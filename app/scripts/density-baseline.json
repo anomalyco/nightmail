@@ -297,28 +297,16 @@
    "findings": []
   },
   "Receiving · rituals · agent · desktop": {
-   "score": 73,
-   "findings": [
-    "long-block|attach a ritual to an address or alias; ",
-    "long-block|questions a ritual asks brand’s ai a",
-    "long-block|runs triage as written, as if attached t"
-   ]
+   "score": 57,
+   "findings": []
   },
   "Receiving · rituals · desktop": {
-   "score": 79,
-   "findings": [
-    "long-block|attach a ritual to an address or alias; ",
-    "long-block|questions a ritual asks brand’s ai a",
-    "long-block|runs triage as written, as if attached t"
-   ]
+   "score": 61,
+   "findings": []
   },
   "Receiving · rituals · no agent · desktop": {
-   "score": 76,
-   "findings": [
-    "long-block|attach a ritual to an address or alias; ",
-    "long-block|questions a ritual asks brand’s ai a",
-    "long-block|runs triage as written, as if attached t"
-   ]
+   "score": 60,
+   "findings": []
   },
   "Receiving · trace · desktop": {
    "score": 37,
