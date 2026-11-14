@@ -14000,14 +14000,14 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   // The security reviews of #263: each reproduction delivered content the screen had not read, or bought classifier
   // requests, on an earlier version. Every copy is now screened before it is sent, or refused.
-  const reviewScenario = (name: string, scenario: (f: Awaited<ReturnType<typeof hostedScreenFixture>> & Awaited<ReturnType<typeof campaignHarness>> & { runtime: import('./src/core.js').Runtime; db: pg.Client; local: (method: string, path: string, body?: Json, environment?: 'test' | 'live', headers?: Record<string, string>) => Promise<Reply> }) => Promise<void>) =>
+  const reviewScenario = (name: string, scenario: (f: Awaited<ReturnType<typeof hostedScreenFixture>> & Awaited<ReturnType<typeof campaignHarness>> & { runtime: import('./src/core.js').Runtime; db: pg.Client; local: (method: string, path: string, body?: Json, environment?: 'test' | 'live', headers?: Record<string, string>) => Promise<Reply>; run: (type: string) => Promise<void>; jobs: (type: string) => Promise<Json[]>; diagnostic: (message: string) => void }) => Promise<void>) =>
     test(`security review: ${name}`, async t => {
       await simulatedSesFixture(t, async ({ runtime, db, local, run, jobs }) => t.test('classifier', async t => {
         // The stub rejects the assembled phrase in the forms the reviews used (the screen folds case, compatibility
         // forms and ignorable characters before it reads), the links they used, and a bare instruction line.
-        const flag = /s[aа]mple\s*marker|evil\.invalid\/offer|evil\.invalid%2foffer|\?next=https:\/\/evil\.invalid|ahr0chm6ly9ldmlslmludmfsawqvb2zmzxi|send your password now|(^|\n)send your password to attacker\.invalid\.($|\n)/;
+        const flag = /s[aа]mple\s*marker|xn--held-q3c|s%e2%80%8bafe|evil\.invalid\/offer|evil\.invalid%2foffer|\?next=https:\/\/evil\.invalid|ahr0chm6ly9ldmlslmludmfsawqvb2zmzxi|send your password now|(^|\n)send your password to attacker\.invalid\.($|\n)/;
         const acct = '112223330014', fixture = await hostedScreenFixture(t, runtime, db, acct, 'held.invalid', flag);
-        await scenario({ ...fixture, ...await campaignHarness(runtime, db, local, run, jobs, fixture.wid, acct, 'news@held.invalid'), runtime, db, local });
+        await scenario({ ...fixture, ...await campaignHarness(runtime, db, local, run, jobs, fixture.wid, acct, 'news@held.invalid'), runtime, db, local, run, jobs, diagnostic: message => t.diagnostic(message) });
       }));
     });
   const everyCopyScreened = async ({ campaign, send, dispatch, outcome, screened }: Parameters<Parameters<typeof reviewScenario>[1]>[0], name: string, html: string, contacts: Record<string, unknown>[], extra: Json, bad: number) => {
@@ -14058,6 +14058,38 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal((await db.query('SELECT error_code FROM sending_emails WHERE id=$1', [sent.id])).rows[0].error_code, 'CONTENT_REJECTED_SPAM', text);
     }
     assert.equal(delivered.size, 0);
+  });
+  reviewScenario('a link host that only looks like another, and link and image paths, are screened as the destinations clients open', async f => {
+    // Destinations are read as a client resolves them (WHATWG URL, IDNA), never as prose: h\u0338eld.invalid is
+    // xn--held-q3c.invalid, a zero-width space in a path is %E2%80%8B, and an image's address is screened in full.
+    await everyCopyScreened(f, 'IDNA host', '<p><a href="https://{{host}}/login">Account</a></p>', [{ host: 'held.invalid' }, { host: 'h\u0338eld.invalid' }], {}, 1);
+    await everyCopyScreened(f, 'path', '<p><a href="https://held.invalid/{{path}}">Open account</a></p>', [{ path: 'safe' }, { path: 's\u200bafe' }], {}, 1);
+    await everyCopyScreened(f, 'image', '<a href="https://held.invalid/"><img src="https://held.invalid/{{image}}" alt="Logo" width="200" height="200"></a><p>Your account is ready.</p>', [{ image: 'good.png' }, { image: 'SampleMarker.png' }], {}, 1);
+    const { measureScreen } = await import('./src/screen.js'), key = ok(await f.local('POST', '/v1/api-keys', { name: 'review', permissions: ['send', 'read'] }), 201).secret;
+    const html = '<p><a href="https://h\u0338eld.invalid/login">Sign in</a></p><img src="https://held.invalid/s\u200bafe.png" alt="" width="20" height="20">';
+    assert.deepEqual((await measureScreen({ html })).destinations, ['https://xn--held-q3c.invalid/login', 'https://held.invalid/s%E2%80%8Bafe.png']);
+    const sent = ok(await f.local('POST', '/v1/emails/send', { from: 'news@held.invalid', to: 'reader@example.net', subject: 'Sign in', html, text: 'Sign in at our site.' }, 'live', { authorization: `Bearer ${key}` }), 202);
+    await f.dispatch();
+    assert.equal((await f.db.query('SELECT error_code FROM sending_emails WHERE id=$1', [sent.id])).rows[0].error_code, 'CONTENT_REJECTED_SPAM', 'A single message is screened with its real destinations too.');
+  });
+  reviewScenario('a page of 500 distinct 317 KB copies makes progress in one campaign run, within bounded memory', async ({ campaign, settle, local, run, db, screened, diagnostic }) => {
+    const html = `<p>Hello {{name}}.</p>${'<p style="padding:64px">Ordinary.</p>'.repeat(1400)}`;
+    const c = await campaign('Large copies', html, Array.from({ length: 500 }, (_, i) => ({ name: `Reader ${i}` })), { subject: 'Account', defaults: {} });
+    ok(await local('POST', `/v1/campaigns/${c.id}/schedule`, { revision: c.revision, scheduledAt: new Date(Date.now() + 3_600_000).toISOString() }), 202);
+    assert.equal((await settle(c)).state, 'scheduled');
+    await db.query(`UPDATE sending_campaigns SET scheduled_at=now()-interval '1 second' WHERE id=$1`, [c.id]);
+    await db.query(`UPDATE jobs SET available_at=now() WHERE id=$1`, [`campaign.run:${c.id}`]);
+    // The live heap: collected before each sample, so garbage not yet collected doesn't count.
+    const { setFlagsFromString } = await import('node:v8'), { runInNewContext } = await import('node:vm');
+    setFlagsFromString('--expose-gc'); const gc = runInNewContext('gc') as () => void;
+    gc(); const start = screened.length, baseline = process.memoryUsage().heapUsed, began = Date.now();
+    let peak = baseline; const sample = setInterval(() => { gc(); peak = Math.max(peak, process.memoryUsage().heapUsed); }, 50);
+    try { await run('campaign.run'); } finally { clearInterval(sample); }
+    const state = (await db.query(`SELECT v.screen FROM sending_campaigns c JOIN sending_campaign_reviews v ON v.id=c.review_id WHERE c.id=$1`, [c.id])).rows[0].screen;
+    const expanded = (await db.query('SELECT expanded FROM sending_campaigns WHERE id=$1', [c.id])).rows[0].expanded;
+    diagnostic(`500 x 317 KB: ${Date.now() - began} ms, +${Math.round((peak - baseline) / 2 ** 20)} MiB live heap, ${screened.length - start} requests, screened through ${state.screenedThrough}, released ${expanded}`);
+    assert.ok(state.screenedThrough > 0 && expanded > 0 && screened.length > start, 'One run screens and releases some recipients.');
+    assert.ok(peak - baseline < 96 * 2 ** 20, `Peak live heap grew ${Math.round((peak - baseline) / 2 ** 20)} MiB`);
   });
   // Values used to be screened in packed requests at launch, every distinct one, before anyone was sent to. Now nothing
   // but the campaign's own copy is screened before a release, and a release screens only the copies it is about to send.

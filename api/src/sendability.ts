@@ -3,7 +3,7 @@ import { placementRoot } from './domain-registry.js';
 import { SHORTENERS, subjectStats, THRESHOLDS } from './deliverability.js';
 import { lint, PreviewLimitError, type Issue, type Client } from './email-preview/index.js';
 import { blockedExtension } from './outbound-content.js';
-import { readHtml, screenTextSignals } from './screen.js';
+import { measureScreen, readHtml, screenTextSignals } from './screen.js';
 import { screenedHtml, screenedHtmlStats } from './screened-html.js';
 import { estimatedMimeBytes, MAX_ENCODED_MESSAGE } from './sending.js';
 import { gradeOf, marketingHourFor } from './standing-model.js';
@@ -125,12 +125,12 @@ export async function checkMail(mail:CheckMail, ctx:CheckContext={}): Promise<Ch
     const bytes=Buffer.byteLength(html);
     if (bytes>=102400) size('gmail-clip','warning',45,'Gmail may clip the message',`${bytes} bytes of HTML before delivery-time rewriting.`, 'Keep decoded HTML below about 102 KB and place essential links early.',{htmlBytes:bytes});
     // Probation dispatch screens the rewritten copy. Image-only mail cannot reach that step; measure the submitted copy instead.
-    let measured=signals.content, basis='submitted';
+    let screenedBytes=(await measureScreen({html:html||undefined,text:mail.text})).screenedBytes, basis='submitted';
     if (html && ctx.domain?.pool==='probation') try {
-      const rewritten=screenedHtml(html,mail.previewText); measured=screenTextSignals((await readHtml(rewritten)).text,mail.text).content; basis='probation copy';
+      screenedBytes=(await measureScreen({html:screenedHtml(html,mail.previewText),text:mail.text})).screenedBytes; basis='probation copy';
     } catch (e) { if (!(e instanceof ApiError && e.code==='CONTENT_IMAGE_ONLY')) throw e; }
-    const limit=ctx.screenLimitBytes??24*1024, screenedBytes=Buffer.byteLength(measured), left=limit-screenedBytes, near=left<limit*0.1;
-    size('screen-bytes',left<0?'error':near?'warning':'info',left<0?100:near?20:0,'Hosted screened-text budget',`${screenedBytes} of ${limit} UTF-8 bytes (${Math.abs(left)} bytes ${left<0?'over':'remaining'}; ${basis}). The text part counts unless it is exactly the HTML's visible text.`,left<0?'Shorten the HTML copy or text alternative before hosted sending.':'Keep room for personalization and the final footer.',{screenedBytes,limitBytes:limit,remainingBytes:left});
+    const limit=ctx.screenLimitBytes??24*1024, left=limit-screenedBytes, near=left<limit*0.1;
+    size('screen-bytes',left<0?'error':near?'warning':'info',left<0?100:near?20:0,'Hosted screened-text budget',`${screenedBytes} of ${limit} UTF-8 bytes (${Math.abs(left)} bytes ${left<0?'over':'remaining'}; ${basis}). The text part counts unless it is exactly the HTML's visible text, and so does each distinct link and image address.`,left<0?'Shorten the HTML copy or text alternative before hosted sending.':'Keep room for personalization and the final footer.',{screenedBytes,limitBytes:limit,remainingBytes:left});
     const mime=estimatedMimeBytes(mail,mail.attachments??[]), over=mime>MAX_ENCODED_MESSAGE;
     size('mime-size',over?'error':'info',over?100:0,'Estimated total MIME size',`${productName}’s conservative estimate is ${mime} bytes including transfer encoding and headers; not an observed wire size.`, 'Reduce attachments or link to large documents if near the 16 MiB limit.',{estimatedBytes:mime,limitBytes:MAX_ENCODED_MESSAGE});
   } catch (e) { if (e instanceof PreviewLimitError || (e instanceof ApiError && e.code==='CONTENT_TOO_LARGE_TO_SCREEN')) throw new ApiError(413,'EMAIL_CHECK_LIMIT_EXCEEDED','Simplify the HTML to fit the offline checker’s byte, tree and style budgets.'); throw e; }

@@ -81,7 +81,7 @@ A Hosted campaign with more than 100 recipients sends a **probe** first: the fir
 
 ## Content screen: how much text
 
-Hosted mail is screened for smuggled advertising and scams before it is delivered. The screen reads the HTML's visible text and `alt` text, then the text part: a text part that, normalized, is exactly the HTML's text (one generated from it) counts once; any other text part is screened in full.
+Hosted mail is screened for smuggled advertising and scams before it is delivered. The screen reads the HTML's visible text and `alt` text, then the text part: a text part that, normalized, is exactly the HTML's text (one generated from it) counts once; any other text part is screened in full. It also reads every distinct address the message links to or loads from (links, images, backgrounds, and addresses in its text), in full, the way a mail client resolves them; these count toward the limit too.
 
 | What | Limit | When it is checked |
 | --- | --- | --- |

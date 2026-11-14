@@ -49,7 +49,7 @@ function refused(message: string, details?: Record<string, unknown>, index?: num
 const unreadable = () => refused('Simplify the HTML so Hosted sending can screen it: it is too large or too deeply nested to read.');
 /** Over the screened-text limit: the measured size and the limit, so the sender knows how much to cut. */
 export const tooLarge = (screenedBytes: number, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) =>
-  refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's visible text and alt text, and the text part unless it says exactly the same. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
+  refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's visible text and alt text, the text part unless it says exactly the same, and each distinct link and image address. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
     { screenedBytes, limitBytes }, index);
 const tooManyHosts = (linkHosts: number, index?: number) =>
   refused(`The message links to or loads ${linkHosts} distinct hosts (counting link labels that name another host); Hosted sending screens at most ${MAX_SIGNALS}. Link to fewer domains.`,
@@ -76,6 +76,25 @@ function completeBodies(content: string, links: string, limitBytes: number, scop
 function host(value: string) {
   try { return new URL(value.startsWith('//') ? 'https:'+value : value).hostname.toLowerCase(); } catch { return ''; }
 }
+/**
+ * Where a URL leads, as a recipient's client resolves it: WHATWG URL parsing with IDNA (so a host with a combining
+ * mark is its punycode, not the host it looks like), the canonical scheme, host, port, path, query and fragment, and
+ * nothing removed beyond what URL parsing itself removes. Never prose-normalized. A value that is not an absolute URL
+ * stays as written. Inline data and attachment references aren't destinations.
+ */
+export function destination(value: string): string | null {
+  const v = value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, '');
+  if (!v || v.startsWith('#') || /^(?:data|cid):/i.test(v)) return null;
+  try { return new URL(v.startsWith('//') ? 'https:' + v : v).href; } catch { return v; }
+}
+const destinationHost = (target: string) => { try { return /^https?:$/.test(new URL(target).protocol) ? new URL(target).hostname : ''; } catch { return ''; } };
+// The attributes a client follows or loads: links, resources, backgrounds, form targets, Office's prefixed links and images.
+const URL_ATTRIBUTES = new Set(['href', 'src', 'background', 'action', 'formaction', 'poster', 'data', 'cite', 'longdesc']);
+const attributeTargets = (name: string, value: string) => name === 'srcset' || name === 'imagesrcset' ? value.split(',').map(part => part.trim().split(/\s+/)[0] ?? '')
+  : name === 'style' ? [...value.matchAll(/url\(\s*(['"]?)(.*?)\1\s*\)/gi)].map(match => match[2]!)
+  : URL_ATTRIBUTES.has(name) || /:(?:href|src)$/.test(name) ? [value] : [];
+// Addresses a client links in text: absolute http(s) URLs and www. hosts, without the punctuation that ends a sentence.
+const textTargets = (text = '') => [...text.matchAll(/(?:\bhttps?:\/\/|\bwww\.)[^\s<>"'`]+/giu)].map(match => (/^www\./i.test(match[0]) ? 'https://' : '') + match[0].replace(/[.,;:!?)\]}'"’”]+$/u, ''));
 const INLINE=new Set(['a','abbr','b','bdi','bdo','big','cite','code','data','del','dfn','em','font','i','ins','kbd','label','mark','q','s','samp','small','span','strike','strong','sub','sup','time','tt','u','var','wbr','img','input','button','select','textarea','output','meter','progress','picture','source','svg','text','tspan','math','mi','mo','mn','ruby','rt','rp','nobr']);
 /**
  * An HTML body as the screen reads it: the text a client lays out, every host it links or loads, anchors whose text
@@ -86,7 +105,7 @@ export async function readHtml(html: string, visit?: (tag: string) => void) {
   if (html.length>512*1024) throw unreadable();
   const fragment=boundedHtmlFragment(html,'fragment',{clients:true});
   if (!fragment) throw unreadable();
-  const hosts=new Set<string>(), mismatches=new Set<string>(), links:string[]=[], images:{ alt: boolean }[]=[];
+  const hosts=new Set<string>(), mismatches=new Set<string>(), destinations=new Set<string>(), links:string[]=[], images:{ alt: boolean }[]=[];
   // Text as a client lays it out: inline runs stay one word, block elements end the line, and text a client shows
   // beside the flow (alt, title) follows on its own lines, as does a table row whose cells hold short pieces read
   // glued, the way a recipient reads a word laid out across adjacent cells.
@@ -109,9 +128,13 @@ export async function readHtml(html: string, visit?: (tag: string) => void) {
     if (['style','script','template','head','title','xml'].includes(tag)) return;
     let display='';
     for (const a of node.attrs) {
-      if (['href','src','srcset','background','action','style'].includes(a.name)) {
-        for(const m of normalize(a.value).matchAll(/(?:https?:)?\/\/[^\s,)'"<>]+/gi)) { const h=host(m[0]); if(h) hosts.add(h); }
-        if(tag==='a' && a.name==='href') { anchor=host(normalize(a.value)); links.push(normalize(a.value)); }
+      // URLs are read from the decoded attribute as they are, never as prose.
+      for (const target of attributeTargets(a.name, a.value)) {
+        const canonical=destination(target);
+        if (!canonical) continue;
+        destinations.add(canonical);
+        const h=destinationHost(canonical); if(h) hosts.add(h);
+        if(tag==='a' && a.name==='href') { anchor=h; links.push(canonical); }
       }
       if (a.name==='style') display=/(?:^|;)\s*display\s*:\s*([a-z-]+)/i.exec(a.value)?.[1]?.toLowerCase() ?? '';
       if (['alt','title'].includes(a.name) && a.value.trim()) aside.push(a.value);
@@ -128,7 +151,7 @@ export async function readHtml(html: string, visit?: (tag: string) => void) {
   };
   for (const child of fragment.childNodes) walk(child,'');
   flush();
-  return { text: [...lines,...aside].join('\n'), hosts, mismatches, links, images };
+  return { text: [...lines,...aside].join('\n'), hosts, mismatches, destinations, links, images };
 }
 /**
  * The text the screen reads: the HTML's visible text, then the text part, then raw MIME, each in full. A recipient reads
@@ -147,13 +170,19 @@ export function screenTextSignals(visible: string, text?: string, rawPart?: stri
   const parts=[rendered,plain,raw].filter((part,i,all)=>part && all.indexOf(part)===i);
   return { content:parts.join('\n'), textHtmlOverlap:overlap(plain,rendered) };
 }
-export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
-/** What the screen would read of a message, measured without asking the classifier. */
+export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; destinations: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
+/**
+ * What the screen would read of a message, measured without asking the classifier: its text, then every distinct
+ * place it links to or loads from, canonical and in full (links, images and other resources, and addresses in its
+ * text), one per line. Destinations count toward the screened-text limit like the text: none is dropped to fit.
+ */
 export async function measureScreen(snapshot: Pick<EmailSnapshot, 'html' | 'text' | 'raw'>): Promise<ScreenMeasure> {
   const read=snapshot.html ? await readHtml(snapshot.html) : undefined;
-  const signals=read ? [...read.mismatches,...read.hosts] : [];
-  const {content,textHtmlOverlap}=screenTextSignals(read?.text ?? '',snapshot.text,snapshot.raw);
-  return { read, signals, content, textHtmlOverlap, screenedBytes: Buffer.byteLength(content) };
+  const destinations=[...new Set([...read?.destinations ?? [], ...[read?.text, snapshot.text, snapshot.raw].flatMap(part => textTargets(part)).flatMap(target => destination(target) ?? [])])];
+  const hosts=new Set([...read?.hosts ?? [], ...destinations.map(destinationHost).filter(Boolean)]);
+  const signals=[...read?.mismatches ?? [], ...hosts];
+  const text=screenTextSignals(read?.text ?? '',snapshot.text,snapshot.raw), content=[text.content, destinations.join('\n')].filter(Boolean).join('\n');
+  return { read, signals, destinations, content, textHtmlOverlap: text.textHtmlOverlap, screenedBytes: Buffer.byteLength(content) };
 }
 /** Refuses a message the screen cannot read within a limit, with the measured size; `index` names a batch item. */
 export function assertScreenable(measure: ScreenMeasure, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) {

@@ -28916,7 +28916,7 @@
     "/v1/emails/send": {
       "post": {
         "operationId": "sendEmail",
-        "description": "Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML’s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once). It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item’s index, and no message of the batch is queued.",
+        "description": "Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML’s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once), and every distinct address it links to or loads from (links, images and other resources, and addresses in its text), each read as a client resolves it (WHATWG URL with IDNA) and in full. It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item’s index, and no message of the batch is queued.",
         "tags": [
           "Emails"
         ],
@@ -29086,7 +29086,7 @@
     "/v1/emails/batch": {
       "post": {
         "operationId": "sendEmailBatch",
-        "description": "Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML’s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once). It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item’s index, and no message of the batch is queued.",
+        "description": "Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML’s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once), and every distinct address it links to or loads from (links, images and other resources, and addresses in its text), each read as a client resolves it (WHATWG URL with IDNA) and in full. It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item’s index, and no message of the batch is queued.",
         "tags": [
           "Emails"
         ],

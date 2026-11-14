@@ -140,7 +140,7 @@ const SendInput = z.object({
   if (v.template && (v.attachments.length || v.kind === 'marketing')) ctx.addIssue({ code: 'custom', message: 'Stored templates currently support transactional messages without attachments only.' });
 }).openapi('BatchSendEmailItem');
 // The screen's limits (src/screen.ts), as the API reference states them; the defaults of JEV_MESSAGE_LIMIT_BYTES and JEV_CAMPAIGN_LIMIT_BYTES.
-const SCREEN_LIMIT_NOTE = 'Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML\u2019s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once). It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item\u2019s index, and no message of the batch is queued.';
+const SCREEN_LIMIT_NOTE = 'Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML\u2019s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once), and every distinct address it links to or loads from (links, images and other resources, and addresses in its text), each read as a client resolves it (WHATWG URL with IDNA) and in full. It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item\u2019s index, and no message of the batch is queued.';
 const CAMPAIGN_SCREEN_NOTE = 'Hosted campaigns are screened copy by copy before they are released, as single messages are, but each distinct copy only once: recipients whose personalized copies read the same share one verdict, so a campaign personalized only with first names costs one screen per distinct first name, and one with a unique value per recipient costs one per recipient. The campaign\u2019s own copy, placeholders unresolved, is screened first and may hold 49,152 bytes of screened text (installation default; 422 CONTENT_TOO_LARGE_TO_SCREEN with error.details[0] { screenedBytes, limitBytes } otherwise); so may each copy, and a copy over it is refused alone. A copy the screen refuses is never sent (CONTENT_REJECTED_SPAM); when refused copies pass 5% and 10 recipients the campaign pauses once for review, and a positive verdict on the campaign\u2019s own copy fails it before anyone is sent to.';
 // SMTP already limits the entire MIME message to the advertised wire SIZE. Keep all
 // address, HTML and encoded-size checks, without imposing the public JSON body-part cap.
@@ -2147,7 +2147,7 @@ export function screenedAs(runtime: Runtime, snapshot: EmailSnapshot, unsubscrib
   const own = (value?: string) => value?.split(unsubscribeUrl).join(unsubscribePlaceholder(runtime));
   return { ...snapshot, html: own(snapshot.html), text: own(snapshot.text) };
 }
-const SCREEN_AHEAD = 2000, SCREEN_PAGE = 500, SCREEN_BUDGET_MS = 8000;
+const SCREEN_AHEAD = 2000, SCREEN_PAGE = 500, SCREEN_BUDGET_MS = 8000, SCREEN_CONCURRENCY = 4, SCREEN_BYTES_IN_FLIGHT = 8 * 1024 * 1024;
 const screenBackoff = (failures: number) => new Date(Date.now() + Math.min(15 * 60_000, 30_000 * 2 ** Math.min(failures, 5))).toISOString();
 async function saveScreen(runtime: Runtime, a: Actor, row: RunRow, state: CampaignScreen) {
   await runtime.db.execute(sql`UPDATE sending_campaign_reviews SET screen=${JSON.stringify(state)}::jsonb WHERE workspace_id=${a.workspaceId} AND id=${row.reviewId}`);
@@ -2180,39 +2180,64 @@ async function screenCampaignStep(runtime: Runtime, a: Actor, row: RunRow) {
 }
 // sending, before a release: the next recipients' copies are rendered as delivered and screened, each distinct one
 // once, and the release never goes past the last recipient whose copy has a verdict (dispatch refuses a copy the screen
-// refused, and screens on its own any copy without a verdict). A page per pass, with a durable cursor.
+// refused, and screens on its own any copy without a verdict). Copies stream through a few at a time, as many as fit
+// SCREEN_BYTES_IN_FLIGHT by their prepared size (snapshot_bytes, and the size each copy actually rendered at), and only
+// a digest of each is kept. The completed prefix is checkpointed about every second; the time budget is checked after
+// each group, so a pass always gets at least one copy through however long it takes.
 async function screenAhead(runtime: Runtime, a: Actor, row: RunRow, state: CampaignScreen, through: number): Promise<CampaignScreen> {
-  const draft = row.reviewDraft!, rendered = row.reviewRendered!, threshold = runtime.config.screen!.threshold, deadline = Date.now() + SCREEN_BUDGET_MS;
-  const page = await recipientChunk(runtime.db, row.reviewId!, state.screenedThrough, Math.min(SCREEN_PAGE, through - state.screenedThrough));
-  const assets = await attachmentRows(runtime.db, a, draft.attachments), probation = !row.account?.trusted;
-  const probationCopy = probation ? (await import('./screened-html.js')).probationCopy : undefined;
-  // Copies that are the same up to their recipient share one delivered form.
-  const forms = new Map<string, number>(), copies: EmailSnapshot[] = [], form: number[] = [];
-  for (const recipient of page) {
-    const copy = await campaignMessage(runtime, runtime.db, a, draft, recipient.recipient, false, true, assets, rendered, true, !rendered.html?.includes('{{'), row.reviewVersion!);
+  const draft = row.reviewDraft!, rendered = row.reviewRendered!, threshold = runtime.config.screen!.threshold, started = Date.now(), ref = screenRef(a, row);
+  const assets = await attachmentRows(runtime.db, a, draft.attachments);
+  const probationCopy = row.account?.trusted ? undefined : (await import('./screened-html.js')).probationCopy;
+  // Copies that are the same up to their recipient share one screen: by a digest of the copy, never the copy itself.
+  const forms = new Map<string, Promise<CopyVerdict>>();
+  const verdictOf = async (recipient: ReviewedRecipient) => {
+    const copy = await campaignMessage(runtime, runtime.db, a, draft, recipient, false, true, assets, rendered, true, !rendered.html?.includes('{{'), row.reviewVersion!);
     marketingFooter(copy, unsubscribePlaceholder(runtime));
-    const same = JSON.stringify([copy.subject, copy.html ?? null, copy.text ?? null]);
-    if (!forms.has(same)) { forms.set(same, copies.length); copies.push(probationCopy ? probationCopy({ ...copy, to: [] }) : { ...copy, to: [] }); }
-    form.push(forms.get(same)!);
+    const size = Buffer.byteLength(copy.html ?? '') + Buffer.byteLength(copy.text ?? ''), form = await digest(JSON.stringify([copy.subject, copy.html ?? null, copy.text ?? null]));
+    let verdict = forms.get(form);
+    if (!verdict) { verdict = campaignVerdicts(runtime, ref, [probationCopy ? probationCopy({ ...copy, to: [] }) : { ...copy, to: [] }], Number.POSITIVE_INFINITY).then(([one]) => one ?? null); forms.set(form, verdict); }
+    return { verdict: await verdict, size };
+  };
+  let progress = state, judged: { email: string; rejected: number }[] = [], saved = Date.now(), largest = 0;
+  // Reputation counts each recipient's verdict when the screen judged it, whether or not it is released; the dispatcher
+  // doesn't count these copies again.
+  const checkpoint = async () => {
+    if (judged.length) await runtime.db.execute(countScreened(sql`SELECT ${a.workspaceId}::text AS workspace_id,x.rejected FROM jsonb_to_recordset(${JSON.stringify(judged)}::jsonb) x(email text,rejected int)
+      WHERE hosted_real_cost(jsonb_build_array(x.email))>0`));
+    judged = []; saved = Date.now();
+    return saveScreen(runtime, a, row, progress);
+  };
+  try {
+    pages: while (progress.screenedThrough < through) {
+      const page = await recipientChunk(runtime.db, row.reviewId!, progress.screenedThrough, Math.min(SCREEN_PAGE, through - progress.screenedThrough));
+      for (let next = 0; next < page.length;) {
+        const group = [page[next]!];
+        let bytes = Math.max(largest, Number(page[next]!.snapshot_bytes ?? 0));
+        while (group.length < SCREEN_CONCURRENCY && next + group.length < page.length) {
+          const more = Math.max(largest, Number(page[next + group.length]!.snapshot_bytes ?? 0));
+          if (bytes + more > SCREEN_BYTES_IN_FLIGHT) break;
+          bytes += more; group.push(page[next + group.length]!);
+        }
+        const results = await Promise.all(group.map(recipient => verdictOf(recipient.recipient)));
+        let rejected = 0;
+        for (const [i, { verdict, size }] of results.entries()) {
+          largest = Math.max(largest, size);
+          if (!verdict) throw new ApiError(503, 'CONTENT_SCREEN_UNAVAILABLE', 'A copy was left without a verdict.', undefined, true);
+          const refused = 'spam' in verdict && verdict.spam >= threshold;
+          if (refused) rejected++;
+          if ('spam' in verdict) judged.push({ email: group[i]!.recipient.email, rejected: refused ? 1 : 0 });
+        }
+        progress = { ...progress, screenedThrough: group.at(-1)!.ordinal, recipients: progress.recipients + group.length, rejected: progress.rejected + rejected, failures: 0 };
+        next += group.length;
+        if (Date.now() - started >= SCREEN_BUDGET_MS) break pages;
+        if (Date.now() - saved >= 1000) await checkpoint();
+      }
+    }
+  } catch (error) {
+    await checkpoint();
+    return screenOutage(runtime, a, row, progress, error);
   }
-  let verdicts: CopyVerdict[];
-  try { verdicts = await campaignVerdicts(runtime, screenRef(a, row), copies, deadline); }
-  catch (error) { return screenOutage(runtime, a, row, state, error); }
-  let screened = 0, rejected = 0;
-  const judged: { email: string; rejected: number }[] = [];
-  for (const [i, index] of form.entries()) {
-    const verdict = verdicts[index]!;
-    if (!verdict) break;
-    screened++;
-    const refused = 'spam' in verdict && verdict.spam >= threshold;
-    if (refused) rejected++;
-    if ('spam' in verdict) judged.push({ email: page[i]!.recipient.email, rejected: refused ? 1 : 0 });
-  }
-  // Reputation counts each recipient's verdict now, when the screen judged it, whether or not it is released; the
-  // dispatcher doesn't count these copies again.
-  if (judged.length) await runtime.db.execute(countScreened(sql`SELECT ${a.workspaceId}::text AS workspace_id,x.rejected FROM jsonb_to_recordset(${JSON.stringify(judged)}::jsonb) x(email text,rejected int)
-    WHERE hosted_real_cost(jsonb_build_array(x.email))>0`));
-  return saveScreen(runtime, a, row, { ...state, screenedThrough: screened ? page[screened - 1]!.ordinal : state.screenedThrough, recipients: state.recipients + screened, rejected: state.rejected + rejected, failures: 0 });
+  return checkpoint();
 }
 async function campaignRejected(runtime: Runtime, a: Actor, row: RunRow, state: CampaignScreen): Promise<never> {
   await runtime.db.execute(countScreened(sql`SELECT v.workspace_id,1 AS rejected FROM sending_campaign_reviews v JOIN sending_review_recipients r ON r.review_id=v.id
