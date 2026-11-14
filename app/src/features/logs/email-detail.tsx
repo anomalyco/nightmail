@@ -1,16 +1,16 @@
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router'
-import { ArrowUpRight } from 'lucide-react'
+import { ArrowUpRight, ChevronRight } from 'lucide-react'
 import { useApi, useApiDef, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
 import type { Email, EmailEvent, EmailEventDetail } from '../../data/types'
-import { Alert, Button, CopyButton, ErrorState, PageHeader, StatusBadge, Tooltip, type Tone } from '../../components/ui'
+import { Alert, Button, CopyButton, ErrorState, PageHeader, Sheet, StatusBadge, Tooltip, type Tone } from '../../components/ui'
 import { htmlToText, useEmailDocument } from '../../components/EmailPreview'
-import { EmailViews, SendabilityDetails, SendabilityToggle, useSendability, type InsightSource } from '../../components/EmailInsight'
+import { EmailViews, SendabilityChip, SendabilityDetails, SendabilityTitle, SendabilityToggle, useSendability, type InsightSource } from '../../components/EmailInsight'
 import { AddressList, NameText, PrivateAddress } from '../../components/PrivateAddress'
 import { AddressText } from '../../components/AddressText'
 import { nameParts } from '../../lib/private-address'
-import { date, label, time } from '../../lib/format'
+import { date, label, shortDateTime, time } from '../../lib/format'
 import { EmailDetailSkeleton } from './skeletons'
 import { useDetailLayout } from './detail-layout'
 import { productName } from '../../../../api/src/brand'
@@ -39,8 +39,10 @@ function EmailDetail({ email }: { email: Email }) {
   const api = useApi()
   const { mode, roomy } = useDetailLayout()
   const [panel, setPanel] = useState(false)
-  // On a phone the score follows the preview, so it waits for the preview's height: nothing moves when that arrives.
-  const [settled, setSettled] = useState(false)
+  // A phone or tablet opens the delivery and the facts, and the score, in sheets; each returns focus to its opener.
+  const [sheet, setSheet] = useState<'details' | 'sendability' | null>(null)
+  const opener = useRef<HTMLElement | null>(null)
+  const openSheet = (which: 'details' | 'sendability') => (from: HTMLElement) => { opener.current = from; setSheet(which) }
   const panelId = useId(), deliveryId = useId()
   const panelRef = useRef<HTMLElement>(null)
   useEffect(() => { if (panel) panelRef.current?.focus() }, [panel])
@@ -52,15 +54,18 @@ function EmailDetail({ email }: { email: Email }) {
   const original = useEmailDocument({ html: email.html, attachmentIds: email.attachments, remoteImages: true, respectStyles: true, asSent: true })
   // A poll that brings new events starts the line over from them.
   const delivery = <Delivery key={email.events.map(event => event.id).join()} email={email} vertical={mode !== 'panel'} />
-  const sendability = <SendabilityDetails check={check} expanded={roomy && mode !== 'stack'} />
+  const sendability = <SendabilityDetails check={check} expanded={roomy} />
   const close = () => { setPanel(false); document.querySelector<HTMLElement>(`[aria-controls="${panelId}"]`)?.focus() }
+  const compact = mode === 'stack'
+  const subject = email.subject || '(no subject)'
   return <div className="email-detail" data-mode={mode}>
-    <PageHeader title={email.subject || '(no subject)'} backTo="/logs" subtitle={<EmailFacts email={email} />} actions={<StatusBadge status={email.status} />} />
-    {mode !== 'column' && delivery}
+    {compact ? <PageHeader title={<Subject text={subject} />} backTo="/logs" subtitle={<StatusLine email={email} chip={<SendabilityChip check={check} onOpen={openSheet('sendability')} />} onOpen={openSheet('details')} />} />
+      : <PageHeader title={subject} backTo="/logs" subtitle={<EmailFacts email={email} />} actions={<StatusBadge status={email.status} />} />}
+    {mode === 'panel' && delivery}
     <div className="email-detail__body">
       <section className="email-detail__preview" aria-label="Preview">
         <EmailViews source={source} previewSource={hasHtml ? { emailId: email.id } : null} check={check} original={{ doc: original.complete ? original.doc : null, error: original.error, html: email.html, text }}
-          fill={mode !== 'stack'} wide={mode !== 'stack'} onSettled={() => setSettled(true)}
+          fill={!compact} wide={!compact} compact={compact}
           toolbarEnd={mode === 'panel' && <SendabilityToggle check={check} open={panel} onToggle={() => setPanel(!panel)} controls={panelId} />} />
       </section>
       {mode === 'column' && <aside className="email-detail__side ui-scroll-fade" aria-label="Details">
@@ -70,8 +75,67 @@ function EmailDetail({ email }: { email: Email }) {
       {/* Its toggle, on the toolbar's row, heads it: the panel starts at the preview's top. */}
       {mode === 'panel' && <aside ref={panelRef} id={panelId} className="email-detail__side ui-scroll-fade" aria-label="Sendability" tabIndex={-1} hidden={!panel} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); close() } }}>{sendability}</aside>}
     </div>
-    {mode === 'stack' && settled && <div className="email-detail__after">{sendability}</div>}
+    {compact && <>
+      <Sheet open={sheet === 'details'} onOpenChange={open => setSheet(open ? 'details' : null)} title="Details" className="email-detail-sheet" returnFocus={opener}>
+        <section className="email-detail-sheet__delivery" aria-label="Delivery">{delivery}</section>
+        <FactList email={email} />
+      </Sheet>
+      <Sheet open={sheet === 'sendability'} onOpenChange={open => setSheet(open ? 'sendability' : null)} title={<SendabilityTitle check={check} />} className="email-detail-sheet email-detail-sheet--tall" returnFocus={opener}>
+        <SendabilityDetails check={check} expanded titled={false} />
+      </Sheet>
+    </>}
   </div>
+}
+
+// A phone's subject: two lines at most; a longer one opens in place on a tap.
+function Subject({ text }: { text: string }) {
+  const ref = useRef<HTMLSpanElement>(null)
+  const [cut, setCut] = useState(false)
+  const [open, setOpen] = useState(false)
+  useLayoutEffect(() => {
+    const element = ref.current!
+    const read = () => setCut(element.scrollHeight > element.clientHeight + 1)
+    read()
+    const observer = new ResizeObserver(read)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [text])
+  const toggle = cut || open
+  return <span ref={ref} className="email-subject" data-open={open || undefined} role={toggle ? 'button' : undefined} tabIndex={toggle ? 0 : undefined} aria-expanded={toggle ? open : undefined}
+    onClick={toggle ? () => setOpen(!open) : undefined} onKeyDown={toggle ? event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setOpen(!open) } } : undefined}>{text}</span>
+}
+
+// A phone's one line under the subject: the status as of its last step, with when and the stream, opening the delivery
+// and the facts; and the score's chip.
+function StatusLine({ email, chip, onOpen }: { email: Email; chip: ReactNode; onOpen: (opener: HTMLElement) => void }) {
+  const key = eventKey(email.status), steps = stepsOf(email.events, email)
+  const at = [...steps].reverse().find(step => step.key === key)?.at ?? steps[steps.length - 1]?.at ?? email.sentAt
+  // Today, the time; before that, the day (the Details sheet has both).
+  const when = sameDay(at, new Date().toISOString()) ? date(at, { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' })
+    : date(at, { month: 'short', day: 'numeric', ...(at.slice(0, 4) === new Date().toISOString().slice(0, 4) ? {} : { year: 'numeric' }), timeZone: 'UTC' })
+  return <div className="email-status">
+    <button type="button" className="email-status__facts" aria-haspopup="dialog" onClick={event => onOpen(event.currentTarget)}>
+      <span className={`delivery__dot ui-tone--${toneOf(key)}`} aria-hidden="true" />
+      <span className="email-status__text"><span className="sr-only">Details: </span>{label(email.status)} <time dateTime={at}>{when}</time> · {label(email.stream)}</span>
+      <ChevronRight size={14} aria-hidden="true" />
+    </button>
+    {chip}
+  </div>
+}
+
+// A phone's facts, in the Details sheet under the delivery: who, from whom, the stream, when and the ID.
+function FactList({ email }: { email: Email }) {
+  const { multiTenant } = useWorkspaceAccess()
+  const to = email.to.split(', ').filter(Boolean)
+  return <dl className="email-fact-list">
+    <div><dt>To</dt><dd>{email.contact ? <Link className="email-facts__contact" to={`/audience/contacts/${encodeURIComponent(email.contact.id)}`} aria-label="Open contact"><AddressList values={to} /><ArrowUpRight size={12} aria-hidden="true" /></Link> : <AddressList values={to} />}</dd></div>
+    <div><dt>From</dt><dd><Sender name={email.fromName} address={email.from} /></dd></div>
+    <div><dt>Stream</dt><dd>{label(email.stream)}</dd></div>
+    <div><dt>Sent</dt><dd><time dateTime={email.sentAt}>{shortDateTime(email.sentAt)} UTC</time></dd></div>
+    {!multiTenant && <div><dt>Region</dt><dd>{email.regionId}</dd></div>}
+    {email.simulated && <div><dt>Simulated</dt><dd>Never sent to SES.</dd></div>}
+    <div><dt>ID</dt><dd className="email-fact-list__id"><code className="identifier">{email.id}</code><CopyButton value={email.id} label="Copy email ID" /></dd></div>
+  </dl>
 }
 
 // To · From · stream · date · ID, on one line under the subject. The recipient opens its contact when there is one.

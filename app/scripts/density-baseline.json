@@ -293,11 +293,11 @@
    "findings": []
   },
   "Sent email · junk-like · phone": {
-   "score": 31,
+   "score": 7,
    "findings": []
   },
   "Sent email · phone": {
-   "score": 29,
+   "score": 6,
    "findings": []
   },
   "Settings · MCP connection · desktop": {

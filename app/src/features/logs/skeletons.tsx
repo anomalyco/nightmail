@@ -24,12 +24,16 @@ export function LogsRouteSkeleton() {
 // appears where nothing else depends on it.
 export function EmailDetailSkeleton() {
   const { mode } = useDetailLayout()
+  // A phone or tablet: the subject, the status line, the preview's one row of controls and its frame.
+  if (mode === 'stack') return <div className="email-detail" data-mode={mode}><PageHeader title={<SkeletonText width={240} lineHeight={24} />} backTo="/logs" subtitle={<div className="email-status"><SkeletonText width={180} /></div>} />
+    <LoadingRegion label="Loading email"><div className="email-detail__body"><section className="email-detail__preview"><div className="ev" data-compact><div className="ev-toolbar"><Skeleton width={112} height={28} /></div>
+      <div className="ev-stage"><div className="ev-canvas"><div className="ev-placeholder" /></div></div></div></section></div></LoadingRegion></div>
   const delivery = <div className="delivery" data-vertical={mode !== 'panel' || undefined}>{mode === 'panel' ? <SkeletonText width={300} lineHeight={28} /> : <div className="delivery__skeleton">{[96, 80, 112].map(width => <SkeletonText key={width} width={width} lineHeight={28} />)}</div>}</div>
   return <div className="email-detail" data-mode={mode}><PageHeader title={<SkeletonText width={320} lineHeight={24} />} backTo="/logs" subtitle={<div className="email-facts"><SkeletonText width={420} /></div>} actions={<Skeleton width={80} height={22} />} />
     <LoadingRegion label="Loading email">
-      {mode !== 'column' && delivery}
+      {mode === 'panel' && delivery}
       <div className="email-detail__body">
-        <section className="email-detail__preview"><div className="ev" data-fill={mode !== 'stack' || undefined}><div className="ev-toolbar"><Skeleton width={360} height={28} /></div>
+        <section className="email-detail__preview"><div className="ev" data-fill><div className="ev-toolbar"><Skeleton width={360} height={28} /></div>
           <div className="ev-stage"><div className="ev-captions" /><div className="ev-canvas"><div className="ev-placeholder" /></div></div></div></section>
         {mode === 'column' && <aside className="email-detail__side"><section className="email-detail__delivery"><h2 className="ss__title">Delivery</h2>{delivery}</section>
           <section className="ss"><div className="ss__head"><h2 className="ss__title">Sendability</h2><SkeletonText width={52} /></div><div className="ss__fixes">{['86%', '70%', '78%'].map(width => <SkeletonText key={width} width={width} lineHeight={28} />)}</div></section></aside>}

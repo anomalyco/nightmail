@@ -24,12 +24,12 @@ const SLOW_MS = 3000, GIVE_UP_MS = 20_000
 const REPLACED = /^(IMG|SVG|VIDEO|CANVAS|HR|INPUT|TEXTAREA|SELECT|BUTTON|PICTURE|OBJECT)$/i
 const clear = (color: string) => color === 'transparent' || /^rgba\(.*,\s*0\)$/.test(color)
 
-// The span of what paints: text, images and rules, and boxes whose background differs from what is behind them (a white
-// card on a grey wrapper) or that have a border or shadow. A box that spans the whole width (a coloured wrapper) is
-// background, not content. Margins are cropped to MARGIN on each side; a span narrower than MIN_SPAN widens.
-function span(page: Document, width: number): [number, number] {
+// What paints, from its left edge to its right: text, images and rules, and boxes whose background differs from what is
+// behind them (a white card on a grey wrapper) or that have a border or shadow. A box that spans the whole width (a
+// coloured wrapper) is background, not content. Null when nothing paints.
+function extent(page: Document, width: number): [number, number] | null {
   const view = page.defaultView, body = page.body
-  if (!view || !body) return [0, width]
+  if (!view || !body) return null
   const canvas = view.getComputedStyle(page.documentElement).backgroundColor, base = clear(canvas) ? 'rgb(255, 255, 255)' : canvas
   const behind = new Map<Element, string>()
   let left = Infinity, right = -Infinity
@@ -48,8 +48,12 @@ function span(page: Document, width: number): [number, number] {
       if (rect.left > 1 || rect.right < width - 1) take(rect)
     }
   }
-  if (!(left < right)) return [0, width]
-  let from = Math.max(0, Math.floor(left) - MARGIN), to = Math.min(width, Math.ceil(right) + MARGIN)
+  return left < right ? [left, right] : null
+}
+// The span a frame shows: the content with MARGIN on each side (a span narrower than MIN_SPAN widens), or all of it.
+function span(content: [number, number] | null, width: number): [number, number] {
+  if (!content) return [0, width]
+  let from = Math.max(0, Math.floor(content[0]) - MARGIN), to = Math.min(width, Math.ceil(content[1]) + MARGIN)
   if (to - from < MIN_SPAN) { from = Math.max(0, Math.round((from + to - MIN_SPAN) / 2)); to = Math.min(width, from + MIN_SPAN); from = Math.max(0, to - MIN_SPAN) }
   return to - from >= width - 2 * MARGIN ? [0, width] : [from, to]
 }
@@ -101,8 +105,14 @@ function measure(doc: string, width: number, key: string) {
     if (page && root) {
       let at = width
       const wide = Math.ceil(root.scrollWidth)
-      if (wide > width + 1) { at = Math.min(wide, MAX_WIDTH); frame.style.width = `${at}px` }
-      const [left, right] = span(page, at)
+      const widen = (to: number) => { at = Math.min(to, MAX_WIDTH); frame.style.width = `${at}px` }
+      if (wide > width + 1) {
+        widen(wide)
+        // Wider than its window: its left margin goes on the right too, so it sits evenly when it shrinks to fit.
+        const content = extent(page, at)
+        if (content && content[0] >= 1 && content[1] > at - content[0]) widen(Math.ceil(content[1] + content[0]))
+      }
+      const [left, right] = span(extent(page, at), at)
       keep({ width: at, height: Math.max(1, Math.ceil(root.scrollHeight)), left, right })
     } else if (final) keep({ width, height: 480, left: 0, right: width })
     if (final) { done = true; window.clearTimeout(slow); window.clearTimeout(giveUp); frame.remove() }

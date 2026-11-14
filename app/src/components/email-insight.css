@@ -3,12 +3,12 @@
 .ei { display: flex; flex-direction: column; gap: var(--space-24); min-width: 0; }
 .ei-retry { margin-top: var(--space-8); }
 :is(.ss, .ev) code { font-family: var(--font-mono); font-size: .92em; }
-:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='aplus'] { --grade-fill: var(--grade-aplus); }
-:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='a'] { --grade-fill: var(--grade-a); }
-:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='b'] { --grade-fill: var(--grade-b); }
-:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='c'] { --grade-fill: var(--grade-c); }
-:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='d'] { --grade-fill: var(--grade-d); }
-:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='f'] { --grade-fill: var(--grade-f); }
+:is(.ss__score, .ev-details__score, .ss-chip, .ei-categories li)[data-grade='aplus'] { --grade-fill: var(--grade-aplus); }
+:is(.ss__score, .ev-details__score, .ss-chip, .ei-categories li)[data-grade='a'] { --grade-fill: var(--grade-a); }
+:is(.ss__score, .ev-details__score, .ss-chip, .ei-categories li)[data-grade='b'] { --grade-fill: var(--grade-b); }
+:is(.ss__score, .ev-details__score, .ss-chip, .ei-categories li)[data-grade='c'] { --grade-fill: var(--grade-c); }
+:is(.ss__score, .ev-details__score, .ss-chip, .ei-categories li)[data-grade='d'] { --grade-fill: var(--grade-d); }
+:is(.ss__score, .ev-details__score, .ss-chip, .ei-categories li)[data-grade='f'] { --grade-fill: var(--grade-f); }
 .ei-dot { flex: none; width: 6px; height: 6px; margin-top: 7px; border-radius: 50%; background: var(--tone-marker); }
 .ei-clear { display: flex; align-items: center; gap: var(--space-8); color: var(--color-success); }
 
@@ -32,10 +32,20 @@
 .ss__all { align-self: flex-start; margin-left: calc(-1 * var(--button-pad-x, 9px)); color: var(--color-muted); }
 .ss__all > svg { width: 14px; height: 14px; color: var(--color-faint); }
 .ss__count { color: var(--color-faint); font-weight: var(--font-weight-regular); font-variant-numeric: tabular-nums; }
+/* A phone's score: a chip under the subject, and the sheet's title with the score beside it. The chip and its
+   placeholder hold one width (the score and a two-digit count), so the line beside it keeps its room when it arrives. */
+.ss-chip, .ss-chip-skeleton { --chip-width: 116px; }
+.ss-chip { position: relative; display: inline-flex; flex: none; align-items: center; justify-content: center; gap: var(--space-6); min-width: var(--chip-width); height: 28px; margin-left: auto; padding: 0 var(--space-12); border: 0; border-radius: 14px; background: var(--color-layer-2); color: var(--color-text); font: inherit; white-space: nowrap; transition: transform 160ms var(--ease-out-strong); }
+.ss-chip::before { content: ''; position: absolute; inset: -8px -4px; }
+.ss-chip:active { transform: scale(.97); }
+.ss-chip__score { display: inline-flex; align-items: baseline; gap: var(--space-4); font-weight: var(--font-weight-bold); font-variant-numeric: tabular-nums; }
+.ss-chip__fix { color: var(--color-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.ss-chip-skeleton { flex: none; margin-left: auto; border-radius: 14px; }
+.ss-sheet-title { display: inline-flex; align-items: baseline; gap: var(--space-12); }
 /* The categories (as many to a row as fit), then problems and notes. */
 .ei-bar { display: block; height: 2px; overflow: hidden; border-radius: 1px; background: var(--color-layer-3); }
 .ei-bar > span { display: block; height: 100%; background: var(--grade-fill, var(--color-faint)); transform-origin: left; }
-.ei-categories { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: var(--space-12) var(--space-16); margin: 0; padding: 0; list-style: none; }
+.ei-categories { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: var(--space-12) var(--space-16); margin: 0; padding: 0; list-style: none; }
 .ei-categories li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; row-gap: var(--space-4); }
 .ei-categories__label { min-width: 0; color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); overflow-wrap: anywhere; }
 .ei-categories__value { font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
@@ -83,6 +93,23 @@
 .ev-view__count { color: var(--color-faint); font-size: var(--text-xs); font-weight: var(--font-weight-regular); font-variant-numeric: tabular-nums; }
 .ev-view__count[data-tone='danger'] { color: var(--color-danger); }
 .ev-views__loading { display: inline-flex; flex: none; align-items: center; height: var(--control-height); padding-left: var(--space-12); }
+/* A phone's or tablet's one row (compact): the view's name, opening a sheet of views; a client's issue count, opening
+   its issues; then width (a tablet), light or dark, and More. */
+.ev-picker { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--space-6); min-width: 0; height: var(--control-height); padding: 0 var(--space-12); border: 0; border-radius: var(--radius-sm); background: var(--color-layer-2); color: var(--color-text); font: inherit; font-weight: var(--font-weight-bold); white-space: nowrap; transition: transform 160ms var(--ease-out-strong); }
+.ev-picker:active { transform: scale(.97); }
+.ev-picker > svg { flex: none; width: 14px; height: 14px; color: var(--color-muted); }
+.ev-theme { display: grid; flex: none; place-items: center; width: var(--control-height); height: var(--control-height); padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--color-muted); transition: background-color 100ms ease-out, color 100ms ease-out, transform 160ms var(--ease-out-strong); }
+.ev-theme[aria-pressed='true'] { background: var(--color-layer-2); color: var(--color-text); }
+.ev-theme:active { transform: scale(.94); }
+@media (hover: hover) and (pointer: fine) { .ev-theme:hover { color: var(--color-text); } }
+.ev-issues-button { position: relative; display: inline-flex; flex: none; align-items: center; gap: var(--space-8); height: var(--control-height); padding: 0 var(--space-4); border: 0; border-radius: var(--radius-sm); background: none; color: var(--color-text); font: inherit; white-space: nowrap; }
+.ev-issues-button .ei-dot { margin-top: 0; }
+.ev-issues-button > svg { width: 14px; height: 14px; color: var(--color-success); }
+.ev-picker-sheet .ui-action-sheet__label { flex: 1 1 auto; min-width: 0; }
+.ev-picker-sheet .ui-action-sheet__item > svg { flex: none; width: 14px; height: 14px; }
+.ev-picker-sheet .ev-view__count { flex: none; }
+.ev-picker-sheet__loading { pointer-events: none; }
+.ev-issues-sheet .ui-sheet__body { display: flex; flex-direction: column; gap: var(--space-12); }
 /* The width toggle comes first, so it can leave (both widths shown) without moving anything after it. */
 .ev-toolbar__end { display: flex; flex: none; align-items: center; gap: var(--space-8); margin-left: auto; }
 :is(.ev-more, .ev-details) { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-8); min-width: var(--control-height); height: var(--control-height); padding: 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: none; color: var(--color-muted); font: inherit; font-weight: var(--font-weight-bold); white-space: nowrap; transition: background-color 100ms ease-out, color 100ms ease-out, transform 160ms var(--ease-out-strong); }
