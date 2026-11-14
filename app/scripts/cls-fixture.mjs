@@ -377,7 +377,7 @@ export async function seed(fx) {
   const email = await mail(db, 'ws_northwind', 30);
   // The newest receipt as a well-made transactional email, and a junk-like one sent a minute ago (EmailInsight's two cases).
   // Neither links a remote image: the sent-mail preview loads those, and the gate allows no external request.
-  await db.query('UPDATE sending_emails SET snapshot = snapshot || $2::jsonb WHERE id = $1', [email, JSON.stringify({ fromName: 'Northwind', html: RECEIPT_HTML, text: RECEIPT_TEXT })]);
+  await db.query('UPDATE sending_emails SET snapshot = snapshot || $2::jsonb WHERE id = $1', [email, JSON.stringify({ kind: 'transactional', fromName: 'Northwind', html: RECEIPT_HTML, text: RECEIPT_TEXT })]);
   const junkEmail = rid('email');
   await db.query(`INSERT INTO sending_emails (id, workspace_id, region, actor_key_id, from_address, to_addresses, cc_addresses, bcc_addresses, subject, snapshot, simulated, status, provider_id, event_outcomes, created_at)
     VALUES ($1,'ws_northwind','${REGION}','fixture','deals@mail.northwind.example','["customer@example.net"]','[]','[]',$2,$3::jsonb,false,'delivered','provider-'||$1,3,now()-interval '1 minute')`,
