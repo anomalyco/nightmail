@@ -7,12 +7,16 @@ Shorten, never hide: numbers, limits, prices and consequences stay.
 
 1. **Measure.** From `app/`: `bun run copy-lint --all` (every string finding, worst files first) and
    `DENSITY_OUT=<dir> bun run density` (`<dir>/summary.md`, `report.json` and an annotated screenshot per page and
-   device: duplicates magenta, long blocks orange, explanations with no action yellow).
+   device: duplicates magenta, detail to disclose blue, text that adds nothing purple, long blocks orange, explanations
+   with no action yellow). `CLS_ONLY=<regex>` measures only matching pages.
 2. **Pick the worst page** by density score. Read its screenshot and findings, then the copy-lint findings in the
    files that render it.
 3. **Fix, in this order:**
-   - **Duplicate information** (`dup-value`, `dup-text`, `dup-label`): keep the one place a reader looks for it
-     (usually the page's own card, not the sidebar or a banner) and remove or link the other.
+   - **Duplicate information** (`dup-value`, `dup-fact`, `dup-text`, `dup-label`): keep the one place a reader looks
+     for it and remove or link the other. A global element (the sidebar's score, a banner) wins over a page's copy.
+   - **Detail shown by default** (`disclosure`): keep the summary figure and open the detail from it (a dialog or an
+     expander). Every moved number keeps a click path, at most 2 clicks away.
+   - **Text that adds nothing** (`restate-value`, `repeated-unit`, `obvious-helper`, `intro-restates`): delete it.
    - **Long blocks and inert explanations:** cut to one short sentence next to the control it explains; move
      reference detail to the docs and link it.
    - **String findings:** shorten to the limit for its kind (`LIMITS` in `copy-lint.mjs`), drop filler and hedges, use
@@ -20,6 +24,22 @@ Shorten, never hide: numbers, limits, prices and consequences stay.
 4. **Check.** Rerun both linters (a clean local run drops fixed findings from the baselines), `bun run build`, and
    `bun run cls` if a layout changed (CLS ≤ 0.001, phone layout holds).
 5. **Ship.** One page per PR with the before and after screenshots and scores, and the updated baselines.
+
+## Density rules
+
+| Id | Finds | Fix |
+| --- | --- | --- |
+| `dup-value` | The same figure twice on one screen (the score in the sidebar and in Overview) | Show it once |
+| `dup-fact` | One fact as two figures, matched by label (`FACTS`: emails in 24 h and the daily limit's count) | Show one, or a different fact (what's left) |
+| `dup-label` | Two sections with the same heading | Merge them |
+| `dup-text` | The same sentence or explanation twice | Say it once |
+| `disclosure` | A summary figure with 5+ rows or 40+ words of detail right under it | Open the detail from the figure |
+| `restate-value` | A caption repeating the figure beside it (“0.00% bounced” under “Bounced 0.00%”) | Drop the caption |
+| `repeated-unit` | The same word on every row of a column (“3 messages”) | Say it once in the header |
+| `obvious-helper` | Helper text repeating its field's label, or under a name, email or search field | Drop it |
+| `intro-restates` | A section intro leading with its heading's words | Drop or rewrite it |
+| `long-block` | A text block over 25 words | Cut it, or move it to the docs |
+| `inert` | An explanation of 15+ words with nothing to act on near it | Put it next to its control, or cut it |
 
 ## Glossary: one name per concept
 
