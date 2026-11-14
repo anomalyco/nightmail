@@ -26,17 +26,8 @@
    ]
   },
   "app/src/components/EmailInsight.tsx": {
-   "grade": [
-    "107: classic outlook for windows renders with word, so brand chec"
-   ],
-   "length/heading": [
-    "118: a low score: fix these before sending"
-   ],
-   "length/helper": [
-    "107: classic outlook for windows renders with word, so brand chec"
-   ],
    "length/label": [
-    "189: can i email (opens in a new tab)"
+    "170: can i email (opens in a new tab)"
    ]
   },
   "app/src/components/LegalLinks.tsx": {
@@ -49,7 +40,7 @@
     "161: couldn’t complete the action. try again. ⟨dup⟩"
    ],
    "filler": [
-    "335: something went wrong. please try again. ⟨please⟩"
+    "336: something went wrong. please try again. ⟨please⟩"
    ]
   },
   "app/src/data/billing.ts": {
@@ -69,7 +60,7 @@
   },
   "app/src/data/types.ts": {
    "numerals": [
-    "237: your workspace is still being set up for sending. try again  ⟨two⟩"
+    "239: your workspace is still being set up for sending. try again  ⟨two⟩"
    ]
   },
   "app/src/features/audience/bulk.tsx": {

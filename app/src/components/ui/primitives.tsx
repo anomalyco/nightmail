@@ -298,8 +298,9 @@ function BackLink({ to }: { to: string }) {
     event.preventDefault(); navigate(-1)
   }}><ArrowLeft size={16} /></Link>
 }
-export function PageHeader({ title, actions, backTo }: { title: ReactNode; actions?: ReactNode; backTo?: string }) {
-  return <header data-component="PageHeader" className="ui-page-header"><div className="cluster">{backTo && <BackLink to={backTo} />}<h1>{title}</h1></div>{actions && <div className="cluster">{actions}</div>}</header>;
+// `subtitle`: one line of facts under the title (an email's sender and date), aligned with the title's text.
+export function PageHeader({ title, actions, backTo, subtitle }: { title: ReactNode; actions?: ReactNode; backTo?: string; subtitle?: ReactNode }) {
+  return <header data-component="PageHeader" className="ui-page-header"><div className="cluster">{backTo && <BackLink to={backTo} />}{subtitle ? <div className="ui-page-header__text"><h1>{title}</h1>{subtitle}</div> : <h1>{title}</h1>}</div>{actions && <div className="cluster">{actions}</div>}</header>;
 }
 export function SectionHeader({ title, actions }: { title: ReactNode; actions?: ReactNode }) {
   return <div data-component="SectionHeader" className="ui-section-header"><h2>{title}</h2>{actions && <div className="cluster">{actions}</div>}</div>;

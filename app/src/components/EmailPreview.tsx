@@ -72,10 +72,71 @@ function fontSource(path: string) {
 
 /** inlineImages maps a received message's Content-IDs to its signed https attachment links. */
 export type EmailPreviewProps = { html: string; title?: string; className?: string; attachmentIds?: string[]; attachmentApi?: AttachmentApi; respectStyles?: boolean; remoteImages?: boolean; inlineImages?: Record<string, string> };
-export function EmailPreview({ html, title = 'Email preview', className, attachmentIds = [], attachmentApi: providedAttachmentApi, respectStyles = false, remoteImages = false, inlineImages }: EmailPreviewProps) {
+type DocumentOptions = { respectStyles: boolean; remoteImages: boolean; inline: Map<string, URL> };
+
+// A px length from an attribute (width="600") or the element's inline style (width: 600px).
+const declared = (element: Element, name: 'width' | 'height') => px(element.getAttribute(name)) ?? px(new RegExp(`(?:^|;)\\s*${name}\\s*:\\s*([\\d.]+)px`, 'i').exec(element.getAttribute('style') ?? '')?.[1]);
+/** An image that loads later (a remote one, or an inline attachment still being read) holds its declared size, and is
+ *  twice as wide as tall when only one side is declared: the room a layout measured before it loads leaves for it. An
+ *  image that hasn't loaded has no shape of its own, so the size is also its aspect ratio. */
+function holdSize(element: Element) {
+  const width = declared(element, 'width'), height = declared(element, 'height');
+  if (width === null && height === null) return false;
+  const w = Math.round(width ?? height! * 2), h = Math.round(height ?? width! / 2);
+  element.setAttribute('src', `data:image/svg+xml,${encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}"/>`)}`);
+  element.setAttribute('style', `${element.getAttribute('style') ?? ''};aspect-ratio:${w}/${h}`);
+  return true;
+}
+
+// The preview's document: sanitized, every URL dropped but the images it may show, a CSP that blocks everything else,
+// and the frame's base styles. `layout` is the copy a frame measures its height from: placeholders for images that load
+// later, and no font data (the dashboard's own Inter stands in).
+function emailDocument(html: string, { respectStyles, remoteImages, inline }: DocumentOptions, sources: Map<string, string> | undefined, fontFaces: string, layout = false) {
+  // Authenticated, validated raster data is assigned from the attachment map
+  // after DOMPurify; the opaque sandbox never needs access to parent Blob URLs.
+  const clean = DOMPurify.sanitize(html, {
+    WHOLE_DOCUMENT: true,
+    USE_PROFILES: { html: true },
+    ADD_TAGS: ['style'],
+    // DOMPurify's default URI rule: a custom ALLOWED_URI_REGEXP also strips ordinary values such as
+    // width="1", which hid tracking pixels from isTrackingPixel. Image sources are checked below.
+    FORBID_TAGS: ['script', 'iframe', 'frame', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'video', 'audio', 'source', 'link', 'base', 'meta'],
+    FORBID_ATTR: ['href', 'srcset', 'ping', 'action', 'formaction', 'target', 'download', 'autofocus', 'xlink:href', 'background'],
+  });
+  const email = new DOMParser().parseFromString(clean, 'text/html');
+  email.querySelectorAll('style[data-bane-fonts], style[data-opensend-fonts]').forEach(style => style.remove());
+  email.querySelectorAll('[src]').forEach(element => {
+    const source = element.getAttribute('src') ?? '';
+    const owned = element.tagName === 'IMG' ? sources?.get(source) ?? inline.get(source)?.href : undefined;
+    const later = layout && element.tagName === 'IMG' && (/^cid:/i.test(source) || (remoteImages && /^https:\/\//i.test(source) && !isTrackingPixel(element)));
+    if (later) { if (!holdSize(element)) element.removeAttribute('src'); }
+    else if (owned) element.setAttribute('src', owned);
+    else if (remoteImages && element.tagName === 'IMG' && /^https?:\/\//i.test(source) && isTrackingPixel(element)) element.remove();
+    else if (element.tagName !== 'IMG' || !(isRasterDataUrl(source) || (remoteImages && /^https:\/\//i.test(source)))) element.removeAttribute('src');
+  });
+  const csp = email.createElement('meta');
+  csp.httpEquiv = 'Content-Security-Policy';
+  const inlineOrigins = [...new Set([...inline.values()].map(url => url.origin))].join(' ');
+  csp.content = `default-src 'none'; style-src 'unsafe-inline'; img-src data:${remoteImages ? ' https:' : inlineOrigins ? ` ${inlineOrigins}` : ''}; font-src data:; script-src 'none'; form-action 'none'; base-uri 'none'; connect-src 'none'`;
+  email.head.prepend(csp);
+  const referrer = email.createElement('meta');
+  referrer.name = 'referrer';
+  referrer.content = 'no-referrer';
+  email.head.prepend(referrer);
+  const tokens = getComputedStyle(document.documentElement);
+  const style = email.createElement('style');
+  // Reuse the browser's cached font files without opening network access inside the sandbox.
+  style.textContent = `${fontFaces} :root { --font-email: ${tokens.getPropertyValue('--font-email')}; --tracking-email: ${tokens.getPropertyValue('--tracking-email')}; --color-text: ${tokens.getPropertyValue('--color-email-text')}; --color-surface: ${tokens.getPropertyValue('--color-email-surface')}; } :where(html) { color-scheme: light; background: var(--color-surface); color: var(--color-text); scrollbar-width: none; } ::-webkit-scrollbar { display: none; } :where(body) { margin: 24px; line-height: 1.5; overflow-wrap: anywhere; font-family: var(--font-email); letter-spacing: var(--tracking-email); } ${respectStyles ? '' : 'body, body * { font-family: var(--font-email) !important; letter-spacing: var(--tracking-email) !important; }'} :where(img) { max-width: 100%; height: auto; }`;
+  email.head.append(style);
+  return `<!doctype html>${email.documentElement.outerHTML}`;
+}
+
+/** An email's sandboxed document (`doc`, null until the frame's fonts are read, once per session), the copy its layout
+ *  is measured from, and why some of its inline images can't be shown. */
+export function useEmailDocument({ html, attachmentIds = [], attachmentApi: providedAttachmentApi, respectStyles = false, remoteImages = false, inlineImages }: Omit<EmailPreviewProps, 'title' | 'className'>) {
   const api = useApi();
   const attachmentApi = providedAttachmentApi ?? api.attachments;
-  const attachmentKey = [...new Set(attachmentIds)].sort().join('\0');
+  const attachmentKey = [...new Set(attachmentIds)].sort().join(',');
   const [resolved, setResolved] = useState<{html: string; attachmentKey: string; api: AttachmentApi | undefined; sources: Map<string, string>} | null>(null);
   const [error, setError] = useState('');
   const [fontFaces, setFontFaces] = useState<string | null>(null);
@@ -87,7 +148,7 @@ export function EmailPreview({ html, title = 'Email preview', className, attachm
       .then(css => { if (live) setFontFaces(css.join(' ')); }).catch(() => { /* Use the font stack's fallback if local fonts are unavailable. */ if (live) setFontFaces(current => current ?? ''); });
     return () => { live = false; };
   }, [italic, otherScripts]);
-  // Content-ID → signed link, applied only to exact img[src] matches after sanitizing (L15).
+  // Content-ID → signed link, applied only to exact img[src="cid:…"] matches after sanitizing (L15).
   const inlineKey = JSON.stringify(inlineImages ?? {});
   const inline = useMemo(() => new Map(Object.entries(JSON.parse(inlineKey) as Record<string, string>).flatMap(([id, url]): [string, URL][] => {
     try { const parsed = new URL(url); return parsed.protocol === 'https:' ? [[`cid:${id}`, parsed]] : []; } catch { return []; }
@@ -96,7 +157,7 @@ export function EmailPreview({ html, title = 'Email preview', className, attachm
   useEffect(() => {
     const controller = new AbortController();
     setError('');
-    loadInlineAttachments(attachmentApi, attachmentKey ? attachmentKey.split('\0') : [], needed, controller.signal).then(result => {
+    loadInlineAttachments(attachmentApi, attachmentKey ? attachmentKey.split(',') : [], needed, controller.signal).then(result => {
       if (controller.signal.aborted) return;
       setResolved({html, attachmentKey, api: attachmentApi, sources: result.sources});
       if (result.sources.size < needed.size) setError('Couldn’t resolve some inline images from this message’s attachments.');
@@ -104,48 +165,19 @@ export function EmailPreview({ html, title = 'Email preview', className, attachm
     return () => controller.abort();
   }, [html, attachmentKey, attachmentApi, needed]);
   const sources = resolved?.html === html && resolved.attachmentKey === attachmentKey && resolved.api === attachmentApi ? resolved.sources : undefined;
-  const srcDoc = useMemo(() => {
-    // Authenticated, validated raster data is assigned from the attachment map
-    // after DOMPurify; the opaque sandbox never needs access to parent Blob URLs.
-    const clean = DOMPurify.sanitize(html, {
-      WHOLE_DOCUMENT: true,
-      USE_PROFILES: { html: true },
-      ADD_TAGS: ['style'],
-      // DOMPurify's default URI rule: a custom ALLOWED_URI_REGEXP also strips ordinary values such as
-      // width="1", which hid tracking pixels from isTrackingPixel. Image sources are checked below.
-      FORBID_TAGS: ['script', 'iframe', 'frame', 'object', 'embed', 'form', 'input', 'button', 'textarea', 'select', 'video', 'audio', 'source', 'link', 'base', 'meta'],
-      FORBID_ATTR: ['href', 'srcset', 'ping', 'action', 'formaction', 'target', 'download', 'autofocus', 'xlink:href', 'background'],
-    });
-    const email = new DOMParser().parseFromString(clean, 'text/html');
-    email.querySelectorAll('style[data-bane-fonts], style[data-opensend-fonts]').forEach(style => style.remove());
-    email.querySelectorAll('[src]').forEach(element => {
-      const source = element.getAttribute('src') ?? '';
-      const owned = element.tagName === 'IMG' ? sources?.get(source) ?? inline.get(source)?.href : undefined;
-      if (owned) element.setAttribute('src', owned);
-      else if (remoteImages && element.tagName === 'IMG' && /^https?:\/\//i.test(source) && isTrackingPixel(element)) element.remove();
-      else if (element.tagName !== 'IMG' || !(isRasterDataUrl(source) || (remoteImages && /^https:\/\//i.test(source)))) element.removeAttribute('src');
-    });
-    const csp = email.createElement('meta');
-    csp.httpEquiv = 'Content-Security-Policy';
-    const inlineOrigins = [...new Set([...inline.values()].map(url => url.origin))].join(' ');
-    csp.content = `default-src 'none'; style-src 'unsafe-inline'; img-src data:${remoteImages ? ' https:' : inlineOrigins ? ` ${inlineOrigins}` : ''}; font-src data:; script-src 'none'; form-action 'none'; base-uri 'none'; connect-src 'none'`;
-    email.head.prepend(csp);
-    const referrer = email.createElement('meta');
-    referrer.name = 'referrer';
-    referrer.content = 'no-referrer';
-    email.head.prepend(referrer);
-    const tokens = getComputedStyle(document.documentElement);
-    const style = email.createElement('style');
-    // Reuse the browser's cached font files without opening network access inside the sandbox.
-    style.textContent = `${fontFaces ?? ''} :root { --font-email: ${tokens.getPropertyValue('--font-email')}; --tracking-email: ${tokens.getPropertyValue('--tracking-email')}; --color-text: ${tokens.getPropertyValue('--color-email-text')}; --color-surface: ${tokens.getPropertyValue('--color-email-surface')}; } :where(html) { color-scheme: light; background: var(--color-surface); color: var(--color-text); scrollbar-width: none; } ::-webkit-scrollbar { display: none; } :where(body) { margin: 24px; line-height: 1.5; overflow-wrap: anywhere; font-family: var(--font-email); letter-spacing: var(--tracking-email); } ${respectStyles ? '' : 'body, body * { font-family: var(--font-email) !important; letter-spacing: var(--tracking-email) !important; }'} :where(img) { max-width: 100%; height: auto; }`;
-    email.head.append(style);
-    return `<!doctype html>${email.documentElement.outerHTML}`;
-  }, [html, sources, fontFaces, respectStyles, remoteImages, inline]);
+  const options = useMemo(() => ({ respectStyles, remoteImages, inline }), [respectStyles, remoteImages, inline]);
+  const doc = useMemo(() => fontFaces === null ? null : emailDocument(html, options, sources, fontFaces), [html, options, sources, fontFaces]);
+  const layout = useMemo(() => emailDocument(html, options, undefined, '', true), [html, options]);
+  return { doc, layout, error };
+}
+
+export function EmailPreview({ title = 'Email preview', className, ...props }: EmailPreviewProps) {
+  const { doc, error } = useEmailDocument(props);
   // The first frame waits for the fonts (one read per session), so the preview loads once instead of twice.
-  if (fontFaces === null) return <div className={['ui-email-preview', className].filter(Boolean).join(' ')} aria-hidden />;
+  if (doc === null) return <div className={['ui-email-preview', className].filter(Boolean).join(' ')} aria-hidden />;
   // Changing srcdoc on a mounted iframe navigates it, and Chrome adds that navigation to the tab's
   // history: Back then steps the preview instead of leaving the page. A new iframe per document
   // (keyed on its content) loads without a history entry.
-  return <>{error && <p className="ui-field__error" role="alert">{error}</p>}<iframe key={srcDoc} title={title} className={['ui-email-preview', className].filter(Boolean).join(' ')} srcDoc={srcDoc} sandbox="" referrerPolicy="no-referrer" /></>;
+  return <>{error && <p className="ui-field__error" role="alert">{error}</p>}<iframe key={doc} title={title} className={['ui-email-preview', className].filter(Boolean).join(' ')} srcDoc={doc} sandbox="" referrerPolicy="no-referrer" /></>;
 }
 export default EmailPreview;
