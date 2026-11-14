@@ -9,6 +9,12 @@ import { loadStanding, scoreView } from './sender-score.js';
 export type CheckContext = {
   domain?: { verified: boolean; dkim?: boolean; mailFrom?: boolean; spf?: boolean; fromSpf?: boolean; dmarc?: string; rua?: boolean; ageDays?: number; pool?: string };
   standing?: {score: number | null; warmup: boolean; accepted: number; bounced: number; complained: number; daily: number | null};
+  /** The Hosted screened-text limit that applies: per message, or per campaign (screened once for every recipient). */
+  screenLimitBytes?: number;
+  /** A campaign's own copy: a URL attribute may start with a placeholder, checked in each recipient's copy. */
+  placeholders?: boolean;
+  /** Where Hosted mail may load fonts from (src/screen.ts fontSources). */
+  fonts?: import('./hosted-html.js').FontSources;
 };
 // Never run placement probes, look up remote assets or lock admission rows.
 // Fresh facts for the exact From only: a parent's DMARC record does not prove the subdomain has no override.
@@ -43,5 +49,5 @@ export async function checkContext(runtime: Runtime, a: Actor, fromDomain: strin
   return {domain: d && {verified: d.state==='verified', dkim: ses?.DkimAttributes ? ses.DkimAttributes.SigningEnabled===true && ses.DkimAttributes.Status==='SUCCESS' : undefined,
     mailFrom: ses && !!ses.MailFromAttributes?.MailFromDomain, spf: dm?.alignment.spf, fromSpf:d?.from_spf??undefined, dmarc: dm?.status,
     rua: dm?.record ? /(?:^|;)\s*rua\s*=\s*mailto:/i.test(dm.record) : undefined, ageDays: d.age ?? undefined, pool: d.pool ?? undefined},
-    standing: rep};
+    standing: rep, screenLimitBytes: runtime.config.screenLimits.messageBytes};
 }

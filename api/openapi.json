@@ -152,7 +152,7 @@
                   "type": "object",
                   "additionalProperties": {}
                 },
-                "description": "Every problem found, when there is more than one part, such as ritual diagnostics with ritual, line, column, message and hint."
+                "description": "Every problem found, when there is more than one part, such as ritual diagnostics with ritual, line, column, message and hint, or a measurement, such as CONTENT_TOO_LARGE_TO_SCREEN with screenedBytes and limitBytes, or UNSUPPORTED_URL_IN_HOSTED_MAIL with the unsupported markup it names (and index in a batch)."
               }
             },
             "required": [
@@ -2600,7 +2600,7 @@
           },
           "screen": {
             "type": "boolean",
-            "description": "Request Jev screening for live transactional mail. Hosted live screening is operator-controlled and cannot be disabled by setting this field to false. Probation and marketing mail defer on classifier outages; trusted transactional mail can proceed. Simulated mail is not screened. A positive reject verdict records CONTENT_REJECTED_SPAM before calling SES."
+            "description": "Request Jev screening for live transactional mail. Hosted live screening is operator-controlled and cannot be disabled by setting this field to false. Probation and marketing mail defer on classifier outages; trusted transactional mail can proceed. Simulated mail is not screened. A positive reject verdict records CONTENT_REJECTED_SPAM before calling SES. Screened mail has the screened-text limit described on sendEmail."
           },
           "replyAddressId": {
             "type": "string",
@@ -2829,7 +2829,7 @@
           },
           "screen": {
             "type": "boolean",
-            "description": "Request Jev screening for live transactional mail. Hosted live screening is operator-controlled and cannot be disabled by setting this field to false. Probation and marketing mail defer on classifier outages; trusted transactional mail can proceed. Simulated mail is not screened. A positive reject verdict records CONTENT_REJECTED_SPAM before calling SES."
+            "description": "Request Jev screening for live transactional mail. Hosted live screening is operator-controlled and cannot be disabled by setting this field to false. Probation and marketing mail defer on classifier outages; trusted transactional mail can proceed. Simulated mail is not screened. A positive reject verdict records CONTENT_REJECTED_SPAM before calling SES. Screened mail has the screened-text limit described on sendEmail."
           }
         },
         "required": [
@@ -17542,7 +17542,7 @@
                 },
                 "errorCode": {
                   "type": "string",
-                  "description": "CONTENT_REJECTED_SPAM, CONTENT_IMAGE_ONLY, CONTENT_TOO_LARGE_TO_SCREEN, ATTACHMENT_TYPE_UNSCREENABLE, ATTACHMENT_CONTENT_MISMATCH."
+                  "description": "CONTENT_REJECTED_SPAM, CONTENT_IMAGE_ONLY, CONTENT_TOO_LARGE_TO_SCREEN, UNSUPPORTED_URL_IN_HOSTED_MAIL, ATTACHMENT_TYPE_UNSCREENABLE, ATTACHMENT_CONTENT_MISMATCH."
                 },
                 "spamScore": {
                   "type": [
@@ -29112,6 +29112,7 @@
     "/v1/emails/send": {
       "post": {
         "operationId": "sendEmail",
+        "description": "Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML’s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once), and every distinct address it links to or loads from (links, images and other resources, and addresses in its text), each read as a client resolves it (WHATWG URL with IDNA) and in full. It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item’s index, and no message of the batch is queued. Hosted mail is delivered as the canonical copy of its HTML that the screen reads: CSS is kept as written less declarations and rules outside a presentation-property allow-list (custom properties, var(), url() but one https background-image, and at-rules but @media and font-service @font-face/@import are removed), and scripts, comments other than Outlook’s conditional ones, preload hints, fonts and style sheets from anywhere but font services, and other markup it can’t read are removed; every kept link and resource is screened by address. Bring-your-own AWS mail with screen: true is sent and screened as submitted. <base>, and link or resource addresses other than absolute http(s), mailto, tel, cid or #fragment, are refused at once with 422 UNSUPPORTED_URL_IN_HOSTED_MAIL, the message naming each element and attribute and error.details[0].unsupported listing them.",
         "tags": [
           "Emails"
         ],
@@ -29281,6 +29282,7 @@
     "/v1/emails/batch": {
       "post": {
         "operationId": "sendEmailBatch",
+        "description": "Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML’s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once), and every distinct address it links to or loads from (links, images and other resources, and addresses in its text), each read as a client resolves it (WHATWG URL with IDNA) and in full. It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item’s index, and no message of the batch is queued. Hosted mail is delivered as the canonical copy of its HTML that the screen reads: CSS is kept as written less declarations and rules outside a presentation-property allow-list (custom properties, var(), url() but one https background-image, and at-rules but @media and font-service @font-face/@import are removed), and scripts, comments other than Outlook’s conditional ones, preload hints, fonts and style sheets from anywhere but font services, and other markup it can’t read are removed; every kept link and resource is screened by address. Bring-your-own AWS mail with screen: true is sent and screened as submitted. <base>, and link or resource addresses other than absolute http(s), mailto, tel, cid or #fragment, are refused at once with 422 UNSUPPORTED_URL_IN_HOSTED_MAIL, the message naming each element and attribute and error.details[0].unsupported listing them.",
         "tags": [
           "Emails"
         ],
@@ -33135,6 +33137,7 @@
     "/v1/campaigns/{id}/test": {
       "post": {
         "operationId": "testCampaign",
+        "description": "Send the current draft, personalized with data, to one address as a transactional test. On Hosted sending a test is screened on its own, with the campaign limit (49,152 bytes of screened text by default; 422 CONTENT_TOO_LARGE_TO_SCREEN with error.details[0] { screenedBytes, limitBytes } over it).",
         "tags": [
           "Campaigns"
         ],
@@ -33314,7 +33317,7 @@
     "/v1/campaigns/{id}/send": {
       "post": {
         "operationId": "sendCampaign",
-        "description": "Accept the current revision for durable background delivery: the audience is frozen now, every message is validated in the background, then recipients are released into the dispatch queue. The 202 count is accepted recipient intents, not SES acceptance or delivery; poll the campaign for its state.",
+        "description": "Accept the current revision for durable background delivery: the audience is frozen now, every message is validated in the background, then recipients are released into the dispatch queue. The 202 count is accepted recipient intents, not SES acceptance or delivery; poll the campaign for its state. Hosted campaigns are screened copy by copy before they are released, as single messages are, but each distinct copy only once: recipients whose personalized copies read the same share one verdict, so a campaign personalized only with first names costs one screen per distinct first name, and one with a unique value per recipient costs one per recipient. The campaign’s own copy, placeholders unresolved, is screened first and may hold 49,152 bytes of screened text (installation default; 422 CONTENT_TOO_LARGE_TO_SCREEN with error.details[0] { screenedBytes, limitBytes } otherwise); so may each copy, and a copy over it is refused alone. A copy the screen refuses is never sent (CONTENT_REJECTED_SPAM); when refused copies pass 5% and 10 recipients the campaign pauses once for review, and a positive verdict on the campaign’s own copy fails it before anyone is sent to. Addresses follow the single-message rules (422 UNSUPPORTED_URL_IN_HOSTED_MAIL), except that the campaign’s own copy may start an address with a placeholder; a recipient’s copy whose address is then not allowed is refused alone with that code.",
         "tags": [
           "Campaigns"
         ],
@@ -33494,7 +33497,7 @@
     "/v1/campaigns/{id}/schedule": {
       "post": {
         "operationId": "scheduleCampaign",
-        "description": "Accept the current revision for durable scheduled delivery. The audience is frozen and validated now; no recipient is materialized or sent before scheduledAt. The 202 count is accepted recipient intents.",
+        "description": "Accept the current revision for durable scheduled delivery. The audience is frozen and validated now; no recipient is materialized or sent before scheduledAt. The 202 count is accepted recipient intents. Hosted campaigns are screened copy by copy before they are released, as single messages are, but each distinct copy only once: recipients whose personalized copies read the same share one verdict, so a campaign personalized only with first names costs one screen per distinct first name, and one with a unique value per recipient costs one per recipient. The campaign’s own copy, placeholders unresolved, is screened first and may hold 49,152 bytes of screened text (installation default; 422 CONTENT_TOO_LARGE_TO_SCREEN with error.details[0] { screenedBytes, limitBytes } otherwise); so may each copy, and a copy over it is refused alone. A copy the screen refuses is never sent (CONTENT_REJECTED_SPAM); when refused copies pass 5% and 10 recipients the campaign pauses once for review, and a positive verdict on the campaign’s own copy fails it before anyone is sent to. Addresses follow the single-message rules (422 UNSUPPORTED_URL_IN_HOSTED_MAIL), except that the campaign’s own copy may start an address with a placeholder; a recipient’s copy whose address is then not allowed is refused alone with that code.",
         "tags": [
           "Campaigns"
         ],

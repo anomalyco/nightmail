@@ -39,7 +39,7 @@ export type ApiError = {
          */
         resetAt?: string;
         /**
-         * Every problem found, when there is more than one part, such as ritual diagnostics with ritual, line, column, message and hint.
+         * Every problem found, when there is more than one part, such as ritual diagnostics with ritual, line, column, message and hint, or a measurement, such as CONTENT_TOO_LARGE_TO_SCREEN with screenedBytes and limitBytes, or UNSUPPORTED_URL_IN_HOSTED_MAIL with the unsupported markup it names (and index in a batch).
          */
         details?: Array<{
             [key: string]: unknown;
@@ -650,7 +650,7 @@ export type SendEmailInput = {
         value: string;
     }>;
     /**
-     * Request Jev screening for live transactional mail. Hosted live screening is operator-controlled and cannot be disabled by setting this field to false. Probation and marketing mail defer on classifier outages; trusted transactional mail can proceed. Simulated mail is not screened. A positive reject verdict records CONTENT_REJECTED_SPAM before calling SES.
+     * Request Jev screening for live transactional mail. Hosted live screening is operator-controlled and cannot be disabled by setting this field to false. Probation and marketing mail defer on classifier outages; trusted transactional mail can proceed. Simulated mail is not screened. A positive reject verdict records CONTENT_REJECTED_SPAM before calling SES. Screened mail has the screened-text limit described on sendEmail.
      */
     screen?: boolean;
     /**
@@ -716,7 +716,7 @@ export type BatchSendEmailItem = {
         value: string;
     }>;
     /**
-     * Request Jev screening for live transactional mail. Hosted live screening is operator-controlled and cannot be disabled by setting this field to false. Probation and marketing mail defer on classifier outages; trusted transactional mail can proceed. Simulated mail is not screened. A positive reject verdict records CONTENT_REJECTED_SPAM before calling SES.
+     * Request Jev screening for live transactional mail. Hosted live screening is operator-controlled and cannot be disabled by setting this field to false. Probation and marketing mail defer on classifier outages; trusted transactional mail can proceed. Simulated mail is not screened. A positive reject verdict records CONTENT_REJECTED_SPAM before calling SES. Screened mail has the screened-text limit described on sendEmail.
      */
     screen?: boolean;
 };
@@ -5333,7 +5333,7 @@ export type SupportScreen = {
          */
         subject: string;
         /**
-         * CONTENT_REJECTED_SPAM, CONTENT_IMAGE_ONLY, CONTENT_TOO_LARGE_TO_SCREEN, ATTACHMENT_TYPE_UNSCREENABLE, ATTACHMENT_CONTENT_MISMATCH.
+         * CONTENT_REJECTED_SPAM, CONTENT_IMAGE_ONLY, CONTENT_TOO_LARGE_TO_SCREEN, UNSUPPORTED_URL_IN_HOSTED_MAIL, ATTACHMENT_TYPE_UNSCREENABLE, ATTACHMENT_CONTENT_MISMATCH.
          */
         errorCode: string;
         /**

@@ -2,17 +2,17 @@ import { getTableColumns, sql, type SQL } from 'drizzle-orm';
 import type { Attachment, SESv2Client, SendEmailCommandInput } from '@aws-sdk/client-sesv2';
 import { ApiError, getSes, isSimulatedSes, id, lazyModule, log, logError, ModuleLoadError, preloadSesTransport, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
 import { attachments, emails, type EmailSnapshot, type EmailStatus, type CampaignDraft, type ReviewedRecipient } from './db/sending.js';
-import { approvedOriginUser, checkedDispatchAttachments, formattedSender, inlineMessage, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, sesDailyReserve, sizeCheck, statusForEvent, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
+import { approvedOriginUser, campaignVerdicts, checkedDispatchAttachments, formattedSender, inlineMessage, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, screenedAs, sesDailyReserve, sizeCheck, statusForEvent, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
 import { receivingPolicy } from './mailbox-ingest-input.js';
 import { principal } from './mail-gateway.js';
 import { regionalSender, sendingConnections, verifiedClaim } from './domain-claims.js';
 import { heldStream } from './hosted-sending.js';
-import { finishCampaigns, reopenQueuedCampaigns, type TenantState } from './states.js';
+import { countScreened, finishCampaigns, reopenQueuedCampaigns, type TenantState } from './states.js';
 import { credentialFingerprint, discoveryTarget } from './ses-region-state.js';
 import { mxResourceName, POOL_INSTALLATION, setupResources } from './ses-setup.js';
 import { forDelivery, type ReadyConnection } from './provider-credentials.js';
 import { wakeWebhooks } from './jobs.js';
-import { screenSnapshot } from './screen.js';
+import { canonicalHtml, fontSources, screenSnapshot, type CampaignScreen } from './screen.js';
 
 const loadSesv2 = lazyModule(() => import('@aws-sdk/client-sesv2'));
 const loadSimulatedSes = lazyModule(() => import('./adapters/simulated-ses.js'));
@@ -40,7 +40,7 @@ function loadDispatchTransport(runtime: Runtime): Promise<DispatchTransport> {
 }
 
 export type Mail = typeof emails.$inferSelect;
-type Review = { version:number; draft: CampaignDraft; rendered: { html?: string; text?: string }; assets:AttachmentRow[]; contentHash: string | null; recipient: ReviewedRecipient };
+type Review = { version:number; draft: CampaignDraft; rendered: { html?: string; text?: string }; assets:AttachmentRow[]; contentHash: string | null; recipient: ReviewedRecipient; screen?: CampaignScreen | null; reviewHash?: string };
 type Owner = { runtime: Runtime; a: Actor; ses: SESv2Client; transport: DispatchTransport; sendClient?:(domainId:string)=>SESv2Client; trusted?:boolean; tenantName?: string; feedbackTopic?: string };
 type LeaseQuota = { rate: number; max: number; sent: number; checked: string; age_ms: number };
 type Leased = { mail: Mail; contentBytes: number; review: Review | null; owner: Owner | null; rateRetries: number; quota?: LeaseQuota; claimStatus?: EmailStatus | 'lost' };
@@ -328,7 +328,7 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
       LEFT JOIN ses_installation_settings s USING (workspace_id)
       ${mx ? sql`JOIN ${sendingConnections(runtime)} pc ON pc.workspace_id=p.workspace_id AND pc.region=${region} AND pc.aws_account_id=${accountId}` : !isSimulatedSes(runtime) ? sql`LEFT JOIN ses_region_discovery d ON d.workspace_id = p.workspace_id AND d.region = ${region}` : sql``}
     ), reviews AS (
-      SELECT carrier, r.renderer_version, r.draft, r.rendered,
+      SELECT carrier, r.renderer_version, r.draft, r.rendered, r.screen, r.content_hash,
         (SELECT jsonb_agg(jsonb_build_object('id',a.id,'workspaceId',a.workspace_id,'filename',a.filename,'contentType',a.content_type,'size',a.size,
           'disposition',a.disposition,'contentId',a.content_id,'storageKey',a.storage_key,'checksum',a.checksum,'sourceTemplateAssetId',a.source_template_asset_id,'createdAt',a.created_at) ORDER BY a.id)
          FROM sending_attachments a WHERE a.workspace_id=r.workspace_id AND a.id IN (SELECT jsonb_array_elements_text(r.draft->'attachments'))) AS assets FROM (
@@ -341,7 +341,7 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
       ${simple ? sql`CASE WHEN EXISTS(SELECT 1 FROM input WHERE id=leased.id) THEN coalesce((SELECT status FROM claimed WHERE id=leased.id),'lost') END` : sql`NULL`} AS claim_status,
       CASE WHEN leased.dispatch_version > 0 THEN (SELECT count(*)::int FROM sending_email_events v
         WHERE v.workspace_id=leased.workspace_id AND v.email_id=leased.id AND v.type='provider_throttled' AND v.data->>'code'='SES_THROTTLED') ELSE 0 END AS rate_retries,
-      r.renderer_version AS review_version, r.draft AS review_draft, r.rendered AS review_rendered,r.assets AS review_assets, rr.content_hash AS review_content_hash, rr.recipient AS review_recipient
+      r.renderer_version AS review_version, r.draft AS review_draft, r.rendered AS review_rendered,r.assets AS review_assets, r.screen AS review_screen, r.content_hash AS review_hash, rr.content_hash AS review_content_hash, rr.recipient AS review_recipient
     FROM selected leased
     CROSS JOIN LATERAL (SELECT octet_length(leased.snapshot::text) AS bytes OFFSET 0) measured
     JOIN settings s ON s.workspace_id = leased.workspace_id AND s.stream = leased.snapshot->>'kind'
@@ -357,14 +357,14 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
   if (!result.rows[0]?.id) return [];
   if (result.rows[0]?.webhooks) await wakeWebhooks(runtime,Number(result.rows[0].webhooks));
   const owners = new Map<string, Owner>();
-  const reviews = new Map<string, Pick<Review, 'version' | 'draft' | 'rendered' | 'assets'>>();
+  const reviews = new Map<string, Pick<Review, 'version' | 'draft' | 'rendered' | 'assets' | 'screen' | 'reviewHash'>>();
   const reviewKey = (row: Record<string, unknown>) => JSON.stringify([row.workspaceId, row.campaignId, row.reviewId]);
   for (const row of result.rows) if (row.review_draft && row.review_rendered) {
-    reviews.set(reviewKey(row), { version:Number(row.review_version), draft: row.review_draft as CampaignDraft, rendered: row.review_rendered as Review['rendered'],assets:(row.review_assets??[]) as AttachmentRow[] });
+    reviews.set(reviewKey(row), { version:Number(row.review_version), draft: row.review_draft as CampaignDraft, rendered: row.review_rendered as Review['rendered'],assets:(row.review_assets??[]) as AttachmentRow[], screen: row.review_screen as CampaignScreen | null, reviewHash: row.review_hash as string });
   }
   return result.rows.map(row => {
-    const { review_version, review_draft, review_rendered, review_content_hash, review_recipient, installation_id, default_region, enabled_regions, ready:regionReady, connection, rate_retries, quota_sample, claim_status, webhooks, ...fields } = row;
-    void review_version; void webhooks;
+    const { review_version, review_draft, review_rendered, review_content_hash, review_recipient, review_screen, review_hash, installation_id, default_region, enabled_regions, ready:regionReady, connection, rate_retries, quota_sample, claim_status, webhooks, ...fields } = row;
+    void review_version; void webhooks; void review_screen; void review_hash;
     // Admission refuses hosted sends until the tenant is ready; mail admitted earlier waits here, never provisions.
     const pc0 = connection as (ReadyConnection & { tenant_state?: TenantState; paused_at?: string | null }) | null;
     const ready = regionReady && !pc0?.paused_at && !(mx && !isSimulatedSes(runtime) && pc0?.kind === 'shared' && pc0.tenant_state !== 'ready');
@@ -394,8 +394,9 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
 }
 
 // A screen rejection carries its verdict into the reject event.
+// `counted`: the verdict already counted toward reputation when it was made (a campaign copy screened at its release).
 class ScreenRejected extends ApiError {
-  constructor(public screen: { spam: number; model: string; threshold: number }) { super(422, 'CONTENT_REJECTED_SPAM', 'The content classifier judged this message to be unsolicited advertising.'); }
+  constructor(public screen: { spam: number; model: string; threshold: number }, public counted = false) { super(422, 'CONTENT_REJECTED_SPAM', 'The content classifier judged this message to be unsolicited advertising.'); }
 }
 let screenSkipLoggedAt = 0;
 // Fail closed for probation and marketing. Trusted transactional and explicit BYO
@@ -409,7 +410,8 @@ async function screenMail(runtime: Runtime, mail: Mail, s: EmailSnapshot, requir
     return false;
   }
   let result: Awaited<ReturnType<typeof screenSnapshot>>;
-  try { result = await screenSnapshot(runtime, s, required); }
+  // Hosted mail is screened as its canonical copy; anything else goes out as submitted and is screened as written.
+  try { result = await screenSnapshot(runtime, s, required, undefined, !hostedGate); }
   catch (error) {
     if(!(error instanceof ApiError) || error.code!=='CONTENT_SCREEN_UNAVAILABLE') throw error;
     if(required) throw new ApiError(503,'CONTENT_SCREEN_UNAVAILABLE','Hosted content screening is unavailable; deferring without calling SES.',undefined,true);
@@ -458,19 +460,26 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
   let screened=false;
   if (!isSimulatedSes(runtime) && (hosted || (s.screen && s.kind==='transactional'))) {
     const required=hosted && (!leased.owner.trusted || s.kind==='marketing');
-    if (hosted && (gate.screenRetryAt??0)>Date.now()) {
+    // A screened campaign's copy (src/sending.ts campaignVerdicts) goes out only under a verdict for its exact screen
+    // input, computed here from the copy being sent (its generated unsubscribe link set back to the placeholder): the
+    // release screened it ahead, and a copy without a verdict (another tier since) is screened now. No verdict, no send.
+    const review=hosted && leased.mail.snapshot.deferredCampaign && leased.review?.screen?.template && leased.review.screen.contentHash===leased.review.reviewHash ? leased.review : null;
+    // Probation mail goes out as the copy the screen reads: every textual field without the bidi controls that
+    // reorder it, the markup reduced to what a client shows as text, the campaign preheader added back from its own
+    // field. Trusted senders keep their markup.
+    if (probation) s = (await import('./screened-html.js')).probationCopy(s);
+    // Hosted mail goes out as its canonical copy (src/hosted-html.ts): one parse, sanitized and serialized, read again
+    // until it reads as itself. The screen below reads exactly these bytes, and SES is sent exactly them.
+    if (hosted && s.html) s = { ...s, html: await canonicalHtml(s.html, fontSources(runtime.config)) };
+    if (review) {
+      const [verdict] = await campaignVerdicts(runtime, { workspaceId: mail.workspaceId, campaignId: mail.campaignId!, reviewId: mail.reviewId! }, [screenedAs(runtime, s, stored?.unsubscribeUrl)], Date.now() + MAX_PRE_SEND_MS);
+      if (!verdict) throw new ApiError(503,'CONTENT_SCREEN_UNAVAILABLE','This copy has no verdict yet; deferring without calling SES.',undefined,true);
+      if ('refused' in verdict) throw verdict.refused;
+      // The release counted every released recipient's verdict toward reputation (src/sending.ts screenAhead).
+      if (verdict.spam>=runtime.config.screen!.threshold) throw new ScreenRejected({ spam: verdict.spam, model: verdict.model, threshold: runtime.config.screen!.threshold }, true);
+    } else if (hosted && (gate.screenRetryAt??0)>Date.now()) {
       if (required) throw new ApiError(503,'CONTENT_SCREEN_UNAVAILABLE','Hosted screen temporarily unavailable.',undefined,true);
-    } else {
-      // Probation mail goes out as the copy the screen reads: every textual field without the bidi controls that
-      // reorder it, the markup reduced to what a client shows as text, the campaign preheader added back from its own
-      // field. Trusted senders keep their message.
-      if (probation) {
-        const { screenedHtml, screenedText } = await import('./screened-html.js');
-        for (const key of ['subject', 'text', 'fromName', 'previewText'] as const) { const value = s[key]; if (value !== undefined) s = { ...s, [key]: screenedText(value) }; }
-        if (s.html) s = { ...s, html: screenedHtml(s.html, s.previewText) };
-      }
-      screened=await screenMail(runtime,mail,s,required,hosted?gate:undefined) && !!leased.owner.tenantName;
-    }
+    } else screened=await screenMail(runtime,mail,s,required,hosted?gate:undefined) && !!leased.owner.tenantName;
   }
   const parts: Attachment[] = [];
   rows ??= checkedDispatchAttachments(s.attachments, await loadAttachments(mail));
@@ -489,15 +498,6 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
   return { ...leased, mail, snapshot: s, content, unsubscribe, stored, screened };
 }
 
-/**
- * Content-screen verdicts for reputation, counted when the screen judged the mail, in the epoch current then (so a
- * verdict on mail queued before a resume still counts after it). Only Hosted mail with a real recipient; `verdicts`
- * yields (workspace_id, rejected 0|1) per judged email. Runs inside the caller's statement.
- */
-const countScreened = (verdicts: SQL) => sql`INSERT INTO hosted_screen_hourly AS s(workspace_id,epoch,hour,screened,rejected)
-  SELECT v.workspace_id,coalesce(pc.resumed_at,'-infinity'),date_trunc('hour',clock_timestamp(),'UTC'),count(*),sum(v.rejected) FROM (${verdicts}) v
-  JOIN provider_connections pc ON pc.workspace_id=v.workspace_id AND pc.kind='shared' GROUP BY 1,2,3 ORDER BY 1,2,3
-  ON CONFLICT(workspace_id,epoch,hour) DO UPDATE SET screened=s.screened+excluded.screened,rejected=s.rejected+excluded.rejected`;
 // Preflight failures (storage, rendering, hash mismatch) cannot have sent email: reject the row.
 async function rejectPreflight(runtime: Runtime, mail: Mail, error: unknown) {
   const code = error instanceof ApiError ? error.code : 'DISPATCH_PREFLIGHT_FAILED';
@@ -512,10 +512,11 @@ async function rejectPreflight(runtime: Runtime, mail: Mail, error: unknown) {
   const rejected=await runtime.db.execute<{n:number}>(sql`WITH rejected AS (
       UPDATE sending_emails SET status = 'rejected', error_code = ${code}, lease_until = NULL, updated_at = clock_timestamp()
       WHERE workspace_id = ${mail.workspaceId} AND id = ${mail.id} AND status = 'queued' AND dispatch_version = ${mail.dispatchVersion} RETURNING ${terminalColumns},to_addresses||cc_addresses||bcc_addresses AS recipients
-    ), ${error instanceof ScreenRejected ? sql`screen_counted AS (${countScreened(sql`SELECT r.workspace_id,1 AS rejected FROM rejected r WHERE hosted_real_cost(r.recipients)>0`)}), ` : sql``}${terminalEvents(sql`SELECT * FROM rejected`,sql`${JSON.stringify({providerCalled:false,...(error instanceof ScreenRejected ? { screen: error.screen } : {})})}::jsonb`)} SELECT count(*)::int AS n FROM webhook_jobs`);
+    ), ${error instanceof ScreenRejected && !error.counted ? sql`screen_counted AS (${countScreened(sql`SELECT r.workspace_id,1 AS rejected FROM rejected r WHERE hosted_real_cost(r.recipients)>0`)}), ` : sql``}${terminalEvents(sql`SELECT * FROM rejected`,sql`${JSON.stringify({providerCalled:false,...(error instanceof ScreenRejected ? { screen: error.screen } : {})})}::jsonb`)} SELECT count(*)::int AS n FROM webhook_jobs`);
   await wakeWebhooks(runtime,rejected.rows[0]!.n);
   // Screen rejections are an expected policy outcome, not a dispatcher fault.
   if (error instanceof ScreenRejected) log('warn', { code, emailId: mail.id, spam: error.screen.spam, model: error.screen.model });
+  else if (code === 'CONTENT_SCREEN_BUDGET_EXCEEDED') log('warn', { code, emailId: mail.id, campaignId: mail.campaignId });
   else logError(error, { code, emailId: mail.id });
   if (mail.campaignId) await finishSettledCampaigns(runtime, [{ workspace_id: mail.workspaceId, campaign_id: mail.campaignId }]);
 }

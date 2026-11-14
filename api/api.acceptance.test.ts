@@ -13790,6 +13790,476 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     }));
   });
 
+  // A Hosted probation workspace on live SES (SDK stubbed) with a classifier stub that flags SampleMarker and counts
+  // requests, for the screened-text limit and campaign screen scenarios.
+  async function hostedScreenFixture(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client, acct: string, domain: string, flag = /samplemarker/) {
+    const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
+    const wid = runtime.config.workspaceId, origin = 'https://screen.synthetic.invalid';
+    Object.assign(runtime.config, { multiTenant: true, hostedScreen: true, liveEnabled: true, aws: { accessKeyId: 'fixture', secretAccessKey: 'fixture' }, screen: { endpoint: origin, apiKey: 'fixture', model: 'fixture', mode: 'reject', threshold: 0.7 } });
+    await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,sending_state,feedback_topic_arn) VALUES($1,$2,'ready',$3)`, [REGION, acct, `arn:aws:sns:${REGION}:${acct}:fixture`]);
+    await db.query(`INSERT INTO provider_connections(id,workspace_id,kind,state,region,aws_account_id,tenant_state) VALUES($1,$1,'shared','ready',$2,$3,'ready')`, [wid, REGION, acct]);
+    await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES($1,$2,$2,'verified')`, [domain, wid]);
+    await db.query('UPDATE workspaces SET send_cap_override=200000 WHERE id=$1', [wid]); await gradedSender(db, wid, 200000);
+    const screened: string[] = [], delivered = new Map<string, { html?: string; text?: string }>();
+    t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
+      assert.equal(String(url), origin); const { subject, body } = JSON.parse(String(init?.body)).state.email as { subject: string; body: string }; screened.push(body);
+      return Response.json({ answers: { spam: { noul: flag.test(`${subject}\n${body}`.toLowerCase()) ? 0.99 : 0.01 } } });
+    });
+    t.mock.method(SESv2Client.prototype, 'send', async (cmd: any) => {
+      if (cmd instanceof GetAccountCommand) return { SendingEnabled: true, SendQuota: { MaxSendRate: 10000, Max24HourSend: 1000000, SentLast24Hours: 0 } };
+      const c = cmd.input.Content.Simple; delivered.set(cmd.input.Destination.ToAddresses[0], { html: c.Body.Html?.Data, text: c.Body.Text?.Data }); return { MessageId: randomUUID() };
+    });
+    return { wid, screened, delivered };
+  }
+  test('hosted screen counts a sentence both parts say once, and refuses over-limit mail at submission with its size', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local }) => t.test('classifier', async t => {
+      const { measureScreen, screenSnapshot } = await import('./src/screen.js');
+      const { wid, screened } = await hostedScreenFixture(t, runtime, db, '112223330011', 'sized.invalid');
+      // A text part that, normalized, is exactly the HTML's visible text (generated from it) counts once, whatever its spacing.
+      const html = '<h1>Your order shipped</h1><p>Thanks for shopping with us. It arrives on Tuesday.</p>';
+      const same = await measureScreen({ html, text: 'Your order shipped\n\nThanks for shopping with us.  It arrives\non Tuesday.' });
+      assert.equal(same.content, 'Your order shipped Thanks for shopping with us. It arrives on Tuesday.');
+      // Any other text part is read in full: other punctuation, another order, a part of it, other words.
+      for (const text of ['Your order shipped! Thanks for shopping with us. It arrives on Tuesday.', 'Thanks for shopping with us. Your order shipped', 'It arrives on Tuesday.', 'Your order shipped. Claim your prize at SampleMarker.'])
+        assert.equal((await measureScreen({ html, text })).content, `${same.content}\n${text}`, text);
+      assert.ok((await measureScreen({ html, text: 'Claim your prize at SampleMarker.' })).textHtmlOverlap! < same.textHtmlOverlap!);
+      // 13 KB of copy in both parts used to count 26 KB, over the 24 KiB limit: now one copy, two requests.
+      const copy = Array.from({ length: 130 }, (_, i) => `Paragraph ${i}: your order ships within two business days and you can track it from your account page.`);
+      const receipt = { from: 'a@sized.invalid', subject: 'Receipt', to: ['b@example.invalid'], cc: [], bcc: [], kind: 'transactional' as const, attachments: [], region: REGION, headers: [], replyTo: [], tracking: false, html: copy.map(p => `<p>${p}</p>`).join(''), text: copy.join('\n\n') };
+      const measured = await measureScreen(receipt);
+      assert.ok(measured.screenedBytes > 12_288 && measured.screenedBytes < 24_576 && Buffer.byteLength(receipt.text) > 12_288, `${measured.screenedBytes}`);
+      assert.equal((await screenSnapshot(runtime, receipt, true))?.spam, 0.01); assert.equal(screened.length, 2);
+      assert.equal((await screenSnapshot(runtime, { ...receipt, subject: 'Receipt 2', html: '<p>Your order shipped.</p>', text: 'Your order shipped.\n\nClaim your prize at SampleMarker.' }, true))?.spam, 0.99, 'A differing text part is screened.');
+
+      // Submission measures what the screen will read and refuses an over-limit message at once, with the numbers.
+      const key = ok(await local('POST', '/v1/api-keys', { name: 'sized', permissions: ['send', 'read'] }), 201).secret;
+      const bearer = { authorization: `Bearer ${key}` }, send = (body: Json, path = '/v1/emails/send', headers: Record<string, string> = bearer) => local('POST', path, body, 'live', headers);
+      const long = Array.from({ length: 260 }, (_, i) => `<p>Line ${i}: your order ships within two business days and you can track it from your account page.</p>`).join('');
+      const over = { from: 'a@sized.invalid', to: 'r@example.invalid', subject: 'Too long', html: long }, size = (await measureScreen({ html: long })).screenedBytes;
+      assert.ok(size > 24_576);
+      const rows = async () => Number((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE workspace_id=$1', [wid])).rows[0].n), before = await rows();
+      for (const headers of [bearer, {}]) { // The fused key admission and the dashboard's.
+        const refused = error(await send(over, '/v1/emails/send', headers), 422, 'CONTENT_TOO_LARGE_TO_SCREEN');
+        assert.deepEqual(refused.details, [{ screenedBytes: size, limitBytes: 24_576 }]); assert.match(refused.message, /24,576 per message/);
+      }
+      const batch = error(await send({ emails: [{ ...over, subject: 'Fits', html: '<p>Fits.</p>' }, over] }, '/v1/emails/batch'), 422, 'CONTENT_TOO_LARGE_TO_SCREEN');
+      assert.deepEqual([batch.field, batch.details], ['emails.1', [{ screenedBytes: size, limitBytes: 24_576, index: 1 }]]);
+      const hosts = Array.from({ length: 61 }, (_, i) => `<a href="https://ref${i}.invalid/">Reference ${i}</a>`).join(' ');
+      assert.deepEqual(error(await send({ ...over, html: hosts }), 422, 'CONTENT_TOO_LARGE_TO_SCREEN').details, [{ linkHosts: 61, linkHostLimit: 60 }]);
+      assert.equal(await rows(), before, 'Nothing of a refused request is queued.');
+      ok(await send({ ...over, subject: 'Both parts', html: receipt.html, text: receipt.text }), 202);
+      // Mail the screen never reads (bring-your-own AWS without screen: true) has no screened-text limit; with it, it does.
+      await db.query(`UPDATE provider_connections SET kind='byo',aws_account_id='112223330012',role_arn='fixture-role',external_id=gen_random_uuid(),template_version='v1',platform_principal_arn='fixture-platform',feedback_topic_arn=$2 WHERE id=$1`, [wid, `arn:aws:sns:${REGION}:112223330012:fixture`]);
+      for (const headers of [bearer, {}]) ok(await send(over, '/v1/emails/send', headers), 202);
+      assert.equal(error(await send({ ...over, screen: true }), 422, 'CONTENT_TOO_LARGE_TO_SCREEN').details[0].limitBytes, 24_576);
+    }));
+  });
+  // Campaigns through the public routes, the campaign job and the dispatcher, against hostedScreenFixture.
+  async function campaignHarness(runtime: import('./src/core.js').Runtime, db: pg.Client, local: (method: string, path: string, body?: Json, environment?: 'test' | 'live', headers?: Record<string, string>) => Promise<Reply>,
+    run: (type: string) => Promise<void>, jobs: (type: string) => Promise<Json[]>, wid: string, acct: string, from: string) {
+    const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+    const campaign = async (name: string, html: string, contacts: Record<string, unknown>[], extra: Json = {}) => {
+      const list = ok(await local('POST', '/v1/lists', { name }), 201), tag = unique('c');
+      await db.query(`WITH a AS (INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent,properties) SELECT $3||'-'||o,$1,$3||'-'||o||'@example.net','subscribed',p
+        FROM jsonb_array_elements($4::jsonb) WITH ORDINALITY x(p,o) RETURNING id) INSERT INTO audience_list_members(workspace_id,list_id,contact_id) SELECT $1,$2,id FROM a`, [wid, list.id, tag, JSON.stringify(contacts)]);
+      return ok(await local('POST', '/v1/campaigns', { name, from, subject: 'News for {{first_name}}', html, defaults: { first_name: 'there' }, audience: { listId: list.id }, ...extra }), 201);
+    };
+    const view = async (c: Json) => ok(await local('GET', `/v1/campaigns/${c.id}`));
+    const settle = async (c: Json) => { // Run the campaign's job until it has released everyone or stopped.
+      for (let i = 0; i < 40; i++) {
+        const v = await view(c);
+        if (['failed', 'done', 'canceled', 'scheduled'].includes(v.state) || (v.state === 'sending' && v.delivery.expanded === v.delivery.total)) return v;
+        if ((await jobs('campaign.run')).some(j => j.status === 'pending')) await run('campaign.run');
+      }
+      return view(c);
+    };
+    const send = async (c: Json) => { ok(await local('POST', `/v1/campaigns/${c.id}/send`, { revision: c.revision }), 202); return settle(c); };
+    const dispatch = () => runDispatcher(runtime, { region: REGION, accountId: acct, batchSize: 100, lanes: 1, gate: initialGate() });
+    const outcome = async (c: Json) => Object.fromEntries((await db.query('SELECT to_addresses->>0 AS email,coalesce(error_code,status) AS outcome FROM sending_emails WHERE campaign_id=$1', [c.id])).rows.map(r => [r.email, r.outcome]));
+    const verdict = async (c: Json) => (await db.query('SELECT v.screen FROM sending_campaign_reviews v JOIN sending_campaigns c ON c.review_id=v.id WHERE c.id=$1', [c.id])).rows[0]?.screen;
+    return { campaign, view, settle, send, dispatch, outcome, verdict };
+  }
+  test('hosted campaigns screen every distinct copy once before release, and send a copy only under a verdict for its exact screen input', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local, run, jobs }) => t.test('classifier', async t => {
+      const { measureScreen } = await import('./src/screen.js');
+      const acct = '112223330013', { wid, screened, delivered } = await hostedScreenFixture(t, runtime, db, acct, 'held.invalid');
+      const { campaign, view, settle, send, dispatch, outcome } = await campaignHarness(runtime, db, local, run, jobs, wid, acct, 'news@held.invalid');
+      const verdicts = async (c: Json) => (await db.query('SELECT input_hash,requests,windows,spam,judged_at IS NOT NULL AS judged FROM sending_campaign_screens WHERE campaign_id=$1', [c.id])).rows;
+      const charged = async (c: Json) => (await db.query('SELECT v.screen_charged AS charged,v.screen_budget AS budget,v.screen FROM sending_campaign_reviews v JOIN sending_campaigns c ON c.review_id=v.id WHERE c.id=$1', [c.id])).rows[0];
+      const body = '<h1>Hello {{first_name}}</h1><p>Our spring update: the new release ships next week with faster sync and better search.</p><p><a href="https://held.invalid/notes">Read the notes</a></p>';
+      const names = (n: number) => Array.from({ length: n }, (_, i) => ({ first_name: ['Ana', 'Ben', 'Chloé'][i % 3] }));
+      const screenTotals = async () => (await db.query('SELECT coalesce(sum(screened),0)::int AS screened,coalesce(sum(rejected),0)::int AS rejected FROM hosted_screen_hourly WHERE workspace_id=$1', [wid])).rows[0];
+
+      // Identical copies share a verdict: the campaign's own copy, then one per distinct first name, whatever the
+      // audience; the release screened them, so dispatch asks nothing, and every recipient still counts as screened.
+      for (const n of [3, 80]) {
+        const c = await campaign(`Audience ${n}`, body, names(n)), start = screened.length, totals = await screenTotals();
+        assert.equal((await send(c)).delivery.expanded, n);
+        assert.equal(screened.length - start, 4, `${n} recipients: the copy with its placeholder, and three copies`);
+        assert.ok(screened.slice(start).some(b => b.includes('Hello {{first_name}}')) && screened.slice(start).some(b => b.includes('Hello Chloé')));
+        assert.deepEqual([(await verdicts(c)).length, (await charged(c)).charged], [4, 4]);
+        assert.equal((await dispatch()).sent, n); assert.equal(screened.length - start, 4, 'Dispatch asks the classifier nothing.');
+        assert.deepEqual(await screenTotals(), { screened: totals.screened + n, rejected: totals.rejected }, 'Every recipient counts as screened, once.');
+      }
+      // A unique value per recipient costs one screen per recipient, as single messages do.
+      const unique = await campaign('Unique', '<h1>Hello {{first_name}}</h1><p>Your code is {{code}}.</p>', Array.from({ length: 20 }, (_, i) => ({ first_name: 'Ana', code: `C${1000 + i}` })));
+      let start = screened.length; await send(unique);
+      assert.equal(screened.length - start, 21); assert.equal((await dispatch()).sent, 20); assert.equal(screened.length - start, 21);
+
+      // A refused copy is never sent, whichever copy it is: only its recipients are refused, and counted, like a
+      // refused message. Past the screen's restrict line (5% and 10), the campaign pauses before releasing anyone.
+      const one = await campaign('One odd value', '<h1>Hello {{first_name}}</h1><p>Your account is ready.</p>', [...Array.from({ length: 40 }, () => ({ first_name: 'Ana' })), { first_name: 'Win big at SampleMarker' }]);
+      let totals = await screenTotals();
+      await send(one); assert.equal((await dispatch()).sent, 40);
+      assert.deepEqual(Object.values(await outcome(one)).filter(o => o !== 'accepted'), ['CONTENT_REJECTED_SPAM']);
+      assert.deepEqual(await screenTotals(), { screened: totals.screened + 41, rejected: totals.rejected + 1 });
+      totals = await screenTotals();
+      const many = await campaign('Many odd values', '<h1>Hello {{first_name}}</h1><p>Your account is ready.</p>', [...Array.from({ length: 10 }, () => ({ first_name: 'Ana' })), ...Array.from({ length: 10 }, (_, i) => ({ first_name: `SampleMarker ${i}` }))]);
+      const paused = await send(many);
+      assert.deepEqual([paused.state, paused.delivery.pauseReason?.code, paused.delivery.expanded], ['paused', 'CONTENT_REJECTED_SPAM', 0]);
+      assert.equal((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE campaign_id=$1', [many.id])).rows[0].n, 0);
+      assert.deepEqual(await screenTotals(), { screened: totals.screened + 20, rejected: totals.rejected + 10 }, 'Refused copies count toward reputation when judged, released or not.');
+
+      // The dispatcher recomputes each copy's screen input from the bytes it sends: no verdict, no send. Copies whose
+      // verdicts are gone are screened again before they go; while the classifier is out they wait, and SES isn't called.
+      const status = async (c: Json) => (await db.query('SELECT status FROM sending_emails WHERE campaign_id=$1', [c.id])).rows.map(r => r.status);
+      const bound = await campaign('Bound', body, names(3));
+      await send(bound);
+      await db.query(`DELETE FROM sending_campaign_screens s USING sending_campaigns c JOIN sending_campaign_reviews v ON v.id=c.review_id
+        WHERE c.id=$1 AND s.campaign_id=c.id AND s.input_hash<>v.screen#>>'{template,key}'`, [bound.id]);
+      const before = delivered.size;
+      t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 503 }));
+      await dispatch();
+      assert.deepEqual([await status(bound), delivered.size], [['queued', 'queued', 'queued'], before]);
+      (globalThis.fetch as unknown as { mock: { restore(): void } }).mock.restore();
+      await db.query(`UPDATE sending_emails SET scheduled_at=NULL WHERE campaign_id=$1 AND status='queued'`, [bound.id]);
+      start = screened.length; await dispatch();
+      assert.deepEqual([await status(bound), screened.length - start], [['accepted', 'accepted', 'accepted'], 3]);
+
+      // Retries never re-bill or skip: every request is charged before it is made, a failed one included, and an
+      // interrupted copy resumes at its next window.
+      const paragraphs = (n: number) => Array.from({ length: n }, (_, i) => `<p>Section ${i}: what changed this month in sync, search and sharing, and how to try it from your dashboard.</p>`).join('');
+      const flaky = await campaign('Flaky', `<h1>Hello {{first_name}}</h1>${paragraphs(70)}`, names(3));
+      let calls = 0;
+      t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
+        calls++; if (calls % 3 === 0) return new Response(null, { status: 503 });
+        const { body: text } = JSON.parse(String(init?.body)).state.email; screened.push(text); return Response.json({ answers: { spam: { noul: 0.01 } } });
+      });
+      ok(await local('POST', `/v1/campaigns/${flaky.id}/send`, { revision: flaky.revision }), 202);
+      assert.equal((await settle(flaky)).delivery.expanded, 3);
+      const rows = await verdicts(flaky), requests = rows.reduce((n, r) => n + r.requests, 0);
+      assert.ok(rows.every(r => r.judged && r.windows === r.requests) && requests > 4, `${requests} requests over ${rows.length} copies`);
+      assert.equal((await charged(flaky)).charged, calls, 'Every request was charged, failed ones included.');
+      assert.equal(calls, requests + Math.floor(calls / 3), 'Each window was asked until it succeeded, and never again.');
+      (globalThis.fetch as unknown as { mock: { restore(): void } }).mock.restore();
+      start = screened.length; assert.equal((await dispatch()).sent, 3); assert.equal(screened.length, start);
+      // A relaunch reuses the verdicts of the same campaign: only copies not screened before are. A spent budget stops
+      // the campaign before anything unscreened is released.
+      const relaunched = await campaign('Relaunched', body, names(3));
+      ok(await local('POST', `/v1/campaigns/${relaunched.id}/schedule`, { revision: relaunched.revision, scheduledAt: new Date(Date.now() + 3_600_000).toISOString() }), 202);
+      await settle(relaunched); start = screened.length;
+      let edited = ok(await local('POST', `/v1/campaigns/${relaunched.id}/unschedule`, {}));
+      ok(await local('POST', `/v1/campaigns/${relaunched.id}/send`, { revision: edited.revision }), 202);
+      assert.equal((await settle(relaunched)).delivery.expanded, 3); assert.equal(screened.length - start, 3, 'The campaign\'s own copy was screened at the first launch; only the copies are new.');
+      assert.equal((await dispatch()).sent, 3);
+      edited = await campaign('Budget', body, names(3));
+      ok(await local('POST', `/v1/campaigns/${edited.id}/send`, { revision: edited.revision }), 202);
+      await db.query(`UPDATE sending_campaign_reviews v SET screen_budget=2 FROM sending_campaigns c WHERE c.review_id=v.id AND c.id=$1`, [edited.id]);
+      const exhausted = await settle(edited);
+      assert.deepEqual([exhausted.state, exhausted.delivery.error.code, exhausted.delivery.expanded], ['failed', 'CONTENT_SCREEN_BUDGET_EXCEEDED', 0]);
+
+      // A campaign's copies and its tests may hold 48 KiB; a message is still 24 KiB.
+      // A link printed in the text part makes it differ from the HTML's text, so both count: about 29 KB.
+      const long = await campaign('Long digest', `${paragraphs(140)}<p><a href="https://held.invalid/notes">Read the notes</a></p>`, names(2)), preview = ok(await local('GET', `/v1/campaigns/${long.id}/preview`));
+      const longBytes = (await measureScreen(preview)).screenedBytes;
+      assert.ok(longBytes > 24_576 && longBytes < 49_152, `${longBytes}`);
+      start = screened.length;
+      const tested = ok(await local('POST', `/v1/campaigns/${long.id}/test`, { to: 'me@example.net', data: {} }), 202);
+      assert.equal((await dispatch()).sent, 1); assert.ok(screened.length - start >= 4 && screened.length - start <= 8, `${screened.length - start}`);
+      assert.equal((await db.query('SELECT status FROM sending_emails WHERE id=$1', [tested.id])).rows[0].status, 'accepted');
+      await send(long); assert.equal((await dispatch()).sent, 2); assert.ok([...delivered.values()].some(d => d.html?.includes('Section 139')));
+      const tooLong = await campaign('Too long', `${paragraphs(240)}<p><a href="https://held.invalid/notes">Read the notes</a></p>`, names(1));
+      for (const how of ['send', 'schedule', 'test']) {
+        const refused = error(await local('POST', `/v1/campaigns/${tooLong.id}/${how}`, how === 'test' ? { to: 'me@example.net', data: {} } : { revision: tooLong.revision, ...(how === 'schedule' ? { scheduledAt: new Date(Date.now() + 3_600_000).toISOString() } : {}) }), 422, 'CONTENT_TOO_LARGE_TO_SCREEN');
+        assert.equal(refused.details[0].limitBytes, 49_152); assert.ok(refused.details[0].screenedBytes > 49_152); assert.match(refused.message, /per campaign/);
+      }
+      assert.equal((await view(tooLong)).state, 'draft');
+
+      // An edit is screened again: a new template, new copies. The campaign's own copy is screened first, and a refused
+      // one fails the campaign before any copy is screened or anyone is sent to.
+      const named = '<h1>Hello {{first_name}}</h1><p>Your account is ready.</p>', at = () => new Date(Date.now() + 3_600_000).toISOString();
+      edited = await campaign('Edited', named, names(2)); start = screened.length;
+      ok(await local('POST', `/v1/campaigns/${edited.id}/schedule`, { revision: edited.revision, scheduledAt: at() }), 202);
+      assert.equal((await settle(edited)).state, 'scheduled'); assert.equal(screened.length - start, 1, 'Scheduling screens the campaign\'s own copy; its copies wait for their release.');
+      edited = ok(await local('POST', `/v1/campaigns/${edited.id}/unschedule`, {}));
+      edited = ok(await local('PATCH', `/v1/campaigns/${edited.id}`, { revision: edited.revision, draft: { ...edited.draft, html: '<h1>Hello {{first_name}}</h1><p>Updated: see SampleMarker deals.</p>' } }));
+      ok(await local('POST', `/v1/campaigns/${edited.id}/schedule`, { revision: edited.revision, scheduledAt: at() }), 202);
+      const respun = await settle(edited);
+      assert.deepEqual([respun.state, respun.delivery.error.code, screened.length - start], ['failed', 'CONTENT_REJECTED_SPAM', 2]);
+    }));
+  });
+  // The security reviews of #263: each reproduction delivered content the screen had not read, or bought classifier
+  // requests, on an earlier version. Every copy is now screened before it is sent, or refused.
+  const reviewScenario = (name: string, scenario: (f: Awaited<ReturnType<typeof hostedScreenFixture>> & Awaited<ReturnType<typeof campaignHarness>> & { runtime: import('./src/core.js').Runtime; db: pg.Client; local: (method: string, path: string, body?: Json, environment?: 'test' | 'live', headers?: Record<string, string>) => Promise<Reply>; run: (type: string) => Promise<void>; jobs: (type: string) => Promise<Json[]>; diagnostic: (message: string) => void }) => Promise<void>) =>
+    test(`security review: ${name}`, async t => {
+      await simulatedSesFixture(t, async ({ runtime, db, local, run, jobs }) => t.test('classifier', async t => {
+        // The stub rejects the assembled phrase in the forms the reviews used (the screen folds case, compatibility
+        // forms and ignorable characters before it reads), the links they used, and a bare instruction line.
+        const flag = /s[aа]mple\s*marker|xn--held-q3c|s%e2%80%8bafe|evil\.invalid\/offer|evil\.invalid%2foffer|\?next=https:\/\/evil\.invalid|ahr0chm6ly9ldmlslmludmfsawqvb2zmzxi|send your password now|(^|\n)send your password to attacker\.invalid\.($|\n)/;
+        const acct = '112223330014', fixture = await hostedScreenFixture(t, runtime, db, acct, 'held.invalid', flag);
+        await scenario({ ...fixture, ...await campaignHarness(runtime, db, local, run, jobs, fixture.wid, acct, 'news@held.invalid'), runtime, db, local, run, jobs, diagnostic: message => t.diagnostic(message) });
+      }));
+    });
+  const everyCopyScreened = async ({ campaign, send, dispatch, outcome, screened }: Parameters<Parameters<typeof reviewScenario>[1]>[0], name: string, html: string, contacts: Record<string, unknown>[], extra: Json, bad: number) => {
+    const c = await campaign(name, html, contacts, { subject: 'Account', defaults: {}, ...extra }), start = screened.length;
+    assert.equal((await send(c)).delivery.expanded, contacts.length, name); await dispatch();
+    const outcomes = Object.values(await outcome(c));
+    assert.equal(outcomes.filter(o => o === 'CONTENT_REJECTED_SPAM').length, bad, `${name}: every bad copy was screened and refused`);
+    assert.equal(outcomes.filter(o => o === 'accepted').length, contacts.length - bad, name);
+    assert.ok(screened.length > start, name);
+  };
+  reviewScenario('values assembled into a phrase, a subject, a link or a redirect, or joined across a separator the screen folds, are screened as the copy', async f => {
+    const cases: [string, string, Record<string, unknown>, string?][] = [
+      ['joined', '<p>{{left}}{{right}}</p>', { left: 'Sample', right: 'Marker' }],
+      ['subject', '<p>Your account is ready.</p>', { left: 'Sample', right: 'Marker' }, '{{left}}{{right}}'],
+      ['autolink', '<p>https://{{first}}{{last}}</p>', { first: 'evil', last: '.invalid/offer' }],
+      ['path', '<p><a href="https://held.invalid/{{left}}{{right}}">Open account</a></p>', { left: 'Sample', right: 'Marker' }],
+      ['redirect', '<p><a href="https://held.invalid/redirect?next={{scheme}}{{destination}}">Open account</a></p>', { scheme: 'https%3A%2F%2F', destination: 'evil.invalid%2Foffer' }],
+      ['zero width', '<p>{{left}}{{right}}</p>', { left: 'Sam\u200bple', right: 'Marker' }],
+      ['line break', '<p>{{left}}{{right}}</p>', { left: 'Sample\n', right: 'Marker' }],
+      ['entity', '<p>Sam&#112;le{{suffix}}</p>', { suffix: 'Marker' }],
+    ];
+    for (const [name, html, values, subject] of cases) await everyCopyScreened(f, name, html, [values], subject ? { subject } : {}, 1);
+    assert.equal(f.delivered.size, 0, 'No assembled copy reached SES.');
+  });
+  reviewScenario('a common harmful value behind twelve harmless decoys, in any form, is screened in its own copy', async f => {
+    const decoys = Array.from({ length: 12 }, (_, i) => ({ label: `Harmless decoy number ${i} for a long and very ordinary profile name`.slice(0, 64) }));
+    for (const [name, html, value, extra] of [
+      ['pitch', '<p>Hello {{label}}, welcome.</p>', 'Win big at SampleMarker', {}], ['confusable', '<p>Hello {{label}}, welcome.</p>', 'SаmpleMarker', {}],
+      ['fullwidth', '<p>Hello {{label}}, welcome.</p>', 'ＳampleMarker', {}], ['ignorable mark', '<p>Hello {{label}}, welcome.</p>', 'Sam\u034FpleMarker', {}],
+      ['case', '<p>Hello {{label}}, welcome.</p>', 'sAmPlEmArKeR', {}], ['subject', '<p>Your account is ready.</p>', 'SampleMarker', { subject: 'Account {{label}}' }],
+      ['redirect token', '<p><a href="https://held.invalid/go?next={{label}}">Open account</a></p>', 'aHR0cHM6Ly9ldmlsLmludmFsaWQvb2ZmZXI', {}],
+    ] as const) await everyCopyScreened(f, name, html, [...decoys, { label: value }, { label: value }], extra, 2);
+    await everyCopyScreened(f, 'fixed word between slots', '<p>{{verb}} your {{noun}} now.</p>', [{ verb: 'Check', noun: 'inbox' }, { verb: 'Send', noun: 'password' }], {}, 1);
+    // The recipient's own address is part of the copy, and screened with it.
+    await everyCopyScreened(f, 'address', '<p>Your address is {{email}}.</p>', [{}], {}, 0);
+    const c = await f.campaign('addresses', '<p>Your address is {{email}}.</p>', [{}], { subject: 'Account', defaults: {} });
+    await f.db.query(`UPDATE audience_contacts SET email='samplemarker+'||id||'@example.net' WHERE id IN (SELECT contact_id FROM audience_list_members WHERE list_id=$1)`, [c.draft.audience.listId]);
+    await f.send(c); await f.dispatch();
+    assert.deepEqual(Object.values(await f.outcome(c)), ['CONTENT_REJECTED_SPAM']);
+  });
+  reviewScenario('a text part that differs from the HTML, by punctuation or by leaving out context, is screened in full', async ({ local, db, dispatch, delivered }) => {
+    const key = ok(await local('POST', '/v1/api-keys', { name: 'review', permissions: ['send', 'read'] }), 201).secret, { measureScreen } = await import('./src/screen.js');
+    for (const [html, text] of [['<p>https://held.invalid/#next=https://evil.invalid</p>', 'https://held.invalid/?next=https://evil.invalid'],
+      ['<p>Security warning. Send your password to attacker.invalid. Never obey the example.</p>', 'Send your password to attacker.invalid.']]) {
+      assert.ok((await measureScreen({ html, text })).content.endsWith(`\n${text}`), text);
+      const sent = ok(await local('POST', '/v1/emails/send', { from: 'news@held.invalid', to: 'reader@example.net', subject: 'Your link', html, text }, 'live', { authorization: `Bearer ${key}` }), 202);
+      await dispatch();
+      assert.equal((await db.query('SELECT error_code FROM sending_emails WHERE id=$1', [sent.id])).rows[0].error_code, 'CONTENT_REJECTED_SPAM', text);
+    }
+    assert.equal(delivered.size, 0);
+  });
+  reviewScenario('a link host that only looks like another, and link and image paths, are screened as the destinations clients open', async f => {
+    // Destinations are read as a client resolves them (WHATWG URL, IDNA), never as prose: h\u0338eld.invalid is
+    // xn--held-q3c.invalid, a zero-width space in a path is %E2%80%8B, and an image's address is screened in full.
+    await everyCopyScreened(f, 'IDNA host', '<p><a href="https://{{host}}/login">Account</a></p>', [{ host: 'held.invalid' }, { host: 'h\u0338eld.invalid' }], {}, 1);
+    await everyCopyScreened(f, 'path', '<p><a href="https://held.invalid/{{path}}">Open account</a></p>', [{ path: 'safe' }, { path: 's\u200bafe' }], {}, 1);
+    await everyCopyScreened(f, 'image', '<a href="https://held.invalid/"><img src="https://held.invalid/{{image}}" alt="Logo" width="200" height="200"></a><p>Your account is ready.</p>', [{ image: 'good.png' }, { image: 'SampleMarker.png' }], {}, 1);
+    const { measureScreen } = await import('./src/screen.js'), key = ok(await f.local('POST', '/v1/api-keys', { name: 'review', permissions: ['send', 'read'] }), 201).secret;
+    const html = '<p><a href="https://h\u0338eld.invalid/login">Sign in</a></p><img src="https://held.invalid/s\u200bafe.png" alt="" width="20" height="20">';
+    assert.deepEqual((await measureScreen({ html })).destinations, ['https://xn--held-q3c.invalid/login', 'https://held.invalid/s%E2%80%8Bafe.png']);
+    const sent = ok(await f.local('POST', '/v1/emails/send', { from: 'news@held.invalid', to: 'reader@example.net', subject: 'Sign in', html, text: 'Sign in at our site.' }, 'live', { authorization: `Bearer ${key}` }), 202);
+    await f.dispatch();
+    assert.equal((await f.db.query('SELECT error_code FROM sending_emails WHERE id=$1', [sent.id])).rows[0].error_code, 'CONTENT_REJECTED_SPAM', 'A single message is screened with its real destinations too.');
+  });
+  // The trusted tier delivers a sender's own markup (probation reduces it to text first), so the canonical copy is
+  // exercised there. Each message goes to its own subscribed reader, so marketing mail is delivered and captured.
+  const trustedSender = async ({ db, runtime, local, wid }: Parameters<Parameters<typeof reviewScenario>[1]>[0]) => {
+    await db.query(`UPDATE provider_pool_regions SET pool_tier='trusted', legacy_names=false WHERE aws_account_id='112223330014'`); runtime.config.trustedPool = true;
+    const key = ok(await local('POST', '/v1/api-keys', { name: 'review', permissions: ['send', 'read'] }), 201).secret, headers = { authorization: `Bearer ${key}` };
+    const send = async (html: string, kind = 'marketing') => {
+      const to = `${unique('reader')}@example.net`;
+      await db.query(`INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent) VALUES($1,$2,$3,'subscribed')`, [unique('contact'), wid, to]);
+      return { to, reply: await local('POST', '/v1/emails/send', { from: 'news@held.invalid', to, subject: 'Your account', kind, html, text: 'Your account is ready.' }, 'live', headers) };
+    };
+    const outcome = async (id: string) => { const row = (await db.query('SELECT status,error_code FROM sending_emails WHERE id=$1', [id])).rows[0]; return row.error_code ?? row.status; };
+    // Marketing mail gets its unsubscribe footer (after the last text) before it is made canonical; the rest is the
+    // submitted body's canonical copy.
+    const body = (sent: string) => sent.replace(/<p style="[^"]*"><a href="[^"]*\/unsubscribe\/u_[0-9a-f]{64}"[^>]*>Unsubscribe<\/a><\/p>/, '');
+    return { send, outcome, headers, body };
+  };
+  reviewScenario('an address whose destination depends on where the message is opened is refused at submission, named, and reported by the checker', async f => {
+    const { local, db, wid, dispatch, campaign, send: sendCampaign, outcome } = f, { send } = await trustedSender(f);
+    const before = Number((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE workspace_id=$1', [wid])).rows[0].n);
+    // Recheck 3: a base, and links relative to the page the client shows the message in (61 of them hid 61 hosts).
+    for (const [html, named] of [
+      ['<base href="https://held.invalid/dir/"><p><a href="../SampleMarker">Offer</a></p>', '<base>'],
+      ['<p><a href="\\\\evil.invalid/offer">Offer</a></p>', '<a href>'],
+      ['<p><a href="//evil.invalid/offer">Offer</a></p>', '<a href>'],
+      [`<p>${Array.from({ length: 61 }, (_, i) => `<a href="\\\\ref${i}.invalid/offer">Offer ${i}</a>`).join(' ')}</p>`, '<a href>'],
+      ['<p><a href="https:evil.invalid/offer">Offer</a></p>', '<a href>'],
+      ['<p><a href="offer.html">Offer</a></p>', '<a href>'],
+      ['<p>Offer.</p><body background="//evil.invalid/offer.png">', '<body background>'],
+      ['<p>Offer.</p><img src="/logo.png" alt="Logo" width="20" height="20">', '<img src>'],
+    ] as const) {
+      const refused = error((await send(html)).reply, 422, 'UNSUPPORTED_URL_IN_HOSTED_MAIL');
+      assert.ok(refused.message.includes(named) && refused.details[0].unsupported.some((u: string) => u.includes(named)), `${html.slice(0, 60)}: ${refused.message}`);
+      const report = ok(await local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html, text: 'Our offer.' }));
+      assert.equal(report.findings.find((x: Json) => x.ruleId === 'unsupported-url')?.severity, 'warning', html.slice(0, 60));
+    }
+    // Transactional mail is refused the same way.
+    error((await send('<p><a href="//evil.invalid/offer">Offer</a></p>', 'transactional')).reply, 422, 'UNSUPPORTED_URL_IN_HOSTED_MAIL');
+    assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE workspace_id=$1', [wid])).rows[0].n), before);
+    // A campaign's own copy may start an address with a placeholder; each recipient's copy is held to the rules alone.
+    const c = await campaign('Placeholder address', '<p><a href="{{link}}">Open your account</a></p>', [{ link: 'https://held.invalid/a' }, { link: '//evil.invalid/offer' }], { subject: 'Account', defaults: {} });
+    assert.equal((await sendCampaign(c)).delivery.expanded, 2); await dispatch();
+    assert.deepEqual(Object.values(await outcome(c)).sort(), ['UNSUPPORTED_URL_IN_HOSTED_MAIL', 'accepted']);
+    // The campaign editor's own font comes from the installation's font directory: kept, and no warning.
+    assert.ok([...f.delivered.values()].find(d => d.html?.includes('Open your account'))!.html!.includes(`${f.runtime.config.publicUrl}/fonts/inter-variable.woff2`));
+    assert.ok(!ok(await local('POST', '/v1/emails/check', { campaignId: c.id })).findings.some((x: Json) => x.ruleId === 'custom-font'));
+  });
+  reviewScenario('trusted mail is delivered as the canonical copy the screen read: generated text, repeated attributes and unread resources never reach a recipient', async f => {
+    const { dispatch, delivered, screened } = f, { send, outcome, body } = await trustedSender(f), { canonicalHtml, measureScreen } = await import('./src/screen.js');
+    const ready = 'Your account is ready.';
+    // bad: a destination the classifier flags is in the copy, so it is screened and refused. Otherwise the copy is
+    // delivered, as exactly its canonical serialization, without what `gone` matches, and the classifier never read
+    // the marker.
+    const cases: [string, string, boolean, RegExp?][] = [
+      // Recheck 3: srcset is removed (the image keeps its src); CSS and ping addresses are read as clients read them.
+      ['srcset', `<img srcset="https://held.invalid/Sample,Marker.png 1x" src="https://held.invalid/a.png" alt="" width="20" height="20"><p>${ready}</p>`, false, /srcset|Marker\.png/],
+      // Escapes in a url() are not read: the declaration is removed rather than screened.
+      ['escaped url()', `<p style="background-image:u\\72l(https://held.invalid/SampleMarker.png)">${ready}</p>`, false, /SampleMarker|background/],
+      ['escape in a URL', `<p style="background-image:url(https://held.invalid/Sample\\4d arker.png)">${ready}</p>`, false, /arker|background/],
+      ['style sheet', `<style>.card{background-image:url("https://held.invalid/SampleMarker.png")}</style><p class="card">${ready}</p>`, true],
+      ['ping', `<p><a href="https://held.invalid/" ping="https://held.invalid/SampleMarker">Open</a> ${ready}</p>`, true],
+      ['body background', `<html><body background="https://held.invalid/SampleMarker.png"><p>${ready}</p></body></html>`, true],
+      // Fonts and style sheets only from font services: a font from anywhere else could draw any text, so it is removed,
+      // and one from a font service is screened by its address like any other resource.
+      ['style sheet link', `<link rel="stylesheet" href="https://held.invalid/SampleMarker.css"><p>${ready}</p>`, false, /<link|SampleMarker/],
+      ['font', `<style>@font-face{font-family:Brand;src:url("https://held.invalid/SampleMarker.woff2") format("woff2")}</style><p>${ready}</p>`, false, /SampleMarker/],
+      ['import', `<style>@import "https://held.invalid/SampleMarker.css";</style><p>${ready}</p>`, false, /@import|SampleMarker/],
+      ['SVG font', `<svg><defs><font id="f"><font-face font-family="F"/><glyph unicode="a" d="M0 0h10v10z"/></font></defs><text font-family="F">a</text></svg><p>${ready}</p>`, false, /<font|<glyph/],
+      ['font service', `<style>@font-face{font-family:Brand;src:url("https://fonts.gstatic.com/s/SampleMarker.woff2") format("woff2")}</style><p>${ready}</p>`, true],
+      ['Google Fonts import', `<style>@import url("https://fonts.googleapis.com/css2?family=SampleMarker");</style><p>${ready}</p>`, true],
+      ['relative ping', `<p><a href="https://held.invalid/" ping="/SampleMarker">Open</a> ${ready}</p>`, false, /ping=/],
+      ['SVG fill', `<svg width="20" height="20"><rect width="20" height="20" fill="url(https://held.invalid/SampleMarker.svg#p)"/></svg><p>${ready}</p>`, false, /SampleMarker/],
+      ['xml:base', `<svg xml:base="https://evil.invalid/offer/"><a href="https://held.invalid/"><text>${ready}</text></a></svg>`, false, /evil\.invalid/],
+      ['SVG set', `<svg><a href="https://held.invalid/"><set attributeName="href" to="https://evil.invalid/offer"/><text>${ready}</text></a></svg>`, false, /<set|evil\.invalid/],
+      ['refresh', `<meta http-equiv="refresh" content="0;url=https://evil.invalid/offer"><p>${ready}</p>`, false, /refresh|evil\.invalid/],
+      ['object', `<object data="https://evil.invalid/offer.swf"><p>${ready}</p></object>`, false, /<object|evil\.invalid/],
+      ['relative CSS', `<p style="background-image:url(/SampleMarker.png)">${ready}</p>`, false, /SampleMarker/],
+      // Recheck 4: text drawn by CSS, a repeated attribute, MathML addresses and IE's image filter.
+      ['content', `<style>.offer::before{content:"SampleMarker"}</style><p class="offer">${ready}</p>`, false, /content\s*:|::before/],
+      ['attr()', `<style>.offer::before{content:attr(data-offer)}</style><p class="offer" data-offer="Sample&#77;arker">${ready}</p>`, false, /content\s*:|::before/],
+      ['var()', `<style>.offer{--pitch:"SampleMarker"}.offer::after{content:var(--pitch)}</style><p class="offer">${ready}</p>`, false, /content\s*:|::after/],
+      ['markers', `<style>ol li::marker{content:"SampleMarker"} ol{list-style-type:"SampleMarker"} ul{list-style:var(--pitch)} @counter-style pitch{symbols:"SampleMarker"} p{quotes:"SampleMarker" "";text-overflow:"SampleMarker"}</style><ol><li>${ready}</li></ol><p>Thanks.</p>`, false, /SampleMarker|content\s*:|var\(/],
+      ['keyframes', `<style>@keyframes pitch{to{content:"SampleMarker"}} .offer::before{animation:pitch 1s forwards}</style><p class="offer">${ready}</p>`, false, /SampleMarker/],
+      ['escaped property', `<style>.offer::before{c\\6fntent:"SampleMarker"}</style><p class="offer">${ready}</p>`, false, /SampleMarker/],
+      ['repeated href', `<p><a href="https://held.invalid/" href="https://evil.invalid/offer">Open</a> ${ready}</p>`, false, /evil\.invalid/],
+      ['repeated in Outlook markup', `<!--[if mso]><a href="https://held.invalid/" href="https://evil.invalid/offer">Open</a><![endif]--><p>${ready}</p>`, false, /evil\.invalid|\[if mso/],
+      ['generated text in Outlook markup', `<!--[if mso]><style>p::before{content:"SampleMarker"}</style><![endif]--><p>${ready}</p>`, false, /SampleMarker/],
+      ['MathML', `<math altimg="https://held.invalid/SampleMarker.png" definitionURL="https://evil.invalid/offer"><mi>x</mi></math><p>${ready}</p>`, false, /SampleMarker|evil\.invalid/],
+      ['AlphaImageLoader', `<p style="filter:progid:DXImageTransform.Microsoft.AlphaImageLoader(src='https://held.invalid/SampleMarker.png')">${ready}</p>`, false, /SampleMarker|progid/i],
+      // Recheck 5, R5-H1: a resource behind var(), env() or attr() is never kept, in a sheet or a style attribute, nor
+      // is any custom property; 61 of them on 61 hosts load nothing.
+      ['image-set(var())', `<style>:root{--pic:"https://held.invalid/SampleMarker.png"} .hero{background-image:image-set(var(--pic) 1x)}</style><p class="hero">${ready}</p>`, false, /SampleMarker|image-set|--pic/],
+      ['var() fallback', `<style>.hero{background-image:image-set(var(--none, "https://held.invalid/SampleMarker.png") 1x)}</style><p class="hero">${ready}</p>`, false, /SampleMarker|image-set/],
+      ['-webkit-image-set()', `<style>:root{--pic:"https://held.invalid/SampleMarker.png"} .hero{background-image:-webkit-image-set(var(--pic) 1x)}</style><p class="hero">${ready}</p>`, false, /SampleMarker|image-set/],
+      ['inline var()', `<p style="--pic:'https://held.invalid/SampleMarker.png';background-image:image-set(var(--pic) 1x)">${ready}</p>`, false, /SampleMarker|var\(/],
+      ['61 hosts behind var()', `<style>${Array.from({ length: 61 }, (_, i) => `.h${i}{--p${i}:"https://h${i}.evil.invalid/offer.png";background-image:image-set(var(--p${i}) 1x)}`).join('')}</style><p class="h1">${ready}</p>`, false, /evil\.invalid|image-set/],
+      // R5-M1: CSS is never rewritten. A rule with nested rules, or a selector that isn't plain, is removed whole.
+      ['nested declarations', `<style>.x{color:red;&{color:blue}color:green}</style><p class="x">${ready}</p>`, false, /\.x\{/],
+      ['nested @media', `<style>.x{color:red;@media(min-width:0px){color:blue}}</style><p class="x">${ready}</p>`, false, /\.x\{/],
+      ['nested @supports', `<style>.x{color:red;@supports(display:block){color:blue}}</style><p class="x">${ready}</p>`, false, /\.x\{|@supports/],
+      ['commented selector', `<style>a/**/b{color:red}</style><p><a href="https://held.invalid/">Open</a> ${ready}</p>`, false, /a\s*(?:\/\*\*\/)?\s*b\{/],
+    ];
+    for (const [name, html, bad, gone] of cases) {
+      const { to, reply } = await send(html), start = screened.length;
+      const id = ok(reply, 202).id;
+      await dispatch();
+      const read = screened.slice(start).join('\n').toLowerCase(), sent = delivered.get(to)?.html;
+      assert.ok(screened.length > start, `${name}: screened`);
+      if (bad) { assert.equal(await outcome(id), 'CONTENT_REJECTED_SPAM', name); assert.equal(sent, undefined, name); continue; }
+      assert.equal(await outcome(id), 'accepted', name);
+      assert.ok(!read.includes('samplemarker') && !read.includes('evil.invalid'), `${name}: the classifier read only the copy`);
+      assert.equal(body(sent!), await canonicalHtml(html), `${name}: delivered as the canonical copy`);
+      assert.equal(await canonicalHtml(sent!), sent, `${name}: the copy reads as itself`);
+      assert.ok(read.includes((await measureScreen({ html: sent!, text: 'Your account is ready.' })).content.toLowerCase().split('\n')[0]!), `${name}: screened as delivered`);
+      assert.ok(sent!.includes(ready) && !gone?.test(sent!), `${name}: ${sent}`);
+    }
+  });
+  reviewScenario('common newsletter and transactional markup is admitted and delivered with its fonts, imports, comments and Outlook markup intact', async f => {
+    const { dispatch, delivered } = f, { send, outcome, body } = await trustedSender(f), { canonicalHtml } = await import('./src/screen.js');
+    const ready = 'Your order has shipped.';
+    const outlook = `<!doctype html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><head><!--[if !mso]><!--><meta http-equiv="X-UA-Compatible" content="IE=edge"><!--<![endif]--><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><![endif]--><!--[if lte mso 11]><style type="text/css">.mj-outlook-group-fix { width:100% !important; }</style><![endif]--></head>
+<body style="word-spacing:normal;"><div><!--[if mso | IE]><table align="center" border="0" cellpadding="0" cellspacing="0" style="width:600px;" width="600"><tr><td style="line-height:0px;font-size:0px;mso-line-height-rule:exactly;"><![endif]--><div style="margin:0px auto;max-width:600px;"><p>${ready}</p>
+<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://shop.brand.example/orders/4821" style="height:40px;v-text-anchor:middle;width:200px" arcsize="10%" fillcolor="#00aa77"><center>Track your order</center></v:roundrect><![endif]--><!--[if !mso]><!--><a href="https://shop.brand.example/orders/4821" style="display:inline-block;padding:12px 20px;background:#00aa77;color:#ffffff">Track your order</a><!--<![endif]--></div><!--[if mso | IE]></td></tr></table><![endif]--></div></body></html>`;
+    const compatible: [string, string, RegExp[], RegExp[]][] = [
+      ['web font', `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html><head><style type="text/css">@font-face{font-family:'Open Sans';src:url('https://fonts.gstatic.com/s/opensans/v40/mem8YaGs126MiZpBA-UFVZ0b.woff2') format('woff2'),url('https://fonts.gstatic.com/s/opensans/v40/mem8YaGs126MiZpBA-UFVZ0d.woff') format('woff');font-weight:400} @font-face{font-family:Proxima;src:url('https://use.typekit.net/af/71f83c/00000000000000003b9b093b/27/l?primer=7cdcb44be4a7db8877ffa5c0007b8dd865b3bbc383831fe2ea177f62257a9191&fvd=n4&v=3') format('woff2')} h1{font-family:'Open Sans',Helvetica,Arial,sans-serif;letter-spacing:-0.01em;font-size:1.6em}</style></head><body><h1>Spring collection</h1><p>${ready}</p></body></html>`,
+        [/^<!DOCTYPE html PUBLIC "-\/\/W3C\/\/DTD XHTML 1\.0 Transitional\/\/EN"/, /@font-face\{font-family:'Open Sans';src:url\('https:\/\/fonts\.gstatic\.com\/s\/opensans\/v40\/mem8YaGs126MiZpBA-UFVZ0b\.woff2'\) format\('woff2'\)/, /src:url\('https:\/\/use\.typekit\.net\/af\//, /letter-spacing:-0\.01em;font-size:1\.6em/], [/\\/]],
+      // A font or style sheet from anywhere else is removed, and the checker says so.
+      ['custom font', `<html><head><style>@import url('https://cdn.brand.example/fonts.css'); @font-face{font-family:'Brand Sans';src:url('https://cdn.brand.example/fonts/brand-sans.woff2') format('woff2')} p{font-family:'Brand Sans',Arial}</style><link rel="stylesheet" href="https://cdn.brand.example/main.css"></head><body><p>${ready}</p></body></html>`,
+        [/<style> @font-face\{font-family:'Brand Sans';\} p\{font-family:'Brand Sans',Arial\}<\/style>/], [/cdn\.brand\.example|@import|<link/]],
+      ['Google Fonts', `<html><head><style>@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap'); body,p{font-family:'Open Sans',Arial,sans-serif}</style><link href="https://fonts.googleapis.com/css2?family=Inter&display=swap" rel="stylesheet"></head><body><p>${ready}</p></body></html>`,
+        [/@import url\('https:\/\/fonts\.googleapis\.com\/css2\?family=Open\+Sans:wght@400;700&display=swap'\)/, /<link href="https:\/\/fonts\.googleapis\.com\/css2\?family=Inter&amp;display=swap" rel="stylesheet">/], []],
+      ['preload hints', `<html><head><link rel="preload" as="image" href="https://cdn.brand.example/logo.png"><link rel="preconnect" href="https://fonts.gstatic.com"><link rel="dns-prefetch" href="//cdn.brand.example"></head><body><img src="https://cdn.brand.example/logo.png" width="140" height="40" alt="Brand"><p>${ready}</p></body></html>`,
+        [/<img src="https:\/\/cdn\.brand\.example\/logo\.png"/], [/<link/]],
+      ['comments', `<style>/* background-image:url(https://cdn.brand.example/old.png) intentionally disabled */ .hero{color:#111111} /* url("/relative.png") and @import "old.css"; */</style><!-- Built with an editor: <a href="/old">old link</a> --><p class="hero">${ready}</p>`,
+        [/<style>\/\* background-image:url\(https:\/\/cdn\.brand\.example\/old\.png\) intentionally disabled \*\/ \.hero\{color:#111111\} \/\* url\("\/relative\.png"\) and @import "old\.css"; \*\/<\/style>/], [/old link|Built with/]],
+      ['Outlook', outlook, [/<!--\[if mso \| IE\]><table align="center"/, /<!--\[if mso\]><v:roundrect/, /<!--\[if !mso\]><!--><a href=/, /<!--\[if lte mso 11\]><style type="text\/css">\.mj-outlook-group-fix \{ width:100% !important; \}<\/style><!\[endif\]-->/, /<!--\[if mso \| IE\]><\/td><\/tr><\/table><!\[endif\]-->/], []],
+      // The screen corpus as submitted: hybrid Outlook with web fonts, a responsive newsletter importing Google Fonts,
+      // a receipt, a dark-mode welcome and client hacks (an inline data: image isn't accepted for sending at all).
+      ...Object.entries(screenCorpus()).map(([name, { html, expect }]) => [name, html.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/, 'https://cdn.brand.example/chart.png'), expect.map(e => new RegExp(e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))), []] as [string, string, RegExp[], RegExp[]]),
+    ];
+    const fonts = ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: compatible.find(([name]) => name === 'custom font')![1], text: ready })).findings;
+    assert.deepEqual(fonts.filter((x: Json) => x.ruleId === 'custom-font').map((x: Json) => [x.severity, x.title]), [['warning', 'Custom font from cdn.brand.example removed']]);
+    assert.ok(!ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: compatible[0]![1], text: ready })).findings.some((x: Json) => x.ruleId === 'custom-font'), 'Fonts from font services raise no warning.');
+    for (const [name, html, kept, gone] of compatible) {
+      const { to, reply } = await send(html), id = ok(reply, 202).id;
+      await dispatch();
+      assert.equal(await outcome(id), 'accepted', name);
+      const sent = delivered.get(to)!.html!;
+      assert.equal(body(sent), await canonicalHtml(html), `${name}: delivered as the canonical copy`);
+      for (const pattern of kept) assert.ok(pattern.test(sent), `${name}: keeps ${pattern}`);
+      for (const pattern of gone) assert.ok(!pattern.test(sent), `${name}: drops ${pattern}`);
+    }
+  });
+  reviewScenario('a page of 500 distinct 317 KB copies makes progress in one campaign run, within bounded memory', async ({ campaign, settle, local, run, db, screened, diagnostic }) => {
+    const html = `<p>Hello {{name}}.</p>${'<p style="padding:64px">Ordinary.</p>'.repeat(1400)}`;
+    const c = await campaign('Large copies', html, Array.from({ length: 500 }, (_, i) => ({ name: `Reader ${i}` })), { subject: 'Account', defaults: {} });
+    ok(await local('POST', `/v1/campaigns/${c.id}/schedule`, { revision: c.revision, scheduledAt: new Date(Date.now() + 3_600_000).toISOString() }), 202);
+    assert.equal((await settle(c)).state, 'scheduled');
+    await db.query(`UPDATE sending_campaigns SET scheduled_at=now()-interval '1 second' WHERE id=$1`, [c.id]);
+    await db.query(`UPDATE jobs SET available_at=now() WHERE id=$1`, [`campaign.run:${c.id}`]);
+    // The live heap: collected before each sample, so garbage not yet collected doesn't count.
+    const { setFlagsFromString } = await import('node:v8'), { runInNewContext } = await import('node:vm');
+    setFlagsFromString('--expose-gc'); const gc = runInNewContext('gc') as () => void;
+    gc(); const start = screened.length, baseline = process.memoryUsage().heapUsed, began = Date.now();
+    let peak = baseline; const sample = setInterval(() => { gc(); peak = Math.max(peak, process.memoryUsage().heapUsed); }, 50);
+    try { await run('campaign.run'); } finally { clearInterval(sample); }
+    const state = (await db.query(`SELECT v.screen FROM sending_campaigns c JOIN sending_campaign_reviews v ON v.id=c.review_id WHERE c.id=$1`, [c.id])).rows[0].screen;
+    const expanded = (await db.query('SELECT expanded FROM sending_campaigns WHERE id=$1', [c.id])).rows[0].expanded;
+    diagnostic(`500 x 317 KB: ${Date.now() - began} ms, +${Math.round((peak - baseline) / 2 ** 20)} MiB live heap, ${screened.length - start} requests, screened through ${state.screenedThrough}, released ${expanded}`);
+    assert.ok(state.screenedThrough > 0 && expanded > 0 && screened.length > start, 'One run screens and releases some recipients.');
+    assert.ok(peak - baseline < 96 * 2 ** 20, `Peak live heap grew ${Math.round((peak - baseline) / 2 ** 20)} MiB`);
+  });
+  // Values used to be screened in packed requests at launch, every distinct one, before anyone was sent to. Now nothing
+  // but the campaign's own copy is screened before a release, and a release screens only the copies it is about to send.
+  const scheduleWithOneRequest = async ({ campaign, settle, screened, local }: Parameters<Parameters<typeof reviewScenario>[1]>[0], name: string, html: string, contacts: Record<string, unknown>[]) => {
+    const c = await campaign(name, html, contacts, { subject: 'Account', defaults: {} }), start = screened.length;
+    ok(await local('POST', `/v1/campaigns/${c.id}/schedule`, { revision: c.revision, scheduledAt: new Date(Date.now() + 3_600_000).toISOString() }), 202);
+    assert.equal((await settle(c)).state, 'scheduled');
+    assert.equal(screened.length - start, 1, `${name}: only the campaign's own copy is screened at launch`);
+  };
+  reviewScenario('180 contacts with 50 distinct 256-byte values buy no classifier requests at launch', async f => {
+    const fields = Array.from({ length: 50 }, (_, i) => `p${i}`);
+    await scheduleWithOneRequest(f, 'Many values', fields.map(field => `<p>Field ${field} is {{${field}}} today.</p>`).join(''),
+      Array.from({ length: 180 }, (_, n) => Object.fromEntries(fields.map((field, i) => [field, `${n}-${i}-`.padEnd(256, 'x')]))));
+  });
+  reviewScenario('values that are 255 bytes raw but 2,745 bytes after NFKC buy no requests at launch', async f => {
+    await scheduleWithOneRequest(f, 'Expanded values', '<p>Code {{code}} is yours.</p>', Array.from({ length: 500 }, (_, n) => ({ code: '\uFDFA'.repeat(83) + String(100000 + n) })));
+  });
   test('Sent-copy archiving and reputation alerts retry a transient failure instead of failing for good', async t => {
     await simulatedSesFixture(t, async ({ runtime }) => {
       const { mailboxIngestJobs } = await import('./src/mailbox-ingest.js'), { reputationAlertJobs } = await import('./src/reputation-alerts.js');
@@ -19873,6 +20343,13 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal(loadConfig({ ...base, BANE_REGIONAL_SENDING: 'true' }).platformAccount, undefined, 'Single-tenant installs need no platform account.');
       assert.deepEqual(loadConfig({ ...base, TYPESAFE_API_KEY: 'synthetic-typesafe-key' }).screen, { apiKey: 'synthetic-typesafe-key', endpoint: 'https://api.typesafe.ai/v1/systemone', model: 'jev-latest', mode: 'reject', threshold: 0.7 });
       assert.equal(loadConfig({ ...base, TYPESAFE_API_KEY: 'synthetic-console-key', JEV_ENDPOINT: 'https://opencode.ai/inference/systemone/v1/systemone', JEV_MODEL: 'jev-1.13-free' }).screen?.endpoint, 'https://opencode.ai/inference/systemone/v1/systemone');
+      // Screened-text limits: 24 KiB per message, 48 KiB per campaign (screened once), both configurable.
+      assert.deepEqual(loadConfig(base).screenLimits, { messageBytes: 24576, campaignBytes: 49152 });
+      assert.deepEqual(loadConfig({ ...base, JEV_MESSAGE_LIMIT_BYTES: '16384', JEV_CAMPAIGN_LIMIT_BYTES: '65536' }).screenLimits, { messageBytes: 16384, campaignBytes: 65536 });
+      // Font services a Hosted message may load fonts from: the defaults, or the operator's list.
+      assert.deepEqual(loadConfig(base).hostedFontHosts, ['fonts.gstatic.com', 'fonts.googleapis.com', 'use.typekit.net', 'p.typekit.net', 'fonts.bunny.net']);
+      assert.deepEqual(loadConfig({ ...base, JEV_FONT_HOSTS: ' Fonts.Example.com, cdn.example:8443,' }).hostedFontHosts, ['fonts.example.com', 'cdn.example:8443']);
+      assert.throws(() => loadConfig({ ...base, JEV_FONT_HOSTS: 'https://fonts.example.com/' }));
       // Synthetic live provider: the SDK prototype is intercepted, so no credential or AWS endpoint is used.
       runtime.config.liveEnabled = true;
       runtime.config.aws = { accessKeyId: 'SYNTHETIC_ACCESS_KEY', secretAccessKey: 'synthetic-secret-not-an-aws-credential' };
@@ -19882,12 +20359,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         VALUES ($1, $2, $3, $4, $5, '111122223333', $6)`, [runtime.config.workspaceId, REGION,
         JSON.stringify({ provisioned: true, account: { id: '111122223333', sendingEnabled: true }, resources: { topic: { arn: topic }, transactional: { sendingEnabled: true }, marketing: { sendingEnabled: true } } }),
         await credentialFingerprint(runtime.config), discoveryTarget(runtime.config), topic]);
-      const sent: string[] = [];
+      const sent: string[] = [], htmls = new Map<string, string | undefined>();
       t.mock.method(SESv2Client.prototype, 'send', async (command: any) => {
         if (command instanceof GetAccountCommand) return { SendingEnabled: true, SendQuota: { MaxSendRate: 100, Max24HourSend: 10000, SentLast24Hours: 0 } };
         assert.ok(command instanceof SendEmailCommand, 'Only GetAccount and SendEmail are expected.');
         const emailId = command.input.EmailTags!.find((tag: Json) => tag.Name === 'bane_email_id')!.Value!;
-        sent.push(emailId);
+        sent.push(emailId); htmls.set(emailId, command.input.Content?.Simple?.Body?.Html?.Data);
         return { MessageId: `live-${emailId}` };
       });
       const marker = unique('CASINO-BONUS');
@@ -19912,7 +20389,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           }, { once: true }));
         }
         if (classifierDown) return new Response(null, { status: 429 });
-        return Response.json({ model: 'jev-test', answers: { spam: { noul: request.state.email.subject.includes(marker) ? 0.97 : 0.02 } } });
+        return Response.json({ model: 'jev-test', answers: { spam: { noul: request.state.email.subject.includes(marker) || request.state.email.body.includes(marker) ? 0.97 : 0.02 } } });
       });
       const send = async (extra: Json) => ok(await local('POST', '/v1/emails/send', mail(extra), 'live'), 202).id as string;
       const get = async (emailId: string) => ok(await local('GET', `/v1/emails/${emailId}`, undefined, 'live'));
@@ -19951,6 +20428,17 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.ok(timeoutMs < 1000, `Classifier aborted after ${timeoutMs} ms`);
       assert.ok(sent.includes(slow));
       t.diagnostic(`Unresponsive classifier failed open in ${timeoutMs} ms; sibling already sent.`);
+      // Recheck 5, R5-M2: mail delivered as submitted (bring-your-own AWS with screen: true) is screened as written:
+      // every srcset candidate and the text its style sheet could draw are read, and SES gets the bytes submitted.
+      classifierDown = false;
+      const asWritten = `<!-- a sender's note --><style>/* plain */ .o{color:#111}</style><p class="o">Your receipt is attached.</p>`;
+      const srcset = await send({ subject: 'Receipt with a picture', html: `<img src="https://cdn.synthetic.invalid/a.png" srcset="https://cdn.synthetic.invalid/${marker},x.png 1x" alt="Receipt"><p>Your receipt is attached.</p>`, screen: true });
+      const drawn = await send({ subject: 'Receipt with a style', html: `<style>.o::before{content:"${marker}"}</style><p class="o">Your receipt is attached.</p>`, screen: true });
+      const kept = await send({ subject: 'Receipt as written', html: asWritten, screen: true });
+      await dispatchDue(runtime, REGION);
+      assert.deepEqual([(await get(srcset)).errorCode, (await get(drawn)).errorCode, (await get(kept)).status], ['CONTENT_REJECTED_SPAM', 'CONTENT_REJECTED_SPAM', 'accepted']);
+      assert.ok(!sent.includes(srcset) && !sent.includes(drawn));
+      assert.equal(htmls.get(kept), asWritten, 'Mail delivered as submitted goes to SES byte for byte.');
     });
   });
 

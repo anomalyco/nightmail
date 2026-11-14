@@ -1,6 +1,7 @@
 import { ApiError, digest, type Runtime } from './core.js';
 import type { EmailSnapshot } from './db/sending.js';
 import { VISIBLE_WORDS } from './screened-html.js';
+import { destination, destinationHost, hostedHtml, type FontSources, type HostedOptions } from './hosted-html.js';
 import { formattedSender } from './sending.js';
 
 // Opt-in content screen for live transactional mail (`screen: true`): asks Jev, TypeSafe AI's decision
@@ -8,8 +9,11 @@ import { formattedSender } from './sending.js';
 // gambling ad set as a workspace name in an invitation). The dispatcher decides what to do with the score.
 
 const MAX_BODY = 8000;
-export const MAX_SCREEN_BYTES = 24 * 1024;
-const MAX_CHUNKS = 4;
+// Link signals (every host a message links or loads, and link labels that name another host) repeat in each request.
+const MAX_SIGNALS = 60, MAX_SIGNAL_BYTES = 1000, OVERLAP = 256;
+/** Requests the longest text a limit admits needs: windows of a request less the most signals, overlapping by 256 bytes
+ *  and a few bytes less at UTF-8 boundaries. 24 KiB takes 4; 48 KiB takes 8. */
+export const chunksFor = (limitBytes: number) => { const width = MAX_BODY - MAX_SIGNAL_BYTES - 1; return 1 + Math.ceil(Math.max(0, limitBytes - width) / (width - OVERLAP - 6)); };
 const TTL_MS = 60 * 60 * 1000;
 const MAX_ENTRIES = 5000;
 const DEADLINE_MS = 500;
@@ -37,21 +41,41 @@ function copy(s = '') {
   const sentences = normalize(s).split(/\n+|(?<=[.!?])\s+/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
   return [...new Set(sentences)].join(' ');
 }
-const tooLarge = () => new ApiError(422,'CONTENT_TOO_LARGE_TO_SCREEN','Shorten the message so Hosted sending can screen it.');
+const bytes = (n: number) => n.toLocaleString('en-US');
+function refused(message: string, details?: Record<string, unknown>, index?: number) {
+  const error = new ApiError(422, 'CONTENT_TOO_LARGE_TO_SCREEN', message, index === undefined ? undefined : `emails.${index}`);
+  if (details) error.details = [{ ...details, ...(index === undefined ? {} : { index }) }];
+  return error;
+}
+const unreadable = () => refused('Simplify the HTML so Hosted sending can screen it: it is too large or too deeply nested to read.');
+/** Over the screened-text limit: the measured size and the limit, so the sender knows how much to cut. */
+export const tooLarge = (screenedBytes: number, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) =>
+  refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's visible text and alt text, the text part unless it says exactly the same, and each distinct link and image address. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
+    { screenedBytes, limitBytes }, index);
+/** Markup whose destinations the screen can't read: refused for Hosted mail, named so the sender can fix it. */
+export const unsupportedUrls = (unsupported: string[], index?: number) => {
+  const error = new ApiError(422, 'UNSUPPORTED_URL_IN_HOSTED_MAIL', `Hosted sending screens every address a message links to or loads from, and where these lead depends on where the message is opened: ${unsupported.join('; ')}. Use absolute https:// addresses (or mailto:, tel:, cid: and #fragments), and no <base>.`, index === undefined ? 'html' : `emails.${index}.html`);
+  error.details = [{ unsupported, ...(index === undefined ? {} : { index }) }];
+  return error;
+};
+const tooManyHosts = (linkHosts: number, index?: number) =>
+  refused(`The message links to or loads ${linkHosts} distinct hosts (counting link labels that name another host); Hosted sending screens at most ${MAX_SIGNALS}. Link to fewer domains.`,
+    { linkHosts, linkHostLimit: MAX_SIGNALS }, index);
 // Repeat link signals and a little preceding context in each window. Split on
 // UTF-8 boundaries; a clean result is meaningful only after the last window.
-function completeBodies(content: string, links: string) {
-  const bytes = Buffer.from(content), prefix = links ? links+'\n' : '';
-  if (bytes.length > MAX_SCREEN_BYTES || Buffer.byteLength(links) > 1000) throw tooLarge();
+function completeBodies(content: string, links: string, limitBytes: number, scope: 'message' | 'campaign' = 'message') {
+  const bytes = Buffer.from(content), prefix = links ? links+'\n' : '', most = chunksFor(limitBytes);
+  if (bytes.length > limitBytes) throw tooLarge(bytes.length, limitBytes, scope);
+  if (Buffer.byteLength(links) > MAX_SIGNAL_BYTES) throw tooManyHosts(links.split('\n').length);
   const bodies: string[] = [], width = MAX_BODY - Buffer.byteLength(prefix);
   let start = 0;
   do {
-    if (bodies.length === MAX_CHUNKS) throw tooLarge();
+    if (bodies.length === most) throw tooLarge(bytes.length, limitBytes, scope);
     let end = Math.min(bytes.length, start + width);
     while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
     bodies.push(prefix + bytes.toString('utf8', start, end));
     if (end === bytes.length) break;
-    start = end - 256;
+    start = end - OVERLAP;
     while ((bytes[start]! & 0xc0) === 0x80) start--;
   } while (true);
   return bodies;
@@ -59,23 +83,28 @@ function completeBodies(content: string, links: string) {
 function host(value: string) {
   try { return new URL(value.startsWith('//') ? 'https:'+value : value).hostname.toLowerCase(); } catch { return ''; }
 }
+// Addresses a client links in text: absolute http(s) URLs and www. hosts, without the punctuation that ends a sentence.
+const textTargets = (text = '') => [...text.matchAll(/(?:\bhttps?:\/\/|\bwww\.)[^\s<>"'`]+/giu)].map(match => (/^www\./i.test(match[0]) ? 'https://' : '') + match[0].replace(/[.,;:!?)\]}'"’”]+$/u, ''));
 const INLINE=new Set(['a','abbr','b','bdi','bdo','big','cite','code','data','del','dfn','em','font','i','ins','kbd','label','mark','q','s','samp','small','span','strike','strong','sub','sup','time','tt','u','var','wbr','img','input','button','select','textarea','output','meter','progress','picture','source','svg','text','tspan','math','mi','mo','mn','ruby','rt','rp','nobr']);
 /**
- * An HTML body as the screen reads it: the text a client lays out, every host it links or loads, anchors whose text
- * names another host than their href, and its links and images (for the support lint, src/deliverability.ts).
+ * What a recipient reads of an HTML body: its canonical copy (src/hosted-html.ts), the one Hosted sending delivers,
+ * and from that same tree its text, every place it links to or loads from, and the markup refused.
  */
-export async function readHtml(html: string, visit?: (tag: string) => void) {
-  const { boundedHtmlFragment } = await import('./bounded-html.js');
-  if (html.length>512*1024) throw tooLarge();
-  const fragment=boundedHtmlFragment(html,'fragment',{clients:true});
-  if (!fragment) throw tooLarge();
-  const hosts=new Set<string>(), mismatches=new Set<string>(), links:string[]=[], images:{ alt: boolean }[]=[];
+/** Where this installation's Hosted mail may load fonts from: its font services, and its own font directory. */
+export const fontSources = (config: Pick<Runtime['config'], 'hostedFontHosts' | 'publicUrl'>): FontSources => ({ hosts: config.hostedFontHosts, prefix: `${config.publicUrl}/fonts/` });
+export async function readHtml(html: string, visit?: (tag: string) => void, options: HostedOptions = {}) {
+  if (html.length>512*1024) throw unreadable();
+  const copy=hostedHtml(html, options);
+  if (!copy) throw unreadable();
+  const { destinations, unsupported, removed }=copy, root=copy.root;
+  for (const tag of copy.tags) visit?.(tag);
+  const hosts=new Set([...destinations].map(destinationHost).filter(Boolean)), mismatches=new Set<string>(), links:string[]=[], images:{ alt: boolean }[]=[];
   // Text as a client lays it out: inline runs stay one word, block elements end the line, and text a client shows
   // beside the flow (alt, title) follows on its own lines, as does a table row whose cells hold short pieces read
   // glued, the way a recipient reads a word laid out across adjacent cells.
   const lines:string[]=[], aside:string[]=[], rows:string[][]=[]; let line='';
   const flush=()=>{ if(line.trim()) lines.push(line); line=''; };
-  const walk=(node:typeof fragment.childNodes[number], anchor:string)=>{
+  const walk=(node:typeof root.childNodes[number], anchor:string)=>{
     if ('value' in node) {
       line+=node.value;
       if(anchor) for(const word of normalize(node.value).split(/\s+/)) {
@@ -88,16 +117,19 @@ export async function readHtml(html: string, visit?: (tag: string) => void) {
     const children='childNodes' in node ? node.childNodes : [];
     if (!('tagName' in node)) { for (const child of children) walk(child,anchor); return; }
     const tag=node.tagName;
-    visit?.(tag);
-    if (['style','script','template','head','title','xml'].includes(tag)) return;
+    // The head isn't shown, but Outlook reads a conditional comment wherever it is.
+    if (tag==='head') { for (const child of children) if (child.nodeName==='#comment') walk(child,anchor); return; }
+    if (['style','script','template','title','xml'].includes(tag)) return;
     let display='';
     for (const a of node.attrs) {
-      if (['href','src','srcset','background','action','style'].includes(a.name)) {
-        for(const m of normalize(a.value).matchAll(/(?:https?:)?\/\/[^\s,)'"<>]+/gi)) { const h=host(m[0]); if(h) hosts.add(h); }
-        if(tag==='a' && a.name==='href') { anchor=host(normalize(a.value)); links.push(normalize(a.value)); }
-      }
+      // URLs are read from the decoded attribute as they are, never as prose (the copy's inventory has them all).
+      if (tag==='a' && a.name==='href') { const target=destination(a.value); anchor=target ? destinationHost(target) : ''; if (target) links.push(target); }
       if (a.name==='style') display=/(?:^|;)\s*display\s*:\s*([a-z-]+)/i.exec(a.value)?.[1]?.toLowerCase() ?? '';
-      if (['alt','title'].includes(a.name) && a.value.trim()) aside.push(a.value);
+      // Text a client shows beside the flow: alt and title, and what form controls draw (placeholders, button and
+      // option labels, the value in a field).
+      const shown=['alt','title','placeholder'].includes(a.name) || (a.name==='value' && ['input','button','option'].includes(tag) && !node.attrs.some(b=>b.name==='type' && b.value.toLowerCase()==='hidden'))
+        || (a.name==='label' && ['option','optgroup','track'].includes(tag));
+      if (shown && a.value.trim()) aside.push(a.value);
     }
     if (tag==='img') images.push({ alt: node.attrs.some(a=>a.name==='alt' && !!a.value.trim()) });
     const inline=display ? display.startsWith('inline') : INLINE.has(tag);
@@ -109,28 +141,59 @@ export async function readHtml(html: string, visit?: (tag: string) => void) {
     if (tag==='td' || tag==='th') rows[rows.length-1]?.push(lines.slice(start).join(' '));
     if (tag==='tr') { const cells=rows.pop()!; if (cells.length>1 && cells.some(cell=>cell.trim() && cell.trim().length<=4)) aside.push(cells.join('')); }
   };
-  for (const child of fragment.childNodes) walk(child,'');
+  for (const child of root.childNodes) walk(child,'');
   flush();
-  return { text: [...lines,...aside].join('\n'), hosts, mismatches, links, images };
+  aside.push(...copy.text);
+  return { text: [...lines,...aside].join('\n'), hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, links, images, html: copy.html };
 }
+/**
+ * The text the screen reads: the HTML's visible text, then the text part, then raw MIME, each in full. A recipient reads
+ * one part or the other, so a part is left out only when, normalized, it is byte for byte a part already read (a text part
+ * generated from the HTML); any difference at all, and the whole part is screened. The parts' word overlap goes to the
+ * classifier as a signal, since a text part that tells another story is a known spam trick.
+ */
 export function screenTextSignals(visible: string, text?: string, rawPart?: string) {
-  // Preserve order and repetitions in mandatory input; deduplicating sentences
-  // could change the meaning or make an over-limit message appear to fit.
   const project=(s='')=>normalize(s).replace(/\s+/g,' ').trim();
-  const plain=project(text), raw=project(rawPart), rendered=project(visible);
+  const rendered=project(visible), plain=project(text), raw=project(rawPart);
   const words=(v:string)=>new Set(v.toLowerCase().match(VISIBLE_WORDS));
   function overlap(text:string, html:string) {
     const a=words(text), b=words(html), common=[...a].filter(w=>b.has(w)).length;
     return a.size && b.size ? common/(a.size+b.size-common) : undefined;
   }
-  return { content:[rendered,plain,raw].filter(Boolean).join('\n'), textHtmlOverlap:overlap(plain,rendered) };
+  const parts=[rendered,plain,raw].filter((part,i,all)=>part && all.indexOf(part)===i);
+  return { content:parts.join('\n'), textHtmlOverlap:overlap(plain,rendered) };
 }
-async function body(snapshot: EmailSnapshot) {
-  const read=snapshot.html ? await readHtml(snapshot.html) : undefined;
-  const signals=read ? [...read.mismatches,...read.hosts] : [];
-  if(signals.length>60) throw tooLarge();
-  const {content,textHtmlOverlap}=screenTextSignals(read?.text ?? '',snapshot.text,snapshot.raw);
-  return { bodies:completeBodies(content,signals.join('\n')), textHtmlOverlap };
+export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; destinations: string[]; unsupported: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
+/** The HTML a Hosted message is delivered as: its canonical copy, which reads as itself, so the screen reads exactly it. */
+export async function canonicalHtml(html: string, fonts?: FontSources): Promise<string> {
+  if (html.length>512*1024) throw unreadable();
+  const copy=hostedHtml(html, { fonts });
+  if (!copy) throw unreadable();
+  return copy.html;
+}
+/**
+ * What the screen would read of a message, measured without asking the classifier: its text, then every distinct
+ * place it links to or loads from, canonical and in full (links, images and other resources, and addresses in its
+ * text), one per line. Destinations count toward the screened-text limit like the text: none is dropped to fit.
+ */
+export async function measureScreen(snapshot: Pick<EmailSnapshot, 'html' | 'text' | 'raw'>, options: HostedOptions = {}): Promise<ScreenMeasure> {
+  const read=snapshot.html ? await readHtml(snapshot.html, undefined, options) : undefined;
+  const destinations=[...new Set([...read?.destinations ?? [], ...[read?.text, snapshot.text, snapshot.raw].flatMap(part => textTargets(part)).flatMap(target => destination(target) ?? [])])];
+  const hosts=new Set([...read?.hosts ?? [], ...destinations.map(destinationHost).filter(Boolean)]);
+  const signals=[...read?.mismatches ?? [], ...hosts];
+  const text=screenTextSignals(read?.text ?? '',snapshot.text,snapshot.raw), content=[text.content, destinations.join('\n')].filter(Boolean).join('\n');
+  return { read, signals, destinations, unsupported: read?.unsupported ?? [], content, textHtmlOverlap: text.textHtmlOverlap, screenedBytes: Buffer.byteLength(content) };
+}
+/** Refuses a message the screen cannot read within a limit, with the measured size; `index` names a batch item. */
+export function assertScreenable(measure: ScreenMeasure, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) {
+  if (measure.unsupported.length) throw unsupportedUrls(measure.unsupported, index);
+  if (measure.signals.length>MAX_SIGNALS || Buffer.byteLength(measure.signals.join('\n'))>MAX_SIGNAL_BYTES) throw tooManyHosts(measure.signals.length,index);
+  if (measure.screenedBytes>limitBytes) throw tooLarge(measure.screenedBytes,limitBytes,scope,index);
+}
+async function body(snapshot: EmailSnapshot, limitBytes: number, fonts: FontSources, original: boolean) {
+  const measure=await measureScreen(snapshot, { fonts, original });
+  assertScreenable(measure,limitBytes);
+  return { bodies:completeBodies(measure.content,measure.signals.join('\n'),limitBytes), textHtmlOverlap:measure.textHtmlOverlap };
 }
 export async function jevQuestions(endpoint:string,apiKey:string,model:string,state:unknown,questions:unknown,deadline:number):Promise<unknown> {
   // The deadline includes reading the response body. Never retry inside a send lease.
@@ -160,13 +223,16 @@ async function evaluate(endpoint: string, apiKey: string, model: string, state: 
   return { spam, model: typeof parsed?.model === 'string' ? parsed.model : model };
 }
 
-/** Spam probability for one snapshot, or null when the installation has no classifier configured. */
-export async function screenSnapshot(runtime: Runtime, snapshot: EmailSnapshot, required=false): Promise<ScreenResult | null> {
+/** Spam probability for one snapshot, or null when the installation has no classifier configured. A campaign test has
+ *  the campaign limit. `reserve` is told how many requests a classification will make before the first one. The
+ *  snapshot is read as it is sent: Hosted mail as its canonical copy (the dispatcher has already made it one), mail
+ *  delivered as submitted (BYO `screen: true`, `original`) exactly as written. */
+export async function screenSnapshot(runtime: Runtime, snapshot: EmailSnapshot, required=false, reserve?: (requests: number) => Promise<void>, original=false): Promise<ScreenResult | null> {
   const settings = runtime.config.screen;
   if (!settings) return null;
   const from = formattedSender(snapshot.from, snapshot.fromName);
   const recipients=snapshot.to.length+snapshot.cc.length+snapshot.bcc.length;
-  const key = await digest(JSON.stringify([runtime.config.workspaceId,settings.endpoint,settings.model,required,from,snapshot.kind,snapshot.subject,snapshot.text,snapshot.html,snapshot.raw,recipients]));
+  const key = await digest(JSON.stringify([runtime.config.workspaceId,settings.endpoint,settings.model,required,original,from,snapshot.kind,snapshot.subject,snapshot.text,snapshot.html,snapshot.raw,recipients]));
   const now = Date.now();
   const hit = cache.get(key);
   if (hit && hit.expires > now) return hit.result;
@@ -174,7 +240,9 @@ export async function screenSnapshot(runtime: Runtime, snapshot: EmailSnapshot, 
   // Concurrent copies share one request; failures are not cached so the next copy retries.
   let pending=flights.get(runtime.storage);if(!pending){pending=new Map();flights.set(runtime.storage,pending);}
   const existing=pending.get(key);if(existing)return existing;
-  const lookup=body(snapshot).then(async ({bodies,textHtmlOverlap})=>{
+  const limits=runtime.config.screenLimits;
+  const lookup=body(snapshot,snapshot.testCampaignId ? limits.campaignBytes : limits.messageBytes,fontSources(runtime.config),original).then(async ({bodies,textHtmlOverlap})=>{
+    await reserve?.(bodies.length);
     const sender=copy(from), subject=copy(snapshot.subject);
     let highest: ScreenResult | undefined;
     for (const body of bodies) {
@@ -186,4 +254,39 @@ export async function screenSnapshot(runtime: Runtime, snapshot: EmailSnapshot, 
   try{const result=await lookup;cache.set(key,{expires:now+TTL_MS,result});
     while(cache.size>MAX_ENTRIES)cache.delete(cache.keys().next().value!);return result;
   }finally{pending.delete(key);}
+}
+
+// A Hosted campaign is screened copy by copy, as single messages are, but each distinct copy only once
+// (src/sending.ts campaignVerdicts): a copy's verdict is keyed by its exact screen input, everything the classifier is
+// sent for it, so recipients whose copies read the same share it. Only the generated unsubscribe link is set aside.
+
+/** A campaign's screening state, on its review (sending_campaign_reviews.screen). */
+export type CampaignScreen = {
+  /** The review content it belongs to (sending_campaign_reviews.content_hash). */
+  contentHash: string; probation: boolean;
+  /** The campaign's own copy, placeholders unresolved, screened first as an early refusal. */
+  template: { key: string; spam: number; model: string } | null;
+  /** Recipients whose copies have verdicts, in send order, and how many of them were refused as spam. */
+  screenedThrough: number; recipients: number; rejected: number;
+  /** Classifier outages in a row, for the wait before the next attempt; whether the refused share paused it once. */
+  failures: number; quarantined: boolean;
+};
+/** What the classifier is sent for one copy: its requests, and their key, which is the same for the same input. */
+export type ScreenInput = { key: string; bodies: string[]; textHtmlOverlap?: number; from: string; subject: string };
+/** A campaign copy's screen input, refused past the limit. */
+export async function screenInput(runtime: Runtime, snapshot: EmailSnapshot, limitBytes: number, options: { placeholders?: boolean } = {}): Promise<ScreenInput> {
+  const settings = runtime.config.screen;
+  if (!settings) throw new ApiError(503, 'CONTENT_SCREEN_UNAVAILABLE', 'Hosted content screening is unavailable.', undefined, true);
+  const measure = await measureScreen(snapshot, { ...options, fonts: fontSources(runtime.config) });
+  assertScreenable(measure, limitBytes, 'campaign');
+  const bodies = completeBodies(measure.content, measure.signals.join('\n'), limitBytes, 'campaign');
+  const from = copy(formattedSender(snapshot.from, snapshot.fromName)), subject = copy(snapshot.subject);
+  const key = await digest(JSON.stringify([settings.endpoint, settings.model, from, snapshot.kind, subject, bodies, measure.textHtmlOverlap ?? null]));
+  return { key, bodies, textHtmlOverlap: measure.textHtmlOverlap, from, subject };
+}
+/** One request of a campaign copy's screen. */
+export async function screenWindow(runtime: Runtime, input: ScreenInput, window: number): Promise<ScreenResult> {
+  const settings = runtime.config.screen;
+  if (!settings) throw new ApiError(503, 'CONTENT_SCREEN_UNAVAILABLE', 'Hosted content screening is unavailable.', undefined, true);
+  return evaluate(settings.endpoint, settings.apiKey, settings.model, { email: { from: input.from, kind: 'marketing', subject: input.subject, body: input.bodies[window]! }, signals: { recipients: 1, textHtmlOverlap: input.textHtmlOverlap } });
 }

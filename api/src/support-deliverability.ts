@@ -166,7 +166,7 @@ export function registerSupportDeliverability(app: App, meta: Meta, WorkspaceFil
     hours: z.array(z.object({ at: z.string(), screened: z.number(), rejected: z.number() })).describe('Hours the Hosted content screen judged mail in.'),
     totals: z.object({ screened: z.number(), rejected: z.number(), rate: Rate }), byCode: z.record(z.string(), z.number()).describe('Among the rejections listed.'),
     rejections: z.array(z.object({ emailId: z.string(), campaignId: z.string().nullable(), at: z.string(), subject: z.string().describe('120 characters.'),
-      errorCode: z.string().describe('CONTENT_REJECTED_SPAM, CONTENT_IMAGE_ONLY, CONTENT_TOO_LARGE_TO_SCREEN, ATTACHMENT_TYPE_UNSCREENABLE, ATTACHMENT_CONTENT_MISMATCH.'),
+      errorCode: z.string().describe('CONTENT_REJECTED_SPAM, CONTENT_IMAGE_ONLY, CONTENT_TOO_LARGE_TO_SCREEN, UNSUPPORTED_URL_IN_HOSTED_MAIL, ATTACHMENT_TYPE_UNSCREENABLE, ATTACHMENT_CONTENT_MISMATCH.'),
       spamScore: z.number().nullable().describe('The classifier’s spam probability, for CONTENT_REJECTED_SPAM.'), model: z.string().nullable() })).describe('The last 50, newest first.'),
   }).openapi('SupportScreen');
   app.openapi(createRoute({ ...meta('getSupportScreen', 'The Hosted content screen over at most 7 days: hourly screened and rejected counts, and the last 50 rejections with subject, error code and spam score. Never bodies.'),

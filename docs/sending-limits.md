@@ -79,6 +79,69 @@ Bounces alone hold marketing; they stop everything only when **transactional mai
 
 A Hosted campaign with more than 100 recipients sends a **probe** first: the first `min(500, 10%)` recipients, at least 100. Release waits until the probe has gone out and ten more minutes for its feedback (`delivery.waiting.reason` is `list_probe`). More than 3% hard bounces or 2 complaints **quarantines** the campaign (paused, `LIST_QUALITY`); bounced addresses are suppressed and owners get an email. After the probe, a campaign still pauses at more than 2% bounces after 1,000 accepted or more than 0.08% complaints after 2,000. The owner can resume a quarantined campaign once; a second quarantine needs a review (409 `QUARANTINE_REVIEW_REQUIRED`). A quarantine never pauses the account.
 
+## Content screen: how much text
+
+Hosted mail is screened for smuggled advertising and scams before it is delivered. The screen reads the HTML's visible text and `alt` text, then the text part: a text part that, normalized, is exactly the HTML's text (one generated from it) counts once; any other text part is screened in full. It also reads every distinct address the message links to or loads from (links, images, backgrounds, and addresses in its text), in full, the way a mail client resolves them; these count toward the limit too.
+
+| What | Limit | When it is checked |
+| --- | --- | --- |
+| A message (`POST /v1/emails/send`, each item of `/v1/emails/batch`, replies and inbox sends) | **24,576 UTF-8 bytes** of screened text (24 KiB), 60 distinct link hosts | On submission |
+| A campaign's own copy, placeholders unresolved, and a campaign test | **49,152 UTF-8 bytes** (48 KiB) | On send, schedule or test |
+| Each recipient's copy of a campaign | 49,152 bytes; a copy over it is refused alone | Before it is released |
+
+Every recipient's copy of a campaign is screened before it is released, but each distinct copy only once: recipients whose personalized copies read exactly the same share one verdict. A campaign personalized with first names costs one screen per distinct first name; one with a unique value per recipient costs one per recipient, as a single message would. The campaign's own copy is screened first: if it is refused, the campaign fails before anyone is sent to. A copy the screen refuses is never sent (`CONTENT_REJECTED_SPAM`, counted in the score like any refused message), and when refused copies pass 5% and 10 recipients the campaign pauses once for you to review.
+
+Over a limit, the request is refused at once with 422 `CONTENT_TOO_LARGE_TO_SCREEN` and `error.details[0]` set to `{ screenedBytes, limitBytes }` (or `{ linkHosts, linkHostLimit }`); in a batch, `index` names the message and nothing in the batch is queued. `POST /v1/emails/check` reports the measured size as the `screen-bytes` finding. Self-hosted installations set the limits with `JEV_MESSAGE_LIMIT_BYTES` and `JEV_CAMPAIGN_LIMIT_BYTES`.
+
+## Content screen: the delivered copy
+
+Hosted mail is delivered as one canonical copy of its HTML, and the screen reads exactly that copy. The body is parsed once, as a document, the tree is cleaned as below, and the result is serialized. Those bytes go to SES, and the screened text, the list of every address the message links to or loads from, and the verdict all come from the same tree. The copy is read again until it reads as itself, so a recipient's client parses exactly what was screened. This applies to all Hosted mail: probation and trusted, transactional and marketing, and each campaign copy. On probation the copy is first reduced to text, as described in `api/README.md`.
+
+**Refused** at submission with 422 `UNSUPPORTED_URL_IN_HOSTED_MAIL`, because where it leads depends on where the message is opened:
+- `<base>`;
+- any link or resource address that isn't an absolute `https://` or `http://` address (with both slashes), `mailto:`, `tel:`, `cid:` (an attachment) or a `#fragment`. This covers relative (`/offer`, `../offer`, `https:offer`) and network-path (`//host/offer`, `\\host/offer`) addresses and other schemes. Inline `data:` is refused earlier, as `UNSAFE_HTML_URL`.
+
+The error names each element and attribute, and `error.details[0].unsupported` lists them (with `index` in a batch). `POST /v1/emails/check` reports the same as the `unsupported-url` warning. A campaign's own copy may start an address with a placeholder (`href="{{link}}"`): each recipient's copy must then hold an allowed address, or that copy alone is refused with the same code.
+
+**CSS** is never rewritten. A style sheet or `style` attribute is delivered byte for byte as written, less whole declarations and rules, cut out where they were parsed. What stays is a conservative allow-list:
+- **A declaration stays** when its property is a presentation property (the list below) and its value holds only keywords, numbers, lengths, colours, gradients and `calc()`/`min()`/`max()`/`clamp()` arithmetic.
+- **A declaration is removed** when its property is anything else, including custom properties (`--*`), `content`, `quotes`, counters, `cursor`, `filter`, `transform`, `direction`, `order`, transitions and animations. It is also removed when its value has `var()`, `env()`, `attr()`, `url()`, `image-set()`, `cross-fade()`, `element()`, `expression()` or any other function, a function name written with escapes, or a string anywhere but a font name.
+- **`background-image`** may load exactly one absolute `https` image, written `url("…")` without escapes; that address is screened. Any other `background-image`, and a `background` shorthand with an image, is removed.
+- **At-rules:** `@media` stays, with its rules filtered the same way. `@font-face` and `@import` stay only when they load from the font services below. Every other at-rule (`@supports`, `@keyframes`, `@counter-style`, `@page` …) is removed.
+- **Rules:** a rule stays only with a plain selector (type, class, id, attribute and pseudo selectors and combinators) and a block of plain declarations. A rule with nested rules or at-rules in its block, or with any other selector, is removed whole, as is a rule left without declarations. CSS comments stay where they are; every CSS reader ignores them.
+
+The presentation properties (each also with a `-webkit-`, `-moz-`, `-ms-` or `-o-` prefix):
+- **Typography:** `font` and its longhands (`font-family`, `-size`, `-style`, `-weight`, `-variant*`, `-feature-settings`, `-variation-settings`, `-stretch`, `-kerning`, `-optical-sizing`, `-synthesis`, `-size-adjust`, `-smoothing`), `line-height`, `letter-spacing`, `word-spacing`, `text-align(-last)`, `text-decoration*`, `text-underline-offset`/`-position`, `text-transform`, `text-indent`, `text-shadow`, `text-rendering`, `text-size-adjust`, `white-space`, `word-break`, `word-wrap`, `overflow-wrap`, `hyphens`, `tab-size`, `vertical-align`, `list-style`, `list-style-type`, `list-style-position`, `interpolation-mode`.
+- **Colour:** `color`, `background`, `background-color`, `background-image` (above), `background-position`, `-size`, `-repeat`, `-clip`, `-origin`, `opacity`, `color-scheme`, `supported-color-schemes`, `accent-color`, `caret-color`, `text-fill-color`.
+- **Spacing:** `margin*`, `padding*` (physical and logical), `gap`, `row-gap`, `column-gap`, `grid-gap`.
+- **Sizing:** `width`, `height`, `min-`/`max-width`/`-height`, `inline-size`, `block-size` and their `min-`/`max-`, `box-sizing`, `aspect-ratio`, `object-fit`, `object-position`.
+- **Borders:** `border*` (sides, widths, styles, colours, radii), `border-collapse`, `border-spacing`, `outline*`, `box-shadow`.
+- **Display and layout:** `display`, `position`, `top`, `right`, `bottom`, `left`, `inset`, `float`, `clear`, `z-index`, `overflow(-x/-y)`, `table-layout`, `caption-side`, `empty-cells`, `flex`, `flex-direction`, `flex-wrap`, `flex-flow` (not reversed), `flex-grow`, `flex-shrink`, `flex-basis`, `grid-template-columns`/`-rows`, `grid-auto-columns`/`-rows`/`-flow`, `columns`, `column-count`, `column-width`, `column-rule`.
+- **Alignment:** `align-items`, `align-content`, `align-self`, `justify-content`, `justify-items`, `justify-self`, `place-items`, `place-content`, `place-self`.
+- **Visibility:** `visibility`.
+- **Outlook and VML:** `mso-table-lspace`, `mso-table-rspace`, `mso-line-height-rule`, `mso-line-height-alt`, `mso-hide`, `mso-padding-alt`, `mso-margin-top-alt`, `mso-margin-bottom-alt`, `mso-text-raise`, `mso-font-width`, `mso-ansi-font-size`, `mso-bidi-font-size`, `mso-height-rule`, `mso-border-alt`, `mso-width-percent`, `mso-fit-shape-to-text`, `mso-wrap-style`, `v-text-anchor`.
+
+**Removed** from the delivered HTML too, because a client could draw or load something from them that the screen can't read:
+- **Comments:** HTML comments other than Outlook's conditional ones. An Outlook conditional comment is delivered as written and its markup is screened. If any of that markup would be removed, or it repeats an attribute, the whole comment is removed.
+- **Elements:** scripts, `<template>`, frames, `<embed>`, `<link>` other than a style sheet (preload, prefetch and preconnect hints included), refresh and Link `<meta>`, and SVG `<set>`/`<animate>` of an address or style. `<object>` and `<applet>` are replaced by their fallback content.
+- **Attributes:** `srcset` (the image keeps its `src`), `archive`, `xml:base`, MathML `altimg` and `definitionURL`, `ping` with an address that isn't absolute, `url()` resources in SVG presentation attributes, and inline `data:` addresses. A repeated attribute is delivered once, the first, as every HTML parser reads it.
+
+**Fonts:** a font can draw any text in place of the text the screen reads, and a style sheet can generate text, so Hosted mail loads both only from font services whose fonts senders can't upload. `@font-face` files, `@import` and `<link rel="stylesheet">` may come from `fonts.gstatic.com`, `fonts.googleapis.com`, `use.typekit.net`, `p.typekit.net` and `fonts.bunny.net`, over `https`. Self-hosted installations set the list with `JEV_FONT_HOSTS`. Font files may also come from the installation's own font directory (the campaign editor's Inter). Fonts and style sheets from anywhere else are removed from the delivered copy rather than refused, as are SVG fonts, and `POST /v1/emails/check` shows a `custom-font` warning: "Custom font from <host> removed; use a hosted font service."
+
+Every kept address (links, images, `background-image`, fonts, imports) is on the screen's list and counts toward the screened-text limit and the 60-host limit above.
+
+**Bring-your-own AWS with `screen: true`:** the message goes out exactly as submitted and is screened as written, not as a Hosted copy. The screen reads its text, every address it could link to or load from, and the text its style sheet could draw. Addresses include URL attributes, every `srcset` candidate, and every `url()` or absolute address anywhere in its CSS, custom properties and `var()` fallbacks included. Drawn text includes CSS strings and the attributes `attr()` reads. `<base>` and relative addresses are refused as above.
+
+Every URL-bearing attribute is either read as a destination or removed:
+
+| Attribute | Treatment |
+| --- | --- |
+| `href`, `src`, `background`, `poster`, `action`, `formaction`, `cite`, `longdesc`, `usemap`, `data`, `codebase`, `classid`, `code`, `profile`, `manifest`, `icon`, `lowsrc`, `dynsrc`, SVG `xlink:href`, and any prefixed `…:href` or `…:src` (Office `o:href`, `v:src`) | Read as a destination; refused unless it is an allowed address |
+| `ping`, `attributionsrc` | Each space-separated address is read as a destination; removed when any isn't absolute `http(s)` |
+| `srcset`, `imagesrcset`, `imagesizes`, `archive`, `xml:base`, `altimg`, `definitionURL` | Removed |
+| `style` and `<style>` | CSS as above: a `background-image`, `@font-face` or `@import` address is read as a destination; any other resource is removed with its declaration |
+| `fill`, `stroke`, `filter`, `mask`, `clip-path`, `marker`, `marker-start`, `marker-mid`, `marker-end`, `cursor`, `color-profile` | Removed when it loads anything but a `url(#id)` in the message |
+
 ## The `account.standing.changed` event
 
 Subscribe a webhook to `account.standing.changed` to hear about every change of step, a campaign quarantine, and an owner's or Nightmail's release. `data` has `step`, `previousStep`, `reasons` (code, metric, value, count, threshold, minimum, window, message), `since`, `version`, `sequence` (per workspace, always increasing: ignore a sequence you have already seen), `marketingHeld`, `change` and `actor.kind` (`system`, `owner` or `operator`).
