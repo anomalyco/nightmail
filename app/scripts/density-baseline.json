@@ -165,26 +165,20 @@
    "findings": []
   },
   "Overview · sending limits dialog · desktop": {
-   "score": 106,
+   "score": 65,
    "findings": [
-    "inert|a pause caused only by transactional bou",
-    "inert|after ## hours an owner or admin can rel",
-    "inert|all sending stops. receiving, inboxes an",
-    "inert|hard bounces ≥ #% and ≥ ## in ## hours, ",
-    "inert|the daily limit stops rising and owners ",
-    "long-block|a pause caused only by transactional bou",
-    "long-block|campaigns to more than ### recipients se",
-    "long-block|checked every ## minutes. a line needs b",
-    "long-block|the score moves at most # points up or #"
+    "inert|marketing is held, not receipts or reset",
+    "inert|sending stops; receiving, inboxes and th",
+    "inert|the limit stops rising and owners and ad",
+    "long-block|marketing is held, not receipts or reset",
+    "long-block|sending stops; receiving, inboxes and th"
    ]
   },
   "Overview · sending limits dialog · phone": {
-   "score": 90,
+   "score": 56,
    "findings": [
-    "long-block|a pause caused only by transactional bou",
-    "long-block|campaigns to more than ### recipients se",
-    "long-block|checked every ## minutes. a line needs b",
-    "long-block|the score moves at most # points up or #"
+    "long-block|marketing is held, not receipts or reset",
+    "long-block|sending stops; receiving, inboxes and th"
    ]
   },
   "Overview · setup · desktop": {

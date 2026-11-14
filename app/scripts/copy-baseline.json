@@ -433,25 +433,6 @@
     "131: what was done, or why not"
    ]
   },
-  "app/src/features/score/limits.tsx": {
-   "grade": [
-    "16: after 24 hours an owner or admin can release it from overvie",
-    "26: hosted workspaces have a daily limit in recipients over a ro",
-    "33: marketing gets the limit minus a reserve of 100 or 10%, whic"
-   ],
-   "length/body": [
-    "50: campaigns to more than 100 recipients send to a probe first:"
-   ],
-   "passive": [
-    "18: a pause caused only by transactional bounces can be resumed  ⟨be resumed by an⟩"
-   ],
-   "sentence-length": [
-    "16: after 24 hours an owner or admin can release it from overvie",
-    "18: a pause caused only by transactional bounces can be resumed ",
-    "33: marketing gets the limit minus a reserve of 100 or 10%, whic",
-    "50: campaigns to more than 100 recipients send to a probe first:"
-   ]
-  },
   "app/src/features/score/standing.tsx": {
    "glossary": [
     "33: confirm every contact opted in; stop mailing bought or old l ⟨opted in⟩",
