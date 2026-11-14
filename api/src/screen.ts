@@ -129,21 +129,16 @@ export async function readHtml(html: string, visit?: (tag: string) => void, opti
     const children='childNodes' in node ? node.childNodes : [];
     if (!('tagName' in node)) { for (const child of children) walk(child,anchor); return; }
     const tag=node.tagName;
-    // The head isn't shown, but Outlook reads a conditional comment wherever it is, and a title is read too.
-    if (tag==='head') { for (const child of children) if (child.nodeName==='#comment' || ('tagName' in child && child.tagName==='title')) walk(child,anchor); return; }
-    if (tag==='style' || tag==='script') return;
-    let display='';
-    for (const a of node.attrs) {
-      // URLs are read from the decoded attribute as they are, never as prose (the copy's inventory has them all).
-      if (tag==='a' && a.name==='href') { const target=destination(a.value); anchor=target ? destinationHost(target) : ''; if (target) links.push(target); }
-      if (a.name==='style') display=/(?:^|;)\s*display\s*:\s*([a-z-]+)/i.exec(a.value)?.[1]?.toLowerCase() ?? '';
-    }
+    // Only what the body shows: the head isn't (the copy has no title or comments anywhere).
+    if (tag==='head' || tag==='style' || tag==='script') return;
+    // URLs are read from the decoded attribute as they are, never as prose (the copy's inventory has them all).
+    for (const a of node.attrs) if (tag==='a' && a.name==='href') { const target=destination(a.value); anchor=target ? destinationHost(target) : ''; if (target) links.push(target); }
     if (tag==='img') {
       const alt=node.attrs.find(a=>a.name==='alt')?.value ?? '';
       images.push({ alt: !!alt.trim() });
       if (alt) line.push({ alt });
     }
-    const inline=display ? display.startsWith('inline') : INLINE.has(tag);
+    const laid=copy.layout.get(node), inline=laid ? laid==='inline' : INLINE.has(tag);
     if (!inline) flush();
     const start=lines.length;
     if (tag==='tr') rows.push([]);

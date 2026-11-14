@@ -416,6 +416,91 @@ const PREHEADER_STYLE = 'display:none;max-height:0;overflow:hidden;opacity:0;mso
 const hides = (style: string) => /(?:^|;)\s*(?:display\s*:\s*none|visibility\s*:\s*hidden|opacity\s*:\s*0(?:\.0+)?|max-height\s*:\s*0(?:px)?|font-size\s*:\s*[01](?:\.\d+)?(?:px|pt)?)\s*(?:;|$)/i.test(style);
 
 type State = { fontPx: number; color: Rgb; background: Rgb };
+/** Whether every selector of a rule's prelude is one the style reader below applies (src/hosted-css.ts keeps colours
+ *  only in such rules, so the reader sees every colour a Hosted copy can draw text in). */
+export const modeledSelector = (prelude: string) => prelude.split(',').every(text => !!parseSelector(stripComments(text).replace(/\s+/g, ' ').trim()));
+/** A sheet with its @media blocks opened, so their rules read as if every query matched. */
+function unwrapMedia(sheet: string) {
+  let css = stripComments(sheet);
+  for (let pass = 0; pass < 4 && /@media/i.test(css); pass++) {
+    let out = '', i = 0;
+    for (;;) {
+      const at = css.slice(i).search(/@media\b/i);
+      if (at < 0) { out += css.slice(i); break; }
+      out += css.slice(i, i + at);
+      const open = css.indexOf('{', i + at);
+      if (open < 0) break;
+      let level = 1, j = open + 1;
+      for (; j < css.length && level; j++) { if (css[j] === '{') level++; else if (css[j] === '}') level--; }
+      out += css.slice(open + 1, level ? css.length : j - 1);
+      i = j;
+    }
+    css = out;
+  }
+  return css;
+}
+type Look = { color: Rgb; background: Rgb; image: boolean; fontPx: number; opacity: number };
+const LINK: Rgb = [0, 0, 238];
+/**
+ * What a Hosted copy (src/hosted-html.ts) shows nothing of, read from its sheets and style attributes: the elements
+ * hidden (display:none, visibility:hidden or collapse, opacity of 0.1 or less, type under 2 px, a line
+ * height under 1 px, or a box of 2 px or less with its overflow hidden) and the text drawn in, or within a contrast of
+ * 1.5 of, its background colour (over a background image, text counts as shown). Sheets are read twice, as written and
+ * with every @media query matching (dark mode, small screens), and what either reading hides counts.
+ */
+export function concealed(root: Element, sheets: string[]): { hidden: Set<Element>; invisible: Set<DefaultTreeAdapterMap['textNode']>; inline: Set<Element>; block: Set<Element> } {
+  const tree = survey(root), readings = [inliner(sheets, tree), inliner(sheets.map(unwrapMedia), tree)];
+  const hidden = new Set<Element>(), invisible = new Set<DefaultTreeAdapterMap['textNode']>(), inline = new Set<Element>(), block = new Set<Element>();
+  const look = (element: Element, inherited: Look, merged: Declaration[]): Look | null => {
+    const state = { ...inherited }, attr = (name: string) => element.attrs.find(a => a.name === name)?.value;
+    let clipped = false, small = false, hide = false;
+    const paint = (token: string) => { const c = colorOf(token); if (c) { state.background = blend(c.rgb, c.alpha, state.background); if (c.alpha >= 1) state.image = false; } };
+    const value = (raw: string) => raw.toLowerCase().replace(/\s*\(\s*([^)]*?)\s*\)/g, (_, inner: string) => `(${inner.replace(/\s*,\s*/g, ',').replace(/\s+/g, ',')})`).replace(/\s+/g, ' ').trim();
+    const bgcolor = attr('bgcolor'); if (bgcolor) paint(bgcolor.trim().toLowerCase());
+    for (const d of merged) {
+      const v = value(d.value);
+      if (d.property === 'background-color' || d.property === 'background') { const color = v.split(' ').find(token => colorOf(token)); if (color) paint(color); }
+      if ((d.property === 'background' || d.property === 'background-image') && /url\(/.test(v)) state.image = true;
+    }
+    if (element.tagName === 'a' && attr('href') !== undefined) state.color = LINK;
+    const fontColor = element.tagName === 'font' ? colorOf(attr('color')?.trim().toLowerCase() ?? '') : undefined;
+    if (fontColor) state.color = blend(fontColor.rgb, fontColor.alpha, state.background);
+    const fontSize = element.tagName === 'font' ? own(FONT_SIZE_ATTRIBUTE, attr('size')?.trim() ?? '') : undefined;
+    if (fontSize) state.fontPx = fontSize;
+    state.fontPx *= own(UA_SCALE, element.tagName) ?? 1;
+    for (const d of merged) {
+      const v = value(d.value);
+      switch (d.property) {
+        case 'display': hide ||= v === 'none'; break;
+        case 'visibility': hide ||= v === 'hidden' || v === 'collapse'; break;
+        case 'opacity': { const n = v.endsWith('%') ? parseFloat(v) / 100 : parseFloat(v); if (Number.isFinite(n)) state.opacity *= Math.max(0, n); break; }
+        case 'color': { if (v === 'transparent') state.color = state.background; else { const c = colorOf(v); if (c) state.color = blend(c.rgb, c.alpha, state.background); } break; }
+        case 'font-size': { const n = fontPx(v, state.fontPx); if (n !== undefined) state.fontPx = n; break; }
+        case 'font': { const n = v.split(/[ /]/).map(token => /^[-\d.]/.test(token) ? fontPx(token, state.fontPx) : undefined).find(n => n !== undefined); if (n !== undefined) state.fontPx = n; break; }
+        case 'line-height': { const n = /^[\d.]+$/.test(v) ? parseFloat(v) * state.fontPx : px(v, state.fontPx, state.fontPx); hide ||= n !== undefined && n < 1; break; }
+        case 'overflow': case 'overflow-x': case 'overflow-y': clipped ||= /\b(?:hidden|clip)\b/.test(v); break;
+        case 'height': case 'max-height': case 'width': case 'max-width': { const n = px(v, state.fontPx, NaN); small ||= n !== undefined && n <= 2; break; }
+      }
+    }
+    return hide || (clipped && small) || state.fontPx < 2 || state.opacity <= 0.1 ? null : state;
+  };
+  const start: Look = { color: [0, 0, 0], background: [255, 255, 255], image: false, fontPx: 16, opacity: 1 };
+  // How each element lays out, for reading its text in order: inline when any reading makes it inline (or contents) or
+  // an item of a flex or grid container, which lines items up side by side; block when a reading gives it another box.
+  const visit = (element: Element, looks: Look[], items: boolean) => {
+    for (const node of element.childNodes) {
+      if (isText(node)) { if (node.value.trim() && looks.some(l => !l.image && contrast(l.color, l.background) < 1.5)) invisible.add(node); continue; }
+      if (!isElement(node) || node.namespaceURI !== HTML || node.tagName === 'head') continue;
+      const merged = readings.map(read => read(node)), displays = merged.flatMap(m => m.filter(d => d.property === 'display').map(d => d.value.trim().toLowerCase()));
+      if (items || displays.some(d => d.startsWith('inline') || d === 'contents')) inline.add(node); else if (displays.length) block.add(node);
+      const next = looks.map((l, i) => look(node, l, merged[i]!));
+      if (next.some(n => !n)) { hidden.add(node); continue; }
+      visit(node, next as Look[], displays.some(d => /^(?:inline-)?(?:flex|grid)$/.test(d)));
+    }
+  };
+  visit(root, [start, start], false);
+  return { hidden, invisible, inline, block };
+}
 export function screenedHtml(html: string, previewText?: string): string {
   let copy = pass(html, previewText);
   // Misnested formatting elements can make a parser read the serialized tree back differently; the copy is read again

@@ -17,6 +17,7 @@
  * Removing whole declarations and rules from where they were parsed leaves the rest of the text to read as it did.
  */
 import { Limit, tokenize, type Token } from './css-syntax.js';
+import { modeledSelector } from './screened-html.js';
 
 /** Where a sheet may load fonts (an @font-face's files) and other sheets (@import) from: a font can draw any
  *  text and a sheet can generate it, and the screen reads neither. */
@@ -55,9 +56,9 @@ export const PROPERTIES = new Set([
   'border-right-color', 'border-bottom-color', 'border-left-color', 'border-radius', 'border-top-left-radius', 'border-top-right-radius', 'border-bottom-left-radius',
   'border-bottom-right-radius', 'border-collapse', 'border-spacing', 'outline', 'outline-width', 'outline-style', 'outline-color', 'outline-offset', 'box-shadow',
   // Display and layout
-  'display', 'position', 'top', 'right', 'bottom', 'left', 'inset', 'float', 'clear', 'z-index', 'overflow', 'overflow-x', 'overflow-y', 'table-layout',
+  'display', 'float', 'clear', 'overflow', 'overflow-x', 'overflow-y', 'table-layout',
   'caption-side', 'empty-cells', 'flex', 'flex-direction', 'flex-wrap', 'flex-flow', 'flex-grow', 'flex-shrink', 'flex-basis', 'grid-template-columns',
-  'grid-template-rows', 'grid-auto-columns', 'grid-auto-rows', 'grid-auto-flow', 'columns', 'column-count', 'column-width', 'column-rule',
+  'grid-template-rows', 'grid-auto-columns', 'grid-auto-rows', 'columns', 'column-count', 'column-width', 'column-rule',
   // Alignment
   'align-items', 'align-content', 'align-self', 'justify-content', 'justify-items', 'justify-self', 'place-items', 'place-content', 'place-self',
   // Visibility basics
@@ -146,7 +147,9 @@ function declaration(segment: Segment): { name: Token; value: CV[] } | null {
 
 // ----- What may stay ---------------------------------------------------------------------------------------------------
 
-type Read = { text: string; resolve: Resolve; policy: FontPolicy; destinations: string[]; removed: string[]; fonts: string[] };
+// `inline`: a style attribute rather than a sheet; `modeled`: whether the screen's style reader (src/screened-html.ts)
+// applies the sheet rule being read, so it can tell where its colours make text invisible.
+type Read = { text: string; resolve: Resolve; policy: FontPolicy; destinations: string[]; removed: string[]; fonts: string[]; inline: boolean; modeled: boolean };
 const raw = (read: Read, n: { start: number; end: number }) => read.text.slice(n.start, n.end);
 function foreign(read: Read, target: string) {
   const host = new URL(target).host;
@@ -213,12 +216,74 @@ function keep(read: Read, d: { name: Token; value: CV[] }, context: 'style' | 'f
     return 'List style changed to plain numbers or bullets';
   }
   if (/^(?:flex-direction|flex-flow|flex-wrap)$/.test(base) && d.value.some(n => n.kind === 'token' && n.t.kind === 'ident' && /reverse$/i.test(n.t.value))) return `CSS ${name} that reverses the order`;
-  return plainValue(d.value, STRINGS.has(base)) ? null : `CSS ${name} with a value Hosted sending doesn't keep`;
+  if (!plainValue(d.value, STRINGS.has(base))) return `CSS ${name} with a value Hosted sending doesn't keep`;
+  const words = withoutImportant(d.value), idents = words.flatMap(n => n.kind === 'token' && n.t.kind === 'ident' ? [n.t.value.toLowerCase()] : []);
+  const sizes = words.flatMap(n => n.kind === 'token' ? [size(n.t)] : []).filter(n => !Number.isNaN(n));
+  // What draws text in another order than the document's: rows moved to a table's head or foot, right floats (which
+  // line up in reverse), and negative offsets that pull text over or before what precedes it.
+  if (base === 'display' && idents.some(v => /^table-(?:header-group|footer-group|caption)$/.test(v))) return 'CSS display that moves table rows';
+  if (base === 'float' && idents.some(v => v !== 'none' && v !== 'left' && v !== 'inline-start')) return 'CSS float other than left';
+  if ((/^margin/.test(base) || base === 'text-indent') && sizes.some(n => n < 0)) return `negative CSS ${base.startsWith('margin') ? 'margins' : base}`;
+  if ((base === 'letter-spacing' || base === 'word-spacing') && sizes.some(n => n < -2)) return `CSS ${base} that overlaps letters`;
+  // mso-hide:all hides from Outlook alone what every other client shows (a button's HTML beside its VML twin): with
+  // the conditional comments gone, Outlook shows it too.
+  if (base === 'mso-hide' && idents.includes('all')) return 'CSS mso-hide (Outlook shows it too)';
+  if (read.inline) return null;
+  // In a sheet, what would hide whatever its selector matches is removed, so the text shows (the copy removes content
+  // that a style attribute hides: src/hosted-html.ts). So are colours in a rule the screen's style reader doesn't apply.
+  if (hides(base, words, idents, sizes, read)) return 'CSS that hides text';
+  if (!read.modeled && /^(?:color|background|background-color)$/.test(base)) return `CSS ${base} in a rule Hosted sending can't check`;
+  return null;
+}
+// A length, roughly in px (16 px type, a 390 px wide screen); NaN for anything that isn't one. Percentages count against
+// 16 px, which is what they are for font-size and line-height.
+function size(t: Token): number {
+  if (t.kind === 'number') return t.num * (t.num === 0 ? 0 : 16);
+  if (t.kind === 'percentage') return t.num * 0.16;
+  if (t.kind !== 'dimension') return NaN;
+  const unit = t.unit.toLowerCase();
+  const factor = ({ px: 1, pt: 4 / 3, pc: 16, in: 96, cm: 37.8, mm: 3.78, q: 0.945, em: 16, rem: 16, ex: 8, ch: 8, lh: 16, rlh: 16 } as Record<string, number>)[unit]
+    ?? (/^[sld]?v(?:w|h|i|b|min|max)$/.test(unit) ? 3.9 : NaN);
+  return t.num * factor;
+}
+// Hiding by selector: display:none, visibility:hidden, opacity near 0, type or line height under 2 px,
+// a box of no height or width, and a colour without opacity.
+function hides(base: string, words: CV[], idents: string[], sizes: number[], read: Read): boolean {
+  switch (base) {
+    case 'display': return idents.includes('none');
+    case 'visibility': return idents.includes('hidden') || idents.includes('collapse');
+    case 'opacity': return words.some(n => n.kind === 'token' && ((n.t.kind === 'number' && n.t.num <= 0.1) || (n.t.kind === 'percentage' && n.t.num <= 10)));
+    case 'font-size': case 'line-height': return sizes.some(n => n < 2);
+    case 'font': {
+      // The size is the first length, the line height the one after a slash.
+      const lengths = words.filter(n => n.kind === 'token' && ['dimension', 'percentage', 'number'].includes(n.t.kind) && !(n.t.kind === 'number' && n.t.num >= 100));
+      return lengths.some(n => n.kind === 'token' && size(n.t) < 2);
+    }
+    case 'height': case 'max-height': case 'width': case 'max-width': case 'block-size': case 'max-block-size': case 'inline-size': case 'max-inline-size':
+      return sizes.some(n => n <= 0.5);
+    case 'color': return transparent(raw(read, { start: words[0]?.start ?? 0, end: words.at(-1)?.end ?? 0 }));
+    default: return false;
+  }
+}
+// transparent, or a colour with alpha of 0.1 or less.
+function transparent(value: string): boolean {
+  const v = value.trim().toLowerCase();
+  if (v === 'transparent') return true;
+  const hex = /^#[0-9a-f]{8}$/.exec(v) ? parseInt(v.slice(7), 16) / 255 : /^#[0-9a-f]{4}$/.exec(v) ? parseInt(v[4]! + v[4], 16) / 255 : undefined;
+  if (hex !== undefined) return hex <= 0.1;
+  const inner = /^(?:rgb|hsl|hwb|lab|lch|oklab|oklch|color)a?\((.*)\)$/s.exec(v)?.[1];
+  if (!inner) return false;
+  const slash = inner.split('/'), commas = inner.split(',');
+  const alpha = slash.length === 2 ? slash[1]!.trim() : commas.length === 4 ? commas[3]!.trim() : undefined;
+  if (!alpha) return false;
+  const n = alpha.endsWith('%') ? parseFloat(alpha) / 100 : parseFloat(alpha);
+  return Number.isFinite(n) && n <= 0.1;
 }
 type Range = { start: number; end: number };
 // A block of plain declarations: the ranges to remove, or null when the block holds anything else (nested rules).
 function declarations(read: Read, items: CV[], context: 'style' | 'font-face', inline: boolean): { removals: Range[]; kept: number } | null {
   const removals: Range[] = [];
+  read.inline = inline;
   let kept = 0;
   for (const segment of segments(items)) {
     const d = declaration(segment);
@@ -265,6 +330,7 @@ function sheet(read: Read, items: Item[], top: boolean): { removals: Range[]; ke
   for (const item of items) {
     if (item.kind === 'rule') {
       if (!item.block || !selector(item.prelude)) { drop(item, 'a CSS rule with a selector Hosted sending does not read'); continue; }
+      read.modeled = modeledSelector(raw(read, { start: item.start, end: item.block.start }));
       const inner = declarations(read, (item.block as Extract<CV, { kind: 'block' }>).items, 'style', false);
       if (!inner) { drop(item, 'a CSS rule with nested rules'); continue; }
       if (!inner.kept) { removals.push(item); continue; }
@@ -290,7 +356,7 @@ function sheet(read: Read, items: Item[], top: boolean): { removals: Range[]; ke
   return { removals, kept };
 }
 function filter(css: string, resolve: Resolve, policy: FontPolicy, as: 'sheet' | 'declarations'): HostedCss {
-  const text = css.replace(/\r\n?/g, '\n'), read: Read = { text, resolve, policy, destinations: [], removed: [], fonts: [] };
+  const text = css.replace(/\r\n?/g, '\n'), read: Read = { text, resolve, policy, destinations: [], removed: [], fonts: [], inline: as === 'declarations', modeled: true };
   let removals: Range[];
   try {
     const items = values(tokenize(text), text.length);

@@ -11258,7 +11258,8 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.deepEqual((await frozen(mixed[1].id)).binding,{account:acct,topic:trusted,connection:wid,domain:'va-domain',generation});
       await drain(oh);await drain(va);assert.deepEqual(attempts.slice(1),[[oh,'bane-transactional',`bane-${wid}`],[va,'bane-trusted-transactional',`bane-trusted-${wid}`]]);
       // With the hosted screen on, probation mail (Ohio) is delivered as the copy the screen read; trusted mail (Virginia) as
-      // submitted. A subtest holds the classifier mock so it is restored before the fixture's own fetch mock.
+      // its canonical copy, without the conditional comment or the hidden line either. A subtest holds the classifier mock
+      // so it is restored before the fixture's own fetch mock.
       const marked='<html><head><style>.x{display:none}</style></head><body><p>Regional fixture</p><!--[if mso]><p>Outlook only</p><![endif]--><p class="x" style="display:none;color:#fff">Hidden line</p></body></html>';
       Object.assign(runtime.config,{hostedScreen:true,screen:{endpoint:'https://screen.regional.invalid',apiKey:'fixture',model:'fixture',mode:'reject',threshold:0.7}});
       await t.test('screened tiers',async t=>{
@@ -11268,8 +11269,9 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       });
       Object.assign(runtime.config,{hostedScreen:false,screen:undefined});
       assert.deepEqual(attempts.slice(3),[[oh,'bane-transactional',`bane-${wid}`],[va,'bane-trusted-transactional',`bane-trusted-${wid}`]]);
-      assert.deepEqual(delivered.slice(3),[(await import('./src/screened-html.js')).screenedHtml(marked),marked]);
-      assert.ok(!delivered[3]!.includes('<style') && !delivered[3]!.includes('Outlook only') && !delivered[3]!.includes('Hidden line') && delivered[3]!.includes('Regional fixture'));
+      assert.deepEqual(delivered.slice(3),[(await import('./src/screened-html.js')).screenedHtml(marked),await (await import('./src/screen.js')).canonicalHtml(marked)]);
+      for (const copy of delivered.slice(3)) assert.ok(!copy!.includes('Outlook only') && !copy!.includes('Hidden line') && copy!.includes('Regional fixture'), copy);
+      assert.ok(!delivered[3]!.includes('<style'));
       runtime.config.trustedPool=false;error(await send(child),409,'TRUSTED_POOL_DISABLED');runtime.config.trustedPool=true;
       await db.query(`UPDATE workspaces SET send_cap_override=7 WHERE id=$1`,[wid]); // Five simulator recipients already charged across both regions.
       const pair=[parent,child].map(m=>({...m,to:'real-counted@fixture.test'}));
@@ -13435,23 +13437,26 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     });
   });
 
-  test('hosted screen reads what Outlook shows inside a conditional comment',async t=>{
+  test('hosted screen reads only what every client shows: no conditional comment, title or head',async t=>{
     // A subtest, so its classifier mock is lifted before the fixture's own network guard is.
     await simulatedSesFixture(t,async({runtime})=>t.test('classifier input',async t=>{
-      const {screenSnapshot}=await import('./src/screen.js');
+      const {screenSnapshot,canonicalHtml}=await import('./src/screen.js');
       runtime.config.screen={apiKey:'fixture',endpoint:'https://screen.fixture.invalid',model:'test',threshold:.7,mode:'reject'};
       t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>Response.json({answers:{spam:{noul:JSON.parse(String(init.body)).state.email.body.toLowerCase().includes('samplemarker')?0.99:0.1}}}));
       const s={from:'a@example.invalid',subject:'fixture',to:['b@example.invalid'],cc:[],bcc:[],kind:'transactional' as const,attachments:[],region:REGION,headers:[],replyTo:[],tracking:false,text:'Hello',raw:'Hello'};
-      // Its text, with or without markup, and where its links go.
-      for(const html of ['<p>Hello</p><!--[if mso]><p>SampleMarker</p><![endif]-->','<p>Hello</p><!-- [if gte mso 9]>SampleMarker<![endif] -->','<!--[if (gte mso 9)|(IE)]><table><tr><td>SampleMarker</td></tr></table><![endif]--><p>Hello</p>',
-        '<p>Hello</p><!--[if mso]><p><a href="https://samplemarker.invalid/open">Open</a></p><![endif]-->'])
+      // Final review, F-H2: Outlook shows what a conditional comment holds and hides what its markers enclose, so every
+      // conditional comment goes (both branches) and every client shows the copy the screen reads. F-H1: a title isn't
+      // shown, so it never splits the text around it.
+      for(const html of ['<p>Sam<!--[if mso]>innocent<![endif]-->pleMarker</p>','<p>Sam<!-- [if gte mso 9]>innocent<![endif] -->pleMarker</p>','<p>Sam<!--[if !mso]><!-->ple<!--<![endif]-->Marker</p>',
+        '<p>Sam<![if !mso]>ple<![endif]>Marker</p>','<p>Sam<title>innocent</title>pleMarker</p>','<html><head><title>innocent</title></head><body><p>SampleMarker</p></body></html>']) {
         assert.equal((await screenSnapshot(runtime,{...s,html},true))?.spam,.99,html);
-      // A note in an ordinary comment, a template and a conditional style sheet are not the message's copy, nor is a
-      // conditional comment holding markup Hosted sending removes (VML here): the delivered copy has none of it.
-      for(const html of ['<p>Hello</p><!-- SampleMarker <p>SampleMarker</p> -->','<p>Hello</p><template><p>SampleMarker</p></template>','<p>Hello</p><!--[if mso]><style>.samplemarker{color:red}</style><![endif]-->',
-        '<p>Hello</p><!--[if mso]><v:roundrect href="https://samplemarker.invalid/open"><center>Open</center></v:roundrect><![endif]-->'])
+        assert.ok(!/<!--|<title|innocent/.test(await canonicalHtml(html)),`${html}: delivered without it`);
+      }
+      // What only Outlook would show is neither delivered nor read.
+      for(const html of ['<p>Hello</p><!--[if mso]><p>SampleMarker</p><![endif]-->','<!--[if (gte mso 9)|(IE)]><table><tr><td>SampleMarker</td></tr></table><![endif]--><p>Hello</p>',
+        '<p>Hello</p><!--[if mso]><v:roundrect href="https://samplemarker.invalid/open"><center>Open</center></v:roundrect><![endif]-->','<p>Hello</p><!-- SampleMarker <p>SampleMarker</p> -->','<p>Hello</p><template><p>SampleMarker</p></template>'])
         assert.equal((await screenSnapshot(runtime,{...s,html},true))?.spam,.1,html);
-      await assert.rejects(screenSnapshot(runtime,{...s,html:`<p>Hello</p><!--[if mso]>${'<div>'.repeat(257)}<![endif]-->`},true),{code:'CONTENT_TOO_LARGE_TO_SCREEN'});
+      await assert.rejects(screenSnapshot(runtime,{...s,html:`<p>Hello</p>${'<div>'.repeat(257)}`},true),{code:'CONTENT_TOO_LARGE_TO_SCREEN'});
     }));
   });
 
@@ -13586,10 +13591,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const bodies:string[]=[];
       t.mock.method(globalThis,'fetch',async(_url:unknown,init:RequestInit)=>{const body=JSON.parse(String(init.body)).state.email.body;bodies.push(body);return Response.json({answers:{spam:{noul:body.toLowerCase().includes('samplemarker') ? 0.99 : 0.01}}});});
       const s={from:'a@example.invalid',subject:'fixture',to:['b@example.invalid'],cc:[],bcc:[],kind:'transactional' as const,attachments:[],region:REGION,headers:[],replyTo:[],tracking:false,
-        text:'plain signal',raw:'rendered MIME signal',html:`<div hidden>${'x'.repeat(16000)} hidden signal</div><p>HTML signal</p><a href="https://link.example.invalid/path">read</a><img src="https://image.example.invalid/tracker">`};
+        text:'plain signal',raw:'rendered MIME signal',html:`<div>${'x'.repeat(16000)} long signal</div><p>HTML signal</p><div hidden>hidden signal</div><a href="https://link.example.invalid/path">read</a><img src="https://image.example.invalid/tracker">`};
       await screenSnapshot(runtime,s);await screenSnapshot(runtime,s);
       assert.equal(bodies.length,3);assert.ok(bodies.every(b=>Buffer.byteLength(b)<=8000));
-      for(const part of ['plain signal','rendered MIME signal','hidden signal','HTML signal','link.example.invalid','image.example.invalid'])assert.ok(bodies.some(b=>b.includes(part)),part);
+      for(const part of ['plain signal','rendered MIME signal','long signal','HTML signal','link.example.invalid','image.example.invalid'])assert.ok(bodies.some(b=>b.includes(part)),part);
+      // Hidden copy is removed from the delivered copy (final review), so it isn't read either.
+      assert.ok(!bodies.some(b=>b.includes('hidden signal')),'hidden copy');
       await screenSnapshot(runtime,{...s,html:s.html.replace('x'.repeat(16000),'x'.repeat(8000)+'y'+'x'.repeat(7999))});assert.equal(bodies.length,6);
       const hostLinks=Array.from({length:7},(_,i)=>`<a href="https://reference${i}.invalid/document">Reference</a>`).join('');
       for(let i=0;i<(BENCH?65:3);i++) {
@@ -14222,6 +14229,28 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // element outside the list gives its place to its content, and attributes outside it are removed.
       ['form controls and widgets', `<form><button>Sample</button><select><option>Marker</option></select><textarea>Sample</textarea></form><details><summary>Sample</summary>Marker</details><marquee>SampleMarker</marquee><ruby>Sample<rt>Marker</rt></ruby><p>${ready}</p>`, false, /<form|<button|<select|<option|<textarea|<details|<summary|<marquee|<ruby|Sample|Marker/],
       ['unknown elements', `<section><article><custom-tag><p dir="auto" title="SampleMarker" data-x="1" onclick="x()">${ready}</p></custom-tag></article></section>`, false, /<section|<article|<custom-tag|title=|dir=|data-x|onclick/],
+      // Final review, F-H1: a title in the body is removed with its text, so it doesn't split the words around it.
+      ['body title', `<p>Sam<title>innocent</title>pleMarker ${ready}</p>`, true],
+      // F-H2: conditional comments go (both branches); content the copy's CSS hides goes with its text (the element
+      // stays, empty); dir goes, so inline boxes line up in the text's order.
+      ['conditional comment', `<p>Sam<!--[if mso]>innocent<![endif]-->pleMarker ${ready}</p>`, true],
+      ['display:none', `<p>Sam<span style="display:none">innocent</span>pleMarker ${ready}</p>`, true],
+      ['dir', `<p dir="rtl"><span style="display:inline-block">Marker</span><span style="display:inline-block">Sample</span> ${ready}</p>`, false, /dir=/],
+      ['hidden attribute', `<p>Sam<span hidden>innocent</span>pleMarker ${ready}</p>`, true],
+      ['visibility, opacity, tiny type', `<p>Sam<span style="visibility:hidden">x</span>ple<span style="opacity:.05">y</span>Mar<span style="font:0/0 a">z</span>ker ${ready}</p>`, true],
+      ['clipped box', `<p>Sam<span style="display:inline-block;max-width:1px;overflow:hidden">innocent</span>pleMarker ${ready}</p>`, true],
+      ['colour of the background', `<table bgcolor="#ffffff"><tr><td>Sam<span style="color:#fefefe">innocent</span>pleMarker ${ready}</td></tr></table>`, true],
+      ['colour by class', `<style>.d{color:#ffffff}</style><p>Sam<span class="d">innocent</span>pleMarker ${ready}</p>`, true],
+      ['colour in @media', `<style>@media (min-width:0px){.d{color:#fffffe}}</style><p>Sam<span class="d">innocent</span>pleMarker ${ready}</p>`, true],
+      ['split by sheet layout', `<style>.i{display:inline}</style><div class="i">Sam</div><div class="i">pleMarker</div><p>${ready}</p>`, true],
+      // Hiding by selector is removed from the sheet, so what it matched shows (and was read).
+      ['hidden by selector', `<style>.h{display:none}</style><p>Your<span class="h"> account</span> ${ready}</p>`, false, /display:none|\.h\{/],
+      ['colour the screen cannot place', `<style>p :is(.d){color:#ffffff}</style><p>Your <span class="d">account</span> ${ready}</p>`, false, /color:#ffffff/],
+      // mso-hide:all hid from Outlook alone; with the conditional comments gone, Outlook shows it too.
+      ['mso-hide', `<p><a href="https://held.invalid/" style="display:inline-block;mso-hide:all">Open</a> ${ready}</p>`, false, /mso-hide/],
+      // Rows in a table's foot and right floats line up out of document order: removed.
+      ['table foot', `<table><tfoot><tr><td>Thanks.</td></tr></tfoot><tbody><tr><td>${ready}</td></tr></tbody></table>`, false, /<tfoot/],
+      ['right float', `<p><span style="float:right">Thanks.</span><span style="float:right">${ready}</span></p>`, false, /float/],
     ];
     for (const [name, html, bad, gone] of cases) {
       const { to, reply } = await send(html), start = screened.length;
@@ -14243,7 +14272,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     assert.ok(!(await removedBy(`<ol reversed type="1" start="1" style="list-style-type:decimal"><li>${ready}</li></ol><ul style="list-style:square inside"><li>Thanks.</li></ul>`)).includes('List style'), 'Bullets and plain numbers keep their list style.');
     for (const [name, listed] of [['form controls and widgets', ['form elements, with their content', 'details elements, with their content', 'marquee elements, with their content', 'ruby elements, with their content']], ['unknown elements', ['section elements (their content stays)', 'non-HTML elements (their content stays)', 'title attributes on p', 'dir attributes on p', 'data-* attributes on p', 'event handler attributes on p']]] as const)
       for (const what of listed) assert.ok((await removedBy(cases.find(c => c[0] === name)![1])).includes(what), `${name}: ${what}`);
-    assert.equal(await removedBy(`<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td valign="top" bgcolor="#ffffff" style="padding:8px"><h1>Hi</h1><p dir="ltr" lang="en"><a href="https://held.invalid/" target="_blank">Open</a> <img src="https://held.invalid/a.png" alt="A" width="20" height="20"></p><font color="#333" face="Arial" size="2">${ready}</font></td></tr></table>`), '', 'The allow-list keeps ordinary email markup whole.');
+    for (const [name, listed] of [['body title', 'title elements, with their content'], ['conditional comment', 'Outlook conditional comments'], ['display:none', 'hidden elements, with their content'], ['dir', 'dir attributes on p'],
+      ['colour of the background', 'text in its background colour'], ['hidden by selector', 'CSS that hides text'], ['mso-hide', 'CSS mso-hide (Outlook shows it too)']] as const)
+      assert.ok((await removedBy(cases.find(c => c[0] === name)![1])).includes(listed), `${name}: ${listed}`);
+    // The preheader is kept, though hidden: inboxes show it beside the subject, and the screen reads it.
+    assert.equal(await removedBy(`<div style="display:none;max-height:0;overflow:hidden">Your receipt is attached.</div><p>${ready}</p>`), '', 'A preheader is kept.');
+    assert.equal(await removedBy(`<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td valign="top" bgcolor="#ffffff" style="padding:8px"><h1>Hi</h1><p lang="en"><a href="https://held.invalid/" target="_blank">Open</a> <img src="https://held.invalid/a.png" alt="A" width="20" height="20"></p><font color="#333" face="Arial" size="2">${ready}</font></td></tr></table>`), '', 'The allow-list keeps ordinary email markup whole.');
   });
   reviewScenario('common newsletter and transactional markup is admitted and delivered with its fonts, imports and Outlook layout intact', async f => {
     const { dispatch, delivered } = f, { send, outcome, body } = await trustedSender(f), { canonicalHtml } = await import('./src/screen.js');
@@ -14264,9 +14298,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         [/<img src="https:\/\/cdn\.brand\.example\/logo\.png"/], [/<link/]],
       ['comments', `<style>/* background-image:url(https://cdn.brand.example/old.png) intentionally disabled */ .hero{color:#111111} /* url("/relative.png") and @import "old.css"; */</style><!-- Built with an editor: <a href="/old">old link</a> --><p class="hero">${ready}</p>`,
         [/<style>\/\* background-image:url\(https:\/\/cdn\.brand\.example\/old\.png\) intentionally disabled \*\/ \.hero\{color:#111111\} \/\* url\("\/relative\.png"\) and @import "old\.css"; \*\/<\/style>/], [/old link|Built with/]],
-      // Outlook's ghost tables and conditional style sheets stay; VML and Office XML aren't on the allow-list, so the
-      // conditional comments holding them go: Outlook desktop then shows no bulletproof button, a known cost.
-      ['Outlook', outlook, [/<!--\[if mso \| IE\]><table align="center"/, /<!--\[if !mso\]><!--><a href=/, /<!--\[if lte mso 11\]><style type="text\/css">\.mj-outlook-group-fix \{ width:100% !important; \}<\/style><!\[endif\]-->/, /<!--\[if mso \| IE\]><\/td><\/tr><\/table><!\[endif\]-->/], [/v:roundrect|<noscript|OfficeDocumentSettings|X-UA-Compatible/]],
+      // Every conditional comment goes, both branches (final review): Outlook shows the same copy as every other
+      // client, its button the HTML one, without its ghost tables, VML or Office settings.
+      ['Outlook', outlook, [/<a href="https:\/\/shop\.brand\.example\/orders\/4821"[^>]*>Track your order<\/a>/], [/<!--|v:roundrect|<noscript|OfficeDocumentSettings|X-UA-Compatible/]],
       // The screen corpus as submitted: hybrid Outlook with web fonts, a responsive newsletter importing Google Fonts,
       // a receipt, a dark-mode welcome and client hacks (an inline data: image isn't accepted for sending at all).
       ...Object.entries(screenCorpus()).map(([name, { html, expect }]) => [name, html.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/, 'https://cdn.brand.example/chart.png'), expect.map(e => new RegExp(e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))), []] as [string, string, RegExp[], RegExp[]]),
@@ -20498,7 +20532,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // Mail delivered as submitted (bring-your-own AWS with screen: true) is screened as written, so it must hold only
       // markup the Hosted canonical copy keeps; SES gets the bytes submitted.
       classifierDown = false;
-      const asWritten = `<!-- a sender's note --><style>/* plain */ .o{color:#111}</style><p class="o">Your receipt is attached.</p>`;
+      // A head's title isn't shown, so it is no reason to refuse.
+      const asWritten = `<title>Receipt</title><!-- a sender's note --><style>/* plain */ .o{color:#111}</style><p class="o">Your receipt is attached.</p>`;
       const kept = await send({ subject: 'Receipt as written', html: asWritten, screen: true });
       // Recheck 8, R8-H1: an image's alt text is read where the image is, so a phrase across alt text and the text
       // beside it is read whole.
@@ -20530,6 +20565,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         [`<p>\u202e${reversed}\u202c Your receipt is attached.</p>`, 'bidi control characters'],
         [`<p style="font:16px monospace"><input type="text" readonly value="${marker.slice(0, 6)}" style="border:0;width:6ch;padding:0;font:inherit">${marker.slice(6)}</p>`, 'input elements, with their content'],
         [`<p><input placeholder="${marker.slice(0, 6)}">${marker.slice(6)}</p>`, 'input elements, with their content'],
+        // Final review: a body title, a conditional comment, hidden content, dir, and hiding by selector.
+        [`<p>${marker.slice(0, 3)}<title>innocent</title>${marker.slice(3)}</p>`, 'title elements, with their content'],
+        [`<p>${marker.slice(0, 3)}<!--[if mso]>innocent<![endif]-->${marker.slice(3)}</p>`, 'Outlook conditional comments'],
+        [`<p>${marker.slice(0, 3)}<span style="display:none">innocent</span>${marker.slice(3)}</p>`, 'hidden elements, with their content'],
+        ['<p dir="rtl"><span style="display:inline-block">Marker</span><span style="display:inline-block">Sample</span></p>', 'dir attributes on p'],
+        ['<style>.h{display:none}</style><p>Your receipt<span class="h"> is attached</span>.</p>', 'CSS that hides text'],
       ];
       for (const [html, named] of refusals) {
         const refused = error(await local('POST', '/v1/emails/send', mail({ subject: 'Account ready', html, screen: true }), 'live'), 422, 'UNSUPPORTED_HTML_IN_SCREENED_MAIL');
