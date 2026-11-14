@@ -411,7 +411,7 @@ function AddDomain({ draft, onDraftChange, queued, onQueuedChange, ready, onAdde
       <div className="onboarding-field onboarding-field--domain">
         {/* The hint line is always there: the live preview, the queued note or an error take turns in it. */}
         <Field label="Domain" htmlFor="onboarding-domain" error={invalid || (create.error ? <ErrorText error={create.error} /> : undefined)} hint={queued ? `${value} is added as soon as sending is ready.` : <>You’ll send as <code className="onboarding-preview">hello@{domainPattern.test(value) ? value : 'acme.com'}</code></>}>
-          <Input id="onboarding-domain" autoFocus autoComplete="off" autoCapitalize="none" spellCheck={false} value={draft} onChange={event => { onDraftChange(event.target.value); onQueuedChange(false) }} placeholder="acme.com" disabled={create.isPending} />
+          <Input id="onboarding-domain" autoFocus autoComplete="off" autoCapitalize="none" spellCheck={false} value={draft} onChange={event => { setInvalid(''); onDraftChange(event.target.value); onQueuedChange(false) }} placeholder="acme.com" disabled={create.isPending} />
         </Field>
       </div>
       <Button type="submit" variant="primary" loading={create.isPending}>Add domain<ArrowRight size={16} aria-hidden /></Button>

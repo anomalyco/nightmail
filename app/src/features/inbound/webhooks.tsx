@@ -1,9 +1,9 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
-import { Alert, Button, Checkbox, ConfirmDialog, DataTable, Dialog, EmptyState, ErrorState, Field, Input, SecretInput, PageHeader, Pagination, SectionHeader, Select, SkeletonText, StatusBadge } from '../../components/ui'
+import { Alert, Button, Checkbox, ConfirmDialog, DataTable, Dialog, EmptyState, ErrorState, Field, Input, SecretInput, PageHeader, Pagination, SectionHeader, Select, SkeletonText, StatusBadge, type Tone } from '../../components/ui'
 import { useApiDef, useApiMutation, useApiQuery, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
-import { inboundEventTypes, type InboundAddress, type InboundWebhook, type InboundWebhookInput, type MailboxEventType } from '../../data/types'
+import { inboundEventTypes, type InboundAddress, type InboundWebhook, type InboundWebhookInput, type MailboxEventType, type MailboxWebhookDelivery } from '../../data/types'
 import { date, time } from '../../lib/format'
 import { useCursorPagination } from '../../lib/pagination'
 import { fieldError, MutationError, SecretDialog } from '../settings/shared'
@@ -11,7 +11,7 @@ import { headerDraftErrors, HeaderNames, headerPayload, headersChanged, WebhookH
 import '../settings/settings.css'
 import './inbound.css'
 import './receiving.css'
-import { AddressList } from '../../components/PrivateAddress'
+import { AddressList, PrivateAddress } from '../../components/PrivateAddress'
 import { productName } from '../../../../api/src/brand'
 
 const eventInfo: Partial<Record<MailboxEventType, string>> = {
@@ -23,6 +23,8 @@ const eventInfo: Partial<Record<MailboxEventType, string>> = {
   'inbox.created': 'An agent inbox was created', 'inbox.deleted': 'An agent inbox was erased', 'message.held': 'Mail was stored but held: over an inbox’s limits or after it expired',
   'inbox.quota_exceeded': 'An agent inbox reached its message or byte limit',
 }
+// paused: held by a paused webhook until it resumes.
+const deliveryStatus: Record<MailboxWebhookDelivery['status'], { label: string; tone: Tone }> = { pending: { label: 'Retrying', tone: 'warning' }, delivered: { label: 'Delivered', tone: 'success' }, failed: { label: 'Failed', tone: 'danger' }, paused: { label: 'Held', tone: 'neutral' } }
 // routeOnly is form state: a webhook that subscribes to no events and only gets mail a route sends to it.
 type Draft = InboundWebhookInput & { routeOnly: boolean }
 const blank: Draft = { url: '', description: '', eventTypes: ['message.received'], addressIds: null, format: 'bane', routeOnly: false }
@@ -60,7 +62,7 @@ function WebhookFields({ input, urlHint, onChange, addresses, errors, apiError, 
       </Field>
     </div>
     <Checkbox disabled={disabled} checked={(input.junk ?? (input.format === 'inbound' ? 'include' : 'skip')) === 'include'} onCheckedChange={checked => onChange({ ...input, junk: checked ? 'include' : 'skip' })} label={<span className="settings-cell-stack"><span>Deliver junk mail too</span><span className="ui-field__hint">Mail whose spam verdict isn’t PASS, as message.junk or with spam.isJunk.</span></span>} />
-    {!input.routeOnly && input.addressIds !== null && <div className="settings-choices" role="group" aria-label="Addresses">{!addresses?.length ? <p className="muted">No addresses yet.</p> : addresses.map(address => <Checkbox key={address.id} label={address.address} disabled={disabled} checked={input.addressIds!.includes(address.id)} onCheckedChange={checked => onChange({ ...input, addressIds: checked ? [...input.addressIds!, address.id] : input.addressIds!.filter(id => id !== address.id) })} />)}</div>}
+    {!input.routeOnly && input.addressIds !== null && <div className="settings-choices" role="group" aria-label="Addresses">{!addresses?.length ? <p className="muted">No addresses yet.</p> : addresses.map(address => <Checkbox key={address.id} label={<PrivateAddress value={address.address} />} disabled={disabled} checked={input.addressIds!.includes(address.id)} onCheckedChange={checked => onChange({ ...input, addressIds: checked ? [...input.addressIds!, address.id] : input.addressIds!.filter(id => id !== address.id) })} />)}</div>}
     {!input.routeOnly && <fieldset className="mailbox-webhook-events" disabled={disabled}>
       <legend className="ui-field__label">Events</legend>
       {inboundEventTypes.map(type => <Checkbox key={type} disabled={(type === 'message.stored' && input.addressIds !== null) || (input.format === 'inbound' && !receivedOnly([type]).length)} label={<span className="settings-cell-stack"><code>{type}</code>{eventInfo[type] && <span className="ui-field__hint">{eventInfo[type]}</span>}</span>} checked={input.eventTypes.includes(type)} onCheckedChange={checked => onChange({ ...input, eventTypes: checked ? [...input.eventTypes, type] : input.eventTypes.filter(value => value !== type) })} />)}
@@ -168,7 +170,7 @@ function WebhookDetail() {
         {deliveries.error ? <ErrorState error={deliveries.error} onRetry={() => void deliveries.refetch()} /> : <DataTable skeletonRows={3} minRows={3} rows={deliveries.data ?? []} rowKey={row => row.id} empty={<EmptyState title="No deliveries yet" />}
           columns={[
             { key: 'time', label: 'Time (UTC)', width: 200, render: row => <span className="muted mailbox-nowrap">{date(row.createdAt, { month: 'short', day: 'numeric', timeZone: 'UTC' })} · {time(row.createdAt)}</span> },
-            { key: 'status', label: 'Status', width: 120, render: row => <StatusBadge status={row.status === 'delivered' ? 'Delivered' : row.status === 'failed' ? 'Failed' : 'Retrying'} tone={row.status === 'delivered' ? 'success' : row.status === 'failed' ? 'danger' : 'warning'} /> },
+            { key: 'status', label: 'Status', width: 120, render: row => <StatusBadge status={deliveryStatus[row.status].label} tone={deliveryStatus[row.status].tone} /> },
             { key: 'code', label: 'Response', width: 100, render: row => row.lastStatusCode ?? '—' },
             { key: 'attempts', label: 'Attempts', width: 90, render: row => row.attemptCount },
             { key: 'event', label: 'Event', render: row => <code className="settings-break">{row.eventId}</code> },

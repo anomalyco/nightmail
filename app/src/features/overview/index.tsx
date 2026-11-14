@@ -13,10 +13,10 @@ import { NextSteps, SidebarScore, StandingCard, useNextSteps, useSenderScore } f
 // `logColumns` here are Overview's compact set of Logs' columns (skeletons.tsx).
 import { AsideSkeleton, ChartSkeleton, factTitles, FactsSkeleton, latestColumns as logColumns, RegionStatus } from './skeletons'
 import { useLatestRowCount } from './latest'
-import { logHref, useLogRowIntent } from '../logs/rows'
+import { logHref, logRowLabel, useLogRowIntent } from '../logs/rows'
 import { usePrefetchQueries } from '../../data/prefetch'
 import { composer } from '../campaigns/composer-chunk'
-import { DailyLimit, SetupRail, useSetupSteps } from './setup'
+import { DailyLimit, SetupRail, useSendingLimitPending, useSetupSteps } from './setup'
 import { useCompactShell, useMediaQuery } from '../../lib/media'
 
 // Overview: four facts with their own series, the activity chart and the latest emails (down to the card's bottom) on
@@ -54,7 +54,7 @@ export function OverviewPage() {
   // Latest emails and the figures above it must agree: when a new email (or a new outcome for one) shows in the list,
   // the figures are read again. The API keys its dashboard cache on the same mail activity, so that read is current.
   const count = useLatestRowCount()
-  const latest = useApiDef(queries.logs({ direction: 'all', page: 1, pageSize: count }), { interval: 60_000, keepPrevious: true })
+  const latest = useApiDef(queries.logs({ regionId, direction: 'all', page: 1, pageSize: count }), { interval: 60_000, keepPrevious: sameRegion(regionId) })
   const head = latest.data?.items.slice(0, 7).map(row => `${row.id}:${row.status}`).join(',')
   const seen = useRef<string | undefined>(undefined)
   const refetch = query.refetch
@@ -87,7 +87,8 @@ function Aside({ setup, showSetup, campaigns }: { setup: ReturnType<typeof useSe
   const { multiTenant } = useWorkspaceAccess()
   const showScore = useCompactShell() || !multiTenant
   const next = useNextSteps(score.data)
-  const ready = Boolean((score.data || score.isError) && !setup.loading && next.ready)
+  const limitPending = useSendingLimitPending()
+  const ready = Boolean((score.data || score.isError) && !setup.loading && next.ready && !limitPending)
   const { hash, key } = useLocation()
   useEffect(() => {
     if (!ready || hash !== '#standing') return
@@ -140,15 +141,18 @@ function Chart({ data, range, live, stale }: { data: Overview; range: TimeRange;
   </section>
 }
 
+// Latest emails are the selected region's, like the figures and Logs; another region's rows never stand in while it loads.
+const sameRegion = (regionId: string) => (previous: readonly unknown[]) => (previous[1] as { regionId?: string } | undefined)?.regionId === regionId
 // The latest mail is the top of Logs: the same rows, columns and masking (features/logs/rows.tsx), compact. `count`
 // rows fill the column (latest.ts) and are always reserved, so loading, short and full lists are the same height; a new
 // count after a resize keeps the old rows up until the new page arrives. A new email or outcome crossfades the rows.
 function LatestEmails({ count, held }: { count: number; held: boolean }) {
-  const logs = useApiDef(queries.logs({ direction: 'all', page: 1, pageSize: count }), { interval: 60_000, keepPrevious: true }) // warmed with the page (data/prefetch.ts)
+  const { regionId } = useRegion()
+  const logs = useApiDef(queries.logs({ regionId, direction: 'all', page: 1, pageSize: count }), { interval: 60_000, keepPrevious: sameRegion(regionId) }) // warmed with the page (data/prefetch.ts)
   const rowIntent = useLogRowIntent()
   const rows = (logs.data?.items ?? []).slice(0, count)
   return <section className="ov-latest"><SectionHeader title="Latest emails" actions={<Link className="ui-button ui-button--ghost ui-button--sm" to="/logs">Logs <ArrowUpRight size={16} /></Link>} />
-    {logs.isError && !logs.data ? <ErrorState error={logs.error} onRetry={() => logs.refetch()} /> : <Crossfade id={logs.data && rows.map(row => `${row.direction}:${row.id}:${row.status}`).join(',')}><DataTable<LogEntry> className="logs-table ov-table" loading={logs.isPending || held} skeletonRows={count} minRows={count} rows={rows} rowKey={row => `${row.direction}:${row.id}`} rowHref={logHref} onRowIntent={rowIntent} empty={<EmptyState title="No emails yet" />} columns={logColumns} /></Crossfade>}
+    {logs.isError && !logs.data ? <ErrorState error={logs.error} onRetry={() => logs.refetch()} /> : <Crossfade id={logs.data && rows.map(row => `${row.direction}:${row.id}:${row.status}`).join(',')}><DataTable<LogEntry> className="logs-table ov-table" loading={logs.isPending || held} skeletonRows={count} minRows={count} rows={rows} rowKey={row => `${row.direction}:${row.id}`} rowHref={logHref} rowLabel={logRowLabel} onRowIntent={rowIntent} empty={<EmptyState title="No emails yet" />} columns={logColumns} /></Crossfade>}
   </section>
 }
 // Up to three, in the detail column's list style: the name, then how it went (or its status while not sent).
@@ -169,7 +173,7 @@ function ReputationSummary({ report, regionId }: { report: SesDiscovery | undefi
   const reputation = report?.reputation
   if (!report?.account || !reputation?.available) return null
   const worst = [accountStatus(report.account.enforcementStatus), rateStatus('bounceRate', reputation.bounceRate), rateStatus('complaintRate', reputation.complaintRate)].filter(status => status.label !== 'No data' && status.label !== 'Unknown').sort((a, b) => severity[b.tone] - severity[a.tone])[0]
-  return <Link className="overview-reputation" to={`/settings?region=${encodeURIComponent(regionId)}`} title="SES account reputation">
+  return <Link className="overview-reputation" to={`/settings?region=${encodeURIComponent(regionId)}`} title={`SES account reputation: ${ratePercent(reputation.bounceRate)} bounce · ${ratePercent(reputation.complaintRate)} complaint`}>
     <span className="muted">SES</span>{worst && <StatusBadge status={worst.label} tone={worst.tone} />}<span className="muted">{ratePercent(reputation.bounceRate)} bounce · {ratePercent(reputation.complaintRate)} complaint</span>
   </Link>
 }
@@ -225,7 +229,7 @@ export function ActivityChart({ points: target, range, createdOnly = false }: { 
   // Up to six ticks after the first, fewer when the plot is too narrow for their labels.
   const tickSteps = Math.max(1, Math.min(6, Math.floor((right - left) / 72)))
   const tickIndices = [...new Set([0, ...Array.from({ length: tickSteps }, (_, i) => Math.round((i + 1) * (points.length - 1) / tickSteps))])]
-  return <div ref={container} className="activity-chart" onMouseLeave={() => setActive(null)}><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={createdOnly ? `Emails created per ${hourly ? 'hour' : 'day'} on the left scale; outcomes for those emails on the right scale.` : `Email activity per ${hourly ? 'hour' : 'day'}. Sends use the left scale; bounces and complaints use the right scale.`}>
+  return <div ref={container} className="activity-chart" onMouseLeave={() => setActive(null)}><svg viewBox={`0 0 ${width} ${height}`} role="group" aria-label={createdOnly ? `Emails created per ${hourly ? 'hour' : 'day'} on the left scale; outcomes for those emails on the right scale.` : `Email activity per ${hourly ? 'hour' : 'day'}. Sends use the left scale; bounces and complaints use the right scale.`}>
     <text x={0} y={12} className="chart-label">Emails</text>{hasOutcomes && <text x={width - 2} y={12} textAnchor="end" className="chart-label">Bounces and complaints</text>}
     {[0, 1, 2, 3].map(i => <line key={i} x1={left} x2={right} y1={top + i * (bottom - top) / 3} y2={top + i * (bottom - top) / 3} className="chart-grid" />)}
     <Crossfade as="g" id={`${maxSent}:${hasOutcomes ? maxException : ''}`}>{[0, 1, 2, 3].map(i => <g key={i}><text x={0} y={top + i * (bottom - top) / 3 + 4} className="chart-label">{number(Math.round(maxSent * (1 - i / 3)))}</text>{hasOutcomes && <text x={width - 2} y={top + i * (bottom - top) / 3 + 4} textAnchor="end" className="chart-label">{number(Math.round(maxException * (1 - i / 3)))}</text>}</g>)}</Crossfade>

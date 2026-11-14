@@ -21,8 +21,9 @@ const methods = ['get', 'post', 'put', 'patch', 'delete']
 const tagTitle = (tag: string) => tag === 'ApiKeys' ? 'API keys' : tag === 'Auth' ? 'Agent tokens' : tag
 // Examples are written for the hosted origin; this instance's own goes in their place, so a copied command works here.
 const here = (code: string, origin: string) => code.replaceAll(publicOrigin, origin)
+const acronyms = new Set(['api', 'dns', 'url', 'id', 'sdk', 'smtp', 'imap', 'mcp'])
 function operationTitle(value: string) {
-  return value.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(' ').map((word, index) => /^mcp$/i.test(word) ? 'MCP' : index === 0 ? word[0].toUpperCase() + word.slice(1).toLowerCase() : word.toLowerCase()).join(' ')
+  return value.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(' ').map((word, index) => acronyms.has(word.toLowerCase()) ? word.toUpperCase() : index === 0 ? word[0].toUpperCase() + word.slice(1).toLowerCase() : word.toLowerCase()).join(' ')
 }
 
 function resolve(document: Document, value?: Schema): Schema {
@@ -80,11 +81,20 @@ function SchemaDefinition({ document, input }: {document: Document; input: Schem
   const required = new Set<string>(schema.required ?? [])
   const properties = Object.entries<Schema>(schema.properties ?? {})
   if (!properties.length) return <div className="docs-schema-inline"><code>{name ?? typeLabel(document, schema)}</code>{schema.description && <p>{schema.description}</p>}</div>
+  // One level of nesting, named by its path (template.name, headers[].value), so an object field's shape is documented too.
+  const fields = properties.flatMap(([property, definition]) => {
+    const field = { path: property, required: required.has(property), definition }
+    const value = resolve(document, definition), items = value.type === 'array' ? resolve(document, value.items) : null
+    const nested = value.properties ? { prefix: `${property}.`, schema: value } : items?.properties ? { prefix: `${property}[].`, schema: items } : null
+    if (!nested) return [field]
+    const inner = new Set<string>(nested.schema.required ?? [])
+    return [field, ...Object.entries<Schema>(nested.schema.properties).map(([child, definition]) => ({ path: `${nested.prefix}${child}`, required: inner.has(child), definition }))]
+  })
   return <div className="docs-schema">
     {name && <code className="docs-schema-name">{name}</code>}
     {schema.description && <p className="muted">{schema.description}</p>}
-    <div className="docs-field-list">{properties.map(([property, definition]) => <div className="docs-field" key={property}>
-      <div><code>{property}</code>{required.has(property) && <span className="docs-required">required</span>}<span className="docs-type">{typeLabel(document, definition)}</span></div>
+    <div className="docs-field-list">{fields.map(({ path, required, definition }) => <div className="docs-field" key={path}>
+      <div><code>{path}</code>{required && <span className="docs-required">required</span>}<span className="docs-type">{typeLabel(document, definition)}</span></div>
       {resolve(document, definition).description && <p>{resolve(document, definition).description}</p>}
     </div>)}</div>
   </div>

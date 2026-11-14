@@ -165,7 +165,9 @@ function EditInboxDialog({ inbox, open, onOpenChange }: { inbox: Inbox; open: bo
   const until = extend === '' ? null : new Date(extend === 'max' ? limit : Math.min(limit, Math.max(Date.now(), Date.parse(inbox.expiresAt)) + Number(extend) * 1000))
   const save = useApiMutation((_api, body: { name?: string; expiresAt?: string }) => request(`/v1/inboxes/${encodeURIComponent(inbox.id)}`, { method: 'PATCH', body }), 'Inbox updated', false, true, inbox.id)
   useEffect(() => { if (open) { save.reset(); setName(inbox.name ?? ''); setExtend('') } }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
-  const canExtend = inbox.status === 'active' && Date.parse(inbox.expiresAt) < limit - 60_000
+  // An expired inbox can still be kept longer during its hold day: updateInbox takes any expiry up to the limit.
+  const canExtend = inbox.status !== 'deleting' && limit - 60_000 > Math.max(Date.now(), Date.parse(inbox.expiresAt))
+  const atLimit = Date.parse(inbox.expiresAt) >= limit - 60_000
   async function submit(event: FormEvent) {
     event.preventDefault()
     try { await save.mutateAsync({ ...(name.trim() !== (inbox.name ?? '') ? { name: name.trim() } : {}), ...(until ? { expiresAt: until.toISOString() } : {}) }); onOpenChange(false) } catch { /* Shown in the form. */ }
@@ -174,7 +176,7 @@ function EditInboxDialog({ inbox, open, onOpenChange }: { inbox: Inbox; open: bo
     <form id="agent-inbox-edit" className="stack" onSubmit={submit} noValidate>
       <MutationError error={save.error} />
       <Field label="Name" htmlFor="agent-inbox-edit-name" error={fieldError(save.error, 'name')} hint="Shown in lists and as the sender name on replies."><Input id="agent-inbox-edit-name" value={name} maxLength={200} onChange={event => setName(event.target.value)} disabled={save.isPending} autoComplete="off" /></Field>
-      <Field label="Keep it longer" htmlFor="agent-inbox-edit-extend" error={fieldError(save.error, 'expiresAt')} hint={!canExtend ? `It already lasts the maximum: 30 days from creation (${date(new Date(limit).toISOString())}).` : until ? `It will receive until ${date(until.toISOString())}, then be deleted a day later.` : `It receives until ${date(inbox.expiresAt)}.`}>
+      <Field label="Keep it longer" htmlFor="agent-inbox-edit-extend" error={fieldError(save.error, 'expiresAt')} hint={!inbox.expiresAt ? 'It never expires.' : !canExtend ? `${atLimit ? 'It already lasts the maximum' : 'It can’t be kept longer'}: 30 days from creation (${date(new Date(limit).toISOString())}).` : until ? `It will receive until ${date(until.toISOString())}, then be deleted a day later.` : inbox.status === 'expired' ? `It expired on ${date(inbox.expiresAt)}. Keep it longer to receive again.` : `It receives until ${date(inbox.expiresAt)}.`}>
         <Select id="agent-inbox-edit-extend" value={extend} onValueChange={setExtend} disabled={save.isPending || !canExtend} options={[{ value: '', label: 'Keep the current expiry' }, ...extensions]} />
       </Field>
     </form>
@@ -193,8 +195,13 @@ function InboxDetail({ id }: { id: string }) {
   const [folder,setFolder]=useState('')
   const folders=useApiQuery(['agent-inbox-folders',id],(api,signal)=>api.inboxes.folders(id,signal),{interval:15_000})
   const messages = useApiQuery(['agent-inbox-messages', id, folder, pagination.cursor ?? null], (api, signal) => api.inboxes.messages(id, { after: pagination.cursor,folder:folder||undefined }, signal), { interval: 15_000 })
-  // The inbox's keys from the one API key list (its first 100 active keys).
-  const keys = useApiQuery(['keys', 'inbox', id], async (api, signal) => (await api.keys.list(signal, undefined, false)).filter(key => keyFor(key, id)), { enabled: canAdminister })
+  // The inbox's keys from the one API key list, which has no inbox filter: up to ten pages of 100 active keys.
+  const keys = useApiQuery(['keys', 'inbox', id], async (api, signal) => {
+    const data: ApiKey[] = []
+    let cursor: string | undefined, pages = 0
+    do { const page = await api.keys.list(signal, cursor, false); data.push(...page.filter(key => keyFor(key, id))); cursor = page.nextCursor ?? undefined } while (cursor && ++pages < 10)
+    return { data, complete: !cursor }
+  }, { enabled: canAdminister })
   const remove = useApiMutation((api, _: void) => api.inboxes.remove(id), 'Inbox deleted', false, true, id)
   const revoke = useApiMutation((api, keyId: string) => api.keys.revoke(keyId), 'API key revoked')
   const b: Inbox | undefined = inbox.data
@@ -249,7 +256,7 @@ function InboxDetail({ id }: { id: string }) {
     {canAdminister && settled && <section className="section stack" aria-labelledby="agent-inbox-keys">
       <SectionHeader title={<span id="agent-inbox-keys">API keys for this inbox</span>} />
       <p className="muted inbox-facts-note">These API keys read only this inbox, over the API or MCP. They stop working when it is deleted.</p>
-      {keys.error ? <ErrorState error={keys.error} onRetry={() => void keys.refetch()} /> : <DataTable loading={keys.isPending} skeletonRows={1} rows={keys.data ?? []} rowKey={key => key.id}
+      {keys.error ? <ErrorState error={keys.error} onRetry={() => void keys.refetch()} /> : <DataTable loading={keys.isPending} skeletonRows={1} rows={keys.data?.data ?? []} rowKey={key => key.id}
         empty={<EmptyState title="No keys" description="Create one with Connect an agent. It comes with a ready setup for OpenCode, Claude Code or Cursor." />}
         columns={[
           // A key's card: its name and when it was last used, what it can do, and Revoke in the row menu.
@@ -260,6 +267,7 @@ function InboxDetail({ id }: { id: string }) {
           { key: 'revoke', label: '', align: 'right', width: 100, card: 'end', render: key => <Button variant="danger" size="sm" aria-label={`Revoke ${key.name}`} onClick={() => setRevoking(key)}>Revoke</Button>,
             cardRender: key => <DropdownMenu label={`Actions for ${key.name}`} title={key.name} items={[{ label: 'Revoke key', destructive: true, onSelect: () => setRevoking(key) }]} /> },
         ]} />}
+      {keys.data && !keys.data.complete && <p className="muted inbox-facts-note">Only the first 1,000 active keys were checked; <Link to="/api-keys">API keys</Link> lists them all.</p>}
     </section>}
     {selected && <MessageDialog inboxId={id} messageId={selected} onClose={() => setSelected(null)} />}
     {b && <EditInboxDialog inbox={b} open={editing} onOpenChange={setEditing} />}

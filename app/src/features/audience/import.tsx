@@ -4,7 +4,8 @@ import { useApiMutation } from '../../data/context'
 import type { ImportPreview } from '../../data/types'
 import { Alert, Button, Checkbox, DataTable, Dialog, Field, Input, Select } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
-import { fieldError, ListPicker, MutationError, number } from './shared'
+import { fieldError, ListPicker, MutationError, nameTitle, number } from './shared'
+import { AddressText } from '../../components/AddressText'
 import { parseCsv } from './csv'
 
 // Columns the API imports, plus Last name, which only feeds Full name (the API has no last-name field). Headings are
@@ -90,14 +91,14 @@ export function ImportContactsDialog({ listId: initialListId = '', onClose }: { 
     <div className="stack">
       <div className="stack audience-import-fields" hidden={Boolean(preview)}>
         <Field label="Destination list" htmlFor="import-list" hint={listId ? undefined : 'Optional. Contacts are added to your audience either way.'}><ListPicker id="import-list" emptyLabel="No list" value={listId} disabled={locked} onChange={value => { setListId(value); resetPreview() }} /></Field>
-        <Field label="CSV file" htmlFor="import-file" hint={<>Columns: email (required); name, first name, last name, plan and country (optional). Up to {number(MAX_ROWS)} rows and 5 MiB. <a href={sampleHref} download="contacts-sample.csv">Download a sample CSV</a></>}><Input type="file" id="import-file" accept=".csv,text/csv" disabled={locked} onChange={event => void readFile(event.target.files?.[0])} /></Field>
+        <Field label="CSV file" htmlFor="import-file" hint={<>Columns: email (required); name, first name, last name, plan and country (optional). Up to {number(MAX_ROWS)} rows and 5 MiB. <a href={sampleHref} download="contacts-sample.csv">Download a sample CSV</a></>}><Input type="file" id="import-file" accept=".csv,text/csv" disabled={locked} onClick={event => { event.currentTarget.value = '' }} onChange={event => void readFile(event.target.files?.[0])} /></Field>
         {csv && <div className="form-grid">{targets.map(target => <Field key={target.value} label={target.label} htmlFor={`map-${target.value}`} error={fieldError(review.error, `mapping.${target.value}`)} hint={target.value === 'lastName' ? mapping.name === COMBINED ? 'Joined with First name into Full name.' : 'Used only when Full name is First + last name.' : target.value === 'name' && mapping.name === COMBINED ? 'Each contact’s first and last name, joined.' : undefined}>
           <Select id={`map-${target.value}`} disabled={locked} value={mapping[target.value] ?? ''} onValueChange={value => { setMapping({ ...mapping, [target.value]: value }); resetPreview() }} options={[{ value: '', label: 'Do not import' }, ...(target.value === 'name' && combinedAvailable ? [{ value: COMBINED, label: 'First + last name' }] : []), ...headers.map(header => ({ value: header, label: header }))]} />
         </Field>)}</div>}
       </div>
       {preview && <>
         <div className="cluster audience-review-bar"><span className="muted">Check the rows, then import.</span><Button size="sm" disabled={busy} onClick={resetPreview}>Change mapping</Button></div>
-        {preview.rows.length > 0 && <><DataTable rows={preview.rows.slice(0, 10)} rowKey={row => String(row.row)} columns={[{ key: 'row', label: 'Row', width: '16%', card: 'aside', render: row => row.row, cardRender: row => `Row ${row.row}` }, { key: 'email', label: 'Email', width: '50%', card: 'title', render: row => <span className="audience-cell-text"><PrivateAddress value={row.email} /></span> }, { key: 'name', label: 'Full name', width: '34%', card: 'line', render: row => <span className="audience-cell-text" title={row.name}>{row.name || '—'}</span> }]} />
+        {preview.rows.length > 0 && <><DataTable rows={preview.rows.slice(0, 10)} rowKey={row => String(row.row)} columns={[{ key: 'row', label: 'Row', width: '16%', card: 'aside', render: row => row.row, cardRender: row => `Row ${row.row}` }, { key: 'email', label: 'Email', width: '50%', card: 'title', render: row => <span className="audience-cell-text"><PrivateAddress value={row.email} /></span> }, { key: 'name', label: 'Full name', width: '34%', card: 'line', render: row => <span className="audience-cell-text" title={nameTitle(row.name)}>{row.name ? <AddressText text={row.name} /> : '—'}</span> }]} />
           <span className="muted">{plural(preview.rows.length, 'valid row')}{preview.rows.length > 10 ? ' · showing the first 10' : ''}</span></>}
         {preview.errors.length > 0 && <RejectedRows errors={preview.errors} />}
       </>}

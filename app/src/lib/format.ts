@@ -6,7 +6,7 @@ export function date(value: string | null | undefined, options?: Intl.DateTimeFo
   if (Number.isNaN(parsed.getTime())) return '—'
   return new Intl.DateTimeFormat('en-US', options ?? { month: 'short', day: 'numeric', year: 'numeric', timeZone: 'UTC' }).format(parsed)
 }
-export const time = (value: string) => date(value, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'UTC' })
+export const time = (value: string) => date(value, { hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone: 'UTC' })
 export function shortDateTime(value: string) {
   const sameYear = new Date(value).getUTCFullYear() === new Date().getUTCFullYear()
   return date(value, { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }), hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' })

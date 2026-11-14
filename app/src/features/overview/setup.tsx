@@ -15,7 +15,10 @@ import './setup.css'
 import { PrivateAddress } from '../../components/PrivateAddress'
 
 // The hosted limit as GET /v1/me reports it, refreshed with the overview so usage stays current.
-export function useSendingLimit() {
+export function useSendingLimit() { return useSendingLimitRead().limit }
+// Whether the limit is still being read, so Overview's detail column can wait for it instead of growing a row.
+export function useSendingLimitPending() { return useSendingLimitRead().pending }
+function useSendingLimitRead() {
   const api = useApi()
   const identity = useSession()?.identity
   const hosted = identity?.multiTenant === true && identity.connection?.kind === 'shared'
@@ -23,7 +26,7 @@ export function useSendingLimit() {
   // An identity without the limit (the connection cache keeps only a summary) is not a seed: the limit is read.
   const live = useQuery({ queryKey: ['bane', api.mode, 'sending-limit', identity?.workspaceId], enabled: hosted && api.mode === 'live', refetchInterval: 60_000, refetchIntervalInBackground: false,
     initialData: identity?.connection?.sendingLimit !== undefined ? identity ?? undefined : undefined, staleTime: 60_000, queryFn: ({ signal }) => request<Identity>('/v1/me', { signal }) })
-  return hosted ? (live.data ?? identity)?.connection?.sendingLimit ?? null : null
+  return { limit: hosted ? (live.data ?? identity)?.connection?.sendingLimit ?? null : null, pending: hosted && api.mode === 'live' && live.isPending }
 }
 
 export function limitSummary(limit: SendingLimit) {
@@ -72,25 +75,27 @@ export function useSetupSteps(): { loading: boolean; steps: SetupStep[] | null; 
   // The new email shows in Latest emails, the facts and the next steps without a reload.
   const sentTest = (id: string) => {
     setTestId(id)
-    void client.invalidateQueries({ predicate: query => query.queryKey[0] === 'bane' && ['overview', 'overview-setup', 'logs', 'emails', 'sender-score'].includes(String(query.queryKey[2])) }).catch(() => {})
+    void client.invalidateQueries({ predicate: query => query.queryKey[0] === 'bane' && ['overview', 'overview-setup', 'logs', 'emails', 'sender-score', 'sending-limit'].includes(String(query.queryKey[2])) }).catch(() => {})
   }
   if (!enabled) return { loading: false, steps: null }
   if (setup.isPending || (receivingVerified && inbound.isPending && !inbound.error)) return { loading: true, steps: null }
   if (setup.error || !setup.data.domains || !setup.data.apiKeys) return { loading: false, steps: null }
   const items = setup.data.domains, keyed = setup.data.apiKeys.active > 0
   const verified = items.find(domain => domain.status === 'verified')
+  // The setup read carries the ten newest domains; an older verified one still counts (the session's domain summary).
+  const domainDone = !!verified || (identity?.connection?.domains?.verified ?? 0) > 0
   const pending = items.find(domain => domain.status !== 'verified')
   const receiving = items.find(domain => domain.receiving === 'verified')
   const addresses = inbound.data?.reduce((sum, domain) => sum + domain.addressCount, 0) ?? 0
   const sent = setup.data.emails.any || !!testId
-  if (verified && keyed && sent && !testId) return { loading: false, steps: null }
+  if (domainDone && keyed && sent && !testId) return { loading: false, steps: null }
   const steps: SetupStep[] = [
-    { key: 'domain', done: !!verified, title: 'Verify a domain',
-      detail: verified ? `${verified.name} can send.` : pending ? `${pending.name} is waiting for its DNS records.` : 'Add your domain and publish its DNS records.',
-      action: !verified && <Link className="ui-button ui-button--secondary ui-button--md" to={pending ? `/domains/${pending.id}` : '/domains'}>{pending ? 'View records' : 'Add domain'}</Link> },
+    { key: 'domain', done: domainDone, title: 'Verify a domain',
+      detail: verified ? `${verified.name} can send.` : domainDone ? 'Your domain can send.' : pending ? `${pending.name} is waiting for its DNS records.` : 'Add your domain and publish its DNS records.',
+      action: !domainDone && <Link className="ui-button ui-button--secondary ui-button--md" to={pending ? `/domains/${pending.id}` : '/domains'}>{pending ? 'View records' : 'Add domain'}</Link> },
     { key: 'key', done: keyed, title: 'Create an API key', detail: keyed ? 'Your app or agent can authenticate.' : verified ? `A Send only key for ${verified.name} is enough.` : 'A Send only key restricted to your domain is enough.',
       action: !keyed && <Link className="ui-button ui-button--secondary ui-button--md" to={verified ? `/api-keys?create=send&domain=${encodeURIComponent(verified.name)}` : '/api-keys?create=send'}>Create key</Link> },
-    { key: 'send', done: sent, title: 'Send your first email', detail: testId ? <>Test email queued to {identity?.email && <PrivateAddress value={identity.email} />}. <Link to={`/logs/${encodeURIComponent(testId)}`}>View in Logs</Link></> : sent ? 'It’s in Logs.' : verified ? <>Send a test to yourself, or use the examples in <Link to="/docs#quickstart">Docs</Link>.</> : 'Possible once a domain is verified.',
+    { key: 'send', done: sent, title: 'Send your first email', detail: testId ? <>Test email queued to {identity?.email && <PrivateAddress value={identity.email} />}. <Link to={`/logs/${encodeURIComponent(testId)}`}>View in Logs</Link></> : sent ? 'It’s in Logs.' : verified ? <>Send a test to yourself, or use the examples in <Link to="/docs#quickstart">Docs</Link>.</> : domainDone ? <>Use the examples in <Link to="/docs#quickstart">Docs</Link>.</> : 'Possible once a domain is verified.',
       action: !sent && verified && <TestSend domain={verified} onSent={sentTest} /> },
     { key: 'receive', done: !!receiving && addresses > 0, optional: true, title: 'Receive email', detail: receiving ? `${receiving.name} can receive. Create an address like support@.` : 'Add the receiving MX record from a domain’s page.',
       action: receiving ? addresses === 0 && <Link className="ui-button ui-button--ghost ui-button--md" to="/receiving">Create address</Link> : (verified ?? pending) && <Link className="ui-button ui-button--ghost ui-button--md" to={`/domains/${(verified ?? pending)!.id}`}>Set up</Link> },
@@ -98,7 +103,7 @@ export function useSetupSteps(): { loading: boolean; steps: SetupStep[] | null; 
   // Sending a test needs only a verified domain (it uses this session, not a key), so its step opens beside the key step.
   const current = steps.find(step => !step.done && !step.optional) ?? steps.find(step => !step.done)
   // The first email's step stays open once sent, so its confirmation and the link to Logs are seen.
-  const open = steps.filter(step => step === current || (step.key === 'send' && (!!testId || (!step.done && !!verified))))
+  const open = steps.filter(step => step === current || (step.key === 'send' && (!!testId || (!step.done && domainDone))))
   return { loading: false, steps, current, open }
 }
 

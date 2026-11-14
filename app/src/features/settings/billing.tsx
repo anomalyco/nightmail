@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowUpRight, CreditCard } from 'lucide-react'
@@ -91,7 +91,7 @@ function BillingAlerts({ state, summary: b }: { state: NonNullable<ReturnType<ty
   return <>
     {state.receiving === 'held' ? <Alert tone="danger" title="Received mail is being held">{productName} stores new received mail but doesn’t deliver it to inboxes, webhooks or IMAP until you add credit. Nothing is deleted.</Alert>
       : state.receiving === 'grace' ? <Alert tone="warning" title={<>Received mail is accepted until {slot(b?.grace.receiveHoldAt ? monthDay(b.grace.receiveHoldAt) : null, 44)}</>}>Then it’s held until you add credit. The balance is below $0; a top-up settles it first. Nothing is deleted.</Alert> : null}
-    {state.autoRecharge === 'failed' && <Alert tone="warning" title="Auto-recharge is off">{productName} couldn’t charge your card. Update the card, then turn auto-recharge back on.</Alert>}
+    {state.autoRecharge === 'failed' && <Alert tone="warning" title="Auto-recharge is off">{['dispute', 'early_fraud_warning'].includes(b?.autoRecharge?.disabledReason ?? '') ? `Your card was blocked after a ${b?.autoRecharge?.disabledReason === 'dispute' ? 'dispute' : 'fraud warning'}. Add a different card, then turn auto-recharge back on.` : `${productName} couldn’t charge your card. Update the card, then turn auto-recharge back on.`}</Alert>}
   </>
 }
 const useBillingState = () => useSession()?.identity?.billing
@@ -154,7 +154,7 @@ function RechargeForm({ settings, hasCard, capped, Row }: { settings: NonNullabl
       <span title={hasCard ? undefined : 'Save a card first'}><Switch label={<span className="sr-only">Auto-recharge</span>} checked={form.enabled} disabled={pending || !hasCard || !valid} onCheckedChange={enabled => { const next = { ...form, enabled }; setForm(next); void save(next) }} /></span>
     </>} />
     <p className="muted usage-note">{RECHARGE_NOTE}</p>
-    <div className="settings-rows billing-rows">{RECHARGE_ROWS.map(([key, title, range]) => <Row key={key} title={title} hint={key === 'cap' ? `${centsUsd(settings.monthTotalCents)} added this month${capped ? ' · limit reached' : settings.pending ? ' · adding credit now' : ''}` : range}>
+    <div className="settings-rows billing-rows">{RECHARGE_ROWS.map(([key, title, range]) => <Row key={key} title={title} hint={key === 'cap' ? invalid.cap ? '$20 to $10,000, at least the Add amount' : `${centsUsd(settings.monthTotalCents)} added this month${capped ? ' · limit reached' : settings.pending ? ' · adding credit now' : ''}` : range}>
       <span className="billing-dollars"><span aria-hidden="true">$</span><Input aria-label={`${title}, in dollars`} aria-invalid={invalid[key] || undefined} inputMode="decimal" value={form[key]} disabled={pending || !hasCard} onChange={event => setForm({ ...form, [key]: event.target.value })} /></span>
     </Row>)}</div>
   </form>
@@ -165,7 +165,7 @@ const ledgerText = (e: LedgerEntry) => `${e.description}${e.kind === 'topup' && 
 const ledgerDescription = (e: LedgerEntry) => <span className="billing-desc" title={ledgerText(e)}>{e.description}{e.kind === 'topup' && e.expiresAt && <span className="muted"> · Expires {fullDay(e.expiresAt)}</span>}</span>
 const ledgerColumns: Column<LedgerEntry>[] = [
   { key: 'description', label: 'Description', render: e => <span className="billing-cell">{ledgerDescription(e)}{e.invoiceUrl && <InvoiceLink href={e.invoiceUrl} label="Invoice" />}</span>, cardRender: ledgerDescription, card: 'title' },
-  { key: 'at', label: 'Date', width: 124, render: e => date(e.at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }), card: 'line' },
+  { key: 'at', label: 'Date', width: 124, render: e => date(e.at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' }), card: 'line' },
   { key: 'amount', label: 'Amount', width: 104, align: 'right', render: e => <span className="billing-amount" data-sign={BigInt(e.amount) < 0n ? 'out' : 'in'}>{usd(e.amount, { sign: true })}</span>, card: 'aside' },
   { key: 'after', label: 'Balance after', width: 124, align: 'right', render: e => usd(e.balanceAfter), cardRender: e => <>{usd(e.balanceAfter)}{e.invoiceUrl && <> · <InvoiceLink href={e.invoiceUrl} label="Invoice" /></>}</>, card: 'field' },
 ]
@@ -179,7 +179,7 @@ const KIND: Record<Payment['kind'], string> = { checkout: 'Top-up · Checkout', 
 const paymentNote = (p: Payment) => p.status === 'failed' && p.failure ? declineText(p.failure.code) : p.card ? cardLabel(p.card) : null
 const paymentColumns: Column<Payment>[] = [
   { key: 'kind', label: 'Payment', render: p => <span className="billing-stack"><span>{KIND[p.kind]}</span>{paymentNote(p) && <span className="muted billing-stack__note">{paymentNote(p)}</span>}</span>, cardRender: p => KIND[p.kind], card: 'title' },
-  { key: 'at', label: 'Date', width: 124, render: p => date(p.at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }), card: 'line' },
+  { key: 'at', label: 'Date', width: 124, render: p => date(p.at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' }), card: 'line' },
   { key: 'amount', label: 'Amount', width: 104, align: 'right', render: p => p.kind === 'setup' ? '—' : centsUsd(p.totalCents ?? p.amountCents), card: 'aside' },
   { key: 'status', label: 'Status', width: 248, render: p => <span className="cluster billing-links"><PaymentStatusBadge payment={p} /><PaymentLinks payment={p} /></span>, card: 'line' },
 ]
@@ -211,6 +211,17 @@ function HistoryList<T>({ query, pagination, columns, rowKey, empty }: { query: 
 // Add credit: an amount, then how to pay. The saved card is charged now; otherwise Stripe Checkout opens. Above $200
 // a second step confirms the amount.
 const PRESETS = [2000, 5000, 10_000, 25_000]
+/** A radiogroup's keyboard model: one tab stop, and arrows, Home and End select and focus the next choice. */
+function radioKeys<T>(values: T[], current: T, select: (value: T) => void) {
+  return (event: KeyboardEvent<HTMLElement>) => {
+    const index = values.indexOf(current), last = values.length - 1
+    const next = ['ArrowRight', 'ArrowDown'].includes(event.key) ? (index >= last ? 0 : index + 1) : ['ArrowLeft', 'ArrowUp'].includes(event.key) ? (index <= 0 ? last : index - 1) : event.key === 'Home' ? 0 : event.key === 'End' ? last : null
+    if (next === null) return
+    event.preventDefault()
+    select(values[next])
+    event.currentTarget.querySelectorAll<HTMLElement>('[role=radio]')[next]?.focus()
+  }
+}
 function AddCredit({ open, onOpenChange, summary: b }: { open: boolean; onOpenChange: (open: boolean) => void; summary: BillingSummary }) {
   const card = b.paymentMethod, toast = useToast(), refresh = useBillingRefresh()
   const [preset, setPreset] = useState<number | 'custom'>(5000)
@@ -245,14 +256,14 @@ function AddCredit({ open, onOpenChange, summary: b }: { open: boolean; onOpenCh
     footer={<><Button disabled={working} onClick={() => confirming ? setConfirming(false) : onOpenChange(false)}>{confirming ? 'Back' : 'Cancel'}</Button>
       <Button variant="primary" loading={working} disabled={invalid} onClick={() => void pay()}>{confirming ? `Add ${centsUsd(amount ?? 0)}` : method === 'checkout' ? 'Continue to Stripe' : `Charge ${amount !== null && !invalid ? centsUsd(amount) : ''}`.trim()}</Button></>}>
     {confirming ? <p className="billing-add__confirm">Add <b>{centsUsd(amount ?? 0)}</b> to this workspace’s balance? {method === 'saved_card' && card ? `${cardLabel(card)} is charged now.` : 'You pay in Stripe Checkout, where any tax is added.'}</p> : <>
-      <div className="billing-choice" role="radiogroup" aria-label="Amount">
-        {[...PRESETS, 'custom' as const].map(value => <button key={value} type="button" role="radio" aria-checked={preset === value} className="billing-choice__item" disabled={working} onClick={() => setPreset(value)}>{value === 'custom' ? 'Custom' : centsUsd(value).replace('.00', '')}</button>)}
+      <div className="billing-choice" role="radiogroup" aria-label="Amount" onKeyDown={working ? undefined : radioKeys<number | 'custom'>([...PRESETS, 'custom'], preset, setPreset)}>
+        {[...PRESETS, 'custom' as const].map(value => <button key={value} type="button" role="radio" aria-checked={preset === value} tabIndex={preset === value ? 0 : -1} className="billing-choice__item" disabled={working} onClick={() => setPreset(value)}>{value === 'custom' ? 'Custom' : centsUsd(value).replace('.00', '')}</button>)}
       </div>
       {preset === 'custom' && <span className="billing-dollars billing-add__custom"><span aria-hidden="true">$</span><Input autoFocus aria-label="Amount in dollars, $20 to $10,000" inputMode="decimal" placeholder="75" value={custom} disabled={working} onChange={event => setCustom(event.target.value)} /></span>}
       {preset === 'custom' && custom && invalid && <p className="muted">Add $20 to $10,000 at a time.</p>}
-      <div className="billing-methods" role="radiogroup" aria-label="Pay with">
-        {card && <button type="button" role="radio" aria-checked={method === 'saved_card'} className="billing-method" disabled={working} onClick={() => setMethod('saved_card')}><CreditCard size={16} aria-hidden="true" /><span>Charge {cardLabel(card)}</span></button>}
-        <button type="button" role="radio" aria-checked={method === 'checkout'} className="billing-method" disabled={working} onClick={() => setMethod('checkout')}><ArrowUpRight size={16} aria-hidden="true" /><span>Pay with Stripe Checkout</span></button>
+      <div className="billing-methods" role="radiogroup" aria-label="Pay with" onKeyDown={working ? undefined : radioKeys<typeof method>(card ? ['saved_card', 'checkout'] : ['checkout'], method, setMethod)}>
+        {card && <button type="button" role="radio" aria-checked={method === 'saved_card'} tabIndex={method === 'saved_card' ? 0 : -1} className="billing-method" disabled={working} onClick={() => setMethod('saved_card')}><CreditCard size={16} aria-hidden="true" /><span>Charge {cardLabel(card)}</span></button>}
+        <button type="button" role="radio" aria-checked={method === 'checkout'} tabIndex={method === 'checkout' ? 0 : -1} className="billing-method" disabled={working} onClick={() => setMethod('checkout')}><ArrowUpRight size={16} aria-hidden="true" /><span>Pay with Stripe Checkout</span></button>
       </div>
     </>}
     <p className="muted billing-add__terms">{TERMS}</p>

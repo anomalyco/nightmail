@@ -4,9 +4,9 @@ import { useInfiniteQuery } from '@tanstack/react-query'
 import { ChevronRight } from 'lucide-react'
 import { Button, Checkbox, Dialog, Field, Input } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
-import { useApi, useApiDef, useApiMutation, useApiQuery, useWorkspaceAccess } from '../../data/context'
+import { useApi, useApiDef, useApiMutation, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
-import type { ApiKeyInput, AppPasswordInput, AppPasswordProtocol, KeyPermission, MailPermission, PageRequest } from '../../data/types'
+import type { ApiKeyInput, AppPasswordInput, AppPasswordProtocol, Inbox, KeyPermission, MailPermission, PageRequest } from '../../data/types'
 import { fieldError, MutationError } from './shared'
 import '../inbound/inbound.css'
 import './api-keys.css'
@@ -58,17 +58,33 @@ export function CreateKeyDialog({ open, onOpenChange, onCreated, onConnectAgent,
   </Dialog>
 }
 
-type InboxOption = { id: string; name?: string | null; address: string }
+/** Active inboxes to choose from, a page of 50 at a time: Load more reaches the rest. */
+function useInboxOptions(key: string, filter: { type?: Inbox['type'] }, enabled: boolean) {
+  const api = useApi()
+  return useInfiniteQuery({
+    queryKey: ['bane', api.mode, 'agent-inboxes', key],
+    enabled,
+    initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam, signal }) => api.inboxes.list({ ...filter, status: 'active', cursor: pageParam }, signal),
+    getNextPageParam: last => last.nextCursor ?? undefined,
+    staleTime: 60_000,
+    retry: false,
+  })
+}
+const activeInboxes = (query: ReturnType<typeof useInboxOptions>) => (query.data?.pages.flat() ?? []).filter(box => box.status === 'active')
 
 /** Which inbox: a radio list, because a select would show the address unmasked. */
-function InboxChoice({ name, inboxes, pending, value, onChange, disabled, error, none }: { name: string; inboxes: InboxOption[]; pending: boolean; value: string; onChange: (id: string) => void; disabled: boolean; error?: string; none: ReactNode }) {
+function InboxChoice({ name, query, value, onChange, disabled, error, none }: { name: string; query: ReturnType<typeof useInboxOptions>; value: string; onChange: (id: string) => void; disabled: boolean; error?: string; none: ReactNode }) {
+  const inboxes = activeInboxes(query)
   return <fieldset className="settings-key-domains" disabled={disabled} aria-describedby={error ? `${name}-error` : undefined}>
     <legend className="ui-field__label">Inbox</legend>
-    {pending ? <p className="muted" role="status">Loading inboxes…</p> : !inboxes.length ? <p className="muted keys-form-note">{none}</p>
+    {query.isPending && !query.isError ? <p className="muted" role="status">Loading inboxes…</p> : !inboxes.length && !query.isError ? <p className="muted keys-form-note">{none}</p>
       : <div className="settings-key-domain-options">{inboxes.map(box => <label key={box.id} className="keys-choice">
         <input type="radio" name={name} value={box.id} checked={value === box.id} onChange={() => onChange(box.id)} />
         <span>{box.name ? <>{box.name} · </> : null}<PrivateAddress value={box.address} /></span>
       </label>)}</div>}
+    {query.isError && <div className="stack"><MutationError error={query.error} /><Button onClick={() => { void (query.isFetchNextPageError ? query.fetchNextPage() : query.refetch()) }}>Retry loading inboxes</Button></div>}
+    {query.hasNextPage && !query.isError && <Button variant="ghost" loading={query.isFetchingNextPage} onClick={() => void query.fetchNextPage()}>Load more inboxes</Button>}
     {error && <p id={`${name}-error`} className="ui-field__error" role="alert">{error}</p>}
   </fieldset>
 }
@@ -101,13 +117,12 @@ function ApiKeyForm({ open, onOpenChange, onPending, onCreated, initial }: FormP
     staleTime: 60_000,
     retry: false,
   })
-  const inboxes = useApiQuery(['agent-inboxes', 'key-options'], (api, signal) => api.inboxes.list({ status: 'active' }, signal), { enabled: open && purpose === 'inbox' })
+  const inboxes = useInboxOptions('key-options', {}, open && purpose === 'inbox')
   const options = new Map((domainOptions.data?.pages.flatMap(page => page.items) ?? []).map(domain => [domain.name.toLowerCase(), domain.status === 'verified']))
   const domains = [...new Set([...options.keys(), ...selectedDomains])].sort()
   // Inboxes have their own choice; this list is the receiving addresses.
   const receiving = (addresses.data ?? []).filter(item => item.kind !== 'inbox')
-  const activeInboxes = (inboxes.data ?? []).filter(box => box.status === 'active')
-  const chosenInbox = inboxId || activeInboxes[0]?.id || ''
+  const chosenInbox = inboxId || activeInboxes(inboxes)[0]?.id || ''
   const nameError = errors.name || fieldError(create.error, 'name')
   const domainError = errors.domains || fieldError(create.error, 'domains')
   const addressError = errors.addressIds || fieldError(create.error, 'access.addressIds')
@@ -155,7 +170,7 @@ function ApiKeyForm({ open, onOpenChange, onPending, onCreated, initial }: FormP
   return <>
     <form id="create-key" className="stack" onSubmit={submit} noValidate>
       <MutationError error={create.error} />
-      <Field label="Name" htmlFor="key-name" error={nameError}><Input id="key-name" value={name} onChange={event => setName(event.target.value)} autoFocus required disabled={pending} placeholder={placeholder} /></Field>
+      <Field label="Name" htmlFor="key-name" error={nameError}><Input id="key-name" value={name} maxLength={100} onChange={event => setName(event.target.value)} autoFocus required disabled={pending} placeholder={placeholder} /></Field>
       <fieldset className="keys-purpose" disabled={pending}>
         <legend className="ui-field__label">What it can reach</legend>
         {purposes.map(item => <label key={item.value} className="keys-choice">
@@ -185,7 +200,7 @@ function ApiKeyForm({ open, onOpenChange, onPending, onCreated, initial }: FormP
         </div>
         {addressError && <p id="key-address-error" className="ui-field__error" role="alert">{addressError}</p>}
       </fieldset>}
-      {purpose === 'inbox' && <InboxChoice name="key-inbox" inboxes={activeInboxes} pending={inboxes.isPending} value={chosenInbox} onChange={id => { setInboxId(id); clearError('inboxId') }} disabled={pending} error={inboxError}
+      {purpose === 'inbox' && <InboxChoice name="key-inbox" query={inboxes} value={chosenInbox} onChange={id => { setInboxId(id); clearError('inboxId') }} disabled={pending} error={inboxError}
         none={<>No active agent inboxes. <Link to="/receiving/inboxes" onClick={() => onOpenChange(false)}>Create one in Receiving</Link>.</>} />}
       {(purpose === 'addresses' || purpose === 'inbox') && <fieldset className="keys-purpose" disabled={pending}>
         <legend className="ui-field__label">What it can do with the mail</legend>
@@ -203,15 +218,14 @@ function ApiKeyForm({ open, onOpenChange, onPending, onCreated, initial }: FormP
 function AppPasswordForm({ open, onOpenChange, onPending, onCreated }: FormProps) {
   const { multiTenant } = useWorkspaceAccess()
   const create = useApiMutation((api, input: AppPasswordInput) => api.credentials.createAppPassword(input))
-  const inboxes = useApiQuery(['agent-inboxes', 'app-password-options'], (api, signal) => api.inboxes.list({ type: 'persistent', status: 'active' }, signal), { enabled: open })
+  const inboxes = useInboxOptions('app-password-options', { type: 'persistent' }, open)
   const [inboxId, setInboxId] = useState('')
   const [name, setName] = useState('')
   const [protocols, setProtocols] = useState<AppPasswordProtocol[]>(['imap', 'smtp'])
   const [errors, setErrors] = useState<Record<string, string>>({})
   const pending = create.isPending
   useEffect(() => onPending(pending), [pending, onPending])
-  const persistent = (inboxes.data ?? []).filter(box => box.status === 'active')
-  const chosen = inboxId || persistent[0]?.id || ''
+  const chosen = inboxId || activeInboxes(inboxes)[0]?.id || ''
   const toggle = (protocol: AppPasswordProtocol, checked: boolean) => { setErrors(current => ({ ...current, protocols: '' })); setProtocols(current => checked ? [...new Set([...current, protocol])] : current.filter(item => item !== protocol)) }
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -231,8 +245,8 @@ function AppPasswordForm({ open, onOpenChange, onPending, onCreated }: FormProps
   return <>
     <form id="create-app-password" className="stack" onSubmit={submit} noValidate>
       <MutationError error={create.error} />
-      <InboxChoice name="app-password-inbox" inboxes={persistent} pending={inboxes.isPending} value={chosen} onChange={setInboxId} disabled={pending} error={errors.inboxId}
-        none="No persistent inboxes yet. A mail app can only open an inbox that keeps its mail; create one over the API with createInbox." />
+      <InboxChoice name="app-password-inbox" query={inboxes} value={chosen} onChange={setInboxId} disabled={pending} error={errors.inboxId}
+        none="No persistent inboxes yet. A mail app can only open an inbox that keeps its mail; create a persistent one over the API." />
       <Field label="Name" htmlFor="app-password-name" error={errors.name || fieldError(create.error, 'name')}><Input id="app-password-name" value={name} maxLength={100} onChange={event => setName(event.target.value)} autoFocus required disabled={pending} placeholder="Apple Mail" autoComplete="off" /></Field>
       <fieldset className="keys-purpose" disabled={pending}>
         <legend className="ui-field__label">What the mail app can do</legend>

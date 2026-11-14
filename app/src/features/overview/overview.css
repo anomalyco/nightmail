@@ -73,6 +73,8 @@
   .page-surface > .ui-page-header:has(+ .ov-split) > .cluster:last-child, .ov-controls { flex: 1 1 100%; }
   .ov-controls .ui-tabs { flex: none; }
   .ov-controls .ui-select-trigger { flex: 1; width: auto; min-width: 0; }
+  /* The SES chip keeps its label and verdict; the rates (in its title and on Settings) don't fit beside the tabs. */
+  .overview-reputation > .muted:last-child:not(:first-child) { display: none; }
   .ov-split { gap: var(--space-28); }
   .ov-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--space-16); }
   .ov-facts > div { height: 68px; }

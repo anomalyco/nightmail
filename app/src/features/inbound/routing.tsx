@@ -1,7 +1,7 @@
 // Routes: the route editor ("Goes to"), opened from a route row or an address's page.
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router'
-import { Alert, Button, Checkbox, ConfirmDialog, Dialog, Field, Input, Select, Switch } from '../../components/ui'
+import { Alert, Button, Checkbox, ConfirmDialog, Dialog, ErrorState, Field, Input, Select, Switch } from '../../components/ui'
 import { useApiDef, useApiMutation } from '../../data/context'
 import { queries } from '../../data/queries'
 import type { InboundAddress, InboundWebhook, MailRoute } from '../../data/types'
@@ -24,6 +24,10 @@ function destinationsOf(addresses: InboundAddress[], webhooks: InboundWebhook[])
 export function RouteEditor({ match, route, to, onClose }: { match: string; route?: { id: string; enabled: boolean; to: string[] | 'drop' } | null; to?: string[]; onClose: () => void }) {
   const addresses = useApiDef(queries.inboundAddressOptions())
   const webhooks = useApiDef(queries.inboundWebhooks())
+  const error = (!addresses.data && addresses.error) || (!webhooks.data && webhooks.error)
+  if (error) return <Dialog open onOpenChange={next => { if (!next) onClose() }} title={route ? 'Edit route' : 'Add route'} footer={<Button onClick={onClose}>Close</Button>}>
+    <ErrorState error={error} onRetry={() => { if (addresses.error) void addresses.refetch(); if (webhooks.error) void webhooks.refetch() }} />
+  </Dialog>
   if (!addresses.data || !webhooks.data) return null
   const draft = route ? { match, to: route.to, route: { id: route.id, enabled: route.enabled, match, to: route.to } as MailRoute } : { match, to: to ?? [] }
   return <RouteDialog draft={draft} destinations={destinationsOf(addresses.data, webhooks.data)} owners={addresses.data} onClose={onClose} refreshWebhooks={async () => (await webhooks.refetch()).data ?? []} />

@@ -9,7 +9,7 @@ import { recordsFor } from '../settings/domain-records'
 import { mcpClientNames, type McpClient } from '../../../../api/src/mcp-clients'
 import { McpClientSetup, mcpAccess, useMcpScope, useMcpUrl, type McpAccess } from './connect-agent'
 import './developer.css'
-import { apiKeyEnv, productName, sdkPackage } from '../../../../api/src/brand'
+import { apiKeyEnv, productName, productSlug, sdkPackage } from '../../../../api/src/brand'
 
 // The canonical public origin from /v1/me; the page origin stands in for demo mode.
 function receivingMx(domain: Domain) {
@@ -76,7 +76,7 @@ function downloadText(name: string, text: string) {
 export function AgentPrompt({ prompt }: { prompt: string | null }) {
   return <section id="agent-prompt" className="section stack developer-section" aria-label="Agent prompt" aria-busy={prompt === null || undefined}>
     <SectionHeader title="Agent prompt" actions={<span className="developer-icon-actions" data-pending={prompt === null || undefined} inert={prompt === null}>
-      <button type="button" className="ui-button ui-button--ghost ui-button--sm developer-copy-icon" aria-label="Download agent prompt as .txt" title="Download as .txt" onClick={() => downloadText('bane-agent-prompt.txt', prompt ?? '')}><Download size={14} aria-hidden="true" /></button>
+      <button type="button" className="ui-button ui-button--ghost ui-button--sm developer-copy-icon" aria-label="Download agent prompt as .txt" title="Download as .txt" onClick={() => downloadText(`${productSlug}-agent-prompt.txt`, prompt ?? '')}><Download size={14} aria-hidden="true" /></button>
       <CopyAction value={prompt ?? ''} label="Copy agent prompt" variant="ghost" size="sm" compact className="developer-copy-icon" />
     </span>} />
     <p className="muted developer-copy">Paste this into your coding agent, or download it as a .txt file for it to read. It has this workspace’s real values; the API key stays in your environment.</p>

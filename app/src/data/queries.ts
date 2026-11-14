@@ -18,7 +18,13 @@ export const queries = {
   inboundWebhooks: () => def(['inbound-webhooks'], (api, signal) => api.inbound.webhooks(signal)),
   routing: () => def(['routing'], (api, signal) => api.routing.routes(signal)),
   receivingAddresses: (search: string, cursor: string | undefined) => def(['inbound-addresses', 'address', search, cursor ?? null], (api, signal) => api.inbound.addresses({ kind: 'address', search: search || undefined, cursor }, signal)),
-  inboundAddressOptions: () => def(['inbound-addresses', 'options'], (api, signal) => api.inbound.addresses({}, signal)),
+  // Every picker's choices: all addresses, not just the first page (up to ten pages of 100).
+  inboundAddressOptions: () => def(['inbound-addresses', 'options'], async (api, signal) => {
+    let page = await api.inbound.addresses({}, signal)
+    const items = [...page]
+    for (let pages = 1; page.nextCursor && pages < 10; pages++) { page = await api.inbound.addresses({ cursor: page.nextCursor }, signal); items.push(...page) }
+    return Object.assign(items, { nextCursor: page.nextCursor ?? null })
+  }),
   inboundThreads: (addressId: string | undefined, view: InboundThreadView, q: string, cursor: string | undefined) => def(['inbound-threads', addressId ?? null, view, q, cursor ?? null], (api, signal) => api.inbound.threads({ addressId, view, q: q || undefined, cursor }, signal)),
   email: (id: string) => def(['email', id], (api, signal) => api.emails.get(id, signal)),
   receivedEmail: (id: string, canAdminister: boolean) => def(['received-email', id, canAdminister], (api, signal) => api.mailboxes.receivedEmail(id, signal, canAdminister)),

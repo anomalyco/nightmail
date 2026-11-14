@@ -152,13 +152,15 @@ function KeysDialog({ onClose }: { onClose: () => void }) {
   const keys = useQuery({ queryKey: [...uiNotesKey, 'keys'], queryFn: ({ signal }) => uiNotesApi.keys.list(signal) })
   const [name, setName] = useState('Fix agent'), [days, setDays] = useState('30'), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null)
   const [secret, setSecret] = useState<string | null>(null)
+  const [revoking, setRevoking] = useState<{ id: string; name: string } | null>(null)
   async function create(event: FormEvent) {
     event.preventDefault()
     setBusy(true); setError(null)
     try { setSecret((await uiNotesApi.keys.create({ name: name.trim(), expiresInDays: Number(days) })).secret); await client.invalidateQueries({ queryKey: [...uiNotesKey, 'keys'] }) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Couldn’t create the key.') } finally { setBusy(false) }
   }
-  const revoke = async (keyId: string) => { try { await uiNotesApi.keys.revoke(keyId); await client.invalidateQueries({ queryKey: [...uiNotesKey, 'keys'] }) } catch (cause) { setError(cause instanceof Error ? cause.message : 'Couldn’t revoke the key.') } }
+  // ConfirmDialog shows a failure in the dialog and keeps it open.
+  const revoke = async (keyId: string) => { await uiNotesApi.keys.revoke(keyId); await client.invalidateQueries({ queryKey: [...uiNotesKey, 'keys'] }) }
   const live = (keys.data ?? []).filter(key => !key.revokedAt && Date.parse(key.expiresAt) > Date.now())
   const origin = window.location.origin
   return <Dialog sensitive={Boolean(secret)} open onOpenChange={next => { if (!next) onClose() }} title="Agent keys" className="op-keys-dialog"
@@ -174,11 +176,13 @@ function KeysDialog({ onClose }: { onClose: () => void }) {
         <Field label="Expires"><Select value={days} onValueChange={setDays} options={[{ value: '7', label: 'In 7 days' }, { value: '30', label: 'In 30 days' }, { value: '90', label: 'In 90 days' }]} /></Field>
         <Button type="submit" variant="primary" loading={busy} disabled={!name.trim()}>Create key</Button>
       </form>}
-      <ul className="op-keys">{keys.isPending ? <li className="muted">Loading keys…</li> : !live.length ? <li className="muted">No active keys.</li> : live.map(key => <li key={key.id}>
+      <ul className="op-keys">{keys.isPending ? <li className="muted">Loading keys…</li> : keys.isError ? <li><span className="muted">Couldn’t load the keys.</span><Button size="sm" loading={keys.isFetching} onClick={() => void keys.refetch()}>Retry</Button></li> : !live.length ? <li className="muted">No active keys.</li> : live.map(key => <li key={key.id}>
         <span className="op-cell"><strong>{key.name}</strong> <span className="op-muted-id">{key.prefix}…</span></span>
         <span className="muted">{key.lastUsedAt ? `used ${relativeTime(key.lastUsedAt)}` : 'never used'} · expires {relativeTime(key.expiresAt)}</span>
-        <Button size="sm" variant="danger" onClick={() => void revoke(key.id)}>Revoke</Button>
+        <Button size="sm" variant="danger" onClick={() => setRevoking({ id: key.id, name: key.name })}>Revoke</Button>
       </li>)}</ul>
     </div>
+    <ConfirmDialog open={revoking !== null} onOpenChange={next => { if (!next) setRevoking(null) }} danger title={`Revoke ${revoking?.name ?? 'this key'}?`} description="Anything using it stops working. This can’t be undone." confirmLabel="Revoke"
+      onConfirm={() => revoke(revoking!.id)} />
   </Dialog>
 }

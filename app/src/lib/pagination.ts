@@ -1,4 +1,4 @@
-import { useCallback, useLayoutEffect, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { matches, SHELL_COMPACT } from './media'
 
 // The fitted page size of each list is remembered, so the next session can warm that exact first page. A phone or tablet
@@ -81,4 +81,23 @@ export function useCursorPagination() {
   }
 
   return { page, cursor: cursors[page - 1], cursorForPage, onPageChange, reset }
+}
+
+/** `value` once it has stopped changing for `ms`: a search box's text, so a typed word is one request, not one per key. */
+export function useDebounced<T>(value: T, ms = 250) {
+  const [debounced, setDebounced] = useState(value)
+  useEffect(() => { const timer = window.setTimeout(() => setDebounced(value), ms); return () => window.clearTimeout(timer) }, [value, ms])
+  return debounced
+}
+
+/** A list's search box over a search kept in the URL: the box holds its own text while you type and `write`s it once
+ * you pause, so typing neither fetches per key nor races the previous navigation. A search changed elsewhere (Back,
+ * Clear filters) replaces the text. */
+export function useSearchDraft(search: string, write: (value: string) => void, ms = 250) {
+  const [draft, setDraft] = useState(search)
+  const written = useRef(search), typing = useRef<number | undefined>(undefined)
+  useEffect(() => { if (search !== written.current) { window.clearTimeout(typing.current); written.current = search; setDraft(search) } }, [search])
+  useEffect(() => () => window.clearTimeout(typing.current), [])
+  const type = (value: string) => { setDraft(value); window.clearTimeout(typing.current); typing.current = window.setTimeout(() => { written.current = value; write(value) }, ms) }
+  return [draft, type] as const
 }

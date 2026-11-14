@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { Alert, Button, Checkbox, Dialog, Field, Select, Tabs } from '../../components/ui'
 import { CopyAction } from '../../components/motion'
+import { PrivateAddress } from '../../components/PrivateAddress'
 import { useApiQuery, usePublicOrigin, useSession, useWorkspaceAccess } from '../../data/context'
 import { requestedScopes } from '../../../../api/src/brand'
 import { request } from '../../data/live'
@@ -77,7 +78,7 @@ export function ConnectAgentDialog({ open, onOpenChange, inboxId }: { open: bool
   }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   const active = (inboxes.data ?? []).filter(box => box.status === 'active')
   const chosen = inbox || active[0]?.id || ''
-  const label = (box: Inbox) => box.name ? `${box.name} · ${box.address}` : box.address
+  const label = (box: Inbox) => <>{box.name ? `${box.name} · ` : null}<PrivateAddress value={box.address} /></>
   // Single flight: each call makes a new idempotency key, so a second click before the first answers would make a second key.
   const create = useSingleFlight('inbox-connections.create', async () => {
     if (!chosen) return
@@ -107,7 +108,7 @@ export function ConnectAgentDialog({ open, onOpenChange, inboxId }: { open: bool
           <Select value={access} onValueChange={value => setAccess(value as McpAccess)} disabled={client !== 'opencode'} options={mcpAccess.map(({ value, label }) => ({ value, label }))} />
         </Field> : <>
           <Field label="Inbox" hint={inboxes.isPending ? 'Loading inboxes…' : !active.length ? undefined : 'Agent inboxes are expiring addresses for agents and tests.'}>
-            {inboxes.isPending || active.length ? <Select value={chosen} onValueChange={setInbox} disabled={inboxes.isPending} options={active.map(box => ({ value: box.id, label: label(box) }))} />
+            {inboxes.isPending || active.length ? <Select mask value={chosen} onValueChange={setInbox} disabled={inboxes.isPending} options={active.map(box => ({ value: box.id, label: label(box) }))} />
               : <p className="muted connect-agent__empty">No active agent inboxes. <Link to="/receiving/inboxes" onClick={close}>Create one in Receiving</Link>, then connect it here.</p>}
           </Field>
           <Checkbox checked={reply} onCheckedChange={setReply} label="Also let it reply to people who wrote to the inbox (needs replies on for the inbox)" />

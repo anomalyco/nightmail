@@ -85,6 +85,12 @@
 .ui-table-scroll.domains-table th[data-col='sending'] { width: 29% !important; }
 .ui-table-scroll.domains-table th[data-col='receiving'] { width: 23% !important; }
 .ui-table-scroll.domains-table th[data-col='addresses'] { width: 10% !important; }
+/* Self-hosted adds a Region column: the five widths still sum to 100%, so Region never collapses. */
+.ui-table-scroll.domains-table:has(th[data-col='region']) th[data-col='name'] { width: 34% !important; }
+.ui-table-scroll.domains-table:has(th[data-col='region']) th[data-col='sending'] { width: 26% !important; }
+.ui-table-scroll.domains-table:has(th[data-col='region']) th[data-col='receiving'] { width: 21% !important; }
+.ui-table-scroll.domains-table:has(th[data-col='region']) th[data-col='addresses'] { width: 9% !important; }
+.ui-table-scroll.domains-table:has(th[data-col='region']) th[data-col='region'] { width: 10% !important; }
 .domain-fact-note { margin-left: var(--space-8); }
 /* On a phone a long domain wraps in its card instead of ending in an ellipsis. */
 .ui-cards.domains-table .ui-card { height: auto; min-height: var(--table-row-height); }

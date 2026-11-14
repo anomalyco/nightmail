@@ -16,9 +16,11 @@ export const logColumnDefs: SkeletonColumn[] = [
   { key: 'subject', label: 'Subject', card: 'title' }, { key: 'stream', label: 'Stream', width: 116, card: 'hide' }, { key: 'open', label: '', width: 28, card: 'hide' },
 ]
 
-export const logTimestamp = (value: string) => date(value, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'UTC' })
+export const logTimestamp = (value: string) => date(value, { month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone: 'UTC' })
 // A card's time: the hour today, the date before that (UTC, like the table).
 const cardTime = (value: string) => date(value, value.slice(0, 10) === new Date().toISOString().slice(0, 10) ? { hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' } : { month: 'short', day: 'numeric', timeZone: 'UTC' })
+// The row link's name (its visible text is only the time): which way, how it went, the subject and when.
+export const logRowLabel = (row: LogEntry) => `${row.direction === 'sent' ? 'Sent' : 'Received'}, ${row.direction === 'sent' ? label(row.status) : row.status === 'spam' ? 'Spam' : 'Received'}: ${row.subject || '(no subject)'}, ${logTimestamp(row.at)} UTC`
 // Sent and received mail open at /logs/:id; received message IDs start with msg_.
 export const logHref = (row: Pick<LogEntry, 'id'>) => `/logs/${encodeURIComponent(row.id)}`
 export const isReceivedId = (id: string) => id.startsWith('msg_')

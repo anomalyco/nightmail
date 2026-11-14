@@ -91,7 +91,8 @@ function ApiKeys({ connectLink }: { connectLink: boolean }) {
   const failed = sources.filter(source => source.query.error)
   const keysShown = type === 'all' || type === 'api'
   // Addresses name a limited key's scope; without them the key would list IDs, so it waits for them (not their failure).
-  const listLoading = sources.some(source => source.query.isPending) || keysShown && addresses.isPending
+  // A previous page or filter kept as placeholder counts as loading, so its rows never show live Revoke buttons as this page's.
+  const listLoading = sources.some(source => source.query.isPending || source.query.isPlaceholderData) || keysShown && addresses.isPending
   const listFailed = failed.length === sources.length
   const included = (query: typeof keys | typeof agents | typeof passwords) => sources.some(source => source.query === query) && !query.error
   const rows: Row[] = [

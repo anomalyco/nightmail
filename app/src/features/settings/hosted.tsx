@@ -1,7 +1,7 @@
 import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useLocation } from 'react-router'
 import { ArrowUpRight, Info, Lock } from 'lucide-react'
-import { Button, ConfirmDialog, CopyButton, Input, SectionHeader, Select, Skeleton, StatusBadge } from '../../components/ui'
+import { Button, ConfirmDialog, CopyButton, ErrorState, Input, SectionHeader, Select, Skeleton, StatusBadge } from '../../components/ui'
 import { useApiDef, useApiMutation, useSession, useWorkspaceAccess } from '../../data/context'
 import { connectionApi, connectionKindLabel, useConnectionCache } from '../../data/connections'
 import { queries } from '../../data/queries'
@@ -40,7 +40,8 @@ const items = groups.flatMap(group => group.items)
 export function HostedSettings() {
   const { hash } = useLocation()
   const { canAdminister } = useWorkspaceAccess()
-  const requested = decodeURIComponent(hash.slice(1))
+  // A malformed hash (/settings#%) falls back to General instead of throwing during render.
+  const requested = (() => { try { return decodeURIComponent(hash.slice(1)) } catch { return '' } })()
   const section = (requested === 'workspace' ? 'general' : items.find(item => item.key === requested)?.key) ?? 'general'
   const locked = (item: typeof items[number]) => !canAdminister && Boolean(item.admin)
   const current = items.find(item => item.key === section)!
@@ -156,7 +157,7 @@ function AccountRows() {
     {accountApps && <Row title="Connected apps" hint="Disconnect a client from your Anomaly account"><a href={accountApps}>Manage at Anomaly account</a></Row>}
     {apps?.map(app=>app.status==='expired'||app.status==='revoked'?<Row key={app.id} title={connectionTitle(app)} hint={app.clientId}>{app.status==='expired'?'Expired · reconnect the client':'Revoked · reconnect the client'}</Row>
       :<McpApproval key={`${app.id}:${app.workspaceId}`} app={app} workspaces={session.identity?.workspaces??[]} onRevoke={()=>revoke.mutate(app.id)} />)}
-    {agents.error && <p role="alert">Couldn’t load your connected agents.</p>}
+    {agents.error && <ErrorState error={agents.error} onRetry={() => void agents.refetch()} />}
     <MutationError error={revoke.error}/>
     {support && <ContactSupportDialog onClose={() => setSupport(false)} />}
   </div>
@@ -168,6 +169,7 @@ function AccountRows() {
 export function McpApproval({ app, workspaces, onRevoke, linked = true }: { app: Agent; workspaces: WorkspaceMembership[]; onRevoke: () => void; linked?: boolean }) {
   const [workspaceId, setWorkspaceId] = useState(app.workspaceId ?? '')
   const bind = useApiMutation((api, workspace: string) => api.credentials.bindMcpConnection(app.id, { workspaceId: workspace }), 'Saved')
+  const [revoking, setRevoking] = useState(false)
   const changed = workspaceId !== '' && workspaceId !== app.workspaceId
   const name = connectionTitle(app)
   return <Row title={linked ? <Link to={`/settings/mcp/${encodeURIComponent(app.id)}`}>{name}</Link> : name} hint={`${agentAccess(app.permissions)} · ${app.clientId}`}>
@@ -175,9 +177,10 @@ export function McpApproval({ app, workspaces, onRevoke, linked = true }: { app:
       <Select aria-label={`Default workspace for ${name}`} className="settings-mcp__workspace" value={workspaceId} placeholder="Last used" disabled={bind.isPending}
         options={workspaces.map(workspace => ({ value: workspace.id, label: workspace.name }))} onValueChange={setWorkspaceId} />
       <Button variant="primary" loading={bind.isPending} data-hidden={!changed || undefined} tabIndex={changed ? undefined : -1} aria-hidden={!changed || undefined} onClick={() => { bind.mutate(workspaceId) }}>Save</Button>
-      <Button variant="danger" aria-label={`Revoke ${name}`} onClick={onRevoke}>Revoke</Button>
+      <Button variant="danger" aria-label={`Revoke ${name}`} onClick={() => setRevoking(true)}>Revoke</Button>
       {bind.error ? <div className="settings-name-error"><MutationError error={bind.error} /></div> : null}
     </span>
+    <ConfirmDialog open={revoking} onOpenChange={setRevoking} title={`Revoke ${name}?`} description="Its access ends at once. Reconnect the client to use it again." confirmLabel="Revoke" danger onConfirm={onRevoke} />
   </Row>
 }
 // Members and invitations appear together once both are known, so the second table never pushes down. Gated on the

@@ -68,7 +68,7 @@ export interface SenderStanding { step: StandingStep; reasons: StandingReason[];
 export interface SenderScore { state: 'warmup' | 'graded'; emails: { firstEmails: number; last30Days: number }; needed: number; calibratedAt: ISODate | null; score: number | null; grade: SenderGrade | null; target: number; raw: number; band: { min: number; max: number } | null; next: { grade: SenderGrade; at: number } | null; factors: SenderScoreFactor[]; history: { date: string; score: number }[]; limit: SenderLimit | null; standing: SenderStanding | null; computedAt: ISODate }
 /** POST /v1/sender-score/release: the fix checklist an owner confirms before releasing a restrict or a bounce-only pause. */
 export interface StandingReleaseInput { checklist: { bouncedRemoved: true; listSourceConfirmed: true } }
-export interface Overview { periodStart: ISODate; periodEnd: ISODate; sent: number; delivered: number; bounced: number; complaints: number; deferred: number; previousSent: number; points: ChartPoint[]; streams: { name: Stream; sent: number }[]; recentCampaigns: Campaign[] }
+export interface Overview { periodStart: ISODate; periodEnd: ISODate; sent: number; delivered: number; bounced: number; complaints: number; deferred: number; previousSent: number; points: ChartPoint[]; recentCampaigns: Campaign[] }
 export interface Contact { properties?: Record<string, string | number | boolean | null>; id: string; email: string; name: string; country: string; status: ContactStatus; listIds: string[]; createdAt: ISODate; lastOpenedAt: ISODate | null; consent: { source: string; at: ISODate | null }; suppressionReason?: string }
 export interface ContactInput { id?: string; email: string; name: string; country: string; status: ContactStatus; listIds: string[] }
 export interface AudienceList { unknown?: number; id: string; name: string; total: number; subscribed: number; unsubscribed: number; suppressed: number; createdAt: ISODate }
@@ -132,7 +132,7 @@ export interface Mailbox { id: string; key?: string | null; address: string; dis
 export interface MailAddress { name: string | null; address: string }
 export const inboundEventTypes = ['message.received', 'message.junk', 'message.stored', 'message.queued', 'message.sent', 'message.delivered', 'message.delayed', 'message.bounced', 'message.complained', 'message.failed', 'thread.updated', 'address.created', 'address.deleted', 'inbox.created', 'inbox.deleted', 'message.held', 'inbox.quota_exceeded'] as const
 export type MailboxEventType = typeof inboundEventTypes[number]
-export interface MailboxWebhookDelivery { id: string; webhookId: string; eventId: string; status: 'pending' | 'delivered' | 'failed'; attemptCount: number; lastStatusCode: number | null; lastError: string | null; createdAt: ISODate; updatedAt: ISODate }
+export interface MailboxWebhookDelivery { id: string; webhookId: string; eventId: string; status: 'pending' | 'delivered' | 'failed' | 'paused'; attemptCount: number; lastStatusCode: number | null; lastError: string | null; createdAt: ISODate; updatedAt: ISODate }
 export type MailboxThreadView = 'inbox' | 'starred' | 'archive' | 'spam' | 'trash' | 'all'
 export interface MailboxThread {
   id: string; mailboxId: string; subject: string; snippet: string; participants: MailAddress[]; messageCount: number; unreadCount: number

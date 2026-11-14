@@ -174,12 +174,12 @@ export function createLiveApi(): BaneApi {
       const params = new URLSearchParams({ ...(input.regionId ? { region: input.regionId } : {}), from: start.toISOString(), to: end.toISOString() })
       if (input.stream) params.set('stream', input.stream)
       const hourly = input.range !== '30d'
-      // One request returns the chart buckets, the previous period's totals and each stream's totals.
-      const chartParams = new URLSearchParams(params); chartParams.set('granularity', hourly ? 'hour' : 'day'); chartParams.set('include', 'previous,streams')
+      // One request returns the chart buckets and the previous period's totals.
+      const chartParams = new URLSearchParams(params); chartParams.set('granularity', hourly ? 'hour' : 'day'); chartParams.set('include', 'previous')
       const [metrics, campaigns] = await Promise.all([
         call(`/metrics?${chartParams}`, 'GET', undefined, signal), page('/campaigns', {pageSize: 4}, mapCampaignSummary, {region: input.regionId}, signal),
       ])
-      if (!metrics.previous || !metrics.streams) throw new ApiError('The API did not return the previous period and stream totals.', 'INVALID_RESPONSE')
+      if (!metrics.previous) throw new ApiError('The API did not return the previous period’s totals.', 'INVALID_RESPONSE')
       // The public created-cohort contract defines absent UTC buckets as no emails.
       // Fill that known absence across the selected interval, not across guessed history.
       const buckets = hourly ? metrics.hourly : metrics.daily
@@ -192,7 +192,7 @@ export function createLiveApi(): BaneApi {
         const at = new Date(bucket).toISOString(), row = series.get(bucket)
         points.push({at, sent: row?.count ?? 0, delivered: row?.delivered ?? 0, bounced: row?.bounced ?? 0, complaints: row?.complained ?? 0})
       }
-      return { periodStart: metrics.from, periodEnd: metrics.to, sent: metrics.totals.emails, delivered: metrics.totals.delivered, bounced: metrics.totals.bounced, complaints: metrics.totals.complained, deferred: metrics.totals.deliveryDelayed, previousSent: metrics.previous.totals.emails, points, streams: [{name: 'transactional', sent: metrics.streams.transactional.emails}, {name: 'marketing', sent: metrics.streams.marketing.emails}], recentCampaigns: campaigns.items }
+      return { periodStart: metrics.from, periodEnd: metrics.to, sent: metrics.totals.emails, delivered: metrics.totals.delivered, bounced: metrics.totals.bounced, complaints: metrics.totals.complained, deferred: metrics.totals.deliveryDelayed, previousSent: metrics.previous.totals.emails, points, recentCampaigns: campaigns.items }
     },
     // One read for Overview's setup and next steps; each part is null where its own list would refuse this session.
     setup: async signal => { const r = await call<Omit<OverviewSetup, 'domains'> & { domains: { data: Json[] } | null }>('/overview/setup', 'GET', undefined, signal); return { ...r, domains: r.domains ? r.domains.data.map(mapDomain) : null } } },

@@ -683,19 +683,20 @@ export function createMockApi(): BaneApi {
           const rows = emails.filter(e => Date.parse(e.sentAt) >= from && Date.parse(e.sentAt) < to)
           return { at: new Date(from).toISOString(), sent: rows.length, delivered: rows.filter(e => e.status === 'delivered').length, bounced: rows.filter(e => e.status === 'bounced').length, complaints: rows.filter(e => e.status === 'complaint').length }
         })
-        return { periodStart: new Date(start).toISOString(), periodEnd: new Date(end).toISOString(), sent: emails.length, delivered: count('delivered'), bounced: count('bounced'), complaints: count('complaint'), deferred: count('deferred'), previousSent: all.filter(e => Date.parse(e.sentAt) >= start - duration && Date.parse(e.sentAt) < start).length, points, streams: (['transactional', 'marketing'] as const).map(name => ({ name, sent: emails.filter(e => e.stream === name).length })), recentCampaigns: s.campaigns.filter(c => c.regionId === input.regionId && c.archivedAt == null).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4).map(c => campaignTotals(s, c)) }
+        return { periodStart: new Date(start).toISOString(), periodEnd: new Date(end).toISOString(), sent: emails.length, delivered: count('delivered'), bounced: count('bounced'), complaints: count('complaint'), deferred: count('deferred'), previousSent: all.filter(e => Date.parse(e.sentAt) >= start - duration && Date.parse(e.sentAt) < start).length, points, recentCampaigns: s.campaigns.filter(c => c.regionId === input.regionId && c.archivedAt == null).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt)).slice(0, 4).map(c => campaignTotals(s, c)) }
       }),
       // Demo sessions administer a self-hosted installation: no invitations.
       setup: signal => run(signal, false, s => ({ domains: s.domains.slice(0, 10), apiKeys: { active: s.keys.filter(key => !key.revokedAt).length }, emails: { any: s.emails.length > 0 }, webhooks: { total: s.webhooks.length }, invitations: null })),
     },
-    // Demo logs follow GET /v1/logs: sent and received together, newest first; sent-only filters leave received mail out.
+    // Demo logs follow GET /v1/logs: sent and received together, newest first; sent-only filters leave received mail out,
+    // and the Received and Spam statuses leave sent mail out.
     logs: {
       list: (input, signal) => run(signal, false, s => {
         filterRegion(s, input.regionId)
-        const direction = input.direction ?? 'all', sentOnly = Boolean(input.status || input.stream || input.campaignId)
-        const sent: LogEntry[] = direction === 'received' ? [] : s.emails.filter(e => (!input.regionId || e.regionId === input.regionId) && (!input.campaignId || e.campaignId === input.campaignId) && (!input.status || e.status === input.status) && (!input.stream || e.stream === input.stream))
+        const direction = input.direction ?? 'all', receivedOnly = input.status === 'received' || input.status === 'spam', sentOnly = Boolean((input.status && !receivedOnly) || input.stream || input.campaignId)
+        const sent: LogEntry[] = direction === 'received' || receivedOnly ? [] : s.emails.filter(e => (!input.regionId || e.regionId === input.regionId) && (!input.campaignId || e.campaignId === input.campaignId) && (!input.status || e.status === input.status) && (!input.stream || e.stream === input.stream))
           .map(e => ({ id: e.id, direction: 'sent', at: e.sentAt, status: e.status, from: { name: e.fromName ?? null, address: e.from }, to: e.to.split(', '), subject: e.subject, stream: e.stream, campaignId: e.campaignId ?? null, simulated: e.simulated ?? false, attachmentCount: null, threadId: null, addresses: null, regionId: e.regionId, envelopeTo: null }))
-        const received: LogEntry[] = direction === 'sent' || sentOnly ? [] : demoReceived().filter(row => !input.regionId || row.region === input.regionId)
+        const received: LogEntry[] = direction === 'sent' || sentOnly ? [] : demoReceived().filter(row => (!input.regionId || row.region === input.regionId) && (!receivedOnly || (input.status === 'spam') === Boolean(row.spam)))
           .map(row => ({ id: row.id, direction: 'received', at: row.receivedAt, status: row.spam ? 'spam' : 'received', from: row.from, to: row.to.map(to => to.address), subject: row.subject, stream: null, campaignId: null, simulated: false, attachmentCount: row.attachmentCount, threadId: row.threadId, addresses: row.addresses ?? null, regionId: row.region ?? null, envelopeTo: row.envelopeTo ?? null }))
         const rows = [...sent, ...received].sort((a, b) => b.at.localeCompare(a.at) || (a.direction === b.direction ? b.id.localeCompare(a.id) : a.direction === 'sent' ? -1 : 1))
         return page(rows, input, row => `${row.id} ${row.from.address} ${row.from.name ?? ''} ${row.to.join(' ')} ${row.subject} ${row.status} ${row.stream ?? ''}`)

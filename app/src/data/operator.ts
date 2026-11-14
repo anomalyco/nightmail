@@ -54,7 +54,10 @@ export const operatorApi = {
     const page = await request<{ data: OperatorTimelineItem[]; nextCursor: string | null }>(`${base}/workspaces/${id(workspaceId)}/timeline${query({ cursor, limit: 50 })}`, { signal })
     return { items: page.data, nextCursor: page.nextCursor }
   },
-  actions: async (input: { workspaceId?: string; cursor?: string }, signal?: AbortSignal) => (await request<{ data: OperatorAction[]; nextCursor: string | null }>(`${base}/actions${query({ workspaceId: input.workspaceId, cursor: input.cursor, limit: 50 })}`, { signal })).data,
+  actions: async (input: { workspaceId?: string; cursor?: string }, signal?: AbortSignal) => {
+    const page = await request<{ data: OperatorAction[]; nextCursor: string | null }>(`${base}/actions${query({ workspaceId: input.workspaceId, cursor: input.cursor, limit: 50 })}`, { signal })
+    return { items: page.data, nextCursor: page.nextCursor }
+  },
   pause: (workspaceId: string, input: OperatorWhy, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/pause`, 'POST', why(input), guard),
   resume: (workspaceId: string, input: OperatorWhy & { restore: 50 | 100 }, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/resume`, 'POST', { ...why(input), restore: input.restore }, guard),
   marketing: (workspaceId: string, input: OperatorWhy & { held: boolean }, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/marketing`, 'PUT', { held: input.held, ...why(input) }, guard),

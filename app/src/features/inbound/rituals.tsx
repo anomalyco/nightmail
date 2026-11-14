@@ -18,7 +18,7 @@ import { queries } from '../../data/queries'
 import { useLeaveGuard } from '../../lib/leave-guard'
 import { ritualRecipes, ritualTemplates, RITUALS_PER_ADDRESS } from '../../../../api/src/ritual-schema'
 import { concepts, guides } from './concepts'
-import { useOverview } from './overview'
+import { firstOverview, useOverview } from './overview'
 import { ConceptLine } from './parts'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { defaultChoice, EmailPicker, TraceView, traceInput, useDryRun, useRecentMail, type EmailChoice } from './trace'
@@ -27,6 +27,7 @@ import './receiving.css'
 import { useSingleFlight } from '../../lib/single-flight'
 import { actorText, changedLines, diffLines, useLiveVersion, type ChangeActor, type DiffLine, type LiveChange } from './live'
 import { addressOption } from './shared'
+import { maskedParts } from '../../lib/private-address'
 import { productName } from '../../../../api/src/brand'
 
 const errorText = (e: unknown): string => e instanceof ApiError ? e.text : (e as Error).message
@@ -191,10 +192,13 @@ export function RitualsPage() {
   const route = useParams(), wanted = route.key ?? (route.recipe === 'code' ? 'new' : '')
   const routeLocation = useLocation()
   const addresses = useApiDef(queries.inboundAddressOptions(), { enabled: canAdminister })
-  const overview = useOverview({ limit: 1 })
+  // The Receiving page's first read, usually cached: only its domains and endpoints are used here.
+  const overview = useOverview(firstOverview, false, canAdminister)
   const [saved, setSaved] = useState<Saved | null>(null)
   const [loadError, setLoadError] = useState<Error | null>(null)
   const [key, setKey] = useState('')
+  // The saved ritual on screen ('' for a new one): typing another saved ritual's key is a clash, not a rename.
+  const [opened, setOpened] = useState('')
   const [source, setSource] = useState('')
   // A new ritual's starting script, so an untouched new ritual has nothing to save or lose.
   const [origin, setOrigin] = useState('')
@@ -235,7 +239,7 @@ export function RitualsPage() {
   function open(s: Saved, wanted: string) {
     const r = s.config.rituals.find(x => x.key === wanted)
     const start = s.config.rituals.length ? blank() : starter()
-    setKey(r?.key ?? (wanted || (s.config.rituals.length ? '' : 'triage'))); setSource(r?.source ?? start); setOrigin(r?.source ?? start)
+    setKey(r?.key ?? (wanted || (s.config.rituals.length ? '' : 'triage'))); setOpened(r?.key ?? ''); setSource(r?.source ?? start); setOrigin(r?.source ?? start)
     setLists(listsToText(s.config.senderLists)); setDomains(domainsToText(s.config.evaluateDomains))
     setTemplate(''); setProblems([]); dry.clear()
   }
@@ -253,6 +257,8 @@ export function RitualsPage() {
   useEffect(() => { if (saved && routeLocation.hash) requestAnimationFrame(() => document.getElementById(routeLocation.hash.slice(1))?.scrollIntoView({ block: 'start' })) }, [saved, routeLocation.hash])
 
   const isSaved = !!saved?.config.rituals.some(r => r.key === key)
+  // Renamed onto another ritual's key: saving would replace that ritual's script, so it is refused here.
+  const clash = isSaved && key !== opened
   // The draft: this ritual's script, the sender lists and omen domains. Attachments are always the saved ones.
   const config = useMemo<Config | null>(() => saved && ({
     ...saved.config,
@@ -303,6 +309,7 @@ export function RitualsPage() {
       return
     }
     if (theirs) {
+      setOpened(key)
       if (theirs.source !== source) { setSource(theirs.source); setFlash({ lines: changedLines(source, theirs.source), at: Date.now() }) }
       setOrigin(theirs.source)
     }
@@ -350,12 +357,12 @@ export function RitualsPage() {
    *  Single flight, like the writes below: a second Save or ⌘S before the first answers would send the same version again
    *  and report a conflict next to the success; it gets the first one's result instead. */
   const save = useSingleFlight('rituals.save', async (attachments?: Binding[]): Promise<boolean> => {
-    if (!saved || !config || !keyValid) return false
+    if (!saved || !config || !keyValid || clash) return false
     if (incoming) { toast(`Version ${incoming.version} was saved while you were editing: load theirs or keep yours first.`, 'error'); return false }
     setPending(true); setProblems([])
     try {
       const s = await request<Saved>('/v1/rituals', { method: 'PUT', body: { ...config, ...(attachments ? { attachments } : {}) }, ifMatch: saved.version })
-      setSaved(s); setOrigin(source); refresh()
+      setSaved(s); setOrigin(source); setOpened(key); refresh()
       if (key !== wanted) navigate(`/receiving/rituals/${encodeURIComponent(key)}/code`, { replace: true })
       toast(`${key} saved · version ${s.version}`, 'success')
       return true
@@ -393,7 +400,7 @@ export function RitualsPage() {
   // ⌘S / Ctrl+S saves the draft from anywhere on the page, the editor included. A new ritual can be saved as it starts.
   const saveRef = useRef(save)
   saveRef.current = save
-  const canSave = (dirty || (!isSaved && !!key)) && keyValid && !pending && !incoming
+  const canSave = (dirty || (!isSaved && !!key)) && keyValid && !clash && !pending && !incoming
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => { if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 's') { event.preventDefault(); if (canSave) void saveRef.current() } }
     window.addEventListener('keydown', onKey)
@@ -414,10 +421,14 @@ export function RitualsPage() {
     await dry.run({ ...input, to: [recipient], config: { ...config, rituals: config.rituals.map(r => r.key === key ? { ...r, enabled: true } : r), attachments: [{ ritual: key, target: recipient, continue: false }] }, ...(Object.keys(scores).length ? { scores } : {}) })
     requestAnimationFrame(() => tryRef.current?.querySelector('.trace-out')?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' }))
   }
+  // An endpoint template with no endpoint of its type falls back to a name that doesn't exist, so it says what it needs.
+  const endpointFor = (needs?: string) => completions.find(c => c.detail.startsWith(`${needs} ·`))?.label.replace(/^endpoints\.|^endpoints\["|"\]$/g, '')
+  const missing = (t: typeof ritualTemplates[number]) => !!t.needs && completions.length > 0 && !endpointFor(t.needs)
+  const endpointWord = { slack: 'Slack', discord: 'Discord', webhook: 'webhook', forward: 'forward' } as const
   function applyTemplate(id: string) {
     const t = ritualTemplates.find(x => x.id === id)
     if (!t) return
-    setSource(t.source(completions.find(c => c.detail.startsWith(`${t.needs} ·`))?.label.replace(/^endpoints\.|^endpoints\["|"\]$/g, '')))
+    setSource(t.source(endpointFor(t.needs)))
     setTemplate(id); setConfirmTemplate(null); dry.clear()
   }
 
@@ -427,6 +438,8 @@ export function RitualsPage() {
   const bindings = saved?.config.attachments ?? []
   const targets = (addresses.data ?? []).flatMap(a => [{ label: a.address, value: a.id }, ...a.aliases.map(alias => ({ label: alias, value: alias }))])
   const targetName = (value: string) => targets.find(t => t.value === value)?.label ?? value
+  // A label can't hold a PrivateAddress: it names an address as masked, by its first two characters.
+  const spoken = (value: string) => { const m = maskedParts(value); return m ? `${m.shown}…` : value }
   // This ritual's attachments, each with its place among the rituals on that address. Moving one swaps it with the
   // ritual before or after it there; the rest of the list keeps its order.
   type Row = Binding & { i: number; place: number; of: number; before?: number; after?: number }
@@ -447,8 +460,8 @@ export function RitualsPage() {
       ...(b.after !== undefined ? [{ label: 'Move down', disabled: binding, onSelect: () => swap(b, b.after, 1) }] : []),
       { label: 'Detach', destructive: true, disabled: binding, onSelect: () => void saveBindings(bindings.filter((_, i) => i !== b.i), `Detached ${b.ritual}`) },
     ]} />, render: b => <span className="ritual-row-actions">
-      <IconButton label="Move up" disabled={b.before === undefined || binding} onClick={() => swap(b, b.before, -1)}>↑</IconButton>
-      <IconButton label="Move down" disabled={b.after === undefined || binding} onClick={() => swap(b, b.after, 1)}>↓</IconButton>
+      <IconButton label={`Move ${b.ritual} up on ${spoken(targetName(b.target))}`} disabled={b.before === undefined || binding} onClick={() => swap(b, b.before, -1)}>↑</IconButton>
+      <IconButton label={`Move ${b.ritual} down on ${spoken(targetName(b.target))}`} disabled={b.after === undefined || binding} onClick={() => swap(b, b.after, 1)}>↓</IconButton>
       <IconButton label={`Detach ${b.ritual}`} disabled={binding} onClick={() => void saveBindings(bindings.filter((_, i) => i !== b.i), `Detached ${b.ritual}`)}>×</IconButton>
     </span> },
   ]
@@ -463,7 +476,7 @@ export function RitualsPage() {
       {/* Always in the header, so the buttons beside it never move; hidden until there's a saved ritual to delete. It
           sits on the inner side (first here, last on a phone where the row starts at the left), so its reserved space
           never pushes Endpoints and Trace off the content's edge. */}
-      <Button variant="danger" className="ritual-delete" data-hidden={!isSaved || undefined} disabled={!isSaved} onClick={() => setConfirmDelete(true)}>Delete</Button>
+      <Button variant="danger" className="ritual-delete" data-hidden={!isSaved || undefined} disabled={!isSaved || clash} onClick={() => setConfirmDelete(true)}>Delete</Button>
       <Link className="ui-button ui-button--secondary ui-button--md" to="/receiving?tab=endpoints">Endpoints</Link>
       <Link className="ui-button ui-button--secondary ui-button--md" to="/receiving/trace">Trace</Link>
     </>} />
@@ -473,12 +486,12 @@ export function RitualsPage() {
       {recipeName ? <ConceptLine line={<>Made from <Link to={`/receiving/rituals/${encodeURIComponent(key)}`}>{recipeName}</Link>. Saving a change here makes it your own script.</>} />
         : <ConceptLine line="A short script that runs on its addresses’ mail." guide={guides.rituals} />}
       <div className="ritual-pickers">
-        <Field label="Key" error={key && !keyValid ? 'Use lowercase letters, digits and hyphens, like refund-triage.' : undefined} hint={isSaved ? 'Renaming saves it as a new ritual; this one stays until you delete it.' : 'How addresses and the API refer to it. Lowercase letters, digits and hyphens.'}>
-          <Input value={key} onChange={e => setKey(e.target.value.toLowerCase().replace(/[\s_]+/g, '-'))} placeholder="triage" aria-invalid={(!!key && !keyValid) || undefined} />
+        <Field label="Key" error={key && !keyValid ? 'Use lowercase letters, digits and hyphens, like refund-triage.' : clash ? `A ritual named ${key} exists. Open it from Rituals, or pick another key.` : undefined} hint={isSaved ? 'Renaming saves it as a new ritual; this one stays until you delete it.' : 'How addresses and the API refer to it. Lowercase letters, digits and hyphens.'}>
+          <Input value={key} onChange={e => setKey(e.target.value.toLowerCase().replace(/[\s_]+/g, '-'))} placeholder="triage" aria-invalid={(!!key && !keyValid) || clash || undefined} />
         </Field>
-        <Field label="Start from a template" hint={template ? `Applied “${ritualTemplates.find(t => t.id === template)?.name}”. Not saved until you save.` : 'Replaces the script below.'}>
+        <Field label="Start from a template" hint={(t => !t ? 'Replaces the script below.' : missing(t) ? <>Applied “{t.name}”. Its endpoint doesn’t exist yet: <Link to="/receiving?tab=endpoints">add a {endpointWord[t.needs!]} endpoint</Link>.</> : `Applied “${t.name}”. Not saved until you save.`)(ritualTemplates.find(t => t.id === template))}>
           <Select value={template} onValueChange={id => { if (!id) return; if (source.trim() && source !== blank() && source !== origin) setConfirmTemplate(id); else applyTemplate(id) }}
-            options={[{ label: 'Choose…', value: '' }, ...ritualTemplates.map(t => ({ label: t.name, value: t.id }))]} />
+            options={[{ label: 'Choose…', value: '' }, ...ritualTemplates.map(t => ({ label: missing(t) ? `${t.name} (needs a ${endpointWord[t.needs!]} endpoint)` : t.name, value: t.id }))]} />
         </Field>
       </div>
       <Editor value={source} change={value => { setSource(value); if (template && value !== source) setTemplate('') }} completions={completions} check={lint} flash={flash} relint={relint} />
@@ -513,7 +526,7 @@ export function RitualsPage() {
         <div className="ritual-attach">
           <Field label={`Attach ${key || 'this ritual'} to`} hint={!isSaved && key ? `Saves ${key} with it.` : undefined}><Select className="address-select-trigger" menuClassName="address-select" value={target} onValueChange={setTarget} placeholder="Choose an address" options={[{ label: 'Choose an address', value: '' }, ...targets.map(t => addressOption(t.value, t.label))]} /></Field>
           <Checkbox checked={next} onCheckedChange={setNext} label="Run the next one too" />
-          <Button loading={binding || (pending && !isSaved)} disabled={!target || !keyValid || attached || binding || pending} onClick={() => void saveBindings([...bindings, { ritual: key, target, continue: next }], `Attached ${key}`)}>{isSaved ? 'Attach' : 'Save and attach'}</Button>
+          <Button loading={binding || (pending && !isSaved)} disabled={!target || !keyValid || clash || attached || binding || pending} onClick={() => void saveBindings([...bindings, { ritual: key, target, continue: next }], `Attached ${key}`)}>{isSaved ? 'Attach' : 'Save and attach'}</Button>
         </div>
         {attached && <p className="muted ritual-attach__note">{key} already runs on <PrivateAddress value={targetName(target)} />.</p>}
       </section>
@@ -529,7 +542,7 @@ export function RitualsPage() {
 
       {/* Always on screen while editing, so the save state and Save are never scrolled away. It arrives with the
           sections above, in its final place. */}
-      <div className="ritual-savebar" data-dirty={dirty || !isSaved || undefined} data-remote={remoteStatus ? true : undefined} role="status" aria-live="polite">
+      <div className="ritual-savebar" data-dirty={dirty || !isSaved || undefined} data-remote={remoteStatus ? true : undefined}>
         {/* Saved elsewhere while you were editing: above the bar, over the page, so nothing on it moves. */}
         {incoming && changes && <div className="ritual-incoming" role="group" aria-label={`Version ${incoming.version} saved elsewhere`}>
           <p className="ritual-incoming__title"><strong>{whoSaved(incoming.actor)} saved version {incoming.version}</strong> while you were editing.</p>
@@ -548,9 +561,9 @@ export function RitualsPage() {
             <Button size="sm" variant={confirmKeep ? 'danger' : 'primary'} onClick={keepMine}>{confirmKeep ? 'Keep mine anyway' : 'Keep mine'}</Button>
           </div>
         </div>}
-        <span className="ritual-savebar__state"><span className="ritual-savebar__dot" aria-hidden="true" /><span key={remoteStatus ?? 'local'} className={remoteStatus ? 'ritual-savebar__text ritual-savebar__text--remote' : 'ritual-savebar__text'}>{status}</span></span>
+        <span className="ritual-savebar__state" role="status" aria-live="polite"><span className="ritual-savebar__dot" aria-hidden="true" /><span key={remoteStatus ?? 'local'} className={remoteStatus ? 'ritual-savebar__text ritual-savebar__text--remote' : 'ritual-savebar__text'}>{status}</span></span>
         <div className="cluster">
-          <Button variant="ghost" className="ritual-savebar__discard" data-hidden={!dirty || undefined} disabled={!dirty || pending} onClick={() => open(saved, isSaved ? key : '')}>Discard</Button>
+          <Button variant="ghost" className="ritual-savebar__discard" data-hidden={!dirty || undefined} disabled={!dirty || pending} onClick={() => open(saved, clash ? opened : isSaved ? key : '')}>Discard</Button>
           <Button variant="primary" loading={pending} disabled={!canSave} onClick={() => void save()}>Save<kbd className="ritual-savebar__kbd" aria-hidden="true">⌘S</kbd></Button>
         </div>
       </div>

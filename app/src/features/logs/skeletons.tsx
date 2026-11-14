@@ -4,6 +4,7 @@ import { useRegion, useWorkspaceAccess } from '../../data/context'
 import { Button, Input, LoadingRegion, PageHeader, SectionHeader, Select, Skeleton, SkeletonText, TableSkeleton, Tabs } from '../../components/ui'
 import { rememberedPageSize } from '../../lib/pagination'
 import { logsPageColumnDefs } from './rows'
+import { label } from '../../lib/format'
 import { useDetailLayout } from './detail-layout'
 import './logs.css'
 // The sent email's skeleton draws the preview's toolbar and frame, whose styles live with EmailInsight (a lazy chunk):
@@ -15,8 +16,11 @@ export function LogsRouteSkeleton() {
   const { canAdminister, multiTenant } = useWorkspaceAccess()
   const [params] = useSearchParams()
   const campaign = Boolean(params.get('campaign')), view = params.get('view'), direction = campaign ? 'sent' : view === 'sent' || view === 'received' ? view : 'all'
+  // The filters' labels from the URL, as Logs shows them, so the toolbar keeps its widths when it loads.
+  const status = params.get('status'), stream = params.get('stream')
+  const statusLabel = status && status !== 'all' ? label(status) : 'All statuses', streamLabel = direction !== 'received' && status !== 'received' && status !== 'spam' && (stream === 'transactional' || stream === 'marketing') ? label(stream) : 'All streams'
   return <div className="logs-page"><PageHeader title="Logs" actions={<div className="cluster logs-controls">{!multiTenant && !canAdminister && <span className="muted">{regionId}</span>}<Tabs label="Direction" value={direction} onValueChange={() => {}} disabled items={[{ value: 'all', label: 'All' }, { value: 'sent', label: 'Sent' }, { value: 'received', label: 'Received' }]} /></div>} />
-    <div className="data-toolbar"><div className="cluster">{campaign && <Skeleton width={160} height={28} />}<div className="search-box"><Search size={16} /><Input type="search" aria-label="Search logs" placeholder="Search logs" disabled /></div><Select value="all" onValueChange={() => {}} disabled options={[{ value: 'all', label: 'All statuses' }]} /><Select value="all" onValueChange={() => {}} disabled options={[{ value: 'all', label: 'All streams' }]} /></div><Button disabled><Download size={16} />Export page</Button></div>
+    <div className="data-toolbar"><div className="cluster">{campaign && <Skeleton width={160} height={28} />}<div className="search-box"><Search size={16} /><Input type="search" aria-label="Search logs" placeholder="Search logs" disabled /></div><Select value="all" onValueChange={() => {}} disabled options={[{ value: 'all', label: statusLabel }]} /><Select value="all" onValueChange={() => {}} disabled options={[{ value: 'all', label: streamLabel }]} /></div><Button className="logs-export" disabled><Download size={16} /><span>Export CSV</span></Button></div>
     <TableSkeleton className="logs-table" columns={logsPageColumnDefs} rows={rememberedPageSize('logs') || 16} pagination /></div>
 }
 // A sent email in the window's layout (detail-layout.ts): the header, the delivery, the preview's toolbar and its empty

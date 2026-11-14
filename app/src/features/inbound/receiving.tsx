@@ -1,5 +1,5 @@
 // Receiving: Routes, Rituals and Endpoints, the words the API uses. One read (getInboundOverview) per screen.
-import { useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { Check } from 'lucide-react'
@@ -72,6 +72,12 @@ function GettingStarted({ overview, onCreate }: { overview: Overview; onCreate: 
 function RoutesTab({ overview, fetching, filters, setFilter, page, onPage, onCreate, onEditRoute }: { overview: Overview; fetching: boolean; filters: { kind: KindFilter; domain: string; q: string }; setFilter: (patch: Partial<{ kind: KindFilter; domain: string; q: string }>) => void; page: number; onPage: (next: number) => void; onCreate: () => void; onEditRoute: (r: RouteEntry) => void }) {
   const { canAdminister } = useWorkspaceAccess()
   const [newInbox, setNewInbox] = useState(false)
+  // The box keeps its own text and writes q to the URL (and the overview read) once typing pauses, as Logs does.
+  const [draft, setDraft] = useState(filters.q)
+  const written = useRef(filters.q), typing = useRef<number | undefined>(undefined)
+  useEffect(() => { if (filters.q !== written.current) { window.clearTimeout(typing.current); written.current = filters.q; setDraft(filters.q) } }, [filters.q])
+  useEffect(() => () => window.clearTimeout(typing.current), [])
+  const type = (value: string) => { setDraft(value); window.clearTimeout(typing.current); typing.current = window.setTimeout(() => { written.current = value; setFilter({ q: value }) }, 250) }
   const hosts = receivingDomains(overview.domains)
   const total = kindCount(overview.counts, 'all')
   if (!overview.manage && !total && !filters.q) return <EmptyState title="No addresses to show" description="Addresses you can read show up here." />
@@ -86,7 +92,7 @@ function RoutesTab({ overview, fetching, filters, setFilter, page, onPage, onCre
         <button key={k} type="button" className="rcv-filter" aria-pressed={filters.kind === k} onClick={() => setFilter({ kind: k })}>{kinds[k].label}<span>{number(kindCount(overview.counts, k))}</span></button>)}</div>
       <div className="rcv-toolbar__end">
         {hosts.length > 1 && <Select className="rcv-domain" aria-label="Domain" value={filters.domain || 'all'} onValueChange={v => setFilter({ domain: v === 'all' ? '' : v })} options={[{ value: 'all', label: 'All domains' }, ...hosts.map(d => ({ value: d.name, label: d.name }))]} />}
-        <SearchField className="search-box--list" aria-label="Search routes" placeholder="Search address or name" value={filters.q} onChange={e => setFilter({ q: e.target.value })} />
+        <SearchField className="search-box--list" aria-label="Search routes" placeholder="Search address or name" value={draft} onChange={e => type(e.target.value)} />
       </div>
     </div>
     <div className="rcv-kindline">
@@ -171,9 +177,12 @@ export function ReceivingPage() {
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState<RouteEntry | null>(null)
   function update(patch: Record<string, string | null | undefined>) {
-    const next = new URLSearchParams(params)
-    for (const [k, v] of Object.entries(patch)) { if (v === null || v === undefined || v === '' || (k === 'kind' && v === 'all') || (k === 'tab' && v === 'routes')) next.delete(k); else next.set(k, v) }
-    setParams(next, { replace: true })
+    // From the latest URL: a debounced search write must not undo a filter picked while it waited.
+    setParams(previous => {
+      const next = new URLSearchParams(previous)
+      for (const [k, v] of Object.entries(patch)) { if (v === null || v === undefined || v === '' || (k === 'kind' && v === 'all') || (k === 'tab' && v === 'routes')) next.delete(k); else next.set(k, v) }
+      return next
+    }, { replace: true })
     pagination.reset()
   }
   const data = overview.data

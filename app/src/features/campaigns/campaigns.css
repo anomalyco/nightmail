@@ -14,6 +14,8 @@ body:has(.campaign-compose-page) :is(.ui-popover, .ui-dialog, [data-re-bubble-me
 .campaign-compose-page :focus-visible,
 body:has(.campaign-compose-page) :is(.ui-popover, [data-re-bubble-menu], [data-re-slash-command], [data-re-node-selector-content], [data-re-link-bm-form], [data-re-btn-bm-form], [data-re-img-bm-form]) :focus-visible { outline: none; }
 .campaign-compose-page .ui-button:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+/* Links (the back link, Add a domain, Why?) have no other focus cue: they keep the global ring. */
+.campaign-compose-page a:not(.ui-button):focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: var(--focus-offset); }
 .campaign-compose-page :is(.ui-button--ghost, .ui-button--secondary):focus-visible { background: var(--color-canvas); }
 .campaign-compose-row:has(:focus-visible) { border-bottom-color: var(--color-muted); }
 body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: var(--color-text); }

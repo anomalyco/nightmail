@@ -7,12 +7,17 @@ import { Alert, DataTable, ErrorText, Input, SkeletonText, StatusBadge } from '.
 import { contactColumns, memberColumns } from './skeletons'
 import { date as formatDate, number } from '../../lib/format'
 import { PrivateAddress } from '../../components/PrivateAddress'
+import { AddressText } from '../../components/AddressText'
+import { addressParts } from '../../lib/private-address'
+import { useDebounced } from '../../lib/pagination'
 import { consentTitle } from './consent'
 
 export const pageSize = 8
 export const date = (value: string | null) => value ? formatDate(value) : 'Never'
 export { number }
 export { ConsentLegend, consentHelp, consentTitle, statusOptions } from './consent'
+/** A contact name is free text: addresses in it are masked (AddressText), so it is a tooltip only when it holds none. */
+export const nameTitle = (name?: string) => name && !addressParts(name).some(part => part.address) ? name : undefined
 export function fieldError(error: unknown, field: string) { return error instanceof ApiError ? error.fields[field] : undefined }
 export function MutationError({ error }: { error: unknown }) { return error ? <Alert tone="danger"><ErrorText error={error} fallback="Couldn’t complete the request." /></Alert> : null }
 export function useAudienceLists(search = '', cursor?: string) {
@@ -28,8 +33,9 @@ export function ListPicker({ value, onChange, emptyLabel, id, label, disabled = 
   const [search, setSearch] = useState('')
   const [active, setActive] = useState(0)
   const listbox = useId(), menu = useRef<HTMLDivElement>(null)
-  const all = useAudienceLists(), found = useAudienceLists(search.trim())
-  const options = open && search.trim() ? found : all
+  const query = useDebounced(search.trim(), 200)
+  const all = useAudienceLists(), found = useAudienceLists(query)
+  const options = open && query ? found : all
   const known = all.data?.find(list => list.id === value)
   const selected = useApiQuery(['lists', value], (api, signal) => api.lists.get(value, signal), { enabled: Boolean(value) && !all.isPending && !known })
   const name = value ? known?.name ?? selected.data?.name : ''
@@ -59,22 +65,22 @@ export function ListPicker({ value, onChange, emptyLabel, id, label, disabled = 
     <ChevronDown size={14} aria-hidden="true" />
     {open && <div ref={menu} id={listbox} role="listbox" aria-label={label ?? 'Lists'} className="ui-popover audience-list-options"><div className="ui-popover-scroll">
       {items.map((item, index) => <button key={item.id || 'none'} id={`${listbox}-${index}`} type="button" role="option" title={item.name} tabIndex={-1} aria-selected={index === activeIndex} data-current={item.id === value || undefined} className="audience-list-option" onPointerMove={() => setActive(index)} onMouseDown={event => event.preventDefault()} onClick={() => choose(item.id)}><span>{item.name}</span>{item.id === value && <Check size={14} aria-hidden="true" />}</button>)}
-      {options.isPending ? <div className="audience-list-note" role="status">Loading lists…</div> : options.isError ? <div className="audience-list-note" role="alert">Couldn’t load lists. Close and reopen to try again.</div> : search.trim() && !options.data.length ? <div className="audience-list-note">No list named “{search.trim()}”.</div> : options.data.nextCursor ? <div className="audience-list-note">More lists exist. Type to narrow them down.</div> : null}
+      {options.isPending ? <div className="audience-list-note" role="status">Loading lists…</div> : options.isError ? <div className="audience-list-note" role="alert">Couldn’t load lists. Close and reopen to try again.</div> : query && !options.data.length ? <div className="audience-list-note">No list named “{query}”.</div> : options.data.nextCursor ? <div className="audience-list-note">More lists exist. Type to narrow them down.</div> : null}
     </div></div>}
   </div>
 }
 
 export function ContactTable({ contacts, lists = [], members = false, loading = false, minRows = pageSize, listsLoading = false, tableRef, empty }: { contacts: Contact[]; lists?: AudienceList[]; members?: boolean; loading?: boolean; minRows?: number; listsLoading?: boolean; tableRef?: (node: HTMLDivElement | null) => void; empty?: ReactNode }) {
   const columns = members ? memberColumns : contactColumns
-  return <DataTable className="audience-contacts" tableRef={tableRef} rows={contacts} loading={loading} skeletonRows={minRows} minRows={minRows} rowKey={row => row.id} rowHref={row => `/audience/contacts/${row.id}`} empty={empty} columns={columns.map(column => ({ ...column, cardRender: column.key === 'name' ? (row: Contact) => <span title={row.name || undefined}>{row.name || 'No name'}</span> : column.key === 'created' ? (row: Contact) => `Added ${date(row.createdAt)}` : undefined, render: (row: Contact) => {
+  return <DataTable className="audience-contacts" tableRef={tableRef} rows={contacts} loading={loading} skeletonRows={minRows} minRows={minRows} rowKey={row => row.id} rowHref={row => `/audience/contacts/${row.id}`} empty={empty} columns={columns.map(column => ({ ...column, cardRender: column.key === 'name' ? (row: Contact) => <span title={nameTitle(row.name)}>{row.name ? <AddressText text={row.name} /> : 'No name'}</span> : column.key === 'created' ? (row: Contact) => `Added ${date(row.createdAt)}` : undefined, render: (row: Contact) => {
     if (column.key === 'email') return <span className="audience-cell-text"><PrivateAddress value={row.email} /></span>
     if (column.key === 'status') return <span title={consentTitle(row.status)}><StatusBadge status={row.status} /></span>
     if (column.key === 'suppression') return <span className="audience-cell-text" title={row.suppressionReason || undefined}>{row.suppressionReason || '—'}</span>
-    if (column.key === 'name') return <span className="audience-cell-text" title={row.name}>{row.name || '—'}</span>
+    if (column.key === 'name') return <span className="audience-cell-text" title={nameTitle(row.name)}>{row.name ? <AddressText text={row.name} /> : '—'}</span>
     if (column.key === 'lists') {
       if (listsLoading && row.listIds.length) return <SkeletonText width="70%" />
       const names = row.listIds.map(id => lists.find(list => list.id === id)?.name).filter(Boolean).join(', ')
-      const unnamed = row.listIds.length - (names ? names.split(', ').length : 0)
+      const unnamed = row.listIds.filter(id => !lists.find(list => list.id === id)?.name).length
       const text = names ? unnamed ? `${names} +${unnamed}` : names : unnamed ? `${unnamed} list${unnamed === 1 ? '' : 's'}` : '—'
       return <span className="audience-cell-text" title={text}>{text}</span>
     }

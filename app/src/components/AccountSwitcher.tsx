@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import * as DropdownPrimitive from '@radix-ui/react-dropdown-menu'
 import { useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, LifeBuoy, LogOut, Plus, StickyNote, UserPlus } from 'lucide-react'
@@ -33,6 +33,7 @@ export function AccountSwitcher() {
   const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
   const [support, setSupport] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const list = useAccounts(open)
   // The menu itself takes focus when it opens, and an address reveals while focus is on anything that holds it: focus
   // the current workspace instead, so the account's address stays masked until its own row is pointed at or highlighted.
@@ -87,7 +88,7 @@ export function AccountSwitcher() {
     { key: 'sign-out', text: 'Sign out of this account', label: 'Sign out of this account', icon: <LogOut />, onSelect: () => void run(() => session!.signOutAccount(self.id), 'Couldn’t sign out.') },
     ...accounts.length > 1 ? [{ key: 'sign-out-all', text: 'Sign out of all accounts', label: 'Sign out of all accounts', icon: <LogOut />, destructive: true, onSelect: () => void run(() => session!.signOutAll(), 'Couldn’t sign out.') }] : [],
   ])
-  const trigger = <button type="button" id="sidebar-workspace" className="ui-input ui-select-trigger account-switcher" disabled={busy}
+  const trigger = <button ref={triggerRef} type="button" id="sidebar-workspace" className="ui-input ui-select-trigger account-switcher" disabled={busy}
     aria-label={`${self.name || 'Account'}, ${workspace?.name ?? 'workspace'}. Switch account or workspace`} title={[workspace?.name, self.name].filter(Boolean).join(' · ')} onPointerEnter={intent} onPointerDown={intent} onFocus={intent} onClick={phone ? () => void openSheet() : undefined}>
     <span className="account-switcher__workspace">{workspace?.name ?? 'Workspace'}</span>
     <span><ChevronDown size={14} aria-hidden="true" /></span>
@@ -100,7 +101,7 @@ export function AccountSwitcher() {
   // A phone gets a sheet: full-width rows at the bottom of the screen, in thumb reach, and Cancel.
   if (phone) return <>
     {trigger}
-    <Sheet open={open} onOpenChange={setOpen} title="Accounts" className="ui-action-sheet account-sheet">
+    <Sheet open={open} onOpenChange={setOpen} title="Accounts" className="ui-action-sheet account-sheet" returnFocus={triggerRef}>
       {sections.map((section, index) => <div key={index} className="ui-action-sheet__items" role="group">{section.map(entry =>
         <button key={entry.key} type="button" disabled={entry.disabled && !entry.heading} aria-disabled={entry.disabled || undefined} aria-current={entry.checked || (entry.heading && entry.disabled) ? 'true' : undefined}
           className={['ui-action-sheet__item', entry.heading && 'account-sheet__account', entry.destructive && 'ui-action-sheet__item--danger', !entry.heading && !entry.icon && 'account-sheet__workspace'].filter(Boolean).join(' ')}

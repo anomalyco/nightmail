@@ -8,7 +8,7 @@ import { ConsentLegend, ContactTable, date, fieldError, MutationError, number, s
 import { ImportContactsDialog } from './import'
 import { BulkSubscribeDialog } from './bulk'
 import { AudienceHeader } from './header'
-import { useAdaptivePageSize } from '../../lib/pagination'
+import { useAdaptivePageSize, useDebounced, useSearchDraft } from '../../lib/pagination'
 
 // A list's phone card: each consent count with its name, Subscribed and Unknown on one line, the other two below.
 const consentCount = (status: 'subscribed' | 'unknown' | 'unsubscribed' | 'suppressed') => (row: AudienceList) => `${number(row[status] ?? 0)} ${status}`
@@ -18,7 +18,7 @@ export function ListsPage() {
   const [page, setPage] = useState(1)
   const [create, setCreate] = useState(false)
   useEffect(() => setPage(1), [pageSize])
-  const params = { page, pageSize, search }
+  const params = { page, pageSize, search: useDebounced(search.trim()) }
   const query = useApiQuery(['lists', params], (api, signal) => api.lists.list(params, signal))
   const count = (row: AudienceList, status: 'subscribed' | 'unknown' | 'unsubscribed' | 'suppressed') => row[status] ? <Link to={`/audience/lists/${row.id}?status=${status}`} title={`Show ${status} members of ${row.name}`}>{number(row[status])}</Link> : number(row[status] ?? 0)
   return <div className="audience-page"><AudienceHeader actions={<Button variant="primary" onClick={() => setCreate(true)}>Create list</Button>} />
@@ -57,14 +57,15 @@ function ListMembers({ list }: { list: AudienceList }) {
   const [page, setPage] = useState(1)
   const [bulk, setBulk] = useState(false)
   const update = (key: string, value: string) => { setParams(current => { const next = new URLSearchParams(current); if (value) next.set(key, value); else next.delete(key); return next }, { replace: true }); setPage(1) }
+  const [draft, type] = useSearchDraft(search, value => update('q', value))
   useEffect(() => setPage(1), [pageSize])
   const request = { listId: list.id, search, status, page, pageSize }
   const query = useApiQuery(['contacts', request], (api, signal) => api.contacts.list(request, signal))
   const unknown = list.unknown ?? 0
   return <><Tabs value={status} onValueChange={value => update('status', value)} items={[{ value: '', label: 'All members', count: list.total }, ...statusOptions.map(option => ({ ...option, count: list[option.value as 'subscribed' | 'unknown' | 'unsubscribed' | 'suppressed'] }))]} />
-    <div className="data-toolbar"><SearchField className="search-box--list" aria-label="Search members" placeholder="Search members" value={search} onChange={event => update('q', event.target.value)} />{unknown > 0 && <Button onClick={() => setBulk(true)}>Mark {number(unknown)} Unknown as subscribed…</Button>}</div>
+    <div className="data-toolbar"><SearchField className="search-box--list" aria-label="Search members" placeholder="Search members" value={draft} onChange={event => type(event.target.value)} />{unknown > 0 && <Button onClick={() => setBulk(true)}>Mark {number(unknown)} Unknown as subscribed…</Button>}</div>
     <ConsentLegend />
     {query.isError ? <ErrorState error={query.error} onRetry={() => query.refetch()} /> : <><ContactTable tableRef={tableRef} contacts={query.data?.items || []} members loading={query.isPending} minRows={pageSize} empty={search ? <EmptyState title="No matching members" /> : status === 'unknown' ? <EmptyState title="No one with Unknown consent" description="Everyone on this list has subscribed, opted out or is suppressed." /> : status ? <EmptyState title={`No ${statusOptions.find(option => option.value === status)?.label.toLowerCase()} members`} /> : <EmptyState title="No contacts in this list" description="Import contacts, or add one from its contact page." />} />{query.isPending ? <PaginationSkeleton /> : <Pagination page={page} pageSize={pageSize} total={query.data.total} nextCursor={query.data.nextCursor} onPageChange={setPage} />}</>}
-    {bulk && <BulkSubscribeDialog listId={list.id} listName={list.name} onClose={() => setBulk(false)} />}
+    {bulk && <BulkSubscribeDialog listId={list.id} listName={list.name} searchIgnored={Boolean(search)} onClose={() => setBulk(false)} />}
   </>
 }

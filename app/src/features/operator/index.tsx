@@ -82,11 +82,18 @@ function DetailDialog({ title, rows, onClose }: { title: string; rows: [string, 
   </Dialog>
 }
 function Actions() {
-  const actions = useQuery({ queryKey: ['operator', 'actions'], queryFn: ({ signal }) => operatorApi.actions({}, signal) })
+  const actions = useInfiniteQuery({
+    queryKey: ['operator', 'actions'], initialPageParam: undefined as string | undefined,
+    queryFn: ({ pageParam, signal }) => operatorApi.actions({ cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
+  })
+  const rows = (actions.data?.pages ?? []).flatMap(page => page.items)
   const [shown, setShown] = useState<OperatorAction | null>(null)
   return <>
-    {actions.isError && !actions.data ? <ErrorState error={actions.error} onRetry={() => void actions.refetch()} />
-      : <DataTable className="op-table" loading={actions.isPending} skeletonRows={6} rows={actions.data ?? []} rowKey={row => `${row.at}:${row.workspaceId}:${row.action}:${row.requestId ?? ''}`} onRowClick={setShown} empty={<EmptyState title="No operator actions yet" />} columns={actionColumns} />}
+    {actions.isError && !actions.data ? <ErrorState error={actions.error} onRetry={() => void actions.refetch()} /> : <>
+      <DataTable className="op-table" loading={actions.isPending} skeletonRows={6} rows={rows} rowKey={row => `${row.at}:${row.workspaceId}:${row.action}:${row.requestId ?? ''}`} onRowClick={setShown} empty={<EmptyState title="No operator actions yet" />} columns={actionColumns} />
+      {actions.hasNextPage && <Button className="op-more" loading={actions.isFetchingNextPage} onClick={() => void actions.fetchNextPage()}>Load more</Button>}
+      {actions.isError && actions.data && <Alert tone="danger">{actions.error instanceof Error ? actions.error.message : 'Couldn’t load more actions.'}</Alert>}
+    </>}
     {shown && <DetailDialog title={actionLabel(shown)} onClose={() => setShown(null)} rows={[
       ['When', when(shown.at)], ['Workspace', <Link to={`/operator/workspaces/${encodeURIComponent(shown.workspaceId)}`}>{shown.workspaceId}</Link>],
       ['Reason', shown.reason], ['Ticket', shown.ticketRef], ['Via', shown.via], ['Request', shown.requestId ? <span className="op-muted-id">{shown.requestId}</span> : null],
@@ -158,11 +165,11 @@ function WorkspaceBody({ data, canAct, onReleaseCampaign }: { data: OperatorWork
   const [freeAction, setFreeAction] = useState<FreeAction | null>(null)
   const personFree = (userId: string) => billing.data?.free.people.find(p => p.userId === userId)?.free ?? null
   const memberColumns: Column<OperatorMember>[] = [
-    { ...def(memberColumnDefs, 'email'), render: m => <span className="op-email" title={m.email}><PrivateAddress value={m.email} /></span> },
+    { ...def(memberColumnDefs, 'email'), render: m => <span className="op-email"><PrivateAddress value={m.email} /></span> },
     { ...def(memberColumnDefs, 'role'), render: m => label(m.role) },
     { ...def(memberColumnDefs, 'user'), render: m => <span className="op-muted-id">{m.userId}</span> },
-    { ...def(memberColumnDefs, 'billing'), render: m => !billing.data ? <SkeletonText width={96} /> : personFree(m.userId)?.live ? <span className="op-cell" title={personFree(m.userId)!.reason}>Free account{personFree(m.userId)!.until ? ` · until ${when(personFree(m.userId)!.until)}` : ''}</span> : <span className="muted">Billed</span> },
-    { ...def(memberColumnDefs, 'actions'), render: m => canAct && billing.data ? <DropdownMenu label={`Billing for ${m.email}`} title="Billing" items={[personFree(m.userId)
+    { ...def(memberColumnDefs, 'billing'), render: m => !billing.data ? billing.isError ? '—' : <SkeletonText width={96} /> : personFree(m.userId)?.live ? <span className="op-cell" title={personFree(m.userId)!.reason}>Free account{personFree(m.userId)!.until ? ` · until ${when(personFree(m.userId)!.until)}` : ''}</span> : <span className="muted">Billed</span> },
+    { ...def(memberColumnDefs, 'actions'), render: m => canAct && billing.data ? <DropdownMenu label={`Billing for member ${m.userId}`} title="Billing" items={[personFree(m.userId)
       ? { label: 'End free account…', onSelect: () => setFreeAction({ kind: 'person', on: false, userId: m.userId, key: crypto.randomUUID() }) }
       : { label: 'Make account free…', onSelect: () => setFreeAction({ kind: 'person', on: true, userId: m.userId, key: crypto.randomUUID() }) }]} /> : null },
   ]
@@ -206,7 +213,7 @@ function WorkspaceBody({ data, canAct, onReleaseCampaign }: { data: OperatorWork
     <section className="op-section"><SectionHeader title="Factors" /><DataTable className="op-table" rows={score.factors} rowKey={f => f.key} columns={factorColumns} empty={<EmptyState title="No factors yet" />} /></section>
     <section className="op-section"><SectionHeader title="Domains" /><DataTable className="op-table" rows={data.domains} rowKey={d => d.name} columns={domainColumns} empty={<EmptyState title="No domains" />} /></section>
     <section className="op-section" aria-labelledby="op-billing"><SectionHeader title={<span id="op-billing">Billing</span>} />
-      <dl className="op-rows op-rows--single">
+      {billing.isError && !billing.data ? <ErrorState error={billing.error} onRetry={() => void billing.refetch()} /> : <dl className="op-rows op-rows--single">
         <div><dt>Billing</dt><dd title={billingState ?? undefined}>{billingState ?? <SkeletonText width={220} />}</dd></div>
         <div><dt>Free (not billed)</dt><dd className="op-free">{!free ? <ControlSkeleton width={36} /> : <>
           <span title={canAct ? undefined : 'Needs the operator role'}><Switch label={<span className="sr-only">Free (not billed)</span>} checked={Boolean(free.workspace && !free.workspace.expired)} disabled={!canAct}
@@ -214,7 +221,7 @@ function WorkspaceBody({ data, canAct, onReleaseCampaign }: { data: OperatorWork
           <span className="muted op-cell" title={free.workspace?.reason ?? undefined}>{free.workspace ? `${free.workspace.expired ? 'Ended' : 'Since'} ${when(free.workspace.expired ? free.workspace.until : free.workspace.at)}${!free.workspace.expired && free.workspace.until ? ` · until ${when(free.workspace.until)}` : ''} · ${free.workspace.reason ?? ''}` : 'This workspace’s own flag'}</span>
         </>}</dd></div>
         <div><dt>Free owners</dt><dd>{!free ? <SkeletonText width={160} /> : number(free.people.filter(p => p.role === 'owner' && p.free?.live).length)}</dd></div>
-      </dl>
+      </dl>}
     </section>
     <section className="op-section"><SectionHeader title="Members" /><DataTable className="op-table" rows={data.members} rowKey={m => m.userId} columns={memberColumns} empty={<EmptyState title="No members" />} /></section>
     <FreeDialog action={freeAction} workspaceId={data.workspace.id} onClose={() => setFreeAction(null)} />

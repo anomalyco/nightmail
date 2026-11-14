@@ -176,7 +176,7 @@ export function RitualRoute() {
 function RecipeForm({ recipeId, ritualKey }: { recipeId?: string; ritualKey?: string }) {
   const { canAdminister } = useWorkspaceAccess()
   const catalog = useRecipes(canAdminister)
-  const overview = useOverview({ limit: 1 }, false, canAdminister)
+  const overview = useOverview(firstOverview, false, canAdminister)
   const options = useApiDef(queries.inboundAddressOptions(), { enabled: canAdminister })
   const [params] = useSearchParams()
   const client = useQueryClient()

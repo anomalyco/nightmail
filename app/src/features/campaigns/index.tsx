@@ -9,7 +9,7 @@ import { useRefreshListsOnChange } from '../../data/invalidation'
 import { useRegionCatalog } from '../../data/regions'
 import { ApiError, campaignEditable, campaignResumable, type Campaign, type CampaignInput, type SendCampaignInput } from '../../data/types'
 import {
-  Alert, Button, Checkbox, ConfirmDialog, Dialog, DropdownMenu, ErrorState,
+  Alert, Button, Checkbox, ConfirmDialog, Dialog, DropdownMenu, EmptyState, ErrorState,
   Field, IconButton, Input, PageHeader, SectionHeader, Select, SkeletonText,
   StatusBadge, Tabs, useToast,
 } from '../../components/ui'
@@ -34,6 +34,7 @@ import { ComposerSkeleton } from './skeletons'
 import { AddressList, NamedAddress, PrivateAddress } from '../../components/PrivateAddress'
 import { useSingleFlight } from '../../lib/single-flight'
 import { usePhone } from '../../lib/media'
+import { useLeaveGuard } from '../../lib/leave-guard'
 
 const message = (error: unknown) => error instanceof ApiError ? error.text : error instanceof Error ? error.message : 'Something went wrong. Please try again.'
 // {{placeholders}} the campaign uses; email always resolves, everything else needs a contact value or a fallback.
@@ -67,7 +68,10 @@ export function CampaignEditorPage() {
     const ownCreation = !scope.current.id && id === scope.current.createdId
     scope.current = { id, key: ownCreation ? scope.current.key : id ?? 'new', createdId: null }
   }
-  if (!id && !multiTenant && !fallbackRegion) return <CampaignRouteSkeleton kind="editor" isNew />
+  if (!id && !multiTenant && !fallbackRegion) {
+    if (regions.isPending) return <CampaignRouteSkeleton kind="editor" isNew />
+    return <><PageHeader title="Create campaign" backTo="/campaigns" />{regions.isError ? <ErrorState error={regions.error} onRetry={() => regions.refetch()} /> : <EmptyState title="No sending region" description="Choose a default sending region in Settings to create a campaign." action={<Link className="ui-button ui-button--secondary ui-button--md" to="/settings#workspace">Open Settings</Link>} />}</>
+  }
   return <CampaignEditorLoader key={scope.current.key} id={id} fallbackRegion={fallbackRegion} preserveEditor={next => {scope.current.createdId = next.id}} />
 }
 
@@ -133,9 +137,7 @@ function CampaignEditor({ initial, fallbackRegion, preserveEditor }: { initial: 
   const guard = useRef(false)
   useEffect(() => {
     mounted.current = true
-    const warn = (event: BeforeUnloadEvent) => { if (dirtyRef.current || guard.current) { event.preventDefault(); event.returnValue = '' } }
-    window.addEventListener('beforeunload', warn)
-    return () => { mounted.current = false; refreshController.current?.abort(); window.removeEventListener('beforeunload', warn) }
+    return () => { mounted.current = false; refreshController.current?.abort() }
   }, [])
   const [optionCursors, setOptionCursors] = useState<{lists?: string; domains?: string}>({})
   const options = useApiQuery(['campaign-options', { pageSize: 100, ...optionCursors }], async (api, signal) => {
@@ -149,6 +151,12 @@ function CampaignEditor({ initial, fallbackRegion, preserveEditor }: { initial: 
   const previousOptions = useRef<typeof options.data>(undefined)
   if (options.data) previousOptions.current = options.data
   const choices = options.data ?? previousOptions.current ?? { lists: [], segments: [], domains: [], next: { lists: null, domains: null } }
+  // The chosen list or segment may not be on the loaded page of options: read its name, so it never shows as an ID.
+  const listMissing = Boolean(form.listId) && !options.isPending && !choices.lists.some(list => list.id === form.listId)
+  const segmentMissing = Boolean(form.segmentId) && !options.isPending && !choices.segments.some(segment => segment.id === form.segmentId)
+  const chosenList = useApiQuery(['lists', form.listId], (api, signal) => api.lists.get(form.listId, signal), { enabled: listMissing })
+  const chosenSegment = useApiQuery(['segments', form.segmentId ?? ''], (api, signal) => api.segments.get(form.segmentId!, signal), { enabled: segmentMissing })
+  const segmentName = choices.segments.find(segment => segment.id === form.segmentId)?.name ?? (segmentMissing ? chosenSegment.data?.name : undefined)
   const cache = useQueryClient()
   // Saves write the campaign into the cache instead of refetching every query on each autosave.
   const saveMutation = useApiMutation((api, input: CampaignInput) => api.campaigns.save(input), undefined, false, false)
@@ -297,6 +305,9 @@ function CampaignEditor({ initial, fallbackRegion, preserveEditor }: { initial: 
       if (mounted.current) { setPreparing(false); setAutosaving(false) }
     }
   }
+  // In-app links ask before dropping edits autosave hasn't stored: a draft without a name, a failed save, or typing
+  // inside autosave's 800 ms wait. Closing or reloading the tab gets the browser's prompt.
+  const leaveGuard = useLeaveGuard(dirty || autosavePaused, { what: 'this campaign', save: async () => { await save('edit'); return !dirtyRef.current && !creation.current } })
   return <div className="campaign-compose-page">
     <PageHeader title={accepted ? 'Edit campaign' : 'Create campaign'} backTo="/campaigns" actions={<>
       {!phone && <div className="campaign-sync-status" role="status" data-state={syncState} data-actionable={syncActionable || undefined} title={syncTitle}>
@@ -329,10 +340,10 @@ function CampaignEditor({ initial, fallbackRegion, preserveEditor }: { initial: 
             {replyToValidation && <div id="campaign-reply-to-error" className="campaign-compose-feedback ui-field__error" role="alert">{replyToValidation}</div>}
             {(optionCursors.domains || choices.next.domains) && <div className="campaign-compose-feedback cluster"><Button onClick={() => setOptionCursors({...optionCursors, domains: undefined})}>First domains</Button><Button disabled={!choices.next.domains} onClick={() => setOptionCursors({...optionCursors, domains: choices.next.domains ?? undefined})}>More domains</Button></div>}
             {!options.isPending && choices.domains.length === 0 && <Alert tone="warning">No verified domains on this page. <Link to="/domains">Add a domain</Link></Alert>}
-            <div className="campaign-compose-row"><label htmlFor="campaign-list">To</label><Select id="campaign-list" aria-label="Recipient list" disabled={controlsDisabled || options.isPending} value={form.listId} onValueChange={value => change('listId', value)} options={options.isPending ? [{value: form.listId, label: 'Loading recipient lists…', disabled: true}] : choices.lists.length ? [{ value: '', label: 'Choose a list' }, ...(form.listId && !choices.lists.some(l => l.id === form.listId) ? [{value: form.listId, label: form.listId}] : []), ...choices.lists.map(list => ({ value: list.id, label: list.name }))] : [{value: '', label: 'No lists yet. Create one in Audience.', disabled: true}]} /></div>
+            <div className="campaign-compose-row"><label htmlFor="campaign-list">To</label><Select id="campaign-list" aria-label="Recipient list" disabled={controlsDisabled || options.isPending} value={form.listId} onValueChange={value => change('listId', value)} options={options.isPending ? [{value: form.listId, label: 'Loading recipient lists…', disabled: true}] : choices.lists.length ? [{ value: '', label: 'Choose a list' }, ...(listMissing ? [{value: form.listId, label: chosenList.data?.name ?? (chosenList.isError ? 'List not found' : 'Loading list…')}] : []), ...choices.lists.map(list => ({ value: list.id, label: list.name }))] : [{value: '', label: 'No lists yet. Create one in Audience.', disabled: true}]} /></div>
             {(optionCursors.lists || choices.next.lists) && <div className="campaign-compose-feedback cluster"><Button onClick={() => setOptionCursors({...optionCursors, lists: undefined})}>First lists</Button><Button disabled={!choices.next.lists} onClick={() => setOptionCursors({...optionCursors, lists: choices.next.lists ?? undefined})}>More lists</Button></div>}
-            <div className="campaign-compose-row"><label htmlFor="campaign-segment">Segment</label><Select id="campaign-segment" aria-label="Segment" disabled={controlsDisabled || options.isPending} value={form.segmentId ?? ''} onValueChange={value => change('segmentId', value || null)} options={[{ value: '', label: 'Everyone on the list' }, ...(form.segmentId && !choices.segments.some(segment => segment.id === form.segmentId) ? [{value: form.segmentId, label: form.segmentId}] : []), ...choices.segments.map(segment => ({ value: segment.id, label: `Only ${segment.name}` })), ...(!options.isPending && !choices.segments.length ? [{ value: '__none', label: 'No segments yet. A segment is a saved filter, made in Audience.', disabled: true }] : [])]} /></div>
-            <DraftAudienceLine campaign={accepted} listId={form.listId} segmentId={form.segmentId} segmentName={choices.segments.find(segment => segment.id === form.segmentId)?.name} />
+            <div className="campaign-compose-row"><label htmlFor="campaign-segment">Segment</label><Select id="campaign-segment" aria-label="Segment" disabled={controlsDisabled || options.isPending} value={form.segmentId ?? ''} onValueChange={value => change('segmentId', value || null)} options={[{ value: '', label: 'Everyone on the list' }, ...(form.segmentId && segmentMissing ? [{value: form.segmentId, label: segmentName ? `Only ${segmentName}` : chosenSegment.isError ? 'Segment not found' : 'Loading segment…'}] : []), ...choices.segments.map(segment => ({ value: segment.id, label: `Only ${segment.name}` })), ...(!options.isPending && !choices.segments.length ? [{ value: '__none', label: 'No segments yet. A segment is a saved filter, made in Audience.', disabled: true }] : [])]} /></div>
+            <DraftAudienceLine campaign={accepted} listId={form.listId} segmentId={form.segmentId} segmentName={segmentName} />
             <div className="campaign-compose-row campaign-compose-subject"><label htmlFor="campaign-subject">Subject</label><Input id="campaign-subject" placeholder="Add a subject" value={form.subject} onChange={event => change('subject', event.target.value)} disabled={controlsDisabled} /><Button className="campaign-preview-toggle" variant="ghost" size="sm" disabled={controlsDisabled} aria-expanded={previewOpen} aria-controls="campaign-preview-row" title="Text shown after the subject in the inbox" onClick={() => {setPreviewOpen(!previewOpen); if (!previewOpen) requestAnimationFrame(() => previewInput.current?.focus({preventScroll: true}))}}>Inbox preview</Button></div>
             <div id="campaign-preview-row" className="campaign-compose-preview" data-open={previewOpen || undefined} aria-hidden={!previewOpen} inert={!previewOpen}>
               <div><div className="campaign-compose-row"><label htmlFor="campaign-preview">Inbox preview</label><Input ref={previewInput} id="campaign-preview" maxLength={200} placeholder="Text shown after the subject in the inbox" value={form.previewText} onChange={event => change('previewText', event.target.value)} disabled={controlsDisabled} /></div></div>
@@ -354,6 +365,7 @@ function CampaignEditor({ initial, fallbackRegion, preserveEditor }: { initial: 
     <ConfirmDialog open={reviewUpdate} onOpenChange={value => {if (!loadingLatest) setReviewUpdate(value)}} title="Load the latest campaign?" description="This campaign changed elsewhere. Loading the latest version discards your unsaved changes." confirmLabel="Load latest" onConfirm={loadLatest} pending={loadingLatest} />
     {accepted && testOpen && <TestEmailDialog campaign={accepted} open={testOpen} onOpenChange={setTestOpen} />}
     {templatesOpen && <TemplatePickerDialog onOpenChange={setTemplatesOpen} />}
+    {leaveGuard}
   </div>
 }
 

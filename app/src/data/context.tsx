@@ -1,6 +1,6 @@
 import { createContext, Suspense, useContext, useRef, useState, useMemo, useEffect, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useLocation } from 'react-router'
+import { useLocation, useNavigate } from 'react-router'
 import { createMockApi } from './mock'
 import { ApiError, type Identity, type BaneApi, type WorkspaceInvitationPreview } from './types'
 import { roleLabel, workspaceApi } from './workspaces'
@@ -10,6 +10,7 @@ import { regionCatalogKey } from './regions'
 import { dashboardLikelyReady, identityOnboardingStage, rememberDashboardReady, useDomainStep, onboardingStage } from './onboarding'
 import { Alert, Button, PageHeader, useToast } from '../components/ui'
 import { BootLoader } from '../components/BootLoader'
+import { PrivateAddress } from '../components/PrivateAddress'
 import { chunk } from '../lib/preloadable'
 import { canonicalOrigin } from '../lib/public-origin'
 import type { QueryDef } from './queries'
@@ -84,10 +85,10 @@ const expiry = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeSty
 function InvitationReview({ invitation, email, firstWorkspace, joining, error, onJoin, onCancel }: { invitation: WorkspaceInvitationPreview; email: string | null; firstWorkspace: boolean; joining: boolean; error: unknown; onJoin: () => void; onCancel: () => void }) {
   return <main className="page-surface"><PageHeader title={productName} /><div className="stack" style={{maxWidth: 520}}>
     <h2>Join {invitation.workspaceName}?</h2>
-    <p>You were invited{email ? <> as <bdi>{email}</bdi></> : null}. {firstWorkspace ? 'Your account has no workspace yet. Nothing changes until you join; cancelling signs you out.' : 'Nothing changes until you join; you stay in your current workspace if you cancel.'}</p>
+    <p>You were invited{email ? <> as <bdi><PrivateAddress value={email} /></bdi></> : null}. {firstWorkspace ? 'Your account has no workspace yet. Nothing changes until you join; cancelling signs you out.' : 'Nothing changes until you join; you stay in your current workspace if you cancel.'}</p>
     <dl className="invitation-facts">
       <dt>Workspace</dt><dd><bdi>{invitation.workspaceName}</bdi> <code>{invitation.workspaceSlug}</code></dd>
-      <dt>Invited by</dt><dd><bdi>{invitation.inviterName}</bdi> <code>{invitation.inviterEmail}</code></dd>
+      <dt>Invited by</dt><dd><bdi>{invitation.inviterName}</bdi> <code><PrivateAddress value={invitation.inviterEmail} /></code></dd>
       <dt>Role</dt><dd>{roleLabel[invitation.role]}</dd>
       <dt>Expires</dt><dd>{expiry.format(new Date(invitation.expiresAt))}</dd>
     </dl>
@@ -100,6 +101,7 @@ export const isPublicPath = (path: string) => path === '/docs' || path.startsWit
 export function ApiProvider({ children, api }: { children: ReactNode; api?: BaneApi }) {
   // The docs and the legal pages are public: they render signed out, and /v1/me only adds the workspace's context.
   const publicRoute = isPublicPath(useLocation().pathname)
+  const navigate = useNavigate()
   const [provided] = useState(() => api ?? (import.meta.env.VITE_DEMO_MODE === 'true' ? createMockApi() : null))
   // A sign-in (or a return from a provider) this tab started names the account the page opens as; the tab then stays
   // with it. The server names only an account this browser has a session for; a link alone never moves the tab.
@@ -176,7 +178,7 @@ export function ApiProvider({ children, api }: { children: ReactNode; api?: Bane
     // Nothing from the previous workspace may remain visible or cached.
     cache.clear()
     cache.setQueryData(['identity'], next)
-    if (path) window.history.pushState(null, '', path)
+    if (path) navigate(path)
     setGeneration(value => value + 1)
   }
   // Act as another connected account in this tab, at once: no round trip to the account service, one /v1/me to Nightmail.
@@ -198,7 +200,7 @@ export function ApiProvider({ children, api }: { children: ReactNode; api?: Bane
     cache.clear()
     if (accounts) cache.setQueryData<AccountList>(accountsKey, { ...accounts, active: next.id })
     cache.setQueryData(['identity'], next)
-    if (options.path) window.history.pushState(null, '', options.path)
+    if (options.path) navigate(options.path)
     setGeneration(value => value + 1)
   }
   async function switchAccount(id: string, path?: string, workspace?: string) {

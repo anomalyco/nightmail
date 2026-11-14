@@ -1,4 +1,4 @@
-import { Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType } from 'react-router'
 import { BookOpen, Ellipsis, Globe, Inbox, KeyRound, LayoutGrid, Lock, ScrollText, Send, Settings, ShieldCheck, Users } from 'lucide-react'
 import { useApi, useRegion, useSession, useWorkspaceAccess } from '../data/context'
@@ -160,7 +160,8 @@ export function AppShell() {
       if (event.key !== '/' || event.metaKey || event.ctrlKey || event.altKey || event.defaultPrevented) return
       const target = event.target as HTMLElement | null
       if (target?.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"], [role="dialog"]')) return
-      const search = content.current?.querySelector<HTMLInputElement>('input[type="search"]:not(:disabled)')
+      // A hidden search box (the docs' table of contents on a narrow screen) can't take focus: leave the key alone.
+      const search = [...content.current?.querySelectorAll<HTMLInputElement>('input[type="search"]:not(:disabled)') ?? []].find(input => input.getClientRects().length > 0)
       if (!search) return
       event.preventDefault(); search.focus(); search.select()
     }
@@ -219,7 +220,7 @@ export function AppShell() {
       {needsRegion && regions.isError && !regions.data ? <ErrorState error={regions.error} onRetry={() => regions.refetch()} />
         : needsRegion && (regions.isPending ? !regionId : !current && enabled.length > 0) ? <RouteSkeleton />
         : needsRegion && regions.data && !enabled.length ? <EmptyState title="No enabled regions" action={!access.multiTenant && <Link to="/settings">Set up SES</Link>} />
-        : <Outlet />}
+        : <PageErrorBoundary resetKey={location.key}><Outlet /></PageErrorBoundary>}
     </Suspense></ChunkFallback.Provider>
   </main>
   if (compact) return <div className="app-shell app-shell--compact">
@@ -252,12 +253,24 @@ export function AppShell() {
   </div>
 }
 
+// A page that fails to render takes only the page down: the sidebar or tab bar stays, and going anywhere else or Try
+// again renders it afresh. App's boundary remains the last resort for the shell itself.
+class PageErrorBoundary extends Component<{ resetKey: string; children: ReactNode }, { failed: boolean }> {
+  state = { failed: false }
+  static getDerivedStateFromError() { return { failed: true } }
+  componentDidUpdate(previous: { resetKey: string }) { if (this.state.failed && previous.resetKey !== this.props.resetKey) this.setState({ failed: false }) }
+  render() {
+    if (!this.state.failed) return this.props.children
+    return <EmptyState headingAs="h1" title="This page couldn’t load" description="Unsaved changes on it may be lost." action={<div className="cluster"><Button onClick={() => this.setState({ failed: false })}>Try again</Button><Link to="/">Return to overview</Link></div>} />
+  }
+}
+
 // The tab bar and its More sheet. More opens as a history entry of its own, so Back (or a swipe back) closes it
 // instead of leaving the page; a page picked in it replaces that entry, so Back from there returns to the page below.
 const issued = new Set<string>()
 const lockedProps = { title: 'Owners and admins only', 'data-locked': true }
 function TabBar({ links, intent, footer, locked }: { links: readonly NavItem[]; intent: ReturnType<typeof useRouteIntent>; footer: ReactNode; locked: (path: string) => boolean }) {
-  const location = useLocation(), navigate = useNavigate()
+  const location = useLocation(), navigate = useNavigate(), moreButton = useRef<HTMLButtonElement>(null)
   // Only an entry opened in this visit counts: a reload on it shows the page, not a stale sheet.
   const token = (location.state as { more?: string } | null)?.more
   const open = Boolean(token && issued.has(token))
@@ -268,9 +281,9 @@ function TabBar({ links, intent, footer, locked }: { links: readonly NavItem[]; 
   return <>
     <nav className="tab-bar" aria-label="Main navigation">
       {links.filter(([path]) => tabs.includes(path)).map(([path, title]) => <NavLink key={path} className="tab-bar__item" to={path} end={path === '/'} {...intent(path)}><span className="tab-bar__icon" aria-hidden="true">{icons[path]}</span><span className="tab-bar__label">{title}</span></NavLink>)}
-      <button type="button" className="tab-bar__item" aria-haspopup="dialog" aria-expanded={open} aria-current={inMore ? 'page' : undefined} data-active={inMore || open || undefined} onClick={show}><span className="tab-bar__icon" aria-hidden="true"><Ellipsis /></span><span className="tab-bar__label">More</span></button>
+      <button ref={moreButton} type="button" className="tab-bar__item" aria-haspopup="dialog" aria-expanded={open} aria-current={inMore ? 'page' : undefined} data-active={inMore || open || undefined} onClick={show}><span className="tab-bar__icon" aria-hidden="true"><Ellipsis /></span><span className="tab-bar__label">More</span></button>
     </nav>
-    <Sheet open={open} onOpenChange={next => { if (!next) close() }} title="More" hideTitle className="more-sheet">
+    <Sheet open={open} onOpenChange={next => { if (!next) close() }} title="More" hideTitle className="more-sheet" returnFocus={moreButton}>
       <nav className="more-sheet__links" aria-label="More pages">{more.map(([path, title]) => <NavLink key={path} className="more-sheet__link" to={path} replace {...locked(path) ? lockedProps : intent(path)}><span className="more-sheet__icon" aria-hidden="true">{icons[path]}</span>{title}{locked(path) && <Lock className="more-sheet__lock" size={14} aria-label="Owners and admins only" />}</NavLink>)}</nav>
       <div className="more-sheet__footer">{footer}</div>
     </Sheet>

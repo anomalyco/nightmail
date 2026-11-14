@@ -9,11 +9,14 @@ import { webhookSignatureGuide } from '../../../../api/src/webhook-signature-gui
 import { concepts } from '../inbound/concepts'
 import { McpSetup } from './agent-setup'
 import { credentials } from './credentials'
-import { apiKeyEnv, productName } from '../../../../api/src/brand'
+import { usePublicOrigin } from '../../data/context'
+import { apiKeyEnv, productName, publicOrigin } from '../../../../api/src/brand'
 
 export type Guide = { id: string; title: string; summary: string; body: () => ReactNode }
 
-function Code({ children, label }: { children: string; label: string }) {
+// Examples are written for the hosted origin; this installation's own goes in their place, as in the API reference.
+function Code({ children: raw, label }: { children: string; label: string }) {
+  const origin = usePublicOrigin(), children = origin ? raw.replaceAll(publicOrigin, origin) : raw
   return <div className="docs-quickstart-code"><pre className="docs-code" tabIndex={0} aria-label={label}><code>{children}</code></pre><CopyAction value={children} label={`Copy ${label}`} variant="ghost" size="sm" compact className="developer-copy-icon" /></div>
 }
 const slug = (title: string) => title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
@@ -148,7 +151,7 @@ export const guides: Guide[] = [
       </Section>
       <Section title="Create one">
         <p>In <Link to="/receiving/inboxes">Receiving → Agent inboxes → New agent inbox</Link>, or with <Link to="/docs/api/createInbox">createInbox</Link>. Tick <strong>Create an API key for this inbox</strong> to get a key that reads only this inbox, with a ready setup for OpenCode, Claude Code or Cursor. Later, <strong>Connect an agent</strong> on the inbox’s page makes another one.</p>
-        <Code label="create inbox example">{`curl --request POST "$BANE/v1/inboxes" \\\n  --header "Authorization: Bearer $${apiKeyEnv}" \\\n  --header 'Content-Type: application/json' \\\n  --data '{"name":"Sign-up test","ttlSeconds":3600,"credential":{"name":"Sign-up test key","permissions":["read"]}}'`}</Code>
+        <Code label="create inbox example">{`curl --request POST "${publicOrigin}/v1/inboxes" \\\n  --header "Authorization: Bearer $${apiKeyEnv}" \\\n  --header 'Content-Type: application/json' \\\n  --data '{"name":"Sign-up test","ttlSeconds":3600,"credential":{"name":"Sign-up test key","permissions":["read"]}}'`}</Code>
         <p>Then wait for mail with <Link to="/docs/api/listInboxMessages">listInboxMessages</Link> (or the MCP tool <code>waitForMessage</code>), and delete the inbox with <Link to="/docs/api/deleteInbox">deleteInbox</Link> when you’re done.</p>
       </Section>
     </>,
@@ -157,7 +160,7 @@ export const guides: Guide[] = [
     id: 'mcp', title: 'Connect an agent (MCP)', summary: `Let OpenCode, Claude Code or Cursor work with ${productName}, as you or with one inbox.`,
     body: () => <>
       <Section title="Two ways to connect">
-        <Table head={['', 'What the agent can reach', 'Set up']} rows={[
+        <Table head={['Connect', 'What the agent can reach', 'Set up']} rows={[
           [<strong key="a">Sign in as you</strong>, 'What you approve in the browser: read, send or full access. It signs in with your Anomaly account (Google); choose its workspace and receiving tools in Settings → Account.', 'The config below, then sign in from your client.'],
           [<strong key="b">One agent inbox</strong>, 'Only that inbox, with an API key for it: read its mail and, if allowed, reply. Nothing else in the workspace.', <Link key="c" to="/api-keys?connect=1">Connect an agent</Link>],
         ]} />
