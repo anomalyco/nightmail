@@ -156,10 +156,15 @@ function grades(score: number | null) {
   return { band: { min: GRADE_BANDS[index]!.min, max: above?.min ?? 100 }, next: above ? { grade: above.grade, at: above.min } : null };
 }
 
-/** IMAP/SMTP compose caps follow the same limit as API sending (merge principle): the stored daily limit, or 100. */
+/** IMAP/SMTP compose caps follow the same limit as API sending (merge principle): the cap admission uses for a stored
+ * standing (an active override, none when exempt, else the daily limit; a resume's restore cap lowers it), or 100. */
 export async function protocolScoreCap(runtime: Runtime, w: string) {
-  const { rows: [row] } = await runtime.db.execute<{ cap: number | null }>(sql`SELECT daily_limit AS cap FROM sender_standing WHERE workspace_id=${w}`);
-  return row?.cap ?? CALIBRATION.limit;
+  const { firstWeek, secondWeek, mature } = runtime.config.hostedSendCaps;
+  const { rows: [row] } = await runtime.db.execute<{ cap: number | null }>(sql`WITH b AS (SELECT hosted_base_cap(${w},${firstWeek},${secondWeek},${mature}) AS base FROM sender_standing WHERE workspace_id=${w})
+    SELECT CASE WHEN b.base IS NOT NULL AND pc.restore_cap IS NOT NULL AND pc.restore_until>now() THEN least(b.base,pc.restore_cap) ELSE b.base END AS cap
+    FROM b LEFT JOIN LATERAL (SELECT restore_cap,restore_until FROM provider_connections WHERE workspace_id=${w} AND kind='shared' LIMIT 1) pc ON true`);
+  if (!row) return CALIBRATION.limit;
+  return row.cap ?? Infinity;
 }
 
 const dashboardSecurity = [{ dashboardSession: [] }, { secureDashboardSession: [] }] as Record<string, string[]>[];

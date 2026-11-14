@@ -304,12 +304,15 @@ export function registerRituals(app: App) {
     async (c) => {
       const w = ritualAdmin(c).workspaceId,
         v = c.req.valid('query').version;
+      // Versions are Postgres integers: a larger one cannot exist (and would fail the cast with a 500).
       const r = v
-        ? (
-            await c.env.db.execute<{ config: Config; version: number }>(
-              sql`SELECT config,version FROM mail_ritual_versions WHERE workspace_id=${w} AND version=${v}`,
-            )
-          ).rows[0]
+        ? v > 2147483647
+          ? undefined
+          : (
+              await c.env.db.execute<{ config: Config; version: number }>(
+                sql`SELECT config,version FROM mail_ritual_versions WHERE workspace_id=${w} AND version=${v}`,
+              )
+            ).rows[0]
         : await current(c.env.db, w);
       if (!r) throw new ApiError(404, 'NOT_FOUND', 'Ritual version not found.');
       c.header('ETag', `"${r.version}"`);

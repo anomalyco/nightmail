@@ -95,15 +95,15 @@ export async function cleanup(runtime: Runtime, budgetMs = RETENTION_BUDGET_MS) 
   if (runtime.config.multiTenant) deleted.domain_claims=await expireDomainClaims(runtime,Math.min(deadline,Date.now()+60_000));
   const cutoff = sql`now() - interval '30 days'`;
   // Repeats one bounded statement until it deletes less than a full batch or the budget runs out.
-  const drain = async (name: string, statement: () => SQL) => {
+  const drain = async (name: string, statement: () => SQL, size = RETENTION_BATCH) => {
     while (Date.now() < deadline) {
       const result = await runtime.db.execute<{ n: number }>(statement());
       const n = Number(result.rows[0]?.n ?? 0);
       deleted[name] = (deleted[name] ?? 0) + n;
-      if (n < RETENTION_BATCH) return;
+      if (n < size) return;
     }
   };
-  const batch = (table: SQL, where: SQL) => () => sql`WITH gone AS (DELETE FROM ${table} WHERE ctid IN (SELECT ctid FROM ${table} WHERE ${where} LIMIT ${RETENTION_BATCH}) RETURNING 1) SELECT count(*)::int AS n FROM gone`;
+  const batch = (table: SQL, where: SQL, size = RETENTION_BATCH) => () => sql`WITH gone AS (DELETE FROM ${table} WHERE ctid IN (SELECT ctid FROM ${table} WHERE ${where} LIMIT ${size}) RETURNING 1) SELECT count(*)::int AS n FROM gone`;
   // Never erase contacts, consent, suppression, drafts, idempotency keys or active scheduled work.
   await drain('expired_uploads',()=>sql`WITH expired AS (DELETE FROM sending_upload_reservations WHERE id IN
     (SELECT id FROM sending_upload_reservations WHERE expires_at<=now() ORDER BY expires_at LIMIT ${RETENTION_BATCH} FOR UPDATE SKIP LOCKED) RETURNING *),
@@ -143,6 +143,9 @@ export async function cleanup(runtime: Runtime, budgetMs = RETENTION_BUDGET_MS) 
   await drain('support_grants', batch(sql`support_grants`, sql`expires_at < ${cutoff}`));
   await drain('support_handoffs', batch(sql`support_handoffs`, sql`expires_at < ${cutoff}`));
   await drain('audience_operation_plans', batch(sql`audience_operation_plans`, sql`expires_at < now() - interval '1 day'`));
+  // A preview holds its whole parsed CSV (up to 5 MiB) and is replaced by each re-preview, so abandoned ones pile up.
+  // A week leaves room to come back and commit; committed imports stay because deliverability reads them.
+  await drain('audience_import_previews', batch(sql`audience_imports`, sql`status = 'preview' AND created_at < now() - interval '7 days'`, 100), 100);
   await drain('sending_email_events', batch(sql`sending_email_events`, sql`created_at < ${cutoff}`));
   // An email and its attachment links leave in the same statement, so no link can outlive its email.
   await drain('sending_emails', () => sql`WITH gone AS (
@@ -171,7 +174,14 @@ export async function cleanup(runtime: Runtime, budgetMs = RETENTION_BUDGET_MS) 
       AND NOT EXISTS (SELECT 1 FROM sending_campaigns c WHERE c.id = v.campaign_id AND c.workspace_id = v.workspace_id
         AND (${campaignActive()} OR c.review_id = v.id))`);
   await drain('operation_delivery_attempts', batch(sql`operation_delivery_attempts`, sql`created_at < ${cutoff}`));
-  await drain('operation_deliveries', batch(sql`operation_deliveries`, sql`created_at < ${cutoff} AND status NOT IN ('pending','paused')`));
+  // As in the inbound lane: a delivery still held for a paused endpoint after 30 days is dead-lettered with
+  // ENDPOINT_PAUSED_EXPIRED (unpausing no longer resumes it) and kept 7 more days so the reason is seen. Only endpoints
+  // that are still paused: an unpaused one's parked deliveries belong to its resume job.
+  await drain('operation_deliveries_paused_expired', () => sql`WITH expired AS (UPDATE operation_deliveries SET status='failed', last_error='ENDPOINT_PAUSED_EXPIRED', updated_at=now()
+      WHERE id IN (SELECT d.id FROM operation_webhooks w JOIN operation_deliveries d ON d.workspace_id=w.workspace_id AND d.webhook_id=w.id
+        WHERE w.paused AND d.status='paused' AND d.created_at < ${cutoff} LIMIT ${RETENTION_BATCH} FOR UPDATE OF d SKIP LOCKED) RETURNING 1)
+    SELECT count(*)::int AS n FROM expired`);
+  await drain('operation_deliveries', batch(sql`operation_deliveries`, sql`created_at < ${cutoff} AND status NOT IN ('pending','paused') AND (last_error IS DISTINCT FROM 'ENDPOINT_PAUSED_EXPIRED' OR updated_at < now() - interval '7 days')`));
   await drain('operation_events', batch(sql`operation_events`, sql`created_at < ${cutoff}`));
   await drain('operation_sns_receipts', batch(sql`operation_sns_receipts`, sql`created_at < ${cutoff}`));
   await drain('operation_feedback_failures', batch(sql`operation_feedback_failures`, sql`created_at < ${cutoff} AND reason NOT IN ('FEEDBACK_UNTAGGED','FEEDBACK_LEGACY_RECOVERY','FEEDBACK_QUEUE_RECOVERY')`));

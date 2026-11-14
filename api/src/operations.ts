@@ -1081,16 +1081,9 @@ export function registerOperations(app: App) {
       if (locked.reconfirm && body.paused === false && !body.url) throw webhookNeedsUrl();
       const takeover = locked.reconfirm && body.url ? { reconfirm: false, encryptedSecret: await encrypt(c.env, webhookSecret(), secretBinding(a, current.id)) } : {};
       const [updated] = await tx.update(webhooks).set({ ...body, ...takeover, encryptedHeaders: await encryptWebhookHeaders(c.env, headers ?? (body.url && body.url !== locked.url ? [] : undefined), secretBinding(a, current.id)), updatedAt: now() }).where(and(scoped(webhooks, a), eq(webhooks.id, current.id))).returning();
-      // A resumed delivery keeps the attempts it already made: a pause holds the remaining retries, it does not
-      // refill them. One that already used its attempts fails instead of starting another round.
-      if (locked.paused && body.paused === false) await tx.execute(sql`WITH parked AS (
-          SELECT id, attempt_count FROM operation_deliveries WHERE workspace_id=${a.workspaceId} AND webhook_id=${current.id} AND status='paused' ORDER BY id FOR UPDATE
-        ), exhausted AS (
-          UPDATE operation_deliveries d SET status='failed', last_error='WEBHOOK_RETRIES_EXHAUSTED', updated_at=now() FROM parked p WHERE d.id=p.id AND p.attempt_count>=${WEBHOOK_ATTEMPTS}
-        ), resumed AS (
-          UPDATE operation_deliveries d SET status='pending', generation=d.generation+1, updated_at=now() FROM parked p WHERE d.id=p.id AND p.attempt_count<${WEBHOOK_ATTEMPTS} RETURNING d.id, d.generation, d.attempt_count
-        ) INSERT INTO jobs(id, workspace_id, type, payload, attempts)
-          SELECT 'job_'||replace(gen_random_uuid()::text,'-',''), ${a.workspaceId}, 'operation.webhook', jsonb_build_object('deliveryId', id, 'generation', generation), attempt_count FROM resumed`);
+      // The first page resumes with the unpause; a full page hands the rest to a resume job (resumeDeliveries).
+      if (locked.paused && body.paused === false && await resumeParked(tx, a.workspaceId, current.id) === RESUME_PAGE)
+        await enqueue(tx, { type: 'operation.resumeDeliveries', workspaceId: a.workspaceId, payload: { webhookId: current.id } });
       // Changed field names and non-secret values: a URL hint, never header values.
       await recordAudit(tx, c, { action: 'webhook.update', workspaceId: a.workspaceId, target: { type: 'webhook', id: current.id }, details: { fields: [...Object.keys(body), ...(headers ? ['headers'] : [])] },
         before: { url: body.url ? webhookUrlHint(locked.url) : undefined, eventTypes: body.eventTypes ? locked.eventTypes : undefined, regions: body.regions !== undefined ? locked.regions : undefined, paused: body.paused !== undefined ? locked.paused : undefined },
@@ -1556,6 +1549,32 @@ function registerMetrics(app: App) {
 
 // Bits of sending_emails.event_outcomes, set by the operation_events trigger in migration 031.
 const OUTCOME = { accepted: 1, delivered: 2, bounced: 4, complained: 8, opened: 16, clicked: 32, failed: 64, delayed: 128 } as const;
+// Resumes one page of an unpaused endpoint's parked deliveries and returns the page's size; a full page means more
+// may remain. A resumed delivery keeps the attempts it already made: a pause holds the remaining retries, it does not
+// refill them. One that already used its attempts fails instead of starting another round. An endpoint paused again
+// resumes nothing: its next unpause starts over.
+const RESUME_PAGE = 100;
+async function resumeParked(db: DbExecutor, workspaceId: string, webhookId: string) {
+  const { rows } = await db.execute<{ n: number }>(sql`WITH hook AS MATERIALIZED (
+      SELECT id FROM operation_webhooks WHERE workspace_id=${workspaceId} AND id=${webhookId} AND NOT paused FOR SHARE
+    ), parked AS (
+      SELECT d.id, d.attempt_count FROM operation_deliveries d JOIN hook ON hook.id=d.webhook_id WHERE d.workspace_id=${workspaceId} AND d.status='paused' ORDER BY d.id LIMIT ${RESUME_PAGE} FOR UPDATE OF d
+    ), exhausted AS (
+      UPDATE operation_deliveries d SET status='failed', last_error='WEBHOOK_RETRIES_EXHAUSTED', updated_at=now() FROM parked p WHERE d.id=p.id AND p.attempt_count>=${WEBHOOK_ATTEMPTS}
+    ), resumed AS (
+      UPDATE operation_deliveries d SET status='pending', generation=d.generation+1, updated_at=now() FROM parked p WHERE d.id=p.id AND p.attempt_count<${WEBHOOK_ATTEMPTS} RETURNING d.id, d.generation, d.attempt_count
+    ), queued AS (
+      INSERT INTO jobs(id, workspace_id, type, payload, attempts)
+      SELECT 'job_'||replace(gen_random_uuid()::text,'-',''), ${workspaceId}, 'operation.webhook', jsonb_build_object('deliveryId', id, 'generation', generation), attempt_count FROM resumed
+    ) SELECT count(*)::int AS n FROM parked`);
+  return Number(rows[0]?.n ?? 0);
+}
+// Each page commits on its own; after a few seconds the job yields and is picked up again.
+const resumeDeliveries: JobHandler = async (runtime, payload, job) => {
+  for (const until = Date.now() + 5_000; Date.now() < until;)
+    if (await resumeParked(runtime.db, job.workspaceId, String(payload.webhookId)) < RESUME_PAGE) return;
+  throw new JobDeferred(now());
+};
 const webhookJob: JobHandler = async (runtime, payload, job) => {
   const delivery = job.webhook !== undefined ? job.webhook : (await runtime.db.execute<{webhook: import('./core.js').ClaimedWebhook | null}>(sql`WITH claimed AS (
     SELECT ${job.id}::text id,${job.workspaceId}::text workspace_id,${JSON.stringify(payload)}::jsonb payload,'operation.webhook'::text type
@@ -1984,4 +2003,4 @@ const publishBatchJob: JobHandler = async (runtime, payload, job) => {
     }
   });
 };
-export const operationJobs: Record<string, JobHandler> = { 'domain.placement': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./placement.js'))).shadowPlacement(...args); }), 'domain.verify': retryDatabaseFailures(domainVerify), 'domain.mx': retryDatabaseFailures(domainMx), 'operation.webhook': retryDatabaseFailures(webhookJob), 'operation.ses': retryDatabaseFailures(sesJob), 'operation.simulatedFeedback': retryDatabaseFailures(simulatedFeedbackJob), 'operation.simulatedFeedbackRecovery': retryDatabaseFailures(simulatedFeedbackRecovery), 'operation.publish': retryDatabaseFailures(publishJob), 'operation.publishBatch': retryDatabaseFailures(publishBatchJob) };
+export const operationJobs: Record<string, JobHandler> = { 'domain.placement': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./placement.js'))).shadowPlacement(...args); }), 'domain.verify': retryDatabaseFailures(domainVerify), 'domain.mx': retryDatabaseFailures(domainMx), 'operation.webhook': retryDatabaseFailures(webhookJob), 'operation.resumeDeliveries': retryDatabaseFailures(resumeDeliveries), 'operation.ses': retryDatabaseFailures(sesJob), 'operation.simulatedFeedback': retryDatabaseFailures(simulatedFeedbackJob), 'operation.simulatedFeedbackRecovery': retryDatabaseFailures(simulatedFeedbackRecovery), 'operation.publish': retryDatabaseFailures(publishJob), 'operation.publishBatch': retryDatabaseFailures(publishBatchJob) };

@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { ApiError, id, type Ctx } from './core.js';
+import { ApiError, id, logError, type Ctx } from './core.js';
 import { principal } from './mail-gateway.js';
 import { boundMailBucket, mailKey, withMailObjects, readMailBytes } from './mail-objects.js';
 import { parseInboundMime } from './mailbox-ingest.js';
@@ -50,31 +50,45 @@ export async function streamedAppend(c: Ctx, encoded: string, digest: string) {
       },
     }),
   );
-  return rt.db.transaction(async (tx) => {
-    await tx.execute(sql`SELECT FROM inbox_state WHERE workspace_id=${who.w} AND inbox_id=${who.b} FOR UPDATE`);
-    if (!(await tx.execute(auth)).rowCount) throw new ApiError(403, 'CREDENTIAL_REVOKED', 'Protocol access denied.');
-    const available = await tx.execute(
-      sql`SELECT FROM inbox_state s JOIN mailboxes b ON b.id=s.inbox_id WHERE s.inbox_id=${who.b} AND s.messages<coalesce(b.quota_messages,100000) AND s.bytes+${p.size}<=coalesce(b.quota_bytes,1073741824)`,
-    );
-    if (!available.rowCount) throw new ApiError(409, 'OVERQUOTA', 'Append quota exceeded.');
-    await withMailObjects(rt, who.w, '', bucket, async (o) => {
-      if (bucket === 'local:') {
-        await o.put(key, await readMailBytes(stream, p.size, MAX), 'message/rfc822');
-      } else {
-        await o.put(key, { stream, length: p.size }, 'message/rfc822');
-      }
-    });
-    const cut = Buffer.from(prefix).indexOf('\r\n\r\n'),
-      header = cut < 0 ? null : cut + 4;
-    const m = header !== null ? await parseInboundMime(prefix.subarray(0, header)) : null;
-    const row = (
-      await tx.execute<{ r: { pairs: number[][]; validity: number; error?: string } }>(
-        sql`SELECT mailgw_append(${who.w},${who.b},${p.folder},${mid},${id('thr')},${m?.messageId ?? null},${m?.subject ?? ''},${m?.from?.address ?? ''},'',${p.date}::timestamptz,${p.size},${bucket},${key},${header === null ? null : JSON.stringify({ headerLength: header })}::jsonb,${sql.param(p.flags)}::text[]) r`,
-      )
-    ).rows[0]!.r;
-    if (row.error || row.pairs[0]?.[0] === 1) await withMailObjects(rt, who.w, '', bucket, (o) => o.delete([key]));
-    if (row.error) throw new ApiError(409, 'APPEND_REFUSED', 'Append refused.');
-    if(row.pairs[0]?.[0]===0)await savePreview(tx,mid,key,prefix,p.size);
-    return row;
+  const quota = sql`SELECT FROM inbox_state s JOIN mailboxes b ON b.id=s.inbox_id WHERE s.inbox_id=${who.b} AND s.messages<coalesce(b.quota_messages,100000) AND s.bytes+${p.size}<=coalesce(b.quota_bytes,1073741824)`;
+  if (!(await rt.db.execute(quota)).rowCount) throw new ApiError(409, 'OVERQUOTA', 'Append quota exceeded.');
+  // Upload before the transaction: a slow or stalled client must not hold the inbox_state lock (which ingest, flags
+  // and expunge also take) or a pooled connection. The UID is published only by the short transaction below.
+  await withMailObjects(rt, who.w, '', bucket, async (o) => {
+    if (bucket === 'local:') {
+      await o.put(key, await readMailBytes(stream, p.size, MAX), 'message/rfc822');
+    } else {
+      await o.put(key, { stream, length: p.size }, 'message/rfc822');
+    }
   });
+  const discard = () => withMailObjects(rt, who.w, '', bucket, (o) => o.delete([key])).catch((e: unknown) => logError(e, { code: 'APPEND_CLEANUP_FAILED' }, 'warn'));
+  const cut = Buffer.from(prefix).indexOf('\r\n\r\n'),
+    header = cut < 0 ? null : cut + 4;
+  const m = header !== null ? await parseInboundMime(prefix.subarray(0, header)) : null;
+  // Set once the callback finishes: a failure after that is the COMMIT, whose outcome is uncertain, so the object stays.
+  let settled = false;
+  let row: { pairs: number[][]; validity: number; error?: string };
+  try {
+    row = await rt.db.transaction(async (tx) => {
+      settled = false;
+      await tx.execute(sql`SELECT FROM inbox_state WHERE workspace_id=${who.w} AND inbox_id=${who.b} FOR UPDATE`);
+      if (!(await tx.execute(auth)).rowCount) throw new ApiError(403, 'CREDENTIAL_REVOKED', 'Protocol access denied.');
+      if (!(await tx.execute(quota)).rowCount) throw new ApiError(409, 'OVERQUOTA', 'Append quota exceeded.');
+      const r = (
+        await tx.execute<{ r: { pairs: number[][]; validity: number; error?: string } }>(
+          sql`SELECT mailgw_append(${who.w},${who.b},${p.folder},${mid},${id('thr')},${m?.messageId ?? null},${m?.subject ?? ''},${m?.from?.address ?? ''},'',${p.date}::timestamptz,${p.size},${bucket},${key},${header === null ? null : JSON.stringify({ headerLength: header })}::jsonb,${sql.param(p.flags)}::text[]) r`,
+        )
+      ).rows[0]!.r;
+      if (r.error) throw new ApiError(409, 'APPEND_REFUSED', 'Append refused.');
+      if (r.pairs[0]?.[0] === 0) await savePreview(tx, mid, key, prefix, p.size);
+      settled = true;
+      return r;
+    });
+  } catch (e) {
+    if (!settled) await discard();
+    throw e;
+  }
+  // A duplicate kept the existing message: this upload is unreferenced.
+  if (row.pairs[0]?.[0] === 1) await discard();
+  return row;
 }

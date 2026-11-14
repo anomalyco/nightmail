@@ -140,7 +140,8 @@ export function registerInboundOverview(app: App, deps: Deps) {
         UNION ALL
         SELECT m.id||':'||r, 'pattern', 'api', r, split_part(r,'@',2), 2, m.id, NULL::text, NULL::text, NULL::text, m.display_name
         FROM mailboxes m CROSS JOIN LATERAL jsonb_array_elements_text(m.rules) r
-        WHERE m.workspace_id=${w} AND (${scope === null}::boolean OR m.id = ANY(${textArray(scope ?? [])}))
+        WHERE m.workspace_id=${w} AND (m.delete_after IS NULL OR m.delete_after>statement_timestamp())
+          AND (${scope === null}::boolean OR m.id = ANY(${textArray(scope ?? [])}))
         UNION ALL
         SELECT r.id, CASE WHEN starts_with(r.match,'*@') THEN 'catch_all' WHEN position('*' IN r.match)>0 THEN 'pattern' ELSE 'route' END, 'api', r.match, split_part(r.match,'@',2),
           CASE WHEN starts_with(r.match,'*@') THEN 5 WHEN position('*' IN r.match)>0 THEN 2 ELSE 1 END, NULL::text, r.id, NULL::text, NULL::text, NULL::text

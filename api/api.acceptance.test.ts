@@ -1479,6 +1479,26 @@ test('mail gateway: SMTP queues dispatchable content with a single database conn
   assert.equal((await submit('Subject: revoked\r\n\r\nNo send\r\n')).status,403);
   assert.equal((await db.query('SELECT count(*)::int n FROM sending_emails WHERE actor_key_id=$1',[kid])).rows[0].n,3);
 });
+test('mail gateway: the IMAP/SMTP score cap is the cap admission uses for the stored standing',async t=>{
+  const {drizzle}=await import('drizzle-orm/node-postgres'),{protocolScoreCap}=await import('./src/sender-score.js');
+  const db=await fixtureDatabase(t),wid=unique('protocol-cap');
+  await db.query('BEGIN');
+  try {
+    const rt={db:drizzle(db),config:{hostedSendCaps:{firstWeek:100,secondWeek:500,mature:1000}}} as unknown as import('./src/core.js').Runtime;
+    await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)',[wid]);
+    assert.equal(await protocolScoreCap(rt,wid),100,'No stored standing: the calibration limit.');
+    await gradedSender(db,wid,500);
+    assert.equal(await protocolScoreCap(rt,wid),500);
+    await db.query("UPDATE workspaces SET send_cap_override=2000,send_cap_override_expires_at=now()+interval '1 day' WHERE id=$1",[wid]);
+    assert.equal(await protocolScoreCap(rt,wid),2000,'An active operator override replaces the score limit.');
+    await db.query("UPDATE workspaces SET send_cap_override_expires_at=now()-interval '1 second' WHERE id=$1",[wid]);
+    assert.equal(await protocolScoreCap(rt,wid),500,'An expired override no longer applies.');
+    await db.query("INSERT INTO provider_connections(id,workspace_id,kind,region,state,restore_cap,restore_until) VALUES ($1,$1,'shared',$2,'ready',50,now()+interval '1 hour')",[wid,REGION]);
+    assert.equal(await protocolScoreCap(rt,wid),50,'A resume restore caps the limit.');
+    await db.query('UPDATE workspaces SET send_cap_override=NULL,exempt_hosted_quotas=true WHERE id=$1',[wid]);
+    assert.equal(await protocolScoreCap(rt,wid),Infinity,'Exempt: no score cap (the inbox protocol caps still apply).');
+  } finally { await db.query('ROLLBACK'); }
+});
 test('mail gateway: preview migration yields to writers and validates in a separate transaction',async(t)=>{
   const writer=await fixtureDatabase(t),ddl=await fixtureDatabase(t),schema='gw_'+randomUUID().replaceAll('-','');
   await writer.query(`CREATE SCHEMA ${schema}`);cleanup(t,async()=>{await writer.query('ROLLBACK');await ddl.query('ROLLBACK');await writer.query(`DROP SCHEMA ${schema} CASCADE`)});

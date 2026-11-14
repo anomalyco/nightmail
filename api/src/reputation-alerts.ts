@@ -83,8 +83,9 @@ export function decideAlert(metric: Metric, value: number, history: { level: Lev
 async function queueIfChanged(runtime: Runtime, workspaceId: string, region: string, metric: Metric, value: number) {
   return runtime.db.transaction(async tx => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${JOB}:${workspaceId}:${region}:${metric}`}))`);
+    // An alert whose delivery failed was never seen: leaving it out lets the next hourly check raise the level again.
     const recent = await tx.select({ payload: jobs.payload, createdAt: jobs.createdAt }).from(jobs)
-      .where(and(eq(jobs.workspaceId, workspaceId), eq(jobs.type, JOB), sql`${jobs.payload}->>'region' = ${region}`, sql`${jobs.payload}->>'metric' = ${metric}`))
+      .where(and(eq(jobs.workspaceId, workspaceId), eq(jobs.type, JOB), sql`${jobs.payload}->>'region' = ${region}`, sql`${jobs.payload}->>'metric' = ${metric}`, sql`${jobs.status} <> 'failed'`))
       .orderBy(desc(jobs.createdAt)).limit(24);
     const history = recent.map(row => ({ level: (LEVELS as readonly string[]).includes(String(row.payload.level)) ? row.payload.level as Level : 'ok' as Level, at: Date.parse(row.createdAt) }));
     const decision = decideAlert(metric, value, history, Date.now());

@@ -148,41 +148,58 @@ async function delivery(request: Request, env: Env, secret: string | undefined, 
   return { event, deliveryId };
 }
 
+/** Runs a delivery's work; a failure forgets its webhook-id so Nightmail's retry is processed (the inboxes' primary keys
+ * drop a message that was already stored). Success keeps the row, so a duplicate delivery is never processed twice. */
+async function handled(env: Env, deliveryId: string, work: () => Promise<Response>): Promise<Response> {
+  const forget = () => env.DB.prepare('DELETE FROM webhook_deliveries WHERE id = ?').bind(deliveryId).run()
+    .catch(error => logError(error, { event: 'webhook', code: 'DELIVERY_FORGET_FAILED' }));
+  let response: Response;
+  try { response = await work(); }
+  catch (error) { await forget(); throw error; }
+  if (response.status >= 500) await forget();
+  return response;
+}
+
 /** Nightmail's signed webhook for mail received at support@bane.mx (route → webhook:support-agent, bane format, include message). */
 async function inbound(request: Request, env: Env): Promise<Response> {
   const got = await delivery(request, env, env.BANE_INBOUND_WEBHOOK_SECRET, 'BANE_INBOUND_WEBHOOK_SECRET');
   if (got instanceof Response) return got;
-  const { event, deliveryId } = got, message = event.data?.message, messageId = message?.id ?? event.data?.messageId;
-  if (event.type !== 'message.received' || !messageId || message?.direction === 'outbound') return new Response(null, { status: 200 });
-  const threadId = message?.threadId ?? messageId, sender = message?.from?.address?.toLowerCase() ?? 'unknown';
-  if (env.EMAIL_IN && !(await env.EMAIL_IN.limit({ key: `sender:${await addressHash(sender)}` })).success) return new Response(null, { status: 200 });
-  const now = Date.now();
-  let row = await env.DB.prepare('SELECT id, status FROM conversations WHERE thread_id = ?').bind(threadId).first<{ id: string; status: string }>();
-  if (!row) {
-    const id = newId('conv');
-    await env.DB.prepare("INSERT INTO conversations (id, channel, thread_id, created_at, updated_at) VALUES (?, 'email', ?, ?, ?) ON CONFLICT (thread_id) DO NOTHING").bind(id, threadId, now, now).run();
-    row = await env.DB.prepare('SELECT id, status FROM conversations WHERE thread_id = ?').bind(threadId).first<{ id: string; status: string }>();
-  }
-  if (!row) return new Response(null, { status: 503 });
-  // The Durable Object stores the message and arms its alarm before this returns, so Nightmail's retry is never needed
-  // once we answer 200: the DO is the durable inbox.
-  await conversation(env, row.id).enqueueInbound({ conversationId: row.id, threadId, messageId, deliveryId });
-  return new Response(null, { status: 200 });
+  const { event, deliveryId } = got;
+  return handled(env, deliveryId, async () => {
+    const message = event.data?.message, messageId = message?.id ?? event.data?.messageId;
+    if (event.type !== 'message.received' || !messageId || message?.direction === 'outbound') return new Response(null, { status: 200 });
+    const threadId = message?.threadId ?? messageId, sender = message?.from?.address?.toLowerCase() ?? 'unknown';
+    if (env.EMAIL_IN && !(await env.EMAIL_IN.limit({ key: `sender:${await addressHash(sender)}` })).success) return new Response(null, { status: 200 });
+    const now = Date.now();
+    let row = await env.DB.prepare('SELECT id, status FROM conversations WHERE thread_id = ?').bind(threadId).first<{ id: string; status: string }>();
+    if (!row) {
+      const id = newId('conv');
+      await env.DB.prepare("INSERT INTO conversations (id, channel, thread_id, created_at, updated_at) VALUES (?, 'email', ?, ?, ?) ON CONFLICT (thread_id) DO NOTHING").bind(id, threadId, now, now).run();
+      row = await env.DB.prepare('SELECT id, status FROM conversations WHERE thread_id = ?').bind(threadId).first<{ id: string; status: string }>();
+    }
+    if (!row) return new Response(null, { status: 503 });
+    // The Durable Object stores the message and arms its alarm before this returns, so Nightmail's retry is never needed
+    // once we answer 200: the DO is the durable inbox.
+    await conversation(env, row.id).enqueueInbound({ conversationId: row.id, threadId, messageId, deliveryId });
+    return new Response(null, { status: 200 });
+  });
 }
 
 /** abuse@, privacy@, legal@ (route → webhook:support-intake): tickets only, never the agent (intake.ts). */
 async function intake(request: Request, env: Env): Promise<Response> {
   const got = await delivery(request, env, env.BANE_INTAKE_WEBHOOK_SECRET, 'BANE_INTAKE_WEBHOOK_SECRET');
   if (got instanceof Response) return got;
-  const { event } = got, message = event.data?.message, messageId = message?.id ?? event.data?.messageId;
-  if (event.type !== 'message.received' || !messageId || message?.direction === 'outbound') return new Response(null, { status: 200 });
-  // The envelope recipients Nightmail matched (so Bcc counts), else the To header.
-  const recipients = (event.data?.recipients?.length ? event.data.recipients : [JSON.stringify(message?.to ?? '')]).join(' ').toLowerCase();
-  const mailbox = env.INTAKE_ADDRESSES.split(',').map(a => a.trim().toLowerCase()).filter(a => a && recipients.includes(a)).map(a => a.split('@')[0] as Mailbox).find(m => m in INTAKE);
-  if (!mailbox) return new Response(null, { status: 200 });
-  const threadId = message?.threadId ?? messageId;
-  await env.INTAKE.get(env.INTAKE.idFromName(threadId)).enqueue({ threadId, messageId, mailbox });
-  return new Response(null, { status: 200 });
+  return handled(env, got.deliveryId, async () => {
+    const { event } = got, message = event.data?.message, messageId = message?.id ?? event.data?.messageId;
+    if (event.type !== 'message.received' || !messageId || message?.direction === 'outbound') return new Response(null, { status: 200 });
+    // The envelope recipients Nightmail matched (so Bcc counts), else the To header.
+    const recipients = (event.data?.recipients?.length ? event.data.recipients : [JSON.stringify(message?.to ?? '')]).join(' ').toLowerCase();
+    const mailbox = env.INTAKE_ADDRESSES.split(',').map(a => a.trim().toLowerCase()).filter(a => a && recipients.includes(a)).map(a => a.split('@')[0] as Mailbox).find(m => m in INTAKE);
+    if (!mailbox) return new Response(null, { status: 200 });
+    const threadId = message?.threadId ?? messageId;
+    await env.INTAKE.get(env.INTAKE.idFromName(threadId)).enqueue({ threadId, messageId, mailbox });
+    return new Response(null, { status: 200 });
+  });
 }
 
 const page = (title: string, body: string, status = 200) => new Response(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>${title}</title>

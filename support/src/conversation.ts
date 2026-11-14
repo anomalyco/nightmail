@@ -41,6 +41,7 @@ type Meta = {
 type Transcript = { id: string; role: 'user' | 'assistant'; kind: 'first' | 'reply' | 'notice' | null; text: string; at: string; tools: { id: string; label: string; ok: boolean }[]; attachments?: { id: string; type: string; width: number | null; height: number | null; name: string }[] };
 type Outgoing = Record<string, unknown> & { type: string };
 type GrantRow = { grant_id: string; token: string; expires_at: number; workspace_ids: string; content_workspace_id: string | null };
+type InboxRow = { message_id: string; thread_id: string; delivery_id: string; attempts: number; state: string };
 
 export class SupportConversation extends DurableObject<Env> {
   private readonly sql: SqlStorage;
@@ -482,18 +483,29 @@ export class SupportConversation extends DurableObject<Env> {
    * context or its grant. Until a sender is verified there is no model turn at all: only a fixed reply.
    */
   private async processInbox() {
-    const api = baneApi(this.env);
-    const next = this.sql.exec<{ message_id: string; thread_id: string; delivery_id: string; attempts: number; state: string }>("SELECT message_id, thread_id, delivery_id, attempts, state FROM support_inbox WHERE state IN ('new', 'confirmed') ORDER BY received_at LIMIT 1").toArray()[0];
+    const next = this.sql.exec<InboxRow>("SELECT message_id, thread_id, delivery_id, attempts, state FROM support_inbox WHERE state IN ('new', 'confirmed') ORDER BY received_at LIMIT 1").toArray()[0];
     if (!next) return false;
     this.sql.exec('UPDATE support_inbox SET attempts = attempts + 1 WHERE message_id = ?', next.message_id);
     const set = (state: string) => {
       this.sql.exec('UPDATE support_inbox SET state = ? WHERE message_id = ?', state, next.message_id);
       log(state === 'failed' ? 'error' : 'info', { event: 'email', channel: 'support', code: state === 'failed' ? 'EMAIL_FAILED' : undefined, state, messageId: next.message_id, attempt: next.attempts + 1 });
     };
+    try { return await this.processMessage(next, set); }
+    catch (error) {
+      // A missing secret is a deploy mistake: the message waits for the fix. Anything else gets six tries, then the
+      // message is marked failed so it stops re-running turns and blocking the mail behind it.
+      if (error instanceof MissingSecret || next.attempts < 5) throw error;
+      logError(error, { event: 'email', code: 'EMAIL_FAILED', messageId: next.message_id });
+      const still = this.sql.exec<{ state: string }>('SELECT state FROM support_inbox WHERE message_id = ?', next.message_id).toArray()[0];
+      if (still && (still.state === 'new' || still.state === 'confirmed')) set('failed');
+      return true;
+    }
+  }
+
+  private async processMessage(next: InboxRow, set: (state: string) => void) {
+    const api = baneApi(this.env);
     let meta = this.meta()!;
-    let message: InboundMessage;
-    try { message = await api.message(next.message_id); }
-    catch (error) { if (next.attempts >= 5) set('failed'); throw error; }
+    const message = await api.message(next.message_id);
     const sender = senderOf(message);
     // Never answer automatic mail or ourselves (loops). Nightmail flags auto-replies, bounces, reports, bulk and list mail.
     const automatic = !sender || message.automated === true || /^(?:mailer-daemon|postmaster|no-?reply|bounces?)@/i.test(sender) || sender === this.env.SUPPORT_ADDRESS.toLowerCase();
