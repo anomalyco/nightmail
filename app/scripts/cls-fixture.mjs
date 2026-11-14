@@ -156,15 +156,27 @@ export async function start(repo, { log = () => {}, servers = 1, delay = null, f
           if (cached) { res.writeHead(cached.status, cached.headers); res.end(req.method === 'HEAD' ? undefined : cached.body); return; }
         }
         if (pathname.startsWith('/v1/') && delay) { await sleep(delay(rawUrl)); if (res.destroyed || res.writableEnded) return; }
-        const up = httpRequest({ hostname: '127.0.0.1', port: apiPort, method: req.method, path: rawUrl, headers: req.headers, agent }, upRes => {
-          res.writeHead(upRes.statusCode ?? 502, upRes.headers);
-          if (req.method === 'HEAD') { upRes.resume(); res.end(); return; }
-          upRes.pipe(res);
-        });
-        up.on('error', () => { if (!res.headersSent) res.writeHead(502); res.destroy(); });
-        res.on('close', () => { if (!res.writableEnded) up.destroy(); });
+        // A kept-alive socket the API closed for idling (Node's 5 s keepAliveTimeout) just as it was reused resets
+        // before any response: a GET or HEAD has no body to lose, so it goes again once on a fresh socket. Without this
+        // the page saw an empty response (ERR_EMPTY_RESPONSE), now and then, on whichever load drew that socket.
+        const forward = (retry) => {
+          const up = httpRequest({ hostname: '127.0.0.1', port: apiPort, method: req.method, path: rawUrl, headers: req.headers, agent }, upRes => {
+            res.writeHead(upRes.statusCode ?? 502, upRes.headers);
+            if (req.method === 'HEAD') { upRes.resume(); res.end(); return; }
+            upRes.pipe(res);
+          });
+          up.on('error', error => {
+            if (retry && up.reusedSocket && error.code === 'ECONNRESET' && !res.headersSent && !res.destroyed) { forward(false); return; }
+            if (!res.headersSent) res.writeHead(502); res.destroy();
+          });
+          res.on('close', () => { if (!res.writableEnded) up.destroy(); });
+          if (bodyless) up.end();
+          return up;
+        };
+        const bodyless = req.method === 'GET' || req.method === 'HEAD';
+        const up = forward(bodyless);
         req.on('error', () => up.destroy());
-        req.pipe(up);
+        if (!bodyless) req.pipe(up);
       });
       await new Promise((resolve, reject) => { proxy.once('error', reject); proxy.listen(proxyPort, '127.0.0.1', resolve); });
       cleanups.push(async () => { proxy.closeAllConnections(); await new Promise(r => proxy.close(r)); });
