@@ -79,6 +79,18 @@ Bounces alone hold marketing; they stop everything only when **transactional mai
 
 A Hosted campaign with more than 100 recipients sends a **probe** first: the first `min(500, 10%)` recipients, at least 100. Release waits until the probe has gone out and ten more minutes for its feedback (`delivery.waiting.reason` is `list_probe`). More than 3% hard bounces or 2 complaints **quarantines** the campaign (paused, `LIST_QUALITY`); bounced addresses are suppressed and owners get an email. After the probe, a campaign still pauses at more than 2% bounces after 1,000 accepted or more than 0.08% complaints after 2,000. The owner can resume a quarantined campaign once; a second quarantine needs a review (409 `QUARANTINE_REVIEW_REQUIRED`). A quarantine never pauses the account.
 
+## Content screen: how much text
+
+Hosted mail is screened for smuggled advertising and scams before it is delivered. The screen reads the HTML's visible text and `alt` text, then each sentence of the text part that the HTML doesn't already say: a text part generated from the HTML counts once, and a text part that tells another story is screened in full.
+
+| What | Limit | When it is checked |
+| --- | --- | --- |
+| A message (`POST /v1/emails/send`, each item of `/v1/emails/batch`, replies and inbox sends, campaign tests) | **24,576 UTF-8 bytes** of screened text (24 KiB), 60 distinct link hosts | On submission |
+| A campaign, screened **once** for all its recipients | **49,152 UTF-8 bytes** (48 KiB) of its own copy, placeholders unresolved, 60 link hosts | On send or schedule |
+| A personalization value (`{{firstName}}`, a contact property) | **256 UTF-8 bytes**; no markup, control or reordering characters; links only to hosts the campaign links to or your verified sending domains | Fallbacks on send or schedule; contact values while the campaign prepares, before anyone is sent to |
+
+Over a limit, the request is refused at once with 422 `CONTENT_TOO_LARGE_TO_SCREEN` and `error.details[0]` set to `{ screenedBytes, limitBytes }` (or `{ linkHosts, linkHostLimit }`); in a batch, `index` names the message and nothing in the batch is queued. A contact value that breaks a rule fails the campaign with `CAMPAIGN_VALUE_REJECTED` and names the placeholder, never the contact. A campaign the screen judges to be spam fails with `CONTENT_REJECTED_SPAM` before any recipient is sent to; every recipient counts as a screen rejection in the score. `POST /v1/emails/check` reports the measured size as the `screen-bytes` finding. Self-hosted installations set the limits with `JEV_MESSAGE_LIMIT_BYTES` and `JEV_CAMPAIGN_LIMIT_BYTES`.
+
 ## The `account.standing.changed` event
 
 Subscribe a webhook to `account.standing.changed` to hear about every change of step, a campaign quarantine, and an owner's or Nightmail's release. `data` has `step`, `previousStep`, `reasons` (code, metric, value, count, threshold, minimum, window, message), `since`, `version`, `sequence` (per workspace, always increasing: ignore a sequence you have already seen), `marketingHeld`, `change` and `actor.kind` (`system`, `owner` or `operator`).

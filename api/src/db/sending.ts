@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import type { CampaignState } from '../states.js';
 import type { SendingBinding } from '../domain-claims.js';
+import type { CampaignScreen } from '../screen.js';
 import { boolean, doublePrecision, index, integer, jsonb, pgTable, primaryKey, smallint, text, timestamp, uniqueIndex } from 'drizzle-orm/pg-core';
 
 export type EmailStatus = 'queued' | 'attempting' | 'accepted' | 'sent' | 'delivered' | 'bounced' | 'complained' | 'rejected' | 'rendering_failed' | 'delayed' | 'suppressed' | 'canceled' | 'acceptance_unknown' | 'simulated';
@@ -96,6 +97,8 @@ export const campaignReviews = pgTable('sending_campaign_reviews', {
   // Version of the per-recipient renderer (interpolation, preheader, footer) that must reproduce this review's emails.
   rendererVersion: integer('renderer_version').notNull().default(1),
   rendered: jsonb('rendered').$type<{ html?: string; text?: string }>(),
+  // The Hosted content screen's verdict on this review, screened once for every recipient (migration 310).
+  screen: jsonb('screen').$type<CampaignScreen>(),
 }, t => [index('sending_review_campaign').on(t.workspaceId, t.campaignId)]);
 // Recipient values are copied once from one database snapshot; no live contact joins during preparation or expansion.
 export const reviewRecipients = pgTable('sending_review_recipients', {

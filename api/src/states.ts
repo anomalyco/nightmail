@@ -21,6 +21,15 @@ export type PoolState = typeof POOL_STATES[number];
 
 // Publish local terminal transitions from UPDATE ... RETURNING, never by scanning mail
 // after commit. The event, subscribed deliveries and jobs either all exist or none do.
+/**
+ * Content-screen verdicts for reputation, counted when the screen judged the mail, in the epoch current then (so a
+ * verdict on mail queued before a resume still counts after it). Only Hosted mail with a real recipient; `verdicts`
+ * yields (workspace_id, rejected 0|1) per judged email. Runs inside the caller's statement.
+ */
+export const countScreened = (verdicts: SQL) => sql`INSERT INTO hosted_screen_hourly AS s(workspace_id,epoch,hour,screened,rejected)
+  SELECT v.workspace_id,coalesce(pc.resumed_at,'-infinity'),date_trunc('hour',clock_timestamp(),'UTC'),count(*),sum(v.rejected) FROM (${verdicts}) v
+  JOIN provider_connections pc ON pc.workspace_id=v.workspace_id AND pc.kind='shared' GROUP BY 1,2,3 ORDER BY 1,2,3
+  ON CONFLICT(workspace_id,epoch,hour) DO UPDATE SET screened=s.screened+excluded.screened,rejected=s.rejected+excluded.rejected`;
 export const terminalColumns = sql`id,workspace_id,status,region,simulated,error_code,suppression_reason,dispatch_version`;
 export function terminalEvents(rows: SQL, extra = sql`'{}'::jsonb`) {
   return sql`terminal AS (${rows}), emitted AS (

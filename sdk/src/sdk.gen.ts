@@ -1177,6 +1177,9 @@ export const checkEmail = <ThrowOnError extends boolean = false>(options: Option
     }
 });
 
+/**
+ * Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML’s visible text and alt text, plus each text-part sentence the HTML doesn’t already say (a sentence both parts say counts once). It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item’s index, and no message of the batch is queued.
+ */
 export const sendEmail = <ThrowOnError extends boolean = false>(options: Options<SendEmailData, ThrowOnError>): RequestResult<SendEmailResponses, SendEmailErrors, ThrowOnError> => (options.client ?? client).post<SendEmailResponses, SendEmailErrors, ThrowOnError>({
     security: [
         { scheme: 'bearer', type: 'http' },
@@ -1199,6 +1202,9 @@ export const sendEmail = <ThrowOnError extends boolean = false>(options: Options
     }
 });
 
+/**
+ * Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML’s visible text and alt text, plus each text-part sentence the HTML doesn’t already say (a sentence both parts say counts once). It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item’s index, and no message of the batch is queued.
+ */
 export const sendEmailBatch = <ThrowOnError extends boolean = false>(options: Options<SendEmailBatchData, ThrowOnError>): RequestResult<SendEmailBatchResponses, SendEmailBatchErrors, ThrowOnError> => (options.client ?? client).post<SendEmailBatchResponses, SendEmailBatchErrors, ThrowOnError>({
     security: [
         { scheme: 'bearer', type: 'http' },
@@ -1681,6 +1687,9 @@ export const setCampaignArchived = <ThrowOnError extends boolean = false>(option
     }
 });
 
+/**
+ * Send the current draft, personalized with data, to one address as a transactional test. A test is screened as a single message: the screened-text limit described on sendEmail applies.
+ */
 export const testCampaign = <ThrowOnError extends boolean = false>(options: Options<TestCampaignData, ThrowOnError>): RequestResult<TestCampaignResponses, TestCampaignErrors, ThrowOnError> => (options.client ?? client).post<TestCampaignResponses, TestCampaignErrors, ThrowOnError>({
     security: [
         { scheme: 'bearer', type: 'http' },
@@ -1704,7 +1713,7 @@ export const testCampaign = <ThrowOnError extends boolean = false>(options: Opti
 });
 
 /**
- * Accept the current revision for durable background delivery: the audience is frozen now, every message is validated in the background, then recipients are released into the dispatch queue. The 202 count is accepted recipient intents, not SES acceptance or delivery; poll the campaign for its state.
+ * Accept the current revision for durable background delivery: the audience is frozen now, every message is validated in the background, then recipients are released into the dispatch queue. The 202 count is accepted recipient intents, not SES acceptance or delivery; poll the campaign for its state. Hosted campaigns are screened once for all recipients, not once per copy, when sent or scheduled. The campaign’s own copy, with its placeholders unresolved, may hold 49,152 bytes of screened text (installation default; 422 CONTENT_TOO_LARGE_TO_SCREEN with error.details[0] { screenedBytes, limitBytes } otherwise). Each distinct personalization value is then checked and screened once: at most 256 UTF-8 bytes, no markup, control or reordering characters, and links only to hosts the campaign’s own copy links to or to the workspace’s verified sending domains (and their subdomains). A fallback value that breaks a rule is refused here with 422 CAMPAIGN_VALUE_REJECTED; a contact value that does fails the campaign with that code, and a positive verdict fails it with CONTENT_REJECTED_SPAM, before any recipient is sent to. Editing the campaign (unschedule, edit, schedule) screens it again.
  */
 export const sendCampaign = <ThrowOnError extends boolean = false>(options: Options<SendCampaignData, ThrowOnError>): RequestResult<SendCampaignResponses, SendCampaignErrors, ThrowOnError> => (options.client ?? client).post<SendCampaignResponses, SendCampaignErrors, ThrowOnError>({
     security: [
@@ -1729,7 +1738,7 @@ export const sendCampaign = <ThrowOnError extends boolean = false>(options: Opti
 });
 
 /**
- * Accept the current revision for durable scheduled delivery. The audience is frozen and validated now; no recipient is materialized or sent before scheduledAt. The 202 count is accepted recipient intents.
+ * Accept the current revision for durable scheduled delivery. The audience is frozen and validated now; no recipient is materialized or sent before scheduledAt. The 202 count is accepted recipient intents. Hosted campaigns are screened once for all recipients, not once per copy, when sent or scheduled. The campaign’s own copy, with its placeholders unresolved, may hold 49,152 bytes of screened text (installation default; 422 CONTENT_TOO_LARGE_TO_SCREEN with error.details[0] { screenedBytes, limitBytes } otherwise). Each distinct personalization value is then checked and screened once: at most 256 UTF-8 bytes, no markup, control or reordering characters, and links only to hosts the campaign’s own copy links to or to the workspace’s verified sending domains (and their subdomains). A fallback value that breaks a rule is refused here with 422 CAMPAIGN_VALUE_REJECTED; a contact value that does fails the campaign with that code, and a positive verdict fails it with CONTENT_REJECTED_SPAM, before any recipient is sent to. Editing the campaign (unschedule, edit, schedule) screens it again.
  */
 export const scheduleCampaign = <ThrowOnError extends boolean = false>(options: Options<ScheduleCampaignData, ThrowOnError>): RequestResult<ScheduleCampaignResponses, ScheduleCampaignErrors, ThrowOnError> => (options.client ?? client).post<ScheduleCampaignResponses, ScheduleCampaignErrors, ThrowOnError>({
     security: [

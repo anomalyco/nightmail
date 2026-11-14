@@ -429,6 +429,13 @@ export type HtmlStats = { words: number; imageArea: number; images: number; hidd
  * draws them at, words hidden by markup (not displayed, invisible, zero-sized) and words drawn in their background
  * color, and how many more words the image rule (a 200 x 200 picture free, 25 words per further 600 x 300) asks for.
  */
+/** A probation message as it is delivered and screened: every textual field without the bidi controls that reorder it,
+ *  the markup reduced to what a client shows as text, the campaign preheader added back from its own field. */
+export function probationCopy<T extends { subject: string; text?: string; fromName?: string; previewText?: string; html?: string }>(s: T): T {
+  let copy = s;
+  for (const key of ['subject', 'text', 'fromName', 'previewText'] as const) { const value = copy[key]; if (value !== undefined) copy = { ...copy, [key]: screenedText(value) }; }
+  return copy.html ? { ...copy, html: screenedHtml(copy.html, copy.previewText) } : copy;
+}
 export function screenedHtmlStats(html: string) {
   const stats: HtmlStats = { words: 0, imageArea: 0, images: 0, hiddenWords: 0, recoloredWords: 0 };
   pass(html, undefined, stats);

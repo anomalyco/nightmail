@@ -13790,6 +13790,176 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     }));
   });
 
+  // A Hosted probation workspace on live SES (SDK stubbed) with a classifier stub that flags SampleMarker and counts
+  // requests, for the screened-text limit and campaign screen scenarios.
+  async function hostedScreenFixture(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client, acct: string, domain: string) {
+    const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
+    const wid = runtime.config.workspaceId, origin = 'https://screen.synthetic.invalid';
+    Object.assign(runtime.config, { multiTenant: true, hostedScreen: true, liveEnabled: true, aws: { accessKeyId: 'fixture', secretAccessKey: 'fixture' }, screen: { endpoint: origin, apiKey: 'fixture', model: 'fixture', mode: 'reject', threshold: 0.7 } });
+    await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,sending_state,feedback_topic_arn) VALUES($1,$2,'ready',$3)`, [REGION, acct, `arn:aws:sns:${REGION}:${acct}:fixture`]);
+    await db.query(`INSERT INTO provider_connections(id,workspace_id,kind,state,region,aws_account_id,tenant_state) VALUES($1,$1,'shared','ready',$2,$3,'ready')`, [wid, REGION, acct]);
+    await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES($1,$2,$2,'verified')`, [domain, wid]);
+    await db.query('UPDATE workspaces SET send_cap_override=200000 WHERE id=$1', [wid]); await gradedSender(db, wid, 200000);
+    const screened: string[] = [], delivered = new Map<string, { html?: string; text?: string }>();
+    t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
+      assert.equal(String(url), origin); const body = JSON.parse(String(init?.body)).state.email.body as string; screened.push(body);
+      return Response.json({ answers: { spam: { noul: body.toLowerCase().includes('samplemarker') ? 0.99 : 0.01 } } });
+    });
+    t.mock.method(SESv2Client.prototype, 'send', async (cmd: any) => {
+      if (cmd instanceof GetAccountCommand) return { SendingEnabled: true, SendQuota: { MaxSendRate: 10000, Max24HourSend: 1000000, SentLast24Hours: 0 } };
+      const c = cmd.input.Content.Simple; delivered.set(cmd.input.Destination.ToAddresses[0], { html: c.Body.Html?.Data, text: c.Body.Text?.Data }); return { MessageId: randomUUID() };
+    });
+    return { wid, screened, delivered };
+  }
+  test('hosted screen counts a sentence both parts say once, and refuses over-limit mail at submission with its size', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local }) => t.test('classifier', async t => {
+      const { measureScreen, screenSnapshot } = await import('./src/screen.js');
+      const { wid, screened } = await hostedScreenFixture(t, runtime, db, '112223330011', 'sized.invalid');
+      // A text part generated from the HTML says nothing new: whatever its punctuation or spacing, it counts once.
+      const html = '<h1>Your order shipped</h1><p>Thanks for shopping with us. It arrives on Tuesday.</p>';
+      const same = await measureScreen({ html, text: 'Your order shipped\n\nThanks for shopping with us.  It arrives on Tuesday!' });
+      assert.equal(same.content, 'Your order shipped Thanks for shopping with us. It arrives on Tuesday.');
+      // A text part that says something else is still read, in order and with its repetitions, and its overlap is a signal.
+      const differs = await measureScreen({ html, text: 'Your order shipped. Claim your prize at SampleMarker. Claim your prize at SampleMarker.' });
+      assert.equal(differs.content, `${same.content}\nClaim your prize at SampleMarker. Claim your prize at SampleMarker.`);
+      assert.ok(differs.textHtmlOverlap! < same.textHtmlOverlap!);
+      // 13 KB of copy in both parts used to count 26 KB, over the 24 KiB limit: now one copy, two requests.
+      const copy = Array.from({ length: 130 }, (_, i) => `Paragraph ${i}: your order ships within two business days and you can track it from your account page.`);
+      const receipt = { from: 'a@sized.invalid', subject: 'Receipt', to: ['b@example.invalid'], cc: [], bcc: [], kind: 'transactional' as const, attachments: [], region: REGION, headers: [], replyTo: [], tracking: false, html: copy.map(p => `<p>${p}</p>`).join(''), text: copy.join('\n\n') };
+      const measured = await measureScreen(receipt);
+      assert.ok(measured.screenedBytes > 12_288 && measured.screenedBytes < 24_576 && Buffer.byteLength(receipt.text) > 12_288, `${measured.screenedBytes}`);
+      assert.equal((await screenSnapshot(runtime, receipt, true))?.spam, 0.01); assert.equal(screened.length, 2);
+      assert.equal((await screenSnapshot(runtime, { ...receipt, subject: 'Receipt 2', text: `${receipt.text}\n\nClaim your prize at SampleMarker.` }, true))?.spam, 0.99, 'A differing text part is screened.');
+
+      // Submission measures what the screen will read and refuses an over-limit message at once, with the numbers.
+      const key = ok(await local('POST', '/v1/api-keys', { name: 'sized', permissions: ['send', 'read'] }), 201).secret;
+      const bearer = { authorization: `Bearer ${key}` }, send = (body: Json, path = '/v1/emails/send', headers: Record<string, string> = bearer) => local('POST', path, body, 'live', headers);
+      const long = Array.from({ length: 260 }, (_, i) => `<p>Line ${i}: your order ships within two business days and you can track it from your account page.</p>`).join('');
+      const over = { from: 'a@sized.invalid', to: 'r@example.invalid', subject: 'Too long', html: long }, size = (await measureScreen({ html: long })).screenedBytes;
+      assert.ok(size > 24_576);
+      const rows = async () => Number((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE workspace_id=$1', [wid])).rows[0].n), before = await rows();
+      for (const headers of [bearer, {}]) { // The fused key admission and the dashboard's.
+        const refused = error(await send(over, '/v1/emails/send', headers), 422, 'CONTENT_TOO_LARGE_TO_SCREEN');
+        assert.deepEqual(refused.details, [{ screenedBytes: size, limitBytes: 24_576 }]); assert.match(refused.message, /24,576 per message/);
+      }
+      const batch = error(await send({ emails: [{ ...over, subject: 'Fits', html: '<p>Fits.</p>' }, over] }, '/v1/emails/batch'), 422, 'CONTENT_TOO_LARGE_TO_SCREEN');
+      assert.deepEqual([batch.field, batch.details], ['emails.1', [{ screenedBytes: size, limitBytes: 24_576, index: 1 }]]);
+      const hosts = Array.from({ length: 61 }, (_, i) => `<a href="https://ref${i}.invalid/">Reference ${i}</a>`).join(' ');
+      assert.deepEqual(error(await send({ ...over, html: hosts }), 422, 'CONTENT_TOO_LARGE_TO_SCREEN').details, [{ linkHosts: 61, linkHostLimit: 60 }]);
+      assert.equal(await rows(), before, 'Nothing of a refused request is queued.');
+      ok(await send({ ...over, subject: 'Both parts', html: receipt.html, text: receipt.text }), 202);
+      // Mail the screen never reads (bring-your-own AWS without screen: true) has no screened-text limit; with it, it does.
+      await db.query(`UPDATE provider_connections SET kind='byo',aws_account_id='112223330012',role_arn='fixture-role',external_id=gen_random_uuid(),template_version='v1',platform_principal_arn='fixture-platform',feedback_topic_arn=$2 WHERE id=$1`, [wid, `arn:aws:sns:${REGION}:112223330012:fixture`]);
+      for (const headers of [bearer, {}]) ok(await send(over, '/v1/emails/send', headers), 202);
+      assert.equal(error(await send({ ...over, screen: true }), 422, 'CONTENT_TOO_LARGE_TO_SCREEN').details[0].limitBytes, 24_576);
+    }));
+  });
+  test('hosted campaigns are screened once: one request whatever the audience, values checked and screened, recipients checked locally, edits screened again', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local, run, jobs }) => t.test('classifier', async t => {
+      const { runDispatcher, initialGate } = await import('./src/dispatcher.js'), { measureScreen } = await import('./src/screen.js');
+      const acct = '112223330013', { wid, screened, delivered } = await hostedScreenFixture(t, runtime, db, acct, 'held.invalid');
+      const campaign = async (name: string, html: string, contacts: Record<string, unknown>[], extra: Json = {}) => {
+        const list = ok(await local('POST', '/v1/lists', { name }), 201), tag = unique('c');
+        await db.query(`WITH a AS (INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent,properties) SELECT $3||'-'||o,$1,$3||'-'||o||'@example.net','subscribed',p
+          FROM jsonb_array_elements($4::jsonb) WITH ORDINALITY x(p,o) RETURNING id) INSERT INTO audience_list_members(workspace_id,list_id,contact_id) SELECT $1,$2,id FROM a`, [wid, list.id, tag, JSON.stringify(contacts)]);
+        return ok(await local('POST', '/v1/campaigns', { name, from: 'news@held.invalid', subject: 'News for {{first_name}}', html, defaults: { first_name: 'there' }, audience: { listId: list.id }, ...extra }), 201);
+      };
+      const view = async (c: Json) => ok(await local('GET', `/v1/campaigns/${c.id}`));
+      const settle = async (c: Json) => { // Run the campaign's job until it has released everyone or stopped.
+        for (let i = 0; i < 30; i++) {
+          const v = await view(c);
+          if (['failed', 'done', 'canceled', 'scheduled'].includes(v.state) || (v.state === 'sending' && v.delivery.expanded === v.delivery.total)) return v;
+          if ((await jobs('campaign.run')).some(j => j.status === 'pending')) await run('campaign.run');
+        }
+        return view(c);
+      };
+      const dispatch = () => runDispatcher(runtime, { region: REGION, accountId: acct, batchSize: 100, lanes: 1, gate: initialGate() });
+      const outcome = async (c: Json) => Object.fromEntries((await db.query('SELECT to_addresses->>0 AS email,coalesce(error_code,status) AS outcome FROM sending_emails WHERE campaign_id=$1', [c.id])).rows.map(r => [r.email, r.outcome]));
+      const screenTotals = async () => (await db.query('SELECT coalesce(sum(screened),0)::int AS screened,coalesce(sum(rejected),0)::int AS rejected FROM hosted_screen_hourly WHERE workspace_id=$1', [wid])).rows[0];
+      const body = '<h1>Hello {{first_name}}</h1><p>Our spring update: the new release ships next week with faster sync and better search.</p><p><a href="https://held.invalid/notes">Read the notes</a></p>';
+
+      // One request per campaign whatever the audience: its copy and every distinct value in one packed request, and
+      // none per recipient; each recipient still counts as screened.
+      for (const n of [3, 80]) {
+        const c = await campaign(`Audience ${n}`, body, Array.from({ length: n }, (_, i) => ({ first_name: ['Ana', 'Ben', 'Chloé', 'Dev', 'Eun'][i % 5] })));
+        const start = screened.length, totals = await screenTotals();
+        ok(await local('POST', `/v1/campaigns/${c.id}/send`, { revision: c.revision }), 202);
+        assert.equal((await settle(c)).delivery.expanded, n);
+        assert.equal(screened.length - start, 1, `${n} recipients: one classifier request`);
+        assert.ok(screened.at(-1)!.includes('Hello {{first_name}}') && screened.at(-1)!.includes('Chloé') && screened.at(-1)!.includes('held.invalid'));
+        assert.equal((await dispatch()).sent, n); assert.equal(screened.length - start, 1, 'Dispatch asks the classifier nothing.');
+        assert.deepEqual(await screenTotals(), { screened: totals.screened + n, rejected: totals.rejected });
+      }
+
+      // A campaign may hold 48 KiB of screened text (screened once); a single message, a campaign test included, 24 KiB.
+      const paragraphs = (n: number) => Array.from({ length: n }, (_, i) => `<p>Section ${i}: what changed this month in sync, search and sharing, and how to try it from your dashboard.</p>`).join('');
+      const long = await campaign('Long digest', paragraphs(300), [{ first_name: 'Ana' }, { first_name: 'Ben' }]);
+      const longBytes = (await measureScreen({ html: paragraphs(300) })).screenedBytes;
+      assert.ok(longBytes > 24_576 && longBytes < 49_152, `${longBytes}`);
+      const test = error(await local('POST', `/v1/campaigns/${long.id}/test`, { to: 'me@example.net', data: {} }), 422, 'CONTENT_TOO_LARGE_TO_SCREEN');
+      assert.equal(test.details[0].limitBytes, 24_576);
+      let start = screened.length;
+      ok(await local('POST', `/v1/campaigns/${long.id}/send`, { revision: long.revision }), 202); await settle(long);
+      assert.ok(screened.length - start >= 4 && screened.length - start <= 8, `${screened.length - start} requests`);
+      assert.equal((await dispatch()).sent, 2); assert.ok(delivered.get(`${(await db.query('SELECT to_addresses->>0 AS e FROM sending_emails WHERE campaign_id=$1 LIMIT 1', [long.id])).rows[0].e}`)?.html?.includes('Section 299'));
+      const tooLong = await campaign('Too long', paragraphs(600), [{ first_name: 'Ana' }]);
+      for (const how of ['send', 'schedule']) {
+        const refused = error(await local('POST', `/v1/campaigns/${tooLong.id}/${how}`, { revision: tooLong.revision, ...(how === 'schedule' ? { scheduledAt: new Date(Date.now() + 3_600_000).toISOString() } : {}) }), 422, 'CONTENT_TOO_LARGE_TO_SCREEN');
+        assert.equal(refused.details[0].limitBytes, 49_152); assert.ok(refused.details[0].screenedBytes > 49_152); assert.match(refused.message, /per campaign/);
+      }
+      assert.equal((await view(tooLong)).state, 'draft');
+
+      // Personalization values can't smuggle copy past the screen. Values that break a rule fail the campaign before any
+      // request or send; a value that reads as an ad is screened with the rest and fails it; a value linking to a
+      // verified domain is fine.
+      const named = '<h1>Hello {{first_name}}</h1><p>Your account is ready.</p>';
+      for (const [value, rule] of [['Ana https://evil.invalid/offer', /links to/], ['x'.repeat(257), /257 bytes/], ['<b>Ana</b>', /HTML/], ['\u202EanA', /reorder/], ['Ana\u0007', /control/]] as const) {
+        const c = await campaign('Smuggled', named, [{ first_name: 'Ben' }, { first_name: value }]); start = screened.length;
+        ok(await local('POST', `/v1/campaigns/${c.id}/send`, { revision: c.revision }), 202);
+        const failed = await settle(c);
+        assert.deepEqual([failed.state, failed.delivery.error.code, failed.delivery.expanded], ['failed', 'CAMPAIGN_VALUE_REJECTED', 0], JSON.stringify(value));
+        assert.match(failed.delivery.error.message, rule); assert.match(failed.delivery.error.message, /\{\{first_name\}\}/); assert.ok(!failed.delivery.error.message.includes(value));
+        assert.equal(screened.length, start, 'Refused before the classifier.');
+      }
+      const fallback = await campaign('Fallback', named, [{ first_name: 'Ana' }], { defaults: { first_name: 'see https://evil.invalid' } });
+      assert.equal(error(await local('POST', `/v1/campaigns/${fallback.id}/send`, { revision: fallback.revision }), 422, 'CAMPAIGN_VALUE_REJECTED').field, 'defaults.first_name');
+      const ad = await campaign('Ad', named, [...Array.from({ length: 4 }, () => ({ first_name: 'Ana' })), { first_name: 'Win big at SampleMarker' }, { first_name: 'Ben' }]);
+      let totals = await screenTotals(); start = screened.length;
+      ok(await local('POST', `/v1/campaigns/${ad.id}/send`, { revision: ad.revision }), 202);
+      const rejected = await settle(ad);
+      assert.deepEqual([rejected.state, rejected.delivery.error.code, rejected.delivery.expanded], ['failed', 'CONTENT_REJECTED_SPAM', 0]);
+      assert.equal(screened.length - start, 1); assert.ok(screened.at(-1)!.includes('Win big at SampleMarker'));
+      assert.deepEqual(await screenTotals(), { screened: totals.screened + 6, rejected: totals.rejected + 6 }, 'Every real recipient counts as a screen rejection, as screening each copy would.');
+      const linked = await campaign('Linked', '<h1>Hello {{first_name}}</h1><p><a href="{{profile}}">Your profile</a></p>', [{ first_name: 'Ana', profile: 'https://www.held.invalid/u/1' }, { first_name: 'Ben', profile: 'https://held.invalid/u/2' }], { defaults: { first_name: 'there', profile: 'https://held.invalid/u' } });
+      ok(await local('POST', `/v1/campaigns/${linked.id}/send`, { revision: linked.revision }), 202);
+      assert.equal((await settle(linked)).state, 'sending'); assert.equal((await dispatch()).sent, 2);
+      // Per recipient, locally: a value that makes a link label name another host than its link fails only that copy.
+      const labelled = await campaign('Labelled', '<h1>Hello</h1><p><a href="https://held.invalid/account">{{label}}</a></p>', [{ label: 'Your account' }, { label: 'evil.invalid' }], { subject: 'Account', defaults: { label: 'Account' } });
+      start = screened.length; ok(await local('POST', `/v1/campaigns/${labelled.id}/send`, { revision: labelled.revision }), 202); await settle(labelled);
+      assert.equal((await dispatch()).sent, 1); assert.equal(screened.length - start, 1);
+      assert.deepEqual(Object.values(await outcome(labelled)).sort(), ['CAMPAIGN_CONTENT_UNSCREENED', 'accepted']);
+
+      // Edits are screened again: the verdict belongs to the immutable review and its content hash. Rescheduling keeps it;
+      // unscheduling, editing and scheduling again screens the new copy.
+      const at = () => new Date(Date.now() + 3_600_000).toISOString(), reviews = async (c: Json) => (await db.query('SELECT id,content_hash,screen FROM sending_campaign_reviews WHERE campaign_id=$1 ORDER BY created_at', [c.id])).rows;
+      let edited = await campaign('Edited', named, [{ first_name: 'Ana' }, { first_name: 'Ben' }]); start = screened.length;
+      ok(await local('POST', `/v1/campaigns/${edited.id}/schedule`, { revision: edited.revision, scheduledAt: at() }), 202);
+      assert.equal((await settle(edited)).state, 'scheduled'); assert.equal(screened.length - start, 1);
+      ok(await local('POST', `/v1/campaigns/${edited.id}/reschedule`, { scheduledAt: at() })); await settle(edited); assert.equal(screened.length - start, 1);
+      edited = ok(await local('POST', `/v1/campaigns/${edited.id}/unschedule`, {}));
+      edited = ok(await local('PATCH', `/v1/campaigns/${edited.id}`, { revision: edited.revision, draft: { ...edited.draft, html: '<h1>Hello {{first_name}}</h1><p>Updated: see SampleMarker deals.</p>' } }));
+      ok(await local('POST', `/v1/campaigns/${edited.id}/schedule`, { revision: edited.revision, scheduledAt: at() }), 202);
+      const respun = await settle(edited);
+      assert.deepEqual([respun.state, respun.delivery.error.code, screened.length - start], ['failed', 'CONTENT_REJECTED_SPAM', 2]);
+      const [first, second] = await reviews(edited);
+      assert.deepEqual([first.screen.contentHash, second.screen.contentHash, first.screen.spam, second.screen.spam], [first.content_hash, second.content_hash, 0.01, 0.99]);
+      // A verdict that doesn't match its review is not used: each recipient is screened on its own, as before.
+      const bound = await campaign('Bound', named, [{ first_name: 'Ana' }, { first_name: 'Ben' }, { first_name: 'Dev' }]);
+      ok(await local('POST', `/v1/campaigns/${bound.id}/send`, { revision: bound.revision }), 202); await settle(bound);
+      await db.query(`UPDATE sending_campaign_reviews SET screen=jsonb_set(screen,'{contentHash}','"other"') WHERE campaign_id=$1`, [bound.id]);
+      start = screened.length; assert.equal((await dispatch()).sent, 3); assert.equal(screened.length - start, 3);
+    }));
+  });
   test('Sent-copy archiving and reputation alerts retry a transient failure instead of failing for good', async t => {
     await simulatedSesFixture(t, async ({ runtime }) => {
       const { mailboxIngestJobs } = await import('./src/mailbox-ingest.js'), { reputationAlertJobs } = await import('./src/reputation-alerts.js');
@@ -19794,6 +19964,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal(loadConfig({ ...base, BANE_REGIONAL_SENDING: 'true' }).platformAccount, undefined, 'Single-tenant installs need no platform account.');
       assert.deepEqual(loadConfig({ ...base, TYPESAFE_API_KEY: 'synthetic-typesafe-key' }).screen, { apiKey: 'synthetic-typesafe-key', endpoint: 'https://api.typesafe.ai/v1/systemone', model: 'jev-latest', mode: 'reject', threshold: 0.7 });
       assert.equal(loadConfig({ ...base, TYPESAFE_API_KEY: 'synthetic-console-key', JEV_ENDPOINT: 'https://opencode.ai/inference/systemone/v1/systemone', JEV_MODEL: 'jev-1.13-free' }).screen?.endpoint, 'https://opencode.ai/inference/systemone/v1/systemone');
+      // Screened-text limits: 24 KiB per message, 48 KiB per campaign (screened once), both configurable.
+      assert.deepEqual(loadConfig(base).screenLimits, { messageBytes: 24576, campaignBytes: 49152 });
+      assert.deepEqual(loadConfig({ ...base, JEV_MESSAGE_LIMIT_BYTES: '16384', JEV_CAMPAIGN_LIMIT_BYTES: '65536' }).screenLimits, { messageBytes: 16384, campaignBytes: 65536 });
       // Synthetic live provider: the SDK prototype is intercepted, so no credential or AWS endpoint is used.
       runtime.config.liveEnabled = true;
       runtime.config.aws = { accessKeyId: 'SYNTHETIC_ACCESS_KEY', secretAccessKey: 'synthetic-secret-not-an-aws-credential' };
