@@ -3,7 +3,8 @@ config:
   bane:nightmailCloud: "true"
   bane:deployRoleArn: arn:aws:iam::905840579680:role/nightmail-deploy
   bane:nightmailGateway: "true"
-  bane:nightmailGatewayDesired: "0"
+  bane:nightmailGatewayDesired: "1"
+  bane:nightmailGatewayImage: 905840579680.dkr.ecr.us-east-2.amazonaws.com/nightmail-mail-gateway@sha256:7ccd26898c38a0eb5b45c451a4535d24d9f8a6df7a32ca078e55ad963a42b919
   bane:permissionsBoundary: arn:aws:iam::905840579680:policy/bane-runtime-boundary
   bane:writeWorkerSecrets: "true"
   bane:mailGatewayEnabled: "true"

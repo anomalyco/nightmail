@@ -1327,6 +1327,24 @@ function registerPublicEvents(app: App) {
     // Region settings may come from a 30 s cache: a topic or account provisioned since then is re-checked fresh.
     let stack: Awaited<ReturnType<typeof import('./provider-connections.js').byoStackTopic>>;
     let binding:TopicBinding|undefined;
+    if (c.env.config.multiTenant && envelope.Type==='SubscriptionConfirmation' && c.env.config.platformAccount) {
+      const account=c.env.config.platformAccount, region=trusted.region;
+      const names=region==='us-east-2'?['nightmail-inbound','nightmail-feedback']:region==='us-east-1'?['nightmail-trusted-feedback']:[];
+      if(names.some(n=>envelope.TopicArn===`arn:aws:sns:${region}:${account}:${n}`)) {
+        const url=trustedSnsUrl(envelope.SubscribeURL!,trusted.host,false);
+        if(url.searchParams.get('Action')!=='ConfirmSubscription'||url.searchParams.get('TopicArn')!==envelope.TopicArn||url.searchParams.get('Token')!==envelope.Token||url.searchParams.size!==3) throw new ApiError(403,'SNS_UNTRUSTED_URL','SNS confirmation fields differ.');
+        const matched=await c.env.db.transaction(async tx=>{
+          const fence=sql`topic_arn=${envelope.TopicArn} AND account_id=${account} AND region=${region} AND endpoint=${feedbackUrl(c.env.config)} AND expires_at>now()`;
+          const row=(await tx.execute<{confirmation_id:string|null}>(sql`SELECT confirmation_id FROM hosted_topic_cutover WHERE ${fence} FOR UPDATE`)).rows[0];
+          if(!row)return false;
+          if(row.confirmation_id===envelope.MessageId)return true;
+          const result=await fetch(url,{redirect:'manual',signal:AbortSignal.timeout(8000)});await result.body?.cancel();
+          if(!result.ok)throw new ApiError(503,'SNS_CONFIRMATION_FAILED','SNS did not confirm the prepared subscription.',undefined,true);
+          await tx.execute(sql`UPDATE hosted_topic_cutover SET confirmed_at=clock_timestamp(),confirmation_id=${envelope.MessageId} WHERE ${fence}`);return true;
+        });
+        if(matched)return c.json({accepted:true},202);
+      }
+    }
     if (c.env.config.multiTenant) {
       if (envelope.Type==='SubscriptionConfirmation') stack=await (await wrapModuleLoad(() => import('./provider-connections.js'))).byoStackTopic(c.env,envelope.TopicArn);
       binding=stack ? undefined : await sendingTopic(c.env,envelope.TopicArn,envelope.Type==='SubscriptionConfirmation');
