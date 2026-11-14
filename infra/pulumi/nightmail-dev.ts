@@ -1,11 +1,11 @@
 import * as aws from '@pulumi/aws';
 import * as pulumi from '@pulumi/pulumi';
-import {bucketPolicy, deliveryPolicy, feedbackPolicy, inboundPolicy, lifecycleRules, receiptRule} from '../../api/src/mail-controls.js';
+import {bucketPolicy, deliveryPolicy, feedbackPolicy, FEEDBACK_EVENTS, inboundPolicy, lifecycleRules, receiptRule} from '../../api/src/mail-controls.js';
 import {deadLetterAlarm} from './receiving-alarm.js';
 
 /** Prepare a second, private mail path. Nothing here publishes events, creates a live
  * subscription, sets the active receipt set, changes an identity or issues an access key. */
-export function prepareDevMail(ohio:aws.Provider,va:aws.Provider,account:string,boundary:string,policies:Record<string,unknown>) {
+export function prepareDevMail(ohio:aws.Provider,va:aws.Provider,account:string,boundary:string,policies:Record<string,unknown>,active:boolean) {
   if (pulumi.getStack()!=='dev'||account!=='905840579680'||boundary!==`arn:aws:iam::${account}:policy/bane-runtime-boundary`) throw Error('Expected the bounded dev stage');
   const keep={provider:ohio,protect:true};
   const tag=(purpose:string)=>({'nightmail:installation-id':'nightmail:pool','nightmail:owner':'nightmail','nightmail:purpose':purpose});
@@ -38,8 +38,11 @@ export function prepareDevMail(ohio:aws.Provider,va:aws.Provider,account:string,
     const opts={provider,protect:true};const pager=new aws.sns.Topic(`nightmail-alerts-${region}`,{name:'nightmail-alerts',tags:tag('alerts')},opts);
     for(const name of region==='us-east-2'?['nightmail-inbound','nightmail-feedback']:['nightmail-trusted-feedback']) {
       const arn=`arn:aws:sns:${region}:${account}:${name}`, inbound=name==='nightmail-inbound';
+      const prefix=region==='us-east-1'?'nightmail-trusted':'nightmail';
+      const sets=['transactional','marketing'].map(stream=>`${prefix}-${stream}`);
       const topic=new aws.sns.Topic(name,{name,tags:tag(inbound?'mailbox-inbound':'ses-feedback'),deliveryPolicy:JSON.stringify(deliveryPolicy),
-        policy:JSON.stringify(inbound?inboundPolicy(arn,region,account,'nightmail-inbound-'):feedbackPolicy(account,{topic:arn,sets:[]},false))},opts);
+        policy:JSON.stringify(inbound?inboundPolicy(arn,region,account,'nightmail-inbound-'):feedbackPolicy(account,{topic:arn,sets:sets.map(set=>`arn:aws:ses:${region}:${account}:configuration-set/${set}`)},active))},opts);
+      if(active&&!inbound) for(const set of sets) new aws.sesv2.ConfigurationSetEventDestination(`${set}-events`,{configurationSetName:set,eventDestinationName:`${prefix}-events`,eventDestination:{enabled:true,matchingEventTypes:[...FEEDBACK_EVENTS],snsDestination:{topicArn:topic.arn}}},opts);
       topics.set(name,topic);
       const dlqName=name+'-dead-letters';
       const queue=new aws.sqs.Queue(dlqName,{name:dlqName,sqsManagedSseEnabled:true,messageRetentionSeconds:86400*(inbound?3:14),tags:tag('dead-letters')},opts);
@@ -52,4 +55,5 @@ export function prepareDevMail(ohio:aws.Provider,va:aws.Provider,account:string,
   const rule=receiptRule('nightmail-inbound-all',[],{bucket:bucketName,topicArn:`arn:aws:sns:us-east-2:${account}:nightmail-inbound`});
   new aws.ses.ReceiptRule('nightmail-inbound-all',{ruleSetName:set.ruleSetName,name:rule.Name,enabled:rule.Enabled,scanEnabled:rule.ScanEnabled,tlsPolicy:rule.TlsPolicy,
     s3Actions:[{position:1,bucketName:bucket.bucket,objectKeyPrefix:rule.Actions[0].S3Action.ObjectKeyPrefix,topicArn:inbound.arn}]},{...keep,dependsOn:[policy]});
+  return active ? new aws.iam.AccessKey('nightmail-runtime-key',{user:user.name},{provider:va,protect:true}) : undefined;
 }

@@ -10,7 +10,7 @@ import type { Config, Runtime } from './core.js';
 import { claimNameAllowed, domainName } from './domain-claims.js';
 import type { IdentityFacts } from './states.js';
 import { FEEDBACK_EVENTS, feedbackPolicy, poolEventDestination, poolSuppression } from './mail-controls.js';
-import { hasTags, ownerTag, tagKey } from './resource-tags.js';
+import { hasTags, ownerTag, tagKey, TAG_PREFIX } from './resource-tags.js';
 
 type SetupSdk = {
   sesv2: typeof import('@aws-sdk/client-sesv2');
@@ -80,7 +80,7 @@ function validationInput(sdk: SetupSdk, name: string, mode: Exclude<AutoValidati
   return new sdk.sesv2.PutConfigurationSetSuppressionOptionsCommand({ ConfigurationSetName: name, SuppressionScope: pooled ? 'TENANT' : 'ACCOUNT', SuppressedReasons: ['BOUNCE', 'COMPLAINT'], ValidationOptions: { ConditionThreshold: mode === 'off' ? { ConditionThresholdEnabled: 'DISABLED' } : { ConditionThresholdEnabled: 'ENABLED', OverallConfidenceThreshold: { ConfidenceVerdictThreshold: mode.toUpperCase() as 'MANAGED' | 'MEDIUM' | 'HIGH' } } } });
 }
 
-export const POOL_INSTALLATION = 'bane:pool';
+export const POOL_INSTALLATION = `${TAG_PREFIX}:pool`;
 export const mxOwnerTag = ownerTag;
 export function mxResourceName(suffix:string) {
   if (!/^[a-zA-Z0-9_-]+$/.test(suffix)) throw new Error('Invalid MX resource suffix');
@@ -90,7 +90,7 @@ export function mxResourceName(suffix:string) {
 export const claimTenantName = (connection:{pool_tenant_name?:string|null},wid:string) => connection.pool_tenant_name ?? mxResourceName(wid);
 export function poolTenantName(wid:string,tier:'trusted'|'probation') {
   if (!/^ws_[0-9a-f]{32}$/.test(wid)) throw new ApiError(409,'INVALID_TENANT_NAME','Expected an exact Hosted workspace ID.');
-  return mxResourceName(`${tier}-${wid}`);
+  return `${TAG_PREFIX}-${tier}-${wid}`;
 }
 /** A BYO connection's CloudFormation stack and IAM role: Bane-<id> from before the rename, Nightmail-<id> after
  * (provider_connections.stack_name, set when the connection is made). */
@@ -98,7 +98,7 @@ export const byoStackName = (prefix: 'Bane' | 'Nightmail' | undefined, connectio
 export function setupResources(installationId: string, namespace?:MxNamespace): { transactional: string; marketing: string; topicName: string; eventDestinationName: string } {
   if (!installationId) throw new ApiError(503, 'INSTALLATION_ID_REQUIRED', 'The persisted installation ID is missing.');
   const hash=createHash('sha256').update(installationId).digest('hex').slice(0,20);
-  const prefix = namespace ? mxResourceName(namespace==='byo'?hash:namespace) : installationId === POOL_INSTALLATION ? 'bane' : `bane-${hash}`;
+  const prefix = installationId === POOL_INSTALLATION && namespace !== 'byo' ? (namespace ? `${TAG_PREFIX}-${namespace}` : TAG_PREFIX) : namespace ? mxResourceName(namespace==='byo'?hash:namespace) : `bane-${hash}`;
   return { transactional: `${prefix}-transactional`, marketing: `${prefix}-marketing`, topicName: `${prefix}-feedback`, eventDestinationName: `${prefix}-events` };
 }
 
@@ -242,7 +242,7 @@ function assertPoolSet(set: PoolSet, destinations: PoolDestination[] | undefined
   const want = poolSuppression(stream), have = set.SuppressionOptions;
   if (!owned(set.Tags, options) || set.SendingOptions?.SendingEnabled !== true || have?.SuppressionScope !== want.SuppressionScope
     || canonical(have.SuppressedReasons ?? []) !== canonical(want.SuppressedReasons) || autoValidationMode(have) !== DEFAULT_AUTO_VALIDATION[stream]) throw poolSendingDrift(`${arn} SuppressionOptions`);
-  const expected = poolEventDestination(options.namespace === 'trusted' ? 'bane-trusted' : 'bane', topicArn), list = destinations ?? [];
+  const expected = poolEventDestination(options.namespace === 'trusted' ? `${TAG_PREFIX}-trusted` : TAG_PREFIX, topicArn), list = destinations ?? [];
   // Any other destination (a disabled, redirected or extra copy) is drift for the pool, not a warning.
   const wired = (d: PoolDestination) => d.Name === expected.Name && d.Enabled === true && d.SnsDestination?.TopicArn === topicArn && canonical(d.MatchingEventTypes ?? []) === canonical(expected.MatchingEventTypes)
     && !d.CloudWatchDestination && !d.KinesisFirehoseDestination && !d.EventBridgeDestination && !d.PinpointDestination;

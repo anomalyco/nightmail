@@ -1,4 +1,5 @@
 config:
+  bane:nightmailMailActive: "true"
   bane:prepareNightmailMail: "true"
   bane:nightmailCloud: "true"
   bane:deployRoleArn: arn:aws:iam::905840579680:role/nightmail-deploy
@@ -9,7 +10,7 @@ config:
   bane:writeWorkerSecrets: "true"
   bane:mailGatewayEnabled: "true"
   bane:mailGatewayImage: 905840579680.dkr.ecr.us-east-2.amazonaws.com/bane-mail-gateway@sha256:7ccd26898c38a0eb5b45c451a4535d24d9f8a6df7a32ca078e55ad963a42b919
-  bane:mailGatewayDesired: "1"
+  bane:mailGatewayDesired: "0"
   bane:mailControlImports:
     - "bane-905840579680-mail-us-east-2"
     - "bane-inbound:bane-inbound-all"

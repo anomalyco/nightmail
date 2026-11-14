@@ -1,8 +1,8 @@
-// The AWS resource tags this service writes and checks. The keys (and the owner tag's value) stay bane:* for now: the
-// IAM policies that gate tagging (infra/aws-shared runtime policies and the BYO CloudFormation templates) allow only
-// those. Switch TAG_PREFIX together with those policies at the infra cutover. Checks already accept nightmail:* too, so
-// a resource tagged either way stays ours. bane: remove after rename cleanup.
-export const TAG_PREFIX = 'bane' as const;
+// Wrangler define is selected independently for each hosted Worker bundle. Node,
+// self-hosted installations, and stages not yet switched retain the original names.
+declare const NIGHTMAIL_AWS_NAMES: boolean;
+export const TAG_PREFIX = typeof NIGHTMAIL_AWS_NAMES !== 'undefined' && NIGHTMAIL_AWS_NAMES ? 'nightmail' : 'bane';
+export const mailKindTag = (bucket:string) => /^nightmail-\d{12}-mail-us-east-2$/.test(bucket) ? 'nightmail-kind' : 'bane-kind';
 type Tag = { Key?: string; Value?: string };
 export const tagKey = (name: 'owner' | 'installation-id' | 'purpose' | 'domain-claim') => `${TAG_PREFIX}:${name}`;
 export const ownerTag = { Key: tagKey('owner'), Value: TAG_PREFIX };
