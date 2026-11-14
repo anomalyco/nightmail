@@ -186,7 +186,7 @@ const user = new aws.iam.User(runtime, {
 }, adopt(runtime, iam));
 
 const policies = render("--fresh", { account: stage.account, origin: stage.origin });
-if (!production && config.getBoolean('prepareNightmailMail')) prepareDevMail(ohio,iam,stage.account,config.require('permissionsBoundary'),policies);
+const renamedKey = !production && config.getBoolean('prepareNightmailMail') ? prepareDevMail(ohio,iam,stage.account,config.require('permissionsBoundary'),policies,config.getBoolean('nightmailMailActive')===true) : undefined;
 const attachments = Object.entries(policies).map(([name, document]) => {
   const arn = `arn:aws:iam::${stage.account}:policy/${name}`;
   const policy = new aws.iam.Policy(name, { name, path: "/", policy: JSON.stringify(document) }, {...adopt(arn, iam),dependsOn:[route,...feedback,...destinations]});
@@ -220,7 +220,7 @@ if (writeWorkerSecrets) {
     // rotate the IAM key, delete the old binding or move the SES receipt set here.
     new cfV5.WorkersSecret('nightmail-dev-runtime-credentials', {
       accountId: cloudflareAccountId, scriptName: 'nightmail-dev', name: 'AWS_RUNTIME_CREDENTIALS',
-      secretText: pulumi.secret(pulumi.jsonStringify({ accessKeyId: key.id, secretAccessKey: key.secret })),
+      secretText: pulumi.secret(pulumi.jsonStringify({ accessKeyId: (renamedKey??key).id, secretAccessKey: (renamedKey??key).secret })),
     }, { provider, retainOnDelete: true });
   }
 }

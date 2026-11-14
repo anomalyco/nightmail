@@ -1,4 +1,5 @@
 import type { S3Client } from '@aws-sdk/client-s3';
+import {mailKindTag} from './resource-tags.js';
 import { ApiError, lazyModule, type Runtime, type Storage } from './core.js';
 import type { IngestInput } from './mailbox-ingest-input.js';
 import { assertMailboxKey, mailboxS3, receivedAttachmentKey, sentAttachmentKey, workspacePrefix } from './mailbox-setup.js';
@@ -83,7 +84,7 @@ export function s3MailObjects(wid: string, client: S3Client, bucket: string): Ma
     async put(key, body, contentType) {
       const s3 = await loadS3();
       await client.send(new s3.PutObjectCommand({ ...loc(key), Body: body instanceof Uint8Array ? body : body.stream, ContentLength: body.length, ContentType: contentType,
-        ...(key.startsWith(`${workspacePrefix(wid,'raw')}kept/`)?{Tagging:'bane-kind=kept'}:{}) }));
+        ...(key.startsWith(`${workspacePrefix(wid,'raw')}kept/`)?{Tagging:`${mailKindTag(bucket)}=kept`}:{}) }));
     },
     async get(key, range) {
       const s3 = await loadS3();

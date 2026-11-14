@@ -51,7 +51,7 @@ async function awsConfig(region:string, credentials:NonNullable<Runtime['config'
   return { sdk, config: { region, credentials, ignoreConfiguredEndpointUrls: true, maxAttempts: 2, requestHandler: new sdk.FetchHttpHandler({ requestTimeout: 15000 }) } };
 }
 import {storageBinding} from './mailbox-ingest-input.js';
-import { hasTags, tagKey } from './resource-tags.js';
+import { hasTags, tagKey, TAG_PREFIX } from './resource-tags.js';
 export {storageBinding};
 export async function mailboxS3(runtime: Runtime, wid:string, region: string, bucket:string, db:DbExecutor=runtime.db, resolved?:ReadyConnection|null) {
   let credentials=platformCredentials(runtime);
@@ -212,7 +212,9 @@ async function verifyPoolRegion(runtime:Runtime,region:string,account:string,sig
   const lifecycle=await poolRead(`${bucket} LifecycleConfiguration`,()=>s3.send(new sdk.s3.GetBucketLifecycleConfigurationCommand(b),opts));
   // S3/terraform can represent the all-objects filter as <Filter/> rather than <Prefix/>.
   const rules=lifecycle.Rules?.map(r=>({...r,Filter:r.Filter && !Object.keys(r.Filter).length?{Prefix:''}:r.Filter}));
-  if (canonical(rules)!==canonical(lifecycleRules(true))) throw receivingDrift(`${bucket} LifecycleConfiguration`);
+  const oldRules=lifecycleRules(true), renamed=oldRules.map(r=>({...r,ID:r.ID.replace(/^bane-/,'nightmail-')}));
+  const expectedRules=TAG_PREFIX==='bane'?oldRules:[...renamed,...renamed.flatMap(r=>'Tag' in r.Filter?[{...r,ID:r.ID+'-renamed-tag',Filter:{Tag:{...r.Filter.Tag,Key:'nightmail-kind'}}}]:[])];
+  if (canonical(rules)!==canonical(expectedRules)) throw receivingDrift(`${bucket} LifecycleConfiguration`);
   const {Attributes:a}=await poolRead(topicArn,()=>sns.send(new sdk.sns.GetTopicAttributesCommand({TopicArn:topicArn}),opts));
   if (a?.Owner!==account || a.TopicArn!==topicArn || !policyReady(a.Policy,inboundPolicy(topicArn,region,account,rulePrefix))) throw receivingDrift(`${topicArn} Policy`);
   if (!jsonMatches(a.DeliveryPolicy,deliveryPolicy)) throw receivingDrift(`${topicArn} DeliveryPolicy`);
@@ -234,7 +236,7 @@ async function verifyPoolRegion(runtime:Runtime,region:string,account:string,sig
   if (s?.TopicArn!==topicArn || s.Owner!==account || s.Endpoint!==endpoint || s.Protocol!=='https') throw receivingDrift(`${sub.SubscriptionArn} attributes`);
   if (s.PendingConfirmation==='true') throw new ApiError(503,'INBOUND_CONFIRMATION_PENDING','Waiting for signed confirmation of the inbound SNS subscription.',undefined,true);
   if (s.PendingConfirmation!=='false' || s.RawMessageDelivery!=='false' || s.FilterPolicy && !jsonMatches(s.FilterPolicy,{})) throw receivingDrift(`${sub.SubscriptionArn} attributes`);
-  if (runtime.config.receivingRedrive && region==='us-east-2' && !jsonMatches(s.RedrivePolicy,redrivePolicy(region,account))) throw receivingDrift(`${sub.SubscriptionArn} RedrivePolicy`);
+  if (runtime.config.receivingRedrive && region==='us-east-2' && !jsonMatches(s.RedrivePolicy,redrivePolicy(region,account,TAG_PREFIX))) throw receivingDrift(`${sub.SubscriptionArn} RedrivePolicy`);
   return {account,bucket,topicArn,ruleSetName,rules:active.Rules};
 }
 
