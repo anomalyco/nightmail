@@ -35,10 +35,11 @@ const FALLBACK = new Set(['iframe', 'noembed', 'noframes']);
  *    that reads what is shown does not.
  * A serializer writes these nodes as they came.
  */
-export function boundedHtmlFragment(html: string, mode: 'fragment' | 'document' = 'fragment', { clients = false, onParseError }: { clients?: boolean; onParseError?: (error: {code: string}) => void } = {}) {
+export function boundedHtmlFragment(html: string, mode: 'fragment' | 'document' = 'fragment', { clients = false, onParseError }: { clients?: boolean; onParseError?: (error: {code: string}, within?: object) => void } = {}) {
   const started = performance.now(), depth = new WeakMap<object, number>();
-  // base: the tree depth of the node whose data is being parsed, so markup inside it counts from there.
-  let nodes = 0, open = 0, attributeBytes = 0, base = 0;
+  // base: the tree depth of the node whose data is being parsed, so markup inside it counts from there; within: that
+  // node, which parse errors name (a duplicate attribute inside an Outlook conditional comment, for instance).
+  let nodes = 0, open = 0, attributeBytes = 0, base = 0, within: object | undefined;
   const late = () => performance.now() - started > 250;
   const tick = () => {
     if (++nodes > 20_000 || ((nodes & 255) === 0 && late())) throw new TreeBudgetExceeded();
@@ -69,7 +70,7 @@ export function boundedHtmlFragment(html: string, mode: 'fragment' | 'document' 
   function parse(source: string, as: 'fragment'): Fragment;
   function parse(source: string, as: 'fragment' | 'document') {
     open = 0;
-    const options = { treeAdapter, scriptingEnabled: false, onParseError };
+    const options = { treeAdapter, scriptingEnabled: false, onParseError: onParseError && ((error: {code: string}) => onParseError(error, within)) };
     const parser = as === 'document' ? new Parser(options) : Parser.getFragmentParser(null, options);
     const tokenizer = new BoundedTokenizer(parser.options, parser);
     tokenizer.state = parser.tokenizer.state;
@@ -97,8 +98,8 @@ export function boundedHtmlFragment(html: string, mode: 'fragment' | 'document' 
       // only worth a parse where it is shown.
       const read = sources.filter(source => shown !== undefined ? source.trim() : source.includes('<')).map(source => {
         if (late()) throw new TreeBudgetExceeded();
-        base = depth.get(node) ?? 0;
-        return parse(source, 'fragment');
+        base = depth.get(node) ?? 0; within = node;
+        try { return parse(source, 'fragment'); } finally { within = undefined; }
       });
       if (read.length) {
         const [first, ...rest] = read as [Fragment, ...Fragment[]];

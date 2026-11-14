@@ -11,7 +11,8 @@
 // 300 characters of plain text, which is screened like the rest. Text the markup would draw without screened words
 // (list markers with letters or chosen numbers, list items without text) is left out, images count by their declared
 // size against the words beside them, and the bidi controls, directions and layout properties that reorder what a
-// client draws are removed from every textual field and element. Trusted senders keep their markup.
+// client draws are removed from every textual field and element. Trusted senders keep their markup (as its canonical
+// copy, src/hosted-html.ts).
 import { defaultTreeAdapter, html as spec, serializeOuter, type DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
 import { ApiError } from './core.js';

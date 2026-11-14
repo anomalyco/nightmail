@@ -12,7 +12,7 @@ import { credentialFingerprint, discoveryTarget } from './ses-region-state.js';
 import { mxResourceName, POOL_INSTALLATION, setupResources } from './ses-setup.js';
 import { forDelivery, type ReadyConnection } from './provider-credentials.js';
 import { wakeWebhooks } from './jobs.js';
-import { screenSnapshot, type CampaignScreen } from './screen.js';
+import { canonicalHtml, screenSnapshot, type CampaignScreen } from './screen.js';
 
 const loadSesv2 = lazyModule(() => import('@aws-sdk/client-sesv2'));
 const loadSimulatedSes = lazyModule(() => import('./adapters/simulated-ses.js'));
@@ -465,8 +465,11 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
     const review=hosted && leased.mail.snapshot.deferredCampaign && leased.review?.screen?.template && leased.review.screen.contentHash===leased.review.reviewHash ? leased.review : null;
     // Probation mail goes out as the copy the screen reads: every textual field without the bidi controls that
     // reorder it, the markup reduced to what a client shows as text, the campaign preheader added back from its own
-    // field. Trusted senders keep their message.
+    // field. Trusted senders keep their markup.
     if (probation) s = (await import('./screened-html.js')).probationCopy(s);
+    // Hosted mail goes out as its canonical copy (src/hosted-html.ts): one parse, sanitized and serialized, read again
+    // until it reads as itself. The screen below reads exactly these bytes, and SES is sent exactly them.
+    if (hosted && s.html) s = { ...s, html: await canonicalHtml(s.html) };
     if (review) {
       const [verdict] = await campaignVerdicts(runtime, { workspaceId: mail.workspaceId, campaignId: mail.campaignId!, reviewId: mail.reviewId! }, [screenedAs(runtime, s, stored?.unsubscribeUrl)], Date.now() + MAX_PRE_SEND_MS);
       if (!verdict) throw new ApiError(503,'CONTENT_SCREEN_UNAVAILABLE','This copy has no verdict yet; deferring without calling SES.',undefined,true);

@@ -13513,16 +13513,14 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // responsive newsletter with a large style sheet, a receipt, a dark-mode aware welcome, and client-specific hacks.
   function screenCorpus(): Record<string,{html:string;expect:string[]}> {
     const lorem=(n:number)=>Array.from({length:n},(_,i)=>`Paragraph ${i+1}: thank you for being a customer. Your order ships within two business days and you can track it from your account page at any time.`).join(' ');
-    // Hosted sending refuses resources the screen can't read where they lead (web fonts and @import in style sheets,
-    // inline data), so the corpus loads its images and fonts as Hosted mail may.
-    const dataUrl='https://cdn.brand.example/chart.png';
+    const dataUrl='data:image/png;base64,'+Buffer.alloc(1500,7).toString('base64');
     const resets='body{margin:0;padding:0;-webkit-text-size-adjust:100%} table,td{mso-table-lspace:0pt;mso-table-rspace:0pt;border-collapse:collapse} img{-ms-interpolation-mode:bicubic;border:0} a[x-apple-data-detectors]{color:inherit!important;text-decoration:none!important} .ExternalClass{width:100%} .ExternalClass,.ExternalClass p,.ExternalClass span,.ExternalClass td{line-height:100%}';
     return {
       hybridOutlook:{expect:['Spring collection is here','Shop now','Free shipping on orders over $50','Unsubscribe'],html:`<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><head>
 <!--[if gte mso 9]><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml><![endif]--><meta http-equiv="Content-Type" content="text/html; charset=utf-8"><title>Spring collection</title>
 <style type="text/css">/* Client resets */ ${resets} .mobile-only{display:none;max-height:0;overflow:hidden;mso-hide:all} .desktop-only{display:block}
 @media only screen and (max-width:480px){ .mobile-only{display:block!important;max-height:none!important;overflow:visible!important} .desktop-only{display:none!important} .stack{display:block!important;width:100%!important} .h1{font-size:24px!important;line-height:30px!important} }
-</style></head>
+@media screen{ @font-face{font-family:"Brand Sans";src:url("https://cdn.brand.example/fonts/brand-sans.woff2") format("woff2")} }</style></head>
 <body style="margin:0;padding:0;background-color:#f4f4f4"><div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;mso-hide:all;font-family:sans-serif">Spring styles just landed, with free shipping over $50. &nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>
 <!--[if (gte mso 9)|(IE)]><table role="presentation" width="600" align="center" cellpadding="0" cellspacing="0" border="0"><tr><td><![endif]--><table role="presentation" width="100%" style="max-width:600px;margin:0 auto;background:#ffffff" cellpadding="0" cellspacing="0" border="0">
 <tr><td style="padding:24px"><img src="https://cdn.brand.example/logo.png" width="140" alt="Brand logo" style="display:block"></td></tr><tr><td class="h1" style="padding:0 24px;font-family:'Brand Sans',Helvetica,Arial,sans-serif;font-size:32px;line-height:38px;color:#111111">Spring collection is here</td></tr>
@@ -13533,7 +13531,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 <tr><td style="padding:16px 24px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>${[1,2,3].map(i=>`<td class="stack" width="33%" valign="top" style="padding:8px;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:20px;color:#333"><img src="https://cdn.brand.example/item-${i}.jpg" width="160" alt="Item ${i}" style="display:block;width:100%;height:auto"><p style="margin:8px 0 0"><strong>Item ${i}</strong><br>From $${19+i}.00</p></td>`).join('')}</tr></table></td></tr>
 <tr><td style="padding:16px 24px;font-family:Helvetica,Arial,sans-serif;font-size:14px;line-height:20px;color:#333">Free shipping on orders over $50. Returns are free within 30 days.</td></tr>
 <tr><td style="padding:24px;font-family:Helvetica,Arial,sans-serif;font-size:12px;line-height:18px;color:#888;text-align:center">Brand Inc., 1 Market Street, Springfield · <a href="https://shop.brand.example/preferences" style="color:#888">Preferences</a> · <a href="https://shop.brand.example/unsubscribe" style="color:#888">Unsubscribe</a></td></tr></table><!--[if (gte mso 9)|(IE)]></td></tr></table><![endif]--></body></html>`},
-      responsiveMarketing:{expect:['Your weekly digest','Read the full story','View in browser'],html:`<!doctype html><html lang="en"><head><meta charset="utf-8"><style>
+      responsiveMarketing:{expect:['Your weekly digest','Read the full story','View in browser'],html:`<!doctype html><html lang="en"><head><meta charset="utf-8"><style>@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap');
 ${Array.from({length:40},(_,i)=>`#templateSection${i} .mcnTextContent, #templateSection${i} .mcnTextContent p{font-family:'Open Sans',Helvetica,Arial,sans-serif;font-size:${14+(i%4)}px;line-height:150%;color:#${(i*7919%0xffffff).toString(16).padStart(6,'0')};text-align:left} #templateSection${i} .mcnImage{border-radius:${i%8}px}`).join('\n')}
 .mcnButtonContentContainer{border-radius:4px;background-color:#2a7ae2} .mcnButton{color:#fff;font-weight:bold;text-decoration:none;display:block;padding:14px 24px} blockquote{border-left:3px solid #ddd;margin:0;padding-left:12px;font-style:italic} h1,h2{font-family:'Open Sans',Helvetica,Arial,sans-serif;margin:0 0 12px} h1{font-size:28px} h2{font-size:22px}
 @media only screen and (max-width:480px){ ${Array.from({length:30},(_,i)=>`#templateSection${i} .mcnTextContent{font-size:16px!important;line-height:150%!important}`).join(' ')} .mcnButton{padding:18px!important} } @media only screen and (min-width:481px){ .mcnTextContentContainer{max-width:600px!important} }</style></head>
@@ -14074,61 +14072,131 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     await f.dispatch();
     assert.equal((await f.db.query('SELECT error_code FROM sending_emails WHERE id=$1', [sent.id])).rows[0].error_code, 'CONTENT_REJECTED_SPAM', 'A single message is screened with its real destinations too.');
   });
-  reviewScenario('markup whose destinations the screen cannot read is refused at submission, named, and reported by the checker', async ({ local, db, runtime, wid, dispatch, delivered, campaign, send: sendCampaign, outcome }) => {
-    // The trusted tier, which delivers the markup as submitted (probation strips most of these constructs).
+  // The trusted tier delivers a sender's own markup (probation reduces it to text first), so the canonical copy is
+  // exercised there. Each message goes to its own subscribed reader, so marketing mail is delivered and captured.
+  const trustedSender = async ({ db, runtime, local, wid }: Parameters<Parameters<typeof reviewScenario>[1]>[0]) => {
     await db.query(`UPDATE provider_pool_regions SET pool_tier='trusted', legacy_names=false WHERE aws_account_id='112223330014'`); runtime.config.trustedPool = true;
     const key = ok(await local('POST', '/v1/api-keys', { name: 'review', permissions: ['send', 'read'] }), 201).secret, headers = { authorization: `Bearer ${key}` };
-    const send = (html: string, kind = 'marketing', to = 'reader@example.net') => local('POST', '/v1/emails/send', { from: 'news@held.invalid', to, subject: 'Offer', kind, html, text: 'Our offer.' }, 'live', headers);
+    const send = async (html: string, kind = 'marketing') => {
+      const to = `${unique('reader')}@example.net`;
+      await db.query(`INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent) VALUES($1,$2,$3,'subscribed')`, [unique('contact'), wid, to]);
+      return { to, reply: await local('POST', '/v1/emails/send', { from: 'news@held.invalid', to, subject: 'Your account', kind, html, text: 'Your account is ready.' }, 'live', headers) };
+    };
+    const outcome = async (id: string) => { const row = (await db.query('SELECT status,error_code FROM sending_emails WHERE id=$1', [id])).rows[0]; return row.error_code ?? row.status; };
+    // Marketing mail gets its unsubscribe footer (after the last text) before it is made canonical; the rest is the
+    // submitted body's canonical copy.
+    const body = (sent: string) => sent.replace(/<p style="[^"]*"><a href="[^"]*\/unsubscribe\/u_[0-9a-f]{64}"[^>]*>Unsubscribe<\/a><\/p>/, '');
+    return { send, outcome, headers, body };
+  };
+  reviewScenario('an address whose destination depends on where the message is opened is refused at submission, named, and reported by the checker', async f => {
+    const { local, db, wid, dispatch, campaign, send: sendCampaign, outcome } = f, { send } = await trustedSender(f);
     const before = Number((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE workspace_id=$1', [wid])).rows[0].n);
-    // Recheck 3: each was admitted and delivered with its target missing or misread in the classifier's input.
+    // Recheck 3: a base, and links relative to the page the client shows the message in (61 of them hid 61 hosts).
     for (const [html, named] of [
-      ['<img srcset="https://held.invalid/Sample,Marker.png 1x" src="https://held.invalid/a.png" alt="" width="20" height="20"><p>Offer.</p>', '<img srcset>'],
-      ['<p style="background-image:u\\72l(https://held.invalid/SampleMarker.png)">Offer.</p>', '<p style>'],
-      ['<p style="background-image:url(https://held.invalid/Sample\\4d arker.png)">Offer.</p>', '<p style>'],
-      ['<style>.card{background-image:url("https://held.invalid/SampleMarker.png")}</style><p class="card">Offer.</p>', '<style> sheet'],
       ['<base href="https://held.invalid/dir/"><p><a href="../SampleMarker">Offer</a></p>', '<base>'],
       ['<p><a href="\\\\evil.invalid/offer">Offer</a></p>', '<a href>'],
       ['<p><a href="//evil.invalid/offer">Offer</a></p>', '<a href>'],
-      ['<link rel="stylesheet" href="https://held.invalid/a.css"><p>Offer.</p>', '<link>'],
       [`<p>${Array.from({ length: 61 }, (_, i) => `<a href="\\\\ref${i}.invalid/offer">Offer ${i}</a>`).join(' ')}</p>`, '<a href>'],
-      // The rest of the vocabulary: no base but the message's own, no address relative to the client's page, nothing
-      // that loads through CSS or a plugin, and nothing a fragment parse would drop.
       ['<p><a href="https:evil.invalid/offer">Offer</a></p>', '<a href>'],
+      ['<p><a href="offer.html">Offer</a></p>', '<a href>'],
       ['<p>Offer.</p><body background="//evil.invalid/offer.png">', '<body background>'],
-      ['<svg width="20" height="20"><rect width="20" height="20" fill="url(https://held.invalid/SampleMarker.svg#p)"/></svg><p>Offer.</p>', '<rect fill>'],
-      ['<svg xml:base="https://evil.invalid/"><a href="https://held.invalid/"><text>Offer</text></a></svg>', '<svg xml:base>'],
-      ['<svg><a href="https://held.invalid/"><set attributeName="href" to="https://evil.invalid/offer"/><text>Offer</text></a></svg>', '<set attributeName="href">'],
-      ['<p><a href="https://held.invalid/" ping="/SampleMarker">Offer</a></p>', '<a ping>'],
-      ['<meta http-equiv="refresh" content="0;url=https://evil.invalid/offer"><p>Offer.</p>', '<meta http-equiv="refresh">'],
-      ['<object data="https://held.invalid/offer.swf"></object><p>Offer.</p>', '<object>'],
+      ['<p>Offer.</p><img src="/logo.png" alt="Logo" width="20" height="20">', '<img src>'],
     ] as const) {
-      const refused = error(await send(html), 422, 'UNSUPPORTED_URL_IN_HOSTED_MAIL');
+      const refused = error((await send(html)).reply, 422, 'UNSUPPORTED_URL_IN_HOSTED_MAIL');
       assert.ok(refused.message.includes(named) && refused.details[0].unsupported.some((u: string) => u.includes(named)), `${html.slice(0, 60)}: ${refused.message}`);
       const report = ok(await local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html, text: 'Our offer.' }));
-      assert.equal(report.findings.find((f: Json) => f.ruleId === 'unsupported-url')?.severity, 'warning', html.slice(0, 60));
+      assert.equal(report.findings.find((x: Json) => x.ruleId === 'unsupported-url')?.severity, 'warning', html.slice(0, 60));
     }
     // Transactional mail is refused the same way.
-    error(await send('<p><a href="//evil.invalid/offer">Offer</a></p>', 'transactional'), 422, 'UNSUPPORTED_URL_IN_HOSTED_MAIL');
+    error((await send('<p><a href="//evil.invalid/offer">Offer</a></p>', 'transactional')).reply, 422, 'UNSUPPORTED_URL_IN_HOSTED_MAIL');
     assert.equal(Number((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE workspace_id=$1', [wid])).rows[0].n), before);
-    // What Hosted mail may use is admitted and delivered as submitted, every destination in the screened input:
-    // absolute links and images, a ping, a <body> background, background-image: url("https://…") in a style
-    // attribute, fragments, attachments, mailto and tel.
-    const { measureScreen } = await import('./src/screen.js');
-    const good = '<html><body background="https://held.invalid/body.png"><p style="background-image:url(&quot;https://held.invalid/bg.png&quot;)"><a href="https://held.invalid/a" ping="https://held.invalid/ping">Offer</a> <a href="#top">Top</a> <a href="mailto:help@held.invalid">Mail</a> <a href="tel:+15550100">Call</a></p><img src="cid:logo" alt="" width="20" height="20"><svg width="20" height="20"><rect width="20" height="20" fill="url(#p)"/></svg></body></html>';
-    assert.deepEqual((await measureScreen({ html: good })).destinations.sort(), ['https://held.invalid/a', 'https://held.invalid/bg.png', 'https://held.invalid/body.png', 'https://held.invalid/ping', 'mailto:help@held.invalid', 'tel:+15550100']);
-    const accepted = ok(await send(good, 'transactional'), 202).id;
-    // A ping and an inline background image are destinations like any link: screened, and refused when they are bad.
-    const pinged = ok(await send('<p><a href="https://held.invalid/" ping="https://held.invalid/SampleMarker">Offer</a></p>', 'marketing', 'ping@example.net'), 202).id;
-    const background = ok(await send('<p style="background-image:url(&quot;https://held.invalid/SampleMarker.png&quot;)">Offer.</p>', 'marketing', 'background@example.net'), 202).id;
-    const bodied = ok(await send('<html><body background="https://held.invalid/SampleMarker.png"><p>Offer.</p></body></html>', 'marketing', 'body@example.net'), 202).id;
-    await dispatch();
-    const codes = Object.fromEntries((await db.query('SELECT id,coalesce(error_code,status) AS code FROM sending_emails WHERE id=ANY($1)', [[accepted, pinged, background, bodied]])).rows.map(r => [r.id, r.code]));
-    assert.deepEqual([codes[pinged], codes[background], codes[bodied]], ['CONTENT_REJECTED_SPAM', 'CONTENT_REJECTED_SPAM', 'CONTENT_REJECTED_SPAM'], JSON.stringify(codes));
-    assert.ok(delivered.get('reader@example.net')?.html?.includes('ping="https://held.invalid/ping"'), `The trusted copy is delivered as submitted: ${codes[accepted]}`);
     // A campaign's own copy may start an address with a placeholder; each recipient's copy is held to the rules alone.
     const c = await campaign('Placeholder address', '<p><a href="{{link}}">Open your account</a></p>', [{ link: 'https://held.invalid/a' }, { link: '//evil.invalid/offer' }], { subject: 'Account', defaults: {} });
     assert.equal((await sendCampaign(c)).delivery.expanded, 2); await dispatch();
     assert.deepEqual(Object.values(await outcome(c)).sort(), ['UNSUPPORTED_URL_IN_HOSTED_MAIL', 'accepted']);
+  });
+  reviewScenario('trusted mail is delivered as the canonical copy the screen read: generated text, repeated attributes and unread resources never reach a recipient', async f => {
+    const { dispatch, delivered, screened } = f, { send, outcome, body } = await trustedSender(f), { canonicalHtml, measureScreen } = await import('./src/screen.js');
+    const ready = 'Your account is ready.';
+    // bad: a destination the classifier flags is in the copy, so it is screened and refused. Otherwise the copy is
+    // delivered, as exactly its canonical serialization, without what `gone` matches, and the classifier never read
+    // the marker.
+    const cases: [string, string, boolean, RegExp?][] = [
+      // Recheck 3: srcset is removed (the image keeps its src); CSS and ping addresses are read as clients read them.
+      ['srcset', `<img srcset="https://held.invalid/Sample,Marker.png 1x" src="https://held.invalid/a.png" alt="" width="20" height="20"><p>${ready}</p>`, false, /srcset|Marker\.png/],
+      ['escaped url()', `<p style="background-image:u\\72l(https://held.invalid/SampleMarker.png)">${ready}</p>`, true],
+      ['escape in a URL', `<p style="background-image:url(https://held.invalid/Sample\\4d arker.png)">${ready}</p>`, true],
+      ['style sheet', `<style>.card{background-image:url("https://held.invalid/SampleMarker.png")}</style><p class="card">${ready}</p>`, true],
+      ['ping', `<p><a href="https://held.invalid/" ping="https://held.invalid/SampleMarker">Open</a> ${ready}</p>`, true],
+      ['body background', `<html><body background="https://held.invalid/SampleMarker.png"><p>${ready}</p></body></html>`, true],
+      ['style sheet link', `<link rel="stylesheet" href="https://held.invalid/SampleMarker.css"><p>${ready}</p>`, true],
+      ['font', `<style>@font-face{font-family:Brand;src:url("https://held.invalid/SampleMarker.woff2") format("woff2")}</style><p>${ready}</p>`, true],
+      ['import', `<style>@import "https://held.invalid/SampleMarker.css";</style><p>${ready}</p>`, true],
+      ['relative ping', `<p><a href="https://held.invalid/" ping="/SampleMarker">Open</a> ${ready}</p>`, false, /ping=/],
+      ['SVG fill', `<svg width="20" height="20"><rect width="20" height="20" fill="url(https://held.invalid/SampleMarker.svg#p)"/></svg><p>${ready}</p>`, false, /SampleMarker/],
+      ['xml:base', `<svg xml:base="https://evil.invalid/offer/"><a href="https://held.invalid/"><text>${ready}</text></a></svg>`, false, /evil\.invalid/],
+      ['SVG set', `<svg><a href="https://held.invalid/"><set attributeName="href" to="https://evil.invalid/offer"/><text>${ready}</text></a></svg>`, false, /<set|evil\.invalid/],
+      ['refresh', `<meta http-equiv="refresh" content="0;url=https://evil.invalid/offer"><p>${ready}</p>`, false, /refresh|evil\.invalid/],
+      ['object', `<object data="https://evil.invalid/offer.swf"><p>${ready}</p></object>`, false, /<object|evil\.invalid/],
+      ['relative CSS', `<p style="background-image:url(/SampleMarker.png)">${ready}</p>`, false, /SampleMarker/],
+      // Recheck 4: text drawn by CSS, a repeated attribute, MathML addresses and IE's image filter.
+      ['content', `<style>.offer::before{content:"SampleMarker"}</style><p class="offer">${ready}</p>`, false, /content\s*:|::before/],
+      ['attr()', `<style>.offer::before{content:attr(data-offer)}</style><p class="offer" data-offer="Sample&#77;arker">${ready}</p>`, false, /content\s*:|::before/],
+      ['var()', `<style>.offer{--pitch:"SampleMarker"}.offer::after{content:var(--pitch)}</style><p class="offer">${ready}</p>`, false, /content\s*:|::after/],
+      ['markers', `<style>ol li::marker{content:"SampleMarker"} ol{list-style-type:"SampleMarker"} ul{list-style:var(--pitch)} @counter-style pitch{symbols:"SampleMarker"} p{quotes:"SampleMarker" "";text-overflow:"SampleMarker"}</style><ol><li>${ready}</li></ol><p>Thanks.</p>`, false, /SampleMarker|content\s*:|var\(/],
+      ['keyframes', `<style>@keyframes pitch{to{content:"SampleMarker"}} .offer::before{animation:pitch 1s forwards}</style><p class="offer">${ready}</p>`, false, /SampleMarker/],
+      ['escaped property', `<style>.offer::before{c\\6fntent:"SampleMarker"}</style><p class="offer">${ready}</p>`, false, /SampleMarker/],
+      ['repeated href', `<p><a href="https://held.invalid/" href="https://evil.invalid/offer">Open</a> ${ready}</p>`, false, /evil\.invalid/],
+      ['repeated in Outlook markup', `<!--[if mso]><a href="https://held.invalid/" href="https://evil.invalid/offer">Open</a><![endif]--><p>${ready}</p>`, false, /evil\.invalid|\[if mso/],
+      ['generated text in Outlook markup', `<!--[if mso]><style>p::before{content:"SampleMarker"}</style><![endif]--><p>${ready}</p>`, false, /SampleMarker/],
+      ['MathML', `<math altimg="https://held.invalid/SampleMarker.png" definitionURL="https://evil.invalid/offer"><mi>x</mi></math><p>${ready}</p>`, false, /SampleMarker|evil\.invalid/],
+      ['AlphaImageLoader', `<p style="filter:progid:DXImageTransform.Microsoft.AlphaImageLoader(src='https://held.invalid/SampleMarker.png')">${ready}</p>`, false, /SampleMarker|progid/i],
+    ];
+    for (const [name, html, bad, gone] of cases) {
+      const { to, reply } = await send(html), start = screened.length;
+      const id = ok(reply, 202).id;
+      await dispatch();
+      const read = screened.slice(start).join('\n').toLowerCase(), sent = delivered.get(to)?.html;
+      assert.ok(screened.length > start, `${name}: screened`);
+      if (bad) { assert.equal(await outcome(id), 'CONTENT_REJECTED_SPAM', name); assert.equal(sent, undefined, name); continue; }
+      assert.equal(await outcome(id), 'accepted', name);
+      assert.ok(!read.includes('samplemarker') && !read.includes('evil.invalid'), `${name}: the classifier read only the copy`);
+      assert.equal(body(sent!), await canonicalHtml(html), `${name}: delivered as the canonical copy`);
+      assert.equal(await canonicalHtml(sent!), sent, `${name}: the copy reads as itself`);
+      assert.ok(read.includes((await measureScreen({ html: sent!, text: 'Your account is ready.' })).content.toLowerCase().split('\n')[0]!), `${name}: screened as delivered`);
+      assert.ok(sent!.includes(ready) && !gone?.test(sent!), `${name}: ${sent}`);
+    }
+  });
+  reviewScenario('common newsletter and transactional markup is admitted and delivered with its fonts, imports, comments and Outlook markup intact', async f => {
+    const { dispatch, delivered } = f, { send, outcome, body } = await trustedSender(f), { canonicalHtml } = await import('./src/screen.js');
+    const ready = 'Your order has shipped.';
+    const outlook = `<!doctype html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><head><!--[if !mso]><!--><meta http-equiv="X-UA-Compatible" content="IE=edge"><!--<![endif]--><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><![endif]--><!--[if lte mso 11]><style type="text/css">.mj-outlook-group-fix { width:100% !important; }</style><![endif]--></head>
+<body style="word-spacing:normal;"><div><!--[if mso | IE]><table align="center" border="0" cellpadding="0" cellspacing="0" style="width:600px;" width="600"><tr><td style="line-height:0px;font-size:0px;mso-line-height-rule:exactly;"><![endif]--><div style="margin:0px auto;max-width:600px;"><p>${ready}</p>
+<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://shop.brand.example/orders/4821" style="height:40px;width:200px" arcsize="10%" fillcolor="#00aa77"><center>Track your order</center></v:roundrect><![endif]--><!--[if !mso]><!--><a href="https://shop.brand.example/orders/4821" style="display:inline-block;padding:12px 20px;background:#00aa77;color:#ffffff">Track your order</a><!--<![endif]--></div><!--[if mso | IE]></td></tr></table><![endif]--></div></body></html>`;
+    const compatible: [string, string, RegExp[], RegExp[]][] = [
+      ['web font', `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html><head><style type="text/css">@font-face{font-family:'Brand Sans';src:url('https://cdn.brand.example/fonts/brand-sans.woff2') format('woff2'),url('https://cdn.brand.example/fonts/brand-sans.woff') format('woff');font-weight:400} h1{font-family:'Brand Sans',Helvetica,Arial,sans-serif}</style></head><body><h1>Spring collection</h1><p>${ready}</p></body></html>`,
+        [/^<!DOCTYPE html PUBLIC "-\/\/W3C\/\/DTD XHTML 1\.0 Transitional\/\/EN"/, /@font-face\{font-family:'Brand Sans';src:url\('https:\/\/cdn\.brand\.example\/fonts\/brand-sans\.woff2'\)/], []],
+      ['Google Fonts', `<html><head><style>@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap'); body,p{font-family:'Open Sans',Arial,sans-serif}</style><link href="https://fonts.googleapis.com/css2?family=Inter&display=swap" rel="stylesheet"></head><body><p>${ready}</p></body></html>`,
+        [/@import url\('https:\/\/fonts\.googleapis\.com\/css2\?family=Open\+Sans:wght@400;700&display=swap'\)/, /<link href="https:\/\/fonts\.googleapis\.com\/css2\?family=Inter&amp;display=swap" rel="stylesheet">/], []],
+      ['preload hints', `<html><head><link rel="preload" as="image" href="https://cdn.brand.example/logo.png"><link rel="preconnect" href="https://fonts.gstatic.com"><link rel="dns-prefetch" href="//cdn.brand.example"></head><body><img src="https://cdn.brand.example/logo.png" width="140" height="40" alt="Brand"><p>${ready}</p></body></html>`,
+        [/<img src="https:\/\/cdn\.brand\.example\/logo\.png"/], [/<link/]],
+      ['comments', `<style>/* background-image:url(https://cdn.brand.example/old.png) intentionally disabled */ .hero{color:#111111} /* url("/relative.png") and @import "old.css"; */</style><!-- Built with an editor: <a href="/old">old link</a> --><p class="hero">${ready}</p>`,
+        [/<style>\.hero\{color:#111111\}<\/style>/], [/old\.png|relative\.png|old link|Built with/]],
+      ['Outlook', outlook, [/<!--\[if mso \| IE\]><table align="center"/, /<!--\[if mso\]><v:roundrect/, /<!--\[if !mso\]><!--><a href=/, /<!--\[if lte mso 11\]><style type="text\/css">\.mj-outlook-group-fix \{ width:100% !important; \}<\/style><!\[endif\]-->/, /<!--\[if mso \| IE\]><\/td><\/tr><\/table><!\[endif\]-->/], []],
+      // The screen corpus as submitted: hybrid Outlook with web fonts, a responsive newsletter importing Google Fonts,
+      // a receipt, a dark-mode welcome and client hacks (an inline data: image isn't accepted for sending at all).
+      ...Object.entries(screenCorpus()).map(([name, { html, expect }]) => [name, html.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/, 'https://cdn.brand.example/chart.png'), expect.map(e => new RegExp(e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))), []] as [string, string, RegExp[], RegExp[]]),
+    ];
+    for (const [name, html, kept, gone] of compatible) {
+      const { to, reply } = await send(html), id = ok(reply, 202).id;
+      await dispatch();
+      assert.equal(await outcome(id), 'accepted', name);
+      const sent = delivered.get(to)!.html!;
+      assert.equal(body(sent), await canonicalHtml(html), `${name}: delivered as the canonical copy`);
+      for (const pattern of kept) assert.ok(pattern.test(sent), `${name}: keeps ${pattern}`);
+      for (const pattern of gone) assert.ok(!pattern.test(sent), `${name}: drops ${pattern}`);
+    }
   });
   reviewScenario('a page of 500 distinct 317 KB copies makes progress in one campaign run, within bounded memory', async ({ campaign, settle, local, run, db, screened, diagnostic }) => {
     const html = `<p>Hello {{name}}.</p>${'<p style="padding:64px">Ordinary.</p>'.repeat(1400)}`;

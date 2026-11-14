@@ -293,13 +293,13 @@
    ]
   },
   "Sent email · junk-like · desktop": {
-   "score": 101,
+   "score": 97,
    "findings": [
     "disclosure|sendability|ei-score__value"
    ]
   },
   "Sent email · junk-like · phone": {
-   "score": 94,
+   "score": 89,
    "findings": [
     "disclosure|sendability|ei-score__value"
    ]
