@@ -2,10 +2,17 @@
 // synthetic workspaces and page list (cls.mjs, cls-fixture.mjs), at desktop 1440 × 900 and phone 390 × 844.
 //
 // Per page: visible words outside tables, in total and above the fold, text blocks over LONG_BLOCK words, paragraphs,
-// distinct controls, tooltips and info icons; and findings: the same value shown twice on one screen (dup-value: the sender score
-// in the sidebar and in Overview, say), sections with the same label (dup-label), repeated explanations (dup-text),
-// long blocks (long-block) and explanations with nothing to act on near them (inert). The score (SCORE below) weighs
-// them; lower is easier to take in.
+// distinct controls, tooltips and info icons; and findings (app/scripts/copy-fix.md lists them):
+// - said twice: the same figure (dup-value: the sender score in the sidebar and in Overview), the same fact as two
+//   figures (dup-fact: emails in 24 hours and the daily limit's count), the same section label (dup-label), the same
+//   explanation (dup-text);
+// - detail shown by default (disclosure): a summary figure with rows or prose of detail right under it, that could
+//   open from the figure instead;
+// - text that adds nothing: a caption restating its figure (restate-value), a unit or label on every row of a column
+//   (repeated-unit), helper text under a self-explanatory field (obvious-helper), an intro restating its heading
+//   (intro-restates);
+// - long blocks (long-block) and explanations with nothing to act on near them (inert).
+// The score (SCORE below) weighs them; lower is easier to take in.
 //
 // A ratchet: density-baseline.json holds each page's score and findings. CI fails on a finding that isn't in it, or
 // when a page's score rises more than TOLERANCE. A local run lowers the baseline where a page got better; pass
@@ -25,10 +32,10 @@ import { fileURLToPath } from 'node:url';
 const app = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const BASELINE = join(app, 'scripts/density-baseline.json');
 export const OUT = resolve(process.env.DENSITY_OUT ?? join(app, '.density'));
-const LONG_BLOCK = 25, INERT_WORDS = 15, NEAR_PX = 120;
+const LONG_BLOCK = 25, INERT_WORDS = 15, NEAR_PX = 120, DETAIL_ROWS = 5, DETAIL_WORDS = 40, DETAIL_REACH = 360;
 const TOLERANCE = score => Math.max(3, Math.round(score * 0.05));
 // Lower is easier to take in. Words count once, again when above the fold; each finding costs what reading past it does.
-export const SCORE = { word: 0.1, foldWord: 0.1, longBlock: 4, paragraph: 1, control: 0.5, tip: 1, duplicate: 8, inert: 3 };
+export const SCORE = { word: 0.1, foldWord: 0.1, longBlock: 4, paragraph: 1, control: 0.5, tip: 1, duplicate: 8, inert: 3, disclosure: 6, empty: 2 };
 
 // Content pages (legal, docs, the signed-out home), the support chat's scripted conversation, and staff overlays and
 // live-edit states that repeat another page, are not measured.
@@ -36,7 +43,7 @@ const SKIP = /^(Legal|Docs|Signed out|Support chat)|UI notes|without UI notes|li
 export const wanted = job => job.mode === 'load' && (job.device === 'phone' || job.scheme === 'light') && !SKIP.test(job.name ?? job.page);
 
 // ---------------------------------------------------------------- in the page
-const probe = ({ LONG_BLOCK, INERT_WORDS, NEAR_PX }) => {
+const probe = ({ LONG_BLOCK, INERT_WORDS, NEAR_PX, DETAIL_ROWS, DETAIL_WORDS, DETAIL_REACH }) => {
   const shown = el => el.getClientRects().length > 0 && el.checkVisibility({ opacityProperty: true, visibilityProperty: true }) && !el.closest('.sr-only, [hidden], .density-overlay');
   const dialog = [...document.querySelectorAll('[role=dialog], [role=alertdialog]')].find(shown);
   const root = dialog ?? document.querySelector('#main-content') ?? document.body;
@@ -52,9 +59,11 @@ const probe = ({ LONG_BLOCK, INERT_WORDS, NEAR_PX }) => {
   // With a dialog open the screen is the dialog: the page behind it is dimmed and measured on its own.
   const blocks = new Map();
   const walker = document.createTreeWalker(dialog ?? document.body, NodeFilter.SHOW_TEXT);
+  // Punctuation alone (the “ / ” in “216 / 5,000”) joins the block it sits in, but never starts one.
   for (let node; (node = walker.nextNode());) {
-    if (!/[A-Za-z0-9]/.test(node.nodeValue) || node.parentElement.closest(SKIP_TEXT) || !shown(node.parentElement)) continue;
+    if (!node.nodeValue.trim() || node.parentElement.closest(SKIP_TEXT) || !shown(node.parentElement)) continue;
     const block = blockOf(node);
+    if (!/[A-Za-z0-9]/.test(node.nodeValue) && !blocks.has(block)) continue;
     const entry = blocks.get(block) ?? blocks.set(block, { el: block, text: '', last: null }).get(block);
     entry.text += (entry.last && (entry.last !== node.parentElement || /\d$/.test(entry.text) && /^\d/.test(node.nodeValue)) ? ' ' : '') + node.nodeValue;
     entry.last = node.parentElement;
@@ -102,32 +111,71 @@ const probe = ({ LONG_BLOCK, INERT_WORDS, NEAR_PX }) => {
   // The same value twice on one screen: the figures in short labels and stats (not prose, tables, charts, dates or
   // times) with at least 2 significant digits, in two places that aren't one inside the other.
   const MONTH = '(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*';
-  const values = list.filter(b => !b.table && b.words <= 8 && !b.el.closest('svg, [aria-hidden=true], [class*=chart], [class*=axis], time, [role=img], [role=tablist], [role=radiogroup], [role=combobox], select')).flatMap(b => {
+  const figures = list.filter(b => !b.table && b.words <= 8 && !b.el.closest('svg, [aria-hidden=true], [class*=chart], [class*=axis], time, [role=img], [role=tablist], [role=radiogroup], [role=combobox], select')).flatMap(b => {
     const text = b.text.replace(/\d{1,2}:\d{2}(:\d{2})?/g, ' ').replace(new RegExp(`${MONTH}\\s+\\d{1,2}|\\d{1,2}\\s+${MONTH}|\\d{4}-\\d{2}-\\d{2}`, 'g'), ' ');
     // Not part of an identifier (INV-2209, order 4821's “#4821”) or a unit word glued on (30d, 24h).
     // Thresholds (“≥ 2% and ≥ 25”) are rules, not readings, and “/ 100” is a scale. The word after a figure is its
     // unit: “1,000 emails” and “1,000 recipients” are different things.
     if (/[≥≤<>]/.test(text)) return [];
-    return [...text.matchAll(/(?<![\w#-])[$€£]?\d[\d,]*(\.\d+)?%?(?![\w-])/g)].map(m => ({ ...b, at: m.index, shown: m[0], value: m[0].replace(/[$€£,%]/g, '').replace(/\.0+$/, ''), unit: /^\s*([A-Za-z]+)/.exec(text.slice(m.index + m[0].length))?.[1]?.toLowerCase().replace(/s$/, '') ?? '' }))
-      .filter(v => v.value.replace(/^[0.]+/, '').replace(/\D/g, '').length >= 2 && !/^(19|20)\d\d$/.test(v.value) && !(v.value === '100' && /(\/|of|–)\s*$/.test(text.slice(0, v.at))));
+    // A figure's part: `used` is x in “x / y” or “x of y” (not “x of y left”), `cap` is y, anything else `whole`.
+    return [...text.matchAll(/(?<![\w#-])[$€£]?\d[\d,]*(\.\d+)?%?(?![\w-])/g)].map(m => {
+      const before = text.slice(0, m.index), after = text.slice(m.index + m[0].length);
+      const part = /^\s*(\/|of)\s*[$€£]?\d/.test(after) ? (/\b(left|remaining)\b/.test(text) ? 'left' : 'used') : /(\/|\bof)\s*$/.test(before) ? 'cap' : 'whole';
+      return { ...b, at: m.index, shown: m[0], part, value: m[0].replace(/[$€£,%]/g, '').replace(/\.0+$/, ''), unit: /^\s*([A-Za-z]+)/.exec(after)?.[1]?.toLowerCase().replace(/s$/, '') ?? '' };
+    }).filter(v => !/^(19|20)\d\d$/.test(v.value) && !(v.value === '100' && /(\/|of|–)\s*$/.test(text.slice(0, v.at))));
   });
+  const values = figures.filter(v => v.value.replace(/^[0.]+/, '').replace(/\D/g, '').length >= 2);
   // A value's label: the nearest short text before it in its card (or its own words, “Limit 5,000/day”).
+  const CONNECTIVE = /^(of|a|an|the|to|in|at|on|per|and|or|left|remaining|used|day|days|next|this|from)$/i;
   const context = b => {
-    const own = norm(b.text.replace(/[$€£]?\d[\d,./]*%?/g, ' ').replace(/[·:|]/g, ' '));
-    if (/[A-Za-z]{3,}/.test(own)) return own.slice(0, 30);
+    const own = norm(b.text.replace(/[$€£]?\d[\d,./]*%?/g, ' ').replace(/[·:|/()+−-]/g, ' '));
+    if (own.split(' ').some(w => w.length >= 3 && !CONNECTIVE.test(w))) return own.slice(0, 30);
+    // At each level up: the level's own text (a stat's label beside its figure), else the first short text before it.
     for (let el = b.el.parentElement, i = 0; el && i < 4; el = el.parentElement, i++) {
-      const before = list.filter(x => x !== b && el.contains(x.el) && !x.el.contains(b.el) && x.words <= 6 && /[A-Za-z]{3,}/.test(x.text) && (x.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING));
+      const label = x => x !== b && x.words <= 6 && /[A-Za-z]{3,}/.test(x.text);
+      const before = [...list.filter(x => x.el === el && label(x)), ...list.filter(x => label(x) && x.el !== el && el.contains(x.el) && !x.el.contains(b.el) && (x.el.compareDocumentPosition(b.el) & Node.DOCUMENT_POSITION_FOLLOWING))];
       if (before.length) return before[0].text.slice(0, 30);
     }
     return '';
   };
+  // A caption that restates its figure: a line with words in the same small card as a big figure that gives the figure
+  // again (“0.00% bounced” under “Bounced 0.00%”). Its pair isn't reported again as dup-value.
+  const covered = [];
+  const cover = els => covered.push(new Set(els));
+  const isCovered = els => covered.some(set => els.every(el => set.has(el)));
+  const common = (a, b) => { let el = a; while (el && !el.contains(b)) el = el.parentElement; return el; };
+  for (const f of figures.filter(v => v.size >= 18 && v.inRoot && v.words <= 2)) {
+    for (const c of figures.filter(v => v.el !== f.el && v.shown === f.shown && v.size < f.size && /[A-Za-z]{3,}/.test(v.text))) {
+      const card = common(f.el, c.el);
+      if (!card || card === root || card.getBoundingClientRect().height > 220 || isCovered([f.el, c.el])) continue;
+      cover([f.el, c.el]);
+      find('restate-value', `“${c.text.slice(0, 50)}” repeats ${f.shown}${context(f) ? ` (${context(f)})` : ''} right beside it: drop the caption`, `${context(f)}|${c.text.replace(/[\d.,%$]+/g, '#').slice(0, 40)}`, [c.el], 'restates');
+    }
+  }
   const byValue = new Map();
   for (const v of values) (byValue.get(v.value) ?? byValue.set(v.value, []).get(v.value)).push(v);
   for (const [value, all] of byValue) for (const group of (units => units.length < 2 ? [all] : units.map(u => all.filter(v => !v.unit || v.unit === u)))([...new Set(all.map(v => v.unit).filter(Boolean))])) {
     const apart = group.filter((v, i) => !group.some((w, j) => j < i && near(v, w)));
-    if (apart.length < 2 || !apart.some(v => v.inRoot)) continue;
+    if (apart.length < 2 || !apart.some(v => v.inRoot) || isCovered(apart.map(v => v.el))) continue;
+    cover(apart.map(v => v.el));
     const labels = apart.map(v => `${context(v) || 'unlabelled'} (${where(v)})`);
     find('dup-value', `${apart[0].shown} shown ${apart.length} times: ${labels.join(', ')}`, `${value}|${apart.map(v => context(v) || v.text.slice(0, 20)).join('|')}`, apart.map(v => v.el), apart[0].shown);
+  }
+  // The same fact twice, matched by its label rather than its figure (FACTS): two windows or roundings of one measure
+  // (252 emails in the last 24 hours, 216 of the daily limit used) still read as one thing said twice, and differing
+  // figures for it only add doubt. `when` limits a fact to a screen state (the 24h range).
+  const FACTS = [
+    { fact: 'the sender score', parts: [{ label: /^sender score$/i, test: v => v.text.replace(/\s*[A-F][+-]?$/, '') === v.shown }] },
+    { fact: 'emails in the last 24 hours', when: () => [...document.querySelectorAll('[role=tab][aria-selected=true]')].some(t => /^24\s?h$/i.test(norm(t.textContent))), parts: [{ label: /^emails$/i, part: 'whole' }, { label: /daily limit|recipients/i, part: 'used' }] },
+    { fact: 'the daily limit', parts: [{ label: /\blimit\b/i, test: v => /^\s*(\/\s*day|a day)/i.test(v.text.slice(v.at + v.shown.length)) }, { label: /daily limit/i, part: 'cap' }] },
+  ];
+  for (const { fact, when, parts } of FACTS) {
+    if (when && !when()) continue;
+    const found = figures.filter(v => parts.some(p => p.label.test(context(v)) && (!p.part || v.part === p.part) && (!p.test || p.test(v))));
+    const apart = found.filter((v, i) => !found.some((w, j) => j < i && (w.el === v.el || near(v, w))));
+    if (apart.length < 2 || !apart.some(v => v.inRoot) || isCovered(apart.map(v => v.el))) continue;
+    cover(apart.map(v => v.el));
+    find('dup-fact', `${fact} shown ${apart.length} times: ${apart.map(v => `${v.shown} in ${context(v) || 'unlabelled'} (${where(v)})`).join(', ')}`, `${fact}|${apart.map(v => context(v)).join('|')}`, apart.map(v => v.el), fact);
   }
   // Sections with the same label: two headings with the same text on one screen (navigation and tabs left out).
   const heads = list.filter(b => b.heading && !b.shell && b.words <= 8);
@@ -156,6 +204,62 @@ const probe = ({ LONG_BLOCK, INERT_WORDS, NEAR_PX }) => {
       if (!acts) find('inert', `nothing to act on near: “${b.text.slice(0, 70)}…”`, b.text.slice(0, 40), [b.el], 'no action');
     }
   }
+  // Detail shown by default: a summary figure (a big number outside a dialog) in a card or column, with 5+ rows or 40+
+  // words of detail right under it in the same section and not behind a click. The figure already makes the point; the
+  // detail can open from it (a dialog or an expander). The page's own data tables are content, not detail.
+  const content = text => norm(text).toLowerCase().replace(/[’']s\b/g, '').split(/[^a-z]+/).filter(w => w.length >= 3 && !/^(the|and|for|with|from|that|this|your|you|are|its|can|has|have|was|were|will|not|any|all|per|one)$/.test(w)).map(w => w.replace(/(ies|es|s|ed|ing)$/, ''));
+  const summaries = list.filter(b => b.inRoot && !b.shell && !b.table && b.size >= 20 && b.words <= 3 && /\d/.test(b.text) && !b.el.closest('[role=dialog], [role=alertdialog]'));
+  const disclosed = new Set();
+  for (const s of summaries) {
+    for (let el = s.el.parentElement, depth = 0; el && depth < 6 && el !== root && !el.matches('#main-content, [role=dialog]'); el = el.parentElement, depth++) {
+      if (el.querySelector('h1, table.ui-table, [role=grid]') || disclosed.has(el)) break;
+      const under = r => r.top >= s.bottom - 1 && r.top <= s.bottom + DETAIL_REACH;
+      const rows = [...el.querySelectorAll('li, tr, dt, [role=row]')].filter(r => shown(r) && !r.contains(s.el) && !r.closest('nav, details:not([open]), [aria-expanded=false]') && under(r.getBoundingClientRect())).length;
+      const detail = list.filter(b => el.contains(b.el) && b !== s && !b.heading && !b.el.closest('nav') && under(b) && !(b.control && b.words <= 3)).reduce((n, b) => n + b.words, 0);
+      if (rows < DETAIL_ROWS && detail < DETAIL_WORDS) continue;
+      disclosed.add(el);
+      const name = context(s) || s.text;
+      find('disclosure', `${s.text} (${name}) has ${rows ? `${rows} rows and ` : ''}${detail} words of detail right under it: show the figure, and open the detail from it (a dialog or an expander)`, `${name}|${s.el.className}`, [el], `${rows} rows · ${detail}w`);
+      break;
+    }
+  }
+  // A unit or label on every row of a table column (“3 messages”, “5 messages”): the column's header can say it once.
+  const UNITLESS = new RegExp(`^(${MONTH}|mon|tue|wed|thu|fri|sat|sun|utc|am|pm|of)$`, 'i');
+  for (const table of root.querySelectorAll('table')) {
+    const rows = [...table.querySelectorAll('tbody tr')].filter(shown);
+    if (rows.length < 4 || !shown(table)) continue;
+    const heads = [...table.querySelectorAll('thead th')].map(th => norm(th.textContent));
+    for (let c = 0; c < Math.max(...rows.map(r => r.cells.length)); c++) {
+      // Short cells with a number in them, and a whole word (not part of an ID like INV-2209) shared by every one.
+      const cells = rows.map(r => r.cells[c]).filter(cell => cell && shown(cell)).map(cell => norm(cell.textContent));
+      if (cells.length < 4 || new Set(cells).size === 1 || !cells.every(t => /(^|\s)[$€£]?\d[\d,.]*%?(\s|$)/.test(t) && words(t) <= 5)) continue;
+      const tokens = cells.map(t => new Set(t.toLowerCase().split(/\s+/).map(w => w.replace(/[.,:;·]+$/, '')).filter(w => /^[a-z]{2,}$/.test(w) && !UNITLESS.test(w))));
+      const shared = [...tokens[0]].filter(w => tokens.every(set => set.has(w)));
+      if (shared.length) find('repeated-unit', `every row of “${heads[c] || `column ${c + 1}`}” says “${shared.join(' ')}”: say it once in the header`, `${heads[c] || c}|${shared.join(' ')}`, [table.querySelector(`thead th:nth-child(${c + 1})`) ?? table], shared.join(' '));
+    }
+  }
+  // Helper text that says what the field's label (or placeholder) already does, or sits under a self-explanatory field
+  // (a name, an email, a search) without a number, limit or consequence.
+  const SELF = /^(name|email|email address|search|password|subject|from|to|description|display name|first name|last name|url)$/i;
+  for (const hint of root.querySelectorAll('.ui-field__hint:not(.ui-field__error)')) {
+    const field = hint.closest('.ui-field');
+    if (!field || !shown(hint)) continue;
+    const label = norm(field.querySelector('.ui-field__label')?.textContent ?? ''), text = norm(hint.textContent);
+    const place = field.querySelector('[placeholder]')?.getAttribute('placeholder') ?? '';
+    const h = content(text), l = new Set(content(`${label} ${place}`));
+    const restates = h.length > 0 && h.filter(w => l.has(w)).length / h.length >= 0.6;
+    const plain = SELF.test(label) && !/\d|\b(only|never|can.?t|cannot|won.?t|must|once|again|required|optional|private|public|visible|shown)\b/i.test(text);
+    if (restates || plain) find('obvious-helper', `“${text.slice(0, 60)}” under “${label}” ${restates ? 'repeats the label' : 'explains a self-explanatory field'}: drop it`, `${label}|${text.slice(0, 40)}`, [hint], 'obvious');
+  }
+  // A section's intro whose first sentence restates its heading (“Score and daily limit” → “… a daily limit … by the
+  // sender score”) and adds little else.
+  for (const h of list.filter(b => b.heading && b.inRoot && !b.shell && b.words <= 8)) {
+    const next = list.find(b => b !== h && b.inRoot && !b.heading && !b.control && b.words >= 4 && b.top >= h.bottom - 2 && b.top <= h.bottom + 48 && Math.abs(b.left - h.left) < 40);
+    if (!next) continue;
+    // It leads with the heading's own words and adds at most 4 more.
+    const H = content(h.text), S = content(next.text.split(/(?<=[.!?])\s+/)[0]);
+    if (H.length && S.slice(0, H.length).every(w => H.includes(w)) && H.every(w => S.includes(w)) && S.length <= H.length + 4) find('intro-restates', `the first line under “${h.text}” says its heading again: “${next.text.slice(0, 60)}”`, `${h.text}|${next.text.slice(0, 30)}`, [next.el], 'restates heading');
+  }
   window.__density = { marks };
   // Words outside tables and card lists: the page's own copy, labels and figures. Rows of data are counted apart and
   // not scored; their amount depends on the data, not on the page.
@@ -166,14 +270,16 @@ const probe = ({ LONG_BLOCK, INERT_WORDS, NEAR_PX }) => {
     scope: dialog ? 'dialog' : 'page', words: total, fold: above, dataWords: inRoot.filter(b => b.table).reduce((n, b) => n + b.words, 0), longBlocks: findings.filter(f => f.type === 'long-block').length,
     paragraphs: inRoot.filter(b => b.paragraph).length, controls: controls.size, tips: tips.length,
     duplicates: findings.filter(f => f.type.startsWith('dup-')).length, inert: findings.filter(f => f.type === 'inert').length,
+    disclosures: findings.filter(f => f.type === 'disclosure').length, empty: findings.filter(f => ['restate-value', 'repeated-unit', 'obvious-helper', 'intro-restates'].includes(f.type)).length,
     blocks: inRoot.sort((a, b) => b.words - a.words).slice(0, 5).map(b => ({ words: b.words, text: b.text.slice(0, 140) })), findings,
     values: values.map(v => `${v.shown}|${v.text.slice(0, 30)}|${where(v)}`).slice(0, 40), tipTexts: tips.slice(0, 12).map(el => el.matches('svg') ? `icon in ${label(el.parentElement)}` : norm(el.getAttribute('title') ?? '').slice(0, 60)), controlNames: [...controls].slice(0, 60),
   };
 };
 
-// Draws each finding over the page: duplicates magenta, long blocks orange, inert explanations yellow, with a tag.
+// Draws each finding over the page: duplicates magenta, detail to disclose blue, text that adds nothing purple, long
+// blocks orange, inert explanations yellow, each with a tag.
 const annotate = ({ score, name }) => {
-  const colors = { 'dup-value': '#e0119d', 'dup-label': '#e0119d', 'dup-text': '#e0119d', 'long-block': '#f06a00', inert: '#c9a400' };
+  const colors = { 'dup-value': '#e0119d', 'dup-fact': '#e0119d', 'dup-label': '#e0119d', 'dup-text': '#e0119d', disclosure: '#2f6bff', 'long-block': '#f06a00', inert: '#c9a400', 'restate-value': '#8a3ffc', 'repeated-unit': '#8a3ffc', 'obvious-helper': '#8a3ffc', 'intro-restates': '#8a3ffc' };
   const layer = document.createElement('div');
   layer.className = 'density-overlay';
   layer.style.cssText = 'position:fixed;inset:0;pointer-events:none;z-index:2147483647;font:600 11px/1.2 ui-monospace,monospace';
@@ -192,7 +298,7 @@ const annotate = ({ score, name }) => {
   document.body.append(layer);
 };
 
-export const score = m => Math.round(m.words * SCORE.word + m.fold * SCORE.foldWord + m.longBlocks * SCORE.longBlock + m.paragraphs * SCORE.paragraph + m.controls * SCORE.control + m.tips * SCORE.tip + m.duplicates * SCORE.duplicate + m.inert * SCORE.inert);
+export const score = m => Math.round(m.words * SCORE.word + m.fold * SCORE.foldWord + m.longBlocks * SCORE.longBlock + m.paragraphs * SCORE.paragraph + m.controls * SCORE.control + m.tips * SCORE.tip + m.duplicates * SCORE.duplicate + m.inert * SCORE.inert + (m.disclosures ?? 0) * SCORE.disclosure + (m.empty ?? 0) * SCORE.empty);
 const pageKey = r => `${r.page} · ${r.device}`;
 const slug = text => text.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
 
@@ -209,7 +315,7 @@ async function calm(page) {
 // Called by cls.mjs on each wanted job once the page has settled (and its CLS has been read).
 export async function collect(page, job) {
   await calm(page);
-  const m = await page.evaluate(probe, { LONG_BLOCK, INERT_WORDS, NEAR_PX });
+  const m = await page.evaluate(probe, { LONG_BLOCK, INERT_WORDS, NEAR_PX, DETAIL_ROWS, DETAIL_WORDS, DETAIL_REACH });
   m.score = score(m);
   // The whole page, annotated: the viewport grows to the content's height so findings below the fold show too.
   mkdirSync(OUT, { recursive: true });
@@ -259,9 +365,9 @@ export function report(results, { update = false, ci = Boolean(process.env.CI) }
     '',
     `Score = ${Object.entries(SCORE).map(([k, v]) => `${v}·${k}`).join(' + ')}; lower is easier to take in. Fails on a new finding or a score more than 5% (at least 3) over the baseline. Rules: app/scripts/density.mjs; fixing: app/scripts/copy-fix.md.`,
     '',
-    '| Page | Device | Score | Δ | Words | Above fold | Long blocks | Paragraphs | Controls | Tips | Duplicates | Inert |',
-    '| --- | --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |',
-    ...rows.map(({ r, m, worse, fresh, ...row }) => `| ${worse || fresh.length ? '❌ ' : ''}${r.page}${m.scope === 'dialog' ? ' (dialog)' : ''} | ${r.device} | ${m.score} | ${delta({ ...row, m })} | ${m.words} | ${m.fold} | ${m.longBlocks || ''} | ${m.paragraphs || ''} | ${m.controls} | ${m.tips || ''} | ${m.duplicates || ''} | ${m.inert || ''} |`),
+    '| Page | Device | Score | Δ | Words | Above fold | Long blocks | Paragraphs | Controls | Tips | Duplicates | Disclose | Adds nothing | Inert |',
+    '| --- | --- | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: | --: |',
+    ...rows.map(({ r, m, worse, fresh, ...row }) => `| ${worse || fresh.length ? '❌ ' : ''}${r.page}${m.scope === 'dialog' ? ' (dialog)' : ''} | ${r.device} | ${m.score} | ${delta({ ...row, m })} | ${m.words} | ${m.fold} | ${m.longBlocks || ''} | ${m.paragraphs || ''} | ${m.controls} | ${m.tips || ''} | ${m.duplicates || ''} | ${m.disclosures || ''} | ${m.empty || ''} | ${m.inert || ''} |`),
   ];
   if (failed.length) {
     md.push('', '#### Got denser', '');
@@ -272,6 +378,8 @@ export function report(results, { update = false, ci = Boolean(process.env.CI) }
   }
   const dups = rows.flatMap(row => row.m.findings.filter(f => f.type.startsWith('dup-')).map(f => `- ${row.key}: **${f.type}** ${f.message}`));
   if (dups.length) md.push('', '#### Duplicate information', '', ...[...new Set(dups)]);
+  const extra = rows.flatMap(row => row.m.findings.filter(f => ['disclosure', 'restate-value', 'repeated-unit', 'obvious-helper', 'intro-restates'].includes(f.type)).map(f => `- ${row.key}: **${f.type}** ${f.message}`));
+  if (extra.length) md.push('', '#### Detail to disclose, and text that adds nothing', '', ...[...new Set(extra)]);
   if (errors.length) md.push('', '#### Not measured', '', ...errors.map(r => `- ${r.page} (${r.device}): ${r.error}`));
   const markdown = md.join('\n') + '\n';
   mkdirSync(OUT, { recursive: true });
