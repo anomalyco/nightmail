@@ -152,7 +152,7 @@ function declaration(segment: Segment): { name: Token; value: CV[] } | null {
 // `selector` and `media`: the rule being read and the @media queries around it, for `toggle`, which says whether what it
 // hides may stay hidden (blocks shown for one screen width or colour scheme and hidden for another).
 type Read = { text: string; resolve: Resolve; policy: FontPolicy; destinations: string[]; removed: string[]; fonts: string[]; inline: boolean; modeled: boolean;
-  selector: string; media: string[]; toggle: Toggle };
+  selector: string; media: string[]; toggle: Toggle; shown: boolean };
 /** Whether a sheet's hiding declarations may stay, by the rule's selector and the @media queries around it. */
 export type Toggle = (selector: string, media: string[]) => boolean;
 const raw = (read: Read, n: { start: number; end: number }) => read.text.slice(n.start, n.end);
@@ -233,7 +233,7 @@ function keep(read: Read, d: { name: Token; value: CV[] }, context: 'style' | 'f
   // mso-hide:all hides from Outlook alone what every other client shows (a button's HTML beside its VML twin): with
   // the conditional comments gone, Outlook shows it too.
   if (base === 'mso-hide' && idents.includes('all')) return 'CSS mso-hide (Outlook shows it too)';
-  if (read.inline) return null;
+  if (read.inline && !read.shown) return null;
   // In a sheet, what would hide whatever its selector matches is removed, so the text shows (the copy removes content
   // that a style attribute hides: src/hosted-html.ts), unless it toggles whole blocks for a screen width or colour
   // scheme (`toggle`). So are colours in a rule the screen's style reader doesn't apply.
@@ -364,8 +364,8 @@ function sheet(read: Read, items: Item[], top: boolean): { removals: Range[]; ke
   }
   return { removals, kept };
 }
-function filter(css: string, resolve: Resolve, policy: FontPolicy, as: 'sheet' | 'declarations', toggle: Toggle = () => false): HostedCss {
-  const text = css.replace(/\r\n?/g, '\n'), read: Read = { text, resolve, policy, destinations: [], removed: [], fonts: [], inline: as === 'declarations', modeled: true, selector: '', media: [], toggle };
+function filter(css: string, resolve: Resolve, policy: FontPolicy, as: 'sheet' | 'declarations', toggle: Toggle = () => false, shown = false): HostedCss {
+  const text = css.replace(/\r\n?/g, '\n'), read: Read = { text, resolve, policy, destinations: [], removed: [], fonts: [], inline: as === 'declarations', modeled: true, selector: '', media: [], toggle, shown };
   let removals: Range[];
   try {
     const items = values(tokenize(text), text.length);
@@ -384,3 +384,5 @@ export const hostedSheet = (css: string, resolve: Resolve, policy: FontPolicy, t
 const NOTHING: FontPolicy = { font: () => false, sheet: () => false };
 /** A style attribute as delivered. */
 export const hostedDeclarations = (css: string, resolve: Resolve) => filter(css, resolve, NOTHING, 'declarations');
+/** A style attribute without what would hide its element, as a sheet's would be (content shown everywhere). */
+export const shownDeclarations = (css: string, resolve: Resolve) => filter(css, resolve, NOTHING, 'declarations', () => false, true);

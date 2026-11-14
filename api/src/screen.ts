@@ -50,7 +50,7 @@ function refused(message: string, details?: Record<string, unknown>, index?: num
 const unreadable = () => refused('Simplify the HTML so Hosted sending can screen it: it is too large or too deeply nested to read.');
 /** Over the screened-text limit: the measured size and the limit, so the sender knows how much to cut. */
 export const tooLarge = (screenedBytes: number, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) =>
-  refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's text in document order (twice when it has alt text: as shown with its images and without them), the text part unless it says exactly the same, and each distinct link and image address. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
+  refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's text in document order (again with images blocked when it has alt text, and once per combination of the screen widths, colour schemes or mail clients that toggle its blocks), its preheader, the text part unless it says exactly the same, and each distinct link and image address. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
     { screenedBytes, limitBytes }, index);
 /** Markup whose destinations the screen can't read: refused for Hosted mail, named so the sender can fix it. */
 export const unsupportedUrls = (unsupported: string[], index?: number) => {
@@ -102,11 +102,11 @@ export const fontSources = (config: Pick<Runtime['config'], 'hostedFontHosts' | 
  *
  * The text is read in document order, as a client lays it out: inline runs stay one word, block elements and line
  * breaks end the line, and a table row whose cells hold short pieces is read again glued, after the text, the way a
- * recipient reads a word laid out across adjacent cells. A block a screen width or colour scheme shows or hides whole
- * (`toggles`) is read after that, as a block of its own, and the text around it as if it weren't there, so every
- * recipient's text is read, whichever blocks they see. An image's alt text is read where the image is: a client shows
- * it in its place when images are blocked, so a message with alt text is read twice, as shown with its images and as
- * shown without them.
+ * recipient reads a word laid out across adjacent cells. Where screen widths, colour schemes or mail clients show
+ * different blocks (`variants`), each variant's text is read complete and in order, as its own section, so every
+ * recipient's text is read whole, whichever blocks they see. An image's alt text is read where the image is: a client
+ * shows it in its place when images are blocked, so a message with alt text is also read as shown without its images.
+ * The preheader is read apart, after the body.
  */
 export async function readHtml(html: string, visit?: (tag: string) => void, options: HostedOptions = {}) {
   if (html.length>512*1024) throw unreadable();
@@ -116,54 +116,60 @@ export async function readHtml(html: string, visit?: (tag: string) => void, opti
   for (const tag of copy.tags) visit?.(tag);
   const hosts=new Set([...destinations].map(destinationHost).filter(Boolean)), mismatches=new Set<string>(), links:string[]=[], images:{ alt: boolean }[]=[];
   type Part=string|{ alt:string };
-  // A row's cells, each with whether a screen width or colour scheme toggles it; blocks so toggled, read on their own.
-  const lines:Part[][]=[], rows:{ parts:Part[]; toggled:boolean }[][]=[], glued:Part[][]=[], blocks:Part[][]=[]; let line:Part[]=[];
-  const flush=()=>{ if(line.length) lines.push(line); line=[]; };
-  const walk=(node:typeof root.childNodes[number], anchor:string)=>{
-    if ('value' in node) {
-      line.push(node.value);
-      if(anchor) for(const word of normalize(node.value).split(/\s+/)) {
-        if(!word.includes('.') || word.length>2048)continue;
-        const label=host(word.includes('://')?word:'https://'+word);
-        if(label && label!==anchor) mismatches.add(`${label} → ${anchor}`);
-      }
-      return;
-    }
-    const children='childNodes' in node ? node.childNodes : [];
-    if (!('tagName' in node)) { for (const child of children) walk(child,anchor); return; }
-    const tag=node.tagName;
-    // Only what the body shows: the head isn't (the copy has no title or comments anywhere).
-    if (tag==='head' || tag==='style' || tag==='script') return;
-    // URLs are read from the decoded attribute as they are, never as prose (the copy's inventory has them all).
-    for (const a of node.attrs) if (tag==='a' && a.name==='href') { const target=destination(a.value); anchor=target ? destinationHost(target) : ''; if (target) links.push(target); }
-    // A block a screen width or colour scheme shows or hides whole is read as a block of its own, and the text around it
-    // as if it weren't there, which is how a recipient for whom it is hidden reads that text.
-    const toggled=copy.toggles.has(node), outer=line, before=lines.length;
-    if (toggled) line=[];
-    if (tag==='img') {
-      const alt=node.attrs.find(a=>a.name==='alt')?.value ?? '';
-      images.push({ alt: !!alt.trim() });
-      if (alt) line.push({ alt });
-    }
-    const laid=copy.layout.get(node), inline=!toggled && (laid ? laid==='inline' : INLINE.has(tag));
-    if (!inline && !toggled) flush();
-    const start=lines.length;
-    if (tag==='tr') rows.push([]);
-    for (const child of children) walk(child,anchor);
-    if (!inline) flush();
-    if (tag==='td' || tag==='th') rows[rows.length-1]?.push({ parts: lines.slice(start).flatMap((l,i)=>i ? [' ',...l] : l), toggled });
-    if (tag==='tr') {
-      // Glued with every cell, and without the toggled ones, as each recipient sees the row.
-      const cells=rows.pop()!;
-      for (const shown of cells.some(cell=>cell.toggled) ? [cells, cells.filter(cell=>!cell.toggled)] : [cells]) if (shown.length>1 && shown.some(cell=>[false,true].some(alt=>{ const t=render(cell.parts,alt).trim(); return t && t.length<=4; }))) glued.push(shown.flatMap(cell=>cell.parts));
-    }
-    if (toggled) { blocks.push(...lines.splice(before)); line=outer; }
-  };
   const render=(parts:Part[], alt:boolean)=>parts.map(p=>typeof p==='string' ? p : alt ? p.alt : '').join('');
-  for (const child of root.childNodes) walk(child,'');
-  flush();
-  const read=(alt:boolean)=>[...lines,...glued,...blocks].map(l=>render(l,alt)).filter(l=>l.trim()).join('\n'), shown=read(false), blocked=read(true);
-  return { text: blocked===shown ? shown : `${shown}\n${blocked}`, hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, links, images, html: copy.html };
+  // One way the body shows: its text in order, without the toggles this variant hides or the preheader. `collect`
+  // gathers links and images too, once.
+  const read=(hiding:Set<object>, collect:boolean)=>{
+    const lines:Part[][]=[], rows:Part[][][]=[], glued:Part[][]=[]; let line:Part[]=[];
+    const flush=()=>{ if(line.length) lines.push(line); line=[]; };
+    const walk=(node:typeof root.childNodes[number], anchor:string)=>{
+      if ('value' in node) {
+        line.push(node.value);
+        if(collect && anchor) for(const word of normalize(node.value).split(/\s+/)) {
+          if(!word.includes('.') || word.length>2048)continue;
+          const label=host(word.includes('://')?word:'https://'+word);
+          if(label && label!==anchor) mismatches.add(`${label} → ${anchor}`);
+        }
+        return;
+      }
+      const children='childNodes' in node ? node.childNodes : [];
+      if (!('tagName' in node)) { for (const child of children) walk(child,anchor); return; }
+      const tag=node.tagName;
+      // Only what the body shows: the head isn't (the copy has no title or comments anywhere).
+      if (tag==='head' || tag==='style' || tag==='script' || node===copy.preheader || hiding.has(node)) return;
+      // URLs are read from the decoded attribute as they are, never as prose (the copy's inventory has them all).
+      for (const a of node.attrs) if (tag==='a' && a.name==='href') { const target=destination(a.value); anchor=target ? destinationHost(target) : ''; if (target && collect) links.push(target); }
+      if (tag==='img') {
+        const alt=node.attrs.find(a=>a.name==='alt')?.value ?? '';
+        if (collect) images.push({ alt: !!alt.trim() });
+        if (alt) line.push({ alt });
+      }
+      const laid=copy.layout.get(node), inline=laid ? laid==='inline' : INLINE.has(tag);
+      if (!inline) flush();
+      const start=lines.length;
+      if (tag==='tr') rows.push([]);
+      for (const child of children) walk(child,anchor);
+      if (!inline) flush();
+      if (tag==='td' || tag==='th') rows[rows.length-1]?.push(lines.slice(start).flatMap((l,i)=>i ? [' ',...l] : l));
+      if (tag==='tr') { const cells=rows.pop()!; if (cells.length>1 && cells.some(cell=>[false,true].some(alt=>{ const t=render(cell,alt).trim(); return t && t.length<=4; }))) glued.push(cells.flat()); }
+    };
+    for (const child of root.childNodes) walk(child,'');
+    flush();
+    return (alt:boolean)=>[...lines,...glued].map(l=>render(l,alt)).filter(l=>l.trim()).join('\n');
+  };
+  // Every way the body shows, each complete and in order, as its own section: with images and with images blocked,
+  // in each variant (src/hosted-html.ts), the same text once; then the preheader, which inboxes show apart from it.
+  const sections:string[]=[], said=new Set<string>();
+  const section=(title:string, text:string)=>{ if (!text.trim() || said.has(text)) return; said.add(text); sections.push(sections.length ? `--- ${title} ---\n${text}` : text); };
+  const bare=copy.variants.length===1 && !copy.variants[0]!.size;
+  if (!bare) read(new Set(), true);
+  copy.variants.forEach((hiding, i)=>{
+    const stream=read(hiding, bare);
+    section(i ? 'As some screens, colour schemes or mail clients show it' : 'As shown', stream(false));
+    section(i ? 'As some screens, colour schemes or mail clients show it, with images blocked' : 'With images blocked', stream(true));
+  });
+  if (copy.preheader) section('Preheader', copy.preheader.childNodes.map(child=>'value' in child ? child.value : '').join(''));
+  return { text: sections.join('\n'), togglesShown: copy.togglesShown, hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, links, images, html: copy.html };
 }
 /**
  * The text the screen reads: the HTML's visible text, then the text part, then raw MIME, each in full. A recipient reads

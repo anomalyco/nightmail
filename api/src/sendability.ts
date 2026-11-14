@@ -4,7 +4,7 @@ import { SHORTENERS, subjectStats, THRESHOLDS } from './deliverability.js';
 import { lint, PreviewLimitError, type Issue, type Client } from './email-preview/index.js';
 import { blockedExtension } from './outbound-content.js';
 import { measureScreen, readHtml, screenTextSignals } from './screen.js';
-import { screenedHtml, screenedHtmlStats } from './screened-html.js';
+import { MAX_CONDITIONS, screenedHtml, screenedHtmlStats } from './screened-html.js';
 import { estimatedMimeBytes, MAX_ENCODED_MESSAGE } from './sending.js';
 import { gradeOf, marketingHourFor } from './standing-model.js';
 import { categories, splitMailbox, type CheckMail, type CheckReport } from './sendability-schema.js';
@@ -89,6 +89,7 @@ async function content(mail:CheckMail, from:string, read:Awaited<ReturnType<type
   }
   if (hosts.size && !(await Promise.all([...hosts].map(async h=>(await shortDomain(h))===from))).some(Boolean)) add('off-brand-links','warning',25,'All link domains differ from the sender','None of the web links shares the sender’s registrable domain. Third-party links can be legitimate.','Use a recognizable branded destination for the primary action.');
   if (read?.unsupported.length) add('unsupported-url','warning',40,'Hosted sending refuses these addresses',`Hosted sending screens every address a message links to or loads from, and where these lead depends on where the message is opened: ${read.unsupported.join('; ')}.`,'Use absolute https:// addresses (or mailto:, tel:, cid: and #fragments), and no <base>.',{unsupported:read.unsupported.length});
+  if (read?.togglesShown) add('hosted-toggles','warning',5,'Content toggled for some screens shown on every screen',`More than ${MAX_CONDITIONS} screen widths, colour schemes or mail clients show or hide parts of this message. The screen reads every combination of up to ${MAX_CONDITIONS}, so with more, Hosted sending shows that content on every screen instead; mail sent through your own AWS account with screen: true is refused (UNSUPPORTED_HTML_IN_SCREENED_MAIL).`,`Toggle content with at most ${MAX_CONDITIONS} media queries or client-specific selectors.`);
   if (read?.removed.length) add('hosted-removed','info',0,'Markup Hosted sending removes',`Hosted sending delivers only markup the screen reads as the recipient sees it, so it removes: ${read.removed.join('; ')}. Mail sent through your own AWS account with screen: true is refused instead (UNSUPPORTED_HTML_IN_SCREENED_MAIL).`,'Keep to the elements and attributes Hosted sending delivers (docs/sending-limits.md, "the delivered copy").',{removed:read.removed.length});
   if (read?.fonts.length) add('custom-font','warning',5,`Custom font from ${read.fonts.slice(0,3).join(', ')} removed`,`Custom font from ${read.fonts.slice(0,3).join(', ')} removed; use a hosted font service. A font can draw text the screen never reads, so Hosted sending loads fonts and style sheets only from font services.`,'Use a hosted font service: Google Fonts, Adobe Fonts or Bunny Fonts.',{hosts:read.fonts.length});
   if (read?.mismatches.size) add('link-label','warning',18,'Link label names a different host','A displayed hostname differs from its actual destination.','Make the visible destination agree with the link.');

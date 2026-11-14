@@ -13619,7 +13619,11 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // salted between the letters of a word is shown with them or dropped with its hiding element, and text a
       // client would draw from style sheets, attributes, controls or foreign content is not delivered at all.
       const {screenedHtml,screenedText,visibleWords}=await import('./src/screened-html.js');
-      const reading=(html:string)=>html.replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').normalize('NFKC').replace(/[\p{Cf}\p{Mn}\s]/gu,'');
+      const strip=(html:string)=>html.replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').normalize('NFKC').replace(/[\p{Cf}\p{Mn}\s]/gu,'');
+      // The preheader is read apart from the body (final review 2): the body reads as one run without it, then it does.
+      const preheader=(html:string)=>/<body[^>]*>\s*(<div style="display:none[^"]*">[^<]*<\/div>)/.exec(html)?.[1];
+      const reading=(html:string)=>strip(html.replace(preheader(html) ?? '\u0000',''));
+      const screenedAs=(saw:string,html:string)=>saw.includes(reading(html)) && (!preheader(html) || saw.includes(strip(preheader(html)!)));
       const salted=(how:(i:number)=>string)=>`<p>Hello</p><p>${[...'SampleMarker'].map((c,i)=>`${c}${how(i)}`).join('')}</p>`;
       const hidden=['display:none','display:/**/none','dis\\70 lay:none','visibility:hidden','opacity:0','opacity:0.0','font-size:0','font-size:2px','font-size:1em','position:absolute;left:-9999px','display:inline-block;transform:scale(0)',
         'display:inline-block;width:0;overflow:hidden','display:inline-block;margin-left:-9999px','text-indent:-9999px','clip-path:inset(100%)','filter:opacity(0)','mix-blend-mode:screen','color:#fefefe','color:rgba(0,0,0,.02)','color:transparent',
@@ -13647,9 +13651,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       let shape=0;
       for (const [kind,list] of Object.entries(shapes)) for (const html of list) {
         // Shapes can normalize to the same copy; a distinct subject keeps each one out of the verdict cache.
-        const copy=screenedHtml(html), screened=await screenSnapshot(runtime,{...s,subject:`shape ${++shape}`,html:copy},true), saw=bodies.at(-1)!.replace(/\s+/g,''), readable=reading(copy).toLowerCase().includes('samplemarker');
+        const copy=screenedHtml(html), screened=await screenSnapshot(runtime,{...s,subject:`shape ${++shape}`,html:copy},true), saw=bodies.at(-1)!.replace(/\s+/g,''), readable=strip(copy).toLowerCase().includes('samplemarker');
         assert.equal(screenedHtml(copy),copy,`${kind}: ${html.slice(0,60)} normalizes once`);
-        assert.ok(saw.includes(reading(copy)),`${kind}: ${html.slice(0,60)} screened as delivered`);
+        assert.ok(screenedAs(saw,copy),`${kind}: ${html.slice(0,60)} screened as delivered`);
         assert.equal(screened?.spam,readable?.99:.01,`${kind}: ${html.slice(0,60)} classified as readable`);
         if (kind==='hiddenText') assert.ok(readable || !copy.toLowerCase().includes('samplemarker'),`${kind}: ${html.slice(0,60)} shown or left out`);
         if (kind==='salted') assert.ok(readable ? !reading(copy).includes('z0') : reading(copy).includes('z0'),`${kind}: ${html.slice(0,60)} filler shown or dropped`);
@@ -13723,7 +13727,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           for (const phrase of expect) assert.ok(bodies.at(-1)!.includes(phrase),`${name}: ${phrase}`);
           assert.ok(!bodies.at(-1)!.includes('PixelsPerInch') && !bodies.at(-1)!.includes('OfficeDocumentSettings'),`${name}: markup noise`);
         }
-        assert.ok(bodies.at(-2)!.replace(/\s+/g,'').includes(reading(copy)),`${name}: screened as delivered`);
+        assert.ok(screenedAs(bodies.at(-2)!.replace(/\s+/g,''),copy),`${name}: screened as delivered`);
       }
       const calls=bodies.length;await assert.rejects(screenSnapshot(runtime,{...s,kind:'marketing',html:'a'.repeat(40000)},true),{code:'CONTENT_TOO_LARGE_TO_SCREEN'});
       assert.equal(bodies.length,calls);
@@ -13789,6 +13793,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         // Recheck 8, R8-H1: alt text is read where the image is, so a phrase across it and the text beside it is read whole.
         {subject:'altBeside',html:`<p><img src="https://cdn.brand.example/a.png" alt="Sample" width="100" height="20">Marker</p><p>${copy}</p>`},
         {subject:'altWithoutSrc',html:`<p><img alt="Sample" width="100" height="20">Marker</p><p>${copy}</p>`},
+        // Final review 2, F2-H2: a hidden block after an image is no preheader, so the alt text and the text after it read whole.
+        {subject:'altPreheader',html:`<div><img src="https://cdn.brand.example/a.png" alt="Sam" width="30" height="18"><div style="display:none">innocent</div>pleMarker</div><p>${copy}</p>`},
         ...Object.entries(screenCorpus()).map(([subject,{html}])=>({subject,html:html.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/,'https://cdn.brand.example/chart.png')}))];
       const ids=ok(await local('POST','/v1/emails/batch',{emails:mail.map(m=>({from:'a@screened.invalid',to:'success@simulator.amazonses.com',...m}))},'live',{authorization:`Bearer ${key.secret}`}),202).data.map((x:Json)=>x.id);
       const report=await runDispatcher(runtime,{region:REGION,accountId:acct,batchSize:24,lanes:1,gate:initialGate()});
@@ -13798,10 +13804,14 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // screened nor delivered; filler salted into a word is dropped with its hiding element, so the word is read.
       // Every delivered copy is the normalized one, and the classifier read exactly its text.
       assert.deepEqual({...outcome},{hidden:'CONTENT_REJECTED_SPAM',undisplayed:'accepted',variable:'accepted',outlook:'accepted',salted:'CONTENT_REJECTED_SPAM','\u202Erekram elpmas\u202C':'accepted',markers:'accepted',rtlTable:'accepted',
-        svgInline:'ATTACHMENT_TYPE_UNSCREENABLE',svgAsPng:'ATTACHMENT_TYPE_UNSCREENABLE',fakePdf:'ATTACHMENT_CONTENT_MISMATCH',imageOnly:'CONTENT_IMAGE_ONLY',banner:'CONTENT_IMAGE_ONLY',minSized:'accepted',styledSize:'CONTENT_IMAGE_ONLY',fillerWords:'CONTENT_IMAGE_ONLY',logoShort:'accepted',altBeside:'CONTENT_REJECTED_SPAM',altWithoutSrc:'CONTENT_REJECTED_SPAM',
+        svgInline:'ATTACHMENT_TYPE_UNSCREENABLE',svgAsPng:'ATTACHMENT_TYPE_UNSCREENABLE',fakePdf:'ATTACHMENT_CONTENT_MISMATCH',imageOnly:'CONTENT_IMAGE_ONLY',banner:'CONTENT_IMAGE_ONLY',minSized:'accepted',styledSize:'CONTENT_IMAGE_ONLY',fillerWords:'CONTENT_IMAGE_ONLY',logoShort:'accepted',altBeside:'CONTENT_REJECTED_SPAM',altWithoutSrc:'CONTENT_REJECTED_SPAM',altPreheader:'CONTENT_REJECTED_SPAM',
         ...Object.fromEntries(Object.keys(screenCorpus()).map(name=>[name,'accepted']))});
-      assert.equal(report.sent,mail.length-11);
-      const reading=(html:string)=>html.replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').normalize('NFKC').replace(/[\p{Cf}\p{Mn}\s]/gu,'');
+      assert.equal(report.sent,mail.length-12);
+      const strip=(html:string)=>html.replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').normalize('NFKC').replace(/[\p{Cf}\p{Mn}\s]/gu,'');
+      // The preheader is read apart from the body (final review 2): the body reads as one run without it, then it does.
+      const preheader=(html:string)=>/<body[^>]*>\s*(<div style="display:none[^"]*">[^<]*<\/div>)/.exec(html)?.[1];
+      const reading=(html:string)=>strip(html.replace(preheader(html) ?? '\u0000',''));
+      const screenedAs=(saw:string,html:string)=>saw.includes(reading(html)) && (!preheader(html) || saw.includes(strip(preheader(html)!)));
       for (const {subject,html,text} of mail) {
         const sent=delivered.get(screenedText(subject));
         if (outcome[subject]!=='accepted') { assert.equal(sent,undefined,`${subject}: not delivered`); continue; }
@@ -13809,7 +13819,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const saw=screened.get(screenedText(subject))!.join('').replace(/\s+/g,'');
         assert.equal(sent!.html,await canonicalHtml(screenedHtml(html!)),`${subject}: delivered as screened`);
         assert.equal(sent!.text,text===undefined?undefined:screenedText(text),`${subject}: text part as screened`);
-        for (const field of [sent!.html!,sent!.text??'']) assert.ok(saw.includes(reading(field)),`${subject}: screened as delivered`);
+        for (const field of [sent!.html!,sent!.text??'']) assert.ok(screenedAs(saw,field),`${subject}: screened as delivered`);
         assert.ok(!/[\u202a-\u202e\u2066-\u2069]/.test(sent!.html!+(sent!.text??'')+screenedText(subject)),`${subject}: no bidi controls delivered`);
         assert.ok(!sent!.html!.toLowerCase().includes('samplemarker') && !/<style|<!--|<script/.test(sent!.html!),`${subject}: nothing a client draws beyond its text`);
         for (const phrase of screenCorpus()[subject]?.expect ?? []) assert.ok(sent!.html!.includes(phrase),`${subject}: ${phrase}`);
@@ -14264,6 +14274,25 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ['inline toggle by class', `<style>.x{display:none} @media (max-width:480px){ .x{display:inline!important} }</style><p>Your<span class="x"> account</span> ${ready}</p>`, false, /\.x\{display:none/],
       ['inline hidden span with a reveal', `<style>@media (max-width:480px){ .x{display:inline!important} }</style><p>Sam<span class="x" style="display:none">innocent</span>pleMarker ${ready}</p>`, true],
       ['hidden block without a reveal', `<p>${ready}</p><div style="display:none">Never shown</div>`, false, /Never shown/],
+      // Final review 2, F2-H1: each way a client may show toggled blocks is read complete and in order, so a phrase
+      // across a toggled block and the block after it is read whole: by screen width, colour scheme or client selector
+      // (a client's own markup may also make the parent a flex row, which takes the hiding away), whatever else the
+      // sheet does (first-line transforms, a zero-width box), and a div as a table part isn't a toggle.
+      ['F2-H1 width toggle', `<style>.m{display:none} @media(max-width:480px){.m{display:block}}</style><div class="m">Sample</div><div>Marker ${ready}</div>`, true],
+      ['F2-H1 dark-mode toggle', `<style>.m{display:none} @media (prefers-color-scheme: dark){.m{display:block}}</style><div class="m">Sample</div><div>Marker ${ready}</div>`, true],
+      ['F2-H1 client selector', `<style>.m{display:none} u + .body .m{display:block!important}</style><div class="m">Sample</div><div>Marker ${ready}</div>`, true],
+      ['F2-H1 client flex parent', `<style>.m{display:none} u + .body .m{display:block!important} u + .body .row{display:flex}</style><div class="row"><div class="m">Sample</div><div>Marker</div></div><p>${ready}</p>`, true],
+      ['F2-H1 first-line', `<style>.m{display:none} @media(max-width:480px){.m{display:block}} div::first-line{text-transform:uppercase}</style><div class="m">Sample</div><div>Marker ${ready}</div>`, true],
+      ['F2-H1 zero-width box', `<style>.m{display:none} @media(max-width:480px){.m{display:block}}</style><div class="m" style="width:0;white-space:nowrap">Sample</div><div>Marker ${ready}</div>`, true],
+      ['F2-H1 table-row-group', `<style>.m{display:none} @media(max-width:480px){.m{display:table-row-group}}</style><div class="m">Sample</div><div>Marker ${ready}</div>`, true],
+      // Three conditions are read in every combination: here only a narrow screen in dark mode shows both blocks.
+      ['three conditions', `<style>.a{display:none} .b{display:none} @media(max-width:480px){.a{display:block}} @media (prefers-color-scheme: dark){.b{display:block}} u + .body .c{display:none}</style><div class="a">Sample</div><div class="c">Note</div><div class="b">Marker</div><p>${ready}</p>`, true],
+      // With more, toggled content shows everywhere, and the checker warns.
+      ['four conditions', `<style>.a{display:none} .b{display:none} .c{display:none} .d{display:none} @media(max-width:300px){.a{display:block}} @media(max-width:400px){.b{display:block}} @media(max-width:500px){.c{display:block}} @media (prefers-color-scheme: dark){.d{display:block}}</style><div class="a">One</div><div class="b">Two</div><div class="c">Three</div><div class="d">Four</div><p>${ready}</p>`, false, /\.[abcd]\{display:none/],
+      // F2-H2: a hidden block after an image is no preheader (the image's fallback is the first thing shown), so it
+      // loses its text and the alt text and the text after it are read whole. A preheader is read on its own.
+      ['F2-H2 hidden block after an image', `<div><img alt="Sam" width="30" height="18"><div style="display:none">innocent</div>pleMarker ${ready}</div>`, true],
+      ['preheader read apart', `<div style="display:none">Sample marker</div><p>${ready}</p>`, true],
     ];
     for (const [name, html, bad, gone] of cases) {
       const { to, reply } = await send(html), start = screened.length;
@@ -14298,6 +14327,13 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     }
     for (const name of ['mobile-only block', 'mobile-only by style attribute']) assert.ok((await measureScreen({ html: cases.find(c => c[0] === name)![1] })).content.includes('Tap the button on your phone.'), `${name}: screened`);
     assert.ok((await removedBy(cases.find(c => c[0] === 'hidden block without a reveal')![1])).includes('hidden elements, with their content'), 'A block nothing reveals loses its text.');
+    assert.ok((await removedBy(cases.find(c => c[0] === 'F2-H2 hidden block after an image')![1])).includes('hidden elements, with their content'), 'No preheader after an image.');
+    const warned = ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: cases.find(c => c[0] === 'four conditions')![1], text: ready })).findings.find((x: Json) => x.ruleId === 'hosted-toggles');
+    assert.equal(warned?.severity, 'warning', 'More than three conditions: the checker warns.');
+    assert.ok(!ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: cases.find(c => c[0] === 'three conditions')![1], text: ready })).findings.some((x: Json) => x.ruleId === 'hosted-toggles'), 'Three conditions: no warning.');
+    // Each variant is its own section of one classifier input, the preheader too.
+    const sectioned = (await measureScreen({ html: `<div style="display:none">Preview text.</div><style>.m{display:none} @media(max-width:480px){.m{display:block}}</style><div class="m">On phones.</div><p>${ready}</p>` })).content;
+    assert.ok(/Your account is ready\. --- As some screens, colour schemes or mail clients show it --- On phones\. Your account is ready\. --- Preheader --- Preview text\./.test(sectioned) || /On phones\. Your account is ready\. --- As some screens, colour schemes or mail clients show it --- Your account is ready\. --- Preheader --- Preview text\./.test(sectioned), sectioned);
     // The preheader is kept, though hidden: inboxes show it beside the subject, and the screen reads it.
     assert.equal(await removedBy(`<div style="display:none;max-height:0;overflow:hidden">Your receipt is attached.</div><p>${ready}</p>`), '', 'A preheader is kept.');
     assert.equal(await removedBy(`<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td valign="top" bgcolor="#ffffff" style="padding:8px"><h1>Hi</h1><p lang="en"><a href="https://held.invalid/" target="_blank">Open</a> <img src="https://held.invalid/a.png" alt="A" width="20" height="20"></p><font color="#333" face="Arial" size="2">${ready}</font></td></tr></table>`), '', 'The allow-list keeps ordinary email markup whole.');
@@ -20561,11 +20597,13 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // A dark-mode logo swap toggles whole blocks: nothing to remove, so it is screened and sent as written.
       const swap = `<style>.dark-img{display:none!important} .light-img{display:block} @media (prefers-color-scheme: dark){ .dark-img{display:block!important} .light-img{display:none!important} }</style><img class="light-img" src="https://cdn.synthetic.invalid/light.png" alt="Brand" width="120" height="40"><img class="dark-img" src="https://cdn.synthetic.invalid/dark.png" alt="Brand" width="120" height="40"><p>Your receipt is attached.</p>`;
       const swapped = await send({ subject: 'Receipt with a logo swap', html: swap, screen: true });
+      // Final review 2, F2-H1: toggled blocks are kept as written, and each variant read whole, in order.
+      const toggled = await send({ subject: 'Receipt with a toggle', html: `<style>.m{display:none} @media(max-width:480px){.m{display:block}}</style><div class="m">${marker}</div><div>Your receipt is attached.</div>`, screen: true });
       // Recheck 8, R8-H1: an image's alt text is read where the image is, so a phrase across alt text and the text
       // beside it is read whole.
       const alt = await send({ subject: 'Receipt with a picture', html: `<p><img src="https://cdn.synthetic.invalid/a.png" alt="${marker.slice(0, 6)}" width="100" height="20">${marker.slice(6)}</p><p>Your receipt is attached.</p>`, screen: true });
       await dispatchDue(runtime, REGION);
-      assert.deepEqual([(await get(kept)).status, (await get(alt)).errorCode, (await get(swapped)).status], ['accepted', 'CONTENT_REJECTED_SPAM', 'accepted']);
+      assert.deepEqual([(await get(kept)).status, (await get(alt)).errorCode, (await get(swapped)).status, (await get(toggled)).errorCode], ['accepted', 'CONTENT_REJECTED_SPAM', 'accepted', 'CONTENT_REJECTED_SPAM']);
       assert.equal(htmls.get(swapped), swap, 'A logo swap goes to SES byte for byte.');
       assert.ok(!sent.includes(alt));
       assert.equal(htmls.get(kept), asWritten, 'Mail delivered as submitted goes to SES byte for byte.');
@@ -20598,6 +20636,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         [`<p>${marker.slice(0, 3)}<span style="display:none">innocent</span>${marker.slice(3)}</p>`, 'hidden elements, with their content'],
         ['<p dir="rtl"><span style="display:inline-block">Marker</span><span style="display:inline-block">Sample</span></p>', 'dir attributes on p'],
         ['<style>.h{display:none}</style><p>Your receipt<span class="h"> is attached</span>.</p>', 'CSS that hides text'],
+        // Final review 2: more toggle conditions than are read in every combination.
+        ['<style>.a{display:none} .b{display:none} .c{display:none} .d{display:none} @media(max-width:300px){.a{display:block}} @media(max-width:400px){.b{display:block}} @media(max-width:500px){.c{display:block}} @media (prefers-color-scheme: dark){.d{display:block}}</style><div class="a">One</div><div class="b">Two</div><div class="c">Three</div><div class="d">Four</div><p>Your receipt is attached.</p>', 'Content toggled by more than three screen widths, colour schemes or mail clients, shown everywhere'],
       ];
       for (const [html, named] of refusals) {
         const refused = error(await local('POST', '/v1/emails/send', mail({ subject: 'Account ready', html, screen: true }), 'live'), 422, 'UNSUPPORTED_HTML_IN_SCREENED_MAIL');
