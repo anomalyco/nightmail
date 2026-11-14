@@ -23,6 +23,15 @@ const targetLabel: Record<EndpointType, string> = { slack: 'Slack incoming webho
 const payloadOf: Record<EndpointType, string> = { slack: '({ text: … })', discord: '({ content: … })', webhook: '(payload?)', forward: '()' }
 const typeHint: Record<EndpointType, string> = { slack: 'Posts a message to a Slack channel.', discord: 'Posts a message to a Discord channel.', webhook: 'Posts signed JSON to your server. Routes can send whole messages here too.', forward: 'Forwards the email to another address, once its owner agrees.' }
 
+export const slackUrl = /^https:\/\/hooks\.slack\.com\//i, discordUrl = /^https:\/\/(?:\w+\.)?discord(?:app)?\.com\/api\/webhooks\//i
+/** What is wrong with an endpoint's URL or forward address, or '' when it will do. The recipe form checks with it too. */
+export function targetProblem(type: EndpointType, value: string) {
+  if (type === 'forward') return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? '' : 'Enter a full email address, like team@example.com.'
+  if (!/^https:\/\//i.test(value)) return /^http:\/\//i.test(value) ? `Use https://: ${productName} only posts to secure URLs.` : 'Start the URL with https://.'
+  if (type === 'slack' && !slackUrl.test(value)) return 'Use Slack’s incoming webhook URL, starting https://hooks.slack.com/.'
+  if (type === 'discord' && !discordUrl.test(value)) return 'Use Discord’s webhook URL, starting https://discord.com/api/webhooks/.'
+  return ''
+}
 const hours = (iso: string | null) => iso ? Math.max(0, Math.round((Date.parse(iso) - Date.now()) / 3600000)) : 0
 /** The API's nextStep is written for agents; people get the same fact with the dashboard's own controls. */
 function humanStep(e: Endpoint) {
@@ -61,10 +70,7 @@ export function EndpointDialog({ open, onOpenChange, onCreated, onSaved, editing
   // Editing keeps the URL when the field is left empty, unless the type changed (a Discord endpoint needs a Discord URL).
   const targetRequired = !editing || retyped
   const targetError = !value ? (tried && targetRequired && !(editing?.type === 'forward') ? (retyped ? `Enter the ${typeLabel[type]} webhook URL to switch to ${typeLabel[type]}.` : `Enter the ${targetLabel[type].replace(/^HTTPS URL$/, 'URL').toLowerCase()}.`) : '')
-    : type === 'forward' ? (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? '' : 'Enter a full email address, like team@example.com.')
-    : !/^https:\/\//i.test(value) ? (/^http:\/\//i.test(value) ? `Use https://: ${productName} only posts to secure URLs.` : 'Start the URL with https://.')
-    : type === 'slack' && !/^https:\/\/hooks\.slack\.com\//i.test(value) ? 'Use Slack’s incoming webhook URL, starting https://hooks.slack.com/.'
-    : type === 'discord' && !/^https:\/\/(?:\w+\.)?discord(?:app)?\.com\/api\/webhooks\//i.test(value) ? 'Use Discord’s webhook URL, starting https://discord.com/api/webhooks/.' : ''
+    : targetProblem(type, value)
   const nameError = name && !nameValid ? `Use lowercase letters, digits and hyphens, like ${name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '') || 'support'}.` : !name && tried ? 'Name it, like support. Rituals call it by this name.' : ''
   // Only what changed goes to the API; an empty URL field is left out, so the stored URL stays.
   const changes = editing ? {
@@ -131,7 +137,7 @@ export function EndpointDialog({ open, onOpenChange, onCreated, onSaved, editing
 export function CreatedEndpointDialog({ created, onClose, writeRitual = true }: { created: (Endpoint & { secret?: string }) | null; onClose: () => void; writeRitual?: boolean }) {
   const call = created ? `${created.call}${created.type === 'slack' ? '({ text: `New mail from ${email.from.address}` })' : created.type === 'discord' ? '({ content: `New mail from ${email.from.address}` })' : created.type === 'webhook' ? '({ subject: email.subject })' : '()'}` : ''
   return <Dialog sensitive={Boolean(created?.secret)} open={!!created} onOpenChange={next => { if (!next) onClose() }} title={created?.status === 'pending' ? 'Confirmation sent' : 'Endpoint created'}
-    footer={<><Button onClick={onClose}>Done</Button>{writeRitual && created?.status !== 'pending' && <Link className="ui-button ui-button--primary ui-button--md" to="/receiving/rituals?new=1" onClick={onClose}>Write a ritual that uses it</Link>}</>}>
+    footer={<><Button onClick={onClose}>Done</Button>{writeRitual && created?.status !== 'pending' && <Link className="ui-button ui-button--primary ui-button--md" to="/receiving/rituals/new" onClick={onClose}>New ritual</Link>}</>}>
     {created && <div className="stack">
       <Field label="Call it from a ritual" hint={created.type === 'webhook' ? 'The payload is optional; without one it gets the whole message event.' : undefined}><div className="settings-copy-cell"><code>{call}</code><CopyButton value={call} label="Copy call" /></div></Field>
       {created.secret && <Field label="Signing secret" hint={`Copy it now; it won’t be shown again. Use it to verify requests come from ${productName}.`}><div className="settings-copy-cell"><SecretCode>{created.secret}</SecretCode><CopyButton value={created.secret} label="Copy secret" /></div></Field>}

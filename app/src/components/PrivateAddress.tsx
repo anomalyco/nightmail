@@ -16,7 +16,8 @@ import { useMasking } from '../lib/privacy'
 const ROW = '.ui-table__linked, .ui-card', TABBABLE = 'a[href], button, [role="option"], [role="menuitem"], [tabindex]:not([tabindex="-1"]), .ui-table__clickable'
 const focusHolds = (element: Element | null) => {
   const focused = document.activeElement
-  if (!element || !focused || focused === document.body || focused === element || !focused.matches(':focus-visible')) return false
+  // A dialog holds focus itself when it opens with nothing to type in: that reveals none of the addresses in it.
+  if (!element || !focused || focused === document.body || focused === element || !focused.matches(':focus-visible') || focused.matches('[role=dialog], [role=alertdialog]')) return false
   return focused.contains(element) || focused.matches('.ui-row-link') && !!focused.closest(ROW)?.contains(element)
 }
 const focusListeners = new Set<() => void>()

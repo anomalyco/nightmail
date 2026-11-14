@@ -64,7 +64,7 @@ Opening a route shows the address as three steps, each with what you can do ther
 | Step | Line on screen | Actions | When empty |
 |---|---|---|---|
 | **Route** | Mail sent to these addresses. | Add alias, Add pattern | |
-| **Rituals** | Run in order on every message. | Attach a ritual, Write a ritual, detach | No ritual yet |
+| **Rituals** | Run in order on every message. | Attach a ritual, New ritual, detach | No ritual yet |
 | **Goes to** | Where the mail ends up. | Add an endpoint, Edit route | Only its inbox |
 
 ![An address's page: Route, Rituals and Goes to, with recent mail and settings below](images/receiving/address.png)
@@ -101,7 +101,9 @@ Everything is at most two clicks from Receiving.
 | See every address and where its mail goes | Receiving → Routes |
 | Create an address | Receiving → New address |
 | Add an alias or pattern, attach a ritual, add an endpoint | Receiving → Routes → the address |
-| Write, attach or try a ritual | Receiving → Rituals → the ritual (or New ritual) |
+| Add a ready-made ritual or write one | Receiving → Rituals → New ritual |
+| Turn a ritual off, edit, trace or delete it | Receiving → Rituals → its switch or ⋯ menu |
+| Edit, attach or try a script | Receiving → Rituals → the ritual (Edit as code for a ready-made one) |
 | Create, test, pause or delete an endpoint | Receiving → Endpoints |
 | Subscribe a URL to inbound events | Receiving → Endpoints → Event webhooks |
 | Create an agent inbox | Receiving → Routes → Agent inboxes → New agent inbox |

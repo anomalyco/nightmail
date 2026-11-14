@@ -85,7 +85,7 @@ function RouteDialog({ draft, destinations, owners, onClose, refreshWebhooks }: 
         {action === 'deliver' && <>
           {group('inbox', 'Inboxes', <>No addresses yet. <Link to="/receiving">Create one</Link>.</>)}
           {group('webhook', 'Webhooks', 'No webhooks yet. A webhook posts each message to your server as signed JSON.')}
-          <p className="muted routing-explain">Slack, Discord and forwards go through a ritual, which picks the mail and the message. <Link to="/receiving/rituals?new=1">Write a ritual</Link>. If a ritual calls one of these webhooks with its own payload, the webhook gets that payload instead of the whole message, once per message.</p>
+          <p className="muted routing-explain">Slack, Discord and forwards go through a ritual, which picks the mail and the message. <Link to="/receiving/rituals/new">New ritual</Link>. If a ritual calls one of these webhooks with its own payload, the webhook gets that payload instead of the whole message, once per message.</p>
         </>}
         {action === 'keep' && <p className="muted routing-explain">Stored and readable over the API by message ID, but in no inbox.</p>}
         {action === 'drop' && <Alert tone="warning">Dropped mail is not stored and cannot be recovered. Its receipt still records that it arrived.</Alert>}

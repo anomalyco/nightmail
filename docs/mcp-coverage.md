@@ -163,6 +163,10 @@ The remaining rows are human steps: OAuth consent, a forward recipient's confirm
 | `checkRitual` | `rituals` · `check` · rituals |
 | `getRitualTypings` | `rituals` · `typings` · rituals |
 | `listRitualTemplates` | `rituals` · `templates` · rituals |
+| `listRitualRecipes` | `rituals` · `recipes` · rituals |
+| `createRitualFromRecipe` | `rituals` · `createFromRecipe` · rituals |
+| `updateRitualFromRecipe` | `rituals` · `updateFromRecipe` · rituals |
+| `updateRitual` | `rituals` · `update` · rituals |
 | `getRitual` | `rituals` · `get` · rituals |
 | `saveRitual` | `rituals` · `save` · rituals |
 | `deleteRitual` | `rituals` · `delete` · rituals |

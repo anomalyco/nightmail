@@ -14,7 +14,8 @@ import { concepts, guides, kindNote, kinds, type KindFilter } from './concepts'
 import { NewInboxDialog } from './inboxes'
 import { ConnectAgentButton } from '../docs/connect-agent'
 import { ago, expiresIn, receivingDomains, typeLabel, useOverview, type Overview, type OverviewEndpoint, type RouteEntry } from './overview'
-import { Chain, ConceptLine, Match, RitualIcon, RouteIcon, TargetIcon, Targets, targetName } from './parts'
+import { Chain, ConceptLine, Match, RouteIcon, TargetIcon, Targets, targetName } from './parts'
+import { RitualsTab } from './recipes'
 import { CreatedEndpointDialog, EndpointDialog, endpointStatusLabel, endpointStatusTone, type EditableEndpoint, type Endpoint } from './ritual-connections'
 import { RouteEditor } from './routing'
 import { actorText, useLiveVersion } from './live'
@@ -63,7 +64,7 @@ function GettingStarted({ overview, onCreate }: { overview: Overview; onCreate: 
       !live.length && <Link className="ui-button ui-button--secondary ui-button--md" to={sendOnly[0] ? `/domains/${sendOnly[0].id}` : '/domains'}>Set up receiving</Link>)}
     {step(2, false, 'Create an address', <>Mail to it lands in the Inbox for you, the API and agents. For example <code>support@{live[0]?.name ?? 'acme.com'}</code>.</>, <Button disabled={!live.length} onClick={onCreate}>New address</Button>)}
     {step(3, false, 'Choose what happens', <>Optional. A ritual labels, filters or sends mail to an endpoint: Slack, Discord, a webhook or a forward.</>,
-      <div className="cluster"><Link className="ui-button ui-button--ghost ui-button--md" to="/receiving/rituals">Write a ritual</Link><Link className="ui-button ui-button--ghost ui-button--md" to="/receiving?tab=endpoints">Add an endpoint</Link></div>)}
+      <div className="cluster"><Link className="ui-button ui-button--ghost ui-button--md" to="/receiving/rituals/new">New ritual</Link><Link className="ui-button ui-button--ghost ui-button--md" to="/receiving?tab=endpoints">Add an endpoint</Link></div>)}
     <li className="rcv-steps__aside muted">Testing sign-up mail? An <Link to="/receiving/inboxes">agent inbox</Link> works before any DNS is set up.</li>
   </ol>
 }
@@ -112,22 +113,6 @@ function RoutesTab({ overview, fetching, filters, setFilter, page, onPage, onCre
       <Pagination page={page} pageSize={PAGE} total={kindCount(overview.counts, filters.kind)} nextCursor={overview.routes.nextCursor} onPageChange={onPage} />
     </div>
     <NewInboxDialog open={newInbox} onOpenChange={setNewInbox} />
-  </div>
-}
-
-function RitualsTab({ overview }: { overview: Overview }) {
-  const byName = new Map(overview.endpoints.filter(e => e.source === 'endpoint').map(e => [e.name, e]))
-  return <div className="stack rcv-tab">
-    <div className="rcv-kindline"><ConceptLine line={concepts.rituals.line} example={concepts.rituals.example} guide={guides.rituals} /><Link className="ui-button ui-button--secondary ui-button--sm" to="/receiving/rituals?new=1">New ritual</Link></div>
-    <DataTable className="rcv-table" rows={overview.rituals} rowKey={r => r.key} rowHref={r => `/receiving/rituals?key=${encodeURIComponent(r.key)}`}
-      empty={<EmptyState title="No rituals yet" description="A short script that runs on a route’s mail. For example: if the subject mentions a refund, label it and post it to Slack." action={<Link className="ui-button ui-button--secondary ui-button--md" to="/receiving/rituals?new=1">Write a ritual</Link>} />}
-      columns={[
-        { key: 'key', label: 'Ritual', width: '20%', render: r => <span className="rcv-cell"><RitualIcon /><code>{r.key}</code></span> },
-        { key: 'on', label: 'Runs on', width: '20%', card: 'line', render: r => r.attachedTo.length ? `${number(r.attachedTo.length)} ${r.attachedTo.length === 1 ? 'route' : 'routes'}` : <Link className="rcv-add" to={`/receiving/rituals?key=${encodeURIComponent(r.key)}#attach`} onClick={e => e.stopPropagation()}>Not attached · attach</Link> },
-        { key: 'calls', label: 'Can send to', width: '34%', card: 'line', render: r => r.calls.length || r.delivers.length ? <span className="rcv-targets">{r.calls.map(c => { const e = byName.get(c); return <span key={c} className="rcv-target"><TargetIcon type={e?.type ?? 'webhook'} size={13} /><span>{c}</span></span> })}{r.delivers.map(k => <span key={k} className="rcv-target"><TargetIcon type="inbox" size={13} /><span>{k} inbox</span></span>)}</span> : <span className="muted">Labels and filters only</span> },
-        { key: 'omens', label: <span title={concepts.omens.line}>Omens</span>, width: '12%', card: 'hide', render: r => r.omens.length ? <span title={concepts.omens.line}>{`${r.omens.length} AI ${r.omens.length === 1 ? 'question' : 'questions'}`}</span> : <span className="muted">None</span> },
-        { key: 'try', label: '', align: 'right', render: r => <Link className="ui-button ui-button--ghost ui-button--sm" to={`/receiving/rituals?key=${encodeURIComponent(r.key)}#try`} onClick={e => e.stopPropagation()}>Try it</Link> },
-      ]} />
   </div>
 }
 
@@ -214,7 +199,7 @@ export function ReceivingPage() {
     {overview.error && !data ? <ErrorState error={overview.error} onRetry={() => void overview.refetch()} /> : !data || !counts ? <LoadingRegion label="Loading receiving"><div className="rcv-skeleton" aria-hidden="true"><span /><span /><span /><span /></div></LoadingRegion> : <div className="rcv-page">
       <Tabs label="Receiving" value={tab} onValueChange={value => update({ tab: value, kind: null })}
         items={[{ value: 'routes', label: concepts.routes.title, count: counts.routes }, ...(data.manage ? [{ value: 'rituals', label: concepts.rituals.title, count: counts.rituals }, { value: 'endpoints', label: concepts.endpoints.title, count: counts.endpoints }] : [])]} />
-      {tab === 'rituals' && data.manage ? <RitualsTab overview={data} />
+      {tab === 'rituals' && data.manage ? <RitualsTab overview={data} refresh={() => overview.refetch()} />
         : tab === 'endpoints' && data.manage ? <EndpointsTab overview={data} refresh={() => void overview.refetch()} />
         : <RoutesTab overview={data} fetching={overview.isFetching} filters={filters} onCreate={() => setCreating(true)} onEditRoute={setEditing}
           page={pagination.page} onPage={next => pagination.onPageChange(next, data.routes.nextCursor)} setFilter={patch => update(patch)} />}
