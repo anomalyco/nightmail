@@ -75,8 +75,8 @@
 .ei-warning-fixes { margin: var(--space-8) 0 0; padding-left: 1.25em; }
 .ei-warning-fixes li + li { margin-top: var(--space-4); }
 
-/* The preview: the switcher (Original, then the clients with their issue counts; More for the source) and the width,
-   theme and compare toggles on one row, then the stage: a caption over each column and the columns, centred side by
+/* The preview: the switcher (Original, then the clients with their issue counts; More for the source) and the width and
+   theme toggles on one row, then the stage: a caption over each column and the columns, centred side by
    side. Filling (a detail page from 900 px), the stage takes the rest of the height on a darker well and scrolls inside;
    otherwise it is as tall as the email. */
 .ev { display: flex; flex-direction: column; gap: var(--space-12); min-width: 0; }

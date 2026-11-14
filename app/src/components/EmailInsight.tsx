@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
-import { Check, ChevronDown, ChevronRight, Columns2, ExternalLink, Monitor, Moon, MoreHorizontal, Smartphone, Sun } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, ExternalLink, Monitor, Moon, MoreHorizontal, Smartphone, Sun } from 'lucide-react'
 import { useApiQuery } from '../data/context'
 import type { ClientPreview, PreviewClient, PreviewIssue, SendabilityCategory, SendabilityFinding, SendabilityReport, SenderGrade } from '../data/types'
 import { usePhone } from '../lib/media'
@@ -325,25 +325,16 @@ type Slot = { key: string; view: string; device: FrameDevice }
 type Column = Slot & { doc: string }
 
 const GAP = 16
-// Columns sit side by side only at FIT of their size or more. Comparing (each client beside Original) is offered from
-// COMPARE_ROOM, and the phone width joins the desktop one from BOTH_ROOM (800 + 390 px at FIT).
+// The phone width joins the desktop one only where both fit at FIT of their size or more (800 + 390 px at FIT).
 const FIT = .9
 const BOTH_ROOM = Math.round((FRAME_WIDTH.desktop + GAP + FRAME_WIDTH.mobile) * FIT)
-const COMPARE_ROOM = 1080
-// Compare is remembered across emails and visits.
-const COMPARE_KEY = 'nightmail.preview.compare'
-const savedCompare = () => { try { return localStorage.getItem(COMPARE_KEY) !== 'off' } catch { return true } }
-const saveCompare = (on: boolean) => { try { localStorage.setItem(COMPARE_KEY, on ? 'on' : 'off') } catch { /* Kept for this page only. */ } }
 
-// The richest arrangement that fits: comparing, Original then the client at desktop and phone width, else both at the
-// chosen width; otherwise the view at desktop and phone width, else at the chosen one. Widths are the spans measured at
-// desktop width (the device's until measured) and the phone's width.
-function arrange(view: string, device: FrameDevice, room: number, wide: boolean, comparing: boolean, widthOf: (view: string, device: FrameDevice) => number): Slot[] {
-  const slot = (role: 'ref' | 'main', on: FrameDevice): Slot => ({ key: `${role}@${on}`, view: role === 'ref' ? 'original' : view, device: on })
-  const fits = (slots: Slot[]) => slots.reduce((sum, item) => sum + widthOf(item.view, item.device), GAP * (slots.length - 1)) * FIT <= room
-  if (comparing) { const three = [slot('ref', 'desktop'), slot('main', 'desktop'), slot('main', 'mobile')]; return fits(three) ? three : [slot('ref', device), slot('main', device)] }
-  const both = [slot('main', 'desktop'), slot('main', 'mobile')]
-  return wide && fits(both) ? both : [slot('main', device)]
+// Each view on its own: Original is the email as sent, a client is how that client shows it. Where they fit, its desktop
+// and phone widths side by side; otherwise the chosen one. Widths are the span measured at desktop width (the device's
+// until measured) and the phone's width.
+function arrange(view: string, device: FrameDevice, room: number, wide: boolean, widthOf: (device: FrameDevice) => number): Slot[] {
+  const both: Slot[] = [{ key: 'desktop', view, device: 'desktop' }, { key: 'mobile', view, device: 'mobile' }]
+  return wide && (widthOf('desktop') + GAP + widthOf('mobile')) * FIT <= room ? both : [{ key: device, view, device }]
 }
 
 // The columns' room (the canvas's content width), read before the first paint, so the first layout is the one that stays.
@@ -369,8 +360,7 @@ const useClientDocs = (previews: ClientPreview[] | undefined) => useMemo(() => n
  * The preview with one switcher. With `original` (a sent email): Original, the email as sent with its images, then each
  * client; the HTML source and plain text sit behind More. Without it (a draft): the clients. Each client is an offline
  * emulation with its issue count. `fill`: the preview fills its parent's height and scrolls inside; otherwise it is as
- * tall as the email. `wide`: where there is room, the phone width beside the desktop one, and each client beside
- * Original (Compare). `compact` (a phone or tablet): one row of controls, the view picked from a sheet, no captions;
+ * tall as the email. `wide`: where there is room, the phone width beside the desktop one. `compact` (a phone or tablet): one row of controls, the view picked from a sheet, no captions;
  * a phone always shows phone width. `loading`: the draft's HTML is on its way.
  */
 export function EmailViews({ source, previewSource, check, original, loading = false, fill = false, wide = false, compact = false, toolbarEnd }: { source: InsightSource; previewSource: PreviewSource | null; check: Check; original?: OriginalEmail; loading?: boolean; fill?: boolean; wide?: boolean; compact?: boolean; toolbarEnd?: ReactNode }) {
@@ -378,11 +368,9 @@ export function EmailViews({ source, previewSource, check, original, loading = f
   const id = useId()
   const [room, canvas] = useRoom()
   const hasHtml = original ? original.html.trim().length > 0 : Boolean(previewSource)
-  const [compare, setCompare] = useState(savedCompare)
-  const canCompare = wide && Boolean(original) && hasHtml && Boolean(previewSource) && room >= COMPARE_ROOM
   const [chosen, setChosen] = useState<string | null>(null)
-  // Comparing, the first view is the first client beside Original; otherwise Original (a draft's: the first client).
-  const view = chosen ?? ((canCompare && compare) || !original ? CLIENTS[0].value : 'original')
+  // A sent email opens on Original; a draft, which has no Original, on the first client.
+  const view = chosen ?? (original ? 'original' : CLIENTS[0].value)
   const [theme, setTheme] = useState<Theme>('light')
   const [chosenDevice, setDevice] = useState<FrameDevice>(() => phone ? 'mobile' : 'desktop')
   const device = compact && phone ? 'mobile' : chosenDevice
@@ -393,7 +381,6 @@ export function EmailViews({ source, previewSource, check, original, loading = f
   const docs = { desktop: useClientDocs(queries.desktop.data), mobile: useClientDocs(queries.mobile.data) }
   const readers = { desktop: issueReader(check.data, queries.desktop.data), mobile: issueReader(check.data, queries.mobile.data) }
   const client = CLIENTS.find(item => item.value === view)
-  const comparing = canCompare && compare && Boolean(client)
   const sourceView = view === 'html' || view === 'text'
   const frameView = view === 'original' ? Boolean(original) && hasHtml : Boolean(client && previewSource)
   // A column's document: null while it is on its way, undefined when there is none (no preview for that client).
@@ -403,11 +390,12 @@ export function EmailViews({ source, previewSource, check, original, loading = f
     return !item ? undefined : !queries[on].data ? null : docs[on].get(item.clients[on])
   }
 
-  // How many columns fit depends on the span each view takes at desktop width, so those are measured first.
-  const deciding = frameView ? [...new Set(comparing ? ['original', view] : [view])] : []
+  // Whether the phone width fits beside the desktop one depends on the span the view takes at desktop width, so that is
+  // measured first.
+  const deciding = frameView ? [view] : []
   const decided = useFrameSizes(deciding.map(of => ({ doc: docOf(of, 'desktop') ?? null, width: FRAME_WIDTH.desktop })))
-  const widthOf = (of: string, on: FrameDevice) => { const size = on === 'desktop' ? decided[deciding.indexOf(of)] : undefined; return size ? shownWidth(size) : FRAME_WIDTH[on] }
-  const slots = frameView ? arrange(view, device, room, wide, comparing, widthOf) : []
+  const widthOf = (on: FrameDevice) => on === 'desktop' && decided[0] ? shownWidth(decided[0]) : FRAME_WIDTH[on]
+  const slots = frameView ? arrange(view, device, room, wide, widthOf) : []
   const wanted = slots.map(slot => ({ ...slot, doc: docOf(slot.view, slot.device) }))
   const measured = useFrameSizes(wanted.map(column => ({ doc: column.doc ?? null, width: FRAME_WIDTH[column.device] })))
   const failedQuery = slots.map(slot => slot.view === 'original' ? null : queries[slot.device]).find(query => query?.isError && !query.data)
@@ -465,7 +453,6 @@ export function EmailViews({ source, previewSource, check, original, loading = f
       <div className="ev-toolbar__end">
         {showDevice && <Toggle label="Width" value={device} options={DEVICES} onChange={setDevice} off={offWidth} />}
         <Toggle label="Color scheme" value={theme} options={THEMES} onChange={setTheme} off={offTheme} />
-        {canCompare && <div className="ev-toggle"><Tooltip content="Show each client beside Original"><button type="button" aria-pressed={compare} aria-label="Compare with Original" onClick={() => { setChosen(view); setCompare(!compare); saveCompare(!compare) }}><Columns2 size={14} aria-hidden="true" /></button></Tooltip></div>}
         {more}
         {toolbarEnd}
       </div>
