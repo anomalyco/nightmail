@@ -102,7 +102,9 @@ export const fontSources = (config: Pick<Runtime['config'], 'hostedFontHosts' | 
  *
  * The text is read in document order, as a client lays it out: inline runs stay one word, block elements and line
  * breaks end the line, and a table row whose cells hold short pieces is read again glued, after the text, the way a
- * recipient reads a word laid out across adjacent cells. An image's alt text is read where the image is: a client shows
+ * recipient reads a word laid out across adjacent cells. A block a screen width or colour scheme shows or hides whole
+ * (`toggles`) is read after that, as a block of its own, and the text around it as if it weren't there, so every
+ * recipient's text is read, whichever blocks they see. An image's alt text is read where the image is: a client shows
  * it in its place when images are blocked, so a message with alt text is read twice, as shown with its images and as
  * shown without them.
  */
@@ -114,7 +116,8 @@ export async function readHtml(html: string, visit?: (tag: string) => void, opti
   for (const tag of copy.tags) visit?.(tag);
   const hosts=new Set([...destinations].map(destinationHost).filter(Boolean)), mismatches=new Set<string>(), links:string[]=[], images:{ alt: boolean }[]=[];
   type Part=string|{ alt:string };
-  const lines:Part[][]=[], rows:Part[][][]=[], glued:Part[][]=[]; let line:Part[]=[];
+  // A row's cells, each with whether a screen width or colour scheme toggles it; blocks so toggled, read on their own.
+  const lines:Part[][]=[], rows:{ parts:Part[]; toggled:boolean }[][]=[], glued:Part[][]=[], blocks:Part[][]=[]; let line:Part[]=[];
   const flush=()=>{ if(line.length) lines.push(line); line=[]; };
   const walk=(node:typeof root.childNodes[number], anchor:string)=>{
     if ('value' in node) {
@@ -133,24 +136,33 @@ export async function readHtml(html: string, visit?: (tag: string) => void, opti
     if (tag==='head' || tag==='style' || tag==='script') return;
     // URLs are read from the decoded attribute as they are, never as prose (the copy's inventory has them all).
     for (const a of node.attrs) if (tag==='a' && a.name==='href') { const target=destination(a.value); anchor=target ? destinationHost(target) : ''; if (target) links.push(target); }
+    // A block a screen width or colour scheme shows or hides whole is read as a block of its own, and the text around it
+    // as if it weren't there, which is how a recipient for whom it is hidden reads that text.
+    const toggled=copy.toggles.has(node), outer=line, before=lines.length;
+    if (toggled) line=[];
     if (tag==='img') {
       const alt=node.attrs.find(a=>a.name==='alt')?.value ?? '';
       images.push({ alt: !!alt.trim() });
       if (alt) line.push({ alt });
     }
-    const laid=copy.layout.get(node), inline=laid ? laid==='inline' : INLINE.has(tag);
-    if (!inline) flush();
+    const laid=copy.layout.get(node), inline=!toggled && (laid ? laid==='inline' : INLINE.has(tag));
+    if (!inline && !toggled) flush();
     const start=lines.length;
     if (tag==='tr') rows.push([]);
     for (const child of children) walk(child,anchor);
     if (!inline) flush();
-    if (tag==='td' || tag==='th') rows[rows.length-1]?.push(lines.slice(start).flatMap((l,i)=>i ? [' ',...l] : l));
-    if (tag==='tr') { const cells=rows.pop()!; if (cells.length>1 && cells.some(cell=>[false,true].some(alt=>{ const t=render(cell,alt).trim(); return t && t.length<=4; }))) glued.push(cells.flat()); }
+    if (tag==='td' || tag==='th') rows[rows.length-1]?.push({ parts: lines.slice(start).flatMap((l,i)=>i ? [' ',...l] : l), toggled });
+    if (tag==='tr') {
+      // Glued with every cell, and without the toggled ones, as each recipient sees the row.
+      const cells=rows.pop()!;
+      for (const shown of cells.some(cell=>cell.toggled) ? [cells, cells.filter(cell=>!cell.toggled)] : [cells]) if (shown.length>1 && shown.some(cell=>[false,true].some(alt=>{ const t=render(cell.parts,alt).trim(); return t && t.length<=4; }))) glued.push(shown.flatMap(cell=>cell.parts));
+    }
+    if (toggled) { blocks.push(...lines.splice(before)); line=outer; }
   };
   const render=(parts:Part[], alt:boolean)=>parts.map(p=>typeof p==='string' ? p : alt ? p.alt : '').join('');
   for (const child of root.childNodes) walk(child,'');
   flush();
-  const read=(alt:boolean)=>[...lines,...glued].map(l=>render(l,alt)).filter(l=>l.trim()).join('\n'), shown=read(false), blocked=read(true);
+  const read=(alt:boolean)=>[...lines,...glued,...blocks].map(l=>render(l,alt)).filter(l=>l.trim()).join('\n'), shown=read(false), blocked=read(true);
   return { text: blocked===shown ? shown : `${shown}\n${blocked}`, hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, links, images, html: copy.html };
 }
 /**

@@ -14251,6 +14251,19 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // Rows in a table's foot and right floats line up out of document order: removed.
       ['table foot', `<table><tfoot><tr><td>Thanks.</td></tr></tfoot><tbody><tr><td>${ready}</td></tr></tbody></table>`, false, /<tfoot/],
       ['right float', `<p><span style="float:right">Thanks.</span><span style="float:right">${ready}</span></p>`, false, /float/],
+      // Whole blocks a screen width or colour scheme toggles stay toggled: a dark-mode logo swap and a mobile-only block,
+      // by class or by style attribute. The screen reads each as a block of its own (a phrase in one is read whole)
+      // and the text around it as if it weren't there (a word it splits is read whole).
+      ['dark-mode logo swap', `<style>.dark-img{display:none!important} .light-img{display:block} @media (prefers-color-scheme: dark){ .dark-img{display:block!important} .light-img{display:none!important} }</style><img class="light-img" src="https://held.invalid/light.png" alt="Brand" width="120" height="40"><img class="dark-img" src="https://held.invalid/dark.png" alt="Brand" width="120" height="40"><p>${ready}</p>`, false],
+      ['mobile-only block', `<style>.m{display:none;max-height:0;overflow:hidden} @media only screen and (max-width:480px){ .m{display:block!important;max-height:none!important;overflow:visible!important} }</style><p>${ready}</p><div class="m">Tap the button on your phone.</div>`, false],
+      ['mobile-only by style attribute', `<style>@media (max-width:480px){ .m{display:block!important} }</style><p>${ready}</p><div class="m" style="display:none">Tap the button on your phone.</div>`, false],
+      ['phrase in a toggled block', `<style>.m{display:none} @media (max-width:480px){ .m{display:block!important} }</style><p>${ready}</p><div class="m">Sample marker</div>`, true],
+      ['word split by a toggled block', `<style>.m{display:none} @media (max-width:480px){ .m{display:block!important} }</style><div>Sam<div class="m">innocent</div>pleMarker ${ready}</div>`, true],
+      // Inline content is never toggled: a span hidden by a sheet shows (its hiding is removed), one hidden by its own
+      // style loses its text, whatever @media rule would reveal it; and a block nothing reveals loses its text too.
+      ['inline toggle by class', `<style>.x{display:none} @media (max-width:480px){ .x{display:inline!important} }</style><p>Your<span class="x"> account</span> ${ready}</p>`, false, /\.x\{display:none/],
+      ['inline hidden span with a reveal', `<style>@media (max-width:480px){ .x{display:inline!important} }</style><p>Sam<span class="x" style="display:none">innocent</span>pleMarker ${ready}</p>`, true],
+      ['hidden block without a reveal', `<p>${ready}</p><div style="display:none">Never shown</div>`, false, /Never shown/],
     ];
     for (const [name, html, bad, gone] of cases) {
       const { to, reply } = await send(html), start = screened.length;
@@ -14275,6 +14288,16 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     for (const [name, listed] of [['body title', 'title elements, with their content'], ['conditional comment', 'Outlook conditional comments'], ['display:none', 'hidden elements, with their content'], ['dir', 'dir attributes on p'],
       ['colour of the background', 'text in its background colour'], ['hidden by selector', 'CSS that hides text'], ['mso-hide', 'CSS mso-hide (Outlook shows it too)']] as const)
       assert.ok((await removedBy(cases.find(c => c[0] === name)![1])).includes(listed), `${name}: ${listed}`);
+    // Toggled blocks are delivered as written, nothing removed, and the screen read the hidden variant's text.
+    for (const name of ['dark-mode logo swap', 'mobile-only block', 'mobile-only by style attribute']) {
+      const html = cases.find(c => c[0] === name)![1];
+      assert.equal(await removedBy(html), '', `${name}: nothing removed`);
+      assert.equal(await canonicalHtml(html), await canonicalHtml(await canonicalHtml(html)), name);
+      const copy = await canonicalHtml(html);
+      assert.ok(/display:none/.test(copy) && (name === 'dark-mode logo swap' ? copy.includes('light.png') && copy.includes('dark.png') : copy.includes('Tap the button on your phone.</div>')), `${name}: kept`);
+    }
+    for (const name of ['mobile-only block', 'mobile-only by style attribute']) assert.ok((await measureScreen({ html: cases.find(c => c[0] === name)![1] })).content.includes('Tap the button on your phone.'), `${name}: screened`);
+    assert.ok((await removedBy(cases.find(c => c[0] === 'hidden block without a reveal')![1])).includes('hidden elements, with their content'), 'A block nothing reveals loses its text.');
     // The preheader is kept, though hidden: inboxes show it beside the subject, and the screen reads it.
     assert.equal(await removedBy(`<div style="display:none;max-height:0;overflow:hidden">Your receipt is attached.</div><p>${ready}</p>`), '', 'A preheader is kept.');
     assert.equal(await removedBy(`<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td valign="top" bgcolor="#ffffff" style="padding:8px"><h1>Hi</h1><p lang="en"><a href="https://held.invalid/" target="_blank">Open</a> <img src="https://held.invalid/a.png" alt="A" width="20" height="20"></p><font color="#333" face="Arial" size="2">${ready}</font></td></tr></table>`), '', 'The allow-list keeps ordinary email markup whole.');
@@ -20535,11 +20558,15 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // A head's title isn't shown, so it is no reason to refuse.
       const asWritten = `<title>Receipt</title><!-- a sender's note --><style>/* plain */ .o{color:#111}</style><p class="o">Your receipt is attached.</p>`;
       const kept = await send({ subject: 'Receipt as written', html: asWritten, screen: true });
+      // A dark-mode logo swap toggles whole blocks: nothing to remove, so it is screened and sent as written.
+      const swap = `<style>.dark-img{display:none!important} .light-img{display:block} @media (prefers-color-scheme: dark){ .dark-img{display:block!important} .light-img{display:none!important} }</style><img class="light-img" src="https://cdn.synthetic.invalid/light.png" alt="Brand" width="120" height="40"><img class="dark-img" src="https://cdn.synthetic.invalid/dark.png" alt="Brand" width="120" height="40"><p>Your receipt is attached.</p>`;
+      const swapped = await send({ subject: 'Receipt with a logo swap', html: swap, screen: true });
       // Recheck 8, R8-H1: an image's alt text is read where the image is, so a phrase across alt text and the text
       // beside it is read whole.
       const alt = await send({ subject: 'Receipt with a picture', html: `<p><img src="https://cdn.synthetic.invalid/a.png" alt="${marker.slice(0, 6)}" width="100" height="20">${marker.slice(6)}</p><p>Your receipt is attached.</p>`, screen: true });
       await dispatchDue(runtime, REGION);
-      assert.deepEqual([(await get(kept)).status, (await get(alt)).errorCode], ['accepted', 'CONTENT_REJECTED_SPAM']);
+      assert.deepEqual([(await get(kept)).status, (await get(alt)).errorCode, (await get(swapped)).status], ['accepted', 'CONTENT_REJECTED_SPAM', 'accepted']);
+      assert.equal(htmls.get(swapped), swap, 'A logo swap goes to SES byte for byte.');
       assert.ok(!sent.includes(alt));
       assert.equal(htmls.get(kept), asWritten, 'Mail delivered as submitted goes to SES byte for byte.');
       // Anything else is refused at once, naming what the canonical copy would remove; without screen: true it is sent

@@ -149,7 +149,12 @@ function declaration(segment: Segment): { name: Token; value: CV[] } | null {
 
 // `inline`: a style attribute rather than a sheet; `modeled`: whether the screen's style reader (src/screened-html.ts)
 // applies the sheet rule being read, so it can tell where its colours make text invisible.
-type Read = { text: string; resolve: Resolve; policy: FontPolicy; destinations: string[]; removed: string[]; fonts: string[]; inline: boolean; modeled: boolean };
+// `selector` and `media`: the rule being read and the @media queries around it, for `toggle`, which says whether what it
+// hides may stay hidden (blocks shown for one screen width or colour scheme and hidden for another).
+type Read = { text: string; resolve: Resolve; policy: FontPolicy; destinations: string[]; removed: string[]; fonts: string[]; inline: boolean; modeled: boolean;
+  selector: string; media: string[]; toggle: Toggle };
+/** Whether a sheet's hiding declarations may stay, by the rule's selector and the @media queries around it. */
+export type Toggle = (selector: string, media: string[]) => boolean;
 const raw = (read: Read, n: { start: number; end: number }) => read.text.slice(n.start, n.end);
 function foreign(read: Read, target: string) {
   const host = new URL(target).host;
@@ -230,8 +235,9 @@ function keep(read: Read, d: { name: Token; value: CV[] }, context: 'style' | 'f
   if (base === 'mso-hide' && idents.includes('all')) return 'CSS mso-hide (Outlook shows it too)';
   if (read.inline) return null;
   // In a sheet, what would hide whatever its selector matches is removed, so the text shows (the copy removes content
-  // that a style attribute hides: src/hosted-html.ts). So are colours in a rule the screen's style reader doesn't apply.
-  if (hides(base, words, idents, sizes, read)) return 'CSS that hides text';
+  // that a style attribute hides: src/hosted-html.ts), unless it toggles whole blocks for a screen width or colour
+  // scheme (`toggle`). So are colours in a rule the screen's style reader doesn't apply.
+  if (hides(base, words, idents, sizes, read)) return read.toggle(read.selector, read.media) ? null : 'CSS that hides text';
   if (!read.modeled && /^(?:color|background|background-color)$/.test(base)) return `CSS ${base} in a rule Hosted sending can't check`;
   return null;
 }
@@ -330,7 +336,8 @@ function sheet(read: Read, items: Item[], top: boolean): { removals: Range[]; ke
   for (const item of items) {
     if (item.kind === 'rule') {
       if (!item.block || !selector(item.prelude)) { drop(item, 'a CSS rule with a selector Hosted sending does not read'); continue; }
-      read.modeled = modeledSelector(raw(read, { start: item.start, end: item.block.start }));
+      read.selector = raw(read, { start: item.start, end: item.block.start });
+      read.modeled = modeledSelector(read.selector);
       const inner = declarations(read, (item.block as Extract<CV, { kind: 'block' }>).items, 'style', false);
       if (!inner) { drop(item, 'a CSS rule with nested rules'); continue; }
       if (!inner.kept) { removals.push(item); continue; }
@@ -340,7 +347,9 @@ function sheet(read: Read, items: Item[], top: boolean): { removals: Range[]; ke
     const block = item.block as Extract<CV, { kind: 'block' }> | null;
     if (item.escaped) { drop(item, `CSS @${item.name}`); continue; }
     if (item.name === 'media' && block && media(item.prelude)) {
+      read.media.push(raw(read, { start: item.start, end: block.start }).replace(/^@media/i, ''));
       const inner = sheet(read, rules(block.items, false), false);
+      read.media.pop();
       if (inner.kept) { removals.push(...inner.removals); kept++; } else removals.push(item);
     } else if (item.name === 'font-face' && block) {
       const inner = declarations(read, block.items, 'font-face', false);
@@ -355,8 +364,8 @@ function sheet(read: Read, items: Item[], top: boolean): { removals: Range[]; ke
   }
   return { removals, kept };
 }
-function filter(css: string, resolve: Resolve, policy: FontPolicy, as: 'sheet' | 'declarations'): HostedCss {
-  const text = css.replace(/\r\n?/g, '\n'), read: Read = { text, resolve, policy, destinations: [], removed: [], fonts: [], inline: as === 'declarations', modeled: true };
+function filter(css: string, resolve: Resolve, policy: FontPolicy, as: 'sheet' | 'declarations', toggle: Toggle = () => false): HostedCss {
+  const text = css.replace(/\r\n?/g, '\n'), read: Read = { text, resolve, policy, destinations: [], removed: [], fonts: [], inline: as === 'declarations', modeled: true, selector: '', media: [], toggle };
   let removals: Range[];
   try {
     const items = values(tokenize(text), text.length);
@@ -371,7 +380,7 @@ function filter(css: string, resolve: Resolve, policy: FontPolicy, as: 'sheet' |
   return { css: out, destinations: [...new Set(read.destinations)], removed: read.removed, fonts: read.fonts, changed: out !== css };
 }
 /** A <style> sheet as delivered. */
-export const hostedSheet = (css: string, resolve: Resolve, policy: FontPolicy) => filter(css, resolve, policy, 'sheet');
+export const hostedSheet = (css: string, resolve: Resolve, policy: FontPolicy, toggle?: Toggle) => filter(css, resolve, policy, 'sheet', toggle);
 const NOTHING: FontPolicy = { font: () => false, sheet: () => false };
 /** A style attribute as delivered. */
 export const hostedDeclarations = (css: string, resolve: Resolve) => filter(css, resolve, NOTHING, 'declarations');
