@@ -52,6 +52,8 @@ const probe = ({ LONG_BLOCK, INERT_WORDS, NEAR_PX, DETAIL_ROWS, DETAIL_WORDS, DE
   const norm = text => text.replace(/\s+/g, ' ').trim();
   const SKIP_TEXT = 'script, style, noscript, textarea, input, select, option, svg, pre, .cm-editor, [contenteditable=""], [contenteditable="true"], iframe';
   const blockOf = node => { for (let el = node.parentElement; el; el = el.parentElement) { const d = getComputedStyle(el).display; if (d !== 'inline' && d !== 'contents') return el; } return document.body; };
+  // Content words, stemmed: what two labels or a heading and its intro are compared by.
+  const content = text => norm(text).toLowerCase().replace(/[’']s\b/g, '').split(/[^a-z]+/).filter(w => w.length >= 3 && !/^(the|and|for|with|from|that|this|your|you|are|its|can|has|have|was|were|will|not|any|all|per|one)$/.test(w)).map(w => w.replace(/(ies|es|s|ed|ing)$/, ''));
   const label = el => norm(el.getAttribute('aria-label') || el.textContent || el.getAttribute('title') || '').slice(0, 60);
   const path = el => { const parts = []; for (let n = el; n && n !== document.body && parts.length < 4; n = n.parentElement) parts.unshift(n.tagName.toLowerCase() + (typeof n.className === 'string' && n.className ? '.' + n.className.trim().split(/\s+/)[0] : '')); return parts.join(' > '); };
 
@@ -174,6 +176,11 @@ const probe = ({ LONG_BLOCK, INERT_WORDS, NEAR_PX, DETAIL_ROWS, DETAIL_WORDS, DE
   for (const [value, all] of byValue) for (const group of (units => units.length < 2 ? [all] : units.map(u => all.filter(v => !v.unit || v.unit === u)))([...new Set(all.map(v => v.unit).filter(Boolean))])) {
     const apart = group.filter((v, i) => !group.some((w, j) => j < i && near(v, w)));
     if (apart.length < 2 || !apart.some(v => v.inRoot) || isCovered(apart.map(v => v.el))) continue;
+    // The same figure under unrelated labels is a coincidence (Delivered 240 and 240 of the daily limit), not the same
+    // information: the labels must share a word, or the figures a unit (“14 days”), unless one has no label.
+    const words2 = apart.map(v => new Set(content(context(v))));
+    const related = words2.some(set => !set.size) || [...words2[0]].some(w => words2.every(set => set.has(w))) || (apart[0].unit && apart.every(v => v.unit === apart[0].unit));
+    if (!related) continue;
     cover(apart.map(v => v.el));
     const labels = apart.map(v => `${context(v) || 'unlabelled'} (${where(v)})`);
     find('dup-value', `${apart[0].shown} shown ${apart.length} times: ${labels.join(', ')}`, `${value}|${apart.map(v => context(v) || v.text.slice(0, 20)).join('|')}`, apart.map(v => v.el), apart[0].shown);
@@ -208,7 +215,6 @@ const probe = ({ LONG_BLOCK, INERT_WORDS, NEAR_PX, DETAIL_ROWS, DETAIL_WORDS, DE
   // Detail shown by default: a summary figure (a big number outside a dialog) in a card or column, with 5+ rows or 40+
   // words of detail right under it in the same section and not behind a click. The figure already makes the point; the
   // detail can open from it (a dialog or an expander). The page's own data tables are content, not detail.
-  const content = text => norm(text).toLowerCase().replace(/[’']s\b/g, '').split(/[^a-z]+/).filter(w => w.length >= 3 && !/^(the|and|for|with|from|that|this|your|you|are|its|can|has|have|was|were|will|not|any|all|per|one)$/.test(w)).map(w => w.replace(/(ies|es|s|ed|ing)$/, ''));
   const summaries = list.filter(b => b.inRoot && !b.shell && !b.table && b.size >= 20 && b.words <= 3 && /\d/.test(b.text) && !b.el.closest('[role=dialog], [role=alertdialog]'));
   const disclosed = new Set();
   for (const s of summaries) {

@@ -131,17 +131,12 @@
    "findings": []
   },
   "Operator · workspace · desktop": {
-   "score": 46,
-   "findings": [
-    "dup-value|###|daily limit|a day score",
-    "dup-value|##.#|score|→ target quality"
-   ]
+   "score": 30,
+   "findings": []
   },
   "Operator · workspace · phone": {
-   "score": 47,
+   "score": 31,
    "findings": [
-    "dup-value|###|daily limit|a day score",
-    "dup-value|##.#|score|→ target quality",
     "inert|# of #,### accepted emails were marked a"
    ]
   },
