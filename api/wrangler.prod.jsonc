@@ -37,6 +37,8 @@
     "BANE_PLATFORM_AWS_ACCOUNT": "009882681002",
     // Anomaly owns nightmail.com and bane.mx (both adopted by scripts/adopt-platform-domain.ts). Every other workspace is refused.
     "BANE_PLATFORM_DOMAIN_WORKSPACE": "ws_90b0696c835f49fbaa9396fb726e9fe2",
+    // Owner notices (standing, billing) by email, from the adopted platform domain through the platform workspace above.
+    "BANE_NOTIFY_FROM": "system@nightmail.com",
     "BANE_REGIONAL_SENDING": "true",
     "BANE_TRUSTED_POOL": "true",
     "BANE_REQUIRE_DMARC_FOR_BULK": "true",
