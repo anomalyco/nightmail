@@ -223,7 +223,9 @@ function Table<T>({ columns: all, rows, rowKey, onRowClick, onRowIntent, rowHref
   useEffect(() => () => window.clearTimeout(intent.current), [])
   const rest = (row: T) => { window.clearTimeout(intent.current); intent.current = window.setTimeout(() => onRowIntent?.(row), 80) }
   const navigate = useNavigate()
-  const own = (event: { target: EventTarget }) => Boolean((event.target as HTMLElement).closest('button, a, input, select, [role="checkbox"], [role="switch"]'))
+  // The row's own controls keep their click, and so does anything a cell portals out of the row (a menu, a dialog),
+  // whose clicks React still bubbles to the row: a menu item must not also open the row's page.
+  const own = (event: { target: EventTarget; currentTarget: EventTarget }) => !(event.currentTarget as Node).contains(event.target as Node) || Boolean((event.target as HTMLElement).closest('button, a, input, select, [role="checkbox"], [role="switch"]'))
   const follow = (href: string, event: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; button: number }) => { if (event.metaKey || event.ctrlKey || event.shiftKey || event.button === 1) window.open(href, '_blank', 'noopener'); else navigate(href) }
   return <div ref={tableRef} data-component="DataTable" className={cx('ui-table-scroll', className)} aria-busy={loading || undefined}>
     {loading && <span className="sr-only" role="status">Loading table</span>}

@@ -44,7 +44,7 @@ const labels: Record<string, string> = {
   'webhook.create': 'Added a webhook', 'webhook.update': 'Updated a webhook', 'webhook.delete': 'Deleted a webhook', 'webhook.secret_reveal': 'Revealed a signing secret', 'webhook.secret_rotate': 'Rotated a signing secret',
   'inbound_webhook.create': 'Added an inbound webhook', 'inbound_webhook.update': 'Updated an inbound webhook', 'inbound_webhook.delete': 'Deleted an inbound webhook', 'inbound_webhook.secret_rotate': 'Rotated an inbound signing secret',
   'endpoint.create': 'Added an endpoint', 'endpoint.update': 'Updated an endpoint', 'endpoint.delete': 'Deleted an endpoint',
-  'ritual.save': 'Saved a ritual', 'ritual.delete': 'Deleted a ritual', 'ritual.apply': 'Applied rituals', 'ritual.attach': 'Attached a ritual', 'ritual.restore': 'Restored rituals', 'ritual.omens': 'Changed omens',
+  'ritual.save': 'Saved a ritual', 'ritual.delete': 'Deleted a ritual', 'ritual.apply': 'Applied rituals', 'ritual.attach': 'Attached a ritual', 'ritual.restore': 'Restored rituals', 'ritual.omens': 'Changed omens', 'ritual.recipe': 'Saved a ritual from a recipe', 'ritual.enable': 'Turned on a ritual', 'ritual.disable': 'Turned off a ritual',
   'routing.apply': 'Applied routing', 'routing.restore': 'Restored routing', 'route.create': 'Added a route', 'route.update': 'Updated a route', 'route.delete': 'Deleted a route',
   'connection.create': 'Connected sending', 'connection.delete': 'Disconnected sending', 'connection.verify': 'Verified the sending connection',
   'region.configure': 'Configured a region', 'region.provision': 'Provisioned a region', 'region.auto_validation': 'Changed auto-validation',

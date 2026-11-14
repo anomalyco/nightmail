@@ -8656,6 +8656,42 @@
         },
         "additionalProperties": false
       },
+      "RitualRecipeRef": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "maxLength": 40,
+            "description": "Recipe ID from listRitualRecipes."
+          },
+          "params": {
+            "type": "object",
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 500
+                },
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "maxLength": 254
+                  },
+                  "maxItems": 100
+                }
+              ]
+            },
+            "default": {},
+            "description": "The recipe’s fields by name, normalized."
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false,
+        "description": "Set while the source is exactly what this recipe writes. Saving a different source makes the ritual a script and drops it."
+      },
       "EndpointPage": {
         "type": "object",
         "properties": {
@@ -9354,6 +9390,129 @@
         },
         "required": [
           "data"
+        ]
+      },
+      "RitualRecipes": {
+        "type": "object",
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "title"
+              ]
+            },
+            "description": "The order recipes are grouped in."
+          },
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RitualRecipe"
+            }
+          },
+          "omenPricePerThousand": {
+            "type": "string",
+            "description": "USD per 1,000 emails an omen checks."
+          }
+        },
+        "required": [
+          "groups",
+          "data",
+          "omenPricePerThousand"
+        ]
+      },
+      "RitualRecipe": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "group": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "sentence": {
+            "type": "string",
+            "description": "What a ritual made from it does, with {field} where each parameter goes."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RitualRecipeField"
+            }
+          },
+          "omens": {
+            "type": "boolean",
+            "description": "Asks the AI about each email on its addresses (an omen), billed per email checked. Saving one lets the AI read mail at those addresses’ domains."
+          }
+        },
+        "required": [
+          "id",
+          "group",
+          "name",
+          "description",
+          "sentence",
+          "fields",
+          "omens"
+        ]
+      },
+      "RitualRecipeField": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "slack",
+              "discord",
+              "chat",
+              "forward",
+              "webhook",
+              "meaning",
+              "label",
+              "senders"
+            ],
+            "description": "slack, discord, chat (Slack or Discord), forward and webhook take the name of an endpoint of that type (createEndpoint); meaning is what the AI looks for, like \"a refund request\"; label is one label; senders is a list of addresses and @domains."
+          },
+          "label": {
+            "type": "string"
+          },
+          "placeholder": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "hint": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "label",
+          "placeholder",
+          "hint"
         ]
       },
       "RitualTraceRow": {
@@ -12105,6 +12264,38 @@
                     "type": "string"
                   },
                   "description": "Address IDs or addresses it runs on."
+                },
+                "addresses": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "description": "attachedTo as addresses: an inbox ID reads as its primary address."
+                },
+                "recipe": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/RitualRecipeRef"
+                    },
+                    {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "description": "The recipe it was made from (listRitualRecipes), while its source is still what the recipe writes; null for a script."
+                    }
+                  ]
+                },
+                "enabled": {
+                  "type": "boolean",
+                  "description": "False when it is turned off: it keeps its addresses and doesn’t run."
+                },
+                "lastMatchedAt": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "When it last took an action on received mail, among the workspace’s last 1,000 received emails; null if it didn’t."
                 }
               },
               "required": [
@@ -12112,9 +12303,14 @@
                 "calls",
                 "delivers",
                 "omens",
-                "attachedTo"
+                "attachedTo",
+                "addresses",
+                "recipe",
+                "enabled",
+                "lastMatchedAt"
               ]
-            }
+            },
+            "description": "Every ritual in the config, in the order it was saved."
           },
           "endpoints": {
             "type": "array",
@@ -42575,6 +42771,13 @@
                               "source": {
                                 "type": "string",
                                 "maxLength": 65536
+                              },
+                              "recipe": {
+                                "$ref": "#/components/schemas/RitualRecipeRef"
+                              },
+                              "enabled": {
+                                "type": "boolean",
+                                "description": "false: saved and attached, but not run. Omitted or true: runs."
                               }
                             },
                             "required": [
@@ -42867,6 +43070,13 @@
                               "source": {
                                 "type": "string",
                                 "maxLength": 65536
+                              },
+                              "recipe": {
+                                "$ref": "#/components/schemas/RitualRecipeRef"
+                              },
+                              "enabled": {
+                                "type": "boolean",
+                                "description": "false: saved and attached, but not run. Omitted or true: runs."
                               }
                             },
                             "required": [
@@ -45097,7 +45307,1100 @@
         ]
       }
     },
+    "/v1/rituals/recipes": {
+      "get": {
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "dashboardSession": []
+          },
+          {
+            "secureDashboardSession": []
+          }
+        ],
+        "tags": [
+          "Rituals"
+        ],
+        "operationId": "listRitualRecipes",
+        "summary": "Ready-made rituals and the fields each one takes",
+        "description": "Each recipe writes an ordinary ritual from one or two fields. Create one with createRitualFromRecipe; endpoint fields name an endpoint of the right type, created first with createEndpoint.",
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RitualRecipes"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "TypeScript",
+            "label": "TypeScript SDK",
+            "source": "import { createClient } from '@nightmail/sdk/client';\nimport { listRitualRecipes } from '@nightmail/sdk';\n\nconst client = createClient({\n  baseUrl: 'https://bane.mx',\n  auth: scheme => scheme.scheme === 'bearer'\n    ? process.env.NIGHTMAIL_API_KEY\n    : undefined,\n});\n\nconst result = await listRitualRecipes({\n  client,\n  throwOnError: true,\n});\n\nconsole.log(result.data);"
+          },
+          {
+            "lang": "Shell",
+            "label": "cURL",
+            "source": "curl --request GET \\\n  --url 'https://bane.mx/v1/rituals/recipes' \\\n  --header \"Authorization: Bearer $NIGHTMAIL_API_KEY\""
+          }
+        ]
+      },
+      "post": {
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "dashboardSession": []
+          },
+          {
+            "secureDashboardSession": []
+          }
+        ],
+        "tags": [
+          "Rituals"
+        ],
+        "operationId": "createRitualFromRecipe",
+        "summary": "Create a ritual from a recipe and attach it to addresses",
+        "description": "Writes the recipe’s script, saves it as a new ritual (key from the recipe and address unless given) and attaches it to each address, after their other recipes and before their own scripts. An AI recipe lets the AI read mail at those addresses’ domains. Returns the new version and key.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "required": false,
+            "name": "if-match",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "recipe": {
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "params": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 254
+                          },
+                          "maxItems": 100
+                        }
+                      ]
+                    },
+                    "default": {},
+                    "description": "The recipe’s fields by name, normalized."
+                  },
+                  "addresses": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 254
+                    },
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "description": "Inbox IDs (mbx_…) or receiving addresses it runs on."
+                  },
+                  "key": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "recipe",
+                  "addresses"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "integer"
+                    },
+                    "config": {
+                      "type": "object",
+                      "properties": {
+                        "rituals": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+                              },
+                              "source": {
+                                "type": "string",
+                                "maxLength": 65536
+                              },
+                              "recipe": {
+                                "$ref": "#/components/schemas/RitualRecipeRef"
+                              },
+                              "enabled": {
+                                "type": "boolean",
+                                "description": "false: saved and attached, but not run. Omitted or true: runs."
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "source"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 50,
+                          "default": []
+                        },
+                        "attachments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "ritual": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+                              },
+                              "target": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 254,
+                                "description": "A mailbox ID (mbx_…) or an existing recipient address."
+                              },
+                              "continue": {
+                                "type": "boolean",
+                                "default": false,
+                                "description": "Run the next attached ritual even after this one took an action."
+                              }
+                            },
+                            "required": [
+                              "ritual",
+                              "target"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 256,
+                          "default": []
+                        },
+                        "senderLists": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 254
+                            },
+                            "maxItems": 500
+                          },
+                          "default": {},
+                          "description": "Named address lists for lists.has(name, address). Entries are addresses or @domain."
+                        },
+                        "evaluateDomains": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 254
+                          },
+                          "maxItems": 100,
+                          "default": []
+                        },
+                        "evaluateRoutes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 254
+                          },
+                          "maxItems": 100,
+                          "default": [],
+                          "description": "Route IDs opted in to Jev, in addition to the receiving domains."
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "key": {
+                      "type": "string",
+                      "description": "The new ritual’s key."
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "config",
+                    "key"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "TypeScript",
+            "label": "TypeScript SDK",
+            "source": "import { createClient } from '@nightmail/sdk/client';\nimport { createRitualFromRecipe } from '@nightmail/sdk';\n\nconst client = createClient({\n  baseUrl: 'https://bane.mx',\n  auth: scheme => scheme.scheme === 'bearer'\n    ? process.env.NIGHTMAIL_API_KEY\n    : undefined,\n});\n\nconst result = await createRitualFromRecipe({\n  client,\n  body: {\n    \"recipe\": \"example\",\n    \"params\": {},\n    \"addresses\": [\n      \"example\"\n    ]\n  },\n  throwOnError: true,\n});\n\nconsole.log(result.data);"
+          },
+          {
+            "lang": "Shell",
+            "label": "cURL",
+            "source": "curl --request POST \\\n  --url 'https://bane.mx/v1/rituals/recipes' \\\n  --header \"Authorization: Bearer $NIGHTMAIL_API_KEY\" \\\n  --header 'Content-Type: application/json' \\\n  --data '{\n  \"recipe\": \"example\",\n  \"params\": {},\n  \"addresses\": [\n    \"example\"\n  ]\n}'"
+          }
+        ]
+      }
+    },
+    "/v1/rituals/scripts/{key}/recipe": {
+      "put": {
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "dashboardSession": []
+          },
+          {
+            "secureDashboardSession": []
+          }
+        ],
+        "tags": [
+          "Rituals"
+        ],
+        "operationId": "updateRitualFromRecipe",
+        "summary": "Change a ritual’s recipe fields and addresses",
+        "description": "Rewrites the ritual from its recipe with these fields. addresses, when given, replaces where it runs (kept addresses keep their place). Passing recipe turns a script into that recipe.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            },
+            "required": true,
+            "name": "key",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "required": false,
+            "name": "if-match",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "recipe": {
+                    "type": "string",
+                    "maxLength": 40
+                  },
+                  "params": {
+                    "type": "object",
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "maxLength": 500
+                        },
+                        {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "maxLength": 254
+                          },
+                          "maxItems": 100
+                        }
+                      ]
+                    },
+                    "default": {},
+                    "description": "The recipe’s fields by name, normalized."
+                  },
+                  "addresses": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 254
+                    },
+                    "minItems": 1,
+                    "maxItems": 10,
+                    "description": "Inbox IDs (mbx_…) or receiving addresses it runs on."
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "integer"
+                    },
+                    "config": {
+                      "type": "object",
+                      "properties": {
+                        "rituals": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+                              },
+                              "source": {
+                                "type": "string",
+                                "maxLength": 65536
+                              },
+                              "recipe": {
+                                "$ref": "#/components/schemas/RitualRecipeRef"
+                              },
+                              "enabled": {
+                                "type": "boolean",
+                                "description": "false: saved and attached, but not run. Omitted or true: runs."
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "source"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 50,
+                          "default": []
+                        },
+                        "attachments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "ritual": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+                              },
+                              "target": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 254,
+                                "description": "A mailbox ID (mbx_…) or an existing recipient address."
+                              },
+                              "continue": {
+                                "type": "boolean",
+                                "default": false,
+                                "description": "Run the next attached ritual even after this one took an action."
+                              }
+                            },
+                            "required": [
+                              "ritual",
+                              "target"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 256,
+                          "default": []
+                        },
+                        "senderLists": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 254
+                            },
+                            "maxItems": 500
+                          },
+                          "default": {},
+                          "description": "Named address lists for lists.has(name, address). Entries are addresses or @domain."
+                        },
+                        "evaluateDomains": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 254
+                          },
+                          "maxItems": 100,
+                          "default": []
+                        },
+                        "evaluateRoutes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 254
+                          },
+                          "maxItems": 100,
+                          "default": [],
+                          "description": "Route IDs opted in to Jev, in addition to the receiving domains."
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "config"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "TypeScript",
+            "label": "TypeScript SDK",
+            "source": "import { createClient } from '@nightmail/sdk/client';\nimport { updateRitualFromRecipe } from '@nightmail/sdk';\n\nconst client = createClient({\n  baseUrl: 'https://bane.mx',\n  auth: scheme => scheme.scheme === 'bearer'\n    ? process.env.NIGHTMAIL_API_KEY\n    : undefined,\n});\n\nconst result = await updateRitualFromRecipe({\n  client,\n  path: {\n    \"key\": \"example\"\n  },\n  body: {\n    \"params\": {}\n  },\n  throwOnError: true,\n});\n\nconsole.log(result.data);"
+          },
+          {
+            "lang": "Shell",
+            "label": "cURL",
+            "source": "curl --request PUT \\\n  --url 'https://bane.mx/v1/rituals/scripts/example/recipe' \\\n  --header \"Authorization: Bearer $NIGHTMAIL_API_KEY\" \\\n  --header 'Content-Type: application/json' \\\n  --data '{\n  \"params\": {}\n}'"
+          }
+        ]
+      }
+    },
     "/v1/rituals/scripts/{key}": {
+      "patch": {
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "dashboardSession": []
+          },
+          {
+            "secureDashboardSession": []
+          }
+        ],
+        "tags": [
+          "Rituals"
+        ],
+        "operationId": "updateRitual",
+        "summary": "Turn a ritual on or off",
+        "description": "Off keeps the ritual and where it runs, and stops it running until it is turned on again.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+            },
+            "required": true,
+            "name": "key",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "maxLength": 32
+            },
+            "required": false,
+            "name": "if-match",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "enabled": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "enabled"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "version": {
+                      "type": "integer"
+                    },
+                    "config": {
+                      "type": "object",
+                      "properties": {
+                        "rituals": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "key": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+                              },
+                              "source": {
+                                "type": "string",
+                                "maxLength": 65536
+                              },
+                              "recipe": {
+                                "$ref": "#/components/schemas/RitualRecipeRef"
+                              },
+                              "enabled": {
+                                "type": "boolean",
+                                "description": "false: saved and attached, but not run. Omitted or true: runs."
+                              }
+                            },
+                            "required": [
+                              "key",
+                              "source"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 50,
+                          "default": []
+                        },
+                        "attachments": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "ritual": {
+                                "type": "string",
+                                "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"
+                              },
+                              "target": {
+                                "type": "string",
+                                "minLength": 1,
+                                "maxLength": 254,
+                                "description": "A mailbox ID (mbx_…) or an existing recipient address."
+                              },
+                              "continue": {
+                                "type": "boolean",
+                                "default": false,
+                                "description": "Run the next attached ritual even after this one took an action."
+                              }
+                            },
+                            "required": [
+                              "ritual",
+                              "target"
+                            ],
+                            "additionalProperties": false
+                          },
+                          "maxItems": 256,
+                          "default": []
+                        },
+                        "senderLists": {
+                          "type": "object",
+                          "additionalProperties": {
+                            "type": "array",
+                            "items": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 254
+                            },
+                            "maxItems": 500
+                          },
+                          "default": {},
+                          "description": "Named address lists for lists.has(name, address). Entries are addresses or @domain."
+                        },
+                        "evaluateDomains": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 254
+                          },
+                          "maxItems": 100,
+                          "default": []
+                        },
+                        "evaluateRoutes": {
+                          "type": "array",
+                          "items": {
+                            "type": "string",
+                            "minLength": 1,
+                            "maxLength": 254
+                          },
+                          "maxItems": 100,
+                          "default": [],
+                          "description": "Route IDs opted in to Jev, in addition to the receiving domains."
+                        }
+                      },
+                      "additionalProperties": false
+                    }
+                  },
+                  "required": [
+                    "version",
+                    "config"
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "TypeScript",
+            "label": "TypeScript SDK",
+            "source": "import { createClient } from '@nightmail/sdk/client';\nimport { updateRitual } from '@nightmail/sdk';\n\nconst client = createClient({\n  baseUrl: 'https://bane.mx',\n  auth: scheme => scheme.scheme === 'bearer'\n    ? process.env.NIGHTMAIL_API_KEY\n    : undefined,\n});\n\nconst result = await updateRitual({\n  client,\n  path: {\n    \"key\": \"example\"\n  },\n  body: {\n    \"enabled\": false\n  },\n  throwOnError: true,\n});\n\nconsole.log(result.data);"
+          },
+          {
+            "lang": "Shell",
+            "label": "cURL",
+            "source": "curl --request PATCH \\\n  --url 'https://bane.mx/v1/rituals/scripts/example' \\\n  --header \"Authorization: Bearer $NIGHTMAIL_API_KEY\" \\\n  --header 'Content-Type: application/json' \\\n  --data '{\n  \"enabled\": false\n}'"
+          }
+        ]
+      },
       "get": {
         "security": [
           {
@@ -45141,6 +46444,13 @@
                     "source": {
                       "type": "string",
                       "maxLength": 65536
+                    },
+                    "recipe": {
+                      "$ref": "#/components/schemas/RitualRecipeRef"
+                    },
+                    "enabled": {
+                      "type": "boolean",
+                      "description": "false: saved and attached, but not run. Omitted or true: runs."
                     }
                   },
                   "required": [
@@ -45317,6 +46627,13 @@
                   "source": {
                     "type": "string",
                     "maxLength": 65536
+                  },
+                  "recipe": {
+                    "$ref": "#/components/schemas/RitualRecipeRef"
+                  },
+                  "enabled": {
+                    "type": "boolean",
+                    "description": "false: saved and attached, but not run. Omitted or true: runs."
                   }
                 },
                 "required": [
@@ -45354,6 +46671,13 @@
                               "source": {
                                 "type": "string",
                                 "maxLength": 65536
+                              },
+                              "recipe": {
+                                "$ref": "#/components/schemas/RitualRecipeRef"
+                              },
+                              "enabled": {
+                                "type": "boolean",
+                                "description": "false: saved and attached, but not run. Omitted or true: runs."
                               }
                             },
                             "required": [
@@ -45619,6 +46943,13 @@
                               "source": {
                                 "type": "string",
                                 "maxLength": 65536
+                              },
+                              "recipe": {
+                                "$ref": "#/components/schemas/RitualRecipeRef"
+                              },
+                              "enabled": {
+                                "type": "boolean",
+                                "description": "false: saved and attached, but not run. Omitted or true: runs."
                               }
                             },
                             "required": [
@@ -45921,6 +47252,13 @@
                               "source": {
                                 "type": "string",
                                 "maxLength": 65536
+                              },
+                              "recipe": {
+                                "$ref": "#/components/schemas/RitualRecipeRef"
+                              },
+                              "enabled": {
+                                "type": "boolean",
+                                "description": "false: saved and attached, but not run. Omitted or true: runs."
                               }
                             },
                             "required": [
@@ -46179,6 +47517,13 @@
                               "source": {
                                 "type": "string",
                                 "maxLength": 65536
+                              },
+                              "recipe": {
+                                "$ref": "#/components/schemas/RitualRecipeRef"
+                              },
+                              "enabled": {
+                                "type": "boolean",
+                                "description": "false: saved and attached, but not run. Omitted or true: runs."
                               }
                             },
                             "required": [
@@ -46428,6 +47773,13 @@
                         "source": {
                           "type": "string",
                           "maxLength": 65536
+                        },
+                        "recipe": {
+                          "$ref": "#/components/schemas/RitualRecipeRef"
+                        },
+                        "enabled": {
+                          "type": "boolean",
+                          "description": "false: saved and attached, but not run. Omitted or true: runs."
                         }
                       },
                       "required": [
@@ -46536,6 +47888,13 @@
                               "source": {
                                 "type": "string",
                                 "maxLength": 65536
+                              },
+                              "recipe": {
+                                "$ref": "#/components/schemas/RitualRecipeRef"
+                              },
+                              "enabled": {
+                                "type": "boolean",
+                                "description": "false: saved and attached, but not run. Omitted or true: runs."
                               }
                             },
                             "required": [
@@ -46779,6 +48138,13 @@
                             "source": {
                               "type": "string",
                               "maxLength": 65536
+                            },
+                            "recipe": {
+                              "$ref": "#/components/schemas/RitualRecipeRef"
+                            },
+                            "enabled": {
+                              "type": "boolean",
+                              "description": "false: saved and attached, but not run. Omitted or true: runs."
                             }
                           },
                           "required": [

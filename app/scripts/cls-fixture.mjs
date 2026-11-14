@@ -415,10 +415,22 @@ export async function seed(fx) {
     attachments: [{ ritual: 'triage', target: A.support.id, continue: false }, { ritual: 'invoices', target: A.billing.id, continue: false }],
     senderLists: { vip: ['ceo@example.net'] }, evaluateDomains: ['northwind.example'], evaluateRoutes: [],
   }, 200);
+  // Ready-made rituals (recipes) beside the two scripts: the Rituals tab shows them as sentences, one turned off, and
+  // an edit opens the recipe's form (cls.mjs `Receiving · recipe ritual`).
+  await dana.api('POST', '/v1/rituals/recipes', { recipe: 'allow-senders', params: { senders: ['ceo@example.net', '@partner.example'] }, addresses: [A.support.id] }, 201);
+  const refunds = await dana.api('POST', '/v1/rituals/recipes', { recipe: 'label-by-meaning', params: { meaning: 'a refund request', label: 'refund' }, addresses: [A.support.id, A.billing.id] }, 201);
+  const founders = await dana.api('POST', '/v1/rituals/recipes', { recipe: 'forward', params: { to: 'founders' }, addresses: [A.sales.id] }, 201);
+  await dana.api('POST', '/v1/rituals/recipes', { recipe: 'junk-newsletters', params: {}, addresses: [A.sales.id], enabled: false }, 201);
   await threads(db, 'ws_northwind', A.support, [{ id: 'msg_northwind_invoice', subject: 'Invoice for October', snippet: 'Please find the October invoice attached.', unread: true, minutes: 9, from: ['Margaret Ode', 'margaret@example.com'], files: 1 }, ...mix(6, 0)]);
   await threads(db, 'ws_northwind', A.billing, mix(4, 2));
   await threads(db, 'ws_northwind', A.sales, mix(3, 3));
   await threads(db, 'ws_northwind', A.dana, mix(2, 4));
+  // Ingest records which rituals acted on each email (verdicts.ritualsActed); these threads are inserted directly, so
+  // say it here: the Rituals tab's Last matched.
+  const acted = async (box, keys) => db.query(`UPDATE mail_messages SET verdicts=verdicts||jsonb_build_object('ritualsActed',$3::jsonb) WHERE workspace_id=$1 AND id IN (SELECT message_id FROM mailbox_messages WHERE mailbox_id=$2)`, ['ws_northwind', box.id, JSON.stringify(keys)]);
+  await acted(A.support, ['triage', refunds.key]);
+  await acted(A.billing, ['invoices']);
+  await acted(A.sales, [founders.key]);
   const inbox = await agentInbox(db, 'ws_northwind', nw, 'Sign-up e2e', 20, mix(3, 1));
   await agentInbox(db, 'ws_northwind', nw, 'Password reset e2e', 3, []);
 

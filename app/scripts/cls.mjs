@@ -77,11 +77,16 @@ const pages = ids => [
   ['Receiving · address', `/receiving/addresses/${ids.address}`, { from: '/receiving' }],
   ['Receiving · inbox', '/receiving/inbox', { from: '/receiving' }],
   ['Receiving · trace', '/receiving/trace', { from: '/receiving' }],
-  ['Receiving · rituals', '/receiving/rituals', { from: '/receiving' }],
-  ['Receiving · rituals · no agent', '/receiving/rituals', { user: 'nia' }],
-  ['Receiving · rituals · agent', '/receiving/rituals', { user: 'kai', from: '/receiving' }],
-  ['Receiving · rituals · live update', '/receiving/rituals', { user: 'kai', live: 'apply' }],
-  ['Receiving · rituals · live conflict', '/receiving/rituals', { user: 'kai', live: 'conflict' }],
+  // Rituals: the list (the Receiving tab), New ritual's recipes, a recipe's form new and saved, and the script editor.
+  ['Receiving · rituals', '/receiving?tab=rituals', { from: '/receiving', click: 'Rituals' }],
+  ['Receiving · new ritual', '/receiving/rituals/new', { from: '/receiving?tab=rituals', click: 'New ritual' }],
+  ['Receiving · new ritual · new workspace', '/receiving/rituals/new', { user: 'nia' }],
+  ['Receiving · recipe form', '/receiving/rituals/new/slack', { from: '/receiving/rituals/new', click: 'Post to Slack' }],
+  ['Receiving · recipe ritual', '/receiving/rituals/label-by-meaning-support', { from: '/receiving?tab=rituals', row: 'a refund request' }],
+  ['Receiving · ritual editor', '/receiving/rituals/triage/code', { from: '/receiving?tab=rituals', row: 'triage' }],
+  ['Receiving · ritual editor · new script', '/receiving/rituals/new/script', { user: 'nia', from: '/receiving/rituals/new', click: 'Write a script' }],
+  ['Receiving · rituals · live update', '/receiving/rituals/triage/code', { user: 'kai', live: 'apply' }],
+  ['Receiving · rituals · live conflict', '/receiving/rituals/triage/code', { user: 'kai', live: 'conflict' }],
   ['Receiving · agent inboxes', '/receiving/inboxes', { from: '/receiving' }],
   ['Receiving · agent inbox', `/receiving/inboxes/${ids.inbox}`, { from: '/receiving/inboxes' }],
   ['Receiving · webhooks', '/receiving/webhooks', { from: '/receiving' }],
@@ -149,6 +154,7 @@ const pages = ids => [
   ['API keys · create key dialog', '/api-keys', { dialog: 'Create key' }],
   ['Receiving · new address dialog', '/receiving', { dialog: 'New address' }],
   ['Receiving · new agent inbox dialog', '/receiving/inboxes', { dialog: 'New agent inbox' }],
+  ['Receiving · ask your agent dialog', '/receiving/rituals/new', { dialog: 'Ask your agent' }],
   ['Audience · import dialog', '/audience', { dialog: 'Import contacts' }],
   ['Settings · invite dialog', '/settings#members', { dialog: 'Invite teammate' }],
   ['Settings · new webhook', '/settings/webhooks/new', {}],
@@ -156,7 +162,7 @@ const pages = ids => [
 ];
 
 // The phone pass: the pages someone opens on a phone (every list as cards, the details they open, Settings), light only.
-const phonePages = new Set(['Overview', 'Overview · range', 'Logs', 'Sent email', 'Sent email · junk-like', 'Received email', 'Receiving', 'Receiving · address', 'Receiving · inbox', 'Receiving · agent inboxes', 'Receiving · webhooks', 'Campaigns', 'Campaign review', 'Templates', 'Audience', 'Lists', 'Domains', 'Domain', 'API keys', 'Settings', 'Settings · members', 'Settings · plan & usage', 'Settings · activity', 'Settings · billing', 'Settings · billing · owed', 'Settings · billing · free', 'Settings · webhook', 'Settings · MCP connection', 'Onboarding', 'Two accounts · switch', 'Operator', 'Operator · workspace', 'Operator · UI notes', 'Overview · UI notes mode', 'Operator · without UI notes', 'Overview · restricted', 'Campaigns · restricted', 'Signed out', 'Legal', 'Legal · terms', 'Legal · privacy', 'Docs', 'Docs · MCP guide', 'Docs · section', 'Docs · signed out', 'Support chat', 'Overview · sending limits dialog', 'Overview · sender score dialog', 'API keys · create key dialog', 'Receiving · new address dialog', 'Settings · invite dialog', 'Settings · add credit dialog']);
+const phonePages = new Set(['Overview', 'Overview · range', 'Logs', 'Sent email', 'Sent email · junk-like', 'Received email', 'Receiving', 'Receiving · rituals', 'Receiving · new ritual', 'Receiving · recipe form', 'Receiving · recipe ritual', 'Receiving · address', 'Receiving · inbox', 'Receiving · agent inboxes', 'Receiving · webhooks', 'Campaigns', 'Campaign review', 'Templates', 'Audience', 'Lists', 'Domains', 'Domain', 'API keys', 'Settings', 'Settings · members', 'Settings · plan & usage', 'Settings · activity', 'Settings · billing', 'Settings · billing · owed', 'Settings · billing · free', 'Settings · webhook', 'Settings · MCP connection', 'Onboarding', 'Two accounts · switch', 'Operator', 'Operator · workspace', 'Operator · UI notes', 'Overview · UI notes mode', 'Operator · without UI notes', 'Overview · restricted', 'Campaigns · restricted', 'Signed out', 'Legal', 'Legal · terms', 'Legal · privacy', 'Docs', 'Docs · MCP guide', 'Docs · section', 'Docs · signed out', 'Support chat', 'Overview · sending limits dialog', 'Overview · sender score dialog', 'API keys · create key dialog', 'Receiving · new address dialog', 'Settings · invite dialog', 'Settings · add credit dialog']);
 const devices = {
   desktop: { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 },
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true },

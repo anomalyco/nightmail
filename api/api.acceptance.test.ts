@@ -16504,7 +16504,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         assert.deepEqual([byMatch('ov-route@receive.example').kind, byMatch('ov-route@receive.example').route.id, byMatch('ov-route@receive.example').to[0].id], ['route', only.id, hook.id]);
         assert.deepEqual(byMatch('ov-drop@receive.example').to.map((t: Json) => t.type), ['drop']);
         assert.equal(overview.manage, true); assert.ok(overview.counts.address >= 1 && overview.counts.route >= 2 && overview.counts.pattern >= 1);
-        assert.deepEqual(overview.rituals.find((r: Json) => r.key === 'ovtriage'), { key: 'ovtriage', calls: ['support-hook'], delivers: [], omens: [], attachedTo: [box2.id] });
+        assert.deepEqual(overview.rituals.find((r: Json) => r.key === 'ovtriage'), { key: 'ovtriage', calls: ['support-hook'], delivers: [], omens: [], attachedTo: [box2.id], addresses: [box2.address], recipe: null, enabled: true, lastMatchedAt: null });
         const endpoint = overview.endpoints.find((e: Json) => e.id === hook.id);
         assert.deepEqual([endpoint.source, endpoint.name, endpoint.rituals], ['endpoint', 'support-hook', ['ovtriage']]); assert.ok(endpoint.routes >= 1);
         assert.ok(!JSON.stringify(overview).includes('hooks.example.org'), 'webhook URLs stay write-only');
@@ -16660,6 +16660,85 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const after = await entry();
         assert.deepEqual([after.toTruncated, after.toTotal, after.toMore], [false, after.to.length, null]);
         await call('DELETE', `/v1/inbound/addresses/${sub.id}?detach=true`);
+      });
+      await t.test('rituals: recipes write ordinary rituals in stage order, keep their recipe until edited by hand, turn off without detaching and report last matched', async () => {
+        const path = '/v1/rituals', recipes = path + '/recipes';
+        const catalog = await call('GET', recipes);
+        assert.deepEqual(catalog.groups.map((g: Json) => g.id), ['notify', 'pass', 'junk', 'ai']);
+        assert.equal(catalog.omenPricePerThousand, '0.10');
+        assert.deepEqual(catalog.data.filter((r: Json) => r.omens).map((r: Json) => r.id), ['label-by-meaning', 'alert-by-meaning']);
+        assert.deepEqual(catalog.data.find((r: Json) => r.id === 'slack').fields, [{ name: 'channel', type: 'slack', label: 'Slack channel', placeholder: null, hint: null }]);
+        await call('POST', '/v1/endpoints', { type: 'slack', name: 'recipe-chat', url: 'https://hooks.slack.com/services/T0RECIPE/B0RECIPE/synthetic' }, 201);
+        // A hand-written script already runs on the address and stops the rest when it acts.
+        await call('PUT', path, { rituals: [{ key: 'own', source: 'export default function route(email){ label("own") }' }], attachments: [{ ritual: 'own', target: box.id }] });
+        error(await local('POST', recipes, { recipe: 'slack', params: { channel: 'nope' }, addresses: [box.id] }), 422, 'INVALID_RECIPE');
+        error(await local('POST', recipes, { recipe: 'slack', params: { channel: 'support-hook' }, addresses: [box.id] }), 422, 'INVALID_RECIPE');
+        error(await local('POST', recipes, { recipe: 'teleport', params: {}, addresses: [box.id] }), 422, 'UNKNOWN_RECIPE');
+        error(await local('POST', recipes, { recipe: 'slack', params: { channel: 'recipe-chat' }, addresses: ['nobody@receive.example'] }), 422, 'UNKNOWN_TARGET');
+        const slack = await call('POST', recipes, { recipe: 'slack', params: { channel: 'recipe-chat' }, addresses: [box.id] }, 201);
+        assert.equal(slack.key, 'slack-support');
+        const ritual = (config: Json, key: string) => config.rituals.find((r: Json) => r.key === key);
+        assert.deepEqual(ritual(slack.config, 'slack-support').recipe, { id: 'slack', params: { channel: 'recipe-chat' } });
+        assert.match(ritual(slack.config, 'slack-support').source, /if \(ctx\.junk\) return\n  endpoints\["recipe-chat"\]\(\{ text: `\$\{email\.from\.address\}: \$\{email\.subject\}` \}\)/);
+        // Recipes act independently and run before the address's own scripts, keep-out recipes first.
+        const junk = await call('POST', recipes, { recipe: 'junk-newsletters', params: {}, addresses: [box.address] }, 201);
+        const vip = await call('POST', recipes, { recipe: 'allow-senders', params: { senders: 'CEO@Example.net, @partner.example' }, addresses: [box.id] }, 201);
+        assert.deepEqual(ritual(vip.config, vip.key).recipe.params, { senders: ['ceo@example.net', '@partner.example'] });
+        assert.deepEqual(vip.config.attachments, [
+          { ritual: junk.key, target: box.address, continue: true }, { ritual: vip.key, target: box.id, continue: true },
+          { ritual: 'slack-support', target: box.id, continue: true }, { ritual: 'own', target: box.id, continue: false },
+        ]);
+        assert.deepEqual(vip.config.evaluateDomains, []);
+        const ai = await call('POST', recipes, { recipe: 'label-by-meaning', params: { meaning: 'A refund request.', label: 'Refund' }, addresses: [box.id] }, 201);
+        assert.deepEqual(ritual(ai.config, ai.key).recipe.params, { meaning: 'a refund request', label: 'refund' });
+        assert.deepEqual(ai.config.evaluateDomains, ['receive.example']);
+        // Ingest records which rituals acted; the overview turns that into last matched.
+        const first = await ingest('recipe-matched', [box.address]);
+        const acted = (await db.query('SELECT verdicts FROM mail_messages WHERE id=$1', [first.id])).rows[0].verdicts.ritualsActed;
+        assert.deepEqual([...acted].sort(), ['own', 'slack-support']);
+        const overview = async () => (await call('GET', '/v1/inbound/overview?q=support')).rituals;
+        const listed = (await overview()).find((r: Json) => r.key === 'slack-support');
+        assert.deepEqual([listed.recipe, listed.enabled, typeof listed.lastMatchedAt, listed.addresses], [{ id: 'slack', params: { channel: 'recipe-chat' } }, true, 'string', [box.address]]);
+        assert.equal((await overview()).find((r: Json) => r.key === junk.key).lastMatchedAt, null);
+        // Off keeps the ritual and its attachment, and leaves it out of the plan ingest runs.
+        const off = await call('PATCH', path + '/scripts/slack-support', { enabled: false });
+        assert.equal(ritual(off.config, 'slack-support').enabled, false);
+        assert.ok(off.config.attachments.some((a: Json) => a.ritual === 'slack-support'));
+        assert.ok(!(await db.query('SELECT programs FROM mail_ritual_configs WHERE workspace_id=$1', [wid])).rows[0].programs.attachments.some((a: Json) => a.ritual === 'slack-support'));
+        const second = await ingest('recipe-off', [box.address]);
+        assert.deepEqual((await db.query('SELECT verdicts FROM mail_messages WHERE id=$1', [second.id])).rows[0].verdicts.ritualsActed, ['own']);
+        assert.equal((await overview()).find((r: Json) => r.key === 'slack-support').enabled, false);
+        error(await local('PATCH', path + '/scripts/missing', { enabled: true }), 404, 'NOT_FOUND');
+        // Saving the same source keeps the recipe (and the off switch); a hand edit makes it a script.
+        const source = ritual(off.config, 'slack-support').source;
+        const same = await call('PUT', path + '/scripts/slack-support', { key: 'slack-support', source });
+        assert.deepEqual([ritual(same.config, 'slack-support').recipe?.id, ritual(same.config, 'slack-support').enabled], ['slack', false]);
+        const edited = await call('PUT', path + '/scripts/slack-support', { key: 'slack-support', source: source.replace('return', 'return junk("seen")') });
+        assert.deepEqual([ritual(edited.config, 'slack-support').recipe, ritual(edited.config, 'slack-support').enabled], [undefined, false]);
+        // A script becomes a recipe only when asked, in place.
+        error(await local('PUT', path + '/scripts/own/recipe', { params: {} }), 422, 'NOT_A_RECIPE');
+        const converted = await call('PUT', path + '/scripts/own/recipe', { recipe: 'junk-failed-dmarc', params: {} });
+        assert.equal(ritual(converted.config, 'own').recipe.id, 'junk-failed-dmarc');
+        assert.deepEqual(converted.config.attachments.at(-1), { ritual: 'own', target: box.id, continue: false });
+        // Changing a recipe's addresses keeps the ones that stay where they were.
+        const other = await call('POST', '/v1/inbound/addresses', { address: 'recipes@receive.example' }, 201);
+        const moved = await call('PUT', `${path}/scripts/${junk.key}/recipe`, { params: {}, addresses: [box.address, other.id] });
+        assert.deepEqual(moved.config.attachments.filter((a: Json) => a.ritual === junk.key).map((a: Json) => a.target), [box.address, other.id]);
+        // A ritual with no attachments still lists in the overview.
+        await call('PUT', path + '/scripts/loose', { key: 'loose', source: 'export default function route(email){ label("loose") }' });
+        assert.deepEqual((await overview()).find((r: Json) => r.key === 'loose').attachedTo, []);
+        // A forward that stops being confirmed after a ritual was saved with it no longer blocks other saves.
+        // From the other address, so its confirmation email isn't the one the forward tests below read for box.
+        await call('POST', '/v1/endpoints', { type: 'forward', name: 'recipe-fwd', address: 'recipes@example.net', from: other.id }, 201);
+        error(await local('POST', recipes, { recipe: 'forward', params: { to: 'recipe-fwd' }, addresses: [box.id] }), 422, 'UNKNOWN_ENDPOINT');
+        await db.query("UPDATE mail_endpoints SET verified=true WHERE workspace_id=$1 AND ref='forward:recipe-fwd'", [wid]);
+        const forward = await call('POST', recipes, { recipe: 'forward', params: { to: 'recipe-fwd' }, addresses: [box.id] }, 201);
+        await db.query("UPDATE mail_endpoints SET verified=false,declined_at=now() WHERE workspace_id=$1 AND ref='forward:recipe-fwd'", [wid]);
+        assert.equal(ritual((await call('PATCH', path + '/scripts/loose', { enabled: false })).config, 'loose').enabled, false);
+        assert.ok(ritual((await call('GET', path)).config, forward.key));
+        error(await local('POST', recipes, { recipe: 'forward', params: { to: 'recipe-fwd' }, addresses: [other.id] }), 422, 'UNKNOWN_ENDPOINT');
+        await call('PUT', path, {});
+        for (const name of ['recipe-chat', 'recipe-fwd']) await call('DELETE', `/v1/endpoints/${name}`);
       });
       await t.test('rituals: opt-in unions Jev questions, replays recorded scores and lets scripts choose the action',async it=>{
         const path='/v1/rituals',prior=runtime.config.screen;runtime.config.screen={apiKey:'synthetic',endpoint:'https://jev.invalid/fixture',model:'synthetic',mode:'reject',threshold:0.7};let calls=0;

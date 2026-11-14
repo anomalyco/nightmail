@@ -4,7 +4,7 @@ import { jevQuestions } from './screen.js';
 import { visibleMail } from './inbox-content.js';
 import { safeForwardHtml } from './mailbox-send.js';
 import { compileRitual, runRitual, RitualError, MESSAGE_STEPS, MESSAGE_BYTES, type Diagnostic, type RitualIR, type Intent, type TimelineStep } from './ritual-engine.js';
-import { closest, type EndpointType } from './ritual-schema.js';
+import { closest, RITUALS_PER_ADDRESS, type EndpointType } from './ritual-schema.js';
 import { matchRouting, plusBase, type RoutingInput } from './routing-match.js';
 import type { mailMessages, mailAttachments } from './db/mailbox.js';
 import { JobDeferred } from './jobs.js';
@@ -12,7 +12,21 @@ import { loopHeaderNames } from './brand.js';
 
 const key = z.string().regex(/^[a-z0-9][a-z0-9-]{0,62}$/),
   bounded = z.string().min(1).max(254);
-export const Ritual = z.object({ key, source: z.string().max(65536) }).strict();
+export const RecipeRef = z
+  .object({
+    id: z.string().max(40).describe('Recipe ID from listRitualRecipes.'),
+    params: z.record(z.string().max(32), z.union([z.string().max(500), z.array(z.string().max(254)).max(100)])).default({}).describe('The recipe’s fields by name, normalized.'),
+  })
+  .strict()
+  .openapi('RitualRecipeRef');
+export const Ritual = z
+  .object({
+    key,
+    source: z.string().max(65536),
+    recipe: RecipeRef.optional().describe('Set while the source is exactly what this recipe writes. Saving a different source makes the ritual a script and drops it.'),
+    enabled: z.boolean().optional().describe('false: saved and attached, but not run. Omitted or true: runs.'),
+  })
+  .strict();
 export const Binding = z
   .object({
     ritual: key,
@@ -70,17 +84,19 @@ export function compileConfig(c: Config): Programs {
         diagnostics.push(at(name, `No sender list named ${list.name}.`, guess ? `Did you mean "${guess}"?` : 'Add it to senderLists, for example { "vip": ["ceo@example.com", "@partner.com"] }.', list.line, list.column));
       }
   const known = Object.keys(rituals).concat(c.rituals.map(r => r.key));
-  const prompts=new Set(c.attachments.flatMap(b=>Object.values(rituals[b.ritual]?.omens??{}).map(o=>o.prompt)));
+  // A ritual turned off keeps its attachments in the config; the plan leaves them out, so it never runs.
+  const off = new Set(c.rituals.filter(r => r.enabled === false).map(r => r.key)), running = c.attachments.filter(a => !off.has(a.ritual));
+  const prompts=new Set(running.flatMap(b=>Object.values(rituals[b.ritual]?.omens??{}).map(o=>o.prompt)));
   if(prompts.size>10&&(c.evaluateDomains.length||c.evaluateRoutes.length))diagnostics.push(at('','Opted-in attachments may reference at most ten distinct Omen questions in total.'));
   for (const a of c.attachments) {
     if (!known.includes(a.ritual)) { const guess = closest(a.ritual, known); diagnostics.push(at(a.ritual, `Attachment to ${a.target} names ritual ${a.ritual}, which does not exist.`, guess ? `Did you mean ${guess}?` : undefined)); continue; }
     if (c.attachments.filter(x => x.target === a.target && x.ritual === a.ritual).length > 1) diagnostics.push(at(a.ritual, `${a.ritual} is attached to ${a.target} twice.`));
-    if (c.attachments.filter(x => x.target === a.target).length > 3) diagnostics.push(at(a.ritual, `${a.target} has more than three rituals attached.`, 'Combine them, or attach at most three per inbox or address.'));
+    if (c.attachments.filter(x => x.target === a.target).length > RITUALS_PER_ADDRESS) diagnostics.push(at(a.ritual, `${a.target} has more than ${RITUALS_PER_ADDRESS} rituals attached.`, `Combine them, or attach at most ${RITUALS_PER_ADDRESS} per inbox or address.`));
   }
   if (diagnostics.length) throw new RitualConfigError([...new Map(diagnostics.map(d => [formatDiagnostic(d), d])).values()].slice(0, 50));
   const p = {
     rituals,
-    attachments: c.attachments,
+    attachments: running,
     evaluateDomains: c.evaluateDomains,
     evaluateRoutes: c.evaluateRoutes,
     senderLists: c.senderLists,
@@ -245,7 +261,7 @@ export async function ritualPipeline(
            .filter((b) => b.target === r.address || b.target === owner?.id || r.inboxes.includes(b.target))
            .filter(b=>{const ok=active('ritual:'+b.ritual)&&active(bindingKey(b));if(!ok)skipped.add(r.address);return ok;})
           .filter((b, i, all) => all.findIndex((x) => x.ritual === b.ritual) === i)
-          .slice(0, 3);
+          .slice(0, RITUALS_PER_ADDRESS);
   });
   // Either opt-in is sufficient. Distinguish never opted in from an opt-in that
   // still exists in the plan but can no longer authorize evaluation.
@@ -258,6 +274,8 @@ export async function ritualPipeline(
   let answers: Record<string, number> = recorded ?? {},
     steps = 0,
     bytes = 0;
+  // Rituals that took an action on this message (ingest records them as verdicts.ritualsActed for "last matched").
+  const acted = new Set<string>();
   const changes: Record<string, RitualDecision> = Object.create(null),
     trace: {
       recipient: string;
@@ -326,6 +344,7 @@ export async function ritualPipeline(
         fail(error);
       }
       const actions=error?[]:result.intents;
+      if (actions.length) acted.add(key);
       if (preview)
         trace.push({ recipient: r.address, kind, key, scores, steps: result.steps, lines: result.trace, error, actions, timeline: timeline ?? [] });
       for (const [index,a] of actions.entries()) {
@@ -383,6 +402,8 @@ export async function ritualPipeline(
     answers,
     /** Jev calls made for this message: the Omen meter (verdicts.omenCalls). */
     omenCalls: calls.n,
+    /** Keys of the rituals that took an action (verdicts.ritualsActed). */
+    acted: [...acted],
   };
 }
 export type RitualDecision = {

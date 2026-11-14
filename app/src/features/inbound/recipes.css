@@ -1,0 +1,50 @@
+/* Rituals: the list's sentences, the add screen's recipe tiles and the recipe form. Nightmail tokens; flat. */
+.recipe-row { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
+.recipe-row[data-off] { color: var(--color-muted); }
+.recipe-sentence { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.recipe-blank { padding: 1px 6px; border-radius: 4px; background: var(--color-layer-2); color: var(--color-text); }
+.recipe-row[data-off] .recipe-blank { color: var(--color-muted); }
+.recipe-code { font-family: var(--font-mono); font-size: var(--text-sm); }
+.recipe-addresses { display: inline-flex; align-items: baseline; gap: var(--space-6); min-width: 0; max-width: 100%; overflow: hidden; white-space: nowrap; }
+.recipe-addresses .muted { flex: none; font-size: var(--text-xs); }
+.recipe-card-line { display: inline-flex; align-items: baseline; gap: var(--space-6); min-width: 0; color: var(--color-muted); }
+.recipe-card-line > span[aria-hidden] { color: var(--color-faint); }
+.recipe-controls { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--space-8); }
+.recipe-table .ui-check-field { gap: 0; }
+
+/* New ritual: one section per group, tiles in a grid that fills the width. */
+.recipe-groups { display: grid; gap: var(--space-24); }
+.recipe-group { display: grid; gap: var(--space-8); align-content: start; }
+.recipe-group > h2 { margin: 0; color: var(--color-muted); font-size: var(--text-xs); font-weight: var(--font-weight-regular); line-height: var(--leading-xs); }
+.recipe-tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: var(--space-8); }
+.recipe-tile { display: flex; align-items: flex-start; gap: var(--space-12); min-height: 76px; padding: var(--space-12); border: 1px solid var(--color-border-muted); border-radius: var(--radius-sm); color: var(--color-text); text-decoration: none; transition: background var(--motion-duration), transform 160ms var(--ease-out-strong); }
+.recipe-tile > .rcv-icon { margin-top: 2px; }
+.recipe-tile__text { display: grid; gap: 2px; min-width: 0; }
+.recipe-tile__text strong { font-size: var(--text-sm); font-weight: var(--font-weight-bold); line-height: var(--leading-sm); }
+.recipe-tile__text .muted { font-size: var(--text-xs); line-height: var(--leading-xs); text-wrap: pretty; }
+.recipe-group__price { color: var(--color-accent); font-variant-numeric: tabular-nums; }
+@media (hover: hover) and (pointer: fine) { .recipe-tile:hover { background: var(--color-hover); } }
+.recipe-tile:active { transform: scale(.98); }
+.recipe-tile:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+.recipe-tile--skeleton { border-color: transparent; background: var(--color-layer-1); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
+.recipe-agent-link { justify-self: start; margin-inline-start: -11px; color: var(--color-muted); }
+
+/* The recipe form: one column, as wide as a comfortable field. */
+.recipe-form { display: grid; gap: var(--space-16); max-width: 560px; }
+.recipe-form__intro { margin: 0; font-size: var(--text-sm); line-height: var(--leading-sm); }
+.recipe-price { display: flex; align-items: flex-start; gap: var(--space-8); margin: calc(-1 * var(--space-8)) 0 0; color: var(--color-muted); font-size: var(--text-sm); line-height: var(--leading-sm); font-variant-numeric: tabular-nums; }
+.recipe-price > svg { flex: none; margin-top: 3px; color: var(--color-accent); }
+.recipe-field { gap: var(--space-12); }
+.recipe-targets { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8); }
+.recipe-target { display: inline-flex; align-items: center; gap: 2px; height: var(--control-height); padding: 0 2px 0 10px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: var(--text-sm); }
+.recipe-targets__add { width: auto; min-width: 200px; }
+.recipe-form__actions { display: flex; justify-content: flex-end; gap: var(--space-8); }
+
+@media (max-width: 640px) {
+  .recipe-tiles { grid-template-columns: minmax(0, 1fr); }
+  .recipe-groups { gap: var(--space-16); }
+  .recipe-form { max-width: none; }
+  .recipe-targets__add { flex: 1 1 100%; min-width: 0; }
+  .recipe-form__actions > * { flex: 1; }
+}
+@media (prefers-reduced-motion: reduce) { .recipe-tile { transition: background var(--motion-duration); } .recipe-tile:active { transform: none; } }

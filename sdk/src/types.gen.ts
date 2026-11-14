@@ -2392,6 +2392,22 @@ export type RoutingTest = {
     version?: number;
 };
 
+/**
+ * Set while the source is exactly what this recipe writes. Saving a different source makes the ritual a script and drops it.
+ */
+export type RitualRecipeRef = {
+    /**
+     * Recipe ID from listRitualRecipes.
+     */
+    id: string;
+    /**
+     * The recipe’s fields by name, normalized.
+     */
+    params?: {
+        [key: string]: string | Array<string>;
+    };
+};
+
 export type EndpointPage = {
     data: Array<Endpoint>;
     nextCursor: string | null;
@@ -2656,6 +2672,48 @@ export type RitualTemplates = {
         endpoint: string | null;
         source: string;
     }>;
+};
+
+export type RitualRecipes = {
+    /**
+     * The order recipes are grouped in.
+     */
+    groups: Array<{
+        id: string;
+        title: string;
+    }>;
+    data: Array<RitualRecipe>;
+    /**
+     * USD per 1,000 emails an omen checks.
+     */
+    omenPricePerThousand: string;
+};
+
+export type RitualRecipe = {
+    id: string;
+    group: string;
+    name: string;
+    description: string;
+    /**
+     * What a ritual made from it does, with {field} where each parameter goes.
+     */
+    sentence: string;
+    fields: Array<RitualRecipeField>;
+    /**
+     * Asks the AI about each email on its addresses (an omen), billed per email checked. Saving one lets the AI read mail at those addresses’ domains.
+     */
+    omens: boolean;
+};
+
+export type RitualRecipeField = {
+    name: string;
+    /**
+     * slack, discord, chat (Slack or Discord), forward and webhook take the name of an endpoint of that type (createEndpoint); meaning is what the AI looks for, like "a refund request"; label is one label; senders is a list of addresses and @domains.
+     */
+    type: 'slack' | 'discord' | 'chat' | 'forward' | 'webhook' | 'meaning' | 'label' | 'senders';
+    label: string;
+    placeholder: string | null;
+    hint: string | null;
 };
 
 export type RitualTraceRow = {
@@ -3492,6 +3550,9 @@ export type InboundOverview = {
         data: Array<InboundOverviewRoute>;
         nextCursor: string | null;
     };
+    /**
+     * Every ritual in the config, in the order it was saved.
+     */
     rituals: Array<{
         key: string;
         /**
@@ -3507,6 +3568,21 @@ export type InboundOverview = {
          * Address IDs or addresses it runs on.
          */
         attachedTo: Array<string>;
+        /**
+         * attachedTo as addresses: an inbox ID reads as its primary address.
+         */
+        addresses: Array<string>;
+        recipe: RitualRecipeRef & ({
+            [key: string]: unknown;
+        } | null);
+        /**
+         * False when it is turned off: it keeps its addresses and doesn’t run.
+         */
+        enabled: boolean;
+        /**
+         * When it last took an action on received mail, among the workspace’s last 1,000 received emails; null if it didn’t.
+         */
+        lastMatchedAt: string | null;
     }>;
     /**
      * At most 100 endpoints (by name) and 100 inbound webhooks.
@@ -14783,6 +14859,11 @@ export type RestoreRitualVersionResponses = {
             rituals?: Array<{
                 key: string;
                 source: string;
+                recipe?: RitualRecipeRef;
+                /**
+                 * false: saved and attached, but not run. Omitted or true: runs.
+                 */
+                enabled?: boolean;
             }>;
             attachments?: Array<{
                 ritual: string;
@@ -14883,6 +14964,11 @@ export type SetOmenOptInsResponses = {
             rituals?: Array<{
                 key: string;
                 source: string;
+                recipe?: RitualRecipeRef;
+                /**
+                 * false: saved and attached, but not run. Omitted or true: runs.
+                 */
+                enabled?: boolean;
             }>;
             attachments?: Array<{
                 ritual: string;
@@ -15712,6 +15798,298 @@ export type ListRitualTemplatesResponses = {
 
 export type ListRitualTemplatesResponse = ListRitualTemplatesResponses[keyof ListRitualTemplatesResponses];
 
+export type ListRitualRecipesData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/rituals/recipes';
+};
+
+export type ListRitualRecipesErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type ListRitualRecipesError = ListRitualRecipesErrors[keyof ListRitualRecipesErrors];
+
+export type ListRitualRecipesResponses = {
+    /**
+     * Success
+     */
+    200: RitualRecipes;
+};
+
+export type ListRitualRecipesResponse = ListRitualRecipesResponses[keyof ListRitualRecipesResponses];
+
+export type CreateRitualFromRecipeData = {
+    body: {
+        recipe: string;
+        /**
+         * The recipe’s fields by name, normalized.
+         */
+        params?: {
+            [key: string]: string | Array<string>;
+        };
+        /**
+         * Inbox IDs (mbx_…) or receiving addresses it runs on.
+         */
+        addresses: Array<string>;
+        key?: string;
+        enabled?: boolean;
+    };
+    headers?: {
+        'if-match'?: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/v1/rituals/recipes';
+};
+
+export type CreateRitualFromRecipeErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type CreateRitualFromRecipeError = CreateRitualFromRecipeErrors[keyof CreateRitualFromRecipeErrors];
+
+export type CreateRitualFromRecipeResponses = {
+    /**
+     * Success
+     */
+    201: {
+        version: number;
+        config: {
+            rituals?: Array<{
+                key: string;
+                source: string;
+                recipe?: RitualRecipeRef;
+                /**
+                 * false: saved and attached, but not run. Omitted or true: runs.
+                 */
+                enabled?: boolean;
+            }>;
+            attachments?: Array<{
+                ritual: string;
+                /**
+                 * A mailbox ID (mbx_…) or an existing recipient address.
+                 */
+                target: string;
+                /**
+                 * Run the next attached ritual even after this one took an action.
+                 */
+                continue?: boolean;
+            }>;
+            /**
+             * Named address lists for lists.has(name, address). Entries are addresses or @domain.
+             */
+            senderLists?: {
+                [key: string]: Array<string>;
+            };
+            evaluateDomains?: Array<string>;
+            /**
+             * Route IDs opted in to Jev, in addition to the receiving domains.
+             */
+            evaluateRoutes?: Array<string>;
+        };
+        /**
+         * The new ritual’s key.
+         */
+        key: string;
+    };
+};
+
+export type CreateRitualFromRecipeResponse = CreateRitualFromRecipeResponses[keyof CreateRitualFromRecipeResponses];
+
+export type UpdateRitualFromRecipeData = {
+    body: {
+        recipe?: string;
+        /**
+         * The recipe’s fields by name, normalized.
+         */
+        params?: {
+            [key: string]: string | Array<string>;
+        };
+        /**
+         * Inbox IDs (mbx_…) or receiving addresses it runs on.
+         */
+        addresses?: Array<string>;
+        enabled?: boolean;
+    };
+    headers?: {
+        'if-match'?: string;
+    };
+    path: {
+        key: string;
+    };
+    query?: never;
+    url: '/v1/rituals/scripts/{key}/recipe';
+};
+
+export type UpdateRitualFromRecipeErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type UpdateRitualFromRecipeError = UpdateRitualFromRecipeErrors[keyof UpdateRitualFromRecipeErrors];
+
+export type UpdateRitualFromRecipeResponses = {
+    /**
+     * Success
+     */
+    200: {
+        version: number;
+        config: {
+            rituals?: Array<{
+                key: string;
+                source: string;
+                recipe?: RitualRecipeRef;
+                /**
+                 * false: saved and attached, but not run. Omitted or true: runs.
+                 */
+                enabled?: boolean;
+            }>;
+            attachments?: Array<{
+                ritual: string;
+                /**
+                 * A mailbox ID (mbx_…) or an existing recipient address.
+                 */
+                target: string;
+                /**
+                 * Run the next attached ritual even after this one took an action.
+                 */
+                continue?: boolean;
+            }>;
+            /**
+             * Named address lists for lists.has(name, address). Entries are addresses or @domain.
+             */
+            senderLists?: {
+                [key: string]: Array<string>;
+            };
+            evaluateDomains?: Array<string>;
+            /**
+             * Route IDs opted in to Jev, in addition to the receiving domains.
+             */
+            evaluateRoutes?: Array<string>;
+        };
+    };
+};
+
+export type UpdateRitualFromRecipeResponse = UpdateRitualFromRecipeResponses[keyof UpdateRitualFromRecipeResponses];
+
 export type DeleteRitualData = {
     body?: never;
     headers?: {
@@ -15779,6 +16157,11 @@ export type DeleteRitualResponses = {
             rituals?: Array<{
                 key: string;
                 source: string;
+                recipe?: RitualRecipeRef;
+                /**
+                 * false: saved and attached, but not run. Omitted or true: runs.
+                 */
+                enabled?: boolean;
             }>;
             attachments?: Array<{
                 ritual: string;
@@ -15869,15 +16252,128 @@ export type GetRitualResponses = {
     200: {
         key: string;
         source: string;
+        recipe?: RitualRecipeRef;
+        /**
+         * false: saved and attached, but not run. Omitted or true: runs.
+         */
+        enabled?: boolean;
     };
 };
 
 export type GetRitualResponse = GetRitualResponses[keyof GetRitualResponses];
 
+export type UpdateRitualData = {
+    body: {
+        enabled: boolean;
+    };
+    headers?: {
+        'if-match'?: string;
+    };
+    path: {
+        key: string;
+    };
+    query?: never;
+    url: '/v1/rituals/scripts/{key}';
+};
+
+export type UpdateRitualErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type UpdateRitualError = UpdateRitualErrors[keyof UpdateRitualErrors];
+
+export type UpdateRitualResponses = {
+    /**
+     * Success
+     */
+    200: {
+        version: number;
+        config: {
+            rituals?: Array<{
+                key: string;
+                source: string;
+                recipe?: RitualRecipeRef;
+                /**
+                 * false: saved and attached, but not run. Omitted or true: runs.
+                 */
+                enabled?: boolean;
+            }>;
+            attachments?: Array<{
+                ritual: string;
+                /**
+                 * A mailbox ID (mbx_…) or an existing recipient address.
+                 */
+                target: string;
+                /**
+                 * Run the next attached ritual even after this one took an action.
+                 */
+                continue?: boolean;
+            }>;
+            /**
+             * Named address lists for lists.has(name, address). Entries are addresses or @domain.
+             */
+            senderLists?: {
+                [key: string]: Array<string>;
+            };
+            evaluateDomains?: Array<string>;
+            /**
+             * Route IDs opted in to Jev, in addition to the receiving domains.
+             */
+            evaluateRoutes?: Array<string>;
+        };
+    };
+};
+
+export type UpdateRitualResponse = UpdateRitualResponses[keyof UpdateRitualResponses];
+
 export type SaveRitualData = {
     body: {
         key: string;
         source: string;
+        recipe?: RitualRecipeRef;
+        /**
+         * false: saved and attached, but not run. Omitted or true: runs.
+         */
+        enabled?: boolean;
     };
     headers?: {
         'if-match'?: string;
@@ -15944,6 +16440,11 @@ export type SaveRitualResponses = {
             rituals?: Array<{
                 key: string;
                 source: string;
+                recipe?: RitualRecipeRef;
+                /**
+                 * false: saved and attached, but not run. Omitted or true: runs.
+                 */
+                enabled?: boolean;
             }>;
             attachments?: Array<{
                 ritual: string;
@@ -16050,6 +16551,11 @@ export type AttachRitualsResponses = {
             rituals?: Array<{
                 key: string;
                 source: string;
+                recipe?: RitualRecipeRef;
+                /**
+                 * false: saved and attached, but not run. Omitted or true: runs.
+                 */
+                enabled?: boolean;
             }>;
             attachments?: Array<{
                 ritual: string;
@@ -16143,6 +16649,11 @@ export type GetRitualsResponses = {
             rituals?: Array<{
                 key: string;
                 source: string;
+                recipe?: RitualRecipeRef;
+                /**
+                 * false: saved and attached, but not run. Omitted or true: runs.
+                 */
+                enabled?: boolean;
             }>;
             attachments?: Array<{
                 ritual: string;
@@ -16177,6 +16688,11 @@ export type ApplyRitualsData = {
         rituals?: Array<{
             key: string;
             source: string;
+            recipe?: RitualRecipeRef;
+            /**
+             * false: saved and attached, but not run. Omitted or true: runs.
+             */
+            enabled?: boolean;
         }>;
         attachments?: Array<{
             ritual: string;
@@ -16264,6 +16780,11 @@ export type ApplyRitualsResponses = {
             rituals?: Array<{
                 key: string;
                 source: string;
+                recipe?: RitualRecipeRef;
+                /**
+                 * false: saved and attached, but not run. Omitted or true: runs.
+                 */
+                enabled?: boolean;
             }>;
             attachments?: Array<{
                 ritual: string;
@@ -16299,6 +16820,11 @@ export type TestRitualsData = {
             rituals?: Array<{
                 key: string;
                 source: string;
+                recipe?: RitualRecipeRef;
+                /**
+                 * false: saved and attached, but not run. Omitted or true: runs.
+                 */
+                enabled?: boolean;
             }>;
             attachments?: Array<{
                 ritual: string;
