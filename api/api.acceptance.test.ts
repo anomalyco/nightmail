@@ -13424,10 +13424,12 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       const s={from:'a@example.invalid',subject:'fixture',to:['b@example.invalid'],cc:[],bcc:[],kind:'transactional' as const,attachments:[],region:REGION,headers:[],replyTo:[],tracking:false,text:'Hello',raw:'Hello'};
       // Its text, with or without markup, and where its links go.
       for(const html of ['<p>Hello</p><!--[if mso]><p>SampleMarker</p><![endif]-->','<p>Hello</p><!-- [if gte mso 9]>SampleMarker<![endif] -->','<!--[if (gte mso 9)|(IE)]><table><tr><td>SampleMarker</td></tr></table><![endif]--><p>Hello</p>',
-        '<p>Hello</p><!--[if mso]><v:roundrect href="https://samplemarker.invalid/open"><center>Open</center></v:roundrect><![endif]-->'])
+        '<p>Hello</p><!--[if mso]><p><a href="https://samplemarker.invalid/open">Open</a></p><![endif]-->'])
         assert.equal((await screenSnapshot(runtime,{...s,html},true))?.spam,.99,html);
-      // A note in an ordinary comment, a template and a conditional style sheet are not the message's copy.
-      for(const html of ['<p>Hello</p><!-- SampleMarker <p>SampleMarker</p> -->','<p>Hello</p><template><p>SampleMarker</p></template>','<p>Hello</p><!--[if mso]><style>.samplemarker{color:red}</style><![endif]-->'])
+      // A note in an ordinary comment, a template and a conditional style sheet are not the message's copy, nor is a
+      // conditional comment holding markup Hosted sending removes (VML here): the delivered copy has none of it.
+      for(const html of ['<p>Hello</p><!-- SampleMarker <p>SampleMarker</p> -->','<p>Hello</p><template><p>SampleMarker</p></template>','<p>Hello</p><!--[if mso]><style>.samplemarker{color:red}</style><![endif]-->',
+        '<p>Hello</p><!--[if mso]><v:roundrect href="https://samplemarker.invalid/open"><center>Open</center></v:roundrect><![endif]-->'])
         assert.equal((await screenSnapshot(runtime,{...s,html},true))?.spam,.1,html);
       await assert.rejects(screenSnapshot(runtime,{...s,html:`<p>Hello</p><!--[if mso]>${'<div>'.repeat(257)}<![endif]-->`},true),{code:'CONTENT_TOO_LARGE_TO_SCREEN'});
     }));
@@ -13717,7 +13719,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     // A subtest, as the other classifier scenarios: a fetch mock on the fixture's own context would be restored over the
     // fixture's and leak into later tests.
     await simulatedSesFixture(t,async({runtime,db,local})=>t.test('probation copy',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2'),{screenedHtml,screenedText}=await import('./src/screened-html.js');
+      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2'),{screenedHtml,screenedText}=await import('./src/screened-html.js'),{canonicalHtml}=await import('./src/screen.js');
       const wid=runtime.config.workspaceId,acct='112223330003',origin='https://screen.synthetic.invalid';
       runtime.config.hostedSendCaps.firstWeek=10000;
       const key=ok(await local('POST','/v1/api-keys',{name:'screened copy',permissions:['send','read']}),201);
@@ -13757,6 +13759,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         {subject:'styledSize',html:'<img src="https://cdn.brand.example/hero.png" width="1" height="1" style="width:600px;height:400px"><p>Click here</p>'},
         {subject:'fillerWords',html:`<img src="https://cdn.brand.example/hero.png"><p>${'\u115F '.repeat(25)}</p>`},
         {subject:'logoShort',html:'<img src="cid:logo3" width="140" height="40"><p>Your code is 123456.</p>',text:'Your code is 123456.',attachments:[png,pdf]},
+        // Recheck 8, R8-H1: alt text is read where the image is, so a phrase across it and the text beside it is read whole.
+        {subject:'altBeside',html:`<p><img src="https://cdn.brand.example/a.png" alt="Sample" width="100" height="20">Marker</p><p>${copy}</p>`},
+        {subject:'altWithoutSrc',html:`<p><img alt="Sample" width="100" height="20">Marker</p><p>${copy}</p>`},
         ...Object.entries(screenCorpus()).map(([subject,{html}])=>({subject,html:html.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/,'https://cdn.brand.example/chart.png')}))];
       const ids=ok(await local('POST','/v1/emails/batch',{emails:mail.map(m=>({from:'a@screened.invalid',to:'success@simulator.amazonses.com',...m}))},'live',{authorization:`Bearer ${key.secret}`}),202).data.map((x:Json)=>x.id);
       const report=await runDispatcher(runtime,{region:REGION,accountId:acct,batchSize:24,lanes:1,gate:initialGate()});
@@ -13766,16 +13771,16 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // screened nor delivered; filler salted into a word is dropped with its hiding element, so the word is read.
       // Every delivered copy is the normalized one, and the classifier read exactly its text.
       assert.deepEqual({...outcome},{hidden:'CONTENT_REJECTED_SPAM',undisplayed:'accepted',variable:'accepted',outlook:'accepted',salted:'CONTENT_REJECTED_SPAM','\u202Erekram elpmas\u202C':'accepted',markers:'accepted',rtlTable:'accepted',
-        svgInline:'ATTACHMENT_TYPE_UNSCREENABLE',svgAsPng:'ATTACHMENT_TYPE_UNSCREENABLE',fakePdf:'ATTACHMENT_CONTENT_MISMATCH',imageOnly:'CONTENT_IMAGE_ONLY',banner:'CONTENT_IMAGE_ONLY',minSized:'accepted',styledSize:'CONTENT_IMAGE_ONLY',fillerWords:'CONTENT_IMAGE_ONLY',logoShort:'accepted',
+        svgInline:'ATTACHMENT_TYPE_UNSCREENABLE',svgAsPng:'ATTACHMENT_TYPE_UNSCREENABLE',fakePdf:'ATTACHMENT_CONTENT_MISMATCH',imageOnly:'CONTENT_IMAGE_ONLY',banner:'CONTENT_IMAGE_ONLY',minSized:'accepted',styledSize:'CONTENT_IMAGE_ONLY',fillerWords:'CONTENT_IMAGE_ONLY',logoShort:'accepted',altBeside:'CONTENT_REJECTED_SPAM',altWithoutSrc:'CONTENT_REJECTED_SPAM',
         ...Object.fromEntries(Object.keys(screenCorpus()).map(name=>[name,'accepted']))});
-      assert.equal(report.sent,mail.length-9);
+      assert.equal(report.sent,mail.length-11);
       const reading=(html:string)=>html.replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').normalize('NFKC').replace(/[\p{Cf}\p{Mn}\s]/gu,'');
       for (const {subject,html,text} of mail) {
         const sent=delivered.get(screenedText(subject));
         if (outcome[subject]!=='accepted') { assert.equal(sent,undefined,`${subject}: not delivered`); continue; }
         // The classifier's subject field is the delivered subject; its body carries the delivered HTML text and text part.
         const saw=screened.get(screenedText(subject))!.join('').replace(/\s+/g,'');
-        assert.equal(sent!.html,screenedHtml(html!),`${subject}: delivered as screened`);
+        assert.equal(sent!.html,await canonicalHtml(screenedHtml(html!)),`${subject}: delivered as screened`);
         assert.equal(sent!.text,text===undefined?undefined:screenedText(text),`${subject}: text part as screened`);
         for (const field of [sent!.html!,sent!.text??'']) assert.ok(saw.includes(reading(field)),`${subject}: screened as delivered`);
         assert.ok(!/[\u202a-\u202e\u2066-\u2069]/.test(sent!.html!+(sent!.text??'')+screenedText(subject)),`${subject}: no bidi controls delivered`);
@@ -14099,7 +14104,6 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       [`<p>${Array.from({ length: 61 }, (_, i) => `<a href="\\\\ref${i}.invalid/offer">Offer ${i}</a>`).join(' ')}</p>`, '<a href>'],
       ['<p><a href="https:evil.invalid/offer">Offer</a></p>', '<a href>'],
       ['<p><a href="offer.html">Offer</a></p>', '<a href>'],
-      ['<p>Offer.</p><body background="//evil.invalid/offer.png">', '<body background>'],
       ['<p>Offer.</p><img src="/logo.png" alt="Logo" width="20" height="20">', '<img src>'],
     ] as const) {
       const refused = error((await send(html)).reply, 422, 'UNSUPPORTED_URL_IN_HOSTED_MAIL');
@@ -14131,22 +14135,23 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ['escaped url()', `<p style="background-image:u\\72l(https://held.invalid/SampleMarker.png)">${ready}</p>`, false, /SampleMarker|background/],
       ['escape in a URL', `<p style="background-image:url(https://held.invalid/Sample\\4d arker.png)">${ready}</p>`, false, /arker|background/],
       ['style sheet', `<style>.card{background-image:url("https://held.invalid/SampleMarker.png")}</style><p class="card">${ready}</p>`, true],
-      ['ping', `<p><a href="https://held.invalid/" ping="https://held.invalid/SampleMarker">Open</a> ${ready}</p>`, true],
-      ['body background', `<html><body background="https://held.invalid/SampleMarker.png"><p>${ready}</p></body></html>`, true],
+      // Recheck 8: attributes outside the allow-list are removed rather than screened.
+      ['ping', `<p><a href="https://held.invalid/" ping="https://held.invalid/SampleMarker">Open</a> ${ready}</p>`, false, /ping=|SampleMarker/],
+      ['body background', `<html><body background="https://held.invalid/SampleMarker.png"><p>${ready}</p></body></html>`, false, /background=|SampleMarker/],
       // Fonts and style sheets only from font services: a font from anywhere else could draw any text, so it is removed,
       // and one from a font service is screened by its address like any other resource.
       ['style sheet link', `<link rel="stylesheet" href="https://held.invalid/SampleMarker.css"><p>${ready}</p>`, false, /<link|SampleMarker/],
       ['font', `<style>@font-face{font-family:Brand;src:url("https://held.invalid/SampleMarker.woff2") format("woff2")}</style><p>${ready}</p>`, false, /SampleMarker/],
       ['import', `<style>@import "https://held.invalid/SampleMarker.css";</style><p>${ready}</p>`, false, /@import|SampleMarker/],
-      ['SVG font', `<svg><defs><font id="f"><font-face font-family="F"/><glyph unicode="a" d="M0 0h10v10z"/></font></defs><text font-family="F">a</text></svg><p>${ready}</p>`, false, /<font|<glyph/],
+      ['SVG font', `<svg><defs><font id="f"><font-face font-family="F"/><glyph unicode="a" d="M0 0h10v10z"/></font></defs><text font-family="F">a</text></svg><p>${ready}</p>`, false, /<svg|<glyph/],
       ['font service', `<style>@font-face{font-family:Brand;src:url("https://fonts.gstatic.com/s/SampleMarker.woff2") format("woff2")}</style><p>${ready}</p>`, true],
       ['Google Fonts import', `<style>@import url("https://fonts.googleapis.com/css2?family=SampleMarker");</style><p>${ready}</p>`, true],
       ['relative ping', `<p><a href="https://held.invalid/" ping="/SampleMarker">Open</a> ${ready}</p>`, false, /ping=/],
       ['SVG fill', `<svg width="20" height="20"><rect width="20" height="20" fill="url(https://held.invalid/SampleMarker.svg#p)"/></svg><p>${ready}</p>`, false, /SampleMarker/],
-      ['xml:base', `<svg xml:base="https://evil.invalid/offer/"><a href="https://held.invalid/"><text>${ready}</text></a></svg>`, false, /evil\.invalid/],
-      ['SVG set', `<svg><a href="https://held.invalid/"><set attributeName="href" to="https://evil.invalid/offer"/><text>${ready}</text></a></svg>`, false, /<set|evil\.invalid/],
+      ['xml:base', `<svg xml:base="https://evil.invalid/offer/"><a href="https://held.invalid/"><text>Open</text></a></svg><p>${ready}</p>`, false, /evil\.invalid|<svg/],
+      ['SVG set', `<svg><a href="https://held.invalid/"><set attributeName="href" to="https://evil.invalid/offer"/><text>Open</text></a></svg><p>${ready}</p>`, false, /<set|evil\.invalid|<svg/],
       ['refresh', `<meta http-equiv="refresh" content="0;url=https://evil.invalid/offer"><p>${ready}</p>`, false, /refresh|evil\.invalid/],
-      ['object', `<object data="https://evil.invalid/offer.swf"><p>${ready}</p></object>`, false, /<object|evil\.invalid/],
+      ['object', `<object data="https://evil.invalid/offer.swf"><p>Fallback</p></object><p>${ready}</p>`, false, /<object|evil\.invalid|Fallback/],
       ['relative CSS', `<p style="background-image:url(/SampleMarker.png)">${ready}</p>`, false, /SampleMarker/],
       // Recheck 4: text drawn by CSS, a repeated attribute, MathML addresses and IE's image filter.
       ['content', `<style>.offer::before{content:"SampleMarker"}</style><p class="offer">${ready}</p>`, false, /content\s*:|::before/],
@@ -14183,9 +14188,20 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ['bdo', `<p><bdo dir="rtl">rekraMelpmaS</bdo> ${ready}</p>`, false, /<bdo/],
       ['bidi override', `<p>\u202erekraMelpmaS\u202c ${ready} <img src="https://held.invalid/a.png" alt="\u202erekraMelpmaS" width="20" height="20"></p>`, false, /[\u202a-\u202e\u2066-\u2069]/],
       ['SVG unicode-bidi', `<svg><text unicode-bidi="bidi-override" direction="rtl">rekraMelpmaS</text></svg><p>${ready}</p>`, false, /unicode-bidi/],
-      ['SVG title', `<svg width="20" height="20"><title>SampleMarker</title><rect width="20" height="20"/></svg><p>${ready}</p>`, true],
-      ['MathML fences', `<math><mfenced open="SampleMarker"><mi>x</mi></mfenced></math><p>${ready}</p>`, true],
+      ['SVG title', `<svg width="20" height="20"><title>SampleMarker</title><rect width="20" height="20"/></svg><p>${ready}</p>`, false, /<svg|SampleMarker/],
+      ['MathML fences', `<math><mfenced open="SampleMarker"><mi>x</mi></mfenced></math><p>${ready}</p>`, false, /<math|SampleMarker/],
       ['shadow root', `<div><template shadowrootmode="open"><p>SampleMarker</p></template>${ready}</div>`, false, /<template|SampleMarker/],
+      // Recheck 8, R8-H1: text a client draws in the flow is read in its place. An image's alt text sits where the image
+      // is, so a phrase across it and the text beside it is read whole; form controls go with their content.
+      ['image alt without src', `<p><img alt="Sample" width="100" height="20">Marker ${ready}</p>`, true],
+      ['image alt', `<p><img src="https://held.invalid/logo.png" alt="Sample" width="100" height="20">Marker ${ready}</p>`, true],
+      ['inline text input', `<p style="font:16px monospace"><input type="text" readonly value="Sample" style="border:0;width:6ch;padding:0;font:inherit">Marker ${ready}</p>`, false, /<input|Sample/],
+      ['placeholder', `<p><input placeholder="Sample">Marker ${ready}</p>`, false, /<input|Sample/],
+      ['image button', `<p><input type="image" alt="Sample">Marker ${ready}</p>`, false, /<input|Sample/],
+      // Recheck 8, the allow-list: what a client draws its own text or controls for goes with its content; any other
+      // element outside the list gives its place to its content, and attributes outside it are removed.
+      ['form controls and widgets', `<form><button>Sample</button><select><option>Marker</option></select><textarea>Sample</textarea></form><details><summary>Sample</summary>Marker</details><marquee>SampleMarker</marquee><ruby>Sample<rt>Marker</rt></ruby><p>${ready}</p>`, false, /<form|<button|<select|<option|<textarea|<details|<summary|<marquee|<ruby|Sample|Marker/],
+      ['unknown elements', `<section><article><custom-tag><p dir="auto" title="SampleMarker" data-x="1" onclick="x()">${ready}</p></custom-tag></article></section>`, false, /<section|<article|<custom-tag|title=|dir=|data-x|onclick/],
     ];
     for (const [name, html, bad, gone] of cases) {
       const { to, reply } = await send(html), start = screened.length;
@@ -14201,14 +14217,15 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.ok(read.includes((await measureScreen({ html: sent!, text: 'Your account is ready.' })).content.toLowerCase().split('\n')[0]!), `${name}: screened as delivered`);
       assert.ok(sent!.includes(ready) && !gone?.test(sent!), `${name}: ${sent}`);
     }
-    // The checker says when a list's markers changed.
-    for (const name of ['list type and start', 'CSS list style and start', 'list type and value', 'inline list style']) {
-      const finding = ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: cases.find(c => c[0] === name)![1], text: ready })).findings.find((x: Json) => x.ruleId === 'list-markers');
-      assert.deepEqual([finding?.severity, finding?.title], ['warning', 'List style changed to plain numbers or bullets'], name);
-    }
-    assert.ok(!ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: `<ol reversed type="1" start="1" style="list-style-type:decimal"><li>${ready}</li></ol><ul style="list-style:square inside"><li>Thanks.</li></ul>`, text: ready })).findings.some((x: Json) => x.ruleId === 'list-markers'), 'Bullets and plain numbers raise no warning.');
+    // The checker lists what the copy loses, and says when a list's markers changed.
+    const removedBy = async (html: string) => ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html, text: ready })).findings.find((x: Json) => x.ruleId === 'hosted-removed')?.detail ?? '';
+    for (const name of ['list type and start', 'CSS list style and start', 'list type and value', 'inline list style']) assert.ok((await removedBy(cases.find(c => c[0] === name)![1])).includes('List style changed to plain numbers or bullets'), name);
+    assert.ok(!(await removedBy(`<ol reversed type="1" start="1" style="list-style-type:decimal"><li>${ready}</li></ol><ul style="list-style:square inside"><li>Thanks.</li></ul>`)).includes('List style'), 'Bullets and plain numbers keep their list style.');
+    for (const [name, listed] of [['form controls and widgets', ['form elements, with their content', 'details elements, with their content', 'marquee elements, with their content', 'ruby elements, with their content']], ['unknown elements', ['section elements (their content stays)', 'non-HTML elements (their content stays)', 'title attributes on p', 'dir attributes on p', 'data-* attributes on p', 'event handler attributes on p']]] as const)
+      for (const what of listed) assert.ok((await removedBy(cases.find(c => c[0] === name)![1])).includes(what), `${name}: ${what}`);
+    assert.equal(await removedBy(`<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td valign="top" bgcolor="#ffffff" style="padding:8px"><h1>Hi</h1><p dir="ltr" lang="en"><a href="https://held.invalid/" target="_blank">Open</a> <img src="https://held.invalid/a.png" alt="A" width="20" height="20"></p><font color="#333" face="Arial" size="2">${ready}</font></td></tr></table>`), '', 'The allow-list keeps ordinary email markup whole.');
   });
-  reviewScenario('common newsletter and transactional markup is admitted and delivered with its fonts, imports, comments and Outlook markup intact', async f => {
+  reviewScenario('common newsletter and transactional markup is admitted and delivered with its fonts, imports and Outlook layout intact', async f => {
     const { dispatch, delivered } = f, { send, outcome, body } = await trustedSender(f), { canonicalHtml } = await import('./src/screen.js');
     const ready = 'Your order has shipped.';
     const outlook = `<!doctype html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><head><!--[if !mso]><!--><meta http-equiv="X-UA-Compatible" content="IE=edge"><!--<![endif]--><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
@@ -14222,12 +14239,14 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ['custom font', `<html><head><style>@import url('https://cdn.brand.example/fonts.css'); @font-face{font-family:'Brand Sans';src:url('https://cdn.brand.example/fonts/brand-sans.woff2') format('woff2')} p{font-family:'Brand Sans',Arial}</style><link rel="stylesheet" href="https://cdn.brand.example/main.css"></head><body><p>${ready}</p></body></html>`,
         [/<style> @font-face\{font-family:'Brand Sans';\} p\{font-family:'Brand Sans',Arial\}<\/style>/], [/cdn\.brand\.example|@import|<link/]],
       ['Google Fonts', `<html><head><style>@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap'); body,p{font-family:'Open Sans',Arial,sans-serif}</style><link href="https://fonts.googleapis.com/css2?family=Inter&display=swap" rel="stylesheet"></head><body><p>${ready}</p></body></html>`,
-        [/@import url\('https:\/\/fonts\.googleapis\.com\/css2\?family=Open\+Sans:wght@400;700&display=swap'\)/, /<link href="https:\/\/fonts\.googleapis\.com\/css2\?family=Inter&amp;display=swap" rel="stylesheet">/], []],
+        [/@import url\('https:\/\/fonts\.googleapis\.com\/css2\?family=Open\+Sans:wght@400;700&display=swap'\)/], [/<link/]],
       ['preload hints', `<html><head><link rel="preload" as="image" href="https://cdn.brand.example/logo.png"><link rel="preconnect" href="https://fonts.gstatic.com"><link rel="dns-prefetch" href="//cdn.brand.example"></head><body><img src="https://cdn.brand.example/logo.png" width="140" height="40" alt="Brand"><p>${ready}</p></body></html>`,
         [/<img src="https:\/\/cdn\.brand\.example\/logo\.png"/], [/<link/]],
       ['comments', `<style>/* background-image:url(https://cdn.brand.example/old.png) intentionally disabled */ .hero{color:#111111} /* url("/relative.png") and @import "old.css"; */</style><!-- Built with an editor: <a href="/old">old link</a> --><p class="hero">${ready}</p>`,
         [/<style>\/\* background-image:url\(https:\/\/cdn\.brand\.example\/old\.png\) intentionally disabled \*\/ \.hero\{color:#111111\} \/\* url\("\/relative\.png"\) and @import "old\.css"; \*\/<\/style>/], [/old link|Built with/]],
-      ['Outlook', outlook, [/<!--\[if mso \| IE\]><table align="center"/, /<!--\[if mso\]><v:roundrect/, /<!--\[if !mso\]><!--><a href=/, /<!--\[if lte mso 11\]><style type="text\/css">\.mj-outlook-group-fix \{ width:100% !important; \}<\/style><!\[endif\]-->/, /<!--\[if mso \| IE\]><\/td><\/tr><\/table><!\[endif\]-->/], []],
+      // Outlook's ghost tables and conditional style sheets stay; VML and Office XML aren't on the allow-list, so the
+      // conditional comments holding them go: Outlook desktop then shows no bulletproof button, a known cost.
+      ['Outlook', outlook, [/<!--\[if mso \| IE\]><table align="center"/, /<!--\[if !mso\]><!--><a href=/, /<!--\[if lte mso 11\]><style type="text\/css">\.mj-outlook-group-fix \{ width:100% !important; \}<\/style><!\[endif\]-->/, /<!--\[if mso \| IE\]><\/td><\/tr><\/table><!\[endif\]-->/], [/v:roundrect|<noscript|OfficeDocumentSettings|X-UA-Compatible/]],
       // The screen corpus as submitted: hybrid Outlook with web fonts, a responsive newsletter importing Google Fonts,
       // a receipt, a dark-mode welcome and client hacks (an inline data: image isn't accepted for sending at all).
       ...Object.entries(screenCorpus()).map(([name, { html, expect }]) => [name, html.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/, 'https://cdn.brand.example/chart.png'), expect.map(e => new RegExp(e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))), []] as [string, string, RegExp[], RegExp[]]),
@@ -20456,61 +20475,52 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.ok(timeoutMs < 1000, `Classifier aborted after ${timeoutMs} ms`);
       assert.ok(sent.includes(slow));
       t.diagnostic(`Unresponsive classifier failed open in ${timeoutMs} ms; sibling already sent.`);
-      // Recheck 5, R5-M2: mail delivered as submitted (bring-your-own AWS with screen: true) is screened as written:
-      // every srcset candidate and the text its style sheet could draw are read, and SES gets the bytes submitted.
+      // Mail delivered as submitted (bring-your-own AWS with screen: true) is screened as written, so it must hold only
+      // markup the Hosted canonical copy keeps; SES gets the bytes submitted.
       classifierDown = false;
       const asWritten = `<!-- a sender's note --><style>/* plain */ .o{color:#111}</style><p class="o">Your receipt is attached.</p>`;
-      const srcset = await send({ subject: 'Receipt with a picture', html: `<img src="https://cdn.synthetic.invalid/a.png" srcset="https://cdn.synthetic.invalid/${marker},x.png 1x" alt="Receipt"><p>Your receipt is attached.</p>`, screen: true });
       const kept = await send({ subject: 'Receipt as written', html: asWritten, screen: true });
-      // A clearfix's empty content draws nothing.
-      const clearfix = await send({ subject: 'Receipt with a clearfix', html: '<style>.row:after{content:"";display:table;clear:both}</style><div class="row">Your receipt is attached.</div>', screen: true });
+      // Recheck 8, R8-H1: an image's alt text is read where the image is, so a phrase across alt text and the text
+      // beside it is read whole.
+      const alt = await send({ subject: 'Receipt with a picture', html: `<p><img src="https://cdn.synthetic.invalid/a.png" alt="${marker.slice(0, 6)}" width="100" height="20">${marker.slice(6)}</p><p>Your receipt is attached.</p>`, screen: true });
       await dispatchDue(runtime, REGION);
-      assert.deepEqual([(await get(srcset)).errorCode, (await get(kept)).status, (await get(clearfix)).status], ['CONTENT_REJECTED_SPAM', 'accepted', 'accepted']);
-      assert.ok(!sent.includes(srcset));
+      assert.deepEqual([(await get(kept)).status, (await get(alt)).errorCode], ['accepted', 'CONTENT_REJECTED_SPAM']);
+      assert.ok(!sent.includes(alt));
       assert.equal(htmls.get(kept), asWritten, 'Mail delivered as submitted goes to SES byte for byte.');
-      // Recheck 6, R6-M1: text the CSS draws is assembled by the client, in its own order, from strings and attributes
-      // anywhere in the message, so the screen can't read it as written. With screen: true such mail is refused at once,
-      // naming the selector; without it, it is sent as written; the checker warns either way.
-      const drawing: [string, string][] = [
-        [`<style>.o::before{content:attr(data-a) attr(data-b)}</style><p class="o" data-b="${marker.slice(6)}" data-a="${marker.slice(0, 6)}">Account ready.</p>`, '.o::before'],
-        [`<style>.o::before{content:"${marker.slice(0, 3)}" "${marker.slice(3, 6)}" "${marker.slice(6)}"}</style><p class="o">Account ready.</p>`, '.o::before'],
-        [`<style>.o::before{content:"${marker}"}</style><p class="o">Account ready.</p>`, '.o::before'],
-        [`<style>@media (min-width:0px){ol li::marker{content:counter(list-item) " ${marker}"}}</style><ol><li>Account ready.</li></ol>`, 'ol li::marker'],
-        [`<style>q{quotes:"${marker}" ""}</style><p><q>Account ready.</q></p>`, 'q'],
-        [`<p style="content:'${marker}'">Account ready.</p>`, '<p style>'],
-      ];
-      for (const [html, selector] of drawing) {
-        const refused = error(await local('POST', '/v1/emails/send', mail({ subject: 'Account ready', html, screen: true }), 'live'), 422, 'UNSUPPORTED_CSS_GENERATED_TEXT');
-        assert.ok(refused.message.includes(selector) && refused.details[0].selectors.includes(selector), `${selector}: ${refused.message}`);
-        const warning = ok(await local('POST', '/v1/emails/check', { from: mail({}).from, subject: 'Account ready', stream: 'transactional', html }, 'live')).findings.find((x: Json) => x.ruleId === 'css-generated-text');
-        assert.equal(warning?.severity, 'warning', selector);
-      }
-      const unscreenedDrawing = await send({ subject: 'Account ready, unscreened', html: drawing[0]![0] });
-      await dispatchDue(runtime, REGION);
-      assert.equal(htmls.get(unscreenedDrawing), drawing[0]![0], 'Without screen: true it is sent as written.');
-      // Recheck 7, R7-H1: list markers other than bullets or 1, 2, 3… (a list's type, start or value, a CSS list style,
-      // a list-item counter) and text drawn backwards by unicode-bidi are refused the same way.
-      const markers: [string, string, string][] = [
-        ['<ol type="a" start="36441511"><li></li></ol><ol type="a" start="1187621"><li></li></ol><ol type="a" start="9877"><li></li></ol><p>Account ready.</p>', '<ol type="a">', 'list-markers'],
-        ['<style>ol{list-style-type:lower-alpha}</style><ol start="36441511"><li></li></ol><p>Account ready.</p>', 'ol', 'list-markers'],
-        ['<ol type="a"><li value="36441511"></li></ol><p>Account ready.</p>', '<li value="36441511">', 'list-markers'],
-        ['<style>ol{counter-reset:list-item 18005550199}</style><ol><li>Call us.</li></ol><p>Account ready.</p>', 'ol', 'list-markers'],
-        ['<p style="unicode-bidi:bidi-override;direction:rtl">.ydaer tnuoccA</p>', '<p style>', 'css-generated-text'],
-      ];
-      for (const [html, where, rule] of markers) {
-        const refused = error(await local('POST', '/v1/emails/send', mail({ subject: 'Account ready', html, screen: true }), 'live'), 422, 'UNSUPPORTED_CSS_GENERATED_TEXT');
-        assert.ok(refused.message.includes(where) && refused.details[0].selectors.includes(where), `${where}: ${refused.message}`);
-        const warning = ok(await local('POST', '/v1/emails/check', { from: mail({}).from, subject: 'Account ready', stream: 'transactional', html }, 'live')).findings.find((x: Json) => x.ruleId === rule);
-        assert.equal(warning?.severity, 'warning', where);
-      }
-      // A <bdo> or a bidi override character draws its text backwards: read both ways, so the classifier sees it.
+      // Anything else is refused at once, naming what the canonical copy would remove; without screen: true it is sent
+      // as written; the checker lists it either way. These are the earlier rounds' reproductions: a srcset candidate
+      // (R5-M2), text CSS draws (R6-M1), list markers other than bullets or 1, 2, 3… and text drawn backwards (R7-H1),
+      // and a form control's value or placeholder beside text (R8-H1).
       const reversed = [...marker].reverse().join('');
-      const bdo = await send({ subject: 'Receipt with bdo', html: `<p><bdo dir="rtl">${reversed}</bdo> Your receipt is attached.</p>`, screen: true });
-      const override = await send({ subject: 'Receipt with an override', html: `<p>\u202e${reversed}\u202c Your receipt is attached.</p>`, screen: true });
-      const unscreenedMarkers = await send({ subject: 'Account ready, unscreened list', html: markers[0]![0] });
+      const refusals: [string, string][] = [
+        [`<img src="https://cdn.synthetic.invalid/a.png" srcset="https://cdn.synthetic.invalid/${marker},x.png 1x" alt="Receipt"><p>Your receipt is attached.</p>`, 'srcset attributes on img'],
+        ['<style>.row:after{content:"";display:table;clear:both}</style><div class="row">Your receipt is attached.</div>', 'CSS content'],
+        [`<style>.o::before{content:attr(data-a) attr(data-b)}</style><p class="o" data-b="${marker.slice(6)}" data-a="${marker.slice(0, 6)}">Account ready.</p>`, 'CSS content'],
+        [`<style>.o::before{content:"${marker.slice(0, 3)}" "${marker.slice(3, 6)}" "${marker.slice(6)}"}</style><p class="o">Account ready.</p>`, 'CSS content'],
+        [`<style>.o::before{content:"${marker}"}</style><p class="o">Account ready.</p>`, 'CSS content'],
+        [`<style>@media (min-width:0px){ol li::marker{content:counter(list-item) " ${marker}"}}</style><ol><li>Account ready.</li></ol>`, 'CSS content'],
+        [`<style>q{quotes:"${marker}" ""}</style><p><q>Account ready.</q></p>`, 'q elements (their content stays)'],
+        [`<p style="content:'${marker}'">Account ready.</p>`, 'CSS content'],
+        ['<ol type="a" start="36441511"><li></li></ol><ol type="a" start="1187621"><li></li></ol><ol type="a" start="9877"><li></li></ol><p>Account ready.</p>', 'List style changed to plain numbers or bullets'],
+        ['<style>ol{list-style-type:lower-alpha}</style><ol start="36441511"><li></li></ol><p>Account ready.</p>', 'List style changed to plain numbers or bullets'],
+        ['<ol type="a"><li value="36441511"></li></ol><p>Account ready.</p>', 'List style changed to plain numbers or bullets'],
+        ['<style>ol{counter-reset:list-item 18005550199}</style><ol><li>Call us.</li></ol><p>Account ready.</p>', 'CSS counter-reset'],
+        ['<p style="unicode-bidi:bidi-override;direction:rtl">.ydaer tnuoccA</p>', 'CSS unicode-bidi'],
+        [`<p><bdo dir="rtl">${reversed}</bdo> Your receipt is attached.</p>`, 'bdo elements (their content stays)'],
+        [`<p>\u202e${reversed}\u202c Your receipt is attached.</p>`, 'bidi control characters'],
+        [`<p style="font:16px monospace"><input type="text" readonly value="${marker.slice(0, 6)}" style="border:0;width:6ch;padding:0;font:inherit">${marker.slice(6)}</p>`, 'input elements, with their content'],
+        [`<p><input placeholder="${marker.slice(0, 6)}">${marker.slice(6)}</p>`, 'input elements, with their content'],
+      ];
+      for (const [html, named] of refusals) {
+        const refused = error(await local('POST', '/v1/emails/send', mail({ subject: 'Account ready', html, screen: true }), 'live'), 422, 'UNSUPPORTED_HTML_IN_SCREENED_MAIL');
+        assert.ok(refused.message.includes(named) && refused.details[0].removed.includes(named), `${named}: ${refused.message}`);
+        const listed = ok(await local('POST', '/v1/emails/check', { from: mail({}).from, subject: 'Account ready', stream: 'transactional', html }, 'live')).findings.find((x: Json) => x.ruleId === 'hosted-removed');
+        assert.ok(listed?.detail.includes(named), `${named}: ${listed?.detail}`);
+      }
+      const unscreenedDrawing = await send({ subject: 'Account ready, unscreened', html: refusals[2]![0] }), unscreenedMarkers = await send({ subject: 'Account ready, unscreened list', html: refusals[8]![0] });
       await dispatchDue(runtime, REGION);
-      assert.deepEqual([(await get(bdo)).errorCode, (await get(override)).errorCode], ['CONTENT_REJECTED_SPAM', 'CONTENT_REJECTED_SPAM']);
-      assert.equal(htmls.get(unscreenedMarkers), markers[0]![0], 'Without screen: true a list is sent as written.');
+      assert.equal(htmls.get(unscreenedDrawing), refusals[2]![0], 'Without screen: true it is sent as written.');
+      assert.equal(htmls.get(unscreenedMarkers), refusals[8]![0], 'Without screen: true a list is sent as written.');
     });
   });
 

@@ -469,10 +469,10 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
     const review=hosted && leased.mail.snapshot.deferredCampaign && leased.review?.screen?.template && leased.review.screen.contentHash===leased.review.reviewHash ? leased.review : null;
     // Probation mail goes out as the copy the screen reads: every textual field without the bidi controls that
     // reorder it, the markup reduced to what a client shows as text, the campaign preheader added back from its own
-    // field. Trusted senders keep their markup.
+    // field. Trusted senders keep their markup within the allow-list below.
     if (probation) s = (await import('./screened-html.js')).probationCopy(s);
-    // Hosted mail goes out as its canonical copy (src/hosted-html.ts): one parse, sanitized and serialized, read again
-    // until it reads as itself. The screen below reads exactly these bytes, and SES is sent exactly them.
+    // Hosted mail goes out as its canonical copy (src/hosted-html.ts): one parse, reduced to the element and attribute
+    // allow-list and serialized, read again until it reads as itself. The screen below reads exactly these bytes, and SES is sent exactly them.
     if (hosted && s.html) s = { ...s, html: await canonicalHtml(s.html, fontSources(runtime.config)) };
     if (review) {
       const [verdict] = await campaignVerdicts(runtime, { workspaceId: mail.workspaceId, campaignId: mail.campaignId!, reviewId: mail.reviewId! }, [screenedAs(runtime, s, stored?.unsubscribeUrl)], Date.now() + MAX_PRE_SEND_MS);

@@ -50,7 +50,7 @@ function refused(message: string, details?: Record<string, unknown>, index?: num
 const unreadable = () => refused('Simplify the HTML so Hosted sending can screen it: it is too large or too deeply nested to read.');
 /** Over the screened-text limit: the measured size and the limit, so the sender knows how much to cut. */
 export const tooLarge = (screenedBytes: number, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) =>
-  refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's visible text and alt text, the text part unless it says exactly the same, and each distinct link and image address. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
+  refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's text in document order (twice when it has alt text: as shown with its images and without them), the text part unless it says exactly the same, and each distinct link and image address. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
     { screenedBytes, limitBytes }, index);
 /** Markup whose destinations the screen can't read: refused for Hosted mail, named so the sender can fix it. */
 export const unsupportedUrls = (unsupported: string[], index?: number) => {
@@ -58,12 +58,11 @@ export const unsupportedUrls = (unsupported: string[], index?: number) => {
   error.details = [{ unsupported, ...(index === undefined ? {} : { index }) }];
   return error;
 };
-/** Generated text in mail delivered as written that asks to be screened: the client assembles it in its own order from
- *  strings and attributes, draws list markers as letters or chosen numbers, or draws text backwards, so the screen can't
- *  read what the recipient sees. Named by selector or element. */
-export const generatedText = (selectors: string[], index?: number) => {
-  const error = new ApiError(422, 'UNSUPPORTED_CSS_GENERATED_TEXT', `This message is sent through your own AWS account exactly as written and asks to be screened, but it draws text the screen can't read as the recipient sees it (CSS content, quotes or list markers with strings, counters or attr(); list markers other than bullets or 1, 2, 3…, set by a list's type, start or value or by CSS; unicode-bidi overrides): ${selectors.join('; ')}. Put the text in the HTML and use bullets or plain numbers for lists, or send without screen: true.`, index === undefined ? 'html' : `emails.${index}.html`);
-  error.details = [{ selectors, ...(index === undefined ? {} : { index }) }];
+/** Mail delivered as written (bring-your-own AWS) that asks to be screened, holding markup the canonical copy of Hosted
+ *  mail would remove: the screen reads only markup it can read as the recipient sees it, and this mail isn't changed. */
+export const unscreenableHtml = (removed: string[], index?: number) => {
+  const error = new ApiError(422, 'UNSUPPORTED_HTML_IN_SCREENED_MAIL', `This message is sent through your own AWS account exactly as written and asks to be screened, but it holds markup the screen can't read as the recipient sees it, which Hosted sending would remove: ${removed.join('; ')}. Remove it, or send without screen: true.`, index === undefined ? 'html' : `emails.${index}.html`);
+  error.details = [{ removed, ...(index === undefined ? {} : { index }) }];
   return error;
 };
 const tooManyHosts = (linkHosts: number, index?: number) =>
@@ -93,15 +92,20 @@ function host(value: string) {
 }
 // Addresses a client links in text: absolute http(s) URLs and www. hosts, without the punctuation that ends a sentence.
 const textTargets = (text = '') => [...text.matchAll(/(?:\bhttps?:\/\/|\bwww\.)[^\s<>"'`]+/giu)].map(match => (/^www\./i.test(match[0]) ? 'https://' : '') + match[0].replace(/[.,;:!?)\]}'"’”]+$/u, ''));
-const textOf=(node:object):string=>'value' in node ? String(node.value) : ((node as { childNodes?: object[] }).childNodes ?? []).map(textOf).join('');
-const backwards=(text:string)=>[...text].reverse().join('');
-const INLINE=new Set(['a','abbr','b','bdi','bdo','big','cite','code','data','del','dfn','em','font','i','ins','kbd','label','mark','q','s','samp','small','span','strike','strong','sub','sup','time','tt','u','var','wbr','img','input','button','select','textarea','output','meter','progress','picture','source','svg','text','tspan','math','mi','mo','mn','ruby','rt','rp','nobr']);
-/**
- * What a recipient reads of an HTML body: its canonical copy (src/hosted-html.ts), the one Hosted sending delivers,
- * and from that same tree its text, every place it links to or loads from, and the markup refused.
- */
+const INLINE=new Set(['a','b','code','em','font','i','s','small','span','strong','sub','sup','u','img']);
 /** Where this installation's Hosted mail may load fonts from: its font services, and its own font directory. */
 export const fontSources = (config: Pick<Runtime['config'], 'hostedFontHosts' | 'publicUrl'>): FontSources => ({ hosts: config.hostedFontHosts, prefix: `${config.publicUrl}/fonts/` });
+/**
+ * What a recipient reads of an HTML body: its canonical copy (src/hosted-html.ts), the one Hosted sending delivers (or,
+ * for mail delivered as submitted, the tree a client parses from it), and from that same tree its text, every place it
+ * links to or loads from, and the markup refused or removed.
+ *
+ * The text is read in document order, as a client lays it out: inline runs stay one word, block elements and line
+ * breaks end the line, and a table row whose cells hold short pieces is read again glued, after the text, the way a
+ * recipient reads a word laid out across adjacent cells. An image's alt text is read where the image is: a client shows
+ * it in its place when images are blocked, so a message with alt text is read twice, as shown with its images and as
+ * shown without them.
+ */
 export async function readHtml(html: string, visit?: (tag: string) => void, options: HostedOptions = {}) {
   if (html.length>512*1024) throw unreadable();
   const copy=hostedHtml(html, options);
@@ -109,15 +113,12 @@ export async function readHtml(html: string, visit?: (tag: string) => void, opti
   const { destinations, unsupported, removed }=copy, root=copy.root;
   for (const tag of copy.tags) visit?.(tag);
   const hosts=new Set([...destinations].map(destinationHost).filter(Boolean)), mismatches=new Set<string>(), links:string[]=[], images:{ alt: boolean }[]=[];
-  // Text as a client lays it out: inline runs stay one word, block elements end the line, and text a client shows
-  // beside the flow (alt, title) follows on its own lines, as does a table row whose cells hold short pieces read
-  // glued, the way a recipient reads a word laid out across adjacent cells.
-  const lines:string[]=[], aside:string[]=[], rows:string[][]=[]; let line='';
-  // A bidi override draws the letters after it backwards, to the end of its paragraph: such a line is read both ways.
-  const flush=()=>{ if(line.trim()) { lines.push(line); if (/[\u202d\u202e]/.test(line)) aside.push(backwards(line)); } line=''; };
+  type Part=string|{ alt:string };
+  const lines:Part[][]=[], rows:Part[][][]=[], glued:Part[][]=[]; let line:Part[]=[];
+  const flush=()=>{ if(line.length) lines.push(line); line=[]; };
   const walk=(node:typeof root.childNodes[number], anchor:string)=>{
     if ('value' in node) {
-      line+=node.value;
+      line.push(node.value);
       if(anchor) for(const word of normalize(node.value).split(/\s+/)) {
         if(!word.includes('.') || word.length>2048)continue;
         const label=host(word.includes('://')?word:'https://'+word);
@@ -128,41 +129,34 @@ export async function readHtml(html: string, visit?: (tag: string) => void, opti
     const children='childNodes' in node ? node.childNodes : [];
     if (!('tagName' in node)) { for (const child of children) walk(child,anchor); return; }
     const tag=node.tagName;
-    // The head isn't shown, but Outlook reads a conditional comment wherever it is.
-    if (tag==='head') { for (const child of children) if (child.nodeName==='#comment') walk(child,anchor); return; }
-    if (['style','script','xml'].includes(tag)) return;
-    // A title is a tooltip (SVG) or not shown; a template's content is shown where a client attaches it as a shadow root.
-    if (tag==='title') { const title=textOf(node); if (title.trim()) aside.push(title); return; }
-    if (tag==='template') { flush(); for (const child of (node as { content?: { childNodes: typeof children } }).content?.childNodes ?? []) walk(child,anchor); flush(); return; }
-    // <bdo> draws its content backwards (the canonical copy has none).
-    if (tag==='bdo') aside.push(backwards(textOf(node)));
+    // The head isn't shown, but Outlook reads a conditional comment wherever it is, and a title is read too.
+    if (tag==='head') { for (const child of children) if (child.nodeName==='#comment' || ('tagName' in child && child.tagName==='title')) walk(child,anchor); return; }
+    if (tag==='style' || tag==='script') return;
     let display='';
     for (const a of node.attrs) {
       // URLs are read from the decoded attribute as they are, never as prose (the copy's inventory has them all).
       if (tag==='a' && a.name==='href') { const target=destination(a.value); anchor=target ? destinationHost(target) : ''; if (target) links.push(target); }
       if (a.name==='style') display=/(?:^|;)\s*display\s*:\s*([a-z-]+)/i.exec(a.value)?.[1]?.toLowerCase() ?? '';
-      // Text a client shows beside the flow: alt and title, what form controls draw (placeholders, button and
-      // option labels, the value in a field), MathML's fences and string quotes, and a frame's inline document.
-      const shown=['alt','title','placeholder'].includes(a.name) || (a.name==='value' && ['input','button','option'].includes(tag) && !node.attrs.some(b=>b.name==='type' && b.value.toLowerCase()==='hidden'))
-        || (a.name==='label' && ['option','optgroup','track','menuitem'].includes(tag)) || (tag==='mfenced' && ['open','close','separators'].includes(a.name))
-        || (tag==='ms' && ['lquote','rquote'].includes(a.name));
-      if (shown && a.value.trim()) aside.push(a.value);
-      if (a.name==='srcdoc' && ['iframe','frame'].includes(tag)) aside.push(a.value.replace(/<[^>]*>/g,' '));
     }
-    if (tag==='img') images.push({ alt: node.attrs.some(a=>a.name==='alt' && !!a.value.trim()) });
+    if (tag==='img') {
+      const alt=node.attrs.find(a=>a.name==='alt')?.value ?? '';
+      images.push({ alt: !!alt.trim() });
+      if (alt) line.push({ alt });
+    }
     const inline=display ? display.startsWith('inline') : INLINE.has(tag);
     if (!inline) flush();
     const start=lines.length;
     if (tag==='tr') rows.push([]);
     for (const child of children) walk(child,anchor);
     if (!inline) flush();
-    if (tag==='td' || tag==='th') rows[rows.length-1]?.push(lines.slice(start).join(' '));
-    if (tag==='tr') { const cells=rows.pop()!; if (cells.length>1 && cells.some(cell=>cell.trim() && cell.trim().length<=4)) aside.push(cells.join('')); }
+    if (tag==='td' || tag==='th') rows[rows.length-1]?.push(lines.slice(start).flatMap((l,i)=>i ? [' ',...l] : l));
+    if (tag==='tr') { const cells=rows.pop()!; if (cells.length>1 && cells.some(cell=>[false,true].some(alt=>{ const t=render(cell,alt).trim(); return t && t.length<=4; }))) glued.push(cells.flat()); }
   };
+  const render=(parts:Part[], alt:boolean)=>parts.map(p=>typeof p==='string' ? p : alt ? p.alt : '').join('');
   for (const child of root.childNodes) walk(child,'');
   flush();
-  aside.push(...copy.text);
-  return { text: [...lines,...aside].join('\n'), hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, generated: copy.generated, markers: copy.markers, links, images, html: copy.html };
+  const read=(alt:boolean)=>[...lines,...glued].map(l=>render(l,alt)).filter(l=>l.trim()).join('\n'), shown=read(false), blocked=read(true);
+  return { text: blocked===shown ? shown : `${shown}\n${blocked}`, hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, links, images, html: copy.html };
 }
 /**
  * The text the screen reads: the HTML's visible text, then the text part, then raw MIME, each in full. A recipient reads
@@ -181,9 +175,8 @@ export function screenTextSignals(visible: string, text?: string, rawPart?: stri
   const parts=[rendered,plain,raw].filter((part,i,all)=>part && all.indexOf(part)===i);
   return { content:parts.join('\n'), textHtmlOverlap:overlap(plain,rendered) };
 }
-/** `generated`: where mail delivered as written (BYO `screen: true`) draws text the screen can't read: CSS-generated
- *  text and list markers other than bullets or 1, 2, 3…. */
-export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; destinations: string[]; unsupported: string[]; generated: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
+/** `disallowed`: what mail delivered as written (BYO `screen: true`) holds that the canonical copy would remove. */
+export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; destinations: string[]; unsupported: string[]; disallowed: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
 /** The HTML a Hosted message is delivered as: its canonical copy, which reads as itself, so the screen reads exactly it. */
 export async function canonicalHtml(html: string, fonts?: FontSources): Promise<string> {
   if (html.length>512*1024) throw unreadable();
@@ -202,12 +195,12 @@ export async function measureScreen(snapshot: Pick<EmailSnapshot, 'html' | 'text
   const hosts=new Set([...read?.hosts ?? [], ...destinations.map(destinationHost).filter(Boolean)]);
   const signals=[...read?.mismatches ?? [], ...hosts];
   const text=screenTextSignals(read?.text ?? '',snapshot.text,snapshot.raw), content=[text.content, destinations.join('\n')].filter(Boolean).join('\n');
-  return { read, signals, destinations, unsupported: read?.unsupported ?? [], generated: options.original ? [...read?.generated ?? [], ...read?.markers ?? []] : [], content, textHtmlOverlap: text.textHtmlOverlap, screenedBytes: Buffer.byteLength(content) };
+  return { read, signals, destinations, unsupported: read?.unsupported ?? [], disallowed: options.original ? read?.removed ?? [] : [], content, textHtmlOverlap: text.textHtmlOverlap, screenedBytes: Buffer.byteLength(content) };
 }
 /** Refuses a message the screen cannot read within a limit, with the measured size; `index` names a batch item. */
 export function assertScreenable(measure: ScreenMeasure, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) {
   if (measure.unsupported.length) throw unsupportedUrls(measure.unsupported, index);
-  if (measure.generated.length) throw generatedText(measure.generated, index);
+  if (measure.disallowed.length) throw unscreenableHtml(measure.disallowed, index);
   if (measure.signals.length>MAX_SIGNALS || Buffer.byteLength(measure.signals.join('\n'))>MAX_SIGNAL_BYTES) throw tooManyHosts(measure.signals.length,index);
   if (measure.screenedBytes>limitBytes) throw tooLarge(measure.screenedBytes,limitBytes,scope,index);
 }

@@ -1,35 +1,32 @@
 /**
  * The HTML of a Hosted message as it is delivered and screened: one canonical copy. The body is parsed once, as a
- * document, the tree is sanitized, and the accepted tree is serialized; that serialization is what goes to SES, and the
- * screen's text, its destination inventory and the verdict key come from the same tree. A duplicate attribute is read
- * and delivered once (the first, as every HTML parser reads it). The copy is read again until it reads as itself, so a
- * client parses exactly what was screened.
+ * document, the tree is reduced to an allow-list of elements and attributes, and the result is serialized; that
+ * serialization is what goes to SES, and the screen's text, its destination inventory and the verdict key come from the
+ * same tree. A duplicate attribute is read and delivered once (the first, as every HTML parser reads it). The copy is
+ * read again until it reads as itself, so a client parses exactly what was screened.
  *
- * Removed, because a client could draw or load something from them that the screen can't read: CSS declarations and
- * rules outside the allow-list (src/hosted-css.ts, which keeps the rest of the CSS text as written), fonts and style
- * sheets from anywhere but a font service (FontSources), SVG fonts, scripts, templates, frames, plugins (an <object>'s
- * fallback content stays), a list's type, start, value and reversed (markers are bullets or 1, 2, 3…), text drawn
- * backwards (<bdo>, whose content stays, the unicode-bidi attribute, and bidi control characters in text and in the
- * attributes a client shows),
- * <link> other than a style sheet (preload and prefetch hints included), refresh and Link <meta>, comments other than
- * Outlook's conditional ones, SVG animation of an address or style, srcset (the image keeps its src), archive,
- * xml:base, MathML altimg and definitionURL, inline data: addresses, and resources in SVG presentation attributes. An
- * Outlook conditional comment is delivered as written, its markup screened in place, unless any of it would be removed
- * or holds a duplicate attribute; then the whole comment goes.
+ * Kept: the elements in ELEMENTS (document structure, text, links, images, tables, headings, lists and inline
+ * formatting), only with the attributes `allowed` names, CSS through its own allow-list (src/hosted-css.ts, which keeps
+ * the CSS text as written less whole declarations and rules), fonts and style sheets only from font services
+ * (FontSources), and Outlook conditional comments whose markup passes unchanged (otherwise the whole comment goes).
+ * Everything else is removed: an element outside the list gives its place to its content, except the ones a client
+ * draws its own text or controls for (form controls, scripts, frames, plugins, SVG, MathML, templates, noscript,
+ * details, marquee, ruby, media), which go with their content. What the screen reads of this tree is its text in
+ * document order, with each image's alt text in its place (src/screen.ts).
  *
  * Refused (the sender must fix it), because what it leads to depends on where the message is opened: <base>, and any
- * link or resource address that is not absolute http(s), mailto, tel, cid: or a #fragment.
+ * link or image address that is not absolute http(s), mailto, tel, cid: or a #fragment.
  */
 import { defaultTreeAdapter, html as spec, serializeOuter, type DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
-import { cssReach, generatedText, hostedDeclarations, hostedSheet, loadsResource, type FontPolicy } from './hosted-css.js';
+import { hostedDeclarations, hostedSheet, type FontPolicy } from './hosted-css.js';
 import { screenedText } from './screened-html.js';
 
 type Node = DefaultTreeAdapterMap['childNode'];
 type Parent = DefaultTreeAdapterMap['parentNode'];
 type Element = DefaultTreeAdapterMap['element'];
 type Document = DefaultTreeAdapterMap['document'];
-const SVG = spec.NS.SVG;
+const HTML = spec.NS.HTML;
 
 /**
  * Where a URL leads, as a recipient's client resolves it: WHATWG URL parsing with IDNA (so a host with a combining
@@ -58,64 +55,84 @@ function fontPolicy({ hosts, prefix }: FontSources): FontPolicy {
   return { font: target => hosts.includes(host(target)) || (!!own && target.startsWith(own)), sheet: target => hosts.includes(host(target)) };
 }
 
-// The URL-bearing attribute vocabulary (HTML, SVG, MathML and Office markup); docs/sending-limits.md has the table.
-// Read as destinations: one address each; Office prefixes any name (o:href, v:src).
-const URL_ATTRIBUTES = new Set(['href', 'src', 'background', 'poster', 'action', 'formaction', 'cite', 'longdesc', 'usemap', 'data', 'codebase', 'classid', 'code', 'profile', 'manifest', 'icon', 'lowsrc', 'dynsrc', 'xlink:href']);
-// Lists of addresses separated by ASCII whitespace (link auditing): read, or removed when any is not absolute http(s).
-const URL_LISTS = new Set(['ping', 'attributionsrc']);
-// Removed: candidate lists a client splits its own way, another base, and MathML's image and definition addresses.
-const STRIPPED_ATTRIBUTES = new Set(['srcset', 'imagesrcset', 'imagesizes', 'archive', 'xml:base', 'altimg', 'definitionurl']);
-const isUrlAttribute = (name: string) => URL_ATTRIBUTES.has(name) || URL_LISTS.has(name) || STRIPPED_ATTRIBUTES.has(name) || /:(?:href|src)$/.test(name);
-// SVG presentation attributes whose value is CSS that may load a resource.
-const CSS_ATTRIBUTES = new Set(['fill', 'stroke', 'filter', 'mask', 'clip-path', 'marker', 'marker-start', 'marker-mid', 'marker-end', 'cursor', 'color-profile']);
-const REMOVED_ELEMENTS = new Set(['script', 'template', 'iframe', 'noembed', 'noframes', 'frame', 'frameset', 'embed', 'param']);
-const UNWRAPPED_ELEMENTS = new Set(['object', 'applet', 'bdo']);
-// List markers only as bullets or 1, 2, 3…: with a type, a start or a value a client draws letters, roman numerals or
-// numbers the sender picks, which can spell what the screen never reads.
-const LIST_ATTRIBUTES: Record<string, string[]> = { ol: ['type', 'start', 'reversed'], ul: ['type'], li: ['type', 'value'] };
-// Attributes a client shows as text (src/screen.ts reads them beside the flow).
-const SHOWN_ATTRIBUTES = new Set(['alt', 'title', 'xlink:title', 'placeholder', 'value', 'label']);
+// The elements a Hosted message keeps.
+const ELEMENTS = new Set(['html', 'head', 'body', 'title', 'meta', 'style', 'div', 'span', 'p', 'br', 'hr', 'a', 'img', 'table', 'thead', 'tbody', 'tfoot',
+  'tr', 'td', 'th', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'b', 'strong', 'i', 'em', 'u', 's', 'small', 'sup', 'sub', 'blockquote', 'pre',
+  'code', 'center', 'font']);
+// Removed with their content: a client draws text, controls or media of its own for these (or runs or loads them).
+const REMOVED_WITH_CONTENT = new Set(['script', 'noscript', 'template', 'iframe', 'frame', 'frameset', 'noframes', 'object', 'applet', 'embed', 'param',
+  'noembed', 'svg', 'math', 'form', 'input', 'textarea', 'button', 'select', 'option', 'optgroup', 'datalist', 'output', 'meter', 'progress', 'keygen',
+  'details', 'summary', 'dialog', 'marquee', 'ruby', 'rt', 'rp', 'rb', 'rtc', 'audio', 'video', 'canvas', 'map', 'area', 'portal']);
+// Attributes any kept element may have: none of them is drawn as text or loads anything.
+const PRESENTATION = new Set(['style', 'class', 'id', 'dir', 'lang', 'role', 'width', 'height', 'align', 'valign', 'bgcolor', 'border', 'cellpadding',
+  'cellspacing', 'colspan', 'rowspan']);
+// ARIA attributes that hold states, numbers or element references, never text of their own (aria-label and
+// aria-description do, so they are not here).
+const ARIA = new Set(['aria-hidden', 'aria-level', 'aria-labelledby', 'aria-describedby', 'aria-live', 'aria-atomic', 'aria-relevant', 'aria-busy',
+  'aria-current', 'aria-expanded', 'aria-controls', 'aria-owns', 'aria-colcount', 'aria-colindex', 'aria-colspan', 'aria-rowcount', 'aria-rowindex',
+  'aria-rowspan', 'aria-setsize', 'aria-posinset', 'aria-selected', 'aria-checked', 'aria-disabled', 'aria-pressed', 'aria-readonly', 'aria-required',
+  'aria-sort', 'aria-orientation', 'aria-haspopup', 'aria-modal', 'aria-multiline', 'aria-multiselectable', 'aria-invalid', 'aria-details',
+  'aria-errormessage', 'aria-flowto', 'aria-activedescendant', 'aria-autocomplete', 'aria-valuemin', 'aria-valuemax', 'aria-valuenow']);
+// And by element: a link's address and target, an image's address and alt text (read where the image is), a font's
+// presentation, a <meta>'s charset or viewport, and two that change nothing in HTML: <style type="text/css">, which is
+// what a style sheet is anyway, and the XML namespace declarations of an XHTML document's <html>.
+const ATTRIBUTES: Record<string, (name: string, value: string) => boolean> = {
+  html: name => name === 'xmlns' || name.startsWith('xmlns:'),
+  a: name => name === 'href' || name === 'target',
+  img: name => name === 'src' || name === 'alt',
+  font: name => name === 'color' || name === 'face' || name === 'size',
+  meta: name => name === 'charset' || name === 'name' || name === 'content' || name === 'http-equiv',
+  style: (name, value) => name === 'type' && /^\s*text\/css\s*$/i.test(value),
+};
+const allowed = (tag: string, name: string, value: string) =>
+  (PRESENTATION.has(name) && (name !== 'dir' || /^(?:ltr|rtl)$/i.test(value.trim()))) || ARIA.has(name) || !!ATTRIBUTES[tag]?.(name, value);
+// <meta charset>, the http-equiv form of it, and the viewport: nothing else a <meta> says is kept.
+const meta = (element: Element) => {
+  const get = (name: string) => element.attrs.find(a => a.name === name)?.value.trim().toLowerCase();
+  return get('charset') !== undefined || get('name') === 'viewport' || get('http-equiv') === 'content-type';
+};
+// What the sender is told was removed names elements and attributes from HTML's vocabulary, never other text of theirs.
+const VOCABULARY = new Set([...ELEMENTS, ...REMOVED_WITH_CONTENT, 'section', 'article', 'header', 'footer', 'nav', 'main', 'aside', 'address', 'figure',
+  'figcaption', 'picture', 'source', 'track', 'link', 'base', 'col', 'colgroup', 'caption', 'dl', 'dt', 'dd', 'label', 'fieldset', 'legend', 'abbr',
+  'acronym', 'cite', 'q', 'dfn', 'kbd', 'samp', 'var', 'mark', 'del', 'ins', 'big', 'strike', 'tt', 'nobr', 'wbr', 'bdi', 'bdo', 'time', 'data', 'xmp',
+  'plaintext', 'listing', 'slot', 'menu', 'dir', 'hgroup', 'search', 'xml', 'basefont', 'spacer', 'blink', 'image', 'isindex', 'menuitem', 'title', 'name',
+  'rel', 'rev', 'type', 'start', 'value', 'reversed', 'background', 'text', 'vlink', 'alink', 'hspace', 'vspace', 'nowrap', 'noshade', 'size', 'face',
+  'color', 'target', 'href', 'src', 'srcset', 'sizes', 'alt', 'usemap', 'ismap', 'loading', 'decoding', 'fetchpriority', 'crossorigin', 'referrerpolicy',
+  'integrity', 'media', 'charset', 'content', 'http-equiv', 'scope', 'headers', 'axis', 'char', 'charoff', 'frame', 'rules', 'summary', 'span', 'tabindex',
+  'accesskey', 'contenteditable', 'draggable', 'hidden', 'spellcheck', 'translate', 'autofocus', 'inert', 'popover', 'is', 'itemscope', 'itemtype',
+  'itemprop', 'itemid', 'itemref', 'nonce', 'part', 'leftmargin', 'topmargin', 'marginwidth', 'marginheight', 'longdesc', 'ping', 'download', 'hreflang',
+  'datetime', 'placeholder', 'action', 'method', 'xml:lang', 'xml:space', 'aria-label', 'aria-description', 'aria-roledescription', 'aria-valuetext',
+  'aria-placeholder', 'aria-braillelabel', 'aria-brailleroledescription', 'aria-keyshortcuts', 'compact', 'clear', 'shape', 'coords', 'codebase',
+  'classid', 'archive', 'code', 'profile', 'manifest', 'poster', 'controls', 'autoplay', 'loop', 'muted', 'preload', 'srcdoc', 'sandbox', 'allow',
+  'frameborder', 'scrolling', 'form', 'list', 'max', 'min', 'maxlength', 'pattern', 'readonly', 'required', 'selected', 'checked', 'disabled', 'open',
+  'rows', 'cols', 'autocomplete', 'attributionsrc', 'as', 'async', 'defer', 'for', 'kind', 'default', 'standby', 'bordercolor']);
+const known = (name: string) => VOCABULARY.has(name) ? name : /^data-/.test(name) ? 'data-*' : /^on/.test(name) ? 'event handler'
+  : /^(?:v|o|w|x|m):/.test(name) ? `Office ${name.slice(0, 2)}*` : 'non-HTML';
 // Embeddings, overrides and isolates: an override draws the letters after it in reverse.
 const BIDI_CONTROLS = /[\u202a-\u202e\u2066-\u2069]/;
-const ANIMATIONS = new Set(['animate', 'animatecolor', 'set']);
-// SVG fonts draw their own glyphs.
-const SVG_FONTS = new Set(['font', 'font-face', 'font-face-src', 'font-face-uri', 'font-face-format', 'font-face-name', 'glyph', 'missing-glyph', 'altglyph', 'altglyphdef', 'altglyphitem', 'glyphref', 'hkern', 'vkern']);
 // Outlook reads the inside of <!--[if mso]>…<![endif]--> (src/bounded-html.ts); <!--[if !mso]><!--> and <!--<![endif]-->
 // only mark where its content starts and ends.
 const CONDITIONAL = /^\[if\b[^\]<>]*\]>[\s\S]*<!\[endif\]$/i, MARKER = /^(?:\[if\b[^\]<>]*\]><!|<!\[endif\])$/i;
 
 export type HostedHtml = {
-  /** The canonical copy: the serialization of `root`, delivered exactly. */
+  /** The canonical copy: the serialization of `root`, delivered exactly (mail delivered as submitted: the submission). */
   html: string; root: Document;
   /** Every distinct place the copy links to or loads from. */
   destinations: Set<string>;
   /** Markup refused because what it leads to depends on where the message is opened. */
   unsupported: string[];
-  /** What canonicalization removed from the submitted HTML, for the sender. */
+  /** What canonicalization removed from the submitted HTML, for the sender; mail delivered as submitted that asks to
+   *  be screened is refused when it has any. */
   removed: string[];
   /** Every element the submitted HTML has, removed ones included, for the sender's lint (src/sendability.ts). */
   tags: Set<string>;
   /** Hosts whose fonts or style sheets were removed, for the sender. */
   fonts: string[];
-  /** Where the submitted CSS draws text (src/hosted-css.ts generatedText): the canonical copy removes it; mail
-   *  delivered as written can't be screened with it. */
-  generated: string[];
-  /** Where the submitted HTML or CSS draws list markers other than bullets or 1, 2, 3…: the canonical copy draws those
-   *  instead; mail delivered as written can't be screened with them. */
-  markers: string[];
-  /** Text a sheet could draw, read beside the document's text (mail delivered as submitted). */
-  text: string[];
 };
-type Sink = { destinations: Set<string>; unsupported: string[]; removed: string[]; changes: number; tags: Set<string>; fonts: string[]; generated: string[]; markers: string[]; policy: FontPolicy; css: Map<string, ReturnType<typeof hostedDeclarations>> };
-const foreign = (sink: Sink, host: string) => { if (!sink.fonts.includes(host)) sink.fonts.push(host); note(sink.removed, `Custom font from ${host} removed`); };
+type Sink = { destinations: Set<string>; unsupported: string[]; removed: string[]; changes: number; tags: Set<string>; fonts: string[]; policy: FontPolicy; css: Map<string, ReturnType<typeof hostedDeclarations>> };
 // Mail repeats the same inline styles on every row and cell: each distinct one is read once per pass.
 const declarations = (sink: Sink, value: string) => { let read = sink.css.get(value); if (!read) { read = hostedDeclarations(value, resource); sink.css.set(value, read); } return read; };
 const note = (list: string[], what: string) => { if (!list.includes(what) && list.length < 20) list.push(what); };
-// Where CSS draws text or list markers; a style attribute is named by its element.
-const drawn = (sink: Sink, found: ReturnType<typeof generatedText>, where?: string) => {
-  for (const what of found.text) note(sink.generated, where ?? what);
-  for (const what of found.markers) note(sink.markers, where ?? what);
-};
 
 /** One pass: parse, sanitize, serialize. `frozen` reads an Outlook conditional comment's markup without changing it. */
 function sanitize(parent: Parent | DefaultTreeAdapterMap['commentNode'], sink: Sink, frozen: boolean, placeholders: boolean, ambiguous: Set<object>) {
@@ -132,7 +149,7 @@ function sanitize(parent: Parent | DefaultTreeAdapterMap['commentNode'], sink: S
       if (frozen || !CONDITIONAL.test(data)) { if (frozen || !MARKER.test(data)) remove(node); continue; }
       const inner: Sink = { ...sink, destinations: new Set(), unsupported: [], removed: [], changes: 0 };
       sanitize(comment, inner, true, placeholders, ambiguous);
-      if (inner.changes || ambiguous.has(comment)) { remove(node, 'an Outlook conditional comment holding markup Hosted sending removes'); continue; }
+      if (inner.changes || ambiguous.has(comment)) { remove(node, `Outlook conditional comments holding markup Hosted sending removes (${inner.removed.slice(0, 3).join('; ') || 'a repeated attribute'})`); continue; }
       for (const target of inner.destinations) sink.destinations.add(target);
       for (const what of inner.unsupported) note(sink.unsupported, what);
       continue;
@@ -145,23 +162,23 @@ function sanitize(parent: Parent | DefaultTreeAdapterMap['commentNode'], sink: S
     if (!('tagName' in node)) continue;
     const element = node as Element, tag = element.tagName.toLowerCase();
     sink.tags.add(tag);
-    if (REMOVED_ELEMENTS.has(tag)) { remove(node, `<${tag}>`); continue; }
-    if (tag === 'link') {
-      if (!element.attrs.some(a => a.name === 'rel' && a.value.toLowerCase().split(/[\t\n\f\r ]+/).includes('stylesheet'))) { remove(node, '<link> other than a style sheet'); continue; }
-      const target = resource(element.attrs.find(a => a.name === 'href')?.value ?? '');
-      if (!target || !sink.policy.sheet(target)) { if (target) foreign(sink, new URL(target).host); remove(node, target ? undefined : 'a style sheet <link> without an absolute address'); continue; }
+    if (element.namespaceURI !== HTML || REMOVED_WITH_CONTENT.has(tag)) { remove(node, `${known(tag)} elements, with their content`); continue; }
+    if (tag === 'base') { note(sink.unsupported, '<base>'); remove(node); continue; }
+    if (tag === 'meta' && !meta(element)) { remove(node, 'meta elements other than charset or viewport'); continue; }
+    if (!ELEMENTS.has(tag)) {
+      // Its content takes its place.
+      sanitize(element, sink, frozen, placeholders, ambiguous);
+      if (tag === 'link' && /(?:^|\s)stylesheet(?:\s|$)/i.test(element.attrs.find(a => a.name === 'rel')?.value ?? '')) {
+        const href = resource(element.attrs.find(a => a.name === 'href')?.value ?? '');
+        if (href && !sink.policy.sheet(href)) foreign(sink, new URL(href).host);
+      }
+      sink.changes++; note(sink.removed, element.childNodes.length ? `${known(tag)} elements (their content stays)` : `${known(tag)} elements`);
+      if (!frozen) { children.splice(children.indexOf(node), 1, ...element.childNodes); for (const child of element.childNodes) child.parentNode = parent as Parent; }
+      continue;
     }
-    if (SVG_FONTS.has(tag) && element.namespaceURI === SVG) { remove(node, 'an SVG font'); continue; }
-    if (tag === 'meta' && element.attrs.some(a => a.name === 'http-equiv' && /^\s*(?:refresh|link|set-cookie)\s*$/i.test(a.value))) { remove(node, '<meta http-equiv="refresh">'); continue; }
-    if (ANIMATIONS.has(tag) && element.namespaceURI === SVG) {
-      const target = element.attrs.find(a => a.name === 'attributeName')?.value.trim().toLowerCase() ?? '';
-      if (isUrlAttribute(target) || isUrlAttribute(target.replace(/^[^:]*:/, '')) || CSS_ATTRIBUTES.has(target) || target === 'style') { remove(node, `SVG <${element.tagName}> of an address or style`); continue; }
-    }
-    if (tag === 'base') note(sink.unsupported, '<base>');
+    attributes(element, tag, sink, frozen, placeholders);
     if (tag === 'style') {
-      attributes(element, tag, sink, frozen, placeholders);
       const css = element.childNodes.map(child => 'value' in child ? child.value : '').join(''), read = hostedSheet(css, resource, sink.policy);
-      drawn(sink, generatedText(css));
       if (read.removed.length) { sink.changes++; for (const what of read.removed) note(sink.removed, what); }
       for (const host of read.fonts) if (!sink.fonts.includes(host)) sink.fonts.push(host);
       for (const target of read.destinations) sink.destinations.add(target);
@@ -173,17 +190,10 @@ function sanitize(parent: Parent | DefaultTreeAdapterMap['commentNode'], sink: S
       }
       continue;
     }
-    if (UNWRAPPED_ELEMENTS.has(tag)) {
-      // A plugin isn't loaded, so its fallback content is what a client shows; <bdo> would draw its content backwards.
-      sanitize(element, sink, frozen, placeholders, ambiguous);
-      sink.changes++; note(sink.removed, `<${tag}>`);
-      if (!frozen) { children.splice(children.indexOf(node), 1, ...element.childNodes); for (const child of element.childNodes) child.parentNode = parent as Parent; }
-      continue;
-    }
-    attributes(element, tag, sink, frozen, placeholders);
     sanitize(element, sink, frozen, placeholders, ambiguous);
   }
 }
+const foreign = (sink: Sink, host: string) => { if (!sink.fonts.includes(host)) sink.fonts.push(host); note(sink.removed, `Custom font from ${host} removed`); };
 function attributes(element: Element, tag: string, sink: Sink, frozen: boolean, placeholders: boolean) {
   const drop = (attribute: { name: string }, what: string) => {
     sink.changes++; note(sink.removed, what);
@@ -191,43 +201,28 @@ function attributes(element: Element, tag: string, sink: Sink, frozen: boolean, 
   };
   for (const a of [...element.attrs]) {
     const name = (a.prefix ? `${a.prefix}:${a.name}` : a.name).toLowerCase(), value = a.value;
-    if (STRIPPED_ATTRIBUTES.has(name)) { drop(a, `the ${name} attribute`); continue; }
+    if (!allowed(tag, name, value)) {
+      // A list's type, start or value has its markers drawn as letters or numbers the sender picks.
+      const marker = /^(?:ol|ul|li)$/.test(tag) && ((name === 'type' && !/^(?:1|disc|circle|square)$/i.test(value.trim())) || (name === 'start' && !/^\+?0*1$/.test(value.trim())) || name === 'value');
+      drop(a, marker ? 'List style changed to plain numbers or bullets' : `${known(name)} attributes on ${known(tag)}`);
+      continue;
+    }
     if (name === 'style') {
-      drawn(sink, generatedText(value, true), `<${tag} style>`);
       const read = declarations(sink, value);
       for (const target of read.destinations) sink.destinations.add(target);
       if (read.removed.length) { sink.changes++; for (const what of read.removed) note(sink.removed, what); }
       if (!frozen && read.css !== value) { sink.changes++; if (/[^\s;]/.test(read.css)) a.value = read.css; else element.attrs = element.attrs.filter(b => b !== a); }
       continue;
     }
-    if (CSS_ATTRIBUTES.has(name) && loadsResource(value)) { drop(a, `a url() in <${tag} ${name}>`); continue; }
-    if (LIST_ATTRIBUTES[tag]?.includes(name)) {
-      // reversed only counts down to 1; type="1" and start="1" draw what the copy draws without them.
-      if (name !== 'reversed' && !(name === 'type' && /^(?:1|disc|circle|square)$/i.test(value.trim())) && !(name === 'start' && /^\+?0*1$/.test(value.trim()))) note(sink.markers, `<${tag} ${name}="${value.slice(0, 20)}">`);
-      drop(a, `a list's ${name} (list markers are bullets or 1, 2, 3…)`);
+    if (name === 'alt') {
+      if (BIDI_CONTROLS.test(value)) { sink.changes++; note(sink.removed, 'bidi control characters'); if (!frozen) a.value = screenedText(value); }
       continue;
     }
-    if (name === 'unicode-bidi') {
-      if (/override/i.test(value)) note(sink.generated, `<${tag} unicode-bidi>`);
-      drop(a, 'the unicode-bidi attribute');
-      continue;
-    }
-    if (SHOWN_ATTRIBUTES.has(name) && BIDI_CONTROLS.test(value)) {
-      sink.changes++; note(sink.removed, 'bidi control characters');
-      if (!frozen) a.value = screenedText(value);
-      continue;
-    }
+    if (name !== 'href' && name !== 'src') continue;
     if (placeholders && /^[\x00-\x20]*\{\{/.test(value)) continue;
-    if (URL_LISTS.has(name)) {
-      const targets = value.split(/[\t\n\f\r ]+/).filter(Boolean).map(resource);
-      if (targets.every(Boolean)) for (const target of targets) sink.destinations.add(target!);
-      else drop(a, `<${tag} ${name}> with an address that is not absolute http(s)`);
-      continue;
-    }
-    if (!URL_ATTRIBUTES.has(name) && !/:(?:href|src)$/.test(name)) continue;
     // A fragment or an empty value stays in the message; cid: names one of its attachments.
     if (/^[\x00-\x20]*(?:#|$)/.test(value) || /^[\x00-\x20]*cid:/i.test(value)) continue;
-    if (/^[\x00-\x20]*data:/i.test(value)) { drop(a, `an inline data: address in <${tag} ${name}>`); continue; }
+    if (/^[\x00-\x20]*data:/i.test(value)) { drop(a, `an inline data: address in ${tag} ${name}`); continue; }
     const target = destination(value);
     if (target) sink.destinations.add(target);
     else note(sink.unsupported, `<${tag} ${name}> that is not an absolute http(s), mailto or tel address`);
@@ -240,7 +235,7 @@ function doctype(node: DefaultTreeAdapterMap['documentType']) {
   return `<!DOCTYPE ${node.name}${node.publicId ? ` PUBLIC ${id(node.publicId)}${node.systemId ? ` ${id(node.systemId)}` : ''}` : node.systemId ? ` SYSTEM ${id(node.systemId)}` : ''}>`;
 }
 function pass(html: string, placeholders: boolean, policy: FontPolicy) {
-  const ambiguous = new Set<object>(), sink: Sink = { destinations: new Set(), unsupported: [], removed: [], changes: 0, tags: new Set(), fonts: [], generated: [], markers: [], policy, css: new Map() };
+  const ambiguous = new Set<object>(), sink: Sink = { destinations: new Set(), unsupported: [], removed: [], changes: 0, tags: new Set(), fonts: [], policy, css: new Map() };
   const root = boundedHtmlFragment(html, 'document', { clients: true, onParseError: (error, within) => {
     if (error.code !== 'duplicate-attribute') return;
     if (within) ambiguous.add(within); else note(sink.removed, 'a repeated attribute (the first is kept)');
@@ -251,85 +246,28 @@ function pass(html: string, placeholders: boolean, policy: FontPolicy) {
   const serialized = root.childNodes.map(node => node.nodeName === '#documentType' ? doctype(node as DefaultTreeAdapterMap['documentType']) : serializeOuter(node, { scriptingEnabled: false })).join('');
   return { html: serialized, root, ...sink };
 }
-// Absolute addresses anywhere in a value, commas included (a srcset candidate may hold one).
-const ADDRESSES = /https?:[\\/]{2}[^\s"'<>]+/gi;
-/**
- * Mail delivered as submitted (BYO `screen: true`): read without changing anything, so the screen judges the exact
- * bytes that are sent. Every place it could link to or load from is listed: URL attributes as the canonical copy reads
- * them, every candidate and address in srcset and link lists, every url() and absolute address in CSS (custom
- * properties and fallbacks included), and addresses in refresh <meta> and SVG animation values; markup a lenient
- * client may show (comments, templates, frame fallbacks) is searched too. CSS strings and the attributes attr() reads
- * are text a sheet could draw, so they are read as text. A superset of what a client uses. Where it draws text the
- * screen can't read as it is shown (`generated`) or list markers other than bullets or 1, 2, 3… (`markers`), it is
- * named so it can be refused.
- */
-function asSent(root: Document, placeholders: boolean): Omit<HostedHtml, 'html' | 'root' | 'removed' | 'fonts'> {
-  const sink: Sink = { destinations: new Set(), unsupported: [], removed: [], changes: 0, tags: new Set(), fonts: [], generated: [], markers: [], policy: fontPolicy({ hosts: [] }), css: new Map() };
-  const text: string[] = [], read = new Set<string>();
-  const addresses = (value: string) => { for (const match of value.matchAll(ADDRESSES)) { const target = destination(match[0]); if (target) sink.destinations.add(target); } };
-  const css = (value: string) => {
-    const reach = cssReach(value, resource);
-    if (!reach) { note(sink.unsupported, 'a style sheet over the CSS budget'); return; }
-    for (const target of reach.destinations) sink.destinations.add(target);
-    text.push(...reach.text);
-    for (const name of reach.attributes) read.add(name);
-  };
-  const walk = (node: Node | DefaultTreeAdapterMap['parentNode']) => {
-    if ('tagName' in node) {
-      const tag = node.tagName.toLowerCase();
-      sink.tags.add(tag);
-      if (tag === 'base') note(sink.unsupported, '<base>');
-      if (tag === 'style') {
-        const sheet = node.childNodes.map(child => 'value' in child ? child.value : '').join('');
-        css(sheet);
-        drawn(sink, generatedText(sheet));
-      }
-      for (const a of node.attrs) {
-        const name = (a.prefix ? `${a.prefix}:${a.name}` : a.name).toLowerCase();
-        if (name === 'style' || CSS_ATTRIBUTES.has(name)) css(a.value);
-        else if (name === 'srcset' || name === 'imagesrcset' || URL_LISTS.has(name) || name === 'archive' || (tag === 'meta' && name === 'content') || (ANIMATIONS.has(tag) && /^(?:to|from|by|values)$/.test(name))) {
-          for (const part of a.value.split(/[\s,]+/)) { const target = destination(part); if (target) sink.destinations.add(target); }
-          addresses(a.value);
-        }
-      }
-      attributes(node, tag, sink, true, placeholders);
-    }
-    for (const child of (node as DefaultTreeAdapterMap['parentNode']).childNodes ?? []) walk(child);
-    const content = (node as { content?: DefaultTreeAdapterMap['parentNode'] }).content;
-    if (content) walk(content);
-  };
-  walk(root);
-  if (read.size) {
-    const collect = (node: Node | DefaultTreeAdapterMap['parentNode']) => {
-      if ('attrs' in node) for (const a of node.attrs) if (read.has(a.name.toLowerCase()) && a.value.trim()) text.push(a.value);
-      for (const child of (node as DefaultTreeAdapterMap['parentNode']).childNodes ?? []) collect(child);
-    };
-    collect(root);
-  }
-  return { destinations: sink.destinations, unsupported: sink.unsupported, tags: sink.tags, generated: sink.generated, markers: sink.markers, text };
-}
 /** How a body is read: whether addresses may start with a placeholder, where fonts may come from, and whether it is
  *  delivered as submitted (`original`) rather than as its canonical copy. */
 export type HostedOptions = { placeholders?: boolean; fonts?: FontSources; original?: boolean };
 /**
  * The canonical copy of an HTML body, or null when it is over the parser's budgets or doesn't read as itself after a
  * few passes. With `placeholders`, a campaign's own copy may start an address with a placeholder; each recipient's copy
- * is read without it.
+ * is read without it. Mail delivered as submitted (BYO `screen: true`, `original`) is read by the same rules but not
+ * changed: `html` is the submission, `root` the tree a client parses from it, and `removed` what the canonical copy
+ * would remove, which such mail must not have to be screened.
  */
 export function hostedHtml(html: string, { placeholders = false, fonts = { hosts: DEFAULT_FONT_HOSTS }, original = false }: HostedOptions = {}): HostedHtml | null {
-  if (original) {
-    const root = boundedHtmlFragment(html, 'document', { clients: true });
-    return root ? { html, root: root as Document, removed: [], fonts: [], ...asSent(root as Document, placeholders) } : null;
-  }
   const policy = fontPolicy(fonts);
   let input = html, read = pass(input, placeholders, policy);
   if (!read) return null;
-  const { removed, tags, fonts: foreignFonts, generated, markers } = read;
+  // What the first pass found: later passes read a copy without it (a removed <base> is still refused).
+  const { removed, tags, fonts: foreignFonts, unsupported } = read;
+  if (original) return { html, root: read.root as Document, destinations: read.destinations, unsupported, removed, tags, fonts: foreignFonts };
   for (let i = 0; i < 3 && (read.changes || read.html !== input); i++) {
     input = read.html;
     read = pass(input, placeholders, policy);
     if (!read) return null;
   }
   if (read.changes || read.html !== input) return null;
-  return { html: read.html, root: read.root as Document, destinations: read.destinations, unsupported: read.unsupported, removed, tags, fonts: foreignFonts, generated, markers, text: [] };
+  return { html: read.html, root: read.root as Document, destinations: read.destinations, unsupported, removed, tags, fonts: foreignFonts };
 }
