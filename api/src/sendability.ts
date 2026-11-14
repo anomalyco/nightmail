@@ -88,6 +88,7 @@ async function content(mail:CheckMail, from:string, read:Awaited<ReturnType<type
     unsub ||= /unsub|opt-?out|preferences/i.test(u.pathname+u.search);
   }
   if (hosts.size && !(await Promise.all([...hosts].map(async h=>(await shortDomain(h))===from))).some(Boolean)) add('off-brand-links','warning',25,'All link domains differ from the sender','None of the web links shares the sender’s registrable domain. Third-party links can be legitimate.','Use a recognizable branded destination for the primary action.');
+  if (read?.unsupported.length) add('unsupported-url','warning',40,'Hosted sending refuses these addresses',`Hosted sending screens every address a message links to or loads from, and can't read where this markup leads: ${read.unsupported.join('; ')}.`,'Use absolute https:// (or mailto:, tel:, cid:) addresses, and no <base>, <link>, srcset, or CSS url() but background-image: url("https://…") in a style attribute.',{unsupported:read.unsupported.length});
   if (read?.mismatches.size) add('link-label','warning',18,'Link label names a different host','A displayed hostname differs from its actual destination.','Make the visible destination agree with the link.');
   if (short) add('short-url','warning',15,'Link shortener hides the destination','A link uses a known public shortening service.','Link directly to the final branded HTTPS URL.');
   if (ip) add('ip-link','warning',20,'Link points to an IP address','At least one web link has a numeric host instead of a recognizable domain.','Use a branded HTTPS hostname.');
@@ -118,16 +119,16 @@ export async function checkMail(mail:CheckMail, ctx:CheckContext={}): Promise<Ch
   try {
     const html=mail.html??'';
     if (html) rendering(lint(html,e=>{if(e.code!=='missing-doctype') parseErrors.add(e.code);}),category('rendering'));
-    const read=html ? await readHtml(html,tag=>tags.add(tag)) : undefined;
+    const read=html ? await readHtml(html,tag=>tags.add(tag),{placeholders:ctx.placeholders}) : undefined;
     const signals=screenTextSignals(read?.text??'',mail.text);
     const {copy,unsub}=await content(mail,from,read,signals.textHtmlOverlap,tags,parseErrors,category('content'));
     compliance(mail,headers,copy,unsub,category('headers'));
     const bytes=Buffer.byteLength(html);
     if (bytes>=102400) size('gmail-clip','warning',45,'Gmail may clip the message',`${bytes} bytes of HTML before delivery-time rewriting.`, 'Keep decoded HTML below about 102 KB and place essential links early.',{htmlBytes:bytes});
     // Probation dispatch screens the rewritten copy. Image-only mail cannot reach that step; measure the submitted copy instead.
-    let screenedBytes=(await measureScreen({html:html||undefined,text:mail.text})).screenedBytes, basis='submitted';
+    let screenedBytes=(await measureScreen({html:html||undefined,text:mail.text},{placeholders:ctx.placeholders})).screenedBytes, basis='submitted';
     if (html && ctx.domain?.pool==='probation') try {
-      screenedBytes=(await measureScreen({html:screenedHtml(html,mail.previewText),text:mail.text})).screenedBytes; basis='probation copy';
+      screenedBytes=(await measureScreen({html:screenedHtml(html,mail.previewText),text:mail.text},{placeholders:ctx.placeholders})).screenedBytes; basis='probation copy';
     } catch (e) { if (!(e instanceof ApiError && e.code==='CONTENT_IMAGE_ONLY')) throw e; }
     const limit=ctx.screenLimitBytes??24*1024, left=limit-screenedBytes, near=left<limit*0.1;
     size('screen-bytes',left<0?'error':near?'warning':'info',left<0?100:near?20:0,'Hosted screened-text budget',`${screenedBytes} of ${limit} UTF-8 bytes (${Math.abs(left)} bytes ${left<0?'over':'remaining'}; ${basis}). The text part counts unless it is exactly the HTML's visible text, and so does each distinct link and image address.`,left<0?'Shorten the HTML copy or text alternative before hosted sending.':'Keep room for personalization and the final footer.',{screenedBytes,limitBytes:limit,remainingBytes:left});

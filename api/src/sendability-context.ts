@@ -11,6 +11,8 @@ export type CheckContext = {
   standing?: {score: number | null; warmup: boolean; accepted: number; bounced: number; complained: number; daily: number | null};
   /** The Hosted screened-text limit that applies: per message, or per campaign (screened once for every recipient). */
   screenLimitBytes?: number;
+  /** A campaign's own copy: a URL attribute may start with a placeholder, checked in each recipient's copy. */
+  placeholders?: boolean;
 };
 // Never run placement probes, look up remote assets or lock admission rows.
 // Fresh facts for the exact From only: a parent's DMARC record does not prove the subdomain has no override.

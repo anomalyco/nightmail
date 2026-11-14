@@ -39,7 +39,7 @@ export type ApiError = {
          */
         resetAt?: string;
         /**
-         * Every problem found, when there is more than one part, such as ritual diagnostics with ritual, line, column, message and hint, or a measurement, such as CONTENT_TOO_LARGE_TO_SCREEN with screenedBytes and limitBytes (and index in a batch).
+         * Every problem found, when there is more than one part, such as ritual diagnostics with ritual, line, column, message and hint, or a measurement, such as CONTENT_TOO_LARGE_TO_SCREEN with screenedBytes and limitBytes, or UNSUPPORTED_URL_IN_HOSTED_MAIL with the unsupported markup it names (and index in a batch).
          */
         details?: Array<{
             [key: string]: unknown;
@@ -5257,7 +5257,7 @@ export type SupportScreen = {
          */
         subject: string;
         /**
-         * CONTENT_REJECTED_SPAM, CONTENT_IMAGE_ONLY, CONTENT_TOO_LARGE_TO_SCREEN, ATTACHMENT_TYPE_UNSCREENABLE, ATTACHMENT_CONTENT_MISMATCH.
+         * CONTENT_REJECTED_SPAM, CONTENT_IMAGE_ONLY, CONTENT_TOO_LARGE_TO_SCREEN, UNSUPPORTED_URL_IN_HOSTED_MAIL, ATTACHMENT_TYPE_UNSCREENABLE, ATTACHMENT_CONTENT_MISMATCH.
          */
         errorCode: string;
         /**

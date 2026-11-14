@@ -38,3 +38,7 @@ export function sanitizeBlockStyle(value: string | null | undefined): string | n
   }
   return accepted.length ? `${accepted.map(([property, candidate]) => `${property}:${candidate}`).join(';')};` : null;
 }
+
+/** The campaign renderer's web-font sheet (src/campaign-blocks.ts): the one style sheet with url() that Hosted sending
+ *  reads exactly (src/screen.ts), its two font files listed among the message's destinations. `fontBase` is HTML-escaped. */
+export const fontFaceCss = (fontBase: string) => `@font-face{font-family:Inter;src:url('${fontBase}inter-variable.woff2') format('woff2');font-style:normal;font-weight:100 900}@font-face{font-family:Inter;src:url('${fontBase}inter-variable-italic.woff2') format('woff2');font-style:italic;font-weight:100 900}`;

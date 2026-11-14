@@ -1,6 +1,7 @@
 import { ApiError, digest, type Runtime } from './core.js';
 import type { EmailSnapshot } from './db/sending.js';
 import { VISIBLE_WORDS } from './screened-html.js';
+import { fontFaceCss } from './block-style.js';
 import { formattedSender } from './sending.js';
 
 // Opt-in content screen for live transactional mail (`screen: true`): asks Jev, TypeSafe AI's decision
@@ -51,6 +52,12 @@ const unreadable = () => refused('Simplify the HTML so Hosted sending can screen
 export const tooLarge = (screenedBytes: number, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) =>
   refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's visible text and alt text, the text part unless it says exactly the same, and each distinct link and image address. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
     { screenedBytes, limitBytes }, index);
+/** Markup whose destinations the screen can't read: refused for Hosted mail, named so the sender can fix it. */
+export const unsupportedUrls = (unsupported: string[], index?: number) => {
+  const error = new ApiError(422, 'UNSUPPORTED_URL_IN_HOSTED_MAIL', `Hosted sending screens every address a message links to or loads from, and can't read where this markup leads: ${unsupported.join('; ')}. Use absolute https:// (or mailto:, tel:, cid:) addresses, and no <base>, <link>, srcset, or CSS url() but background-image: url("https://…") in a style attribute.`, index === undefined ? 'html' : `emails.${index}.html`);
+  error.details = [{ unsupported, ...(index === undefined ? {} : { index }) }];
+  return error;
+};
 const tooManyHosts = (linkHosts: number, index?: number) =>
   refused(`The message links to or loads ${linkHosts} distinct hosts (counting link labels that name another host); Hosted sending screens at most ${MAX_SIGNALS}. Link to fewer domains.`,
     { linkHosts, linkHostLimit: MAX_SIGNALS }, index);
@@ -79,33 +86,128 @@ function host(value: string) {
 /**
  * Where a URL leads, as a recipient's client resolves it: WHATWG URL parsing with IDNA (so a host with a combining
  * mark is its punycode, not the host it looks like), the canonical scheme, host, port, path, query and fragment, and
- * nothing removed beyond what URL parsing itself removes. Never prose-normalized. A value that is not an absolute URL
- * stays as written. Inline data and attachment references aren't destinations.
+ * nothing removed beyond what URL parsing itself removes. Never prose-normalized. Null unless the value is an absolute
+ * http(s), mailto or tel URL whose meaning doesn't depend on the document's address: an http(s) URL needs its two
+ * slashes, since `https:host` and `https:/host` are relative to an https document.
  */
 export function destination(value: string): string | null {
-  const v = value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, '');
-  if (!v || v.startsWith('#') || /^(?:data|cid):/i.test(v)) return null;
-  try { return new URL(v.startsWith('//') ? 'https:' + v : v).href; } catch { return v; }
+  const v = value.replace(/^[\x00-\x20]+|[\x00-\x20]+$/g, '').replace(/[\t\n\r]/g, '');
+  if (!/^(?:https?:[\\/]{2}|mailto:|tel:)/i.test(v)) return null;
+  try { return new URL(v).href; } catch { return null; }
 }
 const destinationHost = (target: string) => { try { return /^https?:$/.test(new URL(target).protocol) ? new URL(target).hostname : ''; } catch { return ''; } };
-// The attributes a client follows or loads: links, resources, backgrounds, form targets, Office's prefixed links and images.
-const URL_ATTRIBUTES = new Set(['href', 'src', 'background', 'action', 'formaction', 'poster', 'data', 'cite', 'longdesc']);
-const attributeTargets = (name: string, value: string) => name === 'srcset' || name === 'imagesrcset' ? value.split(',').map(part => part.trim().split(/\s+/)[0] ?? '')
-  : name === 'style' ? [...value.matchAll(/url\(\s*(['"]?)(.*?)\1\s*\)/gi)].map(match => match[2]!)
-  : URL_ATTRIBUTES.has(name) || /:(?:href|src)$/.test(name) ? [value] : [];
+// The URL-bearing attribute vocabulary (HTML, SVG, MathML and Office markup), each either in the destination
+// inventory as an absolute URL or refused; docs/sending-limits.md has the table. Office prefixes any name (o:href).
+const INVENTORY = new Set(['href', 'src', 'background', 'poster', 'action', 'formaction', 'cite', 'longdesc', 'usemap', 'data', 'codebase', 'classid', 'code', 'profile', 'manifest', 'icon', 'lowsrc', 'dynsrc', 'xlink:href']);
+// Lists of URLs separated by ASCII whitespace, as the HTML standard splits them.
+const URL_LISTS = new Set(['ping', 'attributionsrc']);
+// Lists a client splits its own way (srcset candidates, comma-separated applet archives), and other bases.
+const REFUSED = new Set(['srcset', 'imagesrcset', 'archive', 'xml:base']);
+const isUrlAttribute = (name: string) => INVENTORY.has(name) || URL_LISTS.has(name) || REFUSED.has(name) || /:(?:href|src)$/.test(name);
+// Attributes whose value is CSS: style, and SVG presentation attributes that take a url().
+const CSS_ATTRIBUTES = new Set(['style', 'fill', 'stroke', 'filter', 'mask', 'clip-path', 'marker', 'marker-start', 'marker-mid', 'marker-end', 'cursor', 'color-profile']);
+// Elements whose resources depend on a plugin, and SVG animation that can rewrite another attribute.
+const PLUGINS = new Set(['applet', 'embed', 'object']), ANIMATIONS = new Set(['animate', 'animatecolor', 'set']);
+const SVG = 'http://www.w3.org/2000/svg';
+/**
+ * Whether CSS can load anything: its escapes decoded as CSS decodes them, any url(), image(), image-set(), src() or
+ * @import refuses it. Comments are left in place: one can only split a token, never make one, so reading through it
+ * finds a superset. A url() of a fragment (#id) stays in the document and is allowed.
+ */
+const cssResource = (css: string) => /(?:url|image|image-set|src)\(|@import/i.test(css
+  .replace(/\\([0-9a-f]{1,6})[ \t\n\r\f]?|\\([^\n\r\f])/gi, (_, hex: string | undefined, char: string | undefined) => hex ? String.fromCodePoint(parseInt(hex, 16) > 0x10ffff || (parseInt(hex, 16) >= 0xd800 && parseInt(hex, 16) <= 0xdfff) ? 0xfffd : parseInt(hex, 16) || 0xfffd) : char!)
+  .replace(/url\(\s*(?:"#[^"\\\n]*"|'#[^'\\\n]*'|#[^"'()\\\s]*)\s*\)/gi, ' '));
+/**
+ * The one CSS resource a style attribute may carry: `background-image: url("https://…")`, a declaration with a
+ * double-quoted absolute https URL, in a style attribute without a backslash (so without escapes). That form is the
+ * same text to every CSS tokenizer, so its URL is listed exactly; anything else in the attribute that could load is
+ * refused as above.
+ */
+const BACKGROUND = /(^|;)\s*background-image\s*:\s*url\(\s*"(https:\/\/[^"'\\\s()<>]+)"\s*\)\s*(?:!\s*important\s*)?(?=;|$)/gi;
+const styleResources = (value: string) => {
+  if (value.includes('\\')) return { urls: [], rest: value };
+  const urls = [...value.matchAll(BACKGROUND)].map(match => match[2]!);
+  return { urls, rest: value.replace(BACKGROUND, '$1 ') };
+};
+// The campaign renderer's own web-font sheet, read exactly: its two font files are destinations.
+const [FONT_HEAD, FONT_MIDDLE, FONT_TAIL] = fontFaceCss('\u0000').split('\u0000') as [string, string, string];
+const fontSheet = (css: string) => {
+  if (!css.startsWith(FONT_HEAD) || !css.endsWith(FONT_TAIL)) return null;
+  const middle = css.slice(FONT_HEAD.length, css.length - FONT_TAIL.length), split = middle.indexOf(FONT_MIDDLE), base = middle.slice(0, split);
+  return split > 0 && middle === base + FONT_MIDDLE + base && /^https?:\/\/[^'"\\\s()<>]+\/$/.test(base) ? [`${base}inter-variable.woff2`, `${base}inter-variable-italic.woff2`] : null;
+};
 // Addresses a client links in text: absolute http(s) URLs and www. hosts, without the punctuation that ends a sentence.
 const textTargets = (text = '') => [...text.matchAll(/(?:\bhttps?:\/\/|\bwww\.)[^\s<>"'`]+/giu)].map(match => (/^www\./i.test(match[0]) ? 'https://' : '') + match[0].replace(/[.,;:!?)\]}'"’”]+$/u, ''));
 const INLINE=new Set(['a','abbr','b','bdi','bdo','big','cite','code','data','del','dfn','em','font','i','ins','kbd','label','mark','q','s','samp','small','span','strike','strong','sub','sup','time','tt','u','var','wbr','img','input','button','select','textarea','output','meter','progress','picture','source','svg','text','tspan','math','mi','mo','mn','ruby','rt','rp','nobr']);
+type HtmlNode = { nodeName: string; tagName?: string; namespaceURI?: string; value?: string; attrs?: { name: string; prefix?: string; value: string }[]; childNodes?: HtmlNode[]; content?: HtmlNode };
+const textOf = (node: HtmlNode): string => node.value ?? (node.childNodes ?? []).map(textOf).join('');
 /**
- * An HTML body as the screen reads it: the text a client lays out, every host it links or loads, anchors whose text
- * names another host than their href, and its links and images (for the support lint, src/deliverability.ts).
+ * Every place an HTML body links to or loads from, as one inventory, and the markup Hosted sending refuses because the
+ * screen couldn't read where it leads: <base> and xml:base, <link>, a refresh or Link <meta>, srcset and archive,
+ * plugin elements, SVG animation of a URL or CSS attribute, CSS resources in style sheets, style attributes and SVG
+ * presentation attributes (but the renderer's own font sheet and `background-image: url("https://…")` in a style
+ * attribute), and any URL attribute whose value is not an absolute http(s), mailto or tel URL (relative and
+ * network-path references included). A fragment-only reference (#top) or an empty one stays in its document and an
+ * attachment reference (cid:) is the message's own, so neither is a destination.
+ *
+ * The trees are read the way a validator reads them (bounded-html's `clients` trees, `content` included: comments,
+ * frame fallbacks and templates a lenient client may show), the body both as a fragment and as a document, whose
+ * <html> and <body> keep their attributes. With `placeholders`, a campaign's own copy may start a URL attribute with a
+ * placeholder; each recipient's copy is read without it.
  */
-export async function readHtml(html: string, visit?: (tag: string) => void) {
+function inventory(roots: HtmlNode[], placeholders = false) {
+  const destinations = new Set<string>(), unsupported: string[] = [];
+  const refuse = (what: string) => { if (!unsupported.includes(what) && unsupported.length < 20) unsupported.push(what); };
+  const url = (tag: string, name: string, value: string) => {
+    if (placeholders && /^[\x00-\x20]*\{\{/.test(value)) return;
+    if (/^[\x00-\x20]*(?:#|$)/.test(value) || /^[\x00-\x20]*cid:/i.test(value)) return;
+    const target = destination(value);
+    if (target) destinations.add(target);
+    else refuse(`<${tag} ${name}> that is not an absolute http(s), mailto or tel address`);
+  };
+  const walk = (node: HtmlNode) => {
+    const tag = node.tagName?.toLowerCase();
+    if (tag === 'base') refuse('<base>');
+    if (tag === 'link') refuse('<link>');
+    if (tag && PLUGINS.has(tag)) refuse(`<${tag}>`);
+    if (tag === 'meta' && node.attrs?.some(a => a.name === 'http-equiv' && /^\s*(?:refresh|link)\s*$/i.test(a.value))) refuse('<meta http-equiv="refresh"> or <meta http-equiv="link">');
+    if (tag && ANIMATIONS.has(tag) && node.namespaceURI === SVG) {
+      const target = node.attrs?.find(a => a.name === 'attributeName')?.value.trim().toLowerCase() ?? '';
+      if (isUrlAttribute(target) || isUrlAttribute(target.replace(/^[^:]*:/, '')) || CSS_ATTRIBUTES.has(target)) refuse(`<${node.tagName} attributeName="${target}">`);
+    }
+    if (tag === 'style') {
+      const css = textOf(node), fonts = fontSheet(css);
+      if (fonts) for (const font of fonts) destinations.add(new URL(font).href);
+      else if (cssResource(css)) refuse('a url(), image-set() or @import in a <style> sheet');
+    }
+    if (tag) for (const a of node.attrs ?? []) {
+      const name = a.prefix ? `${a.prefix}:${a.name}` : a.name;
+      if (name === 'style') {
+        const { urls, rest } = styleResources(a.value);
+        for (const target of urls) url(tag, 'style', target);
+        if (cssResource(rest)) refuse(`a url(), image-set() or @import in <${tag} style> other than background-image: url("https://…")`);
+      } else if (CSS_ATTRIBUTES.has(name) && cssResource(a.value)) refuse(`a url() in <${tag} ${name}>`);
+      if (!isUrlAttribute(name)) continue;
+      if (REFUSED.has(name)) refuse(`<${tag} ${name}>`);
+      else if (URL_LISTS.has(name)) for (const token of a.value.split(/[\t\n\f\r ]+/).filter(Boolean)) url(tag, name, token);
+      else url(tag, name, a.value);
+    }
+    for (const child of node.childNodes ?? []) walk(child);
+    if (node.content) walk(node.content);
+  };
+  for (const root of roots) walk(root);
+  return { destinations, unsupported };
+}
+export async function readHtml(html: string, visit?: (tag: string) => void, options: { placeholders?: boolean } = {}) {
   const { boundedHtmlFragment } = await import('./bounded-html.js');
   if (html.length>512*1024) throw unreadable();
   const fragment=boundedHtmlFragment(html,'fragment',{clients:true});
   if (!fragment) throw unreadable();
-  const hosts=new Set<string>(), mismatches=new Set<string>(), destinations=new Set<string>(), links:string[]=[], images:{ alt: boolean }[]=[];
+  // A client given the whole message keeps the attributes of its <html> and <body>, which a fragment drops.
+  const whole=boundedHtmlFragment(html,'document',{clients:true});
+  if (!whole) throw unreadable();
+  const { destinations, unsupported }=inventory([fragment, whole] as unknown as HtmlNode[], options.placeholders);
+  const hosts=new Set([...destinations].map(destinationHost).filter(Boolean)), mismatches=new Set<string>(), links:string[]=[], images:{ alt: boolean }[]=[];
   // Text as a client lays it out: inline runs stay one word, block elements end the line, and text a client shows
   // beside the flow (alt, title) follows on its own lines, as does a table row whose cells hold short pieces read
   // glued, the way a recipient reads a word laid out across adjacent cells.
@@ -128,14 +230,8 @@ export async function readHtml(html: string, visit?: (tag: string) => void) {
     if (['style','script','template','head','title','xml'].includes(tag)) return;
     let display='';
     for (const a of node.attrs) {
-      // URLs are read from the decoded attribute as they are, never as prose.
-      for (const target of attributeTargets(a.name, a.value)) {
-        const canonical=destination(target);
-        if (!canonical) continue;
-        destinations.add(canonical);
-        const h=destinationHost(canonical); if(h) hosts.add(h);
-        if(tag==='a' && a.name==='href') { anchor=h; links.push(canonical); }
-      }
+      // URLs are read from the decoded attribute as they are, never as prose (the inventory above has them all).
+      if (tag==='a' && a.name==='href') { const target=destination(a.value); anchor=target ? destinationHost(target) : ''; if (target) links.push(target); }
       if (a.name==='style') display=/(?:^|;)\s*display\s*:\s*([a-z-]+)/i.exec(a.value)?.[1]?.toLowerCase() ?? '';
       if (['alt','title'].includes(a.name) && a.value.trim()) aside.push(a.value);
     }
@@ -151,7 +247,7 @@ export async function readHtml(html: string, visit?: (tag: string) => void) {
   };
   for (const child of fragment.childNodes) walk(child,'');
   flush();
-  return { text: [...lines,...aside].join('\n'), hosts, mismatches, destinations, links, images };
+  return { text: [...lines,...aside].join('\n'), hosts, mismatches, destinations, unsupported, links, images };
 }
 /**
  * The text the screen reads: the HTML's visible text, then the text part, then raw MIME, each in full. A recipient reads
@@ -170,22 +266,23 @@ export function screenTextSignals(visible: string, text?: string, rawPart?: stri
   const parts=[rendered,plain,raw].filter((part,i,all)=>part && all.indexOf(part)===i);
   return { content:parts.join('\n'), textHtmlOverlap:overlap(plain,rendered) };
 }
-export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; destinations: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
+export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; destinations: string[]; unsupported: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
 /**
  * What the screen would read of a message, measured without asking the classifier: its text, then every distinct
  * place it links to or loads from, canonical and in full (links, images and other resources, and addresses in its
  * text), one per line. Destinations count toward the screened-text limit like the text: none is dropped to fit.
  */
-export async function measureScreen(snapshot: Pick<EmailSnapshot, 'html' | 'text' | 'raw'>): Promise<ScreenMeasure> {
-  const read=snapshot.html ? await readHtml(snapshot.html) : undefined;
+export async function measureScreen(snapshot: Pick<EmailSnapshot, 'html' | 'text' | 'raw'>, options: { placeholders?: boolean } = {}): Promise<ScreenMeasure> {
+  const read=snapshot.html ? await readHtml(snapshot.html, undefined, options) : undefined;
   const destinations=[...new Set([...read?.destinations ?? [], ...[read?.text, snapshot.text, snapshot.raw].flatMap(part => textTargets(part)).flatMap(target => destination(target) ?? [])])];
   const hosts=new Set([...read?.hosts ?? [], ...destinations.map(destinationHost).filter(Boolean)]);
   const signals=[...read?.mismatches ?? [], ...hosts];
   const text=screenTextSignals(read?.text ?? '',snapshot.text,snapshot.raw), content=[text.content, destinations.join('\n')].filter(Boolean).join('\n');
-  return { read, signals, destinations, content, textHtmlOverlap: text.textHtmlOverlap, screenedBytes: Buffer.byteLength(content) };
+  return { read, signals, destinations, unsupported: read?.unsupported ?? [], content, textHtmlOverlap: text.textHtmlOverlap, screenedBytes: Buffer.byteLength(content) };
 }
 /** Refuses a message the screen cannot read within a limit, with the measured size; `index` names a batch item. */
 export function assertScreenable(measure: ScreenMeasure, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) {
+  if (measure.unsupported.length) throw unsupportedUrls(measure.unsupported, index);
   if (measure.signals.length>MAX_SIGNALS || Buffer.byteLength(measure.signals.join('\n'))>MAX_SIGNAL_BYTES) throw tooManyHosts(measure.signals.length,index);
   if (measure.screenedBytes>limitBytes) throw tooLarge(measure.screenedBytes,limitBytes,scope,index);
 }
@@ -271,10 +368,10 @@ export type CampaignScreen = {
 /** What the classifier is sent for one copy: its requests, and their key, which is the same for the same input. */
 export type ScreenInput = { key: string; bodies: string[]; textHtmlOverlap?: number; from: string; subject: string };
 /** A campaign copy's screen input, refused past the limit. */
-export async function screenInput(runtime: Runtime, snapshot: EmailSnapshot, limitBytes: number): Promise<ScreenInput> {
+export async function screenInput(runtime: Runtime, snapshot: EmailSnapshot, limitBytes: number, options: { placeholders?: boolean } = {}): Promise<ScreenInput> {
   const settings = runtime.config.screen;
   if (!settings) throw new ApiError(503, 'CONTENT_SCREEN_UNAVAILABLE', 'Hosted content screening is unavailable.', undefined, true);
-  const measure = await measureScreen(snapshot);
+  const measure = await measureScreen(snapshot, options);
   assertScreenable(measure, limitBytes, 'campaign');
   const bodies = completeBodies(measure.content, measure.signals.join('\n'), limitBytes, 'campaign');
   const from = copy(formattedSender(snapshot.from, snapshot.fromName)), subject = copy(snapshot.subject);

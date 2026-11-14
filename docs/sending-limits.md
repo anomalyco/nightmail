@@ -93,6 +93,31 @@ Every recipient's copy of a campaign is screened before it is released, but each
 
 Over a limit, the request is refused at once with 422 `CONTENT_TOO_LARGE_TO_SCREEN` and `error.details[0]` set to `{ screenedBytes, limitBytes }` (or `{ linkHosts, linkHostLimit }`); in a batch, `index` names the message and nothing in the batch is queued. `POST /v1/emails/check` reports the measured size as the `screen-bytes` finding. Self-hosted installations set the limits with `JEV_MESSAGE_LIMIT_BYTES` and `JEV_CAMPAIGN_LIMIT_BYTES`.
 
+## Content screen: which addresses
+
+The screen reads every address a message links to or loads from, so Hosted mail uses only addresses whose destination it can read exactly: ones that lead to the same place wherever the message is opened. This applies to all Hosted mail, probation and trusted, transactional and marketing, and to campaigns.
+
+- **Allowed:** absolute `https://` and `http://` addresses (with both slashes), `mailto:` and `tel:`. A `#fragment` or empty link stays in the message, and `cid:` names one of its attachments. Inline `data:` is refused earlier, as `UNSAFE_HTML_URL`.
+- **No base:** no `<base>` or SVG `xml:base`, and no relative (`/offer`, `../offer`, `https:offer`) or network-path (`//host/offer`, `\\host/offer`) addresses.
+- **No `srcset`:** give each image one absolute `src`.
+- **No CSS resources:** no `url()`, `image()`, `image-set()`, `src()` or `@import` in `<style>` sheets, `style` attributes or SVG presentation attributes. Two exceptions: `background-image: url("https://…")` in a `style` attribute (double quotes, and no backslash anywhere in the attribute), and `url(#id)` references within the message. Most mail clients ignore or block CSS resources anyway; use the `background` attribute or an `<img>`.
+- **Nothing else that loads:** no `<link>`, no `<meta http-equiv="refresh">` or `"link"`, no plugin elements (`<object>`, `<embed>`, `<applet>`), and no SVG `<set>` or `<animate>` of an address or style.
+
+Every URL-bearing attribute is either read as a destination or refused:
+
+| Attribute | Treatment |
+| --- | --- |
+| `href`, `src`, `background`, `poster`, `action`, `formaction`, `cite`, `longdesc`, `usemap`, `data`, `codebase`, `classid`, `code`, `profile`, `manifest`, `icon`, `lowsrc`, `dynsrc`, SVG `xlink:href`, and any prefixed `…:href` or `…:src` (Office `o:href`, `v:src`) | Read as a destination; must be an allowed address |
+| `ping`, `attributionsrc` | Each space-separated address is read as a destination |
+| `srcset`, `imagesrcset`, `archive`, `xml:base` | Refused |
+| `style` | `background-image: url("https://…")` is read as a destination; any other CSS resource is refused |
+| `fill`, `stroke`, `filter`, `mask`, `clip-path`, `marker`, `marker-start`, `marker-mid`, `marker-end`, `cursor`, `color-profile` | A CSS resource other than `url(#id)` is refused |
+| `<style>` contents | A CSS resource is refused. The one exception is the web-font sheet the campaign editor adds, whose two font files are read as destinations |
+
+Markup is read the way a validator reads it: as a fragment and as a whole document (so `<html>` and `<body>` keep their attributes), including Outlook conditional comments, other comments, `<template>` contents and frame fallback content. Destinations count toward the screened-text limit and the 60-host limit above.
+
+Anything else is refused at once with 422 `UNSUPPORTED_URL_IN_HOSTED_MAIL`. The message names each element and attribute, and `error.details[0].unsupported` lists them (with `index` in a batch). `POST /v1/emails/check` reports the same as the `unsupported-url` warning. A campaign's own copy may start an address with a placeholder (`href="{{link}}"`): each recipient's copy must then hold an allowed address, or that copy alone is refused with the same code.
+
 ## The `account.standing.changed` event
 
 Subscribe a webhook to `account.standing.changed` to hear about every change of step, a campaign quarantine, and an owner's or Nightmail's release. `data` has `step`, `previousStep`, `reasons` (code, metric, value, count, threshold, minimum, window, message), `since`, `version`, `sequence` (per workspace, always increasing: ignore a sequence you have already seen), `marketingHeld`, `change` and `actor.kind` (`system`, `owner` or `operator`).

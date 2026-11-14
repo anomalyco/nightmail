@@ -140,8 +140,8 @@ const SendInput = z.object({
   if (v.template && (v.attachments.length || v.kind === 'marketing')) ctx.addIssue({ code: 'custom', message: 'Stored templates currently support transactional messages without attachments only.' });
 }).openapi('BatchSendEmailItem');
 // The screen's limits (src/screen.ts), as the API reference states them; the defaults of JEV_MESSAGE_LIMIT_BYTES and JEV_CAMPAIGN_LIMIT_BYTES.
-const SCREEN_LIMIT_NOTE = 'Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML\u2019s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once), and every distinct address it links to or loads from (links, images and other resources, and addresses in its text), each read as a client resolves it (WHATWG URL with IDNA) and in full. It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item\u2019s index, and no message of the batch is queued.';
-const CAMPAIGN_SCREEN_NOTE = 'Hosted campaigns are screened copy by copy before they are released, as single messages are, but each distinct copy only once: recipients whose personalized copies read the same share one verdict, so a campaign personalized only with first names costs one screen per distinct first name, and one with a unique value per recipient costs one per recipient. The campaign\u2019s own copy, placeholders unresolved, is screened first and may hold 49,152 bytes of screened text (installation default; 422 CONTENT_TOO_LARGE_TO_SCREEN with error.details[0] { screenedBytes, limitBytes } otherwise); so may each copy, and a copy over it is refused alone. A copy the screen refuses is never sent (CONTENT_REJECTED_SPAM); when refused copies pass 5% and 10 recipients the campaign pauses once for review, and a positive verdict on the campaign\u2019s own copy fails it before anyone is sent to.';
+const SCREEN_LIMIT_NOTE = 'Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML\u2019s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once), and every distinct address it links to or loads from (links, images and other resources, and addresses in its text), each read as a client resolves it (WHATWG URL with IDNA) and in full. It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item\u2019s index, and no message of the batch is queued. Addresses must be readable exactly: absolute http(s) (with both slashes), mailto, tel, cid or #fragment, with no <base>, <link>, srcset, plugin elements or CSS resources (url(), image-set(), @import) but background-image: url("https://\u2026") in a style attribute; otherwise the request is refused at once with 422 UNSUPPORTED_URL_IN_HOSTED_MAIL, the message naming each element and attribute and error.details[0].unsupported listing them.';
+const CAMPAIGN_SCREEN_NOTE = 'Hosted campaigns are screened copy by copy before they are released, as single messages are, but each distinct copy only once: recipients whose personalized copies read the same share one verdict, so a campaign personalized only with first names costs one screen per distinct first name, and one with a unique value per recipient costs one per recipient. The campaign\u2019s own copy, placeholders unresolved, is screened first and may hold 49,152 bytes of screened text (installation default; 422 CONTENT_TOO_LARGE_TO_SCREEN with error.details[0] { screenedBytes, limitBytes } otherwise); so may each copy, and a copy over it is refused alone. A copy the screen refuses is never sent (CONTENT_REJECTED_SPAM); when refused copies pass 5% and 10 recipients the campaign pauses once for review, and a positive verdict on the campaign\u2019s own copy fails it before anyone is sent to. Addresses follow the single-message rules (422 UNSUPPORTED_URL_IN_HOSTED_MAIL), except that the campaign\u2019s own copy may start an address with a placeholder; a recipient\u2019s copy whose address is then not allowed is refused alone with that code.';
 // SMTP already limits the entire MIME message to the advertised wire SIZE. Keep all
 // address, HTML and encoded-size checks, without imposing the public JSON body-part cap.
 const ProtocolBody = z.string().min(1).optional();
@@ -789,13 +789,15 @@ function structuredSnapshot(input:SendRequest & {region:string}):EmailSnapshot {
 function screenedAtDispatch(runtime: Runtime, snapshot: Pick<EmailSnapshot, 'kind' | 'screen'>, shared: boolean) {
   return !!runtime.config.screen && !isSimulatedSes(runtime) && ((shared && runtime.config.hostedScreen) || (!!snapshot.screen && snapshot.kind === 'transactional'));
 }
+// What the screen refuses to read, whoever sends it: these depend on whether the message is screened at all.
+const SCREEN_REFUSALS = new Set(['CONTENT_TOO_LARGE_TO_SCREEN', 'UNSUPPORTED_URL_IN_HOSTED_MAIL']);
 /** The screen's refusal of one message, or undefined when it fits the per-message limit. */
 async function screenRefusal(runtime: Runtime, snapshot: EmailSnapshot, index?: number) {
   const screen = await loadScreen();
   // A campaign test is a campaign's copy: it has the campaign limit.
   const limits = runtime.config.screenLimits, test = !!snapshot.testCampaignId;
   try { screen.assertScreenable(await screen.measureScreen(snapshot), test ? limits.campaignBytes : limits.messageBytes, test ? 'campaign' : 'message', index); }
-  catch (error) { if (error instanceof ApiError && error.code === 'CONTENT_TOO_LARGE_TO_SCREEN') return error; throw error; }
+  catch (error) { if (error instanceof ApiError && SCREEN_REFUSALS.has(error.code)) return error; throw error; }
 }
 async function assertScreenable(runtime: Runtime, snapshot: EmailSnapshot, shared: boolean, index?: number) {
   if (!screenedAtDispatch(runtime, snapshot, shared)) return;
@@ -1235,7 +1237,7 @@ export function registerSending(app: App) {
     const [{checkMail},{checkContext}]=await Promise.all([wrapModuleLoad(()=>import('./sendability.js')),wrapModuleLoad(()=>import('./sendability-context.js'))]);
     const context=await checkContext(c.env,a,domain);
     // A campaign is screened once for all its recipients, up to its own limit.
-    return c.json(await checkMail(mail,'campaignId' in input ? {...context,screenLimitBytes:c.env.config.screenLimits.campaignBytes} : context),200);
+    return c.json(await checkMail(mail,'campaignId' in input ? {...context,screenLimitBytes:c.env.config.screenLimits.campaignBytes,placeholders:true} : context),200);
   });
   app.openapi(createRoute({ method: 'post', path: '/v1/emails/send', operationId: 'sendEmail', description: SCREEN_LIMIT_NOTE, tags: ['Emails'], security, request: { headers: IdempotencyHeaders, body: json(SingleSendInput) }, responses: { 202: response(SingleReceipt), ...errors } }), async c => {
     const a = actor(c, 'send'); const input = c.req.valid('json');
@@ -1639,7 +1641,7 @@ function backgroundFailure(error: unknown) {
   const placeholder = error instanceof ApiError && code === 'MISSING_TEMPLATE_VARIABLE' ? /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/.exec(error.message)?.[1] : undefined;
   if (placeholder) return { code, message: `A recipient has no value for {{${placeholder}}} (${code}). Add a fallback value for ${placeholder} and send again.` };
   // The screen's refusals name only sizes and limits, never a contact or its values.
-  if (error instanceof ApiError && ['CONTENT_REJECTED_SPAM', 'CONTENT_TOO_LARGE_TO_SCREEN', 'CONTENT_SCREEN_BUDGET_EXCEEDED'].includes(code)) return { code, message: error.message };
+  if (error instanceof ApiError && ['CONTENT_REJECTED_SPAM', 'CONTENT_TOO_LARGE_TO_SCREEN', 'UNSUPPORTED_URL_IN_HOSTED_MAIL', 'CONTENT_SCREEN_BUDGET_EXCEEDED'].includes(code)) return { code, message: error.message };
   return { code, message: `Campaign work could not finish (${code}). Correct the cause and send again, or cancel the campaign.` };
 }
 // Send and schedule: freeze the audience and content now, reserve the recipients, and hand the one run job the rest.
@@ -1667,7 +1669,7 @@ async function launch(runtime: Runtime, db: DbExecutor, a: Actor, campaignId: st
   if (campaignScreened(runtime, a.dispatchAccount?.kind === 'shared')) {
     // Refuse now, with the numbers, what the campaign's screen would refuse in the background.
     const screen = await loadScreen();
-    screen.assertScreenable(await screen.measureScreen(await campaignCopy(runtime, draft, rendered)), runtime.config.screenLimits.campaignBytes, 'campaign');
+    screen.assertScreenable(await screen.measureScreen(await campaignCopy(runtime, draft, rendered), { placeholders: true }), runtime.config.screenLimits.campaignBytes, 'campaign');
   }
   const reviewId = id('review');
   const reviewed=route.binding ? {...row.draft,region:route.region,binding:route.binding} : row.draft;
@@ -2101,12 +2103,12 @@ export type CopyVerdict = { key: string; spam: number; model: string } | { refus
  * its next window. Every request is charged to the review's budget before it is made, whether or not it succeeds.
  * Returns, per copy, its verdict, the refusal of a copy the screen cannot read, or null when the deadline came first.
  */
-export async function campaignVerdicts(runtime: Runtime, ref: CampaignScreenRef, copies: EmailSnapshot[], deadline: number): Promise<CopyVerdict[]> {
+export async function campaignVerdicts(runtime: Runtime, ref: CampaignScreenRef, copies: EmailSnapshot[], deadline: number, options: { placeholders?: boolean } = {}): Promise<CopyVerdict[]> {
   const screen = await loadScreen(), inputs = new Map<string, import('./screen.js').ScreenInput>();
   const keys: (string | ApiError)[] = [];
   for (const copy of copies) {
-    try { const input = await screen.screenInput(runtime, copy, runtime.config.screenLimits.campaignBytes); inputs.set(input.key, input); keys.push(input.key); }
-    catch (error) { if (error instanceof ApiError && error.code === 'CONTENT_TOO_LARGE_TO_SCREEN') keys.push(error); else throw error; }
+    try { const input = await screen.screenInput(runtime, copy, runtime.config.screenLimits.campaignBytes, options); inputs.set(input.key, input); keys.push(input.key); }
+    catch (error) { if (error instanceof ApiError && SCREEN_REFUSALS.has(error.code)) keys.push(error); else throw error; }
   }
   type Row = { input_hash: string; windows: number; spam: number; model: string | null; judged: boolean };
   const pending = [...inputs.values()];
@@ -2170,7 +2172,7 @@ async function screenCampaignStep(runtime: Runtime, a: Actor, row: RunRow) {
   await runtime.db.execute(sql`UPDATE sending_campaign_reviews SET screen_budget=${(row.total + 10) * screen.chunksFor(limits.campaignBytes)} WHERE workspace_id=${a.workspaceId} AND id=${row.reviewId} AND screen_budget IS NULL`);
   const own = await campaignCopy(runtime, row.reviewDraft!, row.reviewRendered!, row.reviewVersion!);
   let verdict: CopyVerdict;
-  try { [verdict] = await campaignVerdicts(runtime, screenRef(a, row), [state.probation ? (await import('./screened-html.js')).probationCopy(own) : own], Date.now() + SCREEN_BUDGET_MS); }
+  try { [verdict] = await campaignVerdicts(runtime, screenRef(a, row), [state.probation ? (await import('./screened-html.js')).probationCopy(own) : own], Date.now() + SCREEN_BUDGET_MS, { placeholders: true }); }
   catch (error) { return screenOutage(runtime, a, row, state, error); }
   if (!verdict) return;
   if ('refused' in verdict) throw verdict.refused;
