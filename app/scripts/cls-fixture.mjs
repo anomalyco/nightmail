@@ -10,6 +10,7 @@ import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const freePort = () => new Promise((resolve, reject) => { const s = createServer(); s.on('error', reject); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 
@@ -155,15 +156,27 @@ export async function start(repo, { log = () => {}, servers = 1, delay = null, f
           if (cached) { res.writeHead(cached.status, cached.headers); res.end(req.method === 'HEAD' ? undefined : cached.body); return; }
         }
         if (pathname.startsWith('/v1/') && delay) { await sleep(delay(rawUrl)); if (res.destroyed || res.writableEnded) return; }
-        const up = httpRequest({ hostname: '127.0.0.1', port: apiPort, method: req.method, path: rawUrl, headers: req.headers, agent }, upRes => {
-          res.writeHead(upRes.statusCode ?? 502, upRes.headers);
-          if (req.method === 'HEAD') { upRes.resume(); res.end(); return; }
-          upRes.pipe(res);
-        });
-        up.on('error', () => { if (!res.headersSent) res.writeHead(502); res.destroy(); });
-        res.on('close', () => { if (!res.writableEnded) up.destroy(); });
+        // A kept-alive socket the API closed for idling (Node's 5 s keepAliveTimeout) just as it was reused resets
+        // before any response: a GET or HEAD has no body to lose, so it goes again once on a fresh socket. Without this
+        // the page saw an empty response (ERR_EMPTY_RESPONSE), now and then, on whichever load drew that socket.
+        const forward = (retry) => {
+          const up = httpRequest({ hostname: '127.0.0.1', port: apiPort, method: req.method, path: rawUrl, headers: req.headers, agent }, upRes => {
+            res.writeHead(upRes.statusCode ?? 502, upRes.headers);
+            if (req.method === 'HEAD') { upRes.resume(); res.end(); return; }
+            upRes.pipe(res);
+          });
+          up.on('error', error => {
+            if (retry && up.reusedSocket && error.code === 'ECONNRESET' && !res.headersSent && !res.destroyed) { forward(false); return; }
+            if (!res.headersSent) res.writeHead(502); res.destroy();
+          });
+          res.on('close', () => { if (!res.writableEnded) up.destroy(); });
+          if (bodyless) up.end();
+          return up;
+        };
+        const bodyless = req.method === 'GET' || req.method === 'HEAD';
+        const up = forward(bodyless);
         req.on('error', () => up.destroy());
-        req.pipe(up);
+        if (!bodyless) req.pipe(up);
       });
       await new Promise((resolve, reject) => { proxy.once('error', reject); proxy.listen(proxyPort, '127.0.0.1', resolve); });
       cleanups.push(async () => { proxy.closeAllConnections(); await new Promise(r => proxy.close(r)); });
@@ -378,6 +391,9 @@ export async function seed(fx) {
   // The newest receipt as a well-made transactional email, and a junk-like one sent a minute ago (EmailInsight's two cases).
   // Neither links a remote image: the sent-mail preview loads those, and the gate allows no external request.
   await db.query('UPDATE sending_emails SET snapshot = snapshot || $2::jsonb WHERE id = $1', [email, JSON.stringify({ kind: 'transactional', fromName: 'Northwind', html: RECEIPT_HTML, text: RECEIPT_TEXT })]);
+  // Its delivery line: handed to SES, accepted and delivered, as the dispatcher and SES feedback record them.
+  for (const [type, ms] of [['dispatch_attempt', 0], ['accepted', 400], ['delivery', 2100]]) await db.query(`INSERT INTO sending_email_events(id,workspace_id,email_id,type,provider_id,external_id,data,simulated,created_at)
+    SELECT $1,workspace_id,id,$2,provider_id,$1,jsonb_build_object('emailId',id,'providerId',provider_id),false,created_at + $3 * interval '1 millisecond' FROM sending_emails WHERE id=$4`, [rid('event'), type, ms, email]);
   const junkEmail = rid('email');
   await db.query(`INSERT INTO sending_emails (id, workspace_id, region, actor_key_id, from_address, to_addresses, cc_addresses, bcc_addresses, subject, snapshot, simulated, status, provider_id, event_outcomes, created_at)
     VALUES ($1,'ws_northwind','${REGION}','fixture','deals@mail.northwind.example','["customer@example.net"]','[]','[]',$2,$3::jsonb,false,'delivered','provider-'||$1,3,now()-interval '1 minute')`,
@@ -407,18 +423,45 @@ export async function seed(fx) {
   await dana.api('POST', '/v1/endpoints', { type: 'slack', name: 'support', url: 'https://hooks.slack.com/services/T0SYNTH/B0SYNTH/northwindfixture0a1' }, 201);
   await dana.api('POST', '/v1/endpoints', { type: 'webhook', name: 'crm', url: 'https://hooks.northwind.example/crm-ritual' }, 201);
   await dana.api('POST', '/v1/endpoints', { type: 'forward', name: 'founders', address: 'founders@mail.northwind.example', preverify: true }, 201);
+  // Ready-made rituals (recipes) beside the two scripts, written by the API's own buildRecipe and saved in this one
+  // config write (one audit row, so Settings → Activity measures what it did before): the Rituals tab shows them as
+  // sentences, one turned off, and an edit opens the recipe's form (cls.mjs `Receiving · recipe ritual`).
+  const apiDir = fileURLToPath(new URL('../../api/', import.meta.url));
+  const { tsImport } = await import(pathToFileURL(createRequire(join(apiDir, 'package.json')).resolve('tsx/esm/api')).href);
+  const { buildRecipe } = await tsImport(join(apiDir, 'src/ritual-schema.ts'), import.meta.url);
+  const endpointTypes = { support: 'slack', crm: 'webhook', founders: 'forward' };
+  const recipe = (key, id, params, extra = {}) => {
+    const built = buildRecipe(id, params, name => endpointTypes[name]);
+    if (!built.ok) throw new Error(`fixture recipe ${id}: ${built.message}`);
+    return { key, source: built.source, recipe: { id, params: built.params }, ...extra };
+  };
   await dana.api('PUT', '/v1/rituals', {
     rituals: [
       { key: 'triage', source: 'export default function route(email, ctx) {\n  if (email.headers.has("list-unsubscribe")) return junk("newsletter")\n  label("support")\n  endpoints.support({ text: `${email.from.address}: ${email.subject}` })\n}\n' },
       { key: 'invoices', source: 'export default function route(email, ctx) {\n  if (email.attachments.length > 0) {\n    label("invoice")\n    endpoints.crm({ subject: email.subject, from: email.from.address })\n  }\n}\n' },
+      recipe('allow-senders-support', 'allow-senders', { senders: ['ceo@example.net', '@partner.example'] }),
+      recipe('label-by-meaning-support', 'label-by-meaning', { meaning: 'a refund request', label: 'refund' }),
+      recipe('forward-sales', 'forward', { to: 'founders' }),
+      recipe('junk-newsletters-sales', 'junk-newsletters', {}, { enabled: false }),
     ],
-    attachments: [{ ritual: 'triage', target: A.support.id, continue: false }, { ritual: 'invoices', target: A.billing.id, continue: false }],
+    // Recipes run with "Run the next one too" on, before the address's own script (createRitualFromRecipe's order).
+    attachments: [
+      { ritual: 'allow-senders-support', target: A.support.id, continue: true }, { ritual: 'label-by-meaning-support', target: A.support.id, continue: true }, { ritual: 'triage', target: A.support.id, continue: false },
+      { ritual: 'label-by-meaning-support', target: A.billing.id, continue: true }, { ritual: 'invoices', target: A.billing.id, continue: false },
+      { ritual: 'junk-newsletters-sales', target: A.sales.id, continue: true }, { ritual: 'forward-sales', target: A.sales.id, continue: true },
+    ],
     senderLists: { vip: ['ceo@example.net'] }, evaluateDomains: ['northwind.example'], evaluateRoutes: [],
   }, 200);
   await threads(db, 'ws_northwind', A.support, [{ id: 'msg_northwind_invoice', subject: 'Invoice for October', snippet: 'Please find the October invoice attached.', unread: true, minutes: 9, from: ['Margaret Ode', 'margaret@example.com'], files: 1 }, ...mix(6, 0)]);
   await threads(db, 'ws_northwind', A.billing, mix(4, 2));
   await threads(db, 'ws_northwind', A.sales, mix(3, 3));
   await threads(db, 'ws_northwind', A.dana, mix(2, 4));
+  // Ingest records which rituals acted on each email (verdicts.ritualsActed); these threads are inserted directly, so
+  // say it here: the Rituals tab's Last matched.
+  const acted = async (box, keys) => db.query(`UPDATE mail_messages SET verdicts=verdicts||jsonb_build_object('ritualsActed',$3::jsonb) WHERE workspace_id=$1 AND id IN (SELECT message_id FROM mailbox_messages WHERE mailbox_id=$2)`, ['ws_northwind', box.id, JSON.stringify(keys)]);
+  await acted(A.support, ['triage', 'label-by-meaning-support']);
+  await acted(A.billing, ['invoices']);
+  await acted(A.sales, ['forward-sales']);
   const inbox = await agentInbox(db, 'ws_northwind', nw, 'Sign-up e2e', 20, mix(3, 1));
   await agentInbox(db, 'ws_northwind', nw, 'Password reset e2e', 3, []);
 

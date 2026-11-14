@@ -10,8 +10,9 @@ export const concepts = {
   },
   rituals: {
     title: 'Rituals',
-    line: 'Short scripts that run on a route’s mail: label it, filter it, or send it on.',
-    example: 'If the subject mentions a refund, label it and post it to Slack.',
+    line: 'What happens to an address’s mail: post it, forward it, junk it or label it.',
+    example: 'Post new mail to support in Slack',
+    adminOnly: 'Owners and admins manage rituals',
   },
   endpoints: {
     title: 'Endpoints',

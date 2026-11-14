@@ -19,6 +19,7 @@ import './inbound.css'
 import './receiving.css'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { useSingleFlight } from '../../lib/single-flight'
+import { RITUALS_PER_ADDRESS } from '../../../../api/src/ritual-schema'
 
 const EMAIL = /^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/
 const lifetimes = [{ value: '', label: 'Permanent' }, { value: '3600', label: '1 hour' }, { value: '86400', label: '1 day' }, { value: '604800', label: '7 days' }, { value: '2592000', label: '30 days' }]
@@ -112,15 +113,15 @@ function AddressPath({ address, overview, onAddAlias, onAddPattern }: { address:
     <span className="addr-arrow" aria-hidden="true">→</span>
     <section className="addr-step" id="rituals">
       <h2>{steps.rituals.title}</h2><p>{steps.rituals.line}</p>
-      {!entry ? <SkeletonText width="50%" /> : attached.length ? <ul>{attached.map((k, i) => <li key={k}><RitualIcon /><Link to={`/receiving/rituals?key=${encodeURIComponent(k)}`}><code>{k}</code></Link>{i < attached.length - 1 && <span className="addr-then">then</span>}<span className="addr-grow" />
+      {!entry ? <SkeletonText width="50%" /> : attached.length ? <ul>{attached.map((k, i) => <li key={k}><RitualIcon /><Link to={`/receiving/rituals/${encodeURIComponent(k)}`}><code>{k}</code></Link>{i < attached.length - 1 && <span className="addr-then">then</span>}<span className="addr-grow" />
         <IconButton size="sm" label={`Detach ${k}`} disabled={busy} onClick={() => void attach(list => list.filter(b => !(b.ritual === k && b.target === address.id)), `${k} detached.`)}><X size={14} aria-hidden="true" /></IconButton></li>)}</ul>
         : <p className="addr-step__empty">{steps.rituals.empty}. A ritual can label, filter or send this address’s mail on.</p>}
       <div className="addr-step__foot">
         {available.length > 0 && <div className="addr-step__actions">
           <Select aria-label="Ritual to attach" value={ritual} onValueChange={setRitual} options={[{ value: '', label: 'Attach a ritual…' }, ...available.map(r => ({ value: r.key, label: r.key }))]} />
-          <Button size="sm" disabled={!ritual || busy || attached.length >= 3} onClick={() => void attach(list => [...list, { ritual, target: address.id, continue: false }], `${ritual} attached.`)}>Attach</Button>
+          <Button size="sm" disabled={!ritual || busy || attached.length >= RITUALS_PER_ADDRESS} onClick={() => void attach(list => [...list, { ritual, target: address.id, continue: !!available.find(r => r.key === ritual)?.recipe }], `${ritual} attached.`)}>Attach</Button>
         </div>}
-        <div className="addr-step__actions"><Link className="ui-button ui-button--ghost ui-button--sm" to="/receiving/rituals?new=1">Write a ritual</Link></div>
+        <div className="addr-step__actions"><Link className="ui-button ui-button--ghost ui-button--sm" to={`/receiving/rituals/new?address=${encodeURIComponent(address.id)}`}>New ritual</Link></div>
       </div>
     </section>
     <span className="addr-arrow" aria-hidden="true">→</span>
@@ -130,7 +131,7 @@ function AddressPath({ address, overview, onAddAlias, onAddPattern }: { address:
       {entry && !elsewhere.length && <p className="addr-step__empty">{steps.goesTo.empty}. Add a route to also send it to a webhook.</p>}
       {entry?.toTruncated && <p className="addr-step__empty">{number(entry.toTotal - entry.to.length)} more {entry.toTotal - entry.to.length === 1 ? 'webhook gets' : 'webhooks get'} this address’s mail. <Link to={`/receiving/webhooks?address=${encodeURIComponent(address.id)}`}>See every webhook</Link></p>}
       {entry?.route && <p className="addr-step__empty">A route sends this address’s mail{entry.route.to === 'drop' ? ' nowhere: it’s dropped' : entry.route.to.includes(address.id) ? '' : ' elsewhere instead of its inbox'}.</p>}
-      <div className="addr-step__actions"><Button size="sm" onClick={() => setRouting(true)}>{entry?.route ? 'Edit route' : 'Add a route'}</Button><span className="muted">A route sends its mail to more inboxes or webhooks too. Slack, Discord and forwards need a <Link to="/receiving/rituals?new=1">ritual</Link>.</span></div>
+      <div className="addr-step__actions"><Button size="sm" onClick={() => setRouting(true)}>{entry?.route ? 'Edit route' : 'Add a route'}</Button><span className="muted">A route sends its mail to more inboxes or webhooks too. Slack, Discord and forwards need a <Link to={`/receiving/rituals/new?address=${encodeURIComponent(address.id)}`}>ritual</Link>.</span></div>
     </section>
     {routing && <RouteEditor match={address.address} route={entry?.route} to={[address.id]} onClose={() => { setRouting(false); void overview.refetch() }} />}
   </div>

@@ -26,17 +26,8 @@
    ]
   },
   "app/src/components/EmailInsight.tsx": {
-   "grade": [
-    "107: classic outlook for windows renders with word, so brand chec"
-   ],
-   "length/heading": [
-    "118: a low score: fix these before sending"
-   ],
-   "length/helper": [
-    "107: classic outlook for windows renders with word, so brand chec"
-   ],
    "length/label": [
-    "189: can i email (opens in a new tab)"
+    "170: can i email (opens in a new tab)"
    ]
   },
   "app/src/components/LegalLinks.tsx": {
@@ -49,7 +40,7 @@
     "161: couldn’t complete the action. try again. ⟨dup⟩"
    ],
    "filler": [
-    "335: something went wrong. please try again. ⟨please⟩"
+    "336: something went wrong. please try again. ⟨please⟩"
    ]
   },
   "app/src/data/billing.ts": {
@@ -69,7 +60,7 @@
   },
   "app/src/data/types.ts": {
    "numerals": [
-    "237: your workspace is still being set up for sending. try again  ⟨two⟩"
+    "239: your workspace is still being set up for sending. try again  ⟨two⟩"
    ]
   },
   "app/src/features/audience/bulk.tsx": {
@@ -240,30 +231,30 @@
   },
   "app/src/features/inbound/addresses.tsx": {
    "duplicate": [
-    "227: shown as the sender name on replies. ⟨dup⟩"
+    "228: shown as the sender name on replies. ⟨dup⟩"
    ],
    "grade": [
-    "63: permanent: receives until you delete it, including mail sent",
-    "217: this temporary address expired. it no longer receives or sen"
+    "64: permanent: receives until you delete it, including mail sent",
+    "218: this temporary address expired. it no longer receives or sen"
    ],
    "length/description": [
-    "52: mail to it lands in the inbox, where you, the api and agents",
-    "162: no mail yet. mail sent to shows up here and in the inbox wit"
+    "53: mail to it lands in the inbox, where you, the api and agents",
+    "163: no mail yet. mail sent to shows up here and in the inbox wit"
    ],
    "length/helper": [
-    "63: after it expires it stops receiving and sending. its mail st",
-    "66: replies come from the same name on a parent domain you send "
+    "64: after it expires it stops receiving and sending. its mail st",
+    "67: replies come from the same name on a parent domain you send "
    ],
    "length/label": [
-    "61: advanced · lifetime and reply-as address, optional"
+    "62: advanced · lifetime and reply-as address, optional"
    ]
   },
   "app/src/features/inbound/concepts.ts": {
    "length/description": [
-    "13: short scripts that run on a route’s mail: label it, filter i",
-    "23: run an email through your routes and rituals to see what wou",
-    "28: questions a ritual asks brand’s ai about an email. each answ",
-    "46: an address keeps its own threads in the inbox. a route can s"
+    "13: what happens to an address’s mail: post it, forward it, junk",
+    "24: run an email through your routes and rituals to see what wou",
+    "29: questions a ritual asks brand’s ai about an email. each answ",
+    "47: an address keeps its own threads in the inbox. a route can s"
    ]
   },
   "app/src/features/inbound/inboxes.tsx": {
@@ -292,10 +283,7 @@
   },
   "app/src/features/inbound/receiving.tsx": {
    "length/description": [
-    "169: showing the first 100 endpoints and 100 inbound webhooks. ev"
-   ],
-   "length/empty": [
-    "123: a short script that runs on a route’s mail. for example: if "
+    "154: showing the first 100 endpoints and 100 inbound webhooks. ev"
    ]
   },
   "app/src/features/inbound/ritual-agent.tsx": {
@@ -304,43 +292,29 @@
    ],
    "length/label": [
     "101: how agents connect over mcp"
-   ],
-   "numerals": [
-    "76: then run … , choose brand, sign in and approve full access.  ⟨two⟩"
-   ],
-   "sentence-length": [
-    "29: in …, read my ritual '…' on … and add a rule that labels ref",
-    "31: in …, try my ritual '…' on the last 5 emails to … and tell m"
-   ],
-   "typography": [
-    "30: in …, explain why my ritual '…' junked the last email to …,  ⟨'⟩"
    ]
   },
   "app/src/features/inbound/ritual-connections.tsx": {
    "length/helper": [
-    "113: its recipient confirmed this address, so it can’t change. cr"
-   ],
-   "length/label": [
-    "134: write a ritual that uses it"
+    "119: its recipient confirmed this address, so it can’t change. cr"
    ],
    "length/option": [
-    "122: skip the email: the address is on a domain this workspace ve"
+    "128: skip the email: the address is on a domain this workspace ve"
    ]
   },
   "app/src/features/inbound/rituals.tsx": {
    "duplicate": [
-    "371: version … was saved while you were editing: load theirs or k ⟨dup⟩",
-    "441: run the next one too ⟨dup⟩",
+    "372: version … was saved while you were editing: load theirs or k ⟨dup⟩",
+    "445: run the next one too ⟨dup⟩",
     "515: run the next one too ⟨dup⟩"
    ],
    "length/heading": [
-    "428: only owners and admins can manage rituals",
     "535: … saved version … while you were editing."
    ],
    "length/toast": [
-    "337: your edits are on top of version …. save to apply them.",
-    "353: version … was saved while you were editing: load theirs or k",
-    "371: version … was saved while you were editing: load theirs or k"
+    "338: your edits are on top of version …. save to apply them.",
+    "354: version … was saved while you were editing: load theirs or k",
+    "372: version … was saved while you were editing: load theirs or k"
    ]
   },
   "app/src/features/inbound/routing.tsx": {

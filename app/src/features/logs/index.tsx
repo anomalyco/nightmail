@@ -1,20 +1,18 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
-import { ArrowUpRight, Download, Paperclip, Search, X } from 'lucide-react'
-import { useApiDef, useApiQuery, useRegion, useApi, useWorkspaceAccess } from '../../data/context'
+import { Link, useParams, useSearchParams } from 'react-router'
+import { Download, Paperclip, Search, X } from 'lucide-react'
+import { useApiDef, useApiQuery, useRegion, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
-import type { Email, LogDirection, LogEntry, ReceivedEmailDetail } from '../../data/types'
+import type { LogDirection, LogEntry, ReceivedEmailDetail } from '../../data/types'
 import { Alert, Button, CopyButton, DataTable, EmptyState, ErrorState, Input, PaginationSkeleton, PageHeader, Pagination, SectionHeader, Select, StatusBadge, Tabs } from '../../components/ui'
-import { EmailPreview, ReceivedEmailPreview, htmlToText } from '../../components/EmailPreview'
-import { EmailInsight } from '../../components/EmailInsight'
+import { ReceivedEmailPreview } from '../../components/EmailPreview'
 import { date, label, time } from '../../lib/format'
 import { downloadCsv } from '../../lib/download'
-import { EmailDetailSkeleton } from './skeletons'
+import { ReceivedEmailSkeleton } from './skeletons'
 import { isReceivedId, logsPageColumns, logCsvRows, logHref, useLogRowIntent } from './rows'
 import { useAdaptivePageSize } from '../../lib/pagination'
-import { AddressList, NameText, PrivateAddress } from '../../components/PrivateAddress'
-import { nameParts } from '../../lib/private-address'
-import { productName } from '../../../../api/src/brand'
+import { AddressList, PrivateAddress } from '../../components/PrivateAddress'
+import { EmailDetailPage, Sender } from './email-detail'
 
 const directions = [{ value: 'all', label: 'All' }, { value: 'sent', label: 'Sent' }, { value: 'received', label: 'Received' }]
 // Sent statuses, most looked-for first; received and spam filter received mail (spam is visible to owners and admins).
@@ -107,11 +105,6 @@ export function LogDetailPage() {
   return isReceivedId(id) ? <ReceivedEmailDetailPage /> : <EmailDetailPage />
 }
 
-// "Name <address>": the name wraps as one piece and the address, with its brackets, stays together on the next line when it doesn't fit.
-function Sender({ name, address }: { name?: string | null; address: string }) {
-  const parts = nameParts(name, address)
-  return parts ? <span className="email-sender"><span><NameText parts={parts} /></span><span className="email-sender__address">&lt;<PrivateAddress value={address} />&gt;</span></span> : <PrivateAddress value={address} />
-}
 const checkTone = (value?: string) => value === 'PASS' ? 'success' as const : value === 'FAIL' ? 'danger' as const : value === 'GRAY' ? 'warning' as const : 'neutral' as const
 const fileSize = (bytes: number) => bytes < 1024 ? `${bytes} B` : bytes < 1_048_576 ? `${(bytes / 1024).toFixed(1)} KB` : `${(bytes / 1_048_576).toFixed(1)} MB`
 export function ReceivedEmailDetailPage() {
@@ -119,7 +112,7 @@ export function ReceivedEmailDetailPage() {
   // Delivery details (envelope, region, verdicts, headers, the raw .eml) are for owners and admins; members read the message.
   const { canAdminister } = useWorkspaceAccess()
   const query = useApiDef(queries.receivedEmail(id, canAdminister))
-  if (query.isPending) return <EmailDetailSkeleton />
+  if (query.isPending) return <ReceivedEmailSkeleton />
   if (query.isError) return <><PageHeader title="Received email" backTo="/logs" /><ErrorState error={query.error} onRetry={() => query.refetch()} /></>
   return <ReceivedEmailDetailView email={query.data} />
 }
@@ -162,75 +155,4 @@ function ReceivedEmailDetailView({ email }: { email: ReceivedEmailDetail }) {
     </section></div>
     <div className="message-identifiers"><span className="cluster">Message ID <span className="identifier">{email.id}</span><CopyButton value={email.id} label="Copy message ID" /></span>{email.messageId && <span className="cluster">Message-ID <span className="identifier" title={email.messageId}>{email.messageId}</span><CopyButton value={email.messageId} label="Copy Message-ID header" /></span>}{!multiTenant && <span>SES · {email.region ?? '—'}</span>}</div>
   </div>
-}
-
-// Statuses that can still change without user action; terminal emails are not polled.
-const pendingStatuses = ['queued', 'attempting', 'accepted', 'sent', 'deferred', 'delayed']
-export function EmailDetailPage() {
-  const { id = '' } = useParams()
-  const query = useApiDef(queries.email(id), { interval: email => email && pendingStatuses.includes(email.status) ? 30_000 : false })
-  if (query.isPending) return <EmailDetailSkeleton />
-  if (query.isError) return <><PageHeader title="Email detail" backTo="/logs" /><ErrorState error={query.error} onRetry={() => query.refetch()} /></>
-  return query.data ? <EmailDetail email={query.data} /> : null
-}
-function EmailDetail({ email }: { email: Email }) {
-  const navigate = useNavigate()
-  const { multiTenant } = useWorkspaceAccess()
-  const api = useApi()
-  const [events, setEvents] = useState(email.events)
-  const [cursor, setCursor] = useState(email.eventsNextCursor)
-  const [eventError, setEventError] = useState('')
-  const [eventBusy, setEventBusy] = useState(false)
-  const [view, setView] = useState('preview')
-  const hasHtml = email.html.trim().length > 0
-  const plainText = email.text ?? (api.mode === 'demo' && hasHtml ? htmlToText(email.html) : '')
-  const hasPlainText = plainText.trim().length > 0
-  const contact = email.contact
-  return <div className="email-detail-page"><PageHeader title={email.subject} backTo="/logs" actions={<><StatusBadge status={email.status} />{contact && <Button onClick={() => navigate(`/audience/contacts/${contact.id}`)}>View contact<ArrowUpRight size={16} /></Button>}</>} />
-    <dl className="email-metadata"><div><dt>To</dt><dd><AddressList values={email.to.split(', ').filter(Boolean)} /></dd></div><div><dt>From</dt><dd><Sender name={email.fromName} address={email.from} /></dd></div><div><dt>Stream</dt><dd>{label(email.stream)}</dd></div></dl>
-    {email.simulated && <Alert tone="info">Simulated; not sent to SES.</Alert>}
-    {email.status === 'bounced' && <Alert tone="warning">Delivery failed.{contact?.suppressed && ' This address is suppressed.'}</Alert>}
-    {['complaint', 'complained'].includes(email.status) && <Alert tone="danger">The recipient reported this message as spam.{contact?.suppressed && ' This address is suppressed.'}</Alert>}
-    {['deferred', 'delayed'].includes(email.status) && <Alert tone="warning">Delivery delayed.</Alert>}
-    <div className="email-detail-grid"><section><Tabs value={view} onValueChange={setView} items={[{ value: 'preview', label: 'Preview' }, { value: 'html', label: 'HTML' }, { value: 'plain', label: 'Plain text' }]} />
-      {view === 'preview' ? hasHtml ? <EmailPreview html={email.html} title="Email message preview" attachmentIds={email.attachments} remoteImages /> : hasPlainText ? <pre className="plain-text-preview">{plainText}</pre> : <EmptyState title="No message snapshot available" /> : <pre className="message-source">{view === 'html' ? email.html || 'No HTML snapshot available.' : hasPlainText ? plainText : 'No plain-text snapshot available.'}</pre>}
-    </section><section className="delivery-timeline"><SectionHeader title="Delivery timeline" actions={<span className="muted">UTC</span>} />{!events.length && !cursor && <p className="muted">No delivery events yet.</p>}<ol>{chronological(events).map(event => <li key={event.id}><span className={`timeline-dot ui-tone--${eventTone(event.type)}`} /><div><div className="cluster between"><span title={`Event type: ${event.type}`}>{eventLabel(event.type)}</span><time className="muted">{time(event.at)}</time></div>{eventMeaning(event.type) && <p className="muted">{eventMeaning(event.type)}</p>}{event.diagnostic && <pre className="diagnostic">{event.diagnostic}</pre>}</div></li>)}</ol>{eventError && <Alert tone="danger">{eventError}</Alert>}{cursor && api.emailEvents && <Button loading={eventBusy} onClick={async () => {setEventBusy(true); setEventError(''); try {const next = await api.emailEvents!(email.id, cursor); setEvents(previous => [...previous, ...next.items]); setCursor(next.nextCursor)} catch (error) {setEventError(error instanceof Error ? error.message : 'Couldn’t load events.')} finally {setEventBusy(false)}}}>Load more events</Button>}</section></div>
-    <div className="message-identifiers"><span className="cluster">Email ID <span className="identifier">{email.id}</span><CopyButton value={email.id} label="Copy email ID" /></span><span>Created {date(email.sentAt)} · {time(email.sentAt)} UTC</span>{!multiTenant && <span>SES · {email.regionId}</span>}</div>
-    {/* Last on the page: its result replaces a skeleton with nothing below it to move. */}
-    <div className="email-insight"><EmailInsight source={{ kind: 'email', id: email.id, html: hasHtml }} /></div>
-  </div>
-}
-
-// One plain name and one line of meaning per delivery event; the raw event type stays on hover for support and logs.
-const eventCopy: Record<string, [title: string, meaning: string]> = {
-  dispatch_attempt: ['Handed to SES', `${productName} passed the email to Amazon SES.`],
-  accepted: ['Accepted by SES', 'SES took the email and gave it a message ID.'],
-  dispatch_deferred: ['Waiting to send', `${productName} is holding the email until there is sending capacity.`],
-  provider_throttled: ['Slowed down by SES', `SES asked ${productName} to slow down; the email is retried automatically.`],
-  acceptance_unknown: ['Acceptance unknown', `SES didn’t confirm whether it took the email, so ${productName} won’t resend it.`],
-  send: ['Sent by SES', 'SES is delivering it to the recipient’s mail server.'], sent: ['Sent by SES', 'SES is delivering it to the recipient’s mail server.'],
-  delivery: ['Delivered', 'The recipient’s mail server accepted it.'], delivered: ['Delivered', 'The recipient’s mail server accepted it.'],
-  bounce: ['Bounced', 'The recipient’s server refused it. The reason is below.'], bounced: ['Bounced', 'The recipient’s server refused it. The reason is below.'],
-  complaint: ['Marked as spam', 'The recipient reported it as spam.'], complained: ['Marked as spam', 'The recipient reported it as spam.'],
-  reject: ['Rejected', 'SES refused to send it, for example because it contained a virus.'], rejected: ['Rejected', 'SES refused to send it, for example because it contained a virus.'],
-  rendering_failure: ['Rendering failed', 'A template value couldn’t be filled in, so nothing was sent.'], rendering_failed: ['Rendering failed', 'A template value couldn’t be filled in, so nothing was sent.'],
-  delivery_delay: ['Delayed', 'The recipient’s server put it off; SES keeps retrying.'], delivery_delayed: ['Delayed', 'The recipient’s server put it off; SES keeps retrying.'],
-  open: ['Opened', 'The recipient opened it with images on.'], opened: ['Opened', 'The recipient opened it with images on.'],
-  click: ['Clicked', 'The recipient clicked a link in it.'], clicked: ['Clicked', 'The recipient clicked a link in it.'],
-  suppressed: ['Suppressed', 'Not sent: the address is suppressed after an earlier bounce or complaint.'],
-  canceled: ['Canceled', 'The email was canceled before it was sent.'],
-  subscription: ['Subscription changed', 'The recipient changed their subscription from this email.'],
-}
-const eventKey = (type: string) => type.replace(/^email\./, '')
-// Oldest first; events in the same second keep the order mail moves through them (Handed, Accepted, Sent, Delivered).
-const lifecycle = Object.keys(eventCopy)
-const chronological = <T extends { at: string; type: string }>(list: T[]) => [...list].sort((a, b) => Date.parse(a.at.slice(0, 19)) - Date.parse(b.at.slice(0, 19)) || lifecycle.indexOf(eventKey(a.type)) - lifecycle.indexOf(eventKey(b.type)))
-function eventLabel(type: string) { return eventCopy[eventKey(type)]?.[0] ?? label(eventKey(type)) }
-function eventMeaning(type: string) { return eventCopy[eventKey(type)]?.[1] }
-function eventTone(type: string) {
-  const key = eventKey(type)
-  if (['delivery', 'delivered', 'open', 'opened', 'click', 'clicked'].includes(key)) return 'success'
-  if (['bounce', 'bounced', 'delivery_delay', 'delivery_delayed', 'provider_throttled', 'dispatch_deferred', 'acceptance_unknown', 'suppressed'].includes(key)) return 'warning'
-  if (['complaint', 'complained', 'reject', 'rejected', 'rendering_failure', 'rendering_failed'].includes(key)) return 'danger'
-  return 'neutral'
 }

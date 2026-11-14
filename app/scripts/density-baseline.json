@@ -30,10 +30,8 @@
    "findings": []
   },
   "Campaign editor · desktop": {
-   "score": 73,
-   "findings": [
-    "disclosure|sendability|ei-score__value"
-   ]
+   "score": 45,
+   "findings": []
   },
   "Campaign review · desktop": {
    "score": 20,
@@ -216,6 +214,10 @@
    "score": 4,
    "findings": []
   },
+  "Receiving · ask your agent dialog · desktop": {
+   "score": 43,
+   "findings": []
+  },
   "Receiving · desktop": {
    "score": 20,
    "findings": []
@@ -246,8 +248,44 @@
     "long-block|then it holds new mail for # more day wi"
    ]
   },
+  "Receiving · new ritual · desktop": {
+   "score": 40,
+   "findings": []
+  },
+  "Receiving · new ritual · new workspace · desktop": {
+   "score": 40,
+   "findings": []
+  },
+  "Receiving · new ritual · phone": {
+   "score": 34,
+   "findings": []
+  },
   "Receiving · phone": {
    "score": 15,
+   "findings": []
+  },
+  "Receiving · recipe form · desktop": {
+   "score": 10,
+   "findings": []
+  },
+  "Receiving · recipe form · phone": {
+   "score": 9,
+   "findings": []
+  },
+  "Receiving · recipe ritual · desktop": {
+   "score": 14,
+   "findings": []
+  },
+  "Receiving · recipe ritual · phone": {
+   "score": 13,
+   "findings": []
+  },
+  "Receiving · ritual editor · desktop": {
+   "score": 52,
+   "findings": []
+  },
+  "Receiving · ritual editor · new script · desktop": {
+   "score": 50,
    "findings": []
   },
   "Receiving · rituals · agent · desktop": {
@@ -255,11 +293,15 @@
    "findings": []
   },
   "Receiving · rituals · desktop": {
-   "score": 61,
+   "score": 24,
    "findings": []
   },
   "Receiving · rituals · no agent · desktop": {
    "score": 60,
+   "findings": []
+  },
+  "Receiving · rituals · phone": {
+   "score": 24,
    "findings": []
   },
   "Receiving · trace · desktop": {
@@ -287,28 +329,20 @@
    "findings": []
   },
   "Sent email · desktop": {
-   "score": 56,
-   "findings": [
-    "disclosure|sendability|ei-score__value"
-   ]
+   "score": 31,
+   "findings": []
   },
   "Sent email · junk-like · desktop": {
-   "score": 97,
-   "findings": [
-    "disclosure|sendability|ei-score__value"
-   ]
+   "score": 34,
+   "findings": []
   },
   "Sent email · junk-like · phone": {
-   "score": 89,
-   "findings": [
-    "disclosure|sendability|ei-score__value"
-   ]
+   "score": 7,
+   "findings": []
   },
   "Sent email · phone": {
-   "score": 49,
-   "findings": [
-    "disclosure|sendability|ei-score__value"
-   ]
+   "score": 6,
+   "findings": []
   },
   "Settings · MCP connection · desktop": {
    "score": 19,

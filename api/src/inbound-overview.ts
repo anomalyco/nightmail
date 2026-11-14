@@ -15,7 +15,8 @@ import { ApiError, errors, response, webhookUrlHint, type App, type Ctx, type Ma
 import type { mailboxes } from './db/mailbox.js';
 import { domains } from './db/operations.js';
 import { Endpoint, endpointSource, endpointView, type EndpointRow } from './ritual-endpoints.js';
-import type { Programs } from './ritual-pipeline.js';
+import { RecipeRef, type Config, type Programs } from './ritual-pipeline.js';
+import { compileRitual, type RitualIR } from './ritual-engine.js';
 import { withRegionSettings } from './ses-region-state.js';
 import { productName } from './brand.js';
 
@@ -26,6 +27,8 @@ type Deps = {
   InboundAddressSchema: z.ZodType; InboundDomainStatus: z.ZodType; InboundCatchAll: z.ZodType;
   security: Record<string, string[]>[];
 };
+/** Received emails read for each ritual's lastMatchedAt: the newest this many, through the tenant page index. */
+export const LAST_MATCHED_WINDOW = 1000;
 /** Endpoints and inbound webhooks listed per overview; endpointsTruncated says when a workspace has more. */
 export const OVERVIEW_ENDPOINTS = 100;
 /** Webhook subscribers listed per route, active ones first. A route with more says so (toTruncated, toTotal, toMore). */
@@ -72,7 +75,7 @@ type Slim = { id: string; address: string; displayName: string | null };
 type Hook = { id: string; name: string | null; description: string; url: string; event_types: string[]; mailbox_ids: string[] | null; paused: boolean; routes?: number };
 type Subscribers = { list: Hook[]; total: number; active: number };
 type RoutesResult = { counts: Record<string, number>; page: PageRow[]; boxes: { row: MailboxRow; addresses: { address: string; kind: string }[]; stat: { threads: number; unread: number; last: string | null } | null }[]; dest_boxes: Slim[]; dest_endpoints: EndpointRow[]; dest_hooks: Hook[]; subscribers: Record<string, Subscribers> };
-type WorkspaceResult = { config: { rituals?: { key: string }[]; attachments?: { ritual: string; target: string }[] } | null; programs: Programs | null; endpoints: (EndpointRow & { routes: number; listed: boolean })[]; endpoints_more: boolean; endpoint_hooks: Pick<Hook, 'id' | 'event_types' | 'mailbox_ids'>[]; hooks: Hook[]; hooks_more: boolean; keyed: (Slim & { key: string })[]; domains: { id: string; name: string; status: string; catchAll: string }[] };
+type WorkspaceResult = { config: Partial<Config> | null; programs: Programs | null; acted: Record<string, string>; names: Record<string, string>; endpoints: (EndpointRow & { routes: number; listed: boolean })[]; endpoints_more: boolean; endpoint_hooks: Pick<Hook, 'id' | 'event_types' | 'mailbox_ids'>[]; hooks: Hook[]; hooks_more: boolean; keyed: (Slim & { key: string })[]; domains: { id: string; name: string; status: string; catchAll: string }[] };
 
 export function registerInboundOverview(app: App, deps: Deps) {
   const RouteEntry = z.object({
@@ -97,7 +100,11 @@ export function registerInboundOverview(app: App, deps: Deps) {
     counts: z.object({ address: z.number().int(), auto: z.number().int().describe('Addresses a catch-all created (origin auto).'), route: z.number().int(), pattern: z.number().int(), catch_all: z.number().int(), inbox: z.number().int() })
       .describe('Routes per kind, after the domain and q filters and before kind and origin.'),
     routes: z.object({ data: z.array(RouteEntry), nextCursor: z.string().nullable() }),
-    rituals: z.array(z.object({ key: z.string(), calls: z.array(z.string()).describe('Endpoint names it can call.'), delivers: z.array(z.string()).describe('Inbox keys it can deliver to.'), omens: z.array(z.string()), attachedTo: z.array(z.string()).describe('Address IDs or addresses it runs on.') })),
+    rituals: z.array(z.object({ key: z.string(), calls: z.array(z.string()).describe('Endpoint names it can call.'), delivers: z.array(z.string()).describe('Inbox keys it can deliver to.'), omens: z.array(z.string()), attachedTo: z.array(z.string()).describe('Address IDs or addresses it runs on.'),
+      addresses: z.array(z.string()).describe('attachedTo as addresses: an inbox ID reads as its primary address.'),
+      recipe: RecipeRef.nullable().describe('The recipe it was made from (listRitualRecipes), while its source is still what the recipe writes; null for a script.'),
+      enabled: z.boolean().describe('False when it is turned off: it keeps its addresses and doesn’t run.'),
+      lastMatchedAt: z.string().nullable().describe(`When it last took an action on received mail, among the workspace’s last ${LAST_MATCHED_WINDOW.toLocaleString('en-US')} received emails; null if it didn’t.`) })).describe('Every ritual in the config, in the order it was saved.'),
     endpoints: z.array(OverviewEndpoint).describe(`At most ${OVERVIEW_ENDPOINTS} endpoints (by name) and ${OVERVIEW_ENDPOINTS} inbound webhooks.`),
     endpointsTruncated: z.boolean().describe(`True when the workspace has more endpoints or inbound webhooks than listed. Read them all with listEndpoints and listInboundWebhooks, following nextCursor until it is null.`),
     domains: z.array(OverviewDomain).describe('Every domain with its receiving status, including domains that only send.'),
@@ -191,7 +198,7 @@ export function registerInboundOverview(app: App, deps: Deps) {
 
     // Statement 2 (managers): the workspace side, bounded by OVERVIEW_ENDPOINTS and the API's own limits (50 rituals,
     // 256 attachments). Route counts come from one probe of the destinations GIN index for all listed endpoints.
-    let ws: WorkspaceResult = { config: null, programs: null, endpoints: [], endpoints_more: false, endpoint_hooks: [], hooks: [], hooks_more: false, keyed: [], domains: [] };
+    let ws: WorkspaceResult = { config: null, programs: null, acted: {}, names: {}, endpoints: [], endpoints_more: false, endpoint_hooks: [], hooks: [], hooks_more: false, keyed: [], domains: [] };
     if (manage) {
       c.env = await withRegionSettings(c.env, w);
       ws = (await c.env.db.execute<WorkspaceResult>(sql`/* inbound-overview: workspace */
@@ -207,9 +214,18 @@ export function registerInboundOverview(app: App, deps: Deps) {
         listed AS (SELECT hook_id AS id FROM eps UNION SELECT id FROM hk),
         -- One probe of the destinations index for every listed endpoint at once; only routes that name one are unnested.
         usage AS (SELECT d AS id, count(*)::int AS n FROM mail_routes r CROSS JOIN LATERAL jsonb_array_elements_text(r.destinations) d
-          WHERE r.workspace_id=${w} AND jsonb_typeof(r.destinations)='array' AND r.destinations ?| ARRAY(SELECT id FROM listed) AND d IN (SELECT id FROM listed) GROUP BY d)
+          WHERE r.workspace_id=${w} AND jsonb_typeof(r.destinations)='array' AND r.destinations ?| ARRAY(SELECT id FROM listed) AND d IN (SELECT id FROM listed) GROUP BY d),
+        -- Which rituals acted on the newest received mail (ingest records verdicts.ritualsActed), and when each last did.
+        recent AS (SELECT m.verdicts->'ritualsActed' AS keys, m.received_at FROM mail_messages m WHERE m.workspace_id=${w} AND m.direction='inbound'
+          ORDER BY m.received_at DESC, m.id DESC LIMIT ${LAST_MATCHED_WINDOW}),
+        acted AS (SELECT k, max(recent.received_at) AS last FROM recent CROSS JOIN LATERAL jsonb_array_elements_text(CASE WHEN jsonb_typeof(recent.keys)='array' THEN recent.keys ELSE '[]'::jsonb END) k GROUP BY k),
+        -- The primary address of each inbox an attachment names by ID, so a ritual's addresses read as addresses.
+        names AS (SELECT a.mailbox_id AS id, a.address FROM mailbox_addresses a WHERE a.workspace_id=${w} AND a.kind='primary'
+          AND a.mailbox_id IN (SELECT b->>'target' FROM cfg CROSS JOIN LATERAL jsonb_array_elements(CASE WHEN jsonb_typeof(cfg.config->'attachments')='array' THEN cfg.config->'attachments' ELSE '[]'::jsonb END) b))
         SELECT
           (SELECT config FROM cfg) AS config, (SELECT programs FROM cfg) AS programs,
+          (SELECT coalesce(jsonb_object_agg(k, to_char(last AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),'{}'::jsonb) FROM acted) AS acted,
+          (SELECT coalesce(jsonb_object_agg(id, address),'{}'::jsonb) FROM names) AS names,
           (SELECT coalesce(jsonb_agg(to_jsonb(eps) || jsonb_build_object('listed', eps.hook_id IN (SELECT hook_id FROM first),
             'routes', coalesce((SELECT n FROM usage WHERE usage.id=eps.hook_id),0))),'[]'::jsonb) FROM eps) AS endpoints,
           (SELECT count(*) > ${OVERVIEW_ENDPOINTS} FROM first) AS endpoints_more,
@@ -289,8 +305,13 @@ export function registerInboundOverview(app: App, deps: Deps) {
       const ritualKeys = ritualsFor([r.match]);
       return { id: r.id, kind: r.kind, match: r.match, host: r.host, address: null, route, catchAll: null, rituals: ritualKeys, ...complete(merge(route ? routed(route) : [], viaRituals(ritualKeys))) };
     });
-    const rituals = Object.entries(programs).map(([key, ir]) => ({ key, calls: ir.refs.filter(r => r.startsWith('endpoint:')).map(r => r.slice(9)), delivers: ir.refs.filter(r => r.startsWith('inbox:')).map(r => r.slice(6)),
-      omens: Object.keys(ir.omens ?? {}), attachedTo: attachments.filter(a => a.ritual === key).map(a => a.target) }));
+    // The plan holds every ritual's compiled form while any ritual runs; with none attached or all off, compile here.
+    const compiled = (key: string, source: string): RitualIR | null => { if (programs[key]) return programs[key]!; try { return compileRitual(source); } catch { return null; } };
+    const rituals = (ws.config?.rituals ?? []).map(({ key, source, recipe, enabled }) => {
+      const ir = compiled(key, source), refs = ir?.refs ?? [];
+      return { key, calls: refs.filter(r => r.startsWith('endpoint:')).map(r => r.slice(9)), delivers: refs.filter(r => r.startsWith('inbox:')).map(r => r.slice(6)),
+        omens: Object.keys(ir?.omens ?? {}), attachedTo: attachments.filter(a => a.ritual === key).map(a => a.target), addresses: attachments.filter(a => a.ritual === key).map(a => ws.names[a.target] ?? a.target), recipe: recipe ?? null, enabled: enabled !== false, lastMatchedAt: ws.acted[key] ?? null };
+    });
     const listed = ws.endpoints.filter(e => e.listed).sort((a, b) => a.name < b.name ? -1 : 1).slice(0, OVERVIEW_ENDPOINTS);
     const endpoints: z.infer<typeof OverviewEndpoint>[] = [
       ...listed.map(row => { const e = endpointViews.get(row.hook_id)!; return { id: e.hook, source: 'endpoint' as const, name: e.view.name, type: e.view.type, status: e.view.status, target: e.view.target, call: e.view.call, eventTypes: [], routes: row.routes, rituals: rituals.filter(r => r.calls.includes(e.view.name)).map(r => r.key) }; }),

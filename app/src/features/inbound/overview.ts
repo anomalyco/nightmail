@@ -16,7 +16,9 @@ export type RouteEntry = {
   /** The complete list's size; more than to.length only when toTruncated (more webhook subscribers than listed). */
   toTotal: number; toTruncated: boolean; toMore: string | null
 }
-export type OverviewRitual = { key: string; calls: string[]; delivers: string[]; omens: string[]; attachedTo: string[] }
+export type RecipeRef = { id: string; params: Record<string, string | string[]> }
+/** A ritual as the list shows it: made from a recipe (its sentence) or a script, on or off, and when it last acted. */
+export type OverviewRitual = { key: string; calls: string[]; delivers: string[]; omens: string[]; attachedTo: string[]; addresses: string[]; recipe: RecipeRef | null; enabled: boolean; lastMatchedAt: string | null }
 export type OverviewEndpoint = { id: string; source: 'endpoint' | 'inbound_webhook'; name: string; type: 'webhook' | 'slack' | 'discord' | 'forward'; status: EndpointStatus; target: string; call: string | null; eventTypes: string[]; routes: number; rituals: string[] }
 /** A domain as the overview lists it: its receiving host, receiving status and catch-all. */
 export type OverviewDomain = Pick<MailboxDomain, 'id' | 'name' | 'status' | 'catchAll'>
@@ -40,11 +42,7 @@ export const firstOverview: OverviewQuery = { limit: 50 }
 export const overviewQuery = (query: OverviewQuery) => ({ key: overviewKey(query), read: (_api: unknown, signal: AbortSignal) => readOverview(query, signal) })
 
 export const receivingDomains = <D extends Pick<MailboxDomain, 'status'>>(domains: D[]) => domains.filter(d => !['off', 'disabled'].includes(d.status))
-export const ago = (iso: string | null | undefined) => {
-  if (!iso) return null
-  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000))
-  return minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`
-}
+export { ago } from '../../lib/format'
 export const expiresIn = (iso: string | null | undefined) => {
   if (!iso) return null
   const hours = Math.round((Date.parse(iso) - Date.now()) / 3_600_000)

@@ -4,9 +4,9 @@ A **ritual** is a short script that runs when mail reaches an inbox or address. 
 
 ![The ritual editor: source with live checks, Try it on an email, where it runs, sender lists and omen opt-in](images/rituals/editor.png)
 
-In the dashboard, rituals and endpoints are tabs of **Receiving**, next to Routes. [receiving.md](receiving.md) explains how they fit together.
+In the dashboard, rituals and endpoints are tabs of **Receiving**, next to Routes. [receiving.md](receiving.md) explains how they fit together. The Rituals tab lists every ritual as a sentence ("Post new mail to support in Slack"), with its addresses, when it last matched, an on/off switch and a menu (Edit, Edit as code, Trace, Delete). **New ritual** opens the [recipes](#recipes); **Write a script** opens the editor.
 
-- [Concepts](#concepts) and [the pipeline](#the-pipeline)
+- [Concepts](#concepts), [recipes](#recipes) and [the pipeline](#the-pipeline)
 - [Language reference](#language-reference): [entry point](#entry-point), [what you can write](#what-you-can-write), [`email` and `ctx`](#email-and-ctx), [built-ins](#built-ins), [endpoints](#calling-endpoints), [omens](#omens), [sender lists](#sender-lists), [limits](#limits), [errors](#compile-errors)
 - [Examples](#examples)
 - [Endpoints](#endpoints): types, [forward confirmation](#forward-confirmation), [retries and rate limits](#retries-and-rate-limits)
@@ -17,12 +17,32 @@ In the dashboard, rituals and endpoints are tabs of **Receiving**, next to Route
 | Thing | What it is | Where it lives |
 |---|---|---|
 | Ritual | A script with one default function `route(email, ctx)`. Deterministic: no clock, randomness, loops or network. | Saved by key in a versioned workspace config (`applyRituals`, `saveRitual`). |
-| Attachment | Runs a ritual on mail to a target: an inbox ID (`mbx_…`) or an address. Ordered; up to three per target. | Same config (`attachRituals`). |
+| Attachment | Runs a ritual on mail to a target: an inbox ID (`mbx_…`) or an address. Ordered; up to 10 per target. | Same config (`attachRituals`). |
+| Recipe | A ready-made ritual with one or two fields, such as Post to Slack or Block senders. It writes an ordinary script; the ritual keeps `recipe: { id, params }` while its source is what the recipe wrote. | `listRitualRecipes`, `createRitualFromRecipe`, `updateRitualFromRecipe`. |
 | Endpoint | A named target: `slack`, `discord`, `webhook` or `forward`. Credentials and URLs stay in the endpoint; scripts only name it. | `/v1/endpoints`. |
 | Omen | A literal question in a ritual, such as `"Is the sender asking for a refund?"`. One Jev call per message answers every question; scripts get numbers or booleans. | Declared in the source; asked only for domains or routes opted in with `setOmenOptIns`. |
 | Sender list | A named list of addresses or `@domains` for `lists.has(name, address)`. | Same config (`senderLists`). |
 
+A ritual can be turned off (`updateRitual` with `enabled: false`): it keeps its source and attachments and doesn't run until it is turned on. The config stores `enabled: false` only; omitted means on.
+
 Routing still decides where mail goes by default (routes and inbox ownership). Rituals run on top of that decision for each recipient and can add destinations, call endpoints, or change the message's disposition. Guard is part of this: blocking, allowing and junking are ordinary ritual actions, with templates for the common rules.
+
+## Recipes
+
+A recipe is a sentence with blanks. Filling them in writes the ritual's script, and that script runs like any other: recipes change nothing about how rituals run.
+
+| Group | Recipe (`id`) | Fields | Writes |
+|---|---|---|---|
+| Tell your team | Post to Slack (`slack`), Post to Discord (`discord`) | `channel`: a Slack or Discord endpoint | `if (ctx.junk) return`, then a post with the sender and subject |
+| Pass it on | Forward (`forward`), Send to your app (`webhook`) | `to`: a confirmed forward; `app`: a webhook endpoint | `if (ctx.junk) return`, then the endpoint call |
+| Keep out junk | Junk newsletters (`junk-newsletters`), Block senders (`block-senders`), Always let VIPs in (`allow-senders`), Junk failed DMARC (`junk-failed-dmarc`) | `senders`: addresses and `@domains`, up to 100 | `junk`, `block` or `allow` plus the `vip` label |
+| Sort with AI | Label by meaning (`label-by-meaning`), Alert by meaning (`alert-by-meaning`) | `meaning`, like `a refund request`; `label`, or `channel`: a Slack or Discord endpoint | an omen, `Does this email look like a refund request?`, acted on at 0.7 |
+
+- **Create.** `createRitualFromRecipe` takes `recipe`, `params` and `addresses` (inbox IDs or addresses, 1 to 10). The key is the recipe and the first address's local part (`slack-support`, then `slack-support-2`) unless `key` is given. Endpoint fields name an endpoint that already exists (`createEndpoint` first); the dashboard's form creates it inline.
+- **Order.** A recipe's attachment runs with **Run the next one too** on, after the address's other recipes and before its scripts: keep-out recipes first, then allow-lists, then the rest. A script's "stop the rest" never silences a recipe.
+- **AI recipes** add their addresses' domains to the omen opt-in (`evaluateDomains`) and cost $0.10 per 1,000 emails checked (`omenPricePerThousand` in `listRitualRecipes`).
+- **Edit.** `updateRitualFromRecipe` rewrites the script from new fields; `addresses`, when given, replaces where it runs (addresses kept stay in place). Saving a different source with `saveRitual` or `applyRituals` makes the ritual a script: its `recipe` is dropped and the dashboard opens it in the editor. Passing `recipe` to `updateRitualFromRecipe` turns a script into that recipe.
+- **Last matched.** Ingest records which rituals took an action on each email (`verdicts.ritualsActed`). `getInboundOverview` lists every ritual with `recipe`, `enabled`, `addresses` and `lastMatchedAt`, the newest of the workspace's last 1,000 received emails it acted on.
 
 ## The pipeline
 
@@ -195,7 +215,7 @@ Lists live in the config: `"senderLists": { "vip": ["ceo@example.com", "@partner
 
 | Limit | Value |
 |---|---|
-| Source | 64 KiB per ritual, 50 rituals, 256 attachments, three per target |
+| Source | 64 KiB per ritual, 50 rituals, 256 attachments, 10 per target |
 | Steps | 50,000 per run, 250,000 per message |
 | Actions | 32 per run; three calls per endpoint per recipient |
 | Output | 64 KiB per action, 256 KiB per message |
@@ -387,12 +407,14 @@ Backoff starts at 15 seconds and grows ×4 up to 12 hours, with ±25% jitter, ne
 | Read the config | `getRituals`, `getRitual`, `listRitualVersions` |
 | Check a source while editing | `checkRitual` |
 | Save | `saveRitual`, `applyRituals` (whole config), `attachRituals`, `deleteRitual`, `restoreRitualVersion` |
+| Recipes | `listRitualRecipes`, `createRitualFromRecipe`, `updateRitualFromRecipe` |
+| Turn on or off | `updateRitual` (`enabled`) |
 | Dry run | `testRituals` (`messageId` or `mime`, optional `config`, `scores`); each trace row has a step-by-step `timeline` |
 | Typings and templates | `getRitualTypings`, `listRitualTemplates` |
 | Omen opt-in | `setOmenOptIns` |
 | Endpoints | `listEndpoints`, `getEndpoint`, `createEndpoint`, `updateEndpoint`, `deleteEndpoint`, `sendEndpointVerification`, `testEndpoint` |
 
-Writes take `If-Match` with the version you read (MCP: `ifMatch`) and fail with `VERSION_CONFLICT` if it changed. Creates take `Idempotency-Key` (MCP: `idempotencyKey`). Over MCP these tools are in the `rituals` and `endpoints` toolsets and need an approval with `manage` and receiving consent; rituals, endpoints and keys an agent creates stop working when that approval is revoked. See [docs/mcp-coverage.md](mcp-coverage.md).
+Writes take `If-Match` with the version you read (MCP: `ifMatch`) and fail with `VERSION_CONFLICT` if it changed; without it, a recipe or on/off write applies to the latest version, since it changes only that ritual. Creates take `Idempotency-Key` (MCP: `idempotencyKey`). Over MCP these tools are in the `rituals` and `endpoints` toolsets and need an approval with `manage` and receiving consent; rituals, endpoints and keys an agent creates stop working when that approval is revoked. See [docs/mcp-coverage.md](mcp-coverage.md).
 
 ```sh
 curl -X POST "$BANE/v1/rituals/check" -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \

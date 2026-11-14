@@ -1,9 +1,8 @@
-// "Work on this with OpenCode": the rituals page's one card for editing with an agent beside you. Folded, it is a
-// single line (the same height before and after the MCP approvals load, so nothing moves); unfolded, it holds the
-// setup for a client that isn't connected yet and prompts written for the ritual and address on screen.
+// "Ask your agent": the add screen's one quiet way to have an agent write a ritual. The dialog holds the setup for a
+// client that isn't connected yet and prompts written for the workspace's first address.
 import { useState, type ReactNode } from 'react'
 import { Link } from 'react-router'
-import { Button, Tabs } from '../../components/ui'
+import { Button, Dialog, Tabs } from '../../components/ui'
 import { CopyAction } from '../../components/motion'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { useApiDef, useSession, useWorkspaceAccess } from '../../data/context'
@@ -22,13 +21,13 @@ type Other = typeof others[number]
 /** A prompt shown with its address masked; the copy holds the real address. */
 type Prompt = { text: string; shown: ReactNode }
 // With several workspaces the prompt names this one: the agent's calls act in the workspace they name, else its default.
-function prompts(ritual: string, address: string | null, workspace: string | null): Prompt[] {
+function prompts(address: string | null, workspace: string | null): Prompt[] {
   const at = address ?? 'my support address', shown = address ? <PrivateAddress value={address} /> : at
-  const name = ritual || 'triage', mine = workspace ? `my ${productName} workspace '${workspace}'` : productName, shownMine = workspace ? <>my {productName} workspace ‘{workspace}’</> : productName
+  const mine = workspace ? `my ${productName} workspace '${workspace}'` : productName, shownMine = workspace ? <>my {productName} workspace ‘{workspace}’</> : productName
   return [
-    { text: `In ${mine}, read my ritual '${name}' on ${at} and add a rule that labels refund requests and posts them to #support.`, shown: <>In {shownMine}, read my ritual ‘{name}’ on {shown} and add a rule that labels refund requests and posts them to #support.</> },
-    { text: `In ${mine}, explain why my ritual '${name}' junked the last email to ${at}, and fix it if it shouldn't have.`, shown: <>In {shownMine}, explain why my ritual ‘{name}’ junked the last email to {shown}, and fix it if it shouldn’t have.</> },
-    { text: `In ${mine}, try my ritual '${name}' on the last 5 emails to ${at} and tell me what it would do to each.`, shown: <>In {shownMine}, try my ritual ‘{name}’ on the last 5 emails to {shown} and tell me what it would do to each.</> },
+    { text: `In ${mine}, add a ritual on ${at} that labels refund requests and posts them to Slack.`, shown: <>In {shownMine}, add a ritual on {shown} that labels refund requests and posts them to Slack.</> },
+    { text: `In ${mine}, list my rituals and explain what each one does to mail at ${at}.`, shown: <>In {shownMine}, list my rituals and explain what each one does to mail at {shown}.</> },
+    { text: `In ${mine}, write a ritual for ${at} and try it on the last 5 emails before you save it.`, shown: <>In {shownMine}, write a ritual for {shown} and try it on the last 5 emails before you save it.</> },
   ]
 }
 
@@ -36,8 +35,18 @@ function prompts(ritual: string, address: string | null, workspace: string | nul
  * workspace. Its calls name the workspace they act in, so any of the account's agents can work in this one. */
 const canEdit = (app: Agent, admin: boolean) => app.status === 'active' && admin && app.permissions.includes('manage')
 
-export function RitualAgentCard({ ritual, address }: { ritual: string; address: string | null }) {
+export function AskAgentLink({ address }: { address: string | null }) {
   const [open, setOpen] = useState(false)
+  return <>
+    <Button variant="ghost" size="sm" className="recipe-agent-link" onClick={() => setOpen(true)}>Ask your agent</Button>
+    <Dialog open={open} onOpenChange={setOpen} className="ritual-agent-dialog" title="Ask your agent" description="It writes and saves rituals here over MCP."
+      footer={<Button onClick={() => setOpen(false)}>Done</Button>}>
+      {open && <AgentSetup address={address} />}
+    </Dialog>
+  </>
+}
+
+function AgentSetup({ address }: { address: string | null }) {
   const [client, setClient] = useState<Other>('claude')
   const identity = useSession()?.identity
   const admin = useWorkspaceAccess().canAdminister
@@ -52,54 +61,43 @@ export function RitualAgentCard({ ritual, address }: { ritual: string; address: 
   const status = apps.isPending ? 'Looking for a connected agent…'
     : connected ? <>Connected as <strong>{connectionTitle(connected)}</strong>. Its saves show up here live.</>
     : limited ? <><strong>{connectionTitle(limited)}</strong> is connected but can’t change rituals in this workspace yet.</>
-    : 'Ask an agent to write or fix this ritual; its saves show up here live.'
+    : 'No agent is connected yet.'
   const command = url ? `opencode mcp add bane --url '${url}'` : ''
-  return <section className="ritual-agent" aria-labelledby="ritual-agent-title" data-open={open || undefined}>
-    <div className="ritual-agent__row">
-      <span className="ritual-agent__mark" data-connected={connected ? true : undefined} aria-hidden="true" />
-      <div className="ritual-agent__text">
-        <h2 id="ritual-agent-title" className="ritual-agent__title">Work on this with OpenCode</h2>
-        <p className="ritual-agent__status muted">{status}</p>
-      </div>
-      <Button size="sm" variant="ghost" aria-expanded={open} aria-controls="ritual-agent-body" onClick={() => setOpen(!open)}>{open ? 'Hide' : 'Show'}</Button>
-    </div>
-    <div id="ritual-agent-body" className="ritual-agent__body" inert={!open || undefined}>
-      <div className="ritual-agent__inner"><div className="ritual-agent__content stack">
-        {limited && <p className="ritual-agent__note">{admin ? <>Rituals need full access. Connect the client again and approve full access, or <Link to={`/settings/mcp/${encodeURIComponent(limited.id)}`}>revoke it in Settings</Link> first.</> : 'Rituals need an owner or admin of this workspace.'}</p>}
-        {!connected && <>
-          <div className="stack ritual-agent__step">
-            <h3 className="ritual-agent__heading">Add {productName} to OpenCode</h3>
-            <div className="developer-snippet">
-              <pre className="developer-code developer-code--wrap" tabIndex={0} aria-label="OpenCode command"><code>{command || 'Loading this installation’s address…'}</code></pre>
-              {command && <CopyAction value={command} label="Copy the OpenCode command" variant="ghost" size="sm" compact className="developer-copy-icon developer-snippet__copy" />}
-            </div>
-            <p className="ritual-agent__hint muted">Then run <code>/mcps</code>, choose bane, sign in and approve full access. Its tools work in any of your workspaces; name this one in your prompt. Two Anomaly accounts? Add an entry for each, such as <code>bane-work</code>, and sign each in with its account.</p>
-          </div>
-          <div className="stack ritual-agent__step">
-            <h3 className="ritual-agent__heading">Or another client</h3>
-            <Tabs label="MCP client" value={client} onValueChange={value => setClient(value as Other)} items={others.map(value => ({ value, label: mcpClientNames[value] }))} />
-            {/* Both configs share one cell, so switching never changes the height. */}
-            <div className="developer-client-panels">{others.map(value => {
-              const snippet = url ? JSON.stringify(mcpClientConfig(value, url, {}), null, 2) : ''
-              return <div key={value} className="stack developer-client-panel" data-active={value === client || undefined} inert={value !== client || undefined}>
-                <div className="developer-snippet">
-                  <pre className="developer-code" tabIndex={0} aria-label={`${mcpClientNames[value]} config`}><code>{snippet}</code></pre>
-                  {snippet && <CopyAction value={snippet} label={`Copy the ${mcpClientNames[value]} config`} variant="ghost" size="sm" compact className="developer-copy-icon developer-snippet__copy" />}
-                </div>
-                <p className="ritual-agent__hint muted">Merge it into <code>{mcpClientFiles[value]}</code>, then sign in to bane from the client.</p>
-              </div>
-            })}</div>
-          </div>
-        </>}
-        <div className="stack ritual-agent__step">
-          <h3 className="ritual-agent__heading">Ask it</h3>
-          <ul className="ritual-agent__prompts">{prompts(ritual, address, workspace).map(p => <li key={p.text} className="ritual-agent__prompt">
-            <span>{p.shown}</span>
-            <CopyAction value={p.text} label="Copy prompt" variant="ghost" size="sm" compact />
-          </li>)}</ul>
+  return <div className="stack ritual-agent__content">
+    <p className="ritual-agent__status muted"><span className="ritual-agent__mark" data-connected={connected ? true : undefined} aria-hidden="true" />{status}</p>
+    {limited && <p className="ritual-agent__note">{admin ? <>Rituals need full access. Connect the client again and approve full access, or <Link to={`/settings/mcp/${encodeURIComponent(limited.id)}`}>revoke it in Settings</Link> first.</> : 'Rituals need an owner or admin of this workspace.'}</p>}
+    {!connected && <>
+      <div className="stack ritual-agent__step">
+        <h3 className="ritual-agent__heading">Add {productName} to OpenCode</h3>
+        <div className="developer-snippet">
+          <pre className="developer-code developer-code--wrap" tabIndex={0} aria-label="OpenCode command"><code>{command || 'Loading this installation’s address…'}</code></pre>
+          {command && <CopyAction value={command} label="Copy the OpenCode command" variant="ghost" size="sm" compact className="developer-copy-icon developer-snippet__copy" />}
         </div>
-        <p className="ritual-agent__hint muted"><Link to={guides.mcp}>How agents connect over MCP</Link></p>
-      </div></div>
+        <p className="ritual-agent__hint muted">Then run <code>/mcps</code>, choose bane, sign in and approve full access. Its tools work in any of your workspaces; name this one in your prompt.</p>
+      </div>
+      <div className="stack ritual-agent__step">
+        <h3 className="ritual-agent__heading">Or another client</h3>
+        <Tabs label="MCP client" value={client} onValueChange={value => setClient(value as Other)} items={others.map(value => ({ value, label: mcpClientNames[value] }))} />
+        {/* Both configs share one cell, so switching never changes the height. */}
+        <div className="developer-client-panels">{others.map(value => {
+          const snippet = url ? JSON.stringify(mcpClientConfig(value, url, {}), null, 2) : ''
+          return <div key={value} className="stack developer-client-panel" data-active={value === client || undefined} inert={value !== client || undefined}>
+            <div className="developer-snippet">
+              <pre className="developer-code" tabIndex={0} aria-label={`${mcpClientNames[value]} config`}><code>{snippet}</code></pre>
+              {snippet && <CopyAction value={snippet} label={`Copy the ${mcpClientNames[value]} config`} variant="ghost" size="sm" compact className="developer-copy-icon developer-snippet__copy" />}
+            </div>
+            <p className="ritual-agent__hint muted">Merge it into <code>{mcpClientFiles[value]}</code>, then sign in to bane from the client.</p>
+          </div>
+        })}</div>
+      </div>
+    </>}
+    <div className="stack ritual-agent__step">
+      <h3 className="ritual-agent__heading">Ask it</h3>
+      <ul className="ritual-agent__prompts">{prompts(address, workspace).map(p => <li key={p.text} className="ritual-agent__prompt">
+        <span>{p.shown}</span>
+        <CopyAction value={p.text} label="Copy prompt" variant="ghost" size="sm" compact />
+      </li>)}</ul>
     </div>
-  </section>
+    <p className="ritual-agent__hint muted"><Link to={guides.mcp}>How agents connect over MCP</Link></p>
+  </div>
 }

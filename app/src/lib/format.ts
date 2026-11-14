@@ -17,6 +17,13 @@ export const formatPercent = percent
 export const formatDate = date
 export const formatTime = time
 // Coarse, human-readable distance from now ("in 5 hours", "2 minutes ago"); best for estimates, not exact times.
+/** How long ago, the way tables say it: 5m, 3h, 2d. The column names the time, so no row repeats "ago". */
+export function ago(value: string | null | undefined, now = Date.now()) {
+  const at = Date.parse(value ?? '')
+  if (!Number.isFinite(at)) return null
+  const minutes = Math.max(0, Math.round((now - at) / 60_000))
+  return minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`
+}
 export function relativeTime(value: string | null | undefined, now = Date.now()) {
   const at = Date.parse(value ?? '')
   if (!Number.isFinite(at)) return '—'

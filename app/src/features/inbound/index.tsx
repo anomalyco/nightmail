@@ -1,5 +1,7 @@
 import { Navigate, useLocation, useParams } from 'react-router'
 
+export { NewRecipeRoute, NewRitualPage, RitualRoute } from './recipes'
+
 export { InboundPage } from './threads'
 export { InboundAddressDetailPage } from './addresses'
 export { ReceivingPage } from './receiving'
@@ -20,3 +22,11 @@ export const LegacyMailboxWebhooksRedirect = () => <LegacyRedirect to="/receivin
 export function LegacyMailboxWebhookRedirect() { const { id = '' } = useParams(); return <LegacyRedirect to={`/receiving/webhooks/${encodeURIComponent(id)}`} /> }
 
 export { AgentInboxPage, AgentInboxesPage } from './inboxes'
+
+// /receiving/rituals was the editor (?key= one ritual, ?new=1 a new one): its links land on the editor's own paths now,
+// and the bare path on the Rituals tab.
+export function RitualsRedirect() {
+  const location = useLocation(), search = new URLSearchParams(location.search), key = search.get('key')
+  const to = key ? `/receiving/rituals/${encodeURIComponent(key)}/code${location.hash}` : search.get('new') ? '/receiving/rituals/new' : '/receiving?tab=rituals'
+  return <Navigate replace to={to} />
+}

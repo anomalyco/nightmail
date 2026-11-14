@@ -223,7 +223,9 @@ function Table<T>({ columns: all, rows, rowKey, onRowClick, onRowIntent, rowHref
   useEffect(() => () => window.clearTimeout(intent.current), [])
   const rest = (row: T) => { window.clearTimeout(intent.current); intent.current = window.setTimeout(() => onRowIntent?.(row), 80) }
   const navigate = useNavigate()
-  const own = (event: { target: EventTarget }) => Boolean((event.target as HTMLElement).closest('button, a, input, select, [role="checkbox"], [role="switch"]'))
+  // The row's own controls keep their click, and so does anything a cell portals out of the row (a menu, a dialog),
+  // whose clicks React still bubbles to the row: a menu item must not also open the row's page.
+  const own = (event: { target: EventTarget; currentTarget: EventTarget }) => !(event.currentTarget as Node).contains(event.target as Node) || Boolean((event.target as HTMLElement).closest('button, a, input, select, [role="checkbox"], [role="switch"]'))
   const follow = (href: string, event: { metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; button: number }) => { if (event.metaKey || event.ctrlKey || event.shiftKey || event.button === 1) window.open(href, '_blank', 'noopener'); else navigate(href) }
   return <div ref={tableRef} data-component="DataTable" className={cx('ui-table-scroll', className)} aria-busy={loading || undefined}>
     {loading && <span className="sr-only" role="status">Loading table</span>}
@@ -298,8 +300,9 @@ function BackLink({ to }: { to: string }) {
     event.preventDefault(); navigate(-1)
   }}><ArrowLeft size={16} /></Link>
 }
-export function PageHeader({ title, actions, backTo }: { title: ReactNode; actions?: ReactNode; backTo?: string }) {
-  return <header data-component="PageHeader" className="ui-page-header"><div className="cluster">{backTo && <BackLink to={backTo} />}<h1>{title}</h1></div>{actions && <div className="cluster">{actions}</div>}</header>;
+// `subtitle`: one line of facts under the title (an email's sender and date), aligned with the title's text.
+export function PageHeader({ title, actions, backTo, subtitle }: { title: ReactNode; actions?: ReactNode; backTo?: string; subtitle?: ReactNode }) {
+  return <header data-component="PageHeader" className="ui-page-header"><div className="cluster">{backTo && <BackLink to={backTo} />}{subtitle ? <div className="ui-page-header__text"><h1>{title}</h1>{subtitle}</div> : <h1>{title}</h1>}</div>{actions && <div className="cluster">{actions}</div>}</header>;
 }
 export function SectionHeader({ title, actions }: { title: ReactNode; actions?: ReactNode }) {
   return <div data-component="SectionHeader" className="ui-section-header"><h2>{title}</h2>{actions && <div className="cluster">{actions}</div>}</div>;

@@ -41,7 +41,9 @@ export interface SesDiscovery {
 export interface SesReputation { available: boolean; reason: string | null; bounceRate: number | null; complaintRate: number | null; series: { at: string; bounceRate: number | null; complaintRate: number | null }[] }
 interface SesConfigurationSet { name: string; exists: boolean | null; owned: boolean | null; sendingEnabled: boolean | null; eventDestinationExists: boolean | null; eventWired: boolean | null; autoValidation: AutoValidationMode | null }
 export interface Workspace { id: string; name: string; accountId?: string; role: string; members?: { id: string; name: string; email: string; role: string }[] }
-export interface EmailEvent { id: string; type: string; at: ISODate; description: string; diagnostic?: string }
+/** What a provider event recorded: a bounce's SES type and subtype, a complaint's feedback type, a click's link, and whether SES thought an open or click came from a bot. */
+export interface EmailEventDetail { bounceType?: string; bounceSubType?: string; feedbackType?: string; link?: string; bot?: boolean }
+export interface EmailEvent { id: string; type: string; at: ISODate; description: string; diagnostic?: string; detail?: EmailEventDetail }
 /** POST /v1/emails/check: an advisory 0–100 sendability score, never an inbox-placement probability. */
 export type SendabilityCategory = 'authentication' | 'content' | 'headers' | 'size' | 'rendering' | 'reputation'
 export interface SendabilityFinding { ruleId: string; category: SendabilityCategory; severity: 'info' | 'warning' | 'error'; title: string; detail: string; fix: string; evidence?: Record<string, number | string> }
