@@ -10,7 +10,8 @@ export class Limit extends Error {}
 
 export type Kind = 'ident' | 'function' | 'at' | 'hash' | 'string' | 'url' | 'delim' | 'number' | 'percentage' | 'dimension'
   | 'ws' | ':' | ';' | ',' | '[' | ']' | '(' | ')' | '{' | '}' | 'cdo' | 'cdc' | 'bad';
-export type Token = { kind: Kind; value: string; unit: string; num: number; escaped: boolean; id: boolean; at: number };
+/** `at` and `end`: where the token starts and ends in the input, newlines normalized (\r\n, \r and \f read as \n). */
+export type Token = { kind: Kind; value: string; unit: string; num: number; escaped: boolean; id: boolean; at: number; end: number };
 export type Block = { kind: 'block'; open: '{' | '[' | '('; items: Node[] };
 export type Func = { kind: 'fn'; name: string; items: Node[] };
 export type Node = Token | Block | Func;
@@ -26,7 +27,7 @@ export function tokenize(input: string, comments?: { found: boolean }): Token[] 
   let i = 0;
   const push = (kind: Kind, at: number, value = '', extra?: Partial<Token>) => {
     if (out.length >= MAX_TOKENS) throw new Limit();
-    out.push({ kind, value, unit: '', num: 0, escaped: false, id: false, at, ...extra });
+    out.push({ kind, value, unit: '', num: 0, escaped: false, id: false, at, end: i, ...extra });
   };
   const validEscape = (j: number) => s[j] === '\\' && s[j + 1] !== undefined && s[j + 1] !== '\n';
   const startsIdent = (j: number) => s[j] === '-' ? isNameStart(s[j + 1]) || s[j + 1] === '-' || validEscape(j + 1) : isNameStart(s[j]) || validEscape(j);

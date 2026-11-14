@@ -143,6 +143,7 @@ export async function readHtml(html: string, visit?: (tag: string) => void, opti
   };
   for (const child of root.childNodes) walk(child,'');
   flush();
+  aside.push(...copy.text);
   return { text: [...lines,...aside].join('\n'), hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, links, images, html: copy.html };
 }
 /**
@@ -189,8 +190,8 @@ export function assertScreenable(measure: ScreenMeasure, limitBytes: number, sco
   if (measure.signals.length>MAX_SIGNALS || Buffer.byteLength(measure.signals.join('\n'))>MAX_SIGNAL_BYTES) throw tooManyHosts(measure.signals.length,index);
   if (measure.screenedBytes>limitBytes) throw tooLarge(measure.screenedBytes,limitBytes,scope,index);
 }
-async function body(snapshot: EmailSnapshot, limitBytes: number, fonts: FontSources) {
-  const measure=await measureScreen(snapshot, { fonts });
+async function body(snapshot: EmailSnapshot, limitBytes: number, fonts: FontSources, original: boolean) {
+  const measure=await measureScreen(snapshot, { fonts, original });
   assertScreenable(measure,limitBytes);
   return { bodies:completeBodies(measure.content,measure.signals.join('\n'),limitBytes), textHtmlOverlap:measure.textHtmlOverlap };
 }
@@ -223,13 +224,15 @@ async function evaluate(endpoint: string, apiKey: string, model: string, state: 
 }
 
 /** Spam probability for one snapshot, or null when the installation has no classifier configured. A campaign test has
- *  the campaign limit. `reserve` is told how many requests a classification will make before the first one. */
-export async function screenSnapshot(runtime: Runtime, snapshot: EmailSnapshot, required=false, reserve?: (requests: number) => Promise<void>): Promise<ScreenResult | null> {
+ *  the campaign limit. `reserve` is told how many requests a classification will make before the first one. The
+ *  snapshot is read as it is sent: Hosted mail as its canonical copy (the dispatcher has already made it one), mail
+ *  delivered as submitted (BYO `screen: true`, `original`) exactly as written. */
+export async function screenSnapshot(runtime: Runtime, snapshot: EmailSnapshot, required=false, reserve?: (requests: number) => Promise<void>, original=false): Promise<ScreenResult | null> {
   const settings = runtime.config.screen;
   if (!settings) return null;
   const from = formattedSender(snapshot.from, snapshot.fromName);
   const recipients=snapshot.to.length+snapshot.cc.length+snapshot.bcc.length;
-  const key = await digest(JSON.stringify([runtime.config.workspaceId,settings.endpoint,settings.model,required,from,snapshot.kind,snapshot.subject,snapshot.text,snapshot.html,snapshot.raw,recipients]));
+  const key = await digest(JSON.stringify([runtime.config.workspaceId,settings.endpoint,settings.model,required,original,from,snapshot.kind,snapshot.subject,snapshot.text,snapshot.html,snapshot.raw,recipients]));
   const now = Date.now();
   const hit = cache.get(key);
   if (hit && hit.expires > now) return hit.result;
@@ -238,7 +241,7 @@ export async function screenSnapshot(runtime: Runtime, snapshot: EmailSnapshot, 
   let pending=flights.get(runtime.storage);if(!pending){pending=new Map();flights.set(runtime.storage,pending);}
   const existing=pending.get(key);if(existing)return existing;
   const limits=runtime.config.screenLimits;
-  const lookup=body(snapshot,snapshot.testCampaignId ? limits.campaignBytes : limits.messageBytes,fontSources(runtime.config)).then(async ({bodies,textHtmlOverlap})=>{
+  const lookup=body(snapshot,snapshot.testCampaignId ? limits.campaignBytes : limits.messageBytes,fontSources(runtime.config),original).then(async ({bodies,textHtmlOverlap})=>{
     await reserve?.(bodies.length);
     const sender=copy(from), subject=copy(snapshot.subject);
     let highest: ScreenResult | undefined;

@@ -5,9 +5,10 @@
  * and delivered once (the first, as every HTML parser reads it). The copy is read again until it reads as itself, so a
  * client parses exactly what was screened.
  *
- * Removed, because a client could draw or load something from them that the screen can't read: text-generating and
- * code-running CSS (src/hosted-css.ts), fonts from anywhere but a font service and style sheets from anywhere but
- * Google Fonts (FontSources), SVG fonts, scripts, templates, frames, plugins (an <object>'s fallback content stays),
+ * Removed, because a client could draw or load something from them that the screen can't read: CSS declarations and
+ * rules outside the allow-list (src/hosted-css.ts, which keeps the rest of the CSS text as written), fonts and style
+ * sheets from anywhere but a font service (FontSources), SVG fonts, scripts, templates, frames, plugins (an <object>'s
+ * fallback content stays),
  * <link> other than a style sheet (preload and prefetch hints included), refresh and Link <meta>, comments other than
  * Outlook's conditional ones, SVG animation of an address or style, srcset (the image keeps its src), archive,
  * xml:base, MathML altimg and definitionURL, inline data: addresses, and resources in SVG presentation attributes. An
@@ -19,7 +20,7 @@
  */
 import { defaultTreeAdapter, html as spec, serializeOuter, type DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
-import { hostedDeclarations, hostedSheet, loadsResource, type FontPolicy } from './hosted-css.js';
+import { cssReach, hostedDeclarations, hostedSheet, loadsResource, type FontPolicy } from './hosted-css.js';
 
 type Node = DefaultTreeAdapterMap['childNode'];
 type Parent = DefaultTreeAdapterMap['parentNode'];
@@ -43,17 +44,15 @@ export const destinationHost = (target: string) => { try { return /^https?:$/.te
 // What a style sheet, style attribute or other CSS may load: absolute http(s) only.
 const resource = (value: string) => { const target = destination(value); return target && /^https?:/.test(target) ? target : null; };
 /**
- * Where a message may load fonts from: a font can draw any text in place of the text the screen reads, so only from
- * font services whose fonts senders can't upload (JEV_FONT_HOSTS), over https, and from the installation's own font
- * directory (`prefix`, the campaign editor's Inter). Style sheets, which can declare fonts and generate text, only
- * from Google Fonts.
+ * Where a message may load fonts and style sheets from: a font can draw any text in place of the text the screen reads,
+ * and a sheet can generate text, so only from font services whose fonts senders can't upload (JEV_FONT_HOSTS), over
+ * https; font files also from the installation's own font directory (`prefix`, the campaign editor's Inter).
  */
 export type FontSources = { hosts: string[]; prefix?: string };
 export const DEFAULT_FONT_HOSTS = ['fonts.gstatic.com', 'fonts.googleapis.com', 'use.typekit.net', 'p.typekit.net', 'fonts.bunny.net'];
-const SHEET_HOSTS = ['fonts.googleapis.com'];
 function fontPolicy({ hosts, prefix }: FontSources): FontPolicy {
   const own = prefix ? resource(prefix) : null, host = (target: string) => target.startsWith('https://') ? new URL(target).host : '';
-  return { font: target => hosts.includes(host(target)) || (!!own && target.startsWith(own)), sheet: target => SHEET_HOSTS.includes(host(target)) };
+  return { font: target => hosts.includes(host(target)) || (!!own && target.startsWith(own)), sheet: target => hosts.includes(host(target)) };
 }
 
 // The URL-bearing attribute vocabulary (HTML, SVG, MathML and Office markup); docs/sending-limits.md has the table.
@@ -88,6 +87,8 @@ export type HostedHtml = {
   tags: Set<string>;
   /** Hosts whose fonts or style sheets were removed, for the sender. */
   fonts: string[];
+  /** Text a sheet could draw, read beside the document's text (mail delivered as submitted). */
+  text: string[];
 };
 type Sink = { destinations: Set<string>; unsupported: string[]; removed: string[]; changes: number; tags: Set<string>; fonts: string[]; policy: FontPolicy; css: Map<string, ReturnType<typeof hostedDeclarations>> };
 const foreign = (sink: Sink, host: string) => { if (!sink.fonts.includes(host)) sink.fonts.push(host); note(sink.removed, `Custom font from ${host} removed`); };
@@ -168,7 +169,7 @@ function attributes(element: Element, tag: string, sink: Sink, frozen: boolean, 
       const read = declarations(sink, value);
       for (const target of read.destinations) sink.destinations.add(target);
       if (read.removed.length) { sink.changes++; for (const what of read.removed) note(sink.removed, what); }
-      if (!frozen && read.css !== value) { sink.changes++; if (read.css) a.value = read.css; else element.attrs = element.attrs.filter(b => b !== a); }
+      if (!frozen && read.css !== value) { sink.changes++; if (/[^\s;]/.test(read.css)) a.value = read.css; else element.attrs = element.attrs.filter(b => b !== a); }
       continue;
     }
     if (CSS_ATTRIBUTES.has(name) && loadsResource(value)) { drop(a, `a url() in <${tag} ${name}>`); continue; }
@@ -206,14 +207,70 @@ function pass(html: string, placeholders: boolean, policy: FontPolicy) {
   const serialized = root.childNodes.map(node => node.nodeName === '#documentType' ? doctype(node as DefaultTreeAdapterMap['documentType']) : serializeOuter(node, { scriptingEnabled: false })).join('');
   return { html: serialized, root, ...sink };
 }
-/** How a body is read: whether addresses may start with a placeholder, and where fonts may come from. */
-export type HostedOptions = { placeholders?: boolean; fonts?: FontSources };
+// Absolute addresses anywhere in a value, commas included (a srcset candidate may hold one).
+const ADDRESSES = /https?:[\\/]{2}[^\s"'<>]+/gi;
+/**
+ * Mail delivered as submitted (BYO `screen: true`): read without changing anything, so the screen judges the exact
+ * bytes that are sent. Every place it could link to or load from is listed: URL attributes as the canonical copy reads
+ * them, every candidate and address in srcset and link lists, every url() and absolute address in CSS (custom
+ * properties and fallbacks included), and addresses in refresh <meta> and SVG animation values; markup a lenient
+ * client may show (comments, templates, frame fallbacks) is searched too. CSS strings and the attributes attr() reads
+ * are text a sheet could draw, so they are read as text. A superset of what a client uses.
+ */
+function asSent(root: Document, placeholders: boolean): Omit<HostedHtml, 'html' | 'root' | 'removed' | 'fonts'> & { text: string[] } {
+  const sink: Sink = { destinations: new Set(), unsupported: [], removed: [], changes: 0, tags: new Set(), fonts: [], policy: fontPolicy({ hosts: [] }), css: new Map() };
+  const text: string[] = [], read = new Set<string>();
+  const addresses = (value: string) => { for (const match of value.matchAll(ADDRESSES)) { const target = destination(match[0]); if (target) sink.destinations.add(target); } };
+  const css = (value: string) => {
+    const reach = cssReach(value, resource);
+    if (!reach) { note(sink.unsupported, 'a style sheet over the CSS budget'); return; }
+    for (const target of reach.destinations) sink.destinations.add(target);
+    text.push(...reach.text);
+    for (const name of reach.attributes) read.add(name);
+  };
+  const walk = (node: Node | DefaultTreeAdapterMap['parentNode']) => {
+    if ('tagName' in node) {
+      const tag = node.tagName.toLowerCase();
+      sink.tags.add(tag);
+      if (tag === 'base') note(sink.unsupported, '<base>');
+      if (tag === 'style') css(node.childNodes.map(child => 'value' in child ? child.value : '').join(''));
+      for (const a of node.attrs) {
+        const name = (a.prefix ? `${a.prefix}:${a.name}` : a.name).toLowerCase();
+        if (name === 'style' || CSS_ATTRIBUTES.has(name)) css(a.value);
+        else if (name === 'srcset' || name === 'imagesrcset' || URL_LISTS.has(name) || name === 'archive' || (tag === 'meta' && name === 'content') || (ANIMATIONS.has(tag) && /^(?:to|from|by|values)$/.test(name))) {
+          for (const part of a.value.split(/[\s,]+/)) { const target = destination(part); if (target) sink.destinations.add(target); }
+          addresses(a.value);
+        }
+      }
+      attributes(node, tag, sink, true, placeholders);
+    }
+    for (const child of (node as DefaultTreeAdapterMap['parentNode']).childNodes ?? []) walk(child);
+    const content = (node as { content?: DefaultTreeAdapterMap['parentNode'] }).content;
+    if (content) walk(content);
+  };
+  walk(root);
+  if (read.size) {
+    const collect = (node: Node | DefaultTreeAdapterMap['parentNode']) => {
+      if ('attrs' in node) for (const a of node.attrs) if (read.has(a.name.toLowerCase()) && a.value.trim()) text.push(a.value);
+      for (const child of (node as DefaultTreeAdapterMap['parentNode']).childNodes ?? []) collect(child);
+    };
+    collect(root);
+  }
+  return { destinations: sink.destinations, unsupported: sink.unsupported, tags: sink.tags, text };
+}
+/** How a body is read: whether addresses may start with a placeholder, where fonts may come from, and whether it is
+ *  delivered as submitted (`original`) rather than as its canonical copy. */
+export type HostedOptions = { placeholders?: boolean; fonts?: FontSources; original?: boolean };
 /**
  * The canonical copy of an HTML body, or null when it is over the parser's budgets or doesn't read as itself after a
  * few passes. With `placeholders`, a campaign's own copy may start an address with a placeholder; each recipient's copy
  * is read without it.
  */
-export function hostedHtml(html: string, { placeholders = false, fonts = { hosts: DEFAULT_FONT_HOSTS } }: HostedOptions = {}): HostedHtml | null {
+export function hostedHtml(html: string, { placeholders = false, fonts = { hosts: DEFAULT_FONT_HOSTS }, original = false }: HostedOptions = {}): HostedHtml | null {
+  if (original) {
+    const root = boundedHtmlFragment(html, 'document', { clients: true });
+    return root ? { html, root: root as Document, removed: [], fonts: [], ...asSent(root as Document, placeholders) } : null;
+  }
   const policy = fontPolicy(fonts);
   let input = html, read = pass(input, placeholders, policy);
   if (!read) return null;
@@ -224,5 +281,5 @@ export function hostedHtml(html: string, { placeholders = false, fonts = { hosts
     if (!read) return null;
   }
   if (read.changes || read.html !== input) return null;
-  return { html: read.html, root: read.root as Document, destinations: read.destinations, unsupported: read.unsupported, removed, tags, fonts: foreignFonts };
+  return { html: read.html, root: read.root as Document, destinations: read.destinations, unsupported: read.unsupported, removed, tags, fonts: foreignFonts, text: [] };
 }

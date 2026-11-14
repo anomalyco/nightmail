@@ -14127,8 +14127,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const cases: [string, string, boolean, RegExp?][] = [
       // Recheck 3: srcset is removed (the image keeps its src); CSS and ping addresses are read as clients read them.
       ['srcset', `<img srcset="https://held.invalid/Sample,Marker.png 1x" src="https://held.invalid/a.png" alt="" width="20" height="20"><p>${ready}</p>`, false, /srcset|Marker\.png/],
-      ['escaped url()', `<p style="background-image:u\\72l(https://held.invalid/SampleMarker.png)">${ready}</p>`, true],
-      ['escape in a URL', `<p style="background-image:url(https://held.invalid/Sample\\4d arker.png)">${ready}</p>`, true],
+      // Escapes in a url() are not read: the declaration is removed rather than screened.
+      ['escaped url()', `<p style="background-image:u\\72l(https://held.invalid/SampleMarker.png)">${ready}</p>`, false, /SampleMarker|background/],
+      ['escape in a URL', `<p style="background-image:url(https://held.invalid/Sample\\4d arker.png)">${ready}</p>`, false, /arker|background/],
       ['style sheet', `<style>.card{background-image:url("https://held.invalid/SampleMarker.png")}</style><p class="card">${ready}</p>`, true],
       ['ping', `<p><a href="https://held.invalid/" ping="https://held.invalid/SampleMarker">Open</a> ${ready}</p>`, true],
       ['body background', `<html><body background="https://held.invalid/SampleMarker.png"><p>${ready}</p></body></html>`, true],
@@ -14159,6 +14160,18 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ['generated text in Outlook markup', `<!--[if mso]><style>p::before{content:"SampleMarker"}</style><![endif]--><p>${ready}</p>`, false, /SampleMarker/],
       ['MathML', `<math altimg="https://held.invalid/SampleMarker.png" definitionURL="https://evil.invalid/offer"><mi>x</mi></math><p>${ready}</p>`, false, /SampleMarker|evil\.invalid/],
       ['AlphaImageLoader', `<p style="filter:progid:DXImageTransform.Microsoft.AlphaImageLoader(src='https://held.invalid/SampleMarker.png')">${ready}</p>`, false, /SampleMarker|progid/i],
+      // Recheck 5, R5-H1: a resource behind var(), env() or attr() is never kept, in a sheet or a style attribute, nor
+      // is any custom property; 61 of them on 61 hosts load nothing.
+      ['image-set(var())', `<style>:root{--pic:"https://held.invalid/SampleMarker.png"} .hero{background-image:image-set(var(--pic) 1x)}</style><p class="hero">${ready}</p>`, false, /SampleMarker|image-set|--pic/],
+      ['var() fallback', `<style>.hero{background-image:image-set(var(--none, "https://held.invalid/SampleMarker.png") 1x)}</style><p class="hero">${ready}</p>`, false, /SampleMarker|image-set/],
+      ['-webkit-image-set()', `<style>:root{--pic:"https://held.invalid/SampleMarker.png"} .hero{background-image:-webkit-image-set(var(--pic) 1x)}</style><p class="hero">${ready}</p>`, false, /SampleMarker|image-set/],
+      ['inline var()', `<p style="--pic:'https://held.invalid/SampleMarker.png';background-image:image-set(var(--pic) 1x)">${ready}</p>`, false, /SampleMarker|var\(/],
+      ['61 hosts behind var()', `<style>${Array.from({ length: 61 }, (_, i) => `.h${i}{--p${i}:"https://h${i}.evil.invalid/offer.png";background-image:image-set(var(--p${i}) 1x)}`).join('')}</style><p class="h1">${ready}</p>`, false, /evil\.invalid|image-set/],
+      // R5-M1: CSS is never rewritten. A rule with nested rules, or a selector that isn't plain, is removed whole.
+      ['nested declarations', `<style>.x{color:red;&{color:blue}color:green}</style><p class="x">${ready}</p>`, false, /\.x\{/],
+      ['nested @media', `<style>.x{color:red;@media(min-width:0px){color:blue}}</style><p class="x">${ready}</p>`, false, /\.x\{/],
+      ['nested @supports', `<style>.x{color:red;@supports(display:block){color:blue}}</style><p class="x">${ready}</p>`, false, /\.x\{|@supports/],
+      ['commented selector', `<style>a/**/b{color:red}</style><p><a href="https://held.invalid/">Open</a> ${ready}</p>`, false, /a\s*(?:\/\*\*\/)?\s*b\{/],
     ];
     for (const [name, html, bad, gone] of cases) {
       const { to, reply } = await send(html), start = screened.length;
@@ -14181,19 +14194,19 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const outlook = `<!doctype html><html xmlns="http://www.w3.org/1999/xhtml" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:o="urn:schemas-microsoft-com:office:office"><head><!--[if !mso]><!--><meta http-equiv="X-UA-Compatible" content="IE=edge"><!--<![endif]--><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
 <!--[if mso]><noscript><xml><o:OfficeDocumentSettings><o:AllowPNG/><o:PixelsPerInch>96</o:PixelsPerInch></o:OfficeDocumentSettings></xml></noscript><![endif]--><!--[if lte mso 11]><style type="text/css">.mj-outlook-group-fix { width:100% !important; }</style><![endif]--></head>
 <body style="word-spacing:normal;"><div><!--[if mso | IE]><table align="center" border="0" cellpadding="0" cellspacing="0" style="width:600px;" width="600"><tr><td style="line-height:0px;font-size:0px;mso-line-height-rule:exactly;"><![endif]--><div style="margin:0px auto;max-width:600px;"><p>${ready}</p>
-<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://shop.brand.example/orders/4821" style="height:40px;width:200px" arcsize="10%" fillcolor="#00aa77"><center>Track your order</center></v:roundrect><![endif]--><!--[if !mso]><!--><a href="https://shop.brand.example/orders/4821" style="display:inline-block;padding:12px 20px;background:#00aa77;color:#ffffff">Track your order</a><!--<![endif]--></div><!--[if mso | IE]></td></tr></table><![endif]--></div></body></html>`;
+<!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://shop.brand.example/orders/4821" style="height:40px;v-text-anchor:middle;width:200px" arcsize="10%" fillcolor="#00aa77"><center>Track your order</center></v:roundrect><![endif]--><!--[if !mso]><!--><a href="https://shop.brand.example/orders/4821" style="display:inline-block;padding:12px 20px;background:#00aa77;color:#ffffff">Track your order</a><!--<![endif]--></div><!--[if mso | IE]></td></tr></table><![endif]--></div></body></html>`;
     const compatible: [string, string, RegExp[], RegExp[]][] = [
       ['web font', `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html><head><style type="text/css">@font-face{font-family:'Open Sans';src:url('https://fonts.gstatic.com/s/opensans/v40/mem8YaGs126MiZpBA-UFVZ0b.woff2') format('woff2'),url('https://fonts.gstatic.com/s/opensans/v40/mem8YaGs126MiZpBA-UFVZ0d.woff') format('woff');font-weight:400} @font-face{font-family:Proxima;src:url('https://use.typekit.net/af/71f83c/00000000000000003b9b093b/27/l?primer=7cdcb44be4a7db8877ffa5c0007b8dd865b3bbc383831fe2ea177f62257a9191&fvd=n4&v=3') format('woff2')} h1{font-family:'Open Sans',Helvetica,Arial,sans-serif;letter-spacing:-0.01em;font-size:1.6em}</style></head><body><h1>Spring collection</h1><p>${ready}</p></body></html>`,
         [/^<!DOCTYPE html PUBLIC "-\/\/W3C\/\/DTD XHTML 1\.0 Transitional\/\/EN"/, /@font-face\{font-family:'Open Sans';src:url\('https:\/\/fonts\.gstatic\.com\/s\/opensans\/v40\/mem8YaGs126MiZpBA-UFVZ0b\.woff2'\) format\('woff2'\)/, /src:url\('https:\/\/use\.typekit\.net\/af\//, /letter-spacing:-0\.01em;font-size:1\.6em/], [/\\/]],
       // A font or style sheet from anywhere else is removed, and the checker says so.
       ['custom font', `<html><head><style>@import url('https://cdn.brand.example/fonts.css'); @font-face{font-family:'Brand Sans';src:url('https://cdn.brand.example/fonts/brand-sans.woff2') format('woff2')} p{font-family:'Brand Sans',Arial}</style><link rel="stylesheet" href="https://cdn.brand.example/main.css"></head><body><p>${ready}</p></body></html>`,
-        [/@font-face\{font-family:'Brand Sans'\}p\{font-family:'Brand Sans',Arial\}/], [/cdn\.brand\.example|@import|<link/]],
+        [/<style> @font-face\{font-family:'Brand Sans';\} p\{font-family:'Brand Sans',Arial\}<\/style>/], [/cdn\.brand\.example|@import|<link/]],
       ['Google Fonts', `<html><head><style>@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap'); body,p{font-family:'Open Sans',Arial,sans-serif}</style><link href="https://fonts.googleapis.com/css2?family=Inter&display=swap" rel="stylesheet"></head><body><p>${ready}</p></body></html>`,
         [/@import url\('https:\/\/fonts\.googleapis\.com\/css2\?family=Open\+Sans:wght@400;700&display=swap'\)/, /<link href="https:\/\/fonts\.googleapis\.com\/css2\?family=Inter&amp;display=swap" rel="stylesheet">/], []],
       ['preload hints', `<html><head><link rel="preload" as="image" href="https://cdn.brand.example/logo.png"><link rel="preconnect" href="https://fonts.gstatic.com"><link rel="dns-prefetch" href="//cdn.brand.example"></head><body><img src="https://cdn.brand.example/logo.png" width="140" height="40" alt="Brand"><p>${ready}</p></body></html>`,
         [/<img src="https:\/\/cdn\.brand\.example\/logo\.png"/], [/<link/]],
       ['comments', `<style>/* background-image:url(https://cdn.brand.example/old.png) intentionally disabled */ .hero{color:#111111} /* url("/relative.png") and @import "old.css"; */</style><!-- Built with an editor: <a href="/old">old link</a> --><p class="hero">${ready}</p>`,
-        [/<style>\.hero\{color:#111111\}<\/style>/], [/old\.png|relative\.png|old link|Built with/]],
+        [/<style>\/\* background-image:url\(https:\/\/cdn\.brand\.example\/old\.png\) intentionally disabled \*\/ \.hero\{color:#111111\} \/\* url\("\/relative\.png"\) and @import "old\.css"; \*\/<\/style>/], [/old link|Built with/]],
       ['Outlook', outlook, [/<!--\[if mso \| IE\]><table align="center"/, /<!--\[if mso\]><v:roundrect/, /<!--\[if !mso\]><!--><a href=/, /<!--\[if lte mso 11\]><style type="text\/css">\.mj-outlook-group-fix \{ width:100% !important; \}<\/style><!\[endif\]-->/, /<!--\[if mso \| IE\]><\/td><\/tr><\/table><!\[endif\]-->/], []],
       // The screen corpus as submitted: hybrid Outlook with web fonts, a responsive newsletter importing Google Fonts,
       // a receipt, a dark-mode welcome and client hacks (an inline data: image isn't accepted for sending at all).
@@ -20267,12 +20280,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         VALUES ($1, $2, $3, $4, $5, '111122223333', $6)`, [runtime.config.workspaceId, REGION,
         JSON.stringify({ provisioned: true, account: { id: '111122223333', sendingEnabled: true }, resources: { topic: { arn: topic }, transactional: { sendingEnabled: true }, marketing: { sendingEnabled: true } } }),
         await credentialFingerprint(runtime.config), discoveryTarget(runtime.config), topic]);
-      const sent: string[] = [];
+      const sent: string[] = [], htmls = new Map<string, string | undefined>();
       t.mock.method(SESv2Client.prototype, 'send', async (command: any) => {
         if (command instanceof GetAccountCommand) return { SendingEnabled: true, SendQuota: { MaxSendRate: 100, Max24HourSend: 10000, SentLast24Hours: 0 } };
         assert.ok(command instanceof SendEmailCommand, 'Only GetAccount and SendEmail are expected.');
         const emailId = command.input.EmailTags!.find((tag: Json) => tag.Name === 'bane_email_id')!.Value!;
-        sent.push(emailId);
+        sent.push(emailId); htmls.set(emailId, command.input.Content?.Simple?.Body?.Html?.Data);
         return { MessageId: `live-${emailId}` };
       });
       const marker = unique('CASINO-BONUS');
@@ -20297,7 +20310,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           }, { once: true }));
         }
         if (classifierDown) return new Response(null, { status: 429 });
-        return Response.json({ model: 'jev-test', answers: { spam: { noul: request.state.email.subject.includes(marker) ? 0.97 : 0.02 } } });
+        return Response.json({ model: 'jev-test', answers: { spam: { noul: request.state.email.subject.includes(marker) || request.state.email.body.includes(marker) ? 0.97 : 0.02 } } });
       });
       const send = async (extra: Json) => ok(await local('POST', '/v1/emails/send', mail(extra), 'live'), 202).id as string;
       const get = async (emailId: string) => ok(await local('GET', `/v1/emails/${emailId}`, undefined, 'live'));
@@ -20336,6 +20349,17 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.ok(timeoutMs < 1000, `Classifier aborted after ${timeoutMs} ms`);
       assert.ok(sent.includes(slow));
       t.diagnostic(`Unresponsive classifier failed open in ${timeoutMs} ms; sibling already sent.`);
+      // Recheck 5, R5-M2: mail delivered as submitted (bring-your-own AWS with screen: true) is screened as written:
+      // every srcset candidate and the text its style sheet could draw are read, and SES gets the bytes submitted.
+      classifierDown = false;
+      const asWritten = `<!-- a sender's note --><style>/* plain */ .o{color:#111}</style><p class="o">Your receipt is attached.</p>`;
+      const srcset = await send({ subject: 'Receipt with a picture', html: `<img src="https://cdn.synthetic.invalid/a.png" srcset="https://cdn.synthetic.invalid/${marker},x.png 1x" alt="Receipt"><p>Your receipt is attached.</p>`, screen: true });
+      const drawn = await send({ subject: 'Receipt with a style', html: `<style>.o::before{content:"${marker}"}</style><p class="o">Your receipt is attached.</p>`, screen: true });
+      const kept = await send({ subject: 'Receipt as written', html: asWritten, screen: true });
+      await dispatchDue(runtime, REGION);
+      assert.deepEqual([(await get(srcset)).errorCode, (await get(drawn)).errorCode, (await get(kept)).status], ['CONTENT_REJECTED_SPAM', 'CONTENT_REJECTED_SPAM', 'accepted']);
+      assert.ok(!sent.includes(srcset) && !sent.includes(drawn));
+      assert.equal(htmls.get(kept), asWritten, 'Mail delivered as submitted goes to SES byte for byte.');
     });
   });
 

@@ -410,7 +410,8 @@ async function screenMail(runtime: Runtime, mail: Mail, s: EmailSnapshot, requir
     return false;
   }
   let result: Awaited<ReturnType<typeof screenSnapshot>>;
-  try { result = await screenSnapshot(runtime, s, required); }
+  // Hosted mail is screened as its canonical copy; anything else goes out as submitted and is screened as written.
+  try { result = await screenSnapshot(runtime, s, required, undefined, !hostedGate); }
   catch (error) {
     if(!(error instanceof ApiError) || error.code!=='CONTENT_SCREEN_UNAVAILABLE') throw error;
     if(required) throw new ApiError(503,'CONTENT_SCREEN_UNAVAILABLE','Hosted content screening is unavailable; deferring without calling SES.',undefined,true);
