@@ -82,12 +82,12 @@ then the campaign \`defaults\` (the dashboard's fallback values). \`{{email}}\` 
 give every other placeholder a default, because one contact without a value fails the launch.
 Tests use \`data\`, then \`defaults\`. Values are escaped automatically.
 
-On Hosted sending, a campaign is screened once for all its recipients when you send or schedule it: its
-own copy, with placeholders unresolved, may hold 49,152 bytes of text (the HTML's visible text plus
-any text-part sentence it doesn't already say), and every distinct value is screened once. Each value
-must be at most 256 bytes, without markup, control or reordering characters, and may link only to
-hosts the campaign itself links to or to your verified sending domains. A value that breaks a rule
-fails the launch with \`CAMPAIGN_VALUE_REJECTED\`, naming the placeholder.
+On Hosted sending, a campaign is screened once for all its recipients when personalization can't
+change what it says: placeholders stand as words of their own (\`Hi {{firstName}},\` and not
+\`{{first}}{{last}}\`, \`Sample{{x}}\` or \`https://{{host}}\`), in a link only as a whole query value
+(\`?ref={{refId}}\`), and every value is short, plain text: at most 64 letters, digits, spaces and
+name punctuation, or 1–64 of A–Z, a–z, 0–9, _ and - in a link. Its own copy may then hold 49,152
+bytes of text. Any other campaign is screened recipient by recipient, at most 24,576 bytes each.
 
 Templates are reusable concrete campaign drafts, not personalization presets. Template subject,
 preview text and HTML must contain literal example content and cannot contain \`{{placeholder}}\`

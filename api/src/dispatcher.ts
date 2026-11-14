@@ -2,7 +2,7 @@ import { getTableColumns, sql, type SQL } from 'drizzle-orm';
 import type { Attachment, SESv2Client, SendEmailCommandInput } from '@aws-sdk/client-sesv2';
 import { ApiError, getSes, isSimulatedSes, id, lazyModule, log, logError, ModuleLoadError, preloadSesTransport, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
 import { attachments, emails, type EmailSnapshot, type EmailStatus, type CampaignDraft, type ReviewedRecipient } from './db/sending.js';
-import { approvedOriginUser, checkedDispatchAttachments, formattedSender, inlineMessage, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, sesDailyReserve, sizeCheck, statusForEvent, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
+import { approvedOriginUser, campaignCopy, checkedDispatchAttachments, formattedSender, inlineMessage, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, sesDailyReserve, sizeCheck, slotValues, statusForEvent, terminalColumns, terminalEvents, unsubscribePlaceholder, verifiedAttachment } from './sending.js';
 import { receivingPolicy } from './mailbox-ingest-input.js';
 import { principal } from './mail-gateway.js';
 import { regionalSender, sendingConnections, verifiedClaim } from './domain-claims.js';
@@ -12,7 +12,7 @@ import { credentialFingerprint, discoveryTarget } from './ses-region-state.js';
 import { mxResourceName, POOL_INSTALLATION, setupResources } from './ses-setup.js';
 import { forDelivery, type ReadyConnection } from './provider-credentials.js';
 import { wakeWebhooks } from './jobs.js';
-import { screenSnapshot, type CampaignScreen } from './screen.js';
+import { screenSnapshot, type CampaignScreen, type CampaignTemplate } from './screen.js';
 
 const loadSesv2 = lazyModule(() => import('@aws-sdk/client-sesv2'));
 const loadSimulatedSes = lazyModule(() => import('./adapters/simulated-ses.js'));
@@ -401,7 +401,7 @@ let screenSkipLoggedAt = 0;
 // Fail closed for probation and marketing. Trusted transactional and explicit BYO
 // checks may fail open. Policy is decided from the leased connection, never caller input.
 // Returns true only when the screen actually judged the message (and passed it); a skip or a fail-open outage is not a clean verdict.
-async function screenMail(runtime: Runtime, mail: Mail, s: EmailSnapshot, required:boolean, hostedGate?:GateState): Promise<boolean> {
+async function screenMail(runtime: Runtime, mail: Mail, s: EmailSnapshot, required:boolean, hostedGate?:GateState, reserve?:(requests:number)=>Promise<void>): Promise<boolean> {
   const settings = runtime.config.screen;
   if (!settings) {
     if(required) throw new ApiError(503,'CONTENT_SCREEN_UNAVAILABLE','Hosted content screening is unavailable; deferring without calling SES.',undefined,true);
@@ -409,7 +409,7 @@ async function screenMail(runtime: Runtime, mail: Mail, s: EmailSnapshot, requir
     return false;
   }
   let result: Awaited<ReturnType<typeof screenSnapshot>>;
-  try { result = await screenSnapshot(runtime, s, required); }
+  try { result = await screenSnapshot(runtime, s, required, reserve); }
   catch (error) {
     if(!(error instanceof ApiError) || error.code!=='CONTENT_SCREEN_UNAVAILABLE') throw error;
     if(required) throw new ApiError(503,'CONTENT_SCREEN_UNAVAILABLE','Hosted content screening is unavailable; deferring without calling SES.',undefined,true);
@@ -424,18 +424,27 @@ async function screenMail(runtime: Runtime, mail: Mail, s: EmailSnapshot, requir
   return true;
 }
 
-// The campaign's verdict, when it judged this exact review (every value included) and passed it. A trusted copy's
-// verdict covers the probation copy, which only drops what it read; a probation copy's is delivered as that copy.
+// The campaign's verdict, when it is complete and judged this exact review. A trusted copy's verdict covers the
+// probation copy, which only drops what it read; a probation copy's is delivered as that copy.
 function campaignVerdict(runtime: Runtime, review: Review) {
-  const verdict=review.screen, settings=runtime.config.screen;
-  return verdict?.done && settings && verdict.contentHash===review.reviewHash && verdict.spam<settings.threshold ? verdict : undefined;
+  const verdict=review.screen;
+  return verdict?.done && runtime.config.screen && verdict.contentHash===review.reviewHash ? verdict : undefined;
 }
-// The personalization values a recipient's copy carries, as interpolation reads them (src/sending.ts campaignMessage):
-// the frozen contact's own values; the campaign's fallbacks were checked with its copy.
-function recipientValues(recipient: ReviewedRecipient): [string, string][] {
-  const values: [string, string][] = Object.entries(recipient.properties).flatMap(([key, value]): [string, string][] =>
-    value === null || value === undefined || key === 'email' || (key === 'name' && recipient.name) ? [] : [[key, String(value)]]);
-  return recipient.name ? [...values, ['name', recipient.name]] : values;
+// The campaign's copy with its placeholders, as its tier delivers it, read once per review and tier.
+const templates=new Map<string,Promise<CampaignTemplate>>();
+function campaignTemplate(runtime: Runtime, review: Review, probation: boolean) {
+  const key=`${review.reviewHash}:${probation}`;
+  let template=templates.get(key);
+  if (!template) {
+    template=(async()=>{
+      const own=await campaignCopy(runtime,review.draft,review.rendered,review.version);
+      return (await import('./screen.js')).campaignTemplate(probation ? (await import('./screened-html.js')).probationCopy(own) : own);
+    })();
+    template.catch(()=>templates.delete(key));
+    templates.set(key,template);
+    while (templates.size>64) templates.delete(templates.keys().next().value!);
+  }
+  return template;
 }
 type AttachmentRow = typeof attachments.$inferSelect;
 function simpleContent(s: EmailSnapshot, parts: Attachment[]): SendEmailCommandInput['Content'] {
@@ -471,22 +480,30 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
   let screened=false;
   if (!isSimulatedSes(runtime) && (hosted || (s.screen && s.kind==='transactional'))) {
     const required=hosted && (!leased.owner.trusted || s.kind==='marketing');
-    // A campaign screened once (src/sending.ts screenCampaignStep) is checked per recipient without the classifier;
-    // without a passing verdict for this exact review and copy, the recipient is screened on its own as before.
-    const campaign=hosted && leased.review && leased.mail.snapshot.deferredCampaign ? campaignVerdict(runtime,leased.review) : undefined;
+    // A campaign screened once (src/sending.ts screenCampaignStep) delivers a copy without the classifier only when the
+    // copy is its template with values in the slots and nothing else. Any other copy of a campaign with a verdict is
+    // screened on its own within the campaign's budget; a campaign without one (launched earlier) is screened as before.
+    const review=hosted && leased.mail.snapshot.deferredCampaign ? leased.review : null, campaign=review ? campaignVerdict(runtime,review) : undefined;
     // Probation mail goes out as the copy the screen reads: every textual field without the bidi controls that
     // reorder it, the markup reduced to what a client shows as text, the campaign preheader added back from its own
     // field. Trusted senders keep their message, except a campaign screened as a probation copy before a promotion.
-    if (campaign) {
-      if (probation || campaign.probation) s = (await import('./screened-html.js')).probationCopy(s);
-      const { checkCampaignCopy } = await import('./screen.js');
-      await checkCampaignCopy(s, recipientValues(leased.review!.recipient), campaign);
-      screened=true;
-    } else if (hosted && (gate.screenRetryAt??0)>Date.now()) {
+    const copied=probation || campaign?.mode==='once' && campaign.probation;
+    if (copied) s = (await import('./screened-html.js')).probationCopy(s);
+    if (campaign?.mode==='once' && campaign.spam<runtime.config.screen!.threshold) {
+      const { sameOutsideSlots } = await import('./screen.js');
+      screened=await sameOutsideSlots(s, await campaignTemplate(runtime, review!, !!copied), slotValues(review!.draft, review!.recipient), stored?.unsubscribeUrl ? { url: stored.unsubscribeUrl, placeholder: unsubscribePlaceholder(runtime) } : undefined);
+      if (!screened) log('warn', { code: 'CAMPAIGN_COPY_DIFFERS', emailId: mail.id, campaignId: mail.campaignId });
+    }
+    if (!screened && hosted && (gate.screenRetryAt??0)>Date.now()) {
       if (required) throw new ApiError(503,'CONTENT_SCREEN_UNAVAILABLE','Hosted screen temporarily unavailable.',undefined,true);
-    } else {
-      if (probation) s = (await import('./screened-html.js')).probationCopy(s);
-      screened=await screenMail(runtime,mail,s,required,hosted?gate:undefined) && !!leased.owner.tenantName;
+    } else if (!screened) {
+      // A campaign's single copies draw on its budget, reserved before the classifier is asked.
+      const reserve=campaign ? async (requests:number) => {
+        const { rowCount } = await runtime.db.execute(sql`UPDATE sending_campaign_reviews SET screen=jsonb_set(screen,'{spent}',to_jsonb((screen->>'spent')::int+${requests}))
+          WHERE workspace_id=${mail.workspaceId} AND id=${mail.reviewId} AND (screen->>'spent')::int+${requests}<=(screen->>'budget')::int`);
+        if (!rowCount) throw new ApiError(422,'CONTENT_SCREEN_BUDGET_EXCEEDED','This campaign has used the classifier requests its audience allows; the copy was not sent.');
+      } : undefined;
+      screened=await screenMail(runtime,mail,s,required,hosted?gate:undefined,reserve) && !!leased.owner.tenantName;
     }
   }
   const parts: Attachment[] = [];
@@ -524,7 +541,7 @@ async function rejectPreflight(runtime: Runtime, mail: Mail, error: unknown) {
   await wakeWebhooks(runtime,rejected.rows[0]!.n);
   // Screen rejections are an expected policy outcome, not a dispatcher fault.
   if (error instanceof ScreenRejected) log('warn', { code, emailId: mail.id, spam: error.screen.spam, model: error.screen.model });
-  else if (code === 'CAMPAIGN_CONTENT_UNSCREENED') log('warn', { code, emailId: mail.id, campaignId: mail.campaignId });
+  else if (code === 'CONTENT_SCREEN_BUDGET_EXCEEDED') log('warn', { code, emailId: mail.id, campaignId: mail.campaignId });
   else logError(error, { code, emailId: mail.id });
   if (mail.campaignId) await finishSettledCampaigns(runtime, [{ workspace_id: mail.workspaceId, campaign_id: mail.campaignId }]);
 }

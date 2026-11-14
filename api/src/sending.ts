@@ -141,7 +141,7 @@ const SendInput = z.object({
 }).openapi('BatchSendEmailItem');
 // The screen's limits (src/screen.ts), as the API reference states them; the defaults of JEV_MESSAGE_LIMIT_BYTES and JEV_CAMPAIGN_LIMIT_BYTES.
 const SCREEN_LIMIT_NOTE = 'Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML\u2019s visible text and alt text, plus each text-part sentence the HTML doesn\u2019t already say (a sentence both parts say counts once). It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item\u2019s index, and no message of the batch is queued.';
-const CAMPAIGN_SCREEN_NOTE = 'Hosted campaigns are screened once for all recipients, not once per copy, when sent or scheduled. The campaign\u2019s own copy, with its placeholders unresolved, may hold 49,152 bytes of screened text (installation default; 422 CONTENT_TOO_LARGE_TO_SCREEN with error.details[0] { screenedBytes, limitBytes } otherwise). Each distinct personalization value is then checked and screened once: at most 256 UTF-8 bytes, no markup, control or reordering characters, and links only to hosts the campaign\u2019s own copy links to or to the workspace\u2019s verified sending domains (and their subdomains). A fallback value that breaks a rule is refused here with 422 CAMPAIGN_VALUE_REJECTED; a contact value that does fails the campaign with that code, and a positive verdict fails it with CONTENT_REJECTED_SPAM, before any recipient is sent to. Editing the campaign (unschedule, edit, schedule) screens it again.';
+const CAMPAIGN_SCREEN_NOTE = 'Hosted campaigns are screened before anyone is sent to. A campaign is screened once for all its recipients when personalization can\u2019t change what it says: its placeholders are words of their own in text and the subject (never joined to the text or another placeholder beside them) or whole query values of http(s) links, and every value in its audience is inert (in text, at most 64 characters after NFKC normalization of letters, digits, spaces and \u2019 \' , - with a period only at the end of a word; in a link, 1\u201364 of A\u2013Z, a\u2013z, 0\u20139, _ and -). {{email}} is the recipient\u2019s own address and may appear in text. The classifier then reads the campaign\u2019s copy with its placeholders and a sample of up to 12 assembled copies, and its copy may hold 49,152 bytes of screened text (installation default). Any other campaign is screened per recipient: its copy, and every recipient\u2019s copy, may hold 24,576 bytes. Over the limit that applies, the request is refused with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] { screenedBytes, limitBytes }; a recipient\u2019s copy over it fails the campaign before release. A positive verdict fails the campaign with CONTENT_REJECTED_SPAM. Editing the campaign (unschedule, edit, schedule) screens it again.';
 // SMTP already limits the entire MIME message to the advertised wire SIZE. Keep all
 // address, HTML and encoded-size checks, without imposing the public JSON body-part cap.
 const ProtocolBody = z.string().min(1).optional();
@@ -792,7 +792,9 @@ function screenedAtDispatch(runtime: Runtime, snapshot: Pick<EmailSnapshot, 'kin
 /** The screen's refusal of one message, or undefined when it fits the per-message limit. */
 async function screenRefusal(runtime: Runtime, snapshot: EmailSnapshot, index?: number) {
   const screen = await loadScreen();
-  try { screen.assertScreenable(await screen.measureScreen(snapshot), runtime.config.screenLimits.messageBytes, 'message', index); }
+  // A campaign test is a campaign's copy: it has the campaign limit.
+  const limits = runtime.config.screenLimits, test = !!snapshot.testCampaignId;
+  try { screen.assertScreenable(await screen.measureScreen(snapshot), test ? limits.campaignBytes : limits.messageBytes, test ? 'campaign' : 'message', index); }
   catch (error) { if (error instanceof ApiError && error.code === 'CONTENT_TOO_LARGE_TO_SCREEN') return error; throw error; }
 }
 async function assertScreenable(runtime: Runtime, snapshot: EmailSnapshot, shared: boolean, index?: number) {
@@ -1178,7 +1180,7 @@ async function renderCampaignContent(runtime: Runtime, draft: Pick<CampaignDraft
 const RECIPIENT_CONTENT_ERRORS = new Set(['CAMPAIGN_RECIPIENT_INVALID', 'MISSING_TEMPLATE_VARIABLE', 'UNSUPPORTED_TEMPLATE_SYNTAX', 'UNSAFE_TEMPLATE_CONTEXT', 'UNSAFE_HTML_URL', 'ENCODED_MESSAGE_TOO_LARGE', 'RENDERED_CONTENT_TOO_LARGE']);
 async function campaignMessage(runtime: Runtime, db: DbExecutor, a: Actor, draft: CampaignDraft, contact: ReviewedRecipient, test = false, preview = false, lockedAttachments?: (typeof attachments.$inferSelect)[], prepared?: { html?: string; text?: string }, templateValidated = false, htmlValidated = false, version = CAMPAIGN_RENDERER_VERSION) {
   try {
-    const values = { ...draft.defaults, ...Object.fromEntries(Object.entries(contact.properties).filter(([, value]) => value !== null && value !== undefined)), email: contact.email, ...(contact.name ? { name: contact.name } : {}) };
+    const values = personalization(draft, contact);
     const rendered = prepared ?? await renderCampaignContent(runtime, draft);
     const parse = rendered.html && (!templateValidated || draft.previewText) ? await loadParse5() : undefined;
     const parsed = SendInput.safeParse({ from: draft.from, fromName: draft.fromName, to: contact.email, replyTo: draft.replyTo, region: test ? campaignSendRegion(runtime,draft) : draft.region, kind: test ? 'transactional' : 'marketing', subject: interpolate(draft.subject, values, false, templateValidated), html: withPreheader(interpolate(rendered.html, values, true, templateValidated, parse), draft.previewText, parse, version), text: interpolate(rendered.text, values, false, templateValidated), attachments: draft.attachments, tracking: test ? false : draft.tracking });
@@ -1473,9 +1475,9 @@ export function registerSending(app: App) {
     await c.env.db.transaction(async db => { const current = await findCampaign(db, a, campaignId, true); draftSender(c.env, a, current.draft); editable(current); await db.execute(sql`DELETE FROM sending_attachment_links l USING sending_campaign_reviews r WHERE l.owner_type = 'review' AND l.owner_id = r.id AND l.workspace_id = r.workspace_id AND r.workspace_id = ${a.workspaceId} AND r.campaign_id = ${campaignId}`); await db.delete(campaignReviews).where(and(scope(campaignReviews, a), eq(campaignReviews.campaignId, campaignId))); await db.delete(attachmentLinks).where(and(scope(attachmentLinks, a), eq(attachmentLinks.ownerType, 'campaign'), eq(attachmentLinks.ownerId, campaignId))); await db.delete(campaigns).where(campaignWhere(a, campaignId)); });
     return c.json({ id: campaignId, deleted: true as const }, 200);
   });
-  app.openapi(createRoute({ method: 'post', path: '/v1/campaigns/{id}/test', operationId: 'testCampaign', description: 'Send the current draft, personalized with data, to one address as a transactional test. A test is screened as a single message: the screened-text limit described on sendEmail applies.', tags: ['Campaigns'], security, request: { params: IdParams, headers: IdempotencyHeaders, body: json(TestCampaign) }, responses: { 202: response(Receipt), ...errors } }), async c => {
+  app.openapi(createRoute({ method: 'post', path: '/v1/campaigns/{id}/test', operationId: 'testCampaign', description: 'Send the current draft, personalized with data, to one address as a transactional test. On Hosted sending a test is screened on its own, with the campaign limit (49,152 bytes of screened text by default; 422 CONTENT_TOO_LARGE_TO_SCREEN with error.details[0] { screenedBytes, limitBytes } over it).', tags: ['Campaigns'], security, request: { params: IdParams, headers: IdempotencyHeaders, body: json(TestCampaign) }, responses: { 202: response(Receipt), ...errors } }), async c => {
     const a = actor(c, 'send'); const input = c.req.valid('json'); const campaignId = c.req.valid('param').id;
-    const result = await idempotent(c, a, input, async db => { const row = await findCampaign(db, a, campaignId, true); if (row.archivedAt) throw new ApiError(409, 'CAMPAIGN_ARCHIVED', 'Restore this campaign before sending a test.'); await checkPending(c.env, db, a, hostedCost(input.to)); const snapshot = await campaignMessage(c.env, db, a, row.draft, { id: 'test-recipient', email: input.to, properties: input.data }, true); await assertScreenable(c.env, snapshot, a.dispatchAccount?.kind === 'shared'); return queueEmail(c.env, db, a, { ...snapshot, testCampaignId: campaignId }, undefined, undefined, c.get('requestId')); });
+    const result = await idempotent(c, a, input, async db => { const row = await findCampaign(db, a, campaignId, true); if (row.archivedAt) throw new ApiError(409, 'CAMPAIGN_ARCHIVED', 'Restore this campaign before sending a test.'); await checkPending(c.env, db, a, hostedCost(input.to)); const snapshot = await campaignMessage(c.env, db, a, row.draft, { id: 'test-recipient', email: input.to, properties: input.data }, true); await assertScreenable(c.env, { ...snapshot, testCampaignId: campaignId }, a.dispatchAccount?.kind === 'shared'); return queueEmail(c.env, db, a, { ...snapshot, testCampaignId: campaignId }, undefined, undefined, c.get('requestId')); });
     return c.json(Receipt.parse(result), 202);
   });
   app.openapi(createRoute({ method: 'post', path: '/v1/campaigns/{id}/send', operationId: 'sendCampaign', description: 'Accept the current revision for durable background delivery: the audience is frozen now, every message is validated in the background, then recipients are released into the dispatch queue. The 202 count is accepted recipient intents, not SES acceptance or delivery; poll the campaign for its state. ' + CAMPAIGN_SCREEN_NOTE, tags: ['Campaigns'], security, request: { params: IdParams, headers: IdempotencyHeaders, body: json(CampaignSend) }, responses: { 202: response(CampaignQueued), ...errors } }), async c => {
@@ -1636,8 +1638,8 @@ function backgroundFailure(error: unknown) {
   // see the campaign, so other content errors stay the sanitized summary.
   const placeholder = error instanceof ApiError && code === 'MISSING_TEMPLATE_VARIABLE' ? /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/.exec(error.message)?.[1] : undefined;
   if (placeholder) return { code, message: `A recipient has no value for {{${placeholder}}} (${code}). Add a fallback value for ${placeholder} and send again.` };
-  // The campaign screen's refusals name only sizes, placeholders and their rule, never a contact or its value.
-  if (error instanceof ApiError && ['CONTENT_REJECTED_SPAM', 'CONTENT_TOO_LARGE_TO_SCREEN', 'CAMPAIGN_VALUE_REJECTED'].includes(code)) return { code, message: error.message };
+  // The screen's refusals name only sizes and limits, never a contact or its values.
+  if (error instanceof ApiError && ['CONTENT_REJECTED_SPAM', 'CONTENT_TOO_LARGE_TO_SCREEN'].includes(code)) return { code, message: error.message };
   return { code, message: `Campaign work could not finish (${code}). Correct the cause and send again, or cancel the campaign.` };
 }
 // Send and schedule: freeze the audience and content now, reserve the recipients, and hand the one run job the rest.
@@ -1663,14 +1665,10 @@ async function launch(runtime: Runtime, db: DbExecutor, a: Actor, campaignId: st
   if (!isSimulatedSes(runtime) && !runtime.config.multiTenant) await assertLiveRegionReady(runtime, db, draft.region, 'marketing', false, a.workspaceId);
   const rendered = await renderCampaignContent(runtime, draft);
   if (campaignScreened(runtime, a.dispatchAccount?.kind === 'shared')) {
-    // Refuse now, with the numbers, what the campaign screen would refuse in the background.
-    const screen = await loadScreen(), measure = await screen.measureScreen(await campaignCopy(runtime, draft, rendered));
-    screen.assertScreenable(measure, runtime.config.screenLimits.campaignBytes, 'campaign');
-    const allowed = { hosts: [...measure.read?.hosts ?? []], domains: await verifiedDomains(db, a, draft.from) };
-    for (const key of placeholderKeys(draft, rendered)) {
-      const value = draft.defaults[key], problem = key === 'email' || value === null || value === undefined ? null : screen.mergeValueProblem(String(value), allowed);
-      if (problem) throw new ApiError(422, 'CAMPAIGN_VALUE_REJECTED', `The fallback value for {{${key}}} ${problem}.`, `defaults.${key}`);
-    }
+    // Refuse now, with the numbers, what the screen would refuse in the background: a campaign whose placeholders could
+    // change what it says is screened per recipient, with the per-message limit.
+    const screen = await loadScreen(), once = typeof await screen.campaignSlots({ subject: draft.subject, html: rendered.html, text: rendered.text }) !== 'string';
+    screen.assertScreenable(await screen.measureScreen(await campaignCopy(runtime, draft, rendered)), once ? runtime.config.screenLimits.campaignBytes : runtime.config.screenLimits.messageBytes, once ? 'campaign' : 'message');
   }
   const reviewId = id('review');
   const reviewed=route.binding ? {...row.draft,region:route.region,binding:route.binding} : row.draft;
@@ -2081,89 +2079,135 @@ const PLACEHOLDER = /{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}/g;
 /** The placeholders a campaign's subject and rendered parts use: the contact properties its audience snapshot keeps. */
 const placeholderKeys = (draft: Pick<CampaignDraft, 'subject'>, rendered: { html?: string; text?: string }) =>
   [...new Set([draft.subject, rendered.html ?? '', rendered.text ?? ''].flatMap(value => [...value.matchAll(PLACEHOLDER)].map(match => match[1]!)))];
+/** A recipient's personalization values as interpolation reads them: the contact's own, its address and name, then the campaign's fallbacks. */
+const personalization = (draft: Pick<CampaignDraft, 'defaults'>, contact: ReviewedRecipient): Record<string, unknown> =>
+  ({ ...draft.defaults, ...Object.fromEntries(Object.entries(contact.properties).filter(([, value]) => value !== null && value !== undefined)), email: contact.email, ...(contact.name ? { name: contact.name } : {}) });
+/** The same values as the text each slot receives. */
+export const slotValues = (draft: Pick<CampaignDraft, 'defaults'>, contact: ReviewedRecipient) =>
+  Object.fromEntries(Object.entries(personalization(draft, contact)).flatMap(([key, value]) => value === null || value === undefined ? [] : [[key, String(value)]])) as Record<string, string>;
 /** Whether the dispatcher screens a campaign's mail (dispatcher.ts prepareMail): Hosted shared sending, live, with a classifier. */
 const campaignScreened = (runtime: Runtime, shared: boolean) => shared && !!runtime.config.screen && runtime.config.hostedScreen && !isSimulatedSes(runtime);
+/** The unsubscribe link a campaign's own copy is screened with; each delivered copy carries its own generated one. */
+export const unsubscribePlaceholder = (runtime: Runtime) => `${runtime.config.publicUrl.replace(/\/$/, '')}/unsubscribe/u_${'0'.repeat(64)}`;
 /** A campaign's own copy as each recipient gets it, placeholders unresolved: preheader, and footer with a placeholder link. */
-async function campaignCopy(runtime: Runtime, draft: CampaignDraft, rendered: { html?: string; text?: string }, version = CAMPAIGN_RENDERER_VERSION): Promise<EmailSnapshot> {
+export async function campaignCopy(runtime: Runtime, draft: CampaignDraft, rendered: { html?: string; text?: string }, version = CAMPAIGN_RENDERER_VERSION): Promise<EmailSnapshot> {
   const parse = rendered.html && draft.previewText ? await loadParse5() : undefined;
   const copy: EmailSnapshot = { testCampaignId: null, from: draft.from, ...(draft.fromName ? { fromName: draft.fromName } : {}), ...(draft.previewText !== undefined ? { previewText: draft.previewText } : {}),
     to: [], cc: [], bcc: [], replyTo: draft.replyTo ?? [], region: draft.region, kind: 'marketing', subject: draft.subject, html: withPreheader(rendered.html, draft.previewText, parse, version), text: rendered.text,
     attachments: draft.attachments, tracking: draft.tracking, headers: [] };
-  marketingFooter(copy, `${runtime.config.publicUrl.replace(/\/$/, '')}/unsubscribe/u_${'0'.repeat(64)}`);
+  marketingFooter(copy, unsubscribePlaceholder(runtime));
   return copy;
 }
-/** The workspace's verified sending domains: personalization values may link to them and their subdomains. */
-async function verifiedDomains(db: DbExecutor, a: Pick<Actor, 'workspaceId'>, from: string) {
-  const { rows } = await db.execute<{ name: string }>(sql`SELECT DISTINCT lower(name) AS name FROM domain_claims WHERE workspace_id=${a.workspaceId} AND sending_state='verified'`);
-  return [...new Set([from.split('@')[1]!.toLowerCase(), ...rows.map(row => row.name)])].sort();
+// The values a frozen audience puts in a campaign's placeholders (the contact's properties and name, as interpolation
+// reads them), one row per recipient and placeholder.
+const slotRows = (reviewId: string, keys: string[]) => sql`SELECT r.ordinal, x.key, x.value FROM sending_review_recipients r CROSS JOIN LATERAL (
+    SELECT 'name' AS key, r.recipient->>'name' AS value
+    UNION ALL SELECT p.key, p.value #>> '{}' FROM jsonb_each(r.recipient->'properties') p WHERE jsonb_typeof(p.value)<>'null' AND NOT (p.key='name' AND r.recipient ? 'name')
+  ) x WHERE r.review_id=${reviewId} AND x.value IS NOT NULL AND x.key IN (SELECT jsonb_array_elements_text(${JSON.stringify(keys)}::jsonb))`;
+/** One page of the distinct (placeholder, value) pairs of a frozen audience, in byte order after `cursor`. */
+async function distinctSlotValues(db: DbExecutor, reviewId: string, keys: string[], cursor: [string, string] | null, limit: number) {
+  return (await db.execute<{ key: string; value: string }>(sql`SELECT v.key COLLATE "C" AS key, v.value COLLATE "C" AS value FROM (${slotRows(reviewId, keys)}) v
+    ${cursor ? sql`WHERE (v.key COLLATE "C", v.value COLLATE "C") > (${cursor[0]}::text COLLATE "C", ${cursor[1]}::text COLLATE "C")` : sql``}
+    GROUP BY 1, 2 ORDER BY 1, 2 LIMIT ${limit}`)).rows;
 }
-/** One page of the distinct personalization values a frozen audience carries (the placeholders' contact properties and
- *  names, as interpolation reads them), in byte order after `cursor`, each with a placeholder that uses it. */
-async function distinctValues(db: DbExecutor, reviewId: string, cursor: string | null, limit: number) {
-  return (await db.execute<{ value: string; key: string }>(sql`SELECT x.value COLLATE "C" AS value, min(x.key) AS key FROM sending_review_recipients r CROSS JOIN LATERAL (
-      SELECT 'name' AS key, r.recipient->>'name' AS value
-      UNION ALL SELECT p.key, p.value #>> '{}' FROM jsonb_each(r.recipient->'properties') p
-        WHERE p.key<>'email' AND jsonb_typeof(p.value)<>'null' AND NOT (p.key='name' AND r.recipient ? 'name')
-    ) x WHERE r.review_id=${reviewId} AND x.value IS NOT NULL ${cursor === null ? sql`` : sql`AND x.value COLLATE "C" > ${cursor}`}
-    GROUP BY 1 ORDER BY 1 LIMIT ${limit}`)).rows;
+/** Recipients whose copies differ most: for each placeholder in turn, a recipient with its rarest value (the longest
+ *  first among equally rare ones), then the next rarest, and so on; the first recipient when nothing varies. */
+async function sampleRecipients(db: DbExecutor, reviewId: string, keys: string[], limit: number) {
+  const { rows } = await db.execute<{ recipient: ReviewedRecipient }>(sql`WITH v AS (${slotRows(reviewId, keys)}),
+    f AS (SELECT key, value, count(*) AS n, min(ordinal) AS ordinal FROM v GROUP BY key, value),
+    ranked AS (SELECT ordinal, key, row_number() OVER (PARTITION BY key ORDER BY n, char_length(value) DESC, value COLLATE "C") AS rank FROM f),
+    picked AS (SELECT ordinal, min(rank) AS rank, min(key COLLATE "C") AS key FROM ranked GROUP BY ordinal ORDER BY 2, 3, 1 LIMIT ${limit})
+    SELECT r.recipient FROM picked p JOIN sending_review_recipients r ON r.review_id=${reviewId} AND r.ordinal=p.ordinal
+    UNION ALL SELECT r.recipient FROM sending_review_recipients r WHERE r.review_id=${reviewId} AND r.ordinal=1 AND NOT EXISTS (SELECT FROM picked)`);
+  return rows.map(row => row.recipient);
 }
-const CAMPAIGN_SCREEN_PAGE = 2000, CAMPAIGN_SCREEN_BUDGET_MS = 8000;
-// preparing, before any recipient: screen the campaign once (src/screen.ts), not once per recipient. Its own copy with the
-// placeholders unresolved, up to the campaign limit, then each distinct personalization value of the frozen audience,
-// checked against the value rules and screened in packed requests, a page per pass. The verdict is durable on the
-// review and bound to its content hash; preparation starts only once every value passed. A positive verdict fails the
-// campaign and counts every real recipient as a screen rejection, as screening each copy would have.
+const CAMPAIGN_VALUE_PAGE = 5000, CAMPAIGN_SCREEN_BUDGET_MS = 8000, CAMPAIGN_SCREENS_PER_HOUR = 20, MAX_ADDRESS_BYTES = 320;
+// preparing, before any recipient: decide how the campaign is screened (src/screen.ts), and screen it once if it can be.
+// 1. Its placeholders must sit as words of text or whole link query values (campaignSlots); otherwise every recipient's
+//    copy is screened on its own (mode each).
+// 2. Every distinct value of the frozen audience, and each fallback, must be inert for its slots (valueProblem), checked
+//    locally a page per pass with a durable cursor; one that isn't makes the campaign mode each.
+// 3. The longest copy those values can make must fit the campaign limit; then the classifier reads the campaign's copy
+//    with its placeholders and up to SAMPLE_COPIES assembled copies, the most diverse in the audience, once: at most
+//    chunksFor(campaign limit) requests each, and at most CAMPAIGN_SCREENS_PER_HOUR such screens per workspace.
+// The verdict is durable on the review and bound to its content hash. A positive verdict fails the campaign before any
+// release and counts every real recipient as a screen rejection, as screening each copy would have. Single copies the
+// dispatcher still screens (mode each, or a copy that isn't its template with values) draw on a budget of
+// chunksFor(message limit) requests per recipient.
 async function screenCampaignStep(runtime: Runtime, a: Actor, row: RunRow) {
-  const settings = runtime.config.screen!, draft = row.reviewDraft!, rendered = row.reviewRendered!, screen = await loadScreen(), started = Date.now();
-  const keys = placeholderKeys(draft, rendered).filter(key => key !== 'email');
-  let verdict = row.reviewScreen?.contentHash === row.reviewHash ? row.reviewScreen : null;
-  try {
-    while (!verdict?.done && Date.now() - started < CAMPAIGN_SCREEN_BUDGET_MS) {
-      let bodies: string[] = [], overlap: number | undefined, fallbacks: { key: string; value: string }[] = [];
-      if (!verdict) {
-        const probation = !row.account?.trusted;
-        let copy = await campaignCopy(runtime, draft, rendered, row.reviewVersion!);
-        if (probation) copy = (await import('./screened-html.js')).probationCopy(copy);
-        const measure = await screen.measureScreen(copy);
-        bodies = screen.campaignBodies(measure, runtime.config.screenLimits.campaignBytes); overlap = measure.textHtmlOverlap;
-        fallbacks = keys.flatMap(key => { const value = draft.defaults[key]; return value === null || value === undefined ? [] : [{ key, value: String(value) }]; });
-        verdict = { contentHash: row.reviewHash!, probation, model: settings.model, spam: 0, calls: 0, screenedBytes: measure.screenedBytes, hosts: [...measure.read?.hosts ?? []].sort(),
-          mismatches: [...measure.read?.mismatches ?? []].sort(), domains: await verifiedDomains(runtime.db, a, draft.from), cursor: null, values: 0, done: false };
-      }
-      const page = keys.length ? await distinctValues(runtime.db, row.reviewId!, verdict.cursor, CAMPAIGN_SCREEN_PAGE) : [];
-      for (const { key, value } of fallbacks) { const problem = screen.mergeValueProblem(value, verdict); if (problem) throw new ApiError(422, 'CAMPAIGN_VALUE_REJECTED', `The fallback value for {{${key}}} ${problem}.`, `defaults.${key}`); }
-      for (const { key, value } of page) { const problem = screen.mergeValueProblem(value, verdict); if (problem) throw new ApiError(422, 'CAMPAIGN_VALUE_REJECTED', `A recipient's value for {{${key}}} ${problem}. Correct the contact's value or the template, then send again.`); }
-      const values = [...new Set([...fallbacks, ...page].map(({ value }) => value))];
-      const requests = screen.packValues(bodies, [...verdict.mismatches, ...verdict.hosts], values);
-      if (requests.length) {
-        const result = await screen.screenCampaignBodies(runtime, draft, requests, overlap);
-        verdict = { ...verdict, spam: Math.max(verdict.spam, result.spam), model: result.model, calls: verdict.calls + requests.length };
-      }
-      verdict = { ...verdict, cursor: page.at(-1)?.value ?? verdict.cursor, values: verdict.values + values.length, done: page.length < CAMPAIGN_SCREEN_PAGE };
-      await runtime.db.execute(sql`UPDATE sending_campaign_reviews SET screen=${JSON.stringify(verdict)}::jsonb WHERE workspace_id=${a.workspaceId} AND id=${row.reviewId}`);
-      if (verdict.spam >= settings.threshold) {
-        await runtime.db.execute(countScreened(sql`SELECT workspace_id,1 AS rejected FROM sending_campaign_reviews v JOIN sending_review_recipients r ON r.review_id=v.id
-          WHERE v.workspace_id=${a.workspaceId} AND v.id=${row.reviewId} AND hosted_real_cost(jsonb_build_array(r.recipient->>'email'))>0`));
-        log('warn', { code: 'CONTENT_REJECTED_SPAM', campaignId: row.id, spam: verdict.spam, model: verdict.model, calls: verdict.calls });
-        throw new ApiError(422, 'CONTENT_REJECTED_SPAM', 'The content classifier judged this campaign to be unsolicited advertising. No recipient was sent to.');
-      }
+  const settings = runtime.config.screen!, limits = runtime.config.screenLimits, draft = row.reviewDraft!, rendered = row.reviewRendered!, screen = await loadScreen(), started = Date.now();
+  const save = async (next: CampaignScreen) => { await runtime.db.execute(sql`UPDATE sending_campaign_reviews SET screen=${JSON.stringify(next)}::jsonb WHERE workspace_id=${a.workspaceId} AND id=${row.reviewId}`); return next; };
+  const slots = await screen.campaignSlots({ subject: draft.subject, html: rendered.html, text: rendered.text });
+  let verdict: CampaignScreen = row.reviewScreen?.contentHash === row.reviewHash ? row.reviewScreen! : { contentHash: row.reviewHash!, at: now(), mode: 'once', reason: null, probation: !row.account?.trusted,
+    model: settings.model, spam: 0, calls: 0, screenedBytes: 0, budget: row.total * screen.chunksFor(limits.messageBytes), spent: 0, cursor: null, longest: {}, values: 0, done: false };
+  const perRecipient = async (reason: string) => { verdict = await save({ ...verdict, mode: 'each', reason, done: true }); log('info', { code: 'CAMPAIGN_SCREENED_PER_RECIPIENT', campaignId: row.id, reason }); };
+  if (typeof slots === 'string') return perRecipient(slots);
+  const keys = [...new Set([...slots.text, ...slots.token])].filter(key => key !== 'email');
+  const problem = (key: string, value: string) => screen.valueProblem(value, { text: slots.text.includes(key), token: slots.token.includes(key) });
+  // Values, locally: the fallbacks first, then the audience a page per pass.
+  if (!verdict.cursor && !verdict.values) for (const key of keys) {
+    const value = draft.defaults[key], why = value === null || value === undefined ? null : problem(key, String(value));
+    if (why) return perRecipient(`The fallback for {{${key}}} ${why}.`);
+  }
+  for (;;) {
+    if (Date.now() - started >= CAMPAIGN_SCREEN_BUDGET_MS) { await save(verdict); return; }
+    const page = keys.length ? await distinctSlotValues(runtime.db, row.reviewId!, keys, verdict.cursor, CAMPAIGN_VALUE_PAGE) : [];
+    const longest = { ...verdict.longest };
+    for (const { key, value } of page) {
+      const why = problem(key, value);
+      if (why) return perRecipient(`A value for {{${key}}} ${why}.`);
+      longest[key] = Math.max(longest[key] ?? 0, screen.valueBytes(value));
     }
+    verdict = { ...verdict, longest, values: verdict.values + page.length, cursor: page.length ? [page.at(-1)!.key, page.at(-1)!.value] : verdict.cursor };
+    if (page.length < CAMPAIGN_VALUE_PAGE) break;
+  }
+  for (const key of keys) { const value = draft.defaults[key]; if (value !== null && value !== undefined) verdict.longest[key] = Math.max(verdict.longest[key] ?? 0, screen.valueBytes(String(value))); }
+  // The campaign's copy, as its tier delivers it, and the longest copy its values can make.
+  const probationCopy = verdict.probation ? (await import('./screened-html.js')).probationCopy : <T,>(copy: T) => copy;
+  const own = probationCopy(await campaignCopy(runtime, draft, rendered, row.reviewVersion!)), measure = await screen.measureScreen(own);
+  const bound = measure.screenedBytes + Object.entries(slots.occurrences).reduce((n, [key, count]) => n + count * (key === 'email' ? MAX_ADDRESS_BYTES : verdict.longest[key] ?? 0), 0);
+  if (bound > limits.campaignBytes) return perRecipient(`Its longest copy could reach ${bound} screened bytes, over the ${limits.campaignBytes}-byte campaign limit.`);
+  const requests = screen.campaignBodies(measure, limits.campaignBytes).map(body => ({ body, subject: own.subject, textHtmlOverlap: measure.textHtmlOverlap }));
+  // A workspace can't buy screens without sending: relaunching the same campaign over and over waits here.
+  const [{ recent }] = (await runtime.db.execute<{ recent: number }>(sql`SELECT count(*)::int AS recent FROM sending_campaign_reviews WHERE workspace_id=${a.workspaceId} AND id<>${row.reviewId}
+    AND screen->>'mode'='once' AND (screen->>'calls')::int>0 AND (screen->>'at')::timestamptz>now()-interval '1 hour'`)).rows as [{ recent: number }];
+  if (recent >= CAMPAIGN_SCREENS_PER_HOUR) { await save(verdict); log('warn', { code: 'CAMPAIGN_SCREENS_RATE_LIMITED', campaignId: row.id }); throw new JobDeferred(new Date(Date.now() + 5 * 60_000).toISOString()); }
+  // Assembled copies: the most diverse recipients, each as delivered (its own link aside), screened whole.
+  const assets = await attachmentRows(runtime.db, a, draft.attachments), seen = new Set<string>([`${own.subject}\n${measure.content}`]);
+  for (const recipient of await sampleRecipients(runtime.db, row.reviewId!, keys, screen.SAMPLE_COPIES)) {
+    const copy = await campaignMessage(runtime, runtime.db, a, draft, recipient, false, true, assets, rendered, true, !rendered.html?.includes('{{'), row.reviewVersion!);
+    marketingFooter(copy, unsubscribePlaceholder(runtime));
+    const delivered = probationCopy(copy), sample = await screen.measureScreen(delivered);
+    if (seen.has(`${delivered.subject}\n${sample.content}`)) continue;
+    seen.add(`${delivered.subject}\n${sample.content}`);
+    requests.push(...screen.campaignBodies(sample, limits.campaignBytes).map(body => ({ body, subject: delivered.subject, textHtmlOverlap: sample.textHtmlOverlap })));
+  }
+  try {
+    const result = await screen.screenCampaignBodies(runtime, draft, requests);
+    verdict = await save({ ...verdict, at: now(), spam: result.spam, model: result.model, calls: requests.length, screenedBytes: measure.screenedBytes, done: true });
   } catch (error) {
     // Fail closed and wait in place: nothing is prepared or released without a verdict.
     if (!(error instanceof ApiError) || error.code !== 'CONTENT_SCREEN_UNAVAILABLE') throw error;
-    log('warn', { code: error.code, campaignId: row.id });
+    await save(verdict); log('warn', { code: error.code, campaignId: row.id });
     throw new JobDeferred(new Date(Date.now() + 30_000).toISOString());
   }
-  if (verdict?.done) log('info', { code: 'CAMPAIGN_SCREENED', campaignId: row.id, calls: verdict.calls, values: verdict.values, screenedBytes: verdict.screenedBytes, spam: verdict.spam });
+  log('info', { code: 'CAMPAIGN_SCREENED', campaignId: row.id, calls: verdict.calls, values: verdict.values, screenedBytes: verdict.screenedBytes, spam: verdict.spam });
+  if (verdict.spam >= settings.threshold) await campaignRejected(runtime, a, row, verdict);
+}
+async function campaignRejected(runtime: Runtime, a: Actor, row: RunRow, verdict: CampaignScreen): Promise<never> {
+  await runtime.db.execute(countScreened(sql`SELECT v.workspace_id,1 AS rejected FROM sending_campaign_reviews v JOIN sending_review_recipients r ON r.review_id=v.id
+    WHERE v.workspace_id=${a.workspaceId} AND v.id=${row.reviewId} AND hosted_real_cost(jsonb_build_array(r.recipient->>'email'))>0`));
+  log('warn', { code: 'CONTENT_REJECTED_SPAM', campaignId: row.id, spam: verdict.spam, model: verdict.model, calls: verdict.calls });
+  throw new ApiError(422, 'CONTENT_REJECTED_SPAM', 'The content classifier judged this campaign to be unsolicited advertising. No recipient was sent to.');
 }
 // preparing: validate the next chunk of frozen recipients (every substitution, URL and MIME size) and keep only each
 // message's digest; when the whole list is validated the campaign moves to its schedule or straight to sending.
 async function prepareStep(runtime: Runtime, a: Actor, row: RunRow, jobId: string) {
-  if (campaignScreened(runtime, row.account?.kind === 'shared')) {
-    const verdict = row.reviewScreen?.contentHash === row.reviewHash ? row.reviewScreen : null;
-    if (!verdict?.done) return screenCampaignStep(runtime, a, row);
-    if (verdict.spam >= runtime.config.screen!.threshold) throw new ApiError(422, 'CONTENT_REJECTED_SPAM', 'The content classifier judged this campaign to be unsolicited advertising. No recipient was sent to.');
-  }
+  const screened = campaignScreened(runtime, row.account?.kind === 'shared'), verdict = row.reviewScreen?.contentHash === row.reviewHash ? row.reviewScreen : null;
+  if (screened && !verdict?.done) return screenCampaignStep(runtime, a, row);
+  if (screened && verdict?.mode === 'once' && verdict.spam >= runtime.config.screen!.threshold) return campaignRejected(runtime, a, row, verdict);
+  // Screened per recipient: every copy must fit the per-message limit, measured as the screen reads it, before any release.
+  const each = screened && verdict?.mode === 'each' ? await loadScreen() : undefined;
   const ref = campaignRef(a, row.id), review = { draft: row.reviewDraft!, rendered: row.reviewRendered! };
   await runtime.db.transaction(async db => {
     const campaign = await findCampaign(db, a, row.id, true);
@@ -2195,8 +2239,9 @@ async function prepareStep(runtime: Runtime, a: Actor, row: RunRow, jobId: strin
         ? { ...staticSnapshot, to: [recipient.recipient.email], headers: [...staticSnapshot.headers] }
         : await campaignMessage(runtime, db, a, review.draft, recipient.recipient, false, true, lockedAttachments, review.rendered, true, htmlStatic, row.reviewVersion!);
       const contentHash = await digest(canonical(snapshot));
-      marketingFooter(snapshot, `${runtime.config.publicUrl.replace(/\/$/, '')}/unsubscribe/u_${'0'.repeat(64)}`);
+      marketingFooter(snapshot, unsubscribePlaceholder(runtime));
       sizeCheck(snapshot, lockedAttachments);
+      if (each) each.assertScreenable(await each.measureScreen(snapshot), runtime.config.screenLimits.messageBytes);
       const size = Buffer.byteLength(JSON.stringify(snapshot), 'utf8');
       if (prepared.length && bytes + size > CAMPAIGN_PREPARE_BYTES) break;
       prepared.push({ ordinal: recipient.ordinal, hash: contentHash, subject: snapshot.subject, bytes: size }); bytes += size; cursor = recipient.ordinal;

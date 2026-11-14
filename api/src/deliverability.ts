@@ -17,7 +17,7 @@ import { productName } from './brand.js';
 
 export const DAY_MS = 86_400_000, HOUR_MS = 3_600_000;
 export const LIMITS = { windowDays: 30, hourlyHours: 72, groups: 20, rows: 50, subject: 120, diagnostic: 160 } as const;
-export const SCREEN_CODES = ['CONTENT_REJECTED_SPAM', 'CONTENT_IMAGE_ONLY', 'CONTENT_TOO_LARGE_TO_SCREEN', 'CAMPAIGN_CONTENT_UNSCREENED', 'ATTACHMENT_TYPE_UNSCREENABLE', 'ATTACHMENT_CONTENT_MISMATCH'];
+export const SCREEN_CODES = ['CONTENT_REJECTED_SPAM', 'CONTENT_IMAGE_ONLY', 'CONTENT_TOO_LARGE_TO_SCREEN', 'CONTENT_SCREEN_BUDGET_EXCEEDED', 'ATTACHMENT_TYPE_UNSCREENABLE', 'ATTACHMENT_CONTENT_MISMATCH'];
 const texts = (list: readonly string[]) => sql`${sql.param([...list])}::text[]`;
 
 /**
