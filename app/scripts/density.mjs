@@ -152,18 +152,10 @@ const probe = ({ LONG_BLOCK, INERT_WORDS, NEAR_PX, DETAIL_ROWS, DETAIL_WORDS, DE
       find('restate-value', `“${c.text.slice(0, 50)}” repeats ${f.shown}${context(f) ? ` (${context(f)})` : ''} right beside it: drop the caption`, `${context(f)}|${c.text.replace(/[\d.,%$]+/g, '#').slice(0, 40)}`, [c.el], 'restates');
     }
   }
-  const byValue = new Map();
-  for (const v of values) (byValue.get(v.value) ?? byValue.set(v.value, []).get(v.value)).push(v);
-  for (const [value, all] of byValue) for (const group of (units => units.length < 2 ? [all] : units.map(u => all.filter(v => !v.unit || v.unit === u)))([...new Set(all.map(v => v.unit).filter(Boolean))])) {
-    const apart = group.filter((v, i) => !group.some((w, j) => j < i && near(v, w)));
-    if (apart.length < 2 || !apart.some(v => v.inRoot) || isCovered(apart.map(v => v.el))) continue;
-    cover(apart.map(v => v.el));
-    const labels = apart.map(v => `${context(v) || 'unlabelled'} (${where(v)})`);
-    find('dup-value', `${apart[0].shown} shown ${apart.length} times: ${labels.join(', ')}`, `${value}|${apart.map(v => context(v) || v.text.slice(0, 20)).join('|')}`, apart.map(v => v.el), apart[0].shown);
-  }
   // The same fact twice, matched by its label rather than its figure (FACTS): two windows or roundings of one measure
   // (252 emails in the last 24 hours, 216 of the daily limit used) still read as one thing said twice, and differing
-  // figures for it only add doubt. `when` limits a fact to a screen state (the 24h range).
+  // figures for it only add doubt. `when` limits a fact to a screen state (the 24h range). Checked before dup-value, so
+  // a pair is the same finding whether or not its figures happen to be equal (the fixture's mail varies by hour).
   const FACTS = [
     { fact: 'the sender score', parts: [{ label: /^sender score$/i, test: v => v.text.replace(/\s*[A-F][+-]?$/, '') === v.shown }] },
     { fact: 'emails in the last 24 hours', when: () => [...document.querySelectorAll('[role=tab][aria-selected=true]')].some(t => /^24\s?h$/i.test(norm(t.textContent))), parts: [{ label: /^emails$/i, part: 'whole' }, { label: /daily limit|recipients/i, part: 'used' }] },
@@ -176,6 +168,15 @@ const probe = ({ LONG_BLOCK, INERT_WORDS, NEAR_PX, DETAIL_ROWS, DETAIL_WORDS, DE
     if (apart.length < 2 || !apart.some(v => v.inRoot) || isCovered(apart.map(v => v.el))) continue;
     cover(apart.map(v => v.el));
     find('dup-fact', `${fact} shown ${apart.length} times: ${apart.map(v => `${v.shown} in ${context(v) || 'unlabelled'} (${where(v)})`).join(', ')}`, `${fact}|${apart.map(v => context(v)).join('|')}`, apart.map(v => v.el), fact);
+  }
+  const byValue = new Map();
+  for (const v of values) (byValue.get(v.value) ?? byValue.set(v.value, []).get(v.value)).push(v);
+  for (const [value, all] of byValue) for (const group of (units => units.length < 2 ? [all] : units.map(u => all.filter(v => !v.unit || v.unit === u)))([...new Set(all.map(v => v.unit).filter(Boolean))])) {
+    const apart = group.filter((v, i) => !group.some((w, j) => j < i && near(v, w)));
+    if (apart.length < 2 || !apart.some(v => v.inRoot) || isCovered(apart.map(v => v.el))) continue;
+    cover(apart.map(v => v.el));
+    const labels = apart.map(v => `${context(v) || 'unlabelled'} (${where(v)})`);
+    find('dup-value', `${apart[0].shown} shown ${apart.length} times: ${labels.join(', ')}`, `${value}|${apart.map(v => context(v) || v.text.slice(0, 20)).join('|')}`, apart.map(v => v.el), apart[0].shown);
   }
   // Sections with the same label: two headings with the same text on one screen (navigation and tabs left out).
   const heads = list.filter(b => b.heading && !b.shell && b.words <= 8);

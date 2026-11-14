@@ -150,10 +150,10 @@
    "findings": [
     "disclosure|sender score|",
     "dup-fact|emails in the last ## hours|emails|daily limit",
-    "dup-value|####|limit day next at|daily limit",
+    "dup-fact|the daily limit|limit day next at|daily limit",
+    "dup-fact|the sender score|sender score|sender score",
     "dup-value|##|helps most authentication|authentication",
-    "dup-value|##|sender score|breakdown",
-    "dup-value|##|sender score|sender score"
+    "dup-value|##|sender score|breakdown"
    ]
   },
   "Overview · phone": {
@@ -161,7 +161,7 @@
    "findings": [
     "disclosure|sender score|",
     "dup-fact|emails in the last ## hours|emails|daily limit",
-    "dup-value|####|limit day next at|daily limit",
+    "dup-fact|the daily limit|limit day next at|daily limit",
     "dup-value|##|helps most authentication|authentication",
     "dup-value|##|sender score|breakdown"
    ]
@@ -171,11 +171,11 @@
    "findings": [
     "disclosure|sender score|",
     "dup-fact|emails in the last ## hours|emails|daily limit",
+    "dup-fact|the daily limit|limit day next at|daily limit",
+    "dup-fact|the sender score|sender score|sender score",
     "dup-text|# of #,# accepted emails were marked as spam in # hours (#.#%; the restrict line",
     "dup-text|marketing is held; receipts and resets still send.",
-    "dup-value|###|limit day next at|daily limit",
     "dup-value|##|sender score|breakdown",
-    "dup-value|##|sender score|sender score",
     "dup-value|#.##|helps most complaints|complaints"
    ]
   },
@@ -184,9 +184,9 @@
    "findings": [
     "disclosure|sender score|",
     "dup-fact|emails in the last ## hours|emails|daily limit",
+    "dup-fact|the daily limit|limit day next at|daily limit",
     "dup-text|# of #,# accepted emails were marked as spam in # hours (#.#%; the restrict line",
     "dup-text|marketing is held; receipts and resets still send.",
-    "dup-value|###|limit day next at|daily limit",
     "dup-value|##|sender score|breakdown",
     "dup-value|#.##|helps most complaints|complaints"
    ]
@@ -483,7 +483,7 @@
   "Settings · sending · desktop": {
    "score": 25,
    "findings": [
-    "dup-value|##|sender score|sender score"
+    "dup-fact|the sender score|sender score|sender score"
    ]
   },
   "Settings · webhook · desktop": {
