@@ -78,7 +78,7 @@ const PARTICIPLE = '(?:\\w+ed|known|shown|sent|taken|given|made|done|seen|kept|h
 const PASSIVE = new RegExp(`\\b(?:is|are|was|were|be|been|being|gets|got)\\s+(?:\\w+ly\\s+)?${PARTICIPLE}\\s+by\\s+(?!default\\b|hand\\b|email\\b|date\\b|name\\b|the (day|hour|month|minute)\\b|\\d)\\w+|\\bit(?:’|')?s?\\s*(?:is\\s+)?(?:recommended|required|advised|suggested)\\s+(?:that|to)\\b`, 'i');
 const NUMBER_WORDS = /\b(two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|fifteen|twenty|thirty|forty|fifty|sixty|ninety|hundred|thousand)\b(?!-)|\bone (more |extra )?(second|minute|hour|day|week|month|year)s?\b/i;
 // Words that keep their capital inside a sentence-case label: names, brands, formats, page names and months.
-const PROPER = new Set(('Bane Nightmail Amazon SES AWS Anomaly Slack Discord Stripe Google GitHub Gmail Outlook Yahoo Hotmail iCloud Microsoft Apple Cloudflare Hosted ' +
+const PROPER = new Set(('Bane Nightmail Amazon SES AWS Anomaly Slack Discord Stripe Google GitHub Gmail Outlook Yahoo Hotmail iCloud Microsoft Windows Apple Samsung Cloudflare Hosted ' +
   'Test Live OpenCode Claude Cursor Zapier JavaScript TypeScript Markdown Node Docker Visa Mastercard I OK Inbox Overview Logs Receiving Campaigns ' +
   'Templates Audience Contacts Lists Segments Domains Settings Docs Operator Billing Members Webhooks Activity Help Trace Rituals Routes Endpoints Omens ' +
   'Jev Monday Tuesday Wednesday Thursday Friday Saturday Sunday January February March April May June July August September October November December ' +
