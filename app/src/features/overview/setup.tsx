@@ -1,13 +1,16 @@
 import { useState, type CSSProperties, type ReactNode } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from 'react-router'
-import { Check } from 'lucide-react'
+import { Check, Info } from 'lucide-react'
 import { useApi, useApiDef, useSession, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
 import { request } from '../../data/live'
-import type { Identity, SendingLimit } from '../../data/types'
+import type { Identity, SenderScore, SendingLimit } from '../../data/types'
 import { date, number } from '../../lib/format'
 import { TestSend } from '../docs/first-send'
+import { Dialog } from '../../components/ui'
+import { limitNotes } from '../score'
+import { SendingLimitsGuide } from '../score/limits'
 import './setup.css'
 import { PrivateAddress } from '../../components/PrivateAddress'
 
@@ -28,14 +31,26 @@ export function limitSummary(limit: SendingLimit) {
   return `${number(limit.used)} of ${number(limit.cap)} recipients in the last 24 hours.${limit.nextCap && limit.nextCapAt ? ` Rises to ${number(limit.nextCap)} on ${date(limit.nextCapAt, { month: 'short', day: 'numeric' })}.` : ''}`
 }
 
-// Hosted sending still has a rolling 24-hour cap on new workspaces: one compact row while it applies.
-export function SendingLimitRow() {
+// Hosted: the daily limit as one line, what's left of it and a meter, then a note only while one applies (an
+// adjustment, a notice). What's left, not what's used: the used count is close to the Emails figure beside it and
+// would say the same fact twice. The row opens how sending limits work; the next band and the per-minute rate are in
+// the sender score's explainer.
+export function DailyLimit({ report }: { report: SenderScore | undefined }) {
   const limit = useSendingLimit()
+  const [explaining, setExplaining] = useState(false)
   if (!limit || limit.cap === null) return null
-  const share = Math.min(1, limit.used / Math.max(1, limit.cap))
-  return <section className="limit-row" aria-label="Sending limit" title={`${limitSummary(limit)} Includes simulator addresses.`}>
-    <div className="limit-row__text"><span>Daily limit</span><span className="muted">{number(limit.used)} / {number(limit.cap)}</span></div>
-    <div className="limit-row__track" data-full={share >= 0.9 || undefined} role="meter" aria-valuemin={0} aria-valuemax={limit.cap} aria-valuenow={limit.used} aria-label="Recipients used in the last 24 hours"><i style={{ width: `${share * 100}%` }} /></div>
+  const share = Math.min(1, limit.used / Math.max(1, limit.cap)), left = Math.max(0, limit.cap - limit.used)
+  const notes = limitNotes(report)
+  return <section className="daily-limit" aria-label="Daily limit">
+    <button type="button" className="limit-row" onClick={() => setExplaining(true)} title={`${limitSummary(limit)} Includes simulator addresses.`} aria-label={`Daily limit: ${number(left)} of ${number(limit.cap)} left. How limits work`}>
+      <span className="limit-row__text"><span className="limit-row__label">Daily limit<Info size={12} aria-hidden="true" /></span><span className="muted">{number(left)} of {number(limit.cap)} left</span></span>
+      <span className="limit-row__track" data-full={share >= 0.9 || undefined}><i style={{ width: `${share * 100}%` }} /></span>
+    </button>
+    {notes.map(note => <p key={note.text} className="limit-row__note" data-tone={note.tone}>{note.tone && <span aria-hidden="true" />}{note.text}</p>)}
+    <Dialog open={explaining} onOpenChange={setExplaining} title="How limits work" className="limits-dialog">
+      <SendingLimitsGuide />
+      <Link className="limits-dialog__docs" to="/docs#sending-limits">Open in the docs</Link>
+    </Dialog>
   </section>
 }
 

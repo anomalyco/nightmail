@@ -13,8 +13,9 @@
 .ov-split__aside > * + * { padding-top: var(--space-16); border-top: 1px solid var(--color-border-muted); }
 .ov-aside-skeleton { display: flex; flex-direction: column; gap: var(--space-12); }
 .ov-aside-skeleton > span { display: block; border-radius: var(--radius-sm); background: var(--color-layer-1); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
-.ov-aside-skeleton > span:first-child { height: 96px; }
-.ov-aside-skeleton > span:last-child { height: 194px; }
+/* The daily limit's row, then the next steps. */
+.ov-aside-skeleton > span:first-child { height: 30px; }
+.ov-aside-skeleton > span:last-child { height: 120px; }
 
 /* Facts (Console-style): a hairline, a label row, then the value beside its own series. 60px tall. */
 .ov-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-24); margin: 0; }

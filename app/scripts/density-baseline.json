@@ -141,66 +141,28 @@
    ]
   },
   "Overview · desktop": {
-   "score": 88,
-   "findings": [
-    "disclosure|sender score|",
-    "dup-fact|emails in the last ## hours|emails|daily limit",
-    "dup-fact|the daily limit|limit day next at|daily limit",
-    "dup-fact|the sender score|sender score|sender score",
-    "dup-value|##|helps most authentication|authentication",
-    "dup-value|##|sender score|breakdown"
-   ]
+   "score": 23,
+   "findings": []
   },
   "Overview · phone": {
-   "score": 78,
-   "findings": [
-    "disclosure|sender score|",
-    "dup-fact|emails in the last ## hours|emails|daily limit",
-    "dup-fact|the daily limit|limit day next at|daily limit",
-    "dup-value|##|helps most authentication|authentication",
-    "dup-value|##|sender score|breakdown"
-   ]
+   "score": 26,
+   "findings": []
   },
   "Overview · restricted · desktop": {
-   "score": 130,
-   "findings": [
-    "disclosure|sender score|",
-    "dup-fact|emails in the last ## hours|emails|daily limit",
-    "dup-fact|the daily limit|limit day next at|daily limit",
-    "dup-fact|the sender score|sender score|sender score",
-    "dup-text|# of #,# accepted emails were marked as spam in # hours (#.#%; the restrict line",
-    "dup-text|marketing is held; receipts and resets still send.",
-    "dup-value|##|sender score|breakdown",
-    "dup-value|#.##|helps most complaints|complaints"
-   ]
+   "score": 43,
+   "findings": []
   },
   "Overview · restricted · phone": {
-   "score": 117,
-   "findings": [
-    "disclosure|sender score|",
-    "dup-fact|emails in the last ## hours|emails|daily limit",
-    "dup-fact|the daily limit|limit day next at|daily limit",
-    "dup-text|# of #,# accepted emails were marked as spam in # hours (#.#%; the restrict line",
-    "dup-text|marketing is held; receipts and resets still send.",
-    "dup-value|##|sender score|breakdown",
-    "dup-value|#.##|helps most complaints|complaints"
-   ]
+   "score": 44,
+   "findings": []
   },
   "Overview · sender score dialog · desktop": {
-   "score": 76,
-   "findings": [
-    "long-block|a #–### grade of how healthy your sendin",
-    "long-block|each part below scores #–###, from a ris",
-    "long-block|every email you send, except simulated s"
-   ]
+   "score": 44,
+   "findings": []
   },
   "Overview · sender score dialog · phone": {
-   "score": 73,
-   "findings": [
-    "long-block|a #–### grade of how healthy your sendin",
-    "long-block|each part below scores #–###, from a ris",
-    "long-block|every email you send, except simulated s"
-   ]
+   "score": 43,
+   "findings": []
   },
   "Overview · sending limits dialog · desktop": {
    "score": 106,
@@ -226,10 +188,8 @@
    ]
   },
   "Overview · setup · desktop": {
-   "score": 48,
-   "findings": [
-    "dup-fact|emails in the last ## hours|emails|daily limit"
-   ]
+   "score": 26,
+   "findings": []
   },
   "Received email · desktop": {
    "score": 10,

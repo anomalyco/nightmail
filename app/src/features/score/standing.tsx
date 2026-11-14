@@ -16,12 +16,17 @@ export function StandingCard({ report }: { report: SenderScore }) {
   const standing = report.standing
   if (!standing || !stepAtLeast(standing.step, 'warn')) return null
   const step = standing.step as RaisedStep, offer = standing.selfService
+  // From Restrict up the banner above every page says what happened (the first reason) and what was done: the card
+  // adds only what the banner doesn't, then how to fix it.
+  const bannered = step !== 'warn'
+  const reasons = bannered ? standing.reasons.slice(1) : standing.reasons
+  const did = bannered ? didExtra(standing).trim() : `${standingDid[step]}${didExtra(standing)}`
   return <section id="standing" className={`standing-card ui-tone--${standingTone(step)}`} aria-labelledby="standing-title" data-step={step}>
     <div className="standing-card__head"><span className="standing-card__dot" aria-hidden="true" /><h2 id="standing-title">{standingTitle[step]}</h2><span className="muted">Since {shortDateTime(standing.since)}</span></div>
-    <div className="standing-card__part"><h3>What happened</h3>
-      {standing.reasons.length ? <ul>{standing.reasons.map(reason => <li key={reason.code}>{reason.message}</li>)}</ul> : <p>{standingFallback[step]}</p>}
-    </div>
-    <div className="standing-card__part"><h3>What {productName} did</h3><p>{standingDid[step]}{didExtra(standing)}</p></div>
+    {(reasons.length > 0 || !bannered) && <div className="standing-card__part"><h3>{bannered ? 'Also' : 'What happened'}</h3>
+      {reasons.length ? <ul>{reasons.map(reason => <li key={reason.code}>{reason.message}</li>)}</ul> : <p>{standingFallback[step]}</p>}
+    </div>}
+    {did && <div className="standing-card__part"><h3>What {productName} did</h3><p>{did}</p></div>}
     <div className="standing-card__part"><h3>How to fix it</h3>
       <ol className="standing-checklist">
         <li>Remove contacts that bounced or complained. <Link to="/audience">Audience</Link></li>
