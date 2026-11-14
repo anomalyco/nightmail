@@ -1,4 +1,4 @@
-/* How sending limits work (docs and Overview's explainer): one table and the ladder as a list of steps. */
+/* How sending limits work (docs and Overview's explainer): the limit table, the warning lines and what each step does. */
 .limits-guide { display: flex; flex-direction: column; gap: var(--space-24); font-size: var(--text-sm); line-height: var(--leading-sm); }
 .limits-guide > section { display: flex; flex-direction: column; gap: var(--space-12); }
 .limits-guide :is(h2, h3) { margin: 0; font-size: var(--text-md); line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
@@ -11,6 +11,13 @@
 .limits-table__part { display: inline-block; white-space: nowrap; }
 .limits-table :is(th, td):last-child { padding-right: 0; }
 .limits-notes { display: flex; flex-direction: column; gap: var(--space-4); margin: 0; padding-inline-start: var(--space-20); color: var(--color-muted); }
+.limits-notes--plain { color: var(--color-text); }
+/* The warning lines: a signal per row, a step per column; cells wrap and read top-down. */
+.limits-table--lines { table-layout: fixed; }
+.limits-table--lines :is(th, td) { height: auto; padding-block: var(--space-6); white-space: normal; vertical-align: top; text-align: left; text-wrap: pretty; }
+.limits-table--lines :is(th, td):nth-child(n + 3) { text-align: left; }
+.limits-table--lines tbody th { color: var(--color-text); font-family: inherit; font-size: inherit; letter-spacing: 0; text-transform: none; }
+.limits-table--lines :is(th, td):first-child { width: 22%; }
 .limits-ladder { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
 .limits-ladder > li { display: flex; flex-direction: column; gap: var(--space-6); padding: var(--space-12) 0; border-top: 1px solid var(--color-border-muted); }
 .limits-ladder__head { display: flex; align-items: center; gap: var(--space-8); }
@@ -26,4 +33,5 @@
   .limits-table :is(th, td):nth-child(2) { white-space: nowrap; }
   .limits-table :is(th, td):nth-child(n + 3) { white-space: nowrap; }
   .limits-table td:nth-child(3):has(> *), .limits-table td:nth-child(3) { text-wrap: balance; }
+  .limits-table--lines :is(th, td):nth-child(n) { white-space: normal; text-wrap: pretty; }
 }
