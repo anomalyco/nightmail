@@ -1,10 +1,11 @@
-// Bane production. bane.mx is the only domain this Worker serves; opensend.mx stays on the old Worker.
+// Production. nightmail.com is the canonical host; bane.mx stays a custom domain (API, SNS feedback, unsubscribe links;
+// dashboard and docs GETs are 301ed to nightmail.com by the bane.mx zone's redirect rule). opensend.mx stays on the old Worker.
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "bane-production",
   "account_id": "15d29c8639fd3733b1b5486a2acfd968",
   "workers_dev": false,
-  "routes": [{ "pattern": "bane.mx", "custom_domain": true }],
+  "routes": [{ "pattern": "nightmail.com", "custom_domain": true }, { "pattern": "bane.mx", "custom_domain": true }],
   "main": "src/worker.ts",
   "compatibility_date": "2026-09-08",
   "compatibility_flags": ["nodejs_compat"],
@@ -18,9 +19,17 @@
   "vars": {
     "BANE_MAIL_BUCKET": "bane-prod-mail",
     "BANE_MAIL_STORE": "r2",
-    "PUBLIC_URL": "https://bane.mx",
+    "PUBLIC_URL": "https://nightmail.com",
+    // The earlier origin: still served, its /mcp audience valid for tokens minted there, and bane.mx stays a platform
+    // domain (its adopted claim keeps receiving support@ and friends). Removed by the cutover.
+    "PREVIOUS_PUBLIC_URLS": "https://bane.mx",
+    // SNS keeps delivering to bane.mx: BYO stacks' IAM conditions pin https://bane.mx/v1/events/ses, and the pool's
+    // subscriptions (infra/pulumi, stage.origin) stay on it. bane.mx serves this path for good.
+    "SES_FEEDBACK_URL": "https://bane.mx/v1/events/ses",
     "ACCOUNT_ISSUER": "https://account.anoma.ly",
     "ACCOUNT_REQUIRED_ACR": "urn:anomaly:acr:google",
+    // MCP asks for nightmail:* scopes (bane:* still accepted until the cutover). Needs account.anoma.ly to know them.
+    "OAUTH_SCOPE_PREFIX": "nightmail",
     // Staff sign-up: the Google Workspace domain (hd) of the sign-in's provider identity, never an address.
     "AUTH_STAFF_GOOGLE_DOMAINS": "anoma.ly",
     // Staff UI notes (src/ui-notes.ts) for these issuer subjects only, who must also be operators: Ryan alone.
@@ -28,8 +37,10 @@
     "ACCOUNT_CLIENT_ID": "bane-production",
     "MULTI_TENANT": "true",
     "BANE_PLATFORM_AWS_ACCOUNT": "009882681002",
-    // Anomaly owns bane.mx itself (adopted by scripts/adopt-platform-domain.ts). Every other workspace is refused.
+    // Anomaly owns nightmail.com and bane.mx (both adopted by scripts/adopt-platform-domain.ts). Every other workspace is refused.
     "BANE_PLATFORM_DOMAIN_WORKSPACE": "ws_90b0696c835f49fbaa9396fb726e9fe2",
+    // Owner notices (standing, billing) by email, from the adopted platform domain through the platform workspace above.
+    "BANE_NOTIFY_FROM": "system@nightmail.com",
     "BANE_REGIONAL_SENDING": "true",
     "BANE_TRUSTED_POOL": "true",
     "BANE_REQUIRE_DMARC_FOR_BULK": "true",
@@ -66,7 +77,7 @@
     "CF_OBSERVABILITY_SCRIPT": "bane-production",
     // The support agent (support/): "Contact support" hands off here, and staff sign-in returns to its /staff/callback.
     // The handoff's Ed25519 key is the BANE_SUPPORT_SIGNING_KEY secret.
-    "BANE_SUPPORT_URL": "https://support.bane.mx/chat"
+    "BANE_SUPPORT_URL": "https://support.nightmail.com/chat"
   },
   "durable_objects": { "bindings": [{ "name": "DISPATCHER", "class_name": "DispatcherShard" }] },
   // Run HTTP requests next to the bane-prod database (PlanetScale aws-us-east-2), as production does.

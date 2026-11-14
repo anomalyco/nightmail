@@ -1,6 +1,6 @@
 # Nightmail TypeScript SDK
 
-TypeScript client for the [Nightmail email API](https://bane.mx). Includes generated request and response types, with no runtime dependencies.
+TypeScript client for the [Nightmail email API](https://nightmail.com). Includes generated request and response types, with no runtime dependencies.
 
 ## Install
 
@@ -19,7 +19,7 @@ import { createClient } from '@nightmail/sdk/client';
 import { sendEmail, getEmail } from '@nightmail/sdk';
 
 const client = createClient({
-  baseUrl: 'https://bane.mx',
+  baseUrl: 'https://nightmail.com',
   auth: scheme => scheme.scheme === 'bearer' ? process.env.NIGHTMAIL_API_KEY : undefined,
 });
 
@@ -42,7 +42,7 @@ const message = await getEmail({
 });
 ```
 
-**Base URL and region.** On hosted Nightmail use `https://bane.mx` and leave `region` out: each sender domain is bound to one sending region, and a different `region` fails with `SENDER_REGION_MISMATCH`. Self-hosted installations use their own public URL as `baseUrl`; pass `region` only to choose between the SES regions that installation has enabled (it defaults to the installation's default region).
+**Base URL and region.** On hosted Nightmail use `https://nightmail.com` and leave `region` out: each sender domain is bound to one sending region, and a different `region` fails with `SENDER_REGION_MISMATCH`. Self-hosted installations use their own public URL as `baseUrl`; pass `region` only to choose between the SES regions that installation has enabled (it defaults to the installation's default region).
 
 **Testing.** Send to `success@simulator.amazonses.com`, `bounce@simulator.amazonses.com` or `complaint@simulator.amazonses.com` to exercise each outcome without reaching a real inbox. Simulator addresses count against hosted sending limits; read the current limit from `GET /v1/me` (`connection.sendingLimit`).
 
@@ -57,7 +57,7 @@ import { createClient } from '@nightmail/sdk/client';
 import { createInbox } from '@nightmail/sdk';
 import { waitForMessage } from '@nightmail/sdk/inbox';
 
-const client = createClient({ baseUrl: 'https://bane.mx', auth: () => process.env.NIGHTMAIL_INBOX_KEY });
+const client = createClient({ baseUrl: 'https://nightmail.com', auth: () => process.env.NIGHTMAIL_INBOX_KEY });
 
 const { data: inbox } = await createInbox({ client, body: { clientId: 'signup-test-42' }, throwOnError: true });
 await signUp(inbox.address); // your app, or the site under test, sends mail to this address
@@ -150,7 +150,7 @@ Use a short-lived `createAgentToken` token to upload a local file without puttin
 ```sh
 export NIGHTMAIL_TOKEN='nm_agent_…'   # read from the environment, never from the command line
 npx --yes @nightmail/sdk upload ./invite.ics \
-  --api https://bane.mx \
+  --api https://nightmail.com \
   --content-type 'text/calendar; method=REQUEST; charset=utf-8'
 ```
 
@@ -162,7 +162,7 @@ Generated per-recipient content can use the same raw upload path without writing
 import { uploadAttachmentBytes } from '@nightmail/sdk/upload';
 
 const attachment = await uploadAttachmentBytes({
-  apiUrl: 'https://bane.mx',
+  apiUrl: 'https://nightmail.com',
   token: temporaryAgentToken,
   filename: 'invite.ics',
   contentType: 'text/calendar; method=REQUEST; charset=utf-8',

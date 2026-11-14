@@ -110,7 +110,7 @@ Every snippet here was run against a local Nightmail on 2026-11-11 (isolated har
 ### curl
 
 ```sh
-export BANE_URL=https://bane.mx        # or your installation's URL
+export BANE_URL=https://nightmail.com        # or your installation's URL
 export NIGHTMAIL_API_KEY=nm_…             # a workspace manage key, or an API key that creates inboxes
 AUTH="Authorization: Bearer $NIGHTMAIL_API_KEY"
 
@@ -184,7 +184,7 @@ import { createClient } from '@nightmail/sdk/client';
 import { createInbox } from '@nightmail/sdk';
 import { waitForMessage } from '@nightmail/sdk/inbox';
 
-const client = createClient({ baseUrl: 'https://bane.mx', auth: () => process.env.NIGHTMAIL_INBOX_KEY });
+const client = createClient({ baseUrl: 'https://nightmail.com', auth: () => process.env.NIGHTMAIL_INBOX_KEY });
 
 const { data: inbox } = await createInbox({ client, body: { clientId: 'signup-test-42' }, throwOnError: true });
 await signUp(inbox.address); // your app, or the site under test, sends mail to this address
@@ -206,7 +206,7 @@ curl -sS "$BANE_URL/v1/api-keys" -H "$AUTH" -H 'Content-Type: application/json' 
 Point an MCP client at hosted Nightmail with an API key that creates inboxes, or one for a single inbox, as the bearer token. For OpenCode:
 
 ```json
-{"mcp":{"servers":{"bane-inbox":{"type":"remote","url":"https://bane.mx/mcp","oauth":false,"headers":{"Authorization":"Bearer {env:NIGHTMAIL_INBOX_KEY}"}}}}}
+{"mcp":{"servers":{"bane-inbox":{"type":"remote","url":"https://nightmail.com/mcp","oauth":false,"headers":{"Authorization":"Bearer {env:NIGHTMAIL_INBOX_KEY}"}}}}}
 ```
 
 The tools an agent then sees, and a real session (IDs shortened):

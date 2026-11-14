@@ -8,7 +8,7 @@ import { productName } from '../../api/src/brand.js';
 // - `BANE` → the `SupportPlatform` entrypoint (api/src/support-platform.ts, its source of truth): verify a handoff or an
 //   email sender, mint and revoke a support grant, and grant-scoped GET /v1/support/* reads. No token: the binding is
 //   the credential.
-// - `BANE_API` → the default entrypoint, Nightmail's public API, as a customer of Nightmail would use it: the support@bane.mx
+// - `BANE_API` → the default entrypoint, Nightmail's public API, as a customer of Nightmail would use it: the support@nightmail.com
 //   inbound address's own API key (BANE_SUPPORT_INBOX_KEY, limited to that address) reads support mail and sends replies and ticket emails.
 
 export type PlatformReply<T = unknown> = { status: number; body: T; requestId: string | null; retryAfter: string | null };

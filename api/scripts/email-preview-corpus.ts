@@ -1,7 +1,7 @@
 // Synthetic email corpus for calibrating the email client emulator (src/email-preview) against real clients. Each
 // fixture isolates one family of rendering behavior (layout, CSS support, fonts, images, buttons, dark mode, clipping)
 // so a mismatch points at one rule. Everything is synthetic: example.com links, made-up names, and only Bane's own
-// public assets (bane.mx) and Google Fonts as remote resources. No project imports, so scripts outside the API can
+// public assets (nightmail.com) and Google Fonts as remote resources. No project imports, so scripts outside the API can
 // load it with `node --import tsx` or bun.
 //
 //   import { emailPreviewCorpus } from './email-preview-corpus.js';
@@ -14,7 +14,7 @@ export interface EmailPreviewFixture {
   html: string;
 }
 
-const asset = (name: string) => `https://bane.mx/${name}`;
+const asset = (name: string) => `https://nightmail.com/${name}`;
 const heroImage = asset('og.png'); // 1200 × 630
 const squareImage = asset('icon-512.png'); // 512 × 512
 const logoImage = asset('apple-touch-icon.png'); // 180 × 180
@@ -151,7 +151,7 @@ const webFonts = doc('Web fonts', `
   <p style="font-family:'Lobster',Georgia,serif;font-size:34px;line-height:42px;margin:0;color:#7c2d12">Handwritten headline</p>
   ${label('@import: Pacifico, fallback Courier New')}
   <p class="imported" style="font-family:'Pacifico','Courier New',monospace;font-size:28px;line-height:38px;margin:0;color:#1e3a8a">Imported font family</p>
-  ${label('@font-face: Inter from bane.mx, fallback Verdana')}
+  ${label('@font-face: Inter from nightmail.com, fallback Verdana')}
   <p class="face" style="font-family:'BaneInter',Verdana,sans-serif;font-size:22px;line-height:30px;margin:0;color:#14532d">Self-hosted variable font</p>
   ${label('System stacks')}
   <p style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:18px;margin:4px 0">-apple-system, Segoe UI, Roboto</p>

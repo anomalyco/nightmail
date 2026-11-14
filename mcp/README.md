@@ -2,7 +2,7 @@
 
 Connect an MCP client to **`https://YOUR_NIGHTMAIL_DOMAIN/mcp`**. The hosted endpoint is part of the Nightmail API; it does not require a local process or an API key. This installation uses **https://bane.mx/mcp**.
 
-If you authorised your client against `https://opensend.mx/mcp`, reconnect it to `https://bane.mx/mcp` and approve access again.
+If you authorised your client against `https://opensend.mx/mcp` or `https://bane.mx/mcp`, reconnect it to `https://nightmail.com/mcp` and approve access again.
 
 ## Connect
 
@@ -40,8 +40,8 @@ One MCP connection is one Anomaly account: the account you choose at Anomaly acc
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "servers": {
-      "bane-personal": { "type": "remote", "url": "https://bane.mx/mcp" },
-      "bane-work": { "type": "remote", "url": "https://bane.mx/mcp" }
+      "bane-personal": { "type": "remote", "url": "https://nightmail.com/mcp" },
+      "bane-work": { "type": "remote", "url": "https://nightmail.com/mcp" }
     }
   }
 }
@@ -136,7 +136,7 @@ The stdio launcher retains one tool per API operation, with nested `path`/`query
 An agent can get its own expiring address, wait for mail and read it, with nothing but an API key limited to its inboxes. On hosted Nightmail pass the key as the bearer token; no OAuth is needed. For OpenCode:
 
 ```json
-{"mcp":{"servers":{"bane-inbox":{"type":"remote","url":"https://bane.mx/mcp","oauth":false,"headers":{"Authorization":"Bearer {env:NIGHTMAIL_INBOX_KEY}"}}}}}
+{"mcp":{"servers":{"bane-inbox":{"type":"remote","url":"https://nightmail.com/mcp","oauth":false,"headers":{"Authorization":"Bearer {env:NIGHTMAIL_INBOX_KEY}"}}}}}
 ```
 
 Use an API key that creates inboxes (`POST /v1/api-keys` with `access: {"type":"addresses","addressIds":[],"mail":["create","read","modify"]}`) to let the agent create inboxes, or an API key for one inbox (`access: {"type":"inbox","inboxId":"mbx_…"}`, or `credential` on `createInbox`) to give it that inbox only; it stops working when the inbox is deleted. Either key sees only the inbox tools its permissions allow:
@@ -161,4 +161,4 @@ Set `ACCOUNT_ISSUER` to the HTTPS issuer that signs access tokens for this insta
 
 `bane:read`, `bane:send` and `bane:manage` request the corresponding Nightmail permissions; a 401 challenge names all three, and you narrow them when approving. The resource verifies the JWT signature and audience (`${PUBLIC_URL}/mcp`, with any query string such as `?codemode=false`), requires a matching Nightmail `(issuer, subject)` identity, and checks live workspace membership and role on every tool call. Members cannot use `manage`. Hosted Nightmail also requires every access token to carry `acr=urn:anomaly:acr:google` (`ACCOUNT_REQUIRED_ACR`); other tokens get a 401 `insufficient_user_authentication` challenge. A sender-constrained access token requires its matching DPoP proof on every request.
 
-For hosted Nightmail, the resource identifiers are `https://dev.bane.mx/mcp` and `https://bane.mx/mcp`. The account issuer supplies the same public subject on dashboard sign-in and on MCP access tokens. Nightmail maintains one approval per user and client ID, including across token refreshes. In **Settings → Account**, revoke a client to block the tokens of its current consent in Nightmail. Use the **Connected apps** link to revoke the grant at the issuer. The cutover shows legacy approvals as expired and revokes their tokens and derived credentials. Reconnect through the account service to authorize again.
+For hosted Nightmail, the resource identifiers are `https://dev.nightmail.com/mcp` and `https://nightmail.com/mcp`. The account issuer supplies the same public subject on dashboard sign-in and on MCP access tokens. Nightmail maintains one approval per user and client ID, including across token refreshes. In **Settings → Account**, revoke a client to block the tokens of its current consent in Nightmail. Use the **Connected apps** link to revoke the grant at the issuer. The cutover shows legacy approvals as expired and revokes their tokens and derived credentials. Reconnect through the account service to authorize again.

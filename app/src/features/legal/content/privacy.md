@@ -5,7 +5,7 @@ updated: 13 November 2026
 effective: 13 November 2026
 ---
 
-This policy explains how **Anomaly Innovations, Inc.** ("Anomaly", "we", "us") handles personal data in **Nightmail**, the email service at bane.mx: its website, API, dashboard, SDK, MCP server, and IMAP and SMTP access.
+This policy explains how **Anomaly Innovations, Inc.** ("Anomaly", "we", "us") handles personal data in **Nightmail**, the email service at nightmail.com: its website, API, dashboard, SDK, MCP server, and IMAP and SMTP access.
 
 ## 1. Two roles: controller and processor
 
@@ -128,7 +128,7 @@ Nightmail stores and processes data mainly in the **United States**. Cloudflare 
 
 | Data | How long |
 | --- | --- |
-| **Received mail** (text, HTML, headers, attachments) to ordinary addresses | **Kept until the customer deletes it** (no automatic expiry). To delete received mail for ordinary addresses, a workspace owner emails [support@bane.mx](mailto:support@bane.mx). Mail older than 90 days counts as billable storage. |
+| **Received mail** (text, HTML, headers, attachments) to ordinary addresses | **Kept until the customer deletes it** (no automatic expiry). To delete received mail for ordinary addresses, a workspace owner emails [support@nightmail.com](mailto:support@nightmail.com). Mail older than 90 days counts as billable storage. |
 | Raw original message (MIME) for ordinary addresses | 90 days |
 | **Persistent inbox** mail | Until deleted |
 | **Agent inbox** mail | Erased when the inbox ends: by default after 24 hours plus 24 hours of grace (at most 30 days plus 7); a 45-day safety rule backs this up |
@@ -164,9 +164,9 @@ We'll notify affected customers and authorities of a personal data breach as the
 
 Depending on where you live, you may have the right to access, correct, delete or export your personal data, to object to or restrict some uses, to withdraw consent, and to complain to a data-protection authority. US state residents may also have the right to know, delete and correct, and not to be discriminated against for using these rights. We don't sell or share personal data for advertising.
 
-To use these rights, email [privacy@bane.mx](mailto:privacy@bane.mx). We'll verify who you are and answer within the time the law requires (usually 30 or 45 days).
+To use these rights, email [privacy@nightmail.com](mailto:privacy@nightmail.com). We'll verify who you are and answer within the time the law requires (usually 30 or 45 days).
 
-**Data Processing Addendum.** Business customers who need one can request our Data Processing Addendum at [privacy@bane.mx](mailto:privacy@bane.mx).
+**Data Processing Addendum.** Business customers who need one can request our Data Processing Addendum at [privacy@nightmail.com](mailto:privacy@nightmail.com).
 
 ## 12. Rights of people in our customers' mail
 
@@ -174,8 +174,8 @@ If you received mail sent through Nightmail, or sent mail to an address hosted o
 
 - **To unsubscribe,** use the link in the email. It works without contacting us.
 - **To access or delete your data,** contact the business that sent you the mail or owns the address you wrote to. They control your data.
-- **If you contact us** at [privacy@bane.mx](mailto:privacy@bane.mx), we'll forward your request to that business where we can identify it, and help them respond as our contracts require.
-- **To report spam or abuse,** email [abuse@bane.mx](mailto:abuse@bane.mx) with the full headers.
+- **If you contact us** at [privacy@nightmail.com](mailto:privacy@nightmail.com), we'll forward your request to that business where we can identify it, and help them respond as our contracts require.
+- **To report spam or abuse,** email [abuse@nightmail.com](mailto:abuse@nightmail.com) with the full headers.
 
 ## 13. Children
 
@@ -190,4 +190,4 @@ We'll post updates on this page and tell customers by email or in the dashboard 
 Anomaly Innovations, Inc.\
 2443 Fillmore St #380-6343, San Francisco, CA 94115, United States
 
-Privacy and data requests: [privacy@bane.mx](mailto:privacy@bane.mx)
+Privacy and data requests: [privacy@nightmail.com](mailto:privacy@nightmail.com)

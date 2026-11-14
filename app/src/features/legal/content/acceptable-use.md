@@ -56,7 +56,7 @@ Don't use Nightmail to send, receive, store or link to:
 - Illegal goods or services, or anything that breaks the law where it's sent or received.
 - Content that infringes someone's intellectual property or privacy.
 
-**Restricted categories.** These need our written approval before you send them, and we may refuse: adult content, online gambling, cannabis and other drugs, weapons, payday loans and debt collection, "get rich quick" offers, crypto promotions, affiliate and lead-generation mailings, and sending on behalf of third parties as a reseller or agency. Ask at [support@bane.mx](mailto:support@bane.mx).
+**Restricted categories.** These need our written approval before you send them, and we may refuse: adult content, online gambling, cannabis and other drugs, weapons, payday loans and debt collection, "get rich quick" offers, crypto promotions, affiliate and lead-generation mailings, and sending on behalf of third parties as a reseller or agency. Ask at [support@nightmail.com](mailto:support@nightmail.com).
 
 ## 6. No working around limits or screening
 
@@ -101,7 +101,7 @@ The [thresholds below](#sending-limits-and-thresholds) say exactly when each ste
 
 **Serious abuse skips the ladder.** For phishing, malware, fraud, illegal content, or when Amazon pauses your sending, we may pause or close the account at once, cancel queued mail, suppress addresses, keep evidence, and report to the authorities where the law requires.
 
-**Appeals.** Use "Ask for review" or "Contact support" in the dashboard, or email [support@bane.mx](mailto:support@bane.mx). A person reviews every appeal.
+**Appeals.** Use "Ask for review" or "Contact support" in the dashboard, or email [support@nightmail.com](mailto:support@nightmail.com). A person reviews every appeal.
 
 ## 10. Sending limits and thresholds
 
@@ -155,7 +155,7 @@ A Hosted campaign with more than 100 recipients first sends to a sample: 10% of 
 
 ## 11. Reporting abuse
 
-Report spam, phishing or other abuse sent through Nightmail to [abuse@bane.mx](mailto:abuse@bane.mx). Include the full message headers. We'll investigate and act.
+Report spam, phishing or other abuse sent through Nightmail to [abuse@nightmail.com](mailto:abuse@nightmail.com). Include the full message headers. We'll investigate and act.
 
 ## 12. Changes
 

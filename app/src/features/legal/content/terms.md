@@ -5,7 +5,7 @@ updated: 13 November 2026
 effective: 13 November 2026
 ---
 
-These Terms of Service (the "Terms") are a binding agreement between you and **Anomaly Innovations, Inc.** ("Anomaly", "we", "us"). They cover Nightmail: the hosted email service at bane.mx, its API, dashboard, SDK, MCP server, and IMAP and SMTP access (together, the "Service").
+These Terms of Service (the "Terms") are a binding agreement between you and **Anomaly Innovations, Inc.** ("Anomaly", "we", "us"). They cover Nightmail: the hosted email service at nightmail.com, its API, dashboard, SDK, MCP server, and IMAP and SMTP access (together, the "Service").
 
 By creating an account, joining a workspace or using the Service, you accept these Terms, the [Acceptable Use Policy](/legal/acceptable-use) and the [Privacy Policy](/legal/privacy). If you use the Service for an organization, you accept these Terms on its behalf and confirm that you're authorized to do so. "You" then means that organization.
 
@@ -118,13 +118,13 @@ We email owners and admins when the balance is low (by default, below $5), when 
 
 - **Prepaid credit expires 12 months after the date you bought it.** Each top-up, including each auto-recharge, expires on its own date. Its purchase date is on its Stripe receipt.
 - **The oldest credit is used first.**
-- Support can tell you the remaining amount and expiry date of each top-up at any time: email [support@bane.mx](mailto:support@bane.mx).
+- Support can tell you the remaining amount and expiry date of each top-up at any time: email [support@nightmail.com](mailto:support@nightmail.com).
 - Expired credit is removed from the balance and isn't refunded.
 - Promotional credit expires as stated when we give it.
 
 ### 5.8 Billing errors and disputes
 
-- Tell us about a billing error within **60 days** of the charge, at [support@bane.mx](mailto:support@bane.mx).
+- Tell us about a billing error within **60 days** of the charge, at [support@nightmail.com](mailto:support@nightmail.com).
 - Please contact us before you dispute a charge with your bank. If you dispute a top-up, we remove the disputed credit from the balance (which can go below $0), and we may block that card.
 
 ### 5.9 Price changes
@@ -181,7 +181,7 @@ We'll tell you why and what to do, unless the law or an active investigation pre
 - **Pause caused by transactional bounces:** an owner can resume once every 30 days, at 50% of the previous limit for 48 hours.
 - **Any other pause** needs our review.
 - Each pause leaves a **strike** for 90 days. A second strike limits you to 50% for 7 days; a third means every resume needs our review.
-- **Appeals:** use "Ask for review" or "Contact support" in the dashboard, or email [support@bane.mx](mailto:support@bane.mx). A person at Anomaly reviews every appeal. We aim to respond within one business day.
+- **Appeals:** use "Ask for review" or "Contact support" in the dashboard, or email [support@nightmail.com](mailto:support@nightmail.com). A person at Anomaly reviews every appeal. We aim to respond within one business day.
 
 ## 9. Your data
 
@@ -190,7 +190,7 @@ We'll tell you why and what to do, unless the law or an active investigation pre
 - **What we don't do.** We don't sell Customer Data, don't use it for advertising, and **don't use it to train AI models**. This covers the content we send to our AI provider for screening and Omens too: our AI provider, TypeSafe AI, has confirmed to us in writing that it doesn't retain or train on that content.
 - **Aggregated data.** We may use data about how the Service is used (volumes, delivery and bounce rates, performance) to run and improve it, and to publish aggregate statistics that don't identify you, your recipients or your content.
 - **People at Anomaly.** Support can't read your message content unless you allow it for a specific support request ([section 10](#support-access)). Staff who review abuse see message metadata, such as recipient domains and the subject line of a message the screen rejected, but not message bodies. Any other access to systems that hold message content is limited to Anomaly personnel who need it to run, secure or repair the Service.
-- **Personal data.** For personal data in Customer Data, you're the controller and we're your processor (a "service provider" under US state privacy laws), as described in the [Privacy Policy](/legal/privacy). A Data Processing Addendum is available to business customers on request at [privacy@bane.mx](mailto:privacy@bane.mx).
+- **Personal data.** For personal data in Customer Data, you're the controller and we're your processor (a "service provider" under US state privacy laws), as described in the [Privacy Policy](/legal/privacy). A Data Processing Addendum is available to business customers on request at [privacy@nightmail.com](mailto:privacy@nightmail.com).
 - **Your responsibilities.** You must have a lawful basis to send and receive the personal data you put into Nightmail, give the notices your recipients need, and not send us special-category data you don't need.
 
 ## 10. Support access
@@ -210,7 +210,7 @@ Nightmail can send your data where you tell it to: webhooks, Slack and Discord e
 
 ## 13. Security
 
-We use reasonable technical and organizational measures to protect Customer Data, as described in the [Privacy Policy](/legal/privacy#security). You must protect your credentials and tell us promptly about any suspected misuse at [support@bane.mx](mailto:support@bane.mx). We'll notify you of a security breach affecting your Customer Data as the law requires and, where one is signed, as the Data Processing Addendum requires.
+We use reasonable technical and organizational measures to protect Customer Data, as described in the [Privacy Policy](/legal/privacy#security). You must protect your credentials and tell us promptly about any suspected misuse at [support@nightmail.com](mailto:support@nightmail.com). We'll notify you of a security breach affecting your Customer Data as the law requires and, where one is signed, as the Data Processing Addendum requires.
 
 ## 14. Availability and support
 
@@ -233,12 +233,12 @@ You'll defend and indemnify Anomaly against third-party claims, fines and costs 
 
 ## 18. Ending the agreement
 
-- **You** can stop using Nightmail at any time. To close a workspace, email [support@bane.mx](mailto:support@bane.mx) from a workspace owner's address; to close your account, email us from your account's address.
+- **You** can stop using Nightmail at any time. To close a workspace, email [support@nightmail.com](mailto:support@nightmail.com) from a workspace owner's address; to close your account, email us from your account's address.
 - **We** can end these Terms or close a workspace:
   - for a serious or repeated breach, at once;
   - otherwise with **30 days'** notice. If we close a workspace without cause, we refund its unused, unexpired paid balance ([section 5.7](#refunds-and-credit-expiry)).
 - If you close a workspace yourself, its unused credit isn't refunded ([section 5.7](#refunds-and-credit-expiry)).
-- **Export.** You can read your messages, contacts and other data at any time through the API, SDK, MCP and IMAP. To export a whole workspace, email [support@bane.mx](mailto:support@bane.mx) and we'll help you do it.
+- **Export.** You can read your messages, contacts and other data at any time through the API, SDK, MCP and IMAP. To export a whole workspace, email [support@nightmail.com](mailto:support@nightmail.com) and we'll help you do it.
 - **After closing:** you have **30 days** to export your data, unless we closed the account for abuse or the law forbids it. After that, we delete the workspace's Customer Data from our active systems within 90 days, except:
   - billing and payment records, kept for **7 years** for tax and accounting;
   - the account's audit trail, kept for up to **1 year** (billing events 7 years);
@@ -297,7 +297,7 @@ If the prohibition against class actions and other claims brought on behalf of t
 
 - **Assignment.** You can't transfer these Terms without our prior written consent. We can transfer them in a merger, acquisition or sale of assets, or to an affiliate.
 - **Force majeure.** Neither side is liable for delays caused by events beyond its reasonable control, including outages of the providers Nightmail depends on.
-- **Notices.** We send notices to workspace owners' email addresses and in the dashboard. You send legal notices to [legal@bane.mx](mailto:legal@bane.mx), or by mail to the address in [section 22](#contact).
+- **Notices.** We send notices to workspace owners' email addresses and in the dashboard. You send legal notices to [legal@nightmail.com](mailto:legal@nightmail.com), or by mail to the address in [section 22](#contact).
 - **Entire agreement.** These Terms, the Acceptable Use Policy, the Privacy Policy, any signed Data Processing Addendum and any order form are the whole agreement between you and Anomaly about the Service. If they conflict, a signed agreement wins, then the Data Processing Addendum for personal data, then these Terms.
 - **Severability and waiver.** If a part of these Terms is unenforceable, it's limited or removed to the minimum extent necessary and the rest stays in force. Not enforcing a term isn't a waiver.
 - **Export and sanctions.** You'll comply with export control and sanctions laws.
@@ -308,7 +308,7 @@ If the prohibition against class actions and other claims brought on behalf of t
 Anomaly Innovations, Inc.\
 2443 Fillmore St #380-6343, San Francisco, CA 94115, United States
 
-- Support and billing: [support@bane.mx](mailto:support@bane.mx)
-- Abuse reports: [abuse@bane.mx](mailto:abuse@bane.mx)
-- Privacy and data requests: [privacy@bane.mx](mailto:privacy@bane.mx)
-- Legal notices: [legal@bane.mx](mailto:legal@bane.mx)
+- Support and billing: [support@nightmail.com](mailto:support@nightmail.com)
+- Abuse reports: [abuse@nightmail.com](mailto:abuse@nightmail.com)
+- Privacy and data requests: [privacy@nightmail.com](mailto:privacy@nightmail.com)
+- Legal notices: [legal@nightmail.com](mailto:legal@nightmail.com)
