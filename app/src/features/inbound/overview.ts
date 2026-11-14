@@ -42,11 +42,7 @@ export const firstOverview: OverviewQuery = { limit: 50 }
 export const overviewQuery = (query: OverviewQuery) => ({ key: overviewKey(query), read: (_api: unknown, signal: AbortSignal) => readOverview(query, signal) })
 
 export const receivingDomains = <D extends Pick<MailboxDomain, 'status'>>(domains: D[]) => domains.filter(d => !['off', 'disabled'].includes(d.status))
-export const ago = (iso: string | null | undefined) => {
-  if (!iso) return null
-  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000))
-  return minutes < 60 ? `${minutes}m` : minutes < 1440 ? `${Math.round(minutes / 60)}h` : `${Math.round(minutes / 1440)}d`
-}
+export { ago } from '../../lib/format'
 export const expiresIn = (iso: string | null | undefined) => {
   if (!iso) return null
   const hours = Math.round((Date.parse(iso) - Date.now()) / 3_600_000)

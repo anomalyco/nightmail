@@ -10,6 +10,7 @@ import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const freePort = () => new Promise((resolve, reject) => { const s = createServer(); s.on('error', reject); s.listen(0, '127.0.0.1', () => { const { port } = s.address(); s.close(() => resolve(port)); }); });
 
@@ -407,20 +408,35 @@ export async function seed(fx) {
   await dana.api('POST', '/v1/endpoints', { type: 'slack', name: 'support', url: 'https://hooks.slack.com/services/T0SYNTH/B0SYNTH/northwindfixture0a1' }, 201);
   await dana.api('POST', '/v1/endpoints', { type: 'webhook', name: 'crm', url: 'https://hooks.northwind.example/crm-ritual' }, 201);
   await dana.api('POST', '/v1/endpoints', { type: 'forward', name: 'founders', address: 'founders@mail.northwind.example', preverify: true }, 201);
+  // Ready-made rituals (recipes) beside the two scripts, written by the API's own buildRecipe and saved in this one
+  // config write (one audit row, so Settings → Activity measures what it did before): the Rituals tab shows them as
+  // sentences, one turned off, and an edit opens the recipe's form (cls.mjs `Receiving · recipe ritual`).
+  const apiDir = fileURLToPath(new URL('../../api/', import.meta.url));
+  const { tsImport } = await import(pathToFileURL(createRequire(join(apiDir, 'package.json')).resolve('tsx/esm/api')).href);
+  const { buildRecipe } = await tsImport(join(apiDir, 'src/ritual-schema.ts'), import.meta.url);
+  const endpointTypes = { support: 'slack', crm: 'webhook', founders: 'forward' };
+  const recipe = (key, id, params, extra = {}) => {
+    const built = buildRecipe(id, params, name => endpointTypes[name]);
+    if (!built.ok) throw new Error(`fixture recipe ${id}: ${built.message}`);
+    return { key, source: built.source, recipe: { id, params: built.params }, ...extra };
+  };
   await dana.api('PUT', '/v1/rituals', {
     rituals: [
       { key: 'triage', source: 'export default function route(email, ctx) {\n  if (email.headers.has("list-unsubscribe")) return junk("newsletter")\n  label("support")\n  endpoints.support({ text: `${email.from.address}: ${email.subject}` })\n}\n' },
       { key: 'invoices', source: 'export default function route(email, ctx) {\n  if (email.attachments.length > 0) {\n    label("invoice")\n    endpoints.crm({ subject: email.subject, from: email.from.address })\n  }\n}\n' },
+      recipe('allow-senders-support', 'allow-senders', { senders: ['ceo@example.net', '@partner.example'] }),
+      recipe('label-by-meaning-support', 'label-by-meaning', { meaning: 'a refund request', label: 'refund' }),
+      recipe('forward-sales', 'forward', { to: 'founders' }),
+      recipe('junk-newsletters-sales', 'junk-newsletters', {}, { enabled: false }),
     ],
-    attachments: [{ ritual: 'triage', target: A.support.id, continue: false }, { ritual: 'invoices', target: A.billing.id, continue: false }],
+    // Recipes run with "Run the next one too" on, before the address's own script (createRitualFromRecipe's order).
+    attachments: [
+      { ritual: 'allow-senders-support', target: A.support.id, continue: true }, { ritual: 'label-by-meaning-support', target: A.support.id, continue: true }, { ritual: 'triage', target: A.support.id, continue: false },
+      { ritual: 'label-by-meaning-support', target: A.billing.id, continue: true }, { ritual: 'invoices', target: A.billing.id, continue: false },
+      { ritual: 'junk-newsletters-sales', target: A.sales.id, continue: true }, { ritual: 'forward-sales', target: A.sales.id, continue: true },
+    ],
     senderLists: { vip: ['ceo@example.net'] }, evaluateDomains: ['northwind.example'], evaluateRoutes: [],
   }, 200);
-  // Ready-made rituals (recipes) beside the two scripts: the Rituals tab shows them as sentences, one turned off, and
-  // an edit opens the recipe's form (cls.mjs `Receiving · recipe ritual`).
-  await dana.api('POST', '/v1/rituals/recipes', { recipe: 'allow-senders', params: { senders: ['ceo@example.net', '@partner.example'] }, addresses: [A.support.id] }, 201);
-  const refunds = await dana.api('POST', '/v1/rituals/recipes', { recipe: 'label-by-meaning', params: { meaning: 'a refund request', label: 'refund' }, addresses: [A.support.id, A.billing.id] }, 201);
-  const founders = await dana.api('POST', '/v1/rituals/recipes', { recipe: 'forward', params: { to: 'founders' }, addresses: [A.sales.id] }, 201);
-  await dana.api('POST', '/v1/rituals/recipes', { recipe: 'junk-newsletters', params: {}, addresses: [A.sales.id], enabled: false }, 201);
   await threads(db, 'ws_northwind', A.support, [{ id: 'msg_northwind_invoice', subject: 'Invoice for October', snippet: 'Please find the October invoice attached.', unread: true, minutes: 9, from: ['Margaret Ode', 'margaret@example.com'], files: 1 }, ...mix(6, 0)]);
   await threads(db, 'ws_northwind', A.billing, mix(4, 2));
   await threads(db, 'ws_northwind', A.sales, mix(3, 3));
@@ -428,9 +444,9 @@ export async function seed(fx) {
   // Ingest records which rituals acted on each email (verdicts.ritualsActed); these threads are inserted directly, so
   // say it here: the Rituals tab's Last matched.
   const acted = async (box, keys) => db.query(`UPDATE mail_messages SET verdicts=verdicts||jsonb_build_object('ritualsActed',$3::jsonb) WHERE workspace_id=$1 AND id IN (SELECT message_id FROM mailbox_messages WHERE mailbox_id=$2)`, ['ws_northwind', box.id, JSON.stringify(keys)]);
-  await acted(A.support, ['triage', refunds.key]);
+  await acted(A.support, ['triage', 'label-by-meaning-support']);
   await acted(A.billing, ['invoices']);
-  await acted(A.sales, [founders.key]);
+  await acted(A.sales, ['forward-sales']);
   const inbox = await agentInbox(db, 'ws_northwind', nw, 'Sign-up e2e', 20, mix(3, 1));
   await agentInbox(db, 'ws_northwind', nw, 'Password reset e2e', 3, []);
 

@@ -3,7 +3,7 @@ import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query'
 import { Button, CopyButton, DataTable, Dialog, EmptyState, ErrorState, SectionHeader, Select, StatusBadge } from '../../components/ui'
 import { useApi } from '../../data/context'
 import { actionLabel, activityApi, activityAreas, type AuditEntry } from '../../data/activity'
-import { relativeTime, shortDateTime } from '../../lib/format'
+import { ago, shortDateTime } from '../../lib/format'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { maskedParts } from '../../lib/private-address'
 import { settingsColumns } from './skeletons'
@@ -70,7 +70,7 @@ function Cell({ full, hint, className, children }: { full: string | null; hint?:
   }}>{children}</span>
 }
 function When({ at }: { at: string }) {
-  return <time dateTime={at} title={`${shortDateTime(at)} UTC`}>{relativeTime(at)}</time>
+  return <time dateTime={at} title={`${shortDateTime(at)} UTC`}>{ago(at) ?? '—'}</time>
 }
 
 export function ActivitySection() {
