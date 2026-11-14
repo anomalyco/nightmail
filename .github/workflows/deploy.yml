@@ -283,6 +283,7 @@ jobs:
       # in anomaly-production. Both the token issuer and every API call use this.
       CF_ACCOUNT_ID: ${{ needs.authorize.outputs.stage == 'dev' && 'd8e944f537ceef3f06a5bd3aec1d7a53' || '15d29c8639fd3733b1b5486a2acfd968' }}
       CF_R2_ENDPOINT: ${{ needs.authorize.outputs.stage == 'dev' && 'd8e944f537ceef3f06a5bd3aec1d7a53' || '15d29c8639fd3733b1b5486a2acfd968' }}.r2.cloudflarestorage.com
+      STATE_BUCKET: ${{ needs.authorize.outputs.stage == 'dev' && 'nightmail-dev-pulumi' || 'bane-production-pulumi' }}
     steps:
       - &unfrozen
         name: Require production deploys to be unfrozen
@@ -374,11 +375,15 @@ jobs:
         with:
           pulumi-version: 3.274.1
 
+      - name: Copy the dev checkpoint before selecting the new backend
+        if: steps.guard.outputs.skip != 'true' && env.STAGE == 'dev' && !inputs.preview
+        run: python3 .github/scripts/copy-pulumi-backend.py
+
       - name: Init stack
         if: steps.guard.outputs.skip != 'true' && github.event_name == 'workflow_dispatch' && inputs.init
         working-directory: infra/pulumi
         env:
-          PULUMI_BACKEND_URL: s3://bane-${{ env.STAGE }}-pulumi?endpoint=${{ env.CF_R2_ENDPOINT }}&region=auto&s3ForcePathStyle=true&awssdk=v2&profile=r2
+          PULUMI_BACKEND_URL: s3://${{ env.STATE_BUCKET }}?endpoint=${{ env.CF_R2_ENDPOINT }}&region=auto&s3ForcePathStyle=true&awssdk=v2&profile=r2
         run: |
           set -euo pipefail
           if pulumi stack select "$STAGE" >/dev/null 2>&1; then
@@ -402,7 +407,9 @@ jobs:
         if: steps.guard.outputs.skip != 'true' && !inputs.preview
         run: |
           case "$STAGE" in production) account=009882681002;; dev) account=905840579680;; *) exit 1;; esac
-          aws configure set profile.receiving-bootstrap.role_arn "arn:aws:iam::$account:role/bane-deploy"
+          role=$(yq -er '.config."bane:deployRoleArn"' "infra/pulumi/Pulumi.$STAGE.yaml")
+          [[ $role == "arn:aws:iam::$account:role/"* ]]
+          aws configure set profile.receiving-bootstrap.role_arn "$role"
           aws configure set profile.receiving-bootstrap.credential_source Environment
           # --profile (rather than AWS_PROFILE) suppresses ambient credentials as final credentials.
           bash .github/scripts/receiving-rule-set.sh "$account" receiving-bootstrap
@@ -414,7 +421,7 @@ jobs:
         working-directory: infra/pulumi
         env:
           CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
-          PULUMI_BACKEND_URL: s3://bane-${{ env.STAGE }}-pulumi?endpoint=${{ env.CF_R2_ENDPOINT }}&region=auto&s3ForcePathStyle=true&awssdk=v2&profile=r2
+          PULUMI_BACKEND_URL: s3://${{ env.STATE_BUCKET }}?endpoint=${{ env.CF_R2_ENDPOINT }}&region=auto&s3ForcePathStyle=true&awssdk=v2&profile=r2
         run: |
           set -euo pipefail
           umask 077
@@ -431,7 +438,7 @@ jobs:
           plan: ${{ !inputs.preview && format('{0}/deploy.plan', runner.temp) || '' }}
           stack-name: ${{ env.STAGE }}
           work-dir: infra/pulumi
-          cloud-url: s3://bane-${{ env.STAGE }}-pulumi?endpoint=${{ env.CF_R2_ENDPOINT }}&region=auto&s3ForcePathStyle=true&awssdk=v2&profile=r2
+          cloud-url: s3://${{ env.STATE_BUCKET }}?endpoint=${{ env.CF_R2_ENDPOINT }}&region=auto&s3ForcePathStyle=true&awssdk=v2&profile=r2
           pulumi-version: 3.274.1
           suppress-progress: true
 

@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 case "$STAGE" in dev) account=905840579680;; production) account=009882681002;; *) exit 2;; esac
-aws configure set profile.tenant-check.role_arn "arn:aws:iam::$account:role/bane-deploy"
+role=$(yq -er '.config."bane:deployRoleArn"' "infra/pulumi/Pulumi.$STAGE.yaml")
+[[ $role == "arn:aws:iam::$account:role/"* ]]
+aws configure set profile.tenant-check.role_arn "$role"
 aws configure set profile.tenant-check.credential_source Environment
 name=bane-tenant-sending-status
 for region in us-east-2 us-east-1; do
