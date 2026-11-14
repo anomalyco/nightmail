@@ -1,10 +1,10 @@
-// Dev only. The pipeline moves the Worker while preserving dev.bane.mx and the original AWS receiving path.
+// Dev only. dev.nightmail.com is canonical; dev.bane.mx stays a custom domain (API, SNS feedback; GETs redirected by its zone).
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
   "name": "nightmail-dev",
   "account_id": "d8e944f537ceef3f06a5bd3aec1d7a53",
   "workers_dev": false,
-  "routes": [{ "pattern": "dev.bane.mx", "custom_domain": true }],
+  "routes": [{ "pattern": "dev.nightmail.com", "custom_domain": true }, { "pattern": "dev.bane.mx", "custom_domain": true }],
   "main": "src/worker.ts",
   "compatibility_date": "2026-09-08",
   "compatibility_flags": ["nodejs_compat"],
@@ -18,7 +18,11 @@
   "vars": {
     "BANE_MAIL_BUCKET": "nightmail-dev-mail",
     "BANE_MAIL_STORE": "r2",
-    "PUBLIC_URL": "https://dev.bane.mx",
+    "PUBLIC_URL": "https://dev.nightmail.com",
+    // The earlier origin, still served (see wrangler.prod.jsonc). Removed by the cutover.
+    "PREVIOUS_PUBLIC_URLS": "https://dev.bane.mx",
+    // The pool's SNS subscriptions stay on dev.bane.mx (infra/pulumi stage.origin).
+    "SES_FEEDBACK_URL": "https://dev.bane.mx/v1/events/ses",
     "ACCOUNT_ISSUER": "https://account.dev.anoma.ly",
     "ACCOUNT_REQUIRED_ACR": "urn:anomaly:acr:google",
     // Staff sign-up: the Google Workspace domain (hd) of the sign-in's provider identity, never an address.
@@ -66,7 +70,7 @@
     "CF_OBSERVABILITY_SCRIPT": "nightmail-dev",
     // The support agent (support/): "Contact support" hands off here, and staff sign-in returns to its /staff/callback.
     // The handoff's Ed25519 key is the BANE_SUPPORT_SIGNING_KEY secret.
-    "BANE_SUPPORT_URL": "https://support.dev.bane.mx/chat"
+    "BANE_SUPPORT_URL": "https://support.dev.nightmail.com/chat"
   },
   "durable_objects": { "bindings": [{ "name": "DISPATCHER", "class_name": "DispatcherShard" }] },
   // Run HTTP requests next to the nightmail/dev database (PlanetScale aws-us-east-2).

@@ -26,4 +26,4 @@ These providers process personal data for Nightmail on behalf of **Anomaly Innov
 
 ## Changes
 
-We update this page before a new subprocessor starts processing personal data. Business customers with a signed Data Processing Addendum get notice of changes as that addendum describes. Questions: [privacy@bane.mx](mailto:privacy@bane.mx).
+We update this page before a new subprocessor starts processing personal data. Business customers with a signed Data Processing Addendum get notice of changes as that addendum describes. Questions: [privacy@nightmail.com](mailto:privacy@nightmail.com).

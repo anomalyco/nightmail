@@ -4,8 +4,11 @@ import assert from 'node:assert/strict';
 import { readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
-const origin = process.argv[2];
-assert(['https://dev.bane.mx', 'https://bane.mx'].includes(origin));
+// The stage's origin, then its earlier one: the deploy that first adds nightmail.com builds while only bane.mx serves
+// the live version. Both custom domains serve the same Worker, so the first that answers the manifest is the source.
+const origins = { 'https://nightmail.com': ['https://nightmail.com', 'https://bane.mx'], 'https://dev.nightmail.com': ['https://dev.nightmail.com', 'https://dev.bane.mx'] }[process.argv[2]];
+assert(origins, `Unknown origin ${process.argv[2]}`);
+let origin;
 const dist = 'app/dist', assets = join(dist, 'assets'), manifest = 'asset-history.json';
 const hashed = /^[\w.~\-]+-[\w-]{8}\.[a-zA-Z0-9]+$/;
 const maxSize = 25 * 1024 * 1024, maxFiles = 20_000;
@@ -44,7 +47,11 @@ async function legacyBuild(html) {
   return [...names].sort();
 }
 
-const live = await get('/' + manifest);
+let live;
+for (const candidate of origins) {
+  try { origin = candidate; live = await get('/' + manifest); break; }
+  catch (error) { console.log(`${candidate}: ${error.message}`); if (candidate === origins.at(-1)) throw error; }
+}
 const history = live.headers.get('content-type')?.includes('text/html')
   ? [await legacyBuild(await live.text())] : await live.json();
 assert(Array.isArray(history) && history.length >= 1 && history.length <= 4);

@@ -1,4 +1,4 @@
-// Bane support, production (support.bane.mx): the support agent's Worker beside bane-production in anomaly-production. Service bindings
+// Support, production (support.nightmail.com; support.bane.mx stays a custom domain for links already sent): the support agent's Worker beside bane-production in anomaly-production. Service bindings
 // only work inside one account, so dev binds bane-dev and production binds bane-production. See support/README.md for
 // the one-time setup (D1 database, address, webhook, secrets) and the deploy.
 {
@@ -10,7 +10,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "preview_urls": false,
-  "routes": [{ "pattern": "support.bane.mx", "custom_domain": true }],
+  "routes": [{ "pattern": "support.nightmail.com", "custom_domain": true }, { "pattern": "support.bane.mx", "custom_domain": true }],
   "minify": true,
   // The system prompt and the voice guide are Markdown files bundled as text.
   "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
@@ -39,15 +39,19 @@
   "triggers": { "crons": ["10 0 * * *"] },
   "vars": {
     "STAGE": "production",
-    "PUBLIC_URL": "https://support.bane.mx",
-    "DASHBOARD_ORIGINS": "https://bane.mx",
-    "BANE_ORIGIN": "https://bane.mx",
-    "SUPPORT_ADDRESS": "support@bane.mx",
-    // The inbound address ID (mbx_…) of SUPPORT_ADDRESS in the platform workspace (ws_90b0…), created 2026-11-13.
-    "SUPPORT_ADDRESS_ID": "mbx_7e7e64495349496691b2ca188cf48b6e",
+    "PUBLIC_URL": "https://support.nightmail.com",
+    // bane.mx until the cutover: its dashboard GETs redirect, but a tab opened before the switch can still start a chat.
+    "DASHBOARD_ORIGINS": "https://nightmail.com,https://bane.mx",
+    "BANE_ORIGIN": "https://nightmail.com",
+    "SUPPORT_ADDRESS": "support@nightmail.com",
+    // The inbound address ID (mbx_…) of SUPPORT_ADDRESS in the platform workspace (ws_90b0…), created on domain day.
+    // support@bane.mx (mbx_7e7e64495349496691b2ca188cf48b6e) keeps its route to the same webhook; replies in its threads
+    // go out from it (src/bane.ts reply), so BANE_SUPPORT_INBOX_KEY must cover both addresses.
+    "SUPPORT_ADDRESS_ID": "mbx_SET_ON_DOMAIN_DAY",
     "TICKET_TO": "ryan@anoma.ly",
     // Straight to tickets, never to the agent (src/intake.ts): their own webhook and API key.
-    "INTAKE_ADDRESSES": "abuse@bane.mx,privacy@bane.mx,legal@bane.mx",
+    // bane.mx's three stay listed (and in BANE_INTAKE_INBOX_KEY) until the cutover.
+    "INTAKE_ADDRESSES": "abuse@nightmail.com,privacy@nightmail.com,legal@nightmail.com,abuse@bane.mx,privacy@bane.mx,legal@bane.mx",
     // Console's inference gateway (Anthropic Messages API). The key is the CONSOLE_GATEWAY_KEY secret.
     "GATEWAY_URL": "https://opencode.ai/inference/anthropic/v1"
   },

@@ -367,7 +367,7 @@ describe('support Worker', () => {
       assert.ok(await db.prepare("SELECT id FROM tickets WHERE type = 'legal' AND title = 'Subpoena 2'").first(), 'legal@ is not starved by abuse@.');
       const held = await db.prepare("SELECT channel, reason, sender, dmarc FROM overflow WHERE message_id = 'msg_abuse_s3'").first<any>();
       assert.deepEqual(held, { channel: 'abuse', reason: 'tickets for abuse@', sender: 's3@spoof.test', dmarc: 'FAIL' }, 'Kept, not dropped.');
-      assert.equal((await replies('thr_s3', caps))[0][3].text, "Hi,\n\nThanks for writing to abuse@bane.mx. We've received your message. A person at Nightmail will reply by email.\n\nNightmail");
+      assert.equal((await replies('thr_s3', caps))[0][3].text, "Hi,\n\nThanks for writing to abuse@nightmail.com. We've received your message. A person at Nightmail will reply by email.\n\nNightmail");
       const buckets = (await db.prepare("SELECT key, n FROM daily_counters WHERE key LIKE '%:mail' ORDER BY key").all<{ key: string; n: number }>()).results;
       assert.ok(buckets.some(b => b.key === 'unauthenticated:abuse:mail' && b.n === 3) && !buckets.some(b => b.key.startsWith('sender:') && b.n === 3), `Spoofed senders share one bucket: ${JSON.stringify(buckets)}`);
       const open = async () => {
@@ -432,8 +432,8 @@ describe('support Worker', () => {
     const db = await mf.getD1Database('DB', 'support');
     const ticket = await db.prepare("SELECT * FROM tickets WHERE type = 'abuse_report' ORDER BY created_at DESC").first<any>();
     assert.deepEqual([ticket.title, ticket.severity, JSON.parse(ticket.details).topic, JSON.parse(ticket.customer)], ['Spam from your customer', 'P3', 'abuse', { verified: false, sender: 'reporter@isp.test', dmarc: 'PASS' }]);
-    assert.equal(ack[3].text, `Hi,\n\nThanks for writing to abuse@bane.mx. We've received your message and logged it as ${ticket.id}. A person at Nightmail will reply by email.\n\nNightmail`);
-    assert.equal(ack[3].subject, 'Re: your message to abuse@bane.mx'); assert.equal(ack[3].addressId, undefined, 'Replies from the address it came in on.');
+    assert.equal(ack[3].text, `Hi,\n\nThanks for writing to abuse@nightmail.com. We've received your message and logged it as ${ticket.id}. A person at Nightmail will reply by email.\n\nNightmail`);
+    assert.equal(ack[3].subject, 'Re: your message to abuse@nightmail.com'); assert.equal(ack[3].addressId, undefined, 'Replies from the address it came in on.');
     assert.equal(ack[4], `Bearer bane_mbx_${'8'.repeat(64)}`, 'With the intake key, not the support key.');
     const team = (await fakeCalls()).find(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[3].subject === `[Nightmail abuse] ${ticket.id}: Spam from your customer (P3)`);
     assert.ok(team, 'The team gets "[Nightmail abuse] …".');
@@ -447,7 +447,7 @@ describe('support Worker', () => {
     // legal@ without a DMARC pass: P2, marked unverified everywhere.
     assert.equal((await signedHook('msg_legal_nodmarc_1', 'thr_legal', 'lawyer@firm.test', { intake: true, to: 'legal@dev.bane.mx' })).status, 200);
     const legalAck = await eventually(async () => (await replies('thr_legal'))[0]);
-    assert.match(legalAck[3].text, /^Hi,\n\nThanks for writing to legal@bane\.mx\./);
+    assert.match(legalAck[3].text, /^Hi,\n\nThanks for writing to legal@nightmail\.com\./);
     const legal = await db.prepare("SELECT * FROM tickets WHERE type = 'legal'").first<any>();
     assert.equal(legal.severity, 'P2');
     const legalMail = (await fakeCalls()).find(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[3].subject === `[Nightmail legal] [UNVERIFIED] ${legal.id}: Subpoena (P2)`);

@@ -279,7 +279,7 @@ jobs:
     env:
       STAGE: ${{ needs.authorize.outputs.stage }}
       AUTHORIZED_ATTEMPT: ${{ needs.authorize.outputs.attempt }}
-      # dev.bane.mx and everything behind it lives in anomaly-dev; production stays
+      # dev.nightmail.com (and dev.bane.mx) and everything behind them live in anomaly-dev; production stays
       # in anomaly-production. Both the token issuer and every API call use this.
       CF_ACCOUNT_ID: ${{ needs.authorize.outputs.stage == 'dev' && 'd8e944f537ceef3f06a5bd3aec1d7a53' || '15d29c8639fd3733b1b5486a2acfd968' }}
       CF_R2_ENDPOINT: ${{ needs.authorize.outputs.stage == 'dev' && 'd8e944f537ceef3f06a5bd3aec1d7a53' || '15d29c8639fd3733b1b5486a2acfd968' }}.r2.cloudflarestorage.com
@@ -477,7 +477,7 @@ jobs:
       - uses: ./.github/actions/build-release
         env:
           VITE_SUPPORT_CHAT: ${{ needs.authorize.outputs.stage == 'dev' && 'true' || 'staff' }}
-          VITE_PUBLIC_URL: ${{ needs.authorize.outputs.stage == 'dev' && 'https://dev.bane.mx' || 'https://bane.mx' }}
+          VITE_PUBLIC_URL: ${{ needs.authorize.outputs.stage == 'dev' && 'https://dev.nightmail.com' || 'https://nightmail.com' }}
 
       # The environment picks the stage. No variable or secret name carries a
       # stage prefix: each stage reads the same keys from its own nightmail/<stage>/
@@ -485,8 +485,8 @@ jobs:
       - name: Configure the stage
         run: |
           case "$STAGE" in
-            dev) public_url=https://dev.bane.mx; wrangler_config=wrangler.dev.jsonc ;;
-            production) public_url=https://bane.mx; wrangler_config=wrangler.prod.jsonc ;;
+            dev) public_url=https://dev.nightmail.com; wrangler_config=wrangler.dev.jsonc ;;
+            production) public_url=https://nightmail.com; wrangler_config=wrangler.prod.jsonc ;;
             *) echo "::error::unknown stage $STAGE"; exit 1 ;;
           esac
           {
@@ -720,8 +720,8 @@ jobs:
       - name: Configure the stage
         run: |
           case "$STAGE" in
-            dev) config=wrangler.dev.jsonc; database=nightmail-support-dev; url=https://support.dev.bane.mx ;;
-            production) config=wrangler.prod.jsonc; database=bane-support; url=https://support.bane.mx ;;
+            dev) config=wrangler.dev.jsonc; database=nightmail-support-dev; url=https://support.dev.nightmail.com ;;
+            production) config=wrangler.prod.jsonc; database=bane-support; url=https://support.nightmail.com ;;
             *) echo "::error::unknown stage $STAGE"; exit 1 ;;
           esac
           { echo "SUPPORT_CONFIG=$config"; echo "SUPPORT_DATABASE=$database"; echo "SUPPORT_URL=$url"; } >> "$GITHUB_ENV"

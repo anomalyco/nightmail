@@ -175,7 +175,7 @@ Hosted received mail can use private Cloudflare R2 storage: `MAIL` is distinct f
 
 Hosted `BANE_*` configuration variables accept the corresponding `MX_*` names as fallbacks. Set the new names for all new deployments.
 
-`wrangler.prod.jsonc` contains the production bindings for **https://bane.mx** on the separate `bane-production` Worker. `wrangler.dev.jsonc` targets the `bane-dev` Worker. To self-host in another account, replace `account_id`, the custom-domain route and `PUBLIC_URL`, the Hyperdrive ID, and the R2/Queue names with your own resources; create the queues (`wrangler queues create bane-work`, `bane-webhooks`, `bane-feedback-v2`, `bane-feedback-v2-dlq` and `bane-feedback-dlq`) before the first deploy. On a fresh installation drop only `LEGACY_FEEDBACK_QUEUE_NAME`, `LEGACY_FEEDBACK_CUTOVER` and the original legacy consumer. Keep both archive-only DLQ consumers and their name/binding settings: each is the other's failure destination. The `DispatcherShard` Durable Object migration is applied by `wrangler deploy`; `DISPATCH_SHARDS` sets how many shards share each region's quota. Do not reuse production bindings for staging or preview builds. The dashboard build is served from `app/dist` as Workers assets on the API's origin.
+`wrangler.prod.jsonc` contains the production bindings for **https://nightmail.com** (and https://bane.mx, its earlier origin) on the separate `bane-production` Worker. `wrangler.dev.jsonc` targets the `bane-dev` Worker. To self-host in another account, replace `account_id`, the custom-domain route and `PUBLIC_URL`, the Hyperdrive ID, and the R2/Queue names with your own resources; create the queues (`wrangler queues create bane-work`, `bane-webhooks`, `bane-feedback-v2`, `bane-feedback-v2-dlq` and `bane-feedback-dlq`) before the first deploy. On a fresh installation drop only `LEGACY_FEEDBACK_QUEUE_NAME`, `LEGACY_FEEDBACK_CUTOVER` and the original legacy consumer. Keep both archive-only DLQ consumers and their name/binding settings: each is the other's failure destination. The `DispatcherShard` Durable Object migration is applied by `wrangler deploy`; `DISPATCH_SHARDS` sets how many shards share each region's quota. Do not reuse production bindings for staging or preview builds. The dashboard build is served from `app/dist` as Workers assets on the API's origin.
 
 Use a read/write database role for Hyperdrive and a separate schema-owner credential for direct Node migrations. Configure Hyperdrive origin TLS as `verify-full`; Cloudflare requires an uploaded CA certificate ID for that mode. The deployed connection uses the validated ISRG Root X1 trust anchor. Node migration connections accept PlanetScale's `sslrootcert=system` URI parameter without treating it as a filesystem path, while retaining certificate and hostname verification.
 
@@ -201,7 +201,7 @@ The XML-builder alias in Wrangler selects the AWS SDK's non-browser parser: Work
 
 ### Live E2E
 
-From `api/` on Node 24, run `bun install` then `bun run e2e` with `BANE_E2E_API_KEY` in the environment. With a local env file, run `node --env-file="$HOME/.config/bane/e2e.env" --import tsx scripts/e2e.ts`. `BANE_E2E_URL` defaults to `https://bane.mx`. The full suite uses the dedicated unrestricted read/send/manage workspace key; it checks the Hosted connection, region and exact test domain ID before writing. Use separate E2E credentials for each hosted environment.
+From `api/` on Node 24, run `bun install` then `bun run e2e` with `BANE_E2E_API_KEY` in the environment. With a local env file, run `node --env-file="$HOME/.config/bane/e2e.env" --import tsx scripts/e2e.ts`. `BANE_E2E_URL` defaults to `https://nightmail.com`. The full suite uses the dedicated unrestricted read/send/manage workspace key; it checks the Hosted connection, region and exact test domain ID before writing. Use separate E2E credentials for each hosted environment.
 
 Each run sends to [run-tagged SES simulator addresses](https://docs.aws.amazon.com/ses/latest/dg/send-an-email-from-console.html#send-email-simulator-considerations) and its own two temporary MX addresses. A second one-recipient campaign is scheduled 24 hours ahead, paused, paced, resumed and canceled before dispatch. The paused outbound webhook sends only a synthetic probe to `https://httpbin.org/status/204`; the inbound webhook sends only thread-state metadata from a run-owned address there. Neither subscribes to customer mail. The API records HTTP attempts, not request headers: this does not independently verify receiver-side HMAC. Cleanup targets only returned IDs. MX retains immutable mail, idempotency, consent/suppression and one-row import records; terminal campaigns are archived, not deleted.
 
@@ -395,7 +395,7 @@ Drain mail writers before applying 062: it backfills recent mail and feedback wh
 
 **Re-home a legacy Hosted Ohio installation (operator only, migrations through 092).** Keep production on the pre-rename release until the switch. **Never deploy the renamed release against the old account:** it resolves different pool names. The re-home script never calls AWS or DNS. Take a restore-tested encrypted backup and an object manifest. Verify destination IAM, SES production access, quota, active receipt-rule set and the HTTPS subscription endpoint. Save receiving hosts, custom MAIL FROM settings and account/tenant suppression lists.
 
-MCP clients authorised against `https://opensend.mx/mcp` must reconnect to `https://bane.mx/mcp`.
+MCP clients authorised against `https://opensend.mx/mcp` or `https://bane.mx/mcp` must reconnect to `https://nightmail.com/mcp`.
 
 1. Block new admissions on both origins; hold incoming SMTP upstream, disable the old catch-all and drain old sends, campaigns, receipts and archives. Keep signed outbound feedback and unsubscribe working. After draining, pause every connection, retaining previous holds. Fence old HTTP writers, cron, queues, runners and deployments; wait for outstanding work to exit. The advisory lock is **not** a Worker maintenance gate. Do not switch to simulated sending.
 2. With the pre-rename release fenced, run `bun run migrate` from the new `api/` checkout using a short-lived operator `DATABASE_URL`, then plan the re-home. Running migration 092 before the switch is safe here only because production has no stored MCP grants: the pre-rename Worker cannot read `bane:*` scopes. With live grants, run 092 together with the renamed release. Supply **every** workspace ID, including unconnected sign-ins and `default` if present. Review connected IDs, unconnected workspaces, receiving hosts, counts, database identity and digest. All running jobs and pending reputation alerts must drain. Pending outbound feedback/webhook/publication jobs may accumulate while consumers are stopped. Apply only the reviewed digest, with writers still fenced:
@@ -458,7 +458,7 @@ Nightmail staff with the operator role leave design and bug notes on the dashboa
 - **Agents:** an operator makes a UI notes key for themself on `/operator/notes` → Agent keys (up to 90 days). It can only list and read notes and set their status, PR link and resolution, and only while that person still has the operator role. Every other operator route still refuses any bearer token. Use it with `scripts/ui-notes.ts`:
 
   ```sh
-  BANE_URL=https://bane.mx BANE_UI_NOTES_KEY=nm_notes_… node --import tsx scripts/ui-notes.ts list --status open --json --screenshots ./ui-notes
+  BANE_URL=https://nightmail.com BANE_UI_NOTES_KEY=nm_notes_… node --import tsx scripts/ui-notes.ts list --status open --json --screenshots ./ui-notes
   node --import tsx scripts/ui-notes.ts get <id> --screenshot ./note.webp
   node --import tsx scripts/ui-notes.ts set-status <id> in_progress
   node --import tsx scripts/ui-notes.ts set-status <id> fixed --pr https://github.com/anomalyco/nightmail/pull/<n>
@@ -540,7 +540,7 @@ export default tool({
   description: 'Who the customer is and what is going on in their Nightmail account: workspaces, sending and limits, domains, failures in the last 24 hours, recent changes and request IDs to look up.',
   args: { workspaceId: tool.schema.string().optional().describe('Narrow to one of the customer’s workspaces.') },
   async execute({ workspaceId }) {
-    const url = new URL('https://bane.mx/v1/support/context');
+    const url = new URL('https://nightmail.com/v1/support/context');
     if (workspaceId) url.searchParams.set('workspaceId', workspaceId);
     const res = await fetch(url, { headers: { authorization: `Bearer ${process.env.BANE_SUPPORT_GRANT}` } });
     return await res.text();

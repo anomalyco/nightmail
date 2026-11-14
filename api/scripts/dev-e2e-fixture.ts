@@ -1,5 +1,5 @@
 // Dev E2E fixture capacity, applied by every dev deploy before its live E2E (deploy.yml; docs/ci.md). The fixture
-// workspace on dev.bane.mx sends all day (deploys, the scheduled E2E, agents' runs), and its one-time 500/day override
+// workspace on dev.nightmail.com (earlier dev.bane.mx) sends all day (deploys, the scheduled E2E, agents' runs), and its one-time 500/day override
 // ran out on Nov 12: campaigns held with hosted_daily_quota, three red deploys, every release blocked. This sets a
 // finite operator override of 100,000 recipients per rolling 24 hours (90,000 for marketing with the default reserve);
 // even a run every minute at the E2E's 25-admission ceiling (36,000 a day) stays under it. Minute limits, pending
@@ -8,7 +8,7 @@
 // One statement, so it is atomic on its own or inside a caller's transaction. It writes hosted_operator_audit only
 // when it changes the row, never lowers a larger override, and leaves an exempted workspace alone (an override would
 // cap it). It refuses any stage but dev and any workspace that is not exactly the E2E fixture.
-//   STAGE=dev PUBLIC_URL=https://dev.bane.mx BANE_E2E_DOMAIN_ID=dom_... DATABASE_URL=... node --import tsx scripts/dev-e2e-fixture.ts
+//   STAGE=dev PUBLIC_URL=https://dev.nightmail.com BANE_E2E_DOMAIN_ID=dom_... DATABASE_URL=... node --import tsx scripts/dev-e2e-fixture.ts
 import type { Client } from 'pg';
 import { log } from '../src/core.js';
 
@@ -17,7 +17,7 @@ const FIXTURE_DOMAINS = ['e2e.bane.mx', 'e2e-va.bane.mx'];
 const reason = 'Dev E2E fixture capacity, applied by every dev deploy (scripts/dev-e2e-fixture.ts)';
 
 export async function applyDevE2eFixture(db: Pick<Client, 'query'>, env: Record<string, string | undefined>) {
-  if (env.STAGE !== 'dev' || env.PUBLIC_URL !== 'https://dev.bane.mx') throw new Error('The dev E2E fixture capacity applies only to dev (STAGE=dev, PUBLIC_URL=https://dev.bane.mx).');
+  if (env.STAGE !== 'dev' || !['https://dev.nightmail.com', 'https://dev.bane.mx'].includes(env.PUBLIC_URL ?? '')) throw new Error('The dev E2E fixture capacity applies only to dev (STAGE=dev, PUBLIC_URL=https://dev.nightmail.com).');
   const domainId = env.BANE_E2E_DOMAIN_ID;
   if (!domainId || !/^dom_[0-9a-f]{32}$/.test(domainId)) throw new Error('BANE_E2E_DOMAIN_ID must name the fixture domain.');
   // The workspace the live E2E requires (prepare()): named E2E, owning the fixture domain, with a shared Hosted

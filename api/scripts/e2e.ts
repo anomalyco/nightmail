@@ -145,7 +145,7 @@ const subject = `Bane E2E ${prefix}`, text = `Bane delivery check ${prefix}.`;
 const html = `<p>${text}</p>`;
 const webhookUrl = 'https://example.com/';
 const key = setting('API_KEY');
-const base = new URL(setting('URL') ?? 'https://bane.mx');
+const base = new URL(setting('URL') ?? 'https://nightmail.com');
 const client = createClient({ baseUrl: base.origin, redirect: 'error', auth: scheme => scheme.scheme === 'bearer' ? key : undefined });
 const attempted = new Set<Op>();
 const successResponses = new Set<Op>();
@@ -854,7 +854,7 @@ async function inbound() {
 
 async function prepare() {
   check(base.protocol === 'https:' && base.href === base.origin + '/', 'BANE_E2E_URL must be a bare HTTPS origin');
-  check(!destructive || (base.origin === 'https://dev.bane.mx' && domain === 'e2e.bane.mx' && domainId === 'dom_e53755830a0141a5bd6e71e45e942f06' && region === 'us-east-2'),'destructive tests require the exact dev fixture');
+  check(!destructive || (['https://dev.nightmail.com', 'https://dev.bane.mx'].includes(base.origin) && domain === 'e2e.bane.mx' && domainId === 'dom_e53755830a0141a5bd6e71e45e942f06' && region === 'us-east-2'),'destructive tests require the exact dev fixture');
   check(key && domain && domainId, 'missing BANE_E2E_API_KEY, DOMAIN or DOMAIN_ID');
   check((await api('getWorkspaceSettings',{})).name === 'E2E','refusing non-E2E workspace');
   const me = await api('getCurrentIdentity', {});
