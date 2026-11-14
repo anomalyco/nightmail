@@ -13815,21 +13815,21 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     await simulatedSesFixture(t, async ({ runtime, db, local }) => t.test('classifier', async t => {
       const { measureScreen, screenSnapshot } = await import('./src/screen.js');
       const { wid, screened } = await hostedScreenFixture(t, runtime, db, '112223330011', 'sized.invalid');
-      // A text part generated from the HTML says nothing new: the same sentences in the same order count once, whatever the spacing.
+      // A text part that, normalized, is exactly the HTML's visible text (generated from it) counts once, whatever its spacing.
       const html = '<h1>Your order shipped</h1><p>Thanks for shopping with us. It arrives on Tuesday.</p>';
       const same = await measureScreen({ html, text: 'Your order shipped\n\nThanks for shopping with us.  It arrives\non Tuesday.' });
       assert.equal(same.content, 'Your order shipped Thanks for shopping with us. It arrives on Tuesday.');
-      // Anything else is read, in order and with its repetitions: other punctuation, another order, other words.
-      const differs = await measureScreen({ html, text: 'It arrives on Tuesday. Your order shipped! Thanks for shopping with us. Claim your prize at SampleMarker. Claim your prize at SampleMarker.' });
-      assert.equal(differs.content, `${same.content}\nYour order shipped! Thanks for shopping with us. Claim your prize at SampleMarker. Claim your prize at SampleMarker.`);
-      assert.ok(differs.textHtmlOverlap! < same.textHtmlOverlap!);
+      // Any other text part is read in full: other punctuation, another order, a part of it, other words.
+      for (const text of ['Your order shipped! Thanks for shopping with us. It arrives on Tuesday.', 'Thanks for shopping with us. Your order shipped', 'It arrives on Tuesday.', 'Your order shipped. Claim your prize at SampleMarker.'])
+        assert.equal((await measureScreen({ html, text })).content, `${same.content}\n${text}`, text);
+      assert.ok((await measureScreen({ html, text: 'Claim your prize at SampleMarker.' })).textHtmlOverlap! < same.textHtmlOverlap!);
       // 13 KB of copy in both parts used to count 26 KB, over the 24 KiB limit: now one copy, two requests.
       const copy = Array.from({ length: 130 }, (_, i) => `Paragraph ${i}: your order ships within two business days and you can track it from your account page.`);
       const receipt = { from: 'a@sized.invalid', subject: 'Receipt', to: ['b@example.invalid'], cc: [], bcc: [], kind: 'transactional' as const, attachments: [], region: REGION, headers: [], replyTo: [], tracking: false, html: copy.map(p => `<p>${p}</p>`).join(''), text: copy.join('\n\n') };
       const measured = await measureScreen(receipt);
       assert.ok(measured.screenedBytes > 12_288 && measured.screenedBytes < 24_576 && Buffer.byteLength(receipt.text) > 12_288, `${measured.screenedBytes}`);
       assert.equal((await screenSnapshot(runtime, receipt, true))?.spam, 0.01); assert.equal(screened.length, 2);
-      assert.equal((await screenSnapshot(runtime, { ...receipt, subject: 'Receipt 2', text: `${receipt.text}\n\nClaim your prize at SampleMarker.` }, true))?.spam, 0.99, 'A differing text part is screened.');
+      assert.equal((await screenSnapshot(runtime, { ...receipt, subject: 'Receipt 2', html: '<p>Your order shipped.</p>', text: 'Your order shipped.\n\nClaim your prize at SampleMarker.' }, true))?.spam, 0.99, 'A differing text part is screened.');
 
       // Submission measures what the screen will read and refuses an over-limit message at once, with the numbers.
       const key = ok(await local('POST', '/v1/api-keys', { name: 'sized', permissions: ['send', 'read'] }), 201).secret;
@@ -13879,118 +13879,146 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const verdict = async (c: Json) => (await db.query('SELECT v.screen FROM sending_campaign_reviews v JOIN sending_campaigns c ON c.review_id=v.id WHERE c.id=$1', [c.id])).rows[0]?.screen;
     return { campaign, view, settle, send, dispatch, outcome, verdict };
   }
-  test('hosted campaigns are screened once only when values are inert: the copy and a sample, local checks per copy, per-recipient screening otherwise, edits screened again', async t => {
+  test('hosted campaigns screen every distinct copy once before release, and send a copy only under a verdict for its exact screen input', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, run, jobs }) => t.test('classifier', async t => {
-      const { measureScreen, sameOutsideSlots, campaignTemplate, campaignSlots, valueProblem } = await import('./src/screen.js');
+      const { measureScreen } = await import('./src/screen.js');
       const acct = '112223330013', { wid, screened, delivered } = await hostedScreenFixture(t, runtime, db, acct, 'held.invalid');
-      const { campaign, view, settle, send, dispatch, outcome, verdict } = await campaignHarness(runtime, db, local, run, jobs, wid, acct, 'news@held.invalid');
+      const { campaign, view, settle, send, dispatch, outcome } = await campaignHarness(runtime, db, local, run, jobs, wid, acct, 'news@held.invalid');
+      const verdicts = async (c: Json) => (await db.query('SELECT input_hash,requests,windows,spam,judged_at IS NOT NULL AS judged FROM sending_campaign_screens WHERE campaign_id=$1', [c.id])).rows;
+      const charged = async (c: Json) => (await db.query('SELECT v.screen_charged AS charged,v.screen_budget AS budget,v.screen FROM sending_campaign_reviews v JOIN sending_campaigns c ON c.review_id=v.id WHERE c.id=$1', [c.id])).rows[0];
+      const body = '<h1>Hello {{first_name}}</h1><p>Our spring update: the new release ships next week with faster sync and better search.</p><p><a href="https://held.invalid/notes">Read the notes</a></p>';
+      const names = (n: number) => Array.from({ length: n }, (_, i) => ({ first_name: ['Ana', 'Ben', 'Chloé'][i % 3] }));
       const screenTotals = async () => (await db.query('SELECT coalesce(sum(screened),0)::int AS screened,coalesce(sum(rejected),0)::int AS rejected FROM hosted_screen_hourly WHERE workspace_id=$1', [wid])).rows[0];
-      const body = '<h1>Hello {{first_name}}</h1><p>Our spring update: the new release ships next week with faster sync and better search.</p><p><a href="https://held.invalid/notes?ref={{ref}}">Read the notes</a></p>';
 
-      // Placement and values, the rules a campaign must meet to be screened once.
-      assert.deepEqual(await campaignSlots({ subject: 'News for {{first_name}}', html: body, text: 'Hello {{first_name}},\n\nRead the notes (https://held.invalid/notes?ref={{ref}})' }), { text: ['first_name'], token: ['ref'], occurrences: { first_name: 2, ref: 1 } });
-      for (const [template, why] of [['<p>{{a}}{{b}}</p>', /joined to the text after it/], ['<p>{{a}} {{b}}</p>', /no text between/], ['<p>Sam&#112;le{{a}}</p>', /before it/], ['<p>{{a}}.invalid</p>', /after it/], ['<p>https://{{a}}</p>', /before it/],
-        ['<p><a href="https://held.invalid/{{a}}">x</a></p>', /address/], ['<p><a href="https://held.invalid/?next={{a}}{{b}}">x</a></p>', /part of a link parameter value/], ['<p><a href="{{a}}">x</a></p>', /address/], ['<p><img src="https://held.invalid/{{a}}.png" alt="x"></p>', /src attribute/],
-        ['<p><img src="https://held.invalid/a.png" alt="{{a}}"></p>', /alt attribute/], ['<p><a href="https://held.invalid/?e={{email}}">x</a></p>', /part of a link parameter value/]] as const)
-        assert.match(await campaignSlots({ subject: 'News', html: template }) as string, why, template);
-      for (const value of ['Ana', 'María José García-López', "O'Brien", 'Dr. Who', 'Chloé, Jr.', '12345', '']) assert.equal(valueProblem(value, { text: true, token: false }), null, value);
-      for (const value of ['evil.invalid', 'https://evil.invalid', 'a@b', 'Sam\u200bple', 'Sample\n', 'x'.repeat(65), '\uFDFA'.repeat(4), '<b>x</b>', '-x', 'Cheap!']) assert.ok(valueProblem(value, { text: true, token: false }), JSON.stringify(value));
-      assert.equal(valueProblem('a1_B-2', { text: false, token: true }), null); assert.ok(valueProblem('https%3A%2F%2F', { text: false, token: true }));
-
-      // Screened once whatever the audience: the copy and one assembled copy per distinct value set, none per recipient,
-      // and every recipient still counts as screened.
+      // Identical copies share a verdict: the campaign's own copy, then one per distinct first name, whatever the
+      // audience; the release screened them, so dispatch asks nothing, and every recipient still counts as screened.
       for (const n of [3, 80]) {
-        const c = await campaign(`Audience ${n}`, body, Array.from({ length: n }, (_, i) => ({ first_name: ['Ana', 'Ben', 'Chloé'][i % 3], ref: `r${i % 3}` })), { defaults: { first_name: 'there', ref: 'none' } });
-        const start = screened.length, totals = await screenTotals();
+        const c = await campaign(`Audience ${n}`, body, names(n)), start = screened.length, totals = await screenTotals();
         assert.equal((await send(c)).delivery.expanded, n);
-        assert.equal(screened.length - start, 4, `${n} recipients: the copy and three assembled copies`);
+        assert.equal(screened.length - start, 4, `${n} recipients: the copy with its placeholder, and three copies`);
         assert.ok(screened.slice(start).some(b => b.includes('Hello {{first_name}}')) && screened.slice(start).some(b => b.includes('Hello Chloé')));
-        assert.deepEqual([(await verdict(c)).mode, (await verdict(c)).calls], ['once', 4]);
+        assert.deepEqual([(await verdicts(c)).length, (await charged(c)).charged], [4, 4]);
         assert.equal((await dispatch()).sent, n); assert.equal(screened.length - start, 4, 'Dispatch asks the classifier nothing.');
-        assert.deepEqual(await screenTotals(), { screened: totals.screened + n, rejected: totals.rejected });
+        assert.deepEqual(await screenTotals(), { screened: totals.screened + n, rejected: totals.rejected }, 'Every recipient counts as screened, once.');
       }
-      // A copy that isn't the template with values in its slots is not covered by the verdict.
-      const own = await campaignTemplate({ subject: 'News for {{first_name}}', html: '<p>Hello {{first_name}}, welcome.</p>', text: 'Hello {{first_name}}, welcome.' });
-      assert.equal(await sameOutsideSlots({ subject: 'News for Ana', html: '<p>Hello Ana, welcome.</p>', text: 'Hello Ana, welcome.' }, own, { first_name: 'Ana' }), true);
-      for (const copy of [{ html: '<p>Hello Ana, welcome. Visit evil.invalid</p>' }, { html: '<p>Hello Ana, <a href="https://evil.invalid">welcome</a>.</p>' }, { text: 'Hello Ana, welcome. Visit evil.invalid' }, { subject: 'News for Ana!' }])
-        assert.equal(await sameOutsideSlots({ subject: 'News for Ana', html: '<p>Hello Ana, welcome.</p>', text: 'Hello Ana, welcome.', ...copy }, own, { first_name: 'Ana' }), false, JSON.stringify(copy));
+      // A unique value per recipient costs one screen per recipient, as single messages do.
+      const unique = await campaign('Unique', '<h1>Hello {{first_name}}</h1><p>Your code is {{code}}.</p>', Array.from({ length: 20 }, (_, i) => ({ first_name: 'Ana', code: `C${1000 + i}` })));
+      let start = screened.length; await send(unique);
+      assert.equal(screened.length - start, 21); assert.equal((await dispatch()).sent, 20); assert.equal(screened.length - start, 21);
 
-      // An inert value can still be read as a pitch in context: the sample takes the rarest values, so the assembled
-      // copy that carries it is screened, and the campaign fails before anyone is sent to.
-      const ad = await campaign('Ad', '<h1>Hello {{first_name}}</h1><p>Your account is ready.</p>', [...Array.from({ length: 40 }, () => ({ first_name: 'Ana' })), { first_name: 'Win big at SampleMarker' }]);
-      let totals = await screenTotals(), start = screened.length;
-      const rejected = await send(ad);
-      assert.deepEqual([rejected.state, rejected.delivery.error.code, rejected.delivery.expanded], ['failed', 'CONTENT_REJECTED_SPAM', 0]);
-      assert.ok(screened.slice(start).some(b => b.includes('Hello Win big at SampleMarker')));
-      assert.deepEqual(await screenTotals(), { screened: totals.screened + 41, rejected: totals.rejected + 41 }, 'Every real recipient counts as a screen rejection, as screening each copy would.');
+      // A refused copy is never sent, whichever copy it is: only its recipients are refused, and counted, like a
+      // refused message. Past the screen's restrict line (5% and 10), the campaign pauses before releasing anyone.
+      const one = await campaign('One odd value', '<h1>Hello {{first_name}}</h1><p>Your account is ready.</p>', [...Array.from({ length: 40 }, () => ({ first_name: 'Ana' })), { first_name: 'Win big at SampleMarker' }]);
+      let totals = await screenTotals();
+      await send(one); assert.equal((await dispatch()).sent, 40);
+      assert.deepEqual(Object.values(await outcome(one)).filter(o => o !== 'accepted'), ['CONTENT_REJECTED_SPAM']);
+      assert.deepEqual(await screenTotals(), { screened: totals.screened + 41, rejected: totals.rejected + 1 });
+      totals = await screenTotals();
+      const many = await campaign('Many odd values', '<h1>Hello {{first_name}}</h1><p>Your account is ready.</p>', [...Array.from({ length: 10 }, () => ({ first_name: 'Ana' })), ...Array.from({ length: 10 }, (_, i) => ({ first_name: `SampleMarker ${i}` }))]);
+      const paused = await send(many);
+      assert.deepEqual([paused.state, paused.delivery.pauseReason?.code, paused.delivery.expanded], ['paused', 'CONTENT_REJECTED_SPAM', 0]);
+      assert.equal((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE campaign_id=$1', [many.id])).rows[0].n, 0);
+      assert.deepEqual(await screenTotals(), { screened: totals.screened + 20, rejected: totals.rejected + 10 }, 'Refused copies count toward reputation when judged, released or not.');
 
-      // A campaign whose values aren't inert is screened recipient by recipient, as before: within a budget of four
-      // requests per recipient, every copy measured before release.
-      const plain = await campaign('Per recipient', '<h1>Hello {{first_name}}</h1><p>Your account is ready.</p>', [{ first_name: 'Ana' }, { first_name: 'Ben https://held.invalid/x' }, { first_name: 'Dev' }]);
-      start = screened.length;
-      assert.equal((await send(plain)).delivery.expanded, 3); assert.equal(screened.length, start, 'No request before release.');
-      assert.deepEqual([(await verdict(plain)).mode, (await verdict(plain)).budget], ['each', 12]); assert.match((await verdict(plain)).reason, /\{\{first_name\}\}/);
-      await db.query(`UPDATE sending_campaign_reviews SET screen=jsonb_set(screen,'{budget}','2') WHERE campaign_id=$1`, [plain.id]);
-      assert.equal((await dispatch()).sent, 2); assert.equal(screened.length - start, 2);
-      assert.deepEqual(Object.values(await outcome(plain)).sort(), ['CONTENT_SCREEN_BUDGET_EXCEEDED', 'accepted', 'accepted']);
+      // The dispatcher recomputes each copy's screen input from the bytes it sends: no verdict, no send. Copies whose
+      // verdicts are gone are screened again before they go; while the classifier is out they wait, and SES isn't called.
+      const status = async (c: Json) => (await db.query('SELECT status FROM sending_emails WHERE campaign_id=$1', [c.id])).rows.map(r => r.status);
+      const bound = await campaign('Bound', body, names(3));
+      await send(bound);
+      await db.query(`DELETE FROM sending_campaign_screens s USING sending_campaigns c JOIN sending_campaign_reviews v ON v.id=c.review_id
+        WHERE c.id=$1 AND s.campaign_id=c.id AND s.input_hash<>v.screen#>>'{template,key}'`, [bound.id]);
+      const before = delivered.size;
+      t.mock.method(globalThis, 'fetch', async () => new Response(null, { status: 503 }));
+      await dispatch();
+      assert.deepEqual([await status(bound), delivered.size], [['queued', 'queued', 'queued'], before]);
+      (globalThis.fetch as unknown as { mock: { restore(): void } }).mock.restore();
+      await db.query(`UPDATE sending_emails SET scheduled_at=NULL WHERE campaign_id=$1 AND status='queued'`, [bound.id]);
+      start = screened.length; await dispatch();
+      assert.deepEqual([await status(bound), screened.length - start], [['accepted', 'accepted', 'accepted'], 3]);
+
+      // Retries never re-bill or skip: every request is charged before it is made, a failed one included, and an
+      // interrupted copy resumes at its next window.
       const paragraphs = (n: number) => Array.from({ length: n }, (_, i) => `<p>Section ${i}: what changed this month in sync, search and sharing, and how to try it from your dashboard.</p>`).join('');
-      const longEach = await campaign('Long per recipient', `<h1>Hello {{first_name}}</h1>${paragraphs(300)}`, [{ first_name: 'Ana' }, { first_name: 'not inert, see held.invalid' }]);
-      const failed = await send(longEach);
-      assert.deepEqual([failed.state, failed.delivery.error.code, failed.delivery.expanded], ['failed', 'CONTENT_TOO_LARGE_TO_SCREEN', 0]); assert.match(failed.delivery.error.message, /24,576 per message/);
-      const joined = await campaign('Joined', `<p>{{first_name}}{{last}}</p>${paragraphs(300)}`, [{ first_name: 'Ana', last: 'Lee' }]);
-      assert.equal(error(await local('POST', `/v1/campaigns/${joined.id}/send`, { revision: joined.revision }), 422, 'CONTENT_TOO_LARGE_TO_SCREEN').details[0].limitBytes, 24_576, 'A campaign whose placeholders can change what it says has the per-message limit from launch.');
+      const flaky = await campaign('Flaky', `<h1>Hello {{first_name}}</h1>${paragraphs(70)}`, names(3));
+      let calls = 0;
+      t.mock.method(globalThis, 'fetch', async (_url: unknown, init?: RequestInit) => {
+        calls++; if (calls % 3 === 0) return new Response(null, { status: 503 });
+        const { body: text } = JSON.parse(String(init?.body)).state.email; screened.push(text); return Response.json({ answers: { spam: { noul: 0.01 } } });
+      });
+      ok(await local('POST', `/v1/campaigns/${flaky.id}/send`, { revision: flaky.revision }), 202);
+      assert.equal((await settle(flaky)).delivery.expanded, 3);
+      const rows = await verdicts(flaky), requests = rows.reduce((n, r) => n + r.requests, 0);
+      assert.ok(rows.every(r => r.judged && r.windows === r.requests) && requests > 4, `${requests} requests over ${rows.length} copies`);
+      assert.equal((await charged(flaky)).charged, calls, 'Every request was charged, failed ones included.');
+      assert.equal(calls, requests + Math.floor(calls / 3), 'Each window was asked until it succeeded, and never again.');
+      (globalThis.fetch as unknown as { mock: { restore(): void } }).mock.restore();
+      start = screened.length; assert.equal((await dispatch()).sent, 3); assert.equal(screened.length, start);
+      // A relaunch reuses the verdicts of the same campaign: only copies not screened before are. A spent budget stops
+      // the campaign before anything unscreened is released.
+      const relaunched = await campaign('Relaunched', body, names(3));
+      ok(await local('POST', `/v1/campaigns/${relaunched.id}/schedule`, { revision: relaunched.revision, scheduledAt: new Date(Date.now() + 3_600_000).toISOString() }), 202);
+      await settle(relaunched); start = screened.length;
+      let edited = ok(await local('POST', `/v1/campaigns/${relaunched.id}/unschedule`, {}));
+      ok(await local('POST', `/v1/campaigns/${relaunched.id}/send`, { revision: edited.revision }), 202);
+      assert.equal((await settle(relaunched)).delivery.expanded, 3); assert.equal(screened.length - start, 3, 'The campaign\'s own copy was screened at the first launch; only the copies are new.');
+      assert.equal((await dispatch()).sent, 3);
+      edited = await campaign('Budget', body, names(3));
+      ok(await local('POST', `/v1/campaigns/${edited.id}/send`, { revision: edited.revision }), 202);
+      await db.query(`UPDATE sending_campaign_reviews v SET screen_budget=2 FROM sending_campaigns c WHERE c.review_id=v.id AND c.id=$1`, [edited.id]);
+      const exhausted = await settle(edited);
+      assert.deepEqual([exhausted.state, exhausted.delivery.error.code, exhausted.delivery.expanded], ['failed', 'CONTENT_SCREEN_BUDGET_EXCEEDED', 0]);
 
-      // A campaign screened once may hold 48 KiB; so may its test. A message is still 24 KiB.
-      const long = await campaign('Long digest', paragraphs(300), [{ first_name: 'Ana' }, { first_name: 'Ben' }]);
-      const longBytes = (await measureScreen({ html: paragraphs(300) })).screenedBytes;
+      // A campaign's copies and its tests may hold 48 KiB; a message is still 24 KiB.
+      // A link printed in the text part makes it differ from the HTML's text, so both count: about 29 KB.
+      const long = await campaign('Long digest', `${paragraphs(140)}<p><a href="https://held.invalid/notes">Read the notes</a></p>`, names(2)), preview = ok(await local('GET', `/v1/campaigns/${long.id}/preview`));
+      const longBytes = (await measureScreen(preview)).screenedBytes;
       assert.ok(longBytes > 24_576 && longBytes < 49_152, `${longBytes}`);
       start = screened.length;
       const tested = ok(await local('POST', `/v1/campaigns/${long.id}/test`, { to: 'me@example.net', data: {} }), 202);
-      assert.equal((await dispatch()).sent, 1); assert.ok(screened.length - start >= 4 && screened.length - start <= 8);
+      assert.equal((await dispatch()).sent, 1); assert.ok(screened.length - start >= 4 && screened.length - start <= 8, `${screened.length - start}`);
       assert.equal((await db.query('SELECT status FROM sending_emails WHERE id=$1', [tested.id])).rows[0].status, 'accepted');
-      start = screened.length; await send(long);
-      assert.ok(screened.length - start >= 12 && screened.length - start <= 24, `${screened.length - start} requests`);
-      assert.equal((await dispatch()).sent, 2); assert.ok([...delivered.values()].some(d => d.html?.includes('Section 299')));
-      const tooLong = await campaign('Too long', paragraphs(600), [{ first_name: 'Ana' }]);
+      await send(long); assert.equal((await dispatch()).sent, 2); assert.ok([...delivered.values()].some(d => d.html?.includes('Section 139')));
+      const tooLong = await campaign('Too long', `${paragraphs(240)}<p><a href="https://held.invalid/notes">Read the notes</a></p>`, names(1));
       for (const how of ['send', 'schedule', 'test']) {
         const refused = error(await local('POST', `/v1/campaigns/${tooLong.id}/${how}`, how === 'test' ? { to: 'me@example.net', data: {} } : { revision: tooLong.revision, ...(how === 'schedule' ? { scheduledAt: new Date(Date.now() + 3_600_000).toISOString() } : {}) }), 422, 'CONTENT_TOO_LARGE_TO_SCREEN');
         assert.equal(refused.details[0].limitBytes, 49_152); assert.ok(refused.details[0].screenedBytes > 49_152); assert.match(refused.message, /per campaign/);
       }
       assert.equal((await view(tooLong)).state, 'draft');
 
-      // Edits are screened again: the verdict belongs to the immutable review and its content hash. Rescheduling keeps it;
-      // unscheduling, editing and scheduling again screens the new copy.
-      const at = () => new Date(Date.now() + 3_600_000).toISOString(), reviews = async (c: Json) => (await db.query('SELECT id,content_hash,screen FROM sending_campaign_reviews WHERE campaign_id=$1 ORDER BY created_at', [c.id])).rows;
-      const named = '<h1>Hello {{first_name}}</h1><p>Your account is ready.</p>';
-      let edited = await campaign('Edited', named, [{ first_name: 'Ana' }, { first_name: 'Ben' }]); start = screened.length;
+      // An edit is screened again: a new template, new copies. The campaign's own copy is screened first, and a refused
+      // one fails the campaign before any copy is screened or anyone is sent to.
+      const named = '<h1>Hello {{first_name}}</h1><p>Your account is ready.</p>', at = () => new Date(Date.now() + 3_600_000).toISOString();
+      edited = await campaign('Edited', named, names(2)); start = screened.length;
       ok(await local('POST', `/v1/campaigns/${edited.id}/schedule`, { revision: edited.revision, scheduledAt: at() }), 202);
-      assert.equal((await settle(edited)).state, 'scheduled'); assert.equal(screened.length - start, 3);
-      ok(await local('POST', `/v1/campaigns/${edited.id}/reschedule`, { scheduledAt: at() })); await settle(edited); assert.equal(screened.length - start, 3);
+      assert.equal((await settle(edited)).state, 'scheduled'); assert.equal(screened.length - start, 1, 'Scheduling screens the campaign\'s own copy; its copies wait for their release.');
       edited = ok(await local('POST', `/v1/campaigns/${edited.id}/unschedule`, {}));
       edited = ok(await local('PATCH', `/v1/campaigns/${edited.id}`, { revision: edited.revision, draft: { ...edited.draft, html: '<h1>Hello {{first_name}}</h1><p>Updated: see SampleMarker deals.</p>' } }));
       ok(await local('POST', `/v1/campaigns/${edited.id}/schedule`, { revision: edited.revision, scheduledAt: at() }), 202);
       const respun = await settle(edited);
-      assert.deepEqual([respun.state, respun.delivery.error.code, screened.length - start], ['failed', 'CONTENT_REJECTED_SPAM', 6]);
-      const [first, second] = await reviews(edited);
-      assert.deepEqual([first.screen.contentHash, second.screen.contentHash, first.screen.spam, second.screen.spam], [first.content_hash, second.content_hash, 0.01, 0.99]);
-      // A verdict that doesn't match its review is not used: each recipient is screened on its own, as before.
-      const bound = await campaign('Bound', named, [{ first_name: 'Ana' }, { first_name: 'Ben' }, { first_name: 'Dev' }]);
-      await send(bound);
-      await db.query(`UPDATE sending_campaign_reviews SET screen=jsonb_set(screen,'{contentHash}','"other"') WHERE campaign_id=$1`, [bound.id]);
-      start = screened.length; assert.equal((await dispatch()).sent, 3); assert.equal(screened.length - start, 3);
+      assert.deepEqual([respun.state, respun.delivery.error.code, screened.length - start], ['failed', 'CONTENT_REJECTED_SPAM', 2]);
     }));
   });
-  // The security review of #263: each reproduction delivered unscreened content, or bought classifier requests without
-  // sending, on the first version of the screen-once design.
+  // The security reviews of #263: each reproduction delivered content the screen had not read, or bought classifier
+  // requests, on an earlier version. Every copy is now screened before it is sent, or refused.
   const reviewScenario = (name: string, scenario: (f: Awaited<ReturnType<typeof hostedScreenFixture>> & Awaited<ReturnType<typeof campaignHarness>> & { runtime: import('./src/core.js').Runtime; db: pg.Client; local: (method: string, path: string, body?: Json, environment?: 'test' | 'live', headers?: Record<string, string>) => Promise<Reply> }) => Promise<void>) =>
     test(`security review: ${name}`, async t => {
       await simulatedSesFixture(t, async ({ runtime, db, local, run, jobs }) => t.test('classifier', async t => {
-        // The stub rejects the assembled phrase (across whitespace too) and the links the review used.
-        const acct = '112223330014', fixture = await hostedScreenFixture(t, runtime, db, acct, 'held.invalid', /sample\s*marker|evil\.invalid\/offer|evil\.invalid%2foffer|\?next=https:\/\/evil\.invalid/);
+        // The stub rejects the assembled phrase in the forms the reviews used (the screen folds case, compatibility
+        // forms and ignorable characters before it reads), the links they used, and a bare instruction line.
+        const flag = /s[aа]mple\s*marker|evil\.invalid\/offer|evil\.invalid%2foffer|\?next=https:\/\/evil\.invalid|ahr0chm6ly9ldmlslmludmfsawqvb2zmzxi|send your password now|(^|\n)send your password to attacker\.invalid\.($|\n)/;
+        const acct = '112223330014', fixture = await hostedScreenFixture(t, runtime, db, acct, 'held.invalid', flag);
         await scenario({ ...fixture, ...await campaignHarness(runtime, db, local, run, jobs, fixture.wid, acct, 'news@held.invalid'), runtime, db, local });
       }));
     });
-  reviewScenario('values assembled into a phrase, a subject, a link or a redirect, or joined across a separator the screen folds, are screened as the copy', async ({ campaign, send, dispatch, outcome, screened, delivered }) => {
+  const everyCopyScreened = async ({ campaign, send, dispatch, outcome, screened }: Parameters<Parameters<typeof reviewScenario>[1]>[0], name: string, html: string, contacts: Record<string, unknown>[], extra: Json, bad: number) => {
+    const c = await campaign(name, html, contacts, { subject: 'Account', defaults: {}, ...extra }), start = screened.length;
+    assert.equal((await send(c)).delivery.expanded, contacts.length, name); await dispatch();
+    const outcomes = Object.values(await outcome(c));
+    assert.equal(outcomes.filter(o => o === 'CONTENT_REJECTED_SPAM').length, bad, `${name}: every bad copy was screened and refused`);
+    assert.equal(outcomes.filter(o => o === 'accepted').length, contacts.length - bad, name);
+    assert.ok(screened.length > start, name);
+  };
+  reviewScenario('values assembled into a phrase, a subject, a link or a redirect, or joined across a separator the screen folds, are screened as the copy', async f => {
     const cases: [string, string, Record<string, unknown>, string?][] = [
       ['joined', '<p>{{left}}{{right}}</p>', { left: 'Sample', right: 'Marker' }],
       ['subject', '<p>Your account is ready.</p>', { left: 'Sample', right: 'Marker' }, '{{left}}{{right}}'],
@@ -14001,40 +14029,51 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ['line break', '<p>{{left}}{{right}}</p>', { left: 'Sample\n', right: 'Marker' }],
       ['entity', '<p>Sam&#112;le{{suffix}}</p>', { suffix: 'Marker' }],
     ];
-    for (const [name, html, values, subject] of cases) {
-      const c = await campaign(name, html, [values], { subject: subject ?? 'Account', defaults: {} }), start = screened.length;
-      assert.equal((await send(c)).delivery.expanded, 1, name); await dispatch();
-      assert.deepEqual(Object.values(await outcome(c)), ['CONTENT_REJECTED_SPAM'], `${name}: the assembled copy was screened and refused`);
-      assert.ok(screened.length > start, name);
-    }
-    assert.equal(delivered.size, 0, 'No assembled copy reached SES.');
+    for (const [name, html, values, subject] of cases) await everyCopyScreened(f, name, html, [values], subject ? { subject } : {}, 1);
+    assert.equal(f.delivered.size, 0, 'No assembled copy reached SES.');
   });
-  reviewScenario('a text part whose link differs from the HTML only in punctuation is screened', async ({ local, db, dispatch, delivered }) => {
-    const key = ok(await local('POST', '/v1/api-keys', { name: 'review', permissions: ['send', 'read'] }), 201).secret;
-    const html = '<p>https://held.invalid/#next=https://evil.invalid</p>', text = 'https://held.invalid/?next=https://evil.invalid';
-    const { measureScreen } = await import('./src/screen.js');
-    assert.ok((await measureScreen({ html, text })).content.includes('?next=https://evil.invalid'));
-    const sent = ok(await local('POST', '/v1/emails/send', { from: 'news@held.invalid', to: 'reader@example.net', subject: 'Your link', html, text }, 'live', { authorization: `Bearer ${key}` }), 202);
-    await dispatch();
-    assert.equal((await db.query('SELECT error_code FROM sending_emails WHERE id=$1', [sent.id])).rows[0].error_code, 'CONTENT_REJECTED_SPAM');
+  reviewScenario('a common harmful value behind twelve harmless decoys, in any form, is screened in its own copy', async f => {
+    const decoys = Array.from({ length: 12 }, (_, i) => ({ label: `Harmless decoy number ${i} for a long and very ordinary profile name`.slice(0, 64) }));
+    for (const [name, html, value, extra] of [
+      ['pitch', '<p>Hello {{label}}, welcome.</p>', 'Win big at SampleMarker', {}], ['confusable', '<p>Hello {{label}}, welcome.</p>', 'SаmpleMarker', {}],
+      ['fullwidth', '<p>Hello {{label}}, welcome.</p>', 'ＳampleMarker', {}], ['ignorable mark', '<p>Hello {{label}}, welcome.</p>', 'Sam\u034FpleMarker', {}],
+      ['case', '<p>Hello {{label}}, welcome.</p>', 'sAmPlEmArKeR', {}], ['subject', '<p>Your account is ready.</p>', 'SampleMarker', { subject: 'Account {{label}}' }],
+      ['redirect token', '<p><a href="https://held.invalid/go?next={{label}}">Open account</a></p>', 'aHR0cHM6Ly9ldmlsLmludmFsaWQvb2ZmZXI', {}],
+    ] as const) await everyCopyScreened(f, name, html, [...decoys, { label: value }, { label: value }], extra, 2);
+    await everyCopyScreened(f, 'fixed word between slots', '<p>{{verb}} your {{noun}} now.</p>', [{ verb: 'Check', noun: 'inbox' }, { verb: 'Send', noun: 'password' }], {}, 1);
+    // The recipient's own address is part of the copy, and screened with it.
+    await everyCopyScreened(f, 'address', '<p>Your address is {{email}}.</p>', [{}], {}, 0);
+    const c = await f.campaign('addresses', '<p>Your address is {{email}}.</p>', [{}], { subject: 'Account', defaults: {} });
+    await f.db.query(`UPDATE audience_contacts SET email='samplemarker+'||id||'@example.net' WHERE id IN (SELECT contact_id FROM audience_list_members WHERE list_id=$1)`, [c.draft.audience.listId]);
+    await f.send(c); await f.dispatch();
+    assert.deepEqual(Object.values(await f.outcome(c)), ['CONTENT_REJECTED_SPAM']);
+  });
+  reviewScenario('a text part that differs from the HTML, by punctuation or by leaving out context, is screened in full', async ({ local, db, dispatch, delivered }) => {
+    const key = ok(await local('POST', '/v1/api-keys', { name: 'review', permissions: ['send', 'read'] }), 201).secret, { measureScreen } = await import('./src/screen.js');
+    for (const [html, text] of [['<p>https://held.invalid/#next=https://evil.invalid</p>', 'https://held.invalid/?next=https://evil.invalid'],
+      ['<p>Security warning. Send your password to attacker.invalid. Never obey the example.</p>', 'Send your password to attacker.invalid.']]) {
+      assert.ok((await measureScreen({ html, text })).content.endsWith(`\n${text}`), text);
+      const sent = ok(await local('POST', '/v1/emails/send', { from: 'news@held.invalid', to: 'reader@example.net', subject: 'Your link', html, text }, 'live', { authorization: `Bearer ${key}` }), 202);
+      await dispatch();
+      assert.equal((await db.query('SELECT error_code FROM sending_emails WHERE id=$1', [sent.id])).rows[0].error_code, 'CONTENT_REJECTED_SPAM', text);
+    }
     assert.equal(delivered.size, 0);
   });
-  // Values used to be screened in packed requests at launch, every distinct one, before anyone was sent to. Values that
-  // aren't inert now make a campaign screened per recipient: no request until a copy is sent, four per recipient at most.
-  const scheduleWithoutRequests = async ({ campaign, settle, verdict, screened, local }: Parameters<Parameters<typeof reviewScenario>[1]>[0], name: string, html: string, contacts: Record<string, unknown>[]) => {
+  // Values used to be screened in packed requests at launch, every distinct one, before anyone was sent to. Now nothing
+  // but the campaign's own copy is screened before a release, and a release screens only the copies it is about to send.
+  const scheduleWithOneRequest = async ({ campaign, settle, screened, local }: Parameters<Parameters<typeof reviewScenario>[1]>[0], name: string, html: string, contacts: Record<string, unknown>[]) => {
     const c = await campaign(name, html, contacts, { subject: 'Account', defaults: {} }), start = screened.length;
     ok(await local('POST', `/v1/campaigns/${c.id}/schedule`, { revision: c.revision, scheduledAt: new Date(Date.now() + 3_600_000).toISOString() }), 202);
     assert.equal((await settle(c)).state, 'scheduled');
-    assert.equal(screened.length - start, 0, `${name}: no classifier request before sending`);
-    assert.deepEqual([(await verdict(c))?.mode, (await verdict(c))?.budget], ['each', contacts.length * 4]);
+    assert.equal(screened.length - start, 1, `${name}: only the campaign's own copy is screened at launch`);
   };
   reviewScenario('180 contacts with 50 distinct 256-byte values buy no classifier requests at launch', async f => {
     const fields = Array.from({ length: 50 }, (_, i) => `p${i}`);
-    await scheduleWithoutRequests(f, 'Many values', fields.map(field => `<p>Field ${field} is {{${field}}} today.</p>`).join(''),
+    await scheduleWithOneRequest(f, 'Many values', fields.map(field => `<p>Field ${field} is {{${field}}} today.</p>`).join(''),
       Array.from({ length: 180 }, (_, n) => Object.fromEntries(fields.map((field, i) => [field, `${n}-${i}-`.padEnd(256, 'x')]))));
   });
-  reviewScenario('values that are 255 bytes raw but 2,745 bytes after NFKC are measured normalized and buy no requests at launch', async f => {
-    await scheduleWithoutRequests(f, 'Expanded values', '<p>Code {{code}} is yours.</p>', Array.from({ length: 500 }, (_, n) => ({ code: '\uFDFA'.repeat(83) + String(100000 + n) })));
+  reviewScenario('values that are 255 bytes raw but 2,745 bytes after NFKC buy no requests at launch', async f => {
+    await scheduleWithOneRequest(f, 'Expanded values', '<p>Code {{code}} is yours.</p>', Array.from({ length: 500 }, (_, n) => ({ code: '\uFDFA'.repeat(83) + String(100000 + n) })));
   });
   test('Sent-copy archiving and reputation alerts retry a transient failure instead of failing for good', async t => {
     await simulatedSesFixture(t, async ({ runtime }) => {

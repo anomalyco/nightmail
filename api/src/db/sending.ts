@@ -97,9 +97,14 @@ export const campaignReviews = pgTable('sending_campaign_reviews', {
   // Version of the per-recipient renderer (interpolation, preheader, footer) that must reproduce this review's emails.
   rendererVersion: integer('renderer_version').notNull().default(1),
   rendered: jsonb('rendered').$type<{ html?: string; text?: string }>(),
-  // The Hosted content screen's verdict on this review, screened once for every recipient (migration 310).
-  screen: jsonb('screen').$type<CampaignScreen>(),
+  // Hosted screening state and its classifier budget, charged before each request (migration 310, src/sending.ts campaignVerdicts).
+  screen: jsonb('screen').$type<CampaignScreen>(), screenBudget: integer('screen_budget'), screenCharged: integer('screen_charged').notNull().default(0),
 }, t => [index('sending_review_campaign').on(t.workspaceId, t.campaignId)]);
+// One verdict per campaign and exact screen input, shared by every recipient whose copy reads the same.
+export const campaignScreens = pgTable('sending_campaign_screens', {
+  campaignId: text('campaign_id').notNull(), ...scope(), inputHash: text('input_hash').notNull(), requests: integer('requests').notNull(), windows: integer('windows').notNull().default(0),
+  spam: doublePrecision('spam').notNull().default(0), model: text('model'), createdAt: time('created_at').notNull().defaultNow(), judgedAt: time('judged_at'),
+}, t => [primaryKey({ columns: [t.campaignId, t.inputHash] })]);
 // Recipient values are copied once from one database snapshot; no live contact joins during preparation or expansion.
 export const reviewRecipients = pgTable('sending_review_recipients', {
   // No foreign key (migration 026): a statement-level trigger on reviews cascades deletes without a per-row insert check.

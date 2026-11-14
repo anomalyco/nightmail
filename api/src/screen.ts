@@ -36,9 +36,9 @@ const flights=new WeakMap<Runtime['storage'],Map<string,Promise<ScreenResult>>>(
 // The text as a reader sees it: compatibility forms folded, and the characters that draw nothing (format controls,
 // combining marks, Hangul fillers and other default-ignorable code points) removed.
 const normalize = (s: string) => s.normalize('NFKC').replace(/[\p{Cf}\p{Mn}\p{Default_Ignorable_Code_Point}]/gu, '');
-const sentences = (s = '') => normalize(s).split(/\n+|(?<=[.!?])\s+/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
 function copy(s = '') {
-  return [...new Set(sentences(s))].join(' ');
+  const sentences = normalize(s).split(/\n+|(?<=[.!?])\s+/).map(p => p.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  return [...new Set(sentences)].join(' ');
 }
 const bytes = (n: number) => n.toLocaleString('en-US');
 function refused(message: string, details?: Record<string, unknown>, index?: number) {
@@ -49,7 +49,7 @@ function refused(message: string, details?: Record<string, unknown>, index?: num
 const unreadable = () => refused('Simplify the HTML so Hosted sending can screen it: it is too large or too deeply nested to read.');
 /** Over the screened-text limit: the measured size and the limit, so the sender knows how much to cut. */
 export const tooLarge = (screenedBytes: number, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) =>
-  refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's visible text and alt text, and each text-part sentence the HTML doesn't already say. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
+  refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's visible text and alt text, and the text part unless it says exactly the same. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
     { screenedBytes, limitBytes }, index);
 const tooManyHosts = (linkHosts: number, index?: number) =>
   refused(`The message links to or loads ${linkHosts} distinct hosts (counting link labels that name another host); Hosted sending screens at most ${MAX_SIGNALS}. Link to fewer domains.`,
@@ -131,34 +131,21 @@ export async function readHtml(html: string, visit?: (tag: string) => void) {
   return { text: [...lines,...aside].join('\n'), hosts, mismatches, links, images };
 }
 /**
- * The text the screen reads: the HTML's visible text in order with its repetitions, then the text part (and raw MIME)
- * without the sentences that only repeat the HTML. A recipient reads one part or the other, so a sentence is left out
- * only when it is exactly a sentence of the HTML once normalized (punctuation, links and case kept), and only in the
- * HTML's order: whatever the text part says differently, or says in another order, is screened. The parts' word overlap
- * still goes to the classifier as a signal, since a text part that tells another story is a known spam trick.
+ * The text the screen reads: the HTML's visible text, then the text part, then raw MIME, each in full. A recipient reads
+ * one part or the other, so a part is left out only when, normalized, it is byte for byte a part already read (a text part
+ * generated from the HTML); any difference at all, and the whole part is screened. The parts' word overlap goes to the
+ * classifier as a signal, since a text part that tells another story is a known spam trick.
  */
 export function screenTextSignals(visible: string, text?: string, rawPart?: string) {
   const project=(s='')=>normalize(s).replace(/\s+/g,' ').trim();
-  const plain=project(text), rendered=project(visible), html=sentences(visible);
-  const at=new Map<string,number[]>();
-  html.forEach((sentence,i)=>at.set(sentence,[...at.get(sentence)??[],i]));
-  // Each part walks the HTML's sentences forward: a sentence is a repeat only at or after the previous repeat. A line
-  // break inside a paragraph of a plain part (hard wrapping) is a space; a blank line ends a sentence.
-  const unsaid=(part?:string)=>{
-    let next=0; const kept:string[]=[];
-    for (const sentence of sentences(part?.replace(/\r\n?/g,'\n').replace(/([^\n])\n(?=[^\n])/g,'$1 '))) {
-      const places=at.get(sentence); let lo=0, hi=places?.length ?? 0;
-      while (lo<hi) { const mid=(lo+hi)>>1; if (places![mid]!<next) lo=mid+1; else hi=mid; }
-      if (places && lo<places.length) next=places[lo]!+1; else kept.push(sentence);
-    }
-    return kept.join(' ');
-  };
+  const rendered=project(visible), plain=project(text), raw=project(rawPart);
   const words=(v:string)=>new Set(v.toLowerCase().match(VISIBLE_WORDS));
   function overlap(text:string, html:string) {
     const a=words(text), b=words(html), common=[...a].filter(w=>b.has(w)).length;
     return a.size && b.size ? common/(a.size+b.size-common) : undefined;
   }
-  return { content:[rendered,unsaid(text),unsaid(rawPart)].filter(Boolean).join('\n'), textHtmlOverlap:overlap(plain,rendered) };
+  const parts=[rendered,plain,raw].filter((part,i,all)=>part && all.indexOf(part)===i);
+  return { content:parts.join('\n'), textHtmlOverlap:overlap(plain,rendered) };
 }
 export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
 /** What the screen would read of a message, measured without asking the classifier. */
@@ -237,144 +224,37 @@ export async function screenSnapshot(runtime: Runtime, snapshot: EmailSnapshot, 
   }finally{pending.delete(key);}
 }
 
-// A campaign is screened once, not once per recipient (src/sending.ts screenCampaignStep), only when personalization
-// can't change what it says. Its placeholders must sit where a value reads as a word of its own (text and subject, never
-// joined to the text or another placeholder beside them) or as a whole query value of a link, and every value of its
-// frozen audience must be inert: a short run of letters, digits and name punctuation, or a link token. The classifier
-// then reads the campaign's copy with its placeholders and a sample of assembled copies, and the dispatcher delivers a
-// copy under that verdict only when it is the template with values in its slots and nothing else. Every other campaign
-// is screened per recipient, within a budget fixed by its audience.
+// A Hosted campaign is screened copy by copy, as single messages are, but each distinct copy only once
+// (src/sending.ts campaignVerdicts): a copy's verdict is keyed by its exact screen input, everything the classifier is
+// sent for it, so recipients whose copies read the same share it. Only the generated unsubscribe link is set aside.
 
-/** A campaign's verdict, stored on its review (sending_campaign_reviews.screen). */
+/** A campaign's screening state, on its review (sending_campaign_reviews.screen). */
 export type CampaignScreen = {
-  /** The review content it judged (sending_campaign_reviews.content_hash), and when. */
-  contentHash: string; at: string;
-  /** once: inert values; the copy and sample were screened. each: every recipient's copy is screened on its own. */
-  mode: 'once' | 'each'; reason: string | null;
-  probation: boolean; model: string; spam: number; calls: number; screenedBytes: number;
-  /** Classifier requests allowed and spent screening single copies of this campaign. */
-  budget: number; spent: number;
-  /** The values pass: the last placeholder and value checked, the longest normalized value per placeholder. */
-  cursor: [string, string] | null; longest: Record<string, number>; values: number; done: boolean;
+  /** The review content it belongs to (sending_campaign_reviews.content_hash). */
+  contentHash: string; probation: boolean;
+  /** The campaign's own copy, placeholders unresolved, screened first as an early refusal. */
+  template: { key: string; spam: number; model: string } | null;
+  /** Recipients whose copies have verdicts, in send order, and how many of them were refused as spam. */
+  screenedThrough: number; recipients: number; rejected: number;
+  /** Classifier outages in a row, for the wait before the next attempt; whether the refused share paused it once. */
+  failures: number; quarantined: boolean;
 };
-export const SAMPLE_COPIES = 12, MAX_VALUE_CHARS = 64;
-const TAG = /{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}/g, WHOLE_TAG = /^{{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*}}$/;
-/** Where a campaign's placeholders sit: as words of text, as whole link query values, how often. */
-export type CampaignSlots = { text: string[]; token: string[]; occurrences: Record<string, number> };
-// A link may carry a value only as a whole query value of a fixed http(s) address: never in its scheme, host, path,
-// parameter names or fragment.
-function querySlot(url: string, token: Set<string>): string | null {
-  const query = url.indexOf('?'), hash = url.indexOf('#', query < 0 ? 0 : query);
-  const base = url.slice(0, query < 0 ? (hash < 0 ? url.length : hash) : query);
-  if (base.includes('{{') || (hash >= 0 && url.slice(hash).includes('{{'))) return 'a placeholder is part of a link address';
-  if (!/^https?:\/\/[^/?#{}\s]+/i.test(base)) return 'a placeholder is in a link that is not an http(s) address';
-  for (const param of url.slice(query + 1, hash < 0 ? undefined : hash).split('&')) {
-    const eq = param.indexOf('='), name = eq < 0 ? param : param.slice(0, eq), value = eq < 0 ? '' : param.slice(eq + 1);
-    if (name.includes('{{')) return 'a placeholder is a link parameter name';
-    if (!value.includes('{{')) continue;
-    const key = WHOLE_TAG.exec(value)?.[1];
-    if (!key || key === 'email') return 'a placeholder is part of a link parameter value';
-    token.add(key);
-  }
-  return null;
-}
-// In text a value must read as words of its own: whitespace, an opening bracket or quote before it; whitespace, closing
-// punctuation, or a period or colon that ends the sentence after it; and a letter or digit of fixed text between two
-// placeholders. Read after the screen's normalization, so an entity, a compatibility form or an invisible character
-// can't join it to its neighbours.
-const BEFORE = /[\s([{"'“‘«¿¡]/u, AFTER = /[\s,;!?)\]}"'”’»]/u;
-function textSlots(stream: string, text: Set<string>, token: Set<string>, occurrences: Record<string, number>, links: boolean): string | null {
-  const s = normalize(stream);
-  let previous = -1;
-  for (const match of s.matchAll(TAG)) {
-    const key = match[1]!, start = match.index!, end = start + match[0].length;
-    if (previous >= 0 && !/[\p{L}\p{N}]/u.test(s.slice(previous, start))) return `{{${key}}} follows another placeholder with no text between them`;
-    previous = end; occurrences[key] = (occurrences[key] ?? 0) + 1;
-    // The plain-text part prints links: a placeholder there is a link's query value or a word, as in the HTML.
-    const word = s.slice(s.slice(0, start).search(/\S*$/), end + (s.slice(end).match(/^\S*/)?.[0].length ?? 0)).replace(/^[([<"']+|[)\]>"'.,;:!?]+$/g, '');
-    if (links && /^(?:https?:\/\/|www\.)/i.test(word)) { const problem = querySlot(word, token); if (problem) return problem; continue; }
-    const before = s[start - 1], after = s[end], next = s[end + 1];
-    if (before !== undefined && !BEFORE.test(before)) return `{{${key}}} is joined to the text before it`;
-    if (after !== undefined && !AFTER.test(after) && !((after === '.' || after === ':') && (next === undefined || /\s/.test(next)))) return `{{${key}}} is joined to the text after it`;
-    text.add(key);
-  }
-  return null;
-}
-/** Where a campaign's placeholders sit, or why its values could change what it says (then it is screened per recipient). */
-export async function campaignSlots(template: { subject: string; html?: string; text?: string }): Promise<CampaignSlots | string> {
-  const text = new Set<string>(), token = new Set<string>(), occurrences: Record<string, number> = {};
-  const subject = textSlots(template.subject, text, token, {}, false);
-  if (subject) return `In the subject, ${subject}`;
-  if (template.html) {
-    const { boundedHtmlFragment } = await import('./bounded-html.js');
-    const root = boundedHtmlFragment(template.html, 'document', { clients: true });
-    if (!root) return 'The HTML is too large to read';
-    const stack: unknown[] = [root];
-    while (stack.length) {
-      const node = stack.pop() as { attrs?: { name: string; value: string }[]; childNodes?: unknown[]; content?: unknown };
-      for (const attr of node.attrs ?? []) {
-        if (!attr.value.includes('{{')) continue;
-        if (attr.name !== 'href') return `A placeholder is in a ${attr.name} attribute`;
-        const problem = querySlot(attr.value.trim(), token);
-        if (problem) return `In a link, ${problem}`;
-      }
-      stack.push(...node.childNodes ?? []);
-      if (node.content) stack.push(node.content);
-    }
-    const problem = textSlots((await readHtml(template.html)).text, text, token, occurrences, false);
-    if (problem) return `In the HTML, ${problem}`;
-  }
-  const plain = textSlots(template.text ?? '', text, token, occurrences, true);
-  if (plain) return `In the text part, ${plain}`;
-  return { text: [...text], token: [...token], occurrences };
-}
-/** Why a value can change what a campaign says in its slot, or null when it is inert: as a link token, 1–64 ASCII
- *  letters, digits, _ or -; as words, at most 64 characters after NFKC normalization of letters, digits, spaces and
- *  ' ’ , - with a period only at the end of a word, starting with a letter or digit. No line breaks, links or symbols. */
-export function valueProblem(value: string, slots: { text: boolean; token: boolean }): string | null {
-  if (slots.token && !/^[A-Za-z0-9_-]{1,64}$/.test(value)) return 'is not a link token';
-  if (!slots.text) return null;
-  const v = value.normalize('NFKC');
-  if ([...v].length > MAX_VALUE_CHARS) return `is longer than ${MAX_VALUE_CHARS} characters`;
-  if (!/^[\p{L}\p{M}\p{N} '’.,-]*$/u.test(v)) return 'has characters other than letters, digits, spaces and name punctuation';
-  if (/\.(?! |$)/.test(v)) return 'has a period inside a word';
-  if (v && !/^[\p{L}\p{N}]/u.test(v)) return 'does not start with a letter or digit';
-  return null;
-}
-/** The normalized size of a value as the screen counts it. */
-export const valueBytes = (value: string) => Buffer.byteLength(normalize(value));
-/** What a delivered copy is compared with: the campaign's copy with its placeholders, as the screen reads it. */
-export type CampaignTemplate = { subject: string; text: string; read: { text: string; links: string[] } };
-export async function campaignTemplate(copy: Pick<EmailSnapshot, 'subject' | 'html' | 'text'>): Promise<CampaignTemplate> {
-  const read = copy.html ? await readHtml(copy.html) : { text: '', links: [] };
-  return { subject: copy.subject, text: copy.text ?? '', read: { text: read.text, links: read.links } };
-}
-/** Whether a delivered copy is its campaign's template with values in the slots and nothing else: the same subject,
- *  text part, visible text and links, the generated unsubscribe link aside. */
-export async function sameOutsideSlots(copy: Pick<EmailSnapshot, 'subject' | 'html' | 'text'>, template: CampaignTemplate, values: Record<string, string>, unsubscribe?: { url: string; placeholder: string }) {
-  const fill = (s: string) => s.replace(TAG, (_, key: string) => values[key] ?? '\u0000');
-  const own = (s = '') => unsubscribe ? s.split(unsubscribe.url).join(unsubscribe.placeholder) : s;
-  if (copy.subject !== fill(template.subject) || own(copy.text) !== fill(template.text)) return false;
-  const read = copy.html ? await readHtml(own(copy.html)) : { text: '', links: [] };
-  return read.text === fill(template.read.text) && read.links.length === template.read.links.length && read.links.every((link, i) => link === fill(template.read.links[i]!));
-}
-/** A campaign's requests: its copy's windows, up to the campaign limit. */
-export function campaignBodies(measure: ScreenMeasure, limitBytes: number) {
-  assertScreenable(measure, limitBytes, 'campaign');
-  return completeBodies(measure.content, measure.signals.join('\n'), limitBytes, 'campaign');
-}
-/** The highest spam score over a campaign's requests, four at a time. */
-export async function screenCampaignBodies(runtime: Runtime, head: Pick<EmailSnapshot, 'from' | 'fromName' | 'subject'>, requests: { body: string; subject: string; textHtmlOverlap?: number }[]): Promise<ScreenResult> {
+/** What the classifier is sent for one copy: its requests, and their key, which is the same for the same input. */
+export type ScreenInput = { key: string; bodies: string[]; textHtmlOverlap?: number; from: string; subject: string };
+/** A campaign copy's screen input, refused past the limit. */
+export async function screenInput(runtime: Runtime, snapshot: EmailSnapshot, limitBytes: number): Promise<ScreenInput> {
   const settings = runtime.config.screen;
   if (!settings) throw new ApiError(503, 'CONTENT_SCREEN_UNAVAILABLE', 'Hosted content screening is unavailable.', undefined, true);
-  const from = copy(formattedSender(head.from, head.fromName));
-  let highest: ScreenResult | undefined, next = 0;
-  await Promise.all(Array.from({ length: Math.min(4, requests.length) }, async () => {
-    while (next < requests.length) {
-      const { body, subject, textHtmlOverlap } = requests[next++]!;
-      const result = await evaluate(settings.endpoint, settings.apiKey, settings.model, { email: { from, kind: 'marketing', subject: copy(subject), body }, signals: { recipients: 1, textHtmlOverlap } });
-      if (!highest || result.spam > highest.spam) highest = result;
-    }
-  }));
-  return highest!;
+  const measure = await measureScreen(snapshot);
+  assertScreenable(measure, limitBytes, 'campaign');
+  const bodies = completeBodies(measure.content, measure.signals.join('\n'), limitBytes, 'campaign');
+  const from = copy(formattedSender(snapshot.from, snapshot.fromName)), subject = copy(snapshot.subject);
+  const key = await digest(JSON.stringify([settings.endpoint, settings.model, from, snapshot.kind, subject, bodies, measure.textHtmlOverlap ?? null]));
+  return { key, bodies, textHtmlOverlap: measure.textHtmlOverlap, from, subject };
+}
+/** One request of a campaign copy's screen. */
+export async function screenWindow(runtime: Runtime, input: ScreenInput, window: number): Promise<ScreenResult> {
+  const settings = runtime.config.screen;
+  if (!settings) throw new ApiError(503, 'CONTENT_SCREEN_UNAVAILABLE', 'Hosted content screening is unavailable.', undefined, true);
+  return evaluate(settings.endpoint, settings.apiKey, settings.model, { email: { from: input.from, kind: 'marketing', subject: input.subject, body: input.bodies[window]! }, signals: { recipients: 1, textHtmlOverlap: input.textHtmlOverlap } });
 }

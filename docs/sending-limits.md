@@ -81,22 +81,17 @@ A Hosted campaign with more than 100 recipients sends a **probe** first: the fir
 
 ## Content screen: how much text
 
-Hosted mail is screened for smuggled advertising and scams before it is delivered. The screen reads the HTML's visible text and `alt` text, then the text part without the sentences that exactly repeat the HTML in the same order: a text part generated from the HTML counts once, and anything it says differently (another link, another order) is screened.
+Hosted mail is screened for smuggled advertising and scams before it is delivered. The screen reads the HTML's visible text and `alt` text, then the text part: a text part that, normalized, is exactly the HTML's text (one generated from it) counts once; any other text part is screened in full.
 
 | What | Limit | When it is checked |
 | --- | --- | --- |
 | A message (`POST /v1/emails/send`, each item of `/v1/emails/batch`, replies and inbox sends) | **24,576 UTF-8 bytes** of screened text (24 KiB), 60 distinct link hosts | On submission |
-| A campaign screened **once** for all its recipients, and a campaign test | **49,152 UTF-8 bytes** (48 KiB) of its own copy, placeholders unresolved | On send, schedule or test |
-| A campaign screened per recipient | 24,576 bytes for its copy and every recipient's copy | On send or schedule, then each copy before release |
+| A campaign's own copy, placeholders unresolved, and a campaign test | **49,152 UTF-8 bytes** (48 KiB) | On send, schedule or test |
+| Each recipient's copy of a campaign | 49,152 bytes; a copy over it is refused alone | Before it is released |
 
-A campaign is screened once only when personalization can't change what it says:
+Every recipient's copy of a campaign is screened before it is released, but each distinct copy only once: recipients whose personalized copies read exactly the same share one verdict. A campaign personalized with first names costs one screen per distinct first name; one with a unique value per recipient costs one per recipient, as a single message would. The campaign's own copy is screened first: if it is refused, the campaign fails before anyone is sent to. A copy the screen refuses is never sent (`CONTENT_REJECTED_SPAM`, counted in the score like any refused message), and when refused copies pass 5% and 10 recipients the campaign pauses once for you to review.
 
-- **Placeholders stand alone.** In text and the subject, a placeholder is a word of its own: whitespace or an opening bracket or quote before it, whitespace or closing punctuation after it, and a letter or digit of fixed text between two placeholders. `Hi {{firstName}},` qualifies; `{{first}}{{last}}`, `Sample{{suffix}}` and `https://{{host}}` don't. In a link, a placeholder may only be a whole query value of a fixed `http(s)` address (`https://example.com/offer?ref={{refId}}`), and nowhere else in an attribute. `{{email}}`, the recipient's own address, may appear in text.
-- **Values are inert.** In text, each value is at most 64 characters after NFKC normalization, made of letters, digits, spaces and `' ’ , -`, with a period only at the end of a word. In a link, it is 1–64 of `A–Z a–z 0–9 _ -`. No line breaks, links, `@`, symbols or invisible characters.
-
-Nightmail then screens the campaign's copy with its placeholders and up to 12 assembled copies with the most unusual values, and delivers each copy only if it is that template with values in its slots. Any other campaign is screened recipient by recipient, as before: it costs more, but it is sent just the same.
-
-Over a limit, the request is refused at once with 422 `CONTENT_TOO_LARGE_TO_SCREEN` and `error.details[0]` set to `{ screenedBytes, limitBytes }` (or `{ linkHosts, linkHostLimit }`); in a batch, `index` names the message and nothing in the batch is queued. A campaign the screen judges to be spam fails with `CONTENT_REJECTED_SPAM` before any recipient is sent to; every recipient counts as a screen rejection in the score. `POST /v1/emails/check` reports the measured size as the `screen-bytes` finding. Self-hosted installations set the limits with `JEV_MESSAGE_LIMIT_BYTES` and `JEV_CAMPAIGN_LIMIT_BYTES`.
+Over a limit, the request is refused at once with 422 `CONTENT_TOO_LARGE_TO_SCREEN` and `error.details[0]` set to `{ screenedBytes, limitBytes }` (or `{ linkHosts, linkHostLimit }`); in a batch, `index` names the message and nothing in the batch is queued. `POST /v1/emails/check` reports the measured size as the `screen-bytes` finding. Self-hosted installations set the limits with `JEV_MESSAGE_LIMIT_BYTES` and `JEV_CAMPAIGN_LIMIT_BYTES`.
 
 ## The `account.standing.changed` event
 
