@@ -131,9 +131,9 @@ function emailDocument(html: string, { respectStyles, remoteImages, inline }: Do
   return `<!doctype html>${email.documentElement.outerHTML}`;
 }
 
-/** An email's sandboxed document (`doc`, null until the frame's fonts are read, once per session), the copy its layout
- *  is measured from, and why some of its inline images can't be shown. */
-export function useEmailDocument({ html, attachmentIds = [], attachmentApi: providedAttachmentApi, respectStyles = false, remoteImages = false, inlineImages }: Omit<EmailPreviewProps, 'title' | 'className'>) {
+/** An email's sandboxed document (`doc`, null until the frame's fonts are read, once per session), why some of its
+ *  inline images can't be shown, and with `measured`, the copy its layout is measured from (EmailFrame). */
+export function useEmailDocument({ html, attachmentIds = [], attachmentApi: providedAttachmentApi, respectStyles = false, remoteImages = false, inlineImages, measured = false }: Omit<EmailPreviewProps, 'title' | 'className'> & { measured?: boolean }) {
   const api = useApi();
   const attachmentApi = providedAttachmentApi ?? api.attachments;
   const attachmentKey = [...new Set(attachmentIds)].sort().join(',');
@@ -167,7 +167,7 @@ export function useEmailDocument({ html, attachmentIds = [], attachmentApi: prov
   const sources = resolved?.html === html && resolved.attachmentKey === attachmentKey && resolved.api === attachmentApi ? resolved.sources : undefined;
   const options = useMemo(() => ({ respectStyles, remoteImages, inline }), [respectStyles, remoteImages, inline]);
   const doc = useMemo(() => fontFaces === null ? null : emailDocument(html, options, sources, fontFaces), [html, options, sources, fontFaces]);
-  const layout = useMemo(() => emailDocument(html, options, undefined, '', true), [html, options]);
+  const layout = useMemo(() => measured ? emailDocument(html, options, undefined, '', true) : '', [html, options, measured]);
   return { doc, layout, error };
 }
 

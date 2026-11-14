@@ -40,7 +40,7 @@ function EmailDetail({ email }: { email: Email }) {
   const source = useMemo<InsightSource>(() => ({ kind: 'email', id: email.id, html: hasHtml }), [email.id, hasHtml])
   const check = useSendability(source)
   // The email as its recipients saw it: its own fonts and styles, and its remote images (tracking pixels removed).
-  const original = useEmailDocument({ html: email.html, attachmentIds: email.attachments, remoteImages: true, respectStyles: true })
+  const original = useEmailDocument({ html: email.html, attachmentIds: email.attachments, remoteImages: true, respectStyles: true, measured: true })
   return <div className="email-detail">
     <PageHeader title={email.subject || '(no subject)'} backTo="/logs" subtitle={<EmailFacts email={email} />} actions={<StatusBadge status={email.status} />} />
     {/* A poll that brings new events starts the line over from them. */}
