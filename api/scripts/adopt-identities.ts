@@ -8,6 +8,7 @@ import { GetCallerIdentityCommand,STSClient } from '@aws-sdk/client-sts';
 import { postgresConnection } from '../src/adapters/node.js';
 import { id } from '../src/core.js';
 import { domainName,claimNameAllowed } from '../src/domain-claims.js';
+import { previousDomains,publicOrigin } from '../src/brand.js';
 import { adoptionFingerprint,matchesAdoption } from '../src/adopted-identity.js';
 import { paceSetupSes,poolTenantName } from '../src/ses-setup.js';
 import { requirePoolFlags } from './set-domain-pool.js';
@@ -31,7 +32,7 @@ export async function adoptIdentities(db:Client,ses:SESv2Client,wid:string,arns:
     if (list[i]!==arn || !arn.startsWith(prefix) || domainName.safeParse(name).data!==name || facts.mailFrom && !facts.mailFrom.endsWith('.'+name)) throw new Error('Expected exactly the attested Virginia domain ARNs and their MAIL FROM hosts.');
     facts.dkimTokens.sort();return {name,arn,fingerprint:adoptionFingerprint(facts)};
   });
-  for (const d of domains) if (!await claimNameAllowed(d.name,'https://bane.mx')) throw new Error('Reserved identity name.');
+  for (const d of domains) if (!await claimNameAllowed(d.name,{publicUrl:publicOrigin,previousOrigins:previousDomains.map(domain=>'https://'+domain)})) throw new Error('Reserved identity name.');
   const digest=createHash('sha256').update(JSON.stringify([wid,input.installation,input.scope,domains])).digest('hex');
   async function members(arn:string) {
     const p=await ses.send(new ListResourceTenantsCommand({ResourceArn:arn,PageSize:2}));

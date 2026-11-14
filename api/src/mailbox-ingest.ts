@@ -5,7 +5,7 @@ import {wirePreview} from './protocol-preview.js';
 import { copyWorkspaceRaw, PARSE_LIMIT } from './mailbox-mime.js';
 import { matchRouting, plusBase } from './routing-match.js';
 import { storeIncoming } from './mailbox-ingest-store.js';
-import { platformHost } from './domain-claims.js';
+import { platformHosts } from './domain-claims.js';
 import { receivingPolicy,ingestInput,type IngestInput } from './mailbox-ingest-input.js';
 import PostalMime, { addressParser, decodeWords, type Address, type Email } from 'postal-mime';
 import { and, eq, sql } from 'drizzle-orm';
@@ -592,7 +592,7 @@ const ingestJob = async (runtime:Runtime, payload:Parameters<JobHandler>[1], job
     }
   } finally { s3.destroy(); }
   const preview=message.lifecycle==='kept'?wirePreview(raw,sizeBytes):undefined;
-  const {queued_count:runnable,wait_ms:waitMs,hold_ms:holdMs}=await storeIncoming(runtime.db,message,attachments,verifiedFrom,!receipt.notification.stagingEtag,verifiedAuthor,plan,receivingPolicy(runtime.config),runtime.config.multiTenant ? platformHost(runtime.config.publicUrl) : null,preview);
+  const {queued_count:runnable,wait_ms:waitMs,hold_ms:holdMs}=await storeIncoming(runtime.db,message,attachments,verifiedFrom,!receipt.notification.stagingEtag,verifiedAuthor,plan,receivingPolicy(runtime.config),runtime.config.multiTenant ? platformHosts(runtime.config) : null,preview);
   log('info', { code: 'MAILBOX_MESSAGE_INGESTED',workspaceId:scope.workspaceId,status,spam,rawMs,waitMs,holdMs,lagMs:Date.now()-Date.parse(receipt.createdAt), bytes:sizeBytes, attachments: attachments.length });
   if(sourceKey.startsWith(HELD_PREFIX))await dropHeld(runtime,receipt,scope.workspaceId,sourceKey);
   if (runnable > 0) try { await runtime.wake?.(runnable,'webhook'); } catch { log('warn', { code: 'QUEUE_WAKE_FAILED', message: 'Mailbox webhook jobs remain durable.' }); }

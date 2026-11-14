@@ -48,7 +48,7 @@ export async function adoptPlatformDomain(db: Client, client: SESv2Client, wid: 
   const reason = mutationReason(options.apply, options.reason);
   const { account, name, arn, publicUrl } = platform(operator, env);
   if (!/^ws_[0-9a-f]{32}$/.test(wid) || (env.BANE_PLATFORM_DOMAIN_WORKSPACE ?? env.MX_PLATFORM_DOMAIN_WORKSPACE) !== wid) throw new Error('BANE_PLATFORM_DOMAIN_WORKSPACE must name this exact workspace, as deployed.');
-  if (!await claimNameAllowed(name, publicUrl, true)) throw new Error('PUBLIC_URL does not name a claimable platform domain.');
+  if (!await claimNameAllowed(name, { publicUrl }, true)) throw new Error('PUBLIC_URL does not name a claimable platform domain.');
   const read = async () => {
     const s = await client.send(new GetEmailIdentityCommand({ EmailIdentity: name }));
     if (s.IdentityType !== 'DOMAIN' || s.DkimAttributes?.SigningAttributesOrigin !== 'AWS_SES' || new Set(s.DkimAttributes.Tokens).size !== 3) throw new Error('Expected an Easy DKIM domain identity.');

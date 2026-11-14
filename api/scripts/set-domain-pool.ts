@@ -2,6 +2,7 @@ import { parseArgs } from 'node:util';
 import { Client } from 'pg';
 import { postgresConnection } from '../src/adapters/node.js';
 import { claimNameAllowed, domainName } from '../src/domain-claims.js';
+import { publicOrigin } from '../src/brand.js';
 import { poolTenantName } from '../src/ses-setup.js';
 import { requirePlatformAccount } from '../src/config.js';
 import { id } from '../src/core.js';
@@ -19,7 +20,7 @@ export async function setDomainPool(db:Client,args:string[],env:Record<string,st
   const canary=host==='e2e-trusted.bane.mx' && tier==='trusted';
   const usage='Usage: set-domain-pool.ts WORKSPACE_ID DOMAIN trusted|probation --reason "…", or WORKSPACE_ID --prepare-trusted --reason "…" (at least 10 characters)';
   if (!reason || reason.length<10) throw new Error(usage);
-  if (!wid || !prepare && (values['prepare-trusted'] || positionals.length!==3 || !['probation','trusted'].includes(tier!) || domainName.safeParse(host).data!==host || (!canary && !await claimNameAllowed(host!,env.PUBLIC_URL ?? 'https://bane.mx')))) throw new Error(usage);
+  if (!wid || !prepare && (values['prepare-trusted'] || positionals.length!==3 || !['probation','trusted'].includes(tier!) || domainName.safeParse(host).data!==host || (!canary && !await claimNameAllowed(host!,{publicUrl:env.PUBLIC_URL ?? publicOrigin,previousOrigins:(env.PREVIOUS_PUBLIC_URLS ?? '').split(',').map(o=>o.trim()).filter(Boolean)})))) throw new Error(usage);
   const name=poolTenantName(wid,'trusted');
   await db.query('BEGIN');
   try {

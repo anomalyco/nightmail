@@ -75,13 +75,24 @@ export function baneApi(env: Env, which: 'support' | 'intake' = 'support') {
     /** A new conversation from the support address (ticket emails, the chat follow-up thread). */
     startThread: (input: { to: string[]; subject: string; text: string; replyTo?: string[] }, idempotencyKey: string) =>
       call<{ id: string; threadId: string }>('POST', '/v1/inbound/threads', { addressId: env.SUPPORT_ADDRESS_ID, ...input }, idempotencyKey),
-    /** A reply in an email conversation, only to the reviewed recipients (Nightmail refuses a reply whose recipients changed). */
-    /** addressId null: the address the message came in on (the intake key sees three). */
-    reply: (threadId: string, input: { replyToMessageId: string; text: string; to: string; subject?: string; addressId?: string | null }, idempotencyKey: string) =>
-      call<{ id: string; threadId: string }>('POST', `/v1/inbound/threads/${encodeURIComponent(threadId)}/reply`, {
-        ...(input.addressId === null ? {} : { addressId: input.addressId ?? env.SUPPORT_ADDRESS_ID }), replyToMessageId: input.replyToMessageId, text: input.text, to: [input.to], cc: [], expectedRecipients: { to: [input.to], cc: [], bcc: [] },
+    /**
+     * A reply in an email conversation, only to the reviewed recipients (Nightmail refuses a reply whose recipients changed).
+     * addressId null: the address the message came in on (the intake key sees three). Omitted: SUPPORT_ADDRESS_ID, or, for a
+     * thread on another support address the key also holds (support@bane.mx after the move to nightmail.com), that address.
+     */
+    async reply(threadId: string, input: { replyToMessageId: string; text: string; to: string; subject?: string; addressId?: string | null }, idempotencyKey: string) {
+      const send = (addressId: string | null, key: string) => call<{ id: string; threadId: string }>('POST', `/v1/inbound/threads/${encodeURIComponent(threadId)}/reply`, {
+        ...(addressId === null ? {} : { addressId }), replyToMessageId: input.replyToMessageId, text: input.text, to: [input.to], cc: [], expectedRecipients: { to: [input.to], cc: [], bcc: [] },
         ...(input.subject ? { subject: input.subject } : {}),
-      }, idempotencyKey),
+      }, key);
+      if (input.addressId !== undefined) return send(input.addressId, idempotencyKey);
+      try { return await send(env.SUPPORT_ADDRESS_ID, idempotencyKey); }
+      catch (error) {
+        // No reply target under SUPPORT_ADDRESS_ID: nothing was sent, so answer from the receiving address under its own key.
+        if (!(error instanceof BaneError) || error.status !== 404 || error.code !== 'NOT_FOUND') throw error;
+        return send(null, `${idempotencyKey}:received`);
+      }
+    },
   };
 }
 export type BaneApi = ReturnType<typeof baneApi>;

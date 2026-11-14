@@ -18,21 +18,26 @@ export const claimName = z.preprocess(value=>{
 },domainName);
 /** The installation's own domain: PUBLIC_URL's host (bane.mx in production). */
 export const platformHost = (publicUrl:string) => new URL(publicUrl).hostname.toLowerCase().replace(/\.$/,'');
+type PlatformOrigins = { publicUrl:string; previousOrigins?:readonly string[] };
+/** Every domain the installation owns: PUBLIC_URL's host, then the hosts it served before (PREVIOUS_PUBLIC_URLS). After
+ * a domain switch the earlier domain stays the platform's: its adopted claim keeps receiving (support@) and its names
+ * stay unclaimable. Sender policy (platformPolicy) follows PUBLIC_URL's host only. */
+export const platformHosts = (config:PlatformOrigins) => [...new Set([config.publicUrl,...(config.previousOrigins ?? [])].map(platformHost))];
+const platformRoot = (name:string,hosts:readonly string[]) => hosts.find(host=>name===host || name.endsWith('.'+host));
 // Operator hosts under the platform domain that not even its owning workspace may claim, receive on or send from,
 // with everything below them: another installation's zone (dev.), release fixtures (e2e., e2e-va., e2e-trusted.),
 // the shared inbound zone (in.), the Domain Connect key (domainconnect.) and service hosts (imap., tracker.). Add
 // new platform hosts here before they go live. A release fixture holding its own e2e* claim keeps sending.
 const fixtureLabel=/^e2e(?:-[a-z0-9-]+)?$/;
 const platformLabel=/^(?:dev|e2e(?:-[a-z0-9-]+)?|in|domainconnect|imap|tracker)$/;
-export function reservedPlatformName(name:string,publicUrl:string) {
-  const host=platformHost(publicUrl);
-  return name.endsWith('.'+host) && platformLabel.test(name.slice(0,-host.length-1).split('.').at(-1)!);
+export function reservedPlatformName(name:string,config:PlatformOrigins) {
+  return platformHosts(config).some(host=>name.endsWith('.'+host) && platformLabel.test(name.slice(0,-host.length-1).split('.').at(-1)!));
 }
 /** The mailboxes a certificate authority may use to validate the platform domain (CA/B BR 3.2.2.4.4, and root@).
  * Nightmail never creates them automatically: only an inbox someone creates on purpose receives that mail. */
-export function platformValidationMailbox(address:string,host:string|null) {
+export function platformValidationMailbox(address:string,hosts:string|readonly string[]|null) {
   const [local='',domain='']=address.toLowerCase().split('@');
-  return !!host && (domain===host || domain.endsWith('.'+host)) && /^(?:admin|administrator|hostmaster|postmaster|webmaster|root)$/.test(local.replace(/\+.*$/,''));
+  return !!platformRoot(domain,hosts===null ? [] : typeof hosts==='string' ? [hosts] : hosts) && /^(?:admin|administrator|hostmaster|postmaster|webmaster|root)$/.test(local.replace(/\+.*$/,''));
 }
 type PlatformConfig = Pick<Runtime['config'],'multiTenant'|'regionalSending'|'platformDomainWorkspace'|'publicUrl'>;
 /** Only the operator-configured workspace owns the platform domain; every other workspace is always refused. Its
@@ -43,21 +48,21 @@ export const platformDomainOwner = (config:Omit<PlatformConfig,'publicUrl'>,work
  * changing or removing BANE_PLATFORM_DOMAIN_WORKSPACE takes effect on the next send and the next dispatch. */
 export const platformPolicy = (config:PlatformConfig) => config.multiTenant ? JSON.stringify({host:platformHost(config.publicUrl),
   owner:config.regionalSending===true ? config.platformDomainWorkspace ?? null : null,reserved:platformLabel.source,fixtures:fixtureLabel.source}) : null;
-export async function claimNameAllowed(name:string,publicUrl:string,platformOwner=false) {
-  const host=platformHost(publicUrl), platform=name===host || name.endsWith('.'+host);
-  return name.includes('.') && (platform ? platformOwner && !reservedPlatformName(name,publicUrl) : !host.endsWith('.'+name))
+export async function claimNameAllowed(name:string,config:PlatformOrigins,platformOwner=false) {
+  const hosts=platformHosts(config), platform=!!platformRoot(name,hosts);
+  return name.includes('.') && (platform ? platformOwner && !reservedPlatformName(name,config) : !hosts.some(host=>host.endsWith('.'+name)))
     && !reservedRoots.some(root=>name===root || name.endsWith('.'+root)) && (await placementRoot(name)).root!==null;
 }
 const within = (name: SQL, parent: SQL) => sql`right('.' || ${name}, length(${parent}) + 1) = '.' || ${parent}`;
 // A hosted workspace has exactly one connection, so the region may be omitted and defaults to it.
 /** `audit` builds the domain.create audit row from the reservation (`reserved`), written in the same statement for a new claim only. */
 export async function reserveClaim(runtime: Runtime, workspace: string, name: string, region?: string, audit?: (reserved: SQL) => SQL) {
-  const owner=platformDomainOwner(runtime.config,workspace), root=platformHost(runtime.config.publicUrl);
-  if (!await claimNameAllowed(name,runtime.config.publicUrl,owner)) throw notAllowed();
+  const owner=platformDomainOwner(runtime.config,workspace), root=platformRoot(name,platformHosts(runtime.config));
+  if (!await claimNameAllowed(name,runtime.config,owner)) throw notAllowed();
   // The platform domain's SES identity predates every claim and carries no claim tag: only the operator's adoption
   // (scripts/adopt-platform-domain.ts) creates the root's claim, and nothing under it is claimed before that.
   // Re-adding the root afterwards is idempotent.
-  if (owner && (name===root || name.endsWith('.'+root)) && !(await runtime.db.execute(sql`SELECT FROM domain_claims WHERE workspace_id=${workspace} AND name=${root} AND identity ? 'adopted'`)).rowCount)
+  if (owner && root && !(await runtime.db.execute(sql`SELECT FROM domain_claims WHERE workspace_id=${workspace} AND name=${root} AND identity ? 'adopted'`)).rowCount)
     throw new ApiError(409,'OPERATOR_ADOPTION_REQUIRED','An operator must adopt the platform domain’s existing SES identity first.','name');
   assertSesConfigured(runtime);
   // The statement's snapshot predates the function's own insert, so a brand-new claim joins to nothing: that is

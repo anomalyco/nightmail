@@ -243,7 +243,7 @@ export async function selectImports(r:Runtime,wid:string,input:z.infer<typeof Im
 export async function newRegionalDomain(r:Runtime,wid:string,name:string,owner:boolean,override?:string,key?:string) {
   const c=await connection(r.db,wid);if (!c) return null;
   if (!owner) throw new ApiError(403,'PERMISSION_DENIED','Use an owner or admin dashboard session to enable a regional domain.');
-  await writable(r,wid);if (!await claimNameAllowed(name,r.config.publicUrl)) throw new ApiError(422,'DOMAIN_NOT_ALLOWED','A public suffix or reserved domain cannot be claimed.','name');
+  await writable(r,wid);if (!await claimNameAllowed(name,r.config)) throw new ApiError(422,'DOMAIN_NOT_ALLOWED','A public suffix or reserved domain cannot be claimed.','name');
   return r.db.transaction(async db=>{
     await getRegionSettings(db,wid,'update');if (usable(await connection(db,wid,true)).id!==c.id) throw stale();
     const op=receipt<Op>(c,'domain',key,JSON.stringify([name,override])),prior=await op.read(db);if(prior)return prior;
