@@ -14296,6 +14296,11 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         SELECT 'q'||i,'owner'||(i%${owners}),'xx-test-1','fixture','a@example.invalid','[]','[]','[]','fixture','{"kind":"transactional"}',true FROM generate_series(1,${3*owners})i;ANALYZE sending_emails`);
       const q=t.mock.method(db,'query',async()=>({rows:[],rowCount:0}));await runDispatcher(runtime,{region:'xx-test-1',gate:initialGate(),batchSize:24});q.mock.restore();
       const args=q.mock.calls.find(c=>(c.arguments[0] as any)?.text?.includes('queued_owners'))!.arguments as any;
+      // The lease updates its rows, and every update adds entries to the log search index's GIN pending list, which the
+      // statement that fills it past 4 MB merges into the index (about 11,000 buffer hits). After the rows above it holds
+      // about 505 of its 512 pages, so whether this statement pays for the merge depends on how much earlier tests
+      // wrote: empty it first, so the lease's own work is what is measured.
+      await db.query("SELECT gin_clean_pending_list('sending_emails_log_trgm'::regclass)");
       const p=(await db.query('EXPLAIN (ANALYZE,BUFFERS,TIMING OFF,FORMAT JSON) '+args[0].text,args[1])).rows[0]['QUERY PLAN'][0];
       t.diagnostic(`REVIEW ${owners} owners: ${p['Execution Time']}ms, ${p.Plan['Shared Hit Blocks']} buffer hits`);
       assert.ok(p.Plan['Shared Hit Blocks']<5000,'A 24-row lease must use bounded work');
