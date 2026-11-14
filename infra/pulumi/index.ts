@@ -127,6 +127,7 @@ const inboundArn = `arn:aws:sns:${region}:${account}:bane-inbound`;
 const opts = (id:string,provider:pulumi.ProviderResource) => imports.includes(id)?adopt(id,provider):{provider,protect:true};
 const tags = (purpose:string) => ({'bane:installation-id':'bane:pool','bane:purpose':purpose});
 export const mailGatewayEndpoint = mailGateway(stack, stage, config, ohio, iam, cloudflare, tags("mail-gateway"));
+export const nightmailGatewayEndpoint = config.getBoolean('nightmailGateway') ? mailGateway(stack,stage,config,ohio,iam,cloudflare,{'nightmail:installation-id':'nightmail:pool','nightmail:purpose':'mail-gateway'},true) : undefined;
 const mail = new aws.s3.Bucket('pool-mail',{bucket:bucketName,tags:tags('mailbox-inbound')},opts(bucketName,ohio));
 const protectedOhio = {provider:ohio,protect:true};
 const block = new aws.s3.BucketPublicAccessBlock('pool-mail-private',{bucket:mail.id,blockPublicAcls:publicAccessBlock.BlockPublicAcls,

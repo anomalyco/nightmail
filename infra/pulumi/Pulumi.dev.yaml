@@ -1,7 +1,9 @@
 config:
   bane:prepareNightmailMail: "true"
   bane:nightmailCloud: "true"
-  bane:deployRoleArn: arn:aws:iam::905840579680:role/bane-deploy
+  bane:deployRoleArn: arn:aws:iam::905840579680:role/nightmail-deploy
+  bane:nightmailGateway: "true"
+  bane:nightmailGatewayDesired: "0"
   bane:permissionsBoundary: arn:aws:iam::905840579680:policy/bane-runtime-boundary
   bane:writeWorkerSecrets: "true"
   bane:mailGatewayEnabled: "true"

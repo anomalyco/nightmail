@@ -2,7 +2,6 @@ import * as aws from "@pulumi/aws";
 import * as cf from "@pulumi/cloudflare";
 import * as pulumi from "@pulumi/pulumi";
 
-const name = "bane-mail-gateway";
 const ports = [993, 143, 465, 587];
 const healthPort = 8080;
 const cidr = "10.68.0.0/16";
@@ -19,25 +18,27 @@ function apiOrigin(stage: "dev" | "production", origin: string) {
 }
 
 export function mailGateway(stage: "dev" | "production", { account, cloudflareAccountId, origin }: Stage,
-  config: pulumi.Config, ohio: aws.Provider, iam: aws.Provider, cloudflare: cf.Provider, tags: Record<string, string>) {
+  config: pulumi.Config, ohio: aws.Provider, iam: aws.Provider, cloudflare: cf.Provider, tags: Record<string, string>, green = false) {
+  const name = green ? 'nightmail-mail-gateway' : 'bane-mail-gateway';
   const api = apiOrigin(stage, origin);
   const opts = { provider: ohio, protect: true };
   const iamOpts = { provider: iam, protect: true };
   const named = (suffix: string) => ({ ...tags, Name: `${name}-${suffix}` });
-  const desired = config.getNumber("mailGatewayDesired") ?? 0;
+  const desired = config.getNumber(green ? 'nightmailGatewayDesired' : 'mailGatewayDesired') ?? 0;
   if (!Number.isSafeInteger(desired) || desired < 0) throw new Error("bane:mailGatewayDesired must be a nonnegative integer");
   // The deploy reads the same committed flag: true binds the Worker's MAILGW_API_TOKEN (and fails
   // without it), false removes it. Tasks only run against a Worker that can authenticate them.
   const enabled = config.getBoolean("mailGatewayEnabled") ?? false;
   if (desired > 0 && !enabled) throw new Error("Set bane:mailGatewayEnabled to true before scaling bane:mailGatewayDesired above 0");
-  const image = config.get("mailGatewayImage");
+  const image = config.get(green ? 'nightmailGatewayImage' : 'mailGatewayImage');
   const repoUrl = `${account}.dkr.ecr.us-east-2.amazonaws.com/${name}`;
   if ((desired > 0 && !image) || (image !== undefined &&
     (!image.startsWith(`${repoUrl}@`) || !/^sha256:[0-9a-f]{64}$/.test(image.slice(repoUrl.length + 1))))) {
     throw new Error(`Set bane:mailGatewayImage to ${repoUrl}@sha256:<digest> before scaling up`);
   }
-  const pager = config.require("receivingAlarmTopicArn");
-  if (pager !== `arn:aws:sns:us-east-2:${account}:bane-alerts`) throw new Error("Expected the stage's Ohio bane-alerts topic");
+  const pagerName = green ? 'nightmail-alerts' : 'bane-alerts';
+  const pager = green ? `arn:aws:sns:us-east-2:${account}:${pagerName}` : config.require("receivingAlarmTopicArn");
+  if (pager !== `arn:aws:sns:us-east-2:${account}:${pagerName}`) throw new Error("Expected the stage's Ohio alerts topic");
 
   const repo = new aws.ecr.Repository(name, { name, imageTagMutability: "IMMUTABLE",
     imageScanningConfiguration: { scanOnPush: true }, tags }, opts);
@@ -77,6 +78,11 @@ export function mailGateway(stage: "dev" | "production", { account, cloudflareAc
   const legacyArns: pulumi.Output<string>[] = [];
   const secrets = Object.entries({ DATABASE_URL: "db-url", MAILGW_CERT_PEM: "tls-cert", MAILGW_KEY_PEM: "tls-key", MAILGW_API_TOKEN: "api-token" })
     .map(([env, key]) => {
+      if (green) {
+        // The old gateway already manages these containers. Look up ARNs only, never secret contents.
+        const shared = aws.secretsmanager.getSecretOutput({name:`nightmail/${stage}/mail-gateway/${key}`},{provider:ohio});
+        return {name:env,valueFrom:shared.arn};
+      }
       const legacyName = `bane/${stage}/mail-gateway/${key}`;
       legacyArns.push(new aws.secretsmanager.Secret(`${name}-${key}`, { name: legacyName, tags }, opts).arn);
       const secretName = `nightmail/${stage}/mail-gateway/${key}`;
@@ -139,7 +145,7 @@ export function mailGateway(stage: "dev" | "production", { account, cloudflareAc
   new aws.cloudwatch.MetricAlarm(`${name}-resets`, { ...alarm, name: `${name}-resets`, metricName: "TCP_ELB_Reset_Count",
     statistic: "Sum", threshold: 10, dimensions: { LoadBalancer: lb.arnSuffix } }, opts);
 
-  if (config.getBoolean("mailGatewayDns") ?? false) {
+  if (config.getBoolean(green ? 'nightmailGatewayDns' : 'mailGatewayDns') ?? false) {
     const zone = api.hostname; // dev.bane.mx or bane.mx: each stage owns its own zone.
     const zoneId = cf.getZoneOutput({ filter: { name: zone, account: { id: cloudflareAccountId } } }, { provider: cloudflare }).id;
     for (const host of ["imap", "smtp"]) new cf.DnsRecord(`${name}-${host}`, { zoneId, name: `${host}.${zone}`,
