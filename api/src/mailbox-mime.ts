@@ -1,5 +1,6 @@
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { MailObjects } from './mail-objects.js';
+import {mailKindTag} from './resource-tags.js';
 import { ApiError, lazyModule } from './core.js';
 
 const loadS3Commands = lazyModule(() => import('@aws-sdk/client-s3'));
@@ -70,7 +71,7 @@ export async function copyWorkspaceRaw(client:S3Client,region:string,bucket:stri
     }
     return {bytes,sizeBytes:size-removed,large};
   }
-  const destination={Bucket:bucket,Key:key,Tagging:`bane-kind=${kind}`};
+  const destination={Bucket:bucket,Key:key,Tagging:`${mailKindTag(bucket)}=${kind}`};
   const copy={CopySource:`${bucket}/${source}`,CopySourceIfMatch:head.ETag};
   if(!removed) await client.send(new CopyObjectCommand({...destination,...copy,TaggingDirective:'REPLACE'}));
   else if(!large) await client.send(new PutObjectCommand({...destination,Body:bytes,ContentType:'message/rfc822'}));

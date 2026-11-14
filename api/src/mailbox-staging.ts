@@ -1,4 +1,5 @@
 import { sql } from 'drizzle-orm';
+import {mailKindTag} from './resource-tags.js';
 import { ApiError, lazyModule, log, type JobHandler, type Runtime } from './core.js';
 import { JobDeferred, retryDatabaseFailures } from './jobs.js';
 import { acceptInboundNotification, recoverHeldReceipts, sesIdPattern } from './mailbox-receipts.js';
@@ -102,7 +103,7 @@ export const cleanCandidates:JobHandler=async(runtime)=>{
   } else if(missing.length){
     const s3=await mailboxS3(runtime,u.workspace_id,u.region,u.bucket);
     try {const {PutObjectTaggingCommand}=await loadS3Staging();const signal=AbortSignal.timeout(10000);
-      for(const key of missing.slice(0,8)){assertMailboxKey(u.workspace_id,key,key.startsWith(`workspaces/${u.workspace_id}/raw/kept/`)?'raw':'att');await s3.send(new PutObjectTaggingCommand({Bucket:u.bucket,Key:key,Tagging:{TagSet:[{Key:'bane-kind',Value:'orphan'}]}}),{abortSignal:signal}).catch(e=>{if(e?.name!=='NoSuchKey')throw e;});}
+      for(const key of missing.slice(0,8)){assertMailboxKey(u.workspace_id,key,key.startsWith(`workspaces/${u.workspace_id}/raw/kept/`)?'raw':'att');await s3.send(new PutObjectTaggingCommand({Bucket:u.bucket,Key:key,Tagging:{TagSet:[{Key:mailKindTag(u.bucket),Value:'orphan'}]}}),{abortSignal:signal}).catch(e=>{if(e?.name!=='NoSuchKey')throw e;});}
     } finally {s3.destroy();}
   }
   const fence=sql`batch=${u.batch} AND keys=${sql.param(u.keys)}::text[] AND ${terminal}`;

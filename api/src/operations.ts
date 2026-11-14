@@ -36,7 +36,7 @@ import { checkMx,expectedMx } from './mailbox-dns.js';
 import { baneRecordIssue, baneRecordUse, defaultReceivingHost, inspectReceivingHost, observeReceiving, takenIssue, type ReceivingObservation } from './receiving-host.js';
 import { deliveryAttempts, deliveries, domainClaims, domains, events, eventTypes, snsReceipts, unsubscribeTokens, webhooks, webhookSecretAudit, workspaceSettings, type PublishedEvent, type EventType } from './db/operations.js';
 import { productName, requestHeaderNames, webhookTestHeaders, webhookUserAgent } from './brand.js';
-import { hasTags, tagKey } from './resource-tags.js';
+import { hasTags, tagKey, TAG_PREFIX } from './resource-tags.js';
 export type { PublishedEvent } from './db/operations.js';
 
 const RegionalAccepted = z.object({ operationId: z.string(), regions: z.array(z.string()) });
@@ -1296,6 +1296,9 @@ function registerPublicEvents(app: App) {
       UNION ALL SELECT region, aws_account_id, 'shared', ${poolSends()},false,CASE WHEN NOT legacy_names THEN 'pool' END,generation FROM provider_pool_regions p WHERE feedback_topic_arn=${arn} AND (legacy_names OR ${poolSends()} OR
         (${!!runtime.config.trustedPool} AND p.region='us-east-1' AND pool_tier='trusted' AND ownership_journal @> ${subscription}::jsonb))
       UNION ALL SELECT region,aws_account_id,'shared',${poolReceives()},true,NULL,NULL FROM provider_pool_regions p WHERE inbound_topic_arn=${arn}
+      ${!confirming && TAG_PREFIX==='nightmail' ? sql`UNION ALL SELECT region,aws_account_id,'shared',true,true,NULL,NULL FROM provider_pool_regions p
+        WHERE region='us-east-2' AND aws_account_id=${runtime.config.platformAccount??''} AND ${poolReceives()} AND inbound_topic_arn='arn:aws:sns:us-east-2:'||aws_account_id||':nightmail-inbound'
+        AND ${arn}='arn:aws:sns:us-east-2:'||aws_account_id||':bane-inbound'` : sql``}
       UNION ALL SELECT r.region,r.account_id,'byo',${connectionReady(sql`c`)},true,NULL,NULL FROM mailbox_regions r JOIN provider_connections c ON c.workspace_id=r.workspace_id AND c.aws_account_id=r.account_id AND c.region=r.region AND c.kind='byo' AND c.template_version<>'v5' WHERE r.topic_arn=${arn}
       ${!confirming ? sql`UNION ALL SELECT region,aws_account_id,kind,true,false,NULL,NULL FROM provider_feedback_history WHERE topic_arn=${arn}` : sql``} ORDER BY ready DESC LIMIT 1`)).rows[0];
     if (!binding || !arn.startsWith(`arn:aws:sns:${binding.region}:${binding.aws_account_id}:`)) return;

@@ -3,6 +3,7 @@ import { ApiError, log, type Runtime } from './core.js';
 import { claimReceives, connectionReady, poolReceives } from './states.js';
 import { mailJson } from './mailbox-text.js';
 import { STAGING_PREFIX } from './mailbox-setup.js';
+import {TAG_PREFIX} from './resource-tags.js';
 
 export type ReceivedNotification = {
   notificationType?: string;
@@ -77,7 +78,11 @@ export async function acceptInboundNotification(runtime:Runtime,input:{topicArn:
   const receivedAt=timestamp??message.mail?.timestamp;
   if(runtime.config.multiTenant && (!receivedAt || !Number.isFinite(Date.parse(receivedAt)))) throw new ApiError(400,'SES_INVALID_EVENT','The receiving timestamp is missing or invalid.');
   const at=receivedAt && Number.isFinite(Date.parse(receivedAt))?new Date(receivedAt).toISOString():new Date().toISOString();
-  const r=await route(runtime,sql`SELECT ${action.bucketName}::text AS bucket,${mid}::text AS mid,${input.region}::text AS region,${input.topicArn}::text AS topic_arn,${at}::timestamptz AS at,
+  // A delayed signed receipt can still refer to the old topic and bucket. Only
+  // canonicalize the exact paired hosted resources after the payload has been verified.
+  const account=runtime.config.platformAccount;
+  const old=TAG_PREFIX==='nightmail' && runtime.config.multiTenant && account && input.region==='us-east-2' && input.topicArn===`arn:aws:sns:us-east-2:${account}:bane-inbound` && action.bucketName===`bane-${account}-mail-us-east-2`;
+  const r=await route(runtime,sql`SELECT ${old?`nightmail-${account}-mail-us-east-2`:action.bucketName}::text AS bucket,${mid}::text AS mid,${input.region}::text AS region,${old?`arn:aws:sns:us-east-2:${account}:nightmail-inbound`:input.topicArn}::text AS topic_arn,${at}::timestamptz AS at,
     least(now(),${at}::timestamptz)+interval '48 hours' AS expires_at,${mailJson(metadata)}::jsonb AS notification,${mailJson(recipients)}::jsonb AS recipients,${!!orphan}::boolean AS fenced,${orphan?.bindingWorkspace??null}::text AS binding_workspace`,false);
   if(!r.trusted) throw new ApiError(403,'MAILBOX_NOTIFICATION_UNTRUSTED','Unknown receiving account, topic or bucket.');
   if(r.held) log('warn',{code:'MAILBOX_NOTIFICATION_UNROUTED_HOST',region:input.region});

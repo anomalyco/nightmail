@@ -5,6 +5,7 @@ import { acquireRegionProvisioning, finishHostedRegion } from './states.js';
 import { awsError, loadSetupSdk, POOL_INSTALLATION, poolTenantName, provisionJournaledFeedback, provisionTenant, type JournalEntry } from './ses-setup.js';
 import { caller, loadStsSdk, platformCredentials } from './provider-credentials.js';
 import { requirePlatformAccount } from './config.js';
+import { TAG_PREFIX } from './resource-tags.js';
 
 export const virginia='us-east-1';
 const pending=()=>new JobDeferred(new Date(Date.now()+15_000).toISOString());
@@ -12,7 +13,7 @@ const fenced=(count:number|null)=>{if (!count) throw new ApiError(409,'PROVISION
 
 // Shared across every workspace. Never call the legacy pool reconciler (it provisions receiving).
 async function ensureFeedback(r:Runtime,platformAccount:string) {
-  const topic=`arn:aws:sns:${virginia}:${platformAccount}:bane-trusted-feedback`;
+  const topic=`arn:aws:sns:${virginia}:${platformAccount}:${TAG_PREFIX}-trusted-feedback`;
   const target=sql`region=${virginia} AND aws_account_id=${platformAccount} AND NOT legacy_names AND pool_tier='trusted'`;
   await r.db.execute(sql`INSERT INTO provider_pool_regions(region,aws_account_id,pool_tier,legacy_names) VALUES(${virginia},${platformAccount},'trusted',false) ON CONFLICT DO NOTHING`);
   const state=(await r.db.execute(sql`SELECT sending_state,feedback_topic_arn,confirmed_generation,generation FROM provider_pool_regions WHERE ${target}`)).rows[0];
@@ -47,7 +48,7 @@ export const trustedProvision:JobHandler=retryDatabaseFailures(async(r,p,j)=>{
   if (!row || row.sending_state==='ready' || row.sending_state==='disabled') return;
   await Promise.all([loadStsSdk(), loadSetupSdk()]);
   const principal=await caller(virginia,platformCredentials(r));
-  if (principal.Arn!==`arn:aws:iam::${platformAccount}:user/bane-runtime` || principal.Account!==platformAccount) throw new ApiError(409,'AWS_ACCOUNT_MISMATCH','Use only the Hosted runtime principal for pool setup.');
+  if (principal.Arn!==`arn:aws:iam::${platformAccount}:user/${TAG_PREFIX}-runtime` || principal.Account!==platformAccount) throw new ApiError(409,'AWS_ACCOUNT_MISMATCH','Use only the Hosted runtime principal for pool setup.');
   await ensureFeedback(r,platformAccount);
   const ref={connectionId:cid,region:virginia};
   const lease=(await r.db.execute(acquireRegionProvisioning(ref,target))).rows[0];if (!lease) throw pending();

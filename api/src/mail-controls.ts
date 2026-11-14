@@ -3,7 +3,7 @@
 export const STAGING_PREFIX = 'staging/';
 export const publicAccessBlock = { BlockPublicAcls: true, IgnorePublicAcls: true, BlockPublicPolicy: true, RestrictPublicBuckets: true };
 export const deliveryPolicy = {http:{defaultHealthyRetryPolicy:{minDelayTarget:20,maxDelayTarget:120,numRetries:30,numNoDelayRetries:0,numMinDelayRetries:2,numMaxDelayRetries:24,backoffFunction:'exponential'},disableSubscriptionOverrides:true}};
-export const redrivePolicy = (region:string,account:string) => ({deadLetterTargetArn:`arn:aws:sqs:${region}:${account}:bane-inbound-dead-letters`});
+export const redrivePolicy = (region:string,account:string,prefix:'bane'|'nightmail'='bane') => ({deadLetterTargetArn:`arn:aws:sqs:${region}:${account}:${prefix}-inbound-dead-letters`});
 
 export function lifecycleRules(pool:boolean) {
   const expire = (ID:string, Filter:{Prefix:string}|{Tag:{Key:string;Value:string}}, Days:number) => ({ ID, Status:'Enabled' as const, Filter, Expiration:{Days} });
@@ -37,7 +37,7 @@ export function feedbackPolicy(account:string,arn:{topic:string;sets:string[]},p
 // SEND is intentionally absent: acceptance is recorded from the SendEmail response.
 export const FEEDBACK_EVENTS = ['DELIVERY','BOUNCE','COMPLAINT','REJECT','RENDERING_FAILURE','DELIVERY_DELAY','OPEN','CLICK'] as const;
 export const POOL_STREAMS = ['transactional','marketing'] as const;
-export const poolEventDestination = (prefix:'bane'|'bane-trusted',topicArn:string) =>
+export const poolEventDestination = (prefix:'bane'|'bane-trusted'|'nightmail'|'nightmail-trusted',topicArn:string) =>
   ({ Name:`${prefix}-events`, Enabled:true, MatchingEventTypes:[...FEEDBACK_EVENTS], SnsDestination:{ TopicArn:topicArn } });
 export const poolSuppression = (stream:typeof POOL_STREAMS[number]) => ({ SuppressedReasons:['BOUNCE','COMPLAINT'], SuppressionScope:'TENANT',
   ValidationOptions:{ ConditionThreshold: stream==='transactional' ? { ConditionThresholdEnabled:'DISABLED' } : { ConditionThresholdEnabled:'ENABLED', OverallConfidenceThreshold:{ ConfidenceVerdictThreshold:'MANAGED' } } } });

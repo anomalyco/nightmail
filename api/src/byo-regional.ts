@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 import { ApiError, id, ModuleLoadError, notFound, wrapModuleLoad, type Runtime, type DbExecutor, type JobHandler } from './core.js';
 import { assume, loadStsSdk } from './provider-credentials.js';
 import { requirePlatformAccount } from './config.js';
+import {TAG_PREFIX} from './resource-tags.js';
 import { awsError, loadSetupSdk, provisionJournaledFeedback, readSelectedDomains, removeByoFeedbackResource, scanRegionPage, setupResources, type Inventory, type CandidateIdentity, type JournalEntry, type ScanStage, byoStackName } from './ses-setup.js';
 import { JobDeferred, retryDatabaseFailures } from './jobs.js';
 import { acquireRegionProvisioning, campaignReserved, finishRegionProvisioning, verifyImportedClaims } from './states.js';
@@ -59,7 +60,7 @@ export function v5Link(r:Runtime,c:{id:string;workspace_id:string;external_id:st
   return `https://${c.region}.console.aws.amazon.com/cloudformation/home?region=${c.region}#/stacks/create/review?${params}`;
 }
 export async function enrollV5(r:Runtime,wid:string,account:string) {
-  const platformAccount=requirePlatformAccount(r.config.platformAccount),platformArn=`arn:aws:iam::${platformAccount}:user/bane-runtime`;
+  const platformAccount=requirePlatformAccount(r.config.platformAccount),platformArn=`arn:aws:iam::${platformAccount}:user/${TAG_PREFIX}-runtime`;
   if (account===platformAccount) throw conflict('AWS_ACCOUNT_IN_USE','The shared sending account cannot be connected.');
   const cid=id('conn'),roleRegion='us-east-2',external=crypto.randomUUID();
   v5Link(r,{id:cid,region:roleRegion,workspace_id:wid,external_id:external,stack_name:byoStackName(r.config.byoStackPrefix,cid)});
