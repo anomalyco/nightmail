@@ -1,18 +1,18 @@
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import type { UseQueryResult } from '@tanstack/react-query'
-import { Check, ChevronRight, ExternalLink, Monitor, Moon, MoreHorizontal, Smartphone, Sun } from 'lucide-react'
+import { Check, ChevronRight, Columns2, ExternalLink, Monitor, Moon, MoreHorizontal, Smartphone, Sun } from 'lucide-react'
 import { useApiQuery } from '../data/context'
 import type { ClientPreview, PreviewClient, PreviewIssue, SendabilityCategory, SendabilityFinding, SendabilityReport, SenderGrade } from '../data/types'
 import { usePhone } from '../lib/media'
 import { AddressText } from './AddressText'
-import { EmailFrame, frameDocument, type FrameDevice } from './EmailFrame'
-import { Alert, Button, Dialog, DropdownMenu, ErrorText, Skeleton, SkeletonText, Tooltip } from './ui'
+import { EmailFrame, FRAME_WIDTH, frameDocument, frameKey, frameSize, shownWidth, useFrameSizes, type FrameDevice } from './EmailFrame'
+import { Alert, Button, DropdownMenu, ErrorText, Skeleton, SkeletonText, Tooltip } from './ui'
 import './email-insight.css'
 import { productName } from '../../../api/src/brand'
 
-// "Will this email land and look right": the sendability check (POST /v1/emails/check) as a score and the fixes to
-// make first, with every finding one click away, and one preview that switches between the email as sent and each
-// emulated client (POST /v1/emails/preview). Used by a sent email's detail page and by the campaign editor's draft.
+// "Will this email land and look right": the sendability check (POST /v1/emails/check) as a score, the fixes to make
+// first and every finding, and the preview: the email as sent and as each client emulation shows it (POST
+// /v1/emails/preview), side by side where the window has room. Used by a sent email's detail page and the campaign editor.
 export type InsightSource = { kind: 'email'; id: string; html: boolean } | { kind: 'campaign'; id: string; revision: number }
 type Theme = 'light' | 'dark'
 type Check = UseQueryResult<SendabilityReport, Error>
@@ -52,8 +52,8 @@ type Client = { value: string; label: string; clients: Record<FrameDevice, Previ
 const CLIENTS: Client[] = [
   { value: 'gmail', label: 'Gmail', clients: { desktop: 'gmail-web', mobile: 'gmail-ios' }, captions: { desktop: 'Gmail on the web', mobile: 'Gmail app on iPhone' } },
   { value: 'apple', label: 'Apple Mail', clients: { desktop: 'apple-mail-macos', mobile: 'apple-mail-ios' }, captions: { desktop: 'Apple Mail on Mac', mobile: 'Apple Mail on iPhone' } },
-  { value: 'outlook', label: 'Outlook', clients: { desktop: 'outlook-web', mobile: 'outlook-web' }, captions: { desktop: 'Outlook.com and new Outlook', mobile: 'Outlook.com and new Outlook, phone width' } },
-  { value: 'yahoo', label: 'Yahoo', clients: { desktop: 'yahoo-web', mobile: 'yahoo-web' }, captions: { desktop: 'Yahoo and AOL Mail on the web', mobile: 'Yahoo and AOL Mail, phone width' } },
+  { value: 'outlook', label: 'Outlook', clients: { desktop: 'outlook-web', mobile: 'outlook-web' }, captions: { desktop: 'Outlook.com and new Outlook', mobile: 'Outlook, phone width' } },
+  { value: 'yahoo', label: 'Yahoo', clients: { desktop: 'yahoo-web', mobile: 'yahoo-web' }, captions: { desktop: 'Yahoo and AOL Mail on the web', mobile: 'Yahoo and AOL, phone width' } },
   { value: 'samsung', label: 'Samsung', clients: { desktop: 'samsung-email', mobile: 'samsung-email' }, captions: { desktop: 'Samsung Email, desktop width', mobile: 'Samsung Email on Android' } },
 ]
 // Classic Outlook for Windows renders with Word: checked, not previewed. Its issues go under Outlook.
@@ -67,7 +67,7 @@ function issueReader(report: SendabilityReport | undefined, previews: ClientPrev
 const issueTone = (issues: PreviewIssue[]) => issues.some(issue => issue.severity === 'error') ? 'danger' as const : 'warning' as const
 const plural = (count: number, word: string) => `${count} ${word}${count === 1 ? '' : 's'}`
 
-// ── Sendability: the score and the fixes to make first; the categories and every finding one click away ──
+// ── Sendability: the score, the fixes to make first, and every finding where there is room for it ──
 
 /** The warning near Send when a draft scores low: the score and the three fixes to make first. Sending stays possible. */
 export function SendabilityWarning({ report, action }: { report: SendabilityReport; action?: ReactNode }) {
@@ -79,37 +79,56 @@ export function SendabilityWarning({ report, action }: { report: SendabilityRepo
   </Alert>
 }
 
+const scoreLabel = (report: SendabilityReport) => `Score ${report.score} of 100, grade ${report.grade}`
 function Score({ report }: { report: SendabilityReport }) {
-  return <Tooltip content={SCORE_NOTE}><span className="ss__score" data-grade={gradeKey(report.grade)} tabIndex={0} role="img" aria-label={`Score ${report.score} of 100, grade ${report.grade}`}>
+  return <Tooltip content={SCORE_NOTE}><span className="ss__score" data-grade={gradeKey(report.grade)} tabIndex={0} role="img" aria-label={scoreLabel(report)}>
     <span>{report.score}</span><span className="ss__dot" aria-hidden="true">·</span><span className="ss__grade">{report.grade}</span>
   </span></Tooltip>
 }
 
-/** `previewed`: a preview beside it shows the client compatibility lint, so that finding stays out of the list. */
-export function SendabilitySummary({ check, previewed = true, warnBelow, checking = false }: { check: Check; previewed?: boolean; warnBelow?: number; checking?: boolean }) {
+/**
+ * The score, then the fixes to make first, each opening its finding in place, and All findings, which opens the rest in
+ * place. `expanded` (a details column with the height for it): the categories and every finding from the start.
+ * `previewed`: a preview beside it shows the client compatibility lint, so that finding stays out of the list.
+ */
+export function SendabilityDetails({ check, expanded = false, previewed = true, warnBelow, checking = false }: { check: Check; expanded?: boolean; previewed?: boolean; warnBelow?: number; checking?: boolean }) {
   const id = useId()
-  const [open, setOpen] = useState(false)
+  const [all, setAll] = useState(false)
   const [focus, setFocus] = useState<string | null>(null)
-  if (check.isPending) return <section className="ss" aria-labelledby={id} aria-busy="true"><div className="ss__head"><h2 id={id} className="ss__title">Sendability</h2><SkeletonText width={52} /></div>
+  const head = (score?: ReactNode) => <div className="ss__head"><h2 id={id} className="ss__title">Sendability</h2>{score}</div>
+  if (check.isPending) return <section className="ss" aria-labelledby={id} aria-busy="true">{head(<SkeletonText width={52} />)}
     <div className="ss__fixes">{['86%', '70%', '78%'].map(width => <SkeletonText key={width} width={width} lineHeight={28} />)}</div></section>
-  if (!check.data) return <section className="ss" aria-labelledby={id}><div className="ss__head"><h2 id={id} className="ss__title">Sendability</h2></div>
+  if (!check.data) return <section className="ss" aria-labelledby={id}>{head()}
     <p className="ss__error"><ErrorText error={check.error} fallback="Couldn’t check this email." /></p><Button size="sm" onClick={() => void check.refetch()}>Try again</Button></section>
   const report = check.data
   const findings = previewed ? report.findings.filter(finding => !PREVIEW_RULES.has(finding.ruleId)) : report.findings
   const fixes = topFixes(report, 3, findings)
-  const show = (ruleId: string | null) => { setFocus(ruleId); setOpen(true) }
-  return <section className="ss" aria-labelledby={id} aria-busy={checking || undefined}>
-    <div className="ss__head"><h2 id={id} className="ss__title">Sendability</h2><span className="ss__status muted" role="status">{checking ? 'Checking…' : ''}</span><Score report={report} /></div>
+  const full = expanded || all
+  const open = (ruleId: string | null) => { setFocus(ruleId); setAll(true) }
+  return <section className="ss" aria-labelledby={id} aria-busy={checking || undefined} data-full={full || undefined}>
+    {head(<><span className="ss__status muted" role="status">{checking ? 'Checking…' : ''}</span><Score report={report} /></>)}
     {warnBelow !== undefined && report.score < warnBelow && fixes.length > 0 && <p className="ss__warn">Fix these before sending. You can still send.</p>}
-    {fixes.length ? <ul className="ss__fixes" aria-label="Fixes to make first">{fixes.map(finding => <li key={finding.ruleId}>
-      <button type="button" className="ss__fix" onClick={() => show(finding.ruleId)}><span className={`ei-dot ui-tone--${severityTone[finding.severity]}`} aria-hidden="true" /><span className="ss__fix-text"><span className="sr-only">{severityLabel[finding.severity]}: </span><AddressText text={finding.fix} /></span></button>
-    </li>)}</ul> : <p className="ei-clear"><Check size={16} aria-hidden="true" />No problems found.</p>}
-    <Button variant="ghost" size="sm" className="ss__all" onClick={() => show(null)}>All findings<span className="ss__count">{findings.length}</span><ChevronRight size={14} aria-hidden="true" /></Button>
-    <Dialog open={open} onOpenChange={setOpen} className="ss-dialog" title={<span className="ss-dialog__title">Sendability<Score report={report} /></span>}>
+    {full ? <>
       <Categories report={report} />
       <Findings findings={ranked(report, findings)} focus={focus} />
-    </Dialog>
+      {!expanded && <Button variant="ghost" size="sm" className="ss__all" aria-expanded="true" onClick={() => { setAll(false); setFocus(null) }}>Fewer findings</Button>}
+    </> : <>
+      {fixes.length ? <ul className="ss__fixes" aria-label="Fixes to make first">{fixes.map(finding => <li key={finding.ruleId}>
+        <button type="button" className="ss__fix" onClick={() => open(finding.ruleId)}><span className={`ei-dot ui-tone--${severityTone[finding.severity]}`} aria-hidden="true" /><span className="ss__fix-text"><span className="sr-only">{severityLabel[finding.severity]}: </span><AddressText text={finding.fix} /></span></button>
+      </li>)}</ul> : <p className="ei-clear"><Check size={16} aria-hidden="true" />No problems found.</p>}
+      <Button variant="ghost" size="sm" className="ss__all" aria-expanded="false" onClick={() => open(null)}>All findings<span className="ss__count">{findings.length}</span><ChevronRight size={14} aria-hidden="true" /></Button>
+    </>}
   </section>
+}
+
+/** Where the window has no room for a details column: the score in the preview's toolbar, opening the details beside it. */
+export function SendabilityToggle({ check, open, onToggle, controls }: { check: Check; open: boolean; onToggle: () => void; controls: string }) {
+  const report = check.data
+  return <button type="button" className="ev-details" aria-expanded={open} aria-controls={controls} onClick={onToggle} aria-label={report ? `Sendability: ${scoreLabel(report)}` : 'Sendability'}>
+    Sendability<span className="ev-details__score" data-grade={report ? gradeKey(report.grade) : undefined} aria-hidden="true">
+      {report ? <><span>{report.score}</span><span className="ss__dot">·</span><span className="ss__grade">{report.grade}</span></> : check.isPending ? <Skeleton width={40} height={12} /> : '–'}
+    </span>
+  </button>
 }
 
 function Categories({ report }: { report: SendabilityReport }) {
@@ -151,7 +170,7 @@ function Finding({ finding, focused }: { finding: SendabilityFinding; focused: b
   </li>
 }
 
-// ── One preview: the email as sent, each emulated client, and its source ──
+// ── The preview: the email as sent and in each client, one column or several side by side ──
 
 const htmlNames: Record<string, string> = { semantics: 'semantic elements', lists: 'lists', 'h1-h6': 'headings', 'image-maps': 'image maps', comments: 'comments', doctype: 'doctype', 'meta-color-scheme': 'color-scheme meta tag' }
 function featureName(feature: string): ReactNode {
@@ -171,26 +190,26 @@ function IssueList({ issues }: { issues: PreviewIssue[] }) {
   </li>)}</ul>
 }
 
-// Under an emulated client: its issue count, opening to the list (classic Outlook for Windows' own under Outlook), and
+// Over each column: what it shows, and for an emulated client its issue count (opening the list over the frame) and
 // that it is an emulation without remote images.
-function IssueStrip({ issues, classic, caption, open, onOpenChange }: { issues: PreviewIssue[]; classic: PreviewIssue[]; caption: string; open: boolean; onOpenChange: (open: boolean) => void }) {
-  const id = useId()
+function Caption({ label, width, emulated, issues = [], classic = [], open = false, onOpenChange, panel }: { label: string; width?: number; emulated?: string; issues?: PreviewIssue[]; classic?: PreviewIssue[]; open?: boolean; onOpenChange?: (open: boolean) => void; panel?: string }) {
   const any = issues.length + classic.length > 0
-  return <div className="ev-strip">
-    <div className="ev-strip__row">
-      <span className="ev-strip__summary">
-        {any ? <button type="button" className="ev-strip__toggle" aria-expanded={open} aria-controls={id} onClick={() => onOpenChange(!open)}>
-          <span className={`ei-dot ui-tone--${issueTone(issues.length ? issues : classic)}`} aria-hidden="true" />{issues.length ? plural(issues.length, 'issue') : 'No issues'}<ChevronRight size={14} aria-hidden="true" />
-        </button> : <span className="ev-strip__clear"><Check size={14} aria-hidden="true" />No issues</span>}
-        {classic.length > 0 && <Tooltip content={`Classic Outlook renders with Word, so ${productName} checks its support instead of previewing it.`}><span className="ev-strip__more" tabIndex={0}>{classic.length} in classic Outlook for Windows</span></Tooltip>}
-      </span>
-      <Tooltip content={`${caption}, emulated offline. Not a screenshot, and remote images don’t load.`}><span className="ev-strip__note" tabIndex={0}>Emulated · images off</span></Tooltip>
-    </div>
-    {any && <div id={id} className="ev-strip__detail" data-open={open || undefined} inert={!open}><div>
-      {issues.length > 0 && <IssueList issues={issues} />}
-      {classic.length > 0 && <><h3 className="ei-group">Classic Outlook for Windows</h3><IssueList issues={classic} /></>}
-    </div></div>}
+  return <div className="ev-caption" style={width ? { width } : undefined}>
+    <span className="ev-caption__label">{label}</span>
+    {emulated && <span className="ev-caption__end">
+      {any ? <button type="button" className="ev-caption__issues" aria-expanded={open} aria-controls={panel} onClick={() => onOpenChange?.(!open)}>
+        <span className={`ei-dot ui-tone--${issueTone(issues.length ? issues : classic)}`} aria-hidden="true" />{issues.length ? plural(issues.length, 'issue') : 'No issues'}
+        {classic.length > 0 && <span className="ev-caption__classic"> · {classic.length} in classic Outlook</span>}<ChevronRight size={14} aria-hidden="true" />
+      </button> : <span className="ev-caption__clear"><Check size={14} aria-hidden="true" />No issues</span>}
+      <Tooltip content={`${emulated}, emulated offline. Not a screenshot, and remote images don’t load.`}><span className="ev-caption__note" tabIndex={0}>Emulated<span className="ev-caption__more"> · images off</span></span></Tooltip>
+    </span>}
   </div>
+}
+function IssuePanel({ id, issues, classic, open }: { id: string; issues: PreviewIssue[]; classic: PreviewIssue[]; open: boolean }) {
+  return <div id={id} className="ev-issues" data-open={open || undefined} inert={!open}><div>
+    {issues.length > 0 && <IssueList issues={issues} />}
+    {classic.length > 0 && <><h3 className="ei-group">Classic Outlook for Windows</h3><p className="ev-note muted">{`It renders with Word, so ${productName} checks its support instead of previewing it.`}</p><IssueList issues={classic} /></>}
+  </div></div>
 }
 
 type ViewOption = { value: string; label: string; count?: number; tone?: 'warning' | 'danger'; hint?: string }
@@ -239,57 +258,170 @@ function Toggle<T extends string>({ label, value, options, onChange, off }: { la
 const THEMES: ToggleOption<Theme>[] = [{ value: 'light', label: 'Light', icon: <Sun size={14} aria-hidden="true" /> }, { value: 'dark', label: 'Dark', icon: <Moon size={14} aria-hidden="true" /> }]
 const DEVICES: ToggleOption<FrameDevice>[] = [{ value: 'desktop', label: 'Desktop', icon: <Monitor size={14} aria-hidden="true" /> }, { value: 'mobile', label: 'Phone', icon: <Smartphone size={14} aria-hidden="true" /> }]
 
-/** The email as sent: its sandboxed document and the copy it is measured from (useEmailDocument), and its parts. */
-export type OriginalEmail = { doc: string | null; layout: string; html: string; text: string; error?: string }
+/** The email as sent: its sandboxed document (null while it is prepared) and its parts. */
+export type OriginalEmail = { doc: string | null; html: string; text: string; error?: string }
 type PreviewSource = { emailId: string } | { html: string }
+type Slot = { key: string; view: string; device: FrameDevice }
+type Column = Slot & { doc: string }
+
+const GAP = 16
+// Columns sit side by side only at FIT of their size or more. Comparing (each client beside Original) is offered from
+// COMPARE_ROOM, and the phone width joins the desktop one from BOTH_ROOM (800 + 390 px at FIT).
+const FIT = .9
+const BOTH_ROOM = Math.round((FRAME_WIDTH.desktop + GAP + FRAME_WIDTH.mobile) * FIT)
+const COMPARE_ROOM = 1080
+// Compare is remembered across emails and visits.
+const COMPARE_KEY = 'nightmail.preview.compare'
+const savedCompare = () => { try { return localStorage.getItem(COMPARE_KEY) !== 'off' } catch { return true } }
+const saveCompare = (on: boolean) => { try { localStorage.setItem(COMPARE_KEY, on ? 'on' : 'off') } catch { /* Kept for this page only. */ } }
+
+// The richest arrangement that fits: comparing, Original then the client at desktop and phone width, else both at the
+// chosen width; otherwise the view at desktop and phone width, else at the chosen one. Widths are the spans measured at
+// desktop width (the device's until measured) and the phone's width.
+function arrange(view: string, device: FrameDevice, room: number, wide: boolean, comparing: boolean, widthOf: (view: string, device: FrameDevice) => number): Slot[] {
+  const slot = (role: 'ref' | 'main', on: FrameDevice): Slot => ({ key: `${role}@${on}`, view: role === 'ref' ? 'original' : view, device: on })
+  const fits = (slots: Slot[]) => slots.reduce((sum, item) => sum + widthOf(item.view, item.device), GAP * (slots.length - 1)) * FIT <= room
+  if (comparing) { const three = [slot('ref', 'desktop'), slot('main', 'desktop'), slot('main', 'mobile')]; return fits(three) ? three : [slot('ref', device), slot('main', device)] }
+  const both = [slot('main', 'desktop'), slot('main', 'mobile')]
+  return wide && fits(both) ? both : [slot('main', device)]
+}
+
+// The columns' room (the canvas's content width), read before the first paint, so the first layout is the one that stays.
+function useRoom() {
+  const [room, setRoom] = useState(0)
+  const ref = useCallback((element: HTMLDivElement) => {
+    const read = () => { const style = getComputedStyle(element); setRoom(Math.max(0, Math.floor(element.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight)))) }
+    read()
+    const observer = new ResizeObserver(read)
+    observer.observe(element)
+    return () => observer.disconnect()
+  }, [])
+  return [room, ref] as const
+}
+// Every client's emulation at one width and theme, in one request.
+function useClientPreviews(source: InsightSource, previewSource: PreviewSource | null, theme: Theme, device: FrameDevice, needed: boolean) {
+  return useApiQuery(['email-previews', ...sourceKey(source), theme, device], (api, signal) => api.emails.preview({ source: previewSource!, clients: clientsFor(device), theme, device }, signal), { enabled: Boolean(previewSource) && needed, keepPrevious: sameSubject(source) })
+}
+const sentLabel = (device: FrameDevice) => device === 'mobile' ? 'As sent, phone width' : 'As sent'
+const useClientDocs = (previews: ClientPreview[] | undefined) => useMemo(() => new Map((previews ?? []).flatMap(item => item.html ? [[item.client, frameDocument(item.html)] as const] : [])), [previews])
 
 /**
- * One preview with one switcher. With `original` (a sent email): Original, the email as sent with its images, then
- * each client; the HTML source and plain text sit behind More. Without it (a draft): the clients. Each client is an
- * offline emulation with its issue count; its issues open under the preview. `loading`: the draft's HTML is on its way.
+ * The preview with one switcher. With `original` (a sent email): Original, the email as sent with its images, then each
+ * client; the HTML source and plain text sit behind More. Without it (a draft): the clients. Each client is an offline
+ * emulation with its issue count. `fill`: the preview fills its parent's height and scrolls inside; otherwise it is as
+ * tall as the email. `wide`: where there is room, the phone width beside the desktop one, and each client beside
+ * Original (Compare). `onSettled`: the first columns have their size. `loading`: the draft's HTML is on its way.
  */
-export function EmailViews({ source, previewSource, check, original, loading = false }: { source: InsightSource; previewSource: PreviewSource | null; check: Check; original?: OriginalEmail; loading?: boolean }) {
+export function EmailViews({ source, previewSource, check, original, loading = false, fill = false, wide = false, toolbarEnd, onSettled }: { source: InsightSource; previewSource: PreviewSource | null; check: Check; original?: OriginalEmail; loading?: boolean; fill?: boolean; wide?: boolean; toolbarEnd?: ReactNode; onSettled?: () => void }) {
   const phone = usePhone()
-  const [view, setView] = useState(original ? 'original' : CLIENTS[0].value)
+  const id = useId()
+  const [room, canvas] = useRoom()
+  const hasHtml = original ? original.html.trim().length > 0 : Boolean(previewSource)
+  const [compare, setCompare] = useState(savedCompare)
+  const canCompare = wide && Boolean(original) && hasHtml && Boolean(previewSource) && room >= COMPARE_ROOM
+  const [chosen, setChosen] = useState<string | null>(null)
+  // Comparing, the first view is the first client beside Original; otherwise Original (a draft's: the first client).
+  const view = chosen ?? ((canCompare && compare) || !original ? CLIENTS[0].value : 'original')
   const [theme, setTheme] = useState<Theme>('light')
   const [device, setDevice] = useState<FrameDevice>(() => phone ? 'mobile' : 'desktop')
-  const [issuesOpen, setIssuesOpen] = useState(false)
-  const previews = useApiQuery(['email-previews', ...sourceKey(source), theme, device], (api, signal) => api.emails.preview({ source: previewSource!, clients: clientsFor(device), theme, device }, signal), { enabled: Boolean(previewSource), keepPrevious: sameSubject(source) })
-  // Clients join the switcher once their counts are known, so no option moves after it appears.
-  const ready = Boolean(previewSource) && !previews.isPending && !check.isPending
-  const issuesOf = issueReader(check.data, previews.data)
+  const [openIssues, setOpenIssues] = useState<Record<string, boolean>>({})
+  const both = wide && room >= BOTH_ROOM
+  const needs = { desktop: both || device === 'desktop', mobile: both || device === 'mobile' }
+  const queries = { desktop: useClientPreviews(source, previewSource, theme, 'desktop', needs.desktop), mobile: useClientPreviews(source, previewSource, theme, 'mobile', needs.mobile) }
+  const docs = { desktop: useClientDocs(queries.desktop.data), mobile: useClientDocs(queries.mobile.data) }
+  const readers = { desktop: issueReader(check.data, queries.desktop.data), mobile: issueReader(check.data, queries.mobile.data) }
   const client = CLIENTS.find(item => item.value === view)
-  const hasHtml = original ? original.html.trim().length > 0 : Boolean(previewSource)
+  const comparing = canCompare && compare && Boolean(client)
+  const sourceView = view === 'html' || view === 'text'
+  const frameView = view === 'original' ? Boolean(original) && hasHtml : Boolean(client && previewSource)
+  // A column's document: null while it is on its way, undefined when there is none (no preview for that client).
+  const docOf = (of: string, on: FrameDevice): string | null | undefined => {
+    if (of === 'original') return original?.doc ?? null
+    const item = CLIENTS.find(entry => entry.value === of)
+    return !item ? undefined : !queries[on].data ? null : docs[on].get(item.clients[on])
+  }
+
+  // How many columns fit depends on the span each view takes at desktop width, so those are measured first.
+  const deciding = frameView ? [...new Set(comparing ? ['original', view] : [view])] : []
+  const decided = useFrameSizes(deciding.map(of => ({ doc: docOf(of, 'desktop') ?? null, width: FRAME_WIDTH.desktop })))
+  const widthOf = (of: string, on: FrameDevice) => { const size = on === 'desktop' ? decided[deciding.indexOf(of)] : undefined; return size ? shownWidth(size) : FRAME_WIDTH[on] }
+  const slots = frameView ? arrange(view, device, room, wide, comparing, widthOf) : []
+  const wanted = slots.map(slot => ({ ...slot, doc: docOf(slot.view, slot.device) }))
+  const measured = useFrameSizes(wanted.map(column => ({ doc: column.doc ?? null, width: FRAME_WIDTH[column.device] })))
+  const failedQuery = slots.map(slot => slot.view === 'original' ? null : queries[slot.device]).find(query => query?.isError && !query.data)
+  const missing = !failedQuery && wanted.some(column => column.doc === undefined)
+  const ready = room > 0 && wanted.length > 0 && deciding.every((of, index) => !docOf(of, 'desktop') || decided[index]) && wanted.every((column, index) => column.doc && measured[index])
+  // The columns on screen change only once every new one has its size, all at once: until then the last ones stay, dimmed.
+  const signature = ready ? wanted.map(column => `${column.key}:${frameKey(column.doc!, FRAME_WIDTH[column.device])}`).join(' ') : null
+  const [shown, setShown] = useState<{ signature: string; columns: Column[] } | null>(null)
+  if (signature && signature !== shown?.signature) setShown({ signature, columns: wanted as Column[] })
+  const settled = !frameView || Boolean(shown) || Boolean(failedQuery) || missing
+  useEffect(() => { if (settled) onSettled?.() }, [settled]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Client options join the switcher once their counts are known, so no option moves after it appears. Where both
+  // widths show, a client's count covers both.
+  const clientsReady = Boolean(previewSource) && !check.isPending && (!needs.desktop || !queries.desktop.isPending) && (!needs.mobile || !queries.mobile.isPending)
+  const counted: FrameDevice[] = both ? ['desktop', 'mobile'] : [device]
+  const issuesOf = (item: Client) => { const all = new Map<string, PreviewIssue>(); for (const on of counted) for (const issue of readers[on](item.clients[on])) if (!all.has(issue.feature) || issue.severity === 'error') all.set(issue.feature, issue); return [...all.values()] }
   const options: ViewOption[] = [
     ...original ? [{ value: 'original', label: 'Original', hint: hasHtml ? 'As sent, with its images' : 'As sent: plain text only' }] : [],
-    ...ready ? CLIENTS.map(item => { const issues = issuesOf(item.clients[device]); return { value: item.value, label: item.label, count: issues.length || undefined, tone: issueTone(issues), hint: item.captions[device] } }) : [],
+    ...clientsReady ? CLIENTS.map(item => { const issues = issuesOf(item); return { value: item.value, label: item.label, count: issues.length || undefined, tone: issueTone(issues), hint: counted.map(on => item.captions[on]).join(' and ') } }) : [],
   ]
-  const sourceView = view === 'html' || view === 'text'
-  const preview = client ? previews.data?.find(item => item.client === client.clients[device]) : undefined
-  const clientDoc = useMemo(() => preview?.html ? frameDocument(preview.html) : null, [preview?.html])
-  // One frame for the original and every client, so a switch crossfades from one to the next.
-  const frame = view === 'original' && original && hasHtml ? { doc: original.doc, layout: original.layout, title: 'Email as sent', pending: false }
-    : client && preview ? { doc: clientDoc, layout: preview.html, title: `${client.captions[device]}, ${theme} mode`, pending: previews.isPlaceholderData || previews.isFetching } : null
+
+  const columns = shown?.columns ?? []
+  const sizes = columns.map(column => frameSize(column.doc, FRAME_WIDTH[column.device]))
+  // A column's width before scaling: its span; at phone width an email wider than the phone shrinks to fit, as phone
+  // apps show it. Every column then scales alike to fit the room.
+  const naturals = columns.map((column, index) => { const size = sizes[index]; return !size ? 0 : column.device === 'mobile' ? Math.min(shownWidth(size), FRAME_WIDTH.mobile) : shownWidth(size) })
+  const total = naturals.reduce((sum, width) => sum + width, 0)
+  const scale = total && room ? Math.min(1, Math.max(.1, (room - GAP * (columns.length - 1)) / total)) : 1
+  const widths = naturals.map(width => Math.round(width * scale))
+  const pending = Boolean(shown) && (shown!.signature !== signature || slots.some(slot => slot.view !== 'original' && queries[slot.device].isPlaceholderData))
+  const describe = (column: Slot) => {
+    const item = CLIENTS.find(entry => entry.value === column.view)
+    if (!item) return { label: sentLabel(column.device), title: column.device === 'mobile' ? 'Email as sent, phone width' : 'Email as sent' }
+    const issues = readers[column.device](item.clients[column.device]), classic = item.value === 'outlook' && column.device === 'desktop' ? readers.desktop(CLASSIC_OUTLOOK) : []
+    return { label: item.captions[column.device], title: `${item.captions[column.device]}, ${theme} mode`, item, issues, classic, key: `${item.value}@${column.device}` }
+  }
+  const showDevice = !(slots.some(slot => slot.device === 'desktop') && slots.some(slot => slot.device === 'mobile'))
+  const showFrames = frameView && !failedQuery && !missing
   if (!original && !previewSource && !loading) return <p className="muted ev-note">Add content to see it in each email client.</p>
-  return <div className="ev">
+  return <div className="ev" data-fill={fill || undefined}>
     <div className="ev-toolbar">
-      <ViewSwitcher value={view} options={options} onChange={setView} loading={hasHtml && !ready && (loading || Boolean(previewSource))} />
+      <ViewSwitcher value={view} options={options} onChange={setChosen} loading={hasHtml && !clientsReady && (loading || Boolean(previewSource))} />
       <div className="ev-toolbar__end">
-        {original && <DropdownMenu label="More views" align="end" items={[{ label: 'HTML source', onSelect: () => setView('html'), disabled: !hasHtml }, { label: 'Plain text', onSelect: () => setView('text') }]}
-          trigger={<button type="button" className="ev-more" data-active={sourceView || undefined} aria-label={sourceView ? `More views: ${view === 'html' ? 'HTML source' : 'Plain text'}` : 'More views'} title="More views">{sourceView ? (view === 'html' ? 'HTML' : 'Text') : <MoreHorizontal size={16} aria-hidden="true" />}</button>} />}
+        {showDevice && <Toggle label="Width" value={device} options={DEVICES} onChange={setDevice} off={sourceView || !hasHtml ? 'Width applies to previews' : undefined} />}
         <Toggle label="Color scheme" value={theme} options={THEMES} onChange={setTheme} off={!client ? 'Dark mode depends on the client' : undefined} />
-        <Toggle label="Width" value={device} options={DEVICES} onChange={setDevice} off={sourceView || !hasHtml ? 'Width applies to previews' : undefined} />
+        {canCompare && <div className="ev-toggle"><Tooltip content="Show each client beside Original"><button type="button" aria-pressed={compare} aria-label="Compare with Original" onClick={() => { setChosen(view); setCompare(!compare); saveCompare(!compare) }}><Columns2 size={14} aria-hidden="true" /></button></Tooltip></div>}
+        {original && <DropdownMenu label="More views" align="end" items={[{ label: 'HTML source', onSelect: () => setChosen('html'), disabled: !hasHtml }, { label: 'Plain text', onSelect: () => setChosen('text') }]}
+          trigger={<button type="button" className="ev-more" data-active={sourceView || undefined} aria-label={sourceView ? `More views: ${view === 'html' ? 'HTML source' : 'Plain text'}` : 'More views'} title="More views">{sourceView ? (view === 'html' ? 'HTML' : 'Text') : <MoreHorizontal size={16} aria-hidden="true" />}</button>} />}
+        {toolbarEnd}
       </div>
     </div>
-    {frame ? <EmailFrame doc={frame.doc} layout={frame.layout} device={device} title={frame.title} pending={frame.pending} />
-      : view === 'original' && original ? <pre className="email-text">{original.text || 'This email has no body.'}</pre>
-      : view === 'html' && original ? <pre className="email-source">{original.html || 'No HTML part.'}</pre>
-      : view === 'text' && original ? <pre className="email-source">{original.text || 'No plain-text part.'}</pre>
-      : client && previews.isError && !previews.data ? <Alert tone="neutral" title="Couldn’t emulate the email clients"><ErrorText error={previews.error} /><div className="ei-retry"><Button size="sm" onClick={() => void previews.refetch()}>Try again</Button></div></Alert>
-      : client && previewSource && !previews.isPending ? <div className="email-frame email-frame--empty muted">No preview for this client.</div>
-      : <div className="email-frame email-frame--loading" aria-hidden="true" />}
-    {view === 'original' && original?.error && <p className="ev-note ui-field__error" role="alert">{original.error}</p>}
-    {client && preview && <IssueStrip issues={issuesOf(client.clients[device])} classic={client.value === 'outlook' ? issuesOf(CLASSIC_OUTLOOK) : []} caption={client.captions[device]} open={issuesOpen} onOpenChange={setIssuesOpen} />}
+    <div className="ev-stage">
+      <div className="ev-captions">
+        {sourceView ? <Caption label={view === 'html' ? 'HTML source' : 'Plain text'} />
+          : view === 'original' && original && !hasHtml ? <Caption label={sentLabel('desktop')} />
+          : showFrames && columns.map((column, index) => { const about = describe(column); return <Caption key={column.key} label={about.label} width={widths[index]} emulated={about.item?.captions[column.device]} issues={about.issues} classic={about.classic}
+            open={Boolean(about.key && openIssues[about.key])} onOpenChange={open => setOpenIssues(state => ({ ...state, [about.key!]: open }))} panel={`${id}-${column.key}`} /> })}
+      </div>
+      <div ref={canvas} className={fill ? 'ev-canvas ui-scroll-fade' : 'ev-canvas'}>
+        {sourceView && original ? <pre className="email-source">{view === 'html' ? original.html || 'No HTML part.' : original.text || 'No plain-text part.'}</pre>
+          : view === 'original' && original && !hasHtml ? <pre className="email-text">{original.text || 'This email has no body.'}</pre>
+          : failedQuery ? <Alert tone="neutral" title="Couldn’t emulate the email clients"><ErrorText error={failedQuery.error} /><div className="ei-retry"><Button size="sm" onClick={() => void failedQuery.refetch()}>Try again</Button></div></Alert>
+          : missing ? <div className="email-frame--empty muted">No preview for this client.</div>
+          : shown ? <>
+            {original?.error && columns.some(column => column.view === 'original') && <p className="ev-note ui-field__error" role="alert">{original.error}</p>}
+            <div className="ev-columns" data-pending={pending || undefined}>{columns.map((column, index) => {
+              const size = sizes[index], about = describe(column)
+              return size ? <div key={column.key} className="ev-column" style={{ width: widths[index] }}>
+                {about.item && about.issues!.length + about.classic!.length > 0 && <IssuePanel id={`${id}-${column.key}`} issues={about.issues!} classic={about.classic!} open={Boolean(openIssues[about.key!])} />}
+                <EmailFrame doc={column.doc} size={size} scale={scale * naturals[index] / shownWidth(size)} title={about.title} pending={pending} />
+              </div> : null
+            })}</div>
+          </> : <div className="ev-placeholder" aria-hidden="true" />}
+      </div>
+    </div>
   </div>
 }
 
@@ -305,7 +437,7 @@ export function EmailInsight({ source, pending = false, placeholder, warnBelow }
   const html = campaign ? campaignHtml.data?.html ?? '' : ''
   const previewSource = source.kind === 'email' ? source.html ? { emailId: source.id } : null : html.trim() ? { html } : null
   return <div className="ei">
-    <SendabilitySummary check={check} warnBelow={warnBelow} checking={pending || check.isFetching || campaignHtml.isFetching} />
+    <SendabilityDetails check={check} warnBelow={warnBelow} checking={pending || check.isFetching || campaignHtml.isFetching} />
     {campaignHtml.isError && !campaignHtml.data ? <Alert tone="neutral" title="Couldn’t render this draft"><ErrorText error={campaignHtml.error} /><div className="ei-retry"><Button size="sm" onClick={() => void campaignHtml.refetch()}>Try again</Button></div></Alert>
       : <EmailViews source={source} previewSource={previewSource} check={check} loading={campaign ? campaignHtml.isPending : false} />}
   </div>
@@ -315,6 +447,6 @@ export function InsightSkeleton() {
   return <div className="ei ei--loading" aria-busy="true"><span role="status" className="sr-only">Checking this email</span>
     <section className="ss" aria-hidden="true"><div className="ss__head"><h2 className="ss__title">Sendability</h2><SkeletonText width={52} /></div>
       <div className="ss__fixes">{['86%', '70%', '78%'].map(width => <SkeletonText key={width} width={width} lineHeight={28} />)}</div></section>
-    <div className="ev" aria-hidden="true"><div className="ev-toolbar"><Skeleton width={320} height={28} /></div><div className="email-frame email-frame--loading" /></div>
+    <div className="ev" aria-hidden="true"><div className="ev-toolbar"><Skeleton width={320} height={28} /></div><div className="ev-stage"><div className="ev-captions" /><div className="ev-canvas"><div className="ev-placeholder" /></div></div></div>
   </div>
 }

@@ -1,4 +1,4 @@
-import { useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, useParams } from 'react-router'
 import { ArrowUpRight } from 'lucide-react'
 import { useApi, useApiDef, useWorkspaceAccess } from '../../data/context'
@@ -6,16 +6,18 @@ import { queries } from '../../data/queries'
 import type { Email, EmailEvent, EmailEventDetail } from '../../data/types'
 import { Alert, Button, CopyButton, ErrorState, PageHeader, StatusBadge, Tooltip, type Tone } from '../../components/ui'
 import { htmlToText, useEmailDocument } from '../../components/EmailPreview'
-import { EmailViews, SendabilitySummary, useSendability, type InsightSource } from '../../components/EmailInsight'
+import { EmailViews, SendabilityDetails, SendabilityToggle, useSendability, type InsightSource } from '../../components/EmailInsight'
 import { AddressList, NameText, PrivateAddress } from '../../components/PrivateAddress'
 import { AddressText } from '../../components/AddressText'
 import { nameParts } from '../../lib/private-address'
 import { date, label, time } from '../../lib/format'
 import { EmailDetailSkeleton } from './skeletons'
+import { useDetailLayout } from './detail-layout'
 import { productName } from '../../../../api/src/brand'
 
-// A sent email, in the order people come for: did it arrive (the status, then its delivery on one line), what it
-// looked like (one preview: as sent, or in each client), and how to do better (the score and the fixes to make first).
+// A sent email, in the order people come for: did it arrive (the status and its delivery), what it looked like (the
+// preview: as sent and in each client, side by side where there is room), and how to do better (the score, the fixes to
+// make first and every finding). The window decides where each sits (detail-layout.ts).
 
 // Statuses that can still change without user action; terminal emails are not polled.
 const pendingStatuses = ['queued', 'attempting', 'accepted', 'sent', 'deferred', 'delayed']
@@ -35,22 +37,40 @@ export function Sender({ name, address }: { name?: string | null; address: strin
 
 function EmailDetail({ email }: { email: Email }) {
   const api = useApi()
+  const { mode, roomy } = useDetailLayout()
+  const [panel, setPanel] = useState(false)
+  // On a phone the score follows the preview, so it waits for the preview's height: nothing moves when that arrives.
+  const [settled, setSettled] = useState(false)
+  const panelId = useId(), deliveryId = useId()
+  const panelRef = useRef<HTMLElement>(null)
+  useEffect(() => { if (panel) panelRef.current?.focus() }, [panel])
   const hasHtml = email.html.trim().length > 0
   const text = email.text ?? (api.mode === 'demo' && hasHtml ? htmlToText(email.html) : '')
   const source = useMemo<InsightSource>(() => ({ kind: 'email', id: email.id, html: hasHtml }), [email.id, hasHtml])
   const check = useSendability(source)
-  // The email as its recipients saw it: its own fonts and styles, and its remote images (tracking pixels removed).
-  const original = useEmailDocument({ html: email.html, attachmentIds: email.attachments, remoteImages: true, respectStyles: true, measured: true })
-  return <div className="email-detail">
+  // The email as its recipients saw it: its own fonts, styles and image sizes, and its remote images (tracking pixels removed).
+  const original = useEmailDocument({ html: email.html, attachmentIds: email.attachments, remoteImages: true, respectStyles: true, asSent: true })
+  // A poll that brings new events starts the line over from them.
+  const delivery = <Delivery key={email.events.map(event => event.id).join()} email={email} vertical={mode !== 'panel'} />
+  const sendability = <SendabilityDetails check={check} expanded={roomy && mode !== 'stack'} />
+  const close = () => { setPanel(false); document.querySelector<HTMLElement>(`[aria-controls="${panelId}"]`)?.focus() }
+  return <div className="email-detail" data-mode={mode}>
     <PageHeader title={email.subject || '(no subject)'} backTo="/logs" subtitle={<EmailFacts email={email} />} actions={<StatusBadge status={email.status} />} />
-    {/* A poll that brings new events starts the line over from them. */}
-    <Delivery key={email.events.map(event => event.id).join()} email={email} />
+    {mode !== 'column' && delivery}
     <div className="email-detail__body">
       <section className="email-detail__preview" aria-label="Preview">
-        <EmailViews source={source} previewSource={hasHtml ? { emailId: email.id } : null} check={check} original={{ ...original, html: email.html, text }} />
+        <EmailViews source={source} previewSource={hasHtml ? { emailId: email.id } : null} check={check} original={{ doc: original.complete ? original.doc : null, error: original.error, html: email.html, text }}
+          fill={mode !== 'stack'} wide={mode !== 'stack'} onSettled={() => setSettled(true)}
+          toolbarEnd={mode === 'panel' && <SendabilityToggle check={check} open={panel} onToggle={() => setPanel(!panel)} controls={panelId} />} />
       </section>
-      <aside className="email-detail__score"><SendabilitySummary check={check} /></aside>
+      {mode === 'column' && <aside className="email-detail__side ui-scroll-fade" aria-label="Details">
+        <section className="email-detail__delivery" aria-labelledby={deliveryId}><h2 id={deliveryId} className="ss__title">Delivery</h2>{delivery}</section>
+        {sendability}
+      </aside>}
+      {/* Its toggle, on the toolbar's row, heads it: the panel starts at the preview's top. */}
+      {mode === 'panel' && <aside ref={panelRef} id={panelId} className="email-detail__side ui-scroll-fade" aria-label="Sendability" tabIndex={-1} hidden={!panel} onKeyDown={event => { if (event.key === 'Escape') { event.stopPropagation(); close() } }}>{sendability}</aside>}
     </div>
+    {mode === 'stack' && settled && <div className="email-detail__after">{sendability}</div>}
   </div>
 }
 
@@ -69,7 +89,7 @@ function EmailFacts({ email }: { email: Email }) {
   </div>
 }
 
-// ── Delivery: every event on one line, oldest first, with what each means on hover ──
+// ── Delivery: every event, oldest first, with what each means on hover ──
 
 // One short name and one line of meaning per event; the raw event type is in the meaning for support and logs.
 const eventCopy: Record<string, [name: string, meaning: string]> = {
@@ -138,7 +158,8 @@ function StepTip({ step, day }: { step: Step; day: string }) {
   return <span className="delivery-tip">{lines.map((line, index) => <span key={index}>{line}</span>)}</span>
 }
 
-function Delivery({ email }: { email: Email }) {
+/** On one line under the header, or `vertical`: a column of steps, each with its time, in the details column or on a phone. */
+function Delivery({ email, vertical }: { email: Email; vertical: boolean }) {
   const api = useApi()
   const [events, setEvents] = useState(email.events)
   const [cursor, setCursor] = useState(email.eventsNextCursor)
@@ -156,7 +177,7 @@ function Delivery({ email }: { email: Email }) {
     try { const next = await api.emailEvents!(email.id, cursor!); setEvents(previous => [...previous, ...next.items]); setCursor(next.nextCursor) }
     catch (cause) { setError(cause instanceof Error ? cause.message : 'Couldn’t load events.') } finally { setBusy(false) }
   }
-  return <div className="delivery">
+  return <div className="delivery" data-vertical={vertical || undefined}>
     <ol className="delivery__steps ui-scroll-fade" aria-label="Delivery">
       {steps.map((step, index) => {
         const [name] = eventCopy[step.key] ?? [label(step.key)]

@@ -4,6 +4,7 @@ import { useRegion, useWorkspaceAccess } from '../../data/context'
 import { Button, Input, LoadingRegion, PageHeader, SectionHeader, Select, Skeleton, SkeletonText, TableSkeleton, Tabs } from '../../components/ui'
 import { rememberedPageSize } from '../../lib/pagination'
 import { logsPageColumnDefs } from './rows'
+import { useDetailLayout } from './detail-layout'
 import './logs.css'
 // The sent email's skeleton draws the preview's toolbar and frame, whose styles live with EmailInsight (a lazy chunk):
 // they load with the skeleton, so its placeholders hold their size before that chunk arrives.
@@ -18,12 +19,21 @@ export function LogsRouteSkeleton() {
     <div className="data-toolbar"><div className="cluster">{campaign && <Skeleton width={160} height={28} />}<div className="search-box"><Search size={16} /><Input type="search" aria-label="Search logs" placeholder="Search logs" disabled /></div><Select value="all" onValueChange={() => {}} disabled options={[{ value: 'all', label: 'All statuses' }]} /><Select value="all" onValueChange={() => {}} disabled options={[{ value: 'all', label: 'All streams' }]} /></div><Button disabled><Download size={16} />Export page</Button></div>
     <TableSkeleton className="logs-table" columns={logsPageColumnDefs} rows={rememberedPageSize('logs') || 16} pagination /></div>
 }
-// A sent email: the header, its facts and delivery line, then the preview's switcher and frame. The score beside (or,
-// on a phone, below) the preview has no placeholder: it appears in a place nothing else depends on.
+// A sent email in the window's layout (detail-layout.ts): the header, the delivery, the preview's toolbar and its empty
+// stage, and from 1200 px the details column. The score's place has a placeholder only in that column: elsewhere it
+// appears where nothing else depends on it.
 export function EmailDetailSkeleton() {
-  return <div className="email-detail"><PageHeader title={<SkeletonText width={320} lineHeight={24} />} backTo="/logs" subtitle={<div className="email-facts"><SkeletonText width={420} /></div>} actions={<Skeleton width={80} height={22} />} />
-    <LoadingRegion label="Loading email"><div className="delivery"><SkeletonText width={300} lineHeight={28} /></div>
-      <div className="email-detail__body"><section className="email-detail__preview"><div className="ev"><div className="ev-toolbar"><Skeleton width={360} height={28} /></div><div className="email-frame email-frame--loading" /></div></section></div>
+  const { mode } = useDetailLayout()
+  const delivery = <div className="delivery" data-vertical={mode !== 'panel' || undefined}>{mode === 'panel' ? <SkeletonText width={300} lineHeight={28} /> : <div className="delivery__skeleton">{[96, 80, 112].map(width => <SkeletonText key={width} width={width} lineHeight={28} />)}</div>}</div>
+  return <div className="email-detail" data-mode={mode}><PageHeader title={<SkeletonText width={320} lineHeight={24} />} backTo="/logs" subtitle={<div className="email-facts"><SkeletonText width={420} /></div>} actions={<Skeleton width={80} height={22} />} />
+    <LoadingRegion label="Loading email">
+      {mode !== 'column' && delivery}
+      <div className="email-detail__body">
+        <section className="email-detail__preview"><div className="ev" data-fill={mode !== 'stack' || undefined}><div className="ev-toolbar"><Skeleton width={360} height={28} /></div>
+          <div className="ev-stage"><div className="ev-captions" /><div className="ev-canvas"><div className="ev-placeholder" /></div></div></div></section>
+        {mode === 'column' && <aside className="email-detail__side"><section className="email-detail__delivery"><h2 className="ss__title">Delivery</h2>{delivery}</section>
+          <section className="ss"><div className="ss__head"><h2 className="ss__title">Sendability</h2><SkeletonText width={52} /></div><div className="ss__fixes">{['86%', '70%', '78%'].map(width => <SkeletonText key={width} width={width} lineHeight={28} />)}</div></section></aside>}
+      </div>
     </LoadingRegion></div>
 }
 // A received message: its facts, the body with its views beside the details, and its identifiers.

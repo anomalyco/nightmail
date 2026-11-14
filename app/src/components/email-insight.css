@@ -1,19 +1,21 @@
-/* EmailInsight (components/EmailInsight.tsx): the score and the fixes to make first (.ss), the findings dialog, and one
-   preview with one switcher (.ev) over one frame (.email-frame, components/EmailFrame.tsx). */
+/* EmailInsight (components/EmailInsight.tsx): the score, the fixes to make first and every finding (.ss), and the
+   preview (.ev): a switcher, then a caption over each column and the columns of frames (.email-frame, EmailFrame.tsx). */
 .ei { display: flex; flex-direction: column; gap: var(--space-24); min-width: 0; }
 .ei-retry { margin-top: var(--space-8); }
-:is(.ss, .ev, .ss-dialog) code { font-family: var(--font-mono); font-size: .92em; }
-:is(.ss__score, .ei-categories li)[data-grade='aplus'] { --grade-fill: var(--grade-aplus); }
-:is(.ss__score, .ei-categories li)[data-grade='a'] { --grade-fill: var(--grade-a); }
-:is(.ss__score, .ei-categories li)[data-grade='b'] { --grade-fill: var(--grade-b); }
-:is(.ss__score, .ei-categories li)[data-grade='c'] { --grade-fill: var(--grade-c); }
-:is(.ss__score, .ei-categories li)[data-grade='d'] { --grade-fill: var(--grade-d); }
-:is(.ss__score, .ei-categories li)[data-grade='f'] { --grade-fill: var(--grade-f); }
+:is(.ss, .ev) code { font-family: var(--font-mono); font-size: .92em; }
+:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='aplus'] { --grade-fill: var(--grade-aplus); }
+:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='a'] { --grade-fill: var(--grade-a); }
+:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='b'] { --grade-fill: var(--grade-b); }
+:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='c'] { --grade-fill: var(--grade-c); }
+:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='d'] { --grade-fill: var(--grade-d); }
+:is(.ss__score, .ev-details__score, .ei-categories li)[data-grade='f'] { --grade-fill: var(--grade-f); }
 .ei-dot { flex: none; width: 6px; height: 6px; margin-top: 7px; border-radius: 50%; background: var(--tone-marker); }
 .ei-clear { display: flex; align-items: center; gap: var(--space-8); color: var(--color-success); }
 
-/* Sendability: a title with the score beside it, the fixes to make first (each opens its finding), All findings. */
+/* Sendability: a title with the score beside it, then the fixes to make first (each opens its finding in place) and
+   All findings; or, with room, the categories and every finding. */
 .ss { display: flex; flex-direction: column; gap: var(--space-8); min-width: 0; }
+.ss[data-full] { gap: var(--space-16); }
 .ss__head { display: flex; align-items: center; gap: var(--space-12); min-height: var(--control-height); }
 .ss__title { font-size: var(--text-sm); line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
 .ss__score { display: inline-flex; align-items: baseline; gap: var(--space-4); border-radius: 2px; font-weight: var(--font-weight-bold); font-variant-numeric: tabular-nums; cursor: default; }
@@ -30,15 +32,10 @@
 .ss__all { align-self: flex-start; margin-left: calc(-1 * var(--button-pad-x, 9px)); color: var(--color-muted); }
 .ss__all > svg { width: 14px; height: 14px; color: var(--color-faint); }
 .ss__count { color: var(--color-faint); font-weight: var(--font-weight-regular); font-variant-numeric: tabular-nums; }
-
-/* The findings dialog: the score in its title, the six categories, then problems and notes. */
-.ss-dialog { width: min(560px, calc(100vw - 32px)); }
-.ss-dialog__title { display: inline-flex; align-items: baseline; gap: var(--space-12); }
-.ss-dialog__title .ss__score { font-size: var(--text-sm); }
-.ss-dialog .ui-dialog__body { display: flex; flex-direction: column; gap: var(--space-20); }
+/* The categories (as many to a row as fit), then problems and notes. */
 .ei-bar { display: block; height: 2px; overflow: hidden; border-radius: 1px; background: var(--color-layer-3); }
 .ei-bar > span { display: block; height: 100%; background: var(--grade-fill, var(--color-faint)); transform-origin: left; }
-.ei-categories { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-12) var(--space-16); margin: 0; padding: 0; list-style: none; }
+.ei-categories { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: var(--space-12) var(--space-16); margin: 0; padding: 0; list-style: none; }
 .ei-categories li { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: baseline; row-gap: var(--space-4); }
 .ei-categories__label { min-width: 0; color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); overflow-wrap: anywhere; }
 .ei-categories__value { font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
@@ -53,8 +50,8 @@
 .ei-finding__title[aria-expanded='true'] > svg { transform: rotate(90deg); }
 @media (hover: hover) and (pointer: fine) { .ei-finding__title:hover > svg { color: var(--color-text); transition-duration: 200ms, 0ms; } }
 .ei-finding__fix { margin-top: 2px; color: var(--color-muted); }
-.ei-finding__detail, .ev-strip__detail { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 200ms var(--ease-out-strong), opacity 150ms ease-out; }
-:is(.ei-finding__detail, .ev-strip__detail)[data-open] { grid-template-rows: 1fr; opacity: 1; }
+.ei-finding__detail, .ev-issues { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 200ms var(--ease-out-strong), opacity 150ms ease-out; }
+:is(.ei-finding__detail, .ev-issues)[data-open] { grid-template-rows: 1fr; opacity: 1; }
 .ei-finding__detail > div { display: flex; flex-direction: column; gap: var(--space-8); min-height: 0; overflow: clip; }
 .ei-finding__detail > div > :first-child { margin-top: var(--space-8); }
 .ei-evidence { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-4) var(--space-12); margin: 0; font-size: var(--text-xs); }
@@ -68,10 +65,13 @@
 .ei-warning-fixes { margin: var(--space-8) 0 0; padding-left: 1.25em; }
 .ei-warning-fixes li + li { margin-top: var(--space-4); }
 
-/* The preview: the switcher (Original, then the clients with their issue counts; More for the source) and the
-   light/dark and desktop/phone toggles on one row, then the frame, then an emulated client's issues. */
+/* The preview: the switcher (Original, then the clients with their issue counts; More for the source) and the width,
+   theme and compare toggles on one row, then the stage: a caption over each column and the columns, centred side by
+   side. Filling (a detail page from 900 px), the stage takes the rest of the height on a darker well and scrolls inside;
+   otherwise it is as tall as the email. */
 .ev { display: flex; flex-direction: column; gap: var(--space-12); min-width: 0; }
-.ev-toolbar { display: flex; align-items: center; gap: var(--space-12); min-height: var(--control-height); }
+.ev[data-fill] { flex: 1 1 0; min-height: 0; }
+.ev-toolbar { display: flex; flex: none; align-items: center; gap: var(--space-12); min-height: var(--control-height); }
 .ev-views { --fade-pad-x: var(--focus-reach); --fade-pad-y: var(--focus-reach); position: relative; display: flex; flex: 0 1 auto; align-items: center; gap: 2px; min-width: 0; margin: calc(-1 * var(--focus-reach)); padding: var(--focus-reach); overflow-x: auto; }
 .ev-views__pill { position: absolute; top: var(--focus-reach); left: 0; height: var(--control-height); border-radius: var(--radius-sm); background: var(--color-layer-2); opacity: 0; pointer-events: none; }
 .ev-views__pill[data-animate] { transition: transform 200ms var(--ease-swap), width 200ms var(--ease-swap); }
@@ -83,49 +83,53 @@
 .ev-view__count { color: var(--color-faint); font-size: var(--text-xs); font-weight: var(--font-weight-regular); font-variant-numeric: tabular-nums; }
 .ev-view__count[data-tone='danger'] { color: var(--color-danger); }
 .ev-views__loading { display: inline-flex; flex: none; align-items: center; height: var(--control-height); padding-left: var(--space-12); }
+/* The width toggle comes first, so it can leave (both widths shown) without moving anything after it. */
 .ev-toolbar__end { display: flex; flex: none; align-items: center; gap: var(--space-8); margin-left: auto; }
-.ev-more { display: inline-flex; align-items: center; justify-content: center; min-width: var(--control-height); height: var(--control-height); padding: 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: none; color: var(--color-muted); font: inherit; font-weight: var(--font-weight-bold); transition: background-color 100ms ease-out, color 100ms ease-out, transform 160ms var(--ease-out-strong); }
-.ev-more[data-active] { background: var(--color-layer-2); color: var(--color-text); }
-@media (hover: hover) and (pointer: fine) { .ev-more:hover { color: var(--color-text); transition-duration: 0ms, 0ms, 160ms; } }
-.ev-more:active { transform: scale(.97); }
+:is(.ev-more, .ev-details) { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-8); min-width: var(--control-height); height: var(--control-height); padding: 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: none; color: var(--color-muted); font: inherit; font-weight: var(--font-weight-bold); white-space: nowrap; transition: background-color 100ms ease-out, color 100ms ease-out, transform 160ms var(--ease-out-strong); }
+:is(.ev-more[data-active], .ev-details[aria-expanded='true']) { background: var(--color-layer-2); color: var(--color-text); }
+@media (hover: hover) and (pointer: fine) { :is(.ev-more, .ev-details):hover { color: var(--color-text); transition-duration: 0ms, 0ms, 160ms; } }
+:is(.ev-more, .ev-details):active { transform: scale(.97); }
+/* The score's slot holds the widest score (100 · A+), so the button keeps its width while the check runs. */
+.ev-details__score { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: var(--space-4); min-width: 7ch; height: var(--leading-sm); color: var(--color-text); font-variant-numeric: tabular-nums; }
+.ev-details__score > .ui-skeleton-block { align-self: center; }
 .ev-toggle { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-sm); background: var(--color-layer-2); }
 .ev-toggle > button { position: relative; display: grid; place-items: center; width: 26px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--color-muted); transition: background-color 100ms ease-out, color 100ms ease-out, transform 160ms var(--ease-out-strong); }
 .ev-toggle > button > svg { width: 14px; height: 14px; }
-.ev-toggle > button[aria-checked='true'] { background: var(--color-surface); box-shadow: var(--shadow-button); color: var(--color-text); }
-@media (hover: hover) and (pointer: fine) { .ev-toggle:not([aria-disabled]) > button:hover:not([aria-checked='true']) { color: var(--color-text); transition-duration: 0ms; } }
+.ev-toggle > button:is([aria-checked='true'], [aria-pressed='true']) { background: var(--color-surface); box-shadow: var(--shadow-button); color: var(--color-text); }
+@media (hover: hover) and (pointer: fine) { .ev-toggle:not([aria-disabled]) > button:hover:not([aria-checked='true'], [aria-pressed='true']) { color: var(--color-text); transition-duration: 0ms; } }
 .ev-toggle:not([aria-disabled]) > button:active { transform: scale(.94); }
 .ev-toggle[aria-disabled] > button { cursor: default; opacity: .45; }
 .ev-note { font-size: var(--text-xs); line-height: var(--leading-xs); }
 
-/* The frame: the measured height before it loads, the next document fading in over the last; past its cap, the cut edge fades. */
-.email-frame { position: relative; box-sizing: content-box; overflow: clip; border-radius: var(--radius-sm); background: var(--color-layer-1); box-shadow: 0 0 0 1px var(--color-border); transition: height 200ms var(--ease-out-strong); }
-.email-frame[data-first] { transition: none; }
-.email-frame[data-more] { mask-image: linear-gradient(to bottom, #000 calc(100% - 32px), transparent); }
-.email-frame:has(iframe:focus-visible) { outline: var(--focus-width) solid var(--color-focus); outline-offset: var(--focus-offset); }
-.email-frame iframe { position: absolute; top: 0; display: block; border: 0; outline: 0; background: transparent; color-scheme: normal; transform-origin: 0 0; opacity: 0; transition: opacity 200ms ease-out; }
-.email-frame iframe[data-loaded] { opacity: 1; }
-.email-frame[data-pending] iframe[data-loaded] { opacity: .5; }
-.email-frame--loading { height: 480px; background: var(--color-layer-2); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
-.email-frame--empty { display: grid; place-items: center; height: 160px; }
-/* The source and the plain text: the email's own text on its own surface; the source in mono. */
-.email-source, .email-text { max-height: 1600px; margin: 0; padding: var(--space-16); overflow: auto; border-radius: var(--radius-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
-.email-source { background: var(--color-layer-1); box-shadow: 0 0 0 1px var(--color-border); font-size: var(--text-xs); line-height: 18px; }
-.email-text { padding: var(--space-24); background: var(--color-email-surface); color: var(--color-email-text); font-family: var(--font-email); line-height: 1.5; }
-
-/* Under an emulated client: its issue count (opening to the list) and that it is an emulation without remote images. */
-.ev-strip { display: flex; flex-direction: column; margin-top: calc(-1 * var(--space-4)); }
-.ev-strip__row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8) var(--space-16); min-height: var(--control-height); }
-.ev-strip__toggle { position: relative; display: inline-flex; align-items: center; gap: var(--space-8); padding: 0; border: 0; border-radius: 2px; background: none; color: var(--color-text); font: inherit; text-align: left; }
-.ev-strip__toggle::before { content: ''; position: absolute; inset: -8px -6px; }
-.ev-strip__toggle .ei-dot { margin-top: 0; }
-.ev-strip__toggle > svg { flex: none; width: 14px; height: 14px; color: var(--color-faint); transition: transform 200ms var(--ease-out-strong); }
-.ev-strip__toggle[aria-expanded='true'] > svg { transform: rotate(90deg); }
-.ev-strip__summary { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-12); min-width: 0; }
-.ev-strip__clear { display: inline-flex; align-items: center; gap: var(--space-6); color: var(--color-success); }
-.ev-strip__more { border-radius: 2px; color: var(--color-muted); cursor: default; }
-.ev-strip__note { flex: none; border-radius: 2px; color: var(--color-faint); font-size: var(--text-xs); cursor: default; }
-.ev-strip__detail > div { display: flex; flex-direction: column; gap: var(--space-8); min-height: 0; overflow: clip; }
-.ev-strip__detail > div > :first-child { margin-top: var(--space-8); }
+.ev-stage { display: flex; flex-direction: column; min-width: 0; }
+.ev[data-fill] .ev-stage { flex: 1 1 0; min-height: 0; border-radius: var(--radius-lg); background: var(--color-layer-2); }
+:root[data-theme='dark'] .ev[data-fill] .ev-stage { background: var(--color-deep); }
+.ev-captions { display: flex; flex: none; justify-content: center; gap: 16px; min-height: var(--control-height); margin-bottom: var(--space-8); }
+.ev[data-fill] .ev-captions { min-height: calc(var(--control-height) + var(--space-8)); margin: 0; padding: var(--space-8) var(--space-16) 0; }
+.ev-canvas { min-width: 0; }
+.ev[data-fill] .ev-canvas { --fade-pad-y: var(--space-8); flex: 1 1 0; min-height: 0; padding: var(--space-8) var(--space-16) var(--space-16); overflow: auto; }
+.ev-columns { display: flex; align-items: flex-start; justify-content: center; gap: 16px; }
+.ev-column { container-type: inline-size; display: flex; flex: none; flex-direction: column; min-width: 0; }
+.ev-placeholder { width: min(100%, 600px); height: 480px; margin-inline: auto; border-radius: var(--radius-sm); background: var(--color-layer-2); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
+.ev[data-fill] .ev-placeholder { height: 100%; background: var(--color-layer-1); }
+/* A caption: what the column shows; for a client, its issue count (opening the list over its frame) and a note that it
+   is an emulation without remote images, shortened in a narrow column. */
+.ev-caption { container-type: inline-size; display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--space-12); max-width: 100%; min-height: var(--control-height); }
+.ev-caption:not([style]) { flex: 1 1 auto; }
+.ev-caption__label { min-width: 0; overflow: hidden; color: var(--color-muted); text-overflow: ellipsis; white-space: nowrap; }
+.ev-caption__end { display: flex; flex: none; align-items: center; gap: var(--space-12); }
+.ev-caption__issues { position: relative; display: inline-flex; flex: none; align-items: center; gap: var(--space-8); padding: 0; border: 0; border-radius: 2px; background: none; color: var(--color-text); font: inherit; text-align: left; white-space: nowrap; }
+.ev-caption__issues::before { content: ''; position: absolute; inset: -8px -6px; }
+.ev-caption__issues .ei-dot { margin-top: 0; }
+.ev-caption__issues > svg { flex: none; width: 14px; height: 14px; color: var(--color-faint); transition: transform 200ms var(--ease-out-strong); }
+.ev-caption__issues[aria-expanded='true'] > svg { transform: rotate(90deg); }
+.ev-caption__classic { margin-left: -4px; color: var(--color-muted); }
+.ev-caption__clear { display: inline-flex; flex: none; align-items: center; gap: var(--space-6); color: var(--color-success); white-space: nowrap; }
+.ev-caption__note { flex: none; border-radius: 2px; color: var(--color-faint); font-size: var(--text-xs); white-space: nowrap; cursor: default; }
+@container (max-width: 600px) { .ev-caption__more { display: none; } }
+@container (max-width: 440px) { .ev-caption__classic { display: none; } }
+.ev-issues > div { display: flex; flex-direction: column; gap: var(--space-8); min-height: 0; overflow: clip; }
+.ev-issues > div > :last-child { margin-bottom: var(--space-12); }
 .ei-issues { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--color-border-muted); }
 .ei-issues li { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-4) var(--space-12); min-height: 36px; padding: var(--space-6) 0; border-bottom: 1px solid var(--color-border-muted); }
 .ei-issues .ei-dot { margin-top: 0; }
@@ -133,19 +137,33 @@
 .ei-issues__link { position: relative; display: inline-flex; align-items: center; gap: var(--space-4); color: var(--color-muted); font-size: var(--text-xs); text-decoration: none; white-space: nowrap; }
 .ei-issues__link::before { content: ''; position: absolute; inset: -12px -6px; }
 @media (hover: hover) and (pointer: fine) { .ei-issues__link:hover { color: var(--color-text); } }
-@media (max-width: 640px) {
+@container (max-width: 480px) {
   .ei-issues li { grid-template-columns: 6px minmax(0, 1fr) auto; }
   .ei-issues__link { grid-column: 2 / -1; justify-self: start; }
 }
 
-/* Touch: 44 px targets for the toggles and the switcher, and a sideways switcher on its own row. */
+/* A frame: its email's height before it loads, the next document fading in over the last. */
+.email-frame { position: relative; flex: none; box-sizing: content-box; overflow: clip; border-radius: var(--radius-sm); background: var(--color-layer-1); box-shadow: 0 0 0 1px var(--color-border); transition: width 200ms var(--ease-out-strong), height 200ms var(--ease-out-strong); }
+.email-frame[data-first] { transition: none; }
+.email-frame:has(iframe:focus-visible) { outline: var(--focus-width) solid var(--color-focus); outline-offset: var(--focus-offset); }
+.email-frame iframe { position: absolute; top: 0; left: 0; display: block; border: 0; outline: 0; background: transparent; color-scheme: normal; transform-origin: 0 0; opacity: 0; transition: opacity 200ms ease-out; }
+.email-frame iframe[data-loaded] { opacity: 1; }
+.email-frame[data-pending] iframe[data-loaded] { opacity: .5; }
+.email-frame--empty { display: grid; place-items: center; height: 160px; }
+/* The source and the plain text: the email's own text on its own surface; the source in mono. */
+.email-source, .email-text { margin: 0; padding: var(--space-16); border-radius: var(--radius-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.email-source { background: var(--color-layer-1); box-shadow: 0 0 0 1px var(--color-border); font-size: var(--text-xs); line-height: 18px; }
+.email-text { max-width: 800px; margin-inline: auto; padding: var(--space-24); background: var(--color-email-surface); color: var(--color-email-text); font-family: var(--font-email); line-height: 1.5; }
+.ev:not([data-fill]) :is(.email-source, .email-text) { max-height: 1600px; overflow: auto; }
+
+/* Touch: 44 px targets for the toggles. */
 @media (pointer: coarse) {
   .ev-toggle > button { width: 36px; height: 36px; }
   .ev-toggle > button::before { content: ''; position: absolute; inset: -4px -1px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .email-frame, .ei-finding__title > svg, .ev-strip__toggle > svg, .ev-views__pill[data-animate] { transition: none; }
-  .ei-finding__detail, .ev-strip__detail { transition: opacity 150ms ease-out; }
+  .email-frame, .ei-finding__title > svg, .ev-caption__issues > svg, .ev-views__pill[data-animate] { transition: none; }
+  .ei-finding__detail, .ev-issues { transition: opacity 150ms ease-out; }
 }
 
 /* The campaign editor: on the paper after the content. The paper stays light in either theme and sets only some
