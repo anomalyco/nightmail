@@ -2,7 +2,7 @@ import type { CSSProperties } from 'react'
 import type { SenderGrade, SenderScore } from '../../data/types'
 
 // The sender score as an instrument: the six grade bands on a 40–100 scale and a needle that sweeps in once.
-// Two forms: `Dial`, the arc in the sidebar card (56px tall), and `Strip`, a slim horizontal scale for Overview.
+// `Dial`: the arc in the score card (56px tall).
 const MIN = 40
 const BANDS: { grade: SenderGrade; from: number; to: number }[] = [{ grade: 'F', from: 40, to: 60 }, { grade: 'D', from: 60, to: 70 }, { grade: 'C', from: 70, to: 80 }, { grade: 'B', from: 80, to: 90 }, { grade: 'A', from: 90, to: 95 }, { grade: 'A+', from: 95, to: 100 }]
 export const gradeKey = (grade: SenderGrade) => grade === 'A+' ? 'aplus' : grade.toLowerCase()
@@ -21,16 +21,4 @@ export function Dial({ report }: { report: SenderScore }) {
     {!on && report.emails.firstEmails > 0 && <path className="gauge-progress" d={arc(cx, cy, r, MIN, MIN + (100 - MIN) * warmup(report))} strokeWidth={stroke} />}
     <g className="gauge-needle" data-rest={!on || undefined}><line x1={cx} y1={cy} x2={cx - (r - 3)} y2={cy} /><circle cx={cx} cy={cy} r={2.6} /></g>
   </svg>
-}
-
-// The bands laid flat, widths in proportion to their score ranges, with a tick every 2.5 points and the needle sliding
-// to the score (transform only). Before the first grade the bands are neutral and fill with warm-up progress.
-export function Strip({ report }: { report: SenderScore }) {
-  const on = graded(report)
-  return <div className="score-strip" aria-hidden="true" data-rest={!on || undefined} style={{ '--pos': `${on ? share(report.score!) * 100 : 0}%`, '--warmup': warmup(report) } as CSSProperties}>
-    <div className="score-strip__bands">{BANDS.map(band => <span key={band.grade} data-grade={on ? gradeKey(band.grade) : 'none'} data-on={on && report.grade === band.grade || undefined} style={{ flexGrow: band.to - band.from }} />)}</div>
-    {!on && <i className="score-strip__progress" />}
-    <span className="score-strip__ticks" />
-    <span className="score-strip__track"><span className="score-strip__needle" /></span>
-  </div>
 }

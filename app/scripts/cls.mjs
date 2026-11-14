@@ -143,7 +143,7 @@ const pages = ids => [
   ['Legal · privacy', '/legal/privacy', { user: null, from: '/legal' }],
   ['Legal · subprocessors', '/legal/subprocessors', { user: null, from: '/legal/privacy' }],
   ['Support chat', '/logs', { from: '/', support: true }],
-  ['Overview · sending limits dialog', '/', { dialog: 'How limits work' }],
+  ['Overview · sending limits dialog', '/', { dialog: 'Daily limit' }],
   ['Overview · sender score dialog', '/', { dialog: 'Sender score' }],
   ['Domains · add domain dialog', '/domains', { dialog: 'Add domain' }],
   ['API keys · create key dialog', '/api-keys', { dialog: 'Create key' }],
