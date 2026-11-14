@@ -14114,6 +14114,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const c = await campaign('Placeholder address', '<p><a href="{{link}}">Open your account</a></p>', [{ link: 'https://held.invalid/a' }, { link: '//evil.invalid/offer' }], { subject: 'Account', defaults: {} });
     assert.equal((await sendCampaign(c)).delivery.expanded, 2); await dispatch();
     assert.deepEqual(Object.values(await outcome(c)).sort(), ['UNSUPPORTED_URL_IN_HOSTED_MAIL', 'accepted']);
+    // The campaign editor's own font comes from the installation's font directory: kept, and no warning.
+    assert.ok([...f.delivered.values()].find(d => d.html?.includes('Open your account'))!.html!.includes(`${f.runtime.config.publicUrl}/fonts/inter-variable.woff2`));
+    assert.ok(!ok(await local('POST', '/v1/emails/check', { campaignId: c.id })).findings.some((x: Json) => x.ruleId === 'custom-font'));
   });
   reviewScenario('trusted mail is delivered as the canonical copy the screen read: generated text, repeated attributes and unread resources never reach a recipient', async f => {
     const { dispatch, delivered, screened } = f, { send, outcome, body } = await trustedSender(f), { canonicalHtml, measureScreen } = await import('./src/screen.js');
@@ -14129,9 +14132,14 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ['style sheet', `<style>.card{background-image:url("https://held.invalid/SampleMarker.png")}</style><p class="card">${ready}</p>`, true],
       ['ping', `<p><a href="https://held.invalid/" ping="https://held.invalid/SampleMarker">Open</a> ${ready}</p>`, true],
       ['body background', `<html><body background="https://held.invalid/SampleMarker.png"><p>${ready}</p></body></html>`, true],
-      ['style sheet link', `<link rel="stylesheet" href="https://held.invalid/SampleMarker.css"><p>${ready}</p>`, true],
-      ['font', `<style>@font-face{font-family:Brand;src:url("https://held.invalid/SampleMarker.woff2") format("woff2")}</style><p>${ready}</p>`, true],
-      ['import', `<style>@import "https://held.invalid/SampleMarker.css";</style><p>${ready}</p>`, true],
+      // Fonts and style sheets only from font services: a font from anywhere else could draw any text, so it is removed,
+      // and one from a font service is screened by its address like any other resource.
+      ['style sheet link', `<link rel="stylesheet" href="https://held.invalid/SampleMarker.css"><p>${ready}</p>`, false, /<link|SampleMarker/],
+      ['font', `<style>@font-face{font-family:Brand;src:url("https://held.invalid/SampleMarker.woff2") format("woff2")}</style><p>${ready}</p>`, false, /SampleMarker/],
+      ['import', `<style>@import "https://held.invalid/SampleMarker.css";</style><p>${ready}</p>`, false, /@import|SampleMarker/],
+      ['SVG font', `<svg><defs><font id="f"><font-face font-family="F"/><glyph unicode="a" d="M0 0h10v10z"/></font></defs><text font-family="F">a</text></svg><p>${ready}</p>`, false, /<font|<glyph/],
+      ['font service', `<style>@font-face{font-family:Brand;src:url("https://fonts.gstatic.com/s/SampleMarker.woff2") format("woff2")}</style><p>${ready}</p>`, true],
+      ['Google Fonts import', `<style>@import url("https://fonts.googleapis.com/css2?family=SampleMarker");</style><p>${ready}</p>`, true],
       ['relative ping', `<p><a href="https://held.invalid/" ping="/SampleMarker">Open</a> ${ready}</p>`, false, /ping=/],
       ['SVG fill', `<svg width="20" height="20"><rect width="20" height="20" fill="url(https://held.invalid/SampleMarker.svg#p)"/></svg><p>${ready}</p>`, false, /SampleMarker/],
       ['xml:base', `<svg xml:base="https://evil.invalid/offer/"><a href="https://held.invalid/"><text>${ready}</text></a></svg>`, false, /evil\.invalid/],
@@ -14175,8 +14183,11 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 <body style="word-spacing:normal;"><div><!--[if mso | IE]><table align="center" border="0" cellpadding="0" cellspacing="0" style="width:600px;" width="600"><tr><td style="line-height:0px;font-size:0px;mso-line-height-rule:exactly;"><![endif]--><div style="margin:0px auto;max-width:600px;"><p>${ready}</p>
 <!--[if mso]><v:roundrect xmlns:v="urn:schemas-microsoft-com:vml" href="https://shop.brand.example/orders/4821" style="height:40px;width:200px" arcsize="10%" fillcolor="#00aa77"><center>Track your order</center></v:roundrect><![endif]--><!--[if !mso]><!--><a href="https://shop.brand.example/orders/4821" style="display:inline-block;padding:12px 20px;background:#00aa77;color:#ffffff">Track your order</a><!--<![endif]--></div><!--[if mso | IE]></td></tr></table><![endif]--></div></body></html>`;
     const compatible: [string, string, RegExp[], RegExp[]][] = [
-      ['web font', `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html><head><style type="text/css">@font-face{font-family:'Brand Sans';src:url('https://cdn.brand.example/fonts/brand-sans.woff2') format('woff2'),url('https://cdn.brand.example/fonts/brand-sans.woff') format('woff');font-weight:400} h1{font-family:'Brand Sans',Helvetica,Arial,sans-serif}</style></head><body><h1>Spring collection</h1><p>${ready}</p></body></html>`,
-        [/^<!DOCTYPE html PUBLIC "-\/\/W3C\/\/DTD XHTML 1\.0 Transitional\/\/EN"/, /@font-face\{font-family:'Brand Sans';src:url\('https:\/\/cdn\.brand\.example\/fonts\/brand-sans\.woff2'\)/], []],
+      ['web font', `<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><html><head><style type="text/css">@font-face{font-family:'Open Sans';src:url('https://fonts.gstatic.com/s/opensans/v40/mem8YaGs126MiZpBA-UFVZ0b.woff2') format('woff2'),url('https://fonts.gstatic.com/s/opensans/v40/mem8YaGs126MiZpBA-UFVZ0d.woff') format('woff');font-weight:400} @font-face{font-family:Proxima;src:url('https://use.typekit.net/af/71f83c/00000000000000003b9b093b/27/l?primer=7cdcb44be4a7db8877ffa5c0007b8dd865b3bbc383831fe2ea177f62257a9191&fvd=n4&v=3') format('woff2')} h1{font-family:'Open Sans',Helvetica,Arial,sans-serif;letter-spacing:-0.01em;font-size:1.6em}</style></head><body><h1>Spring collection</h1><p>${ready}</p></body></html>`,
+        [/^<!DOCTYPE html PUBLIC "-\/\/W3C\/\/DTD XHTML 1\.0 Transitional\/\/EN"/, /@font-face\{font-family:'Open Sans';src:url\('https:\/\/fonts\.gstatic\.com\/s\/opensans\/v40\/mem8YaGs126MiZpBA-UFVZ0b\.woff2'\) format\('woff2'\)/, /src:url\('https:\/\/use\.typekit\.net\/af\//, /letter-spacing:-0\.01em;font-size:1\.6em/], [/\\/]],
+      // A font or style sheet from anywhere else is removed, and the checker says so.
+      ['custom font', `<html><head><style>@import url('https://cdn.brand.example/fonts.css'); @font-face{font-family:'Brand Sans';src:url('https://cdn.brand.example/fonts/brand-sans.woff2') format('woff2')} p{font-family:'Brand Sans',Arial}</style><link rel="stylesheet" href="https://cdn.brand.example/main.css"></head><body><p>${ready}</p></body></html>`,
+        [/@font-face\{font-family:'Brand Sans'\}p\{font-family:'Brand Sans',Arial\}/], [/cdn\.brand\.example|@import|<link/]],
       ['Google Fonts', `<html><head><style>@import url('https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap'); body,p{font-family:'Open Sans',Arial,sans-serif}</style><link href="https://fonts.googleapis.com/css2?family=Inter&display=swap" rel="stylesheet"></head><body><p>${ready}</p></body></html>`,
         [/@import url\('https:\/\/fonts\.googleapis\.com\/css2\?family=Open\+Sans:wght@400;700&display=swap'\)/, /<link href="https:\/\/fonts\.googleapis\.com\/css2\?family=Inter&amp;display=swap" rel="stylesheet">/], []],
       ['preload hints', `<html><head><link rel="preload" as="image" href="https://cdn.brand.example/logo.png"><link rel="preconnect" href="https://fonts.gstatic.com"><link rel="dns-prefetch" href="//cdn.brand.example"></head><body><img src="https://cdn.brand.example/logo.png" width="140" height="40" alt="Brand"><p>${ready}</p></body></html>`,
@@ -14188,6 +14199,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // a receipt, a dark-mode welcome and client hacks (an inline data: image isn't accepted for sending at all).
       ...Object.entries(screenCorpus()).map(([name, { html, expect }]) => [name, html.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/, 'https://cdn.brand.example/chart.png'), expect.map(e => new RegExp(e.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'))), []] as [string, string, RegExp[], RegExp[]]),
     ];
+    const fonts = ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: compatible.find(([name]) => name === 'custom font')![1], text: ready })).findings;
+    assert.deepEqual(fonts.filter((x: Json) => x.ruleId === 'custom-font').map((x: Json) => [x.severity, x.title]), [['warning', 'Custom font from cdn.brand.example removed']]);
+    assert.ok(!ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: compatible[0]![1], text: ready })).findings.some((x: Json) => x.ruleId === 'custom-font'), 'Fonts from font services raise no warning.');
     for (const [name, html, kept, gone] of compatible) {
       const { to, reply } = await send(html), id = ok(reply, 202).id;
       await dispatch();
@@ -20240,6 +20254,10 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // Screened-text limits: 24 KiB per message, 48 KiB per campaign (screened once), both configurable.
       assert.deepEqual(loadConfig(base).screenLimits, { messageBytes: 24576, campaignBytes: 49152 });
       assert.deepEqual(loadConfig({ ...base, JEV_MESSAGE_LIMIT_BYTES: '16384', JEV_CAMPAIGN_LIMIT_BYTES: '65536' }).screenLimits, { messageBytes: 16384, campaignBytes: 65536 });
+      // Font services a Hosted message may load fonts from: the defaults, or the operator's list.
+      assert.deepEqual(loadConfig(base).hostedFontHosts, ['fonts.gstatic.com', 'fonts.googleapis.com', 'use.typekit.net', 'p.typekit.net', 'fonts.bunny.net']);
+      assert.deepEqual(loadConfig({ ...base, JEV_FONT_HOSTS: ' Fonts.Example.com, cdn.example:8443,' }).hostedFontHosts, ['fonts.example.com', 'cdn.example:8443']);
+      assert.throws(() => loadConfig({ ...base, JEV_FONT_HOSTS: 'https://fonts.example.com/' }));
       // Synthetic live provider: the SDK prototype is intercepted, so no credential or AWS endpoint is used.
       runtime.config.liveEnabled = true;
       runtime.config.aws = { accessKeyId: 'SYNTHETIC_ACCESS_KEY', secretAccessKey: 'synthetic-secret-not-an-aws-credential' };

@@ -110,7 +110,9 @@ The error names each element and attribute, and `error.details[0].unsupported` l
 - **Elements:** scripts, `<template>`, frames, `<embed>`, `<link>` other than a style sheet (preload, prefetch and preconnect hints included), refresh and Link `<meta>`, and SVG `<set>`/`<animate>` of an address or style. `<object>` and `<applet>` are replaced by their fallback content.
 - **Attributes:** `srcset` (the image keeps its `src`), `archive`, `xml:base`, MathML `altimg` and `definitionURL`, `ping` with an address that isn't absolute, `url()` resources in SVG presentation attributes, and inline `data:` addresses. A repeated attribute is delivered once, the first, as every HTML parser reads it.
 
-**Kept and screened:** typography, layout and colour CSS, media queries, `@supports`, `@keyframes`, `@font-face` and `@import` from any `https://` host, `<link rel="stylesheet">`, and every link and resource. Each of these addresses is on the screen's list and counts toward the screened-text limit and the 60-host limit above. Fonts and style sheets loaded from elsewhere aren't fetched, so the screen reads their addresses, not their contents.
+**Fonts:** a font can draw any text in place of the text the screen reads, so Hosted mail loads fonts only from font services whose fonts senders can't upload. `@font-face` files may come from `fonts.gstatic.com`, `fonts.googleapis.com`, `use.typekit.net`, `p.typekit.net` and `fonts.bunny.net` (over `https`; self-hosted installations set the list with `JEV_FONT_HOSTS`), or from the installation's own font directory (the campaign editor's Inter). `@import` and `<link rel="stylesheet">` may only load from `fonts.googleapis.com`. A font or style sheet from anywhere else is removed from the delivered copy rather than refused, as are SVG fonts, and `POST /v1/emails/check` shows a `custom-font` warning: "Custom font from <host> removed; use a hosted font service."
+
+**Kept and screened:** typography, layout and colour CSS, media queries, `@supports`, `@keyframes`, fonts and style sheets from the services above, and every link and resource. Each of these addresses is on the screen's list and counts toward the screened-text limit and the 60-host limit above.
 
 Every URL-bearing attribute is either read as a destination or removed:
 
@@ -119,7 +121,7 @@ Every URL-bearing attribute is either read as a destination or removed:
 | `href`, `src`, `background`, `poster`, `action`, `formaction`, `cite`, `longdesc`, `usemap`, `data`, `codebase`, `classid`, `code`, `profile`, `manifest`, `icon`, `lowsrc`, `dynsrc`, SVG `xlink:href`, and any prefixed `…:href` or `…:src` (Office `o:href`, `v:src`) | Read as a destination; refused unless it is an allowed address |
 | `ping`, `attributionsrc` | Each space-separated address is read as a destination; removed when any isn't absolute `http(s)` |
 | `srcset`, `imagesrcset`, `imagesizes`, `archive`, `xml:base`, `altimg`, `definitionURL` | Removed |
-| `style` and `<style>` | CSS as above: every `url()`, `image-set()`, `image()`, `src()`, `@import` and `@font-face` address is read as a destination |
+| `style` and `<style>` | CSS as above: every `url()`, `image-set()`, `image()`, `src()`, `@import` and `@font-face` address is read as a destination; fonts and imports from anywhere but the font services above are removed |
 | `fill`, `stroke`, `filter`, `mask`, `clip-path`, `marker`, `marker-start`, `marker-mid`, `marker-end`, `cursor`, `color-profile` | Removed when it loads anything but a `url(#id)` in the message |
 
 ## The `account.standing.changed` event

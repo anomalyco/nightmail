@@ -13,6 +13,8 @@ export type CheckContext = {
   screenLimitBytes?: number;
   /** A campaign's own copy: a URL attribute may start with a placeholder, checked in each recipient's copy. */
   placeholders?: boolean;
+  /** Where Hosted mail may load fonts from (src/screen.ts fontSources). */
+  fonts?: import('./hosted-html.js').FontSources;
 };
 // Never run placement probes, look up remote assets or lock admission rows.
 // Fresh facts for the exact From only: a parent's DMARC record does not prove the subdomain has no override.

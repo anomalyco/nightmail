@@ -1,7 +1,7 @@
 import { ApiError, digest, type Runtime } from './core.js';
 import type { EmailSnapshot } from './db/sending.js';
 import { VISIBLE_WORDS } from './screened-html.js';
-import { destination, destinationHost, hostedHtml } from './hosted-html.js';
+import { destination, destinationHost, hostedHtml, type FontSources, type HostedOptions } from './hosted-html.js';
 import { formattedSender } from './sending.js';
 
 // Opt-in content screen for live transactional mail (`screen: true`): asks Jev, TypeSafe AI's decision
@@ -90,9 +90,11 @@ const INLINE=new Set(['a','abbr','b','bdi','bdo','big','cite','code','data','del
  * What a recipient reads of an HTML body: its canonical copy (src/hosted-html.ts), the one Hosted sending delivers,
  * and from that same tree its text, every place it links to or loads from, and the markup refused.
  */
-export async function readHtml(html: string, visit?: (tag: string) => void, options: { placeholders?: boolean } = {}) {
+/** Where this installation's Hosted mail may load fonts from: its font services, and its own font directory. */
+export const fontSources = (config: Pick<Runtime['config'], 'hostedFontHosts' | 'publicUrl'>): FontSources => ({ hosts: config.hostedFontHosts, prefix: `${config.publicUrl}/fonts/` });
+export async function readHtml(html: string, visit?: (tag: string) => void, options: HostedOptions = {}) {
   if (html.length>512*1024) throw unreadable();
-  const copy=hostedHtml(html, options.placeholders);
+  const copy=hostedHtml(html, options);
   if (!copy) throw unreadable();
   const { destinations, unsupported, removed }=copy, root=copy.root;
   for (const tag of copy.tags) visit?.(tag);
@@ -141,7 +143,7 @@ export async function readHtml(html: string, visit?: (tag: string) => void, opti
   };
   for (const child of root.childNodes) walk(child,'');
   flush();
-  return { text: [...lines,...aside].join('\n'), hosts, mismatches, destinations, unsupported, removed, links, images, html: copy.html };
+  return { text: [...lines,...aside].join('\n'), hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, links, images, html: copy.html };
 }
 /**
  * The text the screen reads: the HTML's visible text, then the text part, then raw MIME, each in full. A recipient reads
@@ -162,9 +164,9 @@ export function screenTextSignals(visible: string, text?: string, rawPart?: stri
 }
 export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; destinations: string[]; unsupported: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
 /** The HTML a Hosted message is delivered as: its canonical copy, which reads as itself, so the screen reads exactly it. */
-export async function canonicalHtml(html: string): Promise<string> {
+export async function canonicalHtml(html: string, fonts?: FontSources): Promise<string> {
   if (html.length>512*1024) throw unreadable();
-  const copy=hostedHtml(html);
+  const copy=hostedHtml(html, { fonts });
   if (!copy) throw unreadable();
   return copy.html;
 }
@@ -173,7 +175,7 @@ export async function canonicalHtml(html: string): Promise<string> {
  * place it links to or loads from, canonical and in full (links, images and other resources, and addresses in its
  * text), one per line. Destinations count toward the screened-text limit like the text: none is dropped to fit.
  */
-export async function measureScreen(snapshot: Pick<EmailSnapshot, 'html' | 'text' | 'raw'>, options: { placeholders?: boolean } = {}): Promise<ScreenMeasure> {
+export async function measureScreen(snapshot: Pick<EmailSnapshot, 'html' | 'text' | 'raw'>, options: HostedOptions = {}): Promise<ScreenMeasure> {
   const read=snapshot.html ? await readHtml(snapshot.html, undefined, options) : undefined;
   const destinations=[...new Set([...read?.destinations ?? [], ...[read?.text, snapshot.text, snapshot.raw].flatMap(part => textTargets(part)).flatMap(target => destination(target) ?? [])])];
   const hosts=new Set([...read?.hosts ?? [], ...destinations.map(destinationHost).filter(Boolean)]);
@@ -187,8 +189,8 @@ export function assertScreenable(measure: ScreenMeasure, limitBytes: number, sco
   if (measure.signals.length>MAX_SIGNALS || Buffer.byteLength(measure.signals.join('\n'))>MAX_SIGNAL_BYTES) throw tooManyHosts(measure.signals.length,index);
   if (measure.screenedBytes>limitBytes) throw tooLarge(measure.screenedBytes,limitBytes,scope,index);
 }
-async function body(snapshot: EmailSnapshot, limitBytes: number) {
-  const measure=await measureScreen(snapshot);
+async function body(snapshot: EmailSnapshot, limitBytes: number, fonts: FontSources) {
+  const measure=await measureScreen(snapshot, { fonts });
   assertScreenable(measure,limitBytes);
   return { bodies:completeBodies(measure.content,measure.signals.join('\n'),limitBytes), textHtmlOverlap:measure.textHtmlOverlap };
 }
@@ -236,7 +238,7 @@ export async function screenSnapshot(runtime: Runtime, snapshot: EmailSnapshot, 
   let pending=flights.get(runtime.storage);if(!pending){pending=new Map();flights.set(runtime.storage,pending);}
   const existing=pending.get(key);if(existing)return existing;
   const limits=runtime.config.screenLimits;
-  const lookup=body(snapshot,snapshot.testCampaignId ? limits.campaignBytes : limits.messageBytes).then(async ({bodies,textHtmlOverlap})=>{
+  const lookup=body(snapshot,snapshot.testCampaignId ? limits.campaignBytes : limits.messageBytes,fontSources(runtime.config)).then(async ({bodies,textHtmlOverlap})=>{
     await reserve?.(bodies.length);
     const sender=copy(from), subject=copy(snapshot.subject);
     let highest: ScreenResult | undefined;
@@ -272,7 +274,7 @@ export type ScreenInput = { key: string; bodies: string[]; textHtmlOverlap?: num
 export async function screenInput(runtime: Runtime, snapshot: EmailSnapshot, limitBytes: number, options: { placeholders?: boolean } = {}): Promise<ScreenInput> {
   const settings = runtime.config.screen;
   if (!settings) throw new ApiError(503, 'CONTENT_SCREEN_UNAVAILABLE', 'Hosted content screening is unavailable.', undefined, true);
-  const measure = await measureScreen(snapshot, options);
+  const measure = await measureScreen(snapshot, { ...options, fonts: fontSources(runtime.config) });
   assertScreenable(measure, limitBytes, 'campaign');
   const bodies = completeBodies(measure.content, measure.signals.join('\n'), limitBytes, 'campaign');
   const from = copy(formattedSender(snapshot.from, snapshot.fromName)), subject = copy(snapshot.subject);

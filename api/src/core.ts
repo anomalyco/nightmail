@@ -109,6 +109,8 @@ export interface Config {
   screen?: { apiKey: string; endpoint: string; model: string; mode: 'reject' | 'flag'; threshold: number };
   // Screened-text limits (src/screen.ts): one message, and one campaign screened once for all its recipients.
   screenLimits: { messageBytes: number; campaignBytes: number };
+  // Hosts a Hosted message's @font-face may load font files from (src/hosted-html.ts), besides the installation's own.
+  hostedFontHosts: string[];
   aws?: { accessKeyId: string; secretAccessKey: string; sessionToken?: string };
   configurationSets: { transactional: string; marketing: string };
 }
