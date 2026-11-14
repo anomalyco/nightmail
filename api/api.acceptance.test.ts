@@ -14302,7 +14302,10 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // wrote: empty it first, so the lease's own work is what is measured.
       await db.query("SELECT gin_clean_pending_list('sending_emails_log_trgm'::regclass)");
       const p=(await db.query('EXPLAIN (ANALYZE,BUFFERS,TIMING OFF,FORMAT JSON) '+args[0].text,args[1])).rows[0]['QUERY PLAN'][0];
-      t.diagnostic(`REVIEW ${owners} owners: ${p['Execution Time']}ms, ${p.Plan['Shared Hit Blocks']} buffer hits`);
+      // Where the hits go, by each plan node's own share, so a regression names its node in the log.
+      const own: string[] = [], walk = (n: any) => { const kids = (n.Plans ?? []) as any[]; own.push(`${n['Shared Hit Blocks'] - kids.reduce((x, k) => x + (k['Shared Hit Blocks'] ?? 0), 0)} ${n['Node Type']} ${n['Index Name'] ?? n['Relation Name'] ?? n['CTE Name'] ?? ''} x${n['Actual Loops']}`); kids.forEach(walk); };
+      walk(p.Plan);
+      t.diagnostic(`REVIEW ${owners} owners: ${p['Execution Time']}ms, ${p.Plan['Shared Hit Blocks']} buffer hits; most in ${own.sort((a, b) => parseInt(b) - parseInt(a)).slice(0, 3).join(', ')}`);
       assert.ok(p.Plan['Shared Hit Blocks']<5000,'A 24-row lease must use bounded work');
     });
   });
