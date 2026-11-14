@@ -19,7 +19,7 @@ import { workspaces } from './db/workspaces.js';
 import { emails } from './db/sending.js';
 import { sesRegions } from './db/ses-regions.js';
 import { getRegionSettings, resolveRegionRuntime, withRegionSettings } from './ses-region-state.js';
-import { claimName, domainName, platformDomainOwner, platformHost, releaseConnectionClaims, releasedClaimCleanup, reserveClaim, reservedPlatformName } from './domain-claims.js';
+import { claimName, domainName, platformDomainOwner, platformHosts, releaseConnectionClaims, releasedClaimCleanup, reserveClaim, reservedPlatformName } from './domain-claims.js';
 import { loadRegistries } from './domain-registry.js';
 import { discover, groupIds, pendingGroups, signedApply, verifyReturn } from './domain-connect.js';
 import { dmarcView, localDmarc, observeDmarc, type DmarcObservation } from './dmarc.js';
@@ -139,7 +139,7 @@ export function webhookUrl(runtime: Pick<Runtime, 'config'>, value: string) {
   let url: URL; try { url = new URL(value); } catch { throw new ApiError(422, 'INVALID_WEBHOOK_URL', 'A public HTTPS webhook URL is required.', 'url'); }
   const host = url.hostname.toLowerCase();
   if (url.protocol !== 'https:' || url.username || url.password || url.hash || isIP(host.replace(/^\[|\]$/g, '')) || !host.includes('.') || /(^|\.)(localhost|local|internal|invalid|test|home|lan|arpa)$/.test(host) || host.endsWith('.')) throw new ApiError(422, 'INVALID_WEBHOOK_URL', 'Webhook endpoints must use public HTTPS DNS names without credentials or fragments.', 'url');
-  const own = [runtime.config.publicUrl, runtime.config.sesFeedbackUrl].flatMap(value => value ? [new URL(value).hostname.toLowerCase().replace(/\.$/, '')] : []);
+  const own = [runtime.config.publicUrl, ...(runtime.config.previousOrigins ?? []), runtime.config.sesFeedbackUrl].flatMap(value => value ? [new URL(value).hostname.toLowerCase().replace(/\.$/, '')] : []);
   if (own.includes(host)) throw new ApiError(422, 'INVALID_WEBHOOK_URL', 'Webhook endpoints cannot point back at this installation.', 'url');
   return url.toString();
 }
@@ -359,7 +359,7 @@ async function domainReadiness(runtime: Runtime, row: DomainRef, identity?: GetE
 // The operator-adopted platform domain (scripts/adopt-platform-domain.ts) receives on its Ohio connection while its
 // workspace stays configured. Every other adoption is send-only.
 const platformClaim = (config:Config,wid:string,row:{name:string;identity:IdentityFacts|null;connection:Pick<ReadyConnection,'kind'> & {legacy?:boolean}}) =>
-  !!row.identity?.adopted && row.connection.kind==='shared' && row.connection.legacy!==false && platformDomainOwner(config,wid) && row.name===platformHost(config.publicUrl);
+  !!row.identity?.adopted && row.connection.kind==='shared' && row.connection.legacy!==false && platformDomainOwner(config,wid) && platformHosts(config).includes(row.name);
 const claimProof = (row: {connection:Pick<ReadyConnection,'kind'> & {legacy?:boolean};token:string;proof_label:ProofLabel;identity?:IdentityFacts|null;claim_scope?:string}, proven=false) => ({ token:row.token,label:row.proof_label,shared:row.connection.kind==='shared',regional:row.connection.legacy===false,proven,imported:row.connection.kind==='byo' && row.identity?.imported===true,txtOwned:row.claim_scope==='txt' });
 type ClaimRow = DomainRef & ClaimState & ProofTimes & { token:string; proof_label:ProofLabel; identity:IdentityFacts|null; connection:Pick<ReadyConnection,'kind'> & {legacy?:boolean}; created_at?:string|Date; ever_proven?:boolean; dns_first?:boolean };
 const hour=3600_000;
@@ -934,7 +934,7 @@ export function registerOperations(app: App) {
     // DNS is read before the row lock; the locked write is fenced on the claim token.
     const row=await hostedDomain(c.env.db,a.workspaceId,domainId) ?? notFound('Domain'); allowedDomain(a,row.name);
     if (host!==null && host!==row.name && !host.endsWith(`.${row.name}`)) throw new ApiError(422,'RECEIVING_HOST_INVALID',`Use ${row.name} or one of its subdomains.`,'host');
-    if (host!==null && reservedPlatformName(host,c.env.config.publicUrl)) throw new ApiError(409,'RECEIVING_HOST_RESERVED',`${host} is one of ${productName}’s own hosts, so it can’t receive mail for ${row.name}.`,'host');
+    if (host!==null && reservedPlatformName(host,c.env.config)) throw new ApiError(409,'RECEIVING_HOST_RESERVED',`${host} is one of ${productName}’s own hosts, so it can’t receive mail for ${row.name}.`,'host');
     if (row.receiving_host && host!==row.receiving_host) throw new ApiError(409,'RECEIVING_HOST_ACTIVE',`${row.receiving_host} already receives mail for ${row.name}. Remove its MX record first; you can choose another host once it stops resolving.`,'host');
     let facts:Partial<IdentityFacts>={receivingChoice:null,issue:null};
     if (host!==null) {

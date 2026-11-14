@@ -2260,8 +2260,8 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           for(const record of template.records.filter((r:Json)=>offered.groups.includes(r.groupId))) {
             const host=expand(record.host), target=host==='@'?name:`${host}.${name}`;
             const type=record.type==='SPFM'?'TXT':record.type, value=record.type==='SPFM'?`v=spf1 ${record.spfRules} ~all`:expand(record.pointsTo ?? record.data);
-            // The registered template publishes the ownership token as _bane, which proves a claim shown as _nightmail.
-            const same=(shown:string)=>record.groupId==='ownership' ? shown.replace(/^_(?:nightmail|bane|opensend)\./,'')===target.replace(/^_bane\./,'') : shown===target;
+            // Template v3 publishes the ownership token as _nightmail (v2 published _bane); any accepted label proves a claim.
+            const same=(shown:string)=>record.groupId==='ownership' ? shown.replace(/^_(?:nightmail|bane|opensend)\./,'')===target.replace(/^_(?:nightmail|bane)\./,'') : shown===target;
             assert.ok(manual.dns.some((r:Json)=>same(r.name) && r.type===type && r.value===value && r.priority===record.priority),`Signed ${type} at ${target} must match the manual DNS record`);
           }
           assert.deepEqual((await getSetup('?groups=ownership')).groups,['ownership']); assert.equal(requests.length,before,'Cached consent URL generation makes no outbound calls.');
@@ -10971,7 +10971,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
 
   test('Platform domain: only the configured workspace owns, sends and receives as it, after an operator adopts its existing identity',async t=>{
-    const [{nodeRuntime},{createApp},{adoptPlatformDomain,revokePlatformDomain},{operationJobs},{acceptInboundNotification},{ensureRegionSettings},{SESv2Client},{render},{regionalSender,platformValidationMailbox},{storeIncoming},{sql},{JobDeferred}]=await Promise.all([
+    const [{nodeRuntime},{createApp},{adoptPlatformDomain,revokePlatformDomain},{operationJobs},{acceptInboundNotification},{ensureRegionSettings},{SESv2Client},{render},{regionalSender,platformValidationMailbox,platformHosts},{storeIncoming},{sql},{JobDeferred}]=await Promise.all([
       import('./src/adapters/node.js'),import('./src/app.js'),import('./scripts/adopt-platform-domain.js'),import('./src/operations.js'),import('./src/mailbox-ingest.js'),import('./src/ses-region-state.js'),import('@aws-sdk/client-sesv2'),
       import(new URL('../infra/aws-shared/runtime-policies.mjs',import.meta.url).href),import('./src/domain-claims.js'),import('./src/mailbox-ingest-store.js'),import('drizzle-orm'),import('./src/jobs.js')]);
     const db=await fixtureDatabase(t),oh='us-east-2',acct='000033334444',host=`${unique('platform')}.test`,publicUrl=`https://${host}`;
@@ -11132,6 +11132,16 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     assert.deepEqual(await stored([`postmaster@${host}`,`stranger@${host}`,...validation],'store'),{created:[],delivered:[`postmaster@${host}`],unrouted:[`stranger@${host}`,...validation].sort()});
     assert.deepEqual(await stored([`stranger@${host}`,...validation],'create_mailbox'),{created:[`stranger@${host}`],delivered:[`stranger@${host}`],unrouted:[...validation].sort()});
     assert.deepEqual([platformValidationMailbox('Admin@'+host,host),platformValidationMailbox(`postmaster@mail.${host}`,host),platformValidationMailbox('admin@customer.example',host),platformValidationMailbox(`admins@${host}`,host)],[true,true,false,false]);
+    // After a domain switch (PUBLIC_URL moves, the old origin in PREVIOUS_PUBLIC_URLS) the earlier domain stays the
+    // platform's: its adopted claim stays attested and receiving, and no other workspace can claim it or below it.
+    const switched=`${unique('next')}.test`;runtime.config.publicUrl=`https://${switched}`;runtime.config.previousOrigins=[publicUrl];
+    try {
+      await verify();await mxCheck();
+      assert.deepEqual([(await claim()).sending_state,(await db.query(`SELECT identity->'proven' AS proven FROM domain_claims WHERE workspace_id=$1 AND name=$2`,[owner,host])).rows[0].proven,await probe(`abuse@${host}`)],['verified',true,1]);
+      for (const name of [host,`notify.${host}`]) error(await api(other,'POST','/v1/domains',{name}),422,'DOMAIN_NOT_ALLOWED');
+      assert.deepEqual(platformHosts(runtime.config),[switched,host]);
+      assert.deepEqual([platformValidationMailbox(`admin@${host}`,platformHosts(runtime.config)),platformValidationMailbox(`admin@${switched}`,platformHosts(runtime.config))],[true,true]);
+    } finally { runtime.config.publicUrl=publicUrl;runtime.config.previousOrigins=undefined; }
 
     // A rerun only re-attests. Drift stops sending and receiving at the next check, until the operator attests again.
     const settled=writes.length;await adopt(true);assert.equal(writes.length,settled);assert.equal((await claim()).sending_state,'verified');
