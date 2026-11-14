@@ -30,8 +30,10 @@
    "findings": []
   },
   "Campaign editor · desktop": {
-   "score": 67,
-   "findings": []
+   "score": 73,
+   "findings": [
+    "disclosure|sendability|ei-score__value"
+   ]
   },
   "Campaign review · desktop": {
    "score": 20,
@@ -129,106 +131,59 @@
    "findings": []
   },
   "Operator · workspace · desktop": {
-   "score": 46,
-   "findings": [
-    "dup-value|###|day|a day score",
-    "dup-value|##.#|score|→ target quality"
-   ]
+   "score": 30,
+   "findings": []
   },
   "Operator · workspace · phone": {
-   "score": 47,
+   "score": 31,
    "findings": [
-    "dup-value|###|day|a day score",
-    "dup-value|##.#|score|→ target quality",
     "inert|# of #,### accepted emails were marked a"
    ]
   },
   "Overview · desktop": {
-   "score": 82,
-   "findings": [
-    "dup-value|####|limit day next at|daily limit",
-    "dup-value|###|emails|daily limit",
-    "dup-value|##|helps most authentication ( )|authentication",
-    "dup-value|##|in days|days",
-    "dup-value|##|sender score|sender score"
-   ]
+   "score": 23,
+   "findings": []
   },
   "Overview · phone": {
-   "score": 72,
-   "findings": [
-    "dup-value|####|limit day next at|daily limit",
-    "dup-value|###|emails|daily limit",
-    "dup-value|##|helps most authentication ( )|authentication",
-    "dup-value|##|in days|days"
-   ]
+   "score": 26,
+   "findings": []
   },
   "Overview · restricted · desktop": {
-   "score": 124,
-   "findings": [
-    "dup-text|# of #,# accepted emails were marked as spam in # hours (#.#%; the restrict line",
-    "dup-text|marketing is held; receipts and resets still send.",
-    "dup-value|###|emails|daily limit",
-    "dup-value|###|limit day next at|daily limit",
-    "dup-value|##|in days|days",
-    "dup-value|##|sender score|sender score",
-    "dup-value|#.##|helps most complaints ( )|complaints"
-   ]
+   "score": 43,
+   "findings": []
   },
   "Overview · restricted · phone": {
-   "score": 111,
-   "findings": [
-    "dup-text|# of #,# accepted emails were marked as spam in # hours (#.#%; the restrict line",
-    "dup-text|marketing is held; receipts and resets still send.",
-    "dup-value|###|emails|daily limit",
-    "dup-value|###|limit day next at|daily limit",
-    "dup-value|##|in days|days",
-    "dup-value|#.##|helps most complaints ( )|complaints"
-   ]
+   "score": 44,
+   "findings": []
   },
   "Overview · sender score dialog · desktop": {
-   "score": 76,
-   "findings": [
-    "long-block|a #–### grade of how healthy your sendin",
-    "long-block|each part below scores #–###, from a ris",
-    "long-block|every email you send, except simulated s"
-   ]
+   "score": 44,
+   "findings": []
   },
   "Overview · sender score dialog · phone": {
-   "score": 74,
-   "findings": [
-    "long-block|a #–### grade of how healthy your sendin",
-    "long-block|each part below scores #–###, from a ris",
-    "long-block|every email you send, except simulated s"
-   ]
+   "score": 43,
+   "findings": []
   },
   "Overview · sending limits dialog · desktop": {
-   "score": 106,
+   "score": 65,
    "findings": [
-    "inert|a pause caused only by transactional bou",
-    "inert|after ## hours an owner or admin can rel",
-    "inert|all sending stops. receiving, inboxes an",
-    "inert|hard bounces ≥ #% and ≥ ## in ## hours, ",
-    "inert|the daily limit stops rising and owners ",
-    "long-block|a pause caused only by transactional bou",
-    "long-block|campaigns to more than ### recipients se",
-    "long-block|checked every ## minutes. a line needs b",
-    "long-block|the score moves at most # points up or #"
+    "inert|marketing is held, not receipts or reset",
+    "inert|sending stops; receiving, inboxes and th",
+    "inert|the limit stops rising and owners and ad",
+    "long-block|marketing is held, not receipts or reset",
+    "long-block|sending stops; receiving, inboxes and th"
    ]
   },
   "Overview · sending limits dialog · phone": {
-   "score": 90,
+   "score": 56,
    "findings": [
-    "long-block|a pause caused only by transactional bou",
-    "long-block|campaigns to more than ### recipients se",
-    "long-block|checked every ## minutes. a line needs b",
-    "long-block|the score moves at most # points up or #"
+    "long-block|marketing is held, not receipts or reset",
+    "long-block|sending stops; receiving, inboxes and th"
    ]
   },
   "Overview · setup · desktop": {
-   "score": 47,
-   "findings": [
-    "dup-value|###|after emails|daily limit"
-   ]
+   "score": 26,
+   "findings": []
   },
   "Received email · desktop": {
    "score": 10,
@@ -296,35 +251,23 @@
    "findings": []
   },
   "Receiving · rituals · agent · desktop": {
-   "score": 73,
-   "findings": [
-    "long-block|attach a ritual to an address or alias; ",
-    "long-block|questions a ritual asks brand’s ai about ",
-    "long-block|runs triage as written, as if attached t"
-   ]
+   "score": 57,
+   "findings": []
   },
   "Receiving · rituals · desktop": {
-   "score": 79,
-   "findings": [
-    "long-block|attach a ritual to an address or alias; ",
-    "long-block|questions a ritual asks brand’s ai about ",
-    "long-block|runs triage as written, as if attached t"
-   ]
+   "score": 61,
+   "findings": []
   },
   "Receiving · rituals · no agent · desktop": {
-   "score": 76,
-   "findings": [
-    "long-block|attach a ritual to an address or alias; ",
-    "long-block|questions a ritual asks brand’s ai about ",
-    "long-block|runs triage as written, as if attached t"
-   ]
+   "score": 60,
+   "findings": []
   },
   "Receiving · trace · desktop": {
    "score": 37,
    "findings": []
   },
   "Receiving · webhook · desktop": {
-   "score": 28,
+   "score": 29,
    "findings": []
   },
   "Receiving · webhooks · desktop": {
@@ -344,20 +287,28 @@
    "findings": []
   },
   "Sent email · desktop": {
-   "score": 50,
-   "findings": []
+   "score": 56,
+   "findings": [
+    "disclosure|sendability|ei-score__value"
+   ]
   },
   "Sent email · junk-like · desktop": {
-   "score": 90,
-   "findings": []
+   "score": 97,
+   "findings": [
+    "disclosure|sendability|ei-score__value"
+   ]
   },
   "Sent email · junk-like · phone": {
-   "score": 83,
-   "findings": []
+   "score": 89,
+   "findings": [
+    "disclosure|sendability|ei-score__value"
+   ]
   },
   "Sent email · phone": {
-   "score": 43,
-   "findings": []
+   "score": 49,
+   "findings": [
+    "disclosure|sendability|ei-score__value"
+   ]
   },
   "Settings · MCP connection · desktop": {
    "score": 19,
@@ -380,17 +331,17 @@
    "findings": []
   },
   "Settings · add credit dialog · desktop": {
-   "score": 14,
+   "score": 15,
    "findings": []
   },
   "Settings · add credit dialog · phone": {
-   "score": 14,
+   "score": 15,
    "findings": []
   },
   "Settings · billing · desktop": {
    "score": 42,
    "findings": [
-    "long-block|brand charges your saved card when the ba"
+    "long-block|brand charges your saved card when t"
    ]
   },
   "Settings · billing · free · desktop": {
@@ -404,20 +355,22 @@
   "Settings · billing · owed · desktop": {
    "score": 60,
    "findings": [
-    "long-block|brand charges your saved card when the ba"
+    "long-block|brand charges your saved card when t"
    ]
   },
   "Settings · billing · owed · phone": {
-   "score": 56,
+   "score": 62,
    "findings": [
+    "disclosure|balance|billing-balance__amount",
     "inert|then it’s held until you add credit. the",
-    "long-block|brand charges your saved card when the ba"
+    "long-block|brand charges your saved card when t"
    ]
   },
   "Settings · billing · phone": {
-   "score": 41,
+   "score": 47,
    "findings": [
-    "long-block|brand charges your saved card when the ba"
+    "disclosure|balance|billing-balance__amount",
+    "long-block|brand charges your saved card when t"
    ]
   },
   "Settings · desktop": {
@@ -467,25 +420,25 @@
   "Settings · sending · desktop": {
    "score": 25,
    "findings": [
-    "dup-value|##|sender score|sender score"
+    "dup-fact|the sender score|sender score|sender score"
    ]
   },
   "Settings · webhook · desktop": {
    "score": 43,
    "findings": [
-    "long-block|brand signs every delivery with this secr"
+    "long-block|brand signs every delivery with this"
    ]
   },
   "Settings · webhook · phone": {
    "score": 35,
    "findings": [
-    "long-block|brand signs every delivery with this secr"
+    "long-block|brand signs every delivery with this"
    ]
   },
   "Settings · webhooks · desktop": {
    "score": 17,
    "findings": [
-    "long-block|brand calls your url when email you send "
+    "long-block|brand calls your url when email you "
    ]
   },
   "Template · desktop": {

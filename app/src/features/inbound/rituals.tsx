@@ -492,10 +492,10 @@ export function RitualsPage() {
       {check !== null && recent.isFetched && <>
       <section ref={tryRef} id="try" className="section section--bordered stack ritual-try" aria-labelledby="ritual-try">
         <SectionHeader title={<span id="ritual-try">Try it on an email</span>} />
-        <ConceptLine line={`Runs ${key || 'this ritual'} as written, as if attached to the address the email was sent to. Nothing is sent or saved, and ${productName}’s AI isn’t asked: set each omen’s answer here.`} />
+        <ConceptLine line={`Runs ${key || 'this ritual'} as written, as if attached to the address the email went to. Nothing is sent or saved; omens use the answers you set.`} />
         <EmailPicker value={choice} onChange={next => { setChoice(next); dry.clear() }} addresses={recipients} />
         <div className="ritual-try__options">
-          {choice.mode !== 'sample' && <Field label="As mail to" htmlFor="ritual-try-to" hint="The address the ritual is attached to for this try."><Input id="ritual-try-to" list="trace-addresses" value={as} onChange={e => { setAs(e.target.value); dry.clear() }} placeholder={recipient || recipients[0] || 'support@acme.com'} autoComplete="off" /></Field>}
+          {choice.mode !== 'sample' && <Field label="As mail to" htmlFor="ritual-try-to"><Input id="ritual-try-to" list="trace-addresses" value={as} onChange={e => { setAs(e.target.value); dry.clear() }} placeholder={recipient || recipients[0] || 'support@acme.com'} autoComplete="off" /></Field>}
           {omens.map(name => <Field key={name} label={<>If omen <code>{name}</code> answers <strong className="ritual-try__score">{(answers[name] ?? 0.5).toFixed(2)}</strong></>} hint={check?.questions[name]}>
             <input className="ritual-try__range" type="range" min={0} max={1} step={0.05} value={answers[name] ?? 0.5} onChange={e => { setAnswers({ ...answers, [name]: Number(e.target.value) }); dry.clear() }} aria-label={`Answer for ${name}`} />
           </Field>)}
@@ -507,7 +507,7 @@ export function RitualsPage() {
 
       <section id="attach" className="section section--bordered stack" aria-labelledby="ritual-attach">
         <SectionHeader title={<span id="ritual-attach">Runs on</span>} />
-        <ConceptLine line="Attach a ritual to an address or alias; changes here save at once. Up to three run in order; the first that acts stops the rest unless “Run the next one too” is on." />
+        <ConceptLine line="Up to 3 per address, in order; the first that acts stops the rest unless “Run the next one too” is on. Saves at once." />
         <DataTable columns={bindingColumns} rows={bindings.map((b, i) => ({ ...b, i }))} rowKey={b => `${b.target}/${b.ritual}`}
           empty={<EmptyState title="Not attached yet" description="Pick an address below. A ritual runs only on mail to its addresses." />} />
         <div className="ritual-attach">
@@ -519,10 +519,10 @@ export function RitualsPage() {
       </section>
 
       <section className="section section--bordered stack ritual-settings" aria-label="Sender lists and omens">
-        <Field label="Sender lists" hint={<>Named lists of senders, one per line: <code>vip: <PrivateAddress value="ceo@example.com" />, @partner.example</code>. Use with <code>lists.has("vip", email.from.address)</code>.</>}>
+        <Field label="Sender lists" hint={<>One per line: <code>vip: <PrivateAddress value="ceo@example.com" />, @partner.example</code>. Check with <code>lists.has("vip", email.from.address)</code>.</>}>
           <Textarea className="ritual-lists" rows={3} value={lists} onChange={e => setLists(e.target.value)} spellCheck={false} />
         </Field>
-        <Field label="Omens can read mail at" hint={<>{concepts.omens.line} {productName}’s AI reads mail only at these receiving hosts (comma-separated); elsewhere an omen gives its default answer. <Link to={guides.rituals}>How omens work</Link></>}>
+        <Field label="Omens can read mail at" hint={<>Receiving hosts, comma-separated. Elsewhere an omen gives its default answer and {productName}’s AI doesn’t read the mail. <Link to={guides.rituals}>How omens work</Link></>}>
           <Input value={domains} onChange={e => setDomains(e.target.value)} placeholder={(overview.data?.domains ?? []).find(d => d.status === 'active')?.name ?? 'reply.example.com'} />
         </Field>
       </section>

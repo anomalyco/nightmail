@@ -1,25 +1,23 @@
-import { useState, type CSSProperties } from 'react'
+import { type CSSProperties } from 'react'
 import { Link } from 'react-router'
-import { ArrowUpRight, Info } from 'lucide-react'
+import { ArrowUpRight } from 'lucide-react'
 import { useApiDef, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
-import type { Domain, SenderLimit, SenderScore } from '../../data/types'
+import type { Domain, SenderScore } from '../../data/types'
 import { number, shortDateTime } from '../../lib/format'
 import { openScoreAbout } from '../../lib/score-about'
 import { standingTitle, standingTone, stepAtLeast, type RaisedStep } from '../../lib/standing'
 import { useTween } from '../../components/motion'
-import { Dialog } from '../../components/ui'
-import { Dial, Strip } from './gauge'
-import { factorFormats, factorPlain, ScoreAbout } from './about'
+import { Dial } from './gauge'
+import { ScoreAbout } from './about'
 import { productName } from '../../../../api/src/brand'
 export { factorFormats } from './about'
-import { SendingLimitsGuide } from './limits'
 import './score.css'
 export { StandingCard } from './standing'
 
-// The sender score, from GET /v1/sender-score: a 56px sidebar card on every page, and the report card with its
-// breakdown in Overview's detail column. Every block keeps one height in every state, so nothing shifts when it loads.
-// Each of them opens the same explainer (./about.tsx): what the score is, what counts and how it is graded.
+// The sender score, from GET /v1/sender-score: one 56px card on every page (the sidebar's; Overview shows it too where
+// the sidebar isn't on screen), which keeps one height in every state, so nothing shifts when it loads. It opens the
+// explainer (./about.tsx): the breakdown, the trend, the limit the score sets and how it is graded.
 export function useSenderScore() { return useApiDef(queries.senderScore(), { interval: 60_000 }) }
 const whole = (value: number) => Math.round(value)
 // Before the first grade there is no score to show: a dash and "not graded", never a 0 that reads as a bad grade.
@@ -55,81 +53,19 @@ export function ScoreAboutHost() {
 // Faint film grain and a tick ruler: texture, never content.
 function Texture({ ruler = true }: { ruler?: boolean }) { return <><span className="gauge-grain" aria-hidden="true" />{ruler && <span className="gauge-ruler" aria-hidden="true" />}</> }
 
-// Overview's score: one line with the number, the grade and the band strip, then where it goes next. 96px tall. The
-// whole card opens the explainer.
-function ScoreCard({ report }: { report: SenderScore }) {
-  const graded = report.state === 'graded'
-  const shown = useTween(graded ? report.score ?? 0 : 0)
-  const moved = graded && report.history.length ? whole(report.score! - report.history[0].score) : 0
-  return <button type="button" className="gauge-card score-card" onClick={() => openScoreAbout()} aria-label={graded ? `Sender score ${whole(report.score!)}, grade ${report.grade}. About the sender score` : `Sender score not graded yet: ${progressLabel(report)}. About the sender score`}>
-    <Texture ruler={false} />
-    <span className="gauge-head"><span>Sender score</span><span className="gauge-head__aside">{graded ? '30 days' : 'Not graded yet'}{graded && <Info size={11} aria-hidden="true" />}</span></span>
-    <span className="score-card__main">
-      <span className="score-card__value"><b>{graded ? whole(shown) : '—'}</b>{graded && <span className="gauge-grade">{report.grade}</span>}</span>
-      <Strip report={report} />
-    </span>
-    <span className="score-card__foot">{graded
-      ? <><span>{report.next ? `${Math.ceil(report.next.at - report.score!)} to ${report.next.grade}` : 'Top grade'}</span><span>{moved > 0 ? '+' : moved < 0 ? '−' : '±'}{Math.abs(moved)} in 14 days</span></>
-      : <><span>{progressLabel(report)}</span><span className="score-card__more">How it works<Info size={12} aria-hidden="true" /></span></>}</span>
-  </button>
-}
-
-const share = (value: number) => ({ '--share': `${Math.round(Math.min(1, Math.max(0, value)) * 1000) / 10}%` }) as CSSProperties
-
-// Overview's detail column: the score card, the limit it sets (Hosted), then the 14-day trend and the six factors as
-// compact rows. Fixed heights in every state.
-export function ReportCard({ report }: { report: SenderScore | undefined }) {
-  const [explaining, setExplaining] = useState(false)
-  if (!report) return <section id="sender-score" className="score-report" aria-busy="true"><div className="gauge-card score-card"><span className="gauge-skeleton" /></div><div className="score-breakdown score-breakdown--loading" /></section>
-  const graded = report.state === 'graded'
-  // The newest days sit at the right; a score graded today may have no published day yet.
-  const days = graded ? report.history.slice(-14) : [], offset = 14 - days.length
-  const low = days.length ? Math.min(...days.map(day => day.score)) - 4 : 0, high = days.length ? Math.max(...days.map(day => day.score)) : 1
-  return <section id="sender-score" className="score-report" aria-label="Sender score">
-    <ScoreCard report={report} />
-    {report.limit && <ScoreLimit report={report} limit={report.limit} />}
-    <div className="score-breakdown">
-      <div className="score-breakdown__head"><h2>Breakdown</h2><span className="score-breakdown__aside"><span className="muted">{graded ? '14 days' : 'After 100 emails'}</span>{report.limit && <button type="button" className="score-explain" onClick={() => setExplaining(true)}>How limits work</button>}</span></div>
-      <div className="score-history" role="img" aria-label={days.length ? `Daily score over ${days.length} days, from ${whole(days[0].score)} to ${whole(report.score!)}.` : 'No history yet.'}>
-        {Array.from({ length: 14 }, (_, i) => { const day = days[i - offset]; return <span key={i} data-last={i === 13 || undefined} style={{ transform: `scaleY(${day ? Math.max(.1, (day.score - low) / Math.max(1, high - low)) : .1})` }} /> })}
-      </div>
-      <ul className="score-factors">{report.factors.map(factor => <li key={factor.key}><button type="button" title={factorPlain[factor.key]} aria-label={`${factor.label}: ${factorPlain[factor.key]} About the sender score`} onClick={() => openScoreAbout(factor.key)}>
-        <span>{factor.label}</span>
-        {graded && factor.source === 'measured' ? <><span className="score-bar" data-low={factor.score! < 60 || undefined}><i style={share(factor.score! / 100)} /></span><span className="muted">{factorFormats[factor.key](factor.value!)}</span></>
-          : <><span className="score-bar" data-empty /><span className="muted">{graded ? 'No data' : '—'}</span></>}
-      </button></li>)}</ul>
-    </div>
-    {report.limit && <Dialog open={explaining} onOpenChange={setExplaining} title="How sending limits work" className="limits-dialog">
-      <SendingLimitsGuide />
-      <Link className="limits-dialog__docs" to="/docs#sending-limits">Open in the docs</Link>
-    </Dialog>}
-  </section>
-}
-
-// Hosted: the limit the score sets, any adjustment, the factor that would help most and the standing: four lines in
-// every state (calibrating, graded, override, notice, warn and above), each in full; the standing note may take two.
-function ScoreLimit({ report, limit }: { report: SenderScore; limit: SenderLimit }) {
-  const graded = report.state === 'graded' && report.score !== null
-  const daily = limit.daily === null ? 'No daily limit' : `Limit ${number(limit.daily)}/day${limit.source === 'override' ? ' (override)' : ''}`
-  const headline = !graded ? `Calibrating ${report.emails.firstEmails}/${report.needed} · ${daily.toLowerCase()}`
-    : [daily, limit.next ? `next ${number(limit.next.limit)} at ${limit.next.atScore}` : limit.source === 'score' ? 'top band' : null].filter(Boolean).join(' · ')
-  const adjustments = [
-    limit.override && (limit.override.expiresAt ? `Override until ${shortDateTime(limit.override.expiresAt)} UTC` : 'Override with no expiry'),
-    limit.restore && `${limit.restore.daily.toLocaleString('en-US')} a day after a resume, until ${shortDateTime(limit.restore.until)} UTC`,
-    limit.strikeCapUntil && `Strike cap at 50% until ${shortDateTime(limit.strikeCapUntil)} UTC`,
-  ].filter(Boolean).join(' · ')
-  const bursts = `${number(limit.perMinute)} a minute · ${number(limit.transactionalReserve)} kept for receipts`
-  const weakest = graded ? report.factors.filter(f => f.source === 'measured' && f.score !== null && f.value !== null).sort((a, b) => a.score! - b.score!)[0] : undefined
-  const helps = !graded ? 'Factors count from the first grade' : !weakest ? 'No factor measured yet' : weakest.score! >= 100 ? 'Every measured factor is at full marks' : `Helps most: ${weakest.label} (${factorFormats[weakest.key](weakest.value!)})`
-  const standing = report.standing, step = standing?.step ?? 'ok'
-  const raised = stepAtLeast(step, 'warn') ? step as RaisedStep : null
-  const note = raised ? `${standingTitle[raised]} · see above` : step === 'notice' ? `Note: ${standing!.reasons[0]?.message ?? `${productName} noticed a first problem.`}` : standing?.marketingRelease ? `Marketing at ${standing.marketingRelease.percent}% until ${shortDateTime(standing.marketingRelease.until)} UTC` : 'No sending issues'
-  return <div className="score-limit" aria-label="Daily limit">
-    <p className="score-limit__headline">{headline}</p>
-    <p>{adjustments || bursts}</p>
-    <p>{helps}</p>
-    <p className="score-limit__note" data-tone={raised ? standingTone(raised) : step === 'notice' ? 'warning' : 'ok'}><span aria-hidden="true" /><span>{note}</span></p>
-  </div>
+// Overview's notes under the daily limit, each only while it applies: an adjustment of the limit itself, and a
+// standing below Warn worth knowing (a notice, a marketing release). From Warn up the standing card says it.
+export function limitNotes(report: SenderScore | undefined): { text: string; tone?: 'warning' }[] {
+  const limit = report?.limit, standing = report?.standing
+  const notes: { text: string; tone?: 'warning' }[] = []
+  if (limit?.override) notes.push({ text: limit.override.expiresAt ? `Override until ${shortDateTime(limit.override.expiresAt)} UTC` : 'Override with no expiry' })
+  if (limit?.restore) notes.push({ text: `${number(limit.restore.daily)} a day after a resume, until ${shortDateTime(limit.restore.until)} UTC` })
+  if (limit?.strikeCapUntil) notes.push({ text: `Capped at 50% until ${shortDateTime(limit.strikeCapUntil)} UTC` })
+  if (standing && !stepAtLeast(standing.step, 'warn')) {
+    if (standing.step === 'notice') notes.push({ text: standing.reasons[0]?.message ?? `${productName} noticed a first problem.`, tone: 'warning' })
+    if (standing.marketingRelease) notes.push({ text: `Marketing at ${standing.marketingRelease.percent}% until ${shortDateTime(standing.marketingRelease.until)} UTC` })
+  }
+  return notes
 }
 
 // The step worth most points, as a place to go: a measured factor's lost points in the re-weighted raw score.

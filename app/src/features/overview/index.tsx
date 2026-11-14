@@ -9,19 +9,19 @@ import { campaignEditable, type ChartPoint, type LogEntry, type Overview, type S
 import { DataTable, EmptyState, ErrorState, PageHeader, SectionHeader, Select, StatusBadge, Tabs } from '../../components/ui'
 import { Crossfade, useMorph, useTween } from '../../components/motion'
 import { date, label, number, percent } from '../../lib/format'
-import { NextSteps, ReportCard, StandingCard, useNextSteps, useSenderScore } from '../score'
+import { NextSteps, SidebarScore, StandingCard, useNextSteps, useSenderScore } from '../score'
 // `logColumns` here are Overview's compact set of Logs' columns (skeletons.tsx).
 import { AsideSkeleton, ChartSkeleton, factTitles, FactsSkeleton, latestColumns as logColumns, RegionStatus } from './skeletons'
 import { useLatestRowCount } from './latest'
 import { logHref, useLogRowIntent } from '../logs/rows'
 import { usePrefetchQueries } from '../../data/prefetch'
 import { composer } from '../campaigns/composer-chunk'
-import { SendingLimitRow, SetupRail, useSetupSteps } from './setup'
-import { useMediaQuery } from '../../lib/media'
+import { DailyLimit, SetupRail, useSetupSteps } from './setup'
+import { useCompactShell, useMediaQuery } from '../../lib/media'
 
 // Overview: four facts with their own series, the activity chart and the latest emails (down to the card's bottom) on
-// the left; a detail column on the right with setup (until the first email), the sender score, up to three next steps
-// and the recent campaigns.
+// the left; a detail column on the right with the standing card (Warn and up), setup (until the first email), the
+// daily limit, up to three next steps and the recent campaigns. The sender score is the sidebar's card.
 // Every async block reserves its final size, and refetches keep the previous data on screen. A new range or stream keeps
 // the old figures up (dimmed if the new ones take over 100 ms), then numbers tween and charts morph or crossfade.
 export function OverviewPage() {
@@ -82,19 +82,23 @@ export function OverviewPage() {
 // campaigns come with the overview's figures and close the column, so arriving later moves nothing above them.
 function Aside({ setup, showSetup, campaigns }: { setup: ReturnType<typeof useSetupSteps>; showSetup: boolean; campaigns?: Overview['recentCampaigns'] }) {
   const score = useSenderScore()
+  // One score per screen: the sidebar's card, or this column's copy of it where the sidebar isn't on screen (the
+  // phone shell keeps it in More) or doesn't carry it (self-hosted).
+  const { multiTenant } = useWorkspaceAccess()
+  const showScore = useCompactShell() || !multiTenant
   const next = useNextSteps(score.data)
   const ready = Boolean((score.data || score.isError) && !setup.loading && next.ready)
   const { hash, key } = useLocation()
   useEffect(() => {
-    if (!ready || (hash !== '#standing' && hash !== '#sender-score')) return
-    const frame = requestAnimationFrame(() => (document.getElementById(hash.slice(1)) ?? document.getElementById('sender-score'))?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }))
+    if (!ready || hash !== '#standing') return
+    const frame = requestAnimationFrame(() => document.getElementById('standing')?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }))
     return () => cancelAnimationFrame(frame)
   }, [ready, hash, key])
   return <aside className="ov-split__aside" aria-label="Status">{!ready ? <AsideSkeleton /> : <>
     {score.data && <StandingCard report={score.data} />}
     {showSetup && setup.steps && <SetupRail steps={setup.steps} current={setup.current} open={setup.open} />}
-    {score.isError && !score.data ? <ErrorState error={score.error} onRetry={() => score.refetch()} /> : <ReportCard report={score.data} />}
-    <SendingLimitRow />
+    {score.isError && !score.data ? <ErrorState error={score.error} onRetry={() => score.refetch()} /> : showScore && <SidebarScore />}
+    <DailyLimit report={score.data} />
     {!setup.steps && <NextSteps items={next.items} />}
     {campaigns && campaigns.length > 0 && <Campaigns rows={campaigns.slice(0, 3)} />}
   </>}</aside>
