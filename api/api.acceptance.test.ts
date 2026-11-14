@@ -2260,8 +2260,8 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           for(const record of template.records.filter((r:Json)=>offered.groups.includes(r.groupId))) {
             const host=expand(record.host), target=host==='@'?name:`${host}.${name}`;
             const type=record.type==='SPFM'?'TXT':record.type, value=record.type==='SPFM'?`v=spf1 ${record.spfRules} ~all`:expand(record.pointsTo ?? record.data);
-            // The registered template publishes the ownership token as _bane, which proves a claim shown as _nightmail.
-            const same=(shown:string)=>record.groupId==='ownership' ? shown.replace(/^_(?:nightmail|bane|opensend)\./,'')===target.replace(/^_bane\./,'') : shown===target;
+            // Template v3 publishes the ownership token as _nightmail (v2 published _bane); any accepted label proves a claim.
+            const same=(shown:string)=>record.groupId==='ownership' ? shown.replace(/^_(?:nightmail|bane|opensend)\./,'')===target.replace(/^_(?:nightmail|bane)\./,'') : shown===target;
             assert.ok(manual.dns.some((r:Json)=>same(r.name) && r.type===type && r.value===value && r.priority===record.priority),`Signed ${type} at ${target} must match the manual DNS record`);
           }
           assert.deepEqual((await getSetup('?groups=ownership')).groups,['ownership']); assert.equal(requests.length,before,'Cached consent URL generation makes no outbound calls.');
