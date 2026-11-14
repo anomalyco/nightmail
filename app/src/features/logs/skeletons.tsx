@@ -5,6 +5,9 @@ import { Button, Input, LoadingRegion, PageHeader, SectionHeader, Select, Skelet
 import { rememberedPageSize } from '../../lib/pagination'
 import { logsPageColumnDefs } from './rows'
 import './logs.css'
+// The sent email's skeleton draws the preview's toolbar and frame, whose styles live with EmailInsight (a lazy chunk):
+// they load with the skeleton, so its placeholders hold their size before that chunk arrives.
+import '../../components/email-insight.css'
 // Exactly the loaded page: the header with the direction tabs, the toolbar and the table with its remembered page size.
 export function LogsRouteSkeleton() {
   const { regionId } = useRegion()
