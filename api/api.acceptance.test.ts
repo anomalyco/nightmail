@@ -14172,6 +14172,20 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ['nested @media', `<style>.x{color:red;@media(min-width:0px){color:blue}}</style><p class="x">${ready}</p>`, false, /\.x\{/],
       ['nested @supports', `<style>.x{color:red;@supports(display:block){color:blue}}</style><p class="x">${ready}</p>`, false, /\.x\{|@supports/],
       ['commented selector', `<style>a/**/b{color:red}</style><p><a href="https://held.invalid/">Open</a> ${ready}</p>`, false, /a\s*(?:\/\*\*\/)?\s*b\{/],
+      // Recheck 7, R7-H1: list markers are bullets or 1, 2, 3…. With a type, a start or a value, or a CSS list style,
+      // a client draws letters or chosen numbers (Chromium drew these as "casino. bonus. now."), so they are removed.
+      ['list type and start', `<ol type="a" start="36441511"><li></li></ol><ol type="a" start="1187621"><li></li></ol><ol type="a" start="9877"><li></li></ol><p>${ready}</p>`, false, /type=|start=/],
+      ['CSS list style and start', `<style>ol{list-style-type:lower-alpha}</style><ol start="36441511"><li></li></ol><ol start="1187621"><li></li></ol><ol start="9877"><li></li></ol><p>${ready}</p>`, false, /lower-alpha|start=/],
+      ['list type and value', `<ol type="a"><li value="36441511"></li></ol><ol type="a"><li value="1187621"></li></ol><ol type="a"><li value="9877"></li></ol><p>${ready}</p>`, false, /type=|value=/],
+      ['inline list style', `<ul style="list-style:upper-roman inside"><li>${ready}</li></ul><ol reversed style="list-style-type:decimal"><li>Thanks.</li></ol>`, false, /upper-roman|reversed/],
+      // Text drawn backwards is removed (<bdo> keeps its content), and text a client shows beside the flow is read: an
+      // SVG tooltip and MathML fences. A shadow root's content goes with its template.
+      ['bdo', `<p><bdo dir="rtl">rekraMelpmaS</bdo> ${ready}</p>`, false, /<bdo/],
+      ['bidi override', `<p>\u202erekraMelpmaS\u202c ${ready} <img src="https://held.invalid/a.png" alt="\u202erekraMelpmaS" width="20" height="20"></p>`, false, /[\u202a-\u202e\u2066-\u2069]/],
+      ['SVG unicode-bidi', `<svg><text unicode-bidi="bidi-override" direction="rtl">rekraMelpmaS</text></svg><p>${ready}</p>`, false, /unicode-bidi/],
+      ['SVG title', `<svg width="20" height="20"><title>SampleMarker</title><rect width="20" height="20"/></svg><p>${ready}</p>`, true],
+      ['MathML fences', `<math><mfenced open="SampleMarker"><mi>x</mi></mfenced></math><p>${ready}</p>`, true],
+      ['shadow root', `<div><template shadowrootmode="open"><p>SampleMarker</p></template>${ready}</div>`, false, /<template|SampleMarker/],
     ];
     for (const [name, html, bad, gone] of cases) {
       const { to, reply } = await send(html), start = screened.length;
@@ -14187,6 +14201,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.ok(read.includes((await measureScreen({ html: sent!, text: 'Your account is ready.' })).content.toLowerCase().split('\n')[0]!), `${name}: screened as delivered`);
       assert.ok(sent!.includes(ready) && !gone?.test(sent!), `${name}: ${sent}`);
     }
+    // The checker says when a list's markers changed.
+    for (const name of ['list type and start', 'CSS list style and start', 'list type and value', 'inline list style']) {
+      const finding = ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: cases.find(c => c[0] === name)![1], text: ready })).findings.find((x: Json) => x.ruleId === 'list-markers');
+      assert.deepEqual([finding?.severity, finding?.title], ['warning', 'List style changed to plain numbers or bullets'], name);
+    }
+    assert.ok(!ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: `<ol reversed type="1" start="1" style="list-style-type:decimal"><li>${ready}</li></ol><ul style="list-style:square inside"><li>Thanks.</li></ul>`, text: ready })).findings.some((x: Json) => x.ruleId === 'list-markers'), 'Bullets and plain numbers raise no warning.');
   });
   reviewScenario('common newsletter and transactional markup is admitted and delivered with its fonts, imports, comments and Outlook markup intact', async f => {
     const { dispatch, delivered } = f, { send, outcome, body } = await trustedSender(f), { canonicalHtml } = await import('./src/screen.js');
@@ -20468,6 +20488,29 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const unscreenedDrawing = await send({ subject: 'Account ready, unscreened', html: drawing[0]![0] });
       await dispatchDue(runtime, REGION);
       assert.equal(htmls.get(unscreenedDrawing), drawing[0]![0], 'Without screen: true it is sent as written.');
+      // Recheck 7, R7-H1: list markers other than bullets or 1, 2, 3… (a list's type, start or value, a CSS list style,
+      // a list-item counter) and text drawn backwards by unicode-bidi are refused the same way.
+      const markers: [string, string, string][] = [
+        ['<ol type="a" start="36441511"><li></li></ol><ol type="a" start="1187621"><li></li></ol><ol type="a" start="9877"><li></li></ol><p>Account ready.</p>', '<ol type="a">', 'list-markers'],
+        ['<style>ol{list-style-type:lower-alpha}</style><ol start="36441511"><li></li></ol><p>Account ready.</p>', 'ol', 'list-markers'],
+        ['<ol type="a"><li value="36441511"></li></ol><p>Account ready.</p>', '<li value="36441511">', 'list-markers'],
+        ['<style>ol{counter-reset:list-item 18005550199}</style><ol><li>Call us.</li></ol><p>Account ready.</p>', 'ol', 'list-markers'],
+        ['<p style="unicode-bidi:bidi-override;direction:rtl">.ydaer tnuoccA</p>', '<p style>', 'css-generated-text'],
+      ];
+      for (const [html, where, rule] of markers) {
+        const refused = error(await local('POST', '/v1/emails/send', mail({ subject: 'Account ready', html, screen: true }), 'live'), 422, 'UNSUPPORTED_CSS_GENERATED_TEXT');
+        assert.ok(refused.message.includes(where) && refused.details[0].selectors.includes(where), `${where}: ${refused.message}`);
+        const warning = ok(await local('POST', '/v1/emails/check', { from: mail({}).from, subject: 'Account ready', stream: 'transactional', html }, 'live')).findings.find((x: Json) => x.ruleId === rule);
+        assert.equal(warning?.severity, 'warning', where);
+      }
+      // A <bdo> or a bidi override character draws its text backwards: read both ways, so the classifier sees it.
+      const reversed = [...marker].reverse().join('');
+      const bdo = await send({ subject: 'Receipt with bdo', html: `<p><bdo dir="rtl">${reversed}</bdo> Your receipt is attached.</p>`, screen: true });
+      const override = await send({ subject: 'Receipt with an override', html: `<p>\u202e${reversed}\u202c Your receipt is attached.</p>`, screen: true });
+      const unscreenedMarkers = await send({ subject: 'Account ready, unscreened list', html: markers[0]![0] });
+      await dispatchDue(runtime, REGION);
+      assert.deepEqual([(await get(bdo)).errorCode, (await get(override)).errorCode], ['CONTENT_REJECTED_SPAM', 'CONTENT_REJECTED_SPAM']);
+      assert.equal(htmls.get(unscreenedMarkers), markers[0]![0], 'Without screen: true a list is sent as written.');
     });
   });
 

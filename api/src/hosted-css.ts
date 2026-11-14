@@ -67,6 +67,10 @@ export const PROPERTIES = new Set([
 const MSO = new Set(['mso-table-lspace', 'mso-table-rspace', 'mso-line-height-rule', 'mso-line-height-alt', 'mso-hide', 'mso-padding-alt', 'mso-margin-top-alt',
   'mso-margin-bottom-alt', 'mso-text-raise', 'mso-font-width', 'mso-ansi-font-size', 'mso-bidi-font-size', 'mso-height-rule', 'mso-border-alt',
   'mso-width-percent', 'mso-fit-shape-to-text', 'mso-wrap-style', 'v-text-anchor']);
+// The list markers a client may draw: bullets, or 1, 2, 3… (and the CSS-wide keywords, which can only inherit these).
+const CSS_WIDE = ['inherit', 'initial', 'unset', 'revert', 'revert-layer'];
+const LIST_STYLE_TYPES = new Set(['none', 'disc', 'circle', 'square', 'decimal', ...CSS_WIDE]);
+const LIST_STYLE = new Set([...LIST_STYLE_TYPES, 'inside', 'outside']);
 // Strings name things in these properties; anywhere else a string could be drawn.
 const STRINGS = new Set(['font', 'font-family', 'font-feature-settings', 'font-variation-settings']);
 // Functions a kept value may use: colours, gradients, arithmetic and the layout helpers that take only numbers.
@@ -202,6 +206,12 @@ function keep(read: Read, d: { name: Token; value: CV[] }, context: 'style' | 'f
     read.destinations.push(url);
     return null;
   }
+  if (base === 'list-style-type' || base === 'list-style') {
+    // List markers only as bullets or 1, 2, 3…: letters and roman numerals spell words the screen never reads.
+    const words = withoutImportant(d.value), allowed = base === 'list-style' ? LIST_STYLE : LIST_STYLE_TYPES;
+    if (words.length && words.every(n => n.kind === 'token' && n.t.kind === 'ident' && allowed.has(n.t.value.toLowerCase()))) return null;
+    return `CSS ${name} other than bullets or plain numbers`;
+  }
   if (/^(?:flex-direction|flex-flow|flex-wrap)$/.test(base) && d.value.some(n => n.kind === 'token' && n.t.kind === 'ident' && /reverse$/i.test(n.t.value))) return `CSS ${name} that reverses the order`;
   return plainValue(d.value, STRINGS.has(base)) ? null : `CSS ${name} with a value Hosted sending doesn't keep`;
 }
@@ -328,20 +338,24 @@ export function cssReach(css: string, resolve: Resolve): { destinations: string[
 // Properties that draw text, and what in them does: any string with something to show, counters, attr(), and var() or
 // env(), which can stand for either.
 const DRAWING = new Set(['content', 'quotes', 'list-style', 'list-style-type', 'text-overflow', 'hyphenate-character', 'text-emphasis', 'text-emphasis-style', 'string-set']);
+// Properties that set the numbers list markers show.
+const COUNTING = new Set(['counter-reset', 'counter-set', 'counter-increment']);
 const DRAWING_FUNCTIONS = new Set(['counter', 'counters', 'attr', 'var', 'env', 'symbols', 'leader', 'target-counter', 'target-counters', 'target-text', 'string', 'content']);
 /**
  * Where CSS draws text: the selectors of rules whose content, quotes, list markers, text-overflow, hyphenation or
- * emphasis marks show a string, a counter or an attribute, and @counter-style. Text drawn this way is assembled by the
- * client (in its own order, from strings and attributes anywhere in the message), so a screen that reads the message
- * as written can't read it; mail delivered as written that asks to be screened is refused when it has any (`inline`: a
- * style attribute, reported as such). An empty or blank string (a clearfix's content:"") draws nothing and is allowed.
+ * emphasis marks show a string, a counter or an attribute, @counter-style, and unicode-bidi overrides that draw text
+ * backwards (`text`); and of rules whose list markers are anything but bullets or 1, 2, 3… (letters, roman numerals, or
+ * numbers a list-item counter sets: `markers`). Text drawn this way is assembled by the client (in its own order, from
+ * strings and attributes anywhere in the message), so a screen that reads the message as written can't read it; mail
+ * delivered as written that asks to be screened is refused when it has any (`inline`: a style attribute, reported as
+ * such). An empty or blank string (a clearfix's content:"") draws nothing and is allowed.
  */
-export function generatedText(css: string, inline = false): string[] {
-  const found: string[] = [];
+export function generatedText(css: string, inline = false): { text: string[]; markers: string[] } {
+  const found: string[] = [], markers: string[] = [];
   let tokens: Token[];
   const text = css.replace(/\r\n?/g, '\n');
-  try { tokens = tokenize(text); } catch (error) { if (error instanceof Limit) return ['a style sheet over the CSS budget']; throw error; }
-  const note = (where: string) => { const name = where.replace(/\s+/g, ' ').trim().slice(0, 120) || 'a rule'; if (!found.includes(name) && found.length < 10) found.push(name); };
+  try { tokens = tokenize(text); } catch (error) { if (error instanceof Limit) return { text: ['a style sheet over the CSS budget'], markers }; throw error; }
+  const note = (where: string, list = found) => { const name = where.replace(/\s+/g, ' ').trim().slice(0, 120) || 'a rule'; if (!list.includes(name) && list.length < 10) list.push(name); };
   const preludes: string[] = [];
   // `first`: the next token starts a declaration (after {, ; or the start of a style attribute), not a selector.
   let start = 0, first = inline;
@@ -354,20 +368,28 @@ export function generatedText(css: string, inline = false): string[] {
     const declaring = first;
     first = false;
     if (t.kind === 'at' && t.value.toLowerCase() === 'counter-style') { note('@counter-style'); continue; }
-    if (!declaring || t.kind !== 'ident' || !DRAWING.has(t.value.toLowerCase().replace(/^-(?:webkit|moz|ms|o)-/, ''))) continue;
+    const property = t.kind === 'ident' ? t.value.toLowerCase().replace(/^-(?:webkit|moz|ms|o)-/, '') : '';
+    if (!declaring || (!DRAWING.has(property) && !COUNTING.has(property) && property !== 'unicode-bidi')) continue;
     let j = i + 1;
     while (tokens[j]?.kind === 'ws') j++;
     if (tokens[j]?.kind !== ':') continue;
-    let depth = 0, draws = false;
+    let depth = 0, draws = false, marks = false;
     for (j++; j < tokens.length; j++) {
       const v = tokens[j]!;
       if (depth === 0 && (v.kind === ';' || v.kind === '}' || v.kind === '{')) break;
       if (v.kind === 'function' || v.kind === '(' || v.kind === '[') depth++;
       else if (v.kind === ')' || v.kind === ']') depth--;
       if ((v.kind === 'string' && v.value.trim()) || (v.kind === 'function' && DRAWING_FUNCTIONS.has(v.value)) || v.kind === 'bad') draws = true;
+      // List markers other than bullets and 1, 2, 3… (letters, roman numerals, numbers the sender picks); text drawn
+      // backwards.
+      if (v.kind === 'ident' && depth === 0 && (property === 'list-style-type' || property === 'list-style') && !LIST_STYLE.has(v.value.toLowerCase()) && v.value.toLowerCase() !== 'important') marks = true;
+      if (v.kind === 'ident' && COUNTING.has(property) && v.value.toLowerCase() === 'list-item') marks = true;
+      if (v.kind === 'ident' && property === 'unicode-bidi' && /override/i.test(v.value)) draws = true;
     }
-    if (draws) note(inline ? 'a style attribute' : [...preludes].reverse().find(p => !p.trim().startsWith('@')) ?? preludes.at(-1) ?? 'a declaration outside any rule');
+    const where = inline ? 'a style attribute' : [...preludes].reverse().find(p => !p.trim().startsWith('@')) ?? preludes.at(-1) ?? 'a declaration outside any rule';
+    if (draws) note(where);
+    if (marks) note(where, markers);
     i = j - 1;
   }
-  return found;
+  return { text: found, markers };
 }
