@@ -58,6 +58,13 @@ export const unsupportedUrls = (unsupported: string[], index?: number) => {
   error.details = [{ unsupported, ...(index === undefined ? {} : { index }) }];
   return error;
 };
+/** CSS-generated text in mail delivered as written that asks to be screened: the client assembles it in its own order
+ *  from strings and attributes, so the screen can't read what the recipient sees. Named by selector. */
+export const generatedText = (selectors: string[], index?: number) => {
+  const error = new ApiError(422, 'UNSUPPORTED_CSS_GENERATED_TEXT', `This message is sent through your own AWS account exactly as written and asks to be screened, but its CSS draws text the screen can't read as the recipient sees it (content, quotes or list markers with strings, counters or attr()): ${selectors.join('; ')}. Put the text in the HTML, or send without screen: true.`, index === undefined ? 'html' : `emails.${index}.html`);
+  error.details = [{ selectors, ...(index === undefined ? {} : { index }) }];
+  return error;
+};
 const tooManyHosts = (linkHosts: number, index?: number) =>
   refused(`The message links to or loads ${linkHosts} distinct hosts (counting link labels that name another host); Hosted sending screens at most ${MAX_SIGNALS}. Link to fewer domains.`,
     { linkHosts, linkHostLimit: MAX_SIGNALS }, index);
@@ -144,7 +151,7 @@ export async function readHtml(html: string, visit?: (tag: string) => void, opti
   for (const child of root.childNodes) walk(child,'');
   flush();
   aside.push(...copy.text);
-  return { text: [...lines,...aside].join('\n'), hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, links, images, html: copy.html };
+  return { text: [...lines,...aside].join('\n'), hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, generated: copy.generated, links, images, html: copy.html };
 }
 /**
  * The text the screen reads: the HTML's visible text, then the text part, then raw MIME, each in full. A recipient reads
@@ -163,7 +170,8 @@ export function screenTextSignals(visible: string, text?: string, rawPart?: stri
   const parts=[rendered,plain,raw].filter((part,i,all)=>part && all.indexOf(part)===i);
   return { content:parts.join('\n'), textHtmlOverlap:overlap(plain,rendered) };
 }
-export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; destinations: string[]; unsupported: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
+/** `generated`: where the CSS of mail delivered as written (BYO `screen: true`) draws text, which the screen can't read. */
+export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; destinations: string[]; unsupported: string[]; generated: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
 /** The HTML a Hosted message is delivered as: its canonical copy, which reads as itself, so the screen reads exactly it. */
 export async function canonicalHtml(html: string, fonts?: FontSources): Promise<string> {
   if (html.length>512*1024) throw unreadable();
@@ -182,11 +190,12 @@ export async function measureScreen(snapshot: Pick<EmailSnapshot, 'html' | 'text
   const hosts=new Set([...read?.hosts ?? [], ...destinations.map(destinationHost).filter(Boolean)]);
   const signals=[...read?.mismatches ?? [], ...hosts];
   const text=screenTextSignals(read?.text ?? '',snapshot.text,snapshot.raw), content=[text.content, destinations.join('\n')].filter(Boolean).join('\n');
-  return { read, signals, destinations, unsupported: read?.unsupported ?? [], content, textHtmlOverlap: text.textHtmlOverlap, screenedBytes: Buffer.byteLength(content) };
+  return { read, signals, destinations, unsupported: read?.unsupported ?? [], generated: options.original ? read?.generated ?? [] : [], content, textHtmlOverlap: text.textHtmlOverlap, screenedBytes: Buffer.byteLength(content) };
 }
 /** Refuses a message the screen cannot read within a limit, with the measured size; `index` names a batch item. */
 export function assertScreenable(measure: ScreenMeasure, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) {
   if (measure.unsupported.length) throw unsupportedUrls(measure.unsupported, index);
+  if (measure.generated.length) throw generatedText(measure.generated, index);
   if (measure.signals.length>MAX_SIGNALS || Buffer.byteLength(measure.signals.join('\n'))>MAX_SIGNAL_BYTES) throw tooManyHosts(measure.signals.length,index);
   if (measure.screenedBytes>limitBytes) throw tooLarge(measure.screenedBytes,limitBytes,scope,index);
 }

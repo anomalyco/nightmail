@@ -325,3 +325,49 @@ export function cssReach(css: string, resolve: Resolve): { destinations: string[
   }
   return { destinations, text, attributes };
 }
+// Properties that draw text, and what in them does: any string with something to show, counters, attr(), and var() or
+// env(), which can stand for either.
+const DRAWING = new Set(['content', 'quotes', 'list-style', 'list-style-type', 'text-overflow', 'hyphenate-character', 'text-emphasis', 'text-emphasis-style', 'string-set']);
+const DRAWING_FUNCTIONS = new Set(['counter', 'counters', 'attr', 'var', 'env', 'symbols', 'leader', 'target-counter', 'target-counters', 'target-text', 'string', 'content']);
+/**
+ * Where CSS draws text: the selectors of rules whose content, quotes, list markers, text-overflow, hyphenation or
+ * emphasis marks show a string, a counter or an attribute, and @counter-style. Text drawn this way is assembled by the
+ * client (in its own order, from strings and attributes anywhere in the message), so a screen that reads the message
+ * as written can't read it; mail delivered as written that asks to be screened is refused when it has any (`inline`: a
+ * style attribute, reported as such). An empty or blank string (a clearfix's content:"") draws nothing and is allowed.
+ */
+export function generatedText(css: string, inline = false): string[] {
+  const found: string[] = [];
+  let tokens: Token[];
+  const text = css.replace(/\r\n?/g, '\n');
+  try { tokens = tokenize(text); } catch (error) { if (error instanceof Limit) return ['a style sheet over the CSS budget']; throw error; }
+  const note = (where: string) => { const name = where.replace(/\s+/g, ' ').trim().slice(0, 120) || 'a rule'; if (!found.includes(name) && found.length < 10) found.push(name); };
+  const preludes: string[] = [];
+  // `first`: the next token starts a declaration (after {, ; or the start of a style attribute), not a selector.
+  let start = 0, first = inline;
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i]!;
+    if (t.kind === 'ws') continue;
+    if (t.kind === '{') { preludes.push(text.slice(start, t.at)); start = t.end; first = true; continue; }
+    if (t.kind === '}') { preludes.pop(); start = t.end; first = true; continue; }
+    if (t.kind === ';') { start = t.end; first = true; continue; }
+    const declaring = first;
+    first = false;
+    if (t.kind === 'at' && t.value.toLowerCase() === 'counter-style') { note('@counter-style'); continue; }
+    if (!declaring || t.kind !== 'ident' || !DRAWING.has(t.value.toLowerCase().replace(/^-(?:webkit|moz|ms|o)-/, ''))) continue;
+    let j = i + 1;
+    while (tokens[j]?.kind === 'ws') j++;
+    if (tokens[j]?.kind !== ':') continue;
+    let depth = 0, draws = false;
+    for (j++; j < tokens.length; j++) {
+      const v = tokens[j]!;
+      if (depth === 0 && (v.kind === ';' || v.kind === '}' || v.kind === '{')) break;
+      if (v.kind === 'function' || v.kind === '(' || v.kind === '[') depth++;
+      else if (v.kind === ')' || v.kind === ']') depth--;
+      if ((v.kind === 'string' && v.value.trim()) || (v.kind === 'function' && DRAWING_FUNCTIONS.has(v.value)) || v.kind === 'bad') draws = true;
+    }
+    if (draws) note(inline ? 'a style attribute' : [...preludes].reverse().find(p => !p.trim().startsWith('@')) ?? preludes.at(-1) ?? 'a declaration outside any rule');
+    i = j - 1;
+  }
+  return found;
+}

@@ -20433,12 +20433,33 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       classifierDown = false;
       const asWritten = `<!-- a sender's note --><style>/* plain */ .o{color:#111}</style><p class="o">Your receipt is attached.</p>`;
       const srcset = await send({ subject: 'Receipt with a picture', html: `<img src="https://cdn.synthetic.invalid/a.png" srcset="https://cdn.synthetic.invalid/${marker},x.png 1x" alt="Receipt"><p>Your receipt is attached.</p>`, screen: true });
-      const drawn = await send({ subject: 'Receipt with a style', html: `<style>.o::before{content:"${marker}"}</style><p class="o">Your receipt is attached.</p>`, screen: true });
       const kept = await send({ subject: 'Receipt as written', html: asWritten, screen: true });
+      // A clearfix's empty content draws nothing.
+      const clearfix = await send({ subject: 'Receipt with a clearfix', html: '<style>.row:after{content:"";display:table;clear:both}</style><div class="row">Your receipt is attached.</div>', screen: true });
       await dispatchDue(runtime, REGION);
-      assert.deepEqual([(await get(srcset)).errorCode, (await get(drawn)).errorCode, (await get(kept)).status], ['CONTENT_REJECTED_SPAM', 'CONTENT_REJECTED_SPAM', 'accepted']);
-      assert.ok(!sent.includes(srcset) && !sent.includes(drawn));
+      assert.deepEqual([(await get(srcset)).errorCode, (await get(kept)).status, (await get(clearfix)).status], ['CONTENT_REJECTED_SPAM', 'accepted', 'accepted']);
+      assert.ok(!sent.includes(srcset));
       assert.equal(htmls.get(kept), asWritten, 'Mail delivered as submitted goes to SES byte for byte.');
+      // Recheck 6, R6-M1: text the CSS draws is assembled by the client, in its own order, from strings and attributes
+      // anywhere in the message, so the screen can't read it as written. With screen: true such mail is refused at once,
+      // naming the selector; without it, it is sent as written; the checker warns either way.
+      const drawing: [string, string][] = [
+        [`<style>.o::before{content:attr(data-a) attr(data-b)}</style><p class="o" data-b="${marker.slice(6)}" data-a="${marker.slice(0, 6)}">Account ready.</p>`, '.o::before'],
+        [`<style>.o::before{content:"${marker.slice(0, 3)}" "${marker.slice(3, 6)}" "${marker.slice(6)}"}</style><p class="o">Account ready.</p>`, '.o::before'],
+        [`<style>.o::before{content:"${marker}"}</style><p class="o">Account ready.</p>`, '.o::before'],
+        [`<style>@media (min-width:0px){ol li::marker{content:counter(list-item) " ${marker}"}}</style><ol><li>Account ready.</li></ol>`, 'ol li::marker'],
+        [`<style>q{quotes:"${marker}" ""}</style><p><q>Account ready.</q></p>`, 'q'],
+        [`<p style="content:'${marker}'">Account ready.</p>`, '<p style>'],
+      ];
+      for (const [html, selector] of drawing) {
+        const refused = error(await local('POST', '/v1/emails/send', mail({ subject: 'Account ready', html, screen: true }), 'live'), 422, 'UNSUPPORTED_CSS_GENERATED_TEXT');
+        assert.ok(refused.message.includes(selector) && refused.details[0].selectors.includes(selector), `${selector}: ${refused.message}`);
+        const warning = ok(await local('POST', '/v1/emails/check', { from: mail({}).from, subject: 'Account ready', stream: 'transactional', html }, 'live')).findings.find((x: Json) => x.ruleId === 'css-generated-text');
+        assert.equal(warning?.severity, 'warning', selector);
+      }
+      const unscreenedDrawing = await send({ subject: 'Account ready, unscreened', html: drawing[0]![0] });
+      await dispatchDue(runtime, REGION);
+      assert.equal(htmls.get(unscreenedDrawing), drawing[0]![0], 'Without screen: true it is sent as written.');
     });
   });
 

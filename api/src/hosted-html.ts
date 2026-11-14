@@ -20,7 +20,7 @@
  */
 import { defaultTreeAdapter, html as spec, serializeOuter, type DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
-import { cssReach, hostedDeclarations, hostedSheet, loadsResource, type FontPolicy } from './hosted-css.js';
+import { cssReach, generatedText, hostedDeclarations, hostedSheet, loadsResource, type FontPolicy } from './hosted-css.js';
 
 type Node = DefaultTreeAdapterMap['childNode'];
 type Parent = DefaultTreeAdapterMap['parentNode'];
@@ -87,10 +87,13 @@ export type HostedHtml = {
   tags: Set<string>;
   /** Hosts whose fonts or style sheets were removed, for the sender. */
   fonts: string[];
+  /** Where the submitted CSS draws text (src/hosted-css.ts generatedText): the canonical copy removes it; mail
+   *  delivered as written can't be screened with it. */
+  generated: string[];
   /** Text a sheet could draw, read beside the document's text (mail delivered as submitted). */
   text: string[];
 };
-type Sink = { destinations: Set<string>; unsupported: string[]; removed: string[]; changes: number; tags: Set<string>; fonts: string[]; policy: FontPolicy; css: Map<string, ReturnType<typeof hostedDeclarations>> };
+type Sink = { destinations: Set<string>; unsupported: string[]; removed: string[]; changes: number; tags: Set<string>; fonts: string[]; generated: string[]; policy: FontPolicy; css: Map<string, ReturnType<typeof hostedDeclarations>> };
 const foreign = (sink: Sink, host: string) => { if (!sink.fonts.includes(host)) sink.fonts.push(host); note(sink.removed, `Custom font from ${host} removed`); };
 // Mail repeats the same inline styles on every row and cell: each distinct one is read once per pass.
 const declarations = (sink: Sink, value: string) => { let read = sink.css.get(value); if (!read) { read = hostedDeclarations(value, resource); sink.css.set(value, read); } return read; };
@@ -135,6 +138,7 @@ function sanitize(parent: Parent | DefaultTreeAdapterMap['commentNode'], sink: S
     if (tag === 'style') {
       attributes(element, tag, sink, frozen, placeholders);
       const css = element.childNodes.map(child => 'value' in child ? child.value : '').join(''), read = hostedSheet(css, resource, sink.policy);
+      for (const where of generatedText(css)) note(sink.generated, where);
       if (read.removed.length) { sink.changes++; for (const what of read.removed) note(sink.removed, what); }
       for (const host of read.fonts) if (!sink.fonts.includes(host)) sink.fonts.push(host);
       for (const target of read.destinations) sink.destinations.add(target);
@@ -166,6 +170,7 @@ function attributes(element: Element, tag: string, sink: Sink, frozen: boolean, 
     const name = (a.prefix ? `${a.prefix}:${a.name}` : a.name).toLowerCase(), value = a.value;
     if (STRIPPED_ATTRIBUTES.has(name)) { drop(a, `the ${name} attribute`); continue; }
     if (name === 'style') {
+      if (generatedText(value, true).length) note(sink.generated, `<${tag} style>`);
       const read = declarations(sink, value);
       for (const target of read.destinations) sink.destinations.add(target);
       if (read.removed.length) { sink.changes++; for (const what of read.removed) note(sink.removed, what); }
@@ -196,7 +201,7 @@ function doctype(node: DefaultTreeAdapterMap['documentType']) {
   return `<!DOCTYPE ${node.name}${node.publicId ? ` PUBLIC ${id(node.publicId)}${node.systemId ? ` ${id(node.systemId)}` : ''}` : node.systemId ? ` SYSTEM ${id(node.systemId)}` : ''}>`;
 }
 function pass(html: string, placeholders: boolean, policy: FontPolicy) {
-  const ambiguous = new Set<object>(), sink: Sink = { destinations: new Set(), unsupported: [], removed: [], changes: 0, tags: new Set(), fonts: [], policy, css: new Map() };
+  const ambiguous = new Set<object>(), sink: Sink = { destinations: new Set(), unsupported: [], removed: [], changes: 0, tags: new Set(), fonts: [], generated: [], policy, css: new Map() };
   const root = boundedHtmlFragment(html, 'document', { clients: true, onParseError: (error, within) => {
     if (error.code !== 'duplicate-attribute') return;
     if (within) ambiguous.add(within); else note(sink.removed, 'a repeated attribute (the first is kept)');
@@ -217,8 +222,8 @@ const ADDRESSES = /https?:[\\/]{2}[^\s"'<>]+/gi;
  * client may show (comments, templates, frame fallbacks) is searched too. CSS strings and the attributes attr() reads
  * are text a sheet could draw, so they are read as text. A superset of what a client uses.
  */
-function asSent(root: Document, placeholders: boolean): Omit<HostedHtml, 'html' | 'root' | 'removed' | 'fonts'> & { text: string[] } {
-  const sink: Sink = { destinations: new Set(), unsupported: [], removed: [], changes: 0, tags: new Set(), fonts: [], policy: fontPolicy({ hosts: [] }), css: new Map() };
+function asSent(root: Document, placeholders: boolean): Omit<HostedHtml, 'html' | 'root' | 'removed' | 'fonts'> {
+  const sink: Sink = { destinations: new Set(), unsupported: [], removed: [], changes: 0, tags: new Set(), fonts: [], generated: [], policy: fontPolicy({ hosts: [] }), css: new Map() };
   const text: string[] = [], read = new Set<string>();
   const addresses = (value: string) => { for (const match of value.matchAll(ADDRESSES)) { const target = destination(match[0]); if (target) sink.destinations.add(target); } };
   const css = (value: string) => {
@@ -233,7 +238,11 @@ function asSent(root: Document, placeholders: boolean): Omit<HostedHtml, 'html' 
       const tag = node.tagName.toLowerCase();
       sink.tags.add(tag);
       if (tag === 'base') note(sink.unsupported, '<base>');
-      if (tag === 'style') css(node.childNodes.map(child => 'value' in child ? child.value : '').join(''));
+      if (tag === 'style') {
+        const sheet = node.childNodes.map(child => 'value' in child ? child.value : '').join('');
+        css(sheet);
+        for (const where of generatedText(sheet)) note(sink.generated, where);
+      }
       for (const a of node.attrs) {
         const name = (a.prefix ? `${a.prefix}:${a.name}` : a.name).toLowerCase();
         if (name === 'style' || CSS_ATTRIBUTES.has(name)) css(a.value);
@@ -256,7 +265,7 @@ function asSent(root: Document, placeholders: boolean): Omit<HostedHtml, 'html' 
     };
     collect(root);
   }
-  return { destinations: sink.destinations, unsupported: sink.unsupported, tags: sink.tags, text };
+  return { destinations: sink.destinations, unsupported: sink.unsupported, tags: sink.tags, generated: sink.generated, text };
 }
 /** How a body is read: whether addresses may start with a placeholder, where fonts may come from, and whether it is
  *  delivered as submitted (`original`) rather than as its canonical copy. */
@@ -274,12 +283,12 @@ export function hostedHtml(html: string, { placeholders = false, fonts = { hosts
   const policy = fontPolicy(fonts);
   let input = html, read = pass(input, placeholders, policy);
   if (!read) return null;
-  const { removed, tags, fonts: foreignFonts } = read;
+  const { removed, tags, fonts: foreignFonts, generated } = read;
   for (let i = 0; i < 3 && (read.changes || read.html !== input); i++) {
     input = read.html;
     read = pass(input, placeholders, policy);
     if (!read) return null;
   }
   if (read.changes || read.html !== input) return null;
-  return { html: read.html, root: read.root as Document, destinations: read.destinations, unsupported: read.unsupported, removed, tags, fonts: foreignFonts, text: [] };
+  return { html: read.html, root: read.root as Document, destinations: read.destinations, unsupported: read.unsupported, removed, tags, fonts: foreignFonts, generated, text: [] };
 }

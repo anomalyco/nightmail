@@ -140,7 +140,7 @@ const SendInput = z.object({
   if (v.template && (v.attachments.length || v.kind === 'marketing')) ctx.addIssue({ code: 'custom', message: 'Stored templates currently support transactional messages without attachments only.' });
 }).openapi('BatchSendEmailItem');
 // The screen's limits (src/screen.ts), as the API reference states them; the defaults of JEV_MESSAGE_LIMIT_BYTES and JEV_CAMPAIGN_LIMIT_BYTES.
-const SCREEN_LIMIT_NOTE = 'Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML\u2019s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once), and every distinct address it links to or loads from (links, images and other resources, and addresses in its text), each read as a client resolves it (WHATWG URL with IDNA) and in full. It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item\u2019s index, and no message of the batch is queued. Hosted mail is delivered as the canonical copy of its HTML that the screen reads: CSS is kept as written less declarations and rules outside a presentation-property allow-list (custom properties, var(), url() but one https background-image, and at-rules but @media and font-service @font-face/@import are removed), and scripts, comments other than Outlook\u2019s conditional ones, preload hints, fonts and style sheets from anywhere but font services, and other markup it can\u2019t read are removed; every kept link and resource is screened by address. Bring-your-own AWS mail with screen: true is sent and screened as submitted. <base>, and link or resource addresses other than absolute http(s), mailto, tel, cid or #fragment, are refused at once with 422 UNSUPPORTED_URL_IN_HOSTED_MAIL, the message naming each element and attribute and error.details[0].unsupported listing them.';
+const SCREEN_LIMIT_NOTE = 'Screened-text limit: Hosted sending (and `screen: true`) screens each message before delivery and reads its HTML\u2019s visible text and alt text, plus the text part unless, normalized, it is exactly the same text (a text part generated from the HTML counts once), and every distinct address it links to or loads from (links, images and other resources, and addresses in its text), each read as a client resolves it (WHATWG URL with IDNA) and in full. It reads at most 24,576 UTF-8 bytes per message (installation default) and 60 distinct link hosts, counting link labels that name another host. Over either limit, the request is refused at once with 422 CONTENT_TOO_LARGE_TO_SCREEN and error.details[0] holding { screenedBytes, limitBytes } or { linkHosts, linkHostLimit }; in a batch, details also carry the item\u2019s index, and no message of the batch is queued. Hosted mail is delivered as the canonical copy of its HTML that the screen reads: CSS is kept as written less declarations and rules outside a presentation-property allow-list (custom properties, var(), url() but one https background-image, and at-rules but @media and font-service @font-face/@import are removed), and scripts, comments other than Outlook\u2019s conditional ones, preload hints, fonts and style sheets from anywhere but font services, and other markup it can\u2019t read are removed; every kept link and resource is screened by address. Bring-your-own AWS mail with screen: true is sent and screened as submitted; if its CSS draws text (content, quotes or list markers with strings, counters or attr()), which the screen can\u2019t read as the recipient sees it, it is refused at once with 422 UNSUPPORTED_CSS_GENERATED_TEXT naming the selectors. Without screen: true it is unaffected. <base>, and link or resource addresses other than absolute http(s), mailto, tel, cid or #fragment, are refused at once with 422 UNSUPPORTED_URL_IN_HOSTED_MAIL, the message naming each element and attribute and error.details[0].unsupported listing them.';
 const CAMPAIGN_SCREEN_NOTE = 'Hosted campaigns are screened copy by copy before they are released, as single messages are, but each distinct copy only once: recipients whose personalized copies read the same share one verdict, so a campaign personalized only with first names costs one screen per distinct first name, and one with a unique value per recipient costs one per recipient. The campaign\u2019s own copy, placeholders unresolved, is screened first and may hold 49,152 bytes of screened text (installation default; 422 CONTENT_TOO_LARGE_TO_SCREEN with error.details[0] { screenedBytes, limitBytes } otherwise); so may each copy, and a copy over it is refused alone. A copy the screen refuses is never sent (CONTENT_REJECTED_SPAM); when refused copies pass 5% and 10 recipients the campaign pauses once for review, and a positive verdict on the campaign\u2019s own copy fails it before anyone is sent to. Addresses follow the single-message rules (422 UNSUPPORTED_URL_IN_HOSTED_MAIL), except that the campaign\u2019s own copy may start an address with a placeholder; a recipient\u2019s copy whose address is then not allowed is refused alone with that code.';
 // SMTP already limits the entire MIME message to the advertised wire SIZE. Keep all
 // address, HTML and encoded-size checks, without imposing the public JSON body-part cap.
@@ -790,7 +790,7 @@ function screenedAtDispatch(runtime: Runtime, snapshot: Pick<EmailSnapshot, 'kin
   return !!runtime.config.screen && !isSimulatedSes(runtime) && ((shared && runtime.config.hostedScreen) || (!!snapshot.screen && snapshot.kind === 'transactional'));
 }
 // What the screen refuses to read, whoever sends it: these depend on whether the message is screened at all.
-const SCREEN_REFUSALS = new Set(['CONTENT_TOO_LARGE_TO_SCREEN', 'UNSUPPORTED_URL_IN_HOSTED_MAIL']);
+const SCREEN_REFUSALS = new Set(['CONTENT_TOO_LARGE_TO_SCREEN', 'UNSUPPORTED_URL_IN_HOSTED_MAIL', 'UNSUPPORTED_CSS_GENERATED_TEXT']);
 /** The screen's refusal of one message, or undefined when it fits the per-message limit. Hosted mail is measured as its
  *  canonical copy; mail delivered as submitted (BYO `screen: true`, `original`) as written. */
 async function screenRefusal(runtime: Runtime, snapshot: EmailSnapshot, index?: number, original = false) {
@@ -915,7 +915,9 @@ async function atomicAdmission(c:Ctx,input:SendRequest|{emails:SendRequest[]},id
   const bulk=bulkFlags(mails);
   // Whether a message is screened depends on its sender's connection, which the admission statement reads: measure any
   // message the screen may read now, and decide on a refusal only if the statement denies the request.
-  const oversize:(ApiError|undefined)[]=[],screens=!screenChecked && !!c.env.config.screen && !sim;
+  // The screen's refusal of each message, as it would read it: Hosted mail on the shared pool as its canonical copy,
+  // anything else with screen: true as written. Which applies is known once the sender's connection is (below).
+  const oversize:({hosted?:ApiError;asWritten?:ApiError}|undefined)[]=[],screens=!screenChecked && !!c.env.config.screen && !sim;
   for(const [i,m] of mails.entries()){
     const snapshot=structuredSnapshot({...m,region:m.region??''});let token:{hash:string;email:string}|undefined;
     if(bulk[i])snapshot.bulk=true;
@@ -933,7 +935,11 @@ async function atomicAdmission(c:Ctx,input:SendRequest|{emails:SendRequest[]},id
       if(batch && expanded>SENDING_LIMITS.expandedCampaignBytes)throw new ApiError(413,'BATCH_CONTENT_TOO_LARGE','Expanded batch content exceeds the installation limit.');
     }catch(e){if(e instanceof ModuleLoadError)throw e;prepError??=e;}
     rows.push({id:data[i]!.id,snapshot,...token});
-    if(screens && (c.env.config.hostedScreen || (m.screen && m.kind==='transactional')))oversize[i]=await screenRefusal(c.env,snapshot,batch?i:undefined,!c.env.config.hostedScreen);
+    if(screens && (c.env.config.hostedScreen || (m.screen && m.kind==='transactional'))){
+      const hosted=c.env.config.hostedScreen?await screenRefusal(c.env,snapshot,batch?i:undefined,false):undefined;
+      const asWritten=m.screen && m.kind==='transactional'?await screenRefusal(c.env,snapshot,batch?i:undefined,true):undefined;
+      if(hosted||asWritten)oversize[i]={hosted,asWritten};
+    }
     wanted.push({host:m.from.split('@')[1]!.toLowerCase(),region:m.region,kind:m.kind,attachments:m.attachments,bodyBytes:Buffer.byteLength((snapshot.html??'')+(snapshot.text??'')+snapshot.subject)});
     const all=hostedCost(m.to,m.cc,m.bcc),n=sim?0:all;cost+=n;billable+=all;if(m.kind==='marketing'||bulk[i])marketing+=n;
   }
@@ -986,9 +992,10 @@ async function atomicAdmission(c:Ctx,input:SendRequest|{emails:SendRequest[]},id
       sizeCheck(rows[i]!.snapshot,assets);
     }
     if(prepError)throw prepError;
-    for(const [i,refused] of oversize.entries()){
-      const connection=state.routes?.[wanted[i]!.host]?.connection??state.connection;
-      if(refused && screenedAtDispatch(c.env,rows[i]!.snapshot,connection?.kind==='shared'))throw refused;
+    for(const [i,refusals] of oversize.entries()){
+      const connection=state.routes?.[wanted[i]!.host]?.connection??state.connection,shared=connection?.kind==='shared';
+      const refused=shared && cfg.hostedScreen?refusals?.hosted:refusals?.asWritten;
+      if(refused && screenedAtDispatch(c.env,rows[i]!.snapshot,shared))throw refused;
     }
     // Only messages the screen never reads were over its limit: admit the request without measuring.
     if(oversize.some(Boolean))return atomicAdmission(c,input,'actor' in identity?identity:{actor:a},true);
@@ -1643,7 +1650,7 @@ function backgroundFailure(error: unknown) {
   const placeholder = error instanceof ApiError && code === 'MISSING_TEMPLATE_VARIABLE' ? /\{\{([a-zA-Z_][a-zA-Z0-9_]*)\}\}/.exec(error.message)?.[1] : undefined;
   if (placeholder) return { code, message: `A recipient has no value for {{${placeholder}}} (${code}). Add a fallback value for ${placeholder} and send again.` };
   // The screen's refusals name only sizes and limits, never a contact or its values.
-  if (error instanceof ApiError && ['CONTENT_REJECTED_SPAM', 'CONTENT_TOO_LARGE_TO_SCREEN', 'UNSUPPORTED_URL_IN_HOSTED_MAIL', 'CONTENT_SCREEN_BUDGET_EXCEEDED'].includes(code)) return { code, message: error.message };
+  if (error instanceof ApiError && ['CONTENT_REJECTED_SPAM', 'CONTENT_TOO_LARGE_TO_SCREEN', 'UNSUPPORTED_URL_IN_HOSTED_MAIL', 'UNSUPPORTED_CSS_GENERATED_TEXT', 'CONTENT_SCREEN_BUDGET_EXCEEDED'].includes(code)) return { code, message: error.message };
   return { code, message: `Campaign work could not finish (${code}). Correct the cause and send again, or cancel the campaign.` };
 }
 // Send and schedule: freeze the audience and content now, reserve the recipients, and hand the one run job the rest.

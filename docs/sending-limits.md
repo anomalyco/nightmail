@@ -132,6 +132,8 @@ Every kept address (links, images, `background-image`, fonts, imports) is on the
 
 **Bring-your-own AWS with `screen: true`:** the message goes out exactly as submitted and is screened as written, not as a Hosted copy. The screen reads its text, every address it could link to or load from, and the text its style sheet could draw. Addresses include URL attributes, every `srcset` candidate, and every `url()` or absolute address anywhere in its CSS, custom properties and `var()` fallbacks included. Drawn text includes CSS strings and the attributes `attr()` reads. `<base>` and relative addresses are refused as above.
 
+Text that CSS draws, though, is assembled by the recipient's client in its own order, from strings and attributes anywhere in the message, so a screen reading the message as written can't read it as the recipient sees it. Such mail with `screen: true` is refused at once with 422 `UNSUPPORTED_CSS_GENERATED_TEXT`, naming the selectors in the message and in `error.details[0].selectors`. This covers `content`, `quotes`, list markers, `text-overflow`, hyphenation or emphasis marks with strings, counters or `attr()`, and `@counter-style`. An empty `content: ""` (a clearfix) is fine. Without `screen: true` the mail is unaffected. `POST /v1/emails/check` shows a `css-generated-text` warning for it.
+
 Every URL-bearing attribute is either read as a destination or removed:
 
 | Attribute | Treatment |
