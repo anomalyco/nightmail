@@ -30,10 +30,8 @@
    "findings": []
   },
   "Campaign editor · desktop": {
-   "score": 73,
-   "findings": [
-    "disclosure|sendability|ei-score__value"
-   ]
+   "score": 45,
+   "findings": []
   },
   "Campaign review · desktop": {
    "score": 20,
@@ -287,28 +285,20 @@
    "findings": []
   },
   "Sent email · desktop": {
-   "score": 56,
-   "findings": [
-    "disclosure|sendability|ei-score__value"
-   ]
+   "score": 31,
+   "findings": []
   },
   "Sent email · junk-like · desktop": {
-   "score": 97,
-   "findings": [
-    "disclosure|sendability|ei-score__value"
-   ]
+   "score": 34,
+   "findings": []
   },
   "Sent email · junk-like · phone": {
-   "score": 89,
-   "findings": [
-    "disclosure|sendability|ei-score__value"
-   ]
+   "score": 31,
+   "findings": []
   },
   "Sent email · phone": {
-   "score": 49,
-   "findings": [
-    "disclosure|sendability|ei-score__value"
-   ]
+   "score": 29,
+   "findings": []
   },
   "Settings · MCP connection · desktop": {
    "score": 19,
