@@ -1,93 +1,110 @@
 /* The "nmc" homepage: the coin has the page, and a caption runs under it: what it costs on the left, Sign in on the
    right. The coin is drawn on a full-bleed canvas (nmc-coin.ts) where .nmc-coin lies. Below 720 px the caption stacks. */
 .nmc-page {
-  --nmc-pad: clamp(20px, 5.556vw, 96px);
-  --nmc-type: clamp(44px, 5.556vw, 96px);
-  /* The stage is what the header (64), the footer (57) and the caption (the headline, 20, 50 of small print, 44
-     under it) leave of the first screen. The coin stands 44px off its bottom and keeps a sixth of its width clear
-     above, where its far rim swings while it spins down; room beyond that is shared above and below. */
-  --nmc-stage: calc(100svh - 235px - var(--nmc-type));
+  /* The page's two edges and the headline's size grow with the window, in whole pixels so that boxes land on them. */
+  --nmc-pad: clamp(20px, round(5.556vw, 1px), 96px);
+  --nmc-type: clamp(44px, round(5.556vw, 2px), 96px);
+  /* The stage is what the header (64), the footer (57) and the caption (the headline, 20, 50 of small print, 48
+     under it) leave of the first screen. The coin stands --nmc-foot off its bottom and keeps --nmc-swing of its
+     width clear above, where its far rim swings while it settles; room beyond that is shared above and below. */
+  --nmc-stage: calc(100svh - 239px - var(--nmc-type));
   --nmc-wide: 44vw;
   --nmc-least: 240px;
-  --nmc-foot: 44px;
-  --nmc-swing: .16;
+  --nmc-foot: 76px;
+  --nmc-swing: .13;
   --nmc-d: max(var(--nmc-least), min(var(--nmc-wide), 720px, (var(--nmc-stage) - var(--nmc-foot)) / (var(--nmc-aspect) + var(--nmc-swing))));
-  --nmc-ease: cubic-bezier(.2, .8, .2, 1);
   position: relative; display: flex; flex-direction: column; min-height: 100dvh; overflow: clip;
 }
 .nmc-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; pointer-events: none; }
 
 .nmc-header { position: relative; display: flex; flex: none; align-items: center; justify-content: space-between; height: 64px; padding-inline: var(--nmc-pad); border-bottom: 1px solid var(--color-border-muted); }
 .nmc-header .wordmark, .nmc-header .theme-toggle { position: static; }
-.nmc-nav { display: flex; align-items: center; gap: var(--space-4); margin-right: -10px; }
+.nmc-nav { display: flex; align-items: center; gap: var(--space-4); margin-right: -6px; }
 .nmc-nav > a { display: inline-flex; align-items: center; height: 32px; padding: 0 10px; border-radius: var(--radius-sm); color: var(--color-muted); text-decoration: none; transition: color 120ms ease-out, background-color 120ms ease-out; }
 @media (hover: hover) and (pointer: fine) { .nmc-nav > a:hover { background: var(--color-hover); color: var(--color-text); } }
+/* The toggle's icon ends on the page's edge: its button is 28px wide with a pointer and 36px under a finger (ui.css). */
+@media (pointer: coarse), (max-width: 899px) {
+  .nmc-nav { margin-right: -10px; }
+  .nmc-nav > a { height: 44px; padding-inline: var(--space-12); }
+}
 
 .nmc-main { position: relative; display: flex; flex: 1; flex-direction: column; padding-inline: var(--nmc-pad); }
 .nmc-notice { width: min(100%, 520px); margin: var(--space-24) auto 0; }
 .nmc-stage { display: flex; flex: 1; align-items: flex-end; justify-content: center; min-height: 0; padding-bottom: max(var(--nmc-foot), (var(--nmc-stage) - var(--nmc-d) * (var(--nmc-aspect) + var(--nmc-swing))) / 2); }
 .nmc-coin { flex: none; width: var(--nmc-d); aspect-ratio: 1 / var(--nmc-aspect); }
 
-.nmc-caption { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 20px 48px; padding-bottom: 44px; }
+.nmc-caption { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 20px 48px; padding-bottom: 48px; }
 .nmc-title { grid-area: 1 / 1; font-size: var(--nmc-type); font-weight: 530; line-height: 1; letter-spacing: -.042em; white-space: nowrap; }
-.nmc-title span { display: inline-block; white-space: pre; }
 .nmc-title br { display: none; }
 .nmc-what { grid-area: 2 / 1; align-self: baseline; }
 .nmc-lede { color: var(--color-muted); font-size: 16px; line-height: 24px; letter-spacing: -.011em; }
-/* The two figures, set as data: the mono's capitals, spaced, with the unit left in lower case. */
-.nmc-facts { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 10px 0 0; padding: 0; list-style: none; color: var(--color-faint); font-family: var(--font-mono); font-size: 11px; line-height: 16px; letter-spacing: .06em; text-transform: uppercase; }
-.nmc-facts li + li { padding-left: 13px; border-left: 1px solid var(--color-border-strong); }
+/* The two figures, set as data in the mono: the words in one grey, the figures in the text's colour. */
+.nmc-facts { display: flex; margin: 10px 0 0; padding: 0; list-style: none; color: var(--color-muted); font-family: var(--font-mono); font-size: 12px; line-height: 16px; letter-spacing: 0; white-space: nowrap; }
+.nmc-facts li + li { margin-left: 14px; padding-left: 15px; border-left: 1px solid var(--color-border-strong); }
 .nmc-facts b { color: var(--color-text); font-weight: 400; }
-.nmc-facts i { font-style: normal; text-transform: none; }
-.nmc-cta { grid-area: 1 / 2; justify-self: end; display: inline-flex; align-items: center; justify-content: center; gap: var(--space-8); height: 48px; margin-top: .09em; padding: 0 20px 0 24px; border: 0; border-radius: 999px; background: var(--color-contrast); color: var(--color-on-contrast); font: inherit; font-size: 16px; font-weight: 530; line-height: 24px; letter-spacing: -.012em; white-space: nowrap; cursor: pointer; transition: background-color 160ms var(--ease-out-strong), transform 160ms var(--ease-out-strong); }
-.nmc-cta svg { flex: none; transition: transform 200ms var(--ease-out-strong); }
+
+/* Sign in stands on the headline's line: as tall as its capitals, from the cap line down to the baseline. */
+.nmc-cta { grid-area: 1 / 2; justify-self: end; display: inline-flex; align-items: center; justify-content: center; gap: 10px; height: clamp(48px, round(var(--nmc-type) * .725, 2px), 60px); margin-top: round(var(--nmc-type) * .137, 1px); padding: 0 26px 0 30px; border: 0; border-radius: 999px; background: var(--color-contrast); color: var(--color-on-contrast); font: inherit; font-size: 18px; font-weight: 530; line-height: 24px; letter-spacing: -.014em; white-space: nowrap; cursor: pointer; transition: background-color 160ms var(--ease-out-strong), transform 160ms var(--ease-out-strong); }
+.nmc-cta-mark { position: relative; flex: none; width: 18px; height: 18px; }
+.nmc-cta-mark > svg { position: absolute; inset: 0; transition: opacity 140ms ease-out, transform 200ms var(--ease-out-strong); }
+.nmc-cta-wait { opacity: 0; }
 @media (hover: hover) and (pointer: fine) {
   .nmc-cta:hover:not(:disabled) { background: var(--color-contrast-hover); }
-  .nmc-cta:hover:not(:disabled) svg { transform: translateX(3px); }
+  .nmc-cta:hover:not(:disabled) .lucide { transform: translateX(3px); }
 }
 .nmc-cta:active:not(:disabled) { transform: scale(.97); }
-/* Signing in: the button keeps its colour and the arrow keeps leaving. */
-.nmc-cta:disabled { opacity: 1; cursor: progress; }
-.nmc-cta[data-busy] svg { transform: translateX(3px); }
-@media (prefers-reduced-motion: no-preference) { .nmc-cta[data-busy] svg { animation: nmc-go 720ms var(--nmc-ease) infinite; } }
-@keyframes nmc-go { from { opacity: 0; transform: translateX(-5px); } 35% { opacity: 1; } to { opacity: 0; transform: translateX(9px); } }
 .nmc-cta:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: 3px; }
-.nmc-consent { grid-area: 2 / 2; align-self: baseline; justify-self: end; max-width: 34ch; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); text-align: right; text-wrap: balance; }
+/* Signing in: the button stays lit, lets go of the press, and a spinner takes the arrow's place. */
+.nmc-cta:disabled { opacity: 1; cursor: progress; }
+.nmc-cta[data-busy] { background: var(--color-contrast-hover); }
+.nmc-cta[data-busy] .lucide { opacity: 0; transform: translateX(6px); }
+.nmc-cta[data-busy] .nmc-cta-wait { opacity: 1; }
+@media (prefers-reduced-motion: no-preference) {
+  .nmc-cta[data-busy] { animation: nmc-release 320ms var(--ease-out-strong); }
+  .nmc-cta[data-busy] .nmc-cta-wait { animation: nmc-turn 720ms linear infinite; }
+}
+@keyframes nmc-release { from { transform: scale(.97); } }
+@keyframes nmc-turn { to { transform: rotate(1turn); } }
+.nmc-consent { grid-area: 2 / 2; align-self: baseline; justify-self: end; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); text-align: right; white-space: nowrap; }
 
 .nmc-footer { position: relative; flex: none; padding-inline: var(--nmc-pad); border-top: 1px solid var(--color-border-muted); }
-.nmc-page .home-footer { height: 56px; padding-block: 0; border-top: 0; }
+.nmc-page .home-footer { height: 56px; padding-block: 0; border-top: 0; color: var(--color-faint); }
 
-/* The words arrive one after another as the coin spins down; nothing moves the layout. */
+/* The copy arrives a line at a time while the coin settles; the button is there from the first frame. Nothing moves
+   the layout. */
 @media (prefers-reduced-motion: no-preference) {
-  .nmc-title span, .nmc-what, .nmc-cta, .nmc-consent { animation: nmc-arrive 760ms var(--nmc-ease) backwards; }
-  .nmc-title span { animation-delay: calc(60ms + var(--nmc-i) * 60ms); }
-  .nmc-what { animation-delay: 340ms; }
-  .nmc-cta { animation-delay: 420ms; }
-  .nmc-consent { animation-delay: 500ms; }
+  .nmc-title, .nmc-lede, .nmc-facts, .nmc-consent { animation: nmc-arrive 280ms var(--ease-out-strong) backwards; }
+  .nmc-title { animation-delay: 40ms; }
+  .nmc-lede { animation-delay: 100ms; }
+  .nmc-facts { animation-delay: 160ms; }
+  .nmc-consent { animation-delay: 220ms; }
 }
-@keyframes nmc-arrive { from { opacity: 0; transform: translateY(.2em); filter: blur(6px); } }
+@keyframes nmc-arrive { from { opacity: 0; transform: translateY(8px); } }
 
-/* The two figures share a line only where the caption's left side has the width for both. */
-@media (max-width: 1023px) {
-  .nmc-page { --nmc-stage: calc(100svh - 255px - var(--nmc-type)); }
+/* The two figures share a line, and the consent stays on one, only where the caption has the width for both. */
+@media (max-width: 1099px) {
+  .nmc-page { --nmc-stage: calc(100svh - 259px - var(--nmc-type)); }
   .nmc-facts { display: grid; gap: 4px; }
-  .nmc-facts li + li { padding-left: 0; border-left: 0; }
+  .nmc-facts li + li { margin-left: 0; padding-left: 0; border-left: 0; }
+  .nmc-consent { max-width: 34ch; white-space: normal; text-wrap: balance; }
 }
 /* A window taller than it is wide has the height for a wider coin. */
 @media (min-width: 720px) and (max-aspect-ratio: 1 / 1) { .nmc-page { --nmc-wide: 62vw; } }
 
 @media (max-width: 719px) {
-  /* Header 56, footer 49, and the stacked caption: two lines of headline, 82 of small print, 76 of button, 44 of
-     consent, 20 under it. The slice slides out below the coin, so the coin stands higher off the caption. */
-  .nmc-page { --nmc-type: clamp(40px, 12vw, 52px); --nmc-stage: calc(100svh - 327px - 2 * var(--nmc-type)); --nmc-wide: calc(100vw - 2 * var(--nmc-pad)); --nmc-least: 160px; --nmc-foot: 56px; --nmc-swing: .2; }
+  /* Header 56, footer 49, and the stacked caption: two lines of headline, 82 of small print, 80 of button, 44 of
+     consent, 20 under it. The coin is narrower than the column, so that its shadow stays inside it, and stands
+     higher off the caption, where the slice slides out towards the button. */
+  .nmc-page { --nmc-type: clamp(40px, round(12vw, 2px), 52px); --nmc-stage: calc(100svh - 331px - 2 * var(--nmc-type)); --nmc-wide: calc((100vw - 2 * var(--nmc-pad)) / 1.14); --nmc-least: 160px; --nmc-foot: 84px; --nmc-swing: .2; }
   .nmc-header { height: 56px; }
-  .nmc-coin { --nmc-aim: 62; }
+  .nmc-stage { padding-bottom: max(var(--nmc-foot), var(--nmc-stage) - var(--nmc-d) * (var(--nmc-aspect) + var(--nmc-swing))); }
   .nmc-caption { grid-template-columns: minmax(0, 1fr); gap: 0; padding-bottom: 20px; }
   .nmc-title, .nmc-what, .nmc-cta, .nmc-consent { grid-area: auto; }
   .nmc-title br { display: inline; }
   .nmc-what { margin-top: 14px; }
   .nmc-lede { font-size: 15px; line-height: 22px; }
-  .nmc-cta { justify-self: stretch; height: 52px; margin-top: var(--space-24); }
+  .nmc-facts { font-size: 11px; }
+  .nmc-cta { justify-self: stretch; height: 56px; margin-top: var(--space-24); }
   .nmc-consent { justify-self: start; max-width: none; margin-top: var(--space-12); text-align: left; }
   .nmc-page .home-footer { height: 48px; }
 }
