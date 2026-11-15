@@ -39,7 +39,7 @@
   .lt-cta:hover .lt-cta-label { transform: translateY(-4px); }
 }
 .lt-cta:active:not(:disabled) { transform: scale(.98); }
-.lt-cta[data-busy] { cursor: default; }
+.lt-cta[data-busy] { opacity: 1; cursor: progress; }
 .lt-cta[data-busy] .lt-cta-flap { transform: scaleY(-1); }
 .lt-cta[data-busy] .lt-cta-flap path { fill: var(--lt-flap-inside); stroke-opacity: 0; }
 .lt-cta[data-busy] .lt-cta-label { transform: translateY(-4px); }
