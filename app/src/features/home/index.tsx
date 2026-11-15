@@ -52,11 +52,12 @@ export function VolumeBars({ values }: { values: readonly number[] }) {
 
 export type HomeProps = { onSignIn: () => void; onSignInIntent: (event: { button: number }) => void; busy: boolean; notice?: ReactNode }
 
-// Design studies for review, chosen with /?home=terminal|editorial|protocol. Without the parameter the current page renders.
+// Design studies for review, chosen with /?home=terminal|editorial|protocol|postage. Without the parameter the current page renders.
 const variants = {
   terminal: lazy(() => import('./variant-terminal').then(module => ({ default: module.TerminalHome }))),
   editorial: lazy(() => import('./variant-editorial').then(module => ({ default: module.EditorialHome }))),
   protocol: lazy(() => import('./variant-protocol').then(module => ({ default: module.ProtocolHome }))),
+  postage: lazy(() => import('./variant-postage').then(module => ({ default: module.PostageHome }))),
 }
 function selectedVariant() {
   const name = new URLSearchParams(window.location.search).get('home')

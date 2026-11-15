@@ -1,0 +1,113 @@
+/* Postage. One ink (the mark's periwinkle) for everything printed on the sheet, and the text colour for the postmark
+   struck over it. The sheet is laid out in its own units (variant-postage.tsx), so it has a fixed aspect ratio and only
+   transforms and opacity animate. */
+.pst-page {
+  --pst-paper: var(--color-surface);
+  --pst-bg: var(--color-deep);
+  --pst-ink: var(--color-brand);
+  --pst-cancel: var(--color-text);
+  --pst-ease: cubic-bezier(.22, .9, .24, 1);
+  display: flex; flex-direction: column; min-height: 100dvh; width: min(100%, 1200px); margin-inline: auto; padding-inline: var(--space-32); overflow-x: clip;
+}
+:root:not([data-theme='dark']) .pst-page { --pst-paper: #FFFFFF; --pst-bg: var(--color-layer-3); --pst-ink: #47588B; }
+/* In light mode the paper is white, so the desk under it is grey: the perforations and the torn stamp's edge read as holes. */
+:root:not([data-theme='dark']):has(.pst-page) body { background: var(--color-layer-3); }
+
+.pst-header { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+.pst-header .wordmark { position: static; }
+.pst-header .theme-toggle { position: relative; inset: auto; }
+.pst-nav { display: flex; align-items: center; gap: var(--space-12); }
+.pst-nav > a { color: var(--color-muted); text-decoration: none; transition: color var(--motion-duration); }
+.pst-nav > a:hover { color: var(--color-text); }
+
+.pst-main { display: flex; flex: 1; flex-direction: column; padding-block: var(--space-24) 72px; }
+/* Desktop: the copy over the comparison on the left, the sheet beside both. Narrower: copy, sheet, comparison. */
+.pst-hero { display: grid; grid-template: 'copy sheet' auto 'compare sheet' 1fr / minmax(0, 400px) minmax(0, 1fr); column-gap: 72px; row-gap: var(--space-40); }
+.pst-copy { grid-area: copy; display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-20); padding-top: var(--space-32); }
+.pst-copy h1 { font-family: var(--font-mono); font-size: 44px; line-height: 1.1; font-weight: 400; letter-spacing: -.02em; text-wrap: balance; }
+.pst-copy > p { color: var(--color-muted); font-size: var(--text-lg); line-height: 26px; text-wrap: pretty; }
+/* Wide enough for the busy spinner, so the button keeps its size when it's pressed. */
+.pst-cta.ui-button { min-width: 124px; height: 40px; margin-top: var(--space-4); padding-inline: 24px; border-radius: var(--radius-sm); font-size: 15px; }
+.pst-cta.ui-button--primary { background: var(--color-contrast); }
+@media (hover: hover) and (pointer: fine) { .pst-cta.ui-button--primary:hover:not(:disabled) { background: var(--color-contrast-hover); } }
+.pst-copy > .pst-consent { margin-top: calc(-1 * var(--space-8)); color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); }
+
+/* The sheet */
+.pst-figure { grid-area: sheet; display: flex; flex-direction: column; gap: var(--space-12); width: 100%; max-width: 600px; margin: 0; justify-self: end; }
+.pst-sheet { position: relative; width: 100%; aspect-ratio: 328 / 306; }
+.pst-paper, .pst-art { position: absolute; inset: 0; display: block; width: 100%; height: 100%; overflow: visible; }
+.pst-paper-fill { fill: var(--pst-paper); }
+.pst-hole { fill: var(--pst-bg); }
+.pst-selvedge { fill: var(--pst-ink); font-family: var(--font-mono); font-size: 4.6px; letter-spacing: .08em; }
+.pst-selvedge--end { text-anchor: end; }
+.pst-pane { margin: 0; padding: 0; list-style: none; }
+.pst-stamp, .pst-torn { position: absolute; }
+.pst-ink { position: absolute; inset: 0; animation: pst-print 380ms var(--pst-ease) var(--pst-print, 0ms) both; }
+.pst-ink--still { animation: none; }
+.pst-caption { color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); text-wrap: pretty; }
+
+/* One stamp's engraving, in its 100 × 120 units */
+.pst-rule { fill: none; stroke: var(--pst-ink); stroke-width: .5; }
+.pst-rule--outer { stroke-width: 1.3; }
+.pst-rule--fine { stroke-width: .35; }
+.pst-engine { fill: none; stroke: var(--pst-ink); stroke-width: .32; }
+.pst-tablet { fill: var(--pst-paper); stroke: var(--pst-ink); stroke-width: .7; }
+.pst-legend, .pst-value, .pst-letter, .pst-foot { fill: var(--pst-ink); font-family: var(--font-mono); text-anchor: middle; dominant-baseline: central; }
+.pst-legend { font-size: 7px; font-weight: 700; letter-spacing: .1em; }
+.pst-value { font-weight: 700; letter-spacing: -.03em; }
+.pst-unit { font-size: .55em; font-weight: 400; letter-spacing: 0; }
+.pst-letter { font-size: 7.5px; font-weight: 700; }
+.pst-foot { font-size: 6.2px; letter-spacing: .06em; }
+
+/* The torn stamp: printed with the pane, peeled off along the perforation, then struck */
+.pst-torn { z-index: 1; transform: translate(-8%, -2%) rotate(-4deg); animation: pst-tear 760ms var(--pst-ease) 1150ms both; will-change: transform; }
+.pst-torn-body { position: absolute; inset: 0; animation: pst-thud 320ms var(--pst-ease) 2080ms both; }
+.pst-postmark { position: absolute; inset: 0; z-index: 2; transform: rotate(2deg); animation: pst-strike 280ms cubic-bezier(.3, 0, .2, 1) 1960ms both; will-change: transform, opacity; pointer-events: none; }
+.pst-postmark-art { display: block; width: 100%; height: 100%; overflow: visible; }
+.pst-cancel { fill: none; stroke: var(--pst-cancel); stroke-width: 1.5; }
+.pst-wave { stroke-width: 1.4; }
+.pst-ring, .pst-mark-value { fill: var(--pst-cancel); font-family: var(--font-mono); font-weight: 700; text-anchor: middle; }
+.pst-ring { font-size: 6.4px; letter-spacing: .14em; }
+.pst-ring--date { font-size: 5.6px; letter-spacing: .1em; }
+.pst-bridge { stroke-width: .8; }
+.pst-mark-value { font-size: 13px; letter-spacing: -.02em; dominant-baseline: central; }
+.pst-mark-unit { font-size: 6px; letter-spacing: .1em; }
+.pst-approx { font-family: var(--font-body); font-weight: 600; }
+
+@keyframes pst-print { from { opacity: 0; transform: scale(1.04); } }
+@keyframes pst-tear { from { transform: none; } 34% { transform: translate(-1.2%, -1.6%) rotate(-1deg); } }
+@keyframes pst-thud { 35% { transform: scale(.975); } }
+@keyframes pst-strike { from { opacity: 0; transform: rotate(2deg) scale(1.45); } 45% { opacity: 1; transform: rotate(2deg) scale(.97); } }
+@media (prefers-reduced-motion: reduce) { .pst-ink, .pst-torn, .pst-torn-body, .pst-postmark { animation: none; } }
+
+/* Face values side by side */
+.pst-compare { grid-area: compare; align-self: end; display: flex; flex-direction: column; gap: var(--space-12); padding-bottom: var(--space-28); }
+.pst-compare h2 { color: var(--color-text); font-family: var(--font-mono); font-size: var(--text-md); line-height: 20px; font-weight: 400; }
+.pst-compare p { max-width: 44ch; color: var(--color-muted); font-size: var(--text-sm); line-height: var(--leading-sm); text-wrap: pretty; }
+.pst-compare-stamps { display: flex; gap: var(--space-24); margin: 0; padding: 0; list-style: none; }
+.pst-single { display: flex; flex-direction: column; gap: var(--space-8); width: 132px; }
+.pst-single-stamp { position: relative; aspect-ratio: 100 / 120; }
+.pst-single-name { color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
+.pst-single--theirs { --pst-ink: var(--color-faint); }
+
+@media (max-width: 1000px) {
+  .pst-hero { grid-template: 'copy' 'sheet' 'compare' / minmax(0, 1fr); }
+  .pst-copy { padding-top: 0; }
+  .pst-figure { justify-self: start; }
+  .pst-compare { align-self: start; padding-bottom: 0; }
+}
+@media (max-width: 640px) {
+  .pst-page { padding-inline: var(--space-16); }
+  .pst-header { height: 56px; }
+  .pst-main { padding-block: var(--space-12) 56px; }
+  .pst-hero { row-gap: var(--space-32); }
+  .pst-copy { gap: var(--space-16); }
+  .pst-copy h1 { font-size: 30px; }
+  .pst-copy > p { font-size: 15px; line-height: 22px; }
+  .pst-legend { font-size: 8.4px; letter-spacing: .04em; }
+  .pst-foot { font-size: 7.4px; letter-spacing: 0; }
+  .pst-letter { font-size: 8.4px; }
+  .pst-selvedge { font-size: 5px; letter-spacing: .02em; }
+  .pst-compare-stamps { gap: var(--space-16); }
+  .pst-single { width: calc((100% - var(--space-16)) / 2); max-width: 160px; }
+}
