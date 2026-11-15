@@ -144,6 +144,8 @@ const pages = ids => [
   ['Two accounts · switch', '/', { user: ['dana', 'nia'], from: '/', switchTo: 'Lumen Labs' }],
   ['Signed out', '/', { user: null }],
   ['Signed out · stats withheld', '/', { user: null, withheld: true }],
+  // The nmc homepage study: its coin spins down, is cut and gives up a slice in the first two seconds, on a canvas.
+  ['Signed out · nmc', '/?home=nmc', { user: null }],
   // The public legal pages: signed out from the homepage and between documents, and signed in from the sidebar.
   ['Legal', '/legal', { user: null, from: '/legal/terms', click: 'Overview' }],
   ['Legal · terms', '/legal/terms', { user: null, from: '/' }],
@@ -166,7 +168,7 @@ const pages = ids => [
 ];
 
 // The phone pass: the pages someone opens on a phone (every list as cards, the details they open, Settings), light only.
-const phonePages = new Set(['Overview', 'Overview · range', 'Logs', 'Sent email', 'Sent email · junk-like', 'Received email', 'Receiving', 'Receiving · rituals', 'Receiving · new ritual', 'Receiving · recipe form', 'Receiving · recipe ritual', 'Receiving · address', 'Receiving · inbox', 'Receiving · agent inboxes', 'Receiving · webhooks', 'Campaigns', 'Campaign review', 'Templates', 'Audience', 'Lists', 'Domains', 'Domain', 'API keys', 'Settings', 'Settings · members', 'Settings · plan & usage', 'Settings · activity', 'Settings · billing', 'Settings · billing · owed', 'Settings · billing · free', 'Settings · webhook', 'Settings · MCP connection', 'Onboarding', 'Two accounts · switch', 'Operator', 'Operator · workspace', 'Operator · UI notes', 'Overview · UI notes mode', 'Operator · without UI notes', 'Overview · restricted', 'Campaigns · restricted', 'Signed out', 'Signed out · stats withheld', 'Legal', 'Legal · terms', 'Legal · privacy', 'Docs', 'Docs · MCP guide', 'Docs · section', 'Docs · signed out', 'Support chat', 'Overview · sending limits dialog', 'Overview · sender score dialog', 'API keys · create key dialog', 'Receiving · new address dialog', 'Settings · invite dialog', 'Settings · add credit dialog']);
+const phonePages = new Set(['Overview', 'Overview · range', 'Logs', 'Sent email', 'Sent email · junk-like', 'Received email', 'Receiving', 'Receiving · rituals', 'Receiving · new ritual', 'Receiving · recipe form', 'Receiving · recipe ritual', 'Receiving · address', 'Receiving · inbox', 'Receiving · agent inboxes', 'Receiving · webhooks', 'Campaigns', 'Campaign review', 'Templates', 'Audience', 'Lists', 'Domains', 'Domain', 'API keys', 'Settings', 'Settings · members', 'Settings · plan & usage', 'Settings · activity', 'Settings · billing', 'Settings · billing · owed', 'Settings · billing · free', 'Settings · webhook', 'Settings · MCP connection', 'Onboarding', 'Two accounts · switch', 'Operator', 'Operator · workspace', 'Operator · UI notes', 'Overview · UI notes mode', 'Operator · without UI notes', 'Overview · restricted', 'Campaigns · restricted', 'Signed out', 'Signed out · stats withheld', 'Signed out · nmc', 'Legal', 'Legal · terms', 'Legal · privacy', 'Docs', 'Docs · MCP guide', 'Docs · section', 'Docs · signed out', 'Support chat', 'Overview · sending limits dialog', 'Overview · sender score dialog', 'API keys · create key dialog', 'Receiving · new address dialog', 'Settings · invite dialog', 'Settings · add credit dialog']);
 const devices = {
   desktop: { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 },
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true },
