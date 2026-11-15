@@ -1,8 +1,8 @@
 // The coin of the "nmc" homepage study: a one-cent piece lying on a table, on one canvas. Its outer ring is fifty
 // slices with an envelope on each, round a medallion that carries the denomination: fifty emails to the cent, which
 // is the price (RATES.emailUc in api/src/billing/money.ts is $0.0002). The coin settles the way a dropped coin does,
-// the slices are counted round in the brand's blue, and the last, the one that points at Sign in, slides out. A
-// slice slides out a little under the pointer, and out or back in when it is pressed.
+// a light in the brand's blue runs once round the slices, and the one it stops at, the one that points at Sign in,
+// slides out. A slice slides out a little under the pointer, and out or back in when it is pressed.
 //
 // It is drawn flat, as a solid seen from above and in front: every surface has one tone of its own (the medallion,
 // the ring, the wall, the slot a slice leaves), and what stands up from a surface shows its top and, straight below
@@ -24,14 +24,17 @@ const PHASE = STEP / 4  // the slices are turned a quarter step, so no seam lies
 const PULL = 0.44       // how far a slice slides out: clear of the rim by 0.14
 const EAGER = 0.12      // how much further the slice that points at Sign in goes while the pointer is on the button
 const LIFT = 0.07       // how far a slice under the pointer slides out
-const PLAIN_PX = 100    // a coin with a smaller radius than this carries a chevron on each slice in place of an envelope
+const PLAIN_PX = 190    // a coin with a smaller radius than this carries its flap's chevron on each slice in place of an envelope
 // A slice's piece of the reeded edge: where each valley and ridge begins, as fractions of its rim (three reeds).
 const REED = [0, 1 / 15, 4 / 15, 6 / 15, 9 / 15, 11 / 15, 14 / 15, 1]
 
-// The intro, in ms: the coin settles, then the slices are counted round, one every TICK, each lit for LIT.
-const SPIN = 950, HOLD = 90, TICK = 10, LIT = 110
-// While sign-in starts the count keeps going round, slower.
-const BUSY_TICK = 16
+// The intro, in ms: the coin drops DROP_PX onto the table and settles, then a light runs once round the slices,
+// easing in and out, and stops one short of the slice that points at Sign in, which starts out EARLY before it does.
+const SPIN = 950, FALL = 170, DROP_PX = 20, HOLD = 90, RUN = 760, EARLY = 80, FADE = 150
+// The light is three slices long: its head, and a tail in two fainter steps.
+const TAIL = [1, 0.6, 0.3]
+// While sign-in starts the light keeps going round, a slice every BUSY_TICK.
+const BUSY_TICK = 22
 // A coin dropped on a table rolls round on its rim: the tilt dies away while the point it rests on circles faster
 // and faster (Euler's disk; Moffatt, Nature 404, 2000). Here the tilt falls almost evenly, so that every frame shows
 // it lower than the last; the first tilt is as steep as the room above the coin allows.
@@ -48,8 +51,8 @@ const SHADE_X = 2, SHADE_Y = 5
 
 // The face, in a unit circle with y down: a raised rim, the ring of fifty envelopes (one to a slice), and on the
 // medallion the legend and the denomination. Heights are in px: how far a raised part's side shows below its top.
-const RIM_IN = 0.948, RIM_HIGH = 1.5
-const ENV_R = (INNER + RIM_IN) / 2, ENV_W = 0.082, ENV_H = 0.054, ENV_FLAP = 0.52
+const RIM_IN = 0.948, RIM_HIGH = 2
+const ENV_R = (INNER + RIM_IN) / 2, ENV_W = 0.078, ENV_H = 0.054, ENV_FLAP = 0.5
 const LEG_R = 0.585, LEG_CAP = 0.088, LEG_TRACK = 0.14, LEG_SPACE = 0.36, LEG_HIGH = 1.25
 const NUM_CAP = 0.44, NUM_HIGH = 2.5
 // Outlines from Inter at its display optical size (app/public/fonts, SIL OFL), weights 620 and 640, 2048 units to the
@@ -82,8 +85,8 @@ type Vec3 = [number, number, number]
 type Tones = { face: string; ring: string; rim: string; rimLit: string; rimShade: string; rimSide: string; seam: string; mark: string; relief: string; reliefSide: string; edgeLit: string; edgeShade: string }
 // A wall's five tones, darkest first, for a reed's ridge and for the valley beside it.
 type Walls = { ridge: string[]; valley: string[] }
-// cold is the coin's metal and hot the brand's blue, for a slice that is counted or has left. slot is the wall of
-// the slot a slice leaves. shadow lies on the table under whatever stands on it.
+// cold is the coin's metal and hot the brand's blue, for a slice under the light or one that has left. slot is the
+// wall of the slot a slice leaves. shadow lies on the table under whatever stands on it.
 type Palette = { cold: Tones; hot: Tones; coldWalls: Walls; hotWalls: Walls; slot: Walls; shadow: string }
 // out: 0 in the coin, 1 slid out. lift: slid out a little under the pointer. wanted: whether it is to be out.
 type Slice = { out: number; outVel: number; lift: number; liftVel: number; wanted: boolean }
@@ -109,17 +112,17 @@ function paletteFor([r, g, b]: [number, number, number]): Palette {
   const hot: Tones = { face: blue(0.64), ring: blue(0.64), rim: blue(0.71), rimLit: blue(0.8), rimShade: blue(0.58), rimSide: blue(0.52), seam: blue(0.5), mark: blue(0.97), relief: blue(0.97), reliefSide: blue(0.48), edgeLit: blue(0.95), edgeShade: blue(0.5) }
   const hotWalls: Walls = { ridge: [0.38, 0.43, 0.48, 0.53, 0.58].map(blue), valley: [0.345, 0.39, 0.435, 0.48, 0.525].map(blue) }
   if (dark) return {
-    cold: { face: steel(0.76), ring: steel(0.64), rim: steel(0.7), rimLit: steel(0.82), rimShade: steel(0.56), rimSide: steel(0.5), seam: steel(0.46), mark: steel(0.86), relief: steel(0.95), reliefSide: steel(0.47), edgeLit: steel(0.98), edgeShade: steel(0.5) },
+    cold: { face: steel(0.76), ring: steel(0.64), rim: steel(0.7), rimLit: steel(0.82), rimShade: steel(0.58), rimSide: steel(0.54), seam: steel(0.52), mark: steel(0.75), relief: steel(0.95), reliefSide: steel(0.47), edgeLit: steel(0.98), edgeShade: steel(0.54) },
     hot, hotWalls,
     coldWalls: { ridge: [0.31, 0.35, 0.39, 0.43, 0.47].map(steel), valley: [0.275, 0.315, 0.355, 0.395, 0.435].map(steel) },
     slot: { ridge: [0.2, 0.22, 0.245, 0.27, 0.295].map(steel), valley: [0.2, 0.22, 0.245, 0.27, 0.295].map(steel) },
     shadow: 'rgb(0, 0, 0)',
   }
   return {
-    cold: { face: steel(0.94), ring: steel(0.885), rim: steel(0.915), rimLit: steel(0.975), rimShade: steel(0.845), rimSide: steel(0.79), seam: steel(0.64), mark: steel(0.54), relief: steel(1), reliefSide: steel(0.55), edgeLit: steel(0.74), edgeShade: steel(0.6) },
+    cold: { face: steel(0.895), ring: steel(0.82), rim: steel(0.86), rimLit: steel(0.95), rimShade: steel(0.76), rimSide: steel(0.72), seam: steel(0.7), mark: steel(0.69), relief: steel(1), reliefSide: steel(0.52), edgeLit: steel(0.99), edgeShade: steel(0.66) },
     hot, hotWalls,
-    coldWalls: { ridge: [0.66, 0.7, 0.74, 0.78, 0.82].map(steel), valley: [0.625, 0.665, 0.705, 0.745, 0.785].map(steel) },
-    slot: { ridge: [0.46, 0.49, 0.52, 0.55, 0.58].map(steel), valley: [0.46, 0.49, 0.52, 0.55, 0.58].map(steel) },
+    coldWalls: { ridge: [0.6, 0.64, 0.68, 0.72, 0.76].map(steel), valley: [0.565, 0.605, 0.645, 0.685, 0.725].map(steel) },
+    slot: { ridge: [0.4, 0.43, 0.46, 0.49, 0.52].map(steel), valley: [0.4, 0.43, 0.46, 0.49, 0.52].map(steel) },
     shadow: `rgb(${Math.round(r * 0.92)}, ${Math.round(g * 0.92)}, ${Math.round(b * 0.92)})`,
   }
 }
@@ -160,8 +163,8 @@ function shapes(): Shapes {
 }
 
 // The face of a coin of radius R px as the camera sees it, on a sheet at device resolution, in the tones of one
-// metal. Surfaces are filled in the unit circle; lines are stroked in px, so that each is as wide as the next
-// whichever way it runs. `plain` draws a chevron on each slice in place of an envelope.
+// metal. Everything on it lies on its surface: it is drawn in the unit circle and takes the camera's foreshortening,
+// lettering and marks alike. `plain` draws its flap's chevron on each slice in place of an envelope.
 function paintFace(c: CanvasRenderingContext2D, k: Tones, R: number, dpr: number, plain: boolean) {
   const { numeral, letters } = shapes()
   const unit = () => c.setTransform(R * dpr, 0, 0, R * COS * dpr, (R + 1) * dpr, (R * COS + 1) * dpr)
@@ -178,6 +181,8 @@ function paintFace(c: CanvasRenderingContext2D, k: Tones, R: number, dpr: number
   c.save(); c.clip(disc(1)); flood(k.rimLit); c.clip(moved(disc(1), AWAY_X * 0.03, AWAY_Y * 0.03)); flood(k.rimShade); c.clip(moved(disc(1), -AWAY_X * 0.03, -AWAY_Y * 0.03)); flood(k.rim); c.restore()
   // The ring lies a step below the rim: on the far side the step's side shows.
   c.save(); c.clip(disc(RIM_IN)); flood(k.rimSide); c.clip(disc(RIM_IN, high(RIM_HIGH))); flood(k.ring); c.restore()
+  // The medallion stands a step above the ring: on the near side its side shows.
+  c.fillStyle = k.rimSide; c.fill(disc(INNER, high(RIM_HIGH)))
   c.fillStyle = k.face; c.fill(disc(INNER))
   // What is struck on the medallion stands up from it: its side shows straight below its top.
   const raised = (shape: Path2D, px: number) => {
@@ -188,27 +193,25 @@ function paintFace(c: CanvasRenderingContext2D, k: Tones, R: number, dpr: number
   raised(letters, LEG_HIGH)
   raised(numeral, NUM_HIGH)
 
-  // Lines, in px from the coin's centre, on whole device pixels where they run level or upright.
-  c.setTransform(dpr, 0, 0, dpr, (R + 1) * dpr, (R * COS + 1) * dpr)
-  const crisp = (v: number) => (Math.round(v * dpr - dpr % 2 / 2) + dpr % 2 / 2) / dpr
-  c.lineWidth = 1; c.lineJoin = 'round'; c.lineCap = 'butt'
-  // The seams: between slice and slice, and round the medallion.
+  // The seams, between slice and slice and round the medallion, and the mark on each slice: an envelope that lies
+  // along its slice, or the chevron of its flap. On the far half of the ring the flap opens towards the rim and on
+  // the near half towards the medallion, as the legend's letters stand, so that every envelope is the right way up.
+  const line = 1.15 / R
+  c.lineWidth = line; c.lineJoin = 'round'; c.lineCap = 'butt'
   c.strokeStyle = k.seam
   c.beginPath()
-  for (let index = 0; index < SLICES; index++) {
-    const a = PHASE + (index + 0.5) * STEP
-    c.moveTo(Math.cos(a) * INNER * R, Math.sin(a) * INNER * R * COS); c.lineTo(Math.cos(a) * R, Math.sin(a) * R * COS)
-  }
-  c.moveTo(INNER * R, 0); c.ellipse(0, 0, INNER * R, INNER * R * COS, 0, 0, TAU)
+  for (let index = 0; index < SLICES; index++) { const a = PHASE + (index + 0.5) * STEP; c.moveTo(Math.cos(a) * INNER, Math.sin(a) * INNER); c.lineTo(Math.cos(a), Math.sin(a)) }
+  c.moveTo(INNER, 0); c.arc(0, 0, INNER, 0, TAU)
   c.stroke()
-  // The mark on each slice, the right way up wherever its slice lies: an envelope, or the chevron of its flap.
   c.strokeStyle = k.mark
   c.beginPath()
   for (let index = 0; index < SLICES; index++) {
-    const a = PHASE + index * STEP, w = Math.round(ENV_W * R), h = Math.round(ENV_H * R * COS)
-    const left = crisp(Math.cos(a) * ENV_R * R - w / 2), top = crisp(Math.sin(a) * ENV_R * R * COS - h / 2)
-    if (!plain) c.rect(left, top, w, h)
-    c.moveTo(left, top); c.lineTo(left + w / 2, top + (plain ? h * 0.8 : h * ENV_FLAP)); c.lineTo(left + w, top)
+    const a = PHASE + index * STEP, ox = Math.cos(a), oy = Math.sin(a), top = oy < 0 ? 1 : -1
+    // across runs along the ring, up from the envelope's foot to its flap's fold.
+    const at = (across: number, up: number): [number, number] => [(ENV_R + top * up) * ox - across * oy, (ENV_R + top * up) * oy + across * ox]
+    const w = ENV_W / 2, h = ENV_H / 2
+    if (!plain) { c.moveTo(...at(-w, h)); c.lineTo(...at(w, h)); c.lineTo(...at(w, -h)); c.lineTo(...at(-w, -h)); c.closePath() }
+    c.moveTo(...at(-w, h)); c.lineTo(...at(0, h - 2 * h * ENV_FLAP)); c.lineTo(...at(w, h))
   }
   c.stroke()
 }
@@ -225,12 +228,12 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
   let dpr = 1, width = 0, height = 0, R = 0, cx = 0, cy = 0, base = 0, tilt0 = TILT_MIN
   let palette!: Palette, cold!: HTMLCanvasElement, hot!: HTMLCanvasElement
   // start is the time of the intro's first frame: a page opened in a background tab plays it when it is first seen.
-  // counted: the count has gone round. eager: the pointer is on Sign in.
+  // counted: the light has gone round. eager: the pointer is on Sign in.
   let raf = 0, dead = false, start = 0, last = performance.now()
   let counted = reduced, hover = -1, busyAt = 0, eager = false
   const slices: Slice[] = Array.from({ length: SLICES }, () => ({ out: 0, outVel: 0, lift: 0, liftVel: 0, wanted: false }))
   const angle = (index: number) => PHASE + index * STEP
-  // A slice's place in the count: it starts with the slice after the one that points at Sign in and ends on that one.
+  // A slice's place round the ring from the one that points at Sign in: 0 for the slice after it, 49 for itself.
   const place = (index: number) => mod(index - base - 1, SLICES)
   const snap = (value: number) => Math.round(value * dpr) / dpr
   // A point of the coin's top, r px from its centre at angle t, on a piece moved by (dx, dy) px.
@@ -258,10 +261,11 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr)
     R = box.width / 2
     cx = snap(box.left - page.left + R); cy = snap(box.top - page.top + R * COS)
-    // The slice nearest the line from the coin's centre to Sign in. Where the button is straight below the coin, the
-    // slice would come out end-on to the camera: one a little to the right shows its top and its side.
-    let towards = Math.atan2((to.top + to.height / 2 - page.top - cy) / COS, to.left + to.width / 2 - page.left - cx)
-    if (Math.abs(towards - Math.PI / 2) < 0.42) towards = Math.PI / 2 - 0.46
+    // The slice nearest the line from the coin's centre to Sign in, or nearest --nmc-aim (degrees clockwise from 3
+    // o'clock) where the page sets it: with the button straight below the coin, a slice aimed at it would come out
+    // end-on to the camera and hang off the coin's front.
+    const set = parseFloat(getComputedStyle(slot).getPropertyValue('--nmc-aim'))
+    const towards = Number.isFinite(set) ? set * Math.PI / 180 : Math.atan2((to.top + to.height / 2 - page.top - cy) / COS, to.left + to.width / 2 - page.left - cx)
     const aim = mod(Math.round((towards - PHASE) / STEP), SLICES)
     if (aim !== base) { if (slices[base].wanted) { slices[base].wanted = false; slices[aim].wanted = true }; base = aim }
     // Tilted by a with its far side up, the coin's far rim stands 2R (sin a sin TILT − (1 − cos a) cos TILT) above
@@ -295,8 +299,8 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
   }
 
   // The whole coin, tilted by alpha towards azimuth phi and turned by psi about its own axis, with its lowest rim
-  // point on the table. `down` is how nearly it lies flat: its shadow comes with that.
-  function drawSolid(alpha: number, phi: number, psi: number, down: number) {
+  // point `air` px over the table. `down` is how nearly it lies flat: its shadow comes with that.
+  function drawSolid(alpha: number, phi: number, psi: number, air: number, down: number) {
     const T = THICK * R, sa = Math.sin(alpha), ca = Math.cos(alpha), sp = Math.sin(phi), cp = Math.cos(phi)
     // Rz(phi) · Ry(alpha) · Rz(−phi) · Rz(psi): e1 and e2 span the face, n is its normal.
     const spin = (x: number, y: number): Vec3 => {
@@ -308,7 +312,7 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     const project = (x: number, y: number, z: number): [number, number] => [x, y * COS - z * SIN]
     const centre: Vec3 = [T * n[0], T * n[1], R * sa + T * n[2]]
     const [ox, oy] = project(...centre)
-    const originX = cx + ox, originY = cy + T * SIN + oy
+    const originX = cx + ox, originY = cy + T * SIN + oy - air
     const [ax, ay] = project(e1[0] * R, e1[1] * R, e1[2] * R), [bx, by] = project(e2[0] * R, e2[1] * R, e2[2] * R)
     const [tx, ty] = project(-T * n[0], -T * n[1], -T * n[2])
     // Its shadow on the table, under where it will lie.
@@ -341,9 +345,10 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     ctx.closePath()
   }
 
-  // One slice, slid `off` radii along its own direction; heat is how far it has taken the brand's blue. The wall of
-  // a seam is drawn where the slice beside it has moved (before, after).
-  function drawSlice(index: number, off: number, heat: number, before: boolean, after: boolean) {
+  // One slice, slid `off` radii along its own direction. heat is how far it has taken the brand's blue, and glow
+  // how far its top has, under the light. The wall of a seam is drawn where the slice beside it has moved (before,
+  // after).
+  function drawSlice(index: number, off: number, heat: number, glow: number, before: boolean, after: boolean) {
     const a = angle(index), half = STEP / 2, drop = THICK * R * SIN, out = off > 0.002
     const dx = snap(Math.cos(a) * off * R), dy = snap(Math.sin(a) * off * R * COS)
     // In place, a slice's top overlaps its neighbours' and the medallion's by a hair.
@@ -366,10 +371,10 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     for (const [x, y] of bore) ctx.lineTo(x, y)
     for (let k = rim.length - 1; k >= 0; k--) ctx.lineTo(rim[k][0], rim[k][1])
     ctx.closePath(); ctx.clip()
-    if (heat < 1) sheet(cold, dx, dy)
-    if (heat > 0) { ctx.globalAlpha = heat; sheet(hot, dx, dy); ctx.globalAlpha = 1 }
+    if (glow < 1) sheet(cold, dx, dy)
+    if (glow > 0) { ctx.globalAlpha = glow; sheet(hot, dx, dy); ctx.globalAlpha = 1 }
     ctx.restore()
-    edgeLine(index, heat > 0.5 ? palette.hot : palette.cold, (from, to) => ctx.ellipse(cx + dx, cy + dy, R - 0.75, (R - 0.75) * COS, 0, from, to))
+    edgeLine(index, glow > 0.5 ? palette.hot : palette.cold, (from, to) => ctx.ellipse(cx + dx, cy + dy, R - 0.75, (R - 0.75) * COS, 0, from, to))
   }
 
   // The medallion the slices stand round. Its wall shows where a slice in front of it has gone.
@@ -396,27 +401,35 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     if (!R) return
     if (!reduced && t < SPIN) {
       const left = 1 - t / SPIN
-      // The tilt dies away as the point the rim rests on circles faster; rolling without slipping turns the face
-      // slowly against the wobble, and it ends upright.
-      drawSolid(tilt0 * left ** 0.9, -Math.PI / 2 + TAU * TURNS * (1 - left ** 0.55), -TAU * TURNS * (1 - Math.cos(tilt0)) * 0.5 * left ** 1.5, (1 - left) ** 2)
+      // It falls the last of its drop, then the tilt dies away as the point the rim rests on circles faster; rolling
+      // without slipping turns the face slowly against the wobble, and it ends upright.
+      const fall = clamp(t / FALL)
+      drawSolid(tilt0 * left ** 0.9, -Math.PI / 2 + TAU * TURNS * (1 - left ** 0.55), -TAU * TURNS * (1 - Math.cos(tilt0)) * 0.5 * left ** 1.5, DROP_PX * (1 - fall * fall), fall * (1 - left) ** 2)
       raf = requestAnimationFrame(frame)
       return
     }
-    // The count: each slice is lit in turn, and the last, the one that points at Sign in, stays lit and slides out.
-    const count = (t - SPIN - HOLD) / TICK
+    // The light: its head runs from the first slice round to the one before the slice that points at Sign in. As
+    // it arrives that slice starts out, and the light goes down behind it, a step at a time.
+    const run = (t - SPIN - HOLD) / (RUN - EARLY), over = (t - SPIN - HOLD - (RUN - EARLY)) / FADE
     if (!counted) {
       moving = true
-      if (count >= SLICES - 1) slices[base].wanted = true
-      if (count >= SLICES - 1 + LIT / TICK) counted = true
+      if (run >= 1) slices[base].wanted = true
+      if (over >= 1) counted = true
     }
-    const lit = (index: number) => !counted && count >= place(index) && count < place(index) + LIT / TICK
-      || busyAt > 0 && mod(Math.floor((now - busyAt) / BUSY_TICK) - place(index), SLICES) < LIT / BUSY_TICK
+    const eased = run < 0.5 ? 4 * run ** 3 : 1 - (2 - 2 * run) ** 3 / 2
+    const head = busyAt ? Math.floor((now - busyAt) / BUSY_TICK) : counted || run <= 0 ? -1 : Math.floor(clamp(eased) * (SLICES - 2))
+    // How brightly a slice is lit: by how far it lies behind the light's head.
+    const glow = (index: number) => {
+      if (head < 0) return 0
+      const behind = busyAt ? mod(head - place(index), SLICES) : head - place(index)
+      return behind < 0 ? 0 : TAIL[behind + (busyAt ? 0 : Math.max(0, Math.floor(over * TAIL.length)))] ?? 0
+    }
     if (busyAt) moving = true
-    const pose = slices.map(() => ({ off: 0, heat: 0 }))
+    const pose = slices.map(() => ({ off: 0, heat: 0, glow: 0 }))
     for (let index = 0; index < SLICES; index++) {
       const slice = slices[index], p = pose[index]
       // Springs, stepped in 4 ms slices so a long frame can't throw them: each runs a little past and settles.
-      const outTo = slice.wanted ? 1 + (eager && index === base ? EAGER / PULL : 0) : 0, liftTo = index === hover && !slice.wanted ? LIFT : 0
+      const outTo = slice.wanted ? 1 + ((eager || busyAt) && index === base ? EAGER / PULL : 0) : 0, liftTo = index === hover && !slice.wanted ? LIFT : 0
       if (reduced) { slice.out = outTo; slice.outVel = 0 }
       for (let step = dt; step > 0; step -= 4) {
         const h = Math.min(4, step) / 1000
@@ -426,7 +439,8 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
       if (Math.abs(outTo - slice.out) < 0.0005 && Math.abs(slice.outVel) < 0.005) { slice.out = outTo; slice.outVel = 0 } else moving = true
       if (Math.abs(liftTo - slice.lift) < 0.0004 && Math.abs(slice.liftVel) < 0.004) { slice.lift = liftTo; slice.liftVel = 0 } else moving = true
       p.off = Math.max(0, PULL * slice.out + slice.lift)
-      p.heat = slice.wanted || lit(index) ? 1 : clamp(Math.max(slice.out * 3, slice.lift / LIFT * 1.5))
+      p.heat = slice.wanted ? 1 : clamp(Math.max(slice.out * 3, slice.lift / LIFT * 1.5))
+      p.glow = Math.max(p.heat, glow(index))
     }
     // The shadow on the table, under the coin and under each slice that has slid out of it.
     const drop = THICK * R * SIN
@@ -441,7 +455,7 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     const depth = (index: number) => Math.sin(angle(index))
     const apart = (index: number, side: number) => Math.abs(pose[mod(index + side, SLICES)].off - pose[index].off) > 0.002
     const order = slices.map((_, index) => index).sort((a, b) => depth(a) - depth(b))
-    const piece = (index: number) => drawSlice(index, pose[index].off, pose[index].heat, apart(index, -1), apart(index, 1))
+    const piece = (index: number) => drawSlice(index, pose[index].off, pose[index].heat, pose[index].glow, apart(index, -1), apart(index, 1))
     for (const index of order) if (depth(index) <= 0) piece(index)
     drawMedallion()
     for (const index of order) if (depth(index) > 0) piece(index)
@@ -495,13 +509,13 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
   frame(performance.now())
 
   return {
-    // Sign-in has started: the count goes round the coin until the page goes.
+    // Sign-in has started: the light goes round the coin until the page goes.
     setBusy(busy) {
       if (reduced || !!busyAt === busy) return
       busyAt = busy ? performance.now() : 0
       kick()
     },
-    // The pointer is on Sign in: the slice that points at it moves towards it.
+    // The pointer is on Sign in: the slice that points at it moves towards it, and stays there once it is pressed.
     setEager(on) {
       if (reduced || eager === on) return
       eager = on

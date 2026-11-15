@@ -6,12 +6,12 @@
   --nmc-type: clamp(44px, round(5.556vw, 2px), 96px);
   /* The subline's colour, between the text and the muted grey. */
   --nmc-soft: #3A3A3A;
-  /* The stage is what the header (64), the footer (57) and the caption (the headline, 72 of small print and the air
+  /* The stage is what the header (64), the footer (57) and the caption (the headline, 76 of subline and the air
      under it) leave of the first screen. The coin stands --nmc-foot off its bottom, near its caption, and keeps
      --nmc-swing of its width clear above, where its far rim swings while it settles; room beyond that is shared
      above and below. */
   --nmc-under: clamp(48px, 9.8svh, 88px);
-  --nmc-stage: calc(100svh - 193px - var(--nmc-under) - var(--nmc-type));
+  --nmc-stage: calc(100svh - 197px - var(--nmc-under) - var(--nmc-type));
   --nmc-wide: 44vw;
   --nmc-least: 240px;
   --nmc-foot: 56px;
@@ -21,9 +21,6 @@
 }
 :root[data-theme='dark'] .nmc-page { --nmc-soft: #C8C8C8; }
 .nmc-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; pointer-events: none; }
-/* The coin comes into view as it starts to settle. */
-@media (prefers-reduced-motion: no-preference) { .nmc-canvas { animation: nmc-appear 140ms ease-out backwards; } }
-@keyframes nmc-appear { from { opacity: 0; } }
 
 .nmc-header { position: relative; display: flex; flex: none; align-items: center; justify-content: space-between; height: 64px; padding-inline: var(--nmc-pad); border-bottom: 1px solid var(--color-border-muted); }
 .nmc-header .wordmark, .nmc-header .theme-toggle { position: static; }
@@ -41,7 +38,7 @@
 .nmc-stage { display: flex; flex: 1; align-items: flex-end; justify-content: center; min-height: 0; padding-bottom: max(var(--nmc-foot), (var(--nmc-stage) - var(--nmc-d) * (var(--nmc-aspect) + var(--nmc-swing))) / 2); }
 .nmc-coin { flex: none; width: var(--nmc-d); aspect-ratio: 1 / var(--nmc-aspect); }
 
-/* Two columns: what it is on the left, the action and what comes with it on the right, row by row on shared baselines. */
+/* Two columns: what it is and what comes with it on the left, the action on the right, on shared baselines. */
 .nmc-caption { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; column-gap: 48px; padding-bottom: var(--nmc-under); }
 .nmc-title { grid-area: 1 / 1; font-size: var(--nmc-type); font-weight: 530; line-height: 1; letter-spacing: -.042em; white-space: nowrap; }
 .nmc-title br { display: none; }
@@ -71,38 +68,35 @@
 }
 @keyframes nmc-release { from { transform: scale(.97); } }
 @keyframes nmc-turn { to { transform: rotate(1turn); } }
-/* What signing in comes with, set as data in the mono, then the consent, smaller and fainter. */
-.nmc-free { grid-area: 2 / 2; align-self: baseline; justify-self: end; color: var(--color-muted); font-family: var(--font-mono); font-size: 13px; line-height: 20px; letter-spacing: 0; text-align: right; white-space: nowrap; }
-.nmc-free b { color: var(--color-text); font-weight: 400; }
-.nmc-consent { grid-area: 3 / 2; justify-self: end; margin-top: 8px; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); text-align: right; white-space: nowrap; }
+/* The consent, small and faint under the button, on the subline's first baseline. */
+.nmc-consent { grid-area: 2 / 2; align-self: baseline; justify-self: end; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); text-align: right; white-space: nowrap; }
 
 .nmc-footer { position: relative; display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--space-16); height: 57px; padding-inline: var(--nmc-pad); border-top: 1px solid var(--color-border-muted); color: var(--color-faint); font-size: var(--text-xs); }
 .nmc-footer nav { display: flex; gap: var(--space-16); }
 .nmc-footer a { color: inherit; text-decoration: none; transition: color 120ms ease-out; }
 @media (hover: hover) and (pointer: fine) { .nmc-footer a:hover { color: var(--color-text); } }
 
-/* Where the caption is narrower, the lines on the right wrap, and the subline's second sentence takes its own line. */
+/* Where the caption is narrower, the consent wraps and the subline may take a third line. */
 @media (max-width: 1099px) {
-  .nmc-page { --nmc-stage: calc(100svh - 237px - var(--nmc-under) - var(--nmc-type)); }
-  .nmc-lede span, .nmc-free span { display: block; }
-  .nmc-consent { max-width: 34ch; white-space: normal; text-wrap: balance; }
+  .nmc-page { --nmc-stage: calc(100svh - 225px - var(--nmc-under) - var(--nmc-type)); }
+  .nmc-consent { max-width: 24ch; white-space: normal; text-wrap: balance; }
 }
 /* A window taller than it is wide has the height for a wider coin. */
 @media (min-width: 720px) and (max-aspect-ratio: 1 / 1) { .nmc-page { --nmc-wide: 62vw; } }
 
 @media (max-width: 719px) {
-  /* Header 56, footer 49, and the stacked caption: two lines of headline, 62 of subline, 80 of button, 70 of small
-     print, 40 under it. The slice slides out below the coin, so the coin stands higher off the caption. */
-  .nmc-page { --nmc-type: clamp(40px, round(12vw, 2px), 52px); --nmc-under: 40px; --nmc-stage: calc(100svh - 357px - 2 * var(--nmc-type)); --nmc-wide: calc(100vw - 2 * var(--nmc-pad)); --nmc-least: 160px; --nmc-foot: 78px; --nmc-swing: .2; }
+  /* Header 56, footer 49, and the stacked caption: two lines of headline, 110 of subline, 80 of button, 44 of
+     consent, 40 under it. The coin is narrower than the column and stands to its left, so that the slice that has
+     slid out lies beside it, inside the column. */
+  .nmc-page { --nmc-type: clamp(40px, round(13.4vw, 2px), 56px); --nmc-under: 40px; --nmc-stage: calc(100svh - 379px - 2 * var(--nmc-type)); --nmc-wide: calc((100vw - 2 * var(--nmc-pad)) / 1.14); --nmc-least: 160px; --nmc-foot: 60px; --nmc-swing: .2; }
   .nmc-header { height: 56px; }
-  .nmc-stage { padding-bottom: max(var(--nmc-foot), var(--nmc-stage) - var(--nmc-d) * (var(--nmc-aspect) + var(--nmc-swing))); }
+  .nmc-coin { --nmc-aim: 31; margin-right: calc(var(--nmc-d) * .14); }
   .nmc-caption { grid-template-columns: minmax(0, 1fr); }
-  .nmc-title, .nmc-lede, .nmc-cta, .nmc-free, .nmc-consent { grid-area: auto; }
+  .nmc-title, .nmc-lede, .nmc-cta, .nmc-consent { grid-area: auto; }
   .nmc-title br { display: inline; }
   .nmc-lede { margin-top: 14px; font-size: 16px; line-height: 24px; letter-spacing: -.011em; }
+  .nmc-lede span { display: block; }
   .nmc-cta { justify-self: stretch; height: 56px; margin-top: var(--space-24); }
-  .nmc-free { justify-self: start; margin-top: 14px; font-size: 11.5px; line-height: 18px; text-align: left; }
-  .nmc-free span { display: inline; }
-  .nmc-consent { justify-self: start; max-width: none; margin-top: 6px; text-align: left; }
+  .nmc-consent { justify-self: start; max-width: none; margin-top: var(--space-12); text-align: left; }
   .nmc-footer { height: 49px; }
 }

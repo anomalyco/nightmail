@@ -21,7 +21,7 @@ export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
     coin.current = mounted
     return () => { coin.current = null; mounted.destroy() }
   }, [reduced])
-  // While sign-in starts, the count keeps going round the coin.
+  // While sign-in starts, a light keeps going round the coin.
   useEffect(() => { coin.current?.setBusy(busy) }, [busy])
 
   return <div className="nmc-page" style={{ '--nmc-aspect': COIN_ASPECT } as CSSProperties}>
@@ -41,7 +41,10 @@ export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
       </div>
       <div className="nmc-caption">
         <h1 className="nmc-title">Fifty emails <br />a penny.</h1>
-        <p className="nmc-lede">One API to send, receive, reply and thread. <span>Accepted in <b>~100&nbsp;ms</b>.</span></p>
+        <div className="nmc-lede">
+          <p><span>One API to send, receive, reply and thread. </span><span>Accepted in <b>~100&nbsp;ms</b>.</span></p>
+          <p><span><b>3,000</b> sent and <b>3,000</b> received, </span><span>free every month.</span></p>
+        </div>
         <button ref={action} type="button" className="nmc-cta" disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent} onPointerEnter={() => coin.current?.setEager(true)} onPointerLeave={() => coin.current?.setEager(false)} onFocus={event => coin.current?.setEager(event.currentTarget.matches(':focus-visible'))} onBlur={() => coin.current?.setEager(false)}>
           Sign in
           {/* The arrow, drawn at the weight of the label's strokes, and the spinner that takes its place. */}
@@ -50,7 +53,6 @@ export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
             <circle className="nmc-cta-wait" cx="9" cy="9" r="6.5" strokeDasharray="27 41" />
           </svg>
         </button>
-        <p className="nmc-free"><b>3,000</b> sent and <b>3,000</b> received, <span>free every month</span></p>
         <SignInConsent className="nmc-consent" />
       </div>
     </main>
