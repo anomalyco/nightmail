@@ -1,6 +1,6 @@
 .vp-page { --vp-row: 48px; --vp-head: 64px; --vp-verbs: 248px; --vp-ease: cubic-bezier(.65, 0, .35, 1); display: flex; flex-direction: column; width: min(100%, 1120px); min-height: 100dvh; margin-inline: auto; padding-inline: var(--space-32); color: var(--color-muted); font-family: var(--font-mono); }
 .vp-header { display: flex; align-items: center; justify-content: space-between; height: 64px; }
-.vp-header .wordmark, .vp-header .theme-toggle { position: static; }
+.vp-header .wordmark, .vp-header .theme-toggle { position: relative; inset: auto; }
 .vp-nav { display: flex; align-items: center; gap: var(--space-16); font-size: var(--text-sm); }
 .vp-nav a, .vp-link { padding: 0; border: 0; background: none; color: var(--color-muted); font: inherit; text-decoration: none; transition: color var(--motion-duration); }
 .vp-nav a:hover, .vp-link:hover:not(:disabled) { color: var(--color-text); }

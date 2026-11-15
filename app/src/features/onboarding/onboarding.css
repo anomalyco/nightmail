@@ -1,7 +1,7 @@
 /* Shell */
 .onboarding-shell { display: flex; flex-direction: column; height: 100dvh; background: var(--color-deep); }
 .onboarding-header { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); min-height: 48px; padding: var(--space-8) var(--space-12) var(--space-8) var(--space-16); }
-.onboarding-header .wordmark, .onboarding-header .theme-toggle { position: static; }
+.onboarding-header .wordmark, .onboarding-header .theme-toggle { position: relative; inset: auto; }
 .onboarding-signout > svg { display: none; }
 .onboarding-header-actions { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
 .onboarding-workspace { width: 240px; min-width: 0; }

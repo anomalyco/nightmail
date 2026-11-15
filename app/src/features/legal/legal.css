@@ -4,7 +4,7 @@
 /* Proportional figures: the body's tabular ones also widen Inter's hyphen, which reads as a gap in prose ("top - up"). */
 .legal-page { --legal-header: 58px; display: flex; flex-direction: column; min-height: 100dvh; background: var(--color-surface); color: var(--color-text); font-variant-numeric: normal; }
 .legal-header { position: sticky; z-index: 5; top: 0; display: flex; align-items: center; gap: var(--space-24); height: var(--legal-header); padding-inline: var(--space-24); border-bottom: 1px solid var(--color-border); background: var(--color-surface); }
-.legal-header .wordmark, .legal-header .theme-toggle { position: static; }
+.legal-header .wordmark, .legal-header .theme-toggle { position: relative; inset: auto; }
 .legal-header .theme-toggle { margin-inline-start: auto; }
 .legal-switcher { display: flex; gap: var(--space-4); min-width: 0; font-size: var(--text-sm); }
 .legal-switcher a { display: flex; align-items: center; height: var(--control-height); padding-inline: var(--space-8); border-radius: var(--radius-sm); color: var(--color-muted); text-decoration: none; white-space: nowrap; transition: color var(--motion-duration), background-color var(--motion-duration); }

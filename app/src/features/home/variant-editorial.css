@@ -1,6 +1,6 @@
 .ve-page { display: flex; flex-direction: column; width: min(100% - 48px, 640px); min-height: 100dvh; margin-inline: auto; color: var(--color-muted); font-family: var(--font-mono); }
 .ve-header { display: flex; align-items: center; justify-content: space-between; height: 64px; }
-.ve-header .wordmark, .ve-header .theme-toggle { position: static; }
+.ve-header .wordmark, .ve-header .theme-toggle { position: relative; inset: auto; }
 .ve-nav { display: flex; align-items: center; gap: var(--space-16); font-size: var(--text-sm); }
 .ve-nav a, .ve-link { padding: 0; border: 0; background: none; color: var(--color-muted); font: inherit; text-decoration: none; transition: color var(--motion-duration); }
 .ve-nav a:hover, .ve-link:hover:not(:disabled) { color: var(--color-text); }
