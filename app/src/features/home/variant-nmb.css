@@ -82,7 +82,8 @@
 .nmb-cta-label .ui-spinner { position: absolute; top: calc(50% - 8px); right: calc(100% + var(--space-8)); }
 .nmb-cta:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: var(--focus-offset); }
 .nmb-price { margin: 26px 0 0; }
-.nmb-fine { margin: 8px 0 0; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); }
+/* The consent line keeps to the button's width, in two even lines. */
+.nmb-fine { max-width: 100%; margin: 8px 0 0; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); white-space: normal; text-wrap: balance; }
 /* What a returning visitor is told (not approved yet, an invitation waiting): above the button, in the empty part. */
 .nmb-notice { position: absolute; bottom: calc(100% + 64px + var(--space-16)); left: 0; width: 100%; text-align: left; white-space: normal; }
 
@@ -117,7 +118,7 @@
 .nmb-page--tall .nmb-price { margin-top: 14px; }
 .nmb-page--tall .nmb-price b { display: inline; font-size: 15px; line-height: 20px; }
 .nmb-page--tall .nmb-price span { display: inline; }
-.nmb-page--tall .nmb-fine { margin-top: 6px; text-wrap: pretty; }
+.nmb-page--tall .nmb-fine { max-width: none; margin-top: 6px; text-wrap: pretty; }
 /* With a notice the column under the delivery is longer than a phone screen leaves room for: the page grows to hold it. */
 .nmb-page--tall .nmb-notice { position: static; order: 1; margin-top: var(--space-12); }
 .nmb-page--tall:has(.nmb-notice) { grid-template-rows: 56px minmax(820px, 1fr) 48px; }
