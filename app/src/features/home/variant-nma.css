@@ -1,81 +1,140 @@
 /* The nma homepage (variant-nma.tsx): a tower at night, full bleed. nma-scene.ts measures the scene before the first
-   paint and sets every --nma-* length, so the copy sits on the wall the canvas draws. Colours are flat: sky, walls,
-   windows, letters, and the brand blue for stamps and the mast's beacon. */
-.nma-page { --nma-wall: #E9E9E9; --nma-side: #DDDDDD; --nma-hole: #DCDCDC; --nma-wake: #B9B9B9; --nma-lit: var(--color-contrast); --nma-crease: rgb(255 255 255 / 34%); --nma-brand: var(--color-brand); --nma-moon: #DADADA; --nma-spill: #F0F0F0; --nma-street: var(--color-border-strong);
-  --nma-far-1: #F1F1F1; --nma-far-2: #EEEEEE; --nma-far-3: #F4F4F4; --nma-far-hole: #E9E9E9;
-  display: flex; flex-direction: column; min-height: 100svh; overflow-x: clip; background: var(--color-canvas); }
-:root[data-theme='dark'] .nma-page { --nma-wall: #161616; --nma-side: #0F0F0F; --nma-hole: #1F1F1F; --nma-wake: #4A4A4A; --nma-crease: rgb(8 8 8 / 30%); --nma-moon: #D6D6D6; --nma-spill: #141414; --nma-street: rgb(255 255 255 / 14%);
-  --nma-far-1: #0F0F0F; --nma-far-2: #121212; --nma-far-3: #0D0D0D; --nma-far-hole: #171717; }
+   paint and sets every --nma-* length, so the copy sits on the wall the canvas draws; --nma-u and --nma-v are one
+   window's width and height, and everything on the wall is a whole number of them.
 
-.nma-header { display: flex; flex: none; align-items: center; justify-content: space-between; height: 64px; padding-inline: var(--space-32); }
+   Night (the default): one hue (268°, the brand's) at low chroma, and its opposite, a warm paper white, for the
+   letters, the door and whatever else is lit. The picture is layers, each one flat step from the last: sky, a skyline
+   far off, the row across the next street, our street's buildings, the tower's side, the tower's front (a wall and
+   its glass together make a value); within a building the roof is lightest, then the front, then the side.
+   Day is its own picture: a pale sky with the sun, the same layers stepping down from it, glass that is dark as glass
+   is by day (slate on the tower, its mullions a step off it, so the letters in its windows are still paper), a base
+   of stone two steps under the sky, no stars and no lit rooms.
+   Every tone is flat. */
+.nma-page {
+  --nma-sky: oklch(0.945 0.012 255); --nma-text: oklch(0.21 0.02 268); --nma-text-2: oklch(0.43 0.02 268); --nma-text-3: oklch(0.47 0.02 268); --nma-off: oklch(0.66 0.016 268); --nma-hair: oklch(0.21 0.02 268 / 14%); --nma-hover: oklch(0.21 0.02 268 / 7%);
+  --nma-door: oklch(0.25 0.025 268); --nma-door-hover: oklch(0.34 0.03 268); --nma-on-door: oklch(0.985 0.004 92); --nma-door-edge: oklch(1 0 0 / 16%);
+  --nma-star-1: transparent; --nma-star-2: transparent; --nma-star-3: transparent; --nma-moon: transparent; --nma-sun: oklch(0.992 0.014 95); --nma-skyline: oklch(0.918 0.014 258); --nma-ground: oklch(0.88 0.012 262);
+  --nma-far-top: oklch(0.955 0.008 262); --nma-far-front: oklch(0.878 0.014 262); --nma-far-side: oklch(0.835 0.016 262); --nma-far-lit: transparent;
+  --nma-n-top: oklch(0.975 0.004 262); --nma-n-front: oklch(0.832 0.016 262); --nma-n-side: oklch(0.755 0.019 262); --nma-n-base: oklch(0.79 0.018 262); --nma-n-line: oklch(0.7 0.02 262); --nma-n-roof: oklch(0.925 0.008 262); --nma-n-shade: oklch(0.4 0.03 262 / 9%); --nma-n-glass: oklch(0.782 0.02 262); --nma-late: transparent;
+  --nma-t-top: oklch(0.955 0.006 262); --nma-t-front: oklch(0.565 0.03 262); --nma-t-side: oklch(0.46 0.033 262); --nma-t-plinth: oklch(0.868 0.012 85); --nma-t-plinth-side: oklch(0.76 0.014 85); --nma-t-glass: oklch(0.505 0.034 262); --nma-t-glass-lo: oklch(0.524 0.033 262); --nma-t-ghost: oklch(0.67 0.026 262); --nma-t-side-glass: oklch(0.415 0.035 262); --nma-t-reveal: oklch(0.82 0.014 85); --nma-t-line: oklch(0.66 0.022 262); --nma-p-line: oklch(0.915 0.01 85); --nma-t-roof: oklch(0.87 0.01 262); --nma-t-joint: oklch(0.835 0.013 85);
+  --nma-walk: oklch(0.912 0.01 262); --nma-metal: oklch(0.55 0.018 262); --nma-metal-lit: oklch(0.42 0.02 262);
+  --nma-paper: oklch(0.985 0.01 92); --nma-between: oklch(0.76 0.02 262); --nma-flash: oklch(1 0 0); --nma-crease: oklch(0.82 0.03 85); --nma-edge: oklch(0.45 0.03 262); --nma-wake: oklch(0.66 0.03 262);
+  --nma-brand: var(--color-brand); --nma-brand-deep: oklch(0.5 0.085 269); --nma-brand-lit: oklch(0.74 0.065 269); --nma-brand-dark: oklch(0.3 0.06 269);
+  --nma-spill-0: transparent; --nma-spill-1: transparent; --nma-spill-2: transparent; --nma-spill-3: transparent;
+  --nma-ease: cubic-bezier(.22, 1, .36, 1); --nma-k: 17.17;
+  display: flex; flex-direction: column; min-height: 100svh; overflow-x: clip; background: var(--nma-sky); color: var(--nma-text); }
+:root[data-theme='dark'] .nma-page {
+  --nma-sky: oklch(0.148 0.014 268); --nma-text: oklch(0.968 0.004 268); --nma-text-2: oklch(0.74 0.014 268); --nma-text-3: oklch(0.63 0.016 268); --nma-off: oklch(0.45 0.018 268); --nma-hair: oklch(1 0 0 / 9%); --nma-hover: oklch(1 0 0 / 6%);
+  --nma-door: oklch(0.955 0.014 92); --nma-door-hover: oklch(0.995 0.006 92); --nma-on-door: oklch(0.2 0.02 268); --nma-door-edge: oklch(0.2 0.02 268 / 14%);
+  --nma-star-1: oklch(0.33 0.02 268); --nma-star-2: oklch(0.5 0.022 268); --nma-star-3: oklch(0.8 0.018 268); --nma-moon: oklch(0.82 0.014 95); --nma-sun: transparent; --nma-skyline: oklch(0.168 0.015 268); --nma-ground: oklch(0.158 0.014 268);
+  --nma-far-top: oklch(0.222 0.016 268); --nma-far-front: oklch(0.196 0.015 268); --nma-far-side: oklch(0.172 0.014 268); --nma-far-lit: oklch(0.44 0.045 78);
+  --nma-n-top: oklch(0.33 0.02 268); --nma-n-front: oklch(0.232 0.016 268); --nma-n-side: oklch(0.178 0.015 268); --nma-n-base: oklch(0.198 0.015 268); --nma-n-line: oklch(0.36 0.021 268); --nma-n-roof: oklch(0.288 0.018 268); --nma-n-shade: oklch(0.148 0.014 268 / 22%); --nma-n-glass: oklch(0.264 0.018 268); --nma-late: oklch(0.6 0.055 80);
+  --nma-t-top: oklch(0.4 0.023 268); --nma-t-front: oklch(0.272 0.018 268); --nma-t-side: oklch(0.218 0.016 268); --nma-t-plinth: oklch(0.212 0.016 268); --nma-t-plinth-side: oklch(0.172 0.014 268); --nma-t-glass: oklch(0.328 0.021 268); --nma-t-glass-lo: oklch(0.314 0.02 268); --nma-t-ghost: oklch(0.44 0.022 268); --nma-t-side-glass: oklch(0.262 0.018 268); --nma-t-reveal: oklch(0.16 0.014 268); --nma-t-line: oklch(0.47 0.024 268); --nma-p-line: oklch(0.4 0.022 268); --nma-t-roof: oklch(0.32 0.02 268); --nma-t-joint: oklch(0.255 0.017 268);
+  --nma-walk: oklch(0.225 0.016 268); --nma-metal: oklch(0.3 0.018 268); --nma-metal-lit: oklch(0.44 0.022 268);
+  --nma-paper: oklch(0.955 0.014 92); --nma-between: oklch(0.62 0.016 268); --nma-flash: oklch(1 0 0); --nma-crease: oklch(0.72 0.03 85); --nma-edge: transparent; --nma-wake: oklch(0.44 0.016 80);
+  --nma-brand-deep: oklch(0.42 0.07 269); --nma-brand-lit: oklch(0.72 0.07 269); --nma-brand-dark: oklch(0.25 0.05 269);
+  --nma-spill-0: oklch(0.74 0.022 90); --nma-spill-1: oklch(0.58 0.017 88); --nma-spill-2: oklch(0.44 0.008 88); --nma-spill-3: oklch(0.335 0.008 268); }
+
+/* The header stands over the sky: letters cross behind it. */
+.nma-header { position: relative; z-index: 3; display: flex; flex: none; align-items: center; justify-content: space-between; height: 64px; padding-inline: var(--space-32); }
 .nma-header .wordmark, .nma-header .theme-toggle { position: relative; inset: auto; }
-.nma-nav { display: flex; align-items: center; gap: var(--space-12); }
-.nma-nav > a { color: var(--color-muted); text-decoration: none; transition: color var(--motion-duration); }
-.nma-nav > a:hover { color: var(--color-text); }
+.nma-header .wordmark { height: 32px; color: var(--nma-text); }
+/* The lockup as it is, a quarter larger: beside a price this size it has to register. */
+.nma-header .bane-wordmark { gap: var(--space-8); font-size: 17.5px; line-height: 24px; }
+.nma-header .bane-wordmark svg { width: 20px; height: 20px; }
+.nma-nav { display: flex; align-items: center; gap: var(--space-4); }
+.nma-nav > a, .nma-nav .theme-toggle { height: 32px; border-radius: 8px; color: var(--nma-text-2); transition: color 150ms var(--nma-ease), background-color 150ms var(--nma-ease), transform 160ms var(--nma-ease); }
+.nma-nav > a { display: inline-flex; align-items: center; padding-inline: var(--space-12); font-size: var(--text-sm); font-weight: 510; letter-spacing: -.005em; text-decoration: none; }
+.nma-nav .theme-toggle { width: 32px; box-shadow: inset 0 0 0 1px var(--nma-hair); }
+@media (hover: hover) and (pointer: fine) { .nma-nav > a:hover, .nma-nav .theme-toggle:hover:not(:disabled) { background: var(--nma-hover); color: var(--nma-text); } }
+.nma-nav > a:active, .nma-nav .theme-toggle:active { transform: scale(.96); }
+.nma-nav > a:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: 1px; }
 
 .nma-scene { position: relative; flex: 1; min-height: 600px; }
-/* The canvases reach up over the header, so a letter is never cut off where the scene begins (it passes in front of
-   the header; the canvases take no pointer events). */
+/* The canvases reach up behind the header, so a letter is never cut off where the scene begins. */
 .nma-canvas { position: absolute; top: calc(-1 * var(--nma-over, 0px)); left: 0; display: block; width: 100%; height: calc(100% + var(--nma-over, 0px)); pointer-events: none; }
 .nma-air { z-index: 1; }
 
-/* The count appears with the first letter, in the middle of the wall; with the thousandth it steps aside to its place
-   in the sentence and the rest of the copy arrives. */
-.nma-count, .nma-copy { opacity: 0; transition: opacity 600ms var(--ease-out-strong); }
-.nma-count { display: inline-block; translate: calc(var(--nma-count-shift, 0px) - var(--nma-count-nudge, 0px)); transition: opacity 400ms var(--ease-out-strong), translate 460ms var(--ease-in-out-strong); }
-.nma-page:not([data-nma='dark']) .nma-count, .nma-page[data-nma='settled'] .nma-copy { opacity: 1; }
-.nma-page[data-nma='settled'] .nma-count { translate: 0; }
-.nma-band .nma-copy { transition-delay: 340ms; }
-.nma-plaque.nma-copy { transition-delay: 480ms; }
-/* The count keeps the width of its last value, so the sentence never moves. */
-.nma-tally { position: relative; display: inline-block; }
-.nma-tally-room { visibility: hidden; }
-.nma-tally-value { position: absolute; top: 0; right: 0; }
+/* All the lettering is on the wall from the first paint, a step dim. The number's place is kept by the number itself
+   as the sentence sets it, so the words round it never move and are spaced like the rest; until the thousandth letter
+   an odometer stands on that place instead, a touch smaller so that it fits it exactly: four figures in cells of one
+   width and their comma, unlit until the count reaches them. With the thousandth letter it gives way to the number,
+   and the rest lights too. */
+.nma-count, .nma-copy { color: var(--nma-text-2); transition: color 240ms var(--nma-ease); }
+.nma-odo, .nma-page[data-nma='settled'] .nma-count, .nma-page[data-nma='settled'] .nma-copy { color: var(--nma-text); }
+.nma-tally { display: inline-grid; align-items: baseline; justify-items: center; }
+.nma-odo, .nma-final { grid-area: 1 / 1; }
+.nma-odo { font-size: .955em; }
+.nma-digit { display: inline-block; width: .56em; text-align: center; }
+.nma-off { color: var(--nma-off); }
+.nma-final { visibility: hidden; }
+.nma-page[data-nma='settled'] .nma-odo { display: none; }
+.nma-page[data-nma='settled'] .nma-final { visibility: visible; }
 
-.nma-band { position: absolute; z-index: 2; top: var(--nma-band-top); left: var(--nma-left); display: flex; align-items: center; justify-content: center; width: var(--nma-width); height: var(--nma-band-h); margin: 0; color: var(--color-text); font-size: calc(21px * var(--nma-scale, 1)); font-weight: 480; line-height: calc(28px * var(--nma-scale, 1)); letter-spacing: -.012em; white-space: nowrap; }
+/* The sentence: exactly as wide as the price above it, its words spread to the same two edges, its full stop hung
+   outside the right one. --nma-k is its width in ems (without the stop) at the display optical size, which it keeps
+   at every size so that stays true. */
+.nma-band { position: absolute; z-index: 2; top: var(--nma-band-top); left: calc(var(--nma-left) + var(--nma-side) * var(--nma-u)); display: flex; align-items: center; width: var(--nma-art); height: var(--nma-band-h); margin: 0; padding-top: calc(var(--nma-v) * .5); font-size: calc(var(--nma-art) / var(--nma-k)); font-weight: 500; font-variant-numeric: proportional-nums; font-variation-settings: 'opsz' 32; line-height: 1; letter-spacing: -.022em; white-space: nowrap; }
+.nma-line { display: flex; align-items: baseline; justify-content: space-between; width: 100%; translate: 0 -.03em; }
+.nma-row { display: contents; }
+.nma-last { position: relative; }
+.nma-stop { position: absolute; left: 100%; }
 
-/* The ground floor: the door, and a plaque either side of it. */
-.nma-ground { position: absolute; z-index: 2; top: var(--nma-ground-top); left: var(--nma-left); display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; column-gap: calc(var(--space-28) * var(--nma-scale, 1)); width: var(--nma-width); height: var(--nma-ground-h); }
-.nma-plaque { margin: 0 0 calc(14px * var(--nma-scale, 1)); color: var(--color-muted); font-size: calc(var(--text-md) * var(--nma-scale, 1)); line-height: calc(var(--leading-sm) * var(--nma-scale, 1)); white-space: nowrap; }
-.nma-plaque:first-child { text-align: right; }
-.nma-plaque b { color: var(--color-text); font-weight: var(--font-weight-bold); }
+/* The ground floor: the door in the middle and, either side of it, a fact in two lines, each block on the price's edge
+   and centred on the door. */
+.nma-ground { position: absolute; z-index: 2; top: var(--nma-ground-top); left: var(--nma-left); width: var(--nma-width); height: var(--nma-ground-h); }
+.nma-fact { position: absolute; bottom: calc(var(--nma-step) + 3.5 * var(--nma-v)); left: calc(var(--nma-side) * var(--nma-u)); display: grid; row-gap: 6px; margin: 0; white-space: nowrap; translate: 0 50%; }
+.nma-fact:last-child { right: calc(var(--nma-side) * var(--nma-u)); left: auto; justify-items: end; }
+/* What it measures, a step dim; under it the measure, larger, its number at full strength and its unit in the label's
+   grey: one face, two tones, and the numbers carry the facts. */
+.nma-fact-label { color: var(--nma-text-2); font-size: clamp(12px, var(--nma-u) * 1.32, 19px); font-weight: 450; line-height: 1; letter-spacing: -.008em; }
+.nma-fact-value { color: var(--nma-text-2); font-size: clamp(14px, var(--nma-u) * 1.7, 26px); font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -.018em; }
+.nma-fact-value b { font-weight: inherit; }
 
-/* The door: the one light that is on before any letter arrives. */
-.nma-door { display: inline-flex; align-items: center; justify-content: center; width: calc(184px * var(--nma-scale, 1)); height: calc(68px * var(--nma-scale, 1)); padding: 0; border: 0; border-radius: 2px 2px 0 0; background: var(--color-contrast); color: var(--color-on-contrast); font-family: var(--font-body); font-size: calc(16px * var(--nma-scale, 1)); font-weight: 600; line-height: 20px; letter-spacing: -.01em; cursor: pointer; transform-origin: bottom; transition: background-color var(--motion-duration), transform 160ms var(--ease-out-strong); }
-@media (hover: hover) and (pointer: fine) { .nma-door:hover:not(:disabled) { background: var(--color-contrast-hover); } }
-.nma-door:active:not(:disabled) { transform: scale(.985); }
+/* The door: the one light that is on before any letter arrives. Fourteen windows wide and seven floors high. */
+.nma-door { position: absolute; bottom: var(--nma-step); left: calc((var(--nma-cols) - 14) / 2 * var(--nma-u)); display: inline-flex; align-items: center; justify-content: center; width: calc(14 * var(--nma-u)); height: calc(7 * var(--nma-v)); padding: 0; border: 0; border-radius: 2px 2px 0 0; background: var(--nma-door); color: var(--nma-on-door); font-family: var(--font-body); font-size: clamp(15px, var(--nma-u) * 1.2, 20px); font-weight: 600; line-height: 1; letter-spacing: -.012em; cursor: pointer; transform-origin: 50% 100%; transition: background-color 150ms var(--nma-ease), transform 160ms var(--nma-ease); }
+/* Its panel, a hairline inside the leaf. */
+.nma-door::before { content: ''; position: absolute; inset: 4px 4px 0; border: 1px solid var(--nma-door-edge); border-bottom: 0; border-radius: 1px 1px 0 0; pointer-events: none; }
+@media (hover: hover) and (pointer: fine) { .nma-door:hover:not(:disabled) { background: var(--nma-door-hover); } .nma-door:hover:not(:disabled) .nma-door-arrow { translate: 3px 0; } }
+.nma-door:active:not(:disabled) { transform: scale(.98); transition-duration: 90ms; }
 .nma-door:disabled { opacity: 1; }
-/* The spinner hangs off the label's left, so the label stays where it was. */
-.nma-door-label { position: relative; }
-.nma-door-label .ui-spinner { position: absolute; top: calc(50% - 8px); right: calc(100% + var(--space-8)); }
+.nma-door-label { display: inline-flex; align-items: center; gap: .4em; }
+.nma-door-arrow { transition: translate 200ms var(--nma-ease); }
 .nma-door[data-busy] { cursor: progress; }
-.nma-door:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: var(--focus-offset); }
+/* Focus traces the door's frame, square, and stops at the threshold. */
+.nma-door:focus-visible { outline: none; }
+.nma-door:focus-visible::after { content: ''; position: absolute; inset: calc(-.5 * var(--nma-u) - 2px) calc(-.5 * var(--nma-u) - 2px) 0; border: 2px solid var(--color-focus); border-bottom: 0; pointer-events: none; }
 
-.nma-street { position: absolute; z-index: 2; right: var(--space-32); bottom: 0; left: var(--space-32); display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; column-gap: var(--space-16); height: var(--nma-street-h); }
-.nma-street .home-footer { display: contents; }
-.nma-street .home-by { grid-row: 1; grid-column: 1; justify-self: start; }
-.nma-street .home-footer nav { grid-row: 1; grid-column: 3; justify-self: end; }
-.nma-consent { position: absolute; top: 50%; text-wrap: balance; left: calc(var(--nma-centre) - var(--space-32)); width: max-content; margin: 0; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); text-align: center; transform: translate(-50%, -50%); }
+/* On the pavement, on one line: what signing in agrees to, under the door and clear of its light; and whose
+   building this is. */
+.nma-street { position: absolute; z-index: 2; right: var(--space-32); bottom: 15px; left: var(--space-32); display: flex; align-items: center; height: 32px; }
+.nma-by { display: inline-flex; align-items: center; gap: var(--space-6); color: var(--nma-text-3); font-size: var(--text-xs); line-height: var(--leading-xs); text-decoration: none; transition: color 150ms var(--nma-ease); }
+.nma-by svg { flex: none; }
+@media (hover: hover) and (pointer: fine) { .nma-by:hover { color: var(--nma-text); } }
+.nma-consent { position: absolute; top: 50%; left: calc(var(--nma-centre) - var(--space-32)); width: max-content; margin: 0; color: var(--nma-text-3); font-size: 11px; line-height: 16px; text-align: center; text-wrap: balance; translate: -50% -50%; }
+.nma-consent a:hover { color: var(--nma-text); }
 
 /* What the sign-in flow has to say (an invitation, a refusal, an error) hangs in the sky under the header. */
 .nma-notice { position: absolute; z-index: 3; top: var(--space-8); left: 50%; width: min(520px, 100% - 2 * var(--space-16)); translate: -50% 0; }
 
-/* Narrower than this the consent would run into the footer's links: it takes a row of its own above them. */
-@media (max-width: 1099px) {
-  .nma-street { grid-template-columns: auto minmax(0, 1fr); align-content: center; row-gap: 10px; }
-  .nma-consent { position: static; grid-column: 1 / -1; width: auto; transform: none; }
-  .nma-street .home-by { grid-row: 2; }
-  .nma-street .home-footer nav { grid-row: 2; grid-column: 2; }
-}
 @media (max-width: 639px) {
+  .nma-page { --nma-k: 9.93; }
   .nma-header { height: 56px; padding-inline: var(--space-16); }
-  .nma-band { font-size: 16px; line-height: 22px; }
-  .nma-ground { display: flex; flex-direction: column; align-items: center; }
-  .nma-plaque, .nma-plaque:first-child { margin: 0; font-size: var(--text-sm); line-height: 18px; text-align: center; }
-  .nma-plaque br { display: none; }
-  .nma-door { order: 3; width: min(240px, 100% - 64px); height: 60px; margin-top: auto; font-size: 16px; }
-  .nma-street { right: var(--space-16); left: var(--space-16); }
-  .nma-street .home-footer nav { gap: var(--space-12); }
+  .nma-header .bane-wordmark { gap: 7px; font-size: 15.75px; }
+  .nma-header .bane-wordmark svg { width: 18px; height: 18px; }
+  .nma-scene { min-height: 500px; }
+  /* On a phone the sentence takes two lines: the second is the price's width, the first starts on the same edge. */
+  .nma-band { line-height: 1.14; letter-spacing: -.02em; }
+  .nma-line { display: block; }
+  .nma-row { display: flex; column-gap: .22em; align-items: baseline; }
+  .nma-row-wide { justify-content: space-between; column-gap: 0; }
+  .nma-fact { top: calc(var(--nma-v) * 3); bottom: auto; translate: none; }
+  .nma-fact-label { font-size: 13px; }
+  .nma-fact-value { font-size: 17px; }
+  .nma-door { left: calc((var(--nma-cols) - 32) / 2 * var(--nma-u)); width: calc(32 * var(--nma-u)); height: calc(12 * var(--nma-v)); font-size: 15px; }
+  /* On a phone the two lines stack on the pavement, the consent first. */
+  .nma-street { right: var(--space-16); bottom: 10px; left: var(--space-16); flex-direction: column-reverse; justify-content: center; row-gap: var(--space-6); height: 62px; }
+  .nma-consent { position: static; width: auto; translate: none; }
 }
 
-@media (prefers-reduced-motion: reduce) { .nma-count, .nma-copy, .nma-door { transition: none; } }
+@media (prefers-reduced-motion: reduce) { .nma-count, .nma-copy, .nma-door, .nma-door-arrow, .nma-nav > a, .nma-nav .theme-toggle { transition: none; } }

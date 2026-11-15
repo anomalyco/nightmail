@@ -1,156 +1,163 @@
 // The night scene behind the nma homepage (variant-nma.tsx): a tower among darker buildings, its windows just big
 // enough for a letter. A thousand letters fly in and lodge in the windows that spell the price of a thousand emails.
-// Everything is flat fills on two canvases: the buildings with the lodged letters (drawn once, then letter by letter),
-// and the air above them (letters in flight, the beacon and the light from the door), cleared every frame.
+// Everything is flat fills on two canvases: the city with the lodged letters (nma-city.ts draws it once, then this
+// file changes it window by window), and the air above it (letters in flight, the beacon, the light from the door),
+// cleared every frame.
+import { CROWN, drawCity, mast, setBack, setIn, INKS, type Ink, type Site, type Tier } from './nma-city'
 
-/** "$0.20" in windows. Every # is one window; there are exactly 1,000. */
+/** "$0.20" in windows, drawn for this grid (a window is wider than it is tall): stems three windows wide and bars four
+ * floors high, which is the same weight; every outer corner rounded over three windows and three floors; the "$" with
+ * a bar two windows wide through an S that stands two floors short at each end; the "2" on a diagonal as heavy as the
+ * stems. Every # is one window; there are exactly 1,000. */
 const PRICE = [
-  '.....#.........#####.........#####......#####..',
-  '.....#........#######.......#######....#######.',
-  '.....#.......#########.....#########..#########',
-  '..#######....#########.....#########..#########',
-  '.#########...###...###.....###...###..###...###',
-  '###########..###...###.....###...###..###...###',
-  '###########..###...###.....###...###..###...###',
-  '###..#..###..###...###.....###...###..###...###',
-  '###..#..###..###...###.....###...###..###...###',
-  '###..#..###..###...###...........###..###...###',
-  '###..#..###..###...###...........###..###...###',
-  '###..#.......###...###...........###..###...###',
-  '###..#.......###...###...........###..###...###',
-  '###..#.......###...###...........###..###...###',
-  '###..#.......###...###...........###..###...###',
-  '###..#.......###...###...........###..###...###',
-  '###..#.......###...###...........###..###...###',
-  '###..#.......###...###...........###..###...###',
-  '###..#.......###...###...........###..###...###',
-  '###..#.......###...###...........###..###...###',
-  '#########....###...###.......#######..###...###',
-  '##########...###...###......########..###...###',
-  '.##########..###...###.....########...###...###',
-  '..#########..###...###.....#######....###...###',
-  '.....#..###..###...###.....###........###...###',
-  '.....#..###..###...###.....###........###...###',
-  '.....#..###..###...###.....###........###...###',
-  '.....#..###..###...###.....###........###...###',
-  '.....#..###..###...###.....###........###...###',
-  '.....#..###..###...###.....###........###...###',
-  '.....#..###..###...###.....###........###...###',
-  '.....#..###..###...###.....###........###...###',
-  '###..#..###..###...###.....###........###...###',
-  '###..#..###..###...###.....###........###...###',
-  '###..#..###..###...###.....###........###...###',
-  '###..#..###..###...###.....###........###...###',
-  '###########..###...###.....###........###...###',
-  '###########..###...###.....###........###...###',
-  '.#########...###...###.....###........###...###',
-  '..#######....#########.###.#########..#########',
-  '.....#.......#########.###.#########..#########',
-  '.....#........#######..###.#########...#######.',
-  '.....#.........#####...###.#########....#####..',
+  '.....##..........###...........###........###...',
+  '.....##.........#####.........#####......#####..',
+  '...######......#######.......#######....#######.',
+  '..########....#########.....#########..#########',
+  '.##########...###...###.....###...###..###...###',
+  '############..###...###.....###...###..###...###',
+  '###..##..###..###...###.....###...###..###...###',
+  '###..##..###..###...###.....###...###..###...###',
+  '###..##..###..###...###.....###...###..###...###',
+  '###..##..###..###...###.....###...###..###...###',
+  '###..##..###..###...###...........###..###...###',
+  '###..##.......###...###...........###..###...###',
+  '###..##.......###...###...........###..###...###',
+  '###..##.......###...###...........###..###...###',
+  '###..##.......###...###...........###..###...###',
+  '###..##.......###...###...........###..###...###',
+  '###..##.......###...###...........###..###...###',
+  '###..##.......###...###...........###..###...###',
+  '###..##.......###...###...........###..###...###',
+  '##########....###...###...........###..###...###',
+  '.#########....###...###..........####..###...###',
+  '..#########...###...###..........###...###...###',
+  '..##########..###...###..........###...###...###',
+  '.....##..###..###...###.........####...###...###',
+  '.....##..###..###...###.........###....###...###',
+  '.....##..###..###...###.........###....###...###',
+  '.....##..###..###...###........####....###...###',
+  '.....##..###..###...###........###.....###...###',
+  '.....##..###..###...###........###.....###...###',
+  '.....##..###..###...###.......####.....###...###',
+  '.....##..###..###...###.......###......###...###',
+  '.....##..###..###...###.......###......###...###',
+  '###..##..###..###...###......####......###...###',
+  '###..##..###..###...###......###.......###...###',
+  '###..##..###..###...###......###.......###...###',
+  '###..##..###..###...###.....####.......###...###',
+  '###..##..###..###...###.....###........###...###',
+  '############..###...###.....###........###...###',
+  '.##########...###...###.....###........###...###',
+  '..########....#########.###.#########..#########',
+  '...######......#######..###.#########...#######.',
+  '.....##.........#####...###.#########....#####..',
+  '.....##..........###....###.#########.....###...',
 ] as const
 export const LETTERS = 1000
 
 // A window is 18 wide for every 13 tall: the shape of an envelope.
 const CELL = 18 / 13
-const BELOW = 2, ART_COLS = PRICE[0].length, ART_ROWS = PRICE.length
+const ART_COLS = PRICE[0].length, ART_ROWS = PRICE.length
+// The middle of the decimal point: the last window to get its letter.
+const POINT = { col: 25, row: ART_ROWS - 2 }
 
-/** Where everything is, in CSS pixels inside the scene. The page's own boxes (band, ground floor, street) read the same numbers as custom properties. */
+/** Where everything is. Lengths are device pixels of the base canvas (the page's own boxes read them as CSS lengths in --nma-* custom properties), except `street`. */
 export type Plan = {
-  phone: boolean; dpr: number; scale: number; side: number; cols: number; upper: number; floors: number
-  cw: number; ch: number; cwDev: number; chDev: number
-  left: number; top: number; bottom: number; width: number; depth: number
-  bandTop: number; bandH: number; groundTop: number; groundH: number; streetH: number
+  phone: boolean; dpr: number; side: number; cols: number; upper: number; floors: number; depth: number; tiers: Tier[]
+  cw: number; ch: number; zu: number; L: number; T: number; B: number; band: number; ground: number; step: number; walk: number; street: number
 }
 
-// The tower from the top: dark floors, the floors that spell the price, then a plinth with the sentence and the door.
+// The tower from the top: the crown, the wall whose windows spell the price, a frieze with the sentence, the ground
+// floor with the door.
 export function plan(W: number, H: number, dpr: number): Plan {
-  const phone = W < 640
-  // On a tall wide screen the tower grows, and the plinth, its type and the door grow with it (up to 1.4 times).
-  const scale = W < 1100 ? 1 : Math.max(1, Math.min(1.4, H / 836))
-  const bandH = phone ? 46 : Math.round(64 * scale), groundH = phone ? 128 : Math.round(92 * scale), streetH = W < 1100 ? 92 : 68
-  const sky = phone ? 56 : 66, margin = phone ? 30 : 48, depth = phone ? 8 : 22, side = phone ? 3 : 4
-  const upperMin = 3, upperWant = phone ? 30 : 16, upperMax = phone ? 36 : 20
-  const cols = ART_COLS + 2 * side, room = H - sky - bandH - groundH - streetH
-  // As large as the width allows, but leaving the tower dark floors above the price when the height allows it.
-  const widest = (W - 2 * margin - depth) / cols, tallest = room / (upperMin + ART_ROWS + BELOW) * CELL, ideal = room / (upperWant + ART_ROWS + BELOW) * CELL
-  const cwDev = Math.max(4, Math.floor(Math.min(widest, tallest, Math.max(ideal, phone ? 6 : 9), 20) * dpr))
-  const chDev = Math.max(3, Math.round(cwDev / CELL)), cw = cwDev / dpr, ch = chDev / dpr
-  const upper = Math.max(upperMin, Math.min(upperMax, Math.floor(room / ch) - ART_ROWS - BELOW)), floors = upper + ART_ROWS + BELOW
-  const width = cols * cw, height = floors * ch + bandH + groundH
-  const snap = (value: number) => Math.round(value * dpr) / dpr
-  // On a wide screen the tower stands right of centre, leaving the sky on its left to the moon and the letters.
-  const left = snap(Math.max(margin, Math.min(W - margin - depth - width, (W - width - depth) / 2 + (phone ? 0 : Math.min(W * .085, (W - width) * .22))))), bottom = snap(H - streetH), top = bottom - height
-  return { phone, dpr, scale, side, cols, upper, floors, cw, ch, cwDev, chDev, left, top, bottom, width, depth, bandTop: top + floors * ch, bandH, groundTop: bottom - groundH, groundH, streetH }
+  // The pavement runs to the bottom of the page: deep enough for the door's light and the line under it.
+  const phone = W < 640, street = phone ? 100 : 88
+  const side = phone ? 3 : 4, cols = ART_COLS + 2 * side, depth = phone ? 8 : 16
+  // On a phone the frieze takes the sentence in two lines and the ground floor is roomier.
+  const bandRows = phone ? 17 : 8, groundRows = phone ? 30 : 11
+  const sky = phone ? 72 : 106, margin = phone ? 6 : 40, room = (H - sky - street) * dpr
+  const shape = (cw: number) => ({ ch: Math.max(3, Math.round(cw / CELL)), zu: Math.max(4, Math.round(cw / 4) * 4) })
+  // The price stands in the middle of its wall: as many dark floors over it (under the crown) as under it, about as
+  // deep as the wall left at its sides. Nothing above the crown is wall for its own sake.
+  let clear = phone ? 4 : 5, steps = CROWN.length
+  const crowned = () => CROWN.slice(CROWN.length - steps).reduce((n, tier) => n + tier.floors, 0)
+  // The front stands in the middle of the page; its side wall, on the left, has to clear the margin.
+  const fits = (cw: number) => { const { ch, zu } = shape(cw); return cols * cw / 2 + depth * zu / 2 + margin * dpr <= W * dpr / 2 && (crowned() + 2 * clear + ART_ROWS + bandRows + groundRows) * ch <= room }
+  // As large as the page allows. On a short page the crown loses its steps, then the wall its spare floors, before
+  // the windows get any smaller than they can be read at.
+  let cw = Math.floor((phone ? 7 : 17) * dpr)
+  const least = Math.floor((phone ? 5 : 9) * dpr)
+  while (cw > least && !fits(cw)) cw--
+  while (steps > 0 && !fits(cw)) steps--
+  while (clear > 2 && !fits(cw)) clear--
+  while (cw > 4 && !fits(cw)) cw--
+  const { ch, zu } = shape(cw), upper = crowned() + clear, floors = upper + ART_ROWS + clear
+  const band = bandRows * ch, ground = groundRows * ch, B = Math.round((H - street) * dpr), L = Math.round((W * dpr - cols * cw) / 2)
+  const tiers: Tier[] = CROWN.slice(CROWN.length - steps).map(tier => ({ ...tier, back: tier.back * depth / 16 }))
+  return { phone, dpr, side, cols, upper, floors, depth, tiers, cw, ch, zu, L, T: B - band - ground - floors * ch, B, band, ground, step: Math.max(2, Math.round(ch * .34)), walk: Math.round(street * dpr), street }
 }
-
-// The tower steps in twice near the top: how many windows a floor is set in from each edge.
-const CROWN = 4
-export const setback = (row: number, upper: number) => upper < 2 * CROWN + 2 ? 0 : row < CROWN ? 8 : row < 2 * CROWN ? 4 : 0
 
 const random = (seed: number) => () => { seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296 }
 
 // Tonight's moon: 0 new, 0.5 full, from the mean length of a lunation since the new moon of 6 January 2000.
 function moonPhase(now: number) { const lunation = 29.530588853, days = (now - Date.UTC(2000, 0, 6, 18, 14)) / 86_400_000; return ((days % lunation) + lunation) % lunation / lunation }
 
-// The buildings either side of the tower, nearest first: width and height as fractions of the tower's, a wall tone, and
-// what stands on the roof (0 nothing, 1 a plant room, 2 an aerial).
-const LEFT = [[.44, .5, 1, 0], [.3, .3, 2, 0], [.48, .41, 0, 1], [.26, .23, 1, 0], [.52, .34, 2, 2], [.34, .2, 0, 0]] as const
-const RIGHT = [[.36, .35, 2, 0], [.5, .58, 0, 2], [.24, .26, 1, 0], [.46, .43, 2, 1], [.3, .21, 0, 0], [.52, .33, 1, 0]] as const
+// A letter in the air. `cross` comes in on one arc, large enough to be followed, and shrinks into its window; `fall`
+// drops from the top of the page under its own weight; `leave` goes back out; `stray` is the one that ends up on the mast.
+type Flight = { index: number; t0: number; dur: number; kind: 'cross' | 'fall' | 'leave' | 'stray'; fx: number; fy: number; bend: number; spin: number; flip: number; scale: number }
 
-type Flight = { index: number; t0: number; dur: number; fx: number; fy: number; bend: number; spin: number; flip: number; scale: number; leaving: boolean; stray?: boolean }
-type Colors = { wall: string; side: string; hole: string; wake: string; lit: string; crease: string; brand: string; moon: string; spill: string; street: string; far: string[]; farHole: string }
-
-// When each letter lands, in milliseconds from the start: five you can follow, then the storm, then six stragglers.
-const FIRST = [400, 680, 880, 1010, 1100], LAST = [45, 65, 90, 125, 170, 230], STORM = 1250
-const STRAY_AT = 3300, AMBIENT_AT = 6000
+// When each window gets its letter, in milliseconds from the start. The price is on the wall from the first paint as
+// empty windows a step lighter than the rest, so it can be read before anything moves. Three letters come in from the
+// left at the price's own height, a tenth of a second apart, each a third of a second on its arc and five windows
+// wide when it appears, and land one on another at the foot of the "$"'s first column; the sweep grows straight out
+// of the third: the price is filled the way it is read, left to right, slowing as it nears the end, each column from
+// the bottom up, each window one step dimmer for its first two frames; the count stands at 999 for a moment; then the
+// thousandth letter falls, alone and the size of an envelope, down the gap between the 0 and the 2 into the point,
+// and the whole price is a step brighter for two frames. A visitor who has seen that before gets the sweep and the
+// last letter.
+const FIRST = [340, 440, 540], FLIGHT = 340, FULL = { sweepAt: 540, sweep: 720, hold: 140, fall: 400, strayAt: 2600 }, QUICK = { sweepAt: 80, sweep: 560, hold: 90, fall: 320, strayAt: 1500 }
+const AMBIENT_AFTER = 4400, BETWEEN = 34, FLASH = 34
 
 export type Scene = { destroy: () => void; hover: (on: boolean) => void; welcome: (on: boolean) => void }
 
-export function mountScene({ root, scene, base, air, door, reduced, onCount }: { root: HTMLElement; scene: HTMLElement; base: HTMLCanvasElement; air: HTMLCanvasElement; door: HTMLElement; reduced: boolean; onCount: (letters: number) => void }): Scene {
-  const bctx = base.getContext('2d')!, actx = air.getContext('2d')!
+export function mountScene({ root, scene, base, air, door, reduced, quick, onCount }: { root: HTMLElement; scene: HTMLElement; base: HTMLCanvasElement; air: HTMLCanvasElement; door: HTMLElement; reduced: boolean; quick: boolean; onCount: (letters: number) => void }): Scene {
+  const bctx = base.getContext('2d')!, actx = air.getContext('2d')!, times = quick ? QUICK : FULL, singles = quick ? 0 : FIRST.length
   // The canvases start at the top of the page, `over` pixels above the scene, so letters cross the header's band too.
-  let p: Plan, colors: Colors, W = 0, H = 0, over = 0, airDpr = 1
-  // The windows of the price in landing order, as columns and rows of the drawing.
+  let p: Plan, site: Site, ink = {} as Ink, W = 0, H = 0, over = 0, airDpr = 1
+  // The windows of the price in landing order, as columns and rows of the drawing; `carried` marks the ones whose
+  // letter is seen arriving (the rest are simply lit on time).
   let cells: { col: number; row: number }[] = []
-  const lodged = new Uint8Array(LETTERS), landAt = new Float64Array(LETTERS), durations = new Float64Array(LETTERS), spawnOrder: number[] = []
-  let flights: Flight[] = [], spawned = 0, counted = 0
+  const lodged = new Uint8Array(LETTERS), carried = new Uint8Array(LETTERS), landAt = new Float64Array(LETTERS), durations = new Float64Array(LETTERS), spawnOrder: number[] = []
+  let flights: Flight[] = [], spawned = 0, lit = 0, counted = 0
   let strayLanded = false, hovering = false, spill = 0, welcomeAt = -1, welcomeRows = 0
-  let nextSwap = AMBIENT_AT, swapping = -1, raf = 0, doorBox = { x: 0, y: 0, w: 0, h: 0 }
+  const lastAt = times.sweepAt + times.sweep + times.hold + times.fall
+  let nextSwap = lastAt + AMBIENT_AFTER, swapping = -1, doneAt = Infinity, raf = 0, doorBox = { x: 0, y: 0, w: 0, h: 0 }, twinkles: { x: number; y: number; period: number; phase: number }[] = []
   const start = performance.now(), rand = random(20261115)
 
-  function readColors() {
-    const style = getComputedStyle(root), get = (name: string) => style.getPropertyValue(name).trim()
-    colors = { wall: get('--nma-wall'), side: get('--nma-side'), hole: get('--nma-hole'), wake: get('--nma-wake'), lit: get('--nma-lit'), crease: get('--nma-crease'), brand: get('--nma-brand'), moon: get('--nma-moon'), spill: get('--nma-spill'), street: get('--nma-street'),
-      far: [get('--nma-far-1'), get('--nma-far-2'), get('--nma-far-3')], farHole: get('--nma-far-hole') }
-  }
+  function readInks() { const style = getComputedStyle(root); for (const name of INKS) ink[name] = style.getPropertyValue(`--nma-${name}`).trim() }
 
-  // The landing order: random, except that the stragglers are one obvious gap per numeral and the last is the point.
+  // The landing order: column by column from the price's left edge to its right, each column from the bottom up; the
+  // last window of all is the middle of the point.
   function order() {
     const all: { col: number; row: number }[] = []
     PRICE.forEach((line, row) => { for (let col = 0; col < line.length; col++) if (line[col] === '#') all.push({ col, row }) })
-    const shuffle = random(7)
-    for (let i = all.length - 1; i > 0; i--) { const j = Math.floor(shuffle() * (i + 1)); [all[i], all[j]] = [all[j], all[i]] }
-    const last: { col: number; row: number }[] = []
-    for (const [fx, fy] of [[.9, .5], [.02, .3], [.74, .06], [.36, .62], [.98, .8], [.52, .97]]) {
-      const x = fx * (ART_COLS - 1), y = fy * (ART_ROWS - 1)
-      let bestAt = -1, bestDistance = Infinity
-      all.forEach((cell, at) => { const d = Math.hypot((cell.col - x) * CELL, cell.row - y); if (d < bestDistance) { bestDistance = d; bestAt = at } })
-      last.push(all.splice(bestAt, 1)[0])
-    }
-    cells = [...all, ...last]
+    let point = 0, nearest = Infinity
+    all.forEach((cell, at) => { const d = Math.hypot((cell.col - POINT.col) * CELL, cell.row - POINT.row); if (d < nearest) { nearest = d; point = at } })
+    const [last] = all.splice(point, 1)
+    cells = [...all.sort((one, other) => one.col - other.col || other.row - one.row), last]
   }
 
   function schedule() {
-    const jitter = random(11)
     for (let i = 0; i < LETTERS; i++) {
-      if (i < FIRST.length) { landAt[i] = FIRST[i]; durations[i] = 430 }
-      else if (i < LETTERS - LAST.length) { landAt[i] = FIRST[FIRST.length - 1] + STORM * ((i - FIRST.length + 1) / (LETTERS - FIRST.length - LAST.length)) ** .62; durations[i] = 230 + jitter() * 90 }
-      else { const k = i - (LETTERS - LAST.length); landAt[i] = landAt[i - 1] + LAST[k]; durations[i] = 300 + k * 32 }
+      if (i < singles) { landAt[i] = FIRST[i]; durations[i] = FLIGHT; carried[i] = 1 }
+      // The sweep slows into its last column: its place along the price is an ease-out of time.
+      else if (i < LETTERS - 1) landAt[i] = times.sweepAt + times.sweep * (1 - (1 - (i - singles + 1) / (LETTERS - singles - 1)) ** (1 / 1.7))
+      else { landAt[i] = lastAt; durations[i] = times.fall; carried[i] = 1 }
     }
     spawnOrder.length = 0
-    for (let i = 0; i < LETTERS; i++) spawnOrder.push(i)
-    spawnOrder.sort((a, b) => (landAt[a] - durations[a]) - (landAt[b] - durations[b]))
+    for (let i = 0; i < LETTERS; i++) if (carried[i]) spawnOrder.push(i)
+    spawnOrder.sort((one, other) => (landAt[one] - durations[one]) - (landAt[other] - durations[other]))
   }
 
   function measure() {
@@ -159,184 +166,195 @@ export function mountScene({ root, scene, base, air, door, reduced, onCount }: {
     p = plan(W, H, dpr)
     airDpr = Math.min(2, dpr)
     for (const [canvas, context, scale] of [[base, bctx, dpr], [air, actx, airDpr]] as const) { canvas.width = Math.round(W * scale); canvas.height = Math.round((H + over) * scale); context.setTransform(1, 0, 0, 1, 0, Math.round(over * scale)) }
-    const set = (name: string, value: number) => root.style.setProperty(name, `${value}px`)
-    set('--nma-over', over); root.style.setProperty('--nma-scale', String(p.scale))
-    set('--nma-left', p.left); set('--nma-width', p.width); set('--nma-band-top', p.bandTop); set('--nma-band-h', p.bandH)
-    set('--nma-ground-top', p.groundTop); set('--nma-ground-h', p.groundH); set('--nma-street-h', p.streetH); set('--nma-centre', p.left + p.width / 2)
+    const set = (name: string, device: number) => root.style.setProperty(name, `${device / dpr}px`)
+    root.style.setProperty('--nma-over', `${over}px`); root.style.setProperty('--nma-street-h', `${p.street}px`); root.style.setProperty('--nma-side', String(p.side)); root.style.setProperty('--nma-cols', String(p.cols))
+    set('--nma-left', p.L); set('--nma-width', p.cols * p.cw); set('--nma-band-top', p.B - p.ground - p.band); set('--nma-band-h', p.band); set('--nma-ground-top', p.B - p.ground); set('--nma-ground-h', p.ground)
+    set('--nma-u', p.cw); set('--nma-v', p.ch); set('--nma-step', p.step); set('--nma-art', ART_COLS * p.cw); set('--nma-centre', p.L + p.cols * p.cw / 2)
     if (!cells.length) order()
     const sceneBox = scene.getBoundingClientRect(), box = door.getBoundingClientRect()
     doorBox = { x: box.left - sceneBox.left, y: box.top - sceneBox.top, w: box.width, h: box.height }
+    site = { c: bctx, ink, dpr, W, H, over, L: p.L, base: p.B, cw: p.cw, ch: p.ch, zu: p.zu, cols: p.cols, floors: p.floors, tiers: p.tiers, band: p.band, ground: p.ground, walk: p.walk, depth: p.depth, phone: p.phone, moon: moonPhase(Date.now()), door: { x: Math.round(doorBox.x * dpr), w: Math.round(doorBox.w * dpr) } }
+    // A few stars in the open sky above the roofs change brightness, slowly, each in its own time.
+    const place = random(97), topSky = p.T / dpr - 30, clear = (p.L - p.depth * p.zu / 2) / dpr - 24, tip = mast(site)
+    twinkles = []
+    for (let i = 0; i < 60 && twinkles.length < (p.phone ? 5 : 9); i++) {
+      const x = Math.round(place() * W), y = Math.round(-over + 10 + place() * (topSky + over - 10)), period = 2600 + place() * 4200, phase = place() * 6.28
+      if (x > clear && x < (p.L + p.cols * p.cw) / dpr + 24 && y > tip.y - 30) continue
+      twinkles.push({ x, y, period, phase })
+    }
   }
 
-  // Device pixels of a window on the base canvas.
+  // Device pixels of a window on the base canvas; the floors of the crown stand back with their walls.
   function windowBox(col: number, row: number) {
-    const dpr = p.dpr, gx = Math.max(1, Math.round(p.cwDev * .11)), gy = Math.max(1, Math.round(p.chDev * .15))
-    return { x: Math.round(p.left * dpr) + col * p.cwDev + gx, y: Math.round(p.top * dpr) + row * p.chDev + gy, w: p.cwDev - 2 * gx, h: p.chDev - 2 * gy }
+    const gx = Math.max(1, Math.round(p.cw * .1)), gy = Math.max(1, Math.round(p.ch * .13)), back = setBack(row, p.tiers)
+    return { x: p.L + col * p.cw + gx - back * p.zu / 2, y: p.T + row * p.ch + gy - back * p.zu / 4, w: p.cw - 2 * gx, h: p.ch - 2 * gy }
   }
-  // A letter face-down shows its flap; one in nine landed face-up and shows a stamp and an address.
-  const faceUp = (index: number) => (index * 2654435761 >>> 0) % 9 === 0
-  function letter(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, up: boolean) {
-    ctx.fillStyle = colors.lit; ctx.fillRect(x, y, w, h)
-    if (w < 9) return
-    const line = Math.max(1, Math.round(w / 26))
+  // An empty window: glass, in two tones so close that the wall is a quiet field behind the price (one window in
+  // five has its blinds down).
+  function pane(col: number, row: number) {
+    let h = Math.imul(col + 1, 374761393) ^ Math.imul(row + 1, 668265263); h = Math.imul(h ^ h >>> 13, 1274126177)
+    const box = windowBox(col, row)
+    bctx.fillStyle = ink[((h ^ h >>> 16) >>> 0) % 5 ? 't-glass' : 't-glass-lo']; bctx.fillRect(box.x, box.y, box.w, box.h)
+  }
+  // A letter is one flat tone, so the price reads as clean type. Where there are the pixels for it (a letter in
+  // flight, or any window on a dense screen) it also shows its flap, and one in twelve lies face up with a stamp and
+  // an address. By day a letter in the air needs an edge to be seen against the sky.
+  const faceUp = (index: number) => (index * 2654435761 >>> 0) % 12 === 0
+  function letter(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, up: boolean, detail: boolean, edged = false) {
+    ctx.fillStyle = ink.paper; ctx.fillRect(x, y, w, h)
+    const line = Math.max(1, Math.round(w / 24))
+    if (edged && ink.edge !== 'transparent') { ctx.strokeStyle = ink.edge; ctx.lineWidth = line; ctx.strokeRect(x + line / 2, y + line / 2, w - line, h - line) }
+    if (!detail) return
     if (up) {
-      const stamp = Math.max(2, Math.round(h * .34)), pad = Math.max(1, Math.round(h * .16))
-      ctx.fillStyle = colors.brand; ctx.fillRect(x + w - pad - stamp, y + pad, stamp, stamp)
-      ctx.fillStyle = colors.crease
-      ctx.fillRect(x + Math.round(w * .2), y + Math.round(h * .52), Math.round(w * .34), line); ctx.fillRect(x + Math.round(w * .2), y + Math.round(h * .52) + 2 * line, Math.round(w * .24), line)
+      const stamp = Math.max(2, Math.round(h * .36)), pad = Math.max(1, Math.round(h * .16))
+      ctx.fillStyle = ink.brand; ctx.fillRect(x + w - pad - stamp, y + pad, stamp, stamp)
+      ctx.fillStyle = ink.crease
+      ctx.fillRect(x + Math.round(w * .18), y + Math.round(h * .5), Math.round(w * .36), line); ctx.fillRect(x + Math.round(w * .18), y + Math.round(h * .5) + 2 * line, Math.round(w * .25), line)
     } else {
-      ctx.strokeStyle = colors.crease; ctx.lineWidth = line; ctx.beginPath()
-      ctx.moveTo(x + line / 2, y + line / 2); ctx.lineTo(x + w / 2, y + h * .6); ctx.lineTo(x + w - line / 2, y + line / 2); ctx.stroke()
+      ctx.strokeStyle = ink.crease; ctx.lineWidth = line; ctx.beginPath()
+      ctx.moveTo(x + line / 2, y + line / 2); ctx.lineTo(x + w / 2, y + h * .58); ctx.lineTo(x + w - line / 2, y + line / 2); ctx.stroke()
     }
   }
   // The window a letter of the price belongs in: the drawing sits `side` windows in and `upper` floors down.
   const priceWindow = (index: number) => windowBox(cells[index].col + p.side, cells[index].row + p.upper)
+  // A window of the price: its letter, or, until that lands, glass a clear step lighter than the wall's other
+  // windows, so the price is there to be read from the first paint.
   function drawWindow(index: number) {
     const box = priceWindow(index)
-    if (lodged[index]) letter(bctx, box.x, box.y, box.w, box.h, faceUp(index))
-    else { bctx.fillStyle = colors.hole; bctx.fillRect(box.x, box.y, box.w, box.h) }
+    if (lodged[index]) letter(bctx, box.x, box.y, box.w, box.h, faceUp(index), p.dpr >= 1.5 && box.w >= 12)
+    else { bctx.fillStyle = ink['t-ghost']; bctx.fillRect(box.x, box.y, box.w, box.h) }
   }
-
-  const mastTop = () => ({ x: p.left + p.width / 2, y: p.top - (p.phone ? 34 : 52 * p.scale) })
 
   function drawBase() {
-    const dpr = p.dpr, c = bctx, px = (value: number) => Math.round(value * dpr)
-    c.clearRect(0, -px(over), base.width, base.height)
-    const L = px(p.left), T = px(p.top), R = L + p.cols * p.cwDev, B = px(p.bottom), D = px(p.depth), height = B - T, width = R - L
-    // The moon, at tonight's phase (never thinner than a sliver, so there is always one).
-    {
-      const r = px(p.phone ? 12 : 21 * p.scale), cx = px(p.phone ? W * .17 : Math.max(60, p.left * .46)), cy = px(p.phone ? p.top * .5 : Math.max(40, H * .17))
-      let phase = moonPhase(Date.now()); if (phase < .07 || phase > .93) phase = .07
-      const k = Math.cos(2 * Math.PI * phase)
-      c.save(); c.translate(cx, cy); if (phase > .5) c.scale(-1, 1); c.rotate(-.42)
-      c.fillStyle = colors.moon; c.beginPath(); c.arc(0, 0, r, -Math.PI / 2, Math.PI / 2); c.ellipse(0, 0, Math.abs(k) * r, r, 0, Math.PI / 2, -Math.PI / 2, k > 0); c.fill(); c.restore()
-    }
-    // The neighbours: darker walls with their own rhythm of windows, all asleep.
-    for (const [list, direction] of [[LEFT, -1], [RIGHT, 1]] as const) {
-      let edge = direction < 0 ? L + Math.round(width * .1) : R + D - Math.round(width * .1)
-      for (let i = 0; direction < 0 ? edge > 0 : edge < base.width; i++) {
-        const [fw, fh, tone, roof] = list[i % list.length], w = Math.round(width * fw), h = Math.round(height * fh), x = direction < 0 ? edge - w : edge, top = B - h
-        c.fillStyle = colors.far[tone]; c.fillRect(x, top, w, h)
-        if (roof === 1) c.fillRect(x + Math.round(w * .2), top - px(9), Math.round(w * .34), px(9))
-        if (roof === 2) c.fillRect(x + Math.round(w * .7), top - px(p.phone ? 20 : 34), Math.max(1, px(1.5)), px(p.phone ? 20 : 34))
-        // Its windows: the tower's proportions at a slightly different pitch, so the street reads as one material.
-        const pw = Math.round(p.cwDev * (1.2 + (i % 3) * .15)), ph = Math.round(p.chDev * (1.3 + (i % 2) * .3)), inset = Math.round(pw * .7)
-        c.fillStyle = colors.farHole
-        for (let y = top + inset; y + ph < B - px(12); y += ph) for (let wx = x + inset; wx + pw <= x + w - inset * .5; wx += pw) c.fillRect(wx, y, Math.round(pw * .68), Math.round(ph * .52))
-        edge += direction * w
-      }
-    }
-    // The tower: its side, the mast, then the front, stepping in twice at the top.
-    const body = setback(0, p.upper) ? 2 * CROWN * p.chDev : 0
-    c.fillStyle = colors.side; c.beginPath(); c.moveTo(R, T + body); c.lineTo(R + D, T + body + Math.round(D * .62)); c.lineTo(R + D, B); c.lineTo(R, B); c.fill()
-    c.fillStyle = colors.wall
-    const mast = mastTop()
-    c.fillRect(px(mast.x) - Math.max(1, px(1)), px(mast.y), Math.max(2, px(2)), T - px(mast.y))
-    for (const [from, to] of [[0, CROWN], [CROWN, 2 * CROWN]]) { const inset = setback(from, p.upper) * p.cwDev; c.fillRect(L + inset, T + from * p.chDev, width - 2 * inset, (to - from) * p.chDev) }
-    c.fillRect(L, T + body, width, height - body)
-    c.fillStyle = colors.hole
-    for (let row = 0; row < p.floors; row++) for (let col = setback(row, p.upper); col < p.cols - setback(row, p.upper); col++) { const box = windowBox(col, row); c.fillRect(box.x, box.y, box.w, box.h) }
-    for (let i = 0; i < LETTERS; i++) if (lodged[i]) drawWindow(i)
+    const c = bctx, dpr = p.dpr, one = Math.max(1, Math.round(dpr / 2))
+    c.clearRect(0, -Math.round(over * dpr), base.width, base.height)
+    drawCity(site)
+    for (let row = 0; row < p.floors; row++) for (let col = setIn(row, p.tiers); col < p.cols - setIn(row, p.tiers); col++) pane(col, row)
+    for (let i = 0; i < LETTERS; i++) drawWindow(i)
     if (welcomeRows) drawWelcome(0, welcomeRows)
-    c.fillStyle = colors.street; c.fillRect(0, B, base.width, Math.max(1, px(1)))
+    // The doorway: a reveal round the door, a lintel over it, and a threshold a little wider than the frame.
+    const x = Math.round(doorBox.x * dpr), y = Math.round(doorBox.y * dpr), w = Math.round(doorBox.w * dpr), r = Math.max(2 * one, Math.round(p.cw * .5)), lip = Math.max(2 * one, Math.round(p.ch * .34))
+    c.fillStyle = ink['t-reveal']; c.fillRect(x - r, y - r, w + 2 * r, p.B - y + r)
+    c.fillStyle = ink['p-line']; c.fillRect(x - r - one, y - r - one, w + 2 * r + 2 * one, one); c.fillRect(x - r - one, y - r, one, p.B - y + r); c.fillRect(x + w + r, y - r, one, p.B - y + r)
+    c.fillStyle = ink['t-joint']; c.fillRect(x - r - p.cw, y - r - one - lip, w + 2 * r + 2 * p.cw, lip); c.fillStyle = ink['p-line']; c.fillRect(x - r - p.cw, y - r - one - lip, w + 2 * r + 2 * p.cw, one)
+    c.fillStyle = ink['t-top']; c.fillRect(x - r - Math.round(p.cw * .5), p.B - p.step, w + 2 * r + p.cw, p.step)
   }
 
+  const tip = () => mast(site)
   // The letter that had no window left: it catches on the mast and stays there, a flag.
-  function strayRest(t = 0) { const w = Math.max(15, p.cw * 2.1), h = w / CELL, mast = mastTop(), rot = reduced ? -.05 : -.05 + .06 * Math.sin(t / 1300); return { x: mast.x + 1 + w / 2, y: mast.y + (p.phone ? 9 : 13 * p.scale) + h / 2, w, h, rot } }
+  function strayRest(t = 0) { const w = Math.max(14, p.cw / p.dpr * 2), h = w / CELL, m = tip(), rot = reduced ? -.05 : -.05 + .06 * Math.sin(t / 1300); return { x: m.x + 1 + w / 2, y: m.y + (p.phone ? 9 : 12) + h / 2, w, h, rot } }
   function drawStray(t: number) {
-    const rest = strayRest(t), s = airDpr, mast = mastTop()
-    actx.save(); actx.translate((mast.x + 1) * s, rest.y * s); actx.rotate(rest.rot); letter(actx, 0, -rest.h * s / 2, rest.w * s, rest.h * s, true); actx.restore()
+    const rest = strayRest(t), s = airDpr, m = tip()
+    actx.save(); actx.translate((m.x + 1) * s, rest.y * s); actx.rotate(rest.rot); letter(actx, 0, -rest.h * s / 2, rest.w * s, rest.h * s, true, true, true); actx.restore()
   }
 
   function drawWelcome(from: number, to: number) {
     // Floor by floor from the street up, the dark windows come on low: someone is coming in.
     const rows = p.floors, taken = new Set<number>()
     for (let i = 0; i < LETTERS; i++) if (lodged[i]) taken.add((cells[i].row + p.upper) * p.cols + cells[i].col + p.side)
-    bctx.fillStyle = colors.wake
-    for (let k = from; k < to && k < rows; k++) { const row = rows - 1 - k; for (let col = setback(row, p.upper); col < p.cols - setback(row, p.upper); col++) if (!taken.has(row * p.cols + col)) { const box = windowBox(col, row); bctx.fillRect(box.x, box.y, box.w, box.h) } }
+    for (let k = from; k < to && k < rows; k++) { const row = rows - 1 - k; for (let col = setIn(row, p.tiers); col < p.cols - setIn(row, p.tiers); col++) if (!taken.has(row * p.cols + col)) { const box = windowBox(col, row); bctx.fillStyle = ink.wake; bctx.fillRect(box.x, box.y, box.w, box.h) } }
   }
 
-  function makeFlight(index: number, t0: number, dur: number, leaving = false): Flight {
-    // fx or fy below zero means "from beyond that edge": most letters come in from the left, the rest over the top
-    // (to the right of the logo, which they would otherwise cover).
-    const fromTop = rand() < (p.phone ? .5 : .22)
-    return { index, t0, dur, leaving, fx: fromTop ? (p.phone ? .32 : .12) + rand() * (p.phone ? .5 : .4) : -1, fy: fromTop ? -1 : -.05 + rand() * .75, bend: (rand() - .5) * .22, spin: (rand() - .5) * 4.2, flip: (.7 + rand() * .9) * Math.PI, scale: (p.phone ? 4.2 : 3.2) + rand() * 1.8 }
-  }
-  // The first letters take one clear path, so the eye can follow a letter into a window before the storm.
-  function firstFlight(index: number): Flight { const k = index / (FIRST.length - 1); return { index, t0: landAt[index] - durations[index], dur: durations[index], leaving: false, fx: -1, fy: .08 + k * .3, bend: -.16 + k * .08, spin: 1.6 - k * 2.4, flip: Math.PI * 1.1, scale: p.phone ? 5.6 : 4.4 } }
+  // A letter on its way in, on one clear arc: from just beyond the left edge at the price's own height, or on a phone,
+  // where the sky is overhead, from just above the page. It is five windows wide when it appears, so it is an
+  // envelope all the way.
+  function crossing(index: number, t0: number, dur: number, nth: number, of: number): Flight { const k = of > 1 ? nth / (of - 1) : .5; return { index, t0, dur, kind: 'cross', fx: p.phone ? .32 + k * .14 : -1, fy: p.phone ? -1 : .5 + k * .05, bend: p.phone ? .05 + k * .02 : -.13 + k * .03, spin: .8 - k * 1.2, flip: Math.PI * .8, scale: 6 } }
+  // The thousandth falls straight down the dark gap between the 0 and the 2, into the point at its foot.
+  function falling(index: number, t0: number, dur: number): Flight { return { index, t0, dur, kind: 'fall', fx: 0, fy: 0, bend: 0, spin: 0, flip: 0, scale: 2.8 } }
 
-  function drawFlight(f: Flight, t: number) {
-    if (t < f.t0) return
-    const u = Math.min(1, (t - f.t0) / f.dur), s = airDpr
+  // Where a letter in the air is at `u` of its way: centre, size, turn and tumble.
+  function pose(f: Flight, t: number, u: number) {
     // Arriving letters slow into their window; leaving ones gather speed.
-    const e = f.leaving ? 1 - u ** 2.4 : 1 - (1 - u) ** 2.4
+    const leaving = f.kind === 'leave', stray = f.kind === 'stray', e = leaving ? 1 - u ** 2.4 : 1 - (1 - u) ** 2.6
     let tx: number, ty: number, w: number, h: number
-    if (f.stray) { const rest = strayRest(t); tx = rest.x; ty = rest.y; w = rest.w; h = rest.h }
+    if (stray) { const rest = strayRest(t); tx = rest.x; ty = rest.y; w = rest.w; h = rest.h }
     else { const box = priceWindow(f.index); w = box.w / p.dpr; h = box.h / p.dpr; tx = box.x / p.dpr + w / 2; ty = box.y / p.dpr + h / 2 }
+    // A falling letter gathers speed all the way down, upright and the size of an envelope until the last of the drop.
+    if (f.kind === 'fall') { const grow = 1 + (f.scale - 1) * Math.min(1, (1 - u) / .22), from = -over - h * f.scale; return { x: tx, y: from + (ty - from) * u * u, w: w * grow, h: h * grow, rot: 0, tumble: 1 } }
     const reach = Math.max(w, h) * f.scale
-    const sx = f.leaving ? W + reach : f.fx < 0 && f.fy >= 0 ? -reach : W * f.fx, sy = f.leaving ? H * (Math.abs(f.fy) * .4 - .1) : f.fy < 0 ? -over - reach : H * f.fy
+    const sx = leaving ? W + reach : f.fx < 0 && f.fy >= 0 ? -reach : W * f.fx, sy = leaving ? H * (Math.abs(f.fy) * .4 - .1) : f.fy < 0 ? -over - reach : H * f.fy
     const dx = tx - sx, dy = ty - sy, arc = Math.sin(Math.PI * e) * f.bend
-    const x = sx + dx * e - dy * arc, y = sy + dy * e + dx * arc
-    const grow = f.stray ? 1 + (1 - e) * .4 : 1 + (f.scale - 1) * (1 - e) ** 1.15
-    const rot = (f.stray ? strayRest(t).rot : 0) + f.spin * (1 - e) ** 1.3, flipY = Math.max(.38, Math.abs(Math.cos(f.flip * (1 - e))))
-    actx.save(); actx.translate(x * s, y * s); actx.rotate(rot); actx.scale(1, flipY)
-    letter(actx, -w * grow * s / 2, -h * grow * s / 2, w * grow * s, h * grow * s, f.stray ? true : faceUp(f.index)); actx.restore()
+    // It keeps its size for most of the way and only comes down to a window's as it arrives.
+    const grow = stray ? 1 + (1 - e) * .4 : 1 + (f.scale - 1) * (leaving ? u : 1 - u) ** .8
+    return { x: sx + dx * e - dy * arc, y: sy + dy * e + dx * arc, w: w * grow, h: h * grow, rot: (stray ? strayRest(t).rot : 0) + f.spin * (1 - e) ** 1.3, tumble: Math.max(.5, Math.abs(Math.cos(f.flip * (1 - e)))) }
+  }
+  function drawFlight(f: Flight, t: number) {
+    const u = Math.min(1, (t - f.t0) / f.dur), s = airDpr, g = pose(f, t, u)
+    actx.save(); actx.translate(g.x * s, g.y * s); actx.rotate(g.rot); actx.scale(1, g.tumble)
+    letter(actx, -g.w * s / 2, -g.h * s / 2, g.w * s, g.h * s, f.kind === 'stray' || faceUp(Math.max(0, f.index)), g.w * s >= 12, true); actx.restore()
   }
 
   function drawAir(t: number) {
-    const s = airDpr, c = actx
+    const s = airDpr, c = actx, k = s / p.dpr
     c.clearRect(0, -Math.round(over * s), air.width, air.height)
-    // Light from the door on the pavement: a flat patch, longer when the pointer is on the door.
-    const reach = (p.phone ? 14 : 18) + 8 * spill, spread = reach * .7
-    c.fillStyle = colors.spill; c.beginPath()
-    c.moveTo(doorBox.x * s, (p.bottom + 1) * s); c.lineTo((doorBox.x + doorBox.w) * s, (p.bottom + 1) * s); c.lineTo((doorBox.x + doorBox.w + spread) * s, (p.bottom + reach) * s); c.lineTo((doorBox.x - spread) * s, (p.bottom + reach) * s); c.fill()
+    const fill = (tone: string, ...points: number[][]) => { c.fillStyle = tone; c.beginPath(); points.forEach(([x, y], i) => i ? c.lineTo(x * k, y * k) : c.moveTo(x * k, y * k)); c.fill() }
+    // The stars that change: off, dim or bright, never in between.
+    for (const star of twinkles) {
+      const level = reduced ? 1 : Math.sin(t / star.period * 6.28 + star.phase)
+      if (level < -.4) continue
+      c.fillStyle = level > .5 ? ink['star-3'] : ink['star-2']; c.fillRect(Math.round(star.x * s), Math.round(star.y * s), Math.max(1, Math.round(s / 2)), Math.max(1, Math.round(s / 2)))
+    }
+    // Light from the door on the pavement: as wide as the door at the threshold and fanning out from there, in flat
+    // steps of the door's own colour, each dimmer than the one before. With the pointer on the door every step moves
+    // out and a brighter one appears at the threshold.
+    const dx = doorBox.x * p.dpr, dw = doorBox.w * p.dpr, on = spill > .5, reach = (p.phone ? .62 : 1) * p.dpr
+    const fan = (depth: number, tone: string) => fill(tone, [dx, p.B], [dx + dw, p.B], [dx + dw + depth * 2.1, p.B + depth], [dx - depth * .9, p.B + depth])
+    fan((33 + 7 * spill) * reach, ink['spill-3']); fan((20 + 7 * spill) * reach, ink['spill-2']); fan((9 + 7 * spill) * reach, ink['spill-1'])
+    if (on) fan(7 * reach, ink['spill-0'])
     // The mast's beacon: on for a second, off for a second.
-    if (reduced || Math.floor(t / 1100) % 2 === 0) { const mast = mastTop(), r = Math.max(2, (p.phone ? 2 : 2.5) * s); c.fillStyle = colors.brand; c.fillRect(Math.round(mast.x * s - r), Math.round(mast.y * s - r), Math.round(2 * r), Math.round(2 * r)) }
+    if (reduced || Math.floor(t / 1100) % 2 === 0) { const m = tip(), r = Math.max(2, 2.5 * s); c.fillStyle = ink.brand; c.fillRect(Math.round(m.x * s - r / 2), Math.round(m.y * s - r), Math.round(r), Math.round(r)) }
     if (strayLanded) drawStray(t)
-    for (const f of flights) drawFlight(f, t)
+    // The thousandth is in: the whole price is one flat step brighter for two frames.
+    if (t >= doneAt && t - doneAt < FLASH) { c.fillStyle = ink.flash; for (let i = 0; i < LETTERS; i++) { const box = priceWindow(i); c.fillRect(box.x * k, box.y * k, box.w * k, box.h * k) } }
+    // The sweep's leading edge: a window is one flat step dimmer for its first two frames.
+    c.fillStyle = ink.between
+    if (!reduced) for (let i = lit - 1; i >= singles && landAt[i] > t - BETWEEN; i--) if (!carried[i]) { const box = priceWindow(i); c.fillRect(box.x * k, box.y * k, box.w * k, box.h * k) }
+    for (const f of flights) if (t >= f.t0) drawFlight(f, t)
   }
 
-  function land(f: Flight) {
-    if (f.stray) { strayLanded = true; return }
-    if (f.leaving) return
-    lodged[f.index] = 1; drawWindow(f.index)
-    if (f.index === swapping) swapping = -1
+  // A window gets its letter: it is lit, and counted.
+  function lodge(index: number) {
+    lodged[index] = 1; drawWindow(index)
+    if (index === swapping) swapping = -1
     else counted++
   }
 
   function frame(now: number) {
     const t = now - start
-    while (spawned < LETTERS && landAt[spawnOrder[spawned]] - durations[spawnOrder[spawned]] <= t) {
-      const index = spawnOrder[spawned++]
-      flights.push(index < FIRST.length ? firstFlight(index) : makeFlight(index, landAt[index] - durations[index], durations[index]))
+    while (spawned < spawnOrder.length && landAt[spawnOrder[spawned]] - durations[spawnOrder[spawned]] <= t) {
+      const index = spawnOrder[spawned++], t0 = landAt[index] - durations[index]
+      flights.push(index < singles ? crossing(index, t0, durations[index], index, singles) : falling(index, t0, durations[index]))
     }
-    if (!strayLanded && t >= STRAY_AT && !flights.some(f => f.stray)) flights.push({ index: -1, stray: true, t0: STRAY_AT, dur: 1250, leaving: false, fx: -1, fy: .3, bend: -.2, spin: 2.6, flip: Math.PI * 2, scale: 1.4 })
+    const before = counted
+    // The windows whose letters are not followed are lit on time, in order.
+    while (lit < LETTERS && (carried[lit] || landAt[lit] <= t)) { if (!carried[lit]) lodge(lit); lit++ }
+    if (!strayLanded && t >= times.strayAt && !flights.some(f => f.kind === 'stray')) flights.push({ index: -1, kind: 'stray', t0: times.strayAt, dur: 1200, fx: -1, fy: .3, bend: -.2, spin: 2.6, flip: Math.PI * 2, scale: 1.4 })
     // Afterwards, mail keeps moving: now and then a letter leaves its window and another takes its place.
     if (t >= nextSwap && swapping < 0 && welcomeAt < 0) {
-      swapping = Math.floor(rand() * LETTERS); nextSwap = t + 2800 + rand() * 1600
+      swapping = Math.floor(rand() * LETTERS); nextSwap = t + 3400 + rand() * 2000
       lodged[swapping] = 0; drawWindow(swapping)
-      // These two are alone in the sky, so they turn less and stay readable as letters.
-      for (const flight of [makeFlight(swapping, t, 640, true), makeFlight(swapping, t + 540, 720)]) { flight.spin *= .35; flight.flip *= .3; flights.push(flight) }
+      // These two are alone in the sky, so they are smaller and turn less.
+      const gone: Flight = { ...crossing(swapping, t, 760, rand(), 2), kind: 'leave', fy: rand() * .5 }, come = crossing(swapping, t + 620, 820, rand(), 2)
+      for (const flight of [gone, come]) { flight.spin *= .5; flight.flip *= .4; flight.scale = 3.2; flights.push(flight) }
     }
     if (welcomeAt >= 0) { const all = p.floors, rows = Math.min(all, Math.ceil((now - welcomeAt) / 520 * all)); if (rows > welcomeRows) { drawWelcome(welcomeRows, rows); welcomeRows = rows } }
-    spill += ((hovering ? 1 : 0) - spill) * .2
-    const before = counted
-    flights = flights.filter(f => { if (t < f.t0 + f.dur) return true; land(f); return false })
+    spill += ((hovering ? 1 : 0) - spill) * .18
+    flights = flights.filter(f => { if (t < f.t0 + f.dur) return true; if (f.kind === 'stray') strayLanded = true; else if (f.kind !== 'leave') lodge(f.index); return false })
     // The page counts the letters as they land, and says the rest once all thousand are in.
-    if (counted !== before) { onCount(counted); root.dataset.nma = counted >= LETTERS ? 'settled' : 'counting' }
+    if (counted !== before) { onCount(counted); root.dataset.nma = counted >= LETTERS ? 'settled' : 'counting'; if (counted >= LETTERS && doneAt === Infinity) doneAt = t }
     drawAir(t)
     raf = requestAnimationFrame(frame)
   }
 
   function still() { spill = hovering ? 1 : 0; drawAir(0) }
 
-  readColors(); measure(); schedule()
-  if (reduced) { lodged.fill(1); counted = spawned = LETTERS; strayLanded = true; root.dataset.nma = 'settled'; drawBase(); still() }
+  readInks(); measure(); schedule()
+  if (reduced) { lodged.fill(1); counted = lit = LETTERS; spawned = spawnOrder.length; strayLanded = true; root.dataset.nma = 'settled'; drawBase(); still() }
   else { root.dataset.nma = 'dark'; drawBase(); drawAir(0); raf = requestAnimationFrame(frame) }
 
   const resize = new ResizeObserver(() => { if (scene.clientWidth === W && scene.clientHeight === H) return; measure(); drawBase(); if (reduced) still() })
   resize.observe(scene)
-  const theme = new MutationObserver(() => { readColors(); drawBase(); if (reduced) still() })
+  const theme = new MutationObserver(() => { readInks(); drawBase(); if (reduced) still() })
   theme.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
 
   return {
