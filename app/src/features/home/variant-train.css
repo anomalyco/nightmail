@@ -1,0 +1,141 @@
+/* The page is full width so the line can run edge to edge; everything else keeps the content column. */
+.nm-page {
+  --nm-pad: 32px; --nm-max: 1232px; --nm-label: 104px; --nm-s: 1.3;
+  --nm-content: min(100vw - 2 * var(--nm-pad), var(--nm-max));
+  --nm-body: var(--color-text); --nm-lamp: var(--color-deep); --nm-steel: var(--color-muted);
+  display: flex; flex-direction: column; min-height: 100dvh; overflow-x: clip;
+}
+:root[data-theme='dark'] .nm-page { --nm-body: var(--color-layer-3); --nm-lamp: var(--color-text); }
+.nm-page > * { width: var(--nm-content); margin-inline: auto; }
+
+.nm-header { display: flex; align-items: center; justify-content: space-between; height: 64px; }
+.nm-header .wordmark, .nm-header .theme-toggle { position: relative; inset: auto; }
+.nm-nav { display: flex; align-items: center; gap: var(--space-16); font-size: var(--text-md); }
+.nm-nav a, .nm-link { padding: 0; border: 0; background: none; color: var(--color-muted); font: inherit; text-decoration: none; transition: color var(--motion-duration); }
+.nm-nav a:hover, .nm-link:hover:not(:disabled) { color: var(--color-text); }
+.nm-nav .theme-toggle { margin-inline: -6px; }
+
+.nm-main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr) 360px; grid-template-areas: 'intro fare' 'route route'; align-content: start; gap: 56px 96px; padding-block: 48px 40px; }
+
+.nm-intro { grid-area: intro; display: flex; flex-direction: column; align-items: flex-start; }
+.nm-intro h1 { max-width: 15em; color: var(--color-text); font-size: 54px; font-weight: 600; line-height: 1.04; letter-spacing: -.035em; text-wrap: balance; }
+.nm-intro h1 span { color: var(--color-faint); }
+.nm-intro > p { max-width: 34em; margin-top: var(--space-20); color: var(--color-muted); font-size: 17px; line-height: 26px; text-wrap: pretty; }
+.nm-actions { display: flex; align-items: center; gap: var(--space-24); margin-top: var(--space-28); }
+/* Wide enough for the label and the loading spinner, so starting sign-in moves nothing. */
+.nm-cta.ui-button { min-width: 132px; height: 40px; padding-inline: 18px; background: var(--color-contrast); font-size: 15px; text-shadow: none; }
+@media (hover: hover) and (pointer: fine) { .nm-cta.ui-button:hover:not(:disabled) { background: var(--color-contrast-hover); } }
+.nm-docs { color: var(--color-muted); font-size: 15px; text-decoration: none; transition: color var(--motion-duration); }
+.nm-docs:hover { color: var(--color-text); }
+.nm-intro > .nm-consent { margin-top: var(--space-16); color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); }
+.nm-intro > .ui-alert { align-self: stretch; max-width: 34em; margin-top: var(--space-16); }
+
+/* The fare, set like a fare table: one figure, then the cases in leader rows. */
+.nm-fare { grid-area: fare; align-self: start; padding-top: 4px; }
+.nm-fare-figure { color: var(--color-text); font-family: var(--font-mono); font-size: 76px; line-height: 64px; letter-spacing: -.045em; }
+.nm-fare-unit { margin-top: var(--space-16); color: var(--color-text); font-size: 15px; line-height: 22px; }
+.nm-fares { display: grid; gap: var(--space-6); margin: var(--space-20) 0 0; padding-top: var(--space-16); border-top: 1px solid var(--color-border); font-size: var(--text-md); line-height: 20px; }
+.nm-fares > div { display: flex; align-items: baseline; }
+.nm-fares dt { display: flex; flex: 1; align-items: baseline; min-width: 0; color: var(--color-muted); }
+.nm-fares dt::after { content: ''; flex: 1; min-width: var(--space-16); margin-inline: var(--space-8); border-bottom: 1.5px dotted var(--color-border-strong); transform: translateY(-4px); }
+.nm-fares dd { margin: 0; color: var(--color-text); font-family: var(--font-mono); }
+.nm-fares-other :is(dt, dd) { color: var(--color-faint); }
+
+/* The line and its timetable. Station i sits at the start of the timetable's column i, measured from the viewport edge
+   because the line runs full bleed. Drawing sizes are in em: 1em is one unit of the drawing (--nm-s px). */
+.nm-route { grid-area: route; margin: 0; }
+.nm-scene {
+  --nm-gutter: calc((100vw - var(--nm-content)) / 2);
+  --nm-col: calc((var(--nm-content) - var(--nm-label)) / 4);
+  position: relative; display: flex; flex-direction: column; gap: 12em; width: 100vw; margin-left: calc(50% - 50vw); padding-top: 4em;
+  font-size: calc(var(--nm-s) * 1px); line-height: 0; pointer-events: none;
+}
+.nm-rules i { position: absolute; top: 0; bottom: 0; left: calc(var(--nm-gutter) + var(--nm-label) + var(--nm-at) * var(--nm-col)); width: 1px; background: var(--color-border); }
+.nm-line { position: relative; height: 54em; }
+.nm-rail { position: absolute; inset: auto 0 0; height: 1px; background: var(--color-border-strong); }
+
+.nm-train { position: absolute; bottom: 1px; left: 0; z-index: 1; transform: translateX(-100%); will-change: transform; }
+.nm-line--up .nm-train { transform: translateX(100vw); }
+.nm-train-face { display: flex; align-items: flex-end; gap: 3em; }
+.nm-line--up .nm-train-face, .nm-line--up .nm-standard, .nm-line--up .nm-catch { scale: -1 1; }
+.nm-car { position: relative; display: block; flex: none; height: 46em; }
+.nm-car svg { display: block; width: 100%; height: 100%; }
+.nm-car--loco { width: 156em; }
+.nm-car--tender { width: 58em; }
+.nm-car--van { width: 150em; }
+.nm-body, .nm-wheel { fill: var(--nm-body); }
+.nm-lamp { fill: var(--nm-lamp); }
+.nm-net { fill: none; stroke: var(--nm-steel); stroke-width: 1.4; stroke-linejoin: round; }
+.nm-rod { position: absolute; top: 36.3em; left: 49em; width: 48em; height: 2.4em; border-radius: 2em; background: var(--nm-steel); }
+
+.nm-pouch { display: block; width: 12em; height: 18em; overflow: visible; }
+.nm-pouch path { fill: var(--color-brand); }
+.nm-pouch .nm-strap { fill: var(--color-deep); }
+.nm-carried { position: absolute; bottom: 12em; left: 123em; opacity: 0; }
+.nm-carried-swing { display: block; }
+
+.nm-standard { position: absolute; bottom: 1px; left: calc(var(--nm-gutter) + var(--nm-label) + var(--nm-at) * var(--nm-col) + 36em); z-index: 2; width: 24em; height: 46em; }
+.nm-post { position: absolute; inset: 0; transform-origin: 5.2em 100%; }
+.nm-pole { position: absolute; bottom: 0; left: 4em; width: 2.4em; height: 44em; background: var(--nm-steel); }
+.nm-arm { position: absolute; top: 2em; left: 4em; width: 18em; height: 2.4em; border-radius: 1.2em; background: var(--nm-steel); transform-origin: 1.2em 50%; }
+.nm-hanging { position: absolute; top: 3em; left: 16em; display: flex; flex-direction: column; align-items: center; }
+.nm-cord { display: block; width: 1px; height: 9em; background: var(--nm-steel); }
+
+.nm-catch { position: absolute; bottom: 1px; left: calc(var(--nm-gutter) + var(--nm-label) + var(--nm-at) * var(--nm-col) + 30em); z-index: 2; width: 44em; height: 34em; }
+.nm-catch > svg { display: block; width: 100%; height: 100%; overflow: visible; transform-origin: 86% 100%; }
+.nm-catch > svg path { fill: none; stroke: var(--nm-steel); stroke-width: 1.4; stroke-linejoin: round; stroke-linecap: round; }
+.nm-landed { position: absolute; bottom: 3em; left: 16em; opacity: 0; transform: translate(-24px, -10px) rotate(-20deg); }
+
+.nm-route[data-state='done'] .nm-train { visibility: hidden; }
+.nm-route[data-state='done'] .nm-hanging { opacity: 0; }
+.nm-route[data-state='done'] .nm-landed { opacity: 1; transform: rotate(78deg); }
+
+.nm-timetable { width: 100%; table-layout: fixed; border-collapse: collapse; }
+.nm-timetable :is(th, td) { padding: 0 var(--space-12); border-left: 1px solid var(--color-border); text-align: left; vertical-align: middle; }
+.nm-timetable :is(th, td):first-child { width: var(--nm-label); padding-left: 0; border-left: 0; }
+.nm-timetable thead th { height: 36px; color: var(--color-muted); font-size: var(--text-sm); font-weight: var(--font-weight-regular); }
+.nm-timetable tbody :is(th, td) { height: 60px; border-top: 1px solid var(--color-border); }
+.nm-timetable tbody th { color: var(--color-text); font-size: 15px; font-weight: var(--font-weight-regular); }
+.nm-timetable td { position: relative; }
+.nm-short { display: none; }
+.nm-leader { position: absolute; top: 50%; right: var(--space-12); left: var(--space-12); border-top: 2px dotted var(--color-border); }
+.nm-time { position: relative; display: flex; align-items: baseline; gap: var(--space-8); opacity: 0; white-space: nowrap; }
+.nm-route[data-state='done'] .nm-time { opacity: 1; }
+.nm-route[data-state='done'] .nm-leader { opacity: 0; }
+.nm-kind { color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-xs); }
+.nm-figure { color: var(--color-text); font-family: var(--font-mono); font-size: 28px; line-height: 32px; letter-spacing: -.03em; }
+.nm-unit { margin-left: .2em; font-size: .62em; letter-spacing: 0; }
+.nm-figure sup, .nm-route figcaption sup { color: var(--color-faint); font-size: var(--text-xs); vertical-align: top; line-height: 1; }
+.nm-figure sup { margin-left: 2px; }
+.nm-route figcaption { padding-top: var(--space-12); border-top: 1px solid var(--color-border); color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); }
+
+.nm-page > .home-footer { margin-top: 0; }
+
+@media (max-width: 1100px) {
+  .nm-page { --nm-label: 88px; }
+  .nm-main { grid-template-columns: minmax(0, 1fr) 320px; column-gap: 56px; }
+  .nm-intro h1 { font-size: 44px; }
+  .nm-fare-figure { font-size: 64px; line-height: 56px; }
+  .nm-figure { font-size: 22px; }
+}
+@media (max-width: 760px) {
+  .nm-page { --nm-pad: 16px; --nm-label: 52px; --nm-s: .62; }
+  .nm-header { height: 56px; }
+  .nm-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: 'intro' 'route' 'fare'; row-gap: 36px; padding-block: 20px 36px; }
+  .nm-intro h1 { font-size: 31px; line-height: 1.08; letter-spacing: -.03em; }
+  .nm-intro > p { margin-top: var(--space-12); font-size: 15px; line-height: 22px; }
+  .nm-actions { margin-top: var(--space-20); }
+  .nm-cta.ui-button { min-width: 140px; height: 44px; padding-inline: 22px; }
+  .nm-car--van:not(.nm-car--catcher) { display: none; }
+  .nm-timetable :is(th, td) { padding-inline: 6px; }
+  .nm-timetable thead th { height: 30px; font-size: 11px; }
+  .nm-long { display: none; }
+  .nm-short { display: inline; }
+  .nm-timetable tbody :is(th, td) { height: 52px; }
+  .nm-timetable tbody th { font-size: var(--text-sm); }
+  .nm-leader { right: 6px; left: 6px; }
+  .nm-time { flex-direction: column; align-items: flex-start; gap: 0; }
+  .nm-kind { font-size: 10px; line-height: 14px; }
+  .nm-figure { font-size: 16px; line-height: 20px; letter-spacing: -.02em; }
+  .nm-fare-figure { font-size: 56px; line-height: 48px; }
+}
