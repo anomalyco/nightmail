@@ -1,25 +1,24 @@
-/* The "nmc" homepage: the coin has the page, and one line runs under it: what it costs, and where that ends, Sign in.
-   The coin is drawn on a full-bleed canvas (nmc-coin.ts) where .nmc-coin lies. Below 720 px the caption stacks. */
+/* The "nmc" homepage: the coin has the page and a caption runs under it: what it costs on the left, Sign in on the
+   right, where the slice the coin throws out lands. The coin is drawn on a full-bleed canvas (nmc-coin.ts) where
+   .nmc-coin lies. Below 720 px the caption stacks. */
 .nmc-page {
-  /* The page's two edges and the headline's size grow with the window, in whole pixels so that boxes land on them.
-     The headline is as large as lets it run most of the way to Sign in, which is --nmc-action wide. */
+  /* The page's two edges and the headline's size grow with the window, in whole pixels so that boxes land on them. */
   --nmc-pad: clamp(20px, round(5.556vw, 1px), 96px);
-  --nmc-type: clamp(52px, round(7.2vw, 2px), 128px);
-  --nmc-action: 208px;
+  --nmc-type: clamp(44px, round(5.556vw, 2px), 96px);
   /* The subline's colour, between the text and the muted grey. */
   --nmc-soft: #3A3A3A;
   /* The stage is what the header (64), the footer (57) and the caption (the headline, --nmc-lede of subline and the
-     air under it) leave of the first screen. The coin stands --nmc-foot off its bottom, near its caption, and keeps
-     --nmc-swing of its width clear above, where its far rim swings while it settles; room beyond that is shared
-     above and below. */
+     air under it) leave of the first screen, and the coin is as large as it allows: it stands --nmc-foot off the
+     stage's bottom, a little over the headline, and keeps --nmc-swing of its width clear above, where its far rim
+     swings while it settles; room beyond that is shared above and below. */
   --nmc-lede: 72px;
-  --nmc-under: clamp(48px, 8svh, 72px);
+  --nmc-under: clamp(44px, 7.2svh, 64px);
   --nmc-stage: calc(100svh - 121px - var(--nmc-lede) - var(--nmc-under) - var(--nmc-type));
-  --nmc-wide: 34.5vw;
+  --nmc-wide: 48vw;
   --nmc-least: 240px;
-  --nmc-foot: 60px;
-  --nmc-swing: .17;
-  --nmc-d: max(var(--nmc-least), min(var(--nmc-wide), 720px, (var(--nmc-stage) - var(--nmc-foot)) / (var(--nmc-aspect) + var(--nmc-swing))));
+  --nmc-foot: 20px;
+  --nmc-swing: .1;
+  --nmc-d: max(var(--nmc-least), min(var(--nmc-wide), 760px, (var(--nmc-stage) - var(--nmc-foot)) / (var(--nmc-aspect) + var(--nmc-swing))));
   position: relative; display: flex; flex-direction: column; min-height: 100dvh; overflow: clip;
 }
 :root[data-theme='dark'] .nmc-page { --nmc-soft: #C8C8C8; }
@@ -41,18 +40,18 @@
 .nmc-stage { display: flex; flex: 1; align-items: flex-end; justify-content: center; min-height: 0; padding-bottom: max(var(--nmc-foot), (var(--nmc-stage) - var(--nmc-d) * (var(--nmc-aspect) + var(--nmc-swing))) / 2); }
 .nmc-coin { flex: none; width: var(--nmc-d); aspect-ratio: 1 / var(--nmc-aspect); }
 
-/* The caption: the headline and, where it ends, Sign in, standing on its baseline; under them the subline and the
-   consent, on one baseline of their own. */
-.nmc-caption { display: grid; grid-template-columns: minmax(0, 1fr) var(--nmc-action); align-items: start; column-gap: 32px; padding-bottom: var(--nmc-under); }
+/* The caption: the headline and, at the page's other edge, Sign in, standing on its baseline; under them the
+   subline and the consent, on one baseline of their own. */
+.nmc-caption { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; column-gap: 48px; padding-bottom: var(--nmc-under); }
 /* The headline's first stem stands on the page's edge: the F's side bearing is taken back. */
-.nmc-title { grid-area: 1 / 1; margin-left: -.055em; font-size: var(--nmc-type); font-weight: 510; line-height: 1; letter-spacing: -.045em; white-space: nowrap; }
+.nmc-title { grid-area: 1 / 1; margin-left: -.055em; font-size: var(--nmc-type); font-weight: 520; line-height: 1; letter-spacing: -.042em; white-space: nowrap; }
 .nmc-title br { display: none; }
 .nmc-lede { grid-area: 2 / 1; align-self: baseline; margin-top: 16px; color: var(--nmc-soft); font-size: 20px; line-height: 28px; letter-spacing: -.017em; }
 .nmc-lede b { color: var(--color-text); font-weight: inherit; }
 
-/* Sign in is as wide as its column, its label at one end and its arrow at the other. With line-height 1, Inter's
-   baseline lies .136em above the bottom of the headline's line. */
-.nmc-cta { grid-area: 1 / 2; align-self: end; display: flex; align-items: center; justify-content: space-between; width: 100%; height: 48px; margin-bottom: round(var(--nmc-type) * .136, 1px); padding: 0 18px 0 22px; border: 0; border-radius: 999px; background: var(--color-contrast); color: var(--color-on-contrast); font: inherit; font-size: 16px; font-weight: 520; line-height: 24px; letter-spacing: -.011em; white-space: nowrap; cursor: pointer; transition: background-color 160ms var(--ease-out-strong), transform 160ms var(--ease-out-strong); }
+/* Sign in: its label, then its arrow. With line-height 1, Inter's baseline lies .136em above the bottom of the
+   headline's line, and the button stands on it. */
+.nmc-cta { grid-area: 1 / 2; align-self: end; justify-self: end; display: inline-flex; align-items: center; justify-content: center; gap: 12px; height: 48px; margin-bottom: round(var(--nmc-type) * .136, 1px); padding: 0 28px 0 32px; border: 0; border-radius: 999px; background: var(--color-contrast); color: var(--color-on-contrast); font: inherit; font-size: 16px; font-weight: 520; line-height: 24px; letter-spacing: -.011em; white-space: nowrap; cursor: pointer; transition: background-color 160ms var(--ease-out-strong), transform 160ms var(--ease-out-strong); }
 /* The arrow moves on with the pointer over the button; pressed, a spinner stands where it stood. */
 .nmc-cta-mark { flex: none; overflow: visible; }
 .nmc-cta-go { transition: transform 200ms var(--ease-out-strong); }
@@ -74,8 +73,8 @@
 }
 @keyframes nmc-release { from { transform: scale(.97); } }
 @keyframes nmc-turn { to { transform: rotate(1turn); } }
-/* The consent, small and faint, in two lines no wider than the button they stand under. */
-.nmc-consent { grid-area: 2 / 2; align-self: baseline; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); text-align: center; text-wrap: balance; }
+/* The consent, small and faint, in two lines that end on the page's edge under the button. */
+.nmc-consent { grid-area: 2 / 2; align-self: baseline; justify-self: end; max-width: 208px; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); text-align: right; text-wrap: balance; }
 
 .nmc-footer { position: relative; display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--space-16); height: 57px; padding-inline: var(--nmc-pad); border-top: 1px solid var(--color-border-muted); color: var(--color-faint); font-size: var(--text-xs); }
 .nmc-footer nav { display: flex; gap: var(--space-16); }
@@ -88,22 +87,21 @@
   .nmc-lede { font-size: 18px; line-height: 26px; letter-spacing: -.014em; text-wrap: pretty; }
   .nmc-lede p { display: inline; }
 }
-@media (max-width: 899px) { .nmc-page { --nmc-action: 168px; } }
 /* A window taller than it is wide has the height for a wider coin. */
-@media (min-width: 720px) and (max-aspect-ratio: 1 / 1) { .nmc-page { --nmc-wide: 62vw; } }
+@media (min-width: 720px) and (max-aspect-ratio: 1 / 1) { .nmc-page { --nmc-wide: 62vw; --nmc-foot: 56px; } }
 
 @media (max-width: 719px) {
   /* Header 56, footer 49, and the stacked caption: two lines of headline, 86 of subline, 80 of button, 44 of
-     consent, 40 under it. The coin is narrower than the column and stands to its left, so that the slice that has
-     slid out lies beside it, inside the column. */
+     consent, 40 under it. The coin is narrower than the column and stands to its left, so that the slice it throws
+     out lands beside it, inside the column. */
   .nmc-page { --nmc-type: clamp(40px, round(13.4vw, 2px), 56px); --nmc-under: 40px; --nmc-stage: calc(100svh - 355px - 2 * var(--nmc-type)); --nmc-wide: calc((100vw - 2 * var(--nmc-pad)) / 1.2); --nmc-least: 160px; --nmc-foot: 60px; --nmc-swing: .2; }
   .nmc-header { height: 56px; }
-  .nmc-coin { --nmc-aim: 31; margin-right: calc(var(--nmc-d) * .2); }
+  .nmc-coin { --nmc-aim: 31; --nmc-reach: .53; margin-right: calc(var(--nmc-d) * .2); }
   .nmc-caption { grid-template-columns: minmax(0, 1fr); }
   .nmc-title, .nmc-lede, .nmc-cta, .nmc-consent { grid-area: auto; }
   .nmc-title br { display: inline; }
   .nmc-lede { margin-top: 14px; font-size: 16px; line-height: 24px; letter-spacing: -.011em; }
-  .nmc-cta { align-self: auto; height: 56px; margin: var(--space-24) 0 0; padding: 0 22px 0 26px; font-size: 17px; }
-  .nmc-consent { margin-top: var(--space-12); text-align: left; }
+  .nmc-cta { align-self: auto; justify-self: stretch; height: 56px; margin: var(--space-24) 0 0; font-size: 17px; }
+  .nmc-consent { justify-self: start; max-width: none; margin-top: var(--space-12); text-align: left; }
   .nmc-footer { height: 49px; }
 }
