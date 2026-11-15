@@ -4,7 +4,6 @@ import { ThemeToggle } from '../../components/ThemeToggle'
 import { SignInConsent } from '../../components/LegalLinks'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { BaneWordmark } from '../../components/BaneLogo'
-import { AnomalyLogo } from '../../components/AnomalyLogo'
 import { useTheme } from '../../lib/theme'
 import { productName } from '../../../../api/src/brand'
 import { reducedMotion, type HomeProps } from '.'
@@ -135,7 +134,6 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
           <button type="button" className="srt-cta" style={at(p.cta)} disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
             <span className="srt-cta-label">Get started{busy ? <LoaderCircle className="ui-spinner" size={16} aria-hidden="true" /> : <ArrowRight className="srt-cta-arrow" size={16} strokeWidth={2} aria-hidden="true" />}</span>
           </button>
-          <a className="srt-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={18} /></a>
           {/* The letter under the pointer, opened. */}
           <div className="srt-card" ref={cardBox} data-open={card ? '' : undefined} aria-hidden="true">
             {card && <div className="srt-card-body" data-scam={card.scam || undefined}>

@@ -50,7 +50,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   const caps: { tube: number; s: number; on: boolean }[] = Array.from({ length: 18 }, () => ({ tube: 0, s: 0, on: false }))
   let tubeLength: number[][] = []
   const zaps: { id: number; at: number }[] = []
-  const T = options.quick ? { calm: 2.4, ramp: 6.5, over: 1.3 } : { calm: 7.5, ramp: 13, over: 1.7 }
+  const T = options.quick ? { calm: 2.4, ramp: 6.5, over: 1.3 } : { calm: 6, ramp: 10.5, over: 1.6 }
   let raf = 0, last = 0, visible = true, dead = false
   const pointer = { x: 0, y: 0, in: false, down: false, moved: 0, held: -1, hover: -1, dirty: false, mouse: true, holdY: 0 }
 
@@ -73,7 +73,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     L.state.fill(FREE); scripts.clear(); fx = []; resetHeights()
     for (const cap of caps) cap.on = false
     for (const index of m.idx.caps) parts[index].on = false
-    parts[m.idx.scan].on = false; parts[m.idx.beaconOn].on = false
+    parts[m.idx.scan].on = false; parts[m.idx.beaconOn].on = false; parts[m.idx.soot].on = parts[m.idx.shards].on = false
     for (const index of m.idx.lamps) parts[index].on = false
     theme(dark)
   }
@@ -208,9 +208,9 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     matrix(quat, q)
     if (B.thin) {
       // Paper: the air resists a letter moving face on far more than edge on.
-      const nx = R[2], ny = R[5], nz = R[8], vn = vel[o] * nx + vel[o + 1] * ny + vel[o + 2] * nz, k = Math.min(1, 2.4 * dt) * vn
+      const nx = R[2], ny = R[5], nz = R[8], vn = vel[o] * nx + vel[o + 1] * ny + vel[o + 2] * nz, k = Math.min(1, .7 * dt) * vn
       vel[o] -= nx * k; vel[o + 1] -= ny * k; vel[o + 2] -= nz * k
-      const d = 1 - .3 * dt, da = 1 - 1.1 * dt
+      const d = 1 - .22 * dt, da = 1 - .9 * dt
       vel[o] *= d; vel[o + 1] *= d; vel[o + 2] *= d; ang[o] *= da; ang[o + 1] *= da; ang[o + 2] *= da
     }
     pos[o] += vel[o] * dt; pos[o + 1] += vel[o + 1] * dt; pos[o + 2] += vel[o + 2] * dt
@@ -325,26 +325,25 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     // off; none where the cabinet would hide it. The air slows a letter, so it is thrown a little long.
     const want = p.phone ? 250 : 480, launchOne = (i: number, roof: boolean) => {
       const o = i * 3
-      if (roof && Math.random() < .45) return loose(i, rnd(-1, 1) * 190 * px, rnd(260, 620) * px, rnd(-60, 150) * px, 9)
+      if (roof && Math.random() < .3) return loose(i, rnd(-1, 1) * 190 * px, rnd(260, 620) * px, rnd(-60, 150) * px, 9)
       let sx = 0, sy = 0
       for (let tries = 0; tries < 12; tries++) {
         const kind = Math.random(), side = Math.random() < .5 ? -1 : 1
-        if (kind < .3) { sx = p.ox + side * (p.Xc + rnd(-10, 190) * px); sy = p.oy + rnd(-150, p.floor * .8) }
-        else if (kind < .44) { sx = p.ox + rnd(-1, 1) * p.Xc; sy = p.oy + rnd(6, p.floor * .9) }
-        else if (kind < .9) { sx = p.ox + side * rnd(p.Xc + 60 * px, p.W * .56); sy = p.H - (p.H + over * .6) * rnd(0, 1) ** 1.5 }
+        if (kind < .24) { sx = p.ox + side * (p.Xc + rnd(0, 1) ** 1.6 * 230 * px); sy = p.oy + rnd(-170, p.floor * .7) }
+        else if (kind < .36) { sx = p.ox + rnd(-1, 1) * p.Xc; sy = p.oy + rnd(8, p.floor * .9) }
+        else if (kind < .93) { sx = p.ox + side * rnd(p.Xc + 30 * px, Math.max(p.W * .52, p.Xc + 60)); sy = p.H - (p.H + over * .5) * rnd(0, 1) ** 1.15 }
         else { sx = rnd(-.1, 1.1) * p.W; sy = rnd(-over, p.H + 80) }
         if (sy < p.oy - 4 && Math.abs(sx - p.ox + 20 * px) < p.Xc + 44 * px && sy > p.oy - p.yTop - p.D * DY - 30) continue
-        if (sx < 190 && sy > p.H - 70) continue
         break
       }
-      const tz = (p.oy - sy) / DY, tx = sx - p.ox - DX * tz, T = rnd(.8, 1.45), k = 1.15, far = k / (1 - Math.exp(-k * T))
-      loose(i, (tx - L.pos[o]) * far, (G * T / 2 - L.pos[o + 1] / T) * .86, (tz - L.pos[o + 2]) * far, 11)
+      const tz = (p.oy - sy) / DY, tx = sx - p.ox - DX * tz, T = rnd(.75, 1.4), k = .46, far = k / (1 - Math.exp(-k * T))
+      loose(i, (tx - L.pos[o]) * far, G * T / 2 * 1.06 - L.pos[o + 1] / T, (tz - L.pos[o + 2]) * far, 11)
     }
     for (const [i] of [...scripts]) launchOne(i, L.pos[i * 3 + 1] > p.yFas)
     let live = 0
     for (let i = 0; i < MAX; i++) if (L.state[i] !== FREE) { live++; if (L.state[i] === ASLEEP) { wake(i); L.vel[i * 3] = rnd(-1, 1) * 420 * px; L.vel[i * 3 + 1] = rnd(300, 800) * px; L.vel[i * 3 + 2] = rnd(-200, 500) * px; L.ang[i * 3] = rnd(-8, 8); L.ang[i * 3 + 2] = rnd(-8, 8) } }
     for (; live < want; live++) {
-      const i = alloc(), roof = Math.random() < .42; nextLetter(i)
+      const i = alloc(), roof = Math.random() < .3; nextLetter(i)
       if (roof) place(i, rnd(-1, 1) * p.Xw * .7, p.yTop + rnd(4, 30) * px, rnd(.1, .9) * p.D)
       else place(i, rnd(-1, 1) * p.Xw * .92, rnd(p.yCav + p.lh, p.yFas - p.lh * .4), -rnd(3, 14) * px)
       setQuat(i, rnd(-1, 1), rnd(-1, 1), rnd(-1, 1), rnd(0, 6)); launchOne(i, roof)
@@ -358,7 +357,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       Dn.vel[o] = (home[0] / p.Xw + rnd(-.5, .5)) * 620 * px; Dn.vel[o + 1] = roof ? 900 * px : rnd(100, 760) * px; Dn.vel[o + 2] = roof ? rnd(100, 300) * px : -rnd(180, 620) * px
       Dn.ang[o] = rnd(-12, 12); Dn.ang[o + 1] = rnd(-12, 12); Dn.ang[o + 2] = rnd(-12, 12)
     })
-    parts[m.idx.glass].on = false; parts[m.idx.scan].on = false
+    parts[m.idx.glass].on = false; parts[m.idx.scan].on = false; parts[m.idx.soot].on = parts[m.idx.shards].on = true
     for (const index of m.idx.caps) parts[index].on = false
     for (const cap of caps) cap.on = false
     for (let i = 0; i < 46; i++) add({ x: rnd(-1, 1) * p.Xw, y: rnd(p.yCav, p.yFas), z: -4, vx: rnd(-1, 1) * 600 * px, vy: rnd(-100, 700) * px, vz: -rnd(50, 500), max: rnd(.5, 1.1), size: rnd(1.5, 4.5) * px, len: rnd(1.5, 5) * px, spin: rnd(-14, 14), r: colour.steam[0], g: colour.steam[1], b: colour.steam[2], a: .8, shape: 1, gravity: 1, drag: .6 })
@@ -418,9 +417,9 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
 
     for (const [i, s] of scripts) script(i, s, dt, speed)
     if (rainLeft > 0) { const n = Math.min(rainLeft, Math.ceil(dt * 140)); rainLeft -= n; for (let k = 0; k < n; k++) { const i = alloc(); nextLetter(i); place(i, rnd(-.5, .5) * p.W * 1.1 - DX * 600, oyc + rnd(20, 500), rnd(-150, (oyc - 120) / DY)); setQuat(i, rnd(-1, 1), rnd(-1, 1), rnd(-1, 1), rnd(0, 6)); loose(i, rnd(-60, 60), -rnd(200, 500), rnd(-40, 40), 6) } }
-    // Rigid bodies, two steps a frame.
-    const h = dt / 2
-    for (let pass = 0; pass < 2; pass++) {
+    // Rigid bodies, in steps of a 120th of a second or less: two a frame at full rate, more when frames come slowly.
+    const passes = Math.max(2, Math.ceil(dt * 120)), h = dt / passes
+    for (let pass = 0; pass < passes; pass++) {
       for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) step(L, i, h)
       for (let i = 0; i < Dn.cap; i++) if (Dn.state[i] === DYN) step(Dn, i, h)
     }
@@ -454,13 +453,13 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       }
       needleV += ((0 - needle) * 40 - needleV * 8) * dt; needle += needleV * dt
       const glass = parts[m.idx.glass]
-      if (clock > .9) { glass.on = true; glass.fade = clamp((clock - .9) / .3) }
-      if (!left && !away && clock > 1.3) { glass.fade = 1; sorted = 0; burnt = 0; hooks.count(0, 0); heat = 0; runT = 0; spawnIn = .2; setPhase('run') }
+      if (clock > .9) { glass.on = true; glass.fade = clamp((clock - .9) / .3); parts[m.idx.soot].fade = parts[m.idx.shards].fade = 1 - glass.fade }
+      if (!left && !away && clock > 1.3) { glass.fade = 1; parts[m.idx.soot].on = parts[m.idx.shards].on = false; parts[m.idx.soot].fade = parts[m.idx.shards].fade = 1; sorted = 0; burnt = 0; hooks.count(0, 0); heat = 0; runT = 0; spawnIn = .2; setPhase('run') }
     }
     if (phase === 'boom' && clock > 1.2) {
       let moving = 0
-      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (clock > 6.5) sleep(L, i) }
-      for (let i = 0; i < Dn.cap; i++) if (Dn.state[i] === DYN && clock > 6.5) sleep(Dn, i)
+      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (clock > 4.6) sleep(L, i) }
+      for (let i = 0; i < Dn.cap; i++) if (Dn.state[i] === DYN && clock > 4.6) sleep(Dn, i)
       if (!moving) setPhase('rest')
     }
 
@@ -594,7 +593,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   function frame(now: number) {
     raf = 0
     if (dead) return
-    const dt = Math.min(.034, (now - last) / 1000 || .016); last = now
+    const dt = Math.min(.1, (now - last) / 1000 || .016); last = now
     advance(dt); render()
     if (visible && busy()) raf = requestAnimationFrame(frame)
   }

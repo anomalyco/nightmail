@@ -97,6 +97,7 @@ export function buildMachine(p: Plan) {
   // A cable from the laser's pedestal across the roof to the hatch.
   b.tube([[turret[0] - 5 * px, yTop + 1.4 * px, zL + 4 * px], [turret[0] - 5 * px, yTop + 1.4 * px, D * .64], [-Xw * .36, yTop + 1.4 * px, D * .64], [-Xw * .36, yTop + 1.4 * px, D * .7]], 1.3 * px, M.rubber, 6, 5 * px)
 
+  b.quad([-lw * .62, yTop + .15, zL - lw * .3], [lw * .62, yTop + .15, zL - lw * .3], [lw * .62, yTop + .15, zL + lw * .3], [-lw * .62, yTop + .15, zL + lw * .3], M.slot, [0, 1, 0])
   // The roller line and, under it, a chute for each lane: two plates that lean together.
   const rr = P / 8 * .4, yR = yCav + p.cavity * .46, z0 = zL - 12 * px, z1 = zL + 12 * px, rideY = yR + rr + lh / 2, scanY = Math.min(yFas - lh / 2 - 7 * px, rideY + lh * .95)
   for (const x of lanes) for (const s of [-1, 1]) b.prism(ccw([[x + s * .47 * P, yR - rr - 3 * px], [x + s * .47 * P - s * 1.6 * px, yR - rr - 3 * px], [x + s * .3 * P - s * 1.6 * px, yCav], [x + s * .3 * P, yCav]]), z0, z1, M.trim, 'fs')
@@ -114,7 +115,7 @@ export function buildMachine(p: Plan) {
   }
 
   // ── Parts ──
-  const idx = { glass: 0, tubes: 0, needle: 0, turret: 0, scan: 0, hopper: 0, beaconOn: 0, lamps: [] as number[], flaps: [] as number[], rollers: [] as number[], caps: [] as number[], bolts: [] as number[], chutes: [] as number[] }
+  const idx = { glass: 0, tubes: 0, soot: 0, shards: 0, needle: 0, turret: 0, scan: 0, hopper: 0, beaconOn: 0, lamps: [] as number[], flaps: [] as number[], rollers: [] as number[], caps: [] as number[], bolts: [] as number[], chutes: [] as number[] }
 
   idx.needle = b.part('needle', [ga.x, ga.y, 0])
   b.prism(ccw([[ga.x - 1.1 * px, ga.y - ga.r * .22], [ga.x + 1.1 * px, ga.y - ga.r * .22], [ga.x + .4 * px, ga.y + ga.r * .8], [ga.x - .4 * px, ga.y + ga.r * .8]]), -4.8 * px, -4.4 * px, M.ink, 'f')
@@ -164,6 +165,15 @@ export function buildMachine(p: Plan) {
   for (const [x, y] of [[-Xw - px, yFas + px], [Xw + px, yFas + px], [-Xw - px, yCav - px], [Xw + px, yCav - px], [0, yFas + px], [-Xw / 2, yCav - px], [Xw / 2, yCav - px], [-Xw / 2, yFas + px], [Xw / 2, yFas + px]] as [number, number][]) {
     idx.bolts.push(b.part(`bolt${idx.bolts.length}`, [x, y, -2.6 * px])); b.cyl([x, y, 0], 2, -3.2 * px, -2 * px, 1.5 * px, M.steel, 8, 3)
   }
+  // What the burst leaves: soot on the roof round where the hopper stood, and splinters of the glass still in its frame.
+  idx.soot = b.part('soot', [0, 0, 0], true)
+  b.quad([-hb * 2.2, yTop + .2, zL - hd * 2], [hb * 2.4, yTop + .2, zL - hd * 1.6], [hb * 2, yTop + .2, zL + hd * 2.6], [-hb * 1.8, yTop + .2, zL + hd * 2.2], M.scorch, [0, 1, 0])
+  idx.shards = b.part('shards', [0, 0, 0], true)
+  const shard = (points: [number, number][]) => { b.prism(ccw(points), -1.3 * px, -1.2 * px, M.sheen, 'f'); b.prism(ccw(points), -1.25 * px, -1.2 * px, M.glass, 'f') }
+  const ch = p.cavity
+  shard([[-Xw, yFas], [-Xw + Xw * .22, yFas], [-Xw + Xw * .09, yFas - ch * .34], [-Xw, yFas - ch * .5]]); shard([[-Xw, yCav], [-Xw + Xw * .3, yCav], [-Xw + Xw * .12, yCav + ch * .2], [-Xw, yCav + ch * .36]])
+  shard([[Xw, yFas], [Xw - Xw * .16, yFas], [Xw - Xw * .2, yFas - ch * .2], [Xw, yFas - ch * .42]]); shard([[Xw, yCav], [Xw - Xw * .34, yCav], [Xw - Xw * .1, yCav + ch * .3], [Xw, yCav + ch * .24]])
+  shard([[-Xw * .3, yFas], [-Xw * .08, yFas], [-Xw * .16, yFas - ch * .26]]); shard([[Xw * .2, yCav], [Xw * .42, yCav], [Xw * .34, yCav + ch * .18]]); shard([[Xw * .34, yFas], [Xw * .52, yFas], [Xw * .47, yFas - ch * .15]])
   idx.glass = b.part('glass', [0, (yCav + yFas) / 2, -1.2 * px], true)
   b.mark(-Xw, yCav, Xw, yFas, -1.2 * px, M.glass)
   const slant = p.cavity * .55

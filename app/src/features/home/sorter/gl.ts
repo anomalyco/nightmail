@@ -6,7 +6,7 @@
 
 import { DX, DY } from './plan'
 /** Towards the light: tops are lit most, fronts less, left sides not at all. */
-export const LIGHT = norm([0.44, 0.8, -0.41])
+export const LIGHT = norm([0.24, 0.8, -0.55])
 export const TONES = 4, MATS = 48
 
 function norm(v: number[]) { const l = Math.hypot(v[0], v[1], v[2]); return [v[0] / l, v[1] / l, v[2] / l] }
@@ -43,7 +43,7 @@ ${BANDS}
 void main() {
   vec3 n = normalize(vNrm); float nl = dot(n, uL);
   vec4 c = toned(vMat, nl, nl > 0. ? shadowAt(vWorld, n) : 0.);
-  c.rgb = mix(c.rgb, vec3(1.), uFlash * (.25 + .5 * max(nl, 0.)));
+  c.rgb = mix(c.rgb, vec3(1.), uFlash * (vMat < .5 ? .1 : .22 + .45 * max(nl, 0.)));
   o = vec4(c.rgb, c.a * uFade);
 }`
 

@@ -3,6 +3,7 @@ import { ArrowRight, LoaderCircle } from 'lucide-react'
 import { Link } from 'react-router'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { SignInConsent } from '../../components/LegalLinks'
+import { AnomalyLogo } from '../../components/AnomalyLogo'
 import { reducedMotion, type HomeProps } from '.'
 import { DX, DY, type Plan } from './sorter/plan'
 
@@ -93,7 +94,7 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
         <span className="srt-cta-label">Get started{busy ? <LoaderCircle className="ui-spinner" size={16} aria-hidden="true" /> : <ArrowRight className="srt-cta-arrow" size={16} strokeWidth={2} aria-hidden="true" />}</span>
       </button>
       <SignInConsent className="srt-end-consent" />
-      <nav aria-label="Site links"><a href="/docs">API docs</a><Link to="/legal/terms">Terms</Link><Link to="/legal/privacy">Privacy</Link></nav>
+      <nav aria-label="Site links"><a className="srt-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={18} /></a><a href="/docs">API docs</a><Link to="/legal/terms">Terms</Link><Link to="/legal/privacy">Privacy</Link></nav>
     </footer>
   </section>
 }
