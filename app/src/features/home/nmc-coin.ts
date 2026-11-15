@@ -227,9 +227,10 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
 
   let dpr = 1, width = 0, height = 0, R = 0, cx = 0, cy = 0, base = 0, tilt0 = TILT_MIN
   let palette!: Palette, cold!: HTMLCanvasElement, hot!: HTMLCanvasElement
-  // start is the time of the intro's first frame: a page opened in a background tab plays it when it is first seen.
+  // start is the time of the intro's first frame that could be seen: a page opened in a background tab plays it when
+  // it is first looked at. made is what the last layout was made for.
   // counted: the light has gone round. eager: the pointer is on Sign in.
-  let raf = 0, dead = false, start = 0, last = performance.now()
+  let raf = 0, dead = false, start = 0, last = performance.now(), made = ''
   let counted = reduced, hover = -1, busyAt = 0, eager = false
   const slices: Slice[] = Array.from({ length: SLICES }, () => ({ out: 0, outVel: 0, lift: 0, liftVel: 0, wanted: false }))
   const angle = (index: number) => PHASE + index * STEP
@@ -254,8 +255,15 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
   }
   const sheet = (image: HTMLCanvasElement, dx = 0, dy = 0) => ctx.drawImage(image, cx + dx - R - 1, cy + dy - R * COS - 1, image.width / dpr, image.height / dpr)
 
+  // Lays the scene out for the page as it is now. False if nothing it depends on has changed: the canvas is left as
+  // it is then, since sizing a canvas clears it.
   function layout() {
     const page = canvas.getBoundingClientRect(), box = slot.getBoundingClientRect(), to = target.getBoundingClientRect()
+    const room = Math.max(0, box.top - (slot.parentElement?.getBoundingClientRect().top ?? box.top))
+    const set = parseFloat(getComputedStyle(slot).getPropertyValue('--nmc-aim')), deep = color('--color-deep')
+    const now = [window.devicePixelRatio, page.width, page.height, box.left - page.left, box.top - page.top, box.width, to.left - page.left, to.top - page.top, to.width, to.height, room, set, deep].join()
+    if (now === made) return false
+    made = now
     dpr = Math.min(window.devicePixelRatio || 1, 3)
     width = page.width; height = page.height
     canvas.width = Math.round(width * dpr); canvas.height = Math.round(height * dpr)
@@ -264,18 +272,17 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     // The slice nearest the line from the coin's centre to Sign in, or nearest --nmc-aim (degrees clockwise from 3
     // o'clock) where the page sets it: with the button straight below the coin, a slice aimed at it would come out
     // end-on to the camera and hang off the coin's front.
-    const set = parseFloat(getComputedStyle(slot).getPropertyValue('--nmc-aim'))
     const towards = Number.isFinite(set) ? set * Math.PI / 180 : Math.atan2((to.top + to.height / 2 - page.top - cy) / COS, to.left + to.width / 2 - page.left - cx)
     const aim = mod(Math.round((towards - PHASE) / STEP), SLICES)
     if (aim !== base) { if (slices[base].wanted) { slices[base].wanted = false; slices[aim].wanted = true }; base = aim }
     // Tilted by a with its far side up, the coin's far rim stands 2R (sin a sin TILT − (1 − cos a) cos TILT) above
     // where it lies: the first tilt is the steepest that stays inside the stage.
-    const room = Math.max(0, box.top - (slot.parentElement?.getBoundingClientRect().top ?? box.top))
     const rise = (a: number) => 2 * R * (Math.sin(a) * SIN - (1 - Math.cos(a)) * COS)
     tilt0 = TILT_MAX
     for (let low = TILT_MIN, high = TILT_MAX, n = 0; rise(TILT_MAX) > room && n < 12; n++) { const middle = (low + high) / 2; if (rise(middle) > room) high = middle; else low = middle; tilt0 = low }
-    palette = paletteFor(color('--color-deep'))
+    palette = paletteFor(deep)
     if (R > 0) { cold = face(palette.cold); hot = face(palette.hot) }
+    return true
   }
 
   // A piece of wall under the edge from (x0, y0) to (x1, y1), as deep as (tx, ty), in one of the five tones of a
@@ -392,8 +399,8 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
 
   function frame(now: number) {
     raf = 0
-    start ||= now
-    const dt = Math.min(48, now - last), t = now - start
+    if (!start && document.visibilityState !== 'hidden') start = now
+    const dt = Math.min(48, now - last), t = start ? now - start : 0
     last = now
     let moving = false
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -491,7 +498,8 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     kick()
   }
 
-  const redraw = () => { layout(); kick() }
+  // Laid out again, the scene is drawn at once: the page is painted before the next frame's turn comes.
+  const redraw = () => { if (layout() && !dead) { cancelAnimationFrame(raf); frame(performance.now()) } }
   const resize = new ResizeObserver(redraw)
   resize.observe(canvas); resize.observe(slot); resize.observe(target)
   // The theme toggle swaps the page's colours: the coin is struck again in the metal for them.
