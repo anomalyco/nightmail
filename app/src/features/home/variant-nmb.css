@@ -16,8 +16,9 @@
   /* The page's side margins: 80 px at 1440, and whatever centres a 1680 px page on a wider screen. */
   --nmb-margin: max(clamp(20px, 5.556vw, 96px), 50vw - 840px);
   --nmb-bar: 72px;
-  /* The longer proof line and the terms line under Sign in, each in ems of its own type (see the wide layout). */
-  --measure: 20.78;
+  /* On a wide page: how many of the proof lines' ems the pitch is across, and the terms line under Sign in in ems of
+     its own type (see the wide layout). */
+  --measure: 20.66;
   --terms: 32;
   --nmb-foot: 56px;
 
@@ -29,8 +30,8 @@
   --nb-steel-top: oklch(0.875 0.005 268); --nb-steel-0: oklch(0.815 0.006 268); --nb-steel-1: oklch(0.8 0.006 268); --nb-steel-2: oklch(0.765 0.007 268); --nb-steel-3: oklch(0.725 0.007 268);
   --nb-dark-top: oklch(0.74 0.007 268); --nb-dark-0: oklch(0.675 0.008 268); --nb-dark-1: oklch(0.66 0.008 268); --nb-dark-2: oklch(0.615 0.009 268); --nb-dark-3: oklch(0.565 0.009 268);
   --nb-lit: oklch(0.16 0.008 268); --nb-hi: oklch(0.32 0.01 268); --nb-mid: oklch(0.5 0.01 268); --nb-lo: oklch(0.67 0.008 268); --nb-faint: oklch(0.8 0.006 268);
-  --nb-paper: oklch(0.992 0.012 92); --nb-paper-edge: oklch(0.9 0.012 92); --nb-ink: oklch(0.3 0.01 268);
-  --nb-dial: oklch(0.995 0.001 268); --nb-slot: oklch(0.62 0.008 268);
+  --nb-paper: oklch(0.995 0.012 92); --nb-paper-edge: oklch(0.8 0.014 92); --nb-ink: oklch(0.3 0.01 268);
+  --nb-dial: oklch(0.925 0.004 268); --nb-slot: oklch(0.56 0.008 268); --nb-lip: oklch(0.9 0.004 268); --nb-said: oklch(0.3 0.01 268);
   --nb-cast: oklch(0.3 0.02 268 / 9%);
   --nb-accent: var(--color-brand);
   --nb-lamp-top: oklch(0.7 0.07 269.2); --nb-lamp-0: var(--color-brand); --nb-lamp-1: var(--color-brand); --nb-lamp-2: oklch(0.6 0.075 269.2); --nb-lamp-3: oklch(0.56 0.075 269.2);
@@ -56,7 +57,7 @@
   --nb-dark-top: oklch(0.205 0.005 268); --nb-dark-0: oklch(0.172 0.005 268); --nb-dark-1: oklch(0.162 0.005 268); --nb-dark-2: oklch(0.14 0.004 268); --nb-dark-3: oklch(0.122 0.004 268);
   --nb-lit: oklch(0.985 0.002 268); --nb-hi: oklch(0.86 0.006 268); --nb-mid: oklch(0.64 0.008 268); --nb-lo: oklch(0.47 0.008 268); --nb-faint: oklch(0.385 0.008 268);
   --nb-paper: oklch(0.962 0.012 92); --nb-paper-edge: oklch(0.8 0.012 92); --nb-ink: oklch(0.36 0.01 268);
-  --nb-dial: oklch(0.105 0.004 268); --nb-slot: oklch(0.2 0.005 268);
+  --nb-dial: oklch(0.105 0.004 268); --nb-slot: oklch(0.15 0.004 268); --nb-lip: oklch(0.545 0.009 268); --nb-said: oklch(0.985 0.002 268);
   --nb-cast: oklch(0 0 0 / 30%);
   --nb-accent: oklch(0.7 0.085 269.2);
   --nb-lamp-top: oklch(0.8 0.07 269.2); --nb-lamp-0: oklch(0.7 0.085 269.2); --nb-lamp-1: oklch(0.7 0.085 269.2); --nb-lamp-2: oklch(0.63 0.085 269.2); --nb-lamp-3: oklch(0.56 0.085 269.2);
@@ -96,9 +97,9 @@
 .nmb-title { margin: 0; padding-top: clamp(26px, 8.2cqh, 72px); color: var(--nmb-text); font-size: clamp(38px, 5.94cqw, 100px); font-weight: 480; line-height: 1.02; letter-spacing: -.036em; font-variant-numeric: normal; text-wrap: nowrap; }
 .nmb-title span { display: block; }
 
-/* The two proof lines, at the page's middle size and in its third tone, with only the figures in its first. The
-   optical size is pinned so the lines keep one measure in ems at every size. */
-.nmb-sub { margin: 0; color: var(--nmb-text-3); font-size: 17px; font-weight: 400; line-height: 1.36; letter-spacing: -.013em; font-variant-numeric: normal; font-variation-settings: 'opsz' 24; }
+/* Three proof lines, one fact to a line, at the page's middle size and in its third tone, with only the figures in
+   its first. The optical size is pinned so the lines keep one measure in ems at every size. */
+.nmb-sub { margin: 0; color: var(--nmb-text-3); font-size: 17px; font-weight: 400; line-height: 1.36; letter-spacing: -.013em; font-variant-numeric: normal; font-variation-settings: 'opsz' 24; white-space: nowrap; }
 .nmb-sub > span { display: block; }
 .nmb-sub b { color: var(--nmb-text); font-weight: 450; }
 /* The pitch is above the bench, whose box (most of it empty) reaches under it: a press on Sign in is never the bench's. */
@@ -126,22 +127,23 @@
 
 /* Wide screens: the headline holds the top left, the bench crosses the page from margin to margin, rising to the right,
    and the pitch hangs in the corner it leaves free, its left edge on the near post of the gate where the letter is
-   delivered. --w is the bench's width: the page's, or less where the page is too short for it; --pitch is the
+   delivered. --w is the bench's width: the page's, or less where the page is too short for it (and less again on a
+   very short one, where the pitch can't get out of its way); --pitch is the
    distance from that post to the right margin (or the least the pitch can be set in). Its type is sized by that
-   measure: the longer proof line and the terms line each run exactly from the post to the margin (--measure and
-   --terms are their lengths in ems), so the block is locked to the gate on one side and the page on the other. */
+   measure: the proof lines are a set fraction of it, and the terms line runs exactly from the post to the margin
+   (--terms is its length in ems), so the block is locked to the gate on one side and the page on the other. */
 .nmb-page--wide .nmb-main {
-  --w: min(100cqw / (var(--nb-to) - var(--nb-from)), (100cqh - 228px) * var(--nb-aspect));
+  --w: min(100cqw / (var(--nb-to) - var(--nb-from)), (100cqh - 228px - max(0px, (560px - 100cqh) * .5)) * var(--nb-aspect));
   --left: calc(50% - (var(--nb-from) + var(--nb-to)) / 2 * var(--w));
   --pitch: max(340px, 50cqw + ((var(--nb-from) + var(--nb-to)) / 2 - var(--nb-post)) * var(--w));
   /* The pitch sits lower on a short page, where the bench is smaller and its base nearer. */
-  --foot: clamp(22px, 15.6cqh - 60px, 68px);
+  --foot: clamp(20px, 15.6cqh - 74px, 60px);
 }
-.nmb-page--wide .nmb-stage { position: absolute; left: var(--left); top: calc(50% - var(--w) / var(--nb-aspect) / 2 + .6cqh); width: var(--w); }
+.nmb-page--wide .nmb-stage { position: absolute; left: var(--left); top: calc(50% - var(--w) / var(--nb-aspect) / 2 - 1.2cqh); width: var(--w); }
 /* The pitch is a container, so inside it 100cqw is its own width. */
 .nmb-page--wide .nmb-pitch { position: absolute; right: var(--nmb-margin); bottom: var(--foot); width: var(--pitch); container-type: inline-size; --step: calc(100cqw / var(--measure)); }
-.nmb-page--wide .nmb-sub { font-size: var(--step); white-space: nowrap; }
-.nmb-page--wide .nmb-act { gap: clamp(10px, var(--step) * .62, 14px); margin-top: clamp(20px, var(--step) * 1.5, 34px); }
+.nmb-page--wide .nmb-sub { font-size: var(--step); }
+.nmb-page--wide .nmb-act { gap: clamp(10px, var(--step) * .62, 14px); margin-top: clamp(18px, var(--step) * 1.3, 30px); }
 .nmb-page--wide .nmb-cta { height: clamp(44px, var(--step) * 2.3, 54px); padding-inline: clamp(18px, var(--step) * .95, 23px) clamp(15px, var(--step) * .8, 19px); border-radius: clamp(10px, var(--step) * .55, 12px); font-size: clamp(15px, var(--step) * .8, 17px); }
 .nmb-page--wide .nmb-consent { font-size: max(11.5px, 100cqw / var(--terms)); line-height: 1.45; white-space: nowrap; text-wrap: nowrap; }
 /* Where the pitch is too narrow for the terms on one line at a readable size, they take two. */
@@ -158,14 +160,17 @@
    left over is short; either way it is centred on that part. */
 .nmb-page--tall .nmb-figure { order: 1; flex: 1; container-type: size; display: flex; flex-direction: column; min-height: 0; margin-inline: calc(-1 * var(--nmb-margin)); padding-top: clamp(20px, 5cqh, 40px); }
 .nmb-page--tall .nmb-bench { --bw: min((100cqw - 2 * var(--nmb-margin)) / (var(--nb-to) - var(--nb-from)), (100cqh - 28px) * var(--nb-aspect)); width: var(--bw); margin-left: calc(50cqw - (var(--nb-from) + var(--nb-to)) / 2 * var(--bw)); }
+/* A phone's bench starts on the left margin: its base's rounded end is there, the gate where the letter is delivered
+   is on the right margin, and the rest of the second runs off the right edge. That takes a screen about as tall as
+   390 × 840; on a squatter one all of the bench shows instead, centred like a tablet's. */
+.nmb-page--small .nmb-bench { --bw: min((100cqw - 2 * var(--nmb-margin)) / (var(--nb-end) - var(--nb-from)), (100cqh - 24px) * var(--nb-aspect)); margin-left: calc(50cqw - (var(--nb-from) + var(--nb-end)) / 2 * var(--bw)); }
+@media (max-aspect-ratio: 390/838) { .nmb-page--small .nmb-bench { --bw: min((100cqw - 2 * var(--nmb-margin)) / (var(--nb-to) - var(--nb-from)), (100cqh - 24px) * var(--nb-aspect)); margin-left: calc(var(--nmb-margin) - var(--nb-from) * var(--bw)); } }
 .nmb-page--tall .nmb-pitch { order: 3; padding-block: 12px clamp(18px, 5.2cqh, 40px); }
 .nmb-page--tall .nmb-act { margin-top: clamp(18px, 3.6cqh, 28px); }
 /* The proof lines never wrap: their size gives the longest one a little room to spare, so a fallback font that sets
-   it a few pixels wider before the web font arrives doesn't break it and move the page. On a phone each sentence has
-   a line of its own. */
-.nmb-page--tall .nmb-sub { font-size: min(22px, 100cqw / 20.9); white-space: nowrap; }
+   it a few pixels wider before the web font arrives doesn't break it and move the page. */
+.nmb-page--tall .nmb-sub { font-size: min(22px, 100cqw / 17.95); }
 .nmb-page--small .nmb-sub { font-size: min(19px, 100cqw / 17.95); line-height: 1.4; }
-.nmb-page--small .nmb-sub > span > span { display: block; }
 /* On a phone Sign in is as wide as the page. */
 .nmb-page--small .nmb-act { align-items: stretch; }
 .nmb-page--small .nmb-cta { justify-content: center; height: 50px; }
@@ -179,8 +184,8 @@
 .nmb-bench { position: relative; width: 100%; -webkit-user-select: none; user-select: none; }
 .nmb-bench svg { position: absolute; display: block; overflow: visible; }
 .nb-sheet, .nb-hold { position: absolute; inset: 0; width: 100%; height: 100%; }
-.nb-hold, .nb-piece, .nb-ping { pointer-events: none; }
-.nmb-page[data-motion] :is(.nb-hold, .nb-piece[data-part], .nb-ping) { will-change: transform, opacity; }
+.nb-hold, .nb-piece { pointer-events: none; }
+.nmb-page[data-motion] :is(.nb-hold, .nb-piece[data-part]) { will-change: transform, opacity; }
 .nmb-bench path, .nmb-bench circle { vector-effect: non-scaling-stroke; }
 .nb-f { fill: var(--nb-s1); } .nb-h0 { fill: var(--nb-s0); } .nb-h1 { fill: var(--nb-s1); } .nb-h2 { fill: var(--nb-s2); } .nb-h3 { fill: var(--nb-s3); } .nb-t { fill: var(--nb-top); }
 .nb-plate { --nb-top: var(--nb-plate-top); --nb-s0: var(--nb-plate-0); --nb-s1: var(--nb-plate-1); --nb-s2: var(--nb-plate-2); --nb-s3: var(--nb-plate-3); }
@@ -195,8 +200,11 @@
 .nb-cast { fill: var(--nb-cast); }
 .nb-postmark { stroke-width: .6px; opacity: .5; }
 .nb-dial { fill: var(--nb-dial); }
+.nb-zero { fill: var(--nb-lit); }
 .nb-slot { fill: var(--nb-slot); }
+.nb-lip { fill: var(--nb-lip); }
 .nb-wire { stroke-width: 1.25px; }
+.nb-tenth { stroke-width: 1.3px; }
 .nb-cable { stroke-width: 1.1px; }
 .nb-tick { stroke-width: .8px; }
 .nb-ray { stroke-dasharray: .01 3.2; stroke-width: 1.1px; opacity: .85; }
@@ -208,8 +216,7 @@
 .nmb-bench path.nb-arc { vector-effect: none; fill: none; stroke: var(--nb-accent); stroke-linecap: butt; stroke-dasharray: 1 1; }
 .nb-key { fill: var(--nb-steel-top); }
 .nb-label { fill: var(--nb-lo); font-family: var(--font-mono); font-weight: 400; letter-spacing: .15em; }
-.nb-label--lit { fill: var(--nb-lit); }
+.nb-label--lit { fill: var(--nb-said); }
 .nb-code { letter-spacing: .03em; }
-.nb-ping { position: absolute; aspect-ratio: 2; border: 1.5px solid var(--nb-accent); border-radius: 50%; }
 .nmb-page--small :is(.nb-hand) { stroke-width: 1.6px; }
 .nmb-page--small .nb-weight { stroke-width: 2.8px; }
