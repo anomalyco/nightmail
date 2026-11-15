@@ -9,12 +9,8 @@
   --nmc-reach: clamp(18px, 1.6vw, 34px);
   --nmc-button: 208px;
   --nmc-d: max(380px, min(66svh, 640px, (100vw - 2 * var(--nmc-pad) - 3.6 * var(--nmc-type) - var(--nmc-gap) - var(--nmc-reach) - var(--nmc-button)) / 1.525));
-  /* The coin is the same metal in both themes; the slice that has left it takes the colour of Sign in. */
+  /* The coin is the same metal in both themes (nmc-coin.ts shades it); the slice that has left takes Sign in's colours. */
   --nmc-coin: var(--color-brand);
-  --nmc-coin-rim: color-mix(in srgb, var(--color-brand) 84%, #fff);
-  --nmc-coin-edge: color-mix(in srgb, var(--color-brand) 62%, #000);
-  --nmc-coin-wall: color-mix(in srgb, var(--color-brand) 40%, #000);
-  --nmc-coin-ink: color-mix(in srgb, var(--color-brand) 22%, #000);
   --nmc-hot: var(--color-contrast);
   --nmc-hot-ink: var(--color-on-contrast);
   position: relative; display: flex; flex-direction: column; min-height: 100dvh; overflow: clip;

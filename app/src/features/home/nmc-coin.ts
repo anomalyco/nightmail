@@ -2,7 +2,8 @@
 // A slice is the price of one email: RATES.emailUc (api/src/billing/money.ts) is $0.0002, a fiftieth of a cent.
 // The coin spins down the way a dropped coin does, a cut travels round it, and one slice slides out and turns to lie
 // in front of Sign in. Every few seconds that slice leaves and the next takes its place; a slice still in the coin
-// lifts under the pointer and leaves when it is pressed. Fifty slices later the next cent lands.
+// lifts under the pointer and leaves when it is pressed. Fifty slices later the next cent lands. Pressing Sign in
+// sends the waiting slice off through the button.
 
 const TAU = Math.PI * 2
 const SLICES = 50
@@ -43,7 +44,7 @@ type Palette = { top: RGB; rim: RGB; edge: RGB; wall: RGB; ink: RGB; hot: RGB; h
 // out: 0 in the coin, 1 lying in front of Sign in. lift: slid out a little under the pointer. fly: when it left, or 0.
 type Slice = { out: number; outVel: number; lift: number; liftVel: number; cut: number; gone: boolean; fly: number; from: number }
 
-const css = ([r, g, b]: RGB) => `rgb(${r} ${g} ${b})`
+const css = ([r, g, b]: RGB) => `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`
 const mix = (a: RGB, b: RGB, t: number): RGB => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t]
 const clamp = (value: number, low = 0, high = 1) => Math.min(high, Math.max(low, value))
 const smooth = (x: number) => { const t = clamp(x); return t * t * (3 - 2 * t) }
@@ -58,8 +59,6 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
   const probe = document.createElement('span')
   probe.style.display = 'none'
   slot.appendChild(probe)
-  const sampler = document.createElement('canvas').getContext('2d', { willReadFrequently: true })!
-  sampler.canvas.width = sampler.canvas.height = 1
 
   let dpr = 1, width = 0, height = 0, R = 0, cx = 0, cy = 0, aim = 0, pull = 1
   let palette!: Palette, cold!: HTMLCanvasElement, hot!: HTMLCanvasElement
@@ -76,12 +75,10 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
   const angle = (index: number) => aim + turn(index)
   const nextFree = () => order.find(index => !slices[index].gone && !slices[index].fly) ?? -1
 
+  // A colour token as numbers. The tokens used are plain sRGB colours, which every browser computes to rgb(r, g, b).
   function color(name: string): RGB {
     probe.style.color = `var(${name})`
-    sampler.clearRect(0, 0, 1, 1)
-    sampler.fillStyle = getComputedStyle(probe).color
-    sampler.fillRect(0, 0, 1, 1)
-    const [r, g, b] = sampler.getImageData(0, 0, 1, 1).data
+    const [r = 0, g = 0, b = 0] = getComputedStyle(probe).color.match(/[\d.]+/g)?.map(Number) ?? []
     return [r, g, b]
   }
 
@@ -131,7 +128,10 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
     cx = snap(box.left - page.left + R); cy = snap(box.top - page.top + R * COS)
     aim = style.getPropertyValue('--nmc-aim').trim() === 'down' ? Math.PI / 2 : 0
     pull = Number(style.getPropertyValue('--nmc-pull')) || 1
-    palette = { top: color('--nmc-coin'), rim: color('--nmc-coin-rim'), edge: color('--nmc-coin-edge'), wall: color('--nmc-coin-wall'), ink: color('--nmc-coin-ink'), hot: color('--nmc-hot'), hotInk: color('--nmc-hot-ink') }
+    // The coin is one metal in both themes: a lighter raised rim, a darker edge, darker cut walls and engraving. The
+    // top of a slice that has left takes Sign in's colours.
+    const metal = color('--nmc-coin'), white: RGB = [255, 255, 255], black: RGB = [0, 0, 0]
+    palette = { top: metal, rim: mix(metal, white, 0.16), edge: mix(metal, black, 0.38), wall: mix(metal, black, 0.6), ink: mix(metal, black, 0.78), hot: color('--nmc-hot'), hotInk: color('--nmc-hot-ink') }
     if (R > 0) { cold = face(palette.top, palette.rim, palette.ink); hot = face(palette.hot, palette.hot, palette.hotInk) }
   }
 
@@ -366,9 +366,12 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
   kick()
 
   return {
+    // Sign-in has started: the slice lying in front of the button leaves through it, and a ripple runs round the coin
+    // until the page goes.
     setBusy(busy) {
       if (reduced || !!busyAt === busy) return
       busyAt = busy ? performance.now() : 0
+      if (busy && tray >= 0 && slices[tray].out > 0.9) send(tray)
       kick()
     },
     destroy() {

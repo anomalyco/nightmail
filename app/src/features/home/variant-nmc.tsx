@@ -21,7 +21,7 @@ export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
     coin.current = mounted
     return () => { coin.current = null; mounted.destroy() }
   }, [reduced])
-  // While sign-in starts, a ripple runs round the coin.
+  // While sign-in starts, the waiting slice leaves and a ripple runs round the coin.
   useEffect(() => { coin.current?.setBusy(busy) }, [busy])
 
   return <div className="nmc-page">
