@@ -16,11 +16,14 @@ export const ACCEPTED_MS = 99, DELIVERED_MS = 602
 // `width` is how many CSS pixels the part of the drawing that spans the page takes at its design size, so line
 // weights and dots are in pixels: the base from end to end, or, on a phone, the base's left end to the gate where the
 // letter is delivered (the rest of the second can run off the screen). A `fine` drawing has every mark. With `mast`
-// the stopwatch is a clock on a mast over that gate instead of a cabinet at the far end of the base.
-export interface Spec { name: 'wide' | 'tall'; second: number; azimuth: number; width: number; pad: number; fine: boolean; mast?: boolean }
+// the stopwatch is a clock on a mast over that gate instead of a cabinet at the far end of the base; `runout` is how
+// far the rail runs on past its second before its stop (so a screen that cuts the bench there cuts plain rail).
+export interface Spec { name: 'wide' | 'tall'; second: number; azimuth: number; width: number; pad: number; fine: boolean; mast?: boolean; runout?: number }
 export const WIDE: Spec = { name: 'wide', second: 330, azimuth: 112, width: 1280, pad: 8, fine: true }
-/** A phone: the same view of a shorter second in a plainer cut, with the clock over the finish so the whole story fits the width. */
-export const PHONE: Spec = { name: 'tall', second: 170, azimuth: 112, width: 346, pad: 6, fine: false, mast: true }
+/** A phone: a shorter second in a plainer cut, seen further from the end so the bench climbs the screen, with the clock over the finish so the whole story fits the width; the rest of the rail runs off the screen. */
+export const PHONE: Spec = { name: 'tall', second: 170, azimuth: 130, width: 346, pad: 6, fine: false, mast: true, runout: 46 }
+/** A phone whose screen is too squat for that: the same cut from the desktop's side, all of it on the screen. */
+export const PHONE_LOW: Spec = { ...PHONE, azimuth: 112, runout: 0 }
 /** A tall screen wide enough for the bench's fine detail: a tablet held upright. */
 export const TABLET: Spec = { name: 'tall', second: 230, azimuth: 128, width: 760, pad: 8, fine: true }
 
@@ -87,8 +90,8 @@ export interface Bench {
   /** What shows of the letter as it goes down through the jaws or comes up through them: everything above their top edge, as a polygon in fractions of the drawing. */
   slot: Flat[]
   plunger: Piece
-  /** The turns of the starter's spring, from the housing outwards: each loop's far half (behind the rod) and near half. */
-  coils: { back: Piece; front: Piece }[]
+  /** The starter's spring at its cocked length: the far halves of its turns (behind the rod), the near halves, and where it is fixed. */
+  spring: { back: Piece; front: Piece; pivot: Flat; length: number }
   needle: Piece & { pivot: Flat }
   crown: Piece
   key: Piece & { pivot: Flat }
@@ -103,8 +106,8 @@ export interface Bench {
   post: number
 }
 
-/** How far past the second gate's light the letter comes to rest; how far the starter is drawn back and how far its plunger follows; the turns of its spring; how far down the letter goes when it is posted. */
-export const REST = 1, DRAW = 16, STROKE = 12, COILS = 7, POSTED = 38
+/** How far past the second gate's light the letter comes to rest; how far the starter is drawn back and how far its plunger follows; how far down the letter goes when it is posted. */
+export const REST = 1, DRAW = 16, STROKE = 12, POSTED = 38
 
 export function buildBench(spec: Spec): Bench {
   const SEC = spec.second, fine = spec.fine
@@ -115,18 +118,18 @@ export function buildBench(spec: Spec): Bench {
   // The letter, the sled under it (its leading edge is the letter's), and the starter behind that.
   // The starter's housing is long enough to hide its rod at both ends of its travel, and the spring between housing
   // and plunger has room to close to a block when drawn back.
-  const LETTER = { length: 45, height: 34, z: 16.5, lead: 1.5 }, SLED_L = 48, HEAD = 3, SPRING = DRAW + COILS + 2
+  const LETTER = { length: 45, height: 34, z: 16.5, lead: 1.5 }, SLED_L = 48, HEAD = 3, SPRING = DRAW + 9
   const LAUNCHER: Plan = { x: -SLED_L - HEAD - SPRING - (DRAW + STROKE + 2), y: TRACK - 9.5, w: DRAW + STROKE + 2, d: 19, r: 2.5 }
-  // With the clock on a mast nothing stands behind the rail, so the base is narrower; and it is longer at the
-  // starter's end by what the request's name needs.
+  // With the clock on a mast nothing stands behind the rail, so the base is narrower.
   const mast = !!spec.mast
-  const BASE: Plan = mast ? { x: LAUNCHER.x - 20, y: -27, w: SEC - LAUNCHER.x + 20 + 34, d: 68, r: 5 } : { x: LAUNCHER.x - 15, y: -40, w: SEC - LAUNCHER.x + 15 + 28, d: 81, r: 5 }
+  const RUNOUT = spec.runout ?? 0, END = SEC + RUNOUT
+  const BASE: Plan = mast ? { x: LAUNCHER.x - 15, y: -27, w: END - LAUNCHER.x + 15 + 34, d: 68, r: 5 } : { x: LAUNCHER.x - 15, y: -40, w: END - LAUNCHER.x + 15 + 28, d: 81, r: 5 }
   const BASE_H = 15, FOOT_H = 5, FRONT = BASE.y + BASE.d
   // The rail is a wide ground beam on a bed: the sled runs along its back two thirds (centred on TRACK) and the scale
   // is cut into the front third.
   const RAIL_X = LAUNCHER.x + LAUNCHER.w
-  const BED: Plan = { x: RAIL_X - 2, y: -11.5, w: SEC - RAIL_X + 14, d: 29, r: 1.6 }
-  const RAIL: Plan = { x: RAIL_X, y: -9, w: SEC - RAIL_X + 9, d: 24, r: 1 }
+  const BED: Plan = { x: RAIL_X - 2, y: -11.5, w: END - RAIL_X + 14, d: 29, r: 1.6 }
+  const RAIL: Plan = { x: RAIL_X, y: -9, w: END - RAIL_X + 9, d: 24, r: 1 }
   const RAIL_Z = 3.5, RAIL_TOP = 11, SCALE_Y = 7.6, RAIL_FRONT = RAIL.y + RAIL.d
   // The gates' near posts stand well forward of the rail and their beams well above the letter, so a letter at rest
   // in the second gate has clear air round it; each lamp is over its near post.
@@ -147,10 +150,10 @@ export function buildBench(spec: Spec): Bench {
     ...[XA, XB].flatMap(x => k.boxCorners({ x: x - 4, y: GATE_BACK - 4, w: 8, d: GATE_FRONT - GATE_BACK + 8, r: 0 }, 0, GATE_H + BEAM_H + 6)),
     ...(mast ? k.boxCorners({ x: CLOCK[0] - CASE_R, y: CLOCK[1] - CASE_D, w: CASE_R * 2, d: CASE_D * 2, r: 0 }, CLOCK[2] - CASE_R, CLOCK[2] + CASE_R + 7) : k.boxCorners(TIMER, 0, TIMER_H + 6)),
   ]
-  // What the page sets between its margins: the whole base, or with a mast its left end to the second gate's near
-  // post (where the last of the names on the base also ends).
+  // What the page sets between its margins: the whole base, or with a mast its left end to the end of the second
+  // gate's name.
   const rim: Point3[] = k.ringOf(BASE, 8).map(([x, y]) => [x, y, 0] as Point3)
-  const span: Point3[] = mast ? [...rim.filter(([x]) => x < BASE.x + BASE.r + 1), [XB + 6.5, GATE_FRONT + 5.2, 0], [XB + 6, BASE.y + BASE.d, 0]] : rim
+  const span: Point3[] = mast ? [...rim.filter(([x]) => x < BASE.x + BASE.r + 1), [XB + 6.5, GATE_FRONT + 5.2, 0], [XB + 8.2 * 9 * .75 / 2 + 1, BASE.y + BASE.d, 0]] : rim
   const flat = reach.map(point => k.iso(point, unit)), across0 = span.map(point => k.iso(point, unit)[0]), ends0 = rim.map(point => k.iso(point, unit)[0])
   const xs = flat.map(point => point[0]), ys = flat.map(point => point[1])
   const scale = spec.width / (Math.max(...across0) - Math.min(...across0))
@@ -187,23 +190,22 @@ export function buildBench(spec: Spec): Bench {
   }
 
   // The base: a long plate with a trim seam round its foot, and what happens above each place engraved on its front:
-  // the request and the name of each gate. The type is a monospace: each letter is .6 of its size wide, plus the
-  // tracking the page's styles give it. On a fine drawing the request is centred under starter and sled and each
-  // gate's name under its gate. A plain one has no room for that at a size that reads, so the three are set as one
-  // line: the request from the base's left end, DELIVERED ending at its gate's post, ACCEPTED midway between.
+  // the request under the starter, the name of each gate under it, and under the rail's end how long the rail is.
+  // The type is a monospace: each letter is .6 of its size wide, plus the tracking the page's styles give it. A plain
+  // drawing has no room on its base for the request's route at a size that reads: its starter says POST on its own
+  // face instead.
   type Stretch = [number, number]
-  const TYPE = fine ? 5 : 8.2, REQUEST = 'POST /v1/emails/send'
-  const long = (text: string, code = false) => TYPE * text.length * (code ? .63 : .75)
-  const centred = (text: string, x: number, code = false): Stretch => [x - long(text, code) / 2, x + long(text, code) / 2]
-  const lined = (): [Stretch, Stretch, Stretch] => {
-    const first: Stretch = [BASE.x + 6.5, BASE.x + 6.5 + long(REQUEST, true)], last: Stretch = [XB + 6 - long('DELIVERED'), XB + 6]
-    return [first, centred('ACCEPTED', (first[1] + last[0]) / 2), last]
-  }
-  const NAMES: [Stretch, Stretch, Stretch] = fine ? [centred(REQUEST, (LAUNCHER.x + LAUNCHER.w) / 2 - 1, true), centred('ACCEPTED', XA), centred('DELIVERED', XB)] : lined()
-  const label = (text: string, [from, to]: Stretch, also = '') => `<text class="nb-label${also && ` ${also}`}" transform="${k.sideMatrix([(from + to) / 2, FRONT], -4.1, P, 'left')}" font-size="${TYPE}" text-anchor="middle" dominant-baseline="hanging">${text}</text>`
-  const labelBox = ([from, to]: Stretch) => [at([from - 2, FRONT, -3]), at([to + 2, FRONT, -11])]
+  const TYPE = fine ? 5 : 8.2, REQUEST = fine ? 'POST /v1/emails/send' : 'POST', CODE = fine ? 'nb-code' : ''
+  const long = (text: string, code = false, size = TYPE) => size * text.length * (code ? .63 : .75)
+  const centred = (text: string, x: number, code = false, size = TYPE): Stretch => [x - long(text, code, size) / 2, x + long(text, code, size) / 2]
+  // Where a name is cut: on the base's front, or on the front of the starter's housing.
+  const ON_BASE = { y: FRONT, z: -4.1, size: TYPE }, ON_STARTER = { y: LAUNCHER.y + LAUNCHER.d, z: 16.6, size: 6.4 }
+  const POSTED_AT = fine ? ON_BASE : ON_STARTER
+  const NAMES: [Stretch, Stretch, Stretch] = [fine ? centred(REQUEST, (LAUNCHER.x + LAUNCHER.w) / 2 - 1, true) : centred(REQUEST, LAUNCHER.x + LAUNCHER.w / 2 + .4, false, ON_STARTER.size), centred('ACCEPTED', XA), centred('DELIVERED', XB)]
+  const label = (text: string, [from, to]: Stretch, also = '', where = ON_BASE) => `<text class="nb-label${also && ` ${also}`}" transform="${k.sideMatrix([(from + to) / 2, where.y], where.z, P, 'left')}" font-size="${where.size}" text-anchor="middle" dominant-baseline="hanging">${text}</text>`
+  const labelBox = ([from, to]: Stretch, where = ON_BASE) => [at([from - 2, where.y, where.z + 1.1]), at([to + 2, where.y, where.z - where.size - 1])]
   back.push(solid(slab(BASE, -BASE_H, BASE_H, 8, 1.6), { m: 'plate', edge: 'mid', inner: line(k.sideSeam(BASE, -BASE_H + 2.6, P, 8), 'faint') }))
-  back.push(label(REQUEST, NAMES[0], 'nb-code'), label('ACCEPTED', NAMES[1]), label('DELIVERED', NAMES[2]))
+  back.push(fine ? label(REQUEST, NAMES[0], CODE) : '', label('ACCEPTED', NAMES[1]), label('DELIVERED', NAMES[2]), fine ? label('ONE SECOND', centred('ONE SECOND', SEC + 2)) : '')
   back.push(line(k.planOutline(k.insetPlan(BASE, 4.5), 0, P), 'faint'))
   const corners = k.corners(BASE, 10)
   back.push(line(k.joinPaths(corners.map(([x, y]) => k.ring(x, y, 2.3, 0, P, 16))), 'lo'), dots(corners.map(([x, y]) => at([x, y, 0])), px(.6)))
@@ -217,20 +219,25 @@ export function buildBench(spec: Spec): Bench {
     : [[XA, -29], [XB, -25]].map(([from, y]) => [[from!, GATE_BACK - 2], [from!, y!], [TIMER.x - 2, y!]] as Plane[])
   for (const run of CABLES) back.push(line(top(run, .2), 'mid', 'nb-cable'))
 
-  // The stopwatch's face turns once a second: ten heavy marks are its tenths, with finer ones between, and the solid
-  // index at twelve is zero.
-  const divisions = fine ? 50 : 20
+  // The stopwatch's face turns once a second: ten heavy marks are its tenths, with finer ones between, the solid index
+  // at twelve is zero, and round the rim runs the track the hand's trace fills. The face is sunk behind its bezel:
+  // seen from here its floor sits up and to the left of the opening, and the well's wall shows on the right and below.
+  const divisions = fine ? 50 : 20, SUNK = fine ? 1.7 : 1.3
+  const sunk: Flat = [-SUNK * across[0] / along[0], (-SUNK * across[1] + SUNK * across[0] / along[0] * along[1]) / up[1]]
+  const FLOOR: Point3 = [DIAL[0] + sunk[0], DIAL[1], DIAL[2] + sunk[1]], FLOOR_R = DIAL_R - Math.hypot(...sunk)
+  const BAND = 1.75, TRACK_R = FLOOR_R - .45 - BAND / 2
   const face = () => {
     const marks: [string[], string[]] = [[], []]
     for (let index = 1; index < divisions; index++) {
       const tenth = index % (divisions / 10) === 0
-      marks[tenth ? 1 : 0].push(seg(onFace(DIAL, DIAL_R - 2.6, index / divisions), onFace(DIAL, DIAL_R - (tenth ? 7.2 : 4.3), index / divisions)))
+      marks[tenth ? 1 : 0].push(seg(onFace(FLOOR, FLOOR_R - 3.1, index / divisions), onFace(FLOOR, FLOOR_R - (tenth ? 8 : 4.7), index / divisions)))
     }
-    const half = (fine ? 1.25 : 1.5) / (Math.PI * 2 * (DIAL_R - 2.4))
-    const zero = k.pathOf([onFace(DIAL, DIAL_R - 2.4, -half), onFace(DIAL, DIAL_R - 2.4, half), onFace(DIAL, DIAL_R - 7.8, 0)].map(at), true)
+    const half = (fine ? 1.3 : 1.5) / (Math.PI * 2 * (FLOOR_R - 3))
+    const zero = k.pathOf([onFace(FLOOR, FLOOR_R - 2.9, -half), onFace(FLOOR, FLOOR_R - 2.9, half), onFace(FLOOR, FLOOR_R - 8.6, 0)].map(at), true)
     return [
-      `<path class="nb-dial" d="${faceRing(DIAL, DIAL_R, 64)}"/>`, line(faceRing(DIAL, DIAL_R, 64), 'mid'), line(faceRing(DIAL, DIAL_R - 1.7, 64), 'faint'),
-      line(marks[0].join(''), 'mid', 'nb-tick'), line(marks[1].join(''), 'lit', 'nb-tenth'), `<path class="nb-zero" d="${zero}"/>`, line(faceRing(DIAL, 2.2, 16), 'mid'),
+      `<path class="nb-well" d="${faceRing(DIAL, DIAL_R, 64)}"/>`, `<path class="nb-dial" d="${faceRing(FLOOR, FLOOR_R, 64)}"/>`, line(faceRing(FLOOR, FLOOR_R, 64), 'faint'), line(faceRing(DIAL, DIAL_R, 64), 'mid'),
+      `<path class="nb-track" stroke-width="${n(BAND * Math.hypot(...up))}" d="${faceRing(FLOOR, TRACK_R, 64)}"/>`,
+      line(marks[0].join(''), 'mid', 'nb-tick'), line(marks[1].join(''), 'lit', 'nb-tenth'), `<path class="nb-zero" d="${zero}"/>`, line(faceRing(FLOOR, 2.2, 16), 'mid'),
     ].join('')
   }
   // As a cabinet: the dial on its front, a crown on top, two sockets at its foot.
@@ -238,7 +245,11 @@ export function buildBench(spec: Spec): Bench {
     back.push(solid(slab(k.insetPlan(TIMER, -2), 0, 2, 4), { edge: 'lo' }))
     for (const y of [-29, -25]) back.push(solid(slab({ x: TIMER.x - 4.6, y: y - 1.9, w: 4.6, d: 3.8, r: .8 }, 0, 3.4, 2), { m: 'dark', edge: 'lo' }))
     back.push(solid(slab(TIMER, 2, TIMER_H - 2, 5, 1.2), { edge: 'mid', inner: line(k.sideSeam(TIMER, 6.5, P, 5), 'faint') }))
-    back.push(line([0, 1, 2, 3, 4].map(index => k.planOutline({ x: TIMER.x + 26 + index * 5, y: TIMER.y + 3.6, w: 2.4, d: TIMER.d - 7.2, r: 1.2 }, TIMER_H, P, 4)).join(''), 'lo'))
+    // Vents in its top: recessed slots, each with its far edge lit.
+    for (let index = 4; index >= 0; index--) {
+      const vent: Plan = { x: TIMER.x + 26 + index * 5, y: TIMER.y + 3.6, w: 2.4, d: TIMER.d - 7.2, r: 1.2 }
+      back.push(`<path class="nb-slot" d="${k.planOutline(vent, TIMER_H, P, 4)}"/>`, line(k.planOutline(vent, TIMER_H, P, 4), 'lo'), line(k.lineOnTop([vent.x + vent.w, vent.y + 1.2], [vent.x + vent.w, vent.y + vent.d - 1.2], TIMER_H, P), 'mid'))
+    }
     back.push(solid(tube(TIMER.x + 12, TIMER.y + TIMER.d / 2, 5.4, TIMER_H, 1.1), { edge: 'lo' }))
     back.push(face())
     back.push(dots([[3.2, 5], [TIMER.w - 3.2, 5], [3.2, TIMER_H - 3.6], [TIMER.w - 3.2, TIMER_H - 3.6]].map(([dx, z]) => at([TIMER.x + dx!, TIMER.y + TIMER.d, z!])), px(.55)))
@@ -269,7 +280,7 @@ export function buildBench(spec: Spec): Bench {
   for (let x = BED.x + 8; x < BED.x + BED.w - 4; x += fine ? 33 : 47.2) bolts.push(at([x, BED.y + BED.d - 1.25, RAIL_Z]))
   back.push(dots(bolts, px(.45), 'lo'))
   back.push(solid(slab(RAIL, RAIL_Z, RAIL_TOP - RAIL_Z, 3, .7), { m: 'steel', edge: 'hi' }))
-  const STOP: Plan = { x: SEC, y: TRACK - 7.5, w: 8.5, d: 15, r: 1.6 }
+  const STOP: Plan = { x: END, y: TRACK - 7.5, w: 8.5, d: 15, r: 1.6 }
   // The buffer's block stands clear of the gate's near post on the screen, however far round the camera is. A plain
   // drawing has no block: the rod runs on to the stop.
   const BLOCK: Plan = { x: Math.max(XR + 28, XB + 2.6 + (GATE_FRONT + 2.6 - TRACK + 7.75) * Math.abs(1 / Math.tan(turned)) + CLEAR / Math.sin(turned)), y: TRACK - 7.75, w: 10.5, d: 15.5, r: 1.6 }
@@ -282,7 +293,7 @@ export function buildBench(spec: Spec): Bench {
     back.push(`<path class="nb-lip" d="${plate}"/>`, line(plate, 'lo'), dots([at([hole.x - 1.7, TRACK, RAIL_TOP]), at([hole.x + hole.w + 1.7, TRACK, RAIL_TOP])], px(.42), 'lo'))
     back.push(`<path class="nb-slot" d="${k.planOutline(hole, RAIL_TOP, P, 4)}"/>`, line(k.lineOnTop([hole.x + .8, hole.y], [hole.x + hole.w - .8, hole.y], RAIL_TOP, P), 'hi'))
   }
-  back.push(line(k.joinPaths([TRACK - 4.2, TRACK + 4.2].map(y => k.lineOnTop([RAIL.x, y], [SEC, y], RAIL_TOP, P))), 'faint'), line(k.lineOnTop([RAIL.x, SCALE_Y], [RAIL.x + RAIL.w, SCALE_Y], RAIL_TOP, P), 'lo'))
+  back.push(line(k.joinPaths([TRACK - 4.2, TRACK + 4.2].map(y => k.lineOnTop([RAIL.x, y], [END, y], RAIL_TOP, P))), 'faint'), line(k.lineOnTop([RAIL.x, SCALE_Y], [RAIL.x + RAIL.w, SCALE_Y], RAIL_TOP, P), 'lo'))
   // The marks the letter never reaches are a tone down: the part of the second it didn't need.
   const marks: Record<'used' | 'spare', [string[], string[], string[]]> = { used: [[], [], []], spare: [[], [], []] }
   const every = fine ? 100 : 50
@@ -292,7 +303,7 @@ export function buildBench(spec: Spec): Bench {
   }
   back.push(line(marks.used[0].join(''), 'mid', 'nb-tick'), line(marks.used[1].join(''), 'hi', 'nb-tick'), line(marks.used[2].join(''), 'lit', 'nb-tick'))
   back.push(line(marks.spare[0].join(''), 'lo', 'nb-tick'), line(marks.spare[1].join(''), 'mid', 'nb-tick'), line(marks.spare[2].join(''), 'hi', 'nb-tick'))
-  back.push(solid(slab(STOP, RAIL_TOP, 9, 3, .6), { edge: 'mid' }), dots([at([SEC + 4.25, TRACK - 4.4, RAIL_TOP + 9]), at([SEC + 4.25, TRACK + 4.4, RAIL_TOP + 9])], px(.5)))
+  back.push(solid(slab(STOP, RAIL_TOP, 9, 3, .6), { edge: 'mid' }), dots([at([END + 4.25, TRACK - 4.4, RAIL_TOP + 9]), at([END + 4.25, TRACK + 4.4, RAIL_TOP + 9])], px(.5)))
 
   // The buffer's fixed half: a block clamped to the rail with a knob, and the rod its bumper slides on.
   if (fine) {
@@ -300,7 +311,7 @@ export function buildBench(spec: Spec): Bench {
     back.push(solid(slab(BLOCK, RAIL_TOP, 10, 3, .6), { edge: 'mid' }), knob(KNOB[0], KNOB[1], 3.5, RAIL_TOP + 10, 3.8, 22))
     back.push(line(k.lineOnTop([KNOB[0] - 2.4, KNOB[1]], [KNOB[0] + 2.4, KNOB[1]], RAIL_TOP + 13.8, P), 'hi'))
   }
-  back.push(solid(slab({ x: XR + 3.4, y: TRACK - 1.25, w: (fine ? BLOCK.x : SEC) - XR - 3.4, d: 2.5, r: 1.1 }, 12.3, 2.5, 3), { m: 'steel', edge: 'mid', crease: 'none' }))
+  back.push(solid(slab({ x: XR + 3.4, y: TRACK - 1.25, w: (fine ? BLOCK.x : END) - XR - 3.4, d: 2.5, r: 1.1 }, 12.3, 2.5, 3), { m: 'steel', edge: 'mid', crease: 'none' }))
 
   // ——— The moving pieces, each drawn where it stands at the start of a run. ———
   const buffer = pieceOf([
@@ -346,21 +357,22 @@ export function buildBench(spec: Spec): Bench {
     line(k.lineOnTop([0, SLED.y + SLED.d], [0, SLED.y + SLED.d + 4.6], RAIL_TOP + 1.1, P), 'lit', 'nb-index'),
   ].join(''))
 
-  // The starter's plunger, cocked: a rod out of the housing with a bumper on its end, and round the rod a coil spring,
-  // whose turns close up as it is wound and open as it is let go.
-  const HEAD_X = -SLED_L - HEAD, MOUTH = LAUNCHER.x + LAUNCHER.w
+  // The starter's plunger, cocked: a rod out of the housing with a bumper on its end, the spring's seat on the
+  // bumper's back, and round the rod the spring.
+  const HEAD_X = -SLED_L - HEAD, MOUTH = LAUNCHER.x + LAUNCHER.w, ROD_Z = 13.8, WIRE_R = 3.1
   const plunger = pieceOf([
     solid(slab({ x: HEAD_X, y: TRACK - 3.8, w: HEAD, d: 7.6, r: 1 }, 11.1, 5.4, 3), { m: 'dark', edge: 'mid' }),
     solid(slab({ x: LAUNCHER.x + DRAW + 1, y: TRACK - 1.4, w: HEAD_X - LAUNCHER.x - DRAW - 1, d: 2.8, r: 1.2 }, 12.4, 2.8, 3), { m: 'steel', edge: 'mid', crease: 'none' }),
+    line(k.sideRing([HEAD_X, TRACK, ROD_Z], WIRE_R + .5, 'x', P, 20), 'lo'),
   ].join(''))
-  // One turn of the spring: a loop of wire round the rod, leaning a little along it. Its near half is the half whose
-  // outward side faces the viewer.
-  const ROD_Z = 13.8, WIRE_R = 3.1, facing = Math.atan2(Math.sin(30 * Math.PI / 180), Math.sin(spec.azimuth * Math.PI / 180) * Math.cos(30 * Math.PI / 180))
-  const half = (x: number, from: number) => k.pathOf(Array.from({ length: 13 }, (_, step) => { const a = from + Math.PI * step / 12; return at([x + .8 * ((a - facing) / (Math.PI * 2)), TRACK + WIRE_R * Math.cos(a), ROD_Z + WIRE_R * Math.sin(a)]) }))
-  const coils = Array.from({ length: COILS }, (_, index) => {
-    const x = MOUTH + SPRING * (index + 1) / (COILS + 1)
-    return { back: pieceOf(line(half(x, facing + Math.PI / 2), 'mid', 'nb-wire')), front: pieceOf(line(half(x, facing - Math.PI / 2), 'hi', 'nb-wire')) }
-  })
+  // The spring is one helix of wire from the housing's mouth to the bumper, drawn at its cocked length; the page
+  // squeezes and stretches it along the rail about the mouth (see stylesOf), so its turns bunch up when it is wound.
+  // The half of each turn whose outward side faces the viewer passes in front of the rod, the other half behind it.
+  const TURNS = 9, facing = Math.atan2(Math.sin(k.ELEVATION * Math.PI / 180), Math.sin(turned) * Math.cos(k.ELEVATION * Math.PI / 180))
+  const wire = (from: number, to: number) => k.pathOf(Array.from({ length: 9 }, (_, step) => { const turn = from + (to - from) * step / 8, a = facing + turn * Math.PI * 2; return at([MOUTH + SPRING * turn / TURNS, TRACK + WIRE_R * Math.cos(a), ROD_Z + WIRE_R * Math.sin(a)]) }))
+  const near: string[] = [wire(0, .25)], far: string[] = []
+  for (let turn = 0; turn < TURNS; turn++) { far.push(wire(turn + .25, turn + .75)); near.push(wire(turn + .75, Math.min(turn + 1.25, TURNS))) }
+  const spring = { back: pieceOf(line(far.join(''), 'mid', 'nb-wire')), front: pieceOf(line(near.join(''), 'hi', 'nb-wire')), pivot: at([MOUTH, TRACK, ROD_Z]), length: SPRING }
 
   // ——— Front layer: everything the sled passes behind. ———
   const front: string[] = []
@@ -375,6 +387,7 @@ export function buildBench(spec: Spec): Bench {
     pivot: at([LC[0], LC[1], KEY_Z]),
   }
   front.push(dots([[3, 3], [LAUNCHER.w - 3, 3], [3, LAUNCHER.d - 3], [LAUNCHER.w - 3, LAUNCHER.d - 3]].map(([dx, dy]) => at([LAUNCHER.x + dx!, LAUNCHER.y + dy!, 25])), px(.5)))
+  if (!fine) front.push(label(REQUEST, NAMES[0], '', ON_STARTER))
 
   const LENS_Z = GATE_H + BEAM_H + 1
   const lens = (x: number, lit: boolean) => solid(tube(x, LAMP_Y, 3, LENS_Z, 3.4, 24), { m: lit ? 'lamp' : 'dark', edge: lit ? 'lit' : 'mid', crease: lit ? 'none' : 'faint' }) + (lit ? '' : line(k.ring(x, LAMP_Y, 1.7, LENS_Z + 3.4, P, 16), 'lo'))
@@ -404,19 +417,19 @@ export function buildBench(spec: Spec): Bench {
   // What changes when a gate fires: its lamp, then its name on the base. The request's name lights the same way as
   // the letter is thrown.
   const lamp = (x: number) => pieceOf(lens(x, true))
-  const saying = (text: string, where: Stretch, also = '') => pieceOf(label(text, where, `nb-label--lit${also && ` ${also}`}`), labelBox(where))
-  const said: [Piece, Piece, Piece] = [saying(REQUEST, NAMES[0], 'nb-code'), saying('ACCEPTED', NAMES[1]), saying('DELIVERED', NAMES[2])]
+  const saying = (text: string, stretch: Stretch, also = '', where = ON_BASE) => pieceOf(label(text, stretch, `nb-label--lit${also && ` ${also}`}`, where), labelBox(stretch, where))
+  const said: [Piece, Piece, Piece] = [saying(REQUEST, NAMES[0], CODE, POSTED_AT), saying('ACCEPTED', NAMES[1]), saying('DELIVERED', NAMES[2])]
 
   // The stopwatch's hand (pointing up, with a counterweight) and its crown (out).
   const needle = {
-    ...pieceOf(line(seg(onFace(DIAL, -6.4, 0), onFace(DIAL, -2.4, 0)), 'lit', 'nb-weight') + line(seg(onFace(DIAL, -2.4, 0), onFace(DIAL, DIAL_R - 4.2, 0)), 'lit', 'nb-hand') + dots([at(DIAL)], px(2.1), 'lit'), [.25, .5, .75].map(turn => at(onFace(DIAL, DIAL_R, turn))), 4),
-    pivot: at(DIAL),
+    ...pieceOf(line(seg(onFace(FLOOR, -6.4, 0), onFace(FLOOR, -2.4, 0)), 'lit', 'nb-weight') + line(seg(onFace(FLOOR, -2.4, 0), onFace(FLOOR, FLOOR_R - 3.6, 0)), 'lit', 'nb-hand') + dots([at(FLOOR)], px(2.1), 'lit'), [.25, .5, .75].map(turn => at(onFace(FLOOR, FLOOR_R, turn))), 4),
+    pivot: at(FLOOR),
   }
-  // The trace the hand leaves: a band round the dial's rim, drawn out behind the hand from twelve as it goes (six
-  // tenths of the way round when it stops; the rest of the lap as it flies home). It is one stroke, so `swept` gives
-  // the share of its length behind the hand at each step of a turn.
-  const STEPS = 64, BAND = 1.75
-  const trace = Array.from({ length: STEPS + 1 }, (_, step) => at(onFace(DIAL, DIAL_R - .5 - BAND / 2, step / STEPS)))
+  // The trace the hand leaves: it fills the rim's track behind the hand from twelve as it goes (six tenths of the way
+  // round when it stops). It is one stroke, so `swept` gives the share of its length behind the hand at each step of
+  // a turn.
+  const STEPS = 64
+  const trace = Array.from({ length: STEPS + 1 }, (_, step) => at(onFace(FLOOR, TRACK_R, step / STEPS)))
   const lengths = trace.map((point, index) => index ? Math.hypot(point[0] - trace[index - 1]![0], point[1] - trace[index - 1]![1]) : 0)
   let drawn = 0
   const swept = lengths.map(length => (drawn += length)).map(length => length / drawn)
@@ -428,7 +441,7 @@ export function buildBench(spec: Spec): Bench {
 
   return {
     spec, width, height, along, across, up, window, whole, accepted: XA, delivered: XB, rest: XR,
-    back: back.join(''), front: front.join(''), buffer, sled, letter, grip, slot, plunger, coils, needle, crown, key,
+    back: back.join(''), front: front.join(''), buffer, sled, letter, grip, slot, plunger, spring, needle, crown, key,
     lampA: lamp(XA), lampB: lamp(XB), said, arc, swept,
     post: at([XB - 2.6, GATE_FRONT - 2.6, 0])[0] / width,
   }
@@ -438,21 +451,23 @@ export function buildBench(spec: Spec): Bench {
 // caught and rests; then the stopwatch is reset, the letter is posted into the rail and the empty sled is drawn back
 // for the next one. A delivered letter is never sent back. Every moving part reads its place from poseAt(). ———
 
-/** A loop, when in it the letter crosses the zero mark (where the stopwatch starts), and when the reset begins. */
-export const LOOP_MS = 7000, LAUNCH_MS = 760, RESET_MS = 5300
-const RETURN_FROM = RESET_MS + 560, RETURN_MS = 820, CLICK_MS = 180
+/** A loop, when in it the letter crosses the zero mark (where the stopwatch starts), and when the reset begins: the
+    letter rests delivered for most of it, and reset, reload and wind-up are one run of moves at its end. */
+export const LOOP_MS = 10000, LAUNCH_MS = 760, RESET_MS = LOOP_MS - 1240
 // Before a throw the key is wound a quarter turn while the sled is drawn back DRAW units against the spring, and held.
 const WIND_MS = 420, HOLD_MS = 80
 // How long after a gate's lamp its name lights.
 const SAY_MS = 40
-// The reset, in ms after the crown is pressed: the trace goes out, then the hand flies the short way home; the names
-// and lamps go out one by one (last lit, first out); and the letter is posted down through the jaws into the rail.
-const CLEAR_MS = 110, FLY_MS = 90, OUT_MS = [340, 290, 240, 190, 140], POST_FROM = 240, POST_MS = 300
-// The next letter comes up through the jaws once the sled is home, and is up as the loop turns over.
+// The reset, in ms after the crown is pressed. The trace goes out and the hand flies the short way home; the names and
+// lamps go out 30 ms apart (last lit, first out); meanwhile the letter is posted down through the jaws into the rail;
+// the moment it has gone the sled is drawn back, at a steady pace after a soft start, and stops against the plunger.
+const CLEAR_MS = 110, FLY_MS = 60, OUT_MS = [200, 170, 140, 110, 80], POST_FROM = 80, POST_MS = 280
+const RETURN_FROM = RESET_MS + POST_FROM + POST_MS, RETURN_MS = 680, CLICK_MS = 180, SOFT = .3
+// The next letter comes up through the jaws as the sled gets home, and is up as the loop turns over.
 const RISE_MS = 260, RISE_FROM = LOOP_MS - RISE_MS
-/** Where in the loop a page starts, and how long it holds there while it arrives: the empty sled is home, and the
-    next letter comes up once the bench is all there. */
-export const ENTER_MS = RISE_FROM, ENTER_HOLD_MS = 560
+/** Where in the loop a page starts, and how long it holds there while it arrives: the empty sled is all but home, and
+    the next letter comes up once the bench is all there. */
+export const ENTER_MS = RISE_FROM, ENTER_HOLD_MS = 640
 
 export interface Pose {
   /** The sled's leading edge along the rail, in world units from the zero mark. */
@@ -519,7 +534,8 @@ export function poseAt(time: number, bench: Pick<Bench, 'spec' | 'rest'>): Pose 
   } else {
     const home = t - RETURN_FROM - RETURN_MS
     // Drawn back, pushing the plunger in over the last of the way; then the catch clicks.
-    nose = home < 0 ? rest * (1 - smoother(clamp((t - RETURN_FROM) / RETURN_MS))) : -.9 * Math.sin(Math.PI * clamp(home / CLICK_MS)) * (1 - clamp(home / CLICK_MS))
+    const u = clamp((t - RETURN_FROM) / RETURN_MS), gone = u < SOFT ? u * u / (SOFT * (2 - SOFT)) : (2 * u - SOFT) / (2 - SOFT)
+    nose = home < 0 ? rest * (1 - gone) : -.9 * Math.sin(Math.PI * clamp(home / CLICK_MS)) * (1 - clamp(home / CLICK_MS))
     plunger = Math.min(STROKE, nose)
   }
   // The letter stands in the jaws from the moment it is up until it is posted. In between it is down in the rail,
@@ -548,7 +564,7 @@ export function poseAt(time: number, bench: Pick<Bench, 'spec' | 'rest'>): Pose 
 /** The loop time a still page shows: delivered, settled. */
 export const STILL_MS = LAUNCH_MS + DELIVERED_MS + 1600
 
-export type Part = 'sled' | 'lift' | 'letter' | 'plunger' | `coil${number}` | 'buffer' | 'needle' | 'crown' | 'key' | 'lampA' | 'lampB' | 'said0' | 'said1' | 'said2' | 'arc' | 'trace'
+export type Part = 'sled' | 'lift' | 'letter' | 'plunger' | 'spring' | 'buffer' | 'needle' | 'crown' | 'key' | 'lampA' | 'lampB' | 'said0' | 'said1' | 'said2' | 'arc' | 'trace'
 export interface Style { transform?: string; opacity?: number; strokeDashoffset?: number }
 
 // A pose as styles. Whole pieces slide in fractions of the drawing (their holders are its size); the letter and the
@@ -564,6 +580,11 @@ export function stylesOf(pose: Pose, bench: Bench): Record<Part, Style> {
     return (degrees: number) => `${plane} rotate(${f(-degrees)}deg) ${flat}`
   }
   const upright = turnIn(along, up), level = turnIn(along, across)
+  // A stretch along the rail that leaves the vertical alone: what the spring does about its fixed end.
+  const stretch = (by: number) => {
+    const det = along[0] * up[1] - up[0] * along[1]
+    return `matrix(${f((by * along[0] * up[1] - up[0] * along[1]) / det)}, ${f((by - 1) * along[1] * up[1] / det)}, ${f((1 - by) * along[0] * up[0] / det)}, ${f((along[0] * up[1] - by * along[1] * up[0]) / det)}, 0, 0)`
+  }
   // How much of the trace is drawn: the share of the rim's length it reaches round to.
   const share = clamp(pose.trace) * (bench.swept.length - 1), step = Math.min(bench.swept.length - 2, Math.floor(share))
   const behind = bench.swept[step]! + (bench.swept[step + 1]! - bench.swept[step]!) * (share - step)
@@ -572,6 +593,7 @@ export function stylesOf(pose: Pose, bench: Bench): Record<Part, Style> {
     lift: { transform: slide(0, pose.lift) },
     letter: { transform: upright(pose.lean) },
     plunger: { transform: slide(pose.plunger) },
+    spring: { transform: stretch((bench.spring.length + pose.plunger) / bench.spring.length) },
     buffer: { transform: slide(pose.buffer) },
     needle: { transform: upright(pose.turn * 360) },
     crown: { transform: slide(0, -3 * pose.crown) },
@@ -584,8 +606,6 @@ export function stylesOf(pose: Pose, bench: Bench): Record<Part, Style> {
     arc: { opacity: Math.round(pose.traced * 100) / 100 },
     trace: { strokeDashoffset: Math.round((1 - behind) * 1e4) / 1e4 },
   }
-  // Each turn of the spring goes its share of the plunger's way.
-  for (let index = 0; index < COILS; index++) styles[`coil${index}`] = { transform: slide(pose.plunger * (index + 1) / (COILS + 1)) }
   return styles
 }
 

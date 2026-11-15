@@ -6,7 +6,7 @@ import { SignInConsent } from '../../components/LegalLinks'
 import { BaneWordmark } from '../../components/BaneLogo'
 import { AnomalyLogo } from '../../components/AnomalyLogo'
 import { reducedMotion, type HomeProps } from '.'
-import { DELIVERED_MS, ENTER_HOLD_MS, ENTER_MS, LAUNCH_MS, LOOP_MS, PHONE, RESET_MS, STILL_MS, TABLET, WIDE, buildBench, poseAt, stylesOf, tracksOf, type Bench, type Part, type Piece } from './nmb-bench'
+import { DELIVERED_MS, ENTER_HOLD_MS, ENTER_MS, LAUNCH_MS, LOOP_MS, PHONE, PHONE_LOW, RESET_MS, STILL_MS, TABLET, WIDE, buildBench, poseAt, stylesOf, tracksOf, type Bench, type Part, type Piece } from './nmb-bench'
 import './variant-nmb.css'
 import { productName, sdkPackage } from '../../../../api/src/brand'
 
@@ -16,14 +16,15 @@ import { productName, sdkPackage } from '../../../../api/src/brand'
 // The bench itself, its model and its motion are in nmb-bench.ts; this file lays the page out around it.
 
 // Which drawing of the bench a screen gets: across the page on a wide one, under the headline on a tall one, and on a
-// phone a shorter, plainer cut of that with its clock over the finish.
-const TALL_SCREEN = '(max-width: 960px), (max-aspect-ratio: 11/10)', SMALL_SCREEN = '(max-width: 600px)'
+// phone a shorter, plainer cut of that with its clock over the finish, climbing the screen where the screen is tall
+// enough for it (LONG_SCREEN, which the page's styles use too) and lying lower, whole, where it isn't.
+const TALL_SCREEN = '(max-width: 960px), (max-aspect-ratio: 11/10)', SMALL_SCREEN = '(max-width: 600px)', LONG_SCREEN = '(max-aspect-ratio: 390/838)'
 const watchScreen = (changed: () => void) => {
-  const queries = [TALL_SCREEN, SMALL_SCREEN].map(query => matchMedia(query))
+  const queries = [TALL_SCREEN, SMALL_SCREEN, LONG_SCREEN].map(query => matchMedia(query))
   for (const query of queries) query.addEventListener('change', changed)
   return () => { for (const query of queries) query.removeEventListener('change', changed) }
 }
-const readScreen = () => !matchMedia(TALL_SCREEN).matches ? WIDE : matchMedia(SMALL_SCREEN).matches ? PHONE : TABLET
+const readScreen = () => !matchMedia(TALL_SCREEN).matches ? WIDE : !matchMedia(SMALL_SCREEN).matches ? TABLET : matchMedia(LONG_SCREEN).matches ? PHONE : PHONE_LOW
 
 const REQUEST = 'POST /v1/emails/send'
 const LABEL = `A timing bench. A letter stands in a sled on a rail one second long. A sprung starter marked “${REQUEST}” throws it down the rail: it passes a gate marked “accepted” a tenth of the way along and is caught at a gate marked “delivered”, six tenths of the way along, where a stopwatch that turns once a second stops.`
@@ -48,9 +49,9 @@ const BenchView = memo(function BenchView({ bench, at }: { bench: Bench; at: num
     <div className="nb-hold" data-part="sled" style={{ ...styles.sled, clipPath: `polygon(${bench.slot.map(([x, y]) => `${pct(x)} ${pct(y)}`).join(', ')})` }}>{hold('lift', piece(bench.letter, 'letter', bench.letter.pivot))}</div>
     {hold('sled', piece(bench.grip))}
     {/* The spring: the far half of each turn, the rod they are wound on, then the near halves. */}
-    {bench.coils.map((coil, index) => <div key={index} className="nb-hold" data-part={`coil${index}`} style={styles[`coil${index}`]}>{piece(coil.back)}</div>).reverse()}
+    {piece(bench.spring.back, 'spring', bench.spring.pivot)}
     {hold('plunger', piece(bench.plunger))}
-    {bench.coils.map((coil, index) => <div key={index} className="nb-hold" data-part={`coil${index}`} style={styles[`coil${index}`]}>{piece(coil.front)}</div>).reverse()}
+    {piece(bench.spring.front, 'spring', bench.spring.pivot)}
     {sheet(bench.front)}
     {/* On the stopwatch's face (which nothing passes in front of): the trace, the hand, and the crown above. */}
     {piece(bench.arc, 'arc')}
@@ -136,9 +137,10 @@ export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
     <main className="nmb-main" style={drawn}>
       {notice && <div className="nmb-notice">{notice}</div>}
       <h1 className="nmb-title"><span className="nmb-enter" data-beat="0">Email, delivered</span> <span className="nmb-enter" data-beat="1">in under a second.</span></h1>
+      <p className="nmb-sub nmb-enter" data-beat="2"><span>Send and receive by API.</span> <span>Accepted in <b>~100&nbsp;ms</b>.</span></p>
       <div className="nmb-pitch">
-        <p className="nmb-sub nmb-enter" data-beat="3"><span>Send and receive by API.</span> <span>Accepted in <b>~100&nbsp;ms</b>.</span> <span><b>$0.20</b> per 1,000 emails, sent or received.</span></p>
-        <div className="nmb-act nmb-enter" data-beat="4">
+        <p className="nmb-price nmb-enter" data-beat="4"><b>$0.20</b> per 1,000 emails, sent or received.</p>
+        <div className="nmb-act nmb-enter" data-beat="5">
           <button type="button" className="nmb-cta" disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
             Sign in
             <span className="nmb-cta-mark" aria-hidden="true">{busy ? <LoaderCircle className="ui-spinner" size={16} /> : <ArrowRight size={16} />}</span>
@@ -147,7 +149,7 @@ export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
         </div>
       </div>
       <div className="nmb-figure">
-        <div className="nmb-stage nmb-enter" data-beat="2"><BenchView bench={bench} at={reduced ? STILL_MS : ENTER_MS} /></div>
+        <div className="nmb-stage nmb-enter" data-beat="3"><BenchView bench={bench} at={reduced ? STILL_MS : ENTER_MS} /></div>
       </div>
     </main>
 
