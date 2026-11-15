@@ -21,7 +21,7 @@ export const ACCEPTED_MS = 99, DELIVERED_MS = 602
 export interface Spec { name: 'wide' | 'tall'; second: number; azimuth: number; width: number; pad: number; fine: boolean; mast?: boolean; runout?: number }
 export const WIDE: Spec = { name: 'wide', second: 330, azimuth: 112, width: 1280, pad: 8, fine: true }
 /** A phone: a shorter second in a plainer cut, seen further from the end so the bench climbs the screen, with the clock over the finish so the whole story fits the width; the rest of the rail runs off the screen. */
-export const PHONE: Spec = { name: 'tall', second: 170, azimuth: 130, width: 346, pad: 6, fine: false, mast: true, runout: 46 }
+export const PHONE: Spec = { name: 'tall', second: 170, azimuth: 127, width: 346, pad: 6, fine: false, mast: true, runout: 46 }
 /** A phone whose screen is too squat for that: the same cut from the desktop's side, all of it on the screen. */
 export const PHONE_LOW: Spec = { ...PHONE, azimuth: 112, runout: 0 }
 /** A tall screen wide enough for the bench's fine detail: a tablet held upright. */
@@ -124,7 +124,7 @@ export function buildBench(spec: Spec): Bench {
   // With the clock on a mast nothing stands behind the rail, so the base is narrower.
   const mast = !!spec.mast
   const RUNOUT = spec.runout ?? 0, END = SEC + RUNOUT
-  const BASE: Plan = mast ? { x: LAUNCHER.x - 15, y: -27, w: END - LAUNCHER.x + 15 + 34, d: 68, r: 5 } : { x: LAUNCHER.x - 15, y: -40, w: END - LAUNCHER.x + 15 + 28, d: 81, r: 5 }
+  const BASE: Plan = mast ? { x: LAUNCHER.x - 15, y: -27, w: END - LAUNCHER.x + 15 + 34, d: 62, r: 5 } : { x: LAUNCHER.x - 15, y: -40, w: END - LAUNCHER.x + 15 + 28, d: 81, r: 5 }
   const BASE_H = 15, FOOT_H = 5, FRONT = BASE.y + BASE.d
   // The rail is a wide ground beam on a bed: the sled runs along its back two thirds (centred on TRACK) and the scale
   // is cut into the front third.
@@ -133,8 +133,9 @@ export function buildBench(spec: Spec): Bench {
   const RAIL: Plan = { x: RAIL_X, y: -9, w: END - RAIL_X + 9, d: 24, r: 1 }
   const RAIL_Z = 3.5, RAIL_TOP = 11, SCALE_Y = 7.6, RAIL_FRONT = RAIL.y + RAIL.d
   // The gates' near posts stand well forward of the rail and their beams well above the letter, so a letter at rest
-  // in the second gate has clear air round it; each lamp is over its near post.
-  const GATE_H = 63, BEAM_H = 5.5, GATE_BACK = -14.5, GATE_FRONT = 34, LAMP_Y = GATE_FRONT, RAY_Z = 34
+  // in the second gate has clear air round it; each lamp is over its near post. Seen from further round (a phone's
+  // bench) the posts would close on the letter, so there they stand nearer the rail.
+  const GATE_H = 63, BEAM_H = 5.5, GATE_BACK = -14.5, GATE_FRONT = mast ? 27 : 34, LAMP_Y = GATE_FRONT, RAY_Z = 34
   // Seen more from the end, the stopwatch stands further along: just far enough that the second gate's near post and
   // the lamp on it clear the cabinet's end by CLEAR units on the screen.
   const TIMER_Y = -36.5, CLEAR = 3, turned = spec.azimuth * Math.PI / 180
@@ -242,10 +243,9 @@ export function buildBench(spec: Spec): Bench {
       line(marks[0].join(''), 'mid', 'nb-tick'), line(marks[1].join(''), 'lit', 'nb-tenth'), `<path class="nb-zero" d="${zero}"/>`, line(faceRing(FLOOR, 2.2, 16), 'mid'),
     ].join('')
   }
-  // As a cabinet: the dial on its front, a crown on top, two sockets at its foot.
+  // As a cabinet: the dial on its front, a crown on top.
   if (!mast) {
     back.push(solid(slab(k.insetPlan(TIMER, -2), 0, 2, 4), { edge: 'lo' }))
-    for (const y of [-29, -25]) back.push(solid(slab({ x: TIMER.x - 4.6, y: y - 1.9, w: 4.6, d: 3.8, r: .8 }, 0, 3.4, 2), { m: 'dark', edge: 'lo' }))
     back.push(solid(slab(TIMER, 2, TIMER_H - 2, 5, 1.2), { edge: 'mid', inner: line(k.sideSeam(TIMER, 6.5, P, 5), 'faint') }))
     // Vents in its top: recessed slots, each with its far edge lit.
     for (let index = 4; index >= 0; index--) {
@@ -458,7 +458,7 @@ export function buildBench(spec: Spec): Bench {
 
 /** A loop, when in it the letter crosses the zero mark (where the stopwatch starts), and when the reset begins: the
     letter rests delivered for most of it, and reset, reload and wind-up are one run of moves at its end. */
-export const LOOP_MS = 8000, LAUNCH_MS = 560, RESET_MS = LOOP_MS - 1240
+export const LOOP_MS = 8000, LAUNCH_MS = 560, RESET_MS = LOOP_MS - 1300
 // Before a throw the key is wound a quarter turn while the sled is drawn back DRAW units against the spring.
 const WIND_MS = 350, HOLD_MS = 0
 // How long after a gate's lamp its name lights.
@@ -468,10 +468,11 @@ const SAY_MS = 40
 // the moment it has gone the sled is drawn back, at a steady pace after a soft start, and stops against the plunger.
 const CLEAR_MS = 110, FLY_MS = 60, OUT_MS = [320, 260, 200, 140, 80], POST_FROM = 80, POST_MS = 280
 const RETURN_FROM = RESET_MS + POST_FROM + POST_MS, RETURN_MS = 680, CLICK_MS = 180, SOFT = .3
-// The next letter comes up through the jaws as the sled gets home, and is up as the loop turns over.
+// The next letter comes up through the jaws the moment the sled is home (RETURN_FROM + RETURN_MS is RISE_FROM), and is
+// up as the loop turns over.
 const RISE_MS = 260, RISE_FROM = LOOP_MS - RISE_MS
-/** Where in the loop a page starts, and how long it holds there while it arrives: the empty sled is all but home, and
-    the next letter comes up once the bench is all there. */
+/** Where in the loop a page starts, and how long it holds there while it arrives: the empty sled is home against the
+    cocked spring, and the next letter comes up once the bench is all there. */
 export const ENTER_MS = RISE_FROM, ENTER_HOLD_MS = 540
 
 export interface Pose {

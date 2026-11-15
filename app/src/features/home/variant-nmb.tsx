@@ -41,6 +41,8 @@ const BenchView = memo(function BenchView({ bench, at }: { bench: Bench; at: num
     style={{ left: pct(box[0] / width), top: pct(box[1] / height), width: pct(box[2] / width), height: pct(box[3] / height), transformOrigin: pivot && `${pct((pivot[0] - box[0]) / box[2])} ${pct((pivot[1] - box[1]) / box[3])}`, ...(part && styles[part]) }}
     dangerouslySetInnerHTML={{ __html: markup }} />
   const hold = (part: Part, children: ReactNode) => <div className="nb-hold" data-part={part} style={styles[part]}>{children}</div>
+  // The trace's stroke is inside its piece's markup: how much of it is drawn at this moment goes in with it.
+  const trace = { ...bench.arc, markup: bench.arc.markup.replace('data-part="trace"', `data-part="trace" style="stroke-dashoffset: ${styles.trace.strokeDashoffset}"`) }
   return <div className="nmb-bench" role="img" aria-label={LABEL} style={{ aspectRatio: `${width} / ${height}` }}>
     {sheet(bench.back)}
     {hold('buffer', piece(bench.buffer))}
@@ -54,7 +56,7 @@ const BenchView = memo(function BenchView({ bench, at }: { bench: Bench; at: num
     {piece(bench.spring.front, 'spring', bench.spring.pivot)}
     {sheet(bench.front)}
     {/* On the stopwatch's face (which nothing passes in front of): the trace, the hand, and the crown above. */}
-    {piece(bench.arc, 'arc')}
+    {piece(trace, 'arc')}
     {piece(bench.needle, 'needle', bench.needle.pivot)}
     {hold('crown', piece(bench.crown))}
     {piece(bench.key, 'key', bench.key.pivot)}
@@ -65,11 +67,11 @@ const BenchView = memo(function BenchView({ bench, at }: { bench: Bench; at: num
 })
 
 // The page arrives in order: the headline's lines, its two lines of copy with the bench, then the pitch, each rising
-// into place a beat after the one before. Type fades up as it rises; Sign in is solid from its second frame, because
-// a button at half strength reads as one that is switched off; the bench takes its own time to appear (it is all
+// into place a beat after the one before. Type fades up as it rises; Sign in is cut in, solid from its first frame,
+// because a button at half strength reads as one that is switched off; the bench takes its own time to appear (it is all
 // there before ENTER_HOLD_MS is up), and nothing on it moves until it has.
 const ARRIVE: Keyframe[] = [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'translateY(0)' }]
-const ARRIVE_SOLID: Keyframe[] = [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, offset: .12 }, { opacity: 1, transform: 'translateY(0)' }]
+const ARRIVE_SOLID: Keyframe[] = [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, offset: .001 }, { opacity: 1, transform: 'translateY(0)' }]
 const RISE: Keyframe[] = [{ transform: 'translateY(14px)' }, { transform: 'translateY(0)' }], APPEAR: Keyframe[] = [{ opacity: 0 }, { opacity: 1 }]
 const ARRIVE_MS = 820, APPEAR_MS = 380, BEAT_MS = 75, EASE = 'cubic-bezier(.16, 1, .3, 1)'
 
@@ -126,7 +128,7 @@ export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
   // What the layout needs from the drawing: its proportions, the part of it that spans the page, and where the gate
   // the pitch hangs from stands.
   const drawn = { '--nb-aspect': bench.width / bench.height, '--nb-from': bench.window[0], '--nb-to': bench.window[1], '--nb-end': bench.whole[1], '--nb-post': bench.post, '--nb-drop': bench.drop } as CSSProperties
-  return <div ref={page} className={`nmb-page nmb-page--${spec.name}${spec.fine ? '' : ' nmb-page--small'}`} data-motion={reduced ? undefined : ''}>
+  return <div ref={page} className={`nmb-page nmb-page--${spec.name}${spec.fine ? '' : ' nmb-page--small'}${notice ? ' nmb-page--noticed' : ''}`} data-motion={reduced ? undefined : ''}>
     <header className="nmb-header">
       <a className="wordmark" href="/" aria-label={`${productName.toLowerCase()} home`}><BaneWordmark /></a>
       <nav className="nmb-nav" aria-label="Site">
@@ -135,7 +137,7 @@ export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
       </nav>
     </header>
 
-    <main className="nmb-main" style={drawn}>
+    <main className={`nmb-main${notice ? ' nmb-main--noticed' : ''}`} style={drawn}>
       {notice && <div className="nmb-notice">{notice}</div>}
       <h1 className="nmb-title"><span className="nmb-enter" data-beat="0">Email, delivered</span> <span className="nmb-enter" data-beat="1">in under a second.</span></h1>
       <p className="nmb-sub nmb-enter" data-beat="2"><span>Send and receive by API.</span> <span>Accepted in <b>~100&nbsp;ms</b>.</span></p>
