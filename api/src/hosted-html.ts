@@ -11,17 +11,18 @@
  * (FontSources). Everything else is removed: an element outside the list gives its place to its content, except the
  * ones a client draws its own text or controls for (form controls, scripts, frames, plugins, SVG, MathML, templates,
  * noscript, details, marquee, ruby, media) and the title, which go with their content; every comment (Outlook's
- * conditional ones included, so every client shows one copy); `dir`; and what the copy's CSS hides, with its text
- * (conceal). What the screen reads of this tree is the text its body shows, in document order, with each image's alt
- * text in its place (src/screen.ts).
+ * conditional ones included, so every client shows one copy); `dir`; `hidden`; CSS that hides, shows or reorders
+ * content, wherever it is, so the copy shows every version of the message at once (`showsAll`: dark-mode and mobile
+ * toggles, a preheader); and what its CSS still hides, with its text (conceal). What the screen reads of this tree is
+ * the text its body shows, in document order, with each image's alt text in its place (src/screen.ts).
  *
  * Refused (the sender must fix it), because what it leads to depends on where the message is opened: <base>, and any
  * link or image address that is not absolute http(s), mailto, tel, cid: or a #fragment.
  */
 import { defaultTreeAdapter, html as spec, serializeOuter, type DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
-import { hostedDeclarations, hostedSheet, shownDeclarations, type FontPolicy } from './hosted-css.js';
-import { concealed, screenedText } from './screened-html.js';
+import { cssRules, hostedDeclarations, hostedSheet, type FontPolicy } from './hosted-css.js';
+import { concealed, documentSelectors, screenedText } from './screened-html.js';
 
 type Node = DefaultTreeAdapterMap['childNode'];
 type Parent = DefaultTreeAdapterMap['parentNode'];
@@ -135,17 +136,22 @@ export type HostedHtml = {
   fonts: string[];
   /** How the copy's elements lay out where its CSS says (src/screened-html.ts concealed), for reading text in order. */
   layout: Map<Element, 'inline' | 'block'>;
-  /** The ways clients may show the copy, by the blocks each hides (src/screened-html.ts concealed), the one hiding the
-   *  fewest first; one, hiding nothing, when nothing is toggled. */
-  variants: Set<Element>[];
-  /** The preheader: hidden, shown by inboxes beside the subject, and read apart from the body. */
-  preheader?: Element;
-  /** Whether content more conditions toggle than are read in every combination was shown everywhere instead. */
-  togglesShown: boolean;
+  /** Whether CSS that hides or shows content, or changes layout by screen, colour scheme or mail client, was removed:
+   *  the copy shows every version of the message at once. */
+  showsAll: boolean;
 };
-type Sink = { destinations: Set<string>; unsupported: string[]; removed: string[]; changes: number; tags: Set<string>; fonts: string[]; policy: FontPolicy; css: Map<string, ReturnType<typeof hostedDeclarations>>; sheets: Element[]; conservative: boolean; togglesShown: boolean };
+type Sink = { destinations: Set<string>; unsupported: string[]; removed: string[]; changes: number; tags: Set<string>; fonts: string[]; policy: FontPolicy; css: Map<string, ReturnType<typeof hostedDeclarations>>; sheets: Element[]; showsAll: boolean };
 // Mail repeats the same inline styles on every row and cell: each distinct one is read once per pass.
-const declarations = (sink: Sink, value: string) => { let read = sink.css.get(value); if (!read) { read = hostedDeclarations(value, resource); sink.css.set(value, read); } return read; };
+const declarations = (sink: Sink, value: string, blank: boolean) => {
+  const key = `${blank}\0${value}`;
+  let read = sink.css.get(key); if (!read) { read = hostedDeclarations(value, resource, blank); sink.css.set(key, read); }
+  return read;
+};
+// Text a client draws something of: anything but white space and characters drawn as nothing.
+const VISIBLE_TEXT = /[^\s\p{Cf}\p{Default_Ignorable_Code_Point}]/u;
+/** Whether an element holds no text a client draws and no image, so nothing its style may hide. */
+const blank = (element: Element): boolean => element.tagName !== 'img' && element.childNodes.every(child => child.nodeName === '#text' ? !VISIBLE_TEXT.test((child as DefaultTreeAdapterMap['textNode']).value)
+  : !('tagName' in child) || blank(child));
 const note = (list: string[], what: string) => { if (!list.includes(what) && list.length < 20) list.push(what); };
 
 /** One pass: parse, sanitize, serialize. */
@@ -169,7 +175,6 @@ function sanitize(parent: Parent, sink: Sink, placeholders: boolean) {
     // A document's title isn't shown in the message, wherever a client shows it: removed, and only named in a body.
     if (tag === 'title' && (parent as Element).tagName === 'head') { remove(node); continue; }
     if (element.namespaceURI !== HTML || REMOVED_WITH_CONTENT.has(tag)) { remove(node, `${known(tag)} elements, with their content`); continue; }
-    if (element.attrs.some(a => a.name === 'hidden')) { remove(node, 'hidden elements, with their content'); continue; }
     if (tag === 'base') { note(sink.unsupported, '<base>'); remove(node); continue; }
     if (tag === 'meta' && !meta(element)) { remove(node, 'meta elements other than charset or viewport'); continue; }
     if (!ELEMENTS.has(tag)) {
@@ -190,75 +195,60 @@ function sanitize(parent: Parent, sink: Sink, placeholders: boolean) {
   }
 }
 /**
- * The copy's sheets through the CSS allow-list (src/hosted-css.ts). What a sheet hides stays hidden only when it toggles
- * whole blocks for a screen width or colour scheme (src/screened-html.ts concealed), which is read from the sheets with
- * everything hidden that they hide: a first reading keeps every hiding declaration, the second keeps the toggles.
+ * The copy's sheets through the CSS allow-list (src/hosted-css.ts), which keeps nothing that hides or shows content and
+ * nothing a screen width, colour scheme or mail client changes but sizes, spacing, type and colour. Which rules apply by
+ * a mail client's own markup, and which the screen's style reader applies, is read from the document.
  */
 function styles(root: Document, sink: Sink) {
   const html = root.childNodes.find((node): node is Element => 'tagName' in node && node.tagName === 'html');
+  if (!html || !sink.sheets.length) return;
   const text = (element: Element) => element.childNodes.map(child => 'value' in child ? child.value : '').join('');
-  const provisional = html && sink.sheets.length ? concealed(html, sink.sheets.map(element => hostedSheet(text(element), resource, sink.policy, () => true).css)) : undefined;
-  const toggles = provisional?.toggleRule;
-  sink.conservative = !!provisional?.conservative;
-  if (sink.conservative && provisional!.shown.size) { sink.togglesShown = true; note(sink.removed, 'Content toggled by more than three screen widths, colour schemes or mail clients, shown everywhere'); }
+  const selectors = documentSelectors(html, root.mode === 'quirks');
   for (const element of sink.sheets) {
-    const css = text(element), read = hostedSheet(css, resource, sink.policy, toggles);
+    const css = text(element), read = hostedSheet(css, resource, sink.policy, selectors);
     if (read.removed.length) { sink.changes++; for (const what of read.removed) note(sink.removed, what); }
+    if (read.versions) sink.showsAll = true;
     for (const host of read.fonts) if (!sink.fonts.includes(host)) sink.fonts.push(host);
     for (const target of read.destinations) sink.destinations.add(target);
     if (read.css !== css || element.childNodes.some(child => !('value' in child))) {
       sink.changes++;
-      if (!read.css) { const parent = element.parentNode!; parent.childNodes.splice(parent.childNodes.indexOf(element), 1); continue; }
+      if (!read.css.trim()) { const parent = element.parentNode!; parent.childNodes.splice(parent.childNodes.indexOf(element), 1); continue; }
       element.childNodes = [];
       defaultTreeAdapter.insertText(element, read.css);
     }
   }
 }
 /**
- * What the copy's own CSS hides (src/screened-html.ts concealed) goes with its text: a hidden element keeps its place
- * but not its content (a hidden image goes), and text drawn in its background colour goes. Kept: the blocks a screen
- * width, colour scheme or mail client toggles (`variants`, which the screen reads one by one, in full), or, with more
- * conditions than are read in every combination, the same blocks shown everywhere instead; and one hidden block, the
- * preheader, the first thing the message shows (no text or image before it) when its own style hides it, at most 300
- * characters of plain text, which inboxes show beside the subject and the screen reads apart from the body.
+ * What the copy's CSS still hides (src/screened-html.ts concealed: declarations that hide only together, in some
+ * reading of its conditions) goes with its text: a hidden element keeps its place but not its content (a hidden image
+ * goes), and text drawn in its background colour goes. A hidden element draws nothing, so it doesn't separate the text
+ * around it either.
  */
-function conceal(root: Document, sink: Sink): { layout: Map<Element, 'inline' | 'block'>; variants: Set<Element>[]; preheader?: Element } {
-  const layout = new Map<Element, 'inline' | 'block'>();
+function conceal(root: Document): { layout: Map<Element, 'inline' | 'block'>; removed: string[] } {
+  const layout = new Map<Element, 'inline' | 'block'>(), removed: string[] = [];
   const html = root.childNodes.find((node): node is Element => 'tagName' in node && node.tagName === 'html');
-  if (!html) return { layout, variants: [new Set()] };
+  if (!html) return { layout, removed };
   const sheets: string[] = [];
   const collect = (parent: Parent) => { for (const node of parent.childNodes) if ('tagName' in node) { if (node.tagName === 'style') sheets.push(node.childNodes.map(child => 'value' in child ? child.value : '').join('')); else collect(node); } };
   collect(html);
-  const { hidden, invisible, inline, block, variants, shown } = concealed(html, sheets, sink.conservative);
+  const { hidden, invisible, inline, block } = concealed(html, sheets.flatMap(cssRules), root.mode === 'quirks');
   for (const element of inline) layout.set(element, 'inline');
   for (const element of block) layout.set(element, 'block');
-  let seen = false, preheader: Element | undefined;
   const visit = (parent: Parent) => {
     for (const node of [...parent.childNodes]) {
       if (node.nodeName === '#text') {
-        const text = node as DefaultTreeAdapterMap['textNode'];
-        if (invisible.has(text)) { parent.childNodes.splice(parent.childNodes.indexOf(node), 1); sink.changes++; note(sink.removed, 'text in its background colour'); }
-        else if (text.value.trim()) seen = true;
+        if (invisible.has(node as DefaultTreeAdapterMap['textNode'])) { parent.childNodes.splice(parent.childNodes.indexOf(node), 1); note(removed, 'text in its background colour'); }
         continue;
       }
       if (!('tagName' in node) || node.tagName === 'head') continue;
-      if (shown.has(node)) {
-        // More conditions toggle it than are read in every combination: shown everywhere, its own style without what hid it.
-        const style = node.attrs.find(a => a.name === 'style');
-        if (style) { const read = shownDeclarations(style.value, resource); if (read.css !== style.value) { sink.changes++; if (/[^\s;]/.test(read.css)) style.value = read.css; else node.attrs = node.attrs.filter(a => a !== style); } }
-        sink.togglesShown = true; note(sink.removed, 'Content toggled by more than three screen widths, colour schemes or mail clients, shown everywhere');
-      }
-      if (!hidden.has(node)) { if (node.tagName === 'img') seen = true; visit(node); continue; }
-      const text = node.childNodes.every(child => child.nodeName === '#text') ? node.childNodes.map(child => (child as DefaultTreeAdapterMap['textNode']).value).join('') : undefined;
-      if (!seen && !preheader && (node.tagName === 'div' || node.tagName === 'p') && text?.trim() && text.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/\s+/g, ' ').trim().length <= 300) { preheader = node; seen = true; continue; }
-      // What is left of it draws nothing, so it doesn't separate the text around it either.
+      if (!hidden.has(node)) { visit(node); continue; }
       layout.set(node, 'inline');
-      if (node.tagName === 'img') { parent.childNodes.splice(parent.childNodes.indexOf(node), 1); sink.changes++; note(sink.removed, 'hidden images'); continue; }
-      if (node.childNodes.length) { node.childNodes = []; sink.changes++; note(sink.removed, 'hidden elements, with their content'); }
+      if (node.tagName === 'img') { parent.childNodes.splice(parent.childNodes.indexOf(node), 1); note(removed, 'hidden images'); continue; }
+      if (!blank(node)) { node.childNodes = []; note(removed, 'hidden elements, with their content'); }
     }
   };
   visit(html);
-  return { layout, variants, preheader };
+  return { layout, removed };
 }
 const foreign = (sink: Sink, host: string) => { if (!sink.fonts.includes(host)) sink.fonts.push(host); note(sink.removed, `Custom font from ${host} removed`); };
 function attributes(element: Element, tag: string, sink: Sink, placeholders: boolean) {
@@ -275,7 +265,8 @@ function attributes(element: Element, tag: string, sink: Sink, placeholders: boo
       continue;
     }
     if (name === 'style') {
-      const read = declarations(sink, value);
+      const read = declarations(sink, value, blank(element));
+      if (read.versions) sink.showsAll = true;
       for (const target of read.destinations) sink.destinations.add(target);
       if (read.removed.length) { sink.changes++; for (const what of read.removed) note(sink.removed, what); }
       if (read.css !== value) { sink.changes++; if (/[^\s;]/.test(read.css)) a.value = read.css; else element.attrs = element.attrs.filter(b => b !== a); }
@@ -302,7 +293,7 @@ function doctype(node: DefaultTreeAdapterMap['documentType']) {
   return `<!DOCTYPE ${node.name}${node.publicId ? ` PUBLIC ${id(node.publicId)}${node.systemId ? ` ${id(node.systemId)}` : ''}` : node.systemId ? ` SYSTEM ${id(node.systemId)}` : ''}>`;
 }
 function pass(html: string, placeholders: boolean, policy: FontPolicy) {
-  const sink: Sink = { destinations: new Set(), unsupported: [], removed: [], changes: 0, tags: new Set(), fonts: [], policy, css: new Map(), sheets: [], conservative: false, togglesShown: false };
+  const sink: Sink = { destinations: new Set(), unsupported: [], removed: [], changes: 0, tags: new Set(), fonts: [], policy, css: new Map(), sheets: [], showsAll: false };
   // A repeated attribute inside a comment goes with the comment.
   const root = boundedHtmlFragment(html, 'document', { clients: true, onParseError: (error, within) => {
     if (error.code === 'duplicate-attribute' && !within) note(sink.removed, 'a repeated attribute (the first is kept)');
@@ -310,10 +301,11 @@ function pass(html: string, placeholders: boolean, policy: FontPolicy) {
   if (!root) return null;
   sanitize(root, sink, placeholders);
   styles(root as Document, sink);
-  const { layout, variants, preheader } = conceal(root as Document, sink);
+  const { layout, removed } = conceal(root as Document);
+  if (removed.length) { sink.changes++; for (const what of removed) note(sink.removed, what); }
   // Mail is read without scripting: <noscript> holds markup, written as such.
   const serialized = root.childNodes.map(node => node.nodeName === '#documentType' ? doctype(node as DefaultTreeAdapterMap['documentType']) : serializeOuter(node, { scriptingEnabled: false })).join('');
-  return { html: serialized, root, layout, variants, preheader, ...sink };
+  return { html: serialized, root, layout, ...sink };
 }
 /** How a body is read: whether addresses may start with a placeholder, where fonts may come from, and whether it is
  *  delivered as submitted (`original`) rather than as its canonical copy. */
@@ -330,13 +322,13 @@ export function hostedHtml(html: string, { placeholders = false, fonts = { hosts
   let input = html, read = pass(input, placeholders, policy);
   if (!read) return null;
   // What the first pass found: later passes read a copy without it (a removed <base> is still refused).
-  const { removed, tags, fonts: foreignFonts, unsupported, togglesShown } = read;
-  if (original) return { html, root: read.root as Document, destinations: read.destinations, unsupported, removed, tags, fonts: foreignFonts, layout: read.layout, variants: read.variants, preheader: read.preheader, togglesShown };
+  const { removed, tags, fonts: foreignFonts, unsupported, showsAll } = read;
+  if (original) return { html, root: read.root as Document, destinations: read.destinations, unsupported, removed, tags, fonts: foreignFonts, layout: read.layout, showsAll };
   for (let i = 0; i < 3 && (read.changes || read.html !== input); i++) {
     input = read.html;
     read = pass(input, placeholders, policy);
     if (!read) return null;
   }
   if (read.changes || read.html !== input) return null;
-  return { html: read.html, root: read.root as Document, destinations: read.destinations, unsupported, removed, tags, fonts: foreignFonts, layout: read.layout, variants: read.variants, preheader: read.preheader, togglesShown };
+  return { html: read.html, root: read.root as Document, destinations: read.destinations, unsupported, removed, tags, fonts: foreignFonts, layout: read.layout, showsAll };
 }

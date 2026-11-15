@@ -13595,8 +13595,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await screenSnapshot(runtime,s);await screenSnapshot(runtime,s);
       assert.equal(bodies.length,3);assert.ok(bodies.every(b=>Buffer.byteLength(b)<=8000));
       for(const part of ['plain signal','rendered MIME signal','long signal','HTML signal','link.example.invalid','image.example.invalid'])assert.ok(bodies.some(b=>b.includes(part)),part);
-      // Hidden copy is removed from the delivered copy (final review), so it isn't read either.
-      assert.ok(!bodies.some(b=>b.includes('hidden signal')),'hidden copy');
+      // The hidden attribute is dropped, so its copy shows and is read (final review 3: every version shows).
+      assert.ok(bodies.some(b=>b.includes('hidden signal')),'hidden copy');
       await screenSnapshot(runtime,{...s,html:s.html.replace('x'.repeat(16000),'x'.repeat(8000)+'y'+'x'.repeat(7999))});assert.equal(bodies.length,6);
       const hostLinks=Array.from({length:7},(_,i)=>`<a href="https://reference${i}.invalid/document">Reference</a>`).join('');
       for(let i=0;i<(BENCH?65:3);i++) {
@@ -13793,7 +13793,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         // Recheck 8, R8-H1: alt text is read where the image is, so a phrase across it and the text beside it is read whole.
         {subject:'altBeside',html:`<p><img src="https://cdn.brand.example/a.png" alt="Sample" width="100" height="20">Marker</p><p>${copy}</p>`},
         {subject:'altWithoutSrc',html:`<p><img alt="Sample" width="100" height="20">Marker</p><p>${copy}</p>`},
-        // Final review 2, F2-H2: a hidden block after an image is no preheader, so the alt text and the text after it read whole.
+        // Final review 2, F2-H2: a hidden block after an image. Final review 3: nothing hides, so it is delivered shown, a
+        // line of its own between the alt text and the text after it, and read so: no phrase joins across it.
         {subject:'altPreheader',html:`<div><img src="https://cdn.brand.example/a.png" alt="Sam" width="30" height="18"><div style="display:none">innocent</div>pleMarker</div><p>${copy}</p>`},
         ...Object.entries(screenCorpus()).map(([subject,{html}])=>({subject,html:html.replace(/data:image\/png;base64,[A-Za-z0-9+/=]+/,'https://cdn.brand.example/chart.png')}))];
       const ids=ok(await local('POST','/v1/emails/batch',{emails:mail.map(m=>({from:'a@screened.invalid',to:'success@simulator.amazonses.com',...m}))},'live',{authorization:`Bearer ${key.secret}`}),202).data.map((x:Json)=>x.id);
@@ -13804,9 +13805,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // screened nor delivered; filler salted into a word is dropped with its hiding element, so the word is read.
       // Every delivered copy is the normalized one, and the classifier read exactly its text.
       assert.deepEqual({...outcome},{hidden:'CONTENT_REJECTED_SPAM',undisplayed:'accepted',variable:'accepted',outlook:'accepted',salted:'CONTENT_REJECTED_SPAM','\u202Erekram elpmas\u202C':'accepted',markers:'accepted',rtlTable:'accepted',
-        svgInline:'ATTACHMENT_TYPE_UNSCREENABLE',svgAsPng:'ATTACHMENT_TYPE_UNSCREENABLE',fakePdf:'ATTACHMENT_CONTENT_MISMATCH',imageOnly:'CONTENT_IMAGE_ONLY',banner:'CONTENT_IMAGE_ONLY',minSized:'accepted',styledSize:'CONTENT_IMAGE_ONLY',fillerWords:'CONTENT_IMAGE_ONLY',logoShort:'accepted',altBeside:'CONTENT_REJECTED_SPAM',altWithoutSrc:'CONTENT_REJECTED_SPAM',altPreheader:'CONTENT_REJECTED_SPAM',
+        svgInline:'ATTACHMENT_TYPE_UNSCREENABLE',svgAsPng:'ATTACHMENT_TYPE_UNSCREENABLE',fakePdf:'ATTACHMENT_CONTENT_MISMATCH',imageOnly:'CONTENT_IMAGE_ONLY',banner:'CONTENT_IMAGE_ONLY',minSized:'accepted',styledSize:'CONTENT_IMAGE_ONLY',fillerWords:'CONTENT_IMAGE_ONLY',logoShort:'accepted',altBeside:'CONTENT_REJECTED_SPAM',altWithoutSrc:'CONTENT_REJECTED_SPAM',altPreheader:'accepted',
         ...Object.fromEntries(Object.keys(screenCorpus()).map(name=>[name,'accepted']))});
-      assert.equal(report.sent,mail.length-12);
+      assert.equal(report.sent,mail.length-11);
       const strip=(html:string)=>html.replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').normalize('NFKC').replace(/[\p{Cf}\p{Mn}\s]/gu,'');
       // The preheader is read apart from the body (final review 2): the body reads as one run without it, then it does.
       const preheader=(html:string)=>/<body[^>]*>\s*(<div style="display:none[^"]*">[^<]*<\/div>)/.exec(html)?.[1];
@@ -14241,14 +14242,16 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ['unknown elements', `<section><article><custom-tag><p dir="auto" title="SampleMarker" data-x="1" onclick="x()">${ready}</p></custom-tag></article></section>`, false, /<section|<article|<custom-tag|title=|dir=|data-x|onclick/],
       // Final review, F-H1: a title in the body is removed with its text, so it doesn't split the words around it.
       ['body title', `<p>Sam<title>innocent</title>pleMarker ${ready}</p>`, true],
-      // F-H2: conditional comments go (both branches); content the copy's CSS hides goes with its text (the element
-      // stays, empty); dir goes, so inline boxes line up in the text's order.
+      // F-H2: conditional comments go (both branches); dir goes, so inline boxes line up in the text's order. Final
+      // review 3: nothing hides. What hid content (display:none, the hidden attribute, visibility, opacity, tiny type, a
+      // tiny clipped box) is removed, so the content shows and is read where it is: no phrase joins across it.
       ['conditional comment', `<p>Sam<!--[if mso]>innocent<![endif]-->pleMarker ${ready}</p>`, true],
-      ['display:none', `<p>Sam<span style="display:none">innocent</span>pleMarker ${ready}</p>`, true],
+      ['display:none', `<p>Sam<span style="display:none">innocent</span>pleMarker ${ready}</p>`, false, /display:none|<span><\/span>/],
       ['dir', `<p dir="rtl"><span style="display:inline-block">Marker</span><span style="display:inline-block">Sample</span> ${ready}</p>`, false, /dir=/],
-      ['hidden attribute', `<p>Sam<span hidden>innocent</span>pleMarker ${ready}</p>`, true],
-      ['visibility, opacity, tiny type', `<p>Sam<span style="visibility:hidden">x</span>ple<span style="opacity:.05">y</span>Mar<span style="font:0/0 a">z</span>ker ${ready}</p>`, true],
-      ['clipped box', `<p>Sam<span style="display:inline-block;max-width:1px;overflow:hidden">innocent</span>pleMarker ${ready}</p>`, true],
+      ['hidden attribute', `<p>Sam<span hidden>innocent</span>pleMarker ${ready}</p>`, false, /hidden|<span><\/span>/],
+      ['visibility, opacity, tiny type', `<p>Sam<span style="visibility:hidden">x</span>ple<span style="opacity:.05">y</span>Mar<span style="font:0/0 a">z</span>ker ${ready}</p>`, false, /visibility|opacity|font:/],
+      ['clipped box', `<p>Sam<span style="display:inline-block;max-width:1px;overflow:hidden">innocent</span>pleMarker ${ready}</p>`, false, /max-width|<span[^>]*><\/span>/],
+      // Text in the colour of its background still goes (the text, not the colour: the copy keeps its look).
       ['colour of the background', `<table bgcolor="#ffffff"><tr><td>Sam<span style="color:#fefefe">innocent</span>pleMarker ${ready}</td></tr></table>`, true],
       ['colour by class', `<style>.d{color:#ffffff}</style><p>Sam<span class="d">innocent</span>pleMarker ${ready}</p>`, true],
       ['colour in @media', `<style>@media (min-width:0px){.d{color:#fffffe}}</style><p>Sam<span class="d">innocent</span>pleMarker ${ready}</p>`, true],
@@ -14261,23 +14264,17 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // Rows in a table's foot and right floats line up out of document order: removed.
       ['table foot', `<table><tfoot><tr><td>Thanks.</td></tr></tfoot><tbody><tr><td>${ready}</td></tr></tbody></table>`, false, /<tfoot/],
       ['right float', `<p><span style="float:right">Thanks.</span><span style="float:right">${ready}</span></p>`, false, /float/],
-      // Whole blocks a screen width or colour scheme toggles stay toggled: a dark-mode logo swap and a mobile-only block,
-      // by class or by style attribute. The screen reads each as a block of its own (a phrase in one is read whole)
-      // and the text around it as if it weren't there (a word it splits is read whole).
-      ['dark-mode logo swap', `<style>.dark-img{display:none!important} .light-img{display:block} @media (prefers-color-scheme: dark){ .dark-img{display:block!important} .light-img{display:none!important} }</style><img class="light-img" src="https://held.invalid/light.png" alt="Brand" width="120" height="40"><img class="dark-img" src="https://held.invalid/dark.png" alt="Brand" width="120" height="40"><p>${ready}</p>`, false],
-      ['mobile-only block', `<style>.m{display:none;max-height:0;overflow:hidden} @media only screen and (max-width:480px){ .m{display:block!important;max-height:none!important;overflow:visible!important} }</style><p>${ready}</p><div class="m">Tap the button on your phone.</div>`, false],
-      ['mobile-only by style attribute', `<style>@media (max-width:480px){ .m{display:block!important} }</style><p>${ready}</p><div class="m" style="display:none">Tap the button on your phone.</div>`, false],
+      // Final review 3: Hosted mail shows every version. Toggles are removed wherever they are (style attributes,
+      // classes, @media, colour schemes, client selectors): both logos of a dark-mode swap, a mobile-only block on
+      // every screen, every toggled block in place, each read where it is.
+      ['dark-mode logo swap', `<style>.dark-img{display:none!important} .light-img{display:block} @media (prefers-color-scheme: dark){ .dark-img{display:block!important} .light-img{display:none!important} }</style><img class="light-img" src="https://held.invalid/light.png" alt="Brand" width="120" height="40"><img class="dark-img" src="https://held.invalid/dark.png" alt="Brand" width="120" height="40"><p>${ready}</p>`, false, /display:none/],
+      ['mobile-only block', `<style>.m{display:none;max-height:0;overflow:hidden} @media only screen and (max-width:480px){ .m{display:block!important;max-height:none!important;overflow:visible!important} }</style><p>${ready}</p><div class="m">Tap the button on your phone.</div>`, false, /display:none|max-height:0/],
+      ['mobile-only by style attribute', `<style>@media (max-width:480px){ .m{display:block!important} }</style><p>${ready}</p><div class="m" style="display:none">Tap the button on your phone.</div>`, false, /display:none/],
       ['phrase in a toggled block', `<style>.m{display:none} @media (max-width:480px){ .m{display:block!important} }</style><p>${ready}</p><div class="m">Sample marker</div>`, true],
-      ['word split by a toggled block', `<style>.m{display:none} @media (max-width:480px){ .m{display:block!important} }</style><div>Sam<div class="m">innocent</div>pleMarker ${ready}</div>`, true],
-      // Inline content is never toggled: a span hidden by a sheet shows (its hiding is removed), one hidden by its own
-      // style loses its text, whatever @media rule would reveal it; and a block nothing reveals loses its text too.
-      ['inline toggle by class', `<style>.x{display:none} @media (max-width:480px){ .x{display:inline!important} }</style><p>Your<span class="x"> account</span> ${ready}</p>`, false, /\.x\{display:none/],
-      ['inline hidden span with a reveal', `<style>@media (max-width:480px){ .x{display:inline!important} }</style><p>Sam<span class="x" style="display:none">innocent</span>pleMarker ${ready}</p>`, true],
-      ['hidden block without a reveal', `<p>${ready}</p><div style="display:none">Never shown</div>`, false, /Never shown/],
-      // Final review 2, F2-H1: each way a client may show toggled blocks is read complete and in order, so a phrase
-      // across a toggled block and the block after it is read whole: by screen width, colour scheme or client selector
-      // (a client's own markup may also make the parent a flex row, which takes the hiding away), whatever else the
-      // sheet does (first-line transforms, a zero-width box), and a div as a table part isn't a toggle.
+      ['word split by a toggled block', `<style>.m{display:none} @media (max-width:480px){ .m{display:block!important} }</style><div>Sam<div class="m">innocent</div>pleMarker ${ready}</div>`, false, /display:none/],
+      ['inline toggle by class', `<style>.x{display:none} @media (max-width:480px){ .x{display:inline!important} }</style><p>Your<span class="x"> account</span> ${ready}</p>`, false, /display/],
+      ['inline hidden span with a reveal', `<style>@media (max-width:480px){ .x{display:inline!important} }</style><p>Sam<span class="x" style="display:none">innocent</span>pleMarker ${ready}</p>`, false, /display/],
+      ['hidden block', `<p>${ready}</p><div style="display:none">Shown now</div>`, false, /display:none/],
       ['F2-H1 width toggle', `<style>.m{display:none} @media(max-width:480px){.m{display:block}}</style><div class="m">Sample</div><div>Marker ${ready}</div>`, true],
       ['F2-H1 dark-mode toggle', `<style>.m{display:none} @media (prefers-color-scheme: dark){.m{display:block}}</style><div class="m">Sample</div><div>Marker ${ready}</div>`, true],
       ['F2-H1 client selector', `<style>.m{display:none} u + .body .m{display:block!important}</style><div class="m">Sample</div><div>Marker ${ready}</div>`, true],
@@ -14285,14 +14282,40 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ['F2-H1 first-line', `<style>.m{display:none} @media(max-width:480px){.m{display:block}} div::first-line{text-transform:uppercase}</style><div class="m">Sample</div><div>Marker ${ready}</div>`, true],
       ['F2-H1 zero-width box', `<style>.m{display:none} @media(max-width:480px){.m{display:block}}</style><div class="m" style="width:0;white-space:nowrap">Sample</div><div>Marker ${ready}</div>`, true],
       ['F2-H1 table-row-group', `<style>.m{display:none} @media(max-width:480px){.m{display:table-row-group}}</style><div class="m">Sample</div><div>Marker ${ready}</div>`, true],
-      // Three conditions are read in every combination: here only a narrow screen in dark mode shows both blocks.
-      ['three conditions', `<style>.a{display:none} .b{display:none} @media(max-width:480px){.a{display:block}} @media (prefers-color-scheme: dark){.b{display:block}} u + .body .c{display:none}</style><div class="a">Sample</div><div class="c">Note</div><div class="b">Marker</div><p>${ready}</p>`, true],
-      // With more, toggled content shows everywhere, and the checker warns.
-      ['four conditions', `<style>.a{display:none} .b{display:none} .c{display:none} .d{display:none} @media(max-width:300px){.a{display:block}} @media(max-width:400px){.b{display:block}} @media(max-width:500px){.c{display:block}} @media (prefers-color-scheme: dark){.d{display:block}}</style><div class="a">One</div><div class="b">Two</div><div class="c">Three</div><div class="d">Four</div><p>${ready}</p>`, false, /\.[abcd]\{display:none/],
-      // F2-H2: a hidden block after an image is no preheader (the image's fallback is the first thing shown), so it
-      // loses its text and the alt text and the text after it are read whole. A preheader is read on its own.
-      ['F2-H2 hidden block after an image', `<div><img alt="Sam" width="30" height="18"><div style="display:none">innocent</div>pleMarker ${ready}</div>`, true],
-      ['preheader read apart', `<div style="display:none">Sample marker</div><p>${ready}</p>`, true],
+      // Every block shows for every recipient, so no client sees "Sample" beside "Marker" here, and none is read so.
+      ['three conditions', `<style>.a{display:none} .b{display:none} @media(max-width:480px){.a{display:block}} @media (prefers-color-scheme: dark){.b{display:block}} u + .body .c{display:none}</style><div class="a">Sample</div><div class="c">Note</div><div class="b">Marker</div><p>${ready}</p>`, false, /display:none/],
+      ['four conditions', `<style>.a{display:none} .b{display:none} .c{display:none} .d{display:none} @media(max-width:300px){.a{display:block}} @media(max-width:400px){.b{display:block}} @media(max-width:500px){.c{display:block}} @media (prefers-color-scheme: dark){.d{display:block}}</style><div class="a">One</div><div class="b">Two</div><div class="c">Three</div><div class="d">Four</div><p>${ready}</p>`, false, /display:none/],
+      // F2-H2: a hidden block after an image is shown, a line of its own between the alt text and the text after it.
+      ['F2-H2 hidden block after an image', `<div><img alt="Sam" width="30" height="18"><div style="display:none">innocent</div>pleMarker ${ready}</div>`, false, /display:none/],
+      // The preheader is shown and read in its place, at the top.
+      ['preheader', `<div style="display:none">Sample marker</div><p>${ready}</p>`, true],
+      // Final review 3, F3-H1: a hiding style attribute that an !important @media or client rule reveals inline. The
+      // hiding and the reveal both go: the block shows for everyone, a line of its own, and is read so.
+      ['F3-H1 @media reveal', `<style>@media (max-width:600px){.p{display:inline!important}}</style><div class="p" style="display:none">Sample</div><span>Marker</span><p>${ready}</p>`, true],
+      ['F3-H1 client reveal', `<style>u + .body .p{display:inline!important}</style><div class="p" style="display:none">Sample</div><span>Marker</span><p>${ready}</p>`, true],
+      // F3-H2: an @media rule that lays blocks out inline is removed, so every screen shows the four lines the screen
+      // reads, in order, and the instruction across them is refused.
+      ['F3-H2 inline by @media', `<style>@media (max-width:600px){.x{display:inline}}</style><div class="x">Send</div><div class="x">your</div><div class="x">password</div><div class="x">now</div><p>${ready}</p>`, true],
+      // F3-H3: type or a box too small to show its text, by @media: removed, so the text shows and is read in place.
+      ['F3-H3 font-size:0 by @media', `<style>@media (max-width:600px){.x{font-size:0}}</style><p>Sam<span class="x">innocent</span>pleMarker ${ready}</p>`, false, /font-size:0/],
+      ['F3-H3 width:0 by @media', `<style>.x{overflow:hidden;display:inline-block} @media (max-width:600px){.x{width:0}}</style><p>Sam<span class="x">innocent</span>pleMarker ${ready}</p>`, false, /width:0/],
+      ['F3-H3 height:0 by @media', `<style>.x{overflow:hidden;display:inline-block} @media (max-width:600px){.x{height:0}}</style><p>Sam<span class="x">innocent</span>pleMarker ${ready}</p>`, false, /height:0/],
+      // Classes and ids match by case in a standards-mode document, as clients match them: text a class in another case
+      // colours like its background is found and goes. In quirks mode (no doctype) they match whatever their case, or
+      // by case, as clients differ.
+      ['class case, standards mode', `<!doctype html><style>.Hidden{color:#fff}.hidden{color:#000}</style><p>Sam<span class="Hidden">innocent</span>pleMarker ${ready}</p>`, true],
+      ['class case, quirks mode', `<style>.hidden{color:#000}.Hidden{color:#fff}</style><p>Sam<span class="hidden">innocent</span>pleMarker ${ready}</p>`, true],
+      // A client may show a quirks-mode message inside its own standards-mode page, where they match by case again.
+      ['class case, quirks mode in a standards page', `<style>.Hidden{color:#fff}.hidden{color:#000}</style><p>Sam<span class="Hidden">innocent</span>pleMarker ${ready}</p>`, true],
+      ['id case, standards mode', `<!doctype html><style>#Hide{color:#fff}#hide{color:#000}</style><p>Sam<span id="Hide">innocent</span>pleMarker ${ready}</p>`, true],
+      // Sheets are read with the CSS tokenizer: a brace in a string doesn't end the block, so the colour after it counts.
+      ['quoted brace', `<style>.x{font-family:"}";color:#fff}</style><p>Sam<span class="x">innocent</span>pleMarker ${ready}</p>`, true],
+      // A client's own markup completes a selector (Gmail's u + .body, Outlook.com's [data-ogsc]), even when the
+      // document has a <u> of its own: its colours are read as that client draws them.
+      ['client colour', `<style>[data-ogsc] .x{color:#fff}</style><p>Sam<span class="x">innocent</span>pleMarker ${ready}</p>`, true],
+      ['client colour beside a u', `<style>u + .body .x{color:#fff}</style><body class="body"><p><u>Note</u></p><p>Sam<span class="x">innocent</span>pleMarker ${ready}</p></body>`, true],
+      // White space a hiding style hides nothing of keeps it: a 1 px divider and a preheader's filler.
+      ['spacers', `<div style="font-size:1px;line-height:1px;background:#dddddd">&nbsp;</div><p>${ready}</p><div style="display:none;max-height:0;overflow:hidden">&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;</div>`, false],
     ];
     for (const [name, html, bad, gone] of cases) {
       const { to, reply } = await send(html), start = screened.length;
@@ -14314,28 +14337,26 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     assert.ok(!(await removedBy(`<ol reversed type="1" start="1" style="list-style-type:decimal"><li>${ready}</li></ol><ul style="list-style:square inside"><li>Thanks.</li></ul>`)).includes('List style'), 'Bullets and plain numbers keep their list style.');
     for (const [name, listed] of [['form controls and widgets', ['form elements, with their content', 'details elements, with their content', 'marquee elements, with their content', 'ruby elements, with their content']], ['unknown elements', ['section elements (their content stays)', 'non-HTML elements (their content stays)', 'title attributes on p', 'dir attributes on p', 'data-* attributes on p', 'event handler attributes on p']]] as const)
       for (const what of listed) assert.ok((await removedBy(cases.find(c => c[0] === name)![1])).includes(what), `${name}: ${what}`);
-    for (const [name, listed] of [['body title', 'title elements, with their content'], ['conditional comment', 'Outlook conditional comments'], ['display:none', 'hidden elements, with their content'], ['dir', 'dir attributes on p'],
-      ['colour of the background', 'text in its background colour'], ['hidden by selector', 'CSS that hides text'], ['mso-hide', 'CSS mso-hide (Outlook shows it too)']] as const)
+    for (const [name, listed] of [['body title', 'title elements, with their content'], ['conditional comment', 'Outlook conditional comments'], ['display:none', 'CSS that hides or shows content'], ['dir', 'dir attributes on p'],
+      ['colour of the background', 'text in its background colour'], ['hidden by selector', 'CSS that hides or shows content'], ['mso-hide', 'CSS mso-hide (Outlook shows it too)'], ['hidden attribute', 'hidden attributes on span'],
+      ['F3-H2 inline by @media', 'CSS that changes layout by screen, colour scheme or mail client'], ['F3-H3 width:0 by @media', 'CSS that hides or shows content']] as const)
       assert.ok((await removedBy(cases.find(c => c[0] === name)![1])).includes(listed), `${name}: ${listed}`);
-    // Toggled blocks are delivered as written, nothing removed, and the screen read the hidden variant's text.
-    for (const name of ['dark-mode logo swap', 'mobile-only block', 'mobile-only by style attribute']) {
-      const html = cases.find(c => c[0] === name)![1];
-      assert.equal(await removedBy(html), '', `${name}: nothing removed`);
-      assert.equal(await canonicalHtml(html), await canonicalHtml(await canonicalHtml(html)), name);
-      const copy = await canonicalHtml(html);
-      assert.ok(/display:none/.test(copy) && (name === 'dark-mode logo swap' ? copy.includes('light.png') && copy.includes('dark.png') : copy.includes('Tap the button on your phone.</div>')), `${name}: kept`);
+    // Every version shows: both logos, the mobile-only block, the hidden block and the preheader are delivered and
+    // read; a template that toggles anything gets the checker's one warning, a template that toggles nothing doesn't.
+    const findings = async (html: string) => ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html, text: ready })).findings as Json[];
+    for (const name of ['dark-mode logo swap', 'mobile-only block', 'mobile-only by style attribute', 'hidden block', 'preheader', 'F3-H1 @media reveal', 'F3-H3 font-size:0 by @media']) {
+      const html = cases.find(c => c[0] === name)![1], copy = await canonicalHtml(html), warned = (await findings(html)).find(x => x.ruleId === 'hosted-versions');
+      assert.ok(name === 'dark-mode logo swap' ? copy.includes('light.png') && copy.includes('dark.png') : /Tap the button on your phone\.|Shown now|Sample marker|>Sample<|>innocent</.test(copy), `${name}: shown`);
+      assert.deepEqual([warned?.severity, warned?.detail], ['warning', 'Hosted mail shows every version: dark/light and mobile/desktop toggles are removed. Use your own AWS for templates that depend on them.'], `${name}: warned`);
     }
     for (const name of ['mobile-only block', 'mobile-only by style attribute']) assert.ok((await measureScreen({ html: cases.find(c => c[0] === name)![1] })).content.includes('Tap the button on your phone.'), `${name}: screened`);
-    assert.ok((await removedBy(cases.find(c => c[0] === 'hidden block without a reveal')![1])).includes('hidden elements, with their content'), 'A block nothing reveals loses its text.');
-    assert.ok((await removedBy(cases.find(c => c[0] === 'F2-H2 hidden block after an image')![1])).includes('hidden elements, with their content'), 'No preheader after an image.');
-    const warned = ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: cases.find(c => c[0] === 'four conditions')![1], text: ready })).findings.find((x: Json) => x.ruleId === 'hosted-toggles');
-    assert.equal(warned?.severity, 'warning', 'More than three conditions: the checker warns.');
-    assert.ok(!ok(await f.local('POST', '/v1/emails/check', { from: 'news@held.invalid', subject: 'Offer', stream: 'marketing', html: cases.find(c => c[0] === 'three conditions')![1], text: ready })).findings.some((x: Json) => x.ruleId === 'hosted-toggles'), 'Three conditions: no warning.');
-    // Each variant is its own section of one classifier input, the preheader too.
-    const sectioned = (await measureScreen({ html: `<div style="display:none">Preview text.</div><style>.m{display:none} @media(max-width:480px){.m{display:block}}</style><div class="m">On phones.</div><p>${ready}</p>` })).content;
-    assert.ok(/Your account is ready\. --- As some screens, colour schemes or mail clients show it --- On phones\. Your account is ready\. --- Preheader --- Preview text\./.test(sectioned) || /On phones\. Your account is ready\. --- As some screens, colour schemes or mail clients show it --- Your account is ready\. --- Preheader --- Preview text\./.test(sectioned), sectioned);
-    // The preheader is kept, though hidden: inboxes show it beside the subject, and the screen reads it.
-    assert.equal(await removedBy(`<div style="display:none;max-height:0;overflow:hidden">Your receipt is attached.</div><p>${ready}</p>`), '', 'A preheader is kept.');
+    assert.ok(!(await findings(`<style>@media (max-width:480px){ .h1{font-size:24px!important} .stack{display:block!important;width:100%!important} }</style><h1 class="h1">Hi</h1><p class="stack">${ready}</p>`)).some(x => x.ruleId === 'hosted-versions'), 'Sizes, type and stacking by @media: no warning.');
+    // The screen reads one ordered stream: the preheader where it is, at the top; each block on its line.
+    assert.equal((await measureScreen({ html: `<div style="display:none">Preview text.</div><style>.m{display:none} @media(max-width:480px){.m{display:block}}</style><div class="m">On phones.</div><p>${ready}</p>` })).content, `Preview text. On phones. ${ready}`);
+    // White space a hiding style hides nothing of keeps it.
+    const spacers = await canonicalHtml(cases.find(c => c[0] === 'spacers')![1]);
+    assert.ok(spacers.includes('font-size:1px;line-height:1px') && spacers.includes('display:none;max-height:0;overflow:hidden'), spacers);
+    assert.equal(await removedBy(cases.find(c => c[0] === 'spacers')![1]), '', 'Spacers: nothing removed.');
     assert.equal(await removedBy(`<table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" align="center"><tr><td valign="top" bgcolor="#ffffff" style="padding:8px"><h1>Hi</h1><p lang="en"><a href="https://held.invalid/" target="_blank">Open</a> <img src="https://held.invalid/a.png" alt="A" width="20" height="20"></p><font color="#333" face="Arial" size="2">${ready}</font></td></tr></table>`), '', 'The allow-list keeps ordinary email markup whole.');
   });
   reviewScenario('common newsletter and transactional markup is admitted and delivered with its fonts, imports and Outlook layout intact', async f => {
@@ -20594,17 +20615,11 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // A head's title isn't shown, so it is no reason to refuse.
       const asWritten = `<title>Receipt</title><!-- a sender's note --><style>/* plain */ .o{color:#111}</style><p class="o">Your receipt is attached.</p>`;
       const kept = await send({ subject: 'Receipt as written', html: asWritten, screen: true });
-      // A dark-mode logo swap toggles whole blocks: nothing to remove, so it is screened and sent as written.
-      const swap = `<style>.dark-img{display:none!important} .light-img{display:block} @media (prefers-color-scheme: dark){ .dark-img{display:block!important} .light-img{display:none!important} }</style><img class="light-img" src="https://cdn.synthetic.invalid/light.png" alt="Brand" width="120" height="40"><img class="dark-img" src="https://cdn.synthetic.invalid/dark.png" alt="Brand" width="120" height="40"><p>Your receipt is attached.</p>`;
-      const swapped = await send({ subject: 'Receipt with a logo swap', html: swap, screen: true });
-      // Final review 2, F2-H1: toggled blocks are kept as written, and each variant read whole, in order.
-      const toggled = await send({ subject: 'Receipt with a toggle', html: `<style>.m{display:none} @media(max-width:480px){.m{display:block}}</style><div class="m">${marker}</div><div>Your receipt is attached.</div>`, screen: true });
       // Recheck 8, R8-H1: an image's alt text is read where the image is, so a phrase across alt text and the text
       // beside it is read whole.
       const alt = await send({ subject: 'Receipt with a picture', html: `<p><img src="https://cdn.synthetic.invalid/a.png" alt="${marker.slice(0, 6)}" width="100" height="20">${marker.slice(6)}</p><p>Your receipt is attached.</p>`, screen: true });
       await dispatchDue(runtime, REGION);
-      assert.deepEqual([(await get(kept)).status, (await get(alt)).errorCode, (await get(swapped)).status, (await get(toggled)).errorCode], ['accepted', 'CONTENT_REJECTED_SPAM', 'accepted', 'CONTENT_REJECTED_SPAM']);
-      assert.equal(htmls.get(swapped), swap, 'A logo swap goes to SES byte for byte.');
+      assert.deepEqual([(await get(kept)).status, (await get(alt)).errorCode], ['accepted', 'CONTENT_REJECTED_SPAM']);
       assert.ok(!sent.includes(alt));
       assert.equal(htmls.get(kept), asWritten, 'Mail delivered as submitted goes to SES byte for byte.');
       // Anything else is refused at once, naming what the canonical copy would remove; without screen: true it is sent
@@ -20633,11 +20648,18 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         // Final review: a body title, a conditional comment, hidden content, dir, and hiding by selector.
         [`<p>${marker.slice(0, 3)}<title>innocent</title>${marker.slice(3)}</p>`, 'title elements, with their content'],
         [`<p>${marker.slice(0, 3)}<!--[if mso]>innocent<![endif]-->${marker.slice(3)}</p>`, 'Outlook conditional comments'],
-        [`<p>${marker.slice(0, 3)}<span style="display:none">innocent</span>${marker.slice(3)}</p>`, 'hidden elements, with their content'],
+        [`<p>${marker.slice(0, 3)}<span style="display:none">innocent</span>${marker.slice(3)}</p>`, 'CSS that hides or shows content'],
         ['<p dir="rtl"><span style="display:inline-block">Marker</span><span style="display:inline-block">Sample</span></p>', 'dir attributes on p'],
-        ['<style>.h{display:none}</style><p>Your receipt<span class="h"> is attached</span>.</p>', 'CSS that hides text'],
-        // Final review 2: more toggle conditions than are read in every combination.
-        ['<style>.a{display:none} .b{display:none} .c{display:none} .d{display:none} @media(max-width:300px){.a{display:block}} @media(max-width:400px){.b{display:block}} @media(max-width:500px){.c{display:block}} @media (prefers-color-scheme: dark){.d{display:block}}</style><div class="a">One</div><div class="b">Two</div><div class="c">Three</div><div class="d">Four</div><p>Your receipt is attached.</p>', 'Content toggled by more than three screen widths, colour schemes or mail clients, shown everywhere'],
+        ['<style>.h{display:none}</style><p>Your receipt<span class="h"> is attached</span>.</p>', 'CSS that hides or shows content'],
+        // Final review 3: any CSS that hides, shows or reorders content, the way Hosted mail would remove it: a dark-mode
+        // logo swap, a mobile-only block, the reviewer's reveals, inline layout and tiny type by @media, a float.
+        ['<style>.dark-img{display:none!important} @media (prefers-color-scheme: dark){ .dark-img{display:block!important} .light-img{display:none!important} }</style><img class="light-img" src="https://cdn.synthetic.invalid/light.png" alt="Brand" width="120" height="40"><img class="dark-img" src="https://cdn.synthetic.invalid/dark.png" alt="Brand" width="120" height="40"><p>Your receipt is attached.</p>', 'CSS that hides or shows content'],
+        ['<style>.m{display:none} @media(max-width:480px){.m{display:block}}</style><div class="m">On phones</div><div>Your receipt is attached.</div>', 'CSS that hides or shows content'],
+        [`<style>@media (max-width:600px){.p{display:inline!important}}</style><div class="p" style="display:none">${marker.slice(0, 6)}</div><span>${marker.slice(6)}</span>`, 'CSS that changes layout by screen, colour scheme or mail client'],
+        ['<style>@media (max-width:600px){.x{display:inline}}</style><div class="x">Your</div><div class="x">receipt</div>', 'CSS that changes layout by screen, colour scheme or mail client'],
+        ['<style>@media (max-width:600px){.x{font-size:0}}</style><p>Your <span class="x">receipt</span> is attached.</p>', 'CSS that hides or shows content'],
+        ['<p><span style="float:right">attached.</span> Your receipt is</p>', 'CSS that reorders text'],
+        ['<p>Your receipt is <span hidden>not</span> attached.</p>', 'hidden attributes on span'],
       ];
       for (const [html, named] of refusals) {
         const refused = error(await local('POST', '/v1/emails/send', mail({ subject: 'Account ready', html, screen: true }), 'live'), 422, 'UNSUPPORTED_HTML_IN_SCREENED_MAIL');

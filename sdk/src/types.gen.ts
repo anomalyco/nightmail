@@ -923,7 +923,7 @@ export type CampaignDraft = {
     from?: string | '';
     fromName?: string;
     /**
-     * Optional preheader text. Inserted as escaped hidden text into each outgoing HTML snapshot; draft HTML is unchanged. When set, supply HTML without its own duplicate preheader.
+     * Optional preheader text. Inserted as escaped hidden text into each outgoing HTML snapshot (Hosted mail shows every version at once, so there it shows at the top of the message); draft HTML is unchanged. When set, supply HTML without its own duplicate preheader.
      */
     previewText?: string;
     replyTo?: Array<string>;
@@ -1027,7 +1027,7 @@ export type CreateCampaignInput = {
     from?: string | '';
     fromName?: string;
     /**
-     * Optional preheader text. Inserted as escaped hidden text into each outgoing HTML snapshot; draft HTML is unchanged. When set, supply HTML without its own duplicate preheader.
+     * Optional preheader text. Inserted as escaped hidden text into each outgoing HTML snapshot (Hosted mail shows every version at once, so there it shows at the top of the message); draft HTML is unchanged. When set, supply HTML without its own duplicate preheader.
      */
     previewText?: string;
     replyTo?: Array<string>;
@@ -1121,7 +1121,7 @@ export type CampaignDraftSummary = {
     fromName?: string;
     subject?: string | '';
     /**
-     * Optional preheader text. Inserted as escaped hidden text into each outgoing HTML snapshot; draft HTML is unchanged. When set, supply HTML without its own duplicate preheader.
+     * Optional preheader text. Inserted as escaped hidden text into each outgoing HTML snapshot (Hosted mail shows every version at once, so there it shows at the top of the message); draft HTML is unchanged. When set, supply HTML without its own duplicate preheader.
      */
     previewText?: string;
     audience?: {
@@ -1290,7 +1290,7 @@ export type CampaignUpdateInput = {
         from?: string | '';
         fromName?: string;
         /**
-         * Optional preheader text. Inserted as escaped hidden text into each outgoing HTML snapshot; draft HTML is unchanged. When set, supply HTML without its own duplicate preheader.
+         * Optional preheader text. Inserted as escaped hidden text into each outgoing HTML snapshot (Hosted mail shows every version at once, so there it shows at the top of the message); draft HTML is unchanged. When set, supply HTML without its own duplicate preheader.
          */
         previewText?: string;
         replyTo?: Array<string>;

@@ -8,7 +8,8 @@
 // (display:none, the hidden attribute) is left out with its content, so a dark-mode image swap resolves to the light
 // image and a mobile-only block to its desktop state. What a recipient can read is then exactly the text the screen
 // reads. One hidden block is kept: the preheader, the first text of the message when its own style hides it, at most
-// 300 characters of plain text, which is screened like the rest. Text the markup would draw without screened words
+// 300 characters of plain text, which the Hosted copy shows at the top (it shows every version) and which is screened
+// like the rest. Text the markup would draw without screened words
 // (list markers with letters or chosen numbers, list items without text) is left out, images count by their declared
 // size against the words beside them, and the bidi controls, directions and layout properties that reorder what a
 // client draws are removed from every textual field and element. Trusted senders keep their markup within the Hosted
@@ -16,6 +17,7 @@
 import { defaultTreeAdapter, html as spec, serializeOuter, type DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
 import { ApiError } from './core.js';
+import { cssDeclarations, cssRules, type CssRule } from './hosted-css.js';
 
 type Node = DefaultTreeAdapterMap['childNode'];
 type Element = DefaultTreeAdapterMap['element'];
@@ -181,11 +183,13 @@ for (const p of ['width', 'min-width', 'max-width', 'height', 'min-height', 'max
 
 type Declaration = { property: string; value: string; important: boolean };
 type Compound = { tag?: string; ids: string[]; classes: string[]; attributes: { name: string; op?: string; value?: string }[]; pseudo: { name: string; argument?: string }[]; not: Compound[] };
-// `context`: what the selector asks of the element's surroundings (all but its last compound), as written.
-type Selector = { compounds: Compound[]; combinators: string[]; specificity: number; context: string };
+// `text`: the selector as read (one space for white space); `parts`: each compound as written.
+type Selector = { compounds: Compound[]; combinators: string[]; specificity: number; text: string; parts: string[] };
 type Rule = { selector: Selector; declarations: Declaration[]; order: number };
-type Facts = { id: number; tag: string; attrs: Map<string, string>; classes: Set<string>; chain: Set<string>; parent: Facts | null; index: number; typeIndex: number; siblings: number; typeSiblings: number; previous: Facts | null };
-const MAX_SHEET_BYTES = 256 * 1024, MAX_RULES = 4000, MAX_STEPS = 2_000_000;
+// `quirks`: a quirks-mode document (no or a legacy doctype), where classes and ids match whatever their case; elsewhere
+// they match exactly. Facts hold classes, ids and the chain of both as matched.
+type Facts = { id: number; tag: string; attrs: Map<string, string>; classes: Set<string>; chain: Set<string>; parent: Facts | null; index: number; typeIndex: number; siblings: number; typeSiblings: number; previous: Facts | null; quirks: boolean };
+const MAX_RULES = 4000, MAX_STEPS = 2_000_000;
 const PSEUDO = new Set(['first-child', 'last-child', 'only-child', 'first-of-type', 'last-of-type', 'only-of-type', 'nth-child', 'nth-last-child', 'nth-of-type', 'nth-last-of-type']);
 /** Comments removed, outside string literals. */
 function stripComments(css: string) {
@@ -199,33 +203,16 @@ function stripComments(css: string) {
   }
   return out;
 }
-function declarations(body: string): Declaration[] {
-  const out: Declaration[] = [];
-  for (const item of body.split(';')) {
-    const colon = item.indexOf(':');
-    if (colon < 1) continue;
-    const property = item.slice(0, colon).trim().toLowerCase(), important = /!\s*important\s*$/i.test(item), value = item.slice(colon + 1).replace(/!\s*important\s*$/i, '').trim();
-    if (property && value) out.push({ property, value, important });
-  }
-  return out;
-}
-/** The qualified rules of a sheet in source order; at-rules (media, supports, font-face, import) are left out. */
-function rules(sheet: string, out: Rule[]) {
-  const css = sheet.replace(/@(?:import|charset|namespace|layer)\b(?:url\([^)]*\)|"[^"]*"|'[^']*'|[^;{])*;/gi, ' ');
-  for (let i = 0; i < css.length && out.length < MAX_RULES;) {
-    const open = css.indexOf('{', i);
-    if (open < 0) break;
-    const prelude = css.slice(i, open).trim();
-    let level = 1, j = open + 1;
-    for (; j < css.length && level; j++) { if (css[j] === '{') level++; else if (css[j] === '}') level--; }
-    const body = css.slice(open + 1, level ? css.length : j - 1);
-    i = j;
-    if (!prelude || prelude.startsWith('@')) continue;
-    const parsed = declarations(body);
-    if (!parsed.length) continue;
-    for (const text of prelude.split(',')) {
-      const selector = parseSelector(text.replace(/\s+/g, ' ').trim());
-      if (selector) out.push({ selector, declarations: parsed, order: out.length });
+/** The rules the style reader applies, from sheets read with the CSS Syntax tokenizer (src/hosted-css.ts cssRules): one per
+ *  selector of a list, in source order; a selector it can't read never applies. */
+function readRules(sheets: CssRule[]): Rule[] {
+  const out: Rule[] = [];
+  for (const rule of sheets) {
+    if (out.length >= MAX_RULES) break;
+    if (!rule.declarations.length) continue;
+    for (const text of rule.selector.split(',')) {
+      const selector = parseSelector(stripComments(text).replace(/\s+/g, ' ').trim());
+      if (selector) out.push({ selector, declarations: rule.declarations, order: out.length });
     }
   }
   return out;
@@ -234,12 +221,12 @@ function rules(sheet: string, out: Rule[]) {
 function parseCompound(text: string): Compound | null {
   const compound: Compound = { ids: [], classes: [], attributes: [], pseudo: [], not: [] };
   let i = 0;
-  const ident = () => { const m = /^[-\w\u00a0-\uffff]+/.exec(text.slice(i)); if (!m) return null; i += m[0].length; return m[0].toLowerCase(); };
+  const ident = (fold = true) => { const m = /^[-\w\u00a0-\uffff]+/.exec(text.slice(i)); if (!m) return null; i += m[0].length; return fold ? m[0].toLowerCase() : m[0]; };
   while (i < text.length) {
     const c = text[i]!;
     if (c === '*') i++;
-    else if (c === '.') { i++; const name = ident(); if (!name) return null; compound.classes.push(name); }
-    else if (c === '#') { i++; const name = ident(); if (!name) return null; compound.ids.push(name); }
+    else if (c === '.') { i++; const name = ident(false); if (!name) return null; compound.classes.push(name); }
+    else if (c === '#') { i++; const name = ident(false); if (!name) return null; compound.ids.push(name); }
     else if (c === '[') {
       const end = text.indexOf(']', i); if (end < 0) return null;
       const m = /^\s*([-\w]+)\s*(?:([~|^$*]?=)\s*(?:"([^"]*)"|'([^']*)'|([^\s\]]+)))?\s*$/.exec(text.slice(i + 1, end)); if (!m) return null;
@@ -264,7 +251,7 @@ function parseSelector(text: string): Selector | null {
   const tokens = text.match(/\[[^\]]*\]|\([^)]*\)|[>+~]|\s+|[^\s>+~[(]+/g) ?? [];
   const compounds: Compound[] = [], combinators: string[] = [], texts: string[] = [];
   let buffer = '', pending: string | null = null;
-  const flush = () => { if (!buffer) return true; const compound = parseCompound(buffer); texts.push(buffer.toLowerCase()); buffer = ''; if (!compound) return false; if (compounds.length) combinators.push(pending ?? ' '); compounds.push(compound); pending = null; return true; };
+  const flush = () => { if (!buffer) return true; const compound = parseCompound(buffer); texts.push(buffer); buffer = ''; if (!compound) return false; if (compounds.length) combinators.push(pending ?? ' '); compounds.push(compound); pending = null; return true; };
   for (const token of tokens) {
     if (/^\s+$/.test(token)) { if (!flush()) return null; if (pending === null && compounds.length) pending = ' '; }
     else if (token === '>' || token === '+' || token === '~') { if (!flush()) return null; pending = token; }
@@ -272,8 +259,7 @@ function parseSelector(text: string): Selector | null {
   }
   if (!flush() || !compounds.length || pending) return null;
   const weight = (c: Compound): number => c.ids.length * 10000 + (c.classes.length + c.attributes.length + c.pseudo.length) * 100 + (c.tag ? 1 : 0) + c.not.reduce((n, inner) => n + weight(inner), 0);
-  const context = texts.slice(0, -1).map((t, i) => `${t} ${combinators[i]!.trim()} `).join('').replace(/\s+/g, ' ').trim();
-  return { compounds, combinators, specificity: compounds.reduce((n, c) => n + weight(c), 0), context };
+  return { compounds, combinators, specificity: compounds.reduce((n, c) => n + weight(c), 0), text, parts: texts };
 }
 function nth(argument: string | undefined, position: number) {
   const a = (argument ?? '').replace(/\s+/g, '').toLowerCase();
@@ -287,10 +273,11 @@ function nth(argument: string | undefined, position: number) {
   const k = (position - offset) / step;
   return Number.isInteger(k) && k >= 0;
 }
+const fold = (facts: Facts, name: string) => facts.quirks ? name.toLowerCase() : name;
 function matchesCompound(facts: Facts, compound: Compound): boolean {
   if (compound.tag && compound.tag !== facts.tag) return false;
-  for (const id of compound.ids) if (facts.attrs.get('id')?.toLowerCase() !== id) return false;
-  for (const name of compound.classes) if (!facts.classes.has(name)) return false;
+  for (const id of compound.ids) { const own = facts.attrs.get('id'); if (own === undefined || fold(facts, own) !== fold(facts, id)) return false; }
+  for (const name of compound.classes) if (!facts.classes.has(fold(facts, name))) return false;
   for (const { name, op, value } of compound.attributes) {
     const actual = facts.attrs.get(name);
     if (actual === undefined) return false;
@@ -317,9 +304,6 @@ function matchesCompound(facts: Facts, compound: Compound): boolean {
   }
   return true;
 }
-/** The sheets of a message as a function from an element to the declarations its rules give it, in cascade order
- *  (least to most authoritative), with the element's own style attribute last. Bounded by sheet size, rule count and
- *  matching steps; a message past the step budget is too large to screen. */
 /** Whether an element matches a selector, within a budget of matching steps shared by one reading. */
 function matcher() {
   let steps = 0;
@@ -340,31 +324,32 @@ function matcher() {
     return walk(compounds.length - 1, facts);
   };
 }
-/** The declarations each element gets from the sheets and its style attribute. A rule whose `context` is in `clients`
- *  applies by its last compound alone, as in a mail client whose own markup around the message completes the rest. */
-function inliner(sheets: string[], tree: Map<Element, Facts>, clients: Set<string> = new Set()) {
-  const parsed: Rule[] = [];
-  const text = sheets.join('\n');
-  if (text.length <= MAX_SHEET_BYTES) rules(stripComments(text), parsed);
+/** The sheets of a message as a function from an element to the declarations its rules give it, in cascade order
+ *  (least to most authoritative), with the element's own style attribute last. A rule whose selector is in `clients`
+ *  applies as that selector without the leading compounds a mail client's own markup supplies (clientRules).
+ *  Bounded by rule count and matching steps; a message past the step budget is too large to screen. */
+function inliner(sheets: CssRule[], tree: Map<Element, Facts>, quirks = false, clients: Map<string, Selector> = new Map()) {
+  const parsed = readRules(sheets);
   // Indexed by the subject compound's first class, id or type, with the classes and ids a selector needs anywhere.
+  const key = (name: string) => quirks ? name.toLowerCase() : name;
   const index = new Map<string, { rule: Rule; needs: string[] }[]>();
   for (const rule of parsed) {
     const last = rule.selector.compounds[rule.selector.compounds.length - 1]!;
-    const key = last.classes.length ? `.${last.classes[0]}` : last.ids.length ? `#${last.ids[0]}` : last.tag ?? '*';
-    const entry = { rule, needs: (clients.has(rule.selector.context) ? [last] : rule.selector.compounds).flatMap(c => [...c.classes.map(n => `.${n}`), ...c.ids.map(n => `#${n}`)]) };
-    const list = index.get(key); if (list) list.push(entry); else index.set(key, [entry]);
+    const head = last.classes.length ? `.${key(last.classes[0]!)}` : last.ids.length ? `#${key(last.ids[0]!)}` : last.tag ?? '*';
+    const entry = { rule, needs: (clients.get(rule.selector.text) ?? rule.selector).compounds.flatMap(c => [...c.classes.map(n => `.${key(n)}`), ...c.ids.map(n => `#${key(n)}`)]) };
+    const list = index.get(head); if (list) list.push(entry); else index.set(head, [entry]);
   }
-  const match = matcher(), matches = (facts: Facts, selector: Selector) => clients.has(selector.context) ? matchesCompound(facts, selector.compounds.at(-1)!) : match(facts, selector);
+  const match = matcher(), matches = (facts: Facts, selector: Selector) => match(facts, clients.get(selector.text) ?? selector);
   // Mail repeats the same style attribute on every row and cell: each distinct one is read once.
   const styles = new Map<string, Declaration[]>();
   return (element: Element): Declaration[] => {
     const style = element.attrs.find(a => a.name === 'style')?.value ?? '';
     let inline = styles.get(style);
-    if (!inline) { inline = declarations(stripComments(style)); styles.set(style, inline); }
+    if (!inline) { inline = cssDeclarations(style); styles.set(style, inline); }
     const facts = tree.get(element);
     if (!facts || !parsed.length) return inline;
     const candidates = [...(index.get('*') ?? []), ...(index.get(facts.tag) ?? [])];
-    const id = facts.attrs.get('id')?.toLowerCase(); if (id) candidates.push(...index.get(`#${id}`) ?? []);
+    const id = facts.attrs.get('id'); if (id) candidates.push(...index.get(`#${key(id)}`) ?? []);
     for (const name of facts.classes) candidates.push(...index.get(`.${name}`) ?? []);
     type Candidate = Declaration & { specificity: number; order: number };
     const all: Candidate[] = [];
@@ -377,7 +362,7 @@ function inliner(sheets: string[], tree: Map<Element, Facts>, clients: Set<strin
   };
 }
 /** Element facts for selector matching, over the tree as submitted. */
-function survey(root: Element): Map<Element, Facts> {
+function survey(root: Element, quirks = false): Map<Element, Facts> {
   const tree = new Map<Element, Facts>();
   let count = 0;
   const visit = (parent: Element, facts: Facts | null) => {
@@ -385,10 +370,10 @@ function survey(root: Element): Map<Element, Facts> {
     const types = new Map<string, number>();
     let previous: Facts | null = null;
     for (const [i, element] of elements.entries()) {
-      const attrs = new Map(element.attrs.map(a => [a.name, a.value])), classes = new Set((attrs.get('class') ?? '').toLowerCase().split(/\s+/).filter(Boolean));
-      const chain = new Set(facts?.chain ?? []); for (const name of classes) chain.add(`.${name}`); const id = attrs.get('id'); if (id) chain.add(`#${id.toLowerCase()}`);
+      const attrs = new Map(element.attrs.map(a => [a.name, a.value])), names = attrs.get('class') ?? '', classes = new Set((quirks ? names.toLowerCase() : names).split(/[\t\n\f\r ]+/).filter(Boolean));
+      const chain = new Set(facts?.chain ?? []); for (const name of classes) chain.add(`.${name}`); const id = attrs.get('id'); if (id) chain.add(`#${quirks ? id.toLowerCase() : id}`);
       const typeIndex = (types.get(element.tagName) ?? 0) + 1; types.set(element.tagName, typeIndex);
-      const own: Facts = { id: ++count, tag: element.tagName, attrs, classes, chain, parent: facts, index: i + 1, typeIndex, siblings: elements.length, typeSiblings: 0, previous };
+      const own: Facts = { id: ++count, tag: element.tagName, attrs, classes, chain, parent: facts, index: i + 1, typeIndex, siblings: elements.length, typeSiblings: 0, previous, quirks };
       tree.set(element, own); previous = own;
       visit(element, own);
     }
@@ -432,124 +417,104 @@ type State = { fontPx: number; color: Rgb; background: Rgb };
 /** Whether every selector of a rule's prelude is one the style reader below applies (src/hosted-css.ts keeps colours
  *  only in such rules, so the reader sees every colour a Hosted copy can draw text in). */
 export const modeledSelector = (prelude: string) => prelude.split(',').every(text => !!parseSelector(stripComments(text).replace(/\s+/g, ' ').trim()));
-/** The @media queries a sheet holds, nested ones included, as written. */
-function mediaQueries(sheet: string): string[] {
-  return [...stripComments(sheet).matchAll(/@media\b([^{;]*)\{/gi)].map(m => m[1]!.replace(/\s+/g, ' ').trim().toLowerCase());
-}
-/** A sheet with the @media blocks whose query `open` accepts opened (their rules read as if it matched) and the others
- *  left out. */
-function mediaVariant(sheet: string, open: (query: string) => boolean): string {
-  const css = stripComments(sheet);
-  let out = '', i = 0;
-  for (;;) {
-    const at = css.slice(i).search(/@media\b/i);
-    if (at < 0) return out + css.slice(i);
-    out += css.slice(i, i + at);
-    const brace = css.indexOf('{', i + at);
-    if (brace < 0) return out;
-    let level = 1, j = brace + 1;
-    for (; j < css.length && level; j++) { if (css[j] === '{') level++; else if (css[j] === '}') level--; }
-    const query = css.slice(i + at + 6, brace).replace(/\s+/g, ' ').trim().toLowerCase();
-    if (open(query)) out += mediaVariant(css.slice(brace + 1, level ? css.length : j - 1), open);
-    i = j;
-  }
-}
-// A media query of screen width or colour scheme only (the queries mail toggles content with), each part optionally
-// `only screen and` / `all and`. One of a media type alone (`screen`) always matches in a mail client.
-const QUERY_PART = /^(?:(?:only )?(?:screen|all)(?: and |$))?(?:\((?:(?:min-|max-)?(?:device-)?width ?: ?[\d.]+[a-z]*|(?:[\d.]+[a-z]* ?[<>]=? ?)?width(?: ?[<>]=? ?[\d.]+[a-z]*)?|prefers-color-scheme ?: ?(?:dark|light))\)(?: and |$))*$/;
-const toggleQuery = (query: string) => query.split(',').every(part => QUERY_PART.test(part.trim()));
 const alwaysOn = (query: string) => query.split(',').some(part => /^(?:only )?(?:screen|all)$/.test(part.trim()));
 type Look = { color: Rgb; background: Rgb; image: boolean; fontPx: number; opacity: number };
 const LINK: Rgb = [0, 0, 238];
-// Elements whose display mail toggles whole (a block that shows for one screen width or colour scheme and not another),
-// with the display each has unless a style says otherwise. A toggled element keeps a box of its own wherever it shows:
-// one of BOX, or its own table role (a div acting as a table part would line up beside other text).
-const TOGGLED: Record<string, string> = { div: 'block', p: 'block', table: 'table', tr: 'table-row', td: 'table-cell', th: 'table-cell', img: 'inline',
-  h1: 'block', h2: 'block', h3: 'block', h4: 'block', h5: 'block', h6: 'block', ul: 'block', ol: 'block', li: 'list-item', blockquote: 'block', center: 'block' };
-const BOX = /^(?:block|flow-root|table|list-item|flex|grid)$/;
-// Declarations that show or hide what they style: what makes a media query or a client's selector a toggle condition.
-const TOGGLING = new Set(['display', 'visibility', 'opacity', 'max-height', 'overflow', 'overflow-x', 'overflow-y']);
-/** At most this many conditions are read in every combination; with more, toggled content shows everywhere. */
-export const MAX_CONDITIONS = 3;
-/** The @media blocks of a sheet, nested ones included, each with its query and its own text. */
-function mediaBlocks(sheet: string): { query: string; css: string }[] {
-  const css = stripComments(sheet), out: { query: string; css: string }[] = [];
-  for (let i = 0; ;) {
-    const at = css.slice(i).search(/@media\b/i);
-    if (at < 0) return out;
-    const brace = css.indexOf('{', i + at);
-    if (brace < 0) return out;
-    let level = 1, j = brace + 1;
-    for (; j < css.length && level; j++) { if (css[j] === '{') level++; else if (css[j] === '}') level--; }
-    const inner = css.slice(brace + 1, level ? css.length : j - 1);
-    out.push({ query: css.slice(i + at + 6, brace).replace(/\s+/g, ' ').trim().toLowerCase(), css: inner }, ...mediaBlocks(inner));
-    i = j;
-  }
-}
-type Condition = { media?: string; client?: string };
-/**
- * What a Hosted copy (src/hosted-html.ts) shows nothing of, read from its sheets and style attributes: the elements
- * hidden (display:none, visibility:hidden or collapse, opacity of 0.1 or less, type under 2 px, a line height under
- * 1 px, or a box of 2 px or less with its overflow hidden) and the text drawn in, or within a contrast of 1.5 of, its
- * background colour (over a background image, text counts as shown).
- *
- * Mail shows some content to some recipients only, by condition: a screen-width or colour-scheme @media query, or a
- * mail client whose own markup completes a selector (Gmail's `u + .body .x`: a rule whose last compound matches what the
- * whole selector doesn't). With at most MAX_CONDITIONS conditions that show or hide anything, the sheets are read in
- * every combination of them (`variants`), and a block (TOGGLED, a box of its own in every variant that shows it, never a
- * floated or flex or grid item) that one variant shows and another hides is a toggle: it keeps its hiding, and
- * `variants` lists the toggles each distinct variant hides, so the screen reads every variant's complete text in order
- * (src/screen.ts). Anything else a variant hides is hidden. With more conditions (`conservative`), there are no toggles:
- * what a block's own style hides and a condition shows is shown everywhere (`shown`), and the rest is hidden. Text in its
- * background colour in any variant, or with every @media query and client selector applying, is invisible.
- *
- * `toggleRule` says whether a sheet's hiding declaration may stay: when every element its selectors' last compounds
- * match is a block some variant shows, and every @media query around it is a width or colour-scheme one.
- */
-export function concealed(root: Element, sheets: string[], conservative = false) {
-  // Selectors are matched against the tree only when there are sheets to match.
-  const tree = sheets.some(sheet => sheet.trim()) ? survey(root) : new Map<Element, Facts>();
-  const opened = (open: (query: string) => boolean) => sheets.map(sheet => mediaVariant(sheet, open)).join('\n');
-  // The conditions: media queries, and client contexts, holding something that shows or hides.
-  const media = [...new Set(sheets.flatMap(mediaBlocks).filter(b => toggleQuery(b.query) && !alwaysOn(b.query) && [...TOGGLING].some(p => new RegExp(`(?:^|[;{\\s])${p}\\s*:`, 'i').test(b.css))).map(b => b.query))];
-  const candidates: Rule[] = [], match = matcher(), clients = new Set<string>();
-  rules(stripComments(opened(() => true)), candidates);
-  for (const rule of candidates) {
-    if (!rule.selector.context || !rule.declarations.some(d => TOGGLING.has(d.property))) continue;
-    const last = rule.selector.compounds.at(-1)!;
-    for (const [, facts] of tree) if (matchesCompound(facts, last) && !match(facts, rule.selector)) { clients.add(rule.selector.context); break; }
-  }
-  const conditions: Condition[] = [...media.map(q => ({ media: q })), ...[...clients].map(c => ({ client: c }))];
-  conservative ||= conditions.length > MAX_CONDITIONS;
-  const reading = new Map<string, ReturnType<typeof inliner>>();
-  const read = (on: Condition[]) => {
-    const text = opened(q => alwaysOn(q) || on.some(c => c.media === q)), contexts = new Set(on.flatMap(c => c.client ? [c.client] : [])), key = `${text}\0${[...contexts].join('\0')}`;
-    let r = reading.get(key); if (!r) { r = inliner([text], tree, contexts); reading.set(key, r); }
-    return r;
+// Leading compounds mail clients' own markup is known to match: Gmail's <u> before the body, Outlook.com's [owa] and dark
+// mode's [data-ogsc] and kin, its .ExternalClass wrapper, and Apple Mail's and Samsung's message containers.
+const CLIENT_HOOKS = /^(?:u|\[(?:owa|data-og[sa][cb])(?:[~|^$*]?=[^\]]*)?\]|\.externalclass|#messageviewbody|#messagewebviewdiv)$/i;
+/** Rules that apply by condition, a mail client's own markup completing them: those whose leading compounds are known
+ *  client hooks (CLIENT_HOOKS) or match nothing in the document. Each, grouped by those leading compounds (the client),
+ *  maps its selector to the rest of it, which is matched against the document. */
+function clientRules(rules: Rule[], tree: Map<Element, Facts>, absent = new Map<string, boolean>(), match = matcher()): Map<string, Map<string, Selector>> {
+  const clients = new Map<string, Map<string, Selector>>();
+  const nothing = (compound: Compound, text: string) => {
+    if (CLIENT_HOOKS.test(text)) return true;
+    let found = absent.get(text);
+    if (found === undefined) {
+      const single: Selector = { compounds: [compound], combinators: [], specificity: 0, text, parts: [text] };
+      found = true;
+      for (const [, facts] of tree) if (match(facts, single)) { found = false; break; }
+      absent.set(text, found);
+    }
+    return found;
   };
-  // Every combination of the conditions (conservative: none of them, and all of them), and every query and selector
-  // applying at once, for colours only.
-  const sets = conservative ? [[], conditions] : Array.from({ length: 2 ** conditions.length }, (_, n) => conditions.filter((_, i) => n & (1 << i)));
-  const readings = sets.map(read), colours = inliner([opened(() => true)], tree, clients);
+  for (const { selector } of rules) {
+    let k = 0;
+    while (k < selector.compounds.length - 1 && nothing(selector.compounds[k]!, selector.parts[k]!)) k++;
+    if (!k) continue;
+    const client = selector.parts.slice(0, k).map((part, i) => `${part} ${selector.combinators[i]}`).join(' ');
+    let group = clients.get(client); if (!group) { group = new Map(); clients.set(client, group); }
+    group.set(selector.text, { ...selector, compounds: selector.compounds.slice(k), combinators: selector.combinators.slice(k), parts: selector.parts.slice(k) });
+  }
+  return clients;
+}
+/** What src/hosted-css.ts asks of a document's selectors (its `Selectors`): whether the style reader applies a rule's
+ *  selector list, and whether one of them applies by condition (clientRules), in either way classes may match (MODES). */
+export function documentSelectors(root: Element, quirks: boolean) {
+  // One survey, one matching budget and one answer per compound and per selector list, however many declarations ask.
+  const ways = MODES(quirks).map(mode => ({ tree: survey(root, mode), absent: new Map<string, boolean>() })), match = matcher(), answers = new Map<string, boolean>();
+  return {
+    modeled: modeledSelector,
+    conditional: (prelude: string) => {
+      let answer = answers.get(prelude);
+      if (answer === undefined) {
+        const rules = readRules([{ selector: prelude, media: [], declarations: [{ property: 'color', value: 'inherit', important: false }] }]);
+        answer = ways.some(({ tree, absent }) => clientRules(rules, tree, absent, match).size > 0); answers.set(prelude, answer);
+      }
+      return answer;
+    },
+  };
+}
+// How a document's classes and ids may match: as written (a client that shows a quirks-mode message inside its own
+// standards-mode page), and, in a quirks-mode document, whatever their case too.
+const MODES = (quirks: boolean) => quirks ? [true, false] : [false];
+/** Readings beyond the default and the one with everything applying: one per condition, up to this many. */
+const MAX_READINGS = 8;
+/**
+ * What a Hosted copy (src/hosted-html.ts) still shows nothing of, read from its sheets and style attributes. The copy
+ * keeps no CSS that hides or shows content on its own (src/hosted-css.ts), so this finds what declarations hide only
+ * together: the elements hidden (display:none, visibility:hidden or collapse, opacity of 0.1 or less, type under 2 px,
+ * a line height under 1 px, or a box of 2 px or less, or under half its type size, with its overflow hidden) and the
+ * text drawn in, or within a contrast of 1.5 of, its background colour (over a background image, text counts as shown).
+ *
+ * Conditions (a @media query, or a mail client whose own markup completes a selector) change only sizes, spacing, type
+ * and colour in the copy, so the sheets are read with none of them applying, with each alone (up to MAX_READINGS), and
+ * with all of them at once; what is hidden or invisible in any reading counts. Layout (`inline`, `block`) is the
+ * default reading's: a condition may only make a box a block (display:block), which puts its content on lines of its
+ * own, so the default layout reads text together at least wherever any recipient sees it together.
+ */
+export function concealed(root: Element, sheets: CssRule[], quirks = false) {
+  const queries = [...new Set(sheets.flatMap(rule => rule.media).filter(query => !alwaysOn(query)))];
+  // Each way classes may match (MODES) reads the same: the first (the document's own) gives the layout. Selectors are
+  // matched against the tree only when there are rules to match.
+  const readings = MODES(quirks).flatMap(mode => {
+    const tree = sheets.length ? survey(root, mode) : new Map<Element, Facts>();
+    const clients = sheets.length ? clientRules(readRules(sheets), tree) : new Map<string, Map<string, Selector>>();
+    const reading = (open: (query: string) => boolean, relaxed = new Map<string, Selector>()) => inliner(sheets.filter(rule => rule.media.every(query => alwaysOn(query) || open(query))), tree, mode, relaxed);
+    const conditions = queries.length + clients.size <= MAX_READINGS ? [...queries.map(query => reading(q => q === query)), ...[...clients.values()].map(group => reading(() => false, group))] : [];
+    return [reading(() => false), ...conditions, ...(queries.length || clients.size ? [reading(() => true, new Map([...clients.values()].flatMap(group => [...group])))] : [])];
+  });
   const hidden = new Set<Element>(), invisible = new Set<DefaultTreeAdapterMap['textNode']>(), inline = new Set<Element>(), block = new Set<Element>();
-  const toggles = sets.map(() => new Set<Element>()), shown = new Set<Element>(), showable = new Map<Element, boolean>();
   // Siblings repeat the same style under the same parent: each distinct one is looked at once.
   const looked = new Map<Look, Map<Declaration[], Map<string, Look | null>>>();
-  const look = (element: Element, inherited: Look, merged: Declaration[], shown = false): Look | null => {
+  const look = (element: Element, inherited: Look, merged: Declaration[]): Look | null => {
     const attr = (name: string) => element.attrs.find(a => a.name === name)?.value;
-    const key = `${element.tagName}|${attr('bgcolor') ?? ''}|${attr('href') !== undefined}|${attr('color') ?? ''}|${attr('size') ?? ''}|${shown}`;
+    const key = `${element.tagName}|${attr('bgcolor') ?? ''}|${attr('href') !== undefined}|${attr('color') ?? ''}|${attr('size') ?? ''}`;
     let byMerged = looked.get(inherited); if (!byMerged) { byMerged = new Map(); looked.set(inherited, byMerged); }
     let byKey = byMerged.get(merged); if (!byKey) { byKey = new Map(); byMerged.set(merged, byKey); }
     if (byKey.has(key)) return byKey.get(key)!;
-    const result = lookAt(element, inherited, merged, shown, attr);
+    const result = lookAt(element, inherited, merged, attr);
     byKey.set(key, result);
     return result;
   };
-  const lookAt = (element: Element, inherited: Look, merged: Declaration[], shown: boolean, attr: (name: string) => string | undefined): Look | null => {
+  const lookAt = (element: Element, inherited: Look, merged: Declaration[], attr: (name: string) => string | undefined): Look | null => {
     const state = { ...inherited };
-    let clipped = false, small = false, hide = false;
+    let clipped = false, hide = false;
+    const boxes: number[] = [];
     const paint = (token: string) => { const c = colorOf(token); if (c) { state.background = blend(c.rgb, c.alpha, state.background); if (c.alpha >= 1) state.image = false; } };
     const value = (raw: string) => raw.toLowerCase().replace(/\s*\(\s*([^)]*?)\s*\)/g, (_, inner: string) => `(${inner.replace(/\s*,\s*/g, ',').replace(/\s+/g, ',')})`).replace(/\s+/g, ' ').trim();
+    const base = (property: string) => property.replace(/^-(?:webkit|moz|ms|o)-/, '');
     const bgcolor = attr('bgcolor'); if (bgcolor) paint(bgcolor.trim().toLowerCase());
     for (const d of merged) {
       const v = value(d.value);
@@ -562,58 +527,44 @@ export function concealed(root: Element, sheets: string[], conservative = false)
     const fontSize = element.tagName === 'font' ? own(FONT_SIZE_ATTRIBUTE, attr('size')?.trim() ?? '') : undefined;
     if (fontSize) state.fontPx = fontSize;
     state.fontPx *= own(UA_SCALE, element.tagName) ?? 1;
+    let fill: Rgb | undefined;
     for (const d of merged) {
       const v = value(d.value);
-      switch (d.property) {
-        case 'display': hide ||= v === 'none' && !shown; break;
+      switch (base(d.property)) {
+        case 'display': hide ||= v === 'none'; break;
         case 'visibility': hide ||= v === 'hidden' || v === 'collapse'; break;
         case 'opacity': { const n = v.endsWith('%') ? parseFloat(v) / 100 : parseFloat(v); if (Number.isFinite(n)) state.opacity *= Math.max(0, n); break; }
         case 'color': { if (v === 'transparent') state.color = state.background; else { const c = colorOf(v); if (c) state.color = blend(c.rgb, c.alpha, state.background); } break; }
+        // A text fill paints over the colour, on this element and what inherits it.
+        case 'text-fill-color': { if (v === 'transparent') fill = state.background; else { const c = colorOf(v); if (c) fill = blend(c.rgb, c.alpha, state.background); } break; }
         case 'font-size': { const n = fontPx(v, state.fontPx); if (n !== undefined) state.fontPx = n; break; }
         case 'font': { const n = v.split(/[ /]/).map(token => /^[-\d.]/.test(token) ? fontPx(token, state.fontPx) : undefined).find(n => n !== undefined); if (n !== undefined) state.fontPx = n; break; }
         case 'line-height': { const n = /^[\d.]+$/.test(v) ? parseFloat(v) * state.fontPx : px(v, state.fontPx, state.fontPx); hide ||= n !== undefined && n < 1; break; }
         case 'overflow': case 'overflow-x': case 'overflow-y': clipped ||= /\b(?:hidden|clip)\b/.test(v); break;
-        case 'height': case 'max-height': case 'width': case 'max-width': { const n = px(v, state.fontPx, NaN); small ||= n !== undefined && n <= 2; break; }
+        case 'height': case 'max-height': case 'width': case 'max-width': { const n = px(v, state.fontPx, NaN); if (n !== undefined && !Number.isNaN(n)) boxes.push(n); break; }
       }
     }
+    if (fill) state.color = fill;
+    const small = boxes.some(n => n <= 2 || n < state.fontPx / 2);
     return hide || (clipped && small) || state.fontPx < 2 || state.opacity <= 0.1 ? null : state;
   };
   const start: Look = { color: [0, 0, 0], background: [255, 255, 255], image: false, fontPx: 16, opacity: 1 };
-  const once = <T>(list: ReturnType<typeof inliner>[], node: Element, map: Map<ReturnType<typeof inliner>, T>, f: (r: ReturnType<typeof inliner>) => T) => list.map(r => { if (!map.has(r)) map.set(r, f(r)); return map.get(r)!; });
-  // How each element lays out, for reading its text in order: inline when any variant makes it inline (or contents) or
-  // an item of a flex or grid container, which lines items up side by side; block when a variant gives it another box.
-  const visit = (element: Element, looks: (Look | null)[], colour: Look | null, items: boolean) => {
+  // How each element lays out, for reading its text in order: inline when inline (or contents) or an item of a flex or
+  // grid container, which lines items up side by side; block when it has another box.
+  const visit = (element: Element, looks: Look[], items: boolean) => {
     for (const node of element.childNodes) {
-      if (isText(node)) { if (node.value.trim() && [...looks, colour].some(l => l && !l.image && contrast(l.color, l.background) < 1.5)) invisible.add(node); continue; }
+      if (isText(node)) { if (node.value.trim() && looks.some(l => !l.image && contrast(l.color, l.background) < 1.5)) invisible.add(node); continue; }
       if (!isElement(node) || node.namespaceURI !== HTML || node.tagName === 'head') continue;
-      const merged: Declaration[][] = once(readings, node, new Map(), r => r(node)), live = looks.map(Boolean);
-      const displays = merged.map((m, i) => live[i] ? m.findLast(d => d.property === 'display')?.value.trim().toLowerCase() : undefined);
-      if (items || displays.some(d => d && (d.startsWith('inline') || d === 'contents'))) inline.add(node); else if (displays.some(Boolean)) block.add(node);
-      const states = looks.map((l, i) => l && look(node, l, merged[i]!)), flows = displays.some(d => d && /^(?:inline-)?(?:flex|grid)$/.test(d));
-      const next = colour && look(node, colour, colours(node), true);
-      const showing = states.filter((s, i) => s && live[i]).length, hiding = states.filter((s, i) => !s && live[i]).length;
-      if (!hiding) { showable.set(node, true); visit(node, states, next, flows); continue; }
-      // A block of its own wherever it shows.
-      const own = TOGGLED[node.tagName], floats = merged.some(m => m.some((d: Declaration) => d.property === 'float' && d.value.trim().toLowerCase() !== 'none'));
-      const box = (d: string | undefined) => { const v = d ?? own ?? ''; return BOX.test(v) || (v === own && own !== 'inline'); };
-      const eligible = !!own && !items && !floats && displays.every((d, i) => !states[i] || box(d));
-      showable.set(node, eligible && showing > 0);
-      if (!eligible || !showing) { hidden.add(node); continue; }
-      if (conservative) { shown.add(node); visit(node, looks.map((l, i) => l && look(node, l, merged[i]!, true)), next, flows); continue; }
-      states.forEach((s, i) => { if (!s && live[i]) toggles[i]!.add(node); });
-      visit(node, states, next, flows);
+      const merged = readings.map(read => read(node));
+      const display = merged[0]!.findLast(d => d.property === 'display')?.value.trim().toLowerCase();
+      if (items || (display && (display.startsWith('inline') || display === 'contents'))) inline.add(node); else if (display) block.add(node);
+      const states = looks.map((l, i) => look(node, l, merged[i]!));
+      if (states.some(state => !state)) { hidden.add(node); continue; }
+      visit(node, states as Look[], !!display && /^(?:inline-)?(?:flex|grid)$/.test(display));
     }
   };
-  visit(root, readings.map(() => start), start, false);
-  // Variants that hide the same toggles read the same: each distinct one once, the one hiding the fewest first.
-  const variants = [...new Map(toggles.map(set => [[...set].map(e => tree.get(e)?.id ?? 0).sort().join(','), set] as const)).values()].sort((a, b) => a.size - b.size);
-  const toggleRule = (selector: string, queries: string[]) => !conservative && queries.every(query => toggleQuery(query.replace(/\s+/g, ' ').trim().toLowerCase())) && selector.split(',').every(text => {
-    const parsed = parseSelector(stripComments(text).replace(/\s+/g, ' ').trim());
-    if (!parsed) return false;
-    const last = parsed.compounds.at(-1)!, matched = [...tree].filter(([, facts]) => matchesCompound(facts, last)).map(([element]) => element);
-    return matched.length > 0 && matched.every(element => showable.get(element) === true);
-  });
-  return { hidden, invisible, inline, block, variants, shown, conservative, conditions: conditions.length, toggleRule };
+  visit(root, readings.map(() => start), false);
+  return { hidden, invisible, inline, block };
 }
 export function screenedHtml(html: string, previewText?: string): string {
   let copy = pass(html, previewText);
@@ -657,7 +608,8 @@ function pass(html: string, previewText?: string, stats?: HtmlStats): string {
   const sheets: string[] = [];
   const collect = (parent: Parent) => { for (const node of parent.childNodes) if (isElement(node) && node.namespaceURI === HTML) { if (node.tagName === 'style') sheets.push(node.childNodes.map(child => isText(child) ? child.value : '').join('')); else collect(node); } };
   collect(root);
-  const styles = inliner(sheets, survey(root));
+  const quirks = 'mode' in document && document.mode === 'quirks', rules = sheets.flatMap(cssRules).filter(rule => !rule.media.length);
+  const styles = inliner(rules, survey(root, quirks), quirks);
   let seenText = false, words = 0, imageArea = 0;
   const wordsIn = (node: Node): number => isText(node) ? visibleWords(node.value) : isElement(node) ? node.childNodes.reduce((n, child) => n + wordsIn(child), 0) : 0;
   const detach = (node: Node) => defaultTreeAdapter.detachNode(node);

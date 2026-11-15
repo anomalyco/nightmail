@@ -11,13 +11,15 @@
  * - background-image may load one absolute https url("…"), with no escapes, which is listed for the screen.
  * - At-rules: @media stays (its rules filtered the same way); @font-face and @import stay only when they load from the
  *   font services in FontPolicy; every other at-rule (@supports, @keyframes, @counter-style, @page …) is removed.
+ * - Every version shows: what hides or shows content is removed wherever it is (hides), and by condition (in @media, or
+ *   in a rule a mail client's own markup completes: Selectors) only sizes, spacing, type, colour and display:block stay
+ *   (CONDITIONAL). What draws text in another order than the document's is removed everywhere.
  * - A rule stays only with a selector this reader understands and a block of plain declarations: nested rules or
  *   at-rules in a block remove the whole rule. A rule left without declarations is removed.
  *
  * Removing whole declarations and rules from where they were parsed leaves the rest of the text to read as it did.
  */
 import { Limit, tokenize, type Token } from './css-syntax.js';
-import { modeledSelector } from './screened-html.js';
 
 /** Where a sheet may load fonts (an @font-face's files) and other sheets (@import) from: a font can draw any
  *  text and a sheet can generate it, and the screen reads neither. */
@@ -26,7 +28,9 @@ export type FontPolicy = { font: (target: string) => boolean; sheet: (target: st
 export type Resolve = (value: string) => string | null;
 /** A sheet or style attribute as delivered: the kept text, what it loads, what was removed and why, and the hosts whose
  *  fonts or sheets were removed. */
-export type HostedCss = { css: string; destinations: string[]; removed: string[]; fonts: string[]; changed: boolean };
+export type HostedCss = { css: string; destinations: string[]; removed: string[]; fonts: string[]; changed: boolean;
+  /** Whether it removed something that hides or shows content, or changes layout by screen, colour scheme or client. */
+  versions: boolean };
 
 // The presentation properties a Hosted message keeps, unprefixed (-webkit-, -moz-, -ms- and -o- variants count too).
 // Left out on purpose: content, quotes, counters and anything else that draws text; cursor, filter, mask, clip-path,
@@ -147,14 +151,17 @@ function declaration(segment: Segment): { name: Token; value: CV[] } | null {
 
 // ----- What may stay ---------------------------------------------------------------------------------------------------
 
-// `inline`: a style attribute rather than a sheet; `modeled`: whether the screen's style reader (src/screened-html.ts)
-// applies the sheet rule being read, so it can tell where its colours make text invisible.
-// `selector` and `media`: the rule being read and the @media queries around it, for `toggle`, which says whether what it
-// hides may stay hidden (blocks shown for one screen width or colour scheme and hidden for another).
-type Read = { text: string; resolve: Resolve; policy: FontPolicy; destinations: string[]; removed: string[]; fonts: string[]; inline: boolean; modeled: boolean;
-  selector: string; media: string[]; toggle: Toggle; shown: boolean };
-/** Whether a sheet's hiding declarations may stay, by the rule's selector and the @media queries around it. */
-export type Toggle = (selector: string, media: string[]) => boolean;
+/** What a sheet's reader knows of the document a sheet styles (src/hosted-html.ts): whether the screen's style reader
+ *  (src/screened-html.ts) applies a selector (`modeled`), and whether a selector applies by condition, a mail client's
+ *  own markup completing it (`conditional`, as Gmail's `u + .body .x`). */
+export type Selectors = { modeled: (selector: string) => boolean; conditional: (selector: string) => boolean };
+const ANY: Selectors = { modeled: () => true, conditional: () => false };
+// `inline`: a style attribute rather than a sheet; `selector` and `media`: the rule being read and the @media queries
+// around it; `clips`: whether the declaration block being read hides what overflows its box; `blank`: a style
+// attribute on an element that holds no text or image, which hiding hides nothing of; `versions`: whether
+// anything that hides, shows or changes layout by condition was removed.
+type Read = { text: string; resolve: Resolve; policy: FontPolicy; destinations: string[]; removed: string[]; fonts: string[]; inline: boolean; selectors: Selectors;
+  selector: string; media: string[]; clips: boolean; blank: boolean; versions: boolean };
 const raw = (read: Read, n: { start: number; end: number }) => read.text.slice(n.start, n.end);
 function foreign(read: Read, target: string) {
   const host = new URL(target).host;
@@ -220,27 +227,46 @@ function keep(read: Read, d: { name: Token; value: CV[] }, context: 'style' | 'f
     if (words.length && words.every(n => n.kind === 'token' && n.t.kind === 'ident' && allowed.has(n.t.value.toLowerCase()))) return null;
     return 'List style changed to plain numbers or bullets';
   }
-  if (/^(?:flex-direction|flex-flow|flex-wrap)$/.test(base) && d.value.some(n => n.kind === 'token' && n.t.kind === 'ident' && /reverse$/i.test(n.t.value))) return `CSS ${name} that reverses the order`;
   if (!plainValue(d.value, STRINGS.has(base))) return `CSS ${name} with a value Hosted sending doesn't keep`;
   const words = withoutImportant(d.value), idents = words.flatMap(n => n.kind === 'token' && n.t.kind === 'ident' ? [n.t.value.toLowerCase()] : []);
   const sizes = words.flatMap(n => n.kind === 'token' ? [size(n.t)] : []).filter(n => !Number.isNaN(n));
-  // What draws text in another order than the document's: rows moved to a table's head or foot, right floats (which
-  // line up in reverse), and negative offsets that pull text over or before what precedes it.
-  if (base === 'display' && idents.some(v => /^table-(?:header-group|footer-group|caption)$/.test(v))) return 'CSS display that moves table rows';
-  if (base === 'float' && idents.some(v => v !== 'none' && v !== 'left' && v !== 'inline-start')) return 'CSS float other than left';
-  if ((/^margin/.test(base) || base === 'text-indent') && sizes.some(n => n < 0)) return `negative CSS ${base.startsWith('margin') ? 'margins' : base}`;
-  if ((base === 'letter-spacing' || base === 'word-spacing') && sizes.some(n => n < -2)) return `CSS ${base} that overlaps letters`;
-  // mso-hide:all hides from Outlook alone what every other client shows (a button's HTML beside its VML twin): with
-  // the conditional comments gone, Outlook shows it too.
-  if (base === 'mso-hide' && idents.includes('all')) return 'CSS mso-hide (Outlook shows it too)';
-  if (read.inline && !read.shown) return null;
-  // In a sheet, what would hide whatever its selector matches is removed, so the text shows (the copy removes content
-  // that a style attribute hides: src/hosted-html.ts), unless it toggles whole blocks for a screen width or colour
-  // scheme (`toggle`). So are colours in a rule the screen's style reader doesn't apply.
-  if (hides(base, words, idents, sizes, read)) return read.toggle(read.selector, read.media) ? null : 'CSS that hides text';
-  if (!read.modeled && /^(?:color|background|background-color)$/.test(base)) return `CSS ${base} in a rule Hosted sending can't check`;
+  // Every version of the message shows at once: what hides or shows content is removed wherever it is, and so is what
+  // changes it by condition (in @media, or in a rule a mail client's own markup completes) beyond sizes, spacing, type
+  // and colour.
+  const conditional = read.media.length > 0 || (!read.inline && read.selectors.conditional(read.selector));
+  if (!read.blank && hides(base, words, idents, sizes, read, conditional)) { read.versions = true; return 'CSS that hides or shows content'; }
+  // By condition, display:block alone stays (columns stacked on a phone): it only puts content on lines of its own, in
+  // document order, so the screen, which reads the layout without conditions, reads it together or apart at most.
+  if (conditional && !CONDITIONAL.has(base) && !(base === 'display' && idents.length === 1 && idents[0] === 'block')) { read.versions = true; return 'CSS that changes layout by screen, colour scheme or mail client'; }
+  // What draws text in another order than the document's.
+  if (base === 'display' && idents.some(v => v === 'contents' || /^table-(?:header-group|footer-group|caption)$/.test(v))) return 'CSS that reorders text';
+  if (base === 'float' && idents.some(v => v !== 'none')) return 'CSS that reorders text';
+  if (/^(?:flex-direction|flex-flow|flex-wrap)$/.test(base) && idents.some(v => v.endsWith('reverse'))) return 'CSS that reorders text';
+  if ((/^margin/.test(base) || base === 'text-indent') && sizes.some(n => n < 0)) return 'CSS that reorders text';
+  if ((base === 'letter-spacing' || base === 'word-spacing') && sizes.some(n => n < -2)) return 'CSS that reorders text';
+  if (base === 'mso-hide') return 'CSS mso-hide (Outlook shows it too)';
+  // What the screen reads to tell whether text can be seen must be in a rule its style reader applies, written plainly.
+  if (VISIBLE.has(base) && (!read.inline && !read.selectors.modeled(read.selector) || raw(read, { start: d.value[0]?.start ?? 0, end: d.value.at(-1)?.end ?? 0 }).includes('\\'))) return `CSS ${base} in a rule Hosted sending can't check`;
   return null;
 }
+// What may change by condition: sizes, spacing, borders, type and colour.
+const CONDITIONAL = new Set(['width', 'min-width', 'max-width', 'height', 'min-height', 'max-height', 'inline-size', 'block-size', 'min-inline-size', 'max-inline-size',
+  'min-block-size', 'max-block-size', 'box-sizing', 'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'padding-block', 'padding-inline',
+  'padding-block-start', 'padding-block-end', 'padding-inline-start', 'padding-inline-end', 'margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left',
+  'margin-block', 'margin-inline', 'margin-block-start', 'margin-block-end', 'margin-inline-start', 'margin-inline-end', 'border', 'border-top', 'border-right',
+  'border-bottom', 'border-left', 'border-width', 'border-style', 'border-color', 'border-top-width', 'border-right-width', 'border-bottom-width', 'border-left-width',
+  'border-top-style', 'border-right-style', 'border-bottom-style', 'border-left-style', 'border-top-color', 'border-right-color', 'border-bottom-color', 'border-left-color',
+  'border-radius', 'border-top-left-radius', 'border-top-right-radius', 'border-bottom-left-radius', 'border-bottom-right-radius', 'border-collapse', 'border-spacing',
+  'outline', 'outline-width', 'outline-style', 'outline-color', 'outline-offset', 'box-shadow', 'font', 'font-family', 'font-size', 'font-style', 'font-weight',
+  'font-variant', 'font-variant-caps', 'font-variant-numeric', 'font-variant-ligatures', 'font-feature-settings', 'font-variation-settings', 'font-stretch',
+  'font-kerning', 'font-optical-sizing', 'font-synthesis', 'font-size-adjust', 'font-smoothing', 'osx-font-smoothing', 'line-height', 'letter-spacing',
+  'word-spacing', 'text-align', 'text-align-last', 'text-decoration', 'text-decoration-line', 'text-decoration-color', 'text-decoration-style',
+  'text-decoration-thickness', 'text-underline-offset', 'text-underline-position', 'text-transform', 'text-shadow', 'text-rendering', 'text-size-adjust', 'color',
+  'background', 'background-color', 'background-image', 'background-position', 'background-size', 'background-repeat', 'background-clip', 'background-origin',
+  'color-scheme', 'supported-color-schemes', 'accent-color', 'caret-color', 'text-fill-color']);
+// What the screen's style reader reads to tell whether text can be seen (src/screened-html.ts concealed).
+const VISIBLE = new Set(['display', 'opacity', 'overflow', 'overflow-x', 'overflow-y', 'width', 'max-width', 'height', 'max-height', 'font', 'font-size',
+  'line-height', 'color', 'background', 'background-color', 'background-image', 'text-fill-color']);
 // A length, roughly in px (16 px type, a 390 px wide screen); NaN for anything that isn't one. Percentages count against
 // 16 px, which is what they are for font-size and line-height.
 function size(t: Token): number {
@@ -252,12 +278,13 @@ function size(t: Token): number {
     ?? (/^[sld]?v(?:w|h|i|b|min|max)$/.test(unit) ? 3.9 : NaN);
   return t.num * factor;
 }
-// Hiding by selector: display:none, visibility:hidden, opacity near 0, type or line height under 2 px,
-// a box of no height or width, and a colour without opacity.
-function hides(base: string, words: CV[], idents: string[], sizes: number[], read: Read): boolean {
+// What hides or shows content: display:none, any visibility, opacity of 0.1 or less, type or a line height under 2 px, a box
+// 2 px or less across in a block that hides its overflow (or by condition, where another rule may hide it), and a colour
+// or text fill without opacity.
+function hides(base: string, words: CV[], idents: string[], sizes: number[], read: Read, conditional: boolean): boolean {
   switch (base) {
     case 'display': return idents.includes('none');
-    case 'visibility': return idents.includes('hidden') || idents.includes('collapse');
+    case 'visibility': return true;
     case 'opacity': return words.some(n => n.kind === 'token' && ((n.t.kind === 'number' && n.t.num <= 0.1) || (n.t.kind === 'percentage' && n.t.num <= 10)));
     case 'font-size': case 'line-height': return sizes.some(n => n < 2);
     case 'font': {
@@ -266,8 +293,8 @@ function hides(base: string, words: CV[], idents: string[], sizes: number[], rea
       return lengths.some(n => n.kind === 'token' && size(n.t) < 2);
     }
     case 'height': case 'max-height': case 'width': case 'max-width': case 'block-size': case 'max-block-size': case 'inline-size': case 'max-inline-size':
-      return sizes.some(n => n <= 0.5);
-    case 'color': return transparent(raw(read, { start: words[0]?.start ?? 0, end: words.at(-1)?.end ?? 0 }));
+      return (read.clips || conditional) && sizes.some(n => n <= 2);
+    case 'color': case 'text-fill-color': return transparent(raw(read, { start: words[0]?.start ?? 0, end: words.at(-1)?.end ?? 0 }));
     default: return false;
   }
 }
@@ -290,6 +317,8 @@ type Range = { start: number; end: number };
 function declarations(read: Read, items: CV[], context: 'style' | 'font-face', inline: boolean): { removals: Range[]; kept: number } | null {
   const removals: Range[] = [];
   read.inline = inline;
+  // Whether the block hides what overflows its box, which a tiny width or height then hides.
+  read.clips = segments(items).some(segment => { const d = declaration(segment); return !!d && /^overflow(?:-[xy])?$/i.test(d.name.value) && withoutImportant(d.value).some(n => n.kind === 'token' && n.t.kind === 'ident' && /^(?:hidden|clip)$/i.test(n.t.value)); });
   let kept = 0;
   for (const segment of segments(items)) {
     const d = declaration(segment);
@@ -337,7 +366,6 @@ function sheet(read: Read, items: Item[], top: boolean): { removals: Range[]; ke
     if (item.kind === 'rule') {
       if (!item.block || !selector(item.prelude)) { drop(item, 'a CSS rule with a selector Hosted sending does not read'); continue; }
       read.selector = raw(read, { start: item.start, end: item.block.start });
-      read.modeled = modeledSelector(read.selector);
       const inner = declarations(read, (item.block as Extract<CV, { kind: 'block' }>).items, 'style', false);
       if (!inner) { drop(item, 'a CSS rule with nested rules'); continue; }
       if (!inner.kept) { removals.push(item); continue; }
@@ -364,25 +392,59 @@ function sheet(read: Read, items: Item[], top: boolean): { removals: Range[]; ke
   }
   return { removals, kept };
 }
-function filter(css: string, resolve: Resolve, policy: FontPolicy, as: 'sheet' | 'declarations', toggle: Toggle = () => false, shown = false): HostedCss {
-  const text = css.replace(/\r\n?/g, '\n'), read: Read = { text, resolve, policy, destinations: [], removed: [], fonts: [], inline: as === 'declarations', modeled: true, selector: '', media: [], toggle, shown };
+function filter(css: string, resolve: Resolve, policy: FontPolicy, as: 'sheet' | 'declarations', selectors: Selectors = ANY, blank = false): HostedCss {
+  const text = css.replace(/\r\n?/g, '\n'), read: Read = { text, resolve, policy, destinations: [], removed: [], fonts: [], inline: as === 'declarations', selectors, selector: '', media: [], clips: false, blank, versions: false };
   let removals: Range[];
   try {
     const items = values(tokenize(text), text.length);
     removals = as === 'sheet' ? sheet(read, rules(items, true), true).removals : declarations(read, items, 'style', true)!.removals;
   } catch (error) {
     if (!(error instanceof Limit)) throw error;
-    return { css: '', destinations: [], removed: ['a style sheet over the CSS budget'], fonts: [], changed: css !== '' };
+    return { css: '', destinations: [], removed: ['a style sheet over the CSS budget'], fonts: [], changed: css !== '', versions: false };
   }
   let out = '', at = 0;
   for (const range of removals.sort((a, b) => a.start - b.start)) { if (range.start < at) continue; out += text.slice(at, range.start); at = range.end; }
   out += text.slice(at);
-  return { css: out, destinations: [...new Set(read.destinations)], removed: read.removed, fonts: read.fonts, changed: out !== css };
+  return { css: out, destinations: [...new Set(read.destinations)], removed: read.removed, fonts: read.fonts, changed: out !== css, versions: read.versions };
 }
 /** A <style> sheet as delivered. */
-export const hostedSheet = (css: string, resolve: Resolve, policy: FontPolicy, toggle?: Toggle) => filter(css, resolve, policy, 'sheet', toggle);
+export const hostedSheet = (css: string, resolve: Resolve, policy: FontPolicy, selectors?: Selectors) => filter(css, resolve, policy, 'sheet', selectors);
 const NOTHING: FontPolicy = { font: () => false, sheet: () => false };
-/** A style attribute as delivered. */
-export const hostedDeclarations = (css: string, resolve: Resolve) => filter(css, resolve, NOTHING, 'declarations');
-/** A style attribute without what would hide its element, as a sheet's would be (content shown everywhere). */
-export const shownDeclarations = (css: string, resolve: Resolve) => filter(css, resolve, NOTHING, 'declarations', () => false, true);
+/** A style attribute as delivered. `blank`: its element holds no text or image, so what would hide it hides nothing and
+ *  stays (a spacer's 1 px type, an empty block's display:none). */
+export const hostedDeclarations = (css: string, resolve: Resolve, blank = false) => filter(css, resolve, NOTHING, 'declarations', ANY, blank);
+
+/** A declaration as the screen's style reader reads it: the property, its value as written, and !important. */
+export type CssDeclaration = { property: string; value: string; important: boolean };
+/** A qualified rule: its selector as written, the @media queries around it (outermost first), its declarations. */
+export type CssRule = { selector: string; media: string[]; declarations: CssDeclaration[] };
+function plain(text: string, items: CV[]): CssDeclaration[] {
+  return segments(items).flatMap(segment => {
+    const d = declaration(segment);
+    if (!d) return [];
+    const value = withoutImportant(d.value);
+    return [{ property: d.name.value.toLowerCase(), value: value.length ? text.slice(value[0]!.start, value.at(-1)!.end) : '', important: value.length !== solid(d.value).length }];
+  });
+}
+/** A sheet's qualified rules in source order, read with the CSS Syntax 3 tokenizer as clients read them (strings,
+ *  comments and escapes included); at-rules other than @media are left out. Empty past the CSS budget. */
+export function cssRules(css: string): CssRule[] {
+  const text = css.replace(/\r\n?/g, '\n'), out: CssRule[] = [];
+  let items: CV[];
+  try { items = values(tokenize(text), text.length); } catch (error) { if (error instanceof Limit) return []; throw error; }
+  const visit = (list: Item[], media: string[]) => {
+    for (const item of list) {
+      const block = item.block?.kind === 'block' ? item.block : null;
+      if (!block) continue;
+      if (item.kind === 'rule') out.push({ selector: text.slice(item.start, block.start).trim(), media, declarations: plain(text, block.items) });
+      else if (item.name === 'media' && !item.escaped) visit(rules(block.items, false), [...media, text.slice(item.start, block.start).replace(/^@media/i, '').replace(/\s+/g, ' ').trim().toLowerCase()]);
+    }
+  };
+  visit(rules(items, true), []);
+  return out;
+}
+/** A style attribute's declarations, read with the same tokenizer. */
+export function cssDeclarations(css: string): CssDeclaration[] {
+  const text = css.replace(/\r\n?/g, '\n');
+  try { return plain(text, values(tokenize(text), text.length)); } catch (error) { if (error instanceof Limit) return []; throw error; }
+}
