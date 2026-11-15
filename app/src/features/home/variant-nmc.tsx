@@ -15,9 +15,11 @@ import { productName, sdkPackage } from '../../../../api/src/brand'
 export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
   const canvas = useRef<HTMLCanvasElement>(null), slot = useRef<HTMLDivElement>(null), action = useRef<HTMLButtonElement>(null), coin = useRef<Coin | null>(null)
   const [reduced] = useState(reducedMotion)
+  // As the slice the coin throws comes down, Sign in's arrow moves once.
+  const [landed, setLanded] = useState(false)
   // Before the first paint, so that the coin is on it.
   useLayoutEffect(() => {
-    const mounted = mountCoin(canvas.current!, slot.current!, action.current!, { reduced })
+    const mounted = mountCoin(canvas.current!, slot.current!, action.current!, { reduced, onLand: () => setLanded(true) })
     coin.current = mounted
     return () => { coin.current = null; mounted.destroy() }
   }, [reduced])
@@ -47,7 +49,7 @@ export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
           <p>Accepted in <b>~100&nbsp;ms</b>.</p>{' '}
           <p>Free every month: <b>3,000</b>&nbsp;sent&nbsp;and&nbsp;<b>3,000</b>&nbsp;received.</p>
         </div>
-        <button ref={action} type="button" className="nmc-cta" disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent} onPointerEnter={() => coin.current?.setEager(true)} onPointerLeave={() => coin.current?.setEager(false)} onFocus={event => coin.current?.setEager(event.currentTarget.matches(':focus-visible'))} onBlur={() => coin.current?.setEager(false)}>
+        <button ref={action} type="button" className="nmc-cta" disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} data-landed={landed || undefined} onClick={onSignIn} onPointerDown={onSignInIntent} onPointerEnter={() => coin.current?.setEager(true)} onPointerLeave={() => coin.current?.setEager(false)} onFocus={event => coin.current?.setEager(event.currentTarget.matches(':focus-visible'))} onBlur={() => coin.current?.setEager(false)}>
           Sign in
           {/* The arrow, drawn at the weight of the label's strokes, and the spinner that takes its place: a faint
               ring with an arc going round it. */}

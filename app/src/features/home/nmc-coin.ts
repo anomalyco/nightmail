@@ -1,9 +1,9 @@
 // The coin of the "nmc" homepage study: a one-cent piece lying on a table, on one canvas. Its outer ring is fifty
 // slices round a medallion that carries the denomination: fifty emails to the cent, which is the price
 // (RATES.emailUc in api/src/billing/money.ts is $0.0002). The coin settles the way a dropped coin does; as it comes
-// to rest a light in the brand's blue steps along a few slices, slower with each, and the one it stops at, the one
-// that points at Sign in, is thrown out towards the button, and the coin recoils: one email, with its envelope on
-// it. A slice slides out a little under the pointer, and is thrown out or back in when it is pressed.
+// to rest the slice that points at Sign in takes the brand's blue where it lies and is thrown out towards the
+// button, and the coin recoils: one email, with its envelope on it. A slice slides out a little under the pointer,
+// and is thrown out or back in when it is pressed.
 //
 // It is drawn flat, as a solid seen from above and in front: every surface has one tone of its own (the field, the
 // ring raised round it, the two bands of the edge, the slot a slice leaves), and what stands up from a surface shows
@@ -32,14 +32,13 @@ const LIFT = 0.07       // how far a slice under the pointer slides out
 // A slice's piece of the reeded edge: where each valley and ridge begins, as fractions of its rim (three reeds).
 const REED = [0, 1 / 15, 4 / 15, 6 / 15, 9 / 15, 11 / 15, 14 / 15, 1]
 
-// The intro, in ms: the coin drops DROP_PX onto the table and settles in SPIN. From ROLL_AT, while it still rocks,
-// a light steps along the ROLL_N slices before the one that points at Sign in, one slice at a time and slower with
-// each, the way a roulette ball comes to rest; as the coin comes to lie still it gets there and that slice is thrown.
-const SPIN = 700, FALL = 170, DROP_PX = 20, ROLL_AT = 260, ROLL = 440, ROLL_N = 9
+// The intro, in ms: the coin drops DROP_PX onto the table and settles in SPIN. Over the last TINT of that the slice
+// that points at Sign in takes the brand's blue where it lies, and as the coin comes to lie still it is thrown.
+const SPIN = 640, FALL = 170, DROP_PX = 20, TINT = 120
 // A throw takes FLIGHT from the slot to rest: in the air for LAND of that time and GLIDE of the way, then along the
 // table a little past its place and back to it.
 const FLIGHT = 520, LAND = 0.6, GLIDE = 0.86
-// While sign-in starts a light keeps going round, a slice every BUSY_TICK.
+// While sign-in starts a light goes round the ring, a slice every BUSY_TICK.
 const BUSY_TICK = 22
 // A coin dropped on a table rolls round on its rim: the tilt dies away while the point it rests on circles faster
 // and faster (Euler's disk; Moffatt, Nature 404, 2000). Here the tilt falls almost evenly, so that every frame shows
@@ -47,8 +46,9 @@ const BUSY_TICK = 22
 // began at; the first tilt is as steep as the room above the coin allows for that.
 const TILT_MAX = 24 * Math.PI / 180, TILT_MIN = 7 * Math.PI / 180, TURNS = 2.5, FAR = (1 - 0.5 / TURNS) ** (0.9 / 0.55)
 
-// The light comes from the upper left: a wall's tone is one of five, by how far it faces LIGHT (x to the right, y
-// towards the camera, z up). The edge is a plain band, LIP of the coin's thickness, over a reeded one.
+// The light comes from the upper left: a cut face's tone is one of five, by how far it faces LIGHT (x to the right,
+// y towards the camera, z up). The edge is a plain band, LIP of the coin's thickness, over a reeded one, each the
+// same all the way round.
 const LIGHT: [number, number, number] = [-0.86, 0.42, 0.29]
 const LIP = 0.3
 // The shadow on the table is a contact shadow: what lies on it, a few px down and to the right.
@@ -89,9 +89,9 @@ type Vec3 = [number, number, number]
 // envelope on each ('' for none); the tops of what is struck on the field and of its legend, and their side; the
 // line round the top edge.
 type Tones = { face: string; ring: string; step: string; seam: string; mark: string; relief: string; legend: string; reliefSide: string; edge: string }
-// A wall's tones: one for the plain band under the top edge, and under that five, darkest first, for a reed's
-// ridge and for the valley beside it (which is also the tone of a cut face).
-type Walls = { lip: string[]; ridge: string[]; valley: string[] }
+// A wall's tones: the plain band under the top edge, a reed's ridge and the valley beside it, and for a cut face
+// five, darkest first.
+type Walls = { lip: string; ridge: string; valley: string; cut: string[] }
 type Band = keyof Walls
 // cold is the coin's metal and hot the brand's blue, for a slice under the light or one that has left. slot is the
 // wall of the slot a slice leaves. shadow lies on the table under whatever stands on it.
@@ -115,29 +115,30 @@ function oklch(l: number, c: number, h: number) {
 const steel = (l: number) => oklch(l, 0.018 * (1 - clamp((l - 0.6) / 0.42)), 268)
 const blue = (l: number) => oklch(l, 0.082 * (1 - clamp((l - 0.7) / 0.34)), 269)
 // The coin is a few steps of the page's own ground, graphite on a dark page and silver on a light one: the ring, a
-// field a little lighter, an edge in two bands under them, and seams half a step under the ring. What is struck on
+// field a little lighter, an edge in two bands under them (its reeds a small step apart, so that they stay even
+// where they are a pixel or two wide), and seams half a step under the ring. What is struck on
 // it is in the page's text colour, with a side between that and the field, so the denomination is the brightest
 // thing on it. Only a slice in the brand's blue has its envelope.
 function paletteFor([r, g, b]: [number, number, number]): Palette {
   const dark = r + g + b < 384
   const hot: Tones = { face: blue(0.64), ring: blue(0.64), step: blue(0.52), seam: blue(0.58), mark: blue(0.985), relief: blue(0.97), legend: blue(0.97), reliefSide: blue(0.8), edge: blue(0.8) }
-  const hotWalls: Walls = { lip: [blue(0.57)], ridge: [0.4, 0.44, 0.48, 0.52, 0.56].map(blue), valley: [0.35, 0.39, 0.43, 0.47, 0.51].map(blue) }
+  const hotWalls: Walls = { lip: blue(0.57), ridge: blue(0.49), valley: blue(0.455), cut: [0.35, 0.39, 0.43, 0.47, 0.51].map(blue) }
   if (dark) return {
     cold: { face: steel(0.4), ring: steel(0.33), step: steel(0.25), seam: steel(0.293), mark: '', relief: steel(0.95), legend: steel(0.82), reliefSide: steel(0.62), edge: steel(0.6) },
     hot, hotWalls,
-    coldWalls: { lip: [steel(0.285)], ridge: [0.2, 0.215, 0.23, 0.245, 0.26].map(steel), valley: [0.15, 0.165, 0.18, 0.195, 0.21].map(steel) },
-    slot: { lip: [steel(0.1)], ridge: [0.085, 0.092, 0.1, 0.108, 0.116].map(steel), valley: [0.085, 0.092, 0.1, 0.108, 0.116].map(steel) },
+    coldWalls: { lip: steel(0.285), ridge: steel(0.225), valley: steel(0.195), cut: [0.15, 0.165, 0.18, 0.195, 0.21].map(steel) },
+    slot: { lip: steel(0.1), ridge: steel(0.1), valley: steel(0.1), cut: [0.085, 0.092, 0.1, 0.108, 0.116].map(steel) },
     shadow: 'rgb(0, 0, 0)',
   }
   return {
     cold: { face: steel(0.9), ring: steel(0.84), step: steel(0.74), seam: steel(0.79), mark: '', relief: steel(0.2), legend: steel(0.34), reliefSide: steel(0.5), edge: steel(0.74) },
     hot, hotWalls,
-    coldWalls: { lip: [steel(0.77)], ridge: [0.6, 0.64, 0.68, 0.72, 0.76].map(steel), valley: [0.55, 0.59, 0.63, 0.67, 0.71].map(steel) },
-    slot: { lip: [steel(0.46)], ridge: [0.4, 0.43, 0.46, 0.49, 0.52].map(steel), valley: [0.4, 0.43, 0.46, 0.49, 0.52].map(steel) },
+    coldWalls: { lip: steel(0.77), ridge: steel(0.68), valley: steel(0.65), cut: [0.55, 0.59, 0.63, 0.67, 0.71].map(steel) },
+    slot: { lip: steel(0.46), ridge: steel(0.46), valley: steel(0.46), cut: [0.4, 0.43, 0.46, 0.49, 0.52].map(steel) },
     shadow: `rgb(${Math.round(r * 0.92)}, ${Math.round(g * 0.92)}, ${Math.round(b * 0.92)})`,
   }
 }
-// Which of a wall's five tones: how far its normal faces the light.
+// Which of a cut face's five tones: how far its normal faces the light.
 const wallTone = (x: number, y: number, z: number) => clamp(Math.floor((x * LIGHT[0] + y * LIGHT[1] + z * LIGHT[2] + 1) / 2 * 5), 0, 4)
 
 // The lettering struck on the medallion, as paths in the unit circle: the same for every size of coin.
@@ -227,8 +228,11 @@ function paintFace(c: CanvasRenderingContext2D, k: Tones, R: number, dpr: number
 
 export type Coin = { setBusy: (busy: boolean) => void; setEager: (eager: boolean) => void; destroy: () => void }
 
-/** The coin lies where `slot` is, on a canvas that covers the page; the slice that is thrown out points at `target`. */
-export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: HTMLElement, { reduced }: { reduced: boolean }): Coin {
+/**
+ * The coin lies where `slot` is, on a canvas that covers the page; the slice that is thrown out points at `target`.
+ * `onLand` is called once, when the intro's slice comes down on the table.
+ */
+export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: HTMLElement, { reduced, onLand }: { reduced: boolean; onLand?: () => void }): Coin {
   const ctx = canvas.getContext('2d')!
   const probe = document.createElement('span')
   probe.style.display = 'none'
@@ -239,10 +243,11 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
   let palette!: Palette, cold!: HTMLCanvasElement, hot!: HTMLCanvasElement
   // start is the time of the intro's first frame that could be seen: a page opened in a background tab plays it when
   // it is first looked at. made is what the last layout was made for.
-  // ready: the intro's light has come to rest. eager: the pointer is on Sign in, and creep how far that has drawn
-  // the slice that points at it. (kickX, kickY) is how far, in px, the coin is from its place after throwing a slice.
+  // ready: the intro's slice has been thrown, and landed: it has come down. eager: the pointer is on Sign in, and
+  // creep how far that has drawn the slice that points at it. (kickX, kickY) is how far, in px, the coin is from its
+  // place after throwing a slice.
   let raf = 0, dead = false, start = 0, last = performance.now(), made = ''
-  let ready = reduced, hover = -1, busyAt = 0, eager = false, creep = 0, creepVel = 0
+  let ready = reduced, landed = reduced, hover = -1, busyAt = 0, eager = false, creep = 0, creepVel = 0
   let kickX = 0, kickY = 0, kickVelX = 0, kickVelY = 0
   const slices: Slice[] = Array.from({ length: SLICES }, () => ({ out: 0, lift: 0, liftVel: 0, wanted: false }))
   // Where each slice is drawn: `off` radii along its own direction and `rise` px off the table. heat is how far it
@@ -311,12 +316,12 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     return true
   }
 
-  // A piece of wall under the edge from (x0, y0) to (x1, y1), as deep as (tx, ty), in one of the five tones of one
-  // of its bands. heat is how far it has taken the brand's blue.
+  // A piece of wall under the edge from (x0, y0) to (x1, y1), as deep as (tx, ty): one of the edge's bands, or a
+  // cut face in one of its five tones. heat is how far it has taken the brand's blue.
   const wall = (x0: number, y0: number, x1: number, y1: number, tx: number, ty: number, walls: Walls, band: Band, tone: number, heat = 0) => {
     for (const from of heat < 1 ? heat > 0 ? [walls, palette.hotWalls] : [walls] : [palette.hotWalls]) {
       ctx.globalAlpha = from === palette.hotWalls && heat < 1 ? heat : 1
-      ctx.fillStyle = from[band][tone]
+      ctx.fillStyle = band === 'cut' ? from.cut[tone] : from[band]
       ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.lineTo(x1 + tx, y1 + ty); ctx.lineTo(x0 + tx, y0 + ty); ctx.closePath(); ctx.fill()
     }
     ctx.globalAlpha = 1
@@ -353,9 +358,9 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
   }
 
   // The whole coin, tilted by alpha towards azimuth phi and turned by psi about its own axis, with its lowest rim
-  // point `air` px over the table. `down` is how nearly it lies flat: its shadow comes with that. `lit` is the slice
-  // under the light, or −1.
-  function drawSolid(alpha: number, phi: number, psi: number, air: number, down: number, lit: number) {
+  // point `air` px over the table. `down` is how nearly it lies flat: its shadow comes with that. `glow` is how far
+  // the top of the slice `lit` has taken the brand's blue.
+  function drawSolid(alpha: number, phi: number, psi: number, air: number, down: number, lit: number, glow: number) {
     const T = THICK * R, sa = Math.sin(alpha), ca = Math.cos(alpha), sp = Math.sin(phi), cp = Math.cos(phi)
     // Rz(phi) · Ry(alpha) · Rz(−phi) · Rz(psi): e1 and e2 span the face, n is its normal.
     const spin = (x: number, y: number): Vec3 => {
@@ -378,8 +383,8 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     // The edge where it faces the camera: the reeds, then the plain band over them.
     const piece = (t0: number, t1: number, deep: number, band: Band) => {
       const tm = (t0 + t1) / 2
-      const nx = Math.cos(tm) * e1[0] + Math.sin(tm) * e2[0], ny = Math.cos(tm) * e1[1] + Math.sin(tm) * e2[1], nz = Math.cos(tm) * e1[2] + Math.sin(tm) * e2[2]
-      if (ny * SIN + nz * COS > 0) wall(originX + Math.cos(t0) * ax + Math.sin(t0) * bx, originY + Math.cos(t0) * ay + Math.sin(t0) * by, originX + Math.cos(t1) * ax + Math.sin(t1) * bx, originY + Math.cos(t1) * ay + Math.sin(t1) * by, tx * deep, ty * deep, palette.coldWalls, band, band === 'lip' ? 0 : wallTone(nx, ny, nz))
+      const ny = Math.cos(tm) * e1[1] + Math.sin(tm) * e2[1], nz = Math.cos(tm) * e1[2] + Math.sin(tm) * e2[2]
+      if (ny * SIN + nz * COS > 0) wall(originX + Math.cos(t0) * ax + Math.sin(t0) * bx, originY + Math.cos(t0) * ay + Math.sin(t0) * by, originX + Math.cos(t1) * ax + Math.sin(t1) * bx, originY + Math.cos(t1) * ay + Math.sin(t1) * by, tx * deep, ty * deep, palette.coldWalls, band, 0)
     }
     for (let index = 0; index < SLICES; index++) for (let k = 0; k < REED.length - 1; k++) piece(angle(index) - STEP / 2 + REED[k] * STEP, angle(index) - STEP / 2 + REED[k + 1] * STEP, 1, k % 2 ? 'ridge' : 'valley')
     for (let index = 0; index < SLICES; index++) for (let k = 0; k < 2; k++) piece(angle(index) + (k - 1) * STEP / 2 - 0.004, angle(index) + k * STEP / 2 + 0.004, LIP, 'lip')
@@ -389,14 +394,15 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     ctx.beginPath(); ctx.ellipse(0, 0, R, R * COS, 0, 0, TAU); ctx.clip()
     ctx.drawImage(cold, -R - 1, -R * COS - 1, cold.width / dpr, cold.height / dpr)
     ctx.restore()
-    if (lit >= 0) {
+    if (glow > 0) {
       ctx.save()
       ctx.beginPath(); trace(lit, -cx, -cy); ctx.clip()
+      ctx.globalAlpha = glow
       ctx.drawImage(hot, -R - 1, -R * COS - 1, hot.width / dpr, hot.height / dpr)
       ctx.restore()
     }
     rim(palette.cold, 0, 0, [])
-    if (lit >= 0) rimOf(lit, palette.hot, 0, 0)
+    if (glow > 0.5) rimOf(lit, palette.hot, 0, 0)
     ctx.restore()
   }
 
@@ -407,17 +413,17 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     const a = angle(index), half = STEP / 2, drop = THICK * R * SIN, inner = INNER * R
     // A wall that looks into the slot a slice has left is the slot's.
     const cut = out ? palette.coldWalls : palette.slot
-    if (out && -Math.sin(a) > 0.02) wall(...at(inner, a - half, dx, dy), ...at(inner, a + half, dx, dy), 0, drop, cut, 'valley', wallTone(-Math.cos(a), -Math.sin(a), 0), heat)
-    if (before && -Math.cos(a - half) > 0.001) wall(...at(inner, a - half, dx, dy), ...at(R, a - half, dx, dy), 0, drop, cut, 'valley', wallTone(Math.sin(a - half), -Math.cos(a - half), 0), heat)
-    if (after && Math.cos(a + half) > 0.001) wall(...at(R, a + half, dx, dy), ...at(inner, a + half, dx, dy), 0, drop, cut, 'valley', wallTone(-Math.sin(a + half), Math.cos(a + half), 0), heat)
+    if (out && -Math.sin(a) > 0.02) wall(...at(inner, a - half, dx, dy), ...at(inner, a + half, dx, dy), 0, drop, cut, 'cut', wallTone(-Math.cos(a), -Math.sin(a), 0), heat)
+    if (before && -Math.cos(a - half) > 0.001) wall(...at(inner, a - half, dx, dy), ...at(R, a - half, dx, dy), 0, drop, cut, 'cut', wallTone(Math.sin(a - half), -Math.cos(a - half), 0), heat)
+    if (after && Math.cos(a + half) > 0.001) wall(...at(R, a + half, dx, dy), ...at(inner, a + half, dx, dy), 0, drop, cut, 'cut', wallTone(-Math.sin(a + half), Math.cos(a + half), 0), heat)
     if (Math.sin(a - half) <= 0 && Math.sin(a + half) <= 0) return
     // A slice in its place overlaps the next by a hair, and has one piece in the valley's tone under its reeds, so
     // that nothing shows between piece and piece.
     const more = out ? 0 : 0.004
-    if (!out) wall(...at(R, a - half - more), ...at(R, a + half + more), 0, drop, palette.coldWalls, 'valley', wallTone(Math.cos(a), Math.sin(a), 0))
+    if (!out) wall(...at(R, a - half - more), ...at(R, a + half + more), 0, drop, palette.coldWalls, 'valley', 0)
     for (let k = 0; k < REED.length - 1; k++) {
       const t0 = a - half + STEP * REED[k], t1 = a - half + STEP * REED[k + 1], tm = (t0 + t1) / 2
-      if (Math.sin(tm) > 0) wall(...at(R, t0, dx, dy), ...at(R, t1, dx, dy), 0, drop, palette.coldWalls, k % 2 ? 'ridge' : 'valley', wallTone(Math.cos(tm), Math.sin(tm), 0), heat)
+      if (Math.sin(tm) > 0) wall(...at(R, t0, dx, dy), ...at(R, t1, dx, dy), 0, drop, palette.coldWalls, k % 2 ? 'ridge' : 'valley', 0, heat)
     }
     for (let k = 0; k < 2; k++) {
       const t0 = a + (k - 1) * half - more, t1 = a + k * half + more
@@ -448,7 +454,7 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     for (const index of run) {
       if (index !== MEDALLION) walls(index, 0, 0, false, 0, apart(index, -1), apart(index, 1))
       // The wall under the field shows where a slice in front of it has gone.
-      else for (const out of gone) if (depth(out) > 0) wall(...at(inner, angle(out) - STEP / 2), ...at(inner, angle(out) + STEP / 2), 0, drop, palette.slot, 'valley', wallTone(Math.cos(angle(out)), Math.sin(angle(out)), 0))
+      else for (const out of gone) if (depth(out) > 0) wall(...at(inner, angle(out) - STEP / 2), ...at(inner, angle(out) + STEP / 2), 0, drop, palette.slot, 'cut', wallTone(Math.cos(angle(out)), Math.sin(angle(out)), 0))
     }
     ctx.save()
     ctx.beginPath()
@@ -484,22 +490,21 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
     ctx.clearRect(0, 0, width, height)
     if (!R) return
-    // The light: in the intro it steps along the last slices before the one that points at Sign in, each step
-    // longer than the one before, and that slice is thrown out as it arrives; while sign-in starts it goes round
-    // and round. head is its place round the ring.
-    const roll = (t - ROLL_AT) / ROLL
-    if (!ready && roll >= 1) { toss(base); ready = true }
-    const head = busyAt ? mod(Math.floor((now - busyAt) / BUSY_TICK), SLICES) : ready || roll < 0 ? -1 : SLICES - 1 - ROLL_N + Math.floor(ROLL_N * (1 - (1 - roll) ** 2))
+    // While sign-in starts a light goes round the ring, a slice at a time: head is its place.
+    const head = busyAt ? mod(Math.floor((now - busyAt) / BUSY_TICK), SLICES) : -1
     if (!reduced && t < SPIN) {
       const left = 1 - t / SPIN
       // It falls the last of its drop, then the tilt dies away as the point the rim rests on circles faster; rolling
-      // without slipping turns the face slowly against the wobble, and it ends upright.
+      // without slipping turns the face slowly against the wobble, and it ends upright. Over the last of that the
+      // slice that points at Sign in turns blue.
       const fall = clamp(t / FALL)
-      drawSolid(tilt0 * left ** 0.9, -Math.PI / 2 + TAU * TURNS * (1 - left ** 0.55), -TAU * TURNS * (1 - Math.cos(tilt0)) * 0.5 * left ** 1.5, DROP_PX * (1 - fall * fall), fall * (1 - left) ** 2, head < 0 ? -1 : mod(base + 1 + head, SLICES))
+      drawSolid(tilt0 * left ** 0.9, -Math.PI / 2 + TAU * TURNS * (1 - left ** 0.55), -TAU * TURNS * (1 - Math.cos(tilt0)) * 0.5 * left ** 1.5, DROP_PX * (1 - fall * fall), fall * (1 - left) ** 2, base, clamp((t - SPIN + TINT) / TINT))
       raf = requestAnimationFrame(frame)
       return
     }
-    if (!ready || busyAt) moving = true
+    // As the coin comes to lie still, that slice is thrown.
+    if (!ready) { toss(base); ready = true }
+    if (busyAt) moving = true
     // The slice that points at Sign in is drawn a little nearer it while the pointer is on the button, and stays
     // there once it is pressed. Springs are stepped in 4 ms slices so that a long frame can't throw them.
     const creepTo = eager || busyAt ? EAGER : 0
@@ -526,6 +531,7 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
       const way = slice.out < LAND ? GLIDE * air ** 1.25 : 1 - (1 - GLIDE) * (1 - ground) ** 2 * Math.cos(1.5 * Math.PI * ground)
       p.off = Math.max(0, (index === base ? reach : PULL) * way + slice.lift + (index === base ? creep * way : 0))
       p.rise = R * HOP * 4 * air * (1 - air)
+      if (index === base && !landed && slice.out >= LAND) { landed = true; onLand?.() }
       p.heat = slice.wanted ? 1 : clamp(Math.max(slice.out * 3, slice.lift / LIFT * 1.5))
       p.glow = Math.max(p.heat, place(index) === head ? 1 : 0)
     }

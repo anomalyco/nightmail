@@ -13,7 +13,6 @@
      --nmc-swing of its width clear above, where its far rim swings while it settles; room beyond that is shared
      above and below. */
   --nmc-lede: 84px;
-  --nmc-lead: 28px;
   --nmc-under: clamp(44px, 7.2svh, 64px);
   --nmc-stage: calc(100svh - 121px - var(--nmc-lede) - var(--nmc-under) - var(--nmc-type));
   --nmc-wide: 46vw;
@@ -48,7 +47,7 @@
 /* The headline's first stem stands on the page's edge: the F's side bearing is taken back. */
 .nmc-title { grid-area: 1 / 1; margin-left: -.055em; font-size: var(--nmc-type); font-weight: 520; line-height: 1; letter-spacing: -.042em; white-space: nowrap; }
 .nmc-title br { display: none; }
-.nmc-lede { grid-area: 2 / 1; align-self: baseline; margin-top: 28px; color: var(--nmc-soft); font-size: 20px; line-height: var(--nmc-lead); letter-spacing: -.017em; }
+.nmc-lede { grid-area: 2 / 1; align-self: baseline; margin-top: 28px; color: var(--nmc-soft); font-size: 20px; line-height: 28px; letter-spacing: -.017em; }
 .nmc-lede p { display: inline; }
 .nmc-lede p:last-child { display: block; }
 .nmc-lede b { color: var(--color-text); font-weight: inherit; }
@@ -76,11 +75,16 @@
   .nmc-cta[data-busy] { animation: nmc-release 320ms var(--ease-out-strong); }
   .nmc-cta[data-busy] .nmc-cta-turn { animation: nmc-turn 720ms linear infinite; }
 }
+@media (prefers-reduced-motion: no-preference) {
+  /* As the slice the coin throws comes down, the arrow moves once towards where Sign in leads. */
+  .nmc-cta[data-landed] .nmc-cta-go { animation: nmc-nudge 460ms var(--ease-out-strong); }
+}
 @keyframes nmc-release { from { transform: scale(.97); } }
 @keyframes nmc-turn { to { transform: rotate(1turn); } }
-/* The consent, small and faint, in two lines that end on the page's edge under the button, each on the baseline
-   of one of the subline's. */
-.nmc-consent { grid-area: 2 / 2; align-self: baseline; justify-self: end; max-width: 208px; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--nmc-lead); text-align: right; text-wrap: balance; }
+@keyframes nmc-nudge { 35% { transform: translateX(3px); } }
+/* The consent, small and faint: two lines that end on the page's edge, 12px under the button (which stands .136em
+   over the bottom of the headline's line, where this row begins). */
+.nmc-consent { grid-area: 2 / 2; align-self: start; justify-self: end; max-width: 208px; margin-top: calc(12px - round(var(--nmc-type) * .136, 1px)); color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); text-align: right; text-wrap: balance; }
 
 .nmc-footer { position: relative; display: flex; flex: none; align-items: center; justify-content: space-between; gap: var(--space-16); height: 57px; padding-inline: var(--nmc-pad); border-top: 1px solid var(--color-border-muted); color: var(--color-faint); font-size: var(--text-xs); }
 .nmc-footer nav { display: flex; gap: var(--space-16); }
@@ -89,27 +93,27 @@
 
 /* Where the caption is narrower, the subline is one paragraph of up to three lines. */
 @media (max-width: 1099px) {
-  .nmc-page { --nmc-lede: 106px; --nmc-lead: 26px; }
-  .nmc-lede { font-size: 18px; letter-spacing: -.014em; text-wrap: pretty; }
+  .nmc-page { --nmc-lede: 106px; }
+  .nmc-lede { font-size: 18px; line-height: 26px; letter-spacing: -.014em; text-wrap: pretty; }
   .nmc-lede p:last-child { display: inline; }
 }
 /* A window taller than it is wide has the height for a wider coin. */
 @media (min-width: 720px) and (max-aspect-ratio: 1 / 1) { .nmc-page { --nmc-wide: 62vw; } }
 
 @media (max-width: 719px) {
-  /* Header 56, footer 49, and the stacked caption: two lines of headline, 80 of subline, 80 of button, 44 of
+  /* Header 56, footer 49, and the stacked caption: two lines of headline, 86 of subline, 80 of button, 44 of
      consent, 40 under it. The coin is narrower than the column and stands to its left, so that the slice it throws
      out lands beside it, inside the column. */
-  .nmc-page { --nmc-type: clamp(40px, round(13.4vw, 2px), 56px); --nmc-under: 40px; --nmc-stage: calc(100svh - 349px - 2 * var(--nmc-type)); --nmc-wide: calc((100vw - 2 * var(--nmc-pad)) / 1.26); --nmc-least: 160px; --nmc-foot: 56px; --nmc-swing: .1; }
+  .nmc-page { --nmc-type: clamp(40px, round(13.4vw, 2px), 56px); --nmc-under: 40px; --nmc-stage: calc(100svh - 355px - 2 * var(--nmc-type)); --nmc-wide: calc((100vw - 2 * var(--nmc-pad)) / 1.26); --nmc-least: 160px; --nmc-foot: 56px; --nmc-swing: .1; }
   .nmc-header { height: 56px; }
   .nmc-coin { --nmc-aim: 31; --nmc-reach: .6; margin-right: calc(var(--nmc-d) * .26); }
   .nmc-caption { grid-template-columns: minmax(0, 1fr); }
   .nmc-title, .nmc-lede, .nmc-cta, .nmc-consent { grid-area: auto; }
   .nmc-title br { display: inline; }
-  /* A claim to a line: the size is what lets the longest keep to one down to a 360px screen. */
-  .nmc-lede { margin-top: 14px; font-size: clamp(13px, 3.72vw, 16px); line-height: 22px; letter-spacing: -.011em; text-wrap: wrap; }
-  .nmc-lede p, .nmc-lede p:last-child { display: block; }
+  /* The subline is one paragraph: its figures are held together, so its three lines grow shorter. */
+  .nmc-lede { margin-top: 14px; font-size: 16px; line-height: 24px; letter-spacing: -.011em; text-wrap: wrap; }
+  .nmc-lede p:last-child { display: inline; }
   .nmc-cta { align-self: auto; justify-self: stretch; height: 56px; margin: var(--space-24) 0 0; font-size: 17px; }
-  .nmc-consent { justify-self: start; max-width: none; margin-top: var(--space-12); line-height: var(--leading-xs); text-align: left; }
+  .nmc-consent { justify-self: start; max-width: none; margin-top: var(--space-12); text-align: left; }
   .nmc-footer { height: 49px; }
 }
