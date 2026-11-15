@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
 import { ArrowRight } from 'lucide-react'
 import { ThemeToggle } from '../../components/ThemeToggle'
+import { AnomalyLogo } from '../../components/AnomalyLogo'
 import { SignInConsent } from '../../components/LegalLinks'
 import { BaneWordmark } from '../../components/BaneLogo'
-import { HomeFooter, reducedMotion, type HomeProps } from '.'
+import { reducedMotion, type HomeProps } from '.'
 import { COIN_ASPECT, mountCoin, type Coin } from './nmc-coin'
 import './variant-nmc.css'
-import { productName } from '../../../../api/src/brand'
+import { productName, sdkPackage } from '../../../../api/src/brand'
 
 // Direction "nmc": the price as an object. One cent, its ring cut into fifty slices with an envelope on each: fifty
 // emails to the cent, which is $0.0002 each (RATES.emailUc, api/src/billing/money.ts). The coin has the page; under
@@ -15,12 +16,13 @@ import { productName } from '../../../../api/src/brand'
 export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
   const canvas = useRef<HTMLCanvasElement>(null), slot = useRef<HTMLDivElement>(null), action = useRef<HTMLButtonElement>(null), coin = useRef<Coin | null>(null)
   const [reduced] = useState(reducedMotion)
-  useEffect(() => {
+  // Before the first paint, so that the coin is on it.
+  useLayoutEffect(() => {
     const mounted = mountCoin(canvas.current!, slot.current!, action.current!, { reduced })
     coin.current = mounted
     return () => { coin.current = null; mounted.destroy() }
   }, [reduced])
-  // While sign-in starts, the waiting slice goes into the button and a ripple runs round the coin.
+  // While sign-in starts, the waiting slice goes to the button and light runs round the coin.
   useEffect(() => { coin.current?.setBusy(busy) }, [busy])
 
   return <div className="nmc-page" style={{ '--nmc-aspect': COIN_ASPECT } as CSSProperties}>
@@ -40,13 +42,7 @@ export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
       </div>
       <div className="nmc-caption">
         <h1 className="nmc-title">Fifty emails <br />a penny.</h1>
-        <div className="nmc-what">
-          <p className="nmc-lede">One API to send, receive, reply and thread.</p>
-          <ul className="nmc-facts">
-            <li>Accepted in <b>~100&nbsp;ms</b></li>
-            <li><b>3,000</b> sent and <b>3,000</b> received, free every month</li>
-          </ul>
-        </div>
+        <p className="nmc-lede">One API to send, receive, reply and thread. <span>Accepted in <b>~100&nbsp;ms</b>.</span></p>
         <button ref={action} type="button" className="nmc-cta" disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent} onPointerEnter={() => coin.current?.setEager(true)} onPointerLeave={() => coin.current?.setEager(false)} onFocus={event => coin.current?.setEager(event.currentTarget.matches(':focus-visible'))} onBlur={() => coin.current?.setEager(false)}>
           Sign in
           <span className="nmc-cta-mark" aria-hidden="true">
@@ -54,10 +50,15 @@ export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
             <svg className="nmc-cta-wait" viewBox="0 0 18 18" width="18" height="18"><circle cx="9" cy="9" r="6.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray="27 41" /></svg>
           </span>
         </button>
+        <p className="nmc-free"><b>3,000</b> sent and <b>3,000</b> received, <span>free every month</span></p>
         <SignInConsent className="nmc-consent" />
       </div>
     </main>
 
-    <div className="nmc-footer"><HomeFooter /></div>
+    {/* The page's own footer: Docs is in the header and the Terms and Privacy Policy are beside Sign in. */}
+    <footer className="nmc-footer">
+      <a className="home-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={20} /></a>
+      <nav aria-label="Site links"><a href="/openapi.json">OpenAPI</a><a href={`https://www.npmjs.com/package/${sdkPackage}`}>SDK</a></nav>
+    </footer>
   </div>
 }
