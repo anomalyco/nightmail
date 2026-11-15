@@ -50,7 +50,7 @@ function refused(message: string, details?: Record<string, unknown>, index?: num
 const unreadable = () => refused('Simplify the HTML so Hosted sending can screen it: it is too large or too deeply nested to read.');
 /** Over the screened-text limit: the measured size and the limit, so the sender knows how much to cut. */
 export const tooLarge = (screenedBytes: number, limitBytes: number, scope: 'message' | 'campaign' = 'message', index?: number) =>
-  refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's text in document order (again with images blocked when it has alt text), the text part unless it says exactly the same, and each distinct link and image address. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
+  refused(`The screened text is ${bytes(screenedBytes)} UTF-8 bytes; Hosted sending screens at most ${bytes(limitBytes)} per ${scope}. It counts the HTML's text in document order (and, around each place they differ, read apart at every element's edge and with images blocked), the text part unless it says exactly the same, and each distinct link and image address. Shorten the copy by ${bytes(screenedBytes - limitBytes)} bytes.`,
     { screenedBytes, limitBytes }, index);
 /** Markup whose destinations the screen can't read: refused for Hosted mail, named so the sender can fix it. */
 export const unsupportedUrls = (unsupported: string[], index?: number) => {
@@ -92,7 +92,18 @@ function host(value: string) {
 }
 // Addresses a client links in text: absolute http(s) URLs and www. hosts, without the punctuation that ends a sentence.
 const textTargets = (text = '') => [...text.matchAll(/(?:\bhttps?:\/\/|\bwww\.)[^\s<>"'`]+/giu)].map(match => (/^www\./i.test(match[0]) ? 'https://' : '') + match[0].replace(/[.,;:!?)\]}'"’”]+$/u, ''));
-const INLINE=new Set(['a','b','code','em','font','i','s','small','span','strong','sub','sup','u','img']);
+// Elements whose edges may join the text beside them into one word, unless the copy's CSS lays them out otherwise
+// (src/screened-html.ts concealed): inline ones, and table cells.
+const JOINS=new Set(['a','b','code','em','font','i','s','small','span','strong','sub','sup','u','img','td','th']);
+// An element's edge in a line of text: nothing when the text either side reads joined, a space when it reads apart.
+const EDGE=Symbol('edge');
+// The readings of a body's text, each a section of the classifier's input: with its images and with them blocked
+// (alt text in their place), each with the text either side of every inline element, inline-block, flex or grid item
+// and table cell joined, and apart. The first is read whole; each other one where it differs from it (EXCERPT).
+const READINGS=[[false,false,''],[false,true,'Read apart at every element'],[true,false,'With images blocked'],[true,true,'With images blocked, read apart at every element']] as const;
+// How much of a reading is read either side of a place where it differs from the first: every phrase that crosses such
+// a place, up to this many characters either side of it, is read whole. Elsewhere the reading says what the first does.
+const EXCERPT=256;
 /** Where this installation's Hosted mail may load fonts from: its font services, and its own font directory. */
 export const fontSources = (config: Pick<Runtime['config'], 'hostedFontHosts' | 'publicUrl'>): FontSources => ({ hosts: config.hostedFontHosts, prefix: `${config.publicUrl}/fonts/` });
 /**
@@ -100,12 +111,16 @@ export const fontSources = (config: Pick<Runtime['config'], 'hostedFontHosts' | 
  * for mail delivered as submitted, the tree a client parses from it), and from that same tree its text, every place it
  * links to or loads from, and the markup refused or removed.
  *
- * The text is read in document order, as a client lays it out: inline runs stay one word, block elements and line
- * breaks end the line, and a table row whose cells hold short pieces is read again glued, after the text, the way a
- * recipient reads a word laid out across adjacent cells. The copy shows every version of the message at once (no CSS
- * hides anything or changes it by screen, colour scheme or mail client), so this one ordered stream, a preheader in its
- * place, is what every recipient reads. An image's alt text is read where the image is: a client shows it in its place
- * when images are blocked, so a message with alt text is also read as shown without its images.
+ * The text is read in document order. Block elements and line breaks end a line in every reading. Where an element's
+ * edge falls inside a line (an inline element, an inline-block, a flex or grid item, a table cell), whether a client
+ * draws the text either side as one word depends on its layout (a flex row or column, a screen's width, the cells'
+ * widths), so the text is read both ways, joined and apart, rather than by modelling layout: a word laid out across
+ * such pieces is read whole, and so are words a client stacks on lines of their own. The copy shows every version of
+ * the message at once (no CSS hides anything or reorders it), so these readings, a preheader in its place, cover what
+ * every recipient sees. An image's alt text is read where the image is: a client shows it in its place when images are
+ * blocked, so a message with alt text is also read as shown without its images. The first reading (joined, with images)
+ * is read whole; each other one only around the places it differs from it (EXCERPT characters either side of an edge
+ * read apart between two words, or of alt text), since everywhere else it says the same.
  */
 export async function readHtml(html: string, visit?: (tag: string) => void, options: HostedOptions = {}) {
   if (html.length>512*1024) throw unreadable();
@@ -114,50 +129,77 @@ export async function readHtml(html: string, visit?: (tag: string) => void, opti
   const { destinations, unsupported, removed }=copy, root=copy.root;
   for (const tag of copy.tags) visit?.(tag);
   const hosts=new Set([...destinations].map(destinationHost).filter(Boolean)), mismatches=new Set<string>(), links:string[]=[], images:{ alt: boolean }[]=[];
-  type Part=string|{ alt:string };
-  const render=(parts:Part[], alt:boolean)=>parts.map(p=>typeof p==='string' ? p : alt ? p.alt : '').join('');
-  // The body's text in order, with its links and images.
-  const read=()=>{
-    const lines:Part[][]=[], rows:Part[][][]=[], glued:Part[][]=[]; let line:Part[]=[];
-    const flush=()=>{ if(line.length) lines.push(line); line=[]; };
-    const walk=(node:typeof root.childNodes[number], anchor:string)=>{
-      if ('value' in node) {
-        line.push(node.value);
-        if(anchor) for(const word of normalize(node.value).split(/\s+/)) {
-          if(!word.includes('.') || word.length>2048)continue;
-          const label=host(word.includes('://')?word:'https://'+word);
-          if(label && label!==anchor) mismatches.add(`${label} → ${anchor}`);
-        }
-        return;
+  type Part=string|{ alt:string }|typeof EDGE;
+  // The body's text in order, line by line, with its links and images.
+  const lines:Part[][]=[]; let line:Part[]=[];
+  const flush=()=>{ if(line.length) lines.push(line); line=[]; };
+  const walk=(node:typeof root.childNodes[number], anchor:string)=>{
+    if ('value' in node) {
+      line.push(node.value);
+      if(anchor) for(const word of normalize(node.value).split(/\s+/)) {
+        if(!word.includes('.') || word.length>2048)continue;
+        const label=host(word.includes('://')?word:'https://'+word);
+        if(label && label!==anchor) mismatches.add(`${label} → ${anchor}`);
       }
-      const children='childNodes' in node ? node.childNodes : [];
-      if (!('tagName' in node)) { for (const child of children) walk(child,anchor); return; }
-      const tag=node.tagName;
-      // Only what the body shows: the head isn't (the copy has no title or comments anywhere).
-      if (tag==='head' || tag==='style' || tag==='script') return;
-      // URLs are read from the decoded attribute as they are, never as prose (the copy's inventory has them all).
-      for (const a of node.attrs) if (tag==='a' && a.name==='href') { const target=destination(a.value); anchor=target ? destinationHost(target) : ''; if (target) links.push(target); }
-      if (tag==='img') {
-        const alt=node.attrs.find(a=>a.name==='alt')?.value ?? '';
-        images.push({ alt: !!alt.trim() });
-        if (alt) line.push({ alt });
-      }
-      const laid=copy.layout.get(node), inline=laid ? laid==='inline' : INLINE.has(tag);
-      if (!inline) flush();
-      const start=lines.length;
-      if (tag==='tr') rows.push([]);
-      for (const child of children) walk(child,anchor);
-      if (!inline) flush();
-      if (tag==='td' || tag==='th') rows[rows.length-1]?.push(lines.slice(start).flatMap((l,i)=>i ? [' ',...l] : l));
-      if (tag==='tr') { const cells=rows.pop()!; if (cells.length>1 && cells.some(cell=>[false,true].some(alt=>{ const t=render(cell,alt).trim(); return t && t.length<=4; }))) glued.push(cells.flat()); }
-    };
-    for (const child of root.childNodes) walk(child,'');
-    flush();
-    return (alt:boolean)=>[...lines,...glued].map(l=>render(l,alt)).filter(l=>l.trim()).join('\n');
+      return;
+    }
+    const children='childNodes' in node ? node.childNodes : [];
+    if (!('tagName' in node)) { for (const child of children) walk(child,anchor); return; }
+    const tag=node.tagName;
+    // Only what the body shows: the head isn't (the copy has no title or comments anywhere).
+    if (tag==='head' || tag==='style' || tag==='script') return;
+    // URLs are read from the decoded attribute as they are, never as prose (the copy's inventory has them all).
+    for (const a of node.attrs) if (tag==='a' && a.name==='href') { const target=destination(a.value); anchor=target ? destinationHost(target) : ''; if (target) links.push(target); }
+    const laid=copy.layout.get(node), joins=tag!=='br' && tag!=='hr' && (laid ? laid==='inline' : JOINS.has(tag));
+    if (joins) line.push(EDGE); else flush();
+    if (tag==='img') {
+      const alt=node.attrs.find(a=>a.name==='alt')?.value ?? '';
+      images.push({ alt: !!alt.trim() });
+      if (alt) line.push({ alt });
+    }
+    for (const child of children) walk(child,anchor);
+    if (joins) line.push(EDGE); else flush();
   };
-  // As shown with its images, then with images blocked when that reads differently.
-  const stream=read(), shown=stream(false), blocked=stream(true);
-  return { text: blocked===shown || !blocked.trim() ? shown : `${shown}\n--- With images blocked ---\n${blocked}`, showsAll: copy.showsAll, hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, links, images, html: copy.html };
+  for (const child of root.childNodes) walk(child,'');
+  flush();
+  // A reading's text, and the places it differs from the first: an edge read apart between two words, alt text.
+  const render=(alt:boolean, apart:boolean)=>{
+    let text=''; const spans:[number,number,boolean][]=[];
+    for (const parts of lines) {
+      let line=''; const local:[number,number,boolean][]=[];
+      for (const p of parts) {
+        if (typeof p==='string') line+=p;
+        // Edges that meet (one element's end, the next one's start) read as one space.
+        else if (p===EDGE) { const last=local.at(-1); if (apart && !(last?.[2] && last[1]===line.length)) { local.push([line.length,line.length+1,true]); line+=' '; } }
+        else if (alt && p.alt) { local.push([line.length,line.length+p.alt.length,false]); line+=p.alt; }
+      }
+      if (!line.trim()) continue;
+      if (text) text+='\n';
+      const at=text.length; text+=line;
+      // An edge read apart differs only between two words: beside white space it reads as the first does.
+      for (const [s0,e0,edge] of local) if (!edge || (/\S/.test(line[s0-1] ?? '') && /\S/.test(line[e0] ?? ''))) spans.push([at+s0,at+e0,edge]);
+    }
+    // Read apart with images blocked, a phrase differs from both other readings only where it crosses an edge and alt
+    // text: those within EXCERPT characters of each other.
+    const near=(a:[number,number,boolean])=>spans.some(b=>b[2]!==a[2] && b[0]-a[1]<=EXCERPT && a[0]-b[1]<=EXCERPT);
+    return { text, spans: alt && apart ? spans.filter(near) : spans };
+  };
+  const sections:{ title:string; text:string }[]=[];
+  for (const [alt,apart,title] of READINGS) {
+    const { text, spans }=render(alt,apart);
+    if (!title) { if (text.trim()) sections.push({ title, text }); continue; }
+    // EXCERPT characters either side of each place, merged where they meet, never splitting a surrogate pair.
+    const windows:[number,number][]=[];
+    for (const [s0,e0] of spans) {
+      let from=Math.max(0,s0-EXCERPT), to=Math.min(text.length,e0+EXCERPT);
+      if (/[\udc00-\udfff]/.test(text[from] ?? '')) from--; if (/[\udc00-\udfff]/.test(text[to] ?? '')) to++;
+      const last=windows.at(-1);
+      if (last && from<=last[1]) last[1]=Math.max(last[1],to); else windows.push([from,to]);
+    }
+    const excerpt=windows.map(([from,to])=>text.slice(from,to)).join('\n…\n');
+    if (excerpt.trim() && !sections.some(section=>section.text===excerpt)) sections.push({ title, text: excerpt });
+  }
+  return { text: sections.map((section,i)=>i ? `--- ${section.title} ---\n${section.text}` : section.text).join('\n'), sections: sections.map(section=>section.text), showsAll: copy.showsAll, hosts, mismatches, destinations, unsupported, removed, fonts: copy.fonts, links, images, html: copy.html };
 }
 /**
  * The text the screen reads: the HTML's visible text, then the text part, then raw MIME, each in full. A recipient reads
@@ -165,7 +207,7 @@ export async function readHtml(html: string, visit?: (tag: string) => void, opti
  * generated from the HTML); any difference at all, and the whole part is screened. The parts' word overlap goes to the
  * classifier as a signal, since a text part that tells another story is a known spam trick.
  */
-export function screenTextSignals(visible: string, text?: string, rawPart?: string) {
+export function screenTextSignals(visible: string, text?: string, rawPart?: string, sections: string[] = []) {
   const project=(s='')=>normalize(s).replace(/\s+/g,' ').trim();
   const rendered=project(visible), plain=project(text), raw=project(rawPart);
   const words=(v:string)=>new Set(v.toLowerCase().match(VISIBLE_WORDS));
@@ -173,8 +215,10 @@ export function screenTextSignals(visible: string, text?: string, rawPart?: stri
     const a=words(text), b=words(html), common=[...a].filter(w=>b.has(w)).length;
     return a.size && b.size ? common/(a.size+b.size-common) : undefined;
   }
-  const parts=[rendered,plain,raw].filter((part,i,all)=>part && all.indexOf(part)===i);
-  return { content:parts.join('\n'), textHtmlOverlap:overlap(plain,rendered) };
+  // A text part that is exactly one of the HTML's readings (one generated from it) is read with them.
+  const generated=sections.some(section=>project(section)===plain);
+  const parts=[rendered,generated ? '' : plain,raw].filter((part,i,all)=>part && all.indexOf(part)===i);
+  return { content:parts.join('\n'), textHtmlOverlap:overlap(plain,sections.length ? project(sections[0]) : rendered) };
 }
 /** `disallowed`: what mail delivered as written (BYO `screen: true`) holds that the canonical copy would remove. */
 export type ScreenMeasure = { read?: Awaited<ReturnType<typeof readHtml>>; signals: string[]; destinations: string[]; unsupported: string[]; disallowed: string[]; content: string; textHtmlOverlap?: number; screenedBytes: number };
@@ -195,7 +239,7 @@ export async function measureScreen(snapshot: Pick<EmailSnapshot, 'html' | 'text
   const destinations=[...new Set([...read?.destinations ?? [], ...[read?.text, snapshot.text, snapshot.raw].flatMap(part => textTargets(part)).flatMap(target => destination(target) ?? [])])];
   const hosts=new Set([...read?.hosts ?? [], ...destinations.map(destinationHost).filter(Boolean)]);
   const signals=[...read?.mismatches ?? [], ...hosts];
-  const text=screenTextSignals(read?.text ?? '',snapshot.text,snapshot.raw), content=[text.content, destinations.join('\n')].filter(Boolean).join('\n');
+  const text=screenTextSignals(read?.text ?? '',snapshot.text,snapshot.raw,read?.sections), content=[text.content, destinations.join('\n')].filter(Boolean).join('\n');
   return { read, signals, destinations, unsupported: read?.unsupported ?? [], disallowed: options.original ? read?.removed ?? [] : [], content, textHtmlOverlap: text.textHtmlOverlap, screenedBytes: Buffer.byteLength(content) };
 }
 /** Refuses a message the screen cannot read within a limit, with the measured size; `index` names a batch item. */

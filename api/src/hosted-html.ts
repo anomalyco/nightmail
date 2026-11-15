@@ -21,7 +21,7 @@
  */
 import { defaultTreeAdapter, html as spec, serializeOuter, type DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
-import { cssRules, hostedDeclarations, hostedSheet, type FontPolicy } from './hosted-css.js';
+import { cssRules, hostedDeclarations, hostedSheet, NAMED_COLOURS, type FontPolicy } from './hosted-css.js';
 import { concealed, documentSelectors, screenedText } from './screened-html.js';
 
 type Node = DefaultTreeAdapterMap['childNode'];
@@ -85,13 +85,17 @@ const ATTRIBUTES: Record<string, (name: string, value: string) => boolean> = {
   html: name => name === 'xmlns' || name.startsWith('xmlns:'),
   a: name => name === 'href' || name === 'target',
   img: name => name === 'src' || name === 'alt',
-  font: name => name === 'color' || name === 'face' || name === 'size',
+  font: (name, value) => (name === 'color' && colour(value)) || name === 'face' || name === 'size',
   meta: name => name === 'charset' || name === 'name' || name === 'content' || name === 'http-equiv',
   style: (name, value) => name === 'type' && /^\s*text\/css\s*$/i.test(value),
 };
-// align="right" floats an image or table to the right, where several line up in reverse.
+// align="right" floats an image or table to the right, where several line up in reverse. A colour attribute (bgcolor,
+// <font color>) is kept as a name, #rgb or #rrggbb, which every client and the screen read the same; HTML reads any
+// other value by its own legacy rules (bgcolor="rgb(0,0,0)" isn't black).
+const colour = (value: string) => { const v = value.trim().toLowerCase(); return /^#(?:[0-9a-f]{3}){1,2}$/.test(v) || NAMED_COLOURS.has(v); };
 const allowed = (tag: string, name: string, value: string) =>
-  (PRESENTATION.has(name) && !(name === 'align' && (tag === 'img' || tag === 'table') && !/^\s*(?:left|center|middle|top|bottom|baseline)\s*$/i.test(value))) || ARIA.has(name) || !!ATTRIBUTES[tag]?.(name, value);
+  (PRESENTATION.has(name) && !(name === 'align' && (tag === 'img' || tag === 'table') && !/^\s*(?:left|center|middle|top|bottom|baseline)\s*$/i.test(value)) && !(name === 'bgcolor' && !colour(value)))
+  || ARIA.has(name) || !!ATTRIBUTES[tag]?.(name, value);
 // <meta charset>, the http-equiv form of it, and the viewport: nothing else a <meta> says is kept.
 const meta = (element: Element) => {
   const get = (name: string) => element.attrs.find(a => a.name === name)?.value.trim().toLowerCase();
@@ -111,7 +115,7 @@ const VOCABULARY = new Set([...ELEMENTS, ...REMOVED_WITH_CONTENT, 'section', 'ar
   'aria-placeholder', 'aria-braillelabel', 'aria-brailleroledescription', 'aria-keyshortcuts', 'compact', 'clear', 'shape', 'coords', 'codebase',
   'classid', 'archive', 'code', 'profile', 'manifest', 'poster', 'controls', 'autoplay', 'loop', 'muted', 'preload', 'srcdoc', 'sandbox', 'allow',
   'frameborder', 'scrolling', 'form', 'list', 'max', 'min', 'maxlength', 'pattern', 'readonly', 'required', 'selected', 'checked', 'disabled', 'open',
-  'rows', 'cols', 'autocomplete', 'attributionsrc', 'as', 'async', 'defer', 'for', 'kind', 'default', 'standby', 'bordercolor']);
+  'rows', 'cols', 'autocomplete', 'attributionsrc', 'as', 'async', 'defer', 'for', 'kind', 'default', 'standby', 'bordercolor', 'bgcolor']);
 const known = (name: string) => VOCABULARY.has(name) ? name : /^data-/.test(name) ? 'data-*' : /^on/.test(name) ? 'event handler'
   : /^(?:v|o|w|x|m):/.test(name) ? `Office ${name.slice(0, 2)}*` : 'non-HTML';
 // Embeddings, overrides and isolates: an override draws the letters after it in reverse.

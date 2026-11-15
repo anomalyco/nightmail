@@ -17,7 +17,7 @@
 import { defaultTreeAdapter, html as spec, serializeOuter, type DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
 import { ApiError } from './core.js';
-import { cssDeclarations, cssRules, type CssRule } from './hosted-css.js';
+import { cssColor, cssColours, cssDeclarations, cssRules, NAMED_COLOURS, type CssColor, type CssRule } from './hosted-css.js';
 
 type Node = DefaultTreeAdapterMap['childNode'];
 type Element = DefaultTreeAdapterMap['element'];
@@ -114,8 +114,7 @@ const own = <T>(record: Record<string, T>, key: string): T | undefined => Object
 // ----- Values ------------------------------------------------------------------------------------------------------
 
 type Rgb = [number, number, number];
-const NAMED = new Map<string, Rgb>(('aliceblue:f0f8ff antiquewhite:faebd7 aqua:00ffff aquamarine:7fffd4 azure:f0ffff beige:f5f5dc bisque:ffe4c4 black:000000 blanchedalmond:ffebcd blue:0000ff blueviolet:8a2be2 brown:a52a2a burlywood:deb887 cadetblue:5f9ea0 chartreuse:7fff00 chocolate:d2691e coral:ff7f50 cornflowerblue:6495ed cornsilk:fff8dc crimson:dc143c cyan:00ffff darkblue:00008b darkcyan:008b8b darkgoldenrod:b8860b darkgray:a9a9a9 darkgreen:006400 darkgrey:a9a9a9 darkkhaki:bdb76b darkmagenta:8b008b darkolivegreen:556b2f darkorange:ff8c00 darkorchid:9932cc darkred:8b0000 darksalmon:e9967a darkseagreen:8fbc8f darkslateblue:483d8b darkslategray:2f4f4f darkslategrey:2f4f4f darkturquoise:00ced1 darkviolet:9400d3 deeppink:ff1493 deepskyblue:00bfff dimgray:696969 dimgrey:696969 dodgerblue:1e90ff firebrick:b22222 floralwhite:fffaf0 forestgreen:228b22 fuchsia:ff00ff gainsboro:dcdcdc ghostwhite:f8f8ff gold:ffd700 goldenrod:daa520 gray:808080 green:008000 greenyellow:adff2f grey:808080 honeydew:f0fff0 hotpink:ff69b4 indianred:cd5c5c indigo:4b0082 ivory:fffff0 khaki:f0e68c lavender:e6e6fa lavenderblush:fff0f5 lawngreen:7cfc00 lemonchiffon:fffacd lightblue:add8e6 lightcoral:f08080 lightcyan:e0ffff lightgoldenrodyellow:fafad2 lightgray:d3d3d3 lightgreen:90ee90 lightgrey:d3d3d3 lightpink:ffb6c1 lightsalmon:ffa07a lightseagreen:20b2aa lightskyblue:87cefa lightslategray:778899 lightslategrey:778899 lightsteelblue:b0c4de lightyellow:ffffe0 lime:00ff00 limegreen:32cd32 linen:faf0e6 magenta:ff00ff maroon:800000 mediumaquamarine:66cdaa mediumblue:0000cd mediumorchid:ba55d3 mediumpurple:9370db mediumseagreen:3cb371 mediumslateblue:7b68ee mediumspringgreen:00fa9a mediumturquoise:48d1cc mediumvioletred:c71585 midnightblue:191970 mintcream:f5fffa mistyrose:ffe4e1 moccasin:ffe4b5 navajowhite:ffdead navy:000080 oldlace:fdf5e6 olive:808000 olivedrab:6b8e23 orange:ffa500 orangered:ff4500 orchid:da70d6 palegoldenrod:eee8aa palegreen:98fb98 paleturquoise:afeeee palevioletred:db7093 papayawhip:ffefd5 peachpuff:ffdab9 peru:cd853f pink:ffc0cb plum:dda0dd powderblue:b0e0e6 purple:800080 rebeccapurple:663399 red:ff0000 rosybrown:bc8f8f royalblue:4169e1 saddlebrown:8b4513 salmon:fa8072 sandybrown:f4a460 seagreen:2e8b57 seashell:fff5ee sienna:a0522d silver:c0c0c0 skyblue:87ceeb slateblue:6a5acd slategray:708090 slategrey:708090 snow:fffafa springgreen:00ff7f steelblue:4682b4 tan:d2b48c teal:008080 thistle:d8bfd8 tomato:ff6347 turquoise:40e0d0 violet:ee82ee wheat:f5deb3 white:ffffff whitesmoke:f5f5f5 yellow:ffff00 yellowgreen:9acd32')
-  .split(' ').map(entry => { const [name, hex] = entry.split(':') as [string, string]; return [name, [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16)) as Rgb]; }));
+const NAMED = NAMED_COLOURS;
 /** A plain color (hex, rgb(), rgba(), named) as RGB and alpha; anything else, transparent and currentcolor included, is not one. */
 function colorOf(token: string): { rgb: Rgb; alpha: number } | undefined {
   const v = token.toLowerCase();
@@ -495,31 +494,38 @@ export function concealed(root: Element, sheets: CssRule[], quirks = false) {
     const conditions = queries.length + clients.size <= MAX_READINGS ? [...queries.map(query => reading(q => q === query)), ...[...clients.values()].map(group => reading(() => false, group))] : [];
     return [reading(() => false), ...conditions, ...(queries.length || clients.size ? [reading(() => true, new Map([...clients.values()].flatMap(group => [...group])))] : [])];
   });
+  // Outlook's Word engine reads only colour names, #rgb and #rrggbb: where the copy has other colours, every reading is
+  // read again without them, as Outlook draws it (the text keeps the colour it inherits).
+  const elsewhere = (value: string) => cssColours(value).some(c => !c.everywhere);
+  const styled = (element: Element): boolean => element.attrs.some(a => a.name === 'style' && elsewhere(a.value)) || element.childNodes.some(child => isElement(child) && styled(child));
+  const outlook = sheets.some(rule => rule.declarations.some(d => elsewhere(d.value))) || styled(root);
+  const ways = [false, ...(outlook ? [true] : [])].flatMap(legacy => readings.map(read => ({ read, legacy })));
   const hidden = new Set<Element>(), invisible = new Set<DefaultTreeAdapterMap['textNode']>(), inline = new Set<Element>(), block = new Set<Element>();
   // Siblings repeat the same style under the same parent: each distinct one is looked at once.
   const looked = new Map<Look, Map<Declaration[], Map<string, Look | null>>>();
-  const look = (element: Element, inherited: Look, merged: Declaration[]): Look | null => {
+  const look = (element: Element, inherited: Look, merged: Declaration[], legacy: boolean): Look | null => {
     const attr = (name: string) => element.attrs.find(a => a.name === name)?.value;
-    const key = `${element.tagName}|${attr('bgcolor') ?? ''}|${attr('href') !== undefined}|${attr('color') ?? ''}|${attr('size') ?? ''}`;
+    const key = `${element.tagName}|${attr('bgcolor') ?? ''}|${attr('href') !== undefined}|${attr('color') ?? ''}|${attr('size') ?? ''}|${legacy}`;
     let byMerged = looked.get(inherited); if (!byMerged) { byMerged = new Map(); looked.set(inherited, byMerged); }
     let byKey = byMerged.get(merged); if (!byKey) { byKey = new Map(); byMerged.set(merged, byKey); }
     if (byKey.has(key)) return byKey.get(key)!;
-    const result = lookAt(element, inherited, merged, attr);
+    const result = lookAt(element, inherited, merged, attr, legacy);
     byKey.set(key, result);
     return result;
   };
-  const lookAt = (element: Element, inherited: Look, merged: Declaration[], attr: (name: string) => string | undefined): Look | null => {
+  // Colours are read as the copy's CSS keeps them (src/hosted-css.ts cssColor: literals only), and the legacy
+  // attributes (bgcolor, <font color>) as names, #rgb or #rrggbb, the only forms the copy keeps them in.
+  const lookAt = (element: Element, inherited: Look, merged: Declaration[], attr: (name: string) => string | undefined, legacy: boolean): Look | null => {
     const state = { ...inherited };
-    let clipped = false, hide = false;
-    const boxes: number[] = [];
-    const paint = (token: string) => { const c = colorOf(token); if (c) { state.background = blend(c.rgb, c.alpha, state.background); if (c.alpha >= 1) state.image = false; } };
+    let hide = false;
+    const read = (c: CssColor | undefined) => c && (!legacy || c.everywhere) ? c : undefined;
+    const paint = (c: { rgb: Rgb; alpha: number } | undefined) => { if (c) { state.background = blend(c.rgb, c.alpha, state.background); if (c.alpha >= 1) state.image = false; } };
     const value = (raw: string) => raw.toLowerCase().replace(/\s*\(\s*([^)]*?)\s*\)/g, (_, inner: string) => `(${inner.replace(/\s*,\s*/g, ',').replace(/\s+/g, ',')})`).replace(/\s+/g, ' ').trim();
     const base = (property: string) => property.replace(/^-(?:webkit|moz|ms|o)-/, '');
-    const bgcolor = attr('bgcolor'); if (bgcolor) paint(bgcolor.trim().toLowerCase());
+    const bgcolor = attr('bgcolor'); if (bgcolor) paint(colorOf(bgcolor.trim().toLowerCase()));
     for (const d of merged) {
-      const v = value(d.value);
-      if (d.property === 'background-color' || d.property === 'background') { const color = v.split(' ').find(token => colorOf(token)); if (color) paint(color); }
-      if ((d.property === 'background' || d.property === 'background-image') && /url\(/.test(v)) state.image = true;
+      if (d.property === 'background-color' || d.property === 'background') paint(read(cssColours(d.value).at(-1)));
+      if ((d.property === 'background' || d.property === 'background-image') && /url\(/i.test(d.value)) state.image = true;
     }
     if (element.tagName === 'a' && attr('href') !== undefined) state.color = LINK;
     const fontColor = element.tagName === 'font' ? colorOf(attr('color')?.trim().toLowerCase() ?? '') : undefined;
@@ -534,36 +540,34 @@ export function concealed(root: Element, sheets: CssRule[], quirks = false) {
         case 'display': hide ||= v === 'none'; break;
         case 'visibility': hide ||= v === 'hidden' || v === 'collapse'; break;
         case 'opacity': { const n = v.endsWith('%') ? parseFloat(v) / 100 : parseFloat(v); if (Number.isFinite(n)) state.opacity *= Math.max(0, n); break; }
-        case 'color': { if (v === 'transparent') state.color = state.background; else { const c = colorOf(v); if (c) state.color = blend(c.rgb, c.alpha, state.background); } break; }
+        case 'color': { const c = read(cssColor(d.value)); if (c) state.color = blend(c.rgb, c.alpha, state.background); break; }
         // A text fill paints over the colour, on this element and what inherits it.
-        case 'text-fill-color': { if (v === 'transparent') fill = state.background; else { const c = colorOf(v); if (c) fill = blend(c.rgb, c.alpha, state.background); } break; }
+        case 'text-fill-color': { const c = read(cssColor(d.value)); if (c) fill = blend(c.rgb, c.alpha, state.background); break; }
         case 'font-size': { const n = fontPx(v, state.fontPx); if (n !== undefined) state.fontPx = n; break; }
         case 'font': { const n = v.split(/[ /]/).map(token => /^[-\d.]/.test(token) ? fontPx(token, state.fontPx) : undefined).find(n => n !== undefined); if (n !== undefined) state.fontPx = n; break; }
         case 'line-height': { const n = /^[\d.]+$/.test(v) ? parseFloat(v) * state.fontPx : px(v, state.fontPx, state.fontPx); hide ||= n !== undefined && n < 1; break; }
-        case 'overflow': case 'overflow-x': case 'overflow-y': clipped ||= /\b(?:hidden|clip)\b/.test(v); break;
-        case 'height': case 'max-height': case 'width': case 'max-width': { const n = px(v, state.fontPx, NaN); if (n !== undefined && !Number.isNaN(n)) boxes.push(n); break; }
       }
     }
     if (fill) state.color = fill;
-    const small = boxes.some(n => n <= 2 || n < state.fontPx / 2);
-    return hide || (clipped && small) || state.fontPx < 2 || state.opacity <= 0.1 ? null : state;
+    return hide || state.fontPx < 2 || state.opacity <= 0.1 ? null : state;
   };
   const start: Look = { color: [0, 0, 0], background: [255, 255, 255], image: false, fontPx: 16, opacity: 1 };
-  // How each element lays out, for reading its text in order: inline when inline (or contents) or an item of a flex or
-  // grid container, which lines items up side by side; block when it has another box.
+  // How each element lays out, for reading its text (src/screen.ts): `inline` when its edges may join the text beside
+  // it into one word (inline, inline-block and the like, a table cell, or any item of a flex or grid container,
+  // whichever way it runs); `block` when it has a block box of its own.
   const visit = (element: Element, looks: Look[], items: boolean) => {
     for (const node of element.childNodes) {
       if (isText(node)) { if (node.value.trim() && looks.some(l => !l.image && contrast(l.color, l.background) < 1.5)) invisible.add(node); continue; }
       if (!isElement(node) || node.namespaceURI !== HTML || node.tagName === 'head') continue;
       const merged = readings.map(read => read(node));
       const display = merged[0]!.findLast(d => d.property === 'display')?.value.trim().toLowerCase();
-      if (items || (display && (display.startsWith('inline') || display === 'contents'))) inline.add(node); else if (display) block.add(node);
-      const states = looks.map((l, i) => look(node, l, merged[i]!));
+      if (items || (display && (display.startsWith('inline') || display === 'contents' || display === 'table-cell'))) inline.add(node); else if (display) block.add(node);
+      const states = looks.map((l, i) => look(node, l, merged[i % readings.length]!, ways[i]!.legacy));
       if (states.some(state => !state)) { hidden.add(node); continue; }
       visit(node, states as Look[], !!display && /^(?:inline-)?(?:flex|grid)$/.test(display));
     }
   };
-  visit(root, readings.map(() => start), false);
+  visit(root, ways.map(() => start), false);
   return { hidden, invisible, inline, block };
 }
 export function screenedHtml(html: string, previewText?: string): string {

@@ -4,10 +4,11 @@
  * shared CSS Syntax 3 tokenizer (src/css-syntax.ts) found them. What stays is a conservative allow-list:
  *
  * - A declaration stays when its property is a presentation property (PROPERTIES: typography, colour, spacing, sizing,
- *   borders, display and flex/grid layout, alignment, visibility basics) and its value holds only keywords, numbers,
- *   colours, gradients and arithmetic. Custom properties (--*), and any value with var(), env(), attr(), url(),
- *   image-set(), cross-fade(), element(), expression() or another function not on VALUE_FUNCTIONS, or a function name
- *   written with escapes, are removed. Strings stay only where they name fonts or grid areas, never where they draw.
+ *   borders, display and flex/grid layout, alignment, visibility basics) and its value is literal (literal: keywords,
+ *   numbers, lengths in px, pt, em, rem or %, and colours colourOf reads), so the policy and the screen's style reader
+ *   (src/screened-html.ts) know what it draws. Custom properties (--*), and any value with calc(), min(), clamp(),
+ *   color-mix(), var(), url() or any other function, currentColor or a system colour, another unit, or an escape, are
+ *   removed. Strings stay only where they name fonts, never where they draw.
  * - background-image may load one absolute https url("…"), with no escapes, which is listed for the screen.
  * - At-rules: @media stays (its rules filtered the same way); @font-face and @import stay only when they load from the
  *   font services in FontPolicy; every other at-rule (@supports, @keyframes, @counter-style, @page …) is removed.
@@ -35,11 +36,12 @@ export type HostedCss = { css: string; destinations: string[]; removed: string[]
 // The presentation properties a Hosted message keeps, unprefixed (-webkit-, -moz-, -ms- and -o- variants count too).
 // Left out on purpose: content, quotes, counters and anything else that draws text; cursor, filter, mask, clip-path,
 // list-style-image and anything else that loads; transform, direction, unicode-bidi, writing-mode, order and grid
-// placement, which draw text in another order than the document's; transitions and animations.
+// placement, which draw text in another order than the document's; font-size-adjust, which draws type at another size
+// than its own; transitions and animations.
 export const PROPERTIES = new Set([
   // Typography
   'font', 'font-family', 'font-size', 'font-style', 'font-weight', 'font-variant', 'font-variant-caps', 'font-variant-numeric', 'font-variant-ligatures',
-  'font-feature-settings', 'font-variation-settings', 'font-stretch', 'font-kerning', 'font-optical-sizing', 'font-synthesis', 'font-size-adjust', 'line-height',
+  'font-feature-settings', 'font-variation-settings', 'font-stretch', 'font-kerning', 'font-optical-sizing', 'font-synthesis', 'line-height',
   'letter-spacing', 'word-spacing', 'text-align', 'text-align-last', 'text-decoration', 'text-decoration-line', 'text-decoration-color', 'text-decoration-style',
   'text-decoration-thickness', 'text-underline-offset', 'text-underline-position', 'text-transform', 'text-indent', 'text-shadow', 'text-rendering', 'text-size-adjust',
   'white-space', 'word-break', 'word-wrap', 'overflow-wrap', 'hyphens', 'tab-size', 'vertical-align', 'list-style', 'list-style-type', 'list-style-position',
@@ -78,10 +80,11 @@ const LIST_STYLE_TYPES = new Set(['none', 'disc', 'circle', 'square', 'decimal',
 const LIST_STYLE = new Set([...LIST_STYLE_TYPES, 'inside', 'outside']);
 // Strings name things in these properties; anywhere else a string could be drawn.
 const STRINGS = new Set(['font', 'font-family', 'font-feature-settings', 'font-variation-settings']);
-// Functions a kept value may use: colours, gradients, arithmetic and the layout helpers that take only numbers.
+// Functions an @font-face descriptor may use (a style's values are literal).
 const VALUE_FUNCTIONS = /^(?:rgba?|hsla?|hwb|lab|lch|oklab|oklch|color|color-mix|light-dark|(?:-webkit-|-moz-|-o-|-ms-)?(?:repeating-)?(?:linear|radial|conic)-gradient|calc|-webkit-calc|min|max|clamp|minmax|repeat|fit-content)$/;
+// Not size-adjust or the metric overrides: they draw a font's glyphs at another size or place than its text's.
 const FONT_DESCRIPTORS = new Set(['font-family', 'src', 'font-style', 'font-weight', 'font-stretch', 'font-display', 'unicode-range', 'font-variant', 'font-feature-settings',
-  'font-variation-settings', 'ascent-override', 'descent-override', 'line-gap-override', 'size-adjust']);
+  'font-variation-settings']);
 const FONT_FUNCTIONS = /^(?:format|tech|local)$/;
 
 // ----- Component values with their source ranges ----------------------------------------------------------------------
@@ -149,6 +152,94 @@ function declaration(segment: Segment): { name: Token; value: CV[] } | null {
   return value.some(n => n.kind === 'block' && n.open === '{') ? null : { name: head.t, value };
 }
 
+// ----- Literal values -------------------------------------------------------------------------------------------------
+
+/** The CSS colour names, which every client reads the same. */
+export const NAMED_COLOURS = new Map<string, [number, number, number]>(('aliceblue:f0f8ff antiquewhite:faebd7 aqua:00ffff aquamarine:7fffd4 azure:f0ffff beige:f5f5dc bisque:ffe4c4 black:000000 blanchedalmond:ffebcd blue:0000ff blueviolet:8a2be2 brown:a52a2a burlywood:deb887 cadetblue:5f9ea0 chartreuse:7fff00 chocolate:d2691e coral:ff7f50 cornflowerblue:6495ed cornsilk:fff8dc crimson:dc143c cyan:00ffff darkblue:00008b darkcyan:008b8b darkgoldenrod:b8860b darkgray:a9a9a9 darkgreen:006400 darkgrey:a9a9a9 darkkhaki:bdb76b darkmagenta:8b008b darkolivegreen:556b2f darkorange:ff8c00 darkorchid:9932cc darkred:8b0000 darksalmon:e9967a darkseagreen:8fbc8f darkslateblue:483d8b darkslategray:2f4f4f darkslategrey:2f4f4f darkturquoise:00ced1 darkviolet:9400d3 deeppink:ff1493 deepskyblue:00bfff dimgray:696969 dimgrey:696969 dodgerblue:1e90ff firebrick:b22222 floralwhite:fffaf0 forestgreen:228b22 fuchsia:ff00ff gainsboro:dcdcdc ghostwhite:f8f8ff gold:ffd700 goldenrod:daa520 gray:808080 green:008000 greenyellow:adff2f grey:808080 honeydew:f0fff0 hotpink:ff69b4 indianred:cd5c5c indigo:4b0082 ivory:fffff0 khaki:f0e68c lavender:e6e6fa lavenderblush:fff0f5 lawngreen:7cfc00 lemonchiffon:fffacd lightblue:add8e6 lightcoral:f08080 lightcyan:e0ffff lightgoldenrodyellow:fafad2 lightgray:d3d3d3 lightgreen:90ee90 lightgrey:d3d3d3 lightpink:ffb6c1 lightsalmon:ffa07a lightseagreen:20b2aa lightskyblue:87cefa lightslategray:778899 lightslategrey:778899 lightsteelblue:b0c4de lightyellow:ffffe0 lime:00ff00 limegreen:32cd32 linen:faf0e6 magenta:ff00ff maroon:800000 mediumaquamarine:66cdaa mediumblue:0000cd mediumorchid:ba55d3 mediumpurple:9370db mediumseagreen:3cb371 mediumslateblue:7b68ee mediumspringgreen:00fa9a mediumturquoise:48d1cc mediumvioletred:c71585 midnightblue:191970 mintcream:f5fffa mistyrose:ffe4e1 moccasin:ffe4b5 navajowhite:ffdead navy:000080 oldlace:fdf5e6 olive:808000 olivedrab:6b8e23 orange:ffa500 orangered:ff4500 orchid:da70d6 palegoldenrod:eee8aa palegreen:98fb98 paleturquoise:afeeee palevioletred:db7093 papayawhip:ffefd5 peachpuff:ffdab9 peru:cd853f pink:ffc0cb plum:dda0dd powderblue:b0e0e6 purple:800080 rebeccapurple:663399 red:ff0000 rosybrown:bc8f8f royalblue:4169e1 saddlebrown:8b4513 salmon:fa8072 sandybrown:f4a460 seagreen:2e8b57 seashell:fff5ee sienna:a0522d silver:c0c0c0 skyblue:87ceeb slateblue:6a5acd slategray:708090 slategrey:708090 snow:fffafa springgreen:00ff7f steelblue:4682b4 tan:d2b48c teal:008080 thistle:d8bfd8 tomato:ff6347 turquoise:40e0d0 violet:ee82ee wheat:f5deb3 white:ffffff whitesmoke:f5f5f5 yellow:ffff00 yellowgreen:9acd32')
+  .split(' ').map(entry => { const [name, hex] = entry.split(':') as [string, string]; return [name, [0, 2, 4].map(i => parseInt(hex.slice(i, i + 2), 16)) as [number, number, number]]; }));
+/** A colour as RGB and alpha. `everywhere`: every client reads it, Outlook's Word engine included (a name, #rgb or
+ *  #rrggbb); Outlook ignores the rest (#rgba, rgb(), hsl() …), and its text keeps the colour it inherits. */
+export type CssColor = { rgb: [number, number, number]; alpha: number; everywhere: boolean };
+// Keywords that name no value the screen's style reader can place: the text's own colour, the system's colours
+// (Canvas, CanvasText …), and the CSS-wide keywords other than inherit (initial black text on a black background).
+const NOT_LITERAL = new Set(['initial', 'unset', 'revert', 'revert-layer', 'currentcolor', 'canvas', 'canvastext', 'linktext', 'visitedtext', 'activetext', 'buttonface', 'buttontext', 'buttonborder',
+  'field', 'fieldtext', 'highlight', 'highlighttext', 'selecteditem', 'selecteditemtext', 'mark', 'marktext', 'graytext', 'accentcolor', 'accentcolortext',
+  'activeborder', 'activecaption', 'appworkspace', 'background', 'buttonhighlight', 'buttonshadow', 'captiontext', 'inactiveborder', 'inactivecaption',
+  'inactivecaptiontext', 'infobackground', 'infotext', 'menu', 'menutext', 'scrollbar', 'threeddarkshadow', 'threedface', 'threedhighlight',
+  'threedlightshadow', 'threedshadow', 'window', 'windowframe', 'windowtext']);
+const clamp = (n: number, low: number, high: number) => Math.min(high, Math.max(low, n));
+function hslRgb(h: number, s: number, l: number): [number, number, number] {
+  const k = (n: number) => (n + h / 30) % 12, a = s * Math.min(l, 1 - l);
+  return [0, 8, 4].map(n => Math.round(255 * (l - a * Math.max(-1, Math.min(k(n) - 3, 9 - k(n), 1))))) as [number, number, number];
+}
+/** A colour written as a literal: a name, transparent, #rgb, #rgba, #rrggbb, #rrggbbaa, or rgb(), rgba(), hsl() or
+ *  hsla() with literal numbers (comma-separated, or space-separated with an optional / alpha). Undefined for anything
+ *  else: other functions, relative colours, currentColor, system colours. */
+function colourOf(n: CV | undefined): CssColor | undefined {
+  if (!n) return undefined;
+  if (n.kind === 'token') {
+    if (n.t.kind === 'ident' && !n.t.escaped) {
+      const v = n.t.value.toLowerCase(), named = NAMED_COLOURS.get(v);
+      return v === 'transparent' ? { rgb: [0, 0, 0], alpha: 0, everywhere: true } : named ? { rgb: named, alpha: 1, everywhere: true } : undefined;
+    }
+    if (n.t.kind !== 'hash' || !/^[0-9a-f]+$/i.test(n.t.value) || ![3, 4, 6, 8].includes(n.t.value.length)) return undefined;
+    const hex = n.t.value.length <= 4 ? [...n.t.value].map(c => c + c).join('') : n.t.value, at = (i: number) => parseInt(hex.slice(i, i + 2), 16);
+    return { rgb: [at(0), at(2), at(4)], alpha: hex.length === 8 ? at(6) / 255 : 1, everywhere: hex.length === 6 };
+  }
+  if (n.kind !== 'fn' || n.escaped || !/^(?:rgba?|hsla?)$/.test(n.name)) return undefined;
+  const args = solid(n.items), commas = args.filter((_, i) => i % 2 === 1);
+  let parts: CV[], alpha: CV | undefined;
+  if (commas.length && commas.every(c => tok(c, ','))) {
+    // Comma-separated: three or four values.
+    parts = args.filter((_, i) => i % 2 === 0);
+    if (args.length % 2 === 0 || parts.length < 3 || parts.length > 4) return undefined;
+    alpha = parts[3]; parts = parts.slice(0, 3);
+  } else {
+    // Space-separated: three values, then / and an alpha.
+    if (args.length !== 3 && !(args.length === 5 && args[3]!.kind === 'token' && args[3]!.t.kind === 'delim' && args[3]!.t.value === '/')) return undefined;
+    parts = args.slice(0, 3); alpha = args[4];
+  }
+  const num = (c: CV | undefined, units: string[] = []) => c?.kind === 'token' && (c.t.kind === 'number' || c.t.kind === 'percentage' || (c.t.kind === 'dimension' && !c.t.escaped && units.includes(c.t.unit))) ? c.t : undefined;
+  const a = alpha === undefined ? 1 : num(alpha);
+  if (a === undefined) return undefined;
+  const opacity = typeof a === 'number' ? a : clamp(a.kind === 'percentage' ? a.num / 100 : a.num, 0, 1);
+  if (n.name.startsWith('rgb')) {
+    const c = parts.map(p => num(p));
+    if (c.some(t => !t) || (commas.length && new Set(c.map(t => t!.kind)).size > 1)) return undefined;
+    return { rgb: c.map(t => Math.round(clamp(t!.kind === 'percentage' ? t!.num * 2.55 : t!.num, 0, 255))) as [number, number, number], alpha: opacity, everywhere: false };
+  }
+  const [h, sat, light] = [num(parts[0], ['deg', 'grad', 'rad', 'turn']), num(parts[1]), num(parts[2])];
+  if (!h || h.kind === 'percentage' || !sat || !light || (commas.length && (sat.kind !== 'percentage' || light.kind !== 'percentage'))) return undefined;
+  const degrees = h.kind === 'number' ? h.num : h.num * ({ deg: 1, grad: 0.9, rad: 180 / Math.PI, turn: 360 } as Record<string, number>)[h.unit]!;
+  return { rgb: hslRgb(((degrees % 360) + 360) % 360, clamp(sat.num / 100, 0, 1), clamp(light.num / 100, 0, 1)), alpha: opacity, everywhere: false };
+}
+const DISPLAY = new Set(['none', 'block', 'inline', 'inline-block', 'flex', 'inline-flex', 'grid', 'inline-grid', 'table', 'inline-table', 'table-row', 'table-cell',
+  'table-row-group', 'table-header-group', 'table-footer-group', 'table-caption', 'list-item', 'flow-root', 'contents']);
+// Lengths in units the screen's style reader reads exactly (src/screened-html.ts px), and fr for grid tracks.
+const UNITS = new Set(['px', 'pt', 'em', 'rem']);
+const TRACKS = /^grid-(?:template|auto)-(?:columns|rows)$/;
+/** Whether a value is literal: keywords, numbers, lengths in UNITS, percentages, colours colourOf reads, a string
+ *  where a font is named, commas, and / (a font's line height, a colour's alpha). No other function (calc(), min(),
+ *  clamp(), color-mix(), var() …), unit or block: the policy and the screen's style reader know what a literal
+ *  computes to, and nothing else. */
+function literal(items: CV[], base: string): boolean {
+  const strings = STRINGS.has(base);
+  return items.every(n => {
+    if (n.kind === 'fn') return !!colourOf(n);
+    if (n.kind === 'block') return false;
+    const t = n.t;
+    switch (t.kind) {
+      case 'ws': case ',': case 'number': case 'percentage': return true;
+      case 'dimension': return !t.escaped && (UNITS.has(t.unit) || (TRACKS.test(base) && t.unit === 'fr'));
+      case 'hash': return !!colourOf(n);
+      case 'ident': return !t.escaped && !NOT_LITERAL.has(t.value.toLowerCase());
+      case 'string': return strings && !t.escaped;
+      case 'delim': return t.value === '/' || t.value === '!';
+      default: return false;
+    }
+  });
+}
+
 // ----- What may stay ---------------------------------------------------------------------------------------------------
 
 /** What a sheet's reader knows of the document a sheet styles (src/hosted-html.ts): whether the screen's style reader
@@ -157,11 +248,11 @@ function declaration(segment: Segment): { name: Token; value: CV[] } | null {
 export type Selectors = { modeled: (selector: string) => boolean; conditional: (selector: string) => boolean };
 const ANY: Selectors = { modeled: () => true, conditional: () => false };
 // `inline`: a style attribute rather than a sheet; `selector` and `media`: the rule being read and the @media queries
-// around it; `clips`: whether the declaration block being read hides what overflows its box; `blank`: a style
+// around it; `blank`: a style
 // attribute on an element that holds no text or image, which hiding hides nothing of; `versions`: whether
 // anything that hides, shows or changes layout by condition was removed.
 type Read = { text: string; resolve: Resolve; policy: FontPolicy; destinations: string[]; removed: string[]; fonts: string[]; inline: boolean; selectors: Selectors;
-  selector: string; media: string[]; clips: boolean; blank: boolean; versions: boolean };
+  selector: string; media: string[]; blank: boolean; versions: boolean };
 const raw = (read: Read, n: { start: number; end: number }) => read.text.slice(n.start, n.end);
 function foreign(read: Read, target: string) {
   const host = new URL(target).host;
@@ -227,14 +318,16 @@ function keep(read: Read, d: { name: Token; value: CV[] }, context: 'style' | 'f
     if (words.length && words.every(n => n.kind === 'token' && n.t.kind === 'ident' && allowed.has(n.t.value.toLowerCase()))) return null;
     return 'List style changed to plain numbers or bullets';
   }
-  if (!plainValue(d.value, STRINGS.has(base))) return `CSS ${name} with a value Hosted sending doesn't keep`;
+  if (!literal(d.value, base)) return `CSS ${name} with a value Hosted sending doesn't keep`;
   const words = withoutImportant(d.value), idents = words.flatMap(n => n.kind === 'token' && n.t.kind === 'ident' ? [n.t.value.toLowerCase()] : []);
   const sizes = words.flatMap(n => n.kind === 'token' ? [size(n.t)] : []).filter(n => !Number.isNaN(n));
+  // Display only as one of the layouts the screen's style reader knows (src/screened-html.ts concealed).
+  if (base === 'display' && !(words.length === 1 && idents.length === 1 && DISPLAY.has(idents[0]!))) return `CSS ${name} with a value Hosted sending doesn't keep`;
   // Every version of the message shows at once: what hides or shows content is removed wherever it is, and so is what
   // changes it by condition (in @media, or in a rule a mail client's own markup completes) beyond sizes, spacing, type
   // and colour.
   const conditional = read.media.length > 0 || (!read.inline && read.selectors.conditional(read.selector));
-  if (!read.blank && hides(base, words, idents, sizes, read, conditional)) { read.versions = true; return 'CSS that hides or shows content'; }
+  if (!read.blank && hides(base, words, idents, sizes)) { read.versions = true; return 'CSS that hides or shows content'; }
   // By condition, display:block alone stays (columns stacked on a phone): it only puts content on lines of its own, in
   // document order, so the screen, which reads the layout without conditions, reads it together or apart at most.
   if (conditional && !CONDITIONAL.has(base) && !(base === 'display' && idents.length === 1 && idents[0] === 'block')) { read.versions = true; return 'CSS that changes layout by screen, colour scheme or mail client'; }
@@ -245,6 +338,11 @@ function keep(read: Read, d: { name: Token; value: CV[] }, context: 'style' | 'f
   if ((/^margin/.test(base) || base === 'text-indent') && sizes.some(n => n < 0)) return 'CSS that reorders text';
   if ((base === 'letter-spacing' || base === 'word-spacing') && sizes.some(n => n < -2)) return 'CSS that reorders text';
   if (base === 'mso-hide') return 'CSS mso-hide (Outlook shows it too)';
+  // What draws over the text beside it, or away from its place.
+  if (covers(base, words, idents, sizes)) return 'CSS that can cover other text';
+  if (base === 'vertical-align' && words.some(n => n.kind === 'token' && n.t.kind !== 'ident')) return 'CSS that moves text out of its line';
+  if (/^(?:margin|padding|text-indent|letter-spacing|word-spacing|gap|row-gap|column-gap|grid-gap|grid-row-gap|grid-column-gap|min-width|width|inline-size|min-inline-size)/.test(base) && sizes.some(n => Math.abs(n) > 1000)) return 'CSS that moves text far from its place';
+  if (base === 'text-size-adjust' && !idents.some(v => v === 'none' || v === 'auto') && !words.some(n => n.kind === 'token' && n.t.kind === 'percentage' && n.t.num === 100)) return 'CSS text-size-adjust other than 100%';
   // What the screen reads to tell whether text can be seen must be in a rule its style reader applies, written plainly.
   if (VISIBLE.has(base) && (!read.inline && !read.selectors.modeled(read.selector) || raw(read, { start: d.value[0]?.start ?? 0, end: d.value.at(-1)?.end ?? 0 }).includes('\\'))) return `CSS ${base} in a rule Hosted sending can't check`;
   return null;
@@ -259,7 +357,7 @@ const CONDITIONAL = new Set(['width', 'min-width', 'max-width', 'height', 'min-h
   'border-radius', 'border-top-left-radius', 'border-top-right-radius', 'border-bottom-left-radius', 'border-bottom-right-radius', 'border-collapse', 'border-spacing',
   'outline', 'outline-width', 'outline-style', 'outline-color', 'outline-offset', 'box-shadow', 'font', 'font-family', 'font-size', 'font-style', 'font-weight',
   'font-variant', 'font-variant-caps', 'font-variant-numeric', 'font-variant-ligatures', 'font-feature-settings', 'font-variation-settings', 'font-stretch',
-  'font-kerning', 'font-optical-sizing', 'font-synthesis', 'font-size-adjust', 'font-smoothing', 'osx-font-smoothing', 'line-height', 'letter-spacing',
+  'font-kerning', 'font-optical-sizing', 'font-synthesis', 'font-smoothing', 'osx-font-smoothing', 'line-height', 'letter-spacing',
   'word-spacing', 'text-align', 'text-align-last', 'text-decoration', 'text-decoration-line', 'text-decoration-color', 'text-decoration-style',
   'text-decoration-thickness', 'text-underline-offset', 'text-underline-position', 'text-transform', 'text-shadow', 'text-rendering', 'text-size-adjust', 'color',
   'background', 'background-color', 'background-image', 'background-position', 'background-size', 'background-repeat', 'background-clip', 'background-origin',
@@ -279,9 +377,9 @@ function size(t: Token): number {
   return t.num * factor;
 }
 // What hides or shows content: display:none, any visibility, opacity of 0.1 or less, type or a line height under 2 px, a box
-// 2 px or less across in a block that hides its overflow (or by condition, where another rule may hide it), and a colour
-// or text fill without opacity.
-function hides(base: string, words: CV[], idents: string[], sizes: number[], read: Read, conditional: boolean): boolean {
+// 2 px or less across, overflow other than visible (nothing is clipped), a flex basis or grid track of 2 px or less, and
+// a colour or text fill without opacity.
+function hides(base: string, words: CV[], idents: string[], sizes: number[]): boolean {
   switch (base) {
     case 'display': return idents.includes('none');
     case 'visibility': return true;
@@ -292,33 +390,34 @@ function hides(base: string, words: CV[], idents: string[], sizes: number[], rea
       const lengths = words.filter(n => n.kind === 'token' && ['dimension', 'percentage', 'number'].includes(n.t.kind) && !(n.t.kind === 'number' && n.t.num >= 100));
       return lengths.some(n => n.kind === 'token' && size(n.t) < 2);
     }
-    case 'height': case 'max-height': case 'width': case 'max-width': case 'block-size': case 'max-block-size': case 'inline-size': case 'max-inline-size':
-      return (read.clips || conditional) && sizes.some(n => n <= 2);
-    case 'color': case 'text-fill-color': return transparent(raw(read, { start: words[0]?.start ?? 0, end: words.at(-1)?.end ?? 0 }));
+    // A percentage of the box around it, counted against a 390 px screen.
+    case 'height': case 'max-height': case 'width': case 'max-width': case 'block-size': case 'max-block-size': case 'inline-size': case 'max-inline-size': case 'flex-basis':
+      return words.some(n => n.kind === 'token' && (n.t.kind === 'percentage' ? n.t.num * 3.9 : size(n.t)) <= 2);
+    case 'overflow': case 'overflow-x': case 'overflow-y': return idents.some(v => v !== 'visible');
+    // A basis of 2 px or less that doesn't grow (flex: 0 0 0).
+    case 'flex': { const numbers = words.flatMap(n => n.kind === 'token' && n.t.kind === 'number' ? [n.t.num] : []); return numbers[0] === 0 && (numbers.length === 1 || numbers[2] === 0 || words.some(n => n.kind === 'token' && n.t.kind !== 'number' && size(n.t) <= 2)); }
+    case 'grid-template-columns': case 'grid-template-rows': case 'grid-auto-columns': case 'grid-auto-rows':
+      return words.some(n => n.kind === 'token' && (n.t.kind === 'number' ? n.t.num === 0 : n.t.kind === 'dimension' && n.t.unit === 'fr' ? n.t.num <= 0 : size(n.t) <= 2));
+    case 'color': case 'text-fill-color': { const c = cssColorOf(words); return !!c && c.alpha <= 0.1; }
     default: return false;
   }
 }
-// transparent, or a colour with alpha of 0.1 or less.
-function transparent(value: string): boolean {
-  const v = value.trim().toLowerCase();
-  if (v === 'transparent') return true;
-  const hex = /^#[0-9a-f]{8}$/.exec(v) ? parseInt(v.slice(7), 16) / 255 : /^#[0-9a-f]{4}$/.exec(v) ? parseInt(v[4]! + v[4], 16) / 255 : undefined;
-  if (hex !== undefined) return hex <= 0.1;
-  const inner = /^(?:rgb|hsl|hwb|lab|lch|oklab|oklch|color)a?\((.*)\)$/s.exec(v)?.[1];
-  if (!inner) return false;
-  const slash = inner.split('/'), commas = inner.split(',');
-  const alpha = slash.length === 2 ? slash[1]!.trim() : commas.length === 4 ? commas[3]!.trim() : undefined;
-  if (!alpha) return false;
-  const n = alpha.endsWith('%') ? parseFloat(alpha) / 100 : parseFloat(alpha);
-  return Number.isFinite(n) && n <= 0.1;
+// What paints beyond its own box, over the text beside it: a shadow other than an inset one, a text shadow more than
+// 2 px out, an outline.
+function covers(base: string, words: CV[], idents: string[], sizes: number[]): boolean {
+  if (idents.includes('none') && words.length === 1) return false;
+  if (base === 'box-shadow') return !split(words).every(part => part.some(n => n.kind === 'token' && n.t.kind === 'ident' && n.t.value.toLowerCase() === 'inset'));
+  if (base === 'text-shadow') return sizes.some(n => Math.abs(n) > 2);
+  if (base.startsWith('outline')) return !(sizes.length && sizes.every(n => n === 0)) && !idents.includes('none');
+  return false;
 }
+const split = (words: CV[]) => words.reduce<CV[][]>((parts, n) => { if (tok(n, ',')) parts.push([]); else parts.at(-1)!.push(n); return parts; }, [[]]);
+const cssColorOf = (words: CV[]) => words.length === 1 ? colourOf(words[0]) : undefined;
 type Range = { start: number; end: number };
 // A block of plain declarations: the ranges to remove, or null when the block holds anything else (nested rules).
 function declarations(read: Read, items: CV[], context: 'style' | 'font-face', inline: boolean): { removals: Range[]; kept: number } | null {
   const removals: Range[] = [];
   read.inline = inline;
-  // Whether the block hides what overflows its box, which a tiny width or height then hides.
-  read.clips = segments(items).some(segment => { const d = declaration(segment); return !!d && /^overflow(?:-[xy])?$/i.test(d.name.value) && withoutImportant(d.value).some(n => n.kind === 'token' && n.t.kind === 'ident' && /^(?:hidden|clip)$/i.test(n.t.value)); });
   let kept = 0;
   for (const segment of segments(items)) {
     const d = declaration(segment);
@@ -393,7 +492,7 @@ function sheet(read: Read, items: Item[], top: boolean): { removals: Range[]; ke
   return { removals, kept };
 }
 function filter(css: string, resolve: Resolve, policy: FontPolicy, as: 'sheet' | 'declarations', selectors: Selectors = ANY, blank = false): HostedCss {
-  const text = css.replace(/\r\n?/g, '\n'), read: Read = { text, resolve, policy, destinations: [], removed: [], fonts: [], inline: as === 'declarations', selectors, selector: '', media: [], clips: false, blank, versions: false };
+  const text = css.replace(/\r\n?/g, '\n'), read: Read = { text, resolve, policy, destinations: [], removed: [], fonts: [], inline: as === 'declarations', selectors, selector: '', media: [], blank, versions: false };
   let removals: Range[];
   try {
     const items = values(tokenize(text), text.length);
@@ -442,6 +541,19 @@ export function cssRules(css: string): CssRule[] {
   };
   visit(rules(items, true), []);
   return out;
+}
+/** The colours a value names, in order, read as Hosted CSS keeps them (colourOf): one for a colour property, any number
+ *  in a background or shadow. */
+export function cssColours(value: string): CssColor[] {
+  let items: CV[];
+  try { items = values(tokenize(value), value.length); } catch (error) { if (error instanceof Limit) return []; throw error; }
+  return solid(items).flatMap(n => colourOf(n) ?? []);
+}
+/** A colour property's value as a colour, when it is exactly one. */
+export function cssColor(value: string): CssColor | undefined {
+  let items: CV[];
+  try { items = solid(values(tokenize(value), value.length)); } catch (error) { if (error instanceof Limit) return undefined; throw error; }
+  return items.length === 1 ? colourOf(items[0]) : undefined;
 }
 /** A style attribute's declarations, read with the same tokenizer. */
 export function cssDeclarations(css: string): CssDeclaration[] {

@@ -14316,6 +14316,44 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ['client colour beside a u', `<style>u + .body .x{color:#fff}</style><body class="body"><p><u>Note</u></p><p>Sam<span class="x">innocent</span>pleMarker ${ready}</p></body>`, true],
       // White space a hiding style hides nothing of keeps it: a 1 px divider and a preheader's filler.
       ['spacers', `<div style="font-size:1px;line-height:1px;background:#dddddd">&nbsp;</div><p>${ready}</p><div style="display:none;max-height:0;overflow:hidden">&#847;&zwnj;&nbsp;&#847;&zwnj;&nbsp;</div>`, false],
+      // Final review 4, F4-H1: where an element's edge falls inside a line, whether a client draws the words either side
+      // joined or apart depends on layout (a phone's width, a flex or grid axis), so both are read: blocks that a
+      // condition stacks, a flex column, a one-column grid, a client's own block.
+      ['F4-H1 stacked by @media', `<style>.x{display:inline}@media(max-width:480px){.x{display:block}}</style><div class="x">Send</div><div class="x">your</div><div class="x">password</div><div class="x">now.</div><p>${ready}</p>`, true],
+      ['F4-H1 flex column', `<div style="display:flex;flex-direction:column"><div>Send</div><div>your</div><div>password</div><div>now.</div></div><p>${ready}</p>`, true],
+      ['F4-H1 one-column grid', `<div style="display:grid;grid-template-columns:1fr"><div>Send</div><div>your</div><div>password</div><div>now.</div></div><p>${ready}</p>`, true],
+      ['F4-H1 client block', `<style>.x{display:inline} u + .body .x{display:block}</style><body class="body"><div class="x">Send</div><div class="x">your</div><div class="x">password</div><div class="x">now.</div><p>${ready}</p></body>`, true],
+      // And a word laid out across table cells, or across flex items in a row, is read joined.
+      ['word across cells', `<table><tr><td>Sam</td><td>ple</td><td>Marker</td></tr></table><p>${ready}</p>`, true],
+      ['word across flex items', `<div style="display:flex"><div>Sam</div><div>pleMar</div><div>ker</div></div><p>${ready}</p>`, true],
+      // F4-H2: CSS values are literals. calc(), min(), max(), clamp(), color-mix(), oklch(), relative colours,
+      // currentColor and system colours, and units other than px, pt, em, rem and % are removed, so what they hid shows
+      // and is read in place, and the pair a computed negative margin swapped reads in its own order.
+      ['F4-H2 calc() type', `<p>Sam<span style="font-size:calc(1px - 1px)">innocent</span>pleMarker ${ready}</p>`, false, /calc/],
+      ['F4-H2 min() and clamp() type', `<p>Sam<span style="font-size:min(0px, 1px)">inno</span><span style="font-size:clamp(0px, 0px, 0px)">cent</span>pleMarker ${ready}</p>`, false, /min\(|clamp/],
+      ['F4-H2 calc() opacity', `<p style="background:white">Sam<span style="display:inline-block;width:0;opacity:calc(0)">innocent</span>pleMarker ${ready}</p>`, false, /calc|opacity|width:0/],
+      ['F4-H2 calc() width', `<p>Sam<span style="display:inline-block;width:calc(0px);overflow:hidden">innocent</span>pleMarker ${ready}</p>`, false, /calc|overflow/],
+      ['F4-H2 oklch() white', `<p style="background:white">Sam<span style="color:oklch(1 0 0)">innocent</span>pleMarker ${ready}</p>`, false, /oklch/],
+      ['F4-H2 color-mix() low contrast', `<p style="background:#ffffff">Sam<span style="color:color-mix(in srgb, #ffffff 99%, #000000)">innocent</span>pleMarker ${ready}</p>`, false, /color-mix/],
+      ['F4-H2 currentColor background', `<p>Sam<span style="color:#000000;background-color:currentColor">innocent</span>pleMarker ${ready}</p>`, false, /currentColor/i],
+      ['F4-H2 calc() in @media', `<style>@media (max-width:600px){.x{font-size:calc(0px)}}</style><p>Sam<span class="x">innocent</span>pleMarker ${ready}</p>`, false, /calc/],
+      ['F4-H2 negative calc() margins', `<div style="font:16px monospace;white-space:nowrap"><span style="display:inline-block;width:6ch;margin-left:calc(6ch)">Marker</span><span style="display:inline-block;width:6ch;margin-left:calc(-12ch)">Sample</span></div><p>${ready}</p>`, false, /calc|6ch/],
+      // A literal hsl() white is read as white: the text drawn in it goes, so the words either side read whole.
+      ['F4-H2 hsl() white', `<p style="background:white">Sam<span style="display:inline-block;width:0;color:hsl(0 0% 100%)">innocent</span>pleMarker ${ready}</p>`, true],
+      // Outlook reads colour names, #rgb and #rrggbb only: text an rgba() colour shows elsewhere keeps its inherited
+      // white there, on a white background, so it goes too.
+      ['Outlook ignores rgba()', `<div style="color:#ffffff;background:#000000"><p>Sam<span style="color:rgba(0,0,0,1);background:#ffffff">innocent</span>pleMarker ${ready}</p></div>`, true],
+      // A colour attribute HTML reads by its legacy rules is removed (bgcolor="rgb(…)" isn't the colour it names).
+      ['legacy colour attribute', `<table><tr><td bgcolor="rgb(255,255,255)">${ready}</td></tr></table>`, false, /bgcolor/],
+      // Nothing is clipped (an inline-block's second line, under a fixed height), nothing paints over the text beside it
+      // (a wide shadow), nothing is moved far from its place or out of its line, and fonts draw at their own size.
+      ['clipped second line', `<p>Sam<span style="display:inline-block;height:16px;overflow:hidden;vertical-align:top"><br>innocent</span>pleMarker ${ready}</p>`, false, /overflow/],
+      ['wide shadow', `<p>Sam<span style="display:inline-block;box-shadow:0 0 0 40px #ffffff">x</span>pleMarker ${ready}</p>`, false, /box-shadow/],
+      ['far indent', `<p>Sam<span style="display:inline-block;text-indent:9999px">innocent</span>pleMarker ${ready}</p>`, false, /9999px/],
+      ['raised out of its line', `<p>Sam<span style="vertical-align:300px">innocent</span>pleMarker ${ready}</p>`, false, /vertical-align/],
+      ['CSS-wide keyword colour', `<div style="background:#000000;color:#ffffff">Sam<span style="color:initial">innocent</span>pleMarker ${ready}</div>`, false, /initial/],
+      ['display the reader does not lay out', `<div>Sam<div style="display:-webkit-inline-box">pleMar</div>ker ${ready}</div>`, false, /inline-box/],
+      ['font size adjust', `<style>@font-face{font-family:Brand;src:url("https://fonts.gstatic.com/s/brand.woff2") format("woff2");size-adjust:1%}</style><p style="font-family:Brand">Sam<span style="font-size-adjust:0.01">innocent</span>pleMarker ${ready}</p>`, false, /size-adjust/],
     ];
     for (const [name, html, bad, gone] of cases) {
       const { to, reply } = await send(html), start = screened.length;
@@ -20660,6 +20698,10 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         ['<style>@media (max-width:600px){.x{font-size:0}}</style><p>Your <span class="x">receipt</span> is attached.</p>', 'CSS that hides or shows content'],
         ['<p><span style="float:right">attached.</span> Your receipt is</p>', 'CSS that reorders text'],
         ['<p>Your receipt is <span hidden>not</span> attached.</p>', 'hidden attributes on span'],
+        // Final review 4: computed values, clipping and shadows that paint over other text.
+        ['<p>Your receipt is <span style="font-size:calc(1px - 1px)">not</span> attached.</p>', "CSS font-size with a value Hosted sending doesn't keep"],
+        ['<p>Your receipt is <span style="display:inline-block;height:16px;overflow:hidden">not</span> attached.</p>', 'CSS that hides or shows content'],
+        ['<p>Your receipt is <span style="box-shadow:0 0 0 40px #ffffff">not</span> attached.</p>', 'CSS that can cover other text'],
       ];
       for (const [html, named] of refusals) {
         const refused = error(await local('POST', '/v1/emails/send', mail({ subject: 'Account ready', html, screen: true }), 'live'), 422, 'UNSUPPORTED_HTML_IN_SCREENED_MAIL');
