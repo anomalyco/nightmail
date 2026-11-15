@@ -1,5 +1,4 @@
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from 'react'
-import { ArrowRight } from 'lucide-react'
 import { ThemeToggle } from '../../components/ThemeToggle'
 import { AnomalyLogo } from '../../components/AnomalyLogo'
 import { SignInConsent } from '../../components/LegalLinks'
@@ -22,7 +21,7 @@ export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
     coin.current = mounted
     return () => { coin.current = null; mounted.destroy() }
   }, [reduced])
-  // While sign-in starts, the waiting slice goes to the button and light runs round the coin.
+  // While sign-in starts, the count keeps going round the coin.
   useEffect(() => { coin.current?.setBusy(busy) }, [busy])
 
   return <div className="nmc-page" style={{ '--nmc-aspect': COIN_ASPECT } as CSSProperties}>
@@ -45,10 +44,11 @@ export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
         <p className="nmc-lede">One API to send, receive, reply and thread. <span>Accepted in <b>~100&nbsp;ms</b>.</span></p>
         <button ref={action} type="button" className="nmc-cta" disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent} onPointerEnter={() => coin.current?.setEager(true)} onPointerLeave={() => coin.current?.setEager(false)} onFocus={event => coin.current?.setEager(event.currentTarget.matches(':focus-visible'))} onBlur={() => coin.current?.setEager(false)}>
           Sign in
-          <span className="nmc-cta-mark" aria-hidden="true">
-            <ArrowRight size={18} strokeWidth={2} />
-            <svg className="nmc-cta-wait" viewBox="0 0 18 18" width="18" height="18"><circle cx="9" cy="9" r="6.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeDasharray="27 41" /></svg>
-          </span>
+          {/* The arrow, drawn at the weight of the label's strokes, and the spinner that takes its place. */}
+          <svg className="nmc-cta-mark" viewBox="0 0 18 18" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path className="nmc-cta-go" d="M3 9h12M10 4l5 5-5 5" />
+            <circle className="nmc-cta-wait" cx="9" cy="9" r="6.5" strokeDasharray="27 41" />
+          </svg>
         </button>
         <p className="nmc-free"><b>3,000</b> sent and <b>3,000</b> received, <span>free every month</span></p>
         <SignInConsent className="nmc-consent" />
