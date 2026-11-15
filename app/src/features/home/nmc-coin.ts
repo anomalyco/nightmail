@@ -493,10 +493,12 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, target: 
     if (index !== hover) { hover = index; kick() }
   }
   const onLeave = () => { if (hover >= 0) { hover = -1; kick() } }
-  // Pressed, a slice hops out, or back in if it was out.
+  // Pressed, a slice hops out, or back in if it was out. One that would land off the page stays where it is.
   const onDown = (event: PointerEvent) => {
     const index = event.button === 0 && ready ? sliceAt(event) : -1
     if (index < 0) return
+    const [x, y] = at((1 + PULL) * R + 8, angle(index))
+    if (!slices[index].wanted && (x < 0 || x > width || y < 0 || y > height)) return
     slices[index].wanted = !slices[index].wanted
     kick()
   }
