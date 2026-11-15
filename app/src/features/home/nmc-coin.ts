@@ -1,16 +1,16 @@
 // The coin of the "nmc" homepage study: a one-cent piece lying on a table, cut into fifty slices, on one canvas.
 // A slice is the price of one email: RATES.emailUc (api/src/billing/money.ts) is $0.0002, a fiftieth of a cent.
 // The coin spins down the way a dropped coin does, a cut travels round it, and one slice slides out and turns to lie
-// pointing at Sign in. Every few seconds that slice leaves and the next takes its place; a slice still in the coin
-// leaves when it is pressed. Fifty slices later the next cent lands.
+// in front of Sign in. Every few seconds that slice leaves and the next takes its place; a slice still in the coin
+// lifts under the pointer and leaves when it is pressed. Fifty slices later the next cent lands.
 
 const TAU = Math.PI * 2
-export const SLICES = 50
+const SLICES = 50
 const STEP = TAU / SLICES
 // The camera looks down at the table from 34° off vertical. A cent is 1.52 mm thick and 19.05 mm across.
 const TILT = 34 * Math.PI / 180, COS = Math.cos(TILT), SIN = Math.sin(TILT)
 const THICK = 0.16
-/** Height of the coin's box over its width: the top face's ellipse and the edge below it. variant-nmc.css repeats it. */
+/** Height of the coin's box over its width: the top face's ellipse and the edge that shows below it. */
 export const COIN_ASPECT = COS + THICK * SIN / 2
 
 // Lengths below are in coin radii unless they say px or ms.
@@ -26,7 +26,7 @@ const FIRST_SEND = 3600, SEND_EVERY = 6400, DART = 360, NEXT_AFTER = 200, REMINT
 const BUSY_PERIOD = 1100, BUSY_WIDTH = 0.2, BUSY_AMP = 0.06
 // The spin-down of a coin on a table (Euler's disk): the tilt falls as (t0 − t)^(1/3) while the rim's contact point
 // circles faster as (t0 − t)^(−1/6), then everything stops at once (Moffatt, Nature 404, 2000).
-const TILT_RIGHT = 40 * Math.PI / 180, TILT_DOWN = 13 * Math.PI / 180, WOBBLE_HZ = 2.3
+const TILT_RIGHT = 40 * Math.PI / 180, TILT_DOWN = 16 * Math.PI / 180, WOBBLE_HZ = 2.3
 
 // The face: a rim line, fifty envelopes and the denomination, in a unit circle with y down.
 const RIM_R = 0.953, RIM_W = 0.011
@@ -63,7 +63,7 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
 
   let dpr = 1, width = 0, height = 0, R = 0, cx = 0, cy = 0, aim = 0, pull = 1
   let palette!: Palette, cold!: HTMLCanvasElement, hot!: HTMLCanvasElement
-  let raf = 0, timer = 0, start = performance.now(), last = start
+  let raf = 0, timer = 0, next = 0, dead = false, start = performance.now(), last = start
   // tray: the slice lying in front of Sign in, or on its way there.
   let cutDone = reduced, tray = reduced ? 0 : -1, hover = -1, busyAt = 0
   const slices: Slice[] = Array.from({ length: SLICES }, (_, index) => ({ out: reduced && index === 0 ? 1 : 0, outVel: 0, lift: 0, liftVel: 0, cut: reduced ? 1 : 0, gone: false, fly: 0, from: 0 }))
@@ -256,7 +256,7 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
         if (Math.abs(outTo - slice.out) < 0.0005 && Math.abs(slice.outVel) < 0.005) { slice.out = outTo; slice.outVel = 0 } else moving = true
         if (Math.abs(liftTo - slice.lift) < 0.0004 && Math.abs(slice.liftVel) < 0.004) { slice.lift = liftTo; slice.liftVel = 0 } else moving = true
       }
-      // It slides clear of the coin first, then swings round to point at Sign in.
+      // It slides clear of the coin first, then swings round to lie on the line from the coin to Sign in.
       at.off = pull * slice.out + slice.lift
       at.rot = -turn(index) * smooth((slice.out - 0.5) / 0.45)
       at.heat = clamp(slice.out * 1.7) + slice.lift / LIFT * 0.55
@@ -295,7 +295,7 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
     return Math.min(toX, toY) / R + 0.2
   }
 
-  const kick = () => { if (!raf) { last = performance.now(); raf = requestAnimationFrame(frame) } }
+  const kick = () => { if (!raf && !dead) { last = performance.now(); raf = requestAnimationFrame(frame) } }
 
   function send(index: number) {
     const slice = slices[index]
@@ -303,7 +303,8 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
     slice.fly = performance.now(); slice.from = pull * slice.out + slice.lift
     if (tray === index) {
       tray = -1
-      window.setTimeout(() => { if (tray < 0) { tray = nextFree(); kick() } }, NEXT_AFTER)
+      window.clearTimeout(next)
+      next = window.setTimeout(() => { if (tray < 0) { tray = nextFree(); kick() } }, NEXT_AFTER)
     }
     if (hover === index) hover = -1
     kick()
@@ -371,7 +372,8 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
       kick()
     },
     destroy() {
-      cancelAnimationFrame(raf); window.clearTimeout(timer)
+      dead = true
+      cancelAnimationFrame(raf); window.clearTimeout(timer); window.clearTimeout(next)
       resize.disconnect(); theme.disconnect()
       stage.removeEventListener('pointermove', onMove); stage.removeEventListener('pointerleave', onLeave); stage.removeEventListener('pointerdown', onDown)
       probe.remove()

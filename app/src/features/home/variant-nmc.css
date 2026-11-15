@@ -1,5 +1,5 @@
-/* The "nmc" homepage: one line across the page. What it costs, the coin, Sign in. The coin is drawn on a full-bleed
-   canvas (nmc-coin.ts) where .nmc-coin lies; below 1160 px the line turns to run down the page. */
+/* The "nmc" homepage: one line across the page. What it costs, the coin, the slice that has left it, Sign in. The coin
+   is drawn on a full-bleed canvas (nmc-coin.ts) where .nmc-coin lies; below 1240 px the line runs down the page. */
 .nmc-page {
   /* The row is the headline, the coin, the slice lying beside it and the button, edge to edge: the coin takes the width
      the others leave (the headline's longest line is 3.6 em; the slice needs .525 of the coin's width beside it). */
@@ -23,6 +23,9 @@
 .nmc-bar { position: relative; flex: none; width: 100%; padding-inline: var(--nmc-pad); }
 .nmc-header { display: flex; align-items: center; justify-content: space-between; height: 64px; }
 .nmc-header .wordmark, .nmc-header .theme-toggle { position: static; }
+.nmc-brand { display: flex; align-items: center; gap: var(--space-16); min-width: 0; }
+.nmc-brand .nmc-what { color: var(--color-muted); white-space: nowrap; }
+.nmc-lede .nmc-what { display: none; }
 .nmc-nav { display: flex; align-items: center; gap: var(--space-12); }
 .nmc-nav > a { color: var(--color-muted); text-decoration: none; transition: color var(--motion-duration); }
 .nmc-nav > a:hover { color: var(--color-text); }
@@ -35,12 +38,11 @@
 .nmc-title { font-size: var(--nmc-type); font-weight: 600; line-height: .92; letter-spacing: -.05em; white-space: nowrap; }
 .nmc-title span { display: block; }
 .nmc-lede { margin-top: var(--space-24); color: var(--color-muted); font-size: 16px; line-height: 24px; }
-.nmc-lede span { display: block; }
-.nmc-lede b, .nmc-fine b { color: var(--color-text); font-weight: inherit; }
+.nmc-lede b, .nmc-fine b { color: var(--color-text); font-family: var(--font-mono); font-size: .94em; font-weight: inherit; }
 
-/* The coin's box: its face is an ellipse and its edge shows below (COIN_ASPECT in nmc-coin.ts). The slice comes to
-   rest --nmc-pull coin radii from the centre, clear of the rim, pointing at the button. */
-.nmc-coin { --nmc-aim: right; --nmc-pull: 1.05; width: var(--nmc-d); aspect-ratio: 1 / .87378; }
+/* The coin's box (its height comes from COIN_ASPECT in nmc-coin.ts). The slice comes to rest --nmc-pull coin radii
+   from the centre, clear of the rim, on the line from the coin to the button. */
+.nmc-coin { --nmc-aim: right; --nmc-pull: 1.05; width: var(--nmc-d); }
 
 .nmc-act { position: relative; margin-left: calc(var(--nmc-d) * .525 + var(--nmc-reach)); }
 .nmc-cta { display: flex; align-items: center; justify-content: center; width: var(--nmc-button); height: 60px; padding: 0 var(--space-24); border: 0; border-radius: 8px; background: var(--color-contrast); color: var(--color-on-contrast); font: inherit; font-size: 18px; font-weight: 600; line-height: 24px; letter-spacing: -.01em; cursor: pointer; transition: background-color var(--motion-duration), transform 160ms var(--ease-out-strong); }
@@ -65,9 +67,10 @@
   .nmc-title span { display: inline; }
   .nmc-title span:last-child { display: block; }
   .nmc-lede { margin-top: var(--space-12); font-size: 15px; line-height: 22px; }
-  .nmc-lede span { display: inline; }
+  .nmc-brand .nmc-what { display: none; }
+  .nmc-lede .nmc-what { display: inline; }
   .nmc-lede span:last-child { display: block; }
-  .nmc-coin { --nmc-aim: down; --nmc-pull: .62; justify-self: center; margin-top: var(--space-24); }
+  .nmc-coin { --nmc-aim: down; --nmc-pull: .62; justify-self: center; margin-top: var(--space-40); }
   /* The slice lies .62 radii out and is foreshortened like the coin: it reaches .31 × .83 of the width below the rim. */
   .nmc-act { margin: calc(var(--nmc-d) * .257 + var(--space-28)) 0 0; }
   .nmc-cta { height: 56px; }
