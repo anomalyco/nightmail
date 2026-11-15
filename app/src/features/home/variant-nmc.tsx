@@ -8,10 +8,10 @@ import { COIN_ASPECT, mountCoin, type Coin } from './nmc-coin'
 import './variant-nmc.css'
 import { productName, sdkPackage } from '../../../../api/src/brand'
 
-// Direction "nmc": the price as an object. One cent, its ring cut into fifty slices with an envelope on each: fifty
-// emails to the cent, which is $0.0002 each (RATES.emailUc, api/src/billing/money.ts). The coin has the page; under
-// it, one line says what it costs and the slice that has slid out points at Sign in. The speed is the API's
-// acceptance time, measured 2026-11-15 (p50 99 ms over 90 sends).
+// Direction "nmc": the price as an object. One cent, its ring cut into fifty slices, one of them an email that has
+// left it: fifty emails to the cent, which is $0.0002 each (RATES.emailUc, api/src/billing/money.ts). The coin has
+// the page; under it, one line says what it costs and runs on to Sign in, which the slice that has left points at.
+// The speed is the API's acceptance time, measured 2026-11-15 (p50 99 ms over 90 sends).
 export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
   const canvas = useRef<HTMLCanvasElement>(null), slot = useRef<HTMLDivElement>(null), action = useRef<HTMLButtonElement>(null), coin = useRef<Coin | null>(null)
   const [reduced] = useState(reducedMotion)
@@ -37,13 +37,13 @@ export function NmcHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
     <main className="nmc-main">
       {notice && <div className="nmc-notice">{notice}</div>}
       <div className="nmc-stage">
-        <div ref={slot} className="nmc-coin" role="img" aria-label="A one-cent coin. Its outer ring is cut into fifty slices with an envelope on each, and one slice has slid out towards Sign in." />
+        <div ref={slot} className="nmc-coin" role="img" aria-label="A one-cent coin. Its outer ring is cut into fifty slices, and one of them, with an envelope on it, has slid out towards Sign in." />
       </div>
       <div className="nmc-caption">
         <h1 className="nmc-title">Fifty emails <br />a penny.</h1>
         <div className="nmc-lede">
-          <p><span>One API to send, receive, reply and thread. </span><span>Accepted in <b>~100&nbsp;ms</b>.</span></p>
-          <p><span><b>3,000</b> sent and <b>3,000</b> received, </span><span>free every month.</span></p>
+          <p>One API to send, receive, reply and thread. Accepted in <b>~100&nbsp;ms</b>.</p>{' '}
+          <p><b>3,000</b> sent and <b>3,000</b> received, free every month.</p>
         </div>
         <button ref={action} type="button" className="nmc-cta" disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent} onPointerEnter={() => coin.current?.setEager(true)} onPointerLeave={() => coin.current?.setEager(false)} onFocus={event => coin.current?.setEager(event.currentTarget.matches(':focus-visible'))} onBlur={() => coin.current?.setEager(false)}>
           Sign in
