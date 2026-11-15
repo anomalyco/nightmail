@@ -1,0 +1,153 @@
+/* The "nmb" homepage: the page is one second across. Everything on the plate sits where its time is: 1% of the page
+   is 10 ms. Wide screens run the second left to right; portrait ones (.nmb-page--tall) run it down the page. */
+.nmb-page { --nmb-pad: clamp(20px, 2.8vw, 40px); --nmb-ground: var(--color-canvas); display: grid; grid-template-rows: 64px minmax(min(540px, 100svh - 64px), 1fr) 56px; min-height: 100svh; overflow-x: clip; }
+.nmb-header { display: flex; align-items: center; justify-content: space-between; padding-inline: var(--nmb-pad); }
+.nmb-header .wordmark, .nmb-header .theme-toggle { position: relative; inset: auto; }
+.nmb-nav { display: flex; align-items: center; gap: var(--space-12); }
+.nmb-nav > a { margin: -12px -8px; padding: 12px 8px; color: var(--color-muted); text-decoration: none; transition: color var(--motion-duration); }
+.nmb-nav > a:hover { color: var(--color-text); }
+.nmb-footer { padding-inline: var(--nmb-pad); }
+.nmb-page .home-footer { height: 56px; padding-block: 0; border-top: 0; }
+
+.nmb-main { position: relative; container-type: size; display: grid; grid-template: auto minmax(0, 1fr) 132px / minmax(0, 1fr); min-height: 0; }
+/* The letter is 11.6% of the page wide, or smaller where the flight (three letters high) would not fit between the title
+   (about 9.2% of the page's width high) and the strip under the scale. */
+.nmb-main > * { --nmb-u: clamp(44px, min(11.6cqw, (100cqh - 9.2cqw - 150px) / 3), 220px); --nmb-lens: calc(var(--nmb-u) * 5.5); }
+
+/* One line, set to the width of the page it describes. In Inter 500 at this tracking the sentence's ink is 12.15 em
+   long and starts .0235 em into the T, so the line is pulled left by that much and sized to end on the right margin.
+   Each word starts where it does in Inter (the columns), so nothing moves if the web font arrives after the text. */
+.nmb-title { display: grid; grid-template-columns: minmax(0, 15.84fr) minmax(0, 18.667fr) minmax(0, 6.913fr) minmax(0, 14.375fr) minmax(0, 26.389fr) minmax(0, 17.816fr); margin: 0 0 0 -.0235em; padding: clamp(4px, 1.6cqh, 20px) var(--nmb-pad) 0; color: var(--color-text); font-size: calc((100cqw - 2 * var(--nmb-pad)) / 12.166); font-weight: 500; line-height: 1.12; letter-spacing: -.045em; white-space: nowrap; }
+
+/* The plate. Its bottom edge is the scale; a letter's `top` is measured up from it. The scale is drawn twice: faint, and
+   lit (.nmb-lit), which a clipping box (.nmb-sweep) uncovers from the start of the second as far as the delivery. */
+.nmb-stage { position: relative; }
+.nmb-scale { position: absolute; top: calc(100% - 1px); left: 0; width: 100%; height: 14px; border-top: 1px solid var(--color-border-strong); }
+.nmb-scale svg { position: absolute; inset: 0; display: block; width: 100%; height: 13px; overflow: visible; }
+.nmb-scale line { stroke: var(--color-border-strong); stroke-width: 1; vector-effect: non-scaling-stroke; shape-rendering: crispEdges; }
+.nmb-scale .nmb-tenth { stroke: var(--color-faint); }
+/* At rest the scale is lit as far as the delivery: 60.2% of the page. */
+.nmb-sweep { position: absolute; inset: -1px 0 0; overflow: clip; transform: translateX(-39.8%); }
+.nmb-lit { position: absolute; inset: 0; border-top: 1px solid var(--color-muted); transform: translateX(39.8%); }
+.nmb-lit line, .nmb-lit .nmb-tenth { stroke: var(--color-muted); }
+.nmb-marker { position: absolute; top: -1px; left: -1px; width: 2px; height: 22px; background: var(--color-text); opacity: 0; }
+.nmb-flight { position: absolute; inset: 0; }
+
+.nmb-letter { position: absolute; width: var(--nmb-u); height: calc(var(--nmb-u) * .68); translate: -50% -50%; }
+.nmb-letter svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.nmb-paper { fill: var(--nmb-paper); stroke: var(--nmb-ground); stroke-width: 1; paint-order: stroke; }
+.nmb-flap { fill: color-mix(in oklab, var(--nmb-paper) 86%, var(--nmb-ground)); }
+.nmb-ink { fill: none; stroke: var(--nmb-ground); stroke-opacity: .55; stroke-width: 1.5; }
+.nmb-stamp { fill: var(--nmb-ground); fill-opacity: .55; }
+
+/* Exposures develop from the ground's tone to the letter's as the flight goes on (--nmb-age), and each takes one flat
+   tone from how squarely its side faces the lamp (--nmb-light). The one taken as the API accepts is the brand's. */
+.nmb-exposure {
+  --nmb-lit: color-mix(in oklab, var(--color-text) calc(20% + var(--nmb-age) * .56), var(--nmb-ground));
+  --nmb-shade: color-mix(in oklab, var(--color-text) calc(7% + var(--nmb-age) * .3), var(--nmb-ground));
+  --nmb-paper: color-mix(in oklab, var(--nmb-lit) var(--nmb-light), var(--nmb-shade));
+}
+.nmb-steep :is(.nmb-ink, .nmb-stamp, .nmb-flap) { display: none; }
+.nmb-accepted { z-index: 1; --nmb-lit: var(--color-brand); --nmb-shade: color-mix(in oklab, var(--color-brand) 64%, var(--nmb-ground)); }
+/* The letter itself, and where it rests once delivered. */
+.nmb-live { --nmb-paper: var(--color-contrast); }
+.nmb-live .nmb-stamp { fill: var(--color-brand); fill-opacity: 1; }
+.nmb-body { position: absolute; inset: 0; transform-style: preserve-3d; }
+.nmb-side { position: absolute; inset: 0; backface-visibility: hidden; }
+.nmb-side--back { --nmb-paper: color-mix(in oklab, var(--color-contrast) 84%, var(--nmb-ground)); transform: rotateY(180deg); }
+
+/* Before a throw the plate is empty; a visitor who asked for no motion gets the finished plate. */
+.nmb-page[data-motion] .nmb-flight [data-at], .nmb-page[data-motion] .nmb-live, .nmb-page[data-motion] .nmb-sweep { opacity: 0; }
+.nmb-page[data-motion]:not([data-lit]) [data-lit-at] { opacity: .4; }
+
+/* Under the scale: what happened at each mark, centred on it. */
+.nmb-below { position: relative; }
+.nmb-captions { margin: 0; }
+.nmb-caption { position: absolute; top: 26px; translate: -50% 0; text-align: center; white-space: nowrap; }
+.nmb-caption--accepted { left: 9.9%; }
+.nmb-caption--delivered { left: 60.2%; }
+.nmb-caption dt, .nmb-price b { display: block; color: var(--color-text); font-family: var(--font-mono); font-size: 30px; font-weight: 400; line-height: 36px; letter-spacing: -.03em; }
+.nmb-caption--accepted dt { color: var(--color-brand); }
+.nmb-caption dd, .nmb-price span { display: block; margin: 2px 0 0; color: var(--color-muted); font-size: var(--text-sm); line-height: var(--leading-sm); }
+
+/* Sign in stands on the scale in the part of the second the letter didn't need. */
+.nmb-act { position: absolute; top: 0; left: 70%; width: 20%; display: flex; flex-direction: column; align-items: center; text-align: center; white-space: nowrap; }
+.nmb-cta { display: flex; align-items: center; justify-content: center; gap: var(--space-8); width: 100%; height: 64px; margin-top: -64px; padding: 0; border: 0; border-radius: var(--radius-sm) var(--radius-sm) 0 0; background: var(--color-contrast); color: var(--color-on-contrast); font: inherit; font-size: 18px; font-weight: 600; letter-spacing: -.01em; cursor: pointer; transition: background-color var(--motion-duration), transform 160ms var(--ease-out-strong); }
+@media (hover: hover) and (pointer: fine) { .nmb-cta:hover:not(:disabled) { background: var(--color-contrast-hover); } }
+.nmb-cta:active:not(:disabled) { transform: scale(.97); }
+/* Sign-in is starting: the button keeps its ink (a disabled button otherwise fades) and a spinner hangs off the front of
+   its label, which stays where it was. */
+.nmb-cta[data-busy] { opacity: 1; cursor: progress; }
+.nmb-cta-label { position: relative; }
+.nmb-cta-label .ui-spinner { position: absolute; top: calc(50% - 8px); right: calc(100% + var(--space-8)); }
+.nmb-cta:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: var(--focus-offset); }
+.nmb-price { margin: 26px 0 0; }
+.nmb-fine { margin: 8px 0 0; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); }
+/* What a returning visitor is told (not approved yet, an invitation waiting): above the button, in the empty part. */
+.nmb-notice { position: absolute; bottom: calc(100% + 64px + var(--space-16)); left: 0; width: 100%; text-align: left; white-space: normal; }
+
+/* Portrait: the second runs down the page, a word of the title to each tenth of it. */
+.nmb-page--tall { grid-template-rows: 56px minmax(520px, 1fr) 48px; }
+.nmb-page--tall .home-footer { height: 48px; }
+.nmb-page--tall .nmb-main { display: block; }
+.nmb-page--tall .nmb-main > * { --nmb-u: min(27cqw, 14.4cqh); --nmb-column: 72%; --nmb-inset: 44px; }
+.nmb-page--tall .nmb-title { position: absolute; z-index: 1; top: 0; left: var(--nmb-inset); grid-template: repeat(6, 1fr) / none; height: 60%; margin: 0; padding: 0; font-size: min(13.4cqw, 6.9cqh); line-height: 1; }
+.nmb-page--tall .nmb-title span { display: flex; align-items: center; translate: 0 -.1em; }
+/* The stack's left edge is its ink: each word is pulled left by its first letter's side bearing (round ones a hair more). */
+.nmb-page--tall .nmb-title span:nth-child(1) { margin-left: -.0235em; }
+.nmb-page--tall .nmb-title span:nth-child(2) { margin-left: -.058em; }
+.nmb-page--tall .nmb-title span:nth-child(3) { margin-left: -.0444em; }
+.nmb-page--tall .nmb-title span:nth-child(4) { margin-left: -.039em; }
+.nmb-page--tall .nmb-title span:nth-child(5) { margin-left: -.04em; }
+.nmb-page--tall .nmb-title span:nth-child(6) { margin-left: -.0078em; }
+.nmb-page--tall .nmb-stage { position: absolute; inset: 0; overflow: clip; }
+.nmb-page--tall .nmb-scale { top: 0; left: 20px; width: 14px; height: 100%; border-top: 0; border-left: 1px solid var(--color-border-strong); }
+.nmb-page--tall .nmb-scale svg { width: 13px; height: 100%; }
+.nmb-page--tall .nmb-sweep { inset: 0 0 0 -1px; transform: translateY(-39.8%); }
+.nmb-page--tall .nmb-lit { border-top: 0; border-left: 1px solid var(--color-muted); transform: translateY(39.8%); }
+.nmb-page--tall .nmb-marker { top: -1px; left: -1px; width: 22px; height: 2px; }
+.nmb-page--tall .nmb-below { position: static; }
+.nmb-page--tall .nmb-caption { top: auto; left: var(--nmb-inset); translate: 0 -9px; text-align: left; }
+.nmb-page--tall .nmb-caption--accepted { top: 9.9%; display: flex; align-items: baseline; gap: var(--space-8); }
+.nmb-page--tall .nmb-caption--delivered { top: 60.2%; }
+.nmb-page--tall .nmb-caption dt { font-size: 15px; line-height: 18px; }
+.nmb-page--tall .nmb-caption dd { margin: 0; font-size: var(--text-xs); line-height: 18px; }
+.nmb-page--tall .nmb-act { top: calc(60.2% + var(--nmb-u) * .34 + 20px); left: var(--nmb-inset); right: 20px; width: auto; align-items: stretch; text-align: left; white-space: normal; }
+.nmb-page--tall .nmb-cta { height: 54px; margin-top: 0; border-radius: var(--radius-sm); }
+.nmb-page--tall .nmb-price { margin-top: 14px; }
+.nmb-page--tall .nmb-price b { display: inline; font-size: 15px; line-height: 20px; }
+.nmb-page--tall .nmb-price span { display: inline; }
+.nmb-page--tall .nmb-fine { margin-top: 6px; text-wrap: pretty; }
+/* With a notice the column under the delivery is longer than a phone screen leaves room for: the page grows to hold it. */
+.nmb-page--tall .nmb-notice { position: static; order: 1; margin-top: var(--space-12); }
+.nmb-page--tall:has(.nmb-notice) { grid-template-rows: 56px minmax(820px, 1fr) 48px; }
+
+/* Where the two captions would meet, the note under "delivered" goes; narrower still, Sign in takes more of the page
+   and the lines under it wrap. */
+@container (max-width: 1099px) { .nmb-page--wide .nmb-caption--delivered dd { display: none; } }
+@container (max-width: 900px) {
+  .nmb-page--wide .nmb-main { grid-template-rows: auto minmax(0, 1fr) 172px; }
+  .nmb-page--wide .nmb-main > * { --nmb-u: clamp(44px, min(11.6cqw, (100cqh - 9.2cqw - 190px) / 3), 220px); }
+  .nmb-page--wide .nmb-act { left: 69%; width: 27%; white-space: normal; }
+  .nmb-page--wide .nmb-caption dt, .nmb-page--wide .nmb-price b { font-size: 24px; line-height: 30px; }
+  .nmb-page--wide .nmb-price span, .nmb-page--wide .nmb-fine { text-wrap: balance; }
+}
+/* A short, wide window (a phone on its side): a thinner strip under the scale, so Sign in stays in the first screen. */
+@container (max-height: 420px) {
+  .nmb-page--wide .nmb-main { grid-template-rows: auto minmax(0, 1fr) 96px; }
+  .nmb-page--wide .nmb-main > * { --nmb-u: clamp(44px, (100cqh - 9.2cqw - 114px) / 3, 220px); }
+  .nmb-page--wide .nmb-caption { top: 16px; }
+  .nmb-page--wide .nmb-caption dt, .nmb-page--wide .nmb-price b { font-size: 20px; line-height: 24px; }
+  .nmb-page--wide .nmb-cta { height: 48px; margin-top: -48px; font-size: 15px; }
+  .nmb-page--wide .nmb-price { margin-top: 16px; }
+  .nmb-page--wide .nmb-fine { margin-top: 4px; }
+  .nmb-page--wide .nmb-notice { bottom: calc(100% + 48px + var(--space-8)); }
+}
+/* A tablet held upright: the same page, with the button no wider than a thumb's reach. */
+@container (min-width: 600px) {
+  .nmb-page--tall .nmb-act { right: auto; width: 400px; }
+  .nmb-page--tall .nmb-caption dt, .nmb-page--tall .nmb-price b { font-size: 20px; line-height: 24px; }
+  .nmb-page--tall .nmb-caption dd, .nmb-page--tall .nmb-price span, .nmb-page--tall .nmb-fine { font-size: var(--text-md); line-height: 24px; }
+}
+
+@media (prefers-reduced-motion: reduce) { .nmb-cta { transition: none; } }
