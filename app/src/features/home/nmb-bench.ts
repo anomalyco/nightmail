@@ -13,14 +13,17 @@ import type { Flat, Plan, Plane, Point3, Projection, SolidPaths } from './nmb-is
 export const ACCEPTED_MS = 99, DELIVERED_MS = 602
 
 // One camera on the bench. `second` is the rail's length for one second in world units (about a millimetre each).
-// `width` is how many CSS pixels the base takes from end to end at its design size, so line weights and dots are in
-// pixels. A `fine` drawing has every mark and the request's name engraved on it; a plain one is for a phone.
-export interface Spec { name: 'wide' | 'tall'; second: number; azimuth: number; width: number; pad: number; fine: boolean }
+// `width` is how many CSS pixels the part of the drawing that spans the page takes at its design size, so line
+// weights and dots are in pixels: the base from end to end, or, with `bleed`, everything that stands on it, with the
+// base itself drawn far longer than the screen so it runs off both sides. A `fine` drawing has every mark.
+export interface Spec { name: 'wide' | 'tall'; second: number; azimuth: number; width: number; pad: number; fine: boolean; bleed?: boolean }
 export const WIDE: Spec = { name: 'wide', second: 330, azimuth: 112, width: 1280, pad: 8, fine: true }
-/** A phone: a shorter second, seen a little more from the end. */
-export const TALL: Spec = { name: 'tall', second: 170, azimuth: 118, width: 350, pad: 6, fine: false }
+/** A phone: a shorter second, seen much more from the end so the bench climbs the screen, on a base that runs on past it. */
+export const PHONE: Spec = { name: 'tall', second: 170, azimuth: 128, width: 346, pad: 6, fine: false, bleed: true }
+/** A phone with a short screen (most browsers on one): the same bench seen less from the end, so it lies lower. */
+export const PHONE_LOW: Spec = { ...PHONE, azimuth: 111 }
 /** A tall screen wide enough for the bench's fine detail: a tablet held upright. */
-export const TABLET: Spec = { name: 'tall', second: 230, azimuth: 123, width: 760, pad: 8, fine: true }
+export const TABLET: Spec = { name: 'tall', second: 230, azimuth: 128, width: 760, pad: 8, fine: true }
 
 type Tone = 'lit' | 'hi' | 'mid' | 'lo' | 'faint' | 'ink' | 'accent'
 type Material = 'body' | 'plate' | 'steel' | 'dark' | 'paper' | 'lamp'
@@ -68,7 +71,7 @@ export interface Bench {
   along: Flat
   across: Flat
   up: Flat
-  /** Where the base's two ends fall, as fractions of the drawing's width: the page sets them on its margins. */
+  /** The part of the drawing the page sets between its margins, as fractions of the drawing's width. */
   window: [number, number]
   /** Where the gates stand along the rail, in world units, and where the sled comes to rest. */
   accepted: number
@@ -81,9 +84,11 @@ export interface Bench {
   sled: Piece
   letter: Piece & { pivot: Flat }
   grip: Piece
+  /** What shows of the letter as it goes down through the jaws or comes up through them: everything above their top edge, as a polygon in fractions of the drawing. */
+  slot: Flat[]
   plunger: Piece
-  /** The turns of the starter's spring, from the housing outwards. */
-  coils: Piece[]
+  /** The turns of the starter's spring, from the housing outwards: each loop's far half (behind the rod) and near half. */
+  coils: { back: Piece; front: Piece }[]
   needle: Piece & { pivot: Flat }
   crown: Piece
   key: Piece & { pivot: Flat }
@@ -100,8 +105,8 @@ export interface Bench {
   post: number
 }
 
-/** How far past the second gate's light the letter comes to rest; how far the starter is drawn back and how far its plunger follows; the turns of its spring. */
-export const REST = 1, DRAW = 16, STROKE = 12, COILS = 6
+/** How far past the second gate's light the letter comes to rest; how far the starter is drawn back and how far its plunger follows; the turns of its spring; how far down the letter goes when it is posted. */
+export const REST = 1, DRAW = 16, STROKE = 12, COILS = 7, POSTED = 38
 
 export function buildBench(spec: Spec): Bench {
   const SEC = spec.second, fine = spec.fine
@@ -112,9 +117,11 @@ export function buildBench(spec: Spec): Bench {
   // The letter, the sled under it (its leading edge is the letter's), and the starter behind that.
   // The starter's housing is long enough to hide its rod at both ends of its travel, and the spring between housing
   // and plunger has room to close to a block when drawn back.
-  const LETTER = { length: 50, height: 34, z: 16.5 }, SLED_L = 48, HEAD = 3, SPRING = DRAW + COILS + 2
+  const LETTER = { length: 45, height: 34, z: 16.5, lead: 1.5 }, SLED_L = 48, HEAD = 3, SPRING = DRAW + COILS + 2
   const LAUNCHER: Plan = { x: -SLED_L - HEAD - SPRING - (DRAW + STROKE + 2), y: TRACK - 9.5, w: DRAW + STROKE + 2, d: 19, r: 2.5 }
-  const BASE: Plan = { x: LAUNCHER.x - (fine ? 15 : 9), y: -40, w: SEC - LAUNCHER.x + (fine ? 15 + 28 : 9 + 34), d: 81, r: 5 }
+  // A bleeding base runs 320 units past the starter and the stopwatch: far more than any screen shows of it.
+  const RUN = spec.bleed ? 320 : 0
+  const BASE: Plan = { x: LAUNCHER.x - 15 - RUN, y: -40, w: SEC - LAUNCHER.x + 15 + (fine ? 28 : 34) + RUN * 2, d: 81, r: 5 }
   const BASE_H = 15, FOOT_H = 5, FRONT = BASE.y + BASE.d
   // The rail is a wide ground beam on a bed: the sled runs along its back two thirds (centred on TRACK) and the scale
   // is cut into the front third.
@@ -125,18 +132,25 @@ export function buildBench(spec: Spec): Bench {
   // The gates' near posts stand well forward of the rail and their beams well above the letter, so a letter at rest
   // in the second gate has clear air round it; each lamp is over its near post.
   const GATE_H = 63, BEAM_H = 5.5, GATE_BACK = -14.5, GATE_FRONT = 34, LAMP_Y = GATE_FRONT, RAY_Z = 34
-  // Seen more from the end, the stopwatch stands further along so the second gate's post doesn't cross its face.
-  const TIMER: Plan = { x: spec.name === 'wide' ? Math.min(SEC - 62, XR + 62) : SEC - (fine ? 44 : 30), y: -36.5, w: 54, d: 19, r: 3 }
+  // Seen more from the end, the stopwatch stands further along: just far enough that the second gate's near post and
+  // the lamp on it clear the cabinet's end by CLEAR units on the screen.
+  const TIMER_Y = -36.5, CLEAR = 3, turned = spec.azimuth * Math.PI / 180
+  const TIMER: Plan = { x: spec.name === 'wide' ? Math.min(SEC - 62, XR + 62) : XB + 3.9 + (GATE_FRONT + 3.9 - TIMER_Y) * Math.abs(1 / Math.tan(turned)) + CLEAR / Math.sin(turned), y: TIMER_Y, w: 54, d: 19, r: 3 }
   const TIMER_H = 60, DIAL: Point3 = [TIMER.x + TIMER.w / 2, TIMER.y + TIMER.d, 33], DIAL_R = 21.5
 
   // The camera: scaled so the part that spans the page is `width` pixels across; the drawing's own size follows.
   const unit: Projection = { origin: [0, 0], scale: 1, azimuth: spec.azimuth }
+  // What stands on the base: its two ends along the rail, and the box the drawing's own size is taken from (a
+  // bleeding base's ends are left out of it).
+  const ENDS: [number, number] = [LAUNCHER.x - 3, Math.max(TIMER.x + TIMER.w, SEC + 8.5) + 3]
   const reach: Point3[] = [
-    ...k.boxCorners(BASE, -BASE_H - FOOT_H, 0),
+    ...k.boxCorners(spec.bleed ? { ...BASE, x: ENDS[0] - 24, w: ENDS[1] - ENDS[0] + 48 } : BASE, -BASE_H - FOOT_H, 0),
     ...[XA, XB].flatMap(x => k.boxCorners({ x: x - 4, y: GATE_BACK - 4, w: 8, d: GATE_FRONT - GATE_BACK + 8, r: 0 }, 0, GATE_H + BEAM_H + 6)),
     ...k.boxCorners(TIMER, 0, TIMER_H + 6),
   ]
-  const span: Point3[] = k.ringOf(BASE, 8).map(([x, y]) => [x, y, 0] as Point3)
+  const span: Point3[] = spec.bleed
+    ? [[ENDS[0], LAUNCHER.y, 0], [TIMER.x + TIMER.w + 3, TIMER.y + TIMER.d, 0], [SEC + 11.5, TRACK + 7.5, 0], [XB + 6.5, GATE_FRONT + 5.2, 0]]
+    : k.ringOf(BASE, 8).map(([x, y]) => [x, y, 0] as Point3)
   const flat = reach.map(point => k.iso(point, unit)), across0 = span.map(point => k.iso(point, unit)[0])
   const xs = flat.map(point => point[0]), ys = flat.map(point => point[1])
   const scale = spec.width / (Math.max(...across0) - Math.min(...across0))
@@ -165,20 +179,22 @@ export function buildBench(spec: Spec): Bench {
   // ——— Back layer: everything the sled passes in front of. ———
   const back: string[] = []
 
-  const feet: Plane[] = [BASE.x + 20, BASE.x + BASE.w / 2, BASE.x + BASE.w - 20].flatMap(x => [BASE.y + 13, FRONT - 13].map(y => [x, y] as Plane))
+  const feet: Plane[] = (spec.bleed ? [ENDS[0] - 160, ENDS[0] + 6, (ENDS[0] + ENDS[1]) / 2, ENDS[1] - 6, ENDS[1] + 160] : [BASE.x + 20, BASE.x + BASE.w / 2, BASE.x + BASE.w - 20]).flatMap(x => [BASE.y + 13, FRONT - 13].map(y => [x, y] as Plane))
   for (const [x, y] of byDepth(feet, ([x, y]) => [x, y, 0])) {
     back.push(solid(tube(x, y, 7.4, -BASE_H - FOOT_H, 1.6), { m: 'dark', edge: 'lo' }))
     back.push(solid(tube(x, y, 5.6, -BASE_H - FOOT_H + 1.6, FOOT_H - 1.6), { m: 'dark', edge: 'lo' }))
   }
 
   // The base: a long plate with a trim seam round its foot, and what happens above each place engraved on its front:
-  // the request under the starter (where the drawing is large enough to read it) and the name of each gate.
+  // the request under the starter and the name of each gate.
   // The type is a monospace: each letter is .6 of its size wide, plus the tracking the page's styles give it.
-  const TYPE = fine ? 5 : 9.2, REQUEST = 'POST /v1/emails/send', REQUEST_X = (LAUNCHER.x + LAUNCHER.w) / 2 - 1
+  // On a phone the request's name ends a little before ACCEPTED begins; elsewhere it is centred under starter and sled.
+  const TYPE = fine ? 5 : 8.2, REQUEST = 'POST /v1/emails/send'
+  const REQUEST_X = fine ? (LAUNCHER.x + LAUNCHER.w) / 2 - 1 : XA - TYPE * 8 * .75 / 2 - 12 - TYPE * REQUEST.length * .63 / 2
   const label = (text: string, x: number, also = '') => `<text class="nb-label${also && ` ${also}`}" transform="${k.sideMatrix([x, FRONT], -4.1, P, 'left')}" font-size="${TYPE}" text-anchor="middle" dominant-baseline="hanging">${text}</text>`
   const labelBox = (x: number, half: number) => [at([x - half, FRONT, -3]), at([x + half, FRONT, -11])]
   back.push(solid(slab(BASE, -BASE_H, BASE_H, 8, 1.6), { m: 'plate', edge: 'mid', inner: line(k.sideSeam(BASE, -BASE_H + 2.6, P, 8), 'faint') }))
-  back.push(fine ? label(REQUEST, REQUEST_X, 'nb-code') : '', label('ACCEPTED', XA), label('DELIVERED', XB))
+  back.push(label(REQUEST, REQUEST_X, 'nb-code'), label('ACCEPTED', XA), label('DELIVERED', XB))
   back.push(line(k.planOutline(k.insetPlan(BASE, 4.5), 0, P), 'faint'))
   const corners = k.corners(BASE, 10)
   back.push(line(k.joinPaths(corners.map(([x, y]) => k.ring(x, y, 2.3, 0, P, 16))), 'lo'), dots(corners.map(([x, y]) => at([x, y, 0])), px(.6)))
@@ -235,8 +251,15 @@ export function buildBench(spec: Spec): Bench {
   back.push(dots(bolts, px(.45), 'lo'))
   back.push(solid(slab(RAIL, RAIL_Z, RAIL_TOP - RAIL_Z, 3, .7), { m: 'steel', edge: 'hi' }))
   const STOP: Plan = { x: SEC, y: TRACK - 7.5, w: 8.5, d: 15, r: 1.6 }
-  const BLOCK: Plan = { x: XR + 28, y: TRACK - 7.75, w: 10.5, d: 15.5, r: 1.6 }
+  // The buffer's block stands clear of the gate's near post on the screen, however far round the camera is.
+  const BLOCK: Plan = { x: Math.max(XR + 28, XB + 2.6 + (GATE_FRONT + 2.6 - TRACK + 7.75) * Math.abs(1 / Math.tan(turned)) + CLEAR / Math.sin(turned)), y: TRACK - 7.75, w: 10.5, d: 15.5, r: 1.6 }
   back.push(cast(BLOCK, RAIL_TOP, .8))
+  // Two slots in the rail, each a letter long: the one under the starter that a new letter comes up through, and the
+  // one where the sled stops that a delivered letter is posted into.
+  for (const nose of [0, XR]) {
+    const slot = k.planOutline({ x: nose - LETTER.lead - LETTER.length - .8, y: TRACK - .8, w: LETTER.length + 1.6, d: 1.6, r: .8 }, RAIL_TOP, P, 4)
+    back.push(`<path class="nb-slot" d="${slot}"/>`, line(slot, 'lo'))
+  }
   back.push(line(k.joinPaths([TRACK - 4.2, TRACK + 4.2].map(y => k.lineOnTop([RAIL.x, y], [SEC, y], RAIL_TOP, P))), 'faint'), line(k.lineOnTop([RAIL.x, SCALE_Y], [RAIL.x + RAIL.w, SCALE_Y], RAIL_TOP, P), 'lo'))
   // The marks the letter never reaches are a tone down: the part of the second it didn't need.
   const marks: Record<'used' | 'spare', [string[], string[], string[]]> = { used: [[], [], []], spare: [[], [], []] }
@@ -263,7 +286,7 @@ export function buildBench(spec: Spec): Bench {
 
   // The sled: a plate on the rail's track with a pair of jaws along its middle.
   const DECK = RAIL_TOP + 4, JAW = 4.2
-  const SLED: Plan = { x: -SLED_L, y: TRACK - 8, w: SLED_L, d: 16, r: 2 }, JAW_X = -SLED_L + 3, JAW_L = SLED_L - 6
+  const SLED: Plan = { x: -SLED_L, y: TRACK - 8, w: SLED_L, d: 16, r: 2 }, JAW_X = -SLED_L + 1, JAW_L = SLED_L - 2
   const sled = pieceOf([
     cast(SLED, RAIL_TOP, .7),
     solid(slab(SLED, RAIL_TOP, DECK - RAIL_TOP, 4, .6), { edge: 'hi' }),
@@ -272,7 +295,7 @@ export function buildBench(spec: Spec): Bench {
   ].join(''))
 
   // The letter: a thin card standing in the jaws, address side to the viewer, stamp in the leading corner.
-  const LX = -LETTER.length, LZ = LETTER.z + LETTER.height, HALF = .5
+  const LX = -LETTER.lead - LETTER.length, LZ = LETTER.z + LETTER.height, HALF = .5
   const onLetter = (u: number, v: number): Flat => at([LX + u, TRACK + HALF, LZ - v])
   const facePath = (points: Plane[], closed = false) => k.pathOf(points.map(([u, v]) => onLetter(u, v)), closed)
   const STAMP = { u: LETTER.length - 13.2, v: 3.8, size: 9.4 }
@@ -285,26 +308,35 @@ export function buildBench(spec: Spec): Bench {
     ...pieceOf(solid(slab({ x: LX, y: TRACK - HALF, w: LETTER.length, d: HALF * 2, r: 0 }, LETTER.z, LETTER.height, 1), {
       m: 'paper', edge: 'ink', crease: 'none', inner: `<path class="nb-stamp" fill-rule="evenodd" d="${stamp}"/>${line(postmark, 'ink', 'nb-postmark')}${line(address, 'ink', 'nb-address')}`,
     }), [], 12),
-    pivot: at([-LETTER.length / 2, TRACK, DECK + JAW / 2]),
+    pivot: at([LX + LETTER.length / 2, TRACK, DECK + JAW / 2]),
   }
+  // The letter shows above the jaws' top edge and nowhere below it, so going down between them it is posted, not faded.
+  const slot: Flat[] = [at([LX - 9, TRACK, DECK + JAW]), at([9, TRACK, DECK + JAW]), at([9, TRACK, DECK + JAW + 90]), at([LX - 9, TRACK, DECK + JAW + 90])].map(([x, y]) => [x / width, y / height] as Flat)
 
   // In front of the letter: the near jaw with its two thumbscrews, and the index that reads the scale.
   const grip = pieceOf([
     solid(slab({ x: JAW_X, y: TRACK + .5, w: JAW_L, d: 2.2, r: .6 }, DECK, JAW, 2), { edge: 'mid', crease: 'none' }),
-    dots([at([JAW_X + 3.4, TRACK + 1.6, DECK + JAW]), at([JAW_X + JAW_L - 3.4, TRACK + 1.6, DECK + JAW])], px(.42)),
-    ...[-8, -SLED_L + 8].map(x => knob(x, TRACK + 5.4, 2.2, DECK, 4.4, 14)),
+    dots([at([JAW_X + 4.4, TRACK + 1.6, DECK + JAW]), at([JAW_X + JAW_L - 4.4, TRACK + 1.6, DECK + JAW])], px(.42)),
+    ...[-9, -SLED_L + 9].map(x => knob(x, TRACK + 5.4, 2.2, DECK, 4.4, 14)),
     solid(slab({ x: -2.4, y: SLED.y + SLED.d, w: 2.4, d: 4.6, r: .5 }, RAIL_TOP, 1.1, 1), { m: 'steel', edge: 'hi', crease: 'none' }),
     line(k.lineOnTop([0, SLED.y + SLED.d], [0, SLED.y + SLED.d + 4.6], RAIL_TOP + 1.1, P), 'lit', 'nb-index'),
   ].join(''))
 
-  // The starter's plunger, cocked: a rod out of the housing with a bumper on its end, and round the rod the turns of
-  // the spring, which close up as it is wound and open as it is let go.
+  // The starter's plunger, cocked: a rod out of the housing with a bumper on its end, and round the rod a coil spring,
+  // whose turns close up as it is wound and open as it is let go.
   const HEAD_X = -SLED_L - HEAD, MOUTH = LAUNCHER.x + LAUNCHER.w
   const plunger = pieceOf([
     solid(slab({ x: HEAD_X, y: TRACK - 3.8, w: HEAD, d: 7.6, r: 1 }, 11.1, 5.4, 3), { m: 'dark', edge: 'mid' }),
     solid(slab({ x: LAUNCHER.x + DRAW + 1, y: TRACK - 1.4, w: HEAD_X - LAUNCHER.x - DRAW - 1, d: 2.8, r: 1.2 }, 12.4, 2.8, 3), { m: 'steel', edge: 'mid', crease: 'none' }),
   ].join(''))
-  const coils = Array.from({ length: COILS }, (_, index) => pieceOf(solid(slab({ x: MOUTH + SPRING * (index + 1) / (COILS + 1) - .5, y: TRACK - 2.9, w: 1, d: 5.8, r: .5 }, 11.4, 4.8, 2), { m: 'steel', edge: 'mid', crease: 'none' })))
+  // One turn of the spring: a loop of wire round the rod, leaning a little along it. Its near half is the half whose
+  // outward side faces the viewer.
+  const ROD_Z = 13.8, WIRE_R = 3.1, facing = Math.atan2(Math.sin(30 * Math.PI / 180), Math.sin(spec.azimuth * Math.PI / 180) * Math.cos(30 * Math.PI / 180))
+  const half = (x: number, from: number) => k.pathOf(Array.from({ length: 13 }, (_, step) => { const a = from + Math.PI * step / 12; return at([x + .8 * ((a - facing) / (Math.PI * 2)), TRACK + WIRE_R * Math.cos(a), ROD_Z + WIRE_R * Math.sin(a)]) }))
+  const coils = Array.from({ length: COILS }, (_, index) => {
+    const x = MOUTH + SPRING * (index + 1) / (COILS + 1)
+    return { back: pieceOf(line(half(x, facing + Math.PI / 2), 'lo', 'nb-wire')), front: pieceOf(line(half(x, facing - Math.PI / 2), 'hi', 'nb-wire')) }
+  })
 
   // ——— Front layer: everything the sled passes behind. ———
   const front: string[] = []
@@ -336,7 +368,7 @@ export function buildBench(spec: Spec): Bench {
   // the letter is thrown.
   const lamp = (x: number) => pieceOf(lens(x, true))
   const saying = (text: string, x: number, also = '') => pieceOf(label(text, x, `nb-label--lit${also && ` ${also}`}`), labelBox(x, TYPE * text.length * .45))
-  const said: [Piece, Piece, Piece] = [fine ? saying(REQUEST, REQUEST_X, 'nb-code') : pieceOf('', labelBox(REQUEST_X, 4)), saying('ACCEPTED', XA), saying('DELIVERED', XB)]
+  const said: [Piece, Piece, Piece] = [saying(REQUEST, REQUEST_X, 'nb-code'), saying('ACCEPTED', XA), saying('DELIVERED', XB)]
 
   // The stopwatch's hand (pointing up, with a counterweight) and its crown (out).
   const needle = {
@@ -357,39 +389,37 @@ export function buildBench(spec: Spec): Bench {
 
   return {
     spec, width, height, along, across, up, window, accepted: XA, delivered: XB, rest: XR,
-    back: back.join(''), front: front.join(''), buffer, sled, letter, grip, plunger, coils, needle, crown, key,
+    back: back.join(''), front: front.join(''), buffer, sled, letter, grip, slot, plunger, coils, needle, crown, key,
     lampA: lamp(XA), lampB: lamp(XB), said, arc, swept,
     pings: [at([XA, LAMP_Y, LENS_Z + 3.4]), at([XB, LAMP_Y, LENS_Z + 3.4])],
     post: at([XB - 2.6, GATE_FRONT - 2.6, 0])[0] / width,
   }
 }
 
-// ——— The model. One loop: a letter drops into the sled, the starter is wound and let go, the letter runs, is caught
-// and rests; then the stopwatch is reset, the letter is lifted away and the empty sled is drawn back for the next
-// one. A delivered letter is never sent back. Every moving part reads its place from poseAt(). ———
+// ——— The model. One loop: a letter comes up into the sled, the starter is wound and let go, the letter runs, is
+// caught and rests; then the stopwatch is reset, the letter is posted into the rail and the empty sled is drawn back
+// for the next one. A delivered letter is never sent back. Every moving part reads its place from poseAt(). ———
 
 /** A loop, when in it the letter crosses the zero mark (where the stopwatch starts), and when the reset begins. */
-export const LOOP_MS = 7000, LAUNCH_MS = 660, RESET_MS = 5300
+export const LOOP_MS = 7000, LAUNCH_MS = 660, RESET_MS = 5200
 /** Where in the loop a page starts: the empty sled is on the last of its way back, about to be loaded and cocked. */
 export const ENTER_MS = 6440
-const RETURN_FROM = RESET_MS + 300, RETURN_MS = 1200, CLICK_MS = 200
+const RETURN_FROM = RESET_MS + 560, RETURN_MS = 1000, CLICK_MS = 180
 // Before a throw the key is wound a quarter turn while the sled is drawn back DRAW units against the spring, and held.
 const WIND_MS = 420, HOLD_MS = 80
 // A gate's ping, and how long after its lamp its name lights.
 const PING_MS = 520, SAY_MS = 40
-// The reset, in ms after the crown is pressed: the hand flies home, the trace clears as it gets there, the names and
-// lamps go out one by one (last lit, first out), and the letter is lifted out of the sled.
-const FLY_MS = 80, CLEAR_MS = 250, OUT_MS = [340, 290, 240, 190, 140], LIFT_FROM = 200, LIFT_MS = 480, LIFT = 46
-// The next letter drops into the jaws as the sled comes home.
-const DROP_FROM = RETURN_FROM + RETURN_MS - 190, DROP_MS = 260, DROP = 30
+// The reset, in ms after the crown is pressed: the trace goes out, then the hand flies the short way home; the names
+// and lamps go out one by one (last lit, first out); and the letter is posted down through the jaws into the rail.
+const CLEAR_MS = 110, FLY_MS = 90, OUT_MS = [340, 290, 240, 190, 140], POST_FROM = 240, POST_MS = 300
+// The next letter comes up through the jaws as the sled gets home, and is up as the loop turns over.
+const RISE_MS = 280, RISE_FROM = LOOP_MS - RISE_MS
 
 export interface Pose {
   /** The sled's leading edge along the rail, in world units from the zero mark. */
   nose: number
-  /** The letter: where it is along the rail, how far above the sled's jaws, how visible, and its lean in degrees (forwards positive). */
-  letter: number
+  /** The letter: how far it stands above its place in the jaws (negative when it is down through them), and its lean in degrees (forwards positive). */
   lift: number
-  shown: number
   lean: number
   /** How far out the starter's plunger is (0 cocked, STROKE released), and how far in the buffer's bumper is pushed. */
   plunger: number
@@ -398,11 +428,12 @@ export interface Pose {
   turn: number
   crown: number
   key: number
-  /** What is lit: each gate's lamp, the three names on the base (the request, then each gate), and the hand's trace (0 to 1). */
+  /** What is lit: each gate's lamp, the three names on the base (the request, then each gate), and the hand's trace (how bright, and how far round it reaches, in turns). */
   accepted: boolean
   delivered: boolean
   said: [boolean, boolean, boolean]
   traced: number
+  trace: number
   /** Each gate's ping: 0 as it fires, 1 when it has faded; null otherwise. */
   pings: [number | null, number | null]
 }
@@ -454,34 +485,28 @@ export function poseAt(time: number, bench: Pick<Bench, 'spec' | 'rest'>): Pose 
     nose = home < 0 ? rest * (1 - smoother(clamp((t - RETURN_FROM) / RETURN_MS))) : -.9 * Math.sin(Math.PI * clamp(home / CLICK_MS)) * (1 - clamp(home / CLICK_MS))
     plunger = Math.min(STROKE, nose)
   }
-  // The letter rides the sled from the moment it drops in until it is lifted away, where the sled was when it stopped.
-  let letter = nose, lift = 0, shown = 1
-  if (since >= LIFT_FROM && t < DROP_FROM) {
-    const up = clamp((since - LIFT_FROM) / LIFT_MS)
-    letter = up < 1 ? rest : nose
-    lift = LIFT * up * up
-    shown = 1 - clamp((up - .3) / .55)
-  } else if (t >= DROP_FROM) {
-    const fall = (t - DROP_FROM) / DROP_MS
-    // It falls, lands in the jaws and settles with one small rebound.
-    lift = fall < 1 ? DROP * (1 - fall * fall) : Math.abs(ring((t - DROP_FROM - DROP_MS) / 1000, 2.2, 8, .3))
-    shown = clamp(fall / .4)
-    lean = ring((t - DROP_FROM - DROP_MS) / 1000, 1.4, 7, .3)
-  }
+  // The letter stands in the jaws from the moment it is up until it is posted. In between it is down in the rail,
+  // out of sight below the jaws. `risen` counts from the start of its rise, across the turn of the loop.
+  const risen = (t - RISE_FROM + LOOP_MS) % LOOP_MS
+  let lift = 0
+  if (risen < RISE_MS) lift = -POSTED * (1 - out(risen / RISE_MS))
+  else if (risen < RISE_MS + 400) lift = ring((risen - RISE_MS) / 1000, 1.1, 9, .4)
+  else if (since >= POST_FROM) lift = -POSTED * clamp((since - POST_FROM) / POST_MS) ** 2
+  const trace = clamp(run / DELIVERED_MS) * DELIVERED_MS / 1000
   let traced = run >= 0 ? 1 : 0
   if (since >= 0) {
     crown = since < 90 ? out(since / 90) : since < 170 ? 1 : 1 - out(clamp((since - 170) / 190))
-    // The hand flies on round to twelve, as a stopwatch's does, and stops a hair past it before it settles.
+    traced = 1 - clamp(since / CLEAR_MS)
+    // The hand flies on round to twelve, the short way, as a stopwatch's does, and stops a hair past it.
     turn = 1 - (1 - DELIVERED_MS / 1000) * settle((since - FLY_MS) / 1000, 6.4, .8)
-    traced = 1 - clamp((since - CLEAR_MS) / 90)
   }
   const lit = (index: number) => since < OUT_MS[index]!
   const ping = (at: number) => run >= at && run < at + PING_MS ? (run - at) / PING_MS : null
   return {
-    nose, letter, lift, shown, lean, plunger, buffer: Math.max(0, nose - rest), turn, crown, key,
+    nose, lift, lean, plunger, buffer: Math.max(0, nose - rest), turn, crown, key,
     accepted: run >= ACCEPTED_MS && lit(1), delivered: run >= DELIVERED_MS && lit(3),
     said: [freed >= 0 && lit(0), run >= ACCEPTED_MS + SAY_MS && lit(2), run >= DELIVERED_MS + SAY_MS && lit(4)],
-    traced,
+    traced, trace,
     pings: [ping(ACCEPTED_MS), ping(DELIVERED_MS)],
   }
 }
@@ -489,7 +514,7 @@ export function poseAt(time: number, bench: Pick<Bench, 'spec' | 'rest'>): Pose 
 /** The loop time a still page shows: delivered, settled. */
 export const STILL_MS = LAUNCH_MS + DELIVERED_MS + 1600
 
-export type Part = 'sled' | 'letterAt' | 'letter' | 'grip' | 'plunger' | `coil${number}` | 'buffer' | 'needle' | 'crown' | 'key' | 'lampA' | 'lampB' | 'said0' | 'said1' | 'said2' | 'arc' | 'trace' | 'pingA' | 'pingB'
+export type Part = 'sled' | 'lift' | 'letter' | 'plunger' | `coil${number}` | 'buffer' | 'needle' | 'crown' | 'key' | 'lampA' | 'lampB' | 'said0' | 'said1' | 'said2' | 'arc' | 'trace' | 'pingA' | 'pingB'
 export interface Style { transform?: string; opacity?: number; strokeDashoffset?: number }
 
 // A pose as styles. Whole pieces slide in fractions of the drawing (their holders are its size); the letter and the
@@ -506,14 +531,13 @@ export function stylesOf(pose: Pose, bench: Bench): Record<Part, Style> {
   }
   const upright = turnIn(along, up), level = turnIn(along, across)
   const ping = (at: number | null): Style => at === null ? { transform: 'scale(.35)', opacity: 0 } : { transform: `scale(${f(.35 + .65 * out(at))})`, opacity: Math.round((1 - at) * (1 - at) * 100) / 100 }
-  // How much of the trace is still to draw: the share of its length ahead of the hand.
-  const share = clamp(pose.turn) * (bench.swept.length - 1), step = Math.min(bench.swept.length - 2, Math.floor(share))
+  // How much of the trace is drawn: the share of the rim's length it reaches round to.
+  const share = clamp(pose.trace) * (bench.swept.length - 1), step = Math.min(bench.swept.length - 2, Math.floor(share))
   const behind = bench.swept[step]! + (bench.swept[step + 1]! - bench.swept[step]!) * (share - step)
   const styles: Record<Part, Style> = {
     sled: { transform: slide(pose.nose) },
-    letterAt: { transform: slide(pose.letter, pose.lift), opacity: Math.round(pose.shown * 100) / 100 },
+    lift: { transform: slide(0, pose.lift) },
     letter: { transform: upright(pose.lean) },
-    grip: { transform: slide(pose.nose) },
     plunger: { transform: slide(pose.plunger) },
     buffer: { transform: slide(pose.buffer) },
     needle: { transform: upright(pose.turn * 360) },
@@ -543,7 +567,7 @@ export function tracksOf(bench: Bench): Record<Part, Keyframe[]> {
   for (const at of [
     LAUNCH_MS - push - HOLD_MS - WIND_MS, LAUNCH_MS - push - HOLD_MS, LAUNCH_MS - push, LAUNCH_MS, LAUNCH_MS + ACCEPTED_MS, LAUNCH_MS + ACCEPTED_MS + SAY_MS, LAUNCH_MS + DELIVERED_MS, LAUNCH_MS + DELIVERED_MS + SAY_MS,
     LAUNCH_MS + bench.rest / speed, LAUNCH_MS + STROKE / speed, LAUNCH_MS + ACCEPTED_MS + PING_MS, LAUNCH_MS + DELIVERED_MS + PING_MS,
-    RESET_MS, RESET_MS + FLY_MS, RESET_MS + CLEAR_MS, ...OUT_MS.map(ms => RESET_MS + ms), RESET_MS + LIFT_FROM, RESET_MS + LIFT_FROM + LIFT_MS, RETURN_FROM, DROP_FROM, DROP_FROM + DROP_MS, RETURN_FROM + RETURN_MS, LOOP_MS,
+    RESET_MS, RESET_MS + FLY_MS, RESET_MS + CLEAR_MS, ...OUT_MS.map(ms => RESET_MS + ms), RESET_MS + POST_FROM, RESET_MS + POST_FROM + POST_MS, RETURN_FROM, RETURN_FROM + RETURN_MS, RISE_FROM, 400, LOOP_MS,
   ]) {
     times.add(at); times.add(at - .5)
   }
