@@ -1,0 +1,81 @@
+/* The nma homepage (variant-nma.tsx): a tower at night, full bleed. nma-scene.ts measures the scene before the first
+   paint and sets every --nma-* length, so the copy sits on the wall the canvas draws. Colours are flat: sky, walls,
+   windows, letters, and the brand blue for stamps and the mast's beacon. */
+.nma-page { --nma-wall: #E9E9E9; --nma-side: #DDDDDD; --nma-hole: #DCDCDC; --nma-wake: #B9B9B9; --nma-lit: var(--color-contrast); --nma-crease: rgb(255 255 255 / 34%); --nma-brand: var(--color-brand); --nma-moon: #DADADA; --nma-spill: #F0F0F0; --nma-street: var(--color-border-strong);
+  --nma-far-1: #F1F1F1; --nma-far-2: #EEEEEE; --nma-far-3: #F4F4F4; --nma-far-hole: #E9E9E9;
+  display: flex; flex-direction: column; min-height: 100svh; overflow-x: clip; background: var(--color-canvas); }
+:root[data-theme='dark'] .nma-page { --nma-wall: #161616; --nma-side: #0F0F0F; --nma-hole: #1F1F1F; --nma-wake: #4A4A4A; --nma-crease: rgb(8 8 8 / 30%); --nma-moon: #D6D6D6; --nma-spill: #141414; --nma-street: rgb(255 255 255 / 14%);
+  --nma-far-1: #0F0F0F; --nma-far-2: #121212; --nma-far-3: #0D0D0D; --nma-far-hole: #171717; }
+
+.nma-header { display: flex; flex: none; align-items: center; justify-content: space-between; height: 64px; padding-inline: var(--space-32); }
+.nma-header .wordmark, .nma-header .theme-toggle { position: relative; inset: auto; }
+.nma-nav { display: flex; align-items: center; gap: var(--space-12); }
+.nma-nav > a { color: var(--color-muted); text-decoration: none; transition: color var(--motion-duration); }
+.nma-nav > a:hover { color: var(--color-text); }
+
+.nma-scene { position: relative; flex: 1; min-height: 600px; }
+/* The canvases reach up over the header, so a letter is never cut off where the scene begins (it passes in front of
+   the header; the canvases take no pointer events). */
+.nma-canvas { position: absolute; top: calc(-1 * var(--nma-over, 0px)); left: 0; display: block; width: 100%; height: calc(100% + var(--nma-over, 0px)); pointer-events: none; }
+.nma-air { z-index: 1; }
+
+/* The count appears with the first letter, in the middle of the wall; with the thousandth it steps aside to its place
+   in the sentence and the rest of the copy arrives. */
+.nma-count, .nma-copy { opacity: 0; transition: opacity 600ms var(--ease-out-strong); }
+.nma-count { display: inline-block; translate: calc(var(--nma-count-shift, 0px) - var(--nma-count-nudge, 0px)); transition: opacity 400ms var(--ease-out-strong), translate 460ms var(--ease-in-out-strong); }
+.nma-page:not([data-nma='dark']) .nma-count, .nma-page[data-nma='settled'] .nma-copy { opacity: 1; }
+.nma-page[data-nma='settled'] .nma-count { translate: 0; }
+.nma-band .nma-copy { transition-delay: 340ms; }
+.nma-plaque.nma-copy { transition-delay: 480ms; }
+/* The count keeps the width of its last value, so the sentence never moves. */
+.nma-tally { position: relative; display: inline-block; }
+.nma-tally-room { visibility: hidden; }
+.nma-tally-value { position: absolute; top: 0; right: 0; }
+
+.nma-band { position: absolute; z-index: 2; top: var(--nma-band-top); left: var(--nma-left); display: flex; align-items: center; justify-content: center; width: var(--nma-width); height: var(--nma-band-h); margin: 0; color: var(--color-text); font-size: calc(21px * var(--nma-scale, 1)); font-weight: 480; line-height: calc(28px * var(--nma-scale, 1)); letter-spacing: -.012em; white-space: nowrap; }
+
+/* The ground floor: the door, and a plaque either side of it. */
+.nma-ground { position: absolute; z-index: 2; top: var(--nma-ground-top); left: var(--nma-left); display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: end; column-gap: calc(var(--space-28) * var(--nma-scale, 1)); width: var(--nma-width); height: var(--nma-ground-h); }
+.nma-plaque { margin: 0 0 calc(14px * var(--nma-scale, 1)); color: var(--color-muted); font-size: calc(var(--text-md) * var(--nma-scale, 1)); line-height: calc(var(--leading-sm) * var(--nma-scale, 1)); white-space: nowrap; }
+.nma-plaque:first-child { text-align: right; }
+.nma-plaque b { color: var(--color-text); font-weight: var(--font-weight-bold); }
+
+/* The door: the one light that is on before any letter arrives. */
+.nma-door { display: inline-flex; align-items: center; justify-content: center; width: calc(184px * var(--nma-scale, 1)); height: calc(68px * var(--nma-scale, 1)); padding: 0; border: 0; border-radius: 2px 2px 0 0; background: var(--color-contrast); color: var(--color-on-contrast); font-family: var(--font-body); font-size: calc(16px * var(--nma-scale, 1)); font-weight: 600; line-height: 20px; letter-spacing: -.01em; cursor: pointer; transform-origin: bottom; transition: background-color var(--motion-duration), transform 160ms var(--ease-out-strong); }
+@media (hover: hover) and (pointer: fine) { .nma-door:hover:not(:disabled) { background: var(--color-contrast-hover); } }
+.nma-door:active:not(:disabled) { transform: scale(.985); }
+.nma-door:disabled { opacity: 1; }
+/* The spinner hangs off the label's left, so the label stays where it was. */
+.nma-door-label { position: relative; }
+.nma-door-label .ui-spinner { position: absolute; top: calc(50% - 8px); right: calc(100% + var(--space-8)); }
+.nma-door[data-busy] { cursor: progress; }
+.nma-door:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: var(--focus-offset); }
+
+.nma-street { position: absolute; z-index: 2; right: var(--space-32); bottom: 0; left: var(--space-32); display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; column-gap: var(--space-16); height: var(--nma-street-h); }
+.nma-street .home-footer { display: contents; }
+.nma-street .home-by { grid-row: 1; grid-column: 1; justify-self: start; }
+.nma-street .home-footer nav { grid-row: 1; grid-column: 3; justify-self: end; }
+.nma-consent { position: absolute; top: 50%; text-wrap: balance; left: calc(var(--nma-centre) - var(--space-32)); width: max-content; margin: 0; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); text-align: center; transform: translate(-50%, -50%); }
+
+/* What the sign-in flow has to say (an invitation, a refusal, an error) hangs in the sky under the header. */
+.nma-notice { position: absolute; z-index: 3; top: var(--space-8); left: 50%; width: min(520px, 100% - 2 * var(--space-16)); translate: -50% 0; }
+
+/* Narrower than this the consent would run into the footer's links: it takes a row of its own above them. */
+@media (max-width: 1099px) {
+  .nma-street { grid-template-columns: auto minmax(0, 1fr); align-content: center; row-gap: 10px; }
+  .nma-consent { position: static; grid-column: 1 / -1; width: auto; transform: none; }
+  .nma-street .home-by { grid-row: 2; }
+  .nma-street .home-footer nav { grid-row: 2; grid-column: 2; }
+}
+@media (max-width: 639px) {
+  .nma-header { height: 56px; padding-inline: var(--space-16); }
+  .nma-band { font-size: 16px; line-height: 22px; }
+  .nma-ground { display: flex; flex-direction: column; align-items: center; }
+  .nma-plaque, .nma-plaque:first-child { margin: 0; font-size: var(--text-sm); line-height: 18px; text-align: center; }
+  .nma-plaque br { display: none; }
+  .nma-door { order: 3; width: min(240px, 100% - 64px); height: 60px; margin-top: auto; font-size: 16px; }
+  .nma-street { right: var(--space-16); left: var(--space-16); }
+  .nma-street .home-footer nav { gap: var(--space-12); }
+}
+
+@media (prefers-reduced-motion: reduce) { .nma-count, .nma-copy, .nma-door { transition: none; } }
