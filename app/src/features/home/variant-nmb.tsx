@@ -6,7 +6,7 @@ import { SignInConsent } from '../../components/LegalLinks'
 import { BaneWordmark } from '../../components/BaneLogo'
 import { AnomalyLogo } from '../../components/AnomalyLogo'
 import { reducedMotion, type HomeProps } from '.'
-import { CLAIM_MS, DELIVERED_MS, ENTER_MS, LAUNCH_MS, LOOP_MS, RESET_MS, STILL_MS, TABLET, TALL, WIDE, buildBench, poseAt, stylesOf, tracksOf, type Bench, type Part, type Piece } from './nmb-bench'
+import { DELIVERED_MS, ENTER_MS, LAUNCH_MS, LOOP_MS, RESET_MS, STILL_MS, TABLET, TALL, WIDE, buildBench, poseAt, stylesOf, tracksOf, type Bench, type Part, type Piece } from './nmb-bench'
 import './variant-nmb.css'
 import { productName, sdkPackage } from '../../../../api/src/brand'
 
@@ -16,7 +16,7 @@ import { productName, sdkPackage } from '../../../../api/src/brand'
 // The bench itself, its model and its motion are in nmb-bench.ts; this file lays the page out around it.
 
 // Which drawing of the bench a screen gets: across the page on a wide one, under the headline on a tall one, and on a
-// phone a larger, plainer cut of that which runs off both sides of the screen.
+// phone a shorter, plainer cut of that.
 const TALL_SCREEN = '(max-width: 960px), (max-aspect-ratio: 11/10)', SMALL_SCREEN = '(max-width: 600px)'
 const watchScreen = (changed: () => void) => {
   const queries = [matchMedia(TALL_SCREEN), matchMedia(SMALL_SCREEN)]
@@ -26,7 +26,7 @@ const watchScreen = (changed: () => void) => {
 const readScreen = () => !matchMedia(TALL_SCREEN).matches ? WIDE : matchMedia(SMALL_SCREEN).matches ? TALL : TABLET
 
 const REQUEST = 'POST /v1/emails/send'
-const LABEL = `A timing bench. A letter stands in a sled on a rail one second long. A sprung starter marked “${REQUEST}” throws it down the rail: it passes a gate marked “accepted” a tenth of the way along and is caught at a gate marked “delivered”, six tenths of the way along, where a stopwatch stops. The base names where it was delivered: the SES mailbox simulator.`
+const LABEL = `A timing bench. A letter stands in a sled on a rail one second long. A sprung starter marked “${REQUEST}” throws it down the rail: it passes a gate marked “accepted” a tenth of the way along and is caught at a gate marked “delivered”, six tenths of the way along, where a stopwatch stops.`
 
 const pct = (share: number) => `${Math.round(share * 1e5) / 1e3}%`
 
@@ -49,7 +49,9 @@ const BenchView = memo(function BenchView({ bench, at }: { bench: Bench; at: num
     {piece(bench.needle, 'needle', bench.needle.pivot)}
     {hold('crown', piece(bench.crown))}
     {hold('buffer', piece(bench.buffer))}
-    {hold('sled', <>{piece(bench.sled)}{piece(bench.letter, 'letter', bench.letter.pivot)}{piece(bench.grip)}</>)}
+    {hold('sled', piece(bench.sled))}
+    {hold('letterAt', piece(bench.letter, 'letter', bench.letter.pivot))}
+    {hold('grip', piece(bench.grip))}
     {hold('plunger', piece(bench.plunger))}
     {bench.coils.map((coil, index) => <div key={index} className="nb-hold" data-part={`coil${index}`} style={styles[`coil${index}`]}>{piece(coil)}</div>).reverse()}
     {sheet(bench.front)}
@@ -84,8 +86,6 @@ export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
       root.querySelectorAll<HTMLElement>('.nmb-enter').forEach(element => {
         arrivals.push(element.animate(element.classList.contains('nmb-act') ? ARRIVE_SOLID : ARRIVE, { id: 'nmb-enter', duration: ARRIVE_MS, delay: BEAT_MS * Number(element.dataset.beat ?? 0), easing: EASE, fill: 'both' }))
       })
-      // The claim waits a tone down until the first letter proves it: the lamp lights, then the gate's name, then this.
-      arrivals.push(root.querySelector('.nmb-title span:last-child')!.animate([{ color: 'var(--nmb-text-3)' }, { color: 'var(--nmb-text)' }], { id: 'nmb-enter', duration: 520, delay: LOOP_MS - ENTER_MS + LAUNCH_MS + DELIVERED_MS + CLAIM_MS, easing: EASE, fill: 'backwards' }))
       const tracks = tracksOf(bench)
       for (const part of Object.keys(tracks) as Part[]) {
         const animation = root.querySelector(`.nmb-bench [data-part="${part}"]`)!.animate(tracks[part], { id: 'nmb-loop', duration: LOOP_MS, iterations: Infinity })
@@ -121,7 +121,7 @@ export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
   // What the layout needs from the drawing: its proportions, the part of it that spans the page, and where the gate
   // the pitch hangs from stands.
   const drawn = { '--nb-aspect': bench.width / bench.height, '--nb-from': bench.window[0], '--nb-to': bench.window[1], '--nb-post': bench.post } as CSSProperties
-  return <div ref={page} className={`nmb-page nmb-page--${spec.name}${spec.crop ? ' nmb-page--small' : ''}`} data-motion={reduced ? undefined : ''}>
+  return <div ref={page} className={`nmb-page nmb-page--${spec.name}${spec.fine ? '' : ' nmb-page--small'}`} data-motion={reduced ? undefined : ''}>
     <header className="nmb-header">
       <a className="wordmark" href="/" aria-label={`${productName.toLowerCase()} home`}><BaneWordmark /></a>
       <nav className="nmb-nav" aria-label="Site">
@@ -145,8 +145,8 @@ export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
       </div>
       <div className="nmb-figure">
         <div className="nmb-stage nmb-enter" data-beat="2"><BenchView bench={bench} at={reduced ? STILL_MS : ENTER_MS} /></div>
-        {/* Where the bench has no room for its small print (the request's name and where the mail went), a caption carries it. */}
-        {spec.crop && <p className="nmb-caption nmb-enter" data-beat="3"><span>{REQUEST}</span> <span>to the SES mailbox simulator</span></p>}
+        {/* Where the drawing is too small to carry the request's name, a caption under it does. */}
+        {!spec.fine && <p className="nmb-caption nmb-enter" data-beat="3">{REQUEST}</p>}
       </div>
     </main>
 
