@@ -27,7 +27,7 @@ export function plan(W: number, H: number) {
   const P = 2 * Xw / 7, lanes = Array.from({ length: 7 }, (_, i) => (i - 3) * P), lw = P * .5, lh = lw * .7
   const cavD = (phone ? 5.2 : 6.2) * U, zL = cavD / 2
   // Eight tubes down the front, four each side of the price: inbox, agent inbox, endpoint, thread; mailbox, ritual, campaign, logs.
-  const tubeR = (phone ? .36 : .5) * U, pitch = (phone ? 1 : 1.5) * U, first = (phone ? .8 : 1.25) * U
+  const tubeR = (phone ? .4 : .6) * U, pitch = (phone ? 1.02 : 1.56) * U, first = (phone ? .78 : 1.16) * U
   const tubes = [3, 2, 1, 0].map(k => -(Xw + first + k * pitch)).concat([0, 1, 2, 3].map(k => Xw + first + k * pitch))
   const floor = floorU * U, ox = Math.round(W / 2), oy = Math.round(H - floor)
   const cta: Rect = phone ? { x: -Xw + 2 * U, y: 8 * V, w: 2 * Xw - 4 * U, h: 50 } : { x: -8.5 * U, y: 5.4 * V, w: 17 * U, h: 7.6 * V }

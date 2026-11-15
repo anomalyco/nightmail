@@ -88,8 +88,8 @@ export function buildMachine(p: Plan) {
   b.box(-Xw * .42, yTop, D * .58, -Xw * .14, yTop + 1.6 * px, D * .86, M.trim); b.box(-Xw * .3, yTop + 1.6 * px, D * .7, -Xw * .26, yTop + 3 * px, D * .74, M.steel)
   const vents: V3[] = [[-Xw * .86, yTop + 11 * px, D * .72], [Xw * .9, yTop + 11 * px, D * .72]]
   for (const v of vents) { b.cyl([v[0], 0, v[2]], 1, yTop, yTop + 9 * px, 4.5 * px, M.steel, 14, 0); b.cyl([v[0], 0, v[2]], 1, yTop + 9 * px, yTop + 11 * px, 6 * px, M.trim, 14, 2, M.slot) }
-  const turret: V3 = [-Xw * .6, yTop + 13 * px, zL], eject: V3 = [Xw * .6, yTop + 5 * px, zL]
-  b.cyl([turret[0], 0, zL], 1, yTop, yTop + 3 * px, 7 * px, M.trim, 16, 2); b.cyl([turret[0], 0, zL], 1, yTop + 3 * px, yTop + 13 * px, 3.2 * px, M.steel, 12, 2)
+  const turret: V3 = [-Xw * .6, yTop + 16 * px, zL], eject: V3 = [Xw * .6, yTop + 5 * px, zL]
+  b.cyl([turret[0], 0, zL], 1, yTop, yTop + 3 * px, 8.5 * px, M.trim, 16, 2); b.cyl([turret[0], 0, zL], 1, yTop + 3 * px, yTop + 16 * px, 3.6 * px, M.steel, 12, 2)
   b.box(eject[0] - .8 * lw, yTop, zL - 6 * px, eject[0] + .8 * lw, yTop + 5 * px, zL + 6 * px, M.steel)
   b.quad([eject[0] - .64 * lw, yTop + 5 * px + .1, zL - 2 * px], [eject[0] + .64 * lw, yTop + 5 * px + .1, zL - 2 * px], [eject[0] + .64 * lw, yTop + 5 * px + .1, zL + 2 * px], [eject[0] - .64 * lw, yTop + 5 * px + .1, zL + 2 * px], M.slot, [0, 1, 0])
   const beacon: V3 = [Xc - 3 * U, yTop + 12 * px, D * .7]
@@ -126,10 +126,11 @@ export function buildMachine(p: Plan) {
 
   // The laser: a barrel on a yoke, a red lens, fins.
   idx.turret = b.part('turret', turret)
-  b.box(turret[0] - 6 * px, turret[1] - 3.6 * px, zL - 4 * px, turret[0] + 15 * px, turret[1] + 3.6 * px, zL + 4 * px, M.plinth, ALL)
-  b.cyl([0, turret[1], zL], 0, turret[0] + 15 * px, turret[0] + 18 * px, 2.8 * px, M.steel, 12, 2, M.red)
-  for (let i = 0; i < 3; i++) b.box(turret[0] - 3 * px + i * 4 * px, turret[1] + 3.6 * px, zL - 3 * px, turret[0] - 1.4 * px + i * 4 * px, turret[1] + 6 * px, zL + 3 * px, M.trim, ALL)
-  b.cyl([turret[0], turret[1], 0], 2, zL - 5.4 * px, zL + 5.4 * px, 2.4 * px, M.steel, 10, 3)
+  b.box(turret[0] - 8 * px, turret[1] - 4.6 * px, zL - 5 * px, turret[0] + 17 * px, turret[1] + 4.6 * px, zL + 5 * px, M.plinth, ALL)
+  b.cyl([0, turret[1], zL], 0, turret[0] + 17 * px, turret[0] + 22 * px, 3.4 * px, M.steel, 12, 2, M.red)
+  b.cyl([0, turret[1], zL], 0, turret[0] - 10.5 * px, turret[0] - 8 * px, 3.6 * px, M.trim, 12, 1)
+  for (let i = 0; i < 4; i++) b.box(turret[0] - 5 * px + i * 4.4 * px, turret[1] + 4.6 * px, zL - 4 * px, turret[0] - 3.2 * px + i * 4.4 * px, turret[1] + 7.4 * px, zL + 4 * px, M.trim, ALL)
+  b.cyl([turret[0], turret[1], 0], 2, zL - 6.6 * px, zL + 6.6 * px, 3 * px, M.steel, 10, 3)
 
   idx.scan = b.part('scan', [0, scanY, zL]); b.mark(-lw * .56, scanY - .7 * px, lw * .56, scanY + .7 * px, zL - 2.5 * px, M.red)
 

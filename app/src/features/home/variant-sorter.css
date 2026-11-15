@@ -120,7 +120,7 @@
 /* ── Below the machine: the tubes run on down the page to each place mail can go (sorter-stations.tsx) ──
    A unit's --q is how far it has come up the page, 0 to 1; its capsule travels on the first half (--c) and what happens
    on its screen on the second (--v). A step inside takes a window of --v as its own --t. */
-.srt-stations { position: relative; flex: none; }
+.srt-stations { position: relative; flex: none; isolation: isolate; }
 .srt-clamp { position: absolute; z-index: 3; top: -4px; height: 10px; border-radius: 1px; background: var(--srt-steel); box-shadow: inset 0 3px 0 var(--srt-steel-top); }
 .srt-unit { position: absolute; right: 0; left: 0; height: 0; --c: clamp(0, calc(var(--q, 0) / .5), 1); --v: clamp(0, calc((var(--q, 0) - .5) / .5), 1); }
 /* A glass tube lying on the floor, seen from above and in front: four flat bands across it, as the machine's are. */
@@ -132,6 +132,7 @@
   --down: clamp(0, calc(var(--c) / var(--turn)), 1); --along: clamp(0, calc((var(--c) - var(--turn)) / (1 - var(--turn))), 1);
   translate: calc(var(--along) * var(--reach)) calc((var(--down) - 1) * var(--fall)); rotate: calc((1 - clamp(0, calc((var(--c) - var(--turn)) * 400), 1)) * 90deg); opacity: calc(clamp(0, calc(var(--c) * 30), 1) * clamp(0, calc((1 - var(--c)) * 40), 1)); pointer-events: none; }
 
+.srt-shadow { position: absolute; z-index: -1; width: calc(var(--srt-box-w) + 800px); height: calc(var(--srt-box-h) + 800px); margin: -400px 0 0 -400px; background: var(--srt-shadow); pointer-events: none; }
 /* A unit: a box on the floor in the machine's projection (front, top, the side that is seen), a screen in its front. */
 .srt-box { position: absolute; top: 0; width: var(--srt-box-w); height: var(--srt-box-h); background: var(--srt-body); }
 .srt-box::before { content: ''; position: absolute; top: calc(-1 * var(--srt-dy)); left: calc(-1 * var(--srt-dx)); width: calc(100% + var(--srt-dx)); height: calc(var(--srt-dy) + .5px); background: var(--srt-body-top); clip-path: polygon(0 0, calc(100% - var(--srt-dx)) 0, 100% 100%, var(--srt-dx) 100%); }
@@ -179,13 +180,12 @@
 .srt-app-side span { grid-column: 1 / -1; }
 .srt-folder { display: flex; align-items: center; justify-content: space-between; margin: -3px -5px; padding: 3px 5px; border-radius: 3px; background: var(--hair); color: var(--srt-screen-text); }
 .srt-folder b { color: var(--color-brand); font-size: 11px; font-weight: 600; }
-.srt-app-list { overflow: hidden; }
+.srt-app-list { position: relative; overflow: hidden; --rowh: 61px; }
 .srt-app-mail { display: grid; height: 61px; padding: 8px 11px 0; box-shadow: 0 1px 0 var(--hair); font-size: 11.5px; line-height: 15px; white-space: nowrap; }
 .srt-app-mail > * { overflow: hidden; text-overflow: ellipsis; }
 .srt-app-mail b { font-weight: 600; }
 .srt-app-mail em { color: var(--dim); font-style: normal; }
-.srt-app-mail.srt-fresh { opacity: clamp(0, calc(var(--t) * 2.5), 1); translate: 0 calc((var(--t) - 1) * 61px); }
-.srt-app-mail.srt-fresh ~ .srt-app-mail { translate: 0 calc((var(--v) * 2.5 - 1) * 0px); }
+.srt-app-mail.srt-fresh { position: absolute; top: 0; right: 0; left: 0; opacity: clamp(0, calc(var(--t) * 2.5), 1); translate: 0 calc((var(--t) - 1) * var(--rowh)); }
 .srt-app-mail.srt-fresh b::before { content: ''; display: inline-block; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: var(--color-brand); translate: 0 -1px; }
 
 .srt-v-agent, .srt-v-endpoint { display: grid; align-content: start; row-gap: 8px; padding: 13px 13px 0; font-family: var(--font-mono); font-size: 10.5px; line-height: 15px; }
@@ -209,7 +209,6 @@
 .srt-v-endpoint p b { color: var(--color-brand); font-weight: 400; }
 .srt-v-endpoint pre { overflow: hidden; padding: 8px 10px; border-radius: 2px; background: var(--hair); font-family: var(--font-mono); font-size: 10.5px; line-height: 15px; white-space: pre; }
 .srt-unfold { clip-path: inset(0 0 calc((1 - var(--t)) * 100%) 0); }
-.srt-v-endpoint .private-address { display: inline-flex; vertical-align: bottom; }
 
 .srt-sub { padding: 9px 12px 0; color: var(--dim); font-size: 11.5px; white-space: nowrap; }
 .srt-sub b { color: var(--srt-screen-text); font-weight: 500; }
@@ -226,7 +225,7 @@
 .srt-bubble { max-width: 76%; margin-inline: 12px !important; padding: 6px 10px; border-radius: 9px 9px 2px 9px; background: color-mix(in oklch, var(--color-brand) 34%, var(--srt-screen)); font-size: 12px; line-height: 16px; }
 .srt-theirs { justify-self: start; border-radius: 9px 9px 9px 2px; background: var(--hair); }
 .srt-theirs b { display: block; color: var(--dim); font-size: 11px; font-weight: 500; }
-.srt-sent { display: flex; gap: 4px; margin-right: 12px !important; color: var(--dim); font-size: 11px; }
+.srt-sent { margin-right: 12px !important; color: var(--dim); font-size: 11px; }
 
 .srt-v-logs .srt-log { display: grid; grid-template-columns: 70px minmax(0, 1fr); align-items: center; column-gap: 8px; height: 27px; padding-inline: 12px; box-shadow: 0 1px 0 var(--hair); font-size: 11.5px; white-space: nowrap; }
 .srt-log b { overflow: hidden; font-weight: 400; text-overflow: ellipsis; }

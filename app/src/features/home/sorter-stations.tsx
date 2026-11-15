@@ -1,7 +1,6 @@
 import { useEffect, useRef, type CSSProperties, type ReactNode } from 'react'
 import { ArrowRight, LoaderCircle } from 'lucide-react'
 import { Link } from 'react-router'
-import { PrivateAddress } from '../../components/PrivateAddress'
 import { SignInConsent } from '../../components/LegalLinks'
 import { AnomalyLogo } from '../../components/AnomalyLogo'
 import { reducedMotion, type HomeProps } from '.'
@@ -60,6 +59,9 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
   // set outside the tubes, on the side its own tube does not come from.
   const gap = pipeX[4] - pipeX[3] - 2 * r, stack = p.W < 1140, w = Math.round(Math.min(520, gap - (phone ? 26 : 64)))
   const box = phone ? { w, h: 228, d: 44 } : { w, h: Math.round(w * .63), d: 64 }
+  // A unit's shadow on the floor, thrown up the page and to the left as the machine's is: its roof's outline moved along the light.
+  const sx = -.479 * box.h, sy = -.289 * box.h, bx = DX * box.d, by = -DY * box.d, pad = 400
+  const shadow = `polygon(${[[0, box.h], [sx, box.h + sy], [bx + sx, box.h + by + sy], [box.w + bx + sx, box.h + by + sy], [box.w + bx, box.h + by], [bx, box.h + by]].map(([x, y]) => `${Math.round(x + pad)}px ${Math.round(y + pad)}px`).join(', ')})`
   const pitch = box.h + (stack ? 250 : 190), lead = stack ? 150 : 120, port = stack ? 190 : Math.round(box.h / 2)
   const height = lead + STATIONS.length * pitch + 230
   const vars = { '--srt-r': `${r}px`, '--srt-box-w': `${box.w}px`, '--srt-box-h': `${box.h}px`, '--srt-dx': `${-DX * box.d}px`, '--srt-dy': `${DY * box.d}px`, height } as CSSProperties
@@ -76,6 +78,7 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
         <span className="srt-pipe srt-pipe-in" style={{ left: left ? x : boxLeft + box.w, top: port, width: reach }} aria-hidden="true" />
         <span className="srt-joint" style={{ left: x, top: port }} aria-hidden="true" />
         <span className="srt-capsule" style={{ left: x - r * .075, top: port, '--fall': `${fall}px`, '--reach': `${left ? reach : -reach}px`, '--turn': fall / (fall + reach) } as CSSProperties} aria-hidden="true" />
+        <span className="srt-shadow" style={{ left: boxLeft, top: stack ? 74 : 0, clipPath: shadow }} aria-hidden="true" />
         <div className="srt-box" style={{ left: boxLeft }}>
           <span className="srt-collar" aria-hidden="true" />
           <div className="srt-screen" aria-hidden="true">{VIGNETTES[station.key]}</div>
@@ -117,11 +120,14 @@ const VIGNETTES: Record<string, ReactNode> = {
   </div>,
   // The same inbox in a mail app: the count on the folder, the message in the list.
   imap: <div className="srt-v srt-v-imap">
-    <div className="srt-app-side"><i /><i /><i /><span className="srt-folder">Inbox<b className="srt-step srt-pop" style={step(.2, .45)}>1</b></span><span>Sent</span><span>Junk</span><span>Archive</span></div>
+    <div className="srt-app-side"><i /><i /><i /><span className="srt-folder">Inbox<b className="srt-step srt-pop" style={step(.3, .5)}>1</b></span><span>Sent</span><span>Junk</span><span>Archive</span></div>
     <div className="srt-app-list">
       <div className="srt-app-mail srt-step srt-fresh" style={step(.1, .5)}><b>Pantry Assistant</b><span>Your fridge has written a short essay</span><em>Title: On Being Opened. Twelve pages. Tone: considered, angry.</em></div>
-      <div className="srt-app-mail"><b>Mill Row Bakes</b><span>The ovens are taking a vacation</span><em>Three days off. They earned it, we earned it. Bread Tuesday.</em></div>
-      <div className="srt-app-mail"><b>Seed Library</b><span>New hours for the seed library</span><em>Open Tuesdays. Closed when we are in the garden.</em></div>
+      <div className="srt-step srt-shift" style={step(.1, .5)}>
+        <div className="srt-app-mail"><b>Mill Row Bakes</b><span>The ovens are taking a vacation</span><em>Three days off. They earned it, we earned it. Bread Tuesday.</em></div>
+        <div className="srt-app-mail"><b>Seed Library</b><span>New hours for the seed library</span><em>Open Tuesdays. Closed when we are in the garden.</em></div>
+        <div className="srt-app-mail"><b>Boundary Post</b><span>Delivery failed: door was open, which felt wrong</span><em>We respected the door's privacy. The parcel waits outside.</em></div>
+      </div>
     </div>
   </div>,
   // An agent waits on its inbox, reads what arrives, replies.
@@ -145,7 +151,7 @@ const VIGNETTES: Record<string, ReactNode> = {
   // The payload a webhook endpoint is sent, and its answer.
   endpoint: <div className="srt-v srt-v-endpoint">
     <p className="srt-step srt-type" style={step(0, .2)}><b>POST</b> https://hooks.acme.example/mail</p>
-    <pre className="srt-step srt-unfold" style={step(.2, .7)}>{'{\n  "type": "message.received",\n  "from": '}<PrivateAddress value="deliver@hooks.example" />{',\n  "subject": "Your webhook is answering in Latin",\n  "text": "Status 200, but the body is a mood…"\n}'}</pre>
+    <pre className="srt-step srt-unfold" style={step(.2, .7)}>{'{\n  "type": "message.received",\n  "from": "Delivery Service",\n  "subject": "Your webhook is answering in Latin",\n  "text": "Status 200, but the body is a mood…"\n}'}</pre>
     <p className="srt-step srt-in srt-ok" style={step(.76, .92)}><b>200</b> OK</p>
   </div>,
   // A campaign goes out to an audience: a thousand contacts, and what that costs.
@@ -162,7 +168,7 @@ const VIGNETTES: Record<string, ReactNode> = {
     <p className="srt-bubble">Here it is. Again.</p>
     <p className="srt-bubble srt-theirs srt-step srt-in" style={step(.08, .3)}><b>Zahir Bhatt</b>This is the fifth time. Each version is a different version.</p>
     <p className="srt-bubble srt-step srt-type" style={step(.42, .74)}>Sending version six. It is the last one.</p>
-    <p className="srt-sent srt-step srt-in" style={step(.8, .94)}>Sent from <PrivateAddress value="files@acme.example" /></p>
+    <p className="srt-sent srt-step srt-in" style={step(.8, .94)}>Sent from the address it came to</p>
   </div>,
   // The logs: every message that went through, newest first.
   logs: <div className="srt-v srt-v-logs">

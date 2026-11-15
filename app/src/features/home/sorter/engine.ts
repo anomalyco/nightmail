@@ -300,7 +300,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     const o = i * 3, tx = L.pos[o], ty = L.pos[o + 1], tz = L.pos[o + 2]
     const sx = tx - m.turret[0] + DX * (tz - m.turret[2]), sy = ty - m.turret[1] + DY * (tz - m.turret[2])
     turretAim = Math.atan2(sy, sx); turretAngle = turretAim; aimHold = .45
-    const tip = 17 * px, bx = m.turret[0] + Math.cos(turretAim) * tip, by = m.turret[1] + Math.sin(turretAim) * tip, length = Math.hypot(sx, sy) - tip
+    const tip = 22 * px, bx = m.turret[0] + Math.cos(turretAim) * tip, by = m.turret[1] + Math.sin(turretAim) * tip, length = Math.hypot(sx, sy) - tip
     const mx = (bx + tx) / 2 - DX * (tz - m.turret[2]) / 2, my = (by + ty) / 2 - DY * (tz - m.turret[2]) / 2
     add({ x: mx, y: my, z: (m.turret[2] + tz) / 2, max: .13, size: length / 2, len: 3.2 * px, rot: turretAim, r: colour.red[0], g: colour.red[1], b: colour.red[2], a: 1, shape: 3, glow: true })
     glow(tx, ty, tz, 34 * px, colour.ember, .7, .3); glow(bx, by, m.turret[2], 14 * px, colour.red, .8, .16)

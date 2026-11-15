@@ -25,7 +25,7 @@ const TABLE = {
   ember:   [flat(.78, .17, 58), flat(.74, .18, 55)],
   char:    [flat(.2, .025, 55), flat(.24, .03, 55)],
   glass:   [flat(.9, .02, 268, .055), flat(.3, .03, 262, .05)],
-  sheen:   [flat(.95, .015, 268, .085), flat(1, 0, 0, .34)],
+  sheen:   [flat(.95, .015, 268, .085), flat(1, 0, 0, .2)],
   tube:    [[.95, .82, .62, .46, .02, 268, .2], [.4, .5, .34, .26, .03, 262, .2]],
   lampOff: [[.4, .32, .28, .25, .018, 268, 1], [.78, .7, .64, .58, .014, 262, 1]],
   lampOn:  [flat(.95, .06, 92), flat(.97, .1, 92)],
@@ -70,7 +70,7 @@ function glass(index: 0 | 1 | 2 | 3, dark: boolean) {
 /** The machine's tones for the page's own boxes below it (variant-sorter.css reads them as --srt-*). */
 export function toneVars(dark: boolean): Record<string, string> {
   return {
-    '--srt-floor': tone('floor', 0, dark), '--srt-body': tone('body', 1, dark), '--srt-body-top': tone('body', 0, dark), '--srt-body-side': tone('body', 3, dark), '--srt-plinth': tone('plinth', 1, dark), '--srt-trim': tone('trim', 1, dark),
+    '--srt-floor': tone('floor', 0, dark), '--srt-shadow': tone('floor', 3, dark), '--srt-body': tone('body', 1, dark), '--srt-body-top': tone('body', 0, dark), '--srt-body-side': tone('body', 3, dark), '--srt-plinth': tone('plinth', 1, dark), '--srt-trim': tone('trim', 1, dark),
     '--srt-steel': tone('steel', 1, dark), '--srt-steel-top': tone('steel', 0, dark), '--srt-screen': tone('screen', 1, dark), '--srt-lamp-off': tone('lampOff', 1, dark),
     '--srt-tube-0': glass(0, dark), '--srt-tube-1': glass(1, dark), '--srt-tube-2': glass(2, dark), '--srt-tube-3': glass(3, dark),
   }
