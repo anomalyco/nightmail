@@ -1,112 +1,127 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties } from 'react'
-import { LoaderCircle } from 'lucide-react'
+import { memo, useEffect, useMemo, useRef, useState, useSyncExternalStore, type CSSProperties, type ReactNode } from 'react'
+import { ArrowRight, LoaderCircle } from 'lucide-react'
+import { Link } from 'react-router'
 import { ThemeToggle } from '../../components/ThemeToggle'
 import { SignInConsent } from '../../components/LegalLinks'
 import { BaneWordmark } from '../../components/BaneLogo'
-import { HomeFooter, reducedMotion, type HomeProps } from '.'
-import { ACCEPTED_MS, DELIVERED_MS, PAGE_MS, plan, play, turn, type Exposure, type Mode, type Pose } from './nmb-flight'
+import { AnomalyLogo } from '../../components/AnomalyLogo'
+import { reducedMotion, type HomeProps } from '.'
+import { CLAIM_MS, DELIVERED_MS, ENTER_MS, LAUNCH_MS, LOOP_MS, RESET_MS, STILL_MS, TABLET, TALL, WIDE, buildBench, poseAt, stylesOf, tracksOf, type Bench, type Part, type Piece } from './nmb-bench'
 import './variant-nmb.css'
-import { productName } from '../../../../api/src/brand'
+import { productName, sdkPackage } from '../../../../api/src/brand'
 
-// Direction 5: the page is one second wide. A letter is thrown across it and exposed twenty times a second, as on a
-// chronophotographic plate: accepted a tenth of the way over, delivered at six tenths, and the rest of the second is
-// empty but for Sign in. On a portrait screen the second runs down the page and the letter is dropped.
-// Figures: api/src/billing/money.ts's rate and the speeds measured on 2026-11-15 (plans/homepage-nightmail/numbers.md).
+// Direction 5, round 3: a timing bench. The page is one instrument: a rail a second long, a letter in a sled, a gate
+// where the API accepts it and a gate where it is delivered, and a stopwatch. It runs in real time at the speeds
+// measured on 2026-11-15 (plans/homepage-nightmail/numbers.md), then draws the sled back and runs again.
+// The bench itself, its model and its motion are in nmb-bench.ts; this file lays the page out around it.
 
-const TALL = '(max-aspect-ratio: 5/6)'
-const watchMode = (changed: () => void) => { const query = matchMedia(TALL); query.addEventListener('change', changed); return () => query.removeEventListener('change', changed) }
-const readMode = (): Mode => matchMedia(TALL).matches ? 'tall' : 'wide'
-
-// How long the first throw waits for the eye to arrive, how long a finished plate rests before the next, and how long
-// a plate takes to clear.
-const FIRST_HOLD_MS = 420, HOLD_MS = 260, REST_MS = 6400, CLEAR_MS = 420
-
-// The Stamp mark (components/BaneLogo.tsx) in its 100 × 100 box: the stamp on the letter.
-const MARK = 'M0 0L4.84 0A5.16 5.16 0 0 0 15.16 0L24.84 0A5.16 5.16 0 0 0 35.16 0L44.84 0A5.16 5.16 0 0 0 55.16 0L64.84 0A5.16 5.16 0 0 0 75.16 0L84.84 0A5.16 5.16 0 0 0 95.16 0L100 0L100 4.84A5.16 5.16 0 0 0 100 15.16L100 24.84A5.16 5.16 0 0 0 100 35.16L100 44.84A5.16 5.16 0 0 0 100 55.16L100 64.84A5.16 5.16 0 0 0 100 75.16L100 84.84A5.16 5.16 0 0 0 100 95.16L100 100L95.16 100A5.16 5.16 0 0 0 84.84 100L75.16 100A5.16 5.16 0 0 0 64.84 100L55.16 100A5.16 5.16 0 0 0 44.84 100L35.16 100A5.16 5.16 0 0 0 24.84 100L15.16 100A5.16 5.16 0 0 0 4.84 100L0 100L0 95.16A5.16 5.16 0 0 0 0 84.84L0 75.16A5.16 5.16 0 0 0 0 64.84L0 55.16A5.16 5.16 0 0 0 0 44.84L0 35.16A5.16 5.16 0 0 0 0 24.84L0 15.16A5.16 5.16 0 0 0 0 4.84L0 0ZM16.98 16.98L83.02 16.98L83.02 83.02L16.98 83.02ZM23.91 23.91L76.09 23.91L76.09 76.09L23.91 76.09ZM31.48 31.48L68.52 31.48L68.52 68.52L31.48 68.52ZM37.63 37.63L62.37 37.63L62.37 62.37L37.63 62.37Z'
-
-// The letter's two sides in a 100 × 68 box: the address side with its stamp, and the flap side.
-function Front() {
-  return <svg viewBox="0 0 100 68" aria-hidden="true">
-    <rect className="nmb-paper" width="100" height="68" rx="1.6" />
-    <path className="nmb-ink" d="M11 38h33M11 46h25M11 54h29" />
-    <path className="nmb-stamp" fillRule="evenodd" transform="translate(77.5 8.5) scale(.14)" d={MARK} />
-  </svg>
+// Which drawing of the bench a screen gets: across the page on a wide one, under the headline on a tall one, and on a
+// phone a larger, plainer cut of that which runs off both sides of the screen.
+const TALL_SCREEN = '(max-width: 960px), (max-aspect-ratio: 11/10)', SMALL_SCREEN = '(max-width: 600px)'
+const watchScreen = (changed: () => void) => {
+  const queries = [matchMedia(TALL_SCREEN), matchMedia(SMALL_SCREEN)]
+  for (const query of queries) query.addEventListener('change', changed)
+  return () => { for (const query of queries) query.removeEventListener('change', changed) }
 }
-function Back() {
-  return <svg viewBox="0 0 100 68" aria-hidden="true">
-    <rect className="nmb-paper" width="100" height="68" rx="1.6" />
-    <path className="nmb-flap" d="M.8 .8H99.2L50 38Z" />
-    <path className="nmb-ink" d="M.8 .8L50 38L99.2 .8M.8 67.2L39.5 30M99.2 67.2L60.5 30" />
-  </svg>
-}
+const readScreen = () => !matchMedia(TALL_SCREEN).matches ? WIDE : matchMedia(SMALL_SCREEN).matches ? TALL : TABLET
 
-// A pose on the plate: wide, time runs left to right and the letter's height is measured up from the scale; tall, time
-// runs down and the letter sways about its column.
-function place(pose: Pose, mode: Mode, face: 'front' | 'back' = 'front'): CSSProperties {
-  const along = `${(pose.along * 100).toFixed(3)}%`, cross = pose.cross.toFixed(4)
-  return mode === 'wide'
-    ? { left: along, top: `calc(100% - ${cross} * var(--nmb-u))`, transform: turn(pose, face) }
-    : { top: `calc(${along} - ${pose.lift.toFixed(4)} * var(--nmb-u))`, left: `calc(var(--nmb-column) + ${cross} * var(--nmb-u))`, transform: turn(pose, face) }
-}
+const REQUEST = 'POST /v1/emails/send'
+const LABEL = `A timing bench. A letter stands in a sled on a rail one second long. A sprung starter marked “${REQUEST}” throws it down the rail: it passes a gate marked “accepted” a tenth of the way along and is caught at a gate marked “delivered”, six tenths of the way along, where a stopwatch stops. The base names where it was delivered: the SES mailbox simulator.`
 
-// One exposure: the side facing the lens, in a tone set by how late it was taken and how squarely it faces the lamp.
-function Exposed({ pose, mode }: { pose: Exposure; mode: Mode }) {
-  const accepted = Math.abs(pose.t - ACCEPTED_MS) < 25
-  return <i className={`nmb-letter nmb-exposure${accepted ? ' nmb-accepted' : ''}${pose.steep ? ' nmb-steep' : ''}`} data-at={pose.t} style={{ ...place(pose, mode, pose.front ? 'front' : 'back'), '--nmb-light': `${Math.round(100 * pose.light)}%`, '--nmb-age': `${Math.round(100 * pose.t / DELIVERED_MS)}%` } as CSSProperties}>
-    {pose.front ? <Front /> : <Back />}
-  </i>
-}
+const pct = (share: number) => `${Math.round(share * 1e5) / 1e3}%`
 
-// The scale: a tick every 10 ms, longer at each 50 and 100.
-const marks = Array.from({ length: 101 }, (_, i) => ({ at: i * 10, reach: i % 10 === 0 ? 13 : i % 5 === 0 ? 8 : 5 }))
-function Scale({ mode }: { mode: Mode }) {
-  return <svg viewBox={mode === 'wide' ? '0 0 1000 13' : '0 0 13 1000'} preserveAspectRatio="none">
-    {marks.map(({ at, reach }) => mode === 'wide' ? <line key={at} className={reach === 13 ? 'nmb-tenth' : undefined} x1={at} x2={at} y1="0" y2={reach} /> : <line key={at} className={reach === 13 ? 'nmb-tenth' : undefined} y1={at} y2={at} x1="0" x2={reach} />)}
-  </svg>
-}
+// The bench at one moment of its loop. The moving parts keep these styles until the loop's animations take them over;
+// a visitor who asked for no motion keeps them for good.
+const BenchView = memo(function BenchView({ bench, at }: { bench: Bench; at: number }) {
+  const { width, height } = bench, styles = stylesOf(poseAt(at, bench), bench)
+  const sheet = (markup: string) => <svg className="nb-sheet" viewBox={`0 0 ${width} ${height}`} dangerouslySetInnerHTML={{ __html: markup }} />
+  const piece = ({ markup, box }: Piece, part?: Part, pivot?: readonly [number, number]) => <svg
+    className="nb-piece" data-part={part} viewBox={box.join(' ')}
+    style={{ left: pct(box[0] / width), top: pct(box[1] / height), width: pct(box[2] / width), height: pct(box[3] / height), transformOrigin: pivot && `${pct((pivot[0] - box[0]) / box[2])} ${pct((pivot[1] - box[1]) / box[3])}`, ...(part && styles[part]) }}
+    dangerouslySetInnerHTML={{ __html: markup }} />
+  const hold = (part: Part, children: ReactNode) => <div className="nb-hold" data-part={part} style={styles[part]}>{children}</div>
+  // A gate's ping: a ring lying flat on its lamp, so twice as wide as it is tall.
+  const reach = 22 * Math.hypot(...bench.along) / width
+  const ping = (part: 'pingA' | 'pingB', [x, y]: readonly [number, number]) => <i className="nb-ping" data-part={part} style={{ left: pct(x / width), top: pct(y / height), width: pct(reach), marginLeft: pct(-reach / 2), marginTop: pct(-reach / 4), ...styles[part] }} />
+  return <div className="nmb-bench" role="img" aria-label={LABEL} style={{ aspectRatio: `${width} / ${height}` }}>
+    {sheet(bench.back)}
+    {piece(bench.arc, 'arc')}
+    {piece(bench.needle, 'needle', bench.needle.pivot)}
+    {hold('crown', piece(bench.crown))}
+    {hold('buffer', piece(bench.buffer))}
+    {hold('sled', <>{piece(bench.sled)}{piece(bench.letter, 'letter', bench.letter.pivot)}{piece(bench.grip)}</>)}
+    {hold('plunger', piece(bench.plunger))}
+    {bench.coils.map((coil, index) => <div key={index} className="nb-hold" data-part={`coil${index}`} style={styles[`coil${index}`]}>{piece(coil)}</div>).reverse()}
+    {sheet(bench.front)}
+    {piece(bench.key, 'key', bench.key.pivot)}
+    {piece(bench.lampA, 'lampA')}
+    {piece(bench.lampB, 'lampB')}
+    {bench.said.map((name, index) => <div key={index} className="nb-hold" data-part={`said${index}`} style={styles[`said${index}` as Part]}>{piece(name)}</div>)}
+    {ping('pingA', bench.pings[0])}
+    {ping('pingB', bench.pings[1])}
+  </div>
+})
+
+// The page arrives in order: each .nmb-enter rises into place, a beat after the one before. Type fades up as it
+// rises; Sign in is solid from its second frame, because a button at half strength reads as one that is switched off.
+const ARRIVE: Keyframe[] = [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'translateY(0)' }]
+const ARRIVE_SOLID: Keyframe[] = [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, offset: .12 }, { opacity: 1, transform: 'translateY(0)' }]
+const ARRIVE_MS = 820, BEAT_MS = 75, EASE = 'cubic-bezier(.16, 1, .3, 1)'
 
 export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
-  const mode = useSyncExternalStore(watchMode, readMode)
+  const spec = useSyncExternalStore(watchScreen, readScreen)
+  const bench = useMemo(() => buildBench(spec), [spec])
   const [reduced] = useState(reducedMotion)
-  const [run, setRun] = useState(0)
-  const flight = useMemo(() => plan(run, mode), [run, mode])
-  const page = useRef<HTMLDivElement>(null), signingIn = useRef(busy)
-  signingIn.current = busy
+  const page = useRef<HTMLDivElement>(null)
 
-  // Throw, rest, clear the plate, throw the next one. A press on the plate throws again without the wait.
   useEffect(() => {
     if (reduced) return
-    const root = page.current!, stage = root.querySelector<HTMLElement>('.nmb-stage')!
-    let animations: Animation[] = [], timer = 0, stopped = false, resting = false
-    const clear = () => {
-      resting = false
-      window.clearTimeout(timer)
-      for (const selector of ['.nmb-flight', '.nmb-sweep']) animations.push(root.querySelector(selector)!.animate([{ opacity: 1 }, { opacity: 0 }], { duration: CLEAR_MS, fill: 'both', easing: 'ease-in' }))
-      timer = window.setTimeout(() => setRun(count => count + 1), CLEAR_MS)
-    }
-    // The plate keeps resting while the tab is hidden or sign-in is starting.
-    const next = () => { if (document.hidden || signingIn.current) timer = window.setTimeout(next, 1000); else clear() }
+    const root = page.current!
+    const loops: Animation[] = [], arrivals: Animation[] = []
+    let stopped = false
     const start = () => {
       if (stopped) return
-      if (document.hidden) { document.addEventListener('visibilitychange', start, { once: true }); return }
-      animations = play(root, flight, run === 0 ? FIRST_HOLD_MS : HOLD_MS)
-      timer = window.setTimeout(() => { root.dataset.lit = ''; resting = true; timer = window.setTimeout(next, REST_MS) }, Number(root.dataset.origin) + PAGE_MS)
+      root.querySelectorAll<HTMLElement>('.nmb-enter').forEach(element => {
+        arrivals.push(element.animate(element.classList.contains('nmb-act') ? ARRIVE_SOLID : ARRIVE, { id: 'nmb-enter', duration: ARRIVE_MS, delay: BEAT_MS * Number(element.dataset.beat ?? 0), easing: EASE, fill: 'both' }))
+      })
+      // The claim waits a tone down until the first letter proves it: the lamp lights, then the gate's name, then this.
+      arrivals.push(root.querySelector('.nmb-title span:last-child')!.animate([{ color: 'var(--nmb-text-3)' }, { color: 'var(--nmb-text)' }], { id: 'nmb-enter', duration: 520, delay: LOOP_MS - ENTER_MS + LAUNCH_MS + DELIVERED_MS + CLAIM_MS, easing: EASE, fill: 'backwards' }))
+      const tracks = tracksOf(bench)
+      for (const part of Object.keys(tracks) as Part[]) {
+        const animation = root.querySelector(`.nmb-bench [data-part="${part}"]`)!.animate(tracks[part], { id: 'nmb-loop', duration: LOOP_MS, iterations: Infinity })
+        animation.currentTime = ENTER_MS
+        loops.push(animation)
+      }
+      root.dataset.live = ''
     }
-    const again = () => { if (resting && !signingIn.current) clear() }
+    // Nothing moves until the type is in, so no line re-wraps under a running animation. A font that never arrives
+    // doesn't hold the page.
+    const patience = window.setTimeout(start, 1200)
+    void document.fonts.ready.then(() => { window.clearTimeout(patience); start() })
+
+    // The bench rests while the tab is hidden, and a press on it sends the next letter without the wait.
+    const rest = () => { for (const animation of loops) if (document.hidden) animation.pause(); else animation.play() }
+    const again = () => {
+      const now = Number(loops[0]?.currentTime ?? 0), within = now % LOOP_MS
+      if (within > LAUNCH_MS + DELIVERED_MS + 500 && within < RESET_MS) for (const animation of loops) animation.currentTime = now - within + RESET_MS
+    }
+    const stage = root.querySelector('.nmb-bench')!
+    document.addEventListener('visibilitychange', rest)
     stage.addEventListener('pointerdown', again)
-    // The first throw waits for the page's type, so nothing else is still arriving when it starts.
-    if (run === 0) void document.fonts.ready.then(start); else start()
     return () => {
       stopped = true
-      window.clearTimeout(timer)
-      document.removeEventListener('visibilitychange', start)
+      window.clearTimeout(patience)
+      document.removeEventListener('visibilitychange', rest)
       stage.removeEventListener('pointerdown', again)
-      for (const animation of animations) animation.cancel()
+      for (const animation of [...loops, ...arrivals]) animation.cancel()
+      delete root.dataset.live
     }
-  }, [flight, run, reduced])
+  }, [bench, reduced])
 
-  const words = `This page is one second ${mode === 'wide' ? 'wide' : 'tall'}.`
-  return <div ref={page} className={`nmb-page nmb-page--${mode}`} data-motion={reduced ? undefined : ''}>
+  // What the layout needs from the drawing: its proportions, the part of it that spans the page, and where the gate
+  // the pitch hangs from stands.
+  const drawn = { '--nb-aspect': bench.width / bench.height, '--nb-from': bench.window[0], '--nb-to': bench.window[1], '--nb-post': bench.post } as CSSProperties
+  return <div ref={page} className={`nmb-page nmb-page--${spec.name}${spec.crop ? ' nmb-page--small' : ''}`} data-motion={reduced ? undefined : ''}>
     <header className="nmb-header">
       <a className="wordmark" href="/" aria-label={`${productName.toLowerCase()} home`}><BaneWordmark /></a>
       <nav className="nmb-nav" aria-label="Site">
@@ -115,37 +130,29 @@ export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
       </nav>
     </header>
 
-    <main className="nmb-main">
-      <h1 className="nmb-title" aria-label={words}>{words.split(' ').map((word, index) => <span key={index} aria-hidden="true">{word}{' '}</span>)}</h1>
-
-      <div className="nmb-stage" aria-hidden="true">
-        <div className="nmb-flight" key={`${mode}-${run}`}>
-          {flight.exposures.map(pose => <Exposed key={pose.t} pose={pose} mode={mode} />)}
-          <i className="nmb-letter nmb-live" style={place(flight.rest, mode)}><b className="nmb-body"><b className="nmb-side"><Front /></b><b className="nmb-side nmb-side--back"><Back /></b></b></i>
-        </div>
-        <div className="nmb-scale">
-          <Scale mode={mode} />
-          <div className="nmb-sweep"><div className="nmb-lit"><Scale mode={mode} /></div></div>
-          <i className="nmb-marker" />
+    <main className="nmb-main" style={drawn}>
+      {notice && <div className="nmb-notice">{notice}</div>}
+      <h1 className="nmb-title"><span className="nmb-enter" data-beat="0">Email, delivered</span> <span className="nmb-enter" data-beat="1">in under a second.</span></h1>
+      <div className="nmb-pitch">
+        <p className="nmb-sub nmb-enter" data-beat="3"><span>Accepted by the API in <b>~100&nbsp;ms</b>.</span> <span><b>$0.20</b> per 1,000 emails, sent or received.</span></p>
+        <div className="nmb-act nmb-enter" data-beat="4">
+          <button type="button" className="nmb-cta" disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
+            Sign in
+            <span className="nmb-cta-mark" aria-hidden="true">{busy ? <LoaderCircle className="ui-spinner" size={16} /> : <ArrowRight size={16} />}</span>
+          </button>
+          <SignInConsent className="nmb-consent" />
         </div>
       </div>
-
-      <div className="nmb-below">
-        <dl className="nmb-captions">
-          <div className="nmb-caption nmb-caption--accepted" data-lit-at={ACCEPTED_MS}><dt>~100 ms</dt><dd>accepted</dd></div>
-          <div className="nmb-caption nmb-caption--delivered" data-lit-at={DELIVERED_MS}><dt>delivered</dt><dd>to the SES mailbox simulator</dd></div>
-        </dl>
-        <div className="nmb-act">
-          {notice && <div className="nmb-notice">{notice}</div>}
-          <button type="button" className="nmb-cta" disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
-            <span className="nmb-cta-label">{busy && <LoaderCircle className="ui-spinner" size={16} aria-hidden="true" />}Sign in</span>
-          </button>
-          <p className="nmb-price"><b>$0.20</b> <span>per 1,000 emails, sent or received</span></p>
-          <SignInConsent className="nmb-fine" />
-        </div>
+      <div className="nmb-figure">
+        <div className="nmb-stage nmb-enter" data-beat="2"><BenchView bench={bench} at={reduced ? STILL_MS : ENTER_MS} /></div>
+        {/* Where the bench has no room for its small print (the request's name and where the mail went), a caption carries it. */}
+        {spec.crop && <p className="nmb-caption nmb-enter" data-beat="3"><span>{REQUEST}</span> <span>to the SES mailbox simulator</span></p>}
       </div>
     </main>
 
-    <div className="nmb-footer"><HomeFooter /></div>
+    <footer className="nmb-footer">
+      <a className="nmb-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={18} /></a>
+      <nav aria-label="Site links"><a href="/openapi.json">OpenAPI</a><a href={`https://www.npmjs.com/package/${sdkPackage}`}>SDK</a><Link to="/legal">Legal</Link></nav>
+    </footer>
   </div>
 }

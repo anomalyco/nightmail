@@ -144,7 +144,7 @@ const pages = ids => [
   ['Two accounts · switch', '/', { user: ['dana', 'nia'], from: '/', switchTo: 'Lumen Labs' }],
   ['Signed out', '/', { user: null }],
   ['Signed out · stats withheld', '/', { user: null, withheld: true }],
-  // The "nmb" homepage study: a letter crosses its plate in the first second after load, and again every few seconds.
+  // The "nmb" homepage study: its parts rise in after the fonts, then a letter runs down a rail every seven seconds.
   ['Signed out · nmb', '/?home=nmb', { user: null }],
   // The public legal pages: signed out from the homepage and between documents, and signed in from the sidebar.
   ['Legal', '/legal', { user: null, from: '/legal/terms', click: 'Overview' }],
