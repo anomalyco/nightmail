@@ -64,13 +64,14 @@ const BenchView = memo(function BenchView({ bench, at }: { bench: Bench; at: num
   </div>
 })
 
-// The page arrives in order: each .nmb-enter rises into place, a beat after the one before. Type fades up as it
-// rises; Sign in is solid from its second frame, because a button at half strength reads as one that is switched off;
-// the bench takes its own time to appear, and nothing on it moves until it has (ENTER_HOLD_MS).
+// The page arrives in order: the headline's lines, its two lines of copy with the bench, then the pitch, each rising
+// into place a beat after the one before. Type fades up as it rises; Sign in is solid from its second frame, because
+// a button at half strength reads as one that is switched off; the bench takes its own time to appear (it is all
+// there before ENTER_HOLD_MS is up), and nothing on it moves until it has.
 const ARRIVE: Keyframe[] = [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, transform: 'translateY(0)' }]
 const ARRIVE_SOLID: Keyframe[] = [{ opacity: 0, transform: 'translateY(14px)' }, { opacity: 1, offset: .12 }, { opacity: 1, transform: 'translateY(0)' }]
 const RISE: Keyframe[] = [{ transform: 'translateY(14px)' }, { transform: 'translateY(0)' }], APPEAR: Keyframe[] = [{ opacity: 0 }, { opacity: 1 }]
-const ARRIVE_MS = 820, APPEAR_MS = 400, BEAT_MS = 75, EASE = 'cubic-bezier(.16, 1, .3, 1)'
+const ARRIVE_MS = 820, APPEAR_MS = 380, BEAT_MS = 75, EASE = 'cubic-bezier(.16, 1, .3, 1)'
 
 export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
   const spec = useSyncExternalStore(watchScreen, readScreen)
@@ -124,7 +125,7 @@ export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
 
   // What the layout needs from the drawing: its proportions, the part of it that spans the page, and where the gate
   // the pitch hangs from stands.
-  const drawn = { '--nb-aspect': bench.width / bench.height, '--nb-from': bench.window[0], '--nb-to': bench.window[1], '--nb-end': bench.whole[1], '--nb-post': bench.post } as CSSProperties
+  const drawn = { '--nb-aspect': bench.width / bench.height, '--nb-from': bench.window[0], '--nb-to': bench.window[1], '--nb-end': bench.whole[1], '--nb-post': bench.post, '--nb-drop': bench.drop } as CSSProperties
   return <div ref={page} className={`nmb-page nmb-page--${spec.name}${spec.fine ? '' : ' nmb-page--small'}`} data-motion={reduced ? undefined : ''}>
     <header className="nmb-header">
       <a className="wordmark" href="/" aria-label={`${productName.toLowerCase()} home`}><BaneWordmark /></a>
@@ -139,8 +140,8 @@ export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
       <h1 className="nmb-title"><span className="nmb-enter" data-beat="0">Email, delivered</span> <span className="nmb-enter" data-beat="1">in under a second.</span></h1>
       <p className="nmb-sub nmb-enter" data-beat="2"><span>Send and receive by API.</span> <span>Accepted in <b>~100&nbsp;ms</b>.</span></p>
       <div className="nmb-pitch">
-        <p className="nmb-price nmb-enter" data-beat="4"><b>$0.20</b> per 1,000 emails, sent or received.</p>
-        <div className="nmb-act nmb-enter" data-beat="5">
+        <p className="nmb-price nmb-enter" data-beat="3"><b>$0.20</b> per 1,000 emails, sent or received.</p>
+        <div className="nmb-act nmb-enter" data-beat="3">
           <button type="button" className="nmb-cta" disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
             Sign in
             <span className="nmb-cta-mark" aria-hidden="true">{busy ? <LoaderCircle className="ui-spinner" size={16} /> : <ArrowRight size={16} />}</span>
@@ -149,12 +150,12 @@ export function NmbHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
         </div>
       </div>
       <div className="nmb-figure">
-        <div className="nmb-stage nmb-enter" data-beat="3"><BenchView bench={bench} at={reduced ? STILL_MS : ENTER_MS} /></div>
+        <div className="nmb-stage nmb-enter" data-beat="2"><BenchView bench={bench} at={reduced ? STILL_MS : ENTER_MS} /></div>
       </div>
     </main>
 
     <footer className="nmb-footer">
-      <a className="nmb-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={18} /></a>
+      <a className="nmb-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={22} /></a>
       <nav aria-label="Site links"><a href="/openapi.json">OpenAPI</a><a href={`https://www.npmjs.com/package/${sdkPackage}`}>SDK</a><Link to="/legal">Legal</Link></nav>
     </footer>
   </div>

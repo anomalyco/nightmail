@@ -102,8 +102,9 @@ export interface Bench {
   /** The trace the stopwatch's hand leaves on the dial's rim, and how much of its length is drawn at each fortieth of the run. */
   arc: Piece
   swept: number[]
-  /** Where the second gate's near post stands, as a fraction of the drawing's width: the page hangs its pitch from it. */
+  /** Where the second gate's near post stands, as a fraction of the drawing's width (the page hangs its pitch from it), and how far down the drawing the base's lower edge is there, as a fraction of its height. */
   post: number
+  drop: number
 }
 
 /** How far past the second gate's light the letter comes to rest; how far the starter is drawn back and how far its plunger follows; how far down the letter goes when it is posted. */
@@ -190,7 +191,8 @@ export function buildBench(spec: Spec): Bench {
   }
 
   // The base: a long plate with a trim seam round its foot, and what happens above each place engraved on its front:
-  // the request under the starter, the name of each gate under it, and under the rail's end how long the rail is.
+  // the request under the starter, the name of each gate under it, and, ending under the rail's end mark, how long the
+  // rail is (which is printed, not lit: it is never reached).
   // The type is a monospace: each letter is .6 of its size wide, plus the tracking the page's styles give it. A plain
   // drawing has no room on its base for the request's route at a size that reads: its starter says POST on its own
   // face instead.
@@ -205,7 +207,7 @@ export function buildBench(spec: Spec): Bench {
   const label = (text: string, [from, to]: Stretch, also = '', where = ON_BASE) => `<text class="nb-label${also && ` ${also}`}" transform="${k.sideMatrix([(from + to) / 2, where.y], where.z, P, 'left')}" font-size="${where.size}" text-anchor="middle" dominant-baseline="hanging">${text}</text>`
   const labelBox = ([from, to]: Stretch, where = ON_BASE) => [at([from - 2, where.y, where.z + 1.1]), at([to + 2, where.y, where.z - where.size - 1])]
   back.push(solid(slab(BASE, -BASE_H, BASE_H, 8, 1.6), { m: 'plate', edge: 'mid', inner: line(k.sideSeam(BASE, -BASE_H + 2.6, P, 8), 'faint') }))
-  back.push(fine ? label(REQUEST, NAMES[0], CODE) : '', label('ACCEPTED', NAMES[1]), label('DELIVERED', NAMES[2]), fine ? label('ONE SECOND', centred('ONE SECOND', SEC + 2)) : '')
+  back.push(fine ? label(REQUEST, NAMES[0], CODE) : '', label('ACCEPTED', NAMES[1]), label('DELIVERED', NAMES[2]), fine ? label('ONE SECOND', [SEC + 1.2 - long('ONE SECOND'), SEC + 1.2], 'nb-print') : '')
   back.push(line(k.planOutline(k.insetPlan(BASE, 4.5), 0, P), 'faint'))
   const corners = k.corners(BASE, 10)
   back.push(line(k.joinPaths(corners.map(([x, y]) => k.ring(x, y, 2.3, 0, P, 16))), 'lo'), dots(corners.map(([x, y]) => at([x, y, 0])), px(.6)))
@@ -303,6 +305,8 @@ export function buildBench(spec: Spec): Bench {
   }
   back.push(line(marks.used[0].join(''), 'mid', 'nb-tick'), line(marks.used[1].join(''), 'hi', 'nb-tick'), line(marks.used[2].join(''), 'lit', 'nb-tick'))
   back.push(line(marks.spare[0].join(''), 'lo', 'nb-tick'), line(marks.spare[1].join(''), 'mid', 'nb-tick'), line(marks.spare[2].join(''), 'hi', 'nb-tick'))
+  // The rule's two end marks, zero and one second, stand taller than the rest.
+  back.push(line([0, SEC].map(x => k.lineOnTop([x, RAIL_FRONT], [x, RAIL_FRONT - 7.8], RAIL_TOP, P)).join(''), 'lit', 'nb-end'))
   back.push(solid(slab(STOP, RAIL_TOP, 9, 3, .6), { edge: 'mid' }), dots([at([END + 4.25, TRACK - 4.4, RAIL_TOP + 9]), at([END + 4.25, TRACK + 4.4, RAIL_TOP + 9])], px(.5)))
 
   // The buffer's fixed half: a block clamped to the rail with a knob, and the rod its bumper slides on.
@@ -444,6 +448,7 @@ export function buildBench(spec: Spec): Bench {
     back: back.join(''), front: front.join(''), buffer, sled, letter, grip, slot, plunger, spring, needle, crown, key,
     lampA: lamp(XA), lampB: lamp(XB), said, arc, swept,
     post: at([XB - 2.6, GATE_FRONT - 2.6, 0])[0] / width,
+    drop: at([XB - 2.6, FRONT, -BASE_H])[1] / height,
   }
 }
 
@@ -453,21 +458,21 @@ export function buildBench(spec: Spec): Bench {
 
 /** A loop, when in it the letter crosses the zero mark (where the stopwatch starts), and when the reset begins: the
     letter rests delivered for most of it, and reset, reload and wind-up are one run of moves at its end. */
-export const LOOP_MS = 10000, LAUNCH_MS = 760, RESET_MS = LOOP_MS - 1240
-// Before a throw the key is wound a quarter turn while the sled is drawn back DRAW units against the spring, and held.
-const WIND_MS = 420, HOLD_MS = 80
+export const LOOP_MS = 8000, LAUNCH_MS = 560, RESET_MS = LOOP_MS - 1240
+// Before a throw the key is wound a quarter turn while the sled is drawn back DRAW units against the spring.
+const WIND_MS = 350, HOLD_MS = 0
 // How long after a gate's lamp its name lights.
 const SAY_MS = 40
 // The reset, in ms after the crown is pressed. The trace goes out and the hand flies the short way home; the names and
-// lamps go out 30 ms apart (last lit, first out); meanwhile the letter is posted down through the jaws into the rail;
+// lamps go out 60 ms apart (last lit, first out); meanwhile the letter is posted down through the jaws into the rail;
 // the moment it has gone the sled is drawn back, at a steady pace after a soft start, and stops against the plunger.
-const CLEAR_MS = 110, FLY_MS = 60, OUT_MS = [200, 170, 140, 110, 80], POST_FROM = 80, POST_MS = 280
+const CLEAR_MS = 110, FLY_MS = 60, OUT_MS = [320, 260, 200, 140, 80], POST_FROM = 80, POST_MS = 280
 const RETURN_FROM = RESET_MS + POST_FROM + POST_MS, RETURN_MS = 680, CLICK_MS = 180, SOFT = .3
 // The next letter comes up through the jaws as the sled gets home, and is up as the loop turns over.
 const RISE_MS = 260, RISE_FROM = LOOP_MS - RISE_MS
 /** Where in the loop a page starts, and how long it holds there while it arrives: the empty sled is all but home, and
     the next letter comes up once the bench is all there. */
-export const ENTER_MS = RISE_FROM, ENTER_HOLD_MS = 640
+export const ENTER_MS = RISE_FROM, ENTER_HOLD_MS = 540
 
 export interface Pose {
   /** The sled's leading edge along the rail, in world units from the zero mark. */
