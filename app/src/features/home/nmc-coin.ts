@@ -62,7 +62,8 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
 
   let dpr = 1, width = 0, height = 0, R = 0, cx = 0, cy = 0, aim = 0, pull = 1
   let palette!: Palette, cold!: HTMLCanvasElement, hot!: HTMLCanvasElement
-  let raf = 0, timer = 0, next = 0, dead = false, start = performance.now(), last = start
+  // start is the time of the intro's first frame: a page opened in a background tab plays it when it is first seen.
+  let raf = 0, timer = 0, next = 0, dead = false, start = 0, last = performance.now()
   // tray: the slice lying in front of Sign in, or on its way there.
   let cutDone = reduced, tray = reduced ? 0 : -1, hover = -1, busyAt = 0
   const slices: Slice[] = Array.from({ length: SLICES }, (_, index) => ({ out: reduced && index === 0 ? 1 : 0, outVel: 0, lift: 0, liftVel: 0, cut: reduced ? 1 : 0, gone: false, fly: 0, from: 0 }))
@@ -217,6 +218,7 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
 
   function frame(now: number) {
     raf = 0
+    start ||= now
     const dt = Math.min(48, now - last), t = now - start
     last = now
     let moving = false
@@ -325,7 +327,7 @@ export function mountCoin(canvas: HTMLCanvasElement, slot: HTMLElement, { reduce
     timer = 0
     for (const slice of slices) Object.assign(slice, { out: 0, outVel: 0, lift: 0, liftVel: 0, cut: 0, gone: false, fly: 0, from: 0 })
     cutDone = false; tray = -1; hover = -1
-    start = performance.now()
+    start = 0
     kick()
   }
 
