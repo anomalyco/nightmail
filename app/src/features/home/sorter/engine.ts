@@ -313,7 +313,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     const sx = tx - from[0] + DX * (tz - from[2]), sy = ty - from[1] + DY * (tz - from[2]), angle = Math.atan2(sy, sx)
     if (mounted) { turretAim = turretAngle = angle; aimHold = .45 }
     const tip = mounted ? 22 * px : 0, bx = from[0] + Math.cos(angle) * tip, by = from[1] + Math.sin(angle) * tip, length = Math.hypot(sx, sy) - tip
-    const mx = (bx + tx) / 2 - DX * (tz - from[2]) / 2, my = (by + ty) / 2 - DY * (tz - from[2]) / 2, mz = (from[2] + tz) / 2
+    const mx = (bx + tx) / 2, my = (by + ty) / 2, mz = (from[2] + tz) / 2
     const long = mounted ? 1 : 2.2
     add({ x: mx, y: my, z: mz, max: .12 * long, size: length / 2, len: (mounted ? 1.9 : 2.6) * px, rot: angle, ...rgb(colour.red), shape: 4 })
     add({ x: mx, y: my, z: mz - 1, max: .09 * long, size: length / 2, len: (mounted ? .7 : 1) * px, rot: angle, ...rgb(colour.spark), shape: 4 })
@@ -367,7 +367,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       Dn.state[i] = DYN; Dn.still[i] = 0; Dn.pos.set(home, o); Dn.quat.set([0, 0, 0, 1], i * 4); parts[index].on = true
       // The laser comes down where it can still be seen and still be used: on the slab beside the machine (on a phone,
       // where there is no slab beside it, back on the roof).
-      if (index === m.idx.turret) { const T = p.phone ? .8 : 1.5, tx = p.phone ? -p.Xw * .3 : -(p.Xc + rnd(70, 120) * px), tz = p.phone ? p.D * .55 : p.D * .28, ty = p.phone ? p.yTop : 0; Dn.vel[o] = (tx - home[0]) / T; Dn.vel[o + 1] = G * T / 2 - (home[1] - ty) / T; Dn.vel[o + 2] = (tz - home[2]) / T }
+      if (index === m.idx.turret) { const T = p.phone ? .8 : 1.9, tx = p.phone ? -p.Xw * .3 : -(p.Xc + rnd(70, 120) * px), tz = p.phone ? p.D * .55 : p.D * .28, ty = p.phone ? p.yTop : 0; Dn.vel[o] = (tx - home[0]) / T; Dn.vel[o + 1] = G * T / 2 - (home[1] - ty) / T; Dn.vel[o + 2] = (tz - home[2]) / T }
       else if (roof) { const side = home[0] === 0 ? (Math.random() < .5 ? -1 : 1) : Math.sign(home[0]); Dn.vel[o] = side * rnd(160, 420) * px; Dn.vel[o + 1] = rnd(620, 900) * px; Dn.vel[o + 2] = -rnd(60, 260) * px - home[2] * .9 }
       else { Dn.pos[o + 2] = -5 * px; Dn.vel[o] = (home[0] / p.Xw + rnd(-.5, .5)) * (pane ? 380 : 600) * px; Dn.vel[o + 1] = rnd(120, pane ? 520 : 740) * px; Dn.vel[o + 2] = -rnd(160, pane ? 420 : 600) * px }
       const spin = index === m.idx.turret ? 1.6 : roof ? 5 : pane ? 6 : 12
