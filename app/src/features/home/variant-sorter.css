@@ -39,7 +39,12 @@
 .srt-page[data-live] .srt-gl { opacity: 1; pointer-events: auto; }
 @media (prefers-reduced-motion: reduce) { .srt-gl { transition: none; } }
 /* Everything the page writes on the machine: one layer over the canvas. */
-.srt-on { position: absolute; z-index: 2; inset: 0; pointer-events: none; }
+/* (Not a layer of its own: what is on the machine is blended with the render behind it, each piece for itself.) */
+.srt-on { position: absolute; inset: 0; pointer-events: none; }
+/* What is written on the machine in light on dark is only ever lighter than what is behind it. A letter that flies
+   in front of it is paler than any of it, so it hides the writing, as a letter in front of it would; over the machine
+   itself nothing changes. (By day the headline and the lane plates are dark on pale and cannot be hidden this way.) */
+.srt-readout, .srt-fact, .srt-tally, .srt-hero .srt-cta, :root[data-theme='dark'] .srt-band, :root[data-theme='dark'] .srt-lanes li { mix-blend-mode: lighten; }
 .srt-on > :is(button, a) { pointer-events: auto; }
 
 /* The readout: a small screen on the fascia. Who the letter under the scanner is from and where it goes, then its

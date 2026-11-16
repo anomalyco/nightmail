@@ -77,8 +77,9 @@ export function plan(W: number, H: number) {
   let out = -widest / 2 + lean + boxDx / 2 + Math.min(408, room) - (phone ? 10 : 26)
   if (!phone) for (const w of [446, 430, 420, 384]) { const edge = -widest / 2 - lean + boxDx / 2 + Math.min(w, room); if (Math.abs(out - edge) < 18) out = edge - 18 }
   // The renderer's canvas runs on this far below the hero, under the top of the next section: what the burst throws
-  // past the slab falls on down the page and dwindles there, and is never cut off at the hero's edge.
-  const ext = phone ? 300 : 400
+  // past the slab falls on down the page and dwindles there (it is gone before it reaches the first appliance), and
+  // is never cut off at the hero's edge.
+  const ext = phone ? 170 : 260
   // The button, and beside it (over it, on a phone) the two facts. `tight`: too little room beside the button for the
   // longer fact on one line.
   const plate = phone ? 6 : Math.max(6, Math.min(9, .9 * U)), ctaW = Math.max(18.5 * U, 150), ctaH = phone ? 50 : Math.min(Math.max(50, 8.6 * V), base - 2 * plate - 1.5 * V - 5)

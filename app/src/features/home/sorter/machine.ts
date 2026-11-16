@@ -301,11 +301,14 @@ export function buildMachine(p: Plan) {
 
   // The chimneys and the hatch: on the roof until the burst. (The hatch's hinge: two knuckles on the roof at its back edge.)
   b.part('static2')
-  for (const x of [-Xw * .41, -Xw * .19]) b.cyl([0, yTop + 1.6 * px, D * .885], 0, x - 2.4 * px, x + 2.4 * px, 1.7 * px, M.steel, 8, 3)
+  for (const x of [-Xw * .41, -Xw * .19]) b.cyl([0, yTop + 2.6 * px, D * .89], 0, x - 3.4 * px, x + 3.4 * px, 3.1 * px, M.steel, 10, 3)
   vents.forEach((v, i) => { idx.vents.push(b.part(`vent${i}`, [v[0], yTop + 6 * px, v[2]])); b.cyl([v[0], 0, v[2]], 1, yTop, yTop + 11 * px, 4.5 * px, M.steel, 14, 1); b.cyl([v[0], 0, v[2]], 1, yTop + 11 * px, yTop + 13 * px, 6 * px, M.trim, 14, 3, M.slot) })
   idx.hatch = b.part('hatch', [-Xw * .3, yTop + px, D * .76])
-  b.box(-Xw * .46, yTop, D * .64, -Xw * .14, yTop + 3.2 * px, D * .88, M.steel, ALL, M.body); b.box(-Xw * .33, yTop + 3.2 * px, D * .73, -Xw * .27, yTop + 5 * px, D * .79, M.steel, ALL)
-  b.quad([-Xw * .46, yTop - .05, D * .64], [-Xw * .14, yTop - .05, D * .64], [-Xw * .14, yTop - .05, D * .88], [-Xw * .46, yTop - .05, D * .88], M.dark, [0, -1, 0])
+  b.box(-Xw * .46, yTop, D * .64, -Xw * .14, yTop + 4.4 * px, D * .88, M.steel, ALL, M.body); b.box(-Xw * .33, yTop + 4.4 * px, D * .73, -Xw * .27, yTop + 6.2 * px, D * .79, M.steel, ALL)
+  // (Its underside, seen once it is thrown back: the cabinet's steel, sooted at its middle, two ribs across it.)
+  b.quad([-Xw * .46, yTop - .05, D * .64], [-Xw * .14, yTop - .05, D * .64], [-Xw * .14, yTop - .05, D * .88], [-Xw * .46, yTop - .05, D * .88], M.trim, [0, -1, 0])
+  b.quad([-Xw * .4, yTop - .12, D * .69], [-Xw * .2, yTop - .12, D * .69], [-Xw * .2, yTop - .12, D * .83], [-Xw * .4, yTop - .12, D * .83], M.plinth, [0, -1, 0])
+  for (const z of [D * .7, D * .82]) b.box(-Xw * .45, yTop - 1.4 * px, z - .7 * px, -Xw * .15, yTop - .1, z + .7 * px, M.steel, ALL)
 
   // The cannon's barrel: a reinforced breech with the feed tube's coupling behind it, a chase that tapers a little, two
   // bands and a muzzle swell. And its cradle: a sleeve round the barrel, on the trunnions the cheeks carry.
@@ -354,7 +357,7 @@ export function buildMachine(p: Plan) {
 
   // Capsules for the tubes, and bolts that can pop.
   const capH = r * 1.5, capR = r * .68
-  for (let i = 0; i < 28; i++) { idx.caps.push(b.part(`cap${i}`)); b.cyl([0, 0, 0], 1, -capH, capH, capR, M.paper, 8, 0); b.cyl([0, 0, 0], 1, capH, capH + capR * .7, capR, M.brand, 8, 2); b.cyl([0, 0, 0], 1, -capH - capR * .7, -capH, capR, M.brand, 8, 1) }
+  for (let i = 0; i < 28; i++) { idx.caps.push(b.part(`cap${i}`)); b.cyl([0, 0, 0], 1, -capH, capH, capR, M.paper, 8, 0); b.cyl([0, 0, 0], 1, capH, capH + capR * .7, capR, M.brand, 8, 2); b.cyl([0, 0, 0], 1, -capH - capR * .7, -capH, capR, M.paper, 8, 1) }
   for (const [x, y] of [[-Xw - px, yFas + px], [Xw + px, yFas + px], [-Xw - px, yCav - px], [Xw + px, yCav - px], [0, yFas + px], [-Xw / 2, yCav - px], [Xw / 2, yCav - px], [-Xw / 2, yFas + px], [Xw / 2, yFas + px]] as [number, number][]) {
     idx.bolts.push(b.part(`bolt${idx.bolts.length}`, [x, y, -2.6 * px])); b.cyl([x, y, 0], 2, -3.2 * px, -2 * px, 1.5 * px, M.steel, 8, 3)
   }

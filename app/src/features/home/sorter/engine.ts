@@ -393,7 +393,8 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     // The floor under a sleeping letter is now that letter: the next one rests on it. (One that could not be laid flat,
     // on its edge or propped up, dwindles away where it stands.)
     matrix(B.quat, i * 4)
-    if (Math.abs(R[5]) < .8) { fading.push(i); return }
+    // (So does one that stops on a ledge half way up the machine: a riser's top, a block, a bracket.)
+    if (Math.abs(R[5]) < .8 || (B.pos[o + 1] > (p.heads.length ? p.heads[0].h : 0) + 46 * px && B.pos[o + 1] < p.yTop - 6)) { fading.push(i); return }
     for (let a = -1; a <= 1; a += .4) for (let b = -1; b <= 1; b += .5) {
       const lx = a * B.half[o], ly = b * B.half[o + 1], c = cell(B.pos[o] + R[0] * lx + R[1] * ly, B.pos[o + 2] + R[6] * lx + R[7] * ly), y = B.pos[o + 1] + R[3] * lx + R[4] * ly + 1.5
       if (c >= 0 && heights[c] > VOID && y > heights[c] && y < heights[c] + 30) heights[c] = y
