@@ -53,7 +53,7 @@
 /* The gauge is drawn by the machine; this is its hit area and its focus ring. */
 .srt-gauge { position: absolute; z-index: 3; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; }
 .srt-gauge:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: 2px; }
-.srt-cannon { position: absolute; z-index: 3; padding: 0; border: 0; border-radius: 6px; background: none; cursor: pointer; }
+.srt-cannon { position: absolute; z-index: 3; padding: 0; border: 0; border-radius: 0; background: none; cursor: pointer; }
 .srt-cannon:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: 2px; }
 
 .srt-lanes { margin: 0; padding: 0; list-style: none; }
@@ -319,8 +319,9 @@
 .srt-v-endpoint p { white-space: nowrap; }
 .srt-v-endpoint p b { color: var(--color-brand); font-weight: 400; }
 .srt-v-endpoint pre { overflow: hidden; padding: 8px 10px; border-radius: 2px; background: var(--hair); font-family: var(--font-mono); font-size: 10.5px; line-height: 15px; white-space: pre; }
-/* (Its box has 8 px under the last line: hidden with whatever lines are, shown once none is.) */
-.srt-unfold { --hid: round(up, calc((1 - var(--t)) * var(--lines, 6) * 15px), 15px); clip-path: inset(0 0 calc(var(--hid) + min(8px, var(--hid))) 0); }
+/* (Measured down from its top, so a box squeezed shorter than its lines still shows whole lines; the 8 px under the
+   last line are hidden with whatever lines are, and shown once none is.) */
+.srt-unfold { --hid: round(up, calc((1 - var(--t)) * var(--lines, 6) * 1lh), 1lh); clip-path: inset(0 0 max(0px, calc(100% - 16px - var(--lines, 6) * 1lh + var(--hid) + min(8px, var(--hid)))) 0); }
 .srt-ok { color: var(--dim); }
 .srt-ok b { color: var(--srt-screen-text); }
 

@@ -90,18 +90,32 @@ export function drawStill(canvas: HTMLCanvasElement, p: Plan, over: number, dark
   // On the slab: each tube forward from its outlet in the header, over the lip and down.
   // (A tube's line as it is seen: forward along the slab, round over the lip, and down.)
   const leg = (x: number, zFrom: number) => { c.strokeStyle = glass(1, dark); c.lineWidth = 2 * r; c.lineCap = 'butt'; c.beginPath(); c.moveTo(X(x, zFrom), Y(yc, zFrom)); c.arcTo(X(x, p.zOver), Y(yc, p.zOver), X(x, p.zOver), Y(yc, p.zOver) + 200, r * 2.6); c.lineTo(X(x, p.zOver), Y(-p.floor - over, 0)); c.stroke() }
-  p.fan.forEach(at => { leg(at.x, zBlock); fill('steel', 1); c.beginPath(); c.arc(X(at.x, zBlock), Y(yc, zBlock), r + 2 * px, 0, Math.PI * 2); c.fill() })
-  // The outbound tube, up over the lip and into the slab; the tally by the last outlet.
-  { const x = p.out - DX * p.zOver, zIn = p.zOver * .5; leg(x, zIn); fill('steel', 0); c.beginPath(); c.ellipse(X(x, zIn), Y(2 * px, zIn), r + 1.8 * px, (r + 1.8 * px) * .42, 0, 0, Math.PI * 2); c.fill() }
+  // The sleeper under each four, each tube's flange in the trunk, and the collar where it turns down over the lip.
+  const sleeperZ = p.fan.length ? (p.heads[0].z0 + p.zLip) / 2 - .6 * U : (zt + p.zLip) / 2
+  p.heads.forEach((_, side) => { const xs = [0, 1, 2, 3].map(k => p.fan[side * 4 + k].x); box(Math.min(...xs) - 1.9 * U, 0, sleeperZ - .8 * U, Math.max(...xs) + 1.9 * U, yc - r, sleeperZ + .8 * U, 'plinth') })
+  const lipCollar = (x: number) => { const w = r + 1.2 * px; fill('steel', 1); c.fillRect(X(x - w, p.zOver), Y(-p.lip * .5 + 1.4 * px, p.zOver), 2 * w, 2.8 * px); fill('steel', 0); c.beginPath(); c.ellipse(X(x, p.zOver), Y(-p.lip * .5 + 1.4 * px, p.zOver), w, w * .42, 0, 0, Math.PI * 2); c.fill() }
+  p.fan.forEach(at => { leg(at.x, zBlock); fill('steel', 1); c.beginPath(); c.arc(X(at.x, zBlock), Y(yc, zBlock), r + 2 * px, 0, Math.PI * 2); c.fill(); lipCollar(at.x) })
+  // The outbound tube: up over the lip, along the cabinet's front and into the plate at the riser's foot (a phone:
+  // into the plate in the base). The tally by the last outlet.
+  { const x = p.out - DX * p.zOver, trunk = p.heads[1], w = r + 3.4 * px, zJ = p.zLip * .46, portX = Xc + .2 * U + p.riser / 2, into = trunk ? trunk.z0 : -3 * px, px0 = trunk ? portX : x
+    fill('steel', 1); c.fillRect(X(px0 - w, into), Y(yc + w, into), 2 * w, yc + w)
+    c.strokeStyle = glass(1, dark); c.lineWidth = 2 * r; c.beginPath(); c.moveTo(X(x, p.zOver), Y(-p.floor - over, 0))
+    if (trunk) { c.arcTo(X(x, p.zOver), Y(yc, p.zOver), X(x, zJ), Y(yc, zJ), r * 2.4); c.arcTo(X(x, zJ), Y(yc, zJ), X(portX, zJ), Y(yc, zJ), r * 2.2); c.arcTo(X(portX, zJ), Y(yc, zJ), X(portX, into), Y(yc, into), r * 2.2) } else c.arcTo(X(x, p.zOver), Y(yc, p.zOver), X(x, into), Y(yc, into), r * 2.6)
+    c.lineTo(X(px0, into), Y(yc, into)); c.stroke(); lipCollar(x) }
   if (p.tally) { fill('screen', 1); c.fillRect(X(p.tally.x, p.tally.z), Y(p.tally.y + p.tally.h, p.tally.z), p.tally.w, p.tally.h) }
-  // The send cannon: its base plate, its barrel at its elevation, the cheek in front of it.
-  { const C = p.cannon, cu = C.cs, cheek = C.r + 2.2 * px, x0 = C.x - (C.back + 1.6 * cu) * Math.cos(C.el) - 1.7 * cu, zc = C.z - cheek - 2.4 * px
-    box(x0, C.y, C.z - cheek - 1.1 * cu, C.x + 3.4 * cu, C.y + .5 * cu, C.z + cheek + 1.1 * cu, 'plinth')
+  // The send cannon: the tube from the trunk into its chest, the chest, the glass feed up into the breech, its barrel
+  // at its elevation, the cheek in front of it.
+  { const C = p.cannon, cu = C.cs, cheek = C.r + 2.2 * px, ce = Math.cos(C.el), se = Math.sin(C.el), kx = C.x - (C.back + 1.6 * cu) * ce, ky = C.y + C.pivot - (C.back + 1.6 * cu) * se, top = C.y + C.chest, chestZ = C.z - cheek - 1.1 * cu, zc = C.z - cheek - 2.4 * px, trunk = p.heads[1]
+    c.strokeStyle = glass(1, dark); c.lineWidth = 2 * r
+    if (trunk) { const from = trunk.z1 + (trunk.h - yc - r) / DY; c.beginPath(); c.moveTo(X(kx, from), Y(yc, from)); c.lineTo(X(kx, chestZ), Y(yc, chestZ)); c.stroke() }
+    box(kx - 1.7 * cu, C.y, chestZ, C.x + 3.4 * cu, top, C.z + cheek + 1.1 * cu, 'plinth')
+    if (trunk) { fill('steel', 1); c.beginPath(); c.arc(X(kx, chestZ), Y(yc, chestZ), r + 2 * px, 0, Math.PI * 2); c.fill() }
+    c.beginPath(); c.moveTo(X(kx, C.z), Y(top, C.z)); c.arcTo(X(kx, C.z), Y(ky, C.z), X(C.x - C.back * ce, C.z), Y(C.y + C.pivot - C.back * se, C.z), r * 1.5); c.lineTo(X(C.x - C.back * ce, C.z), Y(C.y + C.pivot - C.back * se, C.z)); c.stroke()
     c.save(); c.translate(X(C.x, C.z), Y(C.y + C.pivot, C.z)); c.rotate(-C.el)
     fill('trim', 1); c.fillRect(-C.back, -C.r, C.back + C.fore, 2 * C.r); fill('trim', 0); c.fillRect(-C.back, -C.r, C.back + C.fore, C.r * .5); fill('trim', 3); c.fillRect(-C.back, C.r * .5, C.back + C.fore, C.r * .5)
-    fill('steel', 1); c.fillRect(C.fore - 4.4 * px, -C.r - 2.4 * px, 4.4 * px, 2 * C.r + 4.8 * px); c.fillRect(-C.back - 1.6 * px, -C.r - 3 * px, 3 * px, 2 * C.r + 6 * px); fill('plinth', 1); c.fillRect(-.75 * cu, -C.r - 3.4 * px, 1.5 * cu, 2 * C.r + 6.8 * px)
+    fill('steel', 1); c.fillRect(C.fore - 4.4 * px, -C.r - 2.4 * px, 4.4 * px, 2 * C.r + 4.8 * px); c.fillRect(-C.back - 1.6 * px, -C.r - 3 * px, 3 * px, 2 * C.r + 6 * px); fill('plinth', 1); c.fillRect(-.75 * cu, -C.r - 3.4 * px, 1.5 * cu, 2 * C.r + 6.8 * px); fill('steel', 1); c.fillRect(-.24 * cu, -C.r - 4.4 * px, .48 * cu, 2 * C.r + 8.8 * px)
     c.restore()
-    fill('trim', 1); face([[C.x - 2.5 * cu, C.y + .5 * cu, zc], [C.x + 2.9 * cu, C.y + .5 * cu, zc], [C.x + .95 * cu, C.y + C.pivot + .5 * cu, zc], [C.x - .95 * cu, C.y + C.pivot + .5 * cu, zc]]) }
+    fill('trim', 1); face([[C.x - 2.5 * cu, top, zc], [C.x + 2.9 * cu, top, zc], [C.x + .95 * cu, C.y + C.pivot + .95 * cu, zc], [C.x - .95 * cu, C.y + C.pivot + .95 * cu, zc]]) }
   const g = U * .085, rows = PRICE.length + p.over + p.under
   for (let r = 0; r < rows; r++) for (let col = 0; col < COLS + 2 * p.side; col++) {
     const lit = PRICE[r - p.over]?.[col - p.side] === '#'

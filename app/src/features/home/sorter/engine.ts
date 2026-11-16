@@ -45,7 +45,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   const instances = new Float32Array(MAX * LETTER_FLOATS), fxData = new Float32Array(700 * FX_FLOATS), glowData = new Float32Array(64 * FX_FLOATS)
   // Quality, chosen for the device and lowered if frames come slowly: the canvas's pixel ratio, the shadow map, the size
   // of the smoke's buffer against the page, how many billows may be in the air, how much of the burst's mail is thrown.
-  const LEVELS = [{ dpr: 1, shadow: 512, smoke: .25, puffs: 40, mail: .45 }, { dpr: 1.5, shadow: 1024, smoke: .3, puffs: 64, mail: .62 }, { dpr: 2, shadow: 1024, smoke: .4, puffs: 110, mail: .8 }, { dpr: 2, shadow: 2048, smoke: .5, puffs: 240, mail: 1 }]
+  const LEVELS = [{ dpr: 1, shadow: 512, smoke: .25, puffs: 40, mail: .45 }, { dpr: 1.5, shadow: 1024, smoke: .3, puffs: 64, mail: .62 }, { dpr: 2, shadow: 1024, smoke: .4, puffs: 110, mail: .8 }, { dpr: 2, shadow: 4096, smoke: .5, puffs: 240, mail: 1 }]
   const cores = navigator.hardwareConcurrency || 4, memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 8
   let quality = options.plan.phone || matchMedia('(pointer: coarse)').matches ? (cores <= 4 || memory <= 4 ? 1 : 2) : cores <= 4 ? 2 : 3, pace = 16, strikes = 0
   // The ladder goes back up too: frames on time for a while, and the level it was built for is tried again. A climb
@@ -70,10 +70,11 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   let sendIn = 2.4, recoil = 0, cool = 0, volley = 0, volleyIn = 0
   // Where nothing may come to rest (it is carried off): round each laser, and the cannon.
   let keepClear: { x: number; z: number; y: number; r: number }[] = [], base = 1
+  const fading: number[] = []
   // What is written on the machine is the page's, over the canvas: where smoke hangs in front of it, it is veiled.
   // Each zone is a rectangle on the front (centre, half size); `cover` is how much smoke is over it now.
   let zones: number[][] = []
-  const cover = new Float32Array(8), veil = new Float32Array(8).fill(1), veilSent = new Float32Array(8).fill(1)
+  const through = new Float32Array(40), veil = new Float32Array(8).fill(1), veilSent = new Float32Array(8).fill(1), SAMPLE = [0, 0, -.7, -.5, .7, -.5, -.7, .5, .7, .5]
   // The hatch after the burst: thrown back, hanging by one hinge.
   let hatchHang = 0
   // The lasers, left and right: where each points (an angle on the page, from due right), where it means to, how long it holds that, and the beams being fired.
@@ -275,6 +276,12 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       if (s.t < inBore) { const at = s.y0 + s.az * s.t; P[o] = c.pivot[0] + at * c.ce; P[o + 1] = c.pivot[1] + at * c.se }
       else { const dx = (s.t - inBore) * s.az * c.ce, slope = c.se / c.ce - 2 * s.x * dx; P[o] = mx + dx; P[o + 1] = my + c.se / c.ce * dx - s.x * dx * dx; a = Math.atan(slope) }
       P[o + 2] = c.pivot[2]; setQuat(i, 0, 0, 1, a)
+      // (Smoke at the muzzle as the letter clears it.)
+      if (!s.turn && s.t >= inBore) {
+        s.turn = 1
+        jet(mx, my, c.pivot[2], c.ce, c.se, 300, quality > 1 ? 6 : 4, 1.4, .25)
+        if (room()) for (let k = 0; k < 3; k++) emit(mx + c.ce * 6 * px, my + c.se * 6 * px, c.pivot[2], (c.ce * 60 + rnd(-30, 30)) * px, (c.se * 60 + rnd(0, 40)) * px, 0, .25, rnd(5, 7) * px, rnd(18, 28) * px, rnd(.9, 1.4), .36, 0, 2.4, 22 * px)
+  }
       if (P[o] + DX * P[o + 2] > p.W - p.ox + C.shot.w || P[o + 1] + DY * P[o + 2] < -p.floor) { scripts.delete(i); L.state[i] = FREE }
     } else if (s.stage === 21) {
       // In the air; that side's laser follows it, and where the toss ends it fires.
@@ -383,8 +390,10 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     const o = i * 3
     B.state[i] = ASLEEP; B.still[i] = 0; B.vel.fill(0, o, o + 3); B.ang.fill(0, o, o + 3)
     if (!B.thin) return
-    // The floor under a sleeping letter is now that letter: the next one rests on it.
+    // The floor under a sleeping letter is now that letter: the next one rests on it. (One that could not be laid flat,
+    // on its edge or propped up, dwindles away where it stands.)
     matrix(B.quat, i * 4)
+    if (Math.abs(R[5]) < .8) { fading.push(i); return }
     for (let a = -1; a <= 1; a += .4) for (let b = -1; b <= 1; b += .5) {
       const lx = a * B.half[o], ly = b * B.half[o + 1], c = cell(B.pos[o] + R[0] * lx + R[1] * ly, B.pos[o + 2] + R[6] * lx + R[7] * ly), y = B.pos[o + 1] + R[3] * lx + R[4] * ly + 1.5
       if (c >= 0 && heights[c] > VOID && y > heights[c] && y < heights[c] + 30) heights[c] = y
@@ -459,15 +468,13 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     // Its arc: off along the bore, and by the page's edge a little below where it left.
     scripts.set(i, { stage: 31, t: 0, lane: 8, x0: 0, y0: C.fore - C.shot.w * .52, ax: 0, ay: 0, az: (p.phone ? 560 : 780) * px, turn: 0, data: data[i], x: (c.se / c.ce + .1) / Math.max(60, range) })
     recoil = 1
-    jet(mx, my, c.pivot[2], c.ce, c.se, 300, quality > 1 ? 6 : 4, 1.4, .25)
-    if (room()) for (let k = 0; k < 3; k++) emit(mx + c.ce * 6 * px, my + c.se * 6 * px, c.pivot[2], (c.ce * 60 + rnd(-30, 30)) * px, (c.se * 60 + rnd(0, 40)) * px, 0, .25, rnd(5, 7) * px, rnd(18, 28) * px, rnd(.9, 1.4), .36, 0, 2.4, 22 * px)
   }
 
   // ── The burst ──
   function boom() {
     hatchHang = 1; hatchV = 14
     // (Nothing comes to rest over the hole in the roof, or through the flaps round it.)
-    keepClear.length = base; keepClear.push({ x: m.hole.x, z: m.hole.z, y: p.yTop, r: m.hole.r })
+    keepClear.length = base; keepClear.push({ x: m.hole.x, z: m.hole.z, y: p.yTop, r: m.hole.r }, { x: m.hatchHinge[0], z: m.hatchHinge[2] - 4 * px, y: p.yTop, r: p.Xw * .14 })
     setPhase('boom'); flash = 1; needleV = -9; bend = 1; boomAt = time; smokeLeft = 5.6; volley = 3; volleyIn = .1; leaks.length = 0; ventFor[0] = ventFor[1] = 0
     const cx = 0, cy = (p.yCav + p.yFas) / 2
     resetHeights()
@@ -636,6 +643,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       smoulder(dt)
     }
     flash = Math.max(0, flash - dt * 4.2)
+    for (let k = fading.length - 1; k >= 0; k--) { const i = fading[k]; scale[i] -= dt * 3.2; if (scale[i] <= 0 || L.state[i] !== ASLEEP) { if (L.state[i] === ASLEEP) L.state[i] = FREE; fading.splice(k, 1) } }
     if (!running) { hatchV += (((hatchHang ? 2.3 : 0) - hatch) * (hatchHang ? 46 : 90) - hatchV * (hatchHang ? 3.4 : 14)) * dt; hatch += hatchV * dt; if (hatch < 0) { hatch = 0; hatchV = 0 } if (Math.abs(hatchV) < .004 && Math.abs((hatchHang ? 2.3 : 0) - hatch) < .002) hatchV = 0 }
     // The cannon sends as the machine sorts, oftener as the pace climbs (a capsule comes up the outbound tube and
     // into the breech, and is fired off the page as a letter); as the machine bursts it gets off a last volley.
@@ -753,7 +761,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     {
       const k = 1 / (62 * px), t1 = time * .42, t2 = time * .31, amp = 34 * px
       let live = 0
-      cover.fill(0)
+      through.fill(1)
       for (let n = Math.max(0, S.head - SM); n < S.head; n++) {
         const i = n % SM
         if (S.age[i] >= S.life[i]) continue
@@ -766,11 +774,22 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
         S.vel[o] *= d; S.vel[o + 1] = S.vel[o + 1] * d + S.lift[i] * dt; S.vel[o + 2] *= d
         S.pos[o] += (S.vel[o] + cx * stir) * dt; S.pos[o + 1] += (S.vel[o + 1] + cy * stir) * dt; S.pos[o + 2] += S.vel[o + 2] * dt
         S.size[i] += S.grow[i] * dt * (1 - f * .55); S.rot[i] += S.spin[i] * dt; S.heat[i] *= Math.max(0, 1 - 3 * dt)
-        const sx = S.pos[o] + DX * S.pos[o + 2], sy = S.pos[o + 1] + DY * S.pos[o + 2], reach = S.size[i], thick = S.dens[i] * Math.min(1, f * 7) * Math.max(0, 1 - f) ** 1.2
-        for (let z = 0; z < zones.length; z++) { const zone = zones[z], dx = Math.max(0, Math.abs(sx - zone[0]) - zone[2]), dy = Math.max(0, Math.abs(sy - zone[1]) - zone[3]), d = Math.hypot(dx, dy); if (d < reach) cover[z] += thick * (1 - (d / reach) ** 2) }
+        // (How much of each piece of text this billow hides: its opacity as the renderer draws it, at five points of the text.)
+        const sx = S.pos[o] + DX * S.pos[o + 2], sy = S.pos[o + 1] + DY * S.pos[o + 2], reach = S.size[i], fade = (f < .1 ? f * 10 : 1) * (f < .45 ? 1 : 1 - ((f - .45) / .55) ** 2 * (3 - 2 * (f - .45) / .55)), thick = S.dens[i] * Math.max(0, fade)
+        if (thick > .02) for (let z = 0; z < zones.length; z++) {
+          const zone = zones[z]
+          if (Math.abs(sx - zone[0]) > zone[2] + reach || Math.abs(sy - zone[1]) > zone[3] + reach) continue
+          for (let k = 0; k < 5; k++) { const dx = sx - zone[0] - SAMPLE[k * 2] * zone[2], dy = sy - zone[1] - SAMPLE[k * 2 + 1] * zone[3], r2 = (dx * dx + dy * dy) / (reach * reach); if (r2 < 1) through[z * 5 + k] *= 1 - thick * (1 - r2) ** 2 }
+        }
       }
       S.live = live
-      for (let z = 0; z < zones.length; z++) { veil[z] += (clamp(1 - cover[z] * 1.9) - veil[z]) * Math.min(1, dt * 12); if (Math.abs(veil[z] - veilSent[z]) > .02 || (veil[z] > .995 && veilSent[z] < 1)) { veilSent[z] = veil[z] > .995 ? 1 : veil[z]; hooks.veil(z, veilSent[z]) } }
+      for (let z = 0; z < zones.length; z++) {
+        // (Clear is the text seen through the smoke, averaged over its five points; what the burst leaves over the
+        // readout thins on a clock of its own, so "Jammed" is back within a second and a half.)
+        let clear = (through[z * 5] + through[z * 5 + 1] + through[z * 5 + 2] + through[z * 5 + 3] + through[z * 5 + 4]) / 5
+        clear = Math.max(clear * clear, phase === 'run' || phase === 'overload' ? .7 : clamp((time - boomAt - .9) / 1.1) * .82)
+        veil[z] += (clear - veil[z]) * Math.min(1, dt * 12); if (Math.abs(veil[z] - veilSent[z]) > .02 || (veil[z] > .995 && veilSent[z] < 1)) { veilSent[z] = veil[z] > .995 ? 1 : veil[z]; hooks.veil(z, veilSent[z]) }
+      }
     }
     if (pointer.held >= 0) hold(dt)
     if (pointer.dirty) { pointer.dirty = false; if (pointer.held < 0) setHover(pointer.in && pointer.mouse ? pick(pointer.x, pointer.y) : pointer.hover) }
@@ -874,7 +893,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   const onLeave = () => { pointer.in = false; if (pointer.held < 0) setHover(-1) }
   canvas.addEventListener('pointermove', onMove); canvas.addEventListener('pointerdown', onDown); canvas.addEventListener('pointerup', onUp); canvas.addEventListener('pointercancel', onUp); canvas.addEventListener('pointerleave', onLeave)
 
-  const busy = () => phase !== 'rest' || fx.length > 0 || S.live > 0 || smokeLeft > 0 || pointer.held >= 0 || rainLeft > 0 || L.state.includes(DYN) || Dn.state.includes(DYN) || burning.includes(1) || beams.length > 0 || recoil > 0 || scripts.size > 0 || Math.abs(needleV) > .02 || hatchV !== 0 || veilSent.some(v => v < 1)
+  const busy = () => phase !== 'rest' || fx.length > 0 || S.live > 0 || smokeLeft > 0 || pointer.held >= 0 || rainLeft > 0 || L.state.includes(DYN) || Dn.state.includes(DYN) || burning.includes(1) || beams.length > 0 || recoil > 0 || scripts.size > 0 || Math.abs(needleV) > .02 || hatchV !== 0 || veilSent.some(v => v < 1) || fading.length > 0
   function frame(now: number) {
     raf = 0
     if (dead) return

@@ -241,13 +241,15 @@ export function buildMachine(p: Plan) {
   const outX = p.out - DX * p.zOver, zJ = p.zLip * .46, trunk = p.heads[1], portX = Xc + .2 * U + p.riser / 2
   const flange = (x: number, z: number) => { b.cyl([x, yc, 0], 2, z - 2.6 * px, z, r + 2 * px, M.steel, 16, 1); b.cyl([x, yc, 0], 2, z - 4.8 * px, z - 2.6 * px, r + 1 * px, M.steel, 14, 0) }
   b.cyl([outX, 0, p.zOver], 1, -p.lip * .5 - 1.4 * px, -p.lip * .5 + 1.4 * px, r + 1.2 * px, M.steel, 14, 3)
+  // (Where the outbound tube goes in it wears a square plate, bolted at its corners: in is not out.)
+  const inlet = (x: number, z: number) => { const w = r + 3.4 * px, top = yc + w; b.box(x - w, .4, z - 1.8 * px, x + w, top, z, M.steel); for (const bx of [x - w + 1.5 * px, x + w - 1.5 * px]) for (const by of [1.9 * px, top - 1.5 * px]) b.cyl([bx, by, 0], 2, z - 2.8 * px, z - 1.8 * px, .9 * px, M.trim, 6, 1); b.cyl([x, yc, 0], 2, z - 3.6 * px, z - 1.8 * px, r + 1 * px, M.trim, 14, 0) }
   if (trunk) {
-    flange(portX, trunk.z0)
+    inlet(portX, trunk.z0)
     for (const f of [.3, .72]) { const x = outX + (portX - outX) * f; b.box(x - .8 * U, 0, zJ - r - 1.5 * px, x + .8 * U, seat, zJ + r + 1.5 * px, M.plinth); b.box(x - .25 * U, seat, zJ - r - 1.5 * px, x + .25 * U, yc + r + 1.2 * px, zJ - r - .2 * px, M.steel); b.box(x - .25 * U, seat, zJ + r + .2 * px, x + .25 * U, yc + r + 1.2 * px, zJ + r + 1.5 * px, M.steel); b.box(x - .25 * U, yc + r, zJ - r - 1.5 * px, x + .25 * U, yc + r + 1.2 * px, zJ + r + 1.5 * px, M.steel, ALL) }
     shade(outX, p.zLip + 1, zJ - r); shade(portX, zJ + r, trunk.z0)
     b.quad([outX - .3 * yc, .12, zJ - r + .69 * yc], [portX - .3 * yc, .12, zJ - r + .69 * yc], [portX - .3 * yc, .12, zJ + r + .69 * yc], [outX - .3 * yc, .12, zJ + r + .69 * yc], M.slab, [0, -1, 0])
     flange(kink[0], chestZ - px); strap(kink[0], (trunk.z1 + chestZ) / 2 + 1.2 * U); shade(kink[0], trunk.z1, chestZ - px)
-  } else flange(outX, -3 * px)
+  } else inlet(outX, -3 * px)
   for (const x of sockets) collar(x, yLow, zt, 2.6 * px, r + 1.4 * px)
 
   // Two relief valves on the columns beside the works, of the kind a boiler has: a body on a flange, fed from the
@@ -302,7 +304,7 @@ export function buildMachine(p: Plan) {
   for (const x of [-Xw * .41, -Xw * .19]) b.cyl([0, yTop + 1.6 * px, D * .885], 0, x - 2.4 * px, x + 2.4 * px, 1.7 * px, M.steel, 8, 3)
   vents.forEach((v, i) => { idx.vents.push(b.part(`vent${i}`, [v[0], yTop + 6 * px, v[2]])); b.cyl([v[0], 0, v[2]], 1, yTop, yTop + 11 * px, 4.5 * px, M.steel, 14, 1); b.cyl([v[0], 0, v[2]], 1, yTop + 11 * px, yTop + 13 * px, 6 * px, M.trim, 14, 3, M.slot) })
   idx.hatch = b.part('hatch', [-Xw * .3, yTop + px, D * .76])
-  b.box(-Xw * .46, yTop, D * .64, -Xw * .14, yTop + 3.2 * px, D * .88, M.trim, ALL, M.body); b.box(-Xw * .33, yTop + 3.2 * px, D * .73, -Xw * .27, yTop + 5 * px, D * .79, M.steel, ALL)
+  b.box(-Xw * .46, yTop, D * .64, -Xw * .14, yTop + 3.2 * px, D * .88, M.steel, ALL, M.body); b.box(-Xw * .33, yTop + 3.2 * px, D * .73, -Xw * .27, yTop + 5 * px, D * .79, M.steel, ALL)
   b.quad([-Xw * .46, yTop - .05, D * .64], [-Xw * .14, yTop - .05, D * .64], [-Xw * .14, yTop - .05, D * .88], [-Xw * .46, yTop - .05, D * .88], M.dark, [0, -1, 0])
 
   // The cannon's barrel: a reinforced breech with the feed tube's coupling behind it, a chase that tapers a little, two
