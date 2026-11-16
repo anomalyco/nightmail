@@ -183,6 +183,25 @@ export function buildMachine(p: Plan) {
     for (let k = 0; k < 4; k++) b.cyl([p.tubes[first + k] + DX * (zt - p.zOver), 0, p.zOver], 1, -p.lip * .5 - 1.2 * px, -p.lip * .5 + 1.2 * px, r + 1 * px, M.steel, 12, 3)
   }
 
+  // The send cannon, the sending half of the machine: a pneumatic gun. What is to be sent comes up the page in the
+  // outbound tube, over the slab's lip and down into it, and up out of the floor (or the roof) through a feed tube
+  // into the breech; the gun fires it off the page as a letter. A base plate bolted down, two cheeks, and between
+  // them a cradle the barrel slides back through as it fires. The barrel and the cradle are parts of their own,
+  // built lying level and turned to the gun's elevation by their pose.
+  const C = p.cannon, cu = C.cs, cz = C.z, pivot: V3 = [C.x, C.y + C.pivot, cz], ce = Math.cos(C.el), se = Math.sin(C.el), cr = C.r, cheek = cr + 2.2 * px
+  const along = (a: number, c = 0): V3 => [pivot[0] + a * ce - c * se, pivot[1] + a * se + c * ce, cz]
+  const kink = along(-C.back - 1.6 * cu), baseTop = C.y + .5 * cu, x0 = kink[0] - 1.7 * cu, x1 = C.x + 3.4 * cu
+  b.box(x0, C.y, cz - cheek - 1.1 * cu, x1, baseTop, cz + cheek + 1.1 * cu, M.plinth)
+  for (const x of [x0 + .6 * cu, x1 - .6 * cu]) for (const z of [cz - cheek - .55 * cu, cz + cheek + .55 * cu]) b.cyl([x, 0, z], 1, baseTop, baseTop + 1.1 * px, 1.4 * px, M.steel, 8, 2)
+  for (const z of [cz - cheek - 2.4 * px, cz + cheek]) b.prism(ccw([[C.x - 2.5 * cu, baseTop], [C.x + 2.9 * cu, baseTop], [C.x + .95 * cu, pivot[1] + .5 * cu], [C.x - .95 * cu, pivot[1] + .5 * cu]]), z, z + 2.4 * px, M.trim, 'fks', M.steel)
+  // The feed tube: out of the floor through a collar, and round into the breech.
+  b.cyl([kink[0], 0, cz], 1, baseTop, baseTop + 2.2 * px, r + 1.8 * px, M.steel, 14, 2)
+  // The outbound tube's end: up the page's wall and over the lip (a collar there, as the others wear), a short run
+  // back along the slab, and down into it through a collar.
+  const outX = p.out - DX * p.zOver, zIn = p.zOver * .5
+  b.cyl([outX, 0, zIn], 1, 0, 2.2 * px, r + 1.8 * px, M.steel, 14, 2)
+  b.cyl([outX, 0, p.zOver], 1, -p.lip * .5 - 1.4 * px, -p.lip * .5 + 1.4 * px, r + 1.2 * px, M.steel, 14, 3)
+
   // Two relief valves on the columns beside the works, of the kind a boiler has: a body on a flange, fed from the
   // manifold below, a nozzle up, and a weighted lever that the pressure lifts. Under the right one, the recess a
   // service panel covers.
@@ -201,7 +220,7 @@ export function buildMachine(p: Plan) {
   b.mark(panel.x0 + px, panel.y0 + px, panel.x1 - px, panel.y0 + 2.2 * px, -.2, M.bay)
 
   // ── Parts ──
-  const idx = { glass: 0, tubes: 0, soot: 0, shards: 0, hole: 0, bent: 0, bentHeld: 0, needle: 0, turrets: [] as number[], scan: 0, hopper: 0, hatch: 0, panel: 0, beaconOn: 0, levers: [] as number[], vents: [] as number[], panes: [] as number[], cracks: [] as number[], lamps: [] as number[], flaps: [] as number[], rollers: [] as number[], caps: [] as number[], bolts: [] as number[] }
+  const idx = { glass: 0, tubes: 0, soot: 0, shards: 0, hole: 0, bent: 0, bentHeld: 0, barrel: 0, cradle: 0, needle: 0, turrets: [] as number[], scan: 0, hopper: 0, hatch: 0, panel: 0, beaconOn: 0, levers: [] as number[], vents: [] as number[], panes: [] as number[], cracks: [] as number[], lamps: [] as number[], flaps: [] as number[], rollers: [] as number[], caps: [] as number[], bolts: [] as number[] }
 
   idx.needle = b.part('needle', [ga.x, ga.y, 0])
   b.prism(ccw([[ga.x - 1.1 * px, ga.y - ga.r * .22], [ga.x + 1.1 * px, ga.y - ga.r * .22], [ga.x + .4 * px, ga.y + ga.r * .8], [ga.x - .4 * px, ga.y + ga.r * .8]]), -4.8 * px, -4.4 * px, M.ink, 'f')
@@ -234,6 +253,18 @@ export function buildMachine(p: Plan) {
   vents.forEach((v, i) => { idx.vents.push(b.part(`vent${i}`, [v[0], yTop + 6 * px, v[2]])); b.cyl([v[0], 0, v[2]], 1, yTop, yTop + 11 * px, 4.5 * px, M.steel, 14, 1); b.cyl([v[0], 0, v[2]], 1, yTop + 11 * px, yTop + 13 * px, 6 * px, M.trim, 14, 3, M.slot) })
   idx.hatch = b.part('hatch', [-Xw * .3, yTop + px, D * .76])
   b.box(-Xw * .46, yTop, D * .64, -Xw * .14, yTop + 1.8 * px, D * .88, M.trim, ALL); b.box(-Xw * .32, yTop + 1.8 * px, D * .74, -Xw * .28, yTop + 3.4 * px, D * .78, M.steel, ALL)
+
+  // The cannon's barrel: a reinforced breech with the feed tube's coupling behind it, a chase that tapers a little, two
+  // bands and a muzzle swell. And its cradle: a sleeve round the barrel, on the trunnions the cheeks carry.
+  idx.barrel = b.part('barrel', pivot)
+  { const [x, y] = pivot, ring = (a0: number, a1: number, r0: number, mat: number, r1 = r0, caps = 3) => b.cyl([0, y, cz], 0, x + a0, x + a1, r0, mat, 16, caps, mat, r1)
+    ring(-C.back, -C.back + .3 * (C.back + C.fore), cr + 1.5 * px, M.trim); ring(-C.back + .3 * (C.back + C.fore), C.fore, cr + .6 * px, M.trim, cr - .3 * px)
+    ring(-C.back - 1.6 * px, -C.back + 1.4 * px, cr + 3 * px, M.steel); ring(-C.back - 4.2 * px, -C.back - 1.6 * px, r + 2.4 * px, M.steel)
+    for (const a of [-C.back + .3 * (C.back + C.fore), C.fore * .56]) ring(a - 1.1 * px, a + 1.1 * px, cr + 2.6 * px, M.steel)
+    ring(C.fore - 4.4 * px, C.fore, cr + 2.4 * px, M.steel); b.cyl([0, y, cz], 0, x + C.fore, x + C.fore + .2, C.bore, M.slot, 16, 2, M.slot); ring(C.fore - 6 * px, C.fore - 4.4 * px, cr + 1.2 * px, M.steel, cr + 2.4 * px, 0) }
+  idx.cradle = b.part('cradle', pivot)
+  b.cyl([0, pivot[1], cz], 0, pivot[0] - .75 * cu, pivot[0] + .75 * cu, cr + 3.4 * px, M.plinth, 16, 3, M.plinth)
+  b.cyl([pivot[0], pivot[1], 0], 2, cz - cheek - 4.6 * px, cz + cheek + 4.6 * px, .36 * cu, M.steel, 12, 3)
 
   // The valves' levers, hinged on the body's centre, and the service panel on its four screws.
   for (const v of valves) {
@@ -325,6 +356,11 @@ export function buildMachine(p: Plan) {
       lines.push([[[x, yMan + 2 * r, zt], [x, yLow - 2 * r, zt]], [[leg.x, yc, p.heads[0].z0 + 2 * r + 2], ...b.tube([[leg.x, yc, p.heads[0].z0 - 4 * px], [leg.x, yc, p.zOver], [leg.x, drop, p.zOver]], r, M.tube, 12, r * 3)]])
     } else lines.push([[[x, yMan + 2 * r, zt], ...b.tube([[x, yMan, zt], [x, yc, zt], [x + DX * (zt - p.zOver), yc, p.zOver], [x + DX * (zt - p.zOver), drop, p.zOver]], r, M.tube, 10, r * 3)]])
   })
+  // The outbound tube, a ninth: up the wall under the slab and into the lip; and its last length, the feed into the
+  // breech. Its capsules go up it.
+  const up = b.tube([[outX, drop, p.zOver], [outX, yc, p.zOver], [outX, yc, zIn], [outX, -2 * r, zIn]], r, M.tube, 12, r * 3)
+  const feed = b.tube([[kink[0], baseTop, cz], kink, along(-C.back + 2 * px)], r, M.tube, 12, r * 1.5)
+  lines.push([[...up, [outX, -4 * r, zIn]], [[kink[0], C.y - 2 * r, cz], ...feed, along(-C.back + 3 * r)]])
   idx.bent = b.part('bent', [p.tubes[bentTube], p.fan.length ? bentY : yWall, zt], true)
   if (p.fan.length) b.tube([[p.tubes[bentTube], yMan - 3 * px, zt], [p.tubes[bentTube], bentY, zt]], r, M.tube, 12)
   // The lengths of bracket that go with it.
@@ -332,6 +368,6 @@ export function buildMachine(p: Plan) {
   if (p.fan.length) for (const y of bracketY) if (y > bentY) bracket(p.tubes[bentTube] - pitch / 2, p.tubes[bentTube] + pitch / 2, y)
 
   const data = b.finish()
-  return { data, parts: b.parts, idx, wall, lines, rollerLane, rollerHome, hinge, swing, rr, yR, rideY, scanY, z0, z1, turrets, ejects, beacon, vents, valves, panel, hatchHinge: [-Xw * .3, yTop, D * .88] as V3, crackAt, ventFront: [ventX, ga.y, -3 * px] as V3, hopperTop: yTop + hh, hopperWide: ht, px }
+  return { data, parts: b.parts, idx, wall, lines, rollerLane, rollerHome, hinge, swing, rr, yR, rideY, scanY, z0, z1, turrets, ejects, beacon, vents, valves, panel, cannon: { pivot, ce, se }, hatchHinge: [-Xw * .3, yTop, D * .88] as V3, crackAt, ventFront: [ventX, ga.y, -3 * px] as V3, hopperTop: yTop + hh, hopperWide: ht, px }
 }
 const phone = (p: Plan) => p.phone

@@ -40,7 +40,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   let p = options.plan, over = options.over, dark = options.dark, pool = options.letters, cursor = Math.floor(Math.random() * pool.length)
   let m!: Machine, parts!: Part[], px = 1, G = 1500, oyc = 0
   const L = bodies(MAX, true), kind = new Uint8Array(MAX), data = new Int32Array(MAX), seed = new Float32Array(MAX), burn = new Float32Array(MAX), burning = new Uint8Array(MAX), delay = new Float32Array(MAX), from = new Float32Array(MAX * 7)
-  const scripts = new Map<number, Script>()
+  const scripts = new Map<number, Script>(), scale = new Float32Array(MAX).fill(1)
   let Dn = bodies(0, false), debrisPart: number[] = [], debrisHome: V3[] = [], selfPosed = new Set<number>(), boltBody = 0, hatchBody = 0, panelBody = 0
   const instances = new Float32Array(MAX * LETTER_FLOATS), fxData = new Float32Array(700 * FX_FLOATS), glowData = new Float32Array(64 * FX_FLOATS)
   // Quality, chosen for the device and lowered if frames come slowly: the canvas's pixel ratio, the shadow map, the size
@@ -60,7 +60,12 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
 
   let phase: Phase = 'boot', clock = 0, runT = 0, heat = 0, speed = 1, feed = 1, spawnIn = .3, sorted = 0, burnt = 0, flash = 0, needle = 0, needleV = 0, time = 0, boomAt = -100
   let scanning = -1, spawned = 0, sparkIn = 0, ejectSide = 0, rainLeft = 0, bend = 0, ventIn = [1.2, 2], ventFor = [0, 0], popIn = 1, hatch = 0, hatchV = 0, smokeLeft = 0, panelOff = false
-  const lever = [0, 0], jetIn = [0, 0, 0, 0, 0], leaks: V3[] = []
+  const lever = [0, 0], jetIn = [0, 0, 0, 0, 0, 0], leaks: V3[] = []
+  // The send cannon: when the next capsule sets off for it, its recoil (1 as it fires, dying away), how long before
+  // it will fire for a click again, and what is left of its last volley.
+  let sendIn = 2.4, recoil = 0, cool = 0, volley = 0, volleyIn = 0
+  // Where nothing may come to rest (it is carried off): round each laser, and the cannon.
+  let keepClear: { x: number; z: number; y: number; r: number }[] = []
   // The lasers, left and right: where each points (an angle on the page, from due right), where it means to, how long it holds that, and the beams being fired.
   const turretAngle = [2.7, .45], turretAim = [2.7, .45], aimHold = [0, 0], beams: { id: number; k: number; until: number }[] = []
   const queue: number[] = [], QUEUE = 5
@@ -94,10 +99,13 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     })
     // The cabinet; what stands out in front of it either side of the frame (tubes, blocks, brackets); on a wide page
     // the headers and the risers.
-    const reach = p.heads.length ? p.riser + .2 * p.U : 0
+    const reach = p.heads.length ? p.riser + .2 * p.U : 0, C = p.cannon
     solids = [{ x0: -p.Xc, x1: p.Xc, z0: 0, z1: p.D, y: p.yTop - 14 }, { x0: -p.Xc - reach, x1: -p.Xw, z0: p.zProud, z1: 0, y: p.ySlot }, { x0: p.Xw, x1: p.Xc + reach, z0: p.zProud, z1: 0, y: p.ySlot },
       ...p.heads.map(h => ({ x0: h.x0, x1: h.x1, z0: h.z0, z1: h.z1, y: h.h - 5 * px })),
-      ...(p.heads.length ? [-1, 1].map(side => ({ x0: side < 0 ? -p.Xc - reach : p.Xc + .2 * p.U, x1: side < 0 ? -p.Xc - .2 * p.U : p.Xc + reach, z0: p.zProud, z1: p.zProud + 3 * p.U, y: p.yWall + 1.7 * p.V - 5 * px })) : [])]
+      ...(p.heads.length ? [-1, 1].map(side => ({ x0: side < 0 ? -p.Xc - reach : p.Xc + .2 * p.U, x1: side < 0 ? -p.Xc - .2 * p.U : p.Xc + reach, z0: p.zProud, z1: p.zProud + 3 * p.U, y: p.yWall + 1.7 * p.V - 5 * px })) : []),
+      ...(p.phone ? [] : [{ x0: C.x - C.back, x1: C.x + 3 * C.cs, z0: C.z - C.r - 3 * px, z1: C.z + C.r + 3 * px, y: C.y + C.pivot + C.r }])]
+    keepClear = [...m.turrets.map(t => ({ x: t[0], z: t[2], y: p.yTop, r: 10 * px })), { x: C.x - C.cs, z: C.z, y: C.y, r: C.back + 2 * C.cs }]
+    recoil = 0; sendIn = 2.4; volley = 0
     L.state.fill(FREE); scripts.clear(); fx = []; S.head = S.live = 0; S.life.fill(0); resetHeights(true); queue.length = 0; spawned = 0; bend = 0; calm()
     for (const cap of caps) cap.on = false
     for (const index of m.idx.caps) parts[index].on = false
@@ -129,6 +137,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       heights[iz * GW + ix] = x > -p.Xc && x < p.Xc && z > 0 && z < p.D ? (hopper && Math.abs(x) < ht && Math.abs(z - p.zL) < hd ? p.yTop + hh : p.yTop)
         : p.heads.length && Math.abs(x) > p.Xc + .2 * p.U && Math.abs(x) < p.Xc + .2 * p.U + p.riser && z > p.zProud && z < p.zProud + 3 * p.U ? p.yWall + 1.7 * p.V
         : p.heads.some(h => x > h.x0 && x < h.x1 && z > h.z0 && z < h.z1) ? p.heads[0].h
+        : !p.phone && x > p.cannon.x - p.cannon.back - 3.3 * p.cannon.cs && x < p.cannon.x + 3.4 * p.cannon.cs && Math.abs(z - p.cannon.z) < p.cannon.r + 1.4 * p.cannon.cs ? .5 * p.cannon.cs
         : z > p.zLip + 22 * px && z < p.zProud && p.fan.some(leg => Math.abs(x - leg.x) < p.tubeR + 2) ? yc
         : Math.abs(x) < p.slabX && z > p.zLip + 22 * px && z < p.zBack ? 0 : VOID
     }
@@ -147,7 +156,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     L.pos[i * 3] = x; L.pos[i * 3 + 1] = y; L.pos[i * 3 + 2] = z
     L.quat.set([0, 0, 0, 1], i * 4); L.vel.fill(0, i * 3, i * 3 + 3); L.ang.fill(0, i * 3, i * 3 + 3)
     L.half[i * 3] = p.lw / 2; L.half[i * 3 + 1] = p.lh / 2; L.half[i * 3 + 2] = .7
-    L.still[i] = 0; burn[i] = 0; burning[i] = 0; seed[i] = Math.random()
+    L.still[i] = 0; burn[i] = 0; burning[i] = 0; seed[i] = Math.random(); scale[i] = 1
   }
   function nextLetter(i: number) { cursor = (cursor + 1223) % pool.length; data[i] = cursor; kind[i] = pool[cursor].scam ? 1 : 0 }
   function spawn() {
@@ -240,6 +249,15 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
         s.ax = p.phone ? from[0] + side * 14 * px : side * (p.Xc + 118 * px); s.ay = p.phone ? p.yTop + 122 * px : p.yTop - 44 * px; s.az = 104 * px
         jet(from[0], from[1], p.zL, side * .3, .95, 120, 3)
       }
+    } else if (s.stage === 31) {
+      // Sent: along the bore, out of the muzzle, and off the page's right edge in an arc, a little smoke behind it.
+      const c = m.cannon, C = p.cannon, mx = c.pivot[0] + C.fore * c.ce, my = c.pivot[1] + C.fore * c.se, inBore = (C.fore - s.y0) / s.az
+      let a = C.el
+      if (s.t < inBore) { const at = s.y0 + s.az * s.t; P[o] = c.pivot[0] + at * c.ce; P[o + 1] = c.pivot[1] + at * c.se }
+      else { const dx = (s.t - inBore) * s.az * c.ce, slope = c.se / c.ce - 2 * s.x * dx; P[o] = mx + dx; P[o + 1] = my + c.se / c.ce * dx - s.x * dx * dx; a = Math.atan(slope) }
+      P[o + 2] = c.pivot[2]; setQuat(i, 0, 0, 1, a)
+      if (s.t > inBore && s.t < inBore + .3) { jetIn[5] -= dt * 34; while (jetIn[5] < 0) { jetIn[5] += 1; if (room()) emit(P[o] - Math.cos(a) * C.shot.w * .5, P[o + 1] - Math.sin(a) * C.shot.w * .5, P[o + 2], rnd(-14, 14) * px, rnd(-6, 22) * px, 0, .15, rnd(2.4, 3.4) * px, rnd(10, 16) * px, rnd(.35, .6), .26, 0, 2, 10 * px) } }
+      if (P[o] + DX * P[o + 2] > p.W - p.ox + C.shot.w || P[o + 1] + DY * P[o + 2] < -p.floor) { scripts.delete(i); L.state[i] = FREE }
     } else if (s.stage === 21) {
       // In the air; that side's laser follows it, and where the toss ends it fires.
       const T = p.phone ? .42 : .72, u = clamp(s.t / T), at = m.turrets[s.lane]
@@ -327,8 +345,8 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     if (touching && pos[o + 1] > p.yTop - 2 && Math.abs(pos[o]) < p.Xc && pos[o + 2] > -2 && pos[o + 2] < p.D) {
       const reach = Math.hypot(hx, hy)
       if (pos[o + 2] < reach + 2 * px) { vel[o + 2] = Math.min(vel[o + 2], -190 * px); touching = 0; pos[o + 1] += cy }
-      else for (const t of m.turrets) { const dx = pos[o] - t[0], dz = pos[o + 2] - t[2], d = Math.hypot(dx, dz); if (d < reach + 10 * px) { const k = 170 * px / (d || 1); vel[o] = dx * k || 170 * px; vel[o + 2] = dz * k; touching = 0; pos[o + 1] += cy; break } }
     }
+    if (touching) for (const zone of keepClear) if (pos[o + 1] > zone.y - 2 && pos[o + 1] < zone.y + 70 * px) { const dx = pos[o] - zone.x, dz = pos[o + 2] - zone.z, d = Math.hypot(dx, dz); if (d < Math.hypot(hx, hy) + zone.r) { const k = 170 * px / (d || 1); vel[o] = dx * k || 170 * px; vel[o + 2] = dz * k; touching = 0; pos[o + 1] += cy; break } }
     if (touching) {
       pos[o] += cx / touching; pos[o + 1] += cy / touching; pos[o + 2] += cz / touching
       const slow = Math.hypot(vel[o], vel[o + 1], vel[o + 2]) < 26 * px && Math.hypot(ang[o], ang[o + 1], ang[o + 2]) < 1.1
@@ -366,8 +384,8 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   /** Room in the air for more: what is only atmosphere waits its turn. */
   const room = () => S.live < LEVELS[quality].puffs
   /** Steam let out under pressure: fast and narrow at the nozzle, slowing and swelling into a cloud. */
-  function jet(x: number, y: number, z: number, dx: number, dy: number, power: number, n = 1, wide = 1) {
-    if (room()) for (let k = 0; k < n; k++) { const v = rnd(.55, 1) * power * px, a = rnd(-.16, .16), c = Math.cos(a), sn = Math.sin(a); emit(x, y, z, (dx * c - dy * sn) * v, (dx * sn + dy * c) * v, rnd(-12, 12) * px, 0, rnd(3.6, 5) * wide * px, rnd(26, 38) * wide * px, rnd(.7, 1.1), .46, 0, 3.2, 26 * px) }
+  function jet(x: number, y: number, z: number, dx: number, dy: number, power: number, n = 1, wide = 1, smoke = 0) {
+    if (room()) for (let k = 0; k < n; k++) { const v = rnd(.55, 1) * power * px, a = rnd(-.16, .16), c = Math.cos(a), sn = Math.sin(a); emit(x, y, z, (dx * c - dy * sn) * v, (dx * sn + dy * c) * v, rnd(-12, 12) * px, smoke, rnd(3.6, 5) * wide * px, rnd(26, 38) * wide * px, rnd(.7, 1.1), .46, 0, 3.2, 26 * px) }
   }
   /** What rises by itself from something hot: `kind` 0 steam, 1 smoke. */
   function wisp(x: number, y: number, z: number, kind: number, size = 4, dens = .42) { if (room()) emit(x + rnd(-1, 1) * size * px, y, z, rnd(-8, 8) * px, rnd(22, 46) * px, 0, kind, Math.max(5, rnd(.9, 1.3) * size) * px, rnd(12, 20) * px, rnd(1.2, 2), dens, 0, .8, 18 * px) }
@@ -403,15 +421,34 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     if (cap) { cap.on = true; cap.tube = tube; cap.run = 0; cap.s = 0; cap.wait = 0 }
   }
 
+  // ── The send cannon ──
+  /** A capsule sets off for the breech: from down the page, or (in a hurry) from just under the gun. */
+  function capsuleOut(quick: boolean) {
+    const cap = caps.find(c => !c.on)
+    if (cap) { cap.on = true; cap.tube = 8; cap.run = quick ? 1 : 0; cap.s = 0; cap.wait = 0 } else cannonFire()
+  }
+  /** What reached the breech goes: a letter along the bore and off the page, the barrel back in its cradle, smoke at the muzzle. */
+  function cannonFire() {
+    if (reduced) return
+    const c = m.cannon, C = p.cannon, i = alloc(), mx = c.pivot[0] + C.fore * c.ce, my = c.pivot[1] + C.fore * c.se, range = p.W - p.ox + C.shot.w * 1.2 - (mx + DX * c.pivot[2])
+    for (let tries = 0; tries < 60; tries++) { nextLetter(i); if (!pool[data[i]].scam) break }
+    place(i, c.pivot[0], c.pivot[1], c.pivot[2]); L.state[i] = SCRIPT; scale[i] = .8; kind[i] = 0
+    // Its arc: off along the bore, and by the page's edge a little below where it left.
+    scripts.set(i, { stage: 31, t: 0, lane: 8, x0: 0, y0: -C.back + C.shot.w * .56, ax: 0, ay: 0, az: (p.phone ? 560 : 780) * px, turn: 0, data: data[i], x: (c.se / c.ce + .1) / Math.max(60, range) })
+    recoil = 1
+    jet(mx, my, c.pivot[2], c.ce, c.se, 300, quality > 1 ? 6 : 4, 1.4, .25)
+    if (room()) for (let k = 0; k < 3; k++) emit(mx + c.ce * 6 * px, my + c.se * 6 * px, c.pivot[2], (c.ce * 60 + rnd(-30, 30)) * px, (c.se * 60 + rnd(0, 40)) * px, 0, .25, rnd(5, 7) * px, rnd(18, 28) * px, rnd(.9, 1.4), .36, 0, 2.4, 22 * px)
+  }
+
   // ── The burst ──
   function boom() {
-    setPhase('boom'); flash = 1; needleV = -9; bend = 1; boomAt = time; smokeLeft = 5.6; leaks.length = 0; ventFor[0] = ventFor[1] = 0
+    setPhase('boom'); flash = 1; needleV = -9; bend = 1; boomAt = time; smokeLeft = 5.6; volley = 3; volleyIn = .1; leaks.length = 0; ventFor[0] = ventFor[1] = 0
     const cx = 0, cy = (p.yCav + p.yFas) / 2
     resetHeights()
     // Light, as an effect and only here: a hot core for two frames. The page behind is never lightened.
     add({ x: cx, y: cy, z: -10, max: .075, size: 88 * px, ...rgb(colour.spark), a: 1, shape: 2, glow: true })
     // Every letter in the works, and the hundreds the machine had swallowed, out through the front and the roof.
-    for (const [i] of scripts) { L.pos[i * 3 + 2] = -6 * px; if (L.pos[i * 3 + 1] > p.yFas) L.pos[i * 3 + 1] = p.yTop + p.lh }
+    for (const [i, s] of scripts) if (s.stage < 30) { L.pos[i * 3 + 2] = -6 * px; if (L.pos[i * 3 + 1] > p.yFas) L.pos[i * 3 + 1] = p.yTop + p.lh }
     // Each is thrown at a place: most onto the slab (heaped by the machine's sides, thinning out towards the slab's
     // ends, a strip along the front), some clean off it into the dark. Thrown a little long, for the air.
     const seen = Math.min(p.slabX - 24, p.W / 2 + 20), zA = p.zLip + 16 * px, zB = p.zBack - 16 * px
@@ -428,9 +465,9 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       const T = rnd(.75, 1.3), k = .46, far = k / (1 - Math.exp(-k * T))
       loose(i, (tx - L.pos[o]) * far, G * T / 2 * 1.06 - L.pos[o + 1] / T, (tz - L.pos[o + 2]) * far, 10)
     }
-    for (const [i] of [...scripts]) launchOne(i, L.pos[i * 3 + 1] > p.yFas)
+    for (const [i, s] of [...scripts]) if (s.stage < 30) launchOne(i, L.pos[i * 3 + 1] > p.yFas)
     let live = 0
-    for (let i = 0; i < MAX; i++) if (L.state[i] !== FREE) { live++; if (L.state[i] === ASLEEP) { wake(i); L.vel[i * 3] = rnd(-1, 1) * 380 * px; L.vel[i * 3 + 1] = rnd(300, 760) * px; L.vel[i * 3 + 2] = rnd(-160, 300) * px; L.ang[i * 3] = rnd(-8, 8); L.ang[i * 3 + 2] = rnd(-8, 8) } }
+    for (let i = 0; i < MAX; i++) if (L.state[i] !== FREE && scripts.get(i)?.stage !== 31) { live++; if (L.state[i] === ASLEEP) { wake(i); L.vel[i * 3] = rnd(-1, 1) * 380 * px; L.vel[i * 3 + 1] = rnd(300, 760) * px; L.vel[i * 3 + 2] = rnd(-160, 300) * px; L.ang[i * 3] = rnd(-8, 8); L.ang[i * 3 + 2] = rnd(-8, 8) } }
     for (; live < want; live++) {
       const i = alloc(), roof = Math.random() < .22; nextLetter(i)
       if (roof) place(i, rnd(-1, 1) * p.Xw * .7, p.yTop + rnd(4, 30) * px, rnd(.1, .9) * p.D)
@@ -477,7 +514,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     }
     debrisPart.forEach((_, i) => { Dn.state[i] = HOME; Dn.still[i] = -(.5 + i * .01) })
     for (let i = 0; i < SM; i++) if (S.age[i] < S.life[i]) S.life[i] = Math.min(S.life[i], S.age[i] + rnd(.3, .8))
-    calm(); resetHeights(true); pointer.held = -1; setHover(-1)
+    calm(); resetHeights(true); pointer.held = -1; setHover(-1); volley = 0; sendIn = 2.4
   }
 
   function setPhase(next: Phase) { phase = next; clock = 0; hooks.phase(next) }
@@ -573,6 +610,11 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       smoulder(dt)
     }
     flash = Math.max(0, flash - dt * 4.2)
+    // The cannon sends as the machine sorts, oftener as the pace climbs (a capsule comes up the outbound tube and
+    // into the breech, and is fired off the page as a letter); as the machine bursts it gets off a last volley.
+    if (running) { sendIn -= dt; if (sendIn <= 0) { capsuleOut(false); sendIn = phase === 'overload' ? .34 : 3.2 - 2.4 * Math.min(1, heat) } }
+    else if (volley > 0 && phase === 'boom') { volleyIn -= dt; if (volleyIn <= 0) { cannonFire(); volley--; volleyIn = .14 } }
+    cool = Math.max(0, cool - dt); recoil += (0 - recoil) * Math.min(1, dt * 6.5); if (recoil < .004) recoil = 0
 
     for (const [i, s] of scripts) script(i, s, dt, speed)
     if (rainLeft > 0) { const n = Math.min(rainLeft, Math.ceil(dt * 140)); rainLeft -= n; for (let k = 0; k < n; k++) { const i = alloc(); nextLetter(i); place(i, rnd(-.5, .5) * p.W * 1.1 - DX * 600, oyc + rnd(20, 500), rnd(-150, (oyc - 120) / DY)); setQuat(i, rnd(-1, 1), rnd(-1, 1), rnd(-1, 1), rnd(0, 6)); loose(i, rnd(-60, 60), -rnd(200, 500), rnd(-40, 40), 6) } }
@@ -621,7 +663,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     if ((phase === 'boom' && clock > 1.2) || (phase === 'rest' && time - boomAt < 5.2)) {
       const late = time - boomAt > 4.4
       let moving = 0
-      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (late) { const c = cell(L.pos[i * 3], L.pos[i * 3 + 2]), edge = L.pos[i * 3 + 1] > p.yTop - 2 && L.pos[i * 3 + 2] > -2 && Math.abs(L.pos[i * 3]) < p.Xc && (L.pos[i * 3 + 2] < p.lw * .7 || m.turrets.some(t => Math.hypot(L.pos[i * 3] - t[0], L.pos[i * 3 + 2] - t[2]) < p.lw * .62 + 10 * px)); if (c < 0 || heights[c] === VOID || edge || L.pos[i * 3 + 1] > heights[c] + 30 * px) L.state[i] = FREE; else sleep(L, i) } }
+      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (late) { const c = cell(L.pos[i * 3], L.pos[i * 3 + 2]), edge = L.pos[i * 3 + 1] > p.yTop - 2 && L.pos[i * 3 + 2] > -2 && Math.abs(L.pos[i * 3]) < p.Xc && (L.pos[i * 3 + 2] < p.lw * .7) || keepClear.some(zone => Math.abs(L.pos[i * 3 + 1] - zone.y) < 40 * px && Math.hypot(L.pos[i * 3] - zone.x, L.pos[i * 3 + 2] - zone.z) < p.lw * .62 + zone.r); if (c < 0 || heights[c] === VOID || edge || L.pos[i * 3 + 1] > heights[c] + 30 * px) L.state[i] = FREE; else sleep(L, i) } }
       for (let i = 0; i < Dn.cap; i++) if (Dn.state[i] === DYN && late) sleep(Dn, i)
       if (phase === 'boom' && moving <= 4) setPhase('rest')
     }
@@ -630,12 +672,12 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     // out of its wall, across the slab and over the lip.
     caps.forEach((cap, k) => {
       const part = parts[m.idx.caps[k]]
-      part.on = cap.on && cap.wait <= 0; part.clip = cap.run === 0 ? frontClip : undefined
+      part.on = cap.on && cap.wait <= 0; part.clip = cap.run === 0 && cap.tube < 8 ? frontClip : undefined
       if (!cap.on) return
       if (cap.wait > 0) { cap.wait -= dt * Math.sqrt(speed); return }
       cap.s += dt * 540 * px * Math.sqrt(speed)
       const line = m.lines[cap.tube][cap.run], s = runLength[cap.tube][cap.run]
-      if (cap.s >= s[s.length - 1]) { if (cap.run + 1 < m.lines[cap.tube].length) { cap.run++; cap.s = 0; cap.wait = .16 } else cap.on = false; part.on = false; return }
+      if (cap.s >= s[s.length - 1]) { if (cap.run + 1 < m.lines[cap.tube].length) { cap.run++; cap.s = 0; cap.wait = .16 } else { cap.on = false; if (cap.tube === 8) cannonFire() } part.on = false; return }
       let i = 1; while (s[i] < cap.s) i++
       const a = line[i - 1], b = line[i], u = (cap.s - s[i - 1]) / (s[i] - s[i - 1]), tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2], tl = Math.hypot(tx, ty, tz), angle = Math.acos(clamp(ty / tl, -1, 1)), al = Math.hypot(tz, tx) || 1, sn = Math.sin(angle / 2)
       pose(part.m, [0, 0, 0], [a[0] + tx * u, a[1] + ty * u, a[2] + tz * u], [tz / al * sn, 0, -tx / al * sn, Math.cos(angle / 2)])
@@ -660,6 +702,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       turretAngle[k] += (turretAim[k] - turretAngle[k]) * Math.min(1, dt * 10)
       pose(parts[m.idx.turrets[k]].m, m.turrets[k], m.turrets[k], aboutZ(turretAngle[k]))
     }
+    { const c = m.cannon, back = recoil * 8 * px; pose(parts[m.idx.barrel].m, c.pivot, [c.pivot[0] - c.ce * back, c.pivot[1] - c.se * back, c.pivot[2]], aboutZ(p.cannon.el)); pose(parts[m.idx.cradle].m, c.pivot, c.pivot, aboutZ(p.cannon.el)) }
     m.valves.forEach((v, k) => { const at = m.parts[m.idx.levers[k]].pivot; pose(parts[m.idx.levers[k]].m, at, at, aboutZ(v.side * lever[k])) })
     if (Dn.state[hatchBody] === FREE) pose(parts[m.idx.hatch].m, m.hatchHinge, m.hatchHinge, [Math.sin(hatch / 2), 0, 0, Math.cos(hatch / 2)])
     // Blown-off parts follow their bodies; at home they stand where they were built. The tube the burst bent stays bent.
@@ -710,7 +753,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       instances[o] = L.pos[i * 3]; instances[o + 1] = L.pos[i * 3 + 1]; instances[o + 2] = L.pos[i * 3 + 2]
       instances[o + 3] = L.quat[i * 4]; instances[o + 4] = L.quat[i * 4 + 1]; instances[o + 5] = L.quat[i * 4 + 2]; instances[o + 6] = L.quat[i * 4 + 3]
       const curl = burning[i] ? 1 - Math.min(1, burn[i]) * .3 : 1
-      instances[o + 7] = p.lw * shrink * curl; instances[o + 8] = p.lh * shrink * curl; instances[o + 9] = 1.4
+      instances[o + 7] = p.lw * shrink * curl * scale[i]; instances[o + 8] = p.lh * shrink * curl * scale[i]; instances[o + 9] = 1.4
       instances[o + 10] = seed[i]; instances[o + 11] = burn[i]; instances[o + 12] = kind[i]; instances[o + 13] = i === pointer.hover || i === pointer.held ? 1 : 0
       n++
     }
@@ -744,7 +787,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     let best = -1, depth = Infinity
     for (let i = 0; i < MAX; i++) {
       const state = L.state[i]
-      if (state === FREE || state === HOME || burning[i]) continue
+      if (state === FREE || state === HOME || burning[i] || (state === SCRIPT && scripts.get(i)!.stage >= 30)) continue
       const o = i * 3, x = L.pos[o], y = L.pos[o + 1], z = L.pos[o + 2]
       if (Math.abs(x + DX * z - wx) > p.lw || Math.abs(y + DY * z - wy) > p.lw) continue
       matrix(L.quat, i * 4)
@@ -798,7 +841,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   const onLeave = () => { pointer.in = false; if (pointer.held < 0) setHover(-1) }
   canvas.addEventListener('pointermove', onMove); canvas.addEventListener('pointerdown', onDown); canvas.addEventListener('pointerup', onUp); canvas.addEventListener('pointercancel', onUp); canvas.addEventListener('pointerleave', onLeave)
 
-  const busy = () => phase !== 'rest' || fx.length > 0 || S.live > 0 || smokeLeft > 0 || pointer.held >= 0 || rainLeft > 0 || L.state.includes(DYN) || Dn.state.includes(DYN) || burning.includes(1) || beams.length > 0 || Math.abs(needleV) > .02
+  const busy = () => phase !== 'rest' || fx.length > 0 || S.live > 0 || smokeLeft > 0 || pointer.held >= 0 || rainLeft > 0 || L.state.includes(DYN) || Dn.state.includes(DYN) || burning.includes(1) || beams.length > 0 || recoil > 0 || scripts.size > 0 || Math.abs(needleV) > .02
   function frame(now: number) {
     raf = 0
     if (dead) return
@@ -840,6 +883,8 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     /** The gauge: pressed while the machine runs it overloads it at once; pressed afterwards it puts it back together. */
     gauge() { if (reduced) return; if (phase === 'run' || phase === 'boot') { setPhase('overload'); heat = 1 } else rebuild(); kick() },
     rebuild() { rebuild(); kick() },
+    /** The cannon fires one for a click, if it is not still recovering from the last. */
+    send() { if (reduced || cool > 0 || phase === 'boot' || phase === 'rebuild') return false; cool = .8; capsuleOut(true); kick(); return true },
     /** The flood: a few hundred more letters out of the night, wherever the machine is in its day. */
     rain() { if (reduced) return; rainLeft += p.phone ? 140 : 280; kick() },
     get phase() { return phase },

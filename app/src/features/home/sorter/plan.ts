@@ -61,6 +61,20 @@ export function plan(W: number, H: number) {
   /** Where each tube goes over the lip, across the page from its left edge. */
   const drops = tubes.map((x, t) => ox + (phone ? x + DX * zt : fan[t].at))
   const slabX = phone ? W : Xc + clear + 4.3 * spread
+  // The send cannon: the sending half. On a wide page it stands on the slab to the right of the cabinet, behind the
+  // header; on a phone, on the roof at the back. `x, y, z` is where its base stands, `pivot` how high its barrel
+  // turns, `el` its elevation, `cs` its unit; the letter it fires is four fifths of a sorted one. What is sent comes
+  // back up the page in one more tube (`out`: where across the page, from its middle), into the slab under the
+  // machine, and up a ramp out of the floor (or the roof) into the breech.
+  const cs = phone ? .85 * U : 1.3 * U, el = .54, shot = { w: lw * .8, h: lh * .8 }, bore = shot.h / 2 + .2 * cs, cr = bore + .22 * cs, long = (phone ? 2.6 : 2.9) * shot.w, back = .31 * long
+  const cz = phone ? D * .74 : 15 * U, pivot = back * Math.sin(el) + cr * Math.cos(el) + 1.5 * cs
+  // (On a wide page it stands clear of the riser as it is seen.)
+  const cannon = { x: phone ? .7 * Xw : Xc + .2 * U + riser + 12 + 5.4 * cs - DX * cz, y: phone ? yTop : 0, z: cz, pivot, el, cs, shot, bore, r: cr, back, fore: long - back }
+  // (The outbound tube runs up the page behind the appliances that lean right and beside those that lean left;
+  // sorter-stations.tsx places them from the same numbers.)
+  const inner = 2 * (phone ? Math.min(...tubes.slice(4)) + DX * zt : Xc + clear), room = inner - 2 * (phone ? 20 : 74), widest = Math.min(446, room), lean = phone ? 0 : Math.min(46, Math.max(0, (room - widest) / 2)), boxDx = -DX * (phone ? 40 : 60)
+  let out = -widest / 2 + lean + boxDx / 2 + Math.min(408, room) - (phone ? 10 : 26)
+  if (!phone) for (const w of [446, 430, 420, 384]) { const edge = -widest / 2 - lean + boxDx / 2 + Math.min(w, room); if (Math.abs(out - edge) < 18) out = edge - 18 }
   // The renderer's canvas runs on this far below the hero, under the top of the next section: what the burst throws
   // past the slab falls on down the page and dwindles there, and is never cut off at the hero's edge.
   const ext = phone ? 300 : 400
@@ -71,7 +85,7 @@ export function plan(W: number, H: number) {
   const tight = phone ? COLS * U < 292 : (2 * Xc - 4.8 * U - ctaW) / 2 < 206
   const readout: Rect = phone ? { x: -Xw + U, y: yFas + (fascia - Math.min(48, fascia - 8)) / 2, w: Xw * 1.36, h: Math.min(48, fascia - 8) } : { x: -Xw + 2.2 * U, y: yFas + (fascia - 8.4 * V) / 2, w: 27.5 * U, h: 8.4 * V }
   const gauge = { x: Xw - (phone ? 4.4 : 4.2) * U, y: yFas + fascia / 2, r: Math.min(fascia * .36, phone ? 16 : 24) }
-  return { phone, tight, W, H, ext, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, zProud, riser, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, readout, gauge }
+  return { phone, tight, W, H, ext, cannon, out: Math.round(out), room, widest, lean, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, zProud, riser, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, readout, gauge }
 }
 
 /** A box on the machine's front, as the page places it: left and top in the scene, width and height. */

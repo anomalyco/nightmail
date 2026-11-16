@@ -53,6 +53,8 @@
 /* The gauge is drawn by the machine; this is its hit area and its focus ring. */
 .srt-gauge { position: absolute; z-index: 3; padding: 0; border: 0; border-radius: 50%; background: none; cursor: pointer; }
 .srt-gauge:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: 2px; }
+.srt-cannon { position: absolute; z-index: 3; padding: 0; border: 0; border-radius: 6px; background: none; cursor: pointer; }
+.srt-cannon:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: 2px; }
 
 .srt-lanes { margin: 0; padding: 0; list-style: none; }
 .srt-lanes li { position: absolute; z-index: 2; display: grid; place-items: center; color: var(--srt-text-2); font-family: var(--font-mono); font-size: clamp(9px, var(--srt-u) * 1.15, 11px); line-height: 1; letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; pointer-events: none; }

@@ -7,7 +7,7 @@ import { BaneWordmark } from '../../components/BaneLogo'
 import { useTheme } from '../../lib/theme'
 import { productName } from '../../../../api/src/brand'
 import { reducedMotion, type HomeProps } from '.'
-import { onFront, plan, type Plan, type Rect } from './sorter/plan'
+import { DX, DY, onFront, plan, type Plan, type Rect } from './sorter/plan'
 import { drawStill } from './sorter/still'
 import { toneVars } from './sorter/tones'
 import { COLS } from './sorter/price'
@@ -131,6 +131,9 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
           </div>
           <button type="button" className="srt-gauge" style={at({ x: p.gauge.x - p.gauge.r - 5, y: p.gauge.y - p.gauge.r - 5, w: 2 * p.gauge.r + 10, h: 2 * p.gauge.r + 10 })} aria-label={phase === 'rest' ? 'Put the sorter back together' : 'Pressure gauge'} title={phase === 'rest' ? 'Put it back together' : 'Pressure'} onClick={() => sorter.current?.gauge()} />
           <ol className="srt-lanes" aria-hidden="true">{p.lanes.map((x, i) => <li key={i} style={at({ x: x - .46 * p.P, y: p.ySlot + .14 * p.slot, w: .92 * p.P, h: .72 * p.slot })}>{p.phone ? LANE_CODES[i] : LANE_NAMES[i]}</li>)}</ol>
+          {/* The send cannon: press it and it fires one. */}
+          <button type="button" className="srt-cannon" style={(() => { const c = p.cannon, sx = DX * c.z, sy = DY * c.z, ce = Math.cos(c.el), se = Math.sin(c.el), x0 = c.x - c.back * ce - 2.4 * c.cs, x1 = c.x + c.fore * ce + c.r, top = c.y + c.pivot + c.fore * se + c.r
+            return { left: p.ox + x0 + sx - 4, top: p.oy - top - sy - 4, width: x1 - x0 + 8, height: top - c.y + 8 } })()} aria-label="Send cannon: fire a letter" title="Send one" onClick={() => sorter.current?.send()} />
           {!p.phone && <ol className="srt-lanes srt-mouths" aria-hidden="true">{p.drops.map((x, t) => <li key={t} data-side={t < 4 ? 'l' : 'r'} style={{ top: p.oy + p.front, height: p.lip, ...(t < 4 ? { left: x + p.tubeR + 7 } : { right: p.W - x + p.tubeR + 9 }) }}>{TUBE_NAMES[t]}</li>)}</ol>}
           {/* Under the price, as wide as the price: what it buys. */}
           <h1 className="srt-band" style={at({ x: price.x, y: p.yBand, w: price.w, h: p.band })} aria-label="$0.20 per 1,000 emails, sent or received via API.">
