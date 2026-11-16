@@ -89,9 +89,11 @@ export function plan(W: number, H: number) {
   const plate = phone ? 6 : 1.1 * U, fw = Math.min(-ctaW / 2 - plate - 1.5 * U + Xc - 2.4 * U, 20 * U), narrow = Math.max(70, Math.round(cta.w * .27))
   const facts: Rect[] = phone ? [{ x: cta.x, y: cta.y + cta.h + plate + 6, w: narrow, h: 28 }, { x: cta.x + narrow + 8, y: cta.y + cta.h + plate + 6, w: cta.w - narrow - 8, h: 28 }]
     : [{ x: -Xc + 2.4 * U, y: cta.y - plate, w: fw, h: cta.h + 2 * plate }, { x: Xc - 2.4 * U - fw, y: cta.y - plate, w: fw, h: cta.h + 2 * plate }]
+  // The tally: a counter in the right header's front, beside the last outlet (Logs): everything sorted is on record.
+  const tally = phone ? null : { x: fan[7].x - tubeR - 2 * U - 38, y: (headH - 14) / 2 + 1, w: 38, h: 14, z: zProud }
   const readout: Rect = phone ? { x: -Xw + U, y: yFas + (fascia - Math.min(48, fascia - 8)) / 2, w: Xw * 1.36, h: Math.min(48, fascia - 8) } : { x: -Xw + 2.2 * U, y: yFas + (fascia - 8.4 * V) / 2, w: 27.5 * U, h: 8.4 * V }
   const gauge = { x: Xw - (phone ? 4.4 : 4.2) * U, y: yFas + fascia / 2, r: Math.min(fascia * .36, phone ? 16 : 24) }
-  return { phone, tight, W, H, ext, cannon, out: Math.round(out), room, widest, lean, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, zProud, riser, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, plate, facts, readout, gauge }
+  return { phone, tight, W, H, ext, cannon, out: Math.round(out), room, widest, lean, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, zProud, riser, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, plate, facts, tally, readout, gauge }
 }
 
 /** A box on the machine's front, as the page places it: left and top in the scene, width and height. */

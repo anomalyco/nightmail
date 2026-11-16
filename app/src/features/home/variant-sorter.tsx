@@ -32,7 +32,7 @@ const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'Ar
 export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
   const dark = useTheme().theme === 'dark'
   const scene = useRef<HTMLElement>(null), still = useRef<HTMLCanvasElement>(null), gl = useRef<HTMLCanvasElement>(null), sorter = useRef<Sorter | null>(null)
-  const veiled = useRef<(HTMLElement | null)[]>([])
+  const veiled = useRef<(HTMLElement | null)[]>([]), tally = useRef<HTMLSpanElement>(null)
   const readout = useRef<HTMLDivElement>(null), cardBox = useRef<HTMLDivElement>(null), counts = useRef([0, 0]), shown = useRef<Letter | null>(null)
   const [p, setP] = useState<Plan | null>(null)
   const [reduced] = useState(reducedMotion)
@@ -52,7 +52,7 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
       else if (verdict === 'jam') { from.textContent = `${counts.current[0]} sorted, ${counts.current[1]} burnt`; subject.textContent = 'Jammed. Press the gauge.'; route.textContent = '' }
       else { from.textContent = `${productName.toLowerCase()} sorter`; subject.textContent = 'Waiting for mail'; route.textContent = '' }
     },
-    count(sorted, burnt) { counts.current = [sorted, burnt] },
+    count(sorted, burnt) { counts.current = [sorted, burnt]; if (tally.current) tally.current.textContent = String(sorted % 100000).padStart(5, '0') },
     phase(next) { setPhase(next); if (next === 'boom') try { localStorage.setItem(SEEN, '1') } catch { /* private mode: the long version again next time */ } },
     // Smoke in front of what is written on the machine hides it, as it hides the machine.
     veil(zone, clear) { const el = zone === 0 ? readout.current : veiled.current[zone]; if (el) el.style.opacity = clear >= 1 ? '' : String(clear) },
@@ -145,6 +145,7 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
               <span className="srt-row srt-row-wide"><span>sent</span><span>or</span><span>received</span><span>via</span><span className="srt-last">API<span className="srt-stop">.</span></span></span>
             </span>
           </h1>
+          {p.tally && <span className="srt-tally" ref={tally} style={{ left: p.ox + p.tally.x + DX * p.tally.z, top: p.oy - p.tally.y - p.tally.h - DY * p.tally.z, width: p.tally.w, height: p.tally.h }} aria-hidden="true">00000</span>}
           {/* The two facts: instruments in the base, a legend over a window each. */}
           <p className="srt-fact" ref={el => { veiled.current[3] = el }} style={at(p.facts[0])}><span className="srt-fact-label">Responds in</span><span className="srt-fact-value"><span><b>~100</b><i>ms</i></span><span className="srt-meter" aria-hidden="true" /></span></p>
           <p className="srt-fact" ref={el => { veiled.current[4] = el }} style={at(p.facts[1])}><span className="srt-fact-label">Free every month</span><span className="srt-fact-value"><span><b>3,000</b><i>sent</i></span><span><b>3,000</b><i>received</i></span></span></p>

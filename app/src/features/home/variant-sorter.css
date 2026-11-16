@@ -44,7 +44,7 @@
 
 /* The readout: a small screen on the fascia. Who the letter under the scanner is from and where it goes, then its
    subject in full, on two lines if it needs them. */
-.srt-readout { position: absolute; z-index: 2; display: grid; grid-template: 'from route' auto 'subject subject' 1fr / minmax(0, 1fr) auto; align-content: center; gap: 3px var(--space-8); padding: 0 clamp(7px, var(--srt-u) * 1.1, 11px); font-family: var(--font-mono); font-size: clamp(9.5px, var(--srt-u) * 1.3, 12px); line-height: 1.32; pointer-events: none; }
+.srt-readout { position: absolute; z-index: 2; display: grid; grid-template: 'from route' auto 'subject subject' 1fr / minmax(0, 1fr) auto; align-content: center; gap: 3px var(--space-8); padding: 0 clamp(7px, var(--srt-u) * 1.1, 11px); font-family: var(--font-mono); font-size: clamp(10px, var(--srt-u) * 1.3, 12px); line-height: 1.32; pointer-events: none; }
 .srt-readout-from { grid-area: from; overflow: hidden; color: var(--srt-screen-dim); text-overflow: ellipsis; white-space: nowrap; }
 .srt-readout-subject { grid-area: subject; display: -webkit-box; height: 2.64em; overflow: hidden; color: var(--srt-screen-text); text-wrap: balance; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
 .srt-readout-route { grid-area: route; color: var(--color-brand); letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
@@ -57,9 +57,11 @@
 .srt-cannon:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: 2px; }
 
 .srt-lanes { margin: 0; padding: 0; list-style: none; }
-.srt-lanes li { position: absolute; z-index: 2; display: grid; place-items: center; color: var(--srt-text-2); font-family: var(--font-mono); font-size: clamp(9px, var(--srt-u) * 1.15, 11px); line-height: 1; letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; pointer-events: none; }
+.srt-lanes li { position: absolute; z-index: 2; display: grid; place-items: center; color: var(--srt-text-2); font-family: var(--font-mono); font-size: clamp(10px, var(--srt-u) * 1.2, 11px); line-height: 1; letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; pointer-events: none; }
 /* Where each tube goes over the slab's lip: the name of where it leads, on the lip. */
-.srt-mouths li { place-items: center start; color: var(--srt-text-2); }
+.srt-mouths li { place-items: center start; color: var(--srt-text-2); font-size: 11px; }
+/* The tally in the header by the Logs outlet: everything sorted, counted. */
+.srt-tally { position: absolute; z-index: 2; display: grid; place-items: center; color: var(--srt-screen-text); font-family: var(--font-mono); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: .04em; pointer-events: none; }
 .srt-mouths li[data-side='r'] { place-items: center end; }
 
 /* The sentence: exactly as wide as the price above it, its words spread to the same two edges, its full stop hung
@@ -145,15 +147,16 @@
 
 
 /* ── Under the slab: the tubes run on down the page to each place mail can go (sorter-stations.tsx) ──
-   A unit's --q is how far it has come up the page, 0 to 1; its capsule travels on the first half (--c) and what its
-   appliance does happens on the second (--v). A step inside takes a window of --v as its own --t. */
+   A unit's --q is how far it has come up the page, 0 to 1; what its appliance does happens on --v, which runs over
+   the middle of that. A step inside takes a window of --v as its own --t. */
 .srt-stations { position: relative; flex: none; isolation: isolate; }
 .srt-pipes { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
-.srt-unit { position: absolute; right: 0; left: 0; height: 0; --c: clamp(0, calc(var(--q, 0) / .46), 1); --v: clamp(0, calc((var(--q, 0) - .5) / .5), 1); }
+.srt-unit { position: absolute; right: 0; left: 0; height: 0; --v: clamp(0, calc((var(--q, 0) - .34) / .6), 1); }
 /* A glass tube as the machine draws one (sorter-stations.tsx Tube), in two layers with the capsules between them:
    its far wall; then its near wall as veils (the wall, the lit top of a run across the page, the band in shade and
    its edge) and its steel collars. */
-.srt-tube-back, .srt-tube-wall, .srt-tube-shade, .srt-tube-edge { fill: none; }
+.srt-tube-back, .srt-tube-wall, .srt-tube-shade, .srt-tube-edge, .srt-tube-shadows path { fill: none; }
+.srt-tube-shadows path { stroke: var(--srt-shade); }
 .srt-tube-back { stroke: var(--srt-glass-back); }
 .srt-tube-wall { stroke: var(--srt-glass-1); }
 .srt-tube-lit { fill: var(--srt-glass-0); }
@@ -165,8 +168,11 @@
 .srt-flange-edge { fill: var(--srt-steel); }
 .srt-glass { z-index: 2; }
 .srt-ports { z-index: 4; }
-/* The capsule: down the tube, round the bend, and into the appliance. */
-.srt-capsule { position: absolute; z-index: 1; top: 0; left: 0; width: max(13px, calc(var(--srt-r) * 3.7)); height: max(4.5px, calc(var(--srt-r) * 1.36)); border-radius: 99px; background: linear-gradient(to right, var(--color-brand) 0 22%, var(--srt-paper) 22% 78%, var(--color-brand) 78% 100%); offset-distance: calc(var(--c) * 100%); offset-rotate: auto; opacity: clamp(0, min(calc(var(--c) * 40), calc((1 - var(--c)) * 60)), 1); pointer-events: none; }
+/* The capsules: between a tube's far wall and its near one, each on a transform animation along its tube. */
+.srt-traffic { position: absolute; z-index: 1; inset: 0; overflow: hidden; pointer-events: none; }
+.srt-cap { position: absolute; top: 0; left: 0; width: max(13px, calc(var(--srt-r) * 3.7)); height: max(4.5px, calc(var(--srt-r) * 1.36)); border-radius: 99px; background: linear-gradient(to right, var(--color-brand) 0 22%, var(--srt-paper) 22% 78%, var(--color-brand) 78% 100%); opacity: 0; will-change: transform; }
+/* What an appliance, or the last plate, throws on the wall behind it. */
+.srt-shadow { position: absolute; width: calc(var(--srt-w) + var(--srt-dx)); height: calc(var(--srt-h) + var(--srt-dy)); margin: calc(-1 * var(--srt-dy)) 0 0 calc(-1 * var(--srt-dx)); background: var(--srt-shade); clip-path: polygon(0 0, calc(100% - var(--srt-dx)) 0, 100% var(--srt-dy), 100% 100%, var(--srt-dx) 100%, 0 calc(100% - var(--srt-dy))); translate: -10px 11px; }
 
 /* A unit's name and its one line, over it. */
 .srt-caption { position: absolute; top: 0; display: grid; row-gap: 8px; }
@@ -182,16 +188,22 @@
 .srt-screen { position: absolute; inset: 14px 14px 44px; overflow: hidden; border-radius: 2px; background: var(--srt-screen); box-shadow: 0 0 0 1.5px var(--srt-trim), inset 0 3px 0 var(--srt-slot); color: var(--srt-screen-text); font-size: 12px; line-height: 16px; }
 .srt-plate { position: absolute; bottom: 12px; left: 14px; display: grid; place-items: center; height: 20px; padding-inline: 9px; background: var(--srt-plinth); color: var(--srt-text-2); font-family: var(--font-mono); font-size: 11px; line-height: 1; letter-spacing: .04em; text-transform: uppercase; }
 .srt-lamp { position: absolute; right: 16px; bottom: 16px; width: 12px; height: 12px; border-radius: 50%; background: var(--srt-lamp-off); box-shadow: 0 0 0 2px var(--srt-trim); }
-.srt-lamp::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--srt-paper); opacity: clamp(0, calc(var(--v) * 40), 1); }
+.srt-lamp::after { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--srt-paper-dim); opacity: clamp(0, calc(var(--v) * 40), 1); }
+/* (It winks as each capsule arrives.) */
+.srt-lamp i { position: absolute; z-index: 1; inset: 0; border-radius: 50%; background: var(--srt-paper); opacity: 0; }
 
 /* Each appliance stands on a shelf fixed to the wall: the shelf's top (the strip seen in front of the box), its edge,
    its end running back under the box's side, and two brackets under it. */
-.srt-ledge { position: absolute; top: 100%; right: -7px; left: -7px; height: 8px; background: linear-gradient(to bottom, var(--srt-body-top) 0 3px, var(--srt-trim) 3px); }
+.srt-ledge { position: absolute; top: 100%; right: -7px; left: -7px; height: 8px; background: linear-gradient(to bottom, var(--srt-body-top) 0 3px, var(--srt-trim) 3px); box-shadow: -7px 9px 0 var(--srt-shade); }
+/* (The shelf's top where it stands out past the box at either end.) */
+.srt-ledge i { position: absolute; top: calc(3px - var(--srt-dy)); right: 0; left: calc(-1 * var(--srt-dx)); height: var(--srt-dy); background: var(--srt-body-top); clip-path: polygon(0 0, var(--srt-over) 0, calc(var(--srt-dx) + var(--srt-over)) 100%, calc(100% - var(--srt-over)) 100%, calc(100% - var(--srt-over)) calc(100% - var(--srt-over) * var(--srt-slope)), 100% 100%, var(--srt-dx) 100%); }
 .srt-ledge::before { content: ''; position: absolute; top: calc(3px - var(--srt-dy)); left: calc(-1 * var(--srt-dx)); width: calc(var(--srt-dx) + .5px); height: calc(5px + var(--srt-dy)); background: var(--srt-body-side); clip-path: polygon(0 0, 100% var(--srt-dy), 100% 100%, 0 calc(100% - var(--srt-dy))); }
 .srt-ledge::after { content: ''; position: absolute; top: 100%; right: 11%; left: 11%; height: 18px; background: linear-gradient(to bottom left, var(--srt-body-side) 50%, transparent 50%) 0 0 / 15px 18px no-repeat, linear-gradient(to bottom left, var(--srt-body-side) 50%, transparent 50%) 100% 0 / 15px 18px no-repeat; }
 /* The monitor's shelf is under its stand; the ledger printer hangs on two brackets, its tape between them. */
 .srt-unit[data-kind='imap'] .srt-ledge { top: calc(100% + 38px); right: calc(50% - 112px); left: calc(50% - 112px); }
-.srt-unit[data-kind='logs'] .srt-ledge { height: 0; background: none; }
+.srt-unit[data-kind='logs'] .srt-ledge { height: 0; background: none; box-shadow: none; }
+.srt-unit[data-kind='logs'] .srt-ledge i { display: none; }
+.srt-unit[data-kind='imap'] .srt-ledge i { clip-path: polygon(0 0, calc(100% - var(--srt-dx)) 0, 100% 100%, var(--srt-dx) 100%); }
 .srt-unit[data-kind='logs'] .srt-ledge::before { display: none; }
 .srt-unit[data-kind='logs'] .srt-ledge::after { right: 10px; left: 10px; }
 .srt-stations[data-phone] .srt-ledge { right: -4px; left: -4px; }
@@ -352,11 +364,16 @@
 .srt-sent { margin-right: 12px !important; color: var(--dim); font-size: 11px; }
 
 /* Where the page ends: the price once more, and the way in. */
-.srt-end { position: absolute; right: 0; bottom: 0; left: 0; display: grid; justify-items: center; row-gap: 20px; padding: 0 var(--space-24) var(--space-32); }
-.srt-end-price { margin: 0; color: var(--srt-text-2); font-size: 22px; font-weight: 450; line-height: 1.2; letter-spacing: -.016em; text-align: center; text-wrap: balance; }
+/* The last plate: the price and the button, in the machine's make (a box, a dark bay in a frame, a screw at each
+   corner); the outbound main comes out of its top. Under it, off the plate, what signing in agrees to and the links. */
+.srt-end-plate { display: grid; align-content: center; justify-items: center; row-gap: 18px; padding: 0 24px; }
+.srt-end-price { margin: 0; color: var(--srt-text-2); font-size: 20px; font-weight: 450; line-height: 1.2; letter-spacing: -.016em; text-align: center; text-wrap: balance; }
 .srt-end-price b { color: var(--srt-text); font-weight: 600; }
-.srt-end-cta { position: relative; width: 208px; height: 52px; font-size: 17px; }
-.srt-end-consent { margin: -6px 0 0; color: var(--srt-text-3); font-size: 12px; line-height: 16px; text-align: center; text-wrap: balance; }
+.srt-end-bay { display: block; padding: 9px; background: var(--srt-plinth); box-shadow: inset 0 1.5px 0 var(--srt-body-top), inset 1.5px 0 0 var(--srt-body-side); }
+.srt-end-cta { position: relative; display: flex; width: 208px; height: 50px; background: var(--srt-slot); box-shadow: 0 0 0 2.5px var(--srt-trim); font-size: 17px; }
+.srt-screw { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--srt-steel); box-shadow: inset 0 1.5px 0 var(--srt-steel-top); }
+.srt-end { position: absolute; right: 0; bottom: 0; left: 0; display: grid; justify-items: center; row-gap: 20px; padding: 0 var(--space-24) var(--space-32); }
+.srt-end-consent { margin: 0; color: var(--srt-text-3); font-size: 12px; line-height: 16px; text-align: center; text-wrap: balance; }
 .srt-end-consent a:hover { color: var(--srt-text); }
 .srt-by { display: inline-flex; align-items: center; gap: var(--space-6); }
 .srt-by svg { flex: none; }
@@ -365,7 +382,10 @@
 @media (hover: hover) and (pointer: fine) { .srt-end nav a:hover { color: var(--srt-text); } }
 
 /* On a phone the appliances are as wide as the page allows between the tubes; their type keeps its size. */
-.srt-stations[data-phone] .srt-caption { row-gap: 5px; }
+/* (A phone's captions stop short of the outbound main, which runs up the page just inside the boxes' right edge.) */
+.srt-stations[data-phone] .srt-caption { row-gap: 5px; padding-right: 26px; }
+.srt-stations[data-phone] .srt-end-price { font-size: 17px; }
+.srt-stations[data-phone] .srt-end-plate { row-gap: 14px; padding: 0 16px; }
 .srt-stations[data-phone] .srt-caption h2 { font-size: 24px; }
 .srt-stations[data-phone] .srt-caption p { font-size: 13.5px; line-height: 19px; }
 .srt-stations[data-phone] .srt-screen { inset: 10px 10px 40px; }

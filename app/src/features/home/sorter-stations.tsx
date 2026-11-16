@@ -7,13 +7,17 @@ import { reducedMotion, type HomeProps } from '.'
 import { DX, DY, type Plan } from './sorter/plan'
 
 // Under the slab the machine stands on, its eight tubes run on down the page and one by one bend in to an appliance:
-// the places mail can go. Scrolling carries a capsule down each tube, round the bend and into the appliance,
-// and then the letter in it arrives the way it does in the product: a pigeonhole fills and a row appears in the
-// Inbox, a mail app on a monitor gets the message, a teleprinter prints an agent's turn, a ritual's lamps come on line
-// by line, a switchboard posts a webhook, a press runs a campaign off, a thread grows, a ledger tape prints the logs.
-// Everything is driven by how far the page has scrolled (--q on each unit, 0 to 1), with transforms, opacity and
-// clipping only, so nothing shifts; with reduced motion every unit shows its finished state. The letters are from
-// the sorter's own set.
+// the places mail can go. Capsules run down every tube all the time, round the bends and into the appliances (each
+// one's lamp winks as one arrives); and one more tube, the outbound main, runs back up the page from the plate the
+// last button is on, past the appliances that send (they tee into it), to the slab, where the machine's cannon fires
+// what it carries off the page. One mail system from the hopper to the footer. As the page scrolls, the letter in
+// each appliance arrives the way it does in the product: a pigeonhole fills and a row appears in the Inbox, a mail
+// app on a monitor gets the message, a teleprinter prints an agent's turn, a ritual's lamps come on line by line, a
+// switchboard posts a webhook, a press runs a campaign off, a thread grows, a ledger tape prints the logs. That is
+// driven by how far the page has scrolled (--q on each unit, 0 to 1), with transforms, opacity and clipping only, so
+// nothing shifts; the capsules are transform animations the compositor runs, stopped while the section is off screen;
+// with reduced motion every unit shows its finished state and nothing travels. The letters are from the sorter's own
+// set.
 type Kind = 'inbox' | 'imap' | 'agent' | 'ritual' | 'endpoint' | 'campaign' | 'thread' | 'logs'
 type Station = { kind: Kind; tube: number; name: string; line: string; plate: string; w: number; h: number; up: number; down: number; port: number }
 // `up` and `down` are what stands over or hangs under the appliance's box (paper, a stand); `port` is how far down its
@@ -33,7 +37,7 @@ const STATIONS: Station[] = [
 const step = (from: number, to: number, extra?: CSSProperties) => ({ '--from': from, '--to': to, ...extra }) as CSSProperties
 
 export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Plan | null } & Pick<HomeProps, 'onSignIn' | 'onSignInIntent' | 'busy'>) {
-  const root = useRef<HTMLElement>(null)
+  const root = useRef<HTMLElement>(null), traffic = useRef<HTMLDivElement>(null), flows = useRef<Flow[]>([])
   // One pass per frame while scrolling: how far each unit has come up the page.
   useEffect(() => {
     const units = [...root.current!.querySelectorAll<HTMLElement>('.srt-unit')]
@@ -56,6 +60,29 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
     return () => { cancelAnimationFrame(frame); window.removeEventListener('scroll', queue); window.removeEventListener('resize', queue) }
   }, [p])
 
+  // The capsules: each a transform animation along its tube's line, several to a long tube, and the lamp of the
+  // appliance it ends at winking as it gets there. All of it stops while the section is off screen.
+  useEffect(() => {
+    const host = traffic.current
+    if (!host || reducedMotion() || !host.animate) return
+    const running: Animation[] = []
+    flows.current.forEach((flow, f) => {
+      const frames = along(flow.points, flow.bend), total = frames.at(-1)!.s, duration = total / flow.speed * 1000, count = Math.max(1, Math.min(4, Math.round(total / 1150)))
+      const keyframes = frames.map(at => ({ offset: at.s / total, transform: `translate(${at.x.toFixed(1)}px, ${at.y.toFixed(1)}px) translate(-50%, -50%) rotate(${at.a.toFixed(3)}rad)` }))
+      const edge = Math.min(.2, 26 / total), lamp = flow.unit === undefined ? null : root.current!.querySelectorAll<HTMLElement>('.srt-lamp i')[flow.unit]
+      for (let k = 0; k < count; k++) {
+        const capsule = document.createElement('span'), delay = -((k + (f * .37) % 1) / count) * duration
+        capsule.className = flow.wide ? 'srt-cap srt-cap-wide' : 'srt-cap'
+        host.append(capsule)
+        running.push(capsule.animate(keyframes, { duration, delay, iterations: Infinity }), capsule.animate([{ opacity: 0 }, { opacity: 1, offset: edge }, { opacity: 1, offset: 1 - edge }, { opacity: 0 }], { duration, delay, iterations: Infinity }))
+      }
+      if (lamp) { const period = duration / count, wink = Math.min(.5, 260 / period); running.push(lamp.animate([{ opacity: 0 }, { opacity: 0, offset: 1 - wink }, { opacity: 1, offset: 1 - wink * .6 }, { opacity: 0 }], { duration: period, delay: -(((f * .37) % 1) / count) * duration, iterations: Infinity })) }
+    })
+    const observer = new IntersectionObserver(([entry]) => { for (const animation of running) entry.isIntersecting ? animation.play() : animation.pause() })
+    observer.observe(root.current!)
+    return () => { observer.disconnect(); for (const animation of running) animation.cancel(); host.replaceChildren() }
+  }, [p])
+
   if (!p) return <section className="srt-stations" ref={root} aria-label="Where mail goes" />
   const phone = p.phone, r = p.tubeR, wide = r * 2, depth = phone ? 40 : 60, dx = -DX * depth, dy = DY * depth
   // Each appliance stands between the two fours of tubes, a little towards the side its own tube comes from: those on
@@ -68,11 +95,13 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
     const station = phone ? { ...spec, h: spec.kind === 'inbox' ? 339 : spec.kind === 'thread' ? 288 : spec.h, up: spec.up && spec.kind === 'agent' ? 236 : spec.up, down: spec.kind === 'logs' ? 264 : spec.down } : spec
     const w = Math.min(station.w, room), left = station.tube < 4
     const boxLeft = Math.round(p.ox - widest / 2 + (left ? -lean : lean) + dx / 2), boxTop = top + captionH + dy + 18 + station.up
-    const unit = { station, w, left, top, boxLeft, boxTop: boxTop - top, port: boxTop + Math.round(station.h * station.port), end: left ? boxLeft - dx * .5 : boxLeft + w - 4 }
+    const unit = { station, w, left, top, boxLeft, boxTop: boxTop - top, port: boxTop + Math.round(station.h * station.port), end: left ? boxLeft - dx * .5 : boxLeft + w - 4, sends: boxTop + Math.round(station.h * .74) }
     top = boxTop + station.h + station.down + gap
     return unit
   })
-  const height = top + (phone ? 250 : 240)
+  // Under the last appliance, the plate the last button is on; the outbound main comes out of its top.
+  const plate = { w: phone ? widest : Math.min(540, room + 60), h: phone ? 164 : 138, top: top + dy + 8 }, plateLeft = Math.round(p.ox - plate.w / 2 + dx / 2), mainX = p.ox + p.out
+  const height = plate.top + plate.h + (phone ? 150 : 132)
   // The tubes. A wide page: each side's four start where they left the slab's lip; after each appliance on that side
   // the tubes that are left step in one place towards the column (the inner ones first, so none crosses another),
   // and the innermost then bends in to the next appliance: into a flange on its side wall, at half its depth (an
@@ -80,18 +109,18 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
   // side: under the lip each four go into a collector, and one tube twice as wide comes out of it and runs down the
   // page's edge, with a tee off it to each appliance on its side and a bend into the last.
   const pw = phone ? 10 : wide, bend = pw * 1.5
-  const runs: { key: string; points: Pt[]; wide: number; rings: Ring[] }[] = [], ways: Pt[][] = []
+  const runs: { key: string; points: Pt[]; wide: number; rings: Ring[] }[] = [], ways: Pt[][] = [], sleeve = (x: number): Ring => ({ at: [x, 12], across: false, tall: 30 })
   const collectors: { x0: number; x1: number; out: number }[] = []
   if (!phone) units.forEach(({ station, left, port, end }, k) => {
     const side = left ? 0 : 4, n = station.tube - side, slot = (j: number) => p.drops[side + j], points: Pt[] = [[slot(n), 0]]
     for (let m = 0; m < n; m++) { const y = units.find(u => u.station.tube === side + m)!.port + 78 + (n - m - 1) * (wide + 16); points.push([slot(n - m), y], [slot(n - m - 1), y]) }
     points.push([points.at(-1)![0], port], [end, port])
-    runs.push({ key: `t${station.tube}`, points, wide, rings: rings(points, bend, left ? dx / 2 + 5 : 17, !left) }); ways[k] = points
+    runs.push({ key: `t${station.tube}`, points, wide, rings: [sleeve(points[0][0]), ...rings(points, bend, left ? dx / 2 + 5 : 17, !left).slice(1)] }); ways[k] = points
   })
   else for (const side of [0, 4]) {
     const mine = units.filter(u => u.left === (side === 0)), last = mine.at(-1)!, x = Math.round((p.drops[side] + p.drops[side + 3]) / 2), out = 24, towards = side ? -1 : 1
     collectors.push({ x0: Math.min(p.drops[side], p.drops[side + 3]) - r - 3, x1: Math.max(p.drops[side], p.drops[side + 3]) + r + 3, out })
-    for (let k = 0; k < 4; k++) runs.push({ key: `in${side + k}`, points: [[p.drops[side + k], 0], [p.drops[side + k], 9]], wide, rings: [] })
+    for (let k = 0; k < 4; k++) runs.push({ key: `in${side + k}`, points: [[p.drops[side + k], 0], [p.drops[side + k], 9]], wide, rings: [{ at: [p.drops[side + k], 5.5], across: false, tall: 3 }] })
     const trunk: Pt[] = [[x, out], [x, last.port], [last.end, last.port]], collars = rings(trunk, bend, side ? 17 : dx / 2 + 5, !!side)
     for (const unit of mine) {
       ways[units.indexOf(unit)] = [[x, out], [x, unit.port], [unit.end, unit.port]]
@@ -102,15 +131,33 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
     }
     runs.push({ key: `trunk${side}`, points: trunk, wide: pw, rings: collars.filter((ring, i) => collars.every((other, j) => j >= i || Math.abs(other.at[0] - ring.at[0]) > 1 || Math.abs(other.at[1] - ring.at[1]) > 12)) })
   }
-  const vars = { '--srt-r': `${pw / 2}px`, '--srt-pipe': `${pw}px`, '--srt-dx': `${dx}px`, '--srt-dy': `${dy}px`, height } as CSSProperties
+  // The outbound main: from the plate's top straight up the page to the slab (behind the appliances that lean right,
+  // beside those that lean left). On a wide page the appliances on the left that send tee into it from their right
+  // side; the others it passes behind.
+  const main: Pt[] = [[mainX, 0], [mainX, plate.top - dy * .5]], senders = units.filter(u => ['agent', 'campaign', 'thread'].includes(u.station.kind)), mainRings: Ring[] = [sleeve(mainX)]
+  for (let y = 300; y < main[1][1] - 120; y += 380) if (units.every(u => !(!u.left || phone) || y < u.top + u.boxTop - dy - 30 || y > u.top + u.boxTop + u.station.h + 40)) mainRings.push({ at: [mainX, y], across: false })
+  const outWays: Pt[][] = [[[mainX, plate.top - dy * .5 + 14], [mainX, 16]]]
+  for (const unit of senders) {
+    if (phone || !unit.left) { outWays.push([[mainX, unit.top + unit.boxTop + unit.station.h * .5], [mainX, 16]]); continue }
+    const from = unit.boxLeft + unit.w - 4
+    runs.push({ key: `send${unit.station.tube}`, points: [[from, unit.sends], [mainX - (wide / 2 - 1), unit.sends]], wide, rings: [{ at: [from + 9, unit.sends], across: true }, { at: [mainX - wide / 2 - 3.5, unit.sends], across: true }] })
+    mainRings.push({ at: [mainX, unit.sends - wide / 2 - 4.5], across: false }, { at: [mainX, unit.sends + wide / 2 + 4.5], across: false })
+    outWays.push([[from + 4, unit.sends], [mainX, unit.sends], [mainX, 16]])
+  }
+  runs.push({ key: 'main', points: main, wide, rings: mainRings })
+  // Every capsule's way: down each tube from under its sleeve into its appliance; up the main from each that sends.
+  flows.current = [...ways.map((points, k) => ({ points: [[points[0][0], phone ? points[0][1] + 4 : 16] as Pt, ...points.slice(1, -1), [units[k].left ? units[k].end - dx / 2 - 2 : units[k].end - 2, points.at(-1)![1]] as Pt], bend, speed: phone ? 150 : 230, unit: k, wide: phone })), ...outWays.map(points => ({ points, bend: wide * 1.5, speed: phone ? 130 : 200, unit: undefined, wide: false }))]
+  const vars = { '--srt-r': `${pw / 2}px`, '--srt-pipe': `${pw}px`, '--srt-dx': `${dx}px`, '--srt-dy': `${dy}px`, '--srt-slope': dy / dx, '--srt-over': phone ? '4px' : '7px', height } as CSSProperties
   return <section className="srt-stations" ref={root} style={vars} data-phone={phone || undefined} aria-label="Where mail goes">
     {/* The tubes' far walls; over them the capsules; over those (further down) the tubes' near walls and their collars. */}
     <svg className="srt-pipes" aria-hidden="true">
+      {/* What each tube throws on the wall behind it, down and to the left as the machine's light falls. */}
+      <g className="srt-tube-shadows" transform="translate(-4 5)">{runs.map(run => <path key={run.key} d={line(run.points, bend)} strokeWidth={run.wide} />)}</g>
       {runs.map(run => <Tube key={run.key} layer="back" points={run.points} wide={run.wide} bend={bend} rings={run.rings} />)}
     </svg>
+    <div className="srt-traffic" ref={traffic} aria-hidden="true" />
     {units.map(({ station, w, left, top, boxLeft, boxTop }, k) => <div key={station.kind} className="srt-unit" data-kind={station.kind} data-side={left ? 'l' : 'r'} style={{ top, '--srt-w': `${w}px`, '--srt-h': `${station.h}px` } as CSSProperties}>
-      {/* The capsule rides the last stretch of its tube, round the bend and into the appliance. */}
-      <span className="srt-capsule" style={{ offsetPath: `path("${trail(ways[k], bend, phone ? 300 : 560, top, left ? dx / 2 + 8 + Math.max(6.5, pw * .92) : 0)}")` }} aria-hidden="true" />
+      <span className="srt-shadow" style={{ left: boxLeft, top: boxTop }} aria-hidden="true" />
       <div className="srt-caption" style={{ left: boxLeft - dx, width: w + dx }}>
         <h2>{station.name}</h2>
         <p>{station.line}</p>
@@ -118,13 +165,15 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
       <div className="srt-box" style={{ left: boxLeft, top: boxTop }}>
         {APPLIANCES[station.kind]}
         <span className="srt-plate" aria-hidden="true">{station.plate}</span>
-        <span className="srt-lamp" aria-hidden="true" />
-        <span className="srt-ledge" aria-hidden="true" />
+        <span className="srt-lamp" aria-hidden="true"><i /></span>
+        <span className="srt-ledge" aria-hidden="true"><i /></span>
       </div>
     </div>)}
     <svg className="srt-pipes srt-glass" aria-hidden="true">
+      {/* A phone's collectors: a box each in the machine's projection (its top, the side that is seen, its front). */}
+      {collectors.map(({ x0, x1 }, i) => <g key={i}><polygon className="srt-ring-lit" points={`${x0},9 ${x1},9 ${x1 - 3},4 ${x0 - 3},4`} /><polygon className="srt-flange" points={`${x0},9 ${x0 - 3},4 ${x0 - 3},16 ${x0},21`} /></g>)}
       {runs.map(run => <Tube key={run.key} layer="front" points={run.points} wide={run.wide} bend={bend} rings={run.rings} />)}
-      {collectors.map(({ x0, x1, out }, i) => <g key={i}><rect className="srt-ring" x={x0} y={8} width={x1 - x0} height={out - 11} rx={1} /><rect className="srt-ring-lit" x={x0} y={8} width={x1 - x0} height={2.5} rx={1} /></g>)}
+      {collectors.map(({ x0, x1 }, i) => <rect key={i} className="srt-ring" x={x0} y={9} width={x1 - x0} height={12} />)}
     </svg>
     {/* Where a tube meets the side wall of an appliance on the left: a flange on the wall, the tube's last length, a collar. */}
     <svg className="srt-pipes srt-ports" aria-hidden="true">
@@ -138,11 +187,22 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
         </g>
       })}
     </svg>
-    <footer className="srt-end">
+    {/* The last plate, in the machine's make: the price and the button on it, the outbound main coming out of its top. */}
+    <span className="srt-shadow" style={{ left: plateLeft, top: plate.top, '--srt-w': `${plate.w}px`, '--srt-h': `${plate.h}px` } as CSSProperties} aria-hidden="true" />
+    <div className="srt-box srt-end-plate" style={{ left: plateLeft, top: plate.top, '--srt-w': `${plate.w}px`, '--srt-h': `${plate.h}px` } as CSSProperties}>
       <p className="srt-end-price"><b>$0.20</b> per 1,000 emails, sent or received.</p>
-      <button type="button" className="srt-cta srt-end-cta" disabled={busy} aria-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
-        <span className="srt-cta-label">Get started{busy ? <LoaderCircle className="ui-spinner" size={16} aria-hidden="true" /> : <ArrowRight className="srt-cta-arrow" size={16} strokeWidth={2} aria-hidden="true" />}</span>
-      </button>
+      <span className="srt-end-bay">
+        <button type="button" className="srt-cta srt-end-cta" disabled={busy} aria-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
+          <span className="srt-cta-label">Get started{busy ? <LoaderCircle className="ui-spinner" size={16} aria-hidden="true" /> : <ArrowRight className="srt-cta-arrow" size={16} strokeWidth={2} aria-hidden="true" />}</span>
+        </button>
+      </span>
+      {[0, 1, 2, 3].map(k => <i key={k} className="srt-screw" style={{ [k % 2 ? 'right' : 'left']: 10, [k < 2 ? 'top' : 'bottom']: 10 }} aria-hidden="true" />)}
+    </div>
+    <svg className="srt-pipes srt-ports" aria-hidden="true">
+      <Tube layer="back" points={[[mainX, plate.top - dy - 6], [mainX, plate.top - dy * .5]]} wide={wide} bend={bend} rings={[]} />
+      <Tube layer="front" points={[[mainX, plate.top - dy - 6], [mainX, plate.top - dy * .5]]} wide={wide} bend={bend} rings={[{ at: [mainX, plate.top - dy * .5 - 2.5], across: false }]} />
+    </svg>
+    <footer className="srt-end">
       <SignInConsent className="srt-end-consent" />
       <nav aria-label="Site links"><a className="srt-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={18} /></a><a href="/docs">API docs</a><Link to="/legal/terms">Terms</Link><Link to="/legal/privacy">Privacy</Link></nav>
     </footer>
@@ -152,7 +212,8 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
 type Pt = [number, number]
 const corners = (points: Pt[], bend: number) => points.map((v, i) => i === 0 || i === points.length - 1 ? 0 : Math.min(bend, Math.hypot(v[0] - points[i - 1][0], v[1] - points[i - 1][1]) / 2, Math.hypot(points[i + 1][0] - v[0], points[i + 1][1] - v[1]) / 2))
 
-type Ring = { at: Pt; across: boolean }
+type Ring = { at: Pt; across: boolean; tall?: number }
+type Flow = { points: Pt[]; bend: number; speed: number; unit: number | undefined; wide: boolean }
 /** Where a tube's line turns: for each corner the centre of its quarter circle, its radius, and the points it begins and ends at. */
 function turns(points: Pt[], bend: number) {
   const R = corners(points, bend)
@@ -219,18 +280,28 @@ function Tube({ points, wide, bend, rings, layer }: { points: Pt[]; wide: number
     <path className="srt-tube-lit" d={`M ${top.join(' L ')} L ${under.join(' L ')} Z`} />
     <path className="srt-tube-shade" d={`M ${beside(s => -s.lit * (half - wide * .205)).join(' L ')}`} strokeWidth={wide * .19} />
     <path className="srt-tube-edge" d={`M ${beside(s => -s.lit * (half - wide * .055)).join(' L ')}`} strokeWidth={wide * .11} />
-    {rings.map(({ at, across }, i) => across
+    {rings.map(({ at, across, tall }, i) => across
       ? <g key={i}><rect className="srt-ring" x={at[0] - 2.5} y={at[1] - half - 2.5} width={5} height={wide + 5} rx={1} /><rect className="srt-ring-lit" x={at[0] - 2.5} y={at[1] - half - 2.5} width={5} height={2} rx={1} /></g>
-      : <g key={i}><rect className="srt-ring" x={at[0] - half - 2.5} y={at[1] - 2.5} width={wide + 5} height={5} rx={1} /><rect className="srt-ring-lit" x={at[0] - half - 2.5} y={at[1] - 2.5} width={wide + 5} height={2} rx={1} /></g>)}
+      : <g key={i}><rect className="srt-ring" x={at[0] - half - 2.5} y={at[1] - (tall ?? 5) / 2} width={wide + 5} height={tall ?? 5} rx={1} /><rect className="srt-ring-lit" x={at[0] - half - 2.5} y={at[1] - (tall ?? 5) / 2} width={wide + 5} height={2} rx={1} /></g>)}
   </g>
 }
 
-/** The last `length` pixels of a tube's way, less `short` at its end, as a motion path in the coordinates of the unit it ends at (`top` down the section). */
-function trail(points: Pt[], bend: number, length: number, top: number, short: number) {
-  const end = points.at(-1)!, back = Math.sign(points.at(-2)![0] - end[0]), cut: Pt[] = [...points.slice(0, -1), [end[0] + back * short, end[1]]]
-  let i = cut.length - 1, left = length, start: Pt = cut[0]
-  for (; i > 0; i--) { const a = cut[i - 1], b = cut[i], d = Math.hypot(b[0] - a[0], b[1] - a[1]); if (d >= left) { const t = left / d; start = [b[0] + (a[0] - b[0]) * t, b[1] + (a[1] - b[1]) * t]; break } left -= d }
-  return line([start, ...cut.slice(Math.max(i, 1))], bend, top)
+/** A capsule's way along a tube's line, as points to animate through: where it is, which way it heads, how far it has come. */
+function along(points: Pt[], bend: number) {
+  const T = turns(points, bend), out: { x: number; y: number; a: number; s: number }[] = []
+  let s = 0, heading = 0
+  const put = (x: number, y: number, a: number) => {
+    // (The heading never jumps a turn: it goes on from the last the short way round.)
+    if (out.length) { const last = out.at(-1)!; s += Math.hypot(x - last.x, y - last.y); a = heading + Math.atan2(Math.sin(a - heading), Math.cos(a - heading)) }
+    heading = a; out.push({ x, y, a, s })
+  }
+  points.forEach((v, i) => {
+    const t = T[i]
+    if (!t) { const o = i ? points[i - 1] : points[1], sign = i ? 1 : -1; put(v[0], v[1], Math.atan2((v[1] - o[1]) * sign, (v[0] - o[0]) * sign)); return }
+    const cx = t.from[0] + t.dout[0] * t.r, cy = t.from[1] + t.dout[1] * t.r, a0 = Math.atan2(t.from[1] - cy, t.from[0] - cx), turn = (t.sweep ? 1 : -1) * Math.PI / 2, into = Math.atan2(t.din[1], t.din[0])
+    for (let k = 0; k <= 6; k++) put(cx + Math.cos(a0 + turn * k / 6) * t.r, cy + Math.sin(a0 + turn * k / 6) * t.r, into + turn * k / 6)
+  })
+  return out
 }
 
 const Row = ({ from, subject, when, fresh, style }: { from: string; subject: string; when: string; fresh?: boolean; style?: CSSProperties }) =>

@@ -8,7 +8,7 @@
 import { ALL, Builder, unit, type V3 } from './mesh'
 import { MAT as M } from './tones'
 import { COLS, PRICE } from './price'
-import { DX, type Plan } from './plan'
+import { DX, DY, type Plan } from './plan'
 import { LETTER_FLOATS } from './gl'
 
 export type Machine = ReturnType<typeof buildMachine>
@@ -44,6 +44,7 @@ export function buildMachine(p: Plan) {
     b.box(w.x - e, w.y, -1.4 * px, w.x, w.y + w.h, 0, M.trim); b.box(w.x + w.w, w.y, -1.4 * px, w.x + w.w + e, w.y + w.h, 0, M.trim)
   }
   b.mark(c.x, c.y, c.x + c.w, c.y + c.h, -1.2 * px - .3, M.slot)
+  if (p.tally) { const t = p.tally, e = 1.2 * px; b.box(t.x - e, t.y - e, t.z - px, t.x + t.w + e, t.y + t.h + e, t.z, M.steel); b.mark(t.x, t.y, t.x + t.w, t.y + t.h, t.z - px - .1, M.screen) }
   b.box(c.x - f, c.y + c.h, -3.2 * px, c.x + c.w + f, c.y + c.h + f, 0, M.trim); b.box(c.x - f, c.y - f, -3.2 * px, c.x + c.w + f, c.y, 0, M.trim)
   b.box(c.x - f, c.y, -3.2 * px, c.x, c.y + c.h, 0, M.trim); b.box(c.x + c.w, c.y, -3.2 * px, c.x + c.w + f, c.y + c.h, 0, M.trim)
 
@@ -197,7 +198,11 @@ export function buildMachine(p: Plan) {
   })
   if (!p.fan.length) for (const first of [0, 4]) {
     const shift = DX * (zt - sleeperZ), xs = [0, 1, 2, 3].map(k => p.tubes[first + k] + shift), a = Math.min(...xs), e = Math.max(...xs)
-    b.box(a - 1.2 * U, 0, sleeperZ - .7 * U, e + 1.2 * U, seat, sleeperZ + .7 * U, M.plinth); for (const x of xs) strap(x, sleeperZ)
+    b.box(a - 1.2 * U, 0, sleeperZ - .7 * U, e + 1.2 * U, seat, sleeperZ + .7 * U, M.plinth)
+    // (Four tubes this close share one strap: a flat bar over them, bolted to the sleeper at each end and between.)
+    b.box(a - 1.1 * U, yc + r, sleeperZ - .45 * U, e + 1.1 * U, yc + r + 1.1 * px, sleeperZ + .45 * U, M.steel, ALL)
+    for (const x of [a - 1.1 * U, e + .75 * U]) b.box(x, seat, sleeperZ - .45 * U, x + .35 * U, yc + r, sleeperZ + .45 * U, M.steel)
+    for (const x of [a - .75 * U, a + (e - a) / 3, a + (e - a) * 2 / 3, e + .75 * U]) b.cyl([x, 0, sleeperZ], 1, yc + r + 1.1 * px, yc + r + 2 * px, .9 * px, M.trim, 6, 2)
     for (let k = 0; k < 4; k++) b.cyl([p.tubes[first + k] + DX * (zt - p.zOver), 0, p.zOver], 1, -p.lip * .5 - 1.2 * px, -p.lip * .5 + 1.2 * px, r + 1 * px, M.steel, 12, 3)
   }
 
@@ -374,7 +379,7 @@ export function buildMachine(p: Plan) {
   // The tubes themselves. Each is one or two runs: down the front between the manifolds, and (on a wide page) from
   // its outlet in the header forward across the slab, over the lip and down. One of the front runs is its own part:
   // the burst bends it out of its socket.
-  const lines: V3[][][] = [], drop = -(p.floor + 40)
+  const lines: V3[][][] = [], drop = -(p.floor + 20) - DY * p.zOver
   idx.tubes = b.part('tubes', [0, 0, 0], true)
   p.tubes.forEach((x, t) => {
     if (p.fan.length) {
