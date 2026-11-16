@@ -78,9 +78,13 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
       }
       if (lamp) { const period = duration / count, wink = Math.min(.5, 260 / period); running.push(lamp.animate([{ opacity: 0 }, { opacity: 0, offset: 1 - wink }, { opacity: 1, offset: 1 - wink * .6 }, { opacity: 0 }], { duration: period, delay: -(((f * .37) % 1) / count) * duration, iterations: Infinity })) }
     })
-    const observer = new IntersectionObserver(([entry]) => { for (const animation of running) entry.isIntersecting ? animation.play() : animation.pause() })
+    // (Started and stopped a dozen to a frame, and from a little before the section comes into view: never all at once
+    // under a scroll.)
+    let frame = 0, next = 0, playing = true
+    const turn = () => { frame = 0; for (let k = 0; k < 12 && next < running.length; k++, next++) playing ? running[next].play() : running[next].pause(); if (next < running.length) frame = requestAnimationFrame(turn) }
+    const observer = new IntersectionObserver(([entry]) => { if (entry.isIntersecting === playing) return; playing = entry.isIntersecting; next = 0; frame ||= requestAnimationFrame(turn) }, { rootMargin: '500px 0px' })
     observer.observe(root.current!)
-    return () => { observer.disconnect(); for (const animation of running) animation.cancel(); host.replaceChildren() }
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); for (const animation of running) animation.cancel(); host.replaceChildren() }
   }, [p])
 
   if (!p) return <section className="srt-stations" ref={root} aria-label="Where mail goes" />
