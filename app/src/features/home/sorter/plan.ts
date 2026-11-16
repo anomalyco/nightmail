@@ -49,7 +49,7 @@ export function plan(W: number, H: number) {
   // (Each four stands centred in its strip, between the frame and the cabinet's corner post; a phone's cabinet has no posts.)
   const post = phone ? 0 : U, tubeR = (phone ? .42 : .85) * U, pitch = (phone ? 1.06 : 2.14) * U, first = (strip * U - post - 3 * pitch) / 2
   const front = frontU * U, lip = lipU * U, floor = front + lip + below, ox = Math.round(W / 2), oy = Math.round(H - floor)
-  const zLip = -front / DY, zOver = zLip - tubeR - 3 * U / 9, zBack = D * (phone ? 1.4 : 1.5), zt = -(tubeR + 1.5 * U / 9), zProud = zt - tubeR - 2 * U / 9
+  const zLip = -front / DY, zOver = zLip - tubeR - 3 * U / 9, zBack = D * (phone ? 1.4 : 1.5), zt = -(tubeR + 1.5 * U / 9), zProud = zt - tubeR - 4 * U / 9
   const tubes = [0, 1, 2, 3].map(k => -(Xw + first + k * pitch)).concat([0, 1, 2, 3].map(k => Xw + first + k * pitch)).map(x => x - DX * zt)
   const spread = Math.max(24, Math.min(13.5 * U, (W / 2 - Xc - 26) / 4.05))
   // A tube that runs straight forward leans across the page as depth does: the right-hand four must still come out

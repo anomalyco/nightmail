@@ -5,7 +5,7 @@
 // fascia with the readout and the pressure gauge. On the roof: the hopper letters fall into; either side of it a slot
 // scams are thrown out of, and at each end a laser on a pedestal to burn them; two chimneys, a hatch and a beacon. The tubes leave the cabinet at the floor,
 // cross the slab and go over its lip. Everything that moves or can be blown off is a part.
-import { ALL, Builder, type V3 } from './mesh'
+import { ALL, Builder, unit, type V3 } from './mesh'
 import { MAT as M } from './tones'
 import { COLS, PRICE } from './price'
 import { DX, type Plan } from './plan'
@@ -119,8 +119,17 @@ export function buildMachine(p: Plan) {
   for (const x of [-Xw, Xw]) b.quad([x - .5 * px, yTop + .1, 2.5 * px], [x + .5 * px, yTop + .1, 2.5 * px], [x + .5 * px, yTop + .1, D - 2.5 * px], [x - .5 * px, yTop + .1, D - 2.5 * px], M.line, [0, 1, 0])
   b.quad([-Xw, yTop + .1, D * .5 - .5 * px], [Xw, yTop + .1, D * .5 - .5 * px], [Xw, yTop + .1, D * .5 + .5 * px], [-Xw, yTop + .1, D * .5 + .5 * px], M.line, [0, 1, 0])
   const vents: V3[] = [[-Xw * .84, yTop + 13 * px, D * .7], [Xw * .88, yTop + 13 * px, D * .66]]
-  const turrets: V3[] = [-1, 1].map(s => [s * (Xc - (p.phone ? 2.4 : 3.4) * U), yTop + 16 * px, zL]), ejects: V3[] = [-1, 1].map(s => [s * Xw * .6, yTop + 5 * px, zL])
-  for (const t of turrets) { b.cyl([t[0], 0, zL], 1, yTop, yTop + 3 * px, 8.5 * px, M.trim, 16, 2); b.cyl([t[0], 0, zL], 1, yTop + 3 * px, yTop + 16 * px, 3.6 * px, M.steel, 12, 2) }
+  // The lasers stand on brackets at the roof's front corners, ahead of the front and (where the page is wide) out
+  // past the side: whatever they fire at, in front of the machine, beside it or over it, the beam is clear of it.
+  const tz = -5 * px, turrets: V3[] = [-1, 1].map(s => [s * (p.phone ? Xc - 2.4 * U : Xc + 1.15 * U), yTop + 16 * px, tz]), ejects: V3[] = [-1, 1].map(s => [s * Xw * .6, yTop + 5 * px, zL])
+  turrets.forEach((t, k) => {
+    const s = k ? 1 : -1, in0 = s * (p.phone ? Xc - 4.2 * U : Xc - 1.6 * U), out0 = t[0] + s * 1.05 * U, a = Math.min(in0, out0), e = Math.max(in0, out0)
+    b.box(a, yTop + 2 * px, tz - 6 * px, e, yTop + 4.4 * px, 7 * px, M.trim, ALL)
+    for (const x of [in0 + s * .6 * U, in0 + s * 1.5 * U]) b.cyl([x, 0, 3.4 * px], 1, yTop + 4.4 * px, yTop + 5.4 * px, 1.2 * px, M.steel, 8, 2)
+    // (Under what overhangs the side, a gusset against the wall.)
+    if (!p.phone) b.prism(ccw([[s * Xc, yTop + 2 * px], [out0, yTop + 2 * px], [s * Xc, yTop - 1.9 * U]]), -1.4 * px, 0, M.trim, 'fks', M.steel)
+    b.cyl([t[0], 0, tz], 1, yTop + 4.4 * px, yTop + 6.4 * px, 5.6 * px, M.trim, 16, 2); b.cyl([t[0], 0, tz], 1, yTop + 6.4 * px, yTop + 16 * px, 3.2 * px, M.steel, 12, 2)
+  })
   for (const e of ejects) {
     b.box(e[0] - .62 * lw, yTop, zL - 6 * px, e[0] + .62 * lw, yTop + 5 * px, zL + 6 * px, M.steel)
     b.quad([e[0] - .54 * lw, yTop + 5 * px + .1, zL - 2 * px], [e[0] + .54 * lw, yTop + 5 * px + .1, zL - 2 * px], [e[0] + .54 * lw, yTop + 5 * px + .1, zL + 2 * px], [e[0] - .54 * lw, yTop + 5 * px + .1, zL + 2 * px], M.slot, [0, 1, 0])
@@ -128,7 +137,7 @@ export function buildMachine(p: Plan) {
   const beacon: V3 = [Xc - 3 * U, yTop + 12 * px, D * .82]
   b.cyl([beacon[0], 0, beacon[2]], 1, yTop, yTop + 8 * px, 1.2 * px, M.steel, 8, 0); b.cyl([beacon[0], 0, beacon[2]], 1, yTop + 8 * px, yTop + 9.5 * px, 3.6 * px, M.trim, 12, 2); b.cyl([beacon[0], 0, beacon[2]], 1, yTop + 9.5 * px, yTop + 14 * px, 2.8 * px, M.lampOff, 12, 2)
   // Each laser's cable runs back to a junction box by the kerb.
-  turrets.forEach((t, k) => { const s = k ? 1 : -1; b.tube([[t[0], yTop + 1.4 * px, zL + 7 * px], [t[0], yTop + 1.4 * px, D * .52], [t[0] - s * 2.2 * U, yTop + 1.4 * px, D * .52]], 1.3 * px, M.rubber, 6, 5 * px); b.box(t[0] - s * 2.2 * U - 4 * px, yTop, D * .52 - 4 * px, t[0] - s * 2.2 * U + 4 * px, yTop + 4 * px, D * .52 + 4 * px, M.plinth) })
+  turrets.forEach((t, k) => { const s = k ? 1 : -1, x = s * (Xc - (p.phone ? 3 : 2.6) * U); b.tube([[x, yTop + 1.4 * px, 7 * px], [x, yTop + 1.4 * px, D * .52], [x - s * 2.2 * U, yTop + 1.4 * px, D * .52]], 1.3 * px, M.rubber, 6, 5 * px); b.box(x - s * 2.2 * U - 4 * px, yTop, D * .52 - 4 * px, x - s * 2.2 * U + 4 * px, yTop + 4 * px, D * .52 + 4 * px, M.plinth) })
   // What the hopper and the chimneys stand over: holes, seen once they are gone.
   b.quad([-lw * .5, yTop + .15, zL - lw * .26], [lw * .5, yTop + .15, zL - lw * .26], [lw * .5, yTop + .15, zL + lw * .26], [-lw * .5, yTop + .15, zL + lw * .26], M.slot, [0, 1, 0])
   for (const v of vents) b.cyl([v[0], 0, v[2]], 1, yTop + .1, yTop + .2, 3.6 * px, M.slot, 12, 2)
@@ -147,8 +156,8 @@ export function buildMachine(p: Plan) {
   for (const x of p.tubes) {
     b.mark(x - r - px, lower ? yLow : yWall + 1.5 * px, x + r + px, yMan, -.15, M.dark)
     if (!lower) b.mark(x - r - px, 1.5 * V, x + r + px, yWall - 1.5 * px, -.15, M.slot)
-    b.cyl([x, 0, zt], 1, yMan - 2.4 * px, yMan, r + .9 * px, M.steel, 14, 0)
-    if (lower) b.cyl([x, 0, zt], 1, yLow, yLow + 2.4 * px, r + .9 * px, M.steel, 14, 0)
+    b.cyl([x, 0, zt], 1, yMan - 2.6 * px, yMan, r + 1.4 * px, M.steel, 14, 1)
+    if (lower) b.cyl([x, 0, zt], 1, yLow, yLow + 2.6 * px, r + 1.4 * px, M.steel, 14, 2)
   }
   const pitch = Math.abs(p.tubes[1] - p.tubes[0]), bracketH = phone(p) ? 1.2 * px : 1.5 * px, zB = zt - r - 1.2 * px, reach = r + 1.5 * px, ahead = DX * (zB - zt)
   const bracketY: number[] = []
@@ -224,7 +233,7 @@ export function buildMachine(p: Plan) {
     b.cyl([v.x, 0, vz], 1, v.y + .6 * vs, v.y + 1.9 * vs, .4 * vs, M.steel, 10, 0)
     b.cyl([v.x, 0, vz], 1, v.y + 1.9 * vs, v.y + 2.2 * vs, .56 * vs, M.trim, 12, 2, M.slot)
   }
-  const panel = { x0: Xw + (p.phone ? .5 : .9) * U, x1: colX - (p.phone ? .55 : .8) * vs, y0: yCav + p.cavity * .1, y1: yCav + p.cavity * .4 }, panelX = (panel.x0 + panel.x1) / 2
+  const panel = { x0: Xw + (p.phone ? .5 : .7) * U, x1: colX - (p.phone ? .55 : 1.6) * vs, y0: yCav + p.cavity * .1, y1: yCav + p.cavity * .4 }, panelX = (panel.x0 + panel.x1) / 2
   b.mark(panel.x0 + px, panel.y0 + px, panel.x1 - px, panel.y1 - px, -.15, M.slot)
   b.mark(panel.x0 + px, panel.y0 + px, panel.x1 - px, panel.y0 + 2.2 * px, -.2, M.bay)
 
@@ -241,11 +250,11 @@ export function buildMachine(p: Plan) {
   // The lasers: a barrel in a yoke, cooling rings round it, a red lens. Round, so it looks right aimed any way.
   turrets.forEach((t, k) => {
     idx.turrets.push(b.part(`turret${k}`, t))
-    b.cyl([0, t[1], zL], 0, t[0] - 8 * px, t[0] + 17 * px, 4.4 * px, M.plinth, 14, 1)
-    b.cyl([0, t[1], zL], 0, t[0] + 17 * px, t[0] + 22 * px, 3.4 * px, M.steel, 12, 2, M.red)
-    b.cyl([0, t[1], zL], 0, t[0] - 10.5 * px, t[0] - 8 * px, 3.4 * px, M.trim, 12, 1)
-    for (let i = 0; i < 4; i++) b.cyl([0, t[1], zL], 0, t[0] - 5 * px + i * 4.4 * px, t[0] - 3.2 * px + i * 4.4 * px, 6.2 * px, M.trim, 14, 3)
-    b.cyl([t[0], t[1], 0], 2, zL - 6.4 * px, zL + 6.4 * px, 2.6 * px, M.steel, 10, 3)
+    b.cyl([0, t[1], t[2]], 0, t[0] - 8 * px, t[0] + 17 * px, 4.4 * px, M.plinth, 14, 1)
+    b.cyl([0, t[1], t[2]], 0, t[0] + 17 * px, t[0] + 22 * px, 3.4 * px, M.steel, 12, 2, M.red)
+    b.cyl([0, t[1], t[2]], 0, t[0] - 10.5 * px, t[0] - 8 * px, 3.4 * px, M.trim, 12, 1)
+    for (let i = 0; i < 4; i++) b.cyl([0, t[1], t[2]], 0, t[0] - 5 * px + i * 4.4 * px, t[0] - 3.2 * px + i * 4.4 * px, 6.2 * px, M.trim, 14, 3)
+    b.cyl([t[0], t[1], 0], 2, t[2] - 6.4 * px, t[2] + 6.4 * px, 2.6 * px, M.steel, 10, 3)
   })
 
   idx.scan = b.part('scan', [0, scanY, zL]); b.mark(-lw * .56, scanY - .7 * px, lw * .56, scanY + .7 * px, zL - 2.5 * px, M.red)
@@ -316,12 +325,24 @@ export function buildMachine(p: Plan) {
 
   // What the burst leaves: soot and a torn hole in the roof where the hopper stood, splinters of glass in the frame.
   const ch = p.cavity
+  // (Where the hopper stood the roof is torn open: an uneven hole, the sheet round it bent up and out in flaps, their
+  // undersides to the hole; soot on the roof all round. Seen from the front, the far flaps show their dark undersides
+  // and the near ones their backs.)
+  const rim: [number, number][] = [[-1.2, -.95], [-.2, -1.1], [.95, -.9], [1.35, .1], [1.05, 1.45], [-.1, 1.7], [-1.1, 1.4], [-1.45, .2]].map(([x, z]) => [x * hb, zL + z * hd])
+  const fan = (points: [number, number][], y: number, mat: number, grow = 1) => { for (let i = 0; i < points.length; i++) { const [ax, az] = points[i], [bx, bz] = points[(i + 1) % points.length]; b.tri([0, y, zL + .3 * hd], [ax * grow, y, zL + .3 * hd + (az - zL - .3 * hd) * grow], [bx * grow, y, zL + .3 * hd + (bz - zL - .3 * hd) * grow], [0, 1, 0], mat) } }
   idx.soot = b.part('soot', [0, 0, 0], true)
-  b.quad([-hb * 2.6, yTop + .2, zL - hd * 1.6], [hb * 2.9, yTop + .2, zL - hd * 1.2], [hb * 2.4, yTop + .2, zL + hd * 4.4], [-hb * 2.1, yTop + .2, zL + hd * 3.8], M.scorch, [0, 1, 0])
+  fan(rim, yTop + .2, M.scorch, 1.75)
   idx.hole = b.part('hole')
-  b.quad([-hb * 1.25, yTop + .3, zL - hd * .9], [hb * 1.1, yTop + .3, zL - hd * 1.05], [hb * 1.3, yTop + .3, zL + hd * 1.5], [-hb * .95, yTop + .3, zL + hd * 1.7], M.slot, [0, 1, 0])
-  for (const [x, w, h, lean] of [[-hb * 1.3, hb * .5, 9, -.5], [-hb * .5, hb * .45, 12, -.15], [hb * .3, hb * .5, 8, .2], [hb * 1.05, hb * .42, 11, .55]] as number[][]) b.prism(ccw([[x - w / 2, yTop], [x + w / 2, yTop], [x + lean * h * px, yTop + h * px]]), zL + hd * 1.5, zL + hd * 1.5 + 1.2 * px, M.trim, 'fks', M.steel)
-  for (const [x, w, h, lean] of [[-hb * 1.1, hb * .46, 6, -.3], [hb * .15, hb * .5, 8, .1], [hb * .95, hb * .4, 5, .4]] as number[][]) b.prism(ccw([[x - w / 2, yTop], [x + w / 2, yTop], [x + lean * h * px, yTop + h * px]]), zL - hd, zL - hd + 1.2 * px, M.steel, 'fks', M.trim)
+  fan(rim, yTop + .3, M.slot)
+  rim.forEach(([ax, az], i) => {
+    const [bx, bz] = rim[(i + 1) % rim.length], mx = (ax + bx) / 2, mz = (az + bz) / 2, ox = mx, oz = mz - zL - .3 * hd, l = Math.hypot(ox, oz) || 1, nx = ox / l, nz = oz / l
+    // Each a triangle or a torn four-sided piece, leaning out; every other one short.
+    const h = (i % 2 ? 6.5 : 10.5) * px, outBy = (i % 2 ? 4 : 5.5) * px, skew = (i % 3 - 1) * 2.4 * px
+    const tip: V3 = [mx + nx * outBy - nz * skew, yTop + h, mz + nz * outBy + nx * skew], a: V3 = [ax, yTop + .3, az], c: V3 = [bx, yTop + .3, bz], tip2: V3 = [tip[0] + (bx - ax) * .28, tip[1] - 2.2 * px, tip[2] + (bz - az) * .28]
+    // Its back (the roof's own face, turned outwards) and its underside (to the hole, black with soot).
+    b.quad(a, c, tip2, tip, M.body, unit([nx, .5, nz]))
+    b.quad([a[0] - nx * .5, a[1], a[2] - nz * .5], [c[0] - nx * .5, c[1], c[2] - nz * .5], [tip2[0] - nx * .5, tip2[1], tip2[2] - nz * .5], [tip[0] - nx * .5, tip[1], tip[2] - nz * .5], M.char, [0, 1, 0])
+  })
   idx.shards = b.part('shards', [0, 0, 0], true)
   const shard = (points: [number, number][]) => { b.prism(ccw(points), -1.3 * px, -1.2 * px, M.sheen, 'f'); b.prism(ccw(points), -1.25 * px, -1.2 * px, M.glass, 'f') }
   shard([[-Xw, yFas], [-Xw + Xw * .2, yFas], [-Xw + Xw * .08, yFas - ch * .3], [-Xw, yFas - ch * .46]]); shard([[-Xw, yCav], [-Xw + Xw * .26, yCav], [-Xw + Xw * .1, yCav + ch * .16], [-Xw, yCav + ch * .3]])
@@ -377,6 +398,6 @@ export function buildMachine(p: Plan) {
   if (p.fan.length) for (const y of bracketY) if (y > bentY) bracket(p.tubes[bentTube] - pitch / 2, p.tubes[bentTube] + pitch / 2, y)
 
   const data = b.finish()
-  return { data, parts: b.parts, idx, wall, lines, rollerLane, rollerHome, hinge, swing, rr, yR, rideY, scanY, z0, z1, turrets, ejects, beacon, vents, valves, panel, cannon: { pivot, ce, se }, hatchHinge: [-Xw * .3, yTop, D * .88] as V3, crackAt, ventFront: [ventX, ga.y, -3 * px] as V3, hopperTop: yTop + hh, hopperWide: ht, px }
+  return { data, parts: b.parts, idx, wall, lines, rollerLane, rollerHome, hinge, swing, rr, yR, rideY, scanY, z0, z1, turrets, ejects, beacon, vents, valves, panel, cannon: { pivot, ce, se }, hole: { x: 0, z: zL + .3 * hd, r: 1.5 * Math.max(hb, hd) + 7 * px }, hatchHinge: [-Xw * .3, yTop, D * .88] as V3, crackAt, ventFront: [ventX, ga.y, -3 * px] as V3, hopperTop: yTop + hh, hopperWide: ht, px }
 }
 const phone = (p: Plan) => p.phone
