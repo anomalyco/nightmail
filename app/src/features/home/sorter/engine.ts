@@ -373,6 +373,8 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     }
     // Nor up against the cabinet's front, where it would stand over what is written on the base: it is moved forward.
     if (touching && pos[o + 1] < p.base && Math.abs(pos[o]) < p.Xc + hx && pos[o + 2] < 0 && pos[o + 2] > -(Math.hypot(hx, hy) + 10 * px)) { vel[o + 2] = Math.min(vel[o + 2], -150 * px); touching = 0; pos[o + 1] += cy }
+    // Nor half off the side of the page, cut by its edge: it is moved in.
+    if (touching) { const sx = pos[o] + DX * pos[o + 2], reach = Math.hypot(hx, hy); if (Math.abs(sx) > p.W / 2 - reach - 2 * px && Math.abs(sx) < p.W / 2 + reach) { vel[o] = -Math.sign(sx) * 150 * px; touching = 0; pos[o + 1] += cy } }
     // Nor on the slab's front edge, where it would hang over the lip edge on: it goes over.
     if (touching && pos[o + 1] < p.lh && pos[o + 1] > -2 && pos[o + 2] < p.zLip + 22 * px + Math.hypot(hx, hy) * .8) { vel[o + 2] = Math.min(vel[o + 2], -170 * px); touching = 0; pos[o + 1] += cy }
     if (touching) for (const zone of keepClear) if (pos[o + 1] > zone.y - 2 && pos[o + 1] < zone.y + 70 * px) { const dx = pos[o] - zone.x, dz = pos[o + 2] - zone.z, d = Math.hypot(dx, dz); if (d < Math.hypot(hx, hy) + zone.r) { const k = 170 * px / (d || 1); vel[o] = dx * k || 170 * px; vel[o + 2] = dz * k; touching = 0; pos[o + 1] += cy; break } }
@@ -394,7 +396,9 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     // on its edge or propped up, dwindles away where it stands.)
     matrix(B.quat, i * 4)
     // (So does one that stops on a ledge half way up the machine: a riser's top, a block, a bracket.)
-    if (Math.abs(R[5]) < .8 || (B.pos[o + 1] > (p.heads.length ? p.heads[0].h : 0) + 46 * px && B.pos[o + 1] < p.yTop - 6)) { fading.push(i); return }
+    // And one that has stopped half off the side of the page.
+    const sx = Math.abs(B.pos[o] + DX * B.pos[o + 2])
+    if (Math.abs(R[5]) < .8 || (B.pos[o + 1] > (p.heads.length ? p.heads[0].h : 0) + 46 * px && B.pos[o + 1] < p.yTop - 6) || (sx > p.W / 2 - p.lw * .5 && sx < p.W / 2 + p.lw * .7)) { fading.push(i); return }
     for (let a = -1; a <= 1; a += .4) for (let b = -1; b <= 1; b += .5) {
       const lx = a * B.half[o], ly = b * B.half[o + 1], c = cell(B.pos[o] + R[0] * lx + R[1] * ly, B.pos[o + 2] + R[6] * lx + R[7] * ly), y = B.pos[o + 1] + R[3] * lx + R[4] * ly + 1.5
       if (c >= 0 && heights[c] > VOID && y > heights[c] && y < heights[c] + 30) heights[c] = y
