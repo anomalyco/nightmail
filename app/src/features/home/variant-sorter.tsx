@@ -100,6 +100,8 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
     observer.observe(scene.current!)
     return () => observer.disconnect()
   }, [])
+  // `?perf`: a frame meter in the corner, for checking pace on a real phone.
+  useEffect(() => { if (new URLSearchParams(location.search).has('perf')) void import('./sorter/meter').then(meter => meter.mountMeter()) }, [])
   // The old code brings the flood.
   useEffect(() => {
     let at = 0
@@ -138,7 +140,7 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
           {/* The send cannon: press it and it fires one. */}
           {!reduced && <button type="button" className="srt-cannon" style={(() => { const c = p.cannon, sx = DX * c.z, sy = DY * c.z, ce = Math.cos(c.el), se = Math.sin(c.el), x0 = c.x - c.back * ce - 2.4 * c.cs, x1 = c.x + c.fore * ce + c.r, top = c.y + c.pivot + c.fore * se + c.r
             return { left: p.ox + x0 + sx - 4, top: p.oy - top - sy - 4, width: x1 - x0 + 8, height: top - c.y + 8 } })()} aria-label="Send cannon: fire a letter" title="Send one" onClick={() => sorter.current?.send()} />}
-          {!p.phone && <ol className="srt-lanes srt-mouths" aria-hidden="true">{p.drops.map((x, t) => <li key={t} data-side={t < 4 ? 'l' : 'r'} style={{ top: p.oy + p.front, height: p.lip, ...(t < 4 ? { left: x + p.tubeR + 7 } : { right: p.W - x + p.tubeR + 9 }) }}>{(p.fan[1].x - p.fan[0].x < 84 ? TUBE_CODES : TUBE_NAMES)[t]}</li>)}<li data-side="r" style={{ top: p.oy + p.front, height: p.lip, right: p.W - p.ox - p.out + p.tubeR + 9 }}>{p.fan[1].x - p.fan[0].x < 84 ? 'Out' : 'Outbound'}</li></ol>}
+          {!p.phone && <ol className="srt-lanes srt-mouths" aria-hidden="true">{p.drops.map((x, t) => <li key={t} data-side={t < 4 ? 'l' : 'r'} style={{ top: p.oy + p.front, height: p.lip, ...(t < 4 ? { left: x + p.tubeR + 7 } : { right: p.W - x + p.tubeR + 9 }) }}>{(Math.abs(p.fan[1].x - p.fan[0].x) < 84 ? TUBE_CODES : TUBE_NAMES)[t]}</li>)}<li data-side="r" style={{ top: p.oy + p.front, height: p.lip, right: p.W - p.ox - p.out + p.tubeR + 9 }}>{Math.abs(p.fan[1].x - p.fan[0].x) < 84 ? 'Out' : 'Outbound'}</li></ol>}
           {/* Under the price, as wide as the price: what it buys. */}
           <h1 className="srt-band" ref={el => { veiled.current[2] = el }} style={at({ x: price.x, y: p.yBand, w: price.w, h: p.band })} aria-label="$0.20 per 1,000 emails, sent or received via API.">
             <span className="srt-line" aria-hidden="true">

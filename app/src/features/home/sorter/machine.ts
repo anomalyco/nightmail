@@ -112,7 +112,7 @@ export function buildMachine(p: Plan) {
     for (let i = 0; i < 5; i++) b.box(ventX - ventW, ga.y - ventH + i * ventH * .4 + ventH * .08, -1.6 * px, ventX + ventW, ga.y - ventH + i * ventH * .4 + ventH * .29, 0, M.trim)
   }
   const screwX = Xc - (p.post ? p.post / 2 : .65 * U)
-  for (const y of [yFas + V, yTop - 1.4 * V, ...(p.post ? [yMan - 2 * V, yWall + 3 * V, yBand + p.band / 2, 3 * V] : [])]) for (const x of [-screwX, screwX]) b.cyl([x, y, 0], 2, -3.7 * px, -2.5 * px, 1.3 * px, M.steel, 8, 1)
+  for (const y of [yFas + V, yTop - 1.4 * V, ...(p.post ? [yMan - 2 * V, yWall + 3 * V, yBand + p.band / 2] : [])]) for (const x of [-screwX, screwX]) b.cyl([x, y, 0], 2, -3.7 * px, -2.5 * px, 1.3 * px, M.steel, 8, 1)
 
   // The roof: a kerb round it, seams, a laser's pedestal at each end, a slot scams leave by each side of the hopper, a beacon.
   b.box(-Xc, yTop, 0, Xc, yTop + 2 * px, 2.5 * px, M.trim); b.box(-Xc, yTop, D - 2.5 * px, Xc, yTop + 2 * px, D, M.trim)
@@ -227,7 +227,6 @@ export function buildMachine(p: Plan) {
   // back along the slab, and down into it through a collar.
   const outX = p.out - DX * p.zOver, zIn = p.zOver * .5
   b.cyl([outX, 0, zIn], 1, 0, 2.2 * px, r + 1.8 * px, M.steel, 14, 2)
-  if (p.fan.length) shade(outX, p.zLip + 1, zIn)
   b.cyl([outX, 0, p.zOver], 1, -p.lip * .5 - 1.4 * px, -p.lip * .5 + 1.4 * px, r + 1.2 * px, M.steel, 14, 3)
 
   // Two relief valves on the columns beside the works, of the kind a boiler has: a body on a flange, fed from the

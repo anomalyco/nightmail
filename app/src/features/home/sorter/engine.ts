@@ -56,7 +56,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   const SM = 256, S = { head: 0, live: 0, pos: new Float32Array(SM * 3), vel: new Float32Array(SM * 3), age: new Float32Array(SM), life: new Float32Array(SM), size: new Float32Array(SM), grow: new Float32Array(SM), rot: new Float32Array(SM), spin: new Float32Array(SM), seed: new Float32Array(SM), dens: new Float32Array(SM), kind: new Float32Array(SM), heat: new Float32Array(SM), drag: new Float32Array(SM), lift: new Float32Array(SM) }
   const smokeData = new Float32Array(SM * SMOKE_FLOATS)
   let fx: Fx[] = []
-  const heights = new Float32Array(GW * GD)
+  const heights = new Float32Array(GW * GD), ground = new Float32Array(GW * GD)
   // What a body cannot be inside of: boxes on the floor, each pushed out of through its nearest side below `y` (its
   // top is the floor grid's business).
   let solids: { x0: number; x1: number; z0: number; z1: number; y: number }[] = []
@@ -117,7 +117,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     keepClear = [{ x: C.x - C.cs, z: C.z, y: C.y, r: C.back + 2 * C.cs }]
     zones = [p.readout, { x: -p.Xw, y: p.ySlot, w: 2 * p.Xw, h: p.slot }, { x: -p.Xw, y: p.yBand, w: 2 * p.Xw, h: p.band }, ...p.facts].map(r => [r.x + r.w / 2, r.y + r.h / 2, r.w / 2, r.h / 2])
     recoil = 0; sendIn = 2.4; volley = 0
-    L.state.fill(FREE); scripts.clear(); fx = []; S.head = S.live = 0; S.life.fill(0); resetHeights(true); queue.length = 0; spawned = 0; bend = 0; calm()
+    L.state.fill(FREE); scripts.clear(); fx = []; S.head = S.live = 0; S.life.fill(0); layGround(); resetHeights(true); queue.length = 0; spawned = 0; bend = 0; calm()
     for (const cap of caps) cap.on = false
     for (const index of m.idx.caps) parts[index].on = false
     parts[m.idx.scan].on = false; parts[m.idx.beaconOn].on = false; parts[m.idx.soot].on = parts[m.idx.shards].on = parts[m.idx.hole].on = false
@@ -138,20 +138,27 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     renderer!.setSmoke(dark ? { lit0: rgb01(.86, .006, 268), shade0: rgb01(.4, .014, 268), lit1: rgb01(.5, .01, 268), shade1: rgb01(.2, .014, 268), hot: rgb01(.66, .15, 52) } : { lit0: rgb01(.97, .004, 262), shade0: rgb01(.76, .014, 262), lit1: rgb01(.74, .008, 262), shade1: rgb01(.5, .014, 262), hot: rgb01(.7, .16, 52) })
     set('ember', .78, .17, 58); set('red', .64, .21, 27); set('paper', .955, .014, 92); set('spark', .93, .09, 85)
   }
-  function resetHeights(hopper = false) {
+  /** The floor as the machine is built (worked out once for a plan, and copied back when the floor is cleared). */
+  function layGround() {
     // The slab, and the cabinet's roof standing on it; everywhere else there is nothing to land on. On the slab the
-    // headers, the risers and the tubes that cross it are floor too (a letter lies on a tube, not through it); while
-    // the hopper stands, so is its mouth (what overflows it lies in it and round it, not through its plates).
-    const yc = p.tubeR * 2 + 3.5 * px, hh = p.hopper * .82 * .5, ht = p.lw * 1.1, hd = p.lw * .36
+    // headers, the risers and the tubes that cross it are floor too (a letter lies on a tube, not through it).
+    const yc = p.tubeR * 2 + 3.5 * px
     for (let iz = 0; iz < GD; iz++) for (let ix = 0; ix < GW; ix++) {
       const x = GX0 + (ix + .5) * CELL, z = GZ0 + (iz + .5) * CELL
-      heights[iz * GW + ix] = x > -p.Xc && x < p.Xc && z > 0 && z < p.D ? (hopper && Math.abs(x) < ht && Math.abs(z - p.zL) < hd ? p.yTop + hh : p.yTop)
+      ground[iz * GW + ix] = x > -p.Xc && x < p.Xc && z > 0 && z < p.D ? p.yTop
         : p.heads.length && Math.abs(x) > p.Xc + .2 * p.U && Math.abs(x) < p.Xc + .2 * p.U + p.riser && z > p.zProud && z < p.zProud + 3 * p.U ? p.yWall + 1.7 * p.V
         : p.heads.some(h => x > h.x0 && x < h.x1 && z > h.z0 && z < h.z1) ? p.heads[0].h
         : !p.phone && x > p.cannon.x - p.cannon.back - 3.3 * p.cannon.cs && x < p.cannon.x + 3.4 * p.cannon.cs && Math.abs(z - p.cannon.z) < p.cannon.r + 1.4 * p.cannon.cs ? .5 * p.cannon.cs
         : z > p.zLip + 22 * px && z < p.zProud && p.fan.some(leg => Math.abs(x - leg.x) < p.tubeR + 2) ? yc
         : Math.abs(x) < p.slabX && z > p.zLip + 22 * px && z < p.zBack ? 0 : VOID
     }
+  }
+  function resetHeights(hopper = false) {
+    heights.set(ground)
+    if (!hopper) return
+    // While the hopper stands its mouth is floor too: what overflows it lies in it and round it, not through its plates.
+    const hh = p.hopper * .82 * .5, ht = p.lw * 1.1, hd = p.lw * .36
+    for (let z = p.zL - hd; z < p.zL + hd; z += CELL) for (let x = -ht; x < ht; x += CELL) { const c = cell(x, z); if (c >= 0 && heights[c] === p.yTop) heights[c] = p.yTop + hh }
   }
   const cell = (x: number, z: number) => { const ix = Math.floor((x - GX0) / CELL), iz = Math.floor((z - GZ0) / CELL); return ix < 0 || iz < 0 || ix >= GW || iz >= GD ? -1 : iz * GW + ix }
 
@@ -357,6 +364,8 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       const reach = Math.hypot(hx, hy)
       if (pos[o + 2] < reach + 2 * px) { vel[o + 2] = Math.min(vel[o + 2], -190 * px); touching = 0; pos[o + 1] += cy }
     }
+    // Nor up against the cabinet's front, where it would stand over what is written on the base: it is moved forward.
+    if (touching && pos[o + 1] < p.base && Math.abs(pos[o]) < p.Xc + hx && pos[o + 2] < 0 && pos[o + 2] > -(Math.hypot(hx, hy) + 10 * px)) { vel[o + 2] = Math.min(vel[o + 2], -150 * px); touching = 0; pos[o + 1] += cy }
     // Nor on the slab's front edge, where it would hang over the lip edge on: it goes over.
     if (touching && pos[o + 1] < p.lh && pos[o + 1] > -2 && pos[o + 2] < p.zLip + 22 * px + Math.hypot(hx, hy) * .8) { vel[o + 2] = Math.min(vel[o + 2], -170 * px); touching = 0; pos[o + 1] += cy }
     if (touching) for (const zone of keepClear) if (pos[o + 1] > zone.y - 2 && pos[o + 1] < zone.y + 70 * px) { const dx = pos[o] - zone.x, dz = pos[o + 2] - zone.z, d = Math.hypot(dx, dz); if (d < Math.hypot(hx, hy) + zone.r) { const k = 170 * px / (d || 1); vel[o] = dx * k || 170 * px; vel[o + 2] = dz * k; touching = 0; pos[o + 1] += cy; break } }
@@ -680,7 +689,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     if ((phase === 'boom' && clock > 1.2) || (phase === 'rest' && time - boomAt < 5.2)) {
       const late = time - boomAt > 4.4
       let moving = 0
-      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (late) { const c = cell(L.pos[i * 3], L.pos[i * 3 + 2]), edge = L.pos[i * 3 + 1] > p.yTop - 2 && L.pos[i * 3 + 2] > -2 && Math.abs(L.pos[i * 3]) < p.Xc && (L.pos[i * 3 + 2] < p.lw * .7) || (L.pos[i * 3 + 1] < p.lh && L.pos[i * 3 + 2] < p.zLip + 22 * px + p.lw * .5) || keepClear.some(zone => Math.abs(L.pos[i * 3 + 1] - zone.y) < 40 * px && Math.hypot(L.pos[i * 3] - zone.x, L.pos[i * 3 + 2] - zone.z) < p.lw * .62 + zone.r); if (c < 0 || heights[c] === VOID || edge || L.pos[i * 3 + 1] > heights[c] + 30 * px) L.state[i] = FREE; else sleep(L, i) } }
+      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (late) { const c = cell(L.pos[i * 3], L.pos[i * 3 + 2]), edge = L.pos[i * 3 + 1] > p.yTop - 2 && L.pos[i * 3 + 2] > -2 && Math.abs(L.pos[i * 3]) < p.Xc && (L.pos[i * 3 + 2] < p.lw * .7) || (L.pos[i * 3 + 1] < p.lh && L.pos[i * 3 + 2] < p.zLip + 22 * px + p.lw * .5) || (L.pos[i * 3 + 1] < p.base && Math.abs(L.pos[i * 3]) < p.Xc && L.pos[i * 3 + 2] < 0 && L.pos[i * 3 + 2] > -p.lw * .6) || keepClear.some(zone => Math.abs(L.pos[i * 3 + 1] - zone.y) < 40 * px && Math.hypot(L.pos[i * 3] - zone.x, L.pos[i * 3 + 2] - zone.z) < p.lw * .62 + zone.r); if (c < 0 || heights[c] === VOID || edge || L.pos[i * 3 + 1] > heights[c] + 30 * px) L.state[i] = FREE; else sleep(L, i) } }
       for (let i = 0; i < Dn.cap; i++) if (Dn.state[i] === DYN && late) sleep(Dn, i)
       if (phase === 'boom' && moving <= 4) setPhase('rest')
     }
@@ -799,7 +808,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       if (S.age[i] >= S.life[i]) continue
       const o = sn++ * SMOKE_FLOATS
       smokeData[o] = S.pos[i * 3]; smokeData[o + 1] = S.pos[i * 3 + 1]; smokeData[o + 2] = S.pos[i * 3 + 2]; smokeData[o + 3] = S.size[i]; smokeData[o + 4] = S.rot[i]
-      smokeData[o + 5] = S.age[i] / S.life[i]; smokeData[o + 6] = S.seed[i]; smokeData[o + 7] = S.dens[i]; smokeData[o + 8] = S.kind[i]; smokeData[o + 9] = S.heat[i]
+      smokeData[o + 5] = S.age[i] / S.life[i]; smokeData[o + 6] = S.seed[i]; smokeData[o + 7] = dark || S.kind[i] > .5 ? S.dens[i] : S.dens[i] * clamp(1 - (Math.abs(S.pos[i * 3] + DX * S.pos[i * 3 + 2]) - p.Xc) / (70 * px)); smokeData[o + 8] = S.kind[i]; smokeData[o + 9] = S.heat[i]
     }
     renderer!.draw({ parts, letters: instances, letterCount: n, fx: fxData, fxCount: a, glow: glowData, glowCount: g, smoke: smokeData, smokeCount: sn, flash, flashAt: [0, (p.yCav + p.yFas) / 2, 0], flashR: p.cavity * 1.25, wallOn: true })
   }
