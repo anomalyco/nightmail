@@ -6,22 +6,27 @@ import { AnomalyLogo } from '../../components/AnomalyLogo'
 import { reducedMotion, type HomeProps } from '.'
 import { DX, DY, type Plan } from './sorter/plan'
 
-// Below the machine its eight tubes run on down the page, four each side, and one by one turn in to a unit standing on
-// the floor: the places mail can go. Scrolling carries a capsule down each tube to its unit, where the letter in it
-// arrives the way it does in the product: a row in the Inbox, a message in a mail app, an agent's turn, a ritual
-// running, a webhook's payload, a campaign going out, a thread growing, a line in the logs. Everything is driven by
-// how far the page has scrolled (--q on each unit, 0 to 1), with transforms, opacity and clipping only, so nothing
-// shifts; with reduced motion every unit shows its finished state. The letters are from the sorter's own set.
-type Station = { key: string; tube: number; side: 'l' | 'r'; name: string; line: string; plate: string }
+// Under the slab the machine stands on, its eight tubes run on down the page and one by one bend in to an appliance:
+// the places mail can go. Scrolling carries a capsule down each tube, round the bend and into the appliance's tray,
+// and then the letter in it arrives the way it does in the product: a pigeonhole fills and a row appears in the
+// Inbox, a mail app on a monitor gets the message, a teleprinter prints an agent's turn, a ritual's lamps come on line
+// by line, a switchboard posts a webhook, a press runs a campaign off, a thread grows, a ledger tape prints the logs.
+// Everything is driven by how far the page has scrolled (--q on each unit, 0 to 1), with transforms, opacity and
+// clipping only, so nothing shifts; with reduced motion every unit shows its finished state. The letters are from
+// the sorter's own set.
+type Kind = 'inbox' | 'imap' | 'agent' | 'ritual' | 'endpoint' | 'campaign' | 'thread' | 'logs'
+type Station = { kind: Kind; tube: number; name: string; line: string; plate: string; w: number; h: number; up: number; down: number; port: number }
+// `up` and `down` are what stands over or hangs under the appliance's box (paper, a stand); `port` is how far down its
+// side the tube comes in.
 const STATIONS: Station[] = [
-  { key: 'inbox', tube: 3, side: 'l', name: 'Inbox', line: 'Every address keeps its own threads.', plate: 'Inbox' },
-  { key: 'imap', tube: 4, side: 'r', name: 'IMAP and SMTP', line: 'Or open the same inbox in a mail app.', plate: 'IMAP' },
-  { key: 'agent', tube: 2, side: 'l', name: 'Agent inboxes', line: 'Addresses your agents read and answer over MCP.', plate: 'Agents' },
-  { key: 'ritual', tube: 5, side: 'r', name: 'Rituals', line: 'Short scripts that run on mail as it arrives.', plate: 'Rituals' },
-  { key: 'endpoint', tube: 1, side: 'l', name: 'Endpoints', line: 'Slack, Discord, a webhook or a forward.', plate: 'Endpoints' },
-  { key: 'campaign', tube: 6, side: 'r', name: 'Campaigns', line: 'One send to a whole audience, at the same price.', plate: 'Campaigns' },
-  { key: 'thread', tube: 0, side: 'l', name: 'Threads', line: 'Reply from the address the mail came to.', plate: 'Threads' },
-  { key: 'logs', tube: 7, side: 'r', name: 'Logs', line: 'And every message, sent or received, is on record.', plate: 'Logs' },
+  { kind: 'inbox', tube: 0, name: 'Inbox', line: 'Every address keeps its own threads.', plate: 'Inbox', w: 430, h: 262, up: 0, down: 0, port: .2 },
+  { kind: 'imap', tube: 4, name: 'IMAP and SMTP', line: 'Or open the same inbox in a mail app.', plate: 'IMAP', w: 408, h: 240, up: 0, down: 40, port: .5 },
+  { kind: 'agent', tube: 1, name: 'Agent inboxes', line: 'Addresses your agents read and answer over MCP.', plate: 'Agents', w: 420, h: 96, up: 168, down: 0, port: .5 },
+  { kind: 'ritual', tube: 5, name: 'Rituals', line: 'Short scripts that run on mail as it arrives.', plate: 'Rituals', w: 446, h: 226, up: 0, down: 0, port: .5 },
+  { kind: 'endpoint', tube: 2, name: 'Endpoints', line: 'Slack, Discord, a webhook or a forward.', plate: 'Endpoints', w: 446, h: 232, up: 0, down: 0, port: .5 },
+  { kind: 'campaign', tube: 6, name: 'Campaigns', line: 'One send to a whole audience, at the same price.', plate: 'Campaigns', w: 430, h: 246, up: 0, down: 0, port: .5 },
+  { kind: 'thread', tube: 3, name: 'Threads', line: 'Reply from the address the mail came to.', plate: 'Threads', w: 384, h: 262, up: 0, down: 0, port: .5 },
+  { kind: 'logs', tube: 7, name: 'Logs', line: 'And every message, sent or received, is on record.', plate: 'Logs', w: 420, h: 88, up: 0, down: 186, port: .5 },
 ]
 
 /** A window of a unit's progress: the element's own --t runs 0 to 1 while --v goes from `from` to `to`. */
@@ -40,8 +45,8 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
       const view = window.innerHeight
       units.forEach((unit, i) => {
         const box = unit.getBoundingClientRect()
-        // 0 as the unit's port comes in at the bottom of the window, 1 once it stands at 46% of its height.
-        const q = Math.round(Math.min(1, Math.max(0, (view * 1.02 - box.top) / (view * .56))) * 500) / 500
+        // 0 as the unit comes in at the bottom of the window, 1 once its top stands at about 40% of the window's height.
+        const q = Math.round(Math.min(1, Math.max(0, (view * 1.04 - box.top) / (view * .62))) * 500) / 500
         if (q !== last[i]) { last[i] = q; unit.style.setProperty('--q', String(q)) }
       })
     }
@@ -52,42 +57,41 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
   }, [p])
 
   if (!p) return <section className="srt-stations" ref={root} aria-label="Where mail goes" />
-  const phone = p.phone, r = p.tubeR, zt = -(r + 1.5 * p.U / 9)
-  const pipeX = p.tubes.map(x => p.ox + x + DX * zt)
-  // Each unit is a box on the floor in the machine's own projection: a front, and its top and side behind it.
-  // The units stand in one column between the two fours of tubes; where the page is wide enough each one's name is
-  // set outside the tubes, on the side its own tube does not come from.
-  const gap = pipeX[4] - pipeX[3] - 2 * r, stack = p.W < 1140, w = Math.round(Math.min(520, gap - (phone ? 26 : 64)))
-  const box = phone ? { w, h: 228, d: 44 } : { w, h: Math.round(w * .63), d: 64 }
-  // A unit's shadow on the floor, thrown up the page and to the left as the machine's is: its roof's outline moved along the light.
-  const sx = -.479 * box.h, sy = -.289 * box.h, bx = DX * box.d, by = -DY * box.d, pad = 400
-  const shadow = `polygon(${[[0, box.h], [sx, box.h + sy], [bx + sx, box.h + by + sy], [box.w + bx + sx, box.h + by + sy], [box.w + bx, box.h + by], [bx, box.h + by]].map(([x, y]) => `${Math.round(x + pad)}px ${Math.round(y + pad)}px`).join(', ')})`
-  const pitch = box.h + (stack ? 250 : 190), lead = stack ? 150 : 120, port = stack ? 190 : Math.round(box.h / 2)
-  const height = lead + STATIONS.length * pitch + 230
-  const vars = { '--srt-r': `${r}px`, '--srt-box-w': `${box.w}px`, '--srt-box-h': `${box.h}px`, '--srt-dx': `${-DX * box.d}px`, '--srt-dy': `${DY * box.d}px`, height } as CSSProperties
-  return <section className="srt-stations" ref={root} style={vars} aria-label="Where mail goes">
-    {/* Where the machine's tubes come down onto this part of the floor: a clamp across each four. */}
-    {[0, 4].map(first => <span key={first} className="srt-clamp" style={{ left: pipeX[first] - r - 5, width: pipeX[first + 3] - pipeX[first] + 2 * r + 9 }} aria-hidden="true" />)}
-    {STATIONS.map((station, k) => {
-      const top = lead + k * pitch, left = station.side === 'l', x = pipeX[station.tube]
-      const boxLeft = Math.round(p.ox + (pipeX[3] + pipeX[4]) / 2 - p.ox - box.w / 2 - DX * box.d / 2)
-      const reach = left ? boxLeft - x : x - (boxLeft + box.w), fall = Math.min(top + port, 330)
-      return <div key={station.key} className="srt-unit" data-side={station.side} data-stack={stack || undefined} style={{ top, '--srt-port': `${port}px` } as CSSProperties}>
-        {/* The tube: down the page to this unit's port, then in. A capsule rides it. */}
-        <span className="srt-pipe" style={{ left: x - r, top: -top, height: top + port }} aria-hidden="true" />
-        <span className="srt-pipe srt-pipe-in" style={{ left: left ? x : boxLeft + box.w, top: port, width: reach }} aria-hidden="true" />
-        <span className="srt-joint" style={{ left: x, top: port }} aria-hidden="true" />
-        <span className="srt-capsule" style={{ left: x - r * .075, top: port, '--fall': `${fall}px`, '--reach': `${left ? reach : -reach}px`, '--turn': fall / (fall + reach) } as CSSProperties} aria-hidden="true" />
-        <span className="srt-shadow" style={{ left: boxLeft, top: stack ? 74 : 0, clipPath: shadow }} aria-hidden="true" />
-        <div className="srt-box" style={{ left: boxLeft }}>
-          <span className="srt-collar" aria-hidden="true" />
-          <div className="srt-screen" aria-hidden="true">{VIGNETTES[station.key]}</div>
-          <span className="srt-plate" aria-hidden="true">{station.plate}</span>
-          <span className="srt-lamp" aria-hidden="true" />
-        </div>
-        <div className="srt-caption" style={stack ? { left: boxLeft, width: box.w } : left ? { left: pipeX[7] + r + 44 } : { right: p.W - pipeX[0] + r + 44 }}>
+  const phone = p.phone, r = p.tubeR, wide = r * 2, depth = phone ? 40 : 60, dx = -DX * depth, dy = DY * depth
+  // Each appliance stands between the two fours of tubes, a little towards the side its own tube comes from.
+  const inner = Math.min(...p.drops.slice(4)) - Math.max(...p.drops.slice(0, 4)), room = inner - 2 * (phone ? 20 : 74), lean = phone ? 0 : Math.min(46, Math.max(0, (room - 430) / 2))
+  const captionH = phone ? 58 : 66, gap = phone ? 84 : 116
+  let top = phone ? 96 : 110
+  const units = STATIONS.map(station => {
+    const w = Math.min(station.w, room), left = station.tube < 4, x = p.drops[station.tube]
+    const boxLeft = Math.round(p.ox - w / 2 + (left ? -lean : lean) + dx / 2), boxTop = top + captionH + dy + 18 + station.up
+    const unit = { station, w, left, x, top, boxLeft, boxTop: boxTop - top, port: boxTop - top + Math.round(station.h * station.port) }
+    top = boxTop + station.h + station.down + gap
+    return unit
+  })
+  const height = top + (phone ? 150 : 170)
+  const vars = { '--srt-r': `${r}px`, '--srt-pipe': `${wide}px`, '--srt-dx': `${dx}px`, '--srt-dy': `${dy}px`, height } as CSSProperties
+  return <section className="srt-stations" ref={root} style={vars} data-phone={phone || undefined} aria-label="Where mail goes">
+    {units.map(({ station, w, left, x, top, boxLeft, boxTop, port }) => {
+      // The tube: down the page to this unit, round a bend and along to its tray, just outside the appliance's wall.
+      const s = left ? 1 : -1, trayW = phone ? 0 : 40, end = left ? boxLeft - dx - 6 - trayW : boxLeft + w + 6 + trayW, reach = Math.abs(end - x), bend = Math.max(wide * .5, Math.min(wide * 1.7, reach * .5)), fall = Math.min(top + port - bend, 420)
+      const path = `path("M ${x} ${port - bend - fall} L ${x} ${port - bend} Q ${x} ${port} ${x + s * bend} ${port} L ${end + s * (trayW - (phone ? -8 : 18))} ${port}")`
+      return <div key={station.kind} className="srt-unit" data-kind={station.kind} data-side={left ? 'l' : 'r'} style={{ top, '--srt-w': `${w}px`, '--srt-h': `${station.h}px`, '--srt-port': `${port - boxTop}px` } as CSSProperties}>
+        <span className="srt-pipe" style={{ left: x - wide / 2, top: -top, height: top + port - bend }} aria-hidden="true" />
+        <span className="srt-bend" style={{ left: left ? x - wide / 2 : x - bend, top: port - bend, width: bend + wide / 2, height: bend + wide / 2, '--srt-bend': `${bend}px` } as CSSProperties} aria-hidden="true" />
+        <span className="srt-pipe srt-pipe-in" style={{ left: Math.min(x + s * bend, end), top: port, width: Math.max(0, reach - bend) }} aria-hidden="true" />
+        <span className="srt-ring" style={{ left: x, top: port - bend }} aria-hidden="true" />
+        <span className="srt-ring srt-ring-in" style={{ left: x + s * bend, top: port }} aria-hidden="true" />
+        {!phone && <span className="srt-tray" style={{ left: left ? end : end - trayW, top: port, width: trayW }} aria-hidden="true" />}
+        <span className="srt-capsule" style={{ offsetPath: path }} aria-hidden="true" />
+        <div className="srt-caption" style={{ left: boxLeft - dx, width: w + dx }}>
           <h2>{station.name}</h2>
           <p>{station.line}</p>
+        </div>
+        <div className="srt-box" style={{ left: boxLeft, top: boxTop }}>
+          {APPLIANCES[station.kind]}
+          <span className="srt-plate" aria-hidden="true">{station.plate}</span>
+          <span className="srt-lamp" aria-hidden="true" />
         </div>
       </div>
     })}
@@ -104,76 +108,104 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
 
 const Row = ({ from, subject, when, fresh, style }: { from: string; subject: string; when: string; fresh?: boolean; style?: CSSProperties }) =>
   <div className={fresh ? 'srt-row-mail srt-step srt-fresh' : 'srt-row-mail'} style={style}><i className="srt-dot" /><b>{from}</b><span>{subject}</span><time>{when}</time></div>
+const LOGS: [string, string, number][] = [['Received', 'Turn a one-star canteen review into notes', 0], ['Received', 'Your webhook is answering in Latin', .15], ['Delivered', 'We label the sausages by mood now', .3], ['Received', 'Re: can you send me the file again', .45], ['Sent', 'Sending version six. It is the last one.', .6], ['Received', 'Your pager wants to be friends', .75]]
 
-const VIGNETTES: Record<string, ReactNode> = {
-  // A new row at the top of the Inbox, unread.
-  inbox: <div className="srt-v srt-v-inbox">
-    <div className="srt-v-head"><b>Inbox</b><span className="srt-step srt-count" style={step(.1, .3)}><i>2</i><i>3</i></span></div>
-    <div className="srt-list">
-      <Row fresh from="On-Call Pager" subject="Your pager wants to be friends" when="now" style={step(.05, .4)} />
-      <div className="srt-step srt-shift" style={step(.05, .4)}>
-        <Row from="Handle Concern" subject="Order confirmed: 6 mugs, 7 handles" when="02:14" />
-        <Row from="Nadia Sorrel" subject="Your badge photo is now the wrong you" when="01:40" />
-        <Row from="nightly-sync" subject="Your cron job is asking about the point" when="00:03" />
+// Each appliance: what stands in, on or under its box. All of it is aria-hidden; the unit's name and line say what it is.
+const APPLIANCES: Record<Kind, ReactNode> = {
+  // A rack of pigeonholes over a screen: the letter is filed, and its row heads the Inbox.
+  inbox: <div className="srt-a" aria-hidden="true">
+    <div className="srt-holes">{Array.from({ length: 12 }, (_, i) => <i key={i} className={i === 7 ? 'srt-step srt-filed' : [1, 2, 4, 9, 10].includes(i) ? 'srt-full' : undefined} style={i === 7 ? step(0, .14) : undefined} />)}</div>
+    <div className="srt-screen">
+      <div className="srt-v-head"><b>Inbox</b><span className="srt-step srt-count" style={step(.2, .4)}><i>2</i><i>3</i></span></div>
+      <div className="srt-list">
+        <Row fresh from="On-Call Pager" subject="Your pager wants to be friends" when="now" style={step(.16, .5)} />
+        <div className="srt-step srt-shift" style={step(.16, .5)}>
+          <Row from="Handle Concern" subject="Order confirmed: 6 mugs, 7 handles" when="02:14" />
+          <Row from="Nadia Sorrel" subject="Your badge photo is now the wrong you" when="01:40" />
+          <Row from="nightly-sync" subject="Your cron job is asking about the point" when="00:03" />
+        </div>
       </div>
     </div>
   </div>,
-  // The same inbox in a mail app: the count on the folder, the message in the list.
-  imap: <div className="srt-v srt-v-imap">
-    <div className="srt-app-side"><i /><i /><i /><span className="srt-folder">Inbox<b className="srt-step srt-pop" style={step(.3, .5)}>1</b></span><span>Sent</span><span>Junk</span><span>Archive</span></div>
-    <div className="srt-app-list">
-      <div className="srt-app-mail srt-step srt-fresh" style={step(.1, .5)}><b>Pantry Assistant</b><span>Your fridge has written a short essay</span><em>Title: On Being Opened. Twelve pages. Tone: considered, angry.</em></div>
-      <div className="srt-step srt-shift" style={step(.1, .5)}>
-        <div className="srt-app-mail"><b>Mill Row Bakes</b><span>The ovens are taking a vacation</span><em>Three days off. They earned it, we earned it. Bread Tuesday.</em></div>
-        <div className="srt-app-mail"><b>Seed Library</b><span>New hours for the seed library</span><em>Open Tuesdays. Closed when we are in the garden.</em></div>
-        <div className="srt-app-mail"><b>Boundary Post</b><span>Delivery failed: door was open, which felt wrong</span><em>We respected the door's privacy. The parcel waits outside.</em></div>
+  // A monitor on its stand: the same inbox in a mail app, the count on the folder, the message in the list.
+  imap: <div className="srt-a" aria-hidden="true">
+    <div className="srt-screen srt-v-imap">
+      <div className="srt-app-side"><i /><i /><i /><span className="srt-folder">Inbox<b className="srt-step srt-pop" style={step(.3, .5)}>1</b></span><span>Sent</span><span>Junk</span><span>Archive</span></div>
+      <div className="srt-app-list">
+        <div className="srt-app-mail srt-step srt-fresh" style={step(.1, .5)}><b>Pantry Assistant</b><span>Your fridge has written a short essay</span><em>Title: On Being Opened. Twelve pages. Tone: considered, angry.</em></div>
+        <div className="srt-step srt-shift" style={step(.1, .5)}>
+          <div className="srt-app-mail"><b>Mill Row Bakes</b><span>The ovens are taking a vacation</span><em>Three days off. They earned it, we earned it. Bread Tuesday.</em></div>
+          <div className="srt-app-mail"><b>Seed Library</b><span>New hours for the seed library</span><em>Open Tuesdays. Closed when we are in the garden.</em></div>
+          <div className="srt-app-mail"><b>Boundary Post</b><span>Delivery failed: door was open, which felt wrong</span><em>We respected the door's privacy. The parcel waits outside.</em></div>
+        </div>
       </div>
     </div>
+    <span className="srt-neck" /><span className="srt-foot" />
   </div>,
-  // An agent waits on its inbox, reads what arrives, replies.
-  agent: <div className="srt-v srt-v-agent">
-    <p className="srt-step srt-type" style={step(0, .16)}><i>agent</i> inboxes.wait()</p>
-    <p className="srt-step srt-in srt-got" style={step(.2, .36)}><i>mail</i> <b>Bertram Quaife</b> Turn a one-star canteen review into notes</p>
-    <p className="srt-step srt-in srt-quote" style={step(.34, .5)}>Extract the actionable part from 'the soup was a warning'.</p>
-    <p className="srt-step srt-type" style={step(.54, .78)}><i>agent</i> messages.reply("1. Label the soup.")</p>
-    <p className="srt-step srt-in srt-ok" style={step(.82, .96)}><i>mail</i> Reply sent from the inbox's address</p>
+  // A teleprinter: the agent's turn comes up out of it on paper, line by line.
+  agent: <div className="srt-a" aria-hidden="true">
+    <div className="srt-feed"><div className="srt-paper srt-step" style={step(0, .92)}>
+      <p><i>agent</i> inboxes.wait()</p>
+      <p><i>mail</i> Bertram Quaife: Turn a one-star canteen review into notes</p>
+      <p className="srt-quote">Extract the actionable part from 'the soup was a warning'.</p>
+      <p><i>agent</i> messages.reply("1. Label the soup.")</p>
+      <p><i>mail</i> Reply sent from the inbox's address</p>
+    </div></div>
+    <div className="srt-keys">{Array.from({ length: 22 }, (_, i) => <i key={i} />)}</div>
   </div>,
-  // A ritual runs on the message: the condition holds, two actions follow.
-  ritual: <div className="srt-v srt-v-ritual">
-    <pre><span>export default function route(email) {'{'}</span>
-      <span className="srt-step srt-run" style={step(.1, .3)}>  if (email.subject.includes("pager")) {'{'}<b className="srt-step srt-pop" style={step(.3, .42)}>true</b></span>
-      <span className="srt-step srt-run" style={step(.42, .58)}>    label("on-call")</span>
-      <span className="srt-step srt-run" style={step(.58, .76)}>    endpoints.pager({'{'} text: email.subject {'}'})</span>
-      <span>  {'}'}</span>
-      <span>{'}'}</span></pre>
-    <div className="srt-chips"><span className="srt-step srt-in" style={step(.5, .64)}>Labelled on-call</span><span className="srt-step srt-in" style={step(.72, .88)}>Sent to pager</span></div>
+  // A console: the ritual on its screen, and a lamp for each thing it does, lit as the line runs.
+  ritual: <div className="srt-a" aria-hidden="true">
+    <div className="srt-screen srt-v-ritual">
+      <pre><span>export default function route(email) {'{'}</span>
+        <span className="srt-step srt-run" style={step(.1, .3)}>  if (email.subject.includes("pager")) {'{'}</span>
+        <span className="srt-step srt-run" style={step(.4, .56)}>    label("on-call")</span>
+        <span className="srt-step srt-run" style={step(.62, .8)}>    endpoints.pager({'{'} text: email.subject {'}'})</span>
+        <span>  {'}'}</span>
+        <span>{'}'}</span></pre>
+    </div>
+    <div className="srt-panel">
+      <span className="srt-step srt-led" style={step(.24, .34)}>true</span>
+      <span className="srt-step srt-led" style={step(.5, .6)}>label</span>
+      <span className="srt-step srt-led" style={step(.74, .84)}>endpoint</span>
+    </div>
   </div>,
-  // The payload a webhook endpoint is sent, and its answer.
-  endpoint: <div className="srt-v srt-v-endpoint">
-    <p className="srt-step srt-type" style={step(0, .2)}><b>POST</b> https://hooks.acme.example/mail</p>
-    <pre className="srt-step srt-unfold" style={step(.2, .7)}>{'{\n  "type": "message.received",\n  "from": "Delivery Service",\n  "subject": "Your webhook is answering in Latin",\n  "text": "Status 200, but the body is a mood…"\n}'}</pre>
-    <p className="srt-step srt-in srt-ok" style={step(.76, .92)}><b>200</b> OK</p>
+  // A switchboard: the payload, and the line it goes out on.
+  endpoint: <div className="srt-a" aria-hidden="true">
+    <div className="srt-screen srt-v-endpoint">
+      <p className="srt-step srt-type" style={step(.02, .22)}><b>POST</b> hooks.acme.example/mail</p>
+      <pre className="srt-step srt-unfold" style={step(.22, .66)}>{'{\n  "type": "message.received",\n  "from": "Delivery Service",\n  "subject": "Your webhook is\n    answering in Latin"\n}'}</pre>
+      <p className="srt-step srt-in srt-ok" style={step(.8, .94)}><b>200</b> OK</p>
+    </div>
+    <div className="srt-panel srt-jacks">
+      <span>Slack</span><span>Discord</span><span className="srt-step srt-led" style={step(.68, .8)}>Webhook</span><span>Forward</span>
+    </div>
   </div>,
-  // A campaign goes out to an audience: a thousand contacts, and what that costs.
-  campaign: <div className="srt-v srt-v-campaign">
-    <div className="srt-v-head"><b>We label the sausages by mood now</b></div>
-    <p className="srt-sub">Counter Six Butcher to <b>Regulars</b>, 1,000 contacts</p>
-    <div className="srt-grid">{Array.from({ length: 100 }, (_, i) => <i key={i} className="srt-step" style={step(.08 + (i % 20) * .028 + Math.floor(i / 20) * .012, .14 + (i % 20) * .028 + Math.floor(i / 20) * .012)} />)}</div>
-    <div className="srt-meter"><span className="srt-step srt-fill" style={step(.08, .72)} /></div>
-    <p className="srt-total"><span className="srt-step srt-in" style={step(.74, .86)}>1,000 sent</span><b className="srt-step srt-in" style={step(.84, .96)}>$0.20</b></p>
+  // A press: one letter in, a thousand out, and what that costs.
+  campaign: <div className="srt-a" aria-hidden="true">
+    <div className="srt-screen srt-v-campaign">
+      <div className="srt-v-head"><b>We label the sausages by mood now</b></div>
+      <p className="srt-sub">Counter Six Butcher to <b>Regulars</b>, 1,000 contacts</p>
+      <div className="srt-grid">{Array.from({ length: 100 }, (_, i) => <i key={i} className="srt-step" style={step(.08 + (i % 20) * .028 + Math.floor(i / 20) * .012, .14 + (i % 20) * .028 + Math.floor(i / 20) * .012)} />)}</div>
+      <div className="srt-meter"><span className="srt-step srt-fill" style={step(.08, .72)} /></div>
+      <p className="srt-total"><span className="srt-step srt-in" style={step(.74, .86)}>1,000 sent</span><b className="srt-step srt-in" style={step(.84, .96)}>$0.20</b></p>
+    </div>
+    <div className="srt-out">{[0, 1, 2, 3, 4, 5].map(i => <i key={i} className="srt-step" style={step(.16 + i * .1, .24 + i * .1)} />)}</div>
   </div>,
   // A thread: the message that came, and the reply from the same address.
-  thread: <div className="srt-v srt-v-thread">
-    <div className="srt-v-head"><b>Re: can you send me the file again</b></div>
-    <p className="srt-bubble">Here it is. Again.</p>
-    <p className="srt-bubble srt-theirs srt-step srt-in" style={step(.08, .3)}><b>Zahir Bhatt</b>This is the fifth time. Each version is a different version.</p>
-    <p className="srt-bubble srt-step srt-type" style={step(.42, .74)}>Sending version six. It is the last one.</p>
-    <p className="srt-sent srt-step srt-in" style={step(.8, .94)}>Sent from the address it came to</p>
+  thread: <div className="srt-a" aria-hidden="true">
+    <div className="srt-screen srt-v-thread">
+      <div className="srt-v-head"><b>Re: can you send me the file again</b></div>
+      <p className="srt-bubble">Here it is. Again.</p>
+      <p className="srt-bubble srt-theirs srt-step srt-in" style={step(.08, .3)}><b>Zahir Bhatt</b>This is the fifth time. Each version is a different version.</p>
+      <p className="srt-bubble srt-step srt-type" style={step(.42, .74)}>Sending version six. It is the last one.</p>
+      <p className="srt-sent srt-step srt-in" style={step(.8, .94)}>Sent from the address it came to</p>
+    </div>
   </div>,
-  // The logs: every message that went through, newest first.
-  logs: <div className="srt-v srt-v-logs">
-    <div className="srt-v-head"><b>Logs</b><span>Sent and received</span></div>
-    {[['Received', 'Your pager wants to be friends', .7], ['Sent', 'Sending version six. It is the last one.', .56], ['Received', 'Re: can you send me the file again', .42], ['Delivered', 'We label the sausages by mood now', .28], ['Received', 'Your webhook is answering in Latin', .14], ['Received', 'Turn a one-star canteen review into notes', 0]].map(([status, subject, from], i) =>
-      <div key={i} className="srt-log srt-step srt-in" style={step(from as number, (from as number) + .16)}><span data-status={status}>{status}</span><b>{subject}</b></div>)}
+  // A ledger printer: every message that went through, on tape, the newest at the head.
+  logs: <div className="srt-a" aria-hidden="true">
+    <div className="srt-feed srt-feed-down"><div className="srt-paper srt-step" style={step(0, .94)}>
+      {LOGS.slice().reverse().map(([status, subject], i) => <p key={i} className="srt-log"><span data-status={status}>{status}</span><b>{subject}</b></p>)}
+    </div></div>
+    <div className="srt-keys srt-counter"><b>Logs</b><span>Sent and received</span></div>
   </div>,
 }

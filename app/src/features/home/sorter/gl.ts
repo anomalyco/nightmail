@@ -37,13 +37,13 @@ void main() { vec4 w = uModel * vec4(aPos, 1.); vWorld = w.xyz; vNrm = mat3(uMod
 const MESH_FS = `#version 300 es
 precision highp float; precision highp sampler2DShadow;
 in vec3 vWorld, vNrm; in float vMat;
-uniform sampler2D uPal; uniform sampler2DShadow uShadow; uniform mat4 uLight; uniform vec3 uL; uniform float uFlash, uFade;
+uniform sampler2D uPal; uniform sampler2DShadow uShadow; uniform mat4 uLight; uniform vec3 uL; uniform float uFlash, uFade, uSlab;
 out vec4 o;
 ${BANDS}
 void main() {
   vec3 n = normalize(vNrm); float nl = dot(n, uL);
   vec4 c = toned(vMat, nl, nl > 0. ? shadowAt(vWorld, n) : 0.);
-  c.rgb = mix(c.rgb, vec3(1.), uFlash * (vMat < .5 ? .1 : .22 + .45 * max(nl, 0.)));
+  if (abs(vMat - uSlab) > .5) c.rgb = mix(c.rgb, vec3(1., .93, .78), uFlash * (.16 + .4 * max(nl, 0.)));
   o = vec4(c.rgb, c.a * uFade);
 }`
 
@@ -112,7 +112,6 @@ void main() {
     c = mix(c, pal(uEmber, 1).rgb, 1. - smoothstep(b + .02, b + .07, r));
     c = mix(c, vec3(1., .96, .8), 1. - smoothstep(b, b + .025, r));
   }
-  c = mix(c, vec3(1.), uFlash * .3);
   o = vec4(c, 1.);
 }`
 
@@ -208,7 +207,8 @@ export function createRenderer(canvas: HTMLCanvasElement) {
 
   const proj = new Float32Array(16), light = new Float32Array(16), identity = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
   let W = 1, H = 1, dpr = 1, vertices = 0, wallCount = 0
-  const mats = { paper: 0, ink: 0, stamp: 0, red: 0, ember: 0, char: 0, dim: 0 }
+  const mats = { paper: 0, ink: 0, stamp: 0, red: 0, ember: 0, char: 0, dim: 0, slab: 0 }
+  const clear = [0, 0, 0]
 
   return {
     gl,
@@ -229,6 +229,8 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     },
     setPalette(rgba: Uint8Array) { gl.bindTexture(gl.TEXTURE_2D, palette); gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, TONES, MATS, gl.RGBA, gl.UNSIGNED_BYTE, rgba) },
     setMaterials(next: typeof mats) { Object.assign(mats, next) },
+    /** The page's own colour, behind everything. */
+    setClear(r: number, g: number, b: number) { clear[0] = r; clear[1] = g; clear[2] = b },
     setMesh(data: Float32Array) { gl.bindBuffer(gl.ARRAY_BUFFER, meshBuffer); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); vertices = data.length / 7 },
     setWall(data: Float32Array, count: number) { wall.upload(data, count); wallCount = count },
     get vertices() { return vertices },
@@ -236,7 +238,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
       const pass = (matrix: Float32Array, depthOnly: boolean) => {
         gl.useProgram(mesh.p)
         gl.uniformMatrix4fv(mesh.u('uProj'), false, matrix); gl.uniformMatrix4fv(mesh.u('uLight'), false, light); gl.uniform3fv(mesh.u('uL'), LIGHT)
-        gl.uniform2f(mesh.u('uShake'), depthOnly ? 0 : scene.shake[0] * 2 / W, depthOnly ? 0 : scene.shake[1] * 2 / H); gl.uniform1f(mesh.u('uFlash'), scene.flash); gl.uniform1f(mesh.u('uFade'), 1)
+        gl.uniform2f(mesh.u('uShake'), depthOnly ? 0 : scene.shake[0] * 2 / W, depthOnly ? 0 : scene.shake[1] * 2 / H); gl.uniform1f(mesh.u('uFlash'), scene.flash); gl.uniform1f(mesh.u('uFade'), 1); gl.uniform1f(mesh.u('uSlab'), mats.slab)
         gl.uniform1i(mesh.u('uPal'), 0); gl.uniform1i(mesh.u('uShadow'), 1)
         gl.bindVertexArray(meshVao)
         for (const part of scene.parts) if (part.on && !part.glass && part.fade >= 1) { gl.uniformMatrix4fv(mesh.u('uModel'), false, part.m); gl.drawArrays(gl.TRIANGLES, part.start, part.count) }
@@ -259,7 +261,7 @@ export function createRenderer(canvas: HTMLCanvasElement) {
       gl.disable(gl.POLYGON_OFFSET_FILL)
       gl.bindFramebuffer(gl.FRAMEBUFFER, null); gl.viewport(0, 0, canvas.width, canvas.height)
       gl.activeTexture(gl.TEXTURE1); gl.bindTexture(gl.TEXTURE_2D, shadow)
-      gl.clearColor(0, 0, 0, 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
+      gl.clearColor(clear[0], clear[1], clear[2], 1); gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
       pass(proj, false)
       // Glass and anything fading in or out, over what is behind it.
       gl.enable(gl.BLEND); gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA); gl.depthMask(false)

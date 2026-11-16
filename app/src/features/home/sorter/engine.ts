@@ -18,7 +18,7 @@ export type Hooks = { scan: (letter: Letter | null, verdict: 'read' | 'junk' | '
 export type Sorter = ReturnType<typeof mountSorter>
 
 const MAX = 760, FREE = 0, SCRIPT = 1, DYN = 2, ASLEEP = 3, HELD = 4, HOME = 5
-const CELL = 8, GX0 = -1300, GZ0 = -700, GW = 325, GD = 420
+const CELL = 8, GX0 = -1300, GZ0 = -700, GW = 325, GD = 420, VOID = -9000
 const rnd = (a = 1, b = 0) => b + Math.random() * (a - b)
 const clamp = (x: number, a = 0, b = 1) => x < a ? a : x > b ? b : x
 const ease = (t: number) => t * t * (3 - 2 * t), out = (t: number) => 1 - (1 - t) ** 3
@@ -38,19 +38,20 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   let m!: Machine, parts!: Part[], px = 1, G = 1500, oyc = 0
   const L = bodies(MAX, true), kind = new Uint8Array(MAX), data = new Int32Array(MAX), seed = new Float32Array(MAX), burn = new Float32Array(MAX), burning = new Uint8Array(MAX), delay = new Float32Array(MAX), from = new Float32Array(MAX * 7)
   const scripts = new Map<number, Script>()
-  let Dn = bodies(0, false), debrisPart: number[] = [], debrisHome: V3[] = []
+  let Dn = bodies(0, false), debrisPart: number[] = [], debrisHome: V3[] = [], selfPosed = new Set<number>(), turretBody = 0, boltBody = 0
   const instances = new Float32Array(MAX * LETTER_FLOATS), fxData = new Float32Array(700 * FX_FLOATS), glowData = new Float32Array(64 * FX_FLOATS)
   let fx: Fx[] = []
   const heights = new Float32Array(GW * GD)
   const colour = { steam: [1, 1, 1], smoke: [0, 0, 0], ember: [1, .6, .2], red: [1, .2, .2], paper: [1, 1, 1], spark: [1, .9, .6] }
 
-  let phase: Phase = 'boot', clock = 0, runT = 0, heat = 0, speed = 1, spawnIn = .3, sorted = 0, burnt = 0, shake = 0, flash = 0, needle = 0, needleV = 0, wallBlink = 0, time = 0
-  let scanning = -1, waiting = -1, turretAngle = .45, turretAim = .45, aimHold = 0, steamIn = 0, sparkIn = 0, rainLeft = 0
+  let phase: Phase = 'boot', clock = 0, runT = 0, heat = 0, speed = 1, feed = 1, spawnIn = .3, sorted = 0, burnt = 0, shake = 0, flash = 0, needle = 0, needleV = 0, time = 0
+  let scanning = -1, spawned = 0, turretAngle = .45, turretAim = .45, aimHold = 0, steamIn = 0, sparkIn = 0, rainLeft = 0, bend = 0
+  const queue: number[] = [], QUEUE = 5
   const flapAngle = new Float32Array(7), flapWant = new Float32Array(7), rollerSpin = new Float32Array(56)
-  const caps: { tube: number; s: number; on: boolean }[] = Array.from({ length: 18 }, () => ({ tube: 0, s: 0, on: false }))
-  let tubeLength: number[][] = []
+  const caps = Array.from({ length: 28 }, () => ({ tube: 0, run: 0, s: 0, wait: 0, on: false }))
+  let runLength: number[][][] = []
   const zaps: { id: number; at: number }[] = []
-  const T = options.quick ? { calm: 2.4, ramp: 6.5, over: 1.3 } : { calm: 6, ramp: 10.5, over: 1.6 }
+  const T = options.quick ? { calm: 1.6, ramp: 7.6, over: 1.4 } : { calm: 3.2, ramp: 13.6, over: 1.7 }
   let raf = 0, last = 0, visible = true, dead = false
   const pointer = { x: 0, y: 0, in: false, down: false, moved: 0, held: -1, hover: -1, dirty: false, mouse: true, holdY: 0 }
 
@@ -60,33 +61,36 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     renderer!.resize(p.W, p.H + over, Math.min(window.devicePixelRatio || 1, p.phone ? 2 : 2), p.ox, oyc)
     m = buildMachine(p); parts = m.parts
     renderer!.setMesh(m.data); renderer!.setWall(m.wall, 1000)
-    renderer!.setMaterials({ paper: M.paper, ink: M.ink, stamp: M.brand, red: M.red, ember: M.ember, char: M.char, dim: M.dim })
-    tubeLength = m.tubeLines.map(line => { const s = [0]; for (let i = 1; i < line.length; i++) s.push(s[i - 1] + Math.hypot(line[i][0] - line[i - 1][0], line[i][1] - line[i - 1][1], line[i][2] - line[i - 1][2])); return s })
-    // What can be blown off: the hopper, every roller and gate, the bolts, the scanner's light.
-    debrisPart = [m.idx.hopper, ...m.idx.rollers, ...m.idx.flaps, ...m.idx.bolts]
+    renderer!.setMaterials({ paper: M.paper, ink: M.ink, stamp: M.brand, red: M.red, ember: M.ember, char: M.char, dim: M.dim, slab: M.slab })
+    runLength = m.lines.map(runs => runs.map(line => { const s = [0]; for (let i = 1; i < line.length; i++) s.push(s[i - 1] + Math.hypot(line[i][0] - line[i - 1][0], line[i][1] - line[i - 1][1], line[i][2] - line[i - 1][2])); return s }))
+    // What can be blown off: the hopper, the laser, the chimneys, the hatch, the glass in panes, every roller, gate and bolt.
+    debrisPart = [m.idx.hopper, m.idx.turret, ...m.idx.vents, m.idx.hatch, ...m.idx.panes, ...m.idx.rollers, ...m.idx.flaps, ...m.idx.bolts]
+    selfPosed = new Set([m.idx.turret, ...m.idx.rollers, ...m.idx.flaps]); turretBody = 1; boltBody = debrisPart.length - m.idx.bolts.length
     Dn = bodies(debrisPart.length, false)
     debrisHome = debrisPart.map((index, i) => {
       const part = m.parts[index], c: V3 = [(part.lo[0] + part.hi[0]) / 2, (part.lo[1] + part.hi[1]) / 2, (part.lo[2] + part.hi[2]) / 2]
       for (let k = 0; k < 3; k++) Dn.half[i * 3 + k] = Math.max(1, (part.hi[k] - part.lo[k]) / 2)
       return c
     })
-    L.state.fill(FREE); scripts.clear(); fx = []; resetHeights()
+    L.state.fill(FREE); scripts.clear(); fx = []; resetHeights(); queue.length = 0; spawned = 0; bend = 0
     for (const cap of caps) cap.on = false
     for (const index of m.idx.caps) parts[index].on = false
-    parts[m.idx.scan].on = false; parts[m.idx.beaconOn].on = false; parts[m.idx.soot].on = parts[m.idx.shards].on = false
+    parts[m.idx.scan].on = false; parts[m.idx.beaconOn].on = false; parts[m.idx.soot].on = parts[m.idx.shards].on = parts[m.idx.hole].on = false
+    for (const index of [...m.idx.cracks, ...m.idx.panes]) parts[index].on = false
     for (const index of m.idx.lamps) parts[index].on = false
     theme(dark)
   }
   function theme(next: boolean) {
     dark = next
     renderer!.setPalette(paletteBytes(dark, MATS))
+    const page = dark ? oklch(.158, .014, 268) : oklch(.948, .01, 262); renderer!.setClear(page[0] / 255, page[1] / 255, page[2] / 255)
     const set = (name: keyof typeof colour, l: number, c: number, h: number) => { colour[name] = oklch(l, c, h).map(v => v / 255) }
     if (dark) { set('steam', .8, .008, 268); set('smoke', .33, .012, 268) } else { set('steam', .995, .003, 262); set('smoke', .7, .008, 262) }
     set('ember', .78, .17, 58); set('red', .64, .21, 27); set('paper', .955, .014, 92); set('spark', .93, .09, 85)
   }
   function resetHeights() {
-    heights.fill(0)
-    for (let iz = 0; iz < GD; iz++) for (let ix = 0; ix < GW; ix++) { const x = GX0 + (ix + .5) * CELL, z = GZ0 + (iz + .5) * CELL; if (x > -p.Xc && x < p.Xc && z > 0 && z < p.D) heights[iz * GW + ix] = p.yTop }
+    // The slab, and the cabinet's roof standing on it; everywhere else there is nothing to land on.
+    for (let iz = 0; iz < GD; iz++) for (let ix = 0; ix < GW; ix++) { const x = GX0 + (ix + .5) * CELL, z = GZ0 + (iz + .5) * CELL; heights[iz * GW + ix] = x > -p.Xc && x < p.Xc && z > 0 && z < p.D ? p.yTop : Math.abs(x) < p.slabX && z > p.zLip + 22 * px && z < p.zBack ? 0 : VOID }
   }
   const cell = (x: number, z: number) => { const ix = Math.floor((x - GX0) / CELL), iz = Math.floor((z - GZ0) / CELL); return ix < 0 || iz < 0 || ix >= GW || iz >= GD ? -1 : iz * GW + ix }
 
@@ -107,7 +111,9 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   function nextLetter(i: number) { cursor = (cursor + 1223) % pool.length; data[i] = cursor; kind[i] = pool[cursor].scam ? 1 : 0 }
   function spawn() {
     const i = alloc(); nextLetter(i)
-    const x0 = rnd(-1, 1) * p.lw * 2.2, y0 = oyc + p.lh
+    // The second letter of the day is a scam, so the laser is seen at work early.
+    if (spawned++ === 1) for (let tries = 0; tries < pool.length && !pool[cursor].scam; tries++) nextLetter(i)
+    const x0 = rnd(-1, 1) * p.lw * 1.8, y0 = oyc + p.lh
     place(i, x0, y0, p.zL); L.state[i] = SCRIPT
     const letter = pool[data[i]]
     scripts.set(i, { stage: 0, t: 0, lane: letter.scam ? 7 : letter.route, x0, y0, ax: rnd(-1, 1), ay: rnd(-1, 1), az: rnd(-1, 1), turn: rnd(3, 7) * (Math.random() < .5 ? -1 : 1), data: data[i], x: 0 })
@@ -117,13 +123,14 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     L.vel[i * 3] = vx; L.vel[i * 3 + 1] = vy; L.vel[i * 3 + 2] = vz
     L.ang[i * 3] = rnd(-spin, spin); L.ang[i * 3 + 1] = rnd(-spin, spin); L.ang[i * 3 + 2] = rnd(-spin, spin)
     if (scanning === i) scanning = -1
-    if (waiting === i) waiting = -1
+    const at = queue.indexOf(i); if (at >= 0) queue.splice(at, 1)
   }
   const setQuat = (i: number, ax: number, ay: number, az: number, angle: number) => { const l = Math.hypot(ax, ay, az) || 1, s = Math.sin(angle / 2) / l; L.quat[i * 4] = ax * s; L.quat[i * 4 + 1] = ay * s; L.quat[i * 4 + 2] = az * s; L.quat[i * 4 + 3] = Math.cos(angle / 2) }
 
   // A letter's way through the works, a stage at a time. `rate` is how much faster than calm the machine is running.
-  function script(i: number, s: Script, dt: number, rate: number) {
-    const P = L.pos, o = i * 3
+  function script(i: number, s: Script, dt: number, roll: number) {
+    // The hopper and the scanner quicken faster than the rollers do: the works fill up.
+    const P = L.pos, o = i * 3, rate = s.stage >= 5 && s.stage <= 7 ? roll : feed
     s.t += dt
     if (s.stage === 0) {
       // Falling out of the night, tumbling, into the hopper; turned square by the time it is there.
@@ -131,44 +138,49 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       P[o] = s.x0 * (1 - out(u)); P[o + 1] = s.y0 + (topY - s.y0) * (u * u * .7 + u * .3); P[o + 2] = p.zL
       setQuat(i, s.ax, s.ay, s.az, s.turn * (1 - u) ** 1.6)
       if (u >= 1) {
-        if (waiting === -1 && phase !== 'overload') { waiting = i; s.stage = 1; s.t = 0 }
-        else loose(i, rnd(-1, 1) * 150 * px, rnd(120, 300) * px, rnd(-110, 60) * px, 5)
+        if (queue.length < QUEUE && phase !== 'overload') { queue.push(i); s.stage = 1; s.t = 0 }
+        else loose(i, rnd(-1, 1) * 170 * px, rnd(140, 320) * px, rnd(-60, 150) * px, 5)
       }
     } else if (s.stage === 1) {
-      // Down the hopper's throat and out of sight, until the scanner is free.
-      const u = clamp(s.t / (.2 / rate))
-      P[o] = 0; P[o + 1] = m.hopperTop + p.lh * .2 - u * (p.hopper + p.lh); setQuat(i, 0, 0, 1, 0)
-      if (u >= 1 && scanning === -1) { scanning = i; waiting = -1; s.stage = 2; s.t = 0 }
+      // In the hopper, in line: the next to go lowest, the rest stacked over it, each a little askew.
+      const j = queue.indexOf(i), k = Math.min(1, dt * 16), lean = j ? (j % 2 ? .2 : -.16) : 0
+      P[o] += ((j % 2 ? 1 : -1) * Math.min(j, 1) * p.lw * .09 - P[o]) * k; P[o + 1] += (p.yTop + p.hopper * .34 + j * p.lh * .34 - P[o + 1]) * k
+      setQuat(i, 0, 0, 1, lean)
+      if (j === 0 && scanning === -1 && s.t > .1 / rate) { queue.shift(); scanning = i; s.stage = 10; s.t = 0; s.y0 = P[o + 1] }
+    } else if (s.stage === 10) {
+      // Down the throat and out of sight.
+      const u = clamp(s.t / (.16 / rate))
+      P[o] *= 1 - u; P[o + 1] = s.y0 + (p.yTop - p.lh - s.y0) * u * u; setQuat(i, 0, 0, 1, 0)
+      if (u >= 1) { s.stage = 2; s.t = 0 }
     } else if (s.stage === 2) {
       const u = clamp(s.t / (.22 / rate))
       P[o] = 0; P[o + 1] = p.yFas + p.lh * .6 + (m.scanY - p.yFas - p.lh * .6) * out(u)
       if (u >= 1) { s.stage = 3; s.t = 0; hooks.scan(pool[s.data], pool[s.data].scam ? 'junk' : 'read') }
     } else if (s.stage === 3) {
-      const d = Math.max(.07, .6 / rate), u = clamp(s.t / d), scan = parts[m.idx.scan]
+      const d = Math.max(.09, .62 / rate), u = clamp(s.t / d), scan = parts[m.idx.scan]
       scan.on = true; pose(scan.m, [0, m.scanY, p.zL], [0, m.scanY + Math.cos(u * Math.PI * 2) * p.lh * .42, p.zL], [0, 0, 0, 1])
-      if (u >= 1) { scan.on = false; s.stage = s.lane === 7 ? 20 : 4; s.t = 0 }
+      if (u >= 1) { scan.on = false; s.stage = s.lane === 7 ? 20 : 4; s.t = 0; if (s.lane !== 7) scanning = -1 }
     } else if (s.stage === 4) {
       const u = clamp(s.t / (.14 / rate))
       P[o + 1] = m.scanY + (m.rideY - m.scanY) * u * u
-      if (u >= 1) { s.stage = s.lane === 3 ? 6 : 5; s.t = 0; s.x = 0; if (s.lane === 3) scanning = -1 }
+      if (u >= 1) { s.stage = s.lane === 3 ? 6 : 5; s.t = 0; s.x = 0 }
     } else if (s.stage === 5) {
       // On the rollers, out to its lane's gate.
       const dir = s.lane < 3 ? -1 : 1, target = p.lanes[s.lane] - dir * p.P * .12
-      s.x += dir * 150 * px * rate * dt
-      if (scanning === i && Math.abs(s.x) > p.lw * .75) scanning = -1
+      s.x += dir * 120 * px * rate * dt
       if ((s.x - target) * dir >= 0) { s.x = target; s.stage = 6; s.t = 0 }
       P[o] = s.x; P[o + 1] = m.rideY + Math.sin(s.x * .9) * .5 * px
       if ((p.lanes[s.lane] - s.x) * dir < p.P * .5) flapWant[s.lane] = 1
     } else if (s.stage === 6) {
       // The gate drops away under it: it tips with the gate and slides off into the chute.
-      const u = clamp(s.t / (.26 / rate)), dir = m.swing[s.lane], hinge = m.hinge[s.lane], a = -dir * 1.02 * ease(clamp(u * 1.4))
+      const u = clamp(s.t / (.3 / rate)), dir = m.swing[s.lane], hinge = m.hinge[s.lane], a = -dir * 1.02 * ease(clamp(u * 1.4))
       flapWant[s.lane] = 1
-      const lx = s.x - hinge[0] + dir * u * u * p.P * .42, ly = m.rr + p.lh / 2
+      const lx = s.x - hinge[0] + dir * u * u * p.P * .3, ly = m.rr + p.lh / 2
       P[o] = hinge[0] + lx * Math.cos(a) - ly * Math.sin(a); P[o + 1] = hinge[1] + lx * Math.sin(a) + ly * Math.cos(a)
       setQuat(i, 0, 0, 1, a)
       if (u >= 1) { s.stage = 7; s.t = 0; s.x0 = P[o]; s.y0 = P[o + 1]; s.turn = a }
     } else if (s.stage === 7) {
-      const u = clamp(s.t / (.3 / rate)), endY = p.yCav - p.lh * .9
+      const u = clamp(s.t / (.34 / rate)), endY = p.yCav - p.lh * .9
       P[o] = s.x0 + (p.lanes[s.lane] - s.x0) * out(u); P[o + 1] = s.y0 + (endY - s.y0) * u * u
       setQuat(i, 0, 0, 1, s.turn * (1 - out(u)))
       if (u > .35) flapWant[s.lane] = 0
@@ -180,9 +192,9 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       if (u >= 1) {
         scanning = -1
         place(i, m.eject[0], m.eject[1] + p.lh * .2, p.zL); seed[i] = Math.random()
-        loose(i, rnd(-60, 60) * px, rnd(590, 700) * px, rnd(-25, 25) * px, 2); L.ang[i * 3 + 2] = rnd(5, 9) * (Math.random() < .5 ? -1 : 1)
-        zaps.push({ id: i, at: time + rnd(.3, .4) })
-        puff(m.eject[0], m.eject[1], p.zL, 3, 'steam', 5)
+        loose(i, rnd(-50, 50) * px, rnd(640, 740) * px, rnd(-20, 20) * px, 2); L.ang[i * 3 + 2] = rnd(5, 9) * (Math.random() < .5 ? -1 : 1)
+        zaps.push({ id: i, at: time + rnd(.32, .42) })
+        puff(m.eject[0], m.eject[1], p.zL, 5, 'steam', 3)
       }
     }
   }
@@ -233,7 +245,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       } else if (B.thin && z < 0 && z > -40 * px && x > -p.Xc - 8 && x < p.Xc + 8 && y < 40 * px) {
         // A kick plate that isn't drawn: nothing comes to rest against the foot of the front, where the page's small print is.
         ny = .743; nz = -.669; pen = rad - (y * ny + (z + 40 * px) * nz)
-      } else { const c = cell(x, z); pen = (c < 0 ? 0 : heights[c]) + rad - y }
+      } else { const c = cell(x, z); pen = (c < 0 ? VOID : heights[c]) + rad - y }
       if (pen <= 0) continue
       touching++
       const vx = vel[o] + ang[o + 1] * rz - ang[o + 2] * ry, vy = vel[o + 1] + ang[o + 2] * rx - ang[o] * rz, vz = vel[o + 2] + ang[o] * ry - ang[o + 1] * rx
@@ -263,19 +275,17 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       if (slow) { const d = 1 - 6 * dt; vel[o] *= d; vel[o + 2] *= d; ang[o] *= d; ang[o + 1] *= d; ang[o + 2] *= d }
       if (B.still[i] > .3) sleep(B, i)
     } else B.still[i] = 0
-    if (pos[o + 1] < -400) B.state[i] = B.thin ? FREE : ASLEEP
+    if (pos[o + 1] < -(p.floor + 300)) B.state[i] = B.thin ? FREE : ASLEEP
   }
   function sleep(B: Bodies, i: number) {
     const o = i * 3
     B.state[i] = ASLEEP; B.still[i] = 0; B.vel.fill(0, o, o + 3); B.ang.fill(0, o, o + 3)
     if (!B.thin) return
-    // A letter that would lie across the bottom edge of the scene is not left there, cut in two.
-    if (p.oy - B.pos[o + 1] - DY * B.pos[o + 2] > p.H - p.lw * .55) { B.state[i] = FREE; return }
     // The floor under a sleeping letter is now that letter: the next one rests on it.
     matrix(B.quat, i * 4)
     for (let a = -1; a <= 1; a += .4) for (let b = -1; b <= 1; b += .5) {
       const lx = a * B.half[o], ly = b * B.half[o + 1], c = cell(B.pos[o] + R[0] * lx + R[1] * ly, B.pos[o + 2] + R[6] * lx + R[7] * ly), y = B.pos[o + 1] + R[3] * lx + R[4] * ly + 1.5
-      if (c >= 0 && y > heights[c] && y < heights[c] + 30) heights[c] = y
+      if (c >= 0 && heights[c] > VOID && y > heights[c] && y < heights[c] + 30) heights[c] = y
     }
   }
   function wake(i: number) { if (L.state[i] === ASLEEP) { L.state[i] = DYN; L.still[i] = 0 } }
@@ -285,85 +295,87 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     if (fx.length > 620) return
     fx.push({ vx: 0, vy: 0, vz: 0, life: 0, max: 1, size: 4, grow: 0, rot: 0, spin: 0, r: 1, g: 1, b: 1, a: 1, shape: 0, gravity: 0, drag: 0, glow: false, len: 0, ...o })
   }
+  // Steam and smoke: many small puffs that swell and thin out as they rise.
   function puff(x: number, y: number, z: number, n: number, name: 'steam' | 'smoke', size: number, vy = 60, spread = 26) {
     const c = colour[name]
-    for (let i = 0; i < n; i++) add({ x: x + rnd(-1, 1) * size * .4, y, z: z - 1, vx: rnd(-1, 1) * spread * px, vy: rnd(.5, 1.2) * vy * px, vz: rnd(-8, 8), max: rnd(.6, 1.3), size: rnd(.6, 1) * size * px, grow: rnd(6, 12) * px, r: c[0], g: c[1], b: c[2], a: name === 'steam' ? .92 : .85, drag: 1.2 })
+    for (let i = 0; i < n; i++) add({ x: x + rnd(-1, 1) * size * px, y: y + rnd(-1, 1) * size * px * .5, z: z - 1, vx: rnd(-1, 1) * spread * px, vy: rnd(.5, 1.2) * vy * px, vz: rnd(-8, 8), max: rnd(.9, 1.5), size: rnd(.5, 1) * size * px, grow: rnd(7, 15) * px, r: c[0], g: c[1], b: c[2], a: name === 'steam' ? .5 : .6, drag: 1.3 })
   }
   function sparks(x: number, y: number, z: number, n: number, power = 240, c = colour.spark) {
     for (let i = 0; i < n; i++) { const a = rnd(0, Math.PI * 2), s = rnd(.3, 1) * power * px; add({ x, y, z: z - 2, vx: Math.cos(a) * s, vy: Math.sin(a) * s + power * .3 * px, vz: rnd(-40, 40), max: rnd(.25, .6), size: 1.1 * px, len: rnd(3, 7) * px, r: c[0], g: c[1], b: c[2], shape: 1, gravity: 1, drag: 1.5 }) }
   }
-  function glow(x: number, y: number, z: number, size: number, c: number[], a: number, max: number) { add({ x, y, z, max, size, r: c[0], g: c[1], b: c[2], a, shape: 2, glow: true }) }
+  /** Where the laser is: on its pedestal, or wherever the burst left it. */
+  const laserAt = (): ArrayLike<number> => Dn.state[turretBody] === FREE ? m.turret : Dn.pos.subarray(turretBody * 3, turretBody * 3 + 3)
 
-  // The laser: aim, a beam for a moment, and whatever it hits starts to burn.
+  // The laser: aim, a beam for a moment (two flat bars, red and a paler core), and whatever it hits starts to burn.
   function fire(i: number) {
     if (L.state[i] === FREE || burning[i]) return
-    const o = i * 3, tx = L.pos[o], ty = L.pos[o + 1], tz = L.pos[o + 2]
-    const sx = tx - m.turret[0] + DX * (tz - m.turret[2]), sy = ty - m.turret[1] + DY * (tz - m.turret[2])
-    turretAim = Math.atan2(sy, sx); turretAngle = turretAim; aimHold = .45
-    const tip = 22 * px, bx = m.turret[0] + Math.cos(turretAim) * tip, by = m.turret[1] + Math.sin(turretAim) * tip, length = Math.hypot(sx, sy) - tip
-    const mx = (bx + tx) / 2 - DX * (tz - m.turret[2]) / 2, my = (by + ty) / 2 - DY * (tz - m.turret[2]) / 2
-    add({ x: mx, y: my, z: (m.turret[2] + tz) / 2, max: .13, size: length / 2, len: 3.2 * px, rot: turretAim, r: colour.red[0], g: colour.red[1], b: colour.red[2], a: 1, shape: 3, glow: true })
-    glow(tx, ty, tz, 34 * px, colour.ember, .7, .3); glow(bx, by, m.turret[2], 14 * px, colour.red, .8, .16)
-    sparks(tx, ty, tz, 9, 200, colour.ember)
+    const o = i * 3, tx = L.pos[o], ty = L.pos[o + 1], tz = L.pos[o + 2], from = laserAt(), mounted = Dn.state[turretBody] === FREE
+    const sx = tx - from[0] + DX * (tz - from[2]), sy = ty - from[1] + DY * (tz - from[2]), angle = Math.atan2(sy, sx)
+    if (mounted) { turretAim = turretAngle = angle; aimHold = .45 }
+    const tip = mounted ? 22 * px : 0, bx = from[0] + Math.cos(angle) * tip, by = from[1] + Math.sin(angle) * tip, length = Math.hypot(sx, sy) - tip
+    const mx = (bx + tx) / 2 - DX * (tz - from[2]) / 2, my = (by + ty) / 2 - DY * (tz - from[2]) / 2, mz = (from[2] + tz) / 2
+    add({ x: mx, y: my, z: mz, max: .12, size: length / 2, len: 1.9 * px, rot: angle, ...rgb(colour.red), shape: 4 })
+    add({ x: mx, y: my, z: mz - 1, max: .09, size: length / 2, len: .7 * px, rot: angle, ...rgb(colour.spark), shape: 4 })
+    sparks(tx, ty, tz, 12, 220, colour.ember)
     burning[i] = 1; wake(i)
     if (L.state[i] === SCRIPT) loose(i, 0, 0, 0, 1)
     L.vel[o] *= .4; L.vel[o + 1] = L.vel[o + 1] * .3 + 60 * px; shake = Math.max(shake, 1.2)
   }
   function launch(tube: number) {
     const cap = caps.find(c => !c.on)
-    if (cap) { cap.on = true; cap.tube = tube; cap.s = 0 }
+    if (cap) { cap.on = true; cap.tube = tube; cap.run = 0; cap.s = 0; cap.wait = 0 }
   }
 
   // ── The burst ──
   function boom() {
-    setPhase('boom'); flash = 1; shake = 15; wallBlink = .13; needleV = -9
+    setPhase('boom'); flash = 1; shake = 8; needleV = -9; bend = 1
     const cx = 0, cy = (p.yCav + p.yFas) / 2
-    glow(cx, cy, -10, p.Xw * 1.5, colour.spark, .9, .5); glow(cx, p.yTop, p.zL, p.Xw, colour.ember, .5, .7)
+    // Light, as an effect and only here: a hot core for two frames. The page behind is never lightened.
+    add({ x: cx, y: cy, z: -10, max: .05, size: 88 * px, ...rgb(colour.spark), a: .95, shape: 2, glow: true })
     // Every letter in the works, and the hundreds the machine had swallowed, out through the front and the roof.
     for (const [i] of scripts) { L.pos[i * 3 + 2] = -6 * px; if (L.pos[i * 3 + 1] > p.yFas) L.pos[i * 3 + 1] = p.yTop + p.lh }
-    // Each is thrown at a place on the floor: heaped round the machine's foot, thinning out across the page, a few far
-    // off; none where the cabinet would hide it. The air slows a letter, so it is thrown a little long.
-    const want = p.phone ? 250 : 480, launchOne = (i: number, roof: boolean) => {
-      const o = i * 3
-      if (roof && Math.random() < .3) return loose(i, rnd(-1, 1) * 190 * px, rnd(260, 620) * px, rnd(-60, 150) * px, 9)
-      let sx = 0, sy = 0
-      for (let tries = 0; tries < 12; tries++) {
-        const kind = Math.random(), side = Math.random() < .5 ? -1 : 1
-        if (kind < .24) { sx = p.ox + side * (p.Xc + rnd(0, 1) ** 1.6 * 230 * px); sy = p.oy + rnd(-170, p.floor * .7) }
-        else if (kind < .36) { sx = p.ox + rnd(-1, 1) * p.Xc; sy = p.oy + rnd(8, p.floor * .9) }
-        else if (kind < .93) { sx = p.ox + side * rnd(p.Xc + 30 * px, Math.max(p.W * .52, p.Xc + 60)); sy = p.H - (p.H + over * .5) * rnd(0, 1) ** 1.15 }
-        else { sx = rnd(-.1, 1.1) * p.W; sy = rnd(-over, p.H + 80) }
-        if (sy < p.oy - 4 && Math.abs(sx - p.ox + 20 * px) < p.Xc + 44 * px && sy > p.oy - p.yTop - p.D * DY - 30) continue
-        break
-      }
-      const tz = (p.oy - sy) / DY, tx = sx - p.ox - DX * tz, T = rnd(.75, 1.4), k = .46, far = k / (1 - Math.exp(-k * T))
-      loose(i, (tx - L.pos[o]) * far, G * T / 2 * 1.06 - L.pos[o + 1] / T, (tz - L.pos[o + 2]) * far, 11)
+    // Each is thrown at a place: most onto the slab (heaped by the machine's sides, thinning out towards the slab's
+    // ends, a strip along the front), some clean off it into the dark. Thrown a little long, for the air.
+    const seen = Math.min(p.slabX - 24, p.W / 2 + 20), zA = p.zLip + 16 * px, zB = p.zBack - 16 * px
+    const want = p.phone ? 170 : 300, launchOne = (i: number, roof: boolean) => {
+      const o = i * 3, kind = Math.random(), side = Math.random() < .5 ? -1 : 1
+      if (roof && Math.random() < .24) return loose(i, rnd(-1, 1) * 190 * px, rnd(260, 620) * px, rnd(-40, 190) * px, 9)
+      let tx: number, tz: number
+      if (kind < .26) { tx = side * (p.Xc + 14 * px + rnd(0, 1) ** 1.8 * 150 * px); tz = rnd(-30 * px, p.D * .95) }
+      else if (kind < .44) { tx = rnd(-1, 1) * (p.Xc + 50 * px); tz = rnd(zA + 22 * px, -48 * px) }
+      else if (kind < .8) { tx = side * rnd(Math.min(p.Xc + 30 * px, seen), seen); tz = zA + (zB - zA) * rnd(0, 1) ** 1.25 }
+      else if (kind < .9) { tx = rnd(-1, 1) * seen; tz = p.zLip - rnd(40, 260) * px }
+      else { tx = side * (seen + rnd(40, 320)); tz = rnd(zA, zB + 200) }
+      const T = rnd(.75, 1.3), k = .46, far = k / (1 - Math.exp(-k * T))
+      loose(i, (tx - L.pos[o]) * far, G * T / 2 * 1.06 - L.pos[o + 1] / T, (tz - L.pos[o + 2]) * far, 10)
     }
     for (const [i] of [...scripts]) launchOne(i, L.pos[i * 3 + 1] > p.yFas)
     let live = 0
-    for (let i = 0; i < MAX; i++) if (L.state[i] !== FREE) { live++; if (L.state[i] === ASLEEP) { wake(i); L.vel[i * 3] = rnd(-1, 1) * 420 * px; L.vel[i * 3 + 1] = rnd(300, 800) * px; L.vel[i * 3 + 2] = rnd(-200, 500) * px; L.ang[i * 3] = rnd(-8, 8); L.ang[i * 3 + 2] = rnd(-8, 8) } }
+    for (let i = 0; i < MAX; i++) if (L.state[i] !== FREE) { live++; if (L.state[i] === ASLEEP) { wake(i); L.vel[i * 3] = rnd(-1, 1) * 380 * px; L.vel[i * 3 + 1] = rnd(300, 760) * px; L.vel[i * 3 + 2] = rnd(-160, 300) * px; L.ang[i * 3] = rnd(-8, 8); L.ang[i * 3 + 2] = rnd(-8, 8) } }
     for (; live < want; live++) {
-      const i = alloc(), roof = Math.random() < .3; nextLetter(i)
+      const i = alloc(), roof = Math.random() < .22; nextLetter(i)
       if (roof) place(i, rnd(-1, 1) * p.Xw * .7, p.yTop + rnd(4, 30) * px, rnd(.1, .9) * p.D)
-      else place(i, rnd(-1, 1) * p.Xw * .92, rnd(p.yCav + p.lh, p.yFas - p.lh * .4), -rnd(3, 14) * px)
+      else place(i, rnd(-1, 1) * p.Xw * .9, rnd(p.yCav + p.lh, p.yFas - p.lh * .4), -rnd(3, 14) * px)
       setQuat(i, rnd(-1, 1), rnd(-1, 1), rnd(-1, 1), rnd(0, 6)); launchOne(i, roof)
     }
-    scanning = waiting = -1; zaps.length = 0; hooks.scan(null, 'jam')
-    // The works come apart: every roller, gate and bolt, and the hopper off the roof. The glass goes to splinters.
+    scanning = -1; queue.length = 0; zaps.length = 0; hooks.scan(null, 'jam')
+    // The works come apart, each part with its own weight: the hopper, the laser and the chimneys go up off the roof and
+    // come down on the slab; the hatch skims away; the glass leaves in panes; rollers, gates and bolts spray forward.
     debrisPart.forEach((index, i) => {
-      const home = debrisHome[i], o = i * 3, roof = index === m.idx.hopper
-      Dn.state[i] = DYN; Dn.still[i] = 0; Dn.pos.set(home, o); Dn.quat.set([0, 0, 0, 1], i * 4)
-      if (!roof) Dn.pos[o + 2] = -5 * px
-      Dn.vel[o] = (home[0] / p.Xw + rnd(-.5, .5)) * 620 * px; Dn.vel[o + 1] = roof ? 900 * px : rnd(100, 760) * px; Dn.vel[o + 2] = roof ? rnd(100, 300) * px : -rnd(180, 620) * px
-      Dn.ang[o] = rnd(-12, 12); Dn.ang[o + 1] = rnd(-12, 12); Dn.ang[o + 2] = rnd(-12, 12)
+      const home = debrisHome[i], o = i * 3, roof = index === m.idx.hopper || index === m.idx.turret || index === m.idx.hatch || m.idx.vents.includes(index), pane = m.idx.panes.includes(index)
+      Dn.state[i] = DYN; Dn.still[i] = 0; Dn.pos.set(home, o); Dn.quat.set([0, 0, 0, 1], i * 4); parts[index].on = true
+      if (roof) { const side = home[0] === 0 ? (Math.random() < .5 ? -1 : 1) : Math.sign(home[0]); Dn.vel[o] = side * rnd(160, 420) * px; Dn.vel[o + 1] = rnd(620, 900) * px; Dn.vel[o + 2] = -rnd(60, 260) * px - home[2] * .9 }
+      else { Dn.pos[o + 2] = -5 * px; Dn.vel[o] = (home[0] / p.Xw + rnd(-.5, .5)) * (pane ? 380 : 600) * px; Dn.vel[o + 1] = rnd(120, pane ? 520 : 740) * px; Dn.vel[o + 2] = -rnd(160, pane ? 420 : 600) * px }
+      const spin = roof ? 5 : pane ? 6 : 12
+      Dn.ang[o] = rnd(-spin, spin); Dn.ang[o + 1] = rnd(-spin, spin); Dn.ang[o + 2] = rnd(-spin, spin)
     })
-    parts[m.idx.glass].on = false; parts[m.idx.scan].on = false; parts[m.idx.soot].on = parts[m.idx.shards].on = true
+    for (const index of m.idx.cracks) parts[index].on = false
+    parts[m.idx.glass].on = false; parts[m.idx.scan].on = false; parts[m.idx.soot].on = parts[m.idx.shards].on = parts[m.idx.hole].on = true
     for (const index of m.idx.caps) parts[index].on = false
     for (const cap of caps) cap.on = false
-    for (let i = 0; i < 46; i++) add({ x: rnd(-1, 1) * p.Xw, y: rnd(p.yCav, p.yFas), z: -4, vx: rnd(-1, 1) * 600 * px, vy: rnd(-100, 700) * px, vz: -rnd(50, 500), max: rnd(.5, 1.1), size: rnd(1.5, 4.5) * px, len: rnd(1.5, 5) * px, spin: rnd(-14, 14), r: colour.steam[0], g: colour.steam[1], b: colour.steam[2], a: .8, shape: 1, gravity: 1, drag: .6 })
-    sparks(cx, cy, -8, 60, 760); sparks(0, p.yTop, p.zL, 26, 600)
-    for (let i = 0; i < 44; i++) { const a = i / 44 * Math.PI * 2 + rnd(0, .2); add({ x: cx + Math.cos(a) * p.Xw * .3, y: cy + Math.sin(a) * p.cavity * .3, z: -8, vx: Math.cos(a) * rnd(160, 420) * px, vy: Math.sin(a) * rnd(100, 300) * px + 90 * px, vz: -rnd(0, 120), max: rnd(.7, 1.5), size: rnd(5, 12) * px, grow: rnd(8, 18) * px, ...rgb(i % 3 ? colour.steam : colour.smoke), a: .94, drag: 2.2 }) }
-    puff(m.vents[0][0], m.vents[0][1], m.vents[0][2], 8, 'steam', 9, 150); puff(m.vents[1][0], m.vents[1][1], m.vents[1][2], 8, 'steam', 9, 150)
+    sparks(cx, cy, -8, 70, 760); sparks(0, p.yTop, p.zL, 30, 600)
+    for (let i = 0; i < 60; i++) { const a = rnd(0, Math.PI * 2), far = rnd(0, 1); add({ x: cx + Math.cos(a) * p.Xw * .5 * far, y: cy + Math.sin(a) * p.cavity * .4 * far, z: -8, vx: Math.cos(a) * rnd(60, 300) * px, vy: Math.sin(a) * rnd(40, 200) * px + 80 * px, vz: -rnd(0, 120), max: rnd(.9, 1.5), size: rnd(3, 7) * px, grow: rnd(10, 22) * px, ...rgb(i % 3 ? colour.steam : colour.smoke), a: .55, drag: 2 }) }
+    for (const v of m.vents) puff(v[0], p.yTop, v[2], 10, 'steam', 4, 150)
   }
   const rgb = (c: number[]) => ({ r: c[0], g: c[1], b: c[2] })
 
@@ -375,7 +387,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       const o = i * 3, d = Math.hypot(L.pos[o], L.pos[o + 2])
       L.state[i] = HOME; scripts.delete(i); delay[i] = .05 + d * .00055 / px + rnd(0, .25); from.set([L.pos[o], L.pos[o + 1], L.pos[o + 2], L.quat[i * 4], L.quat[i * 4 + 1], L.quat[i * 4 + 2], L.quat[i * 4 + 3]], i * 7); L.still[i] = 0
     }
-    debrisPart.forEach((_, i) => { Dn.state[i] = HOME; Dn.still[i] = -(.5 + i * .012) })
+    debrisPart.forEach((_, i) => { Dn.state[i] = HOME; Dn.still[i] = -(.5 + i * .01) })
     resetHeights(); pointer.held = -1; setHover(-1)
   }
 
@@ -387,33 +399,41 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     if (phase === 'boot') { needle = Math.sin(clamp(clock / .7) * Math.PI) * .9; parts[m.idx.lamps[2]].on = clock > .15; parts[m.idx.lamps[1]].on = clock > .3; if (clock > .75) { setPhase('run'); runT = 0; needle = 0 } }
     if (phase === 'run') {
       runT += dt
-      const e = clamp((runT - T.calm) / T.ramp); heat = e ** 1.7
+      const e = clamp((runT - T.calm) / T.ramp); heat = e ** 1.3
       if (e >= 1) setPhase('overload')
     }
-    if (phase === 'overload') { heat = 1 + clock * .12; if (clock > T.over) boom() }
+    if (phase === 'overload') {
+      heat = 1 + clock * .12
+      // The glass gives twice before it goes; the gates chatter.
+      m.idx.cracks.forEach((index, n) => { const at = T.over * (.22 + n * .4); if (!parts[index].on && clock >= at) { parts[index].on = true; shake = Math.max(shake, 7); sparks(m.crackAt[n][0], m.crackAt[n][1], -4, 12, 260, colour.steam) } })
+      if (Math.random() < dt * 14) flapWant[Math.floor(rnd(0, 7))] = Math.random() < .5 ? 1 : 0
+      if (clock > T.over) boom()
+    }
     const running = phase === 'run' || phase === 'overload'
-    speed = running ? 1 + 5.4 * Math.min(1, heat) ** 1.25 + (phase === 'overload' ? 1 : 0) : 1
+    // The rollers quicken, the scanner more, but never as fast as the mail arrives: that is what backs up.
+    speed = running ? 1 + 1.9 * Math.min(1, heat) ** 1.5 + (phase === 'overload' ? .4 : 0) : 1
+    feed = running ? 1 + 4.4 * Math.min(1, heat) ** 1.2 : 1
     if (running) {
       spawnIn -= dt
-      if (spawnIn <= 0) { spawn(); spawnIn = phase === 'overload' ? .045 : 1.5 * (1 - heat) ** 2.4 + .075 }
+      if (spawnIn <= 0) { spawn(); spawnIn = phase === 'overload' ? .05 : 1.45 * (1 - heat) ** 3.4 + .07 }
       // Strain: the needle climbs and trembles, the red lamp starts to blink, vents steam, the scanner spits sparks.
       const want = Math.min(1.04, heat * .84 + (phase === 'overload' ? .12 + clock * .05 : 0)) + Math.sin(time * 31) * .012 * heat
       needleV += ((want - needle) * 60 - needleV * 9) * dt; needle += needleV * dt
-      shake = Math.max(shake, clamp((heat - .5) * 2) ** 2 * 2.6 + (phase === 'overload' ? 1.5 + clock * 1.6 : 0))
+      shake = Math.max(shake, heat > .4 ? 1 + clamp((heat - .4) / .6) * 5 + (phase === 'overload' ? clock * 1.1 : 0) : 0)
       parts[m.idx.lamps[0]].on = heat > .45 && Math.sin(time * (8 + heat * 22)) > 0
       parts[m.idx.beaconOn].on = heat > .8 && Math.sin(time * 26) > 0
-      steamIn -= dt * Math.max(0, heat - .38) * (phase === 'overload' ? 70 : 26)
-      while (steamIn < 0) { steamIn += 1; const v = m.vents[Math.random() < .5 ? 0 : 1]; puff(v[0], v[1], v[2], 1, 'steam', 5 + heat * 4, 70 + heat * 80); if (heat > .8 && Math.random() < .5) puff(m.ventFront[0] + rnd(-1, 1) * p.U * 3, m.ventFront[1], m.ventFront[2], 1, 'steam', 5, 30, 50) }
+      steamIn -= dt * Math.max(0, heat - .3) * (phase === 'overload' ? 110 : 46)
+      while (steamIn < 0) { steamIn += 1; const v = m.vents[Math.random() < .5 ? 0 : 1]; puff(v[0], v[1], v[2], 1, 'steam', 2.5 + heat * 2, 60 + heat * 90, 14); if (heat > .75 && Math.random() < .5) puff(m.ventFront[0] + rnd(-1, 1) * p.U * 2.5, m.ventFront[1], m.ventFront[2], 1, 'steam', 2.5, 34, 40) }
       sparkIn -= dt * Math.max(0, heat - .66) * 26
       while (sparkIn < 0) { sparkIn += 1; const lane = Math.floor(rnd(0, 7)); sparks(p.lanes[lane] + rnd(-1, 1) * p.P * .3, m.yR, -2, 3, 130) }
-      if (phase === 'overload' && Math.random() < dt * 9) { const i = Math.floor(rnd(0, m.idx.bolts.length)), k = 1 + 56 + 7 + i; if (Dn.state[k] === FREE) { const home = debrisHome[k]; Dn.state[k] = DYN; Dn.pos.set(home, k * 3); Dn.quat.set([0, 0, 0, 1], k * 4); Dn.vel.set([rnd(-1, 1) * 260 * px, rnd(200, 520) * px, -rnd(200, 520) * px], k * 3); Dn.ang.set([rnd(-20, 20), rnd(-20, 20), rnd(-20, 20)], k * 3); sparks(home[0], home[1], -4, 4, 160) } }
+      if (phase === 'overload' && Math.random() < dt * 9) { const i = Math.floor(rnd(0, m.idx.bolts.length)), k = boltBody + i; if (Dn.state[k] === FREE) { const home = debrisHome[k]; Dn.state[k] = DYN; Dn.pos.set(home, k * 3); Dn.quat.set([0, 0, 0, 1], k * 4); Dn.vel.set([rnd(-1, 1) * 260 * px, rnd(200, 520) * px, -rnd(200, 520) * px], k * 3); Dn.ang.set([rnd(-20, 20), rnd(-20, 20), rnd(-20, 20)], k * 3); sparks(home[0], home[1], -4, 4, 160) } }
     } else {
       parts[m.idx.lamps[0]].on = phase === 'rest' || phase === 'boom'
       parts[m.idx.beaconOn].on = false
       if (phase === 'boom' || phase === 'rest') { needleV += ((-.38 - needle) * 26 - needleV * 2.2) * dt; needle += needleV * dt }
-      if (phase === 'boom' && clock < 3 && Math.random() < dt * 14) puff(rnd(-1, 1) * p.Xw * .8, p.yFas - rnd(0, p.cavity * .5), p.zL, 1, Math.random() < .6 ? 'smoke' : 'steam', rnd(6, 11), 70)
+      if (phase === 'boom' && clock < 3.4 && Math.random() < dt * 34 * (1 - clock / 3.4)) { if (Math.random() < .5) puff(rnd(-1, 1) * p.Xw * .8, p.yFas - rnd(0, p.cavity * .5), p.zL, 1, 'smoke', 4, 60); else puff(rnd(-1, 1) * p.lw * .5, p.yTop, p.zL, 1, 'smoke', 4, 90, 12) }
     }
-    shake = Math.max(0, shake - dt * (phase === 'boom' ? 26 : 30) * (shake > 6 ? 1.6 : .6)); flash = Math.max(0, flash - dt * 4.2); wallBlink = Math.max(0, wallBlink - dt)
+    shake = Math.max(0, shake - dt * (phase === 'boom' ? 14 : 30)); flash = Math.max(0, flash - dt * 4.2)
 
     for (const [i, s] of scripts) script(i, s, dt, speed)
     if (rainLeft > 0) { const n = Math.min(rainLeft, Math.ceil(dt * 140)); rainLeft -= n; for (let k = 0; k < n; k++) { const i = alloc(); nextLetter(i); place(i, rnd(-.5, .5) * p.W * 1.1 - DX * 600, oyc + rnd(20, 500), rnd(-150, (oyc - 120) / DY)); setQuat(i, rnd(-1, 1), rnd(-1, 1), rnd(-1, 1), rnd(0, 6)); loose(i, rnd(-60, 60), -rnd(200, 500), rnd(-40, 40), 6) } }
@@ -453,24 +473,26 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       }
       needleV += ((0 - needle) * 40 - needleV * 8) * dt; needle += needleV * dt
       const glass = parts[m.idx.glass]
-      if (clock > .9) { glass.on = true; glass.fade = clamp((clock - .9) / .3); parts[m.idx.soot].fade = parts[m.idx.shards].fade = 1 - glass.fade }
-      if (!left && !away && clock > 1.3) { glass.fade = 1; parts[m.idx.soot].on = parts[m.idx.shards].on = false; parts[m.idx.soot].fade = parts[m.idx.shards].fade = 1; sorted = 0; burnt = 0; hooks.count(0, 0); heat = 0; runT = 0; spawnIn = .2; setPhase('run') }
+      if (clock > .9) { glass.on = true; glass.fade = clamp((clock - .9) / .3); parts[m.idx.soot].fade = parts[m.idx.shards].fade = 1 - glass.fade; parts[m.idx.hole].on = glass.fade < .5; bend = 1 - glass.fade }
+      if (!left && !away && clock > 1.3) { glass.fade = 1; bend = 0; parts[m.idx.soot].on = parts[m.idx.shards].on = parts[m.idx.hole].on = false; parts[m.idx.soot].fade = parts[m.idx.shards].fade = 1; spawned = 0; sorted = 0; burnt = 0; hooks.count(0, 0); heat = 0; runT = 0; spawnIn = .2; setPhase('run') }
     }
     if (phase === 'boom' && clock > 1.2) {
       let moving = 0
-      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (clock > 4.6) sleep(L, i) }
+      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (clock > 4.6) { const c = cell(L.pos[i * 3], L.pos[i * 3 + 2]); if (c < 0 || heights[c] === VOID || L.pos[i * 3 + 1] > heights[c] + 30 * px) L.state[i] = FREE; else sleep(L, i) } }
       for (let i = 0; i < Dn.cap; i++) if (Dn.state[i] === DYN && clock > 4.6) sleep(Dn, i)
       if (!moving) setPhase('rest')
     }
 
-    // Capsules down the tubes.
+    // Capsules down the tubes: down the front between the manifolds, a moment out of sight inside the cabinet, then
+    // out of its wall, across the slab and over the lip.
     caps.forEach((cap, k) => {
       const part = parts[m.idx.caps[k]]
-      part.on = cap.on
+      part.on = cap.on && cap.wait <= 0
       if (!cap.on) return
-      cap.s += dt * 520 * px * Math.sqrt(speed)
-      const line = m.tubeLines[cap.tube], s = tubeLength[cap.tube]
-      if (cap.s >= s[s.length - 1]) { cap.on = part.on = false; return }
+      if (cap.wait > 0) { cap.wait -= dt * Math.sqrt(speed); return }
+      cap.s += dt * 540 * px * Math.sqrt(speed)
+      const line = m.lines[cap.tube][cap.run], s = runLength[cap.tube][cap.run]
+      if (cap.s >= s[s.length - 1]) { if (cap.run + 1 < m.lines[cap.tube].length) { cap.run++; cap.s = 0; cap.wait = .16 } else cap.on = false; part.on = false; return }
       let i = 1; while (s[i] < cap.s) i++
       const a = line[i - 1], b = line[i], u = (cap.s - s[i - 1]) / (s[i] - s[i - 1]), tx = b[0] - a[0], ty = b[1] - a[1], tz = b[2] - a[2], tl = Math.hypot(tx, ty, tz), angle = Math.acos(clamp(ty / tl, -1, 1)), al = Math.hypot(tz, tx) || 1, sn = Math.sin(angle / 2)
       pose(part.m, [0, 0, 0], [a[0] + tx * u, a[1] + ty * u, a[2] + tz * u], [tz / al * sn, 0, -tx / al * sn, Math.cos(angle / 2)])
@@ -478,7 +500,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
 
     // Gates, rollers, needle, laser.
     for (let i = 0; i < 7; i++) { flapAngle[i] += (flapWant[i] - flapAngle[i]) * Math.min(1, dt * 22 * Math.sqrt(speed)); if (!scripts.size) flapWant[i] = 0 }
-    const spin = running ? 150 * px * speed / m.rr * dt : 0
+    const spin = running ? 120 * px * speed / m.rr * dt : 0
     for (let j = 0; j < 56; j++) {
       const lane = m.rollerLane[j], k = j % 8, home = m.rollerHome[j], part = parts[m.idx.rollers[j]]
       rollerSpin[j] += spin * (lane < 3 ? 1 : lane > 3 ? -1 : .4)
@@ -492,8 +514,12 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     aimHold -= dt; if (aimHold <= 0) turretAim = .45 + Math.sin(time * .7) * .25
     turretAngle += (turretAim - turretAngle) * Math.min(1, dt * 10)
     pose(parts[m.idx.turret].m, m.turret, m.turret, aboutZ(turretAngle))
-    // Blown-off parts follow their bodies.
-    debrisPart.forEach((index, i) => { if (Dn.state[i] !== FREE) pose(parts[index].m, debrisHome[i], Dn.pos, Dn.quat, 1, i * 3, i * 4); else if (index === m.idx.hopper || m.idx.bolts.includes(index)) pose(parts[index].m, debrisHome[i], debrisHome[i], [0, 0, 0, 1]) })
+    // Blown-off parts follow their bodies; at home they stand where they were built. The tube the burst bent stays bent.
+    debrisPart.forEach((index, i) => {
+      if (Dn.state[i] !== FREE) pose(parts[index].m, debrisHome[i], Dn.pos, Dn.quat, 1, i * 3, i * 4)
+      else if (!selfPosed.has(index)) { pose(parts[index].m, debrisHome[i], debrisHome[i], [0, 0, 0, 1]); if (m.idx.panes.includes(index)) parts[index].on = false }
+    })
+    const bent = parts[m.idx.bent]; pose(bent.m, m.parts[m.idx.bent].pivot, m.parts[m.idx.bent].pivot, aboutZ(-.36 * bend))
 
     // Effects.
     for (let k = fx.length - 1; k >= 0; k--) {
@@ -522,16 +548,16 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     for (const f of fx) {
       const u = f.life / f.max, target = f.glow ? glowData : fxData, o = (f.glow ? g++ : a++) * FX_FLOATS
       if (f.glow ? g > 64 : a > 700) { if (f.glow) g--; else a--; continue }
-      // Flat puffs shrink away rather than fade; sparks lie along their flight.
-      const end = f.shape === 0 ? Math.min(1, (1 - u) * 3) : 1, size = f.size * end
+      // Puffs thin out as they swell; sparks lie along their flight; a bar (the laser's beam) lies where it is put.
+      const size = f.size, bar = f.shape === 4
       target[o] = f.x; target[o + 1] = f.y; target[o + 2] = f.z
       target[o + 3] = f.shape === 1 || f.shape === 3 ? Math.max(f.len, size) : size; target[o + 4] = f.shape === 3 ? f.len : size
       target[o + 5] = f.shape === 1 && !f.spin ? Math.atan2(f.vy + DY * f.vz, f.vx + DX * f.vz) : f.rot
-      if (f.shape === 3) { target[o + 3] = f.size; target[o + 4] = f.len * 2.4 }
-      target[o + 6] = f.r; target[o + 7] = f.g; target[o + 8] = f.b; target[o + 9] = f.a * (f.shape === 0 ? 1 : f.shape === 2 || f.shape === 3 ? (1 - u) ** 1.5 : Math.min(1, (1 - u) * 2.5)); target[o + 10] = f.shape
+      if (bar) { target[o + 3] = f.size; target[o + 4] = f.len }
+      target[o + 6] = f.r; target[o + 7] = f.g; target[o + 8] = f.b; target[o + 9] = f.a * (f.shape === 0 ? Math.min(1, u * 8) * (1 - u) ** 1.3 : bar ? 1 : f.shape === 2 ? 1 - u : Math.min(1, (1 - u) * 2.5)); target[o + 10] = bar ? 1 : f.shape
     }
     const s = shake * (reduced ? 0 : 1)
-    renderer!.draw({ parts, letters: instances, letterCount: n, fx: fxData, fxCount: a, glow: glowData, glowCount: g, shake: [Math.sin(time * 71) * s, Math.cos(time * 59) * s], flash, wallOn: wallBlink <= 0 || (wallBlink > .05 && wallBlink < .08) })
+    renderer!.draw({ parts, letters: instances, letterCount: n, fx: fxData, fxCount: a, glow: glowData, glowCount: g, shake: [Math.sin(time * 71) * s, Math.cos(time * 59) * s], flash, wallOn: true })
   }
 
   // ── The pointer: read a letter, drag it, burn a scam ──
@@ -607,18 +633,19 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     setPhase('run'); needle = .22
     const freeze = (lane: number, set: (i: number) => void) => { const i = alloc(); for (let tries = 0; tries < 80; tries++) { nextLetter(i); if (pool[data[i]].scam === (lane === 7)) break } place(i, 0, 0, p.zL); L.state[i] = SCRIPT; set(i) }
     freeze(3, i => { L.pos[i * 3 + 1] = m.scanY; hooks.scan(pool[data[i]], 'read') })
-    freeze(1, i => { L.pos[i * 3] = p.lanes[1] + p.P * .6; L.pos[i * 3 + 1] = m.rideY })
-    freeze(5, i => { L.pos[i * 3] = p.lanes[5] - p.P * .3; L.pos[i * 3 + 1] = m.rideY })
-    freeze(0, i => { L.pos[i * 3] = p.lw * .5; L.pos[i * 3 + 1] = m.hopperTop + p.lh * 2.2; setQuat(i, .3, .2, 1, .5) })
-    freeze(7, i => { L.pos[i * 3] = m.eject[0] + p.lw * .2; L.pos[i * 3 + 1] = m.eject[1] + p.lh * 2.6; setQuat(i, .2, .1, 1, -.6) })
+    freeze(1, i => { L.pos[i * 3] = p.lanes[1] + p.P * .7; L.pos[i * 3 + 1] = m.rideY })
+    freeze(5, i => { L.pos[i * 3] = p.lanes[5] - p.P * .4; L.pos[i * 3 + 1] = m.rideY })
+    freeze(2, i => { L.pos[i * 3 + 1] = p.yTop + p.hopper * .34 })
+    freeze(0, i => { L.pos[i * 3] = p.lw * .5; L.pos[i * 3 + 1] = m.hopperTop + p.lh * 2; setQuat(i, .3, .2, 1, .5) })
+    freeze(7, i => { L.pos[i * 3] = m.eject[0] + p.lw * .2; L.pos[i * 3 + 1] = m.eject[1] + p.lh * 2.4; setQuat(i, .2, .1, 1, -.6) })
     parts[m.idx.lamps[1]].on = parts[m.idx.lamps[2]].on = true
-    caps[0].on = true; caps[0].tube = 3; caps[0].s = tubeLength[3][tubeLength[3].length - 1] * .3; caps[1].on = true; caps[1].tube = 6; caps[1].s = tubeLength[6][tubeLength[6].length - 1] * .55
+    ;[[0, 0, .5], [6, 0, .3], [2, m.lines[2].length - 1, .35], [5, m.lines[5].length - 1, .6]].forEach(([tube, run, at], k) => { const cap = caps[k]; cap.on = true; cap.tube = tube; cap.run = run; cap.wait = 0; cap.s = runLength[tube][run].at(-1)! * at })
     scripts.clear(); advance(0); render()
   }
 
   return {
     setTheme(next: boolean) { theme(next); if (reduced) render(); else { render(); kick() } },
-    setPlan(next: Plan, nextOver: number) { p = next; over = nextOver; phase = 'boot'; clock = 0; heat = 0; needle = 0; needleV = 0; sorted = burnt = 0; scanning = waiting = -1; zaps.length = 0; hooks.count(0, 0); hooks.scan(null, 'idle'); build(); hooks.phase('boot'); if (reduced) still(); else { advance(0); render(); kick() } },
+    setPlan(next: Plan, nextOver: number) { p = next; over = nextOver; phase = 'boot'; clock = 0; heat = 0; needle = 0; needleV = 0; sorted = burnt = 0; scanning = -1; zaps.length = 0; hooks.count(0, 0); hooks.scan(null, 'idle'); build(); hooks.phase('boot'); if (reduced) still(); else { advance(0); render(); kick() } },
     setLetters(next: Letter[]) { if (next.length) { pool = next; cursor = Math.floor(Math.random() * pool.length); for (let i = 0; i < MAX; i++) data[i] %= pool.length } },
     setVisible(next: boolean) { visible = next; if (next) kick() },
     /** The gauge: pressed while the machine runs it overloads it at once; pressed afterwards it puts it back together. */

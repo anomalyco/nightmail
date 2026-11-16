@@ -14,6 +14,9 @@ export function drawStill(canvas: HTMLCanvasElement, p: Plan, over: number, dark
   const face = (points: [number, number, number][]) => { c.beginPath(); points.forEach(([x, y, z], i) => i ? c.lineTo(X(x, z), Y(y, z)) : c.moveTo(X(x, z), Y(y, z))); c.fill() }
   const front = (x0: number, y0: number, x1: number, y1: number) => c.fillRect(X(x0), Y(y1), x1 - x0, y1 - y0)
   const { Xc, Xw, D, U, V, yTop, yWall, yMan, ySlot, yCav, yFas } = p
+  // The slab: its top, its lip.
+  fill('slab', 0); face([[-p.slabX, 0, p.zLip], [p.slabX, 0, p.zLip], [p.slabX, 0, p.zBack], [-p.slabX, 0, p.zBack]])
+  fill('slab', 1); face([[-p.slabX, 0, p.zLip], [p.slabX, 0, p.zLip], [p.slabX, -p.lip, p.zLip], [-p.slabX, -p.lip, p.zLip]])
   fill('body', 3); face([[-Xc, 0, 0], [-Xc, 0, D], [-Xc, yTop, D], [-Xc, yTop, 0]])
   fill('body', 0); face([[-Xc, yTop, 0], [Xc, yTop, 0], [Xc, yTop, D], [-Xc, yTop, D]])
   fill('body', 1); front(-Xc, yWall, Xc, yTop)
@@ -23,6 +26,10 @@ export function drawStill(canvas: HTMLCanvasElement, p: Plan, over: number, dark
   fill('dark', 1); front(-Xw, yCav, Xw, yFas)
   fill('slot', 1); front(p.cta.x, p.cta.y, p.cta.x + p.cta.w, p.cta.y + p.cta.h)
   fill('screen', 1); front(p.readout.x, p.readout.y, p.readout.x + p.readout.w, p.readout.y + p.readout.h)
+  // The tubes' channels down the front, and the gauge's face.
+  fill('dark', 1); for (const x of p.tubes) front(x - p.tubeR - U / 9, p.phone ? 1.5 * V : yWall + 1.7 * V, x + p.tubeR + U / 9, yMan)
+  fill('trim', 1); c.beginPath(); c.arc(X(p.gauge.x), Y(p.gauge.y), p.gauge.r + 2.5 * U / 9, 0, Math.PI * 2); c.fill()
+  fill('dial', 1); c.beginPath(); c.arc(X(p.gauge.x), Y(p.gauge.y), p.gauge.r, 0, Math.PI * 2); c.fill()
   const g = U * .085, rows = PRICE.length + p.over + p.under
   for (let r = 0; r < rows; r++) for (let col = 0; col < COLS + 2 * p.side; col++) {
     const lit = PRICE[r - p.over]?.[col - p.side] === '#'

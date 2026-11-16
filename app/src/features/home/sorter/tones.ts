@@ -1,12 +1,13 @@
 // The sorter's materials. Each is four flat tones of one colour, by how a surface faces the light: lit from above, the
-// front, grazing, and shade (which is also what a cast shadow is). Night: one hue (268°, the brand's) at low chroma and
+// front, grazing, and shade (which is also what a cast shadow is). `floor` is the page itself, the dark the slab stands in. Night: one hue (268°, the brand's) at low chroma and
 // its opposite, a warm paper white, for letters and whatever is lit; red only where something burns. Day is the same
 // machine in pale enamel on a pale floor, its sorting frame still dark so the letters in it stay paper.
 // A row is [lit, front, grazing, shade] lightness, chroma, hue, alpha (OKLCH); night first, then day.
 type Row = [number, number, number, number, number, number, number]
 const flat = (l: number, c: number, h: number, a = 1): Row => [l, l, l, l, c, h, a]
 const TABLE = {
-  floor:   [[.158, .158, .15, .136, .014, 268, 1], [.948, .948, .93, .9, .01, 262, 1]],
+  floor:   [flat(.158, .014, 268), flat(.948, .01, 262)],
+  slab:    [[.228, .192, .184, .178, .017, 268, 1], [.99, .905, .9, .928, .008, 262, 1]],
   body:    [[.365, .272, .242, .214, .018, 268, 1], [.985, .905, .86, .805, .008, 262, 1]],
   plinth:  [[.3, .212, .19, .168, .016, 268, 1], [.955, .868, .825, .775, .012, 262, 1]],
   wall:    [[.365, .272, .242, .214, .018, 268, 1], [.66, .565, .52, .46, .03, 262, 1]],
@@ -26,6 +27,8 @@ const TABLE = {
   char:    [flat(.2, .025, 55), flat(.24, .03, 55)],
   glass:   [flat(.9, .02, 268, .055), flat(.3, .03, 262, .05)],
   sheen:   [flat(.95, .015, 268, .085), flat(1, 0, 0, .2)],
+  pane:    [flat(.86, .02, 268, .22), flat(.55, .03, 262, .3)],
+  crack:   [flat(.96, .01, 268, .5), flat(1, 0, 0, .85)],
   tube:    [[.95, .82, .62, .46, .02, 268, .2], [.4, .5, .34, .26, .03, 262, .2]],
   lampOff: [[.4, .32, .28, .25, .018, 268, 1], [.78, .7, .64, .58, .014, 262, 1]],
   lampOn:  [flat(.95, .06, 92), flat(.97, .1, 92)],
@@ -62,15 +65,16 @@ export function paletteBytes(dark: boolean, rows: number) {
   })
   return bytes
 }
-/** A glass tube over the floor, as the page draws it: one of the tube's tones at its own alpha over the lit floor. */
+/** A glass tube over the page, as the page draws it below the machine: the renderer draws a tube's far wall (in
+ * shade) and then its near wall (in the tone its facing gives), each at the tube's alpha, over what is behind. */
 function glass(index: 0 | 1 | 2 | 3, dark: boolean) {
-  const t = TABLE.tube[dark ? 0 : 1], f = TABLE.floor[dark ? 0 : 1], top = oklch(t[index], t[4], t[5]), under = oklch(f[0], f[4], f[5])
-  return `rgb(${top.map((v, i) => Math.round(v * t[6] + under[i] * (1 - t[6]))).join(' ')})`
+  const t = TABLE.tube[dark ? 0 : 1], f = TABLE.floor[dark ? 0 : 1], near = oklch(t[index], t[4], t[5]), far = oklch(t[3], t[4], t[5]), under = oklch(f[0], f[4], f[5]), a = t[6]
+  return `rgb(${near.map((v, i) => Math.round(v * a + (far[i] * a + under[i] * (1 - a)) * (1 - a))).join(' ')})`
 }
 /** The machine's tones for the page's own boxes below it (variant-sorter.css reads them as --srt-*). */
 export function toneVars(dark: boolean): Record<string, string> {
   return {
-    '--srt-floor': tone('floor', 0, dark), '--srt-shadow': tone('floor', 3, dark), '--srt-body': tone('body', 1, dark), '--srt-body-top': tone('body', 0, dark), '--srt-body-side': tone('body', 3, dark), '--srt-plinth': tone('plinth', 1, dark), '--srt-trim': tone('trim', 1, dark),
+    '--srt-floor': tone('floor', 0, dark), '--srt-body': tone('body', 1, dark), '--srt-body-top': tone('body', 0, dark), '--srt-body-side': tone('body', 3, dark), '--srt-plinth': tone('plinth', 1, dark), '--srt-trim': tone('trim', 1, dark),
     '--srt-steel': tone('steel', 1, dark), '--srt-steel-top': tone('steel', 0, dark), '--srt-screen': tone('screen', 1, dark), '--srt-lamp-off': tone('lampOff', 1, dark),
     '--srt-tube-0': glass(0, dark), '--srt-tube-1': glass(1, dark), '--srt-tube-2': glass(2, dark), '--srt-tube-3': glass(3, dark),
   }
