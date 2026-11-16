@@ -14,7 +14,7 @@ export type Letter = { subject: string; from: string; addr: string; snippet: str
 /** The lanes, left to right, by the dataset's route names; a scam's route is 7. */
 export const LANES = ['thread', 'webhook', 'agent', 'inbox', 'imap', 'ritual', 'campaign'] as const
 export type Phase = 'boot' | 'run' | 'overload' | 'boom' | 'rest' | 'rebuild'
-export type Hooks = { scan: (letter: Letter | null, verdict: 'read' | 'junk' | 'jam' | 'idle') => void; count: (sorted: number, burnt: number) => void; phase: (phase: Phase) => void; hover: (letter: Letter | null, x: number, y: number) => void }
+export type Hooks = { shake: (x: number, y: number) => void; scan: (letter: Letter | null, verdict: 'read' | 'junk' | 'jam' | 'idle') => void; count: (sorted: number, burnt: number) => void; phase: (phase: Phase) => void; hover: (letter: Letter | null, x: number, y: number) => void }
 export type Sorter = ReturnType<typeof mountSorter>
 
 const MAX = 760, FREE = 0, SCRIPT = 1, DYN = 2, ASLEEP = 3, HELD = 4, HOME = 5
@@ -44,10 +44,10 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   const heights = new Float32Array(GW * GD)
   const colour = { steam: [1, 1, 1], smoke: [0, 0, 0], ember: [1, .6, .2], red: [1, .2, .2], paper: [1, 1, 1], spark: [1, .9, .6] }
 
-  let phase: Phase = 'boot', clock = 0, runT = 0, heat = 0, speed = 1, feed = 1, spawnIn = .3, sorted = 0, burnt = 0, shake = 0, flash = 0, needle = 0, needleV = 0, time = 0
+  let phase: Phase = 'boot', clock = 0, runT = 0, heat = 0, speed = 1, feed = 1, spawnIn = .3, sorted = 0, burnt = 0, shake = 0, flash = 0, needle = 0, needleV = 0, time = 0, boomAt = -100
   let scanning = -1, spawned = 0, turretAngle = .45, turretAim = .45, aimHold = 0, steamIn = 0, sparkIn = 0, rainLeft = 0, bend = 0
   const queue: number[] = [], QUEUE = 5
-  const flapAngle = new Float32Array(7), flapWant = new Float32Array(7), rollerSpin = new Float32Array(56)
+  const shook = [0, 0], flapAngle = new Float32Array(7), flapWant = new Float32Array(7), rollerSpin = new Float32Array(56)
   const caps = Array.from({ length: 28 }, () => ({ tube: 0, run: 0, s: 0, wait: 0, on: false }))
   let runLength: number[][][] = []
   const zaps: { id: number; at: number }[] = []
@@ -314,12 +314,13 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     if (mounted) { turretAim = turretAngle = angle; aimHold = .45 }
     const tip = mounted ? 22 * px : 0, bx = from[0] + Math.cos(angle) * tip, by = from[1] + Math.sin(angle) * tip, length = Math.hypot(sx, sy) - tip
     const mx = (bx + tx) / 2 - DX * (tz - from[2]) / 2, my = (by + ty) / 2 - DY * (tz - from[2]) / 2, mz = (from[2] + tz) / 2
-    add({ x: mx, y: my, z: mz, max: .12, size: length / 2, len: 1.9 * px, rot: angle, ...rgb(colour.red), shape: 4 })
-    add({ x: mx, y: my, z: mz - 1, max: .09, size: length / 2, len: .7 * px, rot: angle, ...rgb(colour.spark), shape: 4 })
-    sparks(tx, ty, tz, 12, 220, colour.ember)
+    const long = mounted ? 1 : 2.2
+    add({ x: mx, y: my, z: mz, max: .12 * long, size: length / 2, len: (mounted ? 1.9 : 2.6) * px, rot: angle, ...rgb(colour.red), shape: 4 })
+    add({ x: mx, y: my, z: mz - 1, max: .09 * long, size: length / 2, len: (mounted ? .7 : 1) * px, rot: angle, ...rgb(colour.spark), shape: 4 })
+    sparks(tx, ty, tz, mounted ? 12 : 26, 240, colour.ember); if (!mounted) sparks(bx, by, from[2], 8, 120, colour.red)
     burning[i] = 1; wake(i)
     if (L.state[i] === SCRIPT) loose(i, 0, 0, 0, 1)
-    L.vel[o] *= .4; L.vel[o + 1] = L.vel[o + 1] * .3 + 60 * px; shake = Math.max(shake, 1.2)
+    L.vel[o] *= .4; L.vel[o + 1] = L.vel[o + 1] * .3 + (mounted ? 60 : 150) * px; if (!mounted) { L.ang[o] += rnd(-5, 5); L.ang[o + 2] += rnd(-5, 5) } shake = Math.max(shake, 1.2)
   }
   function launch(tube: number) {
     const cap = caps.find(c => !c.on)
@@ -328,10 +329,10 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
 
   // ── The burst ──
   function boom() {
-    setPhase('boom'); flash = 1; shake = 8; needleV = -9; bend = 1
+    setPhase('boom'); flash = 1; shake = 8; needleV = -9; bend = 1; boomAt = time
     const cx = 0, cy = (p.yCav + p.yFas) / 2
     // Light, as an effect and only here: a hot core for two frames. The page behind is never lightened.
-    add({ x: cx, y: cy, z: -10, max: .05, size: 88 * px, ...rgb(colour.spark), a: .95, shape: 2, glow: true })
+    add({ x: cx, y: cy, z: -10, max: .075, size: 88 * px, ...rgb(colour.spark), a: 1, shape: 2, glow: true })
     // Every letter in the works, and the hundreds the machine had swallowed, out through the front and the roof.
     for (const [i] of scripts) { L.pos[i * 3 + 2] = -6 * px; if (L.pos[i * 3 + 1] > p.yFas) L.pos[i * 3 + 1] = p.yTop + p.lh }
     // Each is thrown at a place: most onto the slab (heaped by the machine's sides, thinning out towards the slab's
@@ -364,9 +365,12 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     debrisPart.forEach((index, i) => {
       const home = debrisHome[i], o = i * 3, roof = index === m.idx.hopper || index === m.idx.turret || index === m.idx.hatch || m.idx.vents.includes(index), pane = m.idx.panes.includes(index)
       Dn.state[i] = DYN; Dn.still[i] = 0; Dn.pos.set(home, o); Dn.quat.set([0, 0, 0, 1], i * 4); parts[index].on = true
-      if (roof) { const side = home[0] === 0 ? (Math.random() < .5 ? -1 : 1) : Math.sign(home[0]); Dn.vel[o] = side * rnd(160, 420) * px; Dn.vel[o + 1] = rnd(620, 900) * px; Dn.vel[o + 2] = -rnd(60, 260) * px - home[2] * .9 }
+      // The laser comes down where it can still be seen and still be used: on the slab beside the machine (on a phone,
+      // where there is no slab beside it, back on the roof).
+      if (index === m.idx.turret) { const T = p.phone ? .8 : 1.5, tx = p.phone ? -p.Xw * .3 : -(p.Xc + rnd(70, 120) * px), tz = p.phone ? p.D * .55 : p.D * .28, ty = p.phone ? p.yTop : 0; Dn.vel[o] = (tx - home[0]) / T; Dn.vel[o + 1] = G * T / 2 - (home[1] - ty) / T; Dn.vel[o + 2] = (tz - home[2]) / T }
+      else if (roof) { const side = home[0] === 0 ? (Math.random() < .5 ? -1 : 1) : Math.sign(home[0]); Dn.vel[o] = side * rnd(160, 420) * px; Dn.vel[o + 1] = rnd(620, 900) * px; Dn.vel[o + 2] = -rnd(60, 260) * px - home[2] * .9 }
       else { Dn.pos[o + 2] = -5 * px; Dn.vel[o] = (home[0] / p.Xw + rnd(-.5, .5)) * (pane ? 380 : 600) * px; Dn.vel[o + 1] = rnd(120, pane ? 520 : 740) * px; Dn.vel[o + 2] = -rnd(160, pane ? 420 : 600) * px }
-      const spin = roof ? 5 : pane ? 6 : 12
+      const spin = index === m.idx.turret ? 1.6 : roof ? 5 : pane ? 6 : 12
       Dn.ang[o] = rnd(-spin, spin); Dn.ang[o + 1] = rnd(-spin, spin); Dn.ang[o + 2] = rnd(-spin, spin)
     })
     for (const index of m.idx.cracks) parts[index].on = false
@@ -476,11 +480,14 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       if (clock > .9) { glass.on = true; glass.fade = clamp((clock - .9) / .3); parts[m.idx.soot].fade = parts[m.idx.shards].fade = 1 - glass.fade; parts[m.idx.hole].on = glass.fade < .5; bend = 1 - glass.fade }
       if (!left && !away && clock > 1.3) { glass.fade = 1; bend = 0; parts[m.idx.soot].on = parts[m.idx.shards].on = parts[m.idx.hole].on = false; parts[m.idx.soot].fade = parts[m.idx.shards].fade = 1; spawned = 0; sorted = 0; burnt = 0; hooks.count(0, 0); heat = 0; runT = 0; spawnIn = .2; setPhase('run') }
     }
-    if (phase === 'boom' && clock > 1.2) {
+    // After the burst: at rest once all but a few letters lie still; whatever has not settled a little later is made to
+    // (or, if it has nothing under it, removed).
+    if ((phase === 'boom' && clock > 1.2) || (phase === 'rest' && time - boomAt < 5.2)) {
+      const late = time - boomAt > 4.4
       let moving = 0
-      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (clock > 4.6) { const c = cell(L.pos[i * 3], L.pos[i * 3 + 2]); if (c < 0 || heights[c] === VOID || L.pos[i * 3 + 1] > heights[c] + 30 * px) L.state[i] = FREE; else sleep(L, i) } }
-      for (let i = 0; i < Dn.cap; i++) if (Dn.state[i] === DYN && clock > 4.6) sleep(Dn, i)
-      if (!moving) setPhase('rest')
+      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (late) { const c = cell(L.pos[i * 3], L.pos[i * 3 + 2]); if (c < 0 || heights[c] === VOID || L.pos[i * 3 + 1] > heights[c] + 30 * px) L.state[i] = FREE; else sleep(L, i) } }
+      for (let i = 0; i < Dn.cap; i++) if (Dn.state[i] === DYN && late) sleep(Dn, i)
+      if (phase === 'boom' && moving <= 4) setPhase('rest')
     }
 
     // Capsules down the tubes: down the front between the manifolds, a moment out of sight inside the cabinet, then
@@ -540,7 +547,8 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       const o = n * LETTER_FLOATS, shrink = L.state[i] === HOME ? 1 - clamp(L.still[i]) ** 3 * .7 : 1
       instances[o] = L.pos[i * 3]; instances[o + 1] = L.pos[i * 3 + 1]; instances[o + 2] = L.pos[i * 3 + 2]
       instances[o + 3] = L.quat[i * 4]; instances[o + 4] = L.quat[i * 4 + 1]; instances[o + 5] = L.quat[i * 4 + 2]; instances[o + 6] = L.quat[i * 4 + 3]
-      instances[o + 7] = p.lw * shrink; instances[o + 8] = p.lh * shrink; instances[o + 9] = 1.4
+      const curl = burning[i] ? 1 - Math.min(1, burn[i]) * .3 : 1
+      instances[o + 7] = p.lw * shrink * curl; instances[o + 8] = p.lh * shrink * curl; instances[o + 9] = 1.4
       instances[o + 10] = seed[i]; instances[o + 11] = burn[i]; instances[o + 12] = kind[i]; instances[o + 13] = i === pointer.hover || i === pointer.held ? 1 : 0
       n++
     }
@@ -554,10 +562,12 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       target[o + 3] = f.shape === 1 || f.shape === 3 ? Math.max(f.len, size) : size; target[o + 4] = f.shape === 3 ? f.len : size
       target[o + 5] = f.shape === 1 && !f.spin ? Math.atan2(f.vy + DY * f.vz, f.vx + DX * f.vz) : f.rot
       if (bar) { target[o + 3] = f.size; target[o + 4] = f.len }
-      target[o + 6] = f.r; target[o + 7] = f.g; target[o + 8] = f.b; target[o + 9] = f.a * (f.shape === 0 ? Math.min(1, u * 8) * (1 - u) ** 1.3 : bar ? 1 : f.shape === 2 ? 1 - u : Math.min(1, (1 - u) * 2.5)); target[o + 10] = bar ? 1 : f.shape
+      target[o + 6] = f.r; target[o + 7] = f.g; target[o + 8] = f.b; target[o + 9] = f.a * (f.shape === 0 ? Math.min(1, u * 8) * (1 - u) ** 1.3 : bar ? 1 : f.shape === 2 ? Math.sqrt(1 - u) : Math.min(1, (1 - u) * 2.5)); target[o + 10] = bar ? 1 : f.shape
     }
-    const s = shake * (reduced ? 0 : 1)
-    renderer!.draw({ parts, letters: instances, letterCount: n, fx: fxData, fxCount: a, glow: glowData, glowCount: g, shake: [Math.sin(time * 71) * s, Math.cos(time * 59) * s], flash, wallOn: true })
+    // The whole scene shakes as one, and the page's text on the machine with it.
+    const s = shake * (reduced ? 0 : 1), sx = Math.round(Math.sin(time * 71) * s * 2) / 2, sy = Math.round(Math.cos(time * 59) * s * 2) / 2
+    if (sx !== shook[0] || sy !== shook[1]) { shook[0] = sx; shook[1] = sy; hooks.shake(sx, -sy) }
+    renderer!.draw({ parts, letters: instances, letterCount: n, fx: fxData, fxCount: a, glow: glowData, glowCount: g, shake: [sx, sy], flash, flashAt: [0, (p.yCav + p.yFas) / 2, 0], flashR: p.cavity * 1.25, wallOn: true })
   }
 
   // ── The pointer: read a letter, drag it, burn a scam ──

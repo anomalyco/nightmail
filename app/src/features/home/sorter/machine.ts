@@ -29,7 +29,10 @@ export function buildMachine(p: Plan) {
   b.box(-Xc - 2 * px, 0, -3 * px, Xc + 2 * px, 1.5 * V, D + 2 * px, M.plinth)
   b.mark(-Xc, 1.5 * V, Xc, yWall, 0, M.plinth)
   b.box(-Xc, yBand - px, -1.5 * px, Xc, yBand + px, 0, M.trim)
-  b.mark(-Xc, 1.5 * V, -Xc + 1.2 * px, yTop, -.12, M.trim); b.mark(Xc - 1.2 * px, 1.5 * V, Xc, yTop, -.12, M.line)
+  // Relief: a post proud of the front at each corner, a cornice under the roof, a rail over the base.
+  for (const x of [-Xc, Xc - 1.3 * U]) b.box(x, 1.5 * V, -2.5 * px, x + 1.3 * U, yTop, 0, M.body)
+  b.mark(-Xc, 1.5 * V, -Xc + 1.2 * px, yTop, -2.5 * px - .1, M.trim)
+  b.box(-Xc - px, yTop - 2.2 * px, -3.5 * px, Xc + px, yTop, 0, M.trim)
   // The button's bay in the base: a frame proud of the wall, dark inside until the page's button paints over it.
   const c = p.cta, f = 2.5 * px
   b.mark(c.x, c.y, c.x + c.w, c.y + c.h, -.3, M.slot)
@@ -58,8 +61,11 @@ export function buildMachine(p: Plan) {
   b.mark(-Xc, yCav, -Xw, yFas, 0, M.body); b.mark(Xw, yCav, Xc, yFas, 0, M.body); b.mark(-Xc, yFas, Xc, yTop, 0, M.body)
   // The works' bay: back wall, floor and the one side wall that is seen, with a frame round the opening.
   b.quad([-Xw, yCav, cavD], [Xw, yCav, cavD], [Xw, yFas, cavD], [-Xw, yFas, cavD], M.dark, [0, 0, -1])
-  b.quad([-Xw, yCav, 0], [Xw, yCav, 0], [Xw, yCav, cavD], [-Xw, yCav, cavD], M.dark, [0, 1, 0])
-  b.quad([Xw, yCav, 0], [Xw, yCav, cavD], [Xw, yFas, cavD], [Xw, yFas, 0], M.dark, [-1, 0, 0])
+  b.quad([-Xw, yCav, 0], [Xw, yCav, 0], [Xw, yCav, cavD], [-Xw, yCav, cavD], M.bay, [0, 1, 0])
+  b.quad([Xw, yCav, 0], [Xw, yCav, cavD], [Xw, yFas, cavD], [Xw, yFas, 0], M.bay, [-1, 0, 0])
+  // Ribs up the bay's back wall, a lane apart, and a skirting where it meets the floor.
+  for (let i = 1; i < 7; i++) b.box((i - 3.5) * P - px, yCav, cavD - 2 * px, (i - 3.5) * P + px, yFas - 5 * px, cavD, M.bay)
+  b.box(-Xw, yCav, cavD - 3 * px, Xw, yCav + 3 * px, cavD, M.bay)
   b.box(-Xw - 2 * px, yFas, -2 * px, Xw + 2 * px, yFas + 2 * px, 0, M.trim); b.box(-Xw - 2 * px, yCav - 2 * px, -2 * px, Xw + 2 * px, yCav, 0, M.trim)
   b.box(-Xw - 2 * px, yCav, -2 * px, -Xw, yFas, 0, M.trim); b.box(Xw, yCav, -2 * px, Xw + 2 * px, yFas, 0, M.trim)
   // A cable tray along the back of the bay, on brackets.
@@ -87,7 +93,7 @@ export function buildMachine(p: Plan) {
     b.mark(ventX - ventW, ga.y - ventH, ventX + ventW, ga.y + ventH, -.2, M.slot)
     for (let i = 0; i < 5; i++) b.box(ventX - ventW, ga.y - ventH + i * ventH * .4 + ventH * .08, -1.6 * px, ventX + ventW, ga.y - ventH + i * ventH * .4 + ventH * .29, 0, M.trim)
   }
-  for (const [x, y] of [[-Xc + U, yFas + V], [Xc - U, yFas + V], [-Xc + U, yTop - V], [Xc - U, yTop - V], [-Xc + U, ySlot + p.slot / 2], [Xc - U, ySlot + p.slot / 2], [-Xc + U, yBand + p.band / 2], [Xc - U, yBand + p.band / 2]]) b.cyl([x, y, 0], 2, -1.2 * px, 0, 1.3 * px, M.steel, 8, 1)
+  for (const [x, y] of [[-Xc + .65 * U, yFas + V], [Xc - .65 * U, yFas + V], [-Xc + .65 * U, yTop - 1.4 * V], [Xc - .65 * U, yTop - 1.4 * V], [-Xc + .65 * U, yMan - 2 * V], [Xc - .65 * U, yMan - 2 * V], [-Xc + .65 * U, yWall + 3 * V], [Xc - .65 * U, yWall + 3 * V], [-Xc + .65 * U, yBand + p.band / 2], [Xc - .65 * U, yBand + p.band / 2], [-Xc + .65 * U, 3 * V], [Xc - .65 * U, 3 * V]]) b.cyl([x, y, 0], 2, -3.7 * px, -2.5 * px, 1.3 * px, M.steel, 8, 1)
 
   // The roof: a kerb round it, seams, the laser's pedestal, the slot scams leave by, a beacon, a cable to the hatch.
   b.box(-Xc, yTop, 0, Xc, yTop + 2 * px, 2.5 * px, M.trim); b.box(-Xc, yTop, D - 2.5 * px, Xc, yTop + 2 * px, D, M.trim)
@@ -126,7 +132,8 @@ export function buildMachine(p: Plan) {
   const saddle = (x: number, z: number, along: 'x' | 'z') => along === 'x' ? b.box(x - 1.8 * px, 0, z - r - 2.4 * px, x + 1.8 * px, 2 * r + 2.6 * px, z + r + 2.4 * px, M.steel) : b.box(x - r - 2.4 * px, 0, z - 1.8 * px, x + r + 2.4 * px, 2 * r + 2.6 * px, z + 1.8 * px, M.steel)
   p.fan.forEach((leg, t) => {
     const s = t < 4 ? -1 : 1, wallX = s * Xc
-    if (s < 0) b.cyl([0, r + 2 * px, leg.z], 0, wallX - 3 * px, wallX, r + 2 * px, M.steel, 12, 1)
+    // A flange where it comes through the wall, bolted on.
+    if (s < 0) { b.cyl([0, r + 2 * px, leg.z], 0, wallX - 4 * px, wallX, r + 3.4 * px, M.trim, 14, 1, M.steel); b.cyl([0, r + 2 * px, leg.z], 0, wallX - 7 * px, wallX - 4 * px, r + 1.4 * px, M.steel, 12, 1) }
     for (let x = wallX + s * 30 * px; Math.abs(x) < Math.abs(leg.x) - 2.6 * r; x += s * 9 * U) saddle(x, leg.z, 'x')
     saddle(leg.x + DX * (leg.z - p.zLip * .45), p.zLip * .45, 'z')
   })

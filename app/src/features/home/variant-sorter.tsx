@@ -30,7 +30,7 @@ const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'Ar
 export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
   const dark = useTheme().theme === 'dark'
   const scene = useRef<HTMLElement>(null), still = useRef<HTMLCanvasElement>(null), gl = useRef<HTMLCanvasElement>(null), sorter = useRef<Sorter | null>(null)
-  const readout = useRef<HTMLDivElement>(null), cardBox = useRef<HTMLDivElement>(null), counts = useRef([0, 0]), shown = useRef<Letter | null>(null)
+  const readout = useRef<HTMLDivElement>(null), on = useRef<HTMLDivElement>(null), cardBox = useRef<HTMLDivElement>(null), counts = useRef([0, 0]), shown = useRef<Letter | null>(null)
   const [p, setP] = useState<Plan | null>(null)
   const [reduced] = useState(reducedMotion)
   // Whoever has watched it burst once gets there sooner the next time.
@@ -40,6 +40,8 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
 
   // What the machine tells the page: the letter under the scanner, the tally, where it is in its day, the letter under the pointer.
   const [hooks] = useState<Hooks>(() => ({
+    // When the machine shakes, what is written on it shakes with it.
+    shake(x, y) { if (on.current) on.current.style.translate = x || y ? `${x}px ${y}px` : '' },
     scan(letter, verdict) {
       const box = readout.current
       if (!box) return
@@ -96,7 +98,12 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
   // The old code brings the flood.
   useEffect(() => {
     let at = 0
-    const onKey = (event: KeyboardEvent) => { at = event.key === KONAMI[at] ? at + 1 : event.key === KONAMI[0] ? 1 : 0; if (at === KONAMI.length) { at = 0; sorter.current?.rain() } }
+    const onKey = (event: KeyboardEvent) => {
+      at = event.key === KONAMI[at] ? at + 1 : event.key === KONAMI[0] ? 1 : 0
+      // Two ups in, the arrows belong to the code: the page doesn't scroll under it (nor rubber-band at its top).
+      if (event.key.startsWith('Arrow') && (at > 2 || (event.key === 'ArrowUp' && window.scrollY <= 0))) event.preventDefault()
+      if (at === KONAMI.length) { at = 0; sorter.current?.rain() }
+    }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [])
@@ -116,7 +123,7 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
       <section className="srt-hero" ref={scene} aria-label="Pricing">
         <canvas ref={still} className="srt-canvas" aria-hidden="true" />
         <canvas ref={gl} className="srt-canvas srt-gl" aria-hidden="true" />
-        {p && <>
+        {p && <div className="srt-on" ref={on}>
           {/* On the fascia: what the scanner is reading, and the gauge (press it and see). */}
           <div className="srt-readout" ref={readout} style={at(p.readout)} data-verdict="idle" aria-hidden="true">
             <span className="srt-readout-from">{productName.toLowerCase()} sorter</span><span className="srt-readout-subject">Waiting for mail</span><span className="srt-readout-route" />
@@ -135,10 +142,12 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
             <p className="srt-fact"><span className="srt-fact-label">Responds in</span><span className="srt-fact-value"><i>~</i>100<i> ms</i></span></p>
             <p className="srt-fact"><span className="srt-fact-label">Free every month</span><span className="srt-fact-value">3,000<i> sent · </i>3,000<i> received</i></span></p>
           </div>
-          <SignInConsent className="srt-consent" />
           <button type="button" className="srt-cta" style={at(p.cta)} disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
             <span className="srt-cta-label">Get started{busy ? <LoaderCircle className="ui-spinner" size={16} aria-hidden="true" /> : <ArrowRight className="srt-cta-arrow" size={16} strokeWidth={2} aria-hidden="true" />}</span>
           </button>
+        </div>}
+        {p && <>
+          <SignInConsent className="srt-consent" />
           {/* The letter under the pointer, opened. */}
           <div className="srt-card" ref={cardBox} data-open={card ? '' : undefined} aria-hidden="true">
             {card && <div className="srt-card-body" data-scam={card.scam || undefined}>

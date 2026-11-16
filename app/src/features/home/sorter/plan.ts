@@ -15,7 +15,7 @@ export function plan(W: number, H: number) {
   const phone = W < 640
   // In cells: the unlit columns and rows round the price, the strip the tubes run down, and each floor of the machine.
   const side = phone ? 1 : 2, over = 2, under = phone ? 1 : 2, strip = phone ? 4.6 : 9.8
-  const rows = phone ? { base: 30, band: 16.5, manifold: 2, slot: 3.6, cavity: 22, fascia: 12 } : { base: 14, band: 7.5, manifold: 2, slot: 3.4, cavity: 19, fascia: 10 }
+  const rows = phone ? { base: 30, band: 16.5, manifold: 2, slot: 3.6, cavity: 22, fascia: 12.6 } : { base: 14, band: 7.5, manifold: 2, slot: 3.4, cavity: 19, fascia: 11 }
   // The slab in front of the machine, its lip, and the page under the lip.
   const depth = phone ? 11 : 20, hopperU = phone ? 5 : 4.2, skyU = phone ? 2 : 1.5, frontU = phone ? 4.6 : 5.75, lipU = phone ? 1.6 : 2, belowU = phone ? 6.4 : 7.6
   const wallRows = ROWS + over + under, tall = (rows.base + rows.band + wallRows + rows.manifold + rows.slot + rows.cavity + rows.fascia) * 13 / 18 + depth * DY + hopperU + skyU + frontU + lipU + belowU
@@ -46,7 +46,7 @@ export function plan(W: number, H: number) {
   const drops = tubes.map((x, t) => ox + (phone ? x + DX * zt : fan[t].x + DX * fan[t].z))
   const slabX = phone ? W : Xc + 4.9 * spread
   const cta: Rect = phone ? { x: -Xw + 2 * U, y: 7.8 * V, w: 2 * Xw - 4 * U, h: 50 } : { x: -7.6 * U, y: (base - Math.max(44, 7.4 * V)) / 2, w: 15.2 * U, h: Math.max(44, 7.4 * V) }
-  const readout: Rect = phone ? { x: -Xw + U, y: yFas + (fascia - 46) / 2, w: Xw * 1.36, h: 46 } : { x: -Xw + U, y: yFas + (fascia - 7.4 * V) / 2, w: 28 * U, h: 7.4 * V }
+  const readout: Rect = phone ? { x: -Xw + U, y: yFas + (fascia - 48) / 2, w: Xw * 1.36, h: 48 } : { x: -Xw + 2.2 * U, y: yFas + (fascia - 8.4 * V) / 2, w: 27.5 * U, h: 8.4 * V }
   const gauge = { x: Xw - (phone ? 4.4 : 4.2) * U, y: yFas + fascia / 2, r: Math.min(fascia * .36, phone ? 16 : 24) }
   return { phone, W, H, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, zt, fan, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, readout, gauge }
 }

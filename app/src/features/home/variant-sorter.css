@@ -36,12 +36,15 @@
 .srt-canvas { position: absolute; top: calc(-1 * var(--srt-header)); left: 0; display: block; width: 100%; height: calc(100% + var(--srt-header)); pointer-events: none; }
 .srt-gl { visibility: hidden; touch-action: pan-y; }
 .srt-page[data-live] .srt-gl { visibility: visible; pointer-events: auto; }
+/* Everything the page writes on the machine: one layer, so it can shake with it. */
+.srt-on { position: absolute; z-index: 2; inset: 0; pointer-events: none; }
+.srt-on > :is(button, a) { pointer-events: auto; }
 
 /* The readout: a small screen on the fascia. Who the letter under the scanner is from and where it goes, then its
    subject in full, on two lines if it needs them. */
-.srt-readout { position: absolute; z-index: 2; display: grid; grid-template: 'from route' auto 'subject subject' 1fr / minmax(0, 1fr) auto; align-content: center; gap: 3px var(--space-8); padding: 0 clamp(7px, var(--srt-u) * 1.1, 11px); font-family: var(--font-mono); font-size: clamp(9.5px, var(--srt-u) * 1.3, 12px); line-height: 1.22; pointer-events: none; }
+.srt-readout { position: absolute; z-index: 2; display: grid; grid-template: 'from route' auto 'subject subject' 1fr / minmax(0, 1fr) auto; align-content: center; gap: 3px var(--space-8); padding: 0 clamp(7px, var(--srt-u) * 1.1, 11px); font-family: var(--font-mono); font-size: clamp(9.5px, var(--srt-u) * 1.3, 12px); line-height: 1.32; pointer-events: none; }
 .srt-readout-from { grid-area: from; overflow: hidden; color: var(--srt-screen-dim); text-overflow: ellipsis; white-space: nowrap; }
-.srt-readout-subject { grid-area: subject; height: 2.44em; overflow: hidden; color: var(--srt-screen-text); text-wrap: balance; }
+.srt-readout-subject { grid-area: subject; height: 2.64em; overflow: hidden; color: var(--srt-screen-text); text-wrap: balance; }
 .srt-readout-route { grid-area: route; color: var(--color-brand); letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .srt-readout[data-verdict='junk'] .srt-readout-route, .srt-readout[data-verdict='jam'] .srt-readout-subject { color: var(--srt-red); }
 
@@ -92,7 +95,7 @@
 .srt-card { position: absolute; z-index: 5; top: 0; left: 0; width: 0; height: 0; pointer-events: none; }
 .srt-card-body { position: absolute; bottom: 16px; left: 0; display: grid; row-gap: 3px; width: 264px; padding: 10px 12px 11px; border-radius: 4px; background: var(--srt-card); box-shadow: 0 0 0 1px var(--srt-card-edge), 0 6px 0 -3px oklch(0 0 0 / 22%); color: var(--srt-card-text); font-size: 12.5px; line-height: 17px; translate: -50% 0; animation: srt-card 140ms var(--srt-ease); }
 .srt-card-body > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.srt-card-body > b { font-size: 13.5px; font-weight: 600; letter-spacing: -.008em; }
+.srt-card-body > b { font-size: 13.5px; font-weight: 600; letter-spacing: -.008em; text-wrap: balance; white-space: normal; }
 .srt-card-body > span:nth-child(3) { color: var(--srt-card-dim); text-wrap: pretty; white-space: normal; }
 .srt-card-from { display: flex; gap: 6px; color: var(--srt-card-dim); font-size: 11.5px; }
 .srt-card-from .private-address { min-width: 0; }
@@ -111,7 +114,6 @@
   .srt-band { line-height: 1.16; letter-spacing: -.02em; }
   .srt-line { display: block; }
   .srt-row { display: flex; column-gap: .22em; align-items: baseline; }
-  .srt-row-wide { justify-content: space-between; column-gap: 0; }
   .srt-fact { top: calc(2.2 * var(--srt-v)); row-gap: 6px; translate: none; }
   .srt-fact-label { font-size: 12.5px; }
   .srt-fact-value { font-size: 15px; }
@@ -126,20 +128,20 @@
    A unit's --q is how far it has come up the page, 0 to 1; its capsule travels on the first half (--c) and what its
    appliance does happens on the second (--v). A step inside takes a window of --v as its own --t. */
 .srt-stations { position: relative; flex: none; isolation: isolate; }
+.srt-pipes { position: absolute; inset: 0; pointer-events: none; }
 .srt-unit { position: absolute; right: 0; left: 0; height: 0; --c: clamp(0, calc(var(--q, 0) / .46), 1); --v: clamp(0, calc((var(--q, 0) - .5) / .5), 1); }
 /* A glass tube as the machine draws one: flat bands across it, by how each part of its wall faces the light (a tube
    running down the page has no lit top; one running across it has). Collars where it bends. */
 .srt-pipe { position: absolute; width: var(--srt-pipe); background: linear-gradient(to right, var(--srt-tube-3) 0 5.6%, var(--srt-tube-2) 5.6% 20.4%, var(--srt-tube-1) 20.4% 98.4%, transparent 98.4%); pointer-events: none; }
 .srt-pipe-in { height: calc(var(--srt-pipe) * 1.085); margin-top: calc(var(--srt-pipe) * -.5425); background: linear-gradient(to bottom, var(--srt-tube-0) 0 65.1%, var(--srt-tube-1) 65.1% 81.7%, var(--srt-tube-2) 81.7% 90.9%, var(--srt-tube-3) 90.9% 100%); }
 .srt-bend { position: absolute; --in: calc(var(--srt-bend) - var(--srt-pipe) / 2); --w: var(--srt-pipe);
-  background: radial-gradient(circle at 100% 0, transparent 0 var(--in), var(--srt-tube-1) var(--in) calc(var(--in) + var(--w) * .72), var(--srt-tube-2) calc(var(--in) + var(--w) * .72) calc(var(--in) + var(--w) * .88), var(--srt-tube-3) calc(var(--in) + var(--w) * .88) calc(var(--in) + var(--w)), transparent calc(var(--in) + var(--w))); pointer-events: none; }
-.srt-unit[data-side='r'] .srt-bend { background: radial-gradient(circle at 0 0, transparent 0 var(--in), var(--srt-tube-1) var(--in) calc(var(--in) + var(--w) * .72), var(--srt-tube-2) calc(var(--in) + var(--w) * .72) calc(var(--in) + var(--w) * .88), var(--srt-tube-3) calc(var(--in) + var(--w) * .88) calc(var(--in) + var(--w)), transparent calc(var(--in) + var(--w))); }
+  background: radial-gradient(circle at var(--srt-c), transparent 0 var(--in), var(--srt-tube-1) var(--in) calc(var(--in) + var(--w) * .72), var(--srt-tube-2) calc(var(--in) + var(--w) * .72) calc(var(--in) + var(--w) * .88), var(--srt-tube-3) calc(var(--in) + var(--w) * .88) calc(var(--in) + var(--w)), transparent calc(var(--in) + var(--w))); pointer-events: none; }
 .srt-ring { position: absolute; z-index: 2; width: calc(var(--srt-pipe) + 6px); height: 6px; margin: -3px 0 0 calc(var(--srt-pipe) / -2 - 3px); border-radius: 1px; background: var(--srt-steel); box-shadow: inset 0 2px 0 var(--srt-steel-top); }
 .srt-ring-in { width: 6px; height: calc(var(--srt-pipe) * 1.085 + 6px); margin: calc(var(--srt-pipe) * -.5425 - 3px) 0 0 -3px; box-shadow: inset 2px 0 0 var(--srt-steel-top); }
-/* The tray a capsule comes to rest in, against the appliance's wall. */
+/* The tray a capsule comes to rest in: a shelf fixed to the appliance's wall, with a stop. */
 .srt-tray { position: absolute; z-index: 2; height: 5px; margin-top: calc(var(--srt-r) * .68 + 2px); border-radius: 1px; background: var(--srt-steel); box-shadow: inset 0 2px 0 var(--srt-steel-top); }
-.srt-tray::after { content: ''; position: absolute; right: 0; bottom: 100%; width: 5px; height: calc(var(--srt-r) * 1.6); border-radius: 1px 1px 0 0; background: var(--srt-steel); }
-.srt-unit[data-side='r'] .srt-tray::after { right: auto; left: 0; }
+.srt-tray::after { content: ''; position: absolute; right: 0; bottom: 0; width: 6px; height: calc(var(--srt-r) * 2.4 + 9px); border-radius: 1px; background: var(--srt-steel); box-shadow: inset 2px 0 0 var(--srt-steel-top); }
+.srt-tray[data-side='r']::after { right: auto; left: 0; }
 /* The capsule: down the tube, round the bend, out into the tray, where it stays. */
 .srt-capsule { position: absolute; z-index: 1; top: 0; left: 0; width: max(13px, calc(var(--srt-r) * 3.7)); height: max(4.5px, calc(var(--srt-r) * 1.36)); border-radius: 99px; background: linear-gradient(to right, var(--color-brand) 0 22%, var(--srt-paper) 22% 78%, var(--color-brand) 78% 100%); offset-distance: calc(var(--c) * 100%); offset-rotate: auto; opacity: clamp(0, calc(var(--c) * 40), 1); pointer-events: none; }
 
@@ -168,18 +170,20 @@
 .srt-v-head b { overflow: hidden; font-weight: 600; text-overflow: ellipsis; }
 .srt-v-head > span { color: var(--dim); font-size: 11px; }
 
-/* Inbox: a rack of pigeonholes over the list. The letter is filed; its row heads the list. */
-.srt-holes { position: absolute; top: 14px; right: 14px; left: 14px; display: grid; grid-template-columns: repeat(12, 1fr); gap: 5px; height: 26px; }
-.srt-holes i { position: relative; background: var(--srt-slot); box-shadow: inset 0 3px 0 color-mix(in oklch, var(--srt-slot), black 30%); }
-.srt-holes i::after { content: ''; position: absolute; inset: 7px 4px 2px; background: var(--srt-paper); opacity: 0; }
-.srt-holes .srt-full::after { opacity: .5; }
-.srt-holes .srt-filed::after { opacity: var(--t); translate: 0 calc((var(--t) - 1) * 12px); }
-.srt-unit[data-kind='inbox'] .srt-screen { top: 54px; }
+/* Inbox: a rack of pigeonholes, two rows of eight, over the list. The letter is filed; its row heads the list. */
+.srt-holes { position: absolute; top: 14px; right: 14px; left: 14px; display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; height: 66px; }
+.srt-holes i { position: relative; overflow: hidden; background: var(--srt-slot); box-shadow: inset 0 4px 0 color-mix(in oklch, var(--srt-slot), black 35%), 0 0 0 1.5px var(--srt-trim); }
+/* An envelope standing in its hole: paper, and the two creases of its flap. */
+.srt-holes i::after { content: ''; position: absolute; inset: 8px 5px 0; opacity: 0; --crease: color-mix(in oklch, var(--srt-paper), black 28%);
+  background: linear-gradient(to bottom right, transparent calc(50% - .7px), var(--crease) calc(50% - .7px) calc(50% + .7px), transparent calc(50% + .7px)) 0 0 / 50% 62% no-repeat, linear-gradient(to bottom left, transparent calc(50% - .7px), var(--crease) calc(50% - .7px) calc(50% + .7px), transparent calc(50% + .7px)) 100% 0 / 50% 62% no-repeat, var(--srt-paper); }
+.srt-holes .srt-full::after { opacity: .62; }
+.srt-holes .srt-filed::after { opacity: var(--t); translate: 0 calc((var(--t) - 1) * 26px); }
+.srt-unit[data-kind='inbox'] .srt-screen { top: 94px; }
 .srt-count { position: relative; display: grid; place-items: center; min-width: 20px; height: 18px; border-radius: 9px; background: var(--color-brand); color: var(--srt-screen) !important; font-weight: 600; font-variant-numeric: tabular-nums; }
 .srt-count i { grid-area: 1 / 1; font-style: normal; }
 .srt-count i:first-child { opacity: calc(1 - var(--t)); }
 .srt-count i:last-child { opacity: var(--t); }
-.srt-list { position: absolute; inset: 33px 0 0; overflow: hidden; --rowh: 36px; }
+.srt-list { position: absolute; inset: 33px 0 0; overflow: hidden; --rowh: 31px; }
 .srt-row-mail { display: grid; grid-template-columns: 8px minmax(0, 96px) minmax(0, 1fr) auto; align-items: center; column-gap: 9px; height: var(--rowh); padding-inline: 12px; box-shadow: 0 1px 0 var(--hair); white-space: nowrap; }
 .srt-row-mail > * { overflow: hidden; text-overflow: ellipsis; }
 .srt-row-mail b { font-weight: 500; }
@@ -260,9 +264,16 @@
 .srt-total { display: flex; align-items: baseline; justify-content: space-between; padding: 9px 12px 0; font-variant-numeric: tabular-nums; }
 .srt-total span { color: var(--dim); }
 .srt-total b { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
-.srt-out { position: absolute; right: 34px; bottom: calc(100% + var(--srt-dy) * .3); display: flex; flex-direction: column-reverse; gap: 1.5px; width: 50px; }
-.srt-out i { height: 5px; background: var(--srt-paper); box-shadow: inset 0 -1.5px 0 color-mix(in oklch, var(--srt-paper), black 18%); opacity: var(--t); translate: calc((1 - var(--t)) * -10px) 0; }
-.srt-out i:nth-child(odd) { margin-left: 3px; margin-right: -3px; }
+.srt-roller { position: absolute; right: 16%; bottom: calc(100% + var(--srt-dy) * .34); left: calc(16% - var(--srt-dx) * .4); height: 26px; border-radius: 13px; background: linear-gradient(to bottom, var(--srt-steel-top) 0 34%, var(--srt-steel) 34% 72%, var(--srt-body-side) 72% 100%); box-shadow: -14px 0 0 -5px var(--srt-trim), 14px 0 0 -5px var(--srt-trim); }
+.srt-shelf { position: absolute; right: 100%; bottom: 46px; width: 74px; height: 5px; margin-right: calc(var(--srt-dx) * .5); background: var(--srt-steel); box-shadow: inset 0 2px 0 var(--srt-steel-top); }
+.srt-out { position: absolute; right: 100%; bottom: 52px; display: flex; flex-direction: column-reverse; gap: 1.5px; width: 56px; margin-right: calc(var(--srt-dx) * .5 + 8px); }
+.srt-out i { height: 6px; background: var(--srt-paper); box-shadow: inset 0 -1.5px 0 color-mix(in oklch, var(--srt-paper), black 18%); opacity: var(--t); translate: calc((1 - var(--t)) * 14px) 0; }
+.srt-out i:nth-child(odd) { margin-right: 3px; margin-left: -3px; }
+
+/* Threads: two reels on the roof and the tape between them; they turn as the thread grows. */
+.srt-reel { position: absolute; bottom: calc(100% + var(--srt-dy) * .3); left: calc(22% - var(--srt-dx) * .4); width: 58px; height: 58px; border-radius: 50%; background: radial-gradient(circle, var(--srt-steel) 0 5px, var(--srt-slot) 5px 9px, transparent 9px), conic-gradient(var(--srt-body-side) 0 8%, var(--srt-plinth) 8% 33.3%, var(--srt-body-side) 33.3% 41.3%, var(--srt-plinth) 41.3% 66.6%, var(--srt-body-side) 66.6% 74.6%, var(--srt-plinth) 74.6% 100%); box-shadow: 0 0 0 4px var(--srt-trim); rotate: calc(var(--v) * 300deg); }
+.srt-reel-b { left: auto; right: 22%; rotate: calc(var(--v) * 300deg + 40deg); }
+.srt-tape { position: absolute; right: calc(22% + 29px); bottom: calc(100% + var(--srt-dy) * .3 + 58px); left: calc(22% - var(--srt-dx) * .4 + 29px); height: 3px; background: var(--color-brand); }
 
 /* Threads. */
 .srt-v-thread { display: grid; align-content: start; justify-items: end; row-gap: 7px; }
@@ -290,9 +301,9 @@
 .srt-stations[data-phone] .srt-caption h2 { font-size: 24px; }
 .srt-stations[data-phone] .srt-caption p { font-size: 13.5px; line-height: 19px; }
 .srt-stations[data-phone] .srt-screen { inset: 10px 10px 40px; }
-.srt-stations[data-phone] .srt-unit[data-kind='inbox'] .srt-screen { top: 46px; }
-.srt-stations[data-phone] .srt-holes { top: 10px; right: 10px; left: 10px; grid-template-columns: repeat(10, 1fr); }
-.srt-stations[data-phone] .srt-holes i:nth-child(n + 11) { display: none; }
+.srt-stations[data-phone] .srt-unit[data-kind='inbox'] .srt-screen { top: 88px; }
+.srt-stations[data-phone] .srt-holes { top: 10px; right: 10px; left: 10px; gap: 5px; }
+.srt-stations[data-phone] .srt-list { --rowh: 33px; }
 .srt-stations[data-phone] .srt-row-mail { grid-template-columns: 8px minmax(0, 84px) minmax(0, 1fr) auto; column-gap: 7px; padding-inline: 10px; }
 .srt-stations[data-phone] .srt-plate { bottom: 10px; left: 10px; }
 .srt-stations[data-phone] .srt-lamp { right: 12px; bottom: 14px; }
@@ -305,10 +316,14 @@
 .srt-stations[data-phone] .srt-paper .srt-quote { margin-left: 34px; }
 .srt-stations[data-phone] .srt-log { grid-template-columns: 62px minmax(0, 1fr); padding-inline: 10px; }
 .srt-stations[data-phone] .srt-unit[data-kind='ritual'] .srt-screen { right: 10px; bottom: 74px; }
-.srt-stations[data-phone] .srt-unit[data-kind='endpoint'] .srt-screen { right: 10px; bottom: 74px; }
+.srt-stations[data-phone] .srt-unit[data-kind='endpoint'] .srt-screen { right: 10px; bottom: 92px; }
 .srt-stations[data-phone] .srt-panel { top: auto; right: 44px; bottom: 44px; left: 10px; grid-auto-flow: column; align-content: center; justify-content: start; column-gap: 14px; width: auto; height: 24px; padding: 0; font-size: 9.5px; }
-.srt-stations[data-phone] .srt-v-ritual pre, .srt-stations[data-phone] .srt-v-endpoint, .srt-stations[data-phone] .srt-v-endpoint pre { font-size: 9.6px; }
-.srt-stations[data-phone] .srt-v-ritual pre { line-height: 18px; }
-.srt-stations[data-phone] .srt-v-ritual pre > span { padding-inline: 9px; }
+.srt-stations[data-phone] .srt-jacks { grid-auto-flow: row; grid-template-columns: repeat(2, max-content); gap: 9px 18px; height: 42px; }
+.srt-stations[data-phone] .srt-v-ritual pre { font-size: 9.1px; line-height: 18px; }
+.srt-stations[data-phone] .srt-v-endpoint, .srt-stations[data-phone] .srt-v-endpoint pre { font-size: 9.6px; }
+.srt-stations[data-phone] .srt-v-ritual pre > span { padding-inline: 7px; }
+.srt-stations[data-phone] .srt-reel { width: 46px; height: 46px; }
+.srt-stations[data-phone] .srt-tape { right: calc(22% + 23px); bottom: calc(100% + var(--srt-dy) * .3 + 46px); left: calc(22% - var(--srt-dx) * .4 + 23px); }
+.srt-stations[data-phone] .srt-shelf, .srt-stations[data-phone] .srt-out { display: none; }
 .srt-stations[data-phone] .srt-foot { width: 140px; margin-left: -70px; }
 @media (prefers-reduced-motion: reduce) { .srt-unit { --q: 1 !important; } }

@@ -37,13 +37,14 @@ void main() { vec4 w = uModel * vec4(aPos, 1.); vWorld = w.xyz; vNrm = mat3(uMod
 const MESH_FS = `#version 300 es
 precision highp float; precision highp sampler2DShadow;
 in vec3 vWorld, vNrm; in float vMat;
-uniform sampler2D uPal; uniform sampler2DShadow uShadow; uniform mat4 uLight; uniform vec3 uL; uniform float uFlash, uFade, uSlab;
+uniform sampler2D uPal; uniform sampler2DShadow uShadow; uniform mat4 uLight; uniform vec3 uL, uFlashAt; uniform float uFlash, uFade, uSlab, uFlashR;
 out vec4 o;
 ${BANDS}
 void main() {
   vec3 n = normalize(vNrm); float nl = dot(n, uL);
   vec4 c = toned(vMat, nl, nl > 0. ? shadowAt(vWorld, n) : 0.);
-  if (abs(vMat - uSlab) > .5) c.rgb = mix(c.rgb, vec3(1., .93, .78), uFlash * (.16 + .4 * max(nl, 0.)));
+  // The burst's light, on the machine's own faces: strongest round the window, gone a little way off (sooner below it).
+  if (uFlash > 0. && abs(vMat - uSlab) > .5) { vec3 d = vWorld - uFlashAt; if (d.y < 0.) d.y *= 1.9; float far = length(d) / uFlashR; c.rgb = mix(c.rgb, vec3(1., .93, .78), uFlash * (.2 + .5 * max(nl, 0.)) * exp(-far * far)); }
   o = vec4(c.rgb, c.a * uFade);
 }`
 
@@ -234,11 +235,11 @@ export function createRenderer(canvas: HTMLCanvasElement) {
     setMesh(data: Float32Array) { gl.bindBuffer(gl.ARRAY_BUFFER, meshBuffer); gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW); vertices = data.length / 7 },
     setWall(data: Float32Array, count: number) { wall.upload(data, count); wallCount = count },
     get vertices() { return vertices },
-    draw(scene: { parts: Part[]; letters: Float32Array; letterCount: number; fx: Float32Array; fxCount: number; glow: Float32Array; glowCount: number; shake: [number, number]; flash: number; wallOn: boolean }) {
+    draw(scene: { parts: Part[]; letters: Float32Array; letterCount: number; fx: Float32Array; fxCount: number; glow: Float32Array; glowCount: number; shake: [number, number]; flash: number; flashAt: number[]; flashR: number; wallOn: boolean }) {
       const pass = (matrix: Float32Array, depthOnly: boolean) => {
         gl.useProgram(mesh.p)
         gl.uniformMatrix4fv(mesh.u('uProj'), false, matrix); gl.uniformMatrix4fv(mesh.u('uLight'), false, light); gl.uniform3fv(mesh.u('uL'), LIGHT)
-        gl.uniform2f(mesh.u('uShake'), depthOnly ? 0 : scene.shake[0] * 2 / W, depthOnly ? 0 : scene.shake[1] * 2 / H); gl.uniform1f(mesh.u('uFlash'), scene.flash); gl.uniform1f(mesh.u('uFade'), 1); gl.uniform1f(mesh.u('uSlab'), mats.slab)
+        gl.uniform2f(mesh.u('uShake'), depthOnly ? 0 : scene.shake[0] * 2 / W, depthOnly ? 0 : scene.shake[1] * 2 / H); gl.uniform1f(mesh.u('uFlash'), scene.flash); gl.uniform1f(mesh.u('uFade'), 1); gl.uniform1f(mesh.u('uSlab'), mats.slab); gl.uniform3fv(mesh.u('uFlashAt'), scene.flashAt); gl.uniform1f(mesh.u('uFlashR'), scene.flashR)
         gl.uniform1i(mesh.u('uPal'), 0); gl.uniform1i(mesh.u('uShadow'), 1)
         gl.bindVertexArray(meshVao)
         for (const part of scene.parts) if (part.on && !part.glass && part.fade >= 1) { gl.uniformMatrix4fv(mesh.u('uModel'), false, part.m); gl.drawArrays(gl.TRIANGLES, part.start, part.count) }
