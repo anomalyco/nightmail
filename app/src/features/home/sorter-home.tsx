@@ -12,6 +12,7 @@ import { drawStill } from './sorter/still'
 import { toneVars } from './sorter/tones'
 import { COLS } from './sorter/price'
 import { Stations } from './sorter-stations'
+import { HeaderMark, logoIdea } from './wordmark'
 import type { Hooks, Letter, Phase, Sorter } from './sorter/engine'
 import './sorter-home.css'
 
@@ -39,6 +40,8 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
   const readout = useRef<HTMLDivElement>(null), cardBox = useRef<HTMLDivElement>(null), counts = useRef([0, 0]), shown = useRef<Letter | null>(null)
   const [p, setP] = useState<Plan | null>(null)
   const [reduced] = useState(reducedMotion)
+  // ?logo=a|b|c|d (PREVIEW ONLY, wordmark/index.tsx): a placement of the new wordmark to look at. null: the page as it ships.
+  const [logo] = useState(logoIdea)
   // Whoever has watched it burst once gets there sooner the next time.
   const [quick] = useState(() => { try { return localStorage.getItem(SEEN) === '1' } catch { return false } })
   const [phase, setPhase] = useState<Phase>('boot'), [live, setLive] = useState(false), [card, setCard] = useState<Letter | null>(null)
@@ -80,12 +83,12 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
 
   // Before the first paint: measure the page and place the machine, so nothing moves afterwards.
   useLayoutEffect(() => {
-    const measure = () => { const box = scene.current!, next = plan(box.clientWidth, box.clientHeight); setP(now => now && now.W === next.W && now.H === next.H ? now : next) }
+    const measure = () => { const box = scene.current!, next = plan(box.clientWidth, box.clientHeight, logo); setP(now => now && now.W === next.W && now.H === next.H ? now : next) }
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(scene.current!)
     return () => observer.disconnect()
-  }, [])
+  }, [logo])
   useLayoutEffect(() => { if (p) drawStill(still.current!, p, over, dark) }, [p, over, dark])
 
   // After the first paint: fetch the engine and start it; then the letters.
@@ -131,7 +134,7 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
   const price = p ? { x: -COLS / 2 * p.U, w: COLS * p.U } : { x: 0, w: 0 }
   return <div className="srt-page" data-phase={phase} data-live={live || undefined} data-phone={p?.phone || undefined} data-tight={p?.tight || undefined} style={{ ...toneVars(dark), ...p && { '--srt-u': `${p.U}px`, '--srt-v': `${p.V}px`, '--srt-price': `${price.w}px`, '--srt-below': `${p.floor - p.front - p.lip}px`, '--srt-ext': `${p.ext}px` } } as CSSProperties}>
     <header className="srt-header">
-      <a className="wordmark" href="/" aria-label={`${productName.toLowerCase()} home`}><BaneWordmark /></a>
+      {logo ? <HeaderMark idea={logo} label={`${productName.toLowerCase()} home`} /> : <a className="wordmark" href="/" aria-label={`${productName.toLowerCase()} home`}><BaneWordmark /></a>}
       <nav className="srt-nav" aria-label="Site">
         <a href="/docs">API docs</a>
         <ThemeToggle />
@@ -143,6 +146,8 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
         <canvas ref={still} className="srt-canvas" aria-hidden="true" />
         <canvas ref={gl} className="srt-canvas srt-gl" aria-hidden="true" />
         {p && <div className="srt-on">
+          {/* ?logo=b|d (PREVIEW ONLY): where the renderer draws the wordmark, as an empty box, so its place can be measured. */}
+          {p.name && <span className="srt-name-box" style={{ position: 'absolute', left: p.ox + p.name.x + DX * p.name.z, top: p.oy - p.name.y - p.name.cap - DY * p.name.z, width: 10.8 * p.name.cap, height: p.name.cap }} aria-hidden="true" />}
           {/* On the fascia: what the scanner is reading, and the gauge (press it and see). */}
           <div className="srt-readout" ref={readout} style={at(p.readout)} data-verdict="idle" aria-hidden="true">
             <span className="srt-readout-from">{productName.toLowerCase()} sorter</span><span className="srt-readout-subject">Waiting for mail</span><span className="srt-readout-route" />
@@ -182,7 +187,7 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
         </>}
         {notice && <div className="srt-notice">{notice}</div>}
       </section>
-      <Stations plan={p} onSignIn={onSignIn} onSignInIntent={onSignInIntent} busy={busy} />
+      <Stations plan={p} onSignIn={onSignIn} onSignInIntent={onSignInIntent} busy={busy} logo={logo} />
     </main>
   </div>
 }

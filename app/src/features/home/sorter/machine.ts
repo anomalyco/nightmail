@@ -10,6 +10,7 @@ import { MAT as M } from './tones'
 import { COLS, PRICE } from './price'
 import { DX, DY, type Plan } from './plan'
 import { LETTER_FLOATS } from './gl'
+import { nameOn } from '../wordmark/solid'
 
 export type Machine = ReturnType<typeof buildMachine>
 
@@ -268,6 +269,10 @@ export function buildMachine(p: Plan) {
   const panel = { x0: Xw + (p.phone ? .5 : .7) * U, x1: colX - (p.phone ? .55 : 1.6) * vs, y0: yCav + p.cavity * .1, y1: yCav + p.cavity * .4 }, panelX = (panel.x0 + panel.x1) / 2
   b.mark(panel.x0 + px, panel.y0 + px, panel.x1 - px, panel.y1 - px, -.15, M.slot)
   b.mark(panel.x0 + px, panel.y0 + px, panel.x1 - px, panel.y0 + 2.2 * px, -.2, M.bay)
+
+  // ?logo=b|d (PREVIEW ONLY): the wordmark on the machine. b: painted on the back wall of the works, behind the
+  // rollers and whatever rides them. d: lit letters at the head of the sorting frame, standing proud of it on darker sides.
+  if (p.name) nameOn(b, p.name, p.logo === 'b' ? M.paint : M.paper, M.rim)
 
   // ── Parts ──
   const idx = { glass: 0, tubes: 0, soot: 0, shards: 0, hole: 0, bent: 0, bentHeld: 0, barrel: 0, cradle: 0, needle: 0, turrets: [] as number[], scan: 0, hopper: 0, hatch: 0, panel: 0, beaconOn: 0, levers: [] as number[], vents: [] as number[], panes: [] as number[], cracks: [] as number[], lamps: [] as number[], flaps: [] as number[], rollers: [] as number[], caps: [] as number[], bolts: [] as number[] }

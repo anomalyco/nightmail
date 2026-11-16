@@ -41,6 +41,12 @@ const TABLE = {
   smoke:   [flat(.36, .012, 268), flat(.7, .008, 262)],
   steam:   [flat(.82, .008, 268), flat(.99, .004, 262)],
   scorch:  [flat(.1, .012, 268, .7), flat(.35, .02, 262, .5)],
+  // ?logo=b (PREVIEW ONLY): the wordmark's paint on the back wall of the works: one tone lit or in shade (the bay's
+  // shadow line would otherwise cut the letters in two), a step under the letters' paper.
+  paint:   [flat(.74, .016, 92), flat(.97, .01, 92)],
+  // ?logo=d (PREVIEW ONLY): the sides of the lit letters at the head of the frame. Never as pale as their faces, by
+  // night or by day, so a letter's face stays the outline's own shape.
+  rim:     [[.5, .39, .33, .27, .02, 268, 1], [.63, .52, .46, .39, .03, 262, 1]],
 } as const
 export type Mat = keyof typeof TABLE
 export const MAT = Object.fromEntries(Object.keys(TABLE).map((name, index) => [name, index])) as Record<Mat, number>

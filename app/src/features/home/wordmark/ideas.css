@@ -1,0 +1,32 @@
+/* PREVIEW ONLY (?logo=a|b|c|d, wordmark/index.tsx): the new marks on the sorter homepage. They are set in the brand's
+   ink on the pale page and its paper on the dark one, and in nothing else; never stretched, never respaced. */
+.srt-page { --srt-name: #0A0B0F; }
+:root[data-theme='dark'] .srt-page { --srt-name: #F4F2EC; }
+
+/* The top bar. The link is 44 px high whatever the mark's size; the mark's left edge is the page's margin, its middle
+   the bar's middle (and so the middle of "API docs" and the theme button). */
+.srt-mark { display: flex; flex: none; align-items: center; height: 44px; border-radius: 4px; color: var(--srt-name); }
+.srt-mark svg { display: block; flex: none; width: calc(var(--srt-mark-h) * var(--srt-mark-ratio)); height: var(--srt-mark-h); fill: currentColor; }
+.srt-mark:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: 4px; }
+/* a, c: the lockup. Cap height 16 px (the tile is as tall); 14 on a phone, 12 where the bar is under 360 px wide. */
+.srt-mark-lockup { --srt-mark-h: 16px; --srt-mark-ratio: 12.12; }
+/* b, d: the monogram alone, a little larger than the lockup's tile, since it is all there is. */
+.srt-mark-tile { --srt-mark-h: 26px; --srt-mark-ratio: 1; }
+@media (max-width: 899px) { .srt-mark-lockup { --srt-mark-h: 14px; } .srt-mark-tile { --srt-mark-h: 24px; } }
+@media (max-width: 359px) { .srt-mark-lockup { --srt-mark-h: 12px; } }
+
+/* c: the wordmark across the end of the page. The footer stands over it; the page's edge cuts it. */
+.srt-poster { position: absolute; bottom: env(safe-area-inset-bottom, 0px); left: 0; display: block; }
+.srt-stations[data-logo='c'] .srt-end { bottom: calc(var(--srt-poster-h) + env(safe-area-inset-bottom, 0px)); padding-bottom: var(--space-40); }
+/* (A sill in the machine's make, only as high as the strip the screen keeps along its bottom: nothing where there is none.) */
+.srt-poster-sill { position: absolute; right: 0; bottom: 0; left: 0; height: env(safe-area-inset-bottom, 0px); background: var(--srt-plinth); box-shadow: inset 0 2px 0 var(--srt-trim); }
+.srt-poster-face { fill: var(--srt-name); }
+.srt-poster-side { stroke-width: .5; stroke-linejoin: round; }
+.srt-poster-side-0 { fill: var(--srt-body-top); stroke: var(--srt-body-top); }
+.srt-poster-side-1 { fill: var(--srt-body); stroke: var(--srt-body); }
+.srt-poster-side-2 { fill: color-mix(in srgb, var(--srt-body), var(--srt-body-side)); stroke: color-mix(in srgb, var(--srt-body), var(--srt-body-side)); }
+.srt-poster-side-3 { fill: var(--srt-body-side); stroke: var(--srt-body-side); }
+.srt-poster-letter rect { fill: var(--srt-paper); }
+.srt-poster-letter path { fill: none; stroke: color-mix(in oklch, var(--srt-paper), black 30%); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.srt-poster-letter .srt-poster-shade { fill: var(--srt-body-side); }
+.srt-poster-letter .srt-poster-stamp { fill: var(--color-brand); }

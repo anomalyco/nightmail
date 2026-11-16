@@ -4,6 +4,7 @@
 // The machine stands on a slab with a lip along its front; the tubes cross the slab, go over the lip and on down the
 // page. The page's boxes (sorter-home.css) are placed from these numbers; the engine builds the machine from them.
 import { COLS, ROWS } from './price'
+import type { LogoIdea } from '../wordmark'
 
 /** Depth on screen per unit of world depth. */
 export const DX = -0.26, DY = 0.42
@@ -11,11 +12,13 @@ export const DX = -0.26, DY = 0.42
 export type Rect = { x: number; y: number; w: number; h: number }
 export type Plan = ReturnType<typeof plan>
 
-export function plan(W: number, H: number) {
+/** `logo`: PREVIEW ONLY (?logo=, wordmark/index.tsx), the wordmark placement being looked at; null is the page as it ships. */
+export function plan(W: number, H: number, logo: LogoIdea | null = null) {
   // Below 900 px there is no room beside the machine for the headers and their tubes: the page is composed as a phone's is.
   const phone = W < 900
   // In cells: the unlit columns and rows round the price, the strip the tubes run down, and each floor of the machine.
-  const side = phone ? 1 : 2, over = 2, under = phone ? 1 : 2, strip = phone ? 4.6 : 9.8
+  // (?logo=d: eight more unlit rows over the price, for the wordmark at the head of the frame.)
+  const side = phone ? 1 : 2, over = logo === 'd' ? 10 : 2, under = phone ? 1 : 2, strip = phone ? 4.6 : 9.8
   const rows = phone ? { base: 30, band: 16.5, manifold: 2, slot: 3.6, cavity: 22, fascia: 12.6 } : { base: 14, band: 7.5, manifold: 2, slot: 3.4, cavity: 19, fascia: 11 }
   // The slab in front of the machine, its lip, and the page under the lip.
   const depth = phone ? 11 : 20, hopperU = phone ? 5 : 4.2, skyU = phone ? 2 : 1.5, frontU = phone ? 4.6 : 5.75, lipU = phone ? 1.6 : 2, belowU = phone ? 6.4 : 7.6
@@ -97,7 +100,14 @@ export function plan(W: number, H: number) {
   const tally = phone ? null : { x: fan[7].x - tubeR - 2 * U - 38, y: (headH - 14) / 2 + 1, w: 38, h: 14, z: zProud }
   const readout: Rect = phone ? { x: -Xw + U, y: yFas + (fascia - Math.min(48, fascia - 8)) / 2, w: Xw * 1.36, h: Math.min(48, fascia - 8) } : { x: -Xw + 2.2 * U, y: yFas + (fascia - 8.4 * V) / 2, w: 27.5 * U, h: 8.4 * V }
   const gauge = { x: Xw - (phone ? 4.4 : 4.2) * U, y: yFas + fascia / 2, r: Math.min(fascia * .36, phone ? 16 : 24) }
-  return { phone, tight, W, H, ext, cannon, out: Math.round(out), room, widest, lean, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, zProud, riser, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, plate, facts, tally, readout, gauge }
+  // ?logo=b|d: where the wordmark is on the machine. `x, y` is its left end on its baseline, `cap` its cap height,
+  // `z` the plane its face is in, `depth` how far that stands off what is behind it (0: it is painted on).
+  // b: on the back wall of the works, in the middle of the window as it is seen, between the rollers and the window's
+  // top. d: at the head of the sorting frame, exactly as wide as the price, half way between it and the frame's top.
+  const capB = Math.min(.27 * cavity, 1.62 * Xw / 10.8), seenLow = yCav + .4 * cavity + P / 8 * .4 + DY * (zL + 12 * U / 9)
+  const name = logo === 'b' ? { x: -5.4 * capB - DX * cavD, y: (seenLow + yFas) / 2 - DY * cavD - capB / 2, cap: capB, z: cavD - 2.4 * U / 9, depth: 0 }
+    : logo === 'd' ? { x: -COLS * U / 2, y: yMan - over * V / 2 - COLS * U / 21.6, cap: COLS * U / 10.8, z: -.6 * U, depth: .6 * U } : null
+  return { logo, name, phone, tight, W, H, ext, cannon, out: Math.round(out), room, widest, lean, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, zProud, riser, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, plate, facts, tally, readout, gauge }
 }
 
 /** A box on the machine's front, as the page places it: left and top in the scene, width and height. */

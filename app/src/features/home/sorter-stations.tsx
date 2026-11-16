@@ -5,6 +5,7 @@ import { SignInConsent } from '../../components/LegalLinks'
 import { AnomalyLogo } from '../../components/AnomalyLogo'
 import type { HomeProps } from '.'
 import { DX, DY, type Plan } from './sorter/plan'
+import { EndBand, endBand, type LogoIdea } from './wordmark'
 
 const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 
@@ -38,7 +39,7 @@ const STATIONS: Station[] = [
 /** A window of a unit's progress: the element's own --t runs 0 to 1 while --v goes from `from` to `to`. */
 const step = (from: number, to: number, extra?: CSSProperties) => ({ '--from': from, '--to': to, ...extra }) as CSSProperties
 
-export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Plan | null } & Pick<HomeProps, 'onSignIn' | 'onSignInIntent' | 'busy'>) {
+export function Stations({ plan: p, onSignIn, onSignInIntent, busy, logo = null }: { plan: Plan | null; logo?: LogoIdea | null } & Pick<HomeProps, 'onSignIn' | 'onSignInIntent' | 'busy'>) {
   const root = useRef<HTMLElement>(null), traffic = useRef<HTMLDivElement>(null), flows = useRef<Flow[]>([])
   // One pass per frame while scrolling: how far each unit has come up the page.
   useEffect(() => {
@@ -107,7 +108,9 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
   })
   // Under the last appliance, the plate the last button is on; the outbound main comes out of its top.
   const plate = { w: phone ? widest : Math.min(540, room + 60), h: phone ? 164 : 138, top: top + dy + 8 }, plateLeft = Math.round(p.ox - plate.w / 2 + dx / 2), mainX = p.ox + p.out
-  const height = plate.top + plate.h + (phone ? 150 : 132)
+  // ?logo=c (PREVIEW ONLY): the wordmark across the end of the page, under the footer; the section is taller by it.
+  const poster = logo === 'c' ? endBand(p.W, phone).h : 0
+  const height = plate.top + plate.h + (phone ? 150 : 132) + (poster ? poster + 24 : 0)
   // The tubes. A wide page: each side's four start where they left the slab's lip; after each appliance on that side
   // the tubes that are left step in one place towards the column (the inner ones first, so none crosses another),
   // and the innermost then bends in to the next appliance: into a flange on its side wall, at half its depth (an
@@ -157,8 +160,8 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
   runs.push({ key: 'main', points: main, wide, rings: mainRings })
   // Every capsule's way: down each tube from under its sleeve into its appliance; up the main from each that sends.
   flows.current = [...ways.map((points, k) => ({ points: [[points[0][0], phone ? points[0][1] + 4 : 16] as Pt, ...points.slice(1, -1), [units[k].left ? units[k].end - dx / 2 - 2 : units[k].end - 2, points.at(-1)![1]] as Pt], bend, speed: phone ? 150 : 230, unit: k, wide: phone })), ...outWays.map(points => ({ points, bend: wide * 1.5, speed: phone ? 130 : 200, unit: undefined, wide: false }))]
-  const vars = { '--srt-r': `${pw / 2}px`, '--srt-pipe': `${pw}px`, '--srt-dx': `${dx}px`, '--srt-dy': `${dy}px`, '--srt-slope': dy / dx, '--srt-over': phone ? '4px' : '7px', height } as CSSProperties
-  return <section className="srt-stations" ref={root} style={vars} data-phone={phone || undefined} aria-label="Where mail goes">
+  const vars = { '--srt-r': `${pw / 2}px`, '--srt-pipe': `${pw}px`, '--srt-dx': `${dx}px`, '--srt-dy': `${dy}px`, '--srt-slope': dy / dx, '--srt-over': phone ? '4px' : '7px', '--srt-poster-h': `${poster}px`, height: poster ? `calc(${height}px + env(safe-area-inset-bottom, 0px))` : height } as CSSProperties
+  return <section className="srt-stations" ref={root} style={vars} data-phone={phone || undefined} data-logo={logo || undefined} aria-label="Where mail goes">
     {/* The tubes' far walls; over them the capsules; over those (further down) the tubes' near walls and their collars. */}
     <svg className="srt-pipes" aria-hidden="true">
       {/* What each tube throws on the wall behind it, down and to the left as the machine's light falls. */}
@@ -216,6 +219,7 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
       <SignInConsent className="srt-end-consent" />
       <nav aria-label="Site links"><a className="srt-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={18} /></a><a href="/docs">API docs</a><Link to="/legal/terms">Terms</Link><Link to="/legal/privacy">Privacy</Link></nav>
     </footer>
+    {poster > 0 && <EndBand W={p.W} phone={phone} />}
   </section>
 }
 
