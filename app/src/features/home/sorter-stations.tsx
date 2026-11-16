@@ -58,36 +58,40 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
 
   if (!p) return <section className="srt-stations" ref={root} aria-label="Where mail goes" />
   const phone = p.phone, r = p.tubeR, wide = r * 2, depth = phone ? 40 : 60, dx = -DX * depth, dy = DY * depth
-  // Each appliance stands between the two fours of tubes, a little towards the side its own tube comes from.
-  const inner = Math.min(...p.drops.slice(4)) - Math.max(...p.drops.slice(0, 4)), room = inner - 2 * (phone ? 20 : 74), lean = phone ? 0 : Math.min(46, Math.max(0, (room - 430) / 2))
-  const captionH = phone ? 58 : 66, gap = phone ? 84 : 116, trayW = phone ? 0 : 42
+  // Each appliance stands between the two fours of tubes, a little towards the side its own tube comes from: those on
+  // the left share one left edge, those on the right another, so their names stand in two columns down the page.
+  const inner = Math.min(...p.drops.slice(4)) - Math.max(...p.drops.slice(0, 4)), room = inner - 2 * (phone ? 20 : 74), widest = Math.min(446, room), lean = phone ? 0 : Math.min(46, Math.max(0, (room - widest) / 2))
+  const captionH = phone ? 58 : 66, gap = phone ? 84 : 116
   let top = phone ? 96 : 110
-  const units = STATIONS.map(station => {
+  // (On a phone the printed paper is narrower, so longer: nothing printed is cut short.)
+  const units = STATIONS.map(spec => {
+    const station = phone ? { ...spec, up: spec.up && spec.kind === 'agent' ? 236 : spec.up, down: spec.kind === 'logs' ? 264 : spec.down } : spec
     const w = Math.min(station.w, room), left = station.tube < 4
-    const boxLeft = Math.round(p.ox - w / 2 + (left ? -lean : lean) + dx / 2), boxTop = top + captionH + dy + 18 + station.up
-    const unit = { station, w, left, top, boxLeft, boxTop: boxTop - top, port: boxTop + Math.round(station.h * station.port), end: left ? boxLeft - dx * .5 - trayW : boxLeft + w + trayW }
+    const boxLeft = Math.round(p.ox - widest / 2 + (left ? -lean : lean) + dx / 2), boxTop = top + captionH + dy + 18 + station.up
+    const unit = { station, w, left, top, boxLeft, boxTop: boxTop - top, port: boxTop + Math.round(station.h * station.port), end: left ? boxLeft - dx * .5 : boxLeft + w - 4 }
     top = boxTop + station.h + station.down + gap
     return unit
   })
   const height = top + (phone ? 250 : 240)
   // The tubes. Each side's four start where they left the slab's lip; after each appliance on that side the tubes that
   // are left step in one place towards the column (the inner ones first, so none crosses another), and the innermost
-  // then bends in to the next appliance. On a phone they are a ribbon at each edge and run straight.
+  // then bends in to the next appliance: into a flange on its side wall, at half its depth (an appliance on the right
+  // shows no such wall: its tube goes in behind its front). On a phone they are a ribbon at each edge and run straight.
+  const bend = wide * 1.5
   const pipes = units.map(({ station, left, port, end }) => {
-    const side = left ? 0 : 4, n = station.tube - side, slot = (j: number) => p.drops[side + j], points: Pt[] = [[slot(phone ? n : n), 0]]
+    const side = left ? 0 : 4, n = station.tube - side, slot = (j: number) => p.drops[side + j], points: Pt[] = [[slot(n), 0]]
     if (!phone) for (let m = 0; m < n; m++) { const y = units.find(u => u.station.tube === side + m)!.port + 78 + (n - m - 1) * (wide + 16); points.push([slot(n - m), y], [slot(n - m - 1), y]) }
-    const x = points.at(-1)![0]
-    points.push([x, port], [end + (left ? 1 : -1) * (phone ? 8 : trayW - 20), port])
-    return { tube: station.tube, points, x, tray: end }
+    points.push([points.at(-1)![0], port], [end, port])
+    return { tube: station.tube, points, left }
   })
   const vars = { '--srt-r': `${r}px`, '--srt-pipe': `${wide}px`, '--srt-dx': `${dx}px`, '--srt-dy': `${dy}px`, height } as CSSProperties
   return <section className="srt-stations" ref={root} style={vars} data-phone={phone || undefined} aria-label="Where mail goes">
-    <div className="srt-pipes" aria-hidden="true">
-      {pipes.map(({ tube, points, tray }) => <Pipe key={tube} points={points} wide={wide} bend={wide * 1.7} tray={phone ? null : [tray, trayW, tube < 4]} />)}
-    </div>
+    <svg className="srt-pipes" aria-hidden="true">
+      {pipes.map(({ tube, points, left }) => <Tube key={tube} points={points} wide={wide} bend={bend} rings={rings(points, bend, left ? dx / 2 + 5 : 13)} />)}
+    </svg>
     {units.map(({ station, w, left, top, boxLeft, boxTop }, k) => <div key={station.kind} className="srt-unit" data-kind={station.kind} data-side={left ? 'l' : 'r'} style={{ top, '--srt-w': `${w}px`, '--srt-h': `${station.h}px` } as CSSProperties}>
       {/* The capsule rides the last stretch of its tube, round the bend and out into the tray. */}
-      <span className="srt-capsule" style={{ offsetPath: `path("${trail(pipes[k].points, wide * 1.7, phone ? 300 : 560, top)}")` }} aria-hidden="true" />
+      <span className="srt-capsule" style={{ offsetPath: `path("${trail(pipes[k].points, bend, phone ? 300 : 560, top, left ? dx / 2 + 8 + Math.max(6.5, r * 1.85) : 0)}")` }} aria-hidden="true" />
       <div className="srt-caption" style={{ left: boxLeft - dx, width: w + dx }}>
         <h2>{station.name}</h2>
         <p>{station.line}</p>
@@ -98,6 +102,17 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
         <span className="srt-lamp" aria-hidden="true" />
       </div>
     </div>)}
+    {/* Where a tube meets the side wall of an appliance on the left: a flange on the wall, the tube's last length, a collar. */}
+    <svg className="srt-pipes srt-ports" aria-hidden="true">
+      {pipes.filter(pipe => pipe.left).map(({ tube, points }) => {
+        const [x, y] = points.at(-1)!, e = phone ? 3.5 : 5, h = wide / 2 + (phone ? 3 : 5), m = dy / dx
+        return <g key={tube}>
+          <polygon className="srt-flange" points={`${x - e},${y - h - m * e} ${x + e},${y - h + m * e} ${x + e},${y + h + m * e} ${x - e},${y + h - m * e}`} />
+          <polygon className="srt-flange-edge" points={`${x - e},${y - h - m * e} ${x + e},${y - h + m * e} ${x + e},${y - h + m * e + 1.5} ${x - e},${y - h - m * e + 1.5}`} />
+          <Tube points={[[x - dx / 2 - 3, y], [x, y]]} wide={wide} bend={bend} rings={[{ at: [x - 3, y], across: true }]} />
+        </g>
+      })}
+    </svg>
     <footer className="srt-end">
       <p className="srt-end-price"><b>$0.20</b> per 1,000 emails, sent or received.</p>
       <button type="button" className="srt-cta srt-end-cta" disabled={busy} aria-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
@@ -112,44 +127,80 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
 type Pt = [number, number]
 const corners = (points: Pt[], bend: number) => points.map((v, i) => i === 0 || i === points.length - 1 ? 0 : Math.min(bend, Math.hypot(v[0] - points[i - 1][0], v[1] - points[i - 1][1]) / 2, Math.hypot(points[i + 1][0] - v[0], points[i + 1][1] - v[1]) / 2))
 
-/** A tube that runs down the page and across it at right angles: its straight runs, a quarter ring at each corner, a
- * collar either side of its last bend, and the tray at its end. */
-function Pipe({ points, wide, bend, tray }: { points: Pt[]; wide: number; bend: number; tray: [number, number, boolean] | null }) {
-  const R = corners(points, bend), last = points.length - 1, out = wide / 2
-  return <>
-    {points.slice(0, -1).map((a, i) => {
-      // The glass ends where the tray begins: the capsule comes out into the open.
-      const b: Pt = i === last - 1 && tray ? [tray[0], points[last][1]] : points[i + 1]
-      if (a[0] === b[0]) return <span key={`s${i}`} className="srt-pipe" style={{ left: a[0] - out, top: a[1] + R[i], height: Math.max(0, b[1] - R[i + 1] - a[1] - R[i]) }} />
-      const s = Math.sign(b[0] - a[0])
-      return <span key={`s${i}`} className="srt-pipe srt-pipe-in" style={{ left: s > 0 ? a[0] + R[i] : b[0] + R[i + 1], top: a[1], width: Math.max(0, Math.abs(b[0] - a[0]) - R[i] - R[i + 1]) }} />
-    })}
-    {points.slice(1, -1).map((v, k) => {
-      const i = k + 1, rad = R[i], a = points[i - 1], b = points[i + 1], size = rad + out
-      // Down then across: the ring's centre is beside the corner, level with where the bend begins. Across then down: under it.
-      if (a[0] === v[0]) { const s = Math.sign(b[0] - v[0]); return <span key={`b${i}`} className="srt-bend" style={{ left: s > 0 ? v[0] - out : v[0] - rad, top: v[1] - rad, width: size, height: size, '--srt-bend': `${rad}px`, '--srt-c': s > 0 ? '100% 0' : '0 0' } as CSSProperties} /> }
-      const s = Math.sign(v[0] - a[0])
-      return <span key={`b${i}`} className="srt-bend" style={{ left: s > 0 ? v[0] - rad : v[0] - out, top: v[1] - out, width: size, height: size, '--srt-bend': `${rad}px`, '--srt-c': s > 0 ? '0 100%' : '100% 100%' } as CSSProperties} />
-    })}
-    <span className="srt-ring" style={{ left: points[last - 1][0], top: points[last - 1][1] - R[last - 1] }} />
-    <span className="srt-ring srt-ring-in" style={{ left: points[last - 1][0] + Math.sign(points[last][0] - points[last - 1][0]) * R[last - 1], top: points[last][1] }} />
-    {tray && <span className="srt-tray" data-side={tray[2] ? 'l' : 'r'} style={{ left: tray[2] ? tray[0] : tray[0] - tray[1], top: points[last][1], width: tray[1] }} />}
-  </>
+/** Where a tube's line turns: for each corner the centre of its quarter circle, its radius, and the points it begins and ends at. */
+function turns(points: Pt[], bend: number) {
+  const R = corners(points, bend)
+  return points.map((v, i) => {
+    if (!R[i]) return null
+    const a = points[i - 1], b = points[i + 1], la = Math.hypot(v[0] - a[0], v[1] - a[1]), lb = Math.hypot(b[0] - v[0], b[1] - v[1])
+    const din: Pt = [(v[0] - a[0]) / la, (v[1] - a[1]) / la], dout: Pt = [(b[0] - v[0]) / lb, (b[1] - v[1]) / lb]
+    return { r: R[i], din, dout, from: [v[0] - din[0] * R[i], v[1] - din[1] * R[i]] as Pt, to: [v[0] + dout[0] * R[i], v[1] + dout[1] * R[i]] as Pt, sweep: din[0] * dout[1] - din[1] * dout[0] > 0 ? 1 : 0 }
+  })
+}
+/** A tube's centre line as a path: straight runs joined by quarter circles, all of one radius. `top` is taken off every y. */
+function line(points: Pt[], bend: number, top = 0) {
+  const T = turns(points, bend)
+  let d = `M ${points[0][0]} ${points[0][1] - top}`
+  points.forEach((v, i) => { if (!i) return; const t = T[i]; d += t ? ` L ${t.from[0]} ${t.from[1] - top} A ${t.r} ${t.r} 0 0 ${t.sweep} ${t.to[0]} ${t.to[1] - top}` : ` L ${v[0]} ${v[1] - top}` })
+  return d
+}
+/** Collars: where a tube comes under the slab, either end of each change of direction (a step sideways is one
+ * fitting, collared at its ends), one a little short of where it ends, and along a long straight run every so often. */
+function rings(points: Pt[], bend: number, short: number) {
+  const T = turns(points, bend), out: { at: Pt; across: boolean }[] = [{ at: [points[0][0], 0], across: false }], last = points.length - 1
+  T.forEach((t, i) => {
+    if (!t) return
+    const before = T[i - 1], after = T[i + 1]
+    if (!before || Math.hypot(t.from[0] - before.to[0], t.from[1] - before.to[1]) > 140) out.push({ at: t.from, across: t.din[1] === 0 })
+    if (i < last - 1 && (!after || Math.hypot(after.from[0] - t.to[0], after.from[1] - t.to[1]) > 140)) out.push({ at: t.to, across: t.dout[1] === 0 })
+  })
+  const end = points[last], back = Math.sign(points[last - 1][0] - end[0])
+  if (Math.abs(points[last - 1][0] - end[0]) > bend + short + 14) out.push({ at: [end[0] + back * short, end[1]], across: true })
+  for (let i = 1; i <= last; i++) {
+    const a = points[i - 1], b = points[i]
+    if (a[0] === b[0]) for (let y = 300; y < b[1]; y += 380) if (y > a[1] && out.every(ring => Math.abs(ring.at[0] - a[0]) > 1 || Math.abs(ring.at[1] - y) > 70) && Math.abs(y - b[1]) > 70 && Math.abs(y - a[1]) > 70) out.push({ at: [a[0], y], across: false })
+  }
+  return out
+}
+/** A glass tube as the machine draws one, lit from above and the right as the machine is: its wall in the tone of a
+ * tube seen from the front; down the side away from the light a band in shade with a darker edge; and where it runs
+ * across the page its lit top. Through a corner the lit top comes in gradually and the shade goes round with the
+ * light (crossing the tube where the corner turns away from it). Steel collars lie across it. */
+function Tube({ points, wide, bend, rings }: { points: Pt[]; wide: number; bend: number; rings: { at: Pt; across: boolean }[] }) {
+  const T = turns(points, bend), half = wide / 2
+  // Along the line: the point, the normal to its left hand, which side of that the light is on (1 or -1, or between
+  // while it crosses), how level the tube lies (0 down the page, 1 across), and which side is up.
+  const along: { p: Pt; n: Pt; lit: number; level: number; up: number }[] = []
+  const side = (d: Pt) => { const n: Pt = [d[1], -d[0]]; return { n, lit: Math.sign(n[0] - n[1]), level: Math.abs(d[0]), up: -Math.sign(n[1]) } }
+  const put = (p: Pt, d: Pt) => along.push({ p, ...side(d) })
+  points.forEach((v, i) => {
+    const t = T[i]
+    if (!t) { const o = i ? points[i - 1] : points[1], l = Math.hypot(v[0] - o[0], v[1] - o[1]) * (i ? 1 : -1); put(v, [(v[0] - o[0]) / l, (v[1] - o[1]) / l]); return }
+    const a = side(t.din), b = side(t.dout), cx = t.from[0] + t.dout[0] * t.r, cy = t.from[1] + t.dout[1] * t.r, a0 = Math.atan2(t.from[1] - cy, t.from[0] - cx), turn = (t.sweep ? 1 : -1) * Math.PI / 2
+    for (let k = 0; k <= 10; k++) {
+      const u = k / 10, e = u * u * (3 - 2 * u), angle = a0 + turn * u, d: Pt = [-Math.sin(angle) * (t.sweep ? 1 : -1), Math.cos(angle) * (t.sweep ? 1 : -1)]
+      along.push({ p: [cx + Math.cos(angle) * t.r, cy + Math.sin(angle) * t.r], n: [d[1], -d[0]], lit: a.lit + (b.lit - a.lit) * e, level: a.level + (b.level - a.level) * e, up: a.level ? a.up : b.up })
+    }
+  })
+  const beside = (offset: (s: typeof along[0]) => number) => along.map(s => { const o = offset(s); return `${(s.p[0] + s.n[0] * o).toFixed(2)} ${(s.p[1] + s.n[1] * o).toFixed(2)}` })
+  const top = beside(s => s.up * half), under = beside(s => s.up * (half - wide * .65 * s.level)).reverse()
+  return <g>
+    <path className="srt-tube" d={line(points, bend)} strokeWidth={wide} />
+    <path className="srt-tube-lit" d={`M ${top.join(' L ')} L ${under.join(' L ')} Z`} />
+    <path className="srt-tube-shade" d={`M ${beside(s => -s.lit * (half - wide * .1)).join(' L ')}`} strokeWidth={wide * .2} />
+    <path className="srt-tube-edge" d={`M ${beside(s => -s.lit * (half - wide * .03)).join(' L ')}`} strokeWidth={wide * .06} />
+    {rings.map(({ at, across }, i) => across
+      ? <g key={i}><rect className="srt-ring" x={at[0] - 2.5} y={at[1] - half - 2.5} width={5} height={wide + 5} rx={1} /><rect className="srt-ring-lit" x={at[0] - 2.5} y={at[1] - half - 2.5} width={5} height={2} rx={1} /></g>
+      : <g key={i}><rect className="srt-ring" x={at[0] - half - 2.5} y={at[1] - 2.5} width={wide + 5} height={5} rx={1} /><rect className="srt-ring-lit" x={at[0] - half - 2.5} y={at[1] - 2.5} width={wide + 5} height={2} rx={1} /></g>)}
+  </g>
 }
 
-/** The last `length` pixels of a tube's way, as a motion path, in the coordinates of the unit it ends at (`top` down the section). */
-function trail(points: Pt[], bend: number, length: number, top: number) {
-  const R = corners(points, bend)
-  let i = points.length - 1, left = length, start: Pt = points[0]
-  for (; i > 0; i--) { const a = points[i - 1], b = points[i], d = Math.hypot(b[0] - a[0], b[1] - a[1]); if (d >= left) { const t = left / d; start = [b[0] + (a[0] - b[0]) * t, b[1] + (a[1] - b[1]) * t]; break } left -= d }
-  let path = `M ${start[0]} ${start[1] - top}`
-  for (let k = Math.max(i, 1); k < points.length; k++) {
-    const v = points[k], rad = R[k]
-    if (!rad) { path += ` L ${v[0]} ${v[1] - top}`; continue }
-    const a = points[k - 1], b = points[k + 1], la = Math.hypot(v[0] - a[0], v[1] - a[1]), lb = Math.hypot(b[0] - v[0], b[1] - v[1])
-    path += ` L ${v[0] - (v[0] - a[0]) / la * rad} ${v[1] - (v[1] - a[1]) / la * rad - top} Q ${v[0]} ${v[1] - top} ${v[0] + (b[0] - v[0]) / lb * rad} ${v[1] + (b[1] - v[1]) / lb * rad - top}`
-  }
-  return path
+/** The last `length` pixels of a tube's way, less `short` at its end, as a motion path in the coordinates of the unit it ends at (`top` down the section). */
+function trail(points: Pt[], bend: number, length: number, top: number, short: number) {
+  const end = points.at(-1)!, back = Math.sign(points.at(-2)![0] - end[0]), cut: Pt[] = [...points.slice(0, -1), [end[0] + back * short, end[1]]]
+  let i = cut.length - 1, left = length, start: Pt = cut[0]
+  for (; i > 0; i--) { const a = cut[i - 1], b = cut[i], d = Math.hypot(b[0] - a[0], b[1] - a[1]); if (d >= left) { const t = left / d; start = [b[0] + (a[0] - b[0]) * t, b[1] + (a[1] - b[1]) * t]; break } left -= d }
+  return line([start, ...cut.slice(Math.max(i, 1))], bend, top)
 }
 
 const Row = ({ from, subject, when, fresh, style }: { from: string; subject: string; when: string; fresh?: boolean; style?: CSSProperties }) =>
@@ -230,7 +281,7 @@ const APPLIANCES: Record<Kind, ReactNode> = {
   campaign: <div className="srt-a" aria-hidden="true">
     <div className="srt-screen srt-v-campaign">
       <div className="srt-v-head"><b>We label the sausages by mood now</b></div>
-      <p className="srt-sub">Counter Six Butcher to <b>Regulars</b>, 1,000 contacts</p>
+      <p className="srt-sub"><span>Counter Six Butcher </span><span>to <b>Regulars</b>, 1,000 contacts</span></p>
       <div className="srt-grid">{Array.from({ length: 100 }, (_, i) => <i key={i} className="srt-step" style={step(.08 + (i % 20) * .028 + Math.floor(i / 20) * .012, .14 + (i % 20) * .028 + Math.floor(i / 20) * .012)} />)}</div>
       <div className="srt-meter"><span className="srt-step srt-fill" style={step(.08, .72)} /></div>
       <p className="srt-total"><span className="srt-step srt-in" style={step(.74, .86)}>1,000 sent</span><b className="srt-step srt-in" style={step(.84, .96)}>$0.20</b></p>
@@ -247,7 +298,7 @@ const APPLIANCES: Record<Kind, ReactNode> = {
       <p className="srt-bubble srt-step srt-type" style={step(.42, .74)}>Sending version six. It is the last one.</p>
       <p className="srt-sent srt-step srt-in" style={step(.8, .94)}>Sent from the address it came to</p>
     </div>
-    <span className="srt-reel" /><span className="srt-reel srt-reel-b" /><span className="srt-tape" />
+    <span className="srt-reel-shade" /><span className="srt-reel-shade" /><span className="srt-tape" /><span className="srt-reel" /><span className="srt-reel srt-reel-b" />
   </div>,
   // A ledger printer: every message that went through, on tape, the newest at the head.
   logs: <div className="srt-a" aria-hidden="true">

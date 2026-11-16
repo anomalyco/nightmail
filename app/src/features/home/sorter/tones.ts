@@ -68,7 +68,7 @@ export function paletteBytes(dark: boolean, rows: number) {
 }
 /** A glass tube over the page, as the page draws it below the machine: the renderer draws a tube's far wall (in
  * shade) and then its near wall (in the tone its facing gives), each at the tube's alpha, over what is behind. */
-function glass(index: 0 | 1 | 2 | 3, dark: boolean) {
+export function glass(index: 0 | 1 | 2 | 3, dark: boolean) {
   const t = TABLE.tube[dark ? 0 : 1], f = TABLE.floor[dark ? 0 : 1], near = oklch(t[index], t[4], t[5]), far = oklch(t[3], t[4], t[5]), under = oklch(f[0], f[4], f[5]), a = t[6]
   return `rgb(${near.map((v, i) => Math.round(v * a + (far[i] * a + under[i] * (1 - a)) * (1 - a))).join(' ')})`
 }
@@ -76,7 +76,7 @@ function glass(index: 0 | 1 | 2 | 3, dark: boolean) {
 export function toneVars(dark: boolean): Record<string, string> {
   return {
     '--srt-floor': tone('floor', 0, dark), '--srt-body': tone('body', 1, dark), '--srt-body-top': tone('body', 0, dark), '--srt-body-side': tone('body', 3, dark), '--srt-plinth': tone('plinth', 1, dark), '--srt-trim': tone('trim', 1, dark),
-    '--srt-steel': tone('steel', 1, dark), '--srt-steel-top': tone('steel', 0, dark), '--srt-screen': tone('screen', 1, dark), '--srt-lamp-off': tone('lampOff', 1, dark),
+    '--srt-steel': tone('steel', 1, dark), '--srt-steel-top': tone('steel', 0, dark), '--srt-steel-graze': tone('steel', 2, dark), '--srt-steel-side': tone('steel', 3, dark), '--srt-paper-dim': tone('dim', 2, dark), '--srt-bay': tone('bay', 0, dark), '--srt-bay-side': tone('bay', 3, dark), '--srt-screen': tone('screen', 1, dark), '--srt-slot': tone('slot', 0, dark), '--srt-lamp-off': tone('lampOff', 1, dark),
     '--srt-tube-0': glass(0, dark), '--srt-tube-1': glass(1, dark), '--srt-tube-2': glass(2, dark), '--srt-tube-3': glass(3, dark),
   }
 }

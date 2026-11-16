@@ -34,9 +34,11 @@
 .srt-hero { position: relative; flex: none; height: calc(100svh - var(--srt-header)); min-height: 600px; }
 /* The canvases reach up behind the header, so a letter is never cut off where the hero begins. */
 .srt-canvas { position: absolute; top: calc(-1 * var(--srt-header)); left: 0; display: block; width: 100%; height: calc(100% + var(--srt-header)); pointer-events: none; }
-.srt-gl { visibility: hidden; touch-action: pan-y; }
-.srt-page[data-live] .srt-gl { visibility: visible; pointer-events: auto; }
-/* Everything the page writes on the machine: one layer, so it can shake with it. */
+/* The renderer's first frame comes up through the still it is laid over. */
+.srt-gl { opacity: 0; touch-action: pan-y; transition: opacity 260ms var(--srt-ease); }
+.srt-page[data-live] .srt-gl { opacity: 1; pointer-events: auto; }
+@media (prefers-reduced-motion: reduce) { .srt-gl { transition: none; } }
+/* Everything the page writes on the machine: one layer over the canvas. */
 .srt-on { position: absolute; z-index: 2; inset: 0; pointer-events: none; }
 .srt-on > :is(button, a) { pointer-events: auto; }
 
@@ -55,7 +57,7 @@
 .srt-lanes { margin: 0; padding: 0; list-style: none; }
 .srt-lanes li { position: absolute; z-index: 2; display: grid; place-items: center; color: var(--srt-text-2); font-family: var(--font-mono); font-size: clamp(9px, var(--srt-u) * 1.15, 11px); line-height: 1; letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; pointer-events: none; }
 /* Where each tube goes over the slab's lip: the name of where it leads, on the lip. */
-.srt-mouths li { place-items: center start; color: var(--srt-text-3); }
+.srt-mouths li { place-items: center start; color: var(--srt-text-2); }
 .srt-mouths li[data-side='r'] { place-items: center end; }
 
 /* The sentence: exactly as wide as the price above it, its words spread to the same two edges, its full stop hung
@@ -73,6 +75,10 @@
 .srt-fact-label { color: var(--srt-text-2); font-size: clamp(12.5px, var(--srt-u) * 1.5, 16px); font-weight: 450; line-height: 1; letter-spacing: -.008em; }
 .srt-fact-value { color: var(--srt-text); font-size: clamp(14px, var(--srt-u) * 1.8, 21px); font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -.018em; }
 .srt-fact-value i { color: var(--srt-text-2); font-style: normal; }
+/* Where there is too little room beside the button, the longer fact's measure takes two lines. */
+.srt-fact[data-tight] { row-gap: 5px; }
+.srt-fact[data-tight] .srt-fact-value { display: grid; justify-items: end; row-gap: 5px; }
+.srt-fact[data-tight] .srt-fact-dot { display: none; }
 
 /* The button: the one lit thing on the base. It rises a pixel under the pointer and sinks two when pressed. */
 .srt-cta { position: absolute; z-index: 3; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 3px; background: var(--srt-cta); box-shadow: 0 2px 0 var(--srt-cta-under); color: var(--srt-on-cta); font-family: var(--font-body); font-size: clamp(15px, var(--srt-u) * 1.9, 19px); font-weight: 600; line-height: 1; letter-spacing: -.012em; cursor: pointer; transition: background-color 150ms var(--srt-ease), translate 140ms var(--srt-ease), box-shadow 140ms var(--srt-ease); }
@@ -105,19 +111,20 @@
 
 .srt-notice { position: absolute; z-index: 4; top: var(--space-8); left: 50%; width: min(520px, 100% - 2 * var(--space-16)); translate: -50% 0; }
 
-@media (max-width: 639px) {
-  .srt-page { --srt-k: 11; --srt-header: 56px; }
+.srt-page[data-phone] { --srt-k: 11; }
+.srt-page[data-phone] .srt-hero { min-height: 580px; }
+.srt-page[data-phone] .srt-band { line-height: 1.16; letter-spacing: -.02em; }
+.srt-page[data-phone] .srt-line { display: block; }
+.srt-page[data-phone] .srt-row { display: flex; column-gap: .22em; align-items: baseline; }
+.srt-page[data-phone] .srt-fact { top: 12px; row-gap: 6px; translate: none; }
+.srt-page[data-phone] .srt-fact-label { font-size: 12.5px; }
+.srt-page[data-phone] .srt-fact-value { font-size: 15px; }
+.srt-page[data-phone] .srt-cta { font-size: 16px; }
+@media (max-width: 899px) {
+  .srt-page { --srt-header: 56px; }
   .srt-header { padding-inline: var(--space-16); }
   .srt-header .bane-wordmark { gap: 7px; font-size: 15.75px; }
   .srt-header .bane-wordmark svg { width: 18px; height: 18px; }
-  .srt-hero { min-height: 580px; }
-  .srt-band { line-height: 1.16; letter-spacing: -.02em; }
-  .srt-line { display: block; }
-  .srt-row { display: flex; column-gap: .22em; align-items: baseline; }
-  .srt-fact { top: calc(2.2 * var(--srt-v)); row-gap: 6px; translate: none; }
-  .srt-fact-label { font-size: 12.5px; }
-  .srt-fact-value { font-size: 15px; }
-  .srt-cta { font-size: 16px; }
   .srt-card-body { width: 232px; }
 }
 
@@ -128,22 +135,22 @@
    A unit's --q is how far it has come up the page, 0 to 1; its capsule travels on the first half (--c) and what its
    appliance does happens on the second (--v). A step inside takes a window of --v as its own --t. */
 .srt-stations { position: relative; flex: none; isolation: isolate; }
-.srt-pipes { position: absolute; inset: 0; pointer-events: none; }
+.srt-pipes { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; pointer-events: none; }
 .srt-unit { position: absolute; right: 0; left: 0; height: 0; --c: clamp(0, calc(var(--q, 0) / .46), 1); --v: clamp(0, calc((var(--q, 0) - .5) / .5), 1); }
-/* A glass tube as the machine draws one: flat bands across it, by how each part of its wall faces the light (a tube
-   running down the page has no lit top; one running across it has). Collars where it bends. */
-.srt-pipe { position: absolute; width: var(--srt-pipe); background: linear-gradient(to right, var(--srt-tube-3) 0 5.6%, var(--srt-tube-2) 5.6% 20.4%, var(--srt-tube-1) 20.4% 98.4%, transparent 98.4%); pointer-events: none; }
-.srt-pipe-in { height: calc(var(--srt-pipe) * 1.085); margin-top: calc(var(--srt-pipe) * -.5425); background: linear-gradient(to bottom, var(--srt-tube-0) 0 65.1%, var(--srt-tube-1) 65.1% 81.7%, var(--srt-tube-2) 81.7% 90.9%, var(--srt-tube-3) 90.9% 100%); }
-.srt-bend { position: absolute; --in: calc(var(--srt-bend) - var(--srt-pipe) / 2); --w: var(--srt-pipe);
-  background: radial-gradient(circle at var(--srt-c), transparent 0 var(--in), var(--srt-tube-1) var(--in) calc(var(--in) + var(--w) * .72), var(--srt-tube-2) calc(var(--in) + var(--w) * .72) calc(var(--in) + var(--w) * .88), var(--srt-tube-3) calc(var(--in) + var(--w) * .88) calc(var(--in) + var(--w)), transparent calc(var(--in) + var(--w))); pointer-events: none; }
-.srt-ring { position: absolute; z-index: 2; width: calc(var(--srt-pipe) + 6px); height: 6px; margin: -3px 0 0 calc(var(--srt-pipe) / -2 - 3px); border-radius: 1px; background: var(--srt-steel); box-shadow: inset 0 2px 0 var(--srt-steel-top); }
-.srt-ring-in { width: 6px; height: calc(var(--srt-pipe) * 1.085 + 6px); margin: calc(var(--srt-pipe) * -.5425 - 3px) 0 0 -3px; box-shadow: inset 2px 0 0 var(--srt-steel-top); }
-/* The tray a capsule comes to rest in: a shelf fixed to the appliance's wall, with a stop. */
-.srt-tray { position: absolute; z-index: 2; height: 5px; margin-top: calc(var(--srt-r) * .68 + 2px); border-radius: 1px; background: var(--srt-steel); box-shadow: inset 0 2px 0 var(--srt-steel-top); }
-.srt-tray::after { content: ''; position: absolute; right: 0; bottom: 0; width: 6px; height: calc(var(--srt-r) * 2.4 + 9px); border-radius: 1px; background: var(--srt-steel); box-shadow: inset 2px 0 0 var(--srt-steel-top); }
-.srt-tray[data-side='r']::after { right: auto; left: 0; }
-/* The capsule: down the tube, round the bend, out into the tray, where it stays. */
-.srt-capsule { position: absolute; z-index: 1; top: 0; left: 0; width: max(13px, calc(var(--srt-r) * 3.7)); height: max(4.5px, calc(var(--srt-r) * 1.36)); border-radius: 99px; background: linear-gradient(to right, var(--color-brand) 0 22%, var(--srt-paper) 22% 78%, var(--color-brand) 78% 100%); offset-distance: calc(var(--c) * 100%); offset-rotate: auto; opacity: clamp(0, calc(var(--c) * 40), 1); pointer-events: none; }
+/* A glass tube as the machine draws one (sorter-stations.tsx Tube): its wall, the lit top of a run across the page,
+   the band in shade and its edge, steel collars. */
+.srt-tube, .srt-tube-shade, .srt-tube-edge { fill: none; }
+.srt-tube { stroke: var(--srt-tube-1); }
+.srt-tube-lit { fill: var(--srt-tube-0); }
+.srt-tube-shade { stroke: var(--srt-tube-2); }
+.srt-tube-edge { stroke: var(--srt-tube-3); }
+.srt-ring { fill: var(--srt-steel); }
+.srt-ring-lit { fill: var(--srt-steel-top); }
+.srt-flange { fill: var(--srt-steel-side); }
+.srt-flange-edge { fill: var(--srt-steel); }
+.srt-ports { z-index: 1; }
+/* The capsule: down the tube, round the bend, and into the appliance. */
+.srt-capsule { position: absolute; top: 0; left: 0; width: max(13px, calc(var(--srt-r) * 3.7)); height: max(4.5px, calc(var(--srt-r) * 1.36)); border-radius: 99px; background: linear-gradient(to right, var(--color-brand) 0 22%, var(--srt-paper) 22% 78%, var(--color-brand) 78% 100%); offset-distance: calc(var(--c) * 100%); offset-rotate: auto; opacity: clamp(0, min(calc(var(--c) * 40), calc((1 - var(--c)) * 60)), 1); pointer-events: none; }
 
 /* A unit's name and its one line, over it. */
 .srt-caption { position: absolute; top: 0; display: grid; row-gap: 8px; }
@@ -170,14 +177,17 @@
 .srt-v-head b { overflow: hidden; font-weight: 600; text-overflow: ellipsis; }
 .srt-v-head > span { color: var(--dim); font-size: 11px; }
 
-/* Inbox: a rack of pigeonholes, two rows of eight, over the list. The letter is filed; its row heads the list. */
+/* Inbox: a rack of pigeonholes, two rows of eight, over the list. Each is a recess seen as the machine's own bay is
+   seen, from above and the left: its back in the dark, its floor lit, its right wall in shade; a letter stands on the
+   floor of the full ones. The letter that arrives is filed; its row heads the list. */
 .srt-holes { position: absolute; top: 14px; right: 14px; left: 14px; display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px; height: 66px; }
-.srt-holes i { position: relative; overflow: hidden; background: var(--srt-slot); box-shadow: inset 0 4px 0 color-mix(in oklch, var(--srt-slot), black 35%), 0 0 0 1.5px var(--srt-trim); }
+.srt-holes i { position: relative; overflow: hidden; box-shadow: 0 0 0 1.5px var(--srt-trim);
+  background: linear-gradient(to top left, var(--srt-bay-side) 50%, transparent 50%) 100% 100% / 4px 6px no-repeat, linear-gradient(var(--srt-bay-side), var(--srt-bay-side)) 100% 0 / 4px calc(100% - 6px) no-repeat, linear-gradient(to top right, var(--srt-bay) 50%, transparent 50%) 0 100% / 4px 6px no-repeat, linear-gradient(var(--srt-bay), var(--srt-bay)) 4px 100% / calc(100% - 8px) 6px no-repeat, var(--srt-slot); }
 /* An envelope standing in its hole: paper, and the two creases of its flap. */
-.srt-holes i::after { content: ''; position: absolute; inset: 8px 5px 0; opacity: 0; --crease: color-mix(in oklch, var(--srt-paper), black 28%);
-  background: linear-gradient(to bottom right, transparent calc(50% - .7px), var(--crease) calc(50% - .7px) calc(50% + .7px), transparent calc(50% + .7px)) 0 0 / 50% 62% no-repeat, linear-gradient(to bottom left, transparent calc(50% - .7px), var(--crease) calc(50% - .7px) calc(50% + .7px), transparent calc(50% + .7px)) 100% 0 / 50% 62% no-repeat, var(--srt-paper); }
-.srt-holes .srt-full::after { opacity: .62; }
-.srt-holes .srt-filed::after { opacity: var(--t); translate: 0 calc((var(--t) - 1) * 26px); }
+.srt-holes i::after { content: ''; position: absolute; inset: 7px 7px 3px 6px; opacity: 0; --sheet: var(--srt-paper-dim); --crease: color-mix(in oklch, var(--sheet), black 26%);
+  background: linear-gradient(to bottom right, transparent calc(50% - .7px), var(--crease) calc(50% - .7px) calc(50% + .7px), transparent calc(50% + .7px)) 0 0 / 50% 58% no-repeat, linear-gradient(to bottom left, transparent calc(50% - .7px), var(--crease) calc(50% - .7px) calc(50% + .7px), transparent calc(50% + .7px)) 100% 0 / 50% 58% no-repeat, var(--sheet); box-shadow: -1.5px 0 0 color-mix(in oklch, var(--sheet), black 34%); }
+.srt-holes .srt-full::after { opacity: 1; }
+.srt-holes .srt-filed::after { --sheet: var(--srt-paper); opacity: clamp(0, calc(var(--t) * 4), 1); translate: 0 calc((var(--t) - 1) * 30px); }
 .srt-unit[data-kind='inbox'] .srt-screen { top: 94px; }
 .srt-count { position: relative; display: grid; place-items: center; min-width: 20px; height: 18px; border-radius: 9px; background: var(--color-brand); color: var(--srt-screen) !important; font-weight: 600; font-variant-numeric: tabular-nums; }
 .srt-count i { grid-area: 1 / 1; font-style: normal; }
@@ -216,13 +226,14 @@
 /* Paper: what the teleprinter and the ledger printer feed out. */
 .srt-feed { position: absolute; right: 30px; bottom: calc(100% + var(--srt-dy) * .45); left: calc(30px - var(--srt-dx) * .45); height: 168px; overflow: hidden; border-bottom: 3px solid var(--srt-slot); }
 .srt-paper { position: absolute; right: 6px; bottom: 0; left: 6px; display: grid; align-content: start; row-gap: 7px; height: 100%; padding: 12px 13px 0; background: var(--srt-paper); color: var(--srt-card-text); font-family: var(--font-mono); font-size: 10.5px; line-height: 15px; translate: 0 calc((1 - var(--t)) * 100%); }
-.srt-paper p { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.srt-paper i { display: inline-block; width: 40px; color: var(--srt-card-dim); font-style: normal; }
-.srt-paper .srt-quote { margin: -2px 0 0 40px; padding: 6px 9px; border-left: 2px solid var(--color-brand); font-family: var(--font-body); font-size: 12px; line-height: 16px; white-space: normal; }
+/* What is printed is printed whole: a long line runs on under its own start. */
+.srt-paper p { padding-left: calc(40px + 1ch); text-indent: calc(-40px - 1ch); }
+.srt-paper i { display: inline-block; width: 40px; color: var(--srt-card-dim); font-style: normal; text-indent: 0; }
+.srt-paper .srt-quote { margin: -2px 0 0 40px; padding: 6px 9px; text-indent: 0; border-left: 2px solid var(--color-brand); font-family: var(--font-body); font-size: 12px; line-height: 16px; white-space: normal; }
 .srt-feed-down { top: 100%; right: 34px; bottom: auto; left: 34px; height: 186px; border-top: 3px solid var(--srt-slot); border-bottom: 0; }
 .srt-feed-down .srt-paper { top: 0; bottom: auto; row-gap: 0; padding: 4px 0 0; translate: 0 calc((var(--t) - 1) * 100%); clip-path: polygon(0 0, 100% 0, 100% 100%, 95% 97%, 90% 100%, 85% 97%, 80% 100%, 75% 97%, 70% 100%, 65% 97%, 60% 100%, 55% 97%, 50% 100%, 45% 97%, 40% 100%, 35% 97%, 30% 100%, 25% 97%, 20% 100%, 15% 97%, 10% 100%, 5% 97%, 0 100%); }
-.srt-log { display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; column-gap: 8px; height: 28px; padding-inline: 13px; box-shadow: 0 1px 0 color-mix(in oklch, var(--srt-card-text) 12%, transparent); font-family: var(--font-body); font-size: 11.5px; }
-.srt-log b { overflow: hidden; font-weight: 450; text-overflow: ellipsis; }
+.srt-paper .srt-log { display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; column-gap: 8px; min-height: 28px; padding: 0 13px; text-indent: 0; box-shadow: 0 1px 0 color-mix(in oklch, var(--srt-card-text) 12%, transparent); font-family: var(--font-body); font-size: 11.5px; }
+.srt-log b { padding-block: 5px; font-weight: 450; line-height: 15px; }
 .srt-log span { color: var(--srt-card-dim); font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .04em; text-transform: uppercase; }
 .srt-log span[data-status='Received'] { color: oklch(0.47 0.1 269); }
 /* The teleprinter's keys; the ledger printer's little window. */
@@ -256,6 +267,8 @@
 
 /* Campaigns: the press's screen, and the pile it prints, on its roof. */
 .srt-sub { padding: 9px 12px 0; color: var(--dim); font-size: 11.5px; white-space: nowrap; }
+.srt-stations[data-phone] .srt-sub span { display: block; }
+.srt-stations[data-phone] .srt-sub { line-height: 15px; }
 .srt-sub b { color: var(--srt-screen-text); font-weight: 500; }
 .srt-grid { display: grid; grid-template-columns: repeat(20, 1fr); gap: 3px; padding: 10px 12px 0; }
 .srt-grid i { aspect-ratio: 18 / 13; background: color-mix(in oklch, var(--hair), var(--srt-paper) calc(var(--t) * 100%)); }
@@ -264,16 +277,31 @@
 .srt-total { display: flex; align-items: baseline; justify-content: space-between; padding: 9px 12px 0; font-variant-numeric: tabular-nums; }
 .srt-total span { color: var(--dim); }
 .srt-total b { font-size: 17px; font-weight: 600; letter-spacing: -.01em; }
-.srt-roller { position: absolute; right: 16%; bottom: calc(100% + var(--srt-dy) * .34); left: calc(16% - var(--srt-dx) * .4); height: 26px; border-radius: 13px; background: linear-gradient(to bottom, var(--srt-steel-top) 0 34%, var(--srt-steel) 34% 72%, var(--srt-body-side) 72% 100%); box-shadow: -14px 0 0 -5px var(--srt-trim), 14px 0 0 -5px var(--srt-trim); }
+.srt-roller { position: absolute; right: 16%; bottom: calc(100% + var(--srt-dy) * .42 + 8px); left: calc(16% - var(--srt-dx) * .42); isolation: isolate; height: 24px; border-radius: 3.5px / 12px; background: linear-gradient(to bottom, var(--srt-steel-top) 0 30%, var(--srt-steel) 30% 68%, var(--srt-steel-graze) 68% 86%, var(--srt-steel-side) 86%); }
+/* The end of it that is seen, with its axle; the two brackets it turns in, standing on the roof. */
+.srt-roller::before { content: ''; position: absolute; top: 0; left: -1px; width: 7px; height: 100%; border-radius: 50%; background: radial-gradient(circle, var(--srt-steel-top) 0 1.5px, transparent 1.5px), var(--srt-steel-side); box-shadow: inset 0 0 0 1px var(--srt-steel-graze); }
+.srt-roller::after { content: ''; position: absolute; z-index: -1; top: 7px; right: 7px; left: 7px; height: 25px; background: linear-gradient(to right, var(--srt-trim) 0 7px, transparent 7px calc(100% - 7px), var(--srt-trim) calc(100% - 7px)); box-shadow: inset 0 -2px 0 var(--srt-body-side); }
 .srt-shelf { position: absolute; right: 100%; bottom: 46px; width: 74px; height: 5px; margin-right: calc(var(--srt-dx) * .5); background: var(--srt-steel); box-shadow: inset 0 2px 0 var(--srt-steel-top); }
+.srt-shelf::after { content: ''; position: absolute; top: 100%; right: 0; width: 14px; height: 12px; background: var(--srt-steel-side); clip-path: polygon(100% 0, 100% 100%, 0 0); }
 .srt-out { position: absolute; right: 100%; bottom: 52px; display: flex; flex-direction: column-reverse; gap: 1.5px; width: 56px; margin-right: calc(var(--srt-dx) * .5 + 8px); }
 .srt-out i { height: 6px; background: var(--srt-paper); box-shadow: inset 0 -1.5px 0 color-mix(in oklch, var(--srt-paper), black 18%); opacity: var(--t); translate: calc((1 - var(--t)) * 14px) 0; }
 .srt-out i:nth-child(odd) { margin-right: 3px; margin-left: -3px; }
 
-/* Threads: two reels on the roof and the tape between them; they turn as the thread grows. */
-.srt-reel { position: absolute; bottom: calc(100% + var(--srt-dy) * .3); left: calc(22% - var(--srt-dx) * .4); width: 58px; height: 58px; border-radius: 50%; background: radial-gradient(circle, var(--srt-steel) 0 5px, var(--srt-slot) 5px 9px, transparent 9px), conic-gradient(var(--srt-body-side) 0 8%, var(--srt-plinth) 8% 33.3%, var(--srt-body-side) 33.3% 41.3%, var(--srt-plinth) 41.3% 66.6%, var(--srt-body-side) 66.6% 74.6%, var(--srt-plinth) 74.6% 100%); box-shadow: 0 0 0 4px var(--srt-trim); rotate: calc(var(--v) * 300deg); }
-.srt-reel-b { left: auto; right: 22%; rotate: calc(var(--v) * 300deg + 40deg); }
-.srt-tape { position: absolute; right: calc(22% + 29px); bottom: calc(100% + var(--srt-dy) * .3 + 58px); left: calc(22% - var(--srt-dx) * .4 + 29px); height: 3px; background: var(--color-brand); }
+/* Threads: two reels standing on the roof and the tape between them. A reel is a flange with three windows on a hub,
+   the tape wound on it showing through them; behind it its other flange, in shade, and under it its shadow on the
+   roof. As the thread grows they turn, and the tape goes from the one to the other. */
+.srt-reel { position: absolute; bottom: calc(100% + var(--srt-dy) * .42); left: calc(22% - var(--srt-dx) * .42); width: 58px; height: 58px; --pack: calc(13px + 10px * (1 - var(--v))); --rim: 29px; }
+.srt-reel-b { right: 22%; left: auto; --pack: calc(13px + 10px * var(--v)); }
+.srt-reel::before { content: ''; position: absolute; inset: 0; border-radius: 50%; background: var(--srt-steel-side); translate: -3px -4.5px; }
+.srt-reel::after { content: ''; position: absolute; inset: 0; border-radius: 50%; rotate: calc(var(--v) * 300deg);
+  background: radial-gradient(circle, var(--srt-steel-top) 0 2.5px, var(--srt-slot) 2.5px 4.5px, var(--srt-steel) 4.5px 10px, transparent 10px calc(var(--rim) - 4.5px), var(--srt-steel) calc(var(--rim) - 4.5px) calc(var(--rim) - 2px), var(--srt-steel-top) calc(var(--rim) - 2px)),
+    conic-gradient(var(--srt-steel) 0deg 44deg, transparent 44deg 120deg, var(--srt-steel) 120deg 164deg, transparent 164deg 240deg, var(--srt-steel) 240deg 284deg, transparent 284deg 360deg),
+    radial-gradient(circle, var(--color-brand) 0 var(--pack), var(--srt-slot) var(--pack)); }
+.srt-reel-b::after { rotate: calc(var(--v) * 300deg + 40deg); }
+/* Their shadows on the roof, thrown back and to the left as the machine's are. */
+.srt-reel-shade { position: absolute; bottom: calc(100% + var(--srt-dy) * .42 - 1px); left: calc(22% - var(--srt-dx) * .42 - 16px); width: 50px; height: 9px; border-radius: 50%; background: color-mix(in oklch, var(--srt-body-top), black 34%); }
+.srt-reel-shade + .srt-reel-shade { right: calc(22% + 24px); left: auto; }
+.srt-tape { position: absolute; right: calc(22% + 28px); bottom: calc(100% + var(--srt-dy) * .42 + 55.5px); left: calc(22% - var(--srt-dx) * .42 + 28px); height: 2.5px; background: var(--color-brand); }
 
 /* Threads. */
 .srt-v-thread { display: grid; align-content: start; justify-items: end; row-gap: 7px; }
@@ -308,13 +336,14 @@
 .srt-stations[data-phone] .srt-plate { bottom: 10px; left: 10px; }
 .srt-stations[data-phone] .srt-lamp { right: 12px; bottom: 14px; }
 .srt-stations[data-phone] .srt-keys, .srt-stations[data-phone] .srt-counter { inset: 10px 10px 40px; }
-.srt-stations[data-phone] .srt-feed { right: 18px; left: calc(18px - var(--srt-dx) * .45); }
-.srt-stations[data-phone] .srt-feed-down { right: 20px; left: 20px; }
+.srt-stations[data-phone] .srt-feed { right: 18px; left: calc(18px - var(--srt-dx) * .45); height: 236px; }
+.srt-stations[data-phone] .srt-feed-down { right: 20px; left: 20px; height: 264px; }
 .srt-stations[data-phone] .srt-paper { padding-inline: 10px; font-size: 9.6px; }
 .srt-stations[data-phone] .srt-feed-down .srt-paper { padding-inline: 0; }
+.srt-stations[data-phone] .srt-paper p { padding-left: calc(34px + 1ch); text-indent: calc(-34px - 1ch); }
 .srt-stations[data-phone] .srt-paper i { width: 34px; }
-.srt-stations[data-phone] .srt-paper .srt-quote { margin-left: 34px; }
-.srt-stations[data-phone] .srt-log { grid-template-columns: 62px minmax(0, 1fr); padding-inline: 10px; }
+.srt-stations[data-phone] .srt-paper .srt-quote { margin-left: 34px; padding-left: 9px; text-indent: 0; }
+.srt-stations[data-phone] .srt-paper .srt-log { grid-template-columns: 62px minmax(0, 1fr); padding: 0 10px; text-indent: 0; }
 .srt-stations[data-phone] .srt-unit[data-kind='ritual'] .srt-screen { right: 10px; bottom: 74px; }
 .srt-stations[data-phone] .srt-unit[data-kind='endpoint'] .srt-screen { right: 10px; bottom: 92px; }
 .srt-stations[data-phone] .srt-panel { top: auto; right: 44px; bottom: 44px; left: 10px; grid-auto-flow: column; align-content: center; justify-content: start; column-gap: 14px; width: auto; height: 24px; padding: 0; font-size: 9.5px; }
@@ -322,8 +351,9 @@
 .srt-stations[data-phone] .srt-v-ritual pre { font-size: 9.1px; line-height: 18px; }
 .srt-stations[data-phone] .srt-v-endpoint, .srt-stations[data-phone] .srt-v-endpoint pre { font-size: 9.6px; }
 .srt-stations[data-phone] .srt-v-ritual pre > span { padding-inline: 7px; }
-.srt-stations[data-phone] .srt-reel { width: 46px; height: 46px; }
-.srt-stations[data-phone] .srt-tape { right: calc(22% + 23px); bottom: calc(100% + var(--srt-dy) * .3 + 46px); left: calc(22% - var(--srt-dx) * .4 + 23px); }
+.srt-stations[data-phone] .srt-reel { width: 46px; height: 46px; --rim: 23px; --pack: calc(11px + 7px * (1 - var(--v))); }
+.srt-stations[data-phone] .srt-reel-b { --pack: calc(11px + 7px * var(--v)); }
+.srt-stations[data-phone] .srt-tape { right: calc(22% + 22px); bottom: calc(100% + var(--srt-dy) * .42 + 43.5px); left: calc(22% - var(--srt-dx) * .42 + 22px); }
 .srt-stations[data-phone] .srt-shelf, .srt-stations[data-phone] .srt-out { display: none; }
 .srt-stations[data-phone] .srt-foot { width: 140px; margin-left: -70px; }
 @media (prefers-reduced-motion: reduce) { .srt-unit { --q: 1 !important; } }

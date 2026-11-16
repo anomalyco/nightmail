@@ -24,13 +24,15 @@ const SEEN = 'sorter.seen', HEADER = { desktop: 64, phone: 56 }
 /** The lanes of the works, left to right, by the names the product uses; a scam's route is the laser. */
 export const LANE_NAMES = ['Threads', 'Endpoints', 'Agents', 'Inbox', 'IMAP', 'Rituals', 'Campaigns'] as const
 /** Where each of the eight tubes leads, in the tubes' own order (sorter/plan.ts). */
+/** The same on a phone, where a lane is forty pixels wide. */
+const LANE_CODES = ['Thr', 'End', 'Agt', 'Inb', 'IMAP', 'Rit', 'Cmp'] as const
 const TUBE_NAMES = ['Inbox', 'Agents', 'Endpoints', 'Threads', 'IMAP', 'Rituals', 'Campaigns', 'Logs'] as const
 const KONAMI = ['ArrowUp', 'ArrowUp', 'ArrowDown', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'b', 'a']
 
 export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps) {
   const dark = useTheme().theme === 'dark'
   const scene = useRef<HTMLElement>(null), still = useRef<HTMLCanvasElement>(null), gl = useRef<HTMLCanvasElement>(null), sorter = useRef<Sorter | null>(null)
-  const readout = useRef<HTMLDivElement>(null), on = useRef<HTMLDivElement>(null), cardBox = useRef<HTMLDivElement>(null), counts = useRef([0, 0]), shown = useRef<Letter | null>(null)
+  const readout = useRef<HTMLDivElement>(null), cardBox = useRef<HTMLDivElement>(null), counts = useRef([0, 0]), shown = useRef<Letter | null>(null)
   const [p, setP] = useState<Plan | null>(null)
   const [reduced] = useState(reducedMotion)
   // Whoever has watched it burst once gets there sooner the next time.
@@ -40,8 +42,6 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
 
   // What the machine tells the page: the letter under the scanner, the tally, where it is in its day, the letter under the pointer.
   const [hooks] = useState<Hooks>(() => ({
-    // When the machine shakes, what is written on it shakes with it.
-    shake(x, y) { if (on.current) on.current.style.translate = x || y ? `${x}px ${y}px` : '' },
     scan(letter, verdict) {
       const box = readout.current
       if (!box) return
@@ -56,7 +56,7 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
     hover(letter, x, y) {
       if (letter !== shown.current) { shown.current = letter; setCard(letter) }
       // The card stays on the page: clear of both edges, and of the top.
-      const width = scene.current?.clientWidth ?? 0, half = (width < 640 ? 232 : 264) / 2 + 8
+      const width = scene.current?.clientWidth ?? 0, half = (width < 900 ? 232 : 264) / 2 + 8
       if (letter && cardBox.current) cardBox.current.style.translate = `${Math.round(Math.min(width - half, Math.max(half, x)))}px ${Math.round(Math.max(72, y))}px`
     },
   }))
@@ -110,7 +110,7 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
 
   const at = (r: Rect): CSSProperties => p ? onFront(p, r) : { display: 'none' }
   const price = p ? { x: -COLS / 2 * p.U, w: COLS * p.U } : { x: 0, w: 0 }
-  return <div className="srt-page" data-phase={phase} data-live={live || undefined} style={{ ...toneVars(dark), ...p && { '--srt-u': `${p.U}px`, '--srt-v': `${p.V}px`, '--srt-price': `${price.w}px`, '--srt-below': `${p.floor - p.front - p.lip}px` } } as CSSProperties}>
+  return <div className="srt-page" data-phase={phase} data-live={live || undefined} data-phone={p?.phone || undefined} style={{ ...toneVars(dark), ...p && { '--srt-u': `${p.U}px`, '--srt-v': `${p.V}px`, '--srt-price': `${price.w}px`, '--srt-below': `${p.floor - p.front - p.lip}px` } } as CSSProperties}>
     <header className="srt-header">
       <a className="wordmark" href="/" aria-label={`${productName.toLowerCase()} home`}><BaneWordmark /></a>
       <nav className="srt-nav" aria-label="Site">
@@ -123,13 +123,13 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
       <section className="srt-hero" ref={scene} aria-label="Pricing">
         <canvas ref={still} className="srt-canvas" aria-hidden="true" />
         <canvas ref={gl} className="srt-canvas srt-gl" aria-hidden="true" />
-        {p && <div className="srt-on" ref={on}>
+        {p && <div className="srt-on">
           {/* On the fascia: what the scanner is reading, and the gauge (press it and see). */}
           <div className="srt-readout" ref={readout} style={at(p.readout)} data-verdict="idle" aria-hidden="true">
             <span className="srt-readout-from">{productName.toLowerCase()} sorter</span><span className="srt-readout-subject">Waiting for mail</span><span className="srt-readout-route" />
           </div>
           <button type="button" className="srt-gauge" style={at({ x: p.gauge.x - p.gauge.r - 5, y: p.gauge.y - p.gauge.r - 5, w: 2 * p.gauge.r + 10, h: 2 * p.gauge.r + 10 })} aria-label={phase === 'rest' ? 'Put the sorter back together' : 'Pressure gauge'} title={phase === 'rest' ? 'Put it back together' : 'Pressure'} onClick={() => sorter.current?.gauge()} />
-          {!p.phone && <ol className="srt-lanes" aria-hidden="true">{p.lanes.map((x, i) => <li key={i} style={at({ x: x - .46 * p.P, y: p.ySlot + .14 * p.slot, w: .92 * p.P, h: .72 * p.slot })}>{LANE_NAMES[i]}</li>)}</ol>}
+          <ol className="srt-lanes" aria-hidden="true">{p.lanes.map((x, i) => <li key={i} style={at({ x: x - .46 * p.P, y: p.ySlot + .14 * p.slot, w: .92 * p.P, h: .72 * p.slot })}>{p.phone ? LANE_CODES[i] : LANE_NAMES[i]}</li>)}</ol>
           {!p.phone && <ol className="srt-lanes srt-mouths" aria-hidden="true">{p.drops.map((x, t) => <li key={t} data-side={t < 4 ? 'l' : 'r'} style={{ top: p.oy + p.front, height: p.lip, ...(t < 4 ? { left: x + p.tubeR + 7 } : { right: p.W - x + p.tubeR + 9 }) }}>{TUBE_NAMES[t]}</li>)}</ol>}
           {/* Under the price, as wide as the price: what it buys. */}
           <h1 className="srt-band" style={at({ x: price.x, y: p.yBand, w: price.w, h: p.band })} aria-label="$0.20 per 1,000 emails, sent or received via API.">
@@ -140,7 +140,7 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
           </h1>
           <div className="srt-base" style={p.phone ? at({ x: price.x, y: p.cta.y + p.cta.h, w: price.w, h: p.base - p.cta.y - p.cta.h }) : at({ x: -p.Xc + 2.4 * p.U, y: p.cta.y, w: 2 * p.Xc - 4.8 * p.U, h: p.cta.h })}>
             <p className="srt-fact"><span className="srt-fact-label">Responds in</span><span className="srt-fact-value"><i>~</i>100<i> ms</i></span></p>
-            <p className="srt-fact"><span className="srt-fact-label">Free every month</span><span className="srt-fact-value">3,000<i> sent · </i>3,000<i> received</i></span></p>
+            <p className="srt-fact" data-tight={p.tight || undefined}><span className="srt-fact-label">Free every month</span><span className="srt-fact-value"><span>3,000<i> sent</i></span><i className="srt-fact-dot"> · </i><span>3,000<i> received</i></span></span></p>
           </div>
           <button type="button" className="srt-cta" style={at(p.cta)} disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
             <span className="srt-cta-label">Get started{busy ? <LoaderCircle className="ui-spinner" size={16} aria-hidden="true" /> : <ArrowRight className="srt-cta-arrow" size={16} strokeWidth={2} aria-hidden="true" />}</span>

@@ -2,8 +2,8 @@
 // front is, from the floor up: the base (the page's button stands in it), the band with the sentence, the sorting frame
 // whose thousand filled pigeonholes spell the price between two manifolds and eight glass tubes, the label rail, the
 // works behind glass (a line of rollers with a drop gate and a chute for each lane, a scanner over the middle) and a
-// fascia with the readout and the pressure gauge. On the roof: the hopper letters fall into, a laser on a pedestal,
-// the slot scams are thrown out of, two chimneys, a hatch and a beacon. The tubes leave the cabinet at the floor,
+// fascia with the readout and the pressure gauge. On the roof: the hopper letters fall into; either side of it a slot
+// scams are thrown out of, and at each end a laser on a pedestal to burn them; two chimneys, a hatch and a beacon. The tubes leave the cabinet at the floor,
 // cross the slab and go over its lip. Everything that moves or can be blown off is a part.
 import { ALL, Builder, type V3 } from './mesh'
 import { MAT as M } from './tones'
@@ -26,12 +26,11 @@ export function buildMachine(p: Plan) {
 
   // The cabinet: its roof and side, then its front floor by floor; a lit edge down its near corner.
   b.box(-Xc, 0, 0, Xc, yTop, D, M.body, 'tl')
-  b.box(-Xc - 2 * px, 0, -3 * px, Xc + 2 * px, 1.5 * V, D + 2 * px, M.plinth)
+  b.box(-Xc - 2 * px, 0, -3 * px, Xc + 2 * px, 1.5 * V, 0, M.plinth)
   b.mark(-Xc, 1.5 * V, Xc, yWall, 0, M.plinth)
   b.box(-Xc, yBand - px, -1.5 * px, Xc, yBand + px, 0, M.trim)
   // Relief: a post proud of the front at each corner, a cornice under the roof, a rail over the base.
-  for (const x of [-Xc, Xc - 1.3 * U]) b.box(x, 1.5 * V, -2.5 * px, x + 1.3 * U, yTop, 0, M.body)
-  b.mark(-Xc, 1.5 * V, -Xc + 1.2 * px, yTop, -2.5 * px - .1, M.trim)
+  if (p.post) { for (const x of [-Xc, Xc - p.post]) b.box(x, 1.5 * V, -2.5 * px, x + p.post, yTop, 0, M.body); b.mark(-Xc, 1.5 * V, -Xc + 1.2 * px, yTop, -2.5 * px - .1, M.trim) }
   b.box(-Xc - px, yTop - 2.2 * px, -3.5 * px, Xc + px, yTop, 0, M.trim)
   // The button's bay in the base: a frame proud of the wall, dark inside until the page's button paints over it.
   const c = p.cta, f = 2.5 * px
@@ -50,10 +49,16 @@ export function buildMachine(p: Plan) {
   }
 
   // Two manifolds, bolted on, with the tubes between them; the label rail; the fascia.
-  const lower = phone(p) ? 0 : 1.7 * V
+  const lower = phone(p) ? 0 : 1.7 * V, zBlock = zt - r - 2 * px
   for (const [y0, y1] of [[yMan, yMan + p.manifold], ...(lower ? [[yWall - .3 * V, yWall + lower]] : [])]) {
     b.box(-Xc - px, y0, -5 * px, Xc + px, y1, 0, M.trim)
-    for (let x = -Xc + 1.5 * U; x < Xc; x += 3 * U) b.cyl([x, (y0 + y1) / 2, 0], 2, -6.2 * px, -5 * px, 1.25 * px, M.steel, 8, 1)
+    for (let x = -Xw + 1.5 * U; x < Xw; x += 3 * U) b.cyl([x, (y0 + y1) / 2, 0], 2, -6.2 * px, -5 * px, 1.25 * px, M.steel, 8, 1)
+    // At each end it stands out past the tubes, which go into it: a block the width of the four, bolted at its corners.
+    for (const s of [-1, 1]) {
+      const a = s * (Xw + .12 * U), e = s * (Xc - p.post - .1 * U), x0 = Math.min(a, e), x1 = Math.max(a, e)
+      b.box(x0, y0, zBlock, x1, y1, 0, M.trim)
+      if (!phone(p)) for (const x of [x0 + .7 * U, x1 - .7 * U]) b.cyl([x, (y0 + y1) / 2, 0], 2, zBlock - 1.1 * px, zBlock, 1.25 * px, M.steel, 8, 1)
+    }
   }
   if (!lower) b.box(-Xc - px, yWall - 1.5 * px, -3 * px, Xc + px, yWall + 1.5 * px, 0, M.trim)
   b.mark(-Xc, ySlot, Xc, yCav, 0, M.body)
@@ -93,7 +98,8 @@ export function buildMachine(p: Plan) {
     b.mark(ventX - ventW, ga.y - ventH, ventX + ventW, ga.y + ventH, -.2, M.slot)
     for (let i = 0; i < 5; i++) b.box(ventX - ventW, ga.y - ventH + i * ventH * .4 + ventH * .08, -1.6 * px, ventX + ventW, ga.y - ventH + i * ventH * .4 + ventH * .29, 0, M.trim)
   }
-  for (const [x, y] of [[-Xc + .65 * U, yFas + V], [Xc - .65 * U, yFas + V], [-Xc + .65 * U, yTop - 1.4 * V], [Xc - .65 * U, yTop - 1.4 * V], [-Xc + .65 * U, yMan - 2 * V], [Xc - .65 * U, yMan - 2 * V], [-Xc + .65 * U, yWall + 3 * V], [Xc - .65 * U, yWall + 3 * V], [-Xc + .65 * U, yBand + p.band / 2], [Xc - .65 * U, yBand + p.band / 2], [-Xc + .65 * U, 3 * V], [Xc - .65 * U, 3 * V]]) b.cyl([x, y, 0], 2, -3.7 * px, -2.5 * px, 1.3 * px, M.steel, 8, 1)
+  const screwX = Xc - (p.post ? p.post / 2 : .65 * U)
+  for (const y of [yFas + V, yTop - 1.4 * V, ...(p.post ? [yMan - 2 * V, yWall + 3 * V, yBand + p.band / 2, 3 * V] : [])]) for (const x of [-screwX, screwX]) b.cyl([x, y, 0], 2, -3.7 * px, -2.5 * px, 1.3 * px, M.steel, 8, 1)
 
   // The roof: a kerb round it, seams, the laser's pedestal, the slot scams leave by, a beacon, a cable to the hatch.
   b.box(-Xc, yTop, 0, Xc, yTop + 2 * px, 2.5 * px, M.trim); b.box(-Xc, yTop, D - 2.5 * px, Xc, yTop + 2 * px, D, M.trim)
@@ -101,13 +107,16 @@ export function buildMachine(p: Plan) {
   for (const x of [-Xw, Xw]) b.quad([x - .5 * px, yTop + .1, 2.5 * px], [x + .5 * px, yTop + .1, 2.5 * px], [x + .5 * px, yTop + .1, D - 2.5 * px], [x - .5 * px, yTop + .1, D - 2.5 * px], M.line, [0, 1, 0])
   b.quad([-Xw, yTop + .1, D * .5 - .5 * px], [Xw, yTop + .1, D * .5 - .5 * px], [Xw, yTop + .1, D * .5 + .5 * px], [-Xw, yTop + .1, D * .5 + .5 * px], M.line, [0, 1, 0])
   const vents: V3[] = [[-Xw * .84, yTop + 13 * px, D * .7], [Xw * .88, yTop + 13 * px, D * .66]]
-  const turret: V3 = [-Xw * .6, yTop + 16 * px, zL], eject: V3 = [Xw * .6, yTop + 5 * px, zL]
-  b.cyl([turret[0], 0, zL], 1, yTop, yTop + 3 * px, 8.5 * px, M.trim, 16, 2); b.cyl([turret[0], 0, zL], 1, yTop + 3 * px, yTop + 16 * px, 3.6 * px, M.steel, 12, 2)
-  b.box(eject[0] - .62 * lw, yTop, zL - 6 * px, eject[0] + .62 * lw, yTop + 5 * px, zL + 6 * px, M.steel)
-  b.quad([eject[0] - .54 * lw, yTop + 5 * px + .1, zL - 2 * px], [eject[0] + .54 * lw, yTop + 5 * px + .1, zL - 2 * px], [eject[0] + .54 * lw, yTop + 5 * px + .1, zL + 2 * px], [eject[0] - .54 * lw, yTop + 5 * px + .1, zL + 2 * px], M.slot, [0, 1, 0])
+  const turrets: V3[] = [-1, 1].map(s => [s * (Xc - (p.phone ? 2.4 : 3.4) * U), yTop + 16 * px, zL]), ejects: V3[] = [-1, 1].map(s => [s * Xw * .6, yTop + 5 * px, zL])
+  for (const t of turrets) { b.cyl([t[0], 0, zL], 1, yTop, yTop + 3 * px, 8.5 * px, M.trim, 16, 2); b.cyl([t[0], 0, zL], 1, yTop + 3 * px, yTop + 16 * px, 3.6 * px, M.steel, 12, 2) }
+  for (const e of ejects) {
+    b.box(e[0] - .62 * lw, yTop, zL - 6 * px, e[0] + .62 * lw, yTop + 5 * px, zL + 6 * px, M.steel)
+    b.quad([e[0] - .54 * lw, yTop + 5 * px + .1, zL - 2 * px], [e[0] + .54 * lw, yTop + 5 * px + .1, zL - 2 * px], [e[0] + .54 * lw, yTop + 5 * px + .1, zL + 2 * px], [e[0] - .54 * lw, yTop + 5 * px + .1, zL + 2 * px], M.slot, [0, 1, 0])
+  }
   const beacon: V3 = [Xc - 3 * U, yTop + 12 * px, D * .82]
   b.cyl([beacon[0], 0, beacon[2]], 1, yTop, yTop + 8 * px, 1.2 * px, M.steel, 8, 0); b.cyl([beacon[0], 0, beacon[2]], 1, yTop + 8 * px, yTop + 9.5 * px, 3.6 * px, M.trim, 12, 2); b.cyl([beacon[0], 0, beacon[2]], 1, yTop + 9.5 * px, yTop + 14 * px, 2.8 * px, M.lampOff, 12, 2)
-  b.tube([[turret[0] - 5 * px, yTop + 1.4 * px, zL + 4 * px], [turret[0] - 5 * px, yTop + 1.4 * px, D * .6], [-Xw * .3, yTop + 1.4 * px, D * .6], [-Xw * .3, yTop + 1.4 * px, D * .68]], 1.3 * px, M.rubber, 6, 5 * px)
+  // Each laser's cable runs back to a junction box by the kerb.
+  turrets.forEach((t, k) => { const s = k ? 1 : -1; b.tube([[t[0], yTop + 1.4 * px, zL + 7 * px], [t[0], yTop + 1.4 * px, D * .52], [t[0] - s * 2.2 * U, yTop + 1.4 * px, D * .52]], 1.3 * px, M.rubber, 6, 5 * px); b.box(t[0] - s * 2.2 * U - 4 * px, yTop, D * .52 - 4 * px, t[0] - s * 2.2 * U + 4 * px, yTop + 4 * px, D * .52 + 4 * px, M.plinth) })
   // What the hopper and the chimneys stand over: holes, seen once they are gone.
   b.quad([-lw * .5, yTop + .15, zL - lw * .26], [lw * .5, yTop + .15, zL - lw * .26], [lw * .5, yTop + .15, zL + lw * .26], [-lw * .5, yTop + .15, zL + lw * .26], M.slot, [0, 1, 0])
   for (const v of vents) b.cyl([v[0], 0, v[2]], 1, yTop + .1, yTop + .2, 3.6 * px, M.slot, 12, 2)
@@ -119,28 +128,63 @@ export function buildMachine(p: Plan) {
   // The scanner hangs from the bay's ceiling over the middle lane.
   b.box(-lw * .6, yFas - 6 * px, zL - 7 * px, lw * .6, yFas, zL + 7 * px, M.steel); b.mark(-lw * .5, yFas - 6 * px - .1, lw * .5, yFas - 4.5 * px, zL - 7 * px - .1, M.red)
 
-  // The tubes' fittings: sockets in both manifolds, a dark channel behind each run, collars; where they cross the
-  // slab, a port in the cabinet's wall and saddles that hold them down.
-  const yLow = lower ? yWall + lower : r + px
+  // The tubes' fittings on the front: a socket in each manifold, a dark channel behind each run, and brackets that
+  // hold each four to the wall (a bar across them, bolted between). One length of bracket, round the tube the burst
+  // will tear out, is that tube's own.
+  const yLow = lower ? yWall + lower : r + px, bentTube = 5, bentY = yLow + (yMan - yLow) * .42
   for (const x of p.tubes) {
     b.mark(x - r - px, lower ? yLow : yWall + 1.5 * px, x + r + px, yMan, -.15, M.dark)
     if (!lower) b.mark(x - r - px, 1.5 * V, x + r + px, yWall - 1.5 * px, -.15, M.slot)
-    b.cyl([x, 0, zt], 1, yMan - 3 * px, yMan, r + 1.6 * px, M.steel, 12, 1)
-    if (lower) b.cyl([x, 0, zt], 1, yLow, yLow + 3 * px, r + 1.6 * px, M.steel, 12, 2)
-    for (let y = yMan - 9 * V; y > yLow + 4 * V; y -= 9.4 * V) b.cyl([x, 0, zt], 1, y - 1.2 * px, y + 1.2 * px, r + 1.2 * px, M.steel, 12, 3)
+    b.cyl([x, 0, zt], 1, yMan - 2.4 * px, yMan, r + .9 * px, M.steel, 14, 0)
+    if (lower) b.cyl([x, 0, zt], 1, yLow, yLow + 2.4 * px, r + .9 * px, M.steel, 14, 0)
   }
-  const saddle = (x: number, z: number, along: 'x' | 'z') => along === 'x' ? b.box(x - 1.8 * px, 0, z - r - 2.4 * px, x + 1.8 * px, 2 * r + 2.6 * px, z + r + 2.4 * px, M.steel) : b.box(x - r - 2.4 * px, 0, z - 1.8 * px, x + r + 2.4 * px, 2 * r + 2.6 * px, z + 1.8 * px, M.steel)
-  p.fan.forEach((leg, t) => {
-    const s = t < 4 ? -1 : 1, wallX = s * Xc
-    // A flange where it comes through the wall, bolted on.
-    if (s < 0) { b.cyl([0, r + 2 * px, leg.z], 0, wallX - 4 * px, wallX, r + 3.4 * px, M.trim, 14, 1, M.steel); b.cyl([0, r + 2 * px, leg.z], 0, wallX - 7 * px, wallX - 4 * px, r + 1.4 * px, M.steel, 12, 1) }
-    for (let x = wallX + s * 30 * px; Math.abs(x) < Math.abs(leg.x) - 2.6 * r; x += s * 9 * U) saddle(x, leg.z, 'x')
-    saddle(leg.x + DX * (leg.z - p.zLip * .45), p.zLip * .45, 'z')
+  const pitch = Math.abs(p.tubes[1] - p.tubes[0]), bracketH = phone(p) ? 1.2 * px : 1.5 * px, zB = zt - r - 1.2 * px
+  const bracketY: number[] = []
+  if (lower) { const n = 3; for (let i = 1; i <= n; i++) bracketY.push(yLow + (yMan - yLow) * i / (n + 1)) }
+  else { for (let y = yMan - 8 * V; y > yWall + 4 * V; y -= 10 * V) bracketY.push(y); bracketY.push(yBand + p.band * .5, p.base * .5) }
+  const bracket = (x0: number, x1: number, y: number) => b.box(x0, y - bracketH, zB, x1, y + bracketH, 0, M.trim)
+  for (const y of bracketY) for (const first of [0, 4]) {
+    const a = Math.min(p.tubes[first], p.tubes[first + 3]) - pitch / 2, e = Math.max(p.tubes[first], p.tubes[first + 3]) + pitch / 2
+    if (first === 4 && lower && y > bentY) { bracket(a, p.tubes[bentTube] - pitch / 2, y); bracket(p.tubes[bentTube] + pitch / 2, e, y) } else bracket(a, e, y)
+    if (!phone(p)) for (let k = 0; k <= 4; k++) b.cyl([a + k * pitch, y, 0], 2, zB - .8 * px, zB, .9 * px, M.steel, 6, 1)
+  }
+
+  // Where the tubes cross the slab. A wide page: at the foot of each side of the cabinet a header, a trunk with a
+  // flanged outlet for each tube in its front; each tube runs straight forward from it over two sleepers, clamped
+  // down at each, and over the lip. A phone: the tubes come down the front, one clamp holds each four to the slab.
+  const yc = r + 2 * px
+  const clamp = (x: number, z: number) => { const w = r + 2 * px, points: [number, number][] = [[x - w - 1.5 * px, 0], [x + w + 1.5 * px, 0], [x + w + 1.5 * px, 1.5 * px], [x + w, 1.5 * px]]; for (let i = 0; i <= 8; i++) { const a = i / 8 * Math.PI; points.push([x + Math.cos(a) * w, yc + Math.sin(a) * w]) } points.push([x - w, 1.5 * px], [x - w - 1.5 * px, 1.5 * px]); b.prism(ccw(points), z - 1.5 * px, z + 1.5 * px, M.steel, 'fs', M.trim) }
+  const sleepers = p.fan.length ? [p.zLip + (p.heads[0].z0 - p.zLip) * .58, p.zLip + 2.6 * U] : []
+  p.heads.forEach((head, side) => {
+    b.box(head.x0, 0, head.z0, head.x1, head.h, head.z1, M.trim)
+    b.box(head.x0 - px, 0, head.z0 - px, head.x1 + (side ? px : 0), 1.8 * px, head.z1, M.plinth)
+    b.box(head.x0 + 2 * px, head.h, head.z0 + 2 * px, head.x1 - 2 * px, head.h + 1.2 * px, head.z1 - 2 * px, M.body)
+    const xs = [0, 1, 2, 3].map(k => p.fan[side * 4 + k].x), a = Math.min(...xs), e = Math.max(...xs)
+    for (const x of xs) { b.cyl([x, yc, 0], 2, head.z0 - 3.2 * px, head.z0, r + 2.6 * px, M.steel, 16, 1); b.cyl([x, yc, 0], 2, head.z0 - 5.4 * px, head.z0 - 3.2 * px, r + 1.2 * px, M.steel, 14, 0) }
+    for (let x = head.x0 + 1.6 * U; x < head.x1 - U; x += 3.2 * U) if (xs.every(at => Math.abs(at - x) > r + 4 * px)) b.cyl([x, head.h - 1.1 * U, 0], 2, head.z0 - 1.1 * px, head.z0, 1.2 * px, M.steel, 8, 1)
+    for (const z of sleepers) { b.box(a - 1.9 * U, 0, z - .9 * U, e + 1.9 * U, 1.5 * px, z + .9 * U, M.plinth); for (const x of xs) clamp(x, z) }
   })
   if (!p.fan.length) for (const first of [0, 4]) { const a = Math.min(p.tubes[first], p.tubes[first + 3]), e = Math.max(p.tubes[first], p.tubes[first + 3]), z = (zt + p.zLip) / 2, shift = DX * (zt - z); b.box(a + shift - r - 2 * px, 0, z - 1.6 * px, e + shift + r + 2 * px, 2 * r + 2.4 * px, z + 1.6 * px, M.steel) }
 
+  // Two relief valves on the columns beside the works, of the kind a boiler has: a body on a flange, fed from the
+  // manifold below, a nozzle up, and a weighted lever that the pressure lifts. Under the right one, the recess a
+  // service panel covers.
+  const vs = p.phone ? .58 * U : U, colX = (Xw + 2 * px + Xc - p.post) / 2, valveY = yCav + p.cavity * .62, vz = -3.4 * px
+  const valves = [-1, 1].map(side => ({ side, x: side * colX, y: valveY, nozzle: [side * colX, valveY + 2.2 * vs, vz] as V3 }))
+  for (const v of valves) {
+    b.cyl([v.x, 0, vz], 1, ySlot, v.y, .3 * vs, M.steel, 10, 0)
+    b.cyl([v.x, 0, vz], 1, ySlot, ySlot + .5 * vs, .5 * vs, M.trim, 10, 2)
+    b.cyl([v.x, v.y, 0], 2, -1.6 * px, 0, 1.15 * vs, M.trim, 18, 1)
+    b.cyl([v.x, v.y, 0], 2, vz - .78 * vs * .4, -1.6 * px, .8 * vs, M.steel, 16, 1)
+    b.cyl([v.x, 0, vz], 1, v.y + .6 * vs, v.y + 1.9 * vs, .4 * vs, M.steel, 10, 0)
+    b.cyl([v.x, 0, vz], 1, v.y + 1.9 * vs, v.y + 2.2 * vs, .56 * vs, M.trim, 12, 2, M.slot)
+  }
+  const panel = { x0: colX - 1.9 * vs, x1: colX + 1.9 * vs, y0: yCav + p.cavity * .1, y1: yCav + p.cavity * .38 }
+  b.mark(panel.x0 + px, panel.y0 + px, panel.x1 - px, panel.y1 - px, -.15, M.slot)
+  b.mark(panel.x0 + px, panel.y0 + px, panel.x1 - px, panel.y0 + 2.2 * px, -.2, M.bay)
+
   // ── Parts ──
-  const idx = { glass: 0, tubes: 0, soot: 0, shards: 0, hole: 0, bent: 0, needle: 0, turret: 0, scan: 0, hopper: 0, hatch: 0, beaconOn: 0, vents: [] as number[], panes: [] as number[], cracks: [] as number[], lamps: [] as number[], flaps: [] as number[], rollers: [] as number[], caps: [] as number[], bolts: [] as number[] }
+  const idx = { glass: 0, tubes: 0, soot: 0, shards: 0, hole: 0, bent: 0, bentHeld: 0, needle: 0, turrets: [] as number[], scan: 0, hopper: 0, hatch: 0, panel: 0, beaconOn: 0, levers: [] as number[], vents: [] as number[], panes: [] as number[], cracks: [] as number[], lamps: [] as number[], flaps: [] as number[], rollers: [] as number[], caps: [] as number[], bolts: [] as number[] }
 
   idx.needle = b.part('needle', [ga.x, ga.y, 0])
   b.prism(ccw([[ga.x - 1.1 * px, ga.y - ga.r * .22], [ga.x + 1.1 * px, ga.y - ga.r * .22], [ga.x + .4 * px, ga.y + ga.r * .8], [ga.x - .4 * px, ga.y + ga.r * .8]]), -4.8 * px, -4.4 * px, M.ink, 'f')
@@ -149,13 +193,15 @@ export function buildMachine(p: Plan) {
   lampX.forEach((x, i) => { idx.lamps.push(b.part(`lamp${i}`)); b.cyl([x, ga.y, 0], 2, -2.7 * px, -2.5 * px, lampR, i === 0 ? M.red : M.lampOn, 14, 1) })
   idx.beaconOn = b.part('beacon'); b.cyl([beacon[0], 0, beacon[2]], 1, yTop + 9.5 * px, yTop + 14.2 * px, 3 * px, M.red, 12, 2)
 
-  // The laser: a barrel on a yoke, a red lens, fins.
-  idx.turret = b.part('turret', turret)
-  b.box(turret[0] - 8 * px, turret[1] - 4.6 * px, zL - 5 * px, turret[0] + 17 * px, turret[1] + 4.6 * px, zL + 5 * px, M.plinth, ALL)
-  b.cyl([0, turret[1], zL], 0, turret[0] + 17 * px, turret[0] + 22 * px, 3.4 * px, M.steel, 12, 2, M.red)
-  b.cyl([0, turret[1], zL], 0, turret[0] - 10.5 * px, turret[0] - 8 * px, 3.6 * px, M.trim, 12, 1)
-  for (let i = 0; i < 4; i++) b.box(turret[0] - 5 * px + i * 4.4 * px, turret[1] + 4.6 * px, zL - 4 * px, turret[0] - 3.2 * px + i * 4.4 * px, turret[1] + 7.4 * px, zL + 4 * px, M.trim, ALL)
-  b.cyl([turret[0], turret[1], 0], 2, zL - 6.6 * px, zL + 6.6 * px, 3 * px, M.steel, 10, 3)
+  // The lasers: a barrel in a yoke, cooling rings round it, a red lens. Round, so it looks right aimed any way.
+  turrets.forEach((t, k) => {
+    idx.turrets.push(b.part(`turret${k}`, t))
+    b.cyl([0, t[1], zL], 0, t[0] - 8 * px, t[0] + 17 * px, 4.4 * px, M.plinth, 14, 1)
+    b.cyl([0, t[1], zL], 0, t[0] + 17 * px, t[0] + 22 * px, 3.4 * px, M.steel, 12, 2, M.red)
+    b.cyl([0, t[1], zL], 0, t[0] - 10.5 * px, t[0] - 8 * px, 3.4 * px, M.trim, 12, 1)
+    for (let i = 0; i < 4; i++) b.cyl([0, t[1], zL], 0, t[0] - 5 * px + i * 4.4 * px, t[0] - 3.2 * px + i * 4.4 * px, 6.2 * px, M.trim, 14, 3)
+    b.cyl([t[0], t[1], 0], 2, zL - 6.4 * px, zL + 6.4 * px, 2.6 * px, M.steel, 10, 3)
+  })
 
   idx.scan = b.part('scan', [0, scanY, zL]); b.mark(-lw * .56, scanY - .7 * px, lw * .56, scanY + .7 * px, zL - 2.5 * px, M.red)
 
@@ -172,11 +218,25 @@ export function buildMachine(p: Plan) {
   idx.hatch = b.part('hatch', [-Xw * .3, yTop + px, D * .76])
   b.box(-Xw * .46, yTop, D * .64, -Xw * .14, yTop + 1.8 * px, D * .88, M.trim, ALL); b.box(-Xw * .32, yTop + 1.8 * px, D * .74, -Xw * .28, yTop + 3.4 * px, D * .78, M.steel, ALL)
 
+  // The valves' levers, hinged on the body's centre, and the service panel on its four screws.
+  for (const v of valves) {
+    idx.levers.push(b.part(`lever${idx.levers.length}`, [v.x, v.y, vz]))
+    const z0 = vz - .78 * vs * .4 - 1.4 * px, z1 = z0 + 1.2 * px, tip = v.x + v.side * 2.3 * vs
+    b.box(Math.min(v.x - v.side * .3 * vs, tip), v.y - .15 * vs, z0, Math.max(v.x - v.side * .3 * vs, tip), v.y + .15 * vs, z1, M.trim, ALL)
+    b.box(Math.min(tip - v.side * .75 * vs, tip), v.y - .78 * vs, z0 - .6 * px, Math.max(tip - v.side * .75 * vs, tip), v.y - .15 * vs, z1 + .6 * px, M.steel, ALL)
+    b.cyl([v.x, v.y, 0], 2, z0 - 1.2 * px, z0, .34 * vs, M.steel, 10, 1)
+  }
+  idx.panel = b.part('panel', [colX, (panel.y0 + panel.y1) / 2, -.7 * px])
+  b.box(panel.x0, panel.y0, -1.4 * px, panel.x1, panel.y1, 0, M.plinth, ALL)
+  for (const x of [panel.x0 + 2.2 * px, panel.x1 - 2.2 * px]) for (const y of [panel.y0 + 2.2 * px, panel.y1 - 2.2 * px]) b.cyl([x, y, 0], 2, -2.2 * px, -1.4 * px, .9 * px, M.steel, 8, 1)
+  b.box(colX - .8 * vs, (panel.y0 + panel.y1) / 2 - .9 * px, -2.6 * px, colX + .8 * vs, (panel.y0 + panel.y1) / 2 + .9 * px, -1.4 * px, M.trim, ALL)
+
   // Rollers: eight to a lane, the middle four on that lane's drop gate. Each has a mark on its end so its turning shows.
   const rollerLane: number[] = [], rollerHome: V3[] = []
   for (let j = 0; j < 56; j++) {
     const x = lanes[0] - P / 2 + (j + .5) * P / 8
     idx.rollers.push(b.part(`roller${j}`, [x, yR, zL])); rollerLane.push(Math.floor(j / 8)); rollerHome.push([x, yR, zL])
+    b.parts[b.parts.length - 1].plain = true
     b.cyl([x, yR, 0], 2, z0, z1, rr, M.steel, 12, 3, M.trim)
     b.cyl([x + rr * .5, yR, 0], 2, z0 - .3, z0 - .1, rr * .28, M.ink, 6, 1)
   }
@@ -233,26 +293,26 @@ export function buildMachine(p: Plan) {
   idx.glass = b.part('glass', [0, (yCav + yFas) / 2, -1.2 * px], true)
   b.mark(-Xw, yCav, Xw, yFas, -1.2 * px, M.glass)
 
-  // The tubes themselves. Each is one or two runs: down the front between the manifolds, and (where they fan out)
-  // out of the cabinet's wall, across the slab, over the lip and down. One of the front runs is its own part: the
-  // burst bends it out of its socket.
-  const lines: V3[][][] = [], drop = -(p.floor + 80), bentTube = 5, bentY = yLow + (yMan - yLow) * .42
+  // The tubes themselves. Each is one or two runs: down the front between the manifolds, and (on a wide page) from
+  // its outlet in the header forward across the slab, over the lip and down. One of the front runs is its own part:
+  // the burst bends it out of its socket.
+  const lines: V3[][][] = [], drop = -(p.floor + 80)
   idx.tubes = b.part('tubes', [0, 0, 0], true)
   p.tubes.forEach((x, t) => {
     if (p.fan.length) {
-      const leg = p.fan[t], s = t < 4 ? -1 : 1
-      const frontRun = t === bentTube ? [[x, yMan, zt], [x, yLow, zt]] as V3[] : b.tube([[x, yMan, zt], [x, yLow, zt]], r, M.tube, 10)
-      if (t === bentTube) b.tube([[x, bentY, zt], [x, yLow, zt]], r, M.tube, 10)
-      lines.push([frontRun, b.tube([[s * (Xc - 4 * px), r + 2 * px, leg.z], [leg.x, r + 2 * px, leg.z], [leg.out, r + 2 * px, p.zOver], [leg.out, drop, p.zOver]], r, M.tube, 10, r * 3.2)])
+      const leg = p.fan[t]
+      const frontRun = t === bentTube ? [[x, yMan, zt], [x, yLow, zt]] as V3[] : b.tube([[x, yMan, zt], [x, yLow, zt]], r, M.tube, 12)
+      if (t === bentTube) b.tube([[x, bentY, zt], [x, yLow, zt]], r, M.tube, 12)
+      lines.push([frontRun, b.tube([[leg.x, yc, p.heads[0].z0 - 5 * px], [leg.x, yc, p.zOver], [leg.x, drop, p.zOver]], r, M.tube, 12, r * 3)])
     } else lines.push([b.tube([[x, yMan, zt], [x, r + px, zt], [x + DX * (zt - p.zOver), r + px, p.zOver], [x + DX * (zt - p.zOver), drop, p.zOver]], r, M.tube, 10, r * 3)])
   })
   idx.bent = b.part('bent', [p.tubes[bentTube], p.fan.length ? bentY : yWall, zt], true)
-  if (p.fan.length) {
-    b.tube([[p.tubes[bentTube], yMan - 3 * px, zt], [p.tubes[bentTube], bentY, zt]], r, M.tube, 10)
-    for (const y of [yMan - 4 * px, bentY + 1.2 * px, (yMan + bentY) / 2]) b.cyl([p.tubes[bentTube], 0, zt], 1, y - 1.2 * px, y + 1.2 * px, r + 1.2 * px, M.steel, 12, 3)
-  }
+  if (p.fan.length) b.tube([[p.tubes[bentTube], yMan - 3 * px, zt], [p.tubes[bentTube], bentY, zt]], r, M.tube, 12)
+  // The lengths of bracket that go with it.
+  idx.bentHeld = b.part('bentHeld', [p.tubes[bentTube], p.fan.length ? bentY : yWall, zt])
+  if (p.fan.length) for (const y of bracketY) if (y > bentY) bracket(p.tubes[bentTube] - pitch / 2, p.tubes[bentTube] + pitch / 2, y)
 
   const data = b.finish()
-  return { data, parts: b.parts, idx, wall, lines, rollerLane, rollerHome, hinge, swing, rr, yR, rideY, scanY, z0, z1, turret, eject, beacon, vents, crackAt, ventFront: [ventX, ga.y, -3 * px] as V3, hopperTop: yTop + hh, hopperWide: ht, px }
+  return { data, parts: b.parts, idx, wall, lines, rollerLane, rollerHome, hinge, swing, rr, yR, rideY, scanY, z0, z1, turrets, ejects, beacon, vents, valves, panel, hatchHinge: [-Xw * .3, yTop, D * .88] as V3, crackAt, ventFront: [ventX, ga.y, -3 * px] as V3, hopperTop: yTop + hh, hopperWide: ht, px }
 }
 const phone = (p: Plan) => p.phone
