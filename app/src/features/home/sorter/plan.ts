@@ -83,9 +83,15 @@ export function plan(W: number, H: number) {
   const ctaW = Math.max(15.2 * U, 128), ctaH = Math.max(44, 7.4 * V)
   const cta: Rect = phone ? { x: -Xw + 2 * U, y: 24, w: 2 * Xw - 4 * U, h: 50 } : { x: -ctaW / 2, y: (base - ctaH) / 2, w: ctaW, h: ctaH }
   const tight = phone ? COLS * U < 292 : (2 * Xc - 4.8 * U - ctaW) / 2 < 206
+  // The button's faceplate (`plate`: how far it stands round the button), and the two facts as instruments in the
+  // base: a display each, as tall as the faceplate, the one to the left of the button and the other to its right. On
+  // a phone they are two small windows side by side over the button, their legends over them.
+  const plate = phone ? 6 : 1.1 * U, fw = Math.min(-ctaW / 2 - plate - 1.5 * U + Xc - 2.4 * U, 20 * U), narrow = Math.max(70, Math.round(cta.w * .27))
+  const facts: Rect[] = phone ? [{ x: cta.x, y: cta.y + cta.h + plate + 6, w: narrow, h: 28 }, { x: cta.x + narrow + 8, y: cta.y + cta.h + plate + 6, w: cta.w - narrow - 8, h: 28 }]
+    : [{ x: -Xc + 2.4 * U, y: cta.y - plate, w: fw, h: cta.h + 2 * plate }, { x: Xc - 2.4 * U - fw, y: cta.y - plate, w: fw, h: cta.h + 2 * plate }]
   const readout: Rect = phone ? { x: -Xw + U, y: yFas + (fascia - Math.min(48, fascia - 8)) / 2, w: Xw * 1.36, h: Math.min(48, fascia - 8) } : { x: -Xw + 2.2 * U, y: yFas + (fascia - 8.4 * V) / 2, w: 27.5 * U, h: 8.4 * V }
   const gauge = { x: Xw - (phone ? 4.4 : 4.2) * U, y: yFas + fascia / 2, r: Math.min(fascia * .36, phone ? 16 : 24) }
-  return { phone, tight, W, H, ext, cannon, out: Math.round(out), room, widest, lean, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, zProud, riser, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, readout, gauge }
+  return { phone, tight, W, H, ext, cannon, out: Math.round(out), room, widest, lean, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, zProud, riser, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, plate, facts, readout, gauge }
 }
 
 /** A box on the machine's front, as the page places it: left and top in the scene, width and height. */

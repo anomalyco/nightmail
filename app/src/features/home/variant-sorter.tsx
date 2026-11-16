@@ -142,10 +142,9 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
               <span className="srt-row srt-row-wide"><span>sent</span><span>or</span><span>received</span><span>via</span><span className="srt-last">API<span className="srt-stop">.</span></span></span>
             </span>
           </h1>
-          <div className="srt-base" style={p.phone ? at({ x: price.x, y: p.cta.y + p.cta.h, w: price.w, h: p.base - p.cta.y - p.cta.h }) : at({ x: -p.Xc + 2.4 * p.U, y: p.cta.y, w: 2 * p.Xc - 4.8 * p.U, h: p.cta.h })}>
-            <p className="srt-fact"><span className="srt-fact-label">Responds in</span><span className="srt-fact-value"><i>~</i>100<i> ms</i></span></p>
-            <p className="srt-fact" data-tight={p.tight || undefined}><span className="srt-fact-label">Free every month</span><span className="srt-fact-value"><span>3,000<i> sent</i></span><i className="srt-fact-dot"> · </i><span>3,000<i> received</i></span></span></p>
-          </div>
+          {/* The two facts: instruments in the base, a legend over a window each. */}
+          <p className="srt-fact" style={at(p.facts[0])}><span className="srt-fact-label">Responds in</span><span className="srt-fact-value"><span><b>~100</b><i>ms</i></span><span className="srt-meter" aria-hidden="true" /></span></p>
+          <p className="srt-fact" style={at(p.facts[1])}><span className="srt-fact-label">Free every month</span><span className="srt-fact-value"><span><b>3,000</b><i>sent</i></span><span><b>3,000</b><i>received</i></span></span></p>
           <button type="button" className="srt-cta" style={at(p.cta)} disabled={busy} aria-busy={busy || undefined} data-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
             <span className="srt-cta-label">Get started{busy ? <LoaderCircle className="ui-spinner" size={16} aria-hidden="true" /> : <ArrowRight className="srt-cta-arrow" size={16} strokeWidth={2} aria-hidden="true" />}</span>
           </button>

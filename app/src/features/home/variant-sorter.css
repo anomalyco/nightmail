@@ -5,14 +5,14 @@
 .srt-page {
   --srt-floor: rgb(234 238 245); --srt-shade: rgb(210 216 226); --srt-text: oklch(0.21 0.02 268); --srt-text-2: oklch(0.42 0.02 268); --srt-text-3: oklch(0.47 0.02 268); --srt-hair: oklch(0.21 0.02 268 / 14%); --srt-hover: oklch(0.21 0.02 268 / 7%);
   --srt-screen-text: oklch(0.93 0.01 92); --srt-screen-dim: oklch(0.72 0.02 262); --srt-plate: oklch(0.42 0.02 268);
-  --srt-cta: oklch(0.25 0.025 268); --srt-cta-hover: oklch(0.33 0.03 268); --srt-cta-under: oklch(0.14 0.02 268); --srt-on-cta: oklch(0.985 0.004 92); --srt-cta-edge: oklch(1 0 0 / 16%);
+  --srt-cta: oklch(0.25 0.025 268); --srt-cta-hover: oklch(0.32 0.03 268); --srt-cta-top: oklch(0.4 0.03 268); --srt-cta-side: oklch(0.16 0.02 268); --srt-on-cta: oklch(0.985 0.004 92); --srt-cta-edge: oklch(1 0 0 / 16%);
   --srt-paper: oklch(0.985 0.01 92); --srt-red: oklch(0.6 0.22 27); --srt-card: oklch(0.995 0.004 92); --srt-card-text: oklch(0.21 0.02 268); --srt-card-dim: oklch(0.45 0.02 268); --srt-card-edge: oklch(0.21 0.02 268 / 12%);
   --srt-ease: cubic-bezier(.22, 1, .36, 1); --srt-k: 17.17; --srt-header: 64px;
   display: flex; flex-direction: column; min-height: 100svh; overflow-x: clip; background: var(--srt-floor); color: var(--srt-text); }
 :root[data-theme='dark'] .srt-page {
   --srt-floor: rgb(10 13 19); --srt-shade: rgb(4 6 10); --srt-text: oklch(0.968 0.004 268); --srt-text-2: oklch(0.74 0.014 268); --srt-text-3: oklch(0.63 0.016 268); --srt-hair: oklch(1 0 0 / 9%); --srt-hover: oklch(1 0 0 / 6%);
   --srt-screen-text: oklch(0.955 0.014 92); --srt-screen-dim: oklch(0.62 0.018 268); --srt-plate: oklch(0.66 0.016 268);
-  --srt-cta: oklch(0.955 0.014 92); --srt-cta-hover: oklch(0.995 0.006 92); --srt-cta-under: oklch(0.7 0.02 92); --srt-on-cta: oklch(0.2 0.02 268); --srt-cta-edge: oklch(0.2 0.02 268 / 14%);
+  --srt-cta: oklch(0.945 0.016 92); --srt-cta-hover: oklch(0.975 0.012 92); --srt-cta-top: oklch(1 0 0); --srt-cta-side: oklch(0.72 0.022 92); --srt-on-cta: oklch(0.2 0.02 268); --srt-cta-edge: oklch(0.2 0.02 268 / 14%);
   --srt-paper: oklch(0.955 0.014 92); --srt-red: oklch(0.68 0.2 27); --srt-card: oklch(0.955 0.014 92); --srt-card-text: oklch(0.2 0.02 268); --srt-card-dim: oklch(0.43 0.02 268); --srt-card-edge: oklch(0.2 0.02 268 / 14%); }
 
 /* The header stands over the night: letters fall behind it. */
@@ -71,29 +71,40 @@
 .srt-stop { position: absolute; left: 100%; }
 
 /* The base: the button in the middle and, either side of it, a fact in two lines: what it measures, then the measure. */
-.srt-base { position: absolute; z-index: 2; pointer-events: none; }
-.srt-fact { position: absolute; top: 50%; left: 0; display: grid; row-gap: 7px; margin: 0; white-space: nowrap; translate: 0 -50%; }
-.srt-fact + .srt-fact { right: 0; left: auto; justify-items: end; }
-.srt-fact-label { color: var(--srt-text-2); font-size: clamp(12.5px, var(--srt-u) * 1.5, 16px); font-weight: 450; line-height: 1; letter-spacing: -.008em; }
-.srt-fact-value { color: var(--srt-text); font-size: clamp(14px, var(--srt-u) * 1.8, 21px); font-weight: 500; font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: -.018em; }
-.srt-fact-value i { color: var(--srt-text-2); font-style: normal; }
-/* Where there is too little room beside the button, the longer fact's measure takes two lines. */
-.srt-fact[data-tight] { row-gap: 5px; }
-.srt-fact[data-tight] .srt-fact-value { display: grid; justify-items: end; row-gap: 5px; }
-.srt-fact[data-tight] .srt-fact-dot { display: none; }
+/* The two facts: displays in the base, in the readout's type. Three lines each on shared baselines: a legend, and
+   two of reading (the response time over its meter; what is free, sent and received). */
+.srt-fact { position: absolute; z-index: 2; display: grid; grid-template-rows: 10px 15px 15px; align-content: space-evenly; margin: 0; padding: 1px clamp(8px, var(--srt-u) * 1.2, 11px) 0; font-family: var(--font-mono); line-height: 1; white-space: nowrap; pointer-events: none; }
+.srt-fact-label { color: var(--srt-screen-dim); font-size: 10px; line-height: 1; letter-spacing: .08em; text-transform: uppercase; }
+.srt-fact-value { display: contents; color: var(--srt-screen-text); font-size: clamp(13.5px, var(--srt-u) * 1.8, 15px); font-variant-numeric: tabular-nums; }
+.srt-fact-value > span { display: flex; align-items: baseline; height: 15px; line-height: 15px; }
+.srt-fact-value b { font-weight: 500; }
+.srt-fact-value i { margin-left: 6px; color: var(--srt-screen-dim); font-size: 10px; font-style: normal; letter-spacing: .06em; text-transform: uppercase; }
+/* The meter under the response time: a scale of 0 to 200 ms, its pointer on 100. */
+.srt-fact-value > .srt-meter { position: relative; align-self: center; height: 9px; max-width: 150px; background: repeating-linear-gradient(90deg, var(--srt-screen-dim) 0 1px, transparent 1px calc((100% - 1px) / 20)) bottom / 100% 4px no-repeat; }
+.srt-meter::before { content: ''; position: absolute; inset: 2px 0 0; border: solid var(--srt-screen-dim); border-width: 0 1px; }
+.srt-meter::after { content: ''; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; background: var(--srt-screen-text); }
+/* A phone: a window each, its legend over it, what is free on one line. */
+.srt-page[data-phone] .srt-fact { display: flex; align-items: center; padding: 0 6px; }
+.srt-page[data-phone] .srt-fact-label { position: absolute; bottom: calc(100% + 6px); left: 0; color: var(--srt-text-2); letter-spacing: .04em; }
+.srt-page[data-phone] .srt-fact-value { display: flex; align-items: center; justify-content: space-between; width: 100%; font-size: clamp(12px, var(--srt-u) * 2.15, 14px); }
+.srt-page[data-phone] .srt-fact-value i { margin-left: 4px; letter-spacing: 0; }
+.srt-page[data-phone] .srt-fact-value > span + span:not(.srt-meter)::before { content: ''; align-self: stretch; width: 1px; margin: -8px 6px -8px 0; background: var(--srt-screen-dim); opacity: .5; }
+.srt-page[data-phone] .srt-meter { display: none; }
 
-/* The button: the one lit thing on the base. It rises a pixel under the pointer and sinks two when pressed. */
-.srt-cta { position: absolute; z-index: 3; display: inline-flex; align-items: center; justify-content: center; padding: 0; border: 0; border-radius: 3px; background: var(--srt-cta); box-shadow: 0 2px 0 var(--srt-cta-under); color: var(--srt-on-cta); font-family: var(--font-body); font-size: clamp(15px, var(--srt-u) * 1.9, 19px); font-weight: 600; line-height: 1; letter-spacing: -.012em; cursor: pointer; transition: background-color 150ms var(--srt-ease), translate 140ms var(--srt-ease), box-shadow 140ms var(--srt-ease); }
-.srt-cta::before { content: ''; position: absolute; inset: 4px; border: 1px solid var(--srt-cta-edge); border-radius: 1px; pointer-events: none; }
-@media (hover: hover) and (pointer: fine) { .srt-cta:hover:not(:disabled) { background: var(--srt-cta-hover); box-shadow: 0 3px 0 var(--srt-cta-under); translate: 0 -1px; } .srt-cta:hover:not(:disabled) .srt-cta-arrow { translate: 4px 0; } }
-.srt-cta:active:not(:disabled) { box-shadow: 0 0 0 var(--srt-cta-under); translate: 0 2px; transition-duration: 70ms; }
+/* The button: a lit key in the faceplate's bay, the one lit thing on the base. It stands proud of the bay, so (seen
+   from above and the right, as everything here is) its top and its left side show; pressed, it goes in flush. */
+.srt-cta { position: absolute; z-index: 3; display: inline-flex; align-items: center; justify-content: center; padding: 3px 0 0 2px; border: 0; background: none; color: var(--srt-on-cta); font-family: var(--font-body); font-size: clamp(15px, var(--srt-u) * 1.9, 19px); font-weight: 600; line-height: 1; letter-spacing: -.012em; cursor: pointer; }
+.srt-cta::before { content: ''; position: absolute; inset: 3px 0 0 2px; background: var(--srt-cta); box-shadow: 0 -2px 0 var(--srt-cta-top), -1px 0 0 var(--srt-cta-side), -1px -2px 0 var(--srt-cta-side); outline: 1px solid var(--srt-cta-edge); outline-offset: -5px; pointer-events: none; transition: background-color 150ms var(--srt-ease), translate 90ms var(--srt-ease), box-shadow 90ms var(--srt-ease); }
+.srt-cta-label { position: relative; display: inline-flex; align-items: center; gap: .4em; transition: translate 90ms var(--srt-ease); }
+@media (hover: hover) and (pointer: fine) { .srt-cta:hover:not(:disabled)::before { background: var(--srt-cta-hover); } .srt-cta:hover:not(:disabled) .srt-cta-arrow { translate: 4px 0; } }
+.srt-cta:active:not(:disabled)::before { box-shadow: 0 0 0 var(--srt-cta-top), 0 0 0 var(--srt-cta-side), 0 0 0 var(--srt-cta-side); translate: -1px -2px; }
+.srt-cta:active:not(:disabled) .srt-cta-label { translate: -1px -2px; }
 .srt-cta:disabled { opacity: 1; }
 .srt-cta[data-busy] { cursor: progress; }
-.srt-cta-label { display: inline-flex; align-items: center; gap: .4em; }
 .srt-cta-arrow { transition: translate 200ms var(--srt-ease); }
 /* Focus: a square ring round a square button, clear of it. */
 .srt-cta:focus-visible { outline: none; }
-.srt-cta:focus-visible::after { content: ''; position: absolute; inset: -6px -6px -8px; border: var(--focus-width) solid var(--color-focus); pointer-events: none; }
+.srt-cta:focus-visible::after { content: ''; position: absolute; inset: -7px; border: var(--focus-width) solid var(--color-focus); pointer-events: none; }
 
 /* Under the slab's lip, off the machine: what signing in agrees to. */
 .srt-consent { position: absolute; z-index: 2; bottom: calc(var(--srt-below) * .47); left: 50%; width: max-content; max-width: calc(100% - 2 * var(--space-16)); margin: 0; color: var(--srt-text-2); font-size: 12px; line-height: 16px; text-align: center; text-wrap: balance; translate: -50% 50%; }
@@ -120,9 +131,6 @@
 .srt-page[data-phone] .srt-band { line-height: 1.16; letter-spacing: -.02em; }
 .srt-page[data-phone] .srt-line { display: block; }
 .srt-page[data-phone] .srt-row { display: flex; column-gap: .22em; align-items: baseline; }
-.srt-page[data-phone] .srt-fact { top: 12px; row-gap: 6px; translate: none; }
-.srt-page[data-phone] .srt-fact-label { font-size: 12.5px; }
-.srt-page[data-phone] .srt-fact-value { font-size: 15px; }
 .srt-page[data-phone] .srt-cta { font-size: 16px; }
 @media (max-width: 899px) {
   .srt-page { --srt-header: 56px; }
@@ -132,7 +140,7 @@
   .srt-card-body { width: 232px; }
 }
 
-@media (prefers-reduced-motion: reduce) { .srt-cta, .srt-cta-arrow, .srt-nav > a, .srt-nav .theme-toggle { transition: none; } .srt-card-body { animation: none; } }
+@media (prefers-reduced-motion: reduce) { .srt-cta::before, .srt-cta-label, .srt-cta-arrow, .srt-nav > a, .srt-nav .theme-toggle { transition: none; } .srt-card-body { animation: none; } }
 
 
 /* ── Under the slab: the tubes run on down the page to each place mail can go (sorter-stations.tsx) ──

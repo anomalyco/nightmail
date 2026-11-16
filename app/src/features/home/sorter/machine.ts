@@ -32,11 +32,20 @@ export function buildMachine(p: Plan) {
   // Relief: a post proud of the front at each corner, a cornice under the roof, a rail over the base.
   if (p.post) { for (const x of [-Xc, Xc - p.post]) b.box(x, 1.5 * V, -2.5 * px, x + p.post, yTop, 0, M.body); b.mark(-Xc, 1.5 * V, -Xc + 1.2 * px, yTop, -2.5 * px - .1, M.trim) }
   b.box(-Xc - px, yTop - 2.2 * px, -3.5 * px, Xc + px, yTop, 0, M.trim)
-  // The button's bay in the base: a frame proud of the wall, dark inside until the page's button paints over it.
-  const c = p.cta, f = 2.5 * px
-  b.mark(c.x, c.y, c.x + c.w, c.y + c.h, -.3, M.slot)
-  b.box(c.x - f, c.y + c.h, -2 * px, c.x + c.w + f, c.y + c.h + f, 0, M.trim); b.box(c.x - f, c.y - f, -2 * px, c.x + c.w + f, c.y, 0, M.trim)
-  b.box(c.x - f, c.y, -2 * px, c.x, c.y + c.h, 0, M.trim); b.box(c.x + c.w, c.y, -2 * px, c.x + c.w + f, c.y + c.h, 0, M.trim)
+  // The button's bay in the base: a faceplate screwed to the wall, on it a frame, dark inside until the page's button
+  // paints over it. Either side of it (over it, on a phone) the two instruments: a window each, in a thin bezel.
+  const c = p.cta, f = 2.5 * px, pl = p.plate
+  b.box(c.x - pl, c.y - pl, -1.2 * px, c.x + c.w + pl, c.y + c.h + pl, 0, M.body)
+  for (const x of [c.x - pl * .5 - f * .5, c.x + c.w + pl * .5 + f * .5]) for (const y of [c.y - pl * .5 - f * .5, c.y + c.h + pl * .5 + f * .5]) b.cyl([x, y, 0], 2, -2.2 * px, -1.2 * px, 1.2 * px, M.steel, 8, 1)
+  for (const w of p.facts) {
+    const e = 1.5 * px
+    b.mark(w.x, w.y, w.x + w.w, w.y + w.h, -.3, M.screen)
+    b.box(w.x - e, w.y + w.h, -1.4 * px, w.x + w.w + e, w.y + w.h + e, 0, M.trim); b.box(w.x - e, w.y - e, -1.4 * px, w.x + w.w + e, w.y, 0, M.trim)
+    b.box(w.x - e, w.y, -1.4 * px, w.x, w.y + w.h, 0, M.trim); b.box(w.x + w.w, w.y, -1.4 * px, w.x + w.w + e, w.y + w.h, 0, M.trim)
+  }
+  b.mark(c.x, c.y, c.x + c.w, c.y + c.h, -1.2 * px - .3, M.slot)
+  b.box(c.x - f, c.y + c.h, -3.2 * px, c.x + c.w + f, c.y + c.h + f, 0, M.trim); b.box(c.x - f, c.y - f, -3.2 * px, c.x + c.w + f, c.y, 0, M.trim)
+  b.box(c.x - f, c.y, -3.2 * px, c.x, c.y + c.h, 0, M.trim); b.box(c.x + c.w, c.y, -3.2 * px, c.x + c.w + f, c.y + c.h, 0, M.trim)
 
   // The sorting frame: every pigeonhole, the empty ones a step off the wall; the thousand full ones are letters.
   b.mark(-Xw, yWall, Xw, yMan, 0, M.wall); b.mark(-Xc, yWall, -Xw, yMan, 0, M.body); b.mark(Xw, yWall, Xc, yMan, 0, M.body)

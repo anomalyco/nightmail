@@ -25,7 +25,9 @@ export function drawStill(canvas: HTMLCanvasElement, p: Plan, over: number, dark
   fill('wall', 1); front(-Xw, yWall, Xw, yMan)
   fill('trim', 1); front(-Xc, yMan, Xc, ySlot)
   fill('dark', 1); front(-Xw, yCav, Xw, yFas)
+  fill('body', 1); front(p.cta.x - p.plate, p.cta.y - p.plate, p.cta.x + p.cta.w + p.plate, p.cta.y + p.cta.h + p.plate)
   fill('slot', 1); front(p.cta.x, p.cta.y, p.cta.x + p.cta.w, p.cta.y + p.cta.h)
+  fill('screen', 1); for (const w of p.facts) front(w.x, w.y, w.x + w.w, w.y + w.h)
   fill('screen', 1); front(p.readout.x, p.readout.y, p.readout.x + p.readout.w, p.readout.y + p.readout.h)
   // The tubes' channels down the front, and the gauge's face.
   fill('dark', 1); for (const x of p.tubes) front(x - p.tubeR - U / 9, p.phone ? 1.5 * V : yWall + 1.7 * V, x + p.tubeR + U / 9, yMan)
