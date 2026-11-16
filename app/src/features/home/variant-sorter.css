@@ -2,10 +2,10 @@
    box its place on the machine's front; --srt-u and --srt-v are one pigeonhole's width and height. The machine itself
    is drawn by sorter/gl.ts in the tones of sorter/tones.ts; --srt-floor is that table's lit floor, so the page and
    the canvas are one surface. Night is the default; day is the same machine in pale enamel. Every tone is flat. */
-.srt-page {
+.srt-page { font-variant-numeric: normal;
   --srt-floor: rgb(234 238 245); --srt-shade: rgb(210 216 226); --srt-text: oklch(0.21 0.02 268); --srt-text-2: oklch(0.42 0.02 268); --srt-text-3: oklch(0.47 0.02 268); --srt-hair: oklch(0.21 0.02 268 / 14%); --srt-hover: oklch(0.21 0.02 268 / 7%);
   --srt-screen-text: oklch(0.93 0.01 92); --srt-screen-dim: oklch(0.72 0.02 262); --srt-plate: oklch(0.42 0.02 268);
-  --srt-cta: oklch(0.25 0.025 268); --srt-cta-hover: oklch(0.32 0.03 268); --srt-cta-top: oklch(0.4 0.03 268); --srt-cta-side: oklch(0.16 0.02 268); --srt-on-cta: oklch(0.985 0.004 92); --srt-cta-edge: oklch(1 0 0 / 16%);
+  --srt-cta: oklch(0.975 0.02 92); --srt-cta-hover: oklch(0.995 0.012 92); --srt-cta-top: oklch(1 0 0); --srt-cta-side: oklch(0.78 0.03 92); --srt-on-cta: oklch(0.2 0.02 268); --srt-cta-edge: oklch(0.2 0.02 268 / 14%);
   --srt-paper: oklch(0.985 0.01 92); --srt-red: oklch(0.6 0.22 27); --srt-card: oklch(0.995 0.004 92); --srt-card-text: oklch(0.21 0.02 268); --srt-card-dim: oklch(0.45 0.02 268); --srt-card-edge: oklch(0.21 0.02 268 / 12%);
   --srt-ease: cubic-bezier(.22, 1, .36, 1); --srt-k: 17.17; --srt-header: 64px;
   display: flex; flex-direction: column; min-height: 100svh; overflow-x: clip; background: var(--srt-floor); color: var(--srt-text); }
@@ -84,19 +84,19 @@
 .srt-fact-value b { font-weight: 500; }
 .srt-fact-value i { margin-left: 6px; color: var(--srt-screen-dim); font-size: 10px; font-style: normal; letter-spacing: .06em; text-transform: uppercase; }
 /* The meter under the response time: a scale of 0 to 200 ms, its pointer on 100. */
-.srt-fact-value > .srt-meter { position: relative; align-self: center; height: 9px; max-width: 150px; background: repeating-linear-gradient(90deg, var(--srt-screen-dim) 0 1px, transparent 1px calc((100% - 1px) / 20)) bottom / 100% 4px no-repeat; }
-.srt-meter::before { content: ''; position: absolute; inset: 2px 0 0; border: solid var(--srt-screen-dim); border-width: 0 1px; }
-.srt-meter::after { content: ''; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; background: var(--srt-screen-text); }
+.srt-fact-value > .srt-scale { position: relative; align-self: center; height: 9px; max-width: 150px; background: repeating-linear-gradient(90deg, var(--srt-screen-dim) 0 1px, transparent 1px calc((100% - 1px) / 20)) bottom / 100% 4px no-repeat; }
+.srt-scale::before { content: ''; position: absolute; inset: 2px 0 0; border: solid var(--srt-screen-dim); border-width: 0 1px; }
+.srt-scale::after { content: ''; position: absolute; top: 0; bottom: 0; left: calc(50% - 1px); width: 2px; background: var(--srt-screen-text); }
 /* A phone: a window each, its legend over it, what is free on one line. */
 .srt-page[data-phone] .srt-fact { display: flex; align-items: center; padding: 0 6px; }
 .srt-page[data-phone] .srt-fact-label { position: absolute; bottom: calc(100% + 6px); left: 0; color: var(--srt-text-2); letter-spacing: .04em; }
 .srt-page[data-phone] .srt-fact-value { display: flex; align-items: center; justify-content: space-between; width: 100%; font-size: clamp(12px, var(--srt-u) * 2.15, 14px); }
 .srt-page[data-phone] .srt-fact-value i { margin-left: 4px; letter-spacing: 0; }
-.srt-page[data-phone] .srt-fact-value > span + span:not(.srt-meter)::before { content: ''; align-self: stretch; width: 1px; margin: -8px 6px -8px 0; background: var(--srt-screen-dim); opacity: .5; }
-.srt-page[data-phone] .srt-meter { display: none; }
+.srt-page[data-phone] .srt-fact-value > span + span:not(.srt-scale)::before { content: ''; align-self: stretch; width: 1px; margin: -8px 6px -8px 0; background: var(--srt-screen-dim); opacity: .5; }
+.srt-page[data-phone] .srt-scale { display: none; }
 /* (A narrow phone: what is free on two lines.) */
 .srt-page[data-phone][data-tight] .srt-fact:last-of-type .srt-fact-value { flex-direction: column; align-items: flex-start; justify-content: center; row-gap: 5px; }
-.srt-page[data-phone][data-tight] .srt-fact-value > span + span:not(.srt-meter)::before { display: none; }
+.srt-page[data-phone][data-tight] .srt-fact-value > span + span:not(.srt-scale)::before { display: none; }
 .srt-page[data-phone][data-tight] .srt-fact-value > span { height: 12px; line-height: 12px; }
 
 /* The button: a lit key in the faceplate's bay, the one lit thing on the base. It stands proud of the bay, so (seen
@@ -170,13 +170,14 @@
 .srt-tube-edge { stroke: var(--srt-glass-3); }
 .srt-ring { fill: var(--srt-steel); }
 .srt-ring-lit { fill: var(--srt-steel-top); }
+.srt-ring-shade { fill: var(--srt-steel-side); }
 .srt-flange { fill: var(--srt-steel-side); }
 .srt-flange-edge { fill: var(--srt-steel); }
 .srt-glass { z-index: 2; }
 .srt-ports { z-index: 4; }
 /* The capsules: between a tube's far wall and its near one, each on a transform animation along its tube. */
 .srt-traffic { position: absolute; z-index: 1; inset: 0; overflow: hidden; pointer-events: none; }
-.srt-cap { position: absolute; top: 0; left: 0; width: max(13px, calc(var(--srt-r) * 3.7)); height: max(4.5px, calc(var(--srt-r) * 1.36)); border-radius: 99px; background: linear-gradient(to right, var(--color-brand) 0 22%, var(--srt-paper) 22% 78%, var(--color-brand) 78% 100%); opacity: 0; will-change: transform; }
+.srt-cap { position: absolute; top: 0; left: 0; width: max(13px, calc(var(--srt-r) * 3.7)); height: max(4.5px, calc(var(--srt-r) * 1.36)); border-radius: 99px; background: linear-gradient(to right, var(--srt-paper) 0 72%, var(--color-brand) 72% 100%); opacity: 0; will-change: transform; }
 /* What an appliance, or the last plate, throws on the wall behind it. */
 .srt-shadow { position: absolute; width: calc(var(--srt-w) + var(--srt-dx)); height: calc(var(--srt-h) + var(--srt-dy)); margin: calc(-1 * var(--srt-dy)) 0 0 calc(-1 * var(--srt-dx)); background: var(--srt-shade); clip-path: polygon(0 0, calc(100% - var(--srt-dx)) 0, 100% var(--srt-dy), 100% 100%, var(--srt-dx) 100%, 0 calc(100% - var(--srt-dy))); translate: -10px 11px; }
 
@@ -219,6 +220,8 @@
 .srt-step { --t: clamp(0, calc((var(--v) - var(--from, 0)) / (var(--to, 1) - var(--from, 0))), 1); }
 .srt-in { opacity: var(--t); translate: 0 calc((1 - var(--t)) * 6px); }
 .srt-type { clip-path: inset(0 calc((1 - var(--t)) * 100%) 0 0); }
+/* (Set in the fixed-width face, it is typed a character at a time; unfolded, a line at a time: nothing is cut through.) */
+.srt-v-endpoint .srt-type { clip-path: inset(0 round(up, calc((1 - var(--t)) * 100%), 1ch) 0 0); }
 .srt-pop { opacity: var(--t); scale: calc(.8 + .2 * var(--t)); }
 .srt-v-head { display: flex; align-items: center; justify-content: space-between; height: 32px; padding-inline: 12px; box-shadow: 0 1px 0 var(--hair); font-size: 12px; white-space: nowrap; }
 .srt-v-head b { overflow: hidden; font-weight: 600; text-overflow: ellipsis; }
@@ -278,15 +281,17 @@
 
 /* Paper: what the teleprinter and the ledger printer feed out. */
 .srt-feed { position: absolute; right: 30px; bottom: calc(100% + var(--srt-dy) * .45); left: calc(30px - var(--srt-dx) * .45); height: 168px; overflow: hidden; border-bottom: 3px solid var(--srt-slot); }
-.srt-paper { position: absolute; right: 6px; bottom: 0; left: 6px; display: grid; align-content: start; row-gap: 7px; height: 100%; padding: 12px 13px 0; background: var(--srt-paper); color: var(--srt-card-text); font-family: var(--font-mono); font-size: 10.5px; line-height: 15px; translate: 0 calc((1 - var(--t)) * 100%); }
+/* Paper is fed a line at a time, as a teleprinter feeds it: every line on one pitch, and no line ever part way out of the slot. */
+.srt-feed { --feed: 168px; --pitch: 16px; }
+.srt-paper { position: absolute; right: 6px; bottom: 0; left: 6px; display: grid; align-content: start; height: 100%; padding: 8px 13px 0; background: var(--srt-paper); color: var(--srt-card-text); font-family: var(--font-mono); font-size: 10.5px; line-height: 16px; translate: 0 round(up, calc((1 - var(--t)) * var(--feed)), var(--pitch)); }
 /* What is printed is printed whole: a long line runs on under its own start. */
 .srt-paper p { padding-left: calc(40px + 1ch); text-indent: calc(-40px - 1ch); }
 .srt-paper i { display: inline-block; width: 40px; color: var(--srt-card-dim); font-style: normal; text-indent: 0; }
-.srt-paper .srt-quote { margin: -2px 0 0 40px; padding: 6px 9px; text-indent: 0; border-left: 2px solid var(--color-brand); font-family: var(--font-body); font-size: 12px; line-height: 16px; white-space: normal; }
-.srt-feed-down { top: 100%; right: 34px; bottom: auto; left: 34px; height: 186px; border-top: 3px solid var(--srt-slot); border-bottom: 0; }
-.srt-feed-down .srt-paper { top: 0; bottom: auto; row-gap: 0; padding: 4px 0 0; translate: 0 calc((var(--t) - 1) * 100%); clip-path: polygon(0 0, 100% 0, 100% 100%, 95% 97%, 90% 100%, 85% 97%, 80% 100%, 75% 97%, 70% 100%, 65% 97%, 60% 100%, 55% 97%, 50% 100%, 45% 97%, 40% 100%, 35% 97%, 30% 100%, 25% 97%, 20% 100%, 15% 97%, 10% 100%, 5% 97%, 0 100%); }
-.srt-paper .srt-log { display: grid; grid-template-columns: 74px minmax(0, 1fr); align-items: center; column-gap: 8px; min-height: 28px; padding: 0 13px; text-indent: 0; box-shadow: 0 1px 0 color-mix(in oklch, var(--srt-card-text) 12%, transparent); font-family: var(--font-body); font-size: 11.5px; }
-.srt-log b { padding-block: 5px; font-weight: 450; line-height: 15px; }
+.srt-paper .srt-quote { margin: 0 0 0 40px; padding: 0 9px; text-indent: 0; border-left: 2px solid var(--color-brand); white-space: normal; }
+.srt-feed-down { --feed: 186px; --pitch: 28px; top: 100%; right: 54px; bottom: auto; left: 24px; height: 186px; border-top: 3px solid var(--srt-slot); border-bottom: 0; }
+.srt-feed-down .srt-paper { top: 0; bottom: auto; padding: 0; translate: 0 round(down, calc((var(--t) - 1) * var(--feed)), var(--pitch)); clip-path: polygon(0 0, 100% 0, 100% 100%, 95% 97%, 90% 100%, 85% 97%, 80% 100%, 75% 97%, 70% 100%, 65% 97%, 60% 100%, 55% 97%, 50% 100%, 45% 97%, 40% 100%, 35% 97%, 30% 100%, 25% 97%, 20% 100%, 15% 97%, 10% 100%, 5% 97%, 0 100%); }
+.srt-paper .srt-log { display: grid; grid-template-columns: 66px minmax(0, 1fr); align-items: center; column-gap: 8px; height: var(--pitch); padding: 0 13px; text-indent: 0; box-shadow: 0 1px 0 color-mix(in oklch, var(--srt-card-text) 12%, transparent); font-family: var(--font-body); font-size: 11px; }
+.srt-log b { font-weight: 450; line-height: 15px; }
 .srt-log span { color: var(--srt-card-dim); font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .04em; text-transform: uppercase; }
 .srt-log span[data-status='Received'] { color: oklch(0.47 0.1 269); }
 /* The teleprinter's keys; the ledger printer's little window. */
@@ -314,7 +319,8 @@
 .srt-v-endpoint p { white-space: nowrap; }
 .srt-v-endpoint p b { color: var(--color-brand); font-weight: 400; }
 .srt-v-endpoint pre { overflow: hidden; padding: 8px 10px; border-radius: 2px; background: var(--hair); font-family: var(--font-mono); font-size: 10.5px; line-height: 15px; white-space: pre; }
-.srt-unfold { clip-path: inset(0 0 calc((1 - var(--t)) * 100%) 0); }
+/* (Its box has 8 px under the last line: hidden with whatever lines are, shown once none is.) */
+.srt-unfold { --hid: round(up, calc((1 - var(--t)) * var(--lines, 6) * 15px), 15px); clip-path: inset(0 0 calc(var(--hid) + min(8px, var(--hid))) 0); }
 .srt-ok { color: var(--dim); }
 .srt-ok b { color: var(--srt-screen-text); }
 
@@ -375,6 +381,7 @@
 .srt-end-plate { display: grid; align-content: center; justify-items: center; row-gap: 18px; padding: 0 24px; }
 .srt-end-price { margin: 0; color: var(--srt-text-2); font-size: 20px; font-weight: 450; line-height: 1.2; letter-spacing: -.016em; text-align: center; text-wrap: balance; }
 .srt-end-price b { color: var(--srt-text); font-weight: 600; }
+.srt-end-price span { white-space: nowrap; }
 .srt-end-bay { display: block; padding: 9px; background: var(--srt-plinth); box-shadow: inset 0 1.5px 0 var(--srt-body-top), inset 1.5px 0 0 var(--srt-body-side); }
 .srt-end-cta { position: relative; display: flex; width: 208px; height: 50px; background: var(--srt-slot); box-shadow: 0 0 0 2.5px var(--srt-trim); font-size: 17px; }
 .srt-screw { position: absolute; width: 5px; height: 5px; border-radius: 50%; background: var(--srt-steel); box-shadow: inset 0 1.5px 0 var(--srt-steel-top); }
@@ -393,7 +400,7 @@
 .srt-stations[data-phone] .srt-end-price { font-size: 17px; }
 .srt-stations[data-phone] .srt-end-plate { row-gap: 14px; padding: 0 16px; }
 .srt-stations[data-phone] .srt-caption h2 { font-size: 24px; }
-.srt-stations[data-phone] .srt-caption p { font-size: 13.5px; line-height: 19px; }
+.srt-stations[data-phone] .srt-caption p { font-size: 13.5px; line-height: 19px; text-wrap: pretty; }
 .srt-stations[data-phone] .srt-screen { inset: 10px 10px 40px; }
 .srt-stations[data-phone] .srt-unit[data-kind='inbox'] .srt-screen { top: 88px; }
 .srt-stations[data-phone] .srt-holes { top: 10px; right: 10px; left: 10px; gap: 5px; }
@@ -414,14 +421,14 @@
 .srt-stations[data-phone] .srt-plate { bottom: 10px; left: 10px; }
 .srt-stations[data-phone] .srt-lamp { right: 12px; bottom: 14px; }
 .srt-stations[data-phone] .srt-keys, .srt-stations[data-phone] .srt-counter { inset: 10px 10px 40px; }
-.srt-stations[data-phone] .srt-feed { right: 18px; left: calc(18px - var(--srt-dx) * .45); height: 236px; }
-.srt-stations[data-phone] .srt-feed-down { right: 20px; left: 20px; height: 264px; }
+.srt-stations[data-phone] .srt-feed { --feed: 232px; right: 18px; left: calc(18px - var(--srt-dx) * .45); height: 232px; }
+.srt-stations[data-phone] .srt-feed-down { --feed: 272px; --pitch: 44px; right: 26px; left: 20px; height: 272px; }
 .srt-stations[data-phone] .srt-paper { padding-inline: 10px; font-size: 9.6px; }
 .srt-stations[data-phone] .srt-feed-down .srt-paper { padding-inline: 0; }
 .srt-stations[data-phone] .srt-paper p { padding-left: calc(34px + 1ch); text-indent: calc(-34px - 1ch); }
 .srt-stations[data-phone] .srt-paper i { width: 34px; }
 .srt-stations[data-phone] .srt-paper .srt-quote { margin-left: 34px; padding-left: 9px; text-indent: 0; }
-.srt-stations[data-phone] .srt-paper .srt-log { grid-template-columns: 62px minmax(0, 1fr); padding: 0 10px; text-indent: 0; }
+.srt-stations[data-phone] .srt-paper .srt-log { grid-template-columns: 58px minmax(0, 1fr); padding: 0 8px; font-size: 11px; text-indent: 0; }
 .srt-stations[data-phone] .srt-unit[data-kind='ritual'] .srt-screen { right: 10px; bottom: 74px; }
 .srt-stations[data-phone] .srt-unit[data-kind='endpoint'] .srt-screen { right: 10px; bottom: 92px; }
 .srt-stations[data-phone] .srt-panel { top: auto; right: 44px; bottom: 44px; left: 10px; grid-auto-flow: column; align-content: center; justify-content: start; column-gap: 14px; width: auto; height: 24px; padding: 0; font-size: 9.5px; }

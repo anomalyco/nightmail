@@ -67,9 +67,10 @@ export function plan(W: number, H: number) {
   // back up the page in one more tube (`out`: where across the page, from its middle), into the slab under the
   // machine, and up a ramp out of the floor (or the roof) into the breech.
   const cs = phone ? .85 * U : 1.3 * U, el = .54, shot = { w: lw * .8, h: lh * .8 }, bore = shot.h / 2 + .2 * cs, cr = bore + .22 * cs, long = (phone ? 2.6 : 2.9) * shot.w, back = .31 * long
-  const cz = phone ? D * .74 : 15 * U, pivot = back * Math.sin(el) + cr * Math.cos(el) + 1.5 * cs
+  // (On a wide page it stands on a chest the mail comes into along the slab; on a phone it is fed up through the roof.)
+  const cz = phone ? D * .74 : 15 * U, chest = phone ? .5 * cs : 2 * tubeR + .6 * cs, pivot = chest + back * Math.sin(el) + cr * Math.cos(el) + cs
   // (On a wide page it stands clear of the riser as it is seen.)
-  const cannon = { x: phone ? .7 * Xw : Xc + .2 * U + riser + 12 + 5.4 * cs - DX * cz, y: phone ? yTop : 0, z: cz, pivot, el, cs, shot, bore, r: cr, back, fore: long - back }
+  const cannon = { x: phone ? .7 * Xw : Xc + .2 * U + riser + 12 + 5.4 * cs - DX * cz, y: phone ? yTop : 0, z: cz, pivot, chest, el, cs, shot, bore, r: cr, back, fore: long - back }
   // (The outbound tube runs up the page behind the appliances that lean right and beside those that lean left;
   // sorter-stations.tsx places them from the same numbers.)
   const inner = 2 * (phone ? Math.min(...tubes.slice(4)) + DX * zt : Xc + clear), room = inner - 2 * (phone ? 20 : 74), widest = Math.min(446, room), lean = phone ? 0 : Math.min(46, Math.max(0, (room - widest) / 2)), boxDx = -DX * (phone ? 40 : 60)
@@ -80,17 +81,17 @@ export function plan(W: number, H: number) {
   const ext = phone ? 300 : 400
   // The button, and beside it (over it, on a phone) the two facts. `tight`: too little room beside the button for the
   // longer fact on one line.
-  const ctaW = Math.max(15.2 * U, 128), ctaH = Math.max(44, 7.4 * V)
-  const cta: Rect = phone ? { x: -Xw + 2 * U, y: 24, w: 2 * Xw - 4 * U, h: 50 } : { x: -ctaW / 2, y: (base - ctaH) / 2, w: ctaW, h: ctaH }
+  const plate = phone ? 6 : Math.max(6, Math.min(9, .9 * U)), ctaW = Math.max(18.5 * U, 150), ctaH = phone ? 50 : Math.min(Math.max(50, 8.6 * V), base - 2 * plate - 1.5 * V - 5)
+  const cta: Rect = phone ? { x: -Xw + 2 * U, y: 24, w: 2 * Xw - 4 * U, h: 50 } : { x: -ctaW / 2, y: 1.5 * V + (base - 1.5 * V - ctaH) / 2, w: ctaW, h: ctaH }
   const tight = phone ? COLS * U < 292 : (2 * Xc - 4.8 * U - ctaW) / 2 < 206
   // The button's faceplate (`plate`: how far it stands round the button), and the two facts as instruments in the
-  // base: a display each, as tall as the faceplate, the one to the left of the button and the other to its right. On
+  // base: a display each, as tall as the button and narrower (the button is the largest thing in its row), the one to the left of the button and the other to its right. On
   // a phone they are two small windows side by side over the button, their legends over them.
-  const plate = phone ? 6 : 1.1 * U, fw = Math.min(-ctaW / 2 - plate - 1.5 * U + Xc - 2.4 * U, 20 * U), narrow = Math.max(70, Math.round(cta.w * .27))
+  const fw = Math.min(-ctaW / 2 - plate - 1.5 * U + Xc - 2.4 * U, Math.max(17 * U, 128)), narrow = Math.max(70, Math.round(cta.w * .27))
   // (On a narrow phone what is free takes two lines, and the windows are taller for it.)
   const winH = tight ? 38 : 28
   const facts: Rect[] = phone ? [{ x: cta.x, y: cta.y + cta.h + plate + 6, w: narrow, h: winH }, { x: cta.x + narrow + 8, y: cta.y + cta.h + plate + 6, w: cta.w - narrow - 8, h: winH }]
-    : [{ x: -Xc + 2.4 * U, y: cta.y - plate, w: fw, h: cta.h + 2 * plate }, { x: Xc - 2.4 * U - fw, y: cta.y - plate, w: fw, h: cta.h + 2 * plate }]
+    : [{ x: -Xc + 2.4 * U, y: cta.y, w: fw, h: cta.h }, { x: Xc - 2.4 * U - fw, y: cta.y, w: fw, h: cta.h }]
   // The tally: a counter in the right header's front, beside the last outlet (Logs): everything sorted is on record.
   const tally = phone ? null : { x: fan[7].x - tubeR - 2 * U - 38, y: (headH - 14) / 2 + 1, w: 38, h: 14, z: zProud }
   const readout: Rect = phone ? { x: -Xw + U, y: yFas + (fascia - Math.min(48, fascia - 8)) / 2, w: Xw * 1.36, h: Math.min(48, fascia - 8) } : { x: -Xw + 2.2 * U, y: yFas + (fascia - 8.4 * V) / 2, w: 27.5 * U, h: 8.4 * V }

@@ -92,7 +92,7 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
   let top = phone ? 96 : 110
   // (On a phone the printed paper is narrower, so longer: nothing printed is cut short.)
   const units = STATIONS.map(spec => {
-    const station = phone ? { ...spec, h: spec.kind === 'inbox' ? 339 : spec.kind === 'thread' ? 288 : spec.h, up: spec.up && spec.kind === 'agent' ? 236 : spec.up, down: spec.kind === 'logs' ? 264 : spec.down } : spec
+    const station = phone ? { ...spec, h: spec.kind === 'inbox' ? 339 : spec.kind === 'thread' ? 288 : spec.h, up: spec.up && spec.kind === 'agent' ? 232 : spec.up, down: spec.kind === 'logs' ? 272 : spec.down } : spec
     const w = Math.min(station.w, room), left = station.tube < 4
     const boxLeft = Math.round(p.ox - widest / 2 + (left ? -lean : lean) + dx / 2), boxTop = top + captionH + dy + 18 + station.up
     const unit = { station, w, left, top, boxLeft, boxTop: boxTop - top, port: boxTop + Math.round(station.h * station.port), end: left ? boxLeft - dx * .5 : boxLeft + w - 4, sends: boxTop + Math.round(station.h * .74) }
@@ -136,6 +136,10 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
   // side; the others it passes behind.
   const main: Pt[] = [[mainX, 0], [mainX, plate.top - dy * .5]], senders = units.filter(u => ['agent', 'campaign', 'thread'].includes(u.station.kind)), mainRings: Ring[] = [sleeve(mainX)]
   for (let y = 300; y < main[1][1] - 120; y += 380) if (units.every(u => !(!u.left || phone) || y < u.top + u.boxTop - dy - 30 || y > u.top + u.boxTop + u.station.h + 40)) mainRings.push({ at: [mainX, y], across: false })
+  for (const unit of units) if (phone || !unit.left) {
+    const over = unit.top + unit.boxTop - dy - 9 - (unit.station.kind === 'campaign' && !phone ? 34 : unit.station.kind === 'thread' ? unit.station.up : unit.station.kind === 'agent' ? unit.station.up : 0), under = unit.top + unit.boxTop + unit.station.h + (unit.station.kind === 'imap' ? 62 : unit.station.kind === 'logs' ? unit.station.down + 10 : 34)
+    for (const y of [over, under]) if (y > 60 && y < main[1][1] - 30 && mainRings.every(ring => Math.abs(ring.at[1] - y) > 22)) mainRings.push({ at: [mainX, y], across: false, tall: 7 })
+  }
   const outWays: Pt[][] = [[[mainX, plate.top - dy * .5 + 14], [mainX, 16]]]
   for (const unit of senders) {
     if (phone || !unit.left) { outWays.push([[mainX, unit.top + unit.boxTop + unit.station.h * .5], [mainX, 16]]); continue }
@@ -190,7 +194,7 @@ export function Stations({ plan: p, onSignIn, onSignInIntent, busy }: { plan: Pl
     {/* The last plate, in the machine's make: the price and the button on it, the outbound main coming out of its top. */}
     <span className="srt-shadow" style={{ left: plateLeft, top: plate.top, '--srt-w': `${plate.w}px`, '--srt-h': `${plate.h}px` } as CSSProperties} aria-hidden="true" />
     <div className="srt-box srt-end-plate" style={{ left: plateLeft, top: plate.top, '--srt-w': `${plate.w}px`, '--srt-h': `${plate.h}px` } as CSSProperties}>
-      <p className="srt-end-price"><b>$0.20</b> per 1,000 emails, sent or received.</p>
+      <p className="srt-end-price"><span><b>$0.20</b> per 1,000 emails,</span> <span>sent or received.</span></p>
       <span className="srt-end-bay">
         <button type="button" className="srt-cta srt-end-cta" disabled={busy} aria-busy={busy || undefined} onClick={onSignIn} onPointerDown={onSignInIntent}>
           <span className="srt-cta-label">Get started{busy ? <LoaderCircle className="ui-spinner" size={16} aria-hidden="true" /> : <ArrowRight className="srt-cta-arrow" size={16} strokeWidth={2} aria-hidden="true" />}</span>
@@ -282,7 +286,20 @@ function Tube({ points, wide, bend, rings, layer }: { points: Pt[]; wide: number
     <path className="srt-tube-edge" d={`M ${beside(s => -s.lit * (half - wide * .055)).join(' L ')}`} strokeWidth={wide * .11} />
     {rings.map(({ at, across, tall }, i) => across
       ? <g key={i}><rect className="srt-ring" x={at[0] - 2.5} y={at[1] - half - 2.5} width={5} height={wide + 5} rx={1} /><rect className="srt-ring-lit" x={at[0] - 2.5} y={at[1] - half - 2.5} width={5} height={2} rx={1} /></g>
+      : tall && tall > 12 ? <Sleeve key={i} x={at[0]} y={at[1]} w={wide + 6} h={tall} />
       : <g key={i}><rect className="srt-ring" x={at[0] - half - 2.5} y={at[1] - (tall ?? 5) / 2} width={wide + 5} height={tall ?? 5} rx={1} /><rect className="srt-ring-lit" x={at[0] - half - 2.5} y={at[1] - (tall ?? 5) / 2} width={wide + 5} height={2} rx={1} /></g>)}
+  </g>
+}
+
+/** A coupling on an upright tube, as the machine would show one: a short steel cylinder seen from a little above (its
+ * top an ellipse, its foot a curve), lit down the side towards the light and in shade down the other. */
+function Sleeve({ x, y, w, h }: { x: number; y: number; w: number; h: number }) {
+  const rx = w / 2, ry = Math.max(1.6, w * .17), top = y - h / 2, foot = y + h / 2
+  return <g>
+    <path className="srt-ring" d={`M ${x - rx} ${top} L ${x - rx} ${foot} A ${rx} ${ry} 0 0 0 ${x + rx} ${foot} L ${x + rx} ${top} Z`} />
+    <path className="srt-ring-shade" d={`M ${x - rx} ${top} L ${x - rx} ${foot} A ${rx} ${ry} 0 0 0 ${x - rx * .5} ${foot + ry * .87} L ${x - rx * .5} ${top} Z`} />
+    <path className="srt-ring-lit" d={`M ${x + rx * .34} ${top} L ${x + rx * .34} ${foot + ry * .94} A ${rx} ${ry} 0 0 0 ${x + rx * .78} ${foot + ry * .63} L ${x + rx * .78} ${top} Z`} />
+    <ellipse className="srt-ring-lit" cx={x} cy={top} rx={rx} ry={ry} />
   </g>
 }
 
