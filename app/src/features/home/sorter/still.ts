@@ -37,37 +37,55 @@ export function drawStill(canvas: HTMLCanvasElement, p: Plan, over: number, dark
     fill(mat, 0); face([[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]])
     fill(mat, 1); face([[x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]])
   }
-  const px = U / 9, r = p.tubeR, zt = p.zt, lower = p.phone ? 0 : 1.7 * V, yLow = lower ? yWall + lower : r + px, zBlock = zt - r - 2 * px, pitch = Math.abs(p.tubes[1] - p.tubes[0])
-  // On the roof: two chimneys, the hopper's back and front plates.
+  const px = U / 9, r = p.tubeR, zt = p.zt, lower = p.phone ? 0 : 1.7 * V, yLow = lower ? yWall + lower : r + px, zBlock = p.zProud, lean = DX * zBlock, zL = p.zL
+  // On the roof: two chimneys, a laser's pedestal and barrel at each end, a slot each side of the hopper, the
+  // hopper's back and front plates.
   for (const [x, z] of [[-Xw * .84, D * .7], [Xw * .88, D * .66]]) { box(x - 4.5 * px, yTop, z, x + 4.5 * px, yTop + 11 * px, z + .1, 'steel'); box(x - 6 * px, yTop + 11 * px, z - 4 * px, x + 6 * px, yTop + 13 * px, z + 4 * px, 'trim') }
+  for (const s of [-1, 1]) {
+    const tx = s * (Xc - (p.phone ? 2.4 : 3.4) * U), up = .5, a = s > 0 ? up : Math.PI - up
+    box(tx - 3.6 * px, yTop, zL, tx + 3.6 * px, yTop + 16 * px, zL + .1, 'steel')
+    c.save(); c.translate(X(tx, zL), Y(yTop + 16 * px, zL)); c.rotate(-a); fill('plinth', 1); c.fillRect(-8 * px, -4.4 * px, 25 * px, 8.8 * px); fill('trim', 1); for (let i = 0; i < 4; i++) c.fillRect((-5 + i * 4.4) * px, -6.2 * px, 1.8 * px, 12.4 * px); c.restore()
+    box(s * Xw * .6 - .62 * p.lw, yTop, zL - 6 * px, s * Xw * .6 + .62 * p.lw, yTop + 5 * px, zL + 6 * px, 'steel')
+  }
   const hh = p.hopper * .82, ht = p.lw * 1.3, hb = p.lw * .62, hd = p.lw * .36
-  fill('steel', 1); face([[-hb, yTop, p.zL + hd], [hb, yTop, p.zL + hd], [ht, yTop + hh, p.zL + hd], [-ht, yTop + hh, p.zL + hd]])
-  fill('steel', 1); face([[-hb, yTop, p.zL - hd], [hb, yTop, p.zL - hd], [hb + (ht - hb) * .62, yTop + hh * .62, p.zL - hd], [-hb - (ht - hb) * .62, yTop + hh * .62, p.zL - hd]])
-  // In the bay: its floor and the roller line. On the fascia: the vent's place is left to the renderer; three lamps.
-  const yR = yCav + p.cavity * .4, rr = p.P / 8 * .4
+  fill('trim', 3); face([[-hb, yTop, zL + hd], [hb, yTop, zL + hd], [ht, yTop + hh, zL + hd], [-ht, yTop + hh, zL + hd]])
+  fill('steel', 1); face([[-hb, yTop, zL - hd], [hb, yTop, zL - hd], [hb + (ht - hb) * .62, yTop + hh * .62, zL - hd], [-hb - (ht - hb) * .62, yTop + hh * .62, zL - hd]])
+  // In the bay: its floor, each lane's chute, the roller line (fifty-six rollers, seen end on and from above).
+  const yR = yCav + p.cavity * .4, rr = p.P / 8 * .4, z0 = zL - 12 * px, z1 = zL + 12 * px
   c.save(); c.beginPath(); c.rect(X(-Xw), Y(yFas), 2 * Xw, yFas - yCav); c.clip()
   fill('bay', 0); face([[-Xw, yCav, 0], [Xw, yCav, 0], [Xw, yCav, p.cavD], [-Xw, yCav, p.cavD]])
   fill('bay', 3); face([[Xw, yCav, 0], [Xw, yCav, p.cavD], [Xw, yFas, p.cavD], [Xw, yFas, 0]])
-  fill('steel', 3); face([[-Xw, yR - rr, p.zL - 12 * px], [Xw, yR - rr, p.zL - 12 * px], [Xw, yR + rr, p.zL - 12 * px], [-Xw, yR + rr, p.zL - 12 * px]])
-  fill('steel', 1); face([[-Xw, yR + rr * .2, p.zL - 12 * px], [Xw, yR + rr * .2, p.zL - 12 * px], [Xw, yR + rr, p.zL + 12 * px], [-Xw, yR + rr, p.zL + 12 * px]])
+  fill('trim', 1); for (const x of p.lanes) for (const s of [-1, 1]) face([[x + s * .48 * p.P, yR - rr - 3 * px, z0], [x + s * .48 * p.P - s * 1.6 * px, yR - rr - 3 * px, z0], [x + s * .4 * p.P - s * 1.6 * px, yCav, z0], [x + s * .4 * p.P, yCav, z0]])
+  for (let j = 0; j < 56; j++) { const x = p.lanes[0] - p.P / 2 + (j + .5) * p.P / 8; fill('steel', 0); face([[x - rr, yR + rr * .3, z0], [x + rr, yR + rr * .3, z0], [x + rr, yR + rr * .3, z1], [x - rr, yR + rr * .3, z1]]); fill('steel', 1); c.beginPath(); c.arc(X(x, z0), Y(yR, z0), rr, 0, Math.PI * 2); c.fill() }
   c.restore()
+  // On the fascia: three lamps, the gauge's ticks, red zone and needle. Under the bay: the lanes' plates.
   fill('lampOff', 1); for (let i = 0; i < 3; i++) { c.beginPath(); c.arc(X(p.gauge.x - p.gauge.r - (2 + 1.7 * i) * U), Y(p.gauge.y), Math.min(4 * px, p.fascia * .1), 0, Math.PI * 2); c.fill() }
+  const gx = X(p.gauge.x), gy = Y(p.gauge.y), gr = p.gauge.r
+  for (let i = 0; i <= 10; i++) { const a = (225 - 27 * i) * Math.PI / 180; c.strokeStyle = tone(i >= 8 ? 'redzone' : 'ink', 1, dark); c.lineWidth = (i % 5 ? .9 : 1.4) * px; c.beginPath(); c.moveTo(gx + Math.cos(a) * gr * (i % 5 ? .78 : .68), gy - Math.sin(a) * gr * (i % 5 ? .78 : .68)); c.lineTo(gx + Math.cos(a) * gr * .9, gy - Math.sin(a) * gr * .9); c.stroke() }
+  c.strokeStyle = tone('redzone', 1, dark); c.lineWidth = gr * .09; c.beginPath(); c.arc(gx, gy, gr * .945, -(225 - 216) * Math.PI / 180, -(225 - 270) * Math.PI / 180); c.stroke()
+  c.strokeStyle = tone('ink', 1, dark); c.lineWidth = 1.6 * px; c.beginPath(); c.moveTo(gx, gy); c.lineTo(gx + Math.cos(135 * Math.PI / 180) * gr * .8, gy - Math.sin(135 * Math.PI / 180) * gr * .8); c.stroke()
+  fill('steel', 1); c.beginPath(); c.arc(gx, gy, 2.2 * px, 0, Math.PI * 2); c.fill()
   fill('plinth', 1); for (const x of p.lanes) front(x - .46 * p.P, ySlot + .14 * p.slot, x + .46 * p.P, ySlot + .86 * p.slot)
-  // The tubes between their manifolds, the blocks they go into, the brackets across them.
-  for (const [y0, y1] of [[yMan, ySlot], ...(lower ? [[yWall - .3 * V, yWall + lower]] : [])]) {
-    box(-Xc - px, y0, -5 * px, Xc + px, y1, 0, 'trim')
-    for (const s of [-1, 1]) { const a = s * (Xw + .12 * U), e = s * (Xc - p.post - .1 * U); if (y0 === yMan) box(Math.min(a, e), y0, zBlock, Math.max(a, e), y1, 0, 'trim') }
-  }
-  for (const x of p.tubes) { c.fillStyle = glass(1, dark); c.fillRect(X(x - r, zt), Y(yMan, zt), 2 * r, yMan - yLow); c.fillStyle = glass(2, dark); c.fillRect(X(x - r, zt), Y(yMan, zt), r * .4, yMan - yLow) }
-  if (lower) {
-    for (const first of [0, 4]) { const a = Math.min(p.tubes[first], p.tubes[first + 3]) - pitch / 2, e = Math.max(p.tubes[first], p.tubes[first + 3]) + pitch / 2; for (let i = 1; i <= 3; i++) { const y = yLow + (yMan - yLow) * i / 4; box(a, y - 1.5 * px, zt - r - 1.2 * px, e, y + 1.5 * px, 0, 'trim') } }
-    for (const s of [-1, 1]) { const a = s * (Xw + .12 * U), e = s * (Xc - p.post - .1 * U); box(Math.min(a, e), yWall - .3 * V, zBlock, Math.max(a, e), yWall + lower, 0, 'trim') }
-  }
-  // On the slab: the headers, and each tube forward from its outlet, over the lip and down.
-  const yc = r + 2 * px
+  // The relief valves on the columns beside the bay.
+  const vs = p.phone ? .58 * U : U, colX = (Xw + 2 * px + Xc - p.post) / 2, valveY = yCav + p.cavity * .62
+  for (const s of [-1, 1]) { fill('steel', 1); front(s * colX - .3 * vs, ySlot, s * colX + .3 * vs, valveY + 1.9 * vs); fill('trim', 1); c.beginPath(); c.arc(X(s * colX), Y(valveY), 1.15 * vs, 0, Math.PI * 2); c.fill(); fill('steel', 1); c.beginPath(); c.arc(X(s * colX, -3 * px), Y(valveY, -3 * px), .8 * vs, 0, Math.PI * 2); c.fill() }
+  // The tubes between their manifolds, the blocks they go into, the brackets across them; on a wide page the lower
+  // block goes on round the corner, and a riser comes down from it to the header on the slab.
+  const ends = (s: number, round: boolean) => [s < 0 ? (round ? -Xc - p.riser - .2 * U : -Xc + p.post + .1 * U) : Xw + .12 * U, s < 0 ? -Xw - .12 * U - lean : round ? Xc + p.riser + .2 * U : Xc - p.post - .1 * U - lean]
+  const yc = r + 3.5 * px
   for (const head of p.heads) box(head.x0, 0, head.z0, head.x1, head.h, head.z1, 'trim')
-  c.fillStyle = glass(1, dark)
-  p.fan.forEach(leg => { face([[leg.x - r, yc, p.heads[0].z0], [leg.x + r, yc, p.heads[0].z0], [leg.x + r, yc, p.zOver], [leg.x - r, yc, p.zOver]]); c.fillRect(X(leg.x - r, p.zOver), Y(yc, p.zOver), 2 * r, p.floor + over) })
+  for (const s of p.heads.length ? [-1, 1] : []) { const x0 = s < 0 ? -Xc - p.riser - .2 * U : Xc + .2 * U; box(x0, p.heads[0].h, zBlock, x0 + p.riser, yWall + lower, zBlock + 3 * U, 'trim') }
+  box(-Xc - px, yMan, -5 * px, Xc + px, ySlot, 0, 'trim')
+  if (lower) box(-Xc - px, yWall - .3 * V, -5 * px, Xc + px, yWall + lower, 0, 'trim')
+  for (const s of [-1, 1]) { const [a, e] = ends(s, false); box(a, yMan, zBlock, e, ySlot, 0, 'trim') }
+  for (const x of p.tubes) { c.fillStyle = glass(1, dark); c.fillRect(X(x - r, zt), Y(yMan, zt), 2 * r, yMan - yLow); c.fillStyle = glass(2, dark); c.fillRect(X(x - r, zt), Y(yMan, zt), r * .5, yMan - yLow) }
+  if (lower) {
+    const reach = r + 1.5 * px, zB = zt - r - 1.2 * px, ahead = DX * (zB - zt)
+    for (const first of [0, 4]) { const a = Math.min(p.tubes[first], p.tubes[first + 3]) - reach - ahead, e = Math.max(p.tubes[first], p.tubes[first + 3]) + reach - ahead; for (let i = 1; i <= 3; i++) { const y = yLow + (yMan - yLow) * i / 4; box(a, y - 1.5 * px, zB, e, y + 1.5 * px, 0, 'trim') } }
+    for (const s of [-1, 1]) { const [a, e] = ends(s, true); box(a, yWall - .3 * V, zBlock, e, yWall + lower, 0, 'trim') }
+  }
+  // On the slab: each tube forward from its outlet in the header, over the lip and down.
+  p.fan.forEach(leg => { fill('steel', 1); c.beginPath(); c.arc(X(leg.x, zBlock), Y(yc, zBlock), r + 2 * px, 0, Math.PI * 2); c.fill(); c.fillStyle = glass(1, dark); face([[leg.x - r, yc, zBlock], [leg.x + r, yc, zBlock], [leg.x + r, yc, p.zOver], [leg.x - r, yc, p.zOver]]); c.fillRect(X(leg.x - r, p.zOver), Y(yc, p.zOver), 2 * r, p.floor + over) })
   const g = U * .085, rows = PRICE.length + p.over + p.under
   for (let r = 0; r < rows; r++) for (let col = 0; col < COLS + 2 * p.side; col++) {
     const lit = PRICE[r - p.over]?.[col - p.side] === '#'

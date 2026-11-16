@@ -94,7 +94,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   }
   /** Nothing under pressure: the valves shut, the hatch down, no leaks. */
   function calm() { hatch = hatchV = 0; popIn = 1; ventIn = [1.2, 2]; ventFor = [0, 0]; smokeLeft = 0; panelOff = false; leaks.length = 0; lever[0] = lever[1] = 0 }
-  function size() { const level = LEVELS[quality]; canvas.dataset.quality = String(quality); renderer!.resize(p.W, p.H + over, Math.min(window.devicePixelRatio || 1, level.dpr), p.ox, oyc, { shadow: level.shadow, smoke: level.smoke }) }
+  function size() { const level = LEVELS[quality]; canvas.dataset.quality = String(quality); renderer!.resize(p.W, p.H + over, Math.min(window.devicePixelRatio || 1, level.dpr), p.ox, oyc, { shadow: level.shadow, smoke: level.smoke }, { y0: -p.lip - 8, y1: p.yTop + 300 * (p.U / 9), z0: p.zLip - 50, z1: p.zBack + 50 }) }
   function theme(next: boolean) {
     dark = next
     renderer!.setPalette(paletteBytes(dark, MATS))
@@ -102,12 +102,12 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     const set = (name: keyof typeof colour, l: number, c: number, h: number) => { colour[name] = oklch(l, c, h).map(v => v / 255) }
     if (dark) { set('steam', .8, .008, 268); set('smoke', .33, .012, 268) } else { set('steam', .995, .003, 262); set('smoke', .7, .008, 262) }
     const rgb01 = (l: number, c: number, h: number) => oklch(l, c, h).map(v => v / 255)
-    renderer!.setSmoke(dark ? { lit0: rgb01(.86, .006, 268), shade0: rgb01(.4, .014, 268), lit1: rgb01(.5, .01, 268), shade1: rgb01(.2, .014, 268), hot: rgb01(.66, .15, 52) } : { lit0: rgb01(1, 0, 0), shade0: rgb01(.8, .012, 262), lit1: rgb01(.68, .008, 262), shade1: rgb01(.36, .014, 262), hot: rgb01(.7, .16, 52) })
+    renderer!.setSmoke(dark ? { lit0: rgb01(.86, .006, 268), shade0: rgb01(.4, .014, 268), lit1: rgb01(.5, .01, 268), shade1: rgb01(.2, .014, 268), hot: rgb01(.66, .15, 52) } : { lit0: rgb01(.97, .004, 262), shade0: rgb01(.76, .014, 262), lit1: rgb01(.74, .008, 262), shade1: rgb01(.5, .014, 262), hot: rgb01(.7, .16, 52) })
     set('ember', .78, .17, 58); set('red', .64, .21, 27); set('paper', .955, .014, 92); set('spark', .93, .09, 85)
   }
   function resetHeights() {
     // The slab, and the cabinet's roof standing on it; everywhere else there is nothing to land on.
-    for (let iz = 0; iz < GD; iz++) for (let ix = 0; ix < GW; ix++) { const x = GX0 + (ix + .5) * CELL, z = GZ0 + (iz + .5) * CELL; heights[iz * GW + ix] = x > -p.Xc && x < p.Xc && z > 0 && z < p.D ? p.yTop : p.heads.some(h => x > h.x0 && x < h.x1 && z > h.z0 && z < h.z1) ? p.heads[0].h : Math.abs(x) < p.slabX && z > p.zLip + 22 * px && z < p.zBack ? 0 : VOID }
+    for (let iz = 0; iz < GD; iz++) for (let ix = 0; ix < GW; ix++) { const x = GX0 + (ix + .5) * CELL, z = GZ0 + (iz + .5) * CELL; heights[iz * GW + ix] = x > -p.Xc && x < p.Xc && z > 0 && z < p.D ? p.yTop : p.heads.length && Math.abs(x) > p.Xc + .2 * p.U && Math.abs(x) < p.Xc + .2 * p.U + p.riser && z > p.zProud && z < p.zProud + 3 * p.U ? p.yWall + 1.7 * p.V : p.heads.some(h => x > h.x0 && x < h.x1 && z > h.z0 && z < h.z1) ? p.heads[0].h : Math.abs(x) < p.slabX && z > p.zLip + 22 * px && z < p.zBack ? 0 : VOID }
   }
   const cell = (x: number, z: number) => { const ix = Math.floor((x - GX0) / CELL), iz = Math.floor((z - GZ0) / CELL); return ix < 0 || iz < 0 || ix >= GW || iz >= GD ? -1 : iz * GW + ix }
 
@@ -297,7 +297,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
       const push = Math.min(pen, 6) * .5; cx += nx * push; cy += ny * push; cz += nz * push
     }
     // Nothing rests on the roof's front edge, where it would hang over the readout and the gauge: it slides off.
-    if (touching && pos[o + 1] > p.yTop - 2 && pos[o + 2] < p.lh * .7 && pos[o + 2] > -2 && Math.abs(pos[o]) < p.Xc) { vel[o + 2] -= 520 * px * dt; touching = 0; pos[o + 1] += cy }
+    if (touching && pos[o + 1] > p.yTop - 2 && pos[o + 2] < Math.hypot(hx, hy) + 2 * px && pos[o + 2] > -2 && Math.abs(pos[o]) < p.Xc) { vel[o + 2] = Math.min(vel[o + 2], -190 * px); touching = 0; pos[o + 1] += cy }
     if (touching) {
       pos[o] += cx / touching; pos[o + 1] += cy / touching; pos[o + 2] += cz / touching
       const slow = Math.hypot(vel[o], vel[o + 1], vel[o + 2]) < 26 * px && Math.hypot(ang[o], ang[o + 1], ang[o + 2]) < 1.1
@@ -336,10 +336,10 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   const room = () => S.live < LEVELS[quality].puffs
   /** Steam let out under pressure: fast and narrow at the nozzle, slowing and swelling into a cloud. */
   function jet(x: number, y: number, z: number, dx: number, dy: number, power: number, n = 1, wide = 1) {
-    if (room()) for (let k = 0; k < n; k++) { const v = rnd(.55, 1) * power * px, a = rnd(-.16, .16), c = Math.cos(a), sn = Math.sin(a); emit(x, y, z, (dx * c - dy * sn) * v, (dx * sn + dy * c) * v, rnd(-12, 12) * px, 0, rnd(2, 3) * wide * px, rnd(22, 34) * wide * px, rnd(.75, 1.25), .5, 0, 3, 30 * px) }
+    if (room()) for (let k = 0; k < n; k++) { const v = rnd(.55, 1) * power * px, a = rnd(-.16, .16), c = Math.cos(a), sn = Math.sin(a); emit(x, y, z, (dx * c - dy * sn) * v, (dx * sn + dy * c) * v, rnd(-12, 12) * px, 0, rnd(3.6, 5) * wide * px, rnd(26, 38) * wide * px, rnd(.7, 1.1), .46, 0, 3.2, 26 * px) }
   }
   /** What rises by itself from something hot: `kind` 0 steam, 1 smoke. */
-  function wisp(x: number, y: number, z: number, kind: number, size = 4, dens = .42) { if (room()) emit(x + rnd(-1, 1) * size * px, y, z, rnd(-8, 8) * px, rnd(22, 46) * px, 0, kind, rnd(.8, 1.2) * size * px, rnd(8, 15) * px, rnd(1.5, 2.6), dens, 0, .8, 18 * px) }
+  function wisp(x: number, y: number, z: number, kind: number, size = 4, dens = .42) { if (room()) emit(x + rnd(-1, 1) * size * px, y, z, rnd(-8, 8) * px, rnd(22, 46) * px, 0, kind, Math.max(5, rnd(.9, 1.3) * size) * px, rnd(12, 20) * px, rnd(1.2, 2), dens, 0, .8, 18 * px) }
   /** Dust knocked up where something heavy lands. */
   function dust(x: number, y: number, z: number) { if (room()) for (let k = 0; k < 2; k++) emit(x, y + 2 * px, z, rnd(-70, 70) * px, rnd(8, 36) * px, rnd(-20, 20) * px, .6, rnd(2.5, 4) * px, rnd(18, 26) * px, rnd(.6, 1), .3, 0, 3.2, 6 * px) }
   function sparks(x: number, y: number, z: number, n: number, power = 240, c = colour.spark) {
@@ -350,8 +350,8 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   function fire(i: number) {
     if (L.state[i] === FREE || burning[i]) return
     const o = i * 3, k = L.pos[o] + DX * L.pos[o + 2] >= 0 ? 1 : 0
-    beams.push({ id: i, k, until: time + .28 })
-    sparks(L.pos[o], L.pos[o + 1], L.pos[o + 2], 18, 260, colour.ember)
+    beams.push({ id: i, k, until: time + .3 })
+    sparks(L.pos[o], L.pos[o + 1], L.pos[o + 2], 7, 200, colour.ember)
     burning[i] = 1; wake(i)
     if (L.state[i] === SCRIPT) loose(i, 0, 0, 0, 1)
     L.vel[o] *= .25; L.vel[o + 1] = L.vel[o + 1] * .2 + 70 * px; L.vel[o + 2] *= .25
@@ -363,9 +363,9 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     const bx = from[0] + Math.cos(angle) * tip, by = from[1] + Math.sin(angle) * tip, length = Math.hypot(sx, sy) - tip, thin = Math.min(1, (b.until - time) / .09)
     // Drawn in the laser's own plane of depth, towards the page: a beam is never behind what it crosses.
     const mx = (bx + tx + DX * (tz - from[2])) / 2, my = (by + ty + DY * (tz - from[2])) / 2
-    add({ x: mx, y: my, z: from[2], max: .02, size: length / 2, len: 2 * px * thin, rot: angle, ...rgb(colour.red), shape: 4 })
-    add({ x: mx, y: my, z: from[2] - 1, max: .02, size: length / 2, len: .75 * px * thin, rot: angle, ...rgb(colour.spark), shape: 4 })
-    if (Math.random() < .5) sparks(tx, ty, tz, 1, 200, colour.ember)
+    add({ x: mx, y: my, z: from[2], max: .02, size: length / 2, len: 2.3 * thin, rot: angle, ...rgb(colour.red), shape: 4 })
+    add({ x: mx, y: my, z: from[2] - 1, max: .02, size: length / 2, len: 1.05 * thin, rot: angle, ...rgb(colour.spark), shape: 4 })
+    if (Math.random() < .3) sparks(tx, ty, tz, 1, 160, colour.ember)
   }
   function launch(tube: number) {
     const cap = caps.find(c => !c.on)
@@ -374,7 +374,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
 
   // ── The burst ──
   function boom() {
-    setPhase('boom'); flash = 1; needleV = -9; bend = 1; boomAt = time; smokeLeft = 7; leaks.length = 0; ventFor[0] = ventFor[1] = 0
+    setPhase('boom'); flash = 1; needleV = -9; bend = 1; boomAt = time; smokeLeft = 5.6; leaks.length = 0; ventFor[0] = ventFor[1] = 0
     const cx = 0, cy = (p.yCav + p.yFas) / 2
     // Light, as an effect and only here: a hot core for two frames. The page behind is never lightened.
     add({ x: cx, y: cy, z: -10, max: .075, size: 88 * px, ...rgb(colour.spark), a: 1, shape: 2, glow: true })
@@ -430,7 +430,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     for (let i = 0; i < billows; i++) {
       const roof = i % 3 === 0, a = rnd(0, Math.PI * 2), far = Math.sqrt(Math.random()), out = rnd(110, 430) * px
       emit(roof ? rnd(-1, 1) * p.lw : Math.cos(a) * p.Xw * .8 * far, roof ? p.yTop + rnd(0, 12) * px : cy + Math.sin(a) * p.cavity * .4 * far, roof ? p.zL : -10 * px,
-        Math.cos(a) * out * (roof ? .45 : 1), Math.abs(Math.sin(a)) * out * .45 + rnd(60, 230) * px, -rnd(0, 60) * px, i % 3 === 1 ? .3 : 1, rnd(9, 17) * px, rnd(22, 40) * px, rnd(2.2, 4.4), rnd(.72, .92), 1, 2.6, 24 * px)
+        Math.cos(a) * out * (roof ? .45 : 1), Math.abs(Math.sin(a)) * out * .45 + rnd(60, 230) * px, -rnd(0, 60) * px, i % 3 === 1 ? .3 : 1, rnd(9, 17) * px, rnd(22, 40) * px, rnd(2.4, 4.6), rnd(.72, .92), 1, 2.6, (roof ? 150 : 70) * px)
     }
   }
   const rgb = (c: number[]) => ({ r: c[0], g: c[1], b: c[2] })
@@ -497,14 +497,14 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   function smoulder(dt: number) {
     if (smokeLeft <= 0) return
     smokeLeft -= dt
-    const u = clamp(smokeLeft / 7)
+    const u = clamp(smokeLeft / 5.6)
     jetIn[2] -= dt * (3 + 24 * u * u) * Math.sqrt(LEVELS[quality].puffs / 240)
     while (jetIn[2] < 0) {
       jetIn[2] += 1
       const r = Math.random()
       if (!room()) continue
       if (r < .5) emit(rnd(-1, 1) * p.Xw * .85, p.yFas - rnd(2, 12) * px, -6 * px, rnd(-12, 12) * px, rnd(30, 60) * px, 0, 1, rnd(7, 11) * px, rnd(12, 20) * px, rnd(2.4, 3.8), .34 + .3 * u, u * .25, .9, 34 * px)
-      else if (r < .86) emit(rnd(-1, 1) * p.lw * .5, p.yTop + 2 * px, p.zL, rnd(-10, 10) * px, rnd(40, 80) * px, 0, 1, rnd(7, 12) * px, rnd(14, 22) * px, rnd(2.6, 4.2), .36 + .3 * u, u * .25, .9, 40 * px)
+      else if (r < .86) emit(rnd(-1, 1) * p.lw * .5, p.yTop + 2 * px, p.zL, rnd(-10, 10) * px, rnd(60, 120) * px, 0, 1, rnd(7, 12) * px, rnd(16, 24) * px, rnd(2.8, 4.4), .4 + .32 * u, u * .25, .9, 66 * px)
       else wisp(p.tubes[5], p.yMan - 4 * px, p.zt, 0, 3, .3)
     }
   }
@@ -553,10 +553,10 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     // Scams in the air meet the laser; what burns, burns away.
     for (let k = beams.length - 1; k >= 0; k--) { if (time >= beams[k].until || L.state[beams[k].id] === FREE) beams.splice(k, 1); else beam(beams[k]) }
     for (let i = 0; i < MAX; i++) if (burning[i] && L.state[i] !== FREE) {
-      burn[i] += dt * 1.9
-      if (Math.random() < dt * 30) add({ x: L.pos[i * 3] + rnd(-1, 1) * p.lw * .4, y: L.pos[i * 3 + 1], z: L.pos[i * 3 + 2] - 1, vx: rnd(-30, 30) * px, vy: rnd(20, 110) * px, max: rnd(.3, .8), size: rnd(.8, 1.6) * px, len: rnd(.8, 1.6) * px, ...rgb(colour.ember), shape: 1, gravity: -.12, drag: 1 })
-      if (burn[i] > .3 && Math.random() < dt * 16) wisp(L.pos[i * 3], L.pos[i * 3 + 1], L.pos[i * 3 + 2], 1, 3, .4)
-      if (burn[i] >= 1.1) { L.state[i] = FREE; burning[i] = 0; scripts.delete(i); burnt++; hooks.count(sorted, burnt); if (pointer.hover === i) setHover(-1) }
+      burn[i] += dt * 1.3
+      if (Math.random() < dt * 12) add({ x: L.pos[i * 3] + rnd(-1, 1) * p.lw * .4, y: L.pos[i * 3 + 1], z: L.pos[i * 3 + 2] - 1, vx: rnd(-30, 30) * px, vy: rnd(20, 110) * px, max: rnd(.3, .8), size: rnd(.8, 1.6) * px, len: rnd(.8, 1.6) * px, ...rgb(colour.ember), shape: 1, gravity: -.12, drag: 1 })
+      if (burn[i] > .25 && Math.random() < dt * 5) wisp(L.pos[i * 3], L.pos[i * 3 + 1] + p.lh * .3, L.pos[i * 3 + 2], 1, 9, .26)
+      if (burn[i] >= 1.1) { for (let k = 0; k < 2; k++) wisp(L.pos[i * 3], L.pos[i * 3 + 1], L.pos[i * 3 + 2], 1, 11, .3); L.state[i] = FREE; burning[i] = 0; scripts.delete(i); burnt++; hooks.count(sorted, burnt); if (pointer.hover === i) setHover(-1) }
     }
     // Letters going home: up in an arc to the hopper, small as they go in.
     if (phase === 'rebuild') {
@@ -588,7 +588,7 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     if ((phase === 'boom' && clock > 1.2) || (phase === 'rest' && time - boomAt < 5.2)) {
       const late = time - boomAt > 4.4
       let moving = 0
-      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (late) { const c = cell(L.pos[i * 3], L.pos[i * 3 + 2]); if (c < 0 || heights[c] === VOID || L.pos[i * 3 + 1] > heights[c] + 30 * px) L.state[i] = FREE; else sleep(L, i) } }
+      for (let i = 0; i < MAX; i++) if (L.state[i] === DYN) { moving++; if (late) { const c = cell(L.pos[i * 3], L.pos[i * 3 + 2]), edge = L.pos[i * 3 + 1] > p.yTop - 2 && L.pos[i * 3 + 2] < p.lw * .7 && L.pos[i * 3 + 2] > -2 && Math.abs(L.pos[i * 3]) < p.Xc; if (c < 0 || heights[c] === VOID || edge || L.pos[i * 3 + 1] > heights[c] + 30 * px) L.state[i] = FREE; else sleep(L, i) } }
       for (let i = 0; i < Dn.cap; i++) if (Dn.state[i] === DYN && late) sleep(Dn, i)
       if (phase === 'boom' && moving <= 4) setPhase('rest')
     }

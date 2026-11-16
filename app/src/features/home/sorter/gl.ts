@@ -75,7 +75,7 @@ float noise(vec2 p) { vec2 i = floor(p), f = fract(p); f = f * f * (3. - 2. * f)
 float seg(vec2 p, vec2 a, vec2 b) { vec2 d = b - a; return length(p - a - d * clamp(dot(p - a, d) / dot(d, d), 0., 1.)); }
 void main() {
   float burn = vA.y, r = 0.;
-  if (burn > 0.) { r = length(vUV - .5) * 1.1 + noise(vUV * 7. + vA.x * 50.) * .45; if (r < burn * 1.7 - .1) discard; }
+  if (burn > 0.) { r = length(vUV - .5) * 1.1 + noise(vUV * 7. + vA.x * 50.) * .45; if (r < burn * 1.3 - .14) discard; }
   if (uDepthOnly > .5) { o = vec4(0.); return; }
   vec3 n = normalize(vNrm); float nl = dot(n, uL);
   float lit = nl > 0. ? shadowAt(vWorld, n) : 0.;
@@ -111,9 +111,9 @@ void main() {
     if (vA.w > 0.) c = mix(c, pal(uStamp, 0).rgb, (1. - smoothstep(px * 1.5, px * 2.5, e)) * vA.w);
   } else c = mix(c, pal(uInk, 1).rgb, .25);
   if (burn > 0.) {
-    float b = burn * 1.7 - .1;
-    c = mix(c, pal(uChar, 1).rgb, 1. - smoothstep(b + .06, b + .2, r));
-    c = mix(c, pal(uEmber, 1).rgb, 1. - smoothstep(b + .02, b + .07, r));
+    float b = burn * 1.3 - .14;
+    c = mix(c, pal(uChar, 1).rgb, (1. - smoothstep(b + .1, b + .55, r)) * .92);
+    c = mix(c, pal(uEmber, 1).rgb, 1. - smoothstep(b + .02, b + .08, r));
     c = mix(c, vec3(1., .96, .8), 1. - smoothstep(b, b + .025, r));
   }
   o = vec4(c, 1.);
@@ -291,17 +291,18 @@ export function createRenderer(canvas: HTMLCanvasElement) {
   return {
     gl,
     /** `quality`: the shadow map's size and how much smaller than the page the smoke's buffer is. */
-    resize(width: number, height: number, ratio: number, ox: number, oy: number, quality: { shadow: number; smoke: number }) {
+    /** `box`: how high and how deep the world is that throws and takes shadows. */
+    resize(width: number, height: number, ratio: number, ox: number, oy: number, quality: { shadow: number; smoke: number }, box: { y0: number; y1: number; z0: number; z1: number }) {
       W = width; H = height; dpr = ratio; shadowWanted = quality.shadow
       sizeHaze(Math.max(64, Math.round(W * dpr * quality.smoke)), Math.max(64, Math.round(H * dpr * quality.smoke)))
       canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr)
       proj.set([2 / W, 0, 0, 0, 0, 2 / H, 0, 0, 2 * DX / W, 2 * DY / H, 1 / 3000, 0, 2 * ox / W - 1, 1 - 2 * oy / H, -1 / 3, 1])
-      // The light's own view of everything the page can show, for the shadow map: a box round the floor in view and
-      // the air over it, looked at along the light.
-      const zf = -(H - oy) / DY - 200, zb = oy / DY + 200, x0 = -ox - 300, x1 = W - ox + 300, top = 1500
+      // The light's own view of what the page shows, for the shadow map: a box round the slab in view, the machine
+      // and a little air over it, looked at along the light. No wider than that: every texel is wanted.
+      const zf = box.z0, zb = box.z1, x0 = -ox - 30, x1 = W - ox + 30, top = box.y1, bottom = box.y0
       const f = [-LIGHT[0], -LIGHT[1], -LIGHT[2]], r = norm([f[2], 0, -f[0]]), u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]]
       const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity]
-      for (const x of [x0, x1]) for (const y of [0, top]) for (const z of [zf, zb]) [r, u, f].forEach((axis, i) => { const d = axis[0] * x + axis[1] * y + axis[2] * z; lo[i] = Math.min(lo[i], d); hi[i] = Math.max(hi[i], d) })
+      for (const x of [x0, x1]) for (const y of [bottom, top]) for (const z of [zf, zb]) [r, u, f].forEach((axis, i) => { const d = axis[0] * x + axis[1] * y + axis[2] * z; lo[i] = Math.min(lo[i], d); hi[i] = Math.max(hi[i], d) })
       const sx = 2 / (hi[0] - lo[0]), sy = 2 / (hi[1] - lo[1]), sz = 2 / (hi[2] - lo[2])
       light.set([r[0] * sx, u[0] * sy, f[0] * sz, 0, r[1] * sx, u[1] * sy, f[1] * sz, 0, r[2] * sx, u[2] * sy, f[2] * sz, 0, -(hi[0] + lo[0]) / (hi[0] - lo[0]), -(hi[1] + lo[1]) / (hi[1] - lo[1]), -(hi[2] + lo[2]) / (hi[2] - lo[2]), 1])
       const wanted = shadowWanted

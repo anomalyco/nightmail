@@ -39,21 +39,25 @@ export function plan(W: number, H: number) {
   const P = 2 * Xw / 7, lanes = Array.from({ length: 7 }, (_, i) => (i - 3) * P), lw = P * .7, lh = lw * .7
   const cavD = (phone ? 5.2 : 6.6) * U, zL = cavD / 2
   // Eight tubes, four each side of the price, the nearest the price first: inbox, agent inbox, endpoint, thread;
-  // mailbox, ritual, campaign, logs. They run down the front between two manifolds. On a wide page they then come out
-  // of a header at the foot of each side of the cabinet (`heads`: a trunk on the slab, an outlet for each tube in its
-  // front), run straight forward across the slab side by side (`fan`: where each lies, and where on the page it goes
-  // over the lip) and go over the lip; on a phone they keep to the front, down to the floor and straight over the lip.
+  // mailbox, ritual, campaign, logs. They run down the front between two manifolds, into a block at each end of the
+  // lower one. On a wide page that block goes on round the cabinet's corner, a riser comes down from it to a header on
+  // the slab beside the cabinet (`heads`: a trunk with an outlet for each tube in its front), and the tubes run
+  // straight forward from the header side by side (`fan`: where each lies, and where on the page it goes over the
+  // lip) and over the lip; on a phone they keep to the front, down to the floor and straight over the lip.
+  // What stands out in front of the wall is seen a little to the right of where it is (depth leans): a tube's place
+  // here is where it is seen.
   // (Each four stands centred in its strip, between the frame and the cabinet's corner post; a phone's cabinet has no posts.)
   const post = phone ? 0 : U, tubeR = (phone ? .42 : .85) * U, pitch = (phone ? 1.06 : 2.14) * U, first = (strip * U - post - 3 * pitch) / 2
-  const tubes = [0, 1, 2, 3].map(k => -(Xw + first + k * pitch)).concat([0, 1, 2, 3].map(k => Xw + first + k * pitch))
   const front = frontU * U, lip = lipU * U, floor = front + lip + below, ox = Math.round(W / 2), oy = Math.round(H - floor)
-  const zLip = -front / DY, zOver = zLip - tubeR - 3 * U / 9, zBack = D * (phone ? 1.4 : 1.5), zt = -(tubeR + 1.5 * U / 9)
+  const zLip = -front / DY, zOver = zLip - tubeR - 3 * U / 9, zBack = D * (phone ? 1.4 : 1.5), zt = -(tubeR + 1.5 * U / 9), zProud = zt - tubeR - 2 * U / 9
+  const tubes = [0, 1, 2, 3].map(k => -(Xw + first + k * pitch)).concat([0, 1, 2, 3].map(k => Xw + first + k * pitch)).map(x => x - DX * zt)
   const spread = Math.max(24, Math.min(13.5 * U, (W / 2 - Xc - 26) / 4.05))
   // A tube that runs straight forward leans across the page as depth does: the right-hand four must still come out
-  // clear of the cabinet's corner, so the nearest stands at least that far out (and its twin on the left the same).
-  const headZ = D * .5, headD = 4.4 * U, headH = 2 * tubeR + 1.6 * U, clear = Math.max(.6 * spread, -DX * (headZ - zOver) + tubeR + .8 * U)
+  // clear of the riser at the cabinet's corner, so the nearest stands at least that far out (and its twin on the left
+  // the same). The header's front, the riser's and the blocks' are one plane.
+  const riser = 2.4 * U, headD = 4.4 * U, headH = 2 * tubeR + 1.6 * U, clear = Math.max(.6 * spread, DX * zOver + riser + tubeR + 1.2 * U)
   const fan = phone ? [] : [0, 1, 2, 3, 4, 5, 6, 7].map(t => { const at = (t < 4 ? -1 : 1) * (Xc + clear + (t % 4) * spread); return { at, x: at - DX * zOver } })
-  const heads = phone ? [] : [{ x0: fan[3].x - 2.2 * U, x1: -Xc }, { x0: Xc, x1: fan[7].x + 2.2 * U }].map(head => ({ ...head, z0: headZ, z1: headZ + headD, h: headH }))
+  const heads = phone ? [] : [{ x0: fan[3].x - 2.2 * U, x1: -Xc }, { x0: Xc, x1: fan[7].x + 2.2 * U }].map(head => ({ ...head, z0: zProud, z1: zProud + headD, h: headH }))
   /** Where each tube goes over the lip, across the page from its left edge. */
   const drops = tubes.map((x, t) => ox + (phone ? x + DX * zt : fan[t].at))
   const slabX = phone ? W : Xc + clear + 4.3 * spread
@@ -64,7 +68,7 @@ export function plan(W: number, H: number) {
   const tight = phone ? COLS * U < 292 : (2 * Xc - 4.8 * U - ctaW) / 2 < 206
   const readout: Rect = phone ? { x: -Xw + U, y: yFas + (fascia - Math.min(48, fascia - 8)) / 2, w: Xw * 1.36, h: Math.min(48, fascia - 8) } : { x: -Xw + 2.2 * U, y: yFas + (fascia - 8.4 * V) / 2, w: 27.5 * U, h: 8.4 * V }
   const gauge = { x: Xw - (phone ? 4.4 : 4.2) * U, y: yFas + fascia / 2, r: Math.min(fascia * .36, phone ? 16 : 24) }
-  return { phone, tight, W, H, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, readout, gauge }
+  return { phone, tight, W, H, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, zProud, riser, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, readout, gauge }
 }
 
 /** A box on the machine's front, as the page places it: left and top in the scene, width and height. */
