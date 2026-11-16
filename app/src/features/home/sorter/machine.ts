@@ -104,7 +104,7 @@ export function buildMachine(p: Plan) {
   const screwX = Xc - (p.post ? p.post / 2 : .65 * U)
   for (const y of [yFas + V, yTop - 1.4 * V, ...(p.post ? [yMan - 2 * V, yWall + 3 * V, yBand + p.band / 2, 3 * V] : [])]) for (const x of [-screwX, screwX]) b.cyl([x, y, 0], 2, -3.7 * px, -2.5 * px, 1.3 * px, M.steel, 8, 1)
 
-  // The roof: a kerb round it, seams, the laser's pedestal, the slot scams leave by, a beacon, a cable to the hatch.
+  // The roof: a kerb round it, seams, a laser's pedestal at each end, a slot scams leave by each side of the hopper, a beacon.
   b.box(-Xc, yTop, 0, Xc, yTop + 2 * px, 2.5 * px, M.trim); b.box(-Xc, yTop, D - 2.5 * px, Xc, yTop + 2 * px, D, M.trim)
   b.box(-Xc, yTop, 2.5 * px, -Xc + 2.5 * px, yTop + 2 * px, D - 2.5 * px, M.trim); b.box(Xc - 2.5 * px, yTop, 2.5 * px, Xc, yTop + 2 * px, D - 2.5 * px, M.trim)
   for (const x of [-Xw, Xw]) b.quad([x - .5 * px, yTop + .1, 2.5 * px], [x + .5 * px, yTop + .1, 2.5 * px], [x + .5 * px, yTop + .1, D - 2.5 * px], [x - .5 * px, yTop + .1, D - 2.5 * px], M.line, [0, 1, 0])
@@ -313,15 +313,17 @@ export function buildMachine(p: Plan) {
   // The tubes themselves. Each is one or two runs: down the front between the manifolds, and (on a wide page) from
   // its outlet in the header forward across the slab, over the lip and down. One of the front runs is its own part:
   // the burst bends it out of its socket.
-  const lines: V3[][][] = [], drop = -(p.floor + 80)
+  const lines: V3[][][] = [], drop = -(p.floor + 40)
   idx.tubes = b.part('tubes', [0, 0, 0], true)
   p.tubes.forEach((x, t) => {
     if (p.fan.length) {
       const leg = p.fan[t]
-      const frontRun = t === bentTube ? [[x, yMan, zt], [x, yLow, zt]] as V3[] : b.tube([[x, yMan, zt], [x, yLow, zt]], r, M.tube, 12)
-      if (t === bentTube) b.tube([[x, bentY, zt], [x, yLow, zt]], r, M.tube, 12)
-      lines.push([frontRun, b.tube([[leg.x, yc, p.heads[0].z0 - 4 * px], [leg.x, yc, p.zOver], [leg.x, drop, p.zOver]], r, M.tube, 12, r * 3)])
-    } else lines.push([b.tube([[x, yMan, zt], [x, yc, zt], [x + DX * (zt - p.zOver), yc, p.zOver], [x + DX * (zt - p.zOver), drop, p.zOver]], r, M.tube, 10, r * 3)])
+      // (A capsule's way begins a capsule's length inside the block or the header it comes out of, and ends as far
+      // inside the block it goes into.)
+      if (t !== bentTube) b.tube([[x, yMan, zt], [x, yLow, zt]], r, M.tube, 12)
+      else b.tube([[x, bentY, zt], [x, yLow, zt]], r, M.tube, 12)
+      lines.push([[[x, yMan + 2 * r, zt], [x, yLow - 2 * r, zt]], [[leg.x, yc, p.heads[0].z0 + 2 * r + 2], ...b.tube([[leg.x, yc, p.heads[0].z0 - 4 * px], [leg.x, yc, p.zOver], [leg.x, drop, p.zOver]], r, M.tube, 12, r * 3)]])
+    } else lines.push([[[x, yMan + 2 * r, zt], ...b.tube([[x, yMan, zt], [x, yc, zt], [x + DX * (zt - p.zOver), yc, p.zOver], [x + DX * (zt - p.zOver), drop, p.zOver]], r, M.tube, 10, r * 3)]])
   })
   idx.bent = b.part('bent', [p.tubes[bentTube], p.fan.length ? bentY : yWall, zt], true)
   if (p.fan.length) b.tube([[p.tubes[bentTube], yMan - 3 * px, zt], [p.tubes[bentTube], bentY, zt]], r, M.tube, 12)

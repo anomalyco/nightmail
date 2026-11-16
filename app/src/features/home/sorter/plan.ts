@@ -12,7 +12,7 @@ export type Rect = { x: number; y: number; w: number; h: number }
 export type Plan = ReturnType<typeof plan>
 
 export function plan(W: number, H: number) {
-  // Below 900 px there is no room beside the machine for the tubes to fan out: the page is composed as a phone's is.
+  // Below 900 px there is no room beside the machine for the headers and their tubes: the page is composed as a phone's is.
   const phone = W < 900
   // In cells: the unlit columns and rows round the price, the strip the tubes run down, and each floor of the machine.
   const side = phone ? 1 : 2, over = 2, under = phone ? 1 : 2, strip = phone ? 4.6 : 9.8
@@ -61,6 +61,9 @@ export function plan(W: number, H: number) {
   /** Where each tube goes over the lip, across the page from its left edge. */
   const drops = tubes.map((x, t) => ox + (phone ? x + DX * zt : fan[t].at))
   const slabX = phone ? W : Xc + clear + 4.3 * spread
+  // The renderer's canvas runs on this far below the hero, under the top of the next section: what the burst throws
+  // past the slab falls on down the page and dwindles there, and is never cut off at the hero's edge.
+  const ext = phone ? 300 : 400
   // The button, and beside it (over it, on a phone) the two facts. `tight`: too little room beside the button for the
   // longer fact on one line.
   const ctaW = Math.max(15.2 * U, 128), ctaH = Math.max(44, 7.4 * V)
@@ -68,7 +71,7 @@ export function plan(W: number, H: number) {
   const tight = phone ? COLS * U < 292 : (2 * Xc - 4.8 * U - ctaW) / 2 < 206
   const readout: Rect = phone ? { x: -Xw + U, y: yFas + (fascia - Math.min(48, fascia - 8)) / 2, w: Xw * 1.36, h: Math.min(48, fascia - 8) } : { x: -Xw + 2.2 * U, y: yFas + (fascia - 8.4 * V) / 2, w: 27.5 * U, h: 8.4 * V }
   const gauge = { x: Xw - (phone ? 4.4 : 4.2) * U, y: yFas + fascia / 2, r: Math.min(fascia * .36, phone ? 16 : 24) }
-  return { phone, tight, W, H, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, zProud, riser, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, readout, gauge }
+  return { phone, tight, W, H, ext, ox, oy, U, V, side, over, under, Xw, Xc, D, base, band, wall, manifold, slot, cavity, fascia, yBand, yWall, yMan, ySlot, yCav, yFas, yTop, P, lanes, lw, lh, cavD, zL, tubeR, tubes, post, zt, zProud, riser, fan, heads, drops, front, lip, floor, zLip, zOver, zBack, slabX, hopper: hopperU * U, cta, readout, gauge }
 }
 
 /** A box on the machine's front, as the page places it: left and top in the scene, width and height. */

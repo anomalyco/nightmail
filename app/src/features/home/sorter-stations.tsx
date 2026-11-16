@@ -7,7 +7,7 @@ import { reducedMotion, type HomeProps } from '.'
 import { DX, DY, type Plan } from './sorter/plan'
 
 // Under the slab the machine stands on, its eight tubes run on down the page and one by one bend in to an appliance:
-// the places mail can go. Scrolling carries a capsule down each tube, round the bend and into the appliance's tray,
+// the places mail can go. Scrolling carries a capsule down each tube, round the bend and into the appliance,
 // and then the letter in it arrives the way it does in the product: a pigeonhole fills and a row appears in the
 // Inbox, a mail app on a monitor gets the message, a teleprinter prints an agent's turn, a ritual's lamps come on line
 // by line, a switchboard posts a webhook, a press runs a campaign off, a thread grows, a ledger tape prints the logs.

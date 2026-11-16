@@ -57,7 +57,8 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
       if (letter !== shown.current) { shown.current = letter; setCard(letter) }
       // The card stays on the page: clear of both edges, and of the top.
       const width = scene.current?.clientWidth ?? 0, half = (width < 900 ? 232 : 264) / 2 + 8
-      if (letter && cardBox.current) cardBox.current.style.translate = `${Math.round(Math.min(width - half, Math.max(half, x)))}px ${Math.round(Math.max(72, y))}px`
+      // (And under the letter where there is no room over it.)
+      if (letter && cardBox.current) { cardBox.current.style.translate = `${Math.round(Math.min(width - half, Math.max(half, x)))}px ${Math.round(Math.max(24, y))}px`; cardBox.current.toggleAttribute('data-under', y < 176) }
     },
   }))
 
@@ -110,7 +111,7 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
 
   const at = (r: Rect): CSSProperties => p ? onFront(p, r) : { display: 'none' }
   const price = p ? { x: -COLS / 2 * p.U, w: COLS * p.U } : { x: 0, w: 0 }
-  return <div className="srt-page" data-phase={phase} data-live={live || undefined} data-phone={p?.phone || undefined} style={{ ...toneVars(dark), ...p && { '--srt-u': `${p.U}px`, '--srt-v': `${p.V}px`, '--srt-price': `${price.w}px`, '--srt-below': `${p.floor - p.front - p.lip}px` } } as CSSProperties}>
+  return <div className="srt-page" data-phase={phase} data-live={live || undefined} data-phone={p?.phone || undefined} style={{ ...toneVars(dark), ...p && { '--srt-u': `${p.U}px`, '--srt-v': `${p.V}px`, '--srt-price': `${price.w}px`, '--srt-below': `${p.floor - p.front - p.lip}px`, '--srt-ext': `${p.ext}px` } } as CSSProperties}>
     <header className="srt-header">
       <a className="wordmark" href="/" aria-label={`${productName.toLowerCase()} home`}><BaneWordmark /></a>
       <nav className="srt-nav" aria-label="Site">
@@ -151,7 +152,7 @@ export function SorterHome({ onSignIn, onSignInIntent, busy, notice }: HomeProps
           {/* The letter under the pointer, opened. */}
           <div className="srt-card" ref={cardBox} data-open={card ? '' : undefined} aria-hidden="true">
             {card && <div className="srt-card-body" data-scam={card.scam || undefined}>
-              <span className="srt-card-from">{card.from} <PrivateAddress value={card.addr} /></span>
+              <span className="srt-card-from"><span>{card.from}</span><PrivateAddress value={card.addr} /></span>
               <b>{card.subject}</b>
               <span>{card.snippet}</span>
               <span className="srt-card-route">{card.scam ? 'A scam. Click to burn it.' : `Routed to ${LANE_NAMES[card.route]}`}</span>

@@ -40,10 +40,11 @@ void main() { vec4 w = uModel * vec4(aPos, 1.); vWorld = w.xyz; vNrm = mat3(uMod
 const MESH_FS = `#version 300 es
 precision highp float; precision highp sampler2DShadow;
 in vec3 vWorld, vNrm; in float vMat;
-uniform sampler2D uPal; uniform sampler2DShadow uShadow; uniform mat4 uLight; uniform vec3 uL, uFlashAt; uniform float uFlash, uFade, uSlab, uFlashR;
+uniform sampler2D uPal; uniform sampler2DShadow uShadow; uniform mat4 uLight; uniform vec3 uL, uFlashAt; uniform float uFlash, uFade, uSlab, uFlashR; uniform vec4 uClipA, uClipB;
 out vec4 o;
 ${BANDS}
 void main() {
+  if (dot(vWorld, uClipA.xyz) > uClipA.w || dot(vWorld, uClipB.xyz) > uClipB.w) discard;
   vec3 n = normalize(vNrm); float nl = dot(n, uL);
   vec4 c = toned(vMat, nl, nl > 0. ? shadowAt(vWorld, n) : 0.);
   // The burst's light, on the machine's own faces: strongest round the window, gone a little way off (sooner below it).
@@ -198,7 +199,8 @@ function noiseTile(size: number) {
 }
 
 /** `plain`: too small a thing to throw a shadow worth drawing (a roller in the works: fifty-six scallops along one edge). */
-export type Part = { start: number; count: number; m: Float32Array; on: boolean; glass: boolean; fade: number; plain?: boolean }
+export type Part = { start: number; count: number; m: Float32Array; on: boolean; glass: boolean; fade: number; plain?: boolean; clip?: Float32Array }
+/** `clip`: two planes (normal, distance); nothing of the part is drawn beyond either (a capsule sliding out of a block). */
 export const LETTER_FLOATS = 14, FX_FLOATS = 11, SMOKE_FLOATS = 10
 
 export type Renderer = ReturnType<typeof createRenderer>
@@ -323,8 +325,12 @@ export function createRenderer(canvas: HTMLCanvasElement) {
         gl.uniformMatrix4fv(mesh.u('uProj'), false, matrix); gl.uniformMatrix4fv(mesh.u('uLight'), false, light); gl.uniform3fv(mesh.u('uL'), LIGHT)
         gl.uniform1f(mesh.u('uFlash'), scene.flash); gl.uniform1f(mesh.u('uFade'), 1); gl.uniform1f(mesh.u('uSlab'), mats.slab); gl.uniform3fv(mesh.u('uFlashAt'), scene.flashAt); gl.uniform1f(mesh.u('uFlashR'), scene.flashR)
         gl.uniform1i(mesh.u('uPal'), 0); gl.uniform1i(mesh.u('uShadow'), 1)
-        gl.bindVertexArray(meshVao)
-        for (const part of scene.parts) if (part.on && !part.glass && part.fade >= 1 && !(depthOnly && part.plain)) { gl.uniformMatrix4fv(mesh.u('uModel'), false, part.m); gl.drawArrays(gl.TRIANGLES, part.start, part.count) }
+        gl.bindVertexArray(meshVao); gl.uniform4f(mesh.u('uClipA'), 0, 0, 0, 1); gl.uniform4f(mesh.u('uClipB'), 0, 0, 0, 1)
+        for (const part of scene.parts) if (part.on && !part.glass && part.fade >= 1 && !(depthOnly && part.plain)) {
+          if (part.clip) { gl.uniform4fv(mesh.u('uClipA'), part.clip.subarray(0, 4)); gl.uniform4fv(mesh.u('uClipB'), part.clip.subarray(4, 8)) }
+          gl.uniformMatrix4fv(mesh.u('uModel'), false, part.m); gl.drawArrays(gl.TRIANGLES, part.start, part.count)
+          if (part.clip) { gl.uniform4f(mesh.u('uClipA'), 0, 0, 0, 1); gl.uniform4f(mesh.u('uClipB'), 0, 0, 0, 1) }
+        }
         gl.useProgram(letter.p)
         gl.uniformMatrix4fv(letter.u('uProj'), false, matrix); gl.uniformMatrix4fv(letter.u('uLight'), false, light); gl.uniform3fv(letter.u('uL'), LIGHT)
         gl.uniform1f(letter.u('uFlash'), scene.flash); gl.uniform1f(letter.u('uDepthOnly'), depthOnly ? 1 : 0)

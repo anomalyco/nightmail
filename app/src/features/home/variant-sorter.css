@@ -35,7 +35,7 @@
 /* The canvases reach up behind the header, so a letter is never cut off where the hero begins. */
 .srt-canvas { position: absolute; top: calc(-1 * var(--srt-header)); left: 0; display: block; width: 100%; height: calc(100% + var(--srt-header)); pointer-events: none; }
 /* The renderer's first frame comes up through the still it is laid over. */
-.srt-gl { opacity: 0; touch-action: pan-y; transition: opacity 260ms var(--srt-ease); }
+.srt-gl { height: calc(100% + var(--srt-header) + var(--srt-ext, 0px)); opacity: 0; touch-action: pan-y; transition: opacity 260ms var(--srt-ease); }
 .srt-page[data-live] .srt-gl { opacity: 1; pointer-events: auto; }
 @media (prefers-reduced-motion: reduce) { .srt-gl { transition: none; } }
 /* Everything the page writes on the machine: one layer over the canvas. */
@@ -100,10 +100,12 @@
 /* A letter, opened, over the one the pointer is on. */
 .srt-card { position: absolute; z-index: 5; top: 0; left: 0; width: 0; height: 0; pointer-events: none; }
 .srt-card-body { position: absolute; bottom: 16px; left: 0; display: grid; row-gap: 3px; width: 264px; padding: 10px 12px 11px; border-radius: 4px; background: var(--srt-card); box-shadow: 0 0 0 1px var(--srt-card-edge), 0 6px 0 -3px oklch(0 0 0 / 22%); color: var(--srt-card-text); font-size: 12.5px; line-height: 17px; translate: -50% 0; animation: srt-card 140ms var(--srt-ease); }
+.srt-card[data-under] .srt-card-body { top: 22px; bottom: auto; }
 .srt-card-body > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .srt-card-body > b { font-size: 13.5px; font-weight: 600; letter-spacing: -.008em; text-wrap: balance; white-space: normal; }
 .srt-card-body > span:nth-child(3) { color: var(--srt-card-dim); text-wrap: pretty; white-space: normal; }
 .srt-card-from { display: flex; gap: 6px; color: var(--srt-card-dim); font-size: 11.5px; }
+.srt-card-from > :first-child { flex: none; max-width: 70%; overflow: hidden; text-overflow: ellipsis; }
 .srt-card-from .private-address { min-width: 0; }
 .srt-card-route { margin-top: 3px; color: var(--srt-card-dim); font-family: var(--font-mono); font-size: 10px; letter-spacing: .04em; text-transform: uppercase; }
 .srt-card-body[data-scam] .srt-card-route { color: oklch(0.52 0.2 27); }
@@ -203,7 +205,8 @@
 .srt-holes i::after { content: ''; position: absolute; inset: 7px 7px 3px 6px; opacity: 0; --sheet: var(--srt-paper-dim); --crease: color-mix(in oklch, var(--sheet), black 26%);
   background: linear-gradient(to bottom right, transparent calc(50% - .7px), var(--crease) calc(50% - .7px) calc(50% + .7px), transparent calc(50% + .7px)) 0 0 / 50% 58% no-repeat, linear-gradient(to bottom left, transparent calc(50% - .7px), var(--crease) calc(50% - .7px) calc(50% + .7px), transparent calc(50% + .7px)) 100% 0 / 50% 58% no-repeat, var(--sheet); box-shadow: -1.5px 0 0 color-mix(in oklch, var(--sheet), black 34%); }
 .srt-holes .srt-full::after { opacity: 1; }
-.srt-holes .srt-filed::after { --sheet: var(--srt-paper); opacity: clamp(0, calc(var(--t) * 4), 1); translate: 0 calc((var(--t) - 1) * 30px); }
+.srt-holes .srt-filed { overflow: visible; }
+.srt-holes .srt-filed::after { --sheet: var(--srt-paper); opacity: clamp(0, calc(var(--t) * 5), 1); scale: calc(1.5 - .5 * var(--t)); translate: calc((1 - var(--t)) * -5px) calc((1 - var(--t)) * 8px); }
 .srt-unit[data-kind='inbox'] .srt-screen { top: 94px; }
 .srt-count { position: relative; display: grid; place-items: center; min-width: 20px; height: 18px; border-radius: 9px; background: var(--color-brand); color: var(--srt-screen) !important; font-weight: 600; font-variant-numeric: tabular-nums; }
 .srt-count i { grid-area: 1 / 1; font-style: normal; }
