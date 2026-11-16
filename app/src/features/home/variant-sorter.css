@@ -59,6 +59,8 @@
 .srt-lanes { margin: 0; padding: 0; list-style: none; }
 .srt-lanes li { position: absolute; z-index: 2; display: grid; place-items: center; color: var(--srt-text-2); font-family: var(--font-mono); font-size: clamp(10px, var(--srt-u) * 1.2, 11px); line-height: 1; letter-spacing: .02em; text-transform: uppercase; white-space: nowrap; pointer-events: none; }
 /* Where each tube goes over the slab's lip: the name of where it leads, on the lip. */
+/* (Whole names where a plate holds them at 10 px; the lanes' codes where it does not.) */
+.srt-lanes[data-names] li { font-size: 10px; letter-spacing: 0; }
 .srt-mouths li { place-items: center start; color: var(--srt-text-2); font-size: 11px; }
 /* The tally in the header by the Logs outlet: everything sorted, counted. */
 .srt-tally { position: absolute; z-index: 2; display: grid; place-items: center; color: var(--srt-screen-text); font-family: var(--font-mono); font-size: 10px; font-variant-numeric: tabular-nums; line-height: 1; letter-spacing: .04em; pointer-events: none; }
@@ -92,6 +94,10 @@
 .srt-page[data-phone] .srt-fact-value i { margin-left: 4px; letter-spacing: 0; }
 .srt-page[data-phone] .srt-fact-value > span + span:not(.srt-meter)::before { content: ''; align-self: stretch; width: 1px; margin: -8px 6px -8px 0; background: var(--srt-screen-dim); opacity: .5; }
 .srt-page[data-phone] .srt-meter { display: none; }
+/* (A narrow phone: what is free on two lines.) */
+.srt-page[data-phone][data-tight] .srt-fact:last-of-type .srt-fact-value { flex-direction: column; align-items: flex-start; justify-content: center; row-gap: 5px; }
+.srt-page[data-phone][data-tight] .srt-fact-value > span + span:not(.srt-meter)::before { display: none; }
+.srt-page[data-phone][data-tight] .srt-fact-value > span { height: 12px; line-height: 12px; }
 
 /* The button: a lit key in the faceplate's bay, the one lit thing on the base. It stands proud of the bay, so (seen
    from above and the right, as everything here is) its top and its left side show; pressed, it goes in flush. */

@@ -87,7 +87,9 @@ export function plan(W: number, H: number) {
   // base: a display each, as tall as the faceplate, the one to the left of the button and the other to its right. On
   // a phone they are two small windows side by side over the button, their legends over them.
   const plate = phone ? 6 : 1.1 * U, fw = Math.min(-ctaW / 2 - plate - 1.5 * U + Xc - 2.4 * U, 20 * U), narrow = Math.max(70, Math.round(cta.w * .27))
-  const facts: Rect[] = phone ? [{ x: cta.x, y: cta.y + cta.h + plate + 6, w: narrow, h: 28 }, { x: cta.x + narrow + 8, y: cta.y + cta.h + plate + 6, w: cta.w - narrow - 8, h: 28 }]
+  // (On a narrow phone what is free takes two lines, and the windows are taller for it.)
+  const winH = tight ? 38 : 28
+  const facts: Rect[] = phone ? [{ x: cta.x, y: cta.y + cta.h + plate + 6, w: narrow, h: winH }, { x: cta.x + narrow + 8, y: cta.y + cta.h + plate + 6, w: cta.w - narrow - 8, h: winH }]
     : [{ x: -Xc + 2.4 * U, y: cta.y - plate, w: fw, h: cta.h + 2 * plate }, { x: Xc - 2.4 * U - fw, y: cta.y - plate, w: fw, h: cta.h + 2 * plate }]
   // The tally: a counter in the right header's front, beside the last outlet (Logs): everything sorted is on record.
   const tally = phone ? null : { x: fan[7].x - tubeR - 2 * U - 38, y: (headH - 14) / 2 + 1, w: 38, h: 14, z: zProud }

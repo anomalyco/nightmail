@@ -48,6 +48,10 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
   const LEVELS = [{ dpr: 1, shadow: 512, smoke: .25, puffs: 40, mail: .45 }, { dpr: 1.5, shadow: 1024, smoke: .3, puffs: 64, mail: .62 }, { dpr: 2, shadow: 1024, smoke: .4, puffs: 110, mail: .8 }, { dpr: 2, shadow: 2048, smoke: .5, puffs: 240, mail: 1 }]
   const cores = navigator.hardwareConcurrency || 4, memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 8
   let quality = options.plan.phone || matchMedia('(pointer: coarse)').matches ? (cores <= 4 || memory <= 4 ? 1 : 2) : cores <= 4 ? 2 : 3, pace = 16, strikes = 0
+  // The ladder goes back up too: frames on time for a while, and the level it was built for is tried again. A climb
+  // that does not hold (down again within a few seconds) doubles the wait before the next, so it never see-saws.
+  const best = quality
+  let steady = 0, climbAfter = 300, climbedAt = -1e9
   // Smoke and steam: each billow a point with a velocity, an age and a size that swells.
   const SM = 256, S = { head: 0, live: 0, pos: new Float32Array(SM * 3), vel: new Float32Array(SM * 3), age: new Float32Array(SM), life: new Float32Array(SM), size: new Float32Array(SM), grow: new Float32Array(SM), rot: new Float32Array(SM), spin: new Float32Array(SM), seed: new Float32Array(SM), dens: new Float32Array(SM), kind: new Float32Array(SM), heat: new Float32Array(SM), drag: new Float32Array(SM), lift: new Float32Array(SM) }
   const smokeData = new Float32Array(SM * SMOKE_FLOATS)
@@ -867,8 +871,12 @@ export function mountSorter(canvas: HTMLCanvasElement, options: { plan: Plan; ov
     const gap = now - last, dt = Math.min(.1, gap / 1000 || .016); last = now
     advance(dt); render()
     // Frames coming slowly for most of a second: one level of quality down (fewer pixels, a smaller shadow map, a
-    // smaller buffer for smoke and less of it).
-    if (gap > 0 && gap < 250) { pace = pace * .9 + gap * .1; strikes = pace > 21 ? strikes + 1 : Math.max(0, strikes - 2); if (strikes > 40 && quality > 0) { quality--; strikes = 0; pace = 16; size() } }
+    // smaller buffer for smoke and less of it). Frames on time for some seconds: one level back up.
+    if (gap > 0 && gap < 250) {
+      pace = pace * .9 + gap * .1; strikes = pace > 21 ? strikes + 1 : Math.max(0, strikes - 2); steady = pace < 17.6 ? steady + 1 : 0
+      if (strikes > 40 && quality > 0) { quality--; strikes = steady = 0; pace = 16; if (now - climbedAt < 8000) climbAfter = Math.min(climbAfter * 2, 4800); size() }
+      else if (steady > climbAfter && quality < best) { quality++; strikes = steady = 0; climbedAt = now; size() }
+    }
     if (visible && !document.hidden && busy()) raf = requestAnimationFrame(frame)
   }
   function kick() { if (!raf && !dead && visible && !document.hidden && !reduced) { last = performance.now(); raf = requestAnimationFrame(frame) } }

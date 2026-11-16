@@ -180,6 +180,7 @@ export function buildMachine(p: Plan) {
   // Where a tube turns down over the lip it wears a collar.
   const yc = r + 3.5 * px, seat = yc - r
   const strap = (x: number, z: number) => { const w = r + 1.3 * px, path: V3[] = [[x - w, 0, z], [x - w, yc, z]]; for (let i = 1; i < 8; i++) { const a = Math.PI - i / 8 * Math.PI; path.push([x + Math.cos(a) * w, yc + Math.sin(a) * w, z]) } path.push([x + w, yc, z], [x + w, 0, z]); b.tube(path, 1.1 * px, M.steel, 6, .5 * px) }
+  const shade = (x: number, z0: number, z1: number) => b.quad([x - r - .3 * (yc + r), .12, z0 + .69 * yc], [x + r - .3 * yc, .12, z0 + .69 * yc], [x + r - .3 * yc, .12, z1], [x - r - .3 * (yc + r), .12, z1], M.slab, [0, -1, 0])
   const sleeperZ = p.fan.length ? (p.heads[0].z0 + p.zLip) / 2 - .6 * U : (zt + p.zLip) / 2
   p.heads.forEach((head, side) => {
     const s = side ? 1 : -1
@@ -195,6 +196,9 @@ export function buildMachine(p: Plan) {
     for (let x = head.x0 + 1.6 * U; x < head.x1 - U; x += 3.2 * U) if (xs.every(at => Math.abs(at - x) > r + 4 * px) && (x < rx0 - U || x > rx0 + p.riser + U)) b.cyl([x, head.h - .9 * U, 0], 2, head.z0 - 1.1 * px, head.z0, 1.2 * px, M.steel, 8, 1)
     b.box(a - 1.9 * U, 0, sleeperZ - .8 * U, e + 1.9 * U, seat, sleeperZ + .8 * U, M.plinth); for (const x of xs) strap(x, sleeperZ)
     for (const x of xs) b.cyl([x, 0, p.zOver], 1, -p.lip * .5 - 1.4 * px, -p.lip * .5 + 1.4 * px, r + 1.2 * px, M.steel, 14, 3)
+    // (Glass throws no shadow in the renderer's map; what each tube throws on the slab is laid there: a strip in the
+    // slab's shade, to the left of the tube and behind it, as the light falls.)
+    for (const x of xs) shade(x, p.zLip + 1, head.z0)
   })
   if (!p.fan.length) for (const first of [0, 4]) {
     const shift = DX * (zt - sleeperZ), xs = [0, 1, 2, 3].map(k => p.tubes[first + k] + shift), a = Math.min(...xs), e = Math.max(...xs)
@@ -223,6 +227,7 @@ export function buildMachine(p: Plan) {
   // back along the slab, and down into it through a collar.
   const outX = p.out - DX * p.zOver, zIn = p.zOver * .5
   b.cyl([outX, 0, zIn], 1, 0, 2.2 * px, r + 1.8 * px, M.steel, 14, 2)
+  if (p.fan.length) shade(outX, p.zLip + 1, zIn)
   b.cyl([outX, 0, p.zOver], 1, -p.lip * .5 - 1.4 * px, -p.lip * .5 + 1.4 * px, r + 1.2 * px, M.steel, 14, 3)
 
   // Two relief valves on the columns beside the works, of the kind a boiler has: a body on a flange, fed from the
