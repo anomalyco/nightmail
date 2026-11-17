@@ -75,7 +75,7 @@ flowchart LR
 
 ## Lifecycle
 
-An API key for an inbox with `read` can see the `junk` flag and SPF, DKIM and DMARC verdicts for mail delivered to **its own inbox**. Agents can use those verdicts to check a sender; they do not make the message content trustworthy. This does not grant access to workspace-wide spam or delivery details in Logs or the inbound API.
+An API key for an inbox with `read` can see the `junk` flag and SPF, DKIM and DMARC verdicts for mail delivered to **its own inbox**. Agents can use those verdicts to check a sender; they do not make the message content trustworthy. With `includeDelivery=true` the inbound API also gives it the delivery details of its own inbox's mail: the envelope recipients that are its own, the headers and the raw message. The raw message is withheld when the same delivery also reached an address the key can't read, because its trace header can name that address. The key never sees another address's mail, unassigned mail or Logs. MCP tools don't offer delivery details, and a key an MCP approval created doesn't get them.
 
 ```mermaid
 stateDiagram-v2

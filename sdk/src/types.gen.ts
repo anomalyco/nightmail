@@ -20634,7 +20634,7 @@ export type ListInboundMessagesData = {
         cursor?: string;
         limit?: number;
         /**
-         * Include delivery details for workspace logs (dashboard or unrestricted live manage access only).
+         * Include delivery details: envelope recipients, region and spam; on one message also headers, verdicts and the raw message link. Owner and admin sessions and unrestricted live manage API keys get them for every stored message, unassigned mail included. An API key limited to addresses or an inbox gets them for its addresses’ mail only: addresses and envelopeTo list only its own, and rawUrl is null when the same delivery also reached an address it cannot read. Other credentials, and keys an MCP approval created, get 403.
          */
         includeDelivery?: 'true' | 'false';
         region?: string;
@@ -20710,7 +20710,7 @@ export type GetInboundMessageData = {
          */
         addressId?: string;
         /**
-         * Include delivery details for workspace logs (dashboard or unrestricted live manage access only).
+         * Include delivery details: envelope recipients, region and spam; on one message also headers, verdicts and the raw message link. Owner and admin sessions and unrestricted live manage API keys get them for every stored message, unassigned mail included. An API key limited to addresses or an inbox gets them for its addresses’ mail only: addresses and envelopeTo list only its own, and rawUrl is null when the same delivery also reached an address it cannot read. Other credentials, and keys an MCP approval created, get 403.
          */
         includeDelivery?: 'true' | 'false';
         /**
