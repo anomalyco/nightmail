@@ -76,7 +76,7 @@ export function createConsoleHarness(env: Env, storage: DurableObjectStorage, co
     async turn(input: TurnInput, _tools, onEvent: (event: HarnessEvent) => void, signal: AbortSignal): Promise<TurnResult> {
       const started = Date.now(), usage: Usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0 };
       const warmed = !!(await storage.get<string>(SESSION_KEY));
-      const texts: string[] = [], names = new Map<string, string>(), streamed = new Map<string, string>();
+      const texts: string[] = [], names = new Map<string, string>(), streamed = new Map<string, string>(), ended = new Set<string>();
       let outcome: 'succeeded' | 'failed' | 'interrupted' | null = null, error: string | undefined;
       let firstTool: number | undefined, firstText: number | undefined, deltas = 0;
       // Console has no per-turn system prompt: the harness's trusted context leads the input, apart from the customer's words.
@@ -122,14 +122,17 @@ export function createConsoleHarness(env: Env, storage: DurableObjectStorage, co
               const data = event.data ?? {};
               const part = `${data.assistantMessageID}:${data.ordinal}`;
               switch (event.type) {
-                case 'session.text.delta': if (data.sessionID === undefined || data.sessionID === sessionID) { deltas++; emit(part, String(data.delta ?? '')); } break;
+                // Deltas ride a separate subscription, so one can arrive after its part ended: the ended text already covered it.
+                case 'session.text.delta': if ((data.sessionID === undefined || data.sessionID === sessionID) && !ended.has(part)) { deltas++; emit(part, String(data.delta ?? '')); } break;
                 case 'session.text.ended': {
                   const whole = typeof data.text === 'string' ? data.text.trim() : '';
+                  ended.add(part);
                   if (!whole) break;
                   // Live text already sent what it saw of this part; send only what it missed.
                   const seen = streamed.get(part) ?? '';
                   if (!seen) emit(part, whole);
-                  else if (whole.startsWith(seen.trim()) && whole.length > seen.trim().length) emit(part, whole.slice(seen.trim().length));
+                  else if (whole.startsWith(seen)) emit(part, whole.slice(seen.length));
+                  else if (whole.startsWith(seen.trim())) emit(part, whole.slice(seen.trim().length).trimStart());
                   texts.push(whole);
                   break;
                 }
