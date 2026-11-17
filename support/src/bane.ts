@@ -8,7 +8,7 @@ import { productName } from '../../api/src/brand.js';
 // - `BANE` → the `SupportPlatform` entrypoint (api/src/support-platform.ts, its source of truth): verify a handoff or an
 //   email sender, mint and revoke a support grant, and grant-scoped GET /v1/support/* reads. No token: the binding is
 //   the credential.
-// - `BANE_API` → the default entrypoint, Nightmail's public API, as a customer of Nightmail would use it: the support@bane.mx
+// - `BANE_API` → the default entrypoint, Nightmail's public API, as a customer of Nightmail would use it: the support@nightmail.dev
 //   inbound address's own API key (BANE_SUPPORT_INBOX_KEY, limited to that address) reads support mail and sends replies and ticket emails.
 
 export type PlatformReply<T = unknown> = { status: number; body: T; requestId: string | null; retryAfter: string | null };
@@ -78,7 +78,7 @@ export function baneApi(env: Env, which: 'support' | 'intake' = 'support') {
     /**
      * A reply in an email conversation, only to the reviewed recipients (Nightmail refuses a reply whose recipients changed).
      * addressId null: the address the message came in on (the intake key sees three). Omitted: SUPPORT_ADDRESS_ID, or, for a
-     * thread on another support address the key also holds (support@bane.mx after the move to nightmail.dev), that address.
+     * thread on another support address the key also holds (support@bane.mx since the move to nightmail.dev), that address.
      */
     async reply(threadId: string, input: { replyToMessageId: string; text: string; to: string; subject?: string; addressId?: string | null }, idempotencyKey: string) {
       const send = (addressId: string | null, key: string) => call<{ id: string; threadId: string }>('POST', `/v1/inbound/threads/${encodeURIComponent(threadId)}/reply`, {

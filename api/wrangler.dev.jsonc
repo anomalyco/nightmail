@@ -26,6 +26,8 @@
     "SES_FEEDBACK_URL": "https://dev.bane.mx/v1/events/ses",
     "ACCOUNT_ISSUER": "https://account.dev.anoma.ly",
     "ACCOUNT_REQUIRED_ACR": "urn:anomaly:acr:google",
+    // MCP asks for nightmail:* scopes, on both hosts; bane:* grants are still accepted until the cutover.
+    "OAUTH_SCOPE_PREFIX": "nightmail",
     // Staff sign-up: the Google Workspace domain (hd) of the sign-in's provider identity, never an address.
     "AUTH_STAFF_GOOGLE_DOMAINS": "anoma.ly",
     // Staff UI notes (src/ui-notes.ts): off on dev until Ryan's account.dev.anoma.ly subject is listed here.
