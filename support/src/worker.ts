@@ -4,6 +4,7 @@ import { addressHash, chatToken, MissingSecret, newId, readChatToken, readConfir
 import { readAttachmentLink, readCapped, serveAttachment } from './attachments.js';
 import { MAX_IMAGE_BYTES } from './image.js';
 import { staff } from './staff.js';
+import { mcp } from './mcp.js';
 import { daily } from './limits.js';
 import { log, logError } from './log.js';
 import { FAVICON_LINKS, favicon } from './favicon.js';
@@ -38,11 +39,11 @@ function cors(env: Env, request: Request): Record<string, string> {
 const socketUrl = (env: Env, conversationId: string, token: string) => `${env.PUBLIC_URL.replace(/^http/, 'ws')}/c/${conversationId}?token=${encodeURIComponent(token)}`;
 const conversation = (env: Env, id: string) => env.CONVERSATION.get(env.CONVERSATION.idFromName(id));
 
-async function readHandoff(request: Request): Promise<{ handoff?: string; conversationId?: string } | null> {
+async function readHandoff(request: Request): Promise<{ handoff?: string; conversationId?: string; runtime?: string } | null> {
   if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return null;
   const text = await request.text();
   if (text.length > 8192) return null;
-  try { const body = JSON.parse(text) as Record<string, unknown>; return { handoff: typeof body.handoff === 'string' ? body.handoff : undefined, conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined }; } catch { return null; }
+  try { const body = JSON.parse(text) as Record<string, unknown>; return { handoff: typeof body.handoff === 'string' ? body.handoff : undefined, conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined, runtime: typeof body.runtime === 'string' ? body.runtime : undefined }; } catch { return null; }
 }
 
 async function startChat(request: Request, env: Env): Promise<Response> {
@@ -67,14 +68,16 @@ async function startChat(request: Request, env: Env): Promise<Response> {
       SELECT ?, 'chat', ?, ?, ?, ?, ?, ? WHERE (SELECT conversation_id FROM handoffs_used WHERE jti = ?) = ?`).bind(conversationId, handoff.userId, handoff.email, handoff.workspace.id, handoff.workspace.name, now, now, handoff.id, conversationId),
   ]);
   if (!claimed[1]?.meta.changes) return fail(409, 'HANDOFF_USED', 'This handoff already opened a conversation. Get a fresh one.', headers);
-  const opened = await conversation(env, conversationId).openChat({ conversationId, handoff });
+  // Prototype: a dev chat may ask to run on the Console agent (agent/console.ts); production and an unset agent ignore it.
+  const runtime = body.runtime === 'console' && env.STAGE === 'dev' && env.CONSOLE_AGENT_URL && env.CONSOLE_AGENT_SLUG ? 'console' as const : undefined;
+  const opened = await conversation(env, conversationId).openChat({ conversationId, handoff, runtime });
   if (!opened.ok) {
     await env.DB.prepare("UPDATE conversations SET status = 'closed', closed_at = ? WHERE id = ?").bind(Date.now(), conversationId).run();
     return opened.code === 'HANDOFF_USED' ? fail(409, 'HANDOFF_USED', 'This handoff already opened a conversation. Get a fresh one.', headers)
       : fail(503, 'SUPPORT_UNAVAILABLE', 'Support could not open your account just now. Try again in a minute.', headers);
   }
   const chat = await chatToken(env.SUPPORT_ROOT_SECRET, conversationId, handoff.userId);
-  return json({ conversationId, chatToken: chat.token, socketUrl: socketUrl(env, conversationId, chat.token), expiresAt: chat.expiresAt }, 200, headers);
+  return json({ conversationId, chatToken: chat.token, socketUrl: socketUrl(env, conversationId, chat.token), expiresAt: chat.expiresAt, ...(runtime ? { runtime } : {}) }, 200, headers);
 }
 
 async function resumeChat(request: Request, env: Env): Promise<Response> {
@@ -255,6 +258,7 @@ async function route(request: Request, env: Env, url: URL, at: { route: string }
     return await readAttachmentLink(env, file[1]!, file[2]!, url.searchParams.get('exp'), url.searchParams.get('sig')) ? serveAttachment(env, file[1]!, file[2]!) : new Response(null, { status: 403 });
   }
   if (path === '/staff' || path.startsWith('/staff/')) { name(staffRoute(path)); return staff(request, env); }
+  if (path === '/mcp' && env.STAGE === 'dev') { name('/mcp'); return mcp(request, env); }
   if (request.method === 'POST' && path === '/hooks/bane-inbound') { name('/hooks/bane-inbound'); return inbound(request, env); }
   if (request.method === 'POST' && path === '/hooks/bane-intake') { name('/hooks/bane-intake'); return intake(request, env); }
   const link = path.match(/^\/confirm\/([A-Za-z0-9_.-]{20,400})$/);

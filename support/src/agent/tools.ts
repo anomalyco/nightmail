@@ -164,6 +164,24 @@ export const TOOLS: ToolSpec[] = [
 ];
 export const TOOL_NAMES = TOOLS.map(t => t.name);
 
+/** A tool's parameters as the JSON Schema both runtimes publish: OpenCode's plugin (opencode.ts) and the MCP server (mcp.ts). */
+export function jsonSchema(params: Record<string, Param>) {
+  const properties: Record<string, unknown> = {}, required: string[] = [];
+  for (const [name, p] of Object.entries(params)) {
+    if (!p.optional) required.push(name);
+    if (p.type === 'string') properties[name] = { type: 'string', description: p.description, ...(p.max ? { maxLength: p.max } : {}), ...(p.pattern ? { pattern: p.pattern } : {}) };
+    else if (p.type === 'number') properties[name] = { type: 'integer', description: p.description, ...(p.min !== undefined ? { minimum: p.min } : {}), ...(p.max !== undefined ? { maximum: p.max } : {}) };
+    else if (p.type === 'enum') properties[name] = { type: 'string', enum: [...p.values], description: p.description };
+    else properties[name] = { type: 'array', items: { type: 'string', maxLength: 400 }, description: p.description, ...(p.max ? { maxItems: p.max } : {}) };
+  }
+  return { type: 'object', properties, required, additionalProperties: false };
+}
+
+/** A tool's name without the prefix a runtime adds (Console's MCP gateway: `<server slug>_<tool>`). */
+export function baseToolName(name: string) {
+  return TOOL_NAMES.find(t => name === t || name.endsWith(`_${t}`)) ?? name;
+}
+
 const list = (value: unknown, max: number, each = 400) => (Array.isArray(value) ? value : []).slice(0, max).map(v => String(v).trim().slice(0, each)).filter(Boolean);
 /** The model's file_ticket arguments as a ticket; a bug without its reproduction is refused, so the model adds it. */
 export function ticketInput(a: Record<string, unknown>): TicketInput {

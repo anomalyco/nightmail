@@ -22,4 +22,6 @@ export type TurnResult = { text: string; usage: Usage; aborted: boolean; error?:
 
 export interface Harness {
   turn(input: TurnInput, tools: ToolHost, onEvent: (event: HarnessEvent) => void, signal: AbortSignal): Promise<TurnResult>;
+  /** Optional: get the runtime ready before the first turn (a remote session opened and kept warm). */
+  warm?(): Promise<void>;
 }
