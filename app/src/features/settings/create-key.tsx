@@ -93,6 +93,21 @@ function InboxChoice({ name, query, value, onChange, disabled, error, none }: { 
   </fieldset>
 }
 
+export const chooseAddress = 'Choose an address, or Every address.'
+/** Which receiving addresses a key reaches, or every one: one control for Create key and a key's Edit addresses.
+ *  `empty` takes the options' place while they load or when there are none. */
+export function AddressChoice({ id, options, every, chosen, onEvery, onToggle, disabled, error, empty }: { id: string; options: { id: string; address: string }[]; every: boolean; chosen: string[];
+  onEvery: (every: boolean) => void; onToggle: (id: string, checked: boolean) => void; disabled: boolean; error?: string; empty?: ReactNode }) {
+  return <fieldset className="settings-key-domains" disabled={disabled} aria-describedby={error ? `${id}-error` : undefined}>
+    <legend className="ui-field__label">Addresses</legend>
+    <Checkbox label="Every address, including new ones" checked={every} onCheckedChange={onEvery} disabled={disabled} />
+    <div className="settings-key-domain-options">
+      {empty ?? options.map(item => <Checkbox key={item.id} label={<PrivateAddress value={item.address} />} checked={!every && chosen.includes(item.id)} disabled={disabled} onCheckedChange={checked => onToggle(item.id, checked)} />)}
+    </div>
+    {error && <p id={`${id}-error`} className="ui-field__error" role="alert">{error}</p>}
+  </fieldset>
+}
+
 type FormProps = { open: boolean; onOpenChange: (open: boolean) => void; onPending: (pending: boolean) => void; onCreated: (created: CreatedSecret) => void }
 
 function ApiKeyForm({ open, onOpenChange, onPending, onCreated, initial }: FormProps & { initial?: { purpose?: Purpose; domain?: string } }) {
@@ -150,7 +165,7 @@ function ApiKeyForm({ open, onOpenChange, onPending, onCreated, initial }: FormP
     if (!name.trim()) next.name = 'Enter a name for this key.'
     if (workspace && !allDomains && !selectedDomains.length) next.domains = 'Select at least one domain, or choose All domains.'
     else if (workspace && !allDomains && selectedDomains.length > 50) next.domains = 'Select up to 50 domains.'
-    if (purpose === 'addresses' && !allAddresses && !addressIds.length) next.addressIds = 'Choose an address, or Every address.'
+    if (purpose === 'addresses' && !allAddresses && !addressIds.length) next.addressIds = chooseAddress
     if (purpose === 'inbox' && !chosenInbox) next.inboxId = 'Choose an inbox.'
     setErrors(next)
     if (Object.keys(next).length) { if (next.name) document.getElementById('key-name')?.focus(); return }
@@ -198,15 +213,9 @@ function ApiKeyForm({ open, onOpenChange, onPending, onCreated, initial }: FormP
         {domainOptions.hasNextPage && !domainOptions.isError && <Button variant="ghost" loading={domainOptions.isFetchingNextPage} onClick={() => void domainOptions.fetchNextPage()}>Load more domains</Button>}
         {domainError && <p id="key-domain-error" className="ui-field__error" role="alert">{domainError}</p>}
       </fieldset>}
-      {purpose === 'addresses' && <fieldset className="settings-key-domains" disabled={pending} aria-describedby={addressError ? 'key-address-error' : undefined}>
-        <legend className="ui-field__label">Addresses</legend>
-        <Checkbox label="Every address, including new ones" checked={allAddresses} onCheckedChange={checked => { setAllAddresses(checked); setAddressIds([]); clearError('addressIds') }} disabled={pending} />
-        <div className="settings-key-domain-options">
-          {addresses.isPending ? <p className="muted" role="status">Loading addresses…</p> : !receiving.length ? <Link className="keys-form-note" to="/receiving" onClick={() => onOpenChange(false)}>Create an address</Link>
-            : receiving.map(item => <Checkbox key={item.id} label={<PrivateAddress value={item.address} />} checked={!allAddresses && addressIds.includes(item.id)} disabled={pending} onCheckedChange={checked => toggleAddress(item.id, checked)} />)}
-        </div>
-        {addressError && <p id="key-address-error" className="ui-field__error" role="alert">{addressError}</p>}
-      </fieldset>}
+      {purpose === 'addresses' && <AddressChoice id="key-address" options={receiving} every={allAddresses} chosen={addressIds} disabled={pending} error={addressError}
+        onEvery={checked => { setAllAddresses(checked); setAddressIds([]); clearError('addressIds') }} onToggle={toggleAddress}
+        empty={addresses.isPending ? <p className="muted" role="status">Loading addresses…</p> : !receiving.length ? <Link className="keys-form-note" to="/receiving" onClick={() => onOpenChange(false)}>Create an address</Link> : undefined} />}
       {purpose === 'inbox' && <InboxChoice name="key-inbox" query={inboxes} value={chosenInbox} onChange={id => { setInboxId(id); clearError('inboxId') }} disabled={pending} error={inboxError}
         none={<Link to="/receiving/inboxes" onClick={() => onOpenChange(false)}>Create an agent inbox</Link>} />}
       {(purpose === 'addresses' || purpose === 'inbox') && <fieldset className="keys-purpose" disabled={pending}>

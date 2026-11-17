@@ -3268,13 +3268,53 @@ describe('Hosted MCP OAuth and tools', () => {
     return output;
   }
 
+  test('an MCP session is tied to the tools its own credential is listed, not the whole catalog', async t => {
+    const db = await fixtureDatabase(t);
+    const manage = await keyFixture(t), read = await keyFixture(t, { permissions: ['read'] });
+    const init = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'acceptance', version: '1' } } };
+    const start = async (key: string, path: string) => { const reply = await http('POST', path, key, init, rpcHeaders); assert.equal(reply.status, 200, diagnostic(reply)); return reply.headers.get('mcp-session-id')!; };
+    const list = (key: string, session: string, path: string) => http('POST', path, key, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, { ...rpcHeaders, 'mcp-session-id': session });
+    const fingerprint = (tools: Json) => createHash('sha256').update(JSON.stringify(tools)).digest('hex').slice(0, 16);
+    for (const path of ['/mcp?codemode=true', '/mcp']) {
+      const readSession = await start(read.secret, path), manageSession = await start(manage.secret, path);
+      // The session names exactly the listing this key is shown, so a release that changes only tools hidden from it
+      // (here the manage-only operations) leaves it valid, and one that changes a tool it lists ends it.
+      const readTools = ok(await list(read.secret, readSession, path)).result.tools;
+      assert.equal(readSession.split('.')[0], fingerprint(readTools));
+      assert.equal(manageSession.split('.')[0], fingerprint(ok(await list(manage.secret, manageSession, path)).result.tools));
+      assert.notEqual(readSession.split('.')[0], manageSession.split('.')[0]);
+      const stale = await list(read.secret, manageSession, path);
+      assert.equal(stale.status, 404, diagnostic(stale));
+    }
+    // The credential's own access changes mid-session: its next request is told to start over and list again.
+    const session = await start(manage.secret, '/mcp?codemode=true');
+    await db.query(`UPDATE api_keys SET permissions='["read"]'::jsonb WHERE id=$1`, [manage.id]);
+    const changed = await list(manage.secret, session, '/mcp?codemode=true');
+    assert.equal(changed.status, 404, diagnostic(changed));
+    assert.equal((changed.body as Json).error.code, -32001);
+    assert.equal(ok(await list(manage.secret, await start(manage.secret, '/mcp?codemode=true'), '/mcp?codemode=true')).result.tools.length, ok(await list(read.secret, await start(read.secret, '/mcp?codemode=true'), '/mcp?codemode=true')).result.tools.length);
+  });
+
   test('hosted MCP advertises both catalogs and composes campaign, contact, email and temporary-token workflows', async t => {
     const db = await fixtureDatabase(t);
     const { token, consentId } = await oauthGrant(t, db);
     const initialized = await rpc(token, 'initialize', { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'acceptance', version: '1' } });
     assert.equal(initialized.protocolVersion, '2025-11-25');
     assert.equal(initialized.serverInfo.name, 'nightmail');
+    // A legacy session carries the catalog it started on: same catalog, it keeps working; a release that changed the
+    // tools answers it 404, which tells the client to initialize again and list the new tools.
+    const init = { jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'acceptance', version: '1' } } };
+    const sessionId = (await http('POST', '/mcp?codemode=true', token, init, rpcHeaders)).headers.get('mcp-session-id');
+    assert.match(sessionId ?? '', /^[0-9a-f]{16}\.[0-9a-f]{32}$/);
+    const listed = (session: string) => http('POST', '/mcp?codemode=true', token, { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }, { ...rpcHeaders, 'mcp-session-id': session });
+    const current = await listed(sessionId!);
+    assert.equal(current.status, 200, diagnostic(current));
+    const earlierCatalog = sessionId!.startsWith('0') ? '1' + sessionId!.slice(1) : '0' + sessionId!.slice(1);
+    const ended = await listed(earlierCatalog);
+    assert.equal(ended.status, 404, diagnostic(ended));
+    assert.equal((ended.body as Json).error.code, -32001);
     const catalog = await rpc(token, 'tools/list');
+    assert.deepEqual(ok(current).result.tools, catalog.tools);
     const defaults=ok(await http('POST','/mcp',token,{jsonrpc:'2.0',id:17,method:'tools/list',params:{}},rpcHeaders)).result.tools;
     // OpenCode adds ?codemode=false to a remote URL: one tool per operation, the same catalog as the legacy ?codemode=true.
     assert.deepEqual((await rpc(token, 'tools/list', {}, '/mcp?codemode=false')).tools, catalog.tools);
@@ -3669,6 +3709,120 @@ describe('Hosted MCP OAuth and tools', () => {
     assert.ok(!(await agents()).some(a => a.id === agentId), 'A revoked agent is inactive.');
     const ended = (await agents('?includeInactive=true')).find(a => a.id === agentId);
     assert.deepEqual([ended?.status, ended?.tokens.map((x: Json) => x.id === minted.id && x.revokedAt !== null)], ['revoked', [true]]);
+  });
+  test('updateApiKey over MCP: an approval changes only the keys it created, which stay tied to it, and a temporary token changes none', async t => {
+    const db = await fixtureDatabase(t);
+    const issued = await oauthGrant(t, db), agentId = `mcp_${issued.consentId}`;
+    const box = async () => { const made = ok(await http('POST', '/v1/inboxes', MANAGER, { type: 'sandbox' }), 201); cleanup(t, async () => { await http('DELETE', `/v1/inboxes/${made.id}`, MANAGER); }); return made; };
+    const [first, second] = [await box(), await box()];
+    const revokeLater = (id: string) => cleanup(t, async () => { await http('POST', `/v1/api-keys/${id}/revoke`, MANAGER); });
+    // The approval's own key: it adds an address, a retry with the same idempotency key replays, and the secret reads it.
+    const own = await callTool(issued.token, 'createApiKey', { confirm: true, body: { name: 'MCP support agent', access: { type: 'addresses', addressIds: [first.id] } } }, 201);
+    secrets.add(own.secret); revokeLater(own.id);
+    const widen = { confirm: true, keyId: own.id, idempotencyKey: unique('mcp-widen'), body: { access: { addAddressIds: [second.id] } } };
+    const widened = await callTool(issued.token, 'updateApiKey', widen);
+    assert.deepEqual(widened.access.addressIds, [first.id, second.id]);
+    assert.deepEqual(await callTool(issued.token, 'updateApiKey', widen), widened);
+    ok(await http('GET', `/v1/inboxes/${second.id}/messages`, own.secret));
+    // A key it made with create: the approval can't take away an inbox that key created while it keeps create, so the
+    // key's own MCP connection still reads it; dropping create ends that.
+    const maker = await callTool(issued.token, 'createApiKey', { confirm: true, body: { name: 'MCP provisioning', access: { type: 'addresses', addressIds: [], mail: ['read', 'create'] } } }, 201);
+    secrets.add(maker.secret); revokeLater(maker.id);
+    const made = ok(await http('POST', '/v1/inboxes', maker.secret, { type: 'sandbox' }), 201);
+    cleanup(t, async () => { await http('DELETE', `/v1/inboxes/${made.id}`, MANAGER); });
+    const removal = await rpc(issued.token, 'tools/call', { name: 'updateApiKey', arguments: { confirm: true, keyId: maker.id, body: { access: { removeAddressIds: [made.id] } } } });
+    assert.equal(removal.structuredContent?.error?.code, 'CREATED_INBOX_REACHABLE', redact(removal));
+    const viaKey = async () => (await rpc(maker.secret, 'tools/call', { name: 'listInboxMessages', arguments: { inboxId: made.id } })).structuredContent;
+    assert.ok(Array.isArray((await viaKey()).data), 'The key still reaches the inbox it created.');
+    const dropped = await callTool(issued.token, 'updateApiKey', { confirm: true, keyId: maker.id, body: { access: { addressIds: [first.id], mail: ['read'] } } });
+    assert.deepEqual([dropped.access.addressIds, dropped.access.createdInboxIds], [[first.id], []]);
+    assert.equal((await viaKey()).error?.code, 'NOT_FOUND');
+    // Not a key someone else made, over MCP or with a key the approval made; and a key never changes itself.
+    const theirs = ok(await http('POST', '/v1/api-keys', MANAGER, { name: 'Dashboard agent', access: { type: 'addresses', addressIds: [first.id] } }), 201);
+    secrets.add(theirs.secret); revokeLater(theirs.id);
+    const refused = await rpc(issued.token, 'tools/call', { name: 'updateApiKey', arguments: { confirm: true, keyId: theirs.id, body: { access: { addAddressIds: [second.id] } } } });
+    assert.equal(refused.structuredContent?.error?.code, 'PERMISSION_DENIED', redact(refused));
+    const grantKey = await callTool(issued.token, 'createApiKey', { confirm: true, body: { name: 'MCP manager', permissions: ['manage'] } }, 201);
+    secrets.add(grantKey.secret); revokeLater(grantKey.id);
+    error(await http('PATCH', `/v1/api-keys/${theirs.id}`, grantKey.secret, { access: { addAddressIds: [second.id] } }), 403, 'PERMISSION_DENIED');
+    error(await http('PATCH', `/v1/api-keys/${grantKey.id}`, grantKey.secret, { name: 'Itself' }), 403, 'PERMISSION_DENIED');
+    assert.equal(ok(await http('PATCH', `/v1/api-keys/${own.id}`, grantKey.secret, { name: 'Renamed by its approval' })).name, 'Renamed by its approval');
+    assert.deepEqual((await db.query('SELECT mailbox_ids FROM mailbox_keys WHERE id = $1', [theirs.id])).rows[0].mailbox_ids, [first.id]);
+    assert.deepEqual((await db.query("SELECT actor_type FROM audit_events WHERE action = 'api_key.update' AND target_id = $1 ORDER BY id", [own.id])).rows.map(r => r.actor_type), ['mcp_grant', 'api_key']);
+    // A temporary agent token changes no key, and neither catalog offers it the tool.
+    const agent = await callTool(issued.token, 'createAgentToken', { body: { permissions: ['read', 'manage'], expiresInSeconds: 120, domains: [], purpose: 'updateApiKey fixture' }, confirm: true }, 201);
+    secrets.add(agent.token);
+    error(await http('PATCH', `/v1/api-keys/${own.id}`, agent.token, { access: { removeAddressIds: [second.id] } }), 403, 'CREDENTIAL_DELEGATION_FORBIDDEN');
+    const offered = async (bearer: string) => (await rpc(bearer, 'tools/list')).tools.some((tool: Json) => tool.name === 'updateApiKey');
+    assert.deepEqual([await offered(issued.token), await offered(grantKey.secret), await offered(agent.token)], [true, true, false]);
+    // The change kept the key tied to its approval: revoking the approval ends it, and an ended key isn't changed.
+    assert.equal(ok(await http('POST', `/v1/agents/${agentId}/revoke`, MANAGER)).scope, 'agent');
+    error(await http('GET', `/v1/inboxes/${first.id}/messages`, own.secret), 401, 'AUTH_INVALID');
+    error(await http('PATCH', `/v1/api-keys/${own.id}`, MANAGER, { name: 'After the approval' }), 409, 'KEY_INACTIVE');
+  });
+  test('API keys: a key write re-checks its caller as it writes: a narrowed caller\'s pending edit or create is refused, and two keys editing each other neither deadlock nor widen', async t => {
+    // Two real connections: one holds key rows (to schedule the race), the other watches the API's requests wait on them.
+    const db = await fixtureDatabase(t), observer = await fixtureDatabase(t);
+    const made = async (body: Json) => { const k = ok(await http('POST', '/v1/api-keys', MANAGER, { name: unique('caller fixture'), ...body }), 201); secrets.add(k.secret); cleanup(t, async () => { await http('POST', `/v1/api-keys/${k.id}/revoke`, MANAGER); }); return k; };
+    const patch = (id: string, token: string, body: Json) => http('PATCH', `/v1/api-keys/${id}`, token, body, {}, 20_000);
+    const row = async (id: string) => (await db.query('SELECT permissions, domains FROM api_keys WHERE id = $1', [id])).rows[0];
+    const narrow = { permissions: ['read'], domains: ['example.com'] }, full = { permissions: ['manage'], domains: [] };
+    const waiting = async (n: number) => {
+      for (let i = 0; i < 250; i++) {
+        const { rows: [r] } = await observer.query(`SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()
+          AND wait_event_type = 'Lock' AND query ~* 'api_keys' AND query ~* 'for (update|share)'`);
+        if (r.n >= n) return;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.fail(`${n} requests did not reach their key row locks`);
+    };
+    const hold = async (ids: string[]) => { await db.query('BEGIN'); await db.query('SELECT id FROM api_keys WHERE id = ANY($1) FOR UPDATE', [ids]); };
+
+    // The review's reproduction. A (manage) edits B while B's row is held; B's ID is the lower, so the edit takes B's row
+    // first and holds nothing of A while it waits. The owner narrows A meanwhile; the edit then reads A narrowed.
+    const [b, a] = [await made(narrow), await made(narrow)].sort((x, y) => x.id < y.id ? -1 : 1);
+    ok(await patch(a!.id, MANAGER, full));
+    error(await patch(a!.id, a!.secret, { name: 'Itself' }), 403, 'PERMISSION_DENIED');
+    await hold([b!.id]);
+    let stale: Promise<Reply>;
+    try {
+      stale = patch(b!.id, a!.secret, full);
+      await waiting(1);
+      ok(await patch(a!.id, MANAGER, narrow));
+      error(await http('POST', '/v1/api-keys', a!.secret, { name: 'Refused create', permissions: ['manage'] }), 403, 'PERMISSION_DENIED');
+      error(await patch(b!.id, a!.secret, full), 403, 'PERMISSION_DENIED');
+    } finally { await db.query('COMMIT'); }
+    error(await stale!, 403, 'PERMISSION_DENIED');
+    assert.deepEqual(await row(b!.id), narrow);
+    error(await patch(a!.id, b!.secret, full), 403, 'PERMISSION_DENIED');
+    assert.deepEqual(await row(a!.id), narrow);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM audit_events WHERE action = 'api_key.update' AND actor_id = $1", [a!.id])).rows[0].n, 0);
+
+    // createApiKey the same way: C's create waits on C's own row, which is narrowed before it reads it.
+    const creator = await made(full), name = unique('made while narrowed');
+    ok(await http('GET', '/v1/api-keys', creator.secret)); // Used now, so authenticating again doesn't touch its row.
+    await hold([creator.id]);
+    let create: Promise<Reply>;
+    try {
+      create = http('POST', '/v1/api-keys', creator.secret, { name, permissions: ['manage'] }, {}, 20_000);
+      await waiting(1);
+      await db.query(`UPDATE api_keys SET permissions = '["read"]', domains = '["example.com"]' WHERE id = $1`, [creator.id]);
+    } finally { await db.query('COMMIT'); }
+    error(await create!, 403, 'PERMISSION_DENIED');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM api_keys WHERE name = $1', [name])).rows[0].n, 0);
+
+    // X and Y (both manage) narrow each other at once. They take the two rows in one order, so one waits for the other
+    // and reads its own new access: exactly one change is made, no deadlock, and neither key gains anything.
+    const [x, y] = [await made(full), await made(full)];
+    for (const k of [x, y]) ok(await http('GET', '/v1/api-keys', k.secret));
+    await hold([x.id, y.id]);
+    let both: Promise<Reply[]>;
+    try { both = Promise.all([patch(y.id, x.secret, narrow), patch(x.id, y.secret, narrow)]); await waiting(2); }
+    finally { await db.query('COMMIT'); }
+    const replies = await both!;
+    assert.deepEqual(replies.map(r => r.status).sort(), [200, 403], redact(replies.map(r => r.body)));
+    assert.equal(replies.find(r => r.status === 403)!.body.error.code, 'PERMISSION_DENIED');
+    assert.deepEqual([await row(x.id), await row(y.id)].map(r => JSON.stringify(r)).sort(), [JSON.stringify(full), JSON.stringify(narrow)].sort());
   });
 
   test('R1: grant edits preserve the human attachment chain across revocation', async t => {
@@ -13974,6 +14128,73 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         assert.equal((await db.query('SELECT status FROM mailbox_domains WHERE id=$1', [stray])).rows[0].status, 'waiting_for_mx');
         await db.query('ROLLBACK TO SAVEPOINT legacy_duplicate');
       });
+
+      // Hosted receiving follows DNS, so enabling it queues the domain's check. Every read says provisioning from the 202
+      // on, until that check routes the domain (or gives up, with its error), instead of off until the check runs.
+      await t.test('enabling receiving reads as provisioning until its check settles: active, or failed with an error', async st => {
+        const [{ SESv2Client }, { processJobs }, { tagKey }] = await Promise.all([import('@aws-sdk/client-sesv2'), import('./src/jobs.js'), import('./src/resource-tags.js')]);
+        // The check reads SES (mocked below), so it needs SES on: synthetic credentials, no network.
+        const { aws, liveEnabled } = runtime.config; Object.assign(runtime.config, { aws: { accessKeyId: 'synthetic-fixture', secretAccessKey: 'synthetic-fixture' }, liveEnabled: true });
+        st.after(() => { Object.assign(runtime.config, { aws, liveEnabled }); });
+        const claims = new Map<string, Claim>(); let denied = false;
+        // An earlier case selected the BYO workspace for this user: name this one.
+        const api = (method: string, path: string, body?: Json) => local(method, path, body, 'live', { 'x-bane-workspace': wid });
+        st.mock.method(SESv2Client.prototype, 'send', async (cmd: any) => {
+          assert.equal(cmd.constructor.name, 'GetEmailIdentityCommand');
+          if (denied) throw Object.assign(new Error('fixture: denied'), { name: 'AccessDeniedException', $metadata: { httpStatusCode: 403 } });
+          return { VerificationStatus: 'SUCCESS', VerifiedForSendingStatus: true, Tags: [{ Key: tagKey('domain-claim'), Value: claims.get(cmd.input.EmailIdentity)!.token }],
+            DkimAttributes: { SigningEnabled: true, Status: 'SUCCESS', Tokens: tokens, SigningAttributesOrigin: 'AWS_SES', SigningHostedZone: 'dkim.amazonses.com' } };
+        });
+        // The job runner, on this domain's check alone (earlier cases left checks of their own queued).
+        const job = (d: Claim) => `domain.verify:${d.token}`;
+        const runCheck = async (d: Claim) => {
+          await db.query("UPDATE jobs SET available_at=now()+interval '1 day' WHERE status='pending' AND id<>$1", [job(d)]);
+          await db.query("DELETE FROM job_schedule WHERE workspace_id='domain.verify:platform'");
+          await processJobs(runtime, async type => operationJobs[type], 1);
+        };
+        const views = async (d: Claim) => {
+          const one = ok(await api('GET', `/v1/inbound/domains/${d.id}`)), listed = ok(await api('GET', '/v1/inbound/domains')).data.find((x: Json) => x.id === d.id);
+          const hosts = ok(await api('GET', `/v1/inbound/domains/${d.id}/hosts`)).data;
+          let page: Json | undefined, cursor = '';
+          do { const body = ok(await api('GET', `/v1/domains?limit=10${cursor && `&cursor=${cursor}`}`)); page = body.data.find((x: Json) => x.id === d.id); cursor = body.nextCursor ?? ''; } while (!page && cursor);
+          return { status: one.status, listed: listed.status, lastError: one.lastError, hosts: hosts.map((h: Json) => [h.name, h.status]), receiving: ok(await api('GET', `/v1/domains/${d.id}`)).receiving, listedReceiving: page!.receiving };
+        };
+        const enable = async (d: Claim) => ok(await api('POST', `/v1/inbound/domains/${d.id}/enable`, {}), 202);
+
+        // 1. The check finds the MX: provisioning, then active.
+        const name = `${unique('rx-enable')}.example`, d = await claim(name), host = `reply.${name}`; claims.set(name, d);
+        zone.set(host, { mx: [ses] });
+        assert.equal(ok(await api('GET', `/v1/inbound/domains/${d.id}`)).status, 'off');
+        const enabled = await enable(d);
+        assert.deepEqual([enabled.status, enabled.name, enabled.lastError], ['provisioning', host, null]);
+        // The host and the domain's DNS readiness keep their existing pending (its MX not yet seen) meanwhile.
+        const provisioning = { status: 'provisioning', listed: 'provisioning', lastError: null, hosts: [[host, 'pending']], receiving: 'pending', listedReceiving: 'pending' };
+        assert.deepEqual(await views(d), provisioning);
+        // Enabling again while it runs is the same request: one check, unchanged, and nothing else written.
+        const queued = async () => (await db.query('SELECT status,available_at,payload,attempts FROM jobs WHERE id=$1', [job(d)])).rows;
+        const audits = async () => (await db.query("SELECT count(*)::int AS n FROM audit_events WHERE action='inbound_domain.enable' AND target_id=$1", [d.id])).rows[0].n;
+        const [before, auditsBefore] = [await queued(), await audits()];
+        assert.equal(before.length, 1); assert.equal(auditsBefore, 1);
+        assert.equal((await enable(d)).status, 'provisioning');
+        assert.deepEqual([await queued(), await audits()], [before, auditsBefore]);
+        assert.deepEqual(await views(d), provisioning);
+        await runCheck(d);
+        assert.deepEqual(await views(d), { status: 'active', listed: 'active', lastError: null, hosts: [[host, 'active']], receiving: 'verified', listedReceiving: 'verified' });
+        assert.equal((await db.query("SELECT identity ? 'receivingRequested' AS requested FROM domain_claims WHERE name=$1", [name])).rows[0].requested, false, 'The check that observed the domain ends the request.');
+        assert.equal((await enable(d)).status, 'active', 'A domain that receives stays as it is.');
+
+        // 2. The check fails for good: failed, with its error, on every read. Enabling again retries.
+        const other = `${unique('rx-enable-fail')}.example`, f = await claim(other), otherHost = `reply.${other}`; claims.set(other, f);
+        assert.equal((await enable(f)).status, 'provisioning');
+        denied = true; await runCheck(f);
+        assert.equal((await db.query('SELECT status,last_error FROM jobs WHERE id=$1', [job(f)])).rows[0].status, 'failed');
+        const message = 'Receiving setup failed (SES_ACCESS_DENIED). Enable receiving again to retry.';
+        assert.deepEqual(await views(f), { status: 'failed', listed: 'failed', lastError: message, hosts: [[otherHost, 'failed']], receiving: 'pending', listedReceiving: 'pending' });
+        denied = false; zone.set(otherHost, { mx: [ses] });
+        assert.equal((await enable(f)).status, 'provisioning');
+        await runCheck(f);
+        assert.deepEqual((await views(f)).hosts, [[otherHost, 'active']]);
+      });
     });
   });
 
@@ -18346,7 +18567,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         { every: null, chosen: null, reply: null, provisioning: null, inbox: ephemeral.id, persistent: kept.id, stray: null, connection: null });
 
       // One list: each is an API key whose access says what it could already do, and no workspace permissions.
-      const access = (type: string, addressIds: string[] | null, inboxId: string | null, mail: string[]) => ({ type, addressIds, inboxId, mail });
+      const access = (type: string, addressIds: string[] | null, inboxId: string | null, mail: string[]) => ({ type, addressIds, inboxId, mail, createdInboxIds: [] });
       const expected: Record<string, Json> = {
         every: access('addresses', null, null, ['read', 'send', 'modify']), chosen: access('addresses', [a.id], null, ['read']), reply: access('addresses', [a.id], null, ['read', 'send']),
         provisioning: access('addresses', [], null, ['create', 'read', 'modify']), inbox: access('inbox', [ephemeral.id], ephemeral.id, ['read']),
@@ -18447,6 +18668,136 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       error(await local('POST', '/v1/api-keys', { name: 'Foreign', access: { type: 'addresses', addressIds: [foreign.id] } }), 422, 'MAILBOX_NOT_FOUND');
       error(await read(as('every'), foreign.id), 404, 'NOT_FOUND'); error(await read(foreign.secret, a.id), 404, 'NOT_FOUND');
       assert.equal((await db.query('SELECT revoked_at FROM mailbox_keys WHERE id = $1', [foreign.key])).rows[0].revoked_at, null);
+    });
+  });
+  test('API keys: updateApiKey changes a key in place with its secret, at once, and never past what createApiKey allows', async t => {
+    await simulatedSesFixture(t, async ({ db, runtime, local, request }) => {
+      const wid = runtime.config.workspaceId, hex = () => randomUUID().replaceAll('-', '');
+      runtime.mailR2 = { write: true, name: 'fake', bucket: { put: async () => {} } } as unknown as typeof runtime.mailR2;
+      const box = async () => ok(await local('POST', '/v1/inboxes', { type: 'sandbox' }), 201);
+      const [first, added] = [await box(), await box()];
+      const deliver = (id: string, subject: string) => local('POST', `/v1/inboxes/${id}/simulate`, { from: 'qa@fixture.invalid', subject, text: subject });
+      ok(await deliver(added.id, 'Before the key had it'), 202);
+      const key = ok(await local('POST', '/v1/api-keys', { name: 'Support agent', access: { type: 'addresses', addressIds: [first.id], mail: ['read'] } }), 201);
+      const messages = (id: string, query = '') => request('GET', `/v1/inboxes/${id}/messages${query}`, key.secret, undefined, {}, 15_000);
+      const change = (id: string, body: Json, headers: Record<string, string> = {}) => local('PATCH', `/v1/api-keys/${id}`, body, 'live', headers);
+      const access = (addressIds: string[] | null, mail = ['read'], createdInboxIds: string[] = []) => ({ type: 'addresses', addressIds, inboxId: null, mail, createdInboxIds });
+      error(await messages(added.id), 404, 'NOT_FOUND');
+
+      // Adding an address: the same secret reads its mail at once. A retry with the same Idempotency-Key replays the
+      // result; the key with another body conflicts; adding it again without one changes nothing and records nothing.
+      const widen = { access: { addAddressIds: [added.id] } }, retry = { 'Idempotency-Key': unique('widen') };
+      const widened = ok(await change(key.id, widen, retry));
+      assert.deepEqual([widened.id, widened.prefix, widened.access, widened.permissions], [key.id, key.prefix, access([first.id, added.id]), []]);
+      assert.deepEqual(ok(await messages(added.id)).data.map((m: Json) => m.subject), ['Before the key had it']);
+      assert.deepEqual(ok(await change(key.id, widen, retry)), widened);
+      error(await change(key.id, { access: { addAddressIds: [first.id] } }, retry), 409, 'IDEMPOTENCY_CONFLICT');
+      assert.deepEqual(ok(await change(key.id, widen)).access, widened.access);
+      const audits = async (id = key.id) => (await db.query("SELECT actor_type, actor_id, summary FROM audit_events WHERE workspace_id = $1 AND action = 'api_key.update' AND target_id = $2 ORDER BY at, id", [wid, id])).rows;
+      const [recorded] = await audits();
+      assert.deepEqual([recorded.actor_type, recorded.actor_id, recorded.summary.before.access.addressIds, recorded.summary.after.access.addressIds, recorded.summary.addedAddressIds],
+        ['member', manager!.userId, [first.id], [first.id, added.id], [added.id]]);
+      assert.equal((await audits()).length, 1);
+
+      // Removing it is refused at once, to a poll already waiting on it too: the poll ends without reading mail that
+      // arrives after the change, and the next request is refused.
+      const cursor = ok(await messages(added.id)).cursor, started = Date.now();
+      const waiting = messages(added.id, `?after=${cursor}&wait=10`);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      assert.deepEqual(ok(await change(key.id, { access: { removeAddressIds: [added.id] } })).access, access([first.id]));
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      ok(await deliver(added.id, 'After the key lost it'), 202);
+      assert.deepEqual(ok(await waiting).data, []);
+      assert.ok(Date.now() - started < 5_000, 'The poll ends when the key changes, not when it times out.');
+      error(await messages(added.id), 404, 'NOT_FOUND');
+      ok(await messages(first.id));
+      assert.deepEqual((await audits()).at(-1).summary.removedAddressIds, [added.id]);
+
+      // Every address must be one of this workspace's; another workspace's keys aren't found here.
+      const other = unique('keys-ws'), otherDomain = unique('mdom'), foreign = { box: `mbx_${hex()}`, key: `mbk_${hex()}` };
+      await db.query('INSERT INTO workspaces (id, name, slug) VALUES ($1, $1, $1)', [other]);
+      await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status,catch_all) VALUES($1,$2,$1,$3,$4,'active','store')", [otherDomain, other, `${other}.example`, REGION]);
+      await db.query('INSERT INTO mailboxes(id,workspace_id,domain_id,address) VALUES($1,$2,$3,$4)', [foreign.box, other, otherDomain, `team@${other}.example`]);
+      await db.query(`INSERT INTO mailbox_keys(id,workspace_id,name,hash,prefix,mailbox_ids,permissions) VALUES($1,$2,'foreign',$3,'nm_mbx_000000','[]','["read"]')`, [foreign.key, other, hex()]);
+      for (const body of [{ access: { addAddressIds: [foreign.box] } }, { access: { addressIds: [first.id, foreign.box] } }]) error(await change(key.id, body), 422, 'MAILBOX_NOT_FOUND');
+      error(await change(foreign.key, { access: { addAddressIds: [first.id] } }), 404, 'NOT_FOUND');
+      assert.deepEqual((await db.query('SELECT mailbox_ids FROM mailbox_keys WHERE id = $1', [key.id])).rows[0].mailbox_ids, [first.id]);
+
+      // A key's type never changes, nor an inbox key's inbox; a key for every address names the ones it keeps.
+      error(await change(key.id, { permissions: ['manage'] }), 422, 'VALIDATION_FAILED');
+      error(await change(key.id, { access: { addressIds: [first.id], addAddressIds: [added.id] } }), 422, 'VALIDATION_FAILED');
+      error(await change(key.id, {}), 422, 'VALIDATION_FAILED');
+      const inboxKey = ok(await local('POST', '/v1/api-keys', { name: 'Inbox agent', access: { type: 'inbox', inboxId: added.id } }), 201);
+      error(await change(inboxKey.id, { access: { addAddressIds: [first.id] } }), 422, 'VALIDATION_FAILED');
+      error(await change(inboxKey.id, { access: { mail: ['read', 'create'] } }), 422, 'VALIDATION_FAILED');
+      assert.deepEqual(ok(await change(inboxKey.id, { access: { mail: ['read', 'modify'] } })).access, { type: 'inbox', addressIds: [added.id], inboxId: added.id, mail: ['read', 'modify'], createdInboxIds: [] });
+      const every = ok(await local('POST', '/v1/api-keys', { name: 'Every address', access: { type: 'addresses' } }), 201);
+      error(await change(every.id, { access: { removeAddressIds: [first.id] } }), 422, 'ADDRESS_SCOPE_REQUIRED');
+      assert.deepEqual(ok(await change(every.id, { access: { addressIds: [first.id] } })).access, access([first.id]));
+
+      // Only what createApiKey allows: not a send key, not a domain-limited manage key, and never a key on itself.
+      const sender = ok(await local('POST', '/v1/api-keys', { name: 'Sender', permissions: ['send'] }), 201);
+      const domainManager = ok(await local('POST', '/v1/api-keys', { name: 'Domain manager', permissions: ['manage'], domains: ['example.com'] }), 201);
+      const admin = ok(await local('POST', '/v1/api-keys', { name: 'Manager', permissions: ['read', 'send', 'manage'] }), 201);
+      for (const restricted of [sender, domainManager]) {
+        error(await request('PATCH', `/v1/api-keys/${key.id}`, restricted.secret, widen), 403, 'PERMISSION_DENIED');
+        error(await request('PATCH', `/v1/api-keys/${restricted.id}`, restricted.secret, { permissions: ['read', 'send', 'manage'], domains: [] }), 403, 'PERMISSION_DENIED');
+      }
+      error(await request('PATCH', `/v1/api-keys/${admin.id}`, admin.secret, { name: 'Renamed' }), 403, 'PERMISSION_DENIED');
+      error(await request('PATCH', `/v1/api-keys/${key.id}`, key.secret, widen), 401, 'AUTH_INVALID');
+      assert.deepEqual((await db.query('SELECT permissions, domains FROM api_keys WHERE id = ANY($1) ORDER BY name', [[sender.id, domainManager.id]])).rows, [{ permissions: ['manage'], domains: ['example.com'] }, { permissions: ['send'], domains: [] }]);
+      // A manage key changes another key as it could create it, and a workspace key's new permissions apply at once.
+      error(await request('GET', '/v1/emails', sender.secret), 403, 'PERMISSION_DENIED');
+      assert.deepEqual(ok(await request('PATCH', `/v1/api-keys/${sender.id}`, admin.secret, { name: 'Reader', permissions: ['read'] })).permissions, ['read']);
+      ok(await request('GET', '/v1/emails', sender.secret));
+      ok(await request('PATCH', `/v1/api-keys/${sender.id}`, admin.secret, { permissions: ['send'] }));
+      error(await request('GET', '/v1/emails', sender.secret), 403, 'PERMISSION_DENIED');
+      error(await change(sender.id, { access: { mail: ['read'] } }), 422, 'VALIDATION_FAILED');
+      // A workspace key's waiting poll ends too when its permissions narrow, and its next request is refused.
+      const watcher = ok(await local('POST', '/v1/api-keys', { name: 'Watcher', permissions: ['read', 'manage'] }), 201), polling = Date.now();
+      const events = request('GET', '/v1/inbound/events?wait=10', watcher.secret, undefined, {}, 15_000);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      ok(await change(watcher.id, { permissions: ['send'] }));
+      assert.deepEqual(ok(await events).data, []);
+      assert.ok(Date.now() - polling < 5_000, 'The poll ends when the key changes, not when it times out.');
+      error(await request('GET', '/v1/inbound/events', watcher.secret), 403);
+
+      // A key with create reaches every inbox it created, whatever its addresses say. Taking one away while create stays
+      // is refused rather than reported, the response and the trail show that reach, and dropping create ends it at once,
+      // for a poll already waiting on it too. The key keeps creating inboxes until then.
+      const maker = ok(await local('POST', '/v1/api-keys', { name: 'Provisioning', access: { type: 'addresses', addressIds: [], mail: ['read', 'create'] } }), 201);
+      const own = ok(await request('POST', '/v1/inboxes', maker.secret, { type: 'sandbox' }), 201);
+      ok(await deliver(own.id, 'Made by the key'), 202);
+      const ownMail = (query = '') => request('GET', `/v1/inboxes/${own.id}/messages${query}`, maker.secret, undefined, {}, 15_000);
+      assert.deepEqual(ok(await local('GET', '/v1/api-keys?limit=100')).data.find((k: Json) => k.id === maker.id).access, access([], ['read', 'create'], [own.id]));
+      error(await change(maker.id, { access: { removeAddressIds: [own.id] } }), 409, 'CREATED_INBOX_REACHABLE');
+      // A replacement that leaves out an inbox the key created, never one of its listed addresses, is refused too.
+      assert.equal(error(await change(maker.id, { access: { addressIds: [first.id] } }), 409, 'CREATED_INBOX_REACHABLE').field, 'access.addressIds');
+      assert.deepEqual((await db.query('SELECT mailbox_ids FROM mailbox_keys WHERE id = $1', [maker.id])).rows[0].mailbox_ids, []);
+      assert.deepEqual(ok(await change(maker.id, { access: { addAddressIds: [own.id] } })).access, access([own.id], ['read', 'create'], [own.id]));
+      for (const [body, field] of [[{ access: { removeAddressIds: [own.id] } }, 'access.removeAddressIds'], [{ access: { addressIds: [first.id] } }, 'access.addressIds']] as const)
+        assert.equal(error(await change(maker.id, body), 409, 'CREATED_INBOX_REACHABLE').field, field);
+      assert.deepEqual((await db.query('SELECT mailbox_ids FROM mailbox_keys WHERE id = $1', [maker.id])).rows[0].mailbox_ids, [own.id]);
+      assert.deepEqual(ok(await ownMail()).data.map((m: Json) => m.subject), ['Made by the key']);
+      const another = ok(await request('POST', '/v1/inboxes', maker.secret, { type: 'sandbox' }), 201);
+      const ownCursor = ok(await ownMail()).cursor, ownStarted = Date.now();
+      const ownWaiting = ownMail(`?after=${ownCursor}&wait=10`);
+      await new Promise(resolve => setTimeout(resolve, 200));
+      assert.deepEqual(ok(await change(maker.id, { access: { addressIds: [first.id], mail: ['read'] } })).access, access([first.id], ['read'], []));
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      ok(await deliver(own.id, 'After the key lost it'), 202);
+      assert.deepEqual(ok(await ownWaiting).data, []);
+      assert.ok(Date.now() - ownStarted < 5_000, 'The poll ends when the key loses create, not when it times out.');
+      error(await ownMail(), 404, 'NOT_FOUND');
+      error(await request('POST', '/v1/inboxes', maker.secret, { type: 'sandbox' }), 403, 'PERMISSION_DENIED');
+      const reach = (await audits(maker.id)).map(r => [r.summary.before.access.createdInboxIds, r.summary.after.access.createdInboxIds]);
+      assert.deepEqual(reach, [[[own.id], [own.id]], [[own.id, another.id].sort(), []]]);
+
+      // Revoked and ended keys can't be changed.
+      ok(await local('POST', `/v1/api-keys/${sender.id}/revoke`));
+      ok(await local('POST', `/v1/api-keys/${key.id}/revoke`));
+      ok(await local('DELETE', `/v1/inboxes/${added.id}`), 202);
+      for (const id of [sender.id, key.id, inboxKey.id]) error(await change(id, { name: 'Back again' }), 409, 'KEY_INACTIVE');
     });
   });
   test('agent inbox contracts and storage budgets',async t=>{

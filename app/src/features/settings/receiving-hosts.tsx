@@ -16,8 +16,8 @@ const hostStatus: Record<ReceivingHost['status'], { label: string; tone: Tone }>
 const path = (domainId: string, hostId?: string) => `/v1/inbound/domains/${encodeURIComponent(domainId)}/hosts${hostId ? `/${encodeURIComponent(hostId)}` : ''}`
 
 /** The hosts the domain receives on, read with the page so the section arrives at its final height. */
-export function useReceivingHosts(domainId: string, enabled: boolean) {
-  return useApiQuery(['mailbox-domain', domainId, 'hosts'], (_api, signal) => request<{ data: ReceivingHost[] }>(path(domainId), { signal }).then(page => page.data.filter(host => host.status !== 'removed')), { enabled })
+export function useReceivingHosts(domainId: string, enabled: boolean, interval: number | false = false) {
+  return useApiQuery(['mailbox-domain', domainId, 'hosts'], (_api, signal) => request<{ data: ReceivingHost[] }>(path(domainId), { signal }).then(page => page.data.filter(host => host.status !== 'removed')), { enabled, interval: () => interval })
 }
 
 /** A domain receives on any set of hosts at once: the domain itself and any of its subdomains, each added and removed on its own. */

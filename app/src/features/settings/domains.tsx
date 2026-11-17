@@ -131,8 +131,9 @@ function DomainDetail() {
   const hosted = useSession()?.identity?.connection?.kind === 'shared'
   const [recheckUntil, setRecheckUntil] = useState(0)
   const domain = useDomain(id, recheckUntil)
-  const receiving = useApiQuery(['mailbox-domain', id], (api, signal) => api.mailboxes.domain(id, signal), { enabled: multiTenant })
-  const hosts = useReceivingHosts(id, multiTenant)
+  // Receiving set up through the API checks the domain in the background: follow it until it settles.
+  const receiving = useApiQuery(['mailbox-domain', id], (api, signal) => api.mailboxes.domain(id, signal), { enabled: multiTenant, interval: state => state?.status === 'provisioning' ? 5_000 : false })
+  const hosts = useReceivingHosts(id, multiTenant, receiving.data?.status === 'provisioning' ? 5_000 : false)
   const verify = useApiMutation((api, domainId: string) => api.domains.verify(domainId), 'Checking records', true)
   const client = useQueryClient()
   // Invalidate only after leaving: refetching this domain would 404 while the dialog closes.

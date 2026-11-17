@@ -1,7 +1,7 @@
 import { createMcpHandler, Server, type CallToolResult, type Tool } from '@modelcontextprotocol/server';
 import { CfWorkerJsonSchemaValidator } from '@modelcontextprotocol/server/validators/cf-worker';
 import { bearerActor, dispatchAsActor, dispatchAsMailboxAccess, workspaceBearer } from './auth.js';
-import { agentTokenMintRefusal, keyAdminRefusal, lastingRefusal, ModuleLoadError, receivingAdminRefusal, requestOrigin, withOuterRequest, workspaceMailAccess, type Actor, type MailboxAccess, type App, type RequestOrigin, type Runtime } from './core.js';
+import { agentTokenMintRefusal, digest, keyAdminRefusal, lastingRefusal, ModuleLoadError, receivingAdminRefusal, requestOrigin, withOuterRequest, workspaceMailAccess, type Actor, type MailboxAccess, type App, type RequestOrigin, type Runtime } from './core.js';
 import { getMcpGrantActor, withMcpAuthorization } from './mcp-auth.js';
 import { chooseWorkspace, setDefaultWorkspace, WorkspaceChoice, type McpConnection } from './oidc-resource.js';
 import { buildMcpCatalog, TOOLSETS, EMAIL_SEND_CONFIRMATION, EMAIL_SEND_ROUTING, type McpOperation } from './mcp-catalog.js';
@@ -123,7 +123,26 @@ const authorized = (op: McpOperation, actor: Actor) => !op.dashboardOnly
   && !(op.receivingAdmin && receivingAdminRefusal(actor, op.write ? 'change receiving configuration' : undefined))
   && !(op.lasting && lastingRefusal(actor, 'make lasting changes')) && permits(actor, op.permission);
 
+/**
+ * The hash of one listing: exactly the tools tools/list returns to this credential, in this mode and toolset. /mcp keeps
+ * no session state, so it cannot push tools/list_changed; instead each legacy session ID carries the listing it started
+ * on, and a request whose listing has since changed (a release, or the credential's own access) is answered 404, which a
+ * client must meet by initializing again and listing the tools anew. The catalog is fixed for an isolate's life, so a
+ * listing is a pure function of its kind, mode and visible operations: hash each one once per isolate.
+ */
+const listingVersions = new Map<string, Promise<string>>();
+function listingVersion(shape: string, tools: () => Tool[]): Promise<string> {
+  let version = listingVersions.get(shape);
+  if (!version) {
+    if (listingVersions.size >= 256) listingVersions.clear();
+    version = digest(JSON.stringify(tools())).then(hash => hash.slice(0, 16));
+    listingVersions.set(shape, version);
+  }
+  return version;
+}
+
 async function serve(app: App, request: Request, runtime: Runtime, principal: Principal, catalog: ReadonlyMap<string, McpOperation>, origin: RequestOrigin): Promise<Response> {
+  const session = request.headers.get('mcp-session-id');
   const base = new URL(runtime.config.publicUrl);
   const inbox = 'inbox' in principal ? principal.inbox : null;
   const connection = 'connection' in principal ? principal.connection : null;
@@ -141,12 +160,17 @@ async function serve(app: App, request: Request, runtime: Runtime, principal: Pr
   const selected = requested.filter(x => (TOOLSETS as readonly string[]).includes(x));
   // Toolsets narrow listings, not calls. Scoped inbox connections always see their allowed inbox operations.
   const listed = (op: McpOperation) => !(inbox && op.tool.name === 'createInboundThread') && (inbox || requested.includes('all') || !selected.length || selected.includes(op.toolset));
+  const visible = new Map([...operations].filter(([, op]) => listed(op)));
   function listTools() {
-    const visible = new Map([...operations].filter(([, op]) => listed(op)));
     // A key or an inbox key acts in its own workspace: its tools take no workspace.
     if (!connection) return codeMode ? [...visible.values()].map(op => op.tool) : resourceTools(visible);
     return codeMode ? [...workspaceTools, ...[...visible.values()].map(op => withWorkspace(op.tool))]
       : [workspaceResource, ...resourceTools(visible).map(tool => tool.name === describeTool.name ? tool : withWorkspace(tool, { type: 'string' }))];
+  }
+  const version = await listingVersion(`${connection ? 'connection' : 'key'}|${codeMode}|${[...visible.keys()].join(',')}`, listTools);
+  if (session !== null && !session.startsWith(`${version}.`)) {
+    await request.body?.cancel();
+    return rpcError(404, -32001, 'Session not found: the tools this connection can use changed. Initialize a new session and list the tools again.');
   }
   /** The workspaces tool: the person's workspaces, this connection's access in each, and the default. */
   function workspaceList() {
@@ -330,7 +354,15 @@ async function serve(app: App, request: Request, runtime: Runtime, principal: Pr
     if (response.status === 405) headers.set('Allow', 'POST, OPTIONS');
     if (!response.body) return new Response(null, { status: response.status, headers });
     const text = await boundedText(response, WIRE_LIMIT);
-    if (headers.get('content-type')?.split(';')[0]?.trim() !== 'text/event-stream') return new Response(redact(text), { status: response.status, headers });
+    // A legacy session starts on this catalog (catalogVersion). Requests without a session ID still work.
+    const started = (message: unknown) => {
+      if (session === null && object(parsedBody) && parsedBody.method === 'initialize' && object(message) && Object.hasOwn(message, 'result'))
+        headers.set('Mcp-Session-Id', `${version}.${crypto.randomUUID().replaceAll('-', '')}`);
+    };
+    if (headers.get('content-type')?.split(';')[0]?.trim() !== 'text/event-stream') {
+      if (object(parsedBody) && parsedBody.method === 'initialize') { try { started(JSON.parse(text)); } catch { /* not a result */ } }
+      return new Response(redact(text), { status: response.status, headers });
+    }
     // SDK2's legacy stateless leg emits SSE even for a single result. Drain it
     // completely and return its terminal JSON-RPC message, not an open DB-backed stream.
     let terminal: ObjectValue | undefined;
@@ -341,6 +373,7 @@ async function serve(app: App, request: Request, runtime: Runtime, principal: Pr
       if (object(message) && message.jsonrpc === '2.0' && Object.hasOwn(message, 'id') && (Object.hasOwn(message, 'result') || Object.hasOwn(message, 'error'))) terminal = message;
     }
     if (!terminal) return rpcError(500, -32603, 'MCP exchange ended without a result. Reconcile an uncertain write before retrying.', requestId);
+    started(terminal);
     headers.set('Content-Type', 'application/json');
     return new Response(redact(JSON.stringify(terminal)), { status: response.status, headers });
   } catch {

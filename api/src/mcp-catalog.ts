@@ -243,6 +243,7 @@ const DESCRIPTIONS: Record<string, string> = {
   createInboxConnection: 'Create a least-privilege MCP connection limited to chosen inboxes. auth=key returns a bearer key once inside a ready config (OpenCode, Claude Code, Cursor or generic); auth=oauth returns the config plus the human step: the person approves and selects the inboxes on the consent screen.',
   createBillingTopUpLink: 'Returns a Stripe Checkout link for a person to open and pay; agents cannot pay. Share the link with an owner or admin. Amount in whole cents, $20 to $10,000, excluding tax; the link expires in 23 hours and credit appears once Stripe confirms the payment.',
   createApiKey: 'Create a long-lived API key: for the workspace (permissions, sender domains), or with access limited to receiving addresses or one agent inbox. Created over MCP, it is tied to this approval and revoked with it. The secret is returned once. Prefer createAgentToken for short scripts.',
+  updateApiKey: 'Change what an existing API key can reach and keep its secret: access.addAddressIds or removeAddressIds for a key limited to addresses, access.mail, or a workspace key\'s permissions and domains. Over MCP, only keys this approval created. Takes effect at once.',
   createWebhook: 'Subscribe a public HTTPS URL to sending events. Set up over MCP, it is tied to this approval: it delivers while the approval is active and is paused when the approval is removed, resuming only with its URL and a new signing secret.',
 };
 const PATH_IDS: Record<string, string> = {

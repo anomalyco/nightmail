@@ -746,6 +746,14 @@ async function inboundKey(addressId: string, otherId: string) {
   check((await listed(limited.id, cursor => api('listApiKeys', { query: { cursor, limit: 100, includeRevoked: 'false' } }))).access.type === 'addresses', 'limited key not listed as an API key');
   check((await api('getInboundAddress', { client: limitedClient, path: { addressId } })).address === inbox, 'limited key cannot read its address');
   await expectDenial(() => api('getInboundAddress', { client: limitedClient, path: { addressId: otherId } }), 404, 'NOT_FOUND');
+  // Its addresses change in place and its secret stays: an added address works at once, and a removed one stops at once.
+  const keyPath = { id: limited.id };
+  const widened = await api('updateApiKey', { path: keyPath, headers: idKey('widen-limited-key'), body: { access: { addAddressIds: [otherId] } } });
+  check(widened.access.addressIds?.join() === [addressId, otherId].join(), 'limited key not widened');
+  check((await api('getInboundAddress', { client: limitedClient, path: { addressId: otherId } })).id === otherId, 'widened key cannot read the added address');
+  const narrowed = await api('updateApiKey', { path: keyPath, headers: idKey('narrow-limited-key'), body: { access: { removeAddressIds: [otherId] } } });
+  check(narrowed.access.addressIds?.join() === addressId, 'limited key not narrowed');
+  await expectDenial(() => api('getInboundAddress', { client: limitedClient, path: { addressId: otherId } }), 404, 'NOT_FOUND');
   await expectDenial(() => api('getCurrentIdentity', { client: limitedClient }), 401, 'AUTH_INVALID');
 }
 

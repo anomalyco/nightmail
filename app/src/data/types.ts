@@ -102,6 +102,8 @@ export type CreateApiKeyAccess = { type: 'workspace' } | { type: 'addresses'; ad
 /** A limited access takes its abilities in access.mail, without permissions or domains. */
 export interface ApiKeyInput { name: string; permissions?: KeyPermission[]; domains?: string[]; access?: CreateApiKeyAccess }
 export interface CreatedApiKey { key: ApiKey; secret: string }
+/** updateApiKey: a key for addresses replaces its addresses (null: every address) or adds and removes some. */
+export interface ApiKeyChange { access: { addressIds?: string[] | null; addAddressIds?: string[]; removeAddressIds?: string[] } }
 export interface AgentTokenSummary { id: string; grantId: string; permissions: KeyPermission[]; domains: string[]; purpose: string; expiresAt: ISODate; createdAt: ISODate; lastUsedAt: ISODate | null; revokedAt: ISODate | null }
 /** A connected agent (GET /v1/agents): an MCP sign-in and the short-lived agent tokens it made in this workspace. `own`
  *  false is another member's agent that made tokens here (owners and admins see these). */
@@ -287,7 +289,7 @@ export interface Api {
   lists: { list(input?: PageRequest & { counts?: boolean }, signal?: AbortSignal): Promise<PageResult<AudienceList>>; get(id: string, signal?: AbortSignal): Promise<AudienceList>; create(input: { name: string }, signal?: AbortSignal): Promise<AudienceList>; remove(id: string, signal?: AbortSignal): Promise<void> }
   segments: { list(input?: PageRequest, signal?: AbortSignal): Promise<PageResult<Segment>>; get(id: string, signal?: AbortSignal): Promise<Segment>; save(input: SegmentInput, signal?: AbortSignal): Promise<Segment>; preview(input: { id: string; listId?: string }, signal?: AbortSignal): Promise<AudiencePreview> }
   /** Every API key, workspace-wide or limited to addresses or an inbox, in one cursor list (100 a page). */
-  keys: { list(signal?: AbortSignal, cursor?: string, includeRevoked?: boolean): Promise<CursorItems<ApiKey>>; create(input: ApiKeyInput, signal?: AbortSignal): Promise<CreatedApiKey>; revoke(id: string, signal?: AbortSignal): Promise<void> }
+  keys: { list(signal?: AbortSignal, cursor?: string, includeRevoked?: boolean): Promise<CursorItems<ApiKey>>; create(input: ApiKeyInput, signal?: AbortSignal): Promise<CreatedApiKey>; update(id: string, change: ApiKeyChange, signal?: AbortSignal): Promise<ApiKey>; revoke(id: string, signal?: AbortSignal): Promise<void> }
   /** Agent tokens (connected agents and the tokens they made) and app passwords. */
   credentials: {
     agents(includeInactive?: boolean, signal?: AbortSignal): Promise<Agent[]>

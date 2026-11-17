@@ -67,7 +67,7 @@ const resources: Record<string, { label: string; actions: Record<string, string>
     list: 'listCampaigns', get: 'getCampaign', create: 'createCampaign', update: 'updateCampaign', delete: 'deleteCampaign', stats: 'getCampaignStats', contentGuide: 'getCampaignContentGuide', preview: 'previewCampaign', audience: 'previewCampaignAudience', previewImage: 'renderCampaignPreviewImage', state: 'getCampaignState', archive: 'setCampaignArchived', test: 'testCampaign', send: 'sendCampaign', schedule: 'scheduleCampaign', unschedule: 'unscheduleCampaign', reschedule: 'rescheduleCampaign', cancel: 'cancelCampaign', pause: 'pauseCampaign', resume: 'resumeCampaign', pacing: 'setCampaignPacing',
   } },
   keys: { label: 'Credentials', actions: {
-    list: 'listApiKeys', create: 'createApiKey', revoke: 'revokeApiKey', listTokens: 'listAgentTokens', createToken: 'createAgentToken', revokeToken: 'revokeAgentToken', listInbound: 'listInboundKeys', createInbound: 'createInboundKey', revokeInbound: 'revokeInboundKey',
+    list: 'listApiKeys', create: 'createApiKey', update: 'updateApiKey', revoke: 'revokeApiKey', listTokens: 'listAgentTokens', createToken: 'createAgentToken', revokeToken: 'revokeAgentToken', listInbound: 'listInboundKeys', createInbound: 'createInboundKey', revokeInbound: 'revokeInboundKey',
   } },
   send: { label: 'Transactional mail (confirm recipients, content and time; do not split shared outreach to bypass the 50-person limit)', actions: {
     single: 'sendEmail', batch: 'sendEmailBatch', preview: 'previewEmail', check: 'checkEmail',

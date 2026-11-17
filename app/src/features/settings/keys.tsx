@@ -1,14 +1,14 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router'
-import { Button, Checkbox, ConfirmDialog, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, PageHeader, Pagination, Tabs, useToast, SecretDialog } from '../../components/ui'
+import { Button, Checkbox, ConfirmDialog, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, MutationError, PageHeader, Pagination, Tabs, useToast, SecretDialog } from '../../components/ui'
 import { useApiMutation, useApiDef, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
-import type { Agent, AgentTokenSummary, ApiKey, AppPassword } from '../../data/types'
+import type { Agent, AgentTokenSummary, ApiKey, ApiKeyChange, AppPassword, InboundAddress } from '../../data/types'
 import { date, shortDateTime } from '../../lib/format'
 import { useCursorPagination } from '../../lib/pagination'
 import { AdminOnlyPage } from './admin-only'
 import { KeySendExample } from '../docs/first-send'
-import { CreateKeyDialog, type CreatedSecret, type Purpose } from './create-key'
+import { AddressChoice, chooseAddress, CreateKeyDialog, type CreatedSecret, type Purpose } from './create-key'
 import { accessLabel, agentAccess, connectionTitle, domainScope, mailLabel, protocolLabel } from './key-labels'
 import { keyTypes, settingsColumns, type KeyTypeFilter } from './skeletons'
 import { KeysGuide } from './keys-guide'
@@ -39,6 +39,8 @@ const rowState = (row: Row): ReactNode => {
   return state ? <span className="muted">{state}</span> : row.kind === 'agent' && !row.agent.own && !row.agent.tokens.some(token => !tokenState(token)) ? <span className="muted">—</span> : null
 }
 const rowName = (row: Row) => row.kind === 'key' ? row.key.name : row.kind === 'agent' ? connectionTitle(row.agent) : row.kind === 'token' ? row.token.purpose : row.password.name
+// A working key for chosen addresses (or every one) can have its addresses changed; a key that creates inboxes can't here.
+const editableAddresses = (row: Row): row is Extract<Row, { kind: 'key' }> => row.kind === 'key' && !keyState(row.key) && row.key.access.type === 'addresses' && !row.key.access.mail.includes('create')
 const revokeLabel = (row: Row) => row.kind === 'key' ? 'Revoke key' : row.kind === 'agent' ? (row.agent.own ? 'Revoke agent' : 'Revoke its tokens') : row.kind === 'token' ? 'Revoke token' : 'Revoke password'
 const expiry = (token: AgentTokenSummary) => tokenState(token) ?? `Expires ${shortDateTime(token.expiresAt)} UTC`
 
@@ -77,6 +79,7 @@ function ApiKeys({ connectLink }: { connectLink: boolean }) {
   const [secret, setSecret] = useState<CreatedSecret | null>(null)
   const [revoking, setRevoking] = useState<Row | null>(null)
   const [viewing, setViewing] = useState<Row | null>(null)
+  const [editing, setEditing] = useState<ApiKey | null>(null)
   const address = (id: string) => addresses.data?.find(item => item.id === id)?.address ?? id
 
   // API keys page by cursor; agents and app passwords aren't paginated, so they join the first page. Each source fails
@@ -159,7 +162,7 @@ function ApiKeys({ connectLink }: { connectLink: boolean }) {
             { ...prefixColumn, render: row => row.kind === 'key' ? <code>{row.key.prefix}</code> : <span className="muted">—</span> },
             { ...lastColumn, render: used, cardRender: row => <span className={row.kind === 'token' ? 'keys-nested' : undefined}>{cardLast(row)}</span> },
             { ...actionsColumn, render: row => rowState(row) ?? <Button variant="danger" aria-label={`Revoke ${rowName(row)}`} onClick={() => setRevoking(row)}>Revoke</Button>,
-              cardRender: row => rowState(row) ? null : <DropdownMenu label={`Actions for ${rowName(row)}`} title={rowName(row)} items={[{ label: revokeLabel(row), destructive: true, onSelect: () => setRevoking(row) }]} /> },
+              cardRender: row => rowState(row) ? null : <DropdownMenu label={`Actions for ${rowName(row)}`} title={rowName(row)} items={[...editableAddresses(row) ? [{ label: 'Edit addresses', onSelect: () => setEditing(row.key) }] : [], { label: revokeLabel(row), destructive: true, onSelect: () => setRevoking(row) }]} /> },
           ]} />}
         {failed.length > 0 && <ErrorState error={failed[0].query.error} onRetry={() => failed.forEach(source => void source.query.refetch())} />}
         {keysShown && !listLoading && (!keys.error || pagination.page > 1) && <Pagination page={pagination.page} pageSize={100} nextCursor={keys.data?.nextCursor} onPageChange={next => pagination.onPageChange(next, keys.data?.nextCursor)} />}
@@ -168,7 +171,8 @@ function ApiKeys({ connectLink }: { connectLink: boolean }) {
     {open && <CreateKeyDialog open onOpenChange={setOpen} initial={initial} onCreated={setSecret} onConnectAgent={() => setConnecting(true)} />}
     <ConnectAgentDialog open={connecting} onOpenChange={setConnecting} onCreateKey={() => setOpen(true)} />
     <SecretDialog secret={secret?.secret ?? null} title={secret?.title ?? 'Key created'} description={secret?.description} onClose={() => setSecret(null)}>{secret?.sendExample && <KeySendExample apiKey={secret.secret} />}{secret?.agent && <McpKeySetup secret={secret.secret} env={apiKeyEnv} />}</SecretDialog>
-    <KeyDetails row={viewing} fields={viewing ? details(viewing) : []} onClose={() => setViewing(null)} onRevoke={row => { setViewing(null); setRevoking(row) }} />
+    <KeyDetails row={viewing} fields={viewing ? details(viewing) : []} onClose={() => setViewing(null)} onRevoke={row => { setViewing(null); setRevoking(row) }} onEdit={key => { setViewing(null); setEditing(key) }} />
+    {editing && <EditAddressesDialog apiKey={editing} options={addresses.data ?? []} onClose={() => setEditing(null)} />}
     <RevokeDialog row={revoking} onClose={() => setRevoking(null)} pending={revokeKey.isPending || revokeAgent.isPending || revokeToken.isPending || revokePassword.isPending}
       onConfirm={async row => {
         if (row.kind === 'key') await revokeKey.mutateAsync(row.key.id)
@@ -179,13 +183,48 @@ function ApiKeys({ connectLink }: { connectLink: boolean }) {
   </div>
 }
 
-// One row in full, with Revoke: the way to read a long name or address list on a phone, where a card clips it.
-function KeyDetails({ row, fields, onClose, onRevoke }: { row: Row | null; fields: [string, ReactNode][]; onClose: () => void; onRevoke: (row: Row) => void }) {
+// One row in full, with its actions: the way to read a long name or address list on a phone, where a card clips it.
+function KeyDetails({ row, fields, onClose, onRevoke, onEdit }: { row: Row | null; fields: [string, ReactNode][]; onClose: () => void; onRevoke: (row: Row) => void; onEdit: (key: ApiKey) => void }) {
   return <Dialog open={row !== null} onOpenChange={next => { if (!next) onClose() }} title={row ? rowName(row) : ''} footer={<>
     <Button onClick={onClose}>Close</Button>
+    {row && editableAddresses(row) && <Button onClick={() => onEdit(row.key)}>Edit addresses</Button>}
     {row && !rowState(row) && <Button variant="danger" onClick={() => onRevoke(row)}>{revokeLabel(row)}</Button>}
   </>}>
     <dl className="keys-details">{fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+  </Dialog>
+}
+
+// A key's addresses, changed in place: the key keeps its secret. Adds and removes only what changed, so an edit made
+// meanwhile elsewhere isn't undone. Rendered only while open, so the choices start from the key each time.
+function EditAddressesDialog({ apiKey, options, onClose }: { apiKey: ApiKey; options: InboundAddress[]; onClose: () => void }) {
+  const update = useApiMutation((api, change: ApiKeyChange) => api.keys.update(apiKey.id, change), 'Addresses updated')
+  const current = apiKey.access.addressIds
+  const [every, setEvery] = useState(current === null)
+  const [chosen, setChosen] = useState<string[]>(current ?? [])
+  const [error, setError] = useState('')
+  const pending = update.isPending
+  // Receiving addresses, and anything else the key already has (an inbox), so saving never drops it unseen.
+  const shown = [...options.filter(item => item.kind !== 'inbox' || current?.includes(item.id)), ...(current ?? []).filter(id => !options.some(item => item.id === id)).map(id => ({ id, address: id }))]
+  function toggle(id: string, checked: boolean) {
+    setError(''); setEvery(false)
+    setChosen(list => checked ? [...new Set([...list, id])] : list.filter(item => item !== id))
+  }
+  async function submit(event: FormEvent) {
+    event.preventDefault()
+    if (!every && !chosen.length) { setError(chooseAddress); return }
+    const add = chosen.filter(id => !current?.includes(id)), remove = (current ?? []).filter(id => !chosen.includes(id))
+    const change: ApiKeyChange | null = every ? current === null ? null : { access: { addressIds: null } }
+      : current === null ? { access: { addressIds: chosen } }
+      : add.length || remove.length ? { access: { ...add.length ? { addAddressIds: add } : {}, ...remove.length ? { removeAddressIds: remove } : {} } } : null
+    try { if (change) await update.mutateAsync(change); onClose() } catch { /* Shown in the form. */ }
+  }
+  return <Dialog open onOpenChange={next => { if (!next && !pending) onClose() }} title="Edit addresses"
+    footer={<><Button disabled={pending} onClick={onClose}>Cancel</Button><Button variant="primary" loading={pending} type="submit" form="edit-key-addresses">Save</Button></>}>
+    <form id="edit-key-addresses" className="stack" onSubmit={submit} noValidate>
+      <MutationError error={update.error} />
+      <AddressChoice id="edit-key-address" options={shown} every={every} chosen={chosen} disabled={pending} error={error}
+        onEvery={checked => { setEvery(checked); setChosen(checked ? [] : current ?? []); setError('') }} onToggle={toggle} />
+    </form>
   </Dialog>
 }
 

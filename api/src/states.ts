@@ -69,7 +69,17 @@ export type IdentityFacts = {
   imported?: true;
   /** Immutable operator-attested SES fingerprint. Only the operator can restore a revoked adoption. */
   adopted?: {arn:string;fingerprint:string};
+  /** Hosted: when receiving was enabled (enableInboundDomain) and the check it queued hasn't observed the domain yet.
+   * Every check that observes the domain writes its facts afresh, without it. */
+  receivingRequested?: string;
 };
+/** Hosted receiving set up on request: `provisioning` while the domain's queued check waits or runs, `failed` (with that
+ * job's error) once it gave up, null otherwise. `dc` is the claim, as in the predicates below. */
+export type ReceivingSetup = { status: 'provisioning' } | { status: 'failed'; error: string | null };
+export const receivingSetup = (dc: SQL = sql`dc`) => sql`(SELECT CASE WHEN j.status IN ('pending','running') THEN jsonb_build_object('status','provisioning')
+  WHEN j.status='failed' THEN jsonb_build_object('status','failed','error',j.last_error) END
+  FROM jobs j WHERE ${dc}.identity->>'receivingRequested' IS NOT NULL AND j.id='domain.verify:'||${dc}.token::text)`;
+export const setupError = (setup: Extract<ReceivingSetup, { status: 'failed' }>) => `Receiving setup failed${setup.error ? ` (${setup.error})` : ''}. Enable receiving again to retry.`;
 /** Labels of the ownership TXT record (`_<label>.<domain>`), current first. A claim shows the one it was made with
  * (domain_claims.proof_label: claims from before the rename keep `_bane`), and any of them proves any claim. */
 export const PROOF_LABELS = [productSlug, ...legacySlugs] as const; // legacySlugs: remove after rename cleanup (pre-rename claims then republish as _nightmail)

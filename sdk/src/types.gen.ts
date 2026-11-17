@@ -208,6 +208,10 @@ export type ApiKeyAccess = {
      * addresses and inbox: read (mail, events, attachments), send (reply and start conversations from those addresses only), modify (mark read, archive, star, label, delete an inbox), create (create agent inboxes and use the ones it created). Empty for workspace keys.
      */
     mail: Array<'read' | 'send' | 'modify' | 'create'>;
+    /**
+     * With create: the live agent inboxes the key created, which it reaches as well as addressIds (up to 1,000, by ID). Empty otherwise.
+     */
+    createdInboxIds: Array<string>;
 };
 
 export type ApiKey = {
@@ -261,6 +265,39 @@ export type CreateApiKeyAccess = {
      */
     inboxId: string;
     mail?: Array<'read' | 'send' | 'modify'>;
+};
+
+export type UpdateApiKey = {
+    name?: string;
+    /**
+     * Workspace keys: replaces its permissions.
+     */
+    permissions?: Array<'read' | 'send' | 'manage'>;
+    /**
+     * Workspace keys: replaces the sender domains it is limited to. [] for all domains.
+     */
+    domains?: Array<string>;
+    /**
+     * A key limited to addresses or an inbox. Its type never changes, nor does an inbox key's inbox.
+     */
+    access?: {
+        /**
+         * A key for addresses: replaces its addresses. null for every address, including ones added later.
+         */
+        addressIds?: Array<string> | null;
+        /**
+         * A key for addresses: adds these and keeps the others. An address it already has is left as it is, so a retry changes nothing.
+         */
+        addAddressIds?: Array<string>;
+        /**
+         * A key for addresses: removes these. Requests with the key lose them at once, and replies it queued from them are not sent. An inbox the key created stays reachable while it has create, so removing one is refused (409 CREATED_INBOX_REACHABLE) unless mail drops create too.
+         */
+        removeAddressIds?: Array<string>;
+        /**
+         * A key for addresses or an inbox: replaces what it may do with that mail. An inbox key takes read, send and modify.
+         */
+        mail?: Array<'read' | 'send' | 'modify' | 'create'>;
+    };
 };
 
 export type ContactRead = Contact & {
@@ -3156,7 +3193,7 @@ export type InboundHost = {
      */
     name: string;
     /**
-     * pending: its MX record isn’t seen yet. active: it receives. mixed: it receives, and another provider’s MX record shares its mail (a backup MX, or one with a better priority while mail moves over). lost: its MX record disappeared; it keeps receiving for two hours. failed: receiving setup failed (self-hosted). removed: it no longer receives; its addresses and mail are kept, and adding it again restores it.
+     * pending: its MX record isn’t seen yet. active: it receives. mixed: it receives, and another provider’s MX record shares its mail (a backup MX, or one with a better priority while mail moves over). lost: its MX record disappeared; it keeps receiving for two hours. failed: receiving setup failed. removed: it no longer receives; its addresses and mail are kept, and adding it again restores it.
      */
     status: 'pending' | 'active' | 'mixed' | 'lost' | 'failed' | 'removed';
     catchAll: 'create_address' | 'store';
@@ -6790,6 +6827,75 @@ export type RevokeApiKeyResponses = {
 };
 
 export type RevokeApiKeyResponse = RevokeApiKeyResponses[keyof RevokeApiKeyResponses];
+
+export type UpdateApiKeyData = {
+    body: UpdateApiKey;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path, and are retained indefinitely. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/v1/api-keys/{id}';
+};
+
+export type UpdateApiKeyErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type UpdateApiKeyError = UpdateApiKeyErrors[keyof UpdateApiKeyErrors];
+
+export type UpdateApiKeyResponses = {
+    /**
+     * Success
+     */
+    200: ApiKey;
+};
+
+export type UpdateApiKeyResponse = UpdateApiKeyResponses[keyof UpdateApiKeyResponses];
 
 export type ListContactsData = {
     body?: never;

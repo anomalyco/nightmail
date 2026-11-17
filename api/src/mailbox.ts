@@ -1,11 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { actorMailAccess, mailboxRoute, receivingConsentRoute, workspaceMailAccess, ApiError, RECEIVING_HOST_CHANGE, digest, errors, getSes, id, isoTime, json, KEY_CHANGE, lasting, lazyModule, log, ModuleLoadError, response, SuppressionEventData, type Actor, type App, type Ctx, type DbExecutor, type MailboxAccess, type Runtime } from './core.js';
-import { authenticate, chargeCredential, delegatedInbox, longPoll, requireReceivingConsent, reservePolls } from './auth.js';
+import { authenticate, chargeCredential, createdInboxes, delegatedInbox, longPoll, requireReceivingConsent, reservePolls } from './auth.js';
 import { boundRequestBody } from './request-body.js';
 import { auditContext, auditInsert, recordAudit } from './audit.js';
 import { domains } from './db/operations.js';
-import { claimReceivable, claimReceives, claimSends, connectionReady } from './states.js';
+import { claimReceivable, claimReceives, claimSends, connectionReady, receivingSetup, setupError, type ReceivingSetup } from './states.js';
 import { mailboxAddresses, mailboxDomains, mailboxes, mailboxKeys, mailboxThreads, mailMessages, mailUnrouted, type MailboxPermission } from './db/mailbox.js';
 import { expectedMx, checkMx, mxBlocksEnable } from './mailbox-dns.js';
 import { eventView, inboundEventTypes, latestCursor, readEvents, recordEvents } from './mailbox-events.js';
@@ -24,7 +24,7 @@ import { registerInboundOverview } from './inbound-overview.js';
 import { AddressState, assertInboundRecipients, createInboundThreadRoute, InboundAddressId, inboundReplyTarget, queueInboundThreadMessage, registerInboundThreadReads, replyToInboundThreadRoute, visibleThreadAddresses } from './inbound-threads.js';
 import { legacyAddressOperations, productName } from './brand.js';
 import { receivingIssueSchema } from './operations.js';
-import { addHost, listHosts, removeHost, updateHost } from './receiving-hosts.js';
+import { addHost, enableHosted, listHosts, removeHost, updateHost } from './receiving-hosts.js';
 
 const security: Record<string, string[]>[] = [{ bearerAuth: [] }, { dashboardSession: [] }, { secureDashboardSession: [] }];
 const loadMailboxSesv2 = lazyModule(() => import('@aws-sdk/client-sesv2'));
@@ -50,7 +50,7 @@ async function mailboxFor(c: Ctx, mailboxId: string, permission: MailboxPermissi
 
 export async function authorizeInboxKey(c:Ctx,token:string):Promise<MailboxAccess>{
   const key=await chargeCredential<{id:string;workspace_id:string;grant_id:string|null;mailbox_ids:string[]|null;scope_ids:string[]|null;permissions:MailboxPermission[]}>(c, mailboxKeys,sql`
-    SELECT k.id,k.workspace_id,k.id AS key_id,g.grant_id,k.mailbox_ids AS scope_ids,CASE WHEN k.permissions ? 'create' THEN coalesce(k.mailbox_ids,'[]'::jsonb)||to_jsonb(ARRAY(SELECT b.id FROM mailboxes b WHERE b.workspace_id=k.workspace_id AND b.created_by=k.id AND b.kind='inbox' AND b.delete_after>now() ORDER BY b.id LIMIT 1000)) ELSE k.mailbox_ids END AS mailbox_ids,k.permissions,${c.env.config.apiRateLimitPerMinute}::int AS max_requests FROM mailbox_keys k LEFT JOIN mail_grant_objects g ON g.workspace_id=k.workspace_id AND g.kind='key' AND g.resource=k.id WHERE hash=${await digest(token)} AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now())`);
+    SELECT k.id,k.workspace_id,k.id AS key_id,g.grant_id,k.mailbox_ids AS scope_ids,CASE WHEN k.permissions ? 'create' THEN coalesce(k.mailbox_ids,'[]'::jsonb)||${createdInboxes(sql`k.workspace_id`, sql`k.id`)} ELSE k.mailbox_ids END AS mailbox_ids,k.permissions,${c.env.config.apiRateLimitPerMinute}::int AS max_requests FROM mailbox_keys k LEFT JOIN mail_grant_objects g ON g.workspace_id=k.workspace_id AND g.kind='key' AND g.resource=k.id WHERE hash=${await digest(token)} AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at>now())`);
   if(!key)throw new ApiError(401,'AUTH_INVALID','The inbox key is invalid or expired.');
   if(key.grant_id){
     const grant=await (await import('./mcp-auth.js')).getMcpGrantActor(c.env,'mcp_'+key.grant_id,key.workspace_id);
@@ -99,7 +99,7 @@ const InboundSubdomainSchema = z.object({
 }).openapi('InboundSubdomain');
 const InboundHostSchema = z.object({
   id: z.string().describe('Host ID (mdom_…).'), domainId: z.string().describe(`${productName} domain ID.`), name: z.string().describe('The host: the domain itself or one of its subdomains.'),
-  status: z.enum(['pending', 'active', 'mixed', 'lost', 'failed', 'removed']).describe(`pending: its MX record isn\u2019t seen yet. active: it receives. mixed: it receives, and another provider\u2019s MX record shares its mail (a backup MX, or one with a better priority while mail moves over). lost: its MX record disappeared; it keeps receiving for two hours. failed: receiving setup failed (self-hosted). removed: it no longer receives; its addresses and mail are kept, and adding it again restores it.`),
+  status: z.enum(['pending', 'active', 'mixed', 'lost', 'failed', 'removed']).describe(`pending: its MX record isn\u2019t seen yet. active: it receives. mixed: it receives, and another provider\u2019s MX record shares its mail (a backup MX, or one with a better priority while mail moves over). lost: its MX record disappeared; it keeps receiving for two hours. failed: receiving setup failed. removed: it no longer receives; its addresses and mail are kept, and adding it again restores it.`),
   catchAll: InboundCatchAll, dns: z.array(MxRecord).describe('The MX record to publish on this host.'), mx: MxReportSchema.nullable(), issue: receivingIssueSchema.nullable().describe('Hosted: what needs attention on this host, from its last DNS check.'),
   addressCount: z.number().int(), metadata: z.record(z.string(), z.unknown()), createdAt: z.string(), updatedAt: z.string(),
 }).openapi('InboundHost');
@@ -134,13 +134,19 @@ async function domainViews(c: Ctx, rows: (typeof domains.$inferSelect)[]) {
   const ids = [...shown.values()].flatMap(state => state ? [state.id] : []);
   const counts = ids.length ? await c.env.db.select({ domainId: mailboxes.domainId, count: sql<number>`count(*)::int` }).from(mailboxes).where(inArray(mailboxes.domainId, ids)).groupBy(mailboxes.domainId) : [];
   const shared=c.env.config.regionalSending && rows.some(row=>row.region!=='us-east-2') && (await c.env.db.execute(sql`SELECT FROM provider_connections WHERE workspace_id=${access(c).workspaceId} AND kind='shared'`)).rowCount;
+  // Hosted: the setup enableInboundDomain asked for, shown until the domain routes.
+  const setups = c.env.config.multiTenant ? new Map((await c.env.db.execute<{ id: string; setup: ReceivingSetup | null }>(sql`SELECT d.id,${receivingSetup()} AS setup FROM operation_domains d
+    JOIN domain_claims dc ON dc.workspace_id=d.workspace_id AND dc.name=d.name WHERE d.workspace_id=${access(c).workspaceId} AND d.id IN (SELECT jsonb_array_elements_text(${JSON.stringify(rows.map(row => row.id))}::jsonb))`)).rows.map(r => [r.id, r.setup])) : null;
   return rows.map(row => {
-    const state = shown.get(row.id), own = all.find(item => item.domainId === row.id && item.parentId === null);
+    const primary = shown.get(row.id), own = all.find(item => item.domainId === row.id && item.parentId === null);
+    // Until its own host routes (or waits for a BYO receipt rule), a domain whose setup was asked for shows that setup.
+    const setup = !primary || (primary.parentId === null && primary.status === 'waiting_for_mx') ? setups?.get(row.id) : null;
+    const state = primary && setup ? { ...primary, status: setup.status, lastError: setup.status === 'failed' ? setupError(setup) : null } : primary;
     const host=state?.receivingHost ?? state?.name ?? row.name;
     const region=state?.region ?? (shared?'us-east-2':row.region);
     // The domain's other hosts: subdomains self-hosted, any host hosted.
     const others = all.filter(item => item.domainId === row.id && item.id !== state?.id && (c.env.config.multiTenant || item.parentId === own?.id) && !['disabled', 'disabling'].includes(item.status)).length;
-    return { id: row.id, name: host, region, status: state?.status ?? 'off' as const, dns: [expectedMx(host, region)], mx: state?.mx ?? null, lastError: state?.lastError ?? null,
+    return { id: row.id, name: host, region, status: state?.status ?? setup?.status ?? 'off' as const, dns: [expectedMx(host, region)], mx: state?.mx ?? null, lastError: state?.lastError ?? (setup?.status === 'failed' ? setupError(setup) : null),
       enabledAt: iso(state?.enabledAt), checkedAt: iso(state?.checkedAt), catchAll: state?.catchAll ?? 'store' as const, addressCount: counts.find(item => item.domainId === state?.id)?.count ?? 0,
       subdomains: { enabled: own?.acceptSubdomains ?? false, count: others, dns: [expectedMx(`*.${row.name}`, region)] } };
   });
@@ -251,11 +257,11 @@ function registerReceivingDomains(app: App) {
     return c.json({ ...view!, mx }, 200);
   });
   app.openapi(createRoute({ ...meta, method: 'post', path: `${base}/{id}/enable`, operationId: 'enableInboundDomain', summary: 'Enable receiving for a verified domain',
-    description: `Checks that the domain is verified in SES and that its MX records will not take mail from another provider, then queues setup: a ${productName} S3 bucket, SNS topic and a catch-all SES receipt rule for the domain. Publish the returned MX record to start receiving. Use force=true to take over a domain whose mail another provider receives today.`,
+    description: `Checks that the domain is verified in SES and that its MX records will not take mail from another provider, then queues setup: a ${productName} S3 bucket, SNS topic and a catch-all SES receipt rule for the domain. Publish the returned MX record to start receiving. Use force=true to take over a domain whose mail another provider receives today. Hosted, receiving follows verified DNS: this queues the domain\u2019s check now, and the domain reads provisioning until that check routes it (active), finds no MX yet (waiting_for_mx) or fails (failed, with lastError).`,
     request: { params: IdParam, body: json(z.object({ catchAll: InboundCatchAll.optional(), force: z.boolean().default(false) }).strict().openapi('EnableInboundDomain')) }, responses: { 202: response(InboundDomainSchema), ...errors } }), async c => {
     const value = hostAdmin(c); const row = await operationDomain(c, c.req.valid('param').id); const input = c.req.valid('json');
     c.env = await withRegionSettings(c.env, value.workspaceId);
-    if (c.env.config.multiTenant) return c.json((await domainViews(c,[row]))[0]!,202);
+    if (c.env.config.multiTenant) { await enableHosted(c, row); return c.json((await domainViews(c,[row]))[0]!,202); }
     if (!c.env.config.regions.includes(row.region)) throw new ApiError(422, 'REGION_NOT_CONFIGURED', 'Enable the domain’s SES region first.');
     const { GetEmailIdentityCommand } = await loadMailboxSesv2();
     const identity = await (await getSes(c.env, row.region)).send(new GetEmailIdentityCommand({ EmailIdentity: row.name })).catch((error: unknown) => {

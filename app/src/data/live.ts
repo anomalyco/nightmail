@@ -276,6 +276,7 @@ export function createLiveApi(): Api {
     keys: {
       list: async (signal, cursor, includeRevoked = true) => { const result = await call<{ data: ApiKey[]; nextCursor: string | null }>(`/api-keys?limit=100&includeRevoked=${includeRevoked}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, 'GET', undefined, signal); return Object.assign(result.data, { nextCursor: result.nextCursor }) },
       create: async (input, signal) => { const { secret, ...key } = await call<ApiKey & { secret: string }>('/api-keys', 'POST', input, signal); return { key, secret } },
+      update: (id, change, signal) => call<ApiKey>(`/api-keys/${idPath(id)}`, 'PATCH', change, signal),
       revoke: async (id, signal) => { await call(`/api-keys/${idPath(id)}/revoke`, 'POST', undefined, signal) }
     },
     credentials: {

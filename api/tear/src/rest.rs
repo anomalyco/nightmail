@@ -225,6 +225,7 @@ pub const OPS: &[(&str, &str, &str, Check)] = &[
     ("testRituals", "post", "/v1/rituals/test", Check::RitualRead),
     ("testRouting", "post", "/v1/routing/test", Check::RoutingRead),
     ("testWebhook", "post", "/v1/webhooks/{id}/test", Check::Manage),
+    ("updateApiKey", "patch", "/v1/api-keys/{id}", Check::Manage),
     ("updateCampaign", "patch", "/v1/campaigns/{id}", Check::Send),
     ("updateCampaignTemplate", "patch", "/v1/templates/{id}", Check::Manage),
     ("updateContact", "patch", "/v1/contacts/{id}", Check::Manage),

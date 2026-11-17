@@ -6,7 +6,7 @@ import type { domains } from './db/operations.js';
 import { checkMx, expectedMx } from './mailbox-dns.js';
 import { queueReconcile } from './mailbox-setup.js';
 import { reservedPlatformName } from './domain-claims.js';
-import { dnsUnavailable, hostedDomain, recheckJob, type HostedDomain } from './operations.js';
+import { derivedReadiness, dnsUnavailable, hostedDomain, recheckJob, type HostedDomain } from './operations.js';
 import { establishedHost, inspectReceivingHost, type ReceivingIssue } from './receiving-host.js';
 import { claimProjection, hostGraceStart } from './states.js';
 import { productName } from './brand.js';
@@ -39,13 +39,15 @@ export function hostName(name: string, domain: string) {
   return host;
 }
 
-type ClaimFacts = Pick<HostedDomain, 'receiving_state' | 'receiving_host' | 'receiving_lost_since' | 'identity'>;
+type ClaimFacts = Pick<HostedDomain, 'receiving_state' | 'receiving_host' | 'receiving_lost_since' | 'identity'> & Partial<Pick<HostedDomain, 'receiving_setup'>>;
 /** One host as the API shows it. Hosted, `claim` keeps the domain's own row's issue and the primary host's MX grace, as every Worker writes them. */
 export function hostView(row: Row, addressCount: number, claim?: ClaimFacts | null) {
   const host = row.receivingHost ?? row.name, own = row.parentId === null;
   const issue: ReceivingIssue | null = removed(row.status) ? null : own && claim ? (claim.identity?.issue?.host === host ? claim.identity.issue : null) : row.issue;
   const lost = row.status === 'active' && !!(claim ? hostGraceStart(claim, { host, lost_since: row.lostSince }) : row.lostSince);
-  const status: HostStatusView = removed(row.status) ? 'removed' : row.status === 'failed' ? 'failed' : row.status !== 'active' ? 'pending' : lost ? 'lost' : row.mx?.state === 'mixed' ? 'mixed' : 'active';
+  // Hosted, the domain's own host is pending while the setup enableInboundDomain asked for runs, and failed if it gave up.
+  const failed = row.status === 'failed' || (own && row.status === 'waiting_for_mx' && claim?.receiving_setup?.status === 'failed');
+  const status: HostStatusView = removed(row.status) ? 'removed' : failed ? 'failed' : row.status !== 'active' ? 'pending' : lost ? 'lost' : row.mx?.state === 'mixed' ? 'mixed' : 'active';
   return { id: row.id, domainId: row.domainId, name: host, status, catchAll: row.catchAll, dns: [expectedMx(host, row.region)], mx: row.mx ?? null, issue, addressCount, metadata: row.metadata,
     createdAt: new Date(row.createdAt).toISOString(), updatedAt: new Date(row.updatedAt).toISOString() };
 }
@@ -142,6 +144,36 @@ async function addHosted(c: Ctx, wid: string, row: HostedDomain, input: AddInput
   });
   if (saved.created) wake(c);
   return { view: (await views(c.env.db, [saved.row], await hostedDomain(c.env.db, wid, row.id)))[0]!, created: saved.created };
+}
+/**
+ * Hosted: receiving follows verified DNS, so enabling it asks for the domain's check now. The request is stamped on the
+ * claim in the transaction that queues the check, so every read shows provisioning from the response on, until that check
+ * observes the domain (it then routes, or waits for its MX) or fails. The domain's own host is created as that check would
+ * create it, so the hosts list shows it from the start. A domain that already receives (or waits for a BYO receipt rule),
+ * whose own host the owner removed, or whose setup is already running is left as it is.
+ */
+export async function enableHosted(c: Ctx, domain: Domain) {
+  const wid = domain.workspaceId, row = await hostedDomain(c.env.db, wid, domain.id);
+  if (!row) return;
+  if (row.claim_scope === 'account' || row.connection.legacy === false) throw new ApiError(409, 'RECEIVING_UNAVAILABLE', `${row.name} can’t receive mail through ${productName}: it was added for sending only.`);
+  const queued = await c.env.db.transaction(async db => {
+    // The claim first, then its hosts: the order every receiving write takes.
+    const current = await hostedDomain(db, wid, domain.id, true);
+    if (!current || current.token !== row.token) throw new ApiError(409, 'DOMAIN_CHANGED', 'The domain changed while receiving was enabled. Try again.', undefined, true);
+    if (!current.identity || current.receiving_setup?.status === 'provisioning' || current.hosts.some(h => h.status === 'active' || h.status === 'provisioning' || (h.own && removed(h.status)))) return false;
+    if (!current.hosts.some(h => h.own)) {
+      const host = derivedReadiness(current).dns.find(r => r.purpose === 'receiving')?.name ?? current.name;
+      // A domain added again takes back its old row (and that row's addresses) by name, as the first check would.
+      await db.execute(sql`INSERT INTO mailbox_domains AS m(id,workspace_id,domain_id,name,region,receiving_host,status) VALUES (${id('mdom')},${wid},${current.id},${current.name},${current.region},${host},'waiting_for_mx')
+        ON CONFLICT ON CONSTRAINT mailbox_domains_name DO UPDATE SET domain_id=excluded.domain_id,parent_id=NULL,region=excluded.region,receiving_host=excluded.receiving_host,status=excluded.status,
+          lost_since=NULL,last_error=NULL,enabled_at=NULL,issue=NULL,updated_at=now()`);
+    }
+    await db.execute(sql`UPDATE domain_claims SET identity=identity||jsonb_build_object('receivingRequested',now()) WHERE workspace_id=${wid} AND name=${current.name} AND token=${current.token}`);
+    await db.execute(recheckJob(wid, sql`SELECT ${current.id}::text AS id,${current.token}::uuid AS token`));
+    await recordAudit(db, c, { action: 'inbound_domain.enable', workspaceId: wid, target: { type: 'domain', id: domain.id }, before: { status: current.receiving_state }, after: { name: current.name } });
+    return true;
+  });
+  if (queued) wake(c);
 }
 const taken = (host: string, name: string) => new ApiError(409, 'RECEIVING_HOST_TAKEN', `${host} already receives mail for another domain, so it can’t also receive for ${name}.`, 'name');
 
