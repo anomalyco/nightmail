@@ -195,10 +195,11 @@ async function intake(request: Request, env: Env): Promise<Response> {
     if (event.type !== 'message.received' || !messageId || message?.direction === 'outbound') return new Response(null, { status: 200 });
     // The envelope recipients Nightmail matched (so Bcc counts), else the To header.
     const recipients = (event.data?.recipients?.length ? event.data.recipients : [JSON.stringify(message?.to ?? '')]).join(' ').toLowerCase();
-    const mailbox = env.INTAKE_ADDRESSES.split(',').map(a => a.trim().toLowerCase()).filter(a => a && recipients.includes(a)).map(a => a.split('@')[0] as Mailbox).find(m => m in INTAKE);
-    if (!mailbox) return new Response(null, { status: 200 });
+    // The intake address it was sent to: the acknowledgement names that one.
+    const address = env.INTAKE_ADDRESSES.split(',').map(a => a.trim().toLowerCase()).find(a => a && recipients.includes(a) && a.split('@')[0]! in INTAKE);
+    if (!address) return new Response(null, { status: 200 });
     const threadId = message?.threadId ?? messageId;
-    await env.INTAKE.get(env.INTAKE.idFromName(threadId)).enqueue({ threadId, messageId, mailbox });
+    await env.INTAKE.get(env.INTAKE.idFromName(threadId)).enqueue({ threadId, messageId, mailbox: address.split('@')[0] as Mailbox, address });
     return new Response(null, { status: 200 });
   });
 }

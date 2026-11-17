@@ -31,6 +31,42 @@ function worker(name: string, env: Record<string, unknown>) {
     exports: { SupportConversation: { type: 'durable-object' as const, storage: 'sqlite' as const }, SupportIntake: { type: 'durable-object' as const, storage: 'sqlite' as const } } } };
 }
 
+// A test-only entry on the built bundle: what it exports, plus a conversation a test can inspect (its alarm and ticket
+// work), age (its idle and closed times) and run the alarm of, and intake mail queued the way earlier versions queued
+// it (without the address it was sent to). Reached at /__probe/<what>?id=<conversation> on the support Worker.
+const PROBE = `
+import worker, { SupportConversation, SupportIntake } from './worker.js';
+export { SupportConversation, SupportIntake };
+export class ProbeConversation extends SupportConversation {
+  async probe() {
+    let open = false; try { open = this.meta() !== null; } catch { /* deleted */ }
+    return { alarm: await this.ctx.storage.getAlarm(), work: (await this.ctx.storage.get('ticket-work')) ?? null, open, now: Date.now() };
+  }
+  async age(ms) { const meta = this.meta(); meta.lastActivity -= ms; if (meta.closedAt) meta.closedAt -= ms; this.save(meta); return this.probe(); }
+  async setWork(fields) { await this.ctx.storage.put('ticket-work', { ...(await this.ctx.storage.get('ticket-work')), ...fields }); return this.probe(); }
+  async runAlarm() { await this.alarm(); return this.probe(); }
+}
+export default {
+  ...worker,
+  async fetch(request, env, ctx) {
+    const what = new URL(request.url).pathname.match(/^\\/__probe\\/(\\w+)$/)?.[1];
+    if (!what) return worker.fetch(request, env, ctx);
+    const body = await request.json();
+    if (what === 'enqueueLegacy') return Response.json(await env.INTAKE.get(env.INTAKE.idFromName(body.threadId)).enqueue(body));
+    return Response.json(await env.CONVERSATION.get(env.CONVERSATION.idFromName(new URL(request.url).searchParams.get('id')))[what](body.arg));
+  },
+};`;
+function probeInstance(env: Record<string, unknown>) {
+  const support = worker('support', { ...env, CONVERSATION: { type: 'durable-object' as const, worker: 'support', exportName: 'ProbeConversation' } });
+  Object.assign(support.config.manifest.modules, { 'probe.js': { type: 'esm', contents: PROBE } });
+  Object.assign(support.config, { manifest: { ...support.config.manifest, mainModule: 'probe.js' }, exports: { ...support.config.exports, ProbeConversation: { type: 'durable-object' as const, storage: 'sqlite' as const } } });
+  return new Miniflare({ cf: false, telemetry: { enabled: false }, workers: [support,
+    { config: { name: 'fake-bane', compatibilityDate: '2026-09-08', manifest: { mainModule: 'bane.js', modules: { 'bane.js': { type: 'esm', contents: FAKE_BANE } } }, env: {} } }] } as never);
+}
+type Probed = { alarm: number | null; work: { failures: number; dueAt: number } | null; open: boolean; now: number };
+const probeCall = async (instance: Miniflare, what: string, body: Record<string, unknown>, id = '') =>
+  (await instance.dispatchFetch(`${SUPPORT}/__probe/${what}?id=${id}`, { method: 'POST', body: JSON.stringify(body) })).json() as Promise<Probed>;
+
 const baseEnv = (overrides: Record<string, unknown> = {}) => ({
   STAGE: text('dev'), PUBLIC_URL: text(SUPPORT), DASHBOARD_ORIGINS: text(`${ORIGIN},http://localhost:5173`), BANE_ORIGIN: text(ORIGIN),
   SUPPORT_ADDRESS: text('support@dev.bane.mx'), SUPPORT_ADDRESS_ID: text('adr_support'), TICKET_TO: text('ryan@anoma.ly'), GATEWAY_URL: text('https://opencode.ai/inference/anthropic/v1'),
@@ -377,7 +413,7 @@ describe('support Worker', () => {
       assert.ok(await db.prepare("SELECT id FROM tickets WHERE type = 'legal' AND title = 'Subpoena 2'").first(), 'legal@ is not starved by abuse@.');
       const held = await db.prepare("SELECT channel, reason, sender, dmarc FROM overflow WHERE message_id = 'msg_abuse_s3'").first<any>();
       assert.deepEqual(held, { channel: 'abuse', reason: 'tickets for abuse@', sender: 's3@spoof.test', dmarc: 'FAIL' }, 'Kept, not dropped.');
-      assert.equal((await replies('thr_s3', caps))[0][3].text, "Hi,\n\nThanks for writing to abuse@bane.mx. We've received your message. A person at Nightmail will reply by email.\n\nNightmail");
+      assert.equal((await replies('thr_s3', caps))[0][3].text, "Hi,\n\nThanks for writing to abuse@dev.bane.mx. We've received your message. A person at Nightmail will reply by email.\n\nNightmail");
       const buckets = (await db.prepare("SELECT key, n FROM daily_counters WHERE key LIKE '%:mail' ORDER BY key").all<{ key: string; n: number }>()).results;
       assert.ok(buckets.some(b => b.key === 'unauthenticated:abuse:mail' && b.n === 3) && !buckets.some(b => b.key.startsWith('sender:') && b.n === 3), `Spoofed senders share one bucket: ${JSON.stringify(buckets)}`);
       const open = async () => {
@@ -434,6 +470,96 @@ describe('support Worker', () => {
     } finally { await caps.dispose(); }
   }, 180_000);
 
+  test('a team notification that fails (a stale address key) is sent on the retry, before the sender is acknowledged', async () => {
+    // Review #371 P1: support deployed before its key covers SUPPORT_ADDRESS_ID, so Nightmail answers the team email 404.
+    // The retry used to find the ticket, skip the notification, acknowledge and mark the message done.
+    const stale = probeInstance(baseEnv({ SUPPORT_ADDRESS_ID: text('adr_stale') }));
+    try {
+      await migrate(stale);
+      const db = await stale.getD1Database('DB', 'support');
+      const hook = (id: string) => signedHook(id, 'thr_legal_stale', 'counsel@law.test', { intake: true, to: 'legal@dev.bane.mx', instance: stale });
+      const attempts = async () => (await fakeCalls(stale)).filter(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[3].addressId === 'adr_stale');
+      const notified = async (id: string) => (await db.prepare('SELECT notified_at FROM tickets WHERE id = ?').bind(id).first<{ notified_at: number | null }>())!.notified_at;
+      assert.equal((await hook('msg_legal_stale_1')).status, 200);
+      const ticket = await eventually(() => db.prepare("SELECT id FROM tickets WHERE type = 'legal' AND title = 'Preserve records'").first<{ id: string }>().then(r => r ?? undefined));
+      assert.ok(ticket && await eventually(async () => (await attempts()).length >= 1 || undefined), 'The team email is attempted and refused.');
+      // A second message wakes the queue at once: the first message is retried and its team email attempted again.
+      assert.equal((await hook('msg_legal_stale_2')).status, 200);
+      assert.ok(await eventually(async () => (await attempts()).length >= 2 || undefined), 'The retry sends the team email again.');
+      assert.ok((await attempts()).every(c => c[3].subject.includes(ticket.id) && c[5] === `ticket-${ticket.id}`), 'The same email, once per ticket.');
+      assert.equal(await notified(ticket.id), null);
+      assert.equal((await replies('thr_legal_stale', stale)).length, 0, 'No acknowledgement before the team knows.');
+      // The key covers the address now: the next attempt notifies the team, then acknowledges the sender once.
+      await (await stale.getWorker('fake-bane')).fetch('http://fake-bane/__cover');
+      assert.equal((await hook('msg_legal_stale_3')).status, 200);
+      const ack = await eventually(async () => (await replies('thr_legal_stale', stale))[0]);
+      assert.ok(ack && await notified(ticket.id), 'Notified, then acknowledged.');
+      // Review #371 P2: named for the address it was sent to, and sent from it.
+      assert.equal(ack[3].subject, 'Re: your message to legal@dev.bane.mx');
+      assert.match(ack[3].text, /^Hi,\n\nThanks for writing to legal@dev\.bane\.mx\. We've received your message and logged it as tkt_/);
+      assert.equal(ack[3].addressId, undefined);
+      await new Promise(r => setTimeout(r, 1000));
+      assert.equal((await replies('thr_legal_stale', stale)).length, 1, 'One acknowledgement for the three messages.');
+      // Review #371 round 2: a message queued before the address was kept names the team, never an address it may not
+      // have been sent to.
+      assert.deepEqual(await probeCall(stale, 'enqueueLegacy', { threadId: 'thr_legal_legacy', messageId: 'msg_legal_legacy_1', mailbox: 'legal' }), { ok: true } as never);
+      const legacy = await eventually(async () => (await replies('thr_legal_legacy', stale))[0]);
+      assert.deepEqual([legacy?.[3].subject, legacy?.[3].addressId], ['Re: your message to Nightmail’s legal team', undefined]);
+      assert.match(legacy[3].text, /^Hi,\n\nThanks for writing to Nightmail’s legal team\. We've received your message and logged it as tkt_/);
+    } finally { await stale.dispose(); }
+  }, 120_000);
+
+  test('a conversation keeps a ticket\'s team email until it is sent: a minute out, never at an elapsed idle or retention time, hourly after ten failures', async () => {
+    // Review #371 round 2: work filed while the inbox is processed used to be scheduled at the 7-day idle time, and work
+    // left past retention at the elapsed retention time (an immediate alarm, again and again).
+    const stale = probeInstance(baseEnv({ SUPPORT_ADDRESS_ID: text('adr_stale'), LIMIT_TURNS_PER_PERSON: text('1') }));
+    try {
+      await migrate(stale);
+      const db = await stale.getD1Database('DB', 'support');
+      // Ada is over her daily answers, so her email files a ticket for the team while the inbox is processed.
+      await db.prepare("INSERT INTO daily_counters (day, key, n) VALUES (?, 'user:usr_ada:turns', 1)").bind(new Date().toISOString().slice(0, 10)).run();
+      assert.equal((await signedHook('msg_pending_1', 'thr_pending', 'ada@acme.test', { instance: stale })).status, 200);
+      const conv = (await eventually(() => db.prepare("SELECT id FROM conversations WHERE thread_id = 'thr_pending'").first<{ id: string }>().then(r => r ?? undefined)))!.id;
+      const ticket = (await eventually(() => db.prepare("SELECT id FROM tickets WHERE title = 'Daily answer limit reached'").first<{ id: string }>().then(r => r ?? undefined)))!.id;
+      assert.ok(await eventually(async () => (await fakeCalls(stale)).some(c => c[0] === 'api' && /^\/v1\/inbound\/threads\/[^/]+\/reply$/.test(c[2]) && c[3].text.includes('can’t answer automatically')) || undefined), 'Ada gets the busy reply.');
+      await new Promise(r => setTimeout(r, 1000));
+      const sends = async () => (await fakeCalls(stale)).filter(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[3].addressId === 'adr_stale');
+      const call = (what: string, arg?: unknown) => probeCall(stale, what, { arg }, conv);
+      const inMinutes = (p: Probed) => (p.alarm! - p.now) / 60_000;
+      let p = await call('probe');
+      assert.ok(p.work && p.alarm !== null && inMinutes(p) > 0.75 && inMinutes(p) <= 1, `Retried a minute out, not at the idle time: ${JSON.stringify(p)}`);
+      assert.equal(p.work.failures, 1);
+      // Not due: an alarm for something else (new mail) sends nothing and keeps the retry.
+      const before = (await sends()).length;
+      p = await call('runAlarm');
+      assert.ok((await sends()).length === before && p.work!.failures === 1 && inMinutes(p) > 0.75 && inMinutes(p) <= 1, JSON.stringify(p));
+      // Its idle time has passed: it closes, and the retry stays a minute out.
+      await call('age', 8 * 86_400_000); await call('setWork', { dueAt: 0 });
+      p = await call('runAlarm');
+      assert.ok(p.open && p.work!.failures === 2 && inMinutes(p) > 0.75 && inMinutes(p) <= 1, JSON.stringify(p));
+      // Its retention has passed too: kept while the email is unsent, and the retry is a minute out, never now.
+      await call('age', 8 * 86_400_000); await call('setWork', { dueAt: 0 });
+      p = await call('runAlarm');
+      assert.ok(p.open && p.work!.failures === 3 && inMinutes(p) > 0.75 && inMinutes(p) <= 1, JSON.stringify(p));
+      // Ten failures: hourly from then on.
+      await call('setWork', { dueAt: 0, failures: 9 });
+      p = await call('runAlarm');
+      assert.ok(p.work!.failures === 10 && inMinutes(p) > 59 && inMinutes(p) <= 60, JSON.stringify(p));
+      assert.equal(await db.prepare('SELECT notified_at FROM tickets WHERE id = ?').bind(ticket).first('notified_at'), null);
+      // The key covers the address now: sent once, with the ticket's idempotency key, then the conversation is deleted.
+      await (await stale.getWorker('fake-bane')).fetch('http://fake-bane/__cover');
+      const attempts = (await sends()).length;
+      await call('setWork', { dueAt: 0 });
+      p = await call('runAlarm');
+      assert.equal(p.work, null);
+      assert.ok(await db.prepare('SELECT notified_at FROM tickets WHERE id = ?').bind(ticket).first('notified_at'));
+      assert.ok(await eventually(async () => !(await call('probe')).open || undefined), 'Past retention with nothing left: deleted.');
+      const all = await sends();
+      assert.equal(all.length, attempts + 1, 'One send once it works, none after.');
+      assert.ok(all.every(c => c[5] === `ticket-${ticket}` && c[3].subject.includes(ticket)), 'The same email, once per ticket.');
+    } finally { await stale.dispose(); }
+  }, 120_000);
+
   test('abuse@, privacy@, legal@: straight to typed tickets, no model, the team emailed, one fixed acknowledgement', async () => {
     const before = recorded.length;
     assert.equal((await signedHook('msg_abuse_1', 'thr_abuse', 'reporter@isp.test', { intake: true, to: 'abuse@dev.bane.mx' })).status, 200);
@@ -442,8 +568,8 @@ describe('support Worker', () => {
     const db = await mf.getD1Database('DB', 'support');
     const ticket = await db.prepare("SELECT * FROM tickets WHERE type = 'abuse_report' ORDER BY created_at DESC").first<any>();
     assert.deepEqual([ticket.title, ticket.severity, JSON.parse(ticket.details).topic, JSON.parse(ticket.customer)], ['Spam from your customer', 'P3', 'abuse', { verified: false, sender: 'reporter@isp.test', dmarc: 'PASS' }]);
-    assert.equal(ack[3].text, `Hi,\n\nThanks for writing to abuse@bane.mx. We've received your message and logged it as ${ticket.id}. A person at Nightmail will reply by email.\n\nNightmail`);
-    assert.equal(ack[3].subject, 'Re: your message to abuse@bane.mx'); assert.equal(ack[3].addressId, undefined, 'Replies from the address it came in on.');
+    assert.equal(ack[3].text, `Hi,\n\nThanks for writing to abuse@dev.bane.mx. We've received your message and logged it as ${ticket.id}. A person at Nightmail will reply by email.\n\nNightmail`);
+    assert.equal(ack[3].subject, 'Re: your message to abuse@dev.bane.mx', 'Named for the address it was sent to.'); assert.equal(ack[3].addressId, undefined, 'Replies from the address it came in on.');
     assert.equal(ack[4], `Bearer bane_mbx_${'8'.repeat(64)}`, 'With the intake key, not the support key.');
     const team = (await fakeCalls()).find(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[3].subject === `[Nightmail abuse] ${ticket.id}: Spam from your customer (P3)`);
     assert.ok(team, 'The team gets "[Nightmail abuse] …".');
@@ -457,7 +583,7 @@ describe('support Worker', () => {
     // legal@ without a DMARC pass: P2, marked unverified everywhere.
     assert.equal((await signedHook('msg_legal_nodmarc_1', 'thr_legal', 'lawyer@firm.test', { intake: true, to: 'legal@dev.bane.mx' })).status, 200);
     const legalAck = await eventually(async () => (await replies('thr_legal'))[0]);
-    assert.match(legalAck[3].text, /^Hi,\n\nThanks for writing to legal@bane\.mx\./);
+    assert.match(legalAck[3].text, /^Hi,\n\nThanks for writing to legal@dev\.bane\.mx\./);
     const legal = await db.prepare("SELECT * FROM tickets WHERE type = 'legal'").first<any>();
     assert.equal(legal.severity, 'P2');
     const legalMail = (await fakeCalls()).find(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[3].subject === `[Nightmail legal] [UNVERIFIED] ${legal.id}: Subpoena (P2)`);

@@ -24,7 +24,8 @@ export type TicketContext = {
   /** Screenshots in this conversation, with links that expire (attachments.ts). */
   attachments: { id: string; name: string; type: string; size: number; url: string }[];
 };
-export type FiledTicket = { id: string; created: boolean; dueAt: number; replyTo: string | null };
+/** notified: the team's email for it was sent (notified_at). Until then every retry sends it (sendTeamEmail). */
+export type FiledTicket = { id: string; created: boolean; notified: boolean; dueAt: number; replyTo: string | null };
 
 export const TYPE_LABEL: Record<TicketType, string> = { billing: 'billing', bug: 'bug', deliverability: 'deliverability', account: 'account', abuse_report: 'abuse', privacy: 'privacy', legal: 'legal', feature_request: 'feature request', other: 'support' };
 
@@ -58,13 +59,13 @@ const masked = (email: string | null) => {
 };
 
 export async function fileTicket(env: Env, ctx: TicketContext, input: TicketInput, now = Date.now()): Promise<FiledTicket> {
-  const existing = await env.DB.prepare('SELECT id, due_at, notes FROM tickets WHERE conversation_id = ?').bind(ctx.conversationId).first<{ id: string; due_at: number; notes: string }>();
+  const existing = await env.DB.prepare('SELECT id, due_at, notes, notified_at FROM tickets WHERE conversation_id = ?').bind(ctx.conversationId).first<{ id: string; due_at: number; notes: string; notified_at: number | null }>();
   if (existing) {
     // One ticket per conversation: later facts are appended.
     const notes = JSON.parse(existing.notes) as unknown[];
     notes.push({ at: new Date(now).toISOString(), type: input.type, title: input.title, summary: input.summary.slice(0, 1200), recommendation: input.recommendation.slice(0, 800), tried: input.tried, details: input.details });
     await env.DB.prepare('UPDATE tickets SET notes = ?, attachments = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(notes.slice(-20)), JSON.stringify(ctx.attachments.map(a => a.id)), now, existing.id).run();
-    return { id: existing.id, created: false, dueAt: existing.due_at, replyTo: masked(ctx.customer.email) };
+    return { id: existing.id, created: false, notified: existing.notified_at !== null, dueAt: existing.due_at, replyTo: masked(ctx.customer.email) };
   }
   const id = newId('tkt'), due = dueAt(input.details.topic, input.severity, now);
   await env.DB.batch([
@@ -74,7 +75,7 @@ export async function fileTicket(env: Env, ctx: TicketContext, input: TicketInpu
       JSON.stringify(input.evidence), ctx.threadId, ctx.costUsd, ctx.model, now, now),
     env.DB.prepare("UPDATE conversations SET status = 'ticketed', ticket_id = coalesce(ticket_id, ?), updated_at = ? WHERE id = ?").bind(id, now, ctx.conversationId),
   ]);
-  return { id, created: true, dueAt: due, replyTo: masked(ctx.customer.email) };
+  return { id, created: true, notified: false, dueAt: due, replyTo: masked(ctx.customer.email) };
 }
 
 /** The type-specific part of the team's email: a bug's reproduction, a feature's use case. */
@@ -132,9 +133,14 @@ export function ticketEmail(env: Pick<Env, 'PUBLIC_URL'>, ctx: TicketContext, ti
 
 /** The team's email. Idempotent per ticket, so a retried notification never sends twice. */
 export async function notifyTeam(env: Env, ctx: TicketContext, ticket: FiledTicket, input: TicketInput) {
-  const { subject, text } = ticketEmail(env, ctx, ticket, input);
-  const sent = await baneApi(env).startThread({ to: [env.TICKET_TO], subject, text }, `ticket-${ticket.id}`);
-  await env.DB.prepare('UPDATE tickets SET notified_at = ? WHERE id = ?').bind(Date.now(), ticket.id).run();
+  return sendTeamEmail(env, ticket.id, ticketEmail(env, ctx, ticket, input));
+}
+/** Sends a ticket's team email unless it was sent (notified_at); a failure leaves notified_at NULL for the next retry. */
+export async function sendTeamEmail(env: Env, ticketId: string, email: { subject: string; text: string }) {
+  const done = await env.DB.prepare('SELECT notified_at FROM tickets WHERE id = ?').bind(ticketId).first<{ notified_at: number | null }>();
+  if (done?.notified_at != null) return null;
+  const sent = await baneApi(env).startThread({ to: [env.TICKET_TO], subject: email.subject, text: email.text }, `ticket-${ticketId}`);
+  await env.DB.prepare('UPDATE tickets SET notified_at = ? WHERE id = ?').bind(Date.now(), ticketId).run();
   return sent;
 }
 

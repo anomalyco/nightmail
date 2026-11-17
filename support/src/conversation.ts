@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { baneApi, BaneError, senderOf, type Handoff, type InboundMessage, type PlatformReply } from './bane.js';
 import type { Env } from './env.js';
 import { gate, LINK_ORIGINS, plainText } from './gate.js';
-import { expectation, fileTicket, notifyTeam, openFollowUp, type TicketContext } from './tickets.js';
+import { expectation, fileTicket, openFollowUp, sendTeamEmail, ticketEmail, type FiledTicket, type TicketContext } from './tickets.js';
 import { addressHash, confirmToken, MissingSecret, newId } from './tokens.js';
 import { alertOnce, countToday, holdOverCap, limits, mailAllowed, ticketAllowed } from './limits.js';
 import { attachmentLink, deleteConversationUploads, MAX_ATTACHMENTS, modelImage, safeName, storeImage, type Attachment } from './attachments.js';
@@ -25,6 +25,13 @@ const TOKEN_BUDGET = 500_000;
 const GRANT_MINUTES = 120;
 const CHAT_IDLE_MS = 24 * 3_600_000, EMAIL_IDLE_MS = 7 * 86_400_000, KEEP_AFTER_CLOSE_MS = 7 * 86_400_000;
 const EMAIL_BURST = 5, EMAIL_BURST_MS = 10 * 60_000;
+/**
+ * A filed ticket's team email and chat follow-up, kept until both are sent (ticketWork). The alarm retries them when due
+ * (dueAt): a minute apart, then hourly after TICKET_FAST_TRIES failures, and never deletes the conversation while some
+ * is left. Each send is idempotent (its idempotency key, and notified_at for the team email).
+ */
+const TICKET_WORK = 'ticket-work', TICKET_FAST_TRIES = 10, TICKET_RETRY_MS = 60_000, TICKET_RETRY_SLOW_MS = 3_600_000;
+type TicketWork = { ticket: FiledTicket; ctx: TicketContext; email: { subject: string; text: string } | null; followUp: boolean; failures: number; dueAt: number };
 const MAX_FRAME = 16_384, MAX_TEXT = 8000;
 const MODEL_LABEL = `${MODEL.model}#${MODEL.variant}`;
 const REDACTED = `I’ve sent this one to the ${productName} team to check before I answer. Someone will follow up by email.`;
@@ -446,18 +453,56 @@ export class SupportConversation extends DurableObject<Env> {
     const exists = await this.env.DB.prepare('SELECT id FROM tickets WHERE conversation_id = ?').bind(meta.conversationId).first();
     if (!exists) {
       const allowed = await ticketAllowed(this.env, { verifiedUserId: meta.verified ? meta.userId : null, mailbox: 'support', sender: meta.email, dmarcPass: dmarc === 'PASS' });
-      if (!allowed.ok) { log('warn', { event: 'ticket', code: 'TICKET_CAP', scope: allowed.scope, reason: allowed.reason }); return { id: '', created: false, dueAt: 0, replyTo: null, refused: allowed.scope }; }
+      if (!allowed.ok) { log('warn', { event: 'ticket', code: 'TICKET_CAP', scope: allowed.scope, reason: allowed.reason }); return { id: '', created: false, notified: false, dueAt: 0, replyTo: null, refused: allowed.scope }; }
     }
     const filed = await fileTicket(this.env, ctx, input);
     if (filed.created) {
       this.update(m => { m.ticketId = filed.id; m.status = 'ticketed'; });
       log('info', { event: 'ticket', code: 'TICKET_FILED', ticket: filed.id, type: input.type, channel: meta.channel });
-      // Email the team and, for a chat, open the customer's follow-up thread; a failure is retried by the alarm.
-      try { await notifyTeam(this.env, ctx, filed, input); } catch (error) { logError(error, { event: 'ticket', code: 'TICKET_NOTIFY_FAILED', ticket: filed.id }); await this.ctx.storage.setAlarm(Date.now() + 60_000); }
-      try { const sent = await openFollowUp(this.env, ctx, filed); if (sent) this.update(m => { m.threadId ??= sent.threadId; }); } catch (error) { logError(error, { event: 'ticket', code: 'TICKET_FOLLOWUP_FAILED', ticket: filed.id }); }
-      if (meta.channel === 'chat') this.broadcast({ type: 'ticket.filed', ticketId: filed.id, ticketType: input.type, category: input.details.topic ?? input.type, replyTo: filed.replyTo, expect: expectation(input) });
     }
+    // Email the team and, for a new chat ticket, open the customer's follow-up thread. Kept until sent: a failure is
+    // retried by the alarm, and a ticket whose team email never went out (notified_at) gets it on its next note too.
+    if (filed.created || (!filed.notified && !await this.ctx.storage.get(TICKET_WORK)))
+      await this.ctx.storage.put(TICKET_WORK, { ticket: filed, ctx, email: ticketEmail(this.env, ctx, filed, input), followUp: filed.created, failures: 0, dueAt: 0 } satisfies TicketWork);
+    if (!filed.notified) await this.ticketWork();
+    if (filed.created && meta.channel === 'chat') this.broadcast({ type: 'ticket.filed', ticketId: filed.id, ticketType: input.type, category: input.details.topic ?? input.type, replyTo: filed.replyTo, expect: expectation(input) });
     return filed;
+  }
+
+  /** Sends what TICKET_WORK holds, if it is due. Returns when to try again, or null once nothing is left. */
+  private async ticketWork(): Promise<number | null> {
+    const work = await this.ctx.storage.get<TicketWork>(TICKET_WORK);
+    if (!work) return null;
+    if (work.dueAt > Date.now()) return work.dueAt;
+    if (work.email) {
+      try { await sendTeamEmail(this.env, work.ticket.id, work.email); work.email = null; }
+      catch (error) { logError(error, { event: 'ticket', code: 'TICKET_NOTIFY_FAILED', ticket: work.ticket.id }); }
+    }
+    if (work.followUp) {
+      try { const sent = await openFollowUp(this.env, work.ctx, work.ticket); if (sent) this.update(m => { m.threadId ??= sent.threadId; }); work.followUp = false; }
+      catch (error) { logError(error, { event: 'ticket', code: 'TICKET_FOLLOWUP_FAILED', ticket: work.ticket.id }); }
+    }
+    if (!work.email && !work.followUp) { await this.ctx.storage.delete(TICKET_WORK); return null; }
+    work.failures += 1;
+    if (work.failures === TICKET_FAST_TRIES) log('error', { event: 'ticket', code: 'TICKET_WORK_STALLED', ticket: work.ticket.id, failures: work.failures });
+    work.dueAt = Date.now() + (work.failures >= TICKET_FAST_TRIES ? TICKET_RETRY_SLOW_MS : TICKET_RETRY_MS);
+    await this.ctx.storage.put(TICKET_WORK, work);
+    // Outside the alarm (a chat turn), bring the alarm forward to the retry; never push a sooner one back.
+    const alarm = await this.ctx.storage.getAlarm();
+    if (alarm === null || alarm > work.dueAt) await this.ctx.storage.setAlarm(work.dueAt);
+    return work.dueAt;
+  }
+
+  /**
+   * The next alarm: the idle close (or the deletion after it), or a pending ticket retry if that is sooner. A retry is
+   * always at least a minute out, and an idle or retention time that has already passed never takes its place.
+   */
+  private async nextAlarm(meta: Meta) {
+    const deadline = meta.closedAt ? meta.closedAt + KEEP_AFTER_CLOSE_MS : meta.lastActivity + (meta.channel === 'chat' ? CHAT_IDLE_MS : EMAIL_IDLE_MS);
+    const work = await this.ctx.storage.get<TicketWork>(TICKET_WORK);
+    if (!work) return deadline;
+    const retry = Math.max(work.dueAt, Date.now() + TICKET_RETRY_MS);
+    return deadline > Date.now() ? Math.min(deadline, retry) : retry;
   }
 
   // ---------- email ----------
@@ -723,7 +768,9 @@ export class SupportConversation extends DurableObject<Env> {
   override async alarm() {
     const meta = this.meta();
     if (!meta) return;
-    if (meta.closedAt && Date.now() - meta.closedAt > KEEP_AFTER_CLOSE_MS) {
+    // Due ticket work first. While any is left the conversation is kept, past its retention too.
+    const ticketPending = await this.ticketWork() !== null;
+    if (meta.closedAt && Date.now() - meta.closedAt > KEEP_AFTER_CLOSE_MS && !ticketPending) {
       // A ticket's screenshots stay for the team until the bucket's lifecycle rule (90 days) removes them.
       if (!meta.ticketId) await deleteConversationUploads(this.env, meta.conversationId);
       await this.ctx.storage.deleteAlarm(); await this.ctx.storage.deleteAll(); return;
@@ -732,8 +779,8 @@ export class SupportConversation extends DurableObject<Env> {
     catch (error) { logError(error, { event: 'email', code: 'INBOX_FAILED' }); await this.ctx.storage.setAlarm(Date.now() + 60_000); return; }
     const idle = meta.channel === 'chat' ? CHAT_IDLE_MS : EMAIL_IDLE_MS;
     if (!meta.closedAt && Date.now() - meta.lastActivity >= idle) await this.close('idle');
-    const after = this.meta()!;
-    await this.ctx.storage.setAlarm(after.closedAt ? after.closedAt + KEEP_AFTER_CLOSE_MS : after.lastActivity + idle);
+    // Read again: processing the inbox can file a ticket whose team email is still to send.
+    await this.ctx.storage.setAlarm(await this.nextAlarm(this.meta()!));
   }
 
   private async close(reason: 'idle' | 'limit' | 'ended') {
