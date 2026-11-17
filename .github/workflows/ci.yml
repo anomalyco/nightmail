@@ -258,7 +258,7 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4]
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
+    timeout-minutes: 40
     services:
       postgres:
         image: postgres:17.11-alpine
@@ -306,7 +306,8 @@ jobs:
           CLS_PG_URL: postgresql://postgres:fixture-admin@127.0.0.1:5432/postgres
           CLS_DENSITY: '1'
           CLS_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
-        run: node scripts/cls.mjs
+        run: | # soak (throwaway branch)
+          rc=0; for i in 1 2 3 4 5 6 7 8; do echo "=== SOAK iteration $i"; node scripts/cls.mjs > /tmp/cls-$i.log 2>&1 || rc=1; grep -E 'measuring|✗|Layout shift' /tmp/cls-$i.log | cut -c1-3000; done; exit $rc
       # Scores the density readings the CLS run took (no second server): fails on a new finding or a denser page.
       - name: Check text density on every page
         if: always() && steps.changes.outputs.run == 'true' && hashFiles('app/.cls/density.json') != ''
