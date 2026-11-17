@@ -130,7 +130,9 @@ jobs:
           # entry (no happy-dom in app/dist). @tiptap/html's peer range ^20 excludes the fixed 21.0.4.
           for pkg in api app sdk; do
             args=(--audit-level=high)
-            case $pkg in app) args+=(--ignore=GHSA-834v-8h66-3h79 --ignore=GHSA-c8p4-j97h-3vg8);; esac
+            # app: picomatch (GHSA-fc5q-39xc-vjpf, ReDoS on crafted extglobs, no patched release) comes only through vite, a
+          # devDependency, matching our own build config's globs; it is not in app/dist. Drop it once picomatch ships a fix.
+          case $pkg in app) args+=(--ignore=GHSA-834v-8h66-3h79 --ignore=GHSA-c8p4-j97h-3vg8 --ignore=GHSA-fc5q-39xc-vjpf);; esac
             echo "::group::bun audit $pkg"; (cd "$pkg" && bun audit "${args[@]}"); echo '::endgroup::'
           done
 
