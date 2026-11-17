@@ -50,6 +50,13 @@ export async function countToday(env: Env, key: string, limit: number, now = Dat
   return { ok: n <= limit, n };
 }
 
+/** countToday for several keys in one D1 round trip, in order. */
+export async function countTodayAll(env: Env, keys: [key: string, limit: number][], now = Date.now()): Promise<{ ok: boolean; n: number }[]> {
+  const statement = env.DB.prepare('INSERT INTO daily_counters (day, key, n) VALUES (?, ?, 1) ON CONFLICT (day, key) DO UPDATE SET n = n + 1 RETURNING n');
+  const results = await env.DB.batch<{ n: number }>(keys.map(([key]) => statement.bind(today(now), key)));
+  return keys.map(([, limit], i) => { const n = results[i]?.results[0]?.n ?? Number.MAX_SAFE_INTEGER; return { ok: n <= limit, n }; });
+}
+
 export type Mailbox = 'support' | 'abuse' | 'privacy' | 'legal';
 /** The mail-cap identity of a sender (R1): the address when DMARC passes, else the address's unauthenticated bucket. */
 export async function mailIdentity(env: Env, mailbox: Mailbox, sender: string, dmarcPass: boolean) {

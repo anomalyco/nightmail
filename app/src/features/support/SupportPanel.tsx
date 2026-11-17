@@ -196,7 +196,9 @@ function useSmoothText(text: string, live: boolean) {
       const seconds = Math.min(64, now - at) / 1000
       at = now
       const backlog = text.length - position.current
-      position.current = Math.min(text.length, position.current + Math.max(live ? 60 : 180, backlog * (live ? 4 : 9)) * seconds)
+      // Once the message has ended the rest is shown within about a quarter second: it is all here, and waiting on the
+      // reveal would only delay the answer (after a tool call the text arrives in one piece at the end).
+      position.current = Math.min(text.length, position.current + Math.max(live ? 60 : 600, backlog * (live ? 4 : 24)) * seconds)
       setCount(Math.floor(position.current))
       if (position.current < text.length) frame = requestAnimationFrame(step)
     }
