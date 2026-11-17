@@ -280,6 +280,9 @@ type ProofTimes={receiving_proved_at?:Date|string|null;receiving_identity_at?:Da
 export type HostedDomain = DomainRef & ClaimState & ProofTimes & { connection: ReadyConnection & { tenant_state: TenantState;legacy?:boolean }; token: string; proof_label: ProofLabel; identity: IdentityFacts | null; claim_scope:'account'|'exclusive'|'txt'; pool_receiving:boolean; expired:boolean; check_txt:boolean; created_at:string; ever_proven:boolean; dns_first:boolean; hosts: ReceivingHostRow[] };
 /** The domain's receiving hosts, its own row first: what every hosted read of a claim carries. `d` is operation_domains. */
 const unavailableDomain = () => new ApiError(409, 'DOMAIN_UNAVAILABLE', 'This SES identity is unavailable for this domain claim.');
+// Hosted: one answer whenever the platform's identity for the name isn't this claim's (made by an operator, left behind
+// outside any claim, or held elsewhere), so it never says whether or whose claim exists. Nothing reuses it by name.
+const reviewRequired = () => new ApiError(409, 'DOMAIN_REVIEW_REQUIRED', `${productName} can’t set up sending for this domain automatically. Contact support with this error’s request ID to have it reviewed.`);
 const ownsIdentity = (identity: GetEmailIdentityCommandOutput, token: string) => hasTags(identity.Tags, [{ Key: claimTag, Value: token }]);
 function hostedDomainSelect(wid:string, domainId:string, lock:SQL=sql``) {
   return sql`SELECT d.id,d.name,d.region,to_jsonb(pc) AS connection,dc.token,dc.proof_label,dc.claim_scope,dc.sending_state,dc.receiving_state,dc.receiving_host,dc.lost_since,dc.receiving_lost_since,dc.identity,
@@ -900,7 +903,11 @@ export function registerOperations(app: App) {
       catch(e) {
         if (e instanceof ModuleLoadError) throw e;
         await identityQuotaAlert(runtime,row.region,claim.connection.aws_account_id,e);
-        if (e instanceof ApiError && (e.code==='DOMAIN_UNAVAILABLE' || (claim.fresh && !e.retryable && e.status<500))) await releaseClaim(c.env.db,a.workspaceId,claim);
+        // Hosted: a retry never drops a claim the workspace already held. A proven claim keeps its DNS proof, and an identity
+        // tagged with its token goes with it on DELETE or expiry instead of being left behind to block the name.
+        const held=claim.connection.kind==='shared' && !claim.fresh;
+        if (e instanceof ApiError && !held && (e.code==='DOMAIN_UNAVAILABLE' || (claim.fresh && !e.retryable && e.status<500))) await releaseClaim(c.env.db,a.workspaceId,claim);
+        if (e instanceof ApiError && e.code==='DOMAIN_UNAVAILABLE' && claim.connection.kind==='shared') throw reviewRequired();
         throw e;
       }
       if (identity===null) return c.json(derivedReadiness({...row,...claim.claim,token:claim.token,connection:claim.connection,dns_first:true}),201);

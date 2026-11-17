@@ -2492,6 +2492,15 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           assert.equal(restored.dns.filter((r:Json)=>r.purpose==='sending' && r.type==='CNAME').length,3); assert.equal(restored.verified,false);
           assert.deepEqual(calls.slice(before),['CreateEmailIdentityCommand','CreateEmailIdentityCommand','GetEmailIdentityCommand']);
           ok(await local('DELETE',`/v1/domains/${restored.id}`,undefined,b.cookie));
+          // Re-adding a released name works: DELETE took the claim's own tagged identity with it, so the new claim makes its
+          // own. A same-workspace retry then returns that domain without another SES call.
+          const claimToken=async(name:string)=>(await pool.query('SELECT token FROM domain_claims WHERE workspace_id=$1 AND name=$2',[b.org.id,name])).rows[0]?.token;
+          assert.ok(!identities.has(`${platform}:${recovery}`));
+          const readdStart=calls.length, readded=ok(await add(b.cookie,recovery),201);
+          assert.notEqual(readded.id,restored.id); assert.deepEqual(calls.slice(readdStart),['CreateEmailIdentityCommand']);
+          assert.deepEqual(identities.get(`${platform}:${recovery}`)!.Tags[0],{Key:'bane:domain-claim',Value:await claimToken(recovery)});
+          assert.equal(ok(await add(b.cookie,recovery),201).id,readded.id); assert.equal(calls.length,readdStart+1);
+          ok(await local('DELETE',`/v1/domains/${readded.id}`,undefined,b.cookie));
           // A request that died before any SES call leaves a claim with no identity. The verify job it reserved owns the identity from then on.
           const {operationJobs:wedgeJobs}=await import('./src/operations.js'),{JobDeferred:Deferred}=await import('./src/jobs.js');
           const wedged=`${unique('wedge')}.invalid`,wedgeStart=calls.length;
@@ -2505,11 +2514,32 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           assert.equal(unwedged.dns.filter((r:Json)=>r.purpose==='sending' && r.type==='CNAME').length,3); assert.ok(identities.get(`${platform}:${wedged}`));
           ok(await local('DELETE',`/v1/domains/${wedge.payload.domainId}`,undefined,b.cookie)); lookups=0;
           await pool.query("UPDATE job_schedule SET wake_not_before=now() WHERE workspace_id='domain.verify:platform'");
-          const collisionStart=calls.length;
-          error(await add(b.cookie,foreign),409,'DOMAIN_UNAVAILABLE');
-          assert.deepEqual(calls.slice(collisionStart),['CreateEmailIdentityCommand','GetEmailIdentityCommand']);
-          assert.ok(identities.has(`${platform}:${foreign}`));
-          assert.equal((await pool.query('SELECT 1 FROM domain_claims WHERE name=$1',[foreign])).rowCount,0);
+          // An identity that isn't this claim's gets one answer whoever made it (an operator's untagged identity, or one tagged
+          // for a claim that no longer exists). It is never reused or touched, nothing is kept, and a retry answers the same.
+          const orphan=`left.${unique('ses')}.invalid`, orphanTags=[{Key:'bane:domain-claim',Value:randomUUID()}];
+          identities.set(`${platform}:${orphan}`,{...verifiedIdentity,Tags:orphanTags});
+          const collisionStart=calls.length, refusals:Json[]=[];
+          for (const name of [foreign,orphan,foreign]) {
+            const {requestId:_,...refusal}=error(await add(b.cookie,name),409,'DOMAIN_REVIEW_REQUIRED');
+            assert.ok(!JSON.stringify(refusal).includes(orphanTags[0]!.Value)); refusals.push(refusal);
+          }
+          assert.deepEqual(refusals,Array(3).fill({code:'DOMAIN_REVIEW_REQUIRED',retryable:false,
+            message:'Nightmail can’t set up sending for this domain automatically. Contact support with this error’s request ID to have it reviewed.'}));
+          assert.deepEqual(calls.slice(collisionStart),Array(3).fill(['CreateEmailIdentityCommand','GetEmailIdentityCommand']).flat());
+          assert.ok(identities.has(`${platform}:${foreign}`)); assert.deepEqual(identities.get(`${platform}:${orphan}`)!.Tags,orphanTags);
+          assert.equal((await pool.query('SELECT 1 FROM domain_claims WHERE name=ANY($1)',[[foreign,orphan]])).rowCount,0);
+          // A retry never drops a claim the workspace already held. This one's first request died before SES, then the name
+          // was blocked: retries are refused without releasing it, and the same claim completes once the name is free.
+          const held=`${unique('held')}.invalid`;
+          dropCreate=true; error(await add(b.cookie,held),503,'SES_UNAVAILABLE');
+          const heldToken=await claimToken(held); assert.ok(heldToken);
+          identities.set(`${platform}:${held}`,{...verifiedIdentity});
+          for (let i=0;i<2;i++) error(await add(b.cookie,held),409,'DOMAIN_REVIEW_REQUIRED');
+          assert.equal(await claimToken(held),heldToken);
+          identities.delete(`${platform}:${held}`);
+          const freed=ok(await add(b.cookie,held),201);
+          assert.deepEqual(identities.get(`${platform}:${held}`)!.Tags[0],{Key:'bane:domain-claim',Value:heldToken});
+          ok(await local('DELETE',`/v1/domains/${freed.id}`,undefined,b.cookie)); assert.ok(!identities.has(`${platform}:${held}`));
           const n=queries.mock.callCount(),creates=calls.length;
           const created = ok(await add(b.cookie,domain),201), proof = created.dns.find((r:Json) => r.purpose==='sending' && r.type==='TXT');
           dt.diagnostic(`POST domain: ${queries.mock.callCount()-n} pg round trips including dashboard auth`);
