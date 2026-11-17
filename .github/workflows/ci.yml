@@ -19,8 +19,8 @@ concurrency:
 
 jobs:
   build:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     permissions:
       contents: read
       pull-requests: read
@@ -111,8 +111,8 @@ jobs:
           node api/scripts/check-api-contract.mjs "$RUNNER_TEMP/base.json" "$RUNNER_TEMP/head.json" "${args[@]}"
 
   audit:
-    runs-on: blacksmith-2vcpu-ubuntu-2404
-    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
@@ -135,7 +135,7 @@ jobs:
           done
 
   gateway:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     env:
       RUSTUP_TOOLCHAIN: 1.99.0
     timeout-minutes: 20
@@ -161,7 +161,7 @@ jobs:
   acceptance:
     needs: acceptance-shard
     if: always()
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - run: test "${{ needs.acceptance-shard.result }}" = success
 
@@ -170,8 +170,8 @@ jobs:
       fail-fast: false
       matrix:
         fixture: [integration, simulated, simulated-heavy]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17.11-alpine
@@ -204,8 +204,8 @@ jobs:
   # apply and end with the same schema; then wrangler dev (workerd) serves wrangler.dev.jsonc's assets and routing on
   # the upgraded database with simulated SES, and every API route asked anonymously must be answered by the Worker.
   preview:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17.11-alpine
@@ -248,7 +248,7 @@ jobs:
   cls:
     needs: cls-shard
     if: always()
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     steps:
       - run: test "${{ needs.cls-shard.result }}" = success
 
@@ -257,8 +257,8 @@ jobs:
       fail-fast: false
       matrix:
         shard: [1, 2, 3, 4]
-    runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
     services:
       postgres:
         image: postgres:17.11-alpine
@@ -335,7 +335,7 @@ jobs:
   # The support Worker (support/, the AI support agent's backend): types, the deployable bundle, and its tests, which
   # drive that bundle in Miniflare with a fake Bane and a scripted model (no network, no model calls).
   support:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
