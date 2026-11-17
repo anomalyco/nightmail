@@ -23,7 +23,75 @@ function pgBin(name) {
   throw new Error(`CLS gate: set CLS_PG_URL to a Postgres admin URL, or install Postgres so ${name} is on PATH.`);
 }
 
-export async function start(repo, { log = () => {}, servers = 1, delay = null, fontDelay = 0 } = {}) {
+// One page's network, as the gate models it: no response starts sooner than `latency` ms after its request arrived, and
+// the response bodies of one page share `bytesPerSecond`, as Chrome's DevTools throttling modeled them. The browser
+// marks each request with its page (`x-cls-page`); a request without one (the gate's own seeding) is not shaped.
+// Chrome's own throttling (Network.emulateNetworkConditionsByRule) stalled now and then on CI's 4-core runner: a
+// page's script and stylesheet responses sat in it for the whole 60 s page.goto, headers received or not even that,
+// long after this proxy had sent them (Nov 17: 12 of 36 CI shard runs; none of 24 with this link instead).
+function pageLink({ latency, bytesPerSecond }) {
+  const streams = [];
+  let timer = null, last = 0, budget = 0, turn = 0;
+  const schedule = () => {
+    if (timer || !streams.length) return;
+    const now = performance.now();
+    const due = streams.some(s => s.head === null && s.ops.length) ? 10 : Math.min(...streams.map(s => s.head ?? Infinity)) - now;
+    if (due === Infinity) return;
+    timer = setTimeout(pump, Math.max(1, Math.ceil(due)));
+  };
+  const pump = () => {
+    timer = null;
+    const now = performance.now();
+    // Bytes accrue only while some body is waiting; a timer that fires late catches up (up to one second's worth).
+    budget = streams.some(s => s.head === null && s.ops.length) ? Math.min(budget + (now - last) * bytesPerSecond / 1000, bytesPerSecond) : 0;
+    last = now;
+    for (const s of streams) if (s.head !== null && s.head <= now) { s.head = null; s.writeHead(...s.headArgs); }
+    // Round-robin in packets, as Chrome does, so concurrent bodies share the page's bandwidth.
+    for (let moved = true; moved;) {
+      moved = false;
+      const order = streams.slice(turn % streams.length).concat(streams.slice(0, turn % streams.length)); turn++;
+      for (const s of order) {
+        if (s.head !== null) continue;
+        while (s.ops.length && s.ops[0] === END) { s.ops.shift(); s.end(); }
+        if (!s.ops.length) { if (s.ended) streams.splice(streams.indexOf(s), 1); continue; }
+        if (budget < 1) continue;
+        const chunk = s.ops[0], n = Math.min(chunk.length, 1500, Math.floor(budget));
+        s.write(chunk.subarray(0, n)); budget -= n; moved = true;
+        if (n === chunk.length) s.ops.shift(); else s.ops[0] = chunk.subarray(n);
+        if (s.ops[0] === END) { s.ops.shift(); s.end(); }
+      }
+    }
+    for (let i = streams.length - 1; i >= 0; i--) if (streams[i].ended && !streams[i].ops.length && streams[i].head === null) streams.splice(i, 1);
+    schedule();
+  };
+  const END = Symbol('end');
+  // Holds the response's head until `latency` after `arrived`, then paces its body; nothing is buffered beyond memory.
+  return (res, arrived) => {
+    const s = { head: arrived + latency, headArgs: null, ops: [], ended: false, writeHead: res.writeHead.bind(res), write: res.write.bind(res), end: res.end.bind(res) };
+    let headQueued = false;
+    if (!streams.length) { last = performance.now(); budget = 0; }
+    res.writeHead = (...args) => { if (!headQueued) { headQueued = true; s.headArgs = args; streams.push(s); schedule(); } return res; };
+    res.write = (chunk, encoding, done) => {
+      if (!headQueued) res.writeHead(res.statusCode);
+      if (chunk?.length) s.ops.push(typeof chunk === 'string' ? Buffer.from(chunk, typeof encoding === 'string' ? encoding : 'utf8') : Buffer.from(chunk.buffer, chunk.byteOffset, chunk.byteLength));
+      if (typeof encoding === 'function') encoding(); else if (typeof done === 'function') done();
+      schedule();
+      return true;
+    };
+    res.end = (chunk, encoding, done) => {
+      if (typeof chunk === 'function') { done = chunk; chunk = undefined; }
+      if (chunk !== undefined && chunk !== null) res.write(chunk, encoding);
+      else if (!headQueued) res.writeHead(res.statusCode);
+      if (!s.ended) { s.ended = true; s.ops.push(END); }
+      if (typeof encoding === 'function') encoding(); else if (typeof done === 'function') done();
+      schedule();
+      return res;
+    };
+    res.once('close', () => { const i = streams.indexOf(s); if (i !== -1) streams.splice(i, 1); s.ops.length = 0; });
+  };
+}
+
+export async function start(repo, { log = () => {}, servers = 1, delay = null, fontDelay = 0, throttle = null } = {}) {
   const api = join(repo, 'api');
   const require = createRequire(join(api, 'package.json'));
   const pg = require('pg');
@@ -95,7 +163,7 @@ export async function start(repo, { log = () => {}, servers = 1, delay = null, f
     // no CDP Fetch interception (context.route) and one or two API processes stay well inside the 6000/min peer budget.
     const fontDir = join(repo, 'app/dist/fonts');
     const fonts = new Map(readdirSync(fontDir).filter(f => f.endsWith('.woff2')).map(f => [f, readFileSync(join(fontDir, f))]));
-    const assetCache = new Map();
+    const assetCache = new Map(), links = new Map();
     const agent = new Agent({ keepAlive: true, maxSockets: 128 });
     cleanups.push(() => agent.destroy());
     let serverLog = '';
@@ -114,6 +182,12 @@ export async function start(repo, { log = () => {}, servers = 1, delay = null, f
       }
       const proxy = createHttpServer(async (req, res) => {
         const rawUrl = req.url || '/', q = rawUrl.indexOf('?'), pathname = q === -1 ? rawUrl : rawUrl.slice(0, q);
+        const page = req.headers['x-cls-page'];
+        delete req.headers['x-cls-page'];
+        // Fonts skip the page's network unless they are meant to arrive late (CLS_FONTS=late).
+        if (page && throttle && (fontDelay > 0 || !pathname.startsWith('/fonts/'))) {
+          (links.get(page) ?? links.set(page, pageLink(throttle)).get(page))(res, performance.now());
+        }
         const sleep = ms => new Promise(done => { const t = setTimeout(done, ms); res.once('close', () => { clearTimeout(t); done(); }); });
         if (pathname.startsWith('/fonts/')) {
           if (fontDelay > 0) { await sleep(fontDelay); if (res.destroyed || res.writableEnded) return; }
@@ -161,12 +235,13 @@ export async function start(repo, { log = () => {}, servers = 1, delay = null, f
         // the page saw an empty response (ERR_EMPTY_RESPONSE), now and then, on whichever load drew that socket.
         const forward = (retry) => {
           const up = httpRequest({ hostname: '127.0.0.1', port: apiPort, method: req.method, path: rawUrl, headers: req.headers, agent }, upRes => {
+            answered = true;
             res.writeHead(upRes.statusCode ?? 502, upRes.headers);
             if (req.method === 'HEAD') { upRes.resume(); res.end(); return; }
             upRes.pipe(res);
           });
           up.on('error', error => {
-            if (retry && up.reusedSocket && error.code === 'ECONNRESET' && !res.headersSent && !res.destroyed) { forward(false); return; }
+            if (retry && up.reusedSocket && error.code === 'ECONNRESET' && !answered && !res.destroyed) { forward(false); return; }
             if (!res.headersSent) res.writeHead(502); res.destroy();
           });
           res.on('close', () => { if (!res.writableEnded) up.destroy(); });
@@ -174,6 +249,7 @@ export async function start(repo, { log = () => {}, servers = 1, delay = null, f
           return up;
         };
         const bodyless = req.method === 'GET' || req.method === 'HEAD';
+        let answered = false;
         const up = forward(bodyless);
         req.on('error', () => up.destroy());
         if (!bodyless) req.pipe(up);

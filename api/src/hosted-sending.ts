@@ -19,26 +19,6 @@ export function hostedAllowance(config: Config, wid: string, incoming: number, m
   const { firstWeek, secondWeek, mature } = config.hostedSendCaps, fn = read ? sql`hosted_allowance_read` : sql`hosted_allowance`;
   return sql<HostedAllowance | null>`(SELECT allowance FROM ${fn}(${wid},${incoming},${marketing},${firstWeek},${secondWeek},${mature},${config.dispatch.dailyHeadroomPercent}))`;
 }
-const count = (value: number) => value.toLocaleString('en-US');
-export function assertHostedAllowance(allowance: HostedAllowance | null, incoming: number, marketing = 0) {
-  if (!allowance) return;
-  if (allowance.pauseReason) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', allowance.pauseReason);
-  if (marketing > 0 && allowance.marketingHeld) throw marketingHeld(allowance.marketingHoldReason);
-  if (allowance.cap === null) return;
-  const reserved = marketing > 0 && marketing + allowance.used > allowance.marketingCap;
-  // The marketing-per-hour cap is folded into marketingCap (hosted_allowance_read); say so when it is the one that binds.
-  const hourly = reserved && allowance.marketingHourCap != null && (allowance.marketingHourUsed ?? 0) + marketing > allowance.marketingHourCap;
-  if (hourly && incoming + allowance.used <= allowance.cap) {
-    const resetAt = new Date(allowance.marketingHourResetAt!).toISOString();
-    throw new ApiError(429, 'SEND_LIMIT_REACHED', `Hosted marketing is limited to ${count(allowance.marketingHourCap!)} recipients an hour; ${count(allowance.marketingHourUsed ?? 0)} are used this hour. The next hour starts at ${resetAt}.${marketing > allowance.marketingHourCap! ? ' This submission exceeds the hourly limit.' : ''}`, undefined, marketing <= allowance.marketingHourCap!, resetAt);
-  }
-  if (incoming && (incoming + allowance.used > allowance.cap || reserved)) {
-    const resetAt = allowance.resetAt ? new Date(allowance.resetAt).toISOString() : undefined;
-    const retryable = incoming <= allowance.cap && marketing <= allowance.marketingCap;
-    throw new ApiError(429, 'SEND_LIMIT_REACHED', `Hosted sending is limited to ${allowance.cap} recipients per rolling 24 hours; ${count(allowance.used)} are used.${reserved ? ` Marketing stops at ${allowance.marketingCap} to reserve transactional capacity.` : ''}${resetAt ? ` Rolling usage expires at ${resetAt}.` : ''}${!retryable ? ' This submission exceeds the available limit.' : ''}`, undefined, retryable, resetAt);
-  }
-}
-
 /**
  * The stream a marketing hold stops, as an expression over a sending_emails row: marketing mail and every campaign
  * row. Admission, campaign release and dispatch (owner selection and the final election) use the same rule.

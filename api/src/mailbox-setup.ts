@@ -281,8 +281,9 @@ export async function reconcileRegion(runtime: Runtime, region: string, workspac
       await runtime.db.update(mailboxRegions).set({ accountId:account,bucket,topicArn:arn,updatedAt:new Date().toISOString() }).where(and(eq(mailboxRegions.workspaceId,workspaceId),eq(mailboxRegions.region,region)));
     }), ses: clients.ses };
     const names = mailboxResources(settings.installationId, region);
-    const rows = await runtime.db.select().from(mailboxDomains).where(and(eq(mailboxDomains.workspaceId, workspaceId), eq(mailboxDomains.region, region),connection ? sql`EXISTS (SELECT 1 FROM domain_claims dc JOIN operation_domains d ON d.workspace_id=dc.workspace_id AND d.name=dc.name WHERE dc.connection_id=${connection.id} AND dc.receiving_host=${mailboxDomains.receivingHost} AND dc.workspace_id=${workspaceId} AND d.id=${mailboxDomains.domainId} AND d.region=${region})` : undefined));
-    // Self-hosted wildcard rows are covered by their parent. BYO rules list only MX-proven hostnames.
+    // BYO: every host whose MX was seen (waiting for the rule, or routing) of a claim that may receive, each listed by name.
+    const rows = await runtime.db.select().from(mailboxDomains).where(and(eq(mailboxDomains.workspaceId, workspaceId), eq(mailboxDomains.region, region),connection ? sql`${mailboxDomains.status} IN ('provisioning','active') AND ${mailboxDomains.receivingHost} IS NOT NULL AND EXISTS (SELECT 1 FROM domain_claims dc JOIN operation_domains d ON d.workspace_id=dc.workspace_id AND d.name=dc.name WHERE dc.connection_id=${connection.id} AND ${claimReceivable()} AND dc.workspace_id=${workspaceId} AND d.id=${mailboxDomains.domainId} AND d.region=${region})` : undefined));
+    // Self-hosted subdomains are covered by their domain's wildcard recipient.
     const receiving = rows.filter(row => !row.parentId && ['provisioning', 'waiting_for_mx', 'active'].includes(row.status));
     const desired = new Set(connection ? rows.map(row=>row.receivingHost!) : receiving.flatMap(row => row.acceptSubdomains ? [row.name, `.${row.name}`] : [row.name]));
     const ours = resources.rules.filter(rule => rule.Name?.startsWith(names.rulePrefix)).sort((a, b) => a.Name!.localeCompare(b.Name!));

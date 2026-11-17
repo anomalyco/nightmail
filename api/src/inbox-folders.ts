@@ -12,7 +12,8 @@ const seq=z.string().regex(/^(?:0|[1-9]\d{0,17})$/);
 export const Location=z.object({folder:Role,uid,uidValidity:uid,modseq:z.string(),deleted:z.boolean()});
 export const flagNames=['flagged','answered','draft','forwarded','junk','notJunk','mdnSent'] as const;
 export const flagsOf=(bits:number)=>flagNames.filter((_,i)=>(bits&(1<<i))!==0);
-export const inboxVisible=(v:MailboxAccess)=>sql`b.workspace_id=${v.workspaceId} AND b.kind='inbox' AND (b.delete_after IS NULL OR b.delete_after>statement_timestamp()) ${v.mailboxIds?sql`AND b.id=ANY(${sql.param(v.mailboxIds)}::text[])`:sql``}`;
+/** Every inbox the credential can read, addresses included (each is an inbox, migration addresses_are_inboxes), until it is deleted. */
+export const inboxVisible=(v:MailboxAccess)=>sql`b.workspace_id=${v.workspaceId} AND (b.delete_after IS NULL OR b.delete_after>statement_timestamp()) ${v.mailboxIds?sql`AND b.id=ANY(${sql.param(v.mailboxIds)}::text[])`:sql``}`;
 export const locations=sql`coalesce((SELECT jsonb_agg(jsonb_build_object('folder',e.role,'uid',e.uid,'uidValidity',f.uid_validity,'modseq',e.modseq::text,'deleted',e.deleted) ORDER BY e.role,e.uid) FROM inbox_entries e JOIN inbox_folders f USING(inbox_id,role) WHERE e.inbox_id=l.mailbox_id AND e.message_id=l.message_id),'[]'::jsonb)`;
 const guard=z.object({source:Role.optional(),uid:uid.optional(),ifModseq:seq.optional()});
 const transfer=guard.extend({folder:Role}).strict();

@@ -16,6 +16,7 @@ type Op = keyof typeof sdk;
 const dashboard = 'Requires a signed-in dashboard session, not an API key.';
 const shared = 'Would change shared domain, routing, provider or workspace configuration.';
 const subdomain = 'Hosted receiving follows exact verified DNS; no wildcard/subdomain fixture.';
+const hostChange = 'Would add, change or remove a receiving host of the shared fixture domain.';
 const byoV2 = 'Regional BYO setup requires a dashboard owner and a customer AWS account, not the Hosted fixture.';
 // Deliberately enumerate IDs (not paths, tags or prefixes): a new endpoint must never auto-skip.
 const safeModeSkips: Partial<Record<Op, string>> = {
@@ -39,6 +40,7 @@ const safeModeSkips: Partial<Record<Op, string>> = {
   disableInboundDomain: 'Hosted receiving cannot be disabled via API; removing the shared MX would break delivery.',
   createInboundSubdomain: subdomain, updateInboundSubdomain: subdomain, removeInboundSubdomain: subdomain,
   getInboundSubdomain: subdomain,
+  addReceivingHost: hostChange, updateReceivingHost: hostChange, removeReceivingHost: hostChange,
   refreshConnectionScan: byoV2, importConnectionDomains: byoV2, getConnectionRegionStatus: byoV2,
 };
 const destructive = process.env.BANE_E2E_ALLOW_DESTRUCTIVE === '1';
@@ -123,13 +125,12 @@ Object.assign(SKIP, {
   listInboxes: receivingMvp,
   ...(!destructive?{createInboxFolder:receivingMvp,updateInboxFolder:receivingMvp,deleteInboxFolder:receivingMvp,listInboxAppPasswords:receivingMvp,createInboxAppPassword:'A real password starts a billable day. Isolated positive test; dev probes a nonexistent inbox.',revokeInboxAppPassword:receivingMvp}:{}),
   getInbox: receivingMvp,
-  listInboxFolders:receivingMvp, getInboxChanges:receivingMvp, copyInboxMessage:receivingMvp, moveInboxMessage:receivingMvp, deleteInboxMessage:receivingMvp, expungeInboxFolder:receivingMvp,
   updateInbox: receivingMvp,
   deleteInbox: receivingMvp,
   simulateInboxMessage: receivingMvp,
-  listInboxMessages: receivingMvp,
-  getInboxMessage: receivingMvp,
-  updateInboxMessage: receivingMvp,
+  // Every address is an inbox: the dev scenario reads and changes a temporary address's mail through these (addressInbox).
+  ...(!destructive ? { listInboxFolders: receivingMvp, getInboxChanges: receivingMvp, copyInboxMessage: receivingMvp, moveInboxMessage: receivingMvp,
+    deleteInboxMessage: receivingMvp, expungeInboxFolder: receivingMvp, listInboxMessages: receivingMvp, getInboxMessage: receivingMvp, updateInboxMessage: receivingMvp } : {}),
   getInboxAttachment: receivingMvp,
   releaseRetiredAddress: receivingMvp,
   testInboundWebhook: receivingMvp,
@@ -149,7 +150,7 @@ const subject = `Bane E2E ${prefix}`, text = `Bane delivery check ${prefix}.`;
 const html = `<p>${text}</p>`;
 const webhookUrl = 'https://example.com/';
 const key = setting('API_KEY');
-const base = new URL(setting('URL') ?? 'https://bane.mx');
+const base = new URL(setting('URL') ?? 'https://nightmail.dev');
 const client = createClient({ baseUrl: base.origin, redirect: 'error', auth: scheme => scheme.scheme === 'bearer' ? key : undefined });
 // Previews answer 303 to their stored result; a client that follows it gets the JSON they used to return.
 const previews = createClient({ baseUrl: base.origin, redirect: 'follow', auth: scheme => scheme.scheme === 'bearer' ? key : undefined });
@@ -322,7 +323,12 @@ async function devBoundaries() {
   await denied('configureRegion',{path:{region},body:{enabled:true}},409,'CONNECTION_MANAGED_REGION');
   await denied('getInboundSubdomain',{path:child},404,'NOT_FOUND');
   await denied('updateInboundSubdomain',{path:child,body:{metadata:{test:prefix}}},404,'NOT_FOUND');
-  await denied('removeInboundSubdomain',{path:child},409,'HOSTED_RECEIVING_MANAGED');
+  await denied('removeInboundSubdomain',{path:child},404,'NOT_FOUND');
+  // Receiving hosts: refused before any DNS read, so the shared fixture never gains or loses a host.
+  const host = {...path, hostId:prefix};
+  await denied('addReceivingHost',{path,body:{name:'_invalid',confirm:false}},422,'RECEIVING_HOST_INVALID');
+  await denied('updateReceivingHost',{path:host,body:{catchAll:'store'}},404,'NOT_FOUND');
+  await denied('removeReceivingHost',{path:host},404,'NOT_FOUND');
   const row = await api('getInboundDomain',{path});
   check(row.status === 'active','refusing to enable an inactive shared fixture');
   await denied('updateInboundDomain',{path,body:{acceptSubdomains:row.subdomains.enabled}},409,'HOSTED_RECEIVING_MANAGED');
@@ -796,6 +802,8 @@ async function inbound() {
   }
   const sender = await address(from), receiver = await address(inbox);
   const addressId = receiver.id;
+  const hosts = await api('listReceivingHosts', { path: d });
+  check(hosts.data.some(h => h.name === domain && h.domainId === domainId && h.status !== 'removed'), 'receiving host list misses the domain itself');
   const children = await api('listInboundSubdomains', { path: d, query: { limit: 1 } });
   check(Array.isArray(children.data) && children.data.every(r => r.parentDomainId === domainId), 'subdomain page includes another parent');
   await api('updateInboundAddress', { path: { addressId }, body: { displayName: prefix } });
@@ -864,11 +872,42 @@ async function inbound() {
     const email = await api('getEmail',{path:{id:emailId}});
     check(!email.simulated && email.providerId,'inbound loop missing provider acceptance'); providerAccepted.add(email.providerId);
   }
+  if (destructive) await step('A temporary address is an inbox: its mail and folders through the inbox routes', () => addressInbox(receiver.id, sender.id, msg.id, sent.id));
+}
+
+// Every address is an inbox: its received and sent mail is filed in folders, and the inbox routes read and change it by
+// the address ID. Run-owned temporary addresses and their own messages only; deleting the addresses ends it.
+async function addressInbox(id: string, otherId: string, messageId: string, sentId: string) {
+  const folders = async () => Object.fromEntries((await api('listInboxFolders', { path: { id } })).data.map(f => [f.role, f]));
+  const state = (await api('listInboxFolders', { path: { id } })).state, before = await folders();
+  const listed = (await api('listInboxMessages', { path: { id }, query: { folder: 'inbox', limit: 100 } })).data.find(m => m.id === messageId);
+  check(listed?.uid && before.inbox.total >= 1, 'received mail not filed in the address inbox');
+  const path = { id, messageId }, detail = await api('getInboxMessage', { path });
+  check(detail.id === messageId && detail.folders.some(f => f.folder === 'inbox' && f.uid === listed.uid), 'address message read through its inbox differs');
+  // A state change, seen in the change feed.
+  check((await api('updateInboxMessage', { path, body: { read: !detail.read } })).read === !detail.read, 'read state not changed');
+  check((await api('getInboxChanges', { path: { id }, query: { since: state } })).changed.includes(messageId), 'change feed missing the read change');
+  // A copy expunged from Archive, then the message moved to Archive and deleted to Trash.
+  const copy = await api('copyInboxMessage', { path, body: { source: 'inbox', uid: listed.uid, folder: 'archive' } });
+  await api('updateInboxMessage', { path, body: { source: 'archive', uid: copy.uid!, deleted: true } });
+  check((await api('expungeInboxFolder', { path: { id, folder: 'archive' }, body: { uids: [copy.uid!] } })).expunged === 1, 'copy not expunged');
+  const moved = await api('moveInboxMessage', { path, body: { source: 'inbox', uid: listed.uid, folder: 'archive' } });
+  await api('deleteInboxMessage', { path, query: { source: 'archive', uid: moved.uid! } });
+  const after = await folders();
+  check(after.inbox.total === before.inbox.total - 1 && after.archive.total === before.archive.total && after.trash.total === before.trash.total + 1, 'folder counts differ after the moves');
+  // A key for the other run-owned address reads that address's Sent mail, and none of this one's.
+  const key = await api('createInboundKey', { body: { name: `${prefix}-other`, addressIds: [otherId], permissions: ['read'] } });
+  defer(`revoke inbound key ${key.id}`, async () => check((await api('revokeInboundKey', { path: { id: key.id } })).revokedAt, 'inbound key not revoked'));
+  const other = createClient({ baseUrl: base.origin, redirect: 'error', headers: { Authorization: `Bearer ${key.secret}` } });
+  check((await api('listInboxMessages', { client: other, path: { id: otherId }, query: { folder: 'sent', limit: 100 } })).data.some(m => m.id === sentId), 'sent mail not filed in Sent');
+  await expectDenial(() => api('listInboxMessages', { client: other, path: { id } }), 404, 'NOT_FOUND');
+  await expectDenial(() => api('getInboxMessage', { client: other, path }), 404, 'NOT_FOUND');
+  await expectDenial(() => api('listInboxFolders', { client: other, path: { id } }), 404, 'NOT_FOUND');
 }
 
 async function prepare() {
   check(base.protocol === 'https:' && base.href === base.origin + '/', 'BANE_E2E_URL must be a bare HTTPS origin');
-  check(!destructive || (base.origin === 'https://dev.bane.mx' && domain === 'e2e.bane.mx' && domainId === 'dom_e53755830a0141a5bd6e71e45e942f06' && region === 'us-east-2'),'destructive tests require the exact dev fixture');
+  check(!destructive || (['https://dev.nightmail.dev', 'https://dev.bane.mx'].includes(base.origin) && domain === 'e2e.bane.mx' && domainId === 'dom_e53755830a0141a5bd6e71e45e942f06' && region === 'us-east-2'),'destructive tests require the exact dev fixture');
   check(key && domain && domainId, 'missing BANE_E2E_API_KEY, DOMAIN or DOMAIN_ID');
   check((await api('getWorkspaceSettings',{})).name === 'E2E','refusing non-E2E workspace');
   const me = await api('getCurrentIdentity', {});

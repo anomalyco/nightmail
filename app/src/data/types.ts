@@ -128,6 +128,8 @@ export interface MailboxDomain {
   lastError: string | null; enabledAt: ISODate | null; checkedAt: ISODate | null; addressCount: number
   subdomains?: { enabled: boolean; count: number; dns: { type: 'MX'; name: string; value: string; priority: number }[] }
 }
+// One host a domain receives on (the domain itself or a subdomain), each with its own status, MX record and catch-all.
+export interface ReceivingHost { id: string; domainId: string; name: string; status: 'pending' | 'active' | 'mixed' | 'lost' | 'failed' | 'removed'; catchAll: 'create_address' | 'store'; dns: { type: 'MX'; name: string; value: string; priority: number }[]; mx: MailboxDomain['mx']; issue: ReceivingIssue | null; addressCount: number }
 export interface Mailbox { id: string; key?: string | null; address: string; displayName: string | null; domain: string; aliases: string[]; rules: string[]; origin: 'api' | 'auto'; createdAt: ISODate; updatedAt: ISODate; stats: { threads: number; unreadThreads: number; lastMessageAt: ISODate | null }; publicAddress?: string | null; expiresAt?: ISODate | null; kind?: 'address' | 'inbox' }
 export interface MailAddress { name: string | null; address: string }
 export const inboundEventTypes = ['message.received', 'message.junk', 'message.stored', 'message.queued', 'message.sent', 'message.delivered', 'message.delayed', 'message.bounced', 'message.complained', 'message.failed', 'thread.updated', 'address.created', 'address.deleted', 'inbox.created', 'inbox.deleted', 'message.held', 'inbox.quota_exceeded'] as const

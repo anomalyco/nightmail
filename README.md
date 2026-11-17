@@ -36,7 +36,7 @@ Self-hosted transactional email, newsletters, campaigns, and inbound conversatio
    sending. Ask before provisioning, deploying, or sending real email.
    ```
 
-The hosted service is at [bane.mx](https://bane.mx); its [production Worker configuration](api/wrangler.prod.jsonc) is separate from dev. Its daily limits follow each workspace's sender score: see [how sending limits work](docs/sending-limits.md).
+The hosted service is at [nightmail.dev](https://nightmail.dev) (earlier [bane.mx](https://bane.mx)); its [production Worker configuration](api/wrangler.prod.jsonc) is separate from dev. Its daily limits follow each workspace's sender score: see [how sending limits work](docs/sending-limits.md).
 
 Prefer a manual setup? Start with [Docker](api/README.md#docker-quickstart) or [Cloudflare](api/README.md#cloudflare). For development, see the [local setup](api/README.md#local-development).
 
@@ -53,14 +53,14 @@ See the [SDK guide](sdk/README.md) for usage examples, or [connect an MCP client
 ## CI and deployments
 
 1. **Pull request:** `CI` builds the dashboard, SDK and MCP, dry-runs both Worker configs, checks types and generated docs, and runs acceptance against disposable PostgreSQL and S3 fixtures. A breaking OpenAPI change fails the build unless maintainers apply **`api-breaking`**. The label waives compatibility only. On a dev push, the waiver applies only when every pushed commit belongs to that merged PR.
-2. **Merge to `dev`:** the push starts push CI and `Deploy` for the `dev` stage together: it builds that SHA, then rechecks the dev tip under the deployment lock. Superseded commits are skipped before migration. The current commit applies Pulumi first when what Pulumi reads changed (see [docs/ci.md](docs/ci.md#releasing-to-production)), then migrates, deploys and runs live tests on `dev.bane.mx`; its summary and JSON report distinguish success, expected rejections, skips and failures.
+2. **Merge to `dev`:** the push starts push CI and `Deploy` for the `dev` stage together: it builds that SHA, then rechecks the dev tip under the deployment lock. Superseded commits are skipped before migration. The current commit applies Pulumi first when what Pulumi reads changed (see [docs/ci.md](docs/ci.md#releasing-to-production)), then migrates, deploys and runs live tests on `dev.nightmail.dev`; its summary and JSON report distinguish success, expected rejections, skips and failures.
 3. **Production:** wait for the dev deploy, live E2E and dev push CI to pass for the merge SHA. Then fast-forward `production` to that exact commit: `git push bane <sha>:refs/heads/production`. The push is the only production deploy trigger. Watch it through the health checks; see [Releasing to production](docs/ci.md#releasing-to-production) for verification and recovery.
 4. **SDK release:** dispatch `Release SDK` from `dev` with `bump` (`patch`, `minor` or `major`). Its `build` job runs repository code with no environment, secrets or OIDC token and uploads the packed tarball; its `publish` job runs in the `release` environment (where a reviewer approves), never checks out the repository, publishes that tarball through npm trusted publishing (the environment's OIDC token; there is no npm token), then tags the build's commit `v<version>` and creates the GitHub release. The version comes from the newest tag, or from `sdk/package.json` before the first tag, and is never committed back, so `dev` stays restricted and `production` stays fast-forward only. Only `dev` may deploy the `release` environment.
 
 Configure **environment-scoped** variables (not repository-wide). The deploy secrets
 live in AWS Secrets Manager (`us-east-1`, account `604439173067`) and are read through
-GitHub OIDC by each environment's own role, `arn:aws:iam::604439173067:role/github/bane-dev`
-or `arn:aws:iam::604439173067:role/github/bane-production`:
+GitHub OIDC by each environment's own role, `arn:aws:iam::604439173067:role/github/nightmail-dev`
+or `arn:aws:iam::604439173067:role/github/nightmail-production`:
 
 | Environment | AWS Secrets Manager | Variables |
 |---|---|---|
@@ -97,7 +97,7 @@ keys need read/send/manage on the dedicated **E2E** workspace, not on a customer
 **Local live E2E:** install API and SDK dependencies, build the SDK (`cd sdk && bun run build`), and privately export `BANE_E2E_API_KEY`. From `api/` run:
 
 ```sh
-BANE_E2E_URL=https://dev.bane.mx BANE_E2E_REGION=us-east-2 \
+BANE_E2E_URL=https://dev.nightmail.dev BANE_E2E_REGION=us-east-2 \
 BANE_E2E_DOMAIN=e2e.bane.mx BANE_E2E_DOMAIN_ID=dom_e53755830a0141a5bd6e71e45e942f06 \
 BANE_E2E_ALLOW_DESTRUCTIVE=1 bun run e2e
 ```

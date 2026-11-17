@@ -206,6 +206,10 @@ The remaining rows are human steps: OAuth consent, a forward recipient's confirm
 | `checkInboundDomain` | `domains` · `checkInbound` · admin |
 | `enableInboundDomain` | `domains` · `enableInbound` · admin |
 | `disableInboundDomain` | `domains` · `disableInbound` · admin |
+| `listReceivingHosts` | `domains` · `listHosts` · admin |
+| `addReceivingHost` | `domains` · `addHost` · admin |
+| `updateReceivingHost` | `domains` · `updateHost` · admin |
+| `removeReceivingHost` | `domains` · `removeHost` · admin |
 | `listInboundSubdomains` | `domains` · `listSubdomains` · admin |
 | `createInboundSubdomain` | `domains` · `createSubdomain` · admin |
 | `getInboundSubdomain` | `domains` · `getSubdomain` · admin |

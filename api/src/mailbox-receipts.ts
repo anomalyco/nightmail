@@ -29,12 +29,19 @@ async function route(runtime:Runtime,source:SQL,replay:boolean) {
     WHERE NOT s.fenced OR s.binding_workspace IS NOT DISTINCT FROM b.wid
   ), env AS (SELECT b.*,addr,split_part(addr,'@',2) AS host FROM bound b CROSS JOIN jsonb_array_elements_text(b.recipients) e(addr)), matched AS MATERIALIZED (
     SELECT e.bucket,e.mid,m.workspace_id,e.addr FROM env e CROSS JOIN LATERAL (SELECT * FROM mailbox_domains m WHERE ${hosted?sql`m.receiving_host`:sql`m.name`}=e.host AND m.region=e.region AND (e.wid=m.workspace_id OR e.kind='shared') OFFSET 0) m
-    WHERE ${replay?sql`e.expires_at>now() AND (e.owners->e.addr) ? m.workspace_id` : sql`NOT EXISTS (SELECT FROM mail_receipt_holds h WHERE h.bucket=e.bucket AND h.ses_message_id=e.mid AND h.binding_workspace IS NOT DISTINCT FROM e.wid AND h.topic_arn=e.topic_arn AND h.recipients ? e.addr AND (h.expires_at<=now() OR NOT (h.owners->e.addr) ? m.workspace_id))`} AND ${hosted ? sql`EXISTS (
-      SELECT 1 FROM operation_domains d JOIN domain_claims dc ON dc.name=d.name AND dc.workspace_id=d.workspace_id AND dc.receiving_host=e.host AND ${claimReceives()}
+    WHERE ${replay?sql`e.expires_at>now() AND (e.owners->e.addr) ? m.workspace_id` : sql`NOT EXISTS (SELECT FROM mail_receipt_holds h WHERE h.bucket=e.bucket AND h.ses_message_id=e.mid AND h.binding_workspace IS NOT DISTINCT FROM e.wid AND h.topic_arn=e.topic_arn AND h.recipients ? e.addr AND (h.expires_at<=now() OR NOT (h.owners->e.addr) ? m.workspace_id))`} AND ${hosted ? sql`
+      -- The recipient's host routes (each host of a domain on its own row, unique while it routes: mailbox_domains_routing_host),
+      -- within its own two-hour grace if its MX went missing, and its domain's claim may receive.
+      m.status='active' AND EXISTS (
+      SELECT 1 FROM operation_domains d JOIN domain_claims dc ON dc.name=d.name AND dc.workspace_id=d.workspace_id AND ${claimReceives()}
       JOIN provider_connections c ON c.id=dc.connection_id AND c.workspace_id=dc.workspace_id AND c.kind=e.kind AND c.region=m.region AND ${connectionReady(sql`c`)} AND c.aws_account_id=split_part(e.topic_arn,':',5)
       AND dc.receiving_proved_at>now()-interval '72 hours' AND dc.receiving_identity_at>now()-interval '96 hours'
       AND (dc.receiving_proof_missed_at IS NULL OR dc.receiving_proof_missed_at>now()-interval '48 hours') AND (dc.receiving_lost_since IS NULL OR dc.receiving_lost_since>now()-interval '2 hours')
-      WHERE d.id=m.domain_id AND d.workspace_id=m.workspace_id AND d.created_at<=e.at AND dc.created_at<=e.at AND (d.region=m.region OR
+      WHERE d.id=m.domain_id AND d.workspace_id=m.workspace_id AND d.created_at<=e.at AND dc.created_at<=e.at
+        -- A host routes only for the domain it is part of: the domain itself or one of its subdomains. The primary host's MX
+        -- grace is the claim's receiving_lost_since (the fence above); every other host's is its row's.
+        AND (e.host=d.name OR right(e.host,length(d.name)+1)='.'||d.name)
+        AND (m.receiving_host=dc.receiving_host OR m.lost_since IS NULL OR m.lost_since>now()-interval '2 hours') AND (d.region=m.region OR
         (c.kind='shared' AND m.region='us-east-2' AND m.status='active' AND EXISTS
           (SELECT FROM domain_sending_bindings sb WHERE sb.domain_id=d.id AND sb.connection_id=c.id AND sb.region=d.region))))` : sql`m.status IN ('provisioning','waiting_for_mx','active') AND (m.parent_id IS NULL OR EXISTS (SELECT 1 FROM mailbox_domains parent WHERE parent.id=m.parent_id AND parent.workspace_id=m.workspace_id AND parent.status IN ('provisioning','waiting_for_mx','active')))`}
   ), groups AS (SELECT bucket,mid,workspace_id,jsonb_agg(DISTINCT addr ORDER BY addr) AS recipients FROM matched GROUP BY 1,2,3),

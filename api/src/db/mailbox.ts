@@ -45,11 +45,15 @@ export const mailboxDomains = pgTable('mailbox_domains', {
   id: text('id').primaryKey(), ...scope(), domainId: text('domain_id').notNull(), name: text('name').notNull(), receivingHost:text('receiving_host'), region: text('region').notNull(),
   status: text('status').$type<MailboxDomainStatus>().notNull(), catchAll: catchAll('catch_all').notNull().default(sql`'store'`),
   mx: jsonb('mx').$type<MxReport | null>(), mxMisses:smallint('mx_misses').notNull().default(0),lastError: text('last_error'), enabledAt: ts('enabled_at'), checkedAt: ts('checked_at'),
-  // Subdomains (acme.example.com) point at their receiving parent and share its SES domain.
+  // One row is one receiving host of a domain (its host is coalesce(receiving_host,name)). The domain's first row has no
+  // parent; every further host (the root, reply., acme. ...) points at it and shares its SES domain. Hosted: when a routing
+  // host's MX went missing (two-hour grace) and the last DNS issue found there.
+  lostSince: ts('lost_since'), issue: jsonb('issue').$type<import('../receiving-host.js').ReceivingIssue | null>(),
   parentId: text('parent_id'), acceptSubdomains: boolean('accept_subdomains').notNull().default(false),
   metadata: jsonb('metadata').$type<Record<string, unknown>>().notNull().default({}),
   createdAt: ts('created_at').notNull().defaultNow(), updatedAt: ts('updated_at').notNull().defaultNow(),
-}, t => [unique('mailbox_domains_name').on(t.workspaceId, t.name), uniqueIndex('mailbox_domains_domain').on(t.workspaceId, t.domainId).where(sql`${t.parentId} IS NULL`),uniqueIndex('mailbox_domains_receiving_host').on(t.workspaceId,t.receivingHost).where(sql`${t.receivingHost} IS NOT NULL AND ${t.status} IN ('active','provisioning')`), index('mailbox_domains_region').on(t.workspaceId, t.region, t.status)]);
+}, t => [unique('mailbox_domains_name').on(t.workspaceId, t.name), uniqueIndex('mailbox_domains_domain').on(t.workspaceId, t.domainId).where(sql`${t.parentId} IS NULL`),uniqueIndex('mailbox_domains_receiving_host').on(t.workspaceId,t.receivingHost).where(sql`${t.receivingHost} IS NOT NULL AND ${t.status} IN ('active','provisioning')`),
+  uniqueIndex('mailbox_domains_routing_host').on(t.receivingHost).where(sql`${t.receivingHost} IS NOT NULL AND ${t.status} IN ('active','provisioning')`), index('mailbox_domains_region').on(t.workspaceId, t.region, t.status)]);
 
 export const mailboxes = pgTable('mailboxes', {
   id: text('id').primaryKey(), ...scope(), key:text('key'), domainId: text('domain_id').notNull(), address: text('address').notNull(), displayName: text('display_name'),

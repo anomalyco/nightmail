@@ -54,16 +54,6 @@ export async function withRegionSettings(runtime: Runtime, workspaceId: string):
   const settings = await getRegionSettings(runtime.db, workspaceId);
   return { ...runtime, config: { ...runtime.config, workspaceId, regions: orderedRegions(settings) } };
 }
-export async function assertLiveRegionReady(runtime: Runtime, db: DbExecutor, region: string, stream: 'transactional' | 'marketing', retryable = false, workspaceId = runtime.config.workspaceId) {
-  if (runtime.config.multiTenant) {
-    if (!(await db.execute(sql`SELECT 1 FROM regional_sending_connections WHERE workspace_id=${workspaceId} AND region=${region}`)).rowCount) throw new ApiError(409, 'CONNECTION_REQUIRED', 'Set up a sending connection for this workspace and region.', 'region', retryable);
-    return;
-  }
-  const [row] = await db.select().from(sesRegions).where(regionWhere(workspaceId, region)).limit(1);
-  if (!row?.report?.provisioned || row.report.account?.sendingEnabled !== true || row.credentialsFingerprint !== await credentialFingerprint(runtime.config) || row.publicUrl !== discoveryTarget(runtime.config) || row.trustedAccountId !== row.report.account?.id || row.trustedTopicArn !== row.report.resources.topic.arn || row.report.resources[stream].sendingEnabled !== true) {
-    throw new ApiError(409, 'SES_SETUP_REQUIRED', 'Run discovery and complete provisioning for this region before live sending.', 'region', retryable);
-  }
-}
 const regionRows = (runtime: Runtime, workspaceId: string) => Promise.all([
   getRegionSettings(runtime.db, workspaceId),
   runtime.db.select({ region: sesRegions.region, account: sesRegions.trustedAccountId, arn: sesRegions.trustedTopicArn }).from(sesRegions).where(eq(sesRegions.workspaceId, workspaceId)),

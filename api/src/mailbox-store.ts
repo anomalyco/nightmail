@@ -117,9 +117,8 @@ export async function createMailbox(tx: DbExecutor, scope: Scope, input: { key?:
 
 /**
  * Adds a stored message to mailboxes and updates each mailbox's thread summary. Returns mailboxes that newly received it.
- * In a mailbox with inbox_state, received mail is counted and filed in its folders, as ingest does (sent mail is filed by
- * the inbox_file_sent trigger). Callers hold each mailbox's row (they just created it, updated it, or locked it to send),
- * so the next release's conversion of an address, which locks the row FOR UPDATE, can't change that meanwhile.
+ * Every mailbox is an inbox (it has inbox_state from its insert, migration addresses_are_inboxes): received mail is counted and filed in its
+ * folders, as ingest does, and sent mail is filed by the inbox_file_sent trigger.
  */
 export async function attachToMailboxes(tx: DbExecutor, scope: Scope, message: typeof mailMessages.$inferSelect, mailboxIds: string[]) {
   if (!mailboxIds.length) return [];

@@ -114,7 +114,8 @@ export function pendingGroups(domain:RecordSet, shared:boolean, safeReceiving:bo
   // The registered template publishes the token as _bane, which proves a claim shown with any label.
   const proof=pending.find(r=>r.purpose==='sending' && r.type==='TXT' && isProofRecord(r.name,domain.name));
   if(shared && proof) add('ownership',{ownership:proof.value});
-  const mx=pending.find(r=>r.purpose==='receiving' && r.type==='MX');
+  // Only the domain's own receiving record (the first): its other hosts were added by hand and are published by hand.
+  const own=domain.dns.find(r=>r.purpose==='receiving' && r.type==='MX'), mx=own?.status==='pending' ? own : undefined;
   const inbound=mx && /^inbound-smtp\.([a-z]{2}(?:-[a-z]+)+-\d+)\.amazonaws\.com$/.exec(mx.value)?.[1];
   // On an undisclosed revision sign both names only when they agree. A stale v1
   // provider must never point the customer's receiving MX at the sending pool.

@@ -33,9 +33,10 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
   const spec = JSON.parse(readFileSync(new URL('openapi.json', api), 'utf8')) as { paths: Record<string, Record<string, { operationId?: string }>> };
   const operations = Object.values(spec.paths).flatMap(item => Object.values(item)).map(op => op.operationId).filter((id): id is string => !!id);
   const file = 'api/scripts/e2e.ts', source = ts.createSourceFile(file, readFileSync(new URL('scripts/e2e.ts', api), 'utf8'), ts.ScriptTarget.Latest, true);
-  const named = new Set<string>();
+  const named = new Set<string>(), called = new Set<string>();
   const visit = (node: ts.Node) => {
     if (ts.isStringLiteralLike(node)) named.add(node.text);
+    if (ts.isCallExpression(node) && node.expression.getText(source) === 'api' && node.arguments[0] && ts.isStringLiteralLike(node.arguments[0])) called.add(node.arguments[0].text);
     if ((ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) && (ts.isIdentifier(node.name) || ts.isStringLiteral(node.name))) named.add(node.name.text);
     if (ts.isPropertyAccessExpression(node) && node.expression.getText(source) === 'SKIP') named.add(node.name.text);
     ts.forEachChild(node, visit);
@@ -43,7 +44,11 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
   visit(source);
   const missing = operations.filter(op => !named.has(op));
   for (const op of missing) fail('E2E coverage', `${op} is in openapi.json but neither called nor skipped in the live dev E2E, which fails the dev deploy after merge. Call it in a step with api('${op}', …), or add it to SKIP with the reason it cannot run against dev.`, file);
-  console.log(`E2E coverage: ${operations.length - missing.length}/${operations.length} operations called or skipped in ${file}.`);
+  // Behaviour a release has to prove live, where a skip doesn't count: these are called with api('…') in a dev step.
+  // Every address is an inbox (#362): a temporary address's mail and folders through the inbox routes, by its address ID.
+  const live = ['listInboxMessages', 'getInboxMessage', 'listInboxFolders', 'getInboxChanges', 'updateInboxMessage', 'copyInboxMessage', 'moveInboxMessage', 'deleteInboxMessage', 'expungeInboxFolder'];
+  for (const op of live.filter(op => !called.has(op))) fail('E2E coverage', `${op} must run in the live dev E2E, not only be skipped: an address's mail through the inbox routes is proven there. Call it with api('${op}', …) in a dev step.`, file);
+  console.log(`E2E coverage: ${operations.length - missing.length}/${operations.length} operations called or skipped in ${file}; ${live.filter(op => called.has(op)).length}/${live.length} required live operations called.`);
 }
 
 // 2. Cloudflare routing. Workers Assets answers any path outside run_worker_first itself (405 for POST, the SPA's

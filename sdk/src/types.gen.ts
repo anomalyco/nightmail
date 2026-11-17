@@ -3138,6 +3138,97 @@ export type UpdateInboundDomain = {
     acceptSubdomains?: boolean;
 };
 
+export type InboundHostList = {
+    data: Array<InboundHost>;
+};
+
+export type InboundHost = {
+    /**
+     * Host ID (mdom_…).
+     */
+    id: string;
+    /**
+     * Nightmail domain ID.
+     */
+    domainId: string;
+    /**
+     * The host: the domain itself or one of its subdomains.
+     */
+    name: string;
+    /**
+     * pending: its MX record isn’t seen yet. active: it receives. mixed: it receives, and another provider’s MX record shares its mail (a backup MX, or one with a better priority while mail moves over). lost: its MX record disappeared; it keeps receiving for two hours. failed: receiving setup failed (self-hosted). removed: it no longer receives; its addresses and mail are kept, and adding it again restores it.
+     */
+    status: 'pending' | 'active' | 'mixed' | 'lost' | 'failed' | 'removed';
+    catchAll: 'create_address' | 'store';
+    /**
+     * The MX record to publish on this host.
+     */
+    dns: Array<{
+        type: 'MX';
+        name: string;
+        value: string;
+        priority: number;
+    }>;
+    mx: InboundMxReport;
+    issue: ReceivingIssue;
+    addressCount: number;
+    metadata: {
+        [key: string]: unknown;
+    };
+    createdAt: string;
+    updatedAt: string;
+};
+
+/**
+ * Hosted: what needs attention on this host, from its last DNS check.
+ */
+export type ReceivingIssue = {
+    /**
+     * cname: the host is a CNAME, so it cannot have an MX (RFC 1034). foreign_mx: another provider receives its mail. split: other MX records share its mail. wildcard: a *.domain CNAME or MX answers for it. bane_record: it is one of Nightmail’s own names (custom MAIL FROM, ownership TXT, DKIM). host_taken: another claim, possibly in another workspace, receives on it. claimed: another workspace claimed it, or a name between it and this domain, in any scope. delegated: it is a delegated zone with its own NS records. claimed and delegated hosts never receive here. mx_missing: its MX disappeared after setup. wrong_region and null_mx: its MX points elsewhere in SES or refuses mail. proof_stale / identity_stale: the ownership TXT proof or the SES verification is out of date.
+     */
+    code: 'cname' | 'foreign_mx' | 'split' | 'wildcard' | 'bane_record' | 'host_taken' | 'claimed' | 'delegated' | 'mx_missing' | 'wrong_region' | 'null_mx' | 'proof_stale' | 'identity_stale';
+    host: string;
+    /**
+     * True when receiving there cannot work until DNS or the choice changes.
+     */
+    blocking: boolean;
+    message: string;
+    provider?: string | null;
+    /**
+     * The existing CNAME target.
+     */
+    target?: string | null;
+    /**
+     * A free subdomain to use instead.
+     */
+    suggestion?: string | null;
+} | null;
+
+export type AddReceivingHost = {
+    /**
+     * For an unknown recipient, store keeps the message as unrouted (default); create_address creates a receiving address.
+     */
+    catchAll?: 'create_address' | 'store';
+    metadata?: {
+        [key: string]: unknown;
+    };
+    /**
+     * The host: the domain itself, a label (acme) or a subdomain (acme.example.com).
+     */
+    name: string;
+    confirm?: boolean;
+};
+
+export type UpdateReceivingHost = {
+    /**
+     * For an unknown recipient, store keeps the message as unrouted (default); create_address creates a receiving address.
+     */
+    catchAll?: 'create_address' | 'store';
+    metadata?: {
+        [key: string]: unknown;
+    };
+};
+
 export type InboundSubdomainPage = {
     data: Array<InboundSubdomain>;
     nextCursor: string | null;
@@ -3189,6 +3280,10 @@ export type CreateInboundSubdomain = {
     metadata?: {
         [key: string]: unknown;
     };
+    /**
+     * Hosted: choose the host even though another provider receives its mail today.
+     */
+    confirm?: boolean;
 };
 
 export type UpdateInboundSubdomain = {
@@ -3632,7 +3727,7 @@ export type InboundOverview = {
 
 export type InboundOverviewRoute = {
     /**
-     * Address ID, route ID, <addressId>:<pattern> for an address pattern, or default:<domainId> for a domain default.
+     * Address ID, route ID, <addressId>:<pattern> for an address pattern, or default:<domainId> (default:<hostId> for a domain’s other receiving hosts) for a host’s default.
      */
     id: string;
     kind: 'address' | 'inbox' | 'route' | 'pattern' | 'catch_all';
@@ -19333,6 +19428,264 @@ export type DisableInboundDomainResponses = {
 };
 
 export type DisableInboundDomainResponse = DisableInboundDomainResponses[keyof DisableInboundDomainResponses];
+
+export type ListReceivingHostsData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/v1/inbound/domains/{id}/hosts';
+};
+
+export type ListReceivingHostsErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type ListReceivingHostsError = ListReceivingHostsErrors[keyof ListReceivingHostsErrors];
+
+export type ListReceivingHostsResponses = {
+    /**
+     * Success
+     */
+    200: InboundHostList;
+};
+
+export type ListReceivingHostsResponse = ListReceivingHostsResponses[keyof ListReceivingHostsResponses];
+
+export type AddReceivingHostData = {
+    body: AddReceivingHost;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/v1/inbound/domains/{id}/hosts';
+};
+
+export type AddReceivingHostErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type AddReceivingHostError = AddReceivingHostErrors[keyof AddReceivingHostErrors];
+
+export type AddReceivingHostResponses = {
+    /**
+     * Success
+     */
+    200: InboundHost;
+    /**
+     * Success
+     */
+    201: InboundHost;
+};
+
+export type AddReceivingHostResponse = AddReceivingHostResponses[keyof AddReceivingHostResponses];
+
+export type RemoveReceivingHostData = {
+    body?: never;
+    path: {
+        id: string;
+        hostId: string;
+    };
+    query?: never;
+    url: '/v1/inbound/domains/{id}/hosts/{hostId}';
+};
+
+export type RemoveReceivingHostErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type RemoveReceivingHostError = RemoveReceivingHostErrors[keyof RemoveReceivingHostErrors];
+
+export type RemoveReceivingHostResponses = {
+    /**
+     * Success
+     */
+    200: InboundHost;
+};
+
+export type RemoveReceivingHostResponse = RemoveReceivingHostResponses[keyof RemoveReceivingHostResponses];
+
+export type UpdateReceivingHostData = {
+    body: UpdateReceivingHost;
+    path: {
+        id: string;
+        hostId: string;
+    };
+    query?: never;
+    url: '/v1/inbound/domains/{id}/hosts/{hostId}';
+};
+
+export type UpdateReceivingHostErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type UpdateReceivingHostError = UpdateReceivingHostErrors[keyof UpdateReceivingHostErrors];
+
+export type UpdateReceivingHostResponses = {
+    /**
+     * Success
+     */
+    200: InboundHost;
+};
+
+export type UpdateReceivingHostResponse = UpdateReceivingHostResponses[keyof UpdateReceivingHostResponses];
 
 export type ListInboundSubdomainsData = {
     body?: never;

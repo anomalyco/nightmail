@@ -20,7 +20,7 @@ const values = z.object({
   // Access tokens with either are accepted.
   OAUTH_SCOPE_PREFIX: z.enum(['bane', 'nightmail']).default('bane'),
   // Origins this installation served before PUBLIC_URL and still answers on (https://bane.mx after the switch to
-  // nightmail.com), comma-separated. Their /mcp resource stays valid for tokens minted there. Remove after rename cleanup.
+  // nightmail.dev), comma-separated. Their /mcp resource stays valid for tokens minted there. Remove after rename cleanup.
   PREVIOUS_PUBLIC_URLS: z.string().default(''),
   // The name a new BYO connection gives its CloudFormation stack and IAM role (<prefix>-<id>). Bane until the runtime's
   // sts:AssumeRole policy also allows role/Nightmail-*, then Nightmail. Existing connections keep their stack's name.

@@ -34,5 +34,5 @@ config:
   bane:receivingAlarmTopicArn: arn:aws:sns:us-east-2:009882681002:bane-alerts
   bane:trustedFeedbackPublish: "true"
   bane:virginiaAlarmTopicArn: arn:aws:sns:us-east-1:009882681002:bane-alerts
-secretsprovider: awskms://alias/pulumi/bane-production?region=us-east-1
+secretsprovider: awskms://alias/pulumi/nightmail-production?region=us-east-1
 encryptedkey: AQICAHi4jVSzrmLwXsODflz6qiRbZ0JAEMb2xDbTZTLHj7dcOgHF7glAsx6bKexc6+o9sQKLAAAAfjB8BgkqhkiG9w0BBwagbzBtAgEAMGgGCSqGSIb3DQEHATAeBglghkgBZQMEAS4wEQQMUp1e9x2SL7jBf+MGAgEQgDv45CvP8nVAA+zbRV5x7ZsfNoMnUM506ujzmrcPKe+UmUyB/pmsZnAn59G+kpWv9bTjvA+x3CXUnB2NxA==

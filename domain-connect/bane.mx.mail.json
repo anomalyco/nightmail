@@ -8,7 +8,7 @@
   "logoUrl": "https://bane.mx/favicon.svg",
   "syncBlock": false,
   "syncPubKeyDomain": "domainconnect.bane.mx",
-  "syncRedirectDomain": "nightmail.com,bane.mx",
+  "syncRedirectDomain": "nightmail.dev,bane.mx",
   "hostRequired": false,
   "records": [
     { "groupId": "sending", "type": "CNAME", "host": "%dkim1%._domainkey", "pointsTo": "%dkim1%.%dkimZone%.amazonses.com", "ttl": 3600 },

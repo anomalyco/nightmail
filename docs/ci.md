@@ -1,6 +1,6 @@
 # CI: what runs where, and how to fix it
 
-Every change reaches production through `dev`: a PR merges into `dev`, the dev deploy migrates the dev database, deploys the Worker and runs the live E2E (`api/scripts/e2e.ts`) against `dev.bane.mx`. Production requires a green live E2E and green dev push CI for the exact SHA.
+Every change reaches production through `dev`: a PR merges into `dev`, the dev deploy migrates the dev database, deploys the Worker and runs the live E2E (`api/scripts/e2e.ts`) against `dev.nightmail.dev`. Production requires a green live E2E and green dev push CI for the exact SHA.
 
 ## Merging into `dev`: the merge queue
 

@@ -60,6 +60,23 @@ export function checkBudget(c: Ctx, used: number, maxRequests: number) {
   c.header('Retry-After', '60');
   throw new ApiError(429, 'REQUEST_RATE_LIMITED', `This key exceeded its ${maxRequests}-request minute budget. Retry after the window resets.`, undefined, true);
 }
+/** A long poll charges every read it may take against the key's minute budget before the first, like ordinary requests. */
+export async function reservePolls(c: Ctx, workspaceId: string, keyId: string, polls: number) {
+  const max = c.env.config.apiRateLimitPerMinute;
+  const { rows: [debit] } = await c.env.db.execute<{ used: number }>(sql`INSERT INTO api_request_budgets AS b(workspace_id,key_id,window_start,used)
+    VALUES(${workspaceId},${keyId},date_trunc('minute',now()),${polls}) ON CONFLICT(workspace_id,key_id) DO UPDATE SET
+    used=least(${max + 1},excluded.used+CASE WHEN b.window_start=excluded.window_start THEN b.used ELSE 0 END),window_start=excluded.window_start RETURNING used`);
+  checkBudget(c, debit!.used, max);
+}
+/** Reads, then once a second, until done, `seconds` (reserved with reservePolls) run out or the client goes away. */
+export async function longPoll<T>(c: Ctx, seconds: number, read: () => Promise<T>, done: (result: T) => boolean): Promise<T> {
+  const deadline = Date.now() + seconds * 1000;
+  for (let left = seconds; ; left--) {
+    const result = await read();
+    if (done(result) || !left || Date.now() >= deadline || c.req.raw.signal.aborted) return result;
+    await new Promise(resolve => setTimeout(resolve, Math.min(1000, Math.max(0, deadline - Date.now()))));
+  }
+}
 
 export async function chargeGrantBudget(runtime:Runtime,w:string,id:string){
   const max=runtime.config.apiRateLimitPerMinute;
@@ -152,7 +169,7 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
     const dashboard = await timed(c,'session-db',()=>getDashboardActor(c.env,c.req.raw.headers));
     if (!dashboard) throw new ApiError(401, 'AUTH_REQUIRED', 'Sign in or supply a bearer API key.');
     migrateLegacyCookies(c); settleDefaultAccount(c, dashboard.keyId.slice('user_'.length));
-    if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) requireDashboardOrigin(c.env, c.req.raw.headers);
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(c.req.method)) requireDashboardOrigin(c.env, c.req.raw);
     c.set('actor', dashboard);
   }
   await next();

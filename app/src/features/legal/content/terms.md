@@ -5,7 +5,7 @@ updated: 15 November 2026
 effective: 13 November 2026
 ---
 
-These Terms of Service (the "Terms") are a binding agreement between you and **Anomaly Innovations, Inc.** ("Anomaly", "we", "us"). They cover Nightmail: the hosted email service at bane.mx, its API, dashboard, SDK, MCP server, and IMAP and SMTP access (together, the "Service").
+These Terms of Service (the "Terms") are a binding agreement between you and **Anomaly Innovations, Inc.** ("Anomaly", "we", "us"). They cover Nightmail: the hosted email service at nightmail.dev, its API, dashboard, SDK, MCP server, and IMAP and SMTP access (together, the "Service").
 
 By creating an account, joining a workspace or using the Service, you accept these Terms, the [Acceptable Use Policy](/legal/acceptable-use) and the [Privacy Policy](/legal/privacy). If you use the Service for an organization, you accept these Terms on its behalf and confirm that you're authorized to do so. "You" then means that organization.
 

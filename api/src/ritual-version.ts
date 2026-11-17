@@ -1,6 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import { checkBudget } from './auth.js';
+import { reservePolls } from './auth.js';
 import { errors, receivingAdmin, response, security, type Actor, type App, type DbExecutor } from './core.js';
 
 // The dashboard's live view of rituals, routes and endpoints, for a person editing next to an agent that saves over MCP.
@@ -63,11 +63,7 @@ export function registerRitualVersion(app: App) {
     const a = receivingAdmin(c), w = a.workspaceId, q = c.req.valid('query');
     const watching = q.after !== undefined || q.endpoints !== undefined, wait = watching ? q.wait : 0;
     // Every tick this call may take is charged before the first, like the inbox long polls (src/mailbox.ts poll()).
-    const max = c.env.config.apiRateLimitPerMinute, ticks = 1 + Math.ceil(wait * 1000 / TICK_MS);
-    const { rows: [debit] } = await c.env.db.execute<{ used: number }>(sql`INSERT INTO api_request_budgets AS b(workspace_id,key_id,window_start,used)
-      VALUES(${w},${a.keyId},date_trunc('minute',now()),${ticks}) ON CONFLICT(workspace_id,key_id) DO UPDATE SET
-      used=least(${max + 1},excluded.used+CASE WHEN b.window_start=excluded.window_start THEN b.used ELSE 0 END),window_start=excluded.window_start RETURNING used`);
-    checkBudget(c, debit!.used, max);
+    await reservePolls(c, w, a.keyId, 1 + Math.ceil(wait * 1000 / TICK_MS));
     const mark = BigInt(q.endpoints ?? '0'), deadline = Date.now() + wait * 1000;
     for (;;) {
       const now = (await c.env.db.execute<{ version: number; endpoint: string | null }>(sql`SELECT coalesce((SELECT version FROM mail_routing_state WHERE workspace_id = ${w}), 0) AS version,

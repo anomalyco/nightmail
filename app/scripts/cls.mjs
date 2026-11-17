@@ -178,9 +178,10 @@ const devices = {
 };
 
 // Every API path gets a stable delay of 300–1300 ms in 200 ms steps: slow, and out of request order, the same way
-// every run. Assets load through Chrome's own throttling (150 ms latency, 1.6 Mbps down).
+// every run. Every response of a page, assets included, starts 150 ms after its request at the soonest and shares the
+// page's 1.6 Mbps (the fixture's proxy applies both, as Chrome's DevTools throttling did).
 const apiDelay = path => { let h = 0; for (const c of path) h = (h * 31 + c.charCodeAt(0)) >>> 0; return 300 + (h % 6) * 200; };
-const throttle = { offline: false, latency: 150, downloadThroughput: 1.6 * 1024 * 1024 / 8, uploadThroughput: 750 * 1024 / 8 };
+const throttle = { latency: 150, bytesPerSecond: 1.6 * 1024 * 1024 / 8 };
 // Web fonts are served at once from app/dist, not through the throttled network, so they have loaded before the
 // (throttled) script that renders any text runs. Before, whether a font arrived before or after the page's text varied
 // with the runner's load, and a page whose text changed size when the font swapped in failed only sometimes (Settings ·
@@ -349,20 +350,19 @@ async function measure(browser, job, fx) {
     page.on('request', request => { const url = request.url(); if (/^https?:\/\//i.test(url) && !url.startsWith(origin)) problems.push(`external request ${url}`); });
     page.on('response', response => { if (response.url().startsWith(origin + '/v1/') && (response.status() >= 500 || response.status() === 429)) problems.push(`${response.status()} ${response.request().method()} ${response.url().slice(origin.length)}`); });
     page.on('pageerror', error => problems.push(`page error: ${error.message}`));
-    // Network rules shape traffic in Chrome without CDP Fetch interception (context.route), whose per-request pauses
-    // stalled targets on Linux CI. The fixture shaper applies apiDelay on /v1/* and serves /fonts/* from memory.
-    const cdp = await context.newCDPSession(page);
-    await cdp.send('Network.enable');
-    if (lateFonts) await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
-    await cdp.send('Network.emulateNetworkConditionsByRule', {
-      offline: false,
-      matchedNetworkConditions: [
-        ...(lateFonts ? [] : [{ urlPattern: `${origin}/fonts/*`, offline: false, latency: 0, downloadThroughput: -1, uploadThroughput: -1 }]),
-        ...(densityOnly ? [] : [{ urlPattern: `${origin}/*`, ...throttle }]),
-        { urlPattern: 'http*://*', offline: true, latency: 0, downloadThroughput: 0, uploadThroughput: 0 },
-      ],
+    // The fixture's proxy shapes the traffic (cls-fixture.mjs): apiDelay on /v1/*, fonts from memory at once, and this
+    // page's latency and bandwidth, for the requests carrying its x-cls-page. Not in Chrome: CDP Fetch interception
+    // (context.route) paused targets on Linux CI, and DevTools throttling (Network.emulateNetworkConditionsByRule)
+    // held a page's scripts for the whole page.goto after the proxy had sent them, in 12 of 36 shard runs on Nov 17.
+    await context.setExtraHTTPHeaders({ 'x-cls-page': String(job.index) });
+    if (lateFonts) {
+      const cdp = await context.newCDPSession(page);
+      await cdp.send('Network.enable');
+      await cdp.send('Network.setCacheDisabled', { cacheDisabled: true });
+    }
+    await page.goto(origin + (job.mode === 'in-app' ? job.from : job.path), { waitUntil: 'domcontentloaded', timeout: 60_000 }).catch(error => {
+      throw new Error(`${error.message.split('\n')[0]} In flight: ${net.pending().map(url => url.replace(origin, '')).join(', ') || 'nothing'}`);
     });
-    await page.goto(origin + (job.mode === 'in-app' ? job.from : job.path), { waitUntil: 'domcontentloaded', timeout: 60_000 });
     // With late fonts, the fallbacks only keep text still if this machine has one of their local fonts (tokens.css).
     const missing = !lateFonts ? [] : await page.evaluate(() => Promise.all([...document.fonts].filter(f => f.family.includes('Fallback')).map(f => f.load().then(() => null, () => `${f.family} ${f.weight} ${f.unicodeRange}`))));
     for (const face of missing.filter(Boolean)) problems.push(`no local font for ${face}: install fonts-liberation and fonts-dejavu-core, or measure on a machine with Arial and Menlo`);
@@ -496,9 +496,10 @@ function summarize(results, seconds) {
 
 rmSync(out, { recursive: true, force: true });
 mkdirSync(out, { recursive: true });
-const browserPromise = chromium.launch(process.env.CLS_CHROME ? { executablePath: process.env.CLS_CHROME } : { channel: 'chrome' });
+// No request leaves the machine: every host but the fixture's fails to resolve.
+const browserPromise = chromium.launch({ ...process.env.CLS_CHROME ? { executablePath: process.env.CLS_CHROME } : { channel: 'chrome' }, args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'] });
 browserPromise.catch(() => {});
-const fx = await start(repo, { servers: Math.min(2, Math.ceil(workers / 8)), delay: densityOnly ? null : apiDelay, fontDelay: lateFonts ? FONT_DELAY_MS : 0, log: message => console.log(`${elapsed()} ${message}`) }).catch(async error => {
+const fx = await start(repo, { servers: Math.min(2, Math.ceil(workers / 8)), delay: densityOnly ? null : apiDelay, fontDelay: lateFonts ? FONT_DELAY_MS : 0, throttle: densityOnly ? null : throttle, log: message => console.log(`${elapsed()} ${message}`) }).catch(async error => {
   await browserPromise.then(b => b.close(), () => {});
   throw error;
 });

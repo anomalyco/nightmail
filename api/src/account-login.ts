@@ -325,11 +325,27 @@ async function accountList(runtime: Runtime, c: Ctx, jar: Jar, connection?: stri
   };
 }
 
+/**
+ * The dashboard origin of the host a request reached: an earlier origin this installation still serves
+ * (PREVIOUS_PUBLIC_URLS) when the request was served on its host, else PUBLIC_URL's. Matched by host, so a TLS-terminating
+ * proxy's http URL counts; a host that is neither (a proxy that rewrote Host) is PUBLIC_URL's, as before a switch.
+ */
+export function servedOrigin(runtime: Runtime, url: string) {
+  const host = new URL(url).host;
+  return runtime.config.previousOrigins?.find(origin => new URL(origin).host === host) ?? new URL(runtime.config.publicUrl).origin;
+}
+/**
+ * Cookie-authenticated writes, signing in, switching and signing out: only the dashboard on the host the request reached
+ * may ask. A tab still open on an earlier origin keeps working there; neither origin's page may act through the other.
+ */
+export function requireDashboardOrigin(runtime: Runtime, request: Request) {
+  if (request.headers.get('origin') !== servedOrigin(runtime, request.url)) throw new ApiError(403,'CSRF_ORIGIN_INVALID','Use the dashboard.');
+}
+
 export async function accountBrowserRoute(c: Ctx) {
   const runtime = c.env, path = c.req.path, origin = new URL(runtime.config.publicUrl).origin;
   c.header('Cache-Control','no-store');
-  // Signing in, switching and signing out change this browser's sessions: only the dashboard itself may ask.
-  if (c.req.method === 'POST' && c.req.header('origin') !== origin) throw new ApiError(403,'CSRF_ORIGIN_INVALID','Use the dashboard to sign in or out.');
+  if (c.req.method === 'POST') requireDashboardOrigin(runtime, c.req.raw);
   const jar = () => sessionJar(runtime, c.req.raw.headers);
   // An empty body is {} (earlier dashboards sign out without one).
   const body = async <T extends z.ZodType>(schema: T) => {
@@ -343,6 +359,10 @@ export async function accountBrowserRoute(c: Ctx) {
   if (path === '/api/auth/sign-in/account' && c.req.method === 'POST') {
     const input = z.object({ callbackURL:z.url().max(2048), prompt:z.literal('select_account').optional() }).strict().safeParse(await c.req.json().catch(()=>null));
     if (!input.success) throw new ApiError(422,'AUTH_INPUT_INVALID','Supply the dashboard return URL.');
+    // A tab on an earlier origin signs in on the current one: it goes to the current origin's root, a constant built
+    // from config alone (nothing of the request, so it can't be steered elsewhere). No flow starts on the earlier
+    // origin. Remove after rename cleanup.
+    if (servedOrigin(runtime, c.req.url) !== origin) return c.json({url:`${origin}/`});
     // A sixth account is refused before the account service is asked, on every sign-in; the callback checks again.
     if ((await connectedAccounts(runtime, await jar())).accounts.length >= MAX_ACCOUNTS) throw new ApiError(409,'ACCOUNT_LIMIT',`A browser can connect at most ${MAX_ACCOUNTS} accounts. Sign out of one to add another.`);
     const start = await beginAccountLogin(runtime,new URL(input.data.callbackURL),c.req.header(clientIpHeader) ?? 'unknown',input.data.prompt).catch(error=>{

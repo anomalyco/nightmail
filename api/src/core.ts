@@ -260,6 +260,8 @@ export const lastingRefusal = (a: Actor | undefined, what: string) => a?.credent
   ? new ApiError(403, 'CREDENTIAL_DELEGATION_FORBIDDEN', `Temporary agent tokens cannot ${what}. Use the dashboard, an API key or the MCP approval itself.`) : null;
 /** What `lasting` refuses, for the areas that share a wording (sending and receiving webhooks; API keys and inbound keys). */
 export const WEBHOOK_CHANGE = 'create, change or delete webhooks or read their signing secrets', KEY_CHANGE = 'create, list or revoke API keys';
+/** What `lasting` refuses on receiving hosts: adding, changing or removing one, turning receiving on or off, or its catch-all. */
+export const RECEIVING_HOST_CHANGE = 'add, change or remove receiving hosts';
 /**
  * Receiving configuration (routing, rituals, endpoints, inbox connections) covers every address in the workspace: an
  * owner or admin, an API key with manage on all domains, or an MCP approval with receiving consent, which reads with
@@ -318,12 +320,14 @@ export const receivingAdminRoute = (path: string) => /^\/v1\/(?:routing|rituals|
 export const keyAdminRoute = (method: string, path: string) => /^\/v1\/(?:api-keys|agent-tokens|inbound\/keys)(?:\/|$)/.test(path) && !agentTokenMintRoute(method, path);
 /** agentTokenMintRefusal's route: createAgentToken. */
 export const agentTokenMintRoute = (method: string, path: string) => method.toUpperCase() === 'POST' && path === '/v1/agent-tokens';
-/** lasting's other routes: setting up sending and receiving webhooks and reading their secrets, and mail client passwords.
- *  Testing a webhook and retrying a delivery stay a temporary token's. */
+/** lasting's other routes: setting up sending and receiving webhooks and reading their secrets, mail client passwords, and
+ *  receiving hosts (adding, changing or removing one, choosing one, turning a domain's receiving on or off, its catch-all).
+ *  Testing a webhook, retrying a delivery and checking a domain's MX stay a temporary token's. */
 export function lastingRoute(method: string, path: string) {
   const verb = method.toUpperCase();
   return (verb === 'POST' && /^\/v1\/(?:inbound\/)?webhooks$/.test(path)) || ((verb === 'PATCH' || verb === 'DELETE') && /^\/v1\/(?:inbound\/)?webhooks\/[^/]+$/.test(path))
-    || /^\/v1\/(?:inbound\/)?webhooks\/[^/]+\/(?:rotate-secret|secret)$/.test(path) || (verb !== 'GET' && /^\/v1\/inboxes\/[^/]+\/app-passwords(?:\/[^/]+)?$/.test(path));
+    || /^\/v1\/(?:inbound\/)?webhooks\/[^/]+\/(?:rotate-secret|secret)$/.test(path) || (verb !== 'GET' && /^\/v1\/inboxes\/[^/]+\/app-passwords(?:\/[^/]+)?$/.test(path))
+    || (verb !== 'GET' && /^\/v1\/inbound\/domains\/[^/]+(?:\/(?:enable|disable|hosts(?:\/[^/]+)?|subdomains(?:\/[^/]+)?))?$/.test(path)) || (verb === 'POST' && /^\/v1\/domains\/[^/]+\/receiving-host$/.test(path));
 }
 /** notMember (app.ts): whether REST refuses this actor the route because it is a workspace member. */
 export const memberRefused = (actor: Pick<Actor, 'role'> | undefined, method: string, path: string) => actor?.role === 'member' && ownerRoute(method, path);

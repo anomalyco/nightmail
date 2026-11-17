@@ -221,7 +221,7 @@ export function registerWorkspaces(app: App) {
   });
   app.openapi(createRoute({ method: 'post', path: '/v1/workspaces/invitations/{id}/accept', operationId: 'acceptWorkspaceInvitation', tags, security, request: { params: IdParams }, responses: { 200: response(z.object({ workspaceId: z.string() })), ...errors } }), async c => {
     if (!c.env.config.multiTenant) return notFound('Endpoint');
-    const a = await invitationRecipient(c.env, c.req.raw.headers), invitationId = c.req.valid('param').id;
+    const a = await invitationRecipient(c.env, c.req.raw), invitationId = c.req.valid('param').id;
     const workspaceId = await claimInvitation(c.env.db, a.userId, a.email, invitationId, auditContext(c));
     if (workspaceId) return c.json({ workspaceId }, 200);
     // Following the URL immediately after sign-in is an idempotent success, never a rejoin.

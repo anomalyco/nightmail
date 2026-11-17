@@ -122,12 +122,15 @@ Access matches the other receiving reads: members and scoped keys see only their
 | Task | Operation (also the MCP tool name) |
 |---|---|
 | Everything on the Routes tab | `getInboundOverview` |
-| Addresses, aliases and patterns | `listInboundAddresses`, `createInboundAddress`, `updateInboundAddress` (`aliases`, `rules`) |
+| Addresses, aliases and patterns | `listInboundAddresses`, `createInboundAddress`, `updateInboundAddress` (`aliases`, `rules`); deprecated, see below |
+| An address's mail and folders | `listInboxMessages`, `getInboxMessage`, `listInboxFolders`, `moveInboxMessage` and the other inbox mail operations, with the address ID |
 | Routes | `listRoutes`, `createRoute`, `updateRoute`, `deleteRoute`, `testRouting` |
 | Catch-all | `updateInboundDomain` (`catchAll`) |
 | Rituals and Try it | `saveRitual`, `attachRituals`, `testRituals` (trace rows carry a step-by-step `timeline`) |
 | Endpoints | `listInboundEndpoints` (every endpoint, named or not, a page at a time; `addressId` keeps the webhooks that get an address's received mail), `listEndpoints`, `createEndpoint`, `updateEndpoint`, `testEndpoint`, `deleteEndpoint` |
 | Inbound webhooks | `listInboundWebhooks` (`cursor`, `limit`, `addressId`, `eventType`), `getInboundWebhook`, `createInboundWebhook`, `updateInboundWebhook` |
+
+Every address is an inbox. It has folders, UIDs and one writer for its thread and message state, like an agent inbox, so the inbox mail and folder operations (`/v1/inboxes/{id}/messages`, `/v1/inboxes/{id}/folders`) take an address ID too. A temporary address (`ttlSeconds`) is an inbox whose lease is `expiresAt` alone: it stops receiving then and is kept. An address can still start threads and keep its own send limits, which an agent inbox can't. The address operations (`listInboundAddresses`, `createInboundAddress`, `getInboundAddress`, `updateInboundAddress`, `deleteInboundAddress`) are deprecated aliases until the domain cutover, which removes them and lets `/v1/inboxes` list and create addresses too. Until then `/v1/inboxes` and `getInbox` show agent inboxes only, because the `Inbox` response can't describe an address without a breaking change. Deleting an address releases it: its threads and folders go, and its stored mail is kept.
 
 Endpoints and webhooks are one model. Every endpoint, whatever its type, is one row with one ID (`mwh_…` for a webhook, `con_…` for Slack, Discord and forwards); a webhook's `key` is its endpoint name. `/v1/endpoints` lists and changes named endpoints of every type, and `/v1/inbound/webhooks` lists and changes webhooks, named or not. Both go through the same writer (`api/src/endpoints.ts`), so names, caps (32 active webhooks with event subscriptions, 500 active route-only webhooks, 50 Slack, Discord and forward endpoints), the in-use checks and pause and resume are the same through either.
 

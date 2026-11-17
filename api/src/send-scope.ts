@@ -5,9 +5,10 @@ declare const held: unique symbol, unlocked: unique symbol;
 /**
  * Proof that this transaction holds a workspace's send locks, taken in the one order every path that sends, launches
  * a campaign or changes a sending connection uses: the campaign row (when one is named), then the admission row
- * (job_schedule), then the settings row; sender claims and attachments only after them. Only lockSendScope and
- * claimSendScope make one, and what reads settings or sender claims in those paths takes one, so the type checker
- * holds the order. Two paths that took them in other orders deadlocked (dev, Nov 12; launch against a BYO disconnect).
+ * (job_schedule), then the settings row; sender claims and attachments only after them. Only lockSendScope makes one,
+ * and what reads settings or sender claims in those paths takes one, so the type checker holds the order. Two paths that took them in other orders deadlocked (dev, Nov 12; launch against a BYO disconnect).
+ * A send admitted in one statement takes the same locks, in the same order, inside the admission decision
+ * (send_admission with locks 'take', migration 323); every other admission is given the SendScope its caller holds.
  */
 export type SendScope = { readonly [held]: true; readonly workspaceId: string };
 /**
@@ -40,13 +41,3 @@ export async function lockSendScope(db: DbExecutor, workspaceId: string, options
     throw new ApiError(503, 'REGION_SETTINGS_NOT_INITIALIZED', 'Run database migrations to initialize SES region settings.');
   return scope(workspaceId);
 }
-/** A direct send's idempotency claim and its admission lock in one statement: only the winning claim takes the lock. */
-export async function claimSendScope(db: DbExecutor, workspaceId: string, claim: SQL) {
-  const claimed = (await db.execute(sql`WITH claim AS (${claim}), locked AS (${admission(workspaceId, sql`FROM claim`)}) SELECT 1 FROM claim`)).rows;
-  return { claimed, scope: claimed.length ? scope(workspaceId) : null };
-}
-/**
- * The settings row, share-locked as the first CTE of a statement that reads sender claims after it: regional_sender
- * and verified_sending_domains lock the closest claim, and reservations and connection changes take settings before claims.
- */
-export const lockedSettings = (held: SendScope) => sql`settings AS MATERIALIZED (SELECT workspace_id,default_region,enabled_regions FROM ses_installation_settings WHERE workspace_id=${held.workspaceId} FOR SHARE)`;

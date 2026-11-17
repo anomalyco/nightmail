@@ -1198,6 +1198,40 @@ test('Account switcher: two accounts in one browser switch, stay apart on every 
   assert.equal((store(await request('/api/auth/sign-out','POST',undefined,as(work)))).status,200);
   assert.equal(await code(await request('/v1/me','GET',undefined,as(work))),'ACCOUNT_SIGNED_OUT');
   assert.equal(await who(as(personal)), personal.id);
+
+  // After a domain switch (PUBLIC_URL moves, the old origin in PREVIOUS_PUBLIC_URLS) a tab still open on the old host
+  // keeps its session there: it reads, writes, switches and signs out with its own Origin. Neither host's page acts
+  // through the other, API keys need no Origin on either, and a new sign-in started there goes to the new origin.
+  const next = 'https://next.example.org', switchedFrom = runtime.config;
+  runtime.config = {...switchedFrom, publicUrl:next, previousOrigins:[origin]};
+  try {
+    const at = (host: string, path: string, method = 'GET', body?: object, headers: Record<string,string> = {}) => app.fetch(new Request(host+path,{method,
+      headers:{origin:host,cookie:cookie(),'content-type':'application/json','x-nightmail-client-ip':`192.0.2.${peer}`,...headers},body:body?JSON.stringify(body):undefined}),runtime);
+    const email = () => `old-host-${randomUUID()}@example.net`;
+    assert.equal((await at(origin,'/v1/me','GET',undefined,as(personal))).status,200);
+    assert.equal((await at(origin,'/v1/contacts','POST',{email:email()},as(personal))).status,201);
+    const key = await at(origin,'/v1/api-keys','POST',{name:'old-host',permissions:['manage']},as(personal));
+    assert.equal(key.status,201);
+    const {secret} = await key.json() as {secret:string};
+    for (const [host, foreign] of [[origin, next], [next, origin]] as const) {
+      for (const [path, body] of [['/v1/contacts', {email:email()}], ['/api/auth/accounts/switch', {account:personal.id}], ['/api/auth/sign-out', {}]] as const) {
+        const refused = await at(host, path, 'POST', body, {...as(personal), origin:foreign});
+        assert.equal(refused.status,403,`${path} on ${host} from ${foreign}`); assert.equal(await code(refused),'CSRF_ORIGIN_INVALID');
+      }
+      for (const sent of [foreign, 'https://attacker.invalid']) assert.equal((await at(host,'/v1/contacts','POST',{email:email()},{authorization:`Bearer ${secret}`,origin:sent})).status,201,'API keys need no Origin');
+    }
+    assert.equal(await who(as(personal)), personal.id, 'A refused sign-out leaves the session');
+    assert.equal(store(await at(origin,'/api/auth/accounts/switch','POST',{account:personal.id})).status,200);
+    // No sign-in flow starts on the old host: it sends the tab to the new origin's root, whatever it asked to return to.
+    for (const callbackURL of [origin+'//attacker.invalid/phish', origin+'///attacker.invalid/phish', origin+'//bane.mx/overview', origin+'/\\attacker.invalid',
+      origin+'/%2F%2Fattacker.invalid', origin+'/@attacker.invalid', 'https://attacker.invalid/', origin+'/?return=https://attacker.invalid/&callbackURL=https://attacker.invalid/#https://attacker.invalid/',
+      origin+'/signed-in/?tab=fixture', origin+'/campaigns?view=sent#top']) {
+      const moved = await at(origin,'/api/auth/sign-in/account','POST',{callbackURL,prompt:'select_account'});
+      assert.deepEqual([moved.status, await moved.json(), moved.headers.getSetCookie()],[200, {url:next+'/'}, []],callbackURL);
+    }
+    assert.equal(store(await at(origin,'/api/auth/sign-out','POST',{},as(personal))).status,200);
+    assert.equal(await code(await at(origin,'/v1/me','GET',undefined,as(personal))),'ACCOUNT_SIGNED_OUT');
+  } finally { runtime.config = switchedFrom; }
   assert.equal(store(await request('/api/auth/sign-out','POST',{all:true})).status,200);
   assert.equal([...jar.keys()].filter(k=>k.includes('session_token')).length,0);
   assert.equal((await request('/v1/me')).status,401);
@@ -1534,7 +1568,12 @@ test('mail gateway: SMTP queues dispatchable content with a single database conn
     const {rows:[sent]}=await db.query('SELECT raw_key FROM mail_messages WHERE workspace_id=$1 AND sending_email_id=$2',[wid,body.id]);
     const copy=Buffer.from((await rt.storage.get(sent.raw_key))!.body).toString('latin1');
     assert.match(copy,/^Subject: blind\r$/m);
-    assert.doesNotMatch(copy,/bcc|hidden@|folded@|resent@/i);
+    // The headers, unfolded, name no blind-recipient field, and no hidden address is anywhere in the copy. Not a bare
+    // /bcc/ over the whole copy: its Message-ID's random hex can end in …0bcc.
+    const end=copy.indexOf('\r\n\r\n');assert.ok(end>0,'header block');
+    const fields=copy.slice(0,end).replace(/\r\n[ \t]+/g,' ').split('\r\n').map((line:string)=>line.slice(0,line.indexOf(':')).trim().toLowerCase());
+    assert.deepEqual(fields.filter((name:string)=>name==='bcc'||name==='resent-bcc'),[]);
+    for(const hidden of ['hidden@example.invalid','folded@example.invalid','resent@example.invalid'])assert.ok(!copy.toLowerCase().includes(hidden),hidden);
   });
   const usage=()=>db.query('SELECT messages,bytes FROM inbox_state WHERE inbox_id=$1',[bid]).then(r=>r.rows[0]);
   const before=await usage();
@@ -2725,7 +2764,9 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
             } finally {await conn.query('ROLLBACK');conn.release();}
             // A missing TXT warns immediately; receiving grace outlasts the sending-state transition.
             const claimState=async()=>(await pool.query('SELECT sending_state,receiving_state,receiving_host,lost_since IS NOT NULL AS lost,receiving_lost_since IS NOT NULL AS receiving_lost FROM domain_claims WHERE name=$1',[domain])).rows[0];
-            const expireGrace=()=>pool.query("UPDATE domain_claims SET lost_since=lost_since-interval '3 hours',receiving_lost_since=receiving_lost_since-interval '3 hours',receiving_proof_missed_at=receiving_proof_missed_at-interval '49 hours' WHERE name=$1",[domain]);
+            const expireGrace=async()=>{await pool.query("UPDATE domain_claims SET lost_since=lost_since-interval '3 hours',receiving_lost_since=receiving_lost_since-interval '3 hours',receiving_proof_missed_at=receiving_proof_missed_at-interval '49 hours' WHERE name=$1",[domain]);
+              await pool.query("UPDATE mailbox_domains SET lost_since=lost_since-interval '3 hours' WHERE domain_id=(SELECT id FROM operation_domains WHERE name=$1)",[domain]);};
+            const hostState=async()=>(await pool.query('SELECT status,lost_since IS NOT NULL AS lost FROM mailbox_domains WHERE receiving_host=$1',[mx.name])).rows[0];
             const steady={sending_state:'verified',receiving_state:'active',receiving_host:mx.name,lost:false,receiving_lost:false};
             assert.deepEqual(await claimState(),steady);
             answer='';for(let i=0;i<2;i++){await pace();await assert.rejects(check(),JobDeferred);const view=ok(await local('GET',detail,undefined,b.cookie));assert.equal(view.receivingIssue.code,'proof_stale');assert.deepEqual({...view,receivingIssue:null},stable);}
@@ -2779,9 +2820,10 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
             answer=proof.value;await pace();await check();assert.deepEqual(await claimState(),steady);
             activeMx.delete(mx.name);await mxCheck();await mxCheck();assert.equal(ok(await local('GET',detail,undefined,b.cookie)).receiving,'verified');
             activeMx.add(mx.name);await mxCheck();assert.deepEqual(await claimState(),steady);
-            activeMx.delete(mx.name);await mxCheck();assert.deepEqual(await claimState(),{...steady,receiving_state:'lost',receiving_lost:true},'An MX grace is tracked on its own side.');assert.equal(ok(await local('GET',detail,undefined,b.cookie)).receiving,'verified');
+            // The host's MX grace: it keeps routing for two hours, on its row and, as the domain's primary host, on the claim.
+            activeMx.delete(mx.name);await mxCheck();assert.deepEqual(await claimState(),{...steady,receiving_state:'lost',receiving_lost:true},'An MX grace is tracked on its own side.');assert.deepEqual(await hostState(),{status:'active',lost:true});assert.equal(ok(await local('GET',detail,undefined,b.cookie)).receiving,'verified');
             await expireGrace();await mxCheck();assert.equal(await probe(custom),0,'An expired MX grace revokes routing while sending stays verified.');
-            assert.deepEqual(await claimState(),{...steady,receiving_state:'pending',receiving_host:null});
+            assert.deepEqual(await claimState(),{...steady,receiving_state:'pending',receiving_host:null});assert.deepEqual(await hostState(),{status:'waiting_for_mx',lost:false});
             assert.equal(ok(await local('GET',detail,undefined,b.cookie)).sending,'verified');
             await it.test('Hourly DNS upkeep covers active claims within 12 rounds in bounded pages',async()=>{
               const {refreshMailboxDns,mailboxSetupJobs}=await import('./src/mailbox-setup.js'),{sql}=await import('drizzle-orm');
@@ -3459,6 +3501,12 @@ describe('Hosted MCP OAuth and tools', () => {
           ['DELETE', `/v1/inbound/webhooks/${hook.id}`], ['POST', `/v1/inbound/webhooks/${hook.id}/rotate-secret`],
           ['POST', '/v1/inbound/keys', { name: 'agent fixture' }], ['GET', '/v1/inbound/keys'], ['POST', '/v1/inbound/keys/mbk_fixture/revoke'],
           ['DELETE', '/v1/inboxes/fixture/app-passwords/fixture'], ['POST', '/v1/inbox-connections', { inboxes: ['fixture'], client: 'generic', auth: 'key' }],
+          // Receiving hosts: adding, changing or removing one (and its subdomain aliases), choosing one, turning receiving on or off.
+          ['POST', '/v1/inbound/domains/dom_fixture/hosts', { name: 'acme' }], ['PATCH', '/v1/inbound/domains/dom_fixture/hosts/mdom_fixture', { catchAll: 'store' }],
+          ['DELETE', '/v1/inbound/domains/dom_fixture/hosts/mdom_fixture'], ['POST', '/v1/inbound/domains/dom_fixture/subdomains', { name: 'acme' }],
+          ['PATCH', '/v1/inbound/domains/dom_fixture/subdomains/mdom_fixture', { catchAll: 'store' }], ['DELETE', '/v1/inbound/domains/dom_fixture/subdomains/mdom_fixture'],
+          ['POST', '/v1/domains/dom_fixture/receiving-host', { host: 'reply.example.com' }], ['PATCH', '/v1/inbound/domains/dom_fixture', { catchAll: 'store' }],
+          ['POST', '/v1/inbound/domains/dom_fixture/enable', {}], ['POST', '/v1/inbound/domains/dom_fixture/disable'],
         ];
         for (const [method, path, body] of writes) {
           const reply = await http(method, path, agent.token, body, path === '/v1/routing' ? { 'if-match': '*' } : {});
@@ -3468,8 +3516,18 @@ describe('Hosted MCP OAuth and tools', () => {
         assert.equal(ok(await http('GET', '/v1/routing', MANAGER)).version, before, 'No refused write saved a routing version.');
         assert.equal(ok(await http('GET', `/v1/inbound/webhooks/${hook.id}`, MANAGER)).paused, true);
         // Reads and previews stay open: routing, its dry run, rituals, endpoints and a webhook's deliveries.
-        for (const path of ['/v1/routing', '/v1/routing/routes', '/v1/rituals', '/v1/endpoints', `/v1/inbound/webhooks/${hook.id}`, `/v1/inbound/webhooks/${hook.id}/deliveries`]) ok(await http('GET', path, agent.token));
+        for (const path of ['/v1/routing', '/v1/routing/routes', '/v1/rituals', '/v1/endpoints', `/v1/inbound/webhooks/${hook.id}`, `/v1/inbound/webhooks/${hook.id}/deliveries`, '/v1/inbound/domains']) ok(await http('GET', path, agent.token));
         assert.ok(Array.isArray(ok(await http('POST', '/v1/routing/test', agent.token, { envelope: { to: ['fixture@example.com'] } })).recipients));
+        // Reading a domain's subdomains stays allowed: an unknown domain is not found, not refused.
+        error(await http('GET', '/v1/inbound/domains/dom_fixture/subdomains', agent.token), 404, 'NOT_FOUND');
+        // Reading a domain's hosts stays allowed: an unknown domain is not found, not refused.
+        error(await http('GET', '/v1/inbound/domains/dom_fixture/hosts', agent.token), 404, 'NOT_FOUND');
+        // MCP discovery asks the same predicate (lastingRoute), so it hides exactly these writes from a temporary token.
+        const { lastingRoute } = await import('./src/core.js'), spec = JSON.parse(await readFile(new URL('./openapi.json', import.meta.url), 'utf8'));
+        const hostRoutes = Object.entries(spec.paths as Record<string, Json>).filter(([path]) => /^\/v1\/inbound\/domains|^\/v1\/domains\/\{id\}\/receiving-host$/.test(path))
+          .flatMap(([path, ops]) => Object.keys(ops).map(method => [method.toUpperCase(), path, ops[method].operationId] as const));
+        assert.deepEqual(hostRoutes.filter(([method, path]) => lastingRoute(method, path)).map(([, , op]) => op).sort(), ['addReceivingHost', 'chooseReceivingHost', 'createInboundSubdomain', 'disableInboundDomain',
+          'enableInboundDomain', 'removeInboundSubdomain', 'removeReceivingHost', 'updateInboundDomain', 'updateInboundSubdomain', 'updateReceivingHost']);
       } finally {
         ok(await http('DELETE', `/v1/inbound/webhooks/${hook.id}`, MANAGER));
         ok(await http('POST', `/v1/agent-tokens/${agent.id}/revoke`, MANAGER, undefined, { 'x-bane-environment': 'live' }));
@@ -5404,6 +5462,9 @@ describe('Hosted MCP OAuth and tools', () => {
   });
 
   test('Support request logs: Workers Logs lines of the grant’s workspaces only, allow-listed, grouped, weighted, and unavailable without Cloudflare', async t => {
+    // One clock for the whole test, as Postgres's now() is one for its transaction: the default window ends at the next
+    // whole minute and keys the 60-second cache, so two reads either side of a minute boundary missed it (dev, Nov 17).
+    t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
     await simulatedSesFixture(t, async ({ runtime, db }) => {
       Object.assign(runtime.config, { multiTenant: true, allowedSubjects: [], staffGoogleDomains: [], support: { url: 'https://support.example.com/start' }, observability: undefined });
       const wid = runtime.config.workspaceId, app = (await import('./src/app.js')).createApp();
@@ -6560,7 +6621,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
       let first: Promise<Reply> | undefined;
       try {
         first = send();
-        for (let i = 0; !(await db.query(`SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)) AND query ~* 'idempotency|key_admission_decision|api_request_budgets'`, [holder])).rowCount; i++) {
+        for (let i = 0; !(await db.query(`SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid)) AND query ~* 'idempotency|key_admission_decision|send_admission|api_request_budgets'`, [holder])).rowCount; i++) {
           assert.ok(i < 250, 'The first send never reached the admission lock.'); await new Promise(resolve => setTimeout(resolve, 20));
         }
         // Before this change the duplicate waited on the first request's unique insert (or its API key's budget row) until it committed.
@@ -6601,6 +6662,78 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
       for (const table of ['sending_email_events', 'operation_events', 'sending_emails', 'sending_idempotency', 'api_request_budgets', 'job_schedule', 'sending_stream_depth', 'domain_claims', 'provider_connections', 'api_keys', 'ses_installation_settings']) await db.query(`DELETE FROM ${table} WHERE workspace_id=$1`, [hosted]);
       await db.query('DELETE FROM provider_pool_regions WHERE aws_account_id=$1', [acct]); await db.query('DELETE FROM workspaces WHERE id=$1', [hosted]);
     }
+  });
+  // Review of #361, round 2: a stored-template send or a campaign test only looked for a finished request with its key
+  // before it rendered, and claimed the key afterwards: a duplicate sent meanwhile rendered again and got 202. Both now
+  // claim it first (idempotent's prepare). A committed self-hosted live workspace; only the AWS SDK transport is mocked.
+  async function claimFirstFixture(t: TestContext) {
+    const db = await fixtureDatabase(t);
+    const [{ createApp }, { nodeRuntime }, { digest }, { credentialFingerprint, discoveryTarget }, { SESv2Client, TestRenderEmailTemplateCommand }] = await Promise.all([
+      import('./src/app.js'), import('./src/adapters/node.js'), import('./src/core.js'), import('./src/ses-region-state.js'), import('@aws-sdk/client-sesv2')]);
+    const instance = nodeRuntime({ ...process.env, DATABASE_URL: FIXTURE_DATABASE_URL, MULTI_TENANT: 'false', ENABLE_LIVE_SES: 'true' }), app = createApp(), runtime = instance.runtime;
+    const w = unique('ws-claim-first'), secret = `nm_${randomUUID().replaceAll('-', '')}${randomUUID().replaceAll('-', '')}`, topic = `arn:aws:sns:${REGION}:111122223333:claim-first`;
+    Object.assign(runtime.config, { workspaceId: w, liveEnabled: true, aws: { accessKeyId: 'synthetic-fixture', secretAccessKey: 'synthetic-fixture' } });
+    cleanup(t, async () => {
+      await instance.close();
+      const tables = (await db.query(`SELECT c.table_name FROM information_schema.columns c JOIN information_schema.tables x USING (table_schema, table_name)
+        WHERE c.table_schema='public' AND c.column_name='workspace_id' AND x.table_type='BASE TABLE'`)).rows.map(r => r.table_name as string);
+      for (let pass = 0; pass < 3; pass++) for (const table of tables) await db.query(`DELETE FROM "${table}" WHERE workspace_id=$1`, [w]).catch(() => {});
+      await db.query('DELETE FROM workspaces WHERE id=$1', [w]);
+    });
+    await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)', [w]);
+    await db.query(`INSERT INTO ses_installation_settings(workspace_id,installation_id,default_region,enabled_regions) VALUES($1,$1,$2,jsonb_build_array($2::text))`, [w, REGION]);
+    await db.query(`INSERT INTO ses_region_discovery(workspace_id,region,report,credentials_fingerprint,public_url,trusted_account_id,trusted_topic_arn) VALUES($1,$2,$3,$4,$5,'111122223333',$6)`, [w, REGION,
+      { provisioned: true, account: { id: '111122223333', sendingEnabled: true }, resources: { topic: { arn: topic }, transactional: { sendingEnabled: true }, marketing: { sendingEnabled: true } } },
+      await credentialFingerprint(runtime.config), discoveryTarget(runtime.config), topic]);
+    await db.query(`INSERT INTO api_keys(id,workspace_id,name,hash,prefix,permissions,domains) VALUES($1,$1,'fixture',$2,'fixture','["send","read","manage"]','[]')`, [w, await digest(secret)]);
+    // SES: the first template render waits until released.
+    const gate = { renders: 0, reached: undefined as unknown as Promise<void>, release: () => {} };
+    let reached = () => {}; gate.reached = new Promise<void>(resolve => { reached = resolve; }); const released = new Promise<void>(resolve => { gate.release = resolve; });
+    t.mock.method(SESv2Client.prototype, 'send', async (command: unknown) => {
+      if (command instanceof TestRenderEmailTemplateCommand) { if (++gate.renders === 1) { reached(); await released; } return { RenderedTemplate: 'Subject: fixture\r\n\r\nFixture.' }; }
+      return { TemplateContent: { Subject: 'fixture' } };
+    });
+    const post = (path: string, body: Json, key?: string) => http('POST', path, secret, body, key ? { 'Idempotency-Key': key } : {}, 10_000, PUBLIC_ORIGIN, request => app.fetch(request, runtime));
+    // From an independent connection: the claims with no result yet.
+    const pending = async () => (await db.query('SELECT count(*)::int AS n FROM sending_idempotency WHERE workspace_id=$1 AND result IS NULL', [w])).rows[0].n as number;
+    const promptly = (reply: Promise<Reply>) => Promise.race([reply, new Promise<never>((_, reject) => setTimeout(() => reject(new Error('no answer within 2 s')), 2_000))]);
+    return { db, w, gate, post, pending, promptly };
+  }
+  test('a stored-template send claims its Idempotency-Key before SES renders: a duplicate is IN_PROGRESS and renders nothing', async t => {
+    const { gate, post, pending, promptly } = await claimFirstFixture(t);
+    const body = { from: 'orders@example.com', to: 'customer@example.invalid', region: REGION, template: { name: 'fixture', data: {} } }, key = 'claim-first-template';
+    const first = post('/v1/emails/send', body, key);
+    try {
+      await gate.reached;
+      assert.equal(await pending(), 1, 'While SES renders, the first request owns a committed pending claim.');
+      error(await promptly(post('/v1/emails/send', body, key)), 409, 'IDEMPOTENCY_IN_PROGRESS');
+      assert.equal(gate.renders, 1, 'The duplicate rendered nothing.');
+    } finally { gate.release(); }
+    const queued = ok(await first, 202);
+    assert.equal(ok(await post('/v1/emails/send', body, key), 202).id, queued.id); assert.equal(gate.renders, 1);
+    error(await post('/v1/emails/send', { ...body, template: { name: 'fixture', data: { other: true } } }, key), 409, 'IDEMPOTENCY_CONFLICT');
+  });
+  test('a campaign test claims its Idempotency-Key before it reads its draft: a duplicate is IN_PROGRESS and renders nothing', async t => {
+    const { db, w, post, pending, promptly } = await claimFirstFixture(t);
+    const draft = ok(await post('/v1/campaigns', { name: 'claim-first', from: 'orders@example.com', subject: 'Claim first', html: '<p>Claim first</p>' }), 201);
+    const path = `/v1/campaigns/${draft.id}/test`, body = { to: 'tester@example.invalid' }, key = 'claim-first-test';
+    // The draft cannot be read while another connection holds its table: the first request waits there.
+    const lock = await fixtureDatabase(t), holder = (await lock.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
+    await lock.query('BEGIN'); await lock.query(`SET LOCAL lock_timeout='2s'`); await lock.query('LOCK TABLE sending_campaigns IN ACCESS EXCLUSIVE MODE');
+    let first: Promise<Reply> | undefined;
+    try {
+      first = post(path, body, key);
+      for (let i = 0; !(await db.query(`SELECT 1 FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))`, [holder])).rowCount; i++) {
+        assert.ok(i < 250, 'The first campaign test never reached its draft.'); await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      assert.equal(await pending(), 1, 'While it reads its draft, the first request owns a committed pending claim.');
+      // An answer while the draft is unreadable is one that read and rendered nothing.
+      error(await promptly(post(path, body, key)), 409, 'IDEMPOTENCY_IN_PROGRESS');
+    } finally { await lock.query('COMMIT'); }
+    const queued = ok(await first!, 202);
+    assert.equal(ok(await post(path, body, key), 202).id, queued.id);
+    error(await post(path, { to: 'other@example.invalid' }, key), 409, 'IDEMPOTENCY_CONFLICT');
+    assert.equal((await db.query(`SELECT count(*)::int AS n FROM sending_emails WHERE workspace_id=$1 AND snapshot->>'testCampaignId'=$2`, [w, draft.id])).rows[0].n, 1);
   });
   test('sends on a simulated deployment use the provider-parity lifecycle; exact retries reuse identity and conflicts do not create mail', async t => {
     const key = await keyFixture(t);
@@ -9936,11 +10069,15 @@ describe('Hosted unsubscribe and dispatch-time consent', () => {
     const token = url.pathname.split('/').at(-1)!;
     assert.ok(content.html.includes(token) && content.text.includes(token), 'Manage-authorized content retrieval must preserve the usable HTML and text capability.');
     const redacted = ok(await http('GET', `/v1/emails/${source.id}/content`, reader.secret));
+    // The runner dispatches this message meanwhile, writing its events: compare detail and listEmailEvents once it has
+    // settled, or a dispatch between the two reads makes them differ (dev, Nov 17: detail [] and two listed events).
+    await poll(`/v1/emails/${source.id}`, reader.secret, body => body.status === 'delivered');
     const detail=ok(await http('GET',`/v1/emails/${source.id}/detail`,reader.secret));
     assert.deepEqual(detail.contact,{id:contact.id,suppressed:false});
     assert.deepEqual(detail.content,{html:redacted.html,text:redacted.text,attachments:redacted.attachments});
     assert.equal(detail.email.id,source.id); assert.ok(!JSON.stringify(detail).includes(token));
     const listedEvents=page(await http('GET',`/v1/emails/${source.id}/events`,reader.secret)) as {id:string}[];
+    assert.ok(listedEvents.length > 0, 'A delivered message has events.');
     assert.deepEqual((detail.events.data as {id:string}[]).map(e=>e.id),listedEvents.map(e=>e.id),'Detail must return the same events as listEmailEvents.');
     assert.equal(redacted.raw, null, 'Read-only access must not expose an unredacted MIME alternative.');
     assert.ok(!JSON.stringify(redacted).includes(token), 'Read-only content must not disclose the valid unsubscribe token anywhere in its response.');
@@ -11474,7 +11611,7 @@ test('Hosted account re-home: drained legacy Ohio installation',async t=>{
   await db.query(`INSERT INTO operation_domains(id,workspace_id,name,region) VALUES('released',$1,$2,$3)`,[w[0],retired,r]);
   const {applyClaim}=await import('./src/states.js'),{releasedClaimCleanup}=await import('./src/domain-claims.js');
   await applyClaim(drizzle(db),{workspaceId:w[0]!,name:retired,token:retiredToken,connectionId:'conn_'+w[0],domainId:'released',region:r},
-    {sending_state:'verified',receiving_state:'active',receiving_host:retiredHost,lost_since:null,receiving_lost_since:null},{ses:{VerificationStatus:'SUCCESS'},proven:true,mx:null,note:null},retiredHost);
+    {sending_state:'verified',receiving_state:'active',receiving_host:retiredHost,lost_since:null,receiving_lost_since:null},{ses:{VerificationStatus:'SUCCESS'},proven:true,mx:null,note:null},[{id:null,host:retiredHost,status:'active',lost_since:null}]);
   await drizzle(db).execute(sql`WITH released AS (DELETE FROM domain_claims WHERE token=${retiredToken} RETURNING name,token), ${releasedClaimCleanup(w[0]!)} DELETE FROM operation_domains WHERE id='released'`);
   const mailboxAddress='fixture@reply.'+names[0];
   await db.query(`INSERT INTO mailboxes(id,workspace_id,domain_id,address) VALUES('box',$1,'mdom',$2)`,[w[0],mailboxAddress]);
@@ -12888,14 +13025,22 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         await db.query(`UPDATE domain_claims SET sending_state='verified' WHERE token=$1`,[reserved.token]);
       };
       await publish(oh);await publish(va);
-      const renders:string[]=[];
+      const renders:string[]=[];let sesDown=false;
       t.mock.method(SESv2Client.prototype,'send',async function(this:InstanceType<typeof SESv2Client>,cmd:any){
+        if(sesDown)throw new Error('A replay must not call SES.');
         const region=await this.config.region();assert.equal(cmd.input.TemplateName,region);
         if(cmd instanceof TestRenderEmailTemplateCommand){renders.push(region);return {RenderedTemplate:'Subject: fixture\r\n\r\nFixture.'};}
         assert.ok(cmd instanceof GetEmailTemplateCommand);return {TemplateContent:{Subject:'fixture'}};
       });
       const batch=ok(await local('POST','/v1/emails/batch',{emails:[va,oh].map(r=>({from:`a@${r}.example`,to:'success@simulator.amazonses.com',template:{name:r,data:{}}}))}),202);
       assert.deepEqual(renders,[va,oh]);assert.deepEqual((await db.query(`SELECT region,snapshot#>>'{binding,connection}' AS connection FROM sending_emails WHERE id=ANY($1) ORDER BY region`,[batch.data.map((m:Json)=>m.id)])).rows,[va,oh].map(region=>({region,connection:wid})));
+      // Review of #361, round 1: a retried template send replays before SES renders again or any rule is checked.
+      const meter=await queryBudget(t,db),templated={from:`a@${oh}.example`,to:'success@simulator.amazonses.com',template:{name:oh,data:{}}},idem={'Idempotency-Key':'pr361-template'};
+      await meter('template-send',async()=>ok(await local('POST','/v1/emails/send',templated),202));
+      const sent=await meter('template-send-keyed',async()=>ok(await local('POST','/v1/emails/send',templated,'live',idem),202));
+      sesDown=true;
+      assert.equal((await meter('template-replay',async()=>ok(await local('POST','/v1/emails/send',templated,'live',idem),202))).id,sent.id);
+      sesDown=false;
       assert.equal((await runtime.db.execute(toggleRegionSending({connectionId:wid,region:va},false,0))).rowCount,0);
       assert.equal((await runtime.db.execute(toggleRegionSending({connectionId:wid,region:va},false,2))).rowCount,1);
       error(await local('POST','/v1/emails/send',{from:`a@${va}.example`,to:address(),subject:'Blocked',text:'No fallback'}),409,'CONNECTION_REQUIRED');
@@ -13359,7 +13504,8 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         zone.set(`reply.${liveName}`, { mx: [ses], ns: ['ns1.child-host.example.'] });
         await recheck(live); const after = await read(live);
         assert.deepEqual([after.receivingIssue.code, after.receivingIssue.blocking], ['delegated', true]);
-        assert.equal((await db.query('SELECT receiving_state FROM domain_claims WHERE name=$1', [liveName])).rows[0].receiving_state, 'lost');
+        // The host keeps routing through its two-hour grace, and the claim mirrors it as its one host always did.
+        assert.deepEqual((await db.query('SELECT m.status,m.lost_since IS NOT NULL AS lost,dc.receiving_state FROM mailbox_domains m JOIN domain_claims dc ON dc.name=m.name AND dc.workspace_id=m.workspace_id WHERE dc.name=$1', [liveName])).rows, [{ status: 'active', lost: true, receiving_state: 'lost' }]);
       });
 
       await t.test('every DNS lookup of one check runs in parallel under one shared time budget', async () => {
@@ -13418,7 +13564,414 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         await recheck(d); current = await read(d); assert.equal(current.receivingIssue, null); assert.equal(current.receiving, 'verified');
         // MAIL FROM can't take the receiving host: refused before any SES call.
         assert.match(error(await local('POST', `/v1/domains/${d.id}/mail-from`, { mailFromDomain: `reply.${d.name}` }), 409, 'MAIL_FROM_RECEIVING_CONFLICT').message, /needs its own MX to feedback-smtp/);
-        error(await choose(d, `inbound.${d.name}`), 409, 'RECEIVING_HOST_ACTIVE');
+        // Choosing another host once reply. receives adds it beside reply., which keeps receiving: nothing that routes moves.
+        const beside = ok(await choose(d, `inbound.${d.name}`));
+        assert.deepEqual(beside.dns.filter((r: Json) => r.purpose === 'receiving').map((r: Json) => [r.name, r.status]), [[`reply.${d.name}`, 'verified'], [`inbound.${d.name}`, 'pending']]);
+        assert.equal(beside.receiving, 'verified');
+      });
+
+      await t.test('a domain receives on its root and any number of subdomains at once; each host is added and removed on its own', async () => {
+        const [{ S3Client }, { acceptInboundNotification, mailboxIngestJobs }] = await Promise.all([import('@aws-sdk/client-s3'), import('./src/mailbox-ingest.js')]);
+        const topicArn = `arn:aws:sns:${REGION}:${account}:hosts-inbound`, bucket = `hosts-${account}-mail`, aws = runtime.config.aws;
+        runtime.config.aws = { accessKeyId: 'synthetic-fixture', secretAccessKey: 'synthetic-fixture' }; t.after(() => { runtime.config.aws = aws; });
+        await db.query('UPDATE provider_pool_regions SET inbound_topic_arn=$2,inbound_bucket=$3 WHERE region=$1', [REGION, topicArn, bucket]);
+        const staged = new Map<string, string>();
+        t.mock.method(S3Client.prototype, 'send', async (cmd: any) => {
+          const body = staged.get(cmd.input.Key ?? '') ?? staged.get(String(cmd.input.CopySource ?? '').split('/').slice(1).join('/')) ?? '';
+          if (cmd.constructor.name === 'HeadObjectCommand') return { ContentLength: Buffer.byteLength(body), ETag: '"fixture"' };
+          if (cmd.constructor.name === 'GetObjectCommand') return { Body: { transformToByteArray: async () => Buffer.from(body) } };
+          return {};
+        });
+        // SNS hands over one received message: how many workspaces it was routed to, and which of its recipients each got.
+        const deliver = async (...recipients: string[]) => {
+          const mid = unique('hosts');
+          staged.set(`staging/${mid}`, `From: sender@example.org\r\nTo: ${recipients.join(', ')}\r\nSubject: Hosts\r\nMessage-ID: <${mid}@example.org>\r\n\r\nHello.`);
+          const routed = await acceptInboundNotification(runtime, { topicArn, region: REGION, message: { notificationType: 'Received', mail: { messageId: mid, source: 'sender@example.org' },
+            receipt: { ...cleanScans, timestamp: new Date().toISOString(), recipients, action: { type: 'S3', bucketName: bucket, topicArn, objectKey: `staging/${mid}` } } } });
+          return { mid, routed, recipients: (await db.query('SELECT recipients FROM mail_receipts WHERE ses_message_id=$1', [mid])).rows[0]?.recipients ?? [] };
+        };
+        const name = `${unique('rx-many')}.example`, d = await claim(name, { receivingHost: `reply.${name}` });
+        // The real case: reply. receives; the root's mail is with another provider today.
+        zone.set(`reply.${name}`, { mx: [ses] }); zone.set(name, { mx: ['5 mx.other.example.'] }); zone.set(`inbox.${name}`, { mx: [ses] });
+        await recheck(d);
+        const hostsPath = `/v1/inbound/domains/${d.id}/hosts`, hosts = async () => ok(await local('GET', hostsPath)).data as Json[];
+        const states = async () => Object.fromEntries((await hosts()).map(h => [h.name, h.status]));
+        const claimHost = async () => (await db.query('SELECT receiving_state,receiving_host FROM domain_claims WHERE name=$1', [name])).rows[0];
+        assert.deepEqual(await states(), { [`reply.${name}`]: 'active' });
+        const reply = ok(await local('POST', '/v1/inbound/addresses', { address: `support@reply.${name}` }), 201);
+        assert.deepEqual((await deliver(reply.address)).recipients, [reply.address]);
+
+        // Adding the root while reply. receives: another provider has its mail, so it asks first; reply. never stops.
+        assert.match(error(await local('POST', hostsPath, { name }), 409, 'RECEIVING_HOST_IN_USE').message, /^Move mail for rx-many-.*\? mx\.other\.example receives mail for /);
+        const root = ok(await local('POST', hostsPath, { name, confirm: true }), 201);
+        assert.deepEqual([root.name, root.status, root.dns[0].name, root.issue.code], [name, 'pending', name, 'foreign_mx']);
+        assert.deepEqual(ok(await local('POST', hostsPath, { name, confirm: true })).id, root.id, 'Adding a host the domain already receives on returns it.');
+        assert.deepEqual((await deliver(reply.address)).recipients, [reply.address], 'reply. keeps receiving while the root is added.');
+        assert.deepEqual(await claimHost(), { receiving_state: 'active', receiving_host: `reply.${name}` });
+        const inbox = ok(await local('POST', hostsPath, { name: 'inbox', catchAll: 'store' }), 201);
+        assert.equal(inbox.name, `inbox.${name}`);
+
+        // Nightmail's MX goes on the root at a lower priority first, beside the provider's (backup-MX staging): it receives
+        // whatever mail reaches it, and says how the mail is split.
+        zone.set(name, { mx: ['5 mx.other.example.', ses] });
+        await recheck(d);
+        assert.deepEqual(await states(), { [`reply.${name}`]: 'active', [name]: 'mixed', [`inbox.${name}`]: 'active' });
+        const mixed = (await hosts()).find(h => h.name === name)!;
+        assert.deepEqual([mixed.issue.code, mixed.mx.state], ['split', 'mixed']);
+        const domain = await read(d);
+        assert.deepEqual(domain.dns.filter((r: Json) => r.purpose === 'receiving').map((r: Json) => [r.name, r.status]), [[`reply.${name}`, 'verified'], [name, 'verified'], [`inbox.${name}`, 'verified']]);
+        assert.equal(domain.receiving, 'verified');
+
+        // Three hosts at once: one message to an address on each reaches every one of them.
+        const hello = ok(await local('POST', '/v1/inbound/addresses', { address: `hello@${name}` }), 201), team = ok(await local('POST', '/v1/inbound/addresses', { address: `team@inbox.${name}` }), 201);
+        const all = await deliver(hello.address, reply.address, team.address);
+        assert.equal(all.routed, 1); assert.deepEqual(all.recipients, [hello.address, reply.address, team.address].sort());
+        await mailboxIngestJobs['mailbox.ingest']!(runtime, { sesMessageId: all.mid }, { id: unique('job'), workspaceId: wid, attempts: 1 });
+        const boxes = (await db.query('SELECT b.mailbox_id FROM mailbox_messages b JOIN mail_messages m ON m.id=b.message_id WHERE m.ses_message_id=$1 ORDER BY 1', [all.mid])).rows.map(r => r.mailbox_id);
+        assert.deepEqual(boxes, [hello.id, reply.id, team.id].sort());
+
+        // Removing reply. stops it alone; its address and mail stay, and adding it back restores both.
+        const replyHost = (await hosts()).find(h => h.name === `reply.${name}`)!;
+        assert.equal(ok(await local('DELETE', `${hostsPath}/${replyHost.id}`)).status, 'removed');
+        assert.deepEqual((await deliver(hello.address, reply.address, team.address)).recipients, [hello.address, team.address].sort());
+        assert.deepEqual(await claimHost(), { receiving_state: 'active', receiving_host: name });
+        assert.deepEqual(await states(), { [`reply.${name}`]: 'removed', [name]: 'mixed', [`inbox.${name}`]: 'active' });
+        assert.ok(!(await read(d)).dns.some((r: Json) => r.purpose === 'receiving' && r.name === `reply.${name}`), 'A removed host has no record to publish.');
+        error(await local('POST', '/v1/inbound/addresses', { address: `late@reply.${name}` }), 409, 'MAILBOX_DOMAIN_NOT_ENABLED');
+        await recheck(d);
+        assert.equal((await states())[`reply.${name}`], 'removed', 'A check never brings a removed host back.');
+        const back = ok(await local('POST', hostsPath, { name: `reply.${name}` }), 201);
+        assert.deepEqual([back.id, back.status, back.addressCount], [replyHost.id, 'pending', 1]);
+        await recheck(d);
+        assert.deepEqual((await deliver(reply.address)).recipients, [reply.address]);
+
+        // The subdomain operations are the same hosts.
+        const subdomains = ok(await local('GET', `/v1/inbound/domains/${d.id}/subdomains?status=all`)).data;
+        assert.deepEqual(subdomains.map((s: Json) => [s.name, s.status, s.dns[0].name]).sort(), [[name, 'active', name], [`inbox.${name}`, 'active', `inbox.${name}`]].sort());
+        const acme = ok(await local('POST', `/v1/inbound/domains/${d.id}/subdomains`, { name: 'acme' }), 201);
+        assert.equal((await hosts()).find(h => h.id === acme.id)?.name, `acme.${name}`);
+        ok(await local('DELETE', `/v1/inbound/domains/${d.id}/subdomains/${acme.id}`));
+        assert.equal((await states())[`acme.${name}`], 'removed');
+
+        // Another workspace's names and hosts stay theirs.
+        const other = unique('rx-many-other');
+        await db.query('INSERT INTO workspaces (id, name, slug) VALUES ($1, $1, $1)', [other]);
+        await db.query(`INSERT INTO provider_connections(id,workspace_id,region,state,kind,aws_account_id,tenant_state) VALUES ($1,$1,$2,'ready','shared',$3,'ready')`, [other, REGION, account]);
+        await db.query("INSERT INTO domain_claims(name,workspace_id,claim_scope) VALUES ($1,$2,'account')", [`shop.${name}`, other]);
+        assert.match(error(await local('POST', hostsPath, { name: 'shop' }), 409, 'RECEIVING_HOST_CLAIMED').message, /is claimed by another Nightmail workspace/);
+        // A host another workspace routes (SQL stands in: the database refuses proven overlapping claims) is refused here,
+        // and two workspaces never route one host at once.
+        const routedElsewhere = async (host: string) => {
+          const id = unique('dom');
+          await db.query("INSERT INTO domain_claims(name,workspace_id,connection_id,receiving_state,receiving_host) VALUES ($1,$2,$2,'pending',$1)", [host, other]);
+          await db.query('INSERT INTO operation_domains(id,workspace_id,name,region) VALUES ($1,$2,$3,$4)', [id, other, host, REGION]);
+          await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,receiving_host,status) VALUES ($1,$2,$1,$3,$4,$3,'active')", [id, other, host, REGION]);
+        };
+        await routedElsewhere(`desk.${name}`); zone.set(`desk.${name}`, { mx: [ses] });
+        assert.match(error(await local('POST', hostsPath, { name: 'desk' }), 409, 'RECEIVING_HOST_TAKEN').message, /already receives mail in another Nightmail workspace/);
+        await db.query('SAVEPOINT duplicate_routing_host');
+        await assert.rejects(db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,receiving_host,status) VALUES ($1,$2,$3,$1,$4,$5,'active')", [unique('mdom'), wid, unique('dom'), REGION, `desk.${name}`]),
+          (e: Json) => e.code === '23505' && e.constraint === 'mailbox_domains_routing_host');
+        await db.query('ROLLBACK TO SAVEPOINT duplicate_routing_host');
+        // A host added here, then routed by another workspace before its MX was checked: it stays pending, flagged, and
+        // this domain never takes its mail.
+        zone.set(`race.${name}`, { mx: [ses] });
+        ok(await local('POST', hostsPath, { name: 'race' }), 201);
+        await routedElsewhere(`race.${name}`);
+        await recheck(d);
+        const race = (await hosts()).find(h => h.name === `race.${name}`)!;
+        assert.deepEqual([race.status, race.issue?.code], ['pending', 'host_taken']);
+        assert.equal((await deliver(`x@race.${name}`)).routed, 0);
+      });
+
+      // What a rollback runs on what this release writes. The MX check, receipt router and BYO reconciler are the previous
+      // release's, unchanged (it shipped them first so that it is this release's safe rollback), so each case below is that
+      // release on state this release's hosts operations made: a removed host, a recovered grace, the original host removed.
+      await t.test('the previous release on hosts this one adds and removes: removed stays removed, a recovered grace routes, removing the original checks cleanly', async () => {
+        const { acceptInboundNotification } = await import('./src/mailbox-ingest.js');
+        const topicArn = `arn:aws:sns:${REGION}:${account}:rollback-inbound`, bucket = `rollback-${account}-mail`;
+        await db.query('UPDATE provider_pool_regions SET inbound_topic_arn=$2,inbound_bucket=$3 WHERE region=$1', [REGION, topicArn, bucket]);
+        const deliver = async (...recipients: string[]) => { const mid = unique('rollback');
+          await acceptInboundNotification(runtime, { topicArn, region: REGION, message: { notificationType: 'Received', mail: { messageId: mid, source: 'sender@example.org' },
+            receipt: { ...cleanScans, timestamp: new Date().toISOString(), recipients, action: { type: 'S3', bucketName: bucket, topicArn, objectKey: `staging/${mid}` } } } });
+          return (await db.query('SELECT recipients FROM mail_receipts WHERE ses_message_id=$1', [mid])).rows[0]?.recipients ?? [];
+        };
+        const setup = async (label: string) => {
+          const name = `${unique(label)}.example`, d = await claim(name, { receivingHost: `reply.${name}` });
+          zone.set(`reply.${name}`, { mx: [ses] }); await recheck(d);
+          const path = `/v1/inbound/domains/${d.id}/hosts`, hosts = async () => ok(await local('GET', path)).data as Json[];
+          const states = async () => Object.fromEntries((await hosts()).map(h => [h.name, h.status]));
+          const claimRow = async () => (await db.query('SELECT receiving_state,receiving_host,receiving_lost_since IS NOT NULL AS lost FROM domain_claims WHERE name=$1', [name])).rows[0];
+          return { name, d, path, hosts, states, claimRow };
+        };
+
+        // 1. The sole host removed while its MX stays published: checks leave it removed, and it routes nothing.
+        const sole = await setup('rx-sole');
+        const only = (await sole.hosts())[0]!;
+        assert.equal(ok(await local('DELETE', `${sole.path}/${only.id}`)).status, 'removed');
+        await recheck(sole.d); await recheck(sole.d);
+        assert.deepEqual(await sole.states(), { [`reply.${sole.name}`]: 'removed' });
+        assert.deepEqual(await sole.claimRow(), { receiving_state: 'pending', receiving_host: null, lost: false });
+        assert.deepEqual(await deliver(`x@reply.${sole.name}`), []);
+
+        // 2. A host's MX grace started by a check, past two hours, then its MX back: the next check clears it and it routes.
+        //    The root alone (its grace on its row), reply. alone (the root routes, so it is the claim's host meanwhile), then
+        //    both (reply., the domain's primary host, keeps its grace on the claim).
+        const graced = await setup('rx-grace'), both = { [`reply.${graced.name}`]: 'active', [graced.name]: 'active' };
+        zone.set(graced.name, { mx: [ses] });
+        ok(await local('POST', graced.path, { name: graced.name }), 201);
+        await recheck(graced.d);
+        assert.deepEqual(await graced.states(), both);
+        for (const gone of [[graced.name], [`reply.${graced.name}`], [`reply.${graced.name}`, graced.name]]) {
+          const to = gone.map(host => `x@${host}`).sort();
+          for (const host of gone) zone.delete(host);
+          await recheck(graced.d);
+          assert.deepEqual(await graced.states(), { ...both, ...Object.fromEntries(gone.map(host => [host, 'lost'])) }, `${gone} in its grace`);
+          assert.deepEqual(await deliver(...to), to, 'A host keeps routing through its grace.');
+          await db.query("UPDATE mailbox_domains SET lost_since=lost_since-interval '3 hours' WHERE domain_id=$1 AND lost_since IS NOT NULL", [graced.d.id]);
+          await db.query("UPDATE domain_claims SET receiving_lost_since=receiving_lost_since-interval '3 hours' WHERE name=$1 AND receiving_lost_since IS NOT NULL", [graced.name]);
+          assert.deepEqual(await deliver(...to), [], `${gone}: an expired grace holds its mail.`);
+          for (const host of gone) zone.set(host, { mx: [ses] });
+          await recheck(graced.d);
+          assert.deepEqual(await graced.states(), both);
+          assert.deepEqual(await graced.claimRow(), { receiving_state: 'active', receiving_host: `reply.${graced.name}`, lost: false });
+          assert.deepEqual(await deliver(...to), to);
+        }
+
+        // 3. The original host removed while the root lives: the next host is the claim's, and every check runs cleanly.
+        const moved = await setup('rx-moved');
+        zone.set(moved.name, { mx: [ses] });
+        ok(await local('POST', moved.path, { name: moved.name }), 201);
+        await recheck(moved.d);
+        const original = (await moved.hosts()).find(h => h.name === `reply.${moved.name}`)!;
+        assert.equal(ok(await local('DELETE', `${moved.path}/${original.id}`)).status, 'removed');
+        assert.deepEqual(await moved.claimRow(), { receiving_state: 'active', receiving_host: moved.name, lost: false });
+        for (let pass = 0; pass < 2; pass++) await recheck(moved.d);
+        assert.deepEqual(await moved.states(), { [`reply.${moved.name}`]: 'removed', [moved.name]: 'active' });
+        assert.deepEqual(await moved.claimRow(), { receiving_state: 'active', receiving_host: moved.name, lost: false });
+        assert.deepEqual(await deliver(`x@reply.${moved.name}`, `y@${moved.name}`), [`y@${moved.name}`]);
+      });
+
+      // What the hosts operations write, built row by row, then the MX check and receipt router (the same modules as the
+      // release before, which shipped them first and is this release's rollback): every host routes on its own row, a
+      // removed host stays removed, and a recovered grace clears.
+      await t.test('hosts as the hosts operations leave them: each routes on its own row, a removed host stays removed, a recovered grace clears', async () => {
+        const { acceptInboundNotification } = await import('./src/mailbox-ingest.js');
+        const topicArn = `arn:aws:sns:${REGION}:${account}:hosts-inbound`, bucket = `hosts-${account}-mail`;
+        await db.query('UPDATE provider_pool_regions SET inbound_topic_arn=$2,inbound_bucket=$3 WHERE region=$1', [REGION, topicArn, bucket]);
+        // SNS hands over one received message: which of its recipients were routed (none while held).
+        const deliver = async (...recipients: string[]) => {
+          const mid = unique('hosts');
+          await acceptInboundNotification(runtime, { topicArn, region: REGION, message: { notificationType: 'Received', mail: { messageId: mid, source: 'sender@example.org' },
+            receipt: { ...cleanScans, timestamp: new Date().toISOString(), recipients, action: { type: 'S3', bucketName: bucket, topicArn, objectKey: `staging/${mid}` } } } });
+          return (await db.query('SELECT recipients FROM mail_receipts WHERE ses_message_id=$1', [mid])).rows[0]?.recipients ?? [];
+        };
+        const name = `${unique('rx-next')}.example`, d = await claim(name, { receivingHost: `reply.${name}` });
+        zone.set(`reply.${name}`, { mx: [ses] }); zone.set(name, { mx: [ses] }); zone.set(`inbox.${name}`, { mx: [ses] });
+        await recheck(d);
+        const own = (await db.query('SELECT id FROM mailbox_domains WHERE domain_id=$1 AND parent_id IS NULL', [d.id])).rows[0].id;
+        // A host beside the domain's own row, as the next release adds it: its row named by its ID, its host in receiving_host.
+        const beside = async (host: string) => { const id = unique('mdom');
+          await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,parent_id,name,region,receiving_host,status,created_at) VALUES ($1,$2,$3,$4,$1,$5,$6,'waiting_for_mx',clock_timestamp())", [id, wid, d.id, own, REGION, host]); return id; };
+        const rows = async () => (await db.query('SELECT receiving_host AS host,status,lost_since IS NOT NULL AS lost FROM mailbox_domains WHERE domain_id=$1 ORDER BY parent_id IS NOT NULL,created_at', [d.id])).rows;
+        const claimRow = async () => (await db.query('SELECT receiving_state,receiving_host,receiving_lost_since IS NOT NULL AS lost FROM domain_claims WHERE name=$1', [name])).rows[0];
+        await beside(name); const inbox = await beside(`inbox.${name}`);
+        await recheck(d);
+        assert.deepEqual(await rows(), [{ host: `reply.${name}`, status: 'active', lost: false }, { host: name, status: 'active', lost: false }, { host: `inbox.${name}`, status: 'active', lost: false }]);
+        assert.deepEqual(await deliver(`a@reply.${name}`, `b@${name}`, `c@inbox.${name}`), [`a@reply.${name}`, `b@${name}`, `c@inbox.${name}`].sort());
+        assert.deepEqual(await claimRow(), { receiving_state: 'active', receiving_host: `reply.${name}`, lost: false }, 'The claim mirrors the first host, as a claim with one host always read.');
+        // A host whose MX went missing over two hours ago is held; once its MX answers again it routes, its grace cleared.
+        zone.delete(`inbox.${name}`); await recheck(d);
+        assert.deepEqual((await rows())[2], { host: `inbox.${name}`, status: 'active', lost: true });
+        await db.query("UPDATE mailbox_domains SET lost_since=lost_since-interval '3 hours' WHERE id=$1", [inbox]);
+        assert.deepEqual(await deliver(`c@inbox.${name}`), []);
+        zone.set(`inbox.${name}`, { mx: [ses] }); await recheck(d);
+        assert.deepEqual((await rows())[2], { host: `inbox.${name}`, status: 'active', lost: false });
+        assert.deepEqual(await deliver(`c@inbox.${name}`), [`c@inbox.${name}`]);
+        // The domain's own host removed while its MX stays published: it stays removed, and the next host is the claim's.
+        await db.query("UPDATE mailbox_domains SET status='disabled',lost_since=NULL WHERE id=$1", [own]);
+        await db.query('UPDATE domain_claims SET receiving_host=$2 WHERE name=$1', [name, name]);
+        await recheck(d); await recheck(d);
+        assert.deepEqual((await rows()).map(r => r.status), ['disabled', 'active', 'active']);
+        assert.deepEqual(await claimRow(), { receiving_state: 'active', receiving_host: name, lost: false });
+        assert.deepEqual(await deliver(`a@reply.${name}`, `b@${name}`), [`b@${name}`]);
+        // Every host removed: nothing routes, and a check brings none back.
+        await db.query("UPDATE mailbox_domains SET status='disabled' WHERE domain_id=$1", [d.id]);
+        await recheck(d);
+        assert.deepEqual((await rows()).map(r => r.status), ['disabled', 'disabled', 'disabled']);
+        assert.deepEqual(await claimRow(), { receiving_state: 'pending', receiving_host: null, lost: false });
+        assert.deepEqual(await deliver(`a@reply.${name}`, `b@${name}`, `c@inbox.${name}`), []);
+      });
+
+      await t.test('BYO: the receipt rule lists every live host of a domain, each by name, and drops a removed one; each activates on its own', async () => {
+        const [{ reconcileRegion }, { ensureRegionSettings }, { feedbackUrl }, { acceptInboundNotification }] = await Promise.all([import('./src/mailbox-setup.js'), import('./src/ses-region-state.js'), import('./src/ses-setup.js'), import('./src/mailbox-ingest.js')]);
+        const [{ STSClient }, { S3Client }, { SNSClient }, { SESClient }] = await Promise.all([import('@aws-sdk/client-sts'), import('@aws-sdk/client-s3'), import('@aws-sdk/client-sns'), import('@aws-sdk/client-ses')]);
+        const bw = unique('rx-byo'), bc = `conn_${bw}`, bd = unique('dom'), bname = `${bw}.example`, baccount = '4' + randomUUID().replace(/\D/g, '').padEnd(11, '7').slice(0, 11);
+        await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)', [bw]);
+        await db.query("INSERT INTO provider_connections(id,workspace_id,region,state,kind,aws_account_id,tenant_state,template_version,role_arn,external_id,platform_principal_arn) VALUES($1,$2,$3,'ready','byo',$4,'ready','v4',$5,$6,$7)",
+          [bc, bw, REGION, baccount, `arn:aws:iam::${baccount}:role/Bane-01234567890123456789`, randomUUID(), `arn:aws:iam::${account}:role/synthetic`]);
+        const identity = { proven: true, mx: null, note: null, ses: { VerificationStatus: 'SUCCESS', VerifiedForSendingStatus: true, DkimAttributes: { SigningEnabled: true, Status: 'SUCCESS', Tokens: tokens } } };
+        const btoken = (await db.query("INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state,receiving_state,ever_proven,identity,receiving_proved_at,receiving_identity_at) VALUES($1,$2,$3,'verified','pending',true,$4,now(),now()) RETURNING token",
+          [bname, bw, bc, JSON.stringify(identity)])).rows[0].token;
+        await db.query('INSERT INTO operation_domains(id,workspace_id,name,region) VALUES($1,$2,$3,$4)', [bd, bw, bname, REGION]);
+        const br = { ...runtime, config: { ...runtime.config, workspaceId: bw, liveEnabled: true, sesFeedbackUrl: 'https://receiving-hosts.fixture.anoma.ly/v1/events/ses', aws: { accessKeyId: 'synthetic', secretAccessKey: 'synthetic' } } };
+        await ensureRegionSettings(br.db, br.config);
+        // The customer's AWS account, in memory: its receipt rules are the assertion.
+        let rules: Json[] = [], tags: Json[] = [];
+        const send = async (command: Json) => {
+          const op = command.constructor.name, x = command.input;
+          switch (op) {
+            case 'AssumeRoleCommand': return { Credentials: { AccessKeyId: 'synthetic', SecretAccessKey: 'synthetic', SessionToken: 'synthetic', Expiration: new Date(Date.now() + 3_600_000) } };
+            case 'GetCallerIdentityCommand': return { Account: baccount };
+            case 'CreateTopicCommand': tags = x.Tags; return { TopicArn: `arn:aws:sns:${REGION}:${baccount}:${x.Name}` };
+            case 'ListTagsForResourceCommand': return { Tags: tags };
+            case 'ListSubscriptionsByTopicCommand': return { Subscriptions: [{ Protocol: 'https', Endpoint: feedbackUrl(br.config), SubscriptionArn: `${x.TopicArn}:synthetic` }] };
+            case 'DescribeActiveReceiptRuleSetCommand': return { Metadata: { Name: 'synthetic-rules' }, Rules: structuredClone(rules) };
+            case 'CreateReceiptRuleCommand': rules.push(structuredClone(x.Rule)); return {};
+            case 'UpdateReceiptRuleCommand': rules = rules.map(r => r.Name === x.Rule.Name ? structuredClone(x.Rule) : r); return {};
+            case 'DeleteReceiptRuleCommand': rules = rules.filter(r => r.Name !== x.RuleName); return {};
+            default: if (/^(?:HeadBucket|CreateBucket|PutBucketTagging|PutPublicAccessBlock|PutBucketPolicy|PutBucketLifecycleConfiguration|SetTopicAttributes)Command$/.test(op)) return {};
+              throw new Error(`Unmocked AWS operation ${op}`);
+          }
+        };
+        for (const client of [STSClient, S3Client, SNSClient, SESClient]) t.mock.method(client.prototype, 'send', send);
+        const check = () => operationJobs['domain.mx']!(br, { domainId: bd, token: btoken }, { id: unique('mx'), attempts: 1, workspaceId: bw });
+        const recipients = () => rules.flatMap(r => r.Recipients ?? []).sort();
+        const rows = async () => (await db.query('SELECT receiving_host AS host,status FROM mailbox_domains WHERE domain_id=$1 ORDER BY parent_id IS NOT NULL,created_at', [bd])).rows;
+        // The BYO workspace's owner adds and removes its hosts through the API.
+        await db.query("INSERT INTO workspace_members(id,workspace_id,user_id,role) VALUES ($1,$2,$3,'owner')", [unique('mem'), bw, manager!.userId]);
+        const byo = (method: string, path: string, body?: Json) => local(method, path, body, 'live', { 'x-bane-workspace': bw });
+        zone.set(`reply.${bname}`, { mx: [ses] }); await check(); await reconcileRegion(br, REGION, bw);
+        assert.deepEqual([recipients(), await rows()], [[`reply.${bname}`], [{ host: `reply.${bname}`, status: 'active' }]]);
+        // The root beside it: listed once its MX is seen, and routing once the rule lists it. reply. never leaves the rule.
+        zone.set(bname, { mx: [ses] });
+        const root = ok(await byo('POST', `/v1/inbound/domains/${bd}/hosts`, { name: bname }), 201);
+        assert.deepEqual([recipients(), (await rows()).map(r => r.status)], [[`reply.${bname}`], ['active', 'waiting_for_mx']]);
+        await check();
+        assert.deepEqual((await rows())[1], { host: bname, status: 'provisioning' });
+        await reconcileRegion(br, REGION, bw);
+        assert.deepEqual([recipients(), (await rows()).map(r => r.status)], [[bname, `reply.${bname}`].sort(), ['active', 'active']]);
+        // Every later reconcile and check keeps both (the previous release's reconciler is this one: it lists every live host).
+        await reconcileRegion(br, REGION, bw); await check(); await reconcileRegion(br, REGION, bw);
+        assert.deepEqual([recipients(), (await rows()).map(r => r.status)], [[bname, `reply.${bname}`].sort(), ['active', 'active']]);
+        // reply. removed: the rule drops it and keeps the root, and nothing brings it back.
+        const reply = ok(await byo('GET', `/v1/inbound/domains/${bd}/hosts`)).data.find((h: Json) => h.name === `reply.${bname}`);
+        assert.equal(ok(await byo('DELETE', `/v1/inbound/domains/${bd}/hosts/${reply.id}`)).status, 'removed');
+        await reconcileRegion(br, REGION, bw); await check(); await reconcileRegion(br, REGION, bw);
+        assert.deepEqual([recipients(), (await rows()).map(r => r.status)], [[bname], ['disabled', 'active']]);
+        assert.equal(ok(await byo('GET', `/v1/inbound/domains/${bd}/hosts`)).data.find((h: Json) => h.id === root.id).status, 'active');
+
+        // Each host activates on its own: a new host the rule lists routes while the domain's other host is in its MX grace
+        // (the claim `lost`, mirroring it), and the claim then mirrors the new host.
+        const { mailboxResources } = await import('./src/mailbox-setup.js'), { getRegionSettings } = await import('./src/ses-region-state.js');
+        const names = mailboxResources((await getRegionSettings(br.db, bw)).installationId, REGION, baccount), topicArn = `arn:aws:sns:${REGION}:${baccount}:${names.topicName}`;
+        const deliver = async (to: string) => { const mid = unique('byo');
+          await acceptInboundNotification(br, { topicArn, region: REGION, message: { notificationType: 'Received', mail: { messageId: mid, source: 'sender@example.org' },
+            receipt: { ...cleanScans, timestamp: new Date().toISOString(), recipients: [to], action: { type: 'S3', bucketName: names.bucket, topicArn, objectKey: `staging/${mid}` } } } });
+          return (await db.query('SELECT recipients FROM mail_receipts WHERE ses_message_id=$1', [mid])).rows[0]?.recipients ?? [];
+        };
+        const claimRow = async () => (await db.query('SELECT receiving_state,receiving_host,receiving_lost_since IS NOT NULL AS lost FROM domain_claims WHERE name=$1', [bname])).rows[0];
+        const states = async () => (await db.query('SELECT status,lost_since IS NOT NULL AS lost FROM mailbox_domains WHERE domain_id=$1 ORDER BY parent_id IS NOT NULL,created_at', [bd])).rows.map(r => `${r.status}${r.lost ? '+grace' : ''}`);
+        zone.delete(bname); await check();
+        assert.deepEqual([await claimRow(), await states()], [{ receiving_state: 'lost', receiving_host: bname, lost: true }, ['disabled', 'active+grace']]);
+        // Each new host is added through the hosts API, as the owner adds it.
+        const added = async (host: string) => ok(await byo('POST', `/v1/inbound/domains/${bd}/hosts`, { name: host }), 201);
+        await added(`new.${bname}`); zone.set(`new.${bname}`, { mx: [ses] }); await check();
+        assert.deepEqual((await states())[2], 'provisioning');
+        await reconcileRegion(br, REGION, bw);
+        assert.deepEqual([recipients(), await states()], [[bname, `new.${bname}`].sort(), ['disabled', 'active+grace', 'active']]);
+        assert.deepEqual(await claimRow(), { receiving_state: 'active', receiving_host: `new.${bname}`, lost: false }, 'The claim mirrors the host that routes outside any grace.');
+        assert.deepEqual([await deliver(`x@new.${bname}`), await deliver(`y@${bname}`)], [[`x@new.${bname}`], [`y@${bname}`]]);
+        // The root's grace stays its own (on its row), and the next check keeps all of it.
+        await check(); await reconcileRegion(br, REGION, bw);
+        assert.deepEqual([await claimRow(), await states()], [{ receiving_state: 'active', receiving_host: `new.${bname}`, lost: false }, ['disabled', 'active+grace', 'active']]);
+
+        // A missing ownership proof authorizes nothing new: within its deadline the hosts that route keep routing, and a host
+        // waiting for the rule waits for its MX again, so the rule activates none. Past it, mail is held; once the claim's
+        // grace ends, every host stops.
+        zone.set(bname, { mx: [ses] }); await added(`late.${bname}`); zone.set(`late.${bname}`, { mx: [ses] }); await check();
+        assert.deepEqual(await states(), ['disabled', 'active', 'active', 'provisioning']);
+        await db.query("UPDATE domain_claims SET identity=jsonb_set(identity,'{proven}','false') WHERE name=$1", [bname]);
+        await check(); await reconcileRegion(br, REGION, bw);
+        assert.deepEqual([(await claimRow()).receiving_state, await states()], ['active', ['disabled', 'active', 'active', 'waiting_for_mx']]);
+        assert.deepEqual([await deliver(`x@new.${bname}`), await deliver(`z@late.${bname}`)], [[`x@new.${bname}`], []]);
+        await db.query("UPDATE domain_claims SET receiving_proved_at=now()-interval '73 hours' WHERE name=$1", [bname]);
+        await check(); await reconcileRegion(br, REGION, bw);
+        assert.deepEqual([(await claimRow()).receiving_state, await states()], ['lost', ['disabled', 'active', 'active', 'waiting_for_mx']]);
+        assert.deepEqual([await deliver(`x@new.${bname}`), await deliver(`z@late.${bname}`)], [[], []]);
+        await db.query("UPDATE domain_claims SET receiving_lost_since=now()-interval '3 hours' WHERE name=$1", [bname]);
+        await check(); await reconcileRegion(br, REGION, bw);
+        assert.deepEqual([(await claimRow()).receiving_state, await states()], ['off', ['disabled', 'waiting_for_mx', 'waiting_for_mx', 'waiting_for_mx']]);
+        assert.deepEqual([await deliver(`x@new.${bname}`), await deliver(`y@${bname}`)], [[], []]);
+      });
+
+      // Migrations 326 and 327 run before this release replaces the Worker before it, which keeps writing the claim's one
+      // receiving host and the domain's own row (by name) until it is gone, and is what a rollback runs. With one host per
+      // domain both read and write the same claim; a host's MX grace lives on the claim for that host. Its statements, verbatim.
+      await t.test('rollout (migrations 326-327): the replaced Worker and this release overlap and roll back on the migrated schema', async () => {
+        const { acceptInboundNotification } = await import('./src/mailbox-ingest.js');
+        const topicArn = `arn:aws:sns:${REGION}:${account}:rollout-inbound`, bucket = `rollout-${account}-mail`;
+        await db.query('UPDATE provider_pool_regions SET inbound_topic_arn=$2,inbound_bucket=$3 WHERE region=$1', [REGION, topicArn, bucket]);
+        const deliver = async (to: string) => { const mid = unique('rollout');
+          await acceptInboundNotification(runtime, { topicArn, region: REGION, message: { notificationType: 'Received', mail: { messageId: mid, source: 'sender@example.org' },
+            receipt: { ...cleanScans, timestamp: new Date().toISOString(), recipients: [to], action: { type: 'S3', bucketName: bucket, topicArn, objectKey: `staging/${mid}` } } } });
+          return (await db.query('SELECT recipients FROM mail_receipts WHERE ses_message_id=$1', [mid])).rows[0]?.recipients ?? [];
+        };
+        const name = `${unique('rx-rollout')}.example`, reply = `reply.${name}`, d = await claim(name, { receivingHost: reply });
+        zone.set(reply, { mx: [ses] });
+        await recheck(d);
+        const { connection_id: connectionId, identity } = (await db.query('SELECT connection_id,identity FROM domain_claims WHERE name=$1', [name])).rows[0];
+        // The replaced Worker's applyClaim: the claim's state and one host, and the domain's row upserted by name.
+        const replacedApplyClaim = (state: 'active' | 'lost' | 'pending', host: string, lostSince: string | null, facts: Json) => db.query(`WITH claim AS (UPDATE domain_claims SET sending_state='verified',receiving_state=$1,receiving_host=$2,
+            lost_since=NULL,receiving_lost_since=$3::timestamptz,identity=$4::jsonb WHERE name=$5 AND token=$6 AND connection_id=$7 RETURNING workspace_id,claim_scope)
+          INSERT INTO mailbox_domains AS m(id,workspace_id,domain_id,name,region,receiving_host,status,enabled_at,mx,checked_at)
+          SELECT $8,workspace_id,$9,$5,$10,$2,$11,now(),NULL::jsonb,NULL::timestamptz FROM claim WHERE claim_scope<>'account'
+          ON CONFLICT ON CONSTRAINT mailbox_domains_name DO UPDATE SET domain_id=excluded.domain_id,parent_id=NULL,region=excluded.region,receiving_host=excluded.receiving_host,status=excluded.status,last_error=NULL,
+            enabled_at=CASE WHEN excluded.enabled_at IS NOT NULL AND m.enabled_at IS NOT NULL AND m.status='active' THEN m.enabled_at ELSE excluded.enabled_at END,
+            mx=coalesce(excluded.mx,m.mx),checked_at=coalesce(excluded.checked_at,m.checked_at),updated_at=now()`,
+          [state, host, lostSince, JSON.stringify(facts), name, d.token, connectionId, unique('mdom'), d.id, REGION, state === 'pending' ? 'waiting_for_mx' : 'active']);
+        // The replaced Worker's ingest binds a recipient's host to the claim's one receiving_host.
+        const replacedRoutes = async (host: string) => (await db.query(`SELECT EXISTS (SELECT FROM mailbox_domains m JOIN operation_domains d ON d.id=m.domain_id AND d.workspace_id=m.workspace_id
+          JOIN domain_claims dc ON dc.name=d.name AND dc.workspace_id=d.workspace_id AND dc.receiving_host=$1 AND dc.receiving_state IN ('active','lost') WHERE m.receiving_host=$1) AS routes`, [host])).rows[0].routes;
+        const state = async () => (await db.query(`SELECT dc.receiving_state,dc.receiving_lost_since,m.status,m.lost_since FROM domain_claims dc JOIN mailbox_domains m ON m.workspace_id=dc.workspace_id AND m.domain_id=$2
+          WHERE dc.name=$1 ORDER BY m.parent_id IS NOT NULL`, [name, d.id])).rows;
+
+        // 1. The replaced Worker saw reply.'s MX vanish: the claim in its two-hour grace, the domain's row still active and
+        //    nothing in the new columns. This release reads that host in its grace and keeps the grace's start.
+        zone.delete(reply);
+        const since = new Date(Date.now() - 30 * 60_000);
+        await replacedApplyClaim('lost', reply, since.toISOString(), { ...identity, issue: { code: 'mx_missing', host: reply, blocking: false, message: 'The MX record is gone.' } });
+        await recheck(d);
+        assert.deepEqual(await state(), [{ receiving_state: 'lost', receiving_lost_since: since, status: 'active', lost_since: since }]);
+        assert.deepEqual(await deliver(`x@${reply}`), [`x@${reply}`]);
+        // 2. This release's grace on the row outlives its start by hours, and the replaced Worker (or a rollback to it) then
+        //    sees the MX come back. It clears the claim's grace but can't clear the row's: the host routes all the same,
+        //    because a domain's primary host keeps its grace on the claim, and this release's next check clears the row.
+        await db.query("UPDATE mailbox_domains SET lost_since=lost_since-interval '3 hours' WHERE domain_id=$1", [d.id]);
+        zone.set(reply, { mx: [ses] });
+        await replacedApplyClaim('active', reply, null, identity);
+        assert.equal(await replacedRoutes(reply), true);
+        assert.deepEqual(await deliver(`x@${reply}`), [`x@${reply}`]);
+        await recheck(d);
+        assert.deepEqual(await state(), [{ receiving_state: 'active', receiving_lost_since: null, status: 'active', lost_since: null }]);
+        // 3. Each writes what the other reads: this release's claim is the replaced Worker's, which routes and rewrites it unchanged.
+        assert.equal(await replacedRoutes(reply), true);
+        await replacedApplyClaim('active', reply, null, identity);
+        await recheck(d);
+        assert.deepEqual(await state(), [{ receiving_state: 'active', receiving_lost_since: null, status: 'active', lost_since: null }]);
+        assert.deepEqual(await deliver(`x@${reply}`), [`x@${reply}`]);
+
+        // 4. Migration 326 again: a host two rows route (only possible before 327's index) goes back to waiting where its
+        //    claim doesn't route it; run twice, it changes nothing more.
+        const migration = await readFile(new URL('./migrations/326_receiving_hosts.sql', import.meta.url), 'utf8');
+        await db.query('SAVEPOINT legacy_duplicate');
+        await db.query('DROP INDEX mailbox_domains_routing_host');
+        const stray = unique('mdom');
+        await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,receiving_host,status) VALUES ($1,$2,$1,$1,$3,$4,'active')", [stray, unique('ws'), REGION, reply]);
+        for (let pass = 0; pass < 2; pass++) await db.query(migration.replace(/^SET LOCAL .*$/m, ''));
+        assert.deepEqual((await db.query("SELECT id FROM mailbox_domains WHERE receiving_host=$1 AND status='active'", [reply])).rows.map(r => r.id), [(await db.query('SELECT id FROM mailbox_domains WHERE domain_id=$1 AND parent_id IS NULL', [d.id])).rows[0].id]);
+        assert.equal((await db.query('SELECT status FROM mailbox_domains WHERE id=$1', [stray])).rows[0].status, 'waiting_for_mx');
+        await db.query('ROLLBACK TO SAVEPOINT legacy_duplicate');
       });
     });
   });
@@ -16854,31 +17407,14 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ok(await local('GET', '/v1/rituals/history?cursor=3000000000'));
     });
   });
-  test('writer fence: a pre-folder conversation recount cannot rewrite an inbox unread count that excludes held mail',async t=>{
-    const db=await fixtureDatabase(t),w=unique('fence'),bid=unique('mbx'),tid=unique('thr'),ids=[unique('msg'),unique('msg')];
-    await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status,catch_all) VALUES($1,$2,$1,'fence.invalid',$3,'active','store')",[bid,w,REGION]);
-    await db.query("INSERT INTO mailboxes(id,workspace_id,domain_id,address,kind,retention_mode,quota_messages) VALUES($1,$2,$1,'fence@fence.invalid','inbox','forever',1)",[bid,w]);
-    await db.query('INSERT INTO inbox_state(inbox_id,workspace_id) VALUES($1,$2)',[bid,w]);await db.query('INSERT INTO mail_threads(id,workspace_id) VALUES($1,$2)',[tid,w]);
-    for(const [i,id] of ids.entries()){
-      await db.query("INSERT INTO mail_messages(id,workspace_id,thread_id,direction,lifecycle) VALUES($1,$2,$3,'inbound','kept')",[id,w,tid]);
-      await db.query("INSERT INTO mailbox_messages(workspace_id,mailbox_id,message_id,thread_id,direction,received_at,read,held_reason) VALUES($1,$2,$3,$4,'inbound',now(),false,$5)",[w,bid,id,tid,i?'quota':null]);
-    }
-    await db.query('INSERT INTO mailbox_threads(mailbox_id,thread_id,workspace_id,message_count,unread_count,last_message_at) VALUES($1,$2,$3,1,1,now())',[bid,tid,w]);
-    const summary=()=>db.query('SELECT message_count,unread_count FROM mailbox_threads WHERE mailbox_id=$1 AND thread_id=$2',[bid,tid]).then(r=>r.rows[0]);
-    // The old patchThread left read unchanged, then recounted unread inbound mail, held mail included.
-    await assert.rejects(db.query("UPDATE mailbox_threads SET unread_count=(SELECT count(*) FROM mailbox_messages WHERE mailbox_id=$1 AND thread_id=$2 AND NOT read AND direction='inbound') WHERE mailbox_id=$1 AND thread_id=$2",[bid,tid]),{code:'40001'});
-    assert.deepEqual(await summary(),{message_count:1,unread_count:1});
-    // A delivery still updates the summary: it changes the message count with the unread count.
-    await db.query('UPDATE mailbox_threads SET message_count=message_count+1,unread_count=unread_count+1 WHERE mailbox_id=$1 AND thread_id=$2',[bid,tid]);
-    assert.deepEqual(await summary(),{message_count:2,unread_count:2});
-  });
-  // The next release makes every address an inbox: it gives each one inbox_state and files its mail, one address at a time,
-  // holding its workspace's ingest lane and then the address row FOR UPDATE, while this release's Worker still serves.
-  // Every writer takes lanes before rows: a thread change takes the ingest lane in its first statement.
-  test('addresses with and without inbox state: a thread change takes the ingest lane first, so conversion, ingest and deletion wait in one order; an ordinary change keeps its statement budget', async t => {
+  // Every address is an inbox (migration addresses_are_inboxes); convert_addresses converts the existing ones while #360's Worker still serves:
+  // inbox_adopt_batch takes a workspace's ingest lane, then each address row FOR UPDATE, and files the address's mail
+  // by its threads' state. The replaced Worker's statements below are #360's, verbatim.
+  test('address conversion: an address files its mail where the inbox writer would; the replaced Worker’s thread changes and this release’s writers take lanes before rows, and a thread change keeps its budget', async t => {
     const [{ nodeRuntime }, { createApp }, { digest }] = await Promise.all([import('./src/adapters/node.js'), import('./src/app.js'), import('./src/core.js')]);
     const { runtime, close } = nodeRuntime({ ...process.env, DATABASE_URL: FIXTURE_DATABASE_URL }); cleanup(t, close);
-    const db = await fixtureDatabase(t), other = await fixtureDatabase(t), pid = (await other.query('SELECT pg_backend_pid() AS pid')).rows[0].pid, app = createApp();
+    const db = await fixtureDatabase(t), old = await fixtureDatabase(t), other = await fixtureDatabase(t), app = createApp();
+    const pidOf = async (c: pg.Client) => (await c.query('SELECT pg_backend_pid() AS pid')).rows[0].pid as number, oldPid = await pidOf(old), otherPid = await pidOf(other);
     const w = unique('convert'), domain = unique('mdom');
     const secret = `nm_${randomUUID().replaceAll('-', '')}${randomUUID().replaceAll('-', '')}`; secrets.add(secret);
     cleanup(t, async () => {
@@ -16888,39 +17424,101 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)', [w]);
     await db.query(`INSERT INTO api_keys(id,workspace_id,name,hash,prefix,permissions,domains) VALUES($1,$2,'fixture',$3,'fixture','["read","send","manage"]','[]')`, [unique('key'), w, await digest(secret)]);
     await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status) VALUES($1,$2,$1,$3,$4,'active')", [domain, w, `${domain}.example`, REGION]);
-    const receive = async (c: pg.Client, bid: string, tid: string) => {
-      const id = unique('msg');
-      await c.query("INSERT INTO mail_messages(id,workspace_id,thread_id,direction,lifecycle) VALUES($1,$2,$3,'inbound','default')", [id, w, tid]);
-      await c.query("INSERT INTO mailbox_messages(workspace_id,mailbox_id,message_id,thread_id,direction,received_at,read) VALUES($1,$2,$3,$4,'inbound',now(),false)", [w, bid, id, tid]);
+    // An address as every address was before 323. An insert makes it an inbox at once; its inbox_state is removed again.
+    const legacyAddress = async () => {
+      const bid = unique('mbx'), address = `${bid}@${domain}.example`;
+      await db.query('INSERT INTO mailboxes(id,workspace_id,domain_id,address) VALUES($1,$2,$3,$4)', [bid, w, domain, address]);
+      await db.query("INSERT INTO mailbox_addresses(workspace_id,address,mailbox_id,kind) VALUES($1,$2,$3,'primary')", [w, address, bid]);
+      assert.equal((await db.query('DELETE FROM inbox_state WHERE inbox_id=$1', [bid])).rowCount, 1, 'A new address is an inbox.');
+      return bid;
+    };
+    let clock = Date.parse('2026-01-01T00:00:00Z');
+    const thread = () => { const tid = unique('thr'); return db.query('INSERT INTO mail_threads(id,workspace_id) VALUES($1,$2)', [tid, w]).then(() => tid); };
+    const message = async (bid: string, tid: string, o: { out?: boolean; read?: boolean; spam?: boolean } = {}) => {
+      const id = unique('msg'), at = new Date(clock += 60_000).toISOString(), direction = o.out ? 'outbound' : 'inbound';
+      await db.query("INSERT INTO mail_messages(id,workspace_id,thread_id,direction,lifecycle,spam,size_bytes,received_at) VALUES($1,$2,$3,$4,'default',$5,100,$6)", [id, w, tid, direction, !!o.spam, at]);
+      await db.query('INSERT INTO mailbox_messages(workspace_id,mailbox_id,message_id,thread_id,direction,received_at,read) VALUES($1,$2,$3,$4,$5,$6,$7)', [w, bid, id, tid, direction, at, o.read ?? !!o.out]);
       return id;
     };
-    // An address with one received message in one thread; converted: given inbox_state with that message filed.
-    const address = async (converted: boolean) => {
-      const bid = unique('mbx'), tid = unique('thr'), name = `${bid}@${domain}.example`;
-      await db.query('INSERT INTO mailboxes(id,workspace_id,domain_id,address) VALUES($1,$2,$3,$4)', [bid, w, domain, name]);
-      await db.query("INSERT INTO mailbox_addresses(workspace_id,address,mailbox_id,kind) VALUES($1,$2,$3,'primary')", [w, name, bid]);
-      await db.query('INSERT INTO mail_threads(id,workspace_id) VALUES($1,$2)', [tid, w]);
-      const mid = await receive(db, bid, tid);
-      await db.query('INSERT INTO mailbox_threads(mailbox_id,thread_id,workspace_id,message_count,unread_count,last_message_at,last_inbound_at) VALUES($1,$2,$3,1,1,now(),now())', [bid, tid, w]);
-      if (converted) await convert(db, bid);
-      return { bid, tid, mid };
+    const summary = (bid: string, tid: string, s: { archived?: boolean; starred?: boolean; spam?: boolean; trashed?: boolean } = {}) => db.query(`INSERT INTO mailbox_threads(mailbox_id,thread_id,workspace_id,message_count,unread_count,last_message_at,archived,starred,spam,trashed_at)
+      SELECT $1,$2,$3,count(*),count(*) FILTER (WHERE NOT read),max(received_at),$4,$5,$6,CASE WHEN $7 THEN now() END FROM mailbox_messages WHERE mailbox_id=$1 AND thread_id=$2`, [bid, tid, w, !!s.archived, !!s.starred, !!s.spam, !!s.trashed]);
+    // The same mail in two addresses: each thread state, a reply, a spam message, read and unread.
+    const mailbox = async () => {
+      const bid = await legacyAddress(), [archived, starred, trashed, spam, plain] = [await thread(), await thread(), await thread(), await thread(), await thread()];
+      await message(bid, archived, { read: true }); await message(bid, starred); await message(bid, trashed); await message(bid, spam);
+      await message(bid, starred, { out: true }); await message(bid, plain, { spam: true }); await message(bid, plain);
+      await summary(bid, archived, { archived: true }); await summary(bid, starred, { starred: true }); await summary(bid, trashed, { trashed: true });
+      await summary(bid, spam, { spam: true }); await summary(bid, plain);
+      return bid;
     };
-    const convert = async (c: pg.Client, bid: string) => {
-      await c.query('INSERT INTO inbox_state(inbox_id,workspace_id,messages) SELECT $1,$2,count(*) FROM mailbox_messages WHERE mailbox_id=$1', [bid, w]);
-      await c.query('SELECT inbox_file_delivery(mailbox_id,message_id,NULL,true) FROM mailbox_messages WHERE mailbox_id=$1 ORDER BY received_at,message_id', [bid]);
+    // Where each message is filed, by its position in received order, and the inbox's counters.
+    const layout = async (bid: string) => {
+      const order = (await db.query('SELECT message_id FROM mailbox_messages WHERE mailbox_id=$1 ORDER BY received_at,message_id', [bid])).rows.map(r => r.message_id);
+      const at = (mid: string) => order.indexOf(mid) + 1;
+      return {
+        entries: (await db.query('SELECT role,uid::int,message_id,modseq::int FROM inbox_entries WHERE inbox_id=$1 ORDER BY role,uid', [bid])).rows.map(r => [r.role, r.uid, at(r.message_id), r.modseq]),
+        folders: (await db.query("SELECT role,uid_next::int,total,unseen,highest_modseq::int FROM inbox_folders WHERE inbox_id=$1 ORDER BY role", [bid])).rows,
+        messages: (await db.query('SELECT message_id,modseq::int,flags,inbox_seq IS NOT NULL AS seq FROM mailbox_messages WHERE mailbox_id=$1', [bid])).rows.map(r => [at(r.message_id), r.modseq, r.flags, r.seq]).sort((a, b) => a[0] - b[0]),
+        state: (await db.query('SELECT messages,bytes::int,modseq::int FROM inbox_state WHERE inbox_id=$1', [bid])).rows[0],
+      };
     };
-    const call = (method: string, path: string, body?: Json) => Promise.resolve(app.fetch(new Request(runtime.config.publicUrl.replace(/\/$/, '') + path, { method,
-      headers: { authorization: `Bearer ${secret}`, ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }), runtime));
-    const started = (p: Promise<Response>) => { p.catch(() => {}); return p; };
-    const waitedOn = async (holder: number, what: string) => {
-      for (let i = 0; !(await db.query('SELECT FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))', [holder])).rowCount; i++) {
+    const convert = (c: pg.Client = db) => c.query('SELECT inbox_adopt_batch($1) AS cursor', [JSON.stringify([w, ''])]).then(r => r.rows[0].cursor);
+
+    // One page converts the workspace's addresses; filed one message at a time by inbox_file_delivery(legacy) gives the same.
+    const converted = await mailbox(), reference = await mailbox();
+    // Ingest counts received mail; inbox_file_delivery counts sent mail as it files it.
+    await db.query('INSERT INTO inbox_state(inbox_id,workspace_id,messages,bytes) VALUES($1,$2,6,600)', [reference, w]);
+    await db.query('SELECT inbox_file_delivery(mailbox_id,message_id,NULL,true) FROM mailbox_messages WHERE mailbox_id=$1 ORDER BY received_at,message_id', [reference]);
+    assert.deepEqual(JSON.parse(await convert()), [w, converted]);
+    const filed = await layout(converted);
+    assert.deepEqual(filed, await layout(reference));
+    assert.deepEqual(filed.entries.map(([role, uid, n]) => [role, uid, n]), [['archive', 1, 1], ['inbox', 1, 2], ['inbox', 2, 7], ['junk', 1, 4], ['junk', 2, 6], ['sent', 1, 5], ['trash', 1, 3]]);
+    assert.deepEqual(filed.messages.map(([n, , flags]) => [n, flags]), [[1, 0], [2, 1], [3, 0], [4, 0], [5, 1], [6, 0], [7, 0]], 'A starred thread flags its messages.');
+    assert.deepEqual(filed.state, { messages: 7, bytes: 700, modseq: 8 });
+    assert.equal((await db.query('SELECT inbox_adopt($1) AS n', [converted])).rows[0].n, null, 'Converting twice changes nothing.');
+    assert.deepEqual(await layout(converted), filed);
+
+    const waitedOn = async (pid: number, what: string) => {
+      for (let i = 0; !(await db.query('SELECT FROM pg_stat_activity WHERE $1 = ANY(pg_blocking_pids(pid))', [pid])).rowCount; i++) {
         assert.ok(i < 250, `${what} never waited.`); await new Promise(resolve => setTimeout(resolve, 20));
       }
     };
-    const lane = () => other.query("INSERT INTO mailbox_write_lanes(workspace_id,lane) VALUES($1,'ingest') ON CONFLICT(workspace_id,lane) DO UPDATE SET lane=excluded.lane WHERE false", [w]);
-    const roles = async (bid: string, mid: string) => (await db.query('SELECT role FROM inbox_entries WHERE inbox_id=$1 AND message_id=$2', [bid, mid])).rows;
-    // Every statement the database receives is counted. Once armed, the first statement a request runs inside its
-    // transaction stops after it returns, holding whatever lock it took, until released.
+    const roles = async (bid: string, mid: string) => (await db.query('SELECT role FROM inbox_entries WHERE inbox_id=$1 AND message_id=$2', [bid, mid])).rows.map(r => r.role);
+    // #360's thread change: the SQL writer first (it takes the ingest lane), the address writer when that changed nothing.
+    const patchThread = (c: pg.Client, bid: string, tid: string) => c.query('SELECT inbox_patch_thread($1,$2,$3,$4::jsonb) ok', [w, bid, tid, JSON.stringify({ archived: true })]).then(r => r.rows[0].ok as boolean);
+
+    // The replaced Worker archives an unconverted address's thread as an address, holding the lane: the conversion waits
+    // for it, then files the message in Archive.
+    const early = await legacyAddress(), earlyThread = await thread(), earlyMessage = await message(early, earlyThread);
+    await summary(early, earlyThread);
+    await old.query('BEGIN');
+    assert.equal(await patchThread(old, early, earlyThread), false);
+    const [row] = (await old.query('SELECT labels FROM mailbox_threads WHERE mailbox_id=$1 AND thread_id=$2 FOR UPDATE', [early, earlyThread])).rows;
+    const page = convert(other); page.catch(() => {});
+    await waitedOn(oldPid, 'The conversion');
+    await old.query('UPDATE mailbox_threads SET archived=true,labels=$3 WHERE mailbox_id=$1 AND thread_id=$2 RETURNING *', [early, earlyThread, row.labels]);
+    await old.query('COMMIT');
+    await page;
+    assert.deepEqual(await roles(early, earlyMessage), ['archive']);
+
+    // A conversion in flight: the replaced Worker's thread change waits for the lane, then goes through the inbox writer.
+    const late = await legacyAddress(), lateThread = await thread(), lateMessage = await message(late, lateThread);
+    await summary(late, lateThread);
+    await other.query('BEGIN'); await convert(other);
+    const change = (async () => {
+      await old.query('BEGIN'); const ok = await patchThread(old, late, lateThread);
+      await old.query('COMMIT'); return ok;
+    })(); change.catch(() => {});
+    await waitedOn(otherPid, 'The thread change');
+    await other.query('COMMIT');
+    assert.equal(await change, true);
+    assert.deepEqual(await roles(late, lateMessage), ['archive']);
+    assert.equal((await db.query('SELECT archived FROM mailbox_threads WHERE mailbox_id=$1 AND thread_id=$2', [late, lateThread])).rows[0].archived, true);
+
+    // This release's own writers, through the app. Every statement is counted; once armed, the first statement a request
+    // runs inside its transaction stops after it returns, holding whatever lock it took, until released.
+    const call = (method: string, path: string, body?: Json) => Promise.resolve(app.fetch(new Request(runtime.config.publicUrl.replace(/\/$/, '') + path, { method,
+      headers: { authorization: `Bearer ${secret}`, ...(body ? { 'content-type': 'application/json' } : {}) }, ...(body ? { body: JSON.stringify(body) } : {}) }), runtime));
     let statements = 0, gate: { at: (pid: number) => void; release: Promise<void> } | undefined;
     const query = pg.Client.prototype.query;
     t.mock.method(pg.Client.prototype, 'query', async function (this: pg.Client & { inTransaction?: boolean; processID?: number }, ...args: unknown[]) {
@@ -16932,48 +17530,40 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       else if (gate && this.inTransaction) { const held = gate; gate = undefined; held.at(this.processID!); await held.release; }
       return result;
     });
-
-    // The review's reproduction: a thread change gets its first lock, then the address is deleted. The delete waits for
-    // the lane the change holds; on #360's first head the change held the address row, the delete then held the lane
-    // and waited for the row, and the change waited for the lane: 40P01.
-    const first = await address(true);
+    // A thread change costs no more statements than an address's did before (9).
+    const starred = await legacyAddress(), starredThread = await thread(), starredMessage = await message(starred, starredThread);
+    await summary(starred, starredThread); await convert();
+    const threadPath = `/v1/inbound/threads/${starredThread}`;
+    assert.equal((await call('PATCH', threadPath, { addressId: starred, starred: true })).status, 200);
+    const before = statements; assert.equal((await call('PATCH', threadPath, { addressId: starred, starred: false })).status, 200);
+    assert.equal(statements - before, 8, 'A thread change takes 8 statements.');
+    // The #360 review's reproduction: a thread change gets its first lock, then the address is deleted. The change took the
+    // ingest lane first, so the delete waits for it and both succeed.
     let at!: (pid: number) => void, release!: () => void;
     const holding = new Promise<number>(resolve => { at = resolve; });
     gate = { at, release: new Promise<void>(resolve => { release = resolve; }) };
-    const changing = started(call('PATCH', `/v1/inbound/threads/${first.tid}`, { addressId: first.bid, starred: true }));
+    const changing = call('PATCH', threadPath, { addressId: starred, starred: true }); changing.catch(() => {});
     const changer = await holding;
-    const deleting = started(call('DELETE', `/v1/inbound/addresses/${first.bid}`));
+    const deleting = call('DELETE', `/v1/inbound/addresses/${starred}`); deleting.catch(() => {});
     await waitedOn(changer, 'The delete');
     release();
     assert.deepEqual([(await changing).status, (await deleting).status], [200, 200]);
-    assert.equal((await db.query('SELECT FROM mailboxes WHERE id=$1', [first.bid])).rowCount, 0);
+    assert.equal((await db.query('SELECT FROM mail_messages WHERE id=$1', [starredMessage])).rowCount, 1);
 
-    // An ordinary address: archiving and unarchiving its thread costs the statements it did before this release.
-    const plain = await address(false), path = `/v1/inbound/threads/${plain.tid}`;
-    assert.equal((await call('PATCH', path, { addressId: plain.bid, archived: true })).status, 200);
-    const before = statements, unarchived = await call('PATCH', path, { addressId: plain.bid, archived: false });
-    assert.equal(statements - before, 9, 'An ordinary address thread change takes 9 statements, as on dev.');
-    assert.deepEqual(((await unarchived.json()) as Json), { addressId: plain.bid, unreadCount: 1, archived: false, starred: false, trashed: false, spam: false, labels: [] });
-
-    // The conversion holds the lane and the address row while it files. Archiving waits for the lane, then moves the entry it filed.
-    await other.query('BEGIN'); await lane(); await other.query('SELECT FROM mailboxes WHERE id=$1 FOR UPDATE', [plain.bid]);
-    const archived = started(call('PATCH', path, { addressId: plain.bid, archived: true }));
-    await waitedOn(pid, 'Archiving');
-    await convert(other, plain.bid);
-    await other.query('COMMIT');
-    const reply = await archived; assert.equal(reply.status, 200); assert.equal(((await reply.json()) as Json).archived, true);
-    assert.deepEqual(await roles(plain.bid, plain.mid), [{ role: 'archive' }]);
-
-    // Ingest holds the lane and the address's inbox_state, then adds a message (a key share on the address row). The delete
-    // waits for the lane, holding nothing ingest needs: deleting the row before locking inbox_state would deadlock.
-    const ingested = await address(true);
-    await other.query('BEGIN'); await lane(); await other.query('SELECT FROM inbox_state WHERE inbox_id=$1 FOR UPDATE', [ingested.bid]);
-    const deleted = started(call('DELETE', `/v1/inbound/addresses/${ingested.bid}`));
-    await waitedOn(pid, 'The delete');
-    await receive(other, ingested.bid, ingested.tid);
+    // Ingest holds the lane and the address's inbox_state, then adds a message (a key share on the address row). Deleting
+    // the address waits for the lane, holding nothing ingest needs, then releases it through inbox_end; its mail is kept.
+    await other.query('BEGIN');
+    await other.query("INSERT INTO mailbox_write_lanes(workspace_id,lane) VALUES($1,'ingest') ON CONFLICT(workspace_id,lane) DO UPDATE SET lane=excluded.lane WHERE false", [w]);
+    await other.query('SELECT FROM inbox_state WHERE inbox_id=$1 FOR UPDATE', [late]);
+    const deleted = call('DELETE', `/v1/inbound/addresses/${late}`); deleted.catch(() => {});
+    await waitedOn(otherPid, 'The delete');
+    const arriving = unique('msg');
+    await other.query("INSERT INTO mail_messages(id,workspace_id,thread_id,direction,lifecycle) VALUES($1,$2,$3,'inbound','default')", [arriving, w, lateThread]);
+    await other.query("INSERT INTO mailbox_messages(workspace_id,mailbox_id,message_id,thread_id,direction,received_at,read) VALUES($1,$2,$3,$4,'inbound',now(),false)", [w, late, arriving, lateThread]);
     await other.query('COMMIT');
     assert.equal((await deleted).status, 200);
-    assert.equal((await db.query('SELECT FROM mailboxes WHERE id=$1', [ingested.bid])).rowCount, 0);
+    for (const [table, column] of [['mailboxes', 'id'], ['inbox_state', 'inbox_id'], ['mailbox_threads', 'mailbox_id']]) assert.equal((await db.query(`SELECT FROM ${table} WHERE ${column}=$1`, [late])).rowCount, 0, table);
+    assert.equal((await db.query('SELECT FROM mail_messages WHERE id=ANY($1::text[])', [[lateMessage, arriving]])).rowCount, 2, 'Stored mail is kept.');
   });
   // Receive admission races (api/tear/admission). Two connections insert receipts the way the SNS
   // route does; the mail_receive_admit trigger and the window and backlog it charges are under test.
@@ -17279,11 +17869,18 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const receipts=(await g.query('SELECT ses_message_id,recipients FROM mail_receipts WHERE workspace_id=$1 ORDER BY 1',[w])).rows;
     assert.deepEqual(receipts.map(r=>[r.ses_message_id,r.recipients]),[['a-new',to('a')],['z-known',to('a','b','c')]]);
   });
+  // A send's sender decision under its send locks (send_admission), as direct, campaign and mailbox sends make it.
+  const senderRoute=async(runtime:import('./src/core.js').Runtime,tx:import('./src/core.js').DbExecutor,held:import('./src/send-scope.js').SendScope,actor:import('./src/core.js').Actor,from:string,marketing=false)=>{
+    const [{admission,actorJson,admitted},{sql}]=await Promise.all([import('./src/admission.js'),import('drizzle-orm')]);
+    const decision=await admission(runtime,actor.workspaceId,actorJson(actor),{stage:'send',locks:held,mails:[{host:from.split('@')[1]!.toLowerCase(),kind:marketing?'marketing':'transactional',attachments:[],bodyBytes:0}]});
+    const route=admitted(runtime,(await tx.execute<{s:import('./src/admission.js').Admitted}>(sql`SELECT ${decision} AS s`)).rows[0]!.s,actor.workspaceId).mails[0]!;
+    return {region:route.region,binding:route.binding};
+  };
   // Dev E2E, Nov 12 (40P01, 500 after ~8 s): POST /v1/domains (reserve_placed_claim) locks the settings row, then the
   // claim. A send's region lookup locked the closest claim inside regional_sender before its FOR SHARE OF the settings
   // row, so a reply from a domain deadlocked with a re-add of that domain (and with domain.verify queued on the claim).
   test('regional sender: a send waits on the settings row before it locks the claim a domain re-add needs',async t=>{
-    const {nodeRuntime}=await import('./src/adapters/node.js'),{sendingRegion}=await import('./src/sending.js'),{lockSendScope}=await import('./src/send-scope.js');
+    const {nodeRuntime}=await import('./src/adapters/node.js'),{lockSendScope}=await import('./src/send-scope.js');
     const {runtime,close}=nodeRuntime({...process.env,DATABASE_URL:FIXTURE_DATABASE_URL});cleanup(t,close);
     Object.assign(runtime.config,{multiTenant:true,regionalSending:true,liveEnabled:false});
     const g=await fixtureDatabase(t),w=unique('sdead'),host=w+'.invalid',region='us-east-2';
@@ -17299,7 +17896,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     let send:Promise<unknown>|undefined,readd:string|undefined;
     try {
       await g.query('SELECT FROM ses_installation_settings WHERE workspace_id=$1 FOR NO KEY UPDATE',[w]);
-      send=runtime.db.transaction(async tx=>sendingRegion(runtime,tx,await lockSendScope(tx,w),actor,`reply@${host}`));send.catch(()=>{});
+      send=runtime.db.transaction(async tx=>senderRoute(runtime,tx,await lockSendScope(tx,w),actor,`reply@${host}`));send.catch(()=>{});
       for(let i=0;i<400&&!(await g.query('SELECT FROM pg_stat_activity WHERE pg_backend_pid()=ANY(pg_blocking_pids(pid))')).rowCount;i++)await new Promise(r=>setTimeout(r,5));
       // Then it locks the claim. Before the fix the waiting send already held it FOR SHARE: 40P01 after deadlock_timeout.
       const started=Date.now();
@@ -17358,7 +17955,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // and ungated, many times, so a new lock-order inversion between them fails here, not on dev. Add a pair here once its
   // own fix lands; CI also fails the job on any deadlock Postgres counts during the suite (.github/scripts/acceptance.sh).
   test('lock order: concurrent domain re-adds, sends and mailbox replies on one domain never deadlock',async t=>{
-    const {nodeRuntime}=await import('./src/adapters/node.js'),{sendingRegion}=await import('./src/sending.js'),{sendFromMailbox}=await import('./src/mailbox-send.js'),{createMailbox}=await import('./src/mailbox-store.js'),{lockSendScope}=await import('./src/send-scope.js');
+    const {nodeRuntime}=await import('./src/adapters/node.js'),{sendFromMailbox}=await import('./src/mailbox-send.js'),{createMailbox}=await import('./src/mailbox-store.js'),{lockSendScope}=await import('./src/send-scope.js');
     const {runtime,close}=nodeRuntime({...process.env,DATABASE_URL:FIXTURE_DATABASE_URL});cleanup(t,close);
     Object.assign(runtime.config,{multiTenant:true,regionalSending:true,liveEnabled:false});
     const g=await fixtureDatabase(t),w=unique('ldead'),host=w+'.invalid',region='us-fixture-'+w.slice(-8),account=String(Date.now()).slice(-12).padStart(12,'6');
@@ -17386,7 +17983,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     for(let round=0;round<60;round++){
       const work=[
         ...Array.from({length:4},()=>readds.query('SELECT id FROM reserve_placed_claim($1,$2,NULL,$3)',[w,host,unique('dom')]).then(r=>assert.equal(r.rows[0].id,w,'A re-add returns the existing domain.'))),
-        ...Array.from({length:4},(_,i)=>runtime.db.transaction(async tx=>sendingRegion(runtime,tx,await lockSendScope(tx,w),actor,`reply@${host}`,undefined,i%2===1))),
+        ...Array.from({length:4},(_,i)=>runtime.db.transaction(async tx=>senderRoute(runtime,tx,await lockSendScope(tx,w),actor,`reply@${host}`,i%2===1))),
         ...Array.from({length:2},reply),
       ];
       for(const r of await Promise.allSettled(work))if(r.status==='rejected')note(r.reason);
@@ -17901,17 +18498,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         if(ingest.delivery?.drop)assert.equal(reads,before);return (await db.query('SELECT * FROM mail_messages WHERE workspace_id=$1 AND ses_message_id=$2',[wid,mid])).rows[0];
       };
       const first=await deliver('r2-first',[box.address],true),defaultMsg=await deliver('r2-mixed',[other.address,'ordinary@'+host],true);
-      await t.test('M1: a previous-generation writer cannot commit unjournaled inbox or thread state',async()=>{
+      await t.test('M1: read state changes are journaled: folder counts and changes follow the inbox writer',async()=>{
         const snapshot=async()=>ok(await request('GET',path+'/folders',key));
         const before=await snapshot();
-        for(const [statement,id] of [
-          ['UPDATE mailbox_messages SET read=true WHERE mailbox_id=$1 AND message_id=$2',first.id],
-          ["UPDATE mailbox_threads SET archived=true,starred=true,labels=ARRAY['fixture'] WHERE mailbox_id=$1 AND thread_id=$2",first.thread_id],
-        ] as const){
-          await db.query('SAVEPOINT previous_writer');
-          try{await assert.rejects(db.query(statement,[box.id,id]),{code:'40001'});}finally{await db.query('ROLLBACK TO previous_writer; RELEASE previous_writer');}
-        }
-        assert.deepEqual(await snapshot(),before);
         assert.equal(ok(await request('GET',`${url}/${first.id}`,key)).read,false);
         assert.deepEqual(ok(await request('GET',path+'/changes?since='+before.state,key)).changed,[]);
         ok(await request('PATCH',`${url}/${first.id}`,key,{read:true}));
@@ -18099,24 +18688,50 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         await charged(1,()=>db.query('SELECT mail_gc_batch(1000)'));for(const j of await jobs('mail.deleteObjects'))await charged(0,()=>mailboxIngestJobs[j.type](runtime,j.payload,{id:j.id,workspaceId:wid,attempts:1}));assert.equal(stored.has(first.raw_key),false);assert.ok(stored.has(sharedMail.raw_key));assert.equal((await db.query('SELECT FROM mailbox_messages WHERE message_id=$1 AND mailbox_id=$2',[sharedMail.id,other.id])).rowCount,1);for(const [table,id] of [['mail_messages',first.id],['mail_threads',first.thread_id],['mailboxes',box.id]])assert.equal((await db.query(`SELECT FROM ${table} WHERE id=$1`,[id])).rowCount,0);
         await db.query('INSERT INTO mail_gc_candidates(workspace_id,message_id) VALUES($1,$2)',[wid,defaultMsg.id]);await db.query('SELECT mail_gc_batch(1000)');assert.equal((await db.query('SELECT FROM mail_messages WHERE id=$1',[defaultMsg.id])).rowCount,1);assert.ok(stored.has(defaultMsg.raw_key));
       });
-      // The next release makes every address an inbox: it gives each address inbox_state and files its mail, one address at a
-      // time, holding the workspace's ingest lane and the address row. This release is the Worker serving while that runs.
-      const convert=async(c:pg.Client,bid:string)=>{
-        await c.query("INSERT INTO inbox_state(inbox_id,workspace_id,messages,bytes) SELECT $1,$2,count(*),coalesce(sum(m.size_bytes),0) FROM mailbox_messages x JOIN mail_messages m ON m.id=x.message_id WHERE x.mailbox_id=$1 AND x.direction='inbound'",[bid,wid]);
-        await c.query('SELECT inbox_file_delivery(mailbox_id,message_id,NULL,true) FROM mailbox_messages WHERE mailbox_id=$1 ORDER BY received_at,message_id',[bid]);
-      };
-      const roles=async(bid:string,mid:string)=>(await db.query('SELECT role FROM inbox_entries WHERE inbox_id=$1 AND message_id=$2 ORDER BY role',[bid,mid])).rows.map((r:Json)=>r.role);
-      await t.test('a converted address: thread changes go through the inbox writer, and mail an alias claims is counted and filed',async()=>{
-        const address=ok(await local('POST','/v1/inbound/addresses',{address:'converted@'+host}),201),m=await deliver('converted-first',[address.address]);
-        await convert(db,address.id);assert.deepEqual(await roles(address.id,m.id),['inbox']);
+      await t.test('every address is an inbox: delivered and claimed mail is filed and counted, thread changes go through the inbox writer, and the inbox routes read and change its mail',async()=>{
+        const roles=async(bid:string,mid:string)=>(await db.query('SELECT role FROM inbox_entries WHERE inbox_id=$1 AND message_id=$2 ORDER BY role',[bid,mid])).rows.map((r:Json)=>r.role);
+        const address=ok(await local('POST','/v1/inbound/addresses',{address:'filed@'+host}),201),m=await deliver('filed-first',[address.address]);
+        assert.deepEqual(await roles(address.id,m.id),['inbox']);
         const state=ok(await local('PATCH',`/v1/inbound/threads/${m.thread_id}`,{addressId:address.id,archived:true,read:true}));
         assert.deepEqual([state.archived,state.unreadCount],[true,0]);assert.deepEqual(await roles(address.id,m.id),['archive']);
         assert.deepEqual((await db.query("SELECT role,total,unseen FROM inbox_folders WHERE inbox_id=$1 AND role IN ('archive','inbox') ORDER BY role",[address.id])).rows,[{role:'archive',total:1,unseen:0},{role:'inbox',total:0,unseen:0}]);
-        const claimed=await deliver('converted-claimed',['claimed@'+host]);assert.equal((await db.query('SELECT FROM mail_unrouted WHERE message_id=$1',[claimed.id])).rowCount,1);
+        const claimed=await deliver('filed-claimed',['claimed@'+host]);assert.equal((await db.query('SELECT FROM mail_unrouted WHERE message_id=$1',[claimed.id])).rowCount,1);
         ok(await local('PATCH',`/v1/inbound/addresses/${address.id}`,{aliases:['claimed@'+host]}));
         assert.deepEqual(await roles(address.id,claimed.id),['inbox']);
         assert.deepEqual((await db.query('SELECT messages,bytes::int FROM inbox_state WHERE inbox_id=$1',[address.id])).rows[0],{messages:2,bytes:m.size_bytes+claimed.size_bytes});
-        ok(await local('DELETE',`/v1/inbound/addresses/${address.id}`));assert.equal((await db.query('SELECT FROM inbox_state WHERE inbox_id=$1',[address.id])).rowCount,0);
+        // Its mail is read and changed through the inbox routes, with an address key too. The Inbox resource lists agent inboxes.
+        const scoped=ok(await local('POST','/v1/inbound/keys',{name:'filed',addressIds:[address.id],permissions:['read','modify']}),201).secret;
+        const inboxPath=`${root}/${address.id}`;
+        const inboxed=ok(await request('GET',`${inboxPath}/messages?folder=inbox`,scoped)).data;assert.deepEqual(inboxed.map((x:Json)=>x.id),[claimed.id]);
+        assert.deepEqual(ok(await request('GET',`${inboxPath}/messages?folder=archive`,scoped)).data.map((x:Json)=>x.id),[m.id]);
+        assert.equal(ok(await request('GET',`${inboxPath}/messages/${m.id}`,scoped)).id,m.id);
+        ok(await request('POST',`${inboxPath}/messages/${claimed.id}/move`,scoped,{source:'inbox',uid:inboxed[0].uid,folder:'archive'}));
+        assert.deepEqual(await roles(address.id,claimed.id),['archive']);
+        assert.ok(ok(await request('GET',`${inboxPath}/folders`,scoped)).data.some((f:Json)=>f.role==='archive'&&f.total===2));
+        // The live E2E's sequence (scripts/e2e.ts addressInbox): a read change in the change feed, a copy expunged from
+        // Archive, a move and a delete to Trash, with folder counts; another address's key reads none of it.
+        const counts=async()=>Object.fromEntries(ok(await request('GET',`${inboxPath}/folders`,scoped)).data.map((f:Json)=>[f.role,f.total]));
+        const since=ok(await request('GET',`${inboxPath}/folders`,scoped)).state,before=await counts(),url=`${inboxPath}/messages/${m.id}`;
+        const entry=ok(await request('GET',url,scoped)).folders[0];assert.equal(entry.folder,'archive');
+        assert.equal(ok(await request('PATCH',url,scoped,{read:false})).read,false);
+        assert.ok(ok(await request('GET',`${inboxPath}/changes?since=${since}`,scoped)).changed.includes(m.id));
+        const copy=ok(await request('POST',`${url}/copy`,scoped,{source:'archive',uid:entry.uid,folder:'inbox'}));
+        ok(await request('PATCH',url,scoped,{source:'inbox',uid:copy.uid,deleted:true}));
+        assert.equal(ok(await request('POST',`${inboxPath}/folders/inbox/expunge`,scoped,{uids:[copy.uid]})).expunged,1);
+        const moved=ok(await request('POST',`${url}/move`,scoped,{source:'archive',uid:entry.uid,folder:'inbox'}));
+        ok(await request('DELETE',`${url}?source=inbox&uid=${moved.uid}`,scoped));
+        assert.deepEqual(await counts(),{...before,archive:before.archive-1,trash:before.trash+1});
+        const unrelated=ok(await local('POST','/v1/inbound/addresses',{address:'unrelated@'+host}),201);
+        const otherKey=ok(await local('POST','/v1/inbound/keys',{name:'other',addressIds:[unrelated.id],permissions:['read']}),201).secret;
+        for(const path of [`${inboxPath}/messages`,url,`${inboxPath}/folders`])error(await request('GET',path,otherKey),404,'NOT_FOUND');
+        error(await local('GET',inboxPath),404);assert.ok(!ok(await local('GET',root)).data.some((b:Json)=>b.id===address.id));
+        // A temporary address is an inbox whose lease is expiresAt alone: receiving stops then, and it is kept.
+        const lease=ok(await local('POST','/v1/inbound/addresses',{address:'lease@'+host,ttlSeconds:600}),201);
+        assert.deepEqual((await db.query('SELECT b.delete_after,s.messages FROM mailboxes b JOIN inbox_state s ON s.inbox_id=b.id WHERE b.id=$1',[lease.id])).rows,[{delete_after:null,messages:0}]);
+        // Deleting releases the address through inbox_end: its threads and folders go, its mail stays.
+        for(const id of [address.id,lease.id,unrelated.id])ok(await local('DELETE',`/v1/inbound/addresses/${id}`));
+        assert.equal((await db.query('SELECT FROM inbox_state WHERE inbox_id=ANY($1::text[])',[[address.id,lease.id]])).rowCount,0);
+        assert.equal((await db.query('SELECT FROM mail_messages WHERE id=ANY($1::text[])',[[m.id,claimed.id]])).rowCount,2);
       });
       await t.test('combined ingest: routed R2 delivery, recipient-specific holds and release at the 2/3 statement budget',async()=>{
         const lease=ok(await local('POST',root,{localPart:'routed',limits:{messages:1}}),201);
@@ -21532,6 +22147,68 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
+  test('query budget: every kind of send is admitted by one statement after authentication',async t=>{
+    await simulatedSesFixture(t,async({db,runtime,local})=>{
+      const wid=runtime.config.workspaceId,acct='112223330044';
+      const meter=await queryBudget(t,db),budgets:Record<string,number>={};
+      const send=async(label:string,max:number,path:string,body:Json,headers:Record<string,string>={})=>{budgets[label]=max;return meter(label,async()=>ok(await local('POST',path,body,'live',headers),202),max);};
+      const key=ok(await local('POST','/v1/api-keys',{name:'budget',permissions:['send','read','manage']}),201),auth={authorization:`Bearer ${key.secret}`};
+      ok(await local('GET','/v1/emails',undefined,'live',auth)); // A warm key: its fingerprint is known.
+      // Self-hosted: the key's budget charge, then one admission statement.
+      await send('self-hosted-send',2,'/v1/emails/send',mail(),{...auth,'Idempotency-Key':'budget-self'});
+      await send('self-hosted-batch-100',2,'/v1/emails/batch',{emails:Array.from({length:100},()=>mail())},{...auth,'Idempotency-Key':'budget-self-batch'});
+      await send('self-hosted-session',2,'/v1/emails/send',mail());
+      const draft=ok(await local('POST','/v1/campaigns',{name:'budget',from:'sender@example.com',subject:'Budget',html:'<p>Budget</p>'},'live',auth),201);
+      // A campaign test reads the draft, renders it, then admits it in one statement.
+      await send('self-hosted-campaign-test',3,`/v1/campaigns/${draft.id}/test`,{to:address()},auth);
+      // Hosted.
+      runtime.config.multiTenant=true;
+      await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,sending_state,feedback_topic_arn) VALUES($1,$2,'ready',$3)`,[REGION,acct,`arn:aws:sns:${REGION}:${acct}:fixture`]);
+      await db.query(`INSERT INTO provider_connections(id,workspace_id,kind,state,region,aws_account_id,tenant_state) VALUES($1,$1,'shared','ready',$2,$3,'ready')`,[wid,REGION,acct]);
+      await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES('budget.invalid',$1,$1,'verified')`,[wid]);
+      const hosted=()=>({from:'a@budget.invalid',to:address(),subject:'Budget',text:'Budget'});
+      const cold=ok(await local('POST','/v1/api-keys',{name:'budget-cold',permissions:['send','read']}),201),bearer={authorization:`Bearer ${cold.secret}`};
+      await send('hosted-cold-key',2,'/v1/emails/send',hosted(),{...bearer,'Idempotency-Key':'budget-cold'});
+      await send('hosted-warm-key',1,'/v1/emails/send',hosted(),{...bearer,'Idempotency-Key':'budget-warm'});
+      await send('hosted-session',2,'/v1/emails/send',hosted());
+      const hostedDraft=ok(await local('POST','/v1/campaigns',{name:'budget-hosted',from:'a@budget.invalid',subject:'Budget',html:'<p>Budget</p>'},'live',auth),201);
+      await send('hosted-campaign-test',3,`/v1/campaigns/${hostedDraft.id}/test`,{to:address()},auth);
+      t.diagnostic(`ADMISSION-BUDGETS ${JSON.stringify(budgets)}`);
+    });
+  });
+  // Review of #361, round 1: a retried campaign test answered from the draft as it is now (422 after an edit, 409 once
+  // archived) instead of replaying the test it already sent.
+  test('a retried campaign test replays its receipt after its draft changed or was archived; a held key is IN_PROGRESS first',async t=>{
+    await simulatedSesFixture(t,async({runtime,db,local})=>{
+      const key=ok(await local('POST','/v1/api-keys',{name:'replay',permissions:['send','read','manage']}),201),auth={authorization:`Bearer ${key.secret}`};
+      const draft=ok(await local('POST','/v1/campaigns',{name:'replay',from:'sender@example.com',subject:'Before',html:'<p>Before</p>'},'live',auth),201);
+      const path=`/v1/campaigns/${draft.id}/test`,body={to:address()},idem={...auth,'Idempotency-Key':'pr361-replay'},meter=await queryBudget(t,db);
+      const first=await meter('campaign-test-keyed',async()=>ok(await local('POST',path,body,'live',idem),202));
+      ok(await local('PATCH',`/v1/campaigns/${draft.id}`,{revision:draft.revision,draft:{name:'replay',from:'sender@example.com',subject:'',html:'<p>Before</p>'}},'live',auth));
+      assert.equal((await meter('campaign-test-replay',async()=>ok(await local('POST',path,body,'live',idem),202))).id,first.id);
+      ok(await local('PATCH',`/v1/campaigns/${draft.id}/archive`,{archived:true},'live',auth));
+      assert.equal(ok(await local('POST',path,body,'live',idem),202).id,first.id);
+      assert.equal((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE workspace_id=$1',[runtime.config.workspaceId])).rows[0].n,1);
+      // Another request holding a key answers IN_PROGRESS before the archived draft is read.
+      const other=await fixtureDatabase(t);await other.query('BEGIN');
+      try{
+        assert.equal((await other.query('SELECT idempotency_lock($1,$2,$3,$4) AS held',[runtime.config.workspaceId,key.id,path,'pr361-held'])).rows[0].held,true);
+        error(await local('POST',path,body,'live',{...auth,'Idempotency-Key':'pr361-held'}),409,'IDEMPOTENCY_IN_PROGRESS');
+      }finally{await other.query('ROLLBACK');}
+      error(await local('POST',path,body,'live',{...auth,'Idempotency-Key':'pr361-held'}),409,'CAMPAIGN_ARCHIVED');
+    });
+  });
+  // Review of #361, round 1: a repeated attachment ID was reported as the missing attachment it also named.
+  test('an attachment named twice is 422 DUPLICATE_ATTACHMENT before the attachment lookup, direct and batch',async t=>{
+    await simulatedSesFixture(t,async({local})=>{
+      const twice=()=>mail({attachments:['att_missing_pr361','att_missing_pr361']});
+      const key=ok(await local('POST','/v1/api-keys',{name:'duplicates',permissions:['send']}),201),auth={authorization:`Bearer ${key.secret}`};
+      for(const headers of [{},auth]){
+        assert.equal(error(await local('POST','/v1/emails/send',twice(),'live',headers),422,'DUPLICATE_ATTACHMENT').field,undefined);
+        assert.equal(error(await local('POST','/v1/emails/batch',{emails:[twice()]},'live',headers),422,'DUPLICATE_ATTACHMENT').field,'emails.0');
+      }
+    });
+  });
   test('query budget: immutable campaign preparation, release, dispatch and storage per recipient',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local})=>{
       const {jobHandlers}=await import('./src/sending.js'),{JobDeferred}=await import('./src/jobs.js'),{dispatchDue}=await import('./src/dispatcher.js');

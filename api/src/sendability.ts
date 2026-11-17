@@ -5,7 +5,7 @@ import { lint, PreviewLimitError, type Issue, type Client } from './email-previe
 import { blockedExtension } from './outbound-content.js';
 import { readHtml, screenTextSignals } from './screen.js';
 import { screenedHtml, screenedHtmlStats } from './screened-html.js';
-import { estimatedMimeBytes, MAX_ENCODED_MESSAGE } from './sending.js';
+import { estimatedMimeBytes, SEND_LIMITS } from './send-limits.js';
 import { gradeOf, marketingHourFor } from './standing-model.js';
 import { categories, splitMailbox, type CheckMail, type CheckReport } from './sendability-schema.js';
 import type { CheckContext } from './sendability-context.js';
@@ -131,8 +131,8 @@ export async function checkMail(mail:CheckMail, ctx:CheckContext={}): Promise<Ch
     } catch (e) { if (!(e instanceof ApiError && e.code==='CONTENT_IMAGE_ONLY')) throw e; }
     const limit=ctx.screenLimitBytes??24*1024, screenedBytes=Buffer.byteLength(measured), left=limit-screenedBytes, near=left<limit*0.1;
     size('screen-bytes',left<0?'error':near?'warning':'info',left<0?100:near?20:0,'Hosted screened-text budget',`${screenedBytes} of ${limit} UTF-8 bytes (${Math.abs(left)} bytes ${left<0?'over':'remaining'}; ${basis}).`,left<0?'Shorten the HTML copy or text alternative before hosted sending.':'Keep room for personalization and the final footer.',{screenedBytes,limitBytes:limit,remainingBytes:left});
-    const mime=estimatedMimeBytes(mail,mail.attachments??[]), over=mime>MAX_ENCODED_MESSAGE;
-    size('mime-size',over?'error':'info',over?100:0,'Estimated total MIME size',`${productName}’s conservative estimate is ${mime} bytes including transfer encoding and headers; not an observed wire size.`, 'Reduce attachments or link to large documents if near the 16 MiB limit.',{estimatedBytes:mime,limitBytes:MAX_ENCODED_MESSAGE});
+    const mime=estimatedMimeBytes(mail,mail.attachments??[]), over=mime>SEND_LIMITS.encodedBytes;
+    size('mime-size',over?'error':'info',over?100:0,'Estimated total MIME size',`${productName}’s conservative estimate is ${mime} bytes including transfer encoding and headers; not an observed wire size.`, 'Reduce attachments or link to large documents if near the 16 MiB limit.',{estimatedBytes:mime,limitBytes:SEND_LIMITS.encodedBytes});
   } catch (e) { if (e instanceof PreviewLimitError || (e instanceof ApiError && e.code==='CONTENT_TOO_LARGE_TO_SCREEN')) throw new ApiError(413,'EMAIL_CHECK_LIMIT_EXCEEDED','Simplify the HTML to fit the offline checker’s byte, tree and style budgets.'); throw e; }
   reputation(mail,ctx,category('reputation'));
   const parts=categories.map(id=>({id,score:Math.max(0,100-(deductions.get(id)??0)),weight:(id==='reputation' && !ctx.standing) || (id==='authentication' && !ctx.domain && !deductions.get(id)) ? 0 : weights[id]}));

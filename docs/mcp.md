@@ -1,6 +1,6 @@
 # Nightmail MCP
 
-Connect an MCP client to **`https://YOUR_NIGHTMAIL_DOMAIN/mcp`**. The MCP server is part of the Nightmail API, so no local process is needed. This installation uses **https://bane.mx/mcp**.
+Connect an MCP client to **`https://YOUR_NIGHTMAIL_DOMAIN/mcp`**. The MCP server is part of the Nightmail API, so no local process is needed. This installation uses **https://nightmail.dev/mcp**.
 
 There are two ways to connect:
 
@@ -11,7 +11,7 @@ There are two ways to connect:
 
 Keys limited to receiving addresses or one agent inbox (`nm_mbx_…`) connect the same way as other keys. See [Agent inboxes](#agent-inboxes).
 
-If you authorised your client against `https://opensend.mx/mcp`, reconnect it to `https://bane.mx/mcp` and approve access again.
+If you authorised your client against `https://opensend.mx/mcp` or `https://bane.mx/mcp`, reconnect it to `https://nightmail.dev/mcp` and approve access again.
 
 ## Connect
 
@@ -28,7 +28,7 @@ In OpenCode, run `opencode2 mcp add nightmail --global --url https://YOUR_NIGHTM
 Pass a workspace API key (`nm_…`) or an agent token (`nm_agent_…`) as the bearer token. The connection then acts only in that credential's workspace, with only its permissions and sender domains:
 
 ```json
-{"$schema":"https://opencode.ai/config.json","mcp":{"servers":{"nightmail":{"type":"remote","url":"https://bane.mx/mcp","oauth":false,"headers":{"Authorization":"Bearer {env:NIGHTMAIL_API_KEY}"}}}}}
+{"$schema":"https://opencode.ai/config.json","mcp":{"servers":{"nightmail":{"type":"remote","url":"https://nightmail.dev/mcp","oauth":false,"headers":{"Authorization":"Bearer {env:NIGHTMAIL_API_KEY}"}}}}}
 ```
 
 In the dashboard, **API keys → Create key** shows this setup for OpenCode, Claude Code and Cursor right after the key is made. Every tool call is an API request made with that credential: Nightmail checks the key on each call (revoked, expired, its minute budget, an agent token's approval), and the API answers exactly as it would over HTTP. The listing offers what the API allows the credential. A temporary agent token never administers keys, webhooks, rituals or routes, and only a signed-in approval mints agent tokens. Tools take no `workspace` argument: naming the key's own workspace is accepted, and any other is refused with `403 WORKSPACE_ACCESS_DENIED`. A key is the right choice for a headless agent or a remote machine where a browser sign-in is awkward. Keep it out of committed configs: reference an environment variable, as above.
@@ -61,8 +61,8 @@ One signed-in MCP connection is one Anomaly account: the account you choose at A
   "$schema": "https://opencode.ai/config.json",
   "mcp": {
     "servers": {
-      "nightmail-personal": { "type": "remote", "url": "https://bane.mx/mcp" },
-      "nightmail-work": { "type": "remote", "url": "https://bane.mx/mcp" }
+      "nightmail-personal": { "type": "remote", "url": "https://nightmail.dev/mcp" },
+      "nightmail-work": { "type": "remote", "url": "https://nightmail.dev/mcp" }
     }
   }
 }
@@ -155,7 +155,7 @@ Build/deploy the API and apply its additive OAuth migration before connecting. N
 An agent can get its own expiring address, wait for mail and read it, with nothing but an API key limited to its inboxes. Pass the key as the bearer token; no OAuth is needed. For OpenCode:
 
 ```json
-{"mcp":{"servers":{"nightmail-inbox":{"type":"remote","url":"https://bane.mx/mcp","oauth":false,"headers":{"Authorization":"Bearer {env:NIGHTMAIL_INBOX_KEY}"}}}}}
+{"mcp":{"servers":{"nightmail-inbox":{"type":"remote","url":"https://nightmail.dev/mcp","oauth":false,"headers":{"Authorization":"Bearer {env:NIGHTMAIL_INBOX_KEY}"}}}}}
 ```
 
 Use an API key that creates inboxes (`POST /v1/api-keys` with `access: {"type":"addresses","addressIds":[],"mail":["create","read","modify"]}`) to let the agent create inboxes. Use an API key for one inbox (`access: {"type":"inbox","inboxId":"mbx_…"}`, or `credential` on `createInbox`) to give it that inbox only; it stops working when the inbox is deleted. Either key sees only the inbox tools its permissions allow:
@@ -180,4 +180,4 @@ Set `ACCOUNT_ISSUER` to the HTTPS issuer that signs access tokens for this insta
 
 `bane:read`, `bane:send` and `bane:manage` request the corresponding Nightmail permissions; a 401 challenge names all three, and you narrow them when approving. The resource verifies the JWT signature and audience (`${PUBLIC_URL}/mcp`, with any query string such as `?codemode=false`). It requires a matching Nightmail `(issuer, subject)` identity and checks live workspace membership and role on every tool call. Members cannot use `manage`. Hosted Nightmail also requires every access token to carry `acr=urn:anomaly:acr:google` (`ACCOUNT_REQUIRED_ACR`); other tokens get a 401 `insufficient_user_authentication` challenge. A sender-constrained access token requires its matching DPoP proof on every request.
 
-For hosted Nightmail, the resource identifiers are `https://dev.bane.mx/mcp` and `https://bane.mx/mcp`. The account issuer supplies the same public subject on dashboard sign-in and on MCP access tokens. Nightmail maintains one approval per user and client ID, including across token refreshes. In **Settings → Account**, revoke a client to block the tokens of its current consent in Nightmail. Use the **Connected apps** link to revoke the grant at the issuer. The cutover shows legacy approvals as expired and revokes their tokens and derived credentials. Reconnect through the account service to authorize again.
+For hosted Nightmail, the resource identifiers are `https://dev.nightmail.dev/mcp` and `https://nightmail.dev/mcp`. The account issuer supplies the same public subject on dashboard sign-in and on MCP access tokens. Nightmail maintains one approval per user and client ID, including across token refreshes. In **Settings → Account**, revoke a client to block the tokens of its current consent in Nightmail. Use the **Connected apps** link to revoke the grant at the issuer. The cutover shows legacy approvals as expired and revokes their tokens and derived credentials. Reconnect through the account service to authorize again.

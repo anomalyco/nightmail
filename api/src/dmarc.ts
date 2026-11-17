@@ -2,6 +2,7 @@ import { ModuleLoadError } from './core.js';
 import { placementRoot } from './domain-registry.js';
 import { dns, fqdn } from './public-dns.js';
 import type { IdentityFacts } from './states.js';
+import { SEND_LIMITS } from './send-limits.js';
 
 type Policy = 'none'|'quarantine'|'reject';
 type Mode = 'r'|'s';
@@ -55,7 +56,7 @@ export async function observeDmarc(name:string,mailFrom?:string):Promise<DmarcOb
 }
 
 export function dmarcView(obs:DmarcObservation|null|undefined,ses:IdentityFacts['ses']) {
-  if(!obs || obs.checkedAt<Date.now()-48*3600_000) return null;
+  if(!obs || obs.checkedAt<Date.now()-SEND_LIMITS.dmarcMaxAgeHours*3600_000) return null;
   const {status,record,source,adkim,aspf}=obs, mail=ses.MailFromAttributes;
   return {status,record,source,adkim,aspf,alignment:{
     // The checked From domain IS this SES identity (also an exact match in strict mode).

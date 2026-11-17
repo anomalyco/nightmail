@@ -6,8 +6,9 @@ import { isProofRecord, type IdentityFacts } from './states.js';
 import { productName } from './brand.js';
 
 /**
- * Hosted receiving hosts. A domain receives on its root only when the root already points at SES (or the
- * owner chose it); otherwise on the first of these subdomains that has no MX and no CNAME of its own.
+ * Hosted receiving hosts. A domain receives on any set of hosts (receiving-hosts.ts); the first one, on the domain's own
+ * row, is suggested automatically until it routes: the root only when the root already points at SES (or the owner chose
+ * it), otherwise the first of these subdomains that has no MX and no CNAME of its own.
  */
 export const receivingLabels = ['reply', 'inbound', 'mail', 'inbox', 'incoming', 'replies'] as const;
 export const receivingCandidates = (domain: string) => receivingLabels.map(label => `${label}.${domain}`);
@@ -62,15 +63,19 @@ const namesUnder = (host: string, domain: string) => {
   return names;
 };
 /**
- * Who else holds each host. `taken`: another claim, in any workspace, already routes it (domain_claims_receiving_host
- * keeps hosts unique). `claimed`: another workspace claimed the host or a name between it and this claim, in any scope
- * (send-only included); that name is theirs, so the parent claim must never receive its mail.
+ * Who else holds each host. `taken`: another domain, in any workspace, already routes it (mailbox_domains_routing_host
+ * keeps routing hosts unique; a claim's own receiving_host is read too, for rows the replaced Worker wrote). `claimed`:
+ * another workspace claimed the host or a name between it and this claim, in any scope (send-only included); that name
+ * is theirs, so the parent claim must never receive its mail.
  */
-async function hostOwners(db: Pick<DbExecutor, 'execute'>, hosts: string[], wid: string, domain: string) {
-  const names = [...new Set(hosts.flatMap(host => namesUnder(host, domain)))];
+export async function hostOwners(db: Pick<DbExecutor, 'execute'>, hosts: string[], wid: string, domain: string) {
+  const names = [...new Set(hosts.flatMap(host => namesUnder(host, domain)))], list = JSON.stringify(hosts);
   const [routed, claims] = await Promise.all([
-    db.execute<{ host: string; own: boolean; name: string }>(sql`SELECT receiving_host AS host,workspace_id=${wid} AS own,name FROM domain_claims
-      WHERE receiving_host IN (SELECT jsonb_array_elements_text(${JSON.stringify(hosts)}::jsonb)) AND NOT (workspace_id=${wid} AND name=${domain})`),
+    db.execute<{ host: string; own: boolean; name: string }>(sql`SELECT m.receiving_host AS host,m.workspace_id=${wid} AS own,d.name FROM mailbox_domains m
+        JOIN operation_domains d ON d.id=m.domain_id AND d.workspace_id=m.workspace_id
+      WHERE m.receiving_host IN (SELECT jsonb_array_elements_text(${list}::jsonb)) AND m.status IN ('active','provisioning') AND NOT (m.workspace_id=${wid} AND d.name=${domain})
+      UNION ALL SELECT receiving_host,workspace_id=${wid},name FROM domain_claims
+      WHERE receiving_host IN (SELECT jsonb_array_elements_text(${list}::jsonb)) AND NOT (workspace_id=${wid} AND name=${domain})`),
     names.length ? db.execute<{ name: string }>(sql`SELECT DISTINCT name FROM domain_claims WHERE name IN (SELECT jsonb_array_elements_text(${JSON.stringify(names)}::jsonb)) AND workspace_id<>${wid} AND (ever_proven OR claim_scope='account')`) : { rows: [] },
   ]);
   const claimed = new Set(claims.rows.map(row => row.name));
@@ -125,70 +130,109 @@ const sameHosts = (a: MxReport, b: MxReport) => a.records.length > 0 && a.record
 /** A wildcard (*.domain) CNAME or MX answers for every subdomain without its own records. */
 const caughtByWildcard = (mx: MxReport, wildcard: MxReport | null) => !!wildcard && (mx.state === 'cname' ? wildcard.state === 'cname' && wildcard.target === mx.target : wildcard.state !== 'cname' && sameHosts(mx, wildcard));
 
-type HostedRow = { name: string; region: string; receiving_host: string | null; identity: (IdentityFacts & { receivingChoice?: string | null }) | null };
+/** A domain's receiving host as the checks read it: `own` is the domain's own row (its host floats with the suggestion until it routes). */
+export type ReceivingHostRow = { id: string; host: string; own: boolean; status: 'waiting_for_mx' | 'provisioning' | 'active' | 'disabled' | 'disabling' | 'failed'; lost_since: string | null; mx: MxReport | null; issue: ReceivingIssue | null };
+type HostedRow = { name: string; region: string; receiving_host: string | null; identity: (IdentityFacts & { receivingChoice?: string | null }) | null; hosts?: ReceivingHostRow[] };
+/** The host the domain's own row routes or waits on a BYO rule for: watched where it is, never moved. */
+export const establishedHost = (row: HostedRow) => {
+  const own = row.hosts?.find(h => h.own);
+  return own ? (own.status === 'active' || own.status === 'provisioning' ? own.host : null) : row.receiving_host;
+};
+/** Codes that mean a host can never receive here, whatever its MX says. */
+export const refusedCodes: ReadonlySet<ReceivingIssueCode> = new Set(['bane_record', 'host_taken', 'claimed', 'delegated']);
+export type HostObservation = { mx: MxReport; issue: ReceivingIssue | null };
 
 /**
- * One receiving observation for a hosted claim, from public DNS only. Used by "Check MX now" (domain.verify),
- * the hourly sweep (domain.mx) and an explicit choice. An established host is watched where it is: a conflict
- * that appears later is reported, never silently re-pointed. Otherwise the suggestion is the owner's choice,
- * the root when it already points here, or the first candidate that is free.
+ * One receiving observation for a hosted claim, from public DNS only, under one time budget: the domain's own row (`own`,
+ * null once the owner removed it) and every other host the domain receives on (`hosts`, by host). Used by "Check MX now"
+ * (domain.verify), the hourly sweep (domain.mx) and an explicit choice.
  */
-export async function observeReceiving(db: Pick<DbExecutor, 'execute'>, row: HostedRow, wid: string, unavailable: () => Error): Promise<ReceivingObservation> {
-  const domain = row.name, region = row.region, ses = row.identity?.ses, dns = dnsBudget(domain, region, unavailable);
+export type DomainObservation = { own: ReceivingObservation | null; hosts: Map<string, HostObservation> };
+export async function observeReceiving(db: Pick<DbExecutor, 'execute'>, row: HostedRow, wid: string, unavailable: () => Error): Promise<DomainObservation> {
+  const dns = dnsBudget(row.name, row.region, unavailable);
   try {
-    const candidates = receivingCandidates(domain);
-    const choice = row.identity?.receivingChoice ?? null;
-    if (choice && !row.receiving_host) return await inspectReceivingHost(db, row, wid, choice, unavailable, dns);
-    const previous = row.identity?.mx?.expected.name;
-    const order = [...new Set([...(previous && previous !== domain && previous.endsWith(`.${domain}`) ? [previous] : []), ...candidates])];
-    // Every lookup this check may need starts now, in parallel; the answers are then read in candidate order.
-    const ownersReady = hostOwners(db, [...new Set([...order, domain, ...(row.receiving_host ? [row.receiving_host] : [])])], wid, domain);
-    const root = dns.probe(domain);
-    const rootReason = (root: MxReport) => root.state === 'missing' || root.state === 'active' ? null
-      : `${domain} ${root.state === 'cname' ? `is a CNAME${root.target ? ` to ${root.target}` : ''}` : root.state === 'null_mx' ? 'publishes a null MX' : `already routes mail to ${root.records.map(r => r.host).filter(h => h !== root.expected.value).join(', ')}`}.`;
-    if (row.receiving_host) {
-      // An established host is reported on where it is, never moved. Only when it can't work, or another provider
-      // holds it, are the candidates checked for a free one to suggest.
-      const host = row.receiving_host, [{ mx, delegated }, owners] = await Promise.all([dns.probe(host), ownersReady]);
-      const blocked = refusal(host, domain, ses, region, owners, delegated, null);
-      const alternative = blocked || ['cname', 'conflict', 'null_mx'].includes(mx.state) ? await freeReceivingHost(db, row, wid, unavailable, host, dns) : null;
-      const issue = refusal(host, domain, ses, region, owners, delegated, alternative) ?? issueFor(host, mx, alternative, true);
-      // A subdomain host keeps explaining why it isn't the root (the root is read again: it may have changed).
-      const reason = mx.state === 'mixed' || host === domain ? null : rootReason((await root).mx);
-      return { mx, ...(mx.state === 'mixed' ? { note: mx.message } : reason ? { note: `${reason} Keep its DNS and publish this MX on ${host} instead.` } : {}), issue };
-    }
-    const owners = await ownersReady;
-    const usable = (host: string) => !baneRecordUse(host, domain, ses) && !owners.taken.has(host) && !owners.claimed.has(host);
-    const probes = new Map(order.filter(usable).map(host => [host, dns.probe(host)]));
-    const wildcard = dns.probe(`*.${domain}`).then(p => p.mx.state === 'missing' ? null : p.mx);
-    const rootMx = (await root).mx;
-    if (rootMx.state === 'active' && usable(domain)) return { mx: rootMx, issue: null };
-    const reasons: string[] = [], rootTaken = rootReason(rootMx);
-    if (rootTaken) reasons.push(rootTaken);
-    const noteFor = (host: string) => reasons.length ? `${reasons.join(' ')} ${rootTaken ? 'Keep its DNS and p' : 'P'}ublish this MX on ${host} instead.` : undefined;
-    let fallback: MxReport | undefined;
-    for (const host of order) {
-      const use = baneRecordUse(host, domain, ses), owner = owners.taken.get(host), claimed = owners.claimed.get(host);
-      if (use || owner || claimed) {
-        reasons.push(use ? `${host} is the ${use}.` : owner ? `${host} already receives mail ${owner.own ? `through ${owner.name}` : `in another ${productName} workspace`}.` : `${claimed === host ? host : claimed} is claimed by another ${productName} workspace.`);
-        continue;
-      }
-      const { mx, delegated } = await probes.get(host)!;
-      if (delegated) { reasons.push(`${host} is a delegated zone with its own name servers.`); continue; }
-      if (mx.state === 'missing' || mx.state === 'active') return { mx, note: noteFor(host), issue: null };
-      // Our MX is published here next to others: this is the host the owner picked, so flag it instead of moving on.
-      if (mx.state === 'mixed') return { mx, note: noteFor(host), issue: issueFor(host, mx, null, false) };
-      // Something answers here. A wildcard answers the same for every candidate, so stop at the first one it explains.
-      const any = await wildcard;
-      if (caughtByWildcard(mx, any)) return { mx, note: noteFor(host), issue: wildcardIssue(host, domain, any!) };
-      fallback ??= mx;
-      reasons.push(mx.state === 'cname' ? `${host} is a CNAME${mx.target ? ` to ${mx.target}` : ''}.` : `${providerOf(mx) ?? 'Another mail server'} receives mail for ${host}.`);
-    }
-    // Every candidate is in use: suggest the first one that DNS answered for, and say exactly what is there.
-    if (fallback) return { mx: fallback, issue: issueFor(fallback.expected.name, fallback, null, false) };
-    const host = order[0]!, { mx, delegated } = await dns.probe(host);
-    return { mx, issue: refusal(host, domain, ses, region, owners, delegated, null) };
+    const others = (row.hosts ?? []).filter(h => !h.own && h.status !== 'disabled' && h.status !== 'disabling');
+    const removed = row.hosts?.find(h => h.own)?.status === 'disabled';
+    const [own, hosts] = await Promise.all([removed ? null : observeOwn(db, row, wid, unavailable, dns, new Set(others.map(h => h.host))), inspectHosts(db, row, wid, others, dns)]);
+    return { own, hosts };
   } finally { dns.close(); }
+}
+
+/** Every other host where it is: its MX, a refusal (another claim, Nightmail's own names, delegation) or a wildcard. */
+async function inspectHosts(db: Pick<DbExecutor, 'execute'>, row: HostedRow, wid: string, hosts: ReceivingHostRow[], dns: Dns) {
+  const found = new Map<string, HostObservation>();
+  if (!hosts.length) return found;
+  const domain = row.name, ses = row.identity?.ses;
+  const wildcard = dns.probe(`*.${domain}`).then(p => p.mx.state === 'missing' ? null : p.mx);
+  const [probes, owners] = await Promise.all([Promise.all(hosts.map(h => dns.probe(h.host))), hostOwners(db, hosts.map(h => h.host), wid, domain)]);
+  for (const [index, h] of hosts.entries()) {
+    const { mx, delegated } = probes[index]!;
+    const refused = refusal(h.host, domain, ses, row.region, owners, delegated, null);
+    const caught = !refused && h.host !== domain && (mx.state === 'cname' || mx.state === 'conflict') && caughtByWildcard(mx, await wildcard);
+    found.set(h.host, { mx, issue: refused ?? (caught ? wildcardIssue(h.host, domain, (await wildcard)!) : issueFor(h.host, mx, null, h.status === 'active')) });
+  }
+  return found;
+}
+
+/**
+ * The domain's own row. A host it routes is watched where it is: a conflict that appears later is reported, never
+ * silently re-pointed. Otherwise the suggestion is the owner's choice, the root when it already points here, or the
+ * first candidate that is free and not one of the domain's other hosts (`others`).
+ */
+async function observeOwn(db: Pick<DbExecutor, 'execute'>, row: HostedRow, wid: string, unavailable: () => Error, dns: Dns, others: ReadonlySet<string>): Promise<ReceivingObservation> {
+  const domain = row.name, region = row.region, ses = row.identity?.ses, established = establishedHost(row);
+  const candidates = receivingCandidates(domain);
+  const choice = row.identity?.receivingChoice ?? null;
+  if (choice && !established && !others.has(choice)) return await inspectReceivingHost(db, row, wid, choice, unavailable, dns);
+  const previous = row.identity?.mx?.expected.name;
+  const order = [...new Set([...(previous && previous !== domain && previous.endsWith(`.${domain}`) ? [previous] : []), ...candidates])].filter(host => !others.has(host));
+  // Every lookup this check may need starts now, in parallel; the answers are then read in candidate order.
+  const ownersReady = hostOwners(db, [...new Set([...order, domain, ...(established ? [established] : [])])], wid, domain);
+  const root = dns.probe(domain);
+  const rootReason = (root: MxReport) => root.state === 'missing' || root.state === 'active' ? null
+    : `${domain} ${root.state === 'cname' ? `is a CNAME${root.target ? ` to ${root.target}` : ''}` : root.state === 'null_mx' ? 'publishes a null MX' : `already routes mail to ${root.records.map(r => r.host).filter(h => h !== root.expected.value).join(', ')}`}.`;
+  if (established) {
+    // An established host is reported on where it is, never moved. Only when it can't work, or another provider
+    // holds it, are the candidates checked for a free one to suggest.
+    const host = established, [{ mx, delegated }, owners] = await Promise.all([dns.probe(host), ownersReady]);
+    const blocked = refusal(host, domain, ses, region, owners, delegated, null);
+    const alternative = blocked || ['cname', 'conflict', 'null_mx'].includes(mx.state) ? await freeReceivingHost(db, row, wid, unavailable, host, dns) : null;
+    const issue = refusal(host, domain, ses, region, owners, delegated, alternative) ?? issueFor(host, mx, alternative, true);
+    // A subdomain host keeps explaining why it isn't the root (the root is read again: it may have changed).
+    const reason = mx.state === 'mixed' || host === domain ? null : rootReason((await root).mx);
+    return { mx, ...(mx.state === 'mixed' ? { note: mx.message } : reason ? { note: `${reason} Keep its DNS and publish this MX on ${host} instead.` } : {}), issue };
+  }
+  const owners = await ownersReady;
+  const usable = (host: string) => !others.has(host) && !baneRecordUse(host, domain, ses) && !owners.taken.has(host) && !owners.claimed.has(host);
+  const probes = new Map(order.filter(usable).map(host => [host, dns.probe(host)]));
+  const wildcard = dns.probe(`*.${domain}`).then(p => p.mx.state === 'missing' ? null : p.mx);
+  const rootMx = (await root).mx;
+  if (rootMx.state === 'active' && usable(domain)) return { mx: rootMx, issue: null };
+  const reasons: string[] = [], rootTaken = rootReason(rootMx);
+  if (rootTaken) reasons.push(rootTaken);
+  const noteFor = (host: string) => reasons.length ? `${reasons.join(' ')} ${rootTaken ? 'Keep its DNS and p' : 'P'}ublish this MX on ${host} instead.` : undefined;
+  let fallback: MxReport | undefined;
+  for (const host of order) {
+    const use = baneRecordUse(host, domain, ses), owner = owners.taken.get(host), claimed = owners.claimed.get(host);
+    if (use || owner || claimed) {
+      reasons.push(use ? `${host} is the ${use}.` : owner ? `${host} already receives mail ${owner.own ? `through ${owner.name}` : `in another ${productName} workspace`}.` : `${claimed === host ? host : claimed} is claimed by another ${productName} workspace.`);
+      continue;
+    }
+    const { mx, delegated } = await probes.get(host)!;
+    if (delegated) { reasons.push(`${host} is a delegated zone with its own name servers.`); continue; }
+    if (mx.state === 'missing' || mx.state === 'active') return { mx, note: noteFor(host), issue: null };
+    // Our MX is published here next to others: this is the host the owner picked, so flag it instead of moving on.
+    if (mx.state === 'mixed') return { mx, note: noteFor(host), issue: issueFor(host, mx, null, false) };
+    // Something answers here. A wildcard answers the same for every candidate, so stop at the first one it explains.
+    const any = await wildcard;
+    if (caughtByWildcard(mx, any)) return { mx, note: noteFor(host), issue: wildcardIssue(host, domain, any!) };
+    fallback ??= mx;
+    reasons.push(mx.state === 'cname' ? `${host} is a CNAME${mx.target ? ` to ${mx.target}` : ''}.` : `${providerOf(mx) ?? 'Another mail server'} receives mail for ${host}.`);
+  }
+  // Every candidate is in use: suggest the first one that DNS answered for, and say exactly what is there.
+  if (fallback) return { mx: fallback, issue: issueFor(fallback.expected.name, fallback, null, false) };
+  const host = order[0] ?? defaultReceivingHost(domain, ses), { mx, delegated } = await dns.probe(host);
+  return { mx, issue: refusal(host, domain, ses, region, owners, delegated, null) };
 }
 
 export function wildcardIssue(host: string, domain: string, wildcard: MxReport): ReceivingIssue {
@@ -199,7 +243,8 @@ export function wildcardIssue(host: string, domain: string, wildcard: MxReport):
 
 /** The first candidate with no MX, no CNAME, no delegation and no other use, checked in DNS in parallel. Null when every one is taken. */
 export async function freeReceivingHost(db: Pick<DbExecutor, 'execute'>, row: HostedRow, wid: string, unavailable: () => Error, except: string, dns: Dns) {
-  const domain = row.name, ses = row.identity?.ses, candidates = receivingCandidates(domain).filter(host => host !== except && !baneRecordUse(host, domain, ses));
+  const domain = row.name, ses = row.identity?.ses, candidates = receivingCandidates(domain).filter(host => host !== except && !baneRecordUse(host, domain, ses)
+    && !row.hosts?.some(h => !h.own && h.host === host && h.status !== 'disabled'));
   const probes = candidates.map(host => dns.probe(host)), owners = await hostOwners(db, candidates, wid, domain);
   for (const [index, host] of candidates.entries()) {
     if (owners.taken.has(host) || owners.claimed.has(host)) continue;

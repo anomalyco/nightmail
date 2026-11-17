@@ -30,6 +30,14 @@ export const settingsColumns = {
     // What sending still waits for (a card has no room for it beside the status); the table shows it in the Sending cell.
     { key: 'note', label: 'Setup', table: false, card: 'line' },
   ],
+  // A receiving host's card: the host and its status, then its addresses and catch-all; Remove is in the row's menu.
+  hosts: [
+    { key: 'host', label: 'Host', width: '38%', card: 'title' },
+    { key: 'status', label: 'Status', width: '24%', card: 'aside' },
+    { key: 'addresses', label: 'Addresses', width: '14%', card: 'field' },
+    { key: 'catchAll', label: 'Catch-all', card: 'field' },
+    { key: 'actions', label: '', align: 'right', width: 56, skeleton: <ControlSkeleton width={32} />, card: 'end' },
+  ],
   dns: [
     { key: 'type', label: 'Type', width: 80 },
     // A card shows the name in its title, beside the type.

@@ -78,7 +78,7 @@ export function baneApi(env: Env, which: 'support' | 'intake' = 'support') {
     /**
      * A reply in an email conversation, only to the reviewed recipients (Nightmail refuses a reply whose recipients changed).
      * addressId null: the address the message came in on (the intake key sees three). Omitted: SUPPORT_ADDRESS_ID, or, for a
-     * thread on another support address the key also holds (support@bane.mx after the move to nightmail.com), that address.
+     * thread on another support address the key also holds (support@bane.mx after the move to nightmail.dev), that address.
      */
     async reply(threadId: string, input: { replyToMessageId: string; text: string; to: string; subject?: string; addressId?: string | null }, idempotencyKey: string) {
       const send = (addressId: string | null, key: string) => call<{ id: string; threadId: string }>('POST', `/v1/inbound/threads/${encodeURIComponent(threadId)}/reply`, {

@@ -1,4 +1,4 @@
-import { and, eq, gte, inArray, sql, type SQL } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { S3Client } from '@aws-sdk/client-s3';
 import { serialize, type DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
@@ -7,8 +7,9 @@ import {mimeIndex} from './mailbox-mime-index.js';
 import { attachmentLinks, attachments as sendingAttachments, emails } from './db/sending.js';
 import { splitThreadingHeaders } from './custom-headers.js';
 import { domains } from './db/operations.js';
-import { regionalSender, regionalSending, unverifiedSender, verifiedClaim } from './domain-claims.js';
-import { claimsOnly, lockedSettings, lockSendScope, type ClaimsOnly, type SendScope } from './send-scope.js';
+import { regionalSending } from './domain-claims.js';
+import { lockSendScope } from './send-scope.js';
+import { actorJson, admission, admitted, type Admitted, type Refused } from './admission.js';
 import { claimReceives, connectionReady } from './states.js';
 import { mailAttachments, mailboxAddresses, mailboxDomains, mailboxes, mailboxMessages, mailMessages, mailThreads, type MailAddress, type SendLimits } from './db/mailbox.js';
 import { recordEvents, mailboxEventCtes } from './mailbox-events.js';
@@ -32,14 +33,17 @@ const ownsUpload = (wid: string, file: ResolvedAttachment) => file.sourceTemplat
   : file.storageKey === uploadKey(wid, file.id) || file.storageKey === `${wid}/attachments/${file.id}` || file.storageKey === `${wid}/live/attachments/${file.id}`;
 type MailboxRow = typeof mailboxes.$inferSelect;
 type MessageRow = typeof mailMessages.$inferSelect;
-const mailboxSender = (runtime:Runtime,locks:SendScope|ClaimsOnly,from:string,wid:SQL=sql`d.workspace_id`) => regionalSending(runtime)
-  ? sql`EXISTS (SELECT FROM ${regionalSender(runtime,locks,wid,from.split('@')[1]!.toLowerCase())} r WHERE r.verified AND r.connection IS NOT NULL)`
-  : verifiedClaim(wid,sql`d.region`,sql`${from.split('@')[1]!.toLowerCase()}::text`);
-
 /** Resolve to immutable sending uploads before admission, never inside a message transaction. */
 export async function resolveAttachments(runtime:Runtime, mailbox:Pick<MailboxRow,'id'|'workspaceId'|'domainId'>, items:AttachmentInput[],from:string):Promise<ResolvedAttachment[]> {
   const scope={workspaceId:mailbox.workspaceId}, out:ResolvedAttachment[]=[];
-  if(items.length && runtime.config.multiTenant && !(await runtime.db.execute(sql`SELECT 1 FROM mailbox_domains d WHERE d.id=${mailbox.domainId} AND d.workspace_id=${scope.workspaceId} AND ${mailboxSender(runtime,claimsOnly,from)}`)).rowCount)throw unverifiedSender();
+  // Before any attachment is written outside PostgreSQL: the send admission decision, checking only, on the sender
+  // in the mailbox domain's region. The send itself is decided again in its transaction.
+  if(items.length && runtime.config.multiTenant){
+    const region=regionalSending(runtime) ? sql`NULL::text` : sql`(SELECT region FROM mailbox_domains d WHERE d.id=${mailbox.domainId} AND d.workspace_id=${scope.workspaceId})`;
+    const mail=sql`jsonb_build_object('mails',jsonb_build_array(jsonb_build_object('host',${from.split('@')[1]!.toLowerCase()}::text,'region',${region},'kind','transactional','attachments','[]'::jsonb,'bodyBytes',0)))`;
+    const check=await admission(runtime,scope.workspaceId,actorJson({keyId:'',domains:[]}),{stage:'send',locks:'none'},mail);
+    admitted(runtime,(await runtime.db.execute<{s:Admitted|Refused}>(sql`SELECT ${check} AS s`)).rows[0]!.s,scope.workspaceId);
+  }
   for(const item of items){
     if ('content' in item){
       const { storeAttachmentBytes } = await wrapModuleLoad(() => import('./sending.js'));
@@ -207,18 +211,10 @@ export async function sendFromMailbox(runtime: Runtime, tx: DbExecutor, message:
       WHERE c.workspace_id=d.workspace_id AND c.region=d.region AND ${connectionReady(sql`c`)})` : sql`(SELECT r.bucket FROM mailbox_regions r WHERE r.region=d.region AND r.workspace_id=d.workspace_id)`;
   const { queueMailboxEmail } = await wrapModuleLoad(() => import('./sending.js'));
   const held = await lockSendScope(tx, message.scope.workspaceId);
-  const mx=runtime.config.multiTenant;
-  const domain=(await tx.execute<{id:string;region:string;bucket:string|null;verified:boolean}>(sql`${mx ? sql`WITH ${lockedSettings(held)} ` : sql``}SELECT d.id,d.region,${bucket} AS bucket,${mx ? mailboxSender(runtime,held,message.from,sql`s.workspace_id`) : sql`true`} AS verified
-    FROM mailbox_domains d ${mx ? sql`LEFT JOIN settings s ON s.workspace_id=d.workspace_id ` : sql``}WHERE d.id=${message.mailbox.domainId} AND d.workspace_id=${message.scope.workspaceId}`)).rows[0];
-  if (domain && !domain.verified) throw unverifiedSender(); // Before any attachment is written outside PostgreSQL.
-  if (!domain?.bucket) throw new ApiError(409, 'MAILBOX_DOMAIN_NOT_READY', 'The mailbox domain has no receiving setup; enable it again.');
-  if (!regionalSending(runtime) && message.region && domain.region !== message.region) throw new ApiError(422, 'MAILBOX_REGION_MISMATCH', 'Tracked mail must use the mailbox region.', 'region');
+  const domain=(await tx.execute<{id:string;region:string;bucket:string|null}>(sql`SELECT d.id,d.region,${bucket} AS bucket
+    FROM mailbox_domains d WHERE d.id=${message.mailbox.domainId} AND d.workspace_id=${message.scope.workspaceId}`)).rows[0];
   const messageRowId = message.protocolArchive?.mid??id('msg');
   const sendingIds=message.attachments.map(f=>f.id);
-  const files=await Promise.all(message.attachments.map(async(file,index)=>{
-    const attachmentId=`matt_${(await digest(`${messageRowId}:${index}`)).slice(0,32)}`;
-    return {id:attachmentId,...message.scope,messageId:messageRowId,filename:file.filename,contentType:file.contentType,sizeBytes:file.size,contentId:file.contentId,disposition:file.disposition as 'inline'|'attachment',sha256:file.checksum,sourceId:file.id,bucket:domain.bucket!,storageKey:sentMailKey(message.scope.workspaceId,domain.bucket!,lifecycle==='ephemeral'?current.id:null,messageRowId,attachmentId)};
-  }));
   const references = referencesHeader(message.references);
   const headers = [
     ...(message.inReplyTo ? [{ Name: 'In-Reply-To', Value: `<${message.inReplyTo}>` }] : []),
@@ -227,7 +223,15 @@ export async function sendFromMailbox(runtime: Runtime, tx: DbExecutor, message:
     ...message.headers.map(header => ({ Name: header.name, Value: header.value })),
   ];
   const fromName = message.fromName ?? message.mailbox.displayName;
-  const { emailId } = await queueMailboxEmail(runtime, tx, held, message.actor, { protocolEnvelope:!!message.protocolArchive,from: message.from, fromName: fromName ?? undefined, to: message.to, cc: message.cc, bcc: message.bcc, replyTo: message.replyTo, region: regionalSending(runtime)?message.region:domain.region, subject: message.subject, html: message.html, text: message.text, attachments: sendingIds, headers, tracking: message.tracking, screen: message.screen, sealed: message.sealed }, locked.replyAuthors);
+  // The send admission decision first, under the send locks held here: a refused sender is answered before the
+  // mailbox domain's own setup. Nothing it wrote survives a later refusal: the transaction rolls back.
+  const { emailId } = await queueMailboxEmail(runtime, tx, held, message.actor, { protocolEnvelope:!!message.protocolArchive,from: message.from, fromName: fromName ?? undefined, to: message.to, cc: message.cc, bcc: message.bcc, replyTo: message.replyTo, region: regionalSending(runtime)?message.region:domain?.region, subject: message.subject, html: message.html, text: message.text, attachments: sendingIds, headers, tracking: message.tracking, screen: message.screen, sealed: message.sealed }, locked.replyAuthors);
+  if (!domain?.bucket) throw new ApiError(409, 'MAILBOX_DOMAIN_NOT_READY', 'The mailbox domain has no receiving setup; enable it again.');
+  if (!regionalSending(runtime) && message.region && domain.region !== message.region) throw new ApiError(422, 'MAILBOX_REGION_MISMATCH', 'Tracked mail must use the mailbox region.', 'region');
+  const files=await Promise.all(message.attachments.map(async(file,index)=>{
+    const attachmentId=`matt_${(await digest(`${messageRowId}:${index}`)).slice(0,32)}`;
+    return {id:attachmentId,...message.scope,messageId:messageRowId,filename:file.filename,contentType:file.contentType,sizeBytes:file.size,contentId:file.contentId,disposition:file.disposition as 'inline'|'attachment',sha256:file.checksum,sourceId:file.id,bucket:domain.bucket!,storageKey:sentMailKey(message.scope.workspaceId,domain.bucket!,lifecycle==='ephemeral'?current.id:null,messageRowId,attachmentId)};
+  }));
   const now = new Date().toISOString();
   let threadId = message.threadId;
   if (!threadId) { threadId = id('thr'); await tx.insert(mailThreads).values({ id: threadId, ...message.scope, subject: normalizeSubject(message.subject).slice(0, 998), messageCount: 0, lastMessageAt: now }); }
@@ -268,7 +272,8 @@ export async function trackedAttachments(runtime:Runtime,actor:Actor,mailboxId:s
 export async function queueTrackedMailboxSend(runtime: Runtime, tx: DbExecutor, actor: Actor, mailboxId: string, input: SendRequest, field: 'replyAddressId' | 'replyMailboxId',files:ResolvedAttachment[]) {
   if (input.kind !== 'transactional' || input.template || !input.subject) throw new ApiError(422, 'MAILBOX_CONTENT_UNSUPPORTED', 'Use an explicit transactional subject and body for tracked sends.', field);
   const scope = { workspaceId: actor.workspaceId };
-  const receiving = runtime.config.multiTenant ? sql<boolean>`EXISTS (SELECT 1 FROM operation_domains d JOIN domain_claims dc ON dc.name=d.name AND dc.workspace_id=d.workspace_id WHERE d.id=${mailboxDomains.domainId} AND d.workspace_id=${mailboxDomains.workspaceId} AND dc.receiving_host=${mailboxDomains.receivingHost} AND ${claimReceives()})` : sql<boolean>`${mailboxDomains.status}='active'`;
+  // The address's own host must route (a domain receives on each of its hosts separately), and hosted, its claim may receive.
+  const receiving = runtime.config.multiTenant ? sql<boolean>`${mailboxDomains.status}='active' AND EXISTS (SELECT 1 FROM operation_domains d JOIN domain_claims dc ON dc.name=d.name AND dc.workspace_id=d.workspace_id WHERE d.id=${mailboxDomains.domainId} AND d.workspace_id=${mailboxDomains.workspaceId} AND ${claimReceives()})` : sql<boolean>`${mailboxDomains.status}='active'`;
   const [target] = await tx.select({ mailbox: mailboxes, receiving, region: mailboxDomains.region }).from(mailboxes).innerJoin(mailboxDomains, eq(mailboxDomains.id, mailboxes.domainId)).where(and(eq(mailboxes.workspaceId, scope.workspaceId), eq(mailboxes.id, mailboxId))).for('share', { of: mailboxDomains });
   if (!target) throw new ApiError(404, 'NOT_FOUND', 'Receivable address was not found.');
   if (!target.receiving) throw new ApiError(409, 'MAILBOX_DOMAIN_NOT_READY', 'The receiving domain must be active before starting a tracked conversation.', field);

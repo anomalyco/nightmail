@@ -8,7 +8,7 @@ import { fileTicket, notifyTeam, type TicketContext } from './tickets.js';
 import type { TicketInput, TicketType } from './agent/tools.js';
 import { addressHash, newId } from './tokens.js';
 import { log, logError } from './log.js';
-import { hostedDomain, productName } from '../../api/src/brand.js';
+import { addresses, productName } from '../../api/src/brand.js';
 
 // abuse@, privacy@ and legal@ (owner decision): straight into the ticket system, never to the AI agent and never
 // forwarded. One SupportIntake object per Nightmail thread at those addresses; there is no OpenCode here and no model call.
@@ -120,8 +120,8 @@ export class SupportIntake extends DurableObject<Env> {
     if (filed?.created) await notifyTeam(this.env, ctx, filed as Awaited<ReturnType<typeof fileTicket>>, input);
     // One fixed acknowledgement per sender per mailbox per day; never to automatic mail.
     if (!automatic && (await countToday(this.env, `sender:${hash}:ack:${next.mailbox}`, 1)).ok) {
-      const text = `Hi,\n\nThanks for writing to ${next.mailbox}@${hostedDomain}. We've received your message${filed ? ` and logged it as ${filed.id}` : ''}. A person at ${productName} will reply by email.\n\n${productName}`;
-      await api.reply(message.threadId ?? next.thread_id, { replyToMessageId: next.message_id, text, to: sender, subject: `Re: your message to ${next.mailbox}@${hostedDomain}`, addressId: null }, `ack-${next.message_id}`);
+      const text = `Hi,\n\nThanks for writing to ${addresses[next.mailbox]}. We've received your message${filed ? ` and logged it as ${filed.id}` : ''}. A person at ${productName} will reply by email.\n\n${productName}`;
+      await api.reply(message.threadId ?? next.thread_id, { replyToMessageId: next.message_id, text, to: sender, subject: `Re: your message to ${addresses[next.mailbox]}`, addressId: null }, `ack-${next.message_id}`);
     }
     set(filed ? 'done' : 'held');
   }

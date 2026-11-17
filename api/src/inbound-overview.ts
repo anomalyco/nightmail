@@ -106,7 +106,7 @@ type WorkspaceResult = { config: Partial<Config> | null; programs: Programs | nu
 
 export function registerInboundOverview(app: App, deps: Deps) {
   const RouteEntry = z.object({
-    id: z.string().describe('Address ID, route ID, <addressId>:<pattern> for an address pattern, or default:<domainId> for a domain default.'),
+    id: z.string().describe('Address ID, route ID, <addressId>:<pattern> for an address pattern, or default:<domainId> (default:<hostId> for a domain’s other receiving hosts) for a host’s default.'),
     kind: z.enum(KINDS),
     match: z.string().describe('The address or pattern mail is sent to.'),
     host: z.string(),
@@ -175,8 +175,9 @@ export function registerInboundOverview(app: App, deps: Deps) {
         FROM mail_routes r WHERE ${manage}::boolean AND r.workspace_id=${w}
           AND NOT EXISTS (SELECT FROM mailbox_addresses a WHERE a.workspace_id=${w} AND a.address=r.match AND a.kind<>'public')
         UNION ALL
-        SELECT 'default:'||d.domain_id, 'catch_all', 'api', '*@'||coalesce(d.receiving_host,d.name), coalesce(d.receiving_host,d.name), 5, NULL::text, NULL::text, d.domain_id, d.catch_all, NULL::text
-        FROM mailbox_domains d WHERE ${manage}::boolean AND d.workspace_id=${w} AND d.parent_id IS NULL AND d.status='active'
+        -- Every receiving host has its own catch-all: default:<domainId> for the domain's own row, default:<hostId> for its other hosts.
+        SELECT 'default:'||CASE WHEN d.parent_id IS NULL THEN d.domain_id ELSE d.id END, 'catch_all', 'api', '*@'||coalesce(d.receiving_host,d.name), coalesce(d.receiving_host,d.name), 5, NULL::text, NULL::text, d.domain_id, d.catch_all, NULL::text
+        FROM mailbox_domains d WHERE ${manage}::boolean AND d.workspace_id=${w} AND d.status='active'
           AND NOT EXISTS (SELECT FROM mail_routes r WHERE r.workspace_id=${w} AND r.match='*@'||coalesce(d.receiving_host,d.name))
       ), f AS (
         SELECT * FROM e WHERE (${host}::text IS NULL OR e.host=${host})

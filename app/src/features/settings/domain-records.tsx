@@ -78,7 +78,7 @@ export function domainState(domain: Domain) {
 }
 const allVerified = (records: DnsRecord[]) => records.length > 0 && records.every(record => record.status === 'verified')
 // Shown relative to the zone, as most DNS providers ask for it; copying gives the full name.
-const relativeHost = (name: string, domain: string) => name === domain ? '@' : name.endsWith(`.${domain}`) ? name.slice(0, -domain.length - 1) : name
+export const relativeHost = (name: string, domain: string) => name === domain ? '@' : name.endsWith(`.${domain}`) ? name.slice(0, -domain.length - 1) : name
 const fqdn = (name: string) => name.endsWith('.') ? name : `${name}.`
 export function zoneLines(records: DnsRecord[]) {
   return records.map(record => {

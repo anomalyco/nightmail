@@ -38,7 +38,7 @@ concurrency:
 jobs:
   authorize:
     name: Authorize
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     # Production waits here for a dev push CI that is still running (up to 25 minutes).
     timeout-minutes: 30
     permissions:
@@ -166,7 +166,7 @@ jobs:
     name: Pulumi ${{ needs.authorize.outputs.stage }}
     needs: authorize
     if: needs.authorize.outputs.pulumi == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: ${{ github.ref_name }}
     permissions:
@@ -175,7 +175,7 @@ jobs:
     env:
       STAGE: ${{ needs.authorize.outputs.stage }}
       AUTHORIZED_ATTEMPT: ${{ needs.authorize.outputs.attempt }}
-      # dev.bane.mx and everything behind it lives in anomaly-dev; production stays
+      # dev.nightmail.dev (and dev.bane.mx) and everything behind them live in anomaly-dev; production stays
       # in anomaly-production. Both the token issuer and every API call use this.
       CF_ACCOUNT_ID: ${{ needs.authorize.outputs.stage == 'dev' && 'd8e944f537ceef3f06a5bd3aec1d7a53' || '15d29c8639fd3733b1b5486a2acfd968' }}
       CF_R2_ENDPOINT: ${{ needs.authorize.outputs.stage == 'dev' && 'd8e944f537ceef3f06a5bd3aec1d7a53' || '15d29c8639fd3733b1b5486a2acfd968' }}.r2.cloudflarestorage.com
@@ -326,7 +326,7 @@ jobs:
       always() && needs.authorize.result == 'success' &&
       (needs.pulumi.result == 'success' || needs.pulumi.result == 'skipped') &&
       inputs.preview != true
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
@@ -355,7 +355,7 @@ jobs:
       - uses: ./.github/actions/build-release
         env:
           VITE_SUPPORT_CHAT: ${{ needs.authorize.outputs.stage == 'dev' && 'true' || 'staff' }}
-          VITE_PUBLIC_URL: ${{ needs.authorize.outputs.stage == 'dev' && 'https://dev.bane.mx' || 'https://bane.mx' }}
+          VITE_PUBLIC_URL: ${{ needs.authorize.outputs.stage == 'dev' && 'https://dev.nightmail.dev' || 'https://nightmail.dev' }}
 
       # The environment picks the stage. No variable or secret name carries a
       # stage prefix: each stage reads the same keys from its own nightmail/<stage>/
@@ -363,8 +363,8 @@ jobs:
       - name: Configure the stage
         run: |
           case "$STAGE" in
-            dev) public_url=https://dev.bane.mx; wrangler_config=wrangler.dev.jsonc ;;
-            production) public_url=https://bane.mx; wrangler_config=wrangler.prod.jsonc ;;
+            dev) public_url=https://dev.nightmail.dev; wrangler_config=wrangler.dev.jsonc ;;
+            production) public_url=https://nightmail.dev; wrangler_config=wrangler.prod.jsonc ;;
             *) echo "::error::unknown stage $STAGE"; exit 1 ;;
           esac
           {
@@ -525,7 +525,7 @@ jobs:
     name: Report the dev E2E failure
     needs: [authorize, deploy]
     if: always() && needs.authorize.outputs.stage == 'dev' && needs.deploy.outputs.e2e == 'failure'
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
@@ -557,7 +557,7 @@ jobs:
       !cancelled() && needs.authorize.result == 'success' &&
       (needs.pulumi.result == 'success' || needs.pulumi.result == 'skipped') &&
       inputs.preview != true && vars.SUPPORT_DEPLOY == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
@@ -592,8 +592,8 @@ jobs:
       - name: Configure the stage
         run: |
           case "$STAGE" in
-            dev) config=wrangler.dev.jsonc; database=nightmail-support-dev; url=https://support.dev.bane.mx ;;
-            production) config=wrangler.prod.jsonc; database=nightmail-support; url=https://support.bane.mx ;;
+            dev) config=wrangler.dev.jsonc; database=nightmail-support-dev; url=https://support.dev.nightmail.dev ;;
+            production) config=wrangler.prod.jsonc; database=nightmail-support; url=https://support.nightmail.dev ;;
             *) echo "::error::unknown stage $STAGE"; exit 1 ;;
           esac
           { echo "SUPPORT_CONFIG=$config"; echo "SUPPORT_DATABASE=$database"; echo "SUPPORT_URL=$url"; } >> "$GITHUB_ENV"
@@ -660,7 +660,7 @@ jobs:
       - name: Health check
         run: |
           for attempt in 1 2 3 4 5 6; do
-            if curl -fsS --max-time 10 "$SUPPORT_URL/health" | jq -e '.status == "ok"' > /dev/null; then exit 0; fi
+            if curl -fsS --max-time 10 --doh-url https://cloudflare-dns.com/dns-query "$SUPPORT_URL/health" | jq -e '.status == "ok"' > /dev/null; then exit 0; fi
             echo "Support health not ready (attempt $attempt)"
             sleep 10
           done

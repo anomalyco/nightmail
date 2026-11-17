@@ -35,11 +35,33 @@ Baseline `bb00802` and the working tree use the same local fixtures. Calls count
 | Campaign dispatch incl. finish | 43 → **41** (0) | 803 → 803 | 801,312 → 335,840 |
 | Inbound reply admission | 25 → 23 (1) | 11 → 13 | 5,047 → 5,225 |
 
-Hosted direct JSON sends with a normal API key use **one client statement** for authentication, the request budget, policy checks, the idempotency receipt and all envelopes. For bodies over 64 KiB with a cold credential fingerprint, authentication runs first to bound speculative parsing; subsequent direct admissions can fuse authentication again. A policy denial releases its new receipt without refunding the request charge; neither envelopes nor attachment links nor unsubscribe tokens are created. This is not a one-call claim for mailbox tracking, stored templates, self-hosted discovery or dashboard authentication. A screened Hosted singleton still needs a lease, external screen, fresh authorization/consent claim and outcome write (three statements with warm quota). No database lock crosses the classifier or SES call, and ambiguous acceptance is never automatically resent.
+Hosted direct JSON sends with a normal API key use **one client statement** for authentication, the request budget, policy checks, the idempotency receipt and all envelopes. For bodies over 64 KiB with a cold credential fingerprint, authentication runs first to bound speculative parsing; subsequent direct admissions can fuse authentication again. A policy denial releases its new receipt without refunding the request charge; neither envelopes nor attachment links nor unsubscribe tokens are created. Every other direct send (self-hosted, dashboard session, cold key, campaign test, the platform's notices) is that same statement after its own authentication; a stored template first renders through SES in the region a check-only decision resolves. Mailbox tracking authenticates and locks in its own transaction. A screened Hosted singleton still needs a lease, external screen, fresh authorization/consent claim and outcome write (three statements with warm quota). No database lock crosses the classifier or SES call, and ambiguous acceptance is never automatically resent.
 
 The previous audit-fix build took **46** calls for campaign dispatch and finish. The lease now returns attachment metadata once per immutable review, and small attachment pages can overlap within the shared byte limit. The acceptance fixture asserts at most **42** calls, a finished campaign and no per-recipient attachment copies. It measured **41** in the full run.
 
 **Campaign storage:** 5,438 → 872 logical bytes per accepted recipient, including its prepared recipient and envelope rows and private per-email attachment links. For 1M equivalent recipients that is **5.438 GB → 0.872 GB** (decimal; projection from measured tuples, not a 1M-row physical database size). Store the frozen draft, rendered base and attachment ownership once per review. The minimal envelope holds indexed delivery/search fields and kind, a deferred marker and, once claimed, its unique unsubscribe capability. No copied body, headers, attachment IDs or email attachment links. A 2,000 × 20 release went from failing to construct the bind list to one bounded recordset insert; the immutable review owns 20 links, not 40,000.
+
+### Send admission: one decision (2026-11-17)
+
+Every kind of send is decided by one SQL function, `send_admission` (migration 323): direct and batch sends, self-hosted and stored-template sends, mailbox sends, campaign tests, campaign launch, preparation and release. It returns the first rule that refuses, with its code and item, so TypeScript (`api/src/admission.ts`) only turns that into the API's error; no rule is re-run to explain a refusal. A campaign test or stored-template send with an Idempotency-Key claims it first, pending and committed, before it reads or renders the draft or template (`idempotent` with `prepare`); the transaction that writes the email runs the admission statement and completes the claim. A duplicate meanwhile is `IDEMPOTENCY_IN_PROGRESS`, and a retry replays the receipt even after the source changed. The claim, BEGIN, the completion and COMMIT are the extra calls. Its limits come from `api/src/send-limits.ts` as parameters. The query-budget fixture `every kind of send is admitted by one statement after authentication` asserts the direct-send rows below; the campaign and inbound rows come from the existing fixtures. Calls include authentication.
+
+| Path | Calls before → after |
+|---|---:|
+| Hosted, warm API key | 1 → 1 |
+| Hosted, cold API key | 2 → 2 |
+| Hosted, dashboard session | 2 → 2 |
+| Self-hosted send, API key | 6 → **2** |
+| Self-hosted batch, 100 | 6 → **2** |
+| Self-hosted, dashboard session | 6 → **2** |
+| Campaign test, self-hosted and Hosted | 9 → **3** (7 with an Idempotency-Key, incl. BEGIN/COMMIT; its replay 2) |
+| Stored-template send, dashboard session (after only) | 3 (7 with an Idempotency-Key, incl. BEGIN/COMMIT; its replay 2) |
+| Inbound reply (mailbox send) | 23 → **21** |
+| Campaign launch incl. capture | 16 → **15** |
+| Campaign preparation | 11 → **10** |
+| Campaign release | 13 → 13 |
+| Campaign dispatch incl. finish | 42 → 42 |
+
+The eight-shard fixture is unchanged: 36.0, 186.6 and 269.9/s at 50, 200 and 1,000/s, against 36.0, 185.7 and 267.7/s before.
 
 ### Feedback, webhook and screening operations
 

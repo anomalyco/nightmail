@@ -1,4 +1,4 @@
-// Bane support, production (support.bane.mx): the support agent's Worker beside bane-production in anomaly-production. Service bindings
+// Support, production (support.nightmail.dev; support.bane.mx stays a custom domain for links already sent): the support agent's Worker beside bane-production in anomaly-production. Service bindings
 // only work inside one account, so dev binds bane-dev and production binds bane-production. See support/README.md for
 // the one-time setup (D1 database, address, webhook, secrets) and the deploy.
 {
@@ -10,7 +10,7 @@
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": false,
   "preview_urls": false,
-  "routes": [{ "pattern": "support.bane.mx", "custom_domain": true }],
+  "routes": [{ "pattern": "support.nightmail.dev", "custom_domain": true }, { "pattern": "support.bane.mx", "custom_domain": true }],
   "minify": true,
   // The system prompt and the voice guide are Markdown files bundled as text.
   "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
@@ -42,9 +42,10 @@
   "triggers": { "crons": ["10 0 * * *"] },
   "vars": {
     "STAGE": "production",
-    "PUBLIC_URL": "https://support.bane.mx",
-    "DASHBOARD_ORIGINS": "https://bane.mx",
-    "BANE_ORIGIN": "https://bane.mx",
+    "PUBLIC_URL": "https://support.nightmail.dev",
+    // bane.mx until the cutover: its dashboard GETs redirect, but a tab opened before the switch can still start a chat.
+    "DASHBOARD_ORIGINS": "https://nightmail.dev,https://bane.mx",
+    "BANE_ORIGIN": "https://nightmail.dev",
     "SUPPORT_ADDRESS": "support@bane.mx",
     // The inbound address ID (mbx_…) of SUPPORT_ADDRESS in the platform workspace (ws_90b0…), created 2026-11-13.
     "SUPPORT_ADDRESS_ID": "mbx_7e7e64495349496691b2ca188cf48b6e",

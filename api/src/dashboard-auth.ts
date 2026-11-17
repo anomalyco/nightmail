@@ -1,7 +1,7 @@
 import {createRoute,z} from '@hono/zod-openapi';
 import {sql} from 'drizzle-orm';
 import {ApiError,digest,errors,isSimulatedSes,response,security,type App,type Runtime} from './core.js';
-import {accountBrowserRoute,accountSessionActor,accountSessionUser,migrateLegacyCookies,settleDefaultAccount} from './account-login.js';
+import {accountBrowserRoute,accountSessionActor,accountSessionUser,migrateLegacyCookies,requireDashboardOrigin,settleDefaultAccount} from './account-login.js';
 import {Workspace,WorkspaceRole,sessionMemberships} from './workspaces.js';
 import {ConnectionSummary,connectionSummary} from './provider-connections.js';
 import { clientIpHeader, productName, requestedScopes } from './brand.js';
@@ -11,9 +11,6 @@ export async function reserveSignIn(runtime:Runtime,headers:Headers) {
   const result=await runtime.db.execute(sql`SELECT reserve_auth_state(${peer}) AS ok`);
   if (!result.rows[0]?.ok) throw new ApiError(429,'AUTH_STATE_LIMIT','Too many pending sign-ins. Try again later.');
 }
-export function requireDashboardOrigin(runtime:Runtime,headers:Headers) {
-  if (headers.get('origin')!==new URL(runtime.config.publicUrl).origin) throw new ApiError(403,'CSRF_ORIGIN_INVALID','Use the dashboard.');
-}
 export async function verifiedDashboardUser(runtime:Runtime,headers:Headers,requireCurrentEmail=false) {
   // A bearer credential (API key, MCP or agent token) never rides the session cookie. It is refused with 403, as on
   // every other dashboard-only route (core.ts); 401 is for a caller with no session at all.
@@ -22,12 +19,12 @@ export async function verifiedDashboardUser(runtime:Runtime,headers:Headers,requ
   if (!user) throw new ApiError(401,'AUTH_REQUIRED',`Sign in to ${productName}.`);
   return {userId:user.id,email:user.email};
 }
-export async function invitationRecipient(runtime:Runtime,headers:Headers) {
-  requireDashboardOrigin(runtime,headers);
-  return verifiedDashboardUser(runtime,headers,true);
+export async function invitationRecipient(runtime:Runtime,request:Request) {
+  requireDashboardOrigin(runtime,request);
+  return verifiedDashboardUser(runtime,request.headers,true);
 }
 export const getDashboardActor = accountSessionActor;
-export { migrateLegacyCookies, settleDefaultAccount };
+export { migrateLegacyCookies, requireDashboardOrigin, settleDefaultAccount };
 export function registerDashboardAuth(app: App) {
   app.on(['GET','POST','OPTIONS'],'/api/auth/*',accountBrowserRoute);
   app.openapi(createRoute({method:'get',path:'/v1/me',operationId:'getCurrentIdentity',tags:['Auth'],security,

@@ -38,7 +38,7 @@ const labels: Record<string, string> = {
   'inbox_key.create': 'Created an API key', 'inbox_key.revoke': 'Revoked an API key', 'inbox_connection.create': 'Connected an agent to inboxes', 'app_password.create': 'Created an app password', 'app_password.revoke': 'Revoked an app password',
   'domain.create': 'Added a domain', 'domain.delete': 'Deleted a domain', 'domain.mail_from': 'Set a MAIL FROM domain', 'domain.receiving_host': 'Chose a receiving host',
   'inbound_domain.enable': 'Turned on receiving', 'inbound_domain.disable': 'Turned off receiving', 'inbound_domain.update': 'Updated a receiving domain',
-  'inbound_subdomain.create': 'Added a receiving subdomain', 'inbound_subdomain.update': 'Updated a receiving subdomain', 'inbound_subdomain.delete': 'Deleted a receiving subdomain',
+  'inbound_host.create': 'Added a receiving host', 'inbound_host.update': 'Updated a receiving host', 'inbound_host.delete': 'Removed a receiving host', 'inbound_subdomain.create': 'Added a receiving subdomain', 'inbound_subdomain.update': 'Updated a receiving subdomain', 'inbound_subdomain.delete': 'Deleted a receiving subdomain',
   'address.create': 'Created an address', 'address.update': 'Updated an address', 'address.delete': 'Deleted an address', 'address.release': 'Released an address',
   'inbox.create': 'Created an inbox', 'inbox.update': 'Updated an inbox', 'inbox.delete': 'Deleted an inbox',
   'webhook.create': 'Added a webhook', 'webhook.update': 'Updated a webhook', 'webhook.delete': 'Deleted a webhook', 'webhook.secret_reveal': 'Revealed a signing secret', 'webhook.secret_rotate': 'Rotated a signing secret',

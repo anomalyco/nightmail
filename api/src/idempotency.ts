@@ -1,11 +1,12 @@
 import { z } from '@hono/zod-openapi';
-import { sql, type SQL } from 'drizzle-orm';
+import { sql } from 'drizzle-orm';
 import { ApiError, digest, webhookUrlHint, type Ctx, type Database, type DbExecutor } from './core.js';
 
 /**
  * Idempotency-Key: one protocol on sending_idempotency for every caller. The create middleware below, idempotent()
- * (sends, campaigns, uploads, mailbox and thread sends, internal notices) and the one-statement direct admission
- * (direct_admission_state) all claim a key with the SQL function idempotency_claim (migration 317), and all answer
+ * (campaigns, uploads, mailbox and thread sends, stored-template sends and campaign tests) and the one-statement send
+ * admission (send_admission: direct and batch sends, internal notices) all claim a key with the SQL function
+ * idempotency_claim (migration 317), and all answer
  * with the one replay rule in replay():
  *
  * - a finished request replays its stored result;
@@ -50,17 +51,11 @@ export type ClaimState = { previous: Record<string, unknown> | null; hash?: stri
  */
 export const idempotencyGate = (path: string, key: string) => sql`CASE WHEN credential.grant_id IS NOT NULL OR NOT (credential.permissions ?| ARRAY['manage','send']) THEN true
   ELSE idempotency_admits(credential.workspace_id, credential.id, ${path}, ${key}) END`;
-/** The claim, an expression: NULL when this request now owns the key, otherwise its ClaimState. receipt is stored with it. */
-const claimKey = (s: IdempotencyScope, hash: string, receipt?: unknown) =>
-  sql`idempotency_claim(${s.workspaceId}, ${s.actorKeyId}, ${s.path}, ${s.key}, ${hash}, ${receipt === undefined ? null : JSON.stringify(receipt)}::jsonb)`;
+/** The claim, an expression: NULL when this request now owns the key, otherwise its ClaimState. */
+const claimKey = (s: IdempotencyScope, hash: string) => sql`idempotency_claim(${s.workspaceId}, ${s.actorKeyId}, ${s.path}, ${s.key}, ${hash}, NULL::jsonb)`;
 const where = (s: IdempotencyScope) => sql`workspace_id = ${s.workspaceId} AND actor_key_id = ${s.actorKeyId} AND path = ${s.path} AND request_key = ${s.key}`;
 async function claim(db: DbExecutor, s: IdempotencyScope, hash: string) {
   return (await db.execute<{ state: ClaimState | null }>(sql`SELECT ${claimKey(s, hash)} AS state`)).rows[0]!.state;
-}
-/** The committed claim, for a caller that has not claimed the key. No row: it is in flight, or free. */
-async function committed(db: DbExecutor, s: IdempotencyScope): Promise<ClaimState> {
-  const [row] = (await db.execute<ClaimState>(sql`SELECT result AS previous, request_hash AS hash, to_jsonb(created_at) #>> '{}' AS "createdAt" FROM sending_idempotency WHERE ${where(s)}`)).rows;
-  return row ?? { previous: null, busy: true };
 }
 const complete = (db: DbExecutor, s: IdempotencyScope, result: unknown) => db.execute(sql`UPDATE sending_idempotency SET result = ${JSON.stringify(result)}::jsonb WHERE ${where(s)}`);
 // Frees a claim that has no result: one whose request was refused or never wrote.
@@ -83,17 +78,15 @@ export function replay<T>(state: ClaimState, hash: string): T {
 /**
  * Runs work in one transaction under the request's key and stores its result with the claim. While the request
  * holds the key a duplicate answers IDEMPOTENCY_IN_PROGRESS; once it commits, the duplicate replays the result.
- * - receipt: the result is known before the work (preallocated IDs). The claim stores it, and lock takes the
- *   caller's lock in the claim's statement, only for the request that won the key (and alone without a key).
  * - prepare: I/O that must run outside the transaction (an object upload). Only the request that owns the key runs
  *   it: the claim commits first, pending, and the transaction stores the result with the write. A failure leaves no
  *   result, so it frees the key; a commit whose acknowledgement was lost keeps its result and replays.
  * - replayed: rechecks that the caller may still read a replayed result.
  */
 export async function idempotent<T extends Record<string, unknown>>(db: Database, request: IdempotentRequest & { workspaceId: string; actorKeyId: string }, body: unknown, work: (tx: DbExecutor) => Promise<T>,
-  options: { receipt?: { result: T; lock: (tx: DbExecutor, claimed?: SQL) => Promise<{ rows: unknown[] }> }; prepare?: () => Promise<void>; replayed?: (db: DbExecutor, result: T) => Promise<void> } = {}): Promise<T> {
-  const { receipt, prepare, replayed } = options;
-  if (request.key === undefined) { await prepare?.(); return db.transaction(async tx => { await receipt?.lock(tx); return work(tx); }); }
+  options: { prepare?: () => Promise<void>; replayed?: (db: DbExecutor, result: T) => Promise<void> } = {}): Promise<T> {
+  const { prepare, replayed } = options;
+  if (request.key === undefined) { await prepare?.(); return db.transaction(work); }
   const scope = { workspaceId: request.workspaceId, actorKeyId: request.actorKeyId, path: request.path, key: request.key };
   const hash = await requestHash(body);
   const answer = async (tx: DbExecutor, state: ClaimState) => { const result = replay<T>(state, hash); await replayed?.(tx, result); return result; };
@@ -106,12 +99,10 @@ export async function idempotent<T extends Record<string, unknown>>(db: Database
     } catch (error) { await release(db, scope).catch(() => {}); throw error; }
   }
   return db.transaction(async tx => {
-    // With a receipt, the claim and the caller's lock run in one statement.
-    const state = receipt ? (await receipt.lock(tx, sql`SELECT 1 FROM (SELECT ${claimKey(scope, hash, receipt.result)} AS state) c WHERE state IS NULL`)).rows.length ? null : await committed(tx, scope)
-      : await claim(tx, scope, hash);
+    const state = await claim(tx, scope, hash);
     if (state) return answer(tx, state);
     const result = await work(tx);
-    if (!receipt) await complete(tx, scope, result);
+    await complete(tx, scope, result);
     return result;
   });
 }

@@ -5,7 +5,7 @@ updated: 13 November 2026
 effective: 13 November 2026
 ---
 
-This policy explains how **Anomaly Innovations, Inc.** ("Anomaly", "we", "us") handles personal data in **Nightmail**, the email service at bane.mx: its website, API, dashboard, SDK, MCP server, and IMAP and SMTP access.
+This policy explains how **Anomaly Innovations, Inc.** ("Anomaly", "we", "us") handles personal data in **Nightmail**, the email service at nightmail.dev: its website, API, dashboard, SDK, MCP server, and IMAP and SMTP access.
 
 ## 1. Two roles: controller and processor
 
