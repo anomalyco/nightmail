@@ -108,6 +108,8 @@ export const mailboxMessages = pgTable('mailbox_messages', {
   mailboxId: text('mailbox_id').notNull(), messageId: text('message_id').notNull(), ...scope(), threadId: text('thread_id').notNull(),
   direction: text('direction').$type<'inbound' | 'outbound'>().notNull(), read: boolean('read').notNull().default(false), receivedAt: ts('received_at').notNull(),
   labels: text('labels').array().notNull().default([]),
+  /** The envelope recipients this inbox received the message for, as ingest routed them (migration 328); null when not recorded. */
+  recipients: text('recipients').array(),
 }, t => [primaryKey({ columns: [t.mailboxId, t.messageId] }), index('mailbox_messages_message_mailbox').on(t.messageId, t.mailboxId),
   index('mailbox_messages_tenant_thread_page').on(t.workspaceId, t.threadId, t.receivedAt.desc(), t.messageId.desc())]);
 

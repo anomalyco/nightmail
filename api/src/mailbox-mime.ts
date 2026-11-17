@@ -42,14 +42,10 @@ function workspaceMime(bytes:Uint8Array,region:string,recipients:string[]) {
   return dropHeaderFields(bytes,f=>{
     if (seenReceived || !f.name.startsWith('received:')) return blindField(f);
     seenReceived=true;
-    const field=f.size<=64*1024 ? f.text() : '', trace=field ? sesTrace(field) : null;
-    return !field || (trace?.region===region && !recipients.includes(trace.recipient));
+    const field=f.size<=64*1024 ? f.text().replace(/\r?\n[ \t]+/g,' ') : '';
+    const match=/\bby\s+inbound-smtp\.([\w-]+)\.amazonaws\.com\b[^;]*?\sfor\s+([^;]+);/i.exec(field);
+    return !field || (match?.[1]===region && !recipients.includes(match[2]!.trim().replace(/^<|>$/g,'').toLowerCase()));
   });
-}
-/** The region and envelope recipient an SES-added Received field names ("by inbound-smtp.<region>.amazonaws.com … for x@…;"), the recipient lower-cased; null for any other field. */
-export function sesTrace(field:string) {
-  const match=/\bby\s+inbound-smtp\.([\w-]+)\.amazonaws\.com\b[^;]*?\sfor\s+([^;]+);/i.exec(field.replace(/\r?\n[ \t]+/g,' '));
-  return match ? { region:match[1]!, recipient:match[2]!.trim().replace(/^<|>$/g,'').toLowerCase() } : null;
 }
 
 /** Inspect the exact bytes being copied. CopySourceIfMatch prevents substituting another object after inspection. */

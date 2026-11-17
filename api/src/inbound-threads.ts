@@ -1,6 +1,5 @@
-import type {MailHeader, Verdicts} from './db/mailbox.js';
+import type {Verdicts} from './db/mailbox.js';
 import { delegatedInbox } from './auth.js';
-import { sesTrace } from './mailbox-mime.js';
 import { mailObjectUrl } from './mail-object-route.js';
 import { boundMailBucket, isS3Bucket } from './mail-objects.js';
 import type { S3Client } from '@aws-sdk/client-s3';
@@ -68,30 +67,32 @@ function visibleLinks(value: MailboxAccess, filter: Filter) {
 // included, go to owner and admin dashboard sessions and unrestricted manage API keys only; MCP grants, agent tokens and
 // the API keys a grant created read mail without them. Shared with logs.ts.
 export const readsDelivery = (actor: Actor | undefined, v: MailboxAccess) => (actor?.credential==='dashboard' && actor.role!=='member') || (actor?.credential==='apiKey' && !actor.grantId && v.admin);
-// A key limited to addresses or an inbox reads them for its own addresses' mail only (messageScope): authorizeInboxKey's
-// access, with no actor. Not a key an MCP approval created (it reads on the approval's terms, as above), and not an MCP
-// tool call (delegatedInbox), which never offers them.
+// A key limited to addresses or an inbox gets the limited delivery view of its own addresses' mail (messageScope):
+// authorizeInboxKey's access, with no actor. Not a key an MCP approval created (it reads on the approval's terms, as
+// above), and not an MCP tool call (delegatedInbox), which never offers them.
 const ownDelivery = (c: Ctx, v: MailboxAccess) => !c.get('actor') && !delegatedInbox(c.env) && !v.admin && !v.grantId;
-// An envelope recipient is a limited reader's own when ingest would give it to one of its addresses this message reached:
-// the address or an alias exactly, its plus-tag base, or a wildcard rule.
-const ownRecipient = (v: MailboxAccess, f: Filter, addr: SQLWrapper) => sql`EXISTS (SELECT FROM mailbox_messages JOIN mailboxes own ON own.id=mailbox_messages.mailbox_id
-    WHERE ${visibleLinks(v,f)} AND mailbox_messages.message_id=mail_messages.id AND (
-      EXISTS (SELECT FROM mailbox_addresses a WHERE a.workspace_id=own.workspace_id AND a.mailbox_id=own.id AND a.address IN (lower(${addr}), regexp_replace(lower(${addr}),'[+][^@]*@','@')))
-      OR EXISTS (SELECT FROM jsonb_array_elements_text(own.rules) r(pattern) WHERE lower(${addr}) LIKE replace(replace(replace(replace(r.pattern,'!','!!'),'%','!%'),'_','!_'),'*','%') ESCAPE '!')))`;
-/** The envelope recipients a reader sees: all of them for a workspace-wide reader, only its own for a limited key. */
-export const visibleEnvelope = (v: MailboxAccess, f: Filter = {}) => v.admin ? sql<string[]>`${messages.envelopeTo}`
-  : sql<string[]>`coalesce((SELECT jsonb_agg(e.addr ORDER BY e.n) FROM jsonb_array_elements_text(${messages.envelopeTo}) WITH ORDINALITY e(addr,n) WHERE ${ownRecipient(v,f,sql`e.addr`)}),'[]'::jsonb)`;
-// The stored raw message is the workspace's copy: Bcc removed, and its SES trace field only names the workspace's own
-// recipients (copyWorkspaceRaw). A limited key gets it only when every envelope recipient is its own (an unknown, empty
-// envelope is not), so it can't learn from the trace field which other address the same delivery reached. Sent mail has
-// no receiving trace.
-const rawVisible = (v: MailboxAccess) => v.admin ? sql`true`
-  : sql`(${messages.direction}='outbound' OR jsonb_array_length(${messages.envelopeTo})>0 AND NOT EXISTS (SELECT FROM jsonb_array_elements_text(${messages.envelopeTo}) e(addr) WHERE NOT ${ownRecipient(v,{},sql`e.addr`)}))`;
-/** Headers for a limited key: the SES trace field goes when it names a recipient that isn't the key's own. */
-const ownHeaders = (headers: MailHeader[], own: string[]) => {
-  const first = headers.findIndex(h => h.name.toLowerCase() === 'received'), trace = first < 0 ? null : sesTrace(headers[first]!.value);
-  return trace && !own.some(addr => addr.toLowerCase() === trace.recipient) ? headers.filter((_, i) => i !== first) : headers;
-};
+/**
+ * The limited delivery view is an allow-list: these fields, each about the key's own delivery, and nothing else. A field
+ * the workspace view gains later stays out of it. No headers (trace and forwarding fields can name any recipient), no
+ * sizeBytes (it measures the workspace's raw copy), and from verdicts only the message's own SES results, never ritual,
+ * Omen or routing results.
+ */
+const limitedVerdicts = ['spf', 'dkim', 'dmarc', 'spam', 'virus'] as const;
+function limitedDelivery(row: typeof messages.$inferSelect, addresses: { id: string; address: string }[], envelopeTo: string[] | null, rawUrl: string | null, rawExpiresAt: string | null) {
+  const verdicts = Object.fromEntries(limitedVerdicts.flatMap(name => row.verdicts[name] === undefined ? [] : [[name, row.verdicts[name]]]));
+  return { addresses, ...(envelopeTo ? { envelopeTo } : {}), region: row.region, spam: row.spam, verdicts, sentAt: row.sentAt ? timestamp(row.sentAt) : null, rawUrl, rawExpiresAt };
+}
+// Which envelope recipients went to the reader's own inboxes, as ingest recorded them on each link (migration 328): never
+// derived from the envelope and today's addresses or rules. Null when any of its links has no record (stored earlier,
+// a sent copy, mail claimed from the unassigned store), so the field is left out rather than guessed.
+const recordedEnvelope = (v: MailboxAccess, f: Filter) => sql<string[] | null>`(SELECT CASE WHEN bool_and(${links.recipients} IS NOT NULL) THEN coalesce(jsonb_agg(DISTINCT got ORDER BY got) FILTER (WHERE got IS NOT NULL),'[]'::jsonb) END
+  FROM ${links} LEFT JOIN LATERAL unnest(${links.recipients}) got ON true WHERE ${visibleLinks(v,f)} AND mailbox_messages.message_id=mail_messages.id)`;
+// The raw message is the workspace's copy and can name any recipient of the delivery. A limited key gets it only for
+// received mail when every inbox the delivery reached is one it reads (live, not held, in its scope) with a recorded
+// recipient list, and those lists cover every envelope recipient (none went unassigned).
+const limitedRaw = (v: MailboxAccess) => sql`(${messages.direction}='inbound' AND jsonb_array_length(${messages.envelopeTo})>0
+  AND NOT EXISTS (SELECT FROM ${links} WHERE mailbox_messages.message_id=mail_messages.id AND NOT (${visibleLinks(v,{})} AND ${links.recipients} IS NOT NULL))
+  AND NOT EXISTS (SELECT FROM jsonb_array_elements_text(${messages.envelopeTo}) e(addr) WHERE NOT EXISTS (SELECT FROM mailbox_messages got WHERE got.message_id=mail_messages.id AND e.addr=ANY(got.recipients))))`;
 // Which stored messages a reader can see, and the receiving addresses each was delivered to. Shared with the unified
 // logs (logs.ts), so both lists apply the same rule.
 export const accessibleMessages = (v: MailboxAccess, f: Filter) => and(eq(messages.workspaceId,v.workspaceId),
@@ -216,8 +217,8 @@ export function registerInboundThreadReads(app: App, access: (c: Ctx, permission
   const addressLinks = (v: MailboxAccess, f: Filter) => sql<string[]>`ARRAY(SELECT ${links.mailboxId} FROM ${links} WHERE ${visibleLinks(v, f)} AND mailbox_messages.message_id=mail_messages.id ORDER BY ${links.mailboxId})`;
   const accessible = accessibleMessages;
   // Received Logs inspect the entire workspace, including SMTP envelopes and unassigned mail: readsDelivery lifts the
-  // reader to the workspace. A limited key keeps its own scope, so it sees its addresses' mail and never unassigned mail.
-  const includeDelivery = z.enum(['true','false']).optional().describe('Include delivery details: envelope recipients, region and spam; on one message also headers, verdicts and the raw message link. Owner and admin sessions and unrestricted live manage API keys get them for every stored message, unassigned mail included. An API key limited to addresses or an inbox gets them for its addresses’ mail only: addresses and envelopeTo list only its own, and rawUrl is null when the same delivery also reached an address it cannot read. Other credentials, and keys an MCP approval created, get 403.');
+  // reader to the workspace. A limited key keeps its own scope and gets only limitedDelivery's fields.
+  const includeDelivery = z.enum(['true','false']).optional().describe('Include delivery details. Owner and admin sessions and unrestricted live manage API keys get them for every stored message, unassigned mail included: addresses, envelopeTo, region and spam, and on one message also headers, verdicts, sentAt, sizeBytes, rawUrl and rawExpiresAt. An API key limited to addresses or an inbox gets them only for mail its addresses can read, and only these fields: addresses (its own); envelopeTo (the recipients delivered to its own inboxes, as recorded at delivery, and left out for mail stored before that was recorded and for sent mail); region; spam; and on one message verdicts (spf, dkim, dmarc, spam and virus only), sentAt, rawUrl and rawExpiresAt (null unless the message was received, every inbox it reached is one the key reads, and every envelope recipient was recorded on them). It never gets headers or sizeBytes. Other credentials, and keys an MCP approval created, get 403.');
   function messageScope(c: Ctx, delivery?: string) {
     const v=access(c,'read');
     if (delivery!=='true') return v;
@@ -237,9 +238,9 @@ export function registerInboundThreadReads(app: App, access: (c: Ctx, permission
   app.openapi(createRoute({ method:'get', path:'/v1/inbound/messages', operationId:'listInboundMessages', tags, security, summary:'Search received and sent messages', description:'Newest first; default inbound. Unassigned stored mail is visible only to a workspace administrator without an address filter.',
     request:{query:PageQuery.extend({ includeDelivery,region:z.string().max(40).optional(),threadId:Id.optional(),direction:z.enum(['inbound','outbound']).default('inbound'),q:z.string().trim().min(1).max(200).optional() })},responses:{200:response(page(MessageListItem).openapi('InboundMessagePage')),...errors} }), async c=>{
     const q=c.req.valid('query'),v=messageScope(c,q.includeDelivery),after=decodeCursor(q.cursor);
-    const rows=await c.env.db.select({ ...metadataFields,...(q.includeDelivery==='true' ? {region:messages.region,spam:messages.spam,to:messages.to,envelopeTo:visibleEnvelope(v,q),addresses:deliveryAddresses(v,q)} : {}),fromAddress:messages.fromAddress,fromName:messages.fromName,addressIds:addressLinks(v,q),at:preciseTime(messages.receivedAt) }).from(messages).where(and(accessible(v,q),eq(messages.direction,q.direction),q.region?eq(messages.region,q.region):undefined,q.threadId?eq(messages.threadId,q.threadId):undefined,
+    const rows=await c.env.db.select({ ...metadataFields,...(q.includeDelivery==='true' ? {region:messages.region,spam:messages.spam,to:messages.to,envelopeTo:v.admin?sql<string[]|null>`${messages.envelopeTo}`:recordedEnvelope(v,q),addresses:deliveryAddresses(v,q)} : {}),fromAddress:messages.fromAddress,fromName:messages.fromName,addressIds:addressLinks(v,q),at:preciseTime(messages.receivedAt) }).from(messages).where(and(accessible(v,q),eq(messages.direction,q.direction),q.region?eq(messages.region,q.region):undefined,q.threadId?eq(messages.threadId,q.threadId):undefined,
       q.q?sql`mail_messages.search @@ websearch_to_tsquery('simple',${q.q})`:undefined,after?sql`(${messages.receivedAt}, ${messages.id}) < (${after[0]}::timestamptz,${after[1]})`:undefined)).orderBy(desc(messages.receivedAt),desc(messages.id)).limit(q.limit+1);
-    const last=rows[q.limit-1];return c.json({data:rows.slice(0,q.limit).map(({at,fromName,fromAddress,...row})=>({...row,receivedAt:timestamp(at),from:{name:fromName,address:fromAddress}})),nextCursor:rows.length>q.limit&&last?encodeCursor(last.at,last.id):null},200);
+    const last=rows[q.limit-1];return c.json({data:rows.slice(0,q.limit).map(({at,fromName,fromAddress,envelopeTo,...row})=>({...row,...(envelopeTo?{envelopeTo}:{}),receivedAt:timestamp(at),from:{name:fromName,address:fromAddress}})),nextCursor:rows.length>q.limit&&last?encodeCursor(last.at,last.id):null},200);
   });
   const Attachment = z.object({id:Id,filename:z.string(),contentType:z.string(),size:z.number().int(),disposition:z.string(),contentId:z.string().nullable(),url:z.string().nullable().optional()});
   const DeliveryDetail = deliverySchema.omit({to:true}).extend({rawUrl:z.string().nullable(),rawExpiresAt:z.string().nullable(),sentAt:z.string().nullable(),sizeBytes:z.number().int().nullable(),headers:z.array(z.object({name:z.string(),value:z.string()})),verdicts:z.record(z.string(),z.union([z.string(),z.boolean()]))}).partial();
@@ -250,13 +251,16 @@ export function registerInboundThreadReads(app: App, access: (c: Ctx, permission
     const body=(html:string|null)=>q.includeHtml==='true'&&html?{html,htmlTooComplex:!boundedHtmlFragment(html,'document')}:{html:null,htmlTooComplex:false};
     const auth=(row:{verdicts:Verdicts|null;automated:boolean})=>q.includeAuthentication==='true'?authenticationView(row):{};
     if (q.includeDelivery==='true') {
-      const [result]=await c.env.db.select({row:messages,addresses:deliveryAddresses(v,q),addressIds:addressLinks(v,q),envelopeTo:visibleEnvelope(v,q),raw:sql<boolean>`${rawVisible(v)}`,isRead:sql<boolean>`coalesce((SELECT bool_and(${links.read}) FROM ${links} WHERE ${visibleLinks(v,q)} AND mailbox_messages.message_id=mail_messages.id),false)`}).from(messages).where(and(eq(messages.id,id),accessible(v,q)));
+      const [result]=await c.env.db.select({row:messages,addresses:deliveryAddresses(v,q),addressIds:addressLinks(v,q),
+        envelopeTo:v.admin?sql<null>`NULL`:recordedEnvelope(v,q),raw:v.admin?sql<boolean>`true`:sql<boolean>`${limitedRaw(v)}`,
+        isRead:sql<boolean>`coalesce((SELECT bool_and(${links.read}) FROM ${links} WHERE ${visibleLinks(v,q)} AND mailbox_messages.message_id=mail_messages.id),false)`}).from(messages).where(and(eq(messages.id,id),accessible(v,q)));
       if (!result) throw new ApiError(404,'NOT_FOUND','Message was not found.');
-      const {row,addresses,addressIds,envelopeTo,raw,isRead}=result;
+      const {row,addresses,addressIds,isRead}=result;
       const files=await c.env.db.select().from(mailAttachments).where(eq(mailAttachments.messageId,id)).orderBy(asc(mailAttachments.id));
-      const {rawUrl,rawExpiresAt,urls}=await deliveryLinks(c.env,row,files,raw);
-      return c.json({...messageView(row,addressIds,isRead),addresses,envelopeTo,region:row.region,spam:row.spam,headers:v.admin?row.headers:ownHeaders(row.headers,envelopeTo),verdicts:row.verdicts,sentAt:row.sentAt?timestamp(row.sentAt):null,sizeBytes:row.sizeBytes,rawUrl,...body(row.html),...auth(row),
-        rawExpiresAt,attachments:files.map((f,i)=>({id:f.id,filename:f.filename,contentType:f.contentType,size:f.sizeBytes,disposition:f.disposition,contentId:f.contentId,url:urls[i]!}))},200);
+      const {rawUrl,rawExpiresAt,urls}=await deliveryLinks(c.env,row,files,result.raw);
+      const content={...messageView(row,addressIds,isRead),...body(row.html),...auth(row),attachments:files.map((f,i)=>({id:f.id,filename:f.filename,contentType:f.contentType,size:f.sizeBytes,disposition:f.disposition,contentId:f.contentId,url:urls[i]!}))};
+      if (!v.admin) return c.json({...content,...limitedDelivery(row,addresses,result.envelopeTo,rawUrl,rawExpiresAt)},200);
+      return c.json({...content,addresses,envelopeTo:row.envelopeTo,region:row.region,spam:row.spam,headers:row.headers,verdicts:row.verdicts,sentAt:row.sentAt?timestamp(row.sentAt):null,sizeBytes:row.sizeBytes,rawUrl,rawExpiresAt},200);
     }
     const [row] = await c.env.db.select({...messageFields,verdicts:messages.verdicts,automated:messages.automated,addressIds:addressLinks(v,q),isRead:sql<boolean>`coalesce((SELECT bool_and(${links.read}) FROM ${links} WHERE ${visibleLinks(v,q)} AND mailbox_messages.message_id=mail_messages.id),false)`}).from(messages).where(and(eq(messages.id,id),accessible(v,q)));
     if (!row) throw new ApiError(404, 'NOT_FOUND', 'Message was not found.');
@@ -270,7 +274,7 @@ export function registerInboundThreadReads(app: App, access: (c: Ctx, permission
     if(!f?.region)throw new ApiError(404,'NOT_FOUND','Attachment not found.');return c.redirect((await signedUrl(c.env,v.workspaceId,'att',f.region,f.bucket,f.key,f.filename)).url,307);
   });
   app.get('/v1/inbound/messages/:messageId/raw',async c=>{
-    const v=messageScope(c,'true'),mid=c.req.param('messageId');const [m]=await c.env.db.select({region:messages.region,bucket:messages.rawBucket,key:messages.rawKey}).from(messages).where(and(accessible(v,{}),eq(messages.id,mid),rawVisible(v),sql`${messages.verdicts}->>'virus'='PASS' AND (${messages.lifecycle}='kept' OR least(${messages.createdAt},${messages.receivedAt})>now()-interval '90 days')`));
+    const v=messageScope(c,'true'),mid=c.req.param('messageId');const [m]=await c.env.db.select({region:messages.region,bucket:messages.rawBucket,key:messages.rawKey}).from(messages).where(and(accessible(v,{}),eq(messages.id,mid),v.admin?undefined:limitedRaw(v),sql`${messages.verdicts}->>'virus'='PASS' AND (${messages.lifecycle}='kept' OR least(${messages.createdAt},${messages.receivedAt})>now()-interval '90 days')`));
     if(!m?.region||!m.bucket||!m.key)throw new ApiError(404,'NOT_FOUND','Raw message not found.');return c.redirect((await signedUrl(c.env,v.workspaceId,'raw',m.region,m.bucket,m.key,mid+'.eml')).url,307);
   });
   app.openapi(createRoute({method:'get',path:'/v1/inbound/messages/{messageId}/attachments/{attachmentId}',operationId:'getInboundAttachment',tags,security,summary:'Download an attachment from a visible message',
