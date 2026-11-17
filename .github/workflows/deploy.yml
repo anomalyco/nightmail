@@ -38,7 +38,7 @@ concurrency:
 jobs:
   authorize:
     name: Authorize
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     # Production waits here for a dev push CI that is still running (up to 25 minutes).
     timeout-minutes: 30
     permissions:
@@ -166,7 +166,7 @@ jobs:
     name: Pulumi ${{ needs.authorize.outputs.stage }}
     needs: authorize
     if: needs.authorize.outputs.pulumi == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: ${{ github.ref_name }}
     permissions:
@@ -326,7 +326,7 @@ jobs:
       always() && needs.authorize.result == 'success' &&
       (needs.pulumi.result == 'success' || needs.pulumi.result == 'skipped') &&
       inputs.preview != true
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
       contents: read
@@ -525,7 +525,7 @@ jobs:
     name: Report the dev E2E failure
     needs: [authorize, deploy]
     if: always() && needs.authorize.outputs.stage == 'dev' && needs.deploy.outputs.e2e == 'failure'
-    runs-on: blacksmith-2vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       contents: read
@@ -557,7 +557,7 @@ jobs:
       !cancelled() && needs.authorize.result == 'success' &&
       (needs.pulumi.result == 'success' || needs.pulumi.result == 'skipped') &&
       inputs.preview != true && vars.SUPPORT_DEPLOY == 'true'
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
       contents: read
