@@ -15,6 +15,8 @@
   // The system prompt and the voice guide are Markdown files bundled as text.
   "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
   "durable_objects": { "bindings": [{ "name": "CONVERSATION", "class_name": "SupportConversation" }, { "name": "INTAKE", "class_name": "SupportIntake" }] },
+  // Which version answers: the deploy asks a candidate at 0% for its readiness by version override (src/readiness.ts).
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "migrations": [{ "tag": "transfer-from-bane-support-dev", "transferred_classes": [
     { "from_script": "bane-support-dev", "from": "SupportConversation", "to": "SupportConversation" },
     { "from_script": "bane-support-dev", "from": "SupportIntake", "to": "SupportIntake" }

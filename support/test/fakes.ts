@@ -14,6 +14,8 @@ const calls = [];
 const used = new Set();
 const shared = new Set();
 let grants = 0;
+// A support key that can't use 'adr_stale' yet answers 404, as Nightmail does, until /__cover (the secrets replaced).
+let staleCovered = false;
 const ok = (body, status = 200) => ({ status, body, requestId: 'req_' + '0'.repeat(32), retryAfter: null });
 const handoff = token => {
   // Test handoffs are "handoff:<id>:<userId>:<workspaceId>:<share>".
@@ -70,6 +72,7 @@ export default {
   async fetch(request) {
     const url = new URL(request.url);
     if (url.pathname === '/__calls') return Response.json(calls);
+    if (url.pathname === '/__cover') { staleCovered = true; return Response.json({ ok: true }); }
     const body = request.method === 'POST' ? await request.json() : null;
     calls.push(['api', request.method, url.pathname, body, request.headers.get('authorization'), request.headers.get('idempotency-key')]);
     // Like Nightmail: inbox keys get an attachment as a short-lived signed link (on Nightmail's origin for R2-stored mail), and
@@ -95,6 +98,9 @@ export default {
         msg_abuse_s1: ['thr_s1', 's1@spoof.test', 'FAIL', 'abuse@dev.bane.mx', 'Spam 1', 'spam'], msg_abuse_s2: ['thr_s2', 's2@spoof.test', 'FAIL', 'abuse@dev.bane.mx', 'Spam 2', 'spam'],
         msg_abuse_s3: ['thr_s3', 's3@spoof.test', 'FAIL', 'abuse@dev.bane.mx', 'Spam 3', 'spam'], msg_legal_pass_1: ['thr_legal_pass', 'counsel@firm.test', 'PASS', 'legal@dev.bane.mx', 'Subpoena 2', 'Preserve records.'],
         msg_privacy_bcc_1: ['thr_privacy', 'dpo@corp.test', 'PASS', 'someone@corp.test', 'Data request', 'Please export my data.'],
+        msg_legal_stale_1: ['thr_legal_stale', 'counsel@law.test', 'PASS', 'legal@dev.nightmail.dev', 'Preserve records', 'Please preserve records for account Y.'],
+        msg_legal_stale_2: ['thr_legal_stale', 'counsel@law.test', 'PASS', 'legal@dev.nightmail.dev', 'Re: Preserve records', 'Following up.'],
+        msg_legal_stale_3: ['thr_legal_stale', 'counsel@law.test', 'PASS', 'legal@dev.nightmail.dev', 'Re: Preserve records', 'Following up again.'],
       }[id] ?? [];
       const [threadId = 'thr_other', from = 'ada@acme.test', dmarc = 'PASS', to = 'support@dev.bane.mx', subject = 'Bounces from Gmail?', body = 'Why are Gmail bounces up this week?'] = table.map(v => v ?? undefined);
       const auto = id.includes('auto');
@@ -102,6 +108,7 @@ export default {
       const authentication = url.searchParams.get('includeAuthentication') === 'true' ? { authentication: { spf: 'PASS', dkim: null, dmarc }, automated: auto } : {};
       return Response.json({ id, threadId, direction: 'inbound', subject, from: { name: null, address: from }, to: [to], text: body, replyText: body, messageId: '<' + id + '@mail.test>', ...authentication, attachments });
     }
+    if (request.method === 'POST' && url.pathname === '/v1/inbound/threads' && body.addressId === 'adr_stale' && !staleCovered) return Response.json({ error: { code: 'NOT_FOUND', message: 'Receiving address was not found.' } }, { status: 404 });
     if (request.method === 'POST' && url.pathname === '/v1/inbound/threads') return Response.json({ id: 'msg_new', threadId: 'thr_new_' + calls.length }, { status: 202 });
     if (request.method === 'POST' && /^\\/v1\\/inbound\\/threads\\/[^/]+\\/reply$/.test(url.pathname)) return Response.json({ id: 'msg_reply', threadId: url.pathname.split('/')[4] }, { status: 202 });
     return Response.json({ error: { code: 'NOT_FOUND' } }, { status: 404 });

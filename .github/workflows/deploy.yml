@@ -592,11 +592,11 @@ jobs:
       - name: Configure the stage
         run: |
           case "$STAGE" in
-            dev) config=wrangler.dev.jsonc; database=nightmail-support-dev; url=https://support.dev.nightmail.dev ;;
-            production) config=wrangler.prod.jsonc; database=nightmail-support; url=https://support.nightmail.dev ;;
+            dev) config=wrangler.dev.jsonc; worker=nightmail-support-dev; database=nightmail-support-dev; url=https://support.dev.nightmail.dev ;;
+            production) config=wrangler.prod.jsonc; worker=nightmail-support; database=nightmail-support; url=https://support.nightmail.dev ;;
             *) echo "::error::unknown stage $STAGE"; exit 1 ;;
           esac
-          { echo "SUPPORT_CONFIG=$config"; echo "SUPPORT_DATABASE=$database"; echo "SUPPORT_URL=$url"; } >> "$GITHUB_ENV"
+          { echo "SUPPORT_CONFIG=$config"; echo "SUPPORT_WORKER=$worker"; echo "SUPPORT_DATABASE=$database"; echo "SUPPORT_URL=$url"; } >> "$GITHUB_ENV"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0
@@ -648,6 +648,42 @@ jobs:
             sleep 10
           done
           echo "::error::D1 kept refusing the token"; exit 1
+
+      # Readiness before any traffic moves (support/src/readiness.ts): the build is uploaded as a candidate and added to
+      # the deployment at 0%, where it carries the deployed secrets. Asked by version override with this job's OIDC token,
+      # it proves those secrets and the routes fit its configuration (production; dev has nothing to check). Not ready:
+      # the deployment goes back to the current version alone and the deploy fails, naming what is missing (never a
+      # secret). Ready: the usual deploy below replaces both.
+      - name: Support readiness (a candidate at 0% with the deployed secrets)
+        working-directory: support
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ steps.cloudflare.outputs.token }}
+          SHA: ${{ needs.authorize.outputs.sha }}
+        run: |
+          set -euo pipefail
+          source ../.github/scripts/cloudflare-retry.sh
+          wrangler=./node_modules/.bin/wrangler upload="$RUNNER_TEMP/support-upload.ndjson" ready="$RUNNER_TEMP/support-ready.json"
+          WRANGLER_OUTPUT_FILE_PATH="$upload" cloudflare_retry "$wrangler" versions upload --config "$SUPPORT_CONFIG" --tag "${SHA:0:12}" --message "Readiness candidate $SHA" > /dev/null
+          candidate=$(jq -r 'select(.type == "version-upload") | .version_id' "$upload" | tail -1)
+          current=$("$wrangler" deployments status --config "$SUPPORT_CONFIG" --json | jq -r '[.versions[] | select(.percentage == 100)][0].version_id')
+          [[ $candidate =~ ^[0-9a-f-]{36}$ && $current =~ ^[0-9a-f-]{36}$ ]] || { echo "::error::Could not read the candidate ($candidate) or the current ($current) support version"; exit 1; }
+          cloudflare_retry "$wrangler" versions deploy "$current@100%" "$candidate@0%" --config "$SUPPORT_CONFIG" --yes --message "Readiness candidate for $SHA" > /dev/null
+          # Any failure from here on puts the current version back alone.
+          trap 'cloudflare_retry "$wrangler" versions deploy "$current@100%" --config "$SUPPORT_CONFIG" --yes --message "Readiness failed for $SHA" > /dev/null' EXIT
+          token=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$SUPPORT_URL" | jq -r .value)
+          echo "::add-mask::$token"
+          # The 0% deployment reaches each location in a few seconds; until then the override is ignored (another version answers).
+          for attempt in $(seq 1 18); do
+            curl -sS --max-time 20 --doh-url https://cloudflare-dns.com/dns-query -o "$ready" -H "Authorization: Bearer $token" \
+              -H "Cloudflare-Workers-Version-Overrides: $SUPPORT_WORKER=\"$candidate\"" "$SUPPORT_URL/ready" || true
+            if jq -e --arg v "$candidate" '.version == $v' "$ready" > /dev/null 2>&1; then break; fi
+            echo "The candidate isn't answering yet (attempt $attempt)"; sleep 10
+          done
+          if ! jq -e --arg v "$candidate" '.version == $v' "$ready" > /dev/null 2>&1; then echo "::error::The candidate never answered $SUPPORT_URL/ready"; exit 1; fi
+          if [[ $STAGE == production ]] && ! jq -e '.checked == true' "$ready" > /dev/null; then echo "::error::Production support must check its readiness: set SUPPORT_KEY_ADDRESSES"; exit 1; fi
+          if ! jq -e '.ok == true' "$ready" > /dev/null; then jq -r '.missing[] | "::error title=Support not ready::" + .' "$ready"; exit 1; fi
+          trap - EXIT
+          echo "Support is ready: $(jq -c '{version, checked}' "$ready")"
 
       - name: Deploy the support Worker
         working-directory: support

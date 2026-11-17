@@ -15,6 +15,8 @@
   // The system prompt and the voice guide are Markdown files bundled as text.
   "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
   "durable_objects": { "bindings": [{ "name": "CONVERSATION", "class_name": "SupportConversation" }, { "name": "INTAKE", "class_name": "SupportIntake" }] },
+  // Which version answers: the deploy asks a candidate at 0% for its readiness by version override (src/readiness.ts).
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
   "migrations": [{ "tag": "transfer-from-bane-support", "transferred_classes": [
     { "from_script": "bane-support", "from": "SupportConversation", "to": "SupportConversation" },
     { "from_script": "bane-support", "from": "SupportIntake", "to": "SupportIntake" }
@@ -56,6 +58,12 @@
     // bane.mx's three stay listed (and in BANE_INTAKE_INBOX_KEY) until the cutover; acknowledgements go out from the
     // address the mail came in on.
     "INTAKE_ADDRESSES": "abuse@nightmail.dev,privacy@nightmail.dev,legal@nightmail.dev,abuse@bane.mx,privacy@bane.mx,legal@bane.mx",
+    // The deploy's readiness check (src/readiness.ts): a new version takes traffic only once BANE_SUPPORT_INBOX_KEY covers
+    // exactly these support addresses, BANE_INTAKE_INBOX_KEY exactly INTAKE_ADDRESSES, and every one of them routes to its
+    // own inbox and its webhook (support-agent and intake).
+    "SUPPORT_KEY_ADDRESSES": "support@nightmail.dev,support@bane.mx",
+    "SUPPORT_WEBHOOK_ID": "mwh_a5e6746e689e485f8fefae014381d83e",
+    "INTAKE_WEBHOOK_ID": "mwh_23169b7a048b4b878956fb69508fe4c8",
     // Console's inference gateway (Anthropic Messages API). The key is the CONSOLE_GATEWAY_KEY secret.
     "GATEWAY_URL": "https://opencode.ai/inference/anthropic/v1"
   },

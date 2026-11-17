@@ -21,6 +21,8 @@ export interface Env {
   UPLOADS: R2Bucket;
   /** Optional: downscales large screenshots before the model sees them (Cloudflare Images binding). */
   IMAGES?: ImagesBinding;
+  /** Which deployed version answers (the deploy's readiness check asks a candidate by version override). */
+  CF_VERSION_METADATA?: WorkerVersionMetadata;
   /** Tests only: where model requests go instead of the network (a fake gateway). Never set in a deployed config. */
   MODEL_FAKE?: Fetcher;
 
@@ -38,6 +40,12 @@ export interface Env {
   INTAKE_ADDRESSES: string;
   /** Where tickets are emailed. */
   TICKET_TO: string;
+  /** The deploy's readiness check (readiness.ts): the addresses BANE_SUPPORT_INBOX_KEY must cover, exactly (SUPPORT_ADDRESS
+   *  and earlier support addresses whose threads it still answers), and the webhooks the support and intake routes go to.
+   *  Unset: nothing to check (dev). */
+  SUPPORT_KEY_ADDRESSES?: string;
+  SUPPORT_WEBHOOK_ID?: string;
+  INTAKE_WEBHOOK_ID?: string;
   /** Console's inference gateway, Anthropic Messages API base (https://opencode.ai/inference/anthropic/v1). The model is pinned in code (agent/opencode.ts). */
   GATEWAY_URL: string;
 

@@ -37,7 +37,7 @@ const baseEnv = (overrides: Record<string, unknown> = {}) => ({
   CONSOLE_GATEWAY_KEY: text(GATEWAY_KEY), SUPPORT_ROOT_SECRET: text(ROOT), BANE_INBOUND_WEBHOOK_SECRET: text(WEBHOOK_SECRET), BANE_SUPPORT_INBOX_KEY: text(`bane_mbx_${'7'.repeat(64)}`),
   CONVERSATION: { type: 'durable-object' as const, worker: 'support', exportName: 'SupportConversation' },
   INTAKE: { type: 'durable-object' as const, worker: 'support', exportName: 'SupportIntake' },
-  INTAKE_ADDRESSES: text('abuse@dev.bane.mx,privacy@dev.bane.mx,legal@dev.bane.mx'), BANE_INTAKE_WEBHOOK_SECRET: text(INTAKE_SECRET), BANE_INTAKE_INBOX_KEY: text(`bane_mbx_${'8'.repeat(64)}`),
+  INTAKE_ADDRESSES: text('abuse@dev.nightmail.dev,privacy@dev.nightmail.dev,legal@dev.nightmail.dev,abuse@dev.bane.mx,privacy@dev.bane.mx,legal@dev.bane.mx'), BANE_INTAKE_WEBHOOK_SECRET: text(INTAKE_SECRET), BANE_INTAKE_INBOX_KEY: text(`bane_mbx_${'8'.repeat(64)}`),
   // The main suite runs many conversations as one person in one day: caps high here, tested low in their own instance.
   LIMIT_TICKETS_PER_PERSON: text('50'), LIMIT_TURNS_PER_PERSON: text('1000'), LIMIT_MAIL_PER_SENDER: text('200'), LIMIT_CONFIRMS_PER_ADDRESS: text('20'), STAFF_RECHECK_SECONDS: text('6'),
   DB: { type: 'd1' as const, id: 'support-test' },
@@ -377,7 +377,7 @@ describe('support Worker', () => {
       assert.ok(await db.prepare("SELECT id FROM tickets WHERE type = 'legal' AND title = 'Subpoena 2'").first(), 'legal@ is not starved by abuse@.');
       const held = await db.prepare("SELECT channel, reason, sender, dmarc FROM overflow WHERE message_id = 'msg_abuse_s3'").first<any>();
       assert.deepEqual(held, { channel: 'abuse', reason: 'tickets for abuse@', sender: 's3@spoof.test', dmarc: 'FAIL' }, 'Kept, not dropped.');
-      assert.equal((await replies('thr_s3', caps))[0][3].text, "Hi,\n\nThanks for writing to abuse@nightmail.dev. We've received your message. A person at Nightmail will reply by email.\n\nNightmail");
+      assert.equal((await replies('thr_s3', caps))[0][3].text, "Hi,\n\nThanks for writing to abuse@dev.bane.mx. We've received your message. A person at Nightmail will reply by email.\n\nNightmail");
       const buckets = (await db.prepare("SELECT key, n FROM daily_counters WHERE key LIKE '%:mail' ORDER BY key").all<{ key: string; n: number }>()).results;
       assert.ok(buckets.some(b => b.key === 'unauthenticated:abuse:mail' && b.n === 3) && !buckets.some(b => b.key.startsWith('sender:') && b.n === 3), `Spoofed senders share one bucket: ${JSON.stringify(buckets)}`);
       const open = async () => {
@@ -434,6 +434,40 @@ describe('support Worker', () => {
     } finally { await caps.dispose(); }
   }, 180_000);
 
+  test('a team notification that fails (a stale address key) is sent on the retry, before the sender is acknowledged', async () => {
+    // Review #371 P1: support deployed before its key covers SUPPORT_ADDRESS_ID, so Nightmail answers the team email 404.
+    // The retry used to find the ticket, skip the notification, acknowledge and mark the message done.
+    const stale = new Miniflare({ cf: false, telemetry: { enabled: false }, workers: [worker('support', baseEnv({ SUPPORT_ADDRESS_ID: text('adr_stale') })),
+      { config: { name: 'fake-bane', compatibilityDate: '2026-09-08', manifest: { mainModule: 'bane.js', modules: { 'bane.js': { type: 'esm', contents: FAKE_BANE } } }, env: {} } }] } as never);
+    try {
+      await migrate(stale);
+      const db = await stale.getD1Database('DB', 'support');
+      const hook = (id: string) => signedHook(id, 'thr_legal_stale', 'counsel@law.test', { intake: true, to: 'legal@dev.nightmail.dev', instance: stale });
+      const attempts = async () => (await fakeCalls(stale)).filter(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[3].addressId === 'adr_stale');
+      const notified = async (id: string) => (await db.prepare('SELECT notified_at FROM tickets WHERE id = ?').bind(id).first<{ notified_at: number | null }>())!.notified_at;
+      assert.equal((await hook('msg_legal_stale_1')).status, 200);
+      const ticket = await eventually(() => db.prepare("SELECT id FROM tickets WHERE type = 'legal' AND title = 'Preserve records'").first<{ id: string }>().then(r => r ?? undefined));
+      assert.ok(ticket && await eventually(async () => (await attempts()).length >= 1 || undefined), 'The team email is attempted and refused.');
+      // A second message wakes the queue at once: the first message is retried and its team email attempted again.
+      assert.equal((await hook('msg_legal_stale_2')).status, 200);
+      assert.ok(await eventually(async () => (await attempts()).length >= 2 || undefined), 'The retry sends the team email again.');
+      assert.ok((await attempts()).every(c => c[3].subject.includes(ticket.id) && c[5] === `ticket-${ticket.id}`), 'The same email, once per ticket.');
+      assert.equal(await notified(ticket.id), null);
+      assert.equal((await replies('thr_legal_stale', stale)).length, 0, 'No acknowledgement before the team knows.');
+      // The secrets are replaced: the next attempt notifies the team, then acknowledges the sender once.
+      await (await stale.getWorker('fake-bane')).fetch('http://fake-bane/__cover');
+      assert.equal((await hook('msg_legal_stale_3')).status, 200);
+      const ack = await eventually(async () => (await replies('thr_legal_stale', stale))[0]);
+      assert.ok(ack && await notified(ticket.id), 'Notified, then acknowledged.');
+      // Review #371 P2: named for the address it was sent to (the second intake domain here), and sent from it.
+      assert.equal(ack[3].subject, 'Re: your message to legal@dev.nightmail.dev');
+      assert.match(ack[3].text, /^Hi,\n\nThanks for writing to legal@dev\.nightmail\.dev\. We've received your message and logged it as tkt_/);
+      assert.equal(ack[3].addressId, undefined);
+      await new Promise(r => setTimeout(r, 1000));
+      assert.equal((await replies('thr_legal_stale', stale)).length, 1, 'One acknowledgement for the three messages.');
+    } finally { await stale.dispose(); }
+  }, 120_000);
+
   test('abuse@, privacy@, legal@: straight to typed tickets, no model, the team emailed, one fixed acknowledgement', async () => {
     const before = recorded.length;
     assert.equal((await signedHook('msg_abuse_1', 'thr_abuse', 'reporter@isp.test', { intake: true, to: 'abuse@dev.bane.mx' })).status, 200);
@@ -442,8 +476,8 @@ describe('support Worker', () => {
     const db = await mf.getD1Database('DB', 'support');
     const ticket = await db.prepare("SELECT * FROM tickets WHERE type = 'abuse_report' ORDER BY created_at DESC").first<any>();
     assert.deepEqual([ticket.title, ticket.severity, JSON.parse(ticket.details).topic, JSON.parse(ticket.customer)], ['Spam from your customer', 'P3', 'abuse', { verified: false, sender: 'reporter@isp.test', dmarc: 'PASS' }]);
-    assert.equal(ack[3].text, `Hi,\n\nThanks for writing to abuse@nightmail.dev. We've received your message and logged it as ${ticket.id}. A person at Nightmail will reply by email.\n\nNightmail`);
-    assert.equal(ack[3].subject, 'Re: your message to abuse@nightmail.dev'); assert.equal(ack[3].addressId, undefined, 'Replies from the address it came in on.');
+    assert.equal(ack[3].text, `Hi,\n\nThanks for writing to abuse@dev.bane.mx. We've received your message and logged it as ${ticket.id}. A person at Nightmail will reply by email.\n\nNightmail`);
+    assert.equal(ack[3].subject, 'Re: your message to abuse@dev.bane.mx', 'Named for the address it was sent to.'); assert.equal(ack[3].addressId, undefined, 'Replies from the address it came in on.');
     assert.equal(ack[4], `Bearer bane_mbx_${'8'.repeat(64)}`, 'With the intake key, not the support key.');
     const team = (await fakeCalls()).find(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[3].subject === `[Nightmail abuse] ${ticket.id}: Spam from your customer (P3)`);
     assert.ok(team, 'The team gets "[Nightmail abuse] …".');
@@ -457,7 +491,7 @@ describe('support Worker', () => {
     // legal@ without a DMARC pass: P2, marked unverified everywhere.
     assert.equal((await signedHook('msg_legal_nodmarc_1', 'thr_legal', 'lawyer@firm.test', { intake: true, to: 'legal@dev.bane.mx' })).status, 200);
     const legalAck = await eventually(async () => (await replies('thr_legal'))[0]);
-    assert.match(legalAck[3].text, /^Hi,\n\nThanks for writing to legal@nightmail\.dev\./);
+    assert.match(legalAck[3].text, /^Hi,\n\nThanks for writing to legal@dev\.bane\.mx\./);
     const legal = await db.prepare("SELECT * FROM tickets WHERE type = 'legal'").first<any>();
     assert.equal(legal.severity, 'P2');
     const legalMail = (await fakeCalls()).find(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[3].subject === `[Nightmail legal] [UNVERIFIED] ${legal.id}: Subpoena (P2)`);

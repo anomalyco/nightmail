@@ -28,17 +28,19 @@ export class SupportIntake extends DurableObject<Env> {
     this.sql = ctx.storage.sql;
     this.sql.exec(`CREATE TABLE IF NOT EXISTS intake_inbox (message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, mailbox TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'new', attempts INTEGER NOT NULL DEFAULT 0, received_at INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS intake_meta (id INTEGER PRIMARY KEY CHECK (id = 1), conversation_id TEXT NOT NULL);`);
+    // The address the message was sent to, for the acknowledgement (rows queued before it was kept have none).
+    if (!this.sql.exec("SELECT 1 FROM pragma_table_info('intake_inbox') WHERE name = 'address'").toArray().length) this.sql.exec('ALTER TABLE intake_inbox ADD COLUMN address TEXT');
   }
 
-  async enqueue(input: { threadId: string; messageId: string; mailbox: Mailbox }) {
-    this.sql.exec('INSERT INTO intake_inbox (message_id, thread_id, mailbox, received_at) VALUES (?, ?, ?, ?) ON CONFLICT (message_id) DO NOTHING', input.messageId, input.threadId, input.mailbox, Date.now());
+  async enqueue(input: { threadId: string; messageId: string; mailbox: Mailbox; address?: string }) {
+    this.sql.exec('INSERT INTO intake_inbox (message_id, thread_id, mailbox, address, received_at) VALUES (?, ?, ?, ?, ?) ON CONFLICT (message_id) DO NOTHING', input.messageId, input.threadId, input.mailbox, input.address ?? null, Date.now());
     await this.ctx.storage.setAlarm(Date.now());
     return { ok: true };
   }
 
   override async alarm() {
     for (;;) {
-      const next = this.sql.exec<{ message_id: string; thread_id: string; mailbox: Mailbox; attempts: number }>("SELECT message_id, thread_id, mailbox, attempts FROM intake_inbox WHERE state = 'new' ORDER BY received_at LIMIT 1").toArray()[0];
+      const next = this.sql.exec<{ message_id: string; thread_id: string; mailbox: Mailbox; address: string | null; attempts: number }>("SELECT message_id, thread_id, mailbox, address, attempts FROM intake_inbox WHERE state = 'new' ORDER BY received_at LIMIT 1").toArray()[0];
       if (!next) return;
       this.sql.exec('UPDATE intake_inbox SET attempts = attempts + 1 WHERE message_id = ?', next.message_id);
       try { await this.process(next); }
@@ -62,7 +64,7 @@ export class SupportIntake extends DurableObject<Env> {
     return row!.id;
   }
 
-  private async process(next: { message_id: string; thread_id: string; mailbox: Mailbox }) {
+  private async process(next: { message_id: string; thread_id: string; mailbox: Mailbox; address: string | null }) {
     const api = baneApi(this.env, 'intake'), set = (state: string) => {
       this.sql.exec('UPDATE intake_inbox SET state = ? WHERE message_id = ?', state, next.message_id);
       log('info', { event: 'email', channel: next.mailbox, state, messageId: next.message_id });
@@ -111,17 +113,21 @@ export class SupportIntake extends DurableObject<Env> {
     // Tickets come from separate budgets (R1): a verified customer's from the verified reserve, anyone else's from this
     // address's own budget, so spoofed abuse@ mail can't use up legal@, privacy@ or a customer's escalation.
     const exists = await this.env.DB.prepare('SELECT id FROM tickets WHERE conversation_id = ?').bind(conversationId).first();
-    let filed: { id: string; created: boolean } | null = null;
+    let filed: { id: string; created: boolean; notified: boolean } | null = null;
     if (!exists) {
       const allowed = await ticketAllowed(this.env, { verifiedUserId: verified ? customer.userId : null, mailbox: next.mailbox, sender, dmarcPass });
       if (!allowed.ok) await holdOverCap(this.env, { channel: next.mailbox, reason: allowed.reason, sender, dmarc, subject: message.subject ?? null, text: message.text ?? null, messageId: next.message_id, threadId: next.thread_id });
       else filed = await fileTicket(this.env, ctx, input);
     } else filed = await fileTicket(this.env, ctx, input);
-    if (filed?.created) await notifyTeam(this.env, ctx, filed as Awaited<ReturnType<typeof fileTicket>>, input);
+    // Until the team's email went out (notified_at), every attempt sends it; it throws, so the message is retried and
+    // the sender isn't acknowledged before the team knows.
+    if (filed && !filed.notified) await notifyTeam(this.env, ctx, filed as Awaited<ReturnType<typeof fileTicket>>, input);
     // One fixed acknowledgement per sender per mailbox per day; never to automatic mail.
     if (!automatic && (await countToday(this.env, `sender:${hash}:ack:${next.mailbox}`, 1)).ok) {
-      const text = `Hi,\n\nThanks for writing to ${addresses[next.mailbox]}. We've received your message${filed ? ` and logged it as ${filed.id}` : ''}. A person at ${productName} will reply by email.\n\n${productName}`;
-      await api.reply(message.threadId ?? next.thread_id, { replyToMessageId: next.message_id, text, to: sender, subject: `Re: your message to ${addresses[next.mailbox]}`, addressId: null }, `ack-${next.message_id}`);
+      // Named for the address it was sent to, and sent from it (addressId null).
+      const wrote = next.address ?? addresses[next.mailbox];
+      const text = `Hi,\n\nThanks for writing to ${wrote}. We've received your message${filed ? ` and logged it as ${filed.id}` : ''}. A person at ${productName} will reply by email.\n\n${productName}`;
+      await api.reply(message.threadId ?? next.thread_id, { replyToMessageId: next.message_id, text, to: sender, subject: `Re: your message to ${wrote}`, addressId: null }, `ack-${next.message_id}`);
     }
     set(filed ? 'done' : 'held');
   }

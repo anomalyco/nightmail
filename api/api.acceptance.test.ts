@@ -5624,6 +5624,41 @@ describe('Hosted MCP OAuth and tools', () => {
     });
   });
 
+  test('Support readiness: only the binding reads what its keys (by hash) cover and its addresses\' routes, in the platform workspace', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const wid = runtime.config.workspaceId, hex = (s: string) => createHash('sha256').update(s).digest('hex');
+      Object.assign(runtime.config, { multiTenant: true, allowedSubjects: [], staffGoogleDomains: [], platformDomainWorkspace: wid });
+      const app = (await import('./src/app.js')).createApp();
+      const { supportPlatform, supportPlatformAllows } = await import('./src/support-platform.js');
+      const platform = supportPlatform(async req => app.fetch(req, { ...runtime, platformCaller: 'bane-support' }), () => runtime.config);
+      const [mdom, sbox, abox, obox] = ['mdom', 'sbox', 'abox', 'obox'].map(name => unique(`ready-${name}-`)), host = `${unique('ready')}.example`;
+      const support = `support@${host}`, abuse = `abuse@${host}`, other = `other@${host}`, live = `nm_mbx_${'1'.repeat(64)}`, revoked = `nm_mbx_${'2'.repeat(64)}`;
+      await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status) VALUES($1,$2,$1,$3,$4,'active')", [mdom, wid, host, REGION]);
+      for (const [box, address] of [[sbox, support], [abox, abuse], [obox, other]]) await db.query('INSERT INTO mailboxes(id,workspace_id,domain_id,address) VALUES($1,$2,$3,$4)', [box, wid, mdom, address]);
+      await db.query(`INSERT INTO mailbox_keys(id,workspace_id,name,hash,prefix,mailbox_ids,permissions,revoked_at) VALUES ($1,$2,'live',$3,'nm_mbx_11111111',$4,'["read","send"]',NULL),
+        ($5,$2,'revoked',$6,'nm_mbx_22222222',$7,'["read"]',now())`, [unique('mbk'), wid, hex(live), JSON.stringify([sbox, obox]), unique('mbk'), hex(revoked), JSON.stringify([abox])]);
+      await db.query("INSERT INTO mail_routes(id,workspace_id,domain_id,match,destinations) VALUES($1,$2,$3,$4,$5)", [unique('rte'), wid, mdom, support, JSON.stringify([sbox, 'mwh_fixture'])]);
+
+      const reply = await platform.readiness([hex(live), hex(revoked)], [support, abuse, `nobody@${host}`]);
+      assert.equal(reply.status, 200, JSON.stringify(reply.body));
+      assert.deepEqual([...reply.body.keys].sort((a, b) => a.hash.localeCompare(b.hash)), [
+        { hash: hex(live), active: true, mail: ['read', 'send'], addresses: [{ id: sbox, address: support }, { id: obox, address: other }] },
+        { hash: hex(revoked), active: false, mail: ['read'], addresses: [{ id: abox, address: abuse }] },
+      ].sort((a, b) => a.hash.localeCompare(b.hash)));
+      assert.deepEqual(reply.body.addresses, [{ id: abox, address: abuse }, { id: sbox, address: support }], 'Only the asked addresses that exist.');
+      assert.deepEqual(reply.body.routes, [{ match: support, to: [sbox, 'mwh_fixture'], enabled: true }]);
+      assert.deepEqual((await platform.readiness([hex('nm_mbx_unknown')], [])).body, { keys: [], addresses: [], routes: [] });
+      // Only the binding: not a session or a bare request, and not past the allow-list's exact path.
+      assert.equal(supportPlatformAllows('GET', '/v1/operator/support/readiness'), true);
+      assert.equal((await app.fetch(new Request(`${PUBLIC_ORIGIN}/v1/operator/support/readiness?keys=&addresses=`), runtime)).status, 403);
+      assert.equal((await platform.call('GET', '/v1/operator/support/readiness/x')).status, 404);
+      // An installation without a platform workspace has nothing to report.
+      runtime.config.platformDomainWorkspace = undefined;
+      const none = await platform.readiness([hex(live)], [support]);
+      assert.deepEqual([none.status, (none.body as unknown as Json).error.code], [409, 'PLATFORM_WORKSPACE_NOT_CONFIGURED']);
+    });
+  });
+
   test('Support staff sign-in: an operator session gets a 2-minute staff token for the support site; only the binding verifies it, and only while they are an operator', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
       const jwk = (generateKeyPairSync('ed25519').privateKey.export({ format: 'jwk' }) as Json), key = { kty: 'OKP' as const, crv: 'Ed25519' as const, d: jwk.d as string, x: jwk.x as string };

@@ -11,6 +11,7 @@ import { addresses, productName } from '../../api/src/brand.js';
 export { SupportConversation } from './conversation.js';
 export { SupportIntake, INTAKE, type Mailbox } from './intake.js';
 import { INTAKE, type Mailbox } from './intake.js';
+import { deployCaller, readiness } from './readiness.js';
 
 // The support Worker (support/README.md): chat starts and resumes, the conversation WebSocket, Nightmail's inbound webhook
 // for support@nightmail.dev, and the "Confirm it's me" page. Every conversation is one SupportConversation Durable Object,
@@ -195,10 +196,11 @@ async function intake(request: Request, env: Env): Promise<Response> {
     if (event.type !== 'message.received' || !messageId || message?.direction === 'outbound') return new Response(null, { status: 200 });
     // The envelope recipients Nightmail matched (so Bcc counts), else the To header.
     const recipients = (event.data?.recipients?.length ? event.data.recipients : [JSON.stringify(message?.to ?? '')]).join(' ').toLowerCase();
-    const mailbox = env.INTAKE_ADDRESSES.split(',').map(a => a.trim().toLowerCase()).filter(a => a && recipients.includes(a)).map(a => a.split('@')[0] as Mailbox).find(m => m in INTAKE);
-    if (!mailbox) return new Response(null, { status: 200 });
+    // The intake address it was sent to: the acknowledgement names that one (abuse@bane.mx or abuse@nightmail.dev).
+    const address = env.INTAKE_ADDRESSES.split(',').map(a => a.trim().toLowerCase()).find(a => a && recipients.includes(a) && a.split('@')[0]! in INTAKE);
+    if (!address) return new Response(null, { status: 200 });
     const threadId = message?.threadId ?? messageId;
-    await env.INTAKE.get(env.INTAKE.idFromName(threadId)).enqueue({ threadId, messageId, mailbox });
+    await env.INTAKE.get(env.INTAKE.idFromName(threadId)).enqueue({ threadId, messageId, mailbox: address.split('@')[0] as Mailbox, address });
     return new Response(null, { status: 200 });
   });
 }
@@ -236,6 +238,12 @@ function staffRoute(path: string) {
 async function route(request: Request, env: Env, url: URL, at: { route: string }): Promise<Response> {
   const path = url.pathname, name = (route: string) => { at.route = route; };
   if (path === '/health') { name('/health'); return json({ status: 'ok', service: 'bane-support', stage: env.STAGE }); }
+  // The deploy's readiness check (readiness.ts), for the deploy job only; anyone else gets a 404.
+  if (path === '/ready' && request.method === 'GET') {
+    name('/ready');
+    if (!await deployCaller(env, request.headers.get('authorization'))) return new Response(null, { status: 404 });
+    return json({ version: env.CF_VERSION_METADATA?.id ?? null, ...await readiness(env) });
+  }
   // (The brand's tile, for the tabs of this Worker's own pages.)
   const icon = request.method === 'GET' ? favicon(path) : null;
   if (icon) { name('/favicon'); return icon; }

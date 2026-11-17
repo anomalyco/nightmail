@@ -388,6 +388,33 @@ export function registerSupportOperator(app: App) {
     if (!now?.role) return c.json({ ok: false as const, code: 'NOT_OPERATOR' as const }, 200);
     return c.json({ ok: true as const, staff: { userId, email: now.email ?? checked.claims.email, role: now.role }, jti, expiresAt }, 200);
   });
+  // The support Worker's deploy check (support/src/readiness.ts): what its inbox keys cover and where its addresses route,
+  // in the platform workspace. Keys are named by the SHA-256 of their secret (as stored), never the secret. Read-only.
+  const Hash = z.string().regex(/^[0-9a-f]{64}$/), Addresses = z.array(z.object({ id: z.string(), address: z.string() }));
+  app.openapi(createRoute({ hide: true, tags: ['Operator'], security: operatorSecurity, method: 'get', path: '/v1/operator/support/readiness', operationId: 'operatorSupportReadiness',
+    request: { query: z.object({
+      keys: z.string().max(200).transform(v => v.split(',').filter(Boolean)).pipe(z.array(Hash).max(2)),
+      addresses: z.string().max(4000).transform(v => v.split(',').map(a => a.trim().toLowerCase()).filter(Boolean)).pipe(z.array(z.email().max(254)).max(20)),
+    }) },
+    responses: { 200: response(z.object({
+      keys: z.array(z.object({ hash: Hash, active: z.boolean(), mail: z.array(z.string()), addresses: Addresses.nullable().describe('Null: every address.') })),
+      addresses: Addresses, routes: z.array(z.object({ match: z.string(), to: z.array(z.string()), enabled: z.boolean() })),
+    })), ...errors } }), async c => {
+    if ((await requireOperator(c, 'operator:read')).via !== 'support') throw new ApiError(403, 'SUPPORT_PLATFORM_REQUIRED', 'Only the support platform checks its readiness.');
+    const w = c.env.config.platformDomainWorkspace;
+    if (!w) throw new ApiError(409, 'PLATFORM_WORKSPACE_NOT_CONFIGURED', 'This installation has no platform workspace.');
+    const q = c.req.valid('query');
+    const { rows: keys } = await c.env.db.execute<{ hash: string; active: boolean; mail: string[]; ids: string[] | null }>(sql`SELECT hash, revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now()) AS active,
+      permissions AS mail, mailbox_ids AS ids FROM mailbox_keys WHERE workspace_id = ${w} AND hash = ANY(${sql.param(q.keys)}::text[])`);
+    const ids = [...new Set(keys.flatMap(k => k.ids ?? []))];
+    const { rows: known } = await c.env.db.execute<{ id: string; address: string }>(sql`SELECT id, address FROM mailboxes WHERE workspace_id = ${w}
+      AND (address = ANY(${sql.param(q.addresses)}::text[]) OR id = ANY(${sql.param(ids)}::text[])) ORDER BY address`);
+    const byId = new Map(known.map(m => [m.id, m]));
+    const { rows: routes } = await c.env.db.execute<{ match: string; to: string[]; enabled: boolean }>(sql`SELECT match, destinations AS "to", enabled FROM mail_routes
+      WHERE workspace_id = ${w} AND match = ANY(${sql.param(q.addresses)}::text[]) ORDER BY match`);
+    return c.json({ keys: keys.map(k => ({ hash: k.hash, active: k.active, mail: k.mail, addresses: k.ids && k.ids.flatMap(i => byId.get(i) ?? []) })),
+      addresses: known.filter(m => q.addresses.includes(m.address)), routes }, 200);
+  });
 }
 
 /** The customer's "Contact support", the public signing keys and the grant's read routes. */

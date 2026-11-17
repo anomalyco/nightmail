@@ -6,7 +6,7 @@ import type { Config } from './core.js';
 // rotation, and is revoked by removing the binding or the entrypoint.
 //
 // It answers exactly what the support Worker needs and nothing else (PR #137 review L2): verify a handoff, verify an
-// email sender, mint and revoke a support grant, read a handoff, verify a staff sign-in, and the grant-scoped GET
+// email sender, mint and revoke a support grant, read a handoff, verify a staff sign-in, check the support deploy's readiness, and the grant-scoped GET
 // /v1/support/* reads. Each call runs through the normal routes, so validation, audit rows and budgets are the same as
 // for an operator. Operator paths act as `service:bane-support`; /v1/support/* still needs the grant's own bearer.
 
@@ -20,11 +20,13 @@ const OPERATOR_ROUTES: [method: string, path: RegExp][] = [
   ['GET', /^\/v1\/operator\/support\/handoffs\/sho_[0-9a-f]{32}$/],
   // Never GET staff-sign-in: only an operator's own dashboard session mints a staff token.
   ['POST', /^\/v1\/operator\/support\/staff\/verify$/],
+  // The support deploy's readiness check: its keys' coverage and its addresses' routes (read-only).
+  ['GET', /^\/v1\/operator\/support\/readiness$/],
 ];
 const SUPPORT_READ = /^\/v1\/support\/[A-Za-z0-9_./-]{1,200}$/;
 const SUPPORT_GRANT = /^(?:nm|bane)_support_[0-9a-f]{64}$/; // bane_: remove after rename cleanup
 
-/** Whether the binding may make this call: the five operator support routes, or a grant's GET under /v1/support. */
+/** Whether the binding may make this call: the six operator support routes, or a grant's GET under /v1/support. */
 export function supportPlatformAllows(method: string, path: string) {
   if (path.includes('..') || path.includes('//')) return false;
   if (method === 'GET' && SUPPORT_READ.test(path)) return true;
@@ -32,6 +34,8 @@ export function supportPlatformAllows(method: string, path: string) {
 }
 
 export type PlatformReply<T = unknown> = { status: number; body: T; requestId: string | null; retryAfter: string | null };
+type Mailbox = { id: string; address: string };
+export type SupportReadinessFacts = { keys: { hash: string; active: boolean; mail: string[]; addresses: Mailbox[] | null }[]; addresses: Mailbox[]; routes: { match: string; to: string[]; enabled: boolean }[] };
 export type HandoffClaims = {
   id: string; kind: string; userId: string; email: string; role: string; workspace: { id: string; name: string };
   page: string | null; requestIds: string[]; shareContent: boolean; issuedAt: string; expiresAt: string;
@@ -156,6 +160,9 @@ export function supportPlatform(dispatch: (request: Request) => Promise<Response
       if (reply.status !== 200) throw new Error(`Staff verification failed with ${reply.status}`);
       return reply.body;
     },
+    /** The support deploy's readiness facts: what the keys with these SHA-256 hashes cover, and these addresses' routes. */
+    readiness: (keys: string[], addresses: string[]) =>
+      call<SupportReadinessFacts>('GET', `/v1/operator/support/readiness?${new URLSearchParams({ keys: keys.join(','), addresses: addresses.join(',') })}`),
     /** A grant-scoped read: `path` under /v1/support/, with its query. */
     read: <T = unknown>(path: string, grant: string) => call<T>('GET', path, undefined, grant),
     call,

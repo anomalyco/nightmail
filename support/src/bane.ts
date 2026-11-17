@@ -19,11 +19,15 @@ export type Handoff = {
 };
 export type HandoffCheck = { ok: true; handoff: Handoff } | { ok: false; code: 'HANDOFF_INVALID' | 'HANDOFF_EXPIRED' | 'HANDOFF_NOT_FOUND' | 'SUPPORT_NOT_CONFIGURED' };
 export type Evidence = { kind: 'dmarc'; result: 'pass'; aligned: true; messageId: string } | { kind: 'magic_link'; confirmedAt: string };
+type Mailbox = { id: string; address: string };
+export type SupportReadinessFacts = { keys: { hash: string; active: boolean; mail: string[]; addresses: Mailbox[] | null }[]; addresses: Mailbox[]; routes: { match: string; to: string[]; enabled: boolean }[] };
 export type Grant = { id: string; token: string; userId: string; workspaceIds: string[]; ticketRef: string; contentShared: boolean; contentWorkspaceId: string | null; expiresAt: string };
 
 /** The methods of Nightmail's SupportPlatform entrypoint, as this Worker calls them over RPC. */
 export interface SupportPlatform {
   verifyHandoff(token: string): Promise<HandoffCheck>;
+  /** The deploy's readiness facts (readiness.ts): what the keys with these SHA-256 hashes cover, and these addresses' routes. */
+  readiness(keys: string[], addresses: string[]): Promise<PlatformReply<SupportReadinessFacts>>;
   verifyEmail(body: { email: string; evidence: Evidence; ticketRef?: string }): Promise<PlatformReply<{ verified: boolean; user: { id: string; name: string } | null; workspaces: { id: string; name: string; role: string }[] }>>;
   mintGrant(body: { userId: string; ticketRef: string; reason: string; verification: 'handoff' | 'dmarc' | 'magic_link'; handoffId?: string; workspaceIds?: string[]; ttlMinutes?: number }): Promise<PlatformReply<Grant>>;
   revokeGrant(grantId: string): Promise<PlatformReply<{ id: string; revoked: true }>>;
