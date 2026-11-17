@@ -46,12 +46,16 @@
     // bane.mx until the cutover: its dashboard GETs redirect, but a tab opened before the switch can still start a chat.
     "DASHBOARD_ORIGINS": "https://nightmail.dev,https://bane.mx",
     "BANE_ORIGIN": "https://nightmail.dev",
-    "SUPPORT_ADDRESS": "support@bane.mx",
-    // The inbound address ID (mbx_…) of SUPPORT_ADDRESS in the platform workspace (ws_90b0…), created 2026-11-13.
-    "SUPPORT_ADDRESS_ID": "mbx_7e7e64495349496691b2ca188cf48b6e",
+    "SUPPORT_ADDRESS": "support@nightmail.dev",
+    // The inbound address ID (mbx_…) of SUPPORT_ADDRESS in the platform workspace (ws_90b0…), created 2026-11-17.
+    // support@bane.mx (mbx_7e7e64495349496691b2ca188cf48b6e) keeps its route to the same webhook, and replies in its
+    // threads go out from it (src/bane.ts reply), so BANE_SUPPORT_INBOX_KEY must cover both addresses.
+    "SUPPORT_ADDRESS_ID": "mbx_8969af953f9148ef9deb3cfee54bfe37",
     "TICKET_TO": "ryan@anoma.ly",
     // Straight to tickets, never to the agent (src/intake.ts): their own webhook and API key.
-    "INTAKE_ADDRESSES": "abuse@bane.mx,privacy@bane.mx,legal@bane.mx",
+    // bane.mx's three stay listed (and in BANE_INTAKE_INBOX_KEY) until the cutover; acknowledgements go out from the
+    // address the mail came in on.
+    "INTAKE_ADDRESSES": "abuse@nightmail.dev,privacy@nightmail.dev,legal@nightmail.dev,abuse@bane.mx,privacy@bane.mx,legal@bane.mx",
     // Console's inference gateway (Anthropic Messages API). The key is the CONSOLE_GATEWAY_KEY secret.
     "GATEWAY_URL": "https://opencode.ai/inference/anthropic/v1"
   },

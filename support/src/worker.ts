@@ -13,7 +13,7 @@ export { SupportIntake, INTAKE, type Mailbox } from './intake.js';
 import { INTAKE, type Mailbox } from './intake.js';
 
 // The support Worker (support/README.md): chat starts and resumes, the conversation WebSocket, Nightmail's inbound webhook
-// for support@bane.mx, and the "Confirm it's me" page. Every conversation is one SupportConversation Durable Object,
+// for support@nightmail.dev, and the "Confirm it's me" page. Every conversation is one SupportConversation Durable Object,
 // reached only by ID from this router, never through a client-named route.
 
 const CONVERSATIONS_PER_DAY = 10;
@@ -161,7 +161,7 @@ async function handled(env: Env, deliveryId: string, work: () => Promise<Respons
   return response;
 }
 
-/** Nightmail's signed webhook for mail received at support@bane.mx (route → webhook:support-agent, bane format, include message). */
+/** Nightmail's signed webhook for mail received at support@nightmail.dev (route → webhook:support-agent, bane format, include message). */
 async function inbound(request: Request, env: Env): Promise<Response> {
   const got = await delivery(request, env, env.BANE_INBOUND_WEBHOOK_SECRET, 'BANE_INBOUND_WEBHOOK_SECRET');
   if (got instanceof Response) return got;
