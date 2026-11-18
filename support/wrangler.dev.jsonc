@@ -52,11 +52,16 @@
     // Straight to tickets, never to the agent (src/intake.ts): their own webhook and API key.
     "INTAKE_ADDRESSES": "abuse@dev.bane.mx,privacy@dev.bane.mx,legal@dev.bane.mx",
     // Console's inference gateway (Anthropic Messages API). The key is the CONSOLE_GATEWAY_KEY secret.
-    "GATEWAY_URL": "https://opencode.ai/inference/anthropic/v1"
+    "GATEWAY_URL": "https://opencode.ai/inference/anthropic/v1",
+    // Prototype (src/agent/console.ts, src/mcp.ts): a chat the panel opens with runtime "console" runs on this Console
+    // agent. Empty = off. On: CONSOLE_AGENT_URL "https://agent.opencode.ai", CONSOLE_AGENT_SLUG "bane-support".
+    "CONSOLE_AGENT_URL": "",
+    "CONSOLE_AGENT_SLUG": ""
   },
   // Secrets, set with `wrangler secret put <NAME> --config wrangler.dev.jsonc` (never through CI):
   // CONSOLE_GATEWAY_KEY, SUPPORT_ROOT_SECRET, BANE_INBOUND_WEBHOOK_SECRET, BANE_SUPPORT_INBOX_KEY,
-  // BANE_INTAKE_WEBHOOK_SECRET, BANE_INTAKE_INBOX_KEY.
+  // BANE_INTAKE_WEBHOOK_SECRET, BANE_INTAKE_INBOX_KEY; for the Console prototype, CONSOLE_AGENT_KEY (a Console key
+  // that may send to the agent's /v1 sessions) and CONSOLE_MCP_KEY (the credential Console's gateway sends to /mcp).
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,

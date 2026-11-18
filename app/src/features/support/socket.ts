@@ -30,6 +30,9 @@ const save = (key: string, value: Saved | null) => { try { if (value) sessionSto
 /** A message in the conversation: it stays open for another day; `written` when it is the person's. */
 const touch = (key: string, written = false) => { const saved = load(key); if (saved) save(key, { ...saved, activeAt: Date.now(), ...written ? { written } : {} }) }
 const fresh = (expiresAt?: string) => Boolean(expiresAt && Date.parse(expiresAt) - Date.now() > 60_000)
+// Prototype: with localStorage `bane.support.runtime` = "console", a new chat asks the support Worker to run it on the
+// Console agent. Only the dev support Worker with a Console agent configured takes it; anywhere else it's ignored.
+const consoleRuntime = () => { try { return localStorage.getItem('bane.support.runtime') === 'console' ? { runtime: 'console' } : {} } catch { return {} } }
 
 // A screenshot upload (§5.1) over XHR, which reports upload progress (fetch doesn't).
 const UPLOAD_ERRORS: Record<string, string> = {
@@ -101,7 +104,7 @@ export function createSocketTransport({ origin, workspaceId, resume }: { origin:
     for (let tries = 0; ; tries++) {
       try {
         const token = await handoff(false)
-        return conversationId ? await post(origin, '/chat/resume', { conversationId, handoff: token }) : await post(origin, '/chat/start', { handoff: token })
+        return conversationId ? await post(origin, '/chat/resume', { conversationId, handoff: token }) : await post(origin, '/chat/start', { handoff: token, ...consoleRuntime() })
       } catch (error) {
         if (!(error instanceof StartError)) throw error
         if (conversationId && error.status === 404) { save(key, null); return open() }

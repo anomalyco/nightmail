@@ -23,6 +23,8 @@ export interface Env {
   IMAGES?: ImagesBinding;
   /** Tests only: where model requests go instead of the network (a fake gateway). Never set in a deployed config. */
   MODEL_FAKE?: Fetcher;
+  /** Tests only: where Console agent requests (/v1) go instead of the network. Never set in a deployed config. */
+  CONSOLE_FAKE?: Fetcher;
 
   STAGE: 'dev' | 'production';
   /** https://support.nightmail.dev: links in emails (confirm, continue in Nightmail). */
@@ -40,6 +42,13 @@ export interface Env {
   TICKET_TO: string;
   /** Console's inference gateway, Anthropic Messages API base (https://opencode.ai/inference/anthropic/v1). The model is pinned in code (agent/opencode.ts). */
   GATEWAY_URL: string;
+  /**
+   * Prototype, dev only (agent/console.ts): a chat the panel opens with `runtime: "console"` runs on this Console agent
+   * instead of the embedded OpenCode. Its agent Worker (https://agent.opencode.ai) and the agent's slug; empty turns the
+   * option off, and production never takes it.
+   */
+  CONSOLE_AGENT_URL?: string;
+  CONSOLE_AGENT_SLUG?: string;
 
   // Secrets (wrangler secret put). The Worker fails closed with a clear error when one is missing.
   CONSOLE_GATEWAY_KEY?: string;
@@ -49,4 +58,8 @@ export interface Env {
   /** The intake addresses' webhook secret and API key (read and send on those three addresses only). */
   BANE_INTAKE_WEBHOOK_SECRET?: string;
   BANE_INTAKE_INBOX_KEY?: string;
+  /** The Console key the Worker sends inputs to the agent's sessions with (/v1). */
+  CONSOLE_AGENT_KEY?: string;
+  /** The key Console's MCP gateway sends with each call to /mcp (the workspace credential of the support MCP server). */
+  CONSOLE_MCP_KEY?: string;
 }

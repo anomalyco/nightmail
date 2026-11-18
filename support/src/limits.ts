@@ -126,6 +126,8 @@ export async function daily(env: Env, now = Date.now()) {
     env.DB.prepare('DELETE FROM confirmations WHERE used_at < ?').bind(ago(30)),
     env.DB.prepare('DELETE FROM staff_tokens_used WHERE used_at < ?').bind(ago(7)),
     env.DB.prepare('DELETE FROM pending_confirms WHERE sent_at < ?').bind(ago(2)),
+    // A conversation closes after 24 h idle (chat), and a closed one refuses its session's calls anyway.
+    env.DB.prepare('DELETE FROM console_sessions WHERE created_at < ?').bind(ago(30)),
     env.DB.prepare("DELETE FROM tickets WHERE status = 'resolved' AND resolved_at < ?").bind(ago(365)),
     env.DB.prepare("DELETE FROM conversations WHERE status = 'closed' AND closed_at < ? AND id NOT IN (SELECT conversation_id FROM tickets)").bind(ago(365)),
   ]);

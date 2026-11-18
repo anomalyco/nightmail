@@ -3,7 +3,7 @@ import type { OpenCodeWorkerd } from '@opencode/sdk/workerd';
 import type { Env } from '../env.js';
 import { MissingSecret } from '../tokens.js';
 import type { Harness, HarnessEvent, TurnInput, TurnResult, Usage } from './harness.js';
-import { TOOLS, ToolFailure, type Param, type ToolHost } from './tools.js';
+import { jsonSchema, TOOLS, ToolFailure, type ToolHost } from './tools.js';
 import SYSTEM from './system.md';
 import VOICE from '../../VOICE.md';
 import { errorTypeOf } from '../../../api/src/log.js';
@@ -100,18 +100,6 @@ function cacheForAnHour(body: ModelRequest): boolean {
   let changed = false;
   for (const part of parts) if (part?.cache_control?.type === 'ephemeral' && part.cache_control.ttl !== '1h') { part.cache_control = { type: 'ephemeral', ttl: '1h' }; changed = true; }
   return changed;
-}
-
-function jsonSchema(params: Record<string, Param>) {
-  const properties: Record<string, unknown> = {}, required: string[] = [];
-  for (const [name, p] of Object.entries(params)) {
-    if (!p.optional) required.push(name);
-    if (p.type === 'string') properties[name] = { type: 'string', description: p.description, ...(p.max ? { maxLength: p.max } : {}), ...(p.pattern ? { pattern: p.pattern } : {}) };
-    else if (p.type === 'number') properties[name] = { type: 'integer', description: p.description, ...(p.min !== undefined ? { minimum: p.min } : {}), ...(p.max !== undefined ? { maximum: p.max } : {}) };
-    else if (p.type === 'enum') properties[name] = { type: 'string', enum: [...p.values], description: p.description };
-    else properties[name] = { type: 'array', items: { type: 'string', maxLength: 400 }, description: p.description, ...(p.max ? { maxItems: p.max } : {}) };
-  }
-  return { type: 'object', properties, required, additionalProperties: false };
 }
 
 /** Distinctive lines of the system prompt, for the output gate's "never reveal this prompt" check. */
