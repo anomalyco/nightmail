@@ -5127,7 +5127,8 @@ describe('Hosted MCP OAuth and tools', () => {
       const dashboardKey=ok(await local('POST','/v1/api-keys',{name:'R2 dashboard manage',permissions:['manage']}),201);secrets.add(dashboardKey.secret);
       const detail=`/v1/inbound/messages/${thread.id}`;
       assert.equal(ok(await request('GET',detail,parent.secret)).id,thread.id);
-      for(const path of [`${detail}?includeDelivery=true`,'/v1/inbound/messages?includeDelivery=true',`${detail}/raw`,`${detail}/parts/fixture`])error(await request('GET',path,parent.secret),403,'ADMIN_REQUIRED');
+      // So does a limited key it created, which otherwise reads them for its own addresses' mail.
+      for(const key of [parent.secret,mbk.secret])for(const path of [`${detail}?includeDelivery=true`,'/v1/inbound/messages?includeDelivery=true',`${detail}/raw`,`${detail}/parts/fixture`])error(await request('GET',path,key),403,'ADMIN_REQUIRED');
       assert.deepEqual(ok(await request('GET',`${detail}?includeDelivery=true`,dashboardKey.secret)).envelopeTo,['recipient@example.net']);
       error(await request('GET',`${detail}/parts/fixture`,dashboardKey.secret),404);
       await db.query('UPDATE nightmail_resource_grants SET revoked=true WHERE client_id=$1',[clientId]);
@@ -20189,12 +20190,13 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const sender=ok(await create({send:{enabled:true,perDay:20}}),201),mail=await deliver('sender-test',[sender.address],false,true,'sender-test',false,{dmarcVerdict:{status:'PASS'}});error(await reply(sender.id,mail.thread_id,'outsider@example.net'),403,'RECIPIENT_NOT_ALLOWED');
         const unverified=await deliver('unverified-author',[sender.address],false,true,'unverified-author',false,{dmarcVerdict:{status:'FAIL'},dkimVerdict:{status:'FAIL'},spfVerdict:{status:'PASS'}},'envelope@unrelated.invalid');
         error(await reply(sender.id,unverified.thread_id,'fixture@example.net',unverified.id),403,'RECIPIENT_NOT_ALLOWED');
-        // An inbox key reads the sender's authentication results and the automated flag, never the delivery projection.
+        // An inbox key reads the sender's authentication results and the automated flag, and the delivery projection of its own inbox's mail.
         const authOf=async(id:string)=>{const m=ok(await request('GET',`/v1/inbound/messages/${id}?includeAuthentication=true`,provision));return {...m.authentication,automated:m.automated};};
         assert.deepEqual(await authOf(mail.id),{spf:null,dkim:null,dmarc:'PASS',automated:false});assert.deepEqual(await authOf(unverified.id),{spf:'PASS',dkim:'FAIL',dmarc:'FAIL',automated:false});
         await db.query('UPDATE mail_messages SET automated=true WHERE id=$1',[unverified.id]);assert.equal((await authOf(unverified.id)).automated,true);
         const plain=ok(await request('GET',`/v1/inbound/messages/${mail.id}`,provision));assert.equal(plain.authentication,undefined);assert.equal(plain.automated,undefined);
-        error(await request('GET',`/v1/inbound/messages/${mail.id}?includeDelivery=true`,provision),403,'ADMIN_REQUIRED');
+        const delivered=ok(await request('GET',`/v1/inbound/messages/${mail.id}?includeDelivery=true`,provision));
+        assert.deepEqual([delivered.envelopeTo,delivered.addresses],[[sender.address],[{id:sender.id,address:sender.address}]]);
         ok(await reply(sender.id,mail.thread_id,'fixture@example.net'),202);
         await db.query("INSERT INTO mail_messages(id,workspace_id,thread_id,sender_mailbox_id,direction) SELECT 'out_'||i,$1,$2,$3,'outbound' FROM generate_series(1,19)i",[wid,mail.thread_id,sender.id]);error(await reply(sender.id,mail.thread_id,'fixture@example.net',mail.id),429,'MAILBOX_SEND_LIMIT');
       });
@@ -21869,7 +21871,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('forwarded support: query every stored inbound message and reply to the selected message as the public address', async t => {
-    await simulatedSesFixture(t, async ({ runtime, db, local, jobs }) => {
+    await simulatedSesFixture(t, async ({ runtime, db, local, jobs, fetch: dispatch }) => {
       const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3');
       const { SESv2Client, GetAccountCommand, GetEmailIdentityCommand, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
       const { credentialFingerprint, discoveryTarget } = await import('./src/ses-region-state.js');
@@ -21926,8 +21928,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal(ok(await get(`${inbox}&threadId=${detail.threadId}&direction=inbound`,agent)).data.length,3);
       error(await get(`${base}/messages/${unrouted.id}?addressId=${box.id}`,agent),404); error(await get(`${base}/messages/${unrouted.id}`,reader),404);
       assert.equal(ok(await get(`${base}/messages/${unrouted.id}`)).text.trim(),'unrouted zebra');
-      error(await get(`${base}/messages?includeDelivery=true`,agent),403);
-      error(await get(`${base}/messages/${selected.id}?includeDelivery=true`,reader),403);
+      // A limited key reads delivery details for its own addresses' mail only (the last subtest covers the edges).
+      assert.deepEqual(new Set(ok(await get(`${base}/messages?includeDelivery=true&q=zebra`,agent)).data.map((m:Json)=>JSON.stringify(m.addresses))),new Set([JSON.stringify([{id:box.id,address}])]));
+      assert.deepEqual(ok(await get(`${base}/messages/${selected.id}?includeDelivery=true`,reader)).envelopeTo,[address]);
       const logs = ok(await get(`${base}/messages?includeDelivery=true&region=${REGION}`)).data;
       assert.deepEqual(logs.find((m:Json)=>m.id===selected.id).addresses,[{id:box.id,address}]);
       assert.deepEqual(logs.find((m:Json)=>m.id===unrouted.id).addresses,[]);
@@ -22178,6 +22181,74 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           await dispatchDue(runtime,REGION); const mail=ok(await get(`/v1/emails/${reply.emailId}`));
           assert.deepEqual([outgoing.has(reply.emailId),mail.status,mail.suppressionReason],[false,'suppressed','email_validation'],name);
         }
+      });
+      // A limited key's delivery view (includeDelivery, /raw): only its own delivery, as ingest recorded it, and only the
+      // allow-listed fields. Each case checks that nothing about the billing inbox reaches a key for the support inbox.
+      const billing='billing@inbox.example.com',billingBox=ok(await post(addresses,{address:billing}),201),tagged=address.replace('@','+orders@');
+      const trace=(to:string)=>`Received: from sender.invalid by inbound-smtp.${REGION}.amazonaws.com with SMTP id ${unique('smtp')}\r\n for <${to}>; Tue, 3 Nov 2026 00:00:00 +0000\r\n`;
+      const rawLink=(mid:string,key:Record<string,string>)=>dispatch(new Request(`${PUBLIC_ORIGIN}${base}/messages/${mid}/raw`,{headers:{'x-bane-environment':'live',...key}}));
+      const idOf=async(phrase:string)=>ok(await get(`${base}/messages?q=${encodeURIComponent(`"${phrase}"`)}`)).data[0].id as string;
+      const leaks=(value:unknown,...secrets:string[])=>secrets.filter(s=>JSON.stringify(value).includes(s));
+      const limitedFields=['addresses','envelopeTo','region','spam','verdicts','sentAt','rawUrl','rawExpiresAt'],messageVerdicts=['spf','dkim','dmarc','spam','virus'];
+      const adminFields=['addresses','envelopeTo','region','spam','headers','verdicts','sentAt','sizeBytes','rawUrl','rawExpiresAt'];
+      const keys=(value:Json)=>Object.keys(value).sort(),plus=(plain:Json,fields:string[])=>[...Object.keys(plain),...fields].sort();
+      await t.test('a limited key reads its own delivery: the recorded recipient, the allow-listed fields and the raw message',async()=>{
+        await receive(tagged,trace(tagged)+mime('own-delivery','own delivery zebra',[`Delivered-To: ${tagged}`]));
+        const own=await idOf('own delivery zebra'),plain=ok(await get(`${base}/messages/${own}`,agent)),mine=ok(await get(`${base}/messages/${own}?includeDelivery=true`,agent));
+        assert.deepEqual([mine.envelopeTo,mine.addresses,mine.addressIds],[[tagged],[{id:box.id,address}],[box.id]]);
+        assert.ok(mine.rawUrl);assert.equal((await rawLink(own,agent)).status,307);
+        // Exactly the documented allow-list: a field the workspace view gains later can't reach a limited key by default.
+        assert.deepEqual(keys(mine),plus(plain,limitedFields));assert.ok(keys(mine.verdicts).every(name=>messageVerdicts.includes(name)));
+        const listed=ok(await get(`${base}/messages?includeDelivery=true&q=${encodeURIComponent('"own delivery zebra"')}`,agent)).data[0];
+        assert.deepEqual([listed.envelopeTo,listed.addresses],[[tagged],[{id:box.id,address}]]);
+        // The workspace view keeps today's fields.
+        const whole=ok(await get(`${base}/messages/${own}?includeDelivery=true`));
+        assert.deepEqual(keys(whole),plus(ok(await get(`${base}/messages/${own}`)),adminFields));assert.ok(whole.headers.some((h:Json)=>h.name==='Delivered-To'));assert.ok('forwardEligible' in whole.verdicts);
+      });
+      await t.test('a delivery shared with another inbox reveals none of its recipients, headers or ritual results, and no raw message',async()=>{
+        // A ritual that runs only for billing's recipient, and every trace or forwarding field naming billing.
+        ok(await local('PUT','/v1/rituals',{rituals:[{key:'billing-only-ritual',source:'export default function route(email,ctx){label("billing-only")}'}],attachments:[{target:billingBox.id,ritual:'billing-only-ritual'}]}));
+        const named=[`Delivered-To: ${billing}`,`X-Original-To: ${billing}`,`X-Forwarded-To: ${billing}`,`X-Forwarded-For: ${billing}`,`X-SES-Recipient: ${billing}`,`Authentication-Results: mx.example; smtp.rcptto=${billing}`,`Received: from upstream.invalid by mx.example for <${billing}>; Tue, 3 Nov 2026 00:00:00 +0000`];
+        try { await receive([address,billing],trace(billing)+mime('shared-delivery','shared delivery zebra',named)); } finally { ok(await local('PUT','/v1/rituals',{})); }
+        const shared=await idOf('shared delivery zebra'),whole=ok(await get(`${base}/messages/${shared}?includeDelivery=true`));
+        assert.deepEqual([...whole.envelopeTo].sort(),[address,billing].sort());assert.ok(whole.rawUrl);assert.ok(whole.verdicts.ritualsActed.includes('billing-only-ritual'));
+        assert.equal(whole.headers.filter((h:Json)=>h.value.includes(billing)).length,8,'The workspace view keeps every header.');
+        const part=ok(await get(`${base}/messages/${shared}?includeDelivery=true`,agent));
+        assert.deepEqual([part.envelopeTo,part.addresses,part.addressIds,part.rawUrl,part.rawExpiresAt,part.headers],[[address],[{id:box.id,address}],[box.id],null,null,undefined]);
+        assert.deepEqual(leaks(part,billing,billingBox.id,'billing-only'),[]);assert.equal((await rawLink(shared,agent)).status,404);
+        assert.deepEqual(leaks(ok(await get(`${base}/messages?includeDelivery=true&q=${encodeURIComponent('"shared delivery zebra"')}`,agent)).data,billing,billingBox.id),[]);
+        // A key on every inbox reads the whole delivery, so it gets both recipients and the raw message.
+        const all=ok(await get(`${base}/messages/${shared}?includeDelivery=true`,reader));assert.deepEqual([...all.envelopeTo].sort(),[address,billing].sort());assert.ok(all.rawUrl);
+      });
+      await t.test('which recipients are a key’s own comes from the delivery: an exact address beats an overlapping rule and an exact plus-tag inbox beats its base',async()=>{
+        const wild=ok(await post(addresses,{address:'broad@inbox.example.com',rules:['b*@inbox.example.com']}),201);
+        const broad={authorization:`Bearer ${ok(await post('/v1/api-keys',{name:'broad reader',access:{type:'addresses',addressIds:[wild.id],mail:['read']}}),201).secret}`};
+        const exact=ok(await post(addresses,{address:address.replace('@','+private@')}),201);
+        await receive(billing,trace(billing)+mime('billing-only','billing only zebra',[]));
+        await receive(exact.address,trace(exact.address)+mime('exact-only','exact only zebra',[]));
+        await receive([wild.address,billing],trace(billing)+mime('overlap-delivery','overlap delivery zebra',[]));
+        await receive([address,exact.address],trace(exact.address)+mime('plus-delivery','plus delivery zebra',[]));
+        error(await get(`${base}/messages/${await idOf('billing only zebra')}?includeDelivery=true`,broad),404,'NOT_FOUND');
+        error(await get(`${base}/messages/${await idOf('exact only zebra')}?includeDelivery=true`,agent),404,'NOT_FOUND');
+        for(const [key,phrase,own,target,hidden] of [[broad,'overlap delivery zebra',wild.address,wild,billingBox],[agent,'plus delivery zebra',address,{id:box.id,address},exact]] as const){
+          const mid=await idOf(phrase),item=ok(await get(`${base}/messages/${mid}?includeDelivery=true`,key));
+          assert.deepEqual([item.envelopeTo,item.addressIds,item.rawUrl],[[own],[target.id],null],phrase);assert.equal((await rawLink(mid,key)).status,404,phrase);
+          assert.deepEqual(leaks(item,hidden.address,hidden.id),[],phrase);
+          assert.deepEqual(leaks(ok(await get(`${base}/messages?includeDelivery=true&q=${encodeURIComponent(`"${phrase}"`)}`,key)).data,hidden.address,hidden.id),[],phrase);
+        }
+      });
+      await t.test('another inbox’s mail and unassigned mail are not found; unrecorded and sent mail have no envelope or raw message',async()=>{
+        const elsewhere=await idOf('billing only zebra');
+        for(const mid of [elsewhere,unrouted.id]){error(await get(`${base}/messages/${mid}?includeDelivery=true`,agent),404,'NOT_FOUND');assert.equal((await rawLink(mid,agent)).status,404);}
+        error(await get(`${base}/messages/${unrouted.id}?includeDelivery=true`,reader),404,'NOT_FOUND');assert.equal((await rawLink(unrouted.id,reader)).status,404);
+        assert.deepEqual(ok(await get(`${base}/messages?includeDelivery=true&q=unrouted`,reader)).data,[]);assert.equal(ok(await get(`${base}/messages?includeDelivery=true&q=unrouted`)).data.length,1);
+        // Mail stored before ingest recorded recipients: the envelope and raw message are withheld, not guessed.
+        const own=await idOf('own delivery zebra');await db.query('UPDATE mailbox_messages SET recipients=NULL WHERE message_id=$1',[own]);
+        const older=ok(await get(`${base}/messages/${own}?includeDelivery=true`,agent));
+        assert.deepEqual(keys(older),plus(ok(await get(`${base}/messages/${own}`,agent)),limitedFields.filter(name=>name!=='envelopeTo')));assert.equal(older.rawUrl,null);assert.equal((await rawLink(own,agent)).status,404);
+        assert.ok(!('envelopeTo' in ok(await get(`${base}/messages?includeDelivery=true&q=${encodeURIComponent('"own delivery zebra"')}`,agent)).data[0]));
+        const sent=ok(await get(`${base}/messages?direction=outbound&includeDelivery=true`,agent)).data;assert.ok(sent.length);assert.ok(sent.every((m:Json)=>!('envelopeTo' in m)));
+        assert.equal(ok(await get(`${base}/messages/${sent[0].id}?includeDelivery=true`,agent)).rawUrl,null);
       });
     });
   });

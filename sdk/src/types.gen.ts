@@ -22951,7 +22951,7 @@ export type ListInboundMessagesData = {
         cursor?: string;
         limit?: number;
         /**
-         * Include delivery details for workspace logs (dashboard or unrestricted live manage access only).
+         * Include delivery details. Owner and admin sessions and unrestricted live manage API keys get them for every stored message, unassigned mail included: addresses, envelopeTo, region and spam, and on one message also headers, verdicts, sentAt, sizeBytes, rawUrl and rawExpiresAt. An API key limited to addresses or an inbox gets them only for mail its addresses can read, and only these fields: addresses (its own); envelopeTo (the recipients delivered to its own inboxes, as recorded at delivery, and left out for mail stored before that was recorded and for sent mail); region; spam; and on one message verdicts (spf, dkim, dmarc, spam and virus only), sentAt, rawUrl and rawExpiresAt (null unless the message was received, every inbox it reached is one the key reads, and every envelope recipient was recorded on them). It never gets headers or sizeBytes. Other credentials, and keys an MCP approval created, get 403.
          */
         includeDelivery?: 'true' | 'false';
         region?: string;
@@ -23027,7 +23027,7 @@ export type GetInboundMessageData = {
          */
         addressId?: string;
         /**
-         * Include delivery details for workspace logs (dashboard or unrestricted live manage access only).
+         * Include delivery details. Owner and admin sessions and unrestricted live manage API keys get them for every stored message, unassigned mail included: addresses, envelopeTo, region and spam, and on one message also headers, verdicts, sentAt, sizeBytes, rawUrl and rawExpiresAt. An API key limited to addresses or an inbox gets them only for mail its addresses can read, and only these fields: addresses (its own); envelopeTo (the recipients delivered to its own inboxes, as recorded at delivery, and left out for mail stored before that was recorded and for sent mail); region; spam; and on one message verdicts (spf, dkim, dmarc, spam and virus only), sentAt, rawUrl and rawExpiresAt (null unless the message was received, every inbox it reached is one the key reads, and every envelope recipient was recorded on them). It never gets headers or sizeBytes. Other credentials, and keys an MCP approval created, get 403.
          */
         includeDelivery?: 'true' | 'false';
         /**
