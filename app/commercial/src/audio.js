@@ -3,6 +3,10 @@
 // Nothing loads before the click.
 
 const FIRST = ["knob", "cut", "s0", "jingle", "bed", "ding", "s1"]
+// The whole mix goes in at LEVEL and through the compressor, then a limiter, so the busiest
+// moments (the ding storm, the radio come back louder, the thuds) never reach 0 dBFS.
+const LEVEL = 0.6
+const CEILING = 0.85
 
 export class AudioEngine {
   constructor(base) {
@@ -20,13 +24,21 @@ export class AudioEngine {
     this.muted = muted
     const c = ctx
     this.master = c.createGain()
-    this.master.gain.value = muted ? 0 : 1
+    this.master.gain.value = muted ? 0 : LEVEL
     const comp = c.createDynamicsCompressor()
     comp.threshold.value = -10
     comp.ratio.value = 3
     comp.attack.value = 0.005
     comp.release.value = 0.2
-    this.master.connect(comp).connect(c.destination)
+    const limit = c.createDynamicsCompressor()
+    limit.threshold.value = -4
+    limit.knee.value = 0
+    limit.ratio.value = 20
+    limit.attack.value = 0.001
+    limit.release.value = 0.1
+    const out = c.createGain()
+    out.gain.value = CEILING
+    this.master.connect(comp).connect(limit).connect(out).connect(c.destination)
     const bus = (pan) => {
       const g = c.createGain()
       const p = c.createStereoPanner()
@@ -84,7 +96,7 @@ export class AudioEngine {
   setMuted(m) {
     this.muted = m
     if (!this.master) return
-    this.master.gain.setTargetAtTime(m ? 0 : 1, this.ctx.currentTime, 0.05)
+    this.master.gain.setTargetAtTime(m ? 0 : LEVEL, this.ctx.currentTime, 0.05)
   }
 
   // offset: seconds already elapsed (for seeking into the show)
