@@ -53,6 +53,22 @@
 .audience-sample { display: flex; flex-direction: column; gap: var(--space-8); margin: 0; padding: 0; list-style: none; }
 .audience-sample li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px; margin: -3px; }
 
+/* Lists chosen to merge: their count and actions sit in the toolbar's row, right of the search. */
+.audience-selection { display: flex; align-items: center; gap: var(--space-8); flex-shrink: 0; }
+/* The count in Signal Log type: a mono figure, muted. */
+.audience-selection__count { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+/* Merge… holds its place until a second list is selected, so the count and Clear don't move when it appears. */
+.audience-selection__later { visibility: hidden; }
+/* Merge lists: each target choice with its control beside it (below it on a phone), then the merged list's size. */
+.audience-merge-into { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: var(--space-8) var(--space-16); min-width: 0; margin: 0; padding: 0; border: 0; }
+.audience-merge-into > legend { padding: 0; margin-bottom: var(--space-8); color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.audience-merge-into > .ui-choice { align-items: center; }
+.audience-merge-into > .ui-choice input { margin-top: 0; }
+.audience-merge-into > .audience-merge-error { grid-column: 2; margin: 0; }
+/* One metric row (fixed height while it counts), its name cut before the figure; no series column. */
+.audience-merge-preview { min-height: var(--metric-height, 40px); }
+.audience-merge-preview > .ui-metric { --metric-spark: 0px; --metric-value: 144px; border-top: 1px solid var(--color-border-muted); }
+
 /* Segment rule builder: one row per condition (field, operator, value, remove). */
 .audience-conditions { display: flex; flex-direction: column; gap: var(--space-8); }
 .audience-condition { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 34px; gap: var(--space-12); align-items: center; }
@@ -93,6 +109,11 @@
   .data-toolbar + .audience-legend { margin-top: calc(-1 * var(--space-12)); }
   .audience-legend__terms { flex-direction: column; margin-top: 0; padding-bottom: var(--space-8); }
   .audience-page > .data-toolbar > .cluster { min-width: 0; max-width: 100%; }
+  /* The selection's button shares the search's row instead of starting a new one under it. */
+  .audience-page > .data-toolbar:has(> .audience-selection) { flex-wrap: nowrap; }
+  .audience-page > .data-toolbar:has(> .audience-selection) > .search-box--list { flex: 1 1 0; }
+  .audience-merge-into { grid-template-columns: minmax(0, 1fr); }
+  .audience-merge-into > .audience-merge-error { grid-column: 1; }
 }
 .ui-card__segment .audience-cell-text { display: inline; }
 /* On a card a long name or list shortens before the date does. */

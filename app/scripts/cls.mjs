@@ -59,7 +59,7 @@ const workers = Number(process.env.CLS_WORKERS) || Math.min(32, availableParalle
 const began = Date.now();
 const elapsed = () => `${((Date.now() - began) / 1000).toFixed(1)}s`;
 
-// [name, path, { user, from, click, row, switchTo, support, notes, dialog, still, alone, phoneOnly, notFound, waitlist }]. The in-app navigation starts on `from` and clicks the
+// [name, path, { user, from, click, row, switchTo, support, notes, check, dialog, menu, still, alone, phoneOnly, notFound, waitlist }]. The in-app navigation starts on `from` and clicks the
 // control whose text starts with `click`, the table row containing `row`, picks the workspace `switchTo` in the account
 // switcher, or else a link to `path`; with none of those (pages reached from a dropdown menu) it pushes `path` through
 // the router's history. It must land on `path`. `support` opens the support chat first, `dialog` a dialog (see above);
@@ -225,13 +225,17 @@ const pages = ids => [
   ['Receiving · new agent inbox dialog', '/receiving/inboxes', { dialog: 'New agent inbox' }],
   ['Receiving · ask your agent dialog', '/receiving/rules/new', { dialog: 'Ask your agent' }],
   ['Audience · import dialog', '/audience', { dialog: 'Import contacts' }],
+  // Two lists checked, then Merge…: the dialog's dry run counts the merged list while it is open (a phone opens it
+  // from the selection's action sheet).
+  ['Lists · merge dialog', '/audience/lists', { check: ['Select Customers', 'Select Newsletter'], dialog: 'Merge' }],
+  ['Lists · merge from the action sheet', '/audience/lists', { check: ['Select Customers', 'Select Newsletter'], menu: ['2 selected', 'Merge…', 'Merge 2 lists'], phoneOnly: true }],
   ['Settings · invite dialog', '/settings#members', { dialog: 'Invite teammate' }],
   ['Settings · new webhook', '/settings/webhooks/new', {}],
   ['Settings · add credit dialog', '/settings#billing', { dialog: 'Add credit' }],
 ];
 
 // The phone pass: the pages someone opens on a phone (every list as cards, the details they open, Settings), light only.
-const phonePages = new Set(['Overview', 'Overview · range', 'Homepage · signed in', 'Overview · from the homepage', 'Logs', 'Sent email', 'Sent email · junk-like', 'Received email', 'Sent email · thread', 'Received email · thread', 'Received email · from its thread', 'Sent email · thread sheet', 'Receiving', 'Receiving · rules', 'Receiving · new rule', 'Receiving · recipe form', 'Receiving · recipe rule', 'Receiving · flow panel', 'Receiving · typed address', 'Receiving · why it went here dialog', 'Receiving · address', 'Receiving · address · where mail goes', 'Receiving · address · settings', 'Receiving · agent inboxes', 'Receiving · destinations', 'Campaigns', 'Campaign review', 'Templates', 'Audience', 'Lists', 'Domains', 'Domain', 'API keys', 'Settings', 'Settings · members', 'Settings · plan & usage', 'Settings · activity', 'Settings · billing', 'Settings · billing · owed', 'Settings · billing · free', 'Settings · webhook', 'Settings · MCP connection', 'Onboarding', 'Onboarding · AWS stack', 'Onboarding · AWS refused', 'Onboarding · AWS choose', 'Onboarding · AWS sandbox', 'Onboarding · AWS production access', 'Onboarding · AWS setting up', 'Settings · sending · AWS', 'Two accounts · switch', 'Operator', 'Operator · workspace', 'Operator · UI notes', 'Operator · waitlist', 'Support', 'Support · agent handling', 'Support · conversation', 'Support · customer sheet', 'Support · confirm a change', 'Overview · UI notes mode', 'Operator · without UI notes', 'Overview · restricted', 'Campaigns · restricted', 'Signed out', 'Signed out · deep link', 'Signed out · page not found', 'Signed out · waitlist', 'Legal', 'Legal · terms', 'Legal · privacy', 'Docs', 'Docs · MCP guide', 'Docs · section', 'Docs · signed out', 'Signed out', 'Support chat', 'Overview · sending limits dialog', 'Overview · sender score dialog', 'Overview · connect agent sheet', 'API keys · create key dialog', 'API keys · SMTP login dialog', 'API keys · edit key dialog', 'Receiving · new address dialog', 'Settings · invite dialog', 'Settings · add credit dialog']);
+const phonePages = new Set(['Overview', 'Overview · range', 'Homepage · signed in', 'Overview · from the homepage', 'Logs', 'Sent email', 'Sent email · junk-like', 'Received email', 'Sent email · thread', 'Received email · thread', 'Received email · from its thread', 'Sent email · thread sheet', 'Receiving', 'Receiving · rules', 'Receiving · new rule', 'Receiving · recipe form', 'Receiving · recipe rule', 'Receiving · flow panel', 'Receiving · typed address', 'Receiving · why it went here dialog', 'Receiving · address', 'Receiving · address · where mail goes', 'Receiving · address · settings', 'Receiving · agent inboxes', 'Receiving · destinations', 'Campaigns', 'Campaign review', 'Templates', 'Audience', 'Lists', 'Domains', 'Domain', 'API keys', 'Settings', 'Settings · members', 'Settings · plan & usage', 'Settings · activity', 'Settings · billing', 'Settings · billing · owed', 'Settings · billing · free', 'Settings · webhook', 'Settings · MCP connection', 'Onboarding', 'Onboarding · AWS stack', 'Onboarding · AWS refused', 'Onboarding · AWS choose', 'Onboarding · AWS sandbox', 'Onboarding · AWS production access', 'Onboarding · AWS setting up', 'Settings · sending · AWS', 'Two accounts · switch', 'Operator', 'Operator · workspace', 'Operator · UI notes', 'Operator · waitlist', 'Support', 'Support · agent handling', 'Support · conversation', 'Support · customer sheet', 'Support · confirm a change', 'Overview · UI notes mode', 'Operator · without UI notes', 'Overview · restricted', 'Campaigns · restricted', 'Signed out', 'Signed out · deep link', 'Signed out · page not found', 'Signed out · waitlist', 'Legal', 'Legal · terms', 'Legal · privacy', 'Docs', 'Docs · MCP guide', 'Docs · section', 'Docs · signed out', 'Signed out', 'Support chat', 'Overview · sending limits dialog', 'Overview · sender score dialog', 'Overview · connect agent sheet', 'API keys · create key dialog', 'API keys · SMTP login dialog', 'API keys · edit key dialog', 'Receiving · new address dialog', 'Settings · invite dialog', 'Settings · add credit dialog', 'Lists · merge from the action sheet']);
 const devices = {
   desktop: { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1 },
   phone: { viewport: { width: 390, height: 844 }, deviceScaleFactor: 1, isMobile: true, hasTouch: true },
@@ -438,6 +442,14 @@ async function measure(browser, job, fx) {
       else await page.waitForFunction(() => document.querySelector('#support-panel[data-open]:not([data-busy])') && !document.querySelector('#support-panel .support-caret'), null, { timeout: 30_000, polling: 100 });
       await settle(page, net);
     }
+    if (job.check) {
+      // Row checkboxes, by their labels, before a control that needs a selection.
+      for (const label of job.check) {
+        const checked = await page.evaluate(label => { const el = [...document.querySelectorAll('[role=checkbox]')].find(el => el.getClientRects().length && el.getAttribute('aria-label') === label); el?.click(); return Boolean(el); }, label);
+        if (!checked) problems.push(`no checkbox “${label}”`);
+      }
+      await settle(page, net);
+    }
     if (job.dialog) {
       const opened = await page.evaluate(label => { const el = [...document.querySelectorAll('button')].find(el => el.getClientRects().length && el.textContent.trim().startsWith(label)); el?.click(); return Boolean(el); }, job.dialog);
       if (!opened) problems.push(`no control “${job.dialog}”`);
@@ -453,7 +465,7 @@ async function measure(browser, job, fx) {
       // A row's menu, then one of its items: a dropdown opens on pointer down, a phone's action sheet on click. The
       // dialog the item opens is found by its title.
       const [trigger, item, title] = job.menu;
-      const opened = await page.evaluate(label => { const el = [...document.querySelectorAll('button')].find(el => el.getClientRects().length && el.getAttribute('aria-label') === label); el?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerType: 'mouse' })); el?.click(); return Boolean(el); }, trigger);
+      const opened = await page.evaluate(label => { const el = [...document.querySelectorAll('button')].find(el => el.getClientRects().length && (el.getAttribute('aria-label') ?? el.textContent.trim()) === label); el?.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, pointerType: 'mouse' })); el?.click(); return Boolean(el); }, trigger);
       const choice = opened && await page.waitForFunction(text => [...document.querySelectorAll('[role=menuitem], .ui-action-sheet__item')].find(el => el.getClientRects().length && el.textContent.trim() === text), item, { timeout: 10_000 }).catch(() => null);
       if (!choice) problems.push(opened ? `no “${item}” in “${trigger}”` : `no control “${trigger}”`);
       else {
@@ -755,10 +767,10 @@ try {
   console.log(`${elapsed()} seeded`);
   const jobs = [];
   const passes = [['desktop', 'light'], ['desktop', 'dark'], ...process.env.CLS_PHONE === '0' ? [] : [['phone', 'light']]];
-  for (const [device, scheme] of passes) for (const [name, path, { user = 'dana', from, click, row, switchTo, support, live, leave, notes, dialog, menu, still, alone, phoneOnly, notFound, waitlist, guard }] of pages(ids)) {
+  for (const [device, scheme] of passes) for (const [name, path, { user = 'dana', from, click, row, switchTo, support, live, leave, notes, check, dialog, menu, still, alone, phoneOnly, notFound, waitlist, guard }] of pages(ids)) {
     if (only && !only.test(name) || device === 'phone' && !phonePages.has(name) || phoneOnly && device !== 'phone') continue;
     const slug = `${name}-${device === 'phone' ? 'phone' : scheme}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const load = { name, path, user, scheme, device, support, live, leave: leave && device === 'desktop' && scheme === 'light', notes, dialog, menu, still, alone, notFound, waitlist, guard: guard && device === 'desktop' && scheme === 'light' ? guard : undefined, mode: 'load', slug: slug + '-load' };
+    const load = { name, path, user, scheme, device, support, live, leave: leave && device === 'desktop' && scheme === 'light', notes, check, dialog, menu, still, alone, notFound, waitlist, guard: guard && device === 'desktop' && scheme === 'light' ? guard : undefined, mode: 'load', slug: slug + '-load' };
     if (densityOnly && !density.wanted(load)) continue;
     jobs.push(load);
     if (from && !densityOnly) jobs.push({ name, path, user, from, click, row, switchTo, support, notes, still, alone, scheme, device, mode: 'in-app', slug: slug + '-in-app' });

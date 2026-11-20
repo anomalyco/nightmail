@@ -178,6 +178,7 @@ pub const OPS: &[(&str, &str, &str, Check)] = &[
     ("listSegments", "get", "/v1/segments", Check::Read),
     ("listWebhookDeliveries", "get", "/v1/webhooks/{id}/deliveries", Check::Read),
     ("listWebhooks", "get", "/v1/webhooks", Check::Read),
+    ("mergeContactLists", "post", "/v1/lists/merge", Check::Manage),
     ("moveInboxMessage", "post", "/v1/inboxes/{id}/messages/{messageId}/move", Check::MailboxAccess("modify")),
     ("pauseCampaign", "post", "/v1/campaigns/{id}/pause", Check::Send),
     ("planAudienceMutation", "post", "/v1/audience-query/plan", Check::Manage),

@@ -492,6 +492,23 @@ async function audience() {
   defer(`remove membership ${l.id}`, async () => check((await api('removeListMember', { path: { ...l, contactId: c.id } })).deleted, 'membership not removed'));
   const members = await api('listListMembers', { path: l });
   check(members.nextCursor === null && members.data.length === 1 && members.data[0].id === c.id && members.data[0].email === success, 'refusing audience: not exactly this run’s simulator recipient');
+  await step('Merge two lists into a new one', async () => {
+    // Every list here is named after the run, so the stale sweep finds any a failed run leaves behind.
+    const other = await api('createContactList', { body: { name: prefix } });
+    defer(`delete list ${other.id}`, async () => check((await api('deleteContactList', { path: { id: other.id } })).deleted, 'list not deleted'));
+    check((await api('addListMembers', { path: { id: other.id }, body: { contactIds: [c.id] } })).added === 1, 'did not add the contact to the second list');
+    const body = { sourceIds: [l.id, other.id], into: { name: prefix } };
+    const dry = await api('mergeContactLists', { body: { ...body, dryRun: true } });
+    check(dry.dryRun && dry.list === null && dry.created && dry.added === 1 && dry.total === 1, 'merge dry run did not count the shared contact once');
+    const merged = await api('mergeContactLists', { body, headers: idKey('merge-lists') });
+    const into = merged.list;
+    check(!!into, 'merge returned no list');
+    defer(`delete merged list ${into!.id}`, async () => check((await api('deleteContactList', { path: { id: into!.id } })).deleted, 'merged list not deleted'));
+    check(!merged.dryRun && merged.created && merged.added === 1 && merged.total === 1 && !merged.deletedListIds.length, 'merge did not add the shared contact once');
+    check((await api('mergeContactLists', { body, headers: idKey('merge-lists') })).list?.id === into!.id, 'a retried merge created another list');
+    const after = await api('getContact', { path: c });
+    check(after.listIds.includes(into!.id) && after.listIds.includes(l.id) && after.marketingConsent === 'subscribed', 'merge changed the sources or consent');
+  });
   const preview = await api('previewSegment', { path: s, body: { listId: l.id } });
   check(preview.matched === 1 && preview.eligible === 1, 'segment did not select one eligible member');
   const rows = await api('queryAudience', { body: { statement: `SELECT email FROM contacts WHERE id = '${c.id}'` } });

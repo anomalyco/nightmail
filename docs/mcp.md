@@ -140,6 +140,8 @@ On an API without the expected-recipient guard, MCP omits reply rather than send
 
 `queryAudience` runs the restricted AudienceQL language over contacts, lists and existing segments. It executes bounded `SELECT` reads. Mutations use `planAudienceMutation` followed by confirmed `applyAudiencePlan`, freezing at most 10,000 contact IDs for 15 minutes and rejecting stale contact updates. Supported mutations update contact names, consent and `properties.key` values, or add/remove matching contacts from a list. AudienceQL never exposes physical tables, joins, DDL, comments or multiple statements. Prior opt-outs require `confirmResubscribe`; suppression is never lifted.
 
+`mergeContactLists` (plain MCP: `lists` with action `merge`) adds the members of two or more lists to an existing list or a new one, each contact once, and can delete the source lists. It never changes consent or suppression. Call it with `dryRun: true` first to show the merged list's size, then confirm the merge with an `idempotencyKey`.
+
 Requests are not retried automatically. `idempotencyKey` is forwarded as `Idempotency-Key`; API replay semantics remain authoritative. A repeat while the first request with that key is still running gets `409 IDEMPOTENCY_IN_PROGRESS` with `Retry-After`: wait, then retry with the same key. A failed or interrupted write can have an uncertain outcome. Reconcile state before retrying. HTTP 202 means queued, not delivered.
 
 ## Hosting and safety

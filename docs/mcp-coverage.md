@@ -41,6 +41,7 @@ The remaining rows are human steps: OAuth consent, a forward recipient's confirm
 | `listListMembers` | `lists` · `members` · sending |
 | `addListMembers` | `lists` · `addMembers` · sending |
 | `removeListMember` | `lists` · `removeMember` · sending |
+| `mergeContactLists` | `lists` · `merge` · sending |
 | `listSegments` | `segments` · `list` · sending |
 | `createSegment` | `segments` · `create` · sending |
 | `getSegment` | `segments` · `get` · sending |
