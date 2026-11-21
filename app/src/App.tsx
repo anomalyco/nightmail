@@ -58,9 +58,9 @@ const WebhookDetailPage = settings.page(m => m.WebhookDetailPage)
 const DocsPage = docs.page(m => m.DocsPage)
 const InboundPage = inbound.page(m => m.InboundPage)
 const RulesPage = chunk(()=>import('./features/inbound/rituals')).page(m=>m.RulesPage)
-// Pitch only (pitch/rule-page): ?v=a…i on a rule's page opens one of the proposed versions of it (g, h and i also on a new rule).
+// Pitch only (pitch/rule-page): ?v=a…j on a rule's page opens one of the proposed versions of it (g to j also on a new rule).
 const RulePitch = chunk(()=>import('./features/inbound/rule-pitch')).page(m=>m.RulePitch)
-function PitchOr({ children }: { children: ReactNode }) { return /[?&]v=[a-i](&|$)/.test(useLocation().search) ? <RulePitch /> : <>{children}</> }
+function PitchOr({ children }: { children: ReactNode }) { return /[?&]v=[a-j](&|$)/.test(useLocation().search) ? <RulePitch /> : <>{children}</> }
 const TracePage = inbound.page(m => m.TracePage)
 const RitualsRedirect = inbound.page(m => m.RitualsRedirect)
 const NewRulePage = inbound.page(m => m.NewRulePage)

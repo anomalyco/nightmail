@@ -10,19 +10,23 @@
 //   G · Sentence: one column. The sentence, the input, recent mail; the code folds open under them.
 //   H · Side by side: the code on the left; the sentence, recent mail and the input in one quiet column beside it.
 //   I · Inbox: recent mail is the page, each email with what the rule does to it; the input is docked under it.
+//   J · Code (the owner's answer to G–I: "the page needs to be code first"): the page is the editor. No agent and no
+//     sentence. Over it: the name, the addresses, Undo, Save and the menu. Problems are the editor's own (a squiggle,
+//     its message on hover, a mark by the line number). "Try on recent mail" under the editor (⌘↵) opens the mail with
+//     what the code does to each email; nothing is tested while it is closed.
 // The agent is a stand-in (POST /v1/rules/assist, answered by the pitch fixture with canned replies it checks with the
 // real rule checker). The API has no such operation yet.
 import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowUp, ChevronDown, ChevronRight, Sparkles } from 'lucide-react'
+import { ArrowUp, ChevronDown, ChevronRight, ChevronUp, Sparkles } from 'lucide-react'
 import { Button, ConfirmDialog, Dialog, DropdownMenu, EmptyState, ErrorState, PageHeader, Sheet, Skeleton, Tabs, useToast, type MenuItem } from '../../components/ui'
 import { useApiDef, useApiQuery } from '../../data/context'
 import { request } from '../../data/live'
 import { errorText } from '../../data/types'
 import { staleAfterWrite } from '../../data/invalidation'
 import { queries } from '../../data/queries'
-import { usePhone } from '../../lib/media'
+import { usePhone, useTouch } from '../../lib/media'
 import { ownRecipient, type ReceivedRecipients } from '../../lib/private-address'
 import { firstOverview, useOverview, type OverviewEndpoint } from './overview'
 import { Editor } from './rituals'
@@ -35,14 +39,14 @@ import './receiving.css'
 import './rule-code-pitch.css'
 import './rule-calm-pitch.css'
 
-type V = 'g' | 'h' | 'i'
+type V = 'g' | 'h' | 'i' | 'j'
 type Binding = { rule: string; target: string; continue: boolean }
 type RuleDef = { key: string; source: string; recipe?: unknown; enabled?: boolean }
 type Config = { rules: RuleDef[]; attachments: Binding[]; senderLists: Record<string, string[]>; evaluateDomains: string[]; evaluateRoutes: string[] }
 type Saved = { version: number; config: Config }
 type Received = ReceivedRecipients & { id: string; from: { name: string | null; address: string }; subject: string; at: string }
 type Completion = { label: string; detail: string; info: string; apply?: string; type: string }
-type Problem = { line: number; column: number; message: string; hint?: string }
+type Problem = { line: number; column: number; endColumn?: number; message: string; hint?: string }
 type Check = { ok: boolean; diagnostics: Problem[]; decisions: string[] }
 type Assist = { reply: string; source: string | null; ok: boolean; name?: string }
 type Outcome = { words: string; ai?: number }
@@ -51,6 +55,9 @@ const LIST = '/receiving?tab=rules'
 const SHARED_SETTINGS = '/settings#receiving'
 const DRAFT = 'new-rule'
 const BLANK = 'export default function route(email, ctx) {\n  \n}\n'
+// J's new rule: the function and one line that shows the shape of a rule.
+const STARTER = 'export default function route(email, ctx) {\n  // e.g. return junk("newsletter")\n  \n}\n'
+const KEY = /^[a-z0-9][a-z0-9-]{0,62}$/
 const QUESTION = 'What should this rule do?'
 const STARTERS = ['Post refund requests to #support', 'Junk newsletters', 'Label invoices']
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
@@ -102,7 +109,7 @@ function useStored(name: string, initial: boolean) {
 // ---------------------------------------------------------------- the page's state: one draft, one save
 function useRule(key: string | null, v: V) {
   const client = useQueryClient(), toast = useToast(), navigate = useNavigate()
-  const isNew = key === null, id = key ?? DRAFT
+  const isNew = key === null, id = key ?? DRAFT, coded = v === 'j', blank = coded ? STARTER : ''
   const overview = useOverview(firstOverview)
   const options = useApiDef(queries.inboundAddressOptions())
   const recent = useApiQuery(['pitch-recent'], (_api, signal) => request<{ data: Received[] }>('/v1/logs?direction=received&limit=12', { signal }).then(r => r.data))
@@ -121,13 +128,15 @@ function useRule(key: string | null, v: V) {
   const [reply, setReply] = useState<string | null>(null)
   const [clean, setClean] = useState<Record<string, string>>({})
   const [seed, setSeed] = useState<{ text: string; at: number }>()
+  // J tests only while its results are open.
+  const [testing, setTesting] = useState(!coded)
   const opts = options.data ?? []
   const endpoints = overview.data?.endpoints ?? []
   const rule = saved?.config.rules.find(r => r.key === id)
   const savedSource = rule?.source ?? ''
   function reset(s: Saved) {
     const r = s.config.rules.find(x => x.key === id)
-    setSource(r?.source ?? ''); setAtts(s.config.attachments); setEnabled(r?.enabled !== false); setName(null); setReply(null); setMark({ lines: [], at: Date.now(), hold: true })
+    setSource(r?.source ?? blank); setAtts(s.config.attachments); setEnabled(r?.enabled !== false); setName(null); setReply(null); setMark({ lines: [], at: Date.now(), hold: true })
   }
   useEffect(() => {
     const ac = new AbortController()
@@ -139,7 +148,17 @@ function useRule(key: string | null, v: V) {
   const first = (opts.find(o => o.address.startsWith('support@')) ?? opts[0])?.id
   useEffect(() => { if (isNew && saved && first) setAtts(a => a.some(b => b.rule === id) ? a : [...a, { rule: id, target: first, continue: true }]) }, [isNew, !!saved, first]) // eslint-disable-line react-hooks/exhaustive-deps
   async function lint(text: string) {
-    try { const r = await request<Check>('/v1/rules/check', { method: 'POST', body: { source: text, key: id } }); setCheck(r); return r.diagnostics }
+    try {
+      const r = await request<Check>('/v1/rules/check', { method: 'POST', body: { source: text, key: id } }); setCheck(r)
+      if (!coded) return r.diagnostics
+      // J has no list of problems, so the editor's marks carry them: a squiggle runs under the whole name it starts at,
+      // and an AI question on mail the AI may not read is marked where the code asks it.
+      const lines = text.split('\n')
+      const whole = r.diagnostics.map(d => ({ ...d, endColumn: Math.max(d.endColumn ?? 0, d.column + Math.max(1, /^[\w$.]*/.exec((lines[d.line - 1] ?? '').slice(d.column - 1))![0].length)) }))
+      if (!r.decisions.length) return whole
+      const at = lines.findIndex(l => l.includes('decisions(')), column = at < 0 ? 1 : lines[at]!.indexOf('decisions(') + 1
+      return [...whole, ...blindDomains().map(d => ({ line: Math.max(1, at + 1), column, endColumn: column + 9, message: blindWords(d) }))]
+    }
     catch { return [] }
   }
   useEffect(() => { if (!saved || !source) return; const t = setTimeout(() => void lint(source), 300); return () => clearTimeout(t) }, [source, !!saved]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -147,8 +166,9 @@ function useRule(key: string | null, v: V) {
   const mine = atts.filter(b => b.rule === id)
   const targets = mine.map(b => b.target)
   const after = mine.length ? mine.every(b => b.continue) : true
-  const written = source.trim() !== '' && source !== BLANK
-  const dirty = !!saved && (isNew ? written : !!rule && (source !== rule.source || !same(atts, saved.config.attachments) || enabled !== (rule.enabled !== false)))
+  const written = source.trim() !== '' && source !== BLANK && source !== STARTER
+  const named = KEY.test(name ?? '') && !saved?.config.rules.some(r => r.key === name)
+  const dirty = !!saved && (isNew ? written || (coded && !!name) : !!rule && (source !== rule.source || !same(atts, saved.config.attachments) || enabled !== (rule.enabled !== false)))
   const addressOf = (t: string) => opts.find(o => o.id === t)?.address ?? t
   const refresh = () => void client.invalidateQueries({ predicate: q => staleAfterWrite(q.queryKey, false) }).catch(() => {})
   const draft = {
@@ -165,8 +185,9 @@ function useRule(key: string | null, v: V) {
   const placeOn = (t: string) => { const list = atts.filter(b => b.target === t); return { place: list.findIndex(b => b.rule === id) + 1, of: list.length, keys: list.map(b => b.rule) } }
 
   /** Everything on the page in one write: the code, where it runs and on or off. A new rule is named here. */
+  const canSave = dirty && (!isNew || (written && (!coded || named)))
   async function save() {
-    if (!saved || busy || !dirty) return
+    if (!saved || busy || !canSave) return
     setBusy(true)
     try {
       const as = isNew ? (name ?? 'rule-' + (saved.config.rules.length + 1)) : id
@@ -200,7 +221,8 @@ function useRule(key: string | null, v: V) {
 
   const summary = useMemo(() => describe(source, endpoints), [source, endpoints])
   const domains = saved?.config.evaluateDomains ?? []
-  const blind = check?.decisions.length ? [...new Set(targets.map(t => addressOf(t).split('@')[1] ?? ''))].filter(d => d && !domains.includes(d)) : []
+  const blindDomains = () => [...new Set(targets.map(t => addressOf(t).split('@')[1] ?? ''))].filter(d => d && !domains.includes(d))
+  const blind = check?.decisions.length ? blindDomains() : []
   const problems = !written ? [] : [...(check?.diagnostics ?? []).map(d => ({ where: 'Line ' + d.line, text: d.message + (d.hint ? ' ' + d.hint : '') })), ...blind.map(d => ({ where: 'AI', text: blindWords(d) }))]
 
   // Recent mail to its addresses (else any recent mail), one per conversation.
@@ -213,9 +235,9 @@ function useRule(key: string | null, v: V) {
   /** Dry runs the draft's code on every email, 350 ms after it changes, as if on the address each email went to.
    *  A test never asks the AI: each stored email brings the answer the AI gave when it arrived. */
   const [results, setResults] = useState<Record<string, { src: string; result?: DryRun }>>({})
-  const signature = JSON.stringify([source, emails.map(m => m.id), !!saved])
+  const signature = JSON.stringify([source, emails.map(m => m.id), !!saved, testing])
   useEffect(() => {
-    if (!saved || !written || !emails.length) return
+    if (!saved || !written || !emails.length || !testing) return
     const ac = new AbortController()
     const timer = setTimeout(() => {
       for (const m of emails) {
@@ -232,11 +254,23 @@ function useRule(key: string | null, v: V) {
   const settled = emails.length > 0 && emails.every(m => results[m.id]?.src === source)
   // What the saved rule does to each email, kept from the last time the draft matched it: what a change is compared with.
   useEffect(() => { if (!isNew && settled && source === savedSource) setClean(Object.fromEntries(emails.map(m => [m.id, outcome(m.id)?.words ?? '']))) }, [settled, source, savedSource]) // eslint-disable-line react-hooks/exhaustive-deps
+  // J can open its results on a draft that already differs: the saved rule is then run once, to compare with.
+  const baseless = coded && testing && !!rule && !!saved && source !== savedSource && emails.some(m => !(m.id in clean))
+  useEffect(() => {
+    if (!baseless || !saved) return
+    const ac = new AbortController()
+    void Promise.all(emails.map(m => {
+      const to = ownRecipient(m) ?? m.to[0] ?? ''
+      return request<DryRun>('/v1/rules/test', { method: 'POST', signal: ac.signal, body: { messageId: m.id, to: [to], config: { ...saved.config, attachments: [{ rule: id, target: to, continue: false }] } } })
+        .then(r => [m.id, outcomeOf(r, id, endpoints)?.words ?? ''] as const, () => [m.id, ''] as const)
+    })).then(rows => { if (!ac.signal.aborted) setClean(Object.fromEntries(rows)) })
+    return () => ac.abort()
+  }, [baseless]) // eslint-disable-line react-hooks/exhaustive-deps
   const was = (m: string) => !isNew && settled && source !== savedSource && m in clean && clean[m] !== (outcome(m)?.words ?? '') ? clean[m]! : null
 
   return {
-    key: id, v, isNew, title: key ?? name ?? 'New rule', saved, loadError, missing: !isNew && !!saved && !rule, ready: !!saved && !!overview.data && opts.length > 0 && !!recent.data,
-    options: opts, source, setSource, written, enabled, setEnabled, busy, dirty, save, undo: () => { if (saved) reset(saved) },
+    key: id, v, isNew, title: key ?? (name || 'New rule'), saved, loadError, missing: !isNew && !!saved && !rule, ready: !!saved && !!overview.data && opts.length > 0 && !!recent.data,
+    options: opts, source, setSource, written, enabled, setEnabled, busy, dirty, canSave, save, name, setName, testing, setTesting, undo: () => { if (saved) reset(saved) },
     targets, after, draft, placeOn, addressOf, deleting, setDeleting, remove, completions, lint, problems, mark,
     thinking, reply, ask, summary, emails, outcome, was, seed, about: (subject: string) => setSeed({ text: 'Mail like “' + subject + '” should ', at: Date.now() }),
   }
@@ -245,19 +279,19 @@ type Rule = ReturnType<typeof useRule>
 
 // ---------------------------------------------------------------- the pieces G, H and I share
 /** The title, then Undo and Save. On and off, and delete, are in the menu. */
-function Top({ p, children, more = [] }: { p: Rule; children?: ReactNode; more?: MenuItem[] }) {
+function Top({ p, children, more = [], title, subtitle, settings = true }: { p: Rule; children?: ReactNode; more?: MenuItem[]; title?: ReactNode; subtitle?: ReactNode; settings?: boolean }) {
   const navigate = useNavigate()
   const items: MenuItem[] = [
     ...more,
     { label: p.enabled ? 'Turn off' : 'Turn on', onSelect: () => p.setEnabled(!p.enabled) },
-    { label: SHARED_LABEL, onSelect: () => navigate(SHARED_SETTINGS) },
+    ...(settings ? [{ label: SHARED_LABEL, onSelect: () => navigate(SHARED_SETTINGS) }] : []),
     { label: 'Delete rule', destructive: true, onSelect: () => p.setDeleting(true) },
   ]
   return <>
-    <PageHeader title={<>{p.title}{!p.enabled && <span className="calm-off">Off</span>}</>} backTo={LIST} actions={<>
+    <PageHeader title={title ?? <>{p.title}{!p.enabled && <span className="calm-off">Off</span>}</>} subtitle={subtitle} backTo={LIST} actions={<>
       <Button variant="ghost" className="calm-undo" data-hidden={!p.dirty || undefined} disabled={!p.dirty || p.busy} onClick={p.undo}>Undo</Button>
       {children}
-      <Button variant="primary" loading={p.busy} disabled={!p.dirty} onClick={() => void p.save()}>Save</Button>
+      <Button variant="primary" loading={p.busy} disabled={!p.canSave} onClick={() => void p.save()}>Save</Button>
       {!p.isNew && <DropdownMenu label={'Actions for ' + p.key} items={items} />}
     </>} />
     <ConfirmDialog open={p.deleting} onOpenChange={p.setDeleting} danger title={'Delete ' + p.key + '?'} description={'It stops running on ' + (p.targets.length === 1 ? 'its address' : 'its ' + p.targets.length + ' addresses') + '.'} confirmLabel="Delete rule" onConfirm={p.remove} />
@@ -265,15 +299,21 @@ function Top({ p, children, more = [] }: { p: Rule; children?: ReactNode; more?:
 }
 /** The rule in a sentence (a new rule: the question), and the mail it runs on, which opens where it runs. */
 function Sentence({ p, size = 'lg' }: { p: Rule; size?: 'xl' | 'lg' }) {
-  const [open, setOpen] = useState(false)
-  const shown = p.targets.slice(0, 3), more = p.targets.length - shown.length
   return <div className="calm-say" data-size={size}>
     <p className="calm-say__text">{p.written ? p.summary : QUESTION}</p>
+    <Addresses p={p} />
+  </div>
+}
+/** The mail the rule runs on, in a line; it opens where it runs (addresses, their order, other rules). */
+function Addresses({ p }: { p: Rule }) {
+  const [open, setOpen] = useState(false)
+  const shown = p.targets.slice(0, 3), more = p.targets.length - shown.length
+  return <>
     <button type="button" className="calm-say__on" onClick={() => setOpen(true)}>
       {p.targets.length ? <>Mail to {shown.map((t, i) => <Fragment key={t}>{i > 0 && (i === shown.length - 1 && !more ? ' and ' : ', ')}<span className="calm-say__addr"><Match value={p.addressOf(t)} host={false} />@</span></Fragment>)}{more > 0 && ' and ' + more + ' more'}</> : 'Choose an address'}<ChevronDown size={14} aria-hidden="true" />
     </button>
     <Dialog open={open} onOpenChange={setOpen} title="Runs on" footer={<Button onClick={() => setOpen(false)}>Done</Button>}><RunsOn p={p} /></Dialog>
-  </div>
+  </>
 }
 /** The agent: one input. ⌘K puts the cursor in it. */
 function Ask({ p }: { p: Rule }) {
@@ -302,10 +342,10 @@ function Starters({ p, inline = false }: { p: Rule; inline?: boolean }) {
 }
 /** Recent mail, each email with what the draft does to it. A row the draft treats differently from the saved rule is
  *  filled, with what the saved rule did struck through. With detail, a row opens to who sent it and the AI's answer. */
-function Mail({ p, detail = false }: { p: Rule; detail?: boolean }) {
+function Mail({ p, detail = false, heading = true }: { p: Rule; detail?: boolean; heading?: boolean }) {
   const [open, setOpen] = useState<string | null>(null)
-  return <section className="calm-mail" aria-label="Recent mail">
-    <h2 className="calm-head">Recent mail</h2>
+  return <section className="calm-mail" data-detail={detail || undefined} aria-label="Recent mail">
+    {heading && <h2 className="calm-head">Recent mail</h2>}
     <ul className="calm-rows" role="list">{p.emails.map(m => {
       const o = p.outcome(m.id), old = p.was(m.id), isOpen = detail && open === m.id
       const inner = <>
@@ -315,16 +355,16 @@ function Mail({ p, detail = false }: { p: Rule; detail?: boolean }) {
       </>
       return <li key={m.id} data-acted={!!o?.words || undefined} data-changed={old !== null || undefined}>
         {detail ? <button type="button" className="calm-row" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : m.id)}>{inner}</button> : <div className="calm-row">{inner}</div>}
-        {isOpen && <p className="calm-row__why"><span>To <Match value={ownRecipient(m) ?? m.to[0] ?? ''} />{o?.ai !== undefined && <>. The AI was {Math.round(o.ai * 100)}% sure.</>}</span><Button variant="ghost" onClick={() => p.about(m.subject)}>Not right?</Button></p>}
+        {isOpen && <p className="calm-row__why"><span>To <Match value={ownRecipient(m) ?? m.to[0] ?? ''} />{o?.ai !== undefined && <>. The AI was {Math.round(o.ai * 100)}% sure.</>}</span>{p.v !== 'j' && <Button variant="ghost" onClick={() => p.about(m.subject)}>Not right?</Button>}</p>}
       </li>
     })}</ul>
   </section>
 }
 /** The code. Lines the agent changed since the last save are filled; problems show only when there are some. */
-function Code({ p, fill = false }: { p: Rule; fill?: boolean }) {
+function Code({ p, fill = false, list = true }: { p: Rule; fill?: boolean; list?: boolean }) {
   return <div className="calm-code" data-fill={fill || undefined}>
-    <Editor value={p.source || BLANK} change={p.setSource} completions={p.completions} check={p.lint} flash={p.mark} />
-    {p.problems.length > 0 && <ul className="calm-problems" role="list">{p.problems.map((x, i) => <li key={i}><span>{x.where}</span>{x.text}</li>)}</ul>}
+    <Editor value={p.source || BLANK} change={p.setSource} completions={p.completions} check={p.lint} flash={p.mark} relint={p.targets.length + 1} />
+    {list && p.problems.length > 0 && <ul className="calm-problems" role="list">{p.problems.map((x, i) => <li key={i}><span>{x.where}</span>{x.text}</li>)}</ul>}
   </div>
 }
 const problemWords = (p: Rule) => p.problems.length ? p.problems.length + (p.problems.length === 1 ? ' problem' : ' problems') : null
@@ -384,12 +424,44 @@ function InboxVersion({ p }: { p: Rule }) {
   </div>
 }
 
+// ---------------------------------------------------------------- J · Code
+/** Closed, one quiet line under the editor. Open (click or ⌘↵): recent mail with what the code does to each email, under
+ *  the editor, or in a sheet on a phone. */
+function Try({ p }: { p: Rule }) {
+  const phone = usePhone()
+  const open = p.testing, set = p.setTesting
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); set(!open) } }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
+  const mail = p.emails.length ? <Mail p={p} detail heading={false} /> : <p className="calm-reply">No mail yet</p>
+  return <div className="calm-try" data-open={open || undefined}>
+    <button type="button" className="calm-try__button" aria-expanded={open} aria-keyshortcuts="Meta+Enter" onClick={() => set(!open)}>Try on recent mail<ChevronUp size={14} aria-hidden="true" /></button>
+    {open && !phone && mail}
+    {phone && <Sheet open={open} onOpenChange={set} title="Recent mail"><div className="calm">{mail}</div></Sheet>}
+  </div>
+}
+function CodeVersion({ p }: { p: Rule }) {
+  const phone = usePhone(), touch = useTouch()
+  const name = p.isNew ? <input className="calm-name" value={p.name ?? ''} size={Math.max(8, (p.name ?? '').length)} placeholder="new-rule" aria-label="Rule name" autoFocus spellCheck={false} autoComplete="off" autoCapitalize="off" onChange={e => p.setName(e.target.value.toLowerCase().replace(/[^a-z0-9-]+/g, '-') || null)} /> : undefined
+  const problem = p.problems[0]
+  return <div className="stack calm calm-j">
+    <Top p={p} title={name} subtitle={phone ? undefined : <Addresses p={p} />} settings={false} />
+    {phone && <div className="calm-j__on"><Addresses p={p} /></div>}
+    <div className="calm-j__body">
+      <div className="calm-j__code"><Code p={p} fill list={false} />{touch && problem && <p className="calm-j__problem" role="status"><span>{problem.where}</span>{problem.text}</p>}</div>
+      <Try p={p} />
+    </div>
+  </div>
+}
+
 // ---------------------------------------------------------------- the page
 export function CalmRulePitch({ ruleKey: key, v }: { ruleKey: string | null; v: V }) {
   const p = useRule(key, v)
   const shell = 'stack calm calm-' + v
   if (p.loadError) return <div className={shell}><PageHeader title={p.title} backTo={LIST} /><ErrorState error={p.loadError} onRetry={() => location.reload()} /></div>
-  if (!p.ready) return <div className={shell}><PageHeader title={p.title} backTo={LIST} /><div className="calm-loading" aria-busy="true"><Skeleton width="70%" height={24} /><Skeleton width="34%" height={14} /></div></div>
+  if (!p.ready) return <div className={shell}><PageHeader title={p.title} backTo={LIST} />{v === 'j' ? <div className="calm-j__body" aria-busy="true"><div className="calm-j__code"><div className="calm-code" data-fill /></div></div> : <div className="calm-loading" aria-busy="true"><Skeleton width="70%" height={24} /><Skeleton width="34%" height={14} /></div>}</div>
   if (p.missing) return <div className={shell}><PageHeader title={p.title} backTo={LIST} /><EmptyState title={'No rule named ' + p.title} action={<Link className="ui-button ui-button--secondary ui-button--md" to={LIST}>Rules</Link>} /></div>
-  return v === 'g' ? <SentenceVersion p={p} /> : v === 'h' ? <SideVersion p={p} /> : <InboxVersion p={p} />
+  return v === 'g' ? <SentenceVersion p={p} /> : v === 'h' ? <SideVersion p={p} /> : v === 'i' ? <InboxVersion p={p} /> : <CodeVersion p={p} />
 }
