@@ -17,7 +17,7 @@ import { logHref, logRowLabel, useLogRowIntent } from '../logs/rows'
 import { usePrefetchQueries } from '../../data/prefetch'
 import { composer } from '../campaigns/composer-chunk'
 import { DailyLimit, SetupRail, useSendingLimitPending, useSetupSteps } from './setup'
-import { blocksVariant, BOUNCE_LINE, ChartA, ChartC, COMPLAINT_LINE, FactsA, FactsC, LanesB, NO_EMAILS, useChartVariant } from './pitch'
+import { blocksMode, blocksVariant, BOUNCE_LINE, ChartA, ChartC, COMPLAINT_LINE, FactsA, FactsC, LanesB, NO_EMAILS, useChartVariant } from './pitch'
 import { useCompactShell, useMediaQuery } from '../../lib/media'
 
 // Overview: four facts with their own series, the activity chart and the latest emails (down to the card's bottom) on
@@ -71,7 +71,7 @@ export function OverviewPage() {
         <Fragment key={held ? 'held' : 'ready'}>
           {query.isError && !data ? <ErrorState error={query.error} onRetry={() => query.refetch()} /> : <>
             {data && !held ? blocksVariant(variant) ? <FactsA data={data} stale={query.isPlaceholderData} /> : variant === 'b' ? <LanesB data={data} range={shownRange} stale={query.isPlaceholderData} /> : variant === 'c' ? <FactsC data={data} stale={query.isPlaceholderData} /> : <Facts data={data} stale={query.isPlaceholderData} /> : <FactsSkeleton />}
-            {variant === 'b' ? null : data && !held ? blocksVariant(variant) ? <ChartA data={data} range={shownRange} stale={query.isPlaceholderData} mode={variant === 'a2' ? 'strip' : variant === 'a3' ? 'pins' : 'stack'} /> : variant === 'c' ? <ChartC data={data} range={shownRange} stale={query.isPlaceholderData} /> : <Chart data={data} range={shownRange} stale={query.isPlaceholderData} /> : <ChartSkeleton />}
+            {variant === 'b' ? null : data && !held ? blocksVariant(variant) ? <ChartA data={data} range={shownRange} stale={query.isPlaceholderData} mode={blocksMode(variant)} /> : variant === 'c' ? <ChartC data={data} range={shownRange} stale={query.isPlaceholderData} /> : <Chart data={data} range={shownRange} stale={query.isPlaceholderData} /> : <ChartSkeleton />}
           </>}
           <LatestEmails params={latestParams} held={held} />
         </Fragment>

@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react'
+import { useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from 'react'
 import { useSearchParams } from 'react-router'
 import type { ChartPoint, Overview, TimeRange } from '../../data/types'
 import { date, number, percent } from '../../lib/format'
@@ -16,9 +16,15 @@ const HOUR = 3_600_000, DAY = 86_400_000
 
 // a2 and a3 keep A's tiles and fat bars, but the bars carry volume only: a2 puts problems in a strip of hourly cells
 // under the axis, a3 tags the hours with problems above their bars.
-export type ChartVariant = 'a' | 'a2' | 'a3' | 'b' | 'c'
-export const chartVariant = (value: string | null): ChartVariant | null => value === 'a' || value === 'a2' || value === 'a3' || value === 'b' || value === 'c' ? value : null
-export const blocksVariant = (variant: ChartVariant | null): variant is 'a' | 'a2' | 'a3' => variant === 'a' || variant === 'a2' || variant === 'a3'
+// l1 and l2 keep A's tiles and draw the activity as lines: l1 puts bounces and complaints on their own small count
+// scale in the same plot, l2 puts the rates, as a share of their limits, in a slim panel under the emails line.
+const variants = ['a', 'a2', 'a3', 'l1', 'l2', 'b', 'c'] as const
+export type ChartVariant = typeof variants[number]
+export const chartVariant = (value: string | null): ChartVariant | null => variants.find(variant => variant === value) ?? null
+export type BlocksMode = 'stack' | 'strip' | 'pins' | 'l1' | 'l2'
+const blocksModes: Partial<Record<ChartVariant, BlocksMode>> = { a: 'stack', a2: 'strip', a3: 'pins', l1: 'l1', l2: 'l2' }
+export const blocksMode = (variant: ChartVariant | null) => variant ? blocksModes[variant] : undefined
+export const blocksVariant = (variant: ChartVariant | null) => blocksMode(variant) !== undefined
 export function useChartVariant() { const [params] = useSearchParams(); return chartVariant(params.get('chart')) }
 // The block's height above Latest emails (latest.ts): facts, the 20px gap and the chart, or B's single block.
 export const blockHeight = (variant: ChartVariant | null) => blocksVariant(variant) ? 104 + 20 + 220 : variant === 'b' ? 278 : variant === 'c' ? 84 + 20 + 220 : 81 + 20 + 220
@@ -91,14 +97,14 @@ const ofLimit = (rate: number, limit: number) => `${Math.max(rate > 0 ? 1 : 0, M
 function Right({ children, className }: { children: ReactNode; className?: string }) {
   return <span className={className ? `pitch-right ${className}` : 'pitch-right'}><span>{children}</span></span>
 }
-function Legend({ items }: { items: Array<[FigureKey, string]> }) {
-  return <span className="pitch-legend" aria-hidden="true">{items.map(([key, text]) => <span key={key}><i className={`pitch-key pitch-key--${key}`} />{text}</span>)}</span>
+function Legend({ items, lines = false }: { items: Array<[FigureKey, string]>; lines?: boolean }) {
+  return <span className={lines ? 'pitch-legend pitch-legend--lines' : 'pitch-legend'} aria-hidden="true">{items.map(([key, text]) => <span key={key}><i className={`pitch-key pitch-key--${key}`} />{text}</span>)}</span>
 }
-function Tip({ points, i, side }: { points: ChartPoint[]; i: number; side: CSSProperties }) {
+function Tip({ points, i, side, deliveredShare = false }: { points: ChartPoint[]; i: number; side: CSSProperties; deliveredShare?: boolean }) {
   const p = points[i]
   return <div className="pitch-tip" role="status" style={side}><strong>{bucketLabel(points, i)}</strong>
     <span><i className="pitch-key pitch-key--sent" />Emails<b>{number(p.sent)}</b></span>
-    <span><i className="pitch-key pitch-key--delivered" />Delivered<b>{number(p.delivered)}</b></span>
+    <span><i className="pitch-key pitch-key--delivered" />Delivered<b>{deliveredShare ? p.sent ? percent(share(p.delivered, p.sent), 1) : '—' : number(p.delivered)}</b></span>
     <span><i className="pitch-key pitch-key--bounces" />Bounced<b>{number(p.bounced)}<em data-zone={zone(hourRate(p.bounced, p.sent), BOUNCE_LINE)}>{p.sent ? percent(share(p.bounced, p.sent), 1) : '—'}</em></b></span>
     <span><i className="pitch-key pitch-key--complaints" />Complaints<b>{number(p.complaints)}</b></span>
   </div>
@@ -140,11 +146,105 @@ export function FactsSkeletonA() {
   </div>)}</div>
 }
 
-export function ChartA({ data, range, stale, mode = 'stack' }: { data: Overview; range: TimeRange; stale: boolean; mode?: 'stack' | 'strip' | 'pins' }) {
+export function ChartA({ data, range, stale, mode = 'stack' }: { data: Overview; range: TimeRange; stale: boolean; mode?: BlocksMode }) {
+  const lines = mode === 'l1' || mode === 'l2'
   return <section className="ov-chart pa-chart" aria-label="Sending activity" data-stale={stale || undefined} data-range={range}>
-    <div className="ov-chart__head"><h2 className="ui-label ui-label--rule">Activity</h2><Legend items={[['sent', mode === 'stack' ? 'Delivered' : 'Emails'], ['bounces', 'Bounced'], ['complaints', 'Complaints']]} /></div>
-    <div className="ov-chart__plot">{!data.sent ? <EmptyState title={NO_EMAILS} /> : mode === 'stack' ? <StackPlot points={data.points} /> : <VolumePlot points={data.points} mode={mode} />}</div>
+    <div className="ov-chart__head"><h2 className="ui-label ui-label--rule">Activity</h2><Legend lines={lines} items={[['sent', mode === 'stack' ? 'Delivered' : 'Emails'], ['bounces', 'Bounced'], ['complaints', 'Complaints']]} /></div>
+    <div className="ov-chart__plot">{!data.sent ? <EmptyState title={NO_EMAILS} /> : mode === 'stack' ? <StackPlot points={data.points} /> : lines ? <LinePlot data={data} mode={mode} /> : <VolumePlot points={data.points} mode={mode} />}</div>
   </section>
+}
+
+// Monotone cubic segments through the points (one "C" command per gap): the curve passes through every value without
+// overshooting a peak or dipping under zero, and a flat run stays flat.
+function monotone(xs: number[], ys: number[]) {
+  const slopes = ys.slice(1).map((y, i) => (y - ys[i]) / (xs[i + 1] - xs[i]))
+  const tangents = ys.map((_, i) => i === 0 ? slopes[0] ?? 0 : i === ys.length - 1 ? slopes[i - 1] : slopes[i - 1] * slopes[i] <= 0 ? 0 : 2 * slopes[i - 1] * slopes[i] / (slopes[i - 1] + slopes[i]))
+  return slopes.map((_, i) => { const third = (xs[i + 1] - xs[i]) / 3; return `C ${xs[i] + third} ${ys[i] + tangents[i] * third} ${xs[i + 1] - third} ${ys[i + 1] - tangents[i + 1] * third} ${xs[i + 1]} ${ys[i + 1]}` })
+}
+// A line through the drawn buckets; keep(i) drops the segment from bucket i to i + 1 (an outcome's line only rises
+// where it has something, and never runs along the baseline between).
+function Line({ xs, ys, kind, keep = () => true }: { xs: number[]; ys: number[]; kind: FigureKey; keep?: (i: number) => boolean }) {
+  let path = '', end = -1
+  monotone(xs, ys).forEach((segment, i) => { if (!keep(i)) return; if (end !== i) path += `M ${xs[i]} ${ys[i]} `; path += segment + ' '; end = i + 1 })
+  return path ? <path d={path} className={`pl-line pl-line--${kind}`} /> : null
+}
+// l1 and l2. Emails are a navy line over a flat navy wash. The window's first and last buckets are still partly counted
+// (the window starts and ends mid-hour), so the lines leave them out rather than dip; they stay in the figures and the
+// readout. l1 draws bounces and complaints as counts on their own small scale in the lower half of the plot: their
+// latest values label the lines' ends, and while a bucket is hovered that scale shows as a short right axis instead. l2 gives the emails line most of the height and puts the bounce and complaint
+// rates under it as a share of their limits, so both limits are the one dashed line. Every hour over a limit has a dot
+// on its line. Hover (or tap and drag on a phone) moves a crosshair with one readout.
+function LinePlot({ data, mode }: { data: Overview; mode: 'l1' | 'l2' }) {
+  const points = data.points
+  const [ref, width] = useWidth<HTMLDivElement>(790)
+  const [active, setActive] = useState<number | null>(null)
+  const compact = width < 520, split = mode === 'l2'
+  const height = 196, axis = 24, left = compact ? 36 : 44, right = width - (split ? 0 : compact ? 30 : 44), top = 12
+  const mainBottom = split ? height - axis - (compact ? 60 : 64) : height - axis
+  const rateTop = mainBottom + 16, rateBottom = height - axis
+  const n = points.length, slot = (right - left) / Math.max(1, n)
+  const xs = points.map((_, i) => left + (i + 0.5) * slot)
+  const max = niceMax(Math.max(...points.map(p => p.sent)))
+  const ey = (value: number) => mainBottom - value / max * (mainBottom - top)
+  const bucket = bucketOf(points)
+  const firstPartial = n > 3 && Date.parse(data.periodStart) > Date.parse(points[0].at)
+  const lastPartial = n > 3 && Date.parse(data.periodEnd) < Date.parse(points[n - 1].at) + bucket
+  const from = firstPartial ? 1 : 0, to = lastPartial ? n - 2 : n - 1, drawn = (i: number) => i >= from && i <= to
+  const span = <T,>(values: T[]) => values.slice(from, to + 1)
+  const bounced = points.map(p => p.bounced), complaints = points.map(p => p.complaints)
+  const bounceRatio = points.map(p => hourRate(p.bounced, p.sent) / BOUNCE_LINE), complaintRatio = points.map(p => hourRate(p.complaints, p.sent) / COMPLAINT_LINE)
+  // l1: the outcomes' own count scale; l2: share of the limit, at least 150% so the dashed line sits two thirds up.
+  const outcomeMax = niceMax(Math.max(3, ...bounced, ...complaints))
+  const band = (mainBottom - top) * 0.55
+  const oy = (value: number) => mainBottom - value / outcomeMax * band
+  const ratioMax = Math.max(1.5, Math.min(3, Math.max(...bounceRatio, ...complaintRatio) * 1.1))
+  const ry = (ratio: number) => rateBottom - Math.min(ratio, ratioMax) / ratioMax * (rateBottom - rateTop)
+  const bounceY = split ? bounceRatio.map(ry) : bounced.map(oy), complaintY = split ? complaintRatio.map(ry) : complaints.map(oy)
+  const hasComplaint = (i: number) => complaints[from + i] > 0 || complaints[from + i + 1] > 0
+  // Dots: an hour over the bounce limit, and any hour with a complaint (one is worth seeing at any rate).
+  const marked = { bounces: bounceRatio.map((r, i) => drawn(i) && r >= 1), complaints: complaints.map((c, i) => drawn(i) && c > 0) }
+  const emailsY = points.map(p => ey(p.sent))
+  const lastFull = to
+  // l1's end labels, kept 12px apart (thousands as 2.8k where a phone's gutter is narrow).
+  const endText = (value: number) => compact && value >= 1000 ? `${(value / 1000).toFixed(1).replace(/\.0$/, '')}k` : number(value)
+  const ends = ([['sent', emailsY[lastFull], endText(points[lastFull]?.sent ?? 0)], ['bounces', bounceY[lastFull], endText(bounced[lastFull])], ['complaints', complaintY[lastFull], endText(complaints[lastFull])]] as const)
+    .map(([kind, y, text]) => ({ kind, y, text })).sort((a, b) => a.y - b.y)
+  for (let i = ends.length - 2; i >= 0; i--) ends[i].y = Math.min(ends[i].y, ends[i + 1].y - 12)
+  const scrub = (event: ReactPointerEvent<HTMLDivElement>) => {
+    if (event.pointerType === 'mouse') return
+    const box = event.currentTarget.getBoundingClientRect()
+    setActive(Math.max(0, Math.min(n - 1, Math.floor((event.clientX - box.left - left) / slot))))
+  }
+  const dot = (cx: number, cy: number, kind: FigureKey, key: string) => <circle key={key} cx={cx} cy={cy} r={3.5} className={`pl-dot pl-dot--${kind}`} />
+  return <div ref={ref} className="pitch-plot pl-plot" data-active={active !== null || undefined} onMouseLeave={() => setActive(null)} onPointerDown={scrub} onPointerMove={scrub}>
+    <svg viewBox={`0 0 ${width} ${height}`} role="group" aria-label={split ? 'Emails per bucket; bounce and complaint rates as a share of their limits' : 'Emails, bounces and complaints per bucket'}>
+      {(split ? [0, 1, 2] : [0, 1, 2, 3]).map((i, _, all) => { const steps = all.length - 1, gy = top + i * (mainBottom - top) / steps; return <g key={i}><line x1={left} x2={right} y1={gy} y2={gy} className={i === steps ? 'chart-grid chart-grid--base' : 'chart-grid'} /><text x={left - 8} y={gy + 3.5} textAnchor="end" className="chart-label">{number(Math.round(max * (1 - i / steps)))}</text></g> })}
+      {split && <g>
+        <line x1={left} x2={right} y1={ry(1)} y2={ry(1)} className="pl-limit" /><text x={left - 8} y={ry(1) + 3.5} textAnchor="end" className="chart-label pl-limit-label">Limit</text>
+        <line x1={left} x2={right} y1={rateBottom} y2={rateBottom} className="chart-grid chart-grid--base" /><text x={left - 8} y={rateBottom + 3.5} textAnchor="end" className="chart-label">0</text>
+      </g>}
+      <path d={`M ${xs[from]} ${mainBottom} L ${xs[from]} ${emailsY[from]} ${monotone(span(xs), span(emailsY)).join(' ')} L ${xs[to]} ${mainBottom} Z`} className="pl-wash" />
+      <Line xs={span(xs)} ys={span(emailsY)} kind="sent" />
+      <Line xs={span(xs)} ys={span(bounceY)} kind="bounces" />
+      <Line xs={span(xs)} ys={span(complaintY)} kind="complaints" keep={hasComplaint} />
+      {points.map((p, i) => <g key={p.at}>{marked.bounces[i] && dot(xs[i], bounceY[i], 'bounces', 'b')}{marked.complaints[i] && dot(xs[i], complaintY[i], 'complaints', 'c')}</g>)}
+      {!split && (active === null
+        ? ends.map(end => <text key={end.kind} x={right + 8} y={end.y + 3.5} className={`chart-label pl-end pl-end--${end.kind}`}>{end.text}</text>)
+        : [0, 1, 2, 3].map(i => <text key={i} x={right + 8} y={oy(outcomeMax * (1 - i / 3)) + 3.5} className="chart-label pl-end pl-end--bounces">{number(Math.round(outcomeMax * (1 - i / 3)))}</text>))}
+      {active !== null && <g className="pl-cursor">
+        <line x1={xs[active]} x2={xs[active]} y1={top} y2={split ? rateBottom : mainBottom} className="pl-crosshair" />
+        {drawn(active) && <>{dot(xs[active], emailsY[active], 'sent', 'e')}{dot(xs[active], bounceY[active], 'bounces', 'b')}{complaints[active] > 0 && dot(xs[active], complaintY[active], 'complaints', 'c')}</>}
+      </g>}
+      {ticks(points, right - left, compact ? 60 : 72).map(i => <text key={i} x={xs[i]} y={height - 6} textAnchor="middle" className="chart-label">{tickLabel(points, i)}</text>)}
+      <Hits points={points} x={i => left + i * slot} width={slot} top={0} height={height - axis} onActive={setActive} />
+    </svg>
+    {active !== null && <Tip points={points} i={active} deliveredShare side={tipSide(xs[active], width, compact ? 164 : 204)} />}
+  </div>
+}
+// The readout beside the crosshair, on the side with room for it, never past the plot's edges.
+function tipSide(x: number, width: number, tip: number): CSSProperties {
+  const after = x + 12, before = x - 12 - tip
+  return { left: Math.max(0, Math.min(width - tip, after + tip <= width ? after : before)) }
 }
 // An hour's problems, judged the same way everywhere below: bounces from a fifth of their limit (1%) are worth a look
 // and at the limit are over it; any complaint counts.

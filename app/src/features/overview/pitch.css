@@ -53,6 +53,29 @@
 .pa-flag[data-zone='over'], .pa-flag--complaints { fill: var(--color-danger-marker); }
 .pa-flag-mark { fill: var(--color-warning-marker); }
 .pa-flag-mark--complaints { fill: var(--color-danger-marker); }
+/* l1 and l2: lines over a flat navy wash, dots ringed in the page colour. */
+.pitch-legend--lines i { width: 12px; height: 2px; }
+.pl-plot svg { touch-action: pan-y; }
+.pl-wash { fill: color-mix(in oklch, var(--color-accent-data) 10%, transparent); }
+.pl-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.pl-line--sent { stroke: var(--color-accent-data); stroke-width: 2.25; }
+.pl-line--bounces { stroke: var(--color-warning-marker); }
+.pl-line--complaints { stroke: var(--color-danger-marker); }
+.pl-dot { stroke: var(--color-surface, var(--color-deep)); stroke-width: 2; }
+.pl-dot--sent { fill: var(--color-accent-data); }
+.pl-dot--bounces { fill: var(--color-warning-marker); }
+.pl-dot--complaints { fill: var(--color-danger-marker); }
+.pl-plot .pitch-tip { min-width: 0; width: 204px; }
+.pl-crosshair { stroke: var(--color-muted); stroke-width: 1; shape-rendering: crispEdges; }
+.pl-limit { stroke: var(--color-muted); stroke-dasharray: 3 3; shape-rendering: crispEdges; }
+.pl-limit-label { text-transform: uppercase; letter-spacing: var(--tracking-label); font-size: 9.5px; }
+.pl-plot .pl-end { font-variant-numeric: tabular-nums; }
+.pl-plot .pl-end--sent { fill: var(--color-accent-data); }
+.pl-plot .pl-end--bounces { fill: var(--color-warning-marker); }
+.pl-plot .pl-end--complaints { fill: var(--color-danger-marker); }
+:root:not([data-theme='dark']) .pl-plot .pl-end--bounces { fill: var(--color-warning); }
+:root:not([data-theme='dark']) .pl-plot .pl-end--complaints { fill: var(--color-danger); }
+
 /* a2's problem cells and a3's chips: flat fills with dark figures on them (white on red in light mode). */
 .pa-cell { fill: color-mix(in oklch, var(--color-text) 7%, transparent); }
 .pa-cell[data-zone='warn'], .pa-chip[data-zone='warn'] { fill: var(--color-warning-marker); }
@@ -140,6 +163,9 @@
   .pa-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .pa-plot .pitch-tip { right: 0 !important; left: 0 !important; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--space-16); min-width: 0; }
   .pa-plot .pitch-tip strong { grid-column: 1 / -1; }
+  .pl-plot .pitch-tip { min-width: 0; width: 164px; padding: var(--space-6) var(--space-8) var(--space-8); gap: 2px; font-size: 11px; }
+  .pl-plot .pitch-tip span { gap: var(--space-6); }
+  .pl-plot .pitch-tip em { min-width: 34px; }
   .pitch-legend { gap: var(--space-8); }
   .ov-chart__head:has(.pitch-legend) h2::after { display: none; }
   .pb-lanes { grid-template-columns: minmax(0, 1fr); grid-template-rows: 24px 88px 24px 48px 24px 40px 22px; }
