@@ -25,6 +25,12 @@ const supportInbox = chunk(() => import('./features/support-inbox'))
 const supportAction = chunk(() => import('./features/support/actions'))
 const legal = chunk(() => import('./features/legal'))
 const supportContinue = chunk(() => import('./features/support/continue'))
+// Pitch (pitch/setups): a newsletter as a page, one issue's review, and Add.
+const setups = chunk(() => import('./features/setups'))
+const NewsletterPage = setups.page(m => m.NewsletterPage)
+const IssuePage = setups.page(m => m.IssuePage)
+const AddPage = setups.page(m => m.AddPage)
+const NewNewsletterPage = setups.page(m => m.NewNewsletterPage)
 const loadOnboarding = onboarding.preload
 const loadOverview = overview.preload
 const loadLogs = logs.preload
@@ -161,6 +167,7 @@ export function App() {
 // The route table, also given to analytics (a page view names its template) and to the signed-out pages (lib/routes.ts).
 const routes = <><Route path="legal/:doc?" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><LegalPage /></Suspense></ChunkFallback.Provider>} /><Route path="onboarding" element={<OnboardingRoute />} /><Route path="support/continue/:id/:message" element={<ChunkFallback.Provider value={<BootLoader />}><SupportContinuePage /></ChunkFallback.Provider>} /><Route index element={<RootPage />} /><Route element={<DashboardGate />}>
     <Route path="overview" element={<OverviewPage />} />
+    <Route path="newsletters/:id" element={<NewsletterPage />} /><Route path="newsletters/:id/issues/:issue" element={<IssuePage />} /><Route path="add" element={<AddPage />} /><Route path="add/newsletter" element={<NewNewsletterPage />} />
     <Route path="logs" element={<LogsPage />} /><Route path="logs/received/:id" element={<Moved to={params => `/logs/${encodeURIComponent(params.id ?? '')}`} />} /><Route path="logs/:id" element={<LogDetailPage />} />
     <Route path="receiving/endpoints" element={<Navigate replace to="/receiving?tab=destinations" />}/><Route path="receiving/rituals/*" element={<RitualsRedirect />} /><Route path="receiving/rules/new" element={<NewRulePage />} /><Route path="receiving/rules/new/script" element={<RulePage />} /><Route path="receiving/rules/new/:recipe" element={<NewRecipeRoute />} /><Route path="receiving/rules/:key" element={<RulePage />} /><Route path="receiving/rules/:key/code" element={<Moved to={params => `/receiving/rules/${encodeURIComponent(params.key ?? '')}`} />} /><Route path="receiving/rules" element={<Navigate replace to="/receiving?tab=rules" />} /><Route path="receiving/routing" element={<Navigate replace to="/receiving" />} /><Route path="receiving/trace" element={<TracePage />} /><Route path="receiving" element={<ReceivingPage />} /><Route path="receiving/inbox" element={<InboundPage />} /><Route path="receiving/addresses/:id" element={<InboundAddressDetailPage />} /><Route path="receiving/webhooks" element={<WebhooksListRedirect />} /><Route path="receiving/webhooks/:id" element={<InboundWebhookDetailPage />} />
     <Route path="receiving/addresses" element={<Moved to={() => '/receiving'} />} /><Route path="inbound" element={<Moved to={() => '/logs?view=received'} />} /><Route path="inbound/addresses" element={<Moved to={() => '/receiving'} />} /><Route path="inbound/addresses/:id" element={<Moved to={params => `/receiving/addresses/${id(params)}`} />} /><Route path="inbound/webhooks" element={<WebhooksListRedirect />} /><Route path="inbound/webhooks/:id" element={<Moved to={params => `/receiving/webhooks/${id(params)}`} />} />

@@ -1,6 +1,6 @@
 import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType } from 'react-router'
-import { BookOpen, Ellipsis, Globe, Inbox, KeyRound, LayoutGrid, LifeBuoy, Lock, Plug, ScrollText, Send, Settings, ShieldCheck, Users } from 'lucide-react'
+import { Link, Navigate, NavLink, Outlet, useLocation, useNavigate, useNavigationType } from 'react-router'
+import { Ellipsis, Lock, LogOut, Plug } from 'lucide-react'
 import { useRegion, useSession, useWorkspaceAccess } from '../data/context'
 import { sidebarPaths, usePrefetchQueries, usePrefetchRoute, useRouteIntent } from '../data/prefetch'
 import { useRegionCatalog, useRegionDiscovery } from '../data/regions'
@@ -9,7 +9,7 @@ import { chunk, ChunkFallback } from '../lib/preloadable'
 import { queries } from '../data/queries'
 import { useScoreAbout } from '../lib/score-about'
 import { openConnectAgent, useConnectAgentOpen } from '../lib/connect-agent'
-import { Alert, Button, EmptyState, ErrorState, Select, Sheet, Skeleton, SkeletonText, useToast } from './ui'
+import { Alert, Button, EmptyState, ErrorState, IconButton, Select, Sheet, Skeleton, SkeletonText, useToast } from './ui'
 import { useCompactShell } from '../lib/media'
 import { RouteSkeleton } from './RouteSkeleton'
 import { ThemeToggle } from './ThemeToggle'
@@ -24,6 +24,10 @@ import { togglePrivacy } from '../lib/privacy'
 import { SupportHost, SupportTrigger, useSupportChat } from './SupportChat'
 import { notesModifierLabel, useUiNotesMode, useUiNotesShortcut } from '../lib/ui-notes-mode'
 import { productName } from '../../../api/src/brand'
+import { BootLoader } from './BootLoader'
+import { useSetups, type Setups } from '../features/setups/data'
+import { addPath, homeFor, isEmpty, navFor, type NavEntry } from '../features/setups/nav'
+import '../features/setups/setups.css'
 
 // The sender score card (hosted): its code and data load with the shell, into a slot that already has its final size.
 const score = chunk(() => import('../features/score'))
@@ -39,17 +43,33 @@ const UiNotesLayer = chunk(() => import('../features/ui-notes')).page(module => 
 
 // Members can't manage sending infrastructure; the API enforces this too.
 const adminOnly = new Set(['/api-keys', '/domains'])
-type NavItem = readonly [path: string, title: string]
-const navigation: readonly NavItem[] = [['/overview', 'Overview'], ['/logs', 'Logs'], ['/receiving', 'Receiving'], ['/campaigns', 'Campaigns'], ['/audience', 'Audience'], ['/domains', 'Domains'], ['/api-keys', 'API keys'], ['/docs', 'Docs'], ['/settings', 'Settings']]
-// Nightmail staff (a platform operator role in GET /v1/me) also get the support inbox and the operator console, last.
-const staffLinks: readonly NavItem[] = [['/support', 'Support'], ['/operator', 'Operator']]
-// Below 900 px the sidebar becomes a top bar (workspace, theme) and a bottom tab bar: the four areas used most, one
-// thumb-tap away and always in view, and More, a sheet with the rest. A drawer would hide every destination behind a
-// button; the tab bar keeps the main ones visible and says where you are.
-const tabs = ['/overview', '/logs', '/receiving', '/campaigns']
-const icons: Record<string, ReactNode> = { '/overview': <LayoutGrid />, '/logs': <ScrollText />, '/receiving': <Inbox />, '/campaigns': <Send />, '/audience': <Users />, '/domains': <Globe />, '/api-keys': <KeyRound />, '/docs': <BookOpen />, '/settings': <Settings />, '/support': <LifeBuoy />, '/operator': <ShieldCheck /> }
+// Pitch (pitch/setups): the sidebar is built from what the workspace has set up (features/setups/nav.tsx), not a fixed
+// list. Below 900 px the first four are tabs, one thumb-tap away, and More holds the rest.
 const current = (path: string, pathname: string) => pathname === path || pathname.startsWith(`${path}/`)
+// What the workspace has set up decides the shell: nothing yet is the first screen with no sidebar; someone invited to
+// one newsletter stays in it; a workspace with no app email has no Overview. (In the product this would ride on /v1/me.)
 export function AppShell() {
+  const setups = useSetups(), location = useLocation()
+  if (setups.isError) return <ErrorState error={setups.error} onRetry={() => void setups.refetch()} />
+  if (!setups.data) return <BootLoader />
+  const data = setups.data, path = location.pathname
+  if (isEmpty(data)) return path === addPath || path.startsWith(`${addPath}/`) ? <StartShell /> : <Navigate to={addPath} replace />
+  const home = homeFor(data)
+  if (data.only && !path.startsWith(home) && !path.startsWith('/campaigns/')) return <Navigate to={home} replace />
+  if (path === '/overview' && !data.has.app) return <Navigate to={home} replace />
+  return <Shell setups={data} />
+}
+function StartShell() {
+  const session = useSession()
+  return <div className="start-shell">
+    <header className="start-shell__bar">
+      <span className="wordmark"><NightmailWordmark /></span>
+      <div><div className="start-shell__workspace"><AccountSwitcher /></div><ThemeToggle /><IconButton className="start-shell__signout" label="Sign out" onClick={() => void session?.logout()}><LogOut size={16} /></IconButton></div>
+    </header>
+    <main id="main-content" className="start-shell__main"><ChunkFallback.Provider value={<BootLoader inline />}><Suspense fallback={<BootLoader inline />}><Outlet /></Suspense></ChunkFallback.Provider></main>
+  </div>
+}
+function Shell({ setups }: { setups: Setups }) {
   const { regionId, setRegionId } = useRegion()
   const session = useSession()
   const access = useWorkspaceAccess()
@@ -161,7 +181,7 @@ export function AppShell() {
     if (!access.multiTenant && regions.data && !current && enabled.length) setRegionId(enabled.find(region => region.region === preferred)?.region ?? enabled[0].region)
   }, [access.multiTenant, regions.data, current, enabled, setRegionId])
   // Docs pages name themselves (features/docs).
-  useEffect(() => { if (location.pathname === '/docs' || location.pathname.startsWith('/docs/')) return; document.title = `${[...navigation, ...staffLinks].find(([path]) => location.pathname.startsWith(path))?.[1] ?? productName.toLowerCase()} · ${productName.toLowerCase()}` }, [location.pathname])
+  useEffect(() => { if (location.pathname === '/docs' || location.pathname.startsWith('/docs/')) return; document.title = `${navFor(setups, true).find(entry => location.pathname.startsWith(entry.path))?.title ?? productName.toLowerCase()} · ${productName.toLowerCase()}` }, [location.pathname, setups])
   // "/" jumps to the page's search box, as in most list-heavy tools, unless you are already typing somewhere.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -199,7 +219,8 @@ export function AppShell() {
     }
   }
   // Members see every page: owner and admin ones carry a lock and open a short note on who can use them.
-  const links: readonly NavItem[] = [...navigation, ...session?.identity?.operator || session?.identity?.staffSignIn ? staffLinks : []]
+  const links = navFor(setups, Boolean(session?.identity?.operator || session?.identity?.staffSignIn))
+  const home = homeFor(setups), scoped = Boolean(setups.only), solo = links.length === 1
   const locked = (path: string) => !access.canAdminister && adminOnly.has(path)
   const scoreHost = (scoreAbout.open || scoreAboutMounted) && <Suspense fallback={null}><ScoreAboutHost /></Suspense>
   const connectHost = (connecting || connectMounted) && <Suspense fallback={null}><ConnectAgentHost /></Suspense>
@@ -218,7 +239,7 @@ export function AppShell() {
       {quota.max24HourSend > 0 && <meter className="quota-meter" min={0} max={quota.max24HourSend} value={quota.sentLast24Hours} aria-label="SES daily quota used" />}
       <span>{number(quota.sentLast24Hours)} / {number(quota.max24HourSend)} sent</span>
     </> : discovery.isFetching ? <><div className="quota-label"><span>Checking SES…</span><Skeleton width={28} /></div><Skeleton height={3} /><SkeletonText lineHeight={18} /></> : needsProvisioning ? null : <><span>SES · {discovery.isError ? 'Check failed' : label(current?.discoveryStatus ?? 'not_discovered')}</span><Link to="/settings">Set up SES</Link></>}</div>
-    {access.multiTenant && <div className="sidebar-score-slot"><SidebarScore /></div>}
+    {access.multiTenant && !scoped && <div className="sidebar-score-slot"><SidebarScore /></div>}
   </>
   const overlays = <>{connectHost}{support.mode && <SupportHost chat={support} />}{notesOn && <UiNotesLayer />}</>
   const main = <main ref={content} id="main-content" className="page-surface" tabIndex={-1}>{session?.notice && <div className="page-notice"><Alert tone="danger" title="Invitation not accepted" onDismiss={session.dismissNotice}>{session.notice}</Alert></div>}
@@ -232,28 +253,28 @@ export function AppShell() {
         : <PageErrorBoundary resetKey={location.key}><Outlet /></PageErrorBoundary>}
     </Suspense></ChunkFallback.Provider>
   </main>
-  if (compact) return <div className="app-shell app-shell--compact">
+  if (compact) return <div className={solo ? 'app-shell app-shell--compact app-shell--solo' : 'app-shell app-shell--compact'}>
     <a className="skip-link" href="#main-content">Skip to content</a>
     <header className="mobile-bar">
-      <NavLink className="wordmark" to="/overview" aria-label={`${productName.toLowerCase()} overview`}><NightmailWordmark /></NavLink>
+      <NavLink className="wordmark" to={home} aria-label={`${productName.toLowerCase()} home`}><NightmailWordmark /></NavLink>
       <div className="mobile-bar__context">{context}</div>
       {support.mode && <SupportTrigger chat={support} />}
       <ThemeToggle />
     </header>
     {scoreHost}
     {main}
-    <TabBar links={links} intent={intent} footer={footer} locked={locked} connect={!access.multiTenant} />
+    {!solo && <TabBar links={links} intent={intent} footer={footer} locked={locked} connect={!access.multiTenant} />}
     {overlays}
   </div>
   return <div className={support.mode ? 'app-shell app-shell--support' : 'app-shell'}>
     <a className="skip-link" href="#main-content">Skip to content</a>
     <aside className="sidebar">
-      <NavLink className="wordmark" to="/overview" aria-label={`${productName.toLowerCase()} overview`}><NightmailWordmark /></NavLink>
+      <NavLink className="wordmark" to={home} aria-label={`${productName.toLowerCase()} home`}><NightmailWordmark /></NavLink>
       <ThemeToggle />
       <div className="sidebar-context">{context}</div>
       {/* Members see every page: owner and admin ones carry a lock and explain who can use them. */}
-      <nav className="main-navigation" aria-label="Main navigation">{links.map(([path, title]) => <NavLink key={path} to={path} {...locked(path) ? lockedProps : intent(path)}>{title}{locked(path) && <Lock size={12} aria-label="Owners and admins only" />}</NavLink>)}</nav>
-      <div className="sidebar-footer"><button type="button" className="sidebar-connect" onPointerEnter={preloadConnectAgent} onFocus={preloadConnectAgent} onClick={openConnectAgent}>Connect an agent<Plug aria-hidden="true" /></button>{footer}</div>
+      <nav className="main-navigation" aria-label="Main navigation">{links.map(({ path, title, count, add, icon }) => <NavLink key={path} to={path} data-add={add || undefined} data-count={count || undefined} {...locked(path) ? lockedProps : intent(path)}><span>{title}</span>{count ? <span className="nav-count" aria-label={`${count} waiting for a yes`}>{count}</span> : null}{add && icon}{locked(path) && <Lock size={12} aria-label="Owners and admins only" />}</NavLink>)}</nav>
+      <div className="sidebar-footer">{!scoped && <button type="button" className="sidebar-connect" onPointerEnter={preloadConnectAgent} onFocus={preloadConnectAgent} onClick={openConnectAgent}>Connect an agent<Plug aria-hidden="true" /></button>}{footer}</div>
     </aside>
     {scoreHost}
     {main}
@@ -279,22 +300,22 @@ class PageErrorBoundary extends Component<{ resetKey: string; children: ReactNod
 const issued = new Set<string>()
 const lockedProps = { title: 'Owners and admins only', 'data-locked': true }
 // `connect`: Connect an agent closes More and opens. Hosted, it is in the account menu instead (AccountSwitcher).
-function TabBar({ links, intent, footer, locked, connect }: { links: readonly NavItem[]; intent: ReturnType<typeof useRouteIntent>; footer: ReactNode; locked: (path: string) => boolean; connect: boolean }) {
+function TabBar({ links, intent, footer, locked, connect }: { links: readonly NavEntry[]; intent: ReturnType<typeof useRouteIntent>; footer: ReactNode; locked: (path: string) => boolean; connect: boolean }) {
   const location = useLocation(), navigate = useNavigate(), moreButton = useRef<HTMLButtonElement>(null)
   // Only an entry opened in this visit counts: a reload on it shows the page, not a stale sheet.
   const token = (location.state as { more?: string } | null)?.more
   const open = Boolean(token && issued.has(token))
-  const more = links.filter(([path]) => !tabs.includes(path))
-  const inMore = more.some(([path]) => current(path, location.pathname))
+  const tabs = links.filter(entry => !entry.add).slice(0, 4), more = links.filter(entry => !tabs.includes(entry))
+  const inMore = more.some(({ path }) => current(path, location.pathname))
   const show = () => { const next = `${Date.now()}:${Math.random()}`; issued.add(next); navigate({ pathname: location.pathname, search: location.search, hash: location.hash }, { state: { more: next } }) }
   const close = () => { if (open) navigate(-1) }
   return <>
-    <nav className="tab-bar" aria-label="Main navigation">
-      {links.filter(([path]) => tabs.includes(path)).map(([path, title]) => <NavLink key={path} className="tab-bar__item" to={path} {...intent(path)}><span className="tab-bar__icon" aria-hidden="true">{icons[path]}</span><span className="tab-bar__label">{title}</span></NavLink>)}
+    <nav className="tab-bar" aria-label="Main navigation" data-tabs={tabs.length + 1}>
+      {tabs.map(({ path, title, icon }) => <NavLink key={path} className="tab-bar__item" to={path} {...intent(path)}><span className="tab-bar__icon" aria-hidden="true">{icon}</span><span className="tab-bar__label">{title}</span></NavLink>)}
       <button ref={moreButton} type="button" className="tab-bar__item" aria-haspopup="dialog" aria-expanded={open} aria-current={inMore ? 'page' : undefined} data-active={inMore || open || undefined} onClick={show}><span className="tab-bar__icon" aria-hidden="true"><Ellipsis /></span><span className="tab-bar__label">More</span></button>
     </nav>
     <Sheet open={open} onOpenChange={next => { if (!next) close() }} title="More" hideTitle className="more-sheet" returnFocus={moreButton}>
-      <nav className="more-sheet__links" aria-label="More pages">{more.map(([path, title]) => <NavLink key={path} className="more-sheet__link" to={path} replace {...locked(path) ? lockedProps : intent(path)}><span className="more-sheet__icon" aria-hidden="true">{icons[path]}</span>{title}{locked(path) && <Lock className="more-sheet__lock" size={14} aria-label="Owners and admins only" />}</NavLink>)}
+      <nav className="more-sheet__links" aria-label="More pages">{more.map(({ path, title, icon }) => <NavLink key={path} className="more-sheet__link" to={path} replace {...locked(path) ? lockedProps : intent(path)}><span className="more-sheet__icon" aria-hidden="true">{icon}</span>{title}{locked(path) && <Lock className="more-sheet__lock" size={14} aria-label="Owners and admins only" />}</NavLink>)}
         {connect && <button type="button" className="more-sheet__link" onPointerDown={preloadConnectAgent} onClick={() => { close(); openConnectAgent() }}><span className="more-sheet__icon" aria-hidden="true"><Plug /></span>Connect an agent</button>}</nav>
       <div className="more-sheet__footer">{footer}</div>
     </Sheet>

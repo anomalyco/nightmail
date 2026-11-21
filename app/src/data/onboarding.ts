@@ -40,7 +40,8 @@ export function onboardingStage(identity: Identity | null | undefined, domainSte
   if (identity.role !== 'owner' && identity.role !== 'admin') return null
   if (identity.connection?.state !== 'ready') return { step: 'sending' }
   if (domainStep === finishedStep) return null
-  if (domainStep === null) return identity.connection.domains?.total === 0 ? { step: 'domain', domainId: '' } : null
+  // Pitch (pitch/setups): a new workspace is asked what it will use Nightmail for first; whatever it picks asks for the domain.
+  if (domainStep === null) return null
   return domainStep.startsWith(agentPrefix) ? { step: 'agent', domainId: domainStep.slice(agentPrefix.length) } : { step: 'domain', domainId: domainStep }
 }
 export const identityOnboardingStage = (identity: Identity | null | undefined) => onboardingStage(identity, identity ? readDomainStep(identity.workspaceId) : null)

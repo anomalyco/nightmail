@@ -91,7 +91,8 @@ function pageLink({ latency, bytesPerSecond }) {
   };
 }
 
-export async function start(repo, { log = () => {}, servers = 1, delay = null, fontDelay = 0, throttle = null } = {}) {
+// `handle` (a pitch's stand-in for API the product doesn't have yet) may answer a request before it is forwarded.
+export async function start(repo, { log = () => {}, servers = 1, delay = null, fontDelay = 0, throttle = null, handle = null } = {}) {
   const api = join(repo, 'api');
   const require = createRequire(join(api, 'package.json'));
   const pg = require('pg');
@@ -236,6 +237,7 @@ export async function start(repo, { log = () => {}, servers = 1, delay = null, f
         if (pathname.startsWith('/v1/') && delay) { await sleep(delay(rawUrl)); if (res.destroyed || res.writableEnded) return; }
         // Onboarding starts Hosted mail by itself, which simulated SES refuses (SES_NOT_CONFIGURED): stand in for the
         // shared pool with the connection the seed gives every hosted workspace, and answer as the API would.
+        if (handle && await handle(req, res, { pathname, origin, apiOrigin })) return;
         let body = null;
         if (req.method === 'POST' && pathname === '/v1/connection') {
           body = Buffer.concat(await Array.fromAsync(req));
@@ -314,11 +316,11 @@ export async function start(repo, { log = () => {}, servers = 1, delay = null, f
 // Harbor Supply: restricted, so its pages carry the standing banner.
 // Connections, domain claims, mail and inbox rows go in as SQL because there is no SES or mail store here.
 const REGION = 'us-east-2';
-const ago = minutes => new Date(Date.now() - minutes * 60_000).toISOString();
+export const ago = minutes => new Date(Date.now() - minutes * 60_000).toISOString();
 let counter = 0;
-const rid = prefix => `${prefix}_${(++counter).toString(36).padStart(6, '0')}${randomBytes(4).toString('hex')}`;
+export const rid = prefix => `${prefix}_${(++counter).toString(36).padStart(6, '0')}${randomBytes(4).toString('hex')}`;
 
-async function hosted(db, workspaceId) {
+export async function hosted(db, workspaceId) {
   const conn = 'conn_' + workspaceId;
   await db.query("INSERT INTO provider_pool_regions(region,aws_account_id,sending_state,feedback_topic_arn) VALUES($1,'111122223333','ready',$2) ON CONFLICT DO NOTHING", [REGION, `arn:aws:sns:${REGION}:111122223333:bane-feedback`]);
   await db.query("INSERT INTO ses_installation_settings(workspace_id,installation_id,default_region,enabled_regions) VALUES($1,$2,$3,$4::jsonb) ON CONFLICT DO NOTHING", [workspaceId, 'install_' + workspaceId, REGION, JSON.stringify([REGION])]);
@@ -328,7 +330,7 @@ async function hosted(db, workspaceId) {
 }
 
 // A domain claim as the hosted DNS checks leave it; `receiving` turns on an active receiving host.
-async function domain(db, workspaceId, conn, name, { receiving = false, mailFrom = false, dmarc = 'quarantine' } = {}) {
+export async function domain(db, workspaceId, conn, name, { receiving = false, mailFrom = false, dmarc = 'quarantine' } = {}) {
   const id = 'dom_' + name.replace(/\W/g, '_');
   const tokens = [0, 1, 2].map(i => `${name.replace(/\W/g, '').slice(0, 10)}${i}k7q2m9dkim`);
   const identity = { ses: { DkimAttributes: { Status: 'SUCCESS', SigningEnabled: true, SigningAttributesOrigin: 'AWS_SES', SigningHostedZone: 'dkim.amazonses.com', Tokens: tokens }, ...(mailFrom ? { MailFromAttributes: { MailFromDomain: 'bounce.' + name, MailFromDomainStatus: 'SUCCESS' } } : {}) }, proven: true, mx: null, note: null,
@@ -367,7 +369,7 @@ const JUNK_HTML = `<html><head><style>.wrap{display:flex;gap:12px}.hero{backgrou
 </body></html>`;
 
 // Hourly sending volume with a weekday rhythm from a fixed seed; bounces ~0.9%, complaints ~0.03%. Returns the newest.
-async function mail(db, workspaceId, days) {
+export async function mail(db, workspaceId, days, { from = 'receipts@mail.northwind.example', subject = 'Your receipt', share = 0.78 } = {}) {
   const now = Date.now(), rows = [];
   let seed = 7;
   const rnd = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
@@ -377,16 +379,16 @@ async function mail(db, workspaceId, days) {
     const base = (dow === 0 || dow === 6 ? 9 : 22) * (0.35 + Math.sin(Math.PI * Math.max(0, Math.min(1, (hour - 6) / 16))));
     const n = Math.max(0, Math.round(base * (0.7 + rnd() * 0.6)));
     for (let i = 0; i < n; i++) {
-      const r = rnd(), kind = rnd() < 0.78 ? 'transactional' : 'marketing';
+      const r = rnd(), kind = rnd() < share ? 'transactional' : 'marketing';
       rows.push([rid('email'), new Date(at.getTime() - i * 13_000).toISOString(), r < 0.009 ? 'bounced' : r < 0.0093 ? 'complained' : 'delivered', kind]);
     }
   }
   for (let i = 0; i < rows.length; i += 500) {
     const params = [], values = [];
     rows.slice(i, i + 500).forEach(([id, at, status, kind], j) => {
-      params.push(id, at, status, JSON.stringify({ kind, region: REGION, subject: 'Your receipt', html: '<p>Thanks for your order.</p>', text: 'Thanks for your order.', attachments: [] }), status === 'delivered' ? 3 : status === 'bounced' ? 5 : 11);
+      params.push(id, at, status, JSON.stringify({ kind, region: REGION, subject, html: '<p>Thanks for your order.</p>', text: 'Thanks for your order.', attachments: [] }), status === 'delivered' ? 3 : status === 'bounced' ? 5 : 11);
       const b = j * 5;
-      values.push(`($${b + 1},'${workspaceId}','${REGION}','fixture','receipts@mail.northwind.example','["customer@example.net"]','[]','[]','Your receipt',$${b + 4}::jsonb,false,$${b + 3},'provider-'||$${b + 1},$${b + 5},$${b + 2}::timestamptz)`);
+      values.push(`($${b + 1},'${workspaceId}','${REGION}','fixture','${from}','["customer@example.net"]','[]','[]','${subject.replaceAll("'", "''")}',$${b + 4}::jsonb,false,$${b + 3},'provider-'||$${b + 1},$${b + 5},$${b + 2}::timestamptz)`);
     });
     await db.query(`INSERT INTO sending_emails (id, workspace_id, region, actor_key_id, from_address, to_addresses, cc_addresses, bcc_addresses, subject, snapshot, simulated, status, provider_id, event_outcomes, created_at) VALUES ${values.join(',')}`, params);
   }
@@ -480,7 +482,7 @@ async function agentInbox(db, workspaceId, { mdom, host }, name, hoursLeft, mess
 // Sender standing as the ten-minute standing job stores it (the gate runs no job worker), 14 published days of score
 // and the standing events the operator timeline reads.
 const factor = (key, label, weight, value, score) => ({ key, label, weight, value, score, points: score === null ? null : Math.round(weight * score) / 100, source: score === null ? 'neutral' : 'measured', basis: 'CLS fixture.' });
-async function standing(db, workspaceId, { score, limit, step, reasons = [], since, factors, events = [] }) {
+export async function standing(db, workspaceId, { score, limit, step, reasons = [], since, factors, events = [] }) {
   await db.query(`INSERT INTO sender_standing(workspace_id,phase,first_recipients,calibrated_at,score,day_score,score_day,target,quality,factors,band_limit,daily_limit,step,reasons,since,computed_at,version,sequence)
     VALUES($1,'graded',100,now()-interval '20 days',$2,$2,(now() AT TIME ZONE 'UTC')::date,$2::numeric+1.5,$2::numeric+4,$3::jsonb,$4,$4,$5,$6::jsonb,$7,now(),$8::int,$8::int)
     ON CONFLICT (workspace_id) DO UPDATE SET phase=excluded.phase,first_recipients=100,calibrated_at=excluded.calibrated_at,score=excluded.score,target=excluded.target,quality=excluded.quality,factors=excluded.factors,
