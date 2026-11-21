@@ -83,7 +83,7 @@
 .ev[data-fill] { flex: 1 1 0; min-height: 0; }
 .ev-toolbar { display: flex; flex: none; align-items: center; gap: var(--space-12); min-height: var(--control-height); }
 .ev-views { --fade-pad-x: var(--focus-reach); --fade-pad-y: var(--focus-reach); position: relative; display: flex; flex: 0 1 auto; align-items: center; gap: 2px; min-width: 0; margin: calc(-1 * var(--focus-reach)); padding: var(--focus-reach); overflow-x: auto; }
-.ev-views__pill { position: absolute; top: var(--focus-reach); left: 0; height: var(--control-height); border-radius: var(--radius-sm); background: var(--color-layer-2); opacity: 0; pointer-events: none; }
+.ev-views__pill { position: absolute; top: var(--focus-reach); left: 0; height: var(--control-height); border-radius: var(--radius-sm); background: var(--color-layer-2); box-shadow: var(--shadow-deboss); opacity: 0; pointer-events: none; }
 .ev-views__pill[data-animate] { transition: transform 200ms var(--ease-swap), width 200ms var(--ease-swap); }
 .ev-view { position: relative; display: inline-flex; flex: none; align-items: center; gap: var(--space-6); height: var(--control-height); padding: 0 var(--space-12); border: 0; border-radius: var(--radius-sm); background: none; color: var(--color-muted); font: inherit; font-weight: var(--font-weight-bold); white-space: nowrap; transition: color 100ms ease-out, transform 160ms var(--ease-out-strong); }
 .ev-view[aria-checked='true'] { color: var(--color-text); }
@@ -119,17 +119,17 @@
 /* The score's slot holds the widest score (100 · A+), so the button keeps its width while the check runs. */
 .ev-details__score { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: var(--space-4); min-width: 7ch; height: var(--leading-sm); color: var(--color-text); font-variant-numeric: tabular-nums; }
 .ev-details__score > .ui-skeleton-block { align-self: center; }
-.ev-toggle { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-sm); background: var(--color-layer-2); }
+.ev-toggle { display: inline-flex; gap: 2px; padding: 2px; border-radius: var(--radius-sm); background: var(--color-layer-2); box-shadow: var(--shadow-deboss); }
 .ev-toggle > button { position: relative; display: grid; place-items: center; width: 26px; height: 24px; padding: 0; border: 0; border-radius: 4px; background: transparent; color: var(--color-muted); transition: background-color 100ms ease-out, color 100ms ease-out, transform 160ms var(--ease-out-strong); }
 .ev-toggle > button > svg { width: 14px; height: 14px; }
-.ev-toggle > button:is([aria-checked='true'], [aria-pressed='true']) { background: var(--color-surface); box-shadow: var(--shadow-button); color: var(--color-text); }
+.ev-toggle > button:is([aria-checked='true'], [aria-pressed='true']) { background: var(--color-surface); box-shadow: var(--shadow-emboss); color: var(--color-text); }
 @media (hover: hover) and (pointer: fine) { .ev-toggle:not([aria-disabled]) > button:hover:not([aria-checked='true'], [aria-pressed='true']) { color: var(--color-text); transition-duration: 0ms; } }
 .ev-toggle:not([aria-disabled]) > button:active { transform: scale(.94); }
 .ev-toggle[aria-disabled] > button { cursor: default; opacity: .45; }
 .ev-note { font-size: var(--text-xs); line-height: var(--leading-xs); }
 
 .ev-stage { display: flex; flex-direction: column; min-width: 0; }
-.ev[data-fill] .ev-stage { flex: 1 1 0; min-height: 0; border-radius: var(--radius-lg); background: var(--color-layer-2); }
+.ev[data-fill] .ev-stage { flex: 1 1 0; min-height: 0; border-radius: var(--radius-lg); background: var(--color-layer-2); box-shadow: var(--shadow-recess); }
 :root[data-theme='dark'] .ev[data-fill] .ev-stage { background: var(--color-deep); }
 .ev-captions { display: flex; flex: none; justify-content: center; gap: 16px; min-height: var(--control-height); margin-bottom: var(--space-8); }
 .ev[data-fill] .ev-captions { min-height: calc(var(--control-height) + var(--space-8)); margin: 0; padding: var(--space-8) var(--space-16) 0; }
@@ -201,6 +201,10 @@
   --color-danger: #B82D35; --color-danger-marker: #D92E3C; --color-danger-bg: #FCECEB; --color-danger-border: #F2BBB7;
   --color-info-marker: #3250DF; --color-info-bg: #ECF1FE; --color-info-border: #C3D4FD; --color-neutral-marker: #737373;
   --grade-aplus: #13804A; --grade-a: #2EAF5A; --grade-b: #3B5CF6; --grade-c: #E7AF36; --grade-d: #EE7B30; --grade-f: #D92E3C;
-  --shadow-button: 0 1px 1.5px rgb(0 0 0 / 10%), 0 0 0 .5px rgb(0 0 0 / 14%);
+  --shadow-inset: inset 0 1px 1.5px rgb(0 0 0 / calc(9% * var(--emboss))), 0 0 0 .5px rgb(0 0 0 / 14%);
+  --shadow-button: var(--shadow-inset);
+  --shadow-emboss: 0 1px 1.5px rgb(0 0 0 / calc(14% * var(--emboss))), inset 0 -1px 0 rgb(0 0 0 / calc(12% * var(--emboss))), 0 0 0 .5px rgb(0 0 0 / 14%);
+  --shadow-deboss: inset 0 1px 1px rgb(0 0 0 / calc(7% * var(--emboss)));
+  --shadow-recess: inset 0 1px 2px rgb(0 0 0 / calc(6% * var(--emboss)));
 }
 .ei--placeholder { gap: var(--space-8); }

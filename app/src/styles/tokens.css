@@ -197,10 +197,26 @@
   --ease-swap: cubic-bezier(.2, .8, .2, 1);
   /* Sheets: the iOS drawer curve. */
   --ease-drawer: cubic-bezier(.32, .72, 0, 1);
+  /* Depth: surfaces sit slightly recessed (a soft shade inside the top edge, a hairline of light inside the bottom one),
+     fields and secondary buttons are pressed in, primary buttons and thumbs are raised and press in when held, badges
+     and the facts' rules are debossed, and dialogs and popovers stand above the page. Shadows only: nothing changes
+     size. --emboss dials every one of them at once (0 flat, 1 the default, about 1.6 strong); each theme sets its own
+     shade and light. Set it on :root: the tokens below are worked out there. */
+  --emboss: 1;
   --shadow-raised: 0 2px 4px rgb(0 0 0 / 4%), 0 1px 2px -1px rgb(0 0 0 / 8%), 0 0 0 .5px rgb(0 0 0 / 12%);
-  --shadow-button: 0 1px 1.5px rgb(0 0 0 / 10%), 0 0 0 .5px rgb(0 0 0 / 14%);
-  --shadow-popover: 0 8px 16px rgb(0 0 0 / 4%), 0 4px 8px rgb(0 0 0 / 8%), 0 0 0 .5px rgb(0 0 0 / 12%);
-  --shadow-dialog: 0 16px 32px rgb(0 0 0 / 4%), 0 8px 16px rgb(0 0 0 / 8%), 0 0 0 .5px rgb(0 0 0 / 12%);
+  --shadow-recess: inset 0 1px 2px rgb(0 0 0 / calc(6% * var(--emboss))), inset 0 -1px 0 rgb(255 255 255 / calc(80% * var(--emboss)));
+  --shadow-surface: var(--shadow-recess), 0 0 0 .5px rgb(0 0 0 / 12%), 0 1px 0 rgb(255 255 255 / calc(90% * var(--emboss)));
+  /* Fields and secondary buttons: their surface, a step deeper where a theme can afford it without losing contrast. */
+  --color-sunken: var(--color-surface);
+  --shadow-inset: inset 0 1px 1.5px rgb(0 0 0 / calc(9% * var(--emboss))), 0 0 0 .5px rgb(0 0 0 / 14%), 0 1px 0 rgb(255 255 255 / calc(80% * var(--emboss)));
+  --shadow-emboss: 0 1px 1.5px rgb(0 0 0 / calc(14% * var(--emboss))), inset 0 1px 0 rgb(255 255 255 / calc(16% * var(--emboss))), inset 0 -1px 0 rgb(0 0 0 / calc(12% * var(--emboss))), 0 0 0 .5px rgb(0 0 0 / 14%);
+  --shadow-pressed: inset 0 1px 2px rgb(0 0 0 / calc(14% * var(--emboss))), 0 0 0 .5px rgb(0 0 0 / 14%);
+  --shadow-pressed-contrast: inset 0 1px 3px rgb(0 0 0 / calc(60% * var(--emboss))), 0 0 0 .5px rgb(0 0 0 / 14%);
+  --shadow-deboss: inset 0 1px 1px rgb(0 0 0 / calc(7% * var(--emboss))), 0 1px 0 rgb(255 255 255 / calc(80% * var(--emboss)));
+  --shadow-groove: inset 0 1px 0 rgb(0 0 0 / calc(3% * var(--emboss)));
+  --shadow-button: var(--shadow-inset);
+  --shadow-popover: 0 8px 16px rgb(0 0 0 / 4%), 0 4px 8px rgb(0 0 0 / 8%), 0 0 0 .5px rgb(0 0 0 / 12%), inset 0 1px 0 rgb(255 255 255 / calc(70% * var(--emboss)));
+  --shadow-dialog: 0 24px 48px rgb(0 0 0 / calc(4% * var(--emboss))), 0 16px 32px rgb(0 0 0 / 4%), 0 8px 16px rgb(0 0 0 / 8%), 0 0 0 .5px rgb(0 0 0 / 12%), inset 0 1px 0 rgb(255 255 255 / calc(70% * var(--emboss)));
   /* Sender score grade bands (the gauge's arcs). */
   --grade-aplus: #13804A; --grade-a: #2EAF5A; --grade-b: #3B5CF6; --grade-c: #E7AF36; --grade-d: #EE7B30; --grade-f: #D92E3C;
 }
@@ -250,7 +266,15 @@
   --color-pressed: rgb(255 255 255 / 10%);
   --color-on-accent: #161616;
   --shadow-raised: 0 2px 4px rgb(0 0 0 / 30%), 0 1px 2px rgb(0 0 0 / 30%), 0 0 0 .5px rgb(255 255 255 / 16%), 0 -.5px rgb(255 255 255 / 6%);
-  --shadow-button: 0 1px 2px rgb(0 0 0 / 40%), 0 0 0 .5px rgb(255 255 255 / 20%), 0 -.5px rgb(255 255 255 / 10%);
-  --shadow-popover: 0 8px 16px rgb(0 0 0 / 30%), 0 4px 8px rgb(0 0 0 / 30%), 0 0 0 .5px rgb(255 255 255 / 16%), 0 -.5px rgb(255 255 255 / 6%);
-  --shadow-dialog: 0 16px 32px rgb(0 0 0 / 30%), 0 8px 16px rgb(0 0 0 / 30%), 0 0 0 .5px rgb(255 255 255 / 16%), 0 -.5px rgb(255 255 255 / 6%);
+  --shadow-recess: inset 0 1px 3px rgb(0 0 0 / calc(55% * var(--emboss))), inset 0 -1px 0 rgb(255 255 255 / calc(5% * var(--emboss)));
+  --shadow-surface: var(--shadow-recess), 0 0 0 .5px rgb(255 255 255 / 14%);
+  --color-sunken: color-mix(in srgb, var(--color-surface), #000 calc(32% * var(--emboss)));
+  --shadow-inset: inset 0 1px 2px rgb(0 0 0 / calc(70% * var(--emboss))), 0 0 0 .5px rgb(255 255 255 / 20%), 0 1px 0 rgb(255 255 255 / calc(9% * var(--emboss)));
+  --shadow-emboss: 0 1px 2px rgb(0 0 0 / calc(70% * var(--emboss))), inset 0 1px 0 rgb(255 255 255 / calc(14% * var(--emboss))), inset 0 -1px 0 rgb(0 0 0 / calc(32% * var(--emboss))), 0 0 0 .5px rgb(255 255 255 / 20%);
+  --shadow-pressed: inset 0 1px 2.5px rgb(0 0 0 / calc(70% * var(--emboss))), 0 0 0 .5px rgb(255 255 255 / 20%);
+  --shadow-pressed-contrast: inset 0 1px 3px rgb(0 0 0 / calc(45% * var(--emboss))), 0 0 0 .5px rgb(255 255 255 / 20%);
+  --shadow-deboss: inset 0 1px 1.5px rgb(0 0 0 / calc(40% * var(--emboss))), 0 1px 0 rgb(255 255 255 / calc(5% * var(--emboss)));
+  --shadow-groove: 0 -1px 0 rgb(0 0 0 / calc(70% * var(--emboss)));
+  --shadow-popover: 0 8px 16px rgb(0 0 0 / 30%), 0 4px 8px rgb(0 0 0 / 30%), 0 0 0 .5px rgb(255 255 255 / 16%), 0 -.5px rgb(255 255 255 / 6%), inset 0 1px 0 rgb(255 255 255 / calc(6% * var(--emboss)));
+  --shadow-dialog: 0 24px 48px rgb(0 0 0 / calc(35% * var(--emboss))), 0 16px 32px rgb(0 0 0 / 30%), 0 8px 16px rgb(0 0 0 / 30%), 0 0 0 .5px rgb(255 255 255 / 16%), 0 -.5px rgb(255 255 255 / 6%), inset 0 1px 0 rgb(255 255 255 / calc(8% * var(--emboss)));
 }

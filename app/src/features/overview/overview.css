@@ -19,7 +19,7 @@
 
 /* Facts (Console-style): a hairline, a label row, then the value beside its own series. 60px tall. */
 .ov-facts { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-24); margin: 0; }
-.ov-facts > div { min-width: 0; height: 60px; padding-top: var(--space-12); border-top: 1px solid var(--color-border); }
+.ov-facts > div { min-width: 0; height: 60px; padding-top: var(--space-12); border-top: 1px solid var(--color-border); box-shadow: var(--shadow-groove); }
 .ov-facts dt { position: relative; height: 16px; color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); white-space: nowrap; }
 /* The count or delta is laid out from the right edge and pulled back by its own width, so as it tweens through wider
    and narrower numbers its box never moves (a transform, not a layout shift). */

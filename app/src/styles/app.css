@@ -22,7 +22,7 @@ button svg, .ui-button svg { width: var(--space-16); height: var(--space-16); st
 .main-navigation { flex-shrink: 0; margin-top: var(--space-16); display: flex; flex-direction: column; gap: var(--space-4); }
 .main-navigation a { min-height: 32px; display: flex; align-items: center; padding-inline: var(--sidebar-inset); border-radius: 4px; font-size: var(--text-sm); line-height: var(--leading-sm); color: var(--color-muted); text-decoration: none; transition: color var(--motion-duration), background var(--motion-duration); }
 .main-navigation a:hover { color: var(--color-text); background: var(--color-hover); }
-.main-navigation a.active { color: var(--color-text); background: var(--color-layer-2); font-weight: var(--font-weight-bold); }
+.main-navigation a.active { color: var(--color-text); background: var(--color-layer-2); box-shadow: var(--shadow-deboss); font-weight: var(--font-weight-bold); }
 .main-navigation a[data-locked] { justify-content: space-between; }
 .main-navigation a[data-locked] svg { color: var(--color-faint); }
 .sidebar-footer { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--space-16); margin-top: auto; padding-inline: var(--sidebar-inset); }
@@ -60,7 +60,7 @@ html:not([data-privacy='off']) .private-field:not(:hover, :focus)::placeholder {
 .quota-meter::-webkit-meter-bar { background: var(--color-layer-2); border: 0; border-radius: 2px; height: 3px; }
 .quota-meter::-webkit-meter-optimum-value { background: var(--color-accent); }
 .quota-meter::-moz-meter-bar { background: var(--color-accent); }
-.page-surface { display: flex; flex-direction: column; margin: var(--page-inset) var(--page-inset) var(--page-inset) var(--sidebar-width); padding: var(--space-24) var(--space-32); height: calc(100dvh - 2 * var(--page-inset)); min-height: 0; background: var(--color-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-raised); position: relative; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.page-surface { display: flex; flex-direction: column; margin: var(--page-inset) var(--page-inset) var(--page-inset) var(--sidebar-width); padding: var(--space-24) var(--space-32); height: calc(100dvh - 2 * var(--page-inset)); min-height: 0; background: var(--color-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-surface); position: relative; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
 .page-surface > :is(.stack, .audience-page, .ui-loading-layout) { flex: 1; }
 .page-surface > .stack { gap: var(--page-gap); }
 .page-surface > .stack > .section { margin-block: 0; }
@@ -264,7 +264,7 @@ body:has(.app-shell--compact) .ui-toasts { --toast-offset: 56px; }
 .tab-bar { position: fixed; inset: auto 0 0; z-index: 30; display: grid; grid-template-columns: repeat(5, minmax(0, 128px)); justify-content: center; height: calc(var(--tab-bar-height) + env(safe-area-inset-bottom)); padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: color-mix(in srgb, var(--color-deep) 94%, transparent); box-shadow: 0 -.5px 0 var(--color-border); backdrop-filter: blur(12px); }
 .tab-bar__item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 0; padding: 0; border: 0; background: none; color: var(--color-muted); font-size: 11px; line-height: 14px; text-decoration: none; -webkit-tap-highlight-color: transparent; transition: color var(--motion-duration); }
 .tab-bar__icon { position: relative; display: grid; place-items: center; width: 52px; height: 28px; transition: transform 160ms var(--ease-out-strong); }
-.tab-bar__icon::before { content: ''; position: absolute; inset: 0; border-radius: 14px; background: var(--color-layer-2); opacity: 0; transform: scaleX(.6); transition: opacity 160ms ease-out, transform 240ms var(--ease-out-strong); }
+.tab-bar__icon::before { content: ''; position: absolute; inset: 0; border-radius: 14px; background: var(--color-layer-2); box-shadow: var(--shadow-deboss); opacity: 0; transform: scaleX(.6); transition: opacity 160ms ease-out, transform 240ms var(--ease-out-strong); }
 .tab-bar__icon svg { position: relative; width: 20px; height: 20px; stroke-width: 1.6; }
 .tab-bar__label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-bar__item:is(.active, [data-active]) { color: var(--color-text); font-weight: var(--font-weight-bold); }
