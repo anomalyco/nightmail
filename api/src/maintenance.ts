@@ -153,6 +153,10 @@ export async function cleanup(runtime: Runtime, budgetMs = RETENTION_BUDGET_MS) 
     SELECT count(*)::int AS n FROM gone`);
   // Handoffs go 30 days after they expire; what they opened is in audit_events.
   await drain('support_handoffs', batch(sql`support_handoffs`, sql`expires_at < ${cutoff}`));
+  // An email's sign-in nobody confirmed goes when it can no longer be confirmed (support-conversations.ts SIGNIN_DAYS), and
+  // with it the sender address it kept; a Message-ID's binding once its Date is too old to bind anyway.
+  await drain('support_email_signins', batch(sql`support_email_signins`, sql`signed_in_at IS NULL AND created_at < now() - interval '7 days'`));
+  await drain('support_email_bindings', batch(sql`support_email_bindings`, sql`created_at < now() - interval '7 days'`));
   // Support transcripts (src/support-inbox.ts) and their subjects go 90 days after the conversation closed.
   const closedLongAgo = sql`SELECT id FROM support_conversations WHERE closed_at < now() - interval '90 days'`;
   await drain('support_messages', batch(sql`support_messages`, sql`conversation_id IN (${closedLongAgo})`));

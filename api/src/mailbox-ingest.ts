@@ -57,15 +57,22 @@ export function soleAlignedSignature(signatures: string[], domain: string) {
     return tags.length===1 && /^d[ \t]*=[ \t]*([^\s]+)$/i.exec(tags[0]!)?.[1]?.toLowerCase()===domain;
   })();
 }
-function singleFrom(email:Email,address:string,mail:ReceivedNotification['mail']) {
+/** A header field name as RFC 5322 defines it: printable ASCII but the colon. The parser keeps a name as written, so "From :",
+ * "From<TAB>:", a first line that starts with a space or an mbox "From " line would each be a field it doesn't count as a From. */
+const FIELD_NAME = /^[\x21-\x39\x3b-\x7e]+$/;
+/** One From, and only one: every field name well formed, one From field that is exactly `address`, and SES's own From (when
+ * it gave one; the author check requires it) agreeing. */
+function singleFrom(email:Email,address:string,mail:ReceivedNotification['mail'],requireSes=false) {
+  if (!email.headers.every(h => FIELD_NAME.test(h.key))) return false;
   const from = email.headers.filter(h => h.key === 'from');
   const sesFrom = mail?.commonHeaders?.from;
+  if (requireSes && !sesFrom) return false;
   return from.length===1 && literalFrom(from[0]!.value,address) && (!sesFrom || (sesFrom.length===1 && literalFrom(sesFrom[0]!,address)));
 }
 // SES authenticates domains, not display names or Reply-To. An aggregate DKIM
 // PASS cannot identify which of several differently aligned signatures passed.
 function replyAuthorVerified(email:Email|null,address:string,mail:ReceivedNotification['mail'],v:Verdicts){
-  if(!email || !ADDRESS.test(address) || !singleFrom(email,address,mail))return false;
+  if(!email || !ADDRESS.test(address) || !singleFrom(email,address,mail,true))return false;
   if(v.dmarc==='PASS')return true;
   const domain=address.split('@')[1]!,source=mail?.source?.toLowerCase();
   if(v.spf==='PASS' && source && ADDRESS.test(source) && source.split('@')[1]===domain)return true;

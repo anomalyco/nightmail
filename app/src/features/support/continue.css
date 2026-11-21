@@ -1,0 +1,11 @@
+/* /support/continue/<id>/<message> (continue.tsx): one dialog over the page background. Its text keeps two lines, the
+   email's subject and time two more (reserved in every state), and its one button one width, so nothing moves while the
+   page loads the email or answers. */
+.support-continue { min-height: 100dvh; background: var(--color-deep); }
+.support-continue__text { display: block; min-height: calc(2 * var(--leading-sm)); }
+.support-continue__action { min-width: 8rem; }
+.support-continue__email { display: grid; align-content: center; gap: var(--space-4); box-sizing: border-box; height: calc(2 * var(--leading-sm) + var(--space-4) + 2 * var(--space-12));
+  padding: var(--space-12); border: 1px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-layer-1); font-size: var(--text-sm); line-height: var(--leading-sm); }
+.support-continue__email[data-empty] { border-color: transparent; background: none; }
+.support-continue__subject { overflow: hidden; color: var(--color-text); font-weight: var(--font-weight-bold); text-overflow: ellipsis; white-space: nowrap; }
+.support-continue__received { color: var(--color-muted); }

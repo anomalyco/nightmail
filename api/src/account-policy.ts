@@ -1,3 +1,4 @@
+import { sql, type SQL } from 'drizzle-orm';
 import { METHOD_ACR } from './config.js';
 import type { Config } from './core.js';
 
@@ -47,3 +48,14 @@ export function provenMailbox(acr: unknown, upstream: ProviderIdentity | null) {
   const email = upstream.email.toLowerCase();
   return upstream.hd || googleMail.has(email.slice(email.lastIndexOf('@') + 1)) ? email : null;
 }
+
+/** How long a sign-in's proof of the mailbox (provenMailbox) lets email speak for the account. */
+export const MAILBOX_PROOF_DAYS = 30;
+/**
+ * Whether the account row `u` (nightmail_users) has an address its person proved, signed in, to be a mailbox they read:
+ * a sign-in whose provenMailbox was that address (recorded at sign-in, account-login.ts) within MAILBOX_PROOF_DAYS, and the
+ * address still the account's verified email. The one definition for everything email support decides from an address:
+ * binding an email's sender by DMARC, a signed-in claim of one email, and the release of an answer written from the account.
+ */
+export const mailboxProven = (u: SQL) => sql`(${u}.email_verified AND ${u}.mailbox_proved_at > now() - make_interval(days => ${MAILBOX_PROOF_DAYS}::int)
+  AND lower(${u}.mailbox_proved) = lower(${u}.email))`;

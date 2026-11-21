@@ -79,7 +79,8 @@ export const operatorGate: MiddlewareHandler<AppEnv> = async (c, next) => {
  * must have a user), joins that user's live memberships within its scope and filters them by the roles this route's
  * dashboard counterpart admits (SUPPORT_CEILINGS), charges the conversation's minute budget (supportWeight: 5 for an
  * aggregate read, else 1), writes the internal support.read row and, the first time the conversation reads a workspace,
- * the customer-visible "support.view". A route without a ceiling is refused.
+ * the customer-visible "support.view". A route without a ceiling is refused, and an email conversation is refused a
+ * chat's own routes (changes and notes): it only reads and narrows its workspace.
  */
 export const supportGate: MiddlewareHandler<AppEnv> = async (c, next) => {
   const conversationId = c.env.supportConversation;
@@ -96,7 +97,7 @@ export const supportGate: MiddlewareHandler<AppEnv> = async (c, next) => {
     content_workspace_id: string | null; used: number; workspaces: SupportScope['workspaces'] }>(sql`WITH conv AS (
       UPDATE support_conversations SET used = CASE WHEN window_start = date_trunc('minute', now()) THEN least(used + ${weight}::int, ${limit + 1}) ELSE ${weight}::int END,
         window_start = date_trunc('minute', now()), last_used_at = now()
-      WHERE id = ${conversationId} AND status <> 'closed' AND user_id IS NOT NULL
+      WHERE id = ${conversationId} AND status <> 'closed' AND user_id IS NOT NULL AND (${ceiling.chatOnly !== true}::boolean OR channel = 'chat')
       RETURNING id, user_id, channel, verification, workspace_id, content_workspace_id, used
     ), scope AS (
       SELECT m.workspace_id AS id, w.name, m.role FROM conv JOIN workspace_members m ON m.user_id = conv.user_id AND (conv.workspace_id IS NULL OR m.workspace_id = conv.workspace_id)
@@ -115,7 +116,12 @@ export const supportGate: MiddlewareHandler<AppEnv> = async (c, next) => {
       ON CONFLICT (actor_id, workspace_id) WHERE action = 'support.view' DO NOTHING
     ) SELECT conv.id, conv.user_id, conv.channel, conv.verification, conv.workspace_id, conv.content_workspace_id, conv.used,
       coalesce((SELECT json_agg(json_build_object('id', id, 'name', name, 'role', role) ORDER BY name, id) FROM scope), '[]') AS workspaces FROM conv`));
-  if (!conv) throw supportRequired();
+  if (!conv) {
+    // Nothing was charged or logged: say why when it is an email conversation asking for a chat's route.
+    if (ceiling.chatOnly && (await c.env.db.execute(sql`SELECT FROM support_conversations WHERE id = ${conversationId} AND channel = 'email' AND status <> 'closed' AND user_id IS NOT NULL`)).rows.length)
+      throw new ApiError(403, 'SUPPORT_CHAT_ONLY', 'An email support conversation only reads and narrows its workspace: changes and notes are a chat’s.');
+    throw supportRequired();
+  }
   if (conv.used > limit) { c.header('Retry-After', '60'); throw new ApiError(429, 'REQUEST_RATE_LIMITED', `A support conversation may make ${limit} requests a minute. Retry after the window resets.`, undefined, true); }
   // Content only where the customer opted in (a chat's own workspace), and only while they still belong to it.
   const contentWorkspaceId = conv.workspaces.some(w => w.id === conv.content_workspace_id) ? conv.content_workspace_id : null;

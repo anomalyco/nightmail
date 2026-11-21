@@ -235,6 +235,9 @@ export async function finishAccountLogin(runtime: Runtime, url: URL, binding: st
       ) UPDATE nightmail_users u SET email=o.email,email_verified=o.verified,updated_at=now() FROM observed o
         WHERE u.id=${userId} AND (u.email,u.email_verified) IS DISTINCT FROM (o.email,o.verified) RETURNING u.id`);
       if(updated.rowCount) await db.execute(sql`DELETE FROM nightmail_sessions WHERE user_id=${userId}`);
+      // This sign-in proves the account's address is a mailbox its person reads now: recorded for email support, which
+      // speaks for the account only within MAILBOX_PROOF_DAYS of such a proof (account-policy.ts mailboxProven).
+      if (mailbox) await db.execute(sql`UPDATE nightmail_users SET mailbox_proved=${mailbox},mailbox_proved_at=now() WHERE id=${userId} AND email_verified AND lower(email)=lower(${mailbox})`);
       // The account's own slot when this browser already has it (signing in again replaces that session), else the
       // first slot without a live session. A sixth account is refused before anything is written.
       const { accounts } = await connectedAccounts(runtime, jar, db);

@@ -6697,10 +6697,22 @@ export type SupportScope = {
         channel: 'chat' | 'email';
         mode: 'member' | 'non_member' | 'pending_signin' | 'unverified';
         verification: 'handoff' | 'dmarc' | 'signin' | 'none';
+        /**
+         * The messages of an email conversation its person confirmed, signed in (the claim), oldest first: each is answered once. Empty otherwise.
+         */
+        signedIn: Array<string>;
     };
     user: {
+        /**
+         * The person the conversation is bound to, as Nightmail stamps it; null when nobody is.
+         */
+        id: string | null;
         name: string | null;
         email: string | null;
+        /**
+         * Whether email is the account’s verified address and a sign-in proved it a mailbox the person reads within the last 30 days. Only then may an answer written from the account go to it, and only to email as stored.
+         */
+        mailboxProven: boolean;
     };
     /**
      * The one workspace in scope (a chat’s, or the one an email narrowed to), while the person is still a member there; null otherwise.

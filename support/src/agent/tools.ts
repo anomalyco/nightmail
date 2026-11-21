@@ -248,20 +248,25 @@ export const TOOL_NAMES = TOOLS.map(t => t.name);
 
 /**
  * Tools whose /v1/support routes Nightmail lets only owners and admins read (SUPPORT_CEILINGS in
- * api/src/support-conversations.ts), and the changes only they may make: offered only in a chat whose workspace has one of
- * those roles (never by email).
+ * api/src/support-conversations.ts), and the changes only they may make: offered only for a workspace in scope with one
+ * of those roles.
  */
 export const MANAGER_TOOLS: ReadonlySet<string> = new Set(['list_domains', 'domain_health', 'list_webhook_deliveries', 'get_billing', 'get_audit', 'api_errors', 'explain_request', 'propose_action', 'recheck_domain']);
-/** Email reads no account: its turns answer through reply and can file a ticket, nothing else. */
+/** An unverified email reads no account: its turns answer through reply and can file a ticket, nothing else. */
 const EMAIL_TOOLS: ReadonlySet<string> = new Set(['reply', 'file_ticket']);
-export type Turn = { channel: 'chat'; manager: boolean } | { channel: 'email' };
+/** Never by email, even for a verified sender: email changes nothing, keeps no notes and never reads content. */
+const CHAT_ONLY: ReadonlySet<string> = new Set(['propose_action', 'recheck_domain', 'request_content_access', 'add_note']);
+export type Turn = { channel: 'chat'; manager: boolean } | { channel: 'email'; verified?: false } | { channel: 'email'; verified: true; manager: boolean };
 /**
- * The tools one turn may call: a chat's account tools by role (the owner/admin ones only for a manager), workspace
- * choice, content access, tickets and add_note, never reply (chat text streams); an email's reply and file_ticket only. OpenCode's
- * session permissions offer exactly these; the plugin refuses any other call.
+ * The tools one turn may call. A chat's: account tools by role (the owner/admin ones only for a manager), workspace
+ * choice, content access, tickets, add_note and the changes, never reply (chat text streams). A verified email's: the same
+ * account reads by role, workspace choice, reply and file_ticket, and nothing that changes anything, keeps a note or reads
+ * content. Any other email's: reply and file_ticket only. OpenCode's session permissions offer exactly these; the plugin
+ * refuses any other call.
  */
 export function toolNames(turn: Turn): string[] {
-  if (turn.channel === 'email') return TOOL_NAMES.filter(name => EMAIL_TOOLS.has(name));
+  if (turn.channel === 'email' && !turn.verified) return TOOL_NAMES.filter(name => EMAIL_TOOLS.has(name));
+  if (turn.channel === 'email') return TOOL_NAMES.filter(name => !CHAT_ONLY.has(name) && (!MANAGER_TOOLS.has(name) || turn.manager));
   return TOOL_NAMES.filter(name => name !== 'reply' && (!MANAGER_TOOLS.has(name) || turn.manager));
 }
 

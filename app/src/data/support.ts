@@ -3,6 +3,8 @@ import { recentFailedRequestIds, request } from './live'
 // The in-app support handoff (hosted): POST /v1/contact-support opens a support conversation for this workspace.
 // `url` is the support platform's page for it, when one is configured; otherwise the reference `id` goes in an email.
 export type SupportHandoff = { id: string; url: string | null; token: string | null; expiresAt: string; shareContent: boolean }
+/** One email waiting for its sender's sign-in, as GET /v1/support-conversations/{id}/claim shows it to that sender. */
+export type SupportPendingEmail = { id: string; messageId: string; subject: string | null; receivedAt: string | null }
 export const supportApi = {
   contact: (input: { shareContent: boolean; message?: string }) => {
     const requestIds = recentFailedRequestIds()
@@ -13,6 +15,10 @@ export const supportApi = {
   },
   /** The chat's own person lets support read message content in its workspace (support/PROTOCOL.md §4.3). */
   allowContent: (conversationId: string) => request<{ id: string; contentWorkspaceId: string }>(`/v1/support-conversations/${encodeURIComponent(conversationId)}/content-access`, { method: 'POST' }),
+  /** The email a sign-in link is for (its subject and when it arrived, never its content), with the claim's own checks. */
+  pending: (conversationId: string, messageId: string) => request<SupportPendingEmail>(`/v1/support-conversations/${encodeURIComponent(conversationId)}/claim?messageId=${encodeURIComponent(messageId)}`),
+  /** Confirm one emailed support request signed in: Nightmail answers it when this person's verified address wrote it. */
+  claim: (conversationId: string, messageId: string) => request<{ id: string; messageId: string; mode: string }>(`/v1/support-conversations/${encodeURIComponent(conversationId)}/claim`, { method: 'POST', body: { messageId } }),
 }
 
 /** A change support proposed to the signed-in person (api/src/support-actions.ts): its sentence is

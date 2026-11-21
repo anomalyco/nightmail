@@ -39,7 +39,7 @@ Keep `conversationId`, `socketUrl` and `expiresAt` in `sessionStorage`, keyed by
 - the chat token expired (connect refused, or `expiresAt` passed);
 - the dashboard was opened with `?support=<conversationId>` for a chat conversation.
 
-An email conversation continues by email, never in the panel: `/chat/resume` answers `409 { error: { code: "EMAIL_CONVERSATION" } }`, and the panel starts a conversation of its own with `/chat/start`.
+An email conversation continues by email, never in the panel: `/chat/resume` answers `409 { error: { code: "EMAIL_CONVERSATION" } }`, and the panel starts a conversation of its own with `/chat/start`. An email support couldn't verify carries a link to the dashboard's `/support/continue/<conversationId>/<messageId>`, where the person sees which email it is (its subject and when it arrived, from Nightmail's `GET /v1/support-conversations/{id}/claim`) and confirms that one email signed in (`POST` the same path); that page talks to Nightmail only, never to this protocol, and the answer goes by email.
 
 The handoff's user must be the conversation's user (`403 { error: { code: "NOT_YOUR_CONVERSATION" } }` otherwise; a conversation with no user is nobody's). `404 { error: { code: "CONVERSATION_NOT_FOUND" } }` means it ended, or its access shrank: start a new one. `503 SUPPORT_UNAVAILABLE`: Nightmail couldn't confirm its access just now; try again.
 
@@ -232,4 +232,4 @@ X-Filename: <URI-encoded file name, optional>
 
 ## 7. Testing without a model
 
-`support/test/fakes.ts` has the scripted model and the fake Nightmail the Worker's tests use. The model script decides its next move from the request: a reply with a tool step (`bounce_reasons`), a consent card ("look at the content"), a ticket ("refund"), a gated answer ("leak please", and "leak in pieces" over several deltas) and a refusal ("Refusal probe: none" or "partway"). A chat turn's request never offers `reply`, so its answer is its text; an email turn answers through `reply` instead. `bun run test` in `support/` drives the real bundle through these, so the frame sequences in §3 are exactly what the tests assert.
+`support/test/fakes.ts` has the scripted model and the fake Nightmail the Worker's tests use. The model script decides its next move from the request: a reply with a tool step (`bounce_reasons`), a consent card ("look at the content"), a ticket ("refund"), a gated answer ("leak please", and "leak in pieces" over several deltas) and a refusal ("Refusal probe: none" or "partway"). A chat turn's request never offers `reply`, so its answer is its text; an email turn answers through `reply` instead. The fake Nightmail binds an email sender to an account only after a test registers one (`/__account`), and `/__claim` stands in for that person's sign-in. `bun run test` in `support/` drives the real bundle through these, so the frame sequences in §3 are exactly what the tests assert.

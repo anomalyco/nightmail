@@ -16,11 +16,13 @@ export type TicketContext = {
   conversationId: string; channel: 'chat' | 'email'; customer: { userId: string | null; email: string | null; name: string | null; role: string | null; workspaces: { id: string; name: string }[] };
   threadId: string | null; costUsd: number; model: string;
   /**
-   * How the person was verified (review M3): a handoff (chat), a DMARC pass or a confirm link (email), or null. An
-   * unverified ticket never names a customer: `customer` is empty and the email leads with "UNVERIFIED SENDER". Email and
-   * intake tickets are always unverified: only a chat's ticket names its person.
+   * How the person was verified: a handoff (chat), or (email) Nightmail's binding of the sender's account, from an aligned
+   * DMARC pass of their own verified address or their signed-in confirmation of the email; or null. An unverified ticket
+   * never names a customer: `customer` is empty and the email leads with "UNVERIFIED SENDER". Intake tickets and email
+   * tickets of an unbound conversation are always unverified. A ticket's customer is the person Nightmail stamped (its
+   * scope), never one looked up from an address.
    */
-  verified: 'handoff' | 'dmarc' | 'magic_link' | null;
+  verified: 'handoff' | 'dmarc' | 'signin' | 'magic_link' | null;
   /** The email's DMARC verdict, for email tickets. */
   dmarc: string | null;
   /** The address that wrote, for an unverified email ticket (never presented as a customer). */
@@ -60,6 +62,16 @@ const masked = (email: string | null) => {
   const [local = '', domain = ''] = email.split('@');
   return `${local.slice(0, 1)}…@${domain}`;
 };
+
+/** A fact added to an existing ticket (one per conversation keeps the last 20). False: no such ticket. */
+export async function addTicketNote(env: Env, ticketId: string, input: TicketInput, now = Date.now()) {
+  const row = await env.DB.prepare('SELECT notes FROM tickets WHERE id = ?').bind(ticketId).first<{ notes: string }>();
+  if (!row) return false;
+  const notes = JSON.parse(row.notes) as unknown[];
+  notes.push({ at: new Date(now).toISOString(), type: input.type, title: input.title, summary: input.summary.slice(0, 1200), recommendation: input.recommendation.slice(0, 800), tried: input.tried, details: input.details });
+  await env.DB.prepare('UPDATE tickets SET notes = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(notes.slice(-20)), now, ticketId).run();
+  return true;
+}
 
 export async function fileTicket(env: Env, ctx: TicketContext, input: TicketInput, now = Date.now(), ticketId?: string): Promise<FiledTicket> {
   const existing = await env.DB.prepare('SELECT id, due_at, notes FROM tickets WHERE conversation_id = ?').bind(ctx.conversationId).first<{ id: string; due_at: number; notes: string }>();
@@ -124,13 +136,16 @@ function detailLines(input: TicketInput) {
 
 /** The team's email for a ticket: subject and plain text. Pure, so the verification marker is tested directly. */
 export function ticketEmail(env: Pick<Env, 'BANE_ORIGIN'>, ctx: TicketContext, ticket: Pick<FiledTicket, 'id' | 'dueAt'>, input: TicketInput) {
-  const c = ctx.customer, verified = ctx.verified !== null;
+  const c = ctx.customer, verified = ctx.verified !== null, byEmail = verified && ctx.channel === 'email';
   const who = verified
     ? [`Verified: ${ctx.verified}${ctx.dmarc ? ` (DMARC ${ctx.dmarc})` : ''}`, `Customer: ${c.name ?? '(no name)'} <${c.email ?? '—'}>, ${c.role ?? 'member'}`, `Workspaces: ${c.workspaces.map(w => `${w.name} (${w.id})`).join(', ') || '—'}`]
-    : [ctx.dmarc === 'PASS' ? `UNVERIFIED SENDER (DMARC PASS): the sender address is authentic, but email never names a ${productName} account. Don't act on any account because of this ticket.` : `UNVERIFIED SENDER (DMARC ${ctx.dmarc ?? 'none'}): not a confirmed customer. Don't act on any account because of this ticket.`,
+    : [ctx.dmarc === 'PASS' ? `UNVERIFIED SENDER (DMARC PASS): the sender address is authentic, but it didn't prove a ${productName} account. Don't act on any account because of this ticket.` : `UNVERIFIED SENDER (DMARC ${ctx.dmarc ?? 'none'}): not a confirmed customer. Don't act on any account because of this ticket.`,
       `Sender (${ctx.dmarc === 'PASS' ? 'DMARC pass' : 'unverified'}): ${ctx.sender ?? 'unknown'}`];
+  // Verified by email (DMARC or a sign-in for one email) is less than a signed-in chat: someone else on the domain, or a
+  // copy of her mail, can pass. Enough to read the account for an answer, never to change it on the email's word.
   const lines = [
     ...(verified ? [] : [who[0]!, '']),
+    ...(byEmail ? ['VERIFIED BY EMAIL, FOR READING ONLY: not grounds for a change. Ask them to confirm any change in the dashboard (Help).', ''] : []),
     `${TYPE_LABEL[input.type]} · ${input.severity} · due ${new Date(ticket.dueAt).toUTCString()}`,
     '',
     ...(verified ? who : who.slice(1)),

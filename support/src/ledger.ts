@@ -11,13 +11,16 @@ import { log, logError } from './log.js';
 // The work ledger (D1 `support_work`, migrations/0005). Every message a flow accepts gets a row before its webhook
 // answers, mail refused at the edge is kept as a row instead of vanishing, and each object mirrors its work items here
 // (work.ts). The cron sweep (every five minutes) reads it, never each object, to finish what an earlier step left:
-// unsent team notices, intake mail for an address configured since, tickets no team email or follow-up covers, and the
-// replay poller (replay.ts), which accepts mail no webhook delivered. It also pulls the staff inbox's replies
-// (api/src/support-inbox.ts) and hands each to its conversation: a wake does the same for one conversation at once, and
-// pulling is what lets staff reply at all (they can only while it happens).
+// unsent team notices, intake mail for an address configured since, tickets no team email or follow-up covers, answers
+// parked for their sender's sign-in (a claim's own wake can be lost), and the replay poller (replay.ts), which accepts
+// mail no webhook delivered. It also pulls the staff inbox's replies (api/src/support-inbox.ts) and hands each to its
+// conversation: a wake does the same for one conversation at once, and pulling is what lets staff reply at all (they can
+// only while it happens).
 
 export type Source = 'webhook' | 'poller';
-const DAY = 86_400_000, MINUTES_10 = 600_000;
+const DAY = 86_400_000, MINUTES_10 = 600_000, MINUTES_5 = 300_000;
+/** Conversations with an answer parked for a sign-in, woken per sweep. */
+const SIGNIN_WAKES = 50;
 
 /** Whether the flow already accepted or kept this message: a later delivery of it changes nothing. */
 export async function ledgered(env: Env, flow: Flow, messageId: string) {
@@ -92,13 +95,31 @@ export async function blockUnconfigured(env: Env, input: { messageId: string; th
 /** Every five minutes: each step on its own, so one failing never stops the others. */
 export async function sweep(env: Env, now = Date.now()) {
   const result: Record<string, number> = {};
-  const steps: [string, () => Promise<number>][] = [['notices', () => resendNotices(env, now)], ['intake', () => acceptConfigured(env, now)], ['tickets', () => ticketMail(env, now)], ['staff', () => staffReplies(env)],
+  const steps: [string, () => Promise<number>][] = [['notices', () => resendNotices(env, now)], ['intake', () => acceptConfigured(env, now)], ['tickets', () => ticketMail(env, now)], ['staff', () => staffReplies(env)], ['signins', () => signinWakes(env, now)],
     ['replaySupport', () => replay(env, 'support', now)], ['replayIntake', () => replay(env, 'intake', now)]];
   for (const [name, step] of steps) {
     try { result[name] = await step(); }
     catch (error) { logError(error, { event: 'scheduled', code: 'SUPPORT_SWEEP_STEP_FAILED', step: name }); }
   }
   return result;
+}
+
+/**
+ * Conversations whose answers wait for their sender's sign-in, woken to ask Nightmail again (the claim's own wake can be
+ * lost), until each is released or its conversation closes (which holds it). Only those due, the longest due first, and
+ * each one's next check is moved later here, before the wake, as well as by the object itself (SIGNIN_CHECKS in
+ * conversation.ts, mirrored here): whatever the wakes do, every parked answer's turn comes, never only the same first few.
+ */
+async function signinWakes(env: Env, now: number) {
+  const rows = (await env.DB.prepare("SELECT object, min(due_at) AS due FROM support_work WHERE flow = 'support' AND kind = 'answer' AND state = 'parked' AND due_at <= ? GROUP BY object ORDER BY due, object LIMIT ?")
+    .bind(now, SIGNIN_WAKES).all<{ object: string; due: number }>()).results;
+  let n = 0;
+  for (const row of rows) {
+    await env.DB.prepare("UPDATE support_work SET due_at = ? WHERE flow = 'support' AND object = ? AND kind = 'answer' AND state = 'parked' AND due_at <= ?").bind(now + MINUTES_5, row.object, now).run();
+    try { await env.CONVERSATION.get(env.CONVERSATION.idFromString(row.object)).wake(); n++; }
+    catch (error) { logError(error, { event: 'email', code: 'SIGNIN_WAKE_FAILED' }, 'warn'); }
+  }
+  return n;
 }
 
 /** Every staff reply waiting in Nightmail's outbox, to its conversation (each queues it once). */

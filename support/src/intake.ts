@@ -190,7 +190,7 @@ export class SupportIntake extends DurableObject<Env> {
     const result = { admission: progress.admission };
     if (!progress.admission.ok) { await hold(progress.admission.reason); return { state: 'held', result }; }
     const automatic = message.automated === true || /^(?:mailer-daemon|postmaster|no-?reply|bounces?)@/i.test(sender);
-    // Who wrote: only the address and its DMARC verdict, as contact data. An email never names an account, whoever owns
+    // Who wrote: only the address and its DMARC verdict, as contact data. Intake mail never names an account, whoever owns
     // the address: the ticket shows an unverified sender.
     const verified: TicketContext['verified'] = null, customer: TicketContext['customer'] = { userId: null, email: null, name: null, role: null, workspaces: [] };
     const conversationId = await external(this.conversationId(threadId));

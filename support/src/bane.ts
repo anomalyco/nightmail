@@ -36,8 +36,11 @@ export type RegisteredConversation = { id: string; channel: 'chat' | 'email'; mo
 export type ScopeWorkspace = { id: string; name: string; role: 'owner' | 'admin' | 'member' };
 /** GET /v1/support/scope: who the conversation is for and what it can read now, read at the start of every turn. */
 export type Scope = {
-  conversation: { id: string; channel: 'chat' | 'email'; mode: Mode; verification: Verification };
-  user: { name: string | null; email: string | null };
+  conversation: { id: string; channel: 'chat' | 'email'; mode: Mode; verification: Verification;
+    /** An email conversation's messages its person confirmed signed in (the claim): each is answered once. */
+    signedIn?: string[] };
+  /** The person Nightmail stamps (id: never shown to the model), and whether `email` is their verified address now. */
+  user: { id?: string | null; name: string | null; email: string | null; mailboxProven?: boolean };
   workspace: ScopeWorkspace | null; workspaces: ScopeWorkspace[]; contentWorkspaceId: string | null; page: string | null;
   /** The person lost a workspace this conversation read: end it without restating anything. */
   shrunk: boolean;
@@ -62,7 +65,7 @@ export interface SupportPlatform {
   registerConversation(body: { conversationId: string; evidence: ConversationEvidence }): Promise<PlatformReply<RegisteredConversation>>;
   /** Every later request for the conversation is refused. Repeating it is harmless. */
   closeConversation(conversationId: string): Promise<PlatformReply<{ id: string; status: 'closed'; closedAt: string }>>;
-  /** A /v1/support GET, or a POST to scope, notes, actions or a domain's verify, for one registered chat: Nightmail stamps the person. */
+  /** A /v1/support GET, or a POST to scope, notes, actions or a domain's verify (a chat's), for one registered conversation: Nightmail stamps the person. */
   request<T = unknown>(conversationId: string, method: string, path: string, body?: unknown): Promise<PlatformReply<T>>;
   // The staff inbox (api/src/support-inbox.ts). A conversation Nightmail doesn't know (not registered) answers 404.
   mirrorMessages(conversationId: string, messages: MirroredMessage[]): Promise<PlatformReply<{ data: { id: string; seq: number; created: boolean }[] }>>;
@@ -155,7 +158,7 @@ export type InboundMessage = {
   id: string; threadId: string | null; direction: 'inbound' | 'outbound'; subject: string | null;
   from: { name: string | null; address: string } | string | null; fromAddress?: string;
   to?: unknown; cc?: unknown; replyTo?: unknown; text?: string | null;
-  replyText?: string | null; messageId?: string | null; inReplyTo?: string | null; references?: unknown;
+  replyText?: string | null; messageId?: string | null; inReplyTo?: string | null; references?: unknown; receivedAt?: string;
   attachments?: { id: string; filename: string | null; contentType: string; size: number; disposition?: string }[];
   /** With includeAuthentication=true. dmarc is PASS when the From domain aligns with a passing SPF or DKIM result. */
   authentication?: { spf: string | null; dkim: string | null; dmarc: string | null };

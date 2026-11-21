@@ -16,7 +16,7 @@ export const DEFAULT_LIMITS = {
   /** Model turns, all conversations together (the Console key's own budget is the backstop), and per person. */
   turnsPerDay: 1500,
   turnsPerPerson: 100,
-  /** Model turns per email sender address (every email answer is general), instead of the per-person cap. */
+  /** Model turns per email sender address (a verified email's turn counts against its person's cap too). */
   turnsPerEmailSender: 5,
   /** Tickets for verified customers (chat, verified email, a DMARC-passing Nightmail user at an intake address). */
   ticketsVerifiedPerDay: 60,
@@ -27,6 +27,8 @@ export const DEFAULT_LIMITS = {
   /** Inbound mail per DMARC-passing sender, per address's unauthenticated bucket, and in total. */
   mailPerSender: 20,
   mailUnauthenticatedPerMailbox: 30,
+  /** Within support@'s unauthenticated bucket, per From address (each such email gets a sign-in reply): one forged address can't spend it all. */
+  mailUnauthenticatedPerAddress: 3,
   mailPerDay: 2000,
   /** "Confirm it's me" links per address a day, and the least time between two for the same open confirmation. */
   confirmsPerAddress: 3,
@@ -63,6 +65,9 @@ export async function mailIdentity(env: Env, mailbox: Mailbox, sender: string, d
 /** Whether one more inbound message fits today (its sender's or bucket's cap, then the total). */
 export async function mailAllowed(env: Env, mailbox: Mailbox, sender: string, dmarcPass: boolean, count = countToday): Promise<{ ok: true } | { ok: false; reason: string }> {
   const id = await mailIdentity(env, mailbox, sender, dmarcPass), cap = limits(env);
+  // Unauthenticated mail at support@ (each answered with a sign-in for that email): its From address first, so a few
+  // forged addresses can't use up the bucket every other sender without DMARC shares.
+  if (!dmarcPass && mailbox === 'support' && !(await count(env, `unauthenticated:support:${await addressHash(sender)}:mail`, cap.mailUnauthenticatedPerAddress)).ok) return { ok: false, reason: 'unauthenticated mail per address' };
   if (!(await count(env, id.key, id.limit)).ok) return { ok: false, reason: dmarcPass ? 'mail per sender' : `unauthenticated mail to ${mailbox}@` };
   if (!(await count(env, 'global:mail', cap.mailPerDay)).ok) { await alertOnce(env, 'mail', cap.mailPerDay); return { ok: false, reason: 'mail per day' }; }
   return { ok: true };
