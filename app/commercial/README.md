@@ -23,7 +23,7 @@ Rules of the story:
   (0 → 1 → 5 → 37 → 212 → ~400 → 1,040 → 9,000 → 99,999+). The dings go from one, to a rhythm, to
   constant, to a roar. Everything Doug tries makes more.
 
-The commercial is the master clock (about 52 seconds of it; the show runs 66 with what Doug does
+The commercial is the master clock (about 50 seconds of it; the show runs 63 with what Doug does
 to the pitchman afterwards). Its clips play back to back and never wait for Doug; every beat cuts
 to a new shot as its clip starts.
 
@@ -32,7 +32,7 @@ to a new shot as its clip starts.
 | standby | (test card) "PLEASE STAND BY" | Doug on his couch with his phone | |
 | 0 | "Folks! Got customers? Then you send email! Meet NIGHTMAIL!" | on "customers?" the set's monitor rolls in: the couch. Over the jingle Doug boops his phone, "Order placed ✓ · 1 × Garden Gnome", and does a happy hop. | 0 |
 | 1 | "One line of code: receipt, SENT! Accepted in a TENTH of a second!" | one ding: "Your receipt · $84.00". He smiles. It is the only email he is glad to get. | 1 |
-| 2 | "Twenty cents per thousand! At that price, why send just ONE?" | ding, ding, ding, ding: shipped, out for delivery, delivered (the gnome pops up beside the couch), "How are you enjoying your gnome?" His smile goes. He flips the phone face down. | 5 |
+| 2 | "Twenty cents per thousand! At that price, why just send ONE?" | ding, ding, ding, ding: shipped, out for delivery, delivered (the gnome pops up beside the couch), "How are you enjoying your gnome?" His smile goes. He flips the phone face down. | 5 |
 | 3 | "No per-contact pricing! Put EVERYBODY on the newsletter! Schedule it for any time!" | the bedroom, 3:00 AM. The face-down phone has been buzzing. "Gnome Depot Weekly · Hi DOUG!" whites out the room and two eyes open; DAILY has him bolt upright; then HOURLY. | 37 |
 | 4 | "And you see EVERYTHING! Delivered! Opened! Clicked! We saw you open that." | the bathroom. Doug, chin-deep in bubbles with a rubber duck, opens the newsletter to hunt for the unsubscribe link: he scrolls all the way down and gets it with his forehead. ✓ DELIVERED ✓ OPENED ✓ CLICKED are stamped on the tub. The aside follows straight on from "Clicked!": the pitchman glances at the footage in passing, and the mail keeps coming. Doug heard it. His eyes and the duck go to the pitchman, and he sinks to his eyes. | 212 |
 | 5 | "But wait, there's MORE! Customers write back? Answer them, INSTANTLY!" | a first date. "Unsubscribed from HOURLY ✓. You've been moved to Gnome Depot MINUTELY." His date finds the ceiling interesting while he pecks out "please stop" with his forehead. The message leaves his phone, crosses out of the footage and lands on the INBOX board over the pitchman's head ("1 NEW · FROM: A CUSTOMER"), which the pitchman could not be prouder of. On "INSTANTLY!" the answers shoot back the other way into his phone: 10% off his next gnome, and "You might also like: Gnome (Large)". | ~400 |
@@ -99,7 +99,7 @@ toggle and two invisible click targets (the glass and the dial).
 ### Timing is data
 
 Cues are looked up by the word the announcer says, not by a time: `w("s4", s4, "we")` is when he
-says "We" in clip `s4`, from the Scribe timings in `public/commercial/audio/manifest.json`. The
+says "We" in clip `s4`, from the word timings in `public/commercial/audio/manifest.json`. The
 band's lines are `[word, chyron]` pairs, so a new recording of the same script retimes the whole
 show through its manifest. Events that depend on each other are clamped in order (he can't click
 before he opens). `bun run commercial:smoke` (from `app/`) runs the whole show without a GPU, at
@@ -110,16 +110,21 @@ WebGPU only; without it the page says so.
 
 ## Audio
 
-The announcer is the v3 script: clips `s0`–`s8`, with ElevenLabs Scribe word timings in the
-manifest. `s4` is the v3.1 take: the same voice and words, with "We saw you open that." as a
-one-second aside straight after "Clicked!". The clips play with a 0.2 s breath between them and
-the jingle (cut to 3.3 s) after `s0`. `s8` is cut off on the "n" of "Call now"; `callnow` and `now`
-are cut from the full take for what the pitchman tries to say afterwards. The cut click, the dial,
-the car's engine and the phone under the hymn book are made with ffmpeg; a chapel organ, a studio
-audience, a tire screech, a door bang, a bowler being crushed and four single heavy thuds are
-ElevenLabs sound effects. At "Call n—" everything stops dead. From there the only sounds are the
-thuds, one per blow, the hat, and the pitchman's three attempts at the rest of his line, each cut
-off by the next thud. The aftermath is silent until its one ding.
+The announcer is Ryan reading the v3 script: clips `s0`–`s8`, each his best take of the line,
+with transcribed word timings in the manifest. In `s4` "We saw you open that." is a quick aside
+straight after "Clicked!". In `s2` he says "why just send ONE?", and the band says so too. `s8`
+has a little more air between its phrases than he read it with (the drive to the studio needs
+it) and ends on the hardest-stopping of his tries at "Call n—". `callnow` is his winded "Call n—"
+and `now` his out-cold "…now…"; the second try after the tackle is `callnow` again, slower, timed
+from the manifest so that the next blow lands on its "n". Every clip is high-passed at 80 Hz,
+compressed lightly and levelled to −16 LUFS (true peak under −1.5 dBTP), and they play with a
+0.2 s breath between them and the jingle (cut to 3.3 s) after `s0`. The whole mix goes through
+the master compressor and a limiter (`audio.js`), so it never reaches 0 dBFS. The cut click, the
+dial, the car's engine and the phone under the hymn book are made with ffmpeg; a chapel organ, a
+studio audience, a tire screech, a door bang, a bowler being crushed and four single heavy thuds
+are ElevenLabs sound effects. At "Call n—" everything stops dead. From there the only sounds are
+the thuds, one per blow, the hat, and the pitchman's three attempts at the rest of his line. The
+aftermath is silent until its one ding.
 
 ## In this repository
 
