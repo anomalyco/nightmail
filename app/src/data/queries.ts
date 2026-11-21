@@ -10,7 +10,7 @@ export type QueryDef<T> = { key: readonly unknown[]; read: (api: Api, signal: Ab
 const def = <T>(key: readonly unknown[], read: QueryDef<T>['read']): QueryDef<T> => ({ key, read })
 
 export const queries = {
-  overview: (regionId: string, range: TimeRange, stream: Stream | 'all') => def(['overview', regionId, range, stream], (api, signal) => api.overview.get({ regionId, range, stream: stream === 'all' ? undefined : stream }, signal)),
+  overview: (regionId: string, range: TimeRange, stream: Stream | 'all', fine = false) => def(['overview', regionId, range, stream, ...(fine ? ['fine'] : [])], (api, signal) => api.overview.get({ regionId, range, stream: stream === 'all' ? undefined : stream, fine }, signal)),
   senderScore: () => def(['sender-score'], (api, signal) => api.senderScore.get(signal)),
   emails: (params: PageRequest) => def(['emails', params], (api, signal) => api.emails.list(params, signal)),
   logs: (params: PageRequest & { direction?: LogDirection }) => def(['logs', params], (api, signal) => api.logs.list(params, signal)),

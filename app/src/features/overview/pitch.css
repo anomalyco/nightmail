@@ -1,0 +1,147 @@
+/* Pitch (?chart=a|b|c): three takes on Overview's figures and activity chart. Flat: fills and hairlines only. */
+.pitch-legend { display: flex; flex: none; align-items: center; gap: var(--space-16); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; white-space: nowrap; }
+.pitch-legend > span { display: inline-flex; align-items: center; gap: var(--space-6); }
+.pitch-key { display: inline-block; flex: none; width: 8px; height: 8px; }
+.pitch-key--sent { background: var(--color-accent-data); }
+.pitch-key--delivered { background: var(--color-success-marker); }
+.pitch-key--bounces { background: var(--color-warning-marker); }
+.pitch-key--complaints { background: var(--color-danger-marker); }
+.pitch-right { position: relative; display: block; flex: 1 1 auto; align-self: stretch; min-width: 0; }
+.pitch-right > span { position: absolute; top: 0; left: 100%; display: inline-flex; align-items: center; gap: inherit; height: 100%; transform: translateX(-100%); white-space: nowrap; }
+/* A head whose right side changes (a readout): the title keeps its width, so nothing beside it moves. */
+.ov-chart__head.pitch-head h2 { flex: none; }
+.pitch-head > .pitch-right { height: 16px; align-self: center; }
+.pitch-plot { position: absolute; inset: 0; }
+.pitch-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.pitch-plot [data-point]:focus-visible { outline: none; stroke: var(--color-focus, var(--color-accent-data)); stroke-width: 1.5; }
+.pa-skeleton { display: block; width: 100%; height: 100%; border-radius: 2px; background: var(--color-layer-2); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
+
+/* A tooltip anchored beside its bucket: flat, one hairline, no shadow. */
+.pitch-tip { position: absolute; top: 0; z-index: 2; display: grid; gap: var(--space-4); min-width: 188px; padding: var(--space-8) var(--space-12) var(--space-12); border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-layer-2); font-size: var(--text-xs); pointer-events: none; }
+.pitch-tip strong { margin-bottom: var(--space-4); color: var(--color-text); font-family: var(--font-mono); font-size: var(--text-label); font-weight: 400; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.pitch-tip span { display: flex; align-items: center; gap: var(--space-8); color: var(--color-muted); }
+.pitch-tip b { display: flex; gap: var(--space-8); margin-left: auto; color: var(--color-text); font-family: var(--font-mono); font-weight: 400; font-variant-numeric: tabular-nums; }
+.pitch-tip em { min-width: 40px; color: var(--color-faint); font-style: normal; text-align: right; }
+.pitch-tip em[data-zone='near'] { color: var(--color-warning); }
+.pitch-tip em[data-zone='over'] { color: var(--color-danger); }
+
+/* ── A · Blocks ── four 104px tiles; a phone stacks them two by two (216px). */
+.pa-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-8); }
+.pa-tile { display: flex; flex-direction: column; min-width: 0; height: 104px; padding: var(--space-12); border-radius: var(--radius-sm); background: var(--color-layer-1); }
+.pa-tile__head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-8); height: 16px; color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); line-height: 16px; letter-spacing: var(--tracking-label); text-transform: uppercase; white-space: nowrap; }
+.pa-tile__hint { color: var(--color-faint); letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.pa-tile__value { display: flex; align-items: baseline; height: 28px; margin-top: var(--space-4); color: var(--color-text); font-family: var(--font-mono); font-size: 22px; line-height: 28px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pa-tile[data-zone='near'] .pa-tile__value { color: var(--color-warning); }
+.pa-tile[data-zone='over'] .pa-tile__value { color: var(--color-danger); }
+.pa-tile__viz { display: flex; flex-direction: column; justify-content: flex-end; height: 26px; margin-top: auto; }
+.pa-gauge { display: grid; grid-template-columns: repeat(20, minmax(0, 1fr)); gap: 2px; height: 12px; }
+.pa-gauge > i { background: color-mix(in oklch, var(--color-text) 10%, transparent); }
+.pa-gauge > i[data-on] { background: var(--color-accent-data); }
+.pa-gauge[data-zone='near'] > i[data-on] { background: var(--color-warning-marker); }
+.pa-gauge[data-zone='over'] > i[data-on] { background: var(--color-danger-marker); }
+.pa-gauge__caption { display: flex; justify-content: space-between; height: 10px; margin-top: var(--space-4); color: var(--color-faint); font-family: var(--font-mono); font-size: 10px; line-height: 10px; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.pitch-cell-track { fill: color-mix(in oklch, var(--color-text) 8%, transparent); }
+.pa-columns { display: block; width: 100%; height: 26px; }
+.pa-columns .pitch-cell { fill: var(--color-accent-data); }
+.pa-columns--delivered .pitch-cell { fill: var(--color-success-marker); }
+.pa-seg--sent { fill: var(--color-accent-data); }
+.pa-seg--bounces { fill: var(--color-warning-marker); }
+.pa-seg--complaints { fill: var(--color-danger-marker); }
+.pa-col { transition: opacity 120ms var(--ease-swap); }
+.pa-plot[data-active] .pa-col:not([data-active]) .pa-seg--sent { opacity: .4; }
+.pa-flag { font-family: var(--font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; fill: var(--color-warning-marker); }
+.pa-flag[data-zone='over'], .pa-flag--complaints { fill: var(--color-danger-marker); }
+.pa-flag-mark { fill: var(--color-warning-marker); }
+.pa-flag-mark--complaints { fill: var(--color-danger-marker); }
+:root:not([data-theme='dark']) .pa-flag { fill: var(--color-warning); }
+:root:not([data-theme='dark']) :is(.pa-flag[data-zone='over'], .pa-flag--complaints) { fill: var(--color-danger); }
+
+/* ── B · Lanes ── a 20px head, then lanes of 104, 64 and 64px and a 22px axis (278px in all). */
+.pb { display: flex; flex-direction: column; gap: var(--space-4); }
+.pb-readout { flex: none; color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pb-lanes { position: relative; display: grid; grid-template-columns: 176px minmax(0, 1fr); grid-template-rows: 104px 64px 64px 22px; border-top: 1px solid var(--color-border-muted); }
+.pb-gutter { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; padding-right: var(--space-16); border-bottom: 1px solid var(--color-border-muted); }
+.pb-label { display: flex; align-items: baseline; gap: var(--space-8); height: 16px; color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); line-height: 16px; letter-spacing: var(--tracking-label); text-transform: uppercase; white-space: nowrap; }
+.pb-label .pitch-right { color: var(--color-faint); letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.pb-value { display: flex; align-items: baseline; gap: var(--space-6); height: 24px; color: var(--color-text); font-family: var(--font-mono); font-size: var(--text-lg); line-height: 24px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pb-sub { color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); line-height: 14px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pb-gutter[data-zone='near'] .pb-value { color: var(--color-warning); }
+.pb-gutter[data-zone='over'] .pb-value { color: var(--color-danger); }
+.pb-gutter[data-zone='near'] .pb-sub { color: var(--color-warning); }
+.pb-gutter[data-zone='over'] .pb-sub { color: var(--color-danger); }
+.pb-plot { position: relative; min-width: 0; border-bottom: 1px solid var(--color-border-muted); }
+.pb-plot > .pa-skeleton { position: absolute; inset: var(--space-8) 0; width: auto; height: auto; }
+.pb-plot .ui-empty-state { height: 100%; justify-content: center; padding: 0; }
+.pb-lane { position: absolute; inset: 0; }
+.pb-lane svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.pb-area--sent { fill: color-mix(in oklch, var(--color-accent-data) 34%, transparent); }
+.pb-edge--sent { fill: none; stroke: var(--color-accent-data); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
+.pb-area--bounces { fill: var(--color-warning-marker); }
+.pb-area--over { fill: var(--color-danger-marker); }
+.pb-level { stroke: var(--color-series-strong); stroke-width: 1; vector-effect: non-scaling-stroke; }
+.pb-level-label { fill: var(--color-muted); }
+.pb-limit { stroke: var(--color-muted); stroke-dasharray: 3 3; vector-effect: non-scaling-stroke; shape-rendering: crispEdges; }
+.pb-limit-label { fill: var(--color-muted); }
+.pb-pin rect { fill: var(--color-danger-marker); }
+.pb-cursor { fill: color-mix(in oklch, var(--color-text) 8%, transparent); }
+.pb-axis { position: relative; }
+.pb-axis svg { position: absolute; inset: 0; display: block; width: 100%; height: 100%; overflow: visible; }
+.pb-hits { position: absolute; top: 0; right: 0; bottom: 22px; left: 176px; width: calc(100% - 176px); height: calc(100% - 22px); }
+
+/* ── C · Pulse ── four 84px cards (two by two on a phone, 176px), the plot as before. */
+.pc-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); column-gap: var(--space-24); row-gap: var(--space-8); }
+.pc-card { display: flex; flex-direction: column; min-width: 0; height: 84px; padding-top: var(--space-12); border-top: 1px solid var(--color-border-muted); }
+.pc-card__head { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-8); height: 16px; color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); line-height: 16px; letter-spacing: var(--tracking-label); text-transform: uppercase; white-space: nowrap; }
+.pc-card__hint { color: var(--color-faint); font-variant-numeric: tabular-nums; }
+.pc-card__value { display: flex; align-items: baseline; gap: var(--space-6); height: 24px; margin-top: var(--space-4); color: var(--color-text); font-family: var(--font-mono); font-size: 20px; line-height: 24px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pc-card__of { color: var(--color-faint); font-size: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.pc-card__of > span { align-items: flex-end; padding-bottom: 3px; line-height: 1; }
+.pc-card[data-zone='near'] .pc-card__of { color: var(--color-warning); }
+.pc-card[data-zone='over'] .pc-card__of { color: var(--color-danger); }
+.pc-card[data-zone='near'] .pc-card__value { color: var(--color-warning); }
+.pc-card[data-zone='over'] .pc-card__value { color: var(--color-danger); }
+.pc-cells { display: block; flex: none; width: 100%; height: 20px; margin-top: auto; }
+.pc-cells .pitch-cell { fill: var(--color-accent-data); }
+.pc-cells--delivered .pitch-cell { fill: var(--color-success-marker); }
+.pc-cells--bounces .pitch-cell, .pc-cells--complaints .pitch-cell { fill: var(--color-series-strong); }
+/* An hour past half its limit takes its outcome's colour, as in the chart: bounces amber, complaints red. */
+.pc-cells--bounces .pitch-cell:is([data-zone='near'], [data-zone='over']) { fill: var(--color-warning-marker); }
+.pc-cells--complaints .pitch-cell:is([data-zone='near'], [data-zone='over']) { fill: var(--color-danger-marker); }
+.pc-cells-skeleton { height: 20px; margin-top: auto; }
+.pc-readout { gap: var(--space-12); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pc-readout time { color: var(--color-text); }
+.pc-readout > span > span { display: inline-flex; align-items: center; gap: var(--space-6); color: var(--color-text); letter-spacing: 0; }
+.pc-readout em { color: var(--color-faint); font-style: normal; }
+.pc-readout [data-zone='near'] em { color: var(--color-warning); }
+.pc-readout [data-zone='over'] em { color: var(--color-danger); }
+.pc-readout > span > .pc-readout__idle { color: var(--color-faint); letter-spacing: var(--tracking-label); }
+.pc-grid { stroke-dasharray: 2 3; }
+.pc-seg--sent { fill: var(--color-accent-data); }
+.pc-seg--bounces { fill: var(--color-warning-marker); }
+.pc-seg--complaints { fill: var(--color-danger-marker); }
+.pc-col[data-over] .pc-seg--sent { fill: var(--color-warning-marker); }
+.pc-cursor { fill: color-mix(in oklch, var(--color-text) 12%, transparent); }
+
+.pa-tiles, .pc-cards, .pb { transition: opacity 200ms var(--ease-swap); }
+:is(.pa-tiles, .pc-cards, .pb)[data-stale] { opacity: .6; transition: opacity 200ms var(--ease-swap) 100ms; }
+
+@media (max-width: 640px) {
+  .pa-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .pa-plot .pitch-tip { right: 0 !important; left: 0 !important; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--space-16); min-width: 0; }
+  .pa-plot .pitch-tip strong { grid-column: 1 / -1; }
+  .pitch-legend { gap: var(--space-8); }
+  .ov-chart__head:has(.pitch-legend) h2::after { display: none; }
+  .pb-lanes { grid-template-columns: minmax(0, 1fr); grid-template-rows: 24px 88px 24px 48px 24px 40px 22px; }
+  /* One row per lane: fixed label and value widths, so a hovered bucket's figures move nothing. */
+  .pb-gutter { flex-direction: row; align-items: baseline; justify-content: flex-start; gap: var(--space-8); padding: 0; border-bottom: 0; }
+  .pb-gutter .pb-label { flex: 0 0 96px; height: 24px; line-height: 24px; }
+  .pb-gutter .pb-label .pitch-right { display: none; }
+  .pb-gutter .pb-value { flex: 0 0 64px; height: 24px; font-size: var(--text-md); }
+  .pb-gutter .pb-sub { line-height: 24px; }
+  .pb-count { display: none; }
+  .pb-axis-gap { display: none; }
+  .pb-hits { left: 0; width: 100%; }
+  .pc-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: var(--space-16); }
+  .pc-readout { gap: var(--space-8); }
+  .pc-readout__day, .pc-readout time .pc-utc { display: none; }
+}

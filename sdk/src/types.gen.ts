@@ -2064,6 +2064,17 @@ export type Metrics = {
         complained: number;
     }>;
     /**
+     * Present with granularity=quarter-hour: 15-minute UTC creation buckets.
+     */
+    quarterHourly?: Array<{
+        date: string;
+        count: number;
+        sent: number;
+        delivered: number;
+        bounced: number;
+        complained: number;
+    }>;
+    /**
      * Present with include=previous.
      */
     previous?: {
@@ -15001,7 +15012,7 @@ export type GetMetricsData = {
         from?: string;
         to?: string;
         stream?: 'transactional' | 'marketing';
-        granularity?: 'day' | 'hour';
+        granularity?: 'day' | 'hour' | 'quarter-hour';
         /**
          * Comma-separated extras computed in the same statement: previous (totals for the window of equal length ending at from) and streams (totals per stream for the window, ignoring the stream filter).
          */

@@ -17,6 +17,7 @@ import { logHref, logRowLabel, useLogRowIntent } from '../logs/rows'
 import { usePrefetchQueries } from '../../data/prefetch'
 import { composer } from '../campaigns/composer-chunk'
 import { DailyLimit, SetupRail, useSendingLimitPending, useSetupSteps } from './setup'
+import { BOUNCE_LINE, ChartA, ChartC, COMPLAINT_LINE, FactsA, FactsC, LanesB, NO_EMAILS, useChartVariant } from './pitch'
 import { useCompactShell, useMediaQuery } from '../../lib/media'
 
 // Overview: four facts with their own series, the activity chart and the latest emails (down to the card's bottom) on
@@ -31,7 +32,8 @@ export function OverviewPage() {
   const requested = searchParams.get('stream')
   const stream = requested === 'transactional' || requested === 'marketing' ? requested : 'all'
   // Each refresh runs one created-cohort aggregation; a minute is fresh enough, and a hidden tab stays quiet.
-  const query = useApiDef(queries.overview(regionId, range, stream), { interval: 60_000, keepPrevious: previous => previous[1] === regionId })
+  const variant = useChartVariant()
+  const query = useApiDef(queries.overview(regionId, range, stream, variant === 'c'), { interval: 60_000, keepPrevious: previous => previous[1] === regionId })
   const { multiTenant, canAdminister } = useWorkspaceAccess()
   const regions = useRegionCatalog({ enabled: !multiTenant })
   const current = regions.data?.data.find(region => region.region === regionId)
@@ -68,8 +70,8 @@ export function OverviewPage() {
         {stacked && setup.error ? <ErrorState error={setup.error} onRetry={setup.retry} /> : null}
         <Fragment key={held ? 'held' : 'ready'}>
           {query.isError && !data ? <ErrorState error={query.error} onRetry={() => query.refetch()} /> : <>
-            {data && !held ? <Facts data={data} stale={query.isPlaceholderData} /> : <FactsSkeleton />}
-            {data && !held ? <Chart data={data} range={shownRange} stale={query.isPlaceholderData} /> : <ChartSkeleton />}
+            {data && !held ? variant === 'a' ? <FactsA data={data} stale={query.isPlaceholderData} /> : variant === 'b' ? <LanesB data={data} range={shownRange} stale={query.isPlaceholderData} /> : variant === 'c' ? <FactsC data={data} stale={query.isPlaceholderData} /> : <Facts data={data} stale={query.isPlaceholderData} /> : <FactsSkeleton />}
+            {variant === 'b' ? null : data && !held ? variant === 'a' ? <ChartA data={data} range={shownRange} stale={query.isPlaceholderData} /> : variant === 'c' ? <ChartC data={data} range={shownRange} stale={query.isPlaceholderData} /> : <Chart data={data} range={shownRange} stale={query.isPlaceholderData} /> : <ChartSkeleton />}
           </>}
           <LatestEmails params={latestParams} held={held} />
         </Fragment>
@@ -116,7 +118,6 @@ const swap = 200
 // Four metric rows (label · series · mono value), two by two. A rate's rule is its meter against its warning line (5%
 // bounces, 0.1% complaints, with a tick there), coloured only once the rate reaches that line: a healthy week is grey.
 // Every number tweens (tabular figures, laid out from the right, so nothing beside it moves) and every series morphs or crossfades.
-export const BOUNCE_LINE = 0.05, COMPLAINT_LINE = 0.001
 // An hour is marked only with enough mail for its rate to mean something: one bounce in four emails is not a trend.
 const BAND_VOLUME = 20
 function Facts({ data, stale }: { data: Overview; stale: boolean }) {
@@ -145,7 +146,7 @@ function Spark({ values: target, tone }: { values: number[]; tone: string }) {
 function Chart({ data, range, stale }: { data: Overview; range: TimeRange; stale: boolean }) {
   return <section className="ov-chart" aria-label="Sending activity" data-stale={stale || undefined}>
     <div className="ov-chart__head"><h2 className="ui-label ui-label--rule">Activity</h2></div>
-    <Crossfade id={data.sent ? buckets(data.points) : 'empty'} className="ov-chart__plot">{data.sent ? <ActivityChart points={data.points} range={range} /> : <EmptyState title="No emails in this period" />}</Crossfade>
+    <Crossfade id={data.sent ? buckets(data.points) : 'empty'} className="ov-chart__plot">{data.sent ? <ActivityChart points={data.points} range={range} /> : <EmptyState title={NO_EMAILS} />}</Crossfade>
   </section>
 }
 

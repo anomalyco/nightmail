@@ -6,7 +6,9 @@ import { LoadingRegion, MetricRow, PageHeader, SectionHeader, Select, Skeleton, 
 import type { LogEntry } from '../../data/types'
 import { logColumnDefs, logColumns } from '../logs/rows'
 import { useLatestRowCount } from './latest'
+import { FactsSkeletonA, FactsSkeletonC, LanesSkeletonB, useChartVariant } from './pitch'
 import './overview.css'
+import './pitch.css'
 
 // Hosted mail manages its region, so it shows no status; a bring-your-own connection shows its own state,
 // and self-hosted SES shows the region's discovery status.
@@ -29,9 +31,14 @@ export const latestColumns: Column<LogEntry>[] = latestColumnDefs.map(column => 
 
 // Each skeleton has exactly the loaded block's dimensions (see overview.css), so swapping in the data moves nothing.
 export function FactsSkeleton() {
+  const variant = useChartVariant()
+  if (variant === 'a') return <FactsSkeletonA />
+  if (variant === 'b') return <LanesSkeletonB />
+  if (variant === 'c') return <FactsSkeletonC />
   return <div className="ov-facts" aria-hidden="true">{factTitles.map(title => <MetricRow key={title} label={title} spark={<span className="ov-spark ov-spark--skeleton" />} value={<Skeleton width={56} height={16} />} />)}</div>
 }
 export function ChartSkeleton() {
+  if (useChartVariant() === 'b') return null
   return <section className="ov-chart" aria-hidden="true"><div className="ov-chart__head"><h2 className="ui-label ui-label--rule">Activity</h2></div><div className="ov-chart__plot ov-chart__plot--loading" /></section>
 }
 export function AsideSkeleton() {

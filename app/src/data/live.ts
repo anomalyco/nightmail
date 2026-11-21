@@ -1,6 +1,6 @@
 import { ApiError, type MailRoute, type RoutingTestResult, type Api, type PageRequest, type PageResult, type Campaign, type CampaignState, type Contact, type AudienceList, type AudiencePreview, type Segment, type Domain, type Webhook, type WebhookDelivery, type MailboxDomain, type MailboxWebhookDelivery, type ReceivedEmailDetail, type InboundAddress, type InboundAddressState, type InboundMessage, type InboundMessageDetail, type InboundThread, type InboundThreadDetail, type InboundWebhook, type ForwardEndpoint, type Email, type RegionCatalog, type SesDiscovery, type RegionProvisionReceipt, type Workspace, type Identity, type OverviewSetup } from './types'
 
-import type { Agent, ApiKey, AppPassword, AuditEntry, CreatedAppPassword, DomainQuota } from './types'
+import type { Agent, ApiKey, AppPassword, AuditEntry, ChartPoint, CreatedAppPassword, DomainQuota } from './types'
 import type { CreatedInbox, Inbox, InboxMessageDetail, InboxMessagePage, LogDirection, LogEntry, SenderScore } from './types'
 import { headerPrefix, productName } from '../../../api/src/brand'
 import { analytics } from '../lib/analytics'
@@ -185,26 +185,35 @@ export function createLiveApi(): Api {
       const end = new Date(), start = new Date(end.getTime() - ({ '24h': 1, '7d': 7, '30d': 30 }[input.range]) * 86400000)
       const params = new URLSearchParams({ ...(input.regionId ? { region: input.regionId } : {}), from: start.toISOString(), to: end.toISOString() })
       if (input.stream) params.set('stream', input.stream)
-      const hourly = input.range !== '30d'
-      // One request returns the chart buckets and the previous period's totals.
-      const chartParams = new URLSearchParams(params); chartParams.set('granularity', hourly ? 'hour' : 'day'); chartParams.set('include', 'previous')
+      const hourly = input.range !== '30d', quarters = Boolean(input.fine) && input.range === '24h'
+      // One request returns the chart buckets and the previous period’s totals.
+      const chartParams = new URLSearchParams(params); chartParams.set('granularity', quarters ? 'quarter-hour' : hourly ? 'hour' : 'day'); chartParams.set('include', 'previous')
       const [metrics, campaigns] = await Promise.all([
         call(`/metrics?${chartParams}`, 'GET', undefined, signal), page('/campaigns', {pageSize: 4}, mapCampaignSummary, {region: input.regionId}, signal),
       ])
       if (!metrics.previous) throw new ApiError('The API did not return the previous period’s totals.', 'INVALID_RESPONSE')
       // The public created-cohort contract defines absent UTC buckets as no emails.
       // Fill that known absence across the selected interval, not across guessed history.
-      const buckets = hourly ? metrics.hourly : metrics.daily
+      const buckets = quarters ? metrics.quarterHourly : hourly ? metrics.hourly : metrics.daily
       if (!Array.isArray(buckets)) throw new ApiError('The API did not return the requested chart buckets.', 'INVALID_RESPONSE')
       const series = new Map<number, Json>(buckets.map((row: Json) => [Date.parse(row.date), row]))
-      const step = hourly ? 3600000 : 86400000
-      const startAt = Math.floor(Date.parse(metrics.from) / step) * step, endAt = Date.parse(metrics.to)
-      const points = []
-      for (let bucket = startAt; bucket < endAt; bucket += step) {
-        const at = new Date(bucket).toISOString(), row = series.get(bucket)
-        points.push({at, sent: row?.count ?? 0, delivered: row?.delivered ?? 0, bounced: row?.bounced ?? 0, complaints: row?.complained ?? 0})
+      const fill = (step: number) => {
+        const startAt = Math.floor(Date.parse(metrics.from) / step) * step, endAt = Date.parse(metrics.to)
+        const points: ChartPoint[] = []
+        for (let bucket = startAt; bucket < endAt; bucket += step) {
+          const at = new Date(bucket).toISOString(), row = series.get(bucket)
+          points.push({at, sent: row?.count ?? 0, delivered: row?.delivered ?? 0, bounced: row?.bounced ?? 0, complaints: row?.complained ?? 0})
+        }
+        return points
       }
-      return { periodStart: metrics.from, periodEnd: metrics.to, sent: metrics.totals.emails, delivered: metrics.totals.delivered, bounced: metrics.totals.bounced, complaints: metrics.totals.complained, deferred: metrics.totals.deliveryDelayed, previousSent: metrics.previous.totals.emails, points, recentCampaigns: campaigns.items }
+      const finePoints = quarters ? fill(900000) : undefined
+      // Quarter-hours roll up into the hours every other part of Overview reads.
+      const points = finePoints ? finePoints.reduce<ChartPoint[]>((hours, point) => {
+        const at = new Date(Math.floor(Date.parse(point.at) / 3600000) * 3600000).toISOString(), last = hours.at(-1)
+        if (last?.at === at) { last.sent += point.sent; last.delivered += point.delivered; last.bounced += point.bounced; last.complaints += point.complaints } else hours.push({ ...point, at })
+        return hours
+      }, []) : fill(hourly ? 3600000 : 86400000)
+      return { periodStart: metrics.from, periodEnd: metrics.to, sent: metrics.totals.emails, delivered: metrics.totals.delivered, bounced: metrics.totals.bounced, complaints: metrics.totals.complained, deferred: metrics.totals.deliveryDelayed, previousSent: metrics.previous.totals.emails, points, ...(input.fine ? { finePoints: finePoints ?? points } : {}), recentCampaigns: campaigns.items }
     },
     // One read for Overview's setup and next steps; each part is null where its own list would refuse this session.
     setup: async signal => { const r = await call<Omit<OverviewSetup, 'domains'> & { domains: { data: Json[] } | null }>('/overview/setup', 'GET', undefined, signal); return { ...r, domains: r.domains ? r.domains.data.map(mapDomain) : null } } },
