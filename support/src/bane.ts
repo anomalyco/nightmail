@@ -39,7 +39,8 @@ export type RegisteredConversation = { id: string; channel: 'chat' | 'email'; mo
 export type ScopeWorkspace = { id: string; name: string; role: 'owner' | 'admin' | 'member' };
 /** GET /v1/support/scope: who the conversation is for and what it can read now, read at the start of every turn. */
 export type Scope = {
-  conversation: { id: string; channel: 'chat' | 'email'; mode: Mode; verification: Verification };
+  /** signedInAt: when the person last signed in to continue it (a claim), also when it was already bound to them. */
+  conversation: { id: string; channel: 'chat' | 'email'; mode: Mode; verification: Verification; signedInAt?: string | null };
   user: { name: string | null; email: string | null };
   workspace: ScopeWorkspace | null; workspaces: ScopeWorkspace[]; contentWorkspaceId: string | null; page: string | null;
   /** The person lost a workspace this conversation read: end it without restating anything. */

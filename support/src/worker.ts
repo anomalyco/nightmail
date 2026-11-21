@@ -87,9 +87,15 @@ async function resumeChat(request: Request, env: Env): Promise<Response> {
   const checked = await env.BANE.verifyHandoff(body.handoff);
   if (!checked.ok) return fail(401, 'HANDOFF_INVALID', 'That handoff is not valid or has expired. Get a fresh one and retry.', headers);
   if (checked.handoff.usedAt) return fail(409, 'HANDOFF_USED', 'This handoff was already used. Get a fresh one.', headers);
-  const row = await env.DB.prepare('SELECT user_id, status FROM conversations WHERE id = ?').bind(body.conversationId).first<{ user_id: string | null; status: string }>();
+  const row = await env.DB.prepare('SELECT channel, user_id, status FROM conversations WHERE id = ?').bind(body.conversationId).first<{ channel: string; user_id: string | null; status: string }>();
   if (!row || row.status === 'closed') return fail(404, 'CONVERSATION_NOT_FOUND', 'That conversation has ended. Start a new one.', headers);
-  if (row.user_id !== checked.handoff.userId) return fail(403, 'NOT_YOUR_CONVERSATION', 'This conversation belongs to someone else.', headers);
+  // An email conversation continues by email: the panel sends the person to /support/continue/<id>, which signs it in.
+  if (row.channel === 'email') return fail(409, 'EMAIL_CONVERSATION', 'This conversation continues by email.', headers, { continueUrl: `${env.BANE_ORIGIN}/support/continue/${body.conversationId}` });
+  if (!row.user_id || row.user_id !== checked.handoff.userId) return fail(403, 'NOT_YOUR_CONVERSATION', 'This conversation belongs to someone else.', headers);
+  // Still open and theirs in the conversation itself, with no less access than it last ran with: checked before a token is minted.
+  const admitted = await conversation(env, body.conversationId).admits({ userId: checked.handoff.userId });
+  if (!admitted.ok) return admitted.code === 'UNAVAILABLE' ? fail(503, 'SUPPORT_UNAVAILABLE', 'Support could not open your account just now. Try again in a minute.', headers)
+    : fail(404, 'CONVERSATION_NOT_FOUND', 'That conversation has ended. Start a new one.', headers);
   const claimed = await env.DB.prepare('INSERT INTO handoffs_used (jti, conversation_id, used_at) VALUES (?, ?, ?) ON CONFLICT (jti) DO NOTHING').bind(checked.handoff.id, body.conversationId, Date.now()).run();
   if (!claimed.meta.changes) return fail(409, 'HANDOFF_USED', 'This handoff was already used. Get a fresh one.', headers);
   // Only a new chat token: account access never expires mid-conversation (Nightmail reads it from the conversation on

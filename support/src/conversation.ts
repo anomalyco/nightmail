@@ -2,7 +2,7 @@ import { DurableObject } from 'cloudflare:workers';
 import { baneApi, BaneError, platformBody, senderOf, type Handoff, type InboundMessage, type MirroredMessage, type MirroredState, type Mode, type OutboxReply, type PlatformReply, type RegisteredConversation, type Scope, type Verification } from './bane.js';
 import type { Env } from './env.js';
 import { gate, LINK_ORIGINS, plainText } from './gate.js';
-import { expectation, fileTicket, openFollowUp, ticketEmail, type FiledTicket, type TicketContext } from './tickets.js';
+import { addTicketNote, expectation, fileTicket, openFollowUp, ticketEmail, type FiledTicket, type TicketContext } from './tickets.js';
 import { addressHash, confirmToken, MissingSecret, newId } from './tokens.js';
 import { alertOnce, countToday, holdOverCap, limits, mailAllowed, ticketAllowed } from './limits.js';
 import { external, WorkQueue, type NewWork, type Outcome, type WorkRow, type WorkState } from './work.js';
@@ -27,8 +27,8 @@ import { addresses, productName } from '../../api/src/brand.js';
 //   are mirrored there in order (a cursor over the transcript, retried until Nightmail has them), staff replies arrive as
 //   `staff:` work items (a wake from Nightmail, or the five-minute sweep), and while staff have paused the agent it
 //   records and mirrors what the customer writes but takes no turn and sends no answer (checked before each).
-// A conversation opened before the stamp keeps reading through its grant (a private table) until the grant lapses.
-// The protocol to the panel is support/PROTOCOL.md.
+// A conversation opened before the stamp never reads again: its next email goes to a fresh, stamped conversation, its
+// unsent answers are held for the team, and it closes (retireLegacy). The protocol to the panel is support/PROTOCOL.md.
 
 const TURNS_PER_CONVERSATION = 60;
 /** Per conversation, in uncached-equivalent tokens: input + output + a tenth of cache reads (they cost a tenth). */
@@ -51,6 +51,10 @@ const FIXED = {
   access_changed: `Hi,\n\nThanks for writing to ${productName} support. This conversation has ended because your access to a ${productName} workspace changed. Write to us again to start a new one.\n\n${productName} support (AI)`,
 };
 const ACCESS_CHANGED = 'This conversation ended because your access to a workspace changed. Open Help to start a new one.';
+/** A chat from before the stamp: it ends at its next message. */
+const LEGACY_ENDED = 'This conversation has ended. Open Help to start a new one.';
+/** Waking a conversation whose answers wait for a sign-in (ledger.ts sweep): minutes after the answer parked, then never. */
+export const SIGNIN_WAKES = [5, 15, 30, 60, 120, 240, 480, 960, 1920, 3840, 7680, 10_080];
 const HELD = `Thanks for writing. I’ve passed this to the ${productName} team to check, and someone will reply here, usually within one business day.\n\n${productName} support (AI)`;
 /** What chat shows when the customer writes while staff have paused the agent (once per pause). */
 const PAUSED = `Someone from the ${productName} team is handling this conversation and will reply here.`;
@@ -78,11 +82,24 @@ type Meta = {
   mode?: Mode | null;
   /** Closed because the person lost access to a workspace it read. */
   endedBy?: 'access';
+  /** A chat's workspace, as the handoff bound it: losing it ends the chat. */
+  bound?: string | null;
+  /** The access the last turn ran with (workspaces and roles, content access, a chat's workspace): less ends the conversation. */
+  seen?: Effective | null;
+  /** The model session ended for good: no turn runs again for this conversation. */
+  modelRetired?: boolean;
+  /** A conversation from before the stamp that handed its thread to a fresh one, and was retired. */
+  successor?: string | null; retired?: boolean;
+  /** A chat's email conversation, for replies in its ticket's follow-up thread. */
+  followupEmail?: string | null;
+  /** The chat ticket this email conversation's messages are added to (opened for a reply in that ticket's thread). */
+  linkedTicket?: string | null;
 };
 type Transcript = { id: string; role: 'user' | 'assistant' | 'staff'; kind: 'first' | 'reply' | 'notice' | 'held' | 'staff' | null; text: string; at: string; tools: { id: string; label: string; ok: boolean }[];
   attachments?: { id: string; type: string; width: number | null; height: number | null; name: string }[]; author?: string | null; channel?: 'email' };
 type Outgoing = Record<string, unknown> & { type: string };
-type GrantRow = { grant_id: string; token: string; expires_at: number; workspace_ids: string; content_workspace_id: string | null };
+/** The access a turn runs with, compared turn to turn. */
+type Effective = { workspaces: { id: string; role: string }[]; content: string | null; bound: string | null };
 
 // Email work. Each payload is fixed when the item is created; `result` holds what an item
 // decided or produced so far, so a retry never decides, charges or asks the model twice.
@@ -95,7 +112,7 @@ type Incoming = { messageId: string; threadId: string; deliveryId: string };
 type Charges = Record<string, Awaited<ReturnType<typeof countToday>>>;
 /** Nightmail's answer to registering one message: who it is for, or why it belongs elsewhere. */
 type Registration = { mode: Mode; verification: Verification } | { refused: 'different_sender' | 'not_verified' | 'closed' | 'limit' };
-type Decision = { message?: Snapshot; charges?: Charges; admission?: Awaited<ReturnType<typeof mailAllowed>>; burst?: boolean; registered?: Registration; forward?: { target: string; key: string | null }; recorded?: string };
+type Decision = { message?: Snapshot; charges?: Charges; admission?: Awaited<ReturnType<typeof mailAllowed>>; burst?: boolean; registered?: Registration; forward?: { target: string; key: string | null }; recorded?: string; successor?: string };
 /** Where a reply to one message is sent from, and its idempotency key: chosen once, when the reply is queued. */
 type Route = { addressId: string | null; key: string };
 type Answer = { messageId: string; threadId: string; sender: string; dmarc: string; route: Route; fixed?: 'no_account' };
@@ -104,11 +121,15 @@ type Imported = { messageId: string; threadId: string; legacy: 1 };
 type Composed = {
   message?: Snapshot; settled?: Answer; owned?: boolean; charges?: Charges; refused?: string | null; allowed?: boolean; images?: Record<string, string>;
   model?: string; ticketed?: boolean; fixed?: 'no_account' | 'busy' | 'access_changed'; text?: string | null; paused?: boolean; held?: string;
+  /** Access was reduced, or the recipient no longer owns the account, after the text was written: never sent. */
+  withheld?: boolean; noticed?: boolean; noted?: boolean;
 };
 type Confirm = { messageId: string; threadId: string; sender: string; route: Route; text: string };
-type Forward = { messageId: string; threadId: string; target: string; deliveryId: string };
-type ForwardReason = 'different_sender' | 'not_verified' | 'closed' | 'pending_confirm';
+type Forward = { messageId: string; threadId: string; target: string; deliveryId: string; ticketId?: string | null };
+type ForwardReason = 'different_sender' | 'not_verified' | 'closed' | 'pending_confirm' | 'legacy' | 'followup' | 'other_thread';
 type Notify = { ticketId: string; key: string; input: { addressId?: string; to: string[]; subject: string; text: string } };
+/** An email to the team that isn't a ticket's (a retired conversation's held answers), sent once under its key. */
+type Alert = { key: string; input: { addressId?: string; to: string[]; subject: string; text: string } };
 type FollowUp = { addressId?: string; ctx: TicketContext; ticket: FiledTicket };
 /** A staff reply to deliver, as Nightmail's outbox gave it. */
 type StaffReply = Pick<OutboxReply, 'id' | 'text' | 'staffName'>;
@@ -232,9 +253,30 @@ export class SupportConversation extends DurableObject<Env> {
   private stamped<T = unknown>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<PlatformReply<T>> {
     return this.env.BANE.request<T>(this.own(), method, path, body);
   }
+  /**
+   * Whether a fresh scope gives this conversation less than the last turn ran with: a workspace gone, a lower role, content
+   * access gone, a chat's own workspace gone, Nightmail's shrunk, or (email) the account no longer at the address that
+   * wrote. Any of these ends the conversation; what the model already read must not reach another turn.
+   */
+  private reduced(meta: Meta, scope: Scope) {
+    if (scope.shrunk) return true;
+    const now = effective(scope, meta.channel === 'chat'), before = meta.seen;
+    if (meta.channel === 'chat' && now.bound !== (meta.bound ?? before?.bound ?? meta.workspace?.id ?? null)) return true;
+    if (meta.channel === 'email' && meta.email && scope.user.email?.trim().toLowerCase() !== meta.email) return true;
+    if (!before) return false;
+    for (const w of before.workspaces) {
+      const kept = now.workspaces.find(x => x.id === w.id);
+      if (!kept || (RANK[kept.role] ?? 0) < (RANK[w.role] ?? 0)) return true;
+    }
+    return !!before.content && before.content !== now.content;
+  }
   /** What Nightmail says now about whom this conversation is for: rebuilds <customer> (meta) from it. */
   private applyScope(scope: Scope) {
+    const seen = effective(scope, this.meta()?.channel === 'chat');
+    // Any change of access drops the cached account summary: the next turn reads it again.
+    if (JSON.stringify(seen) !== JSON.stringify(this.meta()?.seen ?? null)) this.context = null;
     return this.update(m => {
+      m.seen = seen;
       // The workspace in scope; an email's only workspace counts as chosen.
       const workspace = scope.workspace ?? (scope.workspaces.length === 1 ? scope.workspaces[0]! : null);
       m.mode = scope.conversation.mode;
@@ -264,16 +306,11 @@ export class SupportConversation extends DurableObject<Env> {
     } catch (error) { logError(error, { event: 'support', code: 'CONTEXT_READ_FAILED' }, 'warn'); return null; }
   }
 
-  // ---------- the grant of a conversation opened before the stamp (private table; read until it lapses) ----------
-
-  private grant(): GrantRow | null {
-    const row = this.sql.exec<GrantRow>('SELECT grant_id, token, expires_at, workspace_ids, content_workspace_id FROM _support_grant WHERE id = 1').toArray()[0];
-    return row && row.expires_at > Date.now() + 30_000 ? row : null;
-  }
-  private async revokeGrant() {
-    const row = this.sql.exec<{ grant_id: string }>('SELECT grant_id FROM _support_grant WHERE id = 1').toArray()[0];
-    this.sql.exec('DELETE FROM _support_grant');
-    if (row) { try { await this.env.BANE.revokeGrant(row.grant_id); } catch { /* it expires within two hours anyway */ } }
+  /** The model session ends for good: its history (and anything it read) is never used for another turn. */
+  private async retireModel() {
+    this.context = null; this.booting = null;
+    this.update(m => { m.modelRetired = true; });
+    await this.ctx.storage.delete(['support:opencode-session', 'support:opencode-model']);
   }
 
   // ---------- RPC from the router ----------
@@ -287,15 +324,15 @@ export class SupportConversation extends DurableObject<Env> {
     if (this.meta()) return { ok: false, code: 'ALREADY_OPEN' };
     const meta = this.fresh(conversationId, 'chat');
     Object.assign(meta, { userId: handoff.userId, email: handoff.email || null, role: handoff.role, workspace: handoff.workspace, workspaces: [{ ...handoff.workspace, role: handoff.role }], verified: 'handoff' as const,
-      page: handoff.page, handoffMessage: handoff.message, requestIds: handoff.requestIds });
+      page: handoff.page, handoffMessage: handoff.message, requestIds: handoff.requestIds, bound: handoff.workspace.id });
     this.save(meta);
     let registered: PlatformReply<RegisteredConversation> | null = null;
     try { registered = await this.env.BANE.registerConversation({ conversationId: this.own(), evidence: { kind: 'handoff', token } }); }
     catch (error) { logError(error, { event: 'chat', code: 'REGISTER_FAILED' }); }
     if (registered?.status !== 201 && registered?.status !== 200) {
-      // Nothing opened: the object is kept only until retention removes it.
-      this.update(m => { m.status = 'closed'; m.closedAt = Date.now(); });
-      await this.arm();
+      // Nothing opened here. Nightmail may have registered it anyway (a lost answer): the close is retried until it says
+      // closed or unknown, and the object is kept until then and its retention has passed.
+      await this.close('ended');
       const code = registered ? codeOf(registered.body) : null;
       return { ok: false, code: code === 'SUPPORT_HANDOFF_USED' ? 'HANDOFF_USED' : code === 'SUPPORT_CONVERSATION_LIMIT' ? 'CONVERSATION_LIMIT' : 'REGISTER_FAILED' };
     }
@@ -307,8 +344,9 @@ export class SupportConversation extends DurableObject<Env> {
     return { ok: true };
   }
 
-  async enqueueInbound(input: { conversationId: string; threadId: string; messageId: string; deliveryId: string }) {
-    if (!this.meta()) { const meta = this.fresh(input.conversationId, 'email'); meta.threadId = input.threadId; this.save(meta); }
+  /** `ticketId`: a reply in a chat ticket's follow-up thread, whose messages this conversation adds to that ticket once authorized. */
+  async enqueueInbound(input: { conversationId: string; threadId: string; messageId: string; deliveryId: string; ticketId?: string | null }) {
+    if (!this.meta()) { const meta = this.fresh(input.conversationId, 'email'); meta.threadId = input.threadId; meta.linkedTicket = input.ticketId ?? null; this.save(meta); }
     this.ctx.storage.transactionSync(() => {
       this.sql.exec('INSERT INTO _support_inbox (message_id, thread_id, delivery_id, received_at) VALUES (?, ?, ?, ?) ON CONFLICT (message_id) DO NOTHING', input.messageId, input.threadId, input.deliveryId, Date.now());
       this.work.insert({ id: `msg:${input.messageId}`, kind: 'message', payload: { messageId: input.messageId, threadId: input.threadId, deliveryId: input.deliveryId } satisfies Incoming });
@@ -366,10 +404,11 @@ export class SupportConversation extends DurableObject<Env> {
     let reply: PlatformReply<Scope>;
     try { reply = await this.stamped<Scope>('GET', '/v1/support/scope'); } catch (error) { logError(error, { event: 'email', code: 'CLAIM_CHECK_FAILED' }, 'warn'); return false; }
     if (reply.status !== 200) return false;
-    const { mode, verification } = reply.body.conversation;
-    if (verification !== 'signin' || (mode !== 'member' && mode !== 'non_member')) return false;
+    // A sign-in counts even when the conversation was already bound to the same person (by a later message's DMARC pass).
+    const { mode, verification, signedInAt } = reply.body.conversation;
+    if (!(signedInAt || verification === 'signin') || (mode !== 'member' && mode !== 'non_member')) return false;
     this.update(m => { m.mode = mode; m.verified = mode === 'member' ? 'signin' : null; m.pendingSender = null; m.confirmSentAt = null; });
-    this.resumeParked('signin');
+    await this.resumeSignedIn();
     await this.arm();
     if (meta.email) await this.env.DB.prepare('DELETE FROM pending_confirms WHERE address_hash = ? AND conversation_id = ?').bind(await addressHash(meta.email), meta.conversationId).run();
     log('info', { event: 'email', code: 'EMAIL_CLAIMED', conversation: meta.conversationId, mode });
@@ -382,32 +421,82 @@ export class SupportConversation extends DurableObject<Env> {
    * confirmation (which proves the address only) with the fixed non-member reply. An open confirmation's link that hasn't
    * gone out is no longer needed.
    */
-  private resumeParked(how: 'signin' | 'confirm') {
-    const now = Date.now();
+  private resumeParked(how: 'signin' | 'confirm', only?: string[]) {
+    const now = Date.now(), ids = JSON.stringify(only ?? null);
     this.ctx.storage.transactionSync(() => {
-      if (how === 'confirm') this.sql.exec("UPDATE _support_work SET result = json_set(result, '$.fixed', 'no_account', '$.text', ?2), state = 'pending', due_at = ?1, updated_at = ?1 WHERE kind = 'answer' AND state = 'parked'", now, FIXED.no_account);
-      else this.sql.exec("UPDATE _support_work SET state = 'pending', due_at = ?1, updated_at = ?1 WHERE kind = 'answer' AND state = 'parked'", now);
+      const parked = "kind = 'answer' AND state = 'parked' AND (?3 = 'null' OR id IN (SELECT value FROM json_each(?3)))";
+      if (how === 'confirm') this.sql.exec(`UPDATE _support_work SET result = json_set(result, '$.fixed', 'no_account', '$.text', ?2), state = 'pending', due_at = ?1, updated_at = ?1 WHERE ${parked}`, now, FIXED.no_account, ids);
+      else this.sql.exec(`UPDATE _support_work SET state = 'pending', due_at = ?1, updated_at = ?1 WHERE ${parked}`, now, null, ids);
       this.sql.exec("UPDATE _support_work SET state = 'done', updated_at = ? WHERE kind = 'confirm' AND state IN ('pending', 'blocked')", now);
       this.sql.exec("UPDATE _support_inbox SET state = 'confirmed' WHERE state = 'awaiting_confirmation'");
     });
   }
 
+  /**
+   * A sign-in vouches for this conversation's own mail only. Its parked answers go out; one that joined from another
+   * thread (its open confirmation was this one's) gets a conversation of its own, which checks it and asks again.
+   */
+  private async resumeSignedIn() {
+    const parked = this.sql.exec<{ id: string; payload: string; joined: string | null }>(`SELECT a.id, a.payload, json_extract(m.payload, '$.deliveryId') AS joined
+      FROM _support_work a LEFT JOIN _support_work m ON m.id = a.parent WHERE a.kind = 'answer' AND a.state = 'parked'`).toArray();
+    const own = parked.filter(p => p.joined !== 'reroute:pending_confirm').map(p => p.id), now = Date.now();
+    for (const other of parked.filter(p => p.joined === 'reroute:pending_confirm')) {
+      const { messageId, threadId, sender } = JSON.parse(other.payload) as Answer, target = newId('conv');
+      await this.env.DB.prepare("INSERT INTO conversations (id, channel, thread_id, created_at, updated_at) VALUES (?, 'email', ?, ?, ?) ON CONFLICT DO NOTHING")
+        .bind(target, `${threadId}#${await addressHash(sender)}#${newId('msg').slice(4, 12)}`, now, now).run();
+      this.ctx.storage.transactionSync(() => {
+        if (this.sql.exec("UPDATE _support_work SET state = 'done', result = json_set(result, '$.rerouted', ?), updated_at = ? WHERE id = ? AND state = 'parked'", target, now, other.id).rowsWritten)
+          this.work.insert({ kind: 'forward', id: `forward:${messageId}`, payload: { messageId, threadId, target, deliveryId: 'reroute:other_thread' } satisfies Forward }, other.id);
+      });
+      log('warn', { event: 'email', code: 'EMAIL_REROUTED', reason: 'other_thread', to: target });
+    }
+    this.resumeParked('signin', own);
+  }
+
   // ---------- the socket ----------
 
+  /**
+   * Whether this person may join the chat now, checked before any history or card is sent: open here and in D1, theirs,
+   * registered, and Nightmail's scope still gives it what its last turn ran with (less ends it now). 'unavailable': Nightmail
+   * couldn't say; the panel tries again.
+   */
+  private async joinable(userId: string | null): Promise<'ok' | 'gone' | 'unavailable'> {
+    const meta = this.meta();
+    if (!meta || !userId || meta.channel !== 'chat' || meta.userId !== userId || meta.status === 'closed') return 'gone';
+    if (!meta.registered) { await this.retireLegacy(); return 'gone'; }
+    const row = await this.env.DB.prepare('SELECT user_id, status FROM conversations WHERE id = ?').bind(meta.conversationId).first<{ user_id: string | null; status: string }>();
+    if (!row || row.status === 'closed' || row.user_id !== userId) return 'gone';
+    let scope: PlatformReply<Scope>;
+    try { scope = await this.stamped<Scope>('GET', '/v1/support/scope'); } catch (error) { logError(error, { event: 'chat', code: 'SCOPE_READ_FAILED' }, 'warn'); return 'unavailable'; }
+    if (scope.status >= 500 || scope.status === 429) return 'unavailable';
+    if (scope.status !== 200) return 'gone';
+    if (this.reduced(meta, scope.body)) { await this.endForAccess(); return 'gone'; }
+    this.applyScope(scope.body);
+    return 'ok';
+  }
+  /** /chat/resume asks before it mints a token: an email conversation continues by email; anything else must be joinable. */
+  async admits({ userId }: { userId: string }): Promise<{ ok: true } | { ok: false; code: 'EMAIL' | 'GONE' | 'UNAVAILABLE' }> {
+    if (this.meta()?.channel === 'email') return { ok: false, code: 'EMAIL' };
+    const joinable = await this.joinable(userId);
+    return joinable === 'ok' ? { ok: true } : { ok: false, code: joinable === 'gone' ? 'GONE' : 'UNAVAILABLE' };
+  }
+
   override async fetch(request: Request): Promise<Response> {
-    const meta = this.meta(), user = request.headers.get('x-support-user');
-    if (!meta || meta.userId !== user || request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response(null, { status: 404 });
+    if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response(null, { status: 404 });
+    const joinable = await this.joinable(request.headers.get('x-support-user'));
+    if (joinable !== 'ok') return new Response(null, { status: joinable === 'gone' ? 404 : 503 });
+    const meta = this.meta()!;
     // There is no greeting turn: the panel opens with its own fixed line. A question typed into the handoff (an API
     // client's; the panel sends none) becomes the first message, once.
-    const opening = meta.channel === 'chat' && !meta.greeted && meta.status !== 'closed' ? meta.handoffMessage?.trim().slice(0, MAX_TEXT) || null : null;
-    if (meta.channel === 'chat' && !meta.greeted) this.update(m => { m.greeted = true; });
+    const opening = !meta.greeted ? meta.handoffMessage?.trim().slice(0, MAX_TEXT) || null : null;
+    if (!meta.greeted) this.update(m => { m.greeted = true; });
     if (opening) this.record({ id: newId('msg'), role: 'user', kind: null, text: opening, at: new Date().toISOString(), tools: [] });
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
     this.sendTo(pair[1], this.hello(meta));
     this.sendTo(pair[1], { type: 'history', messages: this.history(), pending: { consent: this.pendingConsent(), ticket: meta.ticketId ? { ticketId: meta.ticketId } : null } });
     if (opening) this.enqueueTurn({ text: opening });
-    if (meta.channel === 'chat' && meta.status !== 'closed') this.warm();
+    this.warm();
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
 
@@ -648,9 +737,13 @@ export class SupportConversation extends DurableObject<Env> {
       return reply.status === 200 && reply.body.contentWorkspaceId === workspaceId && reply.body.workspace?.id === workspaceId;
     } catch (error) { logError(error, { event: 'chat', code: 'CONSENT_CHECK_FAILED' }, 'warn'); return false; }
   }
-  /** The person lost a workspace this conversation read: it ends with a fixed notice, no model call, nothing restated. */
+  /**
+   * The person has less access than this conversation ran with: it ends with a fixed notice, no model call, nothing
+   * restated, and its model session is retired, so nothing it read reaches another turn.
+   */
   private async endForAccess() {
     this.update(m => { m.endedBy = 'access'; });
+    await this.retireModel();
     if (this.meta()!.channel === 'chat') this.notice(ACCESS_CHANGED);
     log('info', { event: this.meta()!.channel, code: 'ACCESS_CHANGED_CLOSED', conversation: this.meta()!.conversationId });
     await this.close('ended');
@@ -663,14 +756,15 @@ export class SupportConversation extends DurableObject<Env> {
     this.ctx.waitUntil(this.queue);
   }
 
-  /** OpenCode for this conversation, booted once; a failed boot is retried by the next caller. */
+  /** OpenCode for this conversation, booted once; a failed boot is retried by the next caller. Never once retired. */
   private agent(): Promise<Harness> {
+    if (this.meta()?.modelRetired) return Promise.reject(new Error('The model session of this conversation was retired.'));
     this.booting ??= createHarness(this.env, this.ctx.storage).catch(error => { this.booting = null; throw error; });
     return this.booting;
   }
   /** Boots OpenCode in the background, so the first turn finds it ready. */
   private warm() {
-    if (!this.env.CONSOLE_GATEWAY_KEY) return;
+    if (!this.env.CONSOLE_GATEWAY_KEY || this.meta()?.modelRetired) return;
     this.ctx.waitUntil(this.agent().then(() => undefined, error => logError(error, { event: 'chat', code: 'AGENT_BOOT_FAILED' }, 'warn')));
   }
 
@@ -685,6 +779,11 @@ export class SupportConversation extends DurableObject<Env> {
   private async chatTurn(input: { text?: string; hidden?: boolean; attachments?: string[] }) {
     let meta = this.meta();
     if (!meta) return;
+    // A chat from before the stamp never takes another turn: it ends.
+    if (!meta.registered) {
+      if (meta.status !== 'closed') { this.notice(LEGACY_ENDED); await this.retireLegacy(); }
+      return;
+    }
     const refused = this.admit(meta);
     if (refused) {
       if (refused === 'closed') return;
@@ -700,15 +799,15 @@ export class SupportConversation extends DurableObject<Env> {
     }
     if (meta.pauseNotice) meta = this.update(m => { m.pauseNotice = false; });
     // Who this conversation is for now: Nightmail's scope rebuilds <customer> before every turn, and ends the conversation
-    // when the person lost a workspace it read.
-    if (meta.registered) {
+    // when it gives less than the last turn ran with (reduced).
+    {
       let scope: PlatformReply<Scope> | null = null;
       try { scope = await this.stamped<Scope>('GET', '/v1/support/scope'); } catch (error) { logError(error, { event: 'chat', code: 'SCOPE_READ_FAILED' }); }
       if (scope?.status !== 200) {
         this.broadcast({ type: 'error', code: 'TURN_FAILED', message: 'Something went wrong on my side. Try again in a moment.', retryable: !scope || scope.status >= 500 || scope.status === 429 });
         return;
       }
-      if (scope.body.shrunk) { await this.endForAccess(); return; }
+      if (this.reduced(meta, scope.body)) { await this.endForAccess(); return; }
       meta = this.applyScope(scope.body);
     }
     // Daily caps (review M5): this person's turns and everyone's, before any model call.
@@ -778,7 +877,9 @@ export class SupportConversation extends DurableObject<Env> {
         const meta = this.meta()!;
         // Several workspaces and none chosen: nothing is read until the customer says which.
         if (meta.channel === 'email' && !meta.workspace && meta.workspaces.length > 1) throw new ToolFailure('No workspace chosen yet. Ask the customer which workspace this is about, then call choose_workspace.');
-        const reply = meta.registered ? await this.stamped('GET', path) : await this.legacyRead(meta, path);
+        // Only Nightmail's stamp reads: a conversation it never registered has no account access at all.
+        if (!meta.registered) throw new ToolFailure('You have no account access in this conversation. Answer general questions only.');
+        const reply = await this.stamped('GET', path);
         if (reply.status === 200) return reply.body;
         const code = codeOf(reply.body) ?? `HTTP_${reply.status}`;
         // An email turn whose conversation Nightmail refuses stops: the answer waits as blocked work, and never tells the
@@ -832,15 +933,11 @@ export class SupportConversation extends DurableObject<Env> {
     };
   }
 
-  /** A conversation opened before the stamp reads through its grant until it lapses; then access has ended. */
-  private async legacyRead(meta: Meta, path: string) {
-    const grant = this.grant();
-    if (!grant) throw new ToolFailure(meta.verified ? 'Access to this account ended for this conversation. Answer without account data; in chat, the customer can press Help again to start a new conversation.' : 'This person is not verified, so you have no account access. Answer general questions only.');
-    return this.env.BANE.read(path, grant.token);
-  }
-
-  /** The person a daily cap counts against: the signed-in user, else the sender address. */
-  private async person(meta: Meta) { return meta.userId ? `user:${meta.userId}` : `sender:${await addressHash(meta.email ?? meta.conversationId)}`; }
+  /**
+   * The person a daily cap counts against: a chat's user, an email's sender address (always: whatever account an older
+   * conversation stored, the address that writes is what an email cap counts).
+   */
+  private async person(meta: Meta) { return meta.channel === 'chat' && meta.userId ? `user:${meta.userId}` : `sender:${await addressHash(meta.email ?? meta.conversationId)}`; }
 
   private async turnAllowed(meta: Meta, count = countToday): Promise<{ ok: boolean; global: boolean }> {
     const cap = limits(this.env);
@@ -856,7 +953,7 @@ export class SupportConversation extends DurableObject<Env> {
     const exists = await this.env.DB.prepare('SELECT id FROM tickets WHERE conversation_id = ?').bind(meta.conversationId).first();
     if (!exists) {
       // An email's verified person is known here by their address only (Nightmail keeps the account).
-      const verifiedUserId = meta.verified ? meta.userId ?? `addr:${await addressHash(meta.email ?? meta.conversationId)}` : null;
+      const verifiedUserId = !meta.verified ? null : meta.channel === 'chat' && meta.userId ? meta.userId : `addr:${await addressHash(meta.email ?? meta.conversationId)}`;
       const allowed = await ticketAllowed(this.env, { verifiedUserId, mailbox: 'support', sender: meta.email, dmarcPass: dmarc === 'PASS' });
       if (!allowed.ok) { log('warn', { event: 'ticket', code: 'TICKET_CAP', scope: allowed.scope, reason: allowed.reason }); return { id: '', created: false, dueAt: 0, replyTo: null, refused: allowed.scope }; }
     }
@@ -909,10 +1006,12 @@ export class SupportConversation extends DurableObject<Env> {
       }
       case 'forward': {
         // Done only once the target has stored the message: a failed call is retried, never lost.
-        const { target, threadId, messageId, deliveryId } = payload as Forward;
-        await external(this.env.CONVERSATION.get(this.env.CONVERSATION.idFromName(target)).enqueueInbound({ conversationId: target, threadId, messageId, deliveryId }));
+        const { target, threadId, messageId, deliveryId, ticketId } = payload as Forward;
+        await external(this.env.CONVERSATION.get(this.env.CONVERSATION.idFromName(target)).enqueueInbound({ conversationId: target, threadId, messageId, deliveryId, ticketId }));
         return {};
       }
+      case 'close': await this.closeRemote(); return {};
+      case 'alert': { const { key, input } = payload as Alert; await external(baneApi(this.env).startThread(input, key)); return {}; }
       case 'notify': {
         const { ticketId, key, input } = payload as Notify;
         const row = await external(this.env.DB.prepare('SELECT notified_at FROM tickets WHERE id = ?').bind(ticketId).first<{ notified_at: number | null }>());
@@ -989,8 +1088,24 @@ export class SupportConversation extends DurableObject<Env> {
     if (progress.burst) { await keep('replies in 10 minutes'); return { state: 'held', result: progress }; }
 
     let meta = this.meta()!;
+    // A reply in a chat ticket's follow-up thread: a chat never registers email, so the message goes to an email
+    // conversation of its own (one per chat), which Nightmail checks like any other and which adds it to the ticket once
+    // it is authorized. Never this chat's session or account.
+    if (meta.channel === 'chat') {
+      if (!progress.forward) { progress.forward = meta.followupEmail ? { target: meta.followupEmail, key: null } : { target: newId('conv'), key: await freshKey(next.threadId, sender) }; save(); }
+      if (meta.followupEmail !== progress.forward.target) meta = this.update(m => { m.followupEmail ??= progress.forward!.target; });
+      return this.forward(next, progress, save, sender, 'followup');
+    }
     // One address per conversation (M2): another sender gets a conversation of its own.
     if (meta.email && meta.email !== sender) return this.forward(next, progress, save, sender, 'different_sender');
+    // A conversation from before the stamp: its mail goes to one fresh conversation that Nightmail registers from the
+    // message, carrying nothing over (history, access, answers), and this one retires.
+    if (this.beforeStamp(meta)) {
+      if (!progress.forward) { progress.forward = meta.successor ? { target: meta.successor, key: null } : { target: newId('conv'), key: await freshKey(next.threadId, sender) }; save(); }
+      if (!meta.successor) meta = this.update(m => { m.successor = progress.forward!.target; });
+      await this.retireLegacy();
+      return this.forward(next, progress, save, sender, 'legacy');
+    }
     // A claim whose wake never arrived: the next email checks it.
     await this.recheckClaim();
     // Nightmail decides whom this message is for (M1): once per message, kept for a retry.
@@ -1067,7 +1182,8 @@ export class SupportConversation extends DurableObject<Env> {
     const { target, key } = progress.forward;
     if (key) await external(this.env.DB.prepare("INSERT INTO conversations (id, channel, thread_id, created_at, updated_at) VALUES (?, 'email', ?, ?, ?) ON CONFLICT DO NOTHING").bind(target, key, Date.now(), Date.now()).run());
     log(joins ? 'info' : 'warn', { event: 'email', code: joins ? 'EMAIL_JOINS_PENDING_CONFIRM' : 'EMAIL_REROUTED', reason, from: meta.conversationId, to: target });
-    return { result: progress, children: [{ kind: 'forward', id: `forward:${next.messageId}`, payload: { messageId: next.messageId, threadId: next.threadId, target, deliveryId: `reroute:${reason}` } satisfies Forward }] };
+    const ticketId = reason === 'followup' ? meta.ticketId : null;
+    return { result: progress, children: [{ kind: 'forward', id: `forward:${next.messageId}`, payload: { messageId: next.messageId, threadId: next.threadId, target, deliveryId: `reroute:${reason}`, ...ticketId ? { ticketId } : {} } satisfies Forward }] };
   }
 
   /**
@@ -1077,6 +1193,8 @@ export class SupportConversation extends DurableObject<Env> {
    */
   private async answer(item: WorkRow, queued: Answer | Imported): Promise<Outcome> {
     const progress: Composed = JSON.parse(item.result), save = () => this.work.checkpoint(item.id, progress);
+    // Queued before the stamp: never sent (it was written, or would be, from a grant's reads). Held for the team.
+    if (this.beforeStamp(this.meta()!)) { await this.retireLegacy(); return { state: 'held', result: progress }; }
     const message = await this.snapshot(queued.messageId, progress, save);
     if (!('route' in queued) && !progress.settled) { progress.settled = { messageId: queued.messageId, threadId: message.threadId ?? queued.threadId, sender: message.from ?? '', dmarc: dmarcOf(message), route: this.route(message, queued.messageId, 'reply') }; save(); }
     const answer = 'route' in queued ? queued : progress.settled!;
@@ -1089,6 +1207,27 @@ export class SupportConversation extends DurableObject<Env> {
       if (!progress.held) { progress.held = newId('msg'); save(); }
       this.record({ id: progress.held, role: 'assistant', kind: 'held', text: progress.text, at: new Date().toISOString(), tools: [], channel: 'email' });
       return { result: progress };
+    }
+    // The model wrote it for one person: it goes only while Nightmail's scope still gives that person what the turn ran
+    // with, at the address that wrote, checked again on every try. Otherwise it stays a held draft, never sent; when
+    // access was reduced the sender gets the fixed notice under a key of its own, and the conversation ends.
+    if (!progress.fixed) {
+      if (!progress.withheld) {
+        const release = await this.releasable(answer);
+        if (release !== 'ok') { progress.withheld = true; progress.noticed = release === 'reduced' ? false : undefined; save(); }
+      }
+      if (progress.withheld) {
+        if (!progress.held) { progress.held = newId('msg'); save(); }
+        this.record({ id: progress.held, role: 'assistant', kind: 'held', text: progress.text, at: new Date().toISOString(), tools: [], channel: 'email' });
+        if (progress.noticed === false) {
+          await external(baneApi(this.env).reply(answer.threadId, { replyToMessageId: answer.messageId, text: FIXED.access_changed, to: answer.sender, subject: FIXED_SUBJECT, addressId: answer.route.addressId }, `${answer.route.key}:ended`));
+          this.record({ id: newId('msg'), role: 'assistant', kind: 'notice', text: FIXED_LABEL.access_changed!, at: new Date().toISOString(), tools: [], channel: 'email' });
+          progress.noticed = true; save();
+        }
+        log('warn', { event: 'email', code: 'ANSWER_WITHHELD', conversation: this.meta()!.conversationId });
+        if (this.meta()!.status !== 'closed') await this.endForAccess(); else await this.retireModel();
+        return { state: 'held', result: progress };
+      }
     }
     // Only ever to the address that wrote; Reply-To and Cc are ignored.
     await external(baneApi(this.env).reply(answer.threadId, { replyToMessageId: answer.messageId, text: progress.text, to: answer.sender, addressId: answer.route.addressId, ...(progress.fixed ? { subject: FIXED_SUBJECT } : {}) }, answer.route.key));
@@ -1131,13 +1270,20 @@ export class SupportConversation extends DurableObject<Env> {
       if (meta.mode === 'non_member') { fixed('no_account'); return; }
       if (meta.mode !== 'member') return 'parked';
     }
+    // A reply in a chat ticket's follow-up thread, now that Nightmail has authorized this conversation: the team owns that
+    // thread, so the message is added to the ticket and the agent doesn't answer. A ticket since deleted holds nothing up.
+    if (meta.registered && meta.linkedTicket && progress.model === undefined && progress.allowed === undefined) {
+      progress.noted ??= await external(addTicketNote(this.env, meta.linkedTicket, internal('Customer wrote again', 'The customer replied in the ticket’s follow-up thread.', body.slice(0, 600), 'Read their new message in the thread.', 'other', [answer.messageId])));
+      save();
+      if (progress.noted) { progress.text = null; save(); return; }
+    }
     // Staff have paused the agent: no model turn, and nothing is sent. Decided once, before the model runs.
     if (progress.model === undefined && progress.allowed === undefined && await this.paused(meta, true)) { progress.paused = true; progress.text = null; save(); return; }
     // The scope rebuilds <customer>; a refusal or an outage is retried, never told to the customer.
     if (meta.registered && progress.model === undefined) {
       const scope = await external(this.stamped<Scope>('GET', '/v1/support/scope'));
       if (scope.status !== 200) throw platformError(scope, 'SCOPE_READ_FAILED');
-      if (scope.body.shrunk) { fixed('access_changed'); return; }
+      if (this.reduced(meta, scope.body)) { await this.retireModel(); fixed('access_changed'); return; }
       meta = this.applyScope(scope.body);
     }
     // Fail closed: without the gateway key the answer waits, blocked, until the key is set.
@@ -1297,18 +1443,82 @@ export class SupportConversation extends DurableObject<Env> {
   }
   private arm() { return this.work.arm(this.deadline()); }
 
+  /**
+   * Closes the conversation here, and durably with Nightmail: the `close` item is stored with the local closure, before
+   * anything is acknowledged, and retried until Nightmail says closed (or never knew it). Retention waits for it.
+   */
   private async close(reason: 'idle' | 'limit' | 'ended') {
-    const meta = this.update(m => { m.status = 'closed'; m.closedAt = Date.now(); });
+    this.ctx.storage.transactionSync(() => {
+      this.update(m => { m.status = 'closed'; m.closedAt ??= Date.now(); });
+      this.work.insert({ kind: 'close', id: 'close', payload: {} });
+    });
     this.context = null;
-    // Nightmail refuses every later request for it. Best effort: it closes idle conversations itself too.
-    if (meta.registered) {
-      try { const closed = await this.env.BANE.closeConversation(this.own()); if (closed.status !== 200) log('warn', { event: 'support', code: 'CLOSE_FAILED', status: closed.status }); }
-      catch (error) { logError(error, { event: 'support', code: 'CLOSE_FAILED' }, 'warn'); }
-    }
-    await this.revokeGrant();
     this.broadcast({ type: 'closed', reason });
     for (const ws of this.ctx.getWebSockets()) { try { ws.close(1000, 'closed'); } catch { /* gone */ } }
-    await this.env.DB.prepare("UPDATE conversations SET status = 'closed', closed_at = ?, updated_at = ? WHERE id = ?").bind(meta.closedAt, meta.closedAt, meta.conversationId).run();
+    // Tried now; the alarm retries it.
+    try { await this.closeRemote(); this.sql.exec("UPDATE _support_work SET state = 'done', last_error = NULL, updated_at = ? WHERE id = 'close' AND state IN ('pending', 'blocked')", Date.now()); }
+    catch (error) { logError(error, { event: 'support', code: 'CLOSE_FAILED' }, 'warn'); }
+    await this.arm();
+  }
+  /** Nightmail refuses every later request for the conversation, its grant from before the stamp is revoked, and D1 says closed. */
+  private async closeRemote() {
+    const meta = this.meta()!;
+    const closed = await external(this.env.BANE.closeConversation(this.own()));
+    if (closed.status !== 200 && closed.status !== 404) throw platformError(closed, 'CLOSE_FAILED');
+    const grant = this.sql.exec<{ grant_id: string }>('SELECT grant_id FROM _support_grant WHERE id = 1').toArray()[0];
+    if (grant) {
+      const revoked = await external(this.env.BANE.revokeGrant(grant.grant_id));
+      if (revoked.status !== 200 && revoked.status !== 404) throw platformError(revoked, 'REVOKE_FAILED');
+      this.sql.exec('DELETE FROM _support_grant');
+    }
+    await external(this.env.DB.prepare("UPDATE conversations SET status = 'closed', closed_at = coalesce(closed_at, ?), updated_at = ? WHERE id = ?").bind(meta.closedAt, Date.now(), meta.conversationId).run());
+  }
+
+  // ---------- conversations from before the stamp ----------
+
+  /** Opened before the stamp and bound to a person (an account or a verification Nightmail never registered). */
+  private beforeStamp(meta: Meta) { return !meta.registered && (!!meta.userId || !!meta.verified || !!meta.retired); }
+  /**
+   * Retires a conversation from before the stamp, once: none of its unsent answers is ever sent (each is held, and the
+   * team gets one email listing them), its model session ends, and it closes like any other (its grant revoked).
+   */
+  private async retireLegacy() {
+    const meta = this.meta()!;
+    if (meta.retired) return;
+    const open = this.sql.exec<{ id: string; payload: string; result: string }>("SELECT id, payload, result FROM _support_work WHERE kind = 'answer' AND state IN ('pending', 'blocked', 'parked') ORDER BY created_at").toArray();
+    const drafts = open.map(row => {
+      const { messageId } = JSON.parse(row.payload) as { messageId: string }, done = JSON.parse(row.result) as Composed;
+      const text = typeof done.text === 'string' ? done.text : typeof done.model === 'string' ? done.model : null;
+      return `- Message ${messageId}: ${text ? `a draft, never sent:\n\n${text.slice(0, 1500).replace(/^/gm, '    ')}` : 'not answered yet.'}`;
+    });
+    const now = Date.now();
+    this.ctx.storage.transactionSync(() => {
+      this.sql.exec("UPDATE _support_work SET state = 'held', updated_at = ? WHERE kind = 'answer' AND state IN ('pending', 'blocked', 'parked')", now);
+      this.sql.exec("UPDATE _support_work SET state = 'done', updated_at = ? WHERE kind = 'confirm' AND state IN ('pending', 'blocked', 'parked')", now);
+      this.sql.exec("UPDATE _support_inbox SET state = 'held' WHERE state IN ('awaiting_confirmation', 'confirmed')");
+      if (drafts.length) this.work.insert({ kind: 'alert', id: 'alert:held', payload: { key: `held-${meta.conversationId}`, input: { addressId: this.env.SUPPORT_ADDRESS_ID, to: [this.env.TICKET_TO],
+        subject: `[${productName} support] Unsent answers held in ${meta.conversationId}`,
+        text: [`A support conversation from before the current release had ${drafts.length} unsent answer${drafts.length > 1 ? 's' : ''}. None was sent, and the conversation is closed. Reply to the customer in the thread if they still need an answer.`, '',
+          `Conversation: ${meta.conversationId}`, `Thread: ${meta.threadId ?? 'none'}`, `Channel: ${meta.channel}`, '', ...drafts].join('\n') } } satisfies Alert });
+      this.update(m => { m.retired = true; });
+    });
+    log('warn', { event: meta.channel, code: 'LEGACY_RETIRED', conversation: meta.conversationId, held: drafts.length });
+    await this.retireModel();
+    if (meta.status !== 'closed') await this.close('ended');
+    else { this.work.insert({ kind: 'close', id: 'close', payload: {} }); await this.arm(); }
+  }
+
+  /**
+   * Whether an answer the model wrote may go now: Nightmail's scope for this conversation (an outage is retried), no less
+   * than the turn ran with, and still the account at the address the answer goes to.
+   */
+  private async releasable(answer: Answer): Promise<'ok' | 'reduced' | 'refused'> {
+    const meta = this.meta()!;
+    if (!meta.registered) return 'refused';
+    const scope = await external(this.stamped<Scope>('GET', '/v1/support/scope'));
+    if (scope.status >= 500 || scope.status === 429) throw platformError(scope, 'SCOPE_READ_FAILED');
+    if (scope.status !== 200) return 'refused';
+    return this.reduced(meta, scope.body) || scope.body.user.email?.trim().toLowerCase() !== answer.sender ? 'reduced' : 'ok';
   }
 }
 
@@ -1348,6 +1558,13 @@ function codeOf(body: unknown): string | null {
 /** A Nightmail refusal as the work queue retries it (work.ts failure()). */
 const platformError = (reply: PlatformReply, fallback: string) => new BaneError(reply.status, codeOf(reply.body) ?? fallback, `${productName} answered ${reply.status}`, reply.requestId, reply.retryAfter);
 const bodyOf = (message: Snapshot) => (message.replyText || message.text || '').slice(0, 6000);
+/** A thread key of its own for a new conversation a message is handed to (D1 conversations.thread_id is unique). */
+const freshKey = async (threadId: string, sender: string) => `${threadId}#${await addressHash(sender)}#${newId('msg').slice(4, 12)}`;
+const RANK: Record<string, number> = { member: 1, admin: 2, owner: 3 };
+/** The access a scope gives, as the next turn compares it: workspaces and roles, content access, and a chat's workspace. */
+function effective(scope: Scope, chat: boolean): Effective {
+  return { workspaces: scope.workspaces.map(w => ({ id: w.id, role: w.role })).sort((a, b) => a.id < b.id ? -1 : a.id > b.id ? 1 : 0), content: scope.contentWorkspaceId ?? null, bound: chat ? scope.workspace?.id ?? null : null };
+}
 
 /** countToday for one work item: each key is charged once, and a retry reads the stored outcome. */
 function charged(progress: { charges?: Charges }, save: () => void): typeof countToday {

@@ -14,6 +14,8 @@ const calls = [];
 const used = new Map(); // handoff id → the conversation it registered (or '' when a grant used it)
 const shared = new Set();
 let grants = 0;
+// closeConversation answers 503 this many more times (a test hook): a close Nightmail can't take yet.
+let closeFailures = 0;
 // The staff inbox (api/src/support-inbox.ts), in memory: a conversation exists once a test registers it (/__inbox), like
 // Nightmail's 404 for one it never registered; down makes every inbox call answer 503.
 const inbox = new Map();
@@ -46,7 +48,7 @@ const view = (c, created) => ({ id: c.id, channel: c.channel, mode: c.mode, veri
 const inScope = c => memberships(c.userId).filter(w => !c.workspaceId || w.id === c.workspaceId);
 function scopeOf(c) {
   const all = memberships(c.userId), workspace = c.workspaceId ? all.find(w => w.id === c.workspaceId) ?? null : null;
-  return { conversation: { id: c.id, channel: c.channel, mode: c.mode, verification: c.verification }, user: person(c.userId),
+  return { conversation: { id: c.id, channel: c.channel, mode: c.mode, verification: c.verification, signedInAt: c.signedInAt ?? null }, user: person(c.userId),
     workspace, workspaces: c.channel === 'email' || !c.workspaceId ? all : all.filter(w => w.id === c.workspaceId),
     contentWorkspaceId: all.some(w => w.id === c.content) ? c.content : null, page: c.page, shrunk: [...c.read].some(id => !all.some(w => w.id === id)) };
 }
@@ -59,7 +61,7 @@ function emailEvidence(messageId) {
     mode: verified ? (userId && memberships(userId).length ? 'member' : 'non_member') : userId ? 'pending_signin' : 'unverified' };
 }
 // Per-person reads (the subject is the conversation's person, never anything in the request) and fixed ones.
-const contextOf = c => ({ grant: { id: 'sgr_x', ticketRef: 'conv' }, user: { id: c.userId, ...person(c.userId) },
+const contextOf = c => ({ grant: { id: 'sgr_x', ticketRef: 'conv' }, user: person(c.userId),
   workspaces: inScope(c).map(w => ({ ...w, sending: { kind: 'shared', region: 'us-east-2', paused: false }, counts: { domains: 1, campaigns: 3 } })),
   domains: inScope(c).map(w => ({ workspaceId: w.id, id: 'dom_' + w.id, name: 'news.' + w.id.slice(3) + '.test', sending: 'verified', dmarc: 'missing' })), recentFailures: { sends: [], bounces: [], webhookDeliveries: [] },
   standing: [], recentActivity: [], openEnforcement: [], handoff: null, links: { requestIds: [] } });
@@ -101,6 +103,7 @@ export class SupportPlatform extends WorkerEntrypoint {
   }
   async closeConversation(id) {
     calls.push(['closeConversation', id]);
+    if (closeFailures > 0) { closeFailures -= 1; return refuse(503, 'UNAVAILABLE'); }
     const c = conversations.get(id);
     if (!c) return refuse(404, 'NOT_FOUND');
     c.closed = true;
@@ -216,13 +219,17 @@ export default {
       if (c && reply) { c.outbox.push({ ...reply, createdAt: new Date().toISOString(), delivery: null }); c.paused = 'staff'; }
       return new Response(null, { status: 204 });
     }
-    // Test hooks: the person signs in and claims an email conversation; a membership ends; content access is allowed.
+    // Test hooks: the person signs in and claims an email conversation (one already bound to them only records the
+    // sign-in); a membership ends or its role changes; content access is allowed; closing fails for a while.
     if (url.pathname === '/__claim') {
       const c = conversations.get((await request.json()).conversationId), userId = 'usr_' + c.sender.split('@')[0];
-      Object.assign(c, { userId, mode: memberships(userId).length ? 'member' : 'non_member', verification: 'signin' });
+      if (c.userId) c.signedInAt = new Date().toISOString();
+      else Object.assign(c, { userId, mode: memberships(userId).length ? 'member' : 'non_member', verification: 'signin', signedInAt: new Date().toISOString() });
       return Response.json(view(c, false));
     }
     if (url.pathname === '/__remove') { const { userId, workspaceId } = await request.json(); members.get(userId)?.delete(workspaceId); members.get(userId)?.set('!' + workspaceId, 'gone'); return new Response(null, { status: 204 }); }
+    if (url.pathname === '/__role') { const { userId, workspaceId, role } = await request.json(); members.get(userId)?.set(workspaceId, role); return new Response(null, { status: 204 }); }
+    if (url.pathname === '/__close') { closeFailures = (await request.json()).fail ?? 0; return new Response(null, { status: 204 }); }
     if (url.pathname === '/__content') { const c = conversations.get((await request.json()).conversationId); c.content = c.workspaceId; return new Response(null, { status: 204 }); }
     if (url.pathname === '/__conversation') { const c = conversations.get(url.searchParams.get('id')); return Response.json(c ? { ...c, read: [...c.read] } : null); }
     // An outage refuses the request; a lost one (lost: true) carries it out, then the answer never arrives (the Worker
@@ -282,6 +289,11 @@ const MESSAGES = {
   // The stamp's cases: a member who loses the workspace, a DMARC failure that waits for a sign-in, conversations from before.
   msg_shrink_1: ['thr_shrink', 'dee@acme.test'], msg_shrink_2: ['thr_shrink', 'dee@acme.test'], msg_claim_1: ['thr_claim', 'sam@acme.test', 'FAIL'],
   msg_legacy_grant: ['thr_legacy_d'], msg_legacy_lapsed: ['thr_legacy_e'],
+  // The second round's cases: two threads of one unverified address, an answer whose sender lost access before it went,
+  // a conversation bound by a later DMARC pass and then signed in to, a sign-in found by the sweep, a ticket thread's reply.
+  msg_m4_a: ['thr_m4_a', 'mo@acme.test', 'FAIL'], msg_m4_b: ['thr_m4_b', 'mo@acme.test', 'FAIL'], msg_m6_1: ['thr_m6', 'gil@acme.test'],
+  msg_m10_1: ['thr_m10', 'tia@acme.test', 'FAIL'], msg_m10_2: ['thr_m10', 'tia@acme.test'], msg_sweep_1: ['thr_sweep', 'uma@acme.test', 'FAIL'],
+  msg_m11_1: ['thr_m11', 'ada@acme.test', 'PASS', null, 'Re: Your request', 'One more detail: it was two top-ups, 40 seconds apart.'],
 };
 function message(id) {
   const [threadId = 'thr_other', from = 'ada@acme.test', dmarc = 'PASS', to = 'support@dev.bane.mx', subject = 'Bounces from Gmail?', body = 'Why are Gmail bounces up this week?'] = (MESSAGES[id] ?? []).map(v => v ?? undefined);

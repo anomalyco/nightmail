@@ -28,18 +28,20 @@ panel ══ WebSocket socketUrl ═══════════════�
    | `409` | `{ error: { code: "HANDOFF_USED" } }` | This handoff already opened a conversation: get a fresh one |
    | `429` | `{ error: { code: "RATE_LIMITED", retryAfter } }` | Too many conversations today (10 per person), or 10 still open |
 
-3. **Connect.** `new WebSocket(socketUrl)`, i.e. `wss://support.bane.mx/c/<conversationId>?token=<chatToken>`. The Worker checks the token (bound to this conversation and this person) and the `Origin`. A refused upgrade is a plain `401`/`403`/`404` with no body; get a fresh handoff and call `/chat/resume`.
+3. **Connect.** `new WebSocket(socketUrl)`, i.e. `wss://support.bane.mx/c/<conversationId>?token=<chatToken>`. The Worker checks the token (bound to this conversation and this person) and the `Origin`, and before anything is sent the conversation checks that it is still open and still has the access it last ran with (a lost workspace, a lower role or lost content access ends it). A refused upgrade is a plain `401`/`403`/`404`/`503` with no body; get a fresh handoff and call `/chat/resume`.
 
-Keep `conversationId`, `socketUrl` and `expiresAt` in `sessionStorage`. On a new page the panel opens on a new conversation and shows only its opening line: the person's earlier conversation is never loaded on its own, only from **Continue last conversation** (`/chat/resume`). A conversation the person never wrote in is reused instead of starting another. Switching workspace in the dashboard starts a new conversation (the handoff's workspace is the conversation's scope).
+Keep `conversationId`, `socketUrl` and `expiresAt` in `sessionStorage`, keyed by the signed-in user and the workspace; an account change or sign-out in the tab ends the panel's conversation. On a new page the panel opens on a new conversation and shows only its opening line: the person's earlier conversation is never loaded on its own, only from **Continue last conversation** (`/chat/resume`). A conversation the person never wrote in is reused instead of starting another. Switching workspace in the dashboard starts a new conversation (the handoff's workspace is the conversation's scope).
 
 ## 2. Resuming
 
 `POST {support}/chat/resume` with `{ "conversationId", "handoff" }` returns the same shape as `/chat/start`: a new chat token, nothing else. Account access never expires mid-conversation (Nightmail reads it from the conversation on every request), so there is nothing to renew. Use it when:
 
 - the chat token expired (connect refused, or `expiresAt` passed);
-- the person opened the dashboard from a support email's "continue in Nightmail" link: `https://bane.mx/?support=<conversationId>&share=1`. Open the panel, call `contact-support` then `/chat/resume`. Only an email conversation whose person this Worker knows can be viewed this way (newer ones answer `403`); replies still go by email.
+- the dashboard was opened with `?support=<conversationId>` for a chat conversation.
 
-The handoff's user must be the conversation's user (`403 { error: { code: "NOT_YOUR_CONVERSATION" } }` otherwise). `404 { error: { code: "CONVERSATION_NOT_FOUND" } }` means it expired: start a new one.
+An email conversation continues by email, never in the panel: `/chat/resume` answers `409 { error: { code: "EMAIL_CONVERSATION", continueUrl } }`, and the panel sends the person to `/support/continue/<conversationId>` (support emails link there), where signing in lets support answer the waiting email.
+
+The handoff's user must be the conversation's user (`403 { error: { code: "NOT_YOUR_CONVERSATION" } }` otherwise; a conversation with no user is nobody's). `404 { error: { code: "CONVERSATION_NOT_FOUND" } }` means it ended, or its access shrank: start a new one. `503 SUPPORT_UNAVAILABLE`: Nightmail couldn't confirm its access just now; try again.
 
 ## 3. Message flow at a glance
 

@@ -58,15 +58,20 @@ const masked = (email: string | null) => {
   return `${local.slice(0, 1)}…@${domain}`;
 };
 
+/** Appends later facts to a ticket (the last 20 are kept); false when it no longer exists. `attachments` replaces its screenshots. */
+export async function addTicketNote(env: Env, ticketId: string, input: TicketInput, now = Date.now(), attachments?: string[]) {
+  const row = await env.DB.prepare('SELECT notes, attachments FROM tickets WHERE id = ?').bind(ticketId).first<{ notes: string; attachments: string }>();
+  if (!row) return false;
+  const notes = JSON.parse(row.notes) as unknown[];
+  notes.push({ at: new Date(now).toISOString(), type: input.type, title: input.title, summary: input.summary.slice(0, 1200), recommendation: input.recommendation.slice(0, 800), tried: input.tried, details: input.details });
+  await env.DB.prepare('UPDATE tickets SET notes = ?, attachments = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(notes.slice(-20)), attachments ? JSON.stringify(attachments) : row.attachments, now, ticketId).run();
+  return true;
+}
+
 export async function fileTicket(env: Env, ctx: TicketContext, input: TicketInput, now = Date.now(), ticketId?: string): Promise<FiledTicket> {
-  const existing = await env.DB.prepare('SELECT id, due_at, notes FROM tickets WHERE conversation_id = ?').bind(ctx.conversationId).first<{ id: string; due_at: number; notes: string }>();
-  if (existing) {
-    // One ticket per conversation: later facts are appended.
-    const notes = JSON.parse(existing.notes) as unknown[];
-    notes.push({ at: new Date(now).toISOString(), type: input.type, title: input.title, summary: input.summary.slice(0, 1200), recommendation: input.recommendation.slice(0, 800), tried: input.tried, details: input.details });
-    await env.DB.prepare('UPDATE tickets SET notes = ?, attachments = ?, updated_at = ? WHERE id = ?').bind(JSON.stringify(notes.slice(-20)), JSON.stringify(ctx.attachments.map(a => a.id)), now, existing.id).run();
-    return { id: existing.id, created: false, dueAt: existing.due_at, replyTo: masked(ctx.customer.email) };
-  }
+  const existing = await env.DB.prepare('SELECT id, due_at FROM tickets WHERE conversation_id = ?').bind(ctx.conversationId).first<{ id: string; due_at: number }>();
+  // One ticket per conversation: later facts are appended.
+  if (existing && await addTicketNote(env, existing.id, input, now, ctx.attachments.map(a => a.id))) return { id: existing.id, created: false, dueAt: existing.due_at, replyTo: masked(ctx.customer.email) };
   const id = ticketId ?? newId('tkt'), due = dueAt(input.details.topic, input.severity, now);
   await env.DB.batch([
     env.DB.prepare(`INSERT INTO tickets (id, conversation_id, channel, category, type, title, details, attachments, severity, due_at, customer, summary, ask, tried, recommendation, evidence, followup_thread_id, cost_usd, model, created_at, updated_at)

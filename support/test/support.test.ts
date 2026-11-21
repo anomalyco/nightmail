@@ -300,7 +300,9 @@ describe('support Worker', () => {
     await new Promise(r => setTimeout(r, 500));
     assert.equal(recorded.length, before, 'No model call when the chat opens.');
     assert.ok(!chat.frames.some(f => f.type === 'message.start' || f.type === 'status'), chat.frames.map(f => f.type).join());
-    assert.ok(!(await fakeCalls()).some(c => c[0] === 'request' && c[2] === started.body.conversationId), 'Opening Help reads nothing (no “support viewed” entry).');
+    // Joining checks the conversation's scope (who it is for, what it may read) and nothing else: no account data, so no
+    // “support viewed” entry.
+    assert.deepEqual((await fakeCalls()).filter(c => c[0] === 'request' && c[2] === started.body.conversationId).map(c => [c[3], c[1]]), [['GET', '/v1/support/scope']], 'Opening Help reads no account data.');
 
     chat.send({ type: 'user.message', clientMessageId: 'c1', text: 'Why are Gmail bounces up?' });
     chat.send({ type: 'user.message', clientMessageId: 'c1', text: 'Why are Gmail bounces up?' });
@@ -337,9 +339,9 @@ describe('support Worker', () => {
     assert.ok(!chat.frames.some(f => JSON.stringify(f).includes(GRANT_TOKEN) || JSON.stringify(f).includes('bane_support_')), 'The grant never reaches the panel.');
     const calls = await fakeCalls(), id = started.body.conversationId;
     // Nightmail registered the chat from the same handoff; every read is stamped with this conversation, in order: the
-    // scope, the account summary, then the tool.
+    // scope when the panel joined, the turn's scope, the account summary, then the tool.
     assert.deepEqual(calls.find(c => c[0] === 'registerConversation' && c[1] === id)?.[2], { kind: 'handoff', token });
-    assert.deepEqual(calls.filter(c => c[0] === 'request' && c[2] === id).slice(0, 2).map(c => [c[3], c[1]]), [['GET', '/v1/support/scope'], ['GET', '/v1/support/context?workspaceId=ws_acme']]);
+    assert.deepEqual(calls.filter(c => c[0] === 'request' && c[2] === id).slice(0, 3).map(c => [c[3], c[1]]), [['GET', '/v1/support/scope'], ['GET', '/v1/support/scope'], ['GET', '/v1/support/context?workspaceId=ws_acme']]);
     assert.ok(calls.some(c => c[0] === 'request' && c[2] === id && c[1].startsWith('/v1/support/deliverability/bounces?') && c[1].includes('workspaceId=ws_acme') && c[1].includes('provider=gmail')));
     assert.ok(!calls.some(c => ['mintGrant', 'read', 'revokeGrant'].includes(c[0])), 'No grant is minted or read.');
     // Reconnecting replays the transcript.
@@ -469,6 +471,51 @@ describe('support Worker', () => {
     assert.ok((await fakeCalls()).some(c => c[0] === 'closeConversation' && c[1] === chat.id));
     assert.equal((await (await mf.getD1Database('DB', 'support')).prepare('SELECT status FROM conversations WHERE id = ?').bind(chat.id).first<{ status: string }>())?.status, 'closed');
   }, 180_000);
+
+  test('demoted in the workspace: the next turn ends with the notice, no model call, and the model session is retired', async () => {
+    const chat = await chatIn(mf, handoff('usr_hal'));
+    chat.send({ type: 'user.message', clientMessageId: 'd1', text: 'Why are Gmail bounces up?' });
+    await chat.until(f => f.type === 'message.end' && /61 of 1,000/.test(f.text ?? ''), 60_000);
+    // Still a member, with a lower role: Nightmail's shrunk stays false, and the conversation ends anyway.
+    await fakeHook('/__role', { userId: 'usr_hal', workspaceId: 'ws_acme', role: 'member' });
+    const models = recorded.length, from = chat.frames.length;
+    chat.send({ type: 'user.message', clientMessageId: 'd2', text: 'Why are Gmail bounces up today?' });
+    assert.equal((await chat.until(f => f.type === 'closed')).reason, 'ended');
+    assert.deepEqual(chat.frames.slice(from).filter(f => f.type === 'message.end').map(f => f.text), ['This conversation ended because your access to a workspace changed. Open Help to start a new one.']);
+    assert.ok(!chat.frames.slice(from).some(f => f.type === 'text.delta' || f.type === 'tool.start'));
+    assert.equal(recorded.length, models, 'No model call.');
+    assert.ok((await fakeCalls()).some(c => c[0] === 'closeConversation' && c[1] === chat.id));
+  }, 180_000);
+
+  test('a socket or a resume for a conversation whose access shrank is refused before any history is sent', async () => {
+    const start = await post('/chat/start', { handoff: handoff('usr_mia') });
+    assert.equal(start.status, 200);
+    const chat = await connect(start.body.socketUrl);
+    await chat.until(f => f.type === 'history');
+    chat.send({ type: 'user.message', clientMessageId: 'm1', text: 'Why are Gmail bounces up?' });
+    await chat.until(f => f.type === 'message.end' && /61 of 1,000/.test(f.text ?? ''), 60_000);
+    chat.ws.close();
+    await fakeHook('/__remove', { userId: 'usr_mia', workspaceId: 'ws_acme' });
+    // The chat token is still valid: the conversation itself refuses, and nothing of it is sent.
+    const again = await mf.dispatchFetch(start.body.socketUrl.replace('wss:', 'https:'), { headers: { upgrade: 'websocket', origin: ORIGIN } } as never);
+    assert.equal(again.status, 404);
+    assert.equal((again as unknown as { webSocket: unknown }).webSocket ?? null, null);
+    const resumed = await post('/chat/resume', { conversationId: start.body.conversationId, handoff: handoff('usr_mia') });
+    assert.deepEqual([resumed.status, resumed.body?.error?.code], [404, 'CONVERSATION_NOT_FOUND']);
+    assert.equal((await (await mf.getD1Database('DB', 'support')).prepare('SELECT status FROM conversations WHERE id = ?').bind(start.body.conversationId).first<{ status: string }>())?.status, 'closed');
+  }, 180_000);
+
+  test('/chat/resume: an email conversation continues by email, and a conversation without an owner is nobody’s', async () => {
+    assert.equal((await signedHook('msg_resume_email', 'thr_resume_email')).status, 200);
+    const d1 = await mf.getD1Database('DB', 'support');
+    const emailed = (await eventually(async () => await d1.prepare("SELECT id FROM conversations WHERE thread_id = 'thr_resume_email'").first<{ id: string }>() ?? undefined))!.id;
+    const asked = await post('/chat/resume', { conversationId: emailed, handoff: handoff() });
+    assert.deepEqual([asked.status, asked.body?.error?.code, asked.body?.error?.continueUrl ?? asked.body?.continueUrl], [409, 'EMAIL_CONVERSATION', `${ORIGIN}/support/continue/${emailed}`]);
+    const orphan = `conv_${'q'.repeat(26)}`;
+    await d1.prepare("INSERT INTO conversations (id, channel, created_at, updated_at) VALUES (?, 'chat', ?, ?)").bind(orphan, Date.now(), Date.now()).run();
+    const refused = await post('/chat/resume', { conversationId: orphan, handoff: handoff() });
+    assert.deepEqual([refused.status, refused.body?.error?.code], [403, 'NOT_YOUR_CONVERSATION']);
+  });
 
   test('per-tool query allow-lists: a tool call with extra arguments sends none of them', async () => {
     const paths: string[] = [];
@@ -1040,7 +1087,7 @@ describe('support Worker', () => {
       await drive(c.id, { tick: true });
       const emailed = await sends(`staff-${two}`);
       assert.deepEqual([emailed.length, emailed[0][2], emailed[0][3].to, emailed[0][3].subject], [1, '/v1/inbound/threads', ['ada@acme.test'], 'Re: your Nightmail support chat']);
-      assert.equal(emailed[0][3].text, 'Hi there,\n\nOne more thing: verification finished.\n\nDana Rivera, Nightmail');
+      assert.equal(emailed[0][3].text, 'Hi Ada,\n\nOne more thing: verification finished.\n\nDana Rivera, Nightmail', 'Named from the scope read when the panel joined.');
       assert.deepEqual(await marked(two), ['sent']);
       // Unknown or malformed: 202, and nothing is pulled.
       const pulls = (await fakeCalls(instance)).filter(x => x[0] === 'pullOutbox').length;
@@ -1161,18 +1208,34 @@ describe('support Worker', () => {
       assert.equal((await replies(thread, instance)).length, 1, 'One email.');
     });
 
-    test('a deploy finishes each message the earlier inbox left once, without resending what it sent; it keeps that inbox current for a rollback', async () => {
-      // Ada's conversation: one message answered, one new, one confirmed but unanswered.
+    test('a deploy imports what the earlier inbox left once; a bound conversation from before hands its new mail to a fresh stamped one and holds its unsent answer for the team', async () => {
+      // Ada's conversation (bound before the stamp): one message answered, one new, one confirmed but unanswered.
       let run = await drive('conv_legacy_a');
       assert.deepEqual(states(run), { 'msg:msg_legacy_answered': 'done', 'msg:msg_legacy_new': 'pending', 'msg:msg_legacy_confirmed': 'done', 'answer:msg_legacy_confirmed': 'pending' });
       assert.ok(run.alarm !== null && run.alarm <= Date.now(), 'Armed when imported.');
       run = await drive('conv_legacy_a', { tick: true });
-      assert.ok(Object.values(states(run)).every(s => s === 'done'), JSON.stringify(run.rows));
+      assert.deepEqual(states(run), { 'msg:msg_legacy_answered': 'done', 'msg:msg_legacy_new': 'done', 'msg:msg_legacy_confirmed': 'done', 'answer:msg_legacy_confirmed': 'held',
+        'alert:held': 'done', close: 'done', 'forward:msg_legacy_new': 'done' });
       await drive('conv_legacy_a', { tick: true });
-      for (const id of ['new', 'confirmed']) assert.deepEqual((await sends(`reply-msg_legacy_${id}`)).map(c => [c[6], c[7]]), [[202, false]], id);
+      // The unsent answer is never sent; the team gets one email about it, and the conversation is closed for good.
+      assert.equal((await sends('reply-msg_legacy_confirmed')).length, 0);
       assert.equal((await sends('reply-msg_legacy_answered')).length, 0, 'Never sent again.');
-      // Every row is finished in the old table too, so a rolled-back Worker has nothing left to send.
-      assert.ok(run.legacy.every(r => r.state === 'answered'), JSON.stringify(run.legacy));
+      const alert = await sends('held-conv_legacy_a');
+      assert.deepEqual(alert.map(c => [c[6], c[3].to]), [[202, ['ryan@anoma.ly']]]);
+      assert.match(alert[0][3].text, /msg_legacy_confirmed: not answered yet/);
+      assert.ok(run.meta?.closedAt && (run.meta as any).retired && (run.meta as any).modelRetired);
+      assert.ok((await fakeCalls(instance)).some(c => c[0] === 'closeConversation' && c[1] === 'conv_legacy_a'));
+      assert.deepEqual(run.legacy, [{ message_id: 'msg_legacy_answered', state: 'answered' }, { message_id: 'msg_legacy_confirmed', state: 'held' }, { message_id: 'msg_legacy_new', state: 'rerouted' }]);
+      // The new message is a fresh conversation's: Nightmail registers it from the message, it reads through its own stamp,
+      // and it carries nothing over.
+      const successor = (run.meta as any).successor as string;
+      assert.match(successor, /^conv_[a-z2-7]{26}$/);
+      const fresh = await drive(successor, { tick: true });
+      assert.equal(states(fresh)['answer:msg_legacy_new'], 'done');
+      assert.deepEqual((await sends('reply-msg_legacy_new')).map(c => [c[6], c[7]]), [[202, false]]);
+      const calls = await fakeCalls(instance);
+      assert.ok(calls.some(c => c[0] === 'registerConversation' && c[1] === successor) && calls.some(c => c[0] === 'request' && c[2] === successor && c[1].startsWith('/v1/support/deliverability/bounces')));
+      assert.ok(!calls.some(c => c[0] === 'read') && !calls.some(c => c[0] === 'request' && c[2] === 'conv_legacy_a'), 'Nothing reads through a grant or the old conversation.');
       // Pat's conversation: a message waiting for the confirmation whose link the old code sent. No second link; once
       // confirmed, the answer goes out once.
       run = await drive('conv_legacy_b', { tick: true });
@@ -1259,16 +1322,126 @@ describe('support Worker', () => {
       chat.ws.close();
     });
 
-    test('a conversation opened before the stamp reads through its grant until it lapses, then answers without it', async () => {
-      const read = async (id: string) => { await drive(id, { tick: true }); return (await fakeCalls(instance)).filter(c => c[0] === 'read'); };
-      const before = (await fakeCalls(instance)).filter(c => c[0] === 'read').length;
-      const live = await read('conv_legacy_d');
-      assert.ok(live.length > before && live.slice(before).every(c => c[2] === 'GRANT'), 'The live grant reads.');
-      assert.match((await replies('thr_legacy_d', instance))[0]?.[3].text ?? '', /61 of 1,000/);
-      const lapsed = await read('conv_legacy_e');
-      assert.equal(lapsed.length, live.length, 'A lapsed grant reads nothing.');
-      assert.equal((await replies('thr_legacy_e', instance)).length, 1, 'It is still answered.');
-      assert.ok(!(await fakeCalls(instance)).some(c => c[0] === 'request' && ['conv_legacy_d', 'conv_legacy_e'].includes(c[2])) && !(await fakeCalls(instance)).some(c => c[0] === 'mintGrant'));
+    test('a conversation opened before the stamp never reads through its grant: its waiting answer is held, the team told once, the grant revoked', async () => {
+      for (const [id, thread] of [['conv_legacy_d', 'thr_legacy_d'], ['conv_legacy_e', 'thr_legacy_e']]) {
+        let run = await drive(id, { tick: true });
+        run = await drive(id, { tick: true });
+        assert.deepEqual([states(run)['answer:' + (id === 'conv_legacy_d' ? 'msg_legacy_grant' : 'msg_legacy_lapsed')], states(run).close, states(run)['alert:held']], ['held', 'done', 'done'], id);
+        assert.equal((await replies(thread, instance)).length, 0, 'Never answered.');
+        assert.equal((await sends(`held-${id}`)).length, 1, 'The team is told once.');
+      }
+      const calls = await fakeCalls(instance);
+      assert.ok(!calls.some(c => c[0] === 'read'), 'No grant read, live or lapsed.');
+      assert.equal(calls.filter(c => c[0] === 'revokeGrant').length, 2, 'Each grant is revoked.');
+      assert.ok(!calls.some(c => c[0] === 'request' && ['conv_legacy_d', 'conv_legacy_e'].includes(c[2])) && !calls.some(c => c[0] === 'mintGrant'));
+    });
+
+    test('a sign-in releases only its own thread’s answer; one that joined from another thread gets a conversation and a challenge of its own', async () => {
+      await hook('msg_m4_a', 'thr_m4_a', 'mo@acme.test');
+      const first = await conversationOf('thr_m4_a');
+      await drive(first, { tick: true });
+      // The same address writes in another thread: it joins the open confirmation of the first.
+      await hook('msg_m4_b', 'thr_m4_b', 'mo@acme.test');
+      await drive(await conversationOf('thr_m4_b'), { tick: true });
+      let run = await drive(first, { tick: true });
+      assert.deepEqual([states(run)['answer:msg_m4_a'], states(run)['answer:msg_m4_b']], ['parked', 'parked']);
+      // Mo signs in to continue the first thread's email.
+      await fakeHook('/__claim', { conversationId: first }, instance);
+      assert.equal((await wake(first)).status, 202);
+      await eventually(async () => states(await drive(first))['answer:msg_m4_a'] === 'pending' || undefined);
+      run = await drive(first, { tick: true });
+      assert.deepEqual([states(run)['answer:msg_m4_a'], states(run)['answer:msg_m4_b'], states(run)['forward:msg_m4_b']], ['done', 'done', 'done']);
+      assert.deepEqual((await replies('thr_m4_a', instance)).map(c => c[5]), ['confirm-msg_m4_a', 'reply-msg_m4_a']);
+      // The other thread's message is in a conversation of its own, which asks for its own sign-in or confirmation.
+      const own = (await (await db()).prepare("SELECT id FROM conversations WHERE thread_id LIKE 'thr_m4_b#%' AND id <> ?").bind(first).all<{ id: string }>()).results.map(r => r.id);
+      const challenged = await Promise.all(own.map(id => drive(id, { tick: true })));
+      assert.ok(challenged.some(c => states(c)['answer:msg_m4_b'] === 'parked' && states(c)['confirm:msg_m4_b'] === 'done'), JSON.stringify(challenged.map(c => states(c))));
+      const other = await replies('thr_m4_b', instance);
+      assert.deepEqual(other.map(c => c[5]), ['confirm-msg_m4_b']);
+      assert.match(other[0][3].text, CONFIRM_TEMPLATE);
+    });
+
+    test('an answer whose sender lost access before it went out is held, and the sender gets the fixed notice under a key of its own', async () => {
+      const thread = 'thr_m6', path = `/v1/inbound/threads/${thread}/reply`;
+      await hook('msg_m6_1', thread, 'gil@acme.test');
+      const id = await conversationOf(thread);
+      await outage(path, 503);
+      let run = await drive(id, { tick: true });
+      assert.equal(states(run)['answer:msg_m6_1'], 'pending', 'Written, not sent.');
+      const models = recorded.length;
+      await fakeHook('/__remove', { userId: 'usr_gil', workspaceId: 'ws_acme' }, instance);
+      await outage(path);
+      run = await drive(id, { expire: 'answer:msg_m6_1', tick: true });
+      assert.equal(states(run)['answer:msg_m6_1'], 'held');
+      const sent = await replies(thread, instance);
+      assert.deepEqual(sent.map(c => [c[5], c[3].text]), [['reply-msg_m6_1:ended', ACCESS_CHANGED]], 'The written answer never goes; the notice has its own key.');
+      assert.equal(recorded.length, models, 'No model call.');
+      assert.ok(run.meta?.closedAt && (run.meta as any).modelRetired);
+      await drive(id, { expire: 'answer:msg_m6_1', tick: true });
+      assert.equal((await replies(thread, instance)).length, 1, 'Nothing more on a later run.');
+    });
+
+    test('a close Nightmail can’t take yet is retried until it can, and retention waits for it', async () => {
+      const chat = await chatIn(instance);
+      await fakeHook('/__close', { fail: 3 }, instance);
+      chat.send({ type: 'end' });
+      await chat.until(f => f.type === 'closed');
+      let run = await drive(chat.id);
+      assert.deepEqual([run.meta?.status, states(run).close], ['closed', 'pending'], 'Closed here, the close owed to Nightmail stored with it.');
+      // Past retention, the conversation is kept while its close is still owed.
+      run = await drive(chat.id, { age: 8 * 86_400_000, tick: true });
+      assert.deepEqual([!!run.meta, states(run).close], [true, 'pending'], 'Not deleted yet.');
+      run = await drive(chat.id, { expire: 'close', tick: true });
+      assert.deepEqual([!!run.meta, states(run).close], [true, 'pending'], 'The third try fails too.');
+      run = await drive(chat.id, { expire: 'close', tick: true });
+      assert.equal(run.meta, null, 'Closed with Nightmail, then deleted after retention.');
+      assert.equal((await fakeCalls(instance)).filter(c => c[0] === 'closeConversation' && c[1] === chat.id).length, 4);
+    });
+
+    test('a sign-in counts for a conversation a later DMARC pass already bound: the answer that waited for it goes once', async () => {
+      const thread = 'thr_m10';
+      await hook('msg_m10_1', thread, 'tia@acme.test');
+      const id = await conversationOf(thread);
+      await drive(id, { tick: true });
+      await hook('msg_m10_2', thread, 'tia@acme.test');
+      let run = await drive(id, { tick: true });
+      assert.deepEqual([states(run)['answer:msg_m10_1'], states(run)['answer:msg_m10_2']], ['parked', 'done'], 'Bound by the second message, which vouches for itself only.');
+      assert.equal((await wake(id)).status, 202);
+      await new Promise(r => setTimeout(r, 500));
+      assert.equal(states(await drive(id, { tick: true }))['answer:msg_m10_1'], 'parked', 'No sign-in yet.');
+      await fakeHook('/__claim', { conversationId: id }, instance);
+      assert.equal((await wake(id)).status, 202);
+      await eventually(async () => states(await drive(id))['answer:msg_m10_1'] === 'pending' || undefined);
+      run = await drive(id, { tick: true });
+      assert.equal(states(run)['answer:msg_m10_1'], 'done');
+      assert.deepEqual((await replies(thread, instance)).map(c => c[5]), ['confirm-msg_m10_1', 'reply-msg_m10_2', 'reply-msg_m10_1']);
+    });
+
+    test('a reply in a chat ticket’s follow-up thread gets an email conversation of its own, and joins the ticket once it is authorized', async () => {
+      const chat = await chatIn(instance);
+      chat.send({ type: 'user.message', clientMessageId: 'f1', text: 'Can I get a refund of my duplicate top-up?' });
+      const filed = await chat.until(f => f.type === 'ticket.filed', 60_000);
+      await chat.until(f => f.type === 'message.end' && f.text?.includes('passed this'), 60_000);
+      await drive(chat.id, { tick: true });
+      const ticket = async () => (await db()).prepare('SELECT followup_thread_id, notes FROM tickets WHERE id = ?').bind(filed.ticketId).first<{ followup_thread_id: string; notes: string }>();
+      const thread = (await ticket())!.followup_thread_id;
+      assert.ok(thread);
+      const models = recorded.length;
+      await hook('msg_m11_1', thread, 'ada@acme.test');
+      let run = await drive(chat.id, { tick: true });
+      assert.equal(states(run)['msg:msg_m11_1'], 'done', 'The chat never blocks on it.');
+      assert.equal(states(run)['forward:msg_m11_1'], 'done');
+      const emailed = (run.meta as any).followupEmail as string;
+      assert.match(emailed, /^conv_[a-z2-7]{26}$/);
+      run = await drive(emailed, { tick: true });
+      assert.equal(states(run)['answer:msg_m11_1'], 'done');
+      assert.deepEqual(JSON.parse((await ticket())!.notes).map((n: any) => n.title), ['Customer wrote again'], 'Added to the chat’s ticket.');
+      assert.equal(recorded.length, models, 'No model turn.');
+      assert.equal((await replies(thread, instance)).length, 0, 'The team owns that thread.');
+      const calls = await fakeCalls(instance);
+      assert.ok(calls.some(c => c[0] === 'registerConversation' && c[1] === emailed && c[2].kind === 'email'));
+      assert.ok(!calls.some(c => c[0] === 'registerConversation' && c[1] === chat.id && c[2].kind === 'email'), 'The chat registers no email.');
+      chat.ws.close();
     });
 
     test.each(['throw', 'abort'] as const)('an answer whose turn filed a ticket is sent once after a failure before the send (%s)', async how => {
@@ -1313,6 +1486,25 @@ describe('support Worker', () => {
     }
     const sent = async (key: string) => (await fakeCalls(instance)).filter(c => c[0] === 'api' && c[5] === key);
     const delivered = async (key: string) => (await sent(key)).filter(c => c[6] < 300 && !c[7]);
+
+    test('the sweep wakes a conversation whose answer waits for a sign-in, at its backoff steps and never after a week', async () => {
+      assert.equal((await signedHook('msg_sweep_1', 'thr_sweep', 'uma@acme.test', { instance })).status, 200);
+      const d = await db();
+      assert.ok(await eventually(async () => await d.prepare("SELECT 1 AS n FROM support_work WHERE kind = 'answer' AND state = 'parked' AND message_id = 'msg_sweep_1'").first() ?? undefined), 'Parked, and mirrored to D1.');
+      const id = (await d.prepare("SELECT id FROM conversations WHERE thread_id = 'thr_sweep'").first<{ id: string }>())!.id;
+      // Uma signs in, and the claim's own wake is lost.
+      await fakeHook('/__claim', { conversationId: id }, instance);
+      const parkedFor = (ms: number) => d.prepare("UPDATE support_work SET updated_at = ? WHERE kind = 'answer' AND message_id = 'msg_sweep_1'").bind(Date.now() - ms).run();
+      for (const ms of [8 * 86_400_000, 12 * 60_000]) {
+        // Over a week ago, or between two backoff steps: not woken.
+        await parkedFor(ms); await sweep(); await settle();
+        assert.equal((await delivered('reply-msg_sweep_1')).length, 0, String(ms));
+      }
+      await parkedFor(5 * 60_000 + 30_000); await sweep();
+      assert.ok(await eventually(async () => (await delivered('reply-msg_sweep_1'))[0]), 'Woken at the five-minute step: answered.');
+      await settle();
+      assert.equal((await delivered('reply-msg_sweep_1')).length, 1);
+    });
 
     test('an edge rate limit keeps the message for the digest', async () => {
       assert.equal((await signedHook('msg_rate_1', 'thr_rate_1', 'rate@else.test', { instance })).status, 200);

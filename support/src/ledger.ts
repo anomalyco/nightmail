@@ -6,6 +6,7 @@ import { fromRow, type TicketRow } from './tickets.js';
 import type { Flow } from './work.js';
 import { newId } from './tokens.js';
 import { log, logError } from './log.js';
+import { SIGNIN_WAKES } from './conversation.js';
 
 // The work ledger (D1 `support_work`, migrations/0005). Every message a flow accepts gets a row before its webhook
 // answers, mail refused at the edge is kept as a row instead of vanishing, and each object mirrors its work items here
@@ -86,12 +87,30 @@ export async function blockUnconfigured(env: Env, input: { messageId: string; th
 /** Every five minutes: each step on its own, so one failing never stops the others. */
 export async function sweep(env: Env, now = Date.now()) {
   const result: Record<string, number> = {};
-  const steps: [string, () => Promise<number>][] = [['notices', () => resendNotices(env, now)], ['intake', () => acceptConfigured(env, now)], ['tickets', () => ticketMail(env, now)], ['staff', () => staffReplies(env)]];
+  const steps: [string, () => Promise<number>][] = [['notices', () => resendNotices(env, now)], ['intake', () => acceptConfigured(env, now)], ['tickets', () => ticketMail(env, now)], ['staff', () => staffReplies(env)], ['signin', () => signinWakes(env, now)]];
   for (const [name, step] of steps) {
     try { result[name] = await step(); }
     catch (error) { logError(error, { event: 'scheduled', code: 'SUPPORT_SWEEP_STEP_FAILED', step: name }); }
   }
   return result;
+}
+
+/**
+ * Conversations whose answers wait for the person to sign in, woken to ask Nightmail again: a claim's own wake can be
+ * lost. Each at the backoff's steps after its answer parked (one sweep window each), and not after about a week.
+ */
+async function signinWakes(env: Env, now: number) {
+  const window = 5 * 60_000, last = SIGNIN_WAKES.at(-1)! * 60_000;
+  const rows = (await env.DB.prepare("SELECT object, max(updated_at) AS parked FROM support_work WHERE flow = 'support' AND kind = 'answer' AND state = 'parked' AND updated_at > ? GROUP BY object LIMIT 200")
+    .bind(now - last - window).all<{ object: string; parked: number }>()).results;
+  let n = 0;
+  for (const row of rows) {
+    const age = now - row.parked;
+    if (!SIGNIN_WAKES.some(minutes => age >= minutes * 60_000 && age < minutes * 60_000 + window)) continue;
+    try { await env.CONVERSATION.get(env.CONVERSATION.idFromString(row.object)).wake(); n++; }
+    catch (error) { logError(error, { event: 'email', code: 'SIGNIN_WAKE_FAILED' }, 'warn'); }
+  }
+  return n;
 }
 
 /** Every staff reply waiting in Nightmail's outbox, to its conversation (each queues it once). */
