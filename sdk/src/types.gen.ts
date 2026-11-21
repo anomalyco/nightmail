@@ -554,6 +554,63 @@ export type ContactList = {
     updatedAt: string;
 };
 
+export type ContactListMerge = {
+    dryRun: boolean;
+    list: ContactList & ({
+        [key: string]: unknown;
+    } | null);
+    /**
+     * The merge created the target list (a dry run: would create it).
+     */
+    created: boolean;
+    /**
+     * The source lists, each once.
+     */
+    sourceIds: Array<string>;
+    /**
+     * Contacts added to the target: members of the sources that weren’t on it, each once.
+     */
+    added: number;
+    /**
+     * The target’s members after the merge, each contact once. Active contacts only, as in ContactListRead counts.
+     */
+    total: number;
+    /**
+     * The source lists deleted (a dry run: would delete).
+     */
+    deletedListIds: Array<string>;
+};
+
+export type MergeContactListsInput = {
+    /**
+     * The lists whose members are added to the target. A contact on several of them is added once. The sources keep their members unless deleteSources is true.
+     */
+    sourceIds: Array<string>;
+    /**
+     * The list that gets the members: an existing one ({ listId }) or a new one ({ name }).
+     */
+    into: {
+        /**
+         * An existing list in this workspace. It keeps its own members.
+         */
+        listId: string;
+    } | {
+        /**
+         * The name of a new list the merge creates.
+         */
+        name: string;
+        description?: string;
+    };
+    /**
+     * Delete the source lists after merging. Their contacts stay. The target can’t be one of the sources then.
+     */
+    deleteSources?: boolean;
+    /**
+     * Count what the merge would do and change nothing. Takes no Idempotency-Key.
+     */
+    dryRun?: boolean;
+};
+
 export type Segment = {
     name: string;
     rule: SegmentRule;
@@ -9056,6 +9113,73 @@ export type RemoveListMemberResponses = {
 };
 
 export type RemoveListMemberResponse = RemoveListMemberResponses[keyof RemoveListMemberResponses];
+
+export type MergeContactListsData = {
+    body: MergeContactListsInput;
+    headers?: {
+        /**
+         * Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path, and are retained indefinitely. Without a key, every request is processed, so a retried send can deliver twice.
+         */
+        'Idempotency-Key'?: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/v1/lists/merge';
+};
+
+export type MergeContactListsErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type MergeContactListsError = MergeContactListsErrors[keyof MergeContactListsErrors];
+
+export type MergeContactListsResponses = {
+    /**
+     * Success
+     */
+    200: ContactListMerge;
+};
+
+export type MergeContactListsResponse = MergeContactListsResponses[keyof MergeContactListsResponses];
 
 export type ListSegmentsData = {
     body?: never;
