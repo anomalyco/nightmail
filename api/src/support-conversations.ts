@@ -237,7 +237,7 @@ export function registerSupportConversations(app: App) {
   // ---------- the customer's own session ----------
   const Claimed = z.object({ id: z.string(), mode: Mode });
   app.openapi(createRoute({ hide: true, tags: ['Workspaces'], security: sessionSecurity, method: 'post', path: '/v1/support-conversations/{id}/claim', operationId: 'claimSupportConversation',
-    description: `Continue an emailed support request signed in: binds the conversation to you when your verified email is the address that wrote to ${productName} support. Anyone else gets 404.`,
+    description: `Continue an emailed support request signed in: binds the conversation to you when your verified email is the address that wrote to ${productName} support, and ${productName} support answers the waiting email. Anyone else gets 404.`,
     request: { params: ConversationParam }, responses: { 200: response(Claimed), ...errors } }), async c => {
     if (!c.env.config.multiTenant) return notFound('Endpoint');
     // Like accepting an invitation: a signed-in person whose session's verified email is still theirs, with or without a
@@ -270,6 +270,11 @@ export function registerSupportConversations(app: App) {
       return null;
     });
     if (!claimed) return notFound('Support conversation');
+    // The support platform answers what waited for this sign-in once it reads the binding: wake it with the ID only
+    // (again on a repeated claim, which recovers a lost wake). Nobody else's claim wakes anything.
+    const { wakeSupport } = await import('./support-inbox.js');
+    if (c.env.deferNudge) c.env.deferNudge(async () => { await wakeSupport(c.env.config, conversationId); });
+    else await wakeSupport(c.env.config, conversationId);
     return c.json(claimed!, 200);
   });
 

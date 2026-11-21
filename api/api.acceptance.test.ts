@@ -7137,6 +7137,16 @@ describe('Hosted MCP OAuth and tools', () => {
       const chat = async (f: SessionFixture, workspace = acme, body: Json = {}) => { const id = conversation(); ok(await register(id, { kind: 'handoff', token: (await handoff(f, workspace, body)).token }), 201); return id; };
       const email = async (from: string, o: Parameters<typeof mail>[1] = {}) => { const id = conversation(); const body = ok(await register(id, { kind: 'email', messageId: await mail(from, o) }), 201); return { id, body }; };
       const mint = async (body: Json) => reply(await platform.mintGrant({ reason: 'Customer asked about their workspace', ticketRef: unique('T'), ...body } as never));
+      // The support site: a claim wakes it. Every request to it is recorded and answered; nothing else leaves the fixture.
+      const wakes: { method: string; url: string; headers: string[]; body: string }[] = [], previous = globalThis.fetch;
+      globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const request = new Request(input, init);
+        if (new URL(request.url).origin !== 'https://support.example.com') return previous(input, init);
+        wakes.push({ method: request.method, url: request.url, headers: [...request.headers.keys()], body: await request.text() });
+        return new Response(null, { status: 202 });
+      };
+      t.after(() => { globalThis.fetch = previous; });
+      const wakeOf = (id: string) => ({ method: 'POST', url: 'https://support.example.com/hooks/nightmail-wake', headers: ['content-type'], body: JSON.stringify({ conversationId: id }) });
 
       await t.test('1 registration: Nightmail decides who a conversation is for from its own handoff, or from a support address’s stored From and DMARC verdict', async () => {
         // A handoff binds its user and workspace, once, and is shared with grants either way.
@@ -7366,15 +7376,19 @@ describe('Hosted MCP OAuth and tools', () => {
         ok(await register(conversation(), { kind: 'handoff', token: over.token }), 201);
       });
 
-      await t.test('7 claim: only the session whose verified email is the waiting sender binds the conversation, once', async () => {
-        const waiting = await email(owner.email, { dmarc: 'FAIL' }), path = `/v1/support-conversations/${waiting.id}/claim`;
+      await t.test('7 claim: only the session whose verified email is the waiting sender binds the conversation, once, and wakes the support site with its ID only', async () => {
+        const waiting = await email(owner.email, { dmarc: 'FAIL' }), path = `/v1/support-conversations/${waiting.id}/claim`, woken = wakes.length;
         for (const who of [admin, member, outsider, operator]) error(await send('POST', path, session(who)), 404);
         error(await send('POST', path, {}), 401);
         error(reply(await platform.call('POST', path, {})), 404);
+        assert.equal(wakes.length, woken, 'A refused claim wakes nothing.');
         const claimed = ok(await send('POST', path, session(owner)));
         assert.deepEqual([claimed.id, claimed.mode, (await row(waiting.id)).user_id, (await row(waiting.id)).verification], [waiting.id, 'member', owner.userId, 'signin']);
+        assert.deepEqual(wakes.slice(woken), [wakeOf(waiting.id)], 'One wake, carrying nothing but the conversation’s ID.');
         assert.deepEqual(ok(await send('POST', path, session(owner))), claimed, 'Claiming again changes nothing.');
+        assert.deepEqual(wakes.slice(woken), [wakeOf(waiting.id), wakeOf(waiting.id)], 'A repeated claim wakes again (it recovers a lost wake), with the same ID only.');
         error(await send('POST', path, session(admin)), 404);
+        assert.equal(wakes.length, woken + 2);
         const claims = (await db.query(`SELECT user_id, actor_id, internal FROM audit_events WHERE action = 'support.claim' AND target_id = $1`, [waiting.id])).rows;
         assert.deepEqual(claims, [{ user_id: owner.userId, actor_id: owner.userId, internal: true }]);
         assert.deepEqual(ok(await stamped(waiting.id, 'GET', '/v1/support/workspaces')).data.map((w: Json) => w.id), [acme]);
@@ -7416,7 +7430,9 @@ describe('Hosted MCP OAuth and tools', () => {
         const waiting = await email(lonely.email, { dmarc: 'FAIL' }), path = `/v1/support-conversations/${waiting.id}/claim`;
         error(await send('POST', path, { cookie: lonely.cookie }), 403, 'CSRF_ORIGIN_INVALID');
         error(await send('POST', path, { ...session(lonely), authorization: `Bearer nm_${hex()}` }), 403, 'DASHBOARD_AUTH_REQUIRED');
+        const woken = wakes.length;
         assert.deepEqual(ok(await send('POST', path, session(lonely))), { id: waiting.id, mode: 'non_member' });
+        assert.deepEqual(wakes.slice(woken), [wakeOf(waiting.id)]);
         assert.deepEqual([(await row(waiting.id)).user_id, (await row(waiting.id)).verification], [lonely.userId, 'signin']);
         assert.deepEqual((await db.query(`SELECT user_id FROM audit_events WHERE action = 'support.claim' AND target_id = $1`, [waiting.id])).rows.map(r => r.user_id), [lonely.userId]);
         assert.deepEqual(ok(await stamped(waiting.id, 'GET', '/v1/support/scope')).workspaces, []);
