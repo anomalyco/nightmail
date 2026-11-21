@@ -48,6 +48,8 @@ const SHARED_SETTINGS = '/settings#receiving'
 const ASK = 'Describe what it should do…'
 export const OTHER_RULES = 'Other rules on these addresses'
 export const AI_AT_ARRIVAL = 'The AI’s answer when this email arrived'
+export const SHARED_LABEL = 'Sender lists and AI access'
+export const blindWords = (domain: string) => 'The AI can’t read mail at ' + domain + '.'
 const SUGGESTIONS = ['Send refund requests from support@ to #support in Slack, junk newsletters', 'Also label invoices', 'Explain this rule']
 const typeWord: Record<EndpointType, string> = { slack: 'Slack', discord: 'Discord', webhook: 'Webhook', forward: 'Forward' }
 const ordinal = (n: number) => n + (n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th')
@@ -179,7 +181,7 @@ function useCodeRule(key: string) {
   // Problems: the checker's, then an AI question on an address whose domain the AI may not read.
   const domains = saved?.config.evaluateDomains ?? []
   const blind = check?.decisions.length ? [...new Set(targets.map(t => addressOf(t).split('@')[1] ?? ''))].filter(d => d && !domains.includes(d)) : []
-  const problems = [...(check?.diagnostics ?? []).map(d => ({ where: 'Line ' + d.line, text: d.message + (d.hint ? ' ' + d.hint : '') })), ...blind.map(d => ({ where: 'AI', text: 'The AI can’t read mail at ' + d + '.' }))]
+  const problems = [...(check?.diagnostics ?? []).map(d => ({ where: 'Line ' + d.line, text: d.message + (d.hint ? ' ' + d.hint : '') })), ...blind.map(d => ({ where: 'AI', text: blindWords(d) }))]
 
   // Recent mail to its addresses (else any recent mail), one per conversation.
   const watched = new Set(targets.flatMap(t => { const o = opts.find(x => x.id === t); return o ? [o.address, ...o.aliases] : [t] }))
@@ -228,7 +230,7 @@ type Tests = ReturnType<Page['useTests']>
 function Header({ p, runsOn = false }: { p: Page; runsOn?: boolean }) {
   const navigate = useNavigate(), phone = usePhone()
   const items: MenuItem[] = [
-    { label: 'Sender lists and AI access', onSelect: () => navigate(SHARED_SETTINGS) },
+    { label: SHARED_LABEL, onSelect: () => navigate(SHARED_SETTINGS) },
     { label: 'Delete rule', destructive: true, onSelect: () => p.setDeleting(true) },
   ]
   return <>
@@ -254,7 +256,7 @@ function RunsOnButton({ p }: { p: Page }) {
     <Dialog open={open} onOpenChange={setOpen} title="Runs on" footer={<Button onClick={() => setOpen(false)}>Done</Button>}><RunsOn p={p} /></Dialog>
   </>
 }
-function RunsOn({ p }: { p: Page }) {
+export function RunsOn({ p }: { p: Pick<Page, 'key' | 'targets' | 'placeOn' | 'addressOf' | 'draft' | 'options' | 'after'> }) {
   const remaining = p.options.filter(o => !o.expiresAt && !p.targets.includes(o.id))
   return <div className="cf-runs">
     <ul className="cf-runs__list" role="list">{p.targets.map(t => {

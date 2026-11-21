@@ -1,0 +1,124 @@
+/* PITCH ONLY (pitch/rule-page): the calm rule page, G, H and I (rule-calm-pitch.tsx). Nightmail tokens; flat; neutral
+   except buttons (navy). No section labels, no panel headers: hierarchy is size, weight and space. Text is 15px or
+   larger (the code 14px). "Changed" is one neutral fill, on a mail row and on a line of code. */
+.calm [hidden] { display: none !important; }
+.calm { --calm-text: 15px; --calm-leading: 22px; --calm-row: 48px; --calm-bleed: var(--space-12); gap: 0; font-size: var(--calm-text); line-height: var(--calm-leading); }
+.calm-undo[data-hidden] { visibility: hidden; }
+.calm-off { margin-left: var(--space-8); color: var(--color-muted); font-weight: var(--font-weight-regular); }
+.calm-bad { color: var(--color-danger); }
+.calm-loading { display: grid; gap: var(--space-12); margin-top: var(--space-40); }
+
+/* The rule in a sentence, and the mail it runs on. */
+.calm-say { display: grid; justify-items: start; gap: var(--space-6); min-width: 0; }
+.calm-say__text { max-width: 100%; margin: 0; font-size: 20px; line-height: 28px; letter-spacing: -.2px; font-weight: var(--font-weight-bold); text-wrap: balance; overflow-wrap: anywhere; }
+.calm-say[data-size='xl'] { gap: var(--space-8); }
+.calm-say[data-size='xl'] .calm-say__text { font-size: 28px; line-height: 36px; letter-spacing: -.5px; }
+.calm-say__on > svg { margin-left: var(--space-4); vertical-align: -2px; }
+.calm-say__on { max-width: 100%; margin: 0; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--color-muted); font: inherit; text-align: left; cursor: pointer; }
+.calm-say__addr { display: inline-flex; }
+.calm-say__addr .rcv-match { font-family: inherit; font-size: inherit; letter-spacing: 0; }
+@media (hover: hover) and (pointer: fine) { .calm-say__on:hover { color: var(--color-text); } }
+
+/* The agent: one input. */
+.calm-ask-wrap { display: grid; gap: var(--space-12); min-width: 0; }
+.calm-ask { display: flex; align-items: center; gap: var(--space-12); height: 52px; padding: 0 10px 0 var(--space-16); border-radius: var(--radius-lg); background: var(--color-layer-1); box-shadow: var(--shadow-button); }
+.calm-ask:focus-within { box-shadow: inset 0 0 0 1px var(--color-border-strong); }
+.calm-ask__icon { flex: none; color: var(--color-muted); }
+.calm-ask__input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; outline: 0; background: transparent; color: var(--color-text); font: inherit; }
+.calm-ask__input::placeholder { color: var(--color-faint); opacity: 1; }
+.calm-ask__input:disabled { opacity: 1; cursor: default; }
+.calm-ask__send { flex: none; width: 32px; height: 32px; padding: 0; }
+.calm-reply { margin: 0; color: var(--color-muted); }
+
+/* Rows: recent mail, a new rule's starters, the Code fold. Hairlines between; a fill reaches a little past the text. */
+.calm-head { margin: 0 0 var(--space-8); color: var(--color-muted); font: inherit; }
+.calm-rows { margin: 0; padding: 0; list-style: none; }
+.calm-rows > li { border-top: 1px solid var(--color-border-muted); }
+.calm-rows > li[data-changed] { background: var(--color-active-bg); box-shadow: calc(-1 * var(--calm-bleed)) 0 var(--color-active-bg), var(--calm-bleed) 0 var(--color-active-bg); }
+.calm-row { display: flex; align-items: center; gap: var(--space-16); width: 100%; min-height: var(--calm-row); margin: 0; padding: 0; border: 0; background: none; color: var(--color-muted); font: inherit; text-align: left; }
+.calm-row__main { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.calm-row__from { flex: none; width: 168px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.calm-rows > li:not([data-acted]) .calm-row__from { color: var(--color-muted); }
+.calm-row__out { flex: none; min-width: 1px; color: var(--color-text); white-space: nowrap; }
+.calm-row__out s { margin-right: var(--space-8); color: var(--color-faint); }
+.calm-rows > li[data-acted] .calm-row, .calm-fold__button { color: var(--color-text); }
+@media (hover: hover) and (pointer: fine) { .calm-starters .calm-row:hover:not(:disabled) { color: var(--color-text); } }
+.calm-row__why { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-4) var(--space-16); margin: -6px 0 var(--space-12); color: var(--color-muted); }
+.calm-row__why .ui-button { margin-inline: -11px; font-size: inherit; }
+.calm-row__why .rcv-match { font-size: inherit; }
+button.calm-row { cursor: pointer; }
+@media (hover: hover) and (pointer: fine) { .calm-rows > li:has(> button.calm-row:hover):not([data-changed]) { background: var(--color-hover); box-shadow: calc(-1 * var(--calm-bleed)) 0 var(--color-hover), var(--calm-bleed) 0 var(--color-hover); } }
+
+.calm-starters--inline { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-24); margin: 0; padding: 0; list-style: none; }
+.calm-starters--inline .calm-row { width: auto; min-height: 32px; }
+
+/* The code: no bar over it, no rule beside the numbers. */
+.calm-code { overflow: hidden; border-radius: var(--radius-lg); background: var(--color-surface); box-shadow: var(--shadow-raised); }
+.calm-code .ritual-editor { border: 0; border-radius: 0; }
+.calm-code .ritual-editor:focus-within { border-color: transparent; }
+.calm-code .ritual-editor .cm-editor { font-size: var(--text-md); }
+.calm-code .ritual-editor .cm-content { min-height: 0; padding-block: var(--space-16); line-height: 24px; }
+.calm-code .ritual-editor .cm-gutters { border-right: 0; color: var(--color-faint); line-height: 24px; }
+.calm-code .ritual-editor .cm-foldGutter { display: none !important; }
+/* A long line wraps under its own text, not back at the edge. */
+.calm-code .ritual-editor .cm-line { padding-left: calc(6px + 6ch); text-indent: -6ch; }
+.calm-code .ritual-editor .cm-lineNumbers .cm-gutterElement { min-width: 36px; padding-inline: var(--space-12) var(--space-4); }
+.calm-code .ritual-editor .cm-editor:not(.cm-focused) :is(.cm-activeLine, .cm-activeLineGutter) { background: transparent; }
+.calm-code .ritual-editor .cm-line.ritual-editor__changed { animation: none; background: var(--color-active-bg); }
+.calm-code[data-fill] { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.calm-code[data-fill] .ritual-editor { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.calm-code[data-fill] .ritual-editor .cm-editor { flex: 1; height: 100%; min-height: 0; }
+.calm-problems { flex: none; margin: 0; padding: var(--space-8) var(--space-16); list-style: none; border-top: 1px solid var(--color-border-muted); }
+.calm-problems li { display: flex; gap: var(--space-12); padding-block: var(--space-4); }
+.calm-problems li > span { flex: none; color: var(--color-danger); }
+
+/* G · Sentence: one column, like a short note. */
+.calm-g, .calm-i { width: 100%; max-width: 720px; margin-inline: auto; }
+.calm-g > .calm-say, .calm-g > .calm-loading { margin-top: 72px; }
+.calm-g > .calm-ask-wrap { margin-top: var(--space-32); }
+.calm-g > :is(.calm-mail, .calm-starters) { margin-top: var(--space-40); }
+.calm-fold { border-block: 1px solid var(--color-border-muted); }
+.calm-fold__button > svg { flex: none; color: var(--color-muted); transition: transform var(--motion-duration) ease-out; }
+.calm-fold[data-open] .calm-fold__button > svg { transform: rotate(90deg); }
+.calm-fold > .calm-code { margin-bottom: var(--space-16); }
+
+/* H · Side by side: the code, and one quiet column. */
+.calm-h__grid { display: grid; grid-template-columns: minmax(0, 1fr) 400px; gap: var(--space-40); height: calc(100dvh - 112px); min-height: 520px; margin-top: var(--space-20); }
+.calm-h__code { min-width: 0; min-height: 0; }
+.calm-h__side { display: flex; flex-direction: column; gap: var(--space-32); min-width: 0; min-height: 0; padding-top: var(--space-12); }
+.calm-h__side > .calm-ask-wrap { margin-top: auto; }
+
+/* I · Inbox: recent mail is the page; the input stays under it. */
+.calm-i { flex: 1; }
+.calm-i[data-code] { max-width: none; }
+.calm-i { --calm-row: 56px; }
+.calm-i__grid { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr); gap: var(--space-40); min-height: 0; margin-top: var(--space-40); }
+.calm-i[data-code] .calm-i__grid { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.calm-i__main { display: flex; flex-direction: column; gap: var(--space-32); min-width: 0; }
+.calm-i__dock { position: sticky; bottom: 0; z-index: 1; display: grid; gap: var(--space-16); margin-top: auto; padding-top: var(--space-12); background: var(--color-surface); }
+.calm-i__code { position: sticky; top: 0; height: calc(100dvh - 152px); min-height: 420px; }
+
+@media (max-width: 900px) {
+  .calm-h__grid { grid-template-columns: minmax(0, 1fr) 320px; gap: var(--space-24); }
+}
+@media (max-width: 640px) {
+  /* A phone: 16px in the input, so iOS does not zoom into it. */
+  .calm-ask__input { font-size: 16px; }
+  .calm-g > .calm-say, .calm-g > .calm-loading { margin-top: var(--space-40); }
+  .calm-say[data-size='xl'] .calm-say__text { font-size: 24px; line-height: 32px; letter-spacing: -.4px; }
+  .calm-i .calm-mail .calm-row { display: grid; grid-template: 'from out' auto 'main out' auto / minmax(0, 1fr) auto; align-content: center; row-gap: 2px; min-height: 68px; }
+  .calm-i .calm-row__from { grid-area: from; width: auto; }
+  .calm-i .calm-row__main { grid-area: main; }
+  .calm-i .calm-row__out { grid-area: out; }
+  .calm-h > .ui-tabs { margin-top: var(--space-12); }
+  .calm-h__grid { display: block; height: auto; min-height: 0; margin-top: var(--space-24); }
+  .calm-h__code { height: calc(100dvh - 300px); min-height: 320px; }
+  .calm-h__side { min-height: calc(100dvh - 330px); padding-top: 0; }
+  .calm-h__side > .calm-ask-wrap, .calm-i__dock { position: sticky; bottom: calc(var(--tab-bar-height) + env(safe-area-inset-bottom)); z-index: 1; margin-inline: calc(-1 * var(--space-16)); padding: var(--space-12) var(--space-16); background: var(--color-surface); }
+  .calm-i__grid { margin-top: var(--space-24); }
+  .calm-sheet .calm-code { box-shadow: none; }
+  .calm-code .ritual-editor .cm-editor { font-size: var(--text-sm); }
+  .calm-code .ritual-editor .cm-line { padding-left: calc(6px + 2ch); text-indent: -2ch; }
+  .calm-code .ritual-editor .cm-lineNumbers .cm-gutterElement { min-width: 28px; padding-inline: var(--space-8) var(--space-4); }
+  .calm-row__why { margin-top: -2px; }
+}

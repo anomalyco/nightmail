@@ -25,6 +25,7 @@ import { Match, TargetIcon } from './parts'
 import { addressOption, when } from './shared'
 import type { DryRun } from './trace'
 import { AI_AT_ARRIVAL, CodeRulePitch, OTHER_RULES } from './rule-code-pitch'
+import { CalmRulePitch } from './rule-calm-pitch'
 import './inbound.css'
 import './receiving.css'
 import './recipes.css'
@@ -43,7 +44,7 @@ const LIST = '/receiving?tab=rules'
 const NEW = '+new'
 
 /** The pitch's version for this URL, or null for today's page. */
-export const pitchVersion = (search: string) => { const v = new URLSearchParams(search).get('v'); return v === 'a' || v === 'b' || v === 'c' || v === 'd' || v === 'e' || v === 'f' ? v : null }
+export const pitchVersion = (search: string) => { const v = new URLSearchParams(search).get('v'); return v === 'a' || v === 'b' || v === 'c' || v === 'd' || v === 'e' || v === 'f' || v === 'g' || v === 'h' || v === 'i' ? v : null }
 
 // ---------------------------------------------------------------- words
 /** A recipe as When / If / Then parts; {field} is a blank. Scripts have none: their If / Then is the code. */
@@ -552,6 +553,7 @@ export function RulePitch() {
   const { key = '' } = useParams()
   const [search] = useSearchParams()
   const v = pitchVersion('?' + search.toString()) ?? 'a'
+  if (v === 'g' || v === 'h' || v === 'i') return <CalmRulePitch ruleKey={key || null} v={v} />
   if (v === 'd' || v === 'e' || v === 'f') return <CodeRulePitch ruleKey={key} v={v} />
   return <ChoicePitch ruleKey={key} v={v} />
 }

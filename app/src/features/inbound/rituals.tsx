@@ -81,7 +81,8 @@ const changedField = StateField.define<DecorationSet>({
   },
   provide: field => EditorView.decorations.from(field),
 })
-type Flash = { lines: number[]; at: number }
+/** hold (pitch G–I): the mark stays until the next flash; an empty list clears it. */
+type Flash = { lines: number[]; at: number; hold?: boolean }
 
 /** CodeMirror with workspace completions and live diagnostics from checkRule. `flash` marks lines a remote save
  *  changed; `relint` checks the script again (the workspace's endpoints changed). */
@@ -122,8 +123,9 @@ export function Editor({ value, change, completions, check, flash, relint }: { v
   }, [value])
   useEffect(() => {
     const v = view.current
-    if (!v || !flash?.lines.length) return
+    if (!v || !flash || (!flash.lines.length && !flash.hold)) return
     v.dispatch({ effects: markLines.of(flash.lines) })
+    if (flash.hold) return
     const clear = setTimeout(() => view.current?.dispatch({ effects: markLines.of([]) }), 2600)
     return () => clearTimeout(clear)
   }, [flash])
