@@ -17088,7 +17088,8 @@
             "type": "object",
             "properties": {
               "id": {
-                "type": "string"
+                "type": "string",
+                "description": "Omitted for a support conversation, which knows its person only through the conversation."
               },
               "name": {
                 "type": [
@@ -17110,7 +17111,6 @@
               }
             },
             "required": [
-              "id",
               "name",
               "email",
               "createdAt"
@@ -20610,13 +20610,21 @@
                   "signin",
                   "none"
                 ]
+              },
+              "signedInAt": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "description": "When the person last signed in to continue this email conversation (a claim), also when it was already bound to them; null otherwise."
               }
             },
             "required": [
               "id",
               "channel",
               "mode",
-              "verification"
+              "verification",
+              "signedInAt"
             ]
           },
           "user": {

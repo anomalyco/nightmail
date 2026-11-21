@@ -497,7 +497,7 @@ export function registerSupport(app: App) {
     grant: z.object({ id: z.string(), ticketRef: z.string(), expiresAt: z.string(), contentShared: z.boolean().describe('Whether this request may read email bodies (the customer opted in).'),
       contentWorkspaceId: z.string().nullable().describe('The one workspace whose email bodies this request may read, or null.') })
       .describe('The grant, or for a support conversation the same facts: id and ticketRef are the conversation’s ID, and expiresAt is the time of this read, since a conversation’s access is checked on every request.'),
-    user: z.object({ id: z.string(), name: z.string().nullable(), email: z.string().nullable(), createdAt: z.string().nullable() }),
+    user: z.object({ id: z.string().optional().describe('Omitted for a support conversation, which knows its person only through the conversation.'), name: z.string().nullable(), email: z.string().nullable(), createdAt: z.string().nullable() }),
     workspaces: z.array(WorkspaceSummary), domains: z.array(DomainSummary).describe('Up to 50 domains across the workspaces.'),
     recentFailures: z.object({ since: z.string(), sends: z.array(z.record(z.string(), z.unknown())).describe('Failed, rejected, suppressed and bounced sends in the last 24 hours, by code.'),
       bounces: z.array(z.record(z.string(), z.unknown())).describe('Bounce, complaint and reject events in the last 24 hours, by reason.'),
@@ -525,7 +525,7 @@ export function registerSupport(app: App) {
     ]);
     const requestIds = [...new Set([...(handoff?.request_ids ?? []), ...activity.data.map(e => e.requestId).filter((r): r is string => !!r)])].slice(0, 10);
     return c.json({ grant: { id: scope.grantId, ticketRef: scope.ticketRef, expiresAt: scope.expiresAt, contentShared: !!scope.contentWorkspaceId, contentWorkspaceId: scope.contentWorkspaceId },
-      user: { id: scope.userId, name: user?.name ?? null, email: user?.email ?? null, createdAt: user?.created_at ? new Date(user.created_at).toISOString() : null },
+      user: { ...scope.conversation ? {} : { id: scope.userId }, name: user?.name ?? null, email: user?.email ?? null, createdAt: user?.created_at ? new Date(user.created_at).toISOString() : null },
       workspaces: summaries, domains, recentFailures: { since: new Date(Date.now() - 86_400_000).toISOString(), ...recent, authErrors: null }, standing: stand, recentActivity: activity.data,
       openEnforcement: enforcement.map(e => ({ ...e, since: e.since ? new Date(e.since).toISOString() : null })),
       handoff: handoff ? { id: handoff.id, page: handoff.page, requestIds: handoff.request_ids, message: handoff.message, createdAt: new Date(handoff.created_at).toISOString() } : null,

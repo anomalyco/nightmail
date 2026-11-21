@@ -5364,7 +5364,10 @@ export type SupportContext = {
         contentWorkspaceId: string | null;
     };
     user: {
-        id: string;
+        /**
+         * Omitted for a support conversation, which knows its person only through the conversation.
+         */
+        id?: string;
         name: string | null;
         email: string | null;
         createdAt: string | null;
@@ -6537,6 +6540,10 @@ export type SupportScope = {
         channel: 'chat' | 'email';
         mode: 'member' | 'non_member' | 'pending_signin' | 'unverified';
         verification: 'handoff' | 'dmarc' | 'signin' | 'none';
+        /**
+         * When the person last signed in to continue this email conversation (a claim), also when it was already bound to them; null otherwise.
+         */
+        signedInAt: string | null;
     };
     user: {
         name: string | null;

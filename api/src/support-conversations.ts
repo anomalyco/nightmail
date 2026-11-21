@@ -112,19 +112,22 @@ const admit = (tx: DbExecutor, userId: string) => tx.execute(sql`SELECT pg_advis
 
 /**
  * What a message Nightmail received at a support address proves: its sender, and whether that From is the one literal
- * address SES's DMARC PASS vouches for. dkimAligned records whether a sole signature of the From domain passed too.
+ * address SES's DMARC PASS vouches for, as ingest judged it for every support address it reached (the link's
+ * reply_author_verified) and as the stored verdict says. Anything less, or ambiguous, proves nothing. dkimAligned records
+ * whether a sole signature of the From domain passed too.
  */
 async function emailEvidence(db: DbExecutor, addressIds: string[], messageId: string) {
-  const { rows: [m] } = await db.execute<{ thread_id: string; from_address: string; verdicts: Verdicts; headers: MailHeader[]; user_id: string | null; memberships: number }>(sql`SELECT m.thread_id, m.from_address, m.verdicts, m.headers,
-      u.id AS user_id, (SELECT count(*)::int FROM workspace_members wm WHERE wm.user_id = u.id) AS memberships
+  const { rows: [m] } = await db.execute<{ thread_id: string; from_address: string; verdicts: Verdicts; headers: MailHeader[]; user_id: string | null; memberships: number; author_verified: boolean | null }>(sql`SELECT m.thread_id, m.from_address, m.verdicts, m.headers,
+      u.id AS user_id, (SELECT count(*)::int FROM workspace_members wm WHERE wm.user_id = u.id) AS memberships, links.author_verified
     FROM mail_messages m LEFT JOIN nightmail_users u ON lower(u.email) = lower(m.from_address) AND u.email_verified
-    WHERE m.id = ${messageId} AND m.direction = 'inbound' AND EXISTS (SELECT FROM mailbox_messages mm JOIN mailboxes b ON b.id = mm.mailbox_id AND b.workspace_id = mm.workspace_id
-      WHERE mm.message_id = m.id AND mm.workspace_id = m.workspace_id AND mm.mailbox_id = ANY(${sql.param(addressIds)}::text[]))`);
+    CROSS JOIN LATERAL (SELECT bool_and(mm.reply_author_verified) AS author_verified FROM mailbox_messages mm JOIN mailboxes b ON b.id = mm.mailbox_id AND b.workspace_id = mm.workspace_id
+      WHERE mm.message_id = m.id AND mm.workspace_id = m.workspace_id AND mm.direction = 'inbound' AND mm.mailbox_id = ANY(${sql.param(addressIds)}::text[])) links
+    WHERE m.id = ${messageId} AND m.direction = 'inbound' AND links.author_verified IS NOT NULL`);
   if (!m) return null;
   const { literalFrom, soleAlignedSignature } = await import('./mailbox-ingest.js');
   const from = m.from_address.trim().toLowerCase(), domain = from.split('@')[1] ?? '', field = (name: string) => m.headers.filter(h => h.name.toLowerCase() === name).map(h => h.value);
   const fromFields = field('from'), dmarc = m.verdicts?.dmarc ?? null;
-  const verified = /^[^\s@]+@[^\s@]+$/.test(from) && fromFields.length === 1 && literalFrom(fromFields[0]!, from) && dmarc === 'PASS';
+  const verified = /^[^\s@]+@[^\s@]+$/.test(from) && fromFields.length === 1 && literalFrom(fromFields[0]!, from) && dmarc === 'PASS' && m.author_verified === true;
   const dkimAligned = m.verdicts?.dkim === 'PASS' && soleAlignedSignature(field('dkim-signature'), domain);
   const userId = verified ? m.user_id : null;
   const mode: Row['mode'] = verified ? (userId && m.memberships > 0 ? 'member' : 'non_member') : m.user_id ? 'pending_signin' : 'unverified';
@@ -254,7 +257,12 @@ export function registerSupportConversations(app: App) {
       // person's current verified address. A claim that lost the race answers only if it is already theirs.
       const { rows: [target] } = await tx.execute<Row>(sql`SELECT ${columns} FROM support_conversations WHERE id = ${conversationId} AND channel = 'email' AND status <> 'closed' FOR UPDATE`);
       if (!target) return null;
-      if (target.user_id) return target.user_id === userId ? { id: target.id, mode: target.mode } : null;
+      if (target.user_id) {
+        if (target.user_id !== userId) return null;
+        // Bound to them already (by a later message's DMARC pass): this sign-in still counts for the mail that waited for it.
+        await tx.execute(sql`UPDATE support_conversations SET evidence = coalesce(evidence, '{}'::jsonb) || jsonb_build_object('claimedAt', now()) WHERE id = ${conversationId}`);
+        return { id: target.id, mode: target.mode };
+      }
       const { rows: [row] } = await tx.execute<{ id: string | null; mode: z.infer<typeof Mode> | null; matches: boolean }>(sql`WITH me AS (
           SELECT id, lower(email) AS email FROM nightmail_users WHERE id = ${userId} AND email_verified AND email IS NOT NULL
         ), claimed AS (
@@ -297,7 +305,8 @@ export function registerSupportConversations(app: App) {
   // ---------- stamped: the conversation's own scope (supportGate has checked and logged the call) ----------
   const Workspace = z.object({ id: z.string(), name: z.string(), role: z.enum(['owner', 'admin', 'member']) });
   const Scope = z.object({
-    conversation: z.object({ id: z.string(), channel: z.enum(['chat', 'email']), mode: Mode, verification: z.enum(['handoff', 'dmarc', 'signin', 'none']) }),
+    conversation: z.object({ id: z.string(), channel: z.enum(['chat', 'email']), mode: Mode, verification: z.enum(['handoff', 'dmarc', 'signin', 'none']),
+      signedInAt: z.string().nullable().describe('When the person last signed in to continue this email conversation (a claim), also when it was already bound to them; null otherwise.') }),
     user: z.object({ name: z.string().nullable(), email: z.string().nullable() }),
     workspace: Workspace.nullable().describe('The one workspace in scope (a chat’s, or the one an email narrowed to), while the person is still a member there; null otherwise.'),
     workspaces: z.array(Workspace).describe('What the conversation can read or choose now: a chat’s one workspace, or every workspace an email’s sender belongs to.'),
@@ -315,7 +324,7 @@ export function registerSupportConversations(app: App) {
   async function scopeOf(db: DbExecutor, conversationId: string) {
     const { rows: [row] } = await db.execute<z.infer<typeof Scope> & { workspace_id: string | null }>(sql`WITH s AS (SELECT * FROM support_conversations WHERE id = ${conversationId}),
       memberships AS (SELECT w.id, w.name, m.role FROM s JOIN workspace_members m ON m.user_id = s.user_id JOIN workspaces w ON w.id = m.workspace_id)
-      SELECT json_build_object('id', s.id, 'channel', s.channel, 'mode', s.mode, 'verification', s.verification) AS conversation,
+      SELECT json_build_object('id', s.id, 'channel', s.channel, 'mode', s.mode, 'verification', s.verification, 'signedInAt', s.evidence->>'claimedAt') AS conversation,
         (SELECT json_build_object('name', u.name, 'email', u.email) FROM nightmail_users u WHERE u.id = s.user_id) AS user,
         (SELECT json_build_object('id', id, 'name', name, 'role', role) FROM memberships WHERE id = s.workspace_id) AS workspace,
         coalesce((SELECT json_agg(json_build_object('id', id, 'name', name, 'role', role) ORDER BY name, id) FROM memberships WHERE s.workspace_id IS NULL OR s.channel = 'email' OR id = s.workspace_id), '[]') AS workspaces,
