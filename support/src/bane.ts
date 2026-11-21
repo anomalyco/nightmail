@@ -5,10 +5,11 @@ import { productName } from '../../api/src/brand.js';
 
 // Nightmail, from the support Worker's side. Two bindings to the same Nightmail Worker in the same account:
 //
-// - `BANE` → the `SupportPlatform` entrypoint (api/src/support-platform.ts, its source of truth): verify a handoff or an
-//   email sender, mint and revoke a support grant, grant-scoped GET /v1/support/* reads, and the staff inbox: mirror each
-//   conversation's transcript and state, read whether staff paused the agent, and pull and acknowledge staff replies.
-//   No token: the binding is the credential.
+// - `BANE` → the `SupportPlatform` entrypoint (api/src/support-platform.ts, its source of truth): verify a handoff,
+//   register and close a conversation, its stamped /v1/support/* requests (Nightmail derives the person from the
+//   conversation's row), and the staff inbox: mirror each conversation's transcript and state, read whether staff paused
+//   the agent, and pull and acknowledge staff replies. No token: the binding is the credential. The grant methods stay
+//   declared for conversations opened before the stamp, until their grants lapse.
 // - `BANE_API` → the default entrypoint, Nightmail's public API, as a customer of Nightmail would use it: the support@nightmail.dev
 //   inbound address's own API key (BANE_SUPPORT_INBOX_KEY, limited to that address) reads support mail and sends replies and ticket emails.
 
@@ -29,6 +30,21 @@ export type MirroredState = { subject?: string; ticket?: { id: string; type: str
 export type InboxState = { id: string; status: 'open' | 'ticketed' | 'closed'; agentState: 'active' | 'paused'; pausedBy: 'staff' | 'ticket' | null; pausedAt: string | null; queuedReplies: number };
 /** A staff reply waiting for this Worker to deliver it. */
 export type OutboxReply = { id: string; conversationId: string; channel: 'chat' | 'email'; text: string; staffName: string | null; createdAt: string };
+/** How Nightmail knows who a conversation is for: its own signed handoff, or a message it received at a support address. */
+export type ConversationEvidence = { kind: 'handoff'; token: string } | { kind: 'email'; messageId: string };
+export type Mode = 'member' | 'non_member' | 'pending_signin' | 'unverified';
+export type Verification = 'handoff' | 'dmarc' | 'signin' | 'none';
+/** A registration's answer (POST /v1/operator/support/conversations): Nightmail's decision about the conversation. */
+export type RegisteredConversation = { id: string; channel: 'chat' | 'email'; mode: Mode; verification: Verification; status: 'open' | 'ticketed' | 'closed'; workspaceId: string | null; contentShared: boolean; created: boolean };
+export type ScopeWorkspace = { id: string; name: string; role: 'owner' | 'admin' | 'member' };
+/** GET /v1/support/scope: who the conversation is for and what it can read now, read at the start of every turn. */
+export type Scope = {
+  conversation: { id: string; channel: 'chat' | 'email'; mode: Mode; verification: Verification };
+  user: { name: string | null; email: string | null };
+  workspace: ScopeWorkspace | null; workspaces: ScopeWorkspace[]; contentWorkspaceId: string | null; page: string | null;
+  /** The person lost a workspace this conversation read: end it without restating anything. */
+  shrunk: boolean;
+};
 
 /** The methods of Nightmail's SupportPlatform entrypoint, as this Worker calls them over RPC. */
 export interface SupportPlatform {
@@ -37,6 +53,12 @@ export interface SupportPlatform {
   mintGrant(body: { userId: string; ticketRef: string; reason: string; verification: 'handoff' | 'dmarc' | 'magic_link'; handoffId?: string; workspaceIds?: string[]; ttlMinutes?: number }): Promise<PlatformReply<Grant>>;
   revokeGrant(grantId: string): Promise<PlatformReply<{ id: string; revoked: true }>>;
   read<T = unknown>(path: string, grant: string): Promise<PlatformReply<T>>;
+  /** Nightmail checks the evidence itself and decides who the conversation is for (201 new, 200 repeated). */
+  registerConversation(body: { conversationId: string; evidence: ConversationEvidence }): Promise<PlatformReply<RegisteredConversation>>;
+  /** Every later request for the conversation is refused. Repeating it is harmless. */
+  closeConversation(conversationId: string): Promise<PlatformReply<{ id: string; status: 'closed'; closedAt: string }>>;
+  /** A /v1/support GET, or POST /v1/support/scope or notes, for one registered conversation: Nightmail stamps the person. */
+  request<T = unknown>(conversationId: string, method: string, path: string, body?: unknown): Promise<PlatformReply<T>>;
   /** A staff sign-in token from Nightmail's operator check: still an active operator? (staff.ts) */
   verifyStaff(token: string): Promise<{ ok: true; staff: { userId: string; email: string; role: string }; jti: string; expiresAt: string } | { ok: false; code: 'STAFF_INVALID' | 'STAFF_EXPIRED' | 'NOT_OPERATOR' }>;
   // The staff inbox (api/src/support-inbox.ts). A conversation Nightmail doesn't know (not registered) answers 404.

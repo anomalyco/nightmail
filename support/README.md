@@ -14,11 +14,12 @@ Each conversation (a chat from the dashboard's Help panel, or an email thread at
 ```
 dashboard Help ─ POST /v1/contact-support (Nightmail) ─▶ handoff JWS
               ─ POST /chat/start {handoff} ─▶ router ─ BANE.verifyHandoff ─▶ Nightmail SupportPlatform (service binding)
-                                                     └ DO.openChat ─ BANE.mintGrant ─▶ grant (private DO table); OpenCode boots in the background
-              ═ WebSocket /c/<conv>?token= ═▶ DO ─ OpenCode turn ─ tools ─ BANE.read(/v1/support/*, grant)
+                                                     └ DO.openChat ─ BANE.registerConversation ─▶ Nightmail binds the person; OpenCode boots in the background
+              ═ WebSocket /c/<conv>?token= ═▶ DO ─ OpenCode turn ─ tools ─ BANE.request(conv, /v1/support/*)
                                                                 └ model ─▶ Console gateway (Opus 5.5, medium)
 support@ mail ─ Nightmail route → webhook rule ───▶ POST /hooks/bane-inbound ─▶ DO inbox + alarm
                                               DO ─ BANE_API (address API key) ─ read message, reply in thread
+Nightmail ─ POST /hooks/nightmail-wake { conversationId } ─▶ DO.wake: reads Nightmail again (a claim, staff replies)
 tickets ─ D1 (typed: billing, bug, deliverability, account, abuse_report, feature_request, other)
         ─ email "[Nightmail <type>] tkt_…" to the team (Nightmail API) + the customer's follow-up thread
         ─ staff list at /staff (Nightmail operator sign-in), mark done
@@ -26,10 +27,10 @@ screenshots ─ POST /c/<conv>/attachments (chat) or email image attachments ─
             ─ shown to the model as images ─ linked from tickets (7-day signed links)
 ```
 
-- **Nightmail access** is a service binding to Nightmail's `SupportPlatform` entrypoint (`api/src/support-platform.ts`), with no token. It can verify a handoff, verify an email sender, mint and revoke a grant, and run grant-scoped `GET /v1/support/*` reads. The grant is stored only in the DO's private `support_grant` table, and tool closures add it to each read. It never reaches the model, the panel, logs or D1.
+- **Nightmail access** is a service binding to Nightmail's `SupportPlatform` entrypoint (`api/src/support-platform.ts`), with no token. It can verify a handoff, register and close a conversation, and make `/v1/support/*` requests stamped with a conversation (`request(conversationId, …)`): Nightmail derives the person from the conversation it registered, on every request, so access never expires mid-conversation and ends when they leave a workspace. The DO takes the conversation ID only from its own storage, and checks it is the object named for it; no tool argument, model output, frame or header can name a person, conversation or token. Each turn starts with `GET /v1/support/scope` (`<customer>`) and, for a member with a workspace in scope, `GET /v1/support/context` (`<account>`, kept 5 minutes). A conversation opened before this kept a grant in `_support_grant` and reads through it until it lapses.
 - **Email and tickets** go through Nightmail's public API as a normal customer would: an API key limited to the support address (`BANE_SUPPORT_INBOX_KEY`) over the `BANE_API` binding.
 - **The model** is pinned to Claude Opus 5.5 at medium effort, through Console's inference gateway (`GATEWAY_URL`, key `CONSOLE_GATEWAY_KEY`). It's pinned in the config, the agent, the session and a provider policy. A fetch guard also refuses any other model or effort. Nothing falls back. A conversation whose session began under an earlier pin is switched to the current one before its next turn. The key may only use the models Console's Controls allow for it (Anomaly's workspace, policy "Bane Support"): a model it isn't allowed answers `403 Model access is disabled`. The same fetch caches the tools and the system prompt for an hour (`cache_control.ttl`), so a chat opened after a quiet spell doesn't prefill them again.
-- **Opening a chat** costs no model call. The panel shows its own first line ("Hey, what's up? How can we help?") and takes messages at once. On a new page that line is all it shows: an earlier conversation opens only from **Continue last conversation** in its menu; `/chat/start` returns once the grant is minted, and OpenCode boots in the Durable Object in the background, ready for the first message. Our tables are named `_support_*` because OpenCode bootstraps its schema only into a database whose other tables start with `_`; a conversation from before is renamed on its next wake.
+- **Opening a chat** costs no model call. The panel shows its own first line ("Hey, what's up? How can we help?") and takes messages at once. On a new page that line is all it shows: an earlier conversation opens only from **Continue last conversation** in its menu; `/chat/start` returns once Nightmail registered the conversation, and OpenCode boots in the Durable Object in the background, ready for the first message. Our tables are named `_support_*` because OpenCode bootstraps its schema only into a database whose other tables start with `_`; a conversation from before is renamed on its next wake.
 
 ## Why OpenCode, embedded this way
 
@@ -94,11 +95,12 @@ bun run test    # builds the real bundle, then drives it in Miniflare with a fak
 The tests run the deployed bundle in Miniflare, as Console's agent tests do. `@cloudflare/vitest-pool-workers` can't load the OpenCode SDK. They cover:
 
 - opening a chat without a model call;
-- a tool turn and its projection, and that the grant never reaches the model or the panel;
+- a tool turn and its projection; every read stamped with its own conversation, whatever a tool argument names, and two conversations never reading each other's account;
 - a refund ticket and its emails;
-- the consent re-mint;
+- consent that counts only when Nightmail's scope says so;
+- a person removed from the workspace: the next turn ends the conversation without a model call;
 - the output gate;
-- the email path, from signature to DMARC to grant to reply;
+- the email path, from signature to registration to reply; a DMARC failure that waits for a sign-in, then is answered once after the claim;
 - failing closed without the gateway key;
 - image checks: type by magic bytes, EXIF/XMP/text removed for PNG, JPEG and WebP, damage and oversize refused;
 - uploads: chat token, origin, 413, 415 and the 5-image cap. The model receives the stripped bytes;
@@ -111,12 +113,13 @@ They make no network or model calls. `test/*.local.ts` scripts, which are git-ig
 
 ## Email: who gets a turn
 
-Each email conversation is bound to the first address that writes in it, and once verified, to that address's Nightmail account.
+Each email conversation is bound to the first address that writes in it. Nightmail registers every message (`registerConversation` with the message ID) and decides from the message it stored whom the conversation is for: `member`, `non_member`, `pending_signin` or `unverified`.
 
-- **Every later message is checked again.** It must come from that address, pass DMARC, and still map to the same account. Anything else goes to a conversation of its own and never touches the session, its context or its grant: another sender, a DMARC failure, or a changed account.
-- **No model turn until a sender is verified.**
-  - Without a DMARC pass, the sender gets a fixed reply with a confirm link. Follow-ups from the address wait in the open confirmation, and each later message after a confirmation needs a new one.
-  - With a DMARC pass but no account, the sender gets a fixed "no account" reply.
+- **Every later message is checked again.** It must come from that address and still verify as the same person. Anything else (another sender, a message that no longer verifies, a closed conversation) goes to a conversation of its own and never touches the session or its account.
+- **Only a member gets a model turn.**
+  - `pending_signin` and `unverified` get the same fixed reply, so it never says whether an account exists: sign in to continue (`<Nightmail>/support/continue/<conversation>`), or confirm the address. The answer waits. A claim (the person's own sign-in) wakes this Worker, which reads Nightmail's scope and answers the waiting messages once each; the next email checks again if a wake was lost. A confirmation proves the address only: the waiting messages get the `non_member` reply.
+  - `non_member` (no account, or no workspace) gets a fixed reply.
+- **Access that ends mid-conversation** (Nightmail's scope says `shrunk`): a fixed reply that the conversation ended, then it closes.
 - **Tickets from unverified senders** lead with "UNVERIFIED SENDER" and name no customer.
 - **Links in email replies** must point to Nightmail's own sites, or the reply is held.
 

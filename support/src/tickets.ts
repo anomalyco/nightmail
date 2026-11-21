@@ -13,10 +13,11 @@ export type TicketContext = {
   conversationId: string; channel: 'chat' | 'email'; customer: { userId: string | null; email: string | null; name: string | null; role: string | null; workspaces: { id: string; name: string }[] };
   threadId: string | null; costUsd: number; model: string;
   /**
-   * How the person was verified (review M3): a handoff (chat), a DMARC pass or a confirm link (email), or null. An
+   * How the person was verified (review M3): a handoff (chat); a DMARC pass, their own sign-in, or (before the stamp) a
+   * confirm link (email); or null. An
    * unverified ticket never names a customer: `customer` is empty and the email leads with "UNVERIFIED SENDER".
    */
-  verified: 'handoff' | 'dmarc' | 'magic_link' | null;
+  verified: 'handoff' | 'dmarc' | 'signin' | 'magic_link' | null;
   /** The email's DMARC verdict, for email tickets. */
   dmarc: string | null;
   /** The address that wrote, for an unverified email ticket (never presented as a customer). */

@@ -13,8 +13,8 @@ export { SupportConversation } from './conversation.js';
 export { SupportIntake, INTAKE, type Mailbox } from './intake.js';
 
 // The support Worker (support/README.md): chat starts and resumes, the conversation WebSocket, Nightmail's inbound webhook
-// for support@nightmail.dev, and the "Confirm it's me" page. Every conversation is one SupportConversation Durable Object,
-// reached only by ID from this router, never through a client-named route.
+// for support@nightmail.dev and its content-free wakes, and the "Confirm it's me" page. Every conversation is one
+// SupportConversation Durable Object, reached only by ID from this router, never through a client-named route.
 
 const CONVERSATIONS_PER_DAY = 10;
 const json = (body: unknown, status = 200, headers: HeadersInit = {}) => Response.json(body, { status, headers: { 'cache-control': 'no-store', ...headers } });
@@ -67,10 +67,12 @@ async function startChat(request: Request, env: Env): Promise<Response> {
       SELECT ?, 'chat', ?, ?, ?, ?, ?, ? WHERE (SELECT conversation_id FROM handoffs_used WHERE jti = ?) = ?`).bind(conversationId, handoff.userId, handoff.email, handoff.workspace.id, handoff.workspace.name, now, now, handoff.id, conversationId),
   ]);
   if (!claimed[1]?.meta.changes) return fail(409, 'HANDOFF_USED', 'This handoff already opened a conversation. Get a fresh one.', headers);
-  const opened = await conversation(env, conversationId).openChat({ conversationId, handoff });
+  // Nightmail registers the conversation from this same signed handoff: it binds the person and workspace, once.
+  const opened = await conversation(env, conversationId).openChat({ conversationId, handoff, token: body.handoff });
   if (!opened.ok) {
     await env.DB.prepare("UPDATE conversations SET status = 'closed', closed_at = ? WHERE id = ?").bind(Date.now(), conversationId).run();
     return opened.code === 'HANDOFF_USED' ? fail(409, 'HANDOFF_USED', 'This handoff already opened a conversation. Get a fresh one.', headers)
+      : opened.code === 'CONVERSATION_LIMIT' ? fail(429, 'RATE_LIMITED', `You have too many open support conversations. Continue an earlier one, or email ${addresses.support}.`, { ...headers, 'retry-after': '3600' }, { retryAfter: 3600 })
       : fail(503, 'SUPPORT_UNAVAILABLE', 'Support could not open your account just now. Try again in a minute.', headers);
   }
   const chat = await chatToken(env.SUPPORT_ROOT_SECRET, conversationId, handoff.userId);
@@ -90,8 +92,8 @@ async function resumeChat(request: Request, env: Env): Promise<Response> {
   if (row.user_id !== checked.handoff.userId) return fail(403, 'NOT_YOUR_CONVERSATION', 'This conversation belongs to someone else.', headers);
   const claimed = await env.DB.prepare('INSERT INTO handoffs_used (jti, conversation_id, used_at) VALUES (?, ?, ?) ON CONFLICT (jti) DO NOTHING').bind(checked.handoff.id, body.conversationId, Date.now()).run();
   if (!claimed.meta.changes) return fail(409, 'HANDOFF_USED', 'This handoff was already used. Get a fresh one.', headers);
-  const renewed = await conversation(env, body.conversationId).renewGrant({ handoff: checked.handoff });
-  if (!renewed.ok) return fail(503, 'SUPPORT_UNAVAILABLE', 'Support could not renew access just now. Try again in a minute.', headers);
+  // Only a new chat token: account access never expires mid-conversation (Nightmail reads it from the conversation on
+  // every request), so there is nothing to renew.
   const chat = await chatToken(env.SUPPORT_ROOT_SECRET, body.conversationId, checked.handoff.userId);
   return json({ conversationId: body.conversationId, chatToken: chat.token, socketUrl: socketUrl(env, body.conversationId, chat.token), expiresAt: chat.expiresAt }, 200, headers);
 }
@@ -183,9 +185,10 @@ async function inbound(request: Request, env: Env): Promise<Response> {
 }
 
 /**
- * Nightmail's wake after a staff reply (api/src/support-inbox.ts): `{ conversationId }` and nothing else, unsigned. It only
- * makes that conversation pull its staff replies from Nightmail over the binding now instead of at the next sweep, so it
- * answers 202 whatever the ID (an unknown or closed conversation does nothing) and is rate-limited.
+ * Nightmail's wake after a staff reply or a claim (api/src/support-inbox.ts, support-conversations.ts): `{ conversationId }`
+ * and nothing else, unsigned. It only makes that conversation ask Nightmail again now instead of at the next sweep or
+ * email (pull its staff replies; answer what waited for the person to sign in), so it answers 202 whatever the ID (an
+ * unknown or closed conversation does nothing) and is rate-limited.
  */
 async function wake(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const accepted = new Response(null, { status: 202 });
@@ -229,7 +232,7 @@ async function confirm(request: Request, env: Env, token: string): Promise<Respo
   if (request.method === 'GET') {
     // Nothing from the email (its subject or text) is shown here: the sender may not be who they say (review M4).
     if (!(await conversation(env, read.conversationId).confirmationPending(read.addressHash))) return page('Link expired', `<h1>This link has expired</h1><p>Sign in to ${productName} and press Help instead.</p>`, 410);
-    return page('Confirm it’s you', `<h1>Confirm it’s you</h1><p>${productName} support will read your ${productName} account to answer the email you sent to ${productName} support. Only press this if you wrote to ${productName} support yourself.</p>
+    return page('Confirm it’s you', `<h1>Confirm it’s you</h1><p>Confirm that you wrote to ${productName} support from this address, and we’ll reply to your email. To get help with your ${productName} account, sign in and press Help instead. Only press this if you wrote to ${productName} support yourself.</p>
 <form method="post"><button type="submit">Confirm it’s me</button></form><p class="muted">Didn’t write to ${productName} support? Close this page; nothing happens.</p>`);
   }
   const used = await env.DB.prepare('INSERT INTO confirmations (nonce, conversation_id, used_at) VALUES (?, ?, ?) ON CONFLICT (nonce) DO NOTHING').bind(read.nonce, read.conversationId, Date.now()).run();

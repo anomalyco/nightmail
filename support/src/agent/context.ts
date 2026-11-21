@@ -4,7 +4,7 @@
 export type Customer = {
   channel: 'chat' | 'email'; userId: string | null; name: string | null; email: string | null; role: string | null;
   workspace: { id: string; name: string } | null; workspaces: { id: string; name: string; role: string }[];
-  verified: 'handoff' | 'dmarc' | 'magic_link' | null; contentAccess: boolean; page: string | null;
+  verified: 'handoff' | 'dmarc' | 'signin' | 'magic_link' | null; contentAccess: boolean; page: string | null;
 };
 
 const esc = (s: unknown) => String(s ?? '').replace(/[<>]/g, '').slice(0, 200);

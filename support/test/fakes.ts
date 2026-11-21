@@ -11,7 +11,7 @@ const EMAIL_PNG = Buffer.from(pngWithMetadata(80, 40)).toString('base64');
 export const FAKE_BANE = `
 import { WorkerEntrypoint } from 'cloudflare:workers';
 const calls = [];
-const used = new Set();
+const used = new Map(); // handoff id → the conversation it registered (or '' when a grant used it)
 const shared = new Set();
 let grants = 0;
 // The staff inbox (api/src/support-inbox.ts), in memory: a conversation exists once a test registers it (/__inbox), like
@@ -21,18 +21,49 @@ let inboxDown = false;
 const missing = () => ok({ error: { code: 'NOT_FOUND' } }, 404), unavailable = () => ok({ error: { code: 'UNAVAILABLE' } }, 503);
 const inboxState = (id, c) => ({ id, status: c.status, agentState: c.paused ? 'paused' : 'active', pausedBy: c.paused || null, pausedAt: c.paused ? new Date().toISOString() : null, queuedReplies: c.outbox.filter(r => !r.delivery).length });
 const ok = (body, status = 200) => ({ status, body, requestId: 'req_' + '0'.repeat(32), retryAfter: null });
+const refuse = (status, code) => ok({ error: { code, message: code } }, status);
+// People and workspaces, as Nightmail keeps them: a handoff's user belongs to its workspace, and every @acme.test address
+// is a user in Acme Prod (Ada, plus the cases' rita@, dora@, victim@ …). Removing a membership is a test hook.
+const WORKSPACES = { ws_acme: 'Acme Prod', ws_other: 'Other' };
+const members = new Map(); // userId → Map(workspaceId → role)
+const people = new Map([['usr_ada', { name: 'Ada Lovelace', email: 'ada@acme.test' }]]);
+const person = userId => people.get(userId) ?? { name: null, email: null };
+const known = (userId, email) => { if (!people.has(userId)) people.set(userId, { name: userId[4].toUpperCase() + userId.slice(5), email }); };
+const join = (userId, workspaceId) => { if (!members.has(userId)) members.set(userId, new Map()); if (!members.get(userId).has(workspaceId) && !members.get(userId).has('!' + workspaceId)) members.get(userId).set(workspaceId, 'owner'); };
+const memberships = userId => [...(members.get(userId) ?? new Map())].filter(([id]) => !id.startsWith('!')).map(([id, role]) => ({ id, name: WORKSPACES[id] ?? id, role }));
 const handoff = token => {
   // Test handoffs are "handoff:<id>:<userId>:<workspaceId>:<share>".
   const [kind, id, userId, workspaceId, share] = token.split(':');
   if (kind !== 'handoff') return null;
-  return { id, kind: 'support', userId, email: userId === 'usr_ada' ? 'ada@acme.test' : 'bo@other.test', role: 'owner', workspace: { id: workspaceId, name: workspaceId === 'ws_acme' ? 'Acme Prod' : 'Other' },
+  known(userId, userId.slice(4) + '@other.test');
+  return { id, kind: 'support', userId, email: person(userId).email, role: 'owner', workspace: { id: workspaceId, name: WORKSPACES[workspaceId] ?? workspaceId },
     page: '/campaigns', requestIds: [], shareContent: share === 'share', issuedAt: new Date().toISOString(), expiresAt: new Date(Date.now() + 600000).toISOString(), usedAt: used.has(id) ? new Date().toISOString() : null, grantId: null, message: null };
 };
+// Registered conversations (api/src/support-conversations.ts): Nightmail decides whom each is for, and every stamped
+// request answers for that person only, whatever the request says.
+const conversations = new Map();
+const view = (c, created) => ({ id: c.id, channel: c.channel, mode: c.mode, verification: c.verification, status: c.closed ? 'closed' : 'open', workspaceId: c.workspaceId, contentShared: !!c.content, created });
+const inScope = c => memberships(c.userId).filter(w => !c.workspaceId || w.id === c.workspaceId);
+function scopeOf(c) {
+  const all = memberships(c.userId), workspace = c.workspaceId ? all.find(w => w.id === c.workspaceId) ?? null : null;
+  return { conversation: { id: c.id, channel: c.channel, mode: c.mode, verification: c.verification }, user: person(c.userId),
+    workspace, workspaces: c.channel === 'email' || !c.workspaceId ? all : all.filter(w => w.id === c.workspaceId),
+    contentWorkspaceId: all.some(w => w.id === c.content) ? c.content : null, page: c.page, shrunk: [...c.read].some(id => !all.some(w => w.id === id)) };
+}
+/** An email's evidence as Nightmail reads it from the message it stored: its From and DMARC verdict. */
+function emailEvidence(messageId) {
+  const { from, dmarc } = message(messageId), sender = from.toLowerCase(), local = sender.endsWith('@acme.test') ? sender.split('@')[0] : null;
+  const userId = local ? (local === 'ada' ? 'usr_ada' : 'usr_' + local) : null, verified = dmarc === 'PASS';
+  if (userId) { known(userId, sender); join(userId, 'ws_acme'); }
+  return { sender, userId: verified ? userId : null, verification: verified ? 'dmarc' : 'none',
+    mode: verified ? (userId && memberships(userId).length ? 'member' : 'non_member') : userId ? 'pending_signin' : 'unverified' };
+}
+// Per-person reads (the subject is the conversation's person, never anything in the request) and fixed ones.
+const contextOf = c => ({ grant: { id: 'sgr_x', ticketRef: 'conv' }, user: { id: c.userId, ...person(c.userId) },
+  workspaces: inScope(c).map(w => ({ ...w, sending: { kind: 'shared', region: 'us-east-2', paused: false }, counts: { domains: 1, campaigns: 3 } })),
+  domains: inScope(c).map(w => ({ workspaceId: w.id, id: 'dom_' + w.id, name: 'news.' + w.id.slice(3) + '.test', sending: 'verified', dmarc: 'missing' })), recentFailures: { sends: [], bounces: [], webhookDeliveries: [] },
+  standing: [], recentActivity: [], openEnforcement: [], handoff: null, links: { requestIds: [] } });
 const READS = {
-  '/v1/support/context': { grant: { id: 'sgr_x', ticketRef: 'conv' }, user: { id: 'usr_ada', name: 'Ada Lovelace', email: 'ada@acme.test' },
-    workspaces: [{ id: 'ws_acme', name: 'Acme Prod', role: 'owner', sending: { kind: 'shared', region: 'us-east-2', paused: false }, counts: { domains: 1, campaigns: 3 } }],
-    domains: [{ workspaceId: 'ws_acme', id: 'dom_1', name: 'news.acme.test', sending: 'verified', dmarc: 'missing' }], recentFailures: { sends: [], bounces: [], webhookDeliveries: [] },
-    standing: [], recentActivity: [], openEnforcement: [], handoff: null, links: { requestIds: [] } },
   '/v1/support/campaigns': { data: [{ id: 'cmp_1', name: 'Early access', state: 'sent', launchedAt: new Date(Date.now() - 86400000).toISOString(), tracking: true, audience: { size: 2160 }, pauseReason: null,
     stats: { counts: { total: 2160, byStatus: { delivered: 2140 } }, totals: { accepted: 2152, delivered: 2140, opened: 899, clicked: 64, bounced: 12, complained: 0 }, rates: {} } }] },
   '/v1/support/standing': { data: [{ workspaceId: 'ws_acme', standing: { step: 'normal', score: 93, dailyLimit: 10000 }, last24h: { delivered: 1980, bounced: 20 } }] },
@@ -41,6 +72,61 @@ const READS = {
   '/v1/support/deliverability/bounces': { data: [{ provider: 'gmail', type: 'bounce', count: 61, diagnostic: 'smtp; 550 5.1.1 user unknown at someone@gmail.com from 203.0.113.9' }], findings: [{ severity: 'serious', code: 'HARD_BOUNCES', message: '6.1% hard bounces at Gmail' }], grant: { token: 'never-shown' }, operatorId: 'op_secret' },
 };
 export class SupportPlatform extends WorkerEntrypoint {
+  async registerConversation({ conversationId, evidence }) {
+    calls.push(['registerConversation', conversationId, evidence]);
+    const existing = conversations.get(conversationId);
+    if (evidence.kind === 'handoff') {
+      const h = handoff(evidence.token);
+      if (!h) return refuse(422, 'HANDOFF_INVALID');
+      if (used.has(h.id)) return used.get(h.id) === conversationId ? ok(view(existing, false)) : refuse(409, 'SUPPORT_HANDOFF_USED');
+      if (existing) return refuse(409, 'SUPPORT_CONVERSATION_EXISTS');
+      used.set(h.id, conversationId);
+      join(h.userId, h.workspace.id);
+      const c = { id: conversationId, channel: 'chat', userId: h.userId, sender: null, mode: 'member', verification: 'handoff', workspaceId: h.workspace.id, content: h.shareContent ? h.workspace.id : null, closed: false, read: new Set(), page: h.page };
+      conversations.set(conversationId, c);
+      return ok(view(c, true), 201);
+    }
+    const found = emailEvidence(evidence.messageId);
+    if (!existing) {
+      const c = { id: conversationId, channel: 'email', userId: found.userId, sender: found.sender, mode: found.mode, verification: found.verification, workspaceId: null, content: null, closed: false, read: new Set(), page: null };
+      conversations.set(conversationId, c);
+      return ok(view(c, true), 201);
+    }
+    if (existing.channel !== 'email') return refuse(409, 'SUPPORT_CONVERSATION_EXISTS');
+    if (existing.closed) return refuse(409, 'SUPPORT_CONVERSATION_CLOSED');
+    if (existing.sender !== found.sender) return refuse(409, 'SUPPORT_CONVERSATION_SENDER');
+    if (existing.userId) return found.userId === existing.userId ? ok(view(existing, false)) : refuse(409, 'SUPPORT_CONVERSATION_MISMATCH');
+    Object.assign(existing, { userId: found.userId, mode: found.mode, verification: found.verification });
+    return ok(view(existing, false));
+  }
+  async closeConversation(id) {
+    calls.push(['closeConversation', id]);
+    const c = conversations.get(id);
+    if (!c) return refuse(404, 'NOT_FOUND');
+    c.closed = true;
+    return ok({ id, status: 'closed', closedAt: new Date().toISOString() });
+  }
+  /** A stamped request: [1] the path, [2] the conversation, as the log records it. */
+  async request(conversationId, method, path, body) {
+    calls.push(['request', path, conversationId, method, body ?? null]);
+    const c = conversations.get(conversationId);
+    if (!c || c.closed || !c.userId) return refuse(403, 'SUPPORT_GRANT_REQUIRED');
+    const url = new URL(path, 'https://internal.invalid');
+    if (url.pathname === '/v1/support/scope') {
+      if (method === 'POST') {
+        if (c.channel === 'chat' && body?.workspaceId !== c.workspaceId) return refuse(409, 'SUPPORT_SCOPE_FIXED');
+        if (!memberships(c.userId).some(w => w.id === body?.workspaceId)) return refuse(404, 'NOT_FOUND');
+        c.workspaceId = body.workspaceId;
+      }
+      return ok(scopeOf(c));
+    }
+    if (method !== 'GET') return refuse(403, 'SUPPORT_READ_ONLY');
+    const filter = url.searchParams.get('workspaceId'), scope = inScope(c);
+    if (filter && !scope.some(w => w.id === filter)) return refuse(404, 'NOT_FOUND');
+    for (const w of scope) if (!filter || w.id === filter) c.read.add(w.id);
+    const answer = url.pathname === '/v1/support/context' ? contextOf(c) : READS[url.pathname];
+    return answer ? ok(answer) : refuse(404, 'NOT_FOUND');
+  }
   async verifyHandoff(token) { calls.push(['verifyHandoff', token]); const h = handoff(token); if (h?.shareContent) shared.add(h.id); return h ? { ok: true, handoff: h } : { ok: false, code: 'HANDOFF_INVALID' }; }
   async verifyEmail(body) {
     calls.push(['verifyEmail', body]);
@@ -50,7 +136,7 @@ export class SupportPlatform extends WorkerEntrypoint {
   }
   async mintGrant(body) {
     calls.push(['mintGrant', body]);
-    if (body.handoffId) { if (used.has(body.handoffId)) return ok({ error: { code: 'SUPPORT_HANDOFF_USED' } }, 409); used.add(body.handoffId); }
+    if (body.handoffId) { if (used.has(body.handoffId)) return ok({ error: { code: 'SUPPORT_HANDOFF_USED' } }, 409); used.set(body.handoffId, ''); }
     grants += 1;
     return ok({ id: 'sgr_' + String(grants).padStart(32, '0'), token: '${GRANT_TOKEN}', userId: body.userId, workspaceIds: body.workspaceIds ?? ['ws_acme'], ticketRef: body.ticketRef,
       contentShared: shared.has(body.handoffId), contentWorkspaceId: shared.has(body.handoffId) ? 'ws_acme' : null, expiresAt: new Date(Date.now() + 7200000).toISOString() }, 201);
@@ -130,6 +216,15 @@ export default {
       if (c && reply) { c.outbox.push({ ...reply, createdAt: new Date().toISOString(), delivery: null }); c.paused = 'staff'; }
       return new Response(null, { status: 204 });
     }
+    // Test hooks: the person signs in and claims an email conversation; a membership ends; content access is allowed.
+    if (url.pathname === '/__claim') {
+      const c = conversations.get((await request.json()).conversationId), userId = 'usr_' + c.sender.split('@')[0];
+      Object.assign(c, { userId, mode: memberships(userId).length ? 'member' : 'non_member', verification: 'signin' });
+      return Response.json(view(c, false));
+    }
+    if (url.pathname === '/__remove') { const { userId, workspaceId } = await request.json(); members.get(userId)?.delete(workspaceId); members.get(userId)?.set('!' + workspaceId, 'gone'); return new Response(null, { status: 204 }); }
+    if (url.pathname === '/__content') { const c = conversations.get((await request.json()).conversationId); c.content = c.workspaceId; return new Response(null, { status: 204 }); }
+    if (url.pathname === '/__conversation') { const c = conversations.get(url.searchParams.get('id')); return Response.json(c ? { ...c, read: [...c.read] } : null); }
     // An outage refuses the request; a lost one (lost: true) carries it out, then the answer never arrives (the Worker
     // sees the error status, as when a connection drops after Nightmail committed).
     if (url.pathname === '/__outage') {
@@ -184,6 +279,9 @@ const MESSAGES = {
   // The work ledger's cases.
   msg_rate_1: ['thr_rate_1', 'rate@else.test'], msg_rate_2: ['thr_rate_2', 'rate@else.test'],
   msg_legal_late_1: ['thr_legal_late', 'counsel@late.test', 'PASS', 'legal@dev.bane.mx', 'Preservation', 'Please preserve the records.'],
+  // The stamp's cases: a member who loses the workspace, a DMARC failure that waits for a sign-in, conversations from before.
+  msg_shrink_1: ['thr_shrink', 'dee@acme.test'], msg_shrink_2: ['thr_shrink', 'dee@acme.test'], msg_claim_1: ['thr_claim', 'sam@acme.test', 'FAIL'],
+  msg_legacy_grant: ['thr_legacy_d'], msg_legacy_lapsed: ['thr_legacy_e'],
 };
 function message(id) {
   const [threadId = 'thr_other', from = 'ada@acme.test', dmarc = 'PASS', to = 'support@dev.bane.mx', subject = 'Bounces from Gmail?', body = 'Why are Gmail bounces up this week?'] = (MESSAGES[id] ?? []).map(v => v ?? undefined);
@@ -275,6 +373,13 @@ export async function fakeGateway(request: Request): Promise<Response> {
       reproSteps: ['Open Webhooks', 'Press Send test on any endpoint'], affected: 'POST /v1/webhooks/{id}/test', requestIds: ['req_' + 'a'.repeat(32), 'req_' + 'b'.repeat(32)], errorCodes: ['500 INTERNAL_ERROR'],
       expected: 'A test delivery', actual: 'HTTP 500' });
     return text(['That’s a Nightmail bug: I’ve passed it to the Nightmail team.']);
+  }
+  if (said.includes('someone else')) {
+    // Arguments a tool never declares (another user, conversation, grant), then another customer's workspace.
+    const used = (body?.messages ?? []).slice((body?.messages ?? []).indexOf(lastUser) + 1).flatMap((m: any) => blocks(m)).filter((b: any) => b.type === 'tool_use').length;
+    if (used === 0) return toolUse('toolu_o1', 'bounce_reasons', { provider: 'gmail', userId: 'usr_bo', conversationId: 'conv_' + 'b'.repeat(26), grant: 'nm_support_' + '9'.repeat(64), token: 'tok_other' });
+    if (used === 1) return toolUse('toolu_o2', 'list_domains', { workspaceId: 'ws_other' });
+    return text(['I can only look at your own account.']);
   }
   if (said.includes('A support email arrived')) return answered ? text(['Hi Ada,\n\nGmail hard-bounced 61 of 1,000 sends this week.\n\nNightmail support (AI)']) : toolUse('toolu_e', 'bounce_reasons', { provider: 'gmail' });
   if (said.includes('Gmail bounces')) return answered ? text(['Gmail hard-bounced 61 of 1,000 sends (6.1%). Here’s what I’d do:\n\n1. Remove the import from Oct 25.']) : toolUse('toolu_b', 'bounce_reasons', { provider: 'gmail', days: 7 });

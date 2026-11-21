@@ -7,7 +7,8 @@ import { control, FAKE_BANE, fakeGateway, GRANT_TOKEN, recorded } from './fakes.
 import { gate, LINK_ORIGINS } from '../src/gate.js';
 import { ticketEmail } from '../src/tickets.js';
 import { project, toolResult } from '../src/agent/projection.js';
-import { chatToken, confirmToken, readChatToken, readConfirmToken } from '../src/tokens.js';
+import { TOOLS, type ToolHost } from '../src/agent/tools.js';
+import { addressHash, chatToken, confirmToken, readChatToken, readConfirmToken } from '../src/tokens.js';
 import { cleanImage, ImageRejected } from '../src/image.js';
 import { jpegWithMetadata, pngWithMetadata, SECRET_TEXT, webpWithMetadata } from './images.js';
 
@@ -101,11 +102,18 @@ return [
     pendingSender: 'pat@acme.test', confirmSentAt: now - 60000 }, [['msg_legacy_waiting', 'awaiting_confirmation', 1]]],
   ['conv_legacy_c', { ...base, threadId: 'thr_legacy_c', userId: 'usr_ada', email: 'ada@acme.test', name: 'Ada Lovelace', role: 'owner', verified: 'dmarc', status: 'closed', closedAt: now - 86400000,
     workspace: { id: 'ws_acme', name: 'Acme Prod' }, workspaces: [{ id: 'ws_acme', name: 'Acme Prod', role: 'owner' }] }, [['msg_legacy_gave_up', 'failed', 6]]],
+  // Opened before the stamp, each with a confirmed message to answer: one grant still live, one lapsed.
+  ...[['d', 'msg_legacy_grant', 3600000], ['e', 'msg_legacy_lapsed', -60000]].map(([x, id, left]) => ['conv_legacy_' + x, { ...base, threadId: 'thr_legacy_' + x, userId: 'usr_ada', email: 'ada@acme.test', name: 'Ada Lovelace', role: 'owner', verified: 'dmarc',
+    workspace: { id: 'ws_acme', name: 'Acme Prod' }, workspaces: [{ id: 'ws_acme', name: 'Acme Prod', role: 'owner' }] }, [[id, 'confirmed', 1]], { expiresAt: now + left }]),
 ]; };
 export class SupportConversation extends Conversation {
   constructor(ctx, env) {
-    for (const [name, meta, rows] of legacy(Date.now())) {
+    for (const [name, meta, rows, grant] of legacy(Date.now())) {
       if (!ctx.id.equals(env.CONVERSATION.idFromName(name)) || ctx.storage.sql.exec("SELECT name FROM sqlite_master WHERE name='_support_meta'").toArray().length) continue;
+      if (grant) {
+        ctx.storage.sql.exec('CREATE TABLE _support_grant (id INTEGER PRIMARY KEY CHECK (id = 1), grant_id TEXT NOT NULL, token TEXT NOT NULL, expires_at INTEGER NOT NULL, workspace_ids TEXT NOT NULL, content_workspace_id TEXT)');
+        ctx.storage.sql.exec('INSERT INTO _support_grant VALUES (1, ?, ?, ?, ?, NULL)', 'sgr_' + '1'.repeat(32), '${GRANT_TOKEN}', grant.expiresAt, '["ws_acme"]');
+      }
       ctx.storage.sql.exec('CREATE TABLE _support_meta (id INTEGER PRIMARY KEY CHECK (id = 1), value TEXT NOT NULL)');
       ctx.storage.sql.exec('INSERT INTO _support_meta VALUES (1, ?)', JSON.stringify({ conversationId: name, ...meta }));
       ctx.storage.sql.exec("CREATE TABLE _support_inbox (message_id TEXT PRIMARY KEY, thread_id TEXT NOT NULL, delivery_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'new', attempts INTEGER NOT NULL DEFAULT 0, received_at INTEGER NOT NULL, subject TEXT)");
@@ -200,11 +208,13 @@ const post = (path: string, body: unknown, headers: Record<string, string> = {})
     .then(async r => ({ status: r.status, body: await r.json().catch(() => null) as any, headers: r.headers }));
 const fakeCalls = async (instance: Miniflare = mf) => (await (await (await instance.getWorker('fake-bane')).fetch('http://fake-bane/__calls')).json()) as any[];
 let handoffs = 0;
-const handoff = (user = 'usr_ada', share = false) => `handoff:sho_${String(++handoffs).padStart(32, '0')}:${user}:ws_acme:${share ? 'share' : 'no'}`;
+const handoff = (user = 'usr_ada', share = false, workspace = 'ws_acme') => `handoff:sho_${String(++handoffs).padStart(32, '0')}:${user}:${workspace}:${share ? 'share' : 'no'}`;
+/** A test hook on the fake Nightmail (fakes.ts): a claim, a membership that ends, content access allowed. */
+const fakeHook = async (path: string, body: unknown, instance: Miniflare = mf) => (await instance.getWorker('fake-bane')).fetch(`http://fake-bane${path}`, { method: 'POST', body: JSON.stringify(body) });
 
 /** A live socket: collects frames and waits for one matching a predicate. */
-async function connect(socketUrl: string) {
-  const response = await mf.dispatchFetch(socketUrl.replace('wss:', 'https:'), { headers: { upgrade: 'websocket', origin: ORIGIN } } as never);
+async function connect(socketUrl: string, instance: Miniflare = mf) {
+  const response = await instance.dispatchFetch(socketUrl.replace('wss:', 'https:'), { headers: { upgrade: 'websocket', origin: ORIGIN } } as never);
   assert.equal(response.status, 101);
   const ws = (response as unknown as { webSocket: WebSocket & { accept(): void } }).webSocket;
   ws.accept();
@@ -222,6 +232,15 @@ async function connect(socketUrl: string) {
   });
   return { ws, frames, until, send: (m: unknown) => ws.send(JSON.stringify(m)) };
 }
+/** A chat started and connected on that instance. */
+async function chatIn(instance: Miniflare = mf, token = handoff()) {
+  const start = await instance.dispatchFetch(`${SUPPORT}/chat/start`, { method: 'POST', headers: { 'content-type': 'application/json', origin: ORIGIN }, body: JSON.stringify({ handoff: token }) });
+  const started = await start.json() as any;
+  assert.equal(start.status, 200, JSON.stringify(started));
+  const chat = await connect(started.socketUrl, instance);
+  await chat.until(f => f.type === 'history');
+  return { ...chat, id: started.conversationId as string };
+}
 
 /** Nightmail's inbound webhook for one message, signed with the test secret (support@, or the intake addresses). */
 function signedHook(messageId: string, threadId: string, from = 'ada@acme.test', options: { to?: string; intake?: boolean; instance?: Miniflare; recipients?: string[] } = {}) {
@@ -230,8 +249,10 @@ function signedHook(messageId: string, threadId: string, from = 'ada@acme.test',
   const signature = `v1,${createHmac('sha256', Buffer.from(secret.slice(6), 'base64')).update(`${id}.${ts}.${body}`).digest('base64')}`;
   return (options.instance ?? mf).dispatchFetch(`${SUPPORT}/hooks/${options.intake ? 'bane-intake' : 'bane-inbound'}`, { method: 'POST', body, headers: { 'webhook-id': id, 'webhook-timestamp': ts, 'webhook-signature': signature } });
 }
-const CONFIRM_TEMPLATE = /^Hi,\n\nThanks for writing to Nightmail support\. Before I can look at a Nightmail account, I need to confirm that this email came from you\. Open this link and press Confirm \(it works once, within 24 hours\):\n\nhttps:\/\/support\.dev\.bane\.mx\/confirm\/\S+\n\nOr sign in to Nightmail and press Help\.\n\nIf you didn't write to Nightmail support, ignore this email\.\n\nNightmail support \(AI\)$/;
-const NO_ACCOUNT = 'Hi,\n\nThanks for writing to Nightmail support. I couldn’t find a Nightmail account for this email address, so I can’t look anything up. Please write from the address you sign in to Nightmail with, or sign in and press Help.\n\nNightmail support (AI)';
+// Pending sign-in and unverified alike (the same text either way): sign in to continue, or confirm the address.
+const CONFIRM_TEMPLATE = /^Hi,\n\nThanks for writing to Nightmail support\. I can only look at a Nightmail account once I know this email came from its owner\.\n\nTo continue, sign in to Nightmail:\n\nhttps:\/\/dev\.bane\.mx\/support\/continue\/conv_[a-z2-7]{26}\n\nOr confirm this address instead \(the link works once, within 24 hours\):\n\nhttps:\/\/support\.dev\.bane\.mx\/confirm\/\S+\n\nIf you didn't write to Nightmail support, ignore this email\.\n\nNightmail support \(AI\)$/;
+const NO_ACCOUNT = 'Hi,\n\nThanks for writing to Nightmail support. I can’t look at a Nightmail account from this email. Sign in to Nightmail and press Help, or write from the address you sign in with.\n\nNightmail support (AI)';
+const ACCESS_CHANGED = 'Hi,\n\nThanks for writing to Nightmail support. This conversation has ended because your access to a Nightmail workspace changed. Write to us again to start a new one.\n\nNightmail support (AI)';
 // The replies Nightmail delivered (a refused one, such as a 409, never reaches the customer, and a replay sends nothing new).
 const replies = async (thread: string, instance?: Miniflare) => (await fakeCalls(instance)).filter(c => c[0] === 'api' && c[2] === `/v1/inbound/threads/${thread}/reply` && c[6] < 300 && !c[7]);
 async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): Promise<T | undefined> {
@@ -257,7 +278,7 @@ describe('support Worker', () => {
     }
   });
 
-  test('a chat: opening costs no model call, the agent answers with a tool, and the grant never leaves the Durable Object', async () => {
+  test('a chat: opening costs no model call or account read, the agent answers with a stamped tool read, and nothing is minted', async () => {
     const token = handoff();
     const started = await post('/chat/start', { handoff: token });
     assert.equal(started.status, 200, JSON.stringify(started.body));
@@ -279,6 +300,7 @@ describe('support Worker', () => {
     await new Promise(r => setTimeout(r, 500));
     assert.equal(recorded.length, before, 'No model call when the chat opens.');
     assert.ok(!chat.frames.some(f => f.type === 'message.start' || f.type === 'status'), chat.frames.map(f => f.type).join());
+    assert.ok(!(await fakeCalls()).some(c => c[0] === 'request' && c[2] === started.body.conversationId), 'Opening Help reads nothing (no “support viewed” entry).');
 
     chat.send({ type: 'user.message', clientMessageId: 'c1', text: 'Why are Gmail bounces up?' });
     chat.send({ type: 'user.message', clientMessageId: 'c1', text: 'Why are Gmail bounces up?' });
@@ -295,6 +317,7 @@ describe('support Worker', () => {
     assert.ok(tools.includes('bounce_reasons') && tools.includes('file_ticket') && !tools.some((n: string) => ['bash', 'read', 'edit', 'write', 'skill', 'task', 'webfetch', 'execute'].includes(n)), tools.join());
     const system = JSON.stringify(firstRequest.body.system);
     assert.ok(system.includes('Acme Prod') && system.includes('How Nightmail support writes'), 'The customer block and VOICE.md reach the system prompt.');
+    assert.match(system, /<account read=\\"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z\\">/, 'The account summary read at the turn’s start follows <customer>.');
     assert.ok(!system.includes('<env>') && !system.includes('<context>'), 'No host filesystem context and no greeting bundle.');
     // The static prefix (tools, system prompt) is cached for an hour; the customer block and the messages for five minutes.
     assert.deepEqual([firstRequest.body.tools.at(-1).cache_control, firstRequest.body.system[0].cache_control, firstRequest.body.system[1].cache_control],
@@ -312,9 +335,13 @@ describe('support Worker', () => {
     // The grant token is in no model request and no frame.
     assert.ok(!recorded.some(r => JSON.stringify(r).includes(GRANT_TOKEN)), 'The grant never reaches the model.');
     assert.ok(!chat.frames.some(f => JSON.stringify(f).includes(GRANT_TOKEN) || JSON.stringify(f).includes('bane_support_')), 'The grant never reaches the panel.');
-    const calls = await fakeCalls();
-    assert.ok(calls.some(c => c[0] === 'read' && c[1].startsWith('/v1/support/deliverability/bounces?') && c[1].includes('workspaceId=ws_acme') && c[1].includes('provider=gmail') && c[2] === 'GRANT'));
-    assert.ok(calls.some(c => c[0] === 'mintGrant' && c[1].verification === 'handoff' && c[1].ticketRef === started.body.conversationId && c[1].ttlMinutes === 120));
+    const calls = await fakeCalls(), id = started.body.conversationId;
+    // Nightmail registered the chat from the same handoff; every read is stamped with this conversation, in order: the
+    // scope, the account summary, then the tool.
+    assert.deepEqual(calls.find(c => c[0] === 'registerConversation' && c[1] === id)?.[2], { kind: 'handoff', token });
+    assert.deepEqual(calls.filter(c => c[0] === 'request' && c[2] === id).slice(0, 2).map(c => [c[3], c[1]]), [['GET', '/v1/support/scope'], ['GET', '/v1/support/context?workspaceId=ws_acme']]);
+    assert.ok(calls.some(c => c[0] === 'request' && c[2] === id && c[1].startsWith('/v1/support/deliverability/bounces?') && c[1].includes('workspaceId=ws_acme') && c[1].includes('provider=gmail')));
+    assert.ok(!calls.some(c => ['mintGrant', 'read', 'revokeGrant'].includes(c[0])), 'No grant is minted or read.');
     // Reconnecting replays the transcript.
     chat.ws.close();
     const again = await connect(started.body.socketUrl);
@@ -354,24 +381,114 @@ describe('support Worker', () => {
     chat.ws.close();
   }, 180_000);
 
-  test('content consent: the agent asks, the panel allows with a fresh handoff, the grant is re-minted', async () => {
-    const started = await post('/chat/start', { handoff: handoff() });
-    const chat = await connect(started.body.socketUrl);
-    await chat.until(f => f.type === 'history');
-    chat.send({ type: 'user.message', clientMessageId: 'k1', text: 'Can you look at the content of my promo?' });
-    const consent = await chat.until(f => f.type === 'consent.request', 60_000);
-    assert.match(consent.requestId, /^cns_/);
-    assert.deepEqual([consent.workspace, consent.why], [{ id: 'ws_acme', name: 'Acme Prod' }, 'To check why the screen rejected your promo, I need to read its HTML.']);
-    await chat.until(f => f.type === 'message.end' && f.text?.includes('asked for access'), 60_000);
-    const mints = (await fakeCalls()).filter(c => c[0] === 'mintGrant').length;
-    chat.send({ type: 'consent.respond', requestId: consent.requestId, decision: 'allow', handoff: handoff('usr_ada', true) });
-    const resolved = await chat.until(f => f.type === 'consent.resolved');
-    assert.deepEqual([resolved.requestId, resolved.decision], [consent.requestId, 'allow']);
+  test('consent counts only when Nightmail’s scope says so, never on the frame', async () => {
+    const chat = await chatIn();
+    const ask = async (n: number) => {
+      chat.send({ type: 'user.message', clientMessageId: `k${n}`, text: 'Can you look at the content of my promo?' });
+      const consent = await chat.until(f => f.type === 'consent.request' && !chat.frames.some(r => r.type === 'consent.resolved' && r.requestId === f.requestId), 60_000);
+      await chat.until(f => f.type === 'message.end' && f.seq > consent.seq && f.text?.includes('asked for access'), 60_000);
+      return consent;
+    };
+    const first = await ask(1);
+    assert.match(first.requestId, /^cns_/);
+    assert.deepEqual([first.workspace, first.why], [{ id: 'ws_acme', name: 'Acme Prod' }, 'To check why the screen rejected your promo, I need to read its HTML.']);
+    // A frame that says "allow", with a valid share handoff, while Nightmail has no content access for the chat: denied.
+    const frameHandoff = handoff('usr_ada', true);
+    chat.send({ type: 'consent.respond', requestId: first.requestId, decision: 'allow', handoff: frameHandoff });
+    assert.equal((await chat.until(f => f.type === 'consent.resolved' && f.requestId === first.requestId)).decision, 'deny');
+    await chat.until(f => f.type === 'message.end' && f.seq > first.seq && f.text === 'OK.', 60_000);
+    // The panel asked Nightmail first (content-access with the person's session): now the same frame, without a handoff, counts.
+    const second = await ask(2);
+    await fakeHook('/__content', { conversationId: chat.id });
+    chat.send({ type: 'consent.respond', requestId: second.requestId, decision: 'allow' });
+    assert.equal((await chat.until(f => f.type === 'consent.resolved' && f.requestId === second.requestId)).decision, 'allow');
+    const allowed = await chat.until(f => f.type === 'message.end' && f.text === 'Content access allowed for this conversation.');
+    // The agent carries on (a hidden note): let that turn finish before the next test counts calls.
+    await chat.until(f => f.type === 'message.end' && f.seq > allowed.seq && f.text === 'OK.', 60_000);
     const calls = await fakeCalls();
-    assert.equal(calls.filter(c => c[0] === 'mintGrant').length, mints + 1);
-    assert.ok(calls.some(c => c[0] === 'revokeGrant'), 'The old grant is revoked before the new one.');
+    assert.ok(!calls.some(c => c[0] === 'verifyHandoff' && c[1] === frameHandoff), 'The frame’s handoff is never even checked.');
+    assert.ok(!calls.some(c => ['mintGrant', 'revokeGrant'].includes(c[0])));
+    assert.ok(calls.filter(c => c[0] === 'request' && c[2] === chat.id && c[1] === '/v1/support/scope').length >= 4, 'Each decision read Nightmail’s scope.');
     chat.ws.close();
   }, 180_000);
+
+  test('no grant: every read carries this object’s conversation ID; a tool argument naming another user, conversation or workspace changes nothing', async () => {
+    const chat = await chatIn(), from = (await fakeCalls()).length;
+    chat.send({ type: 'user.message', clientMessageId: 'o1', text: 'Show me someone else’s account' });
+    await chat.until(f => f.type === 'message.end' && f.text === 'I can only look at your own account.', 60_000);
+    const calls = (await fakeCalls()).slice(from), stamped = calls.filter(c => c[0] === 'request');
+    assert.ok(stamped.length >= 3 && stamped.every(c => c[2] === chat.id), JSON.stringify(stamped.map(c => [c[1], c[2]])));
+    const keys = (c: any[]) => [...new URL(c[1], 'https://x.invalid').searchParams.keys()].sort();
+    for (const c of stamped) assert.ok(!keys(c).some(k => ['userId', 'conversationId', 'grant', 'token'].includes(k)), c[1]);
+    // The tool ran with its own arguments only; the other customer's workspace is refused by Nightmail for this person.
+    const bounces = stamped.find(c => c[1].startsWith('/v1/support/deliverability/bounces'));
+    assert.deepEqual(bounces && keys(bounces), ['provider', 'workspaceId']);
+    assert.ok(stamped.some(c => c[1] === '/v1/support/domains?workspaceId=ws_other' && c[2] === chat.id));
+    const ends = chat.frames.filter(f => f.type === 'tool.end').map(f => [f.label, f.ok]);
+    assert.deepEqual(ends, [['Checked your Gmail bounces', true], ['Checked your domains', false]]);
+    assert.ok(!calls.some(c => ['mintGrant', 'read', 'revokeGrant', 'verifyEmail'].includes(c[0])));
+    assert.ok(!(await fakeCalls()).some(c => ['mintGrant', 'read', 'verifyEmail'].includes(c[0])), 'No conversation in this suite minted, read through or verified anything.');
+    chat.ws.close();
+  }, 180_000);
+
+  test('two conversations interleaved never read each other’s account', async () => {
+    const from = (await fakeCalls()).length, models = recorded.length;
+    const ada = await chatIn(mf, handoff('usr_ada')), bo = await chatIn(mf, handoff('usr_bo', false, 'ws_other'));
+    ada.send({ type: 'user.message', clientMessageId: 'i1', text: 'Why are Gmail bounces up?' });
+    bo.send({ type: 'user.message', clientMessageId: 'i1', text: 'Why are Gmail bounces up?' });
+    ada.send({ type: 'user.message', clientMessageId: 'i2', text: 'Why are Gmail bounces up again?' });
+    bo.send({ type: 'user.message', clientMessageId: 'i2', text: 'Why are Gmail bounces up again?' });
+    for (const chat of [ada, bo]) await eventually(async () => chat.frames.filter(f => f.type === 'message.end' && /61 of 1,000/.test(f.text ?? '')).length >= 2 || undefined, 90_000);
+    // Each object only ever named itself, and Nightmail answered for its own person: Ada in Acme, Bo in Other.
+    const stamped = (await fakeCalls()).slice(from).filter(c => c[0] === 'request');
+    for (const [chat, workspace] of [[ada, 'ws_acme'], [bo, 'ws_other']] as const) {
+      const mine = stamped.filter(c => c[2] === chat.id);
+      assert.ok(mine.length >= 4 && mine.every(c => !c[1].includes('workspaceId=') || c[1].includes(`workspaceId=${workspace}`)), JSON.stringify(mine.map(c => c[1])));
+    }
+    assert.equal(stamped.filter(c => c[2] !== ada.id && c[2] !== bo.id).length, 0);
+    // And each model request carried one person's account only.
+    const requests = recorded.slice(models).map(r => JSON.stringify(r.body));
+    const ofAda = requests.filter(r => r.includes('account email: ada@acme.test')), ofBo = requests.filter(r => r.includes('account email: bo@other.test'));
+    assert.ok(ofAda.length >= 2 && ofBo.length >= 2 && ofAda.length + ofBo.length === requests.length);
+    assert.ok(ofAda.every(r => !r.includes('bo@other.test') && !r.includes('ws_other')) && ofBo.every(r => !r.includes('ada@acme.test') && !r.includes('ws_acme')));
+    ada.ws.close(); bo.ws.close();
+  }, 180_000);
+
+  test('removed from the workspace: the next turn closes with the notice and no model call', async () => {
+    const chat = await chatIn(mf, handoff('usr_cy'));
+    chat.send({ type: 'user.message', clientMessageId: 'x1', text: 'Why are Gmail bounces up?' });
+    await chat.until(f => f.type === 'message.end' && /61 of 1,000/.test(f.text ?? ''), 60_000);
+    await fakeHook('/__remove', { userId: 'usr_cy', workspaceId: 'ws_acme' });
+    const models = recorded.length, from = chat.frames.length;
+    chat.send({ type: 'user.message', clientMessageId: 'x2', text: 'And at Outlook?' });
+    assert.equal((await chat.until(f => f.type === 'closed')).reason, 'ended');
+    const after = chat.frames.slice(from);
+    assert.deepEqual(after.filter(f => f.type === 'message.end').map(f => f.text), ['This conversation ended because your access to a workspace changed. Open Help to start a new one.']);
+    assert.ok(!after.some(f => f.type === 'text.delta' || f.type === 'tool.start'), 'Nothing read before is restated.');
+    assert.equal(recorded.length, models, 'No model call.');
+    assert.ok((await fakeCalls()).some(c => c[0] === 'closeConversation' && c[1] === chat.id));
+    assert.equal((await (await mf.getD1Database('DB', 'support')).prepare('SELECT status FROM conversations WHERE id = ?').bind(chat.id).first<{ status: string }>())?.status, 'closed');
+  }, 180_000);
+
+  test('per-tool query allow-lists: a tool call with extra arguments sends none of them', async () => {
+    const paths: string[] = [];
+    const host: ToolHost = { read: async path => { paths.push(path); return {}; }, workspaceId: () => 'ws_acme', chooseWorkspace: async () => '', requestContentAccess: async () => '', fileTicket: async () => '' };
+    const extra = { userId: 'usr_bo', conversationId: `conv_${'b'.repeat(26)}`, grant: `nm_support_${'9'.repeat(64)}`, token: 'tok', ticketRef: 'conv_x', email: 'bo@other.test' };
+    const ids = { emailId: 'em_1', domainId: 'dom_1', campaignId: 'cmp_1', requestId: `req_${'a'.repeat(32)}`, days: 3, hours: 5, provider: 'gmail', status: 'bounced' };
+    const reads = TOOLS.filter(t => !['choose_workspace', 'request_content_access', 'file_ticket'].includes(t.name));
+    for (const tool of reads) {
+      paths.length = 0;
+      await tool.execute({ ...ids, ...extra }, host);
+      assert.equal(paths.length, 1, tool.name);
+      const sent = [...new URL(paths[0]!, 'https://x.invalid').searchParams.keys()];
+      for (const key of sent) assert.ok(key === 'workspaceId' || key === 'since' || key in tool.params, `${tool.name} sent ${key}`);
+      assert.ok(!sent.some(key => key in extra), `${tool.name}: ${paths[0]}`);
+    }
+    // Path IDs and the workspace are pattern-checked and encoded.
+    const get = TOOLS.find(t => t.name === 'get_email')!;
+    await assert.rejects(get.execute({ emailId: '../../operator/users' }, host), /not valid/);
+    await assert.rejects(TOOLS.find(t => t.name === 'list_domains')!.execute({ workspaceId: 'ws_x?userId=usr_bo' }, host), /not valid/);
+  });
 
   test('the output gate replaces a leaking answer and files a ticket', async () => {
     const started = await post('/chat/start', { handoff: handoff() });
@@ -384,7 +501,7 @@ describe('support Worker', () => {
     chat.ws.close();
   }, 180_000);
 
-  test('email: a signed webhook, DMARC-verified sender, a grant, and a reply only to that sender', async () => {
+  test('email: a signed webhook, Nightmail registers the message, a stamped turn, and a reply only to that sender', async () => {
     const body = JSON.stringify({ type: 'message.received', data: { messageId: 'msg_mail_1', message: { id: 'msg_mail_1', threadId: 'thr_mail_1', direction: 'inbound', from: { address: 'ada@acme.test' } } } });
     const id = `wh_${randomBytes(8).toString('hex')}`, ts = String(Math.floor(Date.now() / 1000));
     const signature = `v1,${createHmac('sha256', Buffer.from(WEBHOOK_SECRET.slice(6), 'base64')).update(`${id}.${ts}.${body}`).digest('base64')}`;
@@ -398,41 +515,43 @@ describe('support Worker', () => {
     assert.ok(reply, 'The agent replied in the thread.');
     assert.deepEqual([reply[3].to, reply[3].expectedRecipients, reply[3].replyToMessageId, reply[5]], [['ada@acme.test'], { to: ['ada@acme.test'], cc: [], bcc: [] }, 'msg_mail_1', 'reply-msg_mail_1']);
     assert.equal(reply[3].text, 'Hi Ada,\n\nGmail hard-bounced 61 of 1,000 sends this week.\n\nNightmail support (AI)');
-    const calls = await fakeCalls();
-    const verify = calls.find(c => c[0] === 'verifyEmail' && c[1].email === 'ada@acme.test');
-    assert.deepEqual(verify[1].evidence, { kind: 'dmarc', result: 'pass', aligned: true, messageId: '<msg_mail_1@mail.test>' });
-    assert.ok(calls.some(c => c[0] === 'mintGrant' && c[1].verification === 'dmarc' && JSON.stringify(c[1].workspaceIds) === '["ws_acme"]'));
+    const calls = await fakeCalls(), conv = (await (await mf.getD1Database('DB', 'support')).prepare("SELECT id FROM conversations WHERE thread_id = 'thr_mail_1'").first<{ id: string }>())!.id;
+    // Nightmail decided from the message it stored; nothing here verified the sender or minted anything.
+    assert.deepEqual(calls.filter(c => c[0] === 'registerConversation' && c[1] === conv).map(c => c[2]), [{ kind: 'email', messageId: 'msg_mail_1' }]);
+    assert.ok(calls.some(c => c[0] === 'request' && c[2] === conv && c[1].startsWith('/v1/support/deliverability/bounces?') && c[1].includes('workspaceId=ws_acme')), 'The turn read through the stamp.');
+    assert.ok(!calls.some(c => ['verifyEmail', 'mintGrant', 'read'].includes(c[0])));
     assert.equal(calls.filter(c => c[0] === 'api' && c[2] === '/v1/inbound/threads/thr_mail_1/reply').length, 1, 'One reply per inbound message.');
   }, 180_000);
 
-  test('email without a DMARC pass: a confirm link first, account data only after the POST confirmation', async () => {
+  test('email without a DMARC pass: a sign-in or confirm link first; confirming proves the address, never an account', async () => {
     assert.equal((await signedHook('msg_nodmarc_1', 'thr_nodmarc')).status, 200);
     const first = await eventually(async () => (await fakeCalls()).find(c => c[0] === 'api' && c[2] === '/v1/inbound/threads/thr_nodmarc/reply'));
     assert.ok(first, 'The sender got a reply.');
-    // M4: a fixed reply (no model text), with our confirm link as its only URL and a subject that echoes nothing.
+    // M4: a fixed reply (no model text), with our own two links as its only URLs and a subject that echoes nothing.
     assert.match(first[3].text, CONFIRM_TEMPLATE);
+    const id = (await (await mf.getD1Database('DB', 'support')).prepare("SELECT id FROM conversations WHERE thread_id = 'thr_nodmarc'").first<{ id: string }>())!.id;
+    assert.ok(first[3].text.includes(`${ORIGIN}/support/continue/${id}`), 'Sign in to continue: the claim route for this conversation.');
     assert.equal(first[3].subject, 'Re: your message to Nightmail support');
     const link = String(first[3].text).match(/https:\/\/support\.dev\.bane\.mx\/confirm\/(\S+)/)?.[1];
     assert.ok(link, `The reply carries the confirm link: ${first[3].text}`);
     assert.ok(!recorded.some(r => JSON.stringify(r.body?.messages ?? []).includes('thr_nodmarc')), 'No model turn for an unverified sender.');
-    assert.ok(!(await fakeCalls()).some(c => c[0] === 'verifyEmail' && c[1].evidence?.kind === 'dmarc' && c[1].email === 'ada@acme.test' && c[1].ticketRef?.includes('nodmarc')), 'No DMARC verification without a pass.');
+    assert.ok(!(await fakeCalls()).some(c => c[0] === 'request' && c[2] === id), 'Nothing is read for an unverified sender.');
     // A mail scanner's GET shows the button and confirms nothing; the person's POST does, once.
     const page = await mf.dispatchFetch(`${SUPPORT}/confirm/${link}`);
     const pageText = await page.text();
     assert.equal(page.status, 200); assert.match(pageText, /<form method="post">/);
     assert.ok(!pageText.includes('Bounces from Gmail'), 'The confirm page shows nothing from the email (M4).');
-    assert.ok(!(await fakeCalls()).some(c => c[0] === 'verifyEmail' && c[1].evidence?.kind === 'magic_link'));
+    const models = recorded.length;
     const confirmed = await mf.dispatchFetch(`${SUPPORT}/confirm/${link}`, { method: 'POST' });
     assert.match(await confirmed.text(), /that’s confirmed/);
     assert.match(await (await mf.dispatchFetch(`${SUPPORT}/confirm/${link}`, { method: 'POST' })).text(), /Already confirmed/);
-    const magic = (await fakeCalls()).find(c => c[0] === 'verifyEmail' && c[1].evidence?.kind === 'magic_link');
-    assert.equal(magic[1].email, 'ada@acme.test');
     // The link and the answer are two sends for one message, each under its own key: Nightmail accepts both.
     assert.equal(first[5], 'confirm-msg_nodmarc_1');
-    const answered = await eventually(async () => (await replies('thr_nodmarc')).find(c => /61 of 1,000/.test(c[3].text)));
+    const answered = await eventually(async () => (await replies('thr_nodmarc')).find(c => c[5] === 'reply-msg_nodmarc_1'));
     assert.ok(answered, 'The held message is answered after confirmation.');
-    assert.deepEqual([answered[5], answered[6], answered[3].replyToMessageId], ['reply-msg_nodmarc_1', 202, 'msg_nodmarc_1']);
-    assert.ok((await fakeCalls()).some(c => c[0] === 'mintGrant' && c[1].verification === 'magic_link'));
+    assert.deepEqual([answered[3].text, answered[6], answered[3].replyToMessageId], [NO_ACCOUNT, 202, 'msg_nodmarc_1'], 'With the non-member reply: a confirmed address reads no account.');
+    assert.equal(recorded.length, models, 'No model turn.');
+    assert.ok(!(await fakeCalls()).some(c => ['verifyEmail', 'mintGrant'].includes(c[0]) || (c[0] === 'request' && c[2] === id)));
     assert.equal((await mf.dispatchFetch(`${SUPPORT}/confirm/${link.slice(0, -4)}AAAA`)).status, 410, 'A tampered link is refused.');
   }, 180_000);
 
@@ -441,7 +560,7 @@ describe('support Worker', () => {
     const link = await eventually(async () => (await replies('thr_nodmarc_lost')).find(c => CONFIRM_TEMPLATE.test(c[3].text)));
     assert.ok(link, 'A confirm link.');
     // Nightmail already holds a first answer under the answer's key (committed; its response never reached the Worker),
-    // and the retry's model turn writes a different one.
+    // and the retry's answer is a different one.
     await (await mf.getWorker('fake-bane')).fetch('http://fake-bane/__used', { method: 'POST', body: JSON.stringify({ authorization: `Bearer bane_mbx_${'7'.repeat(64)}`,
       path: '/v1/inbound/threads/thr_nodmarc_lost/reply', key: 'reply-msg_nodmarc_lost', body: { text: 'The first answer' } }) });
     assert.equal((await mf.dispatchFetch(`${SUPPORT}/confirm/${String(link[3].text).match(/\/confirm\/(\S+)/)![1]}`, { method: 'POST' })).status, 200);
@@ -464,15 +583,17 @@ describe('support Worker', () => {
 
   test('M1, M2: a verified thread binds its address and account; a spoof or another sender never reaches its session', async () => {
     // msg_mail_1 verified ada in thr_mail_1 (the email test above). A message from her address with DMARC FAIL:
-    const before = recorded.length, verifies = (await fakeCalls()).filter(c => c[0] === 'verifyEmail').length, reads = (await fakeCalls()).filter(c => c[0] === 'read').length;
+    const before = recorded.length, reads = (await fakeCalls()).filter(c => c[0] === 'request').length;
     const replied = (await replies('thr_mail_1')).length;
     assert.equal((await signedHook('msg_nodmarc_spoof', 'thr_mail_1')).status, 200);
     const spoofReply = await eventually(async () => (await replies('thr_mail_1')).find(c => c[3].replyToMessageId === 'msg_nodmarc_spoof'));
     assert.ok(spoofReply, 'The spoof gets a reply from its own, unverified conversation.');
     assert.match(spoofReply[3].text, CONFIRM_TEMPLATE, 'Only the fixed confirm reply, never account data.');
     assert.equal(recorded.length, before, 'No model turn for the spoofed message (M1).');
-    assert.equal((await fakeCalls()).filter(c => c[0] === 'read').length, reads, 'No grant read for it.');
-    assert.equal((await fakeCalls()).filter(c => c[0] === 'verifyEmail').length, verifies, 'A DMARC failure is never sent for verification.');
+    assert.equal((await fakeCalls()).filter(c => c[0] === 'request').length, reads, 'No account read for it.');
+    // Nightmail refused it for the customer's conversation (it doesn't verify as her), so it went to one of its own.
+    const registered = (await fakeCalls()).filter(c => c[0] === 'registerConversation' && c[2].messageId === 'msg_nodmarc_spoof').map(c => c[1]);
+    assert.equal(registered.length, 2, 'Registered in the thread’s conversation (refused), then in its own.');
     const db = await mf.getD1Database('DB', 'support');
     assert.ok((await db.prepare("SELECT count(*) AS n FROM conversations WHERE thread_id LIKE 'thr_mail_1#%'").first<{ n: number }>())!.n >= 1, 'Routed to a conversation of its own.');
     assert.equal((await db.prepare("SELECT count(*) AS n FROM tickets WHERE ask LIKE '%refund my top-up%'").first<{ n: number }>())!.n, 0, 'No ticket in the customer’s name.');
@@ -486,7 +607,7 @@ describe('support Worker', () => {
     assert.equal((await signedHook('msg_mail_2', 'thr_mail_1')).status, 200);
     const again = await eventually(async () => (await replies('thr_mail_1')).find(c => c[3].replyToMessageId === 'msg_mail_2'));
     assert.match(again[3].text, /Gmail hard-bounced 61 of 1,000/);
-    assert.ok((await fakeCalls()).some(c => c[0] === 'verifyEmail' && c[1].evidence.messageId === '<msg_mail_2@mail.test>'), 'Every message is verified again.');
+    assert.ok((await fakeCalls()).some(c => c[0] === 'registerConversation' && c[2].messageId === 'msg_mail_2'), 'Every message is checked again by Nightmail.');
     assert.equal((await replies('thr_mail_1')).length, replied + 3);
   }, 180_000);
 
@@ -575,7 +696,7 @@ describe('support Worker', () => {
       const link = String(linkReply[3].text).match(/\/confirm\/(\S+)/)![1]!;
       await caps.dispatchFetch(`${SUPPORT}/confirm/${link}`, { method: 'POST' });
       const second = await eventually(async () => (await replies('thr_c2', caps))[0]);
-      assert.ok(second, 'The joined message is answered after the one confirmation (here with the busy reply: the turn cap is spent).');
+      assert.equal(second?.[3].text, NO_ACCOUNT, 'The joined message is answered after the one confirmation (the non-member reply: it proves only the address).');
       // The digest: tomorrow at 00:10 UTC the team gets one email listing what went over a cap.
       await (await caps.getWorker('support')).scheduled({ cron: '10 0 * * *', scheduledTime: new Date(Date.now() + 86_400_000) });
       const digest = await eventually(async () => (await fakeCalls(caps)).find(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && /messages? over cap on /.test(c[3].subject ?? '')));
@@ -776,7 +897,8 @@ describe('support Worker', () => {
     test('ticket work created during the inbox keeps its retry, and an elapsed idle or retention deadline never schedules the past', async () => {
       const thread = 'thr_busy', message = 'msg_busy_1';
       // Rita is over today's answers, so her email files a ticket for the team while it is processed.
-      await (await db()).prepare("INSERT INTO daily_counters (day, key, n) VALUES (?, 'user:usr_rita:turns', 1000)").bind(new Date().toISOString().slice(0, 10)).run();
+      // An email's person is counted by their address (Nightmail keeps the account).
+      await (await db()).prepare("INSERT INTO daily_counters (day, key, n) VALUES (?, ?, 1000)").bind(new Date().toISOString().slice(0, 10), `sender:${await addressHash('rita@acme.test')}:turns`).run();
       await outage('/v1/inbound/threads', 503);
       await hook(message, thread, 'rita@acme.test');
       const id = await conversationOf(thread);
@@ -1073,6 +1195,82 @@ describe('support Worker', () => {
       assert.equal(await (await db()).prepare("SELECT count(*) AS n FROM conversations WHERE thread_id LIKE 'thr_legacy_c%'").first('n'), 0);
     });
 
+    test('a DMARC-fail account address gets the sign-in link and no model turn; after the claim, the waiting message is answered once', async () => {
+      const thread = 'thr_claim', message = 'msg_claim_1', models = recorded.length;
+      await hook(message, thread, 'sam@acme.test');
+      const id = await conversationOf(thread);
+      let run = await drive(id, { tick: true });
+      assert.deepEqual(states(run), { [`msg:${message}`]: 'done', [`confirm:${message}`]: 'done', [`answer:${message}`]: 'parked' });
+      const [link] = await replies(thread, instance);
+      assert.match(link[3].text, CONFIRM_TEMPLATE);
+      assert.ok(link[3].text.includes(`${ORIGIN}/support/continue/${id}`));
+      // Wakes carry nothing, and answer 202 whatever they name: before the claim Nightmail's scope refuses, so nothing runs.
+      for (const target of [id, `conv_${'z'.repeat(26)}`, 'nope']) assert.equal((await wake(target)).status, 202);
+      await new Promise(r => setTimeout(r, 500));
+      run = await drive(id, { tick: true });
+      assert.equal(states(run)[`answer:${message}`], 'parked');
+      assert.equal(recorded.length, models, 'No model turn before the sign-in.');
+      // The person signs in and continues: Nightmail binds the conversation to them and wakes this Worker with its ID only.
+      // The wake runs after its 202: the answer is unparked once Nightmail's scope shows the sign-in.
+      await fakeHook('/__claim', { conversationId: id }, instance);
+      assert.equal((await wake(id)).status, 202);
+      await eventually(async () => states(await drive(id))[`answer:${message}`] === 'pending' || undefined);
+      run = await drive(id, { tick: true });
+      assert.deepEqual([states(run)[`answer:${message}`], run.meta && (run.meta as any).verified], ['done', 'signin']);
+      // A second wake (or a retried claim) finds nothing left to answer.
+      assert.equal((await wake(id)).status, 202);
+      await new Promise(r => setTimeout(r, 500));
+      await drive(id, { tick: true });
+      const sent = await replies(thread, instance);
+      assert.deepEqual(sent.map(c => c[5]), [`confirm-${message}`, `reply-${message}`]);
+      assert.match(sent[1][3].text, /Gmail hard-bounced 61 of 1,000/, 'Answered as the member, once.');
+      assert.ok((await fakeCalls(instance)).some(c => c[0] === 'request' && c[2] === id && c[1].startsWith('/v1/support/deliverability/bounces')));
+    });
+
+    test('removed from the workspace (email): the next answer is the fixed notice, with no model call, and the conversation closes', async () => {
+      const thread = 'thr_shrink';
+      await hook('msg_shrink_1', thread, 'dee@acme.test');
+      const id = await conversationOf(thread);
+      await drive(id, { tick: true });
+      assert.match((await replies(thread, instance))[0]?.[3].text ?? '', /61 of 1,000/);
+      await fakeHook('/__remove', { userId: 'usr_dee', workspaceId: 'ws_acme' }, instance);
+      const models = recorded.length;
+      await hook('msg_shrink_2', thread, 'dee@acme.test');
+      const run = await drive(id, { tick: true });
+      assert.equal(states(run)['answer:msg_shrink_2'], 'done');
+      assert.deepEqual((await replies(thread, instance)).map(c => c[3].text).slice(1), [ACCESS_CHANGED]);
+      assert.equal(recorded.length, models, 'No model call.');
+      assert.ok(run.meta?.closedAt, 'Closed.');
+      assert.ok((await fakeCalls(instance)).some(c => c[0] === 'closeConversation' && c[1] === id));
+    });
+
+    test('a reply 3 hours later reads the account', async () => {
+      const chat = await chatIn(instance), ends = () => chat.frames.filter(f => f.type === 'message.end' && /61 of 1,000/.test(f.text ?? '')).length;
+      chat.send({ type: 'user.message', clientMessageId: 'h1', text: 'Why are Gmail bounces up?' });
+      await eventually(async () => ends() >= 1 || undefined, 60_000);
+      // Three hours pass (the grant this replaces lasted two): nothing in the conversation expires.
+      await drive(chat.id, { age: 3 * 3_600_000 });
+      const from = (await fakeCalls(instance)).length;
+      chat.send({ type: 'user.message', clientMessageId: 'h2', text: 'Why are Gmail bounces up today?' });
+      await eventually(async () => ends() >= 2 || undefined, 60_000);
+      const reads = (await fakeCalls(instance)).slice(from).filter(c => c[0] === 'request');
+      assert.ok(reads.some(c => c[2] === chat.id && c[1].startsWith('/v1/support/deliverability/bounces?')), JSON.stringify(reads));
+      assert.ok(!chat.frames.some(f => f.type === 'error'));
+      chat.ws.close();
+    });
+
+    test('a conversation opened before the stamp reads through its grant until it lapses, then answers without it', async () => {
+      const read = async (id: string) => { await drive(id, { tick: true }); return (await fakeCalls(instance)).filter(c => c[0] === 'read'); };
+      const before = (await fakeCalls(instance)).filter(c => c[0] === 'read').length;
+      const live = await read('conv_legacy_d');
+      assert.ok(live.length > before && live.slice(before).every(c => c[2] === 'GRANT'), 'The live grant reads.');
+      assert.match((await replies('thr_legacy_d', instance))[0]?.[3].text ?? '', /61 of 1,000/);
+      const lapsed = await read('conv_legacy_e');
+      assert.equal(lapsed.length, live.length, 'A lapsed grant reads nothing.');
+      assert.equal((await replies('thr_legacy_e', instance)).length, 1, 'It is still answered.');
+      assert.ok(!(await fakeCalls(instance)).some(c => c[0] === 'request' && ['conv_legacy_d', 'conv_legacy_e'].includes(c[2])) && !(await fakeCalls(instance)).some(c => c[0] === 'mintGrant'));
+    });
+
     test.each(['throw', 'abort'] as const)('an answer whose turn filed a ticket is sent once after a failure before the send (%s)', async how => {
       // The agent files a ticket while answering (the bug path); then the usage update fails (a transient D1 error) or the
       // object is evicted at that point, before the answer's text is stored as final.
@@ -1252,7 +1450,8 @@ describe('support Worker', () => {
   }, 120_000);
 
   test('R2 (the reviewer’s PoC V1): a domain without DMARC gets every email answered, each after its own confirmation; follow-ups join an open one', async () => {
-    const answered = async (thread: string, id: string) => eventually(async () => (await replies(thread)).find(c => c[3].replyToMessageId === id && /61 of 1,000/.test(c[3].text)), 60_000);
+    // A confirmation proves the address, not an account: each is answered with the non-member reply.
+    const answered = async (thread: string, id: string) => eventually(async () => (await replies(thread)).find(c => c[3].replyToMessageId === id && c[3].text === NO_ACCOUNT), 60_000);
     const confirmFrom = async (thread: string, id: string) => {
       const reply = await eventually(async () => (await replies(thread)).find(c => c[3].replyToMessageId === id && CONFIRM_TEMPLATE.test(c[3].text)));
       assert.ok(reply, `A confirm link for ${id}.`);
@@ -1260,8 +1459,8 @@ describe('support Worker', () => {
     };
     assert.equal((await signedHook('msg_v1a', 'thr_v1', 'victim@acme.test')).status, 200);
     await confirmFrom('thr_v1', 'msg_v1a');
-    assert.ok(await answered('thr_v1', 'msg_v1a'), 'Answered with account data after confirming.');
-    // The second message (still no DMARC): rerouted under M1, and it gets its own link instead of silence.
+    assert.ok(await answered('thr_v1', 'msg_v1a'), 'Answered after confirming.');
+    // The second message (still no DMARC): it needs a confirmation of its own, and gets its own link instead of silence.
     assert.equal((await signedHook('msg_v1b', 'thr_v1', 'victim@acme.test')).status, 200);
     await confirmFrom('thr_v1', 'msg_v1b');
     assert.ok(await answered('thr_v1', 'msg_v1b'), 'The second email is answered too.');
@@ -1348,7 +1547,7 @@ describe('support Worker', () => {
     assert.ok(tools.includes('Reading your recent logs…'), tools.join());
     const ends = chat.frames.filter(f => f.type === 'tool.end' && f.label === 'Passed this to the Nightmail team');
     assert.deepEqual(ends.map(e => e.ok), [false, true], 'The incomplete bug ticket was refused, then filed.');
-    const logs = (await fakeCalls()).find(c => c[0] === 'read' && c[1].startsWith('/v1/support/requests?'));
+    const logs = (await fakeCalls()).find(c => c[0] === 'request' && c[2] === started.body.conversationId && c[1].startsWith('/v1/support/requests?'));
     assert.ok(logs && logs[1].includes('status=error') && logs[1].includes('since=') && logs[1].includes('workspaceId=ws_acme'), logs?.[1]);
     const db = await mf.getD1Database('DB', 'support');
     const row = await db.prepare('SELECT * FROM tickets WHERE id = ?').bind(filed.ticketId).first<any>();

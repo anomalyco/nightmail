@@ -26,20 +26,18 @@ panel ══ WebSocket socketUrl ═══════════════�
    | `400` | `{ error: { code: "INVALID_REQUEST" } }` | No handoff in the body |
    | `401` | `{ error: { code: "HANDOFF_INVALID" } }` | Bad signature, wrong audience or expired: get a fresh handoff and retry once |
    | `409` | `{ error: { code: "HANDOFF_USED" } }` | This handoff already opened a conversation: get a fresh one |
-   | `429` | `{ error: { code: "RATE_LIMITED", retryAfter } }` | Too many conversations today (10 per person) |
+   | `429` | `{ error: { code: "RATE_LIMITED", retryAfter } }` | Too many conversations today (10 per person), or 10 still open |
 
 3. **Connect.** `new WebSocket(socketUrl)`, i.e. `wss://support.bane.mx/c/<conversationId>?token=<chatToken>`. The Worker checks the token (bound to this conversation and this person) and the `Origin`. A refused upgrade is a plain `401`/`403`/`404` with no body; get a fresh handoff and call `/chat/resume`.
 
 Keep `conversationId`, `socketUrl` and `expiresAt` in `sessionStorage`. On a new page the panel opens on a new conversation and shows only its opening line: the person's earlier conversation is never loaded on its own, only from **Continue last conversation** (`/chat/resume`). A conversation the person never wrote in is reused instead of starting another. Switching workspace in the dashboard starts a new conversation (the handoff's workspace is the conversation's scope).
 
-## 2. Resuming, renewing and granting content access
+## 2. Resuming
 
-`POST {support}/chat/resume` with `{ "conversationId", "handoff" }` returns the same shape as `/chat/start`. Use it when:
+`POST {support}/chat/resume` with `{ "conversationId", "handoff" }` returns the same shape as `/chat/start`: a new chat token, nothing else. Account access never expires mid-conversation (Nightmail reads it from the conversation on every request), so there is nothing to renew. Use it when:
 
 - the chat token expired (connect refused, or `expiresAt` passed);
-- the server sent `{ type: "error", code: "GRANT_EXPIRED" }` (account access ends after two hours; a fresh handoff renews it);
-- the person pressed **Allow** on a consent card (§4.3): get the handoff with `shareContent: true`;
-- the person opened the dashboard from a support email's "continue in Nightmail" link: `https://bane.mx/?support=<conversationId>&share=1`. Open the panel, tick the share box, call `contact-support` then `/chat/resume`. Email conversations can be viewed this way; replies still go by email.
+- the person opened the dashboard from a support email's "continue in Nightmail" link: `https://bane.mx/?support=<conversationId>&share=1`. Open the panel, call `contact-support` then `/chat/resume`. Only an email conversation whose person this Worker knows can be viewed this way (newer ones answer `403`); replies still go by email.
 
 The handoff's user must be the conversation's user (`403 { error: { code: "NOT_YOUR_CONVERSATION" } }` otherwise). `404 { error: { code: "CONVERSATION_NOT_FOUND" } }` means it expired: start a new one.
 
@@ -124,7 +122,7 @@ While an answer is being worked on, the panel shows one status line in the messa
 
 Render a card: "Let support read emails in **Acme Prod**?" with the `why` and two buttons, **Allow for this chat** and **Not now**.
 
-- **Allow for this chat:** call `POST /v1/contact-support` with `shareContent: true` (the dashboard must be on the card's workspace), then send `consent.respond` with the handoff (§5). If the call fails, send `decision: "deny"`.
+- **Allow for this chat:** call `POST /v1/support-conversations/{conversationId}/content-access` on Nightmail (the dashboard session), then send `consent.respond` with `decision: "allow"` (§5), even if that call failed. Nightmail decides: the Worker allows content only when the conversation's scope says the person allowed it in the card's workspace. The `handoff` the panel still sends with it (`POST /v1/contact-support` with `shareContent: true`) is ignored by this Worker and kept for one release, for the previous one.
 - **Not now:** send `consent.respond` with `decision: "deny"`.
 
 The agent finishes its current answer by saying it has asked, and continues on its own once the person decides: after `consent.resolved` a new `message.start` follows. A card whose request was resolved elsewhere (another tab) closes.
@@ -167,7 +165,7 @@ The agent ends its answer with the proposal and carries on once it is decided: o
 
 | `code` | What the panel does |
 | --- | --- |
-| `GRANT_EXPIRED` | Get a fresh handoff, call `/chat/resume`, reconnect. The agent continues. |
+| `GRANT_EXPIRED` | No longer sent (access doesn't expire mid-conversation). An older Worker sent it: get a fresh handoff, call `/chat/resume`, reconnect. |
 | `RATE_LIMITED` | Show the message; the input stays disabled until `retryAfter` (seconds) passes. |
 | `TURN_FAILED` | Show the message with a **Try again** button that resends the last `user.message` with the same `clientMessageId`. |
 | `BAD_MESSAGE` | A bug in the panel: log it. |
@@ -180,7 +178,7 @@ The agent ends its answer with the proposal and carries on once it is decided: o
 ```jsonc
 { "type": "user.message", "clientMessageId": "c_…", "text": "Why are Gmail opens down?" }  // ≤ 8,000 characters
 { "type": "user.message", "clientMessageId": "c_…", "text": "This is what I see", "attachments": ["att_…"] }  // uploaded first (§5.1); text may be empty
-{ "type": "consent.respond", "requestId": "cns_…", "decision": "allow", "handoff": "<JWS with shareContent>" }
+{ "type": "consent.respond", "requestId": "cns_…", "decision": "allow", "handoff": "<JWS with shareContent>" }  // handoff: ignored, kept for one release
 { "type": "consent.respond", "requestId": "cns_…", "decision": "deny" }
 { "type": "action.resolved", "actionId": "sac_…" }   // after the person decides (§4.4): read what came of it from Nightmail
 { "type": "human.request" }                     // "Talk to a person": files a ticket (once per conversation)
