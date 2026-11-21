@@ -85,7 +85,7 @@ type Flash = { lines: number[]; at: number }
 
 /** CodeMirror with workspace completions and live diagnostics from checkRule. `flash` marks lines a remote save
  *  changed; `relint` checks the script again (the workspace's endpoints changed). */
-function Editor({ value, change, completions, check, flash, relint }: { value: string; change: (s: string) => void; completions: Completion[]; check: (source: string) => Promise<Problem[]>; flash?: Flash; relint?: number }) {
+export function Editor({ value, change, completions, check, flash, relint }: { value: string; change: (s: string) => void; completions: Completion[]; check: (source: string) => Promise<Problem[]>; flash?: Flash; relint?: number }) {
   const parent = useRef<HTMLDivElement>(null), view = useRef<EditorView | null>(null)
   const latest = useRef({ change, completions, check })
   latest.current = { change, completions, check }
