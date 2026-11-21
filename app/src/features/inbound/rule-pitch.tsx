@@ -24,6 +24,7 @@ import { Editor } from './rituals'
 import { Match, TargetIcon } from './parts'
 import { addressOption, when } from './shared'
 import type { DryRun } from './trace'
+import { AI_AT_ARRIVAL, CodeRulePitch, OTHER_RULES } from './rule-code-pitch'
 import './inbound.css'
 import './receiving.css'
 import './recipes.css'
@@ -42,7 +43,7 @@ const LIST = '/receiving?tab=rules'
 const NEW = '+new'
 
 /** The pitch's version for this URL, or null for today's page. */
-export const pitchVersion = (search: string) => { const v = new URLSearchParams(search).get('v'); return v === 'a' || v === 'b' || v === 'c' ? v : null }
+export const pitchVersion = (search: string) => { const v = new URLSearchParams(search).get('v'); return v === 'a' || v === 'b' || v === 'c' || v === 'd' || v === 'e' || v === 'f' ? v : null }
 
 // ---------------------------------------------------------------- words
 /** A recipe as When / If / Then parts; {field} is a blank. Scripts have none: their If / Then is the code. */
@@ -63,13 +64,13 @@ const parts: Record<string, { if?: string; then: string; otherwise?: string }> =
 const fieldLabels: Partial<Record<RecipeField['type'], string>> = { meaning: 'Looks like', slack: 'Posts to', discord: 'Posts to', chat: 'Posts to', forward: 'Forwards to', webhook: 'Sends to', label: 'Label', senders: 'From', test: 'If', words: 'Mentions' }
 const fieldLabel = (f: RecipeField) => f.name === 'otherwise' ? 'Otherwise' : f.type === 'destination' ? 'Sends to' : fieldLabels[f.type] ?? f.label
 const endpointTypes: Partial<Record<RecipeField['type'], EndpointType[]>> = { slack: ['slack'], discord: ['discord'], chat: ['slack', 'discord'], forward: ['forward'], webhook: ['webhook'], destination: ['slack', 'discord', 'webhook', 'forward'] }
-const typeWord: Record<EndpointType, string> = { slack: 'Slack', discord: 'Discord', webhook: 'Webhook', forward: 'Forward' }
+export const typeWord: Record<EndpointType, string> = { slack: 'Slack', discord: 'Discord', webhook: 'Webhook', forward: 'Forward' }
 const testWords: Record<string, string> = { always: 'it’s any mail', from: 'it’s from', subject: 'the subject mentions', text: 'it mentions', attachment: 'it has an attachment' }
 const others = { next: 'Still run', stop: 'Skipped when it acts' }
 const newWording = 'Tested with the old wording’s AI answers until new mail'
 const strParams = (p?: Record<string, string | string[]>) => Object.fromEntries(Object.entries(p ?? {}).map(([k, v]) => [k, Array.isArray(v) ? v.join(', ') : v]))
 const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
-const ordinal = (n: number) => n + (n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th')
+export const ordinal = (n: number) => n + (n === 1 ? 'st' : n === 2 ? 'nd' : n === 3 ? 'rd' : 'th')
 
 function actionWords(a: { op: string; ref?: string; value?: string }, endpoints: OverviewEndpoint[]) {
   if (a.ref?.startsWith('endpoint:')) {
@@ -79,8 +80,8 @@ function actionWords(a: { op: string; ref?: string; value?: string }, endpoints:
   if (a.ref?.startsWith('inbox:')) return `Delivers to the ${a.ref.slice(6)} inbox`
   return ({ label: `Labels it ${a.value ?? ''}`, junk: 'Marks it as junk', block: 'Rejects it', drop: 'Drops it', allow: 'Keeps it out of junk' } as Record<string, string>)[a.op] ?? a.op
 }
-type Outcome = { acted: boolean; words: string; ai?: number; error?: string }
-function outcomeOf(r: DryRun | undefined, key: string, endpoints: OverviewEndpoint[]): Outcome | null {
+export type Outcome = { acted: boolean; words: string; ai?: number; error?: string }
+export function outcomeOf(r: DryRun | undefined, key: string, endpoints: OverviewEndpoint[]): Outcome | null {
   if (!r) return null
   const row = r.trace.find(t => t.key === key)
   if (!row) return { acted: false, words: 'Didn’t run' }
@@ -91,7 +92,7 @@ function outcomeOf(r: DryRun | undefined, key: string, endpoints: OverviewEndpoi
 }
 
 /** What the AI answered, in words: "Looks like a refund request · AI 94%". */
-const aiWords = (ai: number, meaning: string) => (ai >= 0.7 ? 'Looks like ' : 'Doesn’t look like ') + meaning + ' · AI ' + Math.round(ai * 100) + '%'
+export const aiWords = (ai: number, meaning: string) => (ai >= 0.7 ? 'Looks like ' : 'Doesn’t look like ') + meaning + ' · AI ' + Math.round(ai * 100) + '%'
 
 // ---------------------------------------------------------------- state shared by the three versions
 function useRulePage(key: string) {
@@ -407,7 +408,7 @@ function WorkbenchVersion({ p }: { p: Page }) {
     <div className="rp-b__form">
       <Field label="Mail to"><AddressChips p={p} /></Field>
       {p.code || !p.recipe ? <CodeBox p={p} tall /> : p.recipe.fields.map(f => <Field key={f.name} htmlFor={'rp-b-' + f.name} label={<span className="rp-b__label">{fieldLabel(f)}{f.type === 'meaning' && <AiMark />}</span>}><FieldControl p={p} f={f} id={'rp-b-' + f.name} /></Field>)}
-      <Field label="Other rules on these addresses" htmlFor="rp-b-after"><Select id="rp-b-after" value={p.after ? 'next' : 'stop'} onValueChange={v => p.setAfter(v === 'next')} options={[{ value: 'next', label: others.next }, { value: 'stop', label: others.stop }]} /></Field>
+      <Field label={OTHER_RULES} htmlFor="rp-b-after"><Select id="rp-b-after" value={p.after ? 'next' : 'stop'} onValueChange={v => p.setAfter(v === 'next')} options={[{ value: 'next', label: others.next }, { value: 'stop', label: others.stop }]} /></Field>
     </div>
   </section>
   const test = <section className="rp-b__pane rp-b__pane--test" aria-label="Test" hidden={phone && pane !== 'test'}>
@@ -423,7 +424,7 @@ function WorkbenchVersion({ p }: { p: Page }) {
         <button type="button" className="rp-b__row" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? '' : m.id)}>
           <span className="rp-b__mark" data-acted={o?.acted || undefined} aria-hidden="true">{o ? o.acted ? <Check size={13} /> : <Minus size={13} /> : null}</span>
           <span className="rp-b__msg"><span className="rp-b__subject">{m.subject || '(no subject)'}</span><span className="rp-b__from muted">{m.from.name ?? m.from.address}</span></span>
-          {p.recipe?.decisions && <span className="rp-b__ai" title="The AI’s answer when this email arrived">{o?.ai !== undefined && <><span className="rp-meter" aria-hidden="true"><span style={{ transform: 'scaleX(' + o.ai + ')' }} /></span><span className="rp-b__pct">{Math.round(o.ai * 100)}%</span></>}</span>}
+          {p.recipe?.decisions && <span className="rp-b__ai" title={AI_AT_ARRIVAL}>{o?.ai !== undefined && <><span className="rp-meter" aria-hidden="true"><span style={{ transform: 'scaleX(' + o.ai + ')' }} /></span><span className="rp-b__pct">{Math.round(o.ai * 100)}%</span></>}</span>}
           <span className="rp-b__result" data-acted={o?.acted || undefined}>{err ? 'Error' : o ? o.acted ? o.words : '—' : ''}</span>
           <time className="rp-b__time muted">{when(m.at)}</time>
         </button>
@@ -551,6 +552,11 @@ export function RulePitch() {
   const { key = '' } = useParams()
   const [search] = useSearchParams()
   const v = pitchVersion('?' + search.toString()) ?? 'a'
+  if (v === 'd' || v === 'e' || v === 'f') return <CodeRulePitch ruleKey={key} v={v} />
+  return <ChoicePitch ruleKey={key} v={v} />
+}
+/** A, B and C: the rule as its parts (recipe blanks), code one click away. */
+function ChoicePitch({ ruleKey: key, v }: { ruleKey: string; v: 'a' | 'b' | 'c' }) {
   const p = useRulePage(key)
   if (p.loadError) return <div className="stack inbound-stack"><PageHeader title={key} backTo={LIST} /><ErrorState error={p.loadError} onRetry={() => location.reload()} /></div>
   if (!p.saved || !p.overview.data || !p.options.length || !p.recentReady) return <div className="stack inbound-stack rp"><PageHeader title={key} backTo={LIST} /><div className="rp-loading" aria-busy="true"><Skeleton width="60%" height={18} /><Skeleton width="40%" height={18} /></div></div>
