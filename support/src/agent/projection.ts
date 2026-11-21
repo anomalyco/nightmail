@@ -16,7 +16,8 @@ export function project(value: unknown, depth = 0, key = ''): unknown {
   }
   if (value && typeof value === 'object') {
     const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value)) if (!DROP.has(k)) out[k] = project(v, depth + 1, k);
+    // A person's account ID is an identifier the model never needs (the conversation names its person): user.id is dropped.
+    for (const [k, v] of Object.entries(value)) if (!DROP.has(k) && !(key === 'user' && k === 'id')) out[k] = project(v, depth + 1, k);
     return out;
   }
   if (typeof value === 'string') {

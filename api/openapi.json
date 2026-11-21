@@ -17088,8 +17088,7 @@
             "type": "object",
             "properties": {
               "id": {
-                "type": "string",
-                "description": "Omitted for a support conversation, which knows its person only through the conversation."
+                "type": "string"
               },
               "name": {
                 "type": [
@@ -17111,6 +17110,7 @@
               }
             },
             "required": [
+              "id",
               "name",
               "email",
               "createdAt"

@@ -61,7 +61,7 @@ function emailEvidence(messageId) {
     mode: verified ? (userId && memberships(userId).length ? 'member' : 'non_member') : userId ? 'pending_signin' : 'unverified' };
 }
 // Per-person reads (the subject is the conversation's person, never anything in the request) and fixed ones.
-const contextOf = c => ({ grant: { id: 'sgr_x', ticketRef: 'conv' }, user: person(c.userId),
+const contextOf = c => ({ grant: { id: 'sgr_x', ticketRef: 'conv' }, user: { id: c.userId, ...person(c.userId) },
   workspaces: inScope(c).map(w => ({ ...w, sending: { kind: 'shared', region: 'us-east-2', paused: false }, counts: { domains: 1, campaigns: 3 } })),
   domains: inScope(c).map(w => ({ workspaceId: w.id, id: 'dom_' + w.id, name: 'news.' + w.id.slice(3) + '.test', sending: 'verified', dmarc: 'missing' })), recentFailures: { sends: [], bounces: [], webhookDeliveries: [] },
   standing: [], recentActivity: [], openEnforcement: [], handoff: null, links: { requestIds: [] } });
@@ -398,6 +398,7 @@ export async function fakeGateway(request: Request): Promise<Response> {
   if (said.includes('refund')) return answered ? text(['I’ve passed this to the Nightmail team. Someone will reply by email.']) : toolUse('toolu_t', 'file_ticket', {
     type: 'billing', topic: 'refund', title: 'Duplicate $25 top-up', severity: 'P3', summary: 'Ada asks for a refund of a duplicate top-up. The ledger shows two identical top-ups. She wants one refunded.', ask: 'Please refund my duplicate top-up',
     tried: ['get_billing: two $25 top-ups 40 s apart'], recommendation: 'Refund the second $25 top-up (billing error).', evidence: ['req_1'] });
+  if (said.includes('my account summary')) return answered ? text(['Your account looks fine.']) : toolUse('toolu_a', 'account_context', {});
   if (said.includes('look at the content')) return answered ? text(['I’ve asked for access to read that email.']) : toolUse('toolu_c', 'request_content_access', { why: 'To check why the screen rejected your promo, I need to read its HTML.' });
   if (said.includes('leak please')) return text([`Sure: bane_ops_${'a'.repeat(64)}`]);
   return text(['OK.']);

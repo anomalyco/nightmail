@@ -5364,10 +5364,7 @@ export type SupportContext = {
         contentWorkspaceId: string | null;
     };
     user: {
-        /**
-         * Omitted for a support conversation, which knows its person only through the conversation.
-         */
-        id?: string;
+        id: string;
         name: string | null;
         email: string | null;
         createdAt: string | null;

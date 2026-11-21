@@ -7216,8 +7216,7 @@ describe('Hosted MCP OAuth and tools', () => {
       await t.test('2 stamp: only the binding’s request() names a conversation; nothing in an HTTP request can, and an unbound or closed one reads nothing', async () => {
         const id = await chat(owner), theirs = await chat(outsider, other);
         const asked = ok(await stamped(id, 'GET', `/v1/support/context?userId=${outsider.userId}&conversationId=${theirs}&workspaceId=${acme}`));
-        assert.deepEqual([asked.user.email, asked.workspaces.map((w: Json) => w.id), asked.grant.id], [owner.email, [acme], id], 'A model-style userId or conversationId changes nothing.');
-        assert.ok(!('id' in asked.user), 'The summary a conversation reads names no user ID.');
+        assert.deepEqual([asked.user.id, asked.workspaces.map((w: Json) => w.id), asked.grant.id], [owner.userId, [acme], id], 'A model-style userId or conversationId changes nothing.');
         error(await stamped(id, 'GET', `/v1/support/workspaces?workspaceId=${other}`), 404);
         // Over HTTP every header, query parameter and credential naming a conversation, user or token gets today's 403.
         const refused: string[] = [];
