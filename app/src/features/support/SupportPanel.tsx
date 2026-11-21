@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent, type FormEvent, type KeyboardEvent, type RefObject } from 'react'
+import { useNavigate } from 'react-router'
 import { ArrowUp, Check, CircleAlert, History, Image as ImageIcon, ImagePlus, Square, UserRound, X } from 'lucide-react'
 import { Button, DropdownMenu, IconButton, Skeleton } from '../../components/ui'
 import { SheetOpenEffects, useSheetDrag } from '../../components/ui/sheet'
@@ -6,8 +7,8 @@ import { useSession } from '../../data/context'
 import { TOUCH, matches, usePhone, useTouch } from '../../lib/media'
 import { Markdown, settled } from './markdown'
 import { createDemoTransport } from './demo'
-import { createSocketTransport, supportOrigin } from './socket'
-import { actionResult, actionTitle, actionVerb, plural, supportStore, ticketTitle, type ActionPart, type Attachment, type ChatMessage, type ChatState, type Part, type SupportStore } from './store'
+import { createSocketTransport, forgetSaved, supportOrigin } from './socket'
+import { actionResult, actionTitle, actionVerb, endSupport, plural, supportStore, ticketTitle, type ActionPart, type Attachment, type ChatMessage, type ChatState, type Part, type SupportStore } from './store'
 import { ActionSummary } from './actions'
 import { IMAGE_TYPES, MAX_MESSAGE } from './protocol'
 import './support.css'
@@ -15,6 +16,12 @@ import { NightmailMark } from '../../components/NightmailLogo'
 import { productName } from '../../../../api/src/brand'
 
 const cx = (...values: Array<string | false | null | undefined>) => values.filter(Boolean).join(' ')
+// The account in this tab changes or signs out (data/context.tsx, or a 401 from the API): its conversation, socket and state
+// end with it. A sign-out also forgets the conversations this tab saved.
+for (const type of ['nightmail:account-changed', 'nightmail:account-signed-out', 'nightmail:unauthorized']) window.addEventListener(type, event => {
+  endSupport()
+  if (type !== 'nightmail:unauthorized' && (event as CustomEvent<{ signedOut?: boolean } | null>).detail?.signedOut !== false) forgetSaved(true)
+})
 const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 /** The panel's own first line: there from the moment it opens, with no model call and nothing to wait for. On a new page
  *  it is all the panel shows; an earlier conversation opens only from "Continue last conversation". */
@@ -28,16 +35,20 @@ const WORKING = 'Working on it…'
 export function SupportPanel({ mode, open, onClose, onUnread, resume }: { mode: 'demo' | 'live'; open: boolean; onClose: () => void; onUnread: (unread: boolean) => void; resume: string | null }) {
   const identity = useSession()?.identity ?? null
   const phone = usePhone(), touch = useTouch()
-  const workspaceId = identity?.workspaceId ?? 'demo'
+  const userId = identity?.id ?? 'demo', workspaceId = identity?.workspaceId ?? 'demo'
   const workspaceName = identity?.workspaces?.find(item => item.id === identity.workspaceId)?.name ?? null
-  const store = useMemo(() => supportStore(`${mode}:${workspaceId}`, () => {
+  // One conversation per account and workspace: another account in this tab gets its own, never this one's.
+  const store = useMemo(() => supportStore(`${mode}:${userId}:${workspaceId}`, () => {
     const origin = supportOrigin()
-    if (mode === 'live' && origin) return createSocketTransport({ origin, workspaceId, resume })
+    if (mode === 'live' && origin) return createSocketTransport({ origin, userId, workspaceId, resume })
     const workspace = identity?.workspaces?.find(item => item.id === identity.workspaceId)
     return createDemoTransport({ firstName: identity?.name?.trim().split(/\s+/)[0] || 'Ryan', workspace: { id: workspaceId, name: workspace?.name ?? 'Acme' } })
-  }), [mode, workspaceId])
+  }), [mode, userId, workspaceId])
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const panel = useRef<HTMLElement>(null), input = useRef<HTMLTextAreaElement>(null)
+  // A support email's link named an email conversation: it continues on its own page, signed in, by email.
+  const navigate = useNavigate()
+  useEffect(() => { if (state.reason === 'EMAIL_CONVERSATION' && resume) { onClose(); navigate(`/support/continue/${resume}`) } }, [state.reason])
   useEffect(() => { store.setVisible(open); if (open) store.start() }, [store, open])
   useEffect(() => { onUnread(state.unread) }, [state.unread])
   // Opening moves focus in (to the message box, or the panel itself on a touch screen, so the keyboard doesn't jump up);

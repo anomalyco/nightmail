@@ -439,9 +439,11 @@ export class SupportStore {
   }
 }
 
-// One store per workspace (and mode). Switching workspace starts a new conversation, as the protocol asks.
+// One store per account and workspace (and mode). Switching either starts a new conversation, as the protocol asks.
 let current: { key: string; store: SupportStore } | null = null
 export function supportStore(key: string, create: () => SupportTransport) {
   if (current?.key !== key) { current?.store.dispose(); current = { key, store: new SupportStore(create()) } }
   return current.store
 }
+/** Ends the conversation the panel holds (its socket and state): the account in this tab changed or signed out. */
+export function endSupport() { current?.store.dispose(); current = null }

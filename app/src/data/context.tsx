@@ -85,6 +85,9 @@ async function loadIdentity(signal?: AbortSignal) {
   selectWorkspace(result.multiTenant ? result.workspaceId : null)
   return result
 }
+/** The account in this tab changes or signs out: features holding its state end it (the Help panel's conversation). */
+const accountChanged = (signedOut: boolean) => window.dispatchEvent(new CustomEvent('nightmail:account-changed', { detail: { signedOut } }))
+
 function invitationError(error: unknown) {
   if (error instanceof ApiError && error.status === 404) return 'This invitation is invalid, expired or for another email address. Ask for a new one.'
   return `Couldn’t open the invitation. ${errorText(error, 'Try the link again.')}`
@@ -222,6 +225,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   // responses to its requests still in flight are dropped (live.ts). null: the browser's default account.
   async function enter(account: string | null, options: { path?: string; workspace?: string } = {}) {
     const previous = { account: selectedAccount(), workspace: selectedWorkspace() }
+    if (account !== previous.account) accountChanged(false)
     await cache.cancelQueries()
     selectAccount(account)
     if (options.workspace) selectWorkspace(options.workspace)
@@ -230,7 +234,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     catch (error) {
       if (!(error instanceof ApiError && error.status === 401)) { selectAccount(previous.account); selectWorkspace(previous.workspace); throw error }
       // No account is left in this browser: the signed-out page.
-      selectAccount(null); cache.clear(); setGeneration(value => value + 1); await identity.refetch(); return
+      accountChanged(true); selectAccount(null); cache.clear(); setGeneration(value => value + 1); await identity.refetch(); return
     }
     const accounts = cache.getQueryData<AccountList>(accountsKey)
     cache.clear()
@@ -251,6 +255,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     if (id) announce({ type: 'signed-out', accounts: [id] })
     if (id && id !== selectedAccount()) { void cache.invalidateQueries({ queryKey: accountsKey }); return }
     rememberDashboardReady(selectedWorkspace(), false)
+    accountChanged(true)
     if (result.active) { await enter(result.active, { path: '/overview' }); toast('Signed out of that account', 'success'); return }
     selectAccount(null); selectWorkspace(null); cache.clear(); await identity.refetch()
   }
@@ -259,6 +264,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     forgetInboxDrafts()
     announce({ type: 'signed-out', accounts: 'all' })
     rememberDashboardReady(selectedWorkspace(), false)
+    accountChanged(true)
     selectAccount(null); selectWorkspace(null); cache.clear(); await identity.refetch()
   }
   // Add account: the account service's chooser in a popup. The popup starts the sign-in itself and is opened with

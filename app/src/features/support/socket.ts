@@ -4,19 +4,26 @@ import { parseServerMessage, sniff, type ClientMessage, type Connection, type Su
 import { hostedHosts, productName, supportHost } from '../../../../api/src/brand'
 
 // The live transport (support/PROTOCOL.md §1–2, §5): a handoff from Nightmail, then /chat/start or /chat/resume on the support
-// Worker, then one WebSocket. The conversation ID is kept per workspace in sessionStorage, so a reload reconnects to the
-// same conversation; a lost connection retries with backoff and again as soon as the browser is back online.
+// Worker, then one WebSocket. The conversation ID is kept per account and workspace in sessionStorage, so a reload
+// reconnects to the same conversation and another account in this tab never finds it; a lost connection retries with
+// backoff and again as soon as the browser is back online.
 type Started = { conversationId: string; chatToken: string; socketUrl: string; expiresAt: string }
 class StartError extends Error { constructor(readonly status: number, readonly code: string, readonly retryAfter?: number) { super(code) } }
 
 // What rejoins a conversation (PROTOCOL.md §1): its ID, the socket URL until it expires, when it last had a message, and
-// whether the person wrote in it. Two per workspace, for this tab: the conversation the panel is in, and the last one
+// whether the person wrote in it. Two per account and workspace, for this tab: the conversation the panel is in, and the last one
 // the person wrote in on an earlier page, which only "Continue last conversation" opens. A conversation that ended (the
 // server said so, or a day passed without a message: the support Worker closes a chat after 24 hours idle) is forgotten,
 // so nothing asks /chat/resume for one that is gone.
 type Saved = { conversationId: string; socketUrl?: string; expiresAt?: string; activeAt?: number; written?: boolean }
 const IDLE_CLOSE_MS = 24 * 3_600_000
-const storageKey = (workspaceId: string, slot: 'conversation' | 'last' = 'conversation') => `bane.support.${slot}.${workspaceId}`
+const storageKey = (userId: string, workspaceId: string, slot: 'conversation' | 'last' = 'conversation') => `bane.support.${slot}.${userId}.${workspaceId}`
+/** Forgets saved conversations: every account's (a sign-out), or only the slots of earlier releases, kept by workspace alone. */
+export function forgetSaved(all: boolean) {
+  try {
+    for (const key of Object.keys(sessionStorage)) if (/^bane\.support\.(conversation|last)\./.test(key) && (all || !/^bane\.support\.\w+\.[^.]+\.[^.]+$/.test(key))) sessionStorage.removeItem(key)
+  } catch { /* Session-only. */ }
+}
 function load(key: string): Saved | null {
   let raw: string | null = null
   try { raw = sessionStorage.getItem(key) } catch { return null }
@@ -75,8 +82,9 @@ const handoff = async (shareContent: boolean) => {
   return token
 }
 
-export function createSocketTransport({ origin, workspaceId, resume }: { origin: string; workspaceId: string; resume?: string | null }): SupportTransport {
-  const key = storageKey(workspaceId), lastKey = storageKey(workspaceId, 'last')
+export function createSocketTransport({ origin, userId, workspaceId, resume }: { origin: string; userId: string; workspaceId: string; resume?: string | null }): SupportTransport {
+  forgetSaved(false)
+  const key = storageKey(userId, workspaceId), lastKey = storageKey(userId, workspaceId, 'last')
   // A new page opens Help on a new conversation: the one from before is kept for "Continue last conversation" and never
   // shown on its own. One the person never wrote in is reused instead, so opening Help again doesn't start another.
   // A support email's "continue in Nightmail" link (`resume`) opens its conversation, as asked.
@@ -105,6 +113,8 @@ export function createSocketTransport({ origin, workspaceId, resume }: { origin:
       } catch (error) {
         if (!(error instanceof StartError)) throw error
         if (conversationId && error.status === 404) { save(key, null); return open() }
+        // An email conversation continues by email (support/continue): the panel sends the person there.
+        if (conversationId && error.code === 'EMAIL_CONVERSATION') { save(key, null); throw error }
         if (tries === 0 && (error.code === 'HANDOFF_INVALID' || error.code === 'HANDOFF_USED')) continue
         throw error
       }
