@@ -53,6 +53,17 @@
 .pa-flag[data-zone='over'], .pa-flag--complaints { fill: var(--color-danger-marker); }
 .pa-flag-mark { fill: var(--color-warning-marker); }
 .pa-flag-mark--complaints { fill: var(--color-danger-marker); }
+/* a2's problem cells and a3's chips: flat fills with dark figures on them (white on red in light mode). */
+.pa-cell { fill: color-mix(in oklch, var(--color-text) 7%, transparent); }
+.pa-cell[data-zone='warn'], .pa-chip[data-zone='warn'] { fill: var(--color-warning-marker); }
+.pa-cell[data-zone='over'], .pa-chip[data-zone='over'] { fill: var(--color-danger-marker); }
+.pa-cell-text { fill: oklch(.2 0 0); font-family: var(--font-mono); font-size: 9.5px; font-variant-numeric: tabular-nums; pointer-events: none; }
+.pa-plot--pins .pa-cell-text { font-size: 10px; }
+:root:not([data-theme='dark']) .pa-cell-text[data-zone='over'] { fill: #fff; }
+.pa-row-label { font-size: 9.5px; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.pa-plot--strip .pa-cell:not([data-zone]) { fill: color-mix(in oklch, var(--color-text) 5.5%, transparent); }
+.pa-stem { stroke: var(--color-faint); shape-rendering: crispEdges; }
+.pa-plot[data-active] .pa-col:not([data-active]) .pa-cell:not([data-zone]) { opacity: .5; }
 :root:not([data-theme='dark']) .pa-flag { fill: var(--color-warning); }
 :root:not([data-theme='dark']) :is(.pa-flag[data-zone='over'], .pa-flag--complaints) { fill: var(--color-danger); }
 

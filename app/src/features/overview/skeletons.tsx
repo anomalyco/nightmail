@@ -6,7 +6,7 @@ import { LoadingRegion, MetricRow, PageHeader, SectionHeader, Select, Skeleton, 
 import type { LogEntry } from '../../data/types'
 import { logColumnDefs, logColumns } from '../logs/rows'
 import { useLatestRowCount } from './latest'
-import { FactsSkeletonA, FactsSkeletonC, LanesSkeletonB, useChartVariant } from './pitch'
+import { blocksVariant, FactsSkeletonA, FactsSkeletonC, LanesSkeletonB, useChartVariant } from './pitch'
 import './overview.css'
 import './pitch.css'
 
@@ -32,7 +32,7 @@ export const latestColumns: Column<LogEntry>[] = latestColumnDefs.map(column => 
 // Each skeleton has exactly the loaded block's dimensions (see overview.css), so swapping in the data moves nothing.
 export function FactsSkeleton() {
   const variant = useChartVariant()
-  if (variant === 'a') return <FactsSkeletonA />
+  if (blocksVariant(variant)) return <FactsSkeletonA />
   if (variant === 'b') return <LanesSkeletonB />
   if (variant === 'c') return <FactsSkeletonC />
   return <div className="ov-facts" aria-hidden="true">{factTitles.map(title => <MetricRow key={title} label={title} spark={<span className="ov-spark ov-spark--skeleton" />} value={<Skeleton width={56} height={16} />} />)}</div>

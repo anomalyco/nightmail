@@ -14,11 +14,14 @@ export const NO_EMAILS = 'No emails in this period'
 const BAND_VOLUME = 20
 const HOUR = 3_600_000, DAY = 86_400_000
 
-export type ChartVariant = 'a' | 'b' | 'c'
-export const chartVariant = (value: string | null): ChartVariant | null => value === 'a' || value === 'b' || value === 'c' ? value : null
+// a2 and a3 keep A's tiles and fat bars, but the bars carry volume only: a2 puts problems in a strip of hourly cells
+// under the axis, a3 tags the hours with problems above their bars.
+export type ChartVariant = 'a' | 'a2' | 'a3' | 'b' | 'c'
+export const chartVariant = (value: string | null): ChartVariant | null => value === 'a' || value === 'a2' || value === 'a3' || value === 'b' || value === 'c' ? value : null
+export const blocksVariant = (variant: ChartVariant | null): variant is 'a' | 'a2' | 'a3' => variant === 'a' || variant === 'a2' || variant === 'a3'
 export function useChartVariant() { const [params] = useSearchParams(); return chartVariant(params.get('chart')) }
 // The block's height above Latest emails (latest.ts): facts, the 20px gap and the chart, or B's single block.
-export const blockHeight = (variant: ChartVariant | null) => variant === 'a' ? 104 + 20 + 220 : variant === 'b' ? 278 : variant === 'c' ? 84 + 20 + 220 : 81 + 20 + 220
+export const blockHeight = (variant: ChartVariant | null) => blocksVariant(variant) ? 104 + 20 + 220 : variant === 'b' ? 278 : variant === 'c' ? 84 + 20 + 220 : 81 + 20 + 220
 
 const share = (part: number, whole: number) => whole ? part / whole : 0
 const rateText = (rate: number) => rate > 0 && rate < 0.0001 ? percent(rate, 3) : percent(rate, 2)
@@ -137,11 +140,63 @@ export function FactsSkeletonA() {
   </div>)}</div>
 }
 
-export function ChartA({ data, range, stale }: { data: Overview; range: TimeRange; stale: boolean }) {
+export function ChartA({ data, range, stale, mode = 'stack' }: { data: Overview; range: TimeRange; stale: boolean; mode?: 'stack' | 'strip' | 'pins' }) {
   return <section className="ov-chart pa-chart" aria-label="Sending activity" data-stale={stale || undefined} data-range={range}>
-    <div className="ov-chart__head"><h2 className="ui-label ui-label--rule">Activity</h2><Legend items={[['sent', 'Delivered'], ['bounces', 'Bounced'], ['complaints', 'Complaints']]} /></div>
-    <div className="ov-chart__plot">{data.sent ? <StackPlot points={data.points} /> : <EmptyState title={NO_EMAILS} />}</div>
+    <div className="ov-chart__head"><h2 className="ui-label ui-label--rule">Activity</h2><Legend items={[['sent', mode === 'stack' ? 'Delivered' : 'Emails'], ['bounces', 'Bounced'], ['complaints', 'Complaints']]} /></div>
+    <div className="ov-chart__plot">{!data.sent ? <EmptyState title={NO_EMAILS} /> : mode === 'stack' ? <StackPlot points={data.points} /> : <VolumePlot points={data.points} mode={mode} />}</div>
   </section>
+}
+// An hour's problems, judged the same way everywhere below: bounces from a fifth of their limit (1%) are worth a look
+// and at the limit are over it; any complaint counts.
+const bounceState = (p: ChartPoint) => { const rate = hourRate(p.bounced, p.sent); return rate >= BOUNCE_LINE ? 'over' : rate >= BOUNCE_LINE / 5 ? 'warn' : undefined }
+// a2 and a3: the bars are volume only, in one colour. a2 lines two rows of hourly cells up under the axis (bounces,
+// then complaints), lit and labelled with the rate or count where an hour has a problem. a3 tags each such hour above
+// its bar with a chip on a short stem (a square for bounces, a dot for complaints where a phone has no room for text).
+function VolumePlot({ points, mode }: { points: ChartPoint[]; mode: 'strip' | 'pins' }) {
+  const [ref, width] = useWidth<HTMLDivElement>(790)
+  const [active, setActive] = useState<number | null>(null)
+  const compact = width < 520, strip = mode === 'strip'
+  const row = compact ? 10 : 15, rowGap = 3, stripTop = 6
+  const height = 196, left = strip ? (compact ? 44 : 76) : compact ? 36 : 44, right = width, top = strip ? 14 : compact ? 30 : 40
+  const bottom = height - 24 - (strip ? stripTop + row * 2 + rowGap : 0)
+  const n = points.length, slot = (right - left) / Math.max(1, n), gap = slot >= 20 ? 3 : slot >= 8 ? 2 : 1, bar = Math.max(1, slot - gap)
+  const max = niceMax(Math.max(...points.map(p => p.sent)))
+  const h = (value: number) => value / max * (bottom - top)
+  const x = (i: number) => left + i * slot + gap / 2
+  const fits = (text: string) => !compact && text.length * 5.75 <= bar - 1
+  const rows = [bottom + stripTop, bottom + stripTop + row + rowGap]
+  return <div ref={ref} className={`pitch-plot pa-plot pa-plot--${mode}`} data-active={active !== null || undefined} onMouseLeave={() => setActive(null)}>
+    <svg viewBox={`0 0 ${width} ${height}`} role="group" aria-label="Emails per bucket; bounces and complaints marked by hour">
+      {[0, 1, 2, 3].map(i => { const gy = top + i * (bottom - top) / 3; return <g key={i}><line x1={left} x2={right} y1={gy} y2={gy} className={i === 3 ? 'chart-grid chart-grid--base' : 'chart-grid'} /><text x={left - 8} y={gy + 3.5} textAnchor="end" className="chart-label">{number(Math.round(max * (1 - i / 3)))}</text></g> })}
+      {strip && (compact ? ['Bounce', 'Spam'] : ['Bounced', 'Complaints']).map((name, r) => <text key={name} x={left - 8} y={rows[r] + row / 2 + 3.2} textAnchor="end" className="chart-label pa-row-label">{name}</text>)}
+      {points.map((p, i) => {
+        const b = bounceState(p), rate = hourRate(p.bounced, p.sent), cx = x(i) + bar / 2, barTop = bottom - h(p.sent)
+        const rateLabel = percent(rate, 1), spam = p.complaints === 1 ? '1 spam' : `${p.complaints} spam`
+        const marks: ReactNode[] = []
+        if (strip) {
+          marks.push(<g key="b"><rect x={x(i)} width={bar} y={rows[0]} height={row} className="pa-cell" data-zone={b} />{b && fits(rateLabel) && <text x={cx} y={rows[0] + row / 2 + 3.5} textAnchor="middle" className="pa-cell-text" data-zone={b}>{rateLabel}</text>}</g>)
+          marks.push(<g key="c"><rect x={x(i)} width={bar} y={rows[1]} height={row} className="pa-cell" data-zone={p.complaints ? 'over' : undefined} />{p.complaints > 0 && fits(String(p.complaints)) && <text x={cx} y={rows[1] + row / 2 + 3.5} textAnchor="middle" className="pa-cell-text" data-zone="over">{p.complaints}</text>}</g>)
+        } else if (b || p.complaints) {
+          // Chips stack upward from a stem that clears the neighbouring bars (a chip is wider than its bar): bounces
+          // first, then complaints.
+          const near = [i - 1, i + 1].filter(j => j >= 0 && j < n).map(j => bottom - h(points[j].sent))
+          let at = Math.min(barTop, ...(compact ? [] : near)) - 6
+          const tags = [...(b ? [{ key: 'b', zone: b, text: rateLabel, dot: false }] : []), ...(p.complaints ? [{ key: 'c', zone: 'over', text: spam, dot: true }] : [])]
+          marks.push(<line key="stem" x1={cx} x2={cx} y1={barTop - 1} y2={at} className="pa-stem" />)
+          for (const tag of tags) {
+            if (compact) { marks.push(tag.dot ? <circle key={tag.key} cx={cx} cy={at - 4} r={4} className="pa-chip" data-zone={tag.zone} /> : <rect key={tag.key} x={cx - 4} y={at - 8} width={8} height={8} className="pa-chip" data-zone={tag.zone} />); at -= 11; continue }
+            const w = tag.text.length * 6 + 10
+            marks.push(<g key={tag.key}><rect x={cx - w / 2} y={at - 16} width={w} height={16} rx={2} className="pa-chip" data-zone={tag.zone} /><text x={cx} y={at - 4.5} textAnchor="middle" className="pa-cell-text" data-zone={tag.zone}>{tag.text}</text></g>)
+            at -= 19
+          }
+        }
+        return <g key={p.at} className="pa-col" data-active={active === i || undefined}>{p.sent > 0 && <rect x={x(i)} width={bar} y={barTop} height={h(p.sent)} className="pa-seg pa-seg--sent" />}{marks}</g>
+      })}
+      {ticks(points, right - left, compact ? 60 : 72).map(i => <text key={i} x={x(i) + bar / 2} y={height - 6} textAnchor="middle" className="chart-label">{tickLabel(points, i)}</text>)}
+      <Hits points={points} x={i => left + i * slot} width={slot} top={0} height={height - 24} onActive={setActive} />
+    </svg>
+    {active !== null && <Tip points={points} i={active} side={x(active) + bar / 2 > (left + right) / 2 ? { right: right - x(active) + 8 } : { left: x(active) + bar + 8 }} />}
+  </div>
 }
 function StackPlot({ points }: { points: ChartPoint[] }) {
   const [ref, width] = useWidth<HTMLDivElement>(790)
