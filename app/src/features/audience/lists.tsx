@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useApiMutation, useApiQuery } from '../../data/context'
 import type { AudienceList } from '../../data/types'
-import { SearchField, Button, ConfirmDialog, ControlSkeleton, DataTable, Dialog, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, PaginationSkeleton, SkeletonText, Tabs, fieldError, MutationError } from '../../components/ui'
-import { listColumns, ListDetailBodySkeleton } from './skeletons'
+import { SearchField, Button, ConfirmDialog, ControlSkeleton, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, PaginationSkeleton, SelectCheckbox, SkeletonText, Tabs, fieldError, MutationError, type Column } from '../../components/ui'
+import { listColumns, ListDetailBodySkeleton, selectPage } from './skeletons'
 import { ConsentLegend, ContactTable, date, noUnknown, number, statusOptions } from './shared'
 import { ImportContactsDialog } from './import'
 import { BulkSubscribeDialog } from './bulk'
+import { MergeListsDialog } from './merge'
+import { usePhone } from '../../lib/media'
 import { AudienceHeader } from './header'
 import { useAdaptivePageSize, useDebounced, useSearchDraft } from '../../lib/pagination'
 
@@ -14,18 +16,43 @@ import { useAdaptivePageSize, useDebounced, useSearchDraft } from '../../lib/pag
 const consentCount = (status: 'subscribed' | 'unknown' | 'unsubscribed' | 'suppressed') => (row: AudienceList) => `${number(row[status] ?? 0)} ${status}`
 export function ListsPage() {
   const { pageSize, tableRef } = useAdaptivePageSize()
+  const phone = usePhone()
   const [search, setSearch] = useState('')
   const [page, setPage] = useState(1)
   const [create, setCreate] = useState(false)
+  // The lists chosen to merge, kept across pages and searches until merged or cleared.
+  const [selected, setSelected] = useState<ReadonlyMap<string, AudienceList>>(() => new Map())
+  const [merging, setMerging] = useState(false)
   useEffect(() => setPage(1), [pageSize])
   const params = { page, pageSize, search: useDebounced(search.trim()) }
   const query = useApiQuery(['lists', params], (api, signal) => api.lists.list(params, signal))
+  const rows = query.data?.items || []
+  const select = (lists: AudienceList[], on: boolean) => setSelected(current => { const next = new Map(current); for (const list of lists) { if (on) next.set(list.id, list); else next.delete(list.id) } return next })
+  const onPage = rows.filter(row => selected.has(row.id)).length
   const count = (row: AudienceList, status: 'subscribed' | 'unknown' | 'unsubscribed' | 'suppressed') => row[status] ? <Link to={`/audience/lists/${row.id}?status=${status}`} title={`Show ${status} members of ${row.name}`}>{number(row[status])}</Link> : number(row[status] ?? 0)
+  const cells: Record<string, Pick<Column<AudienceList>, 'render' | 'cardRender'> & Partial<Pick<Column<AudienceList>, 'label'>>> = {
+    select: { label: <SelectCheckbox checked={rows.length > 0 && onPage === rows.length ? true : onPage ? 'indeterminate' : false} onCheckedChange={on => select(rows, on)} label={selectPage} disabled={!rows.length} />, render: row => <SelectCheckbox checked={selected.has(row.id)} onCheckedChange={on => select([row], on)} label={`Select ${row.name}`} /> },
+    name: { render: row => <span className="audience-cell-text" title={row.name}>{row.name}</span> },
+    subscribed: { render: row => count(row, 'subscribed'), cardRender: consentCount('subscribed') },
+    unknown: { render: row => count(row, 'unknown'), cardRender: consentCount('unknown') },
+    unsubscribed: { render: row => count(row, 'unsubscribed'), cardRender: consentCount('unsubscribed') },
+    suppressed: { render: row => count(row, 'suppressed'), cardRender: consentCount('suppressed') },
+    total: { render: row => number(row.total), cardRender: row => `${number(row.total)} total` },
+    created: { render: row => date(row.createdAt) },
+  }
+  const clear = () => setSelected(new Map())
+  // Merge… once two or more are selected. A phone gets the selection's actions as an action sheet from one button
+  // beside the search.
+  const mergeable = selected.size >= 2
+  const selection = !selected.size ? null : phone
+    ? <DropdownMenu label="Selected lists" title={`${selected.size} selected`} trigger={<Button>{selected.size} selected</Button>} items={[...mergeable ? [{ label: 'Merge…', onSelect: () => setMerging(true) }] : [], { label: 'Clear selection', onSelect: clear }]} />
+    : <><span className="audience-selection__count">{selected.size} selected</span><Button onClick={clear}>Clear</Button><Button variant="primary" className={mergeable ? undefined : 'audience-selection__later'} onClick={() => setMerging(true)}>Merge…</Button></>
   return <div className="audience-page"><AudienceHeader actions={<Button variant="primary" onClick={() => setCreate(true)}>Create list</Button>} />
-    <div className="data-toolbar"><SearchField className="search-box--list" aria-label="Search lists" placeholder="Search lists" value={search} onChange={event => { setSearch(event.target.value); setPage(1) }} /></div>
+    <div className="data-toolbar"><SearchField className="search-box--list" aria-label="Search lists" placeholder="Search lists" value={search} onChange={event => { setSearch(event.target.value); setPage(1) }} />{selection && <div className="audience-selection">{selection}</div>}</div>
     <ConsentLegend />
-    {query.isError ? <ErrorState error={query.error} onRetry={() => query.refetch()} /> : <><DataTable tableRef={tableRef} rows={query.data?.items || []} loading={query.isPending} skeletonRows={pageSize} minRows={pageSize} rowKey={row => row.id} rowHref={row => `/audience/lists/${row.id}`} empty={search ? <EmptyState title="No matching lists" /> : <EmptyState title="No lists yet" action={<Button onClick={() => setCreate(true)}>Create list</Button>} />} columns={[{ ...listColumns[0], render: row => <span className="audience-cell-text" title={row.name}>{row.name}</span> }, { ...listColumns[1], render: row => count(row, 'subscribed'), cardRender: consentCount('subscribed') }, { ...listColumns[2], render: row => count(row, 'unknown'), cardRender: consentCount('unknown') }, { ...listColumns[3], render: row => count(row, 'unsubscribed'), cardRender: consentCount('unsubscribed') }, { ...listColumns[4], render: row => count(row, 'suppressed'), cardRender: consentCount('suppressed') }, { ...listColumns[5], render: row => number(row.total), cardRender: row => `${number(row.total)} total` }, { ...listColumns[6], render: row => date(row.createdAt) }]} />{query.isPending ? <PaginationSkeleton /> : <Pagination page={page} pageSize={pageSize} total={query.data.total} nextCursor={query.data.nextCursor} onPageChange={setPage} />}</>}
+    {query.isError ? <ErrorState error={query.error} onRetry={() => query.refetch()} /> : <><DataTable tableRef={tableRef} rows={rows} loading={query.isPending} skeletonRows={pageSize} minRows={pageSize} rowKey={row => row.id} rowHref={row => `/audience/lists/${row.id}`} empty={search ? <EmptyState title="No matching lists" /> : <EmptyState title="No lists yet" action={<Button onClick={() => setCreate(true)}>Create list</Button>} />} columns={listColumns.map(column => ({ ...column, ...cells[column.key]! }))} />{query.isPending ? <PaginationSkeleton /> : <Pagination page={page} pageSize={pageSize} total={query.data.total} nextCursor={query.data.nextCursor} onPageChange={setPage} />}</>}
     {create && <CreateListDialog onClose={() => setCreate(false)} />}
+    {merging && <MergeListsDialog lists={[...selected.values()]} onClose={() => setMerging(false)} onMerged={clear} />}
   </div>
 }
 function CreateListDialog({ onClose }: { onClose: () => void }) {

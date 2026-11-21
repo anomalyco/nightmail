@@ -35,7 +35,7 @@ const labels: Record<string, string> = {
   'routing.apply': 'Applied routing', 'routing.restore': 'Restored routing', 'route.create': 'Added a route', 'route.update': 'Updated a route', 'route.delete': 'Deleted a route',
   'connection.create': 'Connected sending', 'connection.delete': 'Disconnected sending', 'connection.verify': 'Verified the sending connection', 'connection.production_access': 'Requested SES production access',
   'region.configure': 'Configured a region', 'region.provision': 'Provisioned a region', 'region.auto_validation': 'Changed auto-validation',
-  'campaign.pause': 'Paused a campaign', 'campaign.resume': 'Resumed a campaign', 'campaign.cancel': 'Cancelled a campaign', 'audience.bulk_apply': 'Changed contacts in bulk',
+  'campaign.pause': 'Paused a campaign', 'campaign.resume': 'Resumed a campaign', 'campaign.cancel': 'Cancelled a campaign', 'audience.bulk_apply': 'Changed contacts in bulk', 'audience.list_merge': 'Merged contact lists',
   'sending.pause': 'Paused sending', 'sending.resume': 'Resumed sending',
   'support.contact': 'You contacted support', 'support.view': 'Viewed this workspace',
   'billing.topup': 'Added credit', 'billing.grant': `Promotional credit from ${productName}`, 'billing.adjustment': `Adjustment by ${productName}`, 'billing.refund_release': 'Refund canceled: credit restored',
@@ -46,5 +46,5 @@ export const actionLabel = (action: string) => labels[action] ?? action
 export const activityAreas: { value: string; label: string }[] = [
   ['member.', 'Members'], ['workspace.', 'Workspace'], ['settings.', 'Settings'], ['api_key.', 'API keys'], ['agent_token.', 'Agent tokens'], ['inbox_key.', 'API keys (earlier)'], ['app_password.', 'App passwords'],
   ['domain.', 'Domains'], ['inbound_domain.', 'Receiving domains'], ['address.', 'Addresses'], ['inbox.', 'Inboxes'], ['webhook.', 'Webhooks'], ['inbound_webhook.', 'Inbound webhooks'],
-  ['endpoint.', 'Endpoints'], ['route.', 'Routes'], ['ritual.', 'Rules'], ['connection.', 'Sending connection'], ['campaign.', 'Campaigns'], ['billing.', 'Billing'], ['support.', 'Support'],
+  ['endpoint.', 'Endpoints'], ['route.', 'Routes'], ['ritual.', 'Rules'], ['connection.', 'Sending connection'], ['campaign.', 'Campaigns'], ['audience.', 'Audience'], ['billing.', 'Billing'], ['support.', 'Support'],
 ].map(([value, label]) => ({ value, label }))

@@ -1,5 +1,5 @@
 import { Fragment } from 'react'
-import { SearchField, ControlSkeleton, FieldSkeleton, LoadingRegion, PageHeader, SectionHeader, Select, SkeletonText, TableSkeleton, Tabs, type SkeletonColumn } from '../../components/ui'
+import { SearchField, ControlSkeleton, FieldSkeleton, LoadingRegion, PageHeader, SectionHeader, Select, SelectCheckbox, SkeletonText, TableSkeleton, Tabs, type SkeletonColumn } from '../../components/ui'
 import { AudienceHeader } from './header'
 import { ConsentLegend, consentTitle, statusOptions } from './consent'
 import './audience.css'
@@ -19,7 +19,11 @@ export const contactColumns: SkeletonColumn[] = [
   { key: 'created', label: 'Added', width: '17%', skeleton: <SkeletonText width={95} />, card: 'inline' },
 ]
 export const memberColumns: SkeletonColumn[] = [contactColumns[0], contactColumns[1], { key: 'suppression', label: 'Suppression reason', width: '38%', card: 'line' }, contactColumns[4]]
+// Lists are selected to merge them: a checkbox before each row (in a card, its control on the right) and in the heading.
+const noop = () => {}
+export const selectPage = 'Select this page'
 export const listColumns: SkeletonColumn[] = [
+  { key: 'select', label: <SelectCheckbox checked={false} onCheckedChange={noop} label={selectPage} disabled />, width: 44, skeleton: <SelectCheckbox checked={false} onCheckedChange={noop} label="Select list" disabled />, card: 'end' },
   { key: 'name', label: 'Name', width: '24%', card: 'title' },
   // A phone card gives consent two lines, two counts each, so all four fit at any width a count reaches.
   { key: 'subscribed', label: consentLabel('subscribed'), width: '12%', align: 'right', card: 'line' },

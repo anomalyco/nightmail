@@ -1,8 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, asc, eq, gt, inArray, isNull, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
-import { actor, ApiError, AudienceSpec, unrestrictedRequired, errors, id, IdParams, json, notFound, page, PageQuery, response, security, type Actor, type App, type DbExecutor, type Runtime } from './core.js';
+import { actor, ApiError, AudienceSpec, unrestrictedRequired, errors, id, IdParams, json, notFound, page, PageQuery, response, security, type Actor, type App, type Ctx, type DbExecutor, type Runtime } from './core.js';
 import { productName } from './brand.js';
+import { recordAudit } from './audit.js';
+import { IdempotencyHeaders, idempotent, idempotentRequest } from './idempotency.js';
+import { CAMPAIGN_ACTIVE } from './states.js';
 export { AudienceSpec };
 import { contacts, consentAudit, imports, listMembers, lists, segments, type ImportError, type ImportRow, type SegmentRule } from './db/audience.js';
 import { enqueue } from './jobs.js';
@@ -42,6 +45,26 @@ const IMPORT_MAX_BYTES = 5 * 1024 * 1024, IMPORT_MAX_ROWS = 50_000;
 const ImportCommit = z.object({ consent: z.object({ status: z.literal('subscribed'), evidence: z.string().trim().min(1).max(2000).describe('How these people agreed to marketing email, for example "Opted in at checkout". Stored with each consent record.'), policyVersion: z.string().trim().min(1).max(120).optional() }).strict().optional().describe('Records that everyone in this import agreed to receive marketing email. It changes only contacts with no consent decision yet: prior opt-outs stay unsubscribed and suppressed addresses stay suppressed. Omit it to import without consent.') }).strict().openapi('CommitContactImportInput');
 const CommittedImport = Import.extend({ subscribed: z.number().int().describe('Contacts this commit marked subscribed; 0 without consent or when the import was already committed.') }).openapi('CommittedContactImport');
 const ImportInput = z.object({ csv: z.string().min(1).max(IMPORT_MAX_BYTES), listId: z.string().min(1).max(120).optional(), mapping: z.object({ email: z.string().min(1).max(200), name: z.string().min(1).max(200).optional(), firstName: z.string().min(1).max(200).optional(), plan: z.string().min(1).max(200).optional(), country: z.string().min(1).max(200).optional() }).strict() }).strict();
+
+const MERGE_MAX_MEMBERSHIPS = 2_000_000;
+const MergeInput = z.object({
+  sourceIds: z.array(z.string().min(1).max(120)).min(1).max(50).describe('The lists whose members are added to the target. A contact on several of them is added once. The sources keep their members unless deleteSources is true.'),
+  into: z.union([
+    z.object({ listId: z.string().min(1).max(120).describe('An existing list in this workspace. It keeps its own members.') }).strict(),
+    z.object({ name: z.string().trim().min(1).max(200).describe('The name of a new list the merge creates.'), description: z.string().max(2000).default('') }).strict(),
+  ]).describe('The list that gets the members: an existing one ({ listId }) or a new one ({ name }).'),
+  deleteSources: z.boolean().default(false).describe('Delete the source lists after merging. Their contacts stay. The target can’t be one of the sources then.'),
+  dryRun: z.boolean().default(false).describe('Count what the merge would do and change nothing. Takes no Idempotency-Key.'),
+}).strict().openapi('MergeContactListsInput');
+const MergeResult = z.object({
+  dryRun: z.boolean(),
+  list: List.nullable().describe('The target list; null on a dry run into a new list.'),
+  created: z.boolean().describe('The merge created the target list (a dry run: would create it).'),
+  sourceIds: z.array(z.string()).describe('The source lists, each once.'),
+  added: z.number().int().describe('Contacts added to the target: members of the sources that weren’t on it, each once.'),
+  total: z.number().int().describe('The target’s members after the merge, each contact once. Active contacts only, as in ContactListRead counts.'),
+  deletedListIds: z.array(z.string()).describe('The source lists deleted (a dry run: would delete).'),
+}).openapi('ContactListMerge');
 
 function scope(table: { workspaceId: AnyPgColumn }, identity: Pick<Actor, 'workspaceId'>) { return eq(table.workspaceId, identity.workspaceId); }
 function scopeValues(identity: Pick<Actor, 'workspaceId'>) { return { workspaceId: identity.workspaceId }; }
@@ -244,6 +267,68 @@ function previewImport(input: z.infer<typeof ImportInput>) {
   return { rows, errors: failures };
 }
 
+// Merging lists copies memberships, nothing else: consent, suppression and profiles stay as they are. One transaction
+// locks every list involved in ID order (the order campaign launches share-lock their audience lists in), refuses a
+// change to a list an active campaign uses, then copies the sources' members in one INSERT ... SELECT. The source
+// memberships are capped at the campaign audience cap, so the statement stays bounded.
+async function mergeLists(db: DbExecutor, c: Ctx, identity: Actor, input: z.infer<typeof MergeInput>): Promise<z.infer<typeof MergeResult>> {
+  const sourceIds = [...new Set(input.sourceIds)], targetId = 'listId' in input.into ? input.into.listId : null;
+  const involved = [...new Set([...sourceIds, ...(targetId ? [targetId] : [])])].sort();
+  if (involved.length < 2) throw new ApiError(422, 'LIST_MERGE_TOO_FEW', targetId ? 'Name at least one list other than the target in sourceIds.' : 'Merging into a new list takes at least two different lists in sourceIds.', 'sourceIds');
+  if (input.deleteSources && targetId && sourceIds.includes(targetId)) throw new ApiError(422, 'LIST_MERGE_TARGET_IS_SOURCE', 'The target list would be deleted with the sources. Leave it out of sourceIds, or set deleteSources to false.', 'into.listId');
+  const query = db.select().from(lists).where(and(scope(lists, identity), inArray(lists.id, involved))).orderBy(asc(lists.id));
+  const found = input.dryRun ? await query : await query.for('update');
+  const missing = involved.find(listId => !found.some(row => row.id === listId));
+  // A list in another workspace answers as one that doesn't exist.
+  if (missing) throw new ApiError(404, 'NOT_FOUND', `List ${missing} was not found in this workspace.`, missing === targetId ? 'into.listId' : 'sourceIds');
+  // What the merge changes: the target gains members, and deleted sources go. Campaigns that have launched read their
+  // frozen snapshot, so neither would reach them; refusing says so instead of leaving it to be discovered.
+  const changed = [...new Set([...(targetId ? [targetId] : []), ...(input.deleteSources ? sourceIds : [])])];
+  if (changed.length) {
+    const [busy] = (await db.execute<{ id: string; name: string | null; state: string; list_id: string }>(sql`SELECT c.id, c.draft->>'name' AS name, c.state, l AS list_id
+      FROM sending_campaigns c CROSS JOIN LATERAL unnest(${sql.param(changed)}::text[]) l
+      WHERE c.workspace_id = ${identity.workspaceId} AND c.state = ANY(${sql.param([...CAMPAIGN_ACTIVE])}::text[])
+        AND (c.draft #>> '{audience,listId}' = l OR coalesce(c.draft #> '{audience,excludeListIds}', '[]'::jsonb) ? l)
+      ORDER BY c.id LIMIT 1`)).rows;
+    if (busy) {
+      const list = found.find(row => row.id === busy.list_id)!;
+      const error = new ApiError(409, 'LIST_IN_USE', `${list.name} is in the audience of the campaign “${busy.name ?? busy.id}”, which is ${busy.state}. Merge it once the campaign has finished, or cancel the campaign.`, list.id === targetId ? 'into.listId' : 'sourceIds');
+      error.details = [{ listId: list.id, campaignId: busy.id, state: busy.state }];
+      throw error;
+    }
+  }
+  const sources = sql`${sql.param(sourceIds)}::text[]`;
+  if ((await db.execute(sql`SELECT 1 FROM audience_list_members WHERE workspace_id = ${identity.workspaceId} AND list_id = ANY(${sources}) OFFSET ${MERGE_MAX_MEMBERSHIPS} LIMIT 1`)).rowCount)
+    throw new ApiError(422, 'LIST_MERGE_TOO_LARGE', `A merge copies at most ${MERGE_MAX_MEMBERSHIPS.toLocaleString('en-US')} memberships from its source lists. Nothing was merged; merge fewer lists at a time.`, 'sourceIds');
+  const active = sql`JOIN audience_contacts c ON c.workspace_id = m.workspace_id AND c.id = m.contact_id AND c.deleted_at IS NULL`;
+  const deleted = input.deleteSources ? sourceIds : [];
+  if (input.dryRun) {
+    const all = sql`${sql.param(targetId ? [...sourceIds, targetId] : sourceIds)}::text[]`;
+    const [counts] = (await db.execute<{ added: number; total: number }>(sql`SELECT count(*) FILTER (WHERE NOT on_target)::int AS added, count(*)::int AS total
+      FROM (SELECT coalesce(bool_or(m.list_id = ${targetId}::text), false) AS on_target FROM audience_list_members m ${active}
+        WHERE m.workspace_id = ${identity.workspaceId} AND m.list_id = ANY(${all}) GROUP BY m.contact_id) u`)).rows;
+    return { dryRun: true, list: found.find(row => row.id === targetId) ?? null, created: !targetId, sourceIds, added: counts!.added, total: counts!.total, deletedListIds: deleted };
+  }
+  const into = 'name' in input.into ? input.into : null;
+  const target = into ? (await db.insert(lists).values({ id: id('lst'), ...scopeValues(identity), name: into.name, description: into.description }).returning())[0]! : found.find(row => row.id === targetId)!;
+  // One statement: the target's members before (a data-modifying CTE's rows are invisible to its siblings) plus those added.
+  const [counts] = (await db.execute<{ added: number; before: number }>(sql`WITH merged AS (
+      INSERT INTO audience_list_members (workspace_id, list_id, contact_id)
+      SELECT DISTINCT m.workspace_id, ${target.id}::text, m.contact_id FROM audience_list_members m ${active}
+      WHERE m.workspace_id = ${identity.workspaceId} AND m.list_id = ANY(${sources}) AND m.list_id <> ${target.id}
+      ON CONFLICT DO NOTHING RETURNING 1)
+    SELECT (SELECT count(*)::int FROM merged) AS added,
+      (SELECT count(*)::int FROM audience_list_members m ${active} WHERE m.workspace_id = ${identity.workspaceId} AND m.list_id = ${target.id}) AS before`)).rows;
+  if (deleted.length) {
+    await db.delete(listMembers).where(and(scope(listMembers, identity), inArray(listMembers.listId, deleted)));
+    await db.delete(lists).where(and(scope(lists, identity), inArray(lists.id, deleted)));
+  }
+  const total = counts!.before + counts!.added;
+  await recordAudit(db, c, { action: 'audience.list_merge', workspaceId: identity.workspaceId, target: { type: 'list', id: target.id },
+    after: { name: target.name, created: !!into, added: counts!.added, total }, details: { sources: found.filter(row => sourceIds.includes(row.id)).map(row => ({ id: row.id, name: row.name })), deleteSources: input.deleteSources } });
+  return { dryRun: false, list: target, created: !!into, sourceIds, added: counts!.added, total, deletedListIds: deleted };
+}
+
 export function registerAudience(app: App) {
   app.openapi(createRoute({ method: 'get', path: '/v1/contacts', operationId: 'listContacts', tags: ['Audience'], security, description: 'Active contacts with current list IDs. Search is a case-insensitive literal email/name substring. Consent and suppression filters are independent.', request: { query: ContactQuery }, responses: { 200: response(page(ContactRead)), ...errors } }), async c => {
     const identity = actor(c), query = c.req.valid('query');
@@ -329,6 +414,14 @@ export function registerAudience(app: App) {
   });
   app.openapi(createRoute({ method: 'delete', path: '/v1/lists/{id}/members/{contactId}', operationId: 'removeListMember', tags: ['Audience'], security, request: { params: IdParams.extend({ contactId: z.string().min(1).max(120) }) }, responses: { 200: response(Deleted), ...errors } }), async c => {
     const identity = actor(c, 'manage'), params = c.req.valid('param'); await findList(c.env.db, identity, params.id); await c.env.db.delete(listMembers).where(and(scope(listMembers, identity), eq(listMembers.listId, params.id), eq(listMembers.contactId, params.contactId))); return c.json({ id: params.contactId, deleted: true as const }, 200);
+  });
+  app.openapi(createRoute({ method: 'post', path: '/v1/lists/merge', operationId: 'mergeContactLists', tags: ['Audience'], security,
+    description: `Adds every member of the source lists to one list: an existing one, or a new one the merge creates. A contact on several lists is added once. Membership isn't consent: consent, suppression and profiles don't change. With deleteSources the source lists are deleted afterwards; their contacts stay. One transaction, so a merge happens completely or not at all; it copies at most 2,000,000 memberships. dryRun returns the counts without changing anything. Refused: a list that doesn't exist in this workspace (404), fewer than two different lists, the target among the sources with deleteSources, and a target or deleted source in the audience of a campaign that is preparing, scheduled, sending or paused (409 LIST_IN_USE). Each merge is recorded in Activity. Use an Idempotency-Key to make a retry safe.`,
+    request: { headers: IdempotencyHeaders, body: json(MergeInput) }, responses: { 200: response(MergeResult), ...errors } }), async c => {
+    const identity = actor(c, 'manage'), input = c.req.valid('json');
+    const merge = (db: DbExecutor) => mergeLists(db, c, identity, input);
+    const result = input.dryRun ? await c.env.db.transaction(merge) : await idempotent(c.env.db, { ...idempotentRequest(c), workspaceId: identity.workspaceId, actorKeyId: identity.keyId }, input, merge);
+    return c.json(MergeResult.parse(result), 200);
   });
   app.openapi(createRoute({ method: 'get', path: '/v1/segments', operationId: 'listSegments', tags: ['Audience'], security, request: { query: SearchQuery }, responses: { 200: response(page(Segment)), ...errors } }), async c => {
     const identity = actor(c), query = c.req.valid('query'); const rows = await c.env.db.select().from(segments).where(and(scope(segments, identity), query.search ? searchText(segments.name, query.search) : undefined, query.cursor ? gt(segments.id, query.cursor) : undefined)).orderBy(asc(segments.id)).limit(query.limit + 1); return c.json(paginate(rows, query.limit), 200);

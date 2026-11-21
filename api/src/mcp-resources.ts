@@ -52,7 +52,7 @@ const resources: Record<string, { label: string; actions: Record<string, string>
     query: 'queryAudience', plan: 'planAudienceMutation', apply: 'applyAudiencePlan',
   } },
   lists: { label: 'Contact lists', actions: {
-    list: 'listContactLists', get: 'getContactList', create: 'createContactList', update: 'updateContactList', delete: 'deleteContactList', members: 'listListMembers', addMembers: 'addListMembers', removeMember: 'removeListMember',
+    list: 'listContactLists', get: 'getContactList', create: 'createContactList', update: 'updateContactList', delete: 'deleteContactList', members: 'listListMembers', addMembers: 'addListMembers', removeMember: 'removeListMember', merge: 'mergeContactLists',
   } },
   segments: { label: 'Dynamic contact segments', actions: {
     list: 'listSegments', get: 'getSegment', create: 'createSegment', update: 'updateSegment', delete: 'deleteSegment', preview: 'previewSegment',
@@ -124,7 +124,6 @@ export function earlierResourceActions(name: string): Readonly<Record<string, st
   return Object.hasOwn(earlierResources, name) ? earlierResources[name] : undefined;
 }
 
-// Optional pagination is uniform across resources; list it once at the tool level.
 const commonArgs = new Set(['search', 'from', 'subjectContains', 'ifMatch']);
 const commonBodyFields = new Set(['name', 'type', 'from', 'to', 'subject', 'text', 'html', 'email', 'ttlSeconds']);
 type Schema = Record<string, any>;

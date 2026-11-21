@@ -1596,6 +1596,134 @@
         ],
         "additionalProperties": false
       },
+      "ContactListMerge": {
+        "type": "object",
+        "properties": {
+          "dryRun": {
+            "type": "boolean"
+          },
+          "list": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/ContactList"
+              },
+              {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "description": "The target list; null on a dry run into a new list."
+              }
+            ]
+          },
+          "created": {
+            "type": "boolean",
+            "description": "The merge created the target list (a dry run: would create it)."
+          },
+          "sourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The source lists, each once."
+          },
+          "added": {
+            "type": "integer",
+            "description": "Contacts added to the target: members of the sources that weren’t on it, each once."
+          },
+          "total": {
+            "type": "integer",
+            "description": "The target’s members after the merge, each contact once. Active contacts only, as in ContactListRead counts."
+          },
+          "deletedListIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "The source lists deleted (a dry run: would delete)."
+          }
+        },
+        "required": [
+          "dryRun",
+          "list",
+          "created",
+          "sourceIds",
+          "added",
+          "total",
+          "deletedListIds"
+        ]
+      },
+      "MergeContactListsInput": {
+        "type": "object",
+        "properties": {
+          "sourceIds": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 120
+            },
+            "minItems": 1,
+            "maxItems": 50,
+            "description": "The lists whose members are added to the target. A contact on several of them is added once. The sources keep their members unless deleteSources is true."
+          },
+          "into": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "listId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 120,
+                    "description": "An existing list in this workspace. It keeps its own members."
+                  }
+                },
+                "required": [
+                  "listId"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200,
+                    "description": "The name of a new list the merge creates."
+                  },
+                  "description": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "default": ""
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            ],
+            "description": "The list that gets the members: an existing one ({ listId }) or a new one ({ name })."
+          },
+          "deleteSources": {
+            "type": "boolean",
+            "default": false,
+            "description": "Delete the source lists after merging. Their contacts stay. The target can’t be one of the sources then."
+          },
+          "dryRun": {
+            "type": "boolean",
+            "default": false,
+            "description": "Count what the merge would do and change nothing. Takes no Idempotency-Key."
+          }
+        },
+        "required": [
+          "sourceIds",
+          "into"
+        ],
+        "additionalProperties": false
+      },
       "Segment": {
         "type": "object",
         "properties": {
@@ -27852,6 +27980,183 @@
             "lang": "Shell",
             "label": "cURL",
             "source": "curl --request DELETE \\\n  --url 'https://nightmail.dev/v1/lists/resource_123/members/contact_123' \\\n  --header \"Authorization: Bearer $NIGHTMAIL_API_KEY\""
+          }
+        ]
+      }
+    },
+    "/v1/lists/merge": {
+      "post": {
+        "operationId": "mergeContactLists",
+        "tags": [
+          "Audience"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          },
+          {
+            "dashboardSession": []
+          },
+          {
+            "secureDashboardSession": []
+          }
+        ],
+        "description": "Adds every member of the source lists to one list: an existing one, or a new one the merge creates. A contact on several lists is added once. Membership isn't consent: consent, suppression and profiles don't change. With deleteSources the source lists are deleted afterwards; their contacts stay. One transaction, so a merge happens completely or not at all; it copies at most 2,000,000 memberships. dryRun returns the counts without changing anything. Refused: a list that doesn't exist in this workspace (404), fewer than two different lists, the target among the sources with deleteSources, and a target or deleted source in the audience of a campaign that is preparing, scheduled, sending or paused (409 LIST_IN_USE). Each merge is recorded in Activity. Use an Idempotency-Key to make a retry safe.",
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "pattern": "^[\\x21-\\x7E]+$",
+              "example": "order-4821-receipt",
+              "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path, and are retained indefinitely. Without a key, every request is processed, so a retried send can deliver twice."
+            },
+            "required": false,
+            "description": "Optional. Makes retries safe. Repeating a request with the same key and the same body returns the original result without performing the write again. While the first request with a key is still running, a duplicate returns 409 IDEMPOTENCY_IN_PROGRESS with Retry-After: retry with the same key, never a new one. Reusing a key with a different body returns 409 IDEMPOTENCY_CONFLICT. Keys are scoped to the API key and request path, and are retained indefinitely. Without a key, every request is processed, so a retried send can deliver twice.",
+            "name": "Idempotency-Key",
+            "in": "header"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeContactListsInput"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ContactListMerge"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Request failed; use error.code and requestId to diagnose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        },
+        "x-nightmail-permission": {
+          "permission": "audience",
+          "level": "write",
+          "scope": "workspace",
+          "person": "admin",
+          "text": "Needs Audience & content: write on the whole workspace. A person needs to be an owner or admin."
+        },
+        "x-codeSamples": [
+          {
+            "lang": "TypeScript",
+            "label": "TypeScript SDK",
+            "source": "import { createClient } from '@nightmail/sdk/client';\nimport { mergeContactLists } from '@nightmail/sdk';\n\nconst client = createClient({\n  baseUrl: 'https://nightmail.dev',\n  auth: scheme => scheme.scheme === 'bearer'\n    ? process.env.NIGHTMAIL_API_KEY\n    : undefined,\n});\n\nconst result = await mergeContactLists({\n  client,\n  body: {\n    \"sourceIds\": [\n      \"source_123\"\n    ],\n    \"into\": {\n      \"listId\": \"list_123\"\n    },\n    \"deleteSources\": false,\n    \"dryRun\": false\n  },\n  throwOnError: true,\n});\n\nconsole.log(result.data);"
+          },
+          {
+            "lang": "Shell",
+            "label": "cURL",
+            "source": "curl --request POST \\\n  --url 'https://nightmail.dev/v1/lists/merge' \\\n  --header \"Authorization: Bearer $NIGHTMAIL_API_KEY\" \\\n  --header 'Content-Type: application/json' \\\n  --data '{\n  \"sourceIds\": [\n    \"source_123\"\n  ],\n  \"into\": {\n    \"listId\": \"list_123\"\n  },\n  \"deleteSources\": false,\n  \"dryRun\": false\n}'"
           }
         ]
       }

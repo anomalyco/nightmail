@@ -718,6 +718,9 @@ export async function seed(fx) {
   const contacts = [];
   for (const who of ['ada', 'grace', 'linus', 'margaret', 'ken']) contacts.push(await dana.api('POST', '/v1/contacts', { email: `${who}@example.net`, name: who[0].toUpperCase() + who.slice(1), properties: { plan: who.length > 4 ? 'pro' : 'free' } }));
   await dana.api('POST', `/v1/lists/${list.id}/members`, { contactIds: contacts.map(c => c.id) });
+  // A second list sharing two of them: Lists' merge dialog counts each contact once.
+  const newsletter = await dana.api('POST', '/v1/lists', { name: 'Newsletter' });
+  await dana.api('POST', `/v1/lists/${newsletter.id}/members`, { contactIds: [contacts[1].id, contacts[4].id] });
   const segment = await dana.api('POST', '/v1/segments', { name: 'Pro plan', rule: { field: 'plan', operator: 'eq', value: 'pro' } });
   const template = await dana.api('POST', '/v1/templates', { name: 'Receipt' });
   const campaign = await dana.api('POST', '/v1/campaigns', { name: 'November product update', subject: 'What shipped in November', from: 'news@mail.northwind.example', html: '<p>Hello</p>' });

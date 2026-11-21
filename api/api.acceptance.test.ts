@@ -9520,6 +9520,99 @@ describe('Lists, compound segments, imports and exports', () => {
     assert.deepEqual(remaining.map((row: Json) => row.id).sort(), [b.id, c.id].sort());
   });
 
+  test('list merge: each contact once, consent and suppression unchanged, sources deleted on request, an Idempotency-Key replays, recorded in Activity', async t => {
+    const key = await keyFixture(t), db = await fixtureDatabase(t);
+    const [a, b, target] = [await resource(t, key.secret, '/v1/lists', { name: unique('merge-a') }), await resource(t, key.secret, '/v1/lists', { name: unique('merge-b') }), await resource(t, key.secret, '/v1/lists', { name: unique('merge-target') })];
+    const contact = async (status?: 'subscribed' | 'unsubscribed') => { const row = await resource(t, key.secret, '/v1/contacts', { email: address() }); if (status) ok(await consent(key.secret, row.id, status)); return row; };
+    const subscribed = await contact('subscribed'), unsubscribed = await contact('unsubscribed'), unknown = await contact(), suppressed = await contact('subscribed'), already = await contact('subscribed');
+    await db.query("UPDATE audience_contacts SET suppressed = true, suppression_reason = 'hard_bounce' WHERE id = $1", [suppressed.id]);
+    const people = [subscribed, unsubscribed, unknown, suppressed, already];
+    ok(await http('POST', `/v1/lists/${a.id}/members`, key.secret, { contactIds: [subscribed.id, unsubscribed.id, unknown.id, already.id] }));
+    ok(await http('POST', `/v1/lists/${b.id}/members`, key.secret, { contactIds: [subscribed.id, suppressed.id, unknown.id] }));
+    ok(await http('POST', `/v1/lists/${target.id}/members`, key.secret, { contactIds: [already.id] }));
+    const state = async () => Promise.all(people.map(async row => {
+      const { marketingConsent, suppressed, suppressionReason } = ok(await http('GET', `/v1/contacts/${row.id}`, key.secret));
+      return { marketingConsent, suppressed, suppressionReason, events: page(await http('GET', `/v1/contacts/${row.id}/consent?limit=100`, key.secret)).length };
+    }));
+    const before = await state();
+    assert.deepEqual(before.map(row => [row.marketingConsent, row.suppressed]), [['subscribed', false], ['unsubscribed', false], ['unknown', false], ['subscribed', true], ['subscribed', false]]);
+    const body = { sourceIds: [a.id, b.id, a.id], into: { listId: target.id }, deleteSources: true };
+    // A dry run counts the merge and changes nothing.
+    const dry = ok(await http('POST', '/v1/lists/merge', key.secret, { ...body, dryRun: true }));
+    assert.deepEqual({ ...dry, list: dry.list.id, deletedListIds: [...dry.deletedListIds].sort() }, { dryRun: true, list: target.id, created: false, sourceIds: [a.id, b.id], added: 4, total: 5, deletedListIds: [a.id, b.id].sort() });
+    assert.deepEqual(await Promise.all([a, b, target].map(async list => ok(await http('GET', `/v1/lists/${list.id}`, key.secret)).counts.total)), [4, 3, 1]);
+    const headers = { 'Idempotency-Key': unique('merge') };
+    const merged = ok(await http('POST', '/v1/lists/merge', key.secret, body, headers));
+    assert.deepEqual({ ...merged, list: merged.list.id }, { dryRun: false, list: target.id, created: false, sourceIds: [a.id, b.id], added: 4, total: 5, deletedListIds: [a.id, b.id] });
+    // Each contact is on the target once; a member of both sources and one already on the target too.
+    const members = page(await http('GET', `/v1/lists/${target.id}/members?limit=100`, key.secret)).map((row: Json) => row.id);
+    assert.deepEqual([...members].sort(), people.map(row => row.id).sort());
+    assert.deepEqual(ok(await http('GET', `/v1/lists/${target.id}`, key.secret)).counts, { total: 5, subscribed: 2, unsubscribed: 1, unknown: 1, suppressed: 1 });
+    // The sources are gone and their contacts stay, each with the consent, suppression and consent history it had.
+    error(await http('GET', `/v1/lists/${a.id}`, key.secret), 404, 'NOT_FOUND');
+    error(await http('GET', `/v1/lists/${b.id}`, key.secret), 404, 'NOT_FOUND');
+    assert.deepEqual(await state(), before, 'Merging lists must not change consent or suppression.');
+    for (const row of people) assert.deepEqual(ok(await http('GET', `/v1/contacts/${row.id}`, key.secret)).listIds, [target.id]);
+    // The same key and body replay the result without merging again; the same key with another body is refused.
+    assert.deepEqual(ok(await http('POST', '/v1/lists/merge', key.secret, body, headers)), merged);
+    error(await http('POST', '/v1/lists/merge', key.secret, { ...body, deleteSources: false }, headers), 409, 'IDEMPOTENCY_CONFLICT');
+    // Into a new list, keeping the sources.
+    const [x, y] = [await resource(t, key.secret, '/v1/lists', { name: unique('merge-x') }), await resource(t, key.secret, '/v1/lists', { name: unique('merge-y') })];
+    ok(await http('POST', `/v1/lists/${x.id}/members`, key.secret, { contactIds: [subscribed.id, unknown.id] }));
+    ok(await http('POST', `/v1/lists/${y.id}/members`, key.secret, { contactIds: [unknown.id, unsubscribed.id] }));
+    const name = unique('merged');
+    const fresh = ok(await http('POST', '/v1/lists/merge', key.secret, { sourceIds: [x.id, y.id], into: { name } }));
+    cleanup(t, async () => { ok(await http('DELETE', `/v1/lists/${fresh.list.id}`, key.secret), [200, 404]); });
+    assert.deepEqual({ created: fresh.created, name: fresh.list.name, added: fresh.added, total: fresh.total, deleted: fresh.deletedListIds }, { created: true, name, added: 3, total: 3, deleted: [] });
+    assert.deepEqual(await Promise.all([x, y].map(async list => ok(await http('GET', `/v1/lists/${list.id}`, key.secret)).counts.total)), [2, 2]);
+    assert.deepEqual(await state(), before);
+    // Activity: one entry per merge, none for the dry run or the replay.
+    const { rows } = await db.query("SELECT actor_type, actor_id, target_type, target_id, summary, internal FROM audit_events WHERE action = 'audience.list_merge' AND target_id = ANY($1) ORDER BY at", [[target.id, fresh.list.id]]);
+    assert.deepEqual(rows, [
+      { actor_type: 'api_key', actor_id: key.id, target_type: 'list', target_id: target.id, internal: false, summary: { after: { name: target.name, created: false, added: 4, total: 5 }, sources: [{ id: a.id, name: a.name }, { id: b.id, name: b.name }].sort((p, q) => p.id.localeCompare(q.id)), deleteSources: true } },
+      { actor_type: 'api_key', actor_id: key.id, target_type: 'list', target_id: fresh.list.id, internal: false, summary: { after: { name, created: true, added: 3, total: 3 }, sources: [{ id: x.id, name: x.name }, { id: y.id, name: y.name }].sort((p, q) => p.id.localeCompare(q.id)), deleteSources: false } },
+    ]);
+  });
+
+  test('list merge refuses another workspace’s list, fewer than two lists, deleting its own target and a list an active campaign uses', async t => {
+    const key = await keyFixture(t), db = await fixtureDatabase(t);
+    const [a, b] = [await resource(t, key.secret, '/v1/lists', { name: unique('merge-refused-a') }), await resource(t, key.secret, '/v1/lists', { name: unique('merge-refused-b') })];
+    const member = await resource(t, key.secret, '/v1/contacts', { email: address() });
+    ok(await consent(key.secret, member.id, 'subscribed'));
+    ok(await http('POST', `/v1/lists/${a.id}/members`, key.secret, { contactIds: [member.id] }));
+    const merge = (body: Json, secret = key.secret) => http('POST', '/v1/lists/merge', secret, body);
+    // Another workspace's list answers as one that doesn't exist, as a source or as the target.
+    const foreign = `lst_${randomUUID().replaceAll('-', '')}`;
+    await db.query("INSERT INTO audience_lists(id, workspace_id, name) VALUES ($1, $2, 'Foreign')", [foreign, unique('ws')]);
+    cleanup(t, async () => { await db.query('DELETE FROM audience_lists WHERE id = $1', [foreign]); });
+    const outside = error(await merge({ sourceIds: [a.id, foreign], into: { listId: b.id } }), 404, 'NOT_FOUND');
+    assert.equal(outside.field, 'sourceIds');
+    assert.ok(outside.message.includes(foreign), outside.message);
+    assert.equal(error(await merge({ sourceIds: [a.id], into: { listId: foreign } }), 404, 'NOT_FOUND').field, 'into.listId');
+    for (const body of [{ sourceIds: [a.id], into: { name: unique('one') } }, { sourceIds: [a.id, a.id], into: { name: unique('same') } }, { sourceIds: [a.id], into: { listId: a.id } }])
+      assert.equal(error(await merge(body), 422, 'LIST_MERGE_TOO_FEW').field, 'sourceIds');
+    error(await merge({ sourceIds: [], into: { listId: a.id } }), 422);
+    assert.equal(error(await merge({ sourceIds: [a.id, b.id], into: { listId: a.id }, deleteSources: true }), 422, 'LIST_MERGE_TARGET_IS_SOURCE').field, 'into.listId');
+    const reader = await keyFixture(t, { permissions: ['read'] });
+    assert.deepEqual(error(await merge({ sourceIds: [a.id], into: { listId: b.id } }, reader.secret), 403, 'PERMISSION_DENIED').required, { permission: 'audience', level: 'write' });
+    // A campaign that has launched holds its list: the target and deleted sources are refused, dry run included.
+    const campaign = await campaignFixture(t, key.secret, { listId: a.id });
+    ok(await http('POST', `/v1/campaigns/${campaign.id}/schedule`, key.secret, { revision: campaign.revision, scheduledAt: new Date(Date.now() + 3_600_000).toISOString() }), 202);
+    for (const dryRun of [true, false]) {
+      const busy = error(await merge({ sourceIds: [b.id], into: { listId: a.id }, dryRun }), 409, 'LIST_IN_USE');
+      assert.equal(busy.field, 'into.listId');
+      assert.equal(busy.details[0].campaignId, campaign.id);
+      assert.equal(error(await merge({ sourceIds: [a.id, b.id], into: { name: unique('busy') }, deleteSources: true, dryRun }), 409, 'LIST_IN_USE').field, 'sourceIds');
+    }
+    // A source that is only read isn't changed, so the campaign doesn't hold it.
+    const copy = ok(await merge({ sourceIds: [a.id, b.id], into: { name: unique('copy') } }));
+    cleanup(t, async () => { ok(await http('DELETE', `/v1/lists/${copy.list.id}`, key.secret), [200, 404]); });
+    assert.deepEqual([copy.added, copy.total], [1, 1]);
+    // Nothing refused changed anything.
+    assert.deepEqual(await Promise.all([a, b].map(async list => ok(await http('GET', `/v1/lists/${list.id}`, key.secret)).counts.total)), [1, 0]);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM audit_events WHERE action = 'audience.list_merge' AND target_id = ANY($1)", [[a.id, b.id]])).rows[0].n, 0);
+  });
+
   test('CSV preview reports bad rows, commit is repeatable, quoted fields round-trip, and import preserves opt-outs', async t => {
     const key = await keyFixture(t);
     const list = await resource(t, key.secret, '/v1/lists', { name: unique('import-list') });

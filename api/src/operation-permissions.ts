@@ -74,6 +74,7 @@ export const OPERATION_PERMISSIONS: Record<string, OperationPermission> = {
   listContactLists: needs('audience', 'read', 'workspace'), createContactList: needs('audience', 'write', 'workspace', admin), getContactList: needs('audience', 'read', 'workspace'),
   updateContactList: needs('audience', 'write', 'workspace', admin), deleteContactList: needs('audience', 'write', 'workspace', admin),
   listListMembers: needs('audience', 'read', 'workspace'), addListMembers: needs('audience', 'write', 'workspace', admin), removeListMember: needs('audience', 'write', 'workspace', admin),
+  mergeContactLists: needs('audience', 'write', 'workspace', admin),
   listSegments: needs('audience', 'read', 'workspace'), createSegment: needs('audience', 'write', 'workspace', admin), getSegment: needs('audience', 'read', 'workspace'),
   updateSegment: needs('audience', 'write', 'workspace', admin), deleteSegment: needs('audience', 'write', 'workspace', admin), previewSegment: needs('audience', 'read', 'workspace'),
   previewContactImport: needs('audience', 'write', 'workspace'), listContactImports: needs('audience', 'read', 'workspace'), getContactImport: needs('audience', 'read', 'workspace'),
