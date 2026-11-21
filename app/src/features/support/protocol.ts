@@ -47,7 +47,8 @@ export type ServerMessage =
 
 export type ClientMessage =
   | { type: 'user.message'; clientMessageId: string; text: string; attachments?: string[] }
-  | { type: 'consent.respond'; requestId: string; decision: 'allow'; handoff: string }
+  // handoff: ignored by the current support Worker (Nightmail decides), kept for one release for the previous one.
+  | { type: 'consent.respond'; requestId: string; decision: 'allow'; handoff?: string }
   | { type: 'consent.respond'; requestId: string; decision: 'deny' }
   | { type: 'action.resolved'; actionId: string }
   | { type: 'human.request' }
@@ -98,7 +99,8 @@ export interface SupportTransport {
   /** Opens (or resumes) the conversation. Safe to call again after going offline. */
   connect(): void
   send(message: ClientMessage): boolean
-  /** Allow on a consent card: gets a handoff that shares content, then answers the request with it (deny if that fails). */
+  /** Allow on a consent card: tells Nightmail (content access for this chat), then answers the request; the Worker checks
+   *  Nightmail's answer itself. */
   allowContent(requestId: string): Promise<void>
   /** A proposed change as Nightmail keeps it, read with the person's own session (§4.4). */
   readAction(actionId: string, signal?: AbortSignal): Promise<SupportAction>

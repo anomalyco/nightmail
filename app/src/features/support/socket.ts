@@ -183,9 +183,15 @@ export function createSocketTransport({ origin, workspaceId, resume }: { origin:
     kind: 'live',
     connect: () => { attempt = 0; void connect() },
     send,
+    // Allow on a consent card (PROTOCOL.md §4.3): the person tells Nightmail with their own session, then the frame says
+    // so. The support Worker allows content only if Nightmail's scope agrees, so a failed call still sends the frame. The
+    // share handoff rides along for the previous Worker, which needed it, for one release.
     async allowContent(requestId) {
-      try { if (send({ type: 'consent.respond', requestId, decision: 'allow', handoff: await handoff(true) })) return } catch { /* Not allowed: answer no. */ }
-      send({ type: 'consent.respond', requestId, decision: 'deny' })
+      const conversationId = started?.conversationId ?? load(key)?.conversationId
+      if (conversationId) { try { await supportApi.allowContent(conversationId) } catch { /* The Worker asks Nightmail itself. */ } }
+      let token: string | undefined
+      try { token = await handoff(true) } catch { /* Only the previous Worker needs it. */ }
+      send({ type: 'consent.respond', requestId, decision: 'allow', ...token ? { handoff: token } : {} })
     },
     readAction: (actionId, signal) => supportActionsApi.get(actionId, signal),
     // Nightmail runs the change for the person's session; the hint only wakes the agent, which reads what came of it

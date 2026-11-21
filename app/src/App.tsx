@@ -24,6 +24,7 @@ const operator = chunk(() => import('./features/operator'))
 const supportInbox = chunk(() => import('./features/support-inbox'))
 const supportAction = chunk(() => import('./features/support/actions'))
 const legal = chunk(() => import('./features/legal'))
+const supportContinue = chunk(() => import('./features/support/continue'))
 const loadOnboarding = onboarding.preload
 const loadOverview = overview.preload
 const loadLogs = logs.preload
@@ -82,11 +83,13 @@ const SupportConversationPage = supportInbox.page(m => m.SupportConversationPage
 const SupportActionDialog = supportAction.page(m => m.SupportActionDialog)
 const OnboardingPage = onboarding.page(m => m.OnboardingPage)
 const LegalPage = legal.page(m => m.LegalPage)
+const SupportContinuePage = supportContinue.page(m => m.SupportContinuePage)
 
 // Preload the first screen's code alongside /v1/me. A workspace that may need onboarding waits instead.
 const noop = () => {}
 const initialPath = window.location.pathname
 if (initialPath === '/legal' || initialPath.startsWith('/legal/')) loadLegal().catch(noop)
+else if (initialPath.startsWith('/support/continue/')) supportContinue.preload().catch(noop)
 else if (initialPath === '/onboarding') loadOnboarding().catch(noop)
 // The docs are public: signed out or in, their code loads alongside /v1/me.
 else if (['/docs', '/developer'].some(path => initialPath.startsWith(path))) loadDocs().catch(noop)
@@ -156,7 +159,7 @@ export function App() {
   return <AppErrorBoundary><Routes>{routes}</Routes></AppErrorBoundary>
 }
 // The route table, also given to analytics (a page view names its template) and to the signed-out pages (lib/routes.ts).
-const routes = <><Route path="legal/:doc?" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><LegalPage /></Suspense></ChunkFallback.Provider>} /><Route path="onboarding" element={<OnboardingRoute />} /><Route index element={<RootPage />} /><Route element={<DashboardGate />}>
+const routes = <><Route path="legal/:doc?" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><LegalPage /></Suspense></ChunkFallback.Provider>} /><Route path="onboarding" element={<OnboardingRoute />} /><Route path="support/continue/:id" element={<ChunkFallback.Provider value={<BootLoader />}><SupportContinuePage /></ChunkFallback.Provider>} /><Route index element={<RootPage />} /><Route element={<DashboardGate />}>
     <Route path="overview" element={<OverviewPage />} />
     <Route path="logs" element={<LogsPage />} /><Route path="logs/received/:id" element={<Moved to={params => `/logs/${encodeURIComponent(params.id ?? '')}`} />} /><Route path="logs/:id" element={<LogDetailPage />} />
     <Route path="receiving/endpoints" element={<Navigate replace to="/receiving?tab=destinations" />}/><Route path="receiving/rituals/*" element={<RitualsRedirect />} /><Route path="receiving/rules/new" element={<NewRulePage />} /><Route path="receiving/rules/new/script" element={<RulesPage />} /><Route path="receiving/rules/new/:recipe" element={<NewRecipeRoute />} /><Route path="receiving/rules/:key" element={<RuleRoute />} /><Route path="receiving/rules/:key/code" element={<RulesPage />} /><Route path="receiving/rules" element={<Navigate replace to="/receiving?tab=rules" />} /><Route path="receiving/routing" element={<Navigate replace to="/receiving" />} /><Route path="receiving/trace" element={<TracePage />} /><Route path="receiving" element={<ReceivingPage />} /><Route path="receiving/inbox" element={<InboundPage />} /><Route path="receiving/addresses/:id" element={<InboundAddressDetailPage />} /><Route path="receiving/webhooks" element={<WebhooksListRedirect />} /><Route path="receiving/webhooks/:id" element={<InboundWebhookDetailPage />} />

@@ -11,6 +11,10 @@ export const supportApi = {
       ...(requestIds.length ? { requestIds } : {}), ...(input.message ? { message: input.message } : {}),
     } })
   },
+  /** The chat's own person lets support read message content in its workspace (support/PROTOCOL.md §4.3). */
+  allowContent: (conversationId: string) => request<{ id: string; contentWorkspaceId: string }>(`/v1/support-conversations/${encodeURIComponent(conversationId)}/content-access`, { method: 'POST' }),
+  /** Continue an emailed support request signed in: Nightmail binds it to this person when their verified address wrote it. */
+  claim: (conversationId: string) => request<{ id: string; mode: string }>(`/v1/support-conversations/${encodeURIComponent(conversationId)}/claim`, { method: 'POST' }),
 }
 
 /** A change support proposed to the signed-in person (api/src/support-actions.ts): its sentence is
