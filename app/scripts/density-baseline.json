@@ -133,6 +133,14 @@
    "score": 6,
    "findings": []
   },
+  "Logs · campaign search · desktop": {
+   "score": 17,
+   "findings": []
+  },
+  "Logs · campaign search · phone": {
+   "score": 11,
+   "findings": []
+  },
   "Logs · desktop": {
    "score": 16,
    "findings": []
@@ -151,6 +159,14 @@
   },
   "Logs · received · desktop": {
    "score": 7,
+   "findings": []
+  },
+  "Logs · search · desktop": {
+   "score": 17,
+   "findings": []
+  },
+  "Logs · search · phone": {
+   "score": 9,
    "findings": []
   },
   "New campaign · desktop": {

@@ -441,9 +441,13 @@ export function literalSearch(value: string) { return `%${value.replace(/[\\%_]/
 // sender, recipients, subject or IDs, through the trigram index on that mail alone (migration 396). Campaign mail matches
 // its exact recipient address, in any case, through a btree, or its email ID, and its campaign lists it (campaignId): a
 // campaign's recipients would otherwise each add a trigram set to that index, written again on every status change.
-// The log text is NULL for campaign mail, exactly as the index and its statistics (migration 395) write it.
-export const sentSearch = (term: string) => sql`((${emails.campaignId} IS NULL AND (CASE WHEN ${emails.campaignId} IS NULL THEN sending_log_text(${emails.id},${emails.campaignId},${emails.providerId},${emails.from},${emails.subject},${emails.to} || ${emails.cc} || ${emails.bcc}) END) ILIKE ${literalSearch(term)})
-  OR (${emails.campaignId} IS NOT NULL AND lower(${emails.to}->>0) = lower(${term})) OR ${emails.id} = ${term})`;
+// The log text is NULL for campaign mail, exactly as the index and its statistics (migration 395) write it. In one
+// campaign's list only campaign mail can match, so the direct-mail branch is left out: the planner can't tell it never
+// matches there, and for a term common in direct mail it would read every email of the workspace looking for it.
+export const sentSearch = (term: string, campaign: boolean) => {
+  const exact = sql`(${emails.campaignId} IS NOT NULL AND lower(${emails.to}->>0) = lower(${term})) OR ${emails.id} = ${term}`;
+  return campaign ? sql`(${exact})` : sql`((${emails.campaignId} IS NULL AND (CASE WHEN ${emails.campaignId} IS NULL THEN sending_log_text(${emails.id},${emails.campaignId},${emails.providerId},${emails.from},${emails.subject},${emails.to} || ${emails.cc} || ${emails.bcc}) END) ILIKE ${literalSearch(term)}) OR ${exact})`;
+};
 export const scope = (table: { workspaceId: AnyPgColumn }, a: Pick<Actor, 'workspaceId'>) => eq(table.workspaceId, a.workspaceId);
 // A key restricted to sender domains reads only mail sent from those domains or their subdomains (L2).
 export function senderDomainWhere(column: AnyPgColumn | SQL, allowed: readonly string[] | SQL) {
@@ -1511,7 +1515,7 @@ export function registerSending(app: App) {
       q.campaignId ? eq(emails.campaignId, q.campaignId) : undefined, q.status === 'queued' ? inArray(emails.status, ['queued', 'scheduled']) : q.status ? eq(emails.status, q.status) : undefined,
       q.region ? eq(emails.region, q.region) : undefined, q.kind ? sql`${emails.snapshot}->>'kind' = ${q.kind}` : undefined,
       q.from ? gte(emails.createdAt, q.from) : undefined, q.to ? lt(emails.createdAt, q.to) : undefined,
-      q.search ? sentSearch(q.search) : undefined,
+      q.search ? sentSearch(q.search, !!q.campaignId) : undefined,
     )).orderBy(desc(emails.createdAt), desc(emails.id)).limit(q.limit + 1), readLimit(READ_LIMIT.emails));
     return c.json({ data: rows.slice(0, q.limit).map(row => emailView(listedSubject(a, row))), nextCursor: nextCursor(rows, q.limit, binding) }, 200);
   });

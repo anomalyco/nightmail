@@ -114,7 +114,7 @@ export function registerLogs(app: App, mailAccess: (a: Actor) => MailboxAccess |
         after ? after.direction === 'sent' ? sql`(${emails.createdAt}, ${emails.id}) < (${after.at}::timestamptz, ${after.id})` : sql`${emails.createdAt} < ${after.at}::timestamptz` : undefined,
         q.campaignId ? sql`${emails.campaignId} = ${q.campaignId}` : undefined, q.status && !onlyReceived ? sql`${emails.status} = ${q.status}` : undefined,
         q.kind ? sql`${emails.snapshot}->>'kind' = ${q.kind}` : undefined, q.region ? sql`${emails.region} = ${q.region}` : undefined, dated(emails.createdAt),
-        q.search ? sentSearch(q.search) : undefined)}
+        q.search ? sentSearch(q.search, !!q.campaignId) : undefined)}
       ORDER BY ${emails.createdAt} DESC, ${emails.id} DESC LIMIT ${n})` : null;
 
     // Which messages: every retained one for administrators. Delivery details: only where getInboundMessage gives them.
@@ -144,7 +144,7 @@ export function registerLogs(app: App, mailAccess: (a: Actor) => MailboxAccess |
       const sentSide = q.direction !== 'received', receivedSide = q.direction !== 'sent' && !!access && !q.kind && !q.campaignId;
       const byKind = (kind: 'transactional' | 'marketing') => sql`SELECT ${kind}::text AS kind, ${emails.status} AS status, count(*)::int AS n FROM ${emails}
         WHERE ${and(mailWhere(a), sql`${emails.snapshot}->>'kind' = ${kind}`, q.campaignId ? sql`${emails.campaignId} = ${q.campaignId}` : undefined, q.region ? sql`${emails.region} = ${q.region}` : undefined, dated(emails.createdAt),
-          q.search ? sentSearch(q.search) : undefined)}
+          q.search ? sentSearch(q.search, !!q.campaignId) : undefined)}
         GROUP BY ${emails.status}`;
       // One after another on the read's one connection.
       const sentRows = sentSide ? (await db.execute<{ kind: 'transactional' | 'marketing'; status: string; n: number }>(sql`${byKind('transactional')} UNION ALL ${byKind('marketing')}`)).rows : [];
