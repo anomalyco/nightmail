@@ -21324,7 +21324,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       });
       const logs: Json[] = [];
       for (const level of ['info', 'warn', 'error'] as const) t.mock.method(console, level, (line: string) => { try { const l = JSON.parse(line); if (/^SES_TENANT_POLICY/.test(l.code)) logs.push(l); } catch { /* not a log line */ } });
-      const changes = () => logs.splice(0).map(l => [l.code === 'SES_TENANT_POLICY_SET' ? `${l.region} ${l.from} → ${l.to}` : `${l.region} refused ${l.wanted}, kept ${l.kept}`, l.why, l.workspaceId === f.wid]);
+      const changes = () => logs.splice(0).map(l => [l.code === 'SES_TENANT_POLICY_SET' ? `${l.region} ${l.from} → ${l.to}` : `${l.region} refused ${l.wanted}, kept ${l.kept}`, l.why, l.workspaceId === f.wid]).sort();
       const applied = async () => (await db.query('SELECT region,applied FROM hosted_tenant_policy WHERE workspace_id=$1 ORDER BY region', [f.wid])).rows.map(r => `${r.region} ${r.applied}`);
       // The reconcile pass: the standing job queues every workspace with a tenant out of line (src/standing.ts), the job runs.
       const jobId = `hosted.tenantPolicy:${f.wid}`;
