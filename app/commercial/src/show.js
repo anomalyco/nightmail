@@ -8,7 +8,7 @@
 //
 // The commercial is the master clock: its clips play back to back and never wait for Doug. Every
 // beat cuts to a new shot as its clip starts, and what happens inside the beat is keyed to the
-// announcer's words, looked up by text in the audio manifest (ElevenLabs Scribe timings). So a
+// announcer's words, looked up by text in the audio manifest (transcribed word timings). So a
 // new recording of the same script retimes the show by itself. Everything is a function of one
 // sim clock (`this.t`): cues fire once, tweens interpolate, so ?t= can fast-forward.
 import { LINES, TEAM } from "./atlas.js"
@@ -425,7 +425,7 @@ export class Show {
     at(w("s1", s1, "accepted"), () => this.readout("202 ACCEPTED · 98 MS", CREAM, false))
     at(w("s1", s1, "tenth"), () => this.chy("0.1 SECONDS!"))
 
-    // ── 2. "why send just ONE?" Four more. He turns the phone over. ─────────────
+    // ── 2. "why just send ONE?" Four more. He turns the phone over. ─────────────
     const s2 = clip("s2")
     M.b2 = s2
     at(s2, () => {
@@ -438,7 +438,7 @@ export class Show {
         this.burst("tv:20¢", 1.9)
         this.crowd("cheer", 0.3)
       }],
-      ["why", "WHY SEND JUST ONE?", YELLOW],
+      ["why", "WHY JUST SEND ONE?", YELLOW],
     ])
     // ding, ding, ding, ding, on the beat, and done before the line is
     const d0 = w("s2", s2, "at") ?? s2 + D.s2 * 0.4
@@ -1088,8 +1088,16 @@ export class Show {
     })
     HITS.forEach(([dt, on, power]) => at(hit + dt, () => this.strike(power, on)))
     // Three times the pitchman tries to go on with it, slower and quieter each time. He never
-    // gets to the end of "Call now", and the third time he is unconscious.
-    ;[[2.95, "callnow", 0.92, 0.8, "CALL N—"], [4.95, "callnow", 0.74, 0.55, "CALL…"], [7.02, "now", 0.66, 0.45, "…NOW…"]].forEach(([dt, clip, rate, gain, text]) =>
+    // gets to the end of "Call now", and the third time he is unconscious. The second try is
+    // `callnow` again, started so that the blow at 5.5 lands on its "n"; the third is over just
+    // before the last blow.
+    const nAt = w("callnow", 0, "n") ?? D.callnow
+    const last = HITS[HITS.length - 1][0]
+    ;[
+      [2.95, "callnow", 0.92, 0.8, "CALL N—"],
+      [Math.max(4.6, 5.5 - (nAt - 0.02) / 0.74), "callnow", 0.74, 0.55, "CALL…"],
+      [Math.max(6.9, last - 0.03 - D.now / 0.66), "now", 0.66, 0.45, "…NOW…"],
+    ].forEach(([dt, clip, rate, gain, text]) =>
       at(hit + dt, () => {
         this.atk.talk = 1
         this.chy(text, YELLOW)
