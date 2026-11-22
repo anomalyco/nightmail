@@ -182,7 +182,7 @@ export function OperatorWorkspacePage() {
 function policyText(policy: OperatorTenantPolicy) {
   const behind = policy.tenants.filter(t => t.applied !== policy.level).map(t => t.region)
   const refused = policy.level === 'standard' ? policy.tenants.map(t => t.refusedAt).filter(at => at !== null).sort().at(-1) : undefined
-  return [`${label(policy.level)} · ${policy.why}`, policy.standardFrom ? `standard from ${when(policy.standardFrom)}` : null,
+  return [`${label(policy.level)} · ${policy.why.replace('-', ' ')}`, policy.standardFrom ? `standard from ${when(policy.standardFrom)}` : null,
     !behind.length ? null : refused ? `AWS refused standard ${when(refused)}, asks again hourly` : `applying to ${behind.join(', ')}`].filter(Boolean).join(' · ')
 }
 const Rows = ({ rows }: { rows: [string, ReactNode][] }) => <dl className="op-rows">{rows.map(([title, value]) => <div key={title}><dt>{title}</dt><dd>{value}</dd></div>)}</dl>

@@ -69,7 +69,7 @@ const WorkspaceView = z.object({ workspace: z.object({ id: z.string(), name: z.s
       .describe(`What ${productName} last applied to each regional SES tenant (none: never switched, so enabled).`),
     policy: z.object({
       level: z.enum(['strict', 'standard']).describe('The AWS reputation policy the tenants should have now: strict while the workspace is on probation, standard once it graduated or an operator exempted it.'),
-      why: z.enum(['exempt', 'graduated', 'evaluation', 'growth', 'standing']).describe('exempt or graduated (standard); otherwise the probation reason (strict).'),
+      why: z.enum(['exempt', 'graduated', 'evaluation', 'growth', 'standing', 'paused', 'resume-limit']).describe('exempt or graduated (standard); otherwise the probation reason, a pause or a resume\'s reduced limit (strict).'),
       standardFrom: z.string().nullable().describe('A graduated workspace that fell back onto probation is strict until a day after it did.'),
       tenants: z.array(z.object({ region: z.string(), applied: z.enum(['strict', 'standard']).nullable().describe('Null: not known yet; the next reconcile applies the level.'), appliedAt: z.string().nullable(),
         refusedAt: z.string().nullable().describe('When AWS last refused standard (the runtime IAM policy or its boundary lacks it). The tenant stays strict; asked again an hour later.') })),

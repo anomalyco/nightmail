@@ -7,9 +7,9 @@ export interface OperatorQueueItem { workspaceId: string; name: string; step: St
 export interface OperatorDomain { name: string; region: string | null; pool: string; dkim: boolean; mailFrom: boolean; dmarc: string | null }
 /** What Nightmail last applied to one regional SES tenant; none listed means never switched (enabled). */
 export interface OperatorTenant { region: string; applied: 'ENABLED' | 'DISABLING' | 'DISABLED'; generation: number; appliedAt: string }
-/** The AWS reputation policy of the workspace's SES tenants: strict on probation, standard once graduated or exempt. */
+/** The AWS reputation policy of the workspace's SES tenants: strict on probation, while paused or under a resume's limit; standard once graduated or exempt. */
 export interface OperatorTenantPolicy {
-  level: 'strict' | 'standard'; why: 'exempt' | 'graduated' | 'evaluation' | 'growth' | 'standing'; standardFrom: string | null
+  level: 'strict' | 'standard'; why: 'exempt' | 'graduated' | 'evaluation' | 'growth' | 'standing' | 'paused' | 'resume-limit'; standardFrom: string | null
   /** Each ready tenant: what was applied (null: not known yet) and when AWS last refused standard. */
   tenants: { region: string; applied: 'strict' | 'standard' | null; appliedAt: string | null; refusedAt: string | null }[]
 }

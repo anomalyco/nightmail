@@ -21300,7 +21300,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.equal(aws.get('us-west-2'), 'DISABLED');
     });
   });
-  test('SES tenant policy: strict on probation, standard once graduated or exempt, strict again on a fall back; a refused standard stays strict and is asked again', async t => {
+  test('SES tenant policy: strict on probation or while limited, standard once graduated or exempt, strict again on a fall back; a refused or lost call never leaves standard unrecorded', async t => {
     await simulatedSesFixture(t, async ({ db, runtime, local }) => {
       const { ensureTenant } = await import('./src/provider-connections.js'), { tenantPolicyJob, queueTenantPolicy, tenantPolicyDrift } = await import('./src/tenant-policy.js');
       const { SESv2Client, CreateTenantCommand, CreateTenantResourceAssociationCommand, GetTenantCommand, PutTenantSuppressionAttributesCommand, UpdateReputationEntityPolicyCommand } = await import('@aws-sdk/client-sesv2'), { STSClient } = await import('@aws-sdk/client-sts');
@@ -21308,8 +21308,9 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       // A key of its own: the platform principal is cached by access key.
       runtime.config.aws = { accessKeyId: unique('fixture-policy'), secretAccessKey: 'fixture-only' };
       t.mock.method(STSClient.prototype, 'send', async () => ({ Account: f.pool, Arn: `arn:aws:iam::${f.pool}:user/bane-runtime` }));
-      // Every reputation policy AWS applied, as "region policy"; with refuse on, AWS denies standard (the IAM change is not applied yet).
-      const set: string[] = []; let refuse = false;
+      // Every reputation policy AWS applied, as "region policy". refuse: AWS denies standard (the IAM change is not applied yet).
+      // lose: AWS applies the policy and the answer is lost.
+      const set: string[] = []; let refuse = false, lose = false;
       t.mock.method(SESv2Client.prototype, 'send', async function (this: InstanceType<typeof SESv2Client>, cmd: any) {
         const region = String(await this.config.region()), arn = (name: string) => `arn:aws:ses:${region}:${f.pool}:tenant/${name}/t-1`;
         if (cmd instanceof CreateTenantCommand) return { TenantName: cmd.input.TenantName, TenantArn: arn(cmd.input.TenantName!) };
@@ -21320,7 +21321,9 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         const policy = /^arn:aws:ses:[a-z0-9-]+:aws:reputation-policy\/(strict|standard)$/.exec(cmd.input.ReputationEntityPolicy!)?.[1];
         assert.equal(cmd.input.ReputationEntityPolicy, `arn:aws:ses:${region}:aws:reputation-policy/${policy}`);
         if (refuse && policy === 'standard') throw Object.assign(new Error('denied'), { name: 'AccessDeniedException' });
-        set.push(`${region} ${policy}`); return {};
+        set.push(`${region} ${policy}`);
+        if (lose) throw Object.assign(new Error('socket hang up'), { name: 'TimeoutError' }); // AWS applied it; the answer never arrived.
+        return {};
       });
       const logs: Json[] = [];
       for (const level of ['info', 'warn', 'error'] as const) t.mock.method(console, level, (line: string) => { try { const l = JSON.parse(line); if (/^SES_TENANT_POLICY/.test(l.code)) logs.push(l); } catch { /* not a log line */ } });
@@ -21357,34 +21360,74 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.deepEqual([set.splice(0), await applied(), changes()], [[], both('strict'), [[`${REGION} refused standard, kept strict`, 'graduated', true], [`${other} refused standard, kept strict`, 'graduated', true]]]);
       assert.equal(await reconcile(), false, 'A refused standard is asked again an hour later, not every pass.');
       await db.query(`UPDATE hosted_tenant_policy SET refused_at=refused_at-interval '61 minutes' WHERE workspace_id=$1`, [f.wid]);
-      refuse = false;
-      assert.equal(await reconcile(), true, 'The hour passed: the reconcile asks again.');
-      assert.deepEqual([set.splice(0), await applied(), changes()], [both('standard'), both('standard'), [[`${REGION} strict → standard`, 'graduated', true], [`${other} strict → standard`, 'graduated', true]]]);
-      assert.equal(await reconcile(), false);
-      // A fall back onto probation (a ladder step from warn) makes both strict at once.
+      // The hour passed: asked again, AWS applies standard but its answer is lost (the call timed out). The record says
+      // unknown, never strict, so a fall back before any retry still reaches AWS.
+      refuse = false; lose = true;
+      await assert.rejects(reconcile(), { code: 'AWS_SETUP_TIMEOUT' });
+      lose = false;
+      assert.deepEqual([set.splice(0), await applied(), changes()], [both('standard'), both('null'), []]);
       await db.query(`UPDATE sender_standing SET step='warn' WHERE workspace_id=$1`, [f.wid]);
       assert.equal(await reconcile(), true);
-      assert.deepEqual([set.splice(0), await applied(), changes()], [both('strict'), both('strict'), [[`${REGION} standard → strict`, 'standing', true], [`${other} standard → strict`, 'standing', true]]]);
-      // Graduated again within a day of the fall back: it stays strict (no flapping), and the operator console says until when.
+      assert.deepEqual([set.splice(0), await applied(), changes()], [both('strict'), both('strict'), [[`${REGION} null → strict`, 'standing', true], [`${other} null → strict`, 'standing', true]]]);
+      // Graduated again within a day of that fall back (the unknown may have been standard): it stays strict, no flapping,
+      // and the operator console says until when.
       await db.query(`UPDATE sender_standing SET step='ok' WHERE workspace_id=$1`, [f.wid]);
       assert.equal(await reconcile(), false);
       const { setOperator } = await import('./scripts/set-operator.js');
       await setOperator(db, [AUTH_SUBJECT, 'operator:read', '--reason', 'Synthetic tenant policy review']);
-      const { policy } = ok(await local('GET', `/v1/operator/workspaces/${f.wid}`)).connection;
+      const page = async () => ok(await local('GET', `/v1/operator/workspaces/${f.wid}`)).connection.policy;
+      const policy = await page();
       const from = (await db.query(`SELECT to_char((max(demoted_at)+interval '24 hours') AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at FROM hosted_tenant_policy WHERE workspace_id=$1`, [f.wid])).rows[0].at;
       assert.deepEqual([policy.level, policy.why, policy.standardFrom, policy.tenants.map((t: Json) => `${t.region} ${t.applied}`)], ['strict', 'graduated', from, both('strict')]);
       await db.query(`UPDATE hosted_tenant_policy SET demoted_at=demoted_at-interval '25 hours' WHERE workspace_id=$1`, [f.wid]);
       assert.equal(await reconcile(), true, 'A day after the fall back it is standard again.');
-      assert.deepEqual([set.splice(0), changes().map(c => c[1])], [both('standard'), ['graduated', 'graduated']]);
-      // An exempt (first-party) workspace is standard whatever its standing, at once.
-      await db.query(`UPDATE sender_standing SET step='warn' WHERE workspace_id=$1`, [f.wid]);
+      assert.deepEqual([set.splice(0), await applied(), changes()], [both('standard'), both('standard'), [[`${REGION} strict → standard`, 'graduated', true], [`${other} strict → standard`, 'graduated', true]]]);
+      assert.equal(await reconcile(), false);
+      // A workspace Nightmail still limits is strict: a resume's reduced limit, then a pause.
+      await db.query(`UPDATE provider_connections SET restore_cap=500,restore_until=now()+interval '47 hours' WHERE id=$1`, [f.wid]);
       assert.equal(await reconcile(), true);
-      assert.deepEqual([set.splice(0), changes().map(c => c[1])], [both('strict'), ['standing', 'standing']]);
+      assert.deepEqual([set.splice(0), await applied(), changes()], [both('strict'), both('strict'), [[`${REGION} standard → strict`, 'resume-limit', true], [`${other} standard → strict`, 'resume-limit', true]]]);
+      await db.query(`UPDATE provider_connections SET restore_cap=NULL,restore_until=NULL,paused_at=now(),pause_reason='Synthetic pause' WHERE id=$1`, [f.wid]);
+      assert.equal(await reconcile(), false, 'Already strict.');
+      assert.equal((await page()).why, 'paused');
+      // An exempt (first-party) workspace is standard whatever else is true, at once.
       await db.query('UPDATE workspaces SET exempt_hosted_quotas=true WHERE id=$1', [f.wid]);
       assert.equal(await reconcile(), true);
       assert.deepEqual([set.splice(0), await applied(), changes()], [both('standard'), both('standard'), [[`${REGION} strict → standard`, 'exempt', true], [`${other} strict → standard`, 'exempt', true]]]);
       assert.equal(await reconcile(), false);
-      assert.equal(ok(await local('GET', `/v1/operator/workspaces/${f.wid}`)).connection.policy.why, 'exempt');
+      assert.equal((await page()).why, 'exempt');
+      // Re-provisioning (a reconnect) sets the tenant strict again. Over a recorded standard it records unknown, not strict,
+      // and queues the job itself, which settles it.
+      await db.query(`UPDATE provider_connections SET tenant_state='pending' WHERE id=$1`, [f.wid]);
+      await ensureTenant(runtime, f.wid, f.wid);
+      assert.deepEqual([set.splice(0), await applied(), changes()], [[`${REGION} strict`], [`${REGION} null`, `${other} standard`].sort(), [[`${REGION} standard → strict`, 'provisioned', true]]]);
+      assert.equal((await db.query('SELECT status FROM jobs WHERE id=$1', [jobId])).rows[0].status, 'pending', 'Provisioning queued the job.');
+      await tenantPolicyJob(runtime, {}, { id: jobId, workspaceId: f.wid, attempts: 1 });
+      assert.deepEqual([set.splice(0), await applied(), changes()], [[`${REGION} standard`], both('standard'), [[`${REGION} null → standard`, 'exempt', true]]]);
+    });
+  });
+  test('SES tenant policy wiring: a standing run queues the policy job and the job runner runs it', async t => {
+    await simulatedSesFixture(t, async ({ db, runtime }) => {
+      const { refreshStanding } = await import('./src/standing.js'), { drainJobs } = await import('./src/dispatch.js');
+      const { SESv2Client, GetTenantCommand, UpdateReputationEntityPolicyCommand } = await import('@aws-sdk/client-sesv2');
+      const f = await hostedHoldFixture(runtime, db);
+      runtime.config.aws = { accessKeyId: unique('fixture-wiring'), secretAccessKey: 'fixture-only' };
+      const set: string[] = [];
+      t.mock.method(SESv2Client.prototype, 'send', async function (this: InstanceType<typeof SESv2Client>, cmd: any) {
+        const region = String(await this.config.region());
+        if (cmd instanceof GetTenantCommand) return { Tenant: { TenantName: cmd.input.TenantName, TenantArn: `arn:aws:ses:${region}:${f.pool}:tenant/${cmd.input.TenantName}/t-1` } };
+        assert.ok(cmd instanceof UpdateReputationEntityPolicyCommand, cmd.constructor.name);
+        set.push(cmd.input.ReputationEntityPolicy!.split('/')[1]!); return {};
+      });
+      // As migration 399 leaves an existing tenant: recorded strict. The workspace is exempt (first-party).
+      await db.query(`INSERT INTO hosted_tenant_policy(workspace_id,region,applied,applied_at) VALUES($1,$2,'strict',now())`, [f.wid, REGION]);
+      await db.query('UPDATE workspaces SET exempt_hosted_quotas=true WHERE id=$1', [f.wid]);
+      const jobId = `hosted.tenantPolicy:${f.wid}`, status = async () => (await db.query('SELECT status FROM jobs WHERE id=$1', [jobId])).rows[0]?.status;
+      await refreshStanding(runtime);
+      const queued = await status();
+      await drainJobs(runtime, 20, 1, 5000, 'work');
+      const record = (await db.query('SELECT applied FROM hosted_tenant_policy WHERE workspace_id=$1', [f.wid])).rows[0];
+      assert.deepEqual([queued, await status(), set, record?.applied], ['pending', 'completed', ['standard'], 'standard']);
     });
   });
   test('MX review round 2: a marketing hold keeps already-queued marketing queued at dispatch while transactional mail sends', async t => {
