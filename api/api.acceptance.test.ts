@@ -21985,6 +21985,42 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     }));
   });
 
+  test('hosted screen outage: an exempt workspace’s transactional mail goes out unscreened; its marketing and a non-exempt workspace’s mail wait',async t=>{
+    await simulatedSesFixture(t,async({runtime,db,local})=>t.test('synthetic transports',async t=>{
+      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
+      const wid=runtime.config.workspaceId,acct='112223330003',origin='https://screen.synthetic.invalid',topic=`arn:aws:sns:${REGION}:${acct}:fixture`;
+      const key=ok(await local('POST','/v1/api-keys',{name:'exempt',permissions:['send','read']}),201);
+      Object.assign(runtime.config,{multiTenant:true,hostedScreen:true,liveEnabled:true,aws:{accessKeyId:'fixture',secretAccessKey:'fixture'},screen:{endpoint:origin,apiKey:'fixture',model:'fixture',mode:'reject',threshold:0.7}});
+      await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,sending_state,feedback_topic_arn) VALUES($1,$2,'ready',$3)`,[REGION,acct,topic]);
+      await db.query(`INSERT INTO provider_connections(id,workspace_id,kind,state,region,aws_account_id,tenant_state) VALUES($1,$1,'shared','ready',$2,$3,'ready')`,[wid,REGION,acct]);
+      await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES('bench.invalid',$1,$1,'verified')`,[wid]);
+      let screens=0;t.mock.method(globalThis,'fetch',async()=>{screens++;return new Response(null,{status:503});}); // The classifier is down.
+      const sent:string[]=[];
+      t.mock.method(SESv2Client.prototype,'send',async(cmd:any)=>{if(cmd instanceof GetAccountCommand)return {SendingEnabled:true,SendQuota:{MaxSendRate:10000,Max24HourSend:100000,SentLast24Hours:0}};sent.push(cmd.input.EmailTags.find((t:Json)=>t.Name==='bane_email_id').Value);return {MessageId:randomUUID()};});
+      const logs:Json[]=[];for(const level of ['error','warn','info'] as const)t.mock.method(console,level,(line:string)=>{try{logs.push(JSON.parse(line));}catch{}});
+      const gate=initialGate(),run=()=>runDispatcher(runtime,{region:REGION,accountId:acct,batchSize:24,lanes:1,gate});
+      const send=async(subject:string,kind='transactional')=>ok(await local('POST','/v1/emails/send',{from:'a@bench.invalid',to:'r@example.invalid',subject,text:'fixture',kind},'live',{authorization:`Bearer ${key.secret}`}),202).id;
+      const row=async(id:string)=>(await db.query('SELECT status,error_code FROM sending_emails WHERE id=$1',[id])).rows[0];
+      // Exempt: transactional mail is screened, the screen fails, and it goes out unscreened; marketing still waits.
+      await db.query('UPDATE workspaces SET exempt_hosted_quotas=true WHERE id=$1',[wid]);
+      const signIn=await send('Sign-in code'),newsletter=await send('Newsletter','marketing');
+      await run();
+      assert.ok(screens>=1);assert.deepEqual(sent,[signIn]);
+      assert.notEqual((await row(signIn)).status,'queued');assert.deepEqual(await row(newsletter),{status:'queued',error_code:'CONTENT_SCREEN_UNAVAILABLE'});
+      assert.ok(logs.some(l=>l.emailId===signIn && l.unscreened===true),'An unscreened send is logged as unscreened');
+      assert.equal((await db.query('SELECT coalesce(sum(screened),0)::int AS n FROM hosted_screen_hourly WHERE workspace_id=$1',[wid])).rows[0].n,0,'An unscreened send is not a clean verdict');
+      // While the breaker is open, the exempt workspace's transactional mail is still leased and sent unscreened, without a call.
+      const during=await send('Sign-in code again');screens=0;
+      await run();
+      assert.deepEqual([sent.at(-1),screens],[during,0]);assert.ok(logs.some(l=>l.emailId===during && l.unscreened===true));
+      // Not exempt: the same transactional mail waits for the screen.
+      await db.query('UPDATE workspaces SET exempt_hosted_quotas=false WHERE id=$1',[wid]);gate.screenRetryAt=undefined;
+      const plain=await send('Another sign-in code');
+      await run();
+      assert.ok(!sent.includes(plain));assert.deepEqual(await row(plain),{status:'queued',error_code:'CONTENT_SCREEN_UNAVAILABLE'});
+    }));
+  });
+
   test('sending review benchmark: healthy hook tenant behind slow tenant',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
       const {processJobs}=await import('./src/jobs.js');

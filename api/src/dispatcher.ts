@@ -47,7 +47,9 @@ function loadDispatchTransport(runtime: Runtime): Promise<DispatchTransport> {
 export type Mail = typeof emails.$inferSelect;
 type Review = { version:number; draft: CampaignDraft; rendered: { html?: string; text?: string }; assets:AttachmentRow[]; contentHash: string | null; recipient: ReviewedRecipient; screen?: CampaignScreen | null; reviewHash?: string };
 // `probation`: a Hosted sender still in its evaluation, growth pace or below good standing (src/hosted-sending.ts probationReason).
-type Owner = { runtime: Runtime; a: Actor; ses: SESv2Client; transport: DispatchTransport; sendClient?:(domainId:string)=>SESv2Client; trusted?:boolean; probation?:boolean; tenantName?: string; feedbackTopic?: string };
+// `exempt`: an operator exempted the workspace from Hosted quotas (workspaces.exempt_hosted_quotas, first-party mail); like the
+// trusted tier, its transactional mail is screened but goes out unscreened when the classifier fails (screenMail).
+type Owner = { runtime: Runtime; a: Actor; ses: SESv2Client; transport: DispatchTransport; sendClient?:(domainId:string)=>SESv2Client; trusted?:boolean; exempt?:boolean; probation?:boolean; tenantName?: string; feedbackTopic?: string };
 type LeaseQuota = { rate: number; max: number; sent: number; checked: string; age_ms: number };
 type Leased = { mail: Mail; contentBytes: number; review: Review | null; owner: Owner | null; rateRetries: number; quota?: LeaseQuota };
 // `screened`: the Hosted content screen judged this mail and passed it (a rejection never reaches sending).
@@ -232,7 +234,7 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
   const tick=sql`date_trunc('minute',statement_timestamp())`;
   // A marketing hold leaves the held stream queued (heldStream); transactional mail keeps flowing.
   const dueForOwner = sql`FROM sending_emails e WHERE ${queued} AND e.workspace_id = o.workspace_id AND ${available} AND (NOT o.marketing_held OR NOT ${heldStream(sql`e`)})
-    ${liveMx && (gate.screenRetryAt??0)>Date.now() ? sql`AND (NOT o.required_screen OR (o.trusted AND ${transactional}))` : sql``}
+    ${liveMx && (gate.screenRetryAt??0)>Date.now() ? sql`AND (NOT o.required_screen OR ((o.trusted OR o.exempt) AND ${transactional}))` : sql``}
     -- A boolean range is an index condition on 061's expression. Equality to true is
     -- simplified to a text comparison and can scan the kind index over delivered mail.
     ${priorityOnly ? sql`AND ${transactional} > false` : sql``}
@@ -255,7 +257,7 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
   const queuedOwners = sql`SELECT n.workspace_id,1 FROM (${seek(sql`${gate.ownerCursor??''}`)}) n
       UNION ALL SELECT n.workspace_id,o.step+1 FROM queued_owners o CROSS JOIN LATERAL (${seek(sql`o.workspace_id`)}) n WHERE o.step<${limit}`;
   const ownersSql = mx ? sql`SELECT q.workspace_id,hosted_marketing_held(q.workspace_id) AS marketing_held ${liveMx?sql`,p.cap,least(p.cap-coalesce(b.used,0),g.cap-g.used) AS remaining,pc.kind='shared' AS required_screen,
-    (${!!runtime.config.trustedPool} AND pc.pool_tier='trusted' AND NOT pc.legacy_names) AS trusted`:sql``}
+    (${!!runtime.config.trustedPool} AND pc.pool_tier='trusted' AND NOT pc.legacy_names) AS trusted,coalesce(w.exempt_hosted_quotas,false) AS exempt`:sql``}
     FROM queued_owners q JOIN ${sendingConnections(runtime)} pc USING(workspace_id)
     ${liveMx?sql`LEFT JOIN workspaces w ON w.id=q.workspace_id LEFT JOIN hosted_burst_windows b ON b.workspace_id=q.workspace_id AND b.scope='' AND b.minute=${tick}
       CROSS JOIN LATERAL (SELECT CASE WHEN pc.kind='shared' AND NOT w.exempt_hosted_quotas THEN hosted_minute_cap(q.workspace_id) END AS cap) p
@@ -295,6 +297,7 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
     ), settings AS MATERIALIZED (
       SELECT p.*, s.installation_id, s.default_region, s.enabled_regions, ${mx ? sql`to_jsonb(pc)` : sql`NULL`} AS connection,
         ${liveMx ? sql`${probationReason(sql`p.workspace_id`)} IS NOT NULL` : sql`false`} AS probation,
+        ${liveMx ? sql`(SELECT o.exempt FROM owners o WHERE o.workspace_id=p.workspace_id)` : sql`false`} AS exempt,
         ${readQuota ? sql`(SELECT jsonb_build_object('rate',max_send_rate,'max',max_24_hour_send,'sent',sent_last_24_hours,'checked',checked_at::text,
           'age_ms',extract(epoch FROM clock_timestamp()-checked_at)*1000)
           FROM ${accountId ? sql`provider_account_limits WHERE aws_account_id=${accountId}` : sql`sending_region_limits WHERE workspace_id=p.workspace_id`}
@@ -315,7 +318,7 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
         SELECT workspace_id, campaign_id, review_id, min(id) AS carrier FROM selected WHERE review_id IS NOT NULL GROUP BY 1,2,3
       ) refs JOIN sending_campaign_reviews r ON r.workspace_id=refs.workspace_id AND r.campaign_id=refs.campaign_id AND r.id=refs.review_id
     )
-    SELECT meta.cursor,${liveMx?sql`(SELECT jsonb_agg(to_jsonb(blocked)) FROM (SELECT DISTINCT workspace_id,stream FROM fit WHERE cap IS NOT NULL AND n>0 AND used>=greatest(50,cap/2)) blocked)`:sql`NULL`} AS blocked_streams,${sql.join(mailColumns, sql`, `)}, measured.bytes AS snapshot_bytes, s.installation_id, s.default_region, s.enabled_regions, s.ready, s.connection,s.quota_sample,s.probation AS on_probation,
+    SELECT meta.cursor,${liveMx?sql`(SELECT jsonb_agg(to_jsonb(blocked)) FROM (SELECT DISTINCT workspace_id,stream FROM fit WHERE cap IS NOT NULL AND n>0 AND used>=greatest(50,cap/2)) blocked)`:sql`NULL`} AS blocked_streams,${sql.join(mailColumns, sql`, `)}, measured.bytes AS snapshot_bytes, s.installation_id, s.default_region, s.enabled_regions, s.ready, s.connection,s.quota_sample,s.probation AS on_probation,s.exempt AS exempt_owner,
       CASE WHEN leased.dispatch_version > 0 THEN (SELECT count(*)::int FROM sending_email_events v
         WHERE v.workspace_id=leased.workspace_id AND v.email_id=leased.id AND v.type='provider_throttled' AND v.data->>'code'='SES_THROTTLED') ELSE 0 END AS rate_retries,
       r.renderer_version AS review_version, r.draft AS review_draft, r.rendered AS review_rendered,r.assets AS review_assets, r.screen AS review_screen, r.content_hash AS review_hash,
@@ -342,7 +345,7 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
     reviews.set(reviewKey(row), { version:Number(row.review_version), draft: row.review_draft as CampaignDraft, rendered: row.review_rendered as Review['rendered'],assets:(row.review_assets??[]) as AttachmentRow[], screen: row.review_screen as CampaignScreen | null, reviewHash: row.review_hash as string });
   }
   return result.rows.map(row => {
-    const { review_version, review_draft, review_rendered, review_content_hash, review_recipient, review_screen, review_hash, installation_id, default_region, enabled_regions, ready:regionReady, connection, rate_retries, quota_sample, on_probation, ...fields } = row;
+    const { review_version, review_draft, review_rendered, review_content_hash, review_recipient, review_screen, review_hash, installation_id, default_region, enabled_regions, ready:regionReady, connection, rate_retries, quota_sample, on_probation, exempt_owner, ...fields } = row;
     void review_version; void review_screen; void review_hash;
     // Admission refuses hosted sends until the tenant is ready; mail admitted earlier waits here, never provisions.
     const pc0 = connection as (ReadyConnection & { tenant_state?: TenantState; paused_at?: string | null }) | null;
@@ -361,7 +364,7 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
       const namespace=pc?.legacy_names===false ? pc.kind==='shared' ? pc.pool_tier : 'byo' : undefined;
       const { transactional, marketing } = setupResources(pc?.kind === 'shared' ? POOL_INSTALLATION : pc?.id ?? installation_id as string,namespace);
       const scoped = { ...runtime, config: { ...runtime.config, workspaceId, regions: [default_region as string, ...(enabled_regions as string[]).filter(r => r !== default_region),...(pc?[region]:[])], configurationSets: { transactional, marketing } } };
-      owner = { runtime: scoped, trusted:runtime.config.trustedPool && pc?.pool_tier==='trusted' && pc.legacy_names===false, probation:on_probation===true, a: { workspaceId, keyId: 'worker', domains: [], permissions: ['manage'] }, transport, ses: transport.clientFor(scoped, region, forDelivery(pc,{purpose:'quota'}), runClients),
+      owner = { runtime: scoped, trusted:runtime.config.trustedPool && pc?.pool_tier==='trusted' && pc.legacy_names===false, exempt:exempt_owner===true, probation:on_probation===true, a: { workspaceId, keyId: 'worker', domains: [], permissions: ['manage'] }, transport, ses: transport.clientFor(scoped, region, forDelivery(pc,{purpose:'quota'}), runClients),
         sendClient:pc?.template_version==='v5'?domainId=>transport.clientFor(scoped,region,forDelivery(pc,{purpose:'send',domainId}),runClients):undefined,
         tenantName: pc?.kind === 'shared' ? pc.pool_tenant_name ?? (pc.managed_tenant ? mxResourceName(workspaceId) : `bane-${workspaceId}`) : undefined, feedbackTopic: pc?.feedback_topic_arn };
       owners.set(workspaceId, owner);
@@ -378,7 +381,7 @@ class ScreenRejected extends ApiError {
   constructor(public screen: { spam: number; model: string; threshold: number }, public counted = false) { super(422, 'CONTENT_REJECTED_SPAM', 'The content classifier judged this message to be unsolicited advertising.'); }
 }
 let screenSkipLoggedAt = 0;
-// Fail closed for probation and marketing. Trusted transactional and explicit BYO
+// Fail closed for probation and marketing. Trusted or exempt transactional and explicit BYO
 // checks may fail open. Policy is decided from the leased connection, never caller input.
 // Returns true only when the screen actually judged the message (and passed it); a skip or a fail-open outage is not a clean verdict.
 async function screenMail(runtime: Runtime, mail: Mail, s: EmailSnapshot, required:boolean, hostedGate?:GateState): Promise<boolean> {
@@ -393,8 +396,8 @@ async function screenMail(runtime: Runtime, mail: Mail, s: EmailSnapshot, requir
   catch (error) {
     if(!(error instanceof ApiError) || error.code!=='CONTENT_SCREEN_UNAVAILABLE') throw error;
     if(required) throw new ApiError(503,'CONTENT_SCREEN_UNAVAILABLE','Hosted content screening is unavailable; deferring without calling SES.',undefined,true);
-    if(hostedGate){if((hostedGate.screenRetryAt??0)>Date.now())return false;hostedGate.screenRetryAt=Date.now()+30_000;}
-    log('warn', { code: error instanceof ApiError ? error.code : 'CONTENT_SCREEN_UNAVAILABLE', emailId: mail.id }); // Sending unscreened.
+    if(hostedGate && (hostedGate.screenRetryAt??0)<=Date.now()) hostedGate.screenRetryAt=Date.now()+30_000;
+    log('warn', { code: error.code, emailId: mail.id, workspaceId: mail.workspaceId, unscreened: true }); // Sending unscreened: every such email, not a clean verdict.
     return false;
   }
   if (!result) return false;
@@ -447,7 +450,7 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
   const delivery=rules ? await import('./screened-html.js') : undefined;
   let screened=false;
   if (!isSimulatedSes(runtime) && (hosted || (s.screen && s.kind==='transactional'))) {
-    const required=hosted && (!leased.owner.trusted || s.kind==='marketing');
+    const required=hosted && (!(leased.owner.trusted || leased.owner.exempt) || s.kind==='marketing');
     // A screened campaign's copy (src/sending.ts campaignVerdicts) goes out only under a verdict for its exact bytes
     // (src/screen.ts copyKey): keyed here from the same customer copy it is delivered from, with Nightmail's
     // unsubscribe slots generated for the placeholder link (src/sending.ts screenedAs), and rewritten for probation as
@@ -466,6 +469,7 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
       if (verdict.spam>=runtime.config.screen!.threshold) throw new ScreenRejected({ spam: verdict.spam, model: verdict.model, threshold: runtime.config.screen!.threshold }, true);
     } else if (hosted && (gate.screenRetryAt??0)>Date.now()) {
       if (required) throw new ApiError(503,'CONTENT_SCREEN_UNAVAILABLE','Hosted screen temporarily unavailable.',undefined,true);
+      log('warn', { code: 'CONTENT_SCREEN_UNAVAILABLE', emailId: mail.id, workspaceId: mail.workspaceId, unscreened: true }); // As in screenMail.
     } else screened=await screenMail(runtime,mail,s,required,hosted?gate:undefined) && !!leased.owner.tenantName;
   }
   const parts: Attachment[] = [];
