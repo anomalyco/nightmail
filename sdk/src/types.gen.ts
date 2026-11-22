@@ -11178,7 +11178,7 @@ export type ListEmailsData = {
         region?: string;
         kind?: 'transactional' | 'marketing';
         /**
-         * Literal case-insensitive substring of sender, To/Cc/Bcc, subject or email/campaign/provider ID, at least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED.
+         * Literal case-insensitive substring of sender, To/Cc/Bcc, subject or email/campaign/provider ID, at least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. A campaign email matches only its exact recipient address (any case) or its email ID; campaignId lists a campaign's emails.
          */
         search?: string;
         from?: string;
@@ -24441,7 +24441,7 @@ export type ListLogsData = {
         limit?: number;
         direction?: 'all' | 'sent' | 'received';
         /**
-         * At least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. Sent mail: a literal, case-insensitive substring of the sender, recipients, subject or IDs. Received mail: a full-text match on sender, recipients, subject and body.
+         * At least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. Sent mail: a literal, case-insensitive substring of the sender, recipients, subject or IDs; a campaign email matches only its exact recipient address (any case) or its email ID, and campaignId lists a campaign's emails. Received mail: a full-text match on sender, recipients, subject and body.
          */
         search?: string;
         /**

@@ -351,7 +351,7 @@ export const EmailStatusFilter = z.enum([...Status.options, 'scheduled']);
 // A literal substring search of sent mail (sending_log_text ILIKE): the trigram index answers terms of 3 characters or
 // more; a shorter one can't use it and reads every email of the workspace, so it is refused.
 export const SubstringSearch = z.string().trim().min(3, 'Search for at least 3 characters.').max(200);
-const EmailQuery = PageQuery.extend({ campaignId: z.string().max(120).optional(), status: EmailStatusFilter.optional().describe('scheduled lists sends waiting for their time; queued includes them.'), region: Region.optional(), kind: z.enum(['transactional', 'marketing']).optional(), search: SubstringSearch.optional().describe('Literal case-insensitive substring of sender, To/Cc/Bcc, subject or email/campaign/provider ID, at least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED.'), from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional() }).refine(q => !q.from || !q.to || Date.parse(q.from) < Date.parse(q.to), 'from must precede to.').describe('Newest created emails first, with an opaque cursor bound to the filters. Date range is createdAt >= from and < to. Search is literal and case-insensitive across sender address, To/Cc/Bcc recipients, subject and email/campaign/provider IDs. Use status, region, kind and creation-date filters for those fields; error codes, simulation state and timestamps are not free-text fields.').openapi('ListEmailsQuery');
+const EmailQuery = PageQuery.extend({ campaignId: z.string().max(120).optional(), status: EmailStatusFilter.optional().describe('scheduled lists sends waiting for their time; queued includes them.'), region: Region.optional(), kind: z.enum(['transactional', 'marketing']).optional(), search: SubstringSearch.optional().describe('Literal case-insensitive substring of sender, To/Cc/Bcc, subject or email/campaign/provider ID, at least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. A campaign email matches only its exact recipient address (any case) or its email ID; campaignId lists a campaign\'s emails.'), from: z.string().datetime({ offset: true }).optional(), to: z.string().datetime({ offset: true }).optional() }).refine(q => !q.from || !q.to || Date.parse(q.from) < Date.parse(q.to), 'from must precede to.').describe('Newest created emails first, with an opaque cursor bound to the filters. Date range is createdAt >= from and < to. Search is literal and case-insensitive across sender address, To/Cc/Bcc recipients, subject and email/campaign/provider IDs; campaign emails match only their exact recipient address or email ID. Use status, region, kind and creation-date filters for those fields; error codes, simulation state and timestamps are not free-text fields.').openapi('ListEmailsQuery');
 const CampaignQuery = PageQuery.extend({ region: Region.optional(), state: CampaignStateValue.optional(), archived: z.enum(['true', 'false']).default('false').describe('False lists active campaigns; true lists archived campaigns only.'), search: z.string().trim().min(1).max(200).optional() }).describe('Newest created campaigns first, excluding archived campaigns by default, with an opaque cursor bound to the filters. Search is literal, case-insensitive name, subject or ID text.').openapi('ListCampaignsQuery');
 const AudienceCounts = z.object({ matched: z.number().int(), eligible: z.number().int(), suppressed: z.number().int(), unsubscribed: z.number().int() }).describe('Live counts for the saved audience: matched contacts, those eligible for marketing, and the suppressed or unsubscribed remainder. Read-only; sending freezes its own snapshot and rechecks consent at dispatch.').openapi('CampaignAudienceCounts');
 
@@ -437,6 +437,17 @@ export async function pageBinding(a: Actor, resource: string, query: Record<stri
   return (await digest(canonical({ workspaceId: a.workspaceId, environment: 'live', resource, filters }))).slice(0, 24);
 }
 export function literalSearch(value: string) { return `%${value.replace(/[\\%_]/g, character => `\\${character}`)}%`; }
+// Sent-mail search (Logs and listEmails). Mail sent one at a time matches a literal, case-insensitive substring of its
+// sender, recipients, subject or IDs, through the trigram index on that mail alone (migration 396). Campaign mail matches
+// its exact recipient address, in any case, through a btree, or its email ID, and its campaign lists it (campaignId): a
+// campaign's recipients would otherwise each add a trigram set to that index, written again on every status change.
+// The log text is NULL for campaign mail, exactly as the index and its statistics (migration 395) write it. In one
+// campaign's list only campaign mail can match, so the direct-mail branch is left out: the planner can't tell it never
+// matches there, and for a term common in direct mail it would read every email of the workspace looking for it.
+export const sentSearch = (term: string, campaign: boolean) => {
+  const exact = sql`(${emails.campaignId} IS NOT NULL AND lower(${emails.to}->>0) = lower(${term})) OR ${emails.id} = ${term}`;
+  return campaign ? sql`(${exact})` : sql`((${emails.campaignId} IS NULL AND (CASE WHEN ${emails.campaignId} IS NULL THEN sending_log_text(${emails.id},${emails.campaignId},${emails.providerId},${emails.from},${emails.subject},${emails.to} || ${emails.cc} || ${emails.bcc}) END) ILIKE ${literalSearch(term)}) OR ${exact})`;
+};
 export const scope = (table: { workspaceId: AnyPgColumn }, a: Pick<Actor, 'workspaceId'>) => eq(table.workspaceId, a.workspaceId);
 // A key restricted to sender domains reads only mail sent from those domains or their subdomains (L2).
 export function senderDomainWhere(column: AnyPgColumn | SQL, allowed: readonly string[] | SQL) {
@@ -1499,13 +1510,12 @@ export function registerSending(app: App) {
   app.openapi(createRoute({ method: 'get', path: '/v1/emails', operationId: 'listEmails', description: readLimitNote(READ_LIMIT.emails), tags: ['Emails'], security, request: { query: EmailQuery }, responses: { 200: response(page(Email)), ...errors } }), async c => {
     const a = actor(c), q = c.req.valid('query'), binding = await pageBinding(a, 'emails', q), cursor = readCursor(q.cursor, binding);
     if (q.region) region(c.env, q.region);
-    const search = q.search ? literalSearch(q.search) : null;
     const rows = await budgetedRead(c.env.db, db => db.select(emailColumns).from(emails).where(and(mailWhere(a),
       cursor ? sql`(${emails.createdAt}, ${emails.id}) < (${cursor.at}::timestamptz, ${cursor.id})` : undefined,
       q.campaignId ? eq(emails.campaignId, q.campaignId) : undefined, q.status === 'queued' ? inArray(emails.status, ['queued', 'scheduled']) : q.status ? eq(emails.status, q.status) : undefined,
       q.region ? eq(emails.region, q.region) : undefined, q.kind ? sql`${emails.snapshot}->>'kind' = ${q.kind}` : undefined,
       q.from ? gte(emails.createdAt, q.from) : undefined, q.to ? lt(emails.createdAt, q.to) : undefined,
-      search ? sql`sending_log_text(${emails.id},${emails.campaignId},${emails.providerId},${emails.from},${emails.subject},${emails.to} || ${emails.cc} || ${emails.bcc}) ILIKE ${search}` : undefined,
+      q.search ? sentSearch(q.search, !!q.campaignId) : undefined,
     )).orderBy(desc(emails.createdAt), desc(emails.id)).limit(q.limit + 1), readLimit(READ_LIMIT.emails));
     return c.json({ data: rows.slice(0, q.limit).map(row => emailView(listedSubject(a, row))), nextCursor: nextCursor(rows, q.limit, binding) }, 200);
   });
@@ -1898,11 +1908,15 @@ async function cancelCampaignWork(db: DbExecutor, a: Actor, row: typeof campaign
   const [inFlight] = await db.select({ count: sql<number>`count(*)::int` }).from(emails).where(and(scope(emails, a), eq(emails.campaignId, row.id), inArray(emails.status, ['attempting', 'accepted', 'sent', 'delivered', 'acceptance_unknown'])));
   return { id: row.id, state: 'canceled' as const, canceled: page.count + unexpanded, inFlight: inFlight!.count };
 }
-/** Which of these addresses this workspace delivered to before, outside this campaign (lower case). */
+/** Which of these addresses this workspace delivered to before, outside this campaign (lower case). Other campaigns' emails
+ *  (one recipient each) are looked up by address in the campaign recipient index; mail sent one at a time is read from
+ *  the workspace's direct mail, never from every campaign row it has. */
 async function deliveredBefore(db: DbExecutor, wid: string, campaignId: string, emails: string[]) {
-  const { rows } = await db.execute<{ email: string }>(sql`SELECT DISTINCT lower(t.addr) AS email FROM sending_emails p CROSS JOIN LATERAL jsonb_array_elements_text(p.to_addresses) t(addr)
-    WHERE p.workspace_id=${wid} AND p.campaign_id IS DISTINCT FROM ${campaignId} AND NOT p.simulated AND (p.status='delivered' OR p.event_outcomes & 2 <> 0)
-      AND lower(t.addr) IN (SELECT lower(x) FROM jsonb_array_elements_text(${JSON.stringify(emails)}::jsonb) x)`);
+  const wanted = sql`(SELECT lower(x) FROM jsonb_array_elements_text(${JSON.stringify(emails)}::jsonb) x)`, delivered = sql`NOT p.simulated AND (p.status='delivered' OR p.event_outcomes & 2 <> 0)`;
+  const { rows } = await db.execute<{ email: string }>(sql`SELECT lower(p.to_addresses->>0) AS email FROM sending_emails p
+      WHERE p.workspace_id=${wid} AND p.campaign_id IS NOT NULL AND p.campaign_id<>${campaignId} AND ${delivered} AND lower(p.to_addresses->>0) IN ${wanted}
+    UNION SELECT lower(t.addr) FROM sending_emails p CROSS JOIN LATERAL jsonb_array_elements_text(p.to_addresses) t(addr)
+      WHERE p.workspace_id=${wid} AND p.campaign_id IS NULL AND ${delivered} AND lower(t.addr) IN ${wanted}`);
   return new Set(rows.map(r => r.email));
 }
 async function recipientChunk(db: DbExecutor, reviewId: string, cursor: number, limit = CAMPAIGN_PREPARE_ROWS) {

@@ -13826,6 +13826,59 @@ describe('Dashboard API capabilities', () => {
     assert.equal(ok(await http('GET', `/v1/metrics?${metricQuery}`, live.secret)).totals.clicked, after.totals.clicked);
   });
 
+  test('Logs search: mail sent one at a time by any part of its address or subject, campaign mail by its exact address or email ID and from its campaign; migration 396 swaps the indexes online', async t => {
+    const db = await fixtureDatabase(t);
+    const key = await keyFixture(t);
+    const campaign = await campaignFixture(t, key.secret, {});
+    const marker = unique('find').replace('-', ''), recipient = `Reader.${marker}@Example.com`;
+    const [direct, sameAddress, campaignMail] = [unique('email'), unique('email'), unique('email')];
+    cleanup(t, async () => { await db.query('DELETE FROM sending_emails WHERE id = ANY($1::text[])', [[direct, sameAddress, campaignMail]]); });
+    // A receipt and a direct message to the campaign's recipient, sent one at a time, and that recipient's campaign email.
+    for (const [id, campaignId, to, subject, kind] of [[direct, null, `direct-${marker}@example.com`, `Quarterly ${marker} invoice`, 'transactional'],
+      [sameAddress, null, recipient.toLowerCase(), `Password reset ${marker}`, 'transactional'], [campaignMail, campaign.id, recipient, `Spring ${marker} update`, 'marketing']])
+      await db.query(`INSERT INTO sending_emails (id, workspace_id, region, actor_key_id, campaign_id, from_address, to_addresses, cc_addresses, bcc_addresses, subject, snapshot, simulated, status, provider_id)
+        VALUES ($1,'default',$2,$3,$4,'sender@example.com',jsonb_build_array($5::text),'[]','[]',$6,jsonb_build_object('kind',$7::text),false,'delivered',$8)`, [id, REGION, key.id, campaignId, to, subject, kind, unique('provider')]);
+    const logs = async (query: Record<string, string>) => page(await http('GET', `/v1/logs?${new URLSearchParams({ direction: 'sent', limit: '100', ...query })}`, key.secret)).map(row => row.id).sort();
+    const emails = async (query: Record<string, string>) => page(await http('GET', `/v1/emails?${new URLSearchParams({ limit: '100', ...query })}`, key.secret)).map(row => row.id).sort();
+    for (const list of [logs, emails]) {
+      // Mail sent one at a time: any part of an address or the subject, as before.
+      assert.deepEqual(await list({ search: `CT-${marker}@exam` }), [direct]);
+      assert.deepEqual(await list({ search: marker }), [direct, sameAddress].sort(), 'A subject word finds direct mail; the campaign email with the same word is not searched by fragment.');
+      // Campaign mail: its exact address, in any case, and its ID. The exact address also finds direct mail to it (a contact's activity).
+      assert.deepEqual(await list({ search: ` READER.${marker}@example.COM ` }), [sameAddress, campaignMail].sort());
+      assert.deepEqual(await list({ search: campaignMail }), [campaignMail]);
+      assert.deepEqual(await list({ search: `reader.${marker}` }), [sameAddress], 'Part of the address finds only the direct email to it.');
+      assert.deepEqual(await list({ search: `Spring ${marker}` }), []);
+      // The campaign's own list still has it, and narrows by its exact address.
+      assert.deepEqual(await list({ campaignId: campaign.id }), [campaignMail]);
+      assert.deepEqual(await list({ campaignId: campaign.id, search: recipient }), [campaignMail]);
+      assert.deepEqual(await list({ campaignId: campaign.id, search: marker }), []);
+    }
+    const counts = async (search: string) => ok(await http('GET', `/v1/logs?${new URLSearchParams({ direction: 'sent', counts: 'true', search })}`, key.secret)).counts;
+    assert.deepEqual([(await counts(recipient)).status, (await counts(recipient)).kind], [{ delivered: 2 }, { transactional: 1, marketing: 1 }]);
+    assert.deepEqual((await counts(`reader.${marker}`)).kind, { transactional: 1, marketing: 0 });
+
+    // Migration 396 on a database upgraded from the previous release, as migrate.ts applies a marked file: the direct-mail
+    // trigram index and the campaign recipient index are built concurrently before the old trigram index is dropped. 395
+    // gave the planner the statistics of their expressions.
+    assert.deepEqual((await db.query("SELECT stxname FROM pg_statistic_ext WHERE stxrelid = 'sending_emails'::regclass AND stxname LIKE 'sending_emails_%' ORDER BY 1")).rows.map(r => r.stxname), ['sending_emails_direct_log_text', 'sending_emails_first_recipient']);
+    const source = await readFile(new URL('./migrations/396_campaign_search_index.sql', import.meta.url), 'utf8');
+    assert.match(source, /^-- bane:no-transaction\n/);
+    const indexes = async () => (await db.query(`SELECT c.relname AS name, i.indisvalid AS valid, pg_get_expr(i.indpred, i.indrelid) AS predicate FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
+      WHERE i.indrelid = 'sending_emails'::regclass AND c.relname IN ('sending_emails_log_trgm', 'sending_emails_direct_log_trgm', 'sending_emails_campaign_recipient') ORDER BY 1`)).rows;
+    const swapped = [{ name: 'sending_emails_campaign_recipient', valid: true, predicate: '(campaign_id IS NOT NULL)' }, { name: 'sending_emails_direct_log_trgm', valid: true, predicate: '(campaign_id IS NULL)' }];
+    assert.deepEqual(await indexes(), swapped, 'The fixture database applied 396.');
+    await db.query("SET statement_timeout = '60s'");
+    await db.query('CREATE INDEX CONCURRENTLY sending_emails_log_trgm ON sending_emails USING gin (sending_log_text(id,campaign_id,provider_id,from_address,subject,to_addresses || cc_addresses || bcc_addresses) gin_trgm_ops)');
+    for (const name of ['sending_emails_direct_log_trgm', 'sending_emails_campaign_recipient']) await db.query(`DROP INDEX CONCURRENTLY ${name}`);
+    const apply = async () => { for (const line of source.split('\n').map(s => s.trim()).filter(s => s && !s.startsWith('--'))) await db.query(line); };
+    await apply();
+    assert.deepEqual(await indexes(), swapped);
+    await apply(); // Applying it again changes nothing.
+    assert.deepEqual(await indexes(), swapped);
+    assert.deepEqual(await logs({ search: recipient }), [sameAddress, campaignMail].sort());
+  });
+
   test('dashboard audience memberships and list counts partition active consent and suppression without scope leaks', async t => {
     const db = await fixtureDatabase(t);
     const key = await keyFixture(t);
@@ -17404,10 +17457,12 @@ test('Hosted account re-home: drained legacy Ohio installation',async t=>{
       });
       await db.query("DELETE FROM mailboxes WHERE domain_id IN('r-old','r-big'); DELETE FROM mailbox_domains WHERE id IN('r-old','r-big'); DELETE FROM mailbox_write_lanes WHERE workspace_id='default' AND lane='address'");continue;
     }
+    // Only the trigram indexes need the harness's existing public extension/opclass.
+    const trigram=source.includes('gin_trgm_ops');
     // As the migrator: a marked file is one online index build per line, each outside a transaction.
-    if(source.startsWith('-- bane:no-transaction\n')){for(const statement of source.split('\n').filter(line=>line.trim() && !line.startsWith('--')))await db.query(statement);continue;}
-    // Only the trigram index needs the harness's existing public extension/opclass.
-    await db.query('BEGIN');if(file==='065_log_search.sql')await db.query(`SET LOCAL search_path TO ${schema},public`);
+    if(source.startsWith('-- bane:no-transaction\n')){if(trigram)await db.query(`SET search_path TO ${schema},public`);
+      for(const statement of source.split('\n').filter(line=>line.trim() && !line.startsWith('--')))await db.query(statement);if(trigram)await db.query(`SET search_path TO ${schema}`);continue;}
+    await db.query('BEGIN');if(trigram)await db.query(`SET LOCAL search_path TO ${schema},public`);
     await db.query(source);
     if(file==='120_webhooks_validate.sql')await t.test('routing M3: constraint scans hold no exclusive lock on receiving tables',async()=>{
       assert.equal((await db.query("SELECT FROM pg_locks WHERE pid=pg_backend_pid() AND relation IN('mailbox_webhooks'::regclass,'mail_receipts'::regclass,'mailboxes'::regclass,'mailbox_webhook_deliveries'::regclass) AND mode='AccessExclusiveLock'")).rowCount,0);
@@ -22893,7 +22948,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // statement that fills it past 4 MB merges into the index (about 11,000 buffer hits). After the rows above it holds
       // about 505 of its 512 pages, so whether this statement pays for the merge depends on how much earlier tests
       // wrote: empty it first, so the lease's own work is what is measured.
-      await db.query("SELECT gin_clean_pending_list('sending_emails_log_trgm'::regclass)");
+      await db.query("SELECT gin_clean_pending_list('sending_emails_direct_log_trgm'::regclass)");
       const p=(await db.query('EXPLAIN (ANALYZE,BUFFERS,TIMING OFF,FORMAT JSON) '+args[0].text,args[1])).rows[0]['QUERY PLAN'][0];
       // Where the hits go, by each plan node's own share, so a regression names its node in the log.
       const own: string[] = [], walk = (n: any) => { const kids = (n.Plans ?? []) as any[]; own.push(`${n['Shared Hit Blocks'] - kids.reduce((x, k) => x + (k['Shared Hit Blocks'] ?? 0), 0)} ${n['Node Type']} ${n['Index Name'] ?? n['Relation Name'] ?? n['CTE Name'] ?? ''} x${n['Actual Loops']}`); kids.forEach(walk); };
@@ -23765,10 +23820,10 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.deepEqual([event.details.campaignId, event.details.code], [c.id, 'LIST_QUALITY']);
       assert.deepEqual((await db.query(`SELECT type FROM jobs WHERE workspace_id=$1 AND type IN ('standing.notify','operation.publish') ORDER BY type`, [wid])).rows.map(r => r.type), ['operation.publish', 'standing.notify']);
       // Review of #115: the owner's one resume used to release the remaining 50 never-mailed contacts unchanged. Now the
-      // rest goes only to contacts this workspace delivered to before (10 of them, from earlier receipts).
+      // rest goes only to contacts this workspace delivered to before (10 of them, from earlier receipts and an earlier campaign).
       const known = (await db.query(`SELECT recipient->>'email' AS email FROM sending_review_recipients WHERE review_id=(SELECT review_id FROM sending_campaigns WHERE id=$1) AND ordinal>100 ORDER BY ordinal DESC LIMIT 10`, [c.id])).rows.map(r => r.email).reverse();
-      await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,status,provider_id,created_at)
-        SELECT 'email_prior_'||n,$1,$2,'fixture',$3,jsonb_build_array(upper(e)),'[]','[]','Receipt','{}',false,'delivered','prior-'||n,now()-interval '20 days' FROM unnest($4::text[]) WITH ORDINALITY x(e,n)`, [wid, REGION, from, known]);
+      await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,campaign_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,status,provider_id,created_at)
+        SELECT 'email_prior_'||n,$1,$2,'fixture',CASE WHEN n%2=0 THEN 'campaign_prior' END,$3,jsonb_build_array(upper(e)),'[]','[]','Receipt','{}',false,'delivered','prior-'||n,now()-interval '20 days' FROM unnest($4::text[]) WITH ORDINALITY x(e,n)`, [wid, REGION, from, known]);
       ok(await local('POST', `${path}/resume`, {}));
       assert.equal((await view()).delivery.deliveredOnly, true);
       await run('campaign.run');
