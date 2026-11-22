@@ -40,7 +40,7 @@
       "Condition": {"StringEquals": {"aws:ResourceTag/bane:owner": "bane", "aws:ResourceTag/bane:installation-id": "bane:pool", "aws:ResourceTag/bane:purpose": "workspace-tenant"}}
     },
     {
-      "Effect": "Allow", "Action": "ses:UpdateReputationEntityPolicy", "Resource": "arn:aws:ses:us-east-1:aws:reputation-policy/strict"
+      "Effect": "Allow", "Action": "ses:UpdateReputationEntityPolicy", "Resource": ["arn:aws:ses:us-east-1:aws:reputation-policy/strict", "arn:aws:ses:us-east-1:aws:reputation-policy/standard"]
     }
   ]
 }

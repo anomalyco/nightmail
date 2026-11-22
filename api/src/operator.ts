@@ -7,6 +7,7 @@ import { applyChange, type Change } from './standing.js';
 import { loadStanding, scoreView, StandingSchema } from './sender-score.js';
 import { clearProbe, queueCampaignRun, resumeCampaign } from './states.js';
 import { productName } from './brand.js';
+import { POLICY, tenantPolicyLevel, tenantPolicyWhy } from './tenant-policy.js';
 
 // The operator API: Anomaly staff with a platform role act on any Hosted workspace through one audited path. The
 // /operator dashboard area, Ryan's support platform (phase 2) and scripts are its clients. Roles live in
@@ -65,7 +66,14 @@ const domainLimitOf = (wid: string) => sql`SELECT json_build_object('used',(SELE
 const WorkspaceView = z.object({ workspace: z.object({ id: z.string(), name: z.string(), createdAt: z.string() }), score: z.unknown(), standing: StandingSchema.nullable(),
   connection: z.object({ region: z.string(), paused: z.boolean(), resuming: z.boolean(), pauseReason: z.string().nullable(), tenantGeneration: z.number().int(),
     tenants: z.array(z.object({ region: z.string(), applied: z.enum(['ENABLED', 'DISABLING', 'DISABLED']).describe(`DISABLING: ${productName} asked AWS and does not know the outcome yet, so it treats the tenant as possibly disabled.`), generation: z.number().int(), appliedAt: z.string() }))
-      .describe(`What ${productName} last applied to each regional SES tenant (none: never switched, so enabled).`) }).nullable(),
+      .describe(`What ${productName} last applied to each regional SES tenant (none: never switched, so enabled).`),
+    policy: z.object({
+      level: z.enum(['strict', 'standard']).describe('The AWS reputation policy the tenants should have now: strict while the workspace is on probation, standard once it graduated or an operator exempted it.'),
+      why: z.enum(['exempt', 'graduated', 'evaluation', 'growth', 'standing', 'paused', 'resume-limit']).describe('exempt or graduated (standard); otherwise the probation reason, a pause or a resume\'s reduced limit (strict).'),
+      standardFrom: z.string().nullable().describe('A graduated workspace that fell back onto probation is strict until a day after it did.'),
+      tenants: z.array(z.object({ region: z.string(), applied: z.enum(['strict', 'standard']).nullable().describe('Null: not known yet; the next reconcile applies the level.'), appliedAt: z.string().nullable(),
+        refusedAt: z.string().nullable().describe('When AWS last refused standard (the runtime IAM policy or its boundary lacks it). The tenant stays strict; asked again an hour later.') })),
+    }).describe('Each ready SES tenant\'s reputation policy (src/tenant-policy.ts).') }).nullable(),
   domains: z.array(z.object({ name: z.string(), region: z.string().nullable(), pool: z.string(), dkim: z.boolean(), mailFrom: z.boolean(), dmarc: z.string().nullable() })),
   members: z.array(z.object({ userId: z.string(), email: z.string(), role: z.string() })), siblings: z.array(z.object({ id: z.string(), name: z.string() })),
   override: z.object({ daily: z.number().int(), expiresAt: z.string().nullable() }).nullable(), exempt: z.boolean(),
@@ -145,7 +153,13 @@ export function registerOperator(app: App) {
       (SELECT json_build_object('id',id,'name',name,'createdAt',created_at) FROM workspaces WHERE id=${wid}) AS workspace,
       (SELECT json_build_object('region',pc.region,'paused',pc.paused_at IS NOT NULL,'resuming',pc.resume_pending_at IS NOT NULL,'pauseReason',pc.pause_reason,'tenantGeneration',pc.tenant_generation,
         'tenants',coalesce((SELECT json_agg(json_build_object('region',t.region,'applied',t.applied,'generation',t.generation,'appliedAt',${isoAt(sql`t.applied_at`)}) ORDER BY t.region)
-          FROM hosted_tenant_status t WHERE t.connection_id=pc.id),'[]')) FROM provider_connections pc WHERE pc.workspace_id=${wid} AND pc.kind='shared') AS connection,
+          FROM hosted_tenant_status t WHERE t.connection_id=pc.id),'[]'),
+        'policy',(SELECT json_build_object('level',l.level,'why',x.why,
+          'standardFrom',CASE WHEN x.why='graduated' AND l.level='strict' THEN ${isoAt(sql`((SELECT max(demoted_at) FROM hosted_tenant_policy WHERE workspace_id=${wid})+make_interval(hours=>${POLICY.settleHours}))`)} END,
+          'tenants',coalesce((SELECT json_agg(json_build_object('region',r.region,'applied',p.applied,'appliedAt',${isoAt(sql`p.applied_at`)},'refusedAt',${isoAt(sql`p.refused_at`)}) ORDER BY r.region)
+            FROM provider_connection_regions r LEFT JOIN hosted_tenant_policy p ON p.workspace_id=pc.workspace_id AND p.region=r.region WHERE r.connection_id=pc.id AND r.tenant_state='ready'),'[]'))
+          FROM (SELECT ${tenantPolicyWhy(sql`pc.workspace_id`)} AS why) x CROSS JOIN LATERAL (SELECT ${tenantPolicyLevel(sql`pc.workspace_id`, sql`x.why`)} AS level) l))
+        FROM provider_connections pc WHERE pc.workspace_id=${wid} AND pc.kind='shared') AS connection,
       coalesce((SELECT json_agg(json_build_object('name',dc.name,'region',b.region,'pool',coalesce(t.tier,'probation'),
         'dkim',coalesce(dc.identity #>> '{ses,DkimAttributes,Status}'='SUCCESS',false),'mailFrom',coalesce(dc.identity #>> '{ses,MailFromAttributes,MailFromDomainStatus}'='SUCCESS',false),'dmarc',dc.identity #>> '{dmarc,status}') ORDER BY dc.name)
         FROM domain_claims dc LEFT JOIN domain_sending_bindings b USING(workspace_id,name,connection_id) LEFT JOIN hosted_domain_tiers t ON t.connection_id=dc.connection_id AND t.name=dc.name

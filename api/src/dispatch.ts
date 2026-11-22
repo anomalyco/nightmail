@@ -41,6 +41,7 @@ function resolveJobHandler(type: string): Promise<JobHandler | undefined> {
     if (type === 'byo.verify') return (await import('./provider-connections.js')).byoVerifyJob;
     if (type === 'tenant.provision') return (await import('./provider-connections.js')).tenantJob;
     if (type === 'hosted.tenantStatus') return (await import('./provider-connections.js')).tenantStatusJob;
+    if (type === 'hosted.tenantPolicy') return (await import('./tenant-policy.js')).tenantPolicyJob;
     if (type.startsWith('standing.')) return (await import('./standing.js')).standingJobs[type];
     if (type === 'audience.newsletterReaders') return (await import('./newsletters.js')).newsletterJobs[type];
     if (type.startsWith('billing.')) return (await import('./billing/jobs.js')).billingJobs[type];

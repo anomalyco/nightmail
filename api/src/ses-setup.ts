@@ -804,19 +804,28 @@ export async function setAutoValidation(runtime: Runtime, options: SesSetupOptio
   finally { c.ses.destroy(); c.sns.destroy(); c.sts.destroy(); c.cw.destroy(); }
 }
 
-/** Nightmail's own switch on a workspace tenant (customer-managed status), set by a pause or resume as a backstop to the
- *  database hold. It is separate from AWS's own status: ENABLED never lifts a pause AWS applied. Returns the ARN. */
-export async function setTenantSendingStatus(runtime: Runtime, region: string, tenantName: string, arn: string | null, status: 'ENABLED' | 'DISABLED') {
+/** One call on a workspace tenant, by its recorded ARN or, for a tenant provisioned before ARNs were recorded, the ARN
+ *  GetTenant returns in the pool account (never recorded here). Returns the ARN. */
+async function onTenant(runtime: Runtime, region: string, tenantName: string, arn: string | null, call: (c: Clients, tenantArn: string, opts: { abortSignal: AbortSignal }) => Promise<unknown>) {
   const context = setupContext(20_000), c = await clients(runtime, region, context), opts = { abortSignal: context.signal };
-  const { GetTenantCommand, UpdateReputationEntityCustomerManagedStatusCommand } = c.sdk.sesv2;
   try {
-    const tenantArn = arn ?? (await c.ses.send(new GetTenantCommand({ TenantName: tenantName }), opts)).Tenant?.TenantArn;
+    const tenantArn = arn ?? (await c.ses.send(new c.sdk.sesv2.GetTenantCommand({ TenantName: tenantName }), opts)).Tenant?.TenantArn;
     if (!tenantArn?.startsWith(`arn:aws:ses:${region}:`)) throw new ApiError(409, 'TENANT_MISMATCH', 'SES did not return the expected tenant.');
-    await c.ses.send(new UpdateReputationEntityCustomerManagedStatusCommand({ ReputationEntityType: 'RESOURCE', ReputationEntityReference: tenantArn, SendingStatus: status }), opts);
+    await call(c, tenantArn, opts);
     return tenantArn;
   } catch (error) { if (error instanceof ModuleLoadError) throw error; throw awsError(error); }
   finally { c.ses.destroy(); c.sns.destroy(); c.sts.destroy(); c.cw.destroy(); }
 }
+/** Nightmail's own switch on a workspace tenant (customer-managed status), set by a pause or resume as a backstop to the
+ *  database hold. It is separate from AWS's own status: ENABLED never lifts a pause AWS applied. Returns the ARN. */
+export const setTenantSendingStatus = (runtime: Runtime, region: string, tenantName: string, arn: string | null, status: 'ENABLED' | 'DISABLED') =>
+  onTenant(runtime, region, tenantName, arn, (c, tenantArn, opts) => c.ses.send(new c.sdk.sesv2.UpdateReputationEntityCustomerManagedStatusCommand({ ReputationEntityType: 'RESOURCE', ReputationEntityReference: tenantArn, SendingStatus: status }), opts));
+/** AWS's reputation policies for a tenant: which finding makes AWS pause it (src/tenant-policy.ts). */
+export type TenantPolicy = 'strict' | 'standard';
+export const reputationPolicyArn = (region: string, policy: TenantPolicy) => `arn:aws:ses:${region}:aws:reputation-policy/${policy}`;
+/** Sets a workspace tenant's reputation policy (src/tenant-policy.ts decides which). Returns the ARN. */
+export const setTenantReputationPolicy = (runtime: Runtime, region: string, tenantName: string, arn: string | null, policy: TenantPolicy) =>
+  onTenant(runtime, region, tenantName, arn, (c, tenantArn, opts) => c.ses.send(new c.sdk.sesv2.UpdateReputationEntityPolicyCommand({ ReputationEntityType: 'RESOURCE', ReputationEntityReference: tenantArn, ReputationEntityPolicy: reputationPolicyArn(region, policy) }), opts));
 
 /** Never use the cause or effective status in an SNS payload to make a standing decision. */
 export async function readTenantStatus(runtime: Runtime, region: string, arn: string, origin: 'AWS_SES' | 'CUSTOMER_MANAGED') {
@@ -857,12 +866,14 @@ export async function provisionTenant(runtime: Runtime, region: string, account:
     if (journal && !journal.arn) await journal.created(tenant.TenantArn);
     if (repair) {await journal?.fence();await c.ses.send(new PutTenantSuppressionAttributesCommand({ TenantName, ...suppression }), opts);}
     await journal?.fence();
-    await c.ses.send(new UpdateReputationEntityPolicyCommand({ ReputationEntityType: 'RESOURCE', ReputationEntityReference: tenant.TenantArn, ReputationEntityPolicy: `arn:aws:ses:${region}:aws:reputation-policy/strict` }), opts);
+    // Every new or repaired tenant starts strict; src/tenant-policy.ts raises it to standard once its workspace graduates.
+    await c.ses.send(new UpdateReputationEntityPolicyCommand({ ReputationEntityType: 'RESOURCE', ReputationEntityReference: tenant.TenantArn, ReputationEntityPolicy: reputationPolicyArn(region, 'strict') }), opts);
     for (const ResourceArn of arns(account, region, setupResources(POOL_INSTALLATION,namespace)).sets) {
       await journal?.fence();
       try { await c.ses.send(new CreateTenantResourceAssociationCommand({ TenantName, ResourceArn }), opts); }
       catch (error) { if (!collision(error)) throw error; }
     }
+    return TenantName;
   } catch (error) { if (error instanceof ModuleLoadError) throw error; throw awsError(error); }
   finally { c.ses.destroy(); c.sns.destroy(); c.sts.destroy(); c.cw.destroy(); }
 }

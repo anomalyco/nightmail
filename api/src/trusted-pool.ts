@@ -6,6 +6,7 @@ import { awsError, loadSetupSdk, POOL_INSTALLATION, poolTenantName, provisionJou
 import { caller, loadStsSdk, platformCredentials } from './provider-credentials.js';
 import { requirePlatformAccount } from './config.js';
 import { TAG_PREFIX } from './resource-tags.js';
+import { queueTenantPolicy, recordProvisionedPolicy, tenantPolicyDrift } from './tenant-policy.js';
 
 export const virginia='us-east-1';
 const pending=()=>new JobDeferred(new Date(Date.now()+15_000).toISOString());
@@ -58,9 +59,11 @@ export const trustedProvision:JobHandler=retryDatabaseFailures(async(r,p,j)=>{
     await provisionTenant(r,virginia,platformAccount,wid,true,'trusted',name,{arn:saved?.arn??null,
       fence:async()=>fenced((await r.db.execute(sql`SELECT FROM provider_connection_regions WHERE ${owned}`)).rowCount),
       created:async arn=>fenced((await r.db.execute(sql`INSERT INTO hosted_tenant_ownership SELECT ${wid},${virginia},${arn} FROM provider_connection_regions WHERE ${owned}`)).rowCount)});
+    await recordProvisionedPolicy(r.db,wid,virginia,name);
     fenced((await r.db.execute(finishHostedRegion(ref,gen))).rowCount);
   } catch(e) {
     if (e instanceof ModuleLoadError) throw e;
     const err=awsError(e);await r.db.execute(sql`UPDATE provider_connection_regions SET sending_state='failed',lease_until=NULL,provision_error=${err.code} WHERE ${owned}`);throw err;
   }
+  await r.db.execute(queueTenantPolicy(tenantPolicyDrift(wid)));
 });
