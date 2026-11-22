@@ -155,7 +155,7 @@ export function registerOperator(app: App) {
         'tenants',coalesce((SELECT json_agg(json_build_object('region',t.region,'applied',t.applied,'generation',t.generation,'appliedAt',${isoAt(sql`t.applied_at`)}) ORDER BY t.region)
           FROM hosted_tenant_status t WHERE t.connection_id=pc.id),'[]'),
         'policy',(SELECT json_build_object('level',l.level,'why',x.why,
-          'standardFrom',CASE WHEN x.why='graduated' AND l.level='strict' THEN ${isoAt(sql`(SELECT max(demoted_at) FROM hosted_tenant_policy WHERE workspace_id=${wid})+make_interval(hours=>${POLICY.settleHours})`)} END,
+          'standardFrom',CASE WHEN x.why='graduated' AND l.level='strict' THEN ${isoAt(sql`((SELECT max(demoted_at) FROM hosted_tenant_policy WHERE workspace_id=${wid})+make_interval(hours=>${POLICY.settleHours}))`)} END,
           'tenants',coalesce((SELECT json_agg(json_build_object('region',r.region,'applied',p.applied,'appliedAt',${isoAt(sql`p.applied_at`)},'refusedAt',${isoAt(sql`p.refused_at`)}) ORDER BY r.region)
             FROM provider_connection_regions r LEFT JOIN hosted_tenant_policy p ON p.workspace_id=pc.workspace_id AND p.region=r.region WHERE r.connection_id=pc.id AND r.tenant_state='ready'),'[]'))
           FROM (SELECT ${tenantPolicyWhy(sql`pc.workspace_id`)} AS why) x CROSS JOIN LATERAL (SELECT ${tenantPolicyLevel(sql`pc.workspace_id`, sql`x.why`)} AS level) l))
