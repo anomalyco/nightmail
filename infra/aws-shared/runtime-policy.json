@@ -20,7 +20,8 @@
     },
     {
       "Effect": "Deny", "Action": ["sns:*Topic*", "sns:*Tag*", "sns:Subscribe", "ses:*Identity*", "ses:*Tenant*", "ses:*ConfigurationSet*", "ses:TagResource", "ses:SendEmail", "ses:*Reputation*"],
-      "NotResource": ["arn:aws:ses:us-east-1:YOUR_AWS_ACCOUNT_ID:*", "arn:aws:ses:us-east-2:YOUR_AWS_ACCOUNT_ID:*", "arn:aws:sns:us-east-1:YOUR_AWS_ACCOUNT_ID:*", "arn:aws:sns:us-east-2:YOUR_AWS_ACCOUNT_ID:*", "arn:aws:ses:us-east-1:aws:reputation-policy/strict", "arn:aws:ses:us-east-2:aws:reputation-policy/strict"]
+      "NotResource": ["arn:aws:ses:us-east-1:YOUR_AWS_ACCOUNT_ID:*", "arn:aws:ses:us-east-2:YOUR_AWS_ACCOUNT_ID:*", "arn:aws:sns:us-east-1:YOUR_AWS_ACCOUNT_ID:*", "arn:aws:sns:us-east-2:YOUR_AWS_ACCOUNT_ID:*", "arn:aws:ses:us-east-1:aws:reputation-policy/strict", "arn:aws:ses:us-east-2:aws:reputation-policy/strict",
+        "arn:aws:ses:us-east-1:aws:reputation-policy/standard", "arn:aws:ses:us-east-2:aws:reputation-policy/standard"]
     },
     {
       "Effect": "Deny", "NotAction": "sts:AssumeRole", "Resource": "*",

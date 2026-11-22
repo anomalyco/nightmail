@@ -4,6 +4,7 @@ import { enqueue, retryDatabaseFailures } from './jobs.js';
 import { queueTenantStatus, resumeHostedConnection, tenantStatusDrift, terminalColumns, terminalEvents, type HostedCaps } from './states.js';
 import { dailyLimit, ESTABLISHED, GOOD_STANDING, establishedBy, EVALUATION, evaluated, FREEZE_FLOOR, GROWTH, moveScore, nextGrowth, nextStanding, quality, stepRank, type DayEvidence, type GrowthHour, type DomainAuth, type Factor, type LadderInput, type Reason, type ScoreState, type Step, type TrackRecord, type Window } from './standing-model.js';
 import { productName } from './brand.js';
+import { queueTenantPolicy, tenantPolicyDrift } from './tenant-policy.js';
 
 // The standing job: every ten minutes it counts each Hosted workspace's mail, moves its score, sets the daily limit
 // admission reads (none in good standing), and walks the ladder (notice → warn → restrict → pause). Every change of standing, by the job, an
@@ -360,8 +361,12 @@ export async function refreshStanding(runtime: Runtime, options: { now?: Date; o
     ON CONFLICT(workspace_id,day) DO UPDATE SET score=excluded.score,quality=excluded.quality,target=excluded.target,daily_limit=excluded.daily_limit,step=excluded.step`);
   await settlePaused(runtime);
   await runtime.db.execute(sql`DELETE FROM hosted_growth_minutes WHERE minute<now()-interval '2 hours'`);
-  // Any workspace whose SES tenants differ from what Nightmail wants (a missed job, a tenant ready after the pause) is queued.
-  if (!options.only) await runtime.db.execute(queueTenantStatus(tenantStatusDrift()));
+  // Any workspace whose SES tenants differ from what Nightmail wants (a missed job, a tenant ready after the pause) is queued,
+  // and so is any whose tenants' reputation policy no longer matches its trust (a graduation, a fall back, an exemption).
+  if (!options.only) {
+    await runtime.db.execute(queueTenantStatus(tenantStatusDrift()));
+    await runtime.db.execute(queueTenantPolicy(tenantPolicyDrift()));
+  }
   return { evaluated: rows.length, changed };
 }
 
@@ -414,7 +419,7 @@ export function tenantStatusEvent(message: Record<string, unknown>) {
   return { arn, account: m.account, region: typeof m.region === 'string' ? m.region : null, tenant: arn.split('/')[1]!, origin, status, cause: typeof m.detail?.data?.record?.cause === 'string' ? m.detail.data.record.cause.slice(0, 300) : null } as const;
 }
 /**
- * Mirrors AWS's own tenant pauses. A DISABLED from AWS (or from the strict reputation policy, which sets the
+ * Mirrors AWS's own tenant pauses. A DISABLED from AWS (or from the tenant's reputation policy, which sets the
  * customer-managed status with its own cause) pauses the workspace (SES_TENANT_PAUSED): only an operator resumes it,
  * after AWS reinstates the tenant. Nightmail's own switch ("Status manually updated.") and every enable are timeline only.
  *

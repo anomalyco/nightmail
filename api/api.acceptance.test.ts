@@ -21300,6 +21300,93 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.equal(aws.get('us-west-2'), 'DISABLED');
     });
   });
+  test('SES tenant policy: strict on probation, standard once graduated or exempt, strict again on a fall back; a refused standard stays strict and is asked again', async t => {
+    await simulatedSesFixture(t, async ({ db, runtime, local }) => {
+      const { ensureTenant } = await import('./src/provider-connections.js'), { tenantPolicyJob, queueTenantPolicy, tenantPolicyDrift } = await import('./src/tenant-policy.js');
+      const { SESv2Client, CreateTenantCommand, CreateTenantResourceAssociationCommand, GetTenantCommand, PutTenantSuppressionAttributesCommand, UpdateReputationEntityPolicyCommand } = await import('@aws-sdk/client-sesv2'), { STSClient } = await import('@aws-sdk/client-sts');
+      const f = await hostedHoldFixture(runtime, db), other = REGION === 'us-east-2' ? 'us-east-1' : 'us-east-2', tenant = `bane-${f.wid}`;
+      // A key of its own: the platform principal is cached by access key.
+      runtime.config.aws = { accessKeyId: unique('fixture-policy'), secretAccessKey: 'fixture-only' };
+      t.mock.method(STSClient.prototype, 'send', async () => ({ Account: f.pool, Arn: `arn:aws:iam::${f.pool}:user/bane-runtime` }));
+      // Every reputation policy AWS applied, as "region policy"; with refuse on, AWS denies standard (the IAM change is not applied yet).
+      const set: string[] = []; let refuse = false;
+      t.mock.method(SESv2Client.prototype, 'send', async function (this: InstanceType<typeof SESv2Client>, cmd: any) {
+        const region = String(await this.config.region()), arn = (name: string) => `arn:aws:ses:${region}:${f.pool}:tenant/${name}/t-1`;
+        if (cmd instanceof CreateTenantCommand) return { TenantName: cmd.input.TenantName, TenantArn: arn(cmd.input.TenantName!) };
+        if (cmd instanceof GetTenantCommand) return { Tenant: { TenantName: cmd.input.TenantName, TenantArn: arn(cmd.input.TenantName!) } };
+        if (cmd instanceof CreateTenantResourceAssociationCommand || cmd instanceof PutTenantSuppressionAttributesCommand) return {};
+        assert.ok(cmd instanceof UpdateReputationEntityPolicyCommand, cmd.constructor.name);
+        assert.equal(cmd.input.ReputationEntityReference, arn(region === REGION ? tenant : 'bane-west-fixture'));
+        const policy = /^arn:aws:ses:[a-z0-9-]+:aws:reputation-policy\/(strict|standard)$/.exec(cmd.input.ReputationEntityPolicy!)?.[1];
+        assert.equal(cmd.input.ReputationEntityPolicy, `arn:aws:ses:${region}:aws:reputation-policy/${policy}`);
+        if (refuse && policy === 'standard') throw Object.assign(new Error('denied'), { name: 'AccessDeniedException' });
+        set.push(`${region} ${policy}`); return {};
+      });
+      const logs: Json[] = [];
+      for (const level of ['info', 'warn', 'error'] as const) t.mock.method(console, level, (line: string) => { try { const l = JSON.parse(line); if (/^SES_TENANT_POLICY/.test(l.code)) logs.push(l); } catch { /* not a log line */ } });
+      const changes = () => logs.splice(0).map(l => [l.code === 'SES_TENANT_POLICY_SET' ? `${l.region} ${l.from} → ${l.to}` : `${l.region} refused ${l.wanted}, kept ${l.kept}`, l.why, l.workspaceId === f.wid]);
+      const applied = async () => (await db.query('SELECT region,applied FROM hosted_tenant_policy WHERE workspace_id=$1 ORDER BY region', [f.wid])).rows.map(r => `${r.region} ${r.applied}`);
+      // The reconcile pass: the standing job queues every workspace with a tenant out of line (src/standing.ts), the job runs.
+      const jobId = `hosted.tenantPolicy:${f.wid}`;
+      const reconcile = async () => {
+        await runtime.db.execute(queueTenantPolicy(tenantPolicyDrift()));
+        if ((await db.query('SELECT status FROM jobs WHERE id=$1', [jobId])).rows[0]?.status !== 'pending') return false;
+        await tenantPolicyJob(runtime, {}, { id: jobId, workspaceId: f.wid, attempts: 1 });
+        await db.query(`UPDATE jobs SET status='completed' WHERE id=$1`, [jobId]);
+        return true;
+      };
+      const both = (policy: string) => [REGION, other].sort().map(r => `${r} ${policy}`);
+      // A new workspace (in its evaluation): provisioning sets its tenant strict and records it; nothing is queued.
+      await db.query(`UPDATE provider_connections SET tenant_state='pending',pool_tenant_name=NULL WHERE id=$1`, [f.wid]);
+      await ensureTenant(runtime, f.wid, f.wid);
+      assert.deepEqual([set.splice(0), await applied(), changes()], [[`${REGION} strict`], [`${REGION} strict`], [[`${REGION} null → strict`, 'provisioned', true]]]);
+      assert.equal((await db.query('SELECT FROM jobs WHERE id=$1', [jobId])).rowCount, 0);
+      // A second regional tenant with no record yet: the reconcile brings it in line, then has nothing to do.
+      await db.query(`INSERT INTO provider_connection_regions(connection_id,region,pool_tenant_name,tenant_state) VALUES($1,$2,'bane-west-fixture','ready')`, [f.wid, other]);
+      assert.equal(await reconcile(), true);
+      assert.deepEqual([set.splice(0), await applied(), changes()], [[`${other} strict`], both('strict'), [[`${other} null → strict`, 'evaluation', true]]]);
+      assert.equal(await reconcile(), false, 'Nothing changed: nothing is queued.');
+      await tenantPolicyJob(runtime, {}, { id: jobId, workspaceId: f.wid, attempts: 1 });
+      assert.deepEqual([set, logs], [[], []], 'Even a run of the job makes no AWS call when every tenant matches.');
+      // Graduation (graded, no daily limit, no growth pace, ok), before the IAM change: AWS refuses standard. Both
+      // tenants stay strict, each says so once, and the next pass waits out the hour.
+      await db.query(`INSERT INTO sender_standing(workspace_id,phase,first_recipients,score,target,quality,band_limit,daily_limit) VALUES($1,'graded',100,90,90,95,NULL,NULL)
+        ON CONFLICT(workspace_id) DO UPDATE SET phase='graded',score=90,target=90,quality=95,band_limit=NULL,daily_limit=NULL,step='ok',growth_until=NULL`, [f.wid]);
+      refuse = true;
+      assert.equal(await reconcile(), true);
+      assert.deepEqual([set.splice(0), await applied(), changes()], [[], both('strict'), [[`${REGION} refused standard, kept strict`, 'graduated', true], [`${other} refused standard, kept strict`, 'graduated', true]]]);
+      assert.equal(await reconcile(), false, 'A refused standard is asked again an hour later, not every pass.');
+      await db.query(`UPDATE hosted_tenant_policy SET refused_at=refused_at-interval '61 minutes' WHERE workspace_id=$1`, [f.wid]);
+      refuse = false;
+      assert.equal(await reconcile(), true, 'The hour passed: the reconcile asks again.');
+      assert.deepEqual([set.splice(0), await applied(), changes()], [both('standard'), both('standard'), [[`${REGION} strict → standard`, 'graduated', true], [`${other} strict → standard`, 'graduated', true]]]);
+      assert.equal(await reconcile(), false);
+      // A fall back onto probation (a ladder step from warn) makes both strict at once.
+      await db.query(`UPDATE sender_standing SET step='warn' WHERE workspace_id=$1`, [f.wid]);
+      assert.equal(await reconcile(), true);
+      assert.deepEqual([set.splice(0), await applied(), changes()], [both('strict'), both('strict'), [[`${REGION} standard → strict`, 'standing', true], [`${other} standard → strict`, 'standing', true]]]);
+      // Graduated again within a day of the fall back: it stays strict (no flapping), and the operator console says until when.
+      await db.query(`UPDATE sender_standing SET step='ok' WHERE workspace_id=$1`, [f.wid]);
+      assert.equal(await reconcile(), false);
+      const { setOperator } = await import('./scripts/set-operator.js');
+      await setOperator(db, [AUTH_SUBJECT, 'operator:read', '--reason', 'Synthetic tenant policy review']);
+      const { policy } = ok(await local('GET', `/v1/operator/workspaces/${f.wid}`)).connection;
+      const from = (await db.query(`SELECT to_char((max(demoted_at)+interval '24 hours') AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS at FROM hosted_tenant_policy WHERE workspace_id=$1`, [f.wid])).rows[0].at;
+      assert.deepEqual([policy.level, policy.why, policy.standardFrom, policy.tenants.map((t: Json) => `${t.region} ${t.applied}`)], ['strict', 'graduated', from, both('strict')]);
+      await db.query(`UPDATE hosted_tenant_policy SET demoted_at=demoted_at-interval '25 hours' WHERE workspace_id=$1`, [f.wid]);
+      assert.equal(await reconcile(), true, 'A day after the fall back it is standard again.');
+      assert.deepEqual([set.splice(0), changes().map(c => c[1])], [both('standard'), ['graduated', 'graduated']]);
+      // An exempt (first-party) workspace is standard whatever its standing, at once.
+      await db.query(`UPDATE sender_standing SET step='warn' WHERE workspace_id=$1`, [f.wid]);
+      assert.equal(await reconcile(), true);
+      assert.deepEqual([set.splice(0), changes().map(c => c[1])], [both('strict'), ['standing', 'standing']]);
+      await db.query('UPDATE workspaces SET exempt_hosted_quotas=true WHERE id=$1', [f.wid]);
+      assert.equal(await reconcile(), true);
+      assert.deepEqual([set.splice(0), await applied(), changes()], [both('standard'), both('standard'), [[`${REGION} strict → standard`, 'exempt', true], [`${other} strict → standard`, 'exempt', true]]]);
+      assert.equal(await reconcile(), false);
+      assert.equal(ok(await local('GET', `/v1/operator/workspaces/${f.wid}`)).connection.policy.why, 'exempt');
+    });
+  });
   test('MX review round 2: a marketing hold keeps already-queued marketing queued at dispatch while transactional mail sends', async t => {
     await simulatedSesFixture(t, async ({ db, runtime, local }) => {
       const { runDispatcher } = await import('./src/dispatcher.js'), { pauseHostedSending } = await import('./src/states.js'), { sql } = await import('drizzle-orm');
@@ -29182,6 +29269,20 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
+  test('SES tenant policy IAM: the runtime may set its own tenants strict or standard in both pools, never none',async()=>{
+    const {render}=await import(new URL('../infra/aws-shared/runtime-policies.mjs',import.meta.url).href),{readFile}=await import('node:fs/promises');
+    const account='905840579680',ws='ws_'+'0f'.repeat(16);
+    const identity=Object.values(render('--fresh',{account,origin:'https://dev.bane.mx'}) as Record<string,{Statement:IamStatement[]}>).flatMap(d=>d.Statement);
+    const boundary=JSON.parse((await readFile(new URL('../infra/aws-shared/runtime-boundary-policy.json',import.meta.url),'utf8')).replaceAll('YOUR_AWS_ACCOUNT_ID',account)).Statement as IamStatement[];
+    const owned={'aws:ResourceTag/bane:owner':'bane','aws:ResourceTag/bane:installation-id':'bane:pool','aws:ResourceTag/bane:purpose':'workspace-tenant'};
+    // UpdateReputationEntityPolicy names the tenant and the policy: the identity policies and the boundary must allow both.
+    for(const [region,tenant] of [['us-east-2','bane-probation-'+ws],['us-east-2','bane-'+ws],['us-east-1','bane-trusted-'+ws]])for(const policy of ['strict','standard','none']){
+      const allowed=[`arn:aws:ses:${region}:${account}:tenant/${tenant}/t-1`,`arn:aws:ses:${region}:aws:reputation-policy/${policy}`]
+        .every(arn=>[identity,boundary].every(p=>iamAllows(p,'ses:UpdateReputationEntityPolicy',arn,{'aws:RequestedRegion':region,...owned})));
+      assert.equal(allowed,policy!=='none',`${tenant} ${policy}`);
+    }
+    assert.equal(iamAllows(identity,'ses:UpdateReputationEntityPolicy',`arn:aws:ses:us-east-2:${account}:tenant/unrelated-${ws}/t-1`,{'aws:RequestedRegion':'us-east-2',...owned}),false);
+  });
   test('BYO broker: the runtime enters only the broker, and only the broker enters connected-account roles',async()=>{
     const {render,renderBroker}=await import(new URL('../infra/aws-shared/runtime-policies.mjs',import.meta.url).href),{readFile}=await import('node:fs/promises');
     const account='905840579680',customer='444455556666',broker=`arn:aws:iam::${account}:role/nightmail-byo-broker`,role=`arn:aws:iam::${customer}:role/Nightmail-0123456789abcdef0123`;

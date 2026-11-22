@@ -6,7 +6,7 @@ import { Alert, Button, Checkbox, ControlSkeleton, DataTable, Dialog, DropdownMe
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { useSession } from '../../data/context'
 import { ApiError, type SenderScoreFactor, type StandingReason, type StandingStep } from '../../data/types'
-import { isoTime, operatorApi, type OperatorAction, type OperatorCampaign, type OperatorDomain, type OperatorMember, type OperatorQueueItem, type OperatorTimelineItem, type OperatorWorkspace, type TimelineKind, type WaitlistEntry } from '../../data/operator'
+import { isoTime, operatorApi, type OperatorAction, type OperatorCampaign, type OperatorDomain, type OperatorMember, type OperatorQueueItem, type OperatorTimelineItem, type OperatorTenantPolicy, type OperatorWorkspace, type TimelineKind, type WaitlistEntry } from '../../data/operator'
 import { label, number, shortDateTime } from '../../lib/format'
 import { downloadCsv } from '../../lib/download'
 import { errorText } from '../../data/types'
@@ -178,6 +178,13 @@ export function OperatorWorkspacePage() {
   </>
 }
 
+// The SES tenants' AWS reputation policy: strict on probation, standard once graduated or exempt (api/src/tenant-policy.ts).
+function policyText(policy: OperatorTenantPolicy) {
+  const behind = policy.tenants.filter(t => t.applied !== policy.level).map(t => t.region)
+  const refused = policy.level === 'standard' ? policy.tenants.map(t => t.refusedAt).filter(at => at !== null).sort().at(-1) : undefined
+  return [`${label(policy.level)} · ${policy.why}`, policy.standardFrom ? `standard from ${when(policy.standardFrom)}` : null,
+    !behind.length ? null : refused ? `AWS refused standard ${when(refused)}, asks again hourly` : `applying to ${behind.join(', ')}`].filter(Boolean).join(' · ')
+}
 const Rows = ({ rows }: { rows: [string, ReactNode][] }) => <dl className="op-rows">{rows.map(([title, value]) => <div key={title}><dt>{title}</dt><dd>{value}</dd></div>)}</dl>
 const yes = (value: boolean) => value ? 'Yes' : 'No'
 
@@ -239,6 +246,7 @@ function WorkspaceBody({ data, canAct, onReleaseCampaign }: { data: OperatorWork
         <Rows rows={[
           ['Pause', connection?.paused ? `${standing?.pauseKind === 'bounce' ? 'Bounce-only' : 'Full'}${connection.pauseReason ? ` · ${connection.pauseReason}` : ''}` : 'Not paused'],
           ['SES tenants', !connection ? '—' : connection.resuming ? 'Enabling before sending resumes' : connection.tenants.length ? connection.tenants.map(t => `${t.region} ${t.applied === 'DISABLED' ? 'disabled' : t.applied === 'DISABLING' ? 'possibly disabled' : 'enabled'}`).join(' · ') : 'Enabled'],
+          ['Tenant policy', connection ? policyText(connection.policy) : '—'],
           ['Marketing', standing?.marketingRelease ? `Released at ${standing.marketingRelease.percent}% until ${when(standing.marketingRelease.until)}` : standing?.marketingHeld ? 'Held' : 'Flowing'],
           ['Self-service', !offer ? '—' : offer.available ? `${label(offer.action ?? 'none')} available` : offer.reason ? `${offer.reason}${offer.availableAt ? ` From ${when(offer.availableAt)}.` : ''}` : 'Nothing to release'],
           ['Version', standing ? `${standing.version} · sequence ${standing.sequence}` : '—'],

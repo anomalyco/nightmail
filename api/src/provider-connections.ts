@@ -10,6 +10,7 @@ import { JobDeferred, MAX_ATTEMPTS, retryDatabaseFailures } from './jobs.js';
 import { loadMailboxSetupSdk, preparePoolReceiving } from './mailbox-setup.js';
 import { byoEnabled } from './byo-pilot.js';
 import { hostedAllowance, type HostedAllowance } from './hosted-sending.js';
+import { queueTenantPolicy, recordProvisionedPolicy, tenantPolicyDrift } from './tenant-policy.js';
 import { requirePlatformAccount } from './config.js';
 import { Accepted, DisconnectSummary, Imports, InventoryFields, ProductionAccess, ProductionAccessState, RegionStatus, StackUpdate, disconnectV5, enrollV5, inventory, prepareStackUpdate, refreshScan, regionLabels, requestProductionAccess, selectImports, statuses, v5Link, type V5Connection } from './byo-regional.js';
 import { BYO_TEMPLATE_VERSIONS, byoFeatures, versionAtLeast } from './byo-permissions.js';
@@ -292,9 +293,12 @@ export async function ensureTenant(runtime: Runtime, wid: string, connectionId: 
   await platformIdentity(runtime, row.pool_account);
   // Record the tenant's ARN: AWS tenant status events are trusted only for a recorded, owned ARN (src/standing.ts).
   const { rows: [owned] } = await runtime.db.execute<{ arn: string }>(sql`SELECT arn FROM hosted_tenant_ownership WHERE workspace_id=${wid} AND region=${row.region}`);
-  await provisionTenant(runtime, row.region, row.pool_account, wid,row.managed_tenant,row.namespace,row.pool_tenant_name, { arn: owned?.arn ?? null,
+  const tenant = await provisionTenant(runtime, row.region, row.pool_account, wid,row.managed_tenant,row.namespace,row.pool_tenant_name, { arn: owned?.arn ?? null,
     created: async arn => { await runtime.db.execute(sql`INSERT INTO hosted_tenant_ownership(workspace_id,region,arn) VALUES(${wid},${row.region},${arn}) ON CONFLICT DO NOTHING`); }, fence: async () => {} });
+  // The tenant is strict now; a graduated or exempt workspace's is raised to standard by the policy job (src/tenant-policy.ts).
+  await recordProvisionedPolicy(runtime.db, wid, row.region, tenant);
   await runtime.db.execute(setTenantState(row.id, 'ready', row.pool_account));
+  await runtime.db.execute(queueTenantPolicy(tenantPolicyDrift(wid)));
 }
 export const tenantJob: JobHandler = retryDatabaseFailures(async (runtime, payload, job) => {
   if (!runtime.config.multiTenant || isSimulatedSes(runtime) || typeof payload.connectionId!=='string') return;
