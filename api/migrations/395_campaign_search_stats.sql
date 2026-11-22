@@ -1,4 +1,4 @@
--- Statistics for the sent-mail search (src/sending.ts sentSearch), ahead of migration 395's index swap. The planner reads
+-- Statistics for the sent-mail search (src/sending.ts sentSearch), ahead of migration 396's index swap. The planner reads
 -- an expression's statistics from a whole-table index only, so once the search indexes are partial it needs these to
 -- see how rare a search term or an address is; without them it walks the workspace's newest mail instead. The log text
 -- is NULL for campaign mail, so a term common in campaign mail alone isn't estimated to match mail sent one at a time.

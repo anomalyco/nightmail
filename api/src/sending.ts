@@ -438,10 +438,10 @@ export async function pageBinding(a: Actor, resource: string, query: Record<stri
 }
 export function literalSearch(value: string) { return `%${value.replace(/[\\%_]/g, character => `\\${character}`)}%`; }
 // Sent-mail search (Logs and listEmails). Mail sent one at a time matches a literal, case-insensitive substring of its
-// sender, recipients, subject or IDs, through the trigram index on that mail alone (migration 395). Campaign mail matches
+// sender, recipients, subject or IDs, through the trigram index on that mail alone (migration 396). Campaign mail matches
 // its exact recipient address, in any case, through a btree, or its email ID, and its campaign lists it (campaignId): a
 // campaign's recipients would otherwise each add a trigram set to that index, written again on every status change.
-// The log text is NULL for campaign mail, exactly as the index and its statistics (migration 394) write it.
+// The log text is NULL for campaign mail, exactly as the index and its statistics (migration 395) write it.
 export const sentSearch = (term: string) => sql`((${emails.campaignId} IS NULL AND (CASE WHEN ${emails.campaignId} IS NULL THEN sending_log_text(${emails.id},${emails.campaignId},${emails.providerId},${emails.from},${emails.subject},${emails.to} || ${emails.cc} || ${emails.bcc}) END) ILIKE ${literalSearch(term)})
   OR (${emails.campaignId} IS NOT NULL AND lower(${emails.to}->>0) = lower(${term})) OR ${emails.id} = ${term})`;
 export const scope = (table: { workspaceId: AnyPgColumn }, a: Pick<Actor, 'workspaceId'>) => eq(table.workspaceId, a.workspaceId);

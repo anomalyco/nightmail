@@ -13826,7 +13826,7 @@ describe('Dashboard API capabilities', () => {
     assert.equal(ok(await http('GET', `/v1/metrics?${metricQuery}`, live.secret)).totals.clicked, after.totals.clicked);
   });
 
-  test('Logs search: mail sent one at a time by any part of its address or subject, campaign mail by its exact address or email ID and from its campaign; migration 395 swaps the indexes online', async t => {
+  test('Logs search: mail sent one at a time by any part of its address or subject, campaign mail by its exact address or email ID and from its campaign; migration 396 swaps the indexes online', async t => {
     const db = await fixtureDatabase(t);
     const key = await keyFixture(t);
     const campaign = await campaignFixture(t, key.secret, {});
@@ -13858,16 +13858,16 @@ describe('Dashboard API capabilities', () => {
     assert.deepEqual([(await counts(recipient)).status, (await counts(recipient)).kind], [{ delivered: 2 }, { transactional: 1, marketing: 1 }]);
     assert.deepEqual((await counts(`reader.${marker}`)).kind, { transactional: 1, marketing: 0 });
 
-    // Migration 395 on a database upgraded from the previous release, as migrate.ts applies a marked file: the direct-mail
-    // trigram index and the campaign recipient index are built concurrently before the old trigram index is dropped. 394
+    // Migration 396 on a database upgraded from the previous release, as migrate.ts applies a marked file: the direct-mail
+    // trigram index and the campaign recipient index are built concurrently before the old trigram index is dropped. 395
     // gave the planner the statistics of their expressions.
     assert.deepEqual((await db.query("SELECT stxname FROM pg_statistic_ext WHERE stxrelid = 'sending_emails'::regclass AND stxname LIKE 'sending_emails_%' ORDER BY 1")).rows.map(r => r.stxname), ['sending_emails_direct_log_text', 'sending_emails_first_recipient']);
-    const source = await readFile(new URL('./migrations/395_campaign_search_index.sql', import.meta.url), 'utf8');
+    const source = await readFile(new URL('./migrations/396_campaign_search_index.sql', import.meta.url), 'utf8');
     assert.match(source, /^-- bane:no-transaction\n/);
     const indexes = async () => (await db.query(`SELECT c.relname AS name, i.indisvalid AS valid, pg_get_expr(i.indpred, i.indrelid) AS predicate FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
       WHERE i.indrelid = 'sending_emails'::regclass AND c.relname IN ('sending_emails_log_trgm', 'sending_emails_direct_log_trgm', 'sending_emails_campaign_recipient') ORDER BY 1`)).rows;
     const swapped = [{ name: 'sending_emails_campaign_recipient', valid: true, predicate: '(campaign_id IS NOT NULL)' }, { name: 'sending_emails_direct_log_trgm', valid: true, predicate: '(campaign_id IS NULL)' }];
-    assert.deepEqual(await indexes(), swapped, 'The fixture database applied 395.');
+    assert.deepEqual(await indexes(), swapped, 'The fixture database applied 396.');
     await db.query("SET statement_timeout = '60s'");
     await db.query('CREATE INDEX CONCURRENTLY sending_emails_log_trgm ON sending_emails USING gin (sending_log_text(id,campaign_id,provider_id,from_address,subject,to_addresses || cc_addresses || bcc_addresses) gin_trgm_ops)');
     for (const name of ['sending_emails_direct_log_trgm', 'sending_emails_campaign_recipient']) await db.query(`DROP INDEX CONCURRENTLY ${name}`);
