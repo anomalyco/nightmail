@@ -70,6 +70,8 @@ const BRAKE_MS = 10000;
 // SES gave no usable answer (transport error, timeout, 5xx, or no MessageId): an ambiguous call is never replayed, so stop starting new
 // calls instead of turning every queued email into acceptance_unknown. Doubles while SES stays silent.
 const OUTAGE_MS = 15000, OUTAGE_MAX_MS = 300000;
+// A deferred email's retry starts this long after the email is due on the database's clock, so it never finds it early.
+const DUE_MARGIN_MS = 100;
 // Far below interrupted-attempt recovery (3 min) and the queue lease (2 min). Ordinary groups
 // can share a claim, but an unsent item never waits behind a long envelope or priority flood.
 const MAX_PRE_SEND_MS = 5000;
@@ -1014,7 +1016,7 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
         if (!(gate.screenRetryAt && gate.screenRetryAt>Date.now())) {
           gate.screenRetryAt=Date.now()+30_000; log('warn',{code:error.code,region:options.region,retryAt:gate.screenRetryAt});
         }
-        counters.paceRetryAt=gate.screenRetryAt; counters.deferred++; screenDeferred.push(item.mail); lane.advanced++; logEmail(lane, item.mail, item.trace, 'deferred', error.code); return;
+        counters.deferred++; screenDeferred.push(item.mail); lane.advanced++; logEmail(lane, item.mail, item.trace, 'deferred', error.code); return;
       }
       counters.skipped++; lane.advanced++;
       logEmail(lane, item.mail, item.trace, await rejectPreflight(item.owner.runtime, item.mail, error), error instanceof ApiError ? error.code : 'DISPATCH_PREFLIGHT_FAILED');
@@ -1079,9 +1081,16 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
   }
   if (handedOver.length) await releaseLeases(base, handedOver);
   // The status comes with each input row, not as a literal, to keep this on the primary key (see the claim in claimCtes).
-  if(screenDeferred.length) await base.db.execute(sql`UPDATE sending_emails e SET lease_until=NULL,error_code='CONTENT_SCREEN_UNAVAILABLE',scheduled_at=clock_timestamp()+interval '30 seconds'
-    FROM jsonb_to_recordset(${JSON.stringify(screenDeferred.map(m=>({id:m.id,version:m.dispatchVersion,status:'queued'})))}::jsonb) x(id text,version int,status text)
-    WHERE e.id=x.id AND e.dispatch_version=x.version AND e.status=x.status`);
+  // The mail comes due 30 s after this statement on the database's clock, which can be later than the breaker the failure set
+  // (the run's other mail went first): the breaker, and so the shard's retry (runDispatcher), is moved to that time and a
+  // little past it, measured from the database's own clock, so the run it starts finds the mail due.
+  if(screenDeferred.length) {
+    const { rows: [deferred] } = await base.db.execute<{ due_in: number | null }>(sql`WITH deferred AS (UPDATE sending_emails e SET lease_until=NULL,error_code='CONTENT_SCREEN_UNAVAILABLE',scheduled_at=clock_timestamp()+interval '30 seconds'
+      FROM jsonb_to_recordset(${JSON.stringify(screenDeferred.map(m=>({id:m.id,version:m.dispatchVersion,status:'queued'})))}::jsonb) x(id text,version int,status text)
+      WHERE e.id=x.id AND e.dispatch_version=x.version AND e.status=x.status RETURNING e.scheduled_at)
+      SELECT (extract(epoch FROM max(scheduled_at)-clock_timestamp())*1000)::float8 AS due_in FROM deferred`);
+    if (deferred?.due_in != null) gate.screenRetryAt = Math.max(gate.screenRetryAt ?? 0, Math.ceil(Date.now() + Number(deferred.due_in) + DUE_MARGIN_MS));
+  }
   return { processed: ready.length, blocked: false };
 }
 const logLost = (count:number) => log('warn', { code:'DISPATCH_CLAIM_LOST', count, message:'Rows changed between lease and claim; they will be reconsidered on the next pass.' });
@@ -1310,6 +1319,10 @@ export async function runDispatcher(runtime: Runtime, options: DispatcherOptions
   await flushFinishing(runtime, lane);
   if (blocked) counters.idle = true;
   if (gate.nextAllowedAt >= Date.now() + MAX_PRE_SEND_MS) { counters.paceRetryAt = Math.ceil(gate.nextAllowedAt); counters.idle = true; }
+  // While the shard's breaker is open its screened mail isn't leased (leaseDue), and it ends when the mail it deferred comes
+  // due. So every run inside it reports its end, not only the run that deferred: whichever run comes next, and however it
+  // ended, the due time has an alarm, and a run that starts early arms it again instead of going idle.
+  if ((gate.screenRetryAt ?? 0) > Date.now()) counters.paceRetryAt = Math.min(counters.paceRetryAt ?? Infinity, Math.ceil(gate.screenRetryAt!));
   counters.durationMs = Date.now() - started;
   // Idle polls are silent; runs that moved mail (or hit the budget) are the throughput record.
   if (counters.claimed || !counters.idle) log('info', { code: 'DISPATCH_RUN', accountId: options.accountId, region: options.region, shard: options.shard?.index ?? 0, ...counters, quota: gate.quota?.maxSendRate ?? null, rate: shardRate(gate, options.shard, pacing), braked: (gate.brakeUntil ?? 0) > Date.now(), wakeMs: options.wakeMs });

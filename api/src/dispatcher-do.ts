@@ -120,11 +120,17 @@ export class DispatcherShard extends DurableObject<Env> {
     await this.ctx.storage.setAlarm(now);
   }
 
-  /** After a run: the alarm at `next` (the run's own retry), or at a retry a wake displaced, whichever is first, unless an
-   *  earlier one is set (a wake during the run). Inside alarm(), getAlarm is null unless something set one since it began. */
-  private async rearm(next: number | undefined) {
-    const at = Math.min(next ?? Infinity, await this.ctx.storage.get<number>('displacedAlarm') ?? Infinity);
-    if (at !== Infinity && (await this.ctx.storage.getAlarm() ?? Infinity) > at) await this.ctx.storage.setAlarm(at);
+  /** After a run: arms the earliest of `soon` (a follow-up), `next` (the run's own retry) and a retry kept as displacedAlarm,
+   *  unless an earlier alarm is set (a wake during the run). When something earlier is armed, the run's own retry is kept as
+   *  displacedAlarm (the earliest such retry), so whichever run comes first arms it again. Inside alarm(), getAlarm is null
+   *  unless something set one since it began. */
+  private async rearm(next: number | undefined, soon?: number) {
+    const kept = await this.ctx.storage.get<number>('displacedAlarm');
+    const at = Math.min(soon ?? Infinity, next ?? Infinity, kept ?? Infinity);
+    if (at === Infinity) return;
+    const alarm = await this.ctx.storage.getAlarm();
+    if ((alarm ?? Infinity) > at) await this.ctx.storage.setAlarm(at);
+    if (next !== undefined && next > Math.min(alarm ?? Infinity, at) && (kept === undefined || next < kept)) await this.ctx.storage.put('displacedAlarm', next);
   }
 
   async alarm(): Promise<void> {
@@ -180,8 +186,9 @@ export class DispatcherShard extends DurableObject<Env> {
     } finally {
       this.running = false;
     }
-    // A request landed during the run: the follow-up alarm (a newer request, with no visitor) screens what this run gave back.
-    await this.rearm(this.landed ? Date.now() : next);
+    // A request landed during the run: the follow-up alarm (a newer request, with no visitor) screens what this run gave back,
+    // and the run's own retry is kept for after it.
+    await this.rearm(next, this.landed ? Date.now() : undefined);
   }
 
   private async runtime(): Promise<Runtime> {

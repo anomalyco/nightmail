@@ -458,8 +458,13 @@ async function evaluate(endpoint: string, apiKey: string, model: string, state: 
     if (typeof spam !== 'number' || !Number.isFinite(spam) || spam<0 || spam>1) { timing.outcome='invalid'; throw new ApiError(503, 'CONTENT_SCREEN_UNAVAILABLE', 'The content classifier returned no valid spam score.', undefined, true); }
     timing.outcome='ok';
     return { spam, model: typeof parsed?.model === 'string' ? parsed.model : model };
+  } catch (error) {
+    if (timing.outcome === 'timeout' && timing.phase === 'headers' && typeof error === 'object' && error) stalls.add(error);
+    throw error;
   } finally { logCall(timing,call,window,windows,sample,at,db); }
 }
+// Requests that got no response headers within the deadline: the classifier stalled (screenSnapshot tries once more).
+const stalls = new WeakSet<object>();
 
 // The classifier's input for a snapshot: what screenSnapshot sends it, request by request.
 function classifierState(snapshot: EmailSnapshot, required: boolean, textHtmlOverlap: number | undefined) {
@@ -485,8 +490,15 @@ export async function screenSnapshot(runtime: Runtime, snapshot: EmailSnapshot, 
   const lookup=body(snapshot,test ? limits.campaignBytes : limits.messageBytes,test ? 'campaign' : 'message').then(async ({bodies,textHtmlOverlap})=>{
     const state=classifierState(snapshot,required,textHtmlOverlap);
     let highest: ScreenResult | undefined;
+    // A stall (no response headers by the deadline) is tried once more at once, once per message: the classifier stalls now
+    // and then, and its next answer usually comes in tens of milliseconds. A second failure is an outage, and the caller backs
+    // off. The second try reads screenHandover like the first, so it is never made once a request has landed on the shard.
+    let retried=false;
     for (const [window, body] of bodies.entries()) {
-      const result=await evaluate(settings.endpoint,settings.apiKey,settings.model,state(body),call,window,bodies.length,runtime.db,runtime.screenHandover);
+      const once=()=>evaluate(settings.endpoint,settings.apiKey,settings.model,state(body),call,window,bodies.length,runtime.db,runtime.screenHandover);
+      let result:ScreenResult;
+      try{result=await once();}
+      catch(error){if(retried || !stalls.has(error as object))throw error;retried=true;result=await once();}
       if (!highest || result.spam>highest.spam) highest=result;
     }
     return highest!;

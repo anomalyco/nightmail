@@ -18295,6 +18295,108 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.deepEqual([violations, calls.length], [[], 5]); assert.equal(sent.at(-1), second);
     }));
   });
+  test('a stalled classifier check is retried once at once, and a deferral always has an alarm at its due time, whoever runs next', async t => {
+    await simulatedSesFixture(t, async ({ runtime, local, db }) => t.test('synthetic transports', async t => {
+      const { registerHooks } = await import('node:module');
+      const hook = registerHooks({ resolve(specifier, context, next) {
+        return specifier === 'cloudflare:workers' ? { shortCircuit:true, url:'data:text/javascript,export class DurableObject {constructor(ctx,env){this.ctx=ctx;this.env=env}} export class WorkerEntrypoint {constructor(ctx,env){this.ctx=ctx;this.env=env}}' } : next(specifier, context);
+      } });
+      const { DispatcherShard } = await import('./src/dispatcher-do.js').finally(() => hook.deregister());
+      const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
+      const wid = runtime.config.workspaceId, acct = '112223330006', origin = 'https://screen.synthetic.invalid', topic = `arn:aws:sns:${REGION}:${acct}:fixture`;
+      const key = ok(await local('POST', '/v1/api-keys', { name: 'stall', permissions: ['send', 'read'] }), 201);
+      Object.assign(runtime.config, { multiTenant: true, hostedScreen: true, liveEnabled: true, aws: { accessKeyId: 'fixture', secretAccessKey: 'fixture' }, screen: { endpoint: origin, apiKey: 'fixture', model: 'fixture', mode: 'reject', threshold: 0.7 } });
+      await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,sending_state,feedback_topic_arn) VALUES($1,$2,'ready',$3)`, [REGION, acct, topic]);
+      await db.query(`INSERT INTO provider_connections(id,workspace_id,kind,state,region,aws_account_id,tenant_state) VALUES($1,$1,'shared','ready',$2,$3,'ready')`, [wid, REGION, acct]);
+      await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES('bench.invalid',$1,$1,'verified')`, [wid]);
+      const sent: string[] = [];
+      t.mock.method(SESv2Client.prototype, 'send', async (cmd: any) => { if (cmd instanceof GetAccountCommand) return { SendingEnabled: true, SendQuota: { MaxSendRate: 10000, Max24HourSend: 100000, SentLast24Hours: 0 } }; sent.push(cmd.input.EmailTags.find((t: Json) => t.Name === 'bane_email_id').Value); return { MessageId: randomUUID() }; });
+      // The platform, as in the test above: one alarm, consumed when it fires; the current request is the newest delivered,
+      // until the next alarm() begins; the classifier stub records a violation if it is called while a request is current.
+      const stored = new Map<string, unknown>();
+      let alarm: number | null = null, current = 'none';
+      const ctx = { waitUntil: () => undefined, storage: {
+        get: async (k: string) => stored.get(k), put: async (k: string, v: unknown) => { stored.set(k, v); },
+        delete: async (k: string) => stored.delete(k), getAlarm: async () => alarm, setAlarm: async (at: number) => { alarm = at; } } };
+      const shard = new DispatcherShard(ctx as unknown as DurableObjectState, {} as Env);
+      Object.assign(shard, { runtime: async () => runtime, placementLogged: true });
+      const gate = () => (shard as unknown as { gate?: { screenRetryAt?: number } }).gate;
+      const deliver = async () => { current = 'request'; await shard.fetch(new Request(`https://dispatcher/wake?region=${REGION}&account=${acct}&shard=0&count=1`)); };
+      const fire = async () => { assert.ok(alarm !== null && alarm <= Date.now() + 50, `an alarm is due (${alarm})`); alarm = null; current = 'alarm'; await shard.alarm(); };
+      // Each classifier request takes the next answer: a stall gets no response headers, so the 500 ms deadline ends it.
+      const answers: ('ok' | 'stall')[] = [], calls: string[] = [], violations: string[] = [];
+      let during: ((call: number) => Promise<void>) | undefined;
+      t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL, init: RequestInit) => {
+        assert.equal(String(url), origin);
+        calls.push(current); if (current !== 'alarm') violations.push(`classifier called while ${current} is current`);
+        if (during) await during(calls.length);
+        if ((answers.shift() ?? 'ok') === 'stall') return new Promise<never>((_, reject) => init.signal!.addEventListener('abort', () => reject(init.signal!.reason)));
+        return Response.json({ answers: { spam: { noul: 0.01 } } });
+      });
+      const logs: Json[] = []; for (const level of ['info', 'warn'] as const) t.mock.method(console, level, (line: string) => { try { logs.push(JSON.parse(line)); } catch {} });
+      const send = async (code: string) => ok(await local('POST', '/v1/emails/send', { from: 'a@bench.invalid', to: 'r@example.invalid', subject: `Your sign-in code is ${code}`, text: `Your sign-in code is ${code}.` }, 'live', { authorization: `Bearer ${key.secret}` }), 202).id as string;
+      const row = async (id: string) => (await db.query(`SELECT status,error_code,lease_until,scheduled_at IS NULL AS unscheduled,(extract(epoch FROM scheduled_at-clock_timestamp())*1000)::float8 AS due_in FROM sending_emails WHERE id=$1`, [id])).rows[0];
+      const deferrals = (id: string) => logs.filter(l => l.code === 'DISPATCH_EMAIL' && l.emailId === id && l.reason === 'CONTENT_SCREEN_UNAVAILABLE').length;
+      // 1. One stall: the check is tried again at once and the email goes out in the same run, with no deferral and no breaker.
+      const single = await send('111111'); answers.push('stall', 'ok');
+      await deliver(); const started = Date.now(); await fire();
+      assert.equal(sent.at(-1), single); assert.equal(deferrals(single), 0); assert.equal(gate()?.screenRetryAt, undefined);
+      assert.deepEqual([violations, calls], [[], ['alarm', 'alarm']]);
+      assert.ok(Date.now() - started < 2500, `one stall cost ${Date.now() - started} ms`);
+      // 2. One stall, and a request lands while it hangs: the second try is not made (the request is current). The email goes
+      // back to the queue as it was, and the follow-up alarm checks it and sends it.
+      const handed = await send('222222'); answers.push('stall', 'ok');
+      during = async () => { during = undefined; await deliver(); };
+      await deliver(); await fire();
+      assert.deepEqual([violations, calls.length], [[], 3]);
+      assert.deepEqual(await row(handed), { status: 'queued', error_code: null, lease_until: null, unscheduled: true, due_in: null });
+      await fire();
+      assert.deepEqual([violations, calls.length], [[], 4]); assert.equal(sent.at(-1), handed); assert.equal(deferrals(handed), 0);
+      // 3. Two stalls in a row: an outage, so it backs off 30 s as before, after one extra request, not more. The alarm is armed
+      // for when the email is due on the database's clock and 100 ms past it, never before (before, it was set at the failure,
+      // on the shard's clock, and could come just before the email was due).
+      const armedAfterDue = (dueIn: number) => alarm !== null && alarm - Date.now() >= dueIn + 50 && alarm - Date.now() <= dueIn + 1000;
+      const twice = await send('333333'); answers.push('stall', 'stall');
+      await deliver(); await fire();
+      assert.deepEqual([violations, calls.length], [[], 6]); assert.equal(deferrals(twice), 1);
+      let due = await row(twice);
+      assert.equal(due.error_code, 'CONTENT_SCREEN_UNAVAILABLE'); assert.ok(due.due_in > 29_000, JSON.stringify(due));
+      assert.ok(armedAfterDue(due.due_in), `armed ${alarm! - Date.now()} ms out for mail due in ${due.due_in}`);
+      // 4. A run that starts before the email is due (here the alarm fires early, with nothing else stored) leases nothing,
+      // and arms the due time again instead of going idle.
+      const armedFor = alarm!; alarm = Date.now();
+      await fire();
+      assert.equal(calls.length, 6); assert.equal(alarm, armedFor, 'The early run arms the due time again');
+      // The email comes due (here moved forward, with the shard's breaker): the alarm's run checks it and sends it.
+      await db.query("UPDATE sending_emails SET scheduled_at=clock_timestamp() WHERE id=$1", [twice]); gate()!.screenRetryAt = Date.now() - 1; alarm = Date.now();
+      await fire();
+      assert.equal(sent.at(-1), twice); assert.deepEqual(violations, []);
+      // 5. Two stalls, and a request lands during the second: the email is deferred, the request's follow-up runs at once and
+      // leases nothing (the breaker is open), and the due time is still armed when it ends.
+      const landed = await send('444444'); answers.push('stall', 'stall');
+      const before = calls.length; during = async n => { if (n === before + 2) { during = undefined; await deliver(); } };
+      await deliver(); await fire();
+      assert.equal(deferrals(landed), 1); assert.ok(alarm !== null && alarm <= Date.now() + 50, 'The follow-up is armed now');
+      await fire();
+      due = await row(landed);
+      assert.equal(due.status, 'queued'); assert.deepEqual(violations, []);
+      assert.ok(armedAfterDue(due.due_in), `after the follow-up, armed ${alarm === null ? 'nothing' : alarm - Date.now() + ' ms out'} for mail due in ${due.due_in}`);
+      // 6. The same, but the object is evicted before the follow-up and its last gate save is lost (it is unconfirmed): the new
+      // instance has no breaker to report, and the deferring run's retry, kept in storage, is what arms the due time.
+      await db.query("UPDATE sending_emails SET status='canceled' WHERE id=$1", [landed]); stored.delete('displacedAlarm');
+      const evicted = await send('555555'); answers.push('stall', 'stall');
+      const base = calls.length; during = async n => { if (n === base + 2) { during = undefined; await deliver(); } };
+      gate()!.screenRetryAt = Date.now() - 1; alarm = Date.now(); await fire();
+      assert.equal(deferrals(evicted), 1); assert.ok(alarm !== null && alarm <= Date.now() + 50, 'The follow-up is armed now');
+      stored.delete('gate');
+      const fresh = new DispatcherShard(ctx as unknown as DurableObjectState, {} as Env);
+      Object.assign(fresh, { runtime: async () => runtime, placementLogged: true });
+      alarm = null; current = 'alarm'; await fresh.alarm();
+      due = await row(evicted);
+      assert.ok(armedAfterDue(due.due_in), `after an evicted follow-up, armed ${alarm === null ? 'nothing' : alarm - Date.now() + ' ms out'} for mail due in ${due.due_in}`);
+      assert.deepEqual(violations, []);
+    }));
+  });
   // tear witness (api/tear/dispatch): send ok, send ok, then a one-row dispatcher stepped through
   // lease, claim, send, record and the next lease, which found nothing and ended the run.
   test('a dispatcher lease that passes the last owner wraps to the first, so a run never stops with mail due', async t => {
@@ -22584,7 +22686,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       const {rows}=await db.query(`SELECT email_id,workspace_id,kind,required,region,shard,outcome,phase,http_status,headers_ms,ms,request_bytes,response_bytes,in_flight,window_index,windows,request_id,sample_rate,
         ses_in_flight,abs(extract(epoch FROM created_at-clock_timestamp()))<60 AS recent FROM content_screen_calls WHERE email_id=ANY($1)`,[Object.values(ids)]);
       const row=(name:string)=>rows.find(r=>r.email_id===ids[name])!;
-      assert.equal(rows.length,6,'One row per request, written when each run ended');
+      assert.equal(rows.length,7,'One row per request, written when each run ended (a stall is tried twice)');
       assert.deepEqual(['ok','503','stall','stall-body','network','invalid'].map(n=>[row(n).outcome,row(n).phase,row(n).http_status]),
         [['ok',null,200],['http_503',null,503],['timeout','headers',null],['timeout','body',200],['network','headers',null],['invalid',null,200]]);
       assert.deepEqual([row('ok').workspace_id,row('ok').kind,row('ok').required,row('ok').region,row('ok').shard,row('ok').window_index,row('ok').windows,row('ok').request_id,row('ok').sample_rate,row('ok').ses_in_flight,row('ok').recent],
