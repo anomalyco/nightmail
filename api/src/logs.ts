@@ -6,7 +6,7 @@ import { emails } from './db/sending.js';
 import { mailMessages as messages } from './db/mailbox.js';
 import { readsDelivery, visibleAddresses } from './inbound-threads.js';
 import { accessibleMessages, sentThreadId, threadSize } from './thread-view.js';
-import { EmailStatusFilter, listedSubject, literalSearch, mailWhere, pageBinding, sentUntrustedContent, SubstringSearch } from './sending.js';
+import { EmailStatusFilter, listedSubject, mailWhere, pageBinding, sentSearch, sentUntrustedContent, SubstringSearch } from './sending.js';
 
 // Logs: sent and received mail in one list, newest first, from one SQL statement. Each side keeps its own index
 // (sending_emails_created_page, mail_messages_tenant_page) and limit; the outer query merges the two pages. The cursor
@@ -63,7 +63,7 @@ const LogStatus = z.enum([...EmailStatusFilter.options, ...receivedStatuses]);
 const receivedStatus = (status: string | undefined): status is (typeof receivedStatuses)[number] => (receivedStatuses as readonly string[]).includes(status ?? '');
 const LogQuery = PageQuery.extend({
   direction: z.enum(['all', 'sent', 'received']).default('all'),
-  search: SubstringSearch.optional().describe('At least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. Sent mail: a literal, case-insensitive substring of the sender, recipients, subject or IDs. Received mail: a full-text match on sender, recipients, subject and body.'),
+  search: SubstringSearch.optional().describe('At least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. Sent mail: a literal, case-insensitive substring of the sender, recipients, subject or IDs; a campaign email matches only its exact recipient address (any case) or its email ID, and campaignId lists a campaign\'s emails. Received mail: a full-text match on sender, recipients, subject and body.'),
   status: LogStatus.optional().describe('A sent-mail status lists sent mail only. received lists received mail that is not flagged as spam; spam lists received mail flagged as spam (spam is visible to administrators only, so dashboard members get none). Either leaves sent mail out, and is refused (403) to credentials that cannot read received mail, like direction=received.'),
   kind: z.enum(['transactional', 'marketing']).optional().describe('Sent mail only; received mail is left out when set.'),
   campaignId: z.string().max(120).optional().describe('Sent mail only; received mail is left out when set.'),
@@ -114,7 +114,7 @@ export function registerLogs(app: App, mailAccess: (a: Actor) => MailboxAccess |
         after ? after.direction === 'sent' ? sql`(${emails.createdAt}, ${emails.id}) < (${after.at}::timestamptz, ${after.id})` : sql`${emails.createdAt} < ${after.at}::timestamptz` : undefined,
         q.campaignId ? sql`${emails.campaignId} = ${q.campaignId}` : undefined, q.status && !onlyReceived ? sql`${emails.status} = ${q.status}` : undefined,
         q.kind ? sql`${emails.snapshot}->>'kind' = ${q.kind}` : undefined, q.region ? sql`${emails.region} = ${q.region}` : undefined, dated(emails.createdAt),
-        q.search ? sql`sending_log_text(${emails.id},${emails.campaignId},${emails.providerId},${emails.from},${emails.subject},${emails.to} || ${emails.cc} || ${emails.bcc}) ILIKE ${literalSearch(q.search)}` : undefined)}
+        q.search ? sentSearch(q.search) : undefined)}
       ORDER BY ${emails.createdAt} DESC, ${emails.id} DESC LIMIT ${n})` : null;
 
     // Which messages: every retained one for administrators. Delivery details: only where getInboundMessage gives them.
@@ -144,7 +144,7 @@ export function registerLogs(app: App, mailAccess: (a: Actor) => MailboxAccess |
       const sentSide = q.direction !== 'received', receivedSide = q.direction !== 'sent' && !!access && !q.kind && !q.campaignId;
       const byKind = (kind: 'transactional' | 'marketing') => sql`SELECT ${kind}::text AS kind, ${emails.status} AS status, count(*)::int AS n FROM ${emails}
         WHERE ${and(mailWhere(a), sql`${emails.snapshot}->>'kind' = ${kind}`, q.campaignId ? sql`${emails.campaignId} = ${q.campaignId}` : undefined, q.region ? sql`${emails.region} = ${q.region}` : undefined, dated(emails.createdAt),
-          q.search ? sql`sending_log_text(${emails.id},${emails.campaignId},${emails.providerId},${emails.from},${emails.subject},${emails.to} || ${emails.cc} || ${emails.bcc}) ILIKE ${literalSearch(q.search)}` : undefined)}
+          q.search ? sentSearch(q.search) : undefined)}
         GROUP BY ${emails.status}`;
       // One after another on the read's one connection.
       const sentRows = sentSide ? (await db.execute<{ kind: 'transactional' | 'marketing'; status: string; n: number }>(sql`${byKind('transactional')} UNION ALL ${byKind('marketing')}`)).rows : [];

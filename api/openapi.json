@@ -33642,10 +33642,10 @@
               "type": "string",
               "minLength": 3,
               "maxLength": 200,
-              "description": "Literal case-insensitive substring of sender, To/Cc/Bcc, subject or email/campaign/provider ID, at least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED."
+              "description": "Literal case-insensitive substring of sender, To/Cc/Bcc, subject or email/campaign/provider ID, at least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. A campaign email matches only its exact recipient address (any case) or its email ID; campaignId lists a campaign's emails."
             },
             "required": false,
-            "description": "Literal case-insensitive substring of sender, To/Cc/Bcc, subject or email/campaign/provider ID, at least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED.",
+            "description": "Literal case-insensitive substring of sender, To/Cc/Bcc, subject or email/campaign/provider ID, at least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. A campaign email matches only its exact recipient address (any case) or its email ID; campaignId lists a campaign's emails.",
             "name": "search",
             "in": "query"
           },
@@ -69702,10 +69702,10 @@
               "type": "string",
               "minLength": 3,
               "maxLength": 200,
-              "description": "At least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. Sent mail: a literal, case-insensitive substring of the sender, recipients, subject or IDs. Received mail: a full-text match on sender, recipients, subject and body."
+              "description": "At least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. Sent mail: a literal, case-insensitive substring of the sender, recipients, subject or IDs; a campaign email matches only its exact recipient address (any case) or its email ID, and campaignId lists a campaign's emails. Received mail: a full-text match on sender, recipients, subject and body."
             },
             "required": false,
-            "description": "At least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. Sent mail: a literal, case-insensitive substring of the sender, recipients, subject or IDs. Received mail: a full-text match on sender, recipients, subject and body.",
+            "description": "At least 3 characters: a shorter term is refused with 422 VALIDATION_FAILED. Sent mail: a literal, case-insensitive substring of the sender, recipients, subject or IDs; a campaign email matches only its exact recipient address (any case) or its email ID, and campaignId lists a campaign's emails. Received mail: a full-text match on sender, recipients, subject and body.",
             "name": "search",
             "in": "query"
           },

@@ -19,6 +19,8 @@ export function logStatuses(direction: LogDirection, { campaign, canAdminister }
   const allowed = new Set([...direction === 'received' ? [] : sentStatuses, ...campaign || direction === 'sent' ? [] : canAdminister ? receivedStatuses : ['received']])
   return [...receivedStatuses, ...sentStatuses].filter(status => allowed.has(status))
 }
+// The search box's hint: a campaign's emails are found by their exact address or email ID, not part of it.
+export const searchHint = (campaign: boolean) => campaign ? 'Exact address or email ID' : 'Search logs'
 /** Whether a status can be combined with the chosen stream: received mail has none. */
 export const withStream = (status: string, stream: string) => stream === 'all' || !receivedStatuses.includes(status)
 // Always a row of their own: the outcomes people come for. Every other status is in one Other row's menu.
