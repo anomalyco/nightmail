@@ -33453,6 +33453,76 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
+  test('hosted health triggers: per-statement feedback and suppression batch refresh matches per-row semantics across duplicates, out-of-order events, multi-recipient hashes and suppression flips', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const wid = runtime.config.workspaceId;
+      // Verify both triggers are statement-level (bit 0 of tgtype is 0 for FOR EACH STATEMENT, 1 for FOR EACH ROW).
+      const trigs = (await db.query(`SELECT tgname, (tgtype & 1) = 0 AS per_statement
+        FROM pg_trigger WHERE tgname IN ('hosted_health_feedback', 'hosted_health_suppressed') ORDER BY tgname`)).rows;
+      assert.deepEqual(trigs, [
+        { tgname: 'hosted_health_feedback', per_statement: true },
+        { tgname: 'hosted_health_suppressed', per_statement: true },
+      ]);
+
+      const sharedArn = `arn:aws:sns:${REGION}:111122223333:shared-stmt-test`;
+      const byoArn = `arn:aws:sns:${REGION}:444455556666:byo-stmt-test`;
+      await db.query("INSERT INTO provider_connections(id,workspace_id,kind,region,state) VALUES ($1,$1,'shared',$2,'ready')", [wid, REGION]);
+      await db.query("INSERT INTO provider_feedback_history(topic_arn,region,aws_account_id,kind) VALUES ($1,$3,'111122223333','shared'),($2,$3,'444455556666','byo') ON CONFLICT DO NOTHING", [sharedArn, byoArn, REGION]);
+      const t0 = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000 - 3_600_000).toISOString();
+      const t1 = new Date(Math.floor(Date.now() / 3_600_000) * 3_600_000 + 60_000).toISOString();
+
+      await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,campaign_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,status,provider_id,feedback_topic_arn,created_at) VALUES
+        ('hh_1',$1,$2,'k','c1','a@e.com','["u1@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'accepted','hp1',$3,$5),
+        ('hh_2',$1,$2,'k',NULL,'a@e.com','["u2@e.com","u3@e.com","success@simulator.amazonses.com"]','[]','[]','S','{"kind":"transactional"}',false,'accepted','hp2',$3,$5),
+        ('hh_3',$1,$2,'k','c1','a@e.com','["success@simulator.amazonses.com"]','[]','[]','S','{"kind":"marketing"}',false,'accepted','hp3',$3,$5),
+        ('hh_4',$1,$2,'k','c1','a@e.com','["u4@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'accepted','hp4',$4,$5),
+        ('hh_5',$1,$2,'k','c1','a@e.com','["u5@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'accepted','hp5',$3,$5)`,
+        [wid, REGION, sharedArn, byoArn, t0]);
+
+      // Single batch: out-of-order bounce before accepted on hh_1, duplicate events for hh_1 in same batch,
+      // multi-recipient hashes + ignored transient bounce on hh_2, simulator-only hh_3, BYO-topic hh_4, hh_5.
+      await db.query(`INSERT INTO sending_email_events(id,workspace_id,email_id,type,provider_id,simulated,data,recipient_hashes,created_at) VALUES
+        ('hev_1',$1,'hh_1','bounce','hp1',false,'{"bounceType":"Permanent"}',ARRAY['h1'],$2),
+        ('hev_2',$1,'hh_1','send','hp1',false,'{}',NULL,$3),
+        ('hev_3',$1,'hh_1','accepted','hp1',false,'{}',NULL,$2),
+        ('hev_4',$1,'hh_1','bounce','hp1',false,'{"bounceType":"Permanent"}',ARRAY['h1'],$3),
+        ('hev_5',$1,'hh_2','accepted','hp2',false,'{}',NULL,$2),
+        ('hev_6',$1,'hh_2','bounce','hp2',false,'{"bounceType":"Permanent"}',ARRAY['ha','hb'],$3),
+        ('hev_7',$1,'hh_2','bounce','hp2',false,'{"bounceType":"Transient"}',ARRAY['hc'],$3),
+        ('hev_8',$1,'hh_2','complaint','hp2',false,'{}',NULL,$3),
+        ('hev_9',$1,'hh_3','accepted','hp3',false,'{}',NULL,$2),
+        ('hev_10',$1,'hh_4','accepted','hp4',false,'{}',NULL,$2),
+        ('hev_11',$1,'hh_5','accepted','hp5',false,'{}',NULL,$2)`,
+        [wid, t0, t1]);
+
+      // Compare live hosted_health_credits and hosted_health_hourly against hosted_health_projection truth!
+      const assertMatchesProjection = async (label: string) => {
+        const expected = (await db.query(`SELECT email_id, epoch::text, hour::text, accepted, bounces, complaints, marketing_accepted, marketing_bounces, marketing_complaints
+          FROM hosted_health_projection WHERE workspace_id=$1 ORDER BY 1,2,3`, [wid])).rows;
+        const actual = (await db.query(`SELECT email_id, epoch::text, hour::text, accepted, bounces, complaints, marketing_accepted, marketing_bounces, marketing_complaints
+          FROM hosted_health_credits WHERE workspace_id=$1 ORDER BY 1,2,3`, [wid])).rows;
+        assert.deepEqual(actual, expected, `${label}: hosted_health_credits matches hosted_health_projection`);
+        const expectedHourly = (await db.query(`SELECT epoch::text, hour::text,
+          sum(accepted)::text AS accepted, sum(bounces)::text AS bounces, sum(complaints)::text AS complaints,
+          sum(marketing_accepted)::text AS marketing_accepted, sum(marketing_bounces)::text AS marketing_bounces, sum(marketing_complaints)::text AS marketing_complaints
+          FROM hosted_health_projection WHERE workspace_id=$1 GROUP BY 1,2 ORDER BY 1,2`, [wid])).rows;
+        const actualHourly = (await db.query(`SELECT epoch::text, hour::text,
+          accepted::text, bounces::text, complaints::text, marketing_accepted::text, marketing_bounces::text, marketing_complaints::text
+          FROM hosted_health_hourly WHERE workspace_id=$1 AND (accepted,bounces,complaints,marketing_accepted,marketing_bounces,marketing_complaints)<>(0,0,0,0,0,0)
+          ORDER BY 1,2`, [wid])).rows;
+        assert.deepEqual(actualHourly, expectedHourly, `${label}: hosted_health_hourly matches hosted_health_projection`);
+      };
+
+      await assertMatchesProjection('after multi-event batch');
+
+      // Batch suppression flip removes credits for suppressed emails; unsuppression restores them.
+      await db.query("UPDATE sending_emails SET status='suppressed' WHERE workspace_id=$1 AND id IN ('hh_5','hh_1')", [wid]);
+      await assertMatchesProjection('after batch suppression');
+      await db.query("UPDATE sending_emails SET status='accepted' WHERE workspace_id=$1 AND id='hh_1'", [wid]);
+      await assertMatchesProjection('after unsuppression');
+    });
+  });
+
   test('paced campaigns release one daily window at a time, pause and resume in place, hold for the SES daily quota, and pause automatically on bounces', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, jobs, db }) => {
       const ws = runtime.config.workspaceId;
