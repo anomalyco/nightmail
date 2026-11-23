@@ -1,0 +1,2021 @@
+{
+  "version": 1,
+  "modelId": "delivery",
+  "cases": [
+    {
+      "name": "smoke-ingest-deliver",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "200"
+        }
+      ],
+      "expected": {
+        "outcome": "pass",
+        "control": true
+      },
+      "note": "Control: basic ingest, run and 200 delivery completes and satisfies all idle and temporal rules"
+    },
+    {
+      "name": "canary-double-start",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "200"
+        }
+      ],
+      "bug": "canary_double_start",
+      "expected": {
+        "outcome": "fail",
+        "operator": "delivery.once/0/afterUnsafe/0",
+        "verdict": "violated",
+        "canary": true
+      },
+      "note": "Canary: planted host bug emits a duplicate delivery.start after a 200 delivery on non-replay-safe W to verify temporal property delivery.once bites"
+    },
+    {
+      "name": "pause-between-claim-and-fence",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": true
+        },
+        {
+          "op": "Pause",
+          "e": "W",
+          "on": true
+        },
+        {
+          "op": "Go",
+          "w": "K"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Pause committed between claim and fence parks without sending"
+    },
+    {
+      "name": "pause-after-claim-then-unpause-delivers",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": true
+        },
+        {
+          "op": "Pause",
+          "e": "W",
+          "on": true
+        },
+        {
+          "op": "Go",
+          "w": "K"
+        },
+        {
+          "op": "Pause",
+          "e": "W",
+          "on": false
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "200"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Delivery parked by post-claim pause resumes on unpause and delivers"
+    },
+    {
+      "name": "retries0-lease-expiry-exhausts",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries0"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:V",
+          "gate": false
+        },
+        {
+          "op": "Expire",
+          "d": "m1:V"
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:V",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "retryAttempts 0: lease expiry after first attempt dead-letters instead of resending"
+    },
+    {
+      "name": "retries0-crash-and-lease-expiry-exhausts",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries0"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:V",
+          "gate": false
+        },
+        {
+          "op": "Crash",
+          "w": "K",
+          "sent": true
+        },
+        {
+          "op": "Expire",
+          "d": "m1:V"
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:V",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "retryAttempts 0: crash during first attempt then lease expiry dead-letters"
+    },
+    {
+      "name": "rate-limit-deferral-keeps-attempts",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Rate",
+          "e": "W",
+          "n": 1
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rate-limit deferral does not reset attempt count"
+    },
+    {
+      "name": "rate-limit-deferral-then-tick-exhausts",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Rate",
+          "e": "W",
+          "n": 1
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Tick"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rate-limit deferral + tick still exhausts retries at 1 + retryAttempts"
+    },
+    {
+      "name": "breaker-deferral-keeps-attempts",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:V",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "timeout"
+        },
+        {
+          "op": "Ingest",
+          "m": "m2",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m2:V",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "timeout"
+        },
+        {
+          "op": "Ingest",
+          "m": "m3",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m3:V",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "timeout"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:V",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Transport timeout breaker defers fourth call without resetting attempts"
+    },
+    {
+      "name": "ritual-over-junk-does-not-taint-routed-webhook",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Rituals",
+          "mode": "over"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b",
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:V",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Ritual failing to junk for box@ does not taint z@'s routed webhook delivery"
+    },
+    {
+      "name": "dup-ses-receipt-no-duplicate-slack",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Rituals",
+          "mode": "slack"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Ingest",
+          "m": "d1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Second SES receipt of same email does not queue ritual actions again"
+    },
+    {
+      "name": "dup-ses-receipt-after-route-off",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "RouteSet",
+          "r": "r1",
+          "state": "off"
+        },
+        {
+          "op": "Ingest",
+          "m": "d1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Second SES receipt after route edit does not re-route earlier recipient"
+    },
+    {
+      "name": "reopen-receipt-after-ritual-edit",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Rituals",
+          "mode": "slack"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Rituals",
+          "mode": "both"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b",
+            "z"
+          ],
+          "variant": "plain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Reopening receipt after ritual edit only routes fresh recipients"
+    },
+    {
+      "name": "dup-receipt-reopen-across-pause",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Pause",
+          "e": "W",
+          "on": true
+        },
+        {
+          "op": "Ingest",
+          "m": "d1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Pause",
+          "e": "W",
+          "on": false
+        },
+        {
+          "op": "Ingest",
+          "m": "d1",
+          "rcpts": [
+            "a",
+            "z"
+          ],
+          "variant": "plain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Duplicate receipt reopen across pause/unpause routes each recipient once"
+    },
+    {
+      "name": "drop-route-then-dup-receipt-reopen",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "RouteSet",
+          "r": "r1",
+          "state": "drop"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Ingest",
+          "m": "d1",
+          "rcpts": [
+            "a",
+            "z"
+          ],
+          "variant": "plain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "All-dropped first receipt stores nothing; second receipt stores and routes fresh recipients"
+    },
+    {
+      "name": "two-receipts-extending-envelope",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Rituals",
+          "mode": "slack"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Ingest",
+          "m": "d1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a",
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Ingest",
+          "m": "d1",
+          "rcpts": [
+            "b",
+            "z"
+          ],
+          "variant": "plain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Reopening first receipt preserves recipients added by second receipt"
+    },
+    {
+      "name": "stored-before-ritual-forward-safe",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Rituals",
+          "mode": "forward"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b",
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:F",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Mail first stored before any ritual still carries forward verdict and forwards"
+    },
+    {
+      "name": "stored-before-ritual-forward-loop",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "loop"
+        },
+        {
+          "op": "Rituals",
+          "mode": "forward"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b",
+            "z"
+          ],
+          "variant": "loop"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:F",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Looped mail first stored before any ritual is refused on later forward"
+    },
+    {
+      "name": "resume-keeps-attempt-budget",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        },
+        {
+          "op": "Pause",
+          "e": "W",
+          "on": true
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Pause",
+          "e": "W",
+          "on": false
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Unpausing keeps prior attempt count instead of refilling attempt budget"
+    },
+    {
+      "name": "resume-keeps-unrecorded-crash-attempt",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:V",
+          "gate": false
+        },
+        {
+          "op": "Crash",
+          "w": "K",
+          "sent": true
+        },
+        {
+          "op": "Expire",
+          "d": "m1:V"
+        },
+        {
+          "op": "Pause",
+          "e": "V",
+          "on": true
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:V",
+          "gate": false
+        },
+        {
+          "op": "Pause",
+          "e": "V",
+          "on": false
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:V",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "L",
+          "resp": "503"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Unpausing counts unrecorded crashed attempt against retry budget"
+    },
+    {
+      "name": "stale-claim-after-settled-refusal",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": true
+        },
+        {
+          "op": "Expire",
+          "d": "m1:W"
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "L",
+          "resp": "400"
+        },
+        {
+          "op": "Go",
+          "w": "K"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Stale claim is fenced out after delivery settled as refused"
+    },
+    {
+      "name": "stale-claim-after-pause-and-resume",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:V",
+          "gate": true
+        },
+        {
+          "op": "Pause",
+          "e": "V",
+          "on": true
+        },
+        {
+          "op": "Expire",
+          "d": "m1:V"
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:V",
+          "gate": false
+        },
+        {
+          "op": "Pause",
+          "e": "V",
+          "on": false
+        },
+        {
+          "op": "Go",
+          "w": "K"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Stale claim is fenced out after delivery paused and resumed as new generation"
+    },
+    {
+      "name": "pause-before-ingest-holds-webhook",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Pause",
+          "e": "W",
+          "on": true
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Pause",
+          "e": "W",
+          "on": false
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "200"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Mail arriving while webhook W is paused is held, parked, and sent on unpause"
+    },
+    {
+      "name": "pause-before-ingest-holds-slack",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Pause",
+          "e": "S",
+          "on": true
+        },
+        {
+          "op": "Rituals",
+          "mode": "slack"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:S",
+          "gate": false
+        },
+        {
+          "op": "Pause",
+          "e": "S",
+          "on": false
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:S",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "200"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Mail arriving while Slack S is paused is held, parked, and sent on unpause"
+    },
+    {
+      "name": "pause-before-ingest-holds-plain-sub",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Pause",
+          "e": "U",
+          "on": true
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:U",
+          "gate": false
+        },
+        {
+          "op": "Pause",
+          "e": "U",
+          "on": false
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:U",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "200"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Mail arriving while plain subscription U is paused is held, parked, and sent on unpause"
+    },
+    {
+      "name": "plain-sub-fenced-on-post-claim-pause",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:U",
+          "gate": true
+        },
+        {
+          "op": "Pause",
+          "e": "U",
+          "on": true
+        },
+        {
+          "op": "Go",
+          "w": "K"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Plain event subscription U honors post-claim pause at fence"
+    },
+    {
+      "name": "plain-sub-fenced-on-stale-claim",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:U",
+          "gate": true
+        },
+        {
+          "op": "Expire",
+          "d": "m1:U"
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:U",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "L",
+          "resp": "410"
+        },
+        {
+          "op": "Go",
+          "w": "K"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Plain event subscription U fences out stale claim after 410 settlement"
+    },
+    {
+      "name": "plain-sub-breaker-deferral",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:U",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "timeout"
+        },
+        {
+          "op": "Ingest",
+          "m": "m2",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m2:U",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "timeout"
+        },
+        {
+          "op": "Ingest",
+          "m": "m3",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m3:U",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "timeout"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:U",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Plain event subscription U honors transport timeout breaker deferral"
+    },
+    {
+      "name": "retries0-lost-claim-before-fence-keeps-attempt",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries0"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": true
+        },
+        {
+          "op": "Crash",
+          "w": "K",
+          "sent": false
+        },
+        {
+          "op": "Expire",
+          "d": "m1:W"
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:W",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "retryAttempts 0: claim dropped before fence does not consume only attempt"
+    },
+    {
+      "name": "retries0-two-lost-claims-before-fence",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries0"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": true
+        },
+        {
+          "op": "Crash",
+          "w": "K",
+          "sent": false
+        },
+        {
+          "op": "Expire",
+          "d": "m1:W"
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:W",
+          "gate": true
+        },
+        {
+          "op": "Crash",
+          "w": "L",
+          "sent": false
+        },
+        {
+          "op": "Expire",
+          "d": "m1:W"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "retryAttempts 0: repeated claims dropped before fence still allow one fenced attempt"
+    },
+    {
+      "name": "breaker-deferral-does-not-count-as-fence-attempt",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:V",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "timeout"
+        },
+        {
+          "op": "Ingest",
+          "m": "m2",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m2:V",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "timeout"
+        },
+        {
+          "op": "Ingest",
+          "m": "m3",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m3:V",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "timeout"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:V",
+          "gate": false
+        },
+        {
+          "op": "Pause",
+          "e": "V",
+          "on": true
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:V",
+          "gate": false
+        },
+        {
+          "op": "Pause",
+          "e": "V",
+          "on": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Breaker deferral does not consume fence attempt on later resume"
+    },
+    {
+      "name": "stripped-verdict-safe-forward",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Strip",
+          "m": "m1"
+        },
+        {
+          "op": "Rituals",
+          "mode": "forward"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b",
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:F",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Mail stripped of ingest-time forward verdicts: safe forward"
+    },
+    {
+      "name": "stripped-verdict-loop-forward",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "loop"
+        },
+        {
+          "op": "Strip",
+          "m": "m1"
+        },
+        {
+          "op": "Rituals",
+          "mode": "forward"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b",
+            "z"
+          ],
+          "variant": "loop"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:F",
+          "gate": false
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Mail stripped of ingest-time forward verdicts: looped forward refused"
+    },
+    {
+      "name": "retries0-stale-claim-before-fence-fenced-out-V",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries0"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "z"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:V",
+          "gate": true
+        },
+        {
+          "op": "Expire",
+          "d": "m1:V"
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:V",
+          "gate": false
+        },
+        {
+          "op": "Go",
+          "w": "K"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "retryAttempts 0: stalled pre-fence claim is fenced out after next claim on V"
+    },
+    {
+      "name": "stale-claim-before-fence-fenced-out-U",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:U",
+          "gate": true
+        },
+        {
+          "op": "Expire",
+          "d": "m1:U"
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:U",
+          "gate": false
+        },
+        {
+          "op": "Go",
+          "w": "K"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Stalled pre-fence claim is fenced out after next claim on U"
+    },
+    {
+      "name": "held-past-retention-dead-lettered",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Pause",
+          "e": "W",
+          "on": true
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Age",
+          "d": "m1:W"
+        },
+        {
+          "op": "Prune"
+        },
+        {
+          "op": "Prune"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Delivery held past 30-day retention is dead-lettered as ENDPOINT_PAUSED_EXPIRED and kept across second prune"
+    },
+    {
+      "name": "backoff-12h-cap-at-seventh-attempt",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries9"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "503"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Backoff 15s * 4^(n-1) reaches 12h (43200s) cap at seventh attempt"
+    },
+    {
+      "name": "forward-decline-blocks-queued-and-ritual",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Rituals",
+          "mode": "forward"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Decline"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:F",
+          "gate": false
+        },
+        {
+          "op": "Rituals",
+          "mode": "none"
+        },
+        {
+          "op": "Rituals",
+          "mode": "forward"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Declining forward via stop link blocks queued forward with CONNECTOR_UNAVAILABLE and refuses ritual save"
+    },
+    {
+      "name": "rituals-four-and-max-caps",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Rituals",
+          "mode": "four"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Rituals",
+          "mode": "max"
+        },
+        {
+          "op": "Ingest",
+          "m": "m2",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Four-call cap queues 3 calls (S, S1, S2); 32-intent max succeeds with label l; Drain settles all"
+    },
+    {
+      "name": "forward-recv24-vs-recv25-and-drain",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Rituals",
+          "mode": "forward"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "recv24"
+        },
+        {
+          "op": "Ingest",
+          "m": "m2",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "recv25"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:F",
+          "gate": false
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m2:F",
+          "gate": false
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "24 Received headers forward; 25 Received headers fail FORWARD_BLOCKED; Drain settles"
+    },
+    {
+      "name": "retry-after-and-7d-cap",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries2"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "a"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "429 120"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:W",
+          "gate": false
+        },
+        {
+          "op": "Reply",
+          "w": "K",
+          "resp": "429 9999999"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Retry-After 120s overrides 15s backoff; huge Retry-After caps at 7 days (604800s); Drain settles"
+    },
+    {
+      "name": "known-bug-dlv-1-plain-sub-unpause-refills-attempts",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "retries1"
+        },
+        {
+          "op": "Ingest",
+          "m": "m1",
+          "rcpts": [
+            "b"
+          ],
+          "variant": "plain"
+        },
+        {
+          "op": "Run",
+          "w": "K",
+          "d": "m1:U",
+          "gate": false
+        },
+        {
+          "op": "Expire",
+          "d": "m1:U"
+        },
+        {
+          "op": "Pause",
+          "e": "U",
+          "on": true
+        },
+        {
+          "op": "Run",
+          "w": "L",
+          "d": "m1:U",
+          "gate": false
+        },
+        {
+          "op": "Pause",
+          "e": "U",
+          "on": false
+        }
+      ],
+      "expected": {
+        "outcome": "fail",
+        "operator": "reply:Pause:/view/d/m1:U/4/1",
+        "verdict": "replyMismatch",
+        "canary": true
+      },
+      "note": "Known product bug DLV-1 (masked in step()): unpausing a plain event subscription (U) after an unrecorded send resets jobs.attempts to 0 because U has no mail_action_attempts row, refilling its retry budget and letting it exceed 1 + retryAttempts sends. Pinned with canary=true so it runs unmasked and fails until fixed."
+    }
+  ]
+}
