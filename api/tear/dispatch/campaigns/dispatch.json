@@ -1,0 +1,1654 @@
+{
+  "version": 1,
+  "modelId": "dispatch",
+  "cases": [
+    {
+      "name": "smoke-send-drain",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass",
+        "control": true
+      },
+      "note": "Control: basic send and drain completes and satisfies all idle and temporal rules"
+    },
+    {
+      "name": "canary-double-send",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "bug": "canary_double_send",
+      "expected": {
+        "outcome": "fail",
+        "operator": "dispatch.once/mail/0",
+        "verdict": "violated",
+        "canary": true
+      },
+      "note": "Canary: planted host bug emits a duplicate send.call after send.committed to verify temporal property dispatch.once bites"
+    },
+    {
+      "name": "late-refusal-reopens-done-campaign",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "throttle"
+        },
+        {
+          "op": "Launch"
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Wait",
+          "seconds": 4
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Recover"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "late refusal reopens a done campaign"
+    },
+    {
+      "name": "record-after-sweep",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Recover"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "record after the sweep"
+    },
+    {
+      "name": "crash-after-provider-accepted",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Crash",
+          "inst": "D1"
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Recover"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "crash after the provider accepted"
+    },
+    {
+      "name": "lease-minus-1s-still-held",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Crash",
+          "inst": "D1"
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 59
+        },
+        {
+          "op": "Step",
+          "inst": "D2"
+        },
+        {
+          "op": "Step",
+          "inst": "D2"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "lease -1 s still held"
+    },
+    {
+      "name": "expired-lease-plus-1s-taken",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Crash",
+          "inst": "D1"
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 59
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Step",
+          "inst": "D2"
+        },
+        {
+          "op": "Step",
+          "inst": "D2"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "expired lease (+1 s) taken by another lease"
+    },
+    {
+      "name": "sweep-minus-1s-leaves-attempt",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Crash",
+          "inst": "D1"
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 59
+        },
+        {
+          "op": "Recover"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "sweep at attempt +3 min -1 s leaves it"
+    },
+    {
+      "name": "sweep-plus-1s-marks-interrupted",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Crash",
+          "inst": "D1"
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Recover"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "sweep at attempt +3 min +1 s"
+    },
+    {
+      "name": "backoff-minus-1s-still-waiting",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "thr"
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "backoff -1 s still waiting"
+    },
+    {
+      "name": "backoff-plus-1s-retried",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "thr"
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "backoff +1 s retried"
+    },
+    {
+      "name": "pre-send-deadline-minus-1s",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Wait",
+          "seconds": 4
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "pre-send deadline -1 s"
+    },
+    {
+      "name": "pre-send-deadline-plus-1s",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Wait",
+          "seconds": 4
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "pre-send deadline +1 s"
+    },
+    {
+      "name": "cancel-between-lease-and-claim",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "throttle"
+        },
+        {
+          "op": "Launch"
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Cancel"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Wait",
+          "seconds": 4
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "cancel between lease and claim"
+    },
+    {
+      "name": "in-flight-send-after-cancel",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Launch"
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Cancel"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        },
+        {
+          "op": "Step",
+          "inst": "D1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "in-flight send after cancel"
+    },
+    {
+      "name": "queued-campaign-dispatches-while-paused",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "paced"
+        },
+        {
+          "op": "Launch"
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Pause"
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Resume"
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Wait",
+          "seconds": 86400
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "queued campaign mail dispatches while paused"
+    },
+    {
+      "name": "next-window-plus-1s-releases",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "paced"
+        },
+        {
+          "op": "Launch"
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Wait",
+          "seconds": 86400
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "next window +1 s releases"
+    },
+    {
+      "name": "schedule-minus-1s-not-due",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Schedule"
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Wait",
+          "seconds": 59
+        },
+        {
+          "op": "Jobs"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "run job -1 s not yet due"
+    },
+    {
+      "name": "schedule-plus-1s-releases",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Schedule"
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "schedule +1 s releases"
+    },
+    {
+      "name": "resume-to-scheduled",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Schedule"
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Pause"
+        },
+        {
+          "op": "Resume"
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "resume to scheduled"
+    },
+    {
+      "name": "pending-cap-plus-1-refused",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "pendingCap"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "pending cap +1 refused"
+    },
+    {
+      "name": "refused-admission-releases-key",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "pendingCap"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "SendKey",
+          "key": "k1",
+          "persona": "ok"
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "SendKey",
+          "key": "k1",
+          "persona": "ok"
+        },
+        {
+          "op": "SendKey",
+          "key": "k1",
+          "persona": "rej"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "refused admission releases its key"
+    },
+    {
+      "name": "two-concurrent-sends-one-key",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "DupKey",
+          "key": "k2",
+          "persona": "ok"
+        },
+        {
+          "op": "SendKey",
+          "key": "k2",
+          "persona": "ok"
+        },
+        {
+          "op": "SendKey",
+          "key": "k2",
+          "persona": "rej"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "two concurrent sends with one key"
+    },
+    {
+      "name": "throttle-brake-delays-next-send",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "thr"
+        },
+        {
+          "op": "Send",
+          "persona": "thr"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Wait",
+          "seconds": 4
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "throttle brake delays the next send"
+    },
+    {
+      "name": "owner-cursor-wrap-short",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "owners"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send2",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "a run with a lease's worth of owners leases past the last owner"
+    },
+    {
+      "name": "owner-cursor-wrap-multi",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "owners"
+        },
+        {
+          "op": "Send2",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send2",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send2",
+          "persona": "ok"
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "a run with a lease's worth of owners leases past the last owner (multi)"
+    },
+    {
+      "name": "allowance-skips-full-page-oversized",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "allowance"
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "the lease skips an envelope the allowance cannot afford (full page)"
+    },
+    {
+      "name": "allowance-affordable-behind-oversized",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "allowance"
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 1,
+          "second": false
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "affordable mail behind an oversized head sends"
+    },
+    {
+      "name": "allowance-second-run-arms-retry",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "allowance"
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "a second run on the same fresh sample skips the row up front"
+    },
+    {
+      "name": "allowance2-every-owner-oversized-head",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "allowance2"
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": true
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 1,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 1,
+          "second": true
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "every owner's head is too large; affordable followers still send"
+    },
+    {
+      "name": "allowance2-oversized-next-day",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "allowance2"
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 2,
+          "second": true
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 1,
+          "second": false
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 1,
+          "second": true
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Wait",
+          "seconds": 86400
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "every owner's head is too large; next day drains remaining"
+    },
+    {
+      "name": "allowance2-reserve-priority",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "allowance2"
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 1,
+          "second": false
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "SendMarketing",
+          "cost": 1,
+          "second": true
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Wait",
+          "seconds": 1
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Wait",
+          "seconds": 86400
+        },
+        {
+          "op": "Wait",
+          "seconds": 60
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "transactional mail spends the room marketing would have used"
+    },
+    {
+      "name": "drain-leases-second-page",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "one drain is a whole run, not one 24-row page"
+    },
+    {
+      "name": "unk-then-ok-stepped-d2",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Send",
+          "persona": "unk"
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Step",
+          "inst": "D2"
+        },
+        {
+          "op": "Step",
+          "inst": "D2"
+        },
+        {
+          "op": "Step",
+          "inst": "D2"
+        },
+        {
+          "op": "Step",
+          "inst": "D2"
+        },
+        {
+          "op": "Step",
+          "inst": "D2"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "2026-11-23 witness: D2 after 5xx unknown"
+    }
+  ]
+}
