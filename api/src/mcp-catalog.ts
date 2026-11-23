@@ -1,6 +1,6 @@
 import { Validator, type Schema } from '@cfworker/json-schema';
 import type { Tool } from '@modelcontextprotocol/server';
-import { agentTokenMintRoute, keyAdminRoute, lastingRoute, mailboxRoute, memberAdminRoute, ownerRoute, receivingAdminRoute, receivingConsentRoute, unrestrictedRoute, type App } from './core.js';
+import { agentTokenMintRoute, keyAdminRoute, lastingRoute, mailboxRoute, memberAdminRoute, ownerRoute, receivingAdminRoute, receivingConsentRoute, type App } from './core.js';
 import { resourceInventory } from './mcp-resources.js';
 import { productName } from './brand.js';
 import { permissionOf } from './operation-permissions.js';
@@ -33,7 +33,10 @@ export interface McpOperation {
   readonly mailbox: boolean;
   /** Under requireReceivingConsent: a grant needs explicit receiving consent. */
   readonly receivingConsent: boolean;
-  /** Refused to a credential limited to sender domains (UNRESTRICTED_KEY_REQUIRED). */
+  /** Refused to a credential limited to sender domains (UNRESTRICTED_KEY_REQUIRED): the operation's permission row
+   *  (operation-permissions.ts, checked against REST's answers by the "permission table" acceptance test) needs the whole
+   *  workspace or a receiving address, which sender domains never cover. Not a list of paths: a guard inside a handler
+   *  (template and attachment writes) counts like the path guard in app.ts. */
   readonly unrestricted: boolean;
   /** Key administration (keyAdminRoute): unrestricted manage, never a temporary agent token. */
   readonly keyAdmin: boolean;
@@ -374,10 +377,10 @@ export function buildMcpCatalog(app: App): ReadonlyMap<string, McpOperation> {
       // The path guards are REST's own predicates (core.ts). On a mailbox path mailboxAuth, not a permission, decides.
       const mailbox = mailboxRoute(path);
       const permission = ANY_AUTHENTICATED.has(name) || mailbox ? 'any' : MANAGE_LEVEL_READS.has(name) ? 'manage' : SEND_LEVEL.has(name) ? 'send' : READ_LEVEL_WRITES.has(name) ? 'read' : write ? 'manage' : 'read';
-      const ownerOnly = receiving || ownerRoute(method, path);
+      const ownerOnly = receiving || ownerRoute(method, path), requires = permissionOf(name);
       operations.set(name, Object.freeze({ tool, method, path, queryParameters, write, confirm, apiArgs, pollPage, toolset, receiving, inbound: receiving || toolset === 'inboxes', inbox: INBOX_PERMISSIONS[name], untrustedContent: UNTRUSTED_READS.has(name), permission, ownerOnly, mailbox,
-        receivingConsent: receivingConsentRoute(path), unrestricted: unrestrictedRoute(path), keyAdmin: keyAdminRoute(method, path), agentTokenMint: agentTokenMintRoute(method, path),
-        receivingAdmin: receivingAdminRoute(path), lasting: lastingRoute(method, path), dashboardOnly: DASHBOARD_ONLY.has(name), memberAdmin: memberAdminRoute(method, path), view: invitations?.view, requires: permissionOf(name), validate: validator(input), validateOutput }));
+        receivingConsent: receivingConsentRoute(path), unrestricted: requires?.scope === 'workspace' || requires?.scope === 'address', keyAdmin: keyAdminRoute(method, path), agentTokenMint: agentTokenMintRoute(method, path),
+        receivingAdmin: receivingAdminRoute(path), lasting: lastingRoute(method, path), dashboardOnly: DASHBOARD_ONLY.has(name), memberAdmin: memberAdminRoute(method, path), view: invitations?.view, requires, validate: validator(input), validateOutput }));
     }
   }
   // The sole non-REST primitive is a constrained long poll of the inbox message operation.
