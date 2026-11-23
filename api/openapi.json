@@ -20143,7 +20143,7 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Active contacts with current list IDs. Search is a case-insensitive literal email/name substring. Consent and suppression filters are independent. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.",
+        "description": "Active contacts with current list IDs. Search is a case-insensitive literal email/name substring. Consent and suppression filters are independent. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters. A page filtered by listId has no such limit.",
         "parameters": [
           {
             "schema": {
@@ -22493,7 +22493,6 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.",
         "parameters": [
           {
             "schema": {

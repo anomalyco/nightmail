@@ -282,7 +282,7 @@ export const updateApiKey = <ThrowOnError extends boolean = false>(options: Opti
 });
 
 /**
- * Active contacts with current list IDs. Search is a case-insensitive literal email/name substring. Consent and suppression filters are independent. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.
+ * Active contacts with current list IDs. Search is a case-insensitive literal email/name substring. Consent and suppression filters are independent. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters. A page filtered by listId has no such limit.
  */
 export const listContacts = <ThrowOnError extends boolean = false>(options?: Options<ListContactsData, ThrowOnError>): RequestResult<ListContactsResponses, ListContactsErrors, ThrowOnError> => (options?.client ?? client).get<ListContactsResponses, ListContactsErrors, ThrowOnError>({
     security: [
@@ -526,9 +526,6 @@ export const updateContactList = <ThrowOnError extends boolean = false>(options:
     }
 });
 
-/**
- * Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.
- */
 export const listListMembers = <ThrowOnError extends boolean = false>(options: Options<ListListMembersData, ThrowOnError>): RequestResult<ListListMembersResponses, ListListMembersErrors, ThrowOnError> => (options.client ?? client).get<ListListMembersResponses, ListListMembersErrors, ThrowOnError>({
     security: [
         { scheme: 'bearer', type: 'http' },

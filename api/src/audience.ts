@@ -21,8 +21,8 @@ const ContactRead = Contact.extend({ listIds: z.array(z.string()) }).openapi('Co
 const ListCounts = z.object({ total: z.number().int(), subscribed: z.number().int(), unsubscribed: z.number().int(), unknown: z.number().int(), suppressed: z.number().int() }).describe('Active members only. Suppressed takes precedence over consent; subscribed, unsubscribed, unknown and suppressed are mutually exclusive and sum to total.');
 const ListRead = z.object({ ...List.shape, counts: ListCounts.nullable() }).strict().openapi('ContactListRead');
 const SearchQuery = PageQuery.extend({ search: z.string().trim().min(1).max(200).optional() });
-// Reads that scan a workspace's contacts or memberships (a search, a list or consent filter, member counts, a segment
-// preview, AudienceQL) stop after 5 seconds with READ_TOO_LARGE rather than hold a connection beside sending.
+// Reads that scan a workspace's contacts or memberships (a search or consent filter, member counts, a segment preview,
+// AudienceQL) stop after 5 seconds with READ_TOO_LARGE rather than hold a connection beside sending.
 export const AUDIENCE_READ = 5;
 const ListQuery = SearchQuery.extend({ counts: z.enum(['true', 'false']).default('true').describe(`false skips member counts (counts is null), for pickers that only need names. Counting scans every membership of each list: counts that need more than ${AUDIENCE_READ} seconds are refused with 422 READ_TOO_LARGE, and the same page with counts=false answers.`) }).openapi('ListContactListsQuery');
 const ContactQuery = SearchQuery.extend({ email: Email.optional().describe('Exact, case-insensitive email match. Uses the unique email index; prefer it over search for one address.'), consent: z.enum(['unknown', 'subscribed', 'unsubscribed']).optional(), suppressed: z.enum(['true', 'false']).optional(), listId: z.string().min(1).max(120).optional() }).openapi('ListContactsQuery');
@@ -68,13 +68,21 @@ async function readContacts(db: DbExecutor, identity: Actor, rows: Array<typeof 
   for (const member of memberships) { const ids = byContact.get(member.contactId) ?? []; ids.push(member.listId); byContact.set(member.contactId, ids); }
   return rows.map(row => ({ ...row, listIds: byContact.get(row.id) ?? [] }));
 }
-/** A page of contacts with their list IDs, in one budgeted read: listContacts, and a list's members. */
-const contactPage = (runtime: Pick<Runtime, 'db'>, identity: Actor, query: z.infer<typeof ContactQuery>) => budgetedRead(runtime.db, async db => {
-  if (query.listId) await findList(db, identity, query.listId);
-  const rows = await db.select().from(contacts).where(and(scope(contacts, identity), isNull(contacts.deletedAt), ...contactFilters(identity, query), query.cursor ? gt(contacts.id, query.cursor) : undefined)).orderBy(asc(contacts.id)).limit(query.limit + 1);
-  const result = paginate(rows, query.limit);
-  return { ...result, data: await readContacts(db, identity, result.data) };
-}, readLimit(AUDIENCE_READ));
+/**
+ * A page of contacts with their list IDs: listContacts, and a list's members. One budgeted read, except with a list
+ * filter: inList probes membership once per contact in contact order, so a list with fewer members than a page (a new
+ * list's own page) reads every contact of the workspace, seconds on a large one. That page loads as it always has
+ * instead of being refused; narrowing it would not help.
+ */
+const contactPage = (runtime: Pick<Runtime, 'db'>, identity: Actor, query: z.infer<typeof ContactQuery>) => {
+  const read = async (db: DbExecutor) => {
+    if (query.listId) await findList(db, identity, query.listId);
+    const rows = await db.select().from(contacts).where(and(scope(contacts, identity), isNull(contacts.deletedAt), ...contactFilters(identity, query), query.cursor ? gt(contacts.id, query.cursor) : undefined)).orderBy(asc(contacts.id)).limit(query.limit + 1);
+    const result = paginate(rows, query.limit);
+    return { ...result, data: await readContacts(db, identity, result.data) };
+  };
+  return query.listId ? read(runtime.db) : budgetedRead(runtime.db, read, readLimit(AUDIENCE_READ));
+};
 async function readLists(db: DbExecutor, identity: Actor, rows: ListRow[]) {
   if (!rows.length) return [];
   const totals = await db.select({ listId: listMembers.listId, total: sql<number>`count(*)::int`, subscribed: sql<number>`count(*) FILTER (WHERE NOT ${contacts.suppressed} AND ${contacts.marketingConsent} = 'subscribed')::int`, unsubscribed: sql<number>`count(*) FILTER (WHERE NOT ${contacts.suppressed} AND ${contacts.marketingConsent} = 'unsubscribed')::int`, unknown: sql<number>`count(*) FILTER (WHERE NOT ${contacts.suppressed} AND ${contacts.marketingConsent} = 'unknown')::int`, suppressed: sql<number>`count(*) FILTER (WHERE ${contacts.suppressed})::int` }).from(listMembers).innerJoin(contacts, and(eq(contacts.id, listMembers.contactId), eq(contacts.workspaceId, listMembers.workspaceId))).where(and(scope(listMembers, identity), scope(contacts, identity), isNull(contacts.deletedAt), inArray(listMembers.listId, rows.map(row => row.id)))).groupBy(listMembers.listId);
@@ -274,7 +282,7 @@ function previewImport(input: z.infer<typeof ImportInput>) {
 }
 
 export function registerAudience(app: App) {
-  app.openapi(createRoute({ method: 'get', path: '/v1/contacts', operationId: 'listContacts', tags: ['Audience'], security, description: `Active contacts with current list IDs. Search is a case-insensitive literal email/name substring. Consent and suppression filters are independent. ${readLimitNote(AUDIENCE_READ)}`, request: { query: ContactQuery }, responses: { 200: response(page(ContactRead)), ...errors } }), async c => c.json(await contactPage(c.env, actor(c), c.req.valid('query')), 200));
+  app.openapi(createRoute({ method: 'get', path: '/v1/contacts', operationId: 'listContacts', tags: ['Audience'], security, description: `Active contacts with current list IDs. Search is a case-insensitive literal email/name substring. Consent and suppression filters are independent. ${readLimitNote(AUDIENCE_READ)} A page filtered by listId has no such limit.`, request: { query: ContactQuery }, responses: { 200: response(page(ContactRead)), ...errors } }), async c => c.json(await contactPage(c.env, actor(c), c.req.valid('query')), 200));
   app.openapi(createRoute({ method: 'post', path: '/v1/contacts', operationId: 'createContact', tags: ['Audience'], security, request: { body: json(ContactInput) }, responses: { 201: response(Contact), ...errors } }), async c => {
     const identity = actor(c, 'editContent'), input = c.req.valid('json');
     const [contact] = await c.env.db.insert(contacts).values({ id: id('con'), ...scopeValues(identity), ...input }).onConflictDoNothing().returning();
@@ -341,7 +349,7 @@ export function registerAudience(app: App) {
     const identity = actor(c, 'manage'), listId = c.req.valid('param').id;
     await c.env.db.transaction(async tx => { const [row] = await tx.delete(lists).where(and(scope(lists, identity), eq(lists.id, listId))).returning(); if (!row) notFound('List'); await tx.delete(listMembers).where(and(scope(listMembers, identity), eq(listMembers.listId, listId))); }); return c.json({ id: listId, deleted: true as const }, 200);
   });
-  app.openapi(createRoute({ method: 'get', path: '/v1/lists/{id}/members', operationId: 'listListMembers', tags: ['Audience'], security, description: readLimitNote(AUDIENCE_READ), request: { params: IdParams, query: ContactQuery.omit({ listId: true }) }, responses: { 200: response(page(ContactRead)), ...errors } }), async c =>
+  app.openapi(createRoute({ method: 'get', path: '/v1/lists/{id}/members', operationId: 'listListMembers', tags: ['Audience'], security, request: { params: IdParams, query: ContactQuery.omit({ listId: true }) }, responses: { 200: response(page(ContactRead)), ...errors } }), async c =>
     c.json(await contactPage(c.env, actor(c), { ...c.req.valid('query'), listId: c.req.valid('param').id }), 200));
   app.openapi(createRoute({ method: 'post', path: '/v1/lists/{id}/members', operationId: 'addListMembers', tags: ['Audience'], security, request: { params: IdParams, body: json(z.object({ contactIds: z.array(z.string().min(1).max(120)).min(1).max(100) }).strict()) }, responses: { 200: response(z.object({ added: z.number().int() })), ...errors } }), async c => {
     const identity = actor(c, 'manage'), listId = c.req.valid('param').id, contactIds = [...new Set(c.req.valid('json').contactIds)];
