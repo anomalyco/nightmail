@@ -33525,6 +33525,84 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
+  test('standing refreshEvidence: reads sending_metrics_hourly with exact parity to sending_emails, falls back on disabled triggers, and fails safe on statement_timeout', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { refreshStanding, STANDING_EVIDENCE_TIMEOUT_MS } = await import('./src/standing.js');
+      const wid = runtime.config.workspaceId;
+      Object.assign(runtime.config, { multiTenant: true });
+      const sharedArn = `arn:aws:sns:${REGION}:111122223333:shared-standing-test`;
+      const byoArn = `arn:aws:sns:${REGION}:444455556666:byo-standing-test`;
+      await db.query("INSERT INTO provider_connections(id,workspace_id,kind,region,state) VALUES ($1,$1,'shared',$2,'ready')", [wid, REGION]);
+      await db.query("INSERT INTO provider_feedback_history(topic_arn,region,aws_account_id,kind) VALUES ($1,$3,'111122223333','shared'),($2,$3,'444455556666','byo') ON CONFLICT DO NOTHING", [sharedArn, byoArn, REGION]);
+
+      // Mix of real direct, campaign (delivered/bounced/suppressed/clicked), bulk transactional, simulated,
+      // simulator-only, mixed simulator+real, shared-topic and BYO-topic emails.
+      await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,campaign_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,status,provider_id,event_outcomes,feedback_topic_arn,created_at) VALUES
+        ('st_dir',$1,$2,'k',NULL,'a@e.com','["u1@e.com"]','[]','[]','S','{"kind":"transactional"}',false,'delivered','p1',3,NULL,now()),
+        ('st_cmp_ok',$1,$2,'k','c1','a@e.com','["u2@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'delivered','p2',35,$3,now()),
+        ('st_cmp_bnc',$1,$2,'k','c1','a@e.com','["u3@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'bounced','p3',5,$3,now()),
+        ('st_cmp_sup',$1,$2,'k','c1','a@e.com','["u4@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'suppressed',NULL,0,$3,now()),
+        ('st_bulk',$1,$2,'k',NULL,'a@e.com','["u5@e.com"]','[]','[]','S','{"kind":"transactional","bulk":true}',false,'delivered','p4',35,NULL,now()),
+        ('st_mixed',$1,$2,'k',NULL,'a@e.com','["success@simulator.amazonses.com","u6@e.com"]','[]','[]','S','{"kind":"transactional"}',false,'complained','p5',9,NULL,now()),
+        ('st_sim_only',$1,$2,'k',NULL,'a@e.com','["success@simulator.amazonses.com"]','[]','[]','S','{"kind":"marketing"}',false,'delivered','p6',3,NULL,now()),
+        ('st_simulated',$1,$2,'k','c1','a@e.com','["u7@e.com"]','[]','[]','S','{"kind":"marketing"}',true,'delivered','p7',3,NULL,now()),
+        ('st_byo',$1,$2,'k','c1','a@e.com','["u8@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'bounced','p8',5,$4,now())`,
+        [wid, REGION, sharedArn, byoArn]);
+
+      const readDaily = async () => (await db.query(
+        "SELECT emails,accepted,delivered,bounced,first_sends,first_bounced,complained,suppressed,marketing_delivered,clicked FROM sender_score_daily WHERE workspace_id=$1 AND day=(now() AT TIME ZONE 'UTC')::date",
+        [wid]
+      )).rows[0];
+
+      // 1. Tallied refreshEvidence: zero scans of sending_emails!
+      const qSpy = t.mock.method(db, 'query');
+      try { await refreshStanding(runtime, { only: wid }); } finally { qSpy.mock.restore(); }
+      const stmts = qSpy.mock.calls.map(c => String((c.arguments[0] as any)?.text ?? c.arguments[0]));
+      assert.ok(stmts.some(s => /JOIN sending_metrics_hourly/i.test(s)), 'refreshEvidence reads sending_metrics_hourly.');
+      assert.equal(stmts.filter(s => /JOIN sending_emails[\s\S]*sender_score_daily/i.test(s)).length, 0, 'refreshEvidence never scans sending_emails when tallies are enabled.');
+      const fromTallies = await readDaily();
+      assert.deepEqual(fromTallies, { emails: 6, accepted: 5, delivered: 3, bounced: 1, first_sends: 2, first_bounced: 1, complained: 1, suppressed: 1, marketing_delivered: 2, clicked: 2 });
+
+      // 2. Fallback with triggers disabled produces exact same sender_score_daily.
+      await db.query('ALTER TABLE sending_emails DISABLE TRIGGER sending_tally_insert, DISABLE TRIGGER sending_tally_update, DISABLE TRIGGER sending_tally_delete');
+      await db.query('DELETE FROM sender_score_daily WHERE workspace_id=$1', [wid]);
+      await db.query('UPDATE sender_standing SET evidence_at=NULL WHERE workspace_id=$1', [wid]);
+      try {
+        await refreshStanding(runtime, { only: wid });
+      } finally {
+        await db.query('ALTER TABLE sending_emails ENABLE TRIGGER sending_tally_insert, ENABLE TRIGGER sending_tally_update, ENABLE TRIGGER sending_tally_delete');
+      }
+      assert.deepEqual(await readDaily(), fromTallies, 'Tallied refreshEvidence matches raw sending_emails fallback bit-for-bit.');
+
+      // 3. Fail-safe on statement_timeout (57014): standing, score, step and version are completely untouched.
+      const before = (await db.query('SELECT score,step,daily_limit,version,evidence_at FROM sender_standing WHERE workspace_id=$1', [wid])).rows[0];
+      await db.query('UPDATE sender_standing SET evidence_at=NULL WHERE workspace_id=$1', [wid]);
+      const warnings: string[] = [];
+      const warnSpy = t.mock.method(console, 'warn', (...args: unknown[]) => { warnings.push(String(args[0])); });
+      const origQuery = db.query.bind(db) as (...args: unknown[]) => unknown;
+      const failSpy = t.mock.method(db, 'query', (...args: unknown[]) => {
+        const text = String((args[0] as any)?.text ?? args[0]);
+        if (/WITH due AS/i.test(text) && /sender_score_daily/i.test(text)) {
+          return Promise.reject(Object.assign(new Error('canceling statement due to statement timeout'), { code: '57014' }));
+        }
+        return origQuery(...args);
+      });
+      let res: { evaluated: number; changed: number };
+      try {
+        res = await refreshStanding(runtime, { only: wid });
+      } finally {
+        failSpy.mock.restore();
+        warnSpy.mock.restore();
+      }
+      assert.deepEqual(res, { evaluated: 0, changed: 0 }, 'Timeout aborts refreshStanding without evaluating or changing standing.');
+      assert.ok(warnings.some(line => line.includes('STANDING_EVIDENCE_TIMEOUT')), 'Logs STANDING_EVIDENCE_TIMEOUT.');
+      const after = (await db.query('SELECT score,step,daily_limit,version,evidence_at FROM sender_standing WHERE workspace_id=$1', [wid])).rows[0];
+      assert.deepEqual([after.score, after.step, after.daily_limit, after.version, after.evidence_at],
+        [before.score, before.step, before.daily_limit, before.version, null], 'Standing is unchanged on evidence timeout.');
+      assert.ok(STANDING_EVIDENCE_TIMEOUT_MS.value === 15_000);
+    });
+  });
+
   test('paced campaigns release one daily window at a time, pause and resume in place, hold for the SES daily quota, and pause automatically on bounces', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, jobs, db }) => {
       const ws = runtime.config.workspaceId;
