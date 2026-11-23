@@ -146,7 +146,7 @@ export async function recountSendingTallies(runtime: Runtime, budgetMs = 60_000,
     try {
       const { rows } = await runtime.db.transaction(async tx => {
         await tx.execute(sql.raw(`SET LOCAL statement_timeout = '${RECOUNT_STATEMENT_SECONDS}s'`));
-        return tx.execute<{ workspace_id: string; region: string; kind: string; hour: string; emails: string; accepted: string; delivered: string; bounced: string; complained: string; opened: string; clicked: string; failed: string; delivery_delayed: string; simulated: string }>(
+        return tx.execute<{ workspace_id: string; region: string; kind: string; hour: string; topic_arn: string; emails: string; accepted: string; delivered: string; bounced: string; complained: string; opened: string; clicked: string; failed: string; delivery_delayed: string; simulated: string; real_emails: string; real_accepted: string; real_delivered: string; real_bounced: string; real_first_sends: string; real_first_bounced: string; real_complained: string; real_suppressed: string; real_marketing_delivered: string; real_marketing_clicked: string }>(
           sql`SELECT w.workspace_id, r.*
             FROM unnest(${sql.param(batch.map(x => x.workspace_id))}::text[]) w(workspace_id),
                  reconcile_sending_metrics_hourly(w.workspace_id) r`
@@ -158,11 +158,15 @@ export async function recountSendingTallies(runtime: Runtime, budgetMs = 60_000,
         for (const row of rows) {
           seen.add(row.workspace_id);
           log('error', {
-            code: 'METRICS_HOURLY_DRIFT', workspace: row.workspace_id, region: row.region, kind: row.kind, hour: row.hour,
+            code: 'METRICS_HOURLY_DRIFT', workspace: row.workspace_id, region: row.region, kind: row.kind, hour: row.hour, topicArn: row.topic_arn,
             emails: Number(row.emails), accepted: Number(row.accepted), delivered: Number(row.delivered),
             bounced: Number(row.bounced), complained: Number(row.complained), opened: Number(row.opened),
             clicked: Number(row.clicked), failed: Number(row.failed), deliveryDelayed: Number(row.delivery_delayed),
             simulated: Number(row.simulated),
+            realEmails: Number(row.real_emails), realAccepted: Number(row.real_accepted), realDelivered: Number(row.real_delivered),
+            realBounced: Number(row.real_bounced), realFirstSends: Number(row.real_first_sends), realFirstBounced: Number(row.real_first_bounced),
+            realComplained: Number(row.real_complained), realSuppressed: Number(row.real_suppressed),
+            realMarketingDelivered: Number(row.real_marketing_delivered), realMarketingClicked: Number(row.real_marketing_clicked),
           });
         }
         workspacesCorrected += seen.size;

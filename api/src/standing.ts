@@ -7,6 +7,7 @@ import { queueTenantStatus, resumeHostedConnection, tenantStatusDrift, terminalC
 import { dailyLimit, ESTABLISHED, GOOD_STANDING, establishedBy, EVALUATION, evaluated, FREEZE_FLOOR, GROWTH, moveScore, nextGrowth, nextStanding, quality, stepRank, type DayEvidence, type GrowthHour, type DomainAuth, type Factor, type LadderInput, type Reason, type ScoreState, type Step, type TrackRecord, type Window } from './standing-model.js';
 import { productName } from './brand.js';
 import { checkSignInMail, standingAlert } from './operator-alerts.js';
+import { talliesEnabled } from './sending-tallies.js';
 
 // The standing job: every ten minutes it counts each Hosted workspace's mail, moves its score, sets the daily limit
 // admission reads (none in good standing), and walks the ladder (notice → warn → restrict → pause). Every change of standing, by the job, an
@@ -126,15 +127,33 @@ const MAIL_ACCEPTED = sql`e.status<>'suppressed' AND (e.provider_id IS NOT NULL 
 // sent through its own (BYO) account before (the unit is one email, in numerator and denominator alike).
 const MAIL_REAL = sql`NOT e.simulated AND hosted_real_cost(e.to_addresses||e.cc_addresses||e.bcc_addresses)>0
   AND (e.feedback_topic_arn IS NULL OR EXISTS (SELECT FROM provider_feedback_history h WHERE h.topic_arn=e.feedback_topic_arn AND h.kind='shared'))`;
+/** Hard statement timeout for refreshEvidence: if tripped, refreshStanding fails safe and changes no workspace's standing. */
+export const STANDING_EVIDENCE_TIMEOUT_MS = { value: 15_000 };
+const isStatementTimeout = (error: unknown) =>
+  [error, (error as { cause?: unknown } | null)?.cause].some(e => String((e as { code?: unknown } | null)?.code) === '57014');
+
 /**
  * Counts each due workspace's mail per UTC day: 30 days the first time, then the last 8 (late feedback). Hourly, or every
  * five minutes during the evaluation, so its recipients are graded soon after their results are in.
+ * Reads sending_metrics_hourly (migration 409) when the tally triggers are enabled (< 1 ms, zero sort spill); falls back
+ * to raw sending_emails if triggers are disabled, always bounded by STANDING_EVIDENCE_TIMEOUT_MS.
  */
-async function refreshEvidence(db: DbExecutor, limit: number) {
-  const { rows: [r] } = await db.execute<{ n: number }>(sql`WITH due AS (
-      SELECT workspace_id,evidence_at FROM sender_standing WHERE evidence_at IS NULL OR evidence_at<now()-CASE WHEN phase='calibrating' THEN interval '5 minutes' ELSE interval '1 hour' END
-      ORDER BY evidence_at NULLS FIRST LIMIT ${limit} FOR UPDATE SKIP LOCKED
-    ), mail AS (
+async function refreshEvidence(db: Runtime['db'], limit: number) {
+  return db.transaction(async tx => {
+    const timeoutMs = Math.max(1, Math.trunc(STANDING_EVIDENCE_TIMEOUT_MS.value));
+    await tx.execute(sql.raw(`SET LOCAL statement_timeout = '${timeoutMs}ms'`));
+    const useTallies = await talliesEnabled(tx);
+    const daysCte = useTallies ? sql`days AS (
+      SELECT d.workspace_id,(t.hour AT TIME ZONE 'UTC')::date AS day,
+        sum(t.real_emails)::int AS emails,sum(t.real_accepted)::int AS accepted,sum(t.real_delivered)::int AS delivered,
+        sum(t.real_bounced)::int AS bounced,sum(t.real_first_sends)::int AS first_sends,sum(t.real_first_bounced)::int AS first_bounced,
+        sum(t.real_complained)::int AS complained,sum(t.real_suppressed)::int AS suppressed,
+        sum(t.real_marketing_delivered)::int AS marketing_delivered,sum(t.real_marketing_clicked)::int AS clicked
+      FROM due d JOIN sending_metrics_hourly t ON t.workspace_id=d.workspace_id
+        AND t.hour>=date_trunc('day',now(),'UTC')-CASE WHEN d.evidence_at IS NULL THEN interval '30 days' ELSE interval '7 days' END
+        AND (t.topic_arn='' OR EXISTS (SELECT FROM provider_feedback_history h WHERE h.topic_arn=t.topic_arn AND h.kind='shared'))
+      GROUP BY 1,2 HAVING sum(t.real_emails)>0
+    )` : sql`mail AS (
       SELECT d.workspace_id,(e.created_at AT TIME ZONE 'UTC')::date AS day,${MAIL_ACCEPTED} AS accepted,
         (e.status='delivered' OR e.event_outcomes & 2 <> 0) AS delivered,(e.status='bounced' OR e.event_outcomes & 4 <> 0) AS bounced,
         (e.status='complained' OR e.event_outcomes & 8 <> 0) AS complained,e.status='suppressed' AS suppressed,
@@ -147,7 +166,11 @@ async function refreshEvidence(db: DbExecutor, limit: number) {
         count(*) FILTER (WHERE complained)::int AS complained,count(*) FILTER (WHERE suppressed AND first_send)::int AS suppressed,
         count(*) FILTER (WHERE delivered AND marketing)::int AS marketing_delivered,count(*) FILTER (WHERE clicked AND marketing)::int AS clicked
       FROM mail GROUP BY 1,2
-    ), screen AS (
+    )`;
+    const { rows: [r] } = await tx.execute<{ n: number }>(sql`WITH due AS (
+      SELECT workspace_id,evidence_at FROM sender_standing WHERE evidence_at IS NULL OR evidence_at<now()-CASE WHEN phase='calibrating' THEN interval '5 minutes' ELSE interval '1 hour' END
+      ORDER BY evidence_at NULLS FIRST LIMIT ${limit} FOR UPDATE SKIP LOCKED
+    ), ${daysCte}, screen AS (
       -- What the screen judged, by the day it judged it (src/dispatcher.ts): mail it never saw does not dilute the rate.
       SELECT d.workspace_id,(v.hour AT TIME ZONE 'UTC')::date AS day,sum(v.screened)::int AS screened,sum(v.rejected)::int AS rejected FROM due d JOIN hosted_screen_hourly v ON v.workspace_id=d.workspace_id
         AND v.hour>=date_trunc('day',now(),'UTC')-CASE WHEN d.evidence_at IS NULL THEN interval '30 days' ELSE interval '7 days' END GROUP BY 1,2
@@ -168,7 +191,8 @@ async function refreshEvidence(db: DbExecutor, limit: number) {
         (excluded.emails,excluded.accepted,excluded.delivered,excluded.bounced,excluded.first_sends,excluded.first_bounced,excluded.complained,excluded.screened,excluded.rejected,excluded.suppressed,excluded.marketing_delivered,excluded.unsubscribed,excluded.clicked)
     ), marked AS (UPDATE sender_standing s SET evidence_at=now() FROM due d WHERE s.workspace_id=d.workspace_id)
     SELECT count(*)::int AS n FROM due`);
-  return r?.n ?? 0;
+    return r?.n ?? 0;
+  });
 }
 
 /**
@@ -278,7 +302,15 @@ export async function refreshStanding(runtime: Runtime, options: { now?: Date; o
   const now = options.now ?? new Date(), limit = options.limit ?? 500;
   // A new workspace starts in its evaluation, at its limit (not the column's default, 100, which predates it).
   await runtime.db.execute(sql`INSERT INTO sender_standing(workspace_id,daily_limit,band_limit) SELECT workspace_id,${EVALUATION.limit}::int,${EVALUATION.limit}::int FROM provider_connections WHERE kind='shared' ${options.only ? sql`AND workspace_id=${options.only}` : sql``} ON CONFLICT DO NOTHING`);
-  await refreshEvidence(runtime.db, options.only ? 1 : 200);
+  try {
+    await refreshEvidence(runtime.db, options.only ? 1 : 200);
+  } catch (error) {
+    if (isStatementTimeout(error)) {
+      log('warn', { code: 'STANDING_EVIDENCE_TIMEOUT', timeoutMs: STANDING_EVIDENCE_TIMEOUT_MS.value, only: options.only ?? null });
+      return { evaluated: 0, changed: 0 };
+    }
+    throw error;
+  }
   const rows = await candidates(runtime, limit, options.only);
   const today = now.toISOString().slice(0, 10), routine: Record<string, unknown>[] = [];
   const lastHour = new Date(Math.floor(now.getTime() / 3600_000) * 3600_000 - 3600_000).toISOString();
