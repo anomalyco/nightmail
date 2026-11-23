@@ -1,8 +1,8 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, asc, eq, gt, gte, inArray, isNotNull, isNull, lt, lte, ne, or, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
-import { actor, ApiError, errors, id, json, response, security, type Actor, type App, type Database, type DbExecutor } from './core.js';
-import { compileRule } from './audience.js';
+import { actor, ApiError, budgetedRead, errors, id, json, readLimit, readLimitNote, response, security, type Actor, type App, type Database, type DbExecutor } from './core.js';
+import { AUDIENCE_READ, compileRule } from './audience.js';
 import { auditContext, auditInsert, type AuditContext } from './audit.js';
 import { audiencePlans, consentAudit, contacts, listMembers, lists, segments, type AudienceOperation } from './db/audience.js';
 import { enqueue } from './jobs.js';
@@ -183,7 +183,10 @@ async function applyPlan(db: Database, identity: Actor, planId: string, confirmR
 }
 
 export function registerAudienceQuery(app: App) {
-  app.openapi(createRoute({ method: 'post', path: '/v1/audience-query/query', operationId: 'queryAudience', tags: ['Audience'], security, description: 'Execute a bounded read-only AudienceQL SELECT against the virtual contacts schema.', request: { body: json(z.object({ statement: Statement }).strict()) }, responses: { 200: response(QueryResult), ...errors } }), async c => c.json(QueryResult.parse(await queryAudience(c.env.db, actor(c), c.req.valid('json').statement)), 200));
+  app.openapi(createRoute({ method: 'post', path: '/v1/audience-query/query', operationId: 'queryAudience', tags: ['Audience'], security, description: `Execute a bounded read-only AudienceQL SELECT against the virtual contacts schema. ${readLimitNote(AUDIENCE_READ)}`, request: { body: json(z.object({ statement: Statement }).strict()) }, responses: { 200: response(QueryResult), ...errors } }), async c => {
+    const identity = actor(c), statement = c.req.valid('json').statement;
+    return c.json(QueryResult.parse(await budgetedRead(c.env.db, db => queryAudience(db, identity, statement), readLimit(AUDIENCE_READ))), 200);
+  });
   app.openapi(createRoute({ method: 'post', path: '/v1/audience-query/plan', operationId: 'planAudienceMutation', tags: ['Audience'], security, description: 'Create a 15-minute immutable plan for a bounded AudienceQL bulk mutation. Does not modify contacts or memberships.', request: { body: json(z.object({ statement: Statement }).strict()) }, responses: { 201: response(PlanResult), ...errors } }), async c => c.json(PlanResult.parse(await planAudience(c.env.db, actor(c, 'manage'), c.req.valid('json').statement)), 201));
   app.openapi(createRoute({ method: 'post', path: '/v1/audience-query/apply', operationId: 'applyAudiencePlan', tags: ['Audience'], security, description: 'Apply an immutable AudienceQL plan once. Prior opt-outs require confirmResubscribe.', request: { body: json(z.object({ planId: z.string().regex(/^aqp_[0-9a-f]{32}$/), confirmResubscribe: z.boolean().default(false), evidence: z.string().trim().min(1).max(2000).optional().describe('For a consent change: how these people agreed, for example "Opted in at checkout". Stored with each consent record.') }).strict()) }, responses: { 200: response(ApplyResult), ...errors } }), async c => { const input = c.req.valid('json'); return c.json(ApplyResult.parse(await applyPlan(c.env.db, actor(c, 'manage'), input.planId, input.confirmResubscribe, auditContext(c), input.evidence)), 200); });
 }

@@ -450,7 +450,8 @@ async function campaignViews<T extends CampaignRow>(runtime: Runtime, a: Actor, 
 }
 // Per-statement limits of the reads a dashboard repeats (budgetedRead): a list walk or aggregate gets 5 seconds; the
 // campaign detail's status counts, polled every few seconds while it sends and read through one campaign's index, get 3.
-const READ_LIMIT = { emails: 5, campaign: 3, campaignStats: 5 } as const;
+// A live count of a campaign's audience scans its list's members: 5.
+const READ_LIMIT = { emails: 5, campaign: 3, campaignStats: 5, audience: 5 } as const;
 export async function pageBinding(a: Actor, resource: string, query: Record<string, unknown>) {
   const { cursor: _cursor, limit: _limit, ...filters } = query;
   // This fixed field is part of the hash in already-issued email and campaign cursors.
@@ -1476,7 +1477,9 @@ export function registerSending(app: App) {
     } else if ('campaignId' in input) {
       const {row,footer}=await campaignWithFooter(c.env,a,input.campaignId), d=row.draft, audience=AudienceSpec.safeParse(d.audience);
       const [rendered,recipients,files]=await Promise.all([renderCampaignContent(c.env,d,false),row.reviewId ? row.total : audience.success && !a.domains.length
-        ? wrapModuleLoad(()=>import('./audience.js')).then(m=>m.countCampaignAudience(c.env.db,a,audience.data,d.requiredNotice===true)).then(r=>r.eligible) : undefined,attachmentRows(c.env.db,a,d.attachments)]);
+        // A count that needs longer than its limit is left out (no pacing finding): the check itself still answers.
+        ? wrapModuleLoad(()=>import('./audience.js')).then(m=>budgetedRead(c.env.db,db=>m.countCampaignAudience(db,a,audience.data,d.requiredNotice===true),readLimit(READ_LIMIT.audience)))
+          .then(r=>r.eligible,error=>{ if (error instanceof ApiError && error.code==='READ_TOO_LARGE') return undefined; throw error; }) : undefined,attachmentRows(c.env.db,a,d.attachments)]);
       if (!d.from || (!rendered.html && !rendered.text)) throw new ApiError(422,'CAMPAIGN_INCOMPLETE','Set a sender and add content before checking this campaign.','campaignId');
       mail={from:d.from,fromName:d.fromName,subject:d.subject,...rendered,previewText:d.previewText,tracking:d.tracking,
         ...d.requiredNotice ? {stream:'transactional' as const} : {stream:'marketing' as const,generatedUnsubscribe:true,postalAddress:!!footer.postalAddress},
@@ -1753,11 +1756,12 @@ export function registerSending(app: App) {
     const rendered = await previewParts(c.env, row.draft, footer);
     return c.json({ html: rendered.html ?? '', text: rendered.text ?? '' }, 200);
   });
-  app.openapi(createRoute({ method: 'get', path: '/v1/campaigns/{id}/audience', operationId: 'previewCampaignAudience', description: 'Counts the saved audience right now: matched contacts and how many are eligible, suppressed or unsubscribed. Read-only and never frozen; send or schedule takes its own snapshot and consent is rechecked at dispatch.', tags: ['Campaigns'], security, request: { params: IdParams }, responses: { 200: response(AudienceCounts), ...errors } }), async c => {
+  app.openapi(createRoute({ method: 'get', path: '/v1/campaigns/{id}/audience', operationId: 'previewCampaignAudience', description: `Counts the saved audience right now: matched contacts and how many are eligible, suppressed or unsubscribed. Read-only and never frozen; send or schedule takes its own snapshot and consent is rechecked at dispatch. A count that needs more than ${READ_LIMIT.audience} seconds is refused with 422 READ_TOO_LARGE; the campaign can still be sent.`, tags: ['Campaigns'], security, request: { params: IdParams }, responses: { 200: response(AudienceCounts), ...errors } }), async c => {
     const a = actor(c), row = await findCampaign(c.env.db, a, c.req.valid('param').id);
     const audience = AudienceSpec.safeParse(row.draft.audience);
     if (!audience.success) throw new ApiError(422, 'CAMPAIGN_INCOMPLETE', 'Choose an audience list before counting recipients.', 'audience.listId');
-    return c.json(AudienceCounts.parse(await (await wrapModuleLoad(() => import('./audience.js'))).countCampaignAudience(c.env.db, a, audience.data, row.draft.requiredNotice === true)), 200);
+    const { countCampaignAudience } = await wrapModuleLoad(() => import('./audience.js'));
+    return c.json(AudienceCounts.parse(await budgetedRead(c.env.db, db => countCampaignAudience(db, a, audience.data, row.draft.requiredNotice === true), readLimit(READ_LIMIT.audience))), 200);
   });
   app.openapi(createRoute({ method: 'get', path: '/v1/campaigns/{id}/preview-image', operationId: 'renderCampaignPreviewImage', description: 'Renders the saved campaign draft as a full-page, 720 px wide PNG for visual review. Inline CID images are embedded; remote HTTPS images are loaded by the isolated renderer.' + PREVIEW_ROUTE_NOTE, tags: ['Campaigns'], security, request: { params: IdParams }, responses: { ...previewResponses(CampaignPreviewImage), ...errors } }), async c => {
     refuseHead(c);

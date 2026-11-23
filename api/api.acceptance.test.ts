@@ -15167,15 +15167,16 @@ describe('Dashboard API capabilities', () => {
 
       // A slow statement: a row-security policy sleeps on this workspace's received mail, inside a savepoint that undoes it.
       const workspace = (await db.query('SELECT quote_literal($1::text) AS q', [wid])).rows[0].q as string;
-      const tooBroad = async (path: string, seconds: number) => {
+      const tooBroad = async (path: string, seconds: number, table = 'mail_messages', meanwhile?: () => Promise<void>) => {
         await db.query(`SAVEPOINT slow_read; SET LOCAL statement_timeout = '60s';
-          ALTER TABLE mail_messages ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-          CREATE POLICY slow_read ON mail_messages USING (CASE WHEN workspace_id = ${workspace} THEN pg_sleep(30) IS NOT NULL ELSE true END)`);
+          ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+          CREATE POLICY slow_read ON ${table} USING (CASE WHEN workspace_id = ${workspace} THEN pg_sleep(30) IS NOT NULL ELSE true END)`);
         try {
           const started = performance.now(), reply = await local('GET', path), elapsed = performance.now() - started;
           assert.equal(error(reply, 422, 'READ_TOO_LARGE').message, `This request is too broad to answer within ${seconds} seconds. Narrow the dates or filters.`);
           assert.ok(elapsed > seconds * 1000 - 100 && elapsed < seconds * 1000 + 1000, `${path} answered after ${Math.round(elapsed)} ms`);
           t.diagnostic(`READ-LIMIT ${path}: 422 after ${Math.round(elapsed)} ms`);
+          await meanwhile?.();
         } finally { await db.query('ROLLBACK TO SAVEPOINT slow_read; RELEASE SAVEPOINT slow_read'); }
       };
       await tooBroad('/v1/logs?direction=received', 5);
@@ -15195,6 +15196,35 @@ describe('Dashboard API capabilities', () => {
       } finally { await db.query('ROLLBACK TO SAVEPOINT slow_counts; RELEASE SAVEPOINT slow_counts'); }
       // The policy and its locks went with the savepoint: the same read answers again.
       assert.deepEqual(ok(await local('GET', '/v1/logs?direction=received')).data.map((row: Json) => row.id), [received]);
+
+      // Audience reads scan a workspace's contacts or memberships (parallel scans and hash joins on a large one): each
+      // answers as before, under 5 seconds per statement. A list's own members are the exception: a list with fewer
+      // members than a page reads every contact of the workspace, and its page must load, so it runs under no limit of its own.
+      const list = ok(await local('POST', '/v1/lists', { name: 'Limits' }), 201), contact = ok(await local('POST', '/v1/contacts', { email: 'ada@limits.example', name: 'Ada' }), 201);
+      assert.equal(ok(await local('POST', `/v1/lists/${list.id}/members`, { contactIds: [contact.id] })).added, 1);
+      const segment = ok(await local('POST', '/v1/segments', { name: 'Everyone', rule: { field: 'email', operator: 'neq', value: 'nobody@limits.example' } }), 201);
+      const campaign = ok(await local('POST', '/v1/campaigns', { name: 'Limits', from: 'sender@example.com', subject: 'Limits', html: '<p>Hello</p>', audience: { listId: list.id } }), 201);
+      const counted = { matched: 1, eligible: 0, suppressed: 0, unsubscribed: 1 };
+      const reads: [method: string, path: string, body: Json | undefined, answer: (body: Json) => unknown, expected: unknown, limit?: string][] = [
+        ['GET', '/v1/contacts?search=ADA', undefined, body => body.data.map((row: Json) => [row.id, row.listIds]), [[contact.id, [list.id]]]],
+        ['GET', `/v1/contacts?listId=${list.id}`, undefined, body => body.data.map((row: Json) => row.id), [contact.id], '1min'],
+        ['GET', `/v1/lists/${list.id}/members?consent=unknown`, undefined, body => body.data.map((row: Json) => row.id), [contact.id], '1min'],
+        ['GET', '/v1/lists', undefined, body => body.data.map((row: Json) => [row.id, row.counts.total, row.counts.unknown]), [[list.id, 1, 1]]],
+        ['POST', `/v1/segments/${segment.id}/preview`, { listId: list.id }, body => body, counted],
+        ['GET', `/v1/campaigns/${campaign.id}/audience`, undefined, body => body, counted],
+        ['POST', '/v1/audience-query/query', { statement: "SELECT email FROM contacts WHERE consent = 'unknown'" }, body => [body.matched, body.rows], [1, [{ email: 'ada@limits.example' }]]],
+        // The sendability check counts the campaign's audience for its pacing advice.
+        ['POST', '/v1/emails/check', { campaignId: campaign.id }, body => typeof body.score, 'number'],
+      ];
+      for (const [method, path, body, answer, expected, limit = '5s'] of reads) {
+        await db.query("SET LOCAL statement_timeout = '60s'");
+        assert.deepEqual(answer(ok(await local(method, path, body))), expected, path);
+        assert.equal(await timeout(), limit, path);
+      }
+      // A search that needs longer is refused, and so are member counts: the same lists without counts answer.
+      await tooBroad('/v1/contacts?search=ada', 5, 'audience_contacts');
+      await tooBroad('/v1/lists', 5, 'audience_list_members', async () => assert.deepEqual(ok(await local('GET', '/v1/lists?counts=false')).data.map((row: Json) => [row.id, row.counts]), [[list.id, null]]));
+      assert.deepEqual(ok(await local('GET', '/v1/contacts?search=ada')).data.map((row: Json) => row.id), [contact.id]);
     });
   });
 

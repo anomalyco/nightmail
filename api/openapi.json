@@ -20143,7 +20143,7 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Active contacts with current list IDs. Search is a case-insensitive literal email/name substring. Consent and suppression filters are independent.",
+        "description": "Active contacts with current list IDs. Search is a case-insensitive literal email/name substring. Consent and suppression filters are independent. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters. A page filtered by listId has no such limit.",
         "parameters": [
           {
             "schema": {
@@ -21625,10 +21625,10 @@
                 "false"
               ],
               "default": "true",
-              "description": "false skips member counts (counts is null), for pickers that only need names. Counting scans every membership of each list."
+              "description": "false skips member counts (counts is null), for pickers that only need names. Counting scans every membership of each list: counts that need more than 5 seconds are refused with 422 READ_TOO_LARGE, and the same page with counts=false answers."
             },
             "required": false,
-            "description": "false skips member counts (counts is null), for pickers that only need names. Counting scans every membership of each list.",
+            "description": "false skips member counts (counts is null), for pickers that only need names. Counting scans every membership of each list: counts that need more than 5 seconds are refused with 422 READ_TOO_LARGE, and the same page with counts=false answers.",
             "name": "counts",
             "in": "query"
           }
@@ -24010,7 +24010,7 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Bounded to 1000 matches. Unknown observation history is never classified as inactive. Counts separate suppressed and other non-consenting contacts.",
+        "description": "Bounded to 1000 matches. Unknown observation history is never classified as inactive. Counts separate suppressed and other non-consenting contacts. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.",
         "parameters": [
           {
             "schema": {
@@ -24980,7 +24980,7 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Execute a bounded read-only AudienceQL SELECT against the virtual contacts schema.",
+        "description": "Execute a bounded read-only AudienceQL SELECT against the virtual contacts schema. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.",
         "requestBody": {
           "required": true,
           "content": {
@@ -32812,7 +32812,7 @@
     "/v1/campaigns/{id}/audience": {
       "get": {
         "operationId": "previewCampaignAudience",
-        "description": "Counts the saved audience right now: matched contacts and how many are eligible, suppressed or unsubscribed. Read-only and never frozen; send or schedule takes its own snapshot and consent is rechecked at dispatch.",
+        "description": "Counts the saved audience right now: matched contacts and how many are eligible, suppressed or unsubscribed. Read-only and never frozen; send or schedule takes its own snapshot and consent is rechecked at dispatch. A count that needs more than 5 seconds is refused with 422 READ_TOO_LARGE; the campaign can still be sent.",
         "tags": [
           "Campaigns"
         ],
