@@ -165,8 +165,9 @@ export async function processJobs(runtime: Runtime, handlers: JobHandlerResolver
         log('info', { ...context, code: 'JOB_DEFERRED', availableAt: error.availableAt, claimMs, claimBatchSize, jobMs: Date.now() - jobStarted });
         return;
       }
-      // A refused or dropped database connection retries like any retryable failure instead of failing the job for good:
-      // one transient refusal used to strand a campaign in preparing.
+      // A transient database failure (a refused or dropped connection, a read-only or full database, a statement cancelled
+      // at its time or lock limit) retries like any retryable failure instead of failing the job for good: one transient
+      // refusal used to strand a campaign in preparing.
       // So does a deadlock or serialization victim, which used to fail any handler not wrapped in retryDatabaseFailures.
       const failure = transientDatabaseError(error) || databaseConflict(error) ? databaseUnavailable(true) : error;
       const code = failure instanceof ApiError ? failure.code : 'JOB_INTERNAL_ERROR';

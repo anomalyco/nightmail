@@ -295,7 +295,7 @@ const friendlyErrors: Record<string, (detail: string) => string> = {
   AUDIENCEQL_LIMIT_EXCEEDED: () => 'A bulk change can update at most 10,000 contacts. Filter to a smaller list and try again.',
   AUDIENCE_PLAN_EXPIRED: () => 'This count is more than 15 minutes old. Count again, then confirm.',
   STALE_AUDIENCE_PLAN: () => 'Some of these contacts changed after they were counted. Count again, then confirm.',
-  [tooBroadCode]: () => 'Too much mail to load at once. Narrow the dates or filters.',
+  [tooBroadCode]: () => 'Too much to load at once. Narrow the dates or filters.',
 }
 /**
  * A failed API call. `message` is what to show a person: plain language with a next step, so any `error.message`

@@ -283,7 +283,8 @@ function createShell(loadDocs: () => Promise<{ doc: Record<string, any>; createL
     const conflict = !known && !invalidJson && databaseConflict(error);
     // An MCP approval revoked while its request ran: the object it would own has no grant left.
     const grantRevoked = database.code === '23503' && database.constraint === 'mail_grant_objects_resource_grant_fkey';
-    // A refused or dropped database connection is a retryable 503, not an internal error (see transientDatabaseError).
+    // A refused or dropped database connection, a read-only or full database and a statement cancelled at its time or
+    // lock limit are a retryable 503, not an internal error (see transientDatabaseError).
     const transient = !known && !invalidJson && transientDatabaseError(error);
     // Values Postgres cannot store come from the request: U+0000 in any text (22021, or 22P05 inside JSON) and a
     // date outside its range, such as year 0000 or a +16:00 offset, which ISO 8601 validation accepts (22007/22008/22009). A client error, not a 500.

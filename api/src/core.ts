@@ -623,11 +623,20 @@ export async function getSes(runtime: Runtime, selectedRegion: string, connectio
   const { getSesSync } = await preloadSesTransport(runtime.config.multiTenant);
   return getSesSync(runtime, selectedRegion, connection, runClients);
 }
-// Database connection failures are transient: the statement never reached the database or the connection dropped.
-// Hyperdrive reports its own failures (pool exhausted, origin refused the connection) as SQLSTATE 58000; Postgres
-// passes 53300 (too many connections), class 08 (connection exceptions) and 57P01-57P03 (shutdown, starting up);
-// node-postgres throws plain errors when a socket drops. Drizzle wraps all of them, so read the cause chain.
-const TRANSIENT_SQLSTATES = new Set(['58000', '53300', '57P01', '57P02', '57P03']);
+// Transient database failures: the same request or job works once the database has recovered.
+// Connection failures: the statement never reached the database or the connection dropped. Hyperdrive reports its own
+// (pool exhausted, origin refused the connection) as SQLSTATE 58000; Postgres passes 53300 (too many connections),
+// class 08 (connection exceptions) and 57P01-57P03 (shutdown, starting up); node-postgres throws plain errors when a
+// socket drops.
+// Refused or cancelled statements: Postgres kept nothing of the statement or of the transaction it ran in. The cluster
+// is read-only (25006; a managed cluster whose disk is nearly full refuses every write this way, and PlanetScale's
+// pg_readonly raises it without an SQLSTATE, so it arrives as XX000 and is told apart by its message, never by XX000
+// alone), the disk is full (53100), or the statement was cancelled at statement_timeout (57014; a read's own budget is
+// READ_TOO_LARGE instead, see budgetedRead) or after waiting lock_timeout for a lock (55P03).
+// Either way, statements the request committed before the failing one stay, which is what Idempotency-Key is for.
+// Drizzle wraps all of them, so read the cause chain.
+const TRANSIENT_SQLSTATES = new Set(['58000', '53300', '57P01', '57P02', '57P03', '25006', '53100', '57014', '55P03']);
+const READ_ONLY_CLUSTER = /^pg_readonly: invalid statement because cluster is read-only\b/;
 const TRANSIENT_SOCKET_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'EPIPE']);
 // node-postgres's pool checkout timeout is the same condition as Hyperdrive's "Failed to acquire a connection".
 const TRANSIENT_DRIVER_MESSAGE = /^(?:Connection terminated(?: unexpectedly)?|Client has encountered a connection error and is not queryable|Failed to acquire a connection from the pool\.?|timeout exceeded when trying to connect|Server connection attempt failed: .+)$/;
@@ -647,7 +656,8 @@ export function transientDatabaseError(error: unknown) {
     return errorChain(error).some(e => {
       try {
         const code: unknown = (e as { code?: unknown }).code, message: unknown = e.message;
-        return typeof code === 'string' && (TRANSIENT_SQLSTATES.has(code) || /^08[0-9A-Z]{3}$/.test(code) || TRANSIENT_SOCKET_CODES.has(code)) || typeof message === 'string' && TRANSIENT_DRIVER_MESSAGE.test(message);
+        return typeof code === 'string' && (TRANSIENT_SQLSTATES.has(code) || /^08[0-9A-Z]{3}$/.test(code) || TRANSIENT_SOCKET_CODES.has(code) || code === 'XX000' && typeof message === 'string' && READ_ONLY_CLUSTER.test(message))
+          || typeof message === 'string' && TRANSIENT_DRIVER_MESSAGE.test(message);
       } catch { return false; }
     });
   } catch { return false; } // A hostile proxy is not a database error.
@@ -655,7 +665,7 @@ export function transientDatabaseError(error: unknown) {
 /** A transaction Postgres rolled back to break a deadlock (40P01) or a serialization conflict (40001): nothing it wrote
  * was kept, so the same request or job can safely run again. */
 export const databaseConflict = (error: unknown) => !(error instanceof ApiError) && ['40P01', '40001'].includes(databaseCodeOf(error) ?? '');
-/** What callers see when the database is briefly unreachable: retry, nothing was committed by this request. */
+/** What callers see when the database is briefly unreachable, read-only or too slow: retry (see TRANSIENT_SQLSTATES). */
 export const databaseUnavailable = (background = false) => new ApiError(503, 'DATABASE_UNAVAILABLE', background ? 'The database was briefly unavailable; the job will be retried.' : 'The database is briefly unavailable. Retry the request.', undefined, true);
 export { errorCodeOf, errorTypeOf, log, setLogContext, stackFrames } from './log.js';
 /**

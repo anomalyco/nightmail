@@ -282,7 +282,7 @@ export const updateApiKey = <ThrowOnError extends boolean = false>(options: Opti
 });
 
 /**
- * Active contacts with current list IDs. Search is a case-insensitive literal email/name substring. Consent and suppression filters are independent.
+ * Active contacts with current list IDs. Search is a case-insensitive literal email/name substring. Consent and suppression filters are independent. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.
  */
 export const listContacts = <ThrowOnError extends boolean = false>(options?: Options<ListContactsData, ThrowOnError>): RequestResult<ListContactsResponses, ListContactsErrors, ThrowOnError> => (options?.client ?? client).get<ListContactsResponses, ListContactsErrors, ThrowOnError>({
     security: [
@@ -526,6 +526,9 @@ export const updateContactList = <ThrowOnError extends boolean = false>(options:
     }
 });
 
+/**
+ * Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.
+ */
 export const listListMembers = <ThrowOnError extends boolean = false>(options: Options<ListListMembersData, ThrowOnError>): RequestResult<ListListMembersResponses, ListListMembersErrors, ThrowOnError> => (options.client ?? client).get<ListListMembersResponses, ListListMembersErrors, ThrowOnError>({
     security: [
         { scheme: 'bearer', type: 'http' },
@@ -683,7 +686,7 @@ export const updateSegment = <ThrowOnError extends boolean = false>(options: Opt
 });
 
 /**
- * Bounded to 1000 matches. Unknown observation history is never classified as inactive. Counts separate suppressed and other non-consenting contacts.
+ * Bounded to 1000 matches. Unknown observation history is never classified as inactive. Counts separate suppressed and other non-consenting contacts. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.
  */
 export const previewSegment = <ThrowOnError extends boolean = false>(options: Options<PreviewSegmentData, ThrowOnError>): RequestResult<PreviewSegmentResponses, PreviewSegmentErrors, ThrowOnError> => (options.client ?? client).post<PreviewSegmentResponses, PreviewSegmentErrors, ThrowOnError>({
     security: [
@@ -794,7 +797,7 @@ export const commitContactImport = <ThrowOnError extends boolean = false>(option
 });
 
 /**
- * Execute a bounded read-only AudienceQL SELECT against the virtual contacts schema.
+ * Execute a bounded read-only AudienceQL SELECT against the virtual contacts schema. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.
  */
 export const queryAudience = <ThrowOnError extends boolean = false>(options: Options<QueryAudienceData, ThrowOnError>): RequestResult<QueryAudienceResponses, QueryAudienceErrors, ThrowOnError> => (options.client ?? client).post<QueryAudienceResponses, QueryAudienceErrors, ThrowOnError>({
     security: [
@@ -1769,7 +1772,7 @@ export const previewCampaign = <ThrowOnError extends boolean = false>(options: O
 });
 
 /**
- * Counts the saved audience right now: matched contacts and how many are eligible, suppressed or unsubscribed. Read-only and never frozen; send or schedule takes its own snapshot and consent is rechecked at dispatch.
+ * Counts the saved audience right now: matched contacts and how many are eligible, suppressed or unsubscribed. Read-only and never frozen; send or schedule takes its own snapshot and consent is rechecked at dispatch. A count that needs more than 5 seconds is refused with 422 READ_TOO_LARGE; the campaign can still be sent.
  */
 export const previewCampaignAudience = <ThrowOnError extends boolean = false>(options: Options<PreviewCampaignAudienceData, ThrowOnError>): RequestResult<PreviewCampaignAudienceResponses, PreviewCampaignAudienceErrors, ThrowOnError> => (options.client ?? client).get<PreviewCampaignAudienceResponses, PreviewCampaignAudienceErrors, ThrowOnError>({
     security: [

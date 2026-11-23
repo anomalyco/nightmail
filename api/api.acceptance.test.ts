@@ -15161,15 +15161,16 @@ describe('Dashboard API capabilities', () => {
 
       // A slow statement: a row-security policy sleeps on this workspace's received mail, inside a savepoint that undoes it.
       const workspace = (await db.query('SELECT quote_literal($1::text) AS q', [wid])).rows[0].q as string;
-      const tooBroad = async (path: string, seconds: number) => {
+      const tooBroad = async (path: string, seconds: number, table = 'mail_messages', meanwhile?: () => Promise<void>) => {
         await db.query(`SAVEPOINT slow_read; SET LOCAL statement_timeout = '60s';
-          ALTER TABLE mail_messages ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
-          CREATE POLICY slow_read ON mail_messages USING (CASE WHEN workspace_id = ${workspace} THEN pg_sleep(30) IS NOT NULL ELSE true END)`);
+          ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY, FORCE ROW LEVEL SECURITY;
+          CREATE POLICY slow_read ON ${table} USING (CASE WHEN workspace_id = ${workspace} THEN pg_sleep(30) IS NOT NULL ELSE true END)`);
         try {
           const started = performance.now(), reply = await local('GET', path), elapsed = performance.now() - started;
           assert.equal(error(reply, 422, 'READ_TOO_LARGE').message, `This request is too broad to answer within ${seconds} seconds. Narrow the dates or filters.`);
           assert.ok(elapsed > seconds * 1000 - 100 && elapsed < seconds * 1000 + 1000, `${path} answered after ${Math.round(elapsed)} ms`);
           t.diagnostic(`READ-LIMIT ${path}: 422 after ${Math.round(elapsed)} ms`);
+          await meanwhile?.();
         } finally { await db.query('ROLLBACK TO SAVEPOINT slow_read; RELEASE SAVEPOINT slow_read'); }
       };
       await tooBroad('/v1/logs?direction=received', 5);
@@ -15189,6 +15190,33 @@ describe('Dashboard API capabilities', () => {
       } finally { await db.query('ROLLBACK TO SAVEPOINT slow_counts; RELEASE SAVEPOINT slow_counts'); }
       // The policy and its locks went with the savepoint: the same read answers again.
       assert.deepEqual(ok(await local('GET', '/v1/logs?direction=received')).data.map((row: Json) => row.id), [received]);
+
+      // Audience reads scan a workspace's contacts or memberships (parallel scans and hash joins on a large one): each
+      // answers as before, under 5 seconds per statement.
+      const list = ok(await local('POST', '/v1/lists', { name: 'Limits' }), 201), contact = ok(await local('POST', '/v1/contacts', { email: 'ada@limits.example', name: 'Ada' }), 201);
+      assert.equal(ok(await local('POST', `/v1/lists/${list.id}/members`, { contactIds: [contact.id] })).added, 1);
+      const segment = ok(await local('POST', '/v1/segments', { name: 'Everyone', rule: { field: 'email', operator: 'neq', value: 'nobody@limits.example' } }), 201);
+      const campaign = ok(await local('POST', '/v1/campaigns', { name: 'Limits', from: 'sender@example.com', subject: 'Limits', html: '<p>Hello</p>', audience: { listId: list.id } }), 201);
+      const counted = { matched: 1, eligible: 0, suppressed: 0, unsubscribed: 1 };
+      const reads: [method: string, path: string, body: Json | undefined, answer: (body: Json) => unknown, expected: unknown][] = [
+        ['GET', '/v1/contacts?search=ADA', undefined, body => body.data.map((row: Json) => [row.id, row.listIds]), [[contact.id, [list.id]]]],
+        ['GET', `/v1/lists/${list.id}/members?consent=unknown`, undefined, body => body.data.map((row: Json) => row.id), [contact.id]],
+        ['GET', '/v1/lists', undefined, body => body.data.map((row: Json) => [row.id, row.counts.total, row.counts.unknown]), [[list.id, 1, 1]]],
+        ['POST', `/v1/segments/${segment.id}/preview`, { listId: list.id }, body => body, counted],
+        ['GET', `/v1/campaigns/${campaign.id}/audience`, undefined, body => body, counted],
+        ['POST', '/v1/audience-query/query', { statement: "SELECT email FROM contacts WHERE consent = 'unknown'" }, body => [body.matched, body.rows], [1, [{ email: 'ada@limits.example' }]]],
+        // The sendability check counts the campaign's audience for its pacing advice.
+        ['POST', '/v1/emails/check', { campaignId: campaign.id }, body => typeof body.score, 'number'],
+      ];
+      for (const [method, path, body, answer, expected] of reads) {
+        await db.query("SET LOCAL statement_timeout = '60s'");
+        assert.deepEqual(answer(ok(await local(method, path, body))), expected, path);
+        assert.equal(await timeout(), '5s', path);
+      }
+      // A search that needs longer is refused, and so are member counts: the same lists without counts answer.
+      await tooBroad('/v1/contacts?search=ada', 5, 'audience_contacts');
+      await tooBroad('/v1/lists', 5, 'audience_list_members', async () => assert.deepEqual(ok(await local('GET', '/v1/lists?counts=false')).data.map((row: Json) => [row.id, row.counts]), [[list.id, null]]));
+      assert.deepEqual(ok(await local('GET', '/v1/contacts?search=ada')).data.map((row: Json) => row.id), [contact.id]);
     });
   });
 
@@ -15320,7 +15348,11 @@ describe('Dashboard API capabilities', () => {
       // Built where it is thrown, as a driver's error is: a stack shows where an error was made, and the log keeps Bane's frames.
       t.mock.method(runtime.db, 'execute', ((...args: Parameters<typeof execute>) => { if (fault) { const thrown = fault as Error; fault = null; throw new Error(thrown.message, { cause: thrown.cause }); } return execute(...args); }) as typeof execute);
       const refused = async (failure: unknown) => { fault = failure; logs.length = 0; return request('GET', '/v1/emails', reader.secret); };
-      for (const failure of [wrapped('58000', 'Failed to acquire a connection from the pool.'), wrapped('58000', 'Server connection attempt failed: connection_refused'), wrapped('53300', 'sorry, too many clients already'), wrapped('08006', 'connection failure'), new Error('Connection terminated unexpectedly')]) {
+      // So is a statement Postgres refused or cancelled, keeping nothing of it: a read-only cluster (PlanetScale's pg_readonly
+      // arrives as XX000 with this message), a full disk, and a statement past its time or lock limit.
+      const readOnly = wrapped('XX000', 'pg_readonly: invalid statement because cluster is read-only');
+      for (const failure of [wrapped('58000', 'Failed to acquire a connection from the pool.'), wrapped('58000', 'Server connection attempt failed: connection_refused'), wrapped('53300', 'sorry, too many clients already'), wrapped('08006', 'connection failure'), new Error('Connection terminated unexpectedly'),
+        readOnly, wrapped('25006', 'cannot execute INSERT in a read-only transaction'), wrapped('53100', 'could not extend file "base/16384/16397": No space left on device'), wrapped('57014', 'canceling statement due to statement timeout'), wrapped('55P03', 'canceling statement due to lock timeout')]) {
         const reply = await refused(failure);
         const body = error(reply, 503, 'DATABASE_UNAVAILABLE');
         assert.deepEqual([body.retryable, reply.headers.get('retry-after')], [true, '1']);
@@ -15332,6 +15364,8 @@ describe('Dashboard API capabilities', () => {
       const broken = await refused(wrapped('42703', 'column "missing" does not exist'));
       error(broken, 500, 'INTERNAL_ERROR');
       assert.equal(logs.find(line => line.code === 'INTERNAL_ERROR')?.databaseCode, '42703');
+      // XX000 is every internal error: only the read-only message is transient.
+      error(await refused(wrapped('XX000', 'unexpected chunk number 2 (expected 1) for toast value 16397')), 500, 'INTERNAL_ERROR');
       assert.equal(ok(await request('GET', '/v1/emails', reader.secret)).data.length >= 0, true, 'the next request succeeds');
       t.mock.restoreAll();
       for (const level of ['error', 'warn', 'info'] as const) t.mock.method(console, level, (line: string) => { try { logs.push(JSON.parse(line)); } catch {} });
@@ -15347,7 +15381,37 @@ describe('Dashboard API capabilities', () => {
       };
       assert.deepEqual(await job(unique('refused-job-'), wrapped('58000', 'Failed to acquire a connection from the pool.')), { status: 'pending', attempts: 1, last_error: 'DATABASE_UNAVAILABLE', later: true });
       assert.equal(logs.find(line => line.code === 'DATABASE_UNAVAILABLE' && line.operation === 'campaign.run')?.databaseCode, '58000');
+      assert.deepEqual(await job(unique('read-only-job-'), readOnly), { status: 'pending', attempts: 1, last_error: 'DATABASE_UNAVAILABLE', later: true });
       assert.deepEqual(await job(unique('broken-job-'), wrapped('42703', 'column "missing" does not exist')), { status: 'failed', attempts: 1, last_error: 'JOB_INTERNAL_ERROR', later: true });
+    });
+  });
+
+  // Production, 2026-11-23: the database's disk filled and the cluster was read-only for three and a half minutes. Every
+  // write was refused and answered 500 INTERNAL_ERROR, not retryable, so callers dropped sends they should have retried.
+  test('database refusals: a write a read-only database refuses and a statement cancelled at its time limit are a retryable 503 that kept nothing; the retry succeeds', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local }) => {
+      const wid = runtime.config.workspaceId, name = unique('refused-list-'), logs: Json[] = [];
+      for (const level of ['error', 'warn'] as const) t.mock.method(console, level, (line: string) => { try { logs.push(JSON.parse(line)); } catch {} });
+      const kept = async () => (await db.query('SELECT count(*)::int AS n FROM audience_lists WHERE workspace_id = $1 AND name = $2', [wid, name])).rows[0].n;
+      // Each refusal is Postgres's own, set up inside a savepoint that undoes it.
+      const refused = async (sqlstate: string, setup: string) => {
+        logs.length = 0;
+        await db.query(`SAVEPOINT refused; ${setup}`);
+        let reply: Reply;
+        try { reply = await local('POST', '/v1/lists', { name }); } finally { await db.query('ROLLBACK TO SAVEPOINT refused; RELEASE SAVEPOINT refused'); }
+        const body = error(reply, 503, 'DATABASE_UNAVAILABLE');
+        assert.deepEqual([body.retryable, reply.headers.get('retry-after'), logs.find(line => line.code === 'DATABASE_UNAVAILABLE' && line.stack)?.databaseCode, await kept()], [true, '1', sqlstate, 0]);
+      };
+      const onInsert = (body: string) => `CREATE FUNCTION refuse_list() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN ${body} END $$;
+        CREATE TRIGGER refuse_list BEFORE INSERT ON audience_lists FOR EACH STATEMENT EXECUTE FUNCTION refuse_list()`;
+      // PlanetScale's read-only mode raises no SQLSTATE of its own: XX000 with this message.
+      await refused('XX000', onInsert("RAISE EXCEPTION 'pg_readonly: invalid statement because cluster is read-only' USING ERRCODE = 'XX000';"));
+      // Postgres's own read-only refusal, of the request's first write.
+      await refused('25006', 'SET LOCAL transaction_read_only = on');
+      // A statement past statement_timeout is cancelled.
+      await refused('57014', `${onInsert('PERFORM pg_sleep(30); RETURN NULL;')}; SET LOCAL statement_timeout = '1s'`);
+      assert.equal(ok(await local('POST', '/v1/lists', { name }), 201).name, name);
+      assert.equal(await kept(), 1);
     });
   });
 });

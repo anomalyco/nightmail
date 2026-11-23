@@ -7052,7 +7052,7 @@ export type ListContactListsData = {
         limit?: number;
         search?: string;
         /**
-         * false skips member counts (counts is null), for pickers that only need names. Counting scans every membership of each list.
+         * false skips member counts (counts is null), for pickers that only need names. Counting scans every membership of each list: counts that need more than 5 seconds are refused with 422 READ_TOO_LARGE, and the same page with counts=false answers.
          */
         counts?: 'true' | 'false';
     };
