@@ -100,6 +100,7 @@ END $$;
 
 CREATE OR REPLACE FUNCTION sending_tally_update() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
+  IF EXISTS (SELECT 1 FROM new_mail WHERE campaign_id IS NOT NULL UNION ALL SELECT 1 FROM old_mail WHERE campaign_id IS NOT NULL) THEN
   WITH diffs AS (
     SELECT workspace_id, campaign_id, status, simulated,
       sum(d_cnt) AS email_count, sum(d_acc) AS accepted, sum(d_del) AS delivered,
@@ -136,7 +137,23 @@ BEGIN
     workspace_id, campaign_id, status, simulated,
     email_count, accepted, delivered, bounced, complained, opened, clicked, failed, delivery_delayed
   ) SELECT * FROM diffs;
+  END IF;
 
+  IF EXISTS (
+    SELECT 1 FROM new_mail n JOIN old_mail o ON o.id = n.id
+    WHERE (n.status IS DISTINCT FROM o.status AND (
+            n.status IN ('accepted','sent','delivered','bounced','complained','delayed','rejected','rendering_failed','suppressed')
+            OR o.status IN ('accepted','sent','delivered','bounced','complained','delayed','rejected','rendering_failed','suppressed')))
+       OR (n.provider_id IS NULL) IS DISTINCT FROM (o.provider_id IS NULL)
+       OR n.event_outcomes IS DISTINCT FROM o.event_outcomes
+       OR n.simulated IS DISTINCT FROM o.simulated
+       OR n.region IS DISTINCT FROM o.region
+       OR n.feedback_topic_arn IS DISTINCT FROM o.feedback_topic_arn
+       OR date_trunc('hour', n.created_at, 'UTC') IS DISTINCT FROM date_trunc('hour', o.created_at, 'UTC')
+       OR (n.snapshot->>'kind') IS DISTINCT FROM (o.snapshot->>'kind')
+       OR (n.snapshot ? 'bulk') IS DISTINCT FROM (o.snapshot ? 'bulk')
+       OR (n.campaign_id IS NOT NULL) IS DISTINCT FROM (o.campaign_id IS NOT NULL)
+  ) THEN
   WITH rows AS (
     SELECT 1::bigint AS sign, workspace_id, region, coalesce(snapshot->>'kind', '') AS kind,
       date_trunc('hour', created_at, 'UTC') AS hour, coalesce(feedback_topic_arn, '') AS topic_arn, simulated,
@@ -206,6 +223,7 @@ BEGIN
      OR real_emails <> 0 OR real_accepted <> 0 OR real_delivered <> 0 OR real_bounced <> 0
      OR real_first_sends <> 0 OR real_first_bounced <> 0 OR real_complained <> 0 OR real_suppressed <> 0
      OR real_marketing_delivered <> 0 OR real_marketing_clicked <> 0;
+  END IF;
 
   RETURN NULL;
 END $$;
