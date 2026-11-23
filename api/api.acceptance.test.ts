@@ -33462,9 +33462,30 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await db.query('ALTER TABLE sending_emails ENABLE TRIGGER sending_tally_insert, ENABLE TRIGGER sending_tally_update, ENABLE TRIGGER sending_tally_delete');
       assert.equal(await talliesEnabled(runtime.db), true);
 
+      // 2b. Record real feedback sequences (bounce without bounceType, validation_suppressed without bounceSubType,
+      // duplicate delivery_delay, and delivery_delay followed by delivery) via recordEmailEvent and verify tallies
+      // match raw sending_email_events semantics (no spurious deliveryDelayed from operation_events's ELSE 129) and
+      // reconcile produces 0 drift.
+      const { recordEmailEvent } = await import('./src/sending.js');
+      await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,campaign_id,review_id,review_ordinal,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,status,provider_id,created_at) VALUES
+        ('t_seq_bnc',$1,$3,'fixture',$2,$4,5,'n@e.com','["s1@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'bounced','ps1',$5),
+        ('t_seq_val',$1,$3,'fixture',$2,$4,6,'n@e.com','["s2@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'sent','ps2',$5),
+        ('t_seq_dly',$1,$3,'fixture',$2,$4,7,'n@e.com','["s3@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'accepted','ps3',$5)`,
+        [wid, cid, REGION, rev, at(400_000)]);
+      await recordEmailEvent(runtime, { workspaceId: wid, emailId: 't_seq_bnc', type: 'bounce', externalId: unique('seq'), data: { synthetic: true } });
+      await recordEmailEvent(runtime, { workspaceId: wid, emailId: 't_seq_val', type: 'validation_suppressed', externalId: unique('seq'), data: { synthetic: true } });
+      await recordEmailEvent(runtime, { workspaceId: wid, emailId: 't_seq_dly', type: 'delivery_delay', externalId: unique('seq'), data: { synthetic: true } });
+      await recordEmailEvent(runtime, { workspaceId: wid, emailId: 't_seq_dly', type: 'delivery_delay', externalId: unique('seq'), data: { synthetic: true } });
+      await recordEmailEvent(runtime, { workspaceId: wid, emailId: 't_seq_dly', type: 'delivery', externalId: unique('seq'), data: { synthetic: true } });
+      const seqStats = ok(await request('GET', `/v1/campaigns/${cid}/stats`, key));
+      assert.equal(seqStats.totals.deliveryDelayed, 1, 'Only t_seq_dly counts as deliveryDelayed (once across duplicate delays + delivery); bounce and validation_suppressed never set deliveryDelayed.');
+      assert.equal(seqStats.totals.bounced, 2, 't_m2 and t_seq_bnc bounced; validation_suppressed did not.');
+      assert.equal(seqStats.totals.delivered, 2, 't_m1 and t_seq_dly delivered.');
+      assert.equal((await db.query('SELECT * FROM reconcile_sending_campaign_tallies($1,$2)', [wid, cid])).rowCount, 0, 'Zero tally drift after bounce/validation_suppressed/duplicate-delay/delivery sequence.');
+
       // 3. Cancel inFlight reads sending_campaign_tallies without scanning sending_emails.
       const cancelRes = ok(await local('POST', `/v1/campaigns/${cid}/cancel`, {}));
-      assert.equal(cancelRes.inFlight, 2, 't_m1 (delivered) and t_m3 (accepted) are inFlight; t_m4 (queued) canceled.');
+      assert.equal(cancelRes.inFlight, 3, 't_m1 (delivered), t_m3 (accepted) and t_seq_dly (delivered) are inFlight; t_m4 (queued) canceled.');
 
       // 4. Bounded folding collapses delta rows and logs SENDING_TALLIES_UNFOLDED_HIGH when above threshold.
       await db.query(`INSERT INTO sending_campaign_tallies(workspace_id,campaign_id,status,simulated,email_count)
@@ -33474,7 +33495,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const folded = await foldSendingTallies(runtime);
       assert.ok(folded.campaignRemoved > 0);
       const afterFold = Number((await db.query('SELECT count(*) AS n FROM sending_campaign_tallies WHERE workspace_id=$1 AND campaign_id=$2', [wid, cid])).rows[0].n);
-      assert.ok(afterFold <= 4, 'Fold collapsed all repeated delta rows to one per (status, simulated).');
+      assert.equal(afterFold, 5, 'Fold collapsed all repeated delta rows to one per (status, simulated): delivered, bounced, accepted, canceled, suppressed.');
+      assert.equal(folded.campaignUnfolded, 0);
       assert.ok(UNFOLDED_ALERT_THRESHOLD > 0);
 
       // 5. Daily exact recount detects injected drift, fixes it in one snapshot, and logs *_DRIFT at error level.
