@@ -189,6 +189,6 @@ export type EndpointRecord = typeof endpoints.$inferSelect;
 export const mailboxWebhookDeliveries = pgTable('mailbox_webhook_deliveries', {
   id: text('id').primaryKey(), ...scope(), webhookId: text('webhook_id').notNull(), eventSeq: bigint('event_seq', { mode: 'number' }),
   generation:integer('generation').notNull().default(0),payload: jsonb('payload').$type<Record<string, unknown>>().notNull(), status: text('status').$type<'pending' | 'delivered' | 'failed' | 'paused'>().notNull().default('pending'),
-  attemptCount: integer('attempt_count').notNull().default(0), lastStatusCode: integer('last_status_code'), lastError: text('last_error'),
+  attemptCount: integer('attempt_count').notNull().default(0), attemptsStarted: integer('attempts_started').notNull().default(0), lastStatusCode: integer('last_status_code'), lastError: text('last_error'),
   createdAt: ts('created_at').notNull().defaultNow(), updatedAt: ts('updated_at').notNull().defaultNow(),
 });

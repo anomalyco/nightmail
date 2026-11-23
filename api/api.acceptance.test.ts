@@ -31168,6 +31168,46 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       }finally{runtime.webhookFetch=transport;}
     });
   });
+  test('a resumed event subscription keeps an attempt that was never recorded: at most 1 + retryAttempts posts',async t=>{
+    // tear/delivery witness DLV-1 (retryAttempts 1): ingest m1 b, run K m1:U, crash K, expire m1:U, pause U, run L m1:U, unpause U.
+    await simulatedSesFixture(t,async({runtime,local,db})=>{
+      const {processJobs}=await import('./src/jobs.js'),{mailboxEventJobs}=await import('./src/mailbox-events.js');
+      await db.query('CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP');
+      const wid=runtime.config.workspaceId;
+      const sub=ok(await local('POST','/v1/inbound/webhooks',{url:'https://example.com/plain-held',eventTypes:['message.received'],retryAttempts:1}),201);
+      await db.query('INSERT INTO mailbox_webhook_deliveries(id,workspace_id,webhook_id,event_seq,payload) VALUES($1,$2,$3,1,$4)',['mwd_plain_held',wid,sub.id,{id:'mev_plain_held',type:'message.received',messageId:'msg_plain_held',data:{}}]);
+      await db.query("INSERT INTO jobs(id,type,workspace_id,payload) VALUES('job_plain_held','mailbox.webhook',$1,'{\"deliveryId\":\"mwd_plain_held\"}')",[wid]);
+      const pending=async()=>(await db.query("SELECT attempts FROM jobs WHERE workspace_id=$1 AND type='mailbox.webhook' AND status='pending'",[wid])).rows;
+      const delivery=async()=>(await db.query("SELECT status,attempt_count FROM mailbox_webhook_deliveries WHERE id='mwd_plain_held'")).rows[0];
+      const run=async()=>{await db.query("UPDATE jobs SET available_at=now() WHERE workspace_id=$1 AND status='pending'",[wid]);await processJobs(runtime,mailboxEventJobs,1,1,20000,'webhooks');};
+      const pause=async(paused:boolean)=>{ok(await local('PATCH',`/v1/inbound/webhooks/${sub.id}`,{paused}));if(!paused)await mailboxEventJobs['mailbox.resumeDeliveries']!(runtime,{hook:sub.id},{id:unique('job'),workspaceId:wid,attempts:1});};
+      // The request leaves, then the runner is lost: nothing after it is recorded, and an event subscription has no attempt row.
+      const lost={on:false},transport=runtime.webhookFetch;let posts=0;
+      const gone=new Proxy(runtime.db,{get(target,p){const v=Reflect.get(target,p);return typeof v==='function'?(...a:unknown[])=>{if(lost.on)throw new Error('Synthetic lost runner');return v.apply(target,a);}:v;}});
+      try{
+        runtime.webhookFetch=async()=>{posts++;lost.on=true;return {status:503};};
+        await assert.rejects(processJobs({...runtime,db:gone},mailboxEventJobs,1,1,20000,'webhooks'));
+        assert.deepEqual((await db.query("SELECT status,attempts FROM jobs WHERE id='job_plain_held'")).rows[0],{status:'running',attempts:1});
+        assert.deepEqual(await delivery(),{status:'pending',attempt_count:0});
+        // Its lease expires while the webhook is paused: the next claim parks the delivery.
+        await db.query("UPDATE jobs SET lease_until=now()-interval '1 second' WHERE id='job_plain_held'");
+        runtime.webhookFetch=async()=>{posts++;return {status:503};};
+        await pause(true);await processJobs(runtime,mailboxEventJobs,1,1,20000,'webhooks');
+        assert.equal(posts,1);assert.deepEqual(await delivery(),{status:'paused',attempt_count:0});
+        // Unpausing resumes it with the lost attempt spent: one attempt is left, not two.
+        await pause(false);
+        assert.deepEqual(await pending(),[{attempts:1}]);
+        await run();await run();
+        assert.equal(posts,2);assert.deepEqual(await delivery(),{status:'failed',attempt_count:1});
+        // A claim that parks sends nothing and spends nothing: a delivery paused before its first attempt keeps both.
+        await db.query('INSERT INTO mailbox_webhook_deliveries(id,workspace_id,webhook_id,event_seq,payload) VALUES($1,$2,$3,2,$4)',['mwd_plain_fresh',wid,sub.id,{id:'mev_plain_fresh',type:'message.received',messageId:'msg_plain_fresh',data:{}}]);
+        await db.query("INSERT INTO jobs(id,type,workspace_id,payload) VALUES('job_plain_fresh','mailbox.webhook',$1,'{\"deliveryId\":\"mwd_plain_fresh\"}')",[wid]);
+        for(let i=0;i<2;i++){await pause(true);await run();await pause(false);assert.deepEqual(await pending(),[{attempts:0}]);}
+        await run();await run();
+        assert.equal(posts,4);
+      }finally{runtime.webhookFetch=transport;}
+    });
+  });
   test('a plain event subscription takes the delivery fence: paused after its claim, claimed stale or behind the breaker',async t=>{
     // tear/delivery witnesses: ingest m1 b, claim K m1:U, pause U, go K; ingest m1 b, claim K m1:U, expire m1:U,
     // run L m1:U, reply L 410, go K; three timeouts, then run K m1:U (the breaker defers, attempts kept).
@@ -31209,6 +31249,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         await due();await processJobs(runtime,mailboxEventJobs,1,1,20000,'webhooks');
         assert.equal(posts,5);
         assert.deepEqual((await db.query("SELECT status,attempts,last_error FROM jobs WHERE id='job_plain_breaker'")).rows[0],{status:'pending',attempts:3,last_error:null});
+        // Nor does the deferral count as an attempt the gate let through: unpausing would resume it with three spent.
+        assert.equal((await db.query("SELECT attempts_started FROM mailbox_webhook_deliveries WHERE id='mwd_plain_breaker'")).rows[0].attempts_started,3);
       }finally{runtime.webhookFetch=transport;}
     });
   });
