@@ -14,15 +14,19 @@ type Gate = { type: EndpointType; per_minute: number | null; retry_on_timeout: b
  * resumes it), and `current` is false when the claim went stale: its job lease expired (another
  * runner may claim or already claimed it), or the delivery settled or was resumed as a new
  * generation. No row: the endpoint is gone.
+ * With `count` (a plain event subscription, which has no attempt row) it also counts the attempt it
+ * lets through on the delivery, recorded or not, so unpausing resumes with those attempts spent.
  */
 type Claim = { id: string; attempts: number; leaseFence?: string };
-const gate = async (db: DbExecutor, w: string, h: ClaimedWebhook, claim?: Claim) => (await db.execute<Gate>(sql`WITH g AS MATERIALIZED (
+const gate = async (db: DbExecutor, w: string, h: ClaimedWebhook, claim?: Claim, count = false) => (await db.execute<Gate>(sql`WITH g AS MATERIALIZED (
     SELECT h.type,h.per_minute,h.retry_on_timeout,h.idempotent,h.paused,(q.status='pending' AND q.generation=${h.generation}
       AND (${claim?.leaseFence ?? null}::text IS NULL OR EXISTS(SELECT FROM jobs j WHERE j.id=${claim?.id ?? ''} AND j.attempts=${claim?.attempts ?? 0} AND j.status='running' AND j.lease_until=${claim?.leaseFence ?? null}::timestamptz))) AS current
     FROM mailbox_webhooks h JOIN mailbox_webhook_deliveries q ON q.workspace_id=h.workspace_id AND q.id=${h.delivery_id} AND q.webhook_id=h.id
     WHERE h.workspace_id=${w} AND h.id=${h.webhook_id} FOR SHARE OF h,q),
   parked AS (UPDATE mailbox_webhook_deliveries x SET status='paused',last_error='ENDPOINT_PAUSED',updated_at=now() FROM g
-    WHERE g.paused AND g.current AND x.workspace_id=${w} AND x.id=${h.delivery_id} AND x.generation=${h.generation} AND x.status='pending')
+    WHERE g.paused AND g.current AND x.workspace_id=${w} AND x.id=${h.delivery_id} AND x.generation=${h.generation} AND x.status='pending'),
+  started AS (UPDATE mailbox_webhook_deliveries x SET attempts_started=attempts_started+1 FROM g
+    WHERE ${count}::boolean AND NOT g.paused AND g.current AND x.workspace_id=${w} AND x.id=${h.delivery_id} AND x.generation=${h.generation} AND x.status='pending')
   SELECT * FROM g`)).rows[0];
 /** Node's errors for a connection that never carried the request: refused, no route, a failed name lookup or TLS handshake.
  * Nothing left, so the outcome is known and a retry cannot duplicate. A reset or a timeout may follow a sent request and
@@ -41,7 +45,8 @@ const keepAttempts = (e: unknown) => e instanceof JobDeferred ? new JobDeferred(
  * Retries all leave through ActionRetry, so backoff, jitter and Retry-After are identical for
  * every endpoint type. An attempt with an unknown outcome is replayed only when the endpoint is
  * idempotent or opted in to retryOnTimeout. Plain event subscriptions keep their webhook semantics
- * (at-least-once with Webhook-Id, no attempt row or rate slot), so their gate is one autocommit statement.
+ * (at-least-once with Webhook-Id, no attempt row or rate slot), so their gate is one autocommit statement,
+ * which counts the attempt on the delivery itself.
  */
 export async function deliverEndpoint(runtime: Runtime, w: string, h: ClaimedWebhook, send: () => Promise<Sent>, claim?: Claim): Promise<Sent> {
   const grants = (h.payload as { grants?: string[] }).grants;
@@ -54,9 +59,13 @@ export async function deliverEndpoint(runtime: Runtime, w: string, h: ClaimedWeb
   }
   const action = (h.payload as { ritualAction?: string }).ritualAction;
   if (!action && !h.routed) {
-    const row = await gate(runtime.db, w, h, claim);
+    const row = await gate(runtime.db, w, h, claim, true);
     if (!row?.current || row.paused) return { status: 0, parked: true };
-    try { return await send(); } catch (e) { throw keepAttempts(e); }
+    try { return await send(); } catch (e) {
+      // The breaker deferred it: nothing left, so the gate's count of attempts goes back down.
+      if (e instanceof JobDeferred) await runtime.db.execute(sql`UPDATE mailbox_webhook_deliveries SET attempts_started=greatest(attempts_started-1,0) WHERE workspace_id=${w} AND id=${h.delivery_id} AND generation=${h.generation}`);
+      throw keepAttempts(e);
+    }
   }
   const fence = await runtime.db.transaction(async tx => {
     const row = await gate(tx, w, h, claim);
