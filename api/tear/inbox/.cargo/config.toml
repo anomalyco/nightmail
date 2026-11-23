@@ -1,3 +1,0 @@
-[net]
-# tear is a private anomalyco repository; let cargo use the git/gh credentials.
-git-fetch-with-cli = true

@@ -1,0 +1,955 @@
+{
+  "version": 1,
+  "modelId": "inbox",
+  "cases": [
+    {
+      "name": "smoke-accept-store-seen-sync",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Seen",
+          "box": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Sync",
+          "box": "A"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        }
+      ],
+      "expected": {
+        "outcome": "pass",
+        "control": true
+      },
+      "note": "Control: accept, store, mark seen, sync, and list folders satisfy all reply, idle, and temporal checks"
+    },
+    {
+      "name": "canary-resurrect-after-expunge",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "quota1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Expunge",
+          "box": "A",
+          "msg": "m1",
+          "role": "inbox"
+        }
+      ],
+      "bug": "canary_resurrect",
+      "expected": {
+        "outcome": "fail",
+        "operator": "inbox.no-resurrection/membership/0",
+        "verdict": "violated",
+        "canary": true
+      },
+      "note": "Canary: planted host bug emits member.present right after member.removed so temporal property inbox.no-resurrection must bite"
+    },
+    {
+      "name": "delete-races-subscribe",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "quota1"
+        },
+        {
+          "op": "Delete",
+          "conn": "W",
+          "box": "A"
+        },
+        {
+          "op": "Subscribe",
+          "conn": "V",
+          "box": "A"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Regression 1: subscribe waiting on inbox_state behind DELETE /v1/inboxes/{id} sees NOT_FOUND after commit"
+    },
+    {
+      "name": "delete-races-seen",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "quota1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Delete",
+          "conn": "W",
+          "box": "A"
+        },
+        {
+          "op": "Seen",
+          "conn": "V",
+          "box": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Regression 2: flag change waiting behind DELETE /v1/inboxes/{id} must not mutate the deleted inbox (migration 151)"
+    },
+    {
+      "name": "quota-reached-then-expunge-frees-slot",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "quota1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m2"
+        },
+        {
+          "op": "Expunge",
+          "box": "A",
+          "msg": "m1",
+          "role": "inbox"
+        },
+        {
+          "op": "Accept",
+          "msg": "m3",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m3"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Regression 4: quota=1 holds m2 unfiled, expunging m1 frees the slot so m3 is filed"
+    },
+    {
+      "name": "prune-floor-sync-and-sync-ahead",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "quota1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "ab"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Move",
+          "box": "A",
+          "msg": "m1",
+          "src": "inbox",
+          "dst": "trash"
+        },
+        {
+          "op": "Sync",
+          "box": "A"
+        },
+        {
+          "op": "Age"
+        },
+        {
+          "op": "Prune"
+        },
+        {
+          "op": "Sync",
+          "box": "A"
+        },
+        {
+          "op": "SyncAhead",
+          "box": "A"
+        },
+        {
+          "op": "Sync",
+          "box": "B"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Regression 5: checkpoint equal to pruned expunge-history floor stays valid; since > state is CHANGES_EXPIRED"
+    },
+    {
+      "name": "prune-expires-cursor-then-resync",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "quota1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Move",
+          "box": "A",
+          "msg": "m1",
+          "src": "inbox",
+          "dst": "trash"
+        },
+        {
+          "op": "Age"
+        },
+        {
+          "op": "Prune"
+        },
+        {
+          "op": "Sync",
+          "box": "A"
+        },
+        {
+          "op": "Seen",
+          "box": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Sync",
+          "box": "A"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Regression 6: cursor below pruned floor gets CHANGES_EXPIRED, resyncs from folders, and resumes"
+    },
+    {
+      "name": "reopen-coalesced-and-window-serialized",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "conn": "W",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "Accept",
+          "conn": "V",
+          "msg": "m1",
+          "recips": "ab"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        },
+        {
+          "op": "Commit",
+          "conn": "V"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        },
+        {
+          "op": "Folders",
+          "box": "B"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Concurrent SNS notifications serialize on WINDOW (migration 157) and coalesce reopen into pending job (migration 155)"
+    },
+    {
+      "name": "subscribe-deleted-inbox-locks-state",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "quota1"
+        },
+        {
+          "op": "Delete",
+          "box": "A"
+        },
+        {
+          "op": "Subscribe",
+          "conn": "V",
+          "box": "A"
+        },
+        {
+          "op": "Subscribe",
+          "conn": "W",
+          "box": "A"
+        },
+        {
+          "op": "Commit",
+          "conn": "V"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "inbox_edit_folder calls inbox_lock_visible before checking delete_after, locking inbox_state until swept"
+    },
+    {
+      "name": "duplicate-ses-id-dedup-and-no-resurrection",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Expunge",
+          "box": "A",
+          "msg": "m1",
+          "role": "inbox"
+        },
+        {
+          "op": "Accept",
+          "msg": "d1",
+          "recips": "ab"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "d1"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        },
+        {
+          "op": "Folders",
+          "box": "B"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Duplicate SES receipt d1 deduplicates by Message-ID, does not resurrect in A, and delivers to B"
+    },
+    {
+      "name": "second-runner-after-lease-expiry",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "Claim",
+          "conn": "I",
+          "msg": "m1"
+        },
+        {
+          "op": "Claim",
+          "conn": "J",
+          "msg": "m1"
+        },
+        {
+          "op": "StoreClaimed",
+          "conn": "I"
+        },
+        {
+          "op": "StoreClaimed",
+          "conn": "J"
+        },
+        {
+          "op": "Commit",
+          "conn": "I"
+        },
+        {
+          "op": "Commit",
+          "conn": "J"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Second ingest runner J waits on ingest lane, then sees receipt already processed"
+    },
+    {
+      "name": "ingest-crash-abort-and-retry",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "Claim",
+          "conn": "I",
+          "msg": "m1"
+        },
+        {
+          "op": "StoreClaimed",
+          "conn": "I"
+        },
+        {
+          "op": "Abort",
+          "conn": "I"
+        },
+        {
+          "op": "Claim",
+          "conn": "I",
+          "msg": "m1"
+        },
+        {
+          "op": "StoreClaimed",
+          "conn": "I"
+        },
+        {
+          "op": "Commit",
+          "conn": "I"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Ingest crash before commit leaves no partial state; retry succeeds cleanly"
+    },
+    {
+      "name": "api-abort-no-uid-modseq-leak",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Move",
+          "conn": "W",
+          "box": "A",
+          "msg": "m1",
+          "src": "inbox",
+          "dst": "trash"
+        },
+        {
+          "op": "Abort",
+          "conn": "W"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Aborted API mutation rolls back UID, MODSEQ, and folder counters without leaking"
+    },
+    {
+      "name": "same-folder-copy-ambiguous-entry",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Copy",
+          "box": "A",
+          "msg": "m1",
+          "src": "inbox",
+          "dst": "inbox"
+        },
+        {
+          "op": "Move",
+          "box": "A",
+          "msg": "m1",
+          "src": "inbox",
+          "dst": "trash"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Same-folder copy creates two entries; role-only locator returns AMBIGUOUS_ENTRY"
+    },
+    {
+      "name": "conditional-update-stale-ifmodseq",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Get",
+          "box": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Seen",
+          "box": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Cas",
+          "box": "A",
+          "msg": "m1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Conditional PATCH with stale ifModseq returns MODIFIED"
+    },
+    {
+      "name": "read-only-credential-refused",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "ReadOnly",
+          "box": "A",
+          "msg": "m1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Read-only inbox credential cannot mutate messages (PERMISSION_DENIED)"
+    },
+    {
+      "name": "sent-copy-and-thread-patch",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m2"
+        },
+        {
+          "op": "Send",
+          "box": "A"
+        },
+        {
+          "op": "Thread",
+          "box": "A",
+          "msg": "m1",
+          "kind": "archive"
+        },
+        {
+          "op": "Thread",
+          "box": "A",
+          "msg": "m1",
+          "kind": "read"
+        },
+        {
+          "op": "Thread",
+          "box": "A",
+          "msg": "m1",
+          "kind": "unarchive"
+        },
+        {
+          "op": "Thread",
+          "box": "A",
+          "msg": "m1",
+          "kind": "unread"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Sent copy gets Sent UID/counters; conversation PATCH moves and updates every message in the thread"
+    },
+    {
+      "name": "store-waits-on-uncommitted-move",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "recips": "a"
+        },
+        {
+          "op": "Claim",
+          "conn": "I",
+          "msg": "m2"
+        },
+        {
+          "op": "Move",
+          "conn": "W",
+          "box": "A",
+          "msg": "m1",
+          "src": "inbox",
+          "dst": "archive"
+        },
+        {
+          "op": "StoreClaimed",
+          "conn": "I"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        },
+        {
+          "op": "Commit",
+          "conn": "I"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Ingest store waiting on inbox_state held by uncommitted move serializes cleanly on commit"
+    },
+    {
+      "name": "delete-and-sweep-erases-inbox",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Delete",
+          "box": "A"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        },
+        {
+          "op": "Sync",
+          "box": "A"
+        },
+        {
+          "op": "Sweep"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "recips": "ab"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m2"
+        },
+        {
+          "op": "Folders",
+          "box": "B"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Deleted inbox returns NOT_FOUND, retention sweep erases it cleanly, and later mail still delivers to B"
+    },
+    {
+      "name": "del-and-purge-folder",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Del",
+          "box": "A",
+          "msg": "m1",
+          "role": "inbox"
+        },
+        {
+          "op": "Purge",
+          "box": "A",
+          "role": "inbox"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        },
+        {
+          "op": "Sync",
+          "box": "A"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Marking \\Deleted and purging a folder expunges the entry and reports removal in change sync"
+    },
+    {
+      "name": "reopen-after-store-delivers-new-inbox-only",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "full"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Expunge",
+          "box": "A",
+          "msg": "m1",
+          "role": "inbox"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "recips": "ab"
+        },
+        {
+          "op": "StoreAuto",
+          "msg": "m1"
+        },
+        {
+          "op": "Folders",
+          "box": "A"
+        },
+        {
+          "op": "Folders",
+          "box": "B"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Receipt reopen after expunge delivers only to newly added inbox B without resurrecting in A"
+    },
+    {
+      "name": "core-preset-interleaving",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "Accept",
+          "conn": "W",
+          "msg": "m1",
+          "recips": "a"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        },
+        {
+          "op": "Claim",
+          "conn": "I",
+          "msg": "m1"
+        },
+        {
+          "op": "StoreClaimed",
+          "conn": "I"
+        },
+        {
+          "op": "Commit",
+          "conn": "I"
+        },
+        {
+          "op": "Seen",
+          "box": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Move",
+          "box": "A",
+          "msg": "m1",
+          "src": "inbox",
+          "dst": "trash"
+        },
+        {
+          "op": "Expunge",
+          "box": "A",
+          "msg": "m1",
+          "role": "trash"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Core preset end-to-end delivery, mutation, move, and expunge"
+    }
+  ]
+}
