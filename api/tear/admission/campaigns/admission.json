@@ -1,0 +1,1717 @@
+{
+  "version": 1,
+  "modelId": "admission",
+  "cases": [
+    {
+      "name": "smoke-send-idem",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1"
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass",
+        "control": true
+      },
+      "note": "Control: basic keyed send and replay passes all model, idle and temporal rules"
+    },
+    {
+      "name": "canary-idem-duplicate",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1"
+        }
+      ],
+      "expected": {
+        "outcome": "fail",
+        "operator": "admission.send.idem-at-most-once/idem/0",
+        "verdict": "violated",
+        "canary": true
+      },
+      "note": "Canary: planted host bug emits send.idem.duplicate after send.idem.admitted to verify temporal property admission.send.idem-at-most-once bites",
+      "bug": "canary_idem_duplicate"
+    },
+    {
+      "name": "reg-recv-dup-race",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv0"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a",
+          "conn": "W"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a",
+          "conn": "V"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        },
+        {
+          "op": "Commit",
+          "conn": "V"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "A. Two notifications of one new message in flight charge the hourly window once"
+    },
+    {
+      "name": "reg-recv-dup-after-fail",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "x",
+          "conn": "W"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "ac",
+          "conn": "V"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        },
+        {
+          "op": "Commit",
+          "conn": "V"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "A. Second notification does not charge for a receipt the first failed (101 recipients)"
+    },
+    {
+      "name": "reg-recv-backlog-race",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv2"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a",
+          "conn": "W"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "a",
+          "conn": "V"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        },
+        {
+          "op": "Commit",
+          "conn": "V"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "B. Notification waiting on window row does not admit past full backlog (backlog 1)"
+    },
+    {
+      "name": "reg-recv-release-behind-accept",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv2"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "a"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Done",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Accept",
+          "msg": "m3",
+          "rcpts": "a",
+          "conn": "W"
+        },
+        {
+          "op": "Release",
+          "conn": "V"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        },
+        {
+          "op": "Commit",
+          "conn": "V"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "B. Release behind an admission skips locked workspace instead of admitting past backlog"
+    },
+    {
+      "name": "reg-recv-reopen-200-dedup",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv2"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "h"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "x"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "C. Reopen counts distinct recipients in the 200-recipient bound"
+    },
+    {
+      "name": "reg-upload-put-after-sweep",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "upload0"
+        },
+        {
+          "op": "Upload",
+          "slot": "U1"
+        },
+        {
+          "op": "Expire"
+        },
+        {
+          "op": "Sweep"
+        },
+        {
+          "op": "Purge"
+        },
+        {
+          "op": "PutOk",
+          "slot": "U1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "D. Put outlasting swept reservation still queues object deletion"
+    },
+    {
+      "name": "reg-recv-reopen-coalesce-backlog1",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv2"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "ac"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Review P1. Reopen while job pending coalesces without queueing past backlog 1"
+    },
+    {
+      "name": "reg-recv-reopen-while-running",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv2"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "ac"
+        },
+        {
+          "op": "Done",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Release"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Done",
+          "ws": "A",
+          "msg": "m1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Review P1. Reopen while job runs is held and released later without a second window charge"
+    },
+    {
+      "name": "reg-recv-release-no-deadlock",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "b"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "b"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "a"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Accept",
+          "msg": "m3",
+          "rcpts": "a",
+          "conn": "W"
+        },
+        {
+          "op": "Accept",
+          "msg": "m3",
+          "rcpts": "ab",
+          "conn": "V"
+        },
+        {
+          "op": "Release",
+          "conn": "X"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        },
+        {
+          "op": "Commit",
+          "conn": "X"
+        },
+        {
+          "op": "Commit",
+          "conn": "V"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Review P2. Global release skips locked workspace instead of deadlocking with multi-workspace accept"
+    },
+    {
+      "name": "reg-recv-legacy-reopen-overlap",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv0"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "h"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Done",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "LegacyAccept",
+          "msg": "m1",
+          "rcpts": "x"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Review P2. Previous Worker route SQL overlaps safely on 100 known + 1 new"
+    },
+    {
+      "name": "reg-upload-crash-tombstone",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "upload0"
+        },
+        {
+          "op": "Upload",
+          "slot": "U1"
+        },
+        {
+          "op": "Expire"
+        },
+        {
+          "op": "Sweep"
+        },
+        {
+          "op": "Purge"
+        },
+        {
+          "op": "PutCrash",
+          "slot": "U1"
+        },
+        {
+          "op": "Day"
+        },
+        {
+          "op": "Sweep"
+        },
+        {
+          "op": "Purge"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Review P2. Late put whose Worker crashed after sweep deletion is cleaned via tombstone a day later"
+    },
+    {
+      "name": "reg-recv-recover-respects-backlog",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv2"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Lose",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "a"
+        },
+        {
+          "op": "Recover"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Recheck R1. Lost-receipt recovery respects backlog 1"
+    },
+    {
+      "name": "reg-recv-reopen-survives-stale-fail",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv0"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "ac"
+        },
+        {
+          "op": "Fail",
+          "ws": "A",
+          "msg": "m1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Recheck R2. Reopen behind running job is held and survives stale failure"
+    },
+    {
+      "name": "reg-recv-window-before-receipt-order",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv0"
+        },
+        {
+          "op": "Accept",
+          "msg": "m3",
+          "rcpts": "a"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "a",
+          "conn": "W"
+        },
+        {
+          "op": "Accept",
+          "msg": "m3",
+          "rcpts": "ac",
+          "conn": "X"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Recheck R3. Every route path locks window row before receipt"
+    },
+    {
+      "name": "reg-recv-release-fair-backoff",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "a"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Accept",
+          "msg": "m3",
+          "rcpts": "a",
+          "conn": "W"
+        },
+        {
+          "op": "Release"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Recheck R4. Busy workspace hold moves 10s back and counts as scanned"
+    },
+    {
+      "name": "reg-recv-legacy-fail-fenced",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv0"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "ac"
+        },
+        {
+          "op": "Lose",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "LegacyFail",
+          "ws": "A",
+          "msg": "m1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Recheck 2. Previous Worker unfenced failure write is dropped by settle fence (164)"
+    },
+    {
+      "name": "reg-upload-foreign-survives",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "upload0"
+        },
+        {
+          "op": "Foreign"
+        },
+        {
+          "op": "Day"
+        },
+        {
+          "op": "Purge"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Recheck 2. Foreign objects (k/attachments/..., mail attachment, template asset) survive reconciliation and purge"
+    },
+    {
+      "name": "reg-upload-reconcile-after-tombstone",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "upload0"
+        },
+        {
+          "op": "Upload",
+          "slot": "U1"
+        },
+        {
+          "op": "Expire"
+        },
+        {
+          "op": "Sweep"
+        },
+        {
+          "op": "Purge"
+        },
+        {
+          "op": "Day"
+        },
+        {
+          "op": "Purge"
+        },
+        {
+          "op": "PutCrash",
+          "slot": "U1"
+        },
+        {
+          "op": "Day"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Recheck R5. Put landing after tombstone spent is deleted by hourly storage reconciliation"
+    },
+    {
+      "name": "bnd-recv-fail-current-claim",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv0"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Fail",
+          "ws": "A",
+          "msg": "m1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Current handler final failure settles its own claim"
+    },
+    {
+      "name": "bnd-recv-legacy-fail-then-fail",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv0"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "LegacyFail",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Fail",
+          "ws": "A",
+          "msg": "m1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Previous Worker failure dropped; current handler failure settles"
+    },
+    {
+      "name": "bnd-recv-recover-once",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv0"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Lose",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Recover"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Lost-receipt recovery re-queues a pending receipt with no live job"
+    },
+    {
+      "name": "bnd-recv-recover-outage-young-and-expired",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv0"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Lose",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Recover"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Lose",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Recover"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Lose",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Recover"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Lose",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Recover"
+        },
+        {
+          "op": "Claim",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Lose",
+          "ws": "A",
+          "msg": "m1"
+        },
+        {
+          "op": "Days"
+        },
+        {
+          "op": "Recover"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Recovery retries past 3 passes while <48h old (commit 249fe963) and fails MAILBOX_RECOVERY_EXHAUSTED past 48h"
+    },
+    {
+      "name": "bnd-recv-hour-resets-window",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "a"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Accept",
+          "msg": "m3",
+          "rcpts": "a"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Next hour window admits again"
+    },
+    {
+      "name": "bnd-recv-release-71h-boundary",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "a"
+        },
+        {
+          "op": "Days"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Release"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Due hold at 71 hours is still released"
+    },
+    {
+      "name": "bnd-recv-release-72h-expired",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "a"
+        },
+        {
+          "op": "Days"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Release"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Due hold at 72 hours fails MAILBOX_BUDGET_HOLD_EXPIRED"
+    },
+    {
+      "name": "bnd-recv-release-again-next-hour",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv1"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "a"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Accept",
+          "msg": "m3",
+          "rcpts": "a"
+        },
+        {
+          "op": "Release"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Release"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Hold released into full window waits another hour then releases"
+    },
+    {
+      "name": "bnd-recv-release-skip-locked",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "recv0"
+        },
+        {
+          "op": "Accept",
+          "msg": "m1",
+          "rcpts": "a"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "a"
+        },
+        {
+          "op": "Accept",
+          "msg": "m3",
+          "rcpts": "a"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Accept",
+          "msg": "m2",
+          "rcpts": "ab",
+          "conn": "W"
+        },
+        {
+          "op": "Release"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Release skips receipt locked by another transaction"
+    },
+    {
+      "name": "bnd-send-operator-keeps-history",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "Limits",
+          "ws": 1,
+          "sendCap": null,
+          "pendCap": 1,
+          "conn": "V"
+        },
+        {
+          "op": "History",
+          "ws": 1,
+          "count": 900
+        },
+        {
+          "op": "Commit",
+          "conn": "V"
+        },
+        {
+          "op": "Week"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 3,
+          "kind": "t"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Operator change in flight preserves clean history recorded meanwhile"
+    },
+    {
+      "name": "bnd-send-tier-history-week",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "History",
+          "ws": 1,
+          "count": 100
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 3,
+          "kind": "t"
+        },
+        {
+          "op": "Week"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 3,
+          "kind": "t"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Evaluation cap holds regardless of history/age (sender score sets limits)"
+    },
+    {
+      "name": "bnd-send-tier-two-weeks",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "History",
+          "ws": 1,
+          "count": 900
+        },
+        {
+          "op": "History",
+          "ws": 1,
+          "count": 100
+        },
+        {
+          "op": "Week"
+        },
+        {
+          "op": "Week"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 3,
+          "kind": "t"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 2,
+          "kind": "t"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Evaluation cap holds after two weeks"
+    },
+    {
+      "name": "bnd-send-resume-keeps-history",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "History",
+          "ws": 1,
+          "count": 100
+        },
+        {
+          "op": "Week"
+        },
+        {
+          "op": "Pause",
+          "ws": 1
+        },
+        {
+          "op": "Resume",
+          "ws": 1
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 3,
+          "kind": "t"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Resume keeps sender history"
+    },
+    {
+      "name": "bnd-send-rolling-window-and-late-refund",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 2,
+          "kind": "t"
+        },
+        {
+          "op": "H23"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        },
+        {
+          "op": "Hour"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        },
+        {
+          "op": "Outcome",
+          "email": "e1",
+          "outcome": "canceled"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rolling 24h window: 23h counts, 24h expires; late refund changes nothing"
+    },
+    {
+      "name": "bnd-send-rate-minute-and-me",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send1"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        },
+        {
+          "op": "Me",
+          "key": 1
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        },
+        {
+          "op": "Minute"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Key minute budget shared with GET /v1/me resets on next minute"
+    },
+    {
+      "name": "bnd-send-pending-cap-and-batch",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "Limits",
+          "ws": 1,
+          "sendCap": null,
+          "pendCap": 1
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        },
+        {
+          "op": "Outcome",
+          "email": "e1",
+          "outcome": "sent"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        },
+        {
+          "op": "Batch",
+          "key": 1
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Pending cap override reached exactly and by one, plus batch"
+    },
+    {
+      "name": "bnd-send-idem-replay-conflict-paused",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1"
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1"
+        },
+        {
+          "op": "IdemOther",
+          "key": 1,
+          "idemKey": "k1"
+        },
+        {
+          "op": "Pause",
+          "ws": 1
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Idempotency replay, conflict, and replay while paused"
+    },
+    {
+      "name": "bnd-send-idem-concurrent-in-progress-then-replay",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1",
+          "conn": "W"
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1",
+          "conn": "V"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        },
+        {
+          "op": "Commit",
+          "conn": "V"
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Concurrent duplicate returns 409 IDEMPOTENCY_IN_PROGRESS immediately (commit 9d9ae337), then replays after commit"
+    },
+    {
+      "name": "bnd-send-idem-concurrent-abort-then-retry",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1",
+          "conn": "W"
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1",
+          "conn": "V"
+        },
+        {
+          "op": "Abort",
+          "conn": "W"
+        },
+        {
+          "op": "Commit",
+          "conn": "V"
+        },
+        {
+          "op": "Idem",
+          "key": 1,
+          "idemKey": "k1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Concurrent duplicate returns 409 IDEMPOTENCY_IN_PROGRESS while open; after abort, retry admits"
+    },
+    {
+      "name": "bnd-send-sponsor-override-exempt",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "Send",
+          "key": 2,
+          "count": 2,
+          "kind": "t"
+        },
+        {
+          "op": "Limits",
+          "ws": 1,
+          "sendCap": 2,
+          "pendCap": null
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 2,
+          "kind": "t"
+        },
+        {
+          "op": "Exempt",
+          "ws": 2,
+          "on": true
+        },
+        {
+          "op": "Send",
+          "key": 2,
+          "count": 3,
+          "kind": "t"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Override leaves sponsor shared usage; exempt removes cap and leaves sponsor"
+    },
+    {
+      "name": "bnd-send-sponsor-pause-propagation",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "Pause",
+          "ws": 2
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        },
+        {
+          "op": "Exempt",
+          "ws": 1,
+          "on": true
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Sponsor hold propagates pause to non-exempt sibling (commit 1cb0461b); exempt ignores sponsor hold"
+    },
+    {
+      "name": "bnd-send-sponsor-race-slot",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "send0"
+        },
+        {
+          "op": "Send",
+          "key": 1,
+          "count": 1,
+          "kind": "t"
+        },
+        {
+          "op": "Send",
+          "key": 3,
+          "count": 1,
+          "kind": "t",
+          "conn": "W"
+        },
+        {
+          "op": "Send",
+          "key": 2,
+          "count": 1,
+          "kind": "t",
+          "conn": "V"
+        },
+        {
+          "op": "Commit",
+          "conn": "W"
+        },
+        {
+          "op": "Commit",
+          "conn": "V"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Sibling workspaces serialize on sponsor lock at last slot"
+    },
+    {
+      "name": "bnd-upload-idem-in-progress-and-replay",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "upload0"
+        },
+        {
+          "op": "Upload",
+          "slot": "U1",
+          "idemKey": "k1"
+        },
+        {
+          "op": "Upload",
+          "slot": "U2",
+          "idemKey": "k1"
+        },
+        {
+          "op": "Upload",
+          "slot": "U2",
+          "idemKey": "k1",
+          "other": true
+        },
+        {
+          "op": "PutOk",
+          "slot": "U1"
+        },
+        {
+          "op": "Upload",
+          "slot": "U3",
+          "idemKey": "k1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "In-flight keyed upload answers 409 IN_PROGRESS / CONFLICT without reserving quota (commit 28c73c39), then replays after ok"
+    },
+    {
+      "name": "bnd-upload-idem-crash-outcome-unknown",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "upload0"
+        },
+        {
+          "op": "Upload",
+          "slot": "U1",
+          "idemKey": "k1"
+        },
+        {
+          "op": "PutCrash",
+          "slot": "U1"
+        },
+        {
+          "op": "Upload",
+          "slot": "U2",
+          "idemKey": "k1"
+        },
+        {
+          "op": "Day"
+        },
+        {
+          "op": "Upload",
+          "slot": "U2",
+          "idemKey": "k1"
+        },
+        {
+          "op": "Upload",
+          "slot": "U2",
+          "idemKey": "k1",
+          "other": true
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Crashed keyed upload stays IN_PROGRESS then becomes OUTCOME_UNKNOWN after day; different body stays CONFLICT"
+    },
+    {
+      "name": "bnd-upload-expire-unswept-fail-delete",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "upload0"
+        },
+        {
+          "op": "Upload",
+          "slot": "U1"
+        },
+        {
+          "op": "Expire"
+        },
+        {
+          "op": "PutOk",
+          "slot": "U1"
+        },
+        {
+          "op": "Upload",
+          "slot": "U2"
+        },
+        {
+          "op": "PutFail",
+          "slot": "U2"
+        },
+        {
+          "op": "Delete",
+          "attachment": "a1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Expired unswept reservation finishes; failed put refunds; delete frees quota"
+    },
+    {
+      "name": "bnd-upload-quota-over-and-keyed",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "upload1"
+        },
+        {
+          "op": "Upload",
+          "slot": "U1"
+        },
+        {
+          "op": "Upload",
+          "slot": "U2"
+        },
+        {
+          "op": "PutOk",
+          "slot": "U1"
+        },
+        {
+          "op": "Upload",
+          "slot": "U2",
+          "idemKey": "k1",
+          "other": true
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Quota room=1 filled exactly then refuses 413 STORED_ATTACHMENT_LIMIT_EXCEEDED"
+    }
+  ]
+}
