@@ -18,6 +18,7 @@ import { admission } from "./admission/admission.model.ts";
 import { inbox } from "./inbox/inbox.model.ts";
 import { delivery } from "./delivery/delivery.model.ts";
 import { campaignLifecycle } from "./campaign-lifecycle/campaign-lifecycle.model.ts";
+import { consent } from "./consent/consent.model.ts";
 
 interface EdgeProfile {
   name: string;
@@ -116,6 +117,18 @@ const MODELS: Record<string, { model: Model<any, any, any, any>; profiles: EdgeP
         starts: [[{ op: "Configure", preset: "core" }]],
         maxDepth: 2,
         maxStates: 350,
+      },
+    ],
+  },
+  consent: {
+    model: consent,
+    profiles: [
+      {
+        name: "core-d2",
+        starts: [[{ op: "Configure", preset: "core" }]],
+        maxDepth: 2,
+        maxStates: 80,
+        filter: (a) => a.op !== "CheckLimits" && a.op !== "RunRetentionScrub",
       },
     ],
   },

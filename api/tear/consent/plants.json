@@ -1,0 +1,58 @@
+[
+  {
+    "label": "cns-1-import-overrides-unsubscribed",
+    "rule": "consent.no-silent-override",
+    "checker": "consent",
+    "file": "api/src/audience.ts",
+    "old": "WHERE c.workspace_id = ${identity.workspaceId} AND c.id IN (SELECT jsonb_array_elements_text(${JSON.stringify(upserted.map(contact => contact.id))}::jsonb)) AND c.marketing_consent = 'unknown'",
+    "neu": "WHERE c.workspace_id = ${identity.workspaceId} AND c.id IN (SELECT jsonb_array_elements_text(${JSON.stringify(upserted.map(contact => contact.id))}::jsonb))"
+  },
+  {
+    "label": "cns-2-bulk-plan-ignores-stale-unsub",
+    "rule": "consent.serializable-unsub-wins",
+    "checker": "consent",
+    "file": "api/src/audience-query.ts",
+    "old": "if (current.length !== ids.length || current.some(row => row.updatedAt !== expected.get(row.id)?.updatedAt)) throw new ApiError(409, 'STALE_AUDIENCE_PLAN', 'A planned contact changed or was deleted. Review a new plan.');",
+    "neu": "if (false && (current.length !== ids.length || current.some(row => row.updatedAt !== expected.get(row.id)?.updatedAt))) throw new ApiError(409, 'STALE_AUDIENCE_PLAN', 'A planned contact changed or was deleted. Review a new plan.');"
+  },
+  {
+    "label": "cns-3-dispatcher-sends-to-blocked",
+    "rule": "consent.no-send-to-blocked",
+    "checker": "consent",
+    "file": "api/src/dispatcher.ts",
+    "old": "WHERE d.email_id=x.id AND cause.reason IS NOT NULL ORDER BY d.n LIMIT 1) AS suppression_reason",
+    "neu": "WHERE false ORDER BY d.n LIMIT 1) AS suppression_reason"
+  },
+  {
+    "label": "cns-4-suppressed-at-order-dependent",
+    "rule": "consent.evidence-preserved-and-order-independent",
+    "checker": "consent",
+    "file": "api/src/db/audience.ts",
+    "old": "suppressed_at=greatest(CASE WHEN c.suppressed THEN coalesce(c.suppressed_at,c.updated_at) END,excluded.suppressed_at)",
+    "neu": "suppressed_at=excluded.suppressed_at"
+  },
+  {
+    "label": "cns-5-list-tally-double-counts-suppressed",
+    "rule": "consent.tallies-exact",
+    "checker": "consent",
+    "file": "api/src/audience.ts",
+    "old": "subscribed: sql<number>`count(*) FILTER (WHERE NOT ${contacts.suppressed} AND ${contacts.marketingConsent} = 'subscribed')::int`",
+    "neu": "subscribed: sql<number>`count(*) FILTER (WHERE ${contacts.marketingConsent} = 'subscribed')::int`"
+  },
+  {
+    "label": "cns-6-unsub-leaks-across-workspaces",
+    "rule": "consent.workspace-isolated",
+    "checker": "consent",
+    "file": "api/src/audience.ts",
+    "old": "await tx.update(contacts).set({ marketingConsent: 'unsubscribed', updatedAt: now }).where(and(scope(contacts, identity), eq(contacts.id, contact.id)));",
+    "neu": "await tx.update(contacts).set({ marketingConsent: 'unsubscribed', updatedAt: now }).where(eq(contacts.email, normalized.data));"
+  },
+  {
+    "label": "cns-7-bulk-10k-limit-bypassed",
+    "rule": "consent.limits-atomic",
+    "checker": "consent",
+    "file": "api/src/audience-query.ts",
+    "old": "if (rows.length > 10_000) throw new ApiError(422, 'AUDIENCEQL_LIMIT_EXCEEDED', 'A mutation plan may target at most 10,000 contacts. Narrow the WHERE clause.', 'statement');",
+    "neu": "if (false && rows.length > 10_000) throw new ApiError(422, 'AUDIENCEQL_LIMIT_EXCEEDED', 'A mutation plan may target at most 10,000 contacts. Narrow the WHERE clause.', 'statement');"
+  }
+]
