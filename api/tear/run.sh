@@ -30,7 +30,7 @@ if [[ ! -d "$HERE/node_modules/@tear/mbt/src" ]] || [[ ! -x "$TEAR_BIN" ]] || [[
   bash "$HERE/setup.sh"
 fi
 
-CORE=(dispatch ses access admission inbox delivery campaign-lifecycle)
+CORE=(dispatch ses access admission inbox delivery campaign-lifecycle consent)
 SAFETY=(campaign-collab campaign-attachments db-faults scale-reads tenant-isolation workspace-isolation)
 
 SCHEDULED_MODE=0
@@ -44,7 +44,7 @@ else
       safety) SELECTED+=("${SAFETY[@]}") ;;
       all) SELECTED+=("${CORE[@]}" "${SAFETY[@]}") ;;
       scheduled) SCHEDULED_MODE=1; SELECTED+=("${CORE[@]}" "${SAFETY[@]}") ;;
-      dispatch|ses|access|admission|inbox|delivery|campaign-lifecycle|campaign-collab|campaign-attachments|db-faults|scale-reads|tenant-isolation|workspace-isolation)
+      dispatch|ses|access|admission|inbox|delivery|campaign-lifecycle|consent|campaign-collab|campaign-attachments|db-faults|scale-reads|tenant-isolation|workspace-isolation)
         SELECTED+=("$arg") ;;
       *) echo "unknown checker: $arg" >&2; exit 2 ;;
     esac
@@ -101,7 +101,7 @@ default_seeds_for() {
   case "$name" in
     scale-reads) count=5 ;;
     tenant-isolation) count=20 ;;
-    campaign-lifecycle) count=30 ;;
+    campaign-lifecycle|consent) count=30 ;;
     workspace-isolation) count=15 ;;
     campaign-collab|campaign-attachments|db-faults) count=40 ;;
     *) count=60 ;;
@@ -112,10 +112,11 @@ default_seeds_for() {
 run_one() {
   local name="$1" model_file="" campaign_file="" extra=() is_core=0
   case "$name" in
-    dispatch|ses|access|admission|inbox|delivery|campaign-lifecycle)
+    dispatch|ses|access|admission|inbox|delivery|campaign-lifecycle|consent)
       model_file="$name/$name.model.ts"
       campaign_file="$name/campaigns/$name.json"
       is_core=1
+      [[ "$name" == "consent" ]] && extra=(--rounds 2)
       ;;
     campaign-collab|tenant-isolation|workspace-isolation)
       model_file="safety/$name.model.ts"

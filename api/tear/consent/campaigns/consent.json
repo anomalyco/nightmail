@@ -1,0 +1,790 @@
+{
+  "version": 1,
+  "modelId": "consent",
+  "cases": [
+    {
+      "name": "smoke-consent-lifecycle",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "CreateContact",
+          "slot": "c4"
+        },
+        {
+          "op": "AddToList",
+          "slot": "c4",
+          "list": "L1"
+        },
+        {
+          "op": "ImportCommit",
+          "slots": [
+            "c3",
+            "c4"
+          ],
+          "list": "L2",
+          "attested": true
+        },
+        {
+          "op": "UpdateProfile",
+          "slot": "c1",
+          "name": "Alice"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c2"
+        },
+        {
+          "op": "LaunchCampaign",
+          "list": "L1"
+        },
+        {
+          "op": "ExpandCampaign"
+        },
+        {
+          "op": "DispatchCampaign"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass",
+        "control": true
+      },
+      "note": "Control: create, attested import, profile update, unsubscribe, campaign freeze/expand/dispatch, verify all 7 invariants"
+    },
+    {
+      "name": "canary-send-unsubscribed",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "LaunchCampaign",
+          "list": "L1"
+        },
+        {
+          "op": "ExpandCampaign"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c1"
+        },
+        {
+          "op": "DispatchCampaign"
+        }
+      ],
+      "bug": "canary_send_unsubscribed",
+      "expected": {
+        "outcome": "fail",
+        "operator": "consent.no-send-after-block/slot/0",
+        "verdict": "violated",
+        "canary": true
+      },
+      "note": "Canary: simulated send to an unsubscribed address fails temporal property consent.no-send-after-block"
+    },
+    {
+      "name": "rule1-import-never-overrides-unsub-or-suppression",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c1"
+        },
+        {
+          "op": "FeedbackSuppress",
+          "slot": "c2",
+          "kind": "hard_bounce",
+          "tsOffsetSec": 0
+        },
+        {
+          "op": "ImportCommit",
+          "slots": [
+            "c1",
+            "c2",
+            "c3"
+          ],
+          "list": "L1",
+          "attested": true
+        },
+        {
+          "op": "UpdateProfile",
+          "slot": "c1",
+          "name": "Bob"
+        },
+        {
+          "op": "UpdateProfile",
+          "slot": "c2",
+          "name": "Bob"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 1: attested CSV import upgrades unknown c3, leaves unsubscribed c1 unsubscribed, and leaves suppressed c2 suppressed"
+    },
+    {
+      "name": "rule1-unconfirmed-and-stale-resubscribe-rejected",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "UnsubscribeFooter",
+          "slot": "c1"
+        },
+        {
+          "op": "SetConsentApi",
+          "slot": "c1",
+          "status": "subscribed"
+        },
+        {
+          "op": "ConfirmResubscribeApi",
+          "slot": "c1",
+          "staleTimestamp": true
+        },
+        {
+          "op": "PlanBulkConsent",
+          "status": "subscribed"
+        },
+        {
+          "op": "ApplyBulkPlan",
+          "confirmResubscribe": false
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 1: unconfirmed API consent, stale confirmed resubscribe, and unconfirmed AudienceQL bulk apply never undo opt-out"
+    },
+    {
+      "name": "rule1-legitimate-confirmed-resubscribe-never-lifts-suppression",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c1"
+        },
+        {
+          "op": "FeedbackSuppress",
+          "slot": "c1",
+          "kind": "complaint",
+          "tsOffsetSec": 0
+        },
+        {
+          "op": "ConfirmResubscribeApi",
+          "slot": "c1"
+        },
+        {
+          "op": "ManualSuppress",
+          "slot": "c2"
+        },
+        {
+          "op": "PlanBulkConsent",
+          "status": "subscribed"
+        },
+        {
+          "op": "ApplyBulkPlan",
+          "confirmResubscribe": true
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 1: legitimate confirmed resubscribe updates marketing_consent only and NEVER lifts complaint/bounce/manual suppression"
+    },
+    {
+      "name": "rule1-delete-and-restore-preserves-unsub-and-suppression",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c1"
+        },
+        {
+          "op": "FeedbackSuppress",
+          "slot": "c2",
+          "kind": "hard_bounce",
+          "tsOffsetSec": 0
+        },
+        {
+          "op": "DeleteContact",
+          "slot": "c1"
+        },
+        {
+          "op": "DeleteContact",
+          "slot": "c2"
+        },
+        {
+          "op": "CreateContact",
+          "slot": "c1"
+        },
+        {
+          "op": "ImportCommit",
+          "slots": [
+            "c1",
+            "c2"
+          ],
+          "list": "L1",
+          "attested": true
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 1: deleting and restoring via attested import retains unsubscribed status and suppression; POST /v1/contacts gets 409"
+    },
+    {
+      "name": "rule1-get-unsubscribe-prefetch-is-readonly",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "UnsubscribeGet",
+          "slot": "c1"
+        },
+        {
+          "op": "UnsubscribeGet",
+          "slot": "c2"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 1: GET /unsubscribe/{token} (link scanner prefetch) never mutates marketing_consent"
+    },
+    {
+      "name": "rule2-race-attested-import-vs-one-click-unsub",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "RaceImportAndUnsub",
+          "slot": "c1"
+        },
+        {
+          "op": "RaceImportAndUnsub",
+          "slot": "c3"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 2: concurrent attested CSV import commit vs one-click unsubscribe always ends unsubscribed"
+    },
+    {
+      "name": "rule2-race-bulk-plan-apply-vs-one-click-unsub",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "RacePlanApplyAndUnsub",
+          "slot": "c2"
+        },
+        {
+          "op": "RacePlanApplyAndUnsub",
+          "slot": "c1"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 2: concurrent AudienceQL bulk apply (even with confirmResubscribe=true) vs one-click unsubscribe always ends unsubscribed"
+    },
+    {
+      "name": "rule2-race-stale-resubscribe-vs-one-click-unsub",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "RaceStaleResubscribeAndUnsub",
+          "slot": "c1"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 2: concurrent pre-race confirmed resubscribe vs one-click unsubscribe ends unsubscribed in both serial orders"
+    },
+    {
+      "name": "rule3-unsub-after-freeze-before-expand-not-sent",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "LaunchCampaign",
+          "list": "L1"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c1"
+        },
+        {
+          "op": "ExpandCampaign"
+        },
+        {
+          "op": "DispatchCampaign"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 3: contact unsubscribed after campaign snapshot freeze and before expansion is never sent"
+    },
+    {
+      "name": "rule3-unsub-after-expand-before-dispatch-not-sent",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "LaunchCampaign",
+          "list": "L1"
+        },
+        {
+          "op": "ExpandCampaign"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c1"
+        },
+        {
+          "op": "SetConsentApi",
+          "slot": "c2",
+          "status": "unsubscribed"
+        },
+        {
+          "op": "DispatchCampaign"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 3: contacts unsubscribed after expansion into queued sending_emails and before dispatcher claim are suppressed, never sent"
+    },
+    {
+      "name": "rule3-suppress-or-delete-after-expand-before-dispatch-not-sent",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "LaunchCampaign",
+          "list": "L1"
+        },
+        {
+          "op": "ExpandCampaign"
+        },
+        {
+          "op": "FeedbackSuppress",
+          "slot": "c1",
+          "kind": "complaint",
+          "tsOffsetSec": 0
+        },
+        {
+          "op": "DeleteContact",
+          "slot": "c2"
+        },
+        {
+          "op": "DispatchCampaign"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 3: contact suppressed by feedback or deleted after expansion is suppressed at dispatcher release"
+    },
+    {
+      "name": "rule4-evidence-survives-edits-lists-delete-restore-and-retention",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "ImportCommit",
+          "slots": [
+            "c3",
+            "c4"
+          ],
+          "list": "L2",
+          "attested": true
+        },
+        {
+          "op": "UnsubscribeFooter",
+          "slot": "c3"
+        },
+        {
+          "op": "UpdateProfile",
+          "slot": "c3",
+          "name": "Alice"
+        },
+        {
+          "op": "AddToList",
+          "slot": "c3",
+          "list": "L1"
+        },
+        {
+          "op": "RemoveFromList",
+          "slot": "c3",
+          "list": "L2"
+        },
+        {
+          "op": "DeleteContact",
+          "slot": "c3"
+        },
+        {
+          "op": "ImportCommit",
+          "slots": [
+            "c3"
+          ],
+          "list": "L1",
+          "attested": true
+        },
+        {
+          "op": "RunRetentionScrub"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 4: consent audit rows (who, when, source, policyVersion, evidence) are immutable and survive edits, list moves, delete/restore, and #601 retention scrub"
+    },
+    {
+      "name": "rule4-feedback-order-independent-suppressed-at",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "RaceFeedbackOrderCheck",
+          "slot": "c3"
+        },
+        {
+          "op": "FeedbackSuppress",
+          "slot": "c3",
+          "kind": "email_validation",
+          "tsOffsetSec": 0
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 4 (#619): out-of-order bounce (t2) then complaint (t1) then email_validation keeps complaint precedence and max suppressed_at"
+    },
+    {
+      "name": "rule5-tallies-exact-across-multi-list-delete-restore-suppress-bulk",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "AddToList",
+          "slot": "c1",
+          "list": "L2"
+        },
+        {
+          "op": "AddToList",
+          "slot": "c2",
+          "list": "L2"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c1"
+        },
+        {
+          "op": "FeedbackSuppress",
+          "slot": "c2",
+          "kind": "hard_bounce",
+          "tsOffsetSec": 0
+        },
+        {
+          "op": "DeleteContact",
+          "slot": "c1"
+        },
+        {
+          "op": "ImportCommit",
+          "slots": [
+            "c1",
+            "c4"
+          ],
+          "list": "L1",
+          "attested": true
+        },
+        {
+          "op": "RemoveFromList",
+          "slot": "c2",
+          "list": "L1"
+        },
+        {
+          "op": "PlanBulkConsent",
+          "status": "unsubscribed"
+        },
+        {
+          "op": "ApplyBulkPlan",
+          "confirmResubscribe": false
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 5 (#596): API list tallies match raw SQL recount across multi-list memberships, deletes, restores, suppressions, and bulk updates"
+    },
+    {
+      "name": "rule6-workspace-isolation-same-email-all-writers",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c1"
+        },
+        {
+          "op": "UnsubscribeFooter",
+          "slot": "c2"
+        },
+        {
+          "op": "FeedbackSuppress",
+          "slot": "c1",
+          "kind": "complaint",
+          "tsOffsetSec": 0
+        },
+        {
+          "op": "ManualSuppress",
+          "slot": "c3"
+        },
+        {
+          "op": "DeleteContact",
+          "slot": "c2"
+        },
+        {
+          "op": "ImportCommit",
+          "slots": [
+            "c1",
+            "c2",
+            "c3",
+            "c4"
+          ],
+          "list": "L1",
+          "attested": true
+        },
+        {
+          "op": "PlanBulkConsent",
+          "status": "unsubscribed"
+        },
+        {
+          "op": "ApplyBulkPlan",
+          "confirmResubscribe": false
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 6: every consent/suppression/delete/import/bulk write in workspace A leaves workspace B's contacts with identical emails untouched, and Hosted SES SuppressionScope stays TENANT"
+    },
+    {
+      "name": "rule7-bulk-10k-cap-rejects-whole",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "bulkLimit"
+        },
+        {
+          "op": "CheckLimits",
+          "kind": "bulk10k"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 7: AudienceQL bulk plan over 10,000 matches rejects whole with 422 AUDIENCEQL_LIMIT_EXCEEDED and zero stored plans"
+    },
+    {
+      "name": "rule7-import-50k-rows-and-51-props-atomic-rollback",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "CheckLimits",
+          "kind": "import50k"
+        },
+        {
+          "op": "CheckLimits",
+          "kind": "importProps51"
+        },
+        {
+          "op": "CheckLimits",
+          "kind": "previewCap50"
+        },
+        {
+          "op": "CheckLimits",
+          "kind": "props16k"
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 7: 50,000 CSV row cap (413), 50-property merged limit atomic rollback (422), #600 preview cap 50 + 40/min limit, and bounded-audience-reads 16 KiB property cap atomic rejection"
+    },
+    {
+      "name": "rule7-rate-limit-retryable-429",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "rateLimit"
+        },
+        {
+          "op": "CheckLimits",
+          "kind": "rateLimit"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 7: API rate limit returns clean retryable 429 without partial writes"
+    },
+    {
+      "name": "bug-consent-01-repeat-unsub-bypassed-by-bulk-plan",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c2"
+        },
+        {
+          "op": "PlanBulkConsent",
+          "status": "subscribed"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c2"
+        },
+        {
+          "op": "ApplyBulkPlan",
+          "confirmResubscribe": true
+        }
+      ],
+      "expected": {
+        "outcome": "fail",
+        "operator": "idle:consent.no-silent-override",
+        "verdict": "idleViolation",
+        "canary": true
+      },
+      "note": "Pinned real product bug BUG-CONSENT-01: recordUnsubscribe early-returns without bumping updated_at when already unsubscribed, so an AudienceQL plan created before a repeat one-click unsubscribe bypasses STALE_AUDIENCE_PLAN and flips the contact back to subscribed."
+    },
+    {
+      "name": "rule2-post-plan-unsub-rejects-stale-bulk-apply",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "core"
+        },
+        {
+          "op": "PlanBulkConsent",
+          "status": "subscribed"
+        },
+        {
+          "op": "UnsubscribeOneClick",
+          "slot": "c1"
+        },
+        {
+          "op": "ApplyBulkPlan",
+          "confirmResubscribe": true
+        },
+        {
+          "op": "VerifyAll"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Rule 2: when a subscribed contact unsubscribes after an AudienceQL plan is created, apply MUST reject with 409 STALE_AUDIENCE_PLAN so the opt-out always wins"
+    }
+  ]
+}

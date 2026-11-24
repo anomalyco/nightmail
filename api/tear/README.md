@@ -8,7 +8,7 @@ Because `anomalyco/tear` is a private repository, `api/package.json` does not de
 
 Each checker uses split files: `<name>.types.ts` (pure shared types), `<name>.model.ts` (pure reference model, idle rules, and temporal properties — never imports `api/src/`), `<name>.host.ts` (Bun host driving the real Nightmail API/SQL/jobs), and `campaigns/<name>.json` (concrete control, canary, and regression cases).
 
-### Core checkers (7)
+### Core checkers (8)
 
 | Checker | Area | Campaign cases |
 |---|---|---:|
@@ -19,6 +19,7 @@ Each checker uses split files: `<name>.types.ts` (pure shared types), `<name>.mo
 | `inbox/` | Inbox folders, UIDs, UIDVALIDITY, MODSEQ, flags, move/copy/expunge, tombstones, reopen job queueing, retention | 26 |
 | `delivery/` | Routing, rules, endpoints, retries, backoff, rate limits, fences, pause/resume (`DLV-1` pinned) | 42 |
 | `campaign-lifecycle/` | Full campaign life (draft → probe → sending → done/paused/canceled/failed), operational faults, crash/deploy, rate/view parity (migration 422), 8 named invariants (`BUG-LC-01` pinned) | 20 |
+| `consent/` | Imports, consent, unsubscribes, suppressions, AudienceQL bulk plans, tallies, cross-workspace isolation & limits under `--rounds 2` concurrency (7 named invariants) | 20 |
 
 ### Preventative safety models (`safety/`, 6)
 
