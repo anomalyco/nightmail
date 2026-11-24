@@ -100,7 +100,7 @@ export async function waitlistPosition(db: DbExecutor, address: string): Promise
 export const LOW_PLACES = 10;
 /**
  * Whether the operators should hear that sign-ups are nearly full (LOW_PLACES or fewer open) or full (none), once per
- * level: the level told is kept with the limit (migration 467), so the next check at the same level or above it says
+ * level: the level told is kept with the limit (migration 468), so the next check at the same level or above it says
  * nothing. Places reopening past a level clear it without a word (an operator's raise did that), so reaching it again is
  * told again. Called after a sign-up or a change of the limit commits, in its own transaction under the limit's lock;
  * returns the level newly reached, with the places it saw, or null.
