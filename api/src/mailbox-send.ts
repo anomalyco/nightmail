@@ -194,8 +194,8 @@ export type OutgoingMessage = {
   /** Bane-authored mail carrying a single-use capability (fwd_…). Every workspace-visible copy withholds it; only the sent message has it. */
   sealed?: boolean;
 };
-/** Withholds single-use capabilities from stored, workspace-visible copies of sealed mail. */
-export const sealCapabilities = (value: string) => value.replace(/fwd_[0-9a-f]{64}/g, '[link withheld: only the recipient can use it]');
+/** Withholds single-use capabilities (a forward confirmation; a sign-in link, signups.ts signinLinkUrl) from stored, workspace-visible copies of sealed mail. */
+export const sealCapabilities = (value: string) => value.replace(/fwd_[0-9a-f]{64}|(?<=\blink=)[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{43}/g, '[link withheld: only the recipient can use it]');
 
 /** Enforces the loop guards. There is no hourly or daily cap per address: the send admission applies the workspace's
  * limits. Caller holds the mailbox row lock. */

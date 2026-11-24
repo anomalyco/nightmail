@@ -28796,6 +28796,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const signInUrl = signinLinkUrl(runtime.config, made.id);
       assert.ok(link.text.includes(`Sign in: ${signInUrl}\n`), link.text);
       assert.deepEqual(link.html.match(/href="[^"]*"/g), [`href="${signInUrl}"`]);
+      // The link is its recipient's alone: whoever reads the platform workspace's sent mail (a member here) sees it withheld.
+      const { rows: [{ user_id: reader }] } = await db.query(`SELECT user_id FROM workspace_members WHERE workspace_id=$1 AND role='owner' ORDER BY id LIMIT 1`, [wid]);
+      await db.query(`INSERT INTO workspace_members(id,workspace_id,user_id,role) VALUES ($1,$2,$3,'member')`, [randomUUID(), platform, reader]);
+      cleanup(t, async () => { await db.query('DELETE FROM workspace_members WHERE workspace_id=$1 AND user_id=$2', [platform, reader]); });
+      const read = ok(await local('GET', `/v1/emails/${link.id}/content`, undefined, 'live', { 'x-nightmail-workspace': platform }));
+      for (const body of [read.text, read.html]) { assert.ok(!body.includes(made.id), body); assert.match(body, /link withheld/); }
       // The link's random characters aren't words: the check reads the email without it.
       for (const email of [invitation, limit, evaluation, domain, waitlist, { ...link, text: link.text.replace(signInUrl, '') }]) {
         for (const body of [email.subject, email.text]) assert.doesNotMatch(body, HOW_IT_WORKS);

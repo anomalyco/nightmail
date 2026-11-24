@@ -656,7 +656,7 @@ async function visibleEmailContent(runtime: Runtime,a: Actor,row: typeof emails.
   // App-owned capabilities only, not a general sanitizer for transactional bearer links.
   // Raw MIME can hide tokens inside encodings/folding; only managers receive that opaque content.
   const visible = (value: string | undefined) => value === undefined ? null : manage ? value : redactCapabilityText(value);
-  // Sealed Nightmail notices (forward confirmations) carry a capability meant only for the recipient: withheld from every reader.
+  // Sealed Nightmail notices (forward confirmations, sign-in links) carry a capability meant only for the recipient: withheld from every reader.
   if (row.snapshot.sealed) { const { sealCapabilities } = await import('./mailbox-send.js'); return EmailContent.parse({ untrustedContent, subject: s.subject, html: s.html === undefined ? null : sealCapabilities(s.html), text: s.text === undefined ? null : sealCapabilities(s.text), raw: null, attachments: s.attachments, render: s.template?.render ?? 'direct', templateName: s.template?.name ?? null, simulated: row.simulated }); }
   return EmailContent.parse({ untrustedContent, subject: visible(s.subject), html: visible(s.html), text: visible(s.text), raw: manage ? s.raw ?? s.mime ?? null : null, attachments: s.attachments, render: s.template?.render ?? 'direct', templateName: s.template?.name ?? null, simulated: row.simulated });
 }
@@ -1502,12 +1502,13 @@ async function renderTemplates(runtime: Runtime, a: Actor, out: Outgoing[], batc
   }
 }
 /** POST /v1/emails/send and /batch after authentication, the dashboard's test email and the platform's notices. */
-async function admitEmails(call: SendCall, a: Actor, input: SendRequest | { emails: SendRequest[] }, scheduledAt?: string) {
+async function admitEmails(call: SendCall, a: Actor, input: SendRequest | { emails: SendRequest[] }, scheduledAt?: string, sealed = false) {
   const batch = 'emails' in input, mails = batch ? input.emails : [input];
   // Marketing mail's footer carries the workspace's postal address when it has one. Unlike a campaign, a marketing send
   // without one is not refused: its caller writes the whole message and may include the address itself.
   const address = mails.some(m => m.kind === 'marketing') ? await workspacePostalAddress(call.runtime, call.db ?? call.runtime.db, a.workspaceId) : null;
   const out = await directMessages(call.runtime, mails, batch, address);
+  if (sealed) for (const m of out) m.snapshot.sealed = true;
   // A reply by header joins the conversation it answers only when its sender can read that message.
   await joinReplies(call.db ?? call.runtime.db, actorMailAccess(a), out.map(m => m.snapshot));
   const needsPrep = out.some(m => m.template) || mayScreenAtAccept(call.runtime, out);
@@ -4066,9 +4067,9 @@ export async function screenHeldMail(runtime: Runtime, limit = 50): Promise<{ le
   return { leased: rows.length, passed, rejected, deferred };
 }
 
-export async function sendSystemEmail(runtime: Runtime, workspaceId: string, mail: { from: string; to: string[]; subject: string; text: string; html?: string; idempotencyKey: string } & ({ standingEvent: string } | { billingNotice: string } | { notice: string })) {
+export async function sendSystemEmail(runtime: Runtime, workspaceId: string, mail: { from: string; to: string[]; subject: string; text: string; html?: string; idempotencyKey: string; sealed?: boolean } & ({ standingEvent: string } | { billingNotice: string } | { notice: string })) {
   const origin = 'standingEvent' in mail ? `standing:${mail.standingEvent}` : 'billingNotice' in mail ? `billing:${mail.billingNotice}` : `notice:${mail.notice}`;
   const a: Actor = { workspaceId, keyId: origin, permissions: ['send'], domains: [], credential: 'apiKey' };
   const input = BatchInput.parse({ emails: mail.to.map(to => ({ from: mail.from, fromName: productName, to: [to], subject: mail.subject, text: mail.text, ...(mail.html ? { html: mail.html } : {}), kind: 'transactional' })) });
-  return admitEmails({ runtime, path: '/v1/emails/batch', key: idempotencyKey(mail.idempotencyKey) }, a, input);
+  return admitEmails({ runtime, path: '/v1/emails/batch', key: idempotencyKey(mail.idempotencyKey) }, a, input, undefined, mail.sealed);
 }
