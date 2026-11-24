@@ -3,6 +3,7 @@ import { ApiError, type MailRoute, type RoutingTestResult, type Api, type PageRe
 import type { Agent, ApiKey, AppPassword, AuditEntry, CreatedAppPassword, DomainQuota, WorkspaceSettings } from './types'
 import type { CreatedInbox, Inbox, InboxMessageDetail, InboxMessagePage, LogDirection, LogEntry, SenderScore } from './types'
 import { headerPrefix, productName } from '../../../api/src/brand'
+import { waitForPendingReport } from '../../../api/src/internal-report-retry'
 import { analytics } from '../lib/analytics'
 import { webhookPatchBody } from '../features/settings/webhook-patch'
 type Json = Record<string, any>
@@ -143,15 +144,20 @@ export async function request<T = Json>(path: string, options: { method?: string
   try {
     try {
       const early = !probe && options.method === undefined && options.body === undefined && !options.file ? takeEarly(path, signal) : null
-      response = (early && await early) ?? await fetch(path, { method, credentials: 'include', signal,
+      const fetchRequest = () => fetch(path, { method, credentials: 'include', signal,
         headers: { Accept: 'application/json', ...(options.ifMatch===undefined?{}:{'If-Match':String(options.ifMatch)}), ...(options.body === undefined ? {} : { 'Content-Type': 'application/json' }), ...options.file?.headers, ...(options.idempotencyKey ? { 'Idempotency-Key': options.idempotencyKey } : {}), ...(account ? { [accountHeader]: account } : {}), ...(workspace ? { [workspaceHeader]: workspace } : {}) },
         body: options.file?.bytes ?? (options.body === undefined ? undefined : JSON.stringify(options.body)) })
+      response = (early && await early) ?? await fetchRequest()
+      data = await response.json().catch(() => null)
+      while (response.status === 202 && await waitForPendingReport(method, path, data, response.headers.get('retry-after'), signal)) {
+        response = await fetchRequest()
+        data = await response.json().catch(() => null)
+      }
     } catch (error) {
       if (isAbortError(error)) throw error
       analytics().apiError(method, path, undefined, 'NETWORK_UNAVAILABLE')
       throw new ApiError(`Cannot reach ${productName}. Check the API service and try again.`, 'NETWORK_UNAVAILABLE')
     }
-    data = await response.json().catch(() => null)
   } finally {
     if (trackedWrite) activeWrites.delete(trackedWrite)
     linked?.cleanup()
