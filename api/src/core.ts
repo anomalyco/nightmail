@@ -178,6 +178,9 @@ export interface Config {
    *  reach (`target`, a name in that zone) and the token that edits its custom hostnames. `workspaces` (Hosted,
    *  NIGHTMAIL_LINK_HOST_WORKSPACES): the only workspaces they are for, none when empty; absent (self-hosted), every one. */
   linkHosts?: { zoneId: string; token: string; target: string; workspaces?: readonly string[] };
+  /** Hosted: routed link hosts (NIGHTMAIL_LINK_ROUTES, src/link-domains.ts): a workspace's links.<domain> that a Worker route
+   *  on this installation's own Cloudflare account sends here, used and answered for that workspace with no custom hostname. */
+  linkRoutes?: readonly { workspaceId: string; hostname: string }[];
   sesFeedbackUrl?: string;
   regions: string[];
   liveEnabled: boolean;

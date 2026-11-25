@@ -33,6 +33,22 @@ if [[ -n $link_zone ]]; then
     { unset link_token; echo "::error::nightmail/${STAGE:-}/NIGHTMAIL_LINK_SAAS_TOKEN must be one line of 20 to 500 characters from [A-Za-z0-9._~+/=-]"; exit 1; }
   echo "::add-mask::$link_token"
 fi
+# Zone routes (routed link hosts, the link zone's */*): Wrangler replaces the Worker's routes on each deploy, after the new
+# version is up. A zone this deploy's token can't see would fail there, half applied, so look each one up first, as
+# Wrangler does (its ID by name, then its Workers routes), and stop here, before the Worker, its secrets or its routes
+# change. The token stays out of argv.
+route_zones=$(node -e "const ts=require('typescript');const c=ts.parseConfigFileTextToJson('w',require('fs').readFileSync(process.argv[1],'utf8')).config;process.stdout.write([...new Set((c?.routes??[]).flatMap(r=>typeof r==='object'&&r.zone_name&&!r.custom_domain?[r.zone_name]:[]))].join(' ')+'|'+String(c?.account_id??''))" "$config")
+route_account=${route_zones##*|}
+cf_get() { printf 'header = "Authorization: Bearer %s"\nurl = "https://api.cloudflare.com/client/v4/%s"\n' "${CLOUDFLARE_API_TOKEN:?}" "$1" | curl --config - --silent --max-time 20; }
+for zone in ${route_zones%|*}; do
+  [[ $zone =~ ^[a-z0-9.-]+$ && $route_account =~ ^[0-9a-f]{32}$ ]] || { echo "::error::$config has a route zone or account_id that isn't a name or an ID"; exit 1; }
+  zone_id=$(cf_get "zones?name=$zone&account.id=$route_account" | jq -r 'select(.success == true and (.result | length) == 1) | .result[0].id' 2>/dev/null || true)
+  if ! [[ $zone_id =~ ^[0-9a-f]{32}$ ]] || ! cf_get "zones/$zone_id/workers/routes" | jq -e '.success == true' >/dev/null 2>&1; then
+    echo "::error::This deploy's Cloudflare token can't read Workers routes on $zone, where $config has routes. The Worker, its secrets and its routes weren't changed (this commit's migrations, applied before this step, stay): give the stage's token Workers Routes Edit on $zone (anomalyco/secrets), then deploy again."
+    exit 1
+  fi
+  echo "Routes: this deploy's token reaches $zone."
+done
 for name in BANE_ROOT_SECRET ACCOUNT_CLIENT_PRIVATE_KEY TYPESAFE_API_KEY; do
   [[ -n ${!name:-} ]] || { echo "::error::Missing required app secret: $name"; exit 1; }
 done

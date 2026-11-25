@@ -1005,6 +1005,13 @@ test('optional Worker secrets disable only their feature on a partial rollout; c
   const listed=`ws_${'1'.repeat(32)}`, saasVars={NIGHTMAIL_LINK_SAAS_ZONE_ID:zone,NIGHTMAIL_LINK_SAAS_TOKEN:token};
   assert.deepEqual([loadConfig({...base,...saasVars}).linkHosts?.workspaces,loadConfig({...base,...saasVars,NIGHTMAIL_LINK_HOST_WORKSPACES:` ${listed} , ${listed}`}).linkHosts?.workspaces,
     loadConfig({...base,...saasVars,NIGHTMAIL_LINK_HOST_WORKSPACES:'everyone'}).linkHosts],[[],[listed],undefined]);
+  // Routed link hosts: one workspace per host, never on this installation's own domain (or a previous one's) or the link
+  // domain; anything else turns them all off.
+  const routes=(value:string,extra={})=>loadConfig({...base,PREVIOUS_PUBLIC_URLS:'https://old.example.org',NIGHTMAIL_LINK_HOST:'links.example.net',NIGHTMAIL_LINK_ROUTES:value,...extra}).linkRoutes;
+  assert.deepEqual(routes(` ${listed}=links.Example.com , ws_${'2'.repeat(32)}=links.mail.example.io`),[{workspaceId:listed,hostname:'links.example.com'},{workspaceId:`ws_${'2'.repeat(32)}`,hostname:'links.mail.example.io'}]);
+  for(const bad of [`${listed}=links.example.org`,`${listed}=links.example.net`,`${listed}=example.com`,`${listed}=links.example.com,ws_${'2'.repeat(32)}=links.example.com`,'links.example.com'])
+    assert.equal(routes(bad),undefined,bad);
+  assert.equal(routes(`${listed}=links.example.com`,{MULTI_TENANT:'false'}),undefined,'Hosted only.');
   for(const bad of [{BANE_ROOT_SECRET:'short'},{ACCOUNT_CLIENT_PRIVATE_KEY:''},{ACCOUNT_REQUIRED_ACR:''},{AWS_RUNTIME_CREDENTIALS:'{}'},{ENABLE_LIVE_SES:'true'}])
     assert.throws(()=>loadConfig({...base,...bad,NIGHTMAIL_POSTMASTER_CREDENTIALS:'bad'}),{code:'CONFIG_INVALID'});
 });
@@ -41874,7 +41881,41 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.deepEqual((await withLinkRecords(runtime,wid,[{name:domain,dns:[]}] as any[]))[0].dns,[]);
       const ownLink=/https:\/\/links\.[^\s"]+\/unsubscribe\/u_[0-9a-f]{64}/.exec(onOwn[0].Content.Simple.Body.Text.Data)![0];
       assert.equal((await page(new Request(ownLink,{headers:{accept:'text/html'}}))).status,200);
+      // A routed link host (NIGHTMAIL_LINK_ROUTES): a route on the platform's own Cloudflare account sends links.<domain>
+      // here. Named for another workspace only, this one's mail stays on the link domain.
+      const routed=`links.${domain}`,{linkHostRequest}=await import('./src/link-hosts.js'),{servesWorkspace}=await import('./src/link-domains.js');
+      runtime.config.linkRoutes=[{workspaceId:other,hostname:'links.routed-elsewhere.example'}];
+      assert.deepEqual(await linkChoice(runtime,runtime.db,wid,from),onShared);
+      // Named for this workspace, with own link hosts also on for it: the routed host is authoritative, whatever link_hosts
+      // says of the name (here gone pending with no custom hostname, as when a custom hostname is deleted). No record, no
+      // check, and every copy links there with nothing recorded on the link domain; the send review says so.
       runtime.config.linkHosts={...saas,workspaces:[wid]};
+      await db.query("UPDATE link_hosts SET status='pending',custom_hostname_id=NULL,checked_at=now()-interval '2 days' WHERE workspace_id=$1 AND domain=$2",[wid,domain]);
+      runtime.config.linkRoutes=[{workspaceId:other,hostname:'links.routed-elsewhere.example'},{workspaceId:wid,hostname:routed}];
+      assert.deepEqual(await linkChoice(runtime,runtime.db,wid,from),{origin:`https://${routed}`});
+      assert.deepEqual(await linkChoice(runtime,runtime.db,wid,`news@mail.${domain}`),{origin:`https://${routed}`},'A name under the domain links there too.');
+      assert.deepEqual((await withLinkRecords(runtime,wid,[{name:domain,dns:[]}] as any[]))[0].dns,[]);
+      await checkLinkHost(runtime,wid,domain);
+      assert.deepEqual((await db.query("SELECT status,checked_at<now()-interval '1 day' AS untouched FROM link_hosts WHERE workspace_id=$1 AND domain=$2",[wid,domain])).rows,[{status:'pending',untouched:true}]);
+      assert.deepEqual(await review(),['not_configured',{hostname:routed,active:true},`https://${routed}`]);
+      await launch();await run('campaign.run');await run('email.dispatch');
+      const onRoute=delivered.splice(0);
+      assert.deepEqual(hostsOf(onRoute),[routed,routed,routed]);
+      assert.equal(await used(),10001);
+      // It answers this workspace's links (the page, the one-click POST, links sent before, images), never another
+      // workspace's, and nothing but links: no dashboard, API or docs on that name.
+      const routedLink=/https:\/\/links\.[^\s"]+\/unsubscribe\/u_[0-9a-f]{64}/.exec(onRoute[0].Content.Simple.Body.Text.Data)![0];
+      assert.equal((await page(new Request(routedLink,{headers:{accept:'text/html'}}))).status,200);
+      assert.equal((await page(new Request(ownLink,{headers:{accept:'text/html'}}))).status,200);
+      assert.equal((await page(new Request(`https://${routed}/unsubscribe/${foreign}`,{headers:{accept:'text/html'}}))).status,404);
+      assert.deepEqual([await servesWorkspace(runtime,`https://${routed}/i/x.png`,wid),await servesWorkspace(runtime,`https://${routed}/i/x.png`,'ws_link_never_shared')],[true,false]);
+      for(const [path,answer] of [['/unsubscribe/u_x','link'],['/i/x.png','link'],['/','missing'],['/overview','missing'],['/v1/campaigns','missing'],['/docs.md','missing']] as const)
+        assert.equal(linkHostRequest(true,routed,path,['nightmail.dev']),answer,path);
+      const oneClick=await page(new Request(routedLink,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'List-Unsubscribe=One-Click'}));
+      assert.equal(oneClick.status,200,await oneClick.clone().text());
+      // Without the setting, that mail goes back to the rules above: here the link domain, its own host being pending.
+      runtime.config.linkRoutes=undefined;
+      assert.deepEqual(await linkChoice(runtime,runtime.db,wid,from),onShared);
       // Neither on (dev, self-hosted): this installation's own origin, as before link hosts.
       Object.assign(runtime.config,{linkHost:undefined,linkHosts:undefined});
       assert.deepEqual(await linkChoice(runtime,runtime.db,wid,from),{origin:PUBLIC_ORIGIN.replace(/\/$/,'')});
@@ -42030,6 +42071,14 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         } finally { await db.query("UPDATE sender_standing SET step='ok' WHERE workspace_id=$1", [wid]); }
         assert.equal((await fetch(new Request(onLinkDomain))).status, 200);
       } finally { runtime.config.linkHost = undefined; }
+      // A routed link host serves its workspace's pictures, and another workspace's routed host none of them.
+      try {
+        runtime.config.linkRoutes = [{ workspaceId: 'ws_routed_elsewhere', hostname: 'links.routed-elsewhere.example' }];
+        assert.equal((await fetch(new Request(`https://links.routed-elsewhere.example${path}`))).status, 404);
+        runtime.config.linkRoutes = [{ workspaceId: runtime.config.workspaceId, hostname: 'links.routed-images.example' }];
+        const routedImage = await fetch(new Request(`https://links.routed-images.example${path}`));
+        assert.equal(routedImage.status, 200); assert.ok(Buffer.from(await routedImage.arrayBuffer()).equals(png));
+      } finally { runtime.config.linkRoutes = undefined; }
       // Hosted, its own domain never serves them, even as one of its own origins.
       const hostedBefore = { multiTenant: runtime.config.multiTenant, previousOrigins: runtime.config.previousOrigins };
       Object.assign(runtime.config, { multiTenant: true, previousOrigins: [...runtime.config.previousOrigins ?? [], 'https://nightmail.dev'] });

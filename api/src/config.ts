@@ -155,6 +155,12 @@ const values = z.object({
   // link domain even with the SaaS zone set, so no other workspace is shown a links record or takes one of the zone's few
   // custom hostnames. Self-hosted ignores it (the operator's own domains all may).
   NIGHTMAIL_LINK_HOST_WORKSPACES: optional(z.string().trim().regex(/^ws_[0-9a-f]{32}(?:\s*,\s*ws_[0-9a-f]{32})*$/)),
+  // Hosted: routed link hosts, <workspace ID>=links.<domain> separated by commas. Each is a name in a zone of this
+  // installation's own Cloudflare account that a Worker route (<host>/*, in the same wrangler config) sends to this
+  // Worker: no custom hostname, no DNS check. Mail from that workspace's <domain> (or a name under it) links there, and
+  // the host answers that workspace's links and nothing else. A malformed list, or a host on this installation's own
+  // domain, turns them all off: that mail links on NIGHTMAIL_LINK_HOST instead.
+  NIGHTMAIL_LINK_ROUTES: optional(z.string().trim().toLowerCase().max(2000).regex(/^ws_[0-9a-f]{32}=links\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}(?:\s*,\s*ws_[0-9a-f]{32}=links\.(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63})*$/)),
   NIGHTMAIL_BYO_V2: z.enum(['true','false']).default('false'),
   BYO_V5_TEMPLATE_URL: optional(z.url({ protocol: /^https$/ })),
   // The origin a connected account's SNS topics deliver to (https://events.nightmail.dev): its role template allows
@@ -263,6 +269,7 @@ const featureSettings = {
   listHygiene: ['NIGHTMAIL_HYGIENE_LISTS'], dnsHygiene: ['NIGHTMAIL_HYGIENE_DNS'],
   linkHosts: ['NIGHTMAIL_LINK_SAAS_ZONE_ID', 'NIGHTMAIL_LINK_SAAS_TOKEN', 'NIGHTMAIL_LINK_SAAS_TARGET', 'NIGHTMAIL_LINK_HOST_WORKSPACES'],
   sharedLinks: ['NIGHTMAIL_LINK_HOST'],
+  linkRoutes: ['NIGHTMAIL_LINK_ROUTES'],
   postmaster: ['NIGHTMAIL_POSTMASTER_CREDENTIALS'],
   supportChat: ['NIGHTMAIL_SUPPORT_URL', 'NIGHTMAIL_SUPPORT_SIGNING_KEY'],
   supportEmail: ['NIGHTMAIL_SUPPORT_ADDRESS_IDS'],
@@ -397,6 +404,11 @@ export function loadConfig(input: Record<string, unknown>): Config {
   const site = (host: string) => host.split('.').slice(-2).join('.');
   const configuredHost = v.MULTI_TENANT === 'true' ? v.NIGHTMAIL_LINK_HOST : undefined;
   const linkHost = configuredHost && [url.origin, ...previousOrigins].some(origin => site(new URL(origin).hostname) === site(configuredHost)) ? disabled('sharedLinks') : configuredHost;
+  // One workspace per routed host, none on this installation's own domain or the link domain.
+  const routes = v.MULTI_TENANT === 'true' ? list(v.NIGHTMAIL_LINK_ROUTES ?? '').map(entry => { const [workspaceId, hostname] = entry.split('='); return { workspaceId: workspaceId!, hostname: hostname! }; }) : [];
+  const linkRoutes = !routes.length ? undefined
+    : routes.some(route => route.hostname === linkHost || [url.origin, ...previousOrigins].some(origin => site(new URL(origin).hostname) === site(route.hostname)))
+      || new Set(routes.map(route => route.hostname)).size !== routes.length ? disabled('linkRoutes') : routes;
   const linkHosts = v.NIGHTMAIL_LINK_SAAS_ZONE_ID && v.NIGHTMAIL_LINK_SAAS_TOKEN && linkTarget
     ? { zoneId: v.NIGHTMAIL_LINK_SAAS_ZONE_ID, token: v.NIGHTMAIL_LINK_SAAS_TOKEN, target: linkTarget,
       ...v.MULTI_TENANT === 'true' ? { workspaces: list(v.NIGHTMAIL_LINK_HOST_WORKSPACES ?? '') } : {} } : undefined;
@@ -437,7 +449,7 @@ export function loadConfig(input: Record<string, unknown>): Config {
     accountClient: v.ACCOUNT_CLIENT_ID && v.ACCOUNT_CLIENT_PRIVATE_KEY ? { id:v.ACCOUNT_CLIENT_ID, privateKey:v.ACCOUNT_CLIENT_PRIVATE_KEY, algorithm:v.ACCOUNT_ID_TOKEN_ALG } : undefined,
     encryptionKey: deriveEncryptionKey(v.NIGHTMAIL_ROOT_SECRET),
     previousEncryptionKey: v.PREVIOUS_NIGHTMAIL_ROOT_SECRET ? deriveEncryptionKey(v.PREVIOUS_NIGHTMAIL_ROOT_SECRET) : v.ENCRYPTION_KEY,
-    publicUrl: url.origin, linkHost, linkHosts, linkedImages: (v.CAMPAIGN_IMAGES ?? (url.protocol === 'https:' ? 'linked' : 'embedded')) === 'linked', sesFeedbackUrl: v.SES_FEEDBACK_URL, regions, liveEnabled: v.ENABLE_LIVE_SES === 'true',
+    publicUrl: url.origin, linkHost, linkHosts, linkRoutes, linkedImages: (v.CAMPAIGN_IMAGES ?? (url.protocol === 'https:' ? 'linked' : 'embedded')) === 'linked', sesFeedbackUrl: v.SES_FEEDBACK_URL, regions, liveEnabled: v.ENABLE_LIVE_SES === 'true',
     simulatedSes: { latencyMs: v.SIMULATED_SES_LATENCY_MS, maxSendRate: v.SIMULATED_SES_RATE, deliveryDelayMs: v.SIMULATED_SES_DELIVERY_DELAY_MS },
     dispatch: { rateFactor: v.DISPATCH_RATE_FACTOR, txReservePercent: v.DISPATCH_TX_RESERVE_PERCENT, targetRate: v.DISPATCH_TARGET_RATE, dailyHeadroomPercent: v.DISPATCH_DAILY_HEADROOM_PERCENT, customerSharePercent: v.HOSTED_CUSTOMER_SHARE_PERCENT },
     aws,

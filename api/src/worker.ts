@@ -330,7 +330,7 @@ export default {
     // With either on, every host that is none of this installation's own came through the link zone's route.
     const own = [String((env as { PUBLIC_URL?: unknown }).PUBLIC_URL), ...String((env as { PREVIOUS_PUBLIC_URLS?: unknown }).PREVIOUS_PUBLIC_URLS ?? '').split(',')]
       .flatMap(origin => { try { return [new URL(origin.trim()).hostname]; } catch { return []; } }).concat(eventsHost ? [eventsHost.replace(/:\d+$/, '')] : []);
-    const linkAnswer = linkHostRequest(!!setting(env, 'LINK_HOST') || !!setting(env, 'LINK_SAAS_ZONE_ID') && !!setting(env, 'LINK_SAAS_TOKEN'), url.hostname, pathname, own);
+    const linkAnswer = linkHostRequest(!!setting(env, 'LINK_HOST') || !!setting(env, 'LINK_ROUTES') || !!setting(env, 'LINK_SAAS_ZONE_ID') && !!setting(env, 'LINK_SAAS_TOKEN'), url.hostname, pathname, own);
     if (linkAnswer === 'missing') return fastSecure(new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } }));
     // A name of the zone that isn't this Worker's (dev, support, media): the zone-wide route runs before its custom domain
     // or bucket, so it goes on to them unchanged (a subrequest to the same zone skips the route).
