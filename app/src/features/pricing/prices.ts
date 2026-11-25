@@ -206,8 +206,9 @@ export type Entry = {
   /** How the vendor charges and its price points, each with its source. */
   offer: Offer
   /** The usage both prices are for at a size on the fader: so many emails to every contact a month, with this many
-   *  teammates; emails sent, one recipient each; or so many emails received and sent by every inbox a month. */
-  model: { per: 'contact'; sendsPerContact: number; seats: number } | { per: 'email' } | { per: 'inbox'; receivedPerInbox: number; sentPerInbox: number }
+   *  teammates; emails sent, one recipient each; emails received, nothing sent; or so many emails received and sent by
+   *  every inbox a month. */
+  model: { per: 'contact'; sendsPerContact: number; seats: number } | { per: 'email' } | { per: 'received' } | { per: 'inbox'; receivedPerInbox: number; sentPerInbox: number }
   /** Small, medium and large, in the offer's unit: the page opens at the middle one. */
   sizes: [number, number, number]
   /** The sizes the page's fader can reach, each one the vendor prices and Nightmail costs less at (the pre-merge check
@@ -241,7 +242,9 @@ export function comparisonOf(entry: Entry): Comparison {
     ? (contacts: number): Usage => ({ contacts, sent: contacts * m.sendsPerContact, received: 0, seats: m.seats })
     : m.per === 'inbox'
       ? (inboxes: number): Usage => ({ inboxes, contacts: 0, sent: inboxes * m.sentPerInbox, received: inboxes * m.receivedPerInbox, seats: 1 })
-      : (sent: number): Usage => ({ contacts: 0, sent, received: 0, seats: 1 })
+      : m.per === 'received'
+        ? (received: number): Usage => ({ contacts: 0, sent: 0, received, seats: 1 })
+        : (sent: number): Usage => ({ contacts: 0, sent, received: 0, seats: 1 })
   return { ...entry, title: `Nightmail vs ${entry.vendor}`, path: `/compare/${entry.slug}`, sizes: entry.sizes.map(use), use }
 }
 /** A comparison's unit as its page names it: the fader's label, the board's head and a size in a sentence. */
@@ -254,6 +257,7 @@ export const UNITS = {
 export function usageLines(c: Pick<Comparison, 'model'>, u: Usage): string[] {
   const m = c.model
   if (m.per === 'contact') return [`${formatCount(u.sent)} emails a month`, `${m.sendsPerContact} to each contact`]
+  if (m.per === 'received') return [`${formatCount(u.received)} received and 0 sent a month`, 'Delivered to your app']
   if (m.per === 'inbox') return [`${formatCount(u.received)} received and ${formatCount(u.sent)} sent a month`, `${m.receivedPerInbox} in and ${m.sentPerInbox} out per inbox`]
   return ['One recipient each', 'Nothing received']
 }
