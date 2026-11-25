@@ -17,7 +17,8 @@ function receivingMx(domain: Domain) {
 }
 
 // domain is undefined when the reader is signed out and the workspace's domains are unknown.
-export function agentPrompt({ origin, domain, email, multiTenant }: { origin: string; domain: Domain | null | undefined; email: string | null; multiTenant: boolean }) {
+// `testSender`: the shared test sender (GET /v1/me), offered until a domain is verified so an agent can send a first email at once.
+export function agentPrompt({ origin, domain, email, multiTenant, testSender }: { origin: string; domain: Domain | null | undefined; email: string | null; multiTenant: boolean; testSender?: { address: string; perDay: number } | null }) {
   const lines = [
     `Set up ${productName} email in this project.`,
     '',
@@ -30,8 +31,10 @@ export function agentPrompt({ origin, domain, email, multiTenant }: { origin: st
     lines.push(`- Sending domain: use a verified domain from Domains in the ${productName} dashboard. Ask me which one before sending.`)
     return lines.join('\n')
   }
+  const test = testSender && email ? `- Until a domain is verified, send a test to ${email} from ${testSender.address}, the shared test sender, with sendEmail (POST /v1/emails/send) and an Idempotency-Key header: it sends to my own address only, at most ${testSender.perDay} a day, without fromName, replyTo or attachments. 202 means queued, not delivered.` : null
   if (!domain) {
-    lines.push(`- Sending domain: none yet. Ask me to add one under Domains in the ${productName} dashboard before sending.`)
+    lines.push(`- Sending domain: none yet. Ask me to add one under Domains in the ${productName} dashboard before sending${test ? ' to anyone else' : ''}.`)
+    if (test) lines.push(test)
     return lines.join('\n')
   }
   const verified = domain.status === 'verified'
@@ -40,6 +43,7 @@ export function agentPrompt({ origin, domain, email, multiTenant }: { origin: st
     `- Sending domain: ${domain.name} (${multiTenant ? '' : `region ${domain.regionId}, `}status: ${verified ? 'verified' : 'pending; its DNS records verify automatically, and sending works once verified'}).`,
     `- Send a test email from hello@${domain.name} to ${to} with sendEmail (POST /v1/emails/send)${multiTenant ? '' : `, region "${domain.regionId}"`} and an Idempotency-Key header. 202 means queued, not delivered.`,
   )
+  if (!verified && test) lines.push(test)
   const mx = receivingMx(domain)
   // Hosted suggests reply.<domain>; never tell an agent to change the root MX, which would move the domain's existing mail.
   if (mx) lines.push(multiTenant

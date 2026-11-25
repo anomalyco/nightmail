@@ -1179,6 +1179,9 @@ export type EmailScreenSummary = {
 };
 
 export type SendEmailInput = {
+    /**
+     * An address on a domain verified in this workspace, or a subdomain of one. Hosted, before the first domain verifies: the test sender (testSender.address in GET /v1/me), to your own address only.
+     */
     from: string;
     fromName?: string;
     to: string | Array<string>;
@@ -1256,6 +1259,9 @@ export type SendEmailBatchInput = {
 };
 
 export type BatchSendEmailItem = {
+    /**
+     * An address on a domain verified in this workspace, or a subdomain of one. Hosted, before the first domain verifies: the test sender (testSender.address in GET /v1/me), to your own address only.
+     */
     from: string;
     fromName?: string;
     to: string | Array<string>;
@@ -6337,6 +6343,15 @@ export type GetCurrentIdentityResponses = {
             id: string;
             name: string;
         }> | null;
+        /**
+         * Hosted: the shared test sender. Until the workspace has a verified domain, sendEmail from this address sends to the verified address of a member of the workspace (their own), as name, at most perMinute and perDay recipients. Null when this installation has none.
+         */
+        testSender?: {
+            address: string;
+            name: string;
+            perDay: number;
+            perMinute: number;
+        } | null;
         /**
          * The hosts mail apps connect to: IMAP on 993 (TLS) or 143 (STARTTLS), SMTP on 465 (TLS) or 587 (STARTTLS). An app password signs in to both; a send-only API key signs in to SMTP as apikey. Null when this installation has no IMAP/SMTP gateway.
          */

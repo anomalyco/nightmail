@@ -148,6 +148,9 @@ export async function start(repo, { log = () => {}, servers = 1, delay = null, f
       MAILGW_API_TOKEN: randomBytes(24).toString('hex'), MAILGW_PUBLIC_DOMAIN: 'northwind.example',
       // Bring your own AWS (regional): the hosted connections' account is the platform's, as in production.
       BANE_PLATFORM_AWS_ACCOUNT: '111122223333', BANE_BYO_V2: 'true', BYO_V5_TEMPLATE_URL: 'https://nightmail-byo-templates-111122223333.s3.us-east-2.amazonaws.com/byo/6.0.yaml', BYO_EVENTS_ORIGIN: 'https://events.nightmail.dev',
+      // The shared test sender (api/src/test-sender.ts): onboarding's Add domain step and Overview offer a workspace with no
+      // verified domain a test to its own address. Nothing is sent here; the platform workspace exists only in config.
+      BANE_PLATFORM_DOMAIN_WORKSPACE: 'ws_' + '0'.repeat(32), NIGHTMAIL_TEST_SENDER: 'onboarding@nightmail.example',
     });
     execFileSync('node', ['--import', 'tsx', 'src/migrate.ts'], { cwd: api, env: envFor(0), stdio: ['ignore', 'ignore', 'inherit'] });
     log('postgres: migrated');
@@ -880,6 +883,11 @@ export async function seed(fx) {
   await db.query("INSERT INTO support_email_signins(conversation_id, message_id, address) VALUES ($1, $2, 'nia@lumenlabs.example')", [continueConversation, continueMessage]);
   await domain(db, 'ws_fresh', await hosted(db, 'ws_fresh'), 'lumenlabs.example');
   await fx.signIn('ona', 'ona@fieldnotes.example', 'Ona Field', { id: 'ws_new', name: 'Field Notes' });
+  // Tessera: Hosted mail and a domain still waiting for its DNS records, so Overview's setup offers a test from the shared
+  // test sender beside View records.
+  await fx.signIn('tess', 'tess@tessera.example', 'Tess Ray', { id: 'ws_nodomain', name: 'Tessera' });
+  await db.query("INSERT INTO domain_claims(workspace_id,name,connection_id,sending_state) VALUES('ws_nodomain','tessera.example',$1,'pending')", [await hosted(db, 'ws_nodomain')]);
+  await db.query("INSERT INTO operation_domains(id,workspace_id,name,region) VALUES('dom_tessera_example','ws_nodomain','tessera.example',$1)", [REGION]);
   // Connecting their own AWS account, one workspace per moment of the connect step (onboarding/aws.tsx).
   await connectedAccount(fx, db, 'bea', 'Juniper', 'stack');
   await connectedAccount(fx, db, 'bo', 'Kestrel', 'refused');

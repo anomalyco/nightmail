@@ -8,6 +8,8 @@ import {Workspace,WorkspaceRole,sessionMemberships} from './workspaces.js';
 import {ConnectionSummary,connectionSummary} from './provider-connections.js';
 import { clientIpHeader, productName, requestedScopes } from './brand.js';
 import { MAIL_PORTS } from './mail-servers.js';
+import { TEST_SENDER_NAME } from './test-sender.js';
+import { SEND_LIMITS } from './send-limits.js';
 
 export async function reserveSignIn(runtime:Runtime,headers:Headers) {
   const peer=await digest(headers.get(clientIpHeader) ?? 'unknown');
@@ -39,6 +41,7 @@ export function registerDashboardAuth(app: App) {
       billing:z.object({enforcement:z.enum(['off','shadow','enforce']),free:z.boolean().describe('Anomaly made this workspace free: never charged or paused for the balance.'),sending:z.enum(['ok','low','paused']),receiving:z.enum(['ok','grace','held']),autoRecharge:z.enum(['off','on','pending','failed','capped'])})
         .nullable().optional().openapi({description:'Hosted dashboard sessions: whether the workspace is free, whether an empty balance has paused sending or held received mail, and auto-recharge, so the dashboard can show it on its first frame. Null otherwise; GET /v1/billing has the detail.'}),
       newsletters:z.array(z.object({id:z.string(),name:z.string()})).nullable().openapi({description:'The workspace\u2019s oldest four newsletters (listNewsletters has them all), so a sidebar can name them on its first frame; a fourth means there are more. Null for a credential that cannot read lists (one without read, or limited to sender domains or addresses).'}),
+      testSender:z.object({address:z.string(),name:z.string(),perDay:z.number().int(),perMinute:z.number().int()}).nullable().optional().openapi({description:`Hosted: the shared test sender. Until the workspace has a verified domain, sendEmail from this address sends to the verified address of a member of the workspace (their own), as name, at most perMinute and perDay recipients. Null when this installation has none.`}),
       mailServers:z.object({imap:z.string(),smtp:z.string()}).nullable().optional().openapi({description:`The hosts mail apps connect to: IMAP on ${MAIL_PORTS.imap.tls} (TLS) or ${MAIL_PORTS.imap.starttls} (STARTTLS), SMTP on ${MAIL_PORTS.smtp.tls} (TLS) or ${MAIL_PORTS.smtp.starttls} (STARTTLS). An app password signs in to both; a send-only API key signs in to SMTP as apikey. Null when this installation has no IMAP/SMTP gateway.`})})),...errors}}),async c=>{
     const identity=c.get('actor'), userId=identity.keyId.startsWith('user_')?identity.keyId.slice(5):null;
     const origin=new URL(c.env.config.publicUrl).origin, hosted=c.env.config.multiTenant;
@@ -65,6 +68,7 @@ export function registerDashboardAuth(app: App) {
       }):null,
       session?import('./byo-pilot.js').then(({byoEnabled})=>byoEnabled(c.env,identity.workspaceId)):false]);
     const billing=billingAndNewsletters?.billing??null, newsletters=billingAndNewsletters?.newsletters??standaloneNewsletters;
-    return c.json({id:userId??identity.keyId,workspaceId:identity.workspaceId,role:WorkspaceRole.nullable().parse(identity.role??null),multiTenant:hosted,simulated:isSimulatedSes(c.env),email:identity.email??null,name:identity.name??null,permissions:identity.permissions,domains:identity.domains,origin,host:new URL(origin).host,mcpScopes:requestedScopes(c.env.config),connection,workspaces:session?.workspaces??null,operator:identity.staff?session?.operator??null:null,staffSignIn:!!session?.operator&&!identity.staff,uiNotes,canCreateWorkspace:identity.credential==='dashboard'&&(!hosted||identity.staff===true),byo,presence:Boolean(c.env.campaignRooms),analytics:c.env.config.dashboardAnalytics===true,billing,newsletters,mailServers:c.env.config.mailServers??null},200);
+    return c.json({id:userId??identity.keyId,workspaceId:identity.workspaceId,role:WorkspaceRole.nullable().parse(identity.role??null),multiTenant:hosted,simulated:isSimulatedSes(c.env),email:identity.email??null,name:identity.name??null,permissions:identity.permissions,domains:identity.domains,origin,host:new URL(origin).host,mcpScopes:requestedScopes(c.env.config),connection,workspaces:session?.workspaces??null,operator:identity.staff?session?.operator??null:null,staffSignIn:!!session?.operator&&!identity.staff,uiNotes,canCreateWorkspace:identity.credential==='dashboard'&&(!hosted||identity.staff===true),byo,presence:Boolean(c.env.campaignRooms),analytics:c.env.config.dashboardAnalytics===true,billing,newsletters,mailServers:c.env.config.mailServers??null,
+      testSender:c.env.config.testSender?{address:c.env.config.testSender,name:TEST_SENDER_NAME,...SEND_LIMITS.testSender}:null},200);
   });
 }

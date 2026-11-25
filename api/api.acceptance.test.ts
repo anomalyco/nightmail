@@ -22608,6 +22608,98 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     });
   });
 
+  // The shared test sender (src/test-sender.ts, migration 490): a workspace with Hosted mail and no domain yet sends to its
+  // own members' verified addresses only, within 3 a minute and 10 a day, screened, through the platform workspace's
+  // claim and SES tenant. The email is the workspace's own: in its Logs, with its events and its feedback.
+  test('test sender: a workspace with no domain sends itself a test, to its members only, within its limits, screened, through the platform tenant and into its own Logs',async t=>{
+    await simulatedSesFixture(t,async({runtime,db,local})=>t.test('synthetic transports',async t=>{
+      const {runDispatcher}=await import('./src/dispatcher.js'),{ingestFeedbackBatch}=await import('./src/operations.js'),{TEST_SENDER_NAME,TEST_SENDER_FOOTER}=await import('./src/test-sender.js');
+      const {SESv2Client,GetAccountCommand,SendEmailCommand}=await import('@aws-sdk/client-sesv2');
+      const wid=runtime.config.workspaceId,acct='111122224444',topic=`arn:aws:sns:${REGION}:${acct}:feedback`,screenOrigin='https://screen.test-sender.invalid';
+      const platform=unique('platform'),host='platform-sender.example',from=`onboarding@${host}`;
+      Object.assign(runtime.config,{multiTenant:true,regionalSending:true,liveEnabled:true,aws:{accessKeyId:'fixture',secretAccessKey:'fixture-only'},platformDomainWorkspace:platform,testSender:from,
+        hostedScreen:true,screen:{endpoint:screenOrigin,apiKey:'fixture',model:'fixture',mode:'reject',threshold:0.7}});
+      await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES($1,$2,$3,'ready','fixture')`,[REGION,acct,topic]);
+      // The platform workspace holds the test sender's domain; this workspace has Hosted mail and no domain.
+      await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)',[platform]);
+      await db.query(`INSERT INTO ses_installation_settings(workspace_id,installation_id,default_region,enabled_regions) SELECT $1,'install_'||md5($1),default_region,enabled_regions FROM ses_installation_settings WHERE workspace_id=$2`,[platform,wid]);
+      for (const w of [platform,wid]) await db.query(`INSERT INTO provider_connections(id,workspace_id,region,state,kind,aws_account_id,tenant_state) VALUES($1,$1,$2,'ready','shared',$3,'ready')`,[w,REGION,acct]);
+      await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES($1,$2,$2,'verified')`,[host,platform]);
+      await db.query('INSERT INTO operation_domains(id,name,workspace_id,region) VALUES($1,$2,$1,$3)',[platform,host,REGION]);
+      // A teammate with a verified address, and one whose address isn't verified.
+      const member=async(email:string,verified:boolean)=>{const user=unique('user');
+        await db.query('INSERT INTO nightmail_users(id,name,email,email_verified) VALUES($1,$1,$2,$3)',[user,email,verified]);
+        await db.query("INSERT INTO workspace_members(id,workspace_id,user_id,role) VALUES($1,$2,$3,'member')",[unique('member'),wid,user]);return email;};
+      const teammate=await member(`teammate-${randomUUID().slice(0,8)}@example.net`,true),unverified=await member(`unverified-${randomUUID().slice(0,8)}@example.net`,false);
+      const sent:Json[]=[],screened:string[]=[];
+      t.mock.method(SESv2Client.prototype,'send',async(cmd:any)=>{
+        if(cmd instanceof GetAccountCommand)return {SendingEnabled:true,SendQuota:{MaxSendRate:1000,Max24HourSend:100000,SentLast24Hours:0}};
+        assert.ok(cmd instanceof SendEmailCommand);sent.push(cmd.input);return {MessageId:unique('ses')};
+      });
+      t.mock.method(globalThis,'fetch',async(url:RequestInfo|URL,init?:RequestInit)=>{
+        assert.equal(String(url),screenOrigin);const body=String(init?.body??'');screened.push(body);
+        return Response.json({answers:{spam:{noul:/buy cheap crypto/i.test(body)?0.99:0.01}}});
+      });
+      const send=(body:Json)=>local('POST','/v1/emails/send',{from,subject:'Hello from the test sender',text:'It works.',...body});
+      const batch=(...emails:Json[])=>local('POST','/v1/emails/batch',{emails:emails.map(m=>({from,subject:'Batch',text:'It works.',...m}))});
+      const row=async(id:string)=>(await db.query('SELECT workspace_id,from_address,status,error_code,provider_id,snapshot FROM sending_emails WHERE id=$1',[id])).rows[0];
+      assert.deepEqual(ok(await local('GET','/v1/me')).testSender,{address:from,name:TEST_SENDER_NAME,perDay:10,perMinute:3});
+
+      // 1. To your own address: this workspace's email, from the fixed name, with the footer, routed by the platform's claim.
+      const own=ok(await send({to:AUTH_EMAIL}),202);
+      assert.equal(own.screen?.status,'passed');
+      const first=await row(own.id);
+      assert.deepEqual([first.workspace_id,first.from_address,first.snapshot.fromName,first.snapshot.testSender,first.snapshot.binding.connection],[wid,from,TEST_SENDER_NAME,true,platform]);
+      assert.ok(first.snapshot.text.endsWith(TEST_SENDER_FOOTER),'The text part ends with the footer.');
+      assert.ok(screened.length>0 && screened.every(body=>body.includes('test sender. Add your domain')),'The screen reads the message with its footer.');
+      // It goes out with the platform workspace's tenant and this workspace's tags; its feedback lands on this email.
+      await runDispatcher(runtime,{region:REGION,accountId:acct});
+      assert.equal(sent.length,1);
+      assert.deepEqual([sent[0]!.FromEmailAddress,sent[0]!.TenantName,sent[0]!.EmailTags.find((tag:Json)=>tag.Name==='bane_workspace_id').Value],[`"${TEST_SENDER_NAME}" <${from}>`,`bane-${platform}`,wid]);
+      const accepted=await row(own.id);assert.equal(accepted.status,'accepted');
+      assert.deepEqual(await ingestFeedbackBatch(runtime,[{topicArn:topic,region:REGION,messageId:unique('sns'),message:{eventType:'Delivery',delivery:{timestamp:new Date().toISOString()},mail:{messageId:accepted.provider_id,sendingAccountId:acct,tags:{bane_email_id:[own.id]}}}}]),[{ok:true}]);
+      assert.equal(ok(await local('GET',`/v1/emails/${own.id}`)).status,'delivered');
+      assert.deepEqual(ok(await local('GET','/v1/logs?direction=sent')).data.map((entry:Json)=>[entry.id,entry.from,entry.status]),[[own.id,{name:TEST_SENDER_NAME,address:from},'delivered']],'Its Logs list it.');
+
+      // 2. Anyone else is refused, a Cc included; a teammate's verified address is the workspace's own.
+      for (const body of [{to:'stranger@example.net'},{to:unverified},{to:AUTH_EMAIL,cc:['stranger@example.net']}]) error(await send(body),422,'TEST_SENDER_RECIPIENT');
+      assert.equal(error(await batch({to:AUTH_EMAIL},{to:'stranger@example.net'}),422,'TEST_SENDER_RECIPIENT').field,'emails.1.to');
+      ok(await send({to:teammate}),202);
+      // 3. What it doesn't send is named, and nothing is queued for it.
+      for (const [body,field] of [[{fromName:'Support'},'fromName'],[{replyTo:['me@example.net']},'replyTo'],[{kind:'marketing'},'kind'],[{headers:[{name:'X-Entity-Ref-ID',value:'1'}]},'headers'],[{scheduledAt:new Date(Date.now()+3600_000).toISOString()},'scheduledAt']] as const)
+        assert.equal(error(await send({to:AUTH_EMAIL,...body}),422,'TEST_SENDER_UNSUPPORTED').field,field);
+      assert.equal(error(await batch({to:AUTH_EMAIL},{to:AUTH_EMAIL,replyTo:['me@example.net']}),422,'TEST_SENDER_UNSUPPORTED').field,'emails.1.replyTo');
+      // 4. Screened as any Hosted send: refused content queues nothing.
+      error(await send({to:AUTH_EMAIL,text:'Buy cheap crypto now'}),422,'CONTENT_REJECTED_SPAM');
+      ok(await send({to:AUTH_EMAIL,fromName:TEST_SENDER_NAME}),202); // Its own name is fine: 3 recipients this minute.
+      // 5. The platform workspace's connection on hold: unavailable, and its hold's reason stays the platform's.
+      await db.query(`UPDATE provider_connections SET paused_at=now(),pause_reason='Synthetic platform hold' WHERE id=$1`,[platform]);
+      assert.doesNotMatch(error(await send({to:AUTH_EMAIL}),409,'TEST_SENDER_UNAVAILABLE').message,/Synthetic/);
+      await db.query('UPDATE provider_connections SET paused_at=NULL,pause_reason=NULL WHERE id=$1',[platform]);
+
+      // 6. Limits: 3 recipients a minute and 10 in 24 hours, counted from this workspace's test emails.
+      const minute=error(await send({to:AUTH_EMAIL}),429,'TEST_SENDER_LIMIT');assert.equal(minute.retryable,true);assert.ok(Date.parse(minute.resetAt)>Date.now());
+      const age=(interval:string)=>db.query('UPDATE sending_emails SET created_at=created_at-$2::interval WHERE workspace_id=$1',[wid,interval]);
+      await age('2 minutes');ok(await batch({to:AUTH_EMAIL},{to:[AUTH_EMAIL,teammate]}),202); // 6
+      await age('2 minutes');ok(await send({to:[AUTH_EMAIL,teammate]}),202);ok(await send({to:AUTH_EMAIL}),202); // 9
+      await age('2 minutes');error(await send({to:[AUTH_EMAIL,teammate]}),429,'TEST_SENDER_LIMIT');ok(await send({to:teammate}),202); // 10
+      await age('2 minutes');assert.match(error(await send({to:AUTH_EMAIL}),429,'TEST_SENDER_LIMIT').message,/10 a day/);
+      await age('24 hours');const late=ok(await send({to:AUTH_EMAIL}),202); // Older than 24 hours, they no longer count.
+
+      // 7. Queued test mail doesn't go once the test sender is turned off: no route is left for it.
+      runtime.config.testSender=undefined;
+      await runDispatcher(runtime,{region:REGION,accountId:acct});
+      assert.equal(sent.length,1);assert.deepEqual([(await row(late.id)).status,(await row(late.id)).error_code],['canceled','SENDER_BINDING_CHANGED']);
+      error(await send({to:AUTH_EMAIL}),403,'SENDER_DOMAIN_NOT_VERIFIED'); // Then it is an ordinary address this workspace doesn't hold.
+      runtime.config.testSender=from;
+
+      // 8. Once a domain verifies, the test sender points to it.
+      await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES('own-domain.example',$1,$1,'verified')`,[wid]);
+      assert.match(error(await send({to:AUTH_EMAIL}),409,'TEST_SENDER_DOMAIN_VERIFIED').message,/own-domain\.example/);
+      assert.equal((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE workspace_id=$1 AND from_address=$2',[wid,from])).rows[0].n,9,'Only admitted sends were queued.');
+    }));
+  });
+
   test('MX regional campaign editing, controls and disabled queue recovery', async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run})=>{
       const {acquireRegionProvisioning,finishHostedRegion,toggleRegionSending}=await import('./src/states.js');

@@ -33,6 +33,14 @@
 .developer-icon-actions[data-pending] { visibility: hidden; }
 
 .first-send-test { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-12); }
+/* The test sender's offer: a quiet text button, then where the test went in its place, on the same line. */
+.self-test { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-4); min-width: 0; font-size: var(--text-sm); line-height: var(--leading-sm); }
+.self-test__sent { padding-block: 6px; text-wrap: pretty; overflow-wrap: anywhere; }
+.self-test__button { position: relative; justify-self: start; padding: 6px 0; border: 0; background: none; color: var(--color-muted); font: inherit; text-align: left; text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 4px; cursor: pointer; transition: color 100ms ease-out, text-decoration-color 100ms ease-out; }
+@media (hover: hover) and (pointer: fine) { .self-test__button:hover:not(:disabled) { color: var(--color-text); text-decoration-color: currentColor; transition-duration: 0ms; } }
+.self-test__button:disabled { cursor: progress; }
+.self-test__error { color: var(--color-danger); text-wrap: pretty; }
+@media (max-width: 640px) { .self-test__button::after { content: ''; position: absolute; inset: -6px 0; } }
 /* Copy sits at the top-right of the code it copies. */
 .developer-snippet { position: relative; min-width: 0; }
 .developer-snippet > .developer-code { padding-right: 48px; }

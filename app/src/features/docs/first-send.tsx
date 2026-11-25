@@ -47,6 +47,31 @@ export function TestSend({ domain, onSent, primary = false }: { domain: Domain; 
   </>
 }
 
+/** The shared test sender (GET /v1/me testSender) and the signed-in user's own address, or null when there is none. Only
+ *  a workspace without a verified domain may use it (the API refuses the rest, naming their domain). */
+export function useTestSender() {
+  const identity = useSession()?.identity
+  return identity?.testSender && identity.email ? { ...identity.testSender, to: identity.email } : null
+}
+
+// "Or send yourself a test first": a test from the shared test sender to the signed-in user's own address, before any
+// domain is verified. It is an ordinary POST /v1/emails/send, as an agent or app would make it. `status` shows where it
+// went in place of the button once sent (only then: the address is the page's only one, and onboarding has no privacy
+// toggle to reveal it); without it the caller confirms the send (onSent). Errors show under it.
+export function SelfTest({ onSent, status = false }: { onSent?: (id: string) => void; status?: boolean }) {
+  const sender = useTestSender()
+  const test = useGuardedMutation({ target: 'test-sender', mutationFn: () => request<{ id: string }>('/v1/emails/send', { method: 'POST', idempotencyKey: crypto.randomUUID(),
+    body: { from: sender!.address, to: sender!.to, subject: `Test email from ${productName}`, text: `It works. This test came from ${productName} before you added a domain.` } }),
+    onSuccess: data => onSent?.(data.id) })
+  if (!sender) return null
+  const sent = status && test.isSuccess
+  return <div className="self-test">
+    {sent ? <span className="self-test__sent muted" role="status">Sent to <PrivateAddress value={sender.to} /> from “{sender.name}”.</span>
+      : <button type="button" className="self-test__button" disabled={test.isPending} aria-busy={test.isPending || undefined} data-analytics="test-sender/send" onClick={() => test.mutate()}>Or send yourself a test first</button>}
+    {test.error ? <span className="self-test__error" role="alert"><ErrorText error={test.error} /></span> : null}
+  </div>
+}
+
 /** Copyable curl and SDK examples plus a test send from the dashboard. Sending needs a verified domain. `compact`
  *  (onboarding, the key-created dialog) leaves out the simulator tip, which is a reference for testing, not a step. */
 export function FirstSend({ domain, apiKey = null, title = 'Send your first email', testButton = true, compact = false }: { domain: Domain | null; apiKey?: string | null; title?: string; testButton?: boolean; compact?: boolean }) {

@@ -55,6 +55,8 @@ export const SEND_LIMITS = {
    * kept, so a scheduled email is visible for its whole wait (longer plans are campaigns, up to a year); up to a minute
    * in the past for a sender's clock (it then sends at once); and how many may wait per workspace. */
   schedule: { horizonSeconds: 30 * 86_400, skewSeconds: 60, workspace: 100_000 },
+  /** The shared test sender (test-sender.ts): recipients a workspace may send it in a rolling 24 hours and in a minute. */
+  testSender: { perDay: 10, perMinute: 3 },
 } as const;
 
 /** UTF-8 bytes of the parts a message's MIME carries, counted without copying them. A message sent as written (mime)

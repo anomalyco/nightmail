@@ -26,6 +26,9 @@
 .onboarding-slot > * { grid-area: 1 / 1; min-width: 0; }
 .onboarding-slot > :not([data-active]) { visibility: hidden; }
 .onboarding-reserve[data-hidden] { visibility: hidden; }
+/* Under the domain form: the test sender's offer, then Skip for now at the end of the row. */
+.onboarding-more { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-12); }
+.onboarding-more > .onboarding-skip { flex: none; margin-left: auto; }
 .onboarding-error { color: var(--color-danger); }
 
 /* Progress: persists across steps, so the line draws and the next mark lights as setup moves on. */

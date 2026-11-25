@@ -2,6 +2,7 @@ import { webhookSignatureGuide } from './webhook-signature-guide.js';
 import type { App } from './core.js';
 import { apiKeyEnv, productName, publicOrigin, sdkPackage } from './brand.js';
 import { permissionExtension, permissionOf } from './operation-permissions.js';
+import { SEND_LIMITS } from './send-limits.js';
 
 type Json = Record<string, any>;
 const METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
@@ -116,7 +117,7 @@ const quickstartCurl = `curl --request POST \\
 export const quickstart: { title: string; text: string; code?: string }[] = [
   { title: 'Add and verify your domain', text: 'In the dashboard, open Domains and add it, or call POST /v1/domains with {"name":"acme.com"}. Publish the DNS records it returns at your DNS provider. Sending works once GET /v1/domains/{id} reports sending: "verified", usually within minutes of the records resolving. A domain whose records are still unproven after 72 hours is released.' },
   { title: 'Create an API key', text: `In the dashboard, open API keys in the sidebar and choose Create key. A Send only key restricted to your domain is enough to send; it can’t read logs, so add Read permission if your code should look up outcomes. Store it as ${apiKeyEnv} on your server and never ship it to a browser.` },
-  { title: 'Send', text: '202 means queued, not delivered. Follow the outcome in the dashboard’s Logs, or with GET /v1/emails/{id} and a key that has Read permission (a Send only key gets 403). Leave out region: the sender domain decides it. To test without reaching a real inbox, send to success@simulator.amazonses.com (or bounce@, complaint@, ooto@ and suppressionlist@ the same domain). Simulator sends use your daily sending limit like any other send, but never count towards your sender score.', code: quickstartCurl },
+  { title: 'Send', text: `202 means queued, not delivered. Follow the outcome in the dashboard’s Logs, or with GET /v1/emails/{id} and a key that has Read permission (a Send only key gets 403). Leave out region: the sender domain decides it. To test without reaching a real inbox, send to success@simulator.amazonses.com (or bounce@, complaint@, ooto@ and suppressionlist@ the same domain). Simulator sends use your daily sending limit like any other send, but never count towards your sender score. No domain yet? Hosted ${productName} sends a test to your own address from its test sender: use the address GET /v1/me returns as testSender.address as from (up to ${SEND_LIMITS.testSender.perMinute} a minute and ${SEND_LIMITS.testSender.perDay} a day, until your first domain verifies).`, code: quickstartCurl },
   { title: 'Receive (optional)', text: `Publish the receiving MX record from the domain page. Hosted ${productName} receives on a free subdomain such as reply.<your domain>, so the domain’s existing mailboxes keep working; it uses the domain itself only when its MX already points to ${productName}, or when you choose it. Create an address with POST /v1/inbound/addresses and subscribe to message.received with POST /v1/inbound/webhooks.` },
   { title: 'Reply', text: 'POST /v1/inbound/threads/{threadId}/reply answers the newest message from its receiving address and sets In-Reply-To and References.' },
 ];

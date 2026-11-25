@@ -50,7 +50,8 @@ export type Mail = typeof emails.$inferSelect;
 type Review = { version:number; draft: CampaignDraft; rendered: { html?: string; text?: string }; assets:AttachmentRow[]; contentHash: string | null; recipient: ReviewedRecipient; screen?: CampaignScreen | null; reviewHash?: string };
 // `probation`: a Hosted sender still in its evaluation, growth pace or below good standing (src/hosted-sending.ts probationReason).
 // `customer`: an outside workspace on the shared account (Hosted, live, not exempt), whose marketing waits for the customer share.
-type Owner = { runtime: Runtime; a: Actor; ses: SESv2Client; transport: DispatchTransport; sendClient?:(domainId:string)=>SESv2Client; trusted?:boolean; probation?:boolean; customer?: boolean; tenantName?: string; feedbackTopic?: string };
+// `route`: the workspace whose sender claim routes this owner's mail, when it isn't the mail's own (a test send's: the platform's).
+type Owner = { runtime: Runtime; a: Actor; ses: SESv2Client; transport: DispatchTransport; sendClient?:(domainId:string)=>SESv2Client; trusted?:boolean; probation?:boolean; customer?: boolean; tenantName?: string; feedbackTopic?: string; route?: string };
 type LeaseQuota = { rate: number; max: number; sent: number; customer: number; checked: string; age_ms: number };
 /** Where one email's time goes in a run, filled in stage by stage for its DISPATCH_EMAIL line (logEmail). */
 type Trace = { leasedAt: number; shard?: number; paceMs?: number; sesMs?: number };
@@ -440,6 +441,13 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
   for(const d of (result.rows[0]?.blocked_streams??[]) as DeferredStream[]) deferBurst(deferred,d.workspace_id,d.stream);
   if (!result.rows[0]?.id) return [];
   const owners = new Map<string, Owner>();
+  // Test sends (test-sender.ts) go out with the platform workspace's connection here: its tenant, configuration sets and
+  // feedback topic are what the test sender's identity is associated with. Read only when the lease holds one.
+  const platform = mx ? runtime.config.platformDomainWorkspace : undefined;
+  const testing = !!platform && !!runtime.config.testSender && result.rows.some(row => (row.snapshot as EmailSnapshot | null)?.testSender);
+  const testConnection = testing ? (await runtime.db.execute<{ c: ReadyConnection & { feedback_topic_arn: string; tenant_state?: TenantState; paused_at?: string | null } }>(sql`SELECT to_jsonb(pc) AS c
+    FROM ${sendingConnections(runtime)} pc WHERE pc.workspace_id=${platform} AND pc.region=${region} AND pc.aws_account_id=${accountId}`)).rows[0]?.c ?? null : null;
+  const testReady = !!testConnection && !testConnection.paused_at && (isSimulatedSes(runtime) || testConnection.kind !== 'shared' || testConnection.tenant_state === 'ready');
   const reviews = new Map<string, Pick<Review, 'version' | 'draft' | 'rendered' | 'assets' | 'screen' | 'reviewHash'>>();
   const reviewKey = (row: Record<string, unknown>) => JSON.stringify([row.workspaceId, row.campaignId, row.reviewId]);
   for (const row of result.rows) if (row.review_draft && row.review_rendered) {
@@ -453,6 +461,15 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
     const ready = regionReady && !pc0?.paused_at && !(mx && !isSimulatedSes(runtime) && pc0?.kind === 'shared' && pc0.tenant_state !== 'ready');
     const mail = fields as Mail, { workspaceId } = mail;
     if (installation_id == null) throw new ApiError(503, 'REGION_SETTINGS_NOT_INITIALIZED', 'Run database migrations to initialize SES region settings.');
+    // `route`: a test send's platform workspace, whose connection this is; the mail and its actor stay the workspace's.
+    const ownerFor = (pc: (ReadyConnection & { feedback_topic_arn: string }) | undefined, flags: { probation: boolean; customer: boolean; route?: string }): Owner => {
+      const namespace=pc?.legacy_names===false ? pc.kind==='shared' ? pc.pool_tier : 'byo' : undefined, tenantWorkspace = flags.route ?? workspaceId;
+      const { transactional, marketing } = setupResources(pc?.kind === 'shared' ? POOL_INSTALLATION : pc?.id ?? installation_id as string,namespace);
+      const scoped = { ...runtime, config: { ...runtime.config, workspaceId, regions: [default_region as string, ...(enabled_regions as string[]).filter(r => r !== default_region),...(pc?[region]:[])], configurationSets: { transactional, marketing } } };
+      return { runtime: scoped, trusted:!flags.route && runtime.config.trustedPool && pc?.pool_tier==='trusted' && pc.legacy_names===false, probation:flags.probation, customer:flags.customer, a: { workspaceId, keyId: 'worker', domains: [], permissions: ['manage'] }, transport, ses: transport.clientFor(scoped, region, forDelivery(pc,{purpose:'quota'}), runClients),
+        sendClient:pc?.template_version==='v5'?domainId=>transport.clientFor(scoped,region,forDelivery(pc,{purpose:'send',domainId}),runClients):undefined,
+        tenantName: pc?.kind === 'shared' ? pc.pool_tenant_name ?? (pc.managed_tenant ? mxResourceName(tenantWorkspace) : `bane-${tenantWorkspace}`) : undefined, feedbackTopic: pc?.feedback_topic_arn, route: flags.route };
+    };
     let owner = owners.get(workspaceId);
     if (!ready) {
       const stream = mail.snapshot.kind;
@@ -461,18 +478,21 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
         log('warn', { code: 'SES_SETUP_REQUIRED', workspaceId, region, stream });
       }
     } else if (!owner) {
-      const pc = connection as (ReadyConnection & { feedback_topic_arn: string }) | undefined;
-      const namespace=pc?.legacy_names===false ? pc.kind==='shared' ? pc.pool_tier : 'byo' : undefined;
-      const { transactional, marketing } = setupResources(pc?.kind === 'shared' ? POOL_INSTALLATION : pc?.id ?? installation_id as string,namespace);
-      const scoped = { ...runtime, config: { ...runtime.config, workspaceId, regions: [default_region as string, ...(enabled_regions as string[]).filter(r => r !== default_region),...(pc?[region]:[])], configurationSets: { transactional, marketing } } };
-      owner = { runtime: scoped, trusted:runtime.config.trustedPool && pc?.pool_tier==='trusted' && pc.legacy_names===false, probation:on_probation===true, customer:outside===true, a: { workspaceId, keyId: 'worker', domains: [], permissions: ['manage'] }, transport, ses: transport.clientFor(scoped, region, forDelivery(pc,{purpose:'quota'}), runClients),
-        sendClient:pc?.template_version==='v5'?domainId=>transport.clientFor(scoped,region,forDelivery(pc,{purpose:'send',domainId}),runClients):undefined,
-        tenantName: pc?.kind === 'shared' ? pc.pool_tenant_name ?? (pc.managed_tenant ? mxResourceName(workspaceId) : `bane-${workspaceId}`) : undefined, feedbackTopic: pc?.feedback_topic_arn };
+      owner = ownerFor(connection as (ReadyConnection & { feedback_topic_arn: string }) | undefined, { probation: on_probation === true, customer: outside === true });
       owners.set(workspaceId, owner);
+    }
+    // A test send still from the configured test sender leaves with the platform's connection, as a new sender's mail
+    // (probation rules), and waits while that connection isn't ready. One whose sender is no longer the test sender keeps
+    // its workspace's owner: the claim finds no route for it and cancels it (SENDER_BINDING_CHANGED).
+    if (ready && mail.snapshot.testSender && mail.from.toLowerCase() === runtime.config.testSender) {
+      const key = `test:${workspaceId}`;
+      owner = owners.get(key) ?? (testReady ? ownerFor(testConnection!, { probation: true, customer: outside === true, route: platform }) : undefined);
+      if (owner) owners.set(key, owner);
+      else if (!deferred.some(d => d.workspace_id === workspaceId && d.stream === mail.snapshot.kind)) log('warn', { code: 'TEST_SENDER_NOT_READY', workspaceId, region });
     }
     const shared = mail.reviewId && reviews.get(reviewKey(row));
     if(mail.snapshot.deferredCampaign) mail.snapshot={...mail.snapshot,from:mail.from,to:mail.to,cc:mail.cc,bcc:mail.bcc,region:mail.region,subject:mail.subject,attachments:shared?shared.draft.attachments:mail.snapshot.attachments??[],binding:shared?shared.draft.binding:mail.snapshot.binding};
-    return { mail, contentBytes: Number(row.snapshot_bytes) > INLINE_SNAPSHOT_BYTES ? Number(row.snapshot_bytes) : 0, owner: ready ? owner! : null, rateRetries: Number(rate_retries), quota: quota_sample as LeaseQuota | undefined, review: shared && review_recipient ? { ...shared, contentHash: review_content_hash as string | null, recipient: review_recipient as ReviewedRecipient } : null, trace: { leasedAt: Date.now() } };
+    return { mail, contentBytes: Number(row.snapshot_bytes) > INLINE_SNAPSHOT_BYTES ? Number(row.snapshot_bytes) : 0, owner: ready ? owner ?? null : null, rateRetries: Number(rate_retries), quota: quota_sample as LeaseQuota | undefined, review: shared && review_recipient ? { ...shared, contentHash: review_content_hash as string | null, recipient: review_recipient as ReviewedRecipient } : null, trace: { leasedAt: Date.now() } };
   });
 }
 
@@ -600,14 +620,14 @@ async function originDecisions(prepared: Prepared[], db: DbExecutor) {
 async function claimGroup(runtime: Runtime, prepared: Prepared[], origins: Map<string, boolean>, db: DbExecutor) {
   const input = prepared.map(item => ({
     id: item.mail.id, workspace_id: item.mail.workspaceId, dispatch_version: item.mail.dispatchVersion, status: 'queued', campaign_id: item.mail.campaignId,
-    actor_key_id: item.mail.actorKeyId, sender: item.snapshot.from.toLowerCase(), mcp_allowed: item.mail.actorKeyId.startsWith('mcp_') && origins.get(mcpOrigin(item)) === true,
+    actor_key_id: item.mail.actorKeyId, route_workspace: item.owner.route ?? item.mail.workspaceId, sender: item.snapshot.from.toLowerCase(), mcp_allowed: item.mail.actorKeyId.startsWith('mcp_') && origins.get(mcpOrigin(item)) === true,
     feedback_topic: item.owner.feedbackTopic, binding:item.review?.draft.binding ?? item.mail.snapshot.binding, destinations: [...item.snapshot.to, ...item.snapshot.cc, ...item.snapshot.bcc].map(email => email.toLowerCase()),
     hosted:!!item.owner.tenantName,marketing: item.snapshot.kind === 'marketing', notice: item.review?.draft.requiredNotice === true, held_stream: item.snapshot.kind !== 'transactional' || !!item.mail.campaignId || !!item.snapshot.bulk, reply_authors: item.snapshot.replyAuthors, snapshot: item.stored ?? null,
     token_hash: item.unsubscribe?.tokenHash ?? null, token_email: item.unsubscribe?.email ?? null, token_page: item.unsubscribe?.page ?? null,
     event_id: rowId('event'), external_id: `attempt-start:${item.mail.id}:${item.mail.dispatchVersion}`, attempt: item.mail.dispatchVersion + 1,
   }));
   const rows = sql`SELECT * FROM jsonb_to_recordset(${JSON.stringify(input)}::jsonb)
-        AS x(id text, workspace_id text, dispatch_version int, status text, campaign_id text, actor_key_id text, sender text, mcp_allowed boolean, hosted boolean, feedback_topic text, binding jsonb, destinations jsonb, marketing boolean, notice boolean, held_stream boolean, reply_authors jsonb, snapshot jsonb, token_hash text, token_email text, token_page text, event_id text, external_id text, attempt int)`;
+        AS x(id text, workspace_id text, dispatch_version int, status text, campaign_id text, actor_key_id text, route_workspace text, sender text, mcp_allowed boolean, hosted boolean, feedback_topic text, binding jsonb, destinations jsonb, marketing boolean, notice boolean, held_stream boolean, reply_authors jsonb, snapshot jsonb, token_hash text, token_email text, token_page text, event_id text, external_id text, attempt int)`;
   const claimed = await db.execute<{ id: string; status: EmailStatus; webhooks:number }>(sql`WITH ${claimCtes(runtime, prepared[0]!.mail.region, rows)} SELECT id,status,(SELECT count(*)::int FROM webhook_jobs) AS webhooks FROM claimed`);
   return {statuses:new Map(claimed.rows.map(row => [row.id, row.status])),webhooks:claimed.rows[0]?.webhooks??0};
 }
@@ -646,8 +666,8 @@ function claimCtes(runtime: Runtime, region: string, input: SQL) {
       JOIN provider_connections sp ON sp.workspace_id=o.id AND sp.kind='shared'
       WHERE me.id IN (SELECT workspace_id FROM input) AND me.quota_sponsor IS NOT NULL AND NOT me.exempt_hosted_quotas ORDER BY sp.id FOR SHARE OF sp
     ), ` : sql``}pinned_routes AS MATERIALIZED (
-      ${runtime.config.multiTenant ? sql`SELECT keys.*,r.* FROM (SELECT DISTINCT workspace_id,split_part(sender,'@',2) AS host FROM input WHERE binding IS NOT NULL) keys
-        CROSS JOIN LATERAL ${regionalSender(runtime,claimsOnly,sql`keys.workspace_id`,sql`keys.host`)} r` : sql`SELECT 1`}
+      ${runtime.config.multiTenant ? sql`SELECT keys.*,r.* FROM (SELECT DISTINCT route_workspace,split_part(sender,'@',2) AS host FROM input WHERE binding IS NOT NULL) keys
+        CROSS JOIN LATERAL ${regionalSender(runtime,claimsOnly,sql`keys.route_workspace`,sql`keys.host`)} r` : sql`SELECT 1`}
     ), eligibility AS MATERIALIZED (
       SELECT x.id,
         CASE WHEN starts_with(x.actor_key_id, 'mcp_') THEN x.mcp_allowed
@@ -676,7 +696,7 @@ function claimCtes(runtime: Runtime, region: string, input: SQL) {
                 OR right(split_part(x.sender, '@', 2), length(d.value) + 1) = '.' || lower(d.value)))) END
           AS origin_ok,
         ${runtime.config.multiTenant ? sql`CASE WHEN x.binding IS NULL THEN ${verifiedClaim(sql`x.workspace_id`, sql`${region}`, sql`split_part(x.sender, '@', 2)`)} ELSE EXISTS (
-          SELECT 1 FROM pinned_routes r WHERE r.workspace_id=x.workspace_id AND r.host=split_part(x.sender,'@',2) AND r.region=${region} AND r.verified AND r.binding=x.binding
+          SELECT 1 FROM pinned_routes r WHERE r.route_workspace=x.route_workspace AND r.host=split_part(x.sender,'@',2) AND r.region=${region} AND r.verified AND r.binding=x.binding
             AND r.connection IS NOT NULL AND r.connection->>'paused_at' IS NULL AND (r.connection->>'kind'='byo' OR ${isSimulatedSes(runtime)} OR r.connection->>'tenant_state'='ready')
             AND r.connection->>'feedback_topic_arn' IS NOT DISTINCT FROM x.feedback_topic) END` : sql`true`} AS binding_ok,
         (x.campaign_id IS NULL OR EXISTS (SELECT 1 FROM campaign_state c WHERE c.workspace_id = x.workspace_id AND c.id = x.campaign_id AND c.state <> 'canceled')) AS campaign_allowed,

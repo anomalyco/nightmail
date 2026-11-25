@@ -62,6 +62,10 @@ const values = z.object({
   // Hosted only: From for owner notices about sender standing (warn, restrict, pause, quarantine). Sent through the
   // platform workspace above; unset means notices appear only in the dashboard and the account.standing.changed webhook.
   NIGHTMAIL_NOTIFY_FROM: optional(z.email().max(254)),
+  // Hosted only, with the platform workspace above: the shared test sender (src/test-sender.ts), an address of a domain
+  // that workspace holds, which a workspace with no verified domain may send from to its members' own addresses (with
+  // regional sending; otherwise it is refused as unavailable). Unset: there is no test sender.
+  NIGHTMAIL_TEST_SENDER: optional(z.email().max(254)),
   // Hosted only: a list (lst_…) of the platform workspace above that everyone who joins the waitlist or signs up is
   // kept in as a contact, with properties to segment by (src/signups.ts). Unset, or not a list ID: nothing is written.
   NIGHTMAIL_SIGNUPS_LIST_ID: z.unknown().optional(),
@@ -276,6 +280,7 @@ export function loadConfig(input: Record<string, unknown>): Config {
     workspaceId: 'default', multiTenant: v.MULTI_TENANT === 'true', authSecret: v.NIGHTMAIL_ROOT_SECRET, previousAuthSecret: v.PREVIOUS_NIGHTMAIL_ROOT_SECRET,mailGatewayToken:v.MAILGW_API_TOKEN,
     mailServers: v.MAILGW_API_TOKEN ? mailServerHosts(v.MAILGW_PUBLIC_DOMAIN ?? url.hostname) : undefined,
     platformAccount: v.NIGHTMAIL_PLATFORM_AWS_ACCOUNT, platformDomainWorkspace: v.MULTI_TENANT==='true' ? v.NIGHTMAIL_PLATFORM_DOMAIN_WORKSPACE : undefined, notifyFrom: v.MULTI_TENANT==='true' ? v.NIGHTMAIL_NOTIFY_FROM : undefined,
+    testSender: v.MULTI_TENANT==='true' && v.NIGHTMAIL_PLATFORM_DOMAIN_WORKSPACE ? v.NIGHTMAIL_TEST_SENDER?.toLowerCase() : undefined,
     signupsListId: v.MULTI_TENANT==='true' ? signupsListId(v.NIGHTMAIL_SIGNUPS_LIST_ID) : undefined,
     support: v.MULTI_TENANT==='true' ? { url: v.NIGHTMAIL_SUPPORT_URL, signingKey: supportSigningKey, addressIds: supportAddressIds } : undefined,
     observability: v.MULTI_TENANT==='true' && v.CF_OBSERVABILITY_TOKEN && v.CF_OBSERVABILITY_ACCOUNT_ID && v.CF_OBSERVABILITY_SCRIPT

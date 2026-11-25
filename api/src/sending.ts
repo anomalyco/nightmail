@@ -41,6 +41,7 @@ import { contentBytes, estimatedMimeBytes, SEND_LIMITS } from './send-limits.js'
 import { assertResponseWithinLimit, reserveMemory, responseByteLimit, withMemory } from './isolate-memory.js';
 import { buildBoundedPageJson, PAGE_MAX_BYTES, streamBase64JsonResponse, utf8Bytes, withBoundedRead } from './read-bounds.js';
 import { RATES } from './billing/money.js';
+import { asTestSend, assertTestSendInput, isTestSend, TEST_SENDER_NOTE } from './test-sender.js';
 
 type HtmlParser = typeof import('parse5').parse;
 const loadParse5 = lazyModule((): Promise<HtmlParser> => import('parse5').then(m => m.parse));
@@ -114,7 +115,7 @@ const Region = z.string().min(1).max(40);
 const AttachmentIds = z.array(z.string().min(1).max(120)).max(SEND_LIMITS.attachments).default([]);
 const ContentFields = { subject: Subject.optional(), html: z.string().min(1).max(MAX_BODY).optional(), text: z.string().min(1).max(MAX_BODY).optional() };
 const SendInput = z.object({
-  from: Address, fromName: FromName.optional(), to: z.union([Address, z.array(Address).min(1).max(50)]), cc: z.array(Address).max(49).default([]), bcc: z.array(Address).max(49).default([]), replyTo: z.array(Address).max(10).default([]),
+  from: Address.describe('An address on a domain verified in this workspace, or a subdomain of one. Hosted, before the first domain verifies: the test sender (testSender.address in GET /v1/me), to your own address only.'), fromName: FromName.optional(), to: z.union([Address, z.array(Address).min(1).max(50)]), cc: z.array(Address).max(49).default([]), bcc: z.array(Address).max(49).default([]), replyTo: z.array(Address).max(10).default([]),
   region: Region.optional().describe(`Usually omitted: hosted ${productName} sends from the region bound to the sender domain, and a different value fails with SENDER_REGION_MISMATCH. Self-hosted installations default to their default region.`), kind: z.enum(['transactional', 'marketing']).default('transactional').describe(`marketing adds ${productName}'s footer (an Unsubscribe link, with the workspace's postal address under it when it has one) and the one-click List-Unsubscribe headers.`), ...ContentFields,
   template: z.object({ name: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/), data: StoredTemplateData }).strict().describe('Uses native SES stored-template rendering and snapshots its rendered MIME. SES does not automatically escape HTML; callers must escape untrusted HTML-context values. Simulated deployments do not render AWS templates.').optional(),
   attachments: AttachmentIds, tracking: z.boolean().optional(), headers: CustomHeaders.optional(),
@@ -1278,10 +1279,12 @@ async function screenOutgoingAtAccept(runtime: Runtime, a: Actor, out: Outgoing[
     const conn = route.connection;
     const shared = conn?.kind === 'shared';
     const hosted = Boolean(shared && runtime.config.hostedScreen);
-    const trusted = Boolean(runtime.config.trustedPool && conn?.pool_tier === 'trusted' && conn?.legacy_names === false);
+    // A test send's route is the platform workspace's connection: its rules are a new sender's, whatever that connection's tier.
+    const test = !!m.snapshot.testSender;
+    const trusted = !test && Boolean(runtime.config.trustedPool && conn?.pool_tier === 'trusted' && conn?.legacy_names === false);
     if (shared && m.snapshot.raw) throw atItem(new ApiError(422, 'SHARED_RAW_UNSUPPORTED', 'Hosted sending requires structured SES content.'), batch ? i : undefined);
     if (shared && m.snapshot.mime && !trusted) throw atItem(new ApiError(422, 'SEALED_MAIL_UNAVAILABLE', 'Signed and encrypted mail goes out as written, which a sender can do once its first messages are evaluated.'), batch ? i : undefined);
-    const rules: 'probation' | 'standard' | null = !hosted || trusted ? null : probation ? 'probation' : 'standard';
+    const rules: 'probation' | 'standard' | null = !hosted || trusted ? null : probation || test ? 'probation' : 'standard';
     const shouldScreen = hosted || Boolean(m.snapshot.screen && m.snapshot.kind === 'transactional');
     let copy = m.snapshot;
     if (rules) {
@@ -1421,7 +1424,8 @@ async function prepareFrontDoor(runtime: Runtime, a: Actor, out: Outgoing[], bat
   await screenOutgoingAtAccept(runtime, a, out, decided, pre!.probation !== null, batch, runtime.db);
 }
 const admissionMails = (out: Outgoing[]): AdmissionMail[] => out.map(({ snapshot: s, duplicate, invalid, oversize }) => ({ host: s.from.split('@')[1]!.toLowerCase(), region: s.region || undefined,
-  kind: s.kind, attachments: [...new Set(s.attachments)], bodyBytes: contentBytes(s), duplicate: !!duplicate, invalid: !!invalid, oversize: !!oversize }));
+  kind: s.kind, attachments: [...new Set(s.attachments)], bodyBytes: contentBytes(s), duplicate: !!duplicate, invalid: !!invalid, oversize: !!oversize,
+  ...(s.testSender ? { test: true, from: s.from.toLowerCase(), recipients: [...s.to, ...s.cc, ...s.bcc].map(e => e.toLowerCase()) } : {}) }));
 
 /**
  * Admits a send in one statement: the API key's authentication and budget (a warm key), the idempotency claim, the
@@ -1536,10 +1540,15 @@ async function renderTemplates(runtime: Runtime, a: Actor, out: Outgoing[], batc
 /** POST /v1/emails/send and /batch after authentication, the dashboard's test email and the platform's notices. */
 async function admitEmails(call: SendCall, a: Actor, input: SendRequest | { emails: SendRequest[] }, scheduledAt?: string, sealed = false) {
   const batch = 'emails' in input, mails = batch ? input.emails : [input];
+  // The test sender (test-sender.ts) is for other workspaces' own sends: never Nightmail's notices, and the platform
+  // workspace sends from its own domain as any address there.
+  const tests = isSystemNoticeKey(a.keyId) || a.workspaceId === call.runtime.config.platformDomainWorkspace ? [] : mails.map(m => isTestSend(call.runtime.config, m.from));
+  for (const [i, m] of mails.entries()) if (tests[i]) assertTestSendInput(m, !!scheduledAt, batch ? i : undefined);
   // Marketing mail's footer carries the workspace's postal address when it has one. Unlike a campaign, a marketing send
   // without one is not refused: its caller writes the whole message and may include the address itself.
   const address = mails.some(m => m.kind === 'marketing') ? await workspacePostalAddress(call.runtime, call.db ?? call.runtime.db, a.workspaceId) : null;
   const out = await directMessages(call.runtime, mails, batch, address);
+  for (const [i, m] of out.entries()) if (tests[i]) asTestSend(m.snapshot);
   if (sealed) for (const m of out) m.snapshot.sealed = true;
   // A reply by header joins the conversation it answers only when its sender can read that message.
   await joinReplies(call.db ?? call.runtime.db, actorMailAccess(a), out.map(m => m.snapshot));
@@ -1610,7 +1619,7 @@ export async function tryAtomicKeyAdmission(c:Ctx,credentialCtes:(charge?:SQL)=>
   const input=parsed.data,mails='emails' in input?input.emails:[input];
   // Fall through to the authenticated handler whenever front-door content screening may run (keeps Jev/JevF outside DB locks).
   if(!isSimulatedSes(c.env) && ((c.env.config.multiTenant && c.env.config.hostedScreen) || mails.some(m => m.screen && m.kind === 'transactional'))) return;
-  if(('replyAddressId' in input && input.replyAddressId)||('replyMailboxId' in input && input.replyMailboxId)||('scheduledAt' in input && input.scheduledAt)||mails.some(m=>m.template || m.kind==='marketing' || m.attachments.some(a=>a.includes('\0')) || m.headers?.some(h=>h.name.toLowerCase()==='in-reply-to')))return;
+  if(('replyAddressId' in input && input.replyAddressId)||('replyMailboxId' in input && input.replyMailboxId)||('scheduledAt' in input && input.scheduledAt)||mails.some(m=>m.template || m.kind==='marketing' || isTestSend(c.env.config,m.from) || m.attachments.some(a=>a.includes('\0')) || m.headers?.some(h=>h.name.toLowerCase()==='in-reply-to')))return;
   const key=c.req.header('Idempotency-Key');if(key!==undefined && !validIdempotencyKey(key))return;
   if(batch && batchContent(mails)>SEND_LIMITS.batchContentChars)return;
   // The statement authenticates the key and answers 401, 429 and 403 before any admission answer. A duplicate of a
@@ -1904,7 +1913,7 @@ export function registerSending(app: App) {
     } else mail=input;
     return c.json(await advisoryCheck(c.env, a, mail, mail === input ? 'draft' : 'email'), 200);
   });
-  app.openapi(createRoute({ method: 'post', path: '/v1/emails/send', operationId: 'sendEmail', description: SCREEN_LIMIT_NOTE, tags: ['Emails'], security, request: { headers: SendIdempotencyHeaders, body: json(SingleSendInput) }, responses: { 202: response(SingleReceipt), ...errors } }), async c => {
+  app.openapi(createRoute({ method: 'post', path: '/v1/emails/send', operationId: 'sendEmail', description: `${SCREEN_LIMIT_NOTE} ${TEST_SENDER_NOTE}`, tags: ['Emails'], security, request: { headers: SendIdempotencyHeaders, body: json(SingleSendInput) }, responses: { 202: response(SingleReceipt), ...errors } }), async c => {
     const a = actor(c, 'send'); const input = c.req.valid('json');
     const replyAddressId = input.replyAddressId ?? input.replyMailboxId;
     if (replyAddressId) {
@@ -1919,7 +1928,7 @@ export function registerSending(app: App) {
     const result = await admitEmails(sendCall(c), a, input, input.scheduledAt && new Date(Date.parse(input.scheduledAt)).toISOString());
     return c.json(SingleReceipt.parse(result), 202);
   });
-  app.openapi(createRoute({ method: 'post', path: '/v1/emails/batch', operationId: 'sendEmailBatch', description: SCREEN_LIMIT_NOTE, tags: ['Emails'], security, request: { headers: SendIdempotencyHeaders, body: json(BatchInput) }, responses: { 202: response(BatchReceipt), ...errors } }), async c => {
+  app.openapi(createRoute({ method: 'post', path: '/v1/emails/batch', operationId: 'sendEmailBatch', description: `${SCREEN_LIMIT_NOTE} ${TEST_SENDER_NOTE}`, tags: ['Emails'], security, request: { headers: SendIdempotencyHeaders, body: json(BatchInput) }, responses: { 202: response(BatchReceipt), ...errors } }), async c => {
     const a = actor(c, 'send'); const input = c.req.valid('json');
     if (batchContent(input.emails) > SEND_LIMITS.batchContentChars) throw new ApiError(413, 'BATCH_CONTENT_TOO_LARGE', `Combined batch body content may not exceed ${SEND_LIMITS.batchContentChars / 1024 / 1024} MiB.`);
     const result = await batchMemory(input.emails, () => admitEmails(sendCall(c), a, input), { workspaceId: a.workspaceId, signal: c.req.raw.signal });
@@ -3940,9 +3949,11 @@ export async function screenHeldMail(runtime: Runtime, limit = HELD_SCREEN_LIMIT
     const conn = r.connection;
     const shared = conn?.kind === 'shared';
     const hosted = Boolean(mx && shared && runtime.config.hostedScreen);
-    const trusted = Boolean(runtime.config.trustedPool && conn?.pool_tier === 'trusted' && conn?.legacy_names === false);
+    // A test send has a new sender's rules, as at accept (screenOutgoingAtAccept).
+    const test = !!snapshot.testSender;
+    const trusted = !test && Boolean(runtime.config.trustedPool && conn?.pool_tier === 'trusted' && conn?.legacy_names === false);
     const required = hosted && (!trusted || snapshot.kind === 'marketing');
-    const rules: 'probation' | 'standard' | null = isSimulatedSes(runtime) || !hosted || trusted ? null : r.on_probation ? 'probation' : 'standard';
+    const rules: 'probation' | 'standard' | null = isSimulatedSes(runtime) || !hosted || trusted ? null : r.on_probation || test ? 'probation' : 'standard';
     const needsScreen = !r.simulated && !isSimulatedSes(runtime) && (hosted || Boolean(snapshot.screen && snapshot.kind === 'transactional'));
 
     // A row that could not be judged now (an outage, a failure of its own) waits 45 s out of oldest-first order so

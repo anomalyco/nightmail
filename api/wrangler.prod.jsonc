@@ -56,6 +56,9 @@
     "BANE_PLATFORM_DOMAIN_WORKSPACE": "ws_90b0696c835f49fbaa9396fb726e9fe2",
     // Owner notices (standing, billing) by email, from the adopted platform domain through the platform workspace above.
     "BANE_NOTIFY_FROM": "system@nightmail.dev",
+    // The shared test sender (src/test-sender.ts): a workspace with no verified domain sends its members a test from it,
+    // through the platform workspace above and its adopted nightmail.dev identity.
+    "NIGHTMAIL_TEST_SENDER": "onboarding@nightmail.dev",
     // Every waitlist join and sign-up is kept as a contact in this list of the platform workspace above (src/signups.ts).
     "NIGHTMAIL_SIGNUPS_LIST_ID": "lst_e665f46fedd040e5b0fcc009a9eb11c3",
     "BANE_REGIONAL_SENDING": "true",

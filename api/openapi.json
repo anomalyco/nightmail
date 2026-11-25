@@ -15,7 +15,7 @@
       },
       {
         "title": "Send",
-        "text": "202 means queued, not delivered. Follow the outcome in the dashboard’s Logs, or with GET /v1/emails/{id} and a key that has Read permission (a Send only key gets 403). Leave out region: the sender domain decides it. To test without reaching a real inbox, send to success@simulator.amazonses.com (or bounce@, complaint@, ooto@ and suppressionlist@ the same domain). Simulator sends use your daily sending limit like any other send, but never count towards your sender score.",
+        "text": "202 means queued, not delivered. Follow the outcome in the dashboard’s Logs, or with GET /v1/emails/{id} and a key that has Read permission (a Send only key gets 403). Leave out region: the sender domain decides it. To test without reaching a real inbox, send to success@simulator.amazonses.com (or bounce@, complaint@, ooto@ and suppressionlist@ the same domain). Simulator sends use your daily sending limit like any other send, but never count towards your sender score. No domain yet? Hosted Nightmail sends a test to your own address from its test sender: use the address GET /v1/me returns as testSender.address as from (up to 3 a minute and 10 a day, until your first domain verifies).",
         "code": "curl --request POST \\\n  --url 'https://nightmail.dev/v1/emails/send' \\\n  --header \"Authorization: Bearer $NIGHTMAIL_API_KEY\" \\\n  --header 'Content-Type: application/json' \\\n  --header \"Idempotency-Key: $(uuidgen)\" \\\n  --data '{\"from\":\"hello@acme.com\",\"to\":\"you@acme.com\",\"subject\":\"Hello from Nightmail\",\"text\":\"It works.\"}'"
       },
       {
@@ -3900,7 +3900,8 @@
           "from": {
             "type": "string",
             "maxLength": 254,
-            "pattern": "^[\\x21-\\x7e]+$"
+            "pattern": "^[\\x21-\\x7e]+$",
+            "description": "An address on a domain verified in this workspace, or a subdomain of one. Hosted, before the first domain verifies: the test sender (testSender.address in GET /v1/me), to your own address only."
           },
           "fromName": {
             "type": "string",
@@ -4139,7 +4140,8 @@
           "from": {
             "type": "string",
             "maxLength": 254,
-            "pattern": "^[\\x21-\\x7e]+$"
+            "pattern": "^[\\x21-\\x7e]+$",
+            "description": "An address on a domain verified in this workspace, or a subdomain of one. Hosted, before the first domain verifies: the test sender (testSender.address in GET /v1/me), to your own address only."
           },
           "fromName": {
             "type": "string",
@@ -19321,6 +19323,33 @@
                       },
                       "description": "The workspace’s oldest four newsletters (listNewsletters has them all), so a sidebar can name them on its first frame; a fourth means there are more. Null for a credential that cannot read lists (one without read, or limited to sender domains or addresses)."
                     },
+                    "testSender": {
+                      "type": [
+                        "object",
+                        "null"
+                      ],
+                      "properties": {
+                        "address": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "perDay": {
+                          "type": "integer"
+                        },
+                        "perMinute": {
+                          "type": "integer"
+                        }
+                      },
+                      "required": [
+                        "address",
+                        "name",
+                        "perDay",
+                        "perMinute"
+                      ],
+                      "description": "Hosted: the shared test sender. Until the workspace has a verified domain, sendEmail from this address sends to the verified address of a member of the workspace (their own), as name, at most perMinute and perDay recipients. Null when this installation has none."
+                    },
                     "mailServers": {
                       "type": [
                         "object",
@@ -29830,7 +29859,7 @@
     "/v1/emails/send": {
       "post": {
         "operationId": "sendEmail",
-        "description": "Front-door admission and content screening: Hosted sending checks validation, recipient suppression/consent, balance, limits, and the content screen (Jev with JevF failover) synchronously before queueing. Failing messages return an immediate error (422 RECIPIENT_INELIGIBLE, 422 CONTENT_REJECTED_SPAM, 422 CONTENT_TOO_LARGE_TO_SCREEN, or retryable 503 CONTENT_SCREEN_UNAVAILABLE with Retry-After when no mandatory classifier is configured) and nothing is queued; during a temporary outage of both classifiers, eligible mail is accepted (202) and held unscreened until a classifier answers. Screened-text limits: at most 65,536 UTF-8 bytes per message (installation default) and 150 distinct link hosts (3,000 bytes of host names), counting link labels that name another host; over either limit, error.details[0] holds { screenedBytes, limitBytes } or { linkHosts, linkHostLimit } (plus index in a batch).",
+        "description": "Front-door admission and content screening: Hosted sending checks validation, recipient suppression/consent, balance, limits, and the content screen (Jev with JevF failover) synchronously before queueing. Failing messages return an immediate error (422 RECIPIENT_INELIGIBLE, 422 CONTENT_REJECTED_SPAM, 422 CONTENT_TOO_LARGE_TO_SCREEN, or retryable 503 CONTENT_SCREEN_UNAVAILABLE with Retry-After when no mandatory classifier is configured) and nothing is queued; during a temporary outage of both classifiers, eligible mail is accepted (202) and held unscreened until a classifier answers. Screened-text limits: at most 65,536 UTF-8 bytes per message (installation default) and 150 distinct link hosts (3,000 bytes of host names), counting link labels that name another host; over either limit, error.details[0] holds { screenedBytes, limitBytes } or { linkHosts, linkHostLimit } (plus index in a batch). Test sender (Hosted): until this workspace has a verified domain, send from the address GET /v1/me returns as testSender.address. It sends only to the verified addresses of the workspace's members (422 TEST_SENDER_RECIPIENT), at most 3 recipients a minute and 10 in 24 hours (429 TEST_SENDER_LIMIT), as plain transactional mail from \"Nightmail Test\" with a fixed footer: no fromName, replyTo, attachments, headers, template, scheduledAt or marketing (422 TEST_SENDER_UNSUPPORTED). Once a domain verifies it answers 409 TEST_SENDER_DOMAIN_VERIFIED. It is screened, logged and billed like any send.",
         "tags": [
           "Emails"
         ],
@@ -30006,7 +30035,7 @@
     "/v1/emails/batch": {
       "post": {
         "operationId": "sendEmailBatch",
-        "description": "Front-door admission and content screening: Hosted sending checks validation, recipient suppression/consent, balance, limits, and the content screen (Jev with JevF failover) synchronously before queueing. Failing messages return an immediate error (422 RECIPIENT_INELIGIBLE, 422 CONTENT_REJECTED_SPAM, 422 CONTENT_TOO_LARGE_TO_SCREEN, or retryable 503 CONTENT_SCREEN_UNAVAILABLE with Retry-After when no mandatory classifier is configured) and nothing is queued; during a temporary outage of both classifiers, eligible mail is accepted (202) and held unscreened until a classifier answers. Screened-text limits: at most 65,536 UTF-8 bytes per message (installation default) and 150 distinct link hosts (3,000 bytes of host names), counting link labels that name another host; over either limit, error.details[0] holds { screenedBytes, limitBytes } or { linkHosts, linkHostLimit } (plus index in a batch).",
+        "description": "Front-door admission and content screening: Hosted sending checks validation, recipient suppression/consent, balance, limits, and the content screen (Jev with JevF failover) synchronously before queueing. Failing messages return an immediate error (422 RECIPIENT_INELIGIBLE, 422 CONTENT_REJECTED_SPAM, 422 CONTENT_TOO_LARGE_TO_SCREEN, or retryable 503 CONTENT_SCREEN_UNAVAILABLE with Retry-After when no mandatory classifier is configured) and nothing is queued; during a temporary outage of both classifiers, eligible mail is accepted (202) and held unscreened until a classifier answers. Screened-text limits: at most 65,536 UTF-8 bytes per message (installation default) and 150 distinct link hosts (3,000 bytes of host names), counting link labels that name another host; over either limit, error.details[0] holds { screenedBytes, limitBytes } or { linkHosts, linkHostLimit } (plus index in a batch). Test sender (Hosted): until this workspace has a verified domain, send from the address GET /v1/me returns as testSender.address. It sends only to the verified addresses of the workspace's members (422 TEST_SENDER_RECIPIENT), at most 3 recipients a minute and 10 in 24 hours (429 TEST_SENDER_LIMIT), as plain transactional mail from \"Nightmail Test\" with a fixed footer: no fromName, replyTo, attachments, headers, template, scheduledAt or marketing (422 TEST_SENDER_UNSUPPORTED). Once a domain verifies it answers 409 TEST_SENDER_DOMAIN_VERIFIED. It is screened, logged and billed like any send.",
         "tags": [
           "Emails"
         ],

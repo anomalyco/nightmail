@@ -42,6 +42,8 @@ export type EmailSnapshot = {
   mailbox?: boolean;
   /** An ordinary send whose In-Reply-To names a stored message its sender could read: that message's thread (thread-view.ts joinReplies). */
   threadId?: string;
+  /** From the shared test sender (test-sender.ts): routed and sent through the platform workspace's claim and tenant. */
+  testSender?: true;
 };
 export type CampaignDraft = {
   regionPinned?: boolean;

@@ -189,7 +189,7 @@ function useAgentPrompt() {
   // Prefer a verified domain for the test send; any domain still gives the agent its DNS context.
   const items = domains.data?.items ?? []
   const domain = withDomain ? items.find(row => row.status === 'verified') ?? items[0] ?? null : undefined
-  return agentPrompt({ origin, domain, email: identity?.email ?? null, multiTenant })
+  return agentPrompt({ origin, domain, email: identity?.email ?? null, multiTenant, testSender: withDomain ? identity?.testSender : null })
 }
 
 function DocsOverview({ document, all }: {document: Document; all: Operation[]}) {

@@ -7,7 +7,7 @@ import { queries } from '../../data/queries'
 import { request } from '../../data/live'
 import type { Identity, SenderScore, SendingLimit } from '../../data/types'
 import { date, number } from '../../lib/format'
-import { TestSend } from '../docs/first-send'
+import { SelfTest, TestSend, useTestSender } from '../docs/first-send'
 import { Dialog } from '../../components/ui'
 import { limitNotes } from '../score'
 import { SendingLimitsGuide } from '../score/limits'
@@ -80,6 +80,7 @@ export function useSetupSteps(): { loading: boolean; steps: SetupStep[] | null; 
   const client = useQueryClient()
   const enabled = multiTenant && canAdminister && identity?.connection?.state === 'ready'
   const setup = useApiDef(queries.overviewSetup(), { enabled })
+  const testSender = useTestSender()
   // A test sent from the steps keeps them up, with its result, until the next visit.
   const [testId, setTestId] = useState<string | null>(null)
   // The new email shows in Latest emails, the facts and the next steps without a reload.
@@ -99,8 +100,11 @@ export function useSetupSteps(): { loading: boolean; steps: SetupStep[] | null; 
   const sent = setup.data.emails.any || !!testId
   if (domainDone && keyed && sent && !testId) return { loading: false, steps: null }
   const steps: SetupStep[] = [
+    // Until a domain verifies, Hosted mail can send a test to the user's own address from the shared test sender; the
+    // first email's step then confirms it, as it does a test from the domain.
     { key: 'domain', done: domainDone, title: 'Verify a domain',
-      action: !domainDone && <Link className="ui-button ui-button--primary ui-button--md" to={pending ? `/domains/${pending.id}` : '/domains'}>{pending ? 'View records' : 'Add domain'}</Link> },
+      action: !domainDone && <div className="setup-rail__choice"><Link className="ui-button ui-button--primary ui-button--md" to={pending ? `/domains/${pending.id}` : '/domains'}>{pending ? 'View records' : 'Add domain'}</Link>
+        {testSender && identity?.connection?.kind === 'shared' && !sent && <SelfTest onSent={sentTest} />}</div> },
     { key: 'key', done: keyed, title: 'Create an API key',
       action: !keyed && <Link className={`ui-button ui-button--${domainDone ? 'primary' : 'secondary'} ui-button--md`} to={verified ? `/api-keys?create=send&domain=${encodeURIComponent(verified.name)}` : '/api-keys?create=send'}>Create key</Link> },
     // The test send names its from and to addresses itself; with no verified domain in this read to test from, the code examples.

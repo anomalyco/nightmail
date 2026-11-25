@@ -109,6 +109,8 @@ export interface Config {
   platformDomainWorkspace?: string;
   /** Hosted only: From for Nightmail's own owner notices (sender standing), on the platform workspace's domain. */
   notifyFrom?: string;
+  /** Hosted with the platform workspace only: the shared test sender's address, lowercased (src/test-sender.ts). */
+  testSender?: string;
   /** Hosted only: the platform workspace's list of waitlist joins and sign-ups (src/signups.ts signupsList). */
   signupsListId?: string;
   /** Hosted only: the support platform's operator credential, its URL and the handoff signing key (src/support.ts). */

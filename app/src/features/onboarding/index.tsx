@@ -13,7 +13,7 @@ import { agentStep, finishedStep, readRegionalDomain, setDomainStep, setRegional
 import { ConnectAwsRegional, PendingDomain, createStack, domainHint, waitingForStack } from './aws'
 import { DnsWaitNote, DomainRecords, useDnsSetup, useDomain } from '../settings/domain-records'
 import { AgentPrompt, McpSetup, agentPrompt } from '../docs/agent-setup'
-import { FirstSend } from '../docs/first-send'
+import { FirstSend, SelfTest } from '../docs/first-send'
 import { domainPattern, normalizeDomain } from '../../lib/domain'
 import { ApiError, errorText, type ConnectionKind, type ConnectionState, type ProviderConnection } from '../../data/types'
 import './onboarding.css'
@@ -187,7 +187,7 @@ function OnboardingSteps({ stage }: { stage: NonNullable<OnboardingStage> }) {
   // Overview opens next: bring the identity's daily limit and counts up to date first.
   const finish = () => { setDomainStep(workspaceId, finishedStep); refreshIdentity() }
   const domainForm = () => <AddDomain draft={draft} onDraftChange={setDraft} queued={queued} onQueuedChange={setQueued}
-    ready={stage.step === 'domain'}
+    ready={stage.step === 'domain'} hosted={flow === 'shared'}
     onAdded={id => setDomainStep(workspaceId, id)} onFinish={finish} />
   let view: View, content: ReactNode
   if (stage.step === 'agent') { view = 'agent'; content = <AgentSetup domainId={stage.domainId} onFinish={finish} /> }
@@ -389,9 +389,10 @@ function ImportedDomains({ count, onContinue, onAddAnother, fallback }: { count:
   </div>
 }
 
-type AddDomainProps = { draft: string; onDraftChange: (value: string) => void; queued: boolean; onQueuedChange: (queued: boolean) => void; ready: boolean; onAdded: (id: string) => void; onFinish: () => void }
-// Before the connection is ready, a valid domain waits and is added as soon as it is.
-function AddDomain({ draft, onDraftChange, queued, onQueuedChange, ready, onAdded, onFinish }: AddDomainProps) {
+type AddDomainProps = { draft: string; onDraftChange: (value: string) => void; queued: boolean; onQueuedChange: (queued: boolean) => void; ready: boolean; hosted: boolean; onAdded: (id: string) => void; onFinish: () => void }
+// Before the connection is ready, a valid domain waits and is added as soon as it is. Hosted mail can send a test to
+// the user's own address from the shared test sender meanwhile, beside Skip for now.
+function AddDomain({ draft, onDraftChange, queued, onQueuedChange, ready, hosted, onAdded, onFinish }: AddDomainProps) {
   const client = useQueryClient()
   const create = useApiMutation((api, name: string) => api.domains.create({ regionId: '', name }), undefined, true, invalidate.domains)
   const [invalid, setInvalid] = useState('')
@@ -422,7 +423,10 @@ function AddDomain({ draft, onDraftChange, queued, onQueuedChange, ready, onAdde
       </div>
       <Button type="submit" variant="primary" loading={create.isPending || queued} data-analytics="onboarding/domain/add">Add domain<ArrowRight size={16} aria-hidden /></Button>
     </form>
-    <div className="onb-rise onboarding-reserve" style={rise(3)} data-hidden={!ready || undefined} inert={!ready}><button type="button" className="onboarding-skip" disabled={create.isPending} data-analytics="onboarding/domain/skip" onClick={onFinish}>Skip for now</button></div>
+    <div className="onb-rise onboarding-reserve onboarding-more" style={rise(3)} data-hidden={!ready || undefined} inert={!ready}>
+      {hosted && <SelfTest status />}
+      <button type="button" className="onboarding-skip" disabled={create.isPending} data-analytics="onboarding/domain/skip" onClick={onFinish}>Skip for now</button>
+    </div>
   </div>
 }
 
@@ -477,7 +481,7 @@ function AgentSetup({ domainId, onFinish }: { domainId: string; onFinish: () => 
   }
   if (domain.isPending) return <BootLoader inline />
   if (domain.error && !missing) return <ErrorState error={domain.error} onRetry={() => void domain.refetch()} />
-  const prompt = origin ? agentPrompt({ origin, domain: current, email: identity?.email ?? null, multiTenant: identity?.multiTenant === true }) : null
+  const prompt = origin ? agentPrompt({ origin, domain: current, email: identity?.email ?? null, multiTenant: identity?.multiTenant === true, testSender: identity?.testSender }) : null
   // The tab names the key's reach: an app's key sends from this domain only; a coding agent's manages the workspace.
   const scopes = [
     { value: 'send', label: current ? `Send only · ${current.name}` : 'Send only' },
