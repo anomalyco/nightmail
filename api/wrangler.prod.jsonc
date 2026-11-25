@@ -7,10 +7,12 @@
   "account_id": "15d29c8639fd3733b1b5486a2acfd968",
   "workers_dev": false,
   // */* on nightmailedge.com: the link domain (links.nightmailedge.com, and customers' own link hosts when those are on)
-  // reaches this Worker, which answers only links there (src/link-hosts.ts). Wrangler replaces the Worker's routes on each
-  // deploy, so the route lives here, and the deploy token's zones include nightmailedge.com (anomalyco/secrets config.ts).
+  // reaches this Worker, which answers only links there (src/link-hosts.ts). links.opencode.ai/* on opencode.ai, a zone of
+  // this account: a routed link host (NIGHTMAIL_LINK_ROUTES below names it and its workspace), answering only links too.
+  // Wrangler replaces the Worker's routes on each deploy, so the routes live here, and the deploy token's zones include
+  // both (anomalyco/secrets config.ts: Workers Routes Edit); deploy-worker.sh stops before any change when one is missing.
   "routes": [{ "pattern": "nightmail.dev", "custom_domain": true }, { "pattern": "bane.mx", "custom_domain": true }, { "pattern": "events.nightmail.dev", "custom_domain": true },
-    { "pattern": "*/*", "zone_name": "nightmailedge.com" }],
+    { "pattern": "*/*", "zone_name": "nightmailedge.com" }, { "pattern": "links.opencode.ai/*", "zone_name": "opencode.ai" }],
   "main": "src/worker.ts",
   "compatibility_date": "2026-09-08",
   "compatibility_flags": ["nodejs_compat"],
@@ -41,6 +43,11 @@
     "NIGHTMAIL_LINK_SAAS_ZONE_ID": "7b0d7306312182f66e12368f93efbb96",
     "NIGHTMAIL_LINK_SAAS_TARGET": "cname.nightmailedge.com",
     "NIGHTMAIL_LINK_HOST_WORKSPACES": "ws_90b0696c835f49fbaa9396fb726e9fe2",
+    // Routed link hosts (src/link-domains.ts routedHost): the platform workspace's opencode.ai mail links on
+    // links.opencode.ai, sent here by the route above once its record is proxied (until then, its custom hostname). No
+    // custom hostname or DNS check; the host answers that workspace's links only. Each host here has its <host>/* route
+    // in this file and the reverse (scripts/check-premerge.ts).
+    "NIGHTMAIL_LINK_ROUTES": "ws_90b0696c835f49fbaa9396fb726e9fe2=links.opencode.ai",
     // Mail apps connect to imap.nightmail.dev and smtp.nightmail.dev (the gateway certificate names both). Shown only
     // while the deploy binds MAILGW_API_TOKEN (bane:mailGatewayEnabled in infra/pulumi/Pulumi.production.yaml).
     "MAILGW_PUBLIC_DOMAIN": "nightmail.dev",

@@ -58,13 +58,26 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
   const routes = (await createOpenApiApp()).routes.filter(r => r.path !== '*' && r.path !== '/*');
   const paths = [...new Set(routes.map(r => r.path.replace(/:[^/]+/g, 'x').replaceAll('*', 'x')))];
   if (!paths.includes('/internal/v1/mail') || !paths.includes('/v1/emails')) fail('Worker routes', 'The route inventory from createOpenApiApp() is incomplete; this check needs updating.');
-  const configs: Record<string, { assets: { run_worker_first: string[] } }> = {};
+  const configs: Record<string, { assets: { run_worker_first: string[] }; routes?: (string | { pattern: string; zone_name?: string; custom_domain?: boolean })[]; vars?: Record<string, unknown> }> = {};
   for (const name of ['wrangler.dev.jsonc', 'wrangler.prod.jsonc']) {
     const parsed = ts.parseConfigFileTextToJson(name, readFileSync(new URL(name, api), 'utf8'));
     if (parsed.error) { fail('Worker routes', `api/${name} does not parse: ${ts.flattenDiagnosticMessageText(parsed.error.messageText, ' ')}`, `api/${name}`); continue; }
     const rules: string[] = (configs[name] = parsed.config).assets.run_worker_first;
     const first = (path: string) => rules.some(r => !r.startsWith('!') && glob(r).test(path)) && !rules.some(r => r.startsWith('!') && glob(r.slice(1)).test(path));
     for (const path of paths.filter(p => !first(p))) fail('Worker routes', `${path} is an API route but api/${name} assets.run_worker_first does not match it, so Cloudflare answers it from static assets (405 or the dashboard HTML). Add its prefix (for example "/${path.split('/')[1]}/*") to run_worker_first in both wrangler configs.`, `api/${name}`);
+  }
+  // Routed link hosts (src/link-domains.ts routedHost): each host NIGHTMAIL_LINK_ROUTES names has its <host>/* route on its
+  // own zone in the same config, and each links.* route is named there, so the app never links on a host Cloudflare
+  // doesn't send here, nor serves one it doesn't scope. Dev deploys to another account: it has none, and never a route on
+  // a zone of production's.
+  for (const [name, config] of Object.entries(configs)) {
+    const named = String(config.vars?.NIGHTMAIL_LINK_ROUTES ?? '').split(',').map(entry => entry.trim().split('=')[1]).filter((host): host is string => !!host);
+    const routed = (config.routes ?? []).flatMap(route => typeof route === 'object' && !route.custom_domain && /^links\.[^/*]+\/\*$/.test(route.pattern) ? [route] : []);
+    for (const host of named) if (!routed.some(route => route.pattern === `${host}/*` && route.zone_name && host.endsWith(`.${route.zone_name}`)))
+      fail('Worker routes', `api/${name} NIGHTMAIL_LINK_ROUTES names ${host}, but has no { "pattern": "${host}/*", "zone_name": <its zone> } route: mail would link on a host Cloudflare doesn't send to this Worker.`, `api/${name}`);
+    for (const route of routed) if (!named.includes(route.pattern.slice(0, -2)))
+      fail('Worker routes', `api/${name} routes ${route.pattern} to this Worker, but NIGHTMAIL_LINK_ROUTES doesn't name its host and workspace, so it would answer no workspace's links.`, `api/${name}`);
+    if (name === 'wrangler.dev.jsonc' && (named.length || routed.length)) fail('Worker routes', 'api/wrangler.dev.jsonc has routed link hosts: dev deploys to another Cloudflare account and must not route a production zone.', 'api/wrangler.dev.jsonc');
   }
   const [dev, prod] = [configs['wrangler.dev.jsonc'], configs['wrangler.prod.jsonc']];
   if (dev && prod && !isDeepStrictEqual(dev.assets, prod.assets)) fail('Worker routes', 'The assets block differs between api/wrangler.dev.jsonc and api/wrangler.prod.jsonc. dev is the only place production routing is tested before release: keep them identical.', 'api/wrangler.prod.jsonc');

@@ -36,6 +36,9 @@ export async function domainSetupTick(runtime: Runtime) {
       JOIN operation_domains d ON d.workspace_id=dc.workspace_id AND d.name=dc.name LEFT JOIN link_hosts h ON h.workspace_id=dc.workspace_id AND h.domain=dc.name
       WHERE dc.sending_state IN ('pending','verified') AND NOT domain_claim_expired(dc) AND NOT coalesce(dc.identity ? 'builtin',false)
         ${listed ? sql`AND dc.workspace_id=ANY(${sql.param([...listed])}::text[])` : sql``}
+        -- A domain with a routed host, or under one, has no custom hostname to check (src/link-domains.ts routedHost).
+        AND NOT EXISTS (SELECT 1 FROM jsonb_to_recordset(${JSON.stringify((runtime.config.linkRoutes ?? []).map(route => ({ w: route.workspaceId, d: route.hostname.slice('links.'.length) })))}::jsonb) r(w text, d text)
+          WHERE r.w=dc.workspace_id AND (dc.name=r.d OR right(dc.name,length(r.d)+1)='.'||r.d))
         -- An active host is checked again daily: a custom hostname deleted at Cloudflare (by hand, a cleanup race, or dev's
         -- checks on the shared zone) is made again instead of leaving every link in the domain's mail unanswered.
         AND coalesce(h.checked_at,'-infinity')<=now()-CASE WHEN h.status='active' THEN interval '1 day' WHEN h.created_at>now()-interval '1 day' THEN interval '14 minutes' ELSE interval '6 hours' END

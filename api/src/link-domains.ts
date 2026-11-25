@@ -23,6 +23,11 @@ import { productName, servedDomains } from './brand.js';
  * there, on its own name; until then (and for every workspace not listed) its mail links on the link domain. Without the
  * link domain, Hosted refuses campaign and marketing mail from a domain whose own host isn't active (LINK_RECORD_REQUIRED).
  * An installation with neither (self-hosted, Hosted dev) links on PUBLIC_URL, as before link hosts.
+ *
+ * Routed link hosts (config.linkRoutes, NIGHTMAIL_LINK_ROUTES): a workspace's links.<domain> in a zone of this
+ * installation's own Cloudflare account, sent to this Worker by a Worker route in the same wrangler config. Before own link
+ * hosts: mail from that domain links there with no custom hostname or DNS check, and the host answers that workspace's
+ * links and no other's whatever link_hosts says of the name. Without the setting, that mail goes back to the rules above.
  */
 export const linkHostName = (domain: string) => `${LINK_LABEL}.${domain}`;
 /** A link host retired with its domain (forgetLinkHost, cleanUpLinkHosts) that still answers its links: mail it already
@@ -30,7 +35,14 @@ export const linkHostName = (domain: string) => `${LINK_LABEL}.${domain}`;
 const retained = (h: SQL) => sql`(${h}.status='retired' AND ${h}.retired_at > now() - make_interval(days => ${LINK_RETENTION_DAYS}))`;
 export const domainOf = (address: string) => address.slice(address.lastIndexOf('@') + 1).trim().toLowerCase().replace(/\.$/, '');
 /** Whether this installation puts the links in customer mail anywhere but PUBLIC_URL. */
-const linksOff = (config: Config) => !config.linkHost && !config.linkHosts;
+const linksOff = (config: Config) => !config.linkHost && !config.linkHosts && !config.linkRoutes;
+/** The routed link host (config.linkRoutes, NIGHTMAIL_LINK_ROUTES) of the workspace's mail from `sender` (a domain): its
+ *  domain's links.<domain>, or that of the domain it is under, longest first. Authoritative: no custom hostname, no DNS
+ *  check, and nothing in link_hosts changes it. */
+export function routedHost(config: Config, workspaceId: string, sender: string) {
+  return config.linkRoutes?.filter(route => route.workspaceId === workspaceId).map(route => route.hostname).sort((a, b) => b.length - a.length)
+    .find(hostname => { const domain = hostname.slice(LINK_LABEL.length + 1); return sender === domain || sender.endsWith(`.${domain}`); });
+}
 /** The SaaS zone, when the workspace may have own link hosts: on Hosted, only a workspace NIGHTMAIL_LINK_HOST_WORKSPACES
  *  lists (none is shown a links record, checked or given a custom hostname otherwise); self-hosted, every one. */
 export const ownLinkHosts = (config: Config, workspaceId: string) =>
@@ -119,7 +131,8 @@ async function ownHosts(db: DbExecutor, workspaceId: string, sender: string) {
     WHERE d.name=${sender} OR right(${sender},length(d.name)+1)='.'||d.name ORDER BY length(d.name) DESC`)).rows;
 }
 export async function linkChoice(runtime: Runtime, db: DbExecutor, workspaceId: string, from: string, purpose: LinkPurpose = 'campaign'): Promise<LinkChoice> {
-  const sender = domainOf(from), config = runtime.config, saas = ownLinkHosts(config, workspaceId);
+  const sender = domainOf(from), config = runtime.config, saas = ownLinkHosts(config, workspaceId), routed = routedHost(config, workspaceId, sender);
+  if (routed) return { origin: `https://${routed}` };
   if (!config.linkHost && !saas) return { origin: ownOrigin(config, sender) };
   let name = sender;
   if (saas) {
@@ -150,7 +163,8 @@ export function linkChoices(runtime: Runtime, db: DbExecutor, workspaceId: strin
  *  the installation's own origin when self-hosted. */
 export function foundLinkOrigin(config: Config, workspaceId: string, from: string, found: string | null | undefined) {
   if (found) return found;
-  const sender = domainOf(from), saas = ownLinkHosts(config, workspaceId);
+  const sender = domainOf(from), saas = ownLinkHosts(config, workspaceId), routed = routedHost(config, workspaceId, sender);
+  if (routed) return `https://${routed}`;
   if (!config.linkHost && !saas) return ownOrigin(config, sender);
   if (config.linkHost) throw linksPaused(sender);
   if (isBuiltinHost(config, sender)) throw builtinLinkRefusal(config, sender, 'campaign');
@@ -164,9 +178,9 @@ export function foundLinkOrigin(config: Config, workspaceId: string, from: strin
  * it launched now (null: it would be refused, the workspace's sending paused or no link host for it). Records nothing.
  */
 export async function linkReview(runtime: Runtime, db: DbExecutor, workspaceId: string, from: string) {
-  const sender = domainOf(from);
-  let own: { hostname: string; active: boolean } | null = null;
-  if (ownLinkHosts(runtime.config, workspaceId) && !isBuiltinHost(runtime.config, sender)) {
+  const sender = domainOf(from), routed = routedHost(runtime.config, workspaceId, sender);
+  let own: { hostname: string; active: boolean } | null = routed ? { hostname: routed, active: true } : null;
+  if (!routed && ownLinkHosts(runtime.config, workspaceId) && !isBuiltinHost(runtime.config, sender)) {
     const rows = await ownHosts(db, workspaceId, sender), active = rows.find(row => row.hostname);
     if (active) own = { hostname: active.hostname!, active: true };
     else if (rows[0]) own = { hostname: linkHostName(rows[0].name), active: false };
@@ -186,6 +200,10 @@ export async function linkReview(runtime: Runtime, db: DbExecutor, workspaceId: 
 export async function servesWorkspace(runtime: Pick<Runtime, 'config' | 'db'>, requestUrl: string, workspaceId: string) {
   const host = new URL(requestUrl).hostname.toLowerCase().replace(/\.$/, ''), config = runtime.config;
   if (linksOff(config) || [config.publicUrl, ...config.previousOrigins ?? []].some(origin => new URL(origin).hostname === host)) return true;
+  // A routed host answers its workspace's links, whatever link_hosts says of the same name (a custom hostname gone pending
+  // or deleted), and no other workspace's.
+  const routes = config.linkRoutes?.filter(route => route.hostname === host);
+  if (routes?.length) return routes.some(route => route.workspaceId === workspaceId);
   return !!(await runtime.db.execute(sql`SELECT 1 FROM link_hosts h WHERE h.workspace_id=${workspaceId} AND h.hostname=${host} AND (h.status='active' OR (h.status='pending' AND h.custom_hostname_id IS NOT NULL) OR ${retained(sql`h`)})
     UNION ALL SELECT 1 FROM link_fallback_days WHERE workspace_id=${workspaceId} AND host=${host} LIMIT 1`)).rowCount;
 }
@@ -253,7 +271,8 @@ type Seen = { state: 'found' | 'missing' | 'wrong_value'; values: string[]; chec
  */
 export async function checkLinkHost(runtime: Runtime, workspaceId: string, domain: string) {
   const saas = ownLinkHosts(runtime.config, workspaceId);
-  if (!saas || isBuiltinHost(runtime.config, domain)) return;
+  // A domain with a routed host (or under one) needs no custom hostname: it is never checked, so never made pending.
+  if (!saas || isBuiltinHost(runtime.config, domain) || routedHost(runtime.config, workspaceId, domain)) return;
   const hostname = linkHostName(domain), checkedAt = new Date().toISOString();
   const { rows: [row] } = await runtime.db.execute<{ custom_hostname_id: string | null; status: 'pending' | 'active' | 'retired'; public_dns: Seen | null }>(sql`SELECT custom_hostname_id, status, public_dns FROM link_hosts WHERE workspace_id=${workspaceId} AND domain=${domain}`);
   // A retired host (its domain deleted, now added again) is checked afresh: active once Cloudflare serves it, pending until then.
@@ -324,7 +343,7 @@ export async function withLinkRecords<T extends Readable>(runtime: Runtime, work
   const shared = !!runtime.config.linkHost;
   for (const report of reports) {
     // A built-in domain has no DNS of its own; a report that has its link record already keeps it.
-    if (isBuiltinHost(runtime.config, report.name) || report.dns.some(record => record.purpose === 'links')) continue;
+    if (isBuiltinHost(runtime.config, report.name) || routedHost(runtime.config, workspaceId, report.name) || report.dns.some(record => record.purpose === 'links')) continue;
     const row = found.get(report.name), active = row?.status === 'active', at = report.dns.findLastIndex(record => record.purpose === 'sending') + 1;
     const record: T['dns'][number] = { name: linkHostName(report.name), type: 'CNAME', value: saas.target, purpose: 'links', status: active ? 'verified' : 'pending',
       ...active ? {} : { note: shared
