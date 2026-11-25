@@ -47,6 +47,9 @@
     // links.opencode.ai, sent here by the route above once its record is proxied (until then, its custom hostname). No
     // custom hostname or DNS check; the host answers that workspace's links only. Each host here has its <host>/* route
     // in this file and the reverse (scripts/check-premerge.ts).
+    // DON'T REMOVE this entry or its route once links.opencode.ai's custom hostname is deleted: mail already sent links
+    // there, and its unsubscribe links must keep answering for 30 days after the last send (LINK_RETENTION_DAYS). Without
+    // the route nothing sends that name here any more. To move off it, make the custom hostname again first.
     "NIGHTMAIL_LINK_ROUTES": "ws_90b0696c835f49fbaa9396fb726e9fe2=links.opencode.ai",
     // Mail apps connect to imap.nightmail.dev and smtp.nightmail.dev (the gateway certificate names both). Shown only
     // while the deploy binds MAILGW_API_TOKEN (bane:mailGatewayEnabled in infra/pulumi/Pulumi.production.yaml).

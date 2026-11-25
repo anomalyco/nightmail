@@ -44,7 +44,7 @@ for zone in ${route_zones%|*}; do
   [[ $zone =~ ^[a-z0-9.-]+$ && $route_account =~ ^[0-9a-f]{32}$ ]] || { echo "::error::$config has a route zone or account_id that isn't a name or an ID"; exit 1; }
   zone_id=$(cf_get "zones?name=$zone&account.id=$route_account" | jq -r 'select(.success == true and (.result | length) == 1) | .result[0].id' 2>/dev/null || true)
   if ! [[ $zone_id =~ ^[0-9a-f]{32}$ ]] || ! cf_get "zones/$zone_id/workers/routes" | jq -e '.success == true' >/dev/null 2>&1; then
-    echo "::error::This deploy's Cloudflare token can't read Workers routes on $zone, where $config has routes. Nothing was changed: give the stage's token Workers Routes Edit on $zone (anomalyco/secrets), then deploy again."
+    echo "::error::This deploy's Cloudflare token can't read Workers routes on $zone, where $config has routes. The Worker, its secrets and its routes weren't changed (this commit's migrations, applied before this step, stay): give the stage's token Workers Routes Edit on $zone (anomalyco/secrets), then deploy again."
     exit 1
   fi
   echo "Routes: this deploy's token reaches $zone."
