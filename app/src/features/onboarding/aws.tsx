@@ -34,7 +34,7 @@ export function ConnectAwsRegional({ connection, onBack, onHosted, onChosen }: P
 }
 
 function Status({ title, state, text, children }: { title: string; state: 'awaiting_role' | 'provisioning' | 'ready' | 'failed'; text: string; children?: ReactNode }) {
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}><h1 className="onboarding-title">{title}</h1></div>
     <StatusRow state={state} text={text} />
     {children}
@@ -54,7 +54,7 @@ function WaitForStack({ connection, onBack, onHosted }: Omit<Props, 'onChosen'>)
   const error = connection?.stack?.error
   const state = connected ? 'ready' : error ? 'failed' : 'awaiting_role'
   const text = connected ? `Account ${account(connection!.awsAccountId!)} connected` : error ? 'The stack didn’t connect' : waitingForStack
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       <button type="button" className="onboarding-back" onClick={onBack} disabled={connected}><ArrowLeft size={14} aria-hidden />Back</button>
       <h1 className="onboarding-title">Connect your AWS account</h1>
@@ -118,7 +118,7 @@ function ChooseDomains({ connection, onChosen }: { connection: ProviderConnectio
     choose.mutate({ ids: picked.filter(id => found.some(candidate => candidate.id === id)), name })
   }
   const nothing = !picked.some(id => found.some(candidate => candidate.id === id)) && !draft.trim()
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}><h1 className="onboarding-title">Choose what sends</h1></div>
     <StatusRow state="ready" text={`Account ${account(connection.awsAccountId!)} connected`} />
     <form className="onboarding-aws-choice onb-rise" style={rise(2)} onSubmit={submit} noValidate>

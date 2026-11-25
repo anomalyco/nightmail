@@ -37,7 +37,7 @@ export function FocusStep({ current, onBack, onPick, onSkip }: { current: Worksp
   useEffect(() => { if (!shown.current) { shown.current = true; analytics().track('onboarding', 'focus/shown') } }, [])
   const skip = () => { analytics().track('onboarding', 'focus/skip'); onSkip() }
   useStepKeys({ digit: n => { const focus = FOCUS_ORDER[n - 1]; if (focus) onPick(focus) }, escape: skip })
-  return <div className="onboarding onboarding--narrow onboarding--focus">
+  return <div className="onboarding onboarding--focus">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       {onBack && <Back onBack={onBack} />}
       <h1 className="onboarding-title">What do you want to do?</h1>
@@ -120,7 +120,7 @@ export function AgentInboxStep({ domain, onBack, onFinish }: { domain: string; o
   }
   const messages = mail.data ?? []
   useNextScreen('agents', onFinish)
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       <Back onBack={onBack} />
       <h1 className="onboarding-title">Your agent’s inbox</h1>
@@ -193,7 +193,7 @@ export function MarketingStep({ domain, onBack, onFinish }: { domain: string | n
   const origin = usePublicOrigin(), { canAdminister } = useWorkspaceAccess(), agent = useAgentSetup(canAdminister)
   const promptFor = (setupToken: string | null | undefined) => marketingPrompt({ origin: origin!, setupToken })
   useNextScreen('marketing', onFinish)
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       <Back onBack={onBack} />
       <h1 className="onboarding-title">Send your first campaign</h1>
@@ -253,7 +253,7 @@ export function NewsletterStep({ domain, onBack, onFinish }: { domain: string; o
   const promptFor = (setupToken: string | null | undefined) => signupFormPrompt({ origin: origin!, newsletter: created!, setupToken })
   const ready = Boolean(created && origin)
   useNextScreen('newsletter', onFinish)
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       <Back onBack={onBack} />
       <h1 className="onboarding-title">Start your newsletter</h1>
@@ -301,7 +301,7 @@ export function PersonalStep({ domain, onBack, onFinish }: { domain: string | nu
   const inbox = useQuery({ ...builtinInboxQuery(domain ?? ''), enabled: Boolean(domain) })
   const promptFor = (setupToken: string | null | undefined) => personalInboxPrompt({ origin: origin!, setupToken, mailServers: servers })
   useNextScreen('personal', onFinish)
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       <Back onBack={onBack} />
       <h1 className="onboarding-title">Your own inbox</h1>

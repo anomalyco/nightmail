@@ -11,7 +11,7 @@
 .onboarding-workspace .account-switcher { width: auto; max-width: 100%; height: auto; min-height: 32px; padding-block: 5px; }
 .onboarding-workspace .account-switcher > .account-switcher__workspace { overflow: visible; white-space: normal; text-overflow: clip; overflow-wrap: anywhere; }
 .page-surface.onboarding-surface { flex: 1; height: auto; margin: 0 var(--page-inset) var(--page-inset); padding: var(--space-40) var(--space-32) 0; }
-.onboarding-notice { width: 100%; max-width: 920px; margin: 0 auto var(--space-24); }
+.onboarding-notice { width: 100%; margin: 0 0 var(--space-24); }
 
 /* Onboarding-only scale: a step above the dashboard, same tokens. */
 .onboarding-surface .ui-button { transition: background var(--motion-duration), color var(--motion-duration), opacity var(--motion-duration), transform 160ms var(--ease-out-strong); }
@@ -41,11 +41,11 @@
 @keyframes onboarding-fade { from { opacity: 0; } }
 @keyframes onboarding-rise { from { opacity: 0; transform: translateY(6px); } }
 
-/* Columns and type */
-.onboarding { display: flex; flex-direction: column; gap: var(--space-28); width: 100%; max-width: 720px; margin-inline: auto; }
-.onboarding--narrow { max-width: 520px; }
-.onboarding--choice { max-width: 800px; }
-.onboarding--wide { max-width: 920px; }
+/* Columns and type: every step takes the page's full width, as every dashboard page does. What would run too wide lays
+   itself out across it instead: the email beside its callouts, the focus choices as a row of cards. */
+.onboarding { display: flex; flex-direction: column; gap: var(--space-28); width: 100%; }
+/* The connect page (features/connect) shares these styles and keeps its own column. */
+.onboarding--narrow { max-width: 520px; margin-inline: auto; }
 .onboarding-intro { display: flex; flex-direction: column; gap: var(--space-8); }
 .onboarding-intro--center { align-items: center; text-align: center; }
 .onboarding-title { font-size: 28px; line-height: 34px; font-weight: var(--font-weight-bold); letter-spacing: -.5px; text-wrap: balance; }
@@ -248,22 +248,30 @@
 .onb-reply-slot > .onb-annotated[data-active] .onb-mail--reply { animation: onboarding-rise 260ms var(--ease-out-strong) both; }
 .onb-email-actions .onboarding-slot { justify-items: start; align-items: center; }
 
-/* Callouts (email-step.tsx Callout): a figure beside what it measures, joined by a thin line. Out of the flow at desktop
-   widths; on a narrow screen it sits under the item, its box there from the first frame. */
-.onb-callout { position: absolute; top: 50%; left: 100%; display: flex; align-items: center; width: 248px; color: var(--color-muted); font-size: var(--text-sm); line-height: 20px; transform: translateY(-50%); opacity: 0; transition: opacity 200ms ease-out; }
+/* Callouts (email-step.tsx Callout): a figure beside what it measures, joined by a thin line. At desktop widths the email
+   takes the page's width less the callout column at its right (--onb-gutter), and the callout sits at the column's far
+   end, its line running across to the email; on a narrow screen it sits under the item. Either way its box is there from
+   the first frame. */
+.onb-email-step { --onb-gutter: clamp(320px, 34%, 640px); }
+.onb-annotated { display: grid; grid-template-columns: minmax(0, 1fr) var(--onb-gutter); align-items: center; }
+.onb-annotated > .onb-mail { grid-column: 1; }
+.onb-reply-slot > .onb-waiting { margin-right: var(--onb-gutter); }
+.onb-callout { grid-column: 2; display: flex; align-items: center; min-width: 0; color: var(--color-muted); font-size: var(--text-sm); line-height: 20px; opacity: 0; transition: opacity 200ms ease-out; }
 .onb-callout[data-shown] { opacity: 1; transition-delay: 60ms; }
-.onb-callout__line { position: relative; flex: 0 0 40px; height: 1px; margin-right: var(--space-12); background: var(--color-border-strong); transform-origin: left; transform: scaleX(0); transition: transform 300ms var(--ease-out-strong); }
+.onb-callout__line { position: relative; flex: 1 1 auto; min-width: 40px; height: 1px; margin-right: var(--space-16); background: var(--color-border-strong); transform-origin: left; transform: scaleX(0); transition: transform 400ms var(--ease-out-strong); }
 .onb-callout__line::before { content: ''; position: absolute; top: -2px; left: -3px; width: 5px; height: 5px; border-radius: 50%; background: var(--color-border-strong); }
 .onb-callout[data-shown] .onb-callout__line { transform: none; }
-.onb-callout__body { display: flex; flex-direction: column; min-width: 0; }
+.onb-callout__body { display: flex; flex-direction: column; flex: 0 0 216px; min-width: 0; }
 .onb-callout__body > span:first-child:not(.onb-callout__row) { display: inline; }
 .onb-callout__row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-12); }
 .onb-callout .onb-num { color: var(--color-text); }
-@media (max-width: 1239px) {
-  .onb-callout { position: static; width: auto; margin-top: var(--space-8); padding-left: var(--space-4); transform: none; align-items: stretch; }
-  .onb-callout__line { flex: 0 0 1px; height: auto; margin: 2px var(--space-12) 2px var(--space-4); transform-origin: top; transform: scaleY(0); }
+@media (max-width: 1023px) {
+  .onb-annotated { grid-template-columns: minmax(0, 1fr); }
+  .onb-reply-slot > .onb-waiting { margin-right: 0; }
+  .onb-callout { grid-column: 1; margin-top: var(--space-8); padding-left: var(--space-4); align-items: stretch; }
+  .onb-callout__line { flex: 0 0 1px; min-width: 0; height: auto; margin: 2px var(--space-12) 2px var(--space-4); transform-origin: top; transform: scaleY(0); }
   .onb-callout__line::before { top: -3px; left: -2px; }
-  .onb-callout__body { flex: 1; }
+  .onb-callout__body { flex: 1 1 auto; }
   .onb-callout__row { justify-content: flex-start; }
 }
 
@@ -281,6 +289,16 @@
 .onb-choice__go { display: inline-flex; align-items: center; gap: var(--space-8); color: var(--color-muted); }
 .onb-choice__go .onb-kbd { margin: 0; }
 .onb-choice__go svg { transition: transform 180ms var(--ease-out-strong); }
+/* At desktop widths the choices are a row of cards across the page (three and two below 1280 px): the icon and the key
+   that picks it on top, the name and its line under them. */
+@media (min-width: 1024px) {
+  .onb-choices { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-12); }
+  .onb-choice { grid-template-columns: 36px minmax(0, 1fr) auto; grid-template-areas: 'icon . go' 'text text text'; align-content: start; row-gap: var(--space-20); min-height: 160px; padding: var(--space-16); }
+  .onb-choice__icon { grid-area: icon; }
+  .onb-choice__text { grid-area: text; }
+  .onb-choice__go { grid-area: go; }
+}
+@media (min-width: 1280px) { .onb-choices { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
 @media (hover: hover) and (pointer: fine) {
   .onb-choice:hover { background: var(--color-well-hover, var(--color-layer-2)); transition-duration: 0ms; }
   .onb-choice:hover .onb-choice__icon { background: var(--color-contrast); color: var(--color-on-contrast); transition-duration: 0ms; }

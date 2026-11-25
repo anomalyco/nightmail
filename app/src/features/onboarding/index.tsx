@@ -334,7 +334,7 @@ function connectionError(error: unknown) {
 // Each option is its name and the one fact that decides between them; the setup itself shows on the next step.
 function ChooseSending({ onChoose, error }: { onChoose: (kind: ConnectionKind) => void; error: unknown }) {
   // Fixed copy, so the choice never re-wraps when a request lands; the exact steps are in Settings → Billing, under Daily limit.
-  return <div className="onboarding onboarding--choice">
+  return <div className="onboarding">
     <div className="onboarding-intro onboarding-intro--center onb-rise" style={rise(0)}>
       <h1 className="onboarding-title">Where should your email send from?</h1>
     </div>
@@ -356,7 +356,7 @@ function ChooseSending({ onChoose, error }: { onChoose: (kind: ConnectionKind) =
 
 // Starting Hosted mail by itself failed: the reason, and the same request again.
 function HostedError({ error, onRetry }: { error: unknown; onRetry: () => void }) {
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <Alert tone="danger" title="Couldn’t set up sending">{connectionError(error)}{error instanceof ApiError && <span className="ui-error-reference">{error.reference}</span>}<div className="ui-error-state__retry"><Button onClick={onRetry}>Try again</Button></div></Alert>
   </div>
 }
@@ -401,7 +401,7 @@ function ConnectAwsStep({ state, connection, onBack, onHosted }: { state: Connec
   const link = connection?.quickCreateUrl
   const connected = state === 'ready'
   const active = connectStates.find(item => item.key === state) ?? connectStates[0]
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       <button type="button" className="onboarding-back" onClick={onBack} disabled={connected}><ArrowLeft size={14} aria-hidden />Back</button>
       <h1 className="onboarding-title">Connect your AWS account</h1>
@@ -455,7 +455,7 @@ function ImportedDomains({ count, onContinue, onAddAnother, fallback }: { count:
   const verified = (domains.data?.items ?? []).filter(domain => domain.status === 'verified')
   if (domains.error || verified.length === 0) return fallback
   const shown = Math.max(count, verified.length)
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       <h1 className="onboarding-title">{shown === 1 ? 'Your domain is ready' : `Your ${shown} domains are ready`}</h1>
     </div>
@@ -490,7 +490,7 @@ function AddDomain({ draft, onDraftChange, queued, onQueuedChange, ready, onAdde
   }
   useEffect(() => { if (ready && queued) { onQueuedChange(false); void add() } }, [ready, queued]) // eslint-disable-line react-hooks/exhaustive-deps
   // A domain queued while sending is set up keeps the button busy until it is added.
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       {onBack && <Back onBack={onBack} />}
       <h1 className="onboarding-title">Add your domain</h1>
@@ -521,7 +521,7 @@ function DomainSetup({ domainId, onContinue, onMissing }: { domainId: string; on
   const current = domain.data
   const issue = !verified && current.status === 'issue'
   // The title's status says where verification is; a verified domain runs Continue's timer down and moves on by itself.
-  return <div className="onboarding onboarding--wide">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       <h1 className="onboarding-title onboarding-domain-title"><span>{current.name}</span><LiveStatus state={verified ? 'verified' : issue ? 'failed' : 'pending'} /></h1>
       {issue && <Alert tone="danger">Verification stopped. Fix the records below, then press Check now on the domain’s page.</Alert>}
@@ -574,7 +574,7 @@ function AgentSetup({ domainId, onFinish, onBack }: { domainId: string; onFinish
   // After onboarding's first email (the built-in domain), the next thing is sending from code; an own domain just verified
   // gets its test email here instead.
   const tested = current?.builtIn === true
-  return <div className="onboarding onboarding--narrow">
+  return <div className="onboarding">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       {onBack && <Back onBack={onBack} />}
       <h1 className="onboarding-title">{tested ? 'Send from your app' : 'Send your first email'}</h1>

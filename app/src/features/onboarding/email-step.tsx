@@ -126,7 +126,7 @@ export function FirstEmailStep({ email, domain, domainId, ready, state, onChange
   // The send is the person's own act, so its heading may take another line; waiting and replied share one cell, as the
   // reply lands on its own and must move nothing.
   const shownTitles = titles.filter(([phases]) => composing || sending ? phases.includes('compose') : !phases.includes('compose'))
-  return <div className="onboarding onboarding--narrow onb-email-step" data-phase={phase}>
+  return <div className="onboarding onb-email-step" data-phase={phase}>
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       <h1 className="onboarding-title onboarding-slot">{shownTitles.map(([phases, title]) => <span key={title} data-active={phases.includes(phase) || undefined} aria-hidden={!phases.includes(phase) || undefined}>{title}</span>)}</h1>
       <p className="muted onboarding-builtin-copy onboarding-slot">{shownTitles.map(([phases, , line]) => <span key={line} data-active={phases.includes(phase) || undefined} aria-hidden={!phases.includes(phase) || undefined}>{line}</span>)}</p>
