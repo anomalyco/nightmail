@@ -39,8 +39,8 @@ export type Scope = {
   conversation: { id: string; channel: 'chat' | 'email'; mode: Mode; verification: Verification;
     /** An email conversation's messages its person confirmed signed in (the claim): each is answered once. */
     signedIn?: string[] };
-  /** The person Nightmail stamps (id: never shown to the model), and whether `email` is their verified address now. */
-  user: { id?: string | null; name: string | null; email: string | null; mailboxProven?: boolean };
+  /** The person Nightmail stamps (id: never shown to the model), their mailbox proof and live dashboard session status. */
+  user: { id?: string | null; name: string | null; email: string | null; mailboxProven?: boolean; activeSession?: boolean; sessionSince?: string | null };
   workspace: ScopeWorkspace | null; workspaces: ScopeWorkspace[]; contentWorkspaceId: string | null; page: string | null;
   /** The person lost a workspace this conversation read: end it without restating anything. */
   shrunk: boolean;

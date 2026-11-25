@@ -8533,15 +8533,15 @@ describe('Hosted MCP OAuth and tools', () => {
           // reads nothing (the same checks as the claim).
           const shown = ok(await pending(waiting, first, { cookie: owner.cookie }));
           const arrived = (await db.query('SELECT received_at FROM mail_messages WHERE id = $1', [first])).rows[0].received_at as Date;
-          assert.deepEqual(shown, { id: waiting, messageId: first, subject: 'Why are my Gmail bounces up?', receivedAt: arrived.toISOString() });
+          assert.deepEqual(shown, { id: waiting, messageId: first, subject: 'Why are my Gmail bounces up?', preview: 'The body stays private.', receivedAt: arrived.toISOString() });
           assert.equal(ok(await pending(waiting, second, { cookie: owner.cookie })).subject, 'And my DKIM?');
           for (const who of [admin, member, outsider, lonely, operator]) error(await pending(waiting, first, { cookie: who.cookie }), 404);
           error(await pending(conversation(), first, { cookie: owner.cookie }), 404);
           error(await pending(waiting, first, {}), 401);
           error(await send('GET', `/v1/support-conversations/${waiting}/claim?messageId=${first}`, { authorization: `Bearer nm_${hex()}` }), 403, 'DASHBOARD_AUTH_REQUIRED');
           error(reply(await platform.call('GET', `/v1/support-conversations/${waiting}/claim?messageId=${first}`)), 404);
-          // Her address must be a mailbox a sign-in proved within 30 days: an older proof shows and confirms nothing.
-          await db.query(`UPDATE nightmail_users SET mailbox_proved_at = now() - interval '31 days' WHERE id = $1`, [owner.userId]);
+          // Her address must be a mailbox a sign-in proved within 7 days: an older proof shows and confirms nothing.
+          await db.query(`UPDATE nightmail_users SET mailbox_proved_at = now() - interval '8 days' WHERE id = $1`, [owner.userId]);
           error(await pending(waiting, first, { cookie: owner.cookie }), 404);
           error(await claim(waiting, first, session(owner)), 404);
           await db.query('UPDATE nightmail_users SET mailbox_proved_at = now() WHERE id = $1', [owner.userId]);
@@ -8823,12 +8823,28 @@ describe('Hosted MCP OAuth and tools', () => {
         assert.deepEqual([mailed.workspaces.map((w: Json) => w.id), mailed.domains.length >= 0, Array.isArray(mailed.standing)], [[acme], true, true], 'Status, domains and sending stay.');
         assert.ok(chatContext.recentActivity.length > 0 && 'apiKeys' in chatContext.workspaces[0].counts, 'A chat’s context is unchanged.');
         assert.equal('apiKeys' in ok(await stamped(owned.id, 'GET', `/v1/support/workspaces?workspaceId=${acme}`)).data[0].counts, false);
-        // Sent mail only: received mail is a chat's.
+        // Individual mail, delivery events, campaigns, screens and audience metadata require a signed-in dashboard chat.
         const received = await mail(owner.email, { workspace: acme, box: acmeBox });
-        assert.deepEqual(ok(await stamped(owned.id, 'GET', `/v1/support/emails?workspaceId=${acme}&direction=received`)).data, []);
-        error(await stamped(owned.id, 'GET', `/v1/support/emails/${received}?workspaceId=${acme}`), 404);
+        for (const path of [`/v1/support/emails?workspaceId=${acme}`, `/v1/support/emails/${received}?workspaceId=${acme}`, `/v1/support/events?workspaceId=${acme}`,
+          `/v1/support/campaigns?workspaceId=${acme}`, `/v1/support/screen?workspaceId=${acme}`, `/v1/support/audience/health?workspaceId=${acme}`]) {
+          error(await stamped(owned.id, 'GET', path), 403, 'SUPPORT_CHAT_ONLY');
+        }
         assert.ok(ok(await stamped(chatted, 'GET', `/v1/support/emails?workspaceId=${acme}&direction=received`)).data.some((e: Json) => e.id === received), 'The chat still reads received mail.');
         ok(await stamped(chatted, 'GET', `/v1/support/emails/${received}?workspaceId=${acme}`));
+        // Mail sent through Nightmail itself requires sign-in confirmation instead of automatic email binding.
+        const fromDomain = owner.email.split('@')[1]!;
+        await db.query(`INSERT INTO domain_claims(workspace_id, name, sending_state, receiving_state, identity, ever_proven) VALUES($1, $2, 'verified', 'off', '{}'::jsonb, true) ON CONFLICT DO NOTHING`, [acme, fromDomain]);
+        const sentProviderId = `ses-${hex().slice(0, 16)}`;
+        await db.query(`INSERT INTO sending_emails(id, workspace_id, region, actor_key_id, from_address, to_addresses, cc_addresses, bcc_addresses, subject, status, provider_id, snapshot, simulated)
+          VALUES($1, $2, $3, 'fixture', $4, $5::jsonb, '[]', '[]', 'Outbound', 'sent', $6, '{}'::jsonb, true)`,
+          [unique('email'), acme, REGION, owner.email, JSON.stringify([`support@${supportDomain}`]), sentProviderId]);
+        const selfSentMsg = await mail(owner.email, { rfcId: `${sentProviderId}@email.amazonses.com` });
+        const selfSentReg = ok(await register(conversation(), { kind: 'email', messageId: selfSentMsg }), 201);
+        assert.equal(selfSentReg.mode, 'pending_signin');
+        const loopMsg = await mail(owner.email, { headers: [{ name: 'X-Nightmail-Loop', value: 'v1.1.tok' }] });
+        assert.equal(ok(await register(conversation(), { kind: 'email', messageId: loopMsg }), 201).mode, 'pending_signin');
+        // Scope reflects live dashboard session presence for chat tokens.
+        assert.equal(ok(await stamped(chatted, 'GET', '/v1/support/scope')).user.activeSession, true);
         for (const done of [owned.id, chatted]) ok(reply(await platform.closeConversation(done)));
       });
 

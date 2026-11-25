@@ -6,7 +6,7 @@ export type SupportHandoff = { id: string; url: string | null; token: string | n
 /** The signed-in person's open chat conversation in the current workspace, from GET /v1/support-conversations/current. */
 export type CurrentSupportConversation = { id: string; status: 'open' | 'ticketed'; createdAt: string; lastMessageAt: string | null }
 /** One email waiting for its sender's sign-in, as GET /v1/support-conversations/{id}/claim shows it to that sender. */
-export type SupportPendingEmail = { id: string; messageId: string; subject: string | null; receivedAt: string | null }
+export type SupportPendingEmail = { id: string; messageId: string; subject: string | null; preview: string | null; receivedAt: string | null }
 export const supportApi = {
   /** The open support chat conversation for this person and workspace, or null when none is open. */
   current: () => request<{ conversation: CurrentSupportConversation | null }>('/v1/support-conversations/current'),

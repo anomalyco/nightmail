@@ -1,7 +1,7 @@
 // Short-lived capabilities the support Worker hands out, all HMAC-SHA256 under keys derived from one root
 // (SUPPORT_ROOT_SECRET) with HKDF and a purpose label, as Nightmail derives its own keys (api/README.md "Secret rotation").
 //
-// - chat token: lets one person's panel open one conversation's WebSocket for 12 hours;
+// - chat token: lets one person's panel open one conversation's WebSocket for 15 minutes (renewed via /chat/resume);
 // - confirm token: the "Confirm it's me" link in an email reply (24 hours, single use, bound to conversation and address).
 
 const encoder = new TextEncoder();
@@ -36,20 +36,22 @@ export async function verify(key: CryptoKey, payload: string, signature: string)
 }
 
 const SAFE = /^[A-Za-z0-9_@.+-]{1,200}$/;
-export const CHAT_TOKEN_HOURS = 12;
+export const CHAT_TOKEN_MINUTES = 15;
+const CHAT_TOKEN_SECONDS = CHAT_TOKEN_MINUTES * 60;
 
 export async function chatToken(root: string | undefined, conversationId: string, userId: string, now = Date.now()) {
-  const exp = Math.floor(now / 1000) + CHAT_TOKEN_HOURS * 3600, payload = `v1.${conversationId}.${userId}.${exp}`;
+  const exp = Math.floor(now / 1000) + CHAT_TOKEN_SECONDS, payload = `v1.${conversationId}.${userId}.${exp}`;
   return { token: `${payload}.${await sign(await purposeKey(root, 'chat-token/v1'), payload)}`, expiresAt: new Date(exp * 1000).toISOString() };
 }
 
-/** The chat token's conversation and user, or null when it is forged, expired or for another conversation. */
-export async function readChatToken(root: string | undefined, token: string | null, conversationId: string, now = Date.now()): Promise<{ userId: string } | null> {
+/** The chat token's conversation, user and validity window, or null when invalid, expired or for another conversation. */
+export async function readChatToken(root: string | undefined, token: string | null, conversationId: string, now = Date.now()): Promise<{ userId: string; issuedAt: number; expiresAt: number } | null> {
   const parts = token?.split('.') ?? [];
   if (parts.length !== 5 || parts[0] !== 'v1') return null;
   const [, conv, userId, exp, sig] = parts as [string, string, string, string, string];
   if (conv !== conversationId || !SAFE.test(userId) || !/^\d{10}$/.test(exp) || Number(exp) * 1000 <= now) return null;
-  try { return await verify(await purposeKey(root, 'chat-token/v1'), `v1.${conv}.${userId}.${exp}`, sig) ? { userId } : null; } catch (error) { if (error instanceof MissingSecret) throw error; return null; }
+  const expiresAt = Number(exp) * 1000, issuedAt = expiresAt - CHAT_TOKEN_SECONDS * 1000;
+  try { return await verify(await purposeKey(root, 'chat-token/v1'), `v1.${conv}.${userId}.${exp}`, sig) ? { userId, issuedAt, expiresAt } : null; } catch (error) { if (error instanceof MissingSecret) throw error; return null; }
 }
 
 /** A confirm link token: the conversation, a hash of the address (never the address itself in a URL) and an expiry. */

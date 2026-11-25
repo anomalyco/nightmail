@@ -61,7 +61,7 @@ export function githubVerifiedAddress(acr: unknown, upstream: ProviderIdentity |
 }
 
 /** How long a sign-in's proof of the mailbox (provenMailbox) lets email speak for the account. */
-export const MAILBOX_PROOF_DAYS = 30;
+export const MAILBOX_PROOF_DAYS = 7;
 /**
  * Whether the account row `u` (nightmail_users) has an address its person proved, signed in, to be a mailbox they read:
  * a sign-in whose provenMailbox was that address (recorded at sign-in, account-login.ts) within MAILBOX_PROOF_DAYS, and the

@@ -167,7 +167,7 @@ Nightmail records a `message.received` event for every message an address receiv
   - mail: 20 a day per DMARC-passing sender, 30 per address for all unauthenticated mail together (a spoofed From can't spread across keys), of which at most 3 per From address at support@ (`LIMIT_MAIL_UNAUTHENTICATED_PER_ADDRESS`, so a forged address can't use up the sign-in replies of every sender without DMARC), and 2,000 in total.
 
   Mail over a cap is never dropped. It's kept, bounded, in D1 `overflow`, and the daily cron (00:10 UTC) emails the team one "N messages over cap" digest. The first time a global cap is hit each day, the team gets an alert at once. Both emails are frozen when first queued (D1 `support_notices`) and resent by the five-minute sweep, under the same idempotency key, until Nightmail accepts them. The daily cron also runs the retention sweep.
-- **Per sender at the edge:** 10 messages a minute (the `EMAIL_IN` limiter). Mail over it is never read or answered, but it's recorded in the work ledger and listed in the digest.
+- **Per sender at the edge:** 10 messages a minute (the `EMAIL_IN` limiter), counted apart for a sender's DMARC-verified mail and for mail that only claims its address. Mail over it is never read or answered, but it's recorded in the work ledger and listed in the digest.
 - **Per conversation:** 60 turns, and 500K tokens weighted by cost (cache reads count a tenth). Past either, the conversation files a ticket.
 - **Per person:** 10 chats a day.
 - **Per email thread:** 5 messages in 10 minutes.

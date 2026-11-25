@@ -45,6 +45,7 @@ type RenderMessage = Pick<
   | 'inReplyTo'
   | 'references'
   | 'spam'
+  | 'verdicts'
   | 'envelopeTo'
   | 'bodyTruncated'
 >;
@@ -69,6 +70,7 @@ const EXAMPLE: { message: RenderMessage; raw: string } = {
     inReplyTo: null,
     references: [],
     spam: false,
+    verdicts: {},
     envelopeTo: ['recipient@example.org'],
     bodyTruncated: false,
   },
@@ -150,6 +152,7 @@ function banePayload(event: Event, m: RenderMessage, parts: Part[], raw: string 
     cc: m.cc,
     replyTo: m.replyTo,
     receivedAt: m.receivedAt,
+    authentication: { dmarc: m.verdicts?.dmarc ?? null },
     text: text.toString(),
     html: html.toString(),
     bodyTruncated: m.bodyTruncated || text.length + html.length < Buffer.byteLength(m.text ?? '') + Buffer.byteLength(m.html ?? ''),

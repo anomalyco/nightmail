@@ -4,8 +4,9 @@
 .support-continue { min-height: 100dvh; background: var(--color-deep); }
 .support-continue__text { display: block; min-height: calc(2 * var(--leading-sm)); }
 .support-continue__action { min-width: 8rem; }
-.support-continue__email { display: grid; align-content: center; gap: var(--space-4); box-sizing: border-box; height: calc(2 * var(--leading-sm) + var(--space-4) + 2 * var(--space-12));
+.support-continue__email { display: grid; align-content: center; gap: var(--space-4); box-sizing: border-box; height: calc(4 * var(--leading-sm) + 2 * var(--space-4) + 2 * var(--space-12));
   padding: var(--space-12); border-radius: var(--radius-sm); background: var(--color-well, var(--color-layer-2)); font-size: var(--text-sm); line-height: var(--leading-sm); }
 .support-continue__email[data-empty] { background: none; }
 .support-continue__subject { overflow: hidden; color: var(--color-text); font-weight: var(--font-weight-bold); text-overflow: ellipsis; white-space: nowrap; }
+.support-continue__preview { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; min-height: calc(2 * var(--leading-sm)); margin: 0; color: var(--color-text); overflow-wrap: anywhere; }
 .support-continue__received { color: var(--color-muted); }

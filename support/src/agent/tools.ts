@@ -255,13 +255,13 @@ export const MANAGER_TOOLS: ReadonlySet<string> = new Set(['list_domains', 'doma
 /** An unverified email reads no account: its turns answer through reply and can file a ticket, nothing else. */
 const EMAIL_TOOLS: ReadonlySet<string> = new Set(['reply', 'file_ticket']);
 /**
- * Everything a verified email may call: the account's status, domains and sending (by role, as in chat), workspace choice,
- * reply and file_ticket. Never billing, the activity trail (it carries key and billing events), request logs (key
- * principals) or webhook deliveries: those are answered in the dashboard's Help chat. And nothing that changes anything,
- * keeps a note or reads content. Nightmail refuses those routes for an email conversation too.
+ * Everything a verified email may call: account status, domains, standing and aggregate deliverability summaries (by role),
+ * workspace choice, reply and file_ticket. Individual sent-mail metadata, delivery events, campaigns, screens, audience
+ * data, billing, the activity trail, request logs, webhook deliveries, changes, notes and content access require the
+ * signed-in dashboard Help chat (and Nightmail enforces the same boundary).
  */
-export const EMAIL_TOOLS_VERIFIED: ReadonlySet<string> = new Set(['account_context', 'list_workspaces', 'list_domains', 'domain_health', 'get_standing', 'list_emails', 'get_email',
-  'list_events', 'delivery_metrics', 'bounce_reasons', 'screen_rejections', 'lint_email', 'list_campaigns', 'get_campaign', 'lint_campaign', 'audience_health', 'choose_workspace', 'reply', 'file_ticket']);
+export const EMAIL_TOOLS_VERIFIED: ReadonlySet<string> = new Set(['account_context', 'list_workspaces', 'list_domains', 'domain_health', 'get_standing',
+  'delivery_metrics', 'bounce_reasons', 'choose_workspace', 'reply', 'file_ticket']);
 export type Turn = { channel: 'chat'; manager: boolean } | { channel: 'email'; verified?: false } | { channel: 'email'; verified: true; manager: boolean };
 /**
  * The tools one turn may call. A chat's: account tools by role (the owner/admin ones only for a manager), workspace

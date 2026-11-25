@@ -222,7 +222,7 @@ const baseEnv = (overrides: Record<string, unknown> = {}) => ({
   INTAKE: { type: 'durable-object' as const, worker: 'support', exportName: 'SupportIntake' },
   INTAKE_ADDRESSES: text('abuse@dev.bane.mx,privacy@dev.bane.mx,legal@dev.bane.mx'), BANE_INTAKE_WEBHOOK_SECRET: text(INTAKE_SECRET), BANE_INTAKE_INBOX_KEY: text(`bane_mbx_${'8'.repeat(64)}`),
   // The main suite runs many conversations as one person in one day: caps high here, tested low in their own instance.
-  LIMIT_TICKETS_PER_PERSON: text('50'), LIMIT_TURNS_PER_PERSON: text('1000'), LIMIT_TURNS_PER_EMAIL_SENDER: text('1000'), LIMIT_MAIL_PER_SENDER: text('200'), LIMIT_CONFIRMS_PER_ADDRESS: text('20'), LIMIT_MAIL_UNAUTHENTICATED_PER_ADDRESS: text('200'),
+  LIMIT_TICKETS_PER_PERSON: text('50'), LIMIT_TURNS_PER_PERSON: text('1000'), LIMIT_TURNS_PER_EMAIL_SENDER: text('1000'), LIMIT_TURNS_PER_EMAIL_DOMAIN: text('1000'), LIMIT_TURNS_GENERAL_PER_DAY: text('1000'), LIMIT_MAIL_PER_SENDER: text('200'), LIMIT_CONFIRMS_PER_ADDRESS: text('20'), LIMIT_MAIL_UNAUTHENTICATED_PER_ADDRESS: text('200'),
   DB: { type: 'd1' as const, id: 'support-test' },
   UPLOADS: { type: 'r2' as const, name: 'support-test-uploads' },
   BANE: { type: 'worker' as const, worker: 'fake-bane', exportName: 'SupportPlatform' },
@@ -291,8 +291,9 @@ async function chatIn(instance: Miniflare = mf, token = handoff()) {
 }
 
 /** Nightmail's inbound webhook for one message, signed with the test secret (support@, or the intake addresses). */
-function signedHook(messageId: string, threadId: string, from = 'ada@acme.test', options: { to?: string; intake?: boolean; instance?: Miniflare; recipients?: string[] } = {}) {
-  const body = JSON.stringify({ type: 'message.received', data: { messageId, ...(options.recipients ? { recipients: options.recipients } : {}), message: { id: messageId, threadId, direction: 'inbound', from: { address: from }, to: [{ address: options.to ?? 'support@dev.bane.mx' }] } } });
+function signedHook(messageId: string, threadId: string, from = 'ada@acme.test', options: { to?: string; intake?: boolean; instance?: Miniflare; recipients?: string[]; dmarc?: string } = {}) {
+  const dmarc = options.dmarc ?? (messageId.includes('nodmarc') ? 'FAIL' : 'PASS');
+  const body = JSON.stringify({ type: 'message.received', data: { messageId, ...(options.recipients ? { recipients: options.recipients } : {}), message: { id: messageId, threadId, direction: 'inbound', from: { address: from }, to: [{ address: options.to ?? 'support@dev.bane.mx' }], authentication: { dmarc } } } });
   const id = `wh_${randomBytes(8).toString('hex')}`, ts = String(Math.floor(Date.now() / 1000)), secret = options.intake ? INTAKE_SECRET : WEBHOOK_SECRET;
   const signature = `v1,${createHmac('sha256', Buffer.from(secret.slice(6), 'base64')).update(`${id}.${ts}.${body}`).digest('base64')}`;
   return (options.instance ?? mf).dispatchFetch(`${SUPPORT}/hooks/${options.intake ? 'bane-intake' : 'bane-inbound'}`, { method: 'POST', body, headers: { 'webhook-id': id, 'webhook-timestamp': ts, 'webhook-signature': signature } });
@@ -687,6 +688,92 @@ describe('support Worker', () => {
     assert.notEqual(afterEnd.body.conversationId, first.body.conversationId);
   }, 180_000);
 
+  test('general email turn budgets stay isolated from signed-in customer chats, and oversized bodies are rejected early', async () => {
+    // Declared and streaming oversized payloads are rejected with 413 before parsing or verification.
+    const bigHandoff = JSON.stringify({ handoff: 'x'.repeat(10_000) });
+    assert.equal((await mf.dispatchFetch(`${SUPPORT}/chat/start`, { method: 'POST', headers: { 'content-type': 'application/json', origin: ORIGIN, 'content-length': String(bigHandoff.length) }, body: bigHandoff })).status, 413);
+    assert.equal((await mf.dispatchFetch(`${SUPPORT}/chat/resume`, { method: 'POST', headers: { 'content-type': 'application/json', origin: ORIGIN }, body: bigHandoff })).status, 413);
+    const bigHook = 'x'.repeat(1_000_050);
+    assert.equal((await mf.dispatchFetch(`${SUPPORT}/hooks/bane-inbound`, { method: 'POST', headers: { 'content-type': 'application/json', 'content-length': String(bigHook.length) }, body: bigHook })).status, 413);
+    assert.equal((await mf.dispatchFetch(`${SUPPORT}/hooks/bane-intake`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: bigHook })).status, 413);
+
+    // Chat tokens expire in 15 minutes and are rejected once the user signs out or signs in again later.
+    const now = Date.now();
+    const short = await chatToken(ROOT, 'conv_' + 'b'.repeat(26), 'usr_tok', now);
+    assert.ok(await readChatToken(ROOT, short.token, 'conv_' + 'b'.repeat(26), now + 14 * 60_000));
+    assert.equal(await readChatToken(ROOT, short.token, 'conv_' + 'b'.repeat(26), now + 16 * 60_000), null);
+    const started = await post('/chat/start', { handoff: handoff('usr_signout') });
+    assert.equal(started.status, 200);
+    await fakeHook('/__session', { userId: 'usr_signout', activeSession: false });
+    const afterSignOut = await mf.dispatchFetch(started.body.socketUrl.replace('wss:', 'https:'), { headers: { upgrade: 'websocket', origin: ORIGIN } });
+    assert.equal(afterSignOut.status, 401);
+    await fakeHook('/__session', { userId: 'usr_signout', activeSession: true, sessionSince: new Date(Date.now() + 60_000).toISOString() });
+    const afterNewLogin = await mf.dispatchFetch(started.body.socketUrl.replace('wss:', 'https:'), { headers: { upgrade: 'websocket', origin: ORIGIN } });
+    assert.equal(afterNewLogin.status, 401);
+
+    // General (non-member) email turn caps do not consume the verified customer reserve.
+    const isolated = new Miniflare({ cf: false, telemetry: { enabled: false }, workers: [worker('support', baseEnv({ LIMIT_TURNS_PER_DAY: text('2'), LIMIT_TURNS_GENERAL_PER_DAY: text('1'), LIMIT_TURNS_PER_EMAIL_DOMAIN: text('1') })),
+      { config: { name: 'fake-bane', compatibilityDate: '2026-09-08', manifest: { mainModule: 'bane.js', modules: { 'bane.js': { type: 'esm', contents: FAKE_BANE } } }, env: {} } }] } as never);
+    try {
+      await migrate(isolated);
+      assert.equal((await signedHook('msg_stranger_cap_1', 'thr_cap_1', 'stranger@else.test', { instance: isolated })).status, 200);
+      assert.ok(await eventually(async () => (await replies('thr_cap_1', isolated))[0]));
+      assert.equal((await signedHook('msg_stranger_cap_2', 'thr_cap_2', 'stranger@else.test', { instance: isolated })).status, 200);
+      const second = await eventually(async () => (await replies('thr_cap_2', isolated))[0]);
+      assert.match(second?.[3].text ?? '', /can’t answer automatically/, 'Second non-member email hits general budget.');
+      const db = await isolated.getD1Database('DB', 'support');
+      assert.equal(await db.prepare("SELECT n FROM daily_counters WHERE key = 'global:turns'").first(), null, 'Customer reserve untouched.');
+      const chat = await chatIn(isolated, handoff('usr_ada'));
+      chat.send({ type: 'user.message', clientMessageId: 'cust_ok_1', text: 'Hello from signed-in chat' });
+      assert.equal((await chat.until(f => f.type === 'message.end' && f.text === 'OK.', 60_000)).text, 'OK.');
+      chat.ws.close();
+    } finally { await isolated.dispose(); }
+  }, 180_000);
+
+  test('chat ingress limits queued messages before persisting them', async () => {
+    const chat = await chatIn(mf, handoff('usr_queue'));
+    // Send 8 rapid messages while the first turn is running: messages past the queue bound get RATE_LIMITED and are not stored.
+    for (let i = 1; i <= 8; i++) chat.send({ type: 'user.message', clientMessageId: `q_${i}`, text: `Queued message ${i}` });
+    const limited = await chat.until(f => f.type === 'error' && f.code === 'RATE_LIMITED', 30_000);
+    assert.equal(limited.retryable, true);
+    await eventually(async () => chat.frames.filter(f => f.type === 'message.end' && f.text === 'OK.').length >= 5 || undefined, 60_000);
+    chat.ws.close();
+    const again = await connect((await post('/chat/resume', { conversationId: chat.id, handoff: handoff('usr_queue') })).body.socketUrl);
+    const replay = await again.until(f => f.type === 'history');
+    const userCount = replay.messages.filter((m: any) => m.role === 'user').length;
+    assert.ok(userCount <= 5, `Only accepted messages are persisted, got ${userCount}`);
+    again.ws.close();
+  }, 180_000);
+
+  test('public mailbox providers are bounded per address rather than sharing one domain budget, and idle sockets close on sign-out', async () => {
+    const isolated = new Miniflare({ cf: false, telemetry: { enabled: false }, workers: [worker('support', baseEnv({ LIMIT_TURNS_GENERAL_PER_DAY: text('5'), LIMIT_TURNS_PER_EMAIL_DOMAIN: text('1'), LIMIT_TURNS_PER_EMAIL_SENDER: text('2') })),
+      { config: { name: 'fake-bane', compatibilityDate: '2026-09-08', manifest: { mainModule: 'bane.js', modules: { 'bane.js': { type: 'esm', contents: FAKE_BANE } } }, env: {} } }] } as never);
+    try {
+      await migrate(isolated);
+      // Two distinct Gmail senders each get answered even with LIMIT_TURNS_PER_EMAIL_DOMAIN=1.
+      assert.equal((await signedHook('msg_gmail_a', 'thr_gmail_a', 'alice@gmail.com', { instance: isolated })).status, 200);
+      assert.equal((await signedHook('msg_gmail_b', 'thr_gmail_b', 'bob@gmail.com', { instance: isolated })).status, 200);
+      const a = await eventually(async () => (await replies('thr_gmail_a', isolated))[0]);
+      const b = await eventually(async () => (await replies('thr_gmail_b', isolated))[0]);
+      assert.ok(a && !a[3].text.includes('can’t answer automatically'), a?.[3].text);
+      assert.ok(b && !b[3].text.includes('can’t answer automatically'), b?.[3].text);
+      // An idle open chat socket whose user signs out is closed with 4401 before receiving a staff push.
+      const started = await (await isolated.dispatchFetch(`${SUPPORT}/chat/start`, { method: 'POST', headers: { 'content-type': 'application/json', origin: ORIGIN }, body: JSON.stringify({ handoff: handoff('usr_idle_so') }) })).json() as any;
+      const chat = await connect(started.socketUrl, isolated);
+      await chat.until(f => f.type === 'history');
+      await fakeHook('/__session', { userId: 'usr_idle_so', activeSession: false }, isolated);
+      const fb = await isolated.getWorker('fake-bane');
+      await fb.fetch('http://fake-bane/__inbox', { method: 'POST', body: JSON.stringify({ id: started.conversationId, reply: { id: 'msg_staffso00000001', text: 'Staff reply after sign-out', staffName: 'Dana' } }) });
+      await isolated.dispatchFetch(`${SUPPORT}/hooks/nightmail-wake`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ conversationId: started.conversationId }) });
+      // The signed-out socket is closed before broadcasting, so the staff reply goes by email instead of pushing over WS.
+      const delivered = await eventually(async () => (await fakeCalls(isolated)).find(c => c[0] === 'markDelivery' && c[2] === 'msg_staffso00000001' && c[3] === 'sent'), 15_000);
+      assert.ok(delivered, 'Staff reply delivered.');
+      const emailed = (await fakeCalls(isolated)).find(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[5] === 'staff-msg_staffso00000001');
+      assert.ok(emailed, 'Closed signed-out socket fell back to email delivery.');
+      assert.ok(!chat.frames.some(f => f.kind === 'staff'), 'Signed-out socket must not receive staff reply push.');
+    } finally { await isolated.dispose(); }
+  }, 180_000);
+
   /** A new chat's first turn for this person in this workspace: its conversation and the turn's context (<customer> on). */
   async function firstTurn(user: string, workspace = 'ws_acme') {
     const chat = await chatIn(mf, handoff(user, false, workspace)), models = recorded.length, tag = `(notes check ${user} ${workspace})`;
@@ -1056,7 +1143,8 @@ describe('support Worker', () => {
     assert.deepEqual(stamped.filter(c => c[3] !== 'GET'), [], 'Email writes nothing.');
     const turn = recorded.slice(before).filter(r => about(r, 'Verified probe'));
     const tools = offered(turn[0]!);
-    for (const read of ['account_context', 'bounce_reasons', 'list_emails', 'choose_workspace', 'reply', 'file_ticket']) assert.ok(tools.includes(read), read);
+    for (const read of ['account_context', 'bounce_reasons', 'choose_workspace', 'reply', 'file_ticket']) assert.ok(tools.includes(read), read);
+    for (const chatOnly of ['list_emails', 'get_email', 'list_events', 'list_campaigns', 'get_campaign', 'screen_rejections', 'audience_health']) assert.ok(!tools.includes(chatOnly), chatOnly);
     for (const never of ['propose_action', 'recheck_domain', 'request_content_access', 'add_note', ...MANAGER]) assert.ok(!tools.includes(never), `A member’s email turn never lists ${never}.`);
     const body = JSON.stringify(turn.map(r => r.body));
     assert.ok(body.includes('verified: dmarc') && body.includes('<account read=') && body.includes('Acme Prod'), 'Her own account, in <customer> and <account>.');
@@ -1096,8 +1184,8 @@ describe('support Worker', () => {
     const turns = recorded.slice(before).filter(r => about(r, 'Excluded probe'));
     assert.ok(turns.length >= 6, 'The model tried each excluded tool, then answered.');
     const tools = offered(turns[0]!);
-    for (const read of ['account_context', 'list_workspaces', 'list_domains', 'domain_health', 'get_standing', 'list_emails', 'get_email', 'list_events', 'delivery_metrics', 'bounce_reasons',
-      'screen_rejections', 'lint_email', 'list_campaigns', 'get_campaign', 'lint_campaign', 'audience_health', 'choose_workspace', 'reply', 'file_ticket']) assert.ok(tools.includes(read), read);
+    for (const read of ['account_context', 'list_workspaces', 'list_domains', 'domain_health', 'get_standing', 'delivery_metrics', 'bounce_reasons', 'choose_workspace', 'reply', 'file_ticket']) assert.ok(tools.includes(read), read);
+    for (const chatOnly of ['list_emails', 'get_email', 'list_events', 'screen_rejections', 'lint_email', 'list_campaigns', 'get_campaign', 'lint_campaign', 'audience_health']) assert.ok(!tools.includes(chatOnly), chatOnly);
     assert.deepEqual(tools.filter(name => NOT_BY_EMAIL.includes(name)), [], 'An owner’s email turn lists none of them.');
     assert.deepEqual(tools.sort(), toolNames({ channel: 'email', verified: true, manager: true }).sort());
     // Each forced call is refused by the tool host, and none reaches Nightmail.
@@ -2547,6 +2635,15 @@ describe('support Worker', () => {
       // A redelivery under a new webhook ID finds the row and changes nothing.
       assert.equal((await signedHook('msg_rate_2', 'thr_rate_2', 'rate@else.test', { instance })).status, 200);
       assert.equal((await kept()).length, 1);
+      // Unauthenticated mail uses its own bucket and never blocks a DMARC-verified sender.
+      assert.equal((await signedHook('msg_unauth_1', 'thr_unauth_1', 'fresh@else.test', { instance, dmarc: 'FAIL' })).status, 200);
+      assert.equal((await signedHook('msg_unauth_2', 'thr_unauth_2', 'fresh@else.test', { instance, dmarc: 'FAIL' })).status, 200);
+      assert.deepEqual(await ledger('msg_unauth_2'), [{ object: '', state: 'held', reason: 'rate', source: 'webhook' }]);
+      // Another unverified sender has its own bucket: one sender's unverified mail never holds everyone else's.
+      assert.equal((await signedHook('msg_unauth_3', 'thr_unauth_3', 'other@else.test', { instance, dmarc: 'FAIL' })).status, 200);
+      assert.notDeepEqual(await ledger('msg_unauth_3'), [{ object: '', state: 'held', reason: 'rate', source: 'webhook' }]);
+      assert.equal((await signedHook('msg_dmarc_ok_1', 'thr_dmarc_ok_1', 'fresh@else.test', { instance, dmarc: 'PASS' })).status, 200);
+      assert.notDeepEqual(await ledger('msg_dmarc_ok_1'), [{ object: '', state: 'held', reason: 'rate', source: 'webhook' }]);
       // The answered message's row is its object's, mirrored once its work finished.
       const first = await eventually(async () => (await ledger('msg_rate_1')).find(r => r.state === 'done'));
       assert.ok(first?.object.length === 64 && first.source === 'webhook', JSON.stringify(await ledger('msg_rate_1')));
@@ -2929,7 +3026,9 @@ describe('support Worker', () => {
     // Nightmail's own addresses are contacts an answer may pass on.
     assert.deepEqual(gate('Write to privacy@nightmail.dev, legal@nightmail.dev or security@nightmail.dev.', scope), { ok: true });
     const chat = await chatToken(ROOT, 'conv_aaaaaaaaaaaaaaaaaaaaaaaaaa', 'usr_ada');
-    assert.deepEqual(await readChatToken(ROOT, chat.token, 'conv_aaaaaaaaaaaaaaaaaaaaaaaaaa'), { userId: 'usr_ada' });
+    const parsed = await readChatToken(ROOT, chat.token, 'conv_aaaaaaaaaaaaaaaaaaaaaaaaaa');
+    assert.equal(parsed?.userId, 'usr_ada');
+    assert.equal(parsed ? parsed.expiresAt - parsed.issuedAt : 0, 15 * 60_000);
     assert.equal(await readChatToken(ROOT, chat.token, 'conv_bbbbbbbbbbbbbbbbbbbbbbbbbb'), null, 'Another conversation.');
     assert.equal(await readChatToken(ROOT, chat.token, 'conv_aaaaaaaaaaaaaaaaaaaaaaaaaa', Date.now() + 13 * 3_600_000), null, 'Expired.');
     assert.equal(await readChatToken(randomBytes(32).toString('hex'), chat.token, 'conv_aaaaaaaaaaaaaaaaaaaaaaaaaa'), null, 'Another root.');

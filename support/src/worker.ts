@@ -38,10 +38,20 @@ function cors(env: Env, request: Request): Record<string, string> {
 const socketUrl = (env: Env, conversationId: string, token: string) => `${env.PUBLIC_URL.replace(/^http/, 'ws')}/c/${conversationId}?token=${encodeURIComponent(token)}`;
 const conversation = (env: Env, id: string) => env.CONVERSATION.get(env.CONVERSATION.idFromName(id));
 
-async function readHandoff(request: Request): Promise<{ handoff?: string; conversationId?: string; resume?: boolean } | null> {
+const MAX_HANDOFF_BYTES = 8192, MAX_WEBHOOK_BYTES = 1_000_000, MAX_WAKE_BYTES = 1024;
+
+/** Enforces Content-Length and a streaming byte limit before decoding text; returns null when oversized. */
+async function readCappedText(request: Request, limit: number): Promise<string | null> {
+  const declared = Number(request.headers.get('content-length') ?? 0);
+  if (Number.isFinite(declared) && declared > limit) { await request.body?.cancel().catch(() => {}); return null; }
+  const bytes = await readCapped(request.body, limit);
+  return bytes ? new TextDecoder().decode(bytes) : null;
+}
+
+async function readHandoff(request: Request): Promise<{ handoff?: string; conversationId?: string; resume?: boolean; tooLarge?: true } | null> {
   if (!request.headers.get('content-type')?.toLowerCase().startsWith('application/json')) return null;
-  const text = await request.text();
-  if (text.length > 8192) return null;
+  const text = await readCappedText(request, MAX_HANDOFF_BYTES);
+  if (text === null) return { tooLarge: true };
   try { const body = JSON.parse(text) as Record<string, unknown>; return { handoff: typeof body.handoff === 'string' ? body.handoff : undefined, conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined, resume: body.resume === true }; } catch { return null; }
 }
 
@@ -49,6 +59,7 @@ async function startChat(request: Request, env: Env): Promise<Response> {
   const headers = cors(env, request);
   if (!allowedOrigin(env, request)) return fail(403, 'ORIGIN_NOT_ALLOWED', `Open support from the ${productName} dashboard.`);
   const body = await readHandoff(request);
+  if (body?.tooLarge) return fail(413, 'PAYLOAD_TOO_LARGE', 'Request body is too large.', headers);
   if (!body?.handoff) return fail(400, 'INVALID_REQUEST', 'Send { "handoff": "<token from /v1/contact-support>" }.', headers);
   const checked = await env.BANE.verifyHandoff(body.handoff);
   if (!checked.ok) return checked.code === 'SUPPORT_NOT_CONFIGURED' ? fail(503, 'SUPPORT_UNAVAILABLE', 'Support chat is not configured on this installation.', headers)
@@ -98,6 +109,7 @@ async function resumeChat(request: Request, env: Env): Promise<Response> {
   const headers = cors(env, request);
   if (!allowedOrigin(env, request)) return fail(403, 'ORIGIN_NOT_ALLOWED', `Open support from the ${productName} dashboard.`);
   const body = await readHandoff(request);
+  if (body?.tooLarge) return fail(413, 'PAYLOAD_TOO_LARGE', 'Request body is too large.', headers);
   if (!body?.handoff || !body.conversationId || !CONVERSATION_ID.test(body.conversationId)) return fail(400, 'INVALID_REQUEST', 'Send { "conversationId", "handoff" }.', headers);
   const checked = await env.BANE.verifyHandoff(body.handoff);
   if (!checked.ok) return fail(401, 'HANDOFF_INVALID', 'That handoff is not valid or has expired. Get a fresh one and retry.', headers);
@@ -126,9 +138,11 @@ async function socket(request: Request, env: Env, conversationId: string): Promi
   if (!reader) return new Response(null, { status: 401 });
   const row = await env.DB.prepare('SELECT user_id, status FROM conversations WHERE id = ?').bind(conversationId).first<{ user_id: string | null; status: string }>();
   if (!row || row.user_id !== reader.userId) return new Response(null, { status: 404 });
-  // The DO trusts this header only from this router: the Durable Object has no public route of its own.
+  // The DO trusts these headers only from this router: the Durable Object has no public route of its own.
   const forwarded = new Request(request.url, request);
   forwarded.headers.set('x-support-user', reader.userId);
+  forwarded.headers.set('x-support-token-iat', String(reader.issuedAt));
+  forwarded.headers.set('x-support-token-exp', String(reader.expiresAt));
   return conversation(env, conversationId).fetch(forwarded);
 }
 
@@ -155,13 +169,14 @@ async function upload(request: Request, env: Env, conversationId: string): Promi
   return added.ok ? json({ attachment: added.attachment }, 201, headers) : fail(added.status, added.code, added.message, headers);
 }
 
-type Hook = { type?: string; data?: { messageId?: string; recipients?: string[]; message?: { id?: string; threadId?: string | null; direction?: string; from?: { address?: string }; to?: unknown; subject?: unknown } } };
+type Hook = { type?: string; data?: { messageId?: string; recipients?: string[]; message?: { id?: string; threadId?: string | null; direction?: string; from?: { address?: string }; to?: unknown; subject?: unknown; authentication?: { dmarc?: string | null } } } };
 
 /** A verified, parsed Nightmail webhook delivery, deduplicated by webhook-id (after parsing, so a malformed one is retried). */
 async function delivery(request: Request, env: Env, secret: string | undefined, name: string): Promise<{ event: Hook; deliveryId: string } | Response> {
   if (!secret) throw new MissingSecret(name);
-  const body = await request.text();
-  if (body.length > 1_000_000 || !(await verifyWebhook(body, request.headers, secret))) return new Response(null, { status: 401 });
+  const body = await readCappedText(request, MAX_WEBHOOK_BYTES);
+  if (body === null) return new Response(null, { status: 413 });
+  if (!(await verifyWebhook(body, request.headers, secret))) return new Response(null, { status: 401 });
   let event: Hook;
   try { event = JSON.parse(body); } catch { return new Response(null, { status: 400 }); }
   // A global brake before anything is recorded: Nightmail retries a 503 later (review M5).
@@ -194,8 +209,12 @@ async function inbound(request: Request, env: Env): Promise<Response> {
     if (event.type !== 'message.received' || !messageId || message?.direction === 'outbound') return new Response(null, { status: 200 });
     const threadId = message?.threadId ?? messageId, sender = message?.from?.address?.toLowerCase() ?? 'unknown';
     if (await ledgered(env, 'support', messageId)) return new Response(null, { status: 200 });
-    // Over the per-sender edge limit: kept in the ledger for the team's digest, never read or answered.
-    if (env.EMAIL_IN && !(await env.EMAIL_IN.limit({ key: `sender:${await addressHash(sender)}` })).success) {
+    // The per-sender edge limit keeps a sender's DMARC-verified mail apart from mail that only claims its address, so
+    // forged mail never limits the real sender; unverified mail is limited per address too, so one forger can't hold
+    // every other unverified sender's mail (EMAIL_IN_GLOBAL bounds them all).
+    const dmarcPass = String(message?.authentication?.dmarc ?? '').toUpperCase() === 'PASS';
+    const rateKey = `${dmarcPass ? 'dmarc' : 'unauth'}:${await addressHash(sender)}`;
+    if (env.EMAIL_IN && !(await env.EMAIL_IN.limit({ key: rateKey })).success) {
       await holdAtEdge(env, { messageId, threadId, sender, subject: typeof message?.subject === 'string' ? message.subject : null, reason: 'rate' });
       return new Response(null, { status: 200 });
     }
@@ -213,7 +232,8 @@ async function inbound(request: Request, env: Env): Promise<Response> {
 async function wake(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const accepted = new Response(null, { status: 202 });
   if (env.WAKE && !(await env.WAKE.limit({ key: 'wake' })).success) return new Response(null, { status: 429, headers: { 'retry-after': '60' } });
-  const body = await readCapped(request.body, 1024).then(bytes => { try { return bytes ? JSON.parse(new TextDecoder().decode(bytes)) as { conversationId?: unknown } : null; } catch { return null; } }, () => null);
+  const text = await readCappedText(request, MAX_WAKE_BYTES).catch(() => null);
+  const body = text ? (() => { try { return JSON.parse(text) as { conversationId?: unknown }; } catch { return null; } })() : null;
   const id = typeof body?.conversationId === 'string' && CONVERSATION_ID.test(body.conversationId) ? body.conversationId : null;
   if (!id || !(await env.DB.prepare('SELECT 1 FROM conversations WHERE id = ?').bind(id).first())) return accepted;
   ctx.waitUntil(conversation(env, id).wake().then(r => log('info', { event: 'inbox', code: 'SUPPORT_WOKEN', queued: r.queued }), error => logError(error, { event: 'inbox', code: 'SUPPORT_WAKE_FAILED' }, 'warn')));

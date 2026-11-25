@@ -73,8 +73,12 @@ export function SupportContinuePage() {
       description={<span className="support-continue__text">{copy.text}</span>}
       footer={<Button variant="primary" className="support-continue__action" loading={working || state === 'loading'} onClick={() => void act()}>{copy.action}</Button>}>
       <div className="support-continue__email" data-empty={!shown && state !== 'loading' ? '' : undefined}>
-        {state === 'loading' ? <><SkeletonText width="80%" /><SkeletonText width="50%" /></>
-          : shown ? <><span className="support-continue__subject">{email.subject?.trim() || '(no subject)'}</span><span className="support-continue__received">{email.receivedAt ? `Received ${received(email.receivedAt)}` : 'Received recently'}</span></>
+        {state === 'loading' ? <><SkeletonText width="80%" /><SkeletonText width="92%" /><SkeletonText width="65%" /><SkeletonText width="50%" /></>
+          : shown ? <>
+            <span className="support-continue__subject">{email.subject?.trim() || '(no subject)'}</span>
+            <p className="support-continue__preview">{email.preview?.trim() || '(no message text)'}</p>
+            <span className="support-continue__received">{email.receivedAt ? `Received ${received(email.receivedAt)}` : 'Received recently'}</span>
+          </>
           : null}
       </div>
     </Dialog>

@@ -42,13 +42,14 @@ export function consumePendingSupportOpen(): PendingSupportOpen | null {
 
 function readMode(hosted: boolean, staff: boolean) {
   const param = new URLSearchParams(window.location.search).get('support')
+  const flag = import.meta.env.VITE_SUPPORT_CHAT as string | undefined
+  const demoAllowed = import.meta.env.DEV || flag === 'true' || staff
   try {
-    if (param === 'demo') sessionStorage.setItem(modeKey, 'demo')
-    if (param === 'off') sessionStorage.removeItem(modeKey)
+    if (param === 'demo' && demoAllowed) sessionStorage.setItem(modeKey, 'demo')
+    if (param === 'off' || !demoAllowed) sessionStorage.removeItem(modeKey)
   } catch { /* Session storage is unavailable: the parameter still applies to this load. */ }
   let stored: string | null = null
-  try { stored = sessionStorage.getItem(modeKey) } catch { stored = param === 'demo' ? 'demo' : null }
-  const flag = import.meta.env.VITE_SUPPORT_CHAT as string | undefined
+  try { stored = demoAllowed ? sessionStorage.getItem(modeKey) : null } catch { stored = demoAllowed && param === 'demo' ? 'demo' : null }
   const live = hosted && (flag === 'true' || flag === 'staff' && staff)
   const mode: SupportMode | null = stored === 'demo' ? 'demo' : live ? 'live' : null
   return { mode, resume: mode === 'live' && param?.startsWith('conv_') ? param : null }

@@ -4,7 +4,7 @@ import type { Env } from './env.js';
 import { gate, LINK_ORIGINS, plainText } from './gate.js';
 import { addTicketNote, expectation, fileTicket, masked, openFollowUp, ticketEmail, type FiledTicket, type TicketContext } from './tickets.js';
 import { addressHash, MissingSecret, newId } from './tokens.js';
-import { alertOnce, countToday, holdOverCap, limits, mailAllowed, ticketAllowed } from './limits.js';
+import { alertOnce, countToday, holdOverCap, limits, mailAllowed, PUBLIC_MAILBOX_DOMAINS, registrableDomain, ticketAllowed } from './limits.js';
 import { external, WorkQueue, type NewWork, type Outcome, type WorkRow, type WorkState } from './work.js';
 import { attachmentLink, deleteConversationUploads, MAX_ATTACHMENTS, modelImage, safeName, storeImage, type Attachment } from './attachments.js';
 import { cleanImage, ImageRejected, IMAGE_TYPES, MAX_IMAGE_BYTES } from './image.js';
@@ -47,6 +47,7 @@ const CONTEXT_MS = 5 * 60_000;
 const CHAT_IDLE_MS = 30 * 86_400_000, EMAIL_IDLE_MS = 7 * 86_400_000, KEEP_AFTER_CLOSE_MS = 7 * 86_400_000;
 const EMAIL_BURST = 5, EMAIL_BURST_MS = 10 * 60_000;
 const MAX_FRAME = 16_384, MAX_TEXT = 8000;
+const MAX_PENDING_TURNS = 5, MAX_PENDING_BYTES = 32_768, CHAT_BURST = 10, CHAT_BURST_MS = 60_000, MAX_TRANSCRIPT_MESSAGES = 200;
 const MODEL_LABEL = `${MODEL.model}#${MODEL.variant}`;
 const REDACTED = `I’ve sent this one to the ${productName} team to check before I answer. Someone will follow up by email.`;
 /** What a chat answer becomes when the model declines to answer (stop_reason "refusal"). */
@@ -73,8 +74,8 @@ const helpLine = (origin: string) => `For anything about your account, sign in t
 const GENERAL_ONLY = `Email answers are general: you can’t see or change any ${productName} account from email. Answer from what you know about ${productName}; the reply ends with a line (added for you) telling them to sign in and press Help for anything about their account.`;
 /** What any email turn is told when it reaches for a change, a note or content access. */
 const EMAIL_READS_ONLY = `By email you read only the account's status, domains and sending. Billing, API keys, the activity log, request logs and webhooks are answered in Help in the dashboard, and so is any change: tell them to sign in to ${productName}, open Help and ask there (they confirm a change on the card). Notes and message content are for a chat too.`;
-/** The only /v1/support reads an email conversation makes: the account's status, domains and sending (Nightmail refuses the rest for email too). */
-const EMAIL_ROUTES = /^\/v1\/support\/(?:context|workspaces|domains|domains\/[^/]+\/health|standing|emails|emails\/[^/]+|emails\/[^/]+\/lint|events|deliverability\/(?:metrics|bounces)|screen|campaigns|campaigns\/[^/]+|campaigns\/[^/]+\/lint|audience\/health|scope)$/;
+/** The only /v1/support reads an email conversation makes: status, domains, standing and aggregate deliverability summaries (Nightmail refuses the rest for email too). */
+const EMAIL_ROUTES = /^\/v1\/support\/(?:context|workspaces|domains|domains\/[^/]+\/health|standing|deliverability\/(?:metrics|bounces)|scope)$/;
 const ACCESS_CHANGED = 'This conversation ended because your access to a workspace changed. Open Help to start a new one.';
 /** A chat from before the stamp: it ends at its next message. */
 const LEGACY_ENDED = 'This conversation has ended. Open Help to start a new one.';
@@ -216,6 +217,10 @@ export class SupportConversation extends DurableObject<Env> {
   /** OpenCode, booting or booted: started in the background when a chat opens or reconnects, awaited by the first turn. */
   private booting: Promise<Harness> | null = null;
   private queue: Promise<unknown> = Promise.resolve();
+  private pendingTurns = 0;
+  private pendingBytes = 0;
+  private chatTimestamps: number[] = [];
+  private closingForLimit = false;
   /** The DMARC verdict of the email being answered, for the ticket it may file. */
   private currentDmarc: string | null = null;
   /**
@@ -539,7 +544,7 @@ export class SupportConversation extends DurableObject<Env> {
    * registered, and Nightmail's scope still gives it what its last turn ran with (less ends it now). 'unavailable': Nightmail
    * couldn't say; the panel tries again.
    */
-  private async joinable(userId: string | null): Promise<'ok' | 'gone' | 'unavailable'> {
+  private async joinable(userId: string | null, tokenIssuedAt?: number): Promise<'ok' | 'gone' | 'unauthorized' | 'unavailable'> {
     const meta = this.meta();
     if (!meta || !userId || meta.channel !== 'chat' || meta.userId !== userId || meta.status === 'closed') return 'gone';
     if (!meta.registered) { await this.retireLegacy(); return 'gone'; }
@@ -549,6 +554,12 @@ export class SupportConversation extends DurableObject<Env> {
     try { scope = await this.stamped<Scope>('GET', '/v1/support/scope'); } catch (error) { logError(error, { event: 'chat', code: 'SCOPE_READ_FAILED' }, 'warn'); return 'unavailable'; }
     if (scope.status >= 500 || scope.status === 429) return 'unavailable';
     if (scope.status !== 200) return 'gone';
+    // Tokens issued before a sign-out are refused once no matching live session remains.
+    if (tokenIssuedAt !== undefined) {
+      if (scope.body.user.activeSession === false) return 'unauthorized';
+      const since = scope.body.user.sessionSince ? Date.parse(scope.body.user.sessionSince) : NaN;
+      if (Number.isFinite(since) && tokenIssuedAt + 5_000 < since) return 'unauthorized';
+    }
     if (this.reduced(meta, scope.body)) { await this.endForAccess(); return 'gone'; }
     this.applyScope(scope.body);
     return 'ok';
@@ -557,13 +568,14 @@ export class SupportConversation extends DurableObject<Env> {
   async admits({ userId }: { userId: string }): Promise<{ ok: true } | { ok: false; code: 'EMAIL' | 'GONE' | 'UNAVAILABLE' }> {
     if (this.meta()?.channel === 'email') return { ok: false, code: 'EMAIL' };
     const joinable = await this.joinable(userId);
-    return joinable === 'ok' ? { ok: true } : { ok: false, code: joinable === 'gone' ? 'GONE' : 'UNAVAILABLE' };
+    return joinable === 'ok' ? { ok: true } : { ok: false, code: joinable === 'gone' || joinable === 'unauthorized' ? 'GONE' : 'UNAVAILABLE' };
   }
 
   override async fetch(request: Request): Promise<Response> {
     if (request.headers.get('upgrade')?.toLowerCase() !== 'websocket') return new Response(null, { status: 404 });
-    const joinable = await this.joinable(request.headers.get('x-support-user'));
-    if (joinable !== 'ok') return new Response(null, { status: joinable === 'gone' ? 404 : 503 });
+    const iatRaw = Number(request.headers.get('x-support-token-iat') ?? ''), expRaw = Number(request.headers.get('x-support-token-exp') ?? '');
+    const joinable = await this.joinable(request.headers.get('x-support-user'), Number.isFinite(iatRaw) && iatRaw > 0 ? iatRaw : undefined);
+    if (joinable !== 'ok') return new Response(null, { status: joinable === 'unauthorized' ? 401 : joinable === 'gone' ? 404 : 503 });
     // Open proposals' cards only as Nightmail returns them now, read through the stamp (a refusal ends the chat).
     const cards = await this.openCards();
     if (cards === 'refused') { await this.endForAccess(); return new Response(null, { status: 404 }); }
@@ -575,6 +587,10 @@ export class SupportConversation extends DurableObject<Env> {
     if (opening) this.record({ id: newId('msg'), role: 'user', kind: null, text: opening, at: new Date().toISOString(), tools: [] });
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
+    if (Number.isFinite(expRaw) && expRaw > 0) {
+      pair[1].serializeAttachment({ ...(Number.isFinite(iatRaw) && iatRaw > 0 ? { iat: iatRaw } : {}), exp: expRaw });
+      await this.arm();
+    }
     const messages = this.history();
     this.sendTo(pair[1], this.hello(meta));
     this.sendTo(pair[1], { type: 'history', messages, pending: { consent: this.pendingConsent(), ticket: this.pendingTicket(meta), actions: cards } });
@@ -586,6 +602,8 @@ export class SupportConversation extends DurableObject<Env> {
   }
 
   override async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer) {
+    const att = ws.deserializeAttachment() as { exp?: number } | null;
+    if (att?.exp && Date.now() >= att.exp) { ws.close(4401, 'expired'); return; }
     if (typeof raw !== 'string' || raw.length > MAX_FRAME) { this.sendTo(ws, { type: 'error', code: 'BAD_MESSAGE', message: 'Frames are JSON text up to 16 KB.', retryable: false }); return; }
     let message: Record<string, unknown>;
     try { message = JSON.parse(raw); } catch { this.sendTo(ws, { type: 'error', code: 'BAD_MESSAGE', message: 'Not JSON.', retryable: false }); return; }
@@ -598,15 +616,38 @@ export class SupportConversation extends DurableObject<Env> {
         const requested = Array.isArray(message.attachments) ? message.attachments.filter((a): a is string => typeof a === 'string').slice(0, MAX_ATTACHMENTS) : [];
         if ((!text && !requested.length) || !clientId) { this.sendTo(ws, { type: 'error', code: 'BAD_MESSAGE', message: 'user.message needs text (or attachments) and clientMessageId.', retryable: false }); return; }
         if (meta.status === 'closed') { this.sendTo(ws, { type: 'closed', reason: 'ended' }); return; }
+        // Check conversation budgets, queue bounds and burst rate before persisting or queueing any work.
+        const refused = this.admit(meta);
+        if (refused) {
+          this.sendTo(ws, { type: 'error', code: 'BUDGET_EXHAUSTED', message: `This conversation has reached its limit. I’ve passed it to the ${productName} team, who will follow up by email.`, retryable: false });
+          if (!this.closingForLimit) {
+            this.closingForLimit = true;
+            this.enqueueTurn({ text });
+          }
+          return;
+        }
+        const storedUsers = this.sql.exec<{ n: number }>("SELECT count(*) AS n FROM _support_transcript WHERE role = 'user'").one().n;
+        if (storedUsers >= MAX_TRANSCRIPT_MESSAGES || meta.turns + this.pendingTurns >= TURNS_PER_CONVERSATION) {
+          this.sendTo(ws, { type: 'error', code: 'BUDGET_EXHAUSTED', message: `This conversation has reached its message limit. Start a new conversation or email ${addresses.support}.`, retryable: false });
+          return;
+        }
+        const textBytes = new TextEncoder().encode(text).length;
+        const now = Date.now();
+        this.chatTimestamps = this.chatTimestamps.filter(at => now - at < CHAT_BURST_MS);
+        if (this.pendingTurns >= MAX_PENDING_TURNS || this.pendingBytes + textBytes > MAX_PENDING_BYTES || this.chatTimestamps.length >= CHAT_BURST) {
+          this.sendTo(ws, { type: 'error', code: 'RATE_LIMITED', message: 'Please wait a moment before sending more messages.', retryable: true, retryAfter: 5 });
+          return;
+        }
         // Only this conversation's own uploads that no earlier message used.
         const unused = new Map(this.sql.exec<{ id: string; type: string; width: number | null; height: number | null; name: string }>('SELECT id, type, width, height, name FROM _support_attachments WHERE message_id IS NULL').toArray().map(a => [a.id, a]));
         if (requested.some(id => !unused.has(id))) { this.sendTo(ws, { type: 'error', code: 'BAD_MESSAGE', message: 'Unknown or already used attachment.', retryable: false }); return; }
         if (this.sql.exec('INSERT INTO _support_client_ids (id) VALUES (?) ON CONFLICT (id) DO NOTHING', clientId).rowsWritten === 0) return;
+        this.chatTimestamps.push(now);
         const messageId = newId('msg');
         for (const id of requested) this.sql.exec('UPDATE _support_attachments SET message_id = ? WHERE id = ?', messageId, id);
-        this.update(m => { m.lastActivity = Date.now(); });
-        this.record({ id: messageId, role: 'user', kind: null, text, at: new Date().toISOString(), tools: [], attachments: requested.map(id => unused.get(id)!) });
-        this.enqueueTurn({ text: text || '(The customer sent a screenshot without text.)', attachments: requested });
+        this.update(m => { m.lastActivity = now; });
+        this.record({ id: messageId, role: 'user', kind: null, text, at: new Date(now).toISOString(), tools: [], attachments: requested.map(id => unused.get(id)!) });
+        this.enqueueTurn({ text: text || '(The customer sent a screenshot without text.)', attachments: requested }, textBytes);
         return;
       }
       case 'consent.respond': {
@@ -639,7 +680,9 @@ export class SupportConversation extends DurableObject<Env> {
         this.hint(id);
         return;
       }
-      case 'human.request': this.record({ id: newId('msg'), role: 'user', kind: null, text: 'Talk to a person', at: new Date().toISOString(), tools: [] });
+      case 'human.request':
+        if (meta.status === 'closed' || meta.ticketId || this.pendingTurns >= MAX_PENDING_TURNS) return;
+        this.record({ id: newId('msg'), role: 'user', kind: null, text: 'Talk to a person', at: new Date().toISOString(), tools: [] });
         this.enqueueTurn({ text: '[The customer pressed “Talk to a person”. File a ticket of the type that fits (topic human_requested) with what you know so far, then tell them what happens next.]', hidden: true }); return;
       case 'cancel': this.abort?.abort(); return;
       case 'feedback': if (message.rating === 'up' || message.rating === 'down') this.update(m => { (m as Meta & { rating?: string }).rating = message.rating as string; }); return;
@@ -828,7 +871,7 @@ export class SupportConversation extends DurableObject<Env> {
           progress.emailed = true; save();
         }
       } else {
-        const open = this.ctx.getWebSockets().length > 0;
+        const open = (await this.recheckSocketSessions()) > 0;
         if (!progress.recorded) {
           this.update(m => { m.lastActivity = Date.now(); });
           this.record({ id: reply.id, role: 'staff', kind: 'staff', text: reply.text, at, tools: [], author });
@@ -854,9 +897,50 @@ export class SupportConversation extends DurableObject<Env> {
     if (meta.channel === 'email' && !progress.recorded) { this.record({ id: reply.id, role: 'staff', kind: 'staff', text: reply.text, at, tools: [], author }); progress.recorded = true; save(); }
     return settle('sent');
   }
+  private nextSocketExpiry(): number | null {
+    let earliest: number | null = null;
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as { exp?: number } | null;
+      if (att?.exp && (earliest === null || att.exp < earliest)) earliest = att.exp;
+    }
+    return earliest;
+  }
+  private pruneExpiredSockets(now = Date.now()) {
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as { exp?: number } | null;
+      if (att?.exp && now >= att.exp) { try { ws.close(4401, 'expired'); } catch { /* closed */ } }
+    }
+  }
+  private async recheckSocketSessions(): Promise<number> {
+    const now = Date.now();
+    const live: WebSocket[] = [];
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as { iat?: number; exp?: number } | null;
+      if (att?.exp && now >= att.exp) { try { ws.close(4401, 'expired'); } catch { /* closed */ } continue; }
+      live.push(ws);
+    }
+    if (!live.length || !this.meta()?.registered) return live.length;
+    let scope: PlatformReply<Scope>;
+    try { scope = await this.stamped<Scope>('GET', '/v1/support/scope'); } catch { return live.length; }
+    if (scope.status !== 200) return live.length;
+    const active = scope.body.user.activeSession !== false;
+    const since = scope.body.user.sessionSince ? Date.parse(scope.body.user.sessionSince) : NaN;
+    let open = 0;
+    for (const ws of live) {
+      const att = ws.deserializeAttachment() as { iat?: number; exp?: number } | null;
+      if (!active || (att?.iat && Number.isFinite(since) && att.iat + 5_000 < since)) {
+        try { ws.close(4401, 'expired'); } catch { /* closed */ }
+      } else open++;
+    }
+    return open;
+  }
   private broadcast(message: Outgoing) {
-    const frame = JSON.stringify({ v: 1, ...message, seq: ++this.seq });
-    for (const ws of this.ctx.getWebSockets()) { try { ws.send(frame); } catch { /* closed */ } }
+    const now = Date.now(), frame = JSON.stringify({ v: 1, ...message, seq: ++this.seq });
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as { exp?: number } | null;
+      if (att?.exp && now >= att.exp) { try { ws.close(4401, 'expired'); } catch { /* closed */ } continue; }
+      try { ws.send(frame); } catch { /* closed */ }
+    }
   }
   private sendTo(ws: WebSocket, message: Outgoing) {
     try { ws.send(JSON.stringify({ v: 1, ...message, seq: ++this.seq })); } catch { /* closed */ }
@@ -987,8 +1071,13 @@ export class SupportConversation extends DurableObject<Env> {
 
   // ---------- turns ----------
 
-  private enqueueTurn(input: { text?: string; hidden?: boolean; attachments?: string[] }) {
-    this.queue = this.queue.then(() => this.chatTurn(input)).catch(error => logError(error, { event: 'chat', code: 'TURN_FAILED' }));
+  private enqueueTurn(input: { text?: string; hidden?: boolean; attachments?: string[] }, bytes = 0) {
+    this.pendingTurns += 1;
+    this.pendingBytes += bytes;
+    this.queue = this.queue.then(() => this.chatTurn(input)).catch(error => logError(error, { event: 'chat', code: 'TURN_FAILED' })).finally(() => {
+      this.pendingTurns = Math.max(0, this.pendingTurns - 1);
+      this.pendingBytes = Math.max(0, this.pendingBytes - bytes);
+    });
     this.ctx.waitUntil(this.queue);
   }
 
@@ -1308,12 +1397,19 @@ export class SupportConversation extends DurableObject<Env> {
   private async person(meta: Meta) { return meta.channel === 'chat' && meta.userId ? `user:${meta.userId}` : `sender:${await addressHash(meta.email ?? meta.conversationId)}`; }
 
   /**
-   * The daily turn caps, before any model call: the person's (a chat's user, at turnsPerPerson; an email's sender address,
-   * at turnsPerEmailSender, and a verified email's stamped person too, at turnsPerPerson), then everyone's.
+   * The daily turn caps, before any model call. Signed-in chats and verified customer emails draw from the customer
+   * reserve (`global:turns`). General (non-member) emails draw from their own per-domain and daily budget so they can
+   * never exhaust the customer reserve.
    */
   private async turnAllowed(meta: Meta, count = countToday, verifiedEmail = false): Promise<{ ok: boolean; global: boolean }> {
     const cap = limits(this.env), email = meta.channel === 'email';
     if (!(await count(this.env, `${await this.person(meta)}:${email ? 'email_turns' : 'turns'}`, email ? cap.turnsPerEmailSender : cap.turnsPerPerson)).ok) return { ok: false, global: false };
+    if (email && !verifiedEmail) {
+      const domain = registrableDomain(meta.email ?? meta.conversationId);
+      if (domain && !PUBLIC_MAILBOX_DOMAINS.has(domain) && !(await count(this.env, `domain:${await addressHash(domain)}:email_turns`, cap.turnsPerEmailDomain)).ok) return { ok: false, global: false };
+      if (!(await count(this.env, 'global:turns:general', cap.turnsGeneralPerDay)).ok) return { ok: false, global: true };
+      return { ok: true, global: false };
+    }
     if (email && verifiedEmail && meta.userId && !(await count(this.env, `user:${meta.userId}:turns`, cap.turnsPerPerson)).ok) return { ok: false, global: false };
     if (!(await count(this.env, 'global:turns', cap.turnsPerDay)).ok) { await alertOnce(this.env, 'turns', cap.turnsPerDay); return { ok: false, global: true }; }
     return { ok: true, global: false };
@@ -1897,6 +1993,7 @@ export class SupportConversation extends DurableObject<Env> {
 
   override async alarm() {
     if (!this.meta()) return;
+    this.pruneExpiredSockets();
     await this.work.drain(item => this.run(item), (item, state) => this.finished(item, state), () => this.deadline());
     // The inbox: what a failed mirror left, and the state this drain changed (blocked work, a ticket).
     await this.mirror();
@@ -1921,8 +2018,10 @@ export class SupportConversation extends DurableObject<Env> {
     const meta = this.meta();
     if (!meta) return null;
     const own = !meta.closedAt ? meta.lastActivity + this.idle(meta) : meta.closedAt + KEEP_AFTER_CLOSE_MS > Date.now() || !this.work.open() ? meta.closedAt + KEEP_AFTER_CLOSE_MS : null;
-    // A mirror that failed is retried at its time, beside the rest.
-    return meta.mirrorDueAt ? own === null ? meta.mirrorDueAt : Math.min(own, meta.mirrorDueAt) : own;
+    // A mirror that failed is retried at its time, and open sockets close when their token expires.
+    const socketExp = this.nextSocketExpiry();
+    const candidates = [own, meta.mirrorDueAt ?? null, socketExp].filter((t): t is number => t !== null);
+    return candidates.length ? Math.min(...candidates) : null;
   }
   private arm() { return this.work.arm(this.deadline()); }
 

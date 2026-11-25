@@ -13,9 +13,12 @@ import { productName } from '../../api/src/brand.js';
 // notices: frozen when first queued and resent by the cron sweep until Nightmail accepts them.
 
 export const DEFAULT_LIMITS = {
-  /** Model turns, all conversations together (the Console key's own budget is the backstop), and per person. */
+  /** Daily model turns reserved for signed-in chats and verified customer emails, and per person. */
   turnsPerDay: 1500,
   turnsPerPerson: 100,
+  /** Separate daily budget for general (non-member) email answers, in total and per sender domain. */
+  turnsGeneralPerDay: 100,
+  turnsPerEmailDomain: 10,
   /** Model turns per email sender address (a verified email's turn counts against its person's cap too). */
   turnsPerEmailSender: 5,
   /** Tickets for verified customers (chat, verified email, a DMARC-passing Nightmail user at an intake address). */
@@ -47,6 +50,26 @@ export function limits(env: Env): Limits {
 }
 
 export const today = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
+
+const TWO_LABEL_PSL = new Set(['co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'net.au', 'org.au', 'co.nz', 'com.br', 'co.jp', 'ne.jp', 'or.jp', 'co.in', 'com.mx', 'co.za', 'com.sg', 'com.hk', 'co.kr', 'com.tr', 'com.ar']);
+/** Large public mailbox providers whose non-member senders are bounded per address and by the global general cap rather than sharing one per-domain cap. */
+export const PUBLIC_MAILBOX_DOMAINS: ReadonlySet<string> = new Set([
+  'gmail.com', 'googlemail.com',
+  'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
+  'icloud.com', 'me.com', 'mac.com',
+  'yahoo.com', 'ymail.com', 'rocketmail.com',
+  'proton.me', 'protonmail.com', 'pm.me',
+  'fastmail.com', 'fastmail.fm',
+  'hey.com', 'aol.com', 'zoho.com', 'gmx.com', 'gmx.net', 'mail.com',
+]);
+/** Registrable domain of an email address (lowercase), for per-domain general-email caps. */
+export function registrableDomain(email: string): string {
+  const domain = email.trim().toLowerCase().split('@').pop() ?? '';
+  const labels = domain.split('.').filter(Boolean);
+  if (labels.length <= 2) return labels.join('.');
+  const lastTwo = labels.slice(-2).join('.');
+  return TWO_LABEL_PSL.has(lastTwo) && labels.length >= 3 ? labels.slice(-3).join('.') : lastTwo;
+}
 
 /** Counts one use of `key` today and says whether it is within `limit`. Atomic in D1. */
 export async function countToday(env: Env, key: string, limit: number, now = Date.now()): Promise<{ ok: boolean; n: number }> {
