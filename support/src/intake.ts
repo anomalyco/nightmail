@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { baneApi, BaneError, senderOf, type InboundMessage } from './bane.js';
+import { nightmailApi, NightmailError, senderOf, type InboundMessage } from './nightmail.js';
 import type { Env } from './env.js';
 import { attachmentLink, safeName, storeImage } from './attachments.js';
 import { cleanImage, ImageRejected, IMAGE_TYPES, MAX_IMAGE_BYTES } from './image.js';
@@ -107,11 +107,11 @@ export class SupportIntake extends DurableObject<Env> {
   /** The route, recipients, sender and key come from storage, never from today's configuration. Only credentials rotate. */
   private async send(request: Send, credential: string | undefined, secret: string) {
     if (!credential) throw new MissingSecret(secret);
-    const response = await external(this.env.BANE_API.fetch(`${this.env.BANE_ORIGIN}${request.path}`, { method: 'POST',
-      headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json', 'idempotency-key': request.key, 'user-agent': 'bane-support' }, body: JSON.stringify(request.body) }));
+    const response = await external(this.env.BANE_API.fetch(`${this.env.NIGHTMAIL_ORIGIN}${request.path}`, { method: 'POST',
+      headers: { authorization: `Bearer ${credential}`, 'content-type': 'application/json', 'idempotency-key': request.key, 'user-agent': 'nightmail-support' }, body: JSON.stringify(request.body) }));
     if (!response.ok) {
       const body = await response.json<{ error?: { code?: string; requestId?: string } }>().catch(() => null);
-      throw new BaneError(response.status, body?.error?.code ?? 'BANE_ERROR', 'Intake send failed', body?.error?.requestId ?? response.headers.get('x-request-id'), response.headers.get('retry-after'));
+      throw new NightmailError(response.status, body?.error?.code ?? 'NIGHTMAIL_ERROR', 'Intake send failed', body?.error?.requestId ?? response.headers.get('x-request-id'), response.headers.get('retry-after'));
     }
     await response.body?.cancel();
   }
@@ -138,7 +138,7 @@ export class SupportIntake extends DurableObject<Env> {
 
   /** The team's email for a ticket, built now and sent as built on every try. */
   private notify(ticket: Pick<FiledTicket, 'id' | 'dueAt'>, ctx: TicketContext, input: TicketInput): NewWork {
-    if (!this.env.SUPPORT_ADDRESS_ID || !this.env.TICKET_TO) throw new BaneError(503, 'SUPPORT_NOT_CONFIGURED', 'Missing ticket mail route');
+    if (!this.env.SUPPORT_ADDRESS_ID || !this.env.TICKET_TO) throw new NightmailError(503, 'SUPPORT_NOT_CONFIGURED', 'Missing ticket mail route');
     const request: Send = { path: '/v1/inbound/threads', key: `ticket-${ticket.id}`, body: { addressId: this.env.SUPPORT_ADDRESS_ID, to: [this.env.TICKET_TO], ...ticketEmail(this.env, ctx, ticket, input) } };
     return { kind: 'notify', id: `notify:${ticket.id}`, payload: { ticketId: ticket.id, request } };
   }
@@ -165,7 +165,7 @@ export class SupportIntake extends DurableObject<Env> {
   }
 
   private async decide(item: WorkRow, next: Incoming): Promise<Outcome> {
-    const { messageId, threadId, mailbox } = next, api = baneApi(this.env, 'intake');
+    const { messageId, threadId, mailbox } = next, api = nightmailApi(this.env, 'intake');
     const progress: Decision = JSON.parse(item.result), save = () => this.work.checkpoint(item.id, progress);
     if (!progress.message) {
       // Retain only what the decision uses, not an unbounded body or the full headers.
@@ -220,7 +220,7 @@ export class SupportIntake extends DurableObject<Env> {
         const attachment = { id, name: image.name, type: image.type, size: image.size, url };
         stored.push(attachment); (progress.attachments ??= []).push(attachment); save();
       } catch (e) {
-        const permanent = e instanceof ImageRejected || (e instanceof BaneError && [404, 410].includes(e.status));
+        const permanent = e instanceof ImageRejected || (e instanceof NightmailError && [404, 410].includes(e.status));
         failures[part.id] = permanent ? MAX_IMAGE_ATTEMPTS : (failures[part.id] ?? 0) + 1;
         save();
         if (failures[part.id]! < MAX_IMAGE_ATTEMPTS) throw e;

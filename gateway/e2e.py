@@ -742,7 +742,7 @@ def imaptest(tmp, p, stress=False):
     shutil.copy(scripts / "select.mbox", profile)
     for name in ("copy", "search-flags", "select"):
         data = (scripts / name).read_text()
-        # rev1 compatibility in the Bane design: never set Recent, old == all, new == none.
+        # rev1 compatibility in the Nightmail design: never set Recent, old == all, new == none.
         if name == "copy":
             data = (
                 data.replace("* 3 recent\n", "")

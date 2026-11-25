@@ -38,7 +38,7 @@ async function materialize(name) {
 async function legacyBuild(html) {
   const refs = text => Array.from(text.matchAll(/["'`](?:\/?assets\/|\.\/)([\w.~\-]+-[\w-]{8}\.(?:js|css))["'`]/g), m => m[1]);
   const names = new Set(refs(html));
-  assert([...names].some(name => /^index-.*\.js$/.test(name)), 'Expected live Bane dashboard');
+  assert([...names].some(name => /^index-.*\.js$/.test(name)), 'Expected live Nightmail dashboard');
   for (const name of names) {
     assert(names.size <= maxFiles);
     await materialize(name);

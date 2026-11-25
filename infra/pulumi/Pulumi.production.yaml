@@ -6,7 +6,6 @@ config:
   bane:nightmailGateway: "true"
   bane:nightmailGatewayDesired: "2"
   bane:nightmailGatewayImage: 009882681002.dkr.ecr.us-east-2.amazonaws.com/nightmail-mail-gateway@sha256:88a79d2fdb98f883d0072af76f2dd217012be61199bea5ea25d013a779d2019e
-  bane:nightmailGatewayDns: "false"
   bane:mailGatewayEnabled: "true"
   bane:writeWorkerSecrets: "true"
   bane:deployRoleArn: arn:aws:iam::009882681002:role/bane-deploy

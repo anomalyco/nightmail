@@ -32,7 +32,7 @@
 .ds-type { display: flex; flex-direction: column; }
 .ds-specimen { display: grid; grid-template-columns: 240px minmax(0, 1fr); align-items: center; gap: var(--space-24); padding-block: var(--space-12); border-bottom: 1px solid var(--color-border-muted); }
 .ds-specimen:last-child { border-bottom: 0; }
-.ds-specimen__meta { display: flex; flex-direction: column; gap: 2px; min-width: 0; color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
+.ds-specimen__meta { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .ds-specimen__meta code { color: var(--color-faint); font-size: var(--text-xs); }
 .ds-specimen__sample { min-width: 0; }
 .ds-specimen__sample .ui-section-header { margin: 0; }
@@ -60,7 +60,7 @@
 @media (hover: hover) and (pointer: fine) { .ds-link:hover { text-decoration: underline; text-underline-offset: 3px; } }
 .ds-link:focus-visible { color: var(--color-accent-text); text-decoration: underline; text-underline-offset: 3px; }
 .ds-hint { display: inline-flex; align-items: center; gap: var(--space-4); color: var(--color-muted); font-size: var(--text-xs); }
-.ds-hint__mark { display: inline-flex; border-radius: 2px; cursor: default; }
+.ds-hint__mark { display: inline-flex; border-radius: var(--radius-xs); cursor: default; }
 
 /* Buttons: a variant per row, a state per column. The previews apply what :hover and :focus-visible apply in ui.css
    (the same quiet cue: no ring). */

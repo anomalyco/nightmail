@@ -33,7 +33,7 @@ const stages = {
 };
 
 const stack = pulumi.getStack();
-if (stack !== "dev" && stack !== "production") throw new Error(`Unsupported Bane stack: ${stack}`);
+if (stack !== "dev" && stack !== "production") throw new Error(`Unsupported Nightmail stack: ${stack}`);
 const stage = stages[stack];
 const production = stack === "production";
 const config = new pulumi.Config("bane");
@@ -79,7 +79,7 @@ new cf.R2Bucket("attachments", { accountId: cloudflareAccountId, name: bucket, j
   ...adopt(`${cloudflareAccountId}/${bucket}/default`, cloudflare), ignoreChanges: ["location"],
 });
 
-// Hosted received mail (raw MIME and files) once BANE_MAIL_STORE=r2; agent inbox mail always.
+// Hosted received mail (raw MIME and files) once NIGHTMAIL_MAIL_STORE=r2; agent inbox mail always.
 // Keys start with their class: d/ default (raw kept 90 days, as in
 // S3), a/ attachments (no expiry, as today), e/ agent inboxes (the app erases them; 45 days is
 // the backstop past the 30-day lease plus 7 days of grace), k/ kept mail (phase 2, app-managed).
@@ -160,8 +160,8 @@ const account = stage.account, region = 'us-east-2', bucketName = `bane-${accoun
 const inboundArn = `arn:aws:sns:${region}:${account}:bane-inbound`;
 const opts = (id:string,provider:pulumi.ProviderResource) => imports.includes(id)?adopt(id,provider):{provider,protect:true};
 const tags = (purpose:string) => ({'bane:installation-id':'bane:pool','bane:purpose':purpose});
-export const mailGatewayEndpoint = mailGateway(stack, stage, config, ohio, iam, cloudflare, tags("mail-gateway"));
-export const nightmailGatewayEndpoint = config.getBoolean('nightmailGateway') ? mailGateway(stack,stage,config,ohio,iam,cloudflare,{'nightmail:installation-id':'nightmail:pool','nightmail:purpose':'mail-gateway'},true) : undefined;
+export const mailGatewayEndpoint = mailGateway(stack, stage, config, ohio, iam, tags("mail-gateway"));
+export const nightmailGatewayEndpoint = config.getBoolean('nightmailGateway') ? mailGateway(stack,stage,config,ohio,iam,{'nightmail:installation-id':'nightmail:pool','nightmail:purpose':'mail-gateway'},true) : undefined;
 const mail = new aws.s3.Bucket('pool-mail',{bucket:bucketName,tags:tags('mailbox-inbound')},opts(bucketName,ohio));
 const protectedOhio = {provider:ohio,protect:true};
 const block = new aws.s3.BucketPublicAccessBlock('pool-mail-private',{bucket:mail.id,blockPublicAcls:publicAccessBlock.BlockPublicAcls,
@@ -174,7 +174,7 @@ const lifecycle = new aws.s3.BucketLifecycleConfiguration('pool-mail-retention',
 const inbound = new aws.sns.Topic('pool-inbound',{name:'bane-inbound',tags:tags('mailbox-inbound'),policy:JSON.stringify(inboundPolicy(inboundArn,region,account,'bane-inbound-')),
   deliveryPolicy:JSON.stringify(deliveryPolicy)},opts(inboundArn,ohio));
 const subArn = imports.find(id=>id.startsWith(inboundArn+':'));
-if (subArn && !/^[0-9a-f-]{36}$/i.test(subArn.slice(inboundArn.length+1))) throw new Error('Import only the confirmed Bane inbound HTTPS subscription ARN');
+if (subArn && !/^[0-9a-f-]{36}$/i.test(subArn.slice(inboundArn.length+1))) throw new Error('Import only the confirmed Nightmail inbound HTTPS subscription ARN');
 const sub = new aws.sns.TopicSubscription('pool-inbound-https',{topic:inbound.arn,protocol:'https',endpoint:stage.legacyOrigin+'/v1/events/ses',rawMessageDelivery:false,
   endpointAutoConfirms:false,redrivePolicy:JSON.stringify(redrivePolicy(region,account))},{...(subArn?adopt(subArn,ohio):protectedOhio),dependsOn:[queuePolicy]});
 const rule=receiptRule('bane-inbound-all',[],{bucket:bucketName,topicArn:inboundArn}), action=rule.Actions[0].S3Action;
@@ -198,7 +198,7 @@ const feedback = [false,true].map((trusted,i)=>{
     Effect:'Allow',Principal:{Service:'sns.amazonaws.com'},Action:'sqs:SendMessage',Resource:queue,Condition:{ArnEquals:{'aws:SourceArn':arn},StringEquals:{'aws:SourceAccount':account}}
   }]}))},{provider});
   const subscription=imports.find(id=>id.startsWith(arn+':'));
-  if (subscription && !/^[0-9a-f-]{36}$/i.test(subscription.slice(arn.length+1))) throw new Error(`Import only the confirmed Bane ${name} HTTPS subscription ARN`);
+  if (subscription && !/^[0-9a-f-]{36}$/i.test(subscription.slice(arn.length+1))) throw new Error(`Import only the confirmed Nightmail ${name} HTTPS subscription ARN`);
   // Virginia's subscription is created and journaled by the Worker during trusted enrollment;
   // Pulumi only adopts it afterwards. Ohio's is created here if the inventory found none.
   if (subscription || !trusted) new aws.sns.TopicSubscription(`pool-${name}-https`,{topic:topic.arn,protocol:'https',endpoint:stage.legacyOrigin+'/v1/events/ses',rawMessageDelivery:false,

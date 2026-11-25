@@ -5,7 +5,7 @@ import { mailboxKeys } from './db/mailbox.js';
 import { API_KEY, checkBudget, credentialCtes } from './auth.js';
 import { tieAllows } from './approval-ties.js';
 import { submittedHeaders } from './custom-headers.js';
-import { submissionParties } from './mailbox-mime.js';
+import { stripBlindRecipients, submissionParties } from './mailbox-mime.js';
 import { envelopeParts } from './mailbox-send.js';
 import { sealedPassthrough, submittedFile, type Submitted } from './protocol-submit.js';
 import { SEND_LIMITS } from './send-limits.js';
@@ -70,7 +70,7 @@ export async function relayLogin(runtime: Runtime, user: string, password: strin
  * more. An envelope past 50 recipients is admitted as one batch of emails of up to 50 each, To and Cc first.
  */
 export async function relaySubmit(c: Ctx, p: Submitted) {
-  const rt = c.env, kind = relayKind(p.kid)!, table = kind === 'api_key' ? apiKeys : mailboxKeys, raw = p.raw;
+  const rt = c.env, kind = relayKind(p.kid)!, table = kind === 'api_key' ? apiKeys : mailboxKeys, raw = stripBlindRecipients(p.raw, true);
   const parsed = await parseSubmission(raw);
   if (!parsed) throw new ApiError(422, 'MIME_LIMIT', 'Message could not be safely parsed.');
   const m = parsed.mail;
@@ -82,7 +82,7 @@ export async function relaySubmit(c: Ctx, p: Submitted) {
   checkBudget(c, key.used, key.max_requests);
   if (!sender || !senders || !key.owned || senders.some(a => !senderDomainAllowed(key.domains, a.split('@')[1]!)))
     throw new ApiError(403, 'SENDER_NOT_OWNED', 'Send from an address this key may use.');
-  const mime = sealedMime(raw) ? await sealedPassthrough(rt, key.workspace_id, raw) : undefined, files = mime ? [] : parsed.files;
+  const mime = sealedMime(raw) ? await sealedPassthrough(rt, key.workspace_id, raw, sender, m.sender?.address) : undefined, files = mime ? [] : parsed.files;
   if (files.length > SEND_LIMITS.attachments) throw new ApiError(422, 'VALIDATION_FAILED', `At most ${SEND_LIMITS.attachments} attachments.`, 'attachments');
   const messages = (attachments: string[]) => envelopeParts({ to, cc, bcc }).map(part => ({
     from: sender, ...m.from?.name ? { fromName: m.from.name } : {}, ...part, replyTo: (m.replyTo ?? []).flatMap(a => a.address ? [a.address] : []),

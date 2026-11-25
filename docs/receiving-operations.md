@@ -146,7 +146,7 @@ No SQS message means no replay. If an object or binding is gone, or a step fails
 
 ### `MAILBOX_STAGING_UNDELIVERED` and the three-day replay gap
 
-When `BANE_RECEIVING_REDRIVE=true` on the shared pool, `mailbox.recoverStaging` only retires objects whose `quarantine/<mid>` copy succeeded **and** whose SES trace host belongs to no workspace in `mailbox_domains` (logging `MAILBOX_STAGING_QUARANTINED` with `ageHours` and writing `retiredReason` onto the completed job payload). If the trace names a workspace's receiving host—or if the quarantine copy itself is denied—the Worker logs `MAILBOX_STAGING_UNDELIVERED` at `error` (with `bucket`, `mid`, `region`, `ageHours`, `copied`, `jobId`, never the recipient address) and leaves the job `failed` with `MAILBOX_STAGING_ENVELOPE_UNKNOWN`.
+When `NIGHTMAIL_RECEIVING_REDRIVE=true` on the shared pool, `mailbox.recoverStaging` only retires objects whose `quarantine/<mid>` copy succeeded **and** whose SES trace host belongs to no workspace in `mailbox_domains` (logging `MAILBOX_STAGING_QUARANTINED` with `ageHours` and writing `retiredReason` onto the completed job payload). If the trace names a workspace's receiving host—or if the quarantine copy itself is denied—the Worker logs `MAILBOX_STAGING_UNDELIVERED` at `error` (with `bucket`, `mid`, `region`, `ageHours`, `copied`, `jobId`, never the recipient address) and leaves the job `failed` with `MAILBOX_STAGING_ENVELOPE_UNKNOWN`.
 
 **Operational gap to be aware of:** dead-letter replay is manual and requires operator AWS access **within the three-day `staging/` lifetime** (the `quarantine/` copy lasts 30 days for forensic inspection, not automated replay). On `MAILBOX_STAGING_UNDELIVERED` (watchtower alert code), inspect `bane-inbound-dead-letters` and run the redrive steps above before `staging/<mid>` expires. Workspace raw copies are required for private Bcc/trace stripping and separate access; S3 staging/quarantine/raw retention remains 3/30/90 days. Published attachments do not acquire an age-based expiry; only positively unreferenced uploads get an orphan expiration tag.
 
@@ -167,9 +167,9 @@ Alert on nonempty `AWS/SQS ApproximateNumberOfMessagesVisible` for `bane-inbound
 
 ## Mail-store rollout and rollback
 
-Inboxes phase 1 moves new hosted received mail (raw MIME and extracted files) from the SES pool bucket to the R2 bucket `bane-<stage>-mail`, and turns on agent inboxes. SES staging (3 days) and quarantine (30 days) stay in S3. BYO and self-hosted mail stays in its S3 bucket. One Worker variable, `BANE_MAIL_STORE`, switches both; the `MAIL` binding must stay bound once any `r2:` row exists.
+Inboxes phase 1 moves new hosted received mail (raw MIME and extracted files) from the SES pool bucket to the R2 bucket `bane-<stage>-mail`, and turns on agent inboxes. SES staging (3 days) and quarantine (30 days) stay in S3. BYO and self-hosted mail stays in its S3 bucket. One Worker variable, `NIGHTMAIL_MAIL_STORE`, switches both; the `MAIL` binding must stay bound once any `r2:` row exists.
 
-| Stage | `MAIL` binding | `BANE_MAIL_STORE` | Effect |
+| Stage | `MAIL` binding | `NIGHTMAIL_MAIL_STORE` | Effect |
 |---|---|---|---|
 | dev | `bane-dev-mail` | `r2` | Shared-pool mail and inbox mail in R2; inboxes on |
 | production, at deploy | `bane-prod-mail` | `s3` | No change: mail stays in S3, `POST /v1/inboxes` answers `503 INBOXES_UNAVAILABLE` |
@@ -187,13 +187,13 @@ Inboxes phase 1 moves new hosted received mail (raw MIME and extracted files) fr
 
 ### Production (after Ryan approves)
 
-4. Push `dev` to `production` as usual. Pulumi creates `bane-prod-mail` and its lifecycle first (same plan as step 1), the migrations run, and the Worker deploys with `BANE_MAIL_STORE=s3`: nothing changes for mail yet.
-5. The flip: change `BANE_MAIL_STORE` to `"r2"` in `api/wrangler.prod.jsonc`, merge it through `dev` and push to `production`. New shared-pool mail goes to R2 and agent inboxes turn on.
+4. Push `dev` to `production` as usual. Pulumi creates `bane-prod-mail` and its lifecycle first (same plan as step 1), the migrations run, and the Worker deploys with `NIGHTMAIL_MAIL_STORE=s3`: nothing changes for mail yet.
+5. The flip: change `NIGHTMAIL_MAIL_STORE` to `"r2"` in `api/wrangler.prod.jsonc`, merge it through `dev` and push to `production`. New shared-pool mail goes to R2 and agent inboxes turn on.
 6. Run the production receiving canary and check its row says `r2:bane-prod-mail`. Add Cloudflare R2 as a storage location for hosted mail to the privacy notice.
 
 ### Rollback
 
-Set `BANE_MAIL_STORE` back to `"s3"` and deploy. **Keep the `MAIL` binding and the bucket:** `r2:` rows and outstanding download links read through it. New default mail goes back to S3, new inboxes are refused with `503`, and existing inboxes keep working: their mail and erasure stay in R2 while `MAIL` is bound. Legacy S3 rows stay readable throughout.
+Set `NIGHTMAIL_MAIL_STORE` back to `"s3"` and deploy. **Keep the `MAIL` binding and the bucket:** `r2:` rows and outstanding download links read through it. New default mail goes back to S3, new inboxes are refused with `503`, and existing inboxes keep working: their mail and erasure stay in R2 while `MAIL` is bound. Legacy S3 rows stay readable throughout.
 
 **Do not roll back to pre-inbox Worker code after activation.** It cannot read R2 rows, enforce inbox holds, assign cursors or drain erasure. Prefer flag rollback or a forward fix. If a binary rollback is unavoidable, stop new creates and pause receipt processing, end all inboxes, drain GC and object jobs (including failures), and verify there are no inbox rows, GC candidates or outstanding erasures. Additionally, all remaining `r2:` content must stay readable: backport the dual reader or migrate and verify it before considering an S3-only binary. Reconcile pending receipts/jobs before resuming. Do not revert migrations or delete the bucket.
 

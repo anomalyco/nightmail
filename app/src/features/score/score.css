@@ -7,7 +7,7 @@
 .score-card {
   --hue: calc(var(--score-hue-poor) + clamp(0, (var(--score, 0) - 25) / 50, 1) * (var(--score-hue-mid) - var(--score-hue-poor)) + clamp(0, (var(--score, 0) - 75) / 20, 1) * (var(--score-hue-high) - var(--score-hue-mid)));
   --soft: var(--color-muted);
-  position: relative; display: flex; flex-direction: column; justify-content: space-between; width: 100%; height: 64px; padding: 10px 12px 8px; overflow: hidden;
+  position: relative; display: flex; flex-direction: column; justify-content: space-between; width: 100%; height: 64px; padding: var(--space-12) var(--space-12) var(--space-8); overflow: hidden;
   border: 0; border-radius: var(--radius-md); background-color: var(--score-neutral); background-image: url('./noise-light.png');
   color: var(--color-text); font: inherit; text-align: left; text-decoration: none; font-variant-numeric: tabular-nums;
   transition: background-color var(--motion-duration) var(--ease-standard), transform 160ms var(--ease-out-strong);
@@ -27,8 +27,8 @@
 /* The number with its grade, and (when there is one) the 14-day move or the progress to a first grade at the end. */
 .score-card__row { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-8); height: 28px; }
 .score-card__figure { display: flex; align-items: baseline; gap: var(--space-6); }
-.score-card__figure b { font-family: var(--font-mono); font-size: 26px; line-height: 28px; font-weight: 400; letter-spacing: -.02em; }
-.score-card__grade { font-family: var(--font-mono); font-size: 13px; line-height: 16px; font-weight: 700; }
+.score-card__figure b { font-family: var(--font-mono); font-size: var(--text-display); line-height: 28px; font-weight: 400; letter-spacing: -.02em; }
+.score-card__grade { font-family: var(--font-mono); font-size: var(--text-section); line-height: 16px; font-weight: 700; }
 .score-card__note { min-width: 0; overflow: hidden; color: var(--soft); font-size: var(--text-xs); line-height: 16px; text-overflow: ellipsis; white-space: nowrap; }
 
 /* Next steps: a short list of places to go; rows fade up in sequence. */
@@ -36,16 +36,16 @@
 .next-steps__title { font-size: var(--text-sm); line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
 .next-steps ul { margin: 0; padding: 0; list-style: none; }
 .next-steps li { animation: row-enter 220ms var(--ease-out-strong) both; animation-delay: calc(var(--i, 0) * 40ms); }
-.next-steps a { display: flex; align-items: center; gap: var(--space-8); min-height: 36px; color: var(--color-text); text-decoration: none; font-size: var(--text-sm); }
-.next-steps a > :first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.next-steps a .muted { font-size: var(--text-xs); white-space: nowrap; }
-.next-steps a svg { flex-shrink: 0; color: var(--color-muted); transition: transform 160ms var(--ease-out-strong); }
+.next-steps li > a { display: flex; align-items: center; gap: var(--space-8); min-height: 36px; color: var(--color-text); text-decoration: none; font-size: var(--text-sm); }
+.next-steps li > a > :first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.next-steps li > a .muted { font-size: var(--text-xs); white-space: nowrap; }
+.next-steps li > a svg { flex-shrink: 0; color: var(--color-muted); transition: transform 160ms var(--ease-out-strong); }
 @media (hover: hover) and (pointer: fine) {
-  .next-steps a:hover > :first-child { text-decoration: underline; text-underline-offset: 4px; }
-  .next-steps a:hover svg { transform: translate(2px, -2px); }
+  .next-steps li > a:hover > :first-child { text-decoration: underline; text-underline-offset: 4px; }
+  .next-steps li > a:hover svg { transform: translate(2px, -2px); }
 }
-.next-steps a:focus-visible { text-decoration: none; }
-.next-steps a:focus-visible > :first-child { color: var(--color-text); text-decoration: underline; text-underline-offset: 4px; }
+.next-steps li > a:focus-visible { text-decoration: none; }
+.next-steps li > a:focus-visible > :first-child { color: var(--color-text); text-decoration: underline; text-underline-offset: 4px; }
 
 /* The score card's standing dot (Warn and up), in its top-right corner: positioned, so it never moves anything. */
 .score-card > .score-card__alert { position: absolute; top: 12px; right: 12px; width: 6px; height: 6px; border-radius: 50%; background: var(--tone-marker); animation: score-alert-in 240ms var(--ease-out-strong) both; }
@@ -53,7 +53,7 @@
 
 /* Phone: 44px targets for the next steps and the standing card's link. */
 @media (max-width: 640px) {
-  .next-steps a { min-height: 44px; }
+  .next-steps li > a { min-height: 44px; }
   .standing-card__docs { display: inline-flex; align-items: center; min-height: 44px; margin-block: calc(-1 * var(--space-12)); }
 }
 
@@ -78,25 +78,25 @@
 /* The body scrolls; its blocks keep their full height instead of shrinking into each other. */
 .score-about .ui-dialog__body > * { flex-shrink: 0; }
 .score-about__status { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: var(--space-16); row-gap: var(--space-8); min-height: 56px; padding: var(--space-12) 0; font-variant-numeric: tabular-nums; }
-.score-about__status > b { min-width: 2ch; font-family: var(--font-mono); font-size: 30px; line-height: 32px; font-weight: 400; letter-spacing: -.03em; text-align: left; }
-.score-about__status-text { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-sm); line-height: var(--leading-sm); }
+.score-about__status > b { min-width: 2ch; font-family: var(--font-mono); font-size: var(--text-display); line-height: 32px; font-weight: 400; letter-spacing: -.03em; text-align: left; }
+.score-about__status-text { display: flex; flex-direction: column; gap: var(--space-4); font-size: var(--text-sm); line-height: var(--leading-sm); }
 .score-about__status-text .muted { font-size: var(--text-xs); line-height: var(--leading-xs); }
 /* The grade is text, in the text colour. */
 .score-about__grade { font-family: var(--font-mono); }
 .score-about__status:has(.score-about__history) { grid-template-columns: auto minmax(0, 1fr) auto; }
-.score-about__history { display: flex; align-items: flex-end; gap: 2px; width: 98px; height: 20px; }
+.score-about__history { display: flex; align-items: flex-end; gap: var(--space-2); width: 98px; height: 20px; }
 .score-about__history > span { flex: 1; height: 100%; border-radius: 0; background: var(--color-series); transform-origin: bottom; }
 .score-about__history > span[data-last] { background: var(--color-series-strong); }
 .score-about__limit { grid-column: 1 / -1; padding-top: var(--space-8); font-family: var(--font-mono); font-size: var(--text-xs); line-height: var(--leading-xs); text-wrap: pretty; }
 .score-about__section ul { display: flex; flex-direction: column; gap: var(--space-4); margin: 0; padding-inline-start: var(--space-20); text-wrap: pretty; }
-.score-about__progress { grid-column: 1 / -1; position: relative; display: block; height: 4px; overflow: hidden; border-radius: 2px; background: var(--color-layer-2); }
+.score-about__progress { grid-column: 1 / -1; position: relative; display: block; height: 4px; overflow: hidden; border-radius: var(--radius-2xs); background: var(--color-layer-2); }
 .score-about__progress > i { position: absolute; inset: 0 auto 0 0; width: var(--share); border-radius: inherit; background: var(--color-contrast); }
 .score-about__section { font-size: var(--text-sm); line-height: var(--leading-sm); }
 .score-about__section h3 { font-size: var(--text-sm); font-weight: var(--font-weight-bold); }
-.score-about__section code { font-size: .92em; }
+.score-about__section code { font-size: var(--text-xs); }
 /* The six parts as metric rows: name and weight, the part's score as a meter (a tick at 80), its measured value and score. */
 .score-about__factors { margin: 0; padding: 0; list-style: none; --metric-spark: 140px; --metric-value: 120px; }
-.score-about__factors > li { margin: 0 calc(-1 * var(--focus-reach)); padding: 0 var(--focus-reach); border-radius: 4px; font-size: var(--text-sm); line-height: var(--leading-sm); scroll-margin: var(--space-8); }
+.score-about__factors > li { margin: 0 calc(-1 * var(--focus-reach)); padding: 0 var(--focus-reach); border-radius: var(--radius-xs); font-size: var(--text-sm); line-height: var(--leading-sm); scroll-margin: var(--space-8); }
 .score-about__factors > li[data-focus] { background: var(--color-active-bg); }
 .score-about__factors .ui-metric__spark > .ui-meter { height: 2px; }
 .score-about__factors .ui-metric__unit { margin-left: var(--space-6); }

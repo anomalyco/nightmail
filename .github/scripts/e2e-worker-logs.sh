@@ -3,7 +3,7 @@
 # carry a failed step's request ID, and every server-side error during the run (a numeric 5xx status, or an error line
 # without one, such as a failed job) with exceptions. A failed step's last request is often a successful poll that the
 # tail sampled away; the errors are what explain it. The result becomes part of a public issue, so it keeps only
-# Bane's structured fields: never headers, URLs, IPs or bodies, and no message text for lines of other requests.
+# Nightmail's structured fields: never headers, URLs, IPs or bodies, and no message text for lines of other requests.
 #   e2e-worker-logs.sh <e2e-report.json> <tail.jsonl> <tail.err>  > e2e-worker-logs.json
 set -euo pipefail
 report=$1 tail=$2 err=$3
@@ -14,7 +14,7 @@ if [[ ! -s $tail ]]; then
   jq -n --argjson ids "$ids" --arg reason "$reason" '{requestIds: $ids, available: false, reason: $reason, lines: []}'
   exit 0
 fi
-# Each tail event has logs[].message[] (Bane logs one JSON object per line, as a string or an object) and
+# Each tail event has logs[].message[] (Nightmail logs one JSON object per line, as a string or an object) and
 # exceptions[].
 jq -sc --argjson ids "$ids" '
   def fields: {timestamp, level, event, requestId, route, operation, method, status, code, databaseCode, errorType, jobId, message: ((.message // "") | tostring | .[0:300])} | with_entries(select(.value != null and .value != ""));

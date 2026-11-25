@@ -3,7 +3,7 @@
    The panel, the pill and the tray are solid overlay surfaces on a soft drop, with no edge or inner rule; only the
    outline and the highlight around the element being noted draw a line, on purpose. */
 .uin-layer { display: contents; }
-.uin-outline, .uin-highlight { position: fixed; top: 0; left: 0; z-index: 62; pointer-events: none; border-radius: 3px; }
+.uin-outline, .uin-highlight { position: fixed; top: 0; left: 0; z-index: 62; pointer-events: none; border-radius: var(--radius-xs); }
 .uin-outline { outline: 1.5px solid var(--color-accent); outline-offset: 1px; background: color-mix(in srgb, var(--color-accent) 7%, transparent); }
 .uin-highlight { outline: 1.5px dashed var(--color-accent); outline-offset: 2px; }
 /* Over a secret (data-sensitive), which can't have a note. */
@@ -20,8 +20,8 @@ html[data-ui-notes-armed], html[data-ui-notes-armed] * { cursor: crosshair !impo
 
 /* Pins: a numbered dot on the element's top-left corner. Its hit area is 44 px on a touch screen; with a mouse it stays
    small, so it never covers what is next to it. */
-.uin-pin { position: fixed; top: 0; left: 0; z-index: 63; display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border: 0; border-radius: 9px; background: var(--color-contrast); color: var(--color-on-contrast);
-  box-shadow: var(--shadow-popover); font-family: var(--font-mono); font-size: 11px; font-weight: 700; line-height: 18px; font-variant-numeric: tabular-nums; transition: scale 120ms var(--ease-out-strong), background-color 100ms ease-out; }
+.uin-pin { position: fixed; top: 0; left: 0; z-index: 63; display: grid; place-items: center; min-width: 18px; height: 18px; padding: 0 var(--space-4); border: 0; border-radius: 999px; background: var(--color-contrast); color: var(--color-on-contrast);
+  box-shadow: var(--shadow-popover); font-family: var(--font-mono); font-size: var(--text-label); font-weight: 700; line-height: 18px; font-variant-numeric: tabular-nums; transition: scale 120ms var(--ease-out-strong), background-color 100ms ease-out; }
 .uin-pin::before { content: ''; position: absolute; inset: -4px; }
 @media (pointer: coarse) { .uin-pin::before { inset: -13px; } }
 .uin-pin[data-status='in_progress'], .uin-number[data-status='in_progress'] { background: var(--color-accent); color: var(--color-on-accent); }
@@ -41,12 +41,12 @@ html[data-ui-notes-armed], html[data-ui-notes-armed] * { cursor: crosshair !impo
 .ui-textarea.uin-text { min-height: 76px; }
 .uin-body { max-height: 200px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 .uin-meta { color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
-.uin-meta a { display: inline-flex; align-items: center; gap: 2px; color: var(--color-accent); text-decoration: none; }
+.uin-meta a { display: inline-flex; align-items: center; gap: var(--space-4); color: var(--color-accent); text-decoration: none; }
 .uin-moved { color: var(--color-warning); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .uin-moved a { color: inherit; }
 .uin-error { color: var(--color-danger); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .uin-chips { display: flex; flex-wrap: wrap; gap: var(--space-4); }
-.uin-chip { height: 24px; padding: 0 var(--space-8); border: 0; border-radius: 4px; background: var(--color-chip, var(--color-layer-2)); color: var(--color-muted); font-size: var(--text-xs); line-height: 24px; white-space: nowrap;
+.uin-chip { height: 24px; padding: 0 var(--space-8); border: 0; border-radius: var(--radius-xs); background: var(--color-chip, var(--color-layer-2)); color: var(--color-muted); font-size: var(--text-xs); line-height: 24px; white-space: nowrap;
   transition: background-color 100ms ease-out, color 100ms ease-out, scale 120ms var(--ease-out-strong); }
 .uin-chip[aria-pressed='true'] { background: var(--color-contrast); color: var(--color-on-contrast); }
 .uin-chip:active { scale: .96; }
@@ -57,7 +57,7 @@ html[data-ui-notes-armed], html[data-ui-notes-armed] * { cursor: crosshair !impo
 .uin-confirm { margin-right: auto; color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
 .uin-confirm { color: var(--color-danger); font-family: var(--font-body); }
 .ui-button.uin-delete { margin-right: auto; }
-.uin-number { display: inline-grid; flex: none; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: var(--color-contrast); color: var(--color-on-contrast); font-family: var(--font-mono); font-size: 11px; font-weight: 700; line-height: 18px; font-variant-numeric: tabular-nums; }
+.uin-number { display: inline-grid; flex: none; place-items: center; min-width: 18px; height: 18px; padding: 0 var(--space-4); border-radius: 999px; background: var(--color-contrast); color: var(--color-on-contrast); font-family: var(--font-mono); font-size: var(--text-label); font-weight: 700; line-height: 18px; font-variant-numeric: tabular-nums; }
 .uin-number[data-status='fixed'], .uin-number[data-status='wontfix'] { background: var(--color-layer-3); color: var(--color-muted); }
 .uin-sheet .uin-form { padding-top: var(--space-4); }
 
@@ -73,7 +73,7 @@ html[data-ui-notes-armed], html[data-ui-notes-armed] * { cursor: crosshair !impo
 .uin-tray__panel { position: absolute; bottom: calc(100% + var(--space-8)); left: 0; display: flex; flex-direction: column; width: min(344px, calc(100vw - 24px)); max-height: min(420px, 60dvh); padding: var(--space-4);
   border-radius: var(--radius-sm); background: var(--color-overlay-surface, var(--color-layer-1)); box-shadow: var(--shadow-popover); transform-origin: bottom left; animation: uin-pop 160ms var(--ease-out-strong); }
 .uin-list { flex: 1; min-height: 0; margin: 0; padding: 0; overflow: auto; list-style: none; }
-.uin-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-8); width: 100%; min-height: 32px; padding: var(--space-4) var(--space-8); border: 0; border-radius: 4px; background: transparent; text-align: left; }
+.uin-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-8); width: 100%; min-height: 32px; padding: var(--space-4) var(--space-8); border: 0; border-radius: var(--radius-xs); background: transparent; text-align: left; }
 .uin-row[data-resolved] { color: var(--color-muted); }
 @media (hover: hover) and (pointer: fine) { .uin-row:hover { background: var(--color-overlay-hover, var(--color-hover)); transition-duration: 0ms; } }
 .uin-row:focus-visible { background: var(--color-overlay-hover, var(--color-hover)); }

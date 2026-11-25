@@ -12,7 +12,7 @@ export const webhookSignatureGuide = {
   code: `import { createHmac, timingSafeEqual } from 'node:crypto'
 
 // secret: the webhook's signing secret (whsec_…). body: the raw request body, before JSON.parse.
-export function verifyBaneWebhook(secret, headers, body) {
+export function verifyNightmailWebhook(secret, headers, body) {
   const id = headers['webhook-id'], timestamp = headers['webhook-timestamp']
   if (!id || !timestamp || Math.abs(Date.now() / 1000 - Number(timestamp)) > 300) return false
   const key = Buffer.from(secret.slice('whsec_'.length), 'base64')

@@ -1,4 +1,4 @@
-import type { SupportPlatform } from './bane.js';
+import type { SupportPlatform } from './nightmail.js';
 import type { SupportConversation } from './conversation.js';
 import type { SupportIntake } from './intake.js';
 
@@ -32,7 +32,7 @@ export interface Env {
   /** The dashboard origin allowed to start chats and open sockets (https://nightmail.dev). Comma-separated for dev. */
   DASHBOARD_ORIGINS: string;
   /** Nightmail's own origin, for API paths over BANE_API and dashboard links (https://nightmail.dev). */
-  BANE_ORIGIN: string;
+  NIGHTMAIL_ORIGIN: string;
   /** support@nightmail.dev and its inbound address ID in the platform workspace. */
   SUPPORT_ADDRESS: string;
   SUPPORT_ADDRESS_ID: string;

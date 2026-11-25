@@ -2,6 +2,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { actorMailAccess, budgetedRead, mailboxRoute, readLimit, readLimitNote, receivingAdmin, receivingConsentRoute, workspaceMailAccess, ApiError, denied, requiredOf, restrictedArea, fullAccessRefusal, unrestrictedRequired, receivedMailRead, receivedMailRefusal, RECEIVING_HOST_CHANGE, admits, digest, errors, getSes, id, isoTime, json, lasting, lazyModule, log, ModuleLoadError, response, SuppressionEventData, type Actor, type App, type Ctx, type DbExecutor, type MailboxAccess, type Runtime } from './core.js';
 import { buildBoundedPageJson, PAGE_MAX_BYTES, withBoundedRead } from './read-bounds.js';
+import { hostInDomains } from './domain-mail.js';
 import { authenticate, chargeCredential, createdInboxes, delegatedInbox, keyExpired, longPoll, requireReceivingConsent, reservePolls } from './auth.js';
 import { boundRequestBody } from './request-body.js';
 import { auditContext, auditInsert, recordAudit } from './audit.js';
@@ -81,6 +82,9 @@ async function mailboxAuth(c: Ctx, next: () => Promise<void>) {
     if (value === 'ADMIN_REQUIRED') throw c.get('actor').credential === 'apiKey'
       ? fullAccessRefusal(value, c.get('actor'), restrictedArea(c.req.path), requiredOf(c), 'For mail at some addresses only, a key limited to those addresses also works.')
       : denied(value, 'Received mail requires a key limited to addresses, an owner or admin, or an API key with manage permission on all domains.', requiredOf(c));
+    // A key limited to sender domains reads the receiving addresses there (domainMailAccess), live ones only.
+    if (value.domains) value.mailboxIds = (await c.env.db.execute<{ id: string }>(sql`SELECT id FROM mailboxes WHERE workspace_id = ${value.workspaceId}
+      AND (delete_after IS NULL OR delete_after > statement_timestamp()) AND ${hostInDomains(value.domains, sql`address`)} ORDER BY id`)).rows.map(row => row.id);
     c.set('mailboxAccess', value);
     await next();
   });
@@ -751,7 +755,7 @@ export function registerMailbox(app: App) {
     const mailboxIds = value.mailboxIds === null ? requested : requested === null ? value.mailboxIds : requested.filter(item => value.mailboxIds!.includes(item));
     const types = q.types?.split(',').map(type => type.trim()).filter(Boolean);
     if (types?.some(type => !inboundEventTypes.some(allowed => allowed === type))) throw new ApiError(422, 'INVALID_EVENT_TYPE', `Event types: ${inboundEventTypes.join(', ')}.`, 'types');
-    const scope = { mailboxIds, includeStored: value.admin && types?.includes('message.stored') === true };
+    const scope = { mailboxIds, includeStored: value.admin && types?.includes('message.stored') === true, ...(value.domains ? { domains: value.domains } : {}) };
     // Reserve the extra polls before the first query. Parallel long polls use
     // the same minute counter as ordinary requests, not a separate allowance.
     if (q.wait) await reservePolls(c, value.workspaceId, value.keyId, q.wait);

@@ -33,11 +33,12 @@ export async function foldSendingTallies(runtime: Runtime, budgetMs = 10_000, cl
   let campaignRemoved = 0, campaignKept = 0, campaignUnfolded = 0;
   let metricsRemoved = 0, metricsKept = 0, metricsUnfolded = 0;
   let tenMinuteRemoved = 0, tenMinuteKept = 0, tenMinuteUnfolded = 0;
+  let deliverabilityRemoved = 0, deliverabilityKept = 0, deliverabilityUnfolded = 0;
 
-  // Alternate bounded slices between campaign tallies, hourly metrics and 10-minute metrics so a large backlog in one
-  // table never starves the others within the per-minute budget.
-  let campaignMore = true, metricsMore = true, tenMinuteMore = true;
-  for (let pass = 0; pass < FOLD_MAX_PASSES && (campaignMore || metricsMore || tenMinuteMore) && clock() < until; pass++) {
+  // Alternate bounded slices between campaign tallies, hourly metrics, 10-minute metrics and the platform's
+  // deliverability rollup (migration 525) so a large backlog in one table never starves the others within the budget.
+  let campaignMore = true, metricsMore = true, tenMinuteMore = true, deliverabilityMore = true;
+  for (let pass = 0; pass < FOLD_MAX_PASSES && (campaignMore || metricsMore || tenMinuteMore || deliverabilityMore) && clock() < until; pass++) {
     if (campaignMore && clock() < until) {
       const { rows: [c] } = await runtime.db.execute<{ removed_rows: number; kept_rows: number; unfolded_rows: string }>(
         sql`SELECT removed_rows, kept_rows, unfolded_rows FROM fold_sending_campaign_tallies(${FOLD_BATCH_LIMIT})`
@@ -62,15 +63,24 @@ export async function foldSendingTallies(runtime: Runtime, budgetMs = 10_000, cl
       tenMinuteRemoved += removed; tenMinuteKept += kept; tenMinuteUnfolded = Number(tm?.unfolded_rows ?? 0);
       if (removed < FOLD_BATCH_LIMIT || tenMinuteUnfolded === 0) tenMinuteMore = false;
     }
+    if (deliverabilityMore && clock() < until) {
+      const { rows: [d] } = await runtime.db.execute<{ removed_rows: number; kept_rows: number; unfolded_rows: string }>(
+        sql`SELECT removed_rows, kept_rows, unfolded_rows FROM fold_deliverability_hourly(${FOLD_BATCH_LIMIT})`
+      );
+      const removed = Number(d?.removed_rows ?? 0), kept = Number(d?.kept_rows ?? 0);
+      deliverabilityRemoved += removed; deliverabilityKept += kept; deliverabilityUnfolded = Number(d?.unfolded_rows ?? 0);
+      if (removed < FOLD_BATCH_LIMIT || deliverabilityUnfolded === 0) deliverabilityMore = false;
+    }
   }
 
-  if (campaignUnfolded > UNFOLDED_ALERT_THRESHOLD || metricsUnfolded > UNFOLDED_ALERT_THRESHOLD || tenMinuteUnfolded > UNFOLDED_ALERT_THRESHOLD) {
+  if (campaignUnfolded > UNFOLDED_ALERT_THRESHOLD || metricsUnfolded > UNFOLDED_ALERT_THRESHOLD || tenMinuteUnfolded > UNFOLDED_ALERT_THRESHOLD || deliverabilityUnfolded > UNFOLDED_ALERT_THRESHOLD) {
     log('error', {
       code: 'SENDING_TALLIES_UNFOLDED_HIGH',
       threshold: UNFOLDED_ALERT_THRESHOLD,
       campaignUnfolded,
       metricsUnfolded,
       tenMinuteUnfolded,
+      deliverabilityUnfolded,
       campaignFolded: campaignRemoved - campaignKept,
       metricsFolded: metricsRemoved - metricsKept,
       tenMinuteFolded: tenMinuteRemoved - tenMinuteKept,
@@ -80,6 +90,7 @@ export async function foldSendingTallies(runtime: Runtime, budgetMs = 10_000, cl
     campaignRemoved, campaignKept, campaignUnfolded,
     metricsRemoved, metricsKept, metricsUnfolded,
     tenMinuteRemoved, tenMinuteKept, tenMinuteUnfolded,
+    deliverabilityRemoved, deliverabilityKept, deliverabilityUnfolded,
   };
 }
 
@@ -224,6 +235,16 @@ export async function recountSendingTallies(runtime: Runtime, budgetMs = 60_000,
       await runtime.db.execute(sql`DELETE FROM sending_metrics_ten_minute WHERE bucket < now() - interval '7 days'`);
     } catch (error) {
       logError(error, { code: 'METRICS_TEN_MINUTE_PRUNE_FAILED' }, 'warn');
+    }
+  }
+  // Glass's deliverability history (migrations 525, 529, 530): 120 days, so the 30-day board always has the 30 days before.
+  if (clock() < until) {
+    try {
+      await runtime.db.execute(sql`DELETE FROM deliverability_hourly WHERE hour < now() - interval '120 days'`);
+      await runtime.db.execute(sql`DELETE FROM deliverability_vdm_daily WHERE day < current_date - 120`);
+      await runtime.db.execute(sql`DELETE FROM deliverability_postmaster_daily WHERE day < current_date - 120`);
+    } catch (error) {
+      logError(error, { code: 'DELIVERABILITY_PRUNE_FAILED' }, 'warn');
     }
   }
 

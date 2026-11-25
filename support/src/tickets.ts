@@ -1,4 +1,4 @@
-import { baneApi } from './bane.js';
+import { nightmailApi } from './nightmail.js';
 import type { Env } from './env.js';
 import type { TicketInput, TicketType } from './agent/tools.js';
 import { newId } from './tokens.js';
@@ -135,7 +135,7 @@ function detailLines(input: TicketInput) {
 }
 
 /** The team's email for a ticket: subject and plain text. Pure, so the verification marker is tested directly. */
-export function ticketEmail(env: Pick<Env, 'BANE_ORIGIN'>, ctx: TicketContext, ticket: Pick<FiledTicket, 'id' | 'dueAt'>, input: TicketInput) {
+export function ticketEmail(env: Pick<Env, 'NIGHTMAIL_ORIGIN'>, ctx: TicketContext, ticket: Pick<FiledTicket, 'id' | 'dueAt'>, input: TicketInput) {
   const c = ctx.customer, verified = ctx.verified !== null, byEmail = verified && ctx.channel === 'email';
   const who = verified
     ? [`Verified: ${ctx.verified}${ctx.dmarc ? ` (DMARC ${ctx.dmarc})` : ''}`, `Customer: ${c.name ?? '(no name)'} <${c.email ?? '—'}>, ${c.role ?? 'member'}`, `Workspaces: ${c.workspaces.map(w => `${w.name} (${w.id})`).join(', ') || '—'}`]
@@ -166,7 +166,7 @@ export function ticketEmail(env: Pick<Env, 'BANE_ORIGIN'>, ctx: TicketContext, t
     '',
     ...(input.evidence.ids?.length ? [`Evidence: ${input.evidence.ids.join(', ')}`, ''] : []),
     ...(ctx.attachments.length ? ['Screenshots (links expire in 7 days)', ...ctx.attachments.map(a => `- ${a.name} (${a.type}, ${Math.ceil(a.size / 1024)} KB): ${a.url}`), ''] : []),
-    `Ticket: ${ticket.id}${ctx.model === INTAKE_MODEL ? '' : ` · Support inbox: ${new URL(env.BANE_ORIGIN).origin}/support/${ctx.conversationId}`}`,
+    `Ticket: ${ticket.id}${ctx.model === INTAKE_MODEL ? '' : ` · Support inbox: ${new URL(env.NIGHTMAIL_ORIGIN).origin}/support/${ctx.conversationId}`}`,
     `Cost so far: $${ctx.costUsd.toFixed(3)} on ${ctx.model}.`,
     ctx.channel === 'chat' ? `Reply to the customer in the follow-up thread in ${productName}’s support inbox (they were emailed).` : `Reply in the email thread in ${productName}’s support inbox.`,
   ];
@@ -177,7 +177,7 @@ export function ticketEmail(env: Pick<Env, 'BANE_ORIGIN'>, ctx: TicketContext, t
 /** The team's email. Idempotent per ticket, so a retried notification never sends twice. */
 export async function notifyTeam(env: Env, ctx: TicketContext, ticket: FiledTicket, input: TicketInput) {
   const { subject, text } = ticketEmail(env, ctx, ticket, input);
-  const sent = await baneApi(env).startThread({ to: [env.TICKET_TO], subject, text }, `ticket-${ticket.id}`);
+  const sent = await nightmailApi(env).startThread({ to: [env.TICKET_TO], subject, text }, `ticket-${ticket.id}`);
   await env.DB.prepare('UPDATE tickets SET notified_at = ? WHERE id = ?').bind(Date.now(), ticket.id).run();
   return sent;
 }
@@ -187,7 +187,7 @@ export async function openFollowUp(env: Env, ctx: TicketContext, ticket: FiledTi
   if (ctx.channel !== 'chat' || ctx.verified !== 'handoff' || !ctx.customer.email) return null;
   const first = ctx.customer.name?.split(/\s+/)[0] ?? 'there';
   const text = [`Hi ${first},`, '', `I’ve passed your request to the ${productName} team as ${ticket.id}. Someone will reply here, usually within one business day. You don’t need to do anything else; if you have more to add, reply to this email.`, '', `${productName} support (AI)`].join('\n');
-  const sent = await baneApi(env).startThread({ to: [ctx.customer.email], subject: `Your ${productName} support request ${ticket.id}`, text }, `followup-${ticket.id}`);
+  const sent = await nightmailApi(env).startThread({ to: [ctx.customer.email], subject: `Your ${productName} support request ${ticket.id}`, text }, `followup-${ticket.id}`);
   await env.DB.batch([
     env.DB.prepare('UPDATE tickets SET followup_thread_id = ? WHERE id = ?').bind(sent.threadId, ticket.id),
     env.DB.prepare('UPDATE conversations SET thread_id = coalesce(thread_id, ?) WHERE id = ?').bind(sent.threadId, ctx.conversationId),

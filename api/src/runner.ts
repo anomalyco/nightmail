@@ -3,6 +3,7 @@ import { Client } from 'pg';
 import { nodeLogFacetLane, nodeRuntime, postgresConnection } from './adapters/node.js';
 import { drain,drainJobs } from './dispatch.js';
 import { refreshPoolQuotas, type GateState } from './dispatcher.js';
+import { refreshDeliverabilitySources } from './glass-deliverability.js';
 import { jobConcurrency } from './jobs.js';
 import { hourlyUpkeep, retentionTick } from './maintenance.js';
 import { reconcileSharedConnections } from './provider-connections.js';
@@ -82,7 +83,7 @@ try {
         // Don't stall mail dispatch while waiting for a platform pool to come online.
         if (runtime.config.multiTenant && !sharedSetup && Date.now() - lastSharedSetup >= 60_000) {
           lastSharedSetup = Date.now();
-          sharedSetup = reconcileSharedConnections(runtime).catch(() => log('warn', { code: 'SHARED_SETUP_FAILED' })).then(() => refreshPoolQuotas(runtime)).finally(() => { sharedSetup = undefined; });
+          sharedSetup = reconcileSharedConnections(runtime).catch(() => log('warn', { code: 'SHARED_SETUP_FAILED' })).then(() => refreshPoolQuotas(runtime)).then(() => refreshDeliverabilitySources(runtime)).finally(() => { sharedSetup = undefined; });
         }
         // Health (src/health.ts): what is falling behind, once a minute, in the background. There are no Cloudflare
         // queues here: the jobs table is the queue. This process's own counts (its jobs' database errors) go first.

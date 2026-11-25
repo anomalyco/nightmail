@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
-import { useApiMutation } from '../../data/context'
+import { useApiMutation, useWorkspaceAccess } from '../../data/context'
 import { invalidate } from '../../data/invalidation'
 import { ApiError, type ImportPreview, type RiskBreakdown } from '../../data/types'
 import { Alert, Button, Checkbox, DataTable, Dialog, Field, Input, Select, fieldError, MutationError } from '../../components/ui'
@@ -127,7 +127,9 @@ async function withImportRetry<T>(work: () => Promise<T>, signal: AbortSignal, o
 }
 
 export function ImportContactsDialog({ listId: initialListId = '', onClose }: { listId?: string; onClose: () => void }) {
-  const [listId, setListId] = useState(initialListId)
+  // Adding contacts to a list is an owner's or admin's call (the API wants manage for a list import); members import without one.
+  const { canAdminister } = useWorkspaceAccess()
+  const [listId, setListId] = useState(canAdminister ? initialListId : '')
   // The file's text stays out of the mutations' inputs: each write's input is serialized to guard against a double submit.
   const source = useRef(''), committed = useRef(new Map<number, ImportPreview>())
   const abortRef = useRef<AbortController | null>(null)
@@ -258,7 +260,7 @@ export function ImportContactsDialog({ listId: initialListId = '', onClose }: { 
     <div className="stack">
       <div className="stack audience-import-fields" hidden={Boolean(preview)}>
         {/* The columns are the mapping below once a file is read; the row and size limits are the file's errors. */}
-        <Field label="Add to list" htmlFor="import-list"><ListPicker id="import-list" emptyLabel="No list" value={listId} disabled={locked} onChange={value => { setListId(value); resetPreview() }} /></Field>
+        <Field label="Add to list" htmlFor="import-list" hint={canAdminister ? undefined : 'Only owners and admins can add contacts to a list.'}><ListPicker id="import-list" emptyLabel="No list" value={listId} disabled={locked || !canAdminister} onChange={value => { setListId(value); resetPreview() }} /></Field>
         <Field label="CSV file" htmlFor="import-file"><div className="audience-import-file"><Input type="file" id="import-file" accept=".csv,text/csv" disabled={locked} onClick={event => { event.currentTarget.value = '' }} onChange={event => void readFile(event.target.files?.[0])} /><a className="ui-button ui-button--ghost ui-button--md" href={sampleHref} download="contacts-sample.csv">Sample CSV</a></div></Field>
         {csv && <div className="form-grid">{targets.map(target => <Field key={target.value} label={target.label} htmlFor={`map-${target.value}`} error={fieldError(review.error, `mapping.${target.value}`)}>
           <Select id={`map-${target.value}`} disabled={locked} value={mapping[target.value] ?? ''} onValueChange={value => { setMapping({ ...mapping, [target.value]: value }); resetPreview() }} options={[{ value: '', label: 'Do not import' }, ...(target.value === 'name' && combinedAvailable ? [{ value: COMBINED, label: 'First + last name' }] : []), ...headers.map(header => ({ value: header, label: header }))]} />

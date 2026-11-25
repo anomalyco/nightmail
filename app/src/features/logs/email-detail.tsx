@@ -4,14 +4,14 @@ import { ArrowUpRight, ChevronRight } from 'lucide-react'
 import { useApi, useApiDef, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
 import { pendingEmailStatuses as pendingStatuses, type Email, type EmailEvent } from '../../data/types'
-import { Alert, Button, CopyButton, elapsed, ErrorState, FactsRow, Icon, Identifier, PageHeader, Sheet, Tooltip, Waterfall, type Fact, type Tone } from '../../components/ui'
+import { Alert, Button, CopyButton, elapsed, ErrorState, Icon, Identifier, PageHeader, Sheet, Tooltip, Waterfall, type Fact, type Tone } from '../../components/ui'
 import { useEmailDocument } from '../../components/EmailPreview'
 import { mentionsRemoteImage } from '../../lib/html-scan'
 import { Checks, ChecksChip, ChecksToggle, EmailViews, useSendability, type InsightSource } from '../../components/EmailInsight'
 import { AddressList, Sender } from '../../components/PrivateAddress'
 import { AddressText } from '../../components/AddressText'
 import { date, label, shortDateTime, time } from '../../lib/format'
-import { EmailBar, EmailDetailSkeleton, emailFactLabels } from './skeletons'
+import { EmailBar, EmailDetailSkeleton, EmailFactsStrip } from './skeletons'
 import { useDetailLayout } from './detail-layout'
 import { ThreadChip, ThreadRows, ThreadTimeline, threaded, threadItems, useThreadPrefetch } from './thread'
 import { reasonOf, type Reason } from './reason'
@@ -168,8 +168,8 @@ function FactList({ email }: { email: Email }) {
   </dl>
 }
 
-// A desktop's facts under the bar, in one 36px row split by rules: from whom, to whom (opening its contact when there is
-// one), the stream, when and the region (the ID is in the bar); EmailDetailSkeleton draws the same labels (emailFactLabels).
+// A desktop's facts under the bar, in one 36px row: from whom, to whom (opening its contact when there is one), then over
+// the details column the stream, when and the region (the ID is in the bar); EmailDetailSkeleton draws the same strip.
 function EmailFacts({ email }: { email: Email }) {
   const { multiTenant } = useWorkspaceAccess()
   const to = email.to.split(', ').filter(Boolean)
@@ -180,7 +180,7 @@ function EmailFacts({ email }: { email: Email }) {
     Sent: { value: <time dateTime={email.sentAt}>{shortDateTime(email.sentAt)} UTC</time>, mono: true },
     Region: { value: email.regionId, mono: true },
   }
-  return <FactsRow className="email-facts" label="Email details" items={emailFactLabels(multiTenant).map(name => ({ label: name, ...facts[name] }))} />
+  return <EmailFactsStrip multiTenant={multiTenant} label="Email details" fact={name => facts[name]} />
 }
 
 // ── Delivery: every event, oldest first, with what each means on hover ──

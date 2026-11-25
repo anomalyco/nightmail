@@ -405,7 +405,7 @@ export function registerInboxes(app: App, access: (c: Ctx, p?: MailboxPermission
       const { message, text } = project(r, q.extract), first = r.files[0], scanned = (r.verdicts.virus??(r.direction==='outbound'?'PASS':null)) === 'PASS';
       if(r.files.some(f=>displayText(f.filename)!==f.filename))message.hiddenContent=true;
       if (r.files.some(f => f.bucket !== first!.bucket)) throw absent();
-      // One S3 client for every link; R2 links are Bane-signed and need no client or query.
+      // One S3 client for every link; R2 links are Nightmail-signed and need no client or query.
       const s3 = first && scanned && isS3Bucket(first.bucket) ? await mailboxS3(c.env, v.workspaceId, r.region, first.bucket, c.env.db, r.binding) : undefined;
       try {
         const attachments = await Promise.all(r.files.map(async f => ({

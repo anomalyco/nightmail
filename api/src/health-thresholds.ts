@@ -168,7 +168,7 @@ export const REQUESTS = {
    * Codes that alert at the first line, critical, and as a failed job's error at the first job. MAILBOX_STAGING_UNDELIVERED
    * (#625): mail arrived for a real workspace and its arrival notice was lost, so nobody would otherwise know.
    */
-  errorLinesFirst: ['MAILBOX_STAGING_UNDELIVERED'],
+  errorLinesFirst: ['MAILBOX_STAGING_UNDELIVERED', 'SES_ACCOUNT_SENDING_PAUSED', 'SES_CREDENTIALS_INVALID', 'LINK_HOST_AUTH_FAILED', 'SUPPORT_LOGS_AUTH_FAILED'],
   /**
    * A dispatcher shard's run failing (DISPATCHER_RUN_FAILED and its kin) this often in fifteen minutes. One failure
    * heals itself: the shard runs again 15 seconds later and its leased mail is taken back within three minutes. On the

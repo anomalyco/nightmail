@@ -655,7 +655,7 @@ export type ContactRead = Contact & {
  */
 export type ContactRisk = {
     /**
-     * invalid: not a deliverable address. disposable: a public temporary inbox, or a domain whose mail servers serve them. typo_domain: a mistyped mailbox provider (gmial.com). role: abuse@, postmaster@, noreply@ and the like. dead: known to be undeliverable (a recent permanent bounce). no_mail_domain: the domain can't receive mail (it doesn't exist, or has no mail server).
+     * invalid: not a deliverable address. disposable: a public temporary inbox on a listed domain or subdomain. typo_domain: a mistyped mailbox provider (gmial.com). role: abuse@, postmaster@, noreply@ and the like. dead: known to be undeliverable (a recent permanent bounce). no_mail_domain: the domain can't receive mail (it doesn't exist, or has no mail server).
      */
     reason: 'invalid' | 'disposable' | 'typo_domain' | 'role' | 'dead' | 'no_mail_domain';
     /**
@@ -1921,10 +1921,10 @@ export type CampaignDelivery = {
      */
     deliveredOnly: boolean;
     /**
-     * Why releasing recipients is currently held, and the best estimate of until when. list_probe: Hosted sent the first recipients (the list probe) and waits for their bounces and complaints before releasing the rest. feedback_lag: releasing is briefly held while priority safety feedback (bounces/complaints) catches up. ramp: a Hosted sender's first large campaigns release in growing hourly steps (sendEstimate.ramp); this hour's step is used up, or its delivery results are still coming in before the next step.
+     * Why releasing recipients is currently held, and the best estimate of until when. list_probe: Hosted sent the first recipients (the list probe) and waits for their bounces and complaints before releasing the rest. feedback_lag: releasing is briefly held while priority safety feedback (bounces/complaints) catches up. ramp: a Hosted sender's first large campaigns release in growing hourly steps (sendEstimate.ramp); this hour's step is used up, or its delivery results are still coming in before the next step. link_record: the campaign has no host for its unsubscribe link right now (its workspace's sending is paused, or with own link hosts, its domain's isn't active yet); it continues by itself.
      */
     waiting: {
-        reason: 'pacing_window' | 'ses_daily_quota' | 'hosted_daily_quota' | 'list_probe' | 'balance' | 'feedback_lag' | 'ramp';
+        reason: 'pacing_window' | 'ses_daily_quota' | 'hosted_daily_quota' | 'list_probe' | 'balance' | 'feedback_lag' | 'ramp' | 'link_record';
         until: string;
     } | null;
     /**
@@ -2825,7 +2825,10 @@ export type DomainReadiness = {
         type: 'CNAME' | 'TXT' | 'MX';
         value: string;
         priority?: number;
-        purpose: 'sending' | 'receiving' | 'mail_from' | 'dmarc';
+        /**
+         * links: optional, the domain's own link host (links.<domain>) for the unsubscribe and other links Nightmail adds to campaign and marketing mail; shown when the installation has a link domain with Cloudflare for SaaS.
+         */
+        purpose: 'sending' | 'receiving' | 'mail_from' | 'dmarc' | 'links';
         status: 'pending' | 'verified';
         note?: string;
         /**
@@ -2980,7 +2983,7 @@ export type DomainDnsSetup = {
         name: string;
     } | null;
     applyUrl: string | null;
-    groups: Array<'sending' | 'ownership' | 'receiving' | 'receivingReply' | 'mailfrom'>;
+    groups: Array<'sending' | 'links' | 'ownership' | 'receiving' | 'receivingReply' | 'mailfrom'>;
 };
 
 export type WebhookPage = {

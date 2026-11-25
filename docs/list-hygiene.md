@@ -12,7 +12,7 @@ host names, and no large provider (gmail.com, outlook.com, yahoo.com, icloud.com
 list. A source that fails keeps its last good copy (`hygiene_lists`, `source:<name>`); one that has never been fetched is
 covered by the vendored snapshot, `api/src/hygiene-snapshot.ts`, which is also what an installation uses until its first sync
 (or always, with `NIGHTMAIL_HYGIENE_LISTS=off`). A day's change to the built lists is capped: more than 2,000 (or 2%) new
-disposable domains, more than 25 (or 1%) providers dropped, or more than 10 new disposable mail servers keeps the last built
+disposable domains or more than 25 (or 1%) providers dropped keeps the last built
 lists and logs `HYGIENE_LISTS_CHANGE_REFUSED` until an operator accepts it (`syncHygieneLists(runtime, fetch, true, true)`).
 Refresh the snapshot with
 `node --import tsx scripts/update-hygiene-snapshot.ts` from `api/`.
@@ -26,7 +26,7 @@ Only permissively licensed sources. No GPL list is fetched or vendored.
 | [7c/fakefilter](https://github.com/7c/fakefilter) (`txt/data.txt`) | BSD-3-Clause | disposable domains |
 | [FGRibreau/mailchecker](https://github.com/FGRibreau/mailchecker) (`list.txt`) | MIT | disposable domains |
 | [mixmaxhq/role-based-email-addresses](https://github.com/mixmaxhq/role-based-email-addresses) (`src/index.js`) | MIT | role names for list statistics (the soft tier) |
-| [tompec/public-email-providers-domains](https://github.com/tompec/public-email-providers-domains) (`data/domains.json`) | MIT | real providers and their MX hosts: never disposable |
+| [tompec/public-email-providers-domains](https://github.com/tompec/public-email-providers-domains) (`data/domains.json`) | MIT | real providers: never disposable |
 
 The disposable list is the union of the four disposable sources, less an allowlist kept in
 `api/src/hygiene-sources.ts` (`ALLOWED`: the large providers, privacy relays such as duck.com, Firefox Relay, SimpleLogin
@@ -44,9 +44,7 @@ HTTPS (`NIGHTMAIL_HYGIENE_DNS`; Hosted defaults to Cloudflare's resolver, self-h
 A/AAAA query when there is no MX (`api/src/mail-dns.ts`). The verdict is cached in `hygiene_mail_domains`.
 
 - **no_mail_domain:** NXDOMAIN, a null MX (`0 .`, RFC 7505), or no MX and no address.
-- **disposable:** the domain's MX hosts serve at least three listed disposable domains, as the checks found them, and are
-  not a provider's or a well-known mail host's (Google, Microsoft, Cloudflare and the like). The sync recomputes these
-  hosts daily and queues a sample of listed domains so new disposable services are recognized by their mail servers.
+- A shared mail server does not classify its domains as disposable; only the domain lists above do.
 - A failed lookup (SERVFAIL, timeout) flags nobody and is retried an hour later. Providers on the lists are never looked up.
 
 A contact created through the API is checked inline (1.5 s at most). An import preview checks its domains for 3 s and

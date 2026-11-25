@@ -35,7 +35,7 @@ for name in bane-inbound bane-feedback bane-trusted-feedback; do
     add "$sub"
   fi
 done
-# Pool event destinations (N7): adopt only Bane's exact destination on a set that already exists.
+# Pool event destinations (N7): adopt only Nightmail's exact destination on a set that already exists.
 for spec in us-east-2:bane us-east-1:bane-trusted; do
   region=${spec%%:*}; prefix=${spec#*:}
   sets=$(read_aws sesv2 list-configuration-sets)

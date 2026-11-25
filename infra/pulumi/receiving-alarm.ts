@@ -1,5 +1,5 @@
 // A redriven notification has only its own recovery window (staging: three days; SES feedback:
-// the DLQ's 14 days). Use the operator's existing pager in the queue's region, never a Bane topic
+// the DLQ's 14 days). Use the operator's existing pager in the queue's region, never a Nightmail topic
 // (those feed the Worker). CloudWatch alarm actions must be in the alarm's region.
 export function deadLetterAlarm<T>(account:string,region:'us-east-1'|'us-east-2',name:string,queue:T,pager:string) {
   if(!new RegExp(`^arn:aws:sns:${region}:${account}:[A-Za-z0-9_-]+$`).test(pager) || /:bane-(inbound|feedback|trusted-feedback)$/.test(pager))throw new Error(`Expected a dedicated same-account ${region} alarm topic`);

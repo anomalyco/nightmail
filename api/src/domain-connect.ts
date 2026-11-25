@@ -6,7 +6,7 @@ import { isProofRecord } from './states.js';
 
 // The mail template under each provider ID, preferred first. A DNS provider applies only a template it lists.
 const templates = domainConnectProviderIds.map(id => `/v2/domainTemplates/providers/${id}/services/mail`);
-export const groupIds = ['sending', 'ownership', 'receiving', 'receivingReply', 'mailfrom'] as const;
+export const groupIds = ['sending', 'links', 'ownership', 'receiving', 'receivingReply', 'mailfrom'] as const;
 type Group = typeof groupIds[number];
 type Discovery = { zone: string; name: string; id: string; sync: string; template: string };
 
@@ -114,6 +114,9 @@ export function pendingGroups(domain:RecordSet, shared:boolean, safeReceiving:bo
       add('sending',{dkim1:selectors[0]!,dkim2:selectors[1]!,dkim3:selectors[2]!,dkimZone:zone.slice(0,-'.amazonses.com'.length)});
     }
   }
+  // The link record (src/link-domains.ts): links.<domain> as a CNAME to the installation's target.
+  const link=pending.find(r=>r.purpose==='links' && r.type==='CNAME' && r.name===`links.${domain.name}`);
+  if(link && /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/.test(link.value)) add('links',{linkTarget:link.value});
   // The templates publish the token as _nightmail, which proves a claim shown with any accepted label.
   const proof=pending.find(r=>r.purpose==='sending' && r.type==='TXT' && isProofRecord(r.name,domain.name));
   if(shared && proof) add('ownership',{ownership:proof.value});

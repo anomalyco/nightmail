@@ -26,15 +26,15 @@
   // Downscales screenshots too large to send to the model (Cloudflare Images binding; optional in code).
   "images": { "binding": "IMAGES" },
   "services": [
-    // Bane's SupportPlatform entrypoint (api/src/support-platform.ts): handoffs, sender checks, grants, grant reads.
+    // Nightmail's SupportPlatform entrypoint (api/src/support-platform.ts): handoffs, sender checks, grants, grant reads.
     { "binding": "BANE", "service": "nightmail-production", "entrypoint": "SupportPlatform" },
-    // Bane's public API, called with the support address's API key (limited to that address).
+    // Nightmail's public API, called with the support address's API key (limited to that address).
     { "binding": "BANE_API", "service": "nightmail-production" }
   ],
-  // Rate limiter namespaces are per account; Bane's own use 8794001–8794002.
+  // Rate limiter namespaces are per account; Nightmail's own use 8794001–8794002.
   "ratelimits": [
     { "name": "CHAT_START", "namespace_id": "8794101", "simple": { "limit": 5, "period": 60 } },
-    // Per sender address; and one key across all inbound mail at a higher rate (the Worker answers 503, Bane retries).
+    // Per sender address; and one key across all inbound mail at a higher rate (the Worker answers 503, Nightmail retries).
     { "name": "EMAIL_IN", "namespace_id": "8794102", "simple": { "limit": 10, "period": 60 } },
     { "name": "EMAIL_IN_GLOBAL", "namespace_id": "8794103", "simple": { "limit": 120, "period": 60 } },
     // Nightmail's content-free wakes after a staff reply (src/worker.ts wake): one key for all.
@@ -49,11 +49,11 @@
     "PUBLIC_URL": "https://support.nightmail.dev",
     // bane.mx until the cutover: its dashboard GETs redirect, but a tab opened before the switch can still start a chat.
     "DASHBOARD_ORIGINS": "https://nightmail.dev,https://bane.mx",
-    "BANE_ORIGIN": "https://nightmail.dev",
+    "NIGHTMAIL_ORIGIN": "https://nightmail.dev",
     "SUPPORT_ADDRESS": "support@nightmail.dev",
     // The inbound address ID (mbx_…) of SUPPORT_ADDRESS in the platform workspace (ws_90b0…), created 2026-11-17.
     // support@bane.mx (mbx_7e7e64495349496691b2ca188cf48b6e) keeps its route to the same webhook, and replies in its
-    // threads go out from it (src/bane.ts reply), so BANE_SUPPORT_INBOX_KEY must cover both addresses.
+    // threads go out from it (src/nightmail.ts reply), so BANE_SUPPORT_INBOX_KEY must cover both addresses.
     "SUPPORT_ADDRESS_ID": "mbx_8969af953f9148ef9deb3cfee54bfe37",
     // Every address the agent answers (the replay poller and the key self-check): exactly what BANE_SUPPORT_INBOX_KEY reads.
     "SUPPORT_ADDRESSES": "support@nightmail.dev,support@bane.mx",

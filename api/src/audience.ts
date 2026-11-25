@@ -1116,7 +1116,7 @@ export function registerAudience(app: App) {
     }) as never;
   });
   app.openapi(createRoute({ method: 'post', path: '/v1/contact-imports', operationId: 'previewContactImport', tags: ['Audience'], security, description: `Persist a preview before commit. Feature limit: 5 MiB UTF-8 CSV, 50,000 rows, 100 columns per import; preview and commit a larger file in parts of that size (the dashboard does this for files up to 1,000,000 rows and 100 MiB). Map headers explicitly. Valid rows can commit alongside a retained row-error report. Imports never lift suppression; consent changes only when the commit attests it. Each workspace keeps at most ${IMPORT_OPEN_PREVIEW_CAP} uncommitted previews (oldest evicted) and allows ${IMPORT_PREVIEW_RATE_PER_MINUTE} previews per minute.`, request: { body: json(ImportInput) }, responses: { 201: response(Import), ...errors } }), async c => {
-    const identity = actor(c, 'editContent'), input = c.req.valid('json');
+    const input = c.req.valid('json'), identity = actor(c, input.listId ? 'manage' : 'editContent');
     if (input.listId) await findList(c.env.db, identity, input.listId);
     if (!await chargeBudget(c.env, identity.workspaceId, 'imports:preview', IMPORT_PREVIEW_RATE_PER_MINUTE)) {
       c.header('Retry-After', '60');
@@ -1214,6 +1214,7 @@ export function registerAudience(app: App) {
             throw new ApiError(503, 'IMPORT_COMMIT_BUSY', 'Another contact import is committing in this workspace; retry when it finishes.', undefined, true);
           const [job] = await tx.select({ ...importMetaColumns, rowCount: sql<number>`jsonb_array_length(${imports.rows})::int` }).from(imports).where(and(scope(imports, identity), eq(imports.id, importId))).limit(1).for('update');
           if (!job) importNotFound();
+          if (job.listId) actor(c, 'manage');
           if (job.status === 'committed') {
             const [full] = await tx.select({ rowsText: sql<string>`${imports.rows}::text`, errorsText: sql<string>`${imports.errors}::text` }).from(imports).where(and(scope(imports, identity), eq(imports.id, importId))).limit(1);
             return { meta: job, rowsText: full!.rowsText, errorsText: full!.errorsText, subscribed: 0 };
@@ -1221,7 +1222,7 @@ export function registerAudience(app: App) {
           // A share lock keeps the list from being changed or deleted mid-commit.
           if (job.listId) { const [list] = await tx.select({ id: lists.id }).from(lists).where(and(scope(lists, identity), eq(lists.id, job.listId))).limit(1).for('share'); if (!list) notFound('List'); }
           // Domain verdicts count only while the checks are on (NIGHTMAIL_HYGIENE_DNS), as everywhere else.
-          const now = new Date().toISOString(), hygiene = await hygieneLists(tx), dnsOn = !!c.env.config.hygieneDnsUrl;
+          const now = new Date().toISOString(), dnsOn = !!c.env.config.hygieneDnsUrl;
           let subscribed = 0;
           let sampleContactIds: string[] = [];
           let riskSummary = riskyFrom(null);
@@ -1236,7 +1237,7 @@ export function registerAudience(app: App) {
             const { rows: [step1] } = await tx.execute<{ bad_row: number | null; inserted_subscribed: number; jobs_enqueued: number; existing_unknown_ids: string[] | null; contact_ids: string[] | null; sample_ids: string[] | null; risky: Record<string, number> | null }>(sql`
               WITH incoming AS (
                 SELECT (r->>'row')::int AS row_num, r->>'email' AS email, r->>'name' AS name, coalesce(r->'properties', '{}'::jsonb) AS properties, r->>'risk' AS risk,
-                  m.verdict AS domain_verdict, m.mx AS domain_mx
+                  m.verdict AS domain_verdict
                 FROM audience_imports i CROSS JOIN LATERAL jsonb_array_elements(i.rows) r
                   LEFT JOIN hygiene_mail_domains m ON m.domain = split_part(r->>'email', '@', 2)
                 WHERE i.workspace_id = ${identity.workspaceId} AND i.id = ${importId}
@@ -1247,7 +1248,7 @@ export function registerAudience(app: App) {
                 INSERT INTO audience_contacts AS c (id, workspace_id, email, name, properties, marketing_consent, risk)
                 SELECT 'con_' || ${tsHex}::text || '7' || substr(replace(gen_random_uuid()::text, '-', ''), 14), ${identity.workspaceId}, email, name, properties, ${initialConsent},
                   CASE WHEN risk IS NOT NULL AND risk <> 'role' THEN risk WHEN ${dnsOn} AND domain_verdict = 'no_mail' THEN 'no_mail_domain'
-                    WHEN ${dnsOn} AND domain_verdict = 'ok' AND domain_mx && ${sql.param([...hygiene.disposableMx])}::text[] THEN 'disposable' WHEN risk = 'role' THEN risk
+                    WHEN risk = 'role' THEN risk
                     WHEN ${bouncedElsewhere(sql`incoming.email`, sql`${identity.workspaceId}::text`)} THEN 'dead' END
                 FROM incoming ORDER BY email
                 ON CONFLICT ON CONSTRAINT audience_contacts_email_scope DO UPDATE SET name = coalesce(excluded.name, c.name), properties = c.properties || excluded.properties, deleted_at = NULL, updated_at = ${now},

@@ -4,8 +4,8 @@ import { wildcardMessage } from './dns-messages.js';
 // Every email Nightmail sends a customer about their account, in one template. A notice is three short plain
 // paragraphs (what happened, what it means for their mail right now, what to do next), one link and one line saying
 // why it was sent. customerNotice() is pure and returns the subject with a text part and an HTML part that carry the
-// same words; the HTML part sets a line length, the link as a button and its own dark colours, and nothing else (no
-// images, no background). A notice never says how a check works: no scores, rates, thresholds or provider names. The
+// same words; the HTML part sets a line length, the link as a button and its own colours, light and dark, and nothing
+// else (no images). A notice never says how a check works: no scores, rates, thresholds or provider names. The
 // domain setup reminder alone also lists the DNS records to publish and links the customer's own DNS provider's page.
 //
 // Words a customer chose (a workspace's name, a campaign's) are shown through shownName, an address through
@@ -62,24 +62,29 @@ const moment = (value: Date) => `${day(value)} at ${value.toISOString().slice(11
 const count = (value: number) => value.toLocaleString('en-US');
 const owes = (workspace: string, owed: string, since: Date | null) => since ? `${workspace} has owed ${owed} since ${day(since)}.` : `${workspace} owes ${owed}.`;
 
-// The dashboard's ink, muted text and primary button (app/src/styles/tokens.css), light and dark. Colours a client
-// can't override stay readable on its own canvas: the page sets no background.
+// The dashboard's canvas, ink, muted text and primary button (app/src/styles/tokens.css), light and dark. Every text
+// colour comes with the background it was chosen for: the light pair inline (and as bgcolor on the body and the outer
+// table), the dark pair together in one media query. A client that applies the dark query on a light pane of its own
+// (Outlook on the web asks the browser, not its own theme; webmail drops the color-scheme meta) once showed #ededed
+// on white, because the page left its background to the client.
 const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif", MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
-const DARK = '@media (prefers-color-scheme:dark){.nm-text{color:#ededed!important}.nm-why{color:#a3a3a3!important;border-top-color:#2e2e2e!important}.nm-action{background:#314770!important;border-color:#556f9d!important;color:#ffffff!important}}';
+const PAPER = '#ffffff', INK = '#171717', MUTED = '#5d5d5d';
+const DARK = '@media (prefers-color-scheme:dark){.nm-page{background-color:#181818!important;color:#ededed!important}.nm-text{color:#ededed!important}.nm-why{color:#a3a3a3!important;border-top-color:#2e2e2e!important}.nm-action{background:#314770!important;border-color:#556f9d!important;color:#ffffff!important}}';
+const page = `class="nm-page" bgcolor="${PAPER}"`, ink = (style = '') => `class="nm-text" style="margin:0 0 14px;color:${INK}${style}"`;
 
 /** One notice as an email: the same words as text and as HTML. */
 export function notice(p: Parts): Notice {
   const records = p.records ?? [];
   const text = [p.lines.join('\n\n'), ...records.map(r => `${r.type} record\nName: ${r.name}\nValue: ${r.value}`), ...p.link ? [`${p.link.label}: ${p.link.url}`] : [], `${p.action.label}: ${p.action.url}`, p.why].join('\n\n') + '\n';
-  const field = (label: string, value: string) => `<tr><td class="nm-why" style="width:40px;padding:2px 12px 2px 0;vertical-align:top;font-size:13px;color:#5d5d5d;white-space:nowrap">${label}</td><td style="padding:2px 0;font:14px/1.5 ${MONO};word-break:break-all">${escapeHtml(value)}</td></tr>`;
-  const paragraphs = p.lines.map(line => `<p style="margin:0 0 14px">${escapeHtml(line)}</p>`).join('')
-    + records.map(r => `<p style="margin:0 0 4px;font-weight:600">${escapeHtml(r.type)} record</p><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 14px">${field('Name', r.name)}${field('Value', r.value)}</table>`).join('')
-    + (p.link ? `<p style="margin:0 0 14px"><a href="${escapeHtml(p.link.url)}" style="color:inherit;text-decoration:underline">${escapeHtml(p.link.label)}</a></p>` : '');
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="supported-color-schemes" content="light dark"><title>${escapeHtml(p.subject)}</title><style>${DARK}</style></head>`
-    + `<body style="margin:0;padding:0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:20px 16px 28px">`
-    + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:520px"><tr><td class="nm-text" style="font:15px/1.6 ${FONT};color:#171717">`
+  const field = (label: string, value: string) => `<tr><td class="nm-why" style="width:40px;padding:2px 12px 2px 0;vertical-align:top;font-size:13px;color:${MUTED};white-space:nowrap">${label}</td><td class="nm-text" style="padding:2px 0;font:14px/1.5 ${MONO};color:${INK};word-break:break-all">${escapeHtml(value)}</td></tr>`;
+  const paragraphs = p.lines.map(line => `<p ${ink()}>${escapeHtml(line)}</p>`).join('')
+    + records.map(r => `<p ${ink(';margin-bottom:4px;font-weight:600')}>${escapeHtml(r.type)} record</p><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 14px">${field('Name', r.name)}${field('Value', r.value)}</table>`).join('')
+    + (p.link ? `<p ${ink()}><a class="nm-text" href="${escapeHtml(p.link.url)}" style="color:${INK};text-decoration:underline">${escapeHtml(p.link.label)}</a></p>` : '');
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="supported-color-schemes" content="light dark"><title>${escapeHtml(p.subject)}</title><style>:root{color-scheme:light dark;supported-color-schemes:light dark}${DARK}</style></head>`
+    + `<body ${page} style="margin:0;padding:0;background-color:${PAPER};color:${INK}"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" ${page} style="background-color:${PAPER}"><tr><td ${page} style="padding:20px 16px 28px;background-color:${PAPER};color:${INK}">`
+    + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:520px"><tr><td class="nm-text" style="font:15px/1.6 ${FONT};color:${INK}">`
     + `${paragraphs}<p style="margin:22px 0 0"><a class="nm-action" href="${escapeHtml(p.action.url)}" style="display:inline-block;padding:8px 16px;border:1px solid #223459;border-radius:6px;background:#223459;color:#ffffff;font-weight:500;text-decoration:none">${escapeHtml(p.action.label)}</a></p>`
-    + `<p class="nm-why" style="margin:32px 0 0;padding-top:14px;border-top:1px solid #e4e4e4;font-size:13px;line-height:1.5;color:#5d5d5d">${escapeHtml(p.why)}</p>`
+    + `<p class="nm-why" style="margin:32px 0 0;padding-top:14px;border-top:1px solid #e4e4e4;font-size:13px;line-height:1.5;color:${MUTED}">${escapeHtml(p.why)}</p>`
     + '</td></tr></table></td></tr></table></body></html>';
   return { subject: p.subject, text, html };
 }
@@ -91,6 +96,7 @@ export type NoticeInput =
   | Workspace & { kind: 'resumed'; limit?: boolean; /** Marketing stays on hold after this resume. */ marketingHeld?: boolean }
   | Workspace & { kind: 'campaign_paused'; campaign: { id: string; name: string } }
   | Workspace & { kind: 'domain_unverified'; domain: { id: string; name: string } }
+  | Workspace & { kind: 'domain_released'; domain: { name: string } }
   /** missing: of the domain's `total` sending records, the ones public DNS lacks or has with another value. host: where its DNS is hosted, when known. */
   /** noDns: nobody serves DNS for the domain, so the email asks to check its name instead of listing records. */
   | Workspace & { kind: 'domain_setup'; domain: { id: string; name: string }; noDns?: boolean; /** A wildcard (*.domain), and the parking host it points to, answering its missing CNAMEs. */ wildcard?: string; parking?: { owner: string; target: string }; missing: SetupRecord[]; total: number; wrong: boolean; host: { name: string; url: string | null } | null; releasesAt: Date | null }
@@ -159,6 +165,13 @@ export function customerNotice(origin: string, n: NoticeInput): Notice {
         `${productName} can no longer find the DNS records that verify ${name}.`,
         `Mail from addresses at ${name} is refused until the records are back. Your other domains are not affected.`,
         'The domain’s page lists the records to publish.'] });
+    }
+    case 'domain_released': {
+      const host = hostName(n.domain.name), name = host ?? 'the domain';
+      return notice({ subject: `${host ?? 'A domain'} was released from ${w}`, action: { label: 'Open domains', url: `${base}/domains` }, why: members, lines: [
+        `${productName} removed ${name} from ${w}: the DNS records that verified it have been gone for over 30 days.`,
+        `Mail from addresses at ${name} can’t be sent from ${w}, and another workspace can now add the domain. Your other domains are not affected.`,
+        `If ${name} is still yours, add it again and publish the records it lists.`] });
     }
     case 'domain_setup': {
       const host = hostName(n.domain.name), name = host ?? 'the domain', provider = n.host?.name ?? null;

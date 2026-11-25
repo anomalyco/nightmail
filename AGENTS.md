@@ -1,17 +1,17 @@
-# Bane
+# Nightmail
 
 Self-hosted transactional and marketing email on Amazon SES. Read `README.md` for the starting points and `api/README.md` for setup, deployment, and operational details.
 
 ## Ownership
 
-This codebase is yours: what it's for and how it's built are your call, and you'll keep building on it. You are the primary builder of Bane, not a guest in it. When you touch an area, leave it better: merge duplicated code, fix the related bugs you find instead of only mentioning them, and simplify structure that no longer fits. Keep the conventions below and the public API contract stable; record decisions that change direction in the commit message.
+This codebase is yours: what it's for and how it's built are your call, and you'll keep building on it. You are the primary builder of Nightmail, not a guest in it. When you touch an area, leave it better: merge duplicated code, fix the related bugs you find instead of only mentioning them, and simplify structure that no longer fits. Keep the conventions below and the public API contract stable; record decisions that change direction in the commit message.
 
 ## Repository map
 
 - `app/` — React/Vite dashboard. `app/index.html` loads `src/main.tsx`; `src/App.tsx` defines routes. Screens live in `src/features/`, shared UI in `src/components/`, API adapters in `src/data/`, and design tokens/styles in `src/styles/`.
 - `api/` — Hono API with Zod/OpenAPI schemas. `src/app.ts` assembles routes; `src/server.ts` runs on Node and `src/worker.ts` runs on Cloudflare. `src/runner.ts` runs the Node job worker. PostgreSQL schemas are in `src/db/`, migrations in `migrations/`, and platform/database/storage adapters in `src/adapters/`.
 - `sdk/` — Generated TypeScript client, published on npm as `@nightmail/sdk`. Usage is in `sdk/README.md`.
-- `support/` — The AI support agent's Worker (`bane-support`, `bane-support-dev`): OpenCode in a Durable Object per conversation, reaching Bane through the `SupportPlatform` service binding. Setup and tests are in `support/README.md`, and the Help panel's WebSocket contract is in `support/PROTOCOL.md`.
+- `support/` — The AI support agent's Worker (`nightmail-support`, `nightmail-support-dev`): OpenCode in a Durable Object per conversation, reaching Nightmail through the `SupportPlatform` service binding. Setup and tests are in `support/README.md`, and the Help panel's WebSocket contract is in `support/PROTOCOL.md`.
 - `docs/` — Public demo screenshots, SES research, `mcp.md` (connecting an MCP client to the API's `/mcp`, the only MCP server), `analytics.md` (internal dashboard usage analytics: the event schema and how to query it), and `operations.md` (the runbook: what each health alert means and what to check first, for a person or an agent), `dispatch-scaling.md` (measured throughput ceilings, dispatcher design rationale, and the scaling playbook by SES quota). Prefer `api/README.md` over older research notes for current setup instructions.
 
 The dashboard builds to `app/dist/`. Cloudflare serves that directory; Docker copies it into the API image's `public/` directory. There is no root HTML entry point or root package.json: each package installs its own dependencies with `bun install`.
@@ -39,5 +39,5 @@ Docker, Cloudflare, and local development have separate setup instructions in `a
 - CLS gate: `bun run cls` in `app/` builds the dashboard and measures layout shift on every main page (light and dark, cold load and in-app navigation, slow out-of-order API responses, and the main pages again on a 390 × 844 touch phone) against a throwaway API with synthetic data (Docker or `CLS_PG_URL` for Postgres); CI's `cls` job fails above CLS 0.001, so add new pages to `app/scripts/cls.mjs` and fix a shift by reserving the loaded layout's space, never by raising the limit.
 - CI and what to do when a check fails: `docs/ci.md`. Merge with `gh pr merge <n> --merge --auto` (it merges once green; with the merge queue on, `gh pr merge <n>` enqueues). Before pushing, run `node --import tsx scripts/check-premerge.ts` in `api/` (live E2E coverage for new operations, Worker routing, migration numbers, card slots).
 - Keep tests in `api/api.acceptance.test.ts`; do not add separate test files. Run acceptance tests only with an isolated synthetic database/configuration, never production credentials or data.
-- A deploy that changes the tools an MCP session is listed ends that session: its next request gets 404 and the client initializes again and lists the new tools (OpenCode does this itself). Only a client connected before sessions carried the catalog, or one that ignores the 404, needs `opencode2 api post /api/mcp/bane/disconnect` followed by `opencode2 api post /api/mcp/bane/connect`.
+- A deploy that changes the tools an MCP session is listed ends that session: its next request gets 404 and the client initializes again and lists the new tools (OpenCode does this itself). Only a client connected before sessions carried the catalog, or one that ignores the 404, needs `opencode2 api post /api/mcp/nightmail/disconnect` followed by `opencode2 api post /api/mcp/nightmail/connect`.
 - Use the operator's own deployment resources. Keep credentials, private configuration, database dumps, and real mail out of Git. Ask before provisioning infrastructure, deploying, migrating a live database, or sending real email.

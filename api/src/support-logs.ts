@@ -78,7 +78,8 @@ export async function requestLines(observability: NonNullable<Config['observabil
     body = await response.json();
     if (!response.ok || !record(body) || body.success !== true) throw new Error();
   } catch {
-    log('warn', { code: 'SUPPORT_LOGS_UNAVAILABLE', status });
+    if (status === 401 || status === 403) log('error', { code: 'SUPPORT_LOGS_AUTH_FAILED', status });
+    else log('warn', { code: 'SUPPORT_LOGS_UNAVAILABLE', status });
     throw new LogsUnavailable();
   }
   const result = (body as { result?: unknown }).result, found = record(result) && record(result.events) && Array.isArray(result.events.events) ? result.events.events as unknown[] : [];

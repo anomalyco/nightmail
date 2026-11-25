@@ -510,7 +510,7 @@ export function recordExpanded(ref: CampaignRef, expanded: number, windowStarted
 }
 /** An owner resumed a failed list probe: release the rest only to contacts delivered before, and check health at once. */
 export const restrictToDelivered = (ref: CampaignRef) => sql`UPDATE sending_campaigns SET delivered_only=true,health_checked_at=NULL,updated_at=now() WHERE ${campaignRow(ref)} RETURNING id`;
-export const holdCampaign = (ref: CampaignRef, reason: 'pacing_window' | 'ses_daily_quota' | 'hosted_daily_quota' | 'list_probe' | 'balance' | 'feedback_lag' | 'ramp', until: string) => progressCampaign(ref, 'sending', sql`,waiting_reason=${reason},waiting_until=${until}::timestamptz`);
+export const holdCampaign = (ref: CampaignRef, reason: 'pacing_window' | 'ses_daily_quota' | 'hosted_daily_quota' | 'list_probe' | 'balance' | 'feedback_lag' | 'ramp' | 'link_record', until: string) => progressCampaign(ref, 'sending', sql`,waiting_reason=${reason},waiting_until=${until}::timestamptz`);
 /** The campaign's place on the ramp (src/standing-model.ts RAMP): its step, and when that step's hour started at review ordinal `from` (null: past the last step). */
 export const setRamp = (ref: CampaignRef, step: number, startedAt: string | null, from: number) => progressCampaign(ref, 'sending', sql`,ramp_step=${step},ramp_window_started_at=${startedAt}::timestamptz,ramp_from=${from}`);
 /** A ramp step's batch paused the campaign: the next release, after a resume, starts a new hour on the same step. */

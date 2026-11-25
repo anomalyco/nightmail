@@ -1,6 +1,6 @@
 // Synthetic email corpus for calibrating the email client emulator (src/email-preview) against real clients. Each
 // fixture isolates one family of rendering behavior (layout, CSS support, fonts, images, buttons, dark mode, clipping)
-// so a mismatch points at one rule. Everything is synthetic: example.com links, made-up names, and only Bane's own
+// so a mismatch points at one rule. Everything is synthetic: example.com links, made-up names, and only Nightmail's own
 // public assets (nightmail.dev) and Google Fonts as remote resources. No project imports, so scripts outside the API can
 // load it with `node --import tsx` or bun.
 //

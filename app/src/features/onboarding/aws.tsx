@@ -82,7 +82,9 @@ function choiceError(error: unknown) {
     case 'PRODUCTION_ACCESS_REQUIRED': return 'This region is in the SES sandbox. Request production access first.'
     case 'SCAN_STALE': return 'The account changed since it was checked. Check it again, then choose.'
     case 'CANDIDATE_NO_LONGER_VERIFIED': return 'That domain is no longer verified in SES.'
-    case 'DOMAIN_CLAIMED': case 'DOMAIN_REGION_CONFLICT': return 'That domain is already in use in another workspace or region.'
+    // The API's refusal says how the domain's owner gets it released.
+    case 'DOMAIN_CLAIMED': return errorText(error)
+    case 'DOMAIN_REGION_CONFLICT': return 'That domain is already in use in another workspace or region.'
     default: return errorText(error)
   }
 }

@@ -49,7 +49,7 @@ fn fetch_items(text: &str) -> (Option<u32>, Option<Flags>) {
     let flags = text.find("FLAGS (").and_then(|p| {
         let rest = &text[p + 7..];
         let inner = &rest[..rest.find(')')?];
-        // \Recent is per session and Bane never sets it; Dovecot does.
+        // \Recent is per session and Nightmail never sets it; Dovecot does.
         Some(
             inner
                 .split_whitespace()

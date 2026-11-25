@@ -47,11 +47,11 @@ All IDs and names below are illustrative placeholders. `111122223333` is the pla
 {
   "Version": "2012-10-17",
   "Statement": [{
-    "Sid": "TrustOnlyBaneExecutionRole",
+    "Sid": "TrustOnlyNightmailExecutionRole",
     "Effect": "Allow",
-    "Principal": {"AWS": "arn:aws:iam::111122223333:role/BaneExecution"},
+    "Principal": {"AWS": "arn:aws:iam::111122223333:role/NightmailExecution"},
     "Action": "sts:AssumeRole",
-    "Condition": {"StringEquals": {"sts:ExternalId": "bane-generated-unique-account-id"}}
+    "Condition": {"StringEquals": {"sts:ExternalId": "nightmail-generated-unique-account-id"}}
   }]
 }
 ```
@@ -69,7 +69,7 @@ This policy belongs to the platform caller, not the customer SES role. It is sep
     "Sid": "AssumeRegisteredCustomerRole",
     "Effect": "Allow",
     "Action": "sts:AssumeRole",
-    "Resource": "arn:aws:iam::444455556666:role/BaneConnection"
+    "Resource": "arn:aws:iam::444455556666:role/NightmailConnection"
   }]
 }
 ```
@@ -120,13 +120,13 @@ The wildcard below is necessary for account/list operations; it is **not** `ses:
       "Sid": "ReadApprovedConfigurationSet",
       "Effect": "Allow",
       "Action": ["ses:GetConfigurationSet", "ses:GetConfigurationSetEventDestinations"],
-      "Resource": "arn:aws:ses:us-east-1:444455556666:configuration-set/bane-transactional"
+      "Resource": "arn:aws:ses:us-east-1:444455556666:configuration-set/nightmail-transactional"
     },
     {
       "Sid": "ReadApprovedTemplates",
       "Effect": "Allow",
       "Action": "ses:GetEmailTemplate",
-      "Resource": "arn:aws:ses:us-east-1:444455556666:template/bane-*"
+      "Resource": "arn:aws:ses:us-east-1:444455556666:template/nightmail-*"
     }
   ]
 }
@@ -148,8 +148,8 @@ Attach only the stream statements actually requested. This example uses a **stor
       "Action": "ses:SendEmail",
       "Resource": [
         "arn:aws:ses:us-east-1:444455556666:identity/example.com",
-        "arn:aws:ses:us-east-1:444455556666:configuration-set/bane-transactional",
-        "arn:aws:ses:us-east-1:444455556666:template/bane-transactional-*"
+        "arn:aws:ses:us-east-1:444455556666:configuration-set/nightmail-transactional",
+        "arn:aws:ses:us-east-1:444455556666:template/nightmail-transactional-*"
       ],
       "Condition": {"StringEquals": {"aws:RequestedRegion": "us-east-1", "ses:FromAddress": "receipts@example.com"}}
     },
@@ -159,8 +159,8 @@ Attach only the stream statements actually requested. This example uses a **stor
       "Action": "ses:SendBulkEmail",
       "Resource": [
         "arn:aws:ses:us-east-1:444455556666:identity/example.com",
-        "arn:aws:ses:us-east-1:444455556666:configuration-set/bane-marketing",
-        "arn:aws:ses:us-east-1:444455556666:template/bane-marketing-*"
+        "arn:aws:ses:us-east-1:444455556666:configuration-set/nightmail-marketing",
+        "arn:aws:ses:us-east-1:444455556666:template/nightmail-marketing-*"
       ],
       "Condition": {"StringEquals": {"aws:RequestedRegion": "us-east-1"}}
     }
@@ -170,7 +170,7 @@ Attach only the stream statements actually requested. This example uses a **stor
 
 A resource allow-list does not itself require callers to specify a configuration set when the API allows omission. Nightmail should always select a registered configuration set, reject unregistered names, and inspect identity defaults; test this invariant at the service boundary. Likewise, the bulk example allows sending from the approved domain, not only one mailbox. Use a narrower separately verified email identity when appropriate, and validate bulk From addresses in Nightmail.
 
-**Optional tenant restriction:** for a tenant-specific sender, add `"ses:TenantName": "bane-customer-a"` to `StringEquals` on the relevant send statement, and use only resources associated with that tenant. This requires the request to supply the tenant name; do not use `StringEqualsIfExists` if omission must be denied. A tenant ARN is not listed as the send action's resource type. [S1, S13]
+**Optional tenant restriction:** for a tenant-specific sender, add `"ses:TenantName": "nightmail-customer-a"` to `StringEquals` on the relevant send statement, and use only resources associated with that tenant. This requires the request to supply the tenant name; do not use `StringEqualsIfExists` if omission must be denied. A tenant ARN is not listed as the send action's resource type. [S1, S13]
 
 ### Example E — separately approved template-authoring grant
 
@@ -178,10 +178,10 @@ A resource allow-list does not itself require callers to specify a configuration
 {
   "Version": "2012-10-17",
   "Statement": [{
-    "Sid": "AuthorOnlyBaneMarketingTemplates",
+    "Sid": "AuthorOnlyNightmailMarketingTemplates",
     "Effect": "Allow",
     "Action": ["ses:CreateEmailTemplate", "ses:GetEmailTemplate", "ses:UpdateEmailTemplate", "ses:TestRenderEmailTemplate"],
-    "Resource": "arn:aws:ses:us-east-1:444455556666:template/bane-marketing-*"
+    "Resource": "arn:aws:ses:us-east-1:444455556666:template/nightmail-marketing-*"
   }]
 }
 ```

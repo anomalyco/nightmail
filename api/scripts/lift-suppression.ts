@@ -23,7 +23,7 @@ const inTransaction = (db: Client): Transaction => async work => {
   try { const result = await work(); await db.query('COMMIT'); return result; }
   catch (error) { await db.query('ROLLBACK'); throw error; }
 };
-// A newer suppression (a complaint, or another bounce) seen while lifting: nothing more is removed and Bane keeps it.
+// A newer suppression (a complaint, or another bounce) seen while lifting: nothing more is removed and Nightmail keeps it.
 class Superseded extends Error {}
 // Bounds every SES call, and with it how long the contact row stays locked against feedback ingest.
 const SES_CALL_MS = 5000;
@@ -62,9 +62,9 @@ const where = (t: Target) => t.tenant ? `tenant ${t.tenant} in ${t.region}` : `t
  * Everything is read and every region's account checked before the first write. A `started` row in
  * hosted_operator_audit precedes the first SES change and a `lifted`, `failed` or `superseded` row records each change
  * made. The removals and the clear run under the contact's row lock, which feedback ingest needs to record a bounce or
- * complaint for the address: Bane's suppression is checked again under it, and each SES entry is read again just before
+ * complaint for the address: Nightmail's suppression is checked again under it, and each SES entry is read again just before
  * it is removed. A complaint, or a newer bounce, seen at any of those points stops the lift (`superseded`) and is kept.
- * SES has no conditional delete: a complaint SES records between that read and the delete reaches Bane as feedback once
+ * SES has no conditional delete: a complaint SES records between that read and the delete reaches Nightmail as feedback once
  * the lock is released and suppresses the address again there, which is what dispatch checks.
  */
 export async function liftSuppression(db: Client, args: string[], ses: SuppressionSes = awsSes, transaction: Transaction = inTransaction(db)) {
@@ -79,7 +79,7 @@ export async function liftSuppression(db: Client, args: string[], ses: Suppressi
       coalesce(pool_tenant_name, CASE WHEN managed_tenant THEN $2 ELSE 'bane-' || workspace_id END) AS tenant
     FROM regional_connections WHERE workspace_id = $1 AND kind = 'shared' ORDER BY region`, [wid, mxResourceName(wid)]);
 
-  // Preflight: no SES or Bane change happens until every region has been checked.
+  // Preflight: no SES or Nightmail change happens until every region has been checked.
   const variants = [...new Set([address, address.toLowerCase()])], clients = new Map(regions.map(r => [r.region, ses(r.region)]));
   for (const r of regions) {
     const account = await clients.get(r.region)!.account();
@@ -106,11 +106,11 @@ export async function liftSuppression(db: Client, args: string[], ses: Suppressi
   let current: Target | undefined;
   try {
     const finished = await transaction(async () => {
-      // The row lock feedback ingest takes to suppress this address: no bounce or complaint lands in Bane until this ends.
+      // The row lock feedback ingest takes to suppress this address: no bounce or complaint lands in Nightmail until this ends.
       await db.query(`SELECT set_config('lock_timeout', '5s', true)`);
       const { rows: [now] } = await db.query<{ suppression_reason: string | null; suppressed_at: string | null; version: string }>(
         'SELECT suppression_reason, suppressed_at::text, xmin::text AS version FROM audience_contacts WHERE workspace_id = $1 AND id = $2 AND suppressed FOR UPDATE', [wid, contact.id]);
-      if (changed(now)) throw new Superseded(now?.suppression_reason === 'complaint' ? 'A complaint was recorded in Bane for this address while it was being lifted.' : 'The address was suppressed again while it was being lifted.');
+      if (changed(now)) throw new Superseded(now?.suppression_reason === 'complaint' ? 'A complaint was recorded in Nightmail for this address while it was being lifted.' : 'The address was suppressed again while it was being lifted.');
       for (const target of plan) {
         current = target;
         const client = clients.get(target.region)!, listed = await client.get(target.address, target.tenant);
@@ -120,7 +120,7 @@ export async function liftSuppression(db: Client, args: string[], ses: Suppressi
       current = undefined;
       const { rows: [row] } = await db.query<{ suppression_reason: string | null; suppressed_at: string | null }>(
         'SELECT suppression_reason, suppressed_at::text FROM audience_contacts WHERE workspace_id = $1 AND id = $2 AND suppressed', [wid, contact.id]);
-      if (changed(row)) throw new Superseded(row?.suppression_reason === 'complaint' ? 'A complaint was recorded in Bane for this address while it was being lifted.' : 'The address was suppressed again while it was being lifted.');
+      if (changed(row)) throw new Superseded(row?.suppression_reason === 'complaint' ? 'A complaint was recorded in Nightmail for this address while it was being lifted.' : 'The address was suppressed again while it was being lifted.');
       const { rows: [done] } = await db.query<{ details: Record<string, unknown> }>(`WITH lifted AS (
           UPDATE audience_contacts SET suppressed = false, suppression_reason = NULL, suppressed_at = NULL, updated_at = now()
           WHERE workspace_id = $1 AND id = $2 AND suppressed RETURNING id
@@ -134,11 +134,11 @@ export async function liftSuppression(db: Client, args: string[], ses: Suppressi
     // The transaction rolled back; these rows record what SES already changed.
     if (error instanceof Superseded) {
       await audit({ status: 'superseded', removed, why: error.message });
-      throw new Error(`${error.message} Bane keeps the suppression and nothing more was removed; ${removed.length} SES removal(s) are recorded under lift ${liftId}.`);
+      throw new Error(`${error.message} Nightmail keeps the suppression and nothing more was removed; ${removed.length} SES removal(s) are recorded under lift ${liftId}.`);
     }
     const name = error instanceof Error ? error.name : 'Error';
     await audit({ status: 'failed', removed, failed: { ...(current ? entry(current) : { step: 'bane' }), error: name } });
-    throw new Error(`${current ? `Removing the SES entry on ${where(current)}` : 'Locking the contact'} failed (${name}); ${removed.length} earlier removal(s) are recorded under lift ${liftId}. Bane still suppresses the address; run the command again to finish.`, { cause: error });
+    throw new Error(`${current ? `Removing the SES entry on ${where(current)}` : 'Locking the contact'} failed (${name}); ${removed.length} earlier removal(s) are recorded under lift ${liftId}. Nightmail still suppresses the address; run the command again to finish.`, { cause: error });
   }
 }
 

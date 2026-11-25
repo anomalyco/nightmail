@@ -1,23 +1,23 @@
 # Support chat protocol (v1)
 
-The contract between the dashboard's Help panel and the support Worker (`support.bane.mx`, dev `support.dev.bane.mx`). The panel never talks to the model or to Nightmail's support routes: it talks to one conversation over one WebSocket, and the Worker does the rest.
+The contract between the dashboard's Help panel and the support Worker (`support.nightmail.dev`, dev `support.dev.nightmail.dev`). The panel never talks to the model or to Nightmail's support routes: it talks to one conversation over one WebSocket, and the Worker does the rest.
 
 Everything here is JSON. Unknown fields must be ignored and unknown `type`s skipped, so the server can add fields and message types without breaking an older panel. A breaking change bumps `v`.
 
 | Stage | Support origin | Dashboard origin allowed |
 | --- | --- | --- |
-| production | `https://support.bane.mx` | `https://bane.mx` |
-| dev | `https://support.dev.bane.mx` | `https://dev.bane.mx` (and `http://localhost:5173` when the Worker runs locally) |
+| production | `https://support.nightmail.dev` | `https://nightmail.dev` |
+| dev | `https://support.dev.nightmail.dev` | `https://dev.nightmail.dev` (and `http://localhost:5173` when the Worker runs locally) |
 
 ## 1. Opening a conversation
 
 ```
-panel ── POST /v1/contact-support (dashboard session) ──▶ bane.mx           → { token }        (handoff JWS, 10 min)
-panel ── POST /chat/start { handoff } ─────────────────▶ support.bane.mx   → { conversationId, chatToken, socketUrl, expiresAt }
-panel ══ WebSocket socketUrl ══════════════════════════▶ support.bane.mx   (this protocol)
+panel ── POST /v1/contact-support (dashboard session) ──▶ nightmail.dev           → { token }        (handoff JWS, 10 min)
+panel ── POST /chat/start { handoff } ─────────────────▶ support.nightmail.dev   → { conversationId, chatToken, socketUrl, expiresAt }
+panel ══ WebSocket socketUrl ══════════════════════════▶ support.nightmail.dev   (this protocol)
 ```
 
-1. **Handoff.** `POST https://bane.mx/v1/contact-support` with the signed-in session (any role), as today: `{ kind: "support", page, requestIds, shareContent }`. Leave `message` empty: the panel opens with its own line (§3). A non-empty `message` (an API client's) becomes the conversation's first message. Read `token` from the response (the support URL's `#handoff=` fragment carries the same value).
+1. **Handoff.** `POST https://nightmail.dev/v1/contact-support` with the signed-in session (any role), as today: `{ kind: "support", page, requestIds, shareContent }`. Leave `message` empty: the panel opens with its own line (§3). A non-empty `message` (an API client's) becomes the conversation's first message. Read `token` from the response (the support URL's `#handoff=` fragment carries the same value).
 2. **Start.** `POST {support}/chat/start`, `content-type: application/json`, body `{ "handoff": "<token>" }`. CORS allows the dashboard origin only; no cookies.
 
    | Status | Body | Meaning |
@@ -28,7 +28,7 @@ panel ══ WebSocket socketUrl ═══════════════�
    | `409` | `{ error: { code: "HANDOFF_USED" } }` | This handoff already opened a conversation: get a fresh one |
    | `429` | `{ error: { code: "RATE_LIMITED", retryAfter } }` | Too many conversations today (10 per person), or 10 still open |
 
-3. **Connect.** `new WebSocket(socketUrl)`, i.e. `wss://support.bane.mx/c/<conversationId>?token=<chatToken>`. The Worker checks the token (bound to this conversation and this person) and the `Origin`, and before anything is sent the conversation checks that it is still open and still has the access it last ran with (a lost workspace, a lower role or lost content access ends it). A refused upgrade is a plain `401`/`403`/`404`/`503` with no body; get a fresh handoff and call `/chat/resume`.
+3. **Connect.** `new WebSocket(socketUrl)`, i.e. `wss://support.nightmail.dev/c/<conversationId>?token=<chatToken>`. The Worker checks the token (bound to this conversation and this person) and the `Origin`, and before anything is sent the conversation checks that it is still open and still has the access it last ran with (a lost workspace, a lower role or lost content access ends it). A refused upgrade is a plain `401`/`403`/`404`/`503` with no body; get a fresh handoff and call `/chat/resume`.
 
 Keep `conversationId`, `socketUrl` and `expiresAt` in `sessionStorage`, keyed by the signed-in user and the workspace; an account change or sign-out in the tab ends the panel's conversation and forgets cached tab state. The server is the source of truth: on open without a cached socket, the panel asks `GET /v1/support-conversations/current` for that user and workspace's open chat conversation and resumes it via `/chat/resume`, only creating a new one (with `POST /chat/start { handoff, resume: true }`) when none exists and the person writes or attaches something. Switching workspace switches to that workspace's own continuous conversation (the handoff's workspace is the conversation's scope).
 
@@ -103,7 +103,7 @@ The server holds an answer until its turn ends and the output gate has checked i
 - The server writes no greeting: the panel opens every conversation with its own fixed line, "Hey, what's up? How can we help?", and the customer writes first. Nothing else arrives unasked: a renewal (`/chat/resume`) adds no message, only allowing content access does ("Content access allowed for this conversation."). `kind: "first"` appears only in the history of conversations opened before Nov 16, 2026, when the agent wrote a greeting.
 - `kind: "notice"` is a short line from the harness, not the model (for example "Account access renewed"). Render it smaller.
 - `kind: "staff"` is a reply someone on the team wrote in the staff inbox, with their name as `author`; it arrives whole (`message.start` then `message.end`, no deltas) and never takes the place of an answer under way. In `history` it is `role: "staff"` with `author`. While staff are handling the conversation the agent doesn't answer: a message gets one `notice` ("Someone from the Nightmail team is handling this conversation and will reply here.") and no `status` or answer until they hand back.
-- Text is **Markdown, restricted**: paragraphs, `**bold**`, `` `code` ``, fenced code, numbered and bulleted lists, links. Render links only to `https://bane.mx`, `https://dev.bane.mx`, `https://support.bane.mx`, `https://support.dev.bane.mx` and `https://github.com/anomalyco/nightmail`; show any other URL as plain text. Never render images or raw HTML.
+- Text is **Markdown, restricted**: paragraphs, `**bold**`, `` `code` ``, fenced code, numbered and bulleted lists, links. Render links only to `https://nightmail.dev`, `https://dev.nightmail.dev`, `https://support.nightmail.dev`, `https://support.dev.nightmail.dev` and `https://github.com/anomalyco/nightmail`; show any other URL as plain text. Never render images or raw HTML.
 - Always use `message.end.text` as the stored text. When `redacted` is true, it is a replacement such as "I've sent this to the team to check". When the model declines to answer, the text is a fixed, polite decline (`redacted: false`), never an error or a partial answer.
 
 ### 4.3 Tool activity, consent and tickets

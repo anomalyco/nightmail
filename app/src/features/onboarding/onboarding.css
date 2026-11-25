@@ -1,14 +1,15 @@
 /* Onboarding: flat and calm on the page's surface. No rule, outline or ring draws a card, a row, a step mark or a
    control: a choice is one solid well, a field a solid control fill, and focus shows the hover fill. */
 /* Shell */
-.onboarding-shell { display: flex; flex-direction: column; height: 100dvh; background: var(--color-deep); }
+/* Onboarding's controls: a step above the dashboard's 28px (32px), the touch size (44px) on touch screens. */
+.onboarding-shell { --onb-control-height: calc(var(--control-height-sm) + var(--space-8)); display: flex; flex-direction: column; height: 100dvh; background: var(--color-deep); }
 .onboarding-header { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); min-height: 48px; padding: var(--space-8) var(--space-12) var(--space-8) var(--space-16); }
 .onboarding-header .wordmark, .onboarding-header .theme-toggle { position: relative; inset: auto; }
 .onboarding-signout > svg { display: none; }
 .onboarding-header-actions { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
 /* The workspace picker fits its whole name, as wide as half the header; a longer name wraps instead of being cut. */
 .onboarding-workspace { min-width: 0; max-width: min(480px, 50vw); }
-.onboarding-workspace .account-switcher { width: auto; max-width: 100%; height: auto; min-height: 32px; padding-block: 5px; }
+.onboarding-workspace .account-switcher { width: auto; max-width: 100%; height: auto; min-height: var(--onb-control-height); padding-block: var(--space-8); }
 .onboarding-workspace .account-switcher > .account-switcher__workspace { overflow: visible; white-space: normal; text-overflow: clip; overflow-wrap: anywhere; }
 .page-surface.onboarding-surface { flex: 1; height: auto; margin: 0 var(--page-inset) var(--page-inset); padding: var(--space-40) var(--space-32) 0; }
 .onboarding-notice { width: 100%; max-width: 920px; margin: 0 auto var(--space-24); }
@@ -16,9 +17,8 @@
 /* Onboarding-only scale: a step above the dashboard, same tokens. */
 .onboarding-surface .ui-button { transition: background var(--motion-duration), color var(--motion-duration), opacity var(--motion-duration), transform 160ms var(--ease-out-strong); }
 .onboarding-surface .ui-button:active:not(:disabled) { transform: scale(.97); }
-.onboarding-surface .ui-button--md { height: 32px; padding-inline: var(--space-12); }
-.onboarding-surface .copy-action.ui-button--sm:not(.copy-action--compact) { height: 26px; padding-left: 9px; }
-.onboarding-surface .ui-input { height: 36px; padding-inline: var(--space-12); font-size: var(--text-md); }
+.onboarding-surface .ui-button--md { height: var(--onb-control-height); padding-inline: var(--space-12); }
+.onboarding-surface .ui-input { height: var(--onb-control-height); padding-inline: var(--space-12); font-size: var(--text-md); }
 .onboarding-surface .ui-field__label { line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
 .onboarding-surface .ui-field__hint { line-height: 18px; }
 /* Loading keeps the button's width: the label stays laid out (invisible) and the spinner sits on top. */
@@ -48,17 +48,17 @@
 .onboarding--wide { max-width: 920px; }
 .onboarding-intro { display: flex; flex-direction: column; gap: var(--space-8); }
 .onboarding-intro--center { align-items: center; text-align: center; }
-.onboarding-title { font-size: 28px; line-height: 34px; font-weight: var(--font-weight-bold); letter-spacing: -.5px; text-wrap: balance; }
+.onboarding-title { font-size: var(--text-display); line-height: var(--leading-xl); font-weight: var(--font-weight-bold); letter-spacing: -.5px; text-wrap: balance; }
 
 /* Sending choice: two substantial wells, each its name and the one fact that decides it, a stronger step on hover and
    focus, pressing in on click. */
 .onboarding-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-16); }
-.onboarding-option { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-6); min-width: 0; padding: var(--space-24); border: 0; border-radius: 8px; background: var(--color-well, var(--color-layer-1)); box-shadow: none; color: var(--color-text); font: inherit; text-align: left; cursor: pointer; transition: background-color 100ms ease-out, transform 180ms var(--ease-out-strong); }
+.onboarding-option { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-6); min-width: 0; padding: var(--space-24); border: 0; border-radius: var(--radius-lg); background: var(--color-well, var(--color-layer-1)); box-shadow: none; color: var(--color-text); font: inherit; text-align: left; cursor: pointer; transition: background-color 100ms ease-out, transform 180ms var(--ease-out-strong); }
 .onboarding-option:focus-visible { background: var(--color-well-hover, var(--color-layer-2)); }
 .onboarding-option:focus-visible .onboarding-option-go { color: var(--color-text); }
 .onboarding-option:focus-visible .onboarding-option-icon { background: var(--color-contrast); color: var(--color-on-contrast); }
 .onboarding-option:active { transform: scale(.985); transition-duration: 100ms; }
-.onboarding-option-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; margin-bottom: var(--space-12); border-radius: 8px; background: none; color: var(--color-text); transition: background-color 100ms ease-out, color 100ms ease-out; }
+.onboarding-option-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; margin-bottom: var(--space-12); border-radius: var(--radius-lg); background: none; color: var(--color-text); transition: background-color 100ms ease-out, color 100ms ease-out; }
 .onboarding-option-icon > svg { width: 16px; height: 16px; }
 .onboarding-option-icon--aws > svg { width: 24px; height: 24px; }
 .onboarding-option-title { font-size: var(--text-md); line-height: 22px; font-weight: var(--font-weight-bold); letter-spacing: -.1px; }
@@ -79,18 +79,20 @@
 .onboarding-field { flex: 1; min-width: 0; }
 .onboarding-field .ui-field__hint { overflow-wrap: anywhere; }
 /* Line up with the input, below its label. */
-.onboarding-inline-form > .ui-button { height: 36px; margin-top: calc(var(--leading-sm) + var(--space-8)); }
+.onboarding-inline-form > .ui-button { height: var(--onb-control-height); margin-top: calc(var(--leading-sm) + var(--space-8)); }
 .onboarding-skip { min-height: 32px; padding: 0 var(--space-4); border: 0; background: none; color: var(--color-muted); font-size: var(--text-sm); text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 4px; transition: color 100ms ease-out, text-decoration-color 100ms ease-out; }
+/* Its words start on the column, as Back's do: the button's inset hangs outside it. */
+.onboarding-skip:not(.connect-another) { margin-inline-start: calc(-1 * var(--space-4)); }
 @media (hover: hover) and (pointer: fine) { .onboarding-skip:hover:not(:disabled) { color: var(--color-text); text-decoration-color: currentColor; transition-duration: 0ms; } }
 .onboarding-skip:focus-visible { color: var(--color-text); text-decoration-color: currentColor; }
 
 /* Connect AWS (BYO step 2): one task, a live status in one solid well (its state in the ink and the mark, never a tinted
    box), and clear ways out. */
-.onboarding-back { display: inline-flex; align-items: center; gap: var(--space-4); align-self: flex-start; min-height: 24px; margin: 0 0 var(--space-4) calc(-1 * var(--space-4)); padding: 0 var(--space-4); border: 0; border-radius: 4px; background: none; color: var(--color-muted); font-size: var(--text-sm); transition: color 100ms ease-out; }
+.onboarding-back { display: inline-flex; align-items: center; gap: var(--space-4); align-self: flex-start; min-height: 24px; margin: 0 0 var(--space-4) calc(-1 * var(--space-4)); padding: 0 var(--space-4); border: 0; border-radius: var(--radius-xs); background: none; color: var(--color-muted); font-size: var(--text-sm); transition: color 100ms ease-out; }
 @media (hover: hover) and (pointer: fine) { .onboarding-back:hover:not(:disabled) { color: var(--color-text); transition-duration: 0ms; } }
 .onboarding-back:focus-visible { color: var(--color-text); }
 .onboarding-connect-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-8); }
-.onboarding-connect-status { display: flex; align-items: flex-start; gap: var(--space-12); padding: 14px var(--space-16); border-radius: 8px; background: var(--color-well, var(--color-layer-1)); font-size: var(--text-sm); line-height: var(--leading-sm); transition: color 240ms ease; }
+.onboarding-connect-status { display: flex; align-items: flex-start; gap: var(--space-12); padding: var(--space-12) var(--space-16); border-radius: var(--radius-lg); background: var(--color-well, var(--color-layer-1)); font-size: var(--text-sm); line-height: var(--leading-sm); transition: color 240ms ease; }
 .onboarding-connect-status p { display: grid; }
 .onboarding-connect-status strong { font-weight: var(--font-weight-bold); }
 .onboarding-connect-status[data-state='ready'] { color: var(--color-success); }
@@ -109,7 +111,7 @@
 .onboarding-connect-status[data-state='ready'] .onboarding-connect-mark > svg:first-of-type,
 .onboarding-connect-status[data-state='failed'] .onboarding-connect-mark > svg:last-of-type { opacity: 1; transform: none; }
 /* The disclosure sits last, so opening it never moves anything above. */
-.onboarding-disclosure { display: inline-flex; align-items: center; gap: var(--space-6); min-height: 28px; margin-left: calc(-1 * var(--space-4)); padding: 0 var(--space-4); border: 0; border-radius: 4px; background: none; color: var(--color-muted); font-size: var(--text-sm); transition: color 100ms ease-out; }
+.onboarding-disclosure { display: inline-flex; align-items: center; gap: var(--space-6); min-height: 28px; margin-left: calc(-1 * var(--space-4)); padding: 0 var(--space-4); border: 0; border-radius: var(--radius-xs); background: none; color: var(--color-muted); font-size: var(--text-sm); transition: color 100ms ease-out; }
 .onboarding-disclosure svg { transition: transform 160ms var(--ease-out-strong); }
 .onboarding-disclosure[aria-expanded='true'] svg { transform: rotate(90deg); }
 @media (hover: hover) and (pointer: fine) { .onboarding-disclosure:hover { color: var(--color-text); transition-duration: 0ms; } }
@@ -132,7 +134,7 @@
 
 /* Imported domains: plain rows, apart by spacing and alignment alone. */
 .onboarding-imported { margin: 0; padding: 0; list-style: none; }
-.onboarding-imported li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); padding-block: 10px; }
+.onboarding-imported li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); min-height: var(--row-height-lg); padding-block: var(--space-8); }
 .onboarding-imported code { min-width: 0; font-size: var(--text-sm); line-height: var(--leading-sm); overflow-wrap: anywhere; }
 .onboarding-builtin-name { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
 .onboarding-builtin-copy { margin: 0; }
@@ -140,14 +142,14 @@
 /* DNS step */
 .onboarding-domain-title { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-8) var(--space-12); }
 .onboarding-domain-title > span:first-child { overflow-wrap: anywhere; }
-.onboarding-domain-title .live-status { min-height: 24px; padding: 1px var(--space-8); font-size: var(--text-xs); line-height: var(--leading-sm); letter-spacing: normal; font-weight: var(--font-weight-regular); }
+.onboarding-domain-title .live-status { min-height: 24px; padding: 0 var(--space-8); font-size: var(--text-xs); line-height: var(--leading-sm); letter-spacing: normal; font-weight: var(--font-weight-regular); }
 /* A verified domain: Continue's bar runs down for as long as the flow waits before moving on by itself. */
 .onboarding-continue { position: relative; overflow: hidden; }
 .onboarding-continue[data-timer]::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--color-success-marker); transform-origin: left; animation: onboarding-timer 2500ms linear both; }
 @keyframes onboarding-timer { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 
 /* Sticky action bar: content fades out beneath it instead of being cropped. */
-.onboarding-actions { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: var(--space-16); margin-top: calc(-1 * var(--space-8)); padding: 14px 0 18px; background: var(--color-surface); }
+.onboarding-actions { position: sticky; bottom: 0; z-index: 2; display: flex; align-items: center; justify-content: flex-end; gap: var(--space-16); margin-top: calc(-1 * var(--space-8)); padding: var(--space-16) 0; background: var(--color-surface); }
 .onboarding-actions::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 24px; background: linear-gradient(to bottom, transparent, var(--color-surface)); pointer-events: none; }
 .onboarding-step:has(.onboarding-actions) { padding-bottom: var(--space-8); }
 
@@ -159,33 +161,30 @@
 .onboarding-test .first-send-test .muted { font-size: var(--text-sm); line-height: var(--leading-sm); }
 
 
-/* The focus step and the steps each focus leads to (focus-steps.tsx): a list of tasks, each its icon, title and one line
-   with its action at the end; a done task's icon turns into a check. Every action sits in a slot that holds its place
+/* The focus step and the steps each focus leads to (focus-steps.tsx): a list of tasks, each a well (as the focus choices
+   are) with its icon, title and one line, its action at the end; a done task's icon turns into a check. Every action sits in a slot that holds its place
    (.onboarding-slot), so nothing moves as drafts and names land. */
-.focus-tasks { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
-.focus-task { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-12); min-height: 64px; padding-block: var(--space-12); border-top: 1px solid var(--color-border); }
-.focus-task:last-child { border-bottom: 1px solid var(--color-border); }
-.focus-task__icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: var(--color-layer-2); color: var(--color-text); }
+.focus-tasks { display: flex; flex-direction: column; gap: var(--space-8); margin: 0; padding: 0; list-style: none; }
+.focus-task { display: grid; grid-template-columns: 32px minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-12); min-height: 64px; padding: var(--space-12) var(--space-16) var(--space-12) var(--space-12); border-radius: var(--radius-lg); background: var(--color-well, var(--color-layer-1)); }
+.focus-task__icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--radius-lg); background: var(--color-layer-2); color: var(--color-text); }
 .focus-task[data-done] .focus-task__icon { background: var(--color-success-marker); color: var(--color-surface); }
-.focus-task__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.focus-task__text { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
 .focus-task__title { font-weight: var(--font-weight-bold); line-height: 22px; overflow-wrap: anywhere; }
 .focus-task__line { color: var(--color-muted); font-size: var(--text-sm); line-height: var(--leading-sm); }
 .focus-task__action { display: flex; justify-content: flex-end; min-width: 0; }
 .focus-task__slot { justify-items: end; }
 .focus-task__slot[data-pending], .focus-task__copy[data-pending] { opacity: .45; }
 .focus-name { display: flex; gap: var(--space-6); }
-.focus-name .ui-input { width: 180px; height: 26px; font-size: var(--text-sm); }
+.focus-name .ui-input { width: 180px; height: var(--control-height-sm); font-size: var(--text-sm); }
 .focus-ramp { margin: 0; font-size: var(--text-sm); line-height: var(--leading-sm); }
 .focus-ramp a { color: var(--color-text); }
 .focus-inline-error { font-size: var(--text-sm); }
-.onboarding--focus .onboarding-skip { margin-left: var(--space-4); }
 /* Arriving mail: room for three messages from the first frame, so mail landing moves nothing under it. */
 .focus-mail { display: flex; flex-direction: column; gap: var(--space-8); }
 .focus-mail__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); }
 .focus-mail__head h2 { font-size: var(--text-sm); line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
-.focus-mail__list { display: flex; flex-direction: column; min-height: calc(3 * 40px); margin: 0; padding: 0; list-style: none; border-radius: 8px; background: var(--color-layer-1); }
+.focus-mail__list { display: flex; flex-direction: column; min-height: calc(3 * 40px); margin: 0; padding: 0; list-style: none; border-radius: var(--radius-lg); background: var(--color-layer-1); }
 .focus-mail__list > li { display: grid; grid-template-columns: 13rem minmax(0, 1fr) auto; align-items: center; gap: var(--space-12); height: 40px; padding-inline: var(--space-12); font-size: var(--text-sm); }
-.focus-mail__list > li + li { border-top: 1px solid var(--color-border); }
 .focus-mail__from, .focus-mail__subject { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .focus-mail__list > .focus-mail__empty { display: flex; flex: 1; height: auto; justify-content: center; gap: var(--space-8); text-align: center; }
 @media (max-width: 640px) {
@@ -193,16 +192,16 @@
   .focus-task__action { grid-column: 2; justify-content: flex-start; }
   .focus-task__slot { justify-items: start; }
   .focus-name { width: 100%; }
-  .focus-name .ui-input { flex: 1; width: auto; height: 44px; font-size: 16px; }
+  .focus-name .ui-input { flex: 1; width: auto; height: 44px; font-size: var(--text-lg); }
   .focus-task .ui-button--sm { min-height: 44px; }
   .focus-mail__list { min-height: calc(3 * 56px); }
-  .focus-mail__list > li { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; row-gap: 2px; height: 56px; }
+  .focus-mail__list > li { grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: auto auto; row-gap: var(--space-4); height: 56px; }
   .focus-mail__from { grid-row: 1; }
   .focus-mail__subject { grid-row: 2; grid-column: 1 / -1; color: var(--color-muted); }
 }
 
 /* Key hints (keys.tsx): set into the control they belong to; ui.css hides them on touch screens and below 900 px. */
-.onboarding-surface .onb-kbd { margin-inline-end: -4px; background: var(--color-kbd-inset); }
+.onboarding-surface .onb-kbd { margin-inline-end: calc(-1 * var(--space-4)); background: var(--color-kbd-inset); }
 .onboarding-surface .ui-button--primary > .onb-kbd { background: color-mix(in oklab, var(--color-on-accent) 16%, transparent); color: var(--color-on-accent-muted); }
 .onboarding-skip:has(.onb-kbd) { display: inline-flex; align-items: center; gap: var(--space-8); }
 
@@ -215,13 +214,13 @@
 .onb-provisioning__track > span { position: absolute; inset: 0; background: var(--color-text); transform-origin: left; animation: onb-provision 1.6s cubic-bezier(.4, 0, .2, 1) infinite; }
 .onb-provisioning[data-state='done'] .onb-provisioning__track > span { animation: none; transform: none; transition: transform 300ms var(--ease-out-strong); }
 @keyframes onb-provision { 0% { transform: translateX(-100%) scaleX(.35); } 60% { transform: translateX(60%) scaleX(.5); } 100% { transform: translateX(100%) scaleX(.35); } }
-.onb-provisioning__label { margin: 0; padding-top: 10px; color: var(--color-muted); font-size: var(--text-xs); line-height: 16px; text-align: center; }
+.onb-provisioning__label { margin: 0; padding-top: var(--space-8); color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); text-align: center; }
 
 /* The first email (email-step.tsx): the email as it will arrive, From and To above its subject and words, the fields a
    solid control fill. Sent, it stays where it is, read-only, and its footer says Sent. */
 .onb-annotated { position: relative; }
-.onb-mail { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-16); border-radius: 10px; background: var(--color-well, var(--color-layer-1)); }
-.onb-mail__head { display: flex; flex-direction: column; gap: 2px; margin: 0 0 var(--space-4); padding-inline: var(--space-12); font-size: var(--text-sm); line-height: var(--leading-sm); }
+.onb-mail { display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-16); border-radius: var(--radius-lg); background: var(--color-well, var(--color-layer-1)); }
+.onb-mail__head { display: flex; flex-direction: column; gap: var(--space-4); margin: 0 0 var(--space-4); padding-inline: var(--space-12); font-size: var(--text-sm); line-height: var(--leading-sm); }
 .onb-mail__head > div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: var(--space-8); }
 .onb-mail__head dt { color: var(--color-muted); }
 .onb-mail__head dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
@@ -238,7 +237,7 @@
 
 /* The reply: room for it from the send on, the wait and the reply in one cell, so it landing moves nothing below. */
 .onb-reply-slot > * { min-width: 0; }
-.onb-waiting { display: flex; align-items: center; justify-content: center; gap: var(--space-8); align-self: stretch; min-height: 120px; border-radius: 10px; background: var(--color-layer-1); color: var(--color-muted); font-size: var(--text-sm); transition: opacity 200ms ease-out; }
+.onb-waiting { display: flex; align-items: center; justify-content: center; gap: var(--space-8); align-self: stretch; min-height: 120px; border-radius: var(--radius-lg); background: var(--color-layer-1); color: var(--color-muted); font-size: var(--text-sm); transition: opacity 200ms ease-out; }
 .onb-waiting:not([data-active]) { opacity: 0; }
 .onb-mail--reply { gap: var(--space-6); }
 .onb-mail__words { padding-inline: var(--space-12); }
@@ -261,7 +260,7 @@
 .onb-callout .onb-num { color: var(--color-text); }
 @media (max-width: 1239px) {
   .onb-callout { position: static; width: auto; margin-top: var(--space-8); padding-left: var(--space-4); transform: none; align-items: stretch; }
-  .onb-callout__line { flex: 0 0 1px; height: auto; margin: 2px var(--space-12) 2px var(--space-4); transform-origin: top; transform: scaleY(0); }
+  .onb-callout__line { flex: 0 0 1px; height: auto; margin: var(--space-4) var(--space-12) var(--space-4) var(--space-4); transform-origin: top; transform: scaleY(0); }
   .onb-callout__line::before { top: -3px; left: -2px; }
   .onb-callout__body { flex: 1; }
   .onb-callout__row { justify-content: flex-start; }
@@ -270,12 +269,12 @@
 /* "What do you want to do?" (focus-steps.tsx FocusStep): five rows, each its icon, name, one line and the number that
    picks it; a tap, a click or the number opens its next screen. */
 .onb-choices { display: flex; flex-direction: column; gap: var(--space-8); }
-.onb-choice { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-12); min-height: 64px; padding: var(--space-12) var(--space-16) var(--space-12) var(--space-12); border: 0; border-radius: 10px; background: var(--color-well, var(--color-layer-1)); color: var(--color-text); font: inherit; text-align: left; cursor: pointer; transition: background-color 100ms ease-out, transform 180ms var(--ease-out-strong); }
+.onb-choice { display: grid; grid-template-columns: 36px minmax(0, 1fr) auto; align-items: center; column-gap: var(--space-12); min-height: 64px; padding: var(--space-12) var(--space-16) var(--space-12) var(--space-12); border: 0; border-radius: var(--radius-lg); background: var(--color-well, var(--color-layer-1)); color: var(--color-text); font: inherit; text-align: left; cursor: pointer; transition: background-color 100ms ease-out, transform 180ms var(--ease-out-strong); }
 .onb-choice:active { transform: scale(.99); transition-duration: 100ms; }
 .onb-choice:focus-visible, .onb-choice[aria-pressed='true'] { background: var(--color-well-hover, var(--color-layer-2)); }
-.onb-choice__icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 8px; background: var(--color-layer-2, var(--color-layer-1)); transition: background-color 100ms ease-out, color 100ms ease-out; }
+.onb-choice__icon { display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--radius-lg); background: var(--color-layer-2, var(--color-layer-1)); transition: background-color 100ms ease-out, color 100ms ease-out; }
 .onb-choice:focus-visible .onb-choice__icon, .onb-choice[aria-pressed='true'] .onb-choice__icon { background: var(--color-contrast); color: var(--color-on-contrast); }
-.onb-choice__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.onb-choice__text { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
 .onb-choice__title { font-size: var(--text-md); line-height: 22px; font-weight: var(--font-weight-bold); letter-spacing: -.1px; }
 .onb-choice__line { color: var(--color-muted); font-size: var(--text-sm); line-height: var(--leading-sm); }
 .onb-choice__go { display: inline-flex; align-items: center; gap: var(--space-8); color: var(--color-muted); }
@@ -325,13 +324,13 @@
   .onboarding-disclosure::after { content: ''; position: absolute; inset: -8px 0; }
   .onboarding-skip::after { content: ''; position: absolute; inset: -6px 0; }
   .onboarding { gap: var(--space-20); }
-  .onboarding-title { font-size: 24px; line-height: 30px; letter-spacing: -.4px; }
+  .onboarding-title { font-size: var(--text-xl); line-height: var(--leading-xl); letter-spacing: -.4px; }
   .onboarding-options { grid-template-columns: 1fr; gap: var(--space-12); }
-  .onboarding-option { min-height: 0; padding: 18px; }
+  .onboarding-option { min-height: 0; padding: var(--space-16); }
   .onboarding-option-icon { margin-bottom: var(--space-6); }
   .onboarding-inline-form { flex-direction: column; align-items: stretch; }
   .onboarding-inline-form > .ui-button { margin-top: 0; height: 44px; }
-  .onboarding-surface .ui-input { height: 44px; font-size: 16px; }
+  .onboarding-surface .ui-input { height: 44px; font-size: var(--text-lg); }
   .onboarding-connect-actions { flex-direction: column; align-items: stretch; }
   /* The agent prompt's copy takes the row; the docs and the download share the next. */
   .onboarding-agent .onboarding-connect-actions { flex-direction: row; flex-wrap: wrap; }

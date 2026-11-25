@@ -3,12 +3,12 @@
    out, so an arrival moves nothing on screen. The group runs right to left (direction) so that its own start is its
    right edge, which stays put as it grows; the faces inside read left to right. */
 .campaign-presence { display: flex; direction: rtl; align-items: center; gap: var(--space-4); flex: none; margin-right: var(--space-4); }
-.campaign-presence__face { direction: ltr; position: relative; display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--presence-color, var(--color-layer-3)); color: #fff; font-size: 10px; font-weight: var(--font-weight-bold); letter-spacing: 0; line-height: 1; cursor: default; animation: presence-in 160ms ease-out; }
-.campaign-presence__face[data-kind='agent'] { border-radius: 8px; background: var(--color-layer-3); color: var(--color-text); }
+.campaign-presence__face { direction: ltr; position: relative; display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 50%; background: var(--presence-color, var(--color-layer-3)); color: #fff; font-size: var(--text-label); font-weight: var(--font-weight-bold); letter-spacing: 0; line-height: 1; cursor: default; animation: presence-in 160ms ease-out; }
+.campaign-presence__face[data-kind='agent'] { border-radius: var(--radius-lg); background: var(--color-layer-3); color: var(--color-text); }
 .campaign-presence__face[data-empty] { visibility: hidden; animation: none; }
 .campaign-presence__more { background: var(--color-layer-3); color: var(--color-text); }
 /* A phone's one face: how many others are here, in its corner. */
-.campaign-presence__count { position: absolute; right: -10px; bottom: -3px; display: grid; place-items: center; min-width: 15px; height: 15px; padding-inline: 3px; border: 2px solid var(--color-surface); border-radius: 8px; background: var(--color-text); color: var(--color-surface); font-size: 9px; line-height: 1; }
+.campaign-presence__count { position: absolute; right: -10px; bottom: -3px; display: grid; place-items: center; min-width: 15px; height: 15px; padding-inline: var(--space-4); border: 2px solid var(--color-surface); border-radius: var(--radius-lg); background: var(--color-text); color: var(--color-surface); font-size: var(--text-label); line-height: 1; }
 /* The bar's end column grows with its content below 1,100 px: the one face's place is kept from the first frame. */
 @media (max-width: 1100px) { .campaign-presence[data-reserve] { width: 26px; } }
 @keyframes presence-in { from { opacity: 0; } }

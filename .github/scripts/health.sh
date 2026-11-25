@@ -6,4 +6,6 @@ set -euo pipefail
 for origin in "$@"; do
   curl --fail --silent --show-error --max-time 10 --retry 36 --retry-delay 10 --retry-all-errors --doh-url https://cloudflare-dns.com/dns-query "$origin/health" |
     jq -e '.status == "ok" and (.service == "nightmail" or .service == "bane" or .service == "opensend") and .multiTenant == true' || { echo "Invalid or unavailable $origin/health" >&2; exit 1; }
+  curl --fail --silent --show-error --max-time 10 --retry 18 --retry-delay 10 --retry-all-errors --doh-url https://cloudflare-dns.com/dns-query "$origin/health/ready" |
+    jq -e '.status == "ok" and .database == "ok" and (.service == "nightmail" or .service == "bane" or .service == "opensend") and .multiTenant == true' || { echo "Invalid or unavailable $origin/health/ready" >&2; exit 1; }
 done

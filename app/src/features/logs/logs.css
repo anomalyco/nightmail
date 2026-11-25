@@ -4,11 +4,11 @@
    the delivery runs on one line under the facts and the checks open beside the preview from its toolbar. A phone or
    tablet reads the email first: a short header with its status, one row of controls, the email edge to edge, and
    everything else in sheets. */
-.email-detail { --side-width: clamp(280px, 22cqi, 380px); container-type: inline-size; display: flex; flex-direction: column; min-width: 0; }
+.email-detail { --side-width: clamp(280px, 22cqi, 380px); --details-width: 320px; container-type: inline-size; display: flex; flex-direction: column; min-width: 0; }
 .page-surface .email-detail > .ui-page-header { flex: none; flex-wrap: nowrap; align-items: flex-start; margin-bottom: var(--space-16); }
 .page-surface .email-detail > .ui-page-header > .cluster:first-child { flex: 1 1 0; flex-wrap: nowrap; align-items: flex-start; min-width: 0; max-width: none; }
 .page-surface .email-detail > .ui-page-header > .cluster:last-child:not(:first-child) { flex: none; align-items: center; min-height: var(--control-height); }
-.email-detail .ui-page-header__text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.email-detail .ui-page-header__text { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
 /* The desktop's DetailHeader: the title on its own line box, the back button set level with it (ui.css). */
 .page-surface .email-detail > .ui-page-header--eyebrow h1 { padding-block: 0; }
 .email-detail > .ui-page-header--eyebrow .ui-page-header__text { gap: var(--space-4); }
@@ -22,17 +22,17 @@
 .email-facts :is(.email-sender > span, .email-sender__address) { min-width: 0; overflow: clip; text-overflow: ellipsis; }
 .email-facts .private-address { min-width: 0; }
 .email-facts .private-address__value, .email-facts .email-sender .private-address[data-revealed] > .private-address__value { flex: 0 1 auto; min-width: 0; overflow: clip; white-space: nowrap; overflow-wrap: normal; text-overflow: ellipsis; }
-.email-facts__contact { display: inline-flex; align-items: center; gap: 2px; min-width: 0; border-radius: 2px; color: inherit; text-decoration: none; }
+.email-facts__contact { display: inline-flex; align-items: center; gap: var(--space-4); min-width: 0; border-radius: var(--radius-xs); color: inherit; text-decoration: none; }
 .email-facts__contact > svg { flex: none; color: var(--color-faint); }
 @media (hover: hover) and (pointer: fine) { .email-facts__contact:hover, .email-facts__contact:hover > svg { color: var(--color-text); } }
 .email-facts__contact:focus-visible, .email-facts__contact:focus-visible > svg { color: var(--color-text); }
-.email-facts__note { border-radius: 2px; cursor: default; }
+.email-facts__note { border-radius: var(--radius-xs); cursor: default; }
 /* Delivery: one line of steps, oldest first, joined by a faint chevron (no rule), that scrolls sideways when long. */
 .delivery { display: flex; flex: none; align-items: center; gap: var(--space-12); min-width: 0; min-height: var(--control-height); margin-bottom: var(--space-16); }
 .delivery__steps { --fade-pad-x: var(--focus-reach); --fade-pad-y: var(--focus-reach); display: flex; align-items: center; min-width: 0; margin: calc(-1 * var(--focus-reach)); padding: var(--focus-reach); overflow-x: auto; list-style: none; white-space: nowrap; }
 .delivery__step { display: flex; flex: none; align-items: center; }
 .delivery__step + .delivery__step::before { content: '›'; flex: none; margin-inline: var(--space-8); color: var(--color-faint); }
-.delivery__fact { display: inline-flex; align-items: center; gap: var(--space-6); border-radius: 2px; color: var(--color-text); text-decoration: none; cursor: default; }
+.delivery__fact { display: inline-flex; align-items: center; gap: var(--space-6); border-radius: var(--radius-xs); color: var(--color-text); text-decoration: none; cursor: default; }
 .delivery__dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--tone-marker); }
 .delivery__count, .delivery__time { color: var(--color-muted); font-variant-numeric: tabular-nums; }
 /* Why it ended this way, under the steps: one sentence, then the receiving server's own reply, quieter and on one line
@@ -45,12 +45,12 @@
 .delivery[data-vertical] .delivery__said { display: -webkit-box; margin-top: var(--space-4); line-height: var(--leading-xs); overflow-wrap: anywhere; white-space: normal; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .email-detail-sheet .delivery[data-vertical] .delivery__said { display: block; margin-top: 0; }
 .delivery .delivery__said[data-open] { display: block; overflow: visible; overflow-wrap: anywhere; white-space: normal; }
-.delivery__said[role='button'] { border-radius: 2px; cursor: pointer; }
+.delivery__said[role='button'] { border-radius: var(--radius-xs); cursor: pointer; }
 @media (hover: hover) and (pointer: fine) { .delivery__said[role='button']:hover { color: var(--color-text); } }
 .delivery__said[role='button']:focus-visible { color: var(--color-text); }
 .delivery__zone { color: var(--color-faint); font-size: var(--text-xs); }
 .delivery > .ui-alert { flex: 1; }
-.delivery-tip { display: flex; flex-direction: column; gap: 2px; }
+.delivery-tip { display: flex; flex-direction: column; gap: var(--space-4); }
 .delivery-tip code { font-family: var(--font-mono); }
 /* Vertical (the details column, a phone): a step per row with its time at the end, rows apart by their rhythm. */
 .delivery[data-vertical] { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: var(--space-8); margin-bottom: 0; }
@@ -87,12 +87,12 @@
 .email-detail[data-mode='stack'] > .ui-page-header { flex-wrap: wrap; margin-bottom: var(--space-12); }
 .page-surface .email-detail[data-mode='stack'] > .ui-page-header > .cluster:first-child { flex-basis: 100%; flex-wrap: wrap; row-gap: var(--space-8); }
 .email-detail[data-mode='stack'] .ui-page-header__text { display: contents; }
-.page-surface .email-detail[data-mode='stack'] > .ui-page-header h1 { --title-line: 24px; flex: 1 1 0; font-size: 17px; font-weight: var(--font-weight-bold); line-height: var(--title-line); }
-.email-subject { display: -webkit-box; overflow: hidden; border-radius: 2px; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.page-surface .email-detail[data-mode='stack'] > .ui-page-header h1 { --title-line: var(--leading-title); flex: 1 1 0; font-size: var(--text-title); font-weight: var(--font-weight-bold); line-height: var(--title-line); }
+.email-subject { display: -webkit-box; overflow: hidden; border-radius: var(--radius-xs); -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .email-subject[data-open] { display: block; }
 .email-subject[role='button'] { cursor: pointer; }
 .email-status { display: flex; flex-basis: 100%; align-items: center; gap: var(--space-12); min-width: 0; min-height: 28px; }
-.email-status__facts { position: relative; display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--space-8); min-width: 0; padding: 0; border: 0; border-radius: 2px; background: none; color: var(--color-muted); font: inherit; text-align: left; white-space: nowrap; }
+.email-status__facts { position: relative; display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--space-8); min-width: 0; padding: 0; border: 0; border-radius: var(--radius-xs); background: none; color: var(--color-muted); font: inherit; text-align: left; white-space: nowrap; }
 .email-status__facts::before { content: ''; position: absolute; inset: -8px -6px; }
 .email-status__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .email-status__text time { font-variant-numeric: tabular-nums; }
@@ -140,7 +140,6 @@
    toolbar's pickers filter instead. The stream column needs a wider window still: Transactional reads in full or not at all. */
 .ui-split.logs-split { --facet-width: 228px; flex: 1; min-height: 0; }
 .logs-split > .ui-split__main > :not(.logs-table) { flex-shrink: 0; }
-.logs-split .ui-facets { padding-top: 2px; }
 @media (max-width: 1439px) {
   .ui-split.logs-split { grid-template-columns: minmax(0, 1fr); }
   .ui-split.logs-split > .ui-split__rail { display: none; }
@@ -192,7 +191,7 @@
 .logs-table :is(td, .ui-card__segment) .private-address > :not(.private-address__value) { flex: none; }
 .logs-table :is(td, .ui-card__segment) .private-address__value { flex: 0 1 auto; min-width: 0; overflow: hidden; }
 .logs-table td .private-address { display: flex; }
-.ui-cards.logs-table .ui-card__segment:has(.private-address) { display: flex; gap: .3em; }
+.ui-cards.logs-table .ui-card__segment:has(.private-address) { display: flex; gap: var(--space-4); }
 .ui-cards.logs-table .ui-card__segment > .private-address { min-width: 0; }
 /* A scheduled email's Reschedule dialog: its buttons on the right, like every form dialog's. */
 .logs-dialog-actions { justify-content: flex-end; }
@@ -213,7 +212,7 @@
 .thread-line__step { position: relative; }
 /* Two short lines per message: the sender first (it never gives way to the status), its time at the end; the status
    under the sender in small mono. */
-.thread-line__entry { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; grid-template-areas: 'dot top time' '. status status'; align-items: center; column-gap: var(--space-12); min-height: 44px; margin-inline: calc(-1 * var(--space-8)); padding: var(--space-4) var(--space-8); border-radius: 4px; color: var(--color-text); text-decoration: none; }
+.thread-line__entry { display: grid; grid-template-columns: 6px minmax(0, 1fr) auto; grid-template-areas: 'dot top time' '. status status'; align-items: center; column-gap: var(--space-12); min-height: 44px; margin-inline: calc(-1 * var(--space-8)); padding: var(--space-4) var(--space-8); border-radius: var(--radius-xs); color: var(--color-text); text-decoration: none; }
 .thread-line__dot { grid-area: dot; width: 6px; height: 6px; border-radius: 50%; background: var(--color-faint); }
 .thread-line__dot[data-outbound] { background: var(--color-text); }
 .thread-line__top { display: flex; grid-area: top; align-items: center; gap: var(--space-8); min-width: 0; }
@@ -239,7 +238,7 @@
 .thread-rows__status { min-width: 0; overflow: hidden; color: var(--color-muted); text-overflow: ellipsis; white-space: nowrap; }
 .thread-rows__more { display: flex; padding-left: var(--space-8); color: var(--color-muted); cursor: pointer; }
 @media (hover: hover) and (pointer: fine) { .thread-rows__row:is(a, button):hover { background: var(--color-hover); } }
-.log-subject > .log-thread { display: inline-flex; flex: none; align-items: center; gap: 3px; height: 18px; padding: 0 5px; overflow: visible; border-radius: var(--radius-xs); background: var(--color-chip); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); font-variant-numeric: tabular-nums; line-height: 18px; }
+.log-subject > .log-thread { display: inline-flex; flex: none; align-items: center; gap: var(--space-4); height: 18px; padding: 0 var(--space-6); overflow: visible; border-radius: var(--radius-xs); background: var(--color-chip); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); font-variant-numeric: tabular-nums; line-height: 18px; }
 
 /* ── Console: Logs and a sent email, edge to edge from 900 px ── */
 /* Logs: one 40px strip (the title, direction, range, search with its / key, filters, export) over the facet rail and
@@ -250,16 +249,17 @@
 .logs-bar__title { margin: 0; font-size: var(--text-title); line-height: var(--leading-title); font-weight: var(--font-weight-semibold); letter-spacing: var(--tracking-title); }
 .logs-bar__region { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); }
 .logs-bar .logs-controls { flex-wrap: nowrap; gap: var(--space-8); }
-.logs-bar .logs-controls .ui-tabs { gap: 0; height: 28px; min-height: 0; margin: 0; padding: 2px; overflow: visible; border-radius: var(--radius-sm); background: var(--color-control); }
+.logs-bar .logs-controls .ui-tabs { gap: 0; height: var(--control-height); min-height: 0; margin: 0; padding: var(--space-2); overflow: visible; border-radius: var(--radius-sm); background: var(--color-control); }
 .logs-bar .logs-controls .ui-tabs__marker { display: none; }
-.logs-bar .logs-controls .ui-tab { height: 24px; padding: 0 var(--space-8); border-radius: 4px; font-size: var(--text-xs); transition: background var(--motion-duration) var(--ease-standard), color var(--motion-duration) var(--ease-standard); }
+.logs-bar .logs-controls .ui-tab { height: calc(var(--control-height) - 2 * var(--space-2)); padding: 0 var(--space-8); border-radius: var(--radius-xs); font-size: var(--text-xs); transition: background var(--motion-duration) var(--ease-standard), color var(--motion-duration) var(--ease-standard); }
 .logs-bar .logs-controls .ui-tabs:last-child .ui-tab { min-width: 38px; font-family: var(--font-mono); }
+.logs-bar .logs-controls .ui-tab::before { content: ''; position: absolute; inset: calc(-1 * var(--space-2)) 0; }
 .logs-bar .logs-controls .ui-tab[aria-selected='true'] { background: var(--color-segment); color: var(--color-text); }
 .logs-bar .logs-controls .ui-tab:focus-visible:not([aria-selected='true']) { background: var(--color-control-focus); }
 .logs-bar .logs-controls .ui-tab[aria-selected='true']:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
 .logs-bar__tools { display: flex; flex: 1; align-items: center; justify-content: flex-end; gap: var(--space-8); min-width: 0; }
 .logs-search.search-box { flex: 1 1 280px; width: auto; min-width: 160px; max-width: 420px; }
-.logs-search.search-box .ui-input { width: 100%; padding-inline-end: 30px; }
+.logs-search.search-box .ui-input { width: 100%; padding-inline-end: var(--space-32); }
 .logs-search > .ui-kbd { position: absolute; right: 5px; background: var(--color-kbd-inset); pointer-events: none; }
 .logs-bar .ui-select-trigger.logs-filter, .logs-bar .logs-filter { width: 140px; min-width: 0; }
 @media (max-width: 1279px) { .logs-export { width: var(--control-height); padding: 0; } .logs-export > span { display: none; } }
@@ -286,8 +286,7 @@
   .ui-split.logs-split { padding: 0; }
   .logs-bar__head { flex: 1 1 100%; flex-wrap: wrap; row-gap: var(--space-8); }
   .logs-bar .logs-controls { margin-left: auto; }
-  .logs-bar .logs-controls .ui-tabs { height: 44px; }
-  .logs-bar .logs-controls .ui-tab { height: 40px; min-width: 44px; }
+  .logs-bar .logs-controls .ui-tab { min-width: 44px; }
   .logs-bar__tools { flex: 1 1 100%; flex-wrap: wrap; justify-content: flex-start; }
   .logs-search.search-box { flex: 1 1 100%; max-width: none; }
   .logs-bar .ui-select-trigger.logs-filter, .logs-bar .logs-filter { flex: 1 1 0; width: auto; }
@@ -312,10 +311,16 @@
 .email-bar__status { display: inline-flex; align-items: center; gap: var(--space-6); color: var(--color-text); font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
 .email-bar .ui-identifier { padding-left: var(--space-4); }
 .email-bar .ui-identifier__value { color: var(--color-muted); font-size: var(--text-xs); }
-.email-detail > .email-facts.ui-facts-row { display: flex; flex: none; gap: var(--space-24); height: 36px; margin: 0 var(--space-16); padding: 0; background: none; }
+/* The facts strip shares the body's columns: From and To over the preview, the rest over the details column (from 1200 px,
+   where the column is always there), Stream's label on the column's edge and the last fact at the strip's end, as the
+   column's times are. A longer group (Region, self-hosted) widens its track rather than clipping. */
+.email-detail > .email-facts { display: grid; flex: none; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-24); height: 36px; margin: 0 var(--space-16); }
+.email-detail[data-mode='column'] > .email-facts { grid-template-columns: minmax(0, 1fr) minmax(var(--details-width), max-content); }
+.email-facts > .ui-facts-row { display: flex; gap: var(--space-24); min-width: 0; margin: 0; padding: 0; background: none; }
+.email-detail[data-mode='column'] > .email-facts > .ui-facts-row:last-child { justify-content: space-between; gap: var(--space-16); }
 .email-facts .ui-facts-row__item { flex-direction: row; align-items: center; gap: var(--space-8); min-width: 0; padding: 0; }
-.email-facts .ui-facts-row__item:nth-child(-n + 2) { flex: 1 1 0; }
-.email-facts .ui-facts-row__item:nth-child(n + 3) { flex: none; }
+.email-facts > .ui-facts-row:first-child > .ui-facts-row__item { flex: 1 1 0; }
+.email-facts > .ui-facts-row:last-child > .ui-facts-row__item { flex: none; }
 .email-facts dt { flex: none; color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
 .email-facts dd { flex: 1 1 auto; height: 16px; font-size: var(--text-xs); line-height: 16px; }
 .email-facts dd.ui-facts-row__mono { font-size: var(--text-xs); }
@@ -333,7 +338,7 @@
   .email-detail .ev[data-fill] .ev-placeholder { background: var(--color-hover); }
   .email-detail .ev-stage:has(iframe:focus-visible) { background: var(--color-hover); }
   /* The inspector: its own solid surface, its sections 20px apart, no rule between them. */
-  .email-detail__side { --fade-pad-y: 0px; gap: var(--space-20); width: 320px; margin: 0 0 0 var(--space-24); padding: var(--space-4) 0; background: none; }
+  .email-detail__side { --fade-pad-y: 0px; gap: var(--space-20); width: var(--details-width); margin: 0 0 0 var(--space-24); padding: var(--space-4) 0; background: none; }
   .email-detail[data-mode='panel'] .email-detail__side { padding-top: var(--space-4); }
   .email-detail__side > * { flex: none; }
   .email-detail__side :is(.ss__title, .thread-line__title) { min-height: 24px; color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }

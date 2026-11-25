@@ -1,9 +1,10 @@
+import { labelSkeleton } from './label-skeleton.js';
 import { sql } from 'drizzle-orm';
 import type { GetEmailIdentityCommandOutput, SESv2Client } from '@aws-sdk/client-sesv2';
 import { ApiError, assertSharedAccount, getSes, id, isSimulatedSes, log, logError, ModuleLoadError, type Config, type Ctx, type DbExecutor, type JobHandler, type Runtime } from './core.js';
 import { JobDeferred } from './jobs.js';
 import { SEND_LIMITS } from './send-limits.js';
-import { ADD_OWN_DOMAIN, BUILTIN_UNSUPPORTED, BUILTIN_UNSUPPORTED_WORDS, builtinLimitsText, type BuiltinUnsupported } from './builtin-limits.js';
+import { ADD_OWN_DOMAIN, BUILTIN_APEX_LOCALS, builtinApex, BUILTIN_UNSUPPORTED, BUILTIN_UNSUPPORTED_WORDS, builtinLimitsText, type BuiltinUnsupported } from './builtin-limits.js';
 import { productName } from './brand.js';
 import { claimTenantName } from './ses-setup.js';
 import { tagKey, hasTags } from './resource-tags.js';
@@ -57,7 +58,19 @@ const PROTECTED = new Set(`paypal apple icloud google gmail microsoft outlook of
 // "Nightmail Support" or "Security Team" must not become nightmail-support-k7.<parent> or security-k7.<parent>.
 const IMPERSONATING = new Set(`nightmail bane opensend anomaly opencode security secure verify verification login signin password postmaster
   noreply donotreply admin administrator abuse hostmaster webmaster`.split(/\s+/).filter(Boolean));
-const IMPERSONATING_PHRASE = /(?:^|-)(?:no-reply|do-not-reply|sign-in|log-in)(?:-|$)/;
+// Short or common words that also occur inside ordinary ones (groups, first, olive, purchase, laws, badminton, designing):
+// these count only as a whole word, or one spelled across words or digits ("U P S", "Up5", "Ch4se"). Every other word
+// counts anywhere in the squashed name ("PaypalBilling", "MyGoogleDesk", "NightmailSupport").
+const WHOLE_WORDS = new Set(`ups irs aws live meta citi bank banking bane chase apple zelle slack zoom stripe secure signin login admin`.split(/\s+/));
+const protectedParts = [...PROTECTED, ...IMPERSONATING].filter(word => !WHOLE_WORDS.has(word)).map(labelSkeleton);
+const compact = (name: string) => labelSkeleton(name.replace(/[^\p{L}\p{N}]/gu, ''));
+/** A name's words: split at anything but letters and digits, at case changes ("MyGmailDesk", "UPSDelivery") and between letters and digits. */
+const tokens = (name: string) => name.normalize('NFKC').match(/\p{Lu}+(?!\p{Ll})|\p{Lu}\p{Ll}*|\p{Ll}+|\p{N}+|[\p{Lo}\p{Lt}\p{Lm}]+/gu) ?? [];
+/** Whether some run of adjacent words, folded like a label, is one of the whole words. */
+const wholeWord = (words: string[]) => words.some((_, i) => {
+  for (let j = i, run = ''; j < words.length && run.length < 8; j++) if (WHOLE_WORDS.has(labelSkeleton(run += words[j]))) return true;
+  return false;
+});
 const FILLER = /^(?:workspace|workspaces|team|org|inc|llc|ltd|co)$/;
 /** The base a workspace name falls back to. */
 export const BUILTIN_FALLBACK = 'mail';
@@ -69,7 +82,8 @@ export const reservedBuiltinLabel = (label: string) => RESERVED.has(label);
 export function builtinBase(name: string) {
   const words = name.normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/['’]/g, '').split(/[^a-z0-9]+/).filter(Boolean);
   const kept = words.filter((word, i) => i === 0 || !FILLER.test(word));
-  if (kept.some(word => PROTECTED.has(word) || IMPERSONATING.has(word)) || IMPERSONATING_PHRASE.test(kept.join('-'))) return BUILTIN_FALLBACK;
+  const original = compact(name.normalize('NFKC')), label = compact(kept.join(''));
+  if (protectedParts.some(part => original.includes(part) || label.includes(part)) || wholeWord(tokens(name)) || wholeWord(kept)) return BUILTIN_FALLBACK;
   let base = '';
   for (const word of kept) {
     const next = base ? `${base}-${word}` : word;
@@ -449,6 +463,43 @@ export async function builtinDomainTick(runtime: Runtime) {
     WHERE dc.workspace_id=b.workspace_id AND dc.name=b.name AND dc.identity ? 'builtin' AND b.revoked_at IS NULL AND dc.receiving_state='active'
       AND dc.receiving_proved_at<now()-interval '12 hours' AND EXISTS (SELECT FROM builtin_parent p WHERE p.name=${parent} AND (p.ok OR p.problem='reputation'))`);
   return queued.length + Number(tripped);
+}
+
+/**
+ * Operator only (scripts/builtin-domain.ts apex): the built-in parent's role addresses (BUILTIN_APEX_LOCALS:
+ * abuse@, postmaster@, dmarc@, tls-reports@ <parent>) for the platform workspace. Its own built-in domain gets a receiving
+ * host for the parent's name, so the parent's role addresses reach it (mailbox-receipts.ts route), and each role address
+ * given gets an exact route to the destinations given (that workspace's inboxes or webhooks), written by the routing
+ * API's own save() and audited. The parent itself is never claimed (its claim would overlap every built-in domain's)
+ * and never sends. Idempotent: a role address routed before has its destinations replaced. Returns the host's ID.
+ */
+export async function ensureBuiltinApex(runtime: Pick<Runtime, 'db' | 'config'>, routes: Partial<Record<(typeof BUILTIN_APEX_LOCALS)[number], string[]>>, operator: string, reason: string) {
+  const { parent, workspace: wid } = builtinApex(runtime.config);
+  if (!parent || !wid) throw new ApiError(409, 'BUILTIN_APEX_UNAVAILABLE', 'Set NIGHTMAIL_BUILTIN_DOMAIN and NIGHTMAIL_PLATFORM_DOMAIN_WORKSPACE first.');
+  const unknown = Object.keys(routes).filter(local => !(BUILTIN_APEX_LOCALS as readonly string[]).includes(local));
+  if (unknown.length) throw new ApiError(422, 'BUILTIN_APEX_ADDRESS', `Only ${BUILTIN_APEX_LOCALS.join(', ')} receive at ${parent}, not ${unknown.join(', ')}.`);
+  const routing = await import('./routing.js'), hostId = id('mdom');
+  return runtime.db.transaction(async tx => {
+    const { rows: [host] } = await tx.execute<{ id: string }>(sql`WITH own AS (SELECT m.id,m.domain_id FROM builtin_domains b
+        JOIN mailbox_domains m ON m.workspace_id=b.workspace_id AND m.name=b.name AND m.parent_id IS NULL AND m.status='active' WHERE b.workspace_id=${wid} AND b.revoked_at IS NULL),
+      existing AS (SELECT m.id FROM mailbox_domains m WHERE m.workspace_id=${wid} AND m.receiving_host=${parent} FOR UPDATE),
+      revived AS (UPDATE mailbox_domains m SET status='active',lost_since=NULL,issue=NULL,parent_id=own.id,domain_id=own.domain_id,updated_at=now() FROM own
+        WHERE m.workspace_id=${wid} AND m.id IN (SELECT id FROM existing) RETURNING m.id),
+      made AS (INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,receiving_host,status,enabled_at,parent_id)
+        SELECT ${hostId},${wid},own.domain_id,${hostId},${BUILTIN_REGION},${parent},'active',now(),own.id FROM own WHERE NOT EXISTS (SELECT FROM existing) RETURNING id)
+      SELECT id FROM revived UNION ALL SELECT id FROM made`);
+    if (!host) throw new ApiError(409, 'BUILTIN_APEX_UNAVAILABLE', 'The platform workspace has no built-in domain that receives yet: its role addresses at the parent arrive through it.');
+    // This workspace's routing state row first, as every routing write takes it, so the version read below holds.
+    await tx.execute(sql`INSERT INTO mail_routing_state(workspace_id) VALUES(${wid}) ON CONFLICT DO NOTHING`);
+    await tx.execute(sql`SELECT FROM mail_routing_state WHERE workspace_id=${wid} FOR UPDATE`);
+    const before = await routing.listRoutes(tx, wid), wanted = new Map(Object.entries(routes).map(([local, to]) => [`${local}@${parent}`, to!]));
+    const after = [...before.filter(r => !wanted.has(r.match)), ...[...wanted].map(([match, to]) =>
+      routing.makeRoute({ match, to, note: `${productName}'s built-in domains' ${match.split('@')[0]} address.` } as Parameters<typeof routing.makeRoute>[0], before.find(r => r.match === match)))];
+    await routing.save(tx, systemCtx(runtime as Runtime, wid), wid, await routing.currentVersion(tx, wid), before, after, { note: 'Built-in parent role addresses' });
+    await tx.execute(sql`INSERT INTO hosted_operator_audit(workspace_id,action,details) VALUES(${wid},'builtin-apex',
+      jsonb_build_object('operator',${operator}::text,'reason',${reason}::text,'parent',${parent}::text,'host',${host.id}::text,'routes',${JSON.stringify(routes)}::jsonb))`);
+    return host.id;
+  });
 }
 
 /** Operator only (scripts/builtin-domain.ts): stops the workspace's built-in domain sending and receiving at once, keeps

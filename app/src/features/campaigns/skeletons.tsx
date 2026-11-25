@@ -98,14 +98,14 @@ export function CampaignRouteSkeleton({ kind, isNew = false }: { kind: 'list' | 
       <div className="campaign-compose-scroll"><div className="studio-notices"><Notices /></div><div className="campaign-compose-sheet">
         <div className="campaign-compose-metadata" aria-hidden="true">
           <div className="campaign-compose-row campaign-compose-sender"><span>From</span><ControlSkeleton /><Button variant="ghost" size="sm" className="campaign-sender-toggle" disabled>Reply-To<Icon icon={ChevronRight} size="sm" /></Button></div>
-          <div className="campaign-compose-row campaign-compose-subject"><span>Subject</span><ControlSkeleton /><Button className="campaign-preview-toggle" variant="ghost" size="sm" disabled>Preview text</Button></div>
+          <div className="campaign-compose-row campaign-compose-subject"><span>Subject</span><ControlSkeleton /><Button className="campaign-preview-toggle" variant="ghost" size="sm" disabled>Preview text<Icon icon={ChevronRight} size="sm" /></Button></div>
         </div>
         <ComposerSkeleton />
       </div></div>
     </LoadingRegion>
   </div>
   return <div className="campaign-review campaign-review--draft">
-    <CampaignBar title={<h1 className="studio-title"><SkeletonText width={220} lineHeight={24} /></h1>} actions={<SkeletonText width={65} lineHeight={20} />} />
+    <CampaignBar title={<h1 className="studio-title"><SkeletonText width={220} lineHeight={24} /></h1>} status={<SkeletonText width={52} lineHeight={20} />} />
     <LoadingRegion label="Loading campaign review" className="review-stages">
       {(['Recipients', 'Message', 'Checks', 'Send'] as const).map((title, index) => <section className="review-stage" data-open={index === 0 || undefined} key={title}>
         <div className="review-stage__head"><span className="campaign-steps__mark review-stage__mark" aria-hidden="true">{index + 1}</span><span className="review-stage__title">{title}</span><span className="review-stage__summary"><SkeletonText width={140} /></span></div>

@@ -5,7 +5,7 @@ import { postgresConnection } from '../src/adapters/node.js';
 import { log } from '../src/core.js';
 import { setOperatorRole, type OperatorRole } from '../src/operator-identity.js';
 
-// Grants or removes a Bane platform operator role (the /operator area and /v1/operator/*). Operators are Anomaly staff,
+// Grants or removes a Nightmail platform operator role (the /operator area and /v1/operator/*). Operators are Anomaly staff,
 // never a workspace role: nobody can grant it from the dashboard. The person is named by issuer subject, never by
 // address: read it from scripts/list-signin-attempts.ts after they signed in once, and confirm it with them.
 //   ACCOUNT_ISSUER=https://account.anoma.ly node --import tsx scripts/set-operator.ts SUBJECT operator|operator:read|off --reason "why"

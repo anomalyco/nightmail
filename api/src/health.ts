@@ -372,7 +372,12 @@ function openLine(f: Finding) {
     case 'campaign-slow': return `Campaign ${subject} has stopped releasing mail`;
     case 'campaign-bounces': return `Campaign ${f.words.replaceAll('`', '')}`;
     case 'server-errors': return `${count(f.value)} requests failed in five minutes`;
-    case 'errors': return 'An inbound mail arrival notice could not be delivered';
+    case 'errors': return subject === 'MAILBOX_STAGING_UNDELIVERED' ? 'An inbound mail arrival notice could not be delivered'
+      : subject === 'SES_ACCOUNT_SENDING_PAUSED' ? 'SES paused sending on a platform account'
+      : subject === 'SES_CREDENTIALS_INVALID' ? 'SES rejected platform AWS credentials'
+      : subject === 'LINK_HOST_AUTH_FAILED' ? 'Cloudflare rejected NIGHTMAIL_LINK_SAAS_TOKEN (401/403)'
+      : subject === 'SUPPORT_LOGS_AUTH_FAILED' ? 'Cloudflare rejected CF_OBSERVABILITY_TOKEN (401/403)'
+      : `Critical error ${subject}: ${count(f.value)} in 5 min`;
     case 'database-errors': return `Database: ${SQLSTATES[subject]?.label ?? subject} (${subject})`;
     case 'database-disk': return `Database disk is ${percent(f.value)} full`;
     default: return `${KINDS[f.kind].label}: ${f.words.replaceAll('`', '')}`;

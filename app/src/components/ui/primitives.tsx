@@ -176,8 +176,9 @@ export function ConfirmDialog({ open, onOpenChange, title, description, confirmL
   return <Dialog open={open} onOpenChange={next => { if (!working) onOpenChange(next); }} returnFocus={returnFocus} title={title} status={danger ? <span className="ui-dialog__dot ui-tone--danger" aria-hidden="true" /> : undefined} description={description} footer={<><Button disabled={working} onClick={() => onOpenChange(false)}>{confirmLabel.startsWith('Cancel') ? 'Go back' : 'Cancel'}</Button><Button variant={danger ? 'danger' : 'primary'} loading={working} onClick={confirm}>{confirmLabel}</Button></>}>{error ? <Alert tone="danger"><ErrorText error={error} fallback={actionFailed} /></Alert> : null}</Dialog>;
 }
 export type MenuItem = { label: string; onSelect: () => void; icon?: ReactNode; destructive?: boolean; disabled?: boolean; hint?: ReactNode };
-// side: where the menu opens from its trigger (below by default; a vertical rail's menus open to its right).
-export function DropdownMenu({ items, label = 'More actions', trigger, title, align = 'end', side, onOpenChange }: { items: MenuItem[]; label?: string; trigger?: ReactNode; title?: ReactNode; align?: 'start' | 'end'; side?: 'top' | 'right' | 'bottom' | 'left'; onOpenChange?: (open: boolean) => void }) {
+// side: where the menu opens from its trigger (below by default; a vertical rail's menus open to its right). offset: the
+// gap to the trigger (a rail's menus clear the rail itself, not only the button).
+export function DropdownMenu({ items, label = 'More actions', trigger, title, align = 'end', side, offset, onOpenChange }: { items: MenuItem[]; label?: string; trigger?: ReactNode; title?: ReactNode; align?: 'start' | 'end'; side?: 'top' | 'right' | 'bottom' | 'left'; offset?: number; onOpenChange?: (open: boolean) => void }) {
   const phone = usePhone();
   const [open, setOpen] = useState(false);
   const opener = useRef<HTMLElement | null>(null);
@@ -192,7 +193,7 @@ export function DropdownMenu({ items, label = 'More actions', trigger, title, al
     const button = trigger && isValidElement(trigger) ? cloneElement(trigger as ReactElement<{ onClick?: (event: { currentTarget: HTMLElement }) => void }>, { onClick: show }) : <IconButton label={label} onClick={show}><Icon icon={MoreHorizontal} size="md" /></IconButton>;
     return <>{button}<ActionSheet open={open} onOpenChange={changeOpen} title={title ?? label} items={items} returnFocus={opener} /></>;
   }
-  return <DropdownPrimitive.Root open={onOpenChange ? open : undefined} onOpenChange={onOpenChange ? changeOpen : undefined}><DropdownPrimitive.Trigger asChild>{trigger ?? <IconButton label={label}><Icon icon={MoreHorizontal} size="md" /></IconButton>}</DropdownPrimitive.Trigger><DropdownPrimitive.Portal><DropdownPrimitive.Content align={align} side={side} sideOffset={side === 'right' || side === 'left' ? 8 : 4} className="ui-popover ui-menu">{items.map((item, index) => <DropdownPrimitive.Item key={`${item.label}-${index}`} onSelect={item.onSelect} disabled={item.disabled} className={cx('ui-menu-item', item.destructive && 'ui-menu-item--danger')}><span className="ui-menu-icon">{item.icon}</span>{item.hint ? <span className="ui-action-sheet__label">{item.label}<span className="ui-action-sheet__hint">{item.hint}</span></span> : item.label}</DropdownPrimitive.Item>)}</DropdownPrimitive.Content></DropdownPrimitive.Portal></DropdownPrimitive.Root>;
+  return <DropdownPrimitive.Root open={onOpenChange ? open : undefined} onOpenChange={onOpenChange ? changeOpen : undefined}><DropdownPrimitive.Trigger asChild>{trigger ?? <IconButton label={label}><Icon icon={MoreHorizontal} size="md" /></IconButton>}</DropdownPrimitive.Trigger><DropdownPrimitive.Portal><DropdownPrimitive.Content align={align} side={side} sideOffset={offset ?? (side === 'right' || side === 'left' ? 8 : 4)} className="ui-popover ui-menu">{items.map((item, index) => <DropdownPrimitive.Item key={`${item.label}-${index}`} onSelect={item.onSelect} disabled={item.disabled} className={cx('ui-menu-item', item.destructive && 'ui-menu-item--danger')}><span className="ui-menu-icon">{item.icon}</span>{item.hint ? <span className="ui-action-sheet__label">{item.label}<span className="ui-action-sheet__hint">{item.hint}</span></span> : item.label}</DropdownPrimitive.Item>)}</DropdownPrimitive.Content></DropdownPrimitive.Portal></DropdownPrimitive.Root>;
 }
 // The actions run once the sheet has started closing, so a confirmation they open takes focus cleanly.
 export function ActionSheet({ open, onOpenChange, title, items, returnFocus }: { open: boolean; onOpenChange: (open: boolean) => void; title: ReactNode; items: MenuItem[]; returnFocus?: RefObject<HTMLElement | null> }) {
@@ -224,9 +225,10 @@ function cardShape<C extends SkeletonColumn>(columns: C[]): CardShape<C> {
   });
   return shape;
 }
-// Every card of a table is the same height (12 px padding, a 20 px title line, 24 px per further line, or the 44 px
-// end control if taller), so its skeleton, a short page and a full page all hold the same space.
-const cardHeight = (shape: CardShape<unknown>) => 25 + Math.max(20 + 24 * shape.lines.length, shape.end.length ? 44 : 0);
+// Every card of a table is the same height (12 px padding above and below, a 20 px title line, 24 px per further line,
+// or the 44 px end control if taller, and the 6 px to the next card: .ui-card in ui.css), so its skeleton, a short page
+// and a full page all hold the same space.
+const cardHeight = (shape: CardShape<unknown>) => 30 + Math.max(20 + 24 * shape.lines.length, shape.end.length ? 44 : 0);
 const cardLabel = (label: ReactNode) => typeof label === 'string' && label ? <span className="ui-card__label">{label}</span> : null;
 // onRowIntent: a pointer resting on a row (not crossing it) or focus on it, before the click: warm what the row opens.
 // rowHref: rows that open a page are real links. The first cell's content is an <a href> (keyboard, middle-click,

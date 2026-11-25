@@ -1,5 +1,5 @@
 import type { Env } from './env.js';
-import { platformBody, type OutboxReply } from './bane.js';
+import { platformBody, type OutboxReply } from './nightmail.js';
 import { INTAKE, type Mailbox } from './intake.js';
 import { countToday, overflowRow, resendNotices } from './limits.js';
 import { replay } from './replay.js';

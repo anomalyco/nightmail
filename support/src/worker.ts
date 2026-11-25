@@ -225,17 +225,20 @@ async function inbound(request: Request, env: Env): Promise<Response> {
 }
 
 /**
- * Nightmail's wake after a staff reply (api/src/support-inbox.ts): `{ conversationId }` and nothing else, unsigned. It only
+ * Nightmail's wake after a staff reply (api/src/support-inbox.ts): `{ conversationId }` and a short-lived signature for that conversation. It only
  * makes that conversation pull its staff replies from Nightmail over the binding now instead of at the next sweep, so it
  * answers 202 whatever the ID (an unknown or closed conversation does nothing) and is rate-limited.
  */
 async function wake(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
   const accepted = new Response(null, { status: 202 });
-  if (env.WAKE && !(await env.WAKE.limit({ key: 'wake' })).success) return new Response(null, { status: 429, headers: { 'retry-after': '60' } });
+  const token = request.headers.get('authorization')?.match(/^Bearer (\S{1,4096})$/)?.[1];
+  if (!token) return new Response(null, { status: 401 });
   const text = await readCappedText(request, MAX_WAKE_BYTES).catch(() => null);
   const body = text ? (() => { try { return JSON.parse(text) as { conversationId?: unknown }; } catch { return null; } })() : null;
   const id = typeof body?.conversationId === 'string' && CONVERSATION_ID.test(body.conversationId) ? body.conversationId : null;
-  if (!id || !(await env.DB.prepare('SELECT 1 FROM conversations WHERE id = ?').bind(id).first())) return accepted;
+  if (!id || !await env.BANE.verifyWake(token, id)) return new Response(null, { status: 401 });
+  if (env.WAKE && !(await env.WAKE.limit({ key: 'wake' })).success) return new Response(null, { status: 429, headers: { 'retry-after': '60' } });
+  if (!(await env.DB.prepare('SELECT 1 FROM conversations WHERE id = ?').bind(id).first())) return accepted;
   ctx.waitUntil(conversation(env, id).wake().then(r => log('info', { event: 'inbox', code: 'SUPPORT_WOKEN', queued: r.queued }), error => logError(error, { event: 'inbox', code: 'SUPPORT_WAKE_FAILED' }, 'warn')));
   return accepted;
 }
@@ -270,12 +273,12 @@ const escape = (s: string) => s.replace(/[&<>"']/g, c => `&#${c.charCodeAt(0)};`
  * nothing from the email: it points to Help, where the person is signed in.
  */
 function confirm(env: Env): Response {
-  return page('Continue in Help', `<h1>Continue in Help</h1><p>To get help with your ${productName} account, sign in to <a href="${new URL(env.BANE_ORIGIN).origin}">${productName}</a> and press Help. There’s nothing to confirm here; you can close this page.</p>`);
+  return page('Continue in Help', `<h1>Continue in Help</h1><p>To get help with your ${productName} account, sign in to <a href="${new URL(env.NIGHTMAIL_ORIGIN).origin}">${productName}</a> and press Help. There’s nothing to confirm here; you can close this page.</p>`);
 }
 
 /** Support chat lives in the dashboard's Help panel; direct visits to / or /chat (such as a handoff URL) land here instead of 404. */
 function supportPage(env: Env): Response {
-  const dashboard = new URL(env.BANE_ORIGIN).origin;
+  const dashboard = new URL(env.NIGHTMAIL_ORIGIN).origin;
   return page(`${productName} Support`, `<h1>${productName} Support</h1><p>Support chat lives in the <a href="${dashboard}">${productName} dashboard</a>. Sign in and open Help, or email <a href="mailto:${addresses.support}">${addresses.support}</a> with your support reference.</p>`);
 }
 

@@ -18,11 +18,11 @@
 .dns-cell { min-width: 0; font-size: var(--text-sm); line-height: var(--leading-sm); }
 .dns-cell code { font-size: var(--text-sm); line-height: var(--leading-sm); }
 .dns-type, .dns-type code { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); }
-.dns-status { display: flex; justify-content: flex-end; padding-top: 2px; }
+.dns-status { display: flex; justify-content: flex-end; }
 /* Text, then a reserved icon slot: the copy affordance never moves anything when it appears. */
 .dns-text { display: flex; align-items: flex-start; gap: var(--space-4); min-width: 0; }
 .dns-text code { min-width: 0; overflow-wrap: anywhere; }
-.ui-button.copy-action.dns-copy { position: relative; width: 20px; height: 20px; flex-shrink: 0; border-radius: 4px; opacity: 0; transition: opacity 100ms ease-out, background var(--motion-duration), color 200ms ease, transform 160ms var(--ease-out-strong); }
+.ui-button.copy-action.dns-copy { position: relative; width: 20px; height: 20px; flex-shrink: 0; border-radius: var(--radius-xs); opacity: 0; transition: opacity 100ms ease-out, background var(--motion-duration), color 200ms ease, transform 160ms var(--ease-out-strong); }
 .ui-button.copy-action.dns-copy::before { content: ''; position: absolute; inset: -10px; }
 .dns-copy .copy-action__icon svg { width: 13px; height: 13px; }
 .dns-row:is(:hover, :focus-within) .dns-copy, .dns-copy[data-copied] { opacity: 1; transition-duration: 0ms, var(--motion-duration), 200ms, 160ms; }
@@ -95,7 +95,7 @@
 .domain-record-status { display: flex; min-width: 0; }
 /* Add custom MAIL FROM: one quiet row in place of its two records, under the table's last row. */
 .domain-records-add { display: flex; align-items: center; height: var(--row-height-two-line); padding: var(--space-6) var(--space-12); }
-.domain-records-add > .ui-button--ghost { margin-inline-start: -11px; }
+.domain-records-add > .ui-button--ghost { margin-inline-start: calc(-1 * var(--button-pad-x)); }
 .ui-cards.domain-records + .domain-records-add { margin-inline: calc(-1 * var(--bleed, 0px)); padding-inline: var(--bleed, 0px); }
 .ui-table-scroll.domain-records .settings-copy-cell code { flex: 0 1 auto; overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
 .ui-table-scroll.domain-records .settings-copy-cell > .ui-button { flex: none; }

@@ -1,9 +1,9 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from 'react'
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState, type ComponentProps } from 'react'
 import { EmailEditor, type EmailEditorRef } from '@react-email/editor'
 import type {} from '@react-email/editor/extensions'
 import { defaultSlashCommands, Inspector } from '@react-email/editor/ui'
 import { AlignCenter, AlignLeft, AlignRight, Bold, Box, Braces, ChevronDown, Columns2, Heading2, ImagePlus, Italic, List, LoaderCircle, Minus, MousePointer2, Paperclip, Plus, Redo2, Shapes, SlidersHorizontal, Type, Undo2, UserRound, X, type LucideIcon } from 'lucide-react'
-import { Button, DropdownMenu, Icon, IconButton, SkeletonText, type MenuItem } from '../../components/ui'
+import { Button, DropdownMenu, Icon, IconButton, SkeletonText, Tooltip, type MenuItem } from '../../components/ui'
 import { modKey, useMediaQuery } from '../../lib/media'
 import { useApi } from '../../data/context'
 import type { Attachment, AttachmentApi } from '../../data/types'
@@ -28,6 +28,33 @@ export type EmailComposerRef = { prepare: () => Promise<Draft> }
 type Props = { attachmentIds?: string[]; knownAttachmentIds?: string[]; attachmentApi?: AttachmentApi; initialHtml: string; disabled?: boolean; personalize?: boolean; onReady: () => void; onDirty: () => void; onAttach?: () => void; onBusy?: (busy: boolean) => void }
 const linkForms = '[data-re-link-selector-form], [data-re-link-bm-form], [data-re-btn-bm-form], [data-re-img-bm-form]'
 const variables = [['Name', 'name'], ['First name', 'firstName'], ['Email', 'email']] as const
+// Inline images this editor attaches get content IDs with this prefix (they show in a sent email's source); bane- is the
+// prefix before the rename, still in older drafts, and cleanup recognises both.
+const contentIdPrefix = 'nightmail-'
+const editorContentId = /^(?:nightmail|bane)-/
+// The rail's tooltips and menus open to its right, clear of the rail itself: its 8 px padding, then 8 px.
+const railOffset = 16
+// The editor library's bubble menus (text, link, button, image) are placed by floating-ui with no padding and no
+// cross-axis shift, and only re-placed when the window scrolls, so as the studio's own scroll area moved they slid under
+// its bar, and on a phone they ran to the screen's edge. Their view class builds its middleware in a getter: once the
+// first menu is registered, every menu keeps 8 px inside its scroll area, slides along that edge, and hides once what it
+// belongs to has scrolled out of view; the composer re-places them as the scroll area scrolls (below).
+type MenuView = { floatingUIOptions: Record<string, unknown>; isVisible?: boolean; updatePosition?: () => void }
+let menusInView = false
+function keepMenusInView(view: { pluginViews?: unknown[] } | undefined) {
+  if (menusInView || !view?.pluginViews) return
+  const menu = view.pluginViews.find((item): item is MenuView => typeof item === 'object' && item !== null && 'floatingUIOptions' in item)
+  const proto = menu && Object.getPrototypeOf(menu), read = proto && Object.getOwnPropertyDescriptor(proto, 'middlewares')?.get
+  if (!proto || !read) return
+  Object.defineProperty(proto, 'middlewares', { configurable: true, get(this: MenuView) {
+    const options = this.floatingUIOptions, kept = { flip: options.flip, shift: options.shift, hide: options.hide }
+    if (options.flip) options.flip = { padding: 8 }
+    if (options.shift) options.shift = { padding: 8, crossAxis: true }
+    options.hide = {}
+    try { return read.call(this) } finally { Object.assign(options, kept) }
+  } })
+  menusInView = true
+}
 
 // The library's slash menu reads this shared list and has no image entry, although the
 // editor supports images. Route "/image" to the mounted composer's file picker. The menu
@@ -65,6 +92,10 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
   const [panelChoice, setPanelChoice] = useState<boolean | null>(null)
   const panelShown = panelChoice ?? wide
   const docked = wide && panelShown
+  // Below 900 px the panel is a bottom sheet: closing slides it down before it goes (composer.css's sheet-out).
+  const [closing, setClosing] = useState(false)
+  // Images placed here, by their data: source: the Style panel names them by their file.
+  const imageNames = useRef(new Map<string, string>())
   const inspector = useRef<HTMLElement>(null)
   const editor = useRef<EmailEditorRef>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -154,11 +185,73 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
         button.setAttribute('aria-label', `${index === 0 ? 'Use uniform' : 'Use individual'} ${section.toLowerCase()} values`)
       })
     }
-    label()
-    const observer = new MutationObserver(label)
-    observer.observe(inspector.current, { childList: true, subtree: true })
-    return () => observer.disconnect()
-  }, [panelShown])
+    // An empty field shows what the selected block has now (its computed style) as its placeholder: its size, line height
+    // and colour, no border, no background ("None"), instead of a bare unit or the library's sample 1.
+    const hex = (color: string) => {
+      const [r = 0, g = 0, b = 0, a = 1] = (color.match(/[\d.]+/g) ?? []).map(Number)
+      return a === 0 ? '' : `#${[r, g, b].map(channel => Math.round(channel).toString(16).padStart(2, '0')).join('')}`
+    }
+    const selectedBlock = () => {
+      const value = editor.current?.editor
+      if (!value) return null
+      const { selection } = value.state, { $from } = selection
+      const dom = selection.toJSON().type === 'node' ? value.view.nodeDOM(selection.from) : $from.depth ? value.view.nodeDOM($from.before($from.depth)) : null
+      if (!(dom instanceof HTMLElement)) return null
+      // A node view's wrapper holds the element that carries the block's styles (a heading, a button's link, an image).
+      const styled = 'a, img, hr, p, h1, h2, h3, li, blockquote, pre, section'
+      return dom.matches(styled) ? dom : dom.querySelector<HTMLElement>(styled) ?? dom
+    }
+    const placeholders = () => {
+      const block = selectedBlock(), panel = inspector.current, value = editor.current?.editor
+      if (!block || !panel) return
+      // The block and each section by name, so the panel leaves out what a block can't use (composer.css).
+      if (value) { const { selection } = value.state; panel.dataset.block = (selection.toJSON().type === 'node' ? value.state.doc.nodeAt(selection.from) : selection.$from.parent)?.type.name ?? '' }
+      panel.querySelectorAll<HTMLElement>('[data-re-inspector-section]').forEach(section => {
+        const title = section.querySelector('[data-re-inspector-section-toggle]')?.textContent?.trim().toLowerCase()
+        if (title && section.dataset.section !== title) section.dataset.section = title
+      })
+      // An image placed in the editor has a data: source: name its file (or say it was uploaded), and keep it from typing.
+      const source = panel.querySelector<HTMLInputElement>('input[aria-label="Attributes Source"]'), sourceRow = source?.closest<HTMLElement>('[data-re-inspector-prop-row]')
+      if (source && sourceRow) {
+        const encoded = source.value.startsWith('data:')
+        if (encoded) sourceRow.dataset.sourceName = imageNames.current.get(source.value) ?? uploadedInline.current.get(source.value)?.filename ?? 'Uploaded image'
+        else delete sourceRow.dataset.sourceName
+        source.readOnly = encoded
+      }
+      // A value's unit follows it: 100% says %, not the field's px.
+      panel.querySelectorAll<HTMLElement>('[data-re-inspector-number]').forEach(field => {
+        const input = field.querySelector('input'), unit = field.querySelector<HTMLElement>('[data-re-inspector-unit]'), text = unit?.firstChild
+        if (!input || !unit || !(text instanceof Text)) return
+        const own = unit.dataset.unit ??= text.data, shown = /%\s*$/.test(input.value) ? '%' : own
+        if (text.data !== shown) text.data = shown
+      })
+      const style = getComputedStyle(block), size = parseFloat(style.fontSize)
+      const set = (name: string, text: string) => {
+        const control = panel.querySelector<HTMLInputElement>(`input[aria-label="${name}"]`)
+        if (control && control.placeholder !== text) control.placeholder = text
+      }
+      set('Typography Size', String(Math.round(size)))
+      set('Typography Line height', style.lineHeight === 'normal' ? '120' : String(Math.round(parseFloat(style.lineHeight) / size * 100)))
+      set('Typography Color', hex(style.color) || 'None')
+      set('Background Color', hex(style.backgroundColor) || 'None')
+      set('Border', String(parseFloat(style.borderTopWidth) || 0))
+      for (const side of ['top', 'right', 'bottom', 'left'] as const) set(`Border ${side} width`, String(parseFloat(style.getPropertyValue(`border-${side}-width`)) || 0))
+    }
+    const refresh = () => { label(); placeholders() }
+    refresh()
+    const observer = new MutationObserver(refresh)
+    // Fields the library reuses for another block change only their values: watch those too.
+    observer.observe(inspector.current, { childList: true, subtree: true, attributes: true, attributeFilter: ['value'] })
+    // Another block selected (or this one restyled) can reuse the same fields: read its style again once they render.
+    const instance = editor.current?.editor
+    let frame = 0
+    const later = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(placeholders) }
+    const panel = inspector.current
+    instance?.on('selectionUpdate', later)
+    instance?.on('update', later)
+    panel.addEventListener('input', later)
+    return () => { observer.disconnect(); cancelAnimationFrame(frame); instance?.off('selectionUpdate', later); instance?.off('update', later); panel.removeEventListener('input', later) }
+  }, [panelShown, ready])
   useEffect(() => {
     pickImage = () => { if (!locked) { onDirty(); fileInput.current?.click() } }
     return () => { pickImage = null }
@@ -195,10 +288,10 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
       if (cached && !allIds.has(cached.id)) { metadata.push(cached); allIds.add(cached.id) }
     }
     // An inline image the body no longer uses would go out as a stray attachment. Drop the ones this editor placed
-    // (bane- content IDs) or opened in the body; leave other inline attachments, set through the API, as they are.
+    // (editorContentId) or opened in the body; leave other inline attachments, set through the API, as they are.
     const opened = cidImageSources(initialSnapshot.html)
     const used = empty ? new Set<string>() : new Set([...cidImageSources(documentToBlockHtml(document)), ...inlineSources.flatMap(source => cidBySource.current.get(source)?.slice(4) ?? [])])
-    const removed = metadata.filter(item => item.disposition === 'inline' && item.contentId && !used.has(item.contentId) && (item.contentId.startsWith('bane-') || opened.has(item.contentId)))
+    const removed = metadata.filter(item => item.disposition === 'inline' && item.contentId && !used.has(item.contentId) && (editorContentId.test(item.contentId) || opened.has(item.contentId)))
     const removedInlineIds = removed.map(item => item.id)
     if (empty) return { html: '', inlineAttachmentIds: [], removedInlineIds }
     metadata = metadata.filter(item => !removedInlineIds.includes(item.id)); removedInlineIds.forEach(id => allIds.delete(id))
@@ -213,7 +306,7 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
         const bytes = Uint8Array.from(atob(match[2]), character => character.charCodeAt(0))
         if (allIds.size >= MAX_ATTACHMENTS || totalSize + bytes.length > MAX_ATTACHMENT_BYTES) throw new Error(attachmentLimit)
         const hash = await inlineImageHash(source)
-        const contentId = `bane-${crypto.randomUUID()}`
+        const contentId = `${contentIdPrefix}${crypto.randomUUID()}`
         const extension = match[1].split('/')[1] === 'jpeg' ? 'jpg' : match[1].split('/')[1]
         const item = await attachmentApi.upload(new File([bytes], `image-${hash.slice(0, 12)}.${extension}`, { type: match[1] }), { contentId })
         cid = `cid:${contentId}`
@@ -244,7 +337,7 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
     uploads.current += 1
     setBusy(true)
     busyListener.current?.(true)
-    try { return await prepareLocalImage(file) }
+    try { const image = await prepareLocalImage(file); imageNames.current.set(image.url, file.name); return image }
     catch (cause) { const message = errorText(cause, 'Couldn’t load this image.'); setError(message); throw new Error(message) }
     finally { uploads.current -= 1; if (!uploads.current) { setBusy(false); busyListener.current?.(false) } }
   }, [])
@@ -320,9 +413,28 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
     { label: '2 columns', icon: <Icon icon={Columns2} />, onSelect: () => insertFromMenu(e => e.chain().focus().insertColumns(2).run()) },
   ]
   const variableItems: MenuItem[] = personalize ? variables.map(([text, key]) => ({ label: text, icon: <Icon icon={UserRound} />, onSelect: () => insertFromMenu(e => e.chain().focus().insertContent(`{{${key}}}`).run()) })) : []
-  const togglePanel = () => setPanelChoice(!panelShown)
+  function closePanel() {
+    if (railed || !panelShown) { setPanelChoice(false); return }
+    setClosing(true)
+    window.setTimeout(() => { setClosing(false); setPanelChoice(false) }, matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : 200)
+  }
+  const togglePanel = () => { if (panelShown) closePanel(); else setPanelChoice(true) }
+  useEffect(() => {
+    if (!ready) return
+    const instance = editor.current?.editor, view = instance?.view as { pluginViews?: unknown[]; dom?: HTMLElement } | undefined
+    const check = () => keepMenusInView(view)
+    check()
+    if (!menusInView) instance?.on('transaction', check)
+    const area = view?.dom?.closest('.campaign-compose-scroll')
+    let frame = 0
+    const follow = () => { cancelAnimationFrame(frame); frame = requestAnimationFrame(() => { for (const item of view?.pluginViews ?? []) { const menu = item as MenuView; if (menu?.floatingUIOptions && menu.isVisible) menu.updatePosition?.() } }) }
+    area?.addEventListener('scroll', follow, { passive: true })
+    return () => { instance?.off('transaction', check); area?.removeEventListener('scroll', follow); cancelAnimationFrame(frame) }
+  }, [ready])
   const fileField = <input ref={fileInput} type="file" hidden accept="image/png,image/jpeg,image/gif,image/webp,image/avif" onChange={event => void insertImage(event.target.files?.[0])} />
-  const tool = (label: string, icon: LucideIcon, run: () => void, title = label) => <IconButton label={label} title={title} disabled={inactive} onClick={run}><Icon icon={icon} /></IconButton>
+  // Icon-only tools say what they are in the dashboard's tooltip (beside the rail, above the toolbar), with their shortcut.
+  const tip = (text: string, trigger: ComponentProps<typeof Tooltip>['children']) => <Tooltip content={text} side={railed ? 'right' : 'top'} offset={railed ? railOffset : undefined}>{trigger}</Tooltip>
+  const tool = (label: string, icon: LucideIcon, run: () => void, title = label) => tip(title, <IconButton label={label} title="" disabled={inactive} onClick={run}><Icon icon={icon} /></IconButton>)
   return <div className="email-composer" data-inactive={locked || undefined} onClickCapture={event => { if (locked) { event.preventDefault(); event.stopPropagation() } }} onKeyDownCapture={event => {
     if (event.key === 'Escape' && (event.target as Element).closest(linkForms)) {
       event.preventDefault()
@@ -331,14 +443,17 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
       // These library forms stop bubbling before their own window Escape listener can run.
       window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
       requestAnimationFrame(() => { if (trigger?.isConnected) trigger.focus(); else editor.current?.editor?.commands.focus() })
+    } else if (event.key === 'Escape' && !railed && panelShown && (event.target as Element).closest('.composer-inspector')) {
+      event.preventDefault()
+      closePanel()
     } else if (locked) { event.preventDefault(); event.stopPropagation() }
   }}>
     {railed ? <nav className="composer-rail" aria-label="Email formatting" onMouseDown={keepFocus}>
       <div className="composer-rail__group">
         {tool('Text', Type, insertText)}
         {tool('Image', ImagePlus, chooseImage)}
-        <DropdownMenu label="Components" side="right" align="start" trigger={<IconButton label="Components" disabled={inactive}><Icon icon={Shapes} /></IconButton>} items={componentItems} />
-        {personalize && <DropdownMenu label="Variables" side="right" align="start" trigger={<IconButton label="Variables" disabled={inactive}><Icon icon={Braces} /></IconButton>} items={variableItems} />}
+        <DropdownMenu label="Components" side="right" align="start" offset={railOffset} trigger={tip('Components', <IconButton label="Components" title="" disabled={inactive}><Icon icon={Shapes} /></IconButton>)} items={componentItems} />
+        {personalize && <DropdownMenu label="Variables" side="right" align="start" offset={railOffset} trigger={tip('Variables', <IconButton label="Variables" title="" disabled={inactive}><Icon icon={Braces} /></IconButton>)} items={variableItems} />}
       </div>
       <div className="composer-rail__group">
         {tool('Bold', Bold, () => command(e => e.chain().focus().toggleBold().run()), `Bold ${modKey}B`)}
@@ -352,28 +467,29 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
         {tool('Redo', Redo2, () => command(e => e.chain().focus().redo().run()), `Redo ${modKey}⇧Z`)}
       </div>
       <div className="composer-rail__group">
-        <IconButton label="Style" title={panelShown ? 'Hide style' : 'Show style'} disabled={inactive} aria-pressed={panelShown} onClick={togglePanel}><Icon icon={SlidersHorizontal} /></IconButton>
+        {tip(panelShown ? 'Hide style' : 'Show style', <IconButton label="Style" title="" disabled={inactive} aria-pressed={panelShown} onClick={togglePanel}><Icon icon={SlidersHorizontal} /></IconButton>)}
       </div>
       {busy && <span className="composer-rail__busy" role="status"><Icon icon={LoaderCircle} size="sm" className="ui-spinner" /><span className="sr-only">Preparing…</span></span>}
       {fileField}
     </nav> : <div className="composer-toolbar">
       <div className="composer-tools ui-scroll-fade" aria-label="Email formatting" onMouseDown={keepFocus}>
         <DropdownMenu label="Insert" align="start" trigger={<Button size="sm" variant="ghost" disabled={inactive}><Icon icon={Plus} />Insert<Icon icon={ChevronDown} size="sm" /></Button>} items={[...componentItems, ...variableItems]} />
-        <div className="cluster"><IconButton size="sm" label="Bold" disabled={inactive} onClick={() => command(e => e.chain().focus().toggleBold().run())}><Icon icon={Bold} /></IconButton><IconButton size="sm" label="Italic" disabled={inactive} onClick={() => command(e => e.chain().focus().toggleItalic().run())}><Icon icon={Italic} /></IconButton></div>
-        <div className="cluster"><IconButton size="sm" label="Align left" disabled={inactive} onClick={() => align('left')}><Icon icon={AlignLeft} /></IconButton><IconButton size="sm" label="Align center" disabled={inactive} onClick={() => align('center')}><Icon icon={AlignCenter} /></IconButton><IconButton size="sm" label="Align right" disabled={inactive} onClick={() => align('right')}><Icon icon={AlignRight} /></IconButton></div>
+        <div className="cluster">{tip(`Bold ${modKey}B`, <IconButton size="sm" label="Bold" title="" disabled={inactive} onClick={() => command(e => e.chain().focus().toggleBold().run())}><Icon icon={Bold} /></IconButton>)}{tip(`Italic ${modKey}I`, <IconButton size="sm" label="Italic" title="" disabled={inactive} onClick={() => command(e => e.chain().focus().toggleItalic().run())}><Icon icon={Italic} /></IconButton>)}</div>
+        <div className="cluster">{tip('Align left', <IconButton size="sm" label="Align left" title="" disabled={inactive} onClick={() => align('left')}><Icon icon={AlignLeft} /></IconButton>)}{tip('Align center', <IconButton size="sm" label="Align center" title="" disabled={inactive} onClick={() => align('center')}><Icon icon={AlignCenter} /></IconButton>)}{tip('Align right', <IconButton size="sm" label="Align right" title="" disabled={inactive} onClick={() => align('right')}><Icon icon={AlignRight} /></IconButton>)}</div>
         <Button size="sm" variant="ghost" disabled={inactive} aria-pressed={panelShown} onClick={togglePanel}><Icon icon={SlidersHorizontal} />Style</Button>
         {busy && <span className="muted" role="status">Preparing…</span>}
-        <div className="cluster composer-history"><IconButton size="sm" label="Undo" disabled={inactive} onClick={() => command(e => e.chain().focus().undo().run())}><Icon icon={Undo2} /></IconButton><IconButton size="sm" label="Redo" disabled={inactive} onClick={() => command(e => e.chain().focus().redo().run())}><Icon icon={Redo2} /></IconButton></div>
+        <div className="cluster composer-history">{tip(`Undo ${modKey}Z`, <IconButton size="sm" label="Undo" title="" disabled={inactive} onClick={() => command(e => e.chain().focus().undo().run())}><Icon icon={Undo2} /></IconButton>)}{tip(`Redo ${modKey}⇧Z`, <IconButton size="sm" label="Redo" title="" disabled={inactive} onClick={() => command(e => e.chain().focus().redo().run())}><Icon icon={Redo2} /></IconButton>)}</div>
         {fileField}
       </div>
     </div>}
     {error && <p className="campaign-note composer-error" data-tone="danger" role="alert">{error}</p>}
+    {!railed && panelShown && <div className="composer-inspector-backdrop" data-closing={closing || undefined} aria-hidden="true" onClick={closePanel} />}
     <div className="composer-visual">
       <div className="composer-canvas" onClickCapture={event => { if ((event.target as HTMLElement).closest('a')) event.preventDefault() }}>
         {!ready && <div className="composer-starting" role="status"><SkeletonText width="55%" lineHeight={36} /><SkeletonText /><SkeletonText width="80%" /><SkeletonText width="60%" /><span className="sr-only">Loading visual composer</span></div>}
         <EmailEditor key={generation} ref={editor} content={content as Record<string, unknown>} theme={theme} editable={!locked} placeholder="Write, or type / for blocks…" onUploadImage={upload} className="composer-document" onReady={instance => { synchronizeEditor(instance); trackCaret(instance); setReady(!hydrating); if (!hydrating) { console.info(`[${productName} timing] campaign editor ready`, { navigationMs: Number(performance.now().toFixed(1)) }); onReady() } }} onUpdate={() => { changed.current = true; onDirty() }}>
-          <Inspector.Root ref={inspector} className="composer-inspector" hidden={!panelShown} data-docked={docked || undefined} data-closed={panelShown ? undefined : ''}>
-            <div className="composer-inspector-header"><span className="composer-inspector-title">Style</span><IconButton size="sm" label="Close style" onClick={() => setPanelChoice(false)}><Icon icon={X} /></IconButton></div>
+          <Inspector.Root ref={inspector} className="composer-inspector" hidden={!panelShown} data-docked={docked || undefined} data-closed={panelShown ? undefined : ''} data-closing={closing || undefined}>
+            <div className="composer-inspector-header"><span className="composer-inspector-title">Style</span><IconButton size="sm" label="Close style" onClick={closePanel}><Icon icon={X} /></IconButton></div>
             <Inspector.Breadcrumb />
             {/* Styles are per block (api/src/block-style.ts): no document-wide controls, and a text selection offers its block's. */}
             <Inspector.Document>{() => <p className="composer-inspector-hint">Select a block to style it.</p>}</Inspector.Document>

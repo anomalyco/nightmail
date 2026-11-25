@@ -32,9 +32,9 @@ function Table({ head, rows }: { head: string[]; rows: ReactNode[][] }) {
 }
 /** email.* and ctx.* fields, one level of nesting deep, as the editor completes them. */
 function fieldRows(prefix: string, fields: Record<string, Field>): ReactNode[][] {
-  return Object.entries(fields).flatMap(([name, field]) => [
+  return Object.entries(fields).filter(([, field]) => !field.renamed).flatMap(([name, field]) => [
     [<code key="n">{`${prefix}.${name}`}</code>, field.doc],
-    ...(field.type === 'object' && field.fields ? Object.entries(field.fields).map(([child, f]) => [<code key="n">{`${prefix}.${name}.${child}`}</code>, f.doc]) : []),
+    ...(field.type === 'object' && field.fields ? Object.entries(field.fields).filter(([, f]) => !f.renamed).map(([child, f]) => [<code key="n">{`${prefix}.${name}.${child}`}</code>, f.doc]) : []),
   ])
 }
 

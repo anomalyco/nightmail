@@ -127,7 +127,7 @@ The `agent inbox contracts and storage budgets` tests count actual pg driver cal
 | Object download / R2 delete job handler | 0; download performs one bucket GET |
 | Retention / GC | 1 per ≤25 inboxes (≤5,000 memberships) / 1 per ≤1,000 candidates |
 
-The `BANE_BENCH=1` 10,000-due-inbox fixture ran 400 batches in 707 ms on local Postgres. That fixture measures inbox/retired-address bookkeeping, not 10,000 remote deletes. The cursor test uses independent database sessions and overlapping transactions. The membership retains its event sequence beyond the 30-day event-log window, so the final days of a long lease do not lose their pagination history. These tests do not certify live SES, Hyperdrive, R2, or production IAM.
+The `NIGHTMAIL_BENCH=1` 10,000-due-inbox fixture ran 400 batches in 707 ms on local Postgres. That fixture measures inbox/retired-address bookkeeping, not 10,000 remote deletes. The cursor test uses independent database sessions and overlapping transactions. The membership retains its event sequence beyond the 30-day event-log window, so the final days of a long lease do not lose their pagination history. These tests do not certify live SES, Hyperdrive, R2, or production IAM.
 
 The opt-in `inbox ingest benchmark: compare v1 and v2 on a 100k-address receiving host` ran the original and new store routines interleaved against identical rows (one warm-up, three timed executions each, savepoint rollback). A plain-address delivery with no files took **1.38–1.45 ms** inside v1 versus **1.74–1.84 ms** inside v2. Both take **one wire statement** for the store. This isolates the store, not the S3/R2 transfer or end-to-end latency.
 
@@ -139,7 +139,7 @@ The Worker calls the seven-argument `mail_store_incoming` for both paths: a SQL 
 
 ### Review erasure benchmark
 
-With both GC foreign keys indexed before rollout, `mail_gc_batch(1000)` removed 1,000 messages, message-ID rows and empty threads in **26.9 ms** beside 50,000 unrelated messages/thread summaries, and **31.6 ms** beside 200,000. Same local synthetic harness, one wire statement per batch. The populated fixture is gated behind `BANE_BENCH=1`. This is database time, not a claim about R2 deletion latency.
+With both GC foreign keys indexed before rollout, `mail_gc_batch(1000)` removed 1,000 messages, message-ID rows and empty threads in **26.9 ms** beside 50,000 unrelated messages/thread summaries, and **31.6 ms** beside 200,000. Same local synthetic harness, one wire statement per batch. The populated fixture is gated behind `NIGHTMAIL_BENCH=1`. This is database time, not a claim about R2 deletion latency.
 
 ## Route-enabled receiving (phase 1)
 
@@ -158,7 +158,7 @@ All four columns are asserted (`routing: claimed ingest still uses two DB trips 
 
 Dry runs (`POST /v1/routing/test`) with unsaved routes or an earlier version apply them through the real save path in a transaction that is always rolled back, then read the same claim input. They take the workspace's address lane for the length of that transaction, as any routing change does.
 
-**Not measured yet:** the design's latency targets on a 100k-ingest queue (claim ≤ +0.05 ms with routing on, store hold ≤ +10%, a 300-domain routing write). They need the 100k audit fixture, so they are not part of the acceptance suite or `BANE_BENCH=1`.
+**Not measured yet:** the design's latency targets on a 100k-ingest queue (claim ≤ +0.05 ms with routing on, store hold ≤ +10%, a 300-domain routing write). They need the 100k audit fixture, so they are not part of the acceptance suite or `NIGHTMAIL_BENCH=1`.
 
 **Not versioned yet:** webhook delivery settings (format, junk, include, timeout, retries) and domain catch-all settings. Restoring a version restores routes only; the restore description says so.
 
@@ -168,4 +168,4 @@ Review follow-up, warm local PostgreSQL: median single `SELECT mail_route_input(
 
 The isolated `pgdata-mvp` foreground harness ran 301 tests: **295 passed, zero failed, six skipped**, 44.51 s Node duration / **46.16 s wall**. The AI decision provider and external transports were synthetic. The route-enabled budget fixture saves an attached rule, asserts **one DB call for admission**, then **two ingest calls without files or three with files** (four/five including outer job claim and settlement). Stored dry-run output matches the receipt. No additional handler-source fetch at ingest.
 
-Warm-IR Node CPU measurements, 2,000 warmups and 30,000 iterations per case (`BANE_BENCH=1`, `rules: microbenchmarks`): subject predicate **3.71 µs / 10 steps**; reshaped webhook **5.94 µs / 45 steps**; RE2 predicate on 720 characters **3.06 µs / 369 steps**. This is isolated interpreter CPU, not database latency, parsing, inference or cold Worker startup. Per-run / per-message step ceilings: 50,000 / 250,000. The default manager MCP catalog test measured 14 tools including discovery, about 50,000 serialized characters.
+Warm-IR Node CPU measurements, 2,000 warmups and 30,000 iterations per case (`NIGHTMAIL_BENCH=1`, `rules: microbenchmarks`): subject predicate **3.71 µs / 10 steps**; reshaped webhook **5.94 µs / 45 steps**; RE2 predicate on 720 characters **3.06 µs / 369 steps**. This is isolated interpreter CPU, not database latency, parsing, inference or cold Worker startup. Per-run / per-message step ceilings: 50,000 / 250,000. The default manager MCP catalog test measured 14 tools including discovery, about 50,000 serialized characters.

@@ -9,7 +9,7 @@
 .connect-grants ul { display: flex; flex-direction: column; gap: var(--space-6); margin: 0; padding: 0; list-style: none; }
 .connect-grants li { display: flex; align-items: flex-start; gap: var(--space-8); color: var(--color-muted); }
 .connect-grants li[data-can] { color: var(--color-text); }
-.connect-grants li > svg { flex-shrink: 0; margin-top: 3px; }
+.connect-grants li > svg { flex-shrink: 0; height: 1lh; }
 .connect-grants li[data-can] > svg { color: var(--color-success); }
 .connect-grants p { margin: 0; }
 .connect-another { margin-left: auto; }

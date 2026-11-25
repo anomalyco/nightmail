@@ -150,7 +150,7 @@ The parameters are always `email` and `ctx` (`ctx` is optional). Top-level `cons
 | `envelope` | `{ from, to[] }` | SMTP envelope. |
 | `auth` | `{ fromVerified, spf, dkim, dmarc }` | `fromVerified` is true when DMARC-aligned SPF or DKIM authenticates the From domain. Verdicts are `pass`, `fail`, `gray` or `none`. |
 | `spam` | `{ ses, junk, reason }` | `junk` is Nightmail's verdict so far. |
-| `flags` | `{ automated, autoReply, bulk, listId, baneHops }` | |
+| `flags` | `{ automated, autoReply, bulk, listId, forwardHops }` | |
 | `thread` | `{ id, isReply, inReplyTo, references[] }` | |
 | `attachments`, `images` | `{ id, filename, contentType, size, inline, isImage, safe, … }[]` | Metadata only; content never reaches a rule. |
 | `links` | string[] | Visible links. |
@@ -229,7 +229,7 @@ Lists live in the config: `"senderLists": { "vip": ["ceo@example.com", "@partner
 | AI decisions | 10 per rule, 10 distinct questions per message |
 | Regex | 256 characters, 512 RE2 instructions, 64 Ki characters of input, 512 KiB of matcher state per test |
 
-Measured cost on a warm plan is 4–6 µs of CPU per message for typical rules (`BANE_BENCH=1` runs the benchmark).
+Measured cost on a warm plan is 4–6 µs of CPU per message for typical rules (`NIGHTMAIL_BENCH=1` runs the benchmark).
 
 ### Compile errors
 
@@ -426,7 +426,7 @@ Backoff starts at 15 seconds and grows ×4 up to 12 hours, with ±25% jitter, ne
 The config is `{ rules, attachments: [{ rule, target, continue }], senderLists, evaluateDomains, evaluateRoutes }`. Writes take `If-Match` with the version you read (MCP: `ifMatch`) and fail with `VERSION_CONFLICT` if it changed; without it, a recipe or on/off write applies to the latest version, since it changes only that rule. Creates take `Idempotency-Key` (MCP: `idempotencyKey`). Over MCP these tools are in the `rules` and `endpoints` toolsets and need an owner or admin's approval with `manage`; rules, endpoints and keys an agent creates stop working when that approval is revoked. See [docs/mcp-coverage.md](mcp-coverage.md).
 
 ```sh
-curl -X POST "$BANE/v1/rules/check" -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
+curl -X POST "$NIGHTMAIL/v1/rules/check" -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
   -d '{"source":"export default function route(email){ endpoints.support({ text: email.subject }) }"}'
 ```
 

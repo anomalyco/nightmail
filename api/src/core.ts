@@ -150,14 +150,16 @@ export interface Config {
   databaseDiskBytes?: number;
   /** DEPLOY_SHA and DEPLOY_AT: the commit this deploy runs and when it went out (Glass). Null when not set. */
   deploy?: { sha: string | null; at: string | null };
-  /** PLANETSCALE_WEBHOOK_SECRET: the database disk alert also checks PlanetScale's signature (src/disk-alert.ts). Undefined: its token alone. */
-  planetscaleWebhookSecret?: string;
+  /** PLANETSCALE_WEBHOOK_SECRET: the database disk alert also checks PlanetScale's signature (src/disk-alert.ts). Undefined: token alone; null: invalid configured signer, webhook disabled. */
+  planetscaleWebhookSecret?: string | null;
   /** NIGHTMAIL_ABUSE_ENFORCE. Reserved: abuse monitoring never blocks, and no code reads this yet. */
   abuseEnforce?: boolean;
   /** Hosted billing. stripe is undefined until STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are set (money routes answer 503 BILLING_NOT_CONFIGURED). */
   billing?: { stripe?: { secretKey: string; webhookSecret: string; automaticTax: boolean; creditProduct: string; taxCode: string; apiBase: string } };
   placementShadow?: boolean;
   placementDblZone?: string;
+  /** Glass's Gmail Postmaster Tools reads (NIGHTMAIL_POSTMASTER_CREDENTIALS): an OAuth grant with postmaster.readonly. */
+  postmaster?: { clientId: string; clientSecret: string; refreshToken: string };
   byoTemplateUrl?: string;
   byoV2?: boolean;
   byoV5TemplateUrl?: string;
@@ -168,6 +170,13 @@ export interface Config {
   sharedRegions?: string[];
   hostedSendCaps: { firstWeek: number };
   publicUrl: string;
+  /** CAMPAIGN_IMAGES: campaign mail links its inline pictures from publicUrl/i/… instead of carrying them (src/linked-images.ts). */
+  linkedImages: boolean;
+  /** Hosted: the link domain the links in campaign and marketing mail go on (NIGHTMAIL_LINK_HOST, src/link-domains.ts). */
+  linkHost?: string;
+  /** Own link hosts (src/link-domains.ts), off unless set: the Cloudflare for SaaS zone customers' links.<domain> CNAMEs
+   *  reach (`target`, a name in that zone) and the token that edits its custom hostnames. */
+  linkHosts?: { zoneId: string; token: string; target: string };
   sesFeedbackUrl?: string;
   regions: string[];
   liveEnabled: boolean;
@@ -254,7 +263,11 @@ export interface Runtime {
 export type WebhookFetch = (url: string, init: { method: 'POST'; headers: Record<string, string>; body: string; signal: AbortSignal }) => Promise<{ status: number;retryAfter?:string|null }>;
 // mailboxIds is what the credential can see now (a provisioning key also sees the inboxes it created);
 // scopeIds is an inbox key's configured scope, which never changes for that key.
-export type MailboxAccess = { keyId: string; grantId?:string; workspaceId: string; admin: boolean; mailboxIds: string[] | null; scopeIds?: string[] | null; permissions: import('./db/mailbox.js').MailboxPermission[] };
+export type MailboxAccess = { keyId: string; grantId?:string; workspaceId: string; admin: boolean; mailboxIds: string[] | null; scopeIds?: string[] | null; permissions: import('./db/mailbox.js').MailboxPermission[];
+  /** An API key limited to sender domains, with read (domainMailAccess): it reads only mail addressed to those domains.
+   *  mailboxIds are the receiving addresses there (mailboxAuth reads them), and each message must also have an envelope
+   *  recipient there, or for sent mail be from there (thread-view.ts addressedToDomains). */
+  domains?: string[] };
 /**
  * A support conversation (src/support-conversations.ts) as supportGate loaded it: its person, the workspace whose content
  * they shared, and the workspaces this route's dashboard counterpart lets the person's role read now.
@@ -457,8 +470,11 @@ export function receivedMailRefusal(code: 'UNRESTRICTED_KEY_REQUIRED' | 'ADMIN_R
   const domains = a.domains.length <= 2 ? a.domains.join(' and ') : `${a.domains[0]}, ${a.domains[1]} and ${a.domains.length - 2} more`;
   const addressKey = `with a full-access key, find their IDs with GET /v1/inbound/addresses, then POST /v1/api-keys with ${ADDRESS_KEY_EXAMPLE}; or in the dashboard, API keys → Create key → Mail at chosen addresses`;
   const docs = `Docs: ${origin}/docs/operations/createApiKey.md`;
+  // A key limited to sender domains reads the replies addressed to them once it has Read (domainMailAccess).
+  if (a.domains.length && !a.permissions.includes('read') && !a.permissions.includes('manage')) return denied(code, `${credentialLimits(a)} To read the replies to ${domains}, it needs Read: add Read to it in the dashboard (API keys → Edit; it keeps its secret) or with a full-access key: PATCH /v1/api-keys/${a.keyId} with {"permissions":${JSON.stringify([...a.permissions, 'read'])}}. Or create a key with Read and Send limited to ${domains}, in the dashboard (API keys → Create key) or with a full-access key: POST /v1/api-keys with {"name":"Agent","permissions":["read","send"],"domains":${JSON.stringify(a.domains)}}. It reads only received mail addressed to ${domains}. ${docs}`,
+    { ...need, scope: 'workspace' });
   return denied(code, a.domains.length
-    ? `${credentialLimits(a)} A limit to sender domains doesn't reach received mail, so it can't read replies. To read the replies to ${domains}, use a key limited to the receiving addresses there (Read, and Send to answer from them): ${addressKey}. A full-access key reads all received mail. ${docs}`
+    ? `${credentialLimits(a)} It reads the received mail addressed to ${domains} with GET /v1/inbound/messages, /v1/inbound/threads and /v1/inbound/events, not agent inboxes or the rest of receiving. For an inbox's mail, use a key limited to the receiving addresses (Read, and Send to answer from them): ${addressKey}. A full-access key reads all received mail. ${docs}`
     : `${credentialLimits(a)} Received mail needs Full access, or a key limited to receiving addresses. Make this key Full access in the dashboard (API keys → Edit; it keeps its secret) or with a full-access key: PATCH /v1/api-keys/${a.keyId} with {"permissions":["read","send","manage"]}. Or, for replies at some addresses only, use a key limited to them: ${addressKey}. ${docs}`,
     code === 'UNRESTRICTED_KEY_REQUIRED' ? { ...need, scope: 'workspace' } : need);
 }
@@ -531,6 +547,7 @@ export async function budgetedRead<T>(db: Runtime['db'], work: (tx: DbExecutor) 
 export const statementTimedOut = (error: unknown) => [error, (error as { cause?: unknown })?.cause].some(e => (e as { code?: string } | null)?.code === '57014');
 export const security: Record<string, string[]>[] = [{ bearerAuth: [] }, { dashboardSession: [] }, { secureDashboardSession: [] }];
 export const IdParams = z.object({ id: z.string().min(1).max(120) });
+export function literalSearch(value: string) { return `%${value.replace(/[\\%_]/g, character => `\\${character}`)}%`; }
 export const PageQuery = z.object({ cursor: z.string().max(200).optional(), limit: z.coerce.number().int().min(1).max(100).default(25) });
 export const AudienceSpec = z.object({ listId: z.string().min(1).max(120), segmentId: z.string().min(1).max(120).optional(), excludeListIds: z.array(z.string().min(1).max(120)).max(20).optional(), excludeSegmentIds: z.array(z.string().min(1).max(120)).max(20).optional(),
   priority: z.object({ property: z.string().regex(/^[A-Za-z][A-Za-z0-9_]{0,79}$/), values: z.array(z.string().max(200)).min(1).max(20) }).strict().optional().describe('Send order: contacts whose property equals an earlier value are reviewed and released first; everyone else follows. Useful with paced sending, e.g. { property: "plan", values: ["active", "former"] }.') }).strict();
@@ -743,10 +760,24 @@ export function actorMailAccess(actor: Actor): MailboxAccess | null {
  * webhook settings, not mail or delivery history.
  */
 export function workspaceMailAccess(actor: Actor, method: string, path: string): MailboxAccess | 'UNRESTRICTED_KEY_REQUIRED' | 'ADMIN_REQUIRED' {
-  if (actor.domains.length) return 'UNRESTRICTED_KEY_REQUIRED';
+  if (actor.domains.length) return domainMailAccess(actor, method, path) ?? 'UNRESTRICTED_KEY_REQUIRED';
   if (!actor.permissions.includes('manage') && actor.credential === 'apiKey' && actor.permissions.includes('read') && method.toUpperCase() === 'GET' && /^\/v1\/inbound\/webhooks(?:\/[^/]+)?$/.test(path))
     return { keyId: actor.keyId, workspaceId: actor.workspaceId, admin: false, mailboxIds: null, permissions: [] };
   return actorMailAccess(actor) ?? 'ADMIN_REQUIRED';
+}
+/** The received-mail reads a key limited to sender domains may make: messages, their attachments, threads and events. */
+const DOMAIN_MAIL_READS = /^\/v1\/inbound\/(?:messages(?:\/[^/]+(?:\/(?:attachments|parts)\/[^/]+)?)?|threads(?:\/[^/]+)?|events)$/;
+/**
+ * A workspace API key limited to sender domains that can read (read, or manage) reads the received mail addressed to
+ * those domains, so "Read and Send limited to example.com" is a whole agent key: it sends from there and reads the replies.
+ * Only those reads: everything else under /v1/inbound and /v1/inboxes stays a full-access key's (UNRESTRICTED_KEY_REQUIRED).
+ * mailboxIds start empty, so the access reaches nothing until mailboxAuth puts the receiving addresses there in them.
+ * A send-only key stays send-only; agent tokens and MCP sign-ins limited to domains read none.
+ */
+export function domainMailAccess(actor: Actor, method: string, path: string): MailboxAccess | null {
+  if (actor.credential !== 'apiKey' || !actor.domains.length || (!actor.permissions.includes('read') && !actor.permissions.includes('manage'))) return null;
+  if (method.toUpperCase() !== 'GET' || !DOMAIN_MAIL_READS.test(path)) return null;
+  return { keyId: actor.keyId, workspaceId: actor.workspaceId, admin: false, mailboxIds: [], permissions: ['read'], domains: [...actor.domains] };
 }
 export function senderDomainAllowed(allowed: readonly string[], candidate: string) {
   const domain = candidate.toLowerCase();

@@ -1,5 +1,5 @@
 import { errorCodeOf } from '../../api/src/log.js';
-import { BaneError } from './bane.js';
+import { NightmailError } from './nightmail.js';
 import { MissingSecret } from './tokens.js';
 import { log, logError } from './log.js';
 
@@ -13,12 +13,12 @@ class BindingError extends Error {}
 /** A rejected storage, network or RPC operation is retryable. Don't persist its exception text. */
 export async function external<T>(p: Promise<T>): Promise<T> {
   try { return await p; }
-  catch (e) { if (e instanceof BaneError || e instanceof MissingSecret) throw e; throw new BindingError(); }
+  catch (e) { if (e instanceof NightmailError || e instanceof MissingSecret) throw e; throw new BindingError(); }
 }
 
 const permanent = new Set(['INBOUND_RECIPIENTS_CHANGED', 'REPLY_TO_AUTOMATED', 'REPLY_TO_NO_REPLY', 'SELF_SEND', 'RECIPIENT_REQUIRED']);
 function failure(e: unknown, attempts: number, now: number) {
-  const api = e instanceof BaneError ? e : null;
+  const api = e instanceof NightmailError ? e : null;
   const code = api ? errorCodeOf(api.code) : e instanceof MissingSecret ? 'MISSING_SECRET' : e instanceof BindingError ? 'BINDING_ERROR' : 'UNKNOWN_ERROR';
   const config = api && ([401, 403, 404].includes(api.status) || ['SUPPORT_NOT_CONFIGURED', 'IDEMPOTENCY_OUTCOME_UNKNOWN', 'IDEMPOTENCY_CONFLICT'].includes(code));
   const transient = e instanceof BindingError || (!config && api && (api.status >= 500 || api.status === 429 ||

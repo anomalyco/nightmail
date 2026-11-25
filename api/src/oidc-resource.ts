@@ -17,26 +17,63 @@ const audience = (runtime: Runtime, url?: string) => {
   return new URL('/mcp', origin && runtime.config.previousOrigins?.includes(origin) ? origin : runtime.config.publicUrl).href;
 };
 export function protectedResourceMetadata(runtime: Runtime, url?: string) {
-  // Both scope sets are published and accepted (bane:* until cleanup), the requested ones (OAUTH_SCOPE_PREFIX) first.
-  const scopes = requestedScopes(runtime.config), published = [...scopes, ...oauthScopePrefixes.filter(prefix => !scopes[0]!.startsWith(`${prefix}:`)).flatMap(prefix => permissions.map(p => `${prefix}:${p}`))];
-  return { resource: audience(runtime, url), resource_name:productName, authorization_servers: [runtime.config.accountIssuer],
+  // Only the scopes this installation asks for (OAUTH_SCOPE_PREFIX): MCP clients request every listed scope (Claude Code's
+  // `mcp login` does), and the consent screen showed each permission twice while bane:* was listed too. Tokens with either
+  // prefix still work (authorizeResource). An earlier origin keeps both sets: its grants were made with bane:*, and the
+  // account service checks a grant's scopes against this list whenever it refreshes. bane: remove after rename cleanup.
+  const resource = audience(runtime, url), scopes = requestedScopes(runtime.config);
+  const published = resource === audience(runtime) ? scopes
+    : [...scopes, ...oauthScopePrefixes.filter(prefix => !scopes[0]!.startsWith(`${prefix}:`)).flatMap(prefix => permissions.map(p => `${prefix}:${p}`))];
+  return { resource, resource_name:productName, authorization_servers: [runtime.config.accountIssuer],
     scopes_supported: published, bearer_methods_supported: ['header'],
     // Provisional extension name until the issuer publishes its metadata contract.
     scope_descriptions:Object.fromEntries(published.map(scope => [scope, descriptions[scope.split(':')[1] as Permission]])) };
 }
 
-// Cache only completed public metadata. Each Worker request owns its fetches.
-const authorities = new Map<string, { metadata: oauth.AuthorizationServer; expires: number }>();
-async function authority(issuer: string) {
+// Cache only completed public metadata and last-known-good JWKS. Each Worker request owns its fetches.
+const AUTHORITY_TTL_MS = 300_000;
+const AUTHORITY_STALE_TTL_MS = 24 * 3600_000;
+const AUTHORITY_RETRY_MS = 30_000;
+class IssuerUnavailableError extends Error {
+  constructor() { super('OIDC issuer is temporarily unavailable.'); this.name = 'IssuerUnavailableError'; }
+}
+type CachedAuthority = {
+  metadata: oauth.AuthorizationServer;
+  expires: number;
+  fetchedAt: number;
+  lastFallbackLog?: number;
+  jwks?: { body: string; contentType: string; fetchedAt: number };
+};
+const authorities = new Map<string, CachedAuthority>();
+const isTransientHttp = (status: number) => status === 429 || status >= 500;
+async function authority(issuer: string): Promise<CachedAuthority> {
+  const now = Date.now();
   const cached = authorities.get(issuer);
-  if (cached && cached.expires > Date.now()) return cached.metadata;
+  if (cached && cached.expires > now) return cached;
   const url = new URL(issuer);
-  const response = await oauth.discoveryRequest(url, { signal: AbortSignal.timeout(5000) });
-  const metadata = await oauth.processDiscoveryResponse(url, response);
-  if (!metadata.jwks_uri || new URL(metadata.jwks_uri).protocol !== 'https:') throw Error('Issuer has no HTTPS JWKS');
-  if (authorities.size >= 16) authorities.clear();
-  authorities.set(issuer, { metadata, expires: Date.now() + 300_000 });
-  return metadata;
+  let transient = false;
+  try {
+    const response = await oauth.discoveryRequest(url, { signal: AbortSignal.timeout(5000) });
+    if (isTransientHttp(response.status)) { await response.body?.cancel().catch(() => {}); transient = true; throw new IssuerUnavailableError(); }
+    const metadata = await oauth.processDiscoveryResponse(url, response);
+    if (!metadata.jwks_uri || new URL(metadata.jwks_uri).protocol !== 'https:') throw Error('Issuer has no HTTPS JWKS');
+    if (authorities.size >= 16 && !authorities.has(issuer)) authorities.clear();
+    const entry: CachedAuthority = { metadata, expires: now + AUTHORITY_TTL_MS, fetchedAt: now, jwks: cached?.metadata.jwks_uri === metadata.jwks_uri ? cached.jwks : undefined };
+    authorities.set(issuer, entry);
+    return entry;
+  } catch (error) {
+    const unavailable = transient || error instanceof IssuerUnavailableError || !(error instanceof oauth.OperationProcessingError || error instanceof oauth.ResponseBodyError);
+    if (unavailable && cached && now - cached.fetchedAt < AUTHORITY_STALE_TTL_MS) {
+      cached.expires = now + AUTHORITY_RETRY_MS;
+      if (!cached.lastFallbackLog || now - cached.lastFallbackLog >= 60_000) {
+        cached.lastFallbackLog = now;
+        log('warn', { code: 'OIDC_DISCOVERY_STALE_FALLBACK', ageSeconds: Math.round((now - cached.fetchedAt) / 1000) });
+      }
+      return cached;
+    }
+    if (unavailable) throw new IssuerUnavailableError();
+    throw error;
+  }
 }
 
 // At most 40 characters of letters, digits, spaces and . _ - ( ), trimmed; anything else (or nothing left) is no label.
@@ -176,12 +213,58 @@ export async function authorizeResource(runtime: Runtime, request: Request, hand
   const auth = request.headers.get('authorization');
   if (!auth || auth.length > 16384 || (request.headers.get('dpop')?.length ?? 0) > 8192) return denied(401);
   let claims: oauth.JWTAccessTokenClaims;
+  let issuerUnavailable = false;
   try {
-    const as = await authority(runtime.config.accountIssuer!);
+    const entry = await authority(runtime.config.accountIssuer!);
+    const jwksFetch: typeof fetch = async (input, init) => {
+      const now = Date.now();
+      const target = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+      const isJwks = target === entry.metadata.jwks_uri;
+      const fallback = () => {
+        if (isJwks && entry.jwks && now - entry.jwks.fetchedAt < AUTHORITY_STALE_TTL_MS) {
+          if (!entry.lastFallbackLog || now - entry.lastFallbackLog >= 60_000) {
+            entry.lastFallbackLog = now;
+            log('warn', { code: 'OIDC_JWKS_STALE_FALLBACK', ageSeconds: Math.round((now - entry.jwks.fetchedAt) / 1000) });
+          }
+          return new Response(entry.jwks.body, { status: 200, headers: { 'content-type': entry.jwks.contentType } });
+        }
+        return null;
+      };
+      let response: Response;
+      try { response = await fetch(input, init); }
+      catch (error) {
+        const stale = fallback();
+        if (stale) return stale;
+        issuerUnavailable = true;
+        throw error;
+      }
+      if (isTransientHttp(response.status)) {
+        await response.body?.cancel().catch(() => {});
+        const stale = fallback();
+        if (stale) return stale;
+        issuerUnavailable = true;
+        throw new IssuerUnavailableError();
+      }
+      if (isJwks && response.ok) {
+        const body = await response.text();
+        const contentType = response.headers.get('content-type') ?? 'application/jwk-set+json';
+        entry.jwks = { body, contentType, fetchedAt: now };
+        return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+      }
+      return response;
+    };
     // The audience is this resource; htm and htu must match the actual HTTP request.
-    claims = await oauth.validateJwtAccessToken(as, request, expectedAudience(resource, auth.replace(/^(?:Bearer|DPoP)\s+/i, '')),
-      { signingAlgorithms: ['ES256','RS256'], [oauth.clockTolerance]: 0, signal: AbortSignal.timeout(5000) });
-  } catch { return denied(401); }
+    claims = await oauth.validateJwtAccessToken(entry.metadata, request, expectedAudience(resource, auth.replace(/^(?:Bearer|DPoP)\s+/i, '')),
+      { signingAlgorithms: ['ES256','RS256'], [oauth.clockTolerance]: 0, signal: AbortSignal.timeout(5000), [oauth.customFetch]: jwksFetch });
+  } catch (error) {
+    if (issuerUnavailable || error instanceof IssuerUnavailableError) {
+      return Response.json(
+        { jsonrpc: '2.0', error: { code: -32000, message: 'Authentication service is temporarily unavailable. Retry shortly.' }, id: null },
+        { status: 503, headers: { 'cache-control': 'no-store', 'retry-after': '30' } },
+      );
+    }
+    return denied(401);
+  }
   // A token minted in the future would also block every later token from updating the approval.
   if (typeof claims.iat !== 'number' || claims.iat > Date.now() / 1000 + 30) return denied(401);
   // The dashboard's sign-in requirement applies to every access token, refreshed ones included:

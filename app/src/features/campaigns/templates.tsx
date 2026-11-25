@@ -17,6 +17,7 @@ import { queries } from '../../data/queries'
 import { usePrefetchQueries } from '../../data/prefetch'
 import { ChunkFallback } from '../../lib/preloadable'
 import { CampaignRouteSkeleton, ComposerSkeleton, templateColumns } from './skeletons'
+import { RowProblem } from './steps'
 import { CampaignsHeader } from './header'
 import { publishFirst } from './copy'
 import './campaigns.css'
@@ -218,7 +219,7 @@ function TemplateEditor({ initial }: {initial: CampaignTemplate}) {
         <div className="campaign-compose-row"><label htmlFor="template-preview">Inbox preview</label><Input id="template-preview" placeholder="Shown after the subject" value={draft.previewText ?? ''} disabled={archived} onChange={event => change('previewText', event.target.value)} /></div>
         <div className="campaign-compose-row"><label htmlFor="template-from">From name</label><Input id="template-from" placeholder="Sender name, e.g. Acme" value={draft.fromName ?? ''} disabled={archived} onChange={event => change('fromName', event.target.value)} /></div>
         <div className="campaign-compose-row"><label htmlFor="template-reply">Reply to</label><Input id="template-reply" type="text" inputMode="email" autoCapitalize="none" spellCheck={false} placeholder="reply@example.com" value={replyToText} disabled={archived} aria-invalid={Boolean(replyToValidation) || undefined} aria-describedby={replyToValidation ? 'template-reply-error' : undefined} onChange={event => { setReplyToText(event.target.value); change('replyTo', replyToAddresses(event.target.value)) }} /></div>
-        {replyToValidation && <div id="template-reply-error" className="campaign-compose-feedback ui-field__error" role="alert">{replyToValidation}</div>}
+        <RowProblem id="template-reply-error" message={replyToValidation} />
       </div>
       <ChunkFallback.Provider value={<ComposerSkeleton />}><EmailComposer ref={composer} personalize attachmentApi={api.templateAssets} attachmentIds={draft.attachments} initialHtml={draft.html ?? ''} disabled={archived} onReady={() => setReady(true)} onDirty={changed} onBusy={setComposerBusy} onAttach={() => attachments.current?.open()} /></ChunkFallback.Provider>
       <CampaignAttachments ref={attachments} attachmentApi={api.templateAssets} ids={draft.attachments} persisted={template.draft.attachments} body={template.draft.html ?? ''} shown={ready} onChange={ids => change('attachments', ids)} onBusy={setAssetBusy} disabled={archived || saving || composerBusy} />

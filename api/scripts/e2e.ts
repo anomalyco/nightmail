@@ -45,7 +45,7 @@ const safeModeSkips: Partial<Record<Op, string>> = {
   addReceivingHost: hostChange, updateReceivingHost: hostChange, removeReceivingHost: hostChange,
   refreshConnectionScan: byoV2, importConnectionDomains: byoV2, getConnectionRegionStatus: byoV2, requestConnectionProductionAccess: byoV2, updateConnectionStack: byoV2,
 };
-const destructive = process.env.BANE_E2E_ALLOW_DESTRUCTIVE === '1';
+const destructive = (process.env.NIGHTMAIL_E2E_ALLOW_DESTRUCTIVE ?? process.env.BANE_E2E_ALLOW_DESTRUCTIVE) === '1';
 const SKIP: Partial<Record<Op,string>> = destructive ? {
   createWorkspace: 'OIDC dashboard only; no public delete for a newly created workspace.',
   createConnection: 'Would replace or reconfigure the sole shared Hosted connection; happy path requires a dashboard owner.',
@@ -139,13 +139,13 @@ Object.assign(SKIP, {
 const started = Date.now();
 const prefix = `e2e-${started}-${randomUUID().slice(0, 12)}`;
 // Workflows supply the verified domain and ID for their own installation.
-const setting = (suffix: string) => process.env[`BANE_E2E_${suffix}`] ?? process.env[`OPENSEND_E2E_${suffix}`];
+const setting = (suffix: string) => process.env[`NIGHTMAIL_E2E_${suffix}`] ?? process.env[`BANE_E2E_${suffix}`] ?? process.env[`OPENSEND_E2E_${suffix}`];
 const domain = setting('DOMAIN') ?? 'e2e.bane.mx', domainId = setting('DOMAIN_ID') ?? 'dom_1aa89a5a687348e89699f5cd97f5496b', region = setting('REGION') ?? 'us-east-2';
 const from = `${prefix}@${domain}`, inbox = `${prefix}-in@${domain}`;
 // SES supports +labels on all three mailboxes. Never reuse a real contact or retained suppression.
 const simulator = (kind: 'success' | 'bounce' | 'complaint', label = '') => `${kind}+${prefix}${label}@simulator.amazonses.com`;
 const success = simulator('success'), singleSuccess = simulator('success', '-single'), bounce = simulator('bounce'), complaint = simulator('complaint');
-const subject = `Bane E2E ${prefix}`, text = `Bane delivery check ${prefix}.`;
+const subject = `Nightmail E2E ${prefix}`, text = `Nightmail delivery check ${prefix}.`;
 const html = `<p>${text}</p>`;
 // Synthetic: the E2E workspace's postal address, which its campaigns' footers show.
 const E2E_POSTAL_ADDRESS = 'Nightmail E2E\n1 Fixture Way\nTest City, CA 94000';
@@ -391,7 +391,7 @@ async function mcpChallenge() {
       && /scope="(nightmail|bane):read \1:send \1:manage"/.test(challenge), 'MCP OAuth discovery challenge changed');
   }
   const resource = await get<{ resource?: string; authorization_servers?: string[]; scopes_supported?: string[] }>(new URL('/.well-known/oauth-protected-resource/mcp', base));
-  check(resource.resource === `${base.origin}/mcp` && resource.authorization_servers?.length === 1 && ['nightmail', 'bane'].every(prefix => ['read', 'send', 'manage'].every(p => resource.scopes_supported?.includes(`${prefix}:${p}`))), 'MCP protected resource metadata changed');
+  check(resource.resource === `${base.origin}/mcp` && resource.authorization_servers?.length === 1 && ['nightmail', 'bane'].some(prefix => resource.scopes_supported?.join(' ') === `${prefix}:read ${prefix}:send ${prefix}:manage`), 'MCP protected resource metadata changed');
   // The account service is the authorization server. OpenCode signs in with a client metadata document as its client_id.
   const issuer = resource.authorization_servers[0]!;
   const server = await get<{ issuer?: string; client_id_metadata_document_supported?: boolean; code_challenge_methods_supported?: string[] }>(new URL('/.well-known/oauth-authorization-server', issuer));
@@ -964,7 +964,7 @@ async function inbound() {
     const followed = await api('downloadInboundAttachment', { client: unfollowed, path: { messageId: msg.id, attachmentId: msg.attachments[0].id }, query: { addressId } }) as unknown as Output<'getInboundAttachment'>;
     check(new URL(followed.url).protocol === 'https:' && Date.parse(followed.expiresAt) > Date.now(), 'expected the webhook attachment link to redirect to a temporary HTTPS URL');
     if (destructive) await step('Download and import the run-owned inbound PNG',async()=>{
-      // S3 presigned while mail stays in S3; a Bane-signed /v1/objects link on this origin once it is in R2.
+      // S3 presigned while mail stays in S3; a Nightmail-signed /v1/objects link on this origin once it is in R2.
       const url = new URL(link.url), own = url.origin === base.origin && /^\/v1\/objects\/[A-Za-z0-9_.-]+$/.test(url.pathname);
       check((own || /(?:^|\.)s3[.-][a-z0-9-]+\.amazonaws\.com$/.test(url.hostname) && !url.port) && !url.username && !url.password,'refusing an attachment URL that is neither S3 nor this deployment’s object link');
       const res=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(12000)});
@@ -1031,9 +1031,9 @@ async function addressInbox(id: string, otherId: string, messageId: string, sent
 }
 
 async function prepare() {
-  check(base.protocol === 'https:' && base.href === base.origin + '/', 'BANE_E2E_URL must be a bare HTTPS origin');
+  check(base.protocol === 'https:' && base.href === base.origin + '/', 'NIGHTMAIL_E2E_URL must be a bare HTTPS origin');
   check(!destructive || (['https://dev.nightmail.dev', 'https://dev.bane.mx'].includes(base.origin) && domain === 'e2e.bane.mx' && domainId === 'dom_e53755830a0141a5bd6e71e45e942f06' && region === 'us-east-2'),'destructive tests require the exact dev fixture');
-  check(key && domain && domainId, 'missing BANE_E2E_API_KEY, DOMAIN or DOMAIN_ID');
+  check(key && domain && domainId, 'missing NIGHTMAIL_E2E_API_KEY, DOMAIN or DOMAIN_ID');
   const settings = await api('getWorkspaceSettings',{});
   check(settings.name === 'E2E','refusing non-E2E workspace');
   // Campaigns need the workspace's postal address (CAN-SPAM); the campaign steps run after this one.
@@ -1064,7 +1064,7 @@ async function prepare() {
 // must be exactly one minted by this suite (including the pre-rename form), and
 // both its embedded timestamp and the server's creation timestamp must be old.
 function staleRun(label: string | null | undefined, createdAt: string) {
-  const m = label?.match(/^(?:(?:Bane|OpenSend MX) E2E )?(e2e-(\d{13})-[a-f0-9]{8}-[a-f0-9]{3})(?:-(?:cli|schedule|attachment|import|newsletter))?$/);
+  const m = label?.match(/^(?:(?:Nightmail|Bane|OpenSend MX) E2E )?(e2e-(\d{13})-[a-f0-9]{8}-[a-f0-9]{3})(?:-(?:cli|schedule|attachment|import|newsletter))?$/);
   if (!m) return null;
   const minted = Number(m[2]), created = Date.parse(createdAt), cutoff = started - 30*60_000;
   return minted < cutoff && created < cutoff && Math.abs(created-minted) < 5*60_000 ? m[1] : null;
@@ -1217,7 +1217,7 @@ function finish() {
   }
   const skipped = Object.keys(SKIP).length;
   const covered = new Set(steps.filter(s => s.status === 'pass').flatMap(s => s.operationIds));
-  const headline = `Bane E2E ${failures ? 'FAIL' : 'PASS'} — ${covered.size}/${contract.size} operations in passing steps, ${attempted.size} attempted, ${skipped} intentionally skipped, ${missing.length} not reached (${((ended - started) / 1000).toFixed(1)} s)`;
+  const headline = `Nightmail E2E ${failures ? 'FAIL' : 'PASS'} — ${covered.size}/${contract.size} operations in passing steps, ${attempted.size} attempted, ${skipped} intentionally skipped, ${missing.length} not reached (${((ended - started) / 1000).toFixed(1)} s)`;
   console.log(headline);
   const commit = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
   const report = { commit, targetUrl: base.origin, run: prefix, start: new Date(started).toISOString(), end: new Date(ended).toISOString(), ms: ended - started,

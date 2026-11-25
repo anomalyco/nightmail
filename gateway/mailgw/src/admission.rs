@@ -1,7 +1,7 @@
 use std::{
     collections::{HashMap, VecDeque},
     net::IpAddr,
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, Weak},
     time::Duration,
 };
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
@@ -102,6 +102,7 @@ pub struct Limits {
     ips: HashMap<IpAddr, (u32, Arc<tokio::sync::Semaphore>)>,
     blocks: HashMap<IpAddr, u32>,
     anonymous: u32,
+    signins: HashMap<u64, Weak<Semaphore>>,
     failures: HashMap<(IpAddr, u64), Failures>,
     peer_failures: HashMap<IpAddr, VecDeque<Instant>>,
     accepts: HashMap<IpAddr, Bucket>,
@@ -114,6 +115,19 @@ struct Failures {
 const WINDOW: Duration = Duration::from_secs(600);
 const LOCKOUT: Duration = Duration::from_secs(900);
 impl Limits {
+    /// The sign-in RPCs one login name runs at once: two, the rest wait their turn. Only the sign-in RPC holds a
+    /// permit. Keep at most one live pool per login name.
+    pub fn signin(&mut self, key: u64) -> Arc<Semaphore> {
+        self.signins
+            .get(&key)
+            .and_then(Weak::upgrade)
+            .unwrap_or_else(|| {
+                self.signins.retain(|_, s| s.strong_count() > 0);
+                let s = Arc::new(Semaphore::new(2));
+                self.signins.insert(key, Arc::downgrade(&s));
+                s
+            })
+    }
     pub fn success(&mut self, ip: IpAddr, key: u64) {
         self.failures.remove(&(ip, key));
     }
@@ -205,9 +219,10 @@ impl Bucket {
     }
 }
 const ANONYMOUS: u32 = 128;
-// An office or a carrier-grade NAT shares one /24, and every client reconnects at once after a deploy. Two busy
-// networks still leave half the task available.
-const PER_SUBNET: u32 = 64;
+// Leave room for other networks during a reconnect burst.
+const PER_SUBNET: u32 = 16;
+// A mail app opens several connections at once, and an office or an app's servers share one address.
+const PER_IP: u32 = 8;
 pub struct Slot {
     pub accepted: Instant,
     pub after: Instant,
@@ -234,7 +249,7 @@ impl Slot {
             .ips
             .entry(ip)
             .or_insert_with(|| (0, Arc::new(tokio::sync::Semaphore::new(4))));
-        if *count >= 8 {
+        if *count >= PER_IP {
             return None;
         }
         *count += 1;
@@ -294,7 +309,7 @@ mod tests {
     use super::*;
     #[test]
     fn anonymous_slots_are_scoped_and_returned_for_both_address_families() {
-        // Eight addresses of one /24 (or /48) fill its 64 slots; the ninth waits, another network doesn't.
+        // A full network share leaves room for another network.
         type Family = (fn(u32) -> String, &'static str);
         let families: [Family; 2] = [
             (|i| format!("192.0.2.{i}"), "192.0.3.1"),
@@ -304,13 +319,13 @@ mod tests {
             let limits = Arc::new(Mutex::new(Limits::default()));
             let take = |ip: &str| Slot::take(limits.clone(), ip.parse().unwrap(), Instant::now());
             let mut held = Vec::new();
-            for i in 1..=PER_SUBNET / 8 {
+            for i in 1..=PER_SUBNET / PER_IP {
                 let ip = if i == 2 && other.contains('.') {
                     "::ffff:192.0.2.2".to_owned()
                 } else {
                     peer(i)
                 };
-                for _ in 0..8 {
+                for _ in 0..PER_IP {
                     held.push(take(&ip).unwrap());
                 }
                 assert!(take(&ip).is_none());
@@ -321,6 +336,16 @@ mod tests {
             assert!(limits.lock().unwrap().blocks.is_empty());
             assert!(take(&peer(9)).is_some());
         }
+    }
+    #[test]
+    fn concurrent_signins_leave_room_for_other_names() {
+        let mut limits = Limits::default();
+        let first = limits.signin(1).try_acquire_owned().unwrap();
+        let _second = limits.signin(1).try_acquire_owned().unwrap();
+        assert!(limits.signin(1).try_acquire_owned().is_err());
+        assert!(limits.signin(2).try_acquire_owned().is_ok());
+        drop(first);
+        assert!(limits.signin(1).try_acquire_owned().is_ok());
     }
     #[test]
     fn a_short_byte_credit_delays_in_arrival_order() {

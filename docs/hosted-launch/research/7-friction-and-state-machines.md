@@ -1,4 +1,4 @@
-# OpenSend MX audit: friction and implicit state machines
+# Nightmail audit: friction and implicit state machines
 
 Read-only. Builds on `6-knob-audit.md`; items already there are referenced, not repeated.
 

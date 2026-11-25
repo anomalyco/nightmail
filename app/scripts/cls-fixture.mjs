@@ -1,4 +1,4 @@
-// A throwaway hosted Bane for the CLS gate: a fresh Postgres database, the Node API serving the production dashboard
+// A throwaway hosted Nightmail for the CLS gate: a fresh Postgres database, the Node API serving the production dashboard
 // build (app/dist) and synthetic workspaces. Nothing touches a real deployment, SES or real mail.
 // Postgres comes from CLS_PG_URL (an admin connection, as the CI service provides), else a container of the CI image
 // when Docker is running, else a temporary initdb cluster. The database and role are created here and removed on stop().
@@ -150,6 +150,8 @@ export async function start(repo, { log = () => {}, servers = 1, delay = null, f
       MAILGW_API_TOKEN: randomBytes(24).toString('hex'), MAILGW_PUBLIC_DOMAIN: 'northwind.example',
       // Bring your own AWS (regional): the hosted connections' account is the platform's, as in production.
       BANE_PLATFORM_AWS_ACCOUNT: '111122223333', BANE_BYO_V2: 'true', BYO_V5_TEMPLATE_URL: 'https://nightmail-byo-templates-111122223333.s3.us-east-2.amazonaws.com/byo/6.0.yaml', BYO_EVENTS_ORIGIN: 'https://events.nightmail.dev',
+      // The link domain, as production has it (own link hosts off): no link record on any domain's page.
+      NIGHTMAIL_LINK_HOST: 'links.edge.northwind.example',
     });
     execFileSync('node', ['--import', 'tsx', 'src/migrate.ts'], { cwd: api, env: envFor(0), stdio: ['ignore', 'ignore', 'inherit'] });
     log('postgres: migrated');
@@ -756,7 +758,7 @@ export async function seed(fx) {
   if ((await db.query("SELECT to_regclass('audit_events') IS NOT NULL AS ok")).rows[0].ok) await db.query(`INSERT INTO audit_events
     (workspace_id,user_id,actor_type,actor_id,actor_label,via,action,target_type,target_id,summary,reason,request_id,ip_network,user_agent,internal,at,retain_until) VALUES
     ('ws_northwind','user_sam','member','user_sam',NULL,'dashboard','member.join','member','user_sam','{"after":{"role":"admin"}}',NULL,'req_fixture_join','198.51.100.0/24','Safari 18 on macOS',false,now()-interval '6 days',now()+interval '1 year'),
-    ('ws_northwind','user_sam','support','sgr_fixture','Bane support','support','support.view','workspace','ws_northwind','{"ticket":"T-1042","member":"user_sam"}',NULL,'req_fixture_support',NULL,NULL,false,now()-interval '2 days',now()+interval '1 year')`);
+    ('ws_northwind','user_sam','support','sgr_fixture','Nightmail support','support','support.view','workspace','ws_northwind','{"ticket":"T-1042","member":"user_sam"}',NULL,'req_fixture_support',NULL,NULL,false,now()-interval '2 days',now()+interval '1 year')`);
   const email = await mail(db, 'ws_northwind', 30);
   // The newest receipt as a well-made transactional email, and a junk-like one sent a minute ago (EmailInsight's two cases).
   // Neither links a remote image: the sent-mail preview loads those, and the gate allows no external request.
@@ -875,7 +877,7 @@ export async function seed(fx) {
   const rampCampaign = await dana.api('POST', '/v1/campaigns', { name: 'Waitlist launch', subject: 'We are live', from: 'news@mail.northwind.example', html: '<p>Hello</p>', audience: { listId: waitlist.id } });
   const contact = contacts[0];
 
-  // Northwind's standing: graded B with a notice (two complaints in 10,000 accepted). Dana is also a Bane operator, so the operator
+  // Northwind's standing: graded B with a notice (two complaints in 10,000 accepted). Dana is also a Nightmail operator, so the operator
   // console has a signed-in user.
   const { noticeReasons } = await tsImport(join(apiDir, 'src/standing-model.ts'), import.meta.url);
   await standing(db, 'ws_northwind', { score: 86.4, limit: null, step: 'notice', since: ago(90), factors: [factor('complaints', 'Complaints', 30, 0.0003, 93.1), factor('content', 'Spam screen', 20, null, null), factor('bounces', 'Bounces', 15, 0.009, 91.1), factor('hygiene', 'List quality', 15, 0.012, 97.5), factor('auth', 'Authentication', 10, 0.85, 85), factor('engagement', 'Engagement', 10, 0.0031, 93.9)],

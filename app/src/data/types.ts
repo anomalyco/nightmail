@@ -124,7 +124,7 @@ export interface Campaign { stats?: CampaignListStats | null; counts?: { total: 
 // pacing, pausedAt, pauseReason, waiting, and rateShare are optional so older API responses still type-check.
 // rateShare is the fraction (0.05–1) of the SES per-second send rate the campaign may use; 1 is the full rate.
 export interface CampaignPacing { perDay: number | null; autoPause: boolean; rateShare?: number; windowStartedAt: ISODate | null; windowExpanded: number; nextWindowAt: ISODate | null; plan?: number[] | null; batch?: number | null }
-export interface CampaignDelivery { total: number; prepared: number; expanded: number; canceled: number; error: { code: string; message: string } | null; pacing?: CampaignPacing; pausedAt?: ISODate | null; pauseReason?: { code: string; message: string } | null; waiting?: { reason: 'pacing_window' | 'ses_daily_quota' | 'hosted_daily_quota' | 'list_probe' | 'balance' | 'feedback_lag' | 'ramp'; until: ISODate } | null; feedbackLag?: { oldestMs: number; lane: 'routine' | 'priority' } | null }
+export interface CampaignDelivery { total: number; prepared: number; expanded: number; canceled: number; error: { code: string; message: string } | null; pacing?: CampaignPacing; pausedAt?: ISODate | null; pauseReason?: { code: string; message: string } | null; waiting?: { reason: 'pacing_window' | 'ses_daily_quota' | 'hosted_daily_quota' | 'list_probe' | 'balance' | 'feedback_lag' | 'ramp' | 'link_record'; until: ISODate } | null; feedbackLag?: { oldestMs: number; lane: 'routine' | 'priority' } | null }
 // The API's Campaign.sendEstimate: what is left to release, the region's planned rate, where the sender is on the ramp
 // (api/src/standing-model.ts RAMP; step counts from 1) and when the last recipient is expected to go out.
 export interface CampaignRamp { step: number; steps: number; ceilingPerHour: number; startedAt: ISODate | null; released: number }
@@ -184,7 +184,7 @@ export interface CampaignTemplateDraft { name: string; description: string; subj
 export interface CampaignTemplate { id: string; url: string; revision: number; draft: CampaignTemplateDraft; published: CampaignTemplateDraft | null; publishedRevision: number | null; archivedAt: ISODate | null; createdAt: ISODate; updatedAt: ISODate }
 export interface CampaignTemplateSummary { id: string; url: string; revision: number; name: string; description: string; subject: string; published: boolean; publishedRevision: number | null; archivedAt: ISODate | null; createdAt: ISODate; updatedAt: ISODate }
 export interface AttachmentApi { upload(file: File, inline?: {contentId: string}): Promise<Attachment>; get(id: string, signal?: AbortSignal): Promise<Attachment>; content(id: string, signal?: AbortSignal): Promise<{id: string; filename: string; contentType: string; content: string}>; remove(id: string): Promise<void> }
-export type DnsRecordPurpose = 'sending' | 'receiving' | 'mail_from' | 'dmarc'
+export type DnsRecordPurpose = 'sending' | 'receiving' | 'mail_from' | 'dmarc' | 'links'
 type Dmarc = { status: 'missing' | 'invalid' | 'none' | 'quarantine' | 'reject'; record: string | null; source: string | null; adkim: 'r' | 's'; aspf: 'r' | 's'; alignment: { dkim: boolean; spf: boolean } }
 // What a connected AWS account's disconnect keeps in the account and couldn't remove (DELETE /v1/connection).
 export interface DisconnectSummary {

@@ -65,7 +65,7 @@ function listNode(element: Element): EditorNode {
   for (const child of Array.from(element.children)) {
     if (child.tagName !== 'LI') continue
     const nested: EditorNode[] = []
-    const holder = document.createElement('li')
+    const holder = child.ownerDocument.createElement('li')
     for (const part of Array.from(child.childNodes)) {
       if (part.nodeType === Node.ELEMENT_NODE && ['UL', 'OL'].includes((part as Element).tagName)) nested.push(listNode(part as Element))
       else if (part.nodeType === Node.ELEMENT_NODE && (part as Element).tagName === 'P') holder.append(...Array.from(part.childNodes))
@@ -83,12 +83,12 @@ function imageNode(element: Element, link?: Element): EditorNode | null {
   const width = dimension(element.getAttribute('width')), height = dimension(element.getAttribute('height'))
   return { type: 'image', attrs: withStyle({ src, alt: element.getAttribute('alt') ?? '', width: width ?? 'auto', height: height ?? 'auto', alignment: alignmentOf(element) ?? 'left', href: link ? safeHref(link.getAttribute('href')) : null }, element) }
 }
-function blockNodes(parent: Node, inColumn: boolean): EditorNode[] {
+function blockNodes(parent: Element | DocumentFragment, inColumn: boolean): EditorNode[] {
   const nodes: EditorNode[] = []
   let pending: Element | null = null // Accumulates loose inline content into a paragraph.
   const flush = () => { if (pending) { const text = paragraph(pending); if (text.content?.length) nodes.push(text); pending = null } }
   for (const child of Array.from(parent.childNodes)) {
-    if (child.nodeType === Node.TEXT_NODE) { if ((child.textContent ?? '').trim()) { pending ??= document.createElement('p'); pending.append(child.cloneNode(true)) } continue }
+    if (child.nodeType === Node.TEXT_NODE) { if ((child.textContent ?? '').trim()) { pending ??= parent.ownerDocument.createElement('p'); pending.append(child.cloneNode(true)) } continue }
     if (child.nodeType !== Node.ELEMENT_NODE) continue
     const element = child as Element
     const tag = element.tagName
@@ -117,7 +117,7 @@ function blockNodes(parent: Node, inColumn: boolean): EditorNode[] {
       const href = safeHref(element.getAttribute('href'))
       const isButton = element.hasAttribute('data-button') || element.getAttribute('data-id') === 'react-email-button' || /\bbutton\b/.test(element.getAttribute('class') ?? '')
       if (isButton && href) { flush(); nodes.push({ type: 'button', attrs: withStyle({ href, alignment: alignmentOf(element) ?? 'left' }, element), content: inlineNodes(element, [], true).map(node => node.type === 'text' ? { ...node, marks: node.marks?.filter(mark => mark.type === 'bold') } : node) }); continue }
-      pending ??= document.createElement('p'); pending.append(element.cloneNode(true)); continue
+      pending ??= parent.ownerDocument.createElement('p'); pending.append(element.cloneNode(true)); continue
     }
     if (tag === 'DIV' && element.hasAttribute('data-columns') && !inColumn) {
       flush()
@@ -128,7 +128,7 @@ function blockNodes(parent: Node, inColumn: boolean): EditorNode[] {
     if (tag === 'SECTION') { flush(); const inner = blockNodes(element, false); nodes.push({ type: 'section', attrs: withStyle({}, element), content: inner.length ? inner : [emptyParagraph()] }); continue }
     if (['SCRIPT', 'STYLE', 'HEAD', 'TITLE', 'META', 'LINK', 'IFRAME', 'OBJECT', 'EMBED', 'FORM', 'INPUT', 'BUTTON', 'SELECT', 'TEXTAREA', 'NOSCRIPT', 'TEMPLATE'].includes(tag)) continue
     // Inline content directly inside a container becomes a paragraph; other containers (legacy div/table/section) unwrap.
-    if (['STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE', 'DEL', 'CODE', 'SUP', 'SPAN', 'BR', 'FONT', 'SMALL', 'LABEL'].includes(tag)) { pending ??= document.createElement('p'); pending.append(element.cloneNode(true)); continue }
+    if (['STRONG', 'B', 'EM', 'I', 'U', 'S', 'STRIKE', 'DEL', 'CODE', 'SUP', 'SPAN', 'BR', 'FONT', 'SMALL', 'LABEL'].includes(tag)) { pending ??= parent.ownerDocument.createElement('p'); pending.append(element.cloneNode(true)); continue }
     flush()
     nodes.push(...blockNodes(element, inColumn))
   }

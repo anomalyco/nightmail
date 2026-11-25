@@ -1,4 +1,4 @@
-# Bane implementation TODO
+# Nightmail implementation TODO
 
 Scope decisions recorded 2026-09-08 after reviewing the Paper UI. The portable API and generated SDK now exist: see [API setup and verified scope](api/README.md) and [SDK usage](sdk/README.md). One `api/api.acceptance.test.ts` checks the API; there are no separate unit/spec files. The checklist below still includes frontend work and live integration gates, so unchecked items must not be inferred complete from API implementation alone. See [SES reference hub](docs/aws-ses/README.md) and [implementation decisions](docs/aws-ses/implementation-decisions-and-verification.md).
 

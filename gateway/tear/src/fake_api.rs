@@ -1,4 +1,4 @@
-//! A deterministic in-process fake of Bane's internal mail RPC (`POST /internal/v1/mail`),
+//! A deterministic in-process fake of Nightmail's internal mail RPC (`POST /internal/v1/mail`),
 //! served over loopback HTTP so the gateway's real signed `reqwest` path runs unchanged.
 //!
 //! It re-implements the phase-2 SQL contract the gateway relies on (`api/src/mail-gateway.ts`,

@@ -42,7 +42,7 @@
 .audience-list-picker > svg { position: absolute; right: 10px; top: 50%; translate: 0 -50%; color: var(--color-muted); pointer-events: none; }
 .data-toolbar .audience-list-filter, .audience-list-picker.audience-count-list { width: 220px; max-width: 100%; flex-shrink: 0; }
 .audience-list-options { position: absolute; inset-inline: 0; top: calc(100% + var(--space-4)); display: flex; flex-direction: column; min-width: 220px; max-height: min(280px, 40vh); }
-.audience-list-option { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); width: 100%; min-height: var(--control-height); padding: var(--space-4) var(--space-8); border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.audience-list-option { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); width: 100%; min-height: var(--control-height); padding: var(--space-4) var(--space-8); border: 0; border-radius: var(--radius-xs); background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .audience-list-option > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .audience-list-option[aria-selected='true'] { background: var(--color-hover); }
 .audience-list-option[data-current] { color: var(--color-text); font-weight: var(--font-weight-bold); }
@@ -62,7 +62,7 @@
 .audience-plan { display: flex; flex-direction: column; gap: var(--space-8); min-height: calc(7 * var(--leading-sm) + 6 * var(--space-8)); }
 .audience-plan p { margin: 0; }
 .audience-sample { display: flex; flex-direction: column; gap: var(--space-8); margin: 0; padding: 0; list-style: none; }
-.audience-sample li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 3px; margin: -3px; }
+.audience-sample li { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: var(--space-4); margin: calc(-1 * var(--space-4)); }
 
 /* Segment rule builder: one row per condition (field, operator, value, remove). */
 .audience-conditions { display: flex; flex-direction: column; gap: var(--space-8); }
@@ -79,7 +79,7 @@
 .audience-condition-group { --color-hover: var(--color-well-hover); grid-column: 1 / 4; display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); min-width: 0; min-height: var(--control-height); padding: var(--space-4) var(--space-4) var(--space-4) var(--space-12); border-radius: var(--radius-sm); background: var(--color-well); }
 .audience-condition-group > .ui-button { flex-shrink: 0; }
 .ui-textarea.audience-json { --textarea-leading: var(--leading-xs); font-family: var(--font-mono); font-size: var(--text-xs); }
-@media (pointer: coarse), (max-width: 899px) { .ui-textarea.audience-json { --textarea-leading: 22px; font-size: 16px; } }
+@media (pointer: coarse), (max-width: 899px) { .ui-textarea.audience-json { --textarea-leading: var(--leading-lg); font-size: var(--text-lg); } }
 
 @media (max-width: 800px) {
   .audience-rule { grid-template-columns: minmax(0, 1fr) 34px; }

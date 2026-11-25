@@ -23,7 +23,7 @@ type Progress = Pick<Campaign, 'status' | 'delivery'>
 const releasing = (campaign: Progress) => ['preparing', 'sending'].includes(campaign.status) && (campaign.delivery?.expanded ?? 0) < (campaign.delivery?.total ?? 0)
 // Paused or waiting for a pacing window / SES quota: nothing new is released for a while.
 export const sendingHeld = (campaign: Progress) => campaign.status === 'paused' || (releasing(campaign) && Boolean(campaign.delivery?.waiting))
-const waitingLabel = { pacing_window: 'Waiting for the next daily slice', ses_daily_quota: 'Holding for the SES daily quota', hosted_daily_quota: 'Waiting for Hosted sending capacity', list_probe: 'Waiting for test batch feedback', balance: 'Waiting for account credit', feedback_lag: 'Waiting for delivery reports to catch up', ramp: 'Ramping up' } as const
+const waitingLabel = { pacing_window: 'Waiting for the next daily slice', ses_daily_quota: 'Holding for the SES daily quota', hosted_daily_quota: 'Waiting for Hosted sending capacity', list_probe: 'Waiting for test batch feedback', balance: 'Waiting for account credit', feedback_lag: 'Waiting for delivery reports to catch up', ramp: 'Ramping up', link_record: 'Waiting to resume' } as const
 const atUtc = (value: string) => `${date(value)} · ${time(value)} UTC`
 /** The ramp step a new sender's campaign is on (API sendEstimate.ramp), as the status line says it. */
 const rampLine = (ramp: NonNullable<NonNullable<Campaign['sendEstimate']>['ramp']>) => `Ramping up: step ${ramp.step} of ${ramp.steps}, up to ${number(ramp.ceilingPerHour)} an hour.`
@@ -85,6 +85,9 @@ export function CampaignProgress({ campaign }: { campaign: Campaign }) {
   const statusText = wait
     ? wait.reason === 'feedback_lag'
       ? 'Waiting for delivery reports to catch up.'
+      // No host for its unsubscribe link right now (the workspace's sending is paused): it continues by itself.
+      : wait.reason === 'link_record'
+        ? 'It continues by itself once this workspace’s sending resumes.'
       : wait.reason === 'list_probe'
         ? `Test batch${expanded > 0 ? ` of ${number(expanded)}` : ''} sent. Rest release at ${localTime(wait.until)} if bounces stay low.`
         : wait.reason === 'ramp' && ramp

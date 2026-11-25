@@ -11,10 +11,10 @@
 .app-shell--compact .support-panel:not(.support-panel--sheet) { inset: calc(var(--mobile-bar-height) + env(safe-area-inset-top)) var(--page-inset) max(calc(var(--tab-bar-height) + env(safe-area-inset-bottom) + var(--page-inset)), calc(var(--keyboard-inset, 0px) + var(--page-inset))) auto; width: min(400px, calc(100vw - 2 * var(--page-inset))); height: auto; max-height: 720px; transform-origin: right top; }
 
 /* Phone: a full-height sheet resting on the tab bar (which stays in reach), above the keyboard while typing. */
-.support-panel--sheet { inset: max(var(--space-12), env(safe-area-inset-top)) 0 max(calc(var(--tab-bar-height) + env(safe-area-inset-bottom)), var(--keyboard-inset, 0px)); z-index: 29; width: auto; height: auto; border-radius: 14px 14px 0 0; opacity: 1; transform: translateY(100%); transition: transform 220ms var(--ease-out-strong), visibility 0s 220ms; }
+.support-panel--sheet { inset: max(var(--space-12), env(safe-area-inset-top)) 0 max(calc(var(--tab-bar-height) + env(safe-area-inset-bottom)), var(--keyboard-inset, 0px)); z-index: 29; width: auto; height: auto; border-radius: var(--radius-sheet) var(--radius-sheet) 0 0; opacity: 1; transform: translateY(100%); transition: transform 220ms var(--ease-out-strong), visibility 0s 220ms; }
 .support-panel--sheet[data-open] { transform: none; transition: transform 320ms var(--ease-drawer), visibility 0s; }
 @starting-style { .support-panel--sheet[data-open] { transform: translateY(100%); } }
-.support-panel--sheet .ui-sheet__grab { height: 16px; padding-top: 6px; }
+.support-panel--sheet .ui-sheet__grab { height: 16px; padding-top: var(--space-6); }
 .support-overlay { position: fixed; inset: 0; z-index: 28; background: var(--color-overlay); opacity: 0; visibility: hidden; transition: opacity 200ms ease-out, visibility 0s 200ms; }
 .support-overlay[data-open] { opacity: 1; visibility: visible; transition: opacity 240ms ease-out, visibility 0s; }
 html:has(.support-overlay[data-open]) { overflow: hidden; }
@@ -31,7 +31,7 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-panel__subtitle[data-tone='neutral'] { --dot: var(--color-faint); }
 .support-panel__dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--dot); transition: background-color 240ms ease; }
 .support-panel__subtitle-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; animation: support-fade 200ms ease-out; }
-.support-panel__actions { display: flex; align-items: center; gap: 2px; }
+.support-panel__actions { display: flex; align-items: center; gap: var(--space-2); }
 /* Keyboard focus in the panel is a solid fill: the overlay's own hover step (the panel floats over the page). */
 .support-panel .ui-button--ghost:focus-visible { background: var(--color-overlay-hover, var(--color-hover)); color: var(--color-text); }
 .support-panel .ui-button--primary:focus-visible { background: var(--color-accent-hover); }
@@ -51,14 +51,14 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-text, .support-user { font-size: var(--text-md); line-height: 22px; overflow-wrap: anywhere; }
 .support-text > * { margin: 0; }
 .support-text > * + * { margin-top: var(--space-8); }
-.support-text :is(ul, ol) { padding-left: 20px; }
+.support-text :is(ul, ol) { padding-left: var(--space-20); }
 .support-text li + li { margin-top: var(--space-4); }
 .support-text li::marker { color: var(--color-muted); }
 .support-text strong { font-weight: var(--font-weight-bold); }
 .support-text a { color: var(--color-text); text-decoration-color: color-mix(in srgb, var(--color-text) 40%, transparent); text-underline-offset: 3px; }
 .support-text a:is(:hover, :focus-visible) { text-decoration-color: currentColor; }
-.support-text code { padding: 1px 4px; border-radius: 4px; background: var(--color-chip, var(--color-layer-2)); font-size: 12px; }
-.support-text pre { padding: var(--space-8) var(--space-12); overflow-wrap: anywhere; white-space: pre-wrap; border-radius: var(--radius-sm); background: var(--color-well, var(--color-layer-2)); font-size: 12px; line-height: 18px; }
+.support-text code { padding: 0 var(--space-4); border-radius: var(--radius-xs); background: var(--color-chip, var(--color-layer-2)); font-size: var(--text-xs); }
+.support-text pre { padding: var(--space-8) var(--space-12); overflow-wrap: anywhere; white-space: pre-wrap; border-radius: var(--radius-sm); background: var(--color-well, var(--color-layer-2)); font-size: var(--text-xs); line-height: 18px; }
 .support-text pre code { padding: 0; background: none; }
 .support-message--notice .support-text { color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
 /* A reply from someone on the team: their name over it, as a small mono label (the agent's answers carry none). */
@@ -67,22 +67,21 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-message--user { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-4); padding-left: 12%; }
 .support-user-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-6); max-width: 100%; }
 .support-user-images img { display: block; width: 120px; height: 84px; object-fit: cover; object-position: top left; border-radius: var(--radius-sm); background: var(--color-layer-2); }
-.support-user-images__placeholder { display: flex; flex-direction: column; justify-content: center; gap: 2px; width: 120px; height: 84px; padding: var(--space-8) var(--space-12); border-radius: var(--radius-sm); background: var(--color-layer-2); color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
-.support-user-images__placeholder svg { margin-bottom: 2px; }
+.support-user-images__placeholder { display: flex; flex-direction: column; justify-content: center; gap: var(--space-4); width: 120px; height: 84px; padding: var(--space-8) var(--space-12); border-radius: var(--radius-sm); background: var(--color-layer-2); color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .support-user-images__name { overflow: hidden; color: var(--color-text); text-overflow: ellipsis; white-space: nowrap; }
-.support-user { max-width: 100%; padding: 6px 11px; border-radius: var(--radius-sm); background: var(--color-layer-2); white-space: pre-wrap; }
+.support-user { max-width: 100%; padding: var(--space-6) var(--space-12); border-radius: var(--radius-sm); background: var(--color-layer-2); white-space: pre-wrap; }
 .support-failed { display: flex; align-items: center; gap: var(--space-4); color: var(--color-danger); font-size: var(--text-xs); line-height: var(--leading-xs); }
-.support-failed .ui-button { margin-right: -9px; }
+.support-failed .ui-button { margin-right: calc(-1 * var(--button-pad-x)); }
 
 /* The caret at the end of text that is still arriving. An empty inline box with padding (not an inline-block), so it
    travels with the text without counting as a layout shift. */
-.support-caret { margin-left: 1px; padding-left: .5em; border-radius: 1px; background: var(--color-text); opacity: .55; }
+.support-caret { padding-left: var(--space-6); border-radius: var(--radius-2xs); background: var(--color-text); opacity: .55; }
 
 /* What the agent is doing while it works on an answer: one line in the message, as tall as a line of its text (which
    takes its place). A breathing dot, and a slow sheen across the label; a new label rolls in over the old one. */
 .support-status { display: flex; align-items: center; gap: var(--space-8); height: 22px; margin: 0; color: var(--color-muted); font-size: var(--text-sm); line-height: 22px; animation: support-fade 240ms ease-out both; }
 .support-status__dot, .support-tool__dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--color-text); }
-.support-status__dot { margin-left: 3px; animation: support-breathe 1.4s ease-in-out infinite; }
+.support-status__dot { animation: support-breathe 1.4s ease-in-out infinite; }
 .support-status__label { display: grid; flex: 1; min-width: 0; height: 22px; overflow: hidden; }
 .support-status__text { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   background: linear-gradient(90deg, var(--color-muted) 35%, var(--color-text) 50%, var(--color-muted) 65%) 0 0 / 300% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
@@ -112,7 +111,7 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-card .support-card__error { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); margin-top: var(--space-6); color: var(--color-danger); font-size: var(--text-xs); line-height: var(--leading-xs); }
 /* A proposed change: the names a person typed, inside Nightmail's sentence, read as data (as the consent card's workspace). */
 .support-action__name { color: var(--color-text); font-weight: var(--font-weight-bold); }
-.support-action__loading { display: grid; gap: 8px; padding-block: 5px 3px; }
+.support-action__loading { display: grid; grid-auto-rows: var(--leading-sm); align-items: center; }
 /* What will happen is the card's main text; its buttons sit at the end, Decline then the change, as in the dialog. */
 .support-action .support-card__body { color: var(--color-text); }
 .support-action__choice { justify-content: flex-end; }
@@ -120,14 +119,16 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-action-dialog__status { margin: var(--space-12) 0 0; font-size: var(--text-sm); line-height: var(--leading-sm); }
 /* An outcome can be a sentence (outcome unknown, and what to check): it wraps beside its dot instead of clipping. */
 .support-action-dialog__status .ui-status-dot { align-items: flex-start; white-space: normal; }
-.support-action-dialog__status .ui-status__dot { flex: none; margin-top: calc((var(--leading-sm) - 6px) / 2); }
+/* The dot sits in a box as tall as the first line, so it centres on that line however many lines follow. */
+.support-action-dialog__status .ui-status-dot > .ui-status__dot { display: flex; flex: none; align-items: center; justify-content: center; height: 1lh; background: none; }
+.support-action-dialog__status .ui-status-dot > .ui-status__dot::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--tone-marker); }
 .support-action-dialog__status .ui-status-dot__value { overflow: visible; }
 .support-ticket { display: flex; align-items: flex-start; gap: var(--space-12); }
-.support-ticket__mark { display: grid; flex: none; place-items: center; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; background: var(--color-success-marker); color: var(--support-bg); animation: support-mark-in 320ms var(--ease-out-strong) 100ms both; }
+.support-ticket__mark { display: grid; flex: none; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--color-success-marker); color: var(--support-bg); animation: support-mark-in 320ms var(--ease-out-strong) 100ms both; }
 .support-message[data-restored] .support-ticket__mark { animation: none; }
 .support-ticket__text { flex: 1; min-width: 0; }
 .support-ticket__title { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-12); }
-.support-ticket__facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px var(--space-12); margin: var(--space-6) 0 0; font-size: var(--text-xs); line-height: var(--leading-xs); }
+.support-ticket__facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: var(--space-4) var(--space-12); margin: var(--space-6) 0 0; font-size: var(--text-xs); line-height: var(--leading-xs); }
 .support-ticket__facts > div { display: contents; }
 .support-ticket__facts dt { color: var(--color-muted); }
 .support-ticket__facts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
@@ -143,21 +144,21 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-inline[data-tone='danger'] { --dot: var(--color-danger-marker); }
 .support-inline__dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--dot); }
 .support-inline > span:nth-child(2) { flex: 1; min-width: 0; }
-.support-inline .ui-button { margin-right: -9px; }
+.support-inline .ui-button { margin-right: calc(-1 * var(--button-pad-x)); }
 
 /* The message box: grows with what is typed up to six lines; Enter sends, Shift+Enter starts a line. While the agent
    writes and the box is empty, Send turns into Stop. */
 .support-composer { position: relative; flex: none; padding: var(--space-4) var(--space-12) var(--space-12); }
 /* The box is a solid control fill a step off the panel: a stronger step on hover and while typing, never an outline. */
-.support-composer__box { display: flex; align-items: flex-end; gap: var(--space-8); padding: 4px 4px 4px 10px; border-radius: var(--radius-sm); background: var(--color-overlay-control, var(--color-control, var(--color-surface))); transition: background-color var(--motion-duration) var(--ease-standard); }
+.support-composer__box { display: flex; align-items: flex-end; gap: var(--space-8); padding: var(--space-4) var(--space-4) var(--space-4) var(--space-12); border-radius: var(--radius-sm); background: var(--color-overlay-control, var(--color-control, var(--color-surface))); transition: background-color var(--motion-duration) var(--ease-standard); }
 @media (hover: hover) and (pointer: fine) { .support-composer__box:hover:not(:focus-within):not([data-disabled]) { background: var(--color-overlay-control-hover, var(--color-control-hover, var(--color-layer-2))); } }
 .support-composer__box:focus-within { background: var(--color-overlay-control-focus, var(--color-control-focus, var(--color-layer-2))); }
 .support-composer__box[data-disabled] { background: var(--color-well, var(--color-layer-2)); }
-.support-composer__input { flex: 1; min-width: 0; height: 28px; max-height: 132px; padding: 4px 0; border: 0; background: none; color: var(--color-text); font: inherit; font-size: var(--text-md); line-height: 20px; resize: none; outline: none; }
+.support-composer__input { flex: 1; min-width: 0; height: 28px; max-height: 132px; padding: var(--space-4) 0; border: 0; background: none; color: var(--color-text); font: inherit; font-size: var(--text-md); line-height: 20px; resize: none; outline: none; }
 .support-composer__input::placeholder { color: var(--color-muted); opacity: 1; }
 .support-composer__input:disabled { cursor: not-allowed; }
-.ui-button.support-composer__send { width: 28px; height: 28px; border-radius: 4px; }
-.support-composer__box:has(.support-composer__attach) { padding-left: 4px; }
+.ui-button.support-composer__send { width: 28px; height: 28px; border-radius: var(--radius-xs); }
+.support-composer__box:has(.support-composer__attach) { padding-left: var(--space-4); }
 .ui-button.support-composer__attach { width: 28px; height: 28px; color: var(--color-muted); }
 .ui-button.support-composer__send::after, .ui-button.support-composer__attach::after { inset: -4px; }
 @media (hover: hover) and (pointer: fine) { .ui-button.support-composer__attach:hover:not(:disabled) { color: var(--color-text); transition-duration: 0ms; } }
@@ -167,14 +168,14 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-tray { display: contents; }
 .support-tray[hidden] { display: none; }
 .support-tray__thumbs, .support-tray__line { position: absolute; left: 0; right: 0; z-index: 1; background: var(--support-bg); }
-.support-tray__line { bottom: 100%; height: 24px; padding: 4px var(--space-12); }
+.support-tray__line { bottom: 100%; height: 24px; padding: var(--space-4) var(--space-12); }
 .support-tray__thumbs { bottom: calc(100% + 24px); height: 60px; display: flex; gap: var(--space-8); margin: 0; padding: var(--space-8) var(--space-12) var(--space-4); list-style: none; }
 .support-tray__thumbs::before, .support-tray__line:only-child::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 12px; background: linear-gradient(to bottom, transparent, var(--support-bg)); pointer-events: none; }
 .support-thumb { position: relative; flex: none; width: 48px; height: 48px; animation: support-card-in 240ms var(--ease-out-strong) both; }
 .support-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top left; border-radius: var(--radius-sm); background: var(--color-layer-2); transition: opacity 200ms ease-out; }
 .support-thumb[data-state='uploading'] img { opacity: .55; }
 .support-thumb[data-state='failed'] img { opacity: .55; }
-.support-thumb__bar { position: absolute; left: 5px; right: 5px; bottom: 5px; height: 2px; border-radius: 1px; background: var(--color-accent-data); transform-origin: left; transition: transform 220ms var(--ease-out-strong); }
+.support-thumb__bar { position: absolute; left: 5px; right: 5px; bottom: 5px; height: 2px; border-radius: var(--radius-2xs); background: var(--color-accent-data); transform-origin: left; transition: transform 220ms var(--ease-out-strong); }
 .support-thumb__remove { position: absolute; top: -6px; right: -6px; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: var(--color-contrast); color: var(--color-on-contrast); transition: transform 160ms var(--ease-out-strong); }
 .support-thumb__remove::after { content: ''; position: absolute; inset: -9px; }
 .support-thumb__remove:active { transform: scale(.9); }
@@ -197,7 +198,7 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-composer__send[data-stop] .support-composer__icons > svg:last-child { opacity: 1; transform: none; }
 .support-composer--closed { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-height: 56px; padding: var(--space-12) var(--space-16); color: var(--color-muted); }
 @media (pointer: coarse), (max-width: 899px) {
-  .support-composer__input { height: 36px; padding-block: 7px; font-size: 16px; line-height: 22px; }
+  .support-composer__input { height: var(--control-height-sm); padding-block: calc((var(--control-height-sm) - var(--leading-lg)) / 2); font-size: var(--text-lg); line-height: var(--leading-lg); }
   .ui-button.support-composer__send, .ui-button.support-composer__attach { width: 36px; height: 36px; }
   .support-thumb__remove::after { inset: -13px; }
 }

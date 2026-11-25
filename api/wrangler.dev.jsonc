@@ -14,11 +14,11 @@
     "directory": "../app/dist",
     "binding": "ASSETS",
     "not_found_handling": "none",
-    "run_worker_first": ["/", "/pricing", "/compare", "/compare/*", "/v1", "/v1/*", "/api", "/api/*", "/mcp", "/mcp/*", "/.well-known", "/.well-known/*", "/unsubscribe", "/unsubscribe/*", "/health", "/health/*", "/internal/*", "/openapi.json", "/docs.md", "/docs/operations/*", "/docs/tags/*", "/llms.txt"]
+    "run_worker_first": ["/", "/pricing", "/compare", "/compare/*", "/v1", "/v1/*", "/api", "/api/*", "/mcp", "/mcp/*", "/.well-known", "/.well-known/*", "/unsubscribe", "/unsubscribe/*", "/i/*", "/health", "/health/*", "/internal/*", "/openapi.json", "/docs.md", "/docs/operations/*", "/docs/tags/*", "/llms.txt"]
   },
   "vars": {
-    "BANE_MAIL_BUCKET": "nightmail-dev-mail",
-    "BANE_MAIL_STORE": "r2",
+    "NIGHTMAIL_MAIL_BUCKET": "nightmail-dev-mail",
+    "NIGHTMAIL_MAIL_STORE": "r2",
     "PUBLIC_URL": "https://dev.nightmail.dev",
     // Mail apps connect to imap.dev.bane.mx and smtp.dev.bane.mx, the names on dev's gateway certificate. Shown only
     // while the deploy binds MAILGW_API_TOKEN (bane:mailGatewayEnabled in infra/pulumi/Pulumi.dev.yaml).
@@ -54,15 +54,15 @@
     "BYO_STACK_PREFIX": "Nightmail",
     // Connected AWS accounts' SNS topics and stacks report here, and their role allows only this host.
     "BYO_EVENTS_ORIGIN": "https://events.dev.nightmail.dev",
-    "BANE_PLATFORM_AWS_ACCOUNT": "905840579680",
+    "NIGHTMAIL_PLATFORM_AWS_ACCOUNT": "905840579680",
     // The dedicated account only has the v8 policies: tenants and identities must be created with their pool tags.
-    "BANE_REGIONAL_SENDING": "true",
-    "BANE_TRUSTED_POOL": "true",
-    "BANE_REQUIRE_DMARC_FOR_BULK": "true",
-    "BANE_HOSTED_SCREEN": "true",
-    "BANE_RECEIVING_REDRIVE": "true",
+    "NIGHTMAIL_REGIONAL_SENDING": "true",
+    "NIGHTMAIL_TRUSTED_POOL": "true",
+    "NIGHTMAIL_REQUIRE_DMARC_FOR_BULK": "true",
+    "NIGHTMAIL_HOSTED_SCREEN": "true",
+    "NIGHTMAIL_RECEIVING_REDRIVE": "true",
     // Dev only: the pools become ready in the SES sandbox, so dev can send to the mailbox simulator and verified addresses.
-    "BANE_ALLOW_SES_SANDBOX": "true",
+    "NIGHTMAIL_ALLOW_SES_SANDBOX": "true",
     "DEFAULT_SES_REGION": "us-east-2",
     // Stripe Tax stays off until its registrations exist (api/README.md, Stripe setup). The keys are Worker secrets.
     "STRIPE_AUTOMATIC_TAX": "false",
@@ -91,8 +91,8 @@
     "CF_OBSERVABILITY_ACCOUNT_ID": "d8e944f537ceef3f06a5bd3aec1d7a53",
     "CF_OBSERVABILITY_SCRIPT": "nightmail-dev",
     // The support agent (support/): Nightmail wakes its /hooks/nightmail-wake on this origin, and "Contact support" returns this URL.
-    // The handoff's Ed25519 key is the BANE_SUPPORT_SIGNING_KEY secret.
-    "BANE_SUPPORT_URL": "https://support.dev.nightmail.dev/chat"
+    // The handoff's Ed25519 key is the NIGHTMAIL_SUPPORT_SIGNING_KEY secret (also read as BANE_SUPPORT_SIGNING_KEY).
+    "NIGHTMAIL_SUPPORT_URL": "https://support.dev.nightmail.dev/chat"
   },
   // CAMPAIGN_ROOMS: one per campaign, who has it open in the dashboard (src/campaign-room.ts).
   "durable_objects": { "bindings": [{ "name": "DISPATCHER", "class_name": "DispatcherShard" }, { "name": "CAMPAIGN_ROOMS", "class_name": "CampaignRoom" }] },

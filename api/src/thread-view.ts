@@ -1,9 +1,10 @@
 import { z } from '@hono/zod-openapi';
-import { and, eq, inArray, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
+import { and, eq, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import { ApiError, isoTime, redactCapabilityText, type DbExecutor, type MailboxAccess } from './core.js';
 import { mailboxMessages as links, mailMessages as messages, retainedMail } from './db/mailbox.js';
 import type { EmailSnapshot } from './db/sending.js';
 import { normalizeMessageId, snippetOf } from './mailbox-store.js';
+import { addressedToDomains, oneOf } from './domain-mail.js';
 
 // Which stored messages a reader sees, and an email's whole conversation: the thread block of getEmailDetail and
 // getInboundMessage (includeThread=true), and the thread and its size on each listLogs row. Nothing heavier than the
@@ -25,8 +26,9 @@ export const liveBox = (bid: SQLWrapper) => sql`NOT EXISTS(SELECT FROM mailboxes
 export function visibleLinks(value: MailboxAccess, filter: Filter) {
   if (filter.addressId && value.mailboxIds && !value.mailboxIds.includes(filter.addressId)) throw new ApiError(404, 'NOT_FOUND', 'Address was not found.');
   return and(liveBox(links.mailboxId), sql`${links.heldReason} IS NULL`, eq(links.workspaceId, value.workspaceId),
-    filter.addressId ? eq(links.mailboxId, filter.addressId) : value.mailboxIds ? inArray(links.mailboxId, value.mailboxIds) : undefined,
-    filter.threadId ? eq(links.threadId, filter.threadId) : undefined, filter.messageId ? eq(links.messageId, filter.messageId) : undefined);
+    filter.addressId ? eq(links.mailboxId, filter.addressId) : value.mailboxIds ? oneOf(links.mailboxId, value.mailboxIds) : undefined,
+    filter.threadId ? eq(links.threadId, filter.threadId) : undefined, filter.messageId ? eq(links.messageId, filter.messageId) : undefined,
+    value.domains ? addressedToDomains(value.domains, links.messageId) : undefined);
 }
 // Which stored messages a reader can see. Shared with the message reads and the unified logs (logs.ts), so every list
 // applies the same rule. It names mail_messages and mailbox_messages unaliased: mail_messages is the row being read.

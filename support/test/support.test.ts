@@ -215,7 +215,7 @@ export default {
 };`;
 
 const baseEnv = (overrides: Record<string, unknown> = {}) => ({
-  STAGE: text('dev'), PUBLIC_URL: text(SUPPORT), DASHBOARD_ORIGINS: text(`${ORIGIN},http://localhost:5173`), BANE_ORIGIN: text(ORIGIN),
+  STAGE: text('dev'), PUBLIC_URL: text(SUPPORT), DASHBOARD_ORIGINS: text(`${ORIGIN},http://localhost:5173`), NIGHTMAIL_ORIGIN: text(ORIGIN),
   SUPPORT_ADDRESS: text('support@dev.bane.mx'), SUPPORT_ADDRESS_ID: text('adr_support'), TICKET_TO: text('ryan@anoma.ly'), GATEWAY_URL: text('https://opencode.ai/inference/anthropic/v1'),
   CONSOLE_GATEWAY_KEY: text(GATEWAY_KEY), SUPPORT_ROOT_SECRET: text(ROOT), BANE_INBOUND_WEBHOOK_SECRET: text(WEBHOOK_SECRET), BANE_SUPPORT_INBOX_KEY: text(`bane_mbx_${'7'.repeat(64)}`),
   CONVERSATION: { type: 'durable-object' as const, worker: 'support', exportName: 'SupportConversation' },
@@ -305,7 +305,7 @@ const registeredIn = async (message: string, instance: Miniflare = mf) => (await
 /** The sign-in reply a message got, from the conversation it was registered in. */
 const SIGNIN = async (message: string, instance: Miniflare = mf) => signinReply(await registeredIn(message, instance), message);
 /** Nightmail's wake for one conversation (after a staff reply or a sign-in): its ID only. */
-const wakeHook = (conversationId: string, instance: Miniflare = mf) => instance.dispatchFetch(`${SUPPORT}/hooks/nightmail-wake`, { method: 'POST', body: JSON.stringify({ conversationId }) });
+const wakeHook = (conversationId: string, instance: Miniflare = mf) => instance.dispatchFetch(`${SUPPORT}/hooks/nightmail-wake`, { method: 'POST', headers: { authorization: `Bearer fixture-wake-${conversationId}` }, body: JSON.stringify({ conversationId }) });
 /** The person confirms one message signed in, as the claim does in Nightmail (the fake's hook). */
 const claim = async (conversationId: string, messageId: string, userId: string, instance: Miniflare = mf) => (await fakeHook('/__claim', { conversationId, messageId, userId }, instance)).status;
 /** A verified answer that couldn't go: the fixed notice, under a key of its own. */
@@ -369,7 +369,7 @@ async function eventually<T>(read: () => Promise<T | undefined>, ms = 30_000): P
 describe('support Worker', () => {
   test('health, origin and handoff checks on /chat/start', async () => {
     const health = await (await mf.dispatchFetch(`${SUPPORT}/health`)).json() as any;
-    assert.deepEqual([health.status, health.service, health.stage, health.ready, health.checks.keys], ['ok', 'bane-support', 'dev', false, { support: 'unchecked', intake: 'unchecked' }], 'Live, not ready before any sweep.');
+    assert.deepEqual(health, { status: 'ok', service: 'bane-support', stage: 'dev', ready: false }, 'Live, not ready before any sweep.');
     assert.equal((await post('/chat/start', { handoff: handoff() }, { origin: 'https://evil.test' })).status, 403);
     assert.equal((await post('/chat/start', {})).status, 400);
     assert.equal((await post('/chat/start', { handoff: 'forged' })).status, 401);
@@ -1028,14 +1028,14 @@ describe('support Worker', () => {
   test('M3: a ticket from an unverified sender names no customer and says so first; one verified by email says it is for reading only', () => {
     const base = { conversationId: 'conv_x', channel: 'email' as const, threadId: 'thr', costUsd: 0, model: 'm', attachments: [], customer: { userId: null, email: null, name: null, role: null, workspaces: [] } };
     const input = { type: 'billing' as const, title: 'Refund', severity: 'P3' as const, summary: 's', ask: 'refund', tried: [], recommendation: 'r', evidence: { ids: [] }, details: {} };
-    const unverified = ticketEmail({ BANE_ORIGIN: ORIGIN }, { ...base, verified: null, dmarc: 'FAIL', sender: 'victim@acme.test' }, { id: 'tkt_x', dueAt: 0 }, input);
+    const unverified = ticketEmail({ NIGHTMAIL_ORIGIN: ORIGIN }, { ...base, verified: null, dmarc: 'FAIL', sender: 'victim@acme.test' }, { id: 'tkt_x', dueAt: 0 }, input);
     assert.ok(unverified.text.startsWith('UNVERIFIED SENDER (DMARC FAIL): not a confirmed customer.'), unverified.text);
     assert.ok(!unverified.text.includes('Customer:') && unverified.text.includes('Sender (unverified): victim@acme.test'));
     assert.equal(unverified.subject, '[Nightmail billing] [UNVERIFIED] tkt_x: Refund (P3)');
-    const verified = ticketEmail({ BANE_ORIGIN: ORIGIN }, { ...base, verified: 'dmarc', dmarc: 'PASS', sender: null, customer: { userId: 'usr_ada', email: 'ada@acme.test', name: 'Ada', role: 'owner', workspaces: [] } }, { id: 'tkt_x', dueAt: 0 }, input);
+    const verified = ticketEmail({ NIGHTMAIL_ORIGIN: ORIGIN }, { ...base, verified: 'dmarc', dmarc: 'PASS', sender: null, customer: { userId: 'usr_ada', email: 'ada@acme.test', name: 'Ada', role: 'owner', workspaces: [] } }, { id: 'tkt_x', dueAt: 0 }, input);
     assert.ok(verified.text.includes('Verified: dmarc (DMARC PASS)') && verified.text.includes('Customer: Ada <ada@acme.test>, owner') && !verified.text.includes('UNVERIFIED'));
     assert.ok(verified.text.startsWith('VERIFIED BY EMAIL, FOR READING ONLY: not grounds for a change.'), verified.text);
-    const chat = ticketEmail({ BANE_ORIGIN: ORIGIN }, { ...base, channel: 'chat', verified: 'handoff', dmarc: null, sender: null, customer: { userId: 'usr_ada', email: 'ada@acme.test', name: 'Ada', role: 'owner', workspaces: [] } }, { id: 'tkt_x', dueAt: 0 }, input);
+    const chat = ticketEmail({ NIGHTMAIL_ORIGIN: ORIGIN }, { ...base, channel: 'chat', verified: 'handoff', dmarc: null, sender: null, customer: { userId: 'usr_ada', email: 'ada@acme.test', name: 'Ada', role: 'owner', workspaces: [] } }, { id: 'tkt_x', dueAt: 0 }, input);
     assert.ok(!chat.text.includes('FOR READING ONLY'), 'A signed-in chat’s ticket is not.');
   });
 
@@ -2005,7 +2005,7 @@ describe('support Worker', () => {
     const fakeBane = async (path: string, init?: RequestInit) => (await instance.getWorker('fake-bane')).fetch(`http://fake-bane${path}`, init);
     const inboxOf = async (id: string) => await (await fakeBane(`/__inbox?id=${id}`)).json() as any;
     const setInbox = async (body: object) => assert.equal((await fakeBane('/__inbox', { method: 'POST', body: JSON.stringify(body) })).status, 204);
-    const wake = (conversationId: unknown) => instance.dispatchFetch(`${SUPPORT}/hooks/nightmail-wake`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ conversationId }) });
+    const wake = (conversationId: unknown) => instance.dispatchFetch(`${SUPPORT}/hooks/nightmail-wake`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer fixture-wake-${conversationId}` }, body: JSON.stringify({ conversationId }) });
     const marked = async (messageId: string) => (await fakeCalls(instance)).filter(c => c[0] === 'markDelivery' && c[2] === messageId).map(c => c[3]);
     /** The wake has queued this staff reply (its pull runs after the 202). */
     const queued = (id: string, reply: string) => eventually(async () => (await drive(id)).rows.some(r => r.id === `staff:${reply}`) || undefined);
@@ -2108,9 +2108,11 @@ describe('support Worker', () => {
       assert.deepEqual([emailed.length, emailed[0][2], emailed[0][3].to, emailed[0][3].subject], [1, '/v1/inbound/threads', ['ada@acme.test'], 'Re: your Nightmail support chat']);
       assert.equal(emailed[0][3].text, 'Hi Ada,\n\nOne more thing: verification finished.\n\nDana Rivera, Nightmail', 'Named from the scope read when the panel joined.');
       assert.deepEqual(await marked(two), ['sent']);
-      // Unknown or malformed: 202, and nothing is pulled.
+      // A signed unknown ID is acknowledged, malformed and unsigned requests are refused.
       const pulls = (await fakeCalls(instance)).filter(x => x[0] === 'pullOutbox').length;
-      for (const id of [`conv_${'z'.repeat(26)}`, 'nope', 42]) assert.equal((await wake(id)).status, 202);
+      assert.equal((await wake(`conv_${'z'.repeat(26)}`)).status, 202);
+      for (const id of ['nope', 42]) assert.equal((await wake(id)).status, 401);
+      assert.equal((await instance.dispatchFetch(`${SUPPORT}/hooks/nightmail-wake`, { method: 'POST', body: JSON.stringify({ conversationId: c.id }) })).status, 401);
       await new Promise(r => setTimeout(r, 300));
       assert.equal((await fakeCalls(instance)).filter(x => x[0] === 'pullOutbox').length, pulls);
     }, 180_000);
@@ -2765,7 +2767,7 @@ describe('support Worker', () => {
       assert.equal((await signedHook('msg_wake_1', 'thr_wake', 'waker@else.test', { instance })).status, 200);
       assert.ok(await eventually(async () => (await ledger('msg_wake_1')).find(r => r.state === 'blocked')));
       await swept(); await settle();
-      assert.equal((await health()).checks.keys.support, 'missing');
+      assert.equal((await health()).ready, false);
       assert.equal((await replies('thr_help', instance)).length, 0);
       await outage('/v1/inbound/messages/msg_wake_1');
       await reads(SUPPORT_KEY, ['adr_support', 'adr_help']);
@@ -2778,22 +2780,19 @@ describe('support Worker', () => {
       assert.deepEqual([(await replies('thr_help', instance)).length, (await replies('thr_wake', instance)).length], [1, 1]);
     });
 
-    test('health is ok but not ready with a missing address, a key this Worker lacks or blocked work, and shows counts and causes only', async () => {
-      const shape = (h: any) => ({ ...h, checks: { ...h.checks, replay: { ...h.checks.replay, lagSeconds: typeof h.checks.replay.lagSeconds }, checkedAt: typeof h.checks.checkedAt } });
-      const ready = { status: 'ok', service: 'bane-support', stage: 'dev', ready: true, checks: { keys: { support: 'ok', intake: 'ok' }, work: { blocked: 0, blockedBy: {}, overdue: 0, dead: 0 },
-        replay: { lagSeconds: 'number', routeGaps24h: 4 }, checkedAt: 'string' } };
-      assert.deepEqual(shape(await health()), ready);
+    test('health reports readiness without individual checks or work counts', async () => {
+      const ready = { status: 'ok', service: 'bane-support', stage: 'dev', ready: true };
+      assert.deepEqual(await health(), ready);
       // Blocked work: not ready.
       await outage('/v1/inbound/messages/msg_block_1', 404);
       assert.equal((await signedHook('msg_block_1', 'thr_block', 'blocked@else.test', { instance })).status, 200);
-      const blocked = await eventually(async () => { const h = await health(); return h.checks.work.blocked ? h : undefined; });
-      assert.deepEqual(shape(blocked), { ...ready, ready: false, checks: { ...ready.checks, work: { blocked: 1, blockedBy: { NOT_FOUND: 1 }, overdue: 0, dead: 0 } } }, 'Blocked work names its cause.');
+      const blocked = await eventually(async () => { const h = await health(); return !h.ready ? h : undefined; });
+      assert.deepEqual(blocked, { ...ready, ready: false });
       // A configured address the key can't read: not ready either.
       await reads(SUPPORT_KEY, ['adr_support']);
       await swept();
       const missing = await health();
-      assert.deepEqual([missing.status, missing.ready, missing.checks.keys], ['ok', false, { support: 'missing', intake: 'ok' }]);
-      assert.doesNotMatch(JSON.stringify(missing), /@|adr_|msg_|thr_|conv_|req_/, 'Counts and states only.');
+      assert.deepEqual(missing, { ...ready, ready: false });
       await outage('/v1/inbound/messages/msg_block_1');
       // A stage whose Worker has no support key (its secret unset) says so, apart from a key Nightmail refuses.
       const bare = new Miniflare({ cf: false, telemetry: { enabled: false }, workers: [worker('support', baseEnv({ BANE_SUPPORT_INBOX_KEY: text('') })),
@@ -2801,8 +2800,9 @@ describe('support Worker', () => {
       try {
         await migrate(bare);
         await (await bare.getWorker('support')).scheduled({ cron: '*/5 * * * *', scheduledTime: new Date() });
-        const unset = await eventually(async () => { const h = await (await bare.dispatchFetch(`${SUPPORT}/health`)).json() as any; return h.checks.keys.intake !== 'unchecked' ? h : undefined; });
-        assert.deepEqual([unset?.ready, unset?.checks.keys], [false, { support: 'not_configured', intake: 'ok' }]);
+        const store = await bare.getD1Database('DB', 'support');
+        await eventually(async () => (await store.prepare("SELECT flow FROM support_checks WHERE flow='intake'").first()) ?? undefined);
+        assert.deepEqual(await (await bare.dispatchFetch(`${SUPPORT}/health`)).json(), { ...ready, ready: false });
       } finally { await bare.dispose(); }
     });
   });

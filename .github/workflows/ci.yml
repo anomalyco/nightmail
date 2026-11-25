@@ -112,7 +112,6 @@ jobs:
           PR_HEAD: ${{ github.event.pull_request.head.sha }}
           ALLOWED: ${{ contains(github.event.pull_request.labels.*.name, 'api-breaking') }}
           QUEUE_REF: ${{ github.event.merge_group.head_ref }}
-          QUEUE_BASE: ${{ needs.changes.outputs.base }}
           GH_TOKEN: ${{ github.token }}
         run: |
           node api/scripts/check-api-contract.mjs --self-test
@@ -124,17 +123,13 @@ jobs:
             # request opened, so a branch that has since merged dev would answer for dev's own changes.
             head=$PR_HEAD; BASE=$(git merge-base "$head" "$(git rev-parse HEAD^1)")
           elif [[ $GITHUB_EVENT_NAME == merge_group ]]; then
-            # The queue's commit merges one pull request onto dev and the entries ahead of it (its first parent), so
-            # compare just that step. Its ref names the pull request: refs/heads/gh-readonly-queue/dev/pr-<n>-<sha>.
-            BASE=$(git rev-parse HEAD^1); ALLOWED=false
-            # A batch used to get a second contract check on dev push. Keep that proof: a label on one
-            # PR cannot waive a breaking difference spanning multiple queued entries.
-            if [[ $QUEUE_BASE != "$BASE" ]]; then
-              git show "$QUEUE_BASE:api/openapi.json" > "$RUNNER_TEMP/queue-base.json"
-              node api/scripts/check-api-contract.mjs "$RUNNER_TEMP/queue-base.json" api/openapi.json
+            # The first parent already includes every earlier entry. Only the PR merged in as the
+            # second parent can waive a break introduced between that base and this queue commit.
+            BASE=$(git rev-parse "$head^1"); ALLOWED=false
+            if ! git diff --quiet "$BASE" "$head" -- api/openapi.json && [[ $QUEUE_REF =~ ^refs/heads/gh-readonly-queue/dev/pr-([0-9]+)-[0-9a-f]+$ ]]; then
+              entry=$(gh api "repos/$GITHUB_REPOSITORY/pulls/${BASH_REMATCH[1]}")
+              ALLOWED=$(jq -r --arg head "$(git rev-parse "$head^2")" '.base.ref == "dev" and .head.sha == $head and any(.labels[]; .name == "api-breaking")' <<< "$entry")
             fi
-            pr=$(sed -nE 's#^refs/heads/gh-readonly-queue/[^/]+/pr-([0-9]+)-[0-9a-f]+$#\1#p' <<< "$QUEUE_REF")
-            if [[ -n $pr ]] && gh api "repos/$GITHUB_REPOSITORY/pulls/$pr" --jq '.labels[].name' | grep -qx api-breaking; then ALLOWED=true; fi
           else
             repo="repos/$GITHUB_REPOSITORY"
             prs=$(gh api --paginate --slurp "$repo/commits/$head/pulls?per_page=100")
@@ -167,7 +162,7 @@ jobs:
           bun-version: 1.3.14
       # M6: fail on any high or critical advisory in a locked dependency (runtime and tooling alike;
       # bun audit reads bun.lock). Fix by upgrading or a patch-level override in that package.json.
-      # An ignore must name the advisory, why it cannot reach Bane, and what removes it.
+      # An ignore must name the advisory, why it cannot reach Nightmail, and what removes it.
       - name: Audit locked dependencies for high and critical advisories
         run: |
           set -euo pipefail
@@ -337,7 +332,7 @@ jobs:
           retention-days: 14
 
   # The support Worker (support/, the AI support agent's backend): types, the deployable bundle, and its tests, which
-  # drive that bundle in Miniflare with a fake Bane and a scripted model (no network, no model calls).
+  # drive that bundle in Miniflare with a fake Nightmail and a scripted model (no network, no model calls).
   support-work:
     needs: changes
     if: needs.changes.outputs.support == 'true'

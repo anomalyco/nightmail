@@ -113,14 +113,14 @@ async function wildcardFor(name: string, domain: string, seen: { state: string; 
   if (type === 'A' && values.every(cloudflareProxy)) return { wildcard };
   return sameSet(values, (await sibling(parent, type)).map(fqdn)) ? { wildcard } : undefined;
 }
-/** Adds publicDns to every pending sending and MAIL FROM record (DMARC is a recommendation; receiving has its own MX check). */
+/** Adds publicDns to every pending sending, link and MAIL FROM record (DMARC is a recommendation; receiving has its own MX check). */
 export async function withPublicDns<T extends { name?: string; dns: CheckedRecord[] }>(report: T): Promise<T> {
   const signal = AbortSignal.timeout(BUDGET_MS), checkedAt = new Date().toISOString();
   // One random name per parent (e.g. _domainkey.<domain>), asked once however many CNAMEs share it.
   const siblings = new Map<string, Promise<string[]>>(), label = `nm-${crypto.randomUUID().slice(0, 12)}`;
   const sibling = (parent: string, type: 'A' | 'CNAME') => { const key = `${type} ${parent}`; let probe = siblings.get(key); if (!probe) siblings.set(key, probe = answer(`${label}.${parent}`, type, signal)); return probe; };
   await Promise.all(report.dns.map(async record => {
-    if (record.status === 'verified' || (record.purpose !== 'sending' && record.purpose !== 'mail_from')) return;
+    if (record.status === 'verified' || (record.purpose !== 'sending' && record.purpose !== 'links' && record.purpose !== 'mail_from')) return;
     try {
       const seen = compare(record, await answer(record.name, record.type, signal));
       const found = seen.state !== 'found' && record.type === 'CNAME' ? await wildcardFor(fqdn(record.name), fqdn(report.name ?? record.name.split('.').slice(-2).join('.')), seen, sibling, signal).catch(() => undefined) : undefined;

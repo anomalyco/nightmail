@@ -6,7 +6,7 @@
 //!   ordinary flags and keywords belong to the message (every copy sees them), `\Deleted`
 //!   belongs to the folder entry, UIDs are per folder, strictly ascending and never reused,
 //!   and a recreated folder gets a new UIDVALIDITY.
-//! - **Bane's notification policy**: a session's view changes only on SELECT/EXAMINE, NOOP,
+//! - **Nightmail's notification policy**: a session's view changes only on SELECT/EXAMINE, NOOP,
 //!   IDLE, APPEND, COPY, MOVE, EXPUNGE and CLOSE, never during FETCH or STORE (RFC 3501
 //!   7.4.1). A deleted selected folder ends the session with BYE at its next command.
 //! - **Remote store** (`Backend::Remote`): each connection owns a snapshot of its selected
@@ -64,7 +64,7 @@ pub struct Config {
     pub copy: bool,
     /// The client NOOPs before every command that addresses messages by sequence number or
     /// takes `1:*`, so a server that announces changes after any command (Dovecot) and one
-    /// that announces them only at sync points (Bane) see the same set. Conformance runs.
+    /// that announces them only at sync points (Nightmail) see the same set. Conformance runs.
     pub eager: bool,
     /// Remote: bulk delivery and `1:*` COPY/MOVE, to reach the 1,000-UID mutation bound.
     pub bulk: bool,
@@ -1186,7 +1186,7 @@ impl Model {
             }
         }
         // Conformance runs skip a sequence set naming messages that do not exist: Dovecot
-        // answers BAD, Bane answers OK with no data (both seen in the wild; documented).
+        // answers BAD, Nightmail answers OK with no data (both seen in the wild; documented).
         if cfg.eager
             && let Some(s) = act.session()
             && matches!(

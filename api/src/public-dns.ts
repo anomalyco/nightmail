@@ -14,16 +14,30 @@ const rr=z.object({name:z.string(),type:z.number(),data:z.string()});
 const dnsResponse=z.object({Status:z.number(),TC:z.boolean().optional(),Answer:z.array(rr).default([]),Authority:z.array(rr).default([])});
 export const fqdn=(s:string)=>s.toLowerCase().replace(/\.$/,'');
 /** The CNAME published at `name` itself, not followed; null when there is none (NXDOMAIN or another type). */
+const DOH_ENDPOINTS = ['https://cloudflare-dns.com/dns-query', 'https://dns.google/resolve'] as const;
+/** Queries Cloudflare DoH first and falls back to Google Public DNS on resolver failure, SERVFAIL or truncation. */
+export async function dohQuery(name: string, type: string, signal: AbortSignal) {
+  let lastError: unknown;
+  for (const endpoint of DOH_ENDPOINTS) {
+    if (signal.aborted) break;
+    const url = new URL(endpoint);
+    url.search = new URLSearchParams({ name, type }).toString();
+    try {
+      const result = dnsResponse.parse(await boundedJson(url.href, 'application/dns-json', signal, 64 * 1024));
+      if (result.TC || ![0, 3].includes(result.Status)) throw new Error('Incomplete DNS');
+      return result;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new Error('Probe unavailable');
+}
 export async function cname(name:string,signal:AbortSignal) {
-  const url=new URL('https://cloudflare-dns.com/dns-query');url.search=new URLSearchParams({name,type:'CNAME'}).toString();
-  const result=dnsResponse.parse(await boundedJson(url.href,'application/dns-json',signal,64*1024));
-  if(result.TC || ![0,3].includes(result.Status)) throw new Error('Incomplete DNS');
+  const result=await dohQuery(name,'CNAME',signal);
   return result.Answer.find(r=>r.type===5 && fqdn(r.name)===fqdn(name))?.data ?? null;
 }
 export async function dns(name:string,type:'A'|'AAAA'|'MX'|'TXT'|'NS',signal:AbortSignal) {
-  const url=new URL('https://cloudflare-dns.com/dns-query');url.search=new URLSearchParams({name,type}).toString();
-  const result=dnsResponse.parse(await boundedJson(url.href,'application/dns-json',signal,64*1024));
-  if(result.TC || ![0,3].includes(result.Status)) throw new Error('Incomplete DNS');
+  const result=await dohQuery(name,type,signal);
   const aliases=new Set<string>(); let at=name;
   for(;;) {
     if(aliases.has(at) || aliases.size>12) throw new Error('Invalid alias chain'); aliases.add(at);

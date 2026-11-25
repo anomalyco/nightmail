@@ -31,3 +31,17 @@ export const builtinDomainGuide = {
     + 'A send to anyone else is refused with 422 BUILTIN_DOMAIN_RECIPIENT, naming those recipients in error.details[0].notMembers. A send that uses any of the rest is refused once, with 422 BUILTIN_DOMAIN_UNSUPPORTED naming every field it used in error.details[0].unsupported (for example ["replyTo","headers","attachments"]); past a cap it is 429 BUILTIN_DOMAIN_LIMIT with resetAt. '
     + `It receives at every address: mail to an address without an inbox or route of its own goes to its default inbox, hello@ the domain, and replies from there (POST /v1/inbound/threads/{threadId}/reply) follow the same rules and caps. Once a domain of the workspace’s own verifies, the built-in domain stops sending and keeps receiving: a send from it then gets 409 OWN_DOMAIN_VERIFIED with the same address at your own domain in error.details[0].suggestedFrom (every verified domain in verifiedDomains), so switch From to your own domain as soon as it verifies. ${productName} may turn one off for abuse.`,
 };
+
+/**
+ * The built-in domains' parent receives at its own name only these role addresses (RFC 2142 abuse@ and postmaster@, and
+ * the DMARC and SMTP TLS reports its DNS asks for), and only for the platform workspace (NIGHTMAIL_PLATFORM_DOMAIN_WORKSPACE),
+ * through a receiving host for the parent under that workspace's own built-in domain (scripts/builtin-domain.ts apex).
+ * Its routes say which inbox each goes to. Mail to any other address at the parent is dropped when it arrives
+ * (mailbox-receipts.ts). Null parent: off (built-in domains off, or no platform workspace).
+ */
+export const BUILTIN_APEX_LOCALS = ['abuse', 'postmaster', 'dmarc', 'tls-reports'] as const;
+export const builtinApex = (config: { multiTenant: boolean; builtinDomain?: string; platformDomainWorkspace?: string }) => ({
+  parent: config.multiTenant && config.builtinDomain && config.platformDomainWorkspace ? config.builtinDomain : null,
+  workspace: config.multiTenant && config.builtinDomain ? config.platformDomainWorkspace ?? null : null,
+  locals: [...BUILTIN_APEX_LOCALS] as string[],
+});

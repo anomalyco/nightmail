@@ -16,10 +16,9 @@
 .copy-action[data-copied] .copy-action__icon > svg:last-child,
 .copy-action[data-copied] .copy-action__roll > span:last-child { opacity: 1; transform: none; filter: none; }
 .copy-action__text { display: inline-flex; overflow: hidden; }
-/* The roll reserves room for "ied"; trim the right padding so Copy still looks centred. */
+/* The roll reserves room for "ied"; trim the right inset by a step so Copy still looks centred. */
 .copy-action__roll { text-align: left; }
-.ui-button.copy-action:not(.copy-action--compact) { padding-right: 7px; }
-.ui-button--sm.copy-action:not(.copy-action--compact) { padding-right: 5px; }
+.ui-button.copy-action:not(.copy-action--compact) { padding-right: calc(var(--button-pad-x) - var(--space-4)); }
 .copy-action--compact { width: var(--control-height); padding: 0; }
 .copy-action--compact.ui-button--sm { width: 28px; height: 28px; }
 

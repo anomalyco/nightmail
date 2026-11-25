@@ -1,12 +1,12 @@
 # Checking a message before sending
 
-`POST /v1/emails/check` (`checkEmail` in SDK/MCP) accepts **one** draft, `{"emailId":"…"}` or `{"campaignId":"…"}`. A draft accepts a single From mailbox (`"Bane <billing@bane.mx>"` or bare address + `fromName`), optional `to`, `subject`, `html` and/or `text`, a `transactional` or `marketing` stream, optional headers (name → value) and optional attachment **metadata**. The response contains only diagnostics and measurements, never message HTML. Read permission suffices; stored content follows its existing workspace, sender, mailbox, and capability-redaction rules. Domain-scoped keys cannot obtain workspace reputation statistics. No fetching links, images, DNS, SES, attachment objects or Jev. No side effects on sending.
+`POST /v1/emails/check` (`checkEmail` in SDK/MCP) accepts **one** draft, `{"emailId":"…"}` or `{"campaignId":"…"}`. A draft accepts a single From mailbox (`"Nightmail <billing@nightmail.dev>"` or bare address + `fromName`), optional `to`, `subject`, `html` and/or `text`, a `transactional` or `marketing` stream, optional headers (name → value) and optional attachment **metadata**. The response contains only diagnostics and measurements, never message HTML. Read permission suffices; stored content follows its existing workspace, sender, mailbox, and capability-redaction rules. Domain-scoped keys cannot obtain workspace reputation statistics. No fetching links, images, DNS, SES, attachment objects or Jev. No side effects on sending.
 
-**Interpretation:** a high score means few observed problems, not a percentage chance of inbox placement. Six independent category scores start at 100. Subtract each triggered rule's category points **once**, floor at zero, then round the weighted average over nonzero category weights. A category with no workspace reputation evidence has weight zero; if no exact identity or actionable authentication evidence is available, authentication has weight zero. Unmeasured signals do not become failures. Grades follow Bane's sender grade cutoffs (A+ 95, A 90, B 80, C 70, D 60). This checker does not modify the workspace sender score, nor does a high total override a specific error such as exceeding the hosted screen limit.
+**Interpretation:** a high score means few observed problems, not a percentage chance of inbox placement. Six independent category scores start at 100. Subtract each triggered rule's category points **once**, floor at zero, then round the weighted average over nonzero category weights. A category with no workspace reputation evidence has weight zero; if no exact identity or actionable authentication evidence is available, authentication has weight zero. Unmeasured signals do not become failures. Grades follow Nightmail's sender grade cutoffs (A+ 95, A 90, B 80, C 70, D 60). This checker does not modify the workspace sender score, nor does a high total override a specific error such as exceeding the hosted screen limit.
 
 ## Rules
 
-Points and thresholds below are Bane heuristics, **not** published spam-filter coefficients. The last column gives the reason for the check, not a claim that a provider implements this formula. [Google sender guidelines][G], [Yahoo sender requirements][Y], [DMARC][D], [SES][M], [CAN-SPAM][F] and [RFC 8058][U] give the relevant requirements.
+Points and thresholds below are Nightmail heuristics, **not** published spam-filter coefficients. The last column gives the reason for the check, not a claim that a provider implements this formula. [Google sender guidelines][G], [Yahoo sender requirements][Y], [DMARC][D], [SES][M], [CAN-SPAM][F] and [RFC 8058][U] give the relevant requirements.
 
 ### Authentication & domain (weight 20)
 
@@ -36,8 +36,8 @@ Points and thresholds below are Bane heuristics, **not** published spam-filter c
 | link-label | warning | 18 | Existing screen found a displayed hostname different from the anchor destination. [Google][G] |
 | short-url | warning | 15 | Existing deliverability shortener list: obscured destinations reduce reader trust. [Google][G] |
 | ip-link | warning | 20 | Literal IPv4/IPv6 host: recipient cannot recognize the destination brand. [SpamAssassin URI rules](https://github.com/apache/spamassassin/blob/trunk/rules/20_uri_tests.cf) |
-| redirect | info | 5 | Known Bane tracking or an explicit nested URL in a query parameter; layered redirects obscure the destination. A static hint, not an HTTP redirect trace. |
-| promotional-phrase | info | 4 | Only “no credit check”, “you are a winner”, “this is not spam”. Credit/prize/unsolicited-mail claims from Bane's existing phrase list, intentionally low weight. [FTC prize scam examples](https://consumer.ftc.gov/articles/fake-prize-sweepstakes-and-lottery-scams), [SpamAssassin body rules](https://github.com/apache/spamassassin/blob/trunk/rules/20_body_tests.cf) |
+| redirect | info | 5 | Known Nightmail tracking or an explicit nested URL in a query parameter; layered redirects obscure the destination. A static hint, not an HTTP redirect trace. |
+| promotional-phrase | info | 4 | Only “no credit check”, “you are a winner”, “this is not spam”. Credit/prize/unsolicited-mail claims from Nightmail's existing phrase list, intentionally low weight. [FTC prize scam examples](https://consumer.ftc.gov/articles/fake-prize-sweepstakes-and-lottery-scams), [SpamAssassin body rules](https://github.com/apache/spamassassin/blob/trunk/rules/20_body_tests.cf) |
 | shouting | warning | 8 | Subject ≥10 characters with >65% uppercase letters, repeated punctuation or ≥3 exclamation marks. Readability heuristic; not a blacklist. |
 | subject | info | 6 | Empty, >90 Unicode code points, or >2 pictographs. Many inboxes truncate the subject; emoji-heavy subjects obscure the purpose. [Mailchimp subject-line guide](https://mailchimp.com/help/best-practices-for-email-subject-lines/) |
 | form | warning | 12 | Embedded form: support varies or submission is disabled. [Can I email](https://www.caniemail.com/features/html-form/) |
@@ -57,7 +57,7 @@ Points and thresholds below are Bane heuristics, **not** published spam-filter c
 | unsubscribe-link | error | 25 | Marketing only: no recognizable opt-out/preferences link. Separate from one-click headers. [CAN-SPAM][F], [Google][G] |
 | postal-address | warning | 18 | Marketing only: no recognizable postal address. English street/PO-box heuristic, not a legal or international address validator. [CAN-SPAM][F] |
 
-Pasted marketing drafts are checked **as supplied**. Campaign checks render a base copy before per-recipient substitution and credit the opt-out headers/link Bane adds. Sent structured messages use their retained visible copy. These are not reconstructions of the MIME as received; raw-only or unavailable bodies return an error rather than scoring a blank message.
+Pasted marketing drafts are checked **as supplied**. Campaign checks render a base copy before per-recipient substitution and credit the opt-out headers/link Nightmail adds. Sent structured messages use their retained visible copy. These are not reconstructions of the MIME as received; raw-only or unavailable bodies return an error rather than scoring a blank message.
 
 ### Size & limits (weight 12)
 
@@ -65,7 +65,7 @@ Pasted marketing drafts are checked **as supplied**. Campaign checks render a ba
 |---|---|---:|---|
 | gmail-clip | warning | 45 | ≥102,400 bytes **HTML**, before final tracking/encoding. Approximate Gmail clipping line, not the total MIME size. [Gmail clipping observations](https://github.com/hteumeuleu/email-bugs/issues/41) |
 | screen-bytes | info/warning/error | 0/20/100 | Always reports exact submitted (or known probation-rewritten) UTF-8 bytes, limit 24,576 and signed remaining bytes. Warning under 10% headroom, error above limit. Uses `screen.ts`'s text projection incl. visible HTML, alt/title and plain alternative. This does not run the classifier or guarantee other screening budgets pass. |
-| mime-size | info/error | 0/100 | Reports Bane admission's conservative MIME estimate, including base64, line folding and header reserve. Above the 16 MiB application cap is an error. Not a captured on-wire byte count. |
+| mime-size | info/error | 0/100 | Reports Nightmail admission's conservative MIME estimate, including base64, line folding and header reserve. Above the 16 MiB application cap is an error. Not a captured on-wire byte count. |
 
 ### Rendering (weight 5)
 
@@ -80,11 +80,11 @@ Pasted marketing drafts are checked **as supplied**. Campaign checks render a ba
 | Rule ID | Severity | Points | Trigger and rationale |
 |---|---|---:|---|
 | shared-pool | info | 0 | Actual Hosted binding: reputation on shared SES IPs is not solely under the sender's control. No assumption a trusted pool means a dedicated IP. |
-| warmup | warning | 22 | Workspace sender score is not graded yet. Hosted reads persisted standing; self-hosted/BYO reads the sender-score projection, cached for 60 seconds. [Bane sending limits][B] |
-| sender-band | warning | 30 | Graded workspace score <80 (below B). [Bane sender standing][B] |
+| warmup | warning | 22 | Workspace sender score is not graded yet. Hosted reads persisted standing; self-hosted/BYO reads the sender-score projection, cached for 60 seconds. [Nightmail sending limits][B] |
+| sender-band | warning | 30 | Graded workspace score <80 (below B). [Nightmail sender standing][B] |
 | bounce-rate | error | 35 | Last seven UTC dates, >2% hard bounces/accepted, at least two bounces. Same rate line as the support deliverability diagnostics. |
 | complaint-rate | error | 45 | Last seven UTC dates, ≥0.1% complaints/accepted, at least two complaints. Distinct from Gmail's own recipient-level metric. [Google][G] |
-| burst | warning | 30 | Campaign eligible audience (frozen total for a launch), capped by requested pacing, exceeds effective daily allowance, or the hourly marketing allowance during warm-up. Estimate, not a claim that all recipients arrive at once. [Bane limits][B], [Google][G] |
+| burst | warning | 30 | Campaign eligible audience (frozen total for a launch), capped by requested pacing, exceeds effective daily allowance, or the hourly marketing allowance during warm-up. Estimate, not a claim that all recipients arrive at once. [Nightmail limits][B], [Google][G] |
 
 ## Calibration: same sender, different message
 

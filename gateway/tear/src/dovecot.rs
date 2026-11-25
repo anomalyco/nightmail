@@ -10,17 +10,17 @@
 //!
 //! Comparisons are at sync points only (the mirror after SELECT/NOOP/EXPUNGE/MOVE/APPEND and
 //! the server truth every step). The alphabet leaves out what differs by design or by timing:
-//! COPY (Bane shares ordinary flags across copies, Dovecot copies them), IDLE (Dovecot pushes
-//! asynchronously), folder create/delete (Bane ends a session whose folder vanished). `\Recent`
+//! COPY (Nightmail shares ordinary flags across copies, Dovecot copies them), IDLE (Dovecot pushes
+//! asynchronously), folder create/delete (Nightmail ends a session whose folder vanished). `\Recent`
 //! is dropped from every FLAGS list. The client NOOPs before each sequence-addressed command
-//! (`Config::eager`), because Dovecot announces changes after any command and Bane only at
+//! (`Config::eager`), because Dovecot announces changes after any command and Nightmail only at
 //! sync points; the NOOP gives both servers the same view of "1" and "1:*".
 //!
 //! Documented differences, left out of the alphabet after a first run found them:
 //! - a sequence set naming messages that do not exist (`FETCH 1`, `STORE 1:*` on an empty
-//!   mailbox): Dovecot answers BAD, Bane answers OK with no data;
+//!   mailbox): Dovecot answers BAD, Nightmail answers OK with no data;
 //! - EXPUNGE, MOVE and UID EXPUNGE in a mailbox opened with EXAMINE: Dovecot answers OK and
-//!   changes nothing, Bane answers BAD.
+//!   changes nothing, Nightmail answers BAD.
 //!
 //! Dovecot 2.3.21 diverges from RFC 3501 6.4.3 in one place the model checks: an EXPUNGE
 //! that removes a message the session was never told about announces it with EXISTS but
@@ -52,7 +52,7 @@ pub fn config() -> Config {
     c.idle = false;
     c.copy = false;
     c.eager = true;
-    // EXPUNGE, MOVE and UID EXPUNGE under EXAMINE: Dovecot answers OK (no-op), Bane BAD.
+    // EXPUNGE, MOVE and UID EXPUNGE under EXAMINE: Dovecot answers OK (no-op), Nightmail BAD.
     c.examine = false;
     c
 }

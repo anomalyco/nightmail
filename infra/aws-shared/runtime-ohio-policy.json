@@ -2,7 +2,7 @@
   "Version": "2012-10-17",
   "Statement": [
     {
-      "Effect": "Allow", "Action": ["ses:GetAccount", "cloudwatch:GetMetricData"], "Resource": "*",
+      "Effect": "Allow", "Action": ["ses:GetAccount", "ses:BatchGetMetricData", "cloudwatch:GetMetricData"], "Resource": "*",
       "Condition": {"StringEquals": {"aws:RequestedRegion": ["us-east-1", "us-east-2"]}}
     },
     {

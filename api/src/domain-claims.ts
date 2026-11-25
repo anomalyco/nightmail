@@ -4,7 +4,7 @@ import { ApiError, assertSesConfigured, id, isSimulatedSes, type Runtime, type D
 import type { ReadyConnection } from './provider-credentials.js';
 import { placementRoot } from './domain-registry.js';
 import { connectionReady, detachedClaim, PROOF_LABELS, verifyImportedClaims, type ClaimState, type IdentityFacts, type ProofLabel, type TenantState } from './states.js';
-import { productName } from './brand.js';
+import { addresses, productName } from './brand.js';
 import type { ClaimsOnly, SendScope } from './send-scope.js';
 
 export const domainName = z.string().trim().toLowerCase().max(253).regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/);
@@ -87,10 +87,15 @@ export async function reserveClaim(runtime: Runtime, workspace: string, name: st
   if (row.error_code==='POOL_PLACEMENT_MANAGED') throw new ApiError(422,row.error_code,`Hosted sending placement is managed by ${productName}.`,'region');
   if (row.error_code==='DOMAIN_LIMIT_REACHED') throw await domainLimitReached(runtime.db,workspace);
   if (row.error_code==='DOMAIN_CLAIM_EXPIRED') throw new ApiError(409,row.error_code,'The 72-hour ownership window expired. Remove the domain and add it again.');
-  if (!row.token || !row.id) throw new ApiError(409,'DOMAIN_CLAIMED','This domain overlaps an existing claim.');
+  if (!row.token || !row.id) throw domainClaimed();
   return { ...row, connection: row.connection, token: row.token, claim: row.claim ?? { sending_state: 'pending', receiving_state: 'off', receiving_host: null, lost_since: null, receiving_lost_since: null, identity: null, proof_label: PROOF_LABELS[0], created_at: row.reserved_at, ever_proven: false } }; // A new claim's created_at is this transaction's now(), its proof_label the column default.
 }
 
+/**
+ * Another workspace has proven this name, or one above or below it. What the domain's owner can do about it: an exclusive
+ * claim is released once its ownership records have been gone for 30 days (operations.ts expireDomainClaims).
+ */
+export const domainClaimed = () => new ApiError(409, 'DOMAIN_CLAIMED', `Another workspace has verified this domain, or one above or below it. If the domain is yours, remove that workspace's records from your DNS: its ownership TXT record (_${PROOF_LABELS[0]}.<domain>, or ${PROOF_LABELS.slice(1).map(label => '_' + label).join(' or ')} on older setups) and its DKIM CNAME records under _domainkey. The claim is released about 30 days after both are gone. To release it sooner, write to ${addresses.support}.`);
 /** Whether the workspace sends through its own AWS account: its identities live in that account's SES, so no domain total applies (migration 355). */
 export const byoWorkspace = (workspace: string) => sql`EXISTS (SELECT FROM provider_connections WHERE workspace_id=${workspace} AND kind='byo')`;
 /** Domains the workspace holds and how many it may hold: 100 unless an operator set another limit, and no total (null) with its own AWS account. */
@@ -129,7 +134,7 @@ export async function importByoClaims(db: DbExecutor, connection: { id: string; 
 // beside it (found by domain; the statement's snapshot still has the operation_domains row it deletes).
 export const releasedClaimCleanup = (wid: string) => sql`retired AS (UPDATE mailbox_domains m SET status='disabled',lost_since=NULL,updated_at=now() FROM released r WHERE m.workspace_id=${wid} AND m.status<>'disabled'
     AND (m.name=r.name OR m.domain_id IN (SELECT d.id FROM operation_domains d WHERE d.workspace_id=${wid} AND d.name=r.name))),
-  canceled AS (DELETE FROM jobs USING released r WHERE jobs.workspace_id=${wid} AND jobs.id IN ('domain.verify:'||r.token,'domain.mx:'||r.token,'domain.setupCheck:'||r.token) AND jobs.type IN ('domain.verify','domain.mx','domain.setupCheck') AND jobs.status IN ('pending','running'))`;
+  canceled AS (DELETE FROM jobs USING released r WHERE jobs.workspace_id=${wid} AND jobs.id IN ('domain.verify:'||r.token,'domain.mx:'||r.token,'domain.setupCheck:'||r.token,'domain.linkCheck:'||r.token) AND jobs.type IN ('domain.verify','domain.mx','domain.setupCheck','domain.linkCheck') AND jobs.status IN ('pending','running'))`;
 // Keep independently owned exclusive claims. Send-only imports/adoptions have no TXT proof;
 // their authority cannot survive disconnect. The operator's retained ARN journal does survive.
 export const releaseConnectionClaims = (wid: string, target: SQL) => sql`target AS (${target}), detached AS (UPDATE domain_claims dc SET ${detachedClaim}

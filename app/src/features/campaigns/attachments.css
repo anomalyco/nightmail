@@ -8,8 +8,9 @@
 /* The row's last slot is the remove button or "In body", one width for both so sizes line up. */
 .campaign-file-end { flex-shrink: 0; display: flex; align-items: center; justify-content: flex-end; width: 56px; }
 .campaign-file-note { color: var(--color-muted); font-size: var(--text-sm); white-space: nowrap; }
-.campaign-file-blocks .ui-icon-button { flex-shrink: 0; width: 28px; height: 28px; color: var(--color-muted); }
-@media (pointer: coarse) { .campaign-file-blocks .ui-icon-button { width: 44px; height: 44px; } }
+/* Remove hangs by its own inset and its X's inset in the icon, so the X ends on the column's edge like "In body". */
+.campaign-file-blocks .ui-icon-button { flex-shrink: 0; width: 28px; height: 28px; margin-inline-end: calc(-1 * (var(--space-6) + var(--space-4))); color: var(--color-muted); }
+@media (pointer: coarse) { .campaign-file-blocks .ui-icon-button { width: 44px; height: 44px; margin-inline-end: calc(-1 * (var(--space-12) + var(--space-6))); } }
 @media (max-width: 640px) { .campaign-file-blocks:not([data-compact]) > li { padding-block: var(--space-4); } }
 /* Review: read-only, in the details' own type; the name on one line, the size and "In body" under it. */
 .campaign-file-blocks[data-compact] { display: flex; flex-direction: column; gap: var(--space-8); margin: 0; color: inherit; font: inherit; letter-spacing: inherit; }

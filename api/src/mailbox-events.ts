@@ -2,6 +2,7 @@ import {ActionRetry,deliverEndpoint} from './endpoint-delivery.js';
 import { and, eq, getTableColumns, gt, inArray, isNotNull, max, sql, type SQL } from 'drizzle-orm';
 import { ApiError, lazyModule, ModuleLoadError, type DbExecutor, type JobHandler, type Runtime } from './core.js';
 import { mailboxEvents, mailMessages } from './db/mailbox.js';
+import { addressedToDomains, oneOf } from './domain-mail.js';
 import { inboundHookClaim,JobDeferred,mailboxWebhookAttempts,retryDatabaseFailures } from './jobs.js';
 
 export const inboundEventTypes = ['message.received', 'message.junk', 'message.stored', 'message.queued', 'message.sent', 'message.delivered', 'message.delayed', 'message.bounced', 'message.complained', 'message.failed', 'thread.updated', 'address.created', 'address.deleted', 'inbox.created', 'inbox.deleted', 'message.held', 'inbox.quota_exceeded'] as const;
@@ -51,11 +52,13 @@ export async function recordEvents(tx: DbExecutor, workspaceId: string, items: M
   return (await tx.execute<{n:number}>(sql`WITH ${mailboxEventCtes(source)} SELECT count(*)::int AS n FROM queued`)).rows[0]!.n;
 }
 
-type EventScope = { mailboxIds: string[] | null; includeStored: boolean };
-function visibleEvents(workspaceId: string, { mailboxIds, includeStored }: EventScope) {
-  // All mailboxes is not workspace access: mailbox keys cannot see null-mailbox events.
+type EventScope = { mailboxIds: string[] | null; includeStored: boolean; domains?: string[] };
+function visibleEvents(workspaceId: string, { mailboxIds, includeStored, domains }: EventScope) {
+  // All mailboxes is not workspace access: mailbox keys cannot see null-mailbox events. A key limited to sender domains
+  // sees only the events of messages addressed to them (no thread, address or inbox events).
   return and(eq(mailboxEvents.workspaceId, workspaceId),
-    mailboxIds !== null ? inArray(mailboxEvents.mailboxId, mailboxIds) : includeStored ? undefined : isNotNull(mailboxEvents.mailboxId));
+    mailboxIds !== null ? oneOf(mailboxEvents.mailboxId, mailboxIds) : includeStored ? undefined : isNotNull(mailboxEvents.mailboxId),
+    domains ? and(isNotNull(mailboxEvents.messageId), addressedToDomains(domains, mailboxEvents.messageId)) : undefined);
 }
 export async function readEvents(db: DbExecutor, workspaceId: string, input: EventScope & { after: number; types?: string[]; limit: number }) {
   // Received mail's events name who sent it, its subject and when it arrived, read with the event (by the message's key).

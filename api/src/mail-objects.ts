@@ -52,7 +52,7 @@ export function assertMailKey(wid: string, key: string) {
 export function hostedMailBucket(runtime: Runtime, cls: MailClass) {
   return runtime.mailR2?.write || cls !== 'default' ? boundMailBucket(runtime) : null;
 }
-/** The bucket column value of the bound R2 mail bucket, which Bane-signed download links stream from. */
+/** The bucket column value of the bound R2 mail bucket, which Nightmail-signed download links stream from. */
 export const boundMailBucket = (runtime: Runtime) => runtime.mailR2 ? `${R2}${runtime.mailR2.name}` : null;
 /** Hosted agent inboxes ship with the R2 store; self-hosted installs use their configured S3 bucket. */
 export const inboxStoreReady = (runtime: Runtime) => !runtime.config.multiTenant || !!runtime.mailR2?.write;

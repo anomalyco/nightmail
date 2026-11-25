@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { baneApi, BaneError, platformBody, senderOf, type Handoff, type InboundMessage, type MirroredMessage, type MirroredState, type Mode, type OutboxReply, type PlatformReply, type RegisteredConversation, type Scope, type SupportAction } from './bane.js';
+import { nightmailApi, NightmailError, platformBody, senderOf, type Handoff, type InboundMessage, type MirroredMessage, type MirroredState, type Mode, type OutboxReply, type PlatformReply, type RegisteredConversation, type Scope, type SupportAction } from './nightmail.js';
 import type { Env } from './env.js';
 import { gate, LINK_ORIGINS, plainText } from './gate.js';
 import { addTicketNote, expectation, fileTicket, masked, openFollowUp, ticketEmail, type FiledTicket, type TicketContext } from './tickets.js';
@@ -785,7 +785,7 @@ export class SupportConversation extends DurableObject<Env> {
       if (reply.status === 404) return false;
       return platformBody(reply).agentState === 'paused';
     } catch (error) {
-      if (strict) throw error instanceof BaneError ? error : new BaneError(503, 'INBOX_STATE_UNAVAILABLE', 'The inbox state could not be read');
+      if (strict) throw error instanceof NightmailError ? error : new NightmailError(503, 'INBOX_STATE_UNAVAILABLE', 'The inbox state could not be read');
       logError(error, { event: 'inbox', code: 'INBOX_STATE_UNAVAILABLE' }, 'warn');
       return false;
     }
@@ -864,7 +864,7 @@ export class SupportConversation extends DurableObject<Env> {
         const last = meta.lastInbound;
         if (!recipient || !last) { progress.failed = recipient ? 'no message to reply to' : 'sender not verified'; save(); return settle('failed'); }
         if (!progress.emailed) {
-          await external(baneApi(this.env).reply(last.threadId, { replyToMessageId: last.messageId, text: reply.text, to: recipient, addressId: this.route({ addressIds: last.addressIds } as Snapshot, last.messageId, 'reply').addressId }, `staff-${reply.id}`));
+          await external(nightmailApi(this.env).reply(last.threadId, { replyToMessageId: last.messageId, text: reply.text, to: recipient, addressId: this.route({ addressIds: last.addressIds } as Snapshot, last.messageId, 'reply').addressId }, `staff-${reply.id}`));
           progress.emailed = true; save();
         }
       } else {
@@ -879,13 +879,13 @@ export class SupportConversation extends DurableObject<Env> {
         if (!open && !progress.emailed) {
           if (!recipient) { progress.failed = 'no account address'; save(); return settle('failed'); }
           const first = meta.name?.split(/\s+/)[0] ?? 'there';
-          await external(baneApi(this.env).startThread({ to: [recipient], subject: `Re: your ${productName} support chat`, text: [`Hi ${first},`, '', reply.text, '', `${author}, ${productName}`].join('\n') }, `staff-${reply.id}`));
+          await external(nightmailApi(this.env).startThread({ to: [recipient], subject: `Re: your ${productName} support chat`, text: [`Hi ${first},`, '', reply.text, '', `${author}, ${productName}`].join('\n') }, `staff-${reply.id}`));
           progress.emailed = true; save();
         }
       }
     } catch (error) {
       // A reply Nightmail refuses for good (no reply target, recipients changed): failed, so staff see it wasn't sent.
-      if (error instanceof BaneError && error.status >= 400 && error.status < 500 && error.status !== 429 && !['IDEMPOTENCY_IN_PROGRESS'].includes(error.code)) {
+      if (error instanceof NightmailError && error.status >= 400 && error.status < 500 && error.status !== 429 && !['IDEMPOTENCY_IN_PROGRESS'].includes(error.code)) {
         progress.failed = error.code; save();
         return settle('failed');
       }
@@ -1436,13 +1436,13 @@ export class SupportConversation extends DurableObject<Env> {
       case 'close': await this.closeRemote(); return {};
       // A chat opening whose answer from Nightmail was never handled: closed here, and with Nightmail (the close item).
       case 'opening': if (!this.meta()!.registered && this.meta()!.status !== 'closed') await this.close('ended'); return {};
-      case 'alert': { const { key, input } = payload as Alert; await external(baneApi(this.env).startThread(input, key)); return {}; }
+      case 'alert': { const { key, input } = payload as Alert; await external(nightmailApi(this.env).startThread(input, key)); return {}; }
       case 'notify': {
         const { ticketId, key, input } = payload as Notify;
         const row = await external(this.env.DB.prepare('SELECT notified_at FROM tickets WHERE id = ?').bind(ticketId).first<{ notified_at: number | null }>());
         if (!row) throw new Error('Missing ticket');
         if (row.notified_at === null) {
-          await external(baneApi(this.env).startThread(input, key));
+          await external(nightmailApi(this.env).startThread(input, key));
           await external(this.env.DB.prepare('UPDATE tickets SET notified_at = ? WHERE id = ?').bind(Date.now(), ticketId).run());
         }
         return {};
@@ -1464,7 +1464,7 @@ export class SupportConversation extends DurableObject<Env> {
     const decided = this.sql.exec<{ result: string }>('SELECT result FROM _support_work WHERE id = ?', `msg:${messageId}`).toArray()[0];
     const kept = decided ? (JSON.parse(decided.result) as Decision).message : undefined;
     if (kept) return kept;
-    if (!progress.message) { progress.message = snapshotOf(await external(baneApi(this.env).message(messageId))); save(); }
+    if (!progress.message) { progress.message = snapshotOf(await external(nightmailApi(this.env).message(messageId))); save(); }
     return progress.message;
   }
 
@@ -1494,7 +1494,7 @@ export class SupportConversation extends DurableObject<Env> {
    */
   private async decide(item: WorkRow, next: Incoming): Promise<Outcome> {
     const progress: Decision = JSON.parse(item.result), save = () => this.work.checkpoint(item.id, progress), count = charged(progress, save);
-    if (!progress.message) { progress.message = snapshotOf(await external(baneApi(this.env).message(next.messageId))); save(); }
+    if (!progress.message) { progress.message = snapshotOf(await external(nightmailApi(this.env).message(next.messageId))); save(); }
     const message = progress.message, sender = message.from;
     // Never answer automatic mail or ourselves (loops). Nightmail flags auto-replies, bounces, reports, bulk and list mail.
     if (!sender || message.automated === true || /^(?:mailer-daemon|postmaster|no-?reply|bounces?)@/i.test(sender) || sender === this.env.SUPPORT_ADDRESS.toLowerCase()) return { result: progress };
@@ -1543,7 +1543,7 @@ export class SupportConversation extends DurableObject<Env> {
         await keep('open conversations per person');
         if (!progress.busy) {
           const route = this.route(message, next.messageId, 'reply');
-          await external(baneApi(this.env).reply(message.threadId ?? next.threadId, { replyToMessageId: next.messageId, text: FIXED.busy(), to: sender, subject: FIXED_SUBJECT, addressId: route.addressId }, `${route.key}:busy`));
+          await external(nightmailApi(this.env).reply(message.threadId ?? next.threadId, { replyToMessageId: next.messageId, text: FIXED.busy(), to: sender, subject: FIXED_SUBJECT, addressId: route.addressId }, `${route.key}:busy`));
           progress.busy = true; save();
         }
         return { state: 'held', result: progress };
@@ -1612,8 +1612,8 @@ export class SupportConversation extends DurableObject<Env> {
     // A message that proved nothing: its fixed reply, with a sign-in for this one message, goes once under a key of its
     // own; then its answer waits, parked, until Nightmail lists that sign-in (signIns). Closing holds it.
     if (answer.signin && !progress.challenged) {
-      const origin = new URL(this.env.BANE_ORIGIN).origin, link = `${origin}/support/continue/${meta.conversationId}/${answer.messageId}`;
-      await external(baneApi(this.env).reply(answer.threadId, { replyToMessageId: answer.messageId, text: FIXED.signin(origin, link, receivedOn(message.receivedAt)), to: answer.sender, subject: FIXED_SUBJECT, addressId: answer.route.addressId }, `${answer.route.key}:signin`));
+      const origin = new URL(this.env.NIGHTMAIL_ORIGIN).origin, link = `${origin}/support/continue/${meta.conversationId}/${answer.messageId}`;
+      await external(nightmailApi(this.env).reply(answer.threadId, { replyToMessageId: answer.messageId, text: FIXED.signin(origin, link, receivedOn(message.receivedAt)), to: answer.sender, subject: FIXED_SUBJECT, addressId: answer.route.addressId }, `${answer.route.key}:signin`));
       this.record({ id: newId('msg'), role: 'assistant', kind: 'notice', text: FIXED_LABEL.signin!, at: new Date().toISOString(), tools: [], channel: 'email' });
       progress.challenged = true; save();
       return { state: 'parked', result: progress };
@@ -1645,7 +1645,7 @@ export class SupportConversation extends DurableObject<Env> {
       }
     }
     // Only ever to the address that wrote (a verified answer: to that address as the account stores it); Reply-To and Cc are ignored.
-    await external(baneApi(this.env).reply(answer.threadId, { replyToMessageId: answer.messageId, text: progress.text, to: progress.mode === 'verified' ? progress.recipient! : answer.sender, addressId: answer.route.addressId, ...(progress.fixed ? { subject: FIXED_SUBJECT } : {}) }, answer.route.key));
+    await external(nightmailApi(this.env).reply(answer.threadId, { replyToMessageId: answer.messageId, text: progress.text, to: progress.mode === 'verified' ? progress.recipient! : answer.sender, addressId: answer.route.addressId, ...(progress.fixed ? { subject: FIXED_SUBJECT } : {}) }, answer.route.key));
     const at = new Date().toISOString();
     if (progress.fixed) this.record({ id: newId('msg'), role: 'assistant', kind: 'notice', text: FIXED_LABEL[progress.fixed]!, at, tools: [], channel: 'email' });
     else this.record({ id: newId('msg'), role: 'assistant', kind: 'reply', text: progress.text, at, tools: [], channel: 'email' });
@@ -1686,8 +1686,8 @@ export class SupportConversation extends DurableObject<Env> {
       this.record({ id: progress.held, role: 'assistant', kind: 'held', text: draft, at: new Date().toISOString(), tools: [], channel: 'email' });
     }
     if (progress.noticed === false) {
-      const origin = new URL(this.env.BANE_ORIGIN).origin;
-      await external(baneApi(this.env).reply(answer.threadId, { replyToMessageId: answer.messageId, text: FIXED.access(origin), to: answer.sender, subject: FIXED_SUBJECT, addressId: answer.route.addressId }, `${answer.route.key}:ended`));
+      const origin = new URL(this.env.NIGHTMAIL_ORIGIN).origin;
+      await external(nightmailApi(this.env).reply(answer.threadId, { replyToMessageId: answer.messageId, text: FIXED.access(origin), to: answer.sender, subject: FIXED_SUBJECT, addressId: answer.route.addressId }, `${answer.route.key}:ended`));
       this.record({ id: newId('msg'), role: 'assistant', kind: 'notice', text: FIXED_LABEL.access!, at: new Date().toISOString(), tools: [], channel: 'email' });
       progress.noticed = true; save();
     }
@@ -1717,7 +1717,7 @@ export class SupportConversation extends DurableObject<Env> {
    * and a ticket. A scope offered during a verified turn that gives less stops the turn, and its answer is held.
    */
   private async compose(answer: Answer, message: Snapshot, progress: Composed, save: () => void): Promise<void> {
-    const origin = new URL(this.env.BANE_ORIGIN).origin;
+    const origin = new URL(this.env.NIGHTMAIL_ORIGIN).origin;
     if (answer.fixed) { progress.fixed = answer.fixed; progress.text = FIXED[answer.fixed](origin); progress.mode = 'general'; save(); return; }
     let meta = this.meta()!;
     const body = bodyOf(message), dmarc = answer.dmarc;
@@ -1929,7 +1929,7 @@ export class SupportConversation extends DurableObject<Env> {
       if (kept && this.attachments().some(a => a.id === kept)) { ids.push(kept); continue; }
       if (this.attachments().length >= MAX_ATTACHMENTS) { skipped.push(`${fileName(part.filename)} (the conversation already has ${MAX_ATTACHMENTS} images)`); continue; }
       try {
-        const bytes = await baneApi(this.env).part(messageId, part.id, MAX_IMAGE_BYTES);
+        const bytes = await nightmailApi(this.env).part(messageId, part.id, MAX_IMAGE_BYTES);
         if (!bytes) { skipped.push(`${fileName(part.filename)} (too large)`); continue; }
         const clean = cleanImage(bytes);
         const id = newId('att'), image = await storeImage(this.env, meta.conversationId, id, clean, 'email', safeName(part.filename, `attachment-${this.attachments().length + 1}`));
@@ -2137,7 +2137,7 @@ function codeOf(body: unknown): string | null {
   return typeof code === 'string' ? code : null;
 }
 /** A Nightmail refusal as the work queue retries it (work.ts failure()). */
-const platformError = (reply: PlatformReply, fallback: string) => new BaneError(reply.status, codeOf(reply.body) ?? fallback, `${productName} answered ${reply.status}`, reply.requestId, reply.retryAfter);
+const platformError = (reply: PlatformReply, fallback: string) => new NightmailError(reply.status, codeOf(reply.body) ?? fallback, `${productName} answered ${reply.status}`, reply.requestId, reply.retryAfter);
 /**
  * A file's name inside the harness's own bracketed note: safeName keeps letters, digits, spaces, dots, parentheses and
  * hyphens (no bracket, line break or control character) up to 80 characters, and the name is fenced as untrusted, so it

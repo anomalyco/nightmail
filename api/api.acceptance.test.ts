@@ -99,7 +99,7 @@ async function withinSession(client:{config:{credentials:()=>Promise<{sessionTok
   const [action,resource]=sessionCall(service,cmd,region,account),policy=JSON.parse((await client.config.credentials()).sessionToken!);
   assert.ok(iamAllows(policy.Statement,action,resource,{'aws:RequestedRegion':region,'ses:ApiVersion':'2'}),`${action} on ${resource} is outside its session policy`);
 }
-// The S3 calls Bane makes on one attachment object: ingest/archive PutObject, signed-link and
+// The S3 calls Nightmail makes on one attachment object: ingest/archive PutObject, signed-link and
 // reuse GetObject, and the orphan expiry tag (any other tag value must stay refused).
 function attachmentAccess(statements:IamStatement[],arn:string,account:string) {
   const base={'aws:RequestedRegion':'us-east-2','s3:ResourceAccount':account},tag=(kind:string)=>({...base,'s3:RequestObjectTag/bane-kind':kind,'s3:RequestObjectTagKeys':['bane-kind']});
@@ -120,7 +120,7 @@ async function hostedAttachmentAccess(key:string,account='905840579680') {
 // HTTP scenarios use the actual server. Explicitly labeled OIDC callback and SES
 // setup integrations use the normal app with mocked providers; no auth bypasses.
 const BASE = (process.env.API_BASE_URL ?? 'http://127.0.0.1:8787').replace(/\/$/, '');
-const BENCH = process.env.BANE_BENCH === '1';
+const BENCH = (process.env.NIGHTMAIL_BENCH ?? process.env.BANE_BENCH) === '1';
 test('email preview engine: Word-only lint, Gmail account modes, safe rewrites and byte clipping', async () => {
   const { emulate, lint, PreviewLimitError } = await import('./src/email-preview/index.js');
   const source = '<!doctype html><head><style>.card {border-radius:14px;color:#123456}</style></head><body><p class="card">Receipt</p><a href="https://example.com/read">Read</a><img src="https://example.com/pixel" alt="Logo"><!--[if mso]><p style="display:grid">Word only</p><![endif]--></body>';
@@ -710,7 +710,7 @@ test('ritual regex tests run on a bounded matcher: its state is charged as steps
   }
 });
 test('MCP: every API operation is a tool or a documented human step, and docs/mcp-coverage.md is generated',async()=>{
-  const {createOpenApiApp}=await import('./src/app.js'),{buildMcpCatalog,coverageMarkdown,TOOLSETS}=await import('./src/mcp-catalog.js'),app=await createOpenApiApp();const catalog=buildMcpCatalog(app),spec=app.getOpenAPI31Document({openapi:'3.1.0',info:{title:'Bane API',version:'0.1.0'}});
+  const {createOpenApiApp}=await import('./src/app.js'),{buildMcpCatalog,coverageMarkdown,TOOLSETS}=await import('./src/mcp-catalog.js'),app=await createOpenApiApp();const catalog=buildMcpCatalog(app),spec=app.getOpenAPI31Document({openapi:'3.1.0',info:{title: 'Nightmail API',version:'0.1.0'}});
   const markdown=coverageMarkdown(catalog,spec as Json);assert.doesNotMatch(markdown,/UNCOVERED/);assert.equal(String(await readFile(new URL('../docs/mcp-coverage.md',import.meta.url))),markdown,'Run bun run mcp:coverage');
   // Tools that return received mail, or text derived from it, carry the untrusted-content notice.
   // So do an email's events and the webhook delivery log: a bounce's or a delay's diagnosticCode is the receiving server's text.
@@ -965,6 +965,42 @@ test('OIDC migration links only connected subjects; nobody is adopted by email',
   } finally {
     await db.query('ROLLBACK');
   }
+});
+
+test('optional Worker secrets disable only their feature on a partial rollout; core auth and live SES stay fail-closed', async t => {
+  const {loadConfig} = await import('./src/config.js'), {createApp} = await import('./src/app.js'), {drizzle} = await import('drizzle-orm/node-postgres');
+  const base = {PUBLIC_URL:PUBLIC_ORIGIN, BANE_ROOT_SECRET:AUTH_SECRET, MULTI_TENANT:'true', ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google', ACCOUNT_ISSUER:process.env.ACCOUNT_ISSUER, ACCOUNT_CLIENT_ID:'fixture', ACCOUNT_CLIENT_PRIVATE_KEY:'unused-in-session-fixture'};
+  const zone = 'a'.repeat(32), token = 'fixture-private-value-never-log', lines:string[]=[];
+  t.mock.method(console,'error',(line:string)=>{lines.push(line);});
+  const app=createApp(), db=drizzle(await fixtureDatabase(t));
+  // The old version after token deletion, and the reverse transition with an inherited token on new code.
+  for (const link of [{NIGHTMAIL_LINK_SAAS_ZONE_ID:zone},{NIGHTMAIL_LINK_SAAS_TOKEN:token}]) {
+    const config=loadConfig({...base,...link,NIGHTMAIL_LINK_HOST:'links.example.net',NIGHTMAIL_POSTMASTER_CREDENTIALS:token,
+      NIGHTMAIL_SUPPORT_URL:'https://support.example.org',NIGHTMAIL_SUPPORT_SIGNING_KEY:token,CF_OBSERVABILITY_TOKEN:token,CF_OBSERVABILITY_ACCOUNT_ID:'bad',
+      ANALYTICS_PUSH_SECRET:token,DOMAIN_NS_CHECK:'typo',NIGHTMAIL_PLACEMENT_SHADOW:'typo',STRIPE_SECRET_KEY:'not-a-key',STRIPE_WEBHOOK_SECRET:'whsec_fixture',DOMAIN_CONNECT_KEY_ID:'_dck1'});
+    assert.deepEqual([config.linkHosts,config.linkHost,config.postmaster,config.support?.url,config.support?.signingKey,
+      config.observability,config.analyticsPush,config.billing?.stripe,config.domainConnect],[undefined,'links.example.net',undefined,undefined,undefined,undefined,undefined,undefined,undefined]);
+    assert.deepEqual([config.domainNsCheck,config.placementShadow],[false,false]);
+    const runtime={config,db,snsCertificateState:new SnsCertificateState(),storage:{async put(){throw Error('unused');},async delete(){throw Error('unused');},async get(){return null;}}};
+    assert.equal((await app.fetch(new Request(PUBLIC_ORIGIN+'/health'),runtime)).status,200);
+    const me=await app.fetch(new Request(PUBLIC_ORIGIN+'/v1/me'),runtime); assert.deepEqual([me.status,(await me.json() as Json).error?.code],[401,'AUTH_REQUIRED']);
+  }
+  const errors=lines.map(line=>JSON.parse(line)).filter(line=>line.code==='OPTIONAL_FEATURE_DISABLED');
+  for (const feature of ['linkHosts','postmaster','supportChat','supportLogs','analyticsPush','stripe','domainConnect']) {
+    assert.ok(errors.some(e=>e.feature===feature && e.level==='error'), feature);
+    assert.equal(errors.filter(e=>e.feature===feature).length,1,feature+' is logged once');
+  }
+  assert.ok(!lines.join('').includes(token));
+  const invalidBuiltin=loadConfig({...base,PUBLIC_URL:'https://app.example.org',NIGHTMAIL_BUILTIN_DOMAIN:'example.org'});
+  assert.equal(invalidBuiltin.builtinDomain,undefined,'An overlapping built-in parent uses its existing off switch.');
+  const badScope=loadConfig({...base,NIGHTMAIL_BUILTIN_DOMAIN:'mail.example.org',NIGHTMAIL_BUILTIN_SEND_SCOPE:'typo',NIGHTMAIL_HYGIENE_DNS:'invalid',NIGHTMAIL_HYGIENE_LISTS:'invalid'});
+  assert.deepEqual([badScope.builtinDomain,badScope.builtinScope,badScope.hygieneDnsUrl,badScope.hygieneLists],[undefined,'members',null,false]);
+  const healthy=loadConfig({...base,NIGHTMAIL_LINK_SAAS_ZONE_ID:zone,NIGHTMAIL_LINK_SAAS_TOKEN:token,
+    NIGHTMAIL_POSTMASTER_CREDENTIALS:JSON.stringify({clientId:'id',clientSecret:token,refreshToken:'refresh'}),
+    CF_OBSERVABILITY_TOKEN:token,CF_OBSERVABILITY_ACCOUNT_ID:zone,CF_OBSERVABILITY_SCRIPT:'nightmail-dev'});
+  assert.deepEqual([healthy.linkHosts?.zoneId,healthy.postmaster?.clientId,healthy.observability?.script],[zone,'id','nightmail-dev']);
+  for(const bad of [{BANE_ROOT_SECRET:'short'},{ACCOUNT_CLIENT_PRIVATE_KEY:''},{ACCOUNT_REQUIRED_ACR:''},{AWS_RUNTIME_CREDENTIALS:'{}'},{ENABLE_LIVE_SES:'true'}])
+    assert.throws(()=>loadConfig({...base,...bad,NIGHTMAIL_POSTMASTER_CREDENTIALS:'bad'}),{code:'CONFIG_INVALID'});
 });
 
 test('OIDC dashboard callback verifies the token, consumes bound state once and creates a revocable session', async t => {
@@ -2296,7 +2332,7 @@ test('MCP profiles: one client signed in as two accounts gets two approvals that
   } finally { await db.query('ROLLBACK'); }
 });
 
-test('MCP account resource validates issuer JWT, per-call workspaces, Bane-side revocation and single-use DPoP proof', async t => {
+test('MCP account resource validates issuer JWT, per-call workspaces, Nightmail-side revocation and single-use DPoP proof', async t => {
   const { drizzle } = await import('drizzle-orm/node-postgres');
   const { loadConfig } = await import('./src/config.js');
   const { authorizeResource, externalMcpGrant, protectedResourceMetadata } = await import('./src/oidc-resource.js');
@@ -2324,9 +2360,10 @@ test('MCP account resource validates issuer JWT, per-call workspaces, Bane-side 
     assert.ok(manager);
     await db.query('INSERT INTO nightmail_oidc_identities VALUES($1,$2,$3)',[issuer,claims.sub,manager.userId]);
     const described={read:'Read workspace data.',send:'Send email from the workspace.',manage:'Manage workspace mail and resources.'};
-    const both=['bane:read','bane:send','bane:manage','nightmail:read','nightmail:send','nightmail:manage'];
-    // Both scope sets are published until the rename cleanup; the requested ones (bane:* by default) come first.
-    assert.deepEqual(protectedResourceMetadata(runtime),{resource,resource_name:'Nightmail',authorization_servers:[issuer],scopes_supported:both,bearer_methods_supported:['header'],scope_descriptions:Object.fromEntries(both.map(s=>[s,described[s.split(':')[1] as keyof typeof described]]))});
+    const asked=['bane:read','bane:send','bane:manage'];
+    // Only the scopes the installation asks for (bane:* by default) are published, so a client that requests every listed
+    // scope doesn't ask for each permission twice.
+    assert.deepEqual(protectedResourceMetadata(runtime),{resource,resource_name:'Nightmail',authorization_servers:[issuer],scopes_supported:asked,bearer_methods_supported:['header'],scope_descriptions:Object.fromEntries(asked.map(s=>[s,described[s.split(':')[1] as keyof typeof described]]))});
     assert.deepEqual(await (await run(token())).json(),['read']);
     // nightmail:* and bane:* scopes grant the same; OAUTH_SCOPE_PREFIX only picks the names the server asks for.
     assert.deepEqual(await (await run(token({client_id:'fixture-nightmail',scope:'nightmail:read nightmail:send',jti:randomUUID()}))).json(),['read','send']);
@@ -2334,7 +2371,7 @@ test('MCP account resource validates issuer JWT, per-call workspaces, Bane-side 
     assert.equal((await run(token({client_id:'fixture-unknown',scope:'opensend:read nightmail:live',jti:randomUUID()}))).status,403);
     runtime.config.oauthScopePrefix='nightmail';
     try {
-      const switched=protectedResourceMetadata(runtime),order=['nightmail:read','nightmail:send','nightmail:manage','bane:read','bane:send','bane:manage'];
+      const switched=protectedResourceMetadata(runtime),order=['nightmail:read','nightmail:send','nightmail:manage'];
       assert.deepEqual([switched.scopes_supported,Object.keys(switched.scope_descriptions)],[order,order]);
       assert.match((await run('not-a-token')).headers.get('www-authenticate')??'',/scope="nightmail:read nightmail:send nightmail:manage"/);
       assert.deepEqual(await (await run(token({jti:randomUUID()}))).json(),['read'],'A bane:read token keeps working after the switch.');
@@ -2346,6 +2383,9 @@ test('MCP account resource validates issuer JWT, per-call workspaces, Bane-side 
     try {
       const at=(url:string,access:string)=>authorizeResource(runtime,new Request(url,{method:'POST',headers:{authorization:`Bearer ${access}`}}),async a=>Response.json(a.permissions));
       assert.equal(protectedResourceMetadata(runtime,earlierResource).resource,earlierResource);
+      // The earlier origin still lists bane:* after the requested set: the account service checks the scopes of the grants
+      // made there against this list at every refresh.
+      assert.deepEqual(protectedResourceMetadata(runtime,earlierResource).scopes_supported,['bane:read','bane:send','bane:manage','nightmail:read','nightmail:send','nightmail:manage']);
       assert.equal(protectedResourceMetadata(runtime,'https://elsewhere.example.org/mcp').resource,resource,'An unknown host gets PUBLIC_URL\'s resource.');
       assert.deepEqual(await (await at(earlierResource,token({aud:earlierResource,jti:randomUUID()}))).json(),['read']);
       assert.equal((await at(resource,token({aud:earlierResource,jti:randomUUID()}))).status,401);
@@ -2402,7 +2442,7 @@ test('MCP account resource validates issuer JWT, per-call workspaces, Bane-side 
     assert.equal(deniedBody.jsonrpc,'2.0');assert.equal(deniedBody.error.code,-32000);assert.match(deniedBody.error.message,/Reconnect/);
     const bind=(id:string,body:object,cookie?:string,env?:typeof dashboard)=>call(`/v1/mcp-connections/${id}/workspace`,'POST',body,cookie,env);
     assert.equal((await bind(grants.rows[0].id,{workspaceId:'default'})).status,409,'A revoked approval has no default to set');
-    // The account service's tokens name their consent (jti <consent>.<random>). After a revocation in Bane, a new consent
+    // The account service's tokens name their consent (jti <consent>.<random>). After a revocation in Nightmail, a new consent
     // (the person connected the client again) starts the approval again under a new key, so nothing tied to the revoked
     // one comes back; the revoked consent's tokens, refreshed ones included, stay refused.
     const consented=(consent:string,iat:number,auth_time?:number,scope='bane:read')=>token({client_id:'fixture-consent',jti:`${consent}.${randomUUID()}`,iat,auth_time,scope});
@@ -2454,7 +2494,7 @@ test('MCP account resource validates issuer JWT, per-call workspaces, Bane-side 
     assert.equal(await acting('missing'+suffix),null,'No membership, no access');
     const listed=(await (await call('/v1/agents')).json() as {data:{id:string;workspaceId:string|null}[]}).data.find(g=>g.id===multiId);
     assert.deepEqual([listed?.id,listed?.workspaceId],[multiId,null]);
-    // The default can be set in Bane (or with the setDefaultWorkspace tool): only to one of the person's own workspaces.
+    // The default can be set in Nightmail (or with the setDefaultWorkspace tool): only to one of the person's own workspaces.
     assert.equal((await bind(multiId,{workspaceId:'missing'+suffix})).status,403);
     assert.equal((await bind(multiId,{workspaceId:'default',extra:true})).status,422);
     const otherUser=unique('acceptance-user'),otherToken=createHash('sha256').update(randomUUID()).digest('base64url'),dashboardIssuer=process.env.ACCOUNT_ISSUER??'https://account.anoma.ly';
@@ -3868,7 +3908,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           const pem=privateKey.export({type:'pkcs1',format:'pem'}).toString().replaceAll('\n','\\n');
           for(const invalid of [{DOMAIN_CONNECT_KEY_ID:'_dck1'},{DOMAIN_CONNECT_PRIVATE_KEY:pem},
             ...['invalid-pem',generateKeyPairSync('rsa',{modulusLength:1024}).privateKey.export({type:'pkcs1',format:'pem'}),generateKeyPairSync('ec',{namedCurve:'prime256v1'}).privateKey.export({type:'pkcs8',format:'pem'})].map(k=>({DOMAIN_CONNECT_KEY_ID:'_dck1',DOMAIN_CONNECT_PRIVATE_KEY:k.toString()}))]) {
-            assert.throws(()=>loadConfig({...env,...invalid}),{code:'CONFIG_INVALID'});
+            assert.equal(loadConfig({...env,...invalid}).domainConnect, undefined);
           }
           runtime.config.domainConnect=loadConfig({...env,DOMAIN_CONNECT_PRIVATE_KEY:pem,DOMAIN_CONNECT_KEY_ID:'_dck1'}).domainConnect;
           const {getDashboardActor}=await import('./src/dashboard-auth.js');
@@ -3949,7 +3989,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           let answer = '', lookups = 0, fault=''; const activeMx=new Set<string>(), cnames=new Map<string,string>();
           const policies=new Map<string,string[]>(); let dmarcQueries=0,dmarcFailure=false;
           dt.mock.method(globalThis,'fetch', async (input: RequestInfo | URL) => {
-            const url = new URL(String(input)); assert.equal(url.origin + url.pathname,'https://cloudflare-dns.com/dns-query');
+            const url = new URL(String(input)); assert.ok(['https://cloudflare-dns.com/dns-query','https://dns.google/resolve'].includes(url.origin + url.pathname));
             if (fault===url.searchParams.get('type')+'-servfail') return Response.json({Status:2});
             if (fault===url.searchParams.get('type')+'-503') return new Response(null,{status:503});
             if (fault===url.searchParams.get('type')+'-timeout') throw new DOMException('timed out','TimeoutError');
@@ -4311,6 +4351,20 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
               ok(await local('DELETE',`/v1/domains/${reclaimed.id}`,undefined,a.cookie));
               ok(await local('DELETE',`/v1/domains/${recent.id}`,undefined,b.cookie));
             });
+            await it.test('Hourly expiry keeps a proven name whose ownership TXT is gone while SES still verifies its tagged identity, and frees it once that fails too',async()=>{
+              const {expireDomainClaims}=await import('./src/operations.js'),{sql}=await import('drizzle-orm');
+              const identity=identities.get(`${platform}:${domain}`)!,links=[...associations];
+              const lapse=()=>pool.query("UPDATE domain_claims SET receiving_proved_at=now()-interval '62 days',receiving_proof_missed_at=now()-interval '31 days' WHERE name=$1",[domain]);
+              const restarted=async()=>(await pool.query("SELECT receiving_proof_missed_at>now()-interval '1 hour' AS restarted FROM domain_claims WHERE name=$1",[domain])).rows;
+              answer='';await lapse();await expireDomainClaims(runtime,Date.now()+5000);
+              assert.deepEqual(await restarted(),[{restarted:true}]);assert.ok(identities.has(`${platform}:${domain}`));
+              identity.VerificationStatus='TEMPORARY_FAILURE';await lapse();await expireDomainClaims(runtime,Date.now()+5000);
+              assert.deepEqual(await restarted(),[{restarted:false}],'An SES status that could not read DNS is no answer either way.');
+              identity.VerificationStatus='FAILED';const abort=new Error('rollback the release');
+              await assert.rejects(runtime.db.transaction(async tx=>{await expireDomainClaims({...runtime,db:tx},Date.now()+5000);
+                assert.equal((await tx.execute(sql`SELECT 1 FROM domain_claims WHERE name=${domain}`)).rowCount,0);throw abort;}),e=>e===abort);
+              identity.VerificationStatus='SUCCESS';identities.set(`${platform}:${domain}`,identity);associations.clear();for(const link of links)associations.add(link);
+            });
             assert.equal(await probe(custom),0);await mxCheck();assert.equal(await probe(custom),0,'Hourly MX alone cannot re-authorize lost ownership.');
             answer=proof.value;await pace();await check();assert.deepEqual(await claimState(),steady);
             activeMx.delete(mx.name);await mxCheck();await mxCheck();assert.equal(ok(await local('GET',detail,undefined,b.cookie)).receiving,'verified');
@@ -4386,7 +4440,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           const verify=()=>operationJobs['domain.verify']!(runtime,contender.payload,{id:contender.id,attempts:1,workspaceId:b.org.id});
           await assert.rejects(verify(),JobDeferred);
           assert.deepEqual((await pool.query('SELECT workspace_id,ever_proven FROM domain_claims WHERE name=$1',[race])).rows,[{workspace_id:b.org.id,ever_proven:true}]);
-          for(const name of [race,`child.${race}`]) error(await add(a.cookie,name),409,'DOMAIN_CLAIMED');
+          for(const name of [race,`child.${race}`]) assert.match(error(await add(a.cookie,name),409,'DOMAIN_CLAIMED').message,/If the domain is yours, remove .*_nightmail\..*DKIM CNAME.*released about 30 days after both are gone.*support@/);
           await pace();await assert.rejects(verify(),JobDeferred);
           assert.equal(identities.get(`${platform}:${race}`)?.Tags?.some((tag:Json)=>tag.Value===answer),true);
           ok(await local('DELETE',`/v1/domains/${second.id}`,undefined,b.cookie));
@@ -4806,12 +4860,14 @@ test('permission refusals: every refusal helper names the permission, scope, cre
 
 test('permission refusals over HTTP: the same status and code, with error.required and the Nightmail-Required-Permission header', async t => {
   const read = await keyFixture(t, { permissions: ['read'] }), scoped = await keyFixture(t, { permissions: ['read', 'send', 'manage'], domains: ['example.com'] }), manage = await keyFixture(t);
+  // Limited to a sender domain, a key with read reads the mail addressed to it; a send-only one reads none.
+  const sendScoped = await keyFixture(t, { permissions: ['send'], domains: ['example.com'] });
   const rows: [string, string, Key, unknown, string, Json, string][] = [
     ['POST', '/v1/lists', read, { name: unique('refused-list') }, 'PERMISSION_DENIED', { permission: 'audience', level: 'write' }, 'audience=write'],
     ['GET', '/v1/api-keys', read, undefined, 'PERMISSION_DENIED', { permission: 'configuration', level: 'write' }, 'configuration=write'],
     ['GET', '/v1/metrics', scoped, undefined, 'UNRESTRICTED_KEY_REQUIRED', { permission: 'sentMail', level: 'read', scope: 'workspace' }, 'sent_mail=read; scope="workspace"'],
     ['GET', '/v1/inbound/messages', read, undefined, 'ADMIN_REQUIRED', { permission: 'receivedMail', level: 'read' }, 'received_mail=read'],
-    ['GET', '/v1/inbound/messages', scoped, undefined, 'UNRESTRICTED_KEY_REQUIRED', { permission: 'receivedMail', level: 'read', scope: 'workspace' }, 'received_mail=read; scope="workspace"'],
+    ['GET', '/v1/inbound/messages', sendScoped, undefined, 'UNRESTRICTED_KEY_REQUIRED', { permission: 'receivedMail', level: 'read', scope: 'workspace' }, 'received_mail=read; scope="workspace"'],
     ['GET', '/v1/endpoints', scoped, undefined, 'ADMIN_REQUIRED', { permission: 'receivingRules', level: 'read', scope: 'workspace' }, 'receiving_rules=read; scope="workspace"'],
     ['POST', '/v1/domains', scoped, { name: 'other-refused.example.net' }, 'DOMAIN_NOT_ALLOWED', { permission: 'configuration', scope: 'domain:other-refused.example.net' }, 'configuration; scope="domain:other-refused.example.net"'],
     // A campaign draft and its preview are Audience & content, not Send email.
@@ -5234,6 +5290,8 @@ describe('Hosted MCP OAuth and tools', () => {
         readSendKey: { kind: 'apiKey', grants: [...reads, 'sendEmail:on'], covers: ['workspace', 'domain'], bearer: await key({ permissions: ['read', 'send'] }) },
         manageKey: { kind: 'apiKey', grants: every, covers: ['workspace', 'domain', 'address'], bearer: await key({ permissions: ['manage'] }) },
         domainKey: { kind: 'apiKey', grants: every, covers: ['domain'], bearer: await key({ permissions: ['read', 'send', 'manage'], domains: ['example.com'] }) },
+        // Limited to a sender domain, read also reads the received mail addressed to it (the recipient rows).
+        domainReadKey: { kind: 'apiKey', grants: [...reads, 'sendEmail:on', 'receivedMail:read'], covers: ['domain'], bearer: await key({ permissions: ['read', 'send'], domains: ['example.com'] }) },
         addressReader: { kind: 'addressKey', grants: addressed, covers: ['address'], bearer: await key({ access: { type: 'addresses', mail: ['read'] } }) },
         addressSender: { kind: 'addressKey', grants: ['sendEmail:on'], covers: ['address'], bearer: await key({ access: { type: 'addresses', mail: ['send'] } }) },
         addressOrganizer: { kind: 'addressKey', grants: ['receivedMail:write'], covers: ['address'], bearer: await key({ access: { type: 'addresses', mail: ['modify'] } }) },
@@ -5260,7 +5318,8 @@ describe('Hosted MCP OAuth and tools', () => {
         if ((row.credential === 'lasting' && h.kind === 'agentToken') || (row.credential === 'notDelegated' && (h.kind === 'agentToken' || h.kind === 'signIn'))) return false;
         if (h.kind === 'person' || (h.kind === 'signIn' && !role)) return role;
         const level = ((h.kind === 'agentToken' || h.kind === 'signIn') && row.delegatedLevel) || row.level, covers = h.covers!;
-        return h.grants!.includes(`${row.permission}:${level}`) && (row.scope === 'workspace' || row.scope === 'address' ? covers.includes(row.scope) : covers.includes('workspace') || covers.includes('domain'));
+        return h.grants!.includes(`${row.permission}:${level}`) && (row.scope === 'workspace' || row.scope === 'address' ? covers.includes(row.scope)
+          : row.scope === 'recipient' ? covers.includes('address') || (h.kind === 'apiKey' && covers.includes('domain')) : covers.includes('workspace') || covers.includes('domain'));
       };
       const resolve = (value: Json | undefined): Json => { let v = value ?? {}; for (let i = 0; v.$ref && i < 20; i++) { const [, , section, name] = v.$ref.split('/'); v = spec.components[section][name]; } return v; };
       // Path values that pass validation and name nothing, so a credential REST admits gets 404, never a change.
@@ -5304,7 +5363,7 @@ describe('Hosted MCP OAuth and tools', () => {
       };
       const mismatches: string[] = [];
       // Workspace API keys that aren't full access: limited permissions, or limited to sender domains.
-      const limitedKeys = new Set(['readKey', 'sendKey', 'readSendKey', 'domainKey']), unhelpful: string[] = [];
+      const limitedKeys = new Set(['readKey', 'sendKey', 'readSendKey', 'domainKey', 'domainReadKey']), unhelpful: string[] = [];
       // Some admitted writes reach for the network (an upload to object storage); here such a fetch fails like any other.
       // The fixture's own network guard stays underneath, for the issuer, and is back once every operation was called.
       const guarded = globalThis.fetch;
@@ -5355,7 +5414,7 @@ describe('Hosted MCP OAuth and tools', () => {
         let checked = 0;
         for (const entry of entries) {
           const { id, template, params, row } = entry;
-          if (row.scope !== 'domain' && row.scope !== 'address') continue;
+          if (row.scope !== 'domain' && row.scope !== 'address' && row.scope !== 'recipient') continue;
           const family = listings[id] ?? (Object.keys(resource) as (keyof typeof resource)[]).find(name => resource[name].path.test(template))
             ?? (named[id] || id === 'previewEmail' ? (row.scope === 'domain' ? 'domain' : 'inbox') : undefined);
           // Attachments (object storage the fixture doesn't have) and mail client passwords: their parents are scoped here.
@@ -6378,7 +6437,7 @@ describe('Hosted MCP OAuth and tools', () => {
         for(const name of ['listInboundAddresses','listInboundDomains','getInboundScanPolicy','listInboundWebhooks','listInboxes','revealWebhookSecret'])assert.ok(!receiving.has(name),name);
         assert.ok(receiving.has('getRouting')&&receiving.has('getRules')&&receiving.has('sendEmail'));
         const [{createApp,createOpenApiApp},{buildMcpCatalog},{dispatchAsActor},{getMcpGrantActor}]=await Promise.all([import('./src/app.js'),import('./src/mcp-catalog.js'),import('./src/auth.js'),import('./src/mcp-auth.js')]);
-        const api=await createOpenApiApp(),spec=api.getOpenAPI31Document({openapi:'3.1.0',info:{title:'Bane API',version:'0'}}) as Json,app=createApp();
+        const api=await createOpenApiApp(),spec=api.getOpenAPI31Document({openapi:'3.1.0',info:{title: 'Nightmail API',version:'0'}}) as Json,app=createApp();
         const grantActor=(await getMcpGrantActor(runtime,'mcp_'+consentId,runtime.config.workspaceId))!;assert.ok(grantActor);
         const dummy=(schema:Json|undefined)=>schema?.enum?.[0]??(schema?.format==='email'?'tear@example.com':[schema?.type].flat().includes('integer')?'1':String(schema?.pattern??'').includes('\\d')?'us-east-1':'tear-missing');
         let gets=0;
@@ -6559,7 +6618,7 @@ describe('Hosted MCP OAuth and tools', () => {
   });
 
   // The account service's token names a person, not a workspace: each MCP tool call names the workspace it acts in (or
-  // uses the connection's default), and Bane checks the person's membership and role there on that call.
+  // uses the connection's default), and Nightmail checks the person's membership and role there on that call.
   test('MCP tools act in the workspace each call names: every tool refuses a non-member workspace, defaults, role intersection', async t => {
     await simulatedSesFixture(t, async ({ db, request, runtime }) => {
       runtime.config.multiTenant = true;
@@ -7661,6 +7720,106 @@ describe('Hosted MCP OAuth and tools', () => {
     });
   });
 
+  // A key limited to a sender domain with Read is a whole agent key: it sends from the domain and reads the replies there
+  // (a production agent's Read and Send key for its domain was refused every reply). It reads only mail addressed to its
+  // domains: a message needs an SMTP envelope recipient there (sent mail: a sender there), so mail a route delivered from
+  // another domain into an address there, and mail to other domains, stay hidden in every read: lists, messages, threads,
+  // their counts and snippets, search, attachments, events and long polls, and over MCP. A send-only key reads none.
+  test('a key limited to sender domains reads the received mail addressed to them, in every read, and nothing else', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local, request }) => {
+      const { mailMessages, mailAttachments } = await import('./src/db/mailbox.js');
+      const { attachToMailboxes } = await import('./src/mailbox-store.js');
+      const { recordEvents } = await import('./src/mailbox-events.js');
+      const wid = runtime.config.workspaceId, scope = { workspaceId: wid };
+      runtime.mailR2 = { bucket: {} as R2Bucket, name: 'domain-reads', write: false };
+      const bucket = 'r2:domain-reads', inHost = `${unique('replies')}.example`, subHost = `reply.${inHost}`, outHost = `${unique('others')}.example`;
+      for (const host of [inHost, subHost, outHost]) await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status) VALUES($1,$2,$1,$3,$4,'active')", [unique('mdom'), wid, host, REGION]);
+      await db.query("INSERT INTO mailbox_regions(workspace_id,region,bucket,topic_arn) VALUES($1,$2,'domain-reads','fixture-topic') ON CONFLICT DO NOTHING", [wid, REGION]);
+      const [a, s, b] = await Promise.all([`in@${inHost}`, `agent@${subHost}`, `out@${outHost}`].map(async address => ok(await local('POST', '/v1/inbound/addresses', { address }), 201)));
+      const threads = { mine: unique('thr'), cc: unique('thr'), other: unique('thr'), sub: unique('thr'), sent: unique('thr') };
+      for (const thread of Object.values(threads)) await db.query('INSERT INTO mail_threads(id,workspace_id) VALUES($1,$2)', [thread, wid]);
+      const at = (n: number) => new Date(Date.now() - 60_000 + n * 1000).toISOString();
+      const store = async (o: { thread: string; boxes: string[]; envelope: string[]; subject: string; n: number; direction?: 'inbound' | 'outbound'; from?: string; file?: boolean }) => {
+        const message = unique('msg');
+        const [row] = await runtime.db.insert(mailMessages).values({ id: message, ...scope, direction: o.direction ?? 'inbound', threadId: o.thread, region: REGION, fromAddress: o.from ?? 'customer@example.net', subject: o.subject, text: o.subject,
+          snippet: o.subject, messageId: `${message}@example.net`, envelopeTo: o.envelope, to: o.envelope.map(address => ({ name: null, address })), verdicts: { virus: 'PASS' }, receivedAt: at(o.n), attachmentCount: o.file ? 1 : 0 }).returning();
+        await attachToMailboxes(runtime.db, scope, row!, o.boxes);
+        const file = unique('att');
+        if (o.file) await runtime.db.insert(mailAttachments).values({ id: file, ...scope, messageId: message, filename: 'quote.txt', contentType: 'text/plain', sizeBytes: 42, disposition: 'attachment', sha256: '0'.repeat(64), bucket, storageKey: `a/${wid}/${message}/${file}` });
+        return { id: message, file };
+      };
+      // A reply to the domain; mail to another domain that copies it; a route's delivery of another domain's mail into the
+      // address there, newest in the same conversation; mail to another domain only; a reply to a subdomain; and mail sent
+      // from the address, and from another domain's address through it.
+      const mine = await store({ thread: threads.mine, boxes: [a.id], envelope: [a.address], subject: 'Mine', n: 0, file: true });
+      const cc = await store({ thread: threads.cc, boxes: [a.id, b.id], envelope: [b.address, a.address], subject: 'Copied', n: 1 });
+      const routed = await store({ thread: threads.mine, boxes: [a.id], envelope: [`sales@${outHost}`], subject: 'routed-needle', n: 2, file: true });
+      const other = await store({ thread: threads.other, boxes: [b.id], envelope: [b.address], subject: 'Elsewhere', n: 3 });
+      const sub = await store({ thread: threads.sub, boxes: [s.id], envelope: [s.address], subject: 'Subdomain', n: 4 });
+      const sent = await store({ thread: threads.sent, boxes: [a.id], envelope: ['customer@example.net'], subject: 'Sent', n: 5, direction: 'outbound', from: a.address });
+      const sentElsewhere = await store({ thread: threads.sent, boxes: [a.id], envelope: ['customer@example.net'], subject: 'Sent elsewhere', n: 6, direction: 'outbound', from: `news@${outHost}` });
+      const key = async (permissions: string[]) => { const made = ok(await request('POST', '/v1/api-keys', MANAGER, { name: unique('domain-reads'), permissions, domains: [inHost] }), 201); secrets.add(made.secret); return made as Key; };
+      const [reader, sender] = [await key(['read', 'send']), await key(['send'])];
+      const get = (path: string) => request('GET', path, reader.secret);
+
+      // Messages: its own and the copy, each on its own address only; never the routed, other-domain or foreign-sent mail.
+      const listed: Json[] = ok(await get('/v1/inbound/messages?limit=100')).data;
+      assert.deepEqual(listed.map(m => m.id).sort(), [mine.id, cc.id, sub.id].sort());
+      assert.deepEqual(listed.find(m => m.id === cc.id)?.addressIds, [a.id]);
+      assert.deepEqual(ok(await get('/v1/inbound/messages?direction=outbound')).data.map((m: Json) => m.id), [sent.id]);
+      for (const hidden of [routed, other, sentElsewhere]) error(await get(`/v1/inbound/messages/${hidden.id}`), 404, 'NOT_FOUND');
+      const detail = ok(await get(`/v1/inbound/messages/${mine.id}?includeThread=true`));
+      assert.deepEqual([detail.addressIds, detail.thread.count, detail.thread.messages.map((m: Json) => m.id)], [[a.id], 1, [mine.id]]);
+      error(await get(`/v1/inbound/messages?addressId=${b.id}`), 404, 'NOT_FOUND');
+      error(await get(`/v1/inbound/messages/${mine.id}?includeDelivery=true`), 403, 'ADMIN_REQUIRED');
+      // Conversations: the routed message is newer in the same one, yet it is neither its snippet, its time nor counted.
+      const conversations: Json[] = ok(await get('/v1/inbound/threads')).data, own = conversations.find(c => c.id === threads.mine) ?? assert.fail('Its conversation is listed');
+      assert.deepEqual([own.snippet, own.messageCount, own.addressIds, Date.parse(own.lastMessageAt)], ['Mine', 1, [a.id], Date.parse(detail.receivedAt)]);
+      assert.ok(!conversations.some(c => c.id === threads.other), 'No other domain conversation');
+      const conversation = ok(await get(`/v1/inbound/threads/${threads.mine}`));
+      assert.deepEqual([conversation.messages.map((m: Json) => m.id), conversation.addressStates.map((x: Json) => [x.addressId, x.unreadCount])], [[mine.id], [[a.id, 1]]]);
+      error(await get(`/v1/inbound/threads/${threads.other}`), 404, 'NOT_FOUND');
+      for (const path of ['/v1/inbound/messages?q=routed-needle', '/v1/inbound/threads?q=routed-needle']) assert.deepEqual(ok(await get(path)).data, [], path);
+      // Attachments follow the message.
+      assert.match(ok(await get(`/v1/inbound/messages/${mine.id}/attachments/${mine.file}`)).url, /\/v1\/objects\//);
+      assert.equal(error(await get(`/v1/inbound/messages/${routed.id}/attachments/${routed.file}`), 404, 'NOT_FOUND').message, 'Attachment was not found.');
+      // Events: only those of the messages it reads, on its addresses; a long poll doesn't wake for the others.
+      const event = (box: string, thread: string, message?: string) => ({ type: message ? 'message.received' as const : 'thread.updated' as const, mailboxId: box, threadId: thread, messageId: message ?? null });
+      await recordEvents(runtime.db, wid, [event(a.id, threads.mine, mine.id), event(a.id, threads.cc, cc.id), event(b.id, threads.cc, cc.id), event(a.id, threads.mine, routed.id), event(b.id, threads.other, other.id), event(s.id, threads.sub, sub.id), event(a.id, threads.mine)]);
+      const events: Json[] = ok(await get('/v1/inbound/events?after=0&limit=100')).data;
+      assert.deepEqual(events.map(e => [e.addressId, e.messageId]), [[a.id, mine.id], [a.id, cc.id], [s.id, sub.id]]);
+      const cursor = ok(await get('/v1/inbound/events')).cursor;
+      await recordEvents(runtime.db, wid, [event(a.id, threads.mine, routed.id), event(b.id, threads.other, other.id)]);
+      assert.deepEqual(ok(await get(`/v1/inbound/events?after=${cursor}&wait=1`)).data, []);
+      // MCP events read that same log as the key: offered to the reader (not the send-only key), with only the mail
+      // addressed to its domains, whichever addresses a subscription names.
+      const rpc = async (secret: string, method: string, params: Json = {}) => ok(await request('POST', '/mcp', secret, { jsonrpc: '2.0', id: unique('events-rpc'), method, params }, rpcHeaders)) as Json;
+      assert.equal((await rpc(reader.secret, 'events/list')).result.events[0].name, 'message.received');
+      assert.equal((await rpc(sender.secret, 'events/list')).error.code, -32601);
+      const subscribe = async (args: Json, cursor: string | null) => (await rpc(reader.secret, 'events/poll', { name: 'message.received', arguments: args, cursor })).result as Json;
+      const fromNow = await subscribe({}, null);
+      await recordEvents(runtime.db, wid, [event(a.id, threads.mine, routed.id), event(b.id, threads.other, other.id), event(a.id, threads.mine, mine.id), event(s.id, threads.sub, sub.id)]);
+      assert.deepEqual((await subscribe({}, fromNow.cursor)).events.map((e: Json) => [e.data.addressId, e.data.messageId, e.data.subject]), [[a.id, mine.id, 'Mine'], [s.id, sub.id, 'Subdomain']]);
+      assert.deepEqual((await subscribe({ addressIds: [b.id] }, fromNow.cursor)).events, []);
+      assert.deepEqual((await subscribe({ addressIds: [a.id] }, fromNow.cursor)).events.map((e: Json) => e.data.messageId), [mine.id]);
+      // The workspace's own full-access reader sees all of it.
+      assert.equal(ok(await local('GET', `/v1/inbound/messages/${routed.id}`)).id, routed.id);
+      // A send-only key limited to the domain reads none of it, and is told to add Read.
+      assert.match(error(await request('GET', '/v1/inbound/messages', sender.secret), 403, 'UNRESTRICTED_KEY_REQUIRED').message, /^This key can only send from [^ ]+\. To read the replies to [^ ]+, it needs Read: add Read to it/);
+      // Over MCP the reader is offered exactly those reads, and a call reads what REST does.
+      const toolsOf = async (secret: string) => (ok(await request('POST', '/mcp?codemode=false', secret, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, rpcHeaders)).result.tools as Json[]).map(tool => tool.name as string);
+      const [readerTools, senderTools] = [await toolsOf(reader.secret), await toolsOf(sender.secret)];
+      for (const name of ['listInboundMessages', 'getInboundMessage', 'getInboundAttachment', 'listInboundThreads', 'getInboundThread', 'listInboundEvents']) {
+        assert.ok(readerTools.includes(name), `reader: ${name}`);
+        assert.ok(!senderTools.includes(name), `sender: ${name}`);
+      }
+      for (const name of ['updateInboundThread', 'replyToInboundThread', 'listInboundAddresses', 'listInboxes', 'waitForMessage']) assert.ok(!readerTools.includes(name), `reader: ${name}`);
+      const call = async (messageId: string) => ok(await request('POST', '/mcp?codemode=false', reader.secret, { jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'getInboundMessage', arguments: { messageId } } }, rpcHeaders)).result;
+      assert.equal((await call(mine.id)).structuredContent.id, mine.id);
+      assert.equal((await call(routed.id)).structuredContent.error.code, 'NOT_FOUND');
+    });
+  });
+
   // Sweep #276: a self-hosted dispatcher read MCP grants once per prepared batch, so a grant revoked while an
   // earlier claim group was sending still dispatched the later groups.
   test('single-tenant dispatch rereads an MCP grant in each claim: one revoked during an earlier group stops the next', async t => {
@@ -7671,16 +7830,24 @@ describe('Hosted MCP OAuth and tools', () => {
       for (let i = 0; i < 2; i++) ids.push(ok(await local('POST', '/v1/emails/send', mail()), 202).id);
       await db.query('UPDATE sending_emails SET actor_key_id=$1 WHERE id=ANY($2)', [grant, ids]);
       // The grant is revoked right after the first group's claim, before the second group is claimed.
-      const query = db.query as (...args: unknown[]) => Promise<unknown>; let claims = 0;
+      const query = db.query as (...args: unknown[]) => Promise<pg.QueryResult>; const claims: string[] = [];
       t.mock.method(db, 'query', async function (this: pg.Client, ...args: unknown[]) {
         const result = await query.apply(this, args);
         const text = typeof args[0] === 'string' ? args[0] : (args[0] as { text?: string })?.text ?? '';
-        if (text.includes('mcp_allowed boolean') && ++claims === 1) await query.call(this, 'UPDATE nightmail_resource_grants SET revoked=true WHERE id=$1', [grant]);
+        if (text.includes('mcp_allowed boolean')) {
+          // The regional dispatcher can also claim mail left by other scenarios. Revoke only after this grant's first claim.
+          const own = result.rows.filter(row => ids.includes(row.id));
+          if (own.length) {
+            assert.equal(own.length, 1, 'One claim group per email.');
+            claims.push(own[0]!.id);
+            if (claims.length === 1) await query.call(this, 'UPDATE nightmail_resource_grants SET revoked=true WHERE id=$1', [grant]);
+          }
+        }
         return result;
       } as typeof db.query);
       await runDispatcher(runtime, { region: REGION, sendConcurrency: 1 });
-      assert.equal(claims, 2, 'One claim group per email.');
-      const rows = (await db.query('SELECT status,error_code FROM sending_emails WHERE id=ANY($1)', [ids])).rows.map(row => `${row.status}:${row.error_code}`).sort();
+      assert.deepEqual([...claims].sort(), [...ids].sort(), 'Each grant-owned email was claimed exactly once.');
+      const rows = (await db.query('SELECT status,error_code FROM sending_emails WHERE id=ANY($1) ORDER BY array_position($1::text[], id)', [claims])).rows.map(row => `${row.status}:${row.error_code}`);
       assert.deepEqual(rows, ['accepted:null', 'canceled:ORIGIN_KEY_REVOKED']);
     });
   });
@@ -8193,7 +8360,7 @@ describe('Hosted MCP OAuth and tools', () => {
       assert.deepEqual([claims.jti, claims.aud, claims.workspace.id, claims.user.id, claims.shareContent, claims.requestIds], [handoff.id, 'bane-support', wid, manager!.userId, true, [createdRequest]]);
       ok(await send('POST', '/v1/contact-support', session(member), { shareContent: false }), 201);
 
-      // The support platform verifies the handoff it was given: Bane checks its own signature and the stored row.
+      // The support platform verifies the handoff it was given: Nightmail checks its own signature and the stored row.
       const checked = await platform.verifyHandoff(handoff.token);
       assert.ok(checked.ok); assert.deepEqual([checked.handoff.id, checked.handoff.userId, checked.handoff.workspace.id, checked.handoff.shareContent, checked.handoff.usedAt, checked.handoff.message], [handoff.id, manager!.userId, wid, true, null, 'Why did my key stop working?']);
       assert.deepEqual(await platform.verifyHandoff(`${header}.${payload}.${Buffer.from('forged').toString('base64url')}`), { ok: false, code: 'HANDOFF_INVALID' });
@@ -9106,7 +9273,7 @@ describe('Hosted MCP OAuth and tools', () => {
 
       // Support actions (src/support-actions.ts). Shop has an owner, an admin and a member, a sending and two inbound
       // webhooks with deliveries, a received message and a campaign that is releasing recipients.
-      const boss = await sessionFixture(t), deputy = await sessionFixture(t), clerk = await sessionFixture(t), shop = unique('shop-ws');
+      const boss = await sessionFixture(t), deputy = await sessionFixture(t), clerk = await sessionFixture(t), shop = unique('shop-ws-7a1f');
       await db.query('INSERT INTO workspaces(id,name,slug) VALUES ($1,$1,$1)', [shop]);
       await db.query(`INSERT INTO workspace_members(id,workspace_id,user_id,role) VALUES ($1,$2,$3,'owner'),($4,$2,$5,'admin'),($6,$2,$7,'member')`,
         [unique('mem'), shop, boss.userId, unique('mem'), deputy.userId, unique('mem'), clerk.userId]);
@@ -9152,7 +9319,7 @@ describe('Hosted MCP OAuth and tools', () => {
         // In plain words: the webhook by its name and site (never its URL), when the delivery was, and how it ended.
         const minute = '[A-Z][a-z]{2} \\d{1,2}, \\d\\d:\\d\\d UTC', quoted = (value: string) => JSON.stringify(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         assert.match(proposed.summary, new RegExp(`^Retry the email\\.delivered delivery from ${minute} to your sending webhook "Order events" at "example\\.com", in the workspace ${quoted(shop)}\\. It failed after 3 attempts\\.$`));
-        assert.doesNotMatch(proposed.summary, new RegExp(`${failed}|hooks\\.|7a1f`), 'No delivery ID, and nothing of the URL but its site.');
+        assert.doesNotMatch(proposed.summary.replace(JSON.stringify(shop), ''), new RegExp(`${failed}|hooks\\.|7a1f`), 'Outside the required workspace ID: no delivery ID, and nothing of the URL but its site.');
         assert.equal(Date.parse(proposed.expiresAt) - Date.parse(proposed.createdAt), 24 * 3_600_000);
         assert.deepEqual((await db.query('SELECT conversation_id, user_id, workspace_id FROM support_actions WHERE id = $1', [proposed.id])).rows[0], { conversation_id: id, user_id: boss.userId, workspace_id: shop });
         assert.equal((await propose(id, retry, 200)).id, proposed.id, 'Proposing the same change again answers the open proposal.');
@@ -9460,7 +9627,10 @@ describe('Hosted MCP OAuth and tools', () => {
       globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
         const request = new Request(input, init);
         if (new URL(request.url).origin !== 'https://support.example.com') return previous(input, init);
-        wakes.push({ method: request.method, url: request.url, headers: [...request.headers.keys()], body: await request.text() });
+        const body = await request.text(), { conversationId } = JSON.parse(body), token = request.headers.get('authorization')?.slice(7) ?? '';
+        assert.ok(await platform.verifyWake(token, conversationId));
+        assert.equal(await platform.verifyWake(token, conversation()), false);
+        wakes.push({ method: request.method, url: request.url, headers: [...request.headers.keys()], body });
         return new Response(null, { status: 202 });
       };
       try {
@@ -9549,7 +9719,7 @@ describe('Hosted MCP OAuth and tools', () => {
           const listed = ok(await send('GET', `${inbox}?view=paused`, session(reader))).data.find((c: Json) => c.id === chatId);
           assert.deepEqual([listed.pausedBy.kind, listed.pausedBy.userId, listed.queuedReplies, listed.lastAuthor, listed.needsReply], ['staff', operator.userId, 1, 'staff', false]);
           // The wake names the conversation and nothing else.
-          assert.deepEqual(wakes, [1, 2].map(() => ({ method: 'POST', url: 'https://support.example.com/hooks/nightmail-wake', headers: ['content-type'], body: JSON.stringify({ conversationId: chatId }) })));
+          assert.deepEqual(wakes, [1, 2].map(() => ({ method: 'POST', url: 'https://support.example.com/hooks/nightmail-wake', headers: ['authorization', 'content-type'], body: JSON.stringify({ conversationId: chatId }) })));
           assert.deepEqual((await db.query(`SELECT user_id, actor_id, internal, summary->>'message' AS message FROM audit_events WHERE action = 'support.reply' AND target_id = $1`, [chatId])).rows,
             [{ user_id: owner.userId, actor_id: operator.userId, internal: true, message: queued.id }]);
           // The outbox: one conversation's after its wake, or every one; marked sent once.
@@ -12185,6 +12355,10 @@ describe('Newsletters', () => {
       const writes = (id: string): [string, string, Json?][] => [['POST', '/v1/newsletters', { name: 'Refused', from: sender }], ['PATCH', `/v1/newsletters/${id}`, { name: 'Refused' }], ['DELETE', `/v1/newsletters/${id}`]];
       // A member, and keys with read or read and send: they read newsletters and cannot create, change or delete one.
       const member = await person('member'), admin = await person('admin'), readKey = await key(['read']), readSendKey = await key(['read', 'send']);
+      const listImport = { listId: news.id, csv: 'Email\nreader@example.org', mapping: { email: 'Email' } };
+      error(await request('POST', '/v1/contact-imports', undefined, listImport, member), 403, 'PERMISSION_DENIED');
+      const preview = ok(await request('POST', '/v1/contact-imports', undefined, listImport, admin), 201);
+      error(await request('POST', `/v1/contact-imports/${preview.id}/commit`, undefined, {}, member), 403, 'PERMISSION_DENIED');
       const readers: [string, (method: string, path: string, body?: Json) => Promise<Reply>][] = [
         ['member', (method, path, body) => request(method, path, undefined, body, member)],
         ['read key', (method, path, body) => request(method, path, readKey, body)],
@@ -13254,14 +13428,21 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
     // A key without manage on all domains, unrestricted otherwise, on received mail: the same style, with the address-key option.
     assert.match(error(await http('GET', '/v1/inbound/addresses', reader.secret), 403, 'ADMIN_REQUIRED').message, /^This key can only read\. Inbound addresses need a full-access key: .* For mail at some addresses only, a key limited to those addresses also works\./);
     // Reading replies with a key limited to its sender domain (a production agent tried, then guessed at POST /v1/api-keys):
-    // the refusal names the key that reads them and the request that makes one. A key without the domain limit is told how
-    // to make itself Full access, on its own ID.
+    // with Read it reads the mail addressed to that domain (none here); a send-only key is told to add Read, on its own ID,
+    // or to make a Read and Send key for the domain, with the request that makes one. A key without the domain limit is
+    // told how to make itself Full access, on its own ID.
     const replyKey = await keyFixture(t, { permissions: ['read', 'send'], domains: ['allowed.example.com'] });
-    for (const [key, path] of [[sender, '/v1/inbound/messages'], [replyKey, '/v1/inbound/messages/msg_fixture'], [replyKey, '/v1/inbound/messages/msg_fixture/attachments/att_fixture'], [replyKey, '/v1/inbound/threads']] as const) {
-      const refused = error(await http('GET', path, key.secret), 403, 'UNRESTRICTED_KEY_REQUIRED');
-      assert.match(refused.message, /^This key can only send from allowed\.example\.com(?: and read what was sent from there)?\. A limit to sender domains doesn't reach received mail, so it can't read replies\. To read the replies to allowed\.example\.com, use a key limited to the receiving addresses there \(Read, and Send to answer from them\): with a full-access key, find their IDs with GET \/v1\/inbound\/addresses, then POST \/v1\/api-keys with \{"name":"Replies","access":\{"type":"addresses","addressIds":\["mbx_…"\],"mail":\["read","send"\]\}\}; or in the dashboard, API keys → Create key → Mail at chosen addresses\. A full-access key reads all received mail\. Docs: https?:\/\/[^ ]+\/docs\/operations\/createApiKey\.md Needs Received mail: read on the whole workspace\.$/, path);
+    for (const path of ['/v1/inbound/messages', '/v1/inbound/threads']) assert.deepEqual(ok(await http('GET', path, replyKey.secret)).data, [], path);
+    for (const path of ['/v1/inbound/messages/msg_fixture', '/v1/inbound/messages/msg_fixture/attachments/att_fixture']) error(await http('GET', path, replyKey.secret), 404, 'NOT_FOUND');
+    for (const path of ['/v1/inbound/messages', '/v1/inbound/threads/thr_fixture']) {
+      const refused = error(await http('GET', path, sender.secret), 403, 'UNRESTRICTED_KEY_REQUIRED');
+      assert.match(refused.message, new RegExp(`^This key can only send from allowed\\.example\\.com\\. To read the replies to allowed\\.example\\.com, it needs Read: add Read to it in the dashboard \\(API keys → Edit; it keeps its secret\\) or with a full-access key: PATCH /v1/api-keys/${sender.id} with \\{"permissions":\\["send","read"\\]\\}\\. Or create a key with Read and Send limited to allowed\\.example\\.com, in the dashboard \\(API keys → Create key\\) or with a full-access key: POST /v1/api-keys with \\{"name":"Agent","permissions":\\["read","send"\\],"domains":\\["allowed\\.example\\.com"\\]\\}\\. It reads only received mail addressed to allowed\\.example\\.com\\. Docs: https?://[^ ]+/docs/operations/createApiKey\\.md Needs Received mail: read on the whole workspace\\.$`), path);
       assert.equal(refused.required.scope, 'workspace', path);
     }
+    // What it reads stops there: no agent inboxes, addresses or changes.
+    assert.match(error(await http('GET', '/v1/inboxes/mbx_fixture/messages', replyKey.secret), 403, 'UNRESTRICTED_KEY_REQUIRED').message, /^This key can only send from allowed\.example\.com and read what was sent from there\. It reads the received mail addressed to allowed\.example\.com with GET \/v1\/inbound\/messages, \/v1\/inbound\/threads and \/v1\/inbound\/events, not agent inboxes or the rest of receiving\./);
+    for (const [method, path, body] of [['GET', '/v1/inbound/addresses'], ['PATCH', '/v1/inbound/threads/thr_fixture', { read: true }], ['GET', '/v1/inbound/messages/msg_fixture/raw']] as const)
+      error(await http(method, path, replyKey.secret, body), 403, 'UNRESTRICTED_KEY_REQUIRED');
     const unscoped = error(await http('GET', '/v1/inbound/messages', reader.secret), 403, 'ADMIN_REQUIRED');
     assert.ok(unscoped.message.startsWith(`This key can only read. Received mail needs Full access, or a key limited to receiving addresses. Make this key Full access in the dashboard (API keys → Edit; it keeps its secret) or with a full-access key: PATCH /v1/api-keys/${reader.id} with {"permissions":["read","send","manage"]}. Or, for replies at some addresses only, use a key limited to them: with a full-access key`), unscoped.message);
     // Making that key, guessed at: every problem at once, each with what was sent and the values allowed, then what keys can
@@ -16491,7 +16672,15 @@ describe('Dashboard API capabilities', () => {
     assert.equal(formattedSender('sender@example.com', 'security\u24D0paypal.com'), 'sender@example.com');
     assert.equal(formattedSender('sender@example.com', 'securitya\u20DDpaypal.com'), 'sender@example.com');
     assert.equal(formattedSender('sender@example.com', 'Support \u202Emoc.elpmaxe'), 'sender@example.com');
+    const encodedName = (text: string) => `=?utf-8?B?${Buffer.from(text).toString('base64')}?=`;
+    assert.equal(formattedSender('sender@example.com', encodedName('Acme Billing')), '"Acme Billing" <sender@example.com>');
+    assert.equal(formattedSender('sender@example.com', encodedName('billing@example.com')), 'sender@example.com');
+    error(await http('POST', '/v1/emails/send', key.secret, mail({ fromName: encodedName('billing@example.com') })), 422, 'VALIDATION_FAILED');
     assert.equal(formattedSender('sender@example.com', 'Acme Billing'), '"Acme Billing" <sender@example.com>');
+    const literalName = marker + '\\_%';
+    const literalTemplate = await resource(t, key.secret, '/v1/templates', { name: literalName });
+    await resource(t, key.secret, '/v1/templates', { name: marker + ' other' });
+    assert.deepEqual(ok(await http('GET', '/v1/templates?search=' + encodeURIComponent(literalName), key.secret)).data.map((row: Json) => row.id), [literalTemplate.id]);
     const template = await resource(t, key.secret, '/v1/templates', { name: unique('display-name') });
     error(await http('PATCH', `/v1/templates/${template.id}`, key.secret, { revision: template.revision, draft: { ...template.draft, fromName: 'billing\uFF20example.com' } }), 422, 'VALIDATION_FAILED');
     const contact = await resource(t, key.secret, '/v1/contacts', { email: address() });
@@ -17737,7 +17926,7 @@ describe('Dashboard API capabilities', () => {
       const reader = ok(await local('POST', '/v1/api-keys', { name: 'Refusal reader', permissions: ['read'] }), 201); secrets.add(reader.secret);
       const execute = runtime.db.execute.bind(runtime.db);
       let fault: unknown = null;
-      // Built where it is thrown, as a driver's error is: a stack shows where an error was made, and the log keeps Bane's frames.
+      // Built where it is thrown, as a driver's error is: a stack shows where an error was made, and the log keeps Nightmail's frames.
       t.mock.method(runtime.db, 'execute', ((...args: Parameters<typeof execute>) => { if (fault) { const thrown = fault as Error; fault = null; throw new Error(thrown.message, { cause: thrown.cause }); } return execute(...args); }) as typeof execute);
       const refused = async (failure: unknown) => { fault = failure; logs.length = 0; return request('GET', '/v1/emails', reader.secret); };
       // So is a statement Postgres refused or cancelled, keeping nothing of it: a read-only cluster (PlanetScale's pg_readonly
@@ -19140,7 +19329,7 @@ describe('Billing: Stripe', () => {
     assert.equal(await stripe.getPayment(runtime.db, `ws_${randomUUID().replaceAll('-', '')}`, top.attemptId), null, 'Payments are read inside their workspace only.');
   });
 
-  test('Stripe webhook: a bad or stale signature and the other Stripe mode are refused; events that are not Bane\'s are ignored', async t => {
+  test('Stripe webhook: a bad or stale signature and the other Stripe mode are refused; events that are not Nightmail\'s are ignored', async t => {
     const { runtime, db, deliver, send } = await stripeFixture(t);
     const object = { id: `cs_${randomUUID()}`, object: 'checkout.session', mode: 'payment', status: 'complete', payment_status: 'paid', metadata: {} };
     // Stale and future timestamps sit a minute past the 300 s tolerance and are taken when sent, so a slow request can't
@@ -19286,7 +19475,7 @@ describe('Billing: Stripe', () => {
     assert.deepEqual([(await account()).stripe_payment_method, (await account()).card_last4, (await account()).recharge_enabled], [null, null, false]);
   });
 
-  test('Reconciliation: lost answers are retried with the same keys and credited once; after 22 h Bane searches Stripe; a day-old recharge is canceled', async t => {
+  test('Reconciliation: lost answers are retried with the same keys and credited once; after 22 h Nightmail searches Stripe; a day-old recharge is canceled', async t => {
     const { runtime, fake, wid, account, attempt, ledger, enforcement, backdate, saveCard, recharge, stripe, jobs } = await stripeFixture(t);
     await saveCard();
     const warnings = t.mock.method(console, 'warn', () => {});
@@ -19832,6 +20021,7 @@ describe('Hosted unsubscribe and dispatch-time consent', () => {
     // Opened in a browser, the hosted address asks first (a GET changes nothing), records the opt-out, then continues to the page.
     const path = `/unsubscribe/${tokenOf(second)}`, prompt = await http('GET', path);
     assert.match(ok(prompt), /<form method="post">/);
+    assert.match(ok(prompt), /continue to brand\.example/);
     assert.match(prompt.headers.get('content-security-policy') ?? '', /form-action 'self' https:\/\/brand\.example;/, 'The form may continue to the page.');
     assert.equal(ok(await http('GET', `/v1/contacts/${second.id}`, key.secret)).marketingConsent, 'subscribed');
     const confirmed = await http('POST', path, undefined, 'confirm=footer', form);
@@ -20025,7 +20215,7 @@ describe('Billing: API, MCP and notices', () => {
         // An operator refund: the audit row and the Idempotency-Key commit in the transaction that holds the refund
         // (same xmin as the refund_hold ledger row); a retry returns the refund, another body is refused, and a refusal
         // leaves no audit row.
-        await (await import('./scripts/set-operator.js')).setOperator(db, [AUTH_SUBJECT, 'operator', '--reason', 'Synthetic Bane operator']);
+        await (await import('./scripts/set-operator.js')).setOperator(db, [AUTH_SUBJECT, 'operator', '--reason', 'Synthetic Nightmail operator']);
         const refundPath = `/v1/operator/billing/${wid}/refunds`, refundBody = { attemptId: first.attemptId, amountCents: 1000, basis: 'billing_error', reason: 'Customer was charged for a top-up twice' };
         const refund = ok(await local('POST', refundPath, refundBody, 'live', { 'Idempotency-Key': 'refund-1' }));
         assert.match(refund.refundId, /^brf_/);
@@ -20097,7 +20287,7 @@ describe('Billing: API, MCP and notices', () => {
 
   test('OpenAPI and MCP: billing reads and a top-up link are tools; nothing that charges a card is, and the webhook and operator routes are hidden', async () => {
     const { createOpenApiApp } = await import('./src/app.js'), { buildMcpCatalog, DASHBOARD_MONEY } = await import('./src/mcp-catalog.js'), { resourceActions } = await import('./src/mcp-resources.js');
-    const app = await createOpenApiApp(), spec = app.getOpenAPI31Document({ openapi: '3.1.0', info: { title: 'Bane API', version: '0.1.0' } }) as Json;
+    const app = await createOpenApiApp(), spec = app.getOpenAPI31Document({ openapi: '3.1.0', info: { title: 'Nightmail API', version: '0.1.0' } }) as Json;
     const ids = (path: string) => Object.values(spec.paths[path] ?? {}).map(o => (o as Json).operationId);
     assert.deepEqual([ids('/v1/billing'), ids('/v1/billing/usage'), ids('/v1/billing/ledger'), ids('/v1/billing/payments'), ids('/v1/billing/payments/{id}'), ids('/v1/billing/top-ups'), ids('/v1/billing/top-up-links'), ids('/v1/billing/auto-recharge'), ids('/v1/billing/payment-method').sort()],
       [['getBilling'], ['getBillingUsage'], ['listBillingLedger'], ['listBillingPayments'], ['getBillingPayment'], ['createBillingTopUp'], ['createBillingTopUpLink'], ['updateBillingAutoRecharge'], ['createBillingCardSetup', 'deleteBillingPaymentMethod']]);
@@ -20211,7 +20401,7 @@ describe('Billing: API, MCP and notices', () => {
       assert.deepEqual(ok(await local('GET', base)).decisions, { month: same ? 12 : 7, day: 7 });
       await db.query('ROLLBACK TO SAVEPOINT decisions');
       error(await local('POST', `${base}/credits`, { amountCents: 1000, reason: 'Goodwill after an outage' }, 'live', once('refused-3')), 403, 'OPERATOR_REQUIRED');
-      await setOperator(db, [AUTH_SUBJECT, 'operator', '--reason', 'Synthetic Bane operator']);
+      await setOperator(db, [AUTH_SUBJECT, 'operator', '--reason', 'Synthetic Nightmail operator']);
 
       // A promotional credit: the ledger row and its audit row commit in the same (sub)transaction; a retry with the
       // same Idempotency-Key returns the first answer and posts nothing.
@@ -20269,7 +20459,7 @@ describe('Billing: API, MCP and notices', () => {
       error(await local('PUT', `${base}/free`, on), 403, 'OPERATOR_REQUIRED');
       error(await request('PUT', `/v1/operator/billing/people/${me}/free`, key.secret, on), 403, 'OPERATOR_REQUIRED');
       const { setOperator } = await import('./scripts/set-operator.js');
-      await setOperator(db, [AUTH_SUBJECT, 'operator', '--reason', 'Synthetic Bane operator']);
+      await setOperator(db, [AUTH_SUBJECT, 'operator', '--reason', 'Synthetic Nightmail operator']);
       error(await local('PUT', `${base}/free`, { ...on, until: new Date(Date.now() - 1000).toISOString() }), 422, 'VALIDATION_FAILED');
 
       // The workspace flag: free until a date, audited with the change; customers see the free plan and no gate.
@@ -21015,7 +21205,7 @@ describe('List hygiene', () => {
   });
 
   // The nightly sync of the open lists and the domain checks, with every source and the DNS resolver mocked.
-  test('synced lists and domain checks: a poisoned, failing or shrunken source keeps its last copy; NXDOMAIN, null MX, no MX and disposable mail servers flag contacts at create, import and in the hourly pass', async t => {
+  test('synced lists and domain checks: keep the last copy when a source lists a known provider, fails or shrinks; NXDOMAIN, null MX, no MX and listed disposable domains flag contacts at create, import and in the hourly pass', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
       const [{ SOURCES }, hygiene] = await Promise.all([import('./src/hygiene-sources.js'), import('./src/list-hygiene.js')]);
       const wid = runtime.config.workspaceId, before = { lists: runtime.config.hygieneLists, dns: runtime.config.hygieneDnsUrl };
@@ -21091,10 +21281,10 @@ describe('List hygiene', () => {
           assert.equal(await create('y@gone.example'), 'no_mail_domain');
           assert.equal(calls.length, asked);
 
-          // Mail servers that serve three listed domains serve disposable ones, unless they are a known provider's.
+          // A shared mail server does not make an unlisted domain disposable.
           await hygiene.domainRisks(runtime, await hygiene.hygieneLists(runtime.db), traps, Date.now() + 5_000);
           await hygiene.syncHygieneLists(runtime, fetcher, true);
-          assert.deepEqual((await built()).meta.disposableMx, ['mx.trashhost.test']);
+          assert.equal(await create('reader@trapmx1.example'), 'disposable');
           // A day's change is bounded: a source that suddenly adds 10,000 domains (over 2% of the ~214,000 built) keeps the
           // last built lists until accepted.
           const kept = (await built()).version;
@@ -21107,13 +21297,13 @@ describe('List hygiene', () => {
           sources.mailchecker = many('d', 50000).join('\n');
           await hygiene.syncHygieneLists(runtime, fetcher, true, true);
           hygiene.forgetHygieneLists();
-          assert.equal(await create('z@newtrap.example'), 'disposable');
+          assert.equal(await create('z@newtrap.example'), null);
 
           // An import: the preview counts the domains' verdicts (outranking a role name), and the commit stores them.
           const csv = ['Email', 'p@gone.example', 'abuse@nomx.example', 'q@fine.example', 'r@newtrap2.example', 'postmaster@fine.example'].join('\n');
           const preview = ok(await local('POST', '/v1/contact-imports', { csv, mapping: { email: 'Email' } }), 201);
           const NONE = { invalid: 0, disposable: 0, typo_domain: 0, role: 0, dead: 0, no_mail_domain: 0 };
-          assert.deepEqual(preview.risky, { total: 4, byReason: { ...NONE, no_mail_domain: 2, disposable: 1, role: 1 } });
+          assert.deepEqual(preview.risky, { total: 3, byReason: { ...NONE, no_mail_domain: 2, role: 1 } });
           const committed = ok(await local('POST', `/v1/contact-imports/${preview.id}/commit`, { consent: { status: 'subscribed', evidence: 'Synthetic opt-in.' } }));
           assert.deepEqual(committed.risky, preview.risky);
 
@@ -21542,7 +21732,7 @@ describe('Operational configuration and public event boundaries', () => {
         if (callbacks.length > 1) { response.writeHead(204); response.end(); return; }
       }
       if (request.url === '/certificate' || request.url === '/webhook') {
-        response.writeHead(302, { Location: '/redirect-target' }); response.end('Redirect refused by Bane.');
+        response.writeHead(302, { Location: '/redirect-target' }); response.end('Redirect refused by Nightmail.');
       } else { response.writeHead(200); response.end('The redirect target must never be requested.'); }
     });
     server.listen(0, '127.0.0.1');
@@ -21690,7 +21880,7 @@ test('LIVE SES: one explicitly authorized recipient reaches provider acceptance 
   const key = await keyFixture(t, { permissions: ['read', 'send'], domains: [from.split('@')[1]] });
   const queued = ok(await http('POST', '/v1/emails/send', key.secret, {
     from, to, region: process.env.SES_TEST_REGION ?? REGION,
-    subject: unique('Bane authorized live acceptance'), text: 'One explicitly authorized Bane acceptance email. Provider acceptance is not a delivery claim.', kind: 'transactional',
+    subject: unique('Nightmail authorized live acceptance'), text: 'One explicitly authorized Nightmail acceptance email. Provider acceptance is not a delivery claim.', kind: 'transactional',
   }, { 'Idempotency-Key': unique('authorized-live') }), 202);
   assert.equal(queued.environment, undefined);
   assert.equal(queued.simulated, false);
@@ -22992,7 +23182,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.ok(sent.status >= 400 && sent.status < 500, diagnostic(sent));
       await seen(sent, { route: '/v1/emails/send', method: 'POST', code: sent.body.error.code, principal: 'dashboard', workspace: wid });
       await seen(await request('GET', `/v1/no-such-route/${encodeURIComponent(email)}`, reader.secret), { route: 'unmatched', status: 404, code: 'NOT_FOUND' });
-      // An unexpected failure: the request line plus one error line with Bane's own stack frames, never the message. A
+      // An unexpected failure: the request line plus one error line with Nightmail's own stack frames, never the message. A
       // message can span lines that look like frames, even like a frame in the Worker bundle (PR #131 review).
       const errorLine = (reply: Reply) => lines.map(line => JSON.parse(line) as Json).find(entry => entry.requestId === reply.headers.get('x-request-id') && entry.event !== 'request');
       const ownFrames = (stack: string) => stack.split('\n').every(frame => /^[\w$.<>[\]]+(?: \[as [\w$]+\])? \((?:worker\.js|(?:src|dist)\/[\w./-]+\.(?:ts|js)):\d+:\d+\)$/.test(frame));
@@ -23045,7 +23235,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
 
   // PR #131 recheck: an error's name and message are both caller-reachable text, and either can span lines that look
-  // exactly like frames. stackFrames reads frames only after the exact header text, and keeps Bane's own.
+  // exactly like frames. stackFrames reads frames only after the exact header text, and keeps Nightmail's own.
   test('stack frames: an error name or message that looks like frames is never logged as one, and error fields are logged only as allowlisted strings', async t => {
     const { stackFrames, errorTypeOf, databaseCodeOf, logError, log } = await import('./src/core.js');
     const real = '    at realHandler (worker.js:5:5)\n    at async Pool.query (/app/node_modules/pg/lib/client.js:9:9)\n    at async handler (/app/dist/app.js:7:3)';
@@ -23068,7 +23258,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.equal(stackFrames(error), 'realHandler (worker.js:5:5)\nhandler (dist/app.js:7:3)', JSON.stringify({ name, message }));
       assert.equal(errorTypeOf(error), /^[A-Z][A-Za-z0-9]{0,40}$/.test(name) ? name : 'Error');
     }
-    // Formatted by V8 itself, from this file: no frame of Bane's, and none of the injected ones.
+    // Formatted by V8 itself, from this file: no frame of Nightmail's, and none of the injected ones.
     const lazy = Object.assign(new Error(`boom${fakeMessage}`), { name: `Error${fake}` });
     assert.equal(stackFrames(lazy), undefined);
     // Fails closed when the stack does not start with the current header, or has a line that is not a frame after it.
@@ -23459,7 +23649,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     // Every send is cleared at once, so nothing is left for a dispatcher.
     const send=async(w:string,from:string,status=202,code?:string)=>{const reply=await api(w,'POST','/v1/emails/send',{from,to:'success@simulator.amazonses.com',subject:'Platform',text:'Platform fixture.'});
       if(status!==202)return error(reply,status,code);const {id}=ok(reply,202);await db.query('DELETE FROM sending_emails WHERE id=$1',[id]);};
-    // The operator's hand-made Easy DKIM identity: Bane may associate it with a tenant, never create, change or delete it.
+    // The operator's hand-made Easy DKIM identity: Nightmail may associate it with a tenant, never create, change or delete it.
     const dkim=['platformdkima','platformdkimb','platformdkimc'],identity:Json={IdentityType:'DOMAIN',VerificationStatus:'SUCCESS',VerifiedForSendingStatus:true,Tags:[],
       DkimAttributes:{SigningEnabled:true,Status:'SUCCESS',SigningAttributesOrigin:'AWS_SES',SigningHostedZone:'dkim.amazonses.com',Tokens:[...dkim]}};
     const children=new Map<string,Json>(),members=new Map<string,string>(),writes:string[]=[];let afterRuntimeRead:(()=>Promise<void>)|undefined;
@@ -23795,6 +23985,13 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.deepEqual(["Ryan's workspace",'Acme Corp','Café Crème Inc','PayPal Security','Support','xn--fixture','12345','A','The Very Long Workspace Name For Testing',
         'Nightmail Support','Security Team','Acme no-reply','Login Verification','Postmaster Team','Secure Pay'].map(builtin.builtinBase),
         ['ryans','acme-corp','cafe-creme','mail','mail','mail','mail','mail','the-very-long-name','mail','mail','mail','mail','mail','mail']);
+      assert.deepEqual(['MyGoogleDesk', 'Pay Pal Tools', 'Nіghtmail Desk', 'G00gle Team', 'Cloud Studio'].map(builtin.builtinBase),
+        ['mail', 'mail', 'mail', 'mail', 'cloud-studio']);
+      // Ordinary names keep their label: a short brand word counts only on its own, also spelled across words or digits.
+      assert.deepEqual(['First Round Capital', 'Groups Inc', 'Delivery Hero', 'Purchase Co', 'Olive Garden'].map(builtin.builtinBase),
+        ['first-round-capital', 'groups', 'delivery-hero', 'purchase', 'olive-garden']);
+      const lookalikes = ['UPS Delivery', 'UPSDelivery', 'U P S Billing', 'Up5 Tracking', 'AWS Billing', 'MetaSupport', 'Ch4se Alerts', 'IRS Refunds', 'AppleBilling', 'MyGmailDesk', 'SecureLogin', 'Sign In Help', 'L\u0456ve Support'];
+      assert.deepEqual(lookalikes.map(builtin.builtinBase), lookalikes.map(() => 'mail'));
       const labels=new Set<string>();
       for (let i=0;i<40;i++) {const w=unique('ws-acme');await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$2,$1)',[w,'Acme']);labels.add((await builtin.allocateBuiltinDomain(runtime.db,runtime.config,w,'Acme'))!);}
       assert.equal(labels.size,40,'Every workspace gets its own label.');
@@ -23944,6 +24141,32 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       ok(await local('POST',`/v1/inbound/threads/${thread}/reply`,{addressId:inbox.id,text:'Thanks, on it.'}),202);
       assert.deepEqual((await db.query("SELECT from_address,to_addresses FROM sending_emails WHERE workspace_id=$1 AND created_at>now()-interval '1 hour'",[wid])).rows,[{from_address:from,to_addresses:['someone@sender.example']}]);
       assert.equal((await db.query("SELECT count(*)::int AS n FROM mailboxes WHERE workspace_id=$1 AND origin='auto'",[wid])).rows[0].n,0,'The catch-all never creates addresses.');
+      // Forwarding's confirmation is an email from the built-in domain too (its links on the link domain): to anyone but a
+      // member, refused the same way while it sends to members only; to a member's own address, sent.
+      runtime.config.builtinScope='members';runtime.config.linkHost='links.builtin-fixture.example';
+      const forwarder=ok(await local('POST','/v1/inbound/addresses',{address:`forward@${host}`}),201);
+      assert.deepEqual(error(await local('POST','/v1/endpoints',{type:'forward',name:'builtin-outsider',address:'stranger@example.net',from:forwarder.id}),422,'BUILTIN_DOMAIN_RECIPIENT').details,[{notMembers:['stranger@example.net']}]);
+      assert.equal((await db.query("SELECT count(*)::int AS n FROM mailbox_webhooks WHERE workspace_id=$1 AND key='builtin-outsider'",[wid])).rows[0].n,0,'Nothing is kept.');
+      ok(await local('POST','/v1/endpoints',{type:'forward',name:'builtin-member',address:AUTH_EMAIL,from:forwarder.id}),201);
+      assert.match((await db.query("SELECT snapshot->>'text' AS text FROM sending_emails WHERE workspace_id=$1 AND subject=$2 ORDER BY created_at DESC LIMIT 1",[wid,`Confirm forwarding from forward@${host}`])).rows[0].text,/https:\/\/links\.builtin-fixture\.example\/v1\/forwarding\/confirm\/fwd_/);
+      runtime.config.linkHost=undefined;runtime.config.builtinScope='anyone';
+      // The parent's own role addresses (abuse@, postmaster@, dmarc@, tls-reports@) reach the platform workspace, here this one,
+      // through its built-in domain once an operator adds them (scripts/builtin-domain.ts apex), routed like any address.
+      const operator='arn:aws:sts::111122225555:assumed-role/operator/fixture',platformBefore=runtime.config.platformDomainWorkspace;
+      runtime.config.platformDomainWorkspace=wid;
+      assert.equal((await receive([`abuse@${parent}`])).n,0,'Nothing reaches the parent before an operator adds its host.');
+      await assert.rejects(builtin.ensureBuiltinApex(runtime,{ceo:[support.id]} as never,operator,'Not a role address'),/Only abuse, postmaster, dmarc, tls-reports receive/);
+      const apexHost=await builtin.ensureBuiltinApex(runtime,{abuse:[support.id],dmarc:[inbox.id]},operator,'Role addresses for the parent');
+      assert.equal(await builtin.ensureBuiltinApex(runtime,{abuse:[support.id],dmarc:[inbox.id]},operator,'Role addresses for the parent'),apexHost,'Running it again changes nothing.');
+      assert.deepEqual((await deliver([`abuse@${parent}`])).boxes,[support.id]);
+      assert.deepEqual((await deliver([`dmarc@${parent}`])).boxes,[inbox.id]);
+      assert.equal((await receive([`ceo@${parent}`])).n,0,'Any other address at the parent is dropped,');
+      assert.equal((await db.query('SELECT count(*)::int AS n FROM mail_receipt_holds WHERE recipients ? $1',[`ceo@${parent}`])).rows[0].n,0,'not held.');
+      assert.equal((await db.query("SELECT count(*)::int AS n FROM hosted_operator_audit WHERE workspace_id=$1 AND action='builtin-apex'",[wid])).rows[0].n,2);
+      runtime.config.platformDomainWorkspace=`ws_${'0'.repeat(32)}`;
+      assert.equal((await receive([`abuse@${parent}`])).n,0,'Only the platform workspace receives them.');
+      runtime.config.platformDomainWorkspace=platformBefore;
+      assert.deepEqual((await deliver([`support@${host}`])).boxes,[support.id],'The built-in domain itself receives as before.');
 
       // 6. A pause stops sending (receiving goes on); an own domain closes it; a revoke stops everything for good.
       await db.query("UPDATE provider_connections SET paused_at=now(),pause_reason='Synthetic hold' WHERE id=$1",[wid]);
@@ -25129,7 +25352,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         ok(await choose(d, null)); await recheck(d); assert.equal(receiving(await read(d)).name, `mail.${d.name}`);
       });
 
-      await t.test("Bane's own names: MAIL FROM, ownership TXT and DKIM never carry the receiving MX", async () => {
+      await t.test("Nightmail's own names: MAIL FROM, ownership TXT and DKIM never carry the receiving MX", async () => {
         const name = `${unique('rx-mailfrom')}.example`, d = await claim(name, { mailFrom: `reply.${name}` });
         assert.equal(receiving(await read(d)).name, `inbound.${d.name}`, 'Record generation skips the custom MAIL FROM subdomain.');
         zone.set(`reply.${d.name}`, { mx: [`10 feedback-smtp.${REGION}.amazonses.com.`] });
@@ -25856,7 +26079,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     await simulatedSesFixture(t, async ({runtime,db,local,run}) => {
       const {applyDevE2eFixture,DEV_E2E_SEND_CAP}=await import('./scripts/dev-e2e-fixture.js');
       const wid=runtime.config.workspaceId, domain='e2e.bane.mx', account='111122223333', domainId='dom_'+randomUUID().replaceAll('-','');
-      const dev={STAGE:'dev',PUBLIC_URL:'https://dev.bane.mx',BANE_E2E_DOMAIN_ID:domainId};
+      const dev={STAGE:'dev',PUBLIC_URL:'https://dev.bane.mx',NIGHTMAIL_E2E_DOMAIN_ID:domainId};
       Object.assign(runtime.config,{multiTenant:true,liveEnabled:true,aws:{accessKeyId:'fixture',secretAccessKey:'fixture'}});
       await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state) VALUES ($1,$2,$3,'ready')`,[REGION,account,`arn:aws:sns:${REGION}:${account}:fixture`]);
       await db.query(`INSERT INTO provider_connections(id,workspace_id,region,state,kind,aws_account_id,tenant_state) VALUES ($1,$1,$2,'ready','shared',$3,'ready')`,[wid,REGION,account]);
@@ -25867,7 +26090,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       const audits=async()=>(await db.query(`SELECT details FROM hosted_operator_audit WHERE workspace_id=$1 AND action='set-dev-e2e-fixture-policy'`,[wid])).rows.map(r=>r.details);
       // Never production, never another workspace: a fixture without both verified claims is refused and unchanged.
       await assert.rejects(applyDevE2eFixture(db,{...dev,STAGE:'production',PUBLIC_URL:'https://bane.mx'}),/only to dev/);
-      await assert.rejects(applyDevE2eFixture(db,{...dev,BANE_E2E_DOMAIN_ID:undefined}),/BANE_E2E_DOMAIN_ID/);
+      await assert.rejects(applyDevE2eFixture(db,{...dev,NIGHTMAIL_E2E_DOMAIN_ID:undefined}),/NIGHTMAIL_E2E_DOMAIN_ID/);
       await assert.rejects(applyDevE2eFixture(db,dev),/No unique E2E fixture/);
       await claim('e2e-va.bane.mx');
       // Dev already had the 100k workspace override. Its live Ohio sandbox sample (1/s, 200/day, 100 used) holds
@@ -26726,7 +26949,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     });
   });
 
-  test('MX: an operator lifts a bounce suppression in Bane and SES, scoped, audited and fenced, so a fixed sign-in address gets mail again', async t => {
+  test('MX: an operator lifts a bounce suppression in Nightmail and SES, scoped, audited and fenced, so a fixed sign-in address gets mail again', async t => {
     await simulatedSesFixture(t, async ({runtime,db,local}) => {
       const {liftSuppression}=await import('./scripts/lift-suppression.js'),{runDispatcher}=await import('./src/dispatcher.js');
       const wid=runtime.config.workspaceId, account='111122223333', domain='lift.example', to='New.Hire@Example.net';
@@ -26763,7 +26986,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       const audits=async()=>(await db.query(`SELECT details FROM hosted_operator_audit WHERE workspace_id=$1 AND action='lift-suppression' ORDER BY at`,[wid])).rows.map(r=>r.details);
       const suppressed=async(rcpt=to)=>(await db.query('SELECT suppressed,suppression_reason FROM audience_contacts WHERE workspace_id=$1 AND email=$2',[wid,rcpt.toLowerCase()])).rows[0];
       const bounce=(rcpt:string)=>db.query(`INSERT INTO audience_contacts(id,workspace_id,email,suppressed,suppression_reason,suppressed_at) VALUES($1,$2,$3,true,'hard_bounce',now())`,[unique('con'),wid,rcpt.toLowerCase()]);
-      // A hard bounce of an earlier sign-in email: Bane, both tenants and the shared account list all hold it.
+      // A hard bounce of an earlier sign-in email: Nightmail, both tenants and the shared account list all hold it.
       await bounce(to); list(REGION,tenant).set(to,'BOUNCE'); list(second,trusted).set(to.toLowerCase(),'BOUNCE'); list(REGION).set(to,'BOUNCE');
       assert.equal(await send(to),'suppressed');
       await assert.rejects(liftSuppression(db,[wid,to],ses),/Usage:/);
@@ -26772,7 +26995,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       await assert.rejects(lift(),/Nothing was changed/); accounts[later]=account;
       await assert.rejects(lift(),/shared by every workspace.*--account-level/);
       assert.deepEqual([removals,await audits(),await suppressed()],[[],[],{suppressed:true,suppression_reason:'hard_bounce'}]);
-      // A failure part-way is recorded with what was already removed, and Bane still suppresses the address.
+      // A failure part-way is recorded with what was already removed, and Nightmail still suppresses the address.
       failAt=3; await assert.rejects(lift(to,'--account-level'),/failed \(AccessDeniedException\); 2 earlier removal/); failAt=0;
       const [started,failed]=await audits();
       assert.deepEqual([started.status,started.plan.length,failed.status,failed.removed.length,failed.failed.error,failed.liftId===started.liftId],['started',3,'failed',2,'AccessDeniedException',true]);
@@ -26785,16 +27008,16 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.equal(await send(to),'accepted'); assert.equal(tenants.at(-1),tenant);
       // A completed lift is not repeated: nothing more is read from or removed in SES, and nothing is recorded.
       await assert.rejects(lift(),/not suppressed/); assert.equal(removals.length,4); assert.equal((await audits()).length,4);
-      // Complaints stay, whether Bane or SES (even on the shared list, with --account-level) recorded them.
+      // Complaints stay, whether Nightmail or SES (even on the shared list, with --account-level) recorded them.
       const other=address(); await bounce(other); list(REGION).set(other,'COMPLAINT');
       await assert.rejects(lift(other,'--account-level'),/complaint on the account-level list.*Nothing was changed/);
       await db.query(`UPDATE audience_contacts SET suppression_reason='complaint' WHERE workspace_id=$1 AND email=$2`,[wid,other]);
       await assert.rejects(lift(other),/complaint suppression is not lifted/);
       // A complaint that arrives after the preflight read stops the lift before anything more is removed, and is kept:
-      // recorded in Bane before the row lock...
+      // recorded in Nightmail before the row lock...
       const late=address(),settled=removals.length; await bounce(late); list(REGION,tenant).set(late,'BOUNCE');
       inject=()=>db.query(`UPDATE audience_contacts SET suppression_reason='complaint',suppressed_at=clock_timestamp() WHERE workspace_id=$1 AND email=$2`,[wid,late]);
-      await assert.rejects(lift(late),/complaint was recorded in Bane.*nothing more was removed; 0 SES removal/);
+      await assert.rejects(lift(late),/complaint was recorded in Nightmail.*nothing more was removed; 0 SES removal/);
       assert.deepEqual([removals.length,list(REGION,tenant).get(late),await suppressed(late)],[settled,'BOUNCE',{suppressed:true,suppression_reason:'complaint'}]);
       assert.equal((await audits()).at(-1).status,'superseded');
       // ...in SES before the first delete...
@@ -29184,6 +29407,10 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // without it takes. (A call starts only when its own run has ended, so the run after is the one it could delay.)
       // The calls are held until the run has been timed, then answered.
       const timed = { off: [] as number[], hanging: [] as number[] };
+      // The hanging-call deadline was exercised above. For this ordering check only, drive the held
+      // requests by the release below: descheduling the test must not expire a primed request mid-round.
+      const deadline = AbortSignal.timeout.bind(AbortSignal);
+      t.mock.method(AbortSignal, 'timeout', (ms: number) => mode === 'held' && ms === 30_000 ? new AbortController().signal : deadline(ms));
       // Each is the second of two rounds, and the two take turns going first.
       for (let i = 0; i < 4; i++) for (const arm of i % 2 ? ['hanging', 'off'] as const : ['off', 'hanging'] as const) {
         if (arm === 'off') { use('off'); await round(); const without = await round(); timed.off.push(without.ms); assert.deepEqual(without.seen, baseline.seen); continue; }
@@ -29349,8 +29576,10 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     // With it: each message's request goes to the second classifier under its key's model, and its row is written.
     const first = batch(3); await worker.queue(first, env('jevf-fixture-key'));
     assert.deepEqual([first.state, calls], [{ acked: 1, retried: 0 }, 3]);
-    assert.deepEqual(asked.map(body => JSON.parse(body)), Array(3).fill({ model: 'jevf', state: { email: { subject: 'Private subject', body: 'Private body' } }, questions: { harm: {} } }));
-    assert.deepEqual((await stored()).map(row => [row.jev_score, row.jev_flagged, row.jevf_outcome, row.jevf_score, row.jevf_flagged, row.jevf_model]), Array(3).fill([0.9, true, 'ok', 0.2, false, 'jevf']));
+    assert.equal(asked.length, 3);
+    for (const body of asked) assert.deepEqual(JSON.parse(body), { model: 'jevf', state: { email: { subject: 'Private subject', body: 'Private body' } }, questions: { harm: {} } });
+    const firstRows = await stored(); assert.equal(firstRows.length, 3);
+    for (const row of firstRows) assert.deepEqual([row.jev_score, row.jev_flagged, row.jevf_outcome, row.jevf_score, row.jevf_flagged, row.jevf_model], [0.9, true, 'ok', 0.2, false, 'jevf']);
     // The same messages delivered again: no request, no second row. A message delivered again that never had a row: lost.
     await worker.queue({ ...first, messages: first.messages.map(message => ({ ...message, attempts: 2 })) }, env('jevf-fixture-key'));
     const again = batch(1, 2); await worker.queue(again, env('jevf-fixture-key'));
@@ -29414,7 +29643,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await hostedScreenFixture(t, runtime, db, '112223330015', 'keyed.invalid');
       const { copyKey } = await import('./src/screen.js'), { screenedAs, withUnsubscribe, generatedUnsubscribeUrl } = await import('./src/sending.js');
       const { createUnsubscribeLink } = await import('./src/operations.js');
-      const generated = async () => (await createUnsubscribeLink(runtime, runtime.config.workspaceId, 'a@example.net')).url;
+      const generated = async () => (await createUnsubscribeLink(runtime.config.publicUrl, runtime.config.workspaceId, 'a@example.net')).url;
       const customer = (change: Record<string, unknown> = {}) => ({ testCampaignId: null, from: 'news@keyed.invalid', fromName: 'News', to: ['a@example.net'], cc: [], bcc: [], replyTo: ['help@keyed.invalid'],
         region: REGION, kind: 'marketing' as const, subject: 'Hello Ana', html: '<p>Hello Ana</p>', text: 'Hello Ana', attachments: [], tracking: true, headers: [] as { Name: string; Value: string }[], ...change });
       const key = (change: Record<string, unknown> = {}) => copyKey(runtime, screenedAs(runtime, customer(change)));
@@ -29438,7 +29667,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // The recipient's link is only ever this installation's generated one: its origin, /unsubscribe/u_ and 64 lowercase
       // hex digits. A foreign or look-alike origin, a malformed token, a suffix or another path is refused.
       const token = one.slice(one.lastIndexOf('/u_') + 3), origin = runtime.config.publicUrl.replace(/\/$/, '');
-      assert.equal(generatedUnsubscribeUrl(runtime, one), one);
+      assert.equal(generatedUnsubscribeUrl(origin, one), one);
       for (const bad of [`https://evil.invalid/unsubscribe/u_${token}`, `${origin}.evil.invalid/unsubscribe/u_${token}`, `${origin}/unsubscribe/u_${token.slice(1)}`, `${origin}/unsubscribe/u_${token.toUpperCase()}`,
         `${origin}/unsubscribe/u_${token.slice(1)}g`, `${origin}/unsubscribe/u_${token}/x`, `${origin}/unsubscribe/u_${token}?next=x`, `${origin}/x/unsubscribe/u_${token}`, 'not-a-generated-url', ''])
         assert.throws(() => withUnsubscribe(runtime, customer(), bad), (e: { code?: string }) => e.code === 'UNSUBSCRIBE_LINK_INVALID', bad);
@@ -29448,7 +29677,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('hosted campaigns: one classifier request per distinct copy, however many recipients share it', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, run, jobs }) => t.test('classifier', async t => {
-      // CI: 150 recipients over 12 first names (CI's disk-backed database makes every send slow). BANE_BENCH=1: 100,000 over 5,000.
+      // CI: 150 recipients over 12 first names (CI's disk-backed database makes every send slow). NIGHTMAIL_BENCH=1: 100,000 over 5,000.
       const recipients = BENCH ? 100_000 : 150, names = BENCH ? 5_000 : 12, acct = '112223330016';
       const { wid, screened } = await hostedScreenFixture(t, runtime, db, acct, 'scale.invalid');
       await db.query('UPDATE workspaces SET send_cap_override=$2 WHERE id=$1', [wid, 10 * recipients]); await gradedSender(db, wid, 10 * recipients);
@@ -29749,7 +29978,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const hosted = { MULTI_TENANT: 'true', ACCOUNT_REQUIRED_ACR: 'urn:anomaly:acr:google' };
       assert.deepEqual([settings({ NIGHTMAIL_ABUSE_MONITORING: '2026-11-23T00:00:00Z' }).abuseMonitoring, settings(hosted).abuseMonitoring, settings({ ...hosted, NIGHTMAIL_ABUSE_MONITORING: '2026-11-23T01:00:00+01:00' }).abuseMonitoring],
         [undefined, undefined, { since: '2026-11-23T00:00:00.000Z' }]);
-      assert.throws(() => settings({ ...hosted, NIGHTMAIL_ABUSE_MONITORING: 'true' }), { code: 'CONFIG_INVALID' });
+      assert.equal(settings({ ...hosted, NIGHTMAIL_ABUSE_MONITORING: 'true' }).abuseMonitoring, undefined);
       assert.deepEqual([settings(hosted).abuseEnforce, settings({ ...hosted, NIGHTMAIL_ABUSE_ENFORCE: 'true' }).abuseEnforce], [false, true]);
       const wrangler = async (file: string, key: string) => new RegExp(`^\\s*"${key}"\\s*:`, 'm').test(await readFile(new URL(file, import.meta.url), 'utf8'));
       assert.deepEqual([await wrangler('./wrangler.prod.jsonc', 'NIGHTMAIL_ABUSE_MONITORING'), await wrangler('./wrangler.dev.jsonc', 'NIGHTMAIL_ABUSE_MONITORING'), await wrangler('./wrangler.prod.jsonc', 'NIGHTMAIL_ABUSE_ENFORCE')], [true, true, false], 'Monitoring is on in production, monitor-only.');
@@ -30179,7 +30408,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const settings = (extra: Json) => loadConfig({ PUBLIC_URL: 'https://abuse.example', BANE_ROOT_SECRET: 'local-fixture-'.repeat(4), MULTI_TENANT: 'true', ACCOUNT_REQUIRED_ACR: 'urn:anomaly:acr:google', ...extra });
       assert.deepEqual([settings({}).abuseSlackWebhookUrl, settings({ ABUSE_SLACK_WEBHOOK_URL: 'https://hooks.slack.com/services/T0/B0/fixture' }).abuseSlackWebhookUrl, loadConfig({ PUBLIC_URL: 'https://abuse.example', BANE_ROOT_SECRET: 'local-fixture-'.repeat(4), ABUSE_SLACK_WEBHOOK_URL: 'https://hooks.slack.com/services/T0/B0/fixture' }).abuseSlackWebhookUrl],
         [undefined, 'https://hooks.slack.com/services/T0/B0/fixture', undefined]);
-      assert.throws(() => settings({ ABUSE_SLACK_WEBHOOK_URL: 'https://example.com/hook' }), { code: 'CONFIG_INVALID' });
+      assert.equal(settings({ ABUSE_SLACK_WEBHOOK_URL: 'https://example.com/hook' }).abuseSlackWebhookUrl, undefined);
       assert.deepEqual([runtime.config.abuseSlackWebhookUrl, /ABUSE_SLACK_WEBHOOK_URL/.test(await readFile(new URL('./wrangler.prod.jsonc', import.meta.url), 'utf8'))], [undefined, false], 'Unset here and in production.');
 
       // Two accounts on one mailbox: watch, no alert. The same card on both workspaces: review, one alert.
@@ -30452,6 +30681,141 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
+  test('Glass deliverability: our mail by mailbox provider, kind and region against the period before, from a rollup the triggers keep and a page backfill rebuilds exactly; SES health and VDM estimates per region; operators only', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local, request }) => {
+      const wid = runtime.config.workspaceId, path = '/v1/operator/glass/deliverability', pool = '444455557777', region = 'eu-deliv-1';
+      Object.assign(runtime.config, { multiTenant: true });
+      const { readDeliverability, refreshDeliverabilitySources } = await import('./src/glass-deliverability.js');
+      const { providerOf } = await import('./src/deliverability.js');
+      // Not an operator: the operator area's one refusal, as for a path that doesn't exist; hidden from the public document.
+      const refused = (reply: Reply) => { const { requestId: _, ...rest } = error(reply, 403, 'OPERATOR_REQUIRED'); return { status: reply.status, ...rest }; };
+      assert.deepEqual(refused(await local('GET', path)), refused(await local('GET', '/v1/operator/no-such-page')));
+      assert.equal(ok(await local('GET', '/openapi.json')).paths[path], undefined);
+      const { setOperator } = await import('./scripts/set-operator.js');
+      await setOperator(db, [AUTH_SUBJECT, 'operator:read', '--reason', 'Synthetic deliverability reader']);
+
+      // The SQL provider map is deliverability.ts providerOf, domain by domain.
+      const domains = ['gmail.com', 'googlemail.com', 'outlook.com', 'hotmail.co.uk', 'live.com.au', 'msn.com', 'yahoo.co.jp', 'aol.com', 'ymail.com', 'icloud.com', 'me.com', 'proton.me', 'gmx.de', 'gmx.net', 'web.de', 'example.org', 'mail.outlook.example', 'yahoo.example.co.uk.evil'];
+      const { rows: mapped } = await db.query('SELECT d, mail_provider(d) AS p FROM unnest($1::text[]) d', [domains]);
+      assert.deepEqual(mapped.map((r: Json) => r.p), domains.map(d => providerOf(d)));
+
+      // A region of our own, so the shared database's other mail doesn't move these figures.
+      await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture')`, [region, pool, `arn:aws:sns:${region}:${pool}:deliv`]);
+      const mail = async (to: string, kind: 'transactional' | 'marketing', status: string, bits: number, extra: { simulated?: boolean; age?: string; provider?: string } = {}) => {
+        const id = unique('email');
+        await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,status,simulated,screened,event_outcomes,provider_id,created_at)
+          VALUES ($1,$2,$3,'fixture','news@example.com',$4,'[]','[]','Hello',$5,$6,$7,true,$8,$9,now()-$10::interval)`,
+          [id, wid, region, JSON.stringify([to]), { kind, subject: 'Hello', text: 'Hello', attachments: [] }, status, extra.simulated ?? false, bits, extra.provider ?? null, extra.age ?? '0 seconds']);
+        return id;
+      };
+      const event = (email: string, type: string, data: Json = {}) => db.query(`INSERT INTO sending_email_events(id,workspace_id,email_id,type,provider_id,data,simulated,created_at) VALUES ($1,$2,$3,$4,'p',$5,false,now())`, [unique('event'), wid, email, type, data]);
+      const gmailTx = await mail('a@gmail.com', 'transactional', 'delivered', 3);
+      const gmailMk = await mail('b@googlemail.com', 'marketing', 'delivered', 3);
+      await mail('c@aol.com', 'marketing', 'bounced', 5);
+      await mail('d@outlook.co.uk', 'transactional', 'complained', 11);
+      const apple = await mail('e@icloud.com', 'marketing', 'delivered', 3);
+      const other = await mail('f@example.org', 'transactional', 'sent', 0, { provider: 'ses-1' });
+      await mail('g@gmail.com', 'transactional', 'delivered', 3, { simulated: true });
+      await mail('h@gmail.com', 'transactional', 'delivered', 3, { age: '30 hours' });
+      // Two human opens in two statements count one opened email; a bot-flagged open is an open, not a human one; two
+      // delays in one statement are one deferred email.
+      await event(gmailMk, 'open', { isBotEvent: 'Unlikely' });
+      await event(gmailMk, 'open', { isBotEvent: 'Unlikely' });
+      await event(apple, 'open', { isBotEvent: 'Likely' });
+      await event(other, 'non_permanent_bounce');
+      await db.query(`INSERT INTO sending_email_events(id,workspace_id,email_id,type,provider_id,data,simulated,created_at) SELECT $1||n,$2,$3,'delivery_delay','p','{}',false,now() FROM generate_series(1,2) n`, [unique('event'), wid, other]);
+      // The most complaints and bounces of any workspace in the period, so this one leads both lists.
+      await db.query(`INSERT INTO sending_metrics_hourly(workspace_id,region,kind,hour,emails,accepted,bounced,complained) VALUES ($1,$2,'transactional',date_trunc('hour',now(),'UTC'),0,0,1000000,1000000)`, [wid, region]);
+      // A later complaint moves the first email's figures (the update trigger).
+      await db.query(`UPDATE sending_emails SET status='complained',event_outcomes=event_outcomes|8 WHERE id=$1`, [gmailTx]);
+      await db.query('SELECT * FROM fold_deliverability_hourly(50000)');
+      assert.equal(Number((await db.query(`SELECT count(*) - count(DISTINCT (hour,kind,provider)) AS n FROM deliverability_hourly WHERE region=$1`, [region])).rows[0].n), 0, 'Folded to one row a key.');
+
+      const zero = { accepted: 0, delivered: 0, hardBounced: 0, softBounced: 0, deferred: 0, complained: 0, opened: 0, humanOpened: 0, clicked: 0 };
+      const ours = (b: Awaited<ReturnType<typeof readDeliverability>>) => b.cube.filter(c => c.region === region).map(({ provider, kind, current, previous }) => ({ provider, kind, current, previous }));
+      const day = await readDeliverability(runtime, '24h');
+      assert.deepEqual(ours(day), [
+        { provider: 'apple', kind: 'marketing', current: { ...zero, accepted: 1, delivered: 1, opened: 1 }, previous: zero },
+        { provider: 'gmail', kind: 'marketing', current: { ...zero, accepted: 1, delivered: 1, opened: 1, humanOpened: 1 }, previous: zero },
+        { provider: 'gmail', kind: 'transactional', current: { ...zero, accepted: 1, delivered: 1, complained: 1 }, previous: { ...zero, accepted: 1, delivered: 1 } },
+        { provider: 'microsoft', kind: 'transactional', current: { ...zero, accepted: 1, delivered: 1, complained: 1 }, previous: zero },
+        { provider: 'other', kind: 'transactional', current: { ...zero, accepted: 1, softBounced: 1, deferred: 1 }, previous: zero },
+        { provider: 'yahoo', kind: 'marketing', current: { ...zero, accepted: 1, hardBounced: 1 }, previous: zero },
+      ]);
+      assert.deepEqual([day.window, day.unit, Date.parse(day.until) - Date.parse(day.since), Date.parse(day.since) - Date.parse(day.previousSince)], ['24h', 'hour', 86_400_000, 86_400_000]);
+      assert.ok(day.coverageFrom !== null && day.coverageFrom <= day.since);
+      assert.equal(day.series.filter(s => s.region === region).reduce((n, s) => n + s.accepted, 0), 6, 'The series is the current period only.');
+      // 7 days: both emails in the current period, daily buckets.
+      const week = await readDeliverability(runtime, '7d');
+      assert.deepEqual([week.unit, ours(week).find(c => c.provider === 'gmail' && c.kind === 'transactional')!.current.accepted], ['day', 2]);
+
+      // The backfill rebuilds what the triggers wrote, exactly, and a page run again adds nothing.
+      await db.query('DELETE FROM deliverability_hourly WHERE region=$1', [region]);
+      const pages = (await db.query(`SELECT to_char(date_trunc('hour',now()-interval '30 hours','UTC') AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') AS a,to_char(date_trunc('hour',now(),'UTC') AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"') AS b`)).rows[0];
+      for (const page of [pages.a, pages.b, pages.b]) await db.query('SELECT deliverability_fill_page($1)', [page]);
+      assert.deepEqual(ours(await readDeliverability(runtime, '24h')), ours(day));
+      assert.equal((await db.query(`SELECT deliverability_fill_page($1) AS next`, [new Date(Date.now() + 3_600_000).toISOString()])).rows[0].next, null, 'Done once a page starts after now.');
+
+      // The top workspaces by complaints and bounces, IDs only.
+      assert.deepEqual([day.top.complaints[0]!.workspaceId, day.top.complaints[0]!.complained, day.top.bounces[0]!.workspaceId, day.top.bounces[0]!.bounced], [wid, 1000002, wid, 1000001]);
+      assert.ok(day.top.complaints.length <= 10 && day.top.complaints.every(w => Object.keys(w).join() === 'workspaceId,accepted,bounced,complained'));
+
+      // Amazon's view: GetAccount every 10 minutes, VDM hourly, each elected once; DBL unconfigured without a DQS zone.
+      // Gmail Postmaster Tools (v2) through the stored OAuth grant: a token, then the domain's days (Google's answers stubbed).
+      const builtin = runtime.config.builtinDomain;
+      runtime.config.builtinDomain = 'deliverability.example';
+      // The link domain every customer's campaign links share: its zone's DBL listing is checked with the platform's own.
+      runtime.config.linkHost = 'links.linkzone.example';
+      runtime.config.postmaster = { clientId: 'client', clientSecret: 'secret', refreshToken: 'refresh' };
+      t.after(() => { runtime.config.builtinDomain = builtin; delete runtime.config.postmaster; delete runtime.config.linkHost; });
+      const asked: string[] = [];
+      const today = new Date().toISOString().slice(0, 10).replaceAll('-', ''), yesterday = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10).replaceAll('-', '');
+      // Passed in, never put on the global fetch: concurrent fixtures own that one.
+      const google = async (input: RequestInfo | URL, init?: RequestInit) => {
+        const url = String(input instanceof Request ? input.url : input);
+        if (url === 'https://oauth2.googleapis.com/token') { asked.push(`token:${new URLSearchParams(String(init?.body)).get('refresh_token')}`); return Response.json({ access_token: 'access', expires_in: 3600 }); }
+        if (url === 'https://gmailpostmastertools.googleapis.com/v2/domains/deliverability.example/domainStats:query' && init?.method === 'POST') {
+          const query = JSON.parse(String(init.body));
+          asked.push(`stats:${new Headers(init.headers).get('authorization')}:${query.aggregationGranularity}:${query.metricDefinitions.map((m: Json) => m.name).join(',')}`);
+          const day = (at: string) => ({ year: Number(at.slice(0, 4)), month: Number(at.slice(4, 6)), day: Number(at.slice(6)) });
+          const stat = (at: string, metric: string, floatValue: number) => ({ name: `domains/deliverability.example/domainStats/x.${at}`, metric, date: day(at), value: { floatValue } });
+          return Response.json({ domainStats: [stat(yesterday, 'spam', 0.002), stat(yesterday, 'dmarc', 0.98), stat(today, 'spam', 0.0004), stat(today, 'spf', 1), stat(today, 'dkim', 1), stat(today, 'dmarc', 1), stat(today, 'errors', 0)] });
+        }
+        throw new Error(`Unexpected request: ${url}`);
+      };
+      await refreshDeliverabilitySources(runtime, { fetch: google as typeof fetch });
+      assert.deepEqual(asked, ['token:refresh', 'stats:Bearer access:DAILY:spam,spf,dkim,dmarc,errors']);
+      const checks = (await db.query(`SELECT kind,status,detail,checked_at FROM deliverability_checks WHERE subject=$1 ORDER BY kind`, [region])).rows;
+      assert.deepEqual(checks.map((c: Json) => [c.kind, c.status, c.detail]), [
+        ['ses', 'ok', { enforcement: 'HEALTHY', sendingEnabled: true, productionAccess: true, vdm: true, engagement: true }],
+        ['vdm', 'ok', { days: 60 }],
+      ]);
+      await refreshDeliverabilitySources(runtime, { fetch: google as typeof fetch });
+      assert.deepEqual((await db.query(`SELECT checked_at FROM deliverability_checks WHERE subject=$1 ORDER BY kind`, [region])).rows.map((c: Json) => c.checked_at), checks.map((c: Json) => c.checked_at), 'Not due again yet.');
+      const board = await readDeliverability(runtime, '7d'), mine = board.regions.find(r => r.region === region)!;
+      assert.deepEqual([mine.ses.enforcement, mine.ses.vdm, mine.vdm.status, mine.vdm.providers.map(p => p.provider)], ['HEALTHY', true, 'ok', ['all', 'gmail', 'yahoo', 'other']]);
+      // The simulator's day: 1,000 sent in all, half to Gmail, a fifth to Yahoo; seven days of it, and seven before.
+      const vdm = (provider: string) => mine.vdm.providers.find(p => p.provider === provider)!;
+      assert.deepEqual([vdm('all').current.send, vdm('gmail').current.send, vdm('yahoo').current.send, vdm('other').current.send, vdm('gmail').previous.send, vdm('gmail').current.deliveryOpen],
+        [7000, 3500, 1400, 2100, 3500, 3150]);
+      assert.deepEqual(board.blocklist.find(b => b.domain === 'deliverability.example')?.status, 'unconfigured');
+      assert.deepEqual([board.blocklist.find(b => b.domain === 'linkzone.example')?.status, board.postmaster.some(p => p.domain === 'linkzone.example')], ['unconfigured', false], 'It sends no mail: no Postmaster Tools for it.');
+      const postmaster = board.postmaster.find(p => p.domain === 'deliverability.example')!;
+      assert.deepEqual([postmaster.status, postmaster.url, postmaster.latest, Math.round(postmaster.spamRatio.current! * 1e6) / 1e6], ['ok', 'https://postmaster.google.com/',
+        { day: `${today.slice(0, 4)}-${today.slice(4, 6)}-${today.slice(6)}`, spamRatio: 0.0004, spf: 1, dkim: 1, dmarc: 1, deliveryErrorRatio: 0 }, 0.0012]);
+      runtime.config.builtinDomain = builtin;
+
+      // The route: the same figures for an operator, cached; a window that isn't one is refused.
+      const first = await local('GET', `${path}?window=24h`), page = ok(first);
+      assert.deepEqual([first.headers.get('x-nightmail-glass-cache'), first.headers.get('cache-control')], ['miss', 'private, no-store']);
+      assert.deepEqual(page.cube.filter((c: Json) => c.region === region).map(({ provider, kind, current, previous }: Json) => ({ provider, kind, current, previous })), ours(day));
+      assert.equal((await local('GET', `${path}?window=24h`)).headers.get('x-nightmail-glass-cache'), 'hit');
+      error(await local('GET', `${path}?window=90d`), 422, 'VALIDATION_FAILED');
+      const key = ok(await local('POST', '/v1/api-keys', { name: 'Not an operator', permissions: ['manage'] }), 201); secrets.add(key.secret);
+      assert.deepEqual(refused(await request('GET', path, key.secret)), refused(await request('GET', '/v1/operator/no-such-page', key.secret)));
+    });
+  });
+
   test('operator API: only platform operators read and act; every action needs a reason and is audited in its transaction', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, request }) => {
       const wid = runtime.config.workspaceId, pool = '111122223333', base = `/v1/operator/workspaces/${wid}`;
@@ -30473,7 +30837,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.deepEqual(ok(await local('GET', '/v1/operator/workspaces')).data.filter((w: Json) => w.workspaceId === wid), [], 'A workspace in good standing is not in the queue.');
       assert.equal(ok(await local('GET', `/v1/operator/workspaces?q=${wid}`)).data[0].workspaceId, wid);
       error(await local('POST', `${base}/pause`, { reason: 'Confirmed abuse report' }), 403, 'OPERATOR_REQUIRED');
-      await setOperator(db, [AUTH_SUBJECT, 'operator', '--reason', 'Synthetic Bane operator']);
+      await setOperator(db, [AUTH_SUBJECT, 'operator', '--reason', 'Synthetic Nightmail operator']);
       const page = ok(await local('GET', base));
       assert.deepEqual([page.standing.step, page.score.limit.daily, page.connection.paused, page.members[0].email], ['ok', 2000, false, AUTH_EMAIL]);
       const version = page.standing.version;
@@ -30663,7 +31027,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // A second list-quality quarantine needs an operator.
       await db.query(`UPDATE sending_campaigns SET state='paused',paused_at=now(),pause_reason='{"code":"BOUNCE_RATE_HIGH","message":"x"}',quarantines=2 WHERE id=$1`, [c.id]);
       error(await local('POST', `${path}/resume`, {}), 409, 'QUARANTINE_REVIEW_REQUIRED');
-      await (await import('./scripts/set-operator.js')).setOperator(db, [AUTH_SUBJECT, 'operator', '--reason', 'Synthetic Bane operator']);
+      await (await import('./scripts/set-operator.js')).setOperator(db, [AUTH_SUBJECT, 'operator', '--reason', 'Synthetic Nightmail operator']);
       ok(await local('POST', `/v1/operator/campaigns/${c.id}/release`, { reason: 'Reviewed the list source with the customer' }));
       assert.equal((await view()).state, 'sending');
       assert.equal((await db.query(`SELECT count(*)::int AS n FROM hosted_operator_audit WHERE workspace_id=$1 AND action='operator-release-campaign'`, [wid])).rows[0].n, 1);
@@ -31214,7 +31578,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
-  test('AWS tenant status: an AWS or policy pause of a workspace tenant pauses the workspace; Bane\'s own switch and enables are timeline only', async t => {
+  test('AWS tenant status: an AWS or policy pause of a workspace tenant pauses the workspace; Nightmail\'s own switch and enables are timeline only', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
       const wid = runtime.config.workspaceId, pool = '111122223333', topicArn = `arn:aws:sns:${REGION}:${pool}:bane-feedback`;
       const { ingestFeedbackBatch } = await import('./src/operations.js');
@@ -31255,7 +31619,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal(await pause(), null); assert.equal((await db.query(`SELECT count(*)::int AS n FROM standing_events WHERE workspace_id=$1`, [wid])).rows[0].n, 0);
       liveStatus = 'DISABLED';
       assert.deepEqual(await ingestFeedbackBatch(runtime, [item('DISABLED', 'CUSTOMER_MANAGED', 'shaped non-manual reason')]), [{ ok: true }]);
-      assert.equal(await pause(), null, 'Bane\'s own switch is not an AWS pause.');
+      assert.equal(await pause(), null, 'Nightmail\'s own switch is not an AWS pause.');
       assert.deepEqual(await ingestFeedbackBatch(runtime, [item('DISABLED', 'AWS_SES', 'Trust and Safety review.')]), [{ ok: true }]);
       assert.match((await pause()).reason, /AWS paused this workspace’s SES tenant/);
       assert.deepEqual((await db.query(`SELECT payload FROM jobs WHERE workspace_id=$1 AND type='reputation.alert'`, [wid])).rows.map(r => [r.payload.code, r.payload.tenant, r.payload.exempt]), [['SES_TENANT_PAUSED', arn, false]], 'The operators are alerted.');
@@ -31498,6 +31862,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal(written(PUBLIC_ORIGIN, { kind: 'paused', workspace: 'www.evil.example' }).subject, 'Sending is paused for your workspace');
       assert.equal(written(PUBLIC_ORIGIN, { kind: 'domain_unverified', workspace: 'W', domain: { id: 'dom_1', name: 'Mail.Example\r\nBcc: x@y.example' } }).subject, 'A domain is no longer verified');
       assert.equal(written(PUBLIC_ORIGIN, { kind: 'domain_unverified', workspace: 'W', domain: { id: 'dom_1', name: 'Mail.Example' } }).subject, 'mail.example is no longer verified');
+      assert.equal(written(PUBLIC_ORIGIN, { kind: 'domain_released', workspace: 'W', domain: { name: 'Mail.Example' } }).subject, 'mail.example was released from W');
+      assert.equal(written(PUBLIC_ORIGIN, { kind: 'domain_released', workspace: 'W', domain: { name: 'Mail.Example\r\nBcc: x@y.example' } }).subject, 'A domain was released from W');
       // An address every workspace together has mailed five times in a day is not mailed a sixth.
       await db.query(`UPDATE api_request_budgets SET used=$1 WHERE workspace_id='global' AND key_id LIKE 'invitation-email:%'`, [INVITATION_EMAILS.addressDay]);
       const sixth = (await db.query(`SELECT id FROM workspace_invitations WHERE workspace_id=$1 AND email='named-0@elsewhere.example' AND status='pending'`, [wid])).rows[0].id;
@@ -31679,6 +32045,40 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
+  test('domain ownership: an absent proof has a grace period and is checked again before releasing the name', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { expireDomainClaims } = await import('./src/operations.js');
+      const name = 'renew.example', wid = runtime.config.workspaceId;
+      const { token } = (await db.query("INSERT INTO domain_claims(workspace_id,name,ever_proven,created_at) VALUES($1,$2,true,now()-interval '31 days') RETURNING token", [wid,name])).rows[0];
+      let response = 'absent';
+      // Replaced by hand and put back before the scenario ends: a second t.mock of fetch would leave the scenario's
+      // network guard in place for the tests after this one.
+      const networkGuard = globalThis.fetch;
+      globalThis.fetch = async (input: RequestInfo | URL) => {
+        const url = new URL(String(input)); assert.equal(url.hostname, 'cloudflare-dns.com');
+        return Response.json({Status: response === 'unavailable' ? 2 : 0, Answer: response === 'present' ? [{name:url.searchParams.get('name'), type:16, data:token}] : []});
+      };
+      try {
+        const sweep = () => expireDomainClaims(runtime, Date.now() + 5000);
+        const age = () => db.query("UPDATE domain_claims SET receiving_proof_missed_at=now()-interval '31 days' WHERE token=$1",[token]);
+        const blocks = async () => (await db.query("SELECT exclusive_domain_overlap('other',$1) AS held", ['child.'+name])).rows[0].held;
+        assert.equal(await sweep(), 0); assert.equal(await sweep(), 0); assert.equal(await blocks(), true);
+        await age(); response = 'unavailable'; assert.equal(await sweep(), 0); assert.equal(await blocks(), true);
+        response = 'present'; assert.equal(await sweep(), 0);
+        const missed = async () => (await db.query('SELECT receiving_proof_missed_at FROM domain_claims WHERE token=$1',[token])).rows[0].receiving_proof_missed_at;
+        assert.equal(await missed(), null);
+        // A proof seen in the last week is not looked at again; after a week a miss starts the grace period.
+        response = 'absent'; await db.query("UPDATE domain_claims SET receiving_proved_at=now()-interval '6 days' WHERE token=$1",[token]);
+        await sweep(); assert.equal(await missed(), null);
+        await db.query("UPDATE domain_claims SET receiving_proved_at=now()-interval '8 days' WHERE token=$1",[token]);
+        await sweep(); assert.notEqual(await missed(), null);
+        await age(); assert.equal(await sweep(), 1); assert.equal(await blocks(), false);
+        // Its owners and admins are told, once (the release is the claim's last moment).
+        assert.deepEqual((await db.query("SELECT data->>'name' AS name FROM account_notices WHERE workspace_id=$1 AND kind='domain_released'",[wid])).rows, [{name}]);
+      } finally { globalThis.fetch = networkGuard; }
+    });
+  });
+
   test('domain setup reminder: a domain still pending an hour after it was added has its DNS checked in the background (shown on reads), and with DOMAIN_SETUP_REMINDER on its owners are emailed once which records are missing and where its DNS is hosted; never twice, not for a domain that verified, not with the flag off', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
       const { wid, fresh } = await noticeFixture(runtime, db);
@@ -31787,7 +32187,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const networkGuard = globalThis.fetch;
       t.after(() => { globalThis.fetch = networkGuard; });
       globalThis.fetch = async (input: RequestInfo | URL, init?: RequestInit) => {
-        const url = new URL(String(input)); assert.equal(url.hostname, 'cloudflare-dns.com');
+        const url = new URL(String(input)); assert.ok(['cloudflare-dns.com', 'dns.google'].includes(url.hostname));
         const name = url.searchParams.get('name')!, type = url.searchParams.get('type')!, soa = (zone: string) => ({ name: `${zone}.`, type: 6, data: 'ns. hostmaster. 1 1 1 1 1' });
         if (type === 'NS') lookups.push(name);
         if (name.endsWith('broken.example')) return new Response('', { status: 500 });
@@ -32375,14 +32775,28 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // Signed as a whole: its own bytes go to SES as raw content.
       const signed = Buffer.from([...top('Signed'), 'Content-Type: multipart/signed; protocol="application/pgp-signature"; micalg=pgp-sha256; boundary=s', '', '--s', 'Content-Type: text/plain', '', 'Signed text.',
         '--s', 'Content-Type: application/pgp-signature; name="signature.asc"', '', '-----BEGIN PGP SIGNATURE-----', 'fixture', '-----END PGP SIGNATURE-----', '--s--', ''].join('\r\n'));
-      const sealed = await stream(signed, ['reader@example.net']);
+      const withBlind = Buffer.from(signed.toString().replace('Subject: Signed', 'Bcc: hidden@example.net\r\nSubject: Signed'));
+      const sealed = await stream(withBlind, ['reader@example.net', 'hidden@example.net']);
       assert.equal(sealed.status, 200, JSON.stringify(sealed.body));
       await run('email.dispatch');
       const input = (id: string) => sent.find(s => s.EmailTags.some((tag: Json) => tag.Name === 'bane_email_id' && tag.Value === id))!;
       assert.ok(Buffer.from(input(large.body.id).Content.Simple.Attachments[0].RawContent).equals(file), 'The file reaches SES byte for byte.');
+      assert.deepEqual(input(sealed.body.id).Destination.BccAddresses, ['hidden@example.net']);
       assert.equal(input(sealed.body.id).Content.Simple, undefined);
       assert.ok(Buffer.from(input(sealed.body.id).Content.Raw.Data).equals(signed), 'The signed message reaches SES as written.');
       for (const e of await emails('Many')) assert.ok(input(e.id), 'Both parts of the envelope are sent.');
+      // Outer fields as mail apps write them still go out as written: a quoted name with a comma, an encoded name folded
+      // before the address, a long Subject folded before a word and a colon, a field name with an underscore.
+      const written = [['From: "Relay, App" <app@relay.example>', 'Subject: Signed'], ['From: =?UTF-8?Q?Jos=C3=A9_App?=\r\n <app@relay.example>',
+        'Subject: Signed release notes for the quarterly review with the whole team and its\r\n agenda: budget\r\nmsip_labels: MSIP_Label_fixture_Enabled=true']]
+        .map(([fromLine, subjectLine]) => Buffer.from(signed.toString().replace('From: app@relay.example', fromLine!).replace('Subject: Signed', subjectLine!)));
+      const kept: string[] = [];
+      for (const raw of written) { const res = await stream(raw, ['reader@example.net']); assert.equal(res.status, 200, JSON.stringify(res.body)); kept.push(res.body.id); }
+      await run('email.dispatch');
+      written.forEach((raw, i) => assert.ok(Buffer.from(input(kept[i]!).Content.Raw.Data).equals(raw), 'The signed message reaches SES as written.'));
+      // A bare CR that hides a second From from the parser is refused.
+      const hidden = await stream(Buffer.from(signed.toString().replace('Subject: Signed', 'X-A: b\rFrom: ceo@victim.test\r\r\nSubject: Signed')), ['reader@example.net']);
+      assert.deepEqual([hidden.status, hidden.body.error?.code], [422, 'UNSUPPORTED_MESSAGE']);
       // On Hosted, a sender still on probation can't send it as written.
       runtime.config.multiTenant = true;
       try {
@@ -34790,11 +35204,18 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const { nodeRuntime } = await import('./src/adapters/node.js');
       const { jobHandlers } = await import('./src/sending.js');
       const { processJobs } = await import('./src/jobs.js');
-      const { runtime, close } = nodeRuntime({ ...process.env, DATABASE_URL: FIXTURE_DATABASE_URL });
+      // The background worker uses separate connections for capture and its progress write.
+      // Give all of them the same private queue, containing only this campaign's real job.
+      const schema = 'capture_queue_' + randomUUID().replaceAll('-', ''), url = new URL(FIXTURE_DATABASE_URL!);
+      await g.query(`CREATE SCHEMA ${schema}; CREATE TABLE ${schema}.jobs (LIKE public.jobs INCLUDING ALL); CREATE TABLE ${schema}.job_schedule (LIKE public.job_schedule INCLUDING ALL)`);
+      url.searchParams.set('options', `-c search_path=${schema},public`);
+      const { runtime, close } = nodeRuntime({ ...process.env, DATABASE_URL: url.href });
       try {
         Object.assign(runtime.config, { multiTenant: false, liveEnabled: false });
         const { rows: [cRow] } = await g.query('SELECT workspace_id, review_id FROM sending_campaigns WHERE id=$1', [c.id]);
-        await g.query("UPDATE jobs SET available_at = clock_timestamp() WHERE workspace_id=$1 AND id=$2", [cRow.workspace_id, 'campaign.run:' + c.id]);
+        const jobId = 'campaign.run:' + c.id;
+        assert.equal((await g.query(`INSERT INTO ${schema}.jobs SELECT * FROM public.jobs WHERE workspace_id=$1 AND id=$2 AND status='pending'`, [cRow.workspace_id, jobId])).rowCount, 1);
+        await g.query(`UPDATE ${schema}.jobs SET available_at = clock_timestamp() WHERE id=$1`, [jobId]);
         await stale();
         await processJobs(runtime, jobHandlers, 2, 1, 15_000);
         const capMs = Date.now() - capStart;
@@ -34806,7 +35227,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         assert.equal(after.total, Math.floor(members/every));
         assert.equal(after.prepared, Math.floor(members/every));
         assert.ok(capMs < 10_000, `Deferred ${name} capture took ${capMs} ms.`);
-      } finally { await close(); }
+      } finally { await close(); await g.query(`DROP SCHEMA ${schema} CASCADE`); }
     }
   });
 
@@ -37368,7 +37789,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         // Confirmed and routed, then stopped by its recipient: the route keeps it, so other changes still save, and nothing reaches them.
         const hookId=await confirmedForward('stopped','stopped@example.net');
         await route('stopped@receive.example',['forward:stopped'],'stopped');
-        assert.equal((await rawFetch(new Request(await forwardStopUrl(runtime,hookId),{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded',origin:PUBLIC_ORIGIN},body:'choice=decline'}))).status,200);
+        assert.equal((await rawFetch(new Request(await forwardStopUrl(runtime,hookId,PUBLIC_ORIGIN),{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded',origin:PUBLIC_ORIGIN},body:'choice=decline'}))).status,200);
         assert.equal((await call('GET','/v1/endpoints/stopped')).status,'declined');
         assert.equal((await call('PATCH','/v1/routing/routes/stopped',{note:'kept'})).note,'kept');
         error(await local('POST','/v1/routing/routes',{match:'stopped-again@receive.example',to:['forward:stopped']}),422,'FORWARD_NOT_CONFIRMED');
@@ -37984,7 +38405,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const prefix='arn:aws:sns:us-east-2:111122223333:',queue='bane-inbound-dead-letters',pager=prefix+'oncall';
     assert.deepEqual(receivingAlarm('111122223333',queue,pager),{name:queue,namespace:'AWS/SQS',metricName:'ApproximateNumberOfMessagesVisible',dimensions:{QueueName:queue},statistic:'Maximum',period:60,evaluationPeriods:1,comparisonOperator:'GreaterThanThreshold',threshold:0,treatMissingData:'notBreaching',alarmActions:[pager]});
     for(const bad of [prefix+'bane-inbound',pager.replace('us-east-2','us-east-1'),pager.replace('111122223333','444455556666')])assert.throws(()=>receivingAlarm('111122223333',queue,bad));
-    // SES feedback dead letters (Mythos 5.1 N-M3): Virginia's alarm pages a Virginia topic, never a Bane feedback topic.
+    // SES feedback dead letters (Mythos 5.1 N-M3): Virginia's alarm pages a Virginia topic, never a Nightmail feedback topic.
     const {deadLetterAlarm}=await import(new URL('../infra/pulumi/receiving-alarm.ts',import.meta.url).href),va='arn:aws:sns:us-east-1:111122223333:';
     assert.deepEqual(deadLetterAlarm('111122223333','us-east-1','bane-trusted-feedback-dead-letters','q',va+'oncall').alarmActions,[va+'oncall']);
     for(const bad of [pager,va+'bane-trusted-feedback',prefix+'bane-feedback'])assert.throws(()=>deadLetterAlarm('111122223333',bad===prefix+'bane-feedback'?'us-east-2':'us-east-1','x','q',bad));
@@ -38224,7 +38645,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       } finally { runtime.webhookFetch = transport; }
       const replyPath = `${base}/threads/${detail.threadId}/reply`, idem = { ...agent, 'Idempotency-Key': 'answer-selected' };
       error(await post(replyPath,{ addressId:box.id,replyToMessageId:selected.id,text:'unauthorized',from:'sales@example.com' },agent),403,'FROM_NOT_ALLOWED');
-      // Headers are denylisted, not X- only: structural headers Bane/SES own are refused, everything else passes through.
+      // Headers are denylisted, not X- only: structural headers Nightmail/SES own are refused, everything else passes through.
       for (const name of ['X-SeS-CONFIGURATION-SET','From','content-type','In-Reply-To','List-Unsubscribe','Auto-Submitted','Resent-From','ARC-Seal','Authentication-Results','DomainKey-Signature','Feedback-ID']) error(await post(replyPath,{ addressId:box.id,replyToMessageId:selected.id,text:'no provider overrides',headers:[{name,value:'override'}] },agent),422);
       error(await post(replyPath,{ addressId:box.id,replyToMessageId:selected.id,text:'no injection',headers:[{name:'Precedence',value:'bulk\r\nBcc: victim@example.net'}] },agent),422);
       const reply = await (await queryBudget(t,db))('inbound-reply',async()=>ok(await post(replyPath,{ addressId:box.id,replyToMessageId:selected.id,text:'Answering the second one',replyAll:true,headers:[{name:'Precedence',value:'bulk'},{name:'X-Ticket',value:'42'}] },idem),202));
@@ -38312,7 +38733,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const received = (await announced()).filter(payload => payload.messageId === passed[0].id);
       assert.equal(received.length,1); assert.equal(received[0].data.dmarc,'PASS'); assert.equal((await announced()).length,before + 1);
       // Custom headers: reserved names and malformed Message-IDs are refused, replies keep their own threading,
-      // and a new conversation can cite a thread Bane never received.
+      // and a new conversation can cite a thread Nightmail never received.
       const plain = { from:publicAddress,to:'customer@example.net',subject:'Headers',text:'Header check' };
       error(await post('/v1/emails/send',{ ...plain,headers:[{name:'from',value:'ceo@example.com'}] }),422);
       error(await post('/v1/emails/send',{ ...plain,headers:[{name:'X-SES-Configuration-Set',value:'other'}] }),422);
@@ -39800,7 +40221,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const settings = (extra: Json) => loadConfig({ PUBLIC_URL: 'https://alerts.example', BANE_ROOT_SECRET: 'local-fixture-'.repeat(4), MULTI_TENANT: 'true', ACCOUNT_REQUIRED_ACR: 'urn:anomaly:acr:google', ...extra });
       assert.deepEqual([settings({}).operatorSlackWebhookUrl, settings({ OPERATOR_SLACK_WEBHOOK_URL: OPERATOR_HOOK }).operatorSlackWebhookUrl,
         loadConfig({ PUBLIC_URL: 'https://alerts.example', BANE_ROOT_SECRET: 'local-fixture-'.repeat(4), OPERATOR_SLACK_WEBHOOK_URL: OPERATOR_HOOK }).operatorSlackWebhookUrl], [undefined, OPERATOR_HOOK, undefined]);
-      assert.throws(() => settings({ OPERATOR_SLACK_WEBHOOK_URL: 'https://example.com/hook' }), { code: 'CONFIG_INVALID' });
+      assert.equal(settings({ OPERATOR_SLACK_WEBHOOK_URL: 'https://example.com/hook' }).operatorSlackWebhookUrl, undefined);
       assert.equal(/OPERATOR_SLACK_WEBHOOK_URL/.test(await readFile(new URL('./wrangler.prod.jsonc', import.meta.url), 'utf8')), false);
 
       const f = await hostedHoldFixture(runtime, db), wid = f.wid;
@@ -40424,7 +40845,10 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
       const tag = unique('r').slice(-8), slowRoute = `GET /v1/fixture-${tag}/:id`, failing = `POST /v1/fixture-${tag}`, workspace = `ws_${tag}`, code = `FIXTURE_${tag.toUpperCase()}_FAILED`;
-      counters.resetCounters();
+      // Health lists only the eight busiest-by-latency non-alerting routes. Don't let an unrelated
+      // API process's samples displace our 3 ms route. Exercise both the minute and hour rollups.
+      await db.query('CREATE TEMP TABLE health_minutes (LIKE public.health_minutes INCLUDING ALL) ON COMMIT DROP; CREATE TEMP TABLE health_hours (LIKE public.health_hours INCLUDING ALL) ON COMMIT DROP');
+      counters.resetCounters(); t.after(counters.resetCounters);
       const errorLines = t.mock.method(console, 'error', () => {});
       const batch = () => {
         for (let i = 0; i < 38; i++) counters.countRequest({ route: `/v1/fixture-${tag}/:id`, method: 'GET', status: 200, durationMs: 20, workspace });
@@ -40711,6 +41135,322 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
+  test('link hosts: campaign, test and marketing mail link on the sending domain\'s verified links.<domain>, refuse on Hosted without it, never name this installation',async t=>{
+    await simulatedSesFixture(t,async({runtime,db,local,run,fetch:page})=>{
+      const {SESv2Client,SendEmailCommand,GetEmailIdentityCommand}=await import('@aws-sdk/client-sesv2'),send=SESv2Client.prototype.send,delivered:Json[]=[];
+      runtime.config.linkHosts={zoneId:'0'.repeat(32),token:'acceptance-fixture-cloudflare-token',target:'edge.links-fixture.example'};
+      const {linkOrigin}=await import('./src/link-domains.js'),{linkHostRequest}=await import('./src/link-hosts.js'),target=runtime.config.linkHosts.target,wid=runtime.config.workspaceId;
+      // The domain's SES identity, verified and signing, for its check; every send is captured as SES gets it, then simulated.
+      t.mock.method(SESv2Client.prototype,'send',function(this:any,cmd:any,...rest:any[]){
+        if(cmd instanceof GetEmailIdentityCommand)return Promise.resolve({VerificationStatus:'SUCCESS',VerifiedForSendingStatus:true,DkimAttributes:{Status:'SUCCESS',SigningEnabled:true,SigningAttributesOrigin:'AWS_SES',SigningHostedZone:'dkim.amazonses.com',Tokens:['t1','t2','t3']}});
+        if(cmd instanceof SendEmailCommand)delivered.push(cmd.input);
+        return (send as any).call(this,cmd,...rest);
+      });
+      // Public DNS has links.example.com as a CNAME to the target once `published`; Cloudflare's custom hostnames API serves it once `served`.
+      // Assigned, not mocked: a second mock of the fixture's own fetch mock would put the fixture's back when both are restored.
+      const prior=globalThis.fetch,cloudflare:{method:string;path:string;body?:Json;auth:string|null}[]=[];let published=false,served=false;
+      globalThis.fetch=(async(input:RequestInfo|URL,init?:RequestInit)=>{
+        const url=new URL(input instanceof Request?input.url:String(input));
+        if(url.hostname==='cloudflare-dns.com'){
+          const answer=published&&url.searchParams.get('name')==='links.example.com'&&url.searchParams.get('type')==='CNAME'?[{name:'links.example.com.',type:5,data:`${target}.`}]:[];
+          return Response.json({Status:answer.length?0:3,Answer:answer});
+        }
+        if(url.hostname==='api.cloudflare.com'){
+          cloudflare.push({method:init?.method??'GET',path:url.pathname+url.search,...init?.body?{body:JSON.parse(String(init.body))}:{},auth:new Headers(init?.headers).get('authorization')});
+          return Response.json({success:true,errors:[],result:{id:'ch_fixture',hostname:'links.example.com',status:served?'active':'pending',ssl:{status:served?'active':'pending_validation'}}});
+        }
+        return prior(input,init);
+      }) as typeof fetch;
+      try {
+      const list=ok(await local('POST','/v1/lists',{name:unique('link-hosts')}),201),contact=ok(await local('POST','/v1/contacts',{email:address()}),201);
+      ok(await local('POST',`/v1/contacts/${contact.id}/consent`,{status:'subscribed',source:'fixture',policyVersion:'v1',evidence:'Synthetic fixture.',occurredAt:new Date().toISOString()}));
+      ok(await local('POST',`/v1/lists/${list.id}/members`,{contactIds:[contact.id]}));
+      const draft=()=>local('POST','/v1/campaigns',{name:unique('link-hosts'),from:'news@example.com',subject:'Links',html:'<p>Read <a href="https://example.com/read">this</a>.</p>',audience:{listId:list.id}});
+      const marketing={from:'news@example.com',to:contact.email,subject:'Links',html:'<p>Hello</p>',text:'Hello',kind:'marketing'};
+      // Each kind of mail as SES got it: the host of its unsubscribe link, from the footer (a test is transactional, without
+      // List-Unsubscribe), the header matching it, and nothing in its content, headers included, naming nightmail.dev.
+      const hosts=async()=>{
+        const before=delivered.length,c=ok(await draft(),201);
+        ok(await local('POST',`/v1/campaigns/${c.id}/send`,{revision:c.revision}),202);await run('campaign.run');
+        ok(await local('POST',`/v1/campaigns/${c.id}/test`,{to:'tester@example.net'}),202);
+        ok(await local('POST','/v1/emails/send',marketing),202);
+        await run('email.dispatch');
+        const mail=delivered.slice(before);assert.equal(mail.length,3);
+        return mail.map(input=>{
+          const content=input.Content.Simple,all=JSON.stringify(input.Content);
+          assert.ok(!all.includes('nightmail.dev'),all);
+          const header=content.Headers?.find((h:Json)=>h.Name==='List-Unsubscribe')?.Value as string|undefined;
+          const footer=/https?:\/\/([^/\s"]+)\/unsubscribe\/u_[0-9a-f]{64}/.exec(content.Body.Text.Data)!;
+          assert.ok(footer&&content.Body.Html.Data.includes(footer[0]),'The footer links the same host in both parts.');
+          if(header){assert.equal(header,`<${footer[0]}>`);assert.ok(content.Headers.some((h:Json)=>h.Name==='List-Unsubscribe-Post'));}
+          return footer[1];
+        });
+      };
+      const own=new URL(PUBLIC_ORIGIN).host;
+      // Hosted, and the sending domain has no link host: campaign tests and marketing mail are refused, naming the record, and
+      // so is a launch's link (a launch asks once the sender's own checks pass: this fixture's sender isn't verified on Hosted).
+      const refused=ok(await draft(),201),message=`Campaign and marketing mail from example.com needs the domain's link record, which carries its unsubscribe link: add a CNAME at links.example.com pointing to ${target}, then check the domain.`;
+      runtime.config.multiTenant=true;
+      for(const reply of [await local('POST',`/v1/campaigns/${refused.id}/test`,{to:'success@simulator.amazonses.com'}),await local('POST','/v1/emails/send',marketing)])
+        assert.equal(error(reply,409,'LINK_RECORD_REQUIRED').message,message);
+      await assert.rejects(linkOrigin(runtime,runtime.db,wid,'news@example.com'),{code:'LINK_RECORD_REQUIRED',message});
+      assert.equal(delivered.length,0);
+      // Self-hosted, it links on its own origin, the operator's domain.
+      runtime.config.multiTenant=false;
+      assert.deepEqual(await hosts(),[own,own,own]);
+      // The domain's link record, after its sending records: missing, then found while Cloudflare issues the certificate.
+      const domainId=unique('dom');await db.query('INSERT INTO operation_domains(id,workspace_id,name,region) VALUES($1,$2,$3,$4)',[domainId,wid,'example.com',REGION]);
+      // Self-hosted domain reads ask SES (mocked above); mail stays simulated.
+      const live=async(method:string,path:string)=>{Object.assign(runtime.config,{liveEnabled:true,aws:{accessKeyId:'synthetic-fixture',secretAccessKey:'synthetic-fixture'}});
+        try{return ok(await local(method,path));}finally{runtime.config.liveEnabled=false;}};
+      const record=async(method='POST')=>{const dns=(await live(method,`/v1/domains/${domainId}${method==='POST'?'/verify':''}`)).dns as Json[],at=dns.findIndex(r=>r.purpose==='links');
+        assert.equal(at,dns.findLastIndex(r=>r.purpose==='sending')+1,'The link record follows the sending records.');return dns[at];};
+      const missing=await record();
+      assert.deepEqual([missing.name,missing.type,missing.value,missing.status,missing.publicDns.state],['links.example.com','CNAME',target,'pending','missing']);
+      assert.equal(cloudflare.length,0,'No custom hostname before the CNAME resolves.');
+      published=true;
+      // Hosted: a claim not yet proven gets no custom hostname, CNAME or not (anyone can add a domain, and a wildcard CNAME
+      // answers for any name under one): this fixture's domain has no proven claim.
+      {const {checkLinkHost}=await import('./src/link-domains.js'),hosted=runtime.config.multiTenant;runtime.config.multiTenant=true;
+        try{await checkLinkHost(runtime,wid,'example.com');}finally{runtime.config.multiTenant=hosted;}
+        assert.equal(cloudflare.length,0,'No custom hostname for an unproven Hosted claim.');
+        assert.deepEqual((await db.query('SELECT status,custom_hostname_id,detail FROM link_hosts WHERE workspace_id=$1 AND domain=$2',[wid,'example.com'])).rows[0],{status:'pending',custom_hostname_id:null,detail:'The CNAME is in place. The link host is set up once the domain verifies.'});}
+      const found=await record();
+      assert.deepEqual([found.status,found.publicDns.state],['pending','found']);assert.match(found.note,/certificate is being issued/);
+      assert.deepEqual(cloudflare,[{method:'POST',path:`/client/v4/zones/${runtime.config.linkHosts!.zoneId}/custom_hostnames`,body:{hostname:'links.example.com',ssl:{method:'http',type:'dv',settings:{min_tls_version:'1.2'}}},auth:`Bearer ${runtime.config.linkHosts!.token}`}]);
+      assert.deepEqual(await hosts(),[own,own,own],'Not served yet: still the installation\'s own origin.');
+      served=true;
+      assert.equal((await record()).status,'verified');
+      assert.deepEqual(cloudflare.slice(1).map(call=>[call.method,call.path]),[['GET',`/client/v4/zones/${runtime.config.linkHosts!.zoneId}/custom_hostnames/ch_fixture`]]);
+      assert.equal((await record('GET')).status,'verified');
+      // The domain's own link host, for the campaign, its test and marketing mail, and on Hosted too, for its subdomains as well.
+      assert.deepEqual(await hosts(),['links.example.com','links.example.com','links.example.com']);
+      runtime.config.multiTenant=true;
+      for(const from of ['news@example.com','news@mail.example.com'])assert.equal(await linkOrigin(runtime,runtime.db,wid,from),'https://links.example.com');
+      runtime.config.multiTenant=false;
+      // On the customer's host the unsubscribe page and its one-click POST answer themselves: no redirect, no URL of this installation.
+      const unsubscribe=delivered.slice(-3).flatMap(input=>input.Content.Simple.Headers?.filter((h:Json)=>h.Name==='List-Unsubscribe')??[])[0].Value.slice(1,-1);
+      const shown=await page(new Request(unsubscribe,{headers:{accept:'text/html'}})),html=await shown.text();
+      assert.equal(shown.status,200);assert.match(html,/Unsubscribe from marketing emails\?/);assert.ok(!/https?:\/\//.test(html),html);
+      const oneClick=await page(new Request(unsubscribe,{method:'POST',headers:{'content-type':'application/x-www-form-urlencoded'},body:'List-Unsubscribe=One-Click'}));
+      assert.equal(oneClick.status,200);assert.equal(oneClick.headers.get('location'),null);assert.ok(!/https?:\/\//.test(await oneClick.text()));
+      // links.example.com serves only its own workspace's links: another workspace's valid token is unknown there.
+      const foreign=`u_${'f'.repeat(64)}`;
+      await db.query("INSERT INTO operation_unsubscribe_tokens(token_hash,workspace_id,email) VALUES (encode(sha256(convert_to($1,'UTF8')),'hex'),'ws_link_foreign','someone@example.net')",[foreign]);
+      assert.equal((await page(new Request(`https://links.example.com/unsubscribe/${foreign}`,{headers:{accept:'text/html'}}))).status,404);
+      // The Worker's rule for a link host: its links, and nothing else; this installation's own hosts are untouched.
+      for(const [host,path,answer] of [['links.example.com','/unsubscribe/u_x','link'],['links.example.com','/v1/forwarding/stop/x','link'],['links.example.com','/i/x.png','link'],
+        ['links.example.com','/','missing'],['links.example.com','/overview','missing'],['links.example.com','/v1/campaigns','missing'],['links.example.com','/unsubscribe/u_x/y','missing'],['nightmail.dev','/overview','other'],['dev.nightmail.dev','/overview','pass'],['media.nightmail.dev','/a.png','pass'],
+        ['links.example.com','/.well-known/acme-challenge/token','pass'],['links.example.com','/.well-known/pki-validation/fileauth.txt','pass'],['links.example.com','/.well-known/other','missing']] as const)
+        assert.equal(linkHostRequest(true,host,path,['nightmail.dev']),answer,`${host}${path}`);
+      assert.equal(linkHostRequest(false,'links.example.com','/overview',['nightmail.dev']),'other');
+      } finally { globalThis.fetch=prior; }
+    });
+  });
+
+  test('link hosts: a campaign launched before link hosts waits for its link record and resumes once it verifies; gone domains\' hosts answer their links for 30 days, then go',async t=>{
+    await simulatedSesFixture(t,async({runtime,db,local,run,fetch:page})=>{
+      const wid=runtime.config.workspaceId,pool='111122223333',domain='legacy-links.example',from=`news@${domain}`,zone='0'.repeat(32);
+      Object.assign(runtime.config,{multiTenant:true,liveEnabled:true,aws:{accessKeyId:'fixture-platform',secretAccessKey:'fixture-only'},linkHosts:{zoneId:zone,token:'acceptance-fixture-cloudflare-token',target:'edge.links-fixture.example'}});
+      await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture')`,[REGION,pool,`arn:aws:sns:${REGION}:${pool}:bane-feedback`]);
+      await db.query(`INSERT INTO provider_connections(id,workspace_id,region,state,kind,aws_account_id,tenant_state) VALUES ($1,$1,$2,'ready','shared',$3,'ready')`,[wid,REGION,pool]);
+      await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES ($1,$2,$2,'verified')`,[domain,wid]);
+      await db.query('INSERT INTO operation_domains(id,workspace_id,name,region) VALUES($1,$2,$3,$4)',[unique('dom'),wid,domain,REGION]);
+      await db.query("INSERT INTO link_hosts(workspace_id,domain,hostname,status) VALUES ($1,$2,'links.'||$2,'active')",[wid,domain]);
+      await gradedSender(db,wid,10000);
+      const list=ok(await local('POST','/v1/lists',{name:unique('legacy-links')}),201);
+      await db.query(`WITH c AS (INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent) SELECT 'con_'||md5($1||n),$1,'legacy-'||n||'@example.net','subscribed' FROM generate_series(1,3)n RETURNING id)
+        INSERT INTO audience_list_members(workspace_id,list_id,contact_id) SELECT $1,$2,id FROM c`,[wid,list.id]);
+      // Launched with its link host active, then frozen as a review from before link hosts is: no
+      // link origin, and the sending domain's link host not active.
+      const c=ok(await local('POST','/v1/campaigns',{name:'Legacy links',from,subject:'Legacy',html:'<p>Fixture.</p>',audience:{listId:list.id}}),201),path=`/v1/campaigns/${c.id}`;
+      ok(await local('POST',`${path}/send`,{revision:c.revision}),202);
+      await db.query("UPDATE sending_campaign_reviews SET draft=draft-'linkOrigin' WHERE campaign_id=$1",[c.id]);
+      await db.query("UPDATE link_hosts SET status='pending' WHERE workspace_id=$1 AND domain=$2",[wid,domain]);
+      const view=async()=>ok(await local('GET',path)),job=async()=>(await db.query('SELECT available_at FROM jobs WHERE id=$1',[`campaign.run:${c.id}`])).rows[0];
+      await run('campaign.run');
+      const held=await view();
+      assert.deepEqual([held.state,held.delivery.expanded,held.delivery.waiting.reason],['sending',0,'link_record'],'It waits, releasing no one, instead of failing.');
+      assert.ok(Math.abs(Date.parse(held.delivery.waiting.until)-Date.now()-15*60_000)<60_000);
+      assert.equal((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE campaign_id=$1',[c.id])).rows[0].n,0);
+      assert.ok(Date.parse((await job()).available_at)>Date.now()+14*60_000);
+      // The link record verifies (public DNS has the CNAME, Cloudflare serves the custom hostname): the run wakes at once.
+      const prior=globalThis.fetch,deleted:string[]=[],posted:string[]=[];
+      globalThis.fetch=(async(input:RequestInfo|URL,init?:RequestInit)=>{
+        const url=new URL(input instanceof Request?input.url:String(input));
+        if(url.hostname==='cloudflare-dns.com'){const name=url.searchParams.get('name')!;return Response.json({Status:0,Answer:[{name:`${name}.`,type:5,data:'edge.links-fixture.example.'}]});}
+        if(url.hostname==='api.cloudflare.com'){
+          const id=url.pathname.split('/').at(-1)!,body=init?.body?JSON.parse(String(init.body)):null;
+          if(init?.method==='DELETE'){deleted.push(id);return Response.json({success:true,errors:[],result:{id}});}
+          if(init?.method==='POST')posted.push(body.hostname);
+          // Another installation on the zone made links.taken.example (ch_taken, recorded by no row here).
+          if(init?.method==='POST'&&body?.hostname==='links.taken.example')return Response.json({success:false,errors:[{code:1406}],result:null},{status:409});
+          if(url.searchParams.get('hostname')==='links.taken.example')return Response.json({success:true,errors:[],result:[{id:'ch_taken',status:'active',ssl:{status:'active'}}]});
+          // The zone's quota is used up.
+          if(init?.method==='POST'&&/^links\.full\d?\.example$/.test(body?.hostname))return Response.json({success:false,errors:[{code:1405,message:'Quota exceeded.'}],result:null},{status:403});
+          const known=id==='custom_hostnames'?'ch_legacy':id;
+          return Response.json({success:true,errors:[],result:{id:known,status:'active',ssl:{status:'active'}}});
+        }
+        return prior(input,init);
+      }) as typeof fetch;
+      try {
+        const {checkLinkHost}=await import('./src/link-domains.js');
+        await checkLinkHost(runtime,wid,domain);
+        assert.ok(Date.parse((await job()).available_at)<=Date.now(),'The campaign run is due now.');
+        await run('campaign.run');
+        const resumed=await view();
+        assert.deepEqual([resumed.delivery.expanded,resumed.delivery.waiting],[3,null]);
+        // Gone domains (deleted, released, detached, or their workspace deleted): no operation_domains row. A host that served
+        // mail retires: for LINK_RETENTION_DAYS it keeps its row and custom hostname and still answers its workspace's links, so
+        // opt-outs from mail already sent keep working. One that never became active goes at once. After the retention the
+        // retired ones go, with their custom hostnames, unless another live or retained row still uses the hostname.
+        await db.query(`INSERT INTO link_hosts(workspace_id,domain,hostname,custom_hostname_id,status) VALUES ($1,'gone.example','links.gone.example','ch_gone','active'),
+          ($1,'never.example','links.never.example','ch_never','pending'),
+          ('ws_link_gone_a','shared.example','links.shared.example','ch_shared','active'),('ws_link_gone_b','shared.example','links.shared.example','ch_shared','active')`,[wid]);
+        await db.query("INSERT INTO operation_domains(id,workspace_id,name,region) VALUES($1,'ws_link_gone_b','shared.example',$2)",[unique('dom'),REGION]);
+        const {domainLinkCleanupJob}=await import('./src/domain-setup.js'),{servesWorkspace,forgetLinkHost}=await import('./src/link-domains.js');
+        const cleanup=()=>domainLinkCleanupJob(runtime,{},{id:'domain.linkCleanup',attempts:1,workspaceId:wid});
+        const hosts=async()=>(await db.query("SELECT workspace_id,domain,status FROM link_hosts WHERE domain IN ($1,'gone.example','never.example','deleted.example','shared.example') ORDER BY workspace_id,domain",[domain])).rows.map(r=>`${r.workspace_id}/${r.domain}/${r.status}`);
+        await cleanup();
+        assert.deepEqual(await hosts(),[`${wid}/${domain}/active`,`${wid}/gone.example/retired`,'ws_link_gone_a/shared.example/retired','ws_link_gone_b/shared.example/active'].sort());
+        assert.deepEqual(deleted,['ch_never'],'Only the host that never served mail goes now.');
+        // A domain deleted through the API (forgetLinkHost) retires its active host the same way, its custom hostname kept.
+        await db.query("INSERT INTO link_hosts(workspace_id,domain,hostname,custom_hostname_id,status) VALUES ($1,'deleted.example','links.deleted.example','ch_deleted','active')",[wid]);
+        await forgetLinkHost(runtime,wid,'deleted.example');
+        assert.deepEqual(deleted,['ch_never']);
+        // A retired host still answers its workspace's unsubscribe links (forwarding's pages ask the same), never another's.
+        const kept=`u_${'d'.repeat(64)}`;
+        await db.query("INSERT INTO operation_unsubscribe_tokens(token_hash,workspace_id,email) VALUES (encode(sha256(convert_to($1,'UTF8')),'hex'),$2,'kept@example.net')",[kept,wid]);
+        for(const host of ['links.gone.example','links.deleted.example'])assert.equal((await page(new Request(`https://${host}/unsubscribe/${kept}`,{headers:{accept:'text/html'}}))).status,200,host);
+        assert.equal(await servesWorkspace(runtime,'https://links.gone.example/v1/forwarding/stop/x','ws_link_other'),false);
+        // The retention over: the retired hosts go with their custom hostnames, but ch_shared, which ws_link_gone_b's live row
+        // uses, stays; their links answer 404.
+        await db.query("UPDATE link_hosts SET retired_at=now()-make_interval(days=>31) WHERE status='retired'");
+        await cleanup();
+        assert.deepEqual(await hosts(),[`${wid}/${domain}/active`,'ws_link_gone_b/shared.example/active'].sort());
+        assert.deepEqual([...deleted].sort(),['ch_deleted','ch_gone','ch_never']);
+        assert.equal((await page(new Request(`https://links.gone.example/unsubscribe/${kept}`,{headers:{accept:'text/html'}}))).status,404);
+        const domainOf=async(name:string)=>{
+          await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES ($1,$2,$2,'verified')`,[name,wid]);
+          await db.query("INSERT INTO operation_domains(id,workspace_id,name,region) VALUES($1,$2,$3,$4)",[unique('dom'),wid,name,REGION]);
+          await db.query("DELETE FROM link_hosts WHERE workspace_id=$1 AND domain=$2",[wid,name]);
+          await checkLinkHost(runtime,wid,name);
+          return (await db.query("SELECT status,custom_hostname_id,detail,quota_full_at FROM link_hosts WHERE workspace_id=$1 AND domain=$2",[wid,name])).rows[0];
+        };
+        // A hostname no row here recorded (another installation on the zone made it) is never adopted: the link host stays pending, saying so.
+        const taken=await domainOf('taken.example');
+        assert.deepEqual([taken.status,taken.custom_hostname_id],['pending',null]);assert.match(taken.detail,/another installation/);
+        // The zone's quota is used up (1405): the host waits, saying so, and for an hour no check asks Cloudflare again, this
+        // domain's or another's.
+        posted.length=0;
+        const full=await domainOf('full.example');
+        assert.deepEqual([full.status,full.custom_hostname_id],['pending',null]);assert.match(full.detail,/at capacity/);assert.ok(full.quota_full_at);
+        await checkLinkHost(runtime,wid,'full.example');
+        const other=await domainOf('full2.example');
+        assert.match(other.detail,/at capacity/);assert.equal(other.quota_full_at,null);
+        assert.deepEqual(posted,['links.full.example'],'One request to Cloudflare, then none during the backoff.');
+        await db.query("UPDATE link_hosts SET quota_full_at=now()-interval '61 minutes' WHERE quota_full_at IS NOT NULL");
+        await checkLinkHost(runtime,wid,'full2.example');
+        assert.deepEqual(posted,['links.full.example','links.full2.example'],'After the hour, the next check asks again.');
+      } finally { globalThis.fetch=prior; await db.query('UPDATE link_hosts SET quota_full_at=NULL WHERE quota_full_at IS NOT NULL'); }
+    });
+  });
+
+  test('link domain: campaign and marketing copies link on the link domain, following the workspace\'s own limits; a pause takes it off at once, and an own link host (when on) takes over',async t=>{
+    await simulatedSesFixture(t,async({runtime,db,local,run,fetch:page})=>{
+      // Hosted's SES, live: the account's quota, and every send captured as SES gets it.
+      const {SESv2Client,SendEmailCommand,GetAccountCommand}=await import('@aws-sdk/client-sesv2'),send=SESv2Client.prototype.send,delivered:Json[]=[];let sent=0;
+      t.mock.method(SESv2Client.prototype,'send',function(this:any,cmd:any,...rest:any[]){
+        if(cmd instanceof GetAccountCommand)return Promise.resolve({SendingEnabled:true,SendQuota:{MaxSendRate:100,Max24HourSend:100000,SentLast24Hours:0}});
+        if(cmd instanceof SendEmailCommand){delivered.push(cmd.input);return Promise.resolve({MessageId:`fixture-link-domain-${++sent}`});}
+        return (send as any).call(this,cmd,...rest);
+      });
+      const {linkChoice,withLinkRecords,foundLinkOrigin}=await import('./src/link-domains.js'),{readActivity}=await import('./src/glass.js');
+      const wid=runtime.config.workspaceId,pool='111122223333',domain='link-domain.example',from=`news@${domain}`,shared='links.link-fixture.example';
+      const saas={zoneId:'0'.repeat(32),token:'acceptance-fixture-cloudflare-token',target:'edge.links-fixture.example'};
+      // As production: the link domain on, own link hosts off.
+      Object.assign(runtime.config,{multiTenant:true,liveEnabled:true,aws:{accessKeyId:'fixture-platform',secretAccessKey:'fixture-only'},linkHost:shared,linkHosts:undefined});
+      await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture')`,[REGION,pool,`arn:aws:sns:${REGION}:${pool}:bane-feedback`]);
+      await db.query(`INSERT INTO provider_connections(id,workspace_id,region,state,kind,aws_account_id,tenant_state) VALUES ($1,$1,$2,'ready','shared',$3,'ready')`,[wid,REGION,pool]);
+      await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES ($1,$2,$2,'verified')`,[domain,wid]);
+      await db.query('INSERT INTO operation_domains(id,workspace_id,name,region) VALUES($1,$2,$3,$4)',[unique('dom'),wid,domain,REGION]);
+      await gradedSender(db,wid,10000);
+      const list=ok(await local('POST','/v1/lists',{name:unique('link-domain')}),201);
+      await db.query(`WITH c AS (INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent) SELECT 'con_'||md5($1||n),$1,'link-domain-'||n||'@example.net','subscribed' FROM generate_series(1,3)n RETURNING id)
+        INSERT INTO audience_list_members(workspace_id,list_id,contact_id) SELECT $1,$2,id FROM c`,[wid,list.id]);
+      const used=async()=>Number((await db.query('SELECT coalesce(sum(recipients),0)::int AS n FROM link_fallback_days WHERE workspace_id=$1 AND host=$2',[wid,shared])).rows[0].n);
+      // Each message as SES got it: the host of its footer's unsubscribe link, which List-Unsubscribe matches, and nothing naming this installation.
+      const hostsOf=(mail:Json[])=>mail.map(input=>{
+        const content=input.Content.Simple,all=JSON.stringify(input.Content),own=new URL(PUBLIC_ORIGIN).host;
+        assert.ok(!all.includes(own)&&!all.includes('nightmail.dev'),all);
+        const footer=/https:\/\/([^/\s"]+)\/unsubscribe\/u_[0-9a-f]{64}/.exec(content.Body.Text.Data)!;
+        assert.equal(content.Headers.find((h:Json)=>h.Name==='List-Unsubscribe').Value,`<${footer[0]}>`);
+        return footer[1];
+      });
+      const launch=async()=>{const c=ok(await local('POST','/v1/campaigns',{name:unique('link-domain'),from,subject:'Links',html:'<p>Fixture.</p>',audience:{listId:list.id}}),201);
+        ok(await local('POST',`/v1/campaigns/${c.id}/send`,{revision:c.revision}),202);return c;};
+      const marketingTo=(to:string)=>local('POST','/v1/emails/send',{from,to,subject:'Links',html:'<p>Hello</p>',text:'Hello',kind:'marketing'});
+      // Own link hosts off: no link record to add.
+      assert.deepEqual((await withLinkRecords(runtime,wid,[{name:domain,dns:[]}] as any[]))[0].dns,[]);
+      // A campaign: its review freezes no link host, its release records its recipients, and every copy links on the link domain.
+      const first=await launch();
+      assert.equal((await db.query("SELECT draft ? 'linkOrigin' AS frozen FROM sending_campaign_reviews WHERE campaign_id=$1",[first.id])).rows[0].frozen,false);
+      await run('campaign.run');await run('email.dispatch');
+      assert.deepEqual(hostsOf(delivered.splice(0)),[shared,shared,shared]);
+      assert.equal(await used(),3);
+      // Marketing mail too, recorded the same way.
+      ok(await marketingTo('link-domain-1@example.net'),202);
+      await run('email.dispatch');
+      const [marketing]=delivered.splice(0);assert.deepEqual(hostsOf([marketing]),[shared]);assert.equal(await used(),4);
+      // The link domain serves the links of the workspaces that linked there, and only theirs.
+      const link=/https:\/\/[^\s"]+\/unsubscribe\/u_[0-9a-f]{64}/.exec(marketing.Content.Simple.Body.Text.Data)![0];
+      assert.equal((await page(new Request(link,{headers:{accept:'text/html'}}))).status,200);
+      const foreign=`u_${'e'.repeat(64)}`;
+      await db.query("INSERT INTO operation_unsubscribe_tokens(token_hash,workspace_id,email) VALUES (encode(sha256(convert_to($1,'UTF8')),'hex'),'ws_link_never_shared','someone@example.net')",[foreign]);
+      assert.equal((await page(new Request(`https://${shared}/unsubscribe/${foreign}`,{headers:{accept:'text/html'}}))).status,404);
+      // Glass's activity feed shows the workspace's use of it today.
+      assert.ok((await readActivity(runtime)).events.some(e=>e.kind==='link_fallback'&&e.workspace?.id===wid&&e.subject===shared&&e.detail==='4'&&e.tone==='neutral'));
+      // No cap of its own: past 10,000 today, marketing mail still goes, as the workspace's own limits allow.
+      await db.query('UPDATE link_fallback_days SET recipients=10000 WHERE workspace_id=$1 AND host=$2',[wid,shared]);
+      ok(await marketingTo('link-domain-2@example.net'),202);assert.equal(await used(),10001);
+      await run('email.dispatch');assert.deepEqual(hostsOf(delivered.splice(0)),[shared]);
+      // A pause takes the workspace off at once (a paused connection: an operator's pause or the abuse path; or the standing
+      // ladder's pause step), with every use asking again; a warning, or a new workspace with no standing yet, doesn't.
+      const paused=/isn’t sent while this workspace’s sending is paused/;
+      for(const [hold,undo] of [["UPDATE provider_connections SET paused_at=now(),pause_reason='fixture hold' WHERE id=$1",'UPDATE provider_connections SET paused_at=NULL,pause_reason=NULL WHERE id=$1'],
+        ["UPDATE sender_standing SET step='pause' WHERE workspace_id=$1","UPDATE sender_standing SET step='ok' WHERE workspace_id=$1"]]){
+        await db.query(hold,[wid]);
+        await assert.rejects(linkChoice(runtime,runtime.db,wid,from),{code:'LINK_RECORD_REQUIRED',message:paused});
+        await db.query(undo,[wid]);
+      }
+      const onShared={origin:`https://${shared}`,shared:{host:shared}};
+      await db.query("UPDATE sender_standing SET step='warn' WHERE workspace_id=$1",[wid]);
+      assert.deepEqual(await linkChoice(runtime,runtime.db,wid,from),onShared);
+      await db.query('DELETE FROM sender_standing WHERE workspace_id=$1',[wid]);
+      assert.deepEqual(await linkChoice(runtime,runtime.db,wid,from),onShared);
+      await gradedSender(db,wid,10000);
+      // Own link hosts on as well: the record says the link domain carries the links until it is set up, and once the
+      // domain's own host is active, its mail links there and records nothing on the link domain.
+      runtime.config.linkHosts=saas;
+      assert.equal((await withLinkRecords(runtime,wid,[{name:domain,dns:[]}] as any[]))[0].dns[0].note,`Until it is set up, links in campaign and marketing mail from ${domain} use Nightmail's link domain.`);
+      assert.deepEqual(await linkChoice(runtime,runtime.db,wid,from),onShared);
+      await db.query("INSERT INTO link_hosts(workspace_id,domain,hostname,status) VALUES ($1,$2,'links.'||$2,'active')",[wid,domain]);
+      await launch();await run('campaign.run');await run('email.dispatch');
+      assert.deepEqual(hostsOf(delivered.splice(0)),[`links.${domain}`,`links.${domain}`,`links.${domain}`]);
+      assert.equal(await used(),10001);
+      // Neither on (dev, self-hosted): this installation's own origin, as before link hosts.
+      Object.assign(runtime.config,{linkHost:undefined,linkHosts:undefined});
+      assert.deepEqual(await linkChoice(runtime,runtime.db,wid,from),{origin:PUBLIC_ORIGIN.replace(/\/$/,'')});
+      // Hosted production without the link domain refuses, never moving customers' links onto nightmail.dev; dev's own
+      // host isn't production's.
+      const at=(publicUrl:string)=>({...runtime,config:{...runtime.config,publicUrl}});
+      const missing=/link domain isn’t set up, and its links never go on nightmail\.dev/;
+      await assert.rejects(linkChoice(at('https://nightmail.dev'),runtime.db,wid,from),{code:'LINK_RECORD_REQUIRED',message:missing});
+      assert.throws(()=>foundLinkOrigin(at('https://nightmail.dev').config,from,null),{code:'LINK_RECORD_REQUIRED',message:missing});
+      assert.deepEqual(await linkChoice(at('https://dev.nightmail.dev'),runtime.db,wid,from),{origin:'https://dev.nightmail.dev'});
+    });
+  });
+
   test('a frozen v1 campaign reproduces the legacy preheader at dispatch and on readback, without its web-font block',async t=>{
     await simulatedSesFixture(t,async({db,local,run})=>{
       const {SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2'),send=SESv2Client.prototype.send,delivered:string[]=[];
@@ -40728,6 +41468,118 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const content=ok(await local('GET',`/v1/emails/${mail!.id}/content`));
       assert.equal(delivered.length,1);
       for(const html of [content.html,delivered[0]!]){assert.match(html,/data-opensend-preview="true"/);assert.doesNotMatch(html,/data-opensend-fonts|@font-face|\/fonts\//,'The frozen font block is neither delivered nor read back.');}
+    });
+  });
+
+  test('campaign images: linked from the host of the message\'s links (PUBLIC_URL here, the link domain on Hosted) instead of attached, the message is its HTML, and a link serves only its own picture, only on a host that serves its workspace', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local, fetch, run }) => {
+      const { crc32, deflateSync } = await import('node:zlib'), { inlineMessage } = await import('./src/sending.js');
+      // November's newsletter as it was sent: an editor body and one 272,311-byte PNG shown 100 px wide, under its bane- content ID.
+      const chunk = (type: string, data: Buffer) => { const body = Buffer.concat([Buffer.from(type, 'latin1'), data]), out = Buffer.alloc(data.length + 12); out.writeUInt32BE(data.length); body.copy(out, 4); out.writeUInt32BE(crc32(body), data.length + 8); return out; };
+      const side = 260, header = Buffer.alloc(13); header.writeUInt32BE(side); header.writeUInt32BE(side, 4); header.set([8, 6, 0, 0, 0], 8);
+      const pixels = Buffer.alloc((side * 4 + 1) * side); let seed = 7;
+      for (let i = 0; i < pixels.length; i++) pixels[i] = i % (side * 4 + 1) ? (seed = (Math.imul(seed, 1103515245) + 12345) >>> 0) >>> 24 : 0;
+      const start = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), chunk('IHDR', header), chunk('IDAT', deflateSync(pixels, { level: 0 }))]), end = chunk('IEND', Buffer.alloc(0));
+      const png = Buffer.concat([start, chunk('tEXt', Buffer.concat([Buffer.from('Comment\0'), Buffer.alloc(272_311 - start.length - end.length - 20, 0x20)])), end]);
+      assert.equal(png.length, 272_311);
+      const objects = new Map<string, Uint8Array>();
+      runtime.storage = { put: async (key: string, body: Uint8Array) => { objects.set(key, new Uint8Array(body)); }, get: async (key: string) => objects.has(key) ? { body: objects.get(key)!, contentType: 'application/octet-stream' } : null, delete: async (key: string) => { objects.delete(key); } } as typeof runtime.storage;
+      const { SESv2Client, SendEmailCommand } = await import('@aws-sdk/client-sesv2'), send = SESv2Client.prototype.send, sent: Json[] = [];
+      t.mock.method(SESv2Client.prototype, 'send', async function (this: unknown, cmd: unknown, ...rest: unknown[]) { if (cmd instanceof SendEmailCommand) sent.push(cmd.input); return (send as (...a: unknown[]) => unknown).call(this, cmd, ...rest); });
+      const input = (id: string) => sent.find(s => s.EmailTags.some((tag: Json) => tag.Name === 'bane_email_id' && tag.Value === id))!;
+      // Raw MIME as SES received it, or the same message built from simple content; readable with quoted-printable decoded.
+      const message = (s: Json) => Buffer.from(s.Content.Raw ? s.Content.Raw.Data : inlineMessage({ kind: 'marketing', testCampaignId: null, from: 'sender@example.com', to: s.Destination.ToAddresses, cc: [], bcc: [], replyTo: [], region: REGION,
+        subject: s.Content.Simple.Subject.Data, html: s.Content.Simple.Body.Html?.Data, text: s.Content.Simple.Body.Text?.Data, tracking: false, attachments: [], headers: s.Content.Simple.Headers ?? [] }, s.Content.Simple.Attachments ?? []));
+      const readable = (s: Json) => message(s).toString('latin1').replace(/=\r\n/g, '').replace(/=([0-9A-F]{2})/g, (_: string, hex: string) => String.fromCharCode(parseInt(hex, 16)));
+      const contentId = `bane-${randomUUID()}`;
+      const image = ok(await local('POST', '/v1/attachments', { filename: 'image-57c04568d0ca.png', content: png.toString('base64'), contentType: 'image/png', disposition: 'inline', contentId }), 201);
+      const checksum: string = (await db.query('SELECT checksum FROM sending_attachments WHERE id=$1', [image.id])).rows[0].checksum;
+      const path = `/i/${image.id.slice('attachment_'.length)}${checksum.slice(0, 32)}.png`, url = PUBLIC_ORIGIN + path;
+      const list = ok(await local('POST', '/v1/lists', { name: unique('linked-images') }), 201), contact = ok(await local('POST', '/v1/contacts', { email: address() }), 201);
+      ok(await local('POST', `/v1/contacts/${contact.id}/consent`, { status: 'subscribed', source: 'fixture', policyVersion: 'v1', evidence: 'Synthetic fixture.', occurredAt: new Date().toISOString() }));
+      ok(await local('POST', `/v1/lists/${list.id}/members`, { contactIds: [contact.id] }));
+      const html = `<p>hey,</p>\n<p>three new things just shipped.</p>\n<p>try them out.</p>\n<img src="cid:${contentId}" alt="logo" width="100">`;
+      // Each campaign is reviewed and released while pictures are embedded, as one scheduled before this release was, and
+      // dispatched with the setting under test: the link is made at dispatch, after the reviewed content hash.
+      const campaign = async (name: string, linked: boolean) => {
+        runtime.config.linkedImages = false;
+        const c = ok(await local('POST', '/v1/campaigns', { name, from: 'sender@example.com', subject: name, html, attachments: [image.id], audience: { listId: list.id } }), 201);
+        ok(await local('POST', `/v1/campaigns/${c.id}/send`, { revision: c.revision }), 202);
+        await run('campaign.run');
+        runtime.config.linkedImages = linked;
+        await run('email.dispatch');
+        const [mail] = page(await local('GET', `/v1/emails?campaignId=${c.id}`));
+        return { id: mail!.id as string, sent: input(mail!.id) };
+      };
+      const embedded = await campaign('Embedded', false), linked = await campaign('Linked', true);
+      const before = message(embedded.sent).length, after = message(linked.sent).length;
+      t.diagnostic(`one newsletter message: ${before} bytes with the picture embedded, ${after} bytes with it linked`);
+      assert.ok(readable(embedded.sent).includes(`Content-ID: <${contentId}>`) && before > 360_000, `Embedded, the picture travels in every message (${before} bytes).`);
+      assert.ok(after < 8_000, `Linked, the message is its HTML (${after} bytes).`);
+      assert.equal(linked.sent.Content.Raw, undefined);
+      assert.equal(linked.sent.Content.Simple.Attachments?.length ?? 0, 0);
+      assert.ok(linked.sent.Content.Simple.Body.Html.Data.includes(`<img src="${url}" alt="logo" width="100"`) && !linked.sent.Content.Simple.Body.Html.Data.includes('cid:'), linked.sent.Content.Simple.Body.Html.Data);
+      assert.ok(ok(await local('GET', `/v1/emails/${linked.id}/content`)).html.includes(`cid:${contentId}`), 'The sent message still reads back from its frozen review.');
+
+      // The link is public, cached for a year and serves the picture byte for byte; nothing else answers under /i/.
+      const get = (target: string, headers: Record<string, string> = {}, method = 'GET') => fetch(new Request(PUBLIC_ORIGIN + target, { method, headers }));
+      const served = await get(path);
+      assert.equal(served.status, 200);
+      assert.deepEqual(Object.fromEntries(['content-type', 'content-length', 'cache-control', 'etag', 'x-content-type-options', 'content-security-policy'].map(name => [name, served.headers.get(name)])), {
+        'content-type': 'image/png', 'content-length': '272311', 'cache-control': 'public, max-age=31536000, immutable', etag: `"${checksum}"`, 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" });
+      assert.ok(Buffer.from(await served.arrayBuffer()).equals(png));
+      assert.equal((await get(path, { 'if-none-match': `"${checksum}"` })).status, 304);
+      const head = await get(path, {}, 'HEAD');
+      assert.equal(head.status, 200); assert.equal((await head.arrayBuffer()).byteLength, 0);
+      const name = path.slice(3, -4);
+      for (const wrong of [`/i/${name.slice(0, 32)}${'0'.repeat(32)}.png`, `/i/${name}.gif`, `/i/${name}.svg`, '/i/', `/i/${image.id}`, `/i/${name}.png/`]) {
+        const refused = await get(wrong);
+        assert.equal(refused.status, 404, wrong); assert.equal(refused.headers.get('cache-control'), 'no-store', wrong);
+      }
+
+      // A campaign's test links too. An inline part whose bytes don't open as its declared picture stays attached, and
+      // no link to it answers.
+      const fake = ok(await local('POST', '/v1/attachments', { filename: 'fake.png', content: Buffer.from('<html><script>alert(1)</script></html>').toString('base64'), contentType: 'image/png', disposition: 'inline', contentId: 'fake' }), 201);
+      const mixed = ok(await local('POST', '/v1/campaigns', { name: 'Mixed', from: 'sender@example.com', subject: 'Mixed', html: `${html}<img src="cid:fake" alt="fake">`, attachments: [image.id, fake.id] }), 201);
+      const test = ok(await local('POST', `/v1/campaigns/${mixed.id}/test`, { to: address() }), 202);
+      await run('email.dispatch');
+      const tested = readable(input(test.id));
+      assert.ok(tested.includes(`<img src="${url}" alt="logo" width="100"`) && tested.includes('<img src="cid:fake" alt="fake"') && tested.includes('Content-ID: <fake>') && !tested.includes(`Content-ID: <${contentId}>`), tested.slice(0, 4000));
+      const fakeChecksum: string = (await db.query('SELECT checksum FROM sending_attachments WHERE id=$1', [fake.id])).rows[0].checksum;
+      assert.equal((await get(`/i/${fake.id.slice('attachment_'.length)}${fakeChecksum.slice(0, 32)}.png`)).status, 404);
+
+      // With the link domain (Hosted's links.nightmailedge.com), a campaign's pictures are linked from it, the host of its
+      // unsubscribe link, alt text and size kept; they answer there only for a workspace that has linked there, and on
+      // this installation's own origin as before.
+      const linkDomain = 'links.image-fixture.example', onLinkDomain = `https://${linkDomain}${path}`;
+      runtime.config.linkHost = linkDomain;
+      try {
+        const hosted = await campaign('On the link domain', true), body = hosted.sent.Content.Simple.Body.Html.Data as string;
+        assert.ok(body.includes(`<img src="${onLinkDomain}" alt="logo" width="100"`) && body.includes(`https://${linkDomain}/unsubscribe/`) && !body.includes(`${PUBLIC_ORIGIN}/i/`), body);
+        assert.equal(hosted.sent.Content.Simple.Attachments?.length ?? 0, 0);
+        const there = await fetch(new Request(onLinkDomain));
+        assert.equal(there.status, 200); assert.equal(there.headers.get('cache-control'), 'public, max-age=31536000, immutable');
+        assert.ok(Buffer.from(await there.arrayBuffer()).equals(png));
+        const wid = runtime.config.workspaceId;
+        await db.query('DELETE FROM link_fallback_days WHERE workspace_id=$1 AND host=$2', [wid, linkDomain]);
+        assert.equal((await fetch(new Request(onLinkDomain))).status, 404, 'A workspace that never linked on the link domain has nothing served there.');
+        assert.equal((await get(path)).status, 200);
+        // A campaign's test on the link domain records its use, so its pictures answer there too.
+        const tested = ok(await local('POST', `/v1/campaigns/${mixed.id}/test`, { to: address() }), 202);
+        await run('email.dispatch');
+        assert.ok(readable(input(tested.id)).includes(`<img src="${onLinkDomain}" alt="logo" width="100"`));
+        assert.equal((await fetch(new Request(onLinkDomain))).status, 200);
+      } finally { runtime.config.linkHost = undefined; }
+      // Hosted, its own domain never serves them, even as one of its own origins.
+      const hostedBefore = { multiTenant: runtime.config.multiTenant, previousOrigins: runtime.config.previousOrigins };
+      Object.assign(runtime.config, { multiTenant: true, previousOrigins: [...runtime.config.previousOrigins ?? [], 'https://nightmail.dev'] });
+      try { assert.equal((await fetch(new Request(`https://nightmail.dev${path}`))).status, 404); }
+      finally { Object.assign(runtime.config, hostedBefore); }
+
+      // An email sent through the API keeps the parts its caller attached.
+      const direct = ok(await local('POST', '/v1/emails/send', mail({ html: `<img src="cid:${contentId}">`, attachments: [image.id] })), 202);
+      await run('email.dispatch');
+      assert.ok(readable(input(direct.id)).includes(`Content-ID: <${contentId}>`) && !readable(input(direct.id)).includes(`${PUBLIC_ORIGIN}/i/`));
     });
   });
 
@@ -42016,7 +42868,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const done = await view(), again = await view(), exact = nonzero(await truth());
       assert.equal(done.state, 'done');
       assert.equal(exact.total, tail);
-      assert.deepEqual([nonzero(done.counts), nonzero(again.counts)], [exact, exact], 'A finished campaign reports exact counts immediately.');
+      for (const poll of [done, again]) assert.deepEqual(nonzero(poll.counts), exact, 'A finished campaign reports exact counts immediately.');
       assert.equal(counted(), 0, 'A finished campaign reads tallies without scanning sending_emails.');
       // Unused window variable check preserved for reference: fallback uses CAMPAIGN_PROGRESS_CACHE_SECONDS.
       assert.ok(window > 0);
@@ -44238,15 +45090,15 @@ test('Database disk alert: a PlanetScale storage event with the derived Authoriz
   // changed after signing, gets the same 404. Hosted only, like the Slack webhook.
   const signedRuntime = runtime({ PLANETSCALE_WEBHOOK_SECRET: signing }), sign256 = (body: string, key = signing) => createHmac('sha256', key).update(body).digest('hex');
   assert.deepEqual([signedRuntime.config.planetscaleWebhookSecret, loadConfig({ PUBLIC_URL: origin, BANE_ROOT_SECRET: secret, PLANETSCALE_WEBHOOK_SECRET: signing }).planetscaleWebhookSecret], [signing, undefined]);
-  // A secret too short or too long to be PlanetScale's never stops the installation: it is left unused, as if unset,
-  // and said once, without its value.
+  // An invalid configured signer closes the webhook, not the API, and is reported once without its value.
   const warned: string[] = [];
-  await t.test('a signing secret of the wrong length is ignored with one warning', st => {
-    st.mock.method(console, 'warn', (line: string) => { warned.push(line); });
-    assert.deepEqual(['too-short-fixture', 'x'.repeat(31), 'y'.repeat(201), 'too-short-fixture'].map(value => runtime({ PLANETSCALE_WEBHOOK_SECRET: value }).config.planetscaleWebhookSecret), [undefined, undefined, undefined, undefined]);
+  await t.test('a signing secret of the wrong length closes the webhook with one error', st => {
+    st.mock.method(console, 'error', (line: string) => { warned.push(line); });
+    assert.deepEqual(['too-short-fixture', 'x'.repeat(31), 'y'.repeat(201), 'too-short-fixture'].map(value => runtime({ PLANETSCALE_WEBHOOK_SECRET: value }).config.planetscaleWebhookSecret), [null, null, null, null]);
     assert.equal(loadConfig({ PUBLIC_URL: origin, BANE_ROOT_SECRET: secret, PLANETSCALE_WEBHOOK_SECRET: 'too-short-fixture' }).planetscaleWebhookSecret, undefined, 'Self-hosted, it is never read.');
   });
-  assert.deepEqual(warned.map(line => (JSON.parse(line) as Json).code), ['PLANETSCALE_WEBHOOK_SECRET_IGNORED']);
+  assert.deepEqual(warned.map(line => (JSON.parse(line) as Json).code), ['OPTIONAL_FEATURE_DISABLED']);
+  assert.deepEqual(await deliver(storageEvent(86), { authorization: setup.authorization }, runtime({ PLANETSCALE_WEBHOOK_SECRET: 'invalid' })), [404, 'NOT_FOUND']);
   assert.ok(!warned[0]!.includes('too-short-fixture') && !warned[0]!.includes('x'.repeat(31)));
   const body = JSON.stringify(storageEvent(86));
   for (const signature of [undefined, sign256(body, 'e'.repeat(64)), sign256(body.replace('86', '87')), sign256(body).slice(1)])

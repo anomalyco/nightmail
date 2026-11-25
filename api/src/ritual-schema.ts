@@ -7,11 +7,13 @@ import { productName } from './brand.js'
 
 export type EndpointType = 'slack' | 'discord' | 'webhook' | 'forward';
 
-/** A field of `email` or `ctx`. `record` means any string key (headers); `array` has `items`. */
+/** A field of `email` or `ctx`. `record` means any string key (headers); `array` has `items`. `renamed` marks an
+ * earlier name that rules saved before the rename still compile with; docs and completions leave it out. */
 export type Field = {
   type: 'string' | 'number' | 'boolean' | 'object' | 'array' | 'record';
   doc: string;
   nullable?: boolean;
+  renamed?: string;
   fields?: Record<string, Field>;
   items?: Field;
 };
@@ -70,7 +72,8 @@ export const emailFields: Record<string, Field> = {
     autoReply: b('Has Auto-Submitted.'),
     bulk: b('Has List-Id.'),
     listId: s('The List-Id header.', true),
-    baneHops: n(`${productName} forwarding hops already taken.`),
+    forwardHops: n(`${productName} forwarding hops already taken.`),
+    baneHops: { ...n('Earlier name of forwardHops.'), renamed: 'forwardHops' },
   }),
   thread: o('Conversation.', {
     id: s('Thread ID.', true),
@@ -106,7 +109,7 @@ export function fieldAt(path: readonly string[]): { field: Field } | { missing: 
       return { missing: key, options: ['length', '[index]'], at: path.slice(0, i).join('.') };
     }
     if (field?.type === 'string') return key === 'length' ? { field: n('Number of characters.') } : { missing: key, options: ['length'], at: path.slice(0, i).join('.') };
-    if (!fields || !Object.hasOwn(fields, key)) return { missing: key, options: Object.keys(fields ?? {}), at: path.slice(0, i).join('.') };
+    if (!fields || !Object.hasOwn(fields, key)) return { missing: key, options: Object.entries(fields ?? {}).filter(([, f]) => !f.renamed).map(([name]) => name), at: path.slice(0, i).join('.') };
     field = fields[key]!;
     fields = field.fields;
   }
@@ -191,7 +194,7 @@ function tsType(field: Field, indent: string): string {
   return field.type + nullable;
 }
 function tsFields(fields: Record<string, Field>, indent: string, skip: string[] = []) {
-  return Object.entries(fields).filter(([name]) => !skip.includes(name)).map(([name, field]) => `${indent}/** ${field.doc} */\n${indent}${name}: ${tsType(field, indent)};\n`).join('');
+  return Object.entries(fields).filter(([name]) => !skip.includes(name)).map(([name, field]) => `${indent}/** ${field.renamed ? `@deprecated Use ${field.renamed}. ` : ''}${field.doc} */\n${indent}${name}: ${tsType(field, indent)};\n`).join('');
 }
 
 /** TypeScript declarations for editors and agents, generated from the workspace's endpoints, inboxes and lists. */
@@ -264,6 +267,7 @@ export function ritualCompletions(workspace: RitualWorkspace): Completion[] {
   const out: Completion[] = [];
   const walk = (prefix: string, fields: Record<string, Field>) => {
     for (const [name, field] of Object.entries(fields)) {
+      if (field.renamed) continue;
       const label = `${prefix}.${name}`;
       out.push({ label, type: 'property', detail: field.type === 'object' ? 'object' : tsType(field, '').replace(/\s+/g, ' '), info: field.doc });
       if (field.type === 'object') walk(label, field.fields!);

@@ -6,7 +6,7 @@ sha=$1 repo="repos/$GITHUB_REPOSITORY" wait=${CI_WAIT_SECONDS:-1500} poll=${CI_P
 
 # The dev deploy job's name comes from the same pinned output as its checkout, so its E2E step proves this commit.
 # Only that job and its E2E count, not the run's conclusion: a later job in the run (the support Worker's deploy) can
-# fail without saying anything about Bane, and must not hold back a Bane release.
+# fail without saying anything about Nightmail, and must not hold back a Nightmail release.
 e2e=
 for ((page=1; ; page++)); do
   # Support may still be running. Only the completed main Worker job is proof.

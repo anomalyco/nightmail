@@ -77,10 +77,10 @@ transcript (synthetic or redacted, never real mail) replays with `transcript FIL
 
 ## Documented differences and limits
 
-- Dovecot answers BAD for a sequence set naming messages that do not exist; Bane answers OK
+- Dovecot answers BAD for a sequence set naming messages that do not exist; Nightmail answers OK
   with no data. Dovecot answers OK (no-op) for EXPUNGE, MOVE and UID EXPUNGE under EXAMINE;
-  Bane answers BAD. Both are left out of the conformance alphabet.
-- COPY is not compared with Dovecot: Bane shares ordinary flags across copies by design.
+  Nightmail answers BAD. Both are left out of the conformance alphabet.
+- COPY is not compared with Dovecot: Nightmail shares ordinary flags across copies by design.
 - Dovecot 2.3.21 itself diverges from the model in one place (4-step witness: deliver,
   `B uid-store +deleted 1`, deliver, `A expunge`): an EXPUNGE that removes a message the
   session was never told about announces it with EXISTS but sends no EXPUNGE before the OK

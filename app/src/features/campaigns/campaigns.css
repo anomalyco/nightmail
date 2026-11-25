@@ -22,6 +22,8 @@
   --studio-desk: var(--color-layer-1); --studio-raised: var(--color-surface); --studio-raised-hover: #F0F0F0; --studio-raised-pressed: #E0E0E0;
   /* Anchored menus keep the application theme even when they open from the light email sheet. */
   --campaign-menu-surface: var(--color-overlay-surface); --campaign-menu-text: var(--color-text); --campaign-menu-hover: var(--color-overlay-hover);
+  /* The rail's width and the docked Style panel's: the desk keeps room for both, so the sheet stays centred between them. */
+  --studio-rail: 44px; --studio-panel: 280px;
   display: flex; flex-direction: column; height: 100%; min-height: 0; background: var(--studio-desk); font-family: var(--font-body); font-size: var(--text-md);
 }
 :root[data-theme='dark'] .campaign-compose-page { --studio-desk: var(--color-surface); --studio-raised: var(--color-layer-1); --studio-raised-hover: #2C2C2C; --studio-raised-pressed: #3A3A3A; }
@@ -50,7 +52,7 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
 /* The desk, and the email on it, one step up: a pure white sheet in either theme (the delivered email's own paper),
    680px, 8px corners, no edge and no shadow. The scroll area keeps room on both sides for the rail, so the sheet stays centred. */
 .campaign-compose-workspace { display: flex; flex-direction: column; flex: 1; min-width: 0; min-height: 0; overflow: hidden; background: var(--studio-desk); color: var(--color-text); }
-.campaign-compose-scroll { flex: 1; min-height: 0; overflow: auto; padding: var(--space-16) 76px 64px; overscroll-behavior: contain; }
+.campaign-compose-scroll { flex: 1; min-height: 0; overflow: auto; padding: var(--space-16) calc(var(--studio-rail) + 2 * var(--space-16)) calc(2 * var(--space-32)); overscroll-behavior: contain; }
 .campaign-compose-sheet { display: flex; flex-direction: column; width: 100%; max-width: 680px; min-height: 100%; margin: 0 auto; padding: var(--space-8) 0 var(--space-16); border: 0; border-radius: var(--radius-lg); background: var(--color-email-surface); color: var(--color-email-text); box-shadow: none; }
 /* The workspace's notices (components/Notices.tsx): from 900 px the studio covers the shell's, so it shows its own over
    the sheet, as wide as it; below 900 px the shell's stay in view and these show none. */
@@ -66,39 +68,46 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
 /* The mail header rows: a 12px mono label, the field, its toggle (Reply-To, Preview text) at the right; no rules. The
    row being typed in takes the sheet's hover step. Labels line up with the email's text, 40px in. */
 .campaign-compose-metadata { flex-shrink: 0; padding-bottom: var(--space-16); color: var(--color-text); }
-.campaign-compose-row { --row-label: 72px; display: grid; grid-template-columns: var(--row-label) minmax(0, 1fr); align-items: center; gap: var(--space-8); min-height: 40px; margin-inline: var(--space-8); padding-inline: var(--space-32) var(--space-24); border: 0; border-radius: var(--radius-sm); transition: background var(--motion-duration) var(--ease-standard); }
+.campaign-compose-row { --row-label: 72px; display: grid; grid-template-columns: var(--row-label) minmax(0, 1fr); align-items: center; gap: var(--space-8); min-height: 40px; margin-inline: var(--space-8); padding-inline: var(--space-32); border: 0; border-radius: var(--radius-sm); transition: background var(--motion-duration) var(--ease-standard); }
 .campaign-compose-sender, .campaign-compose-subject { grid-template-columns: var(--row-label) minmax(0, 1fr) auto; }
 .template-compose-page .campaign-compose-row { --row-label: 104px; }
 .campaign-compose-row > :first-child { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); line-height: var(--leading-xs); letter-spacing: 0; }
 .campaign-compose-row:has(input:focus, [role='button']:focus-visible) { background: var(--color-hover); }
-:is(.campaign-compose-metadata, .campaign-personalize) .campaign-compose-row:has([aria-invalid='true']) { background: var(--color-control-invalid); }
-:is(.campaign-compose-metadata, .campaign-personalize) .campaign-compose-row:has([aria-invalid='true']:focus) { background: var(--color-control-invalid-focus); }
+/* A field that needs fixing keeps the row's own fills: its label takes the danger ink, and the reason is the line under the
+   row (.campaign-compose-problem), never a tinted band. */
+:is(.campaign-compose-metadata, .campaign-personalize) .campaign-compose-row:has([aria-invalid='true']) > :first-child { color: var(--color-danger); }
 .campaign-compose-row :is(.ui-input, .ui-control-skeleton) { height: 39px; padding: 0; border: 0; border-radius: 0; background-color: transparent; box-shadow: none; color: var(--color-text); font-size: var(--text-md); }
 /* The field itself stays clear in every state (outweighing ui.css's control fills): the row shows the state. */
 .campaign-compose-page .campaign-compose-row .ui-input:is(:focus, :focus-visible, :disabled, [aria-invalid='true']), .campaign-compose-page .campaign-compose-row .ui-input:hover:not(:disabled):not([aria-invalid='true']):not(:focus) { background-color: transparent; }
 .campaign-compose-row .ui-input:disabled { color: var(--color-muted); }
+/* Text longer than its field fades out over its last 1.5em instead of stopping mid-letter; typing in it shows it all. */
+.campaign-compose-row .ui-input:not(:focus) { mask-image: linear-gradient(to right, #000 calc(100% - 1.5em), transparent); }
 /* The phone's native select keeps its chevron (the reset above used the background shorthand, which also dropped no-repeat). */
-.campaign-compose-row select.ui-native-select { padding-right: 22px; background-position: right 0 center; background-repeat: no-repeat; }
+.campaign-compose-row select.ui-native-select { padding-right: var(--space-24); background-position: right 0 center; background-repeat: no-repeat; }
 .campaign-compose-subject input { font-weight: var(--font-weight-medium); }
-/* The toggles hang out by their own padding, so their words end on the text column's edge. */
-.campaign-compose-row > .ui-button.ui-button--ghost { margin-inline-end: calc(-1 * var(--button-pad-x)); color: var(--color-muted); font-size: var(--text-xs); }
+/* The toggles hang out by their own padding and their chevron's inset in its box, so the chevron's point ends on the
+   email's text column, like the fields' edge. */
+.campaign-compose-row > .ui-button.ui-button--ghost { margin-inline-end: calc(-1 * (var(--button-pad-x) + var(--space-4))); color: var(--color-muted); font-size: var(--text-xs); }
 .campaign-compose-row > .ui-button.ui-button--ghost[aria-expanded='true'] { color: var(--color-text); }
-.campaign-sender-toggle svg { transition: transform 260ms var(--ease-drawer); }
-.campaign-sender-toggle[aria-expanded='true'] svg { transform: rotate(90deg); }
+.campaign-compose-row > .ui-button svg { transition: transform 260ms var(--ease-drawer); }
+.campaign-compose-row > .ui-button[aria-expanded='true'] svg { transform: rotate(90deg); }
 /* Folding rows (Reply-To, Preview text) open with the drawer curve and settle into place, not snap. */
 .campaign-compose-preview { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows 260ms var(--ease-drawer), opacity 200ms ease-out; }
 .campaign-compose-preview[data-open] { grid-template-rows: 1fr; opacity: 1; }
 .campaign-compose-preview > div { min-height: 0; overflow: hidden; }
 .campaign-compose-preview > div > * { transform: translateY(-6px); transition: transform 260ms var(--ease-drawer); }
 .campaign-compose-preview[data-open] > div > * { transform: none; }
-.campaign-compose-feedback { padding: var(--space-8) 40px; }
-.campaign-compose-metadata > .ui-alert { margin: var(--space-8) 40px; }
+.campaign-compose-feedback { padding: var(--space-8) var(--space-40); }
+/* A row's problem, on the line under the row, the size of a field's message elsewhere. */
+.campaign-compose-problem { padding: var(--space-4) var(--space-40) var(--space-8); font-size: var(--text-xs); line-height: var(--leading-xs); }
+.campaign-compose-metadata > .ui-alert { margin: var(--space-8) var(--space-40); }
 /* Fallbacks for {{placeholders}}: a mono lead, then rows like the header's. */
 .campaign-personalize { margin-top: var(--space-16); color: var(--color-text); }
-.campaign-personalize__lead { margin: 0 0 var(--space-4); padding-inline: 40px; color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); line-height: var(--leading-xs); font-weight: 400; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.campaign-personalize__lead { margin: 0 0 var(--space-4); padding-inline: var(--space-40); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); line-height: var(--leading-xs); font-weight: 400; letter-spacing: var(--tracking-label); text-transform: uppercase; }
 .campaign-personalize .campaign-compose-row { --row-label: 128px; }
-.campaign-compose-sheet > .campaign-file-blocks { margin: var(--space-16) 40px 0; }
-@media (prefers-reduced-motion: reduce) { .campaign-compose-preview, .campaign-compose-preview > div > *, .campaign-sender-toggle svg, .campaign-pacing-toggle svg { transition: none; } }
+.campaign-compose-sheet > .campaign-file-blocks { margin: var(--space-16) var(--space-40) 0; }
+/* Reduced motion: the rows still fade (no travel), the chevrons simply turn. */
+@media (prefers-reduced-motion: reduce) { .campaign-compose-preview { transition: opacity 150ms ease-out; } .campaign-compose-preview > div > *, .campaign-compose-row > .ui-button svg, .campaign-pacing-toggle svg { transition: none; } }
 .campaign-review > * { flex-shrink: 0; }
 .campaign-review-layout { display: grid; grid-template-columns: minmax(0, 430fr) minmax(0, 658fr); grid-template-rows: auto 1fr; grid-template-areas: 'recipients message' 'delivery message'; align-items: start; column-gap: var(--space-40); row-gap: var(--space-24); }
 .campaign-recipients { grid-area: recipients; }
@@ -117,7 +126,7 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
    900 px (and in a preview dialog), the canvas with the starting lines, and in the studio the rail and the docked panel. */
 .composer-skeleton-tools { display: flex; align-items: center; gap: var(--space-8); height: 48px; margin: 0 var(--space-8) var(--space-8); padding: 0 var(--space-8); border: 0; background: var(--color-email-surface); overflow: clip; }
 .composer-skeleton-tools .ui-control-skeleton { height: 28px; flex-shrink: 0; background: var(--color-control); }
-.composer-skeleton-canvas { display: flex; flex-direction: column; gap: var(--space-16); flex: 1 0 auto; min-height: 320px; padding: var(--space-16) 40px; background: var(--color-email-surface); }
+.composer-skeleton-canvas { display: flex; flex-direction: column; gap: var(--space-16); flex: 1 0 auto; min-height: 320px; padding: var(--space-16) var(--space-40); background: var(--color-email-surface); }
 .composer-skeleton-canvas .ui-skeleton-block { background: #EDEDED; }
 .composer-skeleton-tool { display: inline-grid; place-items: center; width: 28px; height: 28px; flex: none; border-radius: var(--radius-sm); color: var(--color-muted); opacity: .5; }
 .composer-skeleton-tool--sm { width: 24px; height: 24px; }
@@ -213,22 +222,26 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
 .campaign-compose-page > :is(.studio-bar, .ui-page-header) { background: transparent; }
 .studio-bar__start { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
 .studio-bar__end { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-8); min-width: 0; }
-.studio-bar__crumb { display: inline-flex; flex: 0 1 auto; align-items: center; gap: var(--space-8); min-width: 0; max-width: 168px; margin-inline-start: var(--space-4); color: var(--color-muted); white-space: nowrap; }
-.studio-bar__crumb-text { display: flex; align-items: center; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+/* The path keeps its words while the name beside it shortens; only a long newsletter's name ends in an ellipsis. */
+.studio-bar__crumb { display: inline-flex; flex: none; align-items: center; gap: var(--space-8); min-width: 0; max-width: 168px; margin-inline-start: var(--space-4); color: var(--color-muted); white-space: nowrap; }
+.studio-bar__crumb-text { display: block; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .studio-bar__sep { flex: none; color: var(--color-faint); }
+/* The status comes before the name, in the same place on Write and Review, so a name loading never moves it. */
 .studio-bar__status { display: inline-flex; flex: none; align-items: center; }
 .studio-bar__status .ui-status { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0; }
 .studio-title { min-width: 0; margin: 0; overflow: clip; font-size: var(--text-md); line-height: 20px; font-weight: var(--font-weight-semibold); text-overflow: ellipsis; white-space: nowrap; }
 /* The name: the bar's words until pointed at or typed in, when it takes the bar's hover step. */
 .studio-bar .studio-name { flex: 0 1 320px; min-width: 96px; height: 28px; margin-inline-start: calc(-1 * var(--space-6)); padding-inline: var(--space-6); border: 0; border-radius: var(--radius-sm); background: transparent; box-shadow: none; color: var(--color-text); font-size: var(--text-md); font-weight: var(--font-weight-semibold); }
 .studio-bar .studio-name:is(:focus, :focus-visible) { background: var(--color-control-focus); }
+/* A name longer than its place ends in an ellipsis, as the title on Review does, until it is typed in. */
+.studio-bar .studio-name:not(:focus) { text-overflow: ellipsis; }
 .studio-bar .studio-name:disabled { background: transparent; color: var(--color-text); }
 .studio-name--loading { display: flex; align-items: center; }
 .studio-name__placeholder { overflow: hidden; color: var(--color-muted); text-overflow: ellipsis; white-space: nowrap; }
 /* A shortcut inside its button: crisp 12px mono on a solid cap one step off the button's fill. */
-.studio-bar .ui-button > .ui-kbd { height: 18px; min-width: 0; margin-inline-end: -4px; padding: 0 5px; background: var(--color-kbd-inset); color: var(--color-muted); font-size: var(--text-xs); }
-.studio-bar .ui-button--primary > .ui-kbd { background: #333333; color: #E4E4E4; }
-:root[data-theme='dark'] .studio-bar .ui-button--primary > .ui-kbd { background: #D4D4D4; color: #2B2B2B; }
+.studio-bar .ui-button > .ui-kbd { height: 18px; min-width: 0; margin-inline-end: calc(-1 * var(--space-4)); padding: 0 var(--space-4); background: var(--color-kbd-inset); color: var(--color-muted); font-size: var(--text-xs); }
+/* In the primary button the cap is a tint of the button's own ink, its letters on-accent-muted (as onboarding's are). */
+.studio-bar .ui-button--primary > .ui-kbd { background: color-mix(in oklab, var(--color-on-accent) 16%, transparent); color: var(--color-on-accent-muted); }
 .campaign-steps { display: flex; align-items: center; gap: var(--space-8); margin: 0; padding: 0; list-style: none; font-size: var(--text-xs); }
 .campaign-steps > li { display: flex; align-items: center; gap: var(--space-8); margin: 0; color: var(--color-muted); }
 .campaign-steps > li + li::before { content: '›'; color: var(--color-faint); }
@@ -237,18 +250,24 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
 .campaign-steps button:not(:disabled) { cursor: pointer; }
 @media (hover: hover) and (pointer: fine) { .campaign-steps :is(a, button:not(:disabled)):hover { background: var(--color-hover); color: var(--color-text); } }
 .campaign-steps :is(a, button):focus-visible { background: var(--color-hover); color: var(--color-text); text-decoration: none; }
-.campaign-steps__mark { display: inline-grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: var(--radius-xs); background: var(--color-layer-2); font-family: var(--font-mono); font-size: 11px; font-weight: 400; letter-spacing: 0; }
+.campaign-steps__mark { display: inline-grid; place-items: center; width: 18px; height: 18px; border: 0; border-radius: var(--radius-xs); background: var(--color-layer-2); font-family: var(--font-mono); font-size: var(--text-label); font-weight: 400; letter-spacing: 0; }
 .campaign-steps > li[aria-current] .campaign-steps__mark { background: var(--color-text); color: var(--color-surface); }
 /* A template's header (templates.tsx's PageHeader) is the same bar: back, the title, the status and the actions. */
 .template-compose-page > .ui-page-header { flex-wrap: nowrap; align-items: center; gap: var(--space-12); height: 48px; min-height: 48px; margin: 0; padding: 0 var(--space-12); }
 .template-compose-page > .ui-page-header > .cluster { flex-wrap: nowrap; gap: var(--space-8); min-width: 0; }
 .template-compose-page > .ui-page-header > .cluster:first-child { flex: 1 1 auto; }
 .template-compose-page > .ui-page-header h1 { min-width: 0; overflow: clip; font-size: var(--text-md); line-height: 20px; font-weight: var(--font-weight-semibold); letter-spacing: var(--tracking-body); text-overflow: ellipsis; white-space: nowrap; }
+/* The bar lines up with what sits under it: in the studio, back over the rail's tools (24 px in) and the actions ending on
+   the Style panel's 16 px edge; on Review, both ends on its stages' edges (32 px in). Phones keep the sheet's 8 px. */
+@media (min-width: 900px) {
+  .campaign-compose-page > :is(.studio-bar, .ui-page-header) { padding-inline: var(--space-24) var(--space-16); }
+  .campaign-review > .studio-bar { padding-inline: var(--space-32); }
+}
 /* The tool rail (EmailComposer, from 900 px): one step off the desk (#FFFFFF; #202020 in dark mode), floating 16px in from the
    desk's top-left corner, beside the sheet's top. 28px tools with static 16px glyphs, in groups set apart by space:
    blocks (Components and Variables open to its right), formatting, history, Style. */
-.composer-rail { position: fixed; z-index: 6; top: calc(48px + var(--space-16)); left: var(--space-16); display: flex; flex-direction: column; gap: var(--space-12); width: 44px; max-height: calc(100dvh - 48px - 2 * var(--space-16)); padding: var(--space-8); overflow-y: auto; border: 0; border-radius: var(--radius-lg); background: var(--studio-raised); color: var(--color-muted); --color-hover: var(--studio-raised-hover); --color-pressed: var(--studio-raised-hover); }
-.composer-rail__group { display: flex; flex-direction: column; gap: 2px; }
+.composer-rail { position: fixed; z-index: 6; top: calc(48px + var(--space-16)); left: var(--space-16); display: flex; flex-direction: column; gap: var(--space-12); width: var(--studio-rail); max-height: calc(100dvh - 48px - 2 * var(--space-16)); padding: var(--space-8); overflow-y: auto; border: 0; border-radius: var(--radius-lg); background: var(--studio-raised); color: var(--color-muted); --color-hover: var(--studio-raised-hover); --color-pressed: var(--studio-raised-hover); }
+.composer-rail__group { display: flex; flex-direction: column; gap: var(--space-4); }
 .composer-rail .ui-icon-button { width: 28px; height: 28px; border-radius: var(--radius-sm); color: var(--color-muted); }
 @media (hover: hover) and (pointer: fine) { .composer-rail .ui-icon-button:hover:not(:disabled) { background: var(--studio-raised-hover); color: var(--color-text); } }
 .composer-rail .ui-icon-button:focus-visible, .composer-rail .ui-icon-button:is([aria-pressed='true'], [data-state='open']) { background: var(--studio-raised-hover); color: var(--color-text); }
@@ -256,25 +275,42 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
 .composer-rail .ui-icon-button:is([aria-pressed='true'], [data-state='open']):focus-visible { background: var(--studio-raised-pressed); }
 .composer-rail__busy { display: grid; place-items: center; height: 28px; color: var(--color-muted); }
 .composer-rail.composer-skeleton-rail { display: none; }
-/* The Style panel (EmailComposer): the selected block's styles, on the desk's own
-   surface. From 1150 px it is docked open at the right edge, 280px, under the bar, set apart by spacing alone; from
-   900 px Style opens it there over the desk, and below it floats over the page, lifted as overlays are. Its chips and
-   fields are controls, on the control steps. */
-.composer-inspector { --re-bg: var(--studio-desk); --re-text: var(--color-text); --re-text-muted: var(--color-muted); --re-border: transparent; --re-separator: transparent; --re-hover: var(--color-control-hover); --re-bg-hover: var(--color-control-hover); --re-active: var(--color-control-pressed); --re-pressed: var(--color-control-pressed); --re-bg-active: var(--color-control); position: fixed; z-index: 60; inset: 64px 8px auto; max-height: calc(100dvh - 72px - var(--tab-bar-height, 56px) - env(safe-area-inset-bottom)); overflow: auto; padding: 0 var(--space-16) var(--space-16); border: 0; border-radius: var(--radius-lg); background: var(--studio-desk); color: var(--color-text); font-family: var(--font-body); font-size: var(--text-md); line-height: var(--leading-md); box-shadow: var(--shadow-popover); color-scheme: light; }
+/* The Style panel (EmailComposer): the selected block's styles, on the desk's own surface. From 1150 px it is docked open
+   at the right edge, 280px, under the bar, set apart by spacing alone; from 900 px Style opens it there over the desk.
+   Below 900 px it is a bottom sheet, as the dashboard's action sheets are (below). Its chips and fields are controls, on
+   the control steps. */
+.composer-inspector { --re-bg: var(--studio-desk); --re-text: var(--color-text); --re-text-muted: var(--color-muted); --re-border: transparent; --re-separator: transparent; --re-hover: var(--color-control-hover); --re-bg-hover: var(--color-control-hover); --re-active: var(--color-control-pressed); --re-pressed: var(--color-control-pressed); --re-bg-active: var(--color-control); position: fixed; z-index: 60; overflow: auto; padding: 0 var(--space-16) var(--space-16); border: 0; background: var(--studio-desk); color: var(--color-text); font-family: var(--font-body); font-size: var(--text-md); line-height: var(--leading-md); box-shadow: var(--shadow-popover); color-scheme: light; }
 :root[data-theme='dark'] .composer-inspector { color-scheme: dark; }
 .composer-inspector[hidden], .composer-inspector.composer-skeleton-panel { display: none; }
-.composer-inspector-header { position: sticky; z-index: 1; top: 0; display: flex; align-items: center; justify-content: space-between; height: 44px; margin: 0 calc(-1 * var(--space-16)) var(--space-4); padding: 0 var(--space-12) 0 var(--space-16); border: 0; background: var(--studio-desk); }
+/* Close hangs out so its X ends on the fields' edge, the panel's 16 px. */
+.composer-inspector-header { position: sticky; z-index: 1; top: 0; display: flex; align-items: center; justify-content: space-between; height: 44px; margin: 0 calc(-1 * var(--space-16)) var(--space-4); padding: 0 var(--space-8) 0 var(--space-16); border: 0; background: var(--studio-desk); }
+@media (pointer: coarse) { .composer-inspector-header .ui-icon-button { margin-inline-end: calc(-1 * var(--space-6)); } }
 .composer-inspector-title { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); line-height: var(--leading-xs); font-weight: 400; letter-spacing: var(--tracking-label); text-transform: uppercase; }
 
 .composer-inspector-hint { margin: var(--space-8) 0 0; color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
+/* A phone's Style panel is a bottom sheet like the dashboard's action sheets: the overlay surface and its control steps,
+   the sheet's corners and handle, over a dimmed page (EmailComposer's backdrop, a tap on it closes), rising from the bottom
+   and sliding back down. At most 60% of the screen, so the block being styled stays in view above it. */
+.composer-inspector-backdrop { display: none; }
+/* The page's entrance fade (app.css, section-enter) fills both ways, which keeps the studio a stacking context after it
+   ends, under the shell's tab bar: the sheet and its backdrop could not cover the tab bar as action sheets do. The studio
+   keeps the fade but lets go of it once it has played. */
+.page-surface > .campaign-compose-page:not(.page-notice) { animation-fill-mode: backwards; }
+@media (max-width: 899px) {
+  .composer-inspector { --re-bg: var(--color-overlay-surface); --color-control: var(--color-overlay-control); --color-control-hover: var(--color-overlay-control-hover); --color-control-focus: var(--color-overlay-control-focus); --color-control-pressed: var(--color-overlay-control-pressed); z-index: 81; inset: auto 0 0; max-height: 60dvh; padding: 0 max(var(--space-16), env(safe-area-inset-right)) calc(var(--space-16) + env(safe-area-inset-bottom)) max(var(--space-16), env(safe-area-inset-left)); border-radius: var(--radius-sheet) var(--radius-sheet) 0 0; background: var(--color-overlay-surface); box-shadow: var(--shadow-dialog); overscroll-behavior: contain; animation: sheet-in 300ms var(--ease-drawer); }
+  .composer-inspector[data-closing] { animation: sheet-out 200ms var(--ease-out-strong) forwards; }
+  .composer-inspector-header { height: 52px; padding-top: var(--space-8); background: var(--color-overlay-surface); }
+  .composer-inspector-header::before { content: ''; position: absolute; top: var(--space-8); left: 50%; width: 36px; height: 4px; border-radius: var(--radius-2xs); background: var(--color-border-strong); translate: -50% 0; }
+  .composer-inspector-backdrop { display: block; position: fixed; inset: 0; z-index: 80; background: var(--color-overlay); animation: ui-appear 240ms ease-out; }
+  .composer-inspector-backdrop[data-closing] { animation: ui-disappear 200ms ease-out forwards; }
+}
 /* A touch screen gets 44px tools on the rail, and the desk keeps room for the wider rail. */
 @media (pointer: coarse) {
-  .composer-rail { width: 60px; }
+  .campaign-compose-page { --studio-rail: 60px; }
   .composer-rail :is(.ui-icon-button, .composer-skeleton-tool) { width: 44px; height: 44px; }
 }
-@media (min-width: 900px) and (pointer: coarse) { .campaign-compose-scroll { padding-inline: 92px; } }
 @media (min-width: 900px) {
-  .composer-inspector { inset: 48px 0 0 auto; width: 280px; max-height: none; border-radius: 0; }
+  .composer-inspector { inset: 48px 0 0 auto; width: var(--studio-panel); max-height: none; border-radius: 0; }
   .campaign-compose-page .composer-rail.composer-skeleton-rail { display: flex; }
   .campaign-compose-page .composer-skeleton-tools { display: none; }
 }
@@ -283,7 +319,7 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
      mounts; closing it gives the desk back. */
   .composer-inspector:is([data-docked], .composer-skeleton-panel) { z-index: 5; box-shadow: none; }
   .campaign-compose-page .composer-inspector.composer-skeleton-panel { display: block; }
-  .campaign-compose-workspace { padding-inline-end: 280px; }
+  .campaign-compose-workspace { padding-inline-end: var(--studio-panel); }
   .campaign-compose-workspace:has(.composer-inspector[data-closed]) { padding-inline-end: 0; }
   .app-shell--support .composer-inspector[data-docked] { padding-bottom: calc(var(--launcher-size) + 2 * var(--space-16)); }
 }
@@ -296,11 +332,13 @@ body:has(.campaign-compose-page) .ui-select-item[data-state='checked'] { color: 
 .review-stages { display: flex; flex-direction: column; gap: var(--space-12); flex: 1; min-height: 0; padding: var(--space-24) var(--space-32); }
 /* A closed stage is one solid well (no edge line) that brightens under the pointer; nothing shaded sits on it. The open
    stage drops its well, so its fields, tables and preview sit on the page itself, set apart by space. */
-.review-stage { display: flex; flex-direction: column; flex: 0 0 54px; min-height: 0; overflow: hidden; border-radius: var(--radius-lg); background: var(--color-well); transition: flex-grow 320ms var(--ease-drawer), background-color var(--motion-duration) var(--ease-standard); }
-.review-stage[data-open] { flex-grow: 1; background: transparent; }
+.review-stage { --stage-mark: 18px; display: flex; flex-direction: column; flex: 0 0 auto; min-height: 0; overflow: hidden; border-radius: var(--radius-lg); background: var(--color-well); transition: flex-grow 320ms var(--ease-drawer), background-color var(--motion-duration) var(--ease-standard); }
+/* The open stage takes the rest of the page (and scrolls inside); a closed one is as tall as its head, which grows when its
+   summary wraps rather than cutting it short. */
+.review-stage[data-open] { flex: 1 1 0; min-height: 54px; background: transparent; }
 @media (hover: hover) and (pointer: fine) { .review-stage:not([data-open]):has(> .review-stage__head:hover) { background: var(--color-well-hover); } }
 .review-stage:not([data-open]):has(> .review-stage__head:focus-visible) { background: var(--color-well-hover); }
-.review-stage__head { display: flex; align-items: center; gap: var(--space-12); flex: none; width: 100%; height: 54px; padding: 0 var(--space-20); border: 0; background: none; color: var(--color-text); font: inherit; text-align: left; }
+.review-stage__head { display: flex; align-items: center; gap: var(--space-12); flex: none; width: 100%; min-height: 54px; padding: var(--space-12) var(--space-20); border: 0; background: none; color: var(--color-text); font: inherit; text-align: left; }
 button.review-stage__head { cursor: pointer; }
 .review-stage[data-open] button.review-stage__head { cursor: default; }
 /* A stage's number: a bare figure on the well (no ring, no disc); done, a check in the text's ink; open, the text colour as a fill. */
@@ -308,7 +346,7 @@ button.review-stage__head { cursor: pointer; }
 .review-stage__mark[data-done] { color: var(--color-text); }
 .review-stage[data-open] .review-stage__mark { background: var(--color-text); color: var(--color-surface); }
 .review-stage__title { flex: none; font-weight: var(--font-weight-bold); }
-.review-stage__summary { flex: 1; min-width: 0; overflow: clip; color: var(--color-muted); font-size: var(--text-sm); text-align: right; text-overflow: ellipsis; white-space: nowrap; transition: opacity 200ms ease-out; }
+.review-stage__summary { flex: 1; min-width: 0; color: var(--color-muted); font-size: var(--text-sm); text-align: right; text-wrap: pretty; transition: opacity 200ms ease-out; }
 .review-stage[data-open] .review-stage__summary { opacity: 0; }
 /* Right-aligned text that changes when a count arrives (a stage's summary, the Send button's label) grows leftwards. In an
    RTL box its starting point is its right edge, which stays put, so the change moves nothing; plaintext keeps English in
@@ -317,8 +355,11 @@ button.review-stage__head { cursor: pointer; }
 @media (hover: hover) and (pointer: fine) { .review-stage:not([data-open]) .review-stage__head:hover .review-stage__title { text-decoration: underline; text-underline-offset: 3px; } }
 .review-stage__head:focus-visible .review-stage__title { text-decoration: underline; text-underline-offset: 3px; }
 .review-stage__body { display: flex; flex-direction: column; flex: 1; min-height: 0; opacity: 0; transition: opacity 240ms ease-out; }
+.review-stage:not([data-open]) .review-stage__body { display: none; }
+@starting-style { .review-stage[data-open] .review-stage__body { opacity: 0; } }
 .review-stage[data-open] .review-stage__body { opacity: 1; }
-.review-stage__content { display: flex; flex-direction: column; gap: var(--space-16); flex: 1; min-height: 0; overflow: auto; padding: var(--space-4) var(--space-20) var(--space-20) 52px; }
+/* The open stage's content starts under its title: the head's padding, the mark (--stage-mark, campaign-steps__mark's size) and the gap. */
+.review-stage__content { display: flex; flex-direction: column; gap: var(--space-16); flex: 1; min-height: 0; overflow: auto; padding: var(--space-4) var(--space-20) var(--space-20) calc(var(--space-20) + var(--stage-mark) + var(--space-12)); }
 .review-stage__footer { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-16); flex: none; padding: var(--space-12) var(--space-20); }
 .review-stage__footer .campaign-notes { flex: 1; }
 /* A required notice's confirmation sits beside Send; on a phone it has its own line above it. */
@@ -355,8 +396,8 @@ button.review-stage__head { cursor: pointer; }
   .campaign-review--draft .review-stage__content { overflow: auto; }
 }
 .app-shell--compact .page-surface:has(.campaign-review--draft) { height: calc(100dvh - var(--mobile-bar-height) - var(--tab-bar-height) - env(safe-area-inset-top) - env(safe-area-inset-bottom)); min-height: 0; overflow: hidden; }
-@media (prefers-reduced-motion: reduce) { .review-stage, .review-stage__body, .review-stage__summary, .campaign-studio .campaign-compose-preview, .campaign-studio .campaign-compose-preview > div > * { transition: none; } }
-.campaign-review .campaign-review-layout { column-gap: 56px; row-gap: var(--space-32); }
+@media (prefers-reduced-motion: reduce) { .review-stage { transition: background-color var(--motion-duration) var(--ease-standard); } }
+.campaign-review .campaign-review-layout { column-gap: calc(var(--space-40) + var(--space-16)); row-gap: var(--space-32); }
 .campaign-audience-picker { display: flex; flex-direction: column; gap: var(--space-12); }
 @media (max-width: 1100px) { .studio-bar { grid-template-columns: minmax(0, 1fr) auto; } .studio-bar__steps { display: none; } }
 /* In the studio the name and the actions keep the room until the bar is wide enough for the steps too. */
@@ -367,11 +408,11 @@ button.review-stage__head { cursor: pointer; }
   .studio-bar, .template-compose-page > .ui-page-header { height: auto; min-height: 56px; padding: var(--space-6) var(--space-8); gap: var(--space-8); }
   .studio-bar__crumb { display: none; }
   /* 16px fields on a phone, so iOS never zooms in on focus. */
-  .studio-bar .studio-name, .campaign-compose-row .ui-input { font-size: 16px; }
+  .studio-bar .studio-name, .campaign-compose-row .ui-input { font-size: var(--text-lg); }
   .campaign-compose-scroll { padding: var(--space-8) var(--space-8) var(--space-40); }
   .campaign-compose-sheet { padding-top: var(--space-4); }
   .campaign-compose-row { margin-inline: var(--space-4); padding-inline: var(--space-12) var(--space-12); }
-  .campaign-compose-feedback, .campaign-personalize__lead { padding-inline: var(--space-16); }
+  .campaign-compose-feedback, .campaign-compose-problem, .campaign-personalize__lead { padding-inline: var(--space-16); }
   .campaign-compose-metadata > .ui-alert, .campaign-compose-sheet > .campaign-file-blocks { margin-inline: var(--space-16); }
   .composer-skeleton-canvas { padding-inline: var(--space-16); }
   .campaign-review__body { padding: var(--space-20) var(--space-16); }

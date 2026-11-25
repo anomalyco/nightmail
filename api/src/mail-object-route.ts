@@ -18,7 +18,7 @@ export function mailObjectUrl(runtime: Runtime, w: string, k: string, f: string,
   };
 }
 /**
- * Every check on a Bane-signed object link (format, signature, expiry, a live owning inbox, the tenant
+ * Every check on a Nightmail-signed object link (format, signature, expiry, a live owning inbox, the tenant
  * key) and its download response. The public route passes no workspace: the link is a bearer capability.
  * A server-side read on a caller's behalf passes the caller's workspace, which must own the object.
  */

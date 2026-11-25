@@ -1,5 +1,5 @@
 import { errorCodeOf, errorTypeOf, log, setLogContext, stackFrames } from '../../api/src/log.js';
-import { BaneError } from './bane.js';
+import { NightmailError } from './nightmail.js';
 import { MissingSecret } from './tokens.js';
 
 // Nightmail's structured logs (api/src/log.ts, PR #131): one JSON line per event in Workers Logs, with the same fields,
@@ -16,7 +16,7 @@ export { log };
 export function logError(error: unknown, fields: Record<string, unknown> & { code: string; message?: never }, level: 'error' | 'warn' = 'error') {
   let entry: Record<string, unknown>;
   try {
-    const bane = error instanceof BaneError ? { baneStatus: error.status, baneCode: errorCodeOf(error.code), baneRequestId: error.requestId ?? undefined } : {};
+    const bane = error instanceof NightmailError ? { baneStatus: error.status, baneCode: errorCodeOf(error.code), baneRequestId: error.requestId ?? undefined } : {};
     const secret = error instanceof MissingSecret ? { secret: error.secret } : {};
     entry = { ...fields, code: errorCodeOf(fields.code), errorType: errorTypeOf(error), ...bane, ...secret, stack: stackFrames(error) };
   } catch { entry = { code: errorCodeOf(fields.code), errorType: 'Error' }; }

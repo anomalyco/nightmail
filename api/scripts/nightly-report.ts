@@ -1,4 +1,4 @@
-// The nightly report (docs/ci.md, "Nightly report and self-improve loop"): the last 24 hours of Bane's structured logs
+// The nightly report (docs/ci.md, "Nightly report and self-improve loop"): the last 24 hours of Nightmail's structured logs
 // on production and dev against the previous seven days. It reads the Workers' lines from Workers Logs (the
 // Observability telemetry API) and the mail gateway's from CloudWatch, writes a Markdown report and a JSON summary, and
 // can open one GitHub issue per new problem.
@@ -396,7 +396,7 @@ async function main() {
   }
   const issueLine = (item: Json) => `- [#${item.number}](${item.url}) ${item.title} (${item.stages.join(', ')})`;
   const report = [
-    `# Bane nightly report, ${date}`, '',
+    `# Nightmail nightly report, ${date}`, '',
     `Window: ${iso(end - DAY)} to ${iso(end)}. Sources: Workers Logs for ${stages.map(item => `\`${item.script}\``).join(' and ')}; CloudWatch \`${gatewayLogGroup}\`. Counts of sampled successes are estimates.`, '',
     '## Problems', '',
     `Filed now (${filed.length}):`, filed.length ? filed.map(issueLine).join('\n') : '- none', '',

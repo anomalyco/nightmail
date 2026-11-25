@@ -6,7 +6,7 @@
 import type { DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
 import { sanitizeBlockStyle } from './block-style.js';
-import { productName } from './brand.js';
+import { linkDomain, productName } from './brand.js';
 import { SEND_LIMITS } from './send-limits.js';
 
 type Node = DefaultTreeAdapterMap['node'];
@@ -95,7 +95,9 @@ A campaign created from a template copies them: give it a default for each one (
 ## Unsubscribe
 
 ${productName} adds an Unsubscribe link at the end of every campaign email and the one-click
-\`List-Unsubscribe\` headers. Under the link it shows the workspace's postal address, which US law
+\`List-Unsubscribe\` headers. The link is on ${productName}'s link domain, \`${linkDomain}\`, so
+there is no DNS record to add for it (a self-hosted installation links on its own address instead).
+Under the link it shows the workspace's postal address, which US law
 (CAN-SPAM) requires: set \`postalAddress\` with updateWorkspaceSettings before sending or scheduling a
 campaign (until then both refuse with \`POSTAL_ADDRESS_REQUIRED\`); don't repeat it in the content.
 

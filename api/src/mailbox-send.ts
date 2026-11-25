@@ -194,7 +194,7 @@ export type OutgoingMessage = {
   subject: string; text?: string; html?: string; attachments: ResolvedAttachment[];
   fromName?: string; region?: string; tracking?: boolean; screen?: boolean;
   threadId?: string; inReplyTo: string | null; references: string[]; autoSubmitted?: 'auto-generated' | 'auto-replied'; headers: { name: string; value: string }[];
-  /** Bane-authored mail carrying a single-use capability (fwd_…). Every workspace-visible copy withholds it; only the sent message has it. */
+  /** Nightmail-authored mail carrying a single-use capability (fwd_…). Every workspace-visible copy withholds it; only the sent message has it. */
   sealed?: boolean;
 };
 /** Withholds single-use capabilities (a forward confirmation; a sign-in link, signups.ts signinLinkUrl) from stored, workspace-visible copies of sealed mail. */

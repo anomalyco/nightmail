@@ -1725,7 +1725,7 @@
               "dead",
               "no_mail_domain"
             ],
-            "description": "invalid: not a deliverable address. disposable: a public temporary inbox, or a domain whose mail servers serve them. typo_domain: a mistyped mailbox provider (gmial.com). role: abuse@, postmaster@, noreply@ and the like. dead: known to be undeliverable (a recent permanent bounce). no_mail_domain: the domain can't receive mail (it doesn't exist, or has no mail server)."
+            "description": "invalid: not a deliverable address. disposable: a public temporary inbox on a listed domain or subdomain. typo_domain: a mistyped mailbox provider (gmial.com). role: abuse@, postmaster@, noreply@ and the like. dead: known to be undeliverable (a recent permanent bounce). no_mail_domain: the domain can't receive mail (it doesn't exist, or has no mail server)."
           },
           "suggestion": {
             "type": [
@@ -6077,7 +6077,8 @@
                   "list_probe",
                   "balance",
                   "feedback_lag",
-                  "ramp"
+                  "ramp",
+                  "link_record"
                 ]
               },
               "until": {
@@ -6088,7 +6089,7 @@
               "reason",
               "until"
             ],
-            "description": "Why releasing recipients is currently held, and the best estimate of until when. list_probe: Hosted sent the first recipients (the list probe) and waits for their bounces and complaints before releasing the rest. feedback_lag: releasing is briefly held while priority safety feedback (bounces/complaints) catches up. ramp: a Hosted sender's first large campaigns release in growing hourly steps (sendEstimate.ramp); this hour's step is used up, or its delivery results are still coming in before the next step."
+            "description": "Why releasing recipients is currently held, and the best estimate of until when. list_probe: Hosted sent the first recipients (the list probe) and waits for their bounces and complaints before releasing the rest. feedback_lag: releasing is briefly held while priority safety feedback (bounces/complaints) catches up. ramp: a Hosted sender's first large campaigns release in growing hourly steps (sendEstimate.ramp); this hour's step is used up, or its delivery results are still coming in before the next step. link_record: the campaign has no host for its unsubscribe link right now (its workspace's sending is paused, or with own link hosts, its domain's isn't active yet); it continues by itself."
           },
           "feedbackLag": {
             "type": [
@@ -8641,8 +8642,10 @@
                     "sending",
                     "receiving",
                     "mail_from",
-                    "dmarc"
-                  ]
+                    "dmarc",
+                    "links"
+                  ],
+                  "description": "links: optional, the domain's own link host (links.<domain>) for the unsubscribe and other links Nightmail adds to campaign and marketing mail; shown when the installation has a link domain with Cloudflare for SaaS."
                 },
                 "status": {
                   "type": "string",
@@ -9038,6 +9041,7 @@
               "type": "string",
               "enum": [
                 "sending",
+                "links",
                 "ownership",
                 "receiving",
                 "receivingReply",
@@ -40832,7 +40836,7 @@
             "schema": {
               "type": "string",
               "maxLength": 64,
-              "pattern": "^(sending|ownership|receiving|receivingReply|mailfrom)(,(sending|ownership|receiving|receivingReply|mailfrom))*$",
+              "pattern": "^(sending|links|ownership|receiving|receivingReply|mailfrom)(,(sending|links|ownership|receiving|receivingReply|mailfrom))*$",
               "description": "Optional comma-separated subset of pending groups. Only one receiving target is eligible: receiving (@) or receivingReply (reply). mailfrom is available only for email.<domain>; other MAIL FROM names use manual DNS."
             },
             "required": false,
@@ -63591,8 +63595,8 @@
         "x-nightmail-permission": {
           "permission": "receivedMail",
           "level": "read",
-          "scope": "address",
-          "text": "Needs Received mail: read for the address or inbox."
+          "scope": "recipient",
+          "text": "Needs Received mail: read for the address it reached, or a sender domain it was addressed to."
         },
         "x-codeSamples": [
           {
@@ -63963,8 +63967,8 @@
         "x-nightmail-permission": {
           "permission": "receivedMail",
           "level": "read",
-          "scope": "address",
-          "text": "Needs Received mail: read for the address or inbox."
+          "scope": "recipient",
+          "text": "Needs Received mail: read for the address it reached, or a sender domain it was addressed to."
         },
         "x-codeSamples": [
           {
@@ -64378,8 +64382,8 @@
         "x-nightmail-permission": {
           "permission": "receivedMail",
           "level": "read",
-          "scope": "address",
-          "text": "Needs Received mail: read for the address or inbox."
+          "scope": "recipient",
+          "text": "Needs Received mail: read for the address it reached, or a sender domain it was addressed to."
         },
         "x-codeSamples": [
           {
@@ -64610,8 +64614,8 @@
         "x-nightmail-permission": {
           "permission": "receivedMail",
           "level": "read",
-          "scope": "address",
-          "text": "Needs Received mail: read for the address or inbox."
+          "scope": "recipient",
+          "text": "Needs Received mail: read for the address it reached, or a sender domain it was addressed to."
         },
         "x-codeSamples": [
           {
@@ -64794,8 +64798,8 @@
         "x-nightmail-permission": {
           "permission": "receivedMail",
           "level": "read",
-          "scope": "address",
-          "text": "Needs Received mail: read for the address or inbox."
+          "scope": "recipient",
+          "text": "Needs Received mail: read for the address it reached, or a sender domain it was addressed to."
         },
         "x-codeSamples": [
           {
@@ -64987,8 +64991,8 @@
         "x-nightmail-permission": {
           "permission": "receivedMail",
           "level": "read",
-          "scope": "address",
-          "text": "Needs Received mail: read for the address or inbox."
+          "scope": "recipient",
+          "text": "Needs Received mail: read for the address it reached, or a sender domain it was addressed to."
         },
         "x-codeSamples": [
           {
@@ -66107,8 +66111,8 @@
         "x-nightmail-permission": {
           "permission": "receivedMail",
           "level": "read",
-          "scope": "address",
-          "text": "Needs Received mail: read for the address or inbox."
+          "scope": "recipient",
+          "text": "Needs Received mail: read for the address it reached, or a sender domain it was addressed to."
         },
         "x-codeSamples": [
           {

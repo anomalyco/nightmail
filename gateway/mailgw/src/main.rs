@@ -177,7 +177,7 @@ impl Gateway {
         let mut discard = 0usize;
         let mut terminator = 0usize;
         let mut buf = [0u8; 4096];
-        let mut deadline = auth_deadline.min(Instant::now() + PREAUTH_IDLE);
+        let mut deadline = auth_deadline.min(Instant::now() + Duration::from_secs(5));
         const KEEPALIVE: Duration = Duration::from_secs(240);
         let mut heartbeat = Instant::now() + KEEPALIVE;
         loop {
@@ -747,15 +747,22 @@ async fn main() -> Result<()> {
         let events = gw.events.clone();
         let (ready, mut rx) = watch::channel(false);
         listeners.spawn(async move {
+            let mut backoff = Duration::from_secs(1);
             loop {
                 if remote::listen(&db, &events, &api, &ready).await.is_err() {
+                    let was_online = api.online.swap(false, std::sync::atomic::Ordering::AcqRel);
+                    if was_online {
+                        backoff = Duration::from_secs(1);
+                    }
                     ready.send_replace(false);
-                    api.online
-                        .store(false, std::sync::atomic::Ordering::Release);
-                    tracing::warn!("protocol notification connection unavailable");
+                    tracing::warn!(
+                        backoff_secs = backoff.as_secs(),
+                        "protocol notification connection unavailable"
+                    );
                     api.invalidate(None);
                     events.publish(None, true);
-                    tokio::time::sleep(Duration::from_secs(1)).await
+                    tokio::time::sleep(backoff).await;
+                    backoff = (backoff * 2).min(Duration::from_secs(30));
                 }
             }
         });

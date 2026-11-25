@@ -1,4 +1,4 @@
-# OpenSend MX: tenant-isolation map
+# Nightmail: tenant-isolation map
 
 **Keep `default` as the existing workspace ID. Do not enable a second workspace merely by changing `config.workspaceId`.** That would leave three release blockers: dashboard administrators can list and revoke other users’ MCP grants; unrestricted senders can use another tenant’s SES-verified domain; and feedback batches assign every item to one workspace (`mcp-auth.ts:353–372`; `sending.ts:241–248,1116–1137`; `operations.ts:200–212,563–597`).
 

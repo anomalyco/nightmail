@@ -9,8 +9,8 @@
 .newsletter-readers__count strong { margin-right: var(--space-6); font-family: var(--font-mono); font-size: var(--text-xl); line-height: var(--leading-xl); font-weight: var(--font-weight-regular); letter-spacing: -.5px; }
 .newsletter-readers__count .ui-skeleton-line { height: var(--leading-xl); }
 .newsletter-growth { display: flex; flex-direction: column; gap: var(--space-8); min-width: 0; margin: 0; }
-.newsletter-growth__bars { flex: 1; display: flex; align-items: flex-end; gap: 4px; min-height: 0; }
-.newsletter-growth__bars span { flex: 1; min-width: 0; border-radius: 1px; background: var(--color-accent-data); }
+.newsletter-growth__bars { flex: 1; display: flex; align-items: flex-end; gap: var(--space-4); min-height: 0; }
+.newsletter-growth__bars span { flex: 1; min-width: 0; border-radius: var(--radius-2xs); background: var(--color-accent-data); }
 .newsletter-growth__caption { display: flex; justify-content: space-between; gap: var(--space-16); height: var(--leading-xs); color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .newsletter-issue { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* When an issue went out reads as data: mono, a size down, like the counts beside it. */

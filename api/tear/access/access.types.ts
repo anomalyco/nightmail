@@ -114,7 +114,7 @@ export function restAllows(op: CatalogOp, a: EvalActor): boolean {
   if (!p) return false;
 
   if (a.kind === "inboxKey") {
-    if (p.scope !== "address") return false;
+    if (p.scope !== "address" && p.scope !== "recipient") return false;
     const perms = a.inboxPerms ?? [];
     if (p.permission === "sendEmail") return perms.includes("send");
     if (p.permission === "inboxes" && p.level === "write") return perms.includes("create");
@@ -137,6 +137,10 @@ export function restAllows(op: CatalogOp, a: EvalActor): boolean {
     if (p.level === "write") return a.manage;
     return hasPerm(a, "read");
   }
+
+  // Received mail reads: an API key limited to sender domains reads the mail addressed to them with read (core.ts
+  // domainMailAccess); any other workspace credential as an address-scoped mailbox path.
+  if (p.scope === "recipient") return a.domainLimited ? a.kind === "apiKey" && hasPerm(a, "read") : a.manage;
 
   // Scope restrictions for domain-limited keys
   if (a.domainLimited && (p.scope === "workspace" || p.scope === "address")) {

@@ -1,8 +1,8 @@
 import { getTableColumns, sql, type SQL } from 'drizzle-orm';
 import type { Attachment, SESv2Client, SendEmailCommandInput } from '@aws-sdk/client-sesv2';
-import { ApiError, getSes, isSimulatedSes, rowId, lazyModule, log, logError, ModuleLoadError, preloadSesTransport, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
+import { ApiError, databaseConflict, getSes, isSimulatedSes, rowId, lazyModule, log, logError, ModuleLoadError, preloadSesTransport, transientDatabaseError, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
 import { attachments, emails, type EmailSnapshot, type EmailStatus, type CampaignDraft, type ReviewedRecipient } from './db/sending.js';
-import { approvedOriginUser, checkedDispatchAttachments, customerCredits, formattedSender, inlineMessage, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, sesDailyReserve, sizeCheck, statusForEvent, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
+import { approvedOriginUser, checkedDispatchAttachments, customerCredits, formattedSender, inlineMessage, LINK_RECORD_RECHECK_MS, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, sesDailyReserve, sizeCheck, statusForEvent, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
 import { receivingPolicy } from './mailbox-ingest-input.js';
 import { tieAllows } from './approval-ties.js';
 import { principal } from './mail-gateway.js';
@@ -20,6 +20,8 @@ import { outbound } from './screen-calls.js';
 import { SEND_LIMITS } from './send-limits.js';
 import { SesBodyError } from './ses-body.js';
 import { sendReservation, withMemory } from './isolate-memory.js';
+import { linkInlineImages } from './linked-images.js';
+import { servedDomains } from './brand.js';
 
 const loadSesv2 = lazyModule(() => import('@aws-sdk/client-sesv2'));
 const loadSimulatedSes = lazyModule(() => import('./adapters/simulated-ses.js'));
@@ -30,12 +32,12 @@ const loadSimulatedSes = lazyModule(() => import('./adapters/simulated-ses.js'))
 // Provider pacing lives in process memory (one shard owns one share of the regional quota),
 // so the hot path costs three database statements per batch rather than ten per email.
 
-type DispatchTransport = {
+export type DispatchTransport = {
   GetAccountCommand: typeof import('@aws-sdk/client-sesv2').GetAccountCommand;
   SendEmailCommand: typeof import('@aws-sdk/client-sesv2').SendEmailCommand;
   clientFor: (runtime: Runtime, region: string, connection?: ReadyConnection, runClients?: Map<string, SESv2Client>) => SESv2Client;
 };
-function loadDispatchTransport(runtime: Runtime): Promise<DispatchTransport> {
+export function loadDispatchTransport(runtime: Runtime): Promise<DispatchTransport> {
   return wrapModuleLoad(async () => {
     if (isSimulatedSes(runtime)) {
       const [{ GetAccountCommand, SendEmailCommand }, { simulatedSes }] = await Promise.all([loadSesv2(), loadSimulatedSes()]);
@@ -212,6 +214,13 @@ export const POOL_QUOTA_STALE_MS = 5 * 60_000;
  * time), with the platform's own credentials. A region that sends keeps its fresh sample and costs nothing here. Never
  * throws: a region that can't be read is logged and tried again the next minute.
  */
+/** The platform's own SES client for a shared pool region: shared credentials, so the account must be the platform's
+ *  (core.ts assertSharedAccount), and a runtime scoped to the region (core.ts region()). Quota and deliverability reads. */
+export function poolSes(runtime: Runtime, transport: DispatchTransport, region: string, account: string) {
+  const scoped = { ...runtime, config: { ...runtime.config, regions: [region] } };
+  const pool: ReadyConnection = { id: `pool:${region}`, kind: 'shared', aws_account_id: account, role_arn: '', external_id: '' };
+  return { scoped, ses: transport.clientFor(scoped, region, forDelivery(pool, { purpose: 'quota' })) };
+}
 export async function refreshPoolQuotas(runtime: Runtime) {
   if (!runtime.config.multiTenant) return;
   try {
@@ -222,9 +231,8 @@ export async function refreshPoolQuotas(runtime: Runtime) {
     const transport = await loadDispatchTransport(runtime);
     for (const { region, account } of rows) {
       try {
-        const scoped = { ...runtime, config: { ...runtime.config, regions: [region] } };
-        const pool: ReadyConnection = { id: `pool:${region}`, kind: 'shared', aws_account_id: account, role_arn: '', external_id: '' };
-        await ensureQuota({ runtime: scoped, a: { workspaceId: runtime.config.workspaceId }, transport, ses: transport.clientFor(scoped, region, forDelivery(pool, { purpose: 'quota' })) }, account, region, initialGate(), QUOTA_REFRESH_MS);
+        const { scoped, ses } = poolSes(runtime, transport, region, account);
+        await ensureQuota({ runtime: scoped, a: { workspaceId: runtime.config.workspaceId }, transport, ses }, account, region, initialGate(), QUOTA_REFRESH_MS);
       } catch (error) { logError(error, { code: 'POOL_QUOTA_REFRESH_FAILED', region }, 'warn'); }
     }
   } catch (error) { logError(error, { code: 'POOL_QUOTA_REFRESH_FAILED' }, 'warn'); }
@@ -550,15 +558,33 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
   const rules=isSimulatedSes(runtime) || !hosted || leased.owner.trusted ? null : leased.owner.probation ? 'probation' : 'standard';
   const delivery=rules ? await import('./screened-html.js') : undefined;
   if (delivery && (mail.snapshot.deferredCampaign || s.screenVerdict?.rules !== rules)) s = delivery.hostedCopy(s, rules==='probation');
-  const parts: Attachment[] = [];
+  let parts: Attachment[] = [];
   rows ??= checkedDispatchAttachments(s.attachments, await loadAttachments(mail));
+  const files: { row: AttachmentRow; bytes: Uint8Array }[] = [];
   for (const row of rows) {
     const body = await verifiedAttachment(runtime, row);
+    files.push({ row, bytes: body });
     // A probation attachment goes out under a name a client shows as is, as a type its extension and bytes agree with;
     // any other sender's is checked only for pictures (no SVG, inline parts as raster images).
     if (rules==='standard') delivery!.shownAttachment(row.filename, row.contentType, body, row.disposition === 'inline');
     const { filename, contentType } = rules==='probation' ? delivery!.screenedAttachment(row.filename, row.contentType, body, row.disposition === 'inline') : row;
     parts.push({ FileName: filename, RawContent: body, ContentType: contentType, ContentDisposition: row.disposition === 'inline' ? 'INLINE' : 'ATTACHMENT', ContentTransferEncoding: 'BASE64', ...(row.contentId ? { ContentId: row.contentId } : {}) });
+  }
+  // A campaign's mail, and its test, links its inline pictures from the host of its links (s.linkOrigin: the link domain on
+  // Hosted, PUBLIC_URL without link hosts) rather than carrying them, after the checks above (src/linked-images.ts). Never
+  // from Hosted's own domain (src/link-domains.ts never gives it one); without an origin they stay attached. An email sent
+  // through the API keeps the parts its caller attached.
+  const imageOrigin = s.linkOrigin && !(runtime.config.multiTenant && servedDomains.includes(new URL(s.linkOrigin).hostname)) ? s.linkOrigin : undefined;
+  if (runtime.config.linkedImages && imageOrigin && s.html && !s.mime && !s.raw && (mail.campaignId || s.testCampaignId) && rows.some(row => row.disposition === 'inline')) {
+    const { html, linked } = linkInlineImages(imageOrigin, s.html, files);
+    if (linked.size) {
+      // A test's pictures on the link domain: its use lets the link domain serve them (a campaign's release records its own).
+      const host = new URL(imageOrigin).hostname;
+      if (s.testCampaignId && host === runtime.config.linkHost) await (await import('./link-domains.js')).recordLinkUse(runtime.db, a.workspaceId, host, 0);
+      s = { ...s, html };
+      parts = parts.filter((_, i) => !linked.has(files[i]!.row.id));
+      rows = rows.filter(row => !linked.has(row.id));
+    }
   }
   sizeCheck(s, rows);
   const content: SendEmailCommandInput['Content'] = s.mime || s.raw
@@ -893,10 +919,10 @@ async function recordOutcomes(runtime: Runtime, outcomes: Outcome[]) {
   for (let attempt=0; ; attempt++) {
     try { readyJobs = (await runtime.db.execute<{webhooks:number}>(statement)).rows[0]!.webhooks; break; }
     catch (error) {
-      const pg = error as {code?:string;cause?:{code?:string}};
-      if (!['40P01','40001'].includes(pg.cause?.code ?? pg.code ?? '')) throw error;
+      const conflict = databaseConflict(error), transient = !conflict && transientDatabaseError(error);
+      if (!conflict && !transient) throw error;
       if (attempt>=3) {
-        if (outcomes.length===1) throw error;
+        if (!conflict || outcomes.length===1) throw error;
         // A repeatedly contended mixed write must not strand its neighbors. Keep one
         // writer per run, and attempt the second half even if the first cannot settle.
         const mid=Math.ceil(outcomes.length/2);
@@ -904,7 +930,8 @@ async function recordOutcomes(runtime: Runtime, outcomes: Outcome[]) {
         finally { await recordOutcomes(runtime,outcomes.slice(mid)); }
         return;
       }
-      await sleep((10+Math.random()*20)*2**attempt);
+      const baseMs = transient ? 100 : 10;
+      await sleep((baseMs + Math.random() * baseMs) * 2 ** attempt);
     }
   }
   if (readyJobs > 0) try { await runtime.wake?.(readyJobs, 'webhook'); } catch { log('warn', { code: 'QUEUE_WAKE_FAILED', message: 'Webhook jobs remain durable.' }); }
@@ -1072,7 +1099,7 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
     return { processed: 0, blocked: true };
   }
   const loadAttachments = batchAttachments(base, ready);
-  const unscreened: Mail[] = [];
+  const unscreened: Mail[] = [], linkWaiting: Mail[] = [];
   const prepare = async (item: typeof ready[number]) => {
     try {
       if (item.contentBytes) {
@@ -1091,6 +1118,9 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
     catch (error) {
       if (error instanceof ModuleLoadError) { await releaseLeases(base, [item.mail]); throw error; }
       if (error instanceof HeldForScreen) { unscreened.push(item.mail); counters.deferred++; lane.advanced++; logEmail(lane, item.mail, item.trace, 'deferred', 'SCREEN_REQUIRED'); return; }
+      // A campaign launched before link hosts whose sending domain has none active yet (src/link-domains.ts): the email
+      // stays queued, as its campaign waits, and is tried again in 15 minutes instead of failing.
+      if (error instanceof ApiError && error.code === 'LINK_RECORD_REQUIRED') { linkWaiting.push(item.mail); counters.deferred++; lane.advanced++; logEmail(lane, item.mail, item.trace, 'deferred', 'LINK_RECORD_REQUIRED'); return; }
       counters.skipped++; lane.advanced++;
       logEmail(lane, item.mail, item.trace, await rejectPreflight(item.owner.runtime, item.mail, error), error instanceof ApiError ? error.code : 'DISPATCH_PREFLIGHT_FAILED');
     }
@@ -1151,6 +1181,7 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
   if (unscreened.length) await base.db.execute(sql`UPDATE sending_emails e SET screened = false, lease_until = NULL
     FROM jsonb_to_recordset(${JSON.stringify(unscreened.map(m => ({ workspace_id: m.workspaceId, id: m.id, version: m.dispatchVersion, status: 'queued' })))}::jsonb) x(workspace_id text, id text, version int, status text)
     WHERE e.workspace_id = x.workspace_id AND e.id = x.id AND e.dispatch_version = x.version AND e.status = x.status`);
+  if (linkWaiting.length) await releaseLeases(base, linkWaiting, Date.now() + LINK_RECORD_RECHECK_MS);
   return { processed: ready.length, blocked: false };
 }
 const logLost = (count:number) => log('warn', { code:'DISPATCH_CLAIM_LOST', count, message:'Rows changed between lease and claim; they will be reconsidered on the next pass.' });
@@ -1161,7 +1192,7 @@ async function recordBatch(base: Runtime,lane: Lane,outcomes: Outcome[]) {
   await lane.phase('record', () => recordOutcomes(base,outcomes));
   for (const outcome of outcomes) {
     logEmail(lane, outcome.mail, outcome.trace, outcome.type === 'dispatch_deferred' ? 'deferred' : outcome.type, outcome.errorCode ?? (typeof outcome.data.code === 'string' ? outcome.data.code : undefined));
-    if(outcome.type==='acceptance_unknown' || outcome.type==='provider_throttled' || outcome.errorCode==='SES_TENANT_SENDING_PAUSED') log(outcome.type==='acceptance_unknown'?'error':'warn',{code:outcome.errorCode,region:outcome.mail.region,stream:outcome.mail.snapshot.kind});
+    if(outcome.type==='acceptance_unknown' || outcome.type==='provider_throttled' || outcome.errorCode==='SES_TENANT_SENDING_PAUSED') log(outcome.type==='acceptance_unknown' || outcome.errorCode==='SES_ACCOUNT_SENDING_PAUSED' || outcome.errorCode==='SES_CREDENTIALS_INVALID' ? 'error' : 'warn',{code:outcome.errorCode,region:outcome.mail.region,stream:outcome.mail.snapshot.kind});
     if (outcome.type === 'accepted') lane.counters.sent++; else if (requeued(outcome)) lane.counters.deferred++; else lane.counters.skipped++;
     if (outcome.mail.campaignId && !requeued(outcome)) lane.finishing.set(outcome.mail.campaignId, { workspace_id: outcome.mail.workspaceId, campaign_id: outcome.mail.campaignId });
   }

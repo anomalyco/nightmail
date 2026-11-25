@@ -1,3 +1,4 @@
+import { labelSkeleton } from './label-skeleton.js';
 import { isIPv4, isIPv6 } from 'node:net';
 import tls from 'node:tls';
 import { domainToUnicode } from 'node:url';
@@ -11,10 +12,8 @@ const day = 86_400_000;
 const hostSyntax = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 
 const protectedBrands = ['paypal.com','google.com','microsoft.com','apple.com','amazon.com','stripe.com',productDomain,...servedDomains,'opensend.mx'];
-const confusables:Record<string,string> = { '0':'o','1':'l','3':'e','4':'a','5':'s','7':'t','а':'a','α':'a','е':'e','ε':'e','і':'i','ι':'i','ӏ':'l','о':'o','ο':'o','р':'p','ρ':'p','с':'c','ѕ':'s','т':'t','у':'y','х':'x','ν':'v','к':'k','м':'m' };
-const skeleton = (value:string) => domainToUnicode(value).toLowerCase().normalize('NFKD').replace(/\p{M}/gu,'').replace(/./gu,c=>confusables[c]??c).replace(/rn/g,'m');
 export function brandLookalike(host:string) {
-  const labels=host.split('.').slice(0,-1).map(skeleton);
+  const labels=host.split('.').slice(0,-1).map(label => labelSkeleton(domainToUnicode(label)));
   return protectedBrands.some(official => host!==official && !host.endsWith('.'+official) && labels.some(label =>
     [label.replaceAll('-',''),...label.split('-')].includes(official.split('.')[0]!)));
 }
@@ -81,7 +80,8 @@ async function mailDns(name:string,signal:AbortSignal,probe:ReturnType<typeof pr
   return {mx:mx && mx.values.length>0 && mx.values.every(v=>{const m=/^(\d+)\s+(\S+)$/.exec(v);return !!m && +m[1]!<=65535 && hostSyntax.test(fqdn(m[2]!));}),
     spf:policy && spf(policy.values),dmarc:report && dmarc(report.values)};
 }
-async function dbl(name:string,zone:string,signal:AbortSignal) {
+/** A name on Spamhaus DBL through a DQS zone: listed, clear, or null when the answer proves neither. */
+export async function dbl(name:string,zone:string,signal:AbortSignal) {
   const res=await dns(`${name}.${zone}`,'A',signal);
   // A denied public resolver, usage-limit code, unexpected address or SERVFAIL is not clean.
   if(res.status===0 && res.values.some(a=>/^127\.0\.1\.(?:2|4|5|6|10[2-6])$/.test(a))) return 'listed';

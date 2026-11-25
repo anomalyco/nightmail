@@ -12,7 +12,7 @@
 /* The row the workspace is on: a neutral tint across the row, bold figures, and a Now tag ahead of its score. */
 .limits-table tr[aria-current] td { background: var(--color-active-bg); font-weight: var(--font-weight-bold); }
 .limits-table:not(.limits-table--lines) :is(th, td):first-child { padding-left: var(--space-8); }
-.limits-table__now { display: inline-block; margin-right: var(--space-8); padding: 0 var(--space-6); border-radius: var(--radius-sm); background: var(--color-chip); color: var(--color-text); font-family: var(--font-body); font-size: var(--text-xs); font-weight: normal; line-height: 16px; vertical-align: 1px; }
+.limits-table__now { display: inline-block; margin-right: var(--space-8); padding: 0 var(--space-6); border-radius: var(--radius-sm); background: var(--color-chip); color: var(--color-text); font-family: var(--font-body); font-size: var(--text-xs); font-weight: normal; line-height: var(--leading-xs); vertical-align: top; }
 .limits-table :is(th, td):last-child { padding-right: 0; }
 .limits-notes { display: flex; flex-direction: column; gap: var(--space-4); margin: 0; padding-inline-start: var(--space-20); color: var(--color-muted); }
 .limits-notes--plain { color: var(--color-text); }
@@ -27,8 +27,8 @@
 .limits-ladder > li { display: flex; flex-direction: column; gap: var(--space-6); padding: var(--space-12) 0; }
 .limits-ladder__head { display: flex; align-items: center; gap: var(--space-8); }
 .limits-ladder > li > p + p { margin-top: calc(-1 * var(--space-4)); }
-.limits-ladder__mark { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--color-layer-2); color: var(--tone-ink); font-family: var(--font-mono); font-size: 10px; line-height: 1; }
-.limits-ladder > li > ul { display: flex; flex-direction: column; gap: 2px; margin: 0; padding-inline-start: var(--space-20); font-size: var(--text-xs); line-height: var(--leading-xs); font-variant-numeric: tabular-nums; }
+.limits-ladder__mark { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 50%; background: var(--color-layer-2); color: var(--tone-ink); font-family: var(--font-mono); font-size: var(--text-label); line-height: 1; }
+.limits-ladder > li > ul { display: flex; flex-direction: column; gap: var(--space-4); margin: 0; padding-inline-start: var(--space-20); font-size: var(--text-xs); line-height: var(--leading-xs); font-variant-numeric: tabular-nums; }
 /* Overview's dialog: the warning lines and the campaign probe open from their headings, one rule between them. */
 .limits-guide[data-compact] { gap: 0; }
 .limits-guide[data-compact] > section { padding-bottom: var(--space-16); }

@@ -3,7 +3,7 @@ import { ArrowUpRight, ChevronDown, Download } from 'lucide-react'
 import { Link, useLocation } from 'react-router'
 import { useSession } from '../../data/context'
 import { Button, type ButtonProps, EmptyState, FacetRail, LoadingRegion, Meter, MetricRow, PageHeader, SearchField, SectionHeader, Select, Skeleton, Sparkline, SplitPane, TableSkeleton, Tabs, type FacetGroup, type SkeletonColumn, type Tone } from '../../components/ui'
-import type { AbuseBand } from '../../data/operator'
+import type { AbuseBand, DeliverabilityWindow } from '../../data/operator'
 import './operator.css'
 
 // Not an operator: no such page. An operator signed in with GitHub: staff tools need this account's Google sign-in
@@ -268,7 +268,7 @@ export function OperatorWorkspaceSkeleton({ actions }: { actions: boolean }) {
 // feed in a column of its own (under everything on a narrow screen). Every block has its size here, rows and all, so the
 // route's placeholder, the page's loading state and each 5-second refresh draw the same boxes in the same places.
 // glass.tsx fills them.
-export type GlassRowDef = { key: string; label?: string; spark?: true; meter?: true; cells?: readonly string[] }
+export type GlassRowDef = { key: string; label?: string; spark?: true; meter?: true; cells?: readonly string[]; note?: string }
 export type GlassFill = { label?: ReactNode; hint?: ReactNode; spark?: readonly number[]; value: ReactNode; unit?: ReactNode; tone?: Tone; empty?: boolean
   meter?: { value: number; max: number; mark?: number; tone?: Tone; label?: string }; cells?: ReactNode[] }
 /** A tile: its figure, a hint under it, and in its foot a trend (`spark`, oldest first), parts of a whole (`parts`) or a share (`meter`). */
@@ -290,7 +290,7 @@ export const GLASS_REGION_SLOTS = 2
 const STEP_SLOTS = ['OK', 'Notice', 'Warn', 'Restrict', 'Pause']
 const GRADE_SLOTS = ['A+', 'A', 'B', 'C', 'D', 'F', 'Warmup']
 const slots = (prefix: string, n: number, extra: Omit<GlassRowDef, 'key'> = {}) => Array.from({ length: n }, (_, i): GlassRowDef => ({ key: `${prefix}:${i}`, ...extra }))
-export const glassGroups: { key: string; title: string; to?: [href: string, label: string]; rows: GlassRowDef[] }[] = [
+export const glassGroups: GlassGroupDef[] = [
   { key: 'sending', title: 'Sending now', to: ['/operator?view=health', 'Health'], rows: [{ key: 'transactional', label: 'Transactional', spark: true }, { key: 'marketing', label: 'Marketing', spark: true },
     { key: 'held', label: 'Held for screening' }, { key: 'api', label: 'Send API' }, ...slots('campaign', 2, { meter: true })] },
   { key: 'standing', title: 'Standing', to: ['/operator', 'Queue'], rows: [{ key: 'grades', cells: GRADE_SLOTS }, { key: 'steps', cells: STEP_SLOTS }, { key: 'paused', label: 'Paused' },
@@ -324,6 +324,24 @@ function GlassRegionRow({ row, total = false }: { row: GlassRegionFill; total?: 
     <span role="cell" className="glass-region__checked">{row.checked}</span>
   </div>
 }
+/** A placeholder one line of text tall, so the text that replaces it takes the same box. */
+const SkeletonLine = ({ width }: { width: number }) => <span className="glass-skel-line"><Skeleton width={width} height={12} /></span>
+type GlassGroupDef = { key: string; title: string; to?: [href: string, label: string]; rows: GlassRowDef[] }
+/** Groups of 40px rows in as many columns as fit: a metric row each, a row of labelled cells, or a fixed note. */
+function GlassGroupList({ groups, row: fillRow }: { groups: GlassGroupDef[]; row?: (group: string, row: string) => GlassFill }) {
+  return <div className="glass">{groups.map(group => <section key={group.key} className="glass-group" aria-label={group.title}>
+    <SectionHeader title={group.title} actions={groupLink(group.to)} />
+    {group.rows.map(def => {
+      if (def.note) return <p key={def.key} className="glass-note">{def.note}</p>
+      const row = fillRow?.(group.key, def.key)
+      if (def.cells) return <div key={def.key} className="glass-grades" role="list" aria-label={def.key === 'grades' ? 'Sender scores' : 'Standing steps'} style={{ gridTemplateColumns: `repeat(${def.cells.length}, minmax(0, 1fr))` }}>{def.cells.map((cell, i) =>
+        <span key={cell} role="listitem"><span>{cell}</span><b>{row?.cells?.[i] ?? <Skeleton width={16} height={12} />}</b></span>)}</div>
+      return <MetricRow key={def.key} className={row?.empty ? 'glass-empty' : undefined} label={row ? row.label ?? def.label : def.label ?? <SkeletonLine width={112} />} hint={row?.hint}
+        spark={def.spark && <Sparkline values={row?.spark ?? []} />} value={row ? row.value : <Skeleton width={56} height={14} />} unit={row?.unit} tone={row?.tone}
+        meter={def.meter && <Meter value={row?.meter?.value ?? 0} max={row?.meter?.max ?? 1} mark={row?.meter?.mark} tone={row?.meter?.tone} label={row?.meter?.label} />} />
+    })}
+  </section>)}</div>
+}
 const groupLink = (to?: [string, string]) => to && <Link className="ui-button ui-button--ghost ui-button--sm" to={to[0]}>{to[1]} <ArrowUpRight size={16} aria-hidden="true" /></Link>
 /** The board, filled by `fill`; without it, every figure is a placeholder of its own size. `feed`: the activity column's rows. */
 export function GlassBoard({ fill, feed, live }: { fill?: GlassBoardFill; feed?: ReactNode; live?: ReactNode }) {
@@ -348,17 +366,7 @@ export function GlassBoard({ fill, feed, live }: { fill?: GlassBoardFill; feed?:
           <GlassRegionRow total row={fill?.total ?? { ...regionSkeleton, region: 'Total' }} />
         </div>
       </section>
-      <div className="glass">{glassGroups.map(group => <section key={group.key} className="glass-group" aria-label={group.title}>
-        <SectionHeader title={group.title} actions={groupLink(group.to)} />
-        {group.rows.map(def => {
-          const row = fill?.row(group.key, def.key)
-          if (def.cells) return <div key={def.key} className="glass-grades" role="list" aria-label={def.key === 'grades' ? 'Sender scores' : 'Standing steps'} style={{ gridTemplateColumns: `repeat(${def.cells.length}, minmax(0, 1fr))` }}>{def.cells.map((cell, i) =>
-            <span key={cell} role="listitem"><span>{cell}</span><b>{row?.cells?.[i] ?? <Skeleton width={16} height={12} />}</b></span>)}</div>
-          return <MetricRow key={def.key} className={row?.empty ? 'glass-empty' : undefined} label={row ? row.label ?? def.label : def.label ?? <Skeleton width={112} height={12} />} hint={row?.hint}
-            spark={def.spark && <Sparkline values={row?.spark ?? []} />} value={row ? row.value : <Skeleton width={56} height={14} />} unit={row?.unit} tone={row?.tone}
-            meter={def.meter && <Meter value={row?.meter?.value ?? 0} max={row?.meter?.max ?? 1} mark={row?.meter?.mark} tone={row?.meter?.tone} label={row?.meter?.label} />} />
-        })}
-      </section>)}</div>
+      <GlassGroupList groups={glassGroups} row={fill?.row} />
     </div>
     <aside className="glass-feed" aria-label="Activity">
       <div className="glass-feed__head"><h2 className="glass-feed__title">Activity</h2>{live}</div>
@@ -371,9 +379,85 @@ export function GlassBoard({ fill, feed, live }: { fill?: GlassBoardFill; feed?:
 export const GLASS_EVENT_HEIGHT = 52
 /** Whether the figures are live: a dot and the time they are from, in a box as wide as its placeholder. */
 export const GlassAsOf = ({ at, state = 'live' }: { at?: ReactNode; state?: 'live' | 'stalled' }) => <span className="glass-asof" data-state={at ? state : undefined}>
-  <span className="glass-asof__dot" aria-hidden="true" />{at ?? <Skeleton width={96} height={14} />}</span>
+  <span className="glass-asof__dot" aria-hidden="true" />{at ?? <Skeleton width="12ch" height={14} />}</span>
+/** /glass shows the live board; /glass?view=deliverability the Deliverability board. */
+export type GlassView = 'live' | 'deliverability'
+export const glassView = (search: string): GlassView => new URLSearchParams(search).get('view') === 'deliverability' ? 'deliverability' : 'live'
+const glassViews = [{ value: 'live', label: 'Live' }, { value: 'deliverability', label: 'Deliverability' }]
+export const GlassTabs = ({ value, onValueChange }: { value: GlassView; onValueChange?: (view: GlassView) => void }) =>
+  <div className="glass-views"><Tabs value={value} onValueChange={view => onValueChange?.(view as GlassView)} items={glassViews} label="Glass views" disabled={!onValueChange} /></div>
 export function GlassSkeleton() {
-  return <><PageHeader title="Glass" actions={<GlassAsOf />} /><LoadingRegion label="Loading glass"><GlassBoard /></LoadingRegion></>
+  const view = glassView(useLocation().search)
+  return <><PageHeader title="Glass" actions={<GlassAsOf />} /><GlassTabs value={view} />
+    <LoadingRegion label={view === 'live' ? 'Loading glass' : 'Loading deliverability'}>{view === 'live' ? <GlassBoard /> : <DeliverabilityBoard controls={<DeliverabilityControls {...deliverabilitySettings(useLocation().search)} />} />}</LoadingRegion></>
+}
+
+// The Deliverability board: a control strip (period, stream, region), eight tiles, the providers worst first, groups of
+// rows (engagement, SES accounts, our domains, standing, the workspaces with the most complaints and bounces) and Amazon
+// VDM's estimates. Every block has a fixed number of rows (an empty one keeps its place), so a period or filter that
+// changes the figures moves nothing. deliverability.tsx fills it.
+export type DeliverabilityStream = 'all' | 'transactional' | 'marketing'
+export const DELIVERABILITY_WINDOWS: { value: DeliverabilityWindow; label: string; before: string }[] = [{ value: '24h', label: '24 h', before: 'the 24 h before' }, { value: '7d', label: '7 days', before: 'the 7 days before' }, { value: '30d', label: '30 days', before: 'the 30 days before' }]
+export function deliverabilitySettings(search: string) {
+  const params = new URLSearchParams(search), window = params.get('window'), stream = params.get('stream')
+  return { window: DELIVERABILITY_WINDOWS.some(w => w.value === window) ? window as DeliverabilityWindow : '7d' as DeliverabilityWindow,
+    stream: stream === 'transactional' || stream === 'marketing' ? stream as DeliverabilityStream : 'all' as DeliverabilityStream, region: params.get('region') || 'all' }
+}
+const streams = [{ value: 'all', label: 'All mail' }, { value: 'transactional', label: 'Transactional' }, { value: 'marketing', label: 'Marketing' }]
+export function DeliverabilityControls({ window, stream, region, regions = [], note, onChange }: { window: DeliverabilityWindow; stream: DeliverabilityStream; region: string; regions?: { value: string; label: string }[]; note?: ReactNode
+  onChange?: (key: 'window' | 'stream' | 'region', value: string) => void }) {
+  const options = [{ value: 'all', label: 'All regions' }, ...regions.some(r => r.value === region) || region === 'all' ? [] : [{ value: region, label: region }], ...regions]
+  return <div className="dlv-controls">
+    <Tabs value={window} onValueChange={value => onChange?.('window', value)} items={DELIVERABILITY_WINDOWS} label="Period" disabled={!onChange} />
+    <Tabs value={stream} onValueChange={value => onChange?.('stream', value)} items={streams} label="Mail" disabled={!onChange} />
+    <Select className="dlv-region" aria-label="Region" value={region} onValueChange={value => onChange?.('region', value)} options={options} disabled={!onChange} />
+    <span className="dlv-note"><span>{note ?? <SkeletonLine width={180} />}</span></span>
+  </div>
+}
+export const deliverabilityTiles = [['accepted', 'Accepted'], ['delivered', 'Delivered'], ['hard', 'Hard bounces'], ['soft', 'Soft bounces'], ['deferred', 'Deferred'],
+  ['complained', 'Complaints'], ['human', 'Opened by people'], ['clicked', 'Clicked']] as const
+export const providerColumns = [['provider', 'Provider'], ['accepted', 'Accepted'], ['delivered', 'Delivered'], ['change', 'vs before'], ['hard', 'Hard bounce'], ['soft', 'Soft bounce'],
+  ['deferred', 'Deferred'], ['complained', 'Complaints'], ['human', 'Human opens'], ['machine', 'Bot opens'], ['clicked', 'Clicked']] as const
+export const vdmColumns = [['isp', 'ISP'], ['send', 'Sent'], ['delivered', 'Delivered'], ['permanent', 'Hard bounce'], ['transient', 'Soft bounce'], ['complaint', 'Complaints'], ['open', 'Opens'], ['click', 'Clicks']] as const
+/** Mailbox providers (api/src/deliverability.ts PROVIDERS) and VDM's rows: every provider has a row, mail or none. */
+export const PROVIDER_SLOTS = 7, VDM_SLOTS = 6
+export type DeliverabilityRow = { cells: ReactNode[]; tones?: (Tone | undefined)[]; empty?: boolean }
+export type DeliverabilityFill = { tile: (key: string) => GlassTileFill; providers: DeliverabilityRow[]; vdm: { status: ReactNode; rows: DeliverabilityRow[] }; row: (group: string, row: string) => GlassFill }
+export const deliverabilityGroups: GlassGroupDef[] = [
+  { key: 'engagement', title: 'Engagement', rows: [{ key: 'opened', label: 'Opened', spark: true }, { key: 'human', label: 'Opened by people', spark: true }, { key: 'machine', label: 'Opened by machines only' },
+    { key: 'clicked', label: 'Clicked', spark: true }, { key: 'cto', label: 'Clicks per opener' },
+    { key: 'note', note: 'Over delivered mail. Apple Mail Privacy Protection and link scanners open mail by themselves; SES flags those opens, counted here as machines. Clicks are the firmer signal.' }] },
+  { key: 'ses', title: 'SES accounts', to: ['/operator?view=health', 'Health'], rows: slots('region', GLASS_REGION_SLOTS) },
+  { key: 'domains', title: 'Our domains', rows: [...slots('dbl', 2), ...slots('postmaster', 2)] },
+  { key: 'standing', title: 'Standing', to: ['/operator', 'Queue'], rows: [{ key: 'grades', cells: GRADE_SLOTS }, { key: 'steps', cells: STEP_SLOTS }] },
+  { key: 'complaints', title: 'Most complaints', to: ['/operator', 'Queue'], rows: slots('ws', 10) },
+  { key: 'bounces', title: 'Most bounces', to: ['/operator', 'Queue'], rows: slots('ws', 10) },
+]
+function DeliverabilityTable({ label, columns, rows, slots: n, className }: { label: string; columns: readonly (readonly [string, string])[]; rows?: DeliverabilityRow[]; slots: number; className: string }) {
+  return <div className={`dlv-table ${className}`} role="table" aria-label={label}>
+    <div className="dlv-row dlv-row--head" role="row">{columns.map(([key, title]) => <span key={key} role="columnheader" data-col={key}>{title}</span>)}</div>
+    {Array.from({ length: n }, (_, i) => { const row = rows?.[i]; return <div key={i} className={row?.empty ? 'dlv-row glass-empty' : 'dlv-row'} role="row">
+      {columns.map(([key, title], c) => <span key={key} role="cell" data-col={key} data-label={title} className={row?.tones?.[c] && row.tones[c] !== 'neutral' ? `ui-tone--${row.tones[c]}` : undefined}>
+        {row ? row.cells[c] : <SkeletonLine width={c ? 40 : 88} />}</span>)}
+    </div> })}
+  </div>
+}
+/** The Deliverability board, filled by `fill`; without it, every figure is a placeholder of its own size. */
+export function DeliverabilityBoard({ fill, controls, stale = false }: { fill?: DeliverabilityFill; controls: ReactNode; stale?: boolean }) {
+  return <div className="dlv" data-stale={stale || undefined}>
+    {controls}
+    <section className="glass-tiles dlv-tiles" aria-label="Our mail">{deliverabilityTiles.map(([key, label]) => <GlassTile key={key} label={label} fill={fill?.tile(key)} />)}</section>
+    <section className="glass-section" aria-label="By mailbox provider">
+      <SectionHeader title="By mailbox provider · worst first" />
+      <DeliverabilityTable label="By mailbox provider" columns={providerColumns} rows={fill?.providers} slots={PROVIDER_SLOTS} className="dlv-table--providers" />
+    </section>
+    <GlassGroupList groups={deliverabilityGroups} row={fill?.row} />
+    <section className="glass-section" aria-label="Amazon VDM estimates">
+      <SectionHeader title="Amazon VDM · estimates" />
+      <p className="dlv-status">{fill ? fill.vdm.status : <Skeleton width={320} height={12} />}</p>
+      <DeliverabilityTable label="Amazon VDM estimates by ISP" columns={vdmColumns} rows={fill?.vdm.rows} slots={VDM_SLOTS} className="dlv-table--vdm" />
+    </section>
+  </div>
 }
 
 // The route-level placeholder while the operator chunk loads.

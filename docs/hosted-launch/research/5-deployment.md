@@ -1,4 +1,4 @@
-**Deploy OpenSend MX as a new installation, not a second hostname on the production Worker.** Use one HTTPS origin, `https://opensend.mx`, a new Worker named `opensend-mx-api`, an empty database, and a dedicated AWS account. **One code change blocks deployment:** the Worker recognizes the feedback queue by its production name. Renaming only the binding target would silently lose MX delivery events. This was a read-only review; nothing was provisioned or changed.
+**Deploy Nightmail as a new installation, not a second hostname on the production Worker.** Use one HTTPS origin, `https://opensend.mx`, a new Worker named `opensend-mx-api`, an empty database, and a dedicated AWS account. **One code change blocks deployment:** the Worker recognizes the feedback queue by its production name. Renaming only the binding target would silently lose MX delivery events. This was a read-only review; nothing was provisioned or changed.
 
 ### Isolation and hostnames
 

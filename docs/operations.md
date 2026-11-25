@@ -30,7 +30,7 @@ page), as Slack cards on `OPERATOR_SLACK_WEBHOOK_URL`, and as JSON for a program
 
 ## What an agent may do
 
-Everything under "An agent checks first" is read-only: the health route, Workers Logs (`bane-production`, filter
+Everything under "An agent checks first" is read-only: the health route, Workers Logs (`nightmail-production`, filter
 on `code`; `docs/ci.md`, Request logs) and `SELECT`s on a read-only database session. Report what you find with
 the numbers. Do not pause, resume, cancel, requeue, delete or deploy: those are a person's decisions.
 

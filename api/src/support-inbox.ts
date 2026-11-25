@@ -5,7 +5,7 @@ import { auditInsert, operatorContext, operatorRequired } from './audit.js';
 import { mutate, operatorActor, type OperatorIdentity } from './operator.js';
 import type { OperatorRole } from './operator-identity.js';
 import { supportPlatformOnly } from './support-conversations.js';
-import { CONVERSATION_ID, type InboxState, type OutboxReply } from './support-platform.js';
+import { CONVERSATION_ID, signSupportToken, type InboxState, type OutboxReply } from './support-platform.js';
 
 // The support inbox (api/README.md "Support integration"): every support conversation, its transcript and the staff
 // replies to it. Internal, in two halves:
@@ -192,13 +192,14 @@ async function stateOf(db: DbExecutor, id: string): Promise<InboxState> {
  * conversation's ID, never content. It then pulls the outbox through its binding (its sweep catches anything missed).
  * Skipped without NIGHTMAIL_SUPPORT_URL. Never throws: a failed wake leaves the reply queued for that sweep.
  */
-export async function wakeSupport(config: Pick<Config, 'support'>, conversationId: string): Promise<boolean> {
-  const site = config.support?.url;
-  if (!site) return false;
+export async function wakeSupport(config: Pick<Config, 'support' | 'publicUrl'>, conversationId: string): Promise<boolean> {
+  const site = config.support?.url, key = config.support?.signingKey;
+  if (!site || !key) return false;
   let url: URL;
   try { url = new URL('/hooks/nightmail-wake', new URL(site).origin); } catch { return false; }
   try {
-    const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ conversationId }), redirect: 'manual', signal: AbortSignal.timeout(WAKE_TIMEOUT_MS) });
+    const token = await signSupportToken(key, { iss: config.publicUrl, aud: 'nightmail-support-wake', conversationId, exp: Math.floor(Date.now()/1000) + 60 });
+    const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` }, body: JSON.stringify({ conversationId }), redirect: 'manual', signal: AbortSignal.timeout(WAKE_TIMEOUT_MS) });
     await res.body?.cancel();
     if (!res.ok) log('warn', { code: 'SUPPORT_WAKE_FAILED', status: res.status });
     return res.ok;

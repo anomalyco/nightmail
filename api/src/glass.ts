@@ -7,11 +7,12 @@ import { placesRow, withOpen, type Places } from './signups.js';
 import { alertLabel, quantile } from './health.js';
 import { LATENCY_BUCKETS } from './health-counters.js';
 import { TICK } from './health-thresholds.js';
-import { GRADE_BANDS, GRADES, type Grade } from './standing-model.js';
+import { GRADES, type Grade } from './standing-model.js';
 import { poolReceives, poolSends } from './states.js';
 import { regionLabels } from './region-labels.js';
 import { MicroCentsJson } from './billing/money.js';
 import { PUBLIC_ROUTE } from './analytics-traffic.js';
+import { gradeCounts, registerGlassDeliverability } from './glass-deliverability.js';
 
 // Glass (/glass in the dashboard): everything going on in the installation on one page, for operators. One read that
 // returns every figure, cached GLASS_TTL_SECONDS per installation, so the page's 30-second refresh costs one statement
@@ -125,11 +126,6 @@ const utc = (value: SQL) => sql`to_char((${value}) AT TIME ZONE 'UTC','YYYY-MM-D
 /** n buckets from `start`, oldest first, each `counts`' n for its bucket or 0. `counts` returns (at, n). */
 const series = (start: SQL, unit: 'minute' | 'hour' | 'day', n: number, counts: SQL, end?: SQL) => sql`(SELECT coalesce(json_agg(coalesce(c.n,0) ORDER BY g.at),'[]')
   FROM generate_series(${start},${end ?? sql`${start}+${`${n - 1} ${unit}s`}::interval`},${`1 ${unit}`}::interval) g(at) LEFT JOIN (${counts}) c ON c.at=g.at)`;
-// The grade bands as SQL, best first: A+ from 95, A from 90 below 95, and so on (src/standing-model.ts).
-const gradeCounts = sql.join(GRADE_BANDS.map((band, i) => {
-  const above = GRADE_BANDS[i - 1];
-  return sql`${band.grade}::text,count(*) FILTER (WHERE s.phase='graded' AND s.score>=${band.min}${above ? sql` AND s.score<${above.min}` : sql``})`;
-}), sql`,`);
 
 export async function readGlass(runtime: Pick<Runtime, 'db' | 'config'>): Promise<Glass> {
   const cap = GLASS_CAP + 1, own = new URL(runtime.config.publicUrl).hostname;
@@ -291,15 +287,17 @@ function shape(r: Raw, config: Pick<Runtime['config'], 'deploy' | 'support'>): G
 //  - first_send: the first email of each workspace created in the last 30 days (sending_emails_created_page);
 //  - domain_verified, builtin_ready: domain_claims.verified_at; campaign_launched, campaign_paused: sending_campaigns;
 //  - standing: a workspace's step changes (standing_events, per workspace through its page index);
-//  - breaker: the built-in domains' breaker tripping (builtin_parent); alert: the open health alerts.
+//  - breaker: the built-in domains' breaker tripping (builtin_parent); alert: the open health alerts;
+//  - link_fallback: a workspace's first use of the link domain on a UTC day (link_fallback_days), with its
+//    campaign and marketing recipients there that day so far.
 // No message content: a campaign is its name and size, a domain its name. A sign-up's address is there for the page
 // to blur with the dashboard's privacy toggle. Cached GLASS_TTL_SECONDS per installation; `after` only filters that.
-const ACTIVITY_KINDS = ['signup', 'first_send', 'domain_verified', 'builtin_ready', 'campaign_launched', 'campaign_paused', 'standing', 'breaker', 'alert'] as const;
+const ACTIVITY_KINDS = ['signup', 'first_send', 'domain_verified', 'builtin_ready', 'campaign_launched', 'campaign_paused', 'standing', 'breaker', 'alert', 'link_fallback'] as const;
 const ActivityEvent = z.object({
   id: z.string().describe('Stable across reads: the page adds an event once.'), at: z.string(), kind: z.enum(ACTIVITY_KINDS),
   workspace: z.object({ id: z.string(), name: z.string() }).nullable(),
   subject: z.string().nullable().describe('What it is about: a domain, a campaign\u2019s name, the built-in parent or an alert\u2019s label.'),
-  detail: z.string().nullable().describe('A sign-up\u2019s method (google, github, email, password), a campaign\u2019s recipients, a pause reason\u2019s code, a step change (from>to) or an alert\u2019s words.'),
+  detail: z.string().nullable().describe('A sign-up\u2019s method (google, github, email, password), a campaign\u2019s recipients, a pause reason\u2019s code, a step change (from>to), an alert\u2019s words or the recipients linked on the link domain that day.'),
   place: z.enum(['open', 'waitlist']).nullable().describe('A sign-up\u2019s place.'),
   email: z.string().nullable().describe('A sign-up\u2019s address.'),
   tone: z.enum(['neutral', 'success', 'warning', 'danger']),
@@ -335,12 +333,14 @@ export async function readActivity(runtime: Pick<Runtime, 'db'>): Promise<GlassA
       ORDER BY e.at DESC LIMIT ${n})
     UNION ALL (SELECT 'breaker:'||p.name||':'||extract(epoch FROM p.tripped_at)::bigint,${at(sql`p.tripped_at`)},'breaker',NULL,NULL,p.name,NULL,NULL,NULL,NULL,NULL,p.tripped_at
       FROM builtin_parent p WHERE p.tripped_at IS NOT NULL)
+    UNION ALL (SELECT 'link_fallback:'||f.workspace_id||':'||f.host||':'||f.day,${at(sql`f.first_at`)},'link_fallback',w.id,w.name,f.host,f.recipients::text,NULL,NULL,NULL,NULL,f.first_at
+      FROM link_fallback_days f JOIN workspaces w ON w.id=f.workspace_id ORDER BY f.first_at DESC LIMIT ${n})
     UNION ALL (SELECT 'alert:'||a.key||':'||extract(epoch FROM a.since)::bigint,${at(sql`a.since`)},'alert',NULL,NULL,NULL,a.words,NULL,NULL,a.severity,a.kind,a.since
       FROM health_alerts a ORDER BY a.since DESC LIMIT ${n})
   ) x ORDER BY t DESC,id DESC LIMIT ${n}`);
   const tone = (row: ActivityRow): z.infer<typeof ActivityEvent>['tone'] => row.kind === 'alert' ? (row.severity === 'critical' ? 'danger' : 'warning')
     : row.kind === 'standing' ? (row.severity as 'success' | 'warning' | 'danger') : row.kind === 'breaker' ? 'danger' : row.kind === 'campaign_paused' ? 'warning'
-    : row.kind === 'signup' ? 'neutral' : 'success';
+    : row.kind === 'signup' || row.kind === 'link_fallback' ? 'neutral' : 'success';
   const events = rows.flatMap(row => {
     const label = row.kind === 'alert' ? alertLabel(row.alert_kind ?? '') : null;
     if (row.kind === 'alert' && !label) return [];
@@ -352,6 +352,7 @@ export async function readActivity(runtime: Pick<Runtime, 'db'>): Promise<GlassA
 }
 
 export function registerGlass(app: App) {
+  registerGlassDeliverability(app);
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'get', path: '/v1/operator/glass', operationId: 'operatorGetGlass',
     description: `Everything going on in the installation, for operators: sign-ups, sending, delivery, receiving, money, the system and visitors. One statement over rollups and bounded heads, cached ${GLASS_TTL_SECONDS} seconds.`,
     responses: { 200: response(Glass), ...errors } }), async c => {

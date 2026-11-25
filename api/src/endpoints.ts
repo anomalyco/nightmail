@@ -25,6 +25,7 @@ import { detachDestination, enableRouting, RoutingKey } from './routing.js';
 import { endpointPolicy, DEFAULT_POLICY, type EndpointPolicy } from './ritual-retry.js';
 import { endpointCall, endpointPayloads, type EndpointType } from './ritual-schema.js';
 import { legacyWebhookFormat, loopHeader, productName, webhookFormat } from './brand.js';
+import { linkOrigin, servesWorkspace } from './link-domains.js';
 
 // ── The model ─────────────────────────────────────────────────────────────────────────────
 type HeaderList = z.infer<typeof WebhookHeaders>;
@@ -370,13 +371,14 @@ async function senderBox(tx: DbExecutor, w: string, from?: string, multiTenant =
   if (suggested) error.details = [{ suggestedFrom: suggested }];
   throw error;
 }
-const forwardBase = (runtime: Runtime) => runtime.config.publicUrl.replace(/\/$/, '') + '/v1/forwarding';
+// Forwarding's links are on the receiving address's link host (src/link-domains.ts), as an unsubscribe link is.
+const forwardBase = (origin: string) => origin.replace(/\/$/, '') + '/v1/forwarding';
 /**
  * Emails the recipient a single-use, 24-hour confirmation link. The message is sealed: the
  * workspace's sent-mail views show it with the link withheld, because the link alone confirms.
  */
 async function requestConfirmation(c: Ctx, tx: DbExecutor, w: string, endpointId: string, address: string, from?: string) {
-  const box = await senderBox(tx, w, from, !!c.env.config.multiTenant);
+  const box = await senderBox(tx, w, from, !!c.env.config.multiTenant), origin = await linkOrigin(c.env, tx, w, box.address, 'forward');
   const addressHash = await digest(address);
   const declined = (await tx.execute<{ until: string }>(sql`SELECT (declined_at+interval '30 days')::text AS until FROM mail_forward_declines WHERE workspace_id=${w} AND address_hash=${addressHash} AND declined_at>now()-interval '30 days'`)).rows[0];
   if (declined) throw new ApiError(409, 'FORWARD_DECLINED', `${address} declined forwarding from this workspace. You can ask again after ${new Date(declined.until).toISOString()}.`, 'address');
@@ -389,7 +391,7 @@ async function requestConfirmation(c: Ctx, tx: DbExecutor, w: string, endpointId
   await sendFromMailbox(c.env, tx, {
     actor: c.get('actor'), scope: { workspaceId: w }, mailbox: box, from: box.address, to: [address], cc: [], bcc: [], replyTo: [],
     subject: `Confirm forwarding from ${box.address}`,
-    text: `${box.address} wants to forward the email it receives to ${address}.\n\nTo allow it, open this link within 24 hours and choose Allow:\n${forwardBase(c.env)}/confirm/${token}\n\nIf you don't recognize this request, ignore this email or choose Decline. Nothing is forwarded until you allow it, and declining stops this sender from asking again for 30 days. Every forwarded message includes a link to stop.`,
+    text: `${box.address} wants to forward the email it receives to ${address}.\n\nTo allow it, open this link within 24 hours and choose Allow:\n${forwardBase(origin)}/confirm/${token}\n\nIf you don't recognize this request, ignore this email or choose Decline. Nothing is forwarded until you allow it, and declining stops this sender from asking again for 30 days. Every forwarded message includes a link to stop.`,
     inReplyTo: null, references: [], headers: [], attachments: [], autoSubmitted: 'auto-generated', sealed: true,
   });
 }
@@ -677,17 +679,19 @@ function page(c: Ctx, title: string, body: string, status: 200 | 403 | 404 | 410
   c.header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'");
   return c.html(`<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHtml(title)}</title><style>body{font:16px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;max-width:34rem;margin:12vh auto;padding:0 1.25rem;color:#1a1a1a;background:#fbfbf9}h1{font-size:1.15rem;margin:0 0 1rem}p{margin:0 0 1rem;color:#444}form{display:flex;gap:.75rem;margin-top:1.5rem}button{font:inherit;padding:.55rem 1rem;border-radius:6px;border:1px solid #1a1a1a;background:#1a1a1a;color:#fff;cursor:pointer}button[value=decline]{background:transparent;color:#1a1a1a;border-color:#bbb}@media(prefers-color-scheme:dark){body{background:#111;color:#eee}p{color:#aaa}button{background:#eee;color:#111;border-color:#eee}button[value=decline]{color:#eee;border-color:#555}}</style><h1>${escapeHtml(title)}</h1>${body}</html>`, status);
 }
+// The page's own host: the link host the emailed link named, or this installation's own origin for an earlier link.
 const sameOrigin = (c: Ctx) => {
   const origin = c.req.header('origin'), site = c.req.header('sec-fetch-site');
-  return (origin === undefined || origin === new URL(c.env.config.publicUrl).origin) && (site === undefined || site === 'same-origin' || site === 'none');
+  const host = (() => { try { return origin === undefined ? null : new URL(origin).host; } catch { return ''; } })();
+  return (host === null || host === new URL(c.req.url).host || origin === new URL(c.env.config.publicUrl).origin) && (site === undefined || site === 'same-origin' || site === 'none');
 };
 async function stopSignature(runtime: Runtime, endpointId: string) {
   const key = await crypto.subtle.importKey('raw', Buffer.from(runtime.config.encryptionKey, 'hex'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
   return Buffer.from(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode('forward-stop\n' + endpointId))).toString('base64url');
 }
-/** Stop link included in every forwarded message. Signed, so nothing is stored per message. */
-export async function forwardStopUrl(runtime: Runtime, endpointId: string) {
-  return `${forwardBase(runtime)}/stop/${endpointId}.${await stopSignature(runtime, endpointId)}`;
+/** Stop link included in every forwarded message, on `origin` (the forwarding address's link host). Signed, so nothing is stored per message. */
+export async function forwardStopUrl(runtime: Runtime, endpointId: string, origin: string) {
+  return `${forwardBase(origin)}/stop/${endpointId}.${await stopSignature(runtime, endpointId)}`;
 }
 type Pending = { workspace_id: string; id: string; encrypted_target: string; request_from: string | null };
 const pendingWhere = async (token: string) => sql`proof_hash=${await digest(token)} AND type='forward' AND NOT verified AND declined_at IS NULL AND expires_at>now()`;
@@ -710,7 +714,7 @@ function registerForwardPages(app: App) {
   const confirm = '/v1/forwarding/confirm/:token', stop = '/v1/forwarding/stop/:token';
   app.get(confirm, async c => {
     const token = c.req.param('token'), row = /^fwd_[0-9a-f]{64}$/.test(token) ? (await c.env.db.execute<Pending>(sql`SELECT workspace_id,id,encrypted_target,request_from FROM mailbox_webhooks WHERE ${await pendingWhere(token)}`)).rows[0] : undefined;
-    if (!row) return page(c, 'This link has expired', '<p>It was already used, or more than 24 hours have passed. Nothing will be forwarded unless a new request is allowed.</p>', 410);
+    if (!row || !await servesWorkspace(c.env, c.req.url, row.workspace_id)) return page(c, 'This link has expired', '<p>It was already used, or more than 24 hours have passed. Nothing will be forwarded unless a new request is allowed.</p>', 410);
     const address = await decrypt(c.env, row.encrypted_target, targetBinding(row.workspace_id, row.id));
     return page(c, 'Allow email forwarding?', `<p><strong>${escapeHtml(row.request_from ?? `A ${productName} workspace`)}</strong> wants to forward the email it receives to <strong>${escapeHtml(address)}</strong>.</p><p>Forwarded messages arrive from that address with their attachments, each with a link to stop. If you decline, this sender cannot ask again for 30 days.</p><form method="post"><button name="choice" value="allow">Allow forwarding</button><button name="choice" value="decline">Decline</button></form>`);
   });
@@ -719,6 +723,8 @@ function registerForwardPages(app: App) {
     if (!sameOrigin(c)) return page(c, 'Open the link from your email', '<p>Confirm from the page the emailed link opens.</p>', 403);
     const form = await c.req.parseBody().catch(() => ({} as Record<string, unknown>)), choice = form.choice === 'allow' ? 'allow' : form.choice === 'decline' ? 'decline' : null;
     if (!choice || !/^fwd_[0-9a-f]{64}$/.test(token)) return page(c, 'Choose Allow or Decline', '<p>Open the link from your email again and choose an option.</p>', 403);
+    const pending = (await c.env.db.execute<{ workspace_id: string }>(sql`SELECT workspace_id FROM mailbox_webhooks WHERE ${await pendingWhere(token)}`)).rows[0];
+    if (pending && !await servesWorkspace(c.env, c.req.url, pending.workspace_id)) return page(c, 'This link has expired', '<p>It was already used, or more than 24 hours have passed.</p>', 410);
     try {
       const done = await answerForward(c.env, token, choice);
       return choice === 'allow'
@@ -732,7 +738,8 @@ function registerForwardPages(app: App) {
   const stopRow = async (c: Ctx) => {
     const [endpointId, signature] = c.req.param('token')!.split('.');
     if (!endpointId || !signature || !/^con_[A-Za-z0-9_-]+$/.test(endpointId) || signature !== await stopSignature(c.env, endpointId)) return undefined;
-    return (await c.env.db.execute<Pending & { declined_at: string | null }>(sql`SELECT workspace_id,id,encrypted_target,request_from,declined_at FROM mailbox_webhooks WHERE id=${endpointId} AND type='forward'`)).rows[0];
+    const row = (await c.env.db.execute<Pending & { declined_at: string | null }>(sql`SELECT workspace_id,id,encrypted_target,request_from,declined_at FROM mailbox_webhooks WHERE id=${endpointId} AND type='forward'`)).rows[0];
+    return row && await servesWorkspace(c.env, c.req.url, row.workspace_id) ? row : undefined;
   };
   app.get(stop, async c => {
     const row = await stopRow(c);
@@ -837,7 +844,6 @@ async function forwardSender(tx: DbExecutor, w: string, recipient: string, reque
  * (forwardEligibility), so a forward that comes back, through another forwarder or another installation, stops there.
  */
 async function sendForward(runtime: Runtime, w: string, endpointId: string, address: string, requestFrom: string | null, messageId: string, recipient: string, grants: string[]) {
-  const stopUrl = await forwardStopUrl(runtime, endpointId);
   // Whether it may be forwarded is decided once at ingest (forwardEligibility); only whether it is still kept changes.
   // A message stored without the verdict (sandbox mail, an IMAP append) is never forwarded.
   const received = async (db: DbExecutor) => {
@@ -852,6 +858,7 @@ async function sendForward(runtime: Runtime, w: string, endpointId: string, addr
   await runtime.db.transaction(async tx => {
     await checkExternal(tx, w, address);
     const m = await received(tx), box = await forwardSender(tx, w, recipient, requestFrom);
+    const stopUrl = await forwardStopUrl(runtime, endpointId, await linkOrigin(runtime, tx, w, box.address, 'forward'));
     // One forward per message and endpoint, decided in the same transaction as the send.
     if (!(await tx.execute(sql`INSERT INTO mail_forward_once(workspace_id,message_id,endpoint,grants) VALUES(${w},${m.id},${endpointId},${JSON.stringify(grants)}::jsonb) ON CONFLICT DO NOTHING RETURNING 1`)).rowCount) return;
     // A forward is a send: the send admission applies the workspace's sending limits. Per endpoint, an hourly bound

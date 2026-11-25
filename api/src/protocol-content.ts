@@ -36,7 +36,7 @@ export async function contentWrite(c: Ctx, p: Submitted) {
   const ownsSenders = (addresses: string[]) => !!senders?.every(a => addresses.includes(a));
   const denied = () => new ApiError(403, 'SENDER_NOT_OWNED', 'Use an address owned by this inbox.');
   if (!sender || !ownsSenders(who.owned)) throw denied();
-  const mime = sealedMime(raw) ? await sealedPassthrough(rt, who.w, raw) : undefined;
+  const mime = sealedMime(raw) ? await sealedPassthrough(rt, who.w, raw, sender, m.sender?.address) : undefined;
   // Uploads reserve quota and commit immutable objects using their own transactions.
   // Never ask for a second connection while the Worker holds its only one.
   const attachments = mime ? [] : await resolveAttachments(rt, {id:who.b, workspaceId:who.w, domainId:who.domain}, parsed.files.map(submittedFile), sender);

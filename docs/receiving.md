@@ -173,5 +173,5 @@ Endpoints and webhooks are one model. Every endpoint, whatever its type, is one 
 Attachments follow their message. A webhook payload's attachment link (`downloadUrl` in the inbound format, `url` in a nightmail message's attachments) is `downloadInboundAttachment`: it answers `307` to a download link that works for five minutes. Any credential that can read the message can follow it, by the same rule as `getInboundAttachment`: an inbound key for the address the mail reached, a member's session or an agent token. `rawUrl` is the delivery record (raw MIME names every recipient), so it needs access to every address: an owner or admin session, or an unrestricted manage API key.
 
 ```sh
-curl "$BANE/v1/inbound/overview?kind=address,route&origin=api&q=support" -H "Authorization: Bearer $KEY"
+curl "$NIGHTMAIL/v1/inbound/overview?kind=address,route&origin=api&q=support" -H "Authorization: Bearer $KEY"
 ```

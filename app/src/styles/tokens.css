@@ -124,7 +124,9 @@
      label 11/14 (tracked mono group labels and keycaps) · xs 12/16 (field labels, table headers, metadata, statuses)
      · sm 12/16 (dense secondary controls, mono values) · md 13/18 (body, tables, inputs, buttons, navigation)
      · section 13/18 semibold (section titles) · heading 14/20 (dialogs, empty states) · lg 16/22
-     · title 18/24 semibold (page titles) · xl 24/30. A phone steps body and titles up a size (below). */
+     · title 18/24 semibold (page titles) · xl 24/30 · figure 22 (a metric's figure in mono: Overview's and Glass's
+     tiles) · display 26 (the sender score, an operation's or onboarding's title). A phone steps body and titles up a
+     size (below). */
   --text-label: 11px;
   --leading-label: 14px;
   --tracking-label: .06em;
@@ -137,6 +139,8 @@
   --text-lg: 16px;
   --text-title: 18px;
   --text-xl: 24px;
+  --text-figure: 22px;
+  --text-display: 26px;
   --leading-xs: 16px;
   --leading-sm: 16px;
   --leading-md: 18px;
@@ -153,6 +157,10 @@
   --font-weight-medium: 500;
   --font-weight-semibold: 600;
   --font-weight-bold: 600;
+  /* --space-2 is an inset or a split, never a nudge: a segmented control's or switch's track around what slides in it, and
+     the gap that keeps two filled rows or segments side by side from reading as one. Alignment comes from line-height
+     and box sizes (an icon in a box of its line's height), never a 1–3px margin. */
+  --space-2: 2px;
   --space-4: 4px;
   --space-6: 6px;
   --space-8: 8px;
@@ -163,12 +171,19 @@
   --space-28: 28px;
   --space-32: 32px;
   --space-40: 40px;
+  /* 2xs is for marks inside a control or a reading (a meter's track and fill, a chart's bars, a switch's thumb in its
+     4px track); sheet is a bottom sheet's top corners on a phone. */
+  --radius-2xs: 2px;
   --radius-xs: 4px;
   --radius-sm: 6px;
   --radius-md: 6px;
   --radius-lg: 8px;
+  --radius-sheet: 14px;
   --control-height: 28px;
   --control-height-sm: 24px;
+  /* A control's side inset: a field's text and a button's label sit this far in (a touch button adds --space-4, a small
+     button uses --space-8). Off the spacing scale on purpose, as the controls were drawn (Ryan, A152, 25 Nov). */
+  --control-pad-x: 10px;
   /* The dashboard draws no focus rings: focus shows the hover cue (ui.css). The homepage and price pages keep rings of
      their own, from --focus-width and --color-focus. --focus-reach is the room a scroll area keeps at its edges. */
   --focus-width: 2px;

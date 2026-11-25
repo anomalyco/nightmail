@@ -2,7 +2,7 @@ import type { ReactNode } from 'react'
 import { Download, Search } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 import { useRegion, useWorkspaceAccess } from '../../data/context'
-import { BackLink, Button, FactsRow, Icon, Input, LoadingRegion, PageHeader, SectionHeader, Select, Skeleton, SkeletonText, TableSkeleton, Tabs } from '../../components/ui'
+import { BackLink, Button, FactsRow, Icon, Input, LoadingRegion, PageHeader, SectionHeader, Select, Skeleton, SkeletonText, TableSkeleton, Tabs, type Fact } from '../../components/ui'
 import { rememberedPageSize } from '../../lib/pagination'
 import { logsViewColumnDefs } from './rows'
 import { label } from '../../lib/format'
@@ -33,8 +33,13 @@ export function LogsRouteSkeleton() {
 export function EmailBar({ title, end }: { title: ReactNode; end?: ReactNode }) {
   return <header className="email-bar"><BackLink to="/logs" /><span className="email-bar__tag">Sent email</span><h1 className="email-bar__title" title={typeof title === 'string' ? title : undefined}>{title}</h1>{end && <div className="email-bar__end">{end}</div>}</header>
 }
-// A sent email's facts on a desktop, in FactsRow order (email-detail.tsx EmailFacts); its ID is in the bar.
-export const emailFactLabels = (multiTenant: boolean) => ['From', 'To', 'Stream', 'Sent', ...multiTenant ? [] : ['Region']]
+// A sent email's facts on a desktop (email-detail.tsx EmailFacts), in two groups: who it's from and to, over the preview;
+// the stream, when and the region, over the details column (logs.css). Its ID is in the bar.
+export const emailFactGroups = (multiTenant: boolean) => [['From', 'To'], ['Stream', 'Sent', ...multiTenant ? [] : ['Region']]]
+/** The facts strip under the bar: a FactsRow per group, the second starting on the details column's edge. */
+export function EmailFactsStrip({ multiTenant, fact, label }: { multiTenant: boolean; fact: (name: string) => Omit<Fact, 'label'>; label?: string }) {
+  return <div className="email-facts" role="group" aria-label={label}>{emailFactGroups(multiTenant).map(names => <FactsRow key={names[0]} items={names.map(name => ({ label: name, ...fact(name) }))} />)}</div>
+}
 const factWidths: Record<string, number> = { From: 160, To: 160, Stream: 80, Sent: 120, Region: 72 }
 // A sent email in the window's layout (detail-layout.ts): the header, the delivery, the preview's toolbar and its empty
 // stage, and from 1200 px the details column. The score's place has a placeholder only in that column: elsewhere it
@@ -48,7 +53,7 @@ export function EmailDetailSkeleton() {
       <div className="ev-stage"><div className="ev-canvas"><div className="ev-placeholder" /></div></div></div></section></div></LoadingRegion></div>
   const delivery = <div className="delivery" data-vertical={mode !== 'panel' || undefined}>{mode === 'panel' ? <SkeletonText width={300} lineHeight={28} /> : <div className="delivery__skeleton">{[96, 80, 112].map(width => <SkeletonText key={width} width={width} lineHeight={28} />)}</div>}</div>
   return <div className="email-detail" data-mode={mode}><EmailBar title={<SkeletonText width={320} lineHeight={24} />} end={<><SkeletonText width={72} /><SkeletonText width={180} /></>} />
-    <FactsRow className="email-facts" items={emailFactLabels(multiTenant).map(name => ({ label: name, value: <SkeletonText width={factWidths[name]} /> }))} />
+    <EmailFactsStrip multiTenant={multiTenant} fact={name => ({ value: <SkeletonText width={factWidths[name]} /> })} />
     <LoadingRegion label="Loading email">
       {mode === 'panel' && delivery}
       <div className="email-detail__body">

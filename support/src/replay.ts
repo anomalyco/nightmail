@@ -1,4 +1,4 @@
-import { baneApi, BaneError, type InboundEvent } from './bane.js';
+import { nightmailApi, NightmailError, type InboundEvent } from './nightmail.js';
 import type { Env } from './env.js';
 import { INTAKE } from './intake.js';
 import { acceptIntake, acceptSupport, holdAtEdge, ledgered } from './ledger.js';
@@ -37,7 +37,7 @@ export async function replay(env: Env, flow: Flow, now = Date.now()) {
     extra = seen.filter(s => !want.includes(s.address)).length;
     keys = missing ? 'missing' : extra ? 'extra' : 'ok';
   } catch (error) {
-    keys = error instanceof MissingSecret ? 'not_configured' : error instanceof BaneError && [401, 403].includes(error.status) ? 'unauthorized' : 'unavailable';
+    keys = error instanceof MissingSecret ? 'not_configured' : error instanceof NightmailError && [401, 403].includes(error.status) ? 'unauthorized' : 'unavailable';
     logError(error, { event: 'replay', code: 'SUPPORT_KEY_CHECK_FAILED', flow }, 'warn');
   }
   const before = await env.DB.prepare('SELECT keys FROM support_checks WHERE flow = ?').bind(flow).first<{ keys: Keys }>();
@@ -52,7 +52,7 @@ export async function replay(env: Env, flow: Flow, now = Date.now()) {
 
 /** Every receiving address the flow's key can read. */
 async function readable(env: Env, flow: Flow): Promise<Address[]> {
-  const api = baneApi(env, flow), out: Address[] = [];
+  const api = nightmailApi(env, flow), out: Address[] = [];
   let cursor: string | null = null;
   for (let page = 0; page < 10; page++) {
     const { data, nextCursor } = await api.addresses(cursor);
@@ -69,7 +69,7 @@ async function readable(env: Env, flow: Flow): Promise<Address[]> {
  * install (mail before it went through the webhooks). The flow's '*' row says when the poller was last caught up.
  */
 async function poll(env: Env, flow: Flow, covered: Address[], now: number) {
-  const api = baneApi(env, flow), save = (address: string, cursor: string) => env.DB.prepare(`INSERT INTO replay_cursors (flow, address_id, cursor, updated_at) VALUES (?, ?, ?, ?)
+  const api = nightmailApi(env, flow), save = (address: string, cursor: string) => env.DB.prepare(`INSERT INTO replay_cursors (flow, address_id, cursor, updated_at) VALUES (?, ?, ?, ?)
     ON CONFLICT (flow, address_id) DO UPDATE SET cursor = excluded.cursor, updated_at = excluded.updated_at`).bind(flow, address, cursor, now);
   const base = await env.DB.prepare("SELECT cursor FROM replay_cursors WHERE flow = ? AND address_id = '*'").bind(flow).first<{ cursor: string }>();
   if (!base) { await save('*', (await api.events({ limit: 1 })).cursor).run(); return 0; }
@@ -115,29 +115,12 @@ async function retryBlocked(env: Env, flow: Flow) {
   if (objects.length) log('info', { event: 'replay', code: 'SUPPORT_WORK_WOKEN', flow, objects: objects.length });
 }
 
-/**
- * `/health`: liveness stays `status: "ok"` (the deploy reads it); `ready` and `checks` come from D1 alone, as counts
- * and states, never addresses, IDs or error text (blocked work is counted by its error code, such as MISSING_SECRET or
- * NOT_FOUND, which names the fix). Ready: both keys read exactly their addresses, no work is blocked or
- * overdue (six tries or more), and the poller was caught up within 15 minutes.
- */
+// Public readiness is one bit: both flows can read their mail, the work queue is moving, and replay is current.
 export async function readiness(env: Env, now = Date.now()) {
-  const [checks, work, replayed, causes] = await env.DB.batch<Record<string, unknown>>([
-    env.DB.prepare('SELECT flow, keys, checked_at FROM support_checks'),
-    env.DB.prepare(`SELECT coalesce(sum(state = 'blocked'), 0) AS blocked, coalesce(sum(state = 'pending' AND attempts >= 6), 0) AS overdue,
-      coalesce(sum(state = 'dead' AND updated_at > ?), 0) AS dead, coalesce(sum(kind = 'message' AND source = 'poller' AND created_at > ?), 0) AS gaps
-      FROM support_work WHERE state IN ('blocked', 'pending', 'dead') OR source = 'poller'`).bind(now - 7 * 86_400_000, now - 86_400_000),
-    env.DB.prepare("SELECT min(updated_at) AS at FROM replay_cursors WHERE address_id = '*'"),
-    // last_error is class:status:code[:request]: the code alone, which is an enum, never text.
-    env.DB.prepare(`SELECT CASE WHEN instr(rest, ':') > 0 THEN substr(rest, 1, instr(rest, ':') - 1) ELSE rest END AS code, count(*) AS n FROM (
-      SELECT substr(last_error, instr(substr(last_error, instr(last_error, ':') + 1), ':') + instr(last_error, ':') + 1) AS rest FROM support_work WHERE state = 'blocked' AND last_error IS NOT NULL
-    ) GROUP BY code ORDER BY n DESC LIMIT 10`),
-  ]);
-  const rows = (checks!.results ?? []) as { flow: Flow; keys: Keys; checked_at: number }[], counts = work!.results?.[0] as { blocked: number; overdue: number; dead: number; gaps: number };
-  const keys = Object.fromEntries((['support', 'intake'] as const).map(flow => [flow, rows.find(r => r.flow === flow)?.keys ?? 'unchecked']));
-  const at = (replayed!.results?.[0] as { at: number | null } | undefined)?.at ?? null, lagSeconds = at === null ? null : Math.max(0, Math.round((now - at) / 1000));
-  const checkedAt = rows.length ? new Date(Math.max(...rows.map(r => r.checked_at))).toISOString() : null;
-  const ready = Object.values(keys).every(k => k === 'ok') && !counts.blocked && !counts.overdue && lagSeconds !== null && lagSeconds < READY_LAG_SECONDS;
-  const blockedBy = Object.fromEntries(((causes!.results ?? []) as { code: string; n: number }[]).map(r => [/^[A-Z0-9_]{1,60}$/.test(r.code) ? r.code : 'OTHER', r.n]));
-  return { ready, checks: { keys, work: { blocked: counts.blocked, blockedBy, overdue: counts.overdue, dead: counts.dead }, replay: { lagSeconds, routeGaps24h: counts.gaps }, checkedAt } };
+  const ready = await env.DB.prepare(`SELECT
+    (SELECT count(*) FROM support_checks WHERE flow IN ('support','intake') AND keys='ok')=2
+    AND NOT EXISTS (SELECT 1 FROM support_work WHERE state='blocked' OR (state='pending' AND attempts>=6))
+    AND (SELECT min(updated_at) FROM replay_cursors WHERE address_id='*') > ? AS ready`)
+    .bind(now - READY_LAG_SECONDS * 1000).first<number>('ready');
+  return { ready: ready === 1 };
 }

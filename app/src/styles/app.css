@@ -13,7 +13,7 @@ button svg:not(:where(.ui-icon)), .ui-button svg:not(:where(.ui-icon)) { width: 
    distance to its hover, focus, selection and controls as the canvas does: the raised set, a step off layer-1. */
 :is(.email-detail__preview, .ui-card, .ui-alert) { --color-hover: var(--color-raised-hover); --color-active-bg: var(--color-raised-active); --color-pressed: var(--color-raised-active); --color-control: var(--color-raised-control); --color-control-hover: var(--color-raised-control-hover); --color-control-focus: var(--color-raised-control-focus); --color-control-pressed: var(--color-raised-control-pressed); }
 /* A selected row already wears the selection fill: keyboard focus on it takes one step past it. */
-.ui-table tr[data-selected]:is(:focus-visible, :has(.ui-row-link:focus-visible)) > td { background: var(--color-raised-control-focus); }
+.ui-table tr[data-selected]:is(:focus-visible, :has(.ui-row-link:focus-visible)) > td { background-color: var(--color-raised-control-focus); }
 .sidebar { position: fixed; inset: 0 auto 0 0; z-index: 20; display: flex; flex-direction: column; width: var(--sidebar-width); padding: 0; overflow-y: auto; background: var(--color-deep); }
 /* The wordmark's row is as tall as the command bar beside it, so the two read as one band. */
 .sidebar-head { display: flex; flex: none; align-items: center; height: var(--topbar-height); padding: 0 var(--space-16); }
@@ -30,7 +30,7 @@ button svg:not(:where(.ui-icon)), .ui-button svg:not(:where(.ui-icon)) { width: 
 /* Four tight groups (Mail, Marketing, Infra, Workspace), each a mono label over 28px rows: a static 15px glyph, the
    page, and its G shortcut at the row's end. */
 .main-navigation { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--space-8); padding: var(--space-6) var(--space-8) var(--space-12); }
-.nav-group { display: flex; flex-direction: column; gap: 1px; }
+.nav-group { display: flex; flex-direction: column; gap: var(--space-2); }
 .nav-group__label { display: flex; align-items: center; height: 20px; padding: 0 var(--sidebar-inset); color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); line-height: var(--leading-label); letter-spacing: var(--tracking-label); text-transform: uppercase; user-select: none; }
 .main-navigation a { display: flex; align-items: center; gap: var(--space-8); height: 28px; padding-inline: var(--sidebar-inset); border-radius: var(--radius-sm); color: var(--color-muted); font-size: var(--text-md); line-height: 18px; text-decoration: none; transition: color var(--motion-duration) var(--ease-standard), background var(--motion-duration) var(--ease-standard); }
 .main-navigation a > .ui-icon { --icon-size: 15px; color: var(--color-faint); transition: color var(--motion-duration) var(--ease-standard); }
@@ -58,7 +58,7 @@ button svg:not(:where(.ui-icon)), .ui-button svg:not(:where(.ui-icon)) { width: 
 .topbar__workspace { min-width: 0; overflow: hidden; color: var(--color-muted); text-overflow: ellipsis; }
 .topbar__sep { flex: none; color: var(--color-faint); }
 .topbar__section { flex: none; color: var(--color-text); font-weight: var(--font-weight-medium); }
-.command-trigger { display: flex; align-items: center; gap: var(--space-8); width: 100%; height: 28px; padding: 0 5px 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: var(--color-control); color: var(--color-faint); font-size: var(--text-md); line-height: 18px; text-align: left; cursor: pointer; transition: background var(--motion-duration) var(--ease-standard), color var(--motion-duration) var(--ease-standard); }
+.command-trigger { display: flex; align-items: center; gap: var(--space-8); width: 100%; height: 28px; padding: 0 var(--space-6) 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: var(--color-control); color: var(--color-faint); font-size: var(--text-md); line-height: 18px; text-align: left; cursor: pointer; transition: background var(--motion-duration) var(--ease-standard), color var(--motion-duration) var(--ease-standard); }
 .command-trigger > span { flex: 1; min-width: 0; overflow: hidden; color: var(--color-muted); text-overflow: ellipsis; white-space: nowrap; }
 /* Its ⌘K cap is set into the field. */
 .command-trigger > .ui-kbd { background: var(--color-kbd-inset); }
@@ -81,12 +81,11 @@ button svg:not(:where(.ui-icon)), .ui-button svg:not(:where(.ui-icon)) { width: 
 .command-menu__icon { display: grid; place-items: center; color: inherit; }
 .command-menu__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .command-menu__group { color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
-.command-menu__keys { display: inline-flex; gap: 2px; }
+.command-menu__keys { display: inline-flex; gap: var(--space-2); }
 .command-menu__empty { padding: var(--space-16) var(--space-8); color: var(--color-muted); font-size: var(--text-md); }
 .command-menu .ui-dialog__footer { justify-content: flex-start; padding: var(--space-8) var(--space-16); }
 .command-menu__foot { display: flex; gap: var(--space-16); color: var(--color-faint); font-size: var(--text-xs); }
-.command-menu__foot > span { display: inline-flex; align-items: center; gap: 4px; }
-.command-menu__foot > span > .ui-kbd:last-of-type { margin-right: 2px; }
+.command-menu__foot > span { display: inline-flex; align-items: center; gap: var(--space-6); }
 .ui-dialog--sheet.command-menu .ui-dialog__footer { display: none; }
 .sidebar-setup { display: flex; flex-direction: column; gap: var(--space-4); color: var(--color-text); font-size: var(--text-xs); line-height: var(--leading-xs); text-decoration: none; }
 .sidebar-setup-action { color: var(--color-accent-text); }
@@ -102,7 +101,7 @@ button svg:not(:where(.ui-icon)), .ui-button svg:not(:where(.ui-icon)) { width: 
 .legal-footer-links a { padding-block: var(--space-4); color: inherit; text-decoration: none; transition: color var(--motion-duration); }
 .legal-footer-links a:is(:hover, :focus-visible) { color: var(--color-text); }
 /* Privacy mode (components/PrivacyToggle.tsx): the whole row is the button; the switch only shows its state. */
-.privacy-toggle { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); width: 100%; padding: 0; border: 0; border-radius: 2px; background: none; color: var(--color-text); font: inherit; font-size: var(--text-xs); line-height: var(--leading-xs); text-align: left; cursor: pointer; }
+.privacy-toggle { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); width: 100%; padding: 0; border: 0; border-radius: var(--radius-xs); background: none; color: var(--color-text); font: inherit; font-size: var(--text-xs); line-height: var(--leading-xs); text-align: left; cursor: pointer; }
 .privacy-toggle:focus-visible { background: var(--color-hover); color: var(--color-text); }
 /* Fields that hold addresses (sender lists, a dry run's recipient): blurred like every address, revealed by hover or focus,
    and in the clear with privacy mode off (the default). */
@@ -112,11 +111,11 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
 .sign-in-consent a { color: inherit; text-decoration-line: underline; text-decoration-thickness: from-font; text-underline-offset: .18em; transition: color var(--motion-duration); }
 .sign-in-consent a:is(:hover, :focus-visible) { color: var(--color-text); }
 .quota-label span:last-child { color: var(--color-text); }
-.quota-meter { display: block; height: 3px; width: 100%; border: 0; border-radius: 2px; background: var(--color-layer-2); appearance: none; overflow: hidden; }
-.quota-meter::-webkit-meter-bar { background: var(--color-layer-2); border: 0; border-radius: 2px; height: 3px; }
+.quota-meter { display: block; height: 3px; width: 100%; border: 0; border-radius: var(--radius-2xs); background: var(--color-layer-2); appearance: none; overflow: hidden; }
+.quota-meter::-webkit-meter-bar { background: var(--color-layer-2); border: 0; border-radius: var(--radius-2xs); height: 3px; }
 .quota-meter::-webkit-meter-optimum-value { background: var(--color-accent-data); }
 .quota-meter::-moz-meter-bar { background: var(--color-accent-data); }
-.page-surface { display: flex; flex-direction: column; margin: var(--topbar-height) 0 0 var(--sidebar-width); padding: 14px var(--space-16); height: calc(100dvh - var(--topbar-height)); min-height: 0; border-start-start-radius: var(--radius-lg); background: var(--color-surface); position: relative; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.page-surface { display: flex; flex-direction: column; margin: var(--topbar-height) 0 0 var(--sidebar-width); padding: var(--space-16); height: calc(100dvh - var(--topbar-height)); min-height: 0; border-start-start-radius: var(--radius-lg); background: var(--color-surface); position: relative; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
 /* Console pages (Overview, Logs, a sent email) run edge to edge from 900 px: each lays out its own strips and solid
    surfaces on the page's 16px gutter, and a notice above one sits on that gutter too, as a solid strip of its own. */
 .app-shell:not(.app-shell--compact) .page-surface:has(> :is(.ov-page, .logs-page, .email-detail)) { padding: 0; }
@@ -136,7 +135,7 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
 .standing-banner + .standing-banner { margin-top: calc(-1 * var(--page-gap) + var(--space-8)); }
 /* Flat: a solid neutral strip (no rule), the tone in its icon's ink and the line's own words; no tinted box. */
 .standing-banner { flex-shrink: 0; display: flex; align-items: center; gap: var(--space-12); margin-bottom: var(--page-gap); padding: var(--space-8) var(--space-12); border: 0; border-radius: var(--radius-sm); background: var(--color-layer-1); color: var(--color-text); font-size: var(--text-md); line-height: var(--leading-sm); }
-.standing-banner__icon { flex: none; align-self: flex-start; margin-top: 2px; color: var(--tone-ink); }
+.standing-banner__icon { flex: none; align-self: flex-start; height: 1lh; color: var(--tone-ink); }
 .standing-banner__text { flex: 1; min-width: 0; }
 .standing-banner__text > p { height: var(--leading-sm); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .standing-banner__what { display: flex; align-items: center; font-weight: var(--font-weight-bold); font-variant-numeric: tabular-nums; }
@@ -148,14 +147,14 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
   .standing-banner__text > p { white-space: normal; text-overflow: clip; }
   .standing-banner__text > .standing-banner__did { height: auto; }
   .standing-banner__text > .standing-banner__what { display: -webkit-box; height: calc(2 * var(--leading-sm)); -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-  .standing-banner__text > .standing-banner__what:has(.ui-skeleton-block) { display: flex; align-items: flex-start; padding-top: 4px; }
+  .standing-banner__text > .standing-banner__what:has(.ui-skeleton-block) { display: flex; align-items: flex-start; padding-top: var(--space-4); }
   /* The billing banner's text is fixed, so it needs no reserved lines. */
   .billing-banner .standing-banner__text > .standing-banner__what, .setup-banner .standing-banner__text > .standing-banner__what { display: block; height: auto; -webkit-line-clamp: unset; }
 }
 @media (max-width: 899px) {
   .standing-banner { flex-wrap: wrap; align-items: flex-start; }
   .standing-banner__text { flex-basis: calc(100% - 28px); }
-  .standing-banner__fix { margin-left: calc(16px + var(--space-12)); }
+  .standing-banner__fix { margin-left: calc(var(--space-16) + var(--space-12)); }
 }
 @media (max-width: 640px) {
   .standing-banner__text > .standing-banner__what { height: calc(3 * var(--leading-sm)); -webkit-line-clamp: 3; }
@@ -202,7 +201,7 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
 .nowrap { white-space: nowrap; }
 .text-warning { color: var(--color-warning); }
 /* Charts: no box and no axis rules; ultra-quiet horizontal reference lines (crisp, all one step) and muted mono labels. */
-.chart-label { fill: var(--color-faint); font-family: var(--font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.chart-label { fill: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); font-variant-numeric: tabular-nums; }
 .chart-grid { stroke: var(--color-gridline); shape-rendering: crispEdges; }
 .chart-grid--base { stroke: var(--color-gridline); }
 .search-box { display: flex; align-items: center; position: relative; width: 392px; max-width: 100%; min-width: 220px; flex-shrink: 1; }
@@ -218,7 +217,7 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
 .logs-table { --table-row-height: var(--row-height-log); }
 .logs-table .ui-table { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: -.01em; }
 .logs-table .ui-table .log-subject { font-family: var(--font-body); font-size: var(--text-md); letter-spacing: 0; }
-.logs-table :where(.ui-table tbody tr:not(.ui-table-spacer):nth-child(even)) > td { background: var(--color-row-alt); }
+.logs-table :where(.ui-table tbody tr:not(.ui-table-spacer):nth-child(even)) > td { background-color: var(--color-row-alt); }
 .logs-table .ui-status { font-family: var(--font-mono); font-size: var(--text-xs); }
 /* The time: a muted date, the bright time. */
 .log-time { color: var(--color-text); white-space: nowrap; }
@@ -227,7 +226,7 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
 .logs-controls { flex-wrap: nowrap; gap: var(--space-12); }
 .logs-controls .ui-tabs { min-height: var(--control-height); }
 .logs-controls .ui-tab { height: var(--control-height); }
-.logs-table .ui-table th { height: 28px; padding-block: 0; color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); font-weight: 400; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.logs-table .ui-table th { padding-block: 0; color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); font-weight: 400; letter-spacing: var(--tracking-label); text-transform: uppercase; }
 .logs-table .ui-table td { padding-block: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .logs-table .ui-table :is(th, td):last-child { padding-inline: var(--space-6); text-overflow: clip; }
 .logs-table .ui-table td:last-child svg { display: block; }
@@ -242,9 +241,9 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
 /* A filtered box paints above a card's link, which covers the card: let a press through to it. */
 .private-address__rest { flex: 1 1 0; min-width: 0; filter: blur(.31em); pointer-events: none; }
 .private-address__rest::before { content: 'mnesaroucinetaxmnesaroucinetaxmnesaroucinetaxmnesaroucinetaxmnesaroucinetaxmnesaroucinetaxmnesaroucinetaxmnesaroucinetaxmnesaroucinetaxmnesaroucinetax'; display: block; overflow: hidden; }
-.private-address[tabindex] { border-radius: 2px; cursor: default; }
+.private-address[tabindex] { border-radius: var(--radius-xs); cursor: default; }
 /* A sender (components/PrivateAddress.tsx): the name, then the address with its brackets, which wraps to its own line as one piece. */
-.email-sender { display: flex; flex-wrap: wrap; column-gap: .3em; }
+.email-sender { display: flex; flex-wrap: wrap; column-gap: var(--space-4); }
 .email-sender > span { min-width: 0; max-width: 100%; }
 .email-sender__address { display: flex; }
 .email-sender__address > .private-address { min-width: 0; }
@@ -329,7 +328,7 @@ body:has(.app-shell--compact) .ui-toasts { --toast-offset: 56px; }
 .mobile-bar .theme-toggle { position: relative; inset: auto; flex: none; width: 44px; height: 44px; }
 .app-shell--compact .page-surface { --page-pad: max(var(--space-16), env(safe-area-inset-left), env(safe-area-inset-right)); height: auto; min-height: calc(100dvh - var(--mobile-bar-height) - var(--tab-bar-height) - env(safe-area-inset-top) - env(safe-area-inset-bottom)); margin: 0; padding: var(--space-16) var(--page-pad) var(--space-32); overflow-x: clip; overflow-y: visible; border-radius: 0; box-shadow: none; overscroll-behavior: auto; }
 .tab-bar { position: fixed; inset: auto 0 0; z-index: 30; display: grid; grid-template-columns: repeat(5, minmax(0, 128px)); justify-content: center; height: calc(var(--tab-bar-height) + env(safe-area-inset-bottom)); padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--color-deep); }
-.tab-bar__item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 0; padding: 0; border: 0; background: none; color: var(--color-muted); font-size: 11px; line-height: 14px; text-decoration: none; -webkit-tap-highlight-color: transparent; transition: color var(--motion-duration); }
+.tab-bar__item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-4); min-width: 0; padding: 0; border: 0; background: none; color: var(--color-muted); font-size: var(--text-label); line-height: var(--leading-label); text-decoration: none; -webkit-tap-highlight-color: transparent; transition: color var(--motion-duration); }
 .tab-bar__icon { position: relative; display: grid; place-items: center; width: 44px; height: 26px; transition: transform 160ms var(--ease-out-strong); }
 .tab-bar__icon::before { content: ''; position: absolute; inset: 0; border-radius: var(--radius-sm); background: var(--color-active-bg); opacity: 0; transform: scaleX(.6); transition: opacity 160ms ease-out, transform 240ms var(--ease-out-strong); }
 .tab-bar__icon svg { position: relative; width: 20px; height: 20px; stroke-width: 1.6; }
@@ -341,11 +340,11 @@ body:has(.app-shell--compact) .ui-toasts { --toast-offset: 56px; }
 /* More: the rest of the pages, then the sidebar's footer (sender score, SES quota). */
 .more-sheet__links { display: flex; flex-direction: column; margin: 0 calc(-1 * var(--focus-reach)); }
 .more-sheet__link:focus-visible { background: var(--color-hover); text-decoration: none; }
-.more-sheet__link { display: flex; align-items: center; gap: var(--space-12); min-height: 52px; padding-inline: calc(var(--space-8) - var(--focus-reach)); border-radius: var(--radius-sm); color: var(--color-text); font-size: 15px; text-decoration: none; transition: background-color 120ms ease; }
+.more-sheet__link { display: flex; align-items: center; gap: var(--space-12); min-height: 52px; padding-inline: calc(var(--space-8) - var(--focus-reach)); border-radius: var(--radius-sm); color: var(--color-text); font-size: var(--text-lg); text-decoration: none; transition: background-color 120ms ease; }
 .more-sheet__lock { margin-left: auto; color: var(--color-faint); }
 .more-sheet__link:active { background: var(--color-pressed); transition-duration: 0ms; }
 .more-sheet__link.active { background: var(--color-active-bg); font-weight: var(--font-weight-bold); }
-button.more-sheet__link { width: calc(100% + 2 * var(--focus-reach)); margin: 0; border: 0; background: none; font: inherit; font-size: 15px; text-align: left; cursor: pointer; }
+button.more-sheet__link { width: calc(100% + 2 * var(--focus-reach)); margin: 0; border: 0; background: none; font: inherit; font-size: var(--text-lg); text-align: left; cursor: pointer; }
 .more-sheet__icon { display: grid; place-items: center; width: 28px; color: var(--color-muted); }
 .more-sheet__icon svg { width: 20px; height: 20px; stroke-width: 1.6; }
 .more-sheet__footer { display: flex; flex-direction: column; gap: var(--space-12); margin-top: var(--space-16); padding-top: var(--space-8); }
@@ -408,7 +407,7 @@ html:has(.app-shell--compact) { scroll-padding-bottom: calc(56px + env(safe-area
 .account-menu__email[data-revealed] { overflow: visible; white-space: normal; text-overflow: clip; }
 .account-menu__email[data-revealed] > .private-address__value { overflow: visible; white-space: normal; overflow-wrap: anywhere; }
 /* Workspaces sit under their account's name. */
-.account-menu__workspace { padding-left: calc(var(--space-8) * 2 + 28px); }
+.account-menu__workspace { padding-left: calc(var(--space-8) * 2 + var(--space-28)); }
 .account-menu__workspace-name { flex: 1; min-width: 0; }
 .account-menu__note { color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .account-menu__check { flex: none; margin-left: auto; color: var(--color-text); }
@@ -419,7 +418,7 @@ html:has(.app-shell--compact) { scroll-padding-bottom: calc(56px + env(safe-area
 .account-sheet .ui-action-sheet__items + .ui-action-sheet__items { margin-top: var(--space-8); }
 .account-sheet__account { min-height: 60px; }
 .account-sheet__account[aria-current] { cursor: default; }
-.account-sheet__workspace { padding-left: calc(var(--space-16) + 28px + var(--space-12)); }
+.account-sheet__workspace { padding-left: calc(var(--space-16) + var(--space-28) + var(--space-12)); }
 /* The open menu has focus as a whole; an address in it shows only while its own row is pointed at or highlighted. */
 .account-menu:focus-visible .private-address__rest, .account-sheet :focus-visible .private-address__rest { filter: blur(4px); }
 .account-menu [data-highlighted] .private-address__rest, .account-menu .private-address:hover .private-address__rest { filter: blur(0); }
@@ -447,10 +446,10 @@ body:has(.support-launcher[aria-expanded='true']) .ui-toasts { right: calc(var(-
 .support-trigger::before { content: ''; position: absolute; top: 3px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--color-text); box-shadow: 0 0 0 2px var(--color-deep); opacity: 0; transform: scale(.4); transition: opacity 160ms ease-out, transform 240ms var(--ease-out-strong); pointer-events: none; }
 .support-launcher::before { top: -2px; right: -2px; box-shadow: 0 0 0 2px var(--color-surface); }
 .support-trigger[data-unread]::before { opacity: 1; transform: none; }
-.mobile-bar .support-trigger { flex: none; width: 44px; height: 44px; margin-right: -8px; }
+.mobile-bar .support-trigger { flex: none; width: 44px; height: 44px; margin-right: calc(-1 * var(--space-8)); }
 .mobile-bar .support-trigger::before { top: 11px; right: 11px; }
 .support-panel--error { position: fixed; right: var(--launcher-inset); bottom: calc(var(--launcher-inset) + var(--launcher-size) + var(--space-12)); z-index: 40; display: flex; flex-direction: column; width: min(400px, calc(100vw - var(--sidebar-width) - 2 * var(--launcher-inset))); height: auto; background: var(--color-surface); color: var(--color-text); border-radius: var(--radius-lg); box-shadow: var(--shadow-dialog); overflow: hidden; }
-.support-panel--error.support-panel--sheet { inset: auto 0 calc(var(--tab-bar-height) + env(safe-area-inset-bottom)); width: auto; border-radius: 14px 14px 0 0; }
+.support-panel--error.support-panel--sheet { inset: auto 0 calc(var(--tab-bar-height) + env(safe-area-inset-bottom)); width: auto; border-radius: var(--radius-sheet) var(--radius-sheet) 0 0; }
 .support-panel--error .support-panel__header { display: flex; align-items: center; gap: var(--space-12); height: 56px; padding: 0 var(--space-8) 0 var(--space-16); border-bottom: 1px solid var(--color-border-muted); }
 .support-panel--error .support-panel__heading { flex: 1; min-width: 0; }
 .support-panel--error .support-panel__heading h2 { margin: 0; font-size: var(--text-md); line-height: 20px; font-weight: var(--font-weight-bold); }

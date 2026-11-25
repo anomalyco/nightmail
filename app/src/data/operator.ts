@@ -83,8 +83,30 @@ export interface Glass {
     deploy: { sha: string | null; at: string | null } }
   visitors: { views: number; day: GlassDay; visitors: GlassCount; hourly: number[]; referrers: { host: string; views: number }[]; through: string | null }
 }
+/** Glass's Deliverability board (GET /v1/operator/glass/deliverability, api/src/glass-deliverability.ts): our mail by
+ *  mailbox provider, kind and region for a period and the one before (cube), the period by bucket (series), each pool
+ *  region's SES health and Amazon VDM estimates, Spamhaus DBL, standing and the workspaces with the most complaints and
+ *  bounces. Cached 30 s; the page filters the cube itself. */
+export type DeliverabilityWindow = '24h' | '7d' | '30d'
+export type MailProvider = 'gmail' | 'microsoft' | 'yahoo' | 'apple' | 'proton' | 'gmx' | 'other'
+export type DeliverabilityCounts = { accepted: number; delivered: number; hardBounced: number; softBounced: number; deferred: number; complained: number; opened: number; humanOpened: number; clicked: number }
+export type VdmCounts = { send: number; delivery: number; permanentBounce: number; transientBounce: number; complaint: number; deliveryComplaint: number; open: number; deliveryOpen: number; click: number; deliveryClick: number }
+type CheckState = { status: string | null; checkedAt: string | null }
+export interface Deliverability {
+  window: DeliverabilityWindow; generatedAt: string; since: string; until: string; previousSince: string; coverageFrom: string | null; unit: 'hour' | 'day'
+  cube: { provider: MailProvider; kind: string; region: string; current: DeliverabilityCounts; previous: DeliverabilityCounts }[]
+  series: ({ at: string; kind: string; region: string } & DeliverabilityCounts)[]
+  regions: { region: string; place: string; sending: boolean
+    ses: CheckState & { enforcement: string | null; sendingEnabled: boolean | null; productionAccess: boolean | null; vdm: boolean | null; engagement: boolean | null; error: string | null }
+    vdm: CheckState & { error: string | null; since: string; until: string; previousSince: string; providers: { provider: MailProvider | 'all'; current: VdmCounts; previous: VdmCounts }[] } }[]
+  blocklist: (CheckState & { domain: string })[]
+  postmaster: (CheckState & { domain: string; url: string; error: string | null; spamRatio: { current: number | null; previous: number | null }
+    latest: { day: string; spamRatio: number | null; spf: number | null; dkim: number | null; dmarc: number | null; deliveryErrorRatio: number | null } | null })[]
+  standing: { grades: Record<GlassGrade, number>; calibrating: number; steps: Record<StandingStep, number> }
+  top: Record<'complaints' | 'bounces', { workspaceId: string; accepted: number; bounced: number; complained: number }[]>
+}
 /** Glass's activity feed (GET /v1/operator/glass/activity): the newest 50 events, newest first, each once by its id. */
-export type GlassEventKind = 'signup' | 'first_send' | 'domain_verified' | 'builtin_ready' | 'campaign_launched' | 'campaign_paused' | 'standing' | 'breaker' | 'alert'
+export type GlassEventKind = 'signup' | 'first_send' | 'domain_verified' | 'builtin_ready' | 'campaign_launched' | 'campaign_paused' | 'standing' | 'breaker' | 'alert' | 'link_fallback'
 export interface GlassEvent { id: string; at: string; kind: GlassEventKind; workspace: { id: string; name: string } | null; subject: string | null; detail: string | null
   place: 'open' | 'waitlist' | null; email: string | null; tone: 'neutral' | 'success' | 'warning' | 'danger' }
 export interface GlassActivity { events: GlassEvent[]; generatedAt: string }
@@ -142,6 +164,7 @@ export const operatorApi = {
   signups: (signal?: AbortSignal) => request<SignupPlaces>(`${base}/signups`, { signal }),
   health: (signal?: AbortSignal) => request<OperatorHealth>(`${base}/health`, { signal }),
   glass: (signal?: AbortSignal) => request<Glass>(`${base}/glass`, { signal }),
+  glassDeliverability: (window: DeliverabilityWindow, signal?: AbortSignal) => request<Deliverability>(`${base}/glass/deliverability?window=${window}`, { signal }),
   /** after: the newest event's time the page has; the answer is the events at or after it. */
   glassActivity: (after?: string, signal?: AbortSignal) => request<GlassActivity>(`${base}/glass/activity${after ? `?after=${encodeURIComponent(after)}` : ''}`, { signal }),
   setSignupLimit: (limit: number, raise: SignupRaise, guard: OperatorGuard) => request<SignupPlaces & { letIn: number; emailed: number; notEmailed: number | null }>(`${base}/signups`, { method: 'PUT', body: { limit, raise }, idempotencyKey: guard.idempotencyKey }),

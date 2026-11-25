@@ -23,8 +23,8 @@
 .mailbox-search .ui-input { width: 100%; }
 .mailbox-toolbar .mailbox-address-filter { flex: none; width: auto; min-width: 0; max-width: 50%; }
 /* Rows bleed into the gutter so their text lines up with the search box. */
-.mailbox-threads { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 2px; flex: 1; min-height: 0; overflow-y: auto; margin: 0 calc(-1 * var(--space-4)) 0 calc(-1 * var(--space-16)); padding: 0 var(--space-4) var(--space-16) 0; list-style: none; }
-.mailbox-thread-row { position: relative; display: grid; gap: 2px; width: 100%; padding: var(--space-8) var(--space-12) var(--space-8) var(--space-16); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text); text-align: left; font: inherit; cursor: pointer; transition: background var(--motion-duration, 120ms); }
+.mailbox-threads { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-2); flex: 1; min-height: 0; overflow-y: auto; margin: 0 calc(-1 * var(--space-4)) 0 calc(-1 * var(--space-16)); padding: 0 var(--space-4) var(--space-16) 0; list-style: none; }
+.mailbox-thread-row { position: relative; display: grid; gap: var(--space-4); width: 100%; padding: var(--space-8) var(--space-12) var(--space-8) var(--space-16); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text); text-align: left; font: inherit; cursor: pointer; transition: background var(--motion-duration, 120ms); }
 .mailbox-thread-row:hover { background: var(--color-hover); }
 .mailbox-thread-row[data-selected] { background: var(--color-active-bg, var(--color-hover)); }
 .mailbox-thread-row:focus-visible:not([data-selected]) { background: var(--color-hover); }
@@ -32,18 +32,18 @@
 .mailbox-thread-row[data-selected]:focus-visible { background: var(--color-raised-control-focus); }
 .mailbox-thread-row__top { display: flex; align-items: center; gap: var(--space-8); min-width: 0; font-size: var(--text-sm); line-height: 20px; }
 .mailbox-thread-row__people { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--color-muted); }
-.mailbox-thread-row__count { flex: none; min-width: 20px; height: 18px; padding: 0 6px; border-radius: 4px; background: var(--color-chip); color: var(--color-muted); font-size: 11px; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
+.mailbox-thread-row__count { flex: none; min-width: 20px; height: 18px; padding: 0 var(--space-6); border-radius: var(--radius-xs); background: var(--color-chip); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; }
 .mailbox-thread-row[data-selected] .mailbox-thread-row__count { background: var(--color-surface); }
 .mailbox-thread-row__time { flex: none; min-width: 52px; color: var(--color-muted); font-size: var(--text-xs); text-align: right; font-variant-numeric: tabular-nums; }
 .inbound-thread-row__subject { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--color-text); font-size: var(--text-sm); line-height: 20px; }
 .mailbox-thread-row__top .mailbox-thread-row__people { color: var(--color-text); font-weight: 500; }
 .mailbox-thread-row__snippet { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--color-muted); font-size: var(--text-xs); line-height: 18px; }
 /* The address a conversation reached, as a tag in front of its snippet. */
-.mailbox-thread-row__snippet > .mailbox-address-label { display: inline-block; max-width: min(40%, 150px); margin-right: var(--space-6); padding: 0 var(--space-4); border-radius: 4px; background: var(--color-layer-2); color: var(--color-text); vertical-align: top; }
+.mailbox-thread-row__snippet > .mailbox-address-label { display: inline-block; max-width: min(40%, 150px); margin-right: var(--space-6); padding: 0 var(--space-4); border-radius: var(--radius-xs); background: var(--color-layer-2); color: var(--color-text); vertical-align: top; }
 .mailbox-star { flex: none; color: var(--color-warning-marker, #d4a017); fill: currentColor; }
 .mailbox-labels { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-8); }
 .mailbox-address-label { min-width: 0; overflow: clip; text-overflow: ellipsis; white-space: nowrap; color: var(--color-muted); font-size: var(--text-xs); line-height: 18px; }
-.mailbox-label { padding: 0 6px; border-radius: 4px; background: var(--color-chip); color: var(--color-muted); font-size: 11px; line-height: 18px; }
+.mailbox-label { padding: 0 var(--space-6); border-radius: var(--radius-xs); background: var(--color-chip); color: var(--color-muted); font-size: var(--text-label); line-height: 18px; }
 .mailbox-thread-skeleton { display: grid; gap: var(--space-16); padding: var(--space-16) 0; }
 .mailbox-reader { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow-y: auto; padding: 0 var(--space-12) 0 0; }
 .mailbox-reader > .ui-empty-state { flex: 1; justify-content: center; }
@@ -53,7 +53,7 @@
 .mailbox-conversation__title { display: grid; gap: var(--space-6); flex: 1; min-width: 0; }
 .mailbox-conversation__title h2 { margin: 0; font-size: var(--text-lg); line-height: 28px; overflow-wrap: anywhere; }
 .mailbox-conversation__title p { margin: 0; font-size: var(--text-xs); }
-.mailbox-conversation__actions { flex: none; gap: 2px; margin-top: -2px; }
+.mailbox-conversation__actions { flex: none; gap: var(--space-4); }
 .mailbox-conversation__scope { flex: none; width: auto; max-width: 220px; margin-left: auto; }
 .inbound-older { display: flex; justify-content: center; }
 
@@ -62,7 +62,7 @@
 .mailbox-message__from .muted { overflow: clip; text-overflow: ellipsis; font-size: var(--text-xs); }
 .mailbox-message__meta { flex: none; display: inline-flex; align-items: center; gap: var(--space-8); color: var(--color-muted); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .mailbox-message__header { display: flex; align-items: center; gap: var(--space-12); width: 100%; min-height: 24px; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.mailbox-message__context { display: flex; flex-wrap: wrap; align-items: center; gap: 2px var(--space-12); margin: 2px 0 0; padding: 0; color: var(--color-muted); font-size: var(--text-xs); line-height: 18px; }
+.mailbox-message__context { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-12); margin: var(--space-4) 0 0; padding: 0; color: var(--color-muted); font-size: var(--text-xs); line-height: 18px; }
 .mailbox-message__reply-to { display: inline-flex; align-items: center; gap: var(--space-4); }
 .mailbox-message__reply-to a { color: var(--color-text); }
 
@@ -86,13 +86,13 @@ ul.mailbox-attachments button:focus-visible { background: var(--color-control-fo
 /* The reply box stays reachable at the bottom of long conversations; it grows when focused. */
 .mailbox-composer { position: sticky; bottom: 0; z-index: 1; display: grid; gap: var(--space-8); margin-top: auto; padding: var(--space-12) 0 var(--space-16); background: var(--color-surface); }
 /* Collapsed, its one line sits centred like a field's; it settles to the textarea's own padding as it opens. */
-.mailbox-composer textarea { min-height: 44px; height: 44px; padding-block: calc((44px - var(--textarea-leading)) / 2); resize: none; transition: height var(--motion-duration, 120ms), padding var(--motion-duration, 120ms), background var(--motion-duration) var(--ease-standard); }
-.mailbox-composer:focus-within textarea, .mailbox-composer[data-filled] textarea { height: 112px; padding-block: 8px; resize: vertical; }
+.mailbox-composer textarea { --composer-line: 44px; min-height: var(--composer-line); height: var(--composer-line); padding-block: calc((var(--composer-line) - var(--textarea-leading)) / 2); resize: none; transition: height var(--motion-duration, 120ms), padding var(--motion-duration, 120ms), background var(--motion-duration) var(--ease-standard); }
+.mailbox-composer:focus-within textarea, .mailbox-composer[data-filled] textarea { height: 112px; padding-block: var(--space-8); resize: vertical; }
 .mailbox-composer__to { font-size: var(--text-xs); color: var(--color-muted); overflow-wrap: anywhere; }
 .mailbox-composer__to.muted { margin: 0; }
 .inbound-composer__target { display: flex; align-items: center; gap: var(--space-4); min-height: 24px; }
 /* The reviewed recipients: the exact From, To and Cc the API checks before queueing the reply. */
-.inbound-recipients-review { display: grid; gap: 2px; }
+.inbound-recipients-review { display: grid; gap: var(--space-4); }
 .inbound-recipients { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: var(--space-8); margin: 0; color: var(--color-text); }
 .inbound-recipients__label { color: var(--color-muted); }
 .inbound-recipients__list { display: flex; flex-wrap: wrap; gap: 0 var(--space-12); min-width: 0; }
@@ -105,7 +105,7 @@ ul.mailbox-attachments button:focus-visible { background: var(--color-control-fo
 
 @media (max-width: 900px) {
   .mailbox-layout { grid-template-columns: minmax(0, 1fr); }
-  .mailbox-reader { display: none; padding-inline: 0 3px; }
+  .mailbox-reader { display: none; padding-inline: 0; }
   .mailbox-page[data-thread-open] .mailbox-list { display: none; }
   .mailbox-page[data-thread-open] .mailbox-reader { display: flex; }
   .mailbox-conversation__header { flex-wrap: wrap; }
@@ -123,7 +123,9 @@ ul.mailbox-attachments button:focus-visible { background: var(--color-control-fo
 .mailbox-webhook-events legend { margin-bottom: var(--space-8); padding: 0; }
 .mailbox-webhook-events code { font-size: var(--text-xs); }
 .mailbox-webhook-events .ui-check-field { align-items: flex-start; min-height: 0; }
-.mailbox-webhook-events .ui-checkbox { margin-top: 1px; }
+/* The box centred on the label's first line (its line box: body leading). */
+.mailbox-webhook-events .ui-checkbox { margin-top: calc((var(--leading-md) - var(--space-16)) / 2); }
+@media (pointer: coarse), (max-width: 899px) { .mailbox-webhook-events .ui-checkbox { margin-top: calc((var(--leading-md) - var(--space-20)) / 2); } }
 .mailbox-nowrap { white-space: nowrap; }
 
 /* Pages: copy and toolbars sit on the shared 8/12px rhythm inside the page stack. */
@@ -176,8 +178,8 @@ ul.mailbox-attachments button:focus-visible { background: var(--color-control-fo
 
 /* The rule page (rituals.tsx): the page is the code. It fills the window (a phone: the screen between the bars) and the
    editor takes what the header leaves. No section labels, panel headers or status words: hierarchy is size and space,
-   and text is 15px (the code 14px, 13px on a phone). Navy is Save's alone; "changed" is one neutral fill on a mail row. */
-.stack.rule-page { flex: 1 1 0; gap: 0; min-height: 0; font-size: 15px; line-height: 22px; }
+   and text is 16px (the code 14px, 13px on a phone). Navy is Save's alone; "changed" is one neutral fill on a mail row. */
+.stack.rule-page { flex: 1 1 0; gap: 0; min-height: 0; font-size: var(--text-lg); line-height: var(--leading-lg); }
 /* The addresses sit on the title's line. */
 .rule-page .ui-page-header__text { flex-direction: row; align-items: baseline; gap: var(--space-16); }
 .rule-off { margin-left: var(--space-8); color: var(--color-muted); font-weight: var(--font-weight-regular); }
@@ -190,7 +192,7 @@ ul.mailbox-attachments button:focus-visible { background: var(--color-control-fo
 .rule-name:focus { background: var(--color-control-focus); }
 .rule-name[aria-invalid] { background: var(--color-control-invalid); }
 .rule-name[aria-invalid]:focus { background: var(--color-control-invalid-focus); }
-.rule-on { display: inline-flex; align-items: center; gap: var(--space-6); max-width: 100%; min-height: 22px; margin: 0; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--color-muted); font: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
+.rule-on { display: inline-flex; align-items: center; gap: var(--space-6); max-width: 100%; min-height: 22px; margin: 0; padding: 0; border: 0; border-radius: var(--radius-xs); background: none; color: var(--color-muted); font: inherit; text-align: left; white-space: nowrap; cursor: pointer; }
 .rule-on:disabled { opacity: 1; cursor: default; }
 .rule-on__text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .rule-on > svg { flex: none; }
@@ -205,13 +207,15 @@ ul.mailbox-attachments button:focus-visible { background: var(--color-control-fo
 .ritual-editor .cm-editor { background: var(--color-layer-1); }
 .ritual-editor .cm-editor { flex: 1; height: 100%; min-height: 0; font-size: var(--text-md); }
 .ritual-editor .cm-content { padding-block: var(--space-16); font-family: var(--font-mono); line-height: 24px; }
-.ritual-editor .cm-line { padding-left: calc(6px + 6ch); text-indent: -6ch; }
+.ritual-editor .cm-line { padding-left: calc(var(--space-6) + 6ch); text-indent: -6ch; }
 .ritual-editor .cm-gutters { border-right: 0; background: var(--color-layer-1); color: var(--color-faint); line-height: 24px; }
 .ritual-editor .cm-foldGutter { display: none !important; }
 .ritual-editor .cm-lineNumbers .cm-gutterElement { min-width: 36px; padding-inline: var(--space-12) var(--space-4); }
 /* A problem is the editor's own: a squiggle, its message on hover, one small dot by the line number. */
 .ritual-editor .cm-gutter-lint { width: 14px; }
-.ritual-editor .cm-lint-marker { width: 6px; height: 6px; margin: 9px 4px; border-radius: 50%; background: var(--color-danger); content: none; }
+.ritual-editor .cm-gutter-lint .cm-gutterElement { padding: 0; }
+.ritual-editor .cm-lint-marker { display: flex; align-items: center; justify-content: center; width: 100%; height: 1lh; margin: 0; content: none; }
+.ritual-editor .cm-lint-marker::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--color-danger); }
 .ritual-editor .cm-lint-marker > * { display: none; }
 .ritual-editor .cm-editor.cm-focused { outline: none; }
 .ritual-editor .cm-activeLine, .ritual-editor .cm-activeLineGutter { background: var(--color-hover); }
@@ -224,7 +228,7 @@ ul.mailbox-attachments button:focus-visible { background: var(--color-control-fo
 .rule-problem > span { flex: none; color: var(--color-danger); }
 /* Try on recent mail: one quiet line; open, the mail takes its room from the editor. */
 .rule-try { display: flex; flex-direction: column; min-width: 0; }
-.rule-try__button { display: inline-flex; align-items: center; align-self: flex-start; gap: var(--space-6); height: 44px; margin: 0; padding: 0; border: 0; border-radius: 4px; background: none; color: var(--color-muted); font: inherit; cursor: pointer; }
+.rule-try__button { display: inline-flex; align-items: center; align-self: flex-start; gap: var(--space-6); height: 44px; margin: 0; padding: 0; border: 0; border-radius: var(--radius-xs); background: none; color: var(--color-muted); font: inherit; cursor: pointer; }
 .rule-try__button:disabled { opacity: 1; cursor: default; }
 .rule-try__button > svg { transition: transform var(--motion-duration) ease-out; }
 .rule-try[data-open] .rule-try__button { color: var(--color-text); }
@@ -239,12 +243,12 @@ ul.mailbox-attachments button:focus-visible { background: var(--color-control-fo
 .rule-mail__subject { flex: 0 1 440px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rule-mail__out { flex: 1; min-width: 1px; color: var(--color-text); white-space: nowrap; }
 .rule-mail__out s { margin-right: var(--space-8); color: var(--color-faint); }
-.rule-mail__why { margin: -6px 0 var(--space-12); color: var(--color-muted); overflow-wrap: anywhere; }
+.rule-mail__why { margin: calc(-1 * var(--space-6)) 0 var(--space-12); color: var(--color-muted); overflow-wrap: anywhere; }
 .rule-mail__why .rcv-match { font-size: inherit; }
 .rule-mail__none { margin: 0 0 var(--space-12); color: var(--color-muted); }
 @media (hover: hover) and (pointer: fine) { .rule-mail > li:has(> .rule-mail__row:hover):not([data-changed]) { background: var(--color-hover); box-shadow: calc(-1 * var(--space-12)) 0 var(--color-hover), var(--space-12) 0 var(--color-hover); } }
 .rule-mail > li:has(> .rule-mail__row:focus-visible):not([data-changed]) { background: var(--color-hover); box-shadow: calc(-1 * var(--space-12)) 0 var(--color-hover), var(--space-12) 0 var(--color-hover); }
-.rule-sheet { font-size: 15px; line-height: 22px; }
+.rule-sheet { font-size: var(--text-lg); line-height: var(--leading-lg); }
 /* Runs on (its dialog): each address, the rules there in order, and whether the next one still runs. */
 .rule-runs { display: grid; gap: var(--space-16); }
 .rule-runs ul { display: grid; margin: 0; padding: 0; list-style: none; }
@@ -256,7 +260,7 @@ ul.mailbox-attachments button:focus-visible { background: var(--color-control-fo
 .rule-runs__order [data-self] { color: var(--color-text); }
 .rule-runs li > .ui-check-field { grid-column: 1 / -1; }
 .rule-shared .ui-textarea { --textarea-leading: var(--leading-sm); font-family: var(--font-mono); font-size: var(--text-sm); }
-@media (pointer: coarse), (max-width: 899px) { .rule-shared .ui-textarea { --textarea-leading: 22px; font-size: 16px; } }
+@media (pointer: coarse), (max-width: 899px) { .rule-shared .ui-textarea { --textarea-leading: var(--leading-lg); font-size: var(--text-lg); } }
 @media (max-width: 640px) {
   .stack.rule-page { min-height: auto; }
   /* The header stays one row: a long name shortens, and Undo takes its room from the name only while there is something to undo. */
@@ -268,13 +272,12 @@ ul.mailbox-attachments button:focus-visible { background: var(--color-control-fo
   .rule-on-row { margin-top: var(--space-8); }
   .rule-body { min-height: 300px; margin: var(--space-16) 0 calc(-1 * var(--space-12)); }
   .ritual-editor .cm-editor { font-size: var(--text-sm); }
-  .ritual-editor .cm-line { padding-left: calc(6px + 2ch); text-indent: -2ch; }
+  .ritual-editor .cm-line { padding-left: calc(var(--space-6) + 2ch); text-indent: -2ch; }
   .ritual-editor .cm-lineNumbers .cm-gutterElement { min-width: 28px; padding-inline: var(--space-8) var(--space-4); }
-  .rule-mail__row { display: grid; grid-template: 'from out' auto 'subject out' auto / minmax(0, 1fr) auto; align-content: center; row-gap: 2px; min-height: 68px; }
+  .rule-mail__row { display: grid; grid-template: 'from out' auto 'subject out' auto / minmax(0, 1fr) auto; align-content: center; row-gap: var(--space-4); min-height: 68px; }
   .rule-mail__from { grid-area: from; width: auto; }
   .rule-mail__subject { grid-area: subject; }
   .rule-mail__out { grid-area: out; }
-  .rule-mail__why { margin-top: -2px; }
 }
 /* CodeMirror parks a new tooltip at top: -10000px for one frame to measure it, then moves top/left into view; keeping
    that offscreen frame hidden preserves its measured box while stopping Blink from counting the move as a layout shift. */
@@ -315,8 +318,10 @@ ul.mailbox-attachments button:focus-visible { background: var(--color-control-fo
 /* Ask your agent (the add screen's dialog): connection status, setup for a client not connected yet, and prompts. */
 .ui-dialog.ritual-agent-dialog { width: min(640px, calc(100vw - 32px)); }
 .ritual-agent__content { gap: var(--space-16); }
-.ritual-agent__mark { display: inline-block; flex: none; width: 8px; height: 8px; margin-inline-end: var(--space-8); border-radius: 50%; background: var(--color-neutral-marker); vertical-align: 1px; }
-.ritual-agent__mark[data-connected] { background: var(--color-success-marker); }
+/* The connection's dot, centred on the status's first line: a box of the line's height with the dot drawn in it. */
+.ritual-agent__mark { display: inline-flex; align-items: center; height: 1lh; margin-inline-end: var(--space-8); vertical-align: top; }
+.ritual-agent__mark::before { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--color-neutral-marker); }
+.ritual-agent__mark[data-connected]::before { background: var(--color-success-marker); }
 .ritual-agent__status { margin: 0; font-size: var(--text-sm); line-height: var(--leading-sm); }
 .ritual-agent__status strong { color: var(--color-text); font-weight: 500; }
 .ritual-agent__heading { margin: 0; font-size: var(--text-xs); font-weight: 600; line-height: var(--leading-xs); color: var(--color-muted); }

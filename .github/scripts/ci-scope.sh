@@ -23,6 +23,10 @@ paths=$(mktemp)
 trap 'rm -f "$paths"' EXIT
 # Don't lose the old path on renames, split on whitespace, or turn a diff error into 'nothing changed'.
 git diff --name-only --no-renames -z "$base" HEAD > "$paths"
+# A queue entry can undo an earlier entry's contract change, leaving no net spec diff from dev.
+if [[ $GITHUB_EVENT_NAME == merge_group ]]; then
+  git diff --name-only --no-renames -z HEAD^1 HEAD -- api/openapi.json >> "$paths"
+fi
 # Advisories are published against unchanged lockfiles, so the audit runs on every PR, queue entry and direct push.
 api=false sdk=false dashboard=false acceptance=false gateway=false support=false audit=true
 while IFS= read -r -d '' path; do

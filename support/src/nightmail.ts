@@ -60,6 +60,7 @@ export type SupportAction = {
 
 /** The methods of Nightmail's SupportPlatform entrypoint, as this Worker calls them over RPC. */
 export interface SupportPlatform {
+  verifyWake(token: string, conversationId: string): Promise<boolean>;
   verifyHandoff(token: string): Promise<HandoffCheck>;
   /** Nightmail checks the evidence itself and decides who the conversation is for (201 new, 200 repeated). */
   registerConversation(body: { conversationId: string; evidence: ConversationEvidence }): Promise<PlatformReply<RegisteredConversation>>;
@@ -74,14 +75,14 @@ export interface SupportPlatform {
   pullOutbox(conversationId?: string): Promise<PlatformReply<{ data: OutboxReply[] }>>;
   markDelivery(conversationId: string, messageId: string, status: 'sent' | 'failed'): Promise<PlatformReply<{ id: string; delivery: 'sent' | 'failed'; deliveredAt: string | null }>>;
 }
-/** A platform reply's body, or (any other status than `ok`) a BaneError the work queue can classify. */
+/** A platform reply's body, or (any other status than `ok`) a NightmailError the work queue can classify. */
 export function platformBody<T>(reply: PlatformReply<T>, ok = [200, 201]): T {
   if (ok.includes(reply.status)) return reply.body;
   const code = (reply.body as { error?: { code?: string } } | null)?.error?.code ?? `HTTP_${reply.status}`;
-  throw new BaneError(reply.status, code, `Nightmail answered ${reply.status} (${code})`, reply.requestId, reply.retryAfter);
+  throw new NightmailError(reply.status, code, `Nightmail answered ${reply.status} (${code})`, reply.requestId, reply.retryAfter);
 }
 
-export class BaneError extends Error {
+export class NightmailError extends Error {
   readonly retryAt: number | null;
   constructor(readonly status: number, readonly code: string, message: string, readonly requestId: string | null = null, retryAfter: string | null = null) {
     super(message);
@@ -95,19 +96,19 @@ export class BaneError extends Error {
  * Nightmail's public API over the BANE_API binding, with the support address's API key, or (`intake`) the key for the
  * abuse@, privacy@ and legal@ addresses.
  */
-export function baneApi(env: Env, which: 'support' | 'intake' = 'support') {
+export function nightmailApi(env: Env, which: 'support' | 'intake' = 'support') {
   const key = which === 'intake' ? env.BANE_INTAKE_INBOX_KEY : env.BANE_SUPPORT_INBOX_KEY, secret = which === 'intake' ? 'BANE_INTAKE_INBOX_KEY' : 'BANE_SUPPORT_INBOX_KEY';
   async function call<T>(method: string, path: string, body?: unknown, idempotencyKey?: string): Promise<T> {
     if (!key) throw new MissingSecret(secret);
-    const headers: Record<string, string> = { authorization: `Bearer ${key}`, accept: 'application/json', 'user-agent': 'bane-support' };
+    const headers: Record<string, string> = { authorization: `Bearer ${key}`, accept: 'application/json', 'user-agent': 'nightmail-support' };
     if (body !== undefined) headers['content-type'] = 'application/json';
     if (idempotencyKey) headers['idempotency-key'] = idempotencyKey;
-    const response = await env.BANE_API.fetch(`${env.BANE_ORIGIN}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    const response = await env.BANE_API.fetch(`${env.NIGHTMAIL_ORIGIN}${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
     const text = await response.text();
     let parsed: unknown = null; try { parsed = text ? JSON.parse(text) : null; } catch { /* not JSON */ }
     if (!response.ok) {
       const error = (parsed as { error?: { code?: string; message?: string; requestId?: string } } | null)?.error;
-      throw new BaneError(response.status, error?.code ?? 'BANE_ERROR', error?.message ?? `${productName} answered ${response.status}`, error?.requestId ?? response.headers.get('x-request-id'), response.headers.get('retry-after'));
+      throw new NightmailError(response.status, error?.code ?? 'NIGHTMAIL_ERROR', error?.message ?? `${productName} answered ${response.status}`, error?.requestId ?? response.headers.get('x-request-id'), response.headers.get('retry-after'));
     }
     return parsed as T;
   }
@@ -122,8 +123,8 @@ export function baneApi(env: Env, which: 'support' | 'intake' = 'support') {
       const { url } = await call<{ url: string }>('GET', `/v1/inbound/messages/${encodeURIComponent(messageId)}/attachments/${encodeURIComponent(partId)}`);
       // Mail stored in R2 is served by Nightmail itself: stay on the binding for Nightmail's origin, and fetch other storage directly.
       // Workers have no redirect: 'error'; a redirect is not followed, and fails the ok check below.
-      const response = new URL(url).origin === new URL(env.BANE_ORIGIN).origin ? await env.BANE_API.fetch(url, { redirect: 'manual' }) : await fetch(url, { redirect: 'manual' });
-      if (!response.ok) throw new BaneError(response.status, 'ATTACHMENT_UNAVAILABLE', `Storage answered ${response.status} for an attachment`, null, response.headers.get('retry-after'));
+      const response = new URL(url).origin === new URL(env.NIGHTMAIL_ORIGIN).origin ? await env.BANE_API.fetch(url, { redirect: 'manual' }) : await fetch(url, { redirect: 'manual' });
+      if (!response.ok) throw new NightmailError(response.status, 'ATTACHMENT_UNAVAILABLE', `Storage answered ${response.status} for an attachment`, null, response.headers.get('retry-after'));
       if (Number(response.headers.get('content-length') ?? 0) > limit) { await response.body?.cancel(); return null; }
       return readCapped(response.body, limit);
     },
@@ -151,7 +152,7 @@ export function baneApi(env: Env, which: 'support' | 'intake' = 'support') {
       }, idempotencyKey),
   };
 }
-export type BaneApi = ReturnType<typeof baneApi>;
+export type NightmailApi = ReturnType<typeof nightmailApi>;
 export type InboundEvent = { cursor: string; type: string; addressId: string | null; threadId: string | null; messageId: string | null };
 
 export type InboundMessage = {

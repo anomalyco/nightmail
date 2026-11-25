@@ -68,7 +68,7 @@ export function registerDiskAlert(app: App) {
   app.post(DISK_ALERT_PATH, async c => {
     const { config } = c.env;
     // Self-hosted, no token, a wrong one or a wrong signature: the same 404, whatever is configured.
-    if (!config.multiTenant || !authorized(config, c.req.header('authorization'))) notFound('Endpoint');
+    if (!config.multiTenant || config.planetscaleWebhookSecret === null || !authorized(config, c.req.header('authorization'))) notFound('Endpoint');
     const body = await c.req.text();
     if (config.planetscaleWebhookSecret && !signed(config.planetscaleWebhookSecret, body, c.req.header('x-planetscale-signature'))) notFound('Endpoint');
     let event: Record<string, unknown>;

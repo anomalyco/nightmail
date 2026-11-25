@@ -5,7 +5,7 @@
 export interface OpPerm {
   permission?: "sendEmail" | "sentMail" | "receivedMail" | "inboxes" | "audience" | "receivingRules" | "configuration" | "administration";
   level?: "on" | "read" | "write";
-  scope?: "workspace" | "domain" | "address";
+  scope?: "workspace" | "domain" | "address" | "recipient";
   person?: "any" | "admin" | "owner";
   credential?: "dashboard" | "signIn" | "lasting" | "notDelegated";
   delegatedLevel?: "write";
@@ -1010,7 +1010,7 @@ export const CATALOG_OPS: readonly CatalogOp[] = [
     "perm": {
       "permission": "receivedMail",
       "level": "read",
-      "scope": "address"
+      "scope": "recipient"
     },
     "inbox": null
   },
@@ -1033,7 +1033,7 @@ export const CATALOG_OPS: readonly CatalogOp[] = [
     "perm": {
       "permission": "receivedMail",
       "level": "read",
-      "scope": "address"
+      "scope": "recipient"
     },
     "inbox": null
   },
@@ -1079,7 +1079,7 @@ export const CATALOG_OPS: readonly CatalogOp[] = [
     "perm": {
       "permission": "receivedMail",
       "level": "read",
-      "scope": "address"
+      "scope": "recipient"
     },
     "inbox": null
   },
@@ -1616,7 +1616,7 @@ export const CATALOG_OPS: readonly CatalogOp[] = [
     "perm": {
       "permission": "receivedMail",
       "level": "read",
-      "scope": "address"
+      "scope": "recipient"
     },
     "inbox": null
   },
@@ -1627,7 +1627,7 @@ export const CATALOG_OPS: readonly CatalogOp[] = [
     "perm": {
       "permission": "receivedMail",
       "level": "read",
-      "scope": "address"
+      "scope": "recipient"
     },
     "inbox": null
   },
@@ -1650,7 +1650,7 @@ export const CATALOG_OPS: readonly CatalogOp[] = [
     "perm": {
       "permission": "receivedMail",
       "level": "read",
-      "scope": "address"
+      "scope": "recipient"
     },
     "inbox": null
   },

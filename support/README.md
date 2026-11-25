@@ -4,8 +4,8 @@ A Cloudflare Worker per stage, beside Nightmail in the same account:
 
 | Stage | Worker | URL | Account | Binds |
 | --- | --- | --- | --- | --- |
-| dev | `bane-support-dev` | `https://support.dev.bane.mx` | anomaly-dev | `bane-dev` |
-| production | `bane-support` | `https://support.bane.mx` | anomaly-production | `bane-production` |
+| dev | `nightmail-support-dev` | `https://support.dev.nightmail.dev` | anomaly-dev | `nightmail-dev` |
+| production | `nightmail-support` | `https://support.nightmail.dev` | anomaly-production | `nightmail-production` |
 
 Each conversation (a chat from the dashboard's Help panel, or an email thread at the support address) is one `SupportConversation` Durable Object. The agent inside it is **OpenCode**, embedded with `@opencode/sdk/workerd`. The panel talks to it over the WebSocket protocol in [PROTOCOL.md](PROTOCOL.md). How it writes is in [VOICE.md](VOICE.md), and what it knows and may do is in [src/agent/system.md](src/agent/system.md). The design is in the Nightmail plans (`support-agent-design.md`).
 
@@ -56,26 +56,26 @@ The bundle is 16 MB raw and 2.9 MB gzipped, against a 10 MB limit. In Miniflare 
 
 Run these from `support/` with the stage's Cloudflare account. Ryan's work profile is `wwrangler`; use `--config wrangler.prod.jsonc` for production.
 
-1. **D1:** run `wrangler d1 create bane-support-dev` (production: `bane-support`), put the id in `wrangler.<stage>.jsonc`, then `bun run migrate:dev` (production: `migrate:production`).
-2. **Uploads bucket:** create `bane-support-dev-uploads` (production: `bane-support-uploads`) with a 90-day lifecycle rule, which matches transcript retention: `wrangler r2 bucket create <name>`, then add a rule with `wrangler r2 bucket lifecycle add` that deletes objects after 90 days. The Images binding (`IMAGES`) downscales screenshots over 1.4 MB before the model sees them. It needs no setup beyond Images being enabled on the account.
-3. **DNS:** nothing to add by hand. The Worker's Custom Domain (`support.dev.bane.mx` / `support.bane.mx`) creates its record on first deploy, as long as the zone `bane.mx` is in the same account.
+1. **D1:** run `wrangler d1 create nightmail-support-dev` (production: `nightmail-support`), put the id in `wrangler.<stage>.jsonc`, then `bun run migrate:dev` (production: `migrate:production`).
+2. **Uploads bucket:** create `nightmail-support-dev-uploads` (production: `nightmail-support-uploads`) with a 90-day lifecycle rule, which matches transcript retention: `wrangler r2 bucket create <name>`, then add a rule with `wrangler r2 bucket lifecycle add` that deletes objects after 90 days. The Images binding (`IMAGES`) downscales screenshots over 1.4 MB before the model sees them. It needs no setup beyond Images being enabled on the account.
+3. **DNS:** nothing to add by hand. The Worker's Custom Domain (`support.dev.nightmail.dev` / `support.nightmail.dev`) creates its record on first deploy, as long as the zone `nightmail.dev` is in the same account.
 4. **The support address** in Nightmail's platform workspace (production `ws_90b0…`, or dev's own), through Nightmail's API with an admin key:
-   - create the inbound address `support@bane.mx` (dev: `support@dev.bane.mx`) and put its ID (`mbx_…`) in `SUPPORT_ADDRESS_ID`. Give it the key `support`: routes name an inbox by its address's key;
+   - create the inbound address `support@nightmail.dev` (dev: `support@dev.bane.mx`) and put its ID (`mbx_…`) in `SUPPORT_ADDRESS_ID`. Give it the key `support`: routes name an inbox by its address's key;
    - create an API key limited to that address, read and reply (`POST /v1/api-keys` with `access: {"type":"addresses","addressIds":["mbx_…"],"mail":["read","send"]}`): this is `BANE_SUPPORT_INBOX_KEY`;
-   - create a webhook (Nightmail format, `include: ["message"]`) to `https://support.bane.mx/hooks/bane-inbound` (dev: `support.dev.bane.mx`). Its `whsec_…` is `BANE_INBOUND_WEBHOOK_SECRET`;
+   - create a webhook (Nightmail format, `include: ["message"]`) to `https://support.nightmail.dev/hooks/bane-inbound` (dev: `support.dev.nightmail.dev`). Its `whsec_…` is `BANE_INBOUND_WEBHOOK_SECRET`;
    - add a route for the address to `["inbox:support", "webhook:<that webhook>"]`. Keep the root catch-all at `store`.
-5. **The intake addresses** `abuse@`, `privacy@` and `legal@bane.mx` (dev: `@dev.bane.mx`), in the same platform workspace. These go straight to typed tickets and never reach the agent (`src/intake.ts`). A ticket names only the sender address and its DMARC verdict, never an account:
+5. **The intake addresses** `abuse@`, `privacy@` and `legal@nightmail.dev` (dev: `@dev.bane.mx`), in the same platform workspace. These go straight to typed tickets and never reach the agent (`src/intake.ts`). A ticket names only the sender address and its DMARC verdict, never an account:
    - create the three inbound addresses, and one API key limited to those three, read and reply. This is `BANE_INTAKE_INBOX_KEY`;
-   - create a second webhook (Nightmail format, `include: ["message"]`) to `https://support.bane.mx/hooks/bane-intake`. Its `whsec_…` is `BANE_INTAKE_WEBHOOK_SECRET`;
-   - add a route for each address to its own inbox and the shared webhook, such as `abuse@bane.mx` → `["inbox:abuse", "webhook:<that webhook>"]` (an inbox is per address, so there's no single `inbox:intake`). The team reads full messages and non-image attachments in those inboxes;
+   - create a second webhook (Nightmail format, `include: ["message"]`) to `https://support.nightmail.dev/hooks/bane-intake`. Its `whsec_…` is `BANE_INTAKE_WEBHOOK_SECRET`;
+   - add a route for each address to its own inbox and the shared webhook, such as `abuse@nightmail.dev` → `["inbox:abuse", "webhook:<that webhook>"]` (an inbox is per address, so there's no single `inbox:intake`). The team reads full messages and non-image attachments in those inboxes;
    - `INTAKE_ADDRESSES` in the wrangler config lists them.
-6. **Secrets**, set with `wrangler secret put <NAME> --config wrangler.<stage>.jsonc` and never through CI:
+6. **Secrets**, managed by the operator, never by support CI. For changes to a serving Worker, supply new values with its code via `wrangler deploy --config wrangler.<stage>.jsonc --secrets-file <private-json-file>`. Delete an obsolete binding only after `wrangler deployments status --config wrangler.<stage>.jsonc --json` shows that upload at 100% traffic:
    - `CONSOLE_GATEWAY_KEY`: the Console service key (`models:request`, budgeted). Without it, chat turns refuse with "isn't fully set up" and emails wait in the inbox.
    - `SUPPORT_ROOT_SECRET`: 32+ random bytes as hex (`openssl rand -hex 32`). It's the root for the chat-token and confirm-link keys.
    - `BANE_INBOUND_WEBHOOK_SECRET` and `BANE_SUPPORT_INBOX_KEY`, from step 4.
    - `BANE_INTAKE_WEBHOOK_SECRET` and `BANE_INTAKE_INBOX_KEY`, from step 5.
 7. **Deploy.** With `SUPPORT_DEPLOY=true`, CI prepares support alongside Nightmail and waits for this attempt's healthy Nightmail Worker before migrating D1 or deploying support. By hand: `wrangler deploy --config wrangler.<stage>.jsonc`. Deploy Nightmail first: the binding needs Nightmail's `SupportPlatform` entrypoint.
-8. **Point the dashboard at it:** set Nightmail's `BANE_SUPPORT_URL` to `https://support.bane.mx/chat` (dev: `support.dev.bane.mx`).
+8. **Point the dashboard at it:** set Nightmail's `BANE_SUPPORT_URL` to `https://support.nightmail.dev/chat` (dev: `support.dev.nightmail.dev`).
 
 ## Develop and test
 
@@ -106,7 +106,7 @@ The tests run the deployed bundle in Miniflare, as Console's agent tests do. `@c
 - a bug ticket: refused without its reproduction, then filed with request IDs from `api_errors`. The `[Nightmail bug]` email carries signed screenshot links, and tampered or expired links are refused;
 - email image attachments;
 - the work queues, and the ledger and sweep: mail held at the edge for the digest, intake mail for an unlisted address accepted once it's listed, a ticket's lost team email sent once, and a failed digest resent once;
-- replay and readiness: mail stored before any route is answered once, a key that gains an address replays its mail, no flow takes another's address, and health reports readiness as counts only.
+- replay and readiness: mail stored before any route is answered once, a key that gains an address replays its mail, no flow takes another's address, and health reports whether the service is ready.
 
 They make no network or model calls. `test/*.local.ts` scripts, which are git-ignored, are for a few real turns against the gateway with a key read from a file.
 
@@ -148,7 +148,7 @@ Nightmail's staff Support inbox (`/support` in the dashboard, `api/src/support-i
 
 - **Mirror:** every transcript entry (the customer's messages as they arrive, the agent's answers and tool labels, the harness's notices, held drafts) goes to `mirrorMessages` in order, from a cursor, and the conversation's subject, ticket, turns, cost and blocked work to `mirrorState`. A failed mirror is retried from the same place (1, 2, 5, 15, 30, 60 minutes); a conversation Nightmail hasn't registered waits for its next entry.
 - **Pause:** before every chat turn and every email answer the object reads `inboxState`. While staff have paused the agent it records and mirrors the customer's messages but runs no turn: chat shows one notice, an email gets no answer, and an answer already written but not sent stays a held draft in the inbox. Handing back resumes with the next message. An emailed ticket shows as paused for the ticket, as the agent answers no later mail there.
-- **Staff replies:** Nightmail queues a staff reply, then POSTs `{ conversationId }` (nothing else) to `/hooks/nightmail-wake` (rate-limited by `WAKE`); that conversation pulls its replies with `pullOutbox` at once, and the five-minute sweep pulls everyone's. A sign-in wakes it the same way, and it then also releases what Nightmail's scope lists as signed in. Each reply is a `staff:` item, delivered once: an email reply in the thread to its last customer message, only to the address whose mail passed DMARC; a chat reply into the transcript and open sockets (`kind: "staff"`, PROTOCOL.md), or by email to the account address when no socket is open. Then `markDelivery` records it sent, or failed when it can't be delivered.
+- **Staff replies:** Nightmail queues a staff reply, then POSTs `{ conversationId }` (nothing else) to `/hooks/nightmail-wake` with a one-minute token signed for that conversation; the Worker checks it before charging `WAKE`; that conversation pulls its replies with `pullOutbox` at once, and the five-minute sweep pulls everyone's. A sign-in wakes it the same way, and it then also releases what Nightmail's scope lists as signed in. Each reply is a `staff:` item, delivered once: an email reply in the thread to its last customer message, only to the address whose mail passed DMARC; a chat reply into the transcript and open sockets (`kind: "staff"`, PROTOCOL.md), or by email to the account address when no socket is open. Then `markDelivery` records it sent, or failed when it can't be delivered.
 
 ## Replay and readiness
 
@@ -156,7 +156,7 @@ Nightmail records a `message.received` event for every message an address receiv
 
 - **Key self-check:** each sweep lists the addresses each key reads (`GET /v1/inbound/addresses`) and compares them with the flow's list: `SUPPORT_ADDRESSES` (default `SUPPORT_ADDRESS`) or `INTAKE_ADDRESSES`. The result is `ok`, `missing`, `extra`, `not_configured` (this Worker has no key for the flow: its secret is unset), `unauthorized` (Nightmail refused the key) or `unavailable` (D1 `support_checks`). When a flow's coverage becomes complete again, objects with blocked work are woken, and that work runs at once.
 - **Replay:** only addresses that are both listed and readable are polled, up to 50 events per flow per sweep, each from its own cursor (D1 `replay_cursors`). An address the key can't read isn't polled, so its cursor never passes mail it couldn't see; once the key reads it, its mail since the cursor is replayed. Polling starts at the end of the log when first installed. A message with a ledger row is skipped. A message for a thread whose conversation closed more than 7 days ago is kept for the digest instead of reopening it.
-- **`GET /health`:** `status` stays `ok` (the deploy reads it as liveness). `ready` and `checks` come from D1 alone, as counts and states, never addresses, IDs or error text; `work.blockedBy` counts blocked items by error code (`MISSING_SECRET`: set the secret; `NOT_FOUND` or `FORBIDDEN`: widen the key or add the route). `ready` means both keys are `ok`, nothing is blocked, nothing has failed six or more times, and the poller caught up within 15 minutes. `routeGaps24h` counts mail the poller found before any webhook did.
+- **`GET /health`:** `status` stays `ok` (the deploy reads it as liveness). `ready` means both keys read their configured addresses, nothing is blocked, no pending work has failed six or more times, and the poller caught up within 15 minutes. The underlying checks stay in D1.
 - **Changing a key:** expand an existing key's addresses rather than replacing the key: idempotency keys are scoped to the API key, so a replaced key could resend a reply. Replace a key only when health shows nothing blocked. Every move into `blocked` logs `WORK_BLOCKED` at error level.
 
 ## Limits and retention

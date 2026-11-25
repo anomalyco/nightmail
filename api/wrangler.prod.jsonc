@@ -6,7 +6,11 @@
   "define": { "NIGHTMAIL_AWS_NAMES": "true" },
   "account_id": "15d29c8639fd3733b1b5486a2acfd968",
   "workers_dev": false,
-  "routes": [{ "pattern": "nightmail.dev", "custom_domain": true }, { "pattern": "bane.mx", "custom_domain": true }, { "pattern": "events.nightmail.dev", "custom_domain": true }],
+  // */* on nightmailedge.com: the link domain (links.nightmailedge.com, and customers' own link hosts when those are on)
+  // reaches this Worker, which answers only links there (src/link-hosts.ts). Wrangler replaces the Worker's routes on each
+  // deploy, so the route lives here, and the deploy token's zones include nightmailedge.com (anomalyco/secrets config.ts).
+  "routes": [{ "pattern": "nightmail.dev", "custom_domain": true }, { "pattern": "bane.mx", "custom_domain": true }, { "pattern": "events.nightmail.dev", "custom_domain": true },
+    { "pattern": "*/*", "zone_name": "nightmailedge.com" }],
   "main": "src/worker.ts",
   "compatibility_date": "2026-09-08",
   "compatibility_flags": ["nodejs_compat"],
@@ -15,15 +19,24 @@
     "directory": "../app/dist",
     "binding": "ASSETS",
     "not_found_handling": "none",
-    "run_worker_first": ["/", "/pricing", "/compare", "/compare/*", "/v1", "/v1/*", "/api", "/api/*", "/mcp", "/mcp/*", "/.well-known", "/.well-known/*", "/unsubscribe", "/unsubscribe/*", "/health", "/health/*", "/internal/*", "/openapi.json", "/docs.md", "/docs/operations/*", "/docs/tags/*", "/llms.txt"]
+    "run_worker_first": ["/", "/pricing", "/compare", "/compare/*", "/v1", "/v1/*", "/api", "/api/*", "/mcp", "/mcp/*", "/.well-known", "/.well-known/*", "/unsubscribe", "/unsubscribe/*", "/i/*", "/health", "/health/*", "/internal/*", "/openapi.json", "/docs.md", "/docs/operations/*", "/docs/tags/*", "/llms.txt"]
   },
   "vars": {
-    "BANE_MAIL_BUCKET": "nightmail-prod-mail",
+    "NIGHTMAIL_MAIL_BUCKET": "nightmail-prod-mail",
     "BYO_STACK_PREFIX": "Nightmail",
     // Connected AWS accounts' SNS topics and stacks report here, and their role allows only this host.
     "BYO_EVENTS_ORIGIN": "https://events.nightmail.dev",
-    "BANE_MAIL_STORE": "r2",
+    "NIGHTMAIL_MAIL_STORE": "r2",
     "PUBLIC_URL": "https://nightmail.dev",
+    // The link domain (src/link-domains.ts): every customer's campaign and marketing links go here. A name of the
+    // nightmailedge.com zone, served by the */* route.
+    // Not an off switch: without it (and without own link hosts), production refuses campaign and marketing mail rather
+    // than put customers' links on nightmail.dev (src/link-domains.ts ownOrigin).
+    "NIGHTMAIL_LINK_HOST": "links.nightmailedge.com",
+    // Own link hosts (customers' links.<domain> as custom hostnames of that zone) are off: Cloudflare's custom hostname quota
+    // doesn't allow one per customer yet. To turn them on, set NIGHTMAIL_LINK_SAAS_ZONE_ID to the zone's ID
+    // (7b0d7306312182f66e12368f93efbb96) and NIGHTMAIL_LINK_SAAS_TARGET to cname.nightmailedge.com; the deploy then binds
+    // nightmail/production/NIGHTMAIL_LINK_SAAS_TOKEN (.github/scripts/deploy-worker.sh).
     // Mail apps connect to imap.nightmail.dev and smtp.nightmail.dev (the gateway certificate names both). Shown only
     // while the deploy binds MAILGW_API_TOKEN (bane:mailGatewayEnabled in infra/pulumi/Pulumi.production.yaml).
     "MAILGW_PUBLIC_DOMAIN": "nightmail.dev",
@@ -62,18 +75,18 @@
     "NIGHTMAIL_ABUSE_MONITORING": "2026-11-21T15:30:00Z",
     "ACCOUNT_CLIENT_ID": "bane-production",
     "MULTI_TENANT": "true",
-    "BANE_PLATFORM_AWS_ACCOUNT": "009882681002",
+    "NIGHTMAIL_PLATFORM_AWS_ACCOUNT": "009882681002",
     // Anomaly owns nightmail.dev and bane.mx (both adopted by scripts/adopt-platform-domain.ts). Every other workspace is refused.
-    "BANE_PLATFORM_DOMAIN_WORKSPACE": "ws_90b0696c835f49fbaa9396fb726e9fe2",
+    "NIGHTMAIL_PLATFORM_DOMAIN_WORKSPACE": "ws_90b0696c835f49fbaa9396fb726e9fe2",
     // Owner notices (standing, billing) by email, from the adopted platform domain through the platform workspace above.
-    "BANE_NOTIFY_FROM": "system@nightmail.dev",
+    "NIGHTMAIL_NOTIFY_FROM": "system@nightmail.dev",
     // Every waitlist join and sign-up is kept as a contact in this list of the platform workspace above (src/signups.ts).
     "NIGHTMAIL_SIGNUPS_LIST_ID": "lst_e665f46fedd040e5b0fcc009a9eb11c3",
-    "BANE_REGIONAL_SENDING": "true",
-    "BANE_TRUSTED_POOL": "true",
-    "BANE_REQUIRE_DMARC_FOR_BULK": "true",
-    "BANE_HOSTED_SCREEN": "true",
-    "BANE_RECEIVING_REDRIVE": "true",
+    "NIGHTMAIL_REGIONAL_SENDING": "true",
+    "NIGHTMAIL_TRUSTED_POOL": "true",
+    "NIGHTMAIL_REQUIRE_DMARC_FOR_BULK": "true",
+    "NIGHTMAIL_HOSTED_SCREEN": "true",
+    "NIGHTMAIL_RECEIVING_REDRIVE": "true",
     // BYO_TEMPLATE_URL stays unset until a template is published in the dedicated account.
     "DEFAULT_SES_REGION": "us-east-2",
     // Stripe Tax is on: registrations are set up through Sphere (api/README.md, Stripe setup). The keys are Worker secrets.
@@ -105,10 +118,12 @@
     "CF_OBSERVABILITY_ACCOUNT_ID": "15d29c8639fd3733b1b5486a2acfd968",
     "CF_OBSERVABILITY_SCRIPT": "nightmail-production",
     // The support agent (support/): Nightmail wakes its /hooks/nightmail-wake on this origin, and "Contact support" returns this URL.
-    // The handoff's Ed25519 key is the BANE_SUPPORT_SIGNING_KEY secret.
-    "BANE_SUPPORT_URL": "https://support.nightmail.dev/chat",
+    // The handoff's Ed25519 key is the NIGHTMAIL_SUPPORT_SIGNING_KEY secret (also read as BANE_SUPPORT_SIGNING_KEY).
+    "NIGHTMAIL_SUPPORT_URL": "https://support.nightmail.dev/chat",
     // Email support conversations (src/support-conversations.ts): mail to support@nightmail.dev. On since 2026-11-25 (Ryan approved).
-    "NIGHTMAIL_SUPPORT_ADDRESS_IDS": "mbx_8969af953f9148ef9deb3cfee54bfe37"
+    "NIGHTMAIL_SUPPORT_ADDRESS_IDS": "mbx_8969af953f9148ef9deb3cfee54bfe37",
+    // PlanetScale PS-160 disk capacity in GiB so health.ts opens database-disk at 75% (warn) / 90% (critical) independently of external webhooks.
+    "DATABASE_DISK_GB": "150"
   },
   // CAMPAIGN_ROOMS: one per campaign, who has it open in the dashboard (src/campaign-room.ts).
   "durable_objects": { "bindings": [{ "name": "DISPATCHER", "class_name": "DispatcherShard" }, { "name": "CAMPAIGN_ROOMS", "class_name": "CampaignRoom" }] },

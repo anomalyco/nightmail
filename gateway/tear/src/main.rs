@@ -99,7 +99,7 @@
 //!
 //! **Conformance**
 //!
-//! - [X1] generated traces against Dovecot at sync points (`dovecot`), with Bane's documented
+//! - [X1] generated traces against Dovecot at sync points (`dovecot`), with Nightmail's documented
 //!   differences (shared flags across copies, no `\Recent`) normalized.
 //! - [X2] replay of a failing client transcript as a shrinkable trace (`transcript`).
 #[allow(dead_code, clippy::all)]

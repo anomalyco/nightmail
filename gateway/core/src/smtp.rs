@@ -23,7 +23,7 @@ pub enum SubmitError {
     Cap,
     /// Hosted billing: the workspace's prepaid balance is empty (the API answered 402). A temporary failure, so mail
     /// clients keep the message and retry after a top-up.
-    #[error("451 4.7.1 Bane balance is empty; add credit in Settings > Billing")]
+    #[error("451 4.7.1 Nightmail balance is empty; add credit in Settings > Billing")]
     Balance,
     #[error("451 4.3.0 Submission unavailable")]
     Unavailable,

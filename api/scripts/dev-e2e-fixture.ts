@@ -2,7 +2,7 @@
 // customer share (100 of 200 recipients in the Ohio SES sandbox). Keep a finite operator daily cap of at least
 // 100,000 for this fixture. SES's own daily quota, transactional reserve and sending rate still apply.
 // One atomic, audited transition. Never lower a larger override or change an already exempt workspace.
-//   STAGE=dev PUBLIC_URL=https://dev.nightmail.dev BANE_E2E_DOMAIN_ID=dom_... DATABASE_URL=... node --import tsx scripts/dev-e2e-fixture.ts
+//   STAGE=dev PUBLIC_URL=https://dev.nightmail.dev NIGHTMAIL_E2E_DOMAIN_ID=dom_... DATABASE_URL=... node --import tsx scripts/dev-e2e-fixture.ts
 import type { Client } from 'pg';
 import { log } from '../src/core.js';
 
@@ -12,8 +12,8 @@ const reason = 'First-party dev E2E fixture on the shared SES sandbox (scripts/d
 
 export async function applyDevE2eFixture(db: Pick<Client, 'query'>, env: Record<string, string | undefined>) {
   if (env.STAGE !== 'dev' || !['https://dev.nightmail.dev', 'https://dev.bane.mx'].includes(env.PUBLIC_URL ?? '')) throw new Error('The dev E2E fixture capacity applies only to dev (STAGE=dev, PUBLIC_URL=https://dev.nightmail.dev).');
-  const domainId = env.BANE_E2E_DOMAIN_ID;
-  if (!domainId || !/^dom_[0-9a-f]{32}$/.test(domainId)) throw new Error('BANE_E2E_DOMAIN_ID must name the fixture domain.');
+  const domainId = env.NIGHTMAIL_E2E_DOMAIN_ID ?? env.BANE_E2E_DOMAIN_ID;
+  if (!domainId || !/^dom_[0-9a-f]{32}$/.test(domainId)) throw new Error('NIGHTMAIL_E2E_DOMAIN_ID must name the fixture domain.');
   // The workspace the live E2E requires (prepare()): named E2E, owning the fixture domain, with a shared Hosted
   // connection and both fixture claims verified.
   const { rows } = await db.query<{ id: string; exempt: boolean; current: number | null; details: Record<string, unknown> | null }>(`
@@ -82,7 +82,7 @@ export async function devSandboxMarketingQuotaExhausted(campaignId: string) {
       JOIN provider_account_limits l ON l.aws_account_id=p.aws_account_id AND l.region=p.region
       WHERE c.id=$1 AND w.name='E2E' AND c.state='sending' AND c.waiting_reason='ses_daily_quota'
         AND c.total=1 AND c.expanded=0 AND l.checked_at BETWEEN now()-interval '1 minute' AND now()
-        AND l.max_24_hour_send=200 AND l.max_send_rate=1 AND l.sent_last_24_hours>=180 LIMIT 1`, [campaignId, process.env.BANE_E2E_DOMAIN_ID]);
+        AND l.max_24_hour_send=200 AND l.max_send_rate=1 AND l.sent_last_24_hours>=180 LIMIT 1`, [campaignId, process.env.NIGHTMAIL_E2E_DOMAIN_ID ?? process.env.BANE_E2E_DOMAIN_ID]);
     return result.rowCount === 1;
   } catch {
     throw new Error('Could not confirm the dev SES sandbox quota from the fixture.');

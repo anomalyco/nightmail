@@ -1,3 +1,4 @@
+import { decodeWords } from 'postal-mime';
 import { z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
 import { Buffer } from 'node:buffer';
@@ -54,7 +55,16 @@ const CONFUSABLES = new Map<number, string>([
 const skeleton = (value: string) => Array.from(value.normalize('NFD').replace(/\p{Cf}/gu, ''), c => CONFUSABLES.get(c.codePointAt(0)!) ?? c).join('').normalize('NFD');
 export const foldedDisplayName = (value: string) => skeleton(value).replace(/[\u24b6\u24d0\u{1f150}]/gu, '@').normalize('NFKC').normalize('NFD')
   .replace(/[aA]\p{M}*[\u20dd-\u20e0\u20e2-\u20e4]/gu, '@').replace(/\u276c/g, '<').replace(/\u276d/g, '>').replace(/[\p{M}\p{Cf}]/gu, '');
-export const displayNameAllowed = (value: string) => !CONTROL.test(value) && !/[@<>]/.test(foldedDisplayName(value));
+const plainNameAllowed = (value: string) => !CONTROL.test(value) && !/[@<>]/.test(foldedDisplayName(value));
+export const decodedDisplayName = (value: string) => value.includes('=?') ? decodeWords(value) : value;
+export function displayNameAllowed(value: string) {
+  if (!plainNameAllowed(value)) return false;
+  if (!value.includes('=?')) return true;
+  try {
+    const decoded = decodedDisplayName(value);
+    return !!decoded.trim() && !decoded.includes('=?') && !decoded.includes('�') && plainNameAllowed(decoded);
+  } catch { return false; }
+}
 export const senderDisplayName = () => z.string().max(200).refine(displayNameAllowed, 'Sender name cannot contain an address, angle brackets, or control characters.');
 
 // A campaign's own unsubscribe page. It is only ever a link in the message and a redirect target, never fetched, so it

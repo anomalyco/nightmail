@@ -9,7 +9,7 @@ import { requirePlatformAccount } from './config.js';
 import { awsError, byoFeedbackUrl, loadSetupSdk, provisionJournaledFeedback, readSelectedDomains, removeByoFeedbackResource, scanRegionPage, setupResources, type Inventory, type CandidateIdentity, type JournalEntry, type ScanStage, byoStackName } from './ses-setup.js';
 import { JobDeferred, retryDatabaseFailures } from './jobs.js';
 import { acquireRegionProvisioning, campaignReserved, finishRegionProvisioning, verifyImportedClaims } from './states.js';
-import { claimNameAllowed, domainLimitError, releaseConnectionClaims } from './domain-claims.js';
+import { claimNameAllowed, domainClaimed, domainLimitError, releaseConnectionClaims } from './domain-claims.js';
 import { getRegionSettings } from './ses-region-state.js';
 import { lockSendScope } from './send-scope.js';
 import { byoEnabled } from './byo-pilot.js';
@@ -239,7 +239,7 @@ async function saveIntent(db:DbExecutor,c:V5Connection,region:string,name:string
     if (row.bound!==region || importing && !row.imported) throw conflict('DOMAIN_REGION_CONFLICT','This domain already has a sending binding.');
     return;
   }
-  if ((await db.execute(sql`SELECT FROM (SELECT exclusive_domain_overlap(${c.workspace_id},${name}) AS overlap) e WHERE overlap`)).rowCount) throw conflict('DOMAIN_CLAIMED','The domain overlaps an existing exclusive claim.');
+  if ((await db.execute(sql`SELECT FROM (SELECT exclusive_domain_overlap(${c.workspace_id},${name}) AS overlap) e WHERE overlap`)).rowCount) throw domainClaimed();
   const intent=(await db.execute<Intent>(sql`INSERT INTO byo_domain_intents AS i(id,connection_id,region,name,importing) VALUES(${id('dom')},${c.id},${region},${name},${importing})
     ON CONFLICT(connection_id,name) DO UPDATE SET id=CASE WHEN i.closed_reason IS NULL THEN i.id ELSE excluded.id END,region=excluded.region,importing=excluded.importing,closed_reason=NULL
     WHERE i.closed_reason IS NOT NULL OR (i.region=excluded.region AND i.importing=excluded.importing) RETURNING *`)).rows[0];
@@ -380,7 +380,7 @@ async function bindIntent(r:Runtime,c:V5Connection,p:Record<string,unknown>) {
     await getRegionSettings(db,c.workspace_id,'update');await connection(db,c.workspace_id,true);
     if (!(await db.execute(sql`${select} FOR UPDATE OF i FOR SHARE OF cr`)).rowCount) return;
     await db.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(substring(${i.name} FROM '[^.]+\\.[^.]+$'),84912))`);
-    if ((await db.execute(sql`SELECT WHERE exclusive_domain_overlap(${c.workspace_id},${i.name})`)).rowCount) throw conflict('DOMAIN_CLAIMED','A selected domain now overlaps an exclusive claim.');
+    if ((await db.execute(sql`SELECT WHERE exclusive_domain_overlap(${c.workspace_id},${i.name})`)).rowCount) throw domainClaimed();
     const claim=(await db.execute<{id:string|null;token:string;error_code:string|null}>(sql`SELECT * FROM reserve_regional_claim(${c.workspace_id},${i.name},${i.region},${i.id},${i.importing?c.id:null})`)).rows[0];
     if (!claim?.id) throw conflict(claim?.error_code??'DOMAIN_CLAIMED','The requested regional binding is no longer available.');
     if (ses) {

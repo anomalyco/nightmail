@@ -10,12 +10,29 @@ args=(deploy --config "$config")
 # of argv and sync them in the same Worker version as the application code.
 set +x
 umask 077
-secrets_file=$(mktemp "${RUNNER_TEMP:?}/bane-app-secrets.XXXXXX.json")
-trap 'rm -f -- "$secrets_file"' EXIT
+tmp=$(mktemp -d "${RUNNER_TEMP:?}/nightmail-rollout.XXXXXX")
+trap 'rm -rf -- "$tmp"' EXIT
+secrets_file="$tmp/desired.json"
+obsolete=()
 # Hosted sign-in and MCP accept only the account service's own sign-in methods: config.ts refuses to start
 # without them, so fail here, before secrets sync or migrations, instead of deploying a 503.
 acr=$(node -e "const ts=require('typescript');const c=ts.parseConfigFileTextToJson('w',require('fs').readFileSync(process.argv[1],'utf8')).config;process.stdout.write(String(c?.vars?.MULTI_TENANT)+' '+String(c?.vars?.ACCOUNT_REQUIRED_ACR))" "$config")
 [[ $acr =~ ^true\ urn:anomaly:acr:(github|google|email|password)(\ urn:anomaly:acr:(github|google|email|password))*$ ]] || { echo "::error::$config must set MULTI_TENANT=true and ACCOUNT_REQUIRED_ACR to the account service's methods (urn:anomaly:acr:github, google, email, password)"; exit 1; }
+# Link hosts (api/src/link-domains.ts): the custom hostnames token, nightmail/<stage>/NIGHTMAIL_LINK_SAAS_TOKEN, follows the
+# committed NIGHTMAIL_LINK_SAAS_ZONE_ID; older serving versions require both or neither. With the zone set, the token is required: missing, unreadable or malformed stops the deploy
+# here, before anything changes; it is bound with the app secrets below. Without the zone, a token left on the Worker is
+# deleted below. The value never reaches argv or the log.
+link_zone=$(node -e "const ts=require('typescript');const c=ts.parseConfigFileTextToJson('w',require('fs').readFileSync(process.argv[1],'utf8')).config;process.stdout.write(String(c?.vars?.NIGHTMAIL_LINK_SAAS_ZONE_ID??''))" "$config")
+unset link_token
+if [[ -n $link_zone ]]; then
+  [[ $link_zone =~ ^[0-9a-f]{32}$ ]] || { echo "::error::NIGHTMAIL_LINK_SAAS_ZONE_ID in $config must be a Cloudflare zone id"; exit 1; }
+  link_token=$(aws secretsmanager get-secret-value --secret-id "nightmail/${STAGE:-}/NIGHTMAIL_LINK_SAAS_TOKEN" --query SecretString --output text) ||
+    { echo "::error::$config sets NIGHTMAIL_LINK_SAAS_ZONE_ID, but nightmail/${STAGE:-}/NIGHTMAIL_LINK_SAAS_TOKEN could not be read"; exit 1; }
+  # Check before masking: a workflow command masks one line and unescapes %XX.
+  [[ $link_token =~ ^[A-Za-z0-9._~+/=-]{20,}$ && ${#link_token} -le 500 ]] ||
+    { unset link_token; echo "::error::nightmail/${STAGE:-}/NIGHTMAIL_LINK_SAAS_TOKEN must be one line of 20 to 500 characters from [A-Za-z0-9._~+/=-]"; exit 1; }
+  echo "::add-mask::$link_token"
+fi
 for name in BANE_ROOT_SECRET ACCOUNT_CLIENT_PRIVATE_KEY TYPESAFE_API_KEY; do
   [[ -n ${!name:-} ]] || { echo "::error::Missing required app secret: $name"; exit 1; }
 done
@@ -40,12 +57,8 @@ case $flags in
      else echo "::error::bane:mailGatewayEnabled in Pulumi.$STAGE.yaml must be true or false"; exit 1; fi ;;
   *) echo "::error::bane:mailGatewayEnabled is set more than once in Pulumi.$STAGE.yaml"; exit 1 ;;
 esac
-bound() { # Whether the deployed Worker has the secret $1 (MAILGW_API_TOKEN by default). Any failure stops the deploy.
-  local listed name=${1:-MAILGW_API_TOKEN}
-  listed=$("$wrangler" secret list --config "$config") || { echo "::error::Could not list the Worker's secrets"; exit 1; }
-  jq -e 'type == "array" and all(.[]; type == "object" and (.name | type) == "string")' <<< "$listed" >/dev/null ||
-    { echo "::error::Unexpected output from wrangler secret list"; exit 1; }
-  jq -e --arg name "$name" 'any(.[]; .name == $name)' <<< "$listed" >/dev/null
+list_bindings() {
+  "$wrangler" secret list --config "$config" | jq -ce 'select(type=="array" and all(.[]; (.name|type)=="string")) | map(.name)'
 }
 if [[ $gateway == true ]]; then
   # Missing, pending deletion, unreadable and malformed all stop here.
@@ -60,12 +73,7 @@ if [[ $gateway == true ]]; then
   unset token
 else
   jq -n "$app_secrets" > "$secrets_file"
-  # Before the deploy, so a failed deploy still leaves the route closed.
-  if bound; then
-    echo "bane:mailGatewayEnabled is off; removing MAILGW_API_TOKEN from the Worker."
-    WRANGLER_LOG=error "$wrangler" secret delete MAILGW_API_TOKEN --config "$config" >/dev/null
-    if bound; then echo "::error::MAILGW_API_TOKEN is still bound to the Worker"; exit 1; fi
-  fi
+  obsolete+=(MAILGW_API_TOKEN)
 fi
 # Hosted billing's Stripe keys (api/README.md, Stripe setup), from nightmail/<stage>/STRIPE_*. The Worker takes payments
 # only with both. A key for the other Stripe mode always stops here: dev takes test keys, production live ones.
@@ -87,6 +95,7 @@ else
   if [[ $billing == enforce ]]; then
     echo "::error::Billing is enforced on $STAGE, but nightmail/$STAGE/STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET are not both $stripe_mode-mode Stripe values. Set them, or switch billing back to shadow (scripts/set-billing-enforcement.ts) first."; exit 1
   fi
+  obsolete+=(STRIPE_SECRET_KEY STRIPE_WEBHOOK_SECRET)
   echo "::warning::Billing is ${billing:-off} on $STAGE and its Stripe keys are not set: payments answer 503 BILLING_NOT_CONFIGURED."
 fi
 # The operator alerts' Slack webhook (api/src/operator-alerts.ts), optional: nightmail/<stage>/OPERATOR_SLACK_WEBHOOK_URL.
@@ -94,8 +103,7 @@ fi
 # keeps none: a deploy inherits a Worker secret its file leaves out, so one left from before is deleted here, and
 # taking the secret out of Secrets Manager turns the cards off at the next deploy. Malformed, the cards stay off. Any
 # other read failure leaves the Worker as it is. None of these fails the deploy; the value never reaches argv or the log.
-hook_err=$(mktemp "${RUNNER_TEMP:?}/bane-operator-hook.XXXXXX")
-trap 'rm -f -- "$secrets_file" "$hook_err"' EXIT
+hook_err="$tmp/hook.err"
 operator_hook=off
 if hook=$(aws secretsmanager get-secret-value --secret-id "nightmail/$STAGE/OPERATOR_SLACK_WEBHOOK_URL" --query SecretString --output text 2>"$hook_err"); then
   # Check before masking: a workflow command masks one line and unescapes %XX.
@@ -115,16 +123,7 @@ else
   echo "::warning::nightmail/$STAGE/OPERATOR_SLACK_WEBHOOK_URL could not be read; the Worker's operator alerts are left as they were."
 fi
 unset hook
-if [[ $operator_hook == off || $operator_hook == 'not set' ]]; then
-  # Before the deploy, so a failed deploy still leaves the cards off. Best effort: the next deploy tries again.
-  if listed=$("$wrangler" secret list --config "$config" 2>/dev/null) && jq -e 'any(.[]?; .name == "OPERATOR_SLACK_WEBHOOK_URL")' <<< "$listed" >/dev/null 2>&1; then
-    if WRANGLER_LOG=error "$wrangler" secret delete OPERATOR_SLACK_WEBHOOK_URL --config "$config" >/dev/null 2>&1; then
-      echo "Operator alerts: removed OPERATOR_SLACK_WEBHOOK_URL from the Worker."
-    else
-      echo "::warning::Could not remove OPERATOR_SLACK_WEBHOOK_URL from the Worker; the next deploy tries again."
-    fi
-  fi
-fi
+if [[ $operator_hook == off || $operator_hook == 'not set' ]]; then obsolete+=(OPERATOR_SLACK_WEBHOOK_URL); fi
 echo "Operator alerts: nightmail/$STAGE/OPERATOR_SLACK_WEBHOOK_URL is $operator_hook."
 # The second classifier's key (api/src/screen-shadow.ts), optional: nightmail/<stage>/JEVF_API_KEY. As the operator
 # alerts' webhook above. Set and one line of printable characters, it is bound with the app secrets and the second
@@ -132,8 +131,7 @@ echo "Operator alerts: nightmail/$STAGE/OPERATOR_SLACK_WEBHOOK_URL is $operator_
 # from before is deleted here, and taking the secret out of Secrets Manager turns it off at the next deploy. Malformed,
 # it stays off. Any other read failure leaves the Worker as it is. None of these fails the deploy; the value never
 # reaches argv or the log.
-jevf_err=$(mktemp "${RUNNER_TEMP:?}/bane-jevf-key.XXXXXX")
-trap 'rm -f -- "$secrets_file" "$hook_err" "$jevf_err"' EXIT
+jevf_err="$tmp/jevf.err"
 jevf_key=off
 if key=$(aws secretsmanager get-secret-value --secret-id "nightmail/$STAGE/JEVF_API_KEY" --query SecretString --output text 2>"$jevf_err"); then
   # Check before masking: a workflow command masks one line and unescapes %XX.
@@ -153,24 +151,44 @@ else
   echo "::warning::nightmail/$STAGE/JEVF_API_KEY could not be read; the Worker's second classifier is left as it was."
 fi
 unset key
-if [[ $jevf_key == off || $jevf_key == 'not set' ]]; then
-  # Before the deploy, so a failed deploy still leaves it off. Best effort: the next deploy tries again.
-  if listed=$("$wrangler" secret list --config "$config" 2>/dev/null) && jq -e 'any(.[]?; .name == "JEVF_API_KEY")' <<< "$listed" >/dev/null 2>&1; then
-    if WRANGLER_LOG=error "$wrangler" secret delete JEVF_API_KEY --config "$config" >/dev/null 2>&1; then
-      echo "Second classifier: removed JEVF_API_KEY from the Worker."
-    else
-      echo "::warning::Could not remove JEVF_API_KEY from the Worker; the next deploy tries again."
-    fi
-  fi
-fi
+if [[ $jevf_key == off || $jevf_key == 'not set' ]]; then obsolete+=(JEVF_API_KEY); fi
 echo "Second classifier: nightmail/$STAGE/JEVF_API_KEY is $jevf_key."
+if [[ -n ${link_token:-} ]]; then
+  # shellcheck disable=SC2016 # A jq program: $ENV is jq's, not the shell's.
+  with_link=$(NIGHTMAIL_LINK_SAAS_TOKEN=$link_token jq '. + ($ENV | {NIGHTMAIL_LINK_SAAS_TOKEN})' "$secrets_file") && printf '%s\n' "$with_link" > "$secrets_file"
+  unset with_link link_token
+  echo "Link hosts: zone $link_zone; binding nightmail/$STAGE/NIGHTMAIL_LINK_SAAS_TOKEN."
+else
+  obsolete+=(NIGHTMAIL_LINK_SAAS_TOKEN)
+fi
+# Omitted secrets are inherited. Blank an obsolete binding in the incoming version only, so
+# it cannot authenticate or enable a feature during cleanup; the serving version still has its value.
+existing=$(list_bindings)
+printf '%s\n' "${obsolete[@]}" | jq -Rn --argjson existing "$existing" \
+  '[inputs | select(. as $key | $existing | index($key))] | map({key:.,value:null}) | from_entries' >"$tmp/remove.json"
+jq -s '.[0] + (.[1] | with_entries(.value=""))' "$secrets_file" "$tmp/remove.json" >"$tmp/upload.json"
+secrets_file="$tmp/upload.json"
 args+=(--secrets-file "$secrets_file")
 # Every log line names the commit it runs (core.ts setLogContext), for the nightly report's 5xx-by-deploy table; Glass
 # shows the commit and when it went out.
 if [[ ${DEPLOY_SHA:-} =~ ^[0-9a-f]{40}$ ]]; then args+=(--var "DEPLOY_SHA:$DEPLOY_SHA" --var "DEPLOY_AT:$(date -u +%Y-%m-%dT%H:%M:%SZ)"); fi
 # shellcheck source=/dev/null
 source "$(dirname "$0")/cloudflare-retry.sh"
-WRANGLER_LOG=error cloudflare_retry "$wrangler" "${args[@]}"
-if bound; then state=true; else state=false; fi
+WRANGLER_OUTPUT_FILE_PATH="$tmp/receipt.jsonl" WRANGLER_LOG=error cloudflare_retry "$wrangler" "${args[@]}"
+# A successful upload alone is not proof of cutover. Compare Wrangler's receipt with the actual
+# deployment allocation. A stale, split or unreadable allocation must leave live secrets alone.
+version=$(jq -ers '[.[] | select(.type=="deploy")] | last.version_id | select(type=="string" and length>0)' "$tmp/receipt.jsonl")
+"$wrangler" deployments status --json --config "$config" | jq -e --arg id "$version" \
+  '(.versions|length)==1 and .versions[0].version_id==$id and .versions[0].percentage==100' >/dev/null ||
+  { echo "::error::The uploaded Worker version is not verified at 100% traffic; no obsolete secrets removed"; exit 1; }
+if jq -e 'length>0' "$tmp/remove.json" >/dev/null; then
+  # Wrangler 4.130 interprets JSON null as a deletion in secret bulk (one merge patch).
+  WRANGLER_LOG=error "$wrangler" secret bulk "$tmp/remove.json" --config "$config" >/dev/null
+fi
+actual=$(list_bindings)
+jq -en --argjson actual "$actual" --slurpfile removed "$tmp/remove.json" \
+  'all($removed[0]|keys[]; . as $key | $actual | index($key) == null)' >/dev/null ||
+  { echo "::error::An obsolete binding remains on the new Worker"; exit 1; }
+state=$(jq -r 'index("MAILGW_API_TOKEN") != null' <<< "$actual")
 [[ $state == "$gateway" ]] || { echo "::error::Worker MAILGW_API_TOKEN bound=$state, but bane:mailGatewayEnabled=$gateway"; exit 1; }
 echo "Mail gateway: bane:mailGatewayEnabled=$gateway; Worker MAILGW_API_TOKEN bound=$state."

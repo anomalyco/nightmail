@@ -6,7 +6,7 @@
 .composer-toolbar { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; flex-shrink: 0; height: 48px; margin: 0 var(--space-8) var(--space-8); padding: 0 var(--space-6); border: 0; background: var(--color-email-surface); }
 .composer-tools { display: flex; align-items: center; flex: 1; min-width: 0; flex-wrap: nowrap; gap: var(--space-4); overflow-x: auto; --fade-pad-x: var(--space-4); }
 .composer-tools > * { flex-shrink: 0; }
-.composer-tools .cluster { flex-wrap: nowrap; gap: 2px; }
+.composer-tools .cluster { flex-wrap: nowrap; gap: var(--space-4); }
 .composer-tools .ui-button--ghost[aria-pressed='true'] { background: var(--color-active-bg); color: var(--color-text); }
 .composer-history { margin-left: auto; }
 /* On touch every tool is a full 44px target. */
@@ -19,7 +19,7 @@
 .composer-visual[hidden] { display: none; }
 .composer-canvas { position: relative; display: flex; flex-direction: column; flex: 1 0 auto; min-width: 0; min-height: 320px; padding: 0; background: var(--color-email-surface); color: var(--color-email-text); color-scheme: light; }
 /* The starting lines sit where the loading composer's were (.composer-skeleton-canvas) and the email's text will be. */
-.composer-starting { position: absolute; inset: 0; display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-16) 40px; }
+.composer-starting { position: absolute; inset: 0; display: flex; flex-direction: column; gap: var(--space-16); padding: var(--space-16) var(--space-40); }
 .composer-starting .ui-skeleton-block { background: #EDEDED; }
 .composer-document { display: flex; flex-direction: column; flex: 1 0 auto; min-width: 0; }
 /* The editor theme converts its px sizes to em against a 14px root; keep that root so a 16px paragraph edits at 16px.
@@ -30,6 +30,10 @@
 .composer-document .tiptap:focus-visible { outline: none; }
 :is([data-re-link-selector-input], [data-re-link-bm-input], [data-re-btn-bm-input], [data-re-img-bm-input]):focus-visible { box-shadow: none; background-color: var(--color-overlay-hover); }
 body:has(.email-composer[data-inactive]) :is([data-re-bubble-menu], [data-re-slash-command]) { visibility: hidden; pointer-events: none; }
+/* The slash menu is placed in a wrapper on the page's body: lift it over the studio, which covers the page from 900 px. */
+body > div:has(> [data-re-slash-command]) { z-index: 90; }
+/* The block-type menu's check sits at the end of its row, not after the name. */
+[data-re-node-selector-item] > span { flex: 1; }
 .composer-document .tiptap h1, .composer-document .tiptap h2, .composer-document .tiptap h3 { color: inherit; }
 /* Converted paragraphs retain node-paragraph; its later theme rule must not override heading metrics. */
 .composer-document .tiptap.ProseMirror h1.node-h1.node-paragraph { font-size: 26px; line-height: 1.25; margin: 0 0 20px; }
@@ -61,21 +65,75 @@ body:has(.email-composer[data-inactive]) :is([data-re-bubble-menu], [data-re-sla
 .composer-document .tiptap .node-section > p:last-child:has(> br.ProseMirror-trailingBreak:only-child) { min-height: 1px; height: 1px; margin: 0; line-height: 1px; }
 .composer-document .tiptap a { cursor: text; }
 .composer-document .tiptap table { max-width: 100%; }
-.email-composer > :is(.ui-alert, .composer-error) { margin: 0 40px var(--space-16); }
-/* The Style panel's own fields (the library's Inspector): controls on the control steps (campaigns.css places
-   the panel), solid fills, no edges, a stronger step while pointed at or typed in. */
-.composer-inspector :is(input, select, textarea) { max-width: 100%; }
+.email-composer > :is(.ui-alert, .composer-error) { margin: 0 var(--space-40) var(--space-16); }
+/* The Style panel's own fields (the library's Inspector; campaigns.css places the panel). One grid for every property:
+   its label in one column, its control filling the other to the panel's 16 px edge (where Close's X ends too), 28 px tall
+   like the dashboard's other controls, on the control steps: solid fills, no edges, a stronger step while pointed at or
+   typed in. Rows are 8 px apart and sections 24 px. Values are set in the mono face; an empty field shows what the block
+   has now (EmailComposer's placeholders) in the placeholder's ink. */
+.composer-inspector { --inspector-label: 88px; }
+.composer-inspector [data-re-inspector-section] { gap: var(--space-8); padding-block: var(--space-12); border: 0; }
+.composer-inspector :is([data-re-inspector-section-body], [data-re-inspector-section-body] div:has(> [data-re-inspector-prop-row])) { display: flex; flex-direction: column; gap: var(--space-8); }
+.composer-inspector [data-re-inspector-prop-row] { display: grid; grid-template-columns: var(--inspector-label) minmax(0, 1fr); align-items: center; gap: var(--space-8); min-height: var(--control-height); }
+.composer-inspector [data-re-inspector-prop-row] > * { min-width: 0; }
+.composer-inspector [data-re-inspector-label] { min-width: 0; }
 .composer-inspector :is(select, textarea, [data-re-inspector-select], [data-re-inspector-number], [data-re-inspector-color-control], [data-re-inspector-toggle-group], [data-re-inspector-button]) { border: 0; border-radius: var(--radius-sm); background: var(--color-control); color: var(--color-text); }
 .composer-inspector :is([data-re-inspector-number], [data-re-inspector-color-control]):focus-within, .composer-inspector :is(select, textarea):focus { background: var(--color-control-focus); }
 .composer-inspector [data-re-inspector-button]:hover { background: var(--color-control-hover); }
+.composer-inspector :is([data-re-inspector-number], [data-re-inspector-color-control]) { display: flex; align-items: center; width: 100%; height: var(--control-height); padding-inline: var(--space-8); gap: var(--space-6); }
+.composer-inspector select[data-re-inspector-select] { width: 100%; height: var(--control-height); padding-inline: var(--space-8); font: inherit; font-size: var(--text-xs); }
 .composer-inspector :is([data-re-inspector-input], [data-re-inspector-color-hex]) { border: 0; background: transparent; color: var(--color-text); }
+.composer-inspector :is([data-re-inspector-prop-row] [data-re-inspector-input], [data-re-inspector-number] [data-re-inspector-input], [data-re-inspector-color-control] [data-re-inspector-color-hex]) { flex: 1; width: 100%; min-width: 0; max-width: none; height: 100%; padding: 0; font-family: var(--font-mono); font-size: var(--text-xs); text-overflow: ellipsis; }
+/* A zero (no padding, no corner, no border) reads as nothing set, in the placeholder's ink like the effective values. */
+.composer-inspector :is(input, textarea)::placeholder, .composer-inspector [data-re-inspector-number] input[value='0']:not(:focus) { color: var(--color-faint); opacity: 1; }
+.composer-inspector [data-re-inspector-unit] { flex: none; width: auto; margin: 0; color: var(--color-muted); }
+.composer-inspector [data-re-inspector-icon-button] { display: grid; place-items: center; width: var(--control-height); height: var(--control-height); padding: 0; color: var(--color-muted); }
+/* A colour's swatch: a 16 px chip set off by the hairline the dashboard's swatches have, no ring of the input's own;
+   none set, it is the field's own fill with a slash. */
+.composer-inspector [data-re-inspector-color-trigger] { flex: none; width: 16px; height: 16px; margin: 0; padding: 0; border: 0; border-radius: var(--radius-xs); background: none; cursor: pointer; }
+.composer-inspector [data-re-inspector-color-trigger]::-webkit-color-swatch-wrapper { padding: 0; }
+.composer-inspector [data-re-inspector-color-trigger]::-webkit-color-swatch { border: 0; border-radius: var(--radius-xs); box-shadow: inset 0 0 0 1px var(--color-border); }
+.composer-inspector [data-re-inspector-color-trigger]::-moz-color-swatch { border: 0; border-radius: var(--radius-xs); box-shadow: inset 0 0 0 1px var(--color-border); }
+.composer-inspector [data-re-inspector-color-control]:has([data-re-inspector-color-hex]:placeholder-shown) [data-re-inspector-color-trigger]::-webkit-color-swatch { background: linear-gradient(to top right, transparent calc(50% - 0.5px), var(--color-muted) calc(50% - 0.5px) calc(50% + 0.5px), transparent calc(50% + 0.5px)) !important; }
+.composer-inspector [data-re-inspector-color-control]:has([data-re-inspector-color-hex]:placeholder-shown) [data-re-inspector-color-trigger]::-moz-color-swatch { background: linear-gradient(to top right, transparent calc(50% - 0.5px), var(--color-muted) calc(50% - 0.5px) calc(50% + 0.5px), transparent calc(50% + 0.5px)) !important; }
+/* A value with a uniform or per-side choice: the value, then the choice at the row's end, one height, 4 px apart. */
+.composer-inspector [data-re-inspector-prop-row] > div:has(> [data-re-inspector-toggle-group]) { display: flex; align-items: center; gap: var(--space-4); }
+.composer-inspector [data-re-inspector-prop-row] > div:has(> [data-re-inspector-toggle-group]) > :first-child { flex: 1; }
+.composer-inspector [data-re-inspector-prop-row] > [data-re-inspector-toggle-group] { justify-self: end; }
+/* The uniform / per-side choice is the dashboard's segmented switch: a control track, the chosen segment one step up on
+   --color-segment (Overview's and Logs' ranges). */
+.composer-inspector [data-re-inspector-toggle-group] { display: flex; flex: none; height: var(--control-height); padding: var(--space-2); overflow: hidden; }
+.composer-inspector :is([data-re-inspector-tooltip], [data-re-inspector-tooltip-trigger]) { display: flex; }
+.composer-inspector [data-re-inspector-toggle-item] { width: calc(var(--control-height) - 2 * var(--space-2)); height: calc(var(--control-height) - 2 * var(--space-2)); padding: 0; border: 0; border-radius: var(--radius-xs); background: transparent; color: var(--color-muted); transition: background var(--motion-duration) var(--ease-standard), color var(--motion-duration) var(--ease-standard); }
+.composer-inspector [data-re-inspector-toggle-item]:focus-visible:not([data-active]) { background: var(--color-control-focus); }
+.composer-inspector [data-re-inspector-toggle-item] + [data-re-inspector-toggle-item], .composer-inspector [data-re-inspector-tooltip] + [data-re-inspector-tooltip] [data-re-inspector-toggle-item] { border: 0; }
+.composer-inspector [data-re-inspector-toggle-item][data-active] { background: var(--color-segment); color: var(--color-text); }
+/* Per side: the values two by two in the control column, under the row that holds the choice. */
+.composer-inspector [data-re-inspector-prop-row] + .flex-col { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); margin-inline-start: calc(var(--inspector-label) + var(--space-8)); }
+.composer-inspector [data-re-inspector-prop-row] + .flex-col > div { display: contents; }
+/* A border's sides need the panel's whole width: each is two lines, its width and colour, then its style and Clear. */
+.composer-inspector [data-re-inspector-prop-row] + .flex-col:has(> .flex-col) { margin-inline-start: 0; row-gap: var(--space-8); }
+.composer-inspector [data-re-inspector-prop-row] + .flex-col > .flex-col { display: grid; grid-column: 1 / -1; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) var(--control-height); gap: var(--space-4); }
+.composer-inspector [data-re-inspector-prop-row] + .flex-col > .flex-col > div { display: contents; }
+.composer-inspector [data-re-inspector-prop-row] + .flex-col > .flex-col [data-re-inspector-color-control] { grid-column: 2 / -1; }
+.composer-inspector [data-re-inspector-prop-row] + .flex-col > .flex-col [data-re-inspector-select] { grid-column: 1 / 3; }
+/* What a block can't use isn't offered: a divider has no type and no fill of its own (EmailComposer names the block and
+   each section). */
+.composer-inspector[data-block='horizontalRule'] :is([data-section='typography'], [data-section='background']) { display: none; }
+/* An image placed in the editor has a data: source: the field says its file's name (or "Uploaded image") instead of the
+   encoded bytes, and can't be typed in. */
+.composer-inspector [data-re-inspector-prop-row][data-source-name] > [data-re-inspector-input] { grid-area: 1 / 2; color: transparent; caret-color: transparent; cursor: default; }
+.composer-inspector [data-re-inspector-prop-row][data-source-name]::after { content: attr(data-source-name); grid-area: 1 / 2; align-self: center; min-width: 0; padding-inline: var(--space-8); overflow: hidden; color: var(--color-text); font-family: var(--font-body); font-size: var(--text-xs); line-height: var(--leading-xs); white-space: nowrap; text-overflow: ellipsis; pointer-events: none; }
+/* Alt and Source have no frame of their own: they take a field's fill, left aligned and one line tall until written longer. */
+.composer-inspector [data-re-inspector-prop-row] > [data-re-inspector-input] { width: 100%; min-height: var(--control-height); padding: var(--space-6) var(--space-8); border-radius: var(--radius-sm); background: var(--color-control); font-size: var(--text-xs); line-height: var(--leading-xs); text-align: left; resize: none; field-sizing: content; }
+.composer-inspector [data-re-inspector-prop-row] > textarea[data-re-inspector-input] { font-family: var(--font-body); }
+.composer-inspector [data-re-inspector-prop-row] > [data-re-inspector-input]:focus { background: var(--color-control-focus); }
 .composer-inspector [data-re-inspector-breadcrumb-button] { color: var(--color-text); }
 .composer-inspector [data-re-inspector-breadcrumb-button][data-clickable] { color: var(--color-muted); }
-/* The path's buttons have no fill of their own: focus underlines the name, as on a focused link. */
-.composer-inspector [data-re-inspector-breadcrumb-button]:focus-visible { color: var(--color-text); text-decoration: underline; text-underline-offset: 3px; }
-.composer-inspector [data-re-inspector-toggle-item] { border: 0; background: transparent; color: var(--color-text); }
-.composer-inspector [data-re-inspector-toggle-item][data-active] { background: var(--color-text); color: var(--studio-desk); }
-.composer-inspector [data-re-inspector-section] { border: 0; }
+/* The path's buttons and the section names have no fill of their own: focus underlines the name, as on a focused link. */
+.composer-inspector :is([data-re-inspector-breadcrumb-button], [data-re-inspector-section-toggle]):focus-visible { color: var(--color-text); text-decoration: underline; text-underline-offset: 3px; }
+/* The Uniform / Per side hints, as the dashboard's tooltips. */
+.composer-inspector [data-re-inspector-tooltip-content] { margin-bottom: var(--space-6); padding: var(--space-6) var(--space-8); border-radius: var(--radius-sm); background: var(--color-overlay-surface); box-shadow: var(--shadow-popover); color: var(--color-text); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .composer-inspector-action { align-self: flex-start; margin-top: var(--space-12); }
 /* Phones and tablets: the email's text 16px in, as the header rows' labels. */
 @media (max-width: 899px) {
@@ -87,10 +145,10 @@ body:has(.email-composer[data-inactive]) :is([data-re-bubble-menu], [data-re-sla
 @media (pointer: coarse), (max-width: 899px) {
   [data-re-bubble-menu] { flex-wrap: wrap; max-width: calc(100vw - 16px); }
   [data-re-bubble-menu-group] { border-left: 0; }
-  :is([data-re-bubble-menu-item], [data-re-link-selector-trigger], [data-re-link-bm-item], [data-re-btn-bm-item], [data-re-img-bm-item]) { padding: 11px; }
-  [data-re-node-selector-trigger] { min-height: 36px; padding-inline: 12px; }
+  :is([data-re-bubble-menu-item], [data-re-link-selector-trigger], [data-re-link-bm-item], [data-re-btn-bm-item], [data-re-img-bm-item]) { display: inline-grid; place-items: center; min-width: 36px; min-height: 36px; padding: 0; }
+  [data-re-node-selector-trigger] { min-height: 36px; padding-inline: var(--space-12); }
   :is([data-re-slash-command-item], [data-re-node-selector-item]) { min-height: 44px; }
-  :is([data-re-link-selector-input], [data-re-link-bm-input], [data-re-btn-bm-input], [data-re-img-bm-input], .composer-inspector :is(input, select, textarea)) { font-size: 16px; }
+  :is([data-re-link-selector-input], [data-re-link-bm-input], [data-re-btn-bm-input], [data-re-img-bm-input], .composer-inspector :is(input, select, textarea)) { font-size: var(--text-lg); }
 }
 /* The link toolbar is for a link someone clicked, not for the caret the editor opens with. The library sets visibility inline. */
 .composer-document:not(:focus-within) > [data-re-bubble-menu]:has([data-re-link-bm-toolbar]) { visibility: hidden !important; pointer-events: none; }

@@ -36,12 +36,14 @@ import { realDestination } from './hosted-sending.js';
 import { webhookSecretBinding as mailboxSecretBinding } from './mailbox-events.js';
 import { mailboxDomains, endpoints, type MxReport } from './db/mailbox.js';
 import { checkMx,expectedMx } from './mailbox-dns.js';
+import { dohQuery } from './public-dns.js';
 import { baneRecordIssue, baneRecordUse, defaultReceivingHost, establishedHost, hostOwners, inspectReceivingHost, observeReceiving, refusedCodes, takenIssue, type DomainObservation, type ReceivingHostRow, type ReceivingIssue } from './receiving-host.js';
 import { deliveryAttempts, deliveries, domainClaims, domains, events, eventTypes, snsReceipts, unsubscribeTokens, webhooks, webhookSecretAudit, type PublishedEvent, type EventType } from './db/operations.js';
 import { clientIpHeader, productName, requestHeaderNames, webhookTestHeaders, webhookUserAgent } from './brand.js';
 import { BUILTIN_CAPS, BUILTIN_UNSUPPORTED, builtinLimitsText } from './builtin-limits.js';
 import { hasTags, tagKey, TAG_PREFIX } from './resource-tags.js';
 import { PostalAddress, postalAddressText, unsubscribePageLink } from './outbound-content.js';
+import { checkLinkHost, forgetLinkHost, servesWorkspace, withLinkRecords } from './link-domains.js';
 export type { PublishedEvent } from './db/operations.js';
 
 const RegionalAccepted = z.object({ operationId: z.string(), regions: z.array(z.string()) });
@@ -71,7 +73,7 @@ const attemptSchema = z.object({ id: z.string(), deliveryId: z.string(), statusC
 const dnsState = z.enum(['pending','verified']);
 const publicDns = z.object({ parking:z.object({ owner:z.string().describe('The registrar or host, e.g. Porkbun.'), target:z.string().describe('What its record points to, e.g. pixie.porkbun.com.') }).optional().describe('With wildcard: the answer is a registrar\u2019s parking or forwarding record.'), wildcard:z.string().optional().describe('With missing on a CNAME: a wildcard record (e.g. *.example.com) answers this name with an address instead, as it does a random name beside it. Add the CNAME exactly: the specific record wins over the wildcard.'), state:z.enum(['found','missing','wrong_value']).describe('found: public DNS has this record as listed (it may still take SES a few minutes to verify). missing: nothing of this type at the name. wrong_value: the name has a record of this type with another value.'), values:z.array(z.string()).describe('wrong_value only: what public DNS has at the name instead (at most 5). Empty otherwise.'), checkedAt:z.string() })
   .nullable().optional().describe('For pending sending and MAIL FROM records: what public DNS (Cloudflare 1.1.1.1) shows for this record. verifyDomain looks it up now (answers cached up to 30 seconds). Other reads show the last background check, which runs every 15 to 60 minutes for a Hosted domain still pending an hour after it was added. Null when DNS did not answer in time; absent before any check and on other records.');
-const dnsRecord = z.object({ name:z.string(), type:z.enum(['CNAME','TXT','MX']), value:z.string(), priority:z.number().optional(), purpose:z.enum(['sending','receiving','mail_from','dmarc']), status:dnsState, note:z.string().optional(), publicDns });
+const dnsRecord = z.object({ name:z.string(), type:z.enum(['CNAME','TXT','MX']), value:z.string(), priority:z.number().optional(), purpose:z.enum(['sending','receiving','mail_from','dmarc','links']).describe(`links: optional, the domain's own link host (links.<domain>) for the unsubscribe and other links ${productName} adds to campaign and marketing mail; shown when the installation has a link domain with Cloudflare for SaaS.`), status:dnsState, note:z.string().optional(), publicDns });
 const dmarcSchema=z.object({status:z.enum(['missing','invalid','none','quarantine','reject']),record:z.string().nullable(),source:z.string().nullable().describe('Domain publishing the effective TXT record; may be the organizational domain.'),adkim:z.enum(['r','s']),aspf:z.enum(['r','s']),alignment:z.object({dkim:z.boolean(),spf:z.boolean()})}).nullable().describe('Last DNS and SES observation for this From domain. Null when unchecked, unavailable or stale. Alignment describes configured identifiers, not a delivery verdict.');
 export const receivingIssueSchema = z.object({
   code: z.enum(['cname','foreign_mx','split','wildcard','bane_record','host_taken','claimed','delegated','mx_missing','wrong_region','null_mx','proof_stale','identity_stale']).describe(`cname: the host is a CNAME, so it cannot have an MX (RFC 1034). foreign_mx: another provider receives its mail. split: other MX records share its mail. wildcard: a *.domain CNAME or MX answers for it. bane_record: it is one of ${productName}\u2019s own names (custom MAIL FROM, ownership TXT, DKIM). host_taken: another claim, possibly in another workspace, receives on it. claimed: another workspace claimed it, or a name between it and this domain, in any scope. delegated: it is a delegated zone with its own NS records. claimed and delegated hosts never receive here. mx_missing: its MX disappeared after setup. wrong_region and null_mx: its MX points elsewhere in SES or refuses mail. proof_stale / identity_stale: the ownership TXT proof or the SES verification is out of date.`),
@@ -294,14 +296,10 @@ export async function publishEvent(runtime: Runtime, event: PublishedEvent, wake
   if (wake && readyJobs > 0) try { await runtime.wake?.(readyJobs,'webhook'); } catch { log('warn', { eventId: event.id, code: 'QUEUE_WAKE_FAILED', message: 'The event is committed; the scheduler will recover pending deliveries.' }); }
 }
 
-export async function createUnsubscribeLink(runtime: Runtime, workspaceId: string, email: string) {
+/** A new unsubscribe link on `origin`, the mail's link host (src/link-domains.ts), and the token record that makes it work. */
+export async function createUnsubscribeLink(origin: string, workspaceId: string, email: string) {
   const token = randomSecret('u_');
-  return { url: `${runtime.config.publicUrl.replace(/\/$/, '')}/unsubscribe/${token}`, record: { tokenHash: await digest(token), workspaceId, email: email.trim().toLowerCase() } };
-}
-export async function unsubscribeUrl(runtime: Runtime, workspaceId: string, email: string, db: DbExecutor = runtime.db): Promise<string> {
-  const link = await createUnsubscribeLink(runtime, workspaceId, email);
-  await db.insert(unsubscribeTokens).values(link.record);
-  return link.url;
+  return { url: `${origin.replace(/\/$/, '')}/unsubscribe/${token}`, record: { tokenHash: await digest(token), workspaceId, email: email.trim().toLowerCase() } };
 }
 const claimTag = tagKey('domain-claim');
 type Readiness = z.infer<typeof domainSchema>;
@@ -341,10 +339,7 @@ async function identityQuotaAlert(runtime:Runtime,region:string,account:string,e
 }
 async function txtProof(name: string, token: string) {
   try {
-    const r = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=TXT`, { headers: { accept: 'application/dns-json' }, signal: AbortSignal.timeout(5000), redirect: 'manual' }); // Workers reject 'error'; a 3xx fails !r.ok below.
-    if (!r.ok) { await r.body?.cancel();throw dnsUnavailable(); }
-    const answer = await r.json() as { Status: number; TC?: boolean; Answer?: { name: string; type: number; data: string }[] };
-    if (answer.TC || (answer.Status!==0 && answer.Status!==3)) throw dnsUnavailable();
+    const answer = await dohQuery(name, 'TXT', AbortSignal.timeout(5000));
     return answer.Status === 0 && !!answer.Answer?.some(rr => rr.type === 16 && rr.name.toLowerCase().replace(/\.$/, '') === name && (rr.data === `"${token}"` || rr.data === token));
   } catch { throw dnsUnavailable(); }
 }
@@ -650,27 +645,70 @@ async function releaseClaim(db:DbExecutor,wid:string,row:{token:string}) {
 /** Each release holds one lock through the tag check, SES deletion and database cleanup. On SES
  * failure retain the claim for the next sweep, without letting it block other expired names. */
 export async function expireDomainClaims(runtime:Runtime,deadline:number) {
-  let cursor:{created:string;token:string}|undefined, released=0;
-  while (Date.now()<deadline) {
-    const after=cursor ? sql`AND (dc.created_at,dc.token)>(${cursor.created}::timestamptz,${cursor.token}::uuid)` : sql``;
-    let selected=false;
-    try {
-      const found=await runtime.db.transaction(async db=>{
-        const row=(await db.execute<{workspace_id:string;name:string;token:string;created:string;connection:(HostedDomain['connection'] & {region:string})|null}>(sql`
-          SELECT dc.workspace_id,dc.name,dc.token,dc.created_at::text AS created,to_jsonb(pc) AS connection FROM domain_claims dc
-          LEFT JOIN domain_sending_bindings b ON b.workspace_id=dc.workspace_id AND b.name=dc.name AND b.connection_id=dc.connection_id
-          LEFT JOIN regional_connections pc ON pc.id=b.connection_id AND pc.region=b.region
-          WHERE domain_claim_expired(dc) ${after} ORDER BY dc.created_at,dc.token LIMIT 1 FOR UPDATE OF dc SKIP LOCKED`)).rows[0];
-        if (!row) return false;
-        cursor=row; selected=true;
-        if (row.connection?.kind==='shared') await deleteClaimIdentity(runtime,row.workspace_id,{...row,region:row.connection.region,connection:row.connection});
-        await releaseClaim(db,row.workspace_id,row); return true;
-      });
-      if (!found) break;
-      released++;
-    } catch (e) {
-      if (e instanceof ModuleLoadError || !selected || !(e instanceof ApiError)) throw e;
-      log('warn',{code:'DOMAIN_EXPIRY_RETRY',reason:e.code});
+  // Revisit exclusive claims whose ownership has not been observed for a week, including disconnected claims, so a miss
+  // is noticed within a week. The first definite miss starts a 30-day grace period; only a second definite miss after it
+  // releases the namespace (what the DOMAIN_CLAIMED refusal tells the domain's owner, domain-claims.ts domainClaimed).
+  const due = sql`dc.ever_proven AND dc.claim_scope <> 'account' AND NOT coalesce(dc.identity ?| array['adopted','builtin'], false)
+    AND (dc.connection_id IS NULL OR pc.id IS NOT NULL)
+    AND CASE WHEN dc.receiving_proof_missed_at IS NULL THEN coalesce(dc.receiving_proved_at, dc.created_at) <= now() - interval '7 days'
+      ELSE dc.receiving_proof_missed_at <= now() - interval '30 days' END`;
+  let released=0;
+  // Expired claims first: a due claim whose authority keeps failing must never hold back their cleanup.
+  for (const pending of [sql`domain_claim_expired(dc)`, sql`(${due})`]) {
+    let cursor:{created:string;token:string}|undefined;
+    while (Date.now()<deadline) {
+      const after=cursor ? sql`AND (dc.created_at,dc.token)>(${cursor.created}::timestamptz,${cursor.token}::uuid)` : sql``;
+      let selected=false;
+      try {
+        const found=await runtime.db.transaction(async db=>{
+          const row=(await db.execute<{workspace_id:string;name:string;token:string;created:string;expired:boolean;missed:boolean;imported:boolean;connection:(HostedDomain['connection'] & {region:string})|null}>(sql`
+            SELECT dc.workspace_id,dc.name,dc.token,dc.created_at::text AS created,domain_claim_expired(dc) AS expired,dc.receiving_proof_missed_at IS NOT NULL AS missed,
+              coalesce(dc.identity ? 'imported',false) AS imported,to_jsonb(pc) AS connection FROM domain_claims dc
+            LEFT JOIN domain_sending_bindings b ON b.workspace_id=dc.workspace_id AND b.name=dc.name AND b.connection_id=dc.connection_id
+            LEFT JOIN regional_connections pc ON pc.id=b.connection_id AND pc.region=b.region
+            WHERE ${pending} ${after} ORDER BY dc.created_at,dc.token LIMIT 1 FOR UPDATE OF dc SKIP LOCKED`)).rows[0];
+          if (!row) return false;
+          cursor=row; selected=true;
+          if (!row.expired) {
+            const connection = row.connection;
+            const identityHeld = async () => {
+              if (!connection) return false;
+              const scoped = {...runtime, config: {...runtime.config, workspaceId: row.workspace_id, regions: [connection.region]}};
+              const client = await getSes(scoped, connection.region, {...connection, identitySession: {name: row.name, purpose: row.imported ? 'read' : 'verify'}});
+              try {
+                const identity = await sesCall(({GetEmailIdentityCommand}) => client.send(new GetEmailIdentityCommand({EmailIdentity: row.name})));
+                if (identity.VerificationStatus === 'TEMPORARY_FAILURE') throw dnsUnavailable(); // SES could not read DNS: no answer either way.
+                return identity.VerificationStatus === 'SUCCESS' && (row.imported || ownsIdentity(identity, row.token));
+              } catch (e) {
+                if (!(e instanceof ApiError) || e.code !== 'SES_IDENTITY_NOT_FOUND') throw e;
+                return false;
+              }
+            };
+            const proven = connection?.kind === 'byo' ? await identityHeld() : await ownershipTxt(row.name, row.token);
+            if (proven || !row.missed) {
+              await db.execute(sql`UPDATE domain_claims SET ${observeProof(proven)} WHERE token=${row.token}`);
+              return 'observed';
+            }
+            // A shared claim's TXT is only needed to verify; sending afterwards rests on its DKIM records. While SES still
+            // verifies the claim's tagged identity the name is in use: keep it and look again after another grace period.
+            // receiving_proved_at stays as old as the last TXT seen, so this never lets the domain receive.
+            if (connection?.kind === 'shared' && await identityHeld()) {
+              await db.execute(sql`UPDATE domain_claims SET receiving_proof_missed_at=now() WHERE token=${row.token}`);
+              return 'observed';
+            }
+          }
+          if (row.connection?.kind==='shared') await deleteClaimIdentity(runtime,row.workspace_id,{...row,region:row.connection.region,connection:row.connection});
+          await releaseClaim(db,row.workspace_id,row);
+          // A proven name the workspace held is gone: its owners and admins are told (an abandoned setup is not).
+          if (!row.expired) await (await wrapModuleLoad(() => import('./account-notices.js'))).domainReleased(db,row.workspace_id,{name:row.name,token:row.token});
+          return true;
+        });
+        if (!found) break;
+        if (found === true) released++;
+      } catch (e) {
+        if (e instanceof ModuleLoadError || !selected || !(e instanceof ApiError)) throw e;
+        log('warn',{code:'DOMAIN_EXPIRY_RETRY',reason:e.code});
+      }
     }
   }
   return released;
@@ -926,6 +964,12 @@ export function domainReader(c: Ctx, requested?: string) {
 type DomainQuery = { limit: number; region?: string; refresh: 'true' | 'false'; cursor?: string; /** The caller counts the quota in a statement of its own (getOverviewSetup). */ countedElsewhere?: boolean };
 /** One page of domains as listDomains returns it. Hosted: one statement. Self-hosted: two with refresh=false, otherwise one plus an SES read per domain. */
 export async function domainPage(c: Ctx, a: Actor, q: DomainQuery): Promise<z.infer<typeof DomainPage>> {
+  const page = await domainRows(c, a, q);
+  // Each domain's link record (src/link-domains.ts), so Overview's domains are listDomains' own.
+  await withLinkRecords(c.env, a.workspaceId, page.data);
+  return page;
+}
+async function domainRows(c: Ctx, a: Actor, q: DomainQuery): Promise<z.infer<typeof DomainPage>> {
   const allowed = a.domains.length ? or(...a.domains.map(parent => or(eq(domains.name, parent), like(domains.name, `%.${parent}`)))) : undefined;
   const where = and(scoped(domains, a), allowed, q.region ? eq(domains.region, region(c.env, q.region)) : c.env.config.multiTenant ? undefined : inArray(domains.region, c.env.config.regions), q.cursor ? lt(domains.id, q.cursor) : undefined);
   if (c.env.config.multiTenant) {
@@ -954,7 +998,22 @@ export async function domainPage(c: Ctx, a: Actor, q: DomainQuery): Promise<z.in
   return { data, nextCursor: rows.length > q.limit ? rows[q.limit - 1]!.row.id : null };
 }
 
+/** Every domain a domain route returns, with its link record after its sending records (src/link-domains.ts): one read
+ *  per response, while link hosts are on. It is not part of whether a domain is ready, so no route's own logic needs it. */
+const domainLinkRecords = async (c: Ctx, next: () => Promise<void>) => {
+  await next();
+  const workspaceId = c.get('actor')?.workspaceId;
+  if (!c.env.config?.linkHosts || !workspaceId || c.res.status >= 300 || !c.res.headers.get('content-type')?.startsWith('application/json')) return;
+  const body = await c.res.clone().json().catch(() => null) as { name?: unknown; dns?: unknown; data?: unknown } | null;
+  const domainLike = (value: unknown): value is { name: string; dns: Parameters<typeof withLinkRecords>[2][number]['dns'] } => typeof (value as { name?: unknown })?.name === 'string' && Array.isArray((value as { dns?: unknown }).dns);
+  const reports = domainLike(body) ? [body] : Array.isArray(body?.data) ? body.data.filter(domainLike) : [];
+  if (!reports.length) return;
+  await withLinkRecords(c.env, workspaceId, reports);
+  const headers = new Headers(c.res.headers); headers.delete('content-length');
+  c.res = new Response(JSON.stringify(body), { status: c.res.status, headers });
+};
 export function registerOperations(app: App) {
+  app.use('/v1/domains', domainLinkRecords); app.use('/v1/domains/*', domainLinkRecords);
   app.openapi(createRoute({ method: 'get', path: '/v1/settings/workspace', operationId: 'getWorkspaceSettings', tags: ['Settings'], security, responses: { 200: response(settingsSchema), ...errors } }), async c => {
     const a = workspaceActor(c); const { rows: [row] } = await c.env.db.execute<{ name: string | null; postal_address: string | null; required_notices: boolean; focus: WorkspaceFocus[] | null }>(c.env.config.multiTenant
       ? sql`SELECT name,postal_address,${requiredNoticesOf(a.workspaceId)} AS required_notices,focus FROM workspaces WHERE id=${a.workspaceId}`
@@ -1172,7 +1231,8 @@ export function registerOperations(app: App) {
     const row=await hostedDomain(c.env.db,wid,id) ?? notFound('Domain');
     if (row.identity?.builtin) throw builtinDomainFixed();
     const found=await discover(row.name);
-    const selection=pendingGroups(derivedReadiness(row),row.connection.kind==='shared',row.claim_scope!=='account' && (row.connection.kind==='byo' || row.pool_receiving) && row.identity?.mx?.state==='missing',row.sending_state==='failed' ? [] : c.req.valid('query').groups?.split(','));
+    const [report]=await withLinkRecords(c.env,wid,[derivedReadiness(row)]);
+    const selection=pendingGroups(report!,row.connection.kind==='shared',row.claim_scope!=='account' && (row.connection.kind==='byo' || row.pool_receiving) && row.identity?.mx?.state==='missing',row.sending_state==='failed' ? [] : c.req.valid('query').groups?.split(','));
     const provider=found && {id:found.id,name:found.name}, applyUrl=found && signedApply(c.env.config,found,row,selection,wid,a.keyId.slice(5));
     return c.json({provider,groups:selection.groups,applyUrl},200);
   });
@@ -1209,6 +1269,8 @@ export function registerOperations(app: App) {
     // Check now: what public DNS shows now for each pending record, and where the zone is hosted. A Hosted domain the
     // background check already follows (a stored check, domain-setup.ts) keeps this answer, so its banner moves with it.
     const checked = async (report: Readiness) => {
+      // The domain's link record is checked with it (src/link-domains.ts); domainLinkRecords adds it to the answer.
+      await checkLinkHost(c.env, a.workspaceId, report.name);
       const stored = c.env.config.multiTenant && report.sending === 'pending' && report.dnsHost !== undefined;
       const check = await (await wrapModuleLoad(() => import('./record-check.js'))).checkSetup(report);
       if (check.records.length) { report.dnsHost = check.host; report.dnsIssue = check.noDns ? noDnsIssue(report.name) : null; }
@@ -1229,14 +1291,15 @@ export function registerOperations(app: App) {
   });
   app.openapi(createRoute({method:'delete',path:'/v1/domains/{id}',operationId:'deleteDomain',tags:['Domains'],security,description:'MX only. Delete this claim’s tagged SES identity and release the domain. Does not remove DNS records.',request:{params:IdParams},responses:{200:response(z.object({deleted:z.literal(true)})),...errors}}),async c=>{
     const a=actor(c,'manage'); if (!c.env.config.multiTenant) return notFound('Endpoint');
-    await c.env.db.transaction(async db=>{
+    const name=await c.env.db.transaction(async db=>{
       const row=await hostedDomain(db,a.workspaceId,c.req.valid('param').id,true);
       if (!row) {
         // A claim whose connection is gone has no SES identity to own; releasing it only frees the name.
         const detached=(await db.execute<{id:string;name:string;token:string}>(sql`SELECT d.id,d.name,dc.token FROM operation_domains d JOIN domain_claims dc ON dc.name=d.name AND dc.workspace_id=d.workspace_id
           WHERE d.workspace_id=${a.workspaceId} AND d.id=${c.req.valid('param').id} AND dc.connection_id IS NULL FOR UPDATE OF dc`)).rows[0] ?? notFound('Domain');
         allowedDomain(a,detached.name); await releaseClaim(db,a.workspaceId,detached);
-        return recordAudit(db,c,{action:'domain.delete',workspaceId:a.workspaceId,target:{type:'domain',id:detached.id},before:{name:detached.name}});
+        await recordAudit(db,c,{action:'domain.delete',workspaceId:a.workspaceId,target:{type:'domain',id:detached.id},before:{name:detached.name}});
+        return detached.name;
       }
       allowedDomain(a,row.name);
       if (row.identity?.builtin) throw builtinDomainFixed();
@@ -1249,7 +1312,10 @@ export function registerOperations(app: App) {
       await releaseClaim(db,a.workspaceId,row);
       if (row.connection.kind==='byo' && row.receiving_host) await (await wrapModuleLoad(() => import('./mailbox-setup.js'))).queueReconcile(db,a.workspaceId,row.region);
       await recordAudit(db,c,{action:'domain.delete',workspaceId:a.workspaceId,target:{type:'domain',id:row.id},before:{name:row.name,region:row.region,receivingHost:row.receiving_host}});
-    }); return c.json({deleted:true as const},200);
+      return row.name;
+    });
+    await forgetLinkHost(c.env,a.workspaceId,name);
+    return c.json({deleted:true as const},200);
   });
   app.openapi(createRoute({ method: 'get', path: '/v1/webhooks', operationId: 'listWebhooks', tags: ['Webhooks'], security, request: { query: PageQuery }, responses: { 200: response(listSchema(webhookSchema, 'WebhookPage')), ...errors } }), async c => {
     const a = workspaceActor(c), q = c.req.valid('query'); const rows = await c.env.db.select().from(webhooks).where(and(scoped(webhooks, a), q.cursor ? lt(webhooks.id, q.cursor) : undefined)).orderBy(desc(webhooks.id)).limit(q.limit + 1);
@@ -1712,10 +1778,12 @@ function registerPublicEvents(app: App) {
     const [token] = await c.env.db.select().from(unsubscribeTokens).where(eq(unsubscribeTokens.tokenHash, await digest(raw)));
     // The confirmation form may continue to the campaign's own page: browsers apply form-action to that redirect too.
     c.header('Cache-Control', 'no-store, max-age=0'); c.header('Referrer-Policy', 'no-referrer'); c.header('X-Robots-Tag', 'noindex, nofollow'); c.header('Content-Security-Policy', `default-src 'none'; style-src 'unsafe-inline'; font-src 'self'; form-action 'self'${token?.pageUrl ? ` ${new URL(token.pageUrl).origin}` : ''}; frame-ancestors 'none'; base-uri 'none'`);
-    if (!token) return browser(c) ? invalidLink(c) : notFound('Unsubscribe link');
+    if (!token || !await servesWorkspace(c.env, c.req.url, token.workspaceId)) return browser(c) ? invalidLink(c) : notFound('Unsubscribe link');
     // Link scanners and mail security gateways fetch every link in a message, so a footer GET only asks for
     // confirmation. Mailbox one-click (RFC 8058, List-Unsubscribe-Post) and the confirmation form are POSTs.
-    if (method === 'get') return c.html(unsubscribePage('Unsubscribe from marketing emails?', '<p>You will no longer receive marketing emails from this workspace.</p><form method="post"><input type="hidden" name="confirm" value="footer"><button type="submit" style="font:inherit;font-weight:600;padding:10px 18px;border:0;border-radius:8px;background:#111;color:#fff;cursor:pointer">Unsubscribe</button></form>'), 200);
+    // A page's host may contain & and quotes (a URL host allows them): written as text, never markup.
+    const destination = token.pageUrl ? ` After unsubscribing, you’ll continue to ${new URL(token.pageUrl).host.replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`)}.` : '';
+    if (method === 'get') return c.html(unsubscribePage('Unsubscribe from marketing emails?', `<p>You will no longer receive marketing emails from this workspace.${destination}</p><form method="post"><input type="hidden" name="confirm" value="footer"><button type="submit" style="font:inherit;font-weight:600;padding:10px 18px;border:0;border-radius:8px;background:#111;color:#fff;cursor:pointer">Unsubscribe</button></form>`), 200);
     const form = await c.req.parseBody().catch(() => ({} as Record<string, unknown>));
     // The audience helper commits consent, audit, and the subscription event outbox atomically.
     await (await wrapModuleLoad(() => import('./audience.js'))).recordUnsubscribe(c.env, token.workspaceId, token.email, form.confirm === 'footer' ? 'footer-confirm' : 'rfc8058-post');
@@ -1726,7 +1794,7 @@ function registerPublicEvents(app: App) {
 }
 
 function unsubscribePage(title: string, body: string) {
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>@font-face{font-family:Inter;src:url("/fonts/inter-variable.woff2") format("woff2");font-weight:100 900;font-style:normal;font-display:swap}body,body *{letter-spacing:-0.01em}</style><body style="font-family:Inter,Arial,sans-serif;letter-spacing:-0.01em;margin:48px;line-height:1.5"><main><h1 style="font-size:24px">${title}</h1>${body}</main></body></html>`;
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>body,body *{letter-spacing:-0.01em}</style><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;letter-spacing:-0.01em;margin:48px;line-height:1.5"><main><h1 style="font-size:24px">${title}</h1>${body}</main></body></html>`;
 }
 function registerMetrics(app: App) {
   // The window's aggregate is one statement that reads every email in it (a 30-day Overview reads all retained mail):
@@ -2436,4 +2504,4 @@ const publishBatchJob: JobHandler = async (runtime, payload, job) => {
     }
   });
 };
-export const operationJobs: Record<string, JobHandler> = { 'domain.placement': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./placement.js'))).shadowPlacement(...args); }), 'domain.verify': retryDatabaseFailures(domainVerify), 'domain.setupCheck': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./domain-setup.js'))).domainSetupCheckJob(...args); }), 'domain.mx': retryDatabaseFailures(domainMx), 'domain.builtin': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./builtin-domain.js'))).builtinDomainJob(...args); }), 'operation.webhook': retryDatabaseFailures(webhookJob), 'operation.resumeDeliveries': retryDatabaseFailures(resumeDeliveries), 'operation.ses': retryDatabaseFailures(sesJob), 'operation.simulatedFeedback': retryDatabaseFailures(simulatedFeedbackJob), 'operation.simulatedFeedbackRecovery': retryDatabaseFailures(simulatedFeedbackRecovery), 'operation.publish': retryDatabaseFailures(publishJob), 'operation.publishBatch': retryDatabaseFailures(publishBatchJob) };
+export const operationJobs: Record<string, JobHandler> = { 'domain.placement': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./placement.js'))).shadowPlacement(...args); }), 'domain.verify': retryDatabaseFailures(domainVerify), 'domain.setupCheck': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./domain-setup.js'))).domainSetupCheckJob(...args); }), 'domain.linkCheck': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./domain-setup.js'))).domainLinkCheckJob(...args); }), 'domain.linkCleanup': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./domain-setup.js'))).domainLinkCleanupJob(...args); }), 'domain.mx': retryDatabaseFailures(domainMx), 'domain.builtin': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./builtin-domain.js'))).builtinDomainJob(...args); }), 'operation.webhook': retryDatabaseFailures(webhookJob), 'operation.resumeDeliveries': retryDatabaseFailures(resumeDeliveries), 'operation.ses': retryDatabaseFailures(sesJob), 'operation.simulatedFeedback': retryDatabaseFailures(simulatedFeedbackJob), 'operation.simulatedFeedbackRecovery': retryDatabaseFailures(simulatedFeedbackRecovery), 'operation.publish': retryDatabaseFailures(publishJob), 'operation.publishBatch': retryDatabaseFailures(publishBatchJob) };

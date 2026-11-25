@@ -4,6 +4,7 @@ import { Input } from '../../components/ui'
 import { NameText, PrivateAddress } from '../../components/PrivateAddress'
 import { nameParts } from '../../lib/private-address'
 import { invalidSender } from './copy'
+import { previousDomains } from '../../../../api/src/brand'
 import './sender-input.css'
 
 type Sender = { name: string; email: string }
@@ -12,6 +13,11 @@ export type CampaignSenderInputProps = Sender & {
   /** Take an address on any domain, verified or not (a new newsletter's sender: its domain's setup can come next). */
   anyDomain?: boolean
   disabled?: boolean
+  /** The domain the placeholder suggests (the one the workspace sends from), when it is one of `domains`. */
+  preferredDomain?: string
+  /** A caller with rows of its own says the problem there (with `errorId`), and hears it here; otherwise it is the line under the field. */
+  onError?: (message: string) => void
+  errorId?: string
   onChange: (sender: Sender) => void
 }
 
@@ -19,7 +25,7 @@ const formatSender = ({ name, email }: Sender) => email ? (name ? `${name} <${em
 const validName = (name: string) => name.length <= 200 && !/[\x00-\x1f\x7f]/.test(name)
 // Match the API's practical ASCII address shape, not a general mailbox grammar.
 const validEmail = (email: string) => email.length <= 254 && /^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$/.test(email)
-const verifiedDomain = (domain: string, parents: string[]) => parents.some(parent => domain === parent || domain.endsWith(`.${parent}`))
+const verifiedDomain = (domain: string, parents: readonly string[]) => parents.some(parent => domain === parent || domain.endsWith(`.${parent}`))
 const unquote = (name: string) => name.startsWith('"') && name.endsWith('"') ? name.slice(1, -1).replace(/\\(["\\])/g, '$1') : name
 const draftName = (text: string) => unquote((text.includes('<') ? text.slice(0, text.indexOf('<')) : text.includes('@') ? '' : text).trim())
 
@@ -57,7 +63,7 @@ export function SenderLines({ name, address, inline = false }: { name?: string |
   return <span className={inline ? 'sender-lines sender-lines--inline' : 'sender-lines'}>{parts && <span className="sender-lines__name"><NameText parts={parts} /></span>}<span className="sender-lines__address"><PrivateAddress value={address} /></span></span>
 }
 
-export function CampaignSenderInput({ name, email, domains, anyDomain = false, disabled = false, onChange }: CampaignSenderInputProps) {
+export function CampaignSenderInput({ name, email, domains, anyDomain = false, disabled = false, preferredDomain, onError, errorId: describedBy, onChange }: CampaignSenderInputProps) {
   // The editor remounts for another campaign/region. Parent echoes must not replace
   // an unfinished draft (or move the caret) when its published email is empty.
   const [draft, setDraft] = useState(() => formatSender({ name, email }))
@@ -84,6 +90,13 @@ export function CampaignSenderInput({ name, email, domains, anyDomain = false, d
     : parsed && !allowed(parsed) ? 'Choose an address on a verified domain.'
     : candidates.length ? 'Choose a sender address.' : invalidSender
   const showError = touched && (!parsed || !allowed(parsed))
+  const problem = showError ? error : ''
+  useEffect(() => { onError?.(problem) }, [onError, problem])
+  useEffect(() => () => onError?.(''), [onError])
+  // The placeholder's example: the domain the workspace sends from, else its first verified one, never one of the
+  // service's own earlier domains (brand.ts), which a long-lived workspace may still have verified.
+  const current = verified.filter(domain => !verifiedDomain(domain, previousDomains))
+  const example = current.find(domain => domain === preferredDomain?.toLowerCase()) ?? current[0] ?? 'example.com'
   // A complete address is shown as PrivateAddress (masked until hovered, in full with privacy mode off, like every address in the dashboard) until the field is focused or clicked; the input stays mounted, hidden, so focus moves into it without a blur.
   const masked = !editing && !!parsed
   function edit() {
@@ -129,10 +142,10 @@ export function CampaignSenderInput({ name, email, domains, anyDomain = false, d
       <span className="campaign-sender-mask__text"><SenderLines name={parsed.name} address={parsed.email} inline /></span>
     </div>}
     <Input ref={input} hidden={masked || undefined} id="campaign-from-email" role="combobox" type="text" autoComplete="off" autoCapitalize="none" spellCheck={false}
-      placeholder={`Name <sender@${verified[0] ?? 'example.com'}>`} value={draft} maxLength={460} disabled={disabled} required
+      placeholder={`Name <sender@${example}>`} value={draft} maxLength={460} disabled={disabled} required
       aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? listId : undefined}
       aria-activedescendant={activeIndex >= 0 ? `${listId}-${activeIndex}` : undefined}
-      title={draft || undefined} aria-invalid={showError || undefined} aria-describedby={showError ? errorId : undefined}
+      title={draft || undefined} aria-invalid={showError || undefined} aria-describedby={showError ? describedBy ?? errorId : undefined}
       // Focused, it stays the input: typing a complete address must not swap it for the masked view and drop focus.
       onFocus={() => { setOpen(true); setEditing(true) }}
       onChange={event => { setDraft(event.target.value); publish(event.target.value); setTouched(false); setOpen(true); setActive(-1) }}
@@ -162,6 +175,6 @@ export function CampaignSenderInput({ name, email, domains, anyDomain = false, d
         {formatSender(sender)}
       </button>)}
     </div></div>}
-    {showError && <div id={errorId} className="campaign-sender-options campaign-sender-error" role="alert">{error}</div>}
+    {showError && !onError && <p id={errorId} className="ui-field__hint ui-field__error campaign-sender-error" role="alert">{error}</p>}
   </div>
 }

@@ -3,7 +3,7 @@ import { dirname, join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { envNames, publicOrigin } from '../src/brand.js';
 
-// UI notes for agents: the notes Bane staff leave on the dashboard (⌘-click in notes mode), their screenshots, and
+// UI notes for agents: the notes Nightmail staff leave on the dashboard (⌘-click in notes mode), their screenshots, and
 // their status as they are fixed. It talks to the deployment's API with a UI notes key, which an operator makes on
 // /operator/notes (Agent keys) for themself: it reads notes and sets status, PR link and resolution, nothing else, and
 // stops working when it expires (at most 90 days), is revoked, or its operator loses the operator role.

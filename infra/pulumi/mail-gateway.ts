@@ -1,12 +1,11 @@
 import * as aws from "@pulumi/aws";
-import * as cf from "@pulumi/cloudflare";
 import * as pulumi from "@pulumi/pulumi";
 
 const ports = [993, 143, 465, 587];
 const healthPort = 8080;
 const cidr = "10.68.0.0/16";
 
-type Stage = { account: string; cloudflareAccountId: string; origin: string; legacyOrigin: string };
+type Stage = { account: string; origin: string; legacyOrigin: string };
 const hosts = { dev: ["dev.nightmail.dev", "dev.bane.mx"], production: ["nightmail.dev", "bane.mx"] };
 
 /** The stage's own API origin, which the gateway requires (it never falls back to another installation). */
@@ -18,8 +17,8 @@ function apiOrigin(stage: "dev" | "production", origin: string) {
   return url;
 }
 
-export function mailGateway(stage: "dev" | "production", { account, cloudflareAccountId, origin, legacyOrigin }: Stage,
-  config: pulumi.Config, ohio: aws.Provider, iam: aws.Provider, cloudflare: cf.Provider, tags: Record<string, string>, green = false) {
+export function mailGateway(stage: "dev" | "production", { account, origin, legacyOrigin }: Stage,
+  config: pulumi.Config, ohio: aws.Provider, iam: aws.Provider, tags: Record<string, string>, green = false) {
   const name = green ? 'nightmail-mail-gateway' : 'bane-mail-gateway';
   const api = apiOrigin(stage, green ? origin : legacyOrigin);
   const opts = { provider: ohio, protect: true };
@@ -30,9 +29,6 @@ export function mailGateway(stage: "dev" | "production", { account, cloudflareAc
   // The deploy reads the same committed flag: true binds the Worker's MAILGW_API_TOKEN (and fails
   // without it), false removes it. Tasks only run against a Worker that can authenticate them.
   const enabled = config.getBoolean("mailGatewayEnabled") ?? false;
-  // Production's mail hosts are imap. and smtp.nightmail.dev (api/wrangler.prod.jsonc MAILGW_PUBLIC_DOMAIN), outside the
-  // bane.mx zone this stack would write: their DNS is created by hand (gateway/PHASE2.md, production turn-on).
-  if (green && stage === 'production' && config.getBoolean('nightmailGatewayDns')) throw new Error('Production mail hosts are in the nightmail.dev zone: create imap.nightmail.dev and smtp.nightmail.dev by hand, not with bane:nightmailGatewayDns');
   if (desired > 0 && !enabled) throw new Error("Set bane:mailGatewayEnabled to true before scaling bane:mailGatewayDesired above 0");
   const image = config.get(green ? 'nightmailGatewayImage' : 'mailGatewayImage');
   const repoUrl = `${account}.dkr.ecr.us-east-2.amazonaws.com/${name}`;
@@ -149,11 +145,6 @@ export function mailGateway(stage: "dev" | "production", { account, cloudflareAc
   new aws.cloudwatch.MetricAlarm(`${name}-resets`, { ...alarm, name: `${name}-resets`, metricName: "TCP_ELB_Reset_Count",
     statistic: "Sum", threshold: 10, dimensions: { LoadBalancer: lb.arnSuffix } }, opts);
 
-  if (config.getBoolean(green ? 'nightmailGatewayDns' : 'mailGatewayDns') ?? false) {
-    const zone = api.hostname; // The stage's own API host's zone.
-    const zoneId = cf.getZoneOutput({ filter: { name: zone, account: { id: cloudflareAccountId } } }, { provider: cloudflare }).id;
-    for (const host of ["imap", "smtp"]) new cf.DnsRecord(`${name}-${host}`, { zoneId, name: `${host}.${zone}`,
-      type: "CNAME", content: lb.dnsName, proxied: false, ttl: 300 }, { provider: cloudflare, protect: true, dependsOn: [service] });
-  }
+  // imap/smtp DNS CNAME records are managed in anomalyco/platform (src/dns/).
   return lb.dnsName;
 }

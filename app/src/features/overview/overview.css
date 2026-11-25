@@ -14,9 +14,11 @@
 /* The range: a flat segmented switch, a solid control track with its selected segment a solid step off it (white on
    light, #3A3A3A on dark), no outline. It keeps no page bleed (ui.css gives a phone's tab strips one), so the 8px gap
    to the stream picker stays. */
-.ov-controls .ui-tabs { gap: 0; height: 28px; min-height: 0; margin: 0; padding: 2px; overflow: visible; border-radius: var(--radius-sm); background: var(--color-control); }
+.ov-controls .ui-tabs { gap: 0; height: var(--control-height); min-height: 0; margin: 0; padding: var(--space-2); overflow: visible; border-radius: var(--radius-sm); background: var(--color-control); }
 .ov-controls .ui-tabs__marker { display: none; }
-.ov-controls .ui-tab { height: 24px; min-width: 38px; padding: 0 var(--space-8); border-radius: 4px; font-family: var(--font-mono); font-size: var(--text-xs); transition: background var(--motion-duration) var(--ease-standard), color var(--motion-duration) var(--ease-standard); }
+.ov-controls .ui-tab { height: calc(var(--control-height) - 2 * var(--space-2)); min-width: 38px; padding: 0 var(--space-8); border-radius: var(--radius-xs); font-family: var(--font-mono); font-size: var(--text-xs); transition: background var(--motion-duration) var(--ease-standard), color var(--motion-duration) var(--ease-standard); }
+/* Each segment's hit area reaches the track's edges, so the whole track is the control's target (44px on touch). */
+.ov-controls .ui-tab::before { content: ''; position: absolute; inset: calc(-1 * var(--space-2)) 0; }
 .ov-controls .ui-tab[aria-selected='true'] { background: var(--color-segment); color: var(--color-text); }
 .ov-controls .ui-tab:focus-visible:not([aria-selected='true']) { background: var(--color-control-focus); }
 .ov-controls .ui-tab[aria-selected='true']:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
@@ -31,7 +33,7 @@
    figure (a rate names its limit beside it), and its buckets as sparkbars or, for a rate, a 20-cell gauge that ends at
    the limit. Hover and focus are a solid step. */
 .ov-kpis { display: grid; flex: none; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-8); padding: 0 var(--space-16); }
-.ov-kpi { display: flex; flex-direction: column; min-width: 0; height: 82px; padding: var(--space-12) var(--space-12) 10px; border-radius: var(--radius-sm); background: var(--color-well); color: inherit; text-decoration: none; }
+.ov-kpi { display: flex; flex-direction: column; min-width: 0; height: 82px; padding: var(--space-12) var(--space-12) var(--space-8); border-radius: var(--radius-sm); background: var(--color-well); color: inherit; text-decoration: none; }
 a.ov-kpi:focus-visible { background: var(--color-well-hover); text-decoration: none; }
 @media (hover: hover) and (pointer: fine) { a.ov-kpi:hover { background: var(--color-well-hover); } }
 .ov-kpi__head { display: flex; align-items: center; gap: var(--space-8); height: 14px; color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); line-height: 14px; letter-spacing: var(--tracking-label); text-transform: uppercase; white-space: nowrap; }
@@ -39,17 +41,17 @@ a.ov-kpi:focus-visible { background: var(--color-well-hover); text-decoration: n
 .ov-kpi__hint { position: relative; flex: 1; align-self: stretch; min-width: 0; color: var(--color-faint); letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
 .ov-kpi__hint > span { position: absolute; top: 0; left: 100%; transform: translateX(-100%); }
 .ov-kpi__value { display: flex; align-items: baseline; gap: var(--space-8); height: 28px; margin-top: var(--space-4); white-space: nowrap; }
-.ov-kpi__figure { color: var(--color-text); font-family: var(--font-mono); font-size: 22px; line-height: 28px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.ov-kpi__figure { color: var(--color-text); font-family: var(--font-mono); font-size: var(--text-figure); line-height: 28px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
 .ov-kpi__limit { color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); }
 .ov-kpi[data-zone='near'] .ov-kpi__figure { color: var(--color-warning); }
 .ov-kpi[data-zone='over'] .ov-kpi__figure { color: var(--color-danger); }
 .ov-kpi__spark { display: flex; align-items: flex-end; height: 14px; margin-top: auto; }
 .ov-kpi__spark--gauge { align-items: center; }
-.ov-kpi__spark--loading { display: block; height: 6px; margin-bottom: 4px; border-radius: 1px; background: var(--color-layer-2); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
+.ov-kpi__spark--loading { display: block; height: 6px; margin-bottom: var(--space-4); border-radius: var(--radius-2xs); background: var(--color-layer-2); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
 .ov-columns { display: block; width: 100%; height: 14px; }
 .ov-columns--sent rect { fill: var(--color-accent-data); }
 .ov-columns--delivered rect { fill: var(--color-success-marker); }
-.ov-gauge { display: grid; flex: 1; grid-template-columns: repeat(20, minmax(0, 1fr)); gap: 2px; height: 6px; }
+.ov-gauge { display: grid; flex: 1; grid-template-columns: repeat(20, minmax(0, 1fr)); gap: var(--space-2); height: 6px; }
 .ov-gauge > i { background: var(--color-tick); }
 .ov-gauge > i[data-on] { background: var(--color-accent-data); }
 .ov-gauge[data-zone='near'] > i[data-on] { background: var(--color-warning-marker); }
@@ -72,8 +74,8 @@ a.ov-kpi:focus-visible { background: var(--color-well-hover); text-decoration: n
 .ov-rail-section { display: flex; flex-direction: column; gap: var(--space-4); }
 .ov-rail-section > .ov-label { display: flex; align-items: center; height: 24px; }
 .ov-split__aside .next-steps { gap: var(--space-4); }
-.ov-split__aside .next-steps a { min-height: 34px; font-size: var(--text-md); }
-.ov-split__aside .next-steps a .muted { font-family: var(--font-mono); font-size: var(--text-label); }
+.ov-split__aside .next-steps li > a { min-height: 34px; font-size: var(--text-md); }
+.ov-split__aside .next-steps li > a .muted { font-family: var(--font-mono); font-size: var(--text-label); }
 .ov-campaigns__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); height: 24px; }
 .ov-campaigns__head .ui-button { margin-inline-end: calc(-1 * var(--button-pad-x)); }
 /* The standing (Warn and up) leads the rail as a section in its tone's words, not a tinted card. */
@@ -121,8 +123,8 @@ a.ov-kpi:focus-visible { background: var(--color-well-hover); text-decoration: n
 :root:not([data-theme='dark']) .ov-activity .ov-end--bounces { fill: var(--color-warning); }
 :root:not([data-theme='dark']) .ov-activity .ov-end--complaints { fill: var(--color-danger); }
 /* The readout beside the crosshair: a small overlay, a solid elevated surface on a soft drop, no edge line. */
-.ov-readout { position: absolute; top: 0; z-index: 2; display: grid; gap: 2px; padding: var(--space-6) var(--space-8) var(--space-8); border: 0; border-radius: var(--radius-xs); background: var(--color-overlay-surface); box-shadow: var(--shadow-popover); font-size: var(--text-xs); line-height: 16px; pointer-events: none; }
-.ov-readout strong { margin-bottom: 2px; color: var(--color-text); font-family: var(--font-mono); font-size: var(--text-label); font-weight: 400; }
+.ov-readout { position: absolute; top: 0; z-index: 2; display: grid; gap: var(--space-4); padding: var(--space-6) var(--space-8) var(--space-8); border: 0; border-radius: var(--radius-xs); background: var(--color-overlay-surface); box-shadow: var(--shadow-popover); font-size: var(--text-xs); line-height: 16px; pointer-events: none; }
+.ov-readout strong { color: var(--color-text); font-family: var(--font-mono); font-size: var(--text-label); font-weight: 400; }
 .ov-readout span { display: flex; align-items: center; gap: var(--space-8); color: var(--color-muted); }
 .ov-readout i { flex: none; width: 6px; height: 6px; }
 .ov-readout b { display: flex; gap: var(--space-8); margin-left: auto; color: var(--color-text); font-family: var(--font-mono); font-weight: 400; font-variant-numeric: tabular-nums; }
@@ -144,7 +146,7 @@ a.ov-kpi:focus-visible { background: var(--color-well-hover); text-decoration: n
   .ov-latest .ui-section-header, .ov-campaigns__head { height: 44px; margin-bottom: 0; }
   :is(.ov-latest .ui-section-header, .ov-campaigns__head) .ui-button { height: 44px; }
   .ov-legend { gap: var(--space-12); }
-  .ov-readout { padding: var(--space-6) var(--space-8) var(--space-8); gap: 2px; font-size: 11px; }
+  .ov-readout { font-size: var(--text-label); }
   .ov-readout span { gap: var(--space-6); }
   .ov-readout em { min-width: 34px; }
 }
@@ -167,8 +169,7 @@ a.ov-kpi:focus-visible { background: var(--color-well-hover); text-decoration: n
    their own row, the wells sit inside the margins, and the range segments grow to 44px targets. */
 @media (max-width: 899px) {
   .ui-page-header.ov-strip { flex-wrap: wrap; height: auto; min-height: 0; margin-bottom: var(--space-12); padding: 0; }
-  .ov-controls .ui-tabs { height: 44px; }
-  .ov-controls .ui-tab { height: 40px; min-width: 44px; }
+  .ov-controls .ui-tab { min-width: 44px; }
   .ov-kpis { padding: 0; }
   .ov-lead { padding-inline: 0; }
   .ov-split { padding: var(--space-8) 0 0; }

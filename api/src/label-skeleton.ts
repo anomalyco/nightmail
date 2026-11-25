@@ -1,0 +1,2 @@
+const confusables:Record<string,string> = { '0':'o','1':'l','3':'e','4':'a','5':'s','7':'t','а':'a','α':'a','е':'e','ε':'e','і':'i','ι':'i','ӏ':'l','о':'o','ο':'o','р':'p','ρ':'p','с':'c','ѕ':'s','т':'t','у':'y','х':'x','ν':'v','к':'k','м':'m' };
+export const labelSkeleton = (value:string) => value.toLowerCase().normalize('NFKD').replace(/\p{M}/gu,'').replace(/./gu,c=>confusables[c]??c).replace(/rn/g,'m');

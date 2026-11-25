@@ -228,6 +228,7 @@ export class SupportPlatform extends WorkerEntrypoint {
     const answer = url.pathname === '/v1/support/context' ? contextOf(c) : url.pathname === '/v1/support/audit' ? { data: activityOf(c), nextCursor: null } : READS[url.pathname];
     return answer ? ok(answer) : refuse(404, 'NOT_FOUND');
   }
+  async verifyWake(token, id) { return token === 'fixture-wake-' + id; }
   async verifyHandoff(token) { calls.push(['verifyHandoff', token]); const h = handoff(token); if (h?.shareContent) shared.add(h.id); return h ? { ok: true, handoff: h } : { ok: false, code: 'HANDOFF_INVALID' }; }
   async mirrorMessages(id, messages) {
     calls.push(['mirrorMessages', id, messages.map(m => m.id)]);

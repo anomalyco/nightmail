@@ -1,4 +1,4 @@
-import { baneApi } from './bane.js';
+import { nightmailApi } from './nightmail.js';
 import type { Env } from './env.js';
 import { addressHash } from './tokens.js';
 import { log, logError } from './log.js';
@@ -142,7 +142,7 @@ export async function notice(env: Env, key: string, email: { subject: string; te
 
 async function sendNotice(env: Env, key: string, request: Notice, attempts: number) {
   try {
-    await baneApi(env).startThread(request, key);
+    await nightmailApi(env).startThread(request, key);
     await env.DB.prepare('UPDATE support_notices SET sent_at = ?, attempts = ?, last_error = NULL WHERE key = ?').bind(Date.now(), attempts + 1, key).run();
   } catch (error) {
     logError(error, { event: 'notice', code: 'SUPPORT_NOTICE_FAILED', attempt: attempts + 1 });

@@ -1,7 +1,8 @@
 .campaign-sender { position: relative; min-width: 0; width: 100%; }
 /* Match the shared popover (no edge, a soft drop) so the From suggestions and the To list read as one family of menus. */
 .campaign-sender-options { position: absolute; z-index: 90; display: flex; flex-direction: column; inset-inline: 0; top: calc(100% + var(--space-4)); max-height: min(280px, 40vh); padding: var(--space-4); background: var(--campaign-menu-surface, var(--color-overlay-surface)); color: var(--campaign-menu-text, var(--color-text)); border: 0; border-radius: var(--radius-md); box-shadow: var(--shadow-popover); animation: ui-appear var(--motion-duration) ease-out; }
-.campaign-sender-error { top: auto; bottom: calc(100% + var(--space-4)); color: var(--color-danger); padding: var(--space-6) var(--space-8); font-size: var(--text-xs); line-height: var(--leading-xs); }
+/* Its problem, on the line under the field (a caller with rows of its own, the campaign's header, says it under the row). */
+.campaign-sender-error { margin: var(--space-8) 0 0; }
 .campaign-sender-option { display: flex; align-items: center; width: 100%; min-height: var(--control-height); padding: var(--space-6) var(--space-8); border: 0; border-radius: var(--radius-sm); background: transparent; color: inherit; font: inherit; line-height: var(--leading-sm); text-align: left; white-space: normal; overflow-wrap: anywhere; cursor: pointer; }
 .campaign-sender-option[aria-selected='true'] { background: var(--campaign-menu-hover, var(--color-hover)); }
 .campaign-sender-mask { display: flex; align-items: center; cursor: text; overflow: hidden; }
@@ -12,7 +13,7 @@
 .campaign-sender-mask, .campaign-sender-mask:hover { background: transparent; }
 /* A sender as name over address: each line stays one line; a long address ends in an ellipsis instead of breaking. */
 .sender-lines { display: inline-flex; flex-direction: column; min-width: 0; max-width: 100%; vertical-align: top; }
-.sender-lines--inline { flex-direction: row; align-items: baseline; gap: .3em; }
+.sender-lines--inline { flex-direction: row; align-items: baseline; gap: var(--space-4); }
 .sender-lines__name { min-width: 0; overflow: clip; text-overflow: ellipsis; white-space: nowrap; }
 .sender-lines--inline .sender-lines__name { flex: none; }
 .sender-lines__address { display: flex; min-width: 0; color: var(--color-muted); }

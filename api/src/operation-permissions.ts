@@ -20,8 +20,10 @@ export type OperationPermission = {
    * What the credential's limits must cover. workspace: the whole workspace, so a key limited to sender domains or to
    * addresses is refused. domain: the sender domain the request names or the resource has (a domain-limited key sees
    * its own). address: the receiving address or inbox, for a key limited to addresses or a workspace-wide one.
+   * recipient: received mail, for a key limited to the address it reached, a key limited to sender domains with read
+   * (mail addressed to those domains: core.ts domainMailAccess) or a workspace-wide one.
    */
-  scope?: 'workspace' | 'domain' | 'address';
+  scope?: 'workspace' | 'domain' | 'address' | 'recipient';
   /**
    * With a permission: the role a signed-in person needs, so a workspace member is refused (keys are judged by the
    * permission). Alone: the operation is a person's, never a key's or an agent token's. any: every member. A level beside
@@ -59,6 +61,8 @@ const rulesRead = needs('receivingRules', 'read', 'workspace', admin), rulesChan
 // Receiving hosts, domains and scan policy answer only an unrestricted manage credential, reads included.
 const hostsRead = needs('receivingRules', 'write', 'workspace', admin), hostsChange = rulesChange;
 const mailRead = needs('receivedMail', 'read', 'address'), mailChange = needs('receivedMail', 'write', 'address', admin);
+// The received mail a key limited to sender domains also reads, when addressed to them (core.ts domainMailAccess).
+const recipientRead = needs('receivedMail', 'read', 'recipient');
 
 export const OPERATION_PERMISSIONS: Record<string, OperationPermission> = {
   // MCP connections and agents: the person's own, in the dashboard.
@@ -149,10 +153,10 @@ export const OPERATION_PERMISSIONS: Record<string, OperationPermission> = {
   // Receiving addresses, conversations and received mail.
   listInboundAddresses: needs('inboxes', 'read', 'address'), createInboundAddress: needs('inboxes', 'write', 'workspace', admin), getInboundAddress: needs('inboxes', 'read', 'address'),
   updateInboundAddress: needs('inboxes', 'write', 'workspace', admin), deleteInboundAddress: needs('inboxes', 'write', 'workspace', admin), setInboundAddressFlow: rulesChange,
-  listInboundThreads: mailRead, createInboundThread: needs('sendEmail', 'on', 'address'), getInboundThread: mailRead, updateInboundThread: mailChange,
-  listInboundMessages: mailRead, getInboundMessage: mailRead, getInboundAttachment: mailRead, downloadInboundAttachment: mailRead,
+  listInboundThreads: recipientRead, createInboundThread: needs('sendEmail', 'on', 'address'), getInboundThread: recipientRead, updateInboundThread: mailChange,
+  listInboundMessages: recipientRead, getInboundMessage: recipientRead, getInboundAttachment: recipientRead, downloadInboundAttachment: recipientRead,
   listLogs: needs('sentMail', 'read', 'domain'), getInboundOverview: needs('inboxes', 'read', 'address'), listInboundEndpoints: hostsRead,
-  replyToInboundThread: needs('sendEmail', 'on', 'address'), listInboundEvents: mailRead,
+  replyToInboundThread: needs('sendEmail', 'on', 'address'), listInboundEvents: recipientRead,
   // Inbound webhooks.
   createInboundWebhook: needs('configuration', 'write', 'workspace', adminLasting), listInboundWebhooks: needs('configuration', 'read', 'workspace', { person: 'admin', delegatedLevel: 'write' }),
   getInboundWebhook: needs('configuration', 'read', 'workspace', { person: 'admin', delegatedLevel: 'write' }), updateInboundWebhook: needs('configuration', 'write', 'workspace', adminLasting),
@@ -174,7 +178,7 @@ export const OPERATION_PERMISSIONS: Record<string, OperationPermission> = {
   updateBillingAutoRecharge: people('admin', 'dashboard'), createBillingCardSetup: people('admin', 'dashboard'), deleteBillingPaymentMethod: people('admin', 'dashboard'),
 };
 
-const WHERE = { workspace: ' on the whole workspace', domain: ' for the sender domain', address: ' for the address or inbox' } as const;
+const WHERE = { workspace: ' on the whole workspace', domain: ' for the sender domain', address: ' for the address or inbox', recipient: ' for the address it reached, or a sender domain it was addressed to' } as const;
 const WHO = { any: 'any member', admin: 'an owner or admin', owner: 'an owner' } as const;
 /** The sentence the docs and describe_tool show for a row. */
 export function permissionText(row: OperationPermission): string {

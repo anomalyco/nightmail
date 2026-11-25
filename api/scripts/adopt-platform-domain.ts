@@ -40,7 +40,7 @@ function membership(client: SESv2Client, arn: string) {
 }
 
 // No API endpoint. The platform domain's SES identity (PUBLIC_URL's host) was created by hand before any claim, so it
-// has no bane:domain-claim tag: Bane never creates, changes or deletes it, and the runtime IAM policy can't either.
+// has no bane:domain-claim tag: Nightmail never creates, changes or deletes it, and the runtime IAM policy can't either.
 // This operator tool attests it for the one workspace named by NIGHTMAIL_PLATFORM_DOMAIN_WORKSPACE, associates it with
 // that workspace's Ohio tenant and records the adoption. A dry run prints the identity's fingerprint; --apply needs
 // that reviewed fingerprint and refuses anything else. Run both again after any deliberate change to the identity
@@ -54,7 +54,7 @@ export async function adoptPlatformDomain(db: Client, client: SESv2Client, wid: 
     const s = await client.send(new GetEmailIdentityCommand({ EmailIdentity: name }));
     if (s.IdentityType !== 'DOMAIN' || s.DkimAttributes?.SigningAttributesOrigin !== 'AWS_SES' || new Set(s.DkimAttributes.Tokens).size !== 3) throw new Error('Expected an Easy DKIM domain identity.');
     if (s.Tags?.some(t => t.Key === 'bane:domain-claim')) throw new Error('A domain claim created this identity; it is not the operator’s platform identity.');
-    // A sending authorization policy lets another principal send as the domain outside Bane entirely.
+    // A sending authorization policy lets another principal send as the domain outside Nightmail entirely.
     if (Object.keys(s.Policies ?? {}).length) throw new Error(`Remove the identity's sending authorization policies first: ${Object.keys(s.Policies!).sort().join(', ')}.`);
     return s;
   };

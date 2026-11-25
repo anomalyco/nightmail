@@ -1,20 +1,20 @@
-# OpenSend MX plan
+# Nightmail plan
 
-OpenSend MX is the hosted, multi-tenant OpenSend at `https://opensend.mx`. It behaves like the real customer product from day one; a sign-up allowlist (`anoma.ly` for now) is the only gate. Billing is out of scope. The research behind this plan is in [`research/`](research/) (Nov 3, 2026); this file is the current decision record and wins where they disagree.
+This is the plan for hosted, multi-tenant Nightmail, first launched at `https://opensend.mx`. It behaves like the real customer product from day one; a sign-up allowlist (`anoma.ly` for now) is the only gate. Billing is out of scope. The research behind this plan is in [`research/`](research/) (Nov 3, 2026); this file is the current decision record and wins where they disagree.
 
 ## Principles
 
 - **Customer product, not our install.** Nothing Anomaly-specific in code; deployment settings live in the GitHub `mx` environment.
 - **Few moving parts and few database round trips.** Prefer one set-based statement over caches or new services.
-- **The product manages AWS.** Shared sending runs on one IAM key that OpenSend uses to provision and monitor everything itself. Bring-your-own AWS uses a CloudFormation role OpenSend assumes. No IaC or console work for either.
+- **The product manages AWS.** Shared sending runs on one IAM key that Nightmail uses to provision and monitor everything itself. Bring-your-own AWS uses a CloudFormation role Nightmail assumes. No IaC or console work for either.
 - **Self-hosting keeps working.** The `default` workspace, `DEFAULT_WORKSPACE_OWNERS` and the single AWS key in env remain the single-tenant path; MX bypasses the first two.
 
 ## Customer flow
 
 1. **Sign up** with the configured issuer (invitation or allowlisted verified address). Invitees join the inviting workspace; everyone else gets a new workspace named after them ("Ryan Vogel's Organization", editable) and is its owner.
 2. **"How do you want to send?"**
-   - **Bring your own AWS:** create one CloudFormation stack. Its signed SNS callback identifies the account; OpenSend verifies the external-ID role and imports available verified domains. You pay AWS directly.
-   - **OpenSend shared sending:** $0.11 per 1,000 emails (displayed only; no billing yet). us-east-2 now, eu-west-1 later.
+   - **Bring your own AWS:** create one CloudFormation stack. Its signed SNS callback identifies the account; Nightmail verifies the external-ID role and imports available verified domains. You pay AWS directly.
+   - **Nightmail shared sending:** $0.11 per 1,000 emails (displayed only; no billing yet). us-east-2 now, eu-west-1 later.
 3. **Add a domain:** DKIM, MAIL FROM and an `_opensend` TXT ownership record, checked automatically.
 4. **Create an API key and send.** Test mode works immediately.
 5. **Invite teammates** as owner, admin or member.
@@ -27,7 +27,7 @@ OpenSend MX is the hosted, multi-tenant OpenSend at `https://opensend.mx`. It be
 
 | # | Step | Done when |
 |---|---|---|
-| 1 | **Real sign-up and workspaces.** The allowlist gates only uninvited sign-up; requests and sends are authorized by membership. New workspace per sign-up; invites; Bane’s owner/admin/member roles enforced in the API, MCP and dispatch; workspace switcher. | Two allowlisted users get isolated workspaces; an invited teammate joins as admin or member. |
+| 1 | **Real sign-up and workspaces.** The allowlist gates only uninvited sign-up; requests and sends are authorized by membership. New workspace per sign-up; invites; Nightmail’s owner/admin/member roles enforced in the API, MCP and dispatch; workspace switcher. | Two allowlisted users get isolated workspaces; an invited teammate joins as admin or member. |
 | 2 | **Onboarding choice.** `provider_connections` (shared or bring-your-own). Shared: two shared configuration sets per region and a lazily created SES tenant per workspace (Strict policy, tenant suppression). Bring-your-own: CloudFormation quick-create, `sts:AssumeRole` check, unique AWS account, then the existing provisioning. | A new workspace reaches "ready" either way. |
 | 3 | **Connection-aware sending.** Exclusive claims cannot overlap across workspaces. Shared requires TXT proof and never adopts existing identities. BYO imports identities read-only for its account and region; SES verification and successful DKIM permit sending, not exclusive ownership. Publishing the claim’s `_opensend` TXT and verifying upgrades it to an exclusive claim if no exclusive owner overlaps. Disconnect forgets account-scoped imports. `TenantName` on shared sends; dispatcher shards and SNS trust are keyed by AWS account and region. | Shared and bring-your-own workspaces both send live and get feedback without interfering. |
 | 4 | **Inbound and webhooks across workspaces.** Remove the remaining hardcoded workspace reads; split shared receipts by recipient domain owner; per-workspace webhook destinations with a self-origin denylist. | Inbound and webhooks work across two workspaces. |

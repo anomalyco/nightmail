@@ -5,8 +5,11 @@
  *
  * Bane became Nightmail (nightmail.dev). The hosted service is on nightmail.dev; bane.mx, its earlier domain, is in
  * `previousDomains` and stays served (API, SNS feedback, unsubscribe links; GETs redirect). A name a customer may already
- * have (key prefix, DNS proof, header, scope, cookie) stays accepted until the cutover, which removes them all at once
- * (each site is marked "remove after rename cleanup"). Infrastructure names (Workers, buckets, SES resources) are not here.
+ * have (key prefix, DNS proof, header, scope, cookie) stays accepted, also after the domain cutover (Ryan's decision,
+ * 2026-11-25: keep accepting, stop emitting). The cutover stops emitting the old names that still go out: the Bane-Test
+ * webhook header, the bane_record receiving issue code (a public enum value: give it a deprecation window) and bane:* as
+ * the default OAuth scope prefix. Sites are marked "remove after rename cleanup". Infrastructure names (Workers, buckets,
+ * SES resources) are not here.
  */
 export const productName = 'Nightmail';
 /** Lowercase, for identifiers. */
@@ -21,6 +24,11 @@ export const hostedDomain = 'nightmail.dev';
 /** Domains the hosted service answered on before `hostedDomain`, still served. */
 export const previousDomains: readonly string[] = ['bane.mx'];
 export const servedDomains: readonly string[] = [hostedDomain, ...previousDomains];
+/** The hosted service's customer link hosts (api/src/link-domains.ts): each sending domain's links.<domain> is a CNAME to
+ *  this name, in a Cloudflare for SaaS zone of its own that carries nothing else (no mail, no other site). */
+export const linkHostTarget = 'cname.nightmailedge.com';
+/** Hosted's link domain (NIGHTMAIL_LINK_HOST in wrangler.prod.jsonc): the links in campaign and marketing mail go here. */
+export const linkDomain = 'links.nightmailedge.com';
 /** Every dashboard and API host of the hosted service: production and dev, on each served domain. */
 export const hostedHosts: readonly string[] = servedDomains.flatMap(domain => [domain, `dev.${domain}`]);
 /** The support Worker's host beside a dashboard host (support.nightmail.dev, support.dev.nightmail.dev). */
@@ -28,7 +36,7 @@ export const supportHost = (host: string) => `support.${host}`;
 
 /**
  * The hosted origin. A running installation uses its own: PUBLIC_URL in the API, VITE_PUBLIC_URL or the page's origin
- * in the dashboard, BANE_ORIGIN in the support Worker. This is their default and the origin examples are written for.
+ * in the dashboard, NIGHTMAIL_ORIGIN in the support Worker. This is their default and the origin examples are written for.
  */
 export const publicOrigin = `https://${hostedDomain}`;
 export const docsUrl = `${publicOrigin}/docs`;
@@ -110,10 +118,9 @@ export const loopHeaderNames = requestHeaderNames('loop');
  * each DNS provider again, so list it before the current one until providers have it. */
 export const domainConnectProviderIds = ['nightmail.dev'] as const;
 
-// ---------- Earlier public names, accepted until the domain cutover (remove after rename cleanup) ----------
+// ---------- Earlier public names, still accepted (remove after rename cleanup) ----------
 // Only the names above are emitted. Each one here is still accepted where a customer, a stored row or a deployment
-// may use it. The cutover deletes this section (and the other "remove after rename cleanup" sites) and fixes each site
-// the compiler then names.
+// may use it, and stays accepted after the domain cutover; the cutover only stops emitting old names (see the top).
 
 /** Environment variable prefixes before NIGHTMAIL_, newest first. The server's own settings also took MX_. */
 export const legacyEnvPrefixes = ['BANE_'] as const, legacySettingPrefixes = ['BANE_', 'MX_'] as const;

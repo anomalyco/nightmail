@@ -6,7 +6,7 @@
 .developer-url > .cluster { flex-shrink: 0; }
 /* Icon-only actions: small mark, 40px hit area from a pseudo-element, so nothing around it moves. */
 .developer-icon-actions { display: flex; align-items: center; gap: var(--space-16); }
-.ui-button.developer-copy-icon { position: relative; display: inline-grid; place-items: center; padding: 0; width: 24px; height: 24px; flex-shrink: 0; color: var(--color-muted); }
+.ui-button.developer-copy-icon { position: relative; display: inline-grid; place-items: center; padding: 0; width: var(--control-height-sm); height: var(--control-height-sm); flex-shrink: 0; color: var(--color-muted); }
 .ui-button.developer-copy-icon::before { content: ''; position: absolute; inset: -8px; }
 .developer-copy-icon .copy-action__icon svg { width: 14px; height: 14px; }
 .developer-copy-icon[data-copied] { color: var(--color-success); }
@@ -19,9 +19,9 @@
 .developer-steps { margin: 0; padding-inline-start: var(--space-24); max-width: 72ch; }
 .developer-steps li + li { margin-top: var(--space-12); }
 .developer-steps code { overflow-wrap: anywhere; }
-@media (max-width: 640px) { .ui-button.developer-copy-icon::before { inset: -10px; } .first-send-test .ui-button { min-height: 44px; } .developer-icon-actions { gap: 20px; } }
+@media (max-width: 640px) { .ui-button.developer-copy-icon::before { inset: -10px; } .first-send-test .ui-button { min-height: 44px; } .developer-icon-actions { gap: var(--space-20); } }
 @media (max-width: 560px) {
-  .developer-access .ui-select-trigger { min-height: 44px; font-size: 16px; }
+  .developer-access .ui-select-trigger { min-height: 44px; font-size: var(--text-lg); }
   .developer-code { padding: var(--space-12); font-size: var(--text-xs); white-space: pre; overflow: auto; }
 }
 .developer-client-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-width: 0; }
@@ -35,10 +35,10 @@
 .first-send-test { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-12); }
 /* Copy sits at the top-right of the code it copies. */
 .developer-snippet { position: relative; min-width: 0; }
-.developer-snippet > .developer-code { padding-right: 48px; }
+.developer-snippet > .developer-code { padding-right: calc(var(--space-8) + var(--control-height-sm) + var(--space-16)); }
 /* A config never breaks a key or URL across lines; it scrolls instead. */
 .developer-snippet > .developer-code:not(.developer-code--wrap) { white-space: pre; overflow-x: auto; overflow-wrap: normal; }
-.ui-button.developer-snippet__copy { position: absolute; top: 8px; right: 8px; }
+.ui-button.developer-snippet__copy { position: absolute; top: var(--space-8); right: var(--space-8); }
 /* Wider on desktop for the configs; on a phone it stays the full-width bottom sheet. */
 @media (min-width: 641px) { .ui-dialog.connect-agent-dialog { width: min(640px, calc(100vw - 32px)); } }
 .connect-agent__empty { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: var(--space-8) var(--space-12); font-size: var(--text-sm); }

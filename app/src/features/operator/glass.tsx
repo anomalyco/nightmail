@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Link } from 'react-router'
-import { BadgeCheck, CirclePause, Globe, Megaphone, Send, ShieldAlert, ShieldCheck, TriangleAlert, UserPlus, ZapOff, type LucideIcon } from 'lucide-react'
+import { Link, useLocation, useNavigate } from 'react-router'
+import { BadgeCheck, CirclePause, Globe, Link2, Megaphone, Send, ShieldAlert, ShieldCheck, TriangleAlert, UserPlus, ZapOff, type LucideIcon } from 'lucide-react'
 import { ErrorState, PageHeader, StatusBadge, Tooltip, type Tone } from '../../components/ui'
 import { useTween } from '../../components/motion'
 import { PrivateAddress } from '../../components/PrivateAddress'
@@ -10,7 +10,8 @@ import { ApiError } from '../../data/types'
 import { usd } from '../../data/billing'
 import { operatorApi, type Glass, type GlassCount, type GlassEvent, type GlassGrade, type GlassRegion } from '../../data/operator'
 import { ago, number, percent, time } from '../../lib/format'
-import { GLASS_EVENT_HEIGHT, GlassAsOf, GlassBoard, StaffOnly, type GlassBoardFill, type GlassFill, type GlassRegionFill, type GlassTileFill } from './skeletons'
+import { DeliverabilityView, useDeliverability } from './deliverability'
+import { GLASS_EVENT_HEIGHT, GlassAsOf, GlassBoard, GlassTabs, glassView, StaffOnly, type GlassBoardFill, type GlassFill, type GlassRegionFill, type GlassTileFill } from './skeletons'
 
 // Glass (/glass): a live board of everything going on in Nightmail, for operators only (anyone else gets the app's "Page
 // not found", and the API the refusal of an operator path that doesn't exist). The figures are one read
@@ -24,9 +25,9 @@ const BOUNCE_LINE = 0.05, COMPLAINT_LINE = 0.001
 // A count that stopped at its cap reads "more than": the + says so on hover or focus.
 const count = (c: GlassCount, why: string) => c.atLeast ? <Tooltip content={`More than ${number(c.n)}: ${why}`}><span className="glass-more" tabIndex={0}>{number(c.n)}+</span></Tooltip> : number(c.n)
 const share = (part: number, whole: number) => whole > 0 ? part / whole : 0
-const rateText = (rate: number) => rate > 0 && rate < 0.0001 ? percent(rate, 3) : percent(rate)
+export const rateText = (rate: number) => rate > 0 && rate < 0.0001 ? percent(rate, 3) : percent(rate)
 const compact = (n: number) => new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 }).format(n)
-const since = (at: string | null) => { const text = ago(at); return text === null ? null : text === '0m' ? 'just now' : `${text} ago` }
+export const since = (at: string | null) => { const text = ago(at); return text === null ? null : text === '0m' ? 'just now' : `${text} ago` }
 const zone = (rate: number, line: number): Tone | undefined => rate >= line ? 'danger' : rate >= line / 2 ? 'warning' : undefined
 const health: Record<Glass['system']['status'], [string, Tone]> = { ok: ['OK', 'success'], warning: ['Warning', 'warning'], critical: ['Critical', 'danger'], stale: ['Not measured', 'danger'] }
 const empty = (shown: boolean, text: string): GlassFill => ({ label: shown ? text : '', value: '', empty: true })
@@ -34,22 +35,25 @@ const sum = (values: readonly number[]) => values.reduce((total, n) => total + n
 const plural = (n: number, one: string, many = `${one}s`) => `${number(n)} ${n === 1 ? one : many}`
 
 /** A figure that counts from its last value to its new one; the box is the tile's, so its width never moves anything. */
-function Tick({ value, format = n => number(Math.round(n)) }: { value: number; format?: (n: number) => ReactNode }) {
+export function Tick({ value, format = n => number(Math.round(n)) }: { value: number; format?: (n: number) => ReactNode }) {
   return <>{format(useTween(value, 600))}</>
 }
 /** The change from the 24 hours before: + or − and a percentage (a rate: percentage points), in the colour of how it went. */
-function delta(last: number, previous: number, good: 'up' | 'down' | null, what: string): GlassTileFill['delta'] {
+/** The words a change's title puts after its two figures. */
+export type Periods = readonly [current: string, previous: string]
+const DAY: Periods = ['in the last 24 hours', 'in the 24 before']
+export function delta(last: number, previous: number, good: 'up' | 'down' | null, what: string, periods: Periods = DAY): GlassTileFill['delta'] {
   if (!last && !previous) return undefined
-  const title = `${number(last)} in the last 24 hours, ${number(previous)} in the 24 before`
+  const title = `${number(last)} ${periods[0]}, ${number(previous)} ${periods[1]}`
   if (!previous) return { text: 'new', tone: good === 'up' ? 'success' : good === 'down' ? 'danger' : 'neutral', title: `${what}: ${title}` }
   const change = (last - previous) / previous, flat = Math.abs(change) < 0.005
   return { text: flat ? '±0%' : `${change > 0 ? '+' : '−'}${percent(Math.abs(change), Math.abs(change) < 0.1 ? 1 : 0)}`, title: `${what}: ${title}`,
     tone: flat || !good ? 'neutral' : (change > 0) === (good === 'up') ? 'success' : 'danger' }
 }
-function points(last: number, previous: number, good: 'up' | 'down', what: string, hadMail: boolean): GlassTileFill['delta'] {
+export function points(last: number, previous: number, good: 'up' | 'down', what: string, hadMail: boolean, periods: Periods = DAY): GlassTileFill['delta'] {
   if (!hadMail) return undefined
   const change = (last - previous) * 100, flat = Math.abs(change) < 0.005
-  return { text: flat ? '±0 pt' : `${change > 0 ? '+' : '−'}${Math.abs(change).toFixed(Math.abs(change) < 1 ? 2 : 1)} pt`, title: `${what}: ${rateText(last)} in the last 24 hours, ${rateText(previous)} in the 24 before`,
+  return { text: flat ? '±0 pt' : `${change > 0 ? '+' : '−'}${Math.abs(change).toFixed(Math.abs(change) < 1 ? 2 : 1)} pt`, title: `${what}: ${rateText(last)} ${periods[0]}, ${rateText(previous)} ${periods[1]}`,
     tone: flat ? 'neutral' : (change > 0) === (good === 'up') ? 'success' : 'danger' }
 }
 
@@ -163,7 +167,7 @@ function board(g: Glass): GlassBoardFill {
 const FEED = 50
 const methods: Record<string, string> = { google: 'Google', github: 'GitHub', email: 'Email link', password: 'Password' }
 const icons: Record<GlassEvent['kind'], LucideIcon> = { signup: UserPlus, first_send: Send, domain_verified: BadgeCheck, builtin_ready: Globe, campaign_launched: Megaphone, campaign_paused: CirclePause,
-  standing: ShieldAlert, breaker: ZapOff, alert: TriangleAlert }
+  standing: ShieldAlert, breaker: ZapOff, alert: TriangleAlert, link_fallback: Link2 }
 const stepNames: Record<string, string> = { ok: 'back to OK', notice: 'on notice', warn: 'warned', restrict: 'restricted', pause: 'paused' }
 function eventText(e: GlassEvent): [ReactNode, ReactNode] {
   const who = <b>{e.workspace?.name ?? 'A new account'}</b>
@@ -179,13 +183,14 @@ function eventText(e: GlassEvent): [ReactNode, ReactNode] {
     case 'standing': { const [from, to] = (e.detail ?? '').split('>'); return [<>{who} {stepNames[to ?? ''] ?? to}</>, [`was ${from === 'ok' ? 'OK' : stepNames[from ?? '']?.replace('back to ', '') ?? from}`, e.subject].filter(Boolean).join(' · ')] }
     case 'breaker': return [<><b>Built-in domains</b> stopped</>, `${e.subject} breaker tripped`]
     case 'alert': return [<b>{e.subject}</b>, e.detail]
+    case 'link_fallback': return [<>{who} linked on the link domain</>, [e.subject, e.detail && `${plural(Number(e.detail), 'recipient')} today`].filter(Boolean).join(' · ')]
   }
 }
 const order = (a: GlassEvent, b: GlassEvent) => a.at < b.at ? 1 : a.at > b.at ? -1 : a.id < b.id ? 1 : a.id > b.id ? -1 : 0
-function useActivity() {
+function useActivity(enabled: boolean) {
   const [state, setState] = useState<{ events: GlassEvent[]; fresh: Set<string> }>()
   const newest = useRef<string>(undefined)
-  const query = useQuery({ queryKey: ['operator', 'glass', 'activity'], queryFn: ({ signal }) => operatorApi.glassActivity(newest.current, signal), staleTime: 0, gcTime: 0,
+  const query = useQuery({ queryKey: ['operator', 'glass', 'activity'], queryFn: ({ signal }) => operatorApi.glassActivity(newest.current, signal), staleTime: 0, gcTime: 0, enabled,
     refetchInterval: current => refused(current.state.error) ? false : POLL_MS, refetchIntervalInBackground: false })
   useEffect(() => {
     if (!query.data) return
@@ -218,14 +223,21 @@ export function GlassPage() {
   return operator ? <GlassView /> : <StaffOnly />
 }
 function GlassView() {
+  const { search } = useLocation(), navigate = useNavigate(), view = glassView(search)
   // A failed refresh (the app retries nothing) keeps the last figures and tries again in 5 s; only a refusal stops it.
-  const query = useQuery({ queryKey: ['operator', 'glass'], queryFn: ({ signal }) => operatorApi.glass(signal), staleTime: POLL_MS - 1_000,
+  // The live reads run while the live board is shown; the Deliverability board has its own (./deliverability).
+  const query = useQuery({ queryKey: ['operator', 'glass'], queryFn: ({ signal }) => operatorApi.glass(signal), staleTime: POLL_MS - 1_000, enabled: view === 'live',
     refetchInterval: current => refused(current.state.error) ? false : POLL_MS, refetchIntervalInBackground: false })
-  const activity = useActivity(), glass = query.data
+  const activity = useActivity(view === 'live'), glass = query.data
+  const deliverability = useDeliverability(view === 'deliverability'), dlv = deliverability.data
   const stalled = query.isError || Boolean(activity.error)
+  const asOf = view === 'live' ? <GlassAsOf at={glass && <span title={stalled ? 'The last refresh failed: trying again' : 'Refreshed every 5 seconds'}>{time(glass.generatedAt)} UTC</span>} state={stalled ? 'stalled' : 'live'} />
+    : <GlassAsOf at={dlv && <span title="Refreshed every minute">{time(dlv.generatedAt)} UTC</span>} state={deliverability.isError ? 'stalled' : 'live'} />
   return <>
-    <PageHeader title="Glass" actions={<GlassAsOf at={glass && <span title={stalled ? 'The last refresh failed: trying again' : 'Refreshed every 5 seconds'}>{time(glass.generatedAt)} UTC</span>} state={stalled ? 'stalled' : 'live'} />} />
-    {query.isError && !glass ? <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+    <PageHeader title="Glass" actions={asOf} />
+    <GlassTabs value={view} onValueChange={next => navigate(next === 'live' ? '/glass' : '/glass?view=deliverability')} />
+    {view === 'deliverability' ? <DeliverabilityView />
+      : query.isError && !glass ? <ErrorState error={query.error} onRetry={() => void query.refetch()} />
       : <GlassBoard fill={glass && board(glass)} feed={activity.events && <Feed events={activity.events} fresh={activity.fresh} />} />}
   </>
 }

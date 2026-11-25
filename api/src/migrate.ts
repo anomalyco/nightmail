@@ -113,13 +113,25 @@ try {
       await client.query('RESET lock_timeout; RESET statement_timeout');
       log('info',{code:'MIGRATION_APPLIED',migration:name});continue;
     }
-    await client.query('BEGIN');
-    try {
-      await client.query(source);
-      await client.query('INSERT INTO nightmail_migrations(name, checksum) VALUES ($1, $2)', [name, hash]);
-      await client.query('COMMIT');
-      log('info', { code: 'MIGRATION_APPLIED', migration: name });
-    } catch (error) { await client.query('ROLLBACK'); throw error; }
+    // Bound DDL lock waits (3 s, retried on 55P03) and runaway statements (60 s default; 30 min with an explicit
+    // -- bane:long-statement header for known long backfills) so blocked DDL never queues behind slow reads indefinitely.
+    const statementTimeout = source.startsWith('-- bane:long-statement\n') ? '30min' : '60s';
+    for (let attempt = 1; ; attempt++) {
+      await client.query('BEGIN');
+      try {
+        await client.query(`SET LOCAL lock_timeout='3s'; SET LOCAL statement_timeout='${statementTimeout}'`);
+        await client.query(source);
+        await client.query('INSERT INTO nightmail_migrations(name, checksum) VALUES ($1, $2)', [name, hash]);
+        await client.query('COMMIT');
+        log('info', { code: 'MIGRATION_APPLIED', migration: name });
+        break;
+      } catch (error) {
+        await client.query('ROLLBACK');
+        if ((error as { code?: string }).code !== '55P03' || attempt >= 10) throw error;
+        log('warn', { code: 'MIGRATION_LOCK_RETRY', migration: name, attempt });
+        await new Promise(resolve => setTimeout(resolve, Math.min(2000, attempt * 250)));
+      }
+    }
   }
   await ensureRegionSettings(drizzle(client), config);
   if (rotation) {

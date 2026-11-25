@@ -1,4 +1,4 @@
-.settings-region-scope.stack { min-height: 102px; gap: 8px; }
+.settings-region-scope.stack { min-height: 102px; gap: var(--space-8); }
 .settings-loading-body { display: contents; }
 /* Self-hosted Workspace form: as tall as its loading placeholder (FieldSkeleton multiline). */
 .settings-postal-address.ui-textarea { min-height: 160px; }
@@ -10,7 +10,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-12);
   min-width: 0;
 }
 .settings-copy-cell code,
@@ -67,13 +67,13 @@
 .webhook-header-row > .ui-icon-button { grid-area: remove; }
 .webhook-header-row__error { grid-area: error; }
 .webhook-headers__actions:empty { display: none; }
-.webhook-headers__actions > .ui-button--ghost:first-child { margin-inline-start: calc(-1 * var(--focus-reach)); padding-inline-start: calc(var(--button-pad-x, 11px) - 9px + var(--focus-reach)); }
+.webhook-headers__actions > .ui-button--ghost:first-child { margin-inline-start: calc(-1 * var(--button-pad-x)); }
 .webhook-header-names { display: flex; gap: var(--space-6); min-width: 0; white-space: nowrap; }
 .webhook-header-names > :first-child { overflow: hidden; text-overflow: ellipsis; }
 /* A phone's fingers need 44px: the show and remove buttons (36px wide before), and the Add header / Replace headers buttons (36px tall). */
 @media (max-width: 640px) {
   .webhook-header-row .ui-icon-button.ui-button--sm { width: 44px; height: 44px; }
-  .webhook-header-row__value .ui-input { padding-inline-end: 44px; }
+  .webhook-header-row__value .ui-input { padding-inline-end: var(--control-height); }
   .webhook-header-row__value .ui-icon-button { inset-inline-end: 0; }
   .webhook-headers__actions .ui-button { min-height: 44px; }
 }
@@ -89,7 +89,7 @@
 .settings-choices {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px 24px;
+  gap: var(--space-16) var(--space-24);
 }
 .settings-row-actions {
   justify-content: flex-end;
@@ -117,7 +117,7 @@
 /* Provisioning: one row per step on the page's surface, parted by its padding. */
 .settings-setup-steps { display: flex; flex-direction: column; list-style: none; margin: var(--space-8) 0 0; padding: 0; }
 .settings-setup-steps > li { display: flex; align-items: flex-start; gap: var(--space-12); padding-block: var(--space-12); }
-.settings-setup-steps > li > svg { flex-shrink: 0; margin-top: 2px; color: var(--color-muted); }
+.settings-setup-steps > li > svg { flex-shrink: 0; height: 1lh; color: var(--color-muted); }
 .settings-setup-steps > li[data-state='complete'] > svg { color: var(--color-success); }
 .settings-setup-steps > li[data-state='waiting'] > svg, .settings-setup-steps > li[data-state='blocked'] > svg { color: var(--color-warning); }
 .settings-setup-step { flex: 1; min-width: 0; }
@@ -129,7 +129,7 @@
 .settings-key-domains { display: flex; flex-direction: column; gap: var(--space-8); min-width: 0; margin: 0; padding: 0; border: 0; }
 .settings-key-domains > legend { padding: 0; margin-bottom: var(--space-12); }
 .settings-key-domains p { margin: 0; }
-.settings-key-domain-options { display: flex; flex-direction: column; gap: var(--space-12); max-height: calc(180px - 2px + var(--focus-reach)); overflow-y: auto; padding: var(--space-12) var(--focus-reach) var(--focus-reach); margin: 0 calc(2px - var(--focus-reach)) calc(2px - var(--focus-reach)) calc(-1 * var(--focus-reach)); }
+.settings-key-domain-options { display: flex; flex-direction: column; gap: var(--space-12); max-height: calc(180px + var(--focus-reach)); overflow-y: auto; padding: var(--space-12) var(--focus-reach) var(--focus-reach); margin: 0 calc(-1 * var(--focus-reach)) calc(-1 * var(--focus-reach)); }
 .settings-key-domain-options .ui-check-field { flex-shrink: 0; }
 .settings-key-domain-options .ui-check-field label { overflow-wrap: anywhere; }
 .ui-select-trigger.settings-default-region { width: 320px; max-width: 100%; }

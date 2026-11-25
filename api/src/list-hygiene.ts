@@ -10,15 +10,14 @@ import { resolveMailDomains, type MailDomain } from './mail-dns.js';
 // skip a flagged contact unless its owner allowed it (risk_allowed); transactional mail is never refused, only warned about.
 //  - invalid: not an address mail can be delivered to (the syntax campaign capture would refuse).
 //  - typo_domain: one edit away from a large mailbox provider (gmial.com, hotmial.com, yahooo.com, gmail.con).
-//  - disposable: a public temporary inbox: on the synced lists (src/hygiene-sources.ts), or a domain whose mail servers
-//    serve disposable domains (disposableMx). Anyone can read one, blocklist operators included.
+//  - disposable: a public temporary inbox on a listed domain or subdomain (src/hygiene-sources.ts).
 //  - no_mail_domain: the domain can't receive mail: it doesn't exist, publishes a null MX, or has no MX and no address
 //    (src/mail-dns.ts, cached a day per domain in hygiene_mail_domains, migration 509).
 //  - role: an address that is never a subscriber (abuse@, postmaster@, noreply@): marketing there is reported.
 //  - dead: hard-bounced in another workspace in the last year. A bounce in its own workspace suppresses it already.
 export const RISKS = ['invalid', 'disposable', 'typo_domain', 'role', 'dead', 'no_mail_domain'] as const;
 export type Risk = (typeof RISKS)[number];
-export const RiskReason = z.enum(RISKS).describe('invalid: not a deliverable address. disposable: a public temporary inbox, or a domain whose mail servers serve them. typo_domain: a mistyped mailbox provider (gmial.com). role: abuse@, postmaster@, noreply@ and the like. dead: known to be undeliverable (a recent permanent bounce). no_mail_domain: the domain can\'t receive mail (it doesn\'t exist, or has no mail server).');
+export const RiskReason = z.enum(RISKS).describe('invalid: not a deliverable address. disposable: a public temporary inbox on a listed domain or subdomain. typo_domain: a mistyped mailbox provider (gmial.com). role: abuse@, postmaster@, noreply@ and the like. dead: known to be undeliverable (a recent permanent bounce). no_mail_domain: the domain can\'t receive mail (it doesn\'t exist, or has no mail server).');
 export const RiskBreakdown = z.object({ total: z.number().int(), byReason: z.object(Object.fromEntries(RISKS.map(r => [r, z.number().int()])) as Record<Risk, z.ZodNumber>) }).openapi('RiskBreakdown');
 /** Recipients of a send whose address alone looks risky: transactional mail goes anyway, with these in its receipt. */
 export const RecipientWarning = z.object({ email: z.string(), risk: RiskReason.exclude(['dead', 'no_mail_domain']), suggestion: z.string().nullable() }).openapi('RecipientWarning');
@@ -29,7 +28,7 @@ export function recipientWarnings(addresses: string[]) {
   return warnings.length ? { warnings } : {};
 }
 /** Bump when a rule changes: with the lists' own version, a new one reclassifies every contact. */
-const RULES = 2;
+const RULES = 3;
 
 const ADDRESS = /^(?!\.)(?!.*\.\.)[a-z0-9_'+.\-]*[a-z0-9_+\-]@(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+(?:[a-z]{2,}|xn--[a-z0-9][a-z0-9-]*[a-z0-9])$/i;
 /** The address syntax createContact accepts (mailAddress in outbound-content.ts), without a schema: the import preview and
@@ -58,7 +57,7 @@ export const PUBLIC_MAILBOXES = new Set(`gmail.com googlemail.com outlook.com ho
 // The nightly sync's lists (hygiene_lists 'built'), else the vendored snapshot (src/hygiene-snapshot.ts, only imported then).
 // Held per isolate and checked against the stored version every ten minutes: a sorted string and its line offsets (about
 // 2 MB for 110,000 domains), searched by halving, not a Set of them.
-export type HygieneLists = { version: string; source: 'synced' | 'snapshot'; isDisposable(domain: string): boolean; providers: Set<string>; roles: string[]; disposableMx: Set<string> };
+export type HygieneLists = { version: string; source: 'synced' | 'snapshot'; isDisposable(domain: string): boolean; providers: Set<string>; roles: string[] };
 function sortedLines(body: string) {
   const starts: number[] = [];
   if (body) { starts.push(0); for (let i = body.indexOf('\n'); i >= 0; i = body.indexOf('\n', i + 1)) starts.push(i + 1); }
@@ -69,9 +68,9 @@ function sortedLines(body: string) {
     return false;
   };
 }
-export function makeLists(built: Pick<BuiltLists, 'version' | 'disposable' | 'providers' | 'roles'> & { disposableMx?: string[] }, source: HygieneLists['source']): HygieneLists {
+export function makeLists(built: Pick<BuiltLists, 'version' | 'disposable' | 'providers' | 'roles'>, source: HygieneLists['source']): HygieneLists {
   const has = sortedLines(built.disposable);
-  return { version: built.version, source, providers: new Set(built.providers), roles: built.roles, disposableMx: new Set(built.disposableMx ?? []),
+  return { version: built.version, source, providers: new Set(built.providers), roles: built.roles,
     // A domain or one it is under (sub.mailinator.com), never one the allowlist names.
     isDisposable: domain => { for (let name = domain.toLowerCase(); name.includes('.'); name = name.slice(name.indexOf('.') + 1)) { if (ALLOWED.has(name)) return false; if (has(name)) return true; } return false; } };
 }
@@ -86,7 +85,7 @@ export function hygieneLists(db: DbExecutor): Promise<HygieneLists> {
       const [current] = (await db.execute<{ version: string }>(sql`SELECT version FROM hygiene_lists WHERE name = 'built'`)).rows;
       if (held && (current?.version ?? null) === (held.lists.source === 'synced' ? held.lists.version : null)) { held.checkedAt = Date.now(); return held.lists; }
       if (current) {
-        const [row] = (await db.execute<{ version: string; body: string; meta: { providers: string[]; roles: string[]; disposableMx: string[] } }>(sql`SELECT version, body, meta FROM hygiene_lists WHERE name = 'built'`)).rows;
+        const [row] = (await db.execute<{ version: string; body: string; meta: { providers: string[]; roles: string[] } }>(sql`SELECT version, body, meta FROM hygiene_lists WHERE name = 'built'`)).rows;
         if (row) { held = { lists: makeLists({ version: row.version, disposable: row.body, ...row.meta }, 'synced'), checkedAt: Date.now() }; return held.lists; }
       }
       const { HYGIENE_SNAPSHOT } = await import('./hygiene-snapshot.js');
@@ -204,11 +203,11 @@ export function riskCounts(rows: { risk: string | null; count: number }[]) {
 // Each recipient domain's mail verdict (src/mail-dns.ts), cached in hygiene_mail_domains a day at a time. A domain not
 // checked yet, or checked more than a day ago, is looked up now when there is time (a contact created, an import previewed),
 // and otherwise left 'pending' for the resolver below. Providers on the lists are never looked up. Never per address.
-export type DomainRisk = 'no_mail_domain' | 'disposable';
+export type DomainRisk = 'no_mail_domain';
 const DOMAIN = { freshHours: 24, unknownRetryMinutes: 60, keepDays: 90, concurrency: 24 } as const;
 type DomainRow = { domain: string; verdict: 'pending' | MailDomain['verdict']; mx: string[]; fresh: boolean };
-const riskOfDomain = (lists: HygieneLists, row: Pick<DomainRow, 'verdict' | 'mx'> | undefined): DomainRisk | undefined =>
-  row?.verdict === 'no_mail' ? 'no_mail_domain' : row?.verdict === 'ok' && row.mx.some(host => lists.disposableMx.has(host)) ? 'disposable' : undefined;
+const riskOfDomain = (row: Pick<DomainRow, 'verdict'> | undefined): DomainRisk | undefined =>
+  row?.verdict === 'no_mail' ? 'no_mail_domain' : undefined;
 const checkable = (lists: HygieneLists, domain: string) => !lists.providers.has(domain) && !ALLOWED.has(domain) && !PUBLIC_MAILBOXES.has(domain);
 /** The verdicts of these domains (\`deadline\` in the past: only what is cached), storing what was looked up and queueing the rest. */
 export async function domainRisks(runtime: Pick<Runtime, 'db' | 'config'>, lists: HygieneLists, domains: Iterable<string>, deadline: number): Promise<Map<string, DomainRisk>> {
@@ -226,7 +225,7 @@ export async function domainRisks(runtime: Pick<Runtime, 'db' | 'config'>, lists
     await runtime.db.execute(sql`INSERT INTO hygiene_mail_domains (domain) SELECT unnest(${sql.param(queued)}::text[]) ON CONFLICT (domain) DO NOTHING`);
     await wakeResolver(runtime.db);
   }
-  for (const d of wanted) { const risk = riskOfDomain(lists, looked.get(d) ?? known.get(d)); if (risk) out.set(d, risk); }
+  for (const d of wanted) { const risk = riskOfDomain(looked.get(d) ?? known.get(d)); if (risk) out.set(d, risk); }
   return out;
 }
 async function storeVerdicts(db: DbExecutor, lists: HygieneLists, looked: Map<string, MailDomain>) {
@@ -245,7 +244,7 @@ async function wakeResolver(db: DbExecutor) {
 }
 /**
  * The resolver: pending domains (and ones whose last lookup failed an hour ago or more), oldest first, within the budget.
- * A domain that can't receive mail, or whose mail servers serve disposable domains, flags its contacts that aren't flagged
+ * A domain that can't receive mail flags its contacts that aren't flagged
  * for something stronger, at once: found by the email search index (migration 462). Returns how many it looked up.
  */
 export async function resolvePendingDomains(runtime: Pick<Runtime, 'db' | 'config'>, budgetMs = 30_000) {
@@ -263,7 +262,7 @@ export async function resolvePendingDomains(runtime: Pick<Runtime, 'db' | 'confi
   if (left.length) await runtime.db.execute(sql`UPDATE hygiene_mail_domains SET requested_at = now() WHERE domain = ANY(${sql.param(left)}::text[]) AND verdict = 'pending'`);
   let flagged = 0;
   for (const [domain, verdict] of looked) {
-    const risk = riskOfDomain(lists, verdict);
+    const risk = riskOfDomain(verdict);
     if (!risk) continue;
     const moved = await runtime.db.execute(sql`UPDATE audience_contacts SET risk = ${risk}, risk_allowed = false
       WHERE lower(email) LIKE ('%@' || ${domain}) AND deleted_at IS NULL AND (risk IS NULL OR risk IN ('role', 'dead'))`);
@@ -283,13 +282,11 @@ export const resolveDomainsJob: JobHandler = async runtime => {
 // ----- The nightly sync ------------------------------------------------------------------------------------------------------
 // Once a day (elected through job_schedule), from the hourly upkeep: each source fetched and checked (fetchSource), its last
 // good copy kept (hygiene_lists 'source:<name>'), and the lists rebuilt from the copies. A source that has never been
-// fetched is covered by the vendored snapshot's union. The disposable MX hosts: mail servers that our domain checks found
-// serving at least three listed domains, less the providers' and well-known hosts'. A new version reclassifies everyone.
-const LEGIT_MX = /(^|\.)(google\.com|googlemail\.com|outlook\.com|hotmail\.com|yahoodns\.net|icloud\.com|me\.com|mx\.cloudflare\.net|zoho\.(com|eu|in)|messagingengine\.com|protonmail\.ch|proton\.me|mimecast\.com|pphosted\.com|amazonaws\.com|amazonses\.com|mailgun\.org|sendgrid\.net|secureserver\.net|improvmx\.com|forwardemail\.net|migadu\.com|ovh\.net|ionos\.[a-z.]+|1and1\.[a-z.]+|gmx\.net|web\.de|yandex\.(net|ru)|mail\.ru|qq\.com|163\.com|naver\.com|fastmail\.com|registrar-servers\.com|privateemail\.com|hostinger\.com|titan\.email|emailsrvr\.com|barracudanetworks\.com|messagelabs\.com|trendmicro\.com|sophos\.com|fireeyecloud\.com|iphmx\.com)$/;
+// fetched is covered by the vendored snapshot's union. A new version reclassifies everyone.
 // A day's change to the built lists is bounded. An upstream that suddenly lists thousands more domains, drops real
-// providers (which is what keeps them off the disposable union), or makes new mail servers disposable is treated as broken or
+// providers (which is what keeps them off the disposable union) is treated as broken or
 // poisoned: the last built lists stay, with an error to look at, until an operator accepts the change (acceptChange).
-const SYNC_CAP = { added: 2_000, addedShare: 0.02, droppedProviders: 25, droppedShare: 0.01, newMx: 10 } as const;
+const SYNC_CAP = { added: 2_000, addedShare: 0.02, droppedProviders: 25, droppedShare: 0.01 } as const;
 export async function syncHygieneLists(runtime: Pick<Runtime, 'db' | 'config'>, fetcher: typeof fetch = fetch, force = false, acceptChange = false) {
   if (!runtime.config.hygieneLists) return null;
   const db = runtime.db;
@@ -328,19 +325,16 @@ export async function syncHygieneLists(runtime: Pick<Runtime, 'db' | 'config'>, 
     for (const s of missing.filter(s => s.kind !== 'disposable')) copies.push({ name: s.name, entries: s.kind === 'roles' ? HYGIENE_SNAPSHOT.roles : HYGIENE_SNAPSHOT.providers,
       ...s.kind === 'providers' ? { mx: HYGIENE_SNAPSHOT.providerMx } : {}, sha256: HYGIENE_SNAPSHOT.version, bytes: 0, fetchedAt: HYGIENE_SNAPSHOT.builtAt });
   }
-  const built = buildLists(copies, HYGIENE_SNAPSHOT.providers), providerMx = new Set([...built.providerMx, ...HYGIENE_SNAPSHOT.providerMx]);
-  const { rows: hosts } = await db.execute<{ host: string }>(sql`SELECT host FROM hygiene_mail_domains, unnest(mx) host WHERE listed AND verdict = 'ok' GROUP BY host HAVING count(*) >= 3`);
-  const disposableMx = hosts.map(h => h.host).filter(h => !providerMx.has(h) && !LEGIT_MX.test(h)).sort();
-  const version = `${built.version}.${disposableMx.length ? (await sha16(disposableMx.join('\n'))) : 'nomx'}`;
-  const [prev] = (await db.execute<{ version: string; body: string; meta: { providers?: string[]; disposableMx?: string[] } }>(sql`SELECT version, body, meta FROM hygiene_lists WHERE name = 'built'`)).rows;
+  const built = buildLists(copies, HYGIENE_SNAPSHOT.providers);
+  const version = built.version;
+  const [prev] = (await db.execute<{ version: string; body: string; meta: { providers?: string[] } }>(sql`SELECT version, body, meta FROM hygiene_lists WHERE name = 'built'`)).rows;
   if (prev && prev.version !== version && !acceptChange) {
-    const had = new Set(prev.body ? prev.body.split('\n') : []), providers = new Set(built.providers), mxHad = new Set(prev.meta.disposableMx ?? []);
+    const had = new Set(prev.body ? prev.body.split('\n') : []), providers = new Set(built.providers);
     const added = (built.disposable ? built.disposable.split('\n') : []).filter(d => !had.has(d)).length;
-    const dropped = (prev.meta.providers ?? []).filter(p => !providers.has(p)), newMx = disposableMx.filter(h => !mxHad.has(h));
+    const dropped = (prev.meta.providers ?? []).filter(p => !providers.has(p));
     const over = [
       added > Math.max(SYNC_CAP.added, had.size * SYNC_CAP.addedShare) ? `${added} disposable domains added` : null,
       dropped.length > Math.max(SYNC_CAP.droppedProviders, (prev.meta.providers?.length ?? 0) * SYNC_CAP.droppedShare) ? `${dropped.length} providers dropped (${dropped.slice(0, 5).join(', ')})` : null,
-      newMx.length > SYNC_CAP.newMx ? `${newMx.length} new disposable mail servers (${newMx.slice(0, 5).join(', ')})` : null,
     ].filter((x): x is string => x !== null);
     if (over.length) {
       const error = `refused, over a day's change: ${over.join('; ')}`;
@@ -349,15 +343,11 @@ export async function syncHygieneLists(runtime: Pick<Runtime, 'db' | 'config'>, 
     }
   }
   await db.execute(sql`INSERT INTO hygiene_lists (name, version, body, meta, updated_at) VALUES ('built', ${version}, ${built.disposable},
-      ${JSON.stringify({ providers: built.providers, roles: built.roles, disposableMx, sources: built.sources, failed, builtAt: built.builtAt })}::jsonb, now())
+      ${JSON.stringify({ providers: built.providers, roles: built.roles, sources: built.sources, failed, builtAt: built.builtAt })}::jsonb, now())
     ON CONFLICT (name) DO UPDATE SET version = excluded.version, body = excluded.body, meta = excluded.meta, updated_at = now() WHERE hygiene_lists.version IS DISTINCT FROM excluded.version`);
-  // Mail servers learn from listed domains: queue a sample of them the domain checks haven't seen.
-  const sample = built.disposable.split('\n').filter((_, i, all) => i % Math.max(1, Math.floor(all.length / 500)) === 0).slice(0, 500);
-  if (runtime.config.hygieneDnsUrl) await db.execute(sql`INSERT INTO hygiene_mail_domains (domain) SELECT unnest(${sql.param(sample)}::text[]) ON CONFLICT (domain) DO NOTHING`);
-  log(failed.length ? 'warn' : 'info', { code: 'HYGIENE_LISTS_SYNCED', version, disposable: built.disposable ? built.disposable.split('\n').length : 0, providers: built.providers.length, roles: built.roles.length, disposableMx: disposableMx.length, failed: failed.map(f => f.name) });
+  log(failed.length ? 'warn' : 'info', { code: 'HYGIENE_LISTS_SYNCED', version, disposable: built.disposable ? built.disposable.split('\n').length : 0, providers: built.providers.length, roles: built.roles.length, failed: failed.map(f => f.name) });
   return { version, failed };
 }
-async function sha16(text: string) { return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text))), b => b.toString(16).padStart(2, '0')).join('').slice(0, 16); }
 
 // ----- The hourly pass ---------------------------------------------------------------------------------------------------
 // Every contact, in ID order across workspaces, a bounded slice an hour: a contact created before this existed, one whose

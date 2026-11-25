@@ -20,7 +20,7 @@ The same operations are available through the plain `inboxes` and `messages` MCP
 - [Demos](#demos): [curl](#curl), [SDK](#sdk), [MCP session](#mcp-session), [sandbox](#sandbox)
 - [Dashboard](#dashboard)
 
-**Defaults and limits.** Lease 24 hours (60 seconds to 30 days), then 24 hours of grace (0–168). Per inbox: 200 messages and 25 MiB, after which new mail is held, never dropped. Per workspace: 60 creates a minute and 50,000 retained inboxes. A long poll waits up to 30 seconds (25 over MCP). On hosted Nightmail, inboxes are available once the R2 mail store is on (`BANE_MAIL_STORE=r2`); before that, creates answer `503 INBOXES_UNAVAILABLE`.
+**Defaults and limits.** Lease 24 hours (60 seconds to 30 days), then 24 hours of grace (0–168). Per inbox: 200 messages and 25 MiB, after which new mail is held, never dropped. Per workspace: 60 creates a minute and 50,000 retained inboxes. A long poll waits up to 30 seconds (25 over MCP). On hosted Nightmail, inboxes are available once the R2 mail store is on (`NIGHTMAIL_MAIL_STORE=r2`); before that, creates answer `503 INBOXES_UNAVAILABLE`.
 
 ## What an inbox is
 
@@ -206,7 +206,7 @@ curl -sS "$NIGHTMAIL_URL/v1/api-keys" -H "$AUTH" -H 'Content-Type: application/j
 Point an MCP client at hosted Nightmail with an API key that creates inboxes, or one for a single inbox, as the bearer token. For OpenCode:
 
 ```json
-{"mcp":{"servers":{"bane-inbox":{"type":"remote","url":"https://nightmail.dev/mcp","oauth":false,"headers":{"Authorization":"Bearer {env:NIGHTMAIL_INBOX_KEY}"}}}}}
+{"mcp":{"servers":{"nightmail-inbox":{"type":"remote","url":"https://nightmail.dev/mcp","oauth":false,"headers":{"Authorization":"Bearer {env:NIGHTMAIL_INBOX_KEY}"}}}}}
 ```
 
 The tools an agent then sees, and a real session (IDs shortened):
@@ -296,9 +296,9 @@ With the SDK it is `createInbox({ client, body: { type: 'sandbox' } })`, then `s
 On a Code Mode manage connection of an owner or admin, create an inbox and a bounded client config. An inbox-only agent cannot run the provisioning call itself.
 
 ```js
-const box = await tools.bane.createInbox({body:{type:'sandbox',clientId:'checkout-test'},confirm:true})
+const box = await tools.nightmail.createInbox({body:{type:'sandbox',clientId:'checkout-test'},confirm:true})
 const id = box.id
-const connection = await tools.bane.createInboxConnection({body:{inboxes:[id],client:'opencode',auth:'key',reply:false},confirm:true})
+const connection = await tools.nightmail.createInboxConnection({body:{inboxes:[id],client:'opencode',auth:'key',reply:false},confirm:true})
 // Give connection.config only to the intended client; it contains the one-time bearer secret.
 ```
 

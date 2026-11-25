@@ -12,6 +12,7 @@ import { productName } from './brand.js';
 
 const loadS3Presign = lazyModule(() => Promise.all([import('@aws-sdk/client-s3'), import('@aws-sdk/s3-request-presigner')]));
 import { mailboxMessages as links, mailboxThreads, mailAttachments, mailMessages as messages } from './db/mailbox.js';
+import { oneOf } from './domain-mail.js';
 import { accessibleMessages, EmailThread, liveBox, threadBlock, threadView, visibleLinks, type Filter, type RawThread } from './thread-view.js';
 import { htmlToPlain, replyText } from './mailbox-store.js';
 import { boundedHtmlFragment } from './bounded-html.js';
@@ -76,8 +77,14 @@ export const visibleAddresses = (v:MailboxAccess,q:Filter={}) => sql<{id:string;
 export function visibleThreadAddresses(value: MailboxAccess, threadId: string, addressId?: string) {
   if (addressId && value.mailboxIds && !value.mailboxIds.includes(addressId)) throw new ApiError(404,'NOT_FOUND','Address was not found.');
   return and(liveBox(mailboxThreads.mailboxId),eq(mailboxThreads.threadId,threadId),eq(mailboxThreads.workspaceId,value.workspaceId),
-    addressId ? eq(mailboxThreads.mailboxId,addressId) : value.mailboxIds ? inArray(mailboxThreads.mailboxId,value.mailboxIds) : undefined);
+    addressId ? eq(mailboxThreads.mailboxId,addressId) : value.mailboxIds ? oneOf(mailboxThreads.mailboxId,value.mailboxIds) : undefined,
+    // A key limited to sender domains: only the addresses where it reads a message of this thread.
+    value.domains ? sql`EXISTS (SELECT FROM ${links} WHERE ${visibleLinks(value, { threadId })} AND ${links.mailboxId} = ${mailboxThreads.mailboxId})` : undefined);
 }
+/** A thread state's unread count, for a key limited to sender domains counted over the messages it reads. */
+const unreadOf = (value: MailboxAccess, threadId: string) => value.domains
+  ? sql<number>`(SELECT count(*)::int FROM ${links} WHERE ${visibleLinks(value, { threadId })} AND ${links.mailboxId} = ${mailboxThreads.mailboxId} AND NOT ${links.read})`
+  : sql<number>`${mailboxThreads.unreadCount}`;
 
 async function threadPage(db: DbExecutor, value: MailboxAccess, filter: Filter, options: { view?: z.infer<typeof View>; q?: string; cursor?: string; limit: number }) {
   const after = decodeCursor(options.cursor), view = options.view;
@@ -107,7 +114,27 @@ async function threadPage(db: DbExecutor, value: MailboxAccess, filter: Filter, 
       ELSE (SELECT count(DISTINCT mm.message_id)::int FROM mailbox_messages mm
             WHERE mm.workspace_id=${value.workspaceId} AND mm.held_reason IS NULL AND mm.thread_id=threads.id AND mm.mailbox_id=ANY(threads.address_ids)) END`;
   let rows: { rows: PageRow[] } | undefined;
-  if (singleAddress) {
+  if (value.domains) {
+    // A key limited to sender domains reads only some messages of a mailbox's thread (addressedToDomains), so its threads,
+    // their counts, newest message and time come from those messages, never from mailbox_threads' summaries of them all.
+    const state = viewMatch('s');
+    rows = await db.execute<PageRow>(sql`
+      WITH visible AS MATERIALIZED (
+        SELECT ${links.threadId} AS thread_id, ${links.mailboxId} AS mailbox_id, ${links.messageId} AS message_id, ${links.receivedAt} AS received_at
+        FROM ${links} WHERE ${visibility}
+      ), threads AS MATERIALIZED (
+        SELECT v.thread_id AS id, max(v.received_at) AS last_at, array_agg(DISTINCT v.mailbox_id ORDER BY v.mailbox_id) AS address_ids, count(DISTINCT v.message_id)::int AS message_count
+        FROM visible v GROUP BY v.thread_id
+      ), page AS MATERIALIZED (
+        SELECT * FROM threads WHERE true
+          ${after ? sql`AND (threads.last_at, threads.id) < (${after[0]}::timestamptz, ${after[1]})` : sql``}
+          ${state ? sql`AND EXISTS (SELECT FROM mailbox_threads s WHERE s.workspace_id=${value.workspaceId} AND s.thread_id=threads.id AND s.mailbox_id=ANY(threads.address_ids) AND ${state})` : sql``}
+          ${options.q ? sql`AND EXISTS (SELECT FROM visible v JOIN mail_messages searched ON searched.id=v.message_id WHERE v.thread_id=threads.id AND searched.search @@ websearch_to_tsquery('simple', ${options.q}))` : sql``}
+        ORDER BY threads.last_at DESC, threads.id DESC LIMIT ${options.limit + 1}
+      ) SELECT page.id, m.subject, m.snippet, m.from_name, m.from_address, ${preciseTime(sql`page.last_at`)} AS at, page.address_ids, page.message_count
+        FROM page CROSS JOIN LATERAL (SELECT v.message_id AS latest_id FROM visible v WHERE v.thread_id=page.id ORDER BY v.received_at DESC, v.message_id DESC LIMIT 1) detail
+        JOIN mail_messages m ON m.id=detail.latest_id ORDER BY page.last_at DESC, page.id DESC`);
+  } else if (singleAddress) {
     // One address has at most one mailbox_threads row per thread: walk the index directly without GROUP BY.
     // Check liveBox once as a constant InitPlan so the planner keeps the index scan instead of misestimating an anti-join.
     const state = viewMatch('t');
@@ -301,7 +328,7 @@ async function messagePage(db: DbExecutor, value: MailboxAccess, filter: Filter,
 
 export async function signedUrl(runtime: Runtime,wid:string, kind:'raw'|'att', region: string, bucket: string, key: string, filename?: string,pendingArchive?:string,client?:S3Client,inbox?:string) {
   if(!isS3Bucket(bucket)){
-    // Bane-signed links stream from the R2 binding; sandbox objects in local storage have none.
+    // Nightmail-signed links stream from the R2 binding; sandbox objects in local storage have none.
     if(bucket!==boundMailBucket(runtime))throw new ApiError(404,'MAILBOX_OBJECT_NOT_FOUND','The mail object was not found.');
     if(pendingArchive)await archiveMailboxFiles(runtime,wid,pendingArchive);
     return mailObjectUrl(runtime,wid,key,filename??'attachment',kind==='raw'?'message/rfc822':'application/octet-stream',inbox);
@@ -358,7 +385,7 @@ export function registerInboundThreadReads(app: App, access: (c: Ctx, permission
           const [thread] = (await threadPage(db, value, filter, { limit: 1 })).data;
           if (!thread) throw new ApiError(404, 'NOT_FOUND', 'Thread was not found.');
           const t=mailboxThreads;
-          const addressStates=await db.select({addressId:t.mailboxId, unreadCount:t.unreadCount, archived:t.archived,starred:t.starred,trashed:sql<boolean>`${t.trashedAt} IS NOT NULL`,spam:t.spam,labels:t.labels}).from(t).where(visibleThreadAddresses(value,filter.threadId,filter.addressId)).orderBy(asc(t.mailboxId));
+          const addressStates=await db.select({addressId:t.mailboxId, unreadCount:unreadOf(value,filter.threadId), archived:t.archived,starred:t.starred,trashed:sql<boolean>`${t.trashedAt} IS NOT NULL`,spam:t.spam,labels:t.labels}).from(t).where(visibleThreadAddresses(value,filter.threadId,filter.addressId)).orderBy(asc(t.mailboxId));
           return { ...thread, ...await messagePage(db, value, filter, q.limit, q.cursor), addressStates };
         }, { isolationLevel: 'repeatable read', accessMode: 'read only' });
       } catch (error) {

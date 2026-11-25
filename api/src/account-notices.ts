@@ -9,7 +9,7 @@ import { LINK_MINUTES, signinLinkUrl } from './signups.js';
 // Sending the account emails (src/notices.ts writes them). Three jobs send one each, every one through deliverNotice:
 // standing.notify (standing.ts: paused, marketing on hold, warning, resumed, campaign paused), billing.notify
 // (billing/notify.ts) and account.notify here, for the moments that have no standing event or billing notice of their
-// own: a domain that stopped verifying, a new domain's records still missing after an hour and a new workspace with no
+// own: a domain that stopped verifying or was released, a new domain's records still missing after an hour and a new workspace with no
 // domain after an hour (src/domain-setup.ts), the daily limit reached, the evaluation finished, an invitation, the waitlist and a sign-in link. Those are account_notices rows (migration 403), one per dedupe key, queued with their job in one statement.
 //
 // An email goes out once: the row's dedupe key makes one notice of one moment, the job leases the row so one runner
@@ -66,7 +66,7 @@ export async function noticeFailed(runtime: Runtime, table: NoticeTable, noticeI
 export const noticeRecipients = (workspace: SQL) => sql`ARRAY(SELECT u.email FROM workspace_members m JOIN nightmail_users u ON u.id=m.user_id
   WHERE m.workspace_id=${workspace} AND m.role IN ('owner','admin') AND u.email_verified ORDER BY u.email LIMIT 20)`;
 
-export type AccountNoticeKind = 'domain_unverified' | 'domain_setup' | 'no_domain' | 'limit_reached' | 'evaluation_finished' | 'invitation' | 'waitlist_admitted' | 'signin_link';
+export type AccountNoticeKind = 'domain_unverified' | 'domain_released' | 'domain_setup' | 'no_domain' | 'limit_reached' | 'evaluation_finished' | 'invitation' | 'waitlist_admitted' | 'signin_link';
 type Queued = { workspaceId: string; kind: AccountNoticeKind; dedupe: string; data?: Record<string, unknown>;
   /** At most one of this kind per workspace in 24 hours (suppressed ones don't count). */
   daily?: boolean;
@@ -99,6 +99,10 @@ export async function queueNotice(db: DbExecutor, n: Queued, savepoint = false):
 /** A domain whose grace ran out: mail from it is refused from now on. Once per loss (the claim's lost_since). */
 export const domainUnverified = (db: DbExecutor, workspaceId: string, domain: { id: string; name: string; lostSince: string | null }) =>
   queueNotice(db, { workspaceId, kind: 'domain_unverified', dedupe: `domain:${domain.id}:${domain.lostSince ?? ''}`, data: { domainId: domain.id, name: domain.name } }, true);
+
+/** A proven domain released because its ownership records were gone for 30 days (operations.ts expireDomainClaims). Once per claim. */
+export const domainReleased = (db: DbExecutor, workspaceId: string, domain: { name: string; token: string }) =>
+  queueNotice(db, { workspaceId, kind: 'domain_released', dedupe: `domain-released:${domain.token}`, data: { name: domain.name } }, true);
 
 /** What the setup reminder says (src/domain-setup.ts builds it from the background DNS check). */
 export type DomainSetupData = { domainId: string; name: string; /** Nobody serves DNS for it (record-check.ts dnsZone). */ noDns?: boolean; /** A wildcard (and the parking host behind it) answering its missing CNAMEs (record-check.ts wildcardOf). */ wildcard?: string; parking?: { owner: string; target: string }; total: number; wrong: boolean; missing: { type: string; name: string; value: string }[]; host: { name: string; url: string | null } | null; releasesAt: string | null };
@@ -211,6 +215,8 @@ function noticeOf(row: Row, origin: string, config: Runtime['config']): { to: st
   switch (row.kind) {
     // Still refused: a domain that verified again, or was removed, needs no email.
     case 'domain_unverified': return row.domain === 'pending' || row.domain === 'failed' ? { to: row.recipients, input: { kind: 'domain_unverified', workspace, domain: { id: String(row.data.domainId), name: String(row.data.name) } } } : null;
+    // Not added again meanwhile: a workspace that already has the domain back needs no email about losing it.
+    case 'domain_released': return row.domain === null ? { to: row.recipients, input: { kind: 'domain_released', workspace, domain: { name: String(row.data.name) } } } : null;
     // Still pending: one that verified meanwhile, or was removed, needs no reminder.
     case 'domain_setup': {
       const d = row.data as DomainSetupData;

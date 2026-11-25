@@ -10,6 +10,7 @@ import type { SupportPlatformApi } from './support-platform.js';
 import { SECURITY_HEADERS } from './security-headers.js';
 import { clientIpHeader, clientNetworkHeader, healthService, legacyClientIpHeaders, requestHeaderNames, setting } from './brand.js';
 import { isMissingComparePage, SITE_INDEX, withSiteIndex } from './site-index.js';
+import { linkHostRequest } from './link-hosts.js';
 export { DispatcherShard, CampaignRoom };
 
 // Keep top-level evaluation empty so cold-started isolates answer /health without
@@ -299,6 +300,7 @@ export class SupportPlatform extends WorkerEntrypoint<Env> {
       return withRuntime(this.env, async runtime => app.fetch(request, { ...runtime, ...platformRuntime(conversation) }), SUPPORT_POOL, this.ctx);
     }, config);
   }
+  async verifyWake(token: string, conversationId: string) { return (await this.platform()).verifyWake(token, conversationId); }
   async verifyHandoff(token: string) { return (await this.platform()).verifyHandoff(token); }
   async registerConversation(body: Parameters<SupportPlatformApi['registerConversation']>[0]) { return (await this.platform()).registerConversation(body); }
   async closeConversation(conversationId: string) { return (await this.platform()).closeConversation(conversationId); }
@@ -323,6 +325,16 @@ export default {
     // The events host (BYO_EVENTS_ORIGIN) takes AWS's signed notifications and nothing else.
     let eventsHost: string | undefined; try { eventsHost = new URL(String((env as { BYO_EVENTS_ORIGIN?: unknown }).BYO_EVENTS_ORIGIN)).host; } catch { eventsHost = undefined; }
     if (eventsHost && url.host === eventsHost && pathname !== '/health' && !(request.method === 'POST' && (pathname === '/v1/events/ses' || pathname === '/v1/events/cloudformation'))) return fastSecure(new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } }));
+    // The link domain and customers' own link hosts (src/link-hosts.ts) answer the links in customer mail and nothing else.
+    // With either on, every host that is none of this installation's own came through the link zone's route.
+    const own = [String((env as { PUBLIC_URL?: unknown }).PUBLIC_URL), ...String((env as { PREVIOUS_PUBLIC_URLS?: unknown }).PREVIOUS_PUBLIC_URLS ?? '').split(',')]
+      .flatMap(origin => { try { return [new URL(origin.trim()).hostname]; } catch { return []; } }).concat(eventsHost ? [eventsHost.replace(/:\d+$/, '')] : []);
+    const linkAnswer = linkHostRequest(!!setting(env, 'LINK_HOST') || !!setting(env, 'LINK_SAAS_ZONE_ID') && !!setting(env, 'LINK_SAAS_TOKEN'), url.hostname, pathname, own);
+    if (linkAnswer === 'missing') return fastSecure(new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } }));
+    // A name of the zone that isn't this Worker's (dev, support, media): the zone-wide route runs before its custom domain
+    // or bucket, so it goes on to them unchanged (a subrequest to the same zone skips the route).
+    if (linkAnswer === 'pass') return fetch(request);
+    const linkHost = linkAnswer === 'link';
     if (pathname === '/health' && (request.method === 'GET' || request.method === 'HEAD') && !requestHeaderNames('environment').some(name => request.headers.has(name))) {
       const requestId = `req_${crypto.randomUUID().replaceAll('-', '')}`;
       const multiTenant = ('MULTI_TENANT' in env ? env.MULTI_TENANT : undefined) === 'true', analytics = (env as unknown as { DASHBOARD_ANALYTICS?: unknown }).DASHBOARD_ANALYTICS === 'on';
@@ -332,7 +344,7 @@ export default {
     }
     const staticDoc = (request.method === 'GET' || request.method === 'HEAD') && (['/openapi.json', '/docs.md', '/llms.txt'].includes(pathname) || pathname.startsWith('/docs/operations/') || pathname.startsWith('/docs/tags/'));
     const assets = (env as unknown as { ASSETS?: Fetcher }).ASSETS;
-    if (assets && (request.method === 'GET' || request.method === 'HEAD') && !staticDoc && !/^\/(?:health|v1|api|mcp|\.well-known|unsubscribe|internal)(?:\/|$)/.test(pathname)) {
+    if (assets && (request.method === 'GET' || request.method === 'HEAD') && !staticDoc && !linkHost && !/^\/(?:health|v1|api|mcp|\.well-known|unsubscribe|internal|i)(?:\/|$)/.test(pathname)) {
       // Existing files are served asset-first. Only dashboard routes get the shell on a miss. "/" on a hosted
       // installation is the homepage: home.html, the dashboard's shell with the homepage's first screen painted in it
       // (app/home-shell.ts); Workers Assets answers /home with it.
@@ -353,6 +365,11 @@ export default {
       if (isMissingComparePage(pathname)) return untransformed(shell, request, 404);
       return untransformed(shell, request);
     }
+    // A linked campaign image (src/linked-images.ts) is the same bytes for every reader: once answered, this colo keeps it
+    // and answers it again before admission, the database or storage.
+    const images = request.method === 'GET' && pathname.startsWith('/i/') && typeof caches !== 'undefined' ? (caches as unknown as { default: Cache }).default : undefined;
+    const imageKey = images && new Request(url.origin + pathname);
+    if (images && imageKey) { const kept = await images.match(imageKey).catch(() => undefined); if (kept) return kept; }
     let deps: Awaited<ReturnType<typeof loadHttpDeps>> | undefined;
     try {
       deps = await loadHttpDeps();
@@ -398,7 +415,16 @@ export default {
       const innerTiming = responseHeaders.get('server-timing');
       if(innerTiming) responseHeaders.set('server-timing', [innerTiming, `admission;dur=${admissionMs.toFixed(1)}`, `runtime;dur=${runtimeMs.toFixed(1)}`].join(', '));
       if (!(feedbackIngress && [400,429].includes(response.status))) core.log('info', { requestId: responseHeaders.get('x-request-id'), operation: 'worker-runtime', status: response.status, admissionMs: Number(admissionMs.toFixed(1)), runtimeMs: Number(runtimeMs.toFixed(1)) });
-      return core.secureResponse(new Response(response.body, { status: response.status, statusText: response.statusText, headers: responseHeaders }));
+      const answer = core.secureResponse(new Response(response.body, { status: response.status, statusText: response.statusText, headers: responseHeaders }));
+      if (images && imageKey && answer.status === 200) {
+        const kept = new Response(answer.clone().body, answer);
+        kept.headers.delete('x-request-id'); kept.headers.delete('server-timing');
+        // Kept here an hour, not the year browsers may: a deleted picture or one taken down stops being served from this colo
+        // within the hour (a Cloudflare purge of its URL ends it at once).
+        kept.headers.set('cache-control', 'public, max-age=3600');
+        ctx.waitUntil(images.put(imageKey, kept).catch(() => {}));
+      }
+      return answer;
     }
     catch (error) {
       const requestId = `req_${crypto.randomUUID().replaceAll('-', '')}`;
@@ -556,6 +582,8 @@ export default {
       await reconcileSharedConnections(runtime); // Installation work must not depend on a workspace or a successful queue drain.
       // A pool region nothing has sent through yet still gets its SES quota sampled (Glass, the customer share); never throws.
       await (await core.wrapModuleLoad(() => import('./dispatcher.js'))).refreshPoolQuotas(runtime);
+      // Glass's deliverability sources (SES health, VDM, Spamhaus DBL), each due at its own time; never throws.
+      await (await core.wrapModuleLoad(() => import('./glass-deliverability.js'))).refreshDeliverabilitySources(runtime);
       try { await syncOutboundMessages(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'MAILBOX_OUTBOUND_SYNC_FAILED' }); }
       // Screen any pre-deploy or rollout-window rows held with screened=false outside the mail room before waking shards.
       try { await (await core.wrapModuleLoad(() => import('./sending.js'))).screenHeldMail(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'HELD_SCREEN_SWEEP_FAILED' }); }

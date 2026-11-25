@@ -116,7 +116,7 @@ export function cssPlugins(ctx: Context) {
     plugin('token-space', (decl, _selector, emit) => {
       if (!rules['token-space'].properties.includes(decl.prop)) return
       for (const l of lengths(decl.value)) if (['px', 'rem', 'em'].includes(l.unit) && l.px !== 0)
-        emit(`${decl.prop}: ${l.text}`, l.unit === 'em' ? 'var(--space-N) from the scale (4, 6, 8, 12, 16, 20, 24, 28, 32, 40).' : Math.abs(l.px) < 4 ? `No step is below var(--space-4): align with line-height or the element's height instead of a ${l.text} nudge, or use var(--space-4).` : nearest(space, l.px), l.text)
+        emit(`${decl.prop}: ${l.text}`, l.unit === 'em' ? 'var(--space-N) from the scale (4, 6, 8, 12, 16, 20, 24, 28, 32, 40).' : Math.abs(l.px) < 4 && !space.some(s => s.px === Math.abs(l.px)) ? `No step is ${l.text}: align with line-height or the element's height (an icon in a box of its line's height) instead of a nudge; var(--space-2) is only a track's inset or the split between two filled rows.` : nearest(space, l.px), l.text)
     }),
     plugin('token-radius', (decl, _selector, emit) => {
       if (!/^border(-[a-z]+)*-radius$/.test(decl.prop)) return

@@ -22,7 +22,7 @@ Self-hosted transactional email, newsletters, campaigns, and inbound conversatio
 
    ```sh
    git clone https://github.com/anomalyco/nightmail.git
-   cd bane
+   cd nightmail
    ```
 
 2. Open the repo in your coding agent and paste:
@@ -36,7 +36,7 @@ Self-hosted transactional email, newsletters, campaigns, and inbound conversatio
    sending. Ask before provisioning, deploying, or sending real email.
    ```
 
-The hosted service is at [nightmail.dev](https://nightmail.dev) (earlier [bane.mx](https://bane.mx)); its [production Worker configuration](api/wrangler.prod.jsonc) is separate from dev. Its daily limits follow each workspace's sender score: see [how sending limits work](docs/sending-limits.md).
+The hosted service is at [nightmail.dev](https://nightmail.dev); its [production Worker configuration](api/wrangler.prod.jsonc) is separate from dev. Its daily limits follow each workspace's sender score: see [how sending limits work](docs/sending-limits.md).
 
 Prefer a manual setup? Start with [Docker](api/README.md#docker-quickstart) or [Cloudflare](api/README.md#cloudflare). For development, see the [local setup](api/README.md#local-development).
 
@@ -54,7 +54,7 @@ See the [SDK guide](sdk/README.md) for usage examples, or [connect an MCP client
 
 1. **Pull request:** `CI` selects the [suites affected by the change](docs/ci.md#which-changes-select-which-suites), including the dashboard and SDK builds, Worker bundles, types, generated docs, and acceptance against disposable PostgreSQL and S3 fixtures. A breaking OpenAPI change fails the build unless maintainers apply **`api-breaking`**. The label waives compatibility only. On a dev push, the waiver applies only when every pushed commit belongs to that merged PR.
 2. **Merge to `dev`:** the queue has already tested its exact merge SHA, so its push starts `Deploy` without repeating CI. A direct push still gets full CI. The deploy builds that SHA and rechecks the dev tip under the deployment lock. Superseded commits are skipped before migration. The current commit applies Pulumi first when what Pulumi reads changed (see [docs/ci.md](docs/ci.md#releasing-to-production)), then migrates, deploys and runs live tests on `dev.nightmail.dev`; its summary and JSON report distinguish success, expected rejections, skips and failures.
-3. **Production:** require the passing dev deploy and live E2E for the exact SHA, plus the successful dev queue CI (or direct dev push CI). Then fast-forward `production` to that exact commit: `git push bane <sha>:refs/heads/production`. The push is the only production deploy trigger. Watch it through the health checks; see [Releasing to production](docs/ci.md#releasing-to-production) for verification and recovery.
+3. **Production:** require the passing dev deploy and live E2E for the exact SHA, plus the successful dev queue CI (or direct dev push CI). Then fast-forward `production` to that exact commit: `git push origin <sha>:refs/heads/production`. The push is the only production deploy trigger. Watch it through the health checks; see [Releasing to production](docs/ci.md#releasing-to-production) for verification and recovery.
 4. **SDK release:** dispatch `Release SDK` from `dev` with `bump` (`patch`, `minor` or `major`). Its `build` job runs repository code with no environment, secrets or OIDC token and uploads the packed tarball; its `publish` job runs in the `release` environment (where a reviewer approves), never checks out the repository, publishes that tarball through npm trusted publishing (the environment's OIDC token; there is no npm token), then tags the build's commit `v<version>` and creates the GitHub release. The version comes from the newest tag, or from `sdk/package.json` before the first tag, and is never committed back, so `dev` stays restricted and `production` stays fast-forward only. Only `dev` may deploy the `release` environment.
 
 Configure **environment-scoped** variables (not repository-wide). The deploy secrets
@@ -64,8 +64,8 @@ or `arn:aws:iam::604439173067:role/github/nightmail-production`:
 
 | Environment | AWS Secrets Manager | Variables |
 |---|---|---|
-| `dev` | `DATABASE_URL`, `BANE_ROOT_SECRET`, `ACCOUNT_CLIENT_PRIVATE_KEY`, `TYPESAFE_API_KEY`, `E2E_API_KEY`; `MAILGW_API_TOKEN` while the gateway is enabled | `E2E_DOMAIN`, `E2E_DOMAIN_ID` |
-| `production` | `DATABASE_URL`, `BANE_ROOT_SECRET`, `ACCOUNT_CLIENT_PRIVATE_KEY`, `TYPESAFE_API_KEY`; `MAILGW_API_TOKEN` while the gateway is enabled | `PROD_DEPLOY_ENABLED` |
+| `dev` | `DATABASE_URL`, `BETTER_AUTH_SECRET` (the root secret), `ACCOUNT_CLIENT_PRIVATE_KEY`, `TYPESAFE_API_KEY`, `E2E_API_KEY`; `MAILGW_API_TOKEN` while the gateway is enabled | `E2E_DOMAIN`, `E2E_DOMAIN_ID` |
+| `production` | `DATABASE_URL`, `BETTER_AUTH_SECRET` (the root secret), `ACCOUNT_CLIENT_PRIVATE_KEY`, `TYPESAFE_API_KEY`; `MAILGW_API_TOKEN` while the gateway is enabled | `PROD_DEPLOY_ENABLED` |
 
 For a self-hosted installation, register a confidential OIDC client with your issuer and follow the [dashboard sign-in setup](api/README.md#dashboard-sign-in).
 
@@ -77,10 +77,10 @@ For a self-hosted installation, register a confidential OIDC client with your is
 Dev sets it true. Production stays false until the production runbook's follow-up PR, opened once its secrets, database role, image and DNS are in place. See the [dev](gateway/PHASE2.md#dev-turn-on-runbook) and [production](gateway/PHASE2.md#production-turn-on-runbook) turn-on runbooks, and [IMAP and SMTP](api/README.md#imap-and-smtp) for what customers get, including send-only SMTP logins for apps.
 
 **Both stages use the same key names.** The stage comes from the GitHub environment,
-which selects that environment's variables, and from the `bane/<stage>/` folder, which
+which selects that environment's variables, and from the `nightmail/<stage>/` folder, which
 selects that stage's secrets. Never prefix a key with `DEV_` or `PROD_`; the deploy reads
-`bane/${stage}/DATABASE_URL` and `vars.E2E_DOMAIN` for either stage. Only dev
-runs a live E2E, so only `bane/dev/` holds an `E2E_API_KEY`. `PROD_DEPLOY_ENABLED` keeps
+`nightmail/${stage}/DATABASE_URL` and `vars.E2E_DOMAIN` for either stage. Only dev
+runs a live E2E, so only `nightmail/dev/` holds an `E2E_API_KEY`. `PROD_DEPLOY_ENABLED` keeps
 its name for now because the production freeze check reads it.
 
 The Cloudflare token is not stored anywhere. Each deploy mints a 30-minute token from the
@@ -94,12 +94,12 @@ keys need read/send/manage on the dedicated **E2E** workspace, not on a customer
 
 **Sign-in policy is committed, not a variable.** Identity is the issuer subject; no address or address domain admits anyone. `api/wrangler.<stage>.jsonc` sets `ACCOUNT_REQUIRED_ACR` (GitHub, Google, email link or password) and `AUTH_STAFF_GOOGLE_DOMAINS` (staff sign-up by the Google Workspace domain of a Google sign-in's provider identity; no other method is ever staff). Everyone else joins by invitation or is bound by subject by an operator (`api/scripts/list-signin-attempts.ts`). The old `AUTH_ALLOWED_EMAILS`/`AUTH_ALLOWED_DOMAINS` GitHub variables are no longer read; delete them, and any Worker secret of those names.
 
-**Local live E2E:** install API and SDK dependencies, build the SDK (`cd sdk && bun run build`), and privately export `BANE_E2E_API_KEY`. From `api/` run:
+**Local live E2E:** install API and SDK dependencies, build the SDK (`cd sdk && bun run build`), and privately export `NIGHTMAIL_E2E_API_KEY`. From `api/` run:
 
 ```sh
-BANE_E2E_URL=https://dev.nightmail.dev BANE_E2E_REGION=us-east-2 \
-BANE_E2E_DOMAIN=e2e.bane.mx BANE_E2E_DOMAIN_ID=dom_e53755830a0141a5bd6e71e45e942f06 \
-BANE_E2E_ALLOW_DESTRUCTIVE=1 bun run e2e
+NIGHTMAIL_E2E_URL=https://dev.nightmail.dev NIGHTMAIL_E2E_REGION=us-east-2 \
+NIGHTMAIL_E2E_DOMAIN=e2e.bane.mx NIGHTMAIL_E2E_DOMAIN_ID=dom_e53755830a0141a5bd6e71e45e942f06 \
+NIGHTMAIL_E2E_ALLOW_DESTRUCTIVE=1 bun run e2e
 ```
 
 This sends real SES simulator and inbound-loop mail and consumes sandbox quota. The destructive opt-in is accepted only on the pinned dev fixture. Omit it for the production-safe subset; never run tests on customer data. Both modes first clean up run-owned fixtures older than 30 minutes from interrupted runs. API keys do not support expiry; normal cleanup and the next run revoke test keys. Inspect `api/e2e-report.json` for operation coverage and request IDs.

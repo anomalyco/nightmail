@@ -295,7 +295,7 @@ impl Imap {
             }
             _ if !self.tls => r.line(format!("{t} NO [PRIVACYREQUIRED] Start TLS first")),
             C::Id { .. } => {
-                r.line("* ID (\"name\" \"Bane\")");
+                r.line("* ID (\"name\" \"Nightmail\")");
                 ok(&mut r)
             }
             C::Login { username, password } if !self.authenticated => {

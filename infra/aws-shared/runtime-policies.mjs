@@ -1,4 +1,4 @@
-// Offline renderer for dedicated Bane accounts. Substitute only the account and SNS origin.
+// Offline renderer for dedicated Nightmail accounts. Substitute only the account and SNS origin.
 import { readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
 
@@ -10,7 +10,7 @@ const read = (/** @type {string} */ file, /** @type {string} */ account) => JSON
 /** @param {string} account */
 function dedicated(account) {
   if (!/^\d{12}$/.test(account)) throw new Error('Expected a 12-digit account');
-  if (account === '438095551154') throw new Error('The retired shared account is not a dedicated Bane account');
+  if (account === '438095551154') throw new Error('The retired shared account is not a dedicated Nightmail account');
 }
 // broker: false drops the runtime's grant to enter the BYO broker (the legacy bane-runtime user never needs it).
 /** @param {string} mode @param {{ account: string, origin: string, broker?: boolean }} options */

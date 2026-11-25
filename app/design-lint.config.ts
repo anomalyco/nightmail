@@ -22,6 +22,7 @@ const ignore: Allow[] = [
 // (colours, px, fonts, its divider block), not the dashboard's custom properties.
 const email: Allow = { selector: /\.composer-document\b/, reason: 'the email itself, styled as delivered (mail clients get no tokens)' }
 
+
 const config = {
   include: ['src/**/*.css', 'src/**/*.ts', 'src/**/*.tsx'],
   ignore,
@@ -41,7 +42,7 @@ const config = {
       ],
     },
     'no-focus-ring': {
-      level: 'report',
+      level: 'error',
       title: 'No focus rings',
       why: 'Keyboard focus never draws a ring, outline or halo: it shows the hover cue as a solid step (ui.css, Focus).',
       use: 'A control: background: var(--color-control-focus). A row, menu item or ghost button: background: var(--color-hover). A text link: color: var(--color-text); text-decoration: underline.',
@@ -71,25 +72,25 @@ const config = {
       ],
     },
     'token-space': {
-      level: 'report',
+      level: 'error',
       title: 'Spacing from tokens',
-      why: 'Margins, padding and gaps come from the spacing scale (--space-4 … --space-40), so rhythm stays even across pages.',
+      why: 'Margins, padding and gaps come from the spacing scale (--space-4 … --space-40, and --space-2 for a track\'s inset or the split between two filled rows), so rhythm stays even across pages.',
       use: 'var(--space-N), or calc(-1 * var(--space-N)) for a negative margin.',
       properties: ['margin', 'margin-top', 'margin-right', 'margin-bottom', 'margin-left', 'margin-block', 'margin-block-start', 'margin-block-end', 'margin-inline', 'margin-inline-start', 'margin-inline-end', 'padding', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'padding-block', 'padding-block-start', 'padding-block-end', 'padding-inline', 'padding-inline-start', 'padding-inline-end', 'gap', 'row-gap', 'column-gap', 'grid-gap'],
       allow: [email],
     },
     'token-radius': {
-      level: 'report',
+      level: 'error',
       title: 'Radii from tokens',
-      why: 'Corners come from the radius scale (--radius-xs 4, --radius-sm 6, --radius-lg 8), so controls and surfaces round alike.',
-      use: 'var(--radius-xs | --radius-sm | --radius-md | --radius-lg); 50% for a dot or a face.',
+      why: 'Corners come from the radius scale (--radius-xs 4, --radius-sm 6, --radius-lg 8; --radius-2xs 2 for marks, --radius-sheet 14 for a phone\'s sheet), so controls and surfaces round alike.',
+      use: 'var(--radius-xs | --radius-sm | --radius-md | --radius-lg), var(--radius-2xs) for a mark, var(--radius-sheet) for a sheet; 50% for a dot or a face.',
       allow: [email],
     },
     'token-font-size': {
-      level: 'report',
+      level: 'error',
       title: 'Font sizes from tokens',
-      why: 'Type has one size per role (--text-label 11 … --text-xl 24, tokens.css), and a phone steps body and titles up from the same tokens.',
-      use: 'var(--text-…) for the role: label, xs, sm, md (body), section, heading, lg, title, xl.',
+      why: 'Type has one size per role (--text-label 11 … --text-xl 24, --text-figure 22 and --text-display 26, tokens.css), and a phone steps body and titles up from the same tokens.',
+      use: 'var(--text-…) for the role: label, xs, sm, md (body), section, heading, lg, title, xl, figure, display.',
       allow: [email],
     },
     'font-family': {
@@ -116,7 +117,7 @@ const config = {
     'page-full-width': {
       level: 'report',
       title: 'Pages run full width',
-      why: 'Every dashboard page runs the full width of the canvas (Settings, Billing, domain detail, forms, onboarding in the shell); a cap leaves a page in a column with empty space beside it.',
+      why: 'Every dashboard page runs the full width of the canvas (Settings, Billing, domain detail, forms); a cap leaves a page in a column with empty space beside it.',
       use: 'Remove the max-width and let the block fill the page. Keep a reading measure on prose itself (max-width in ch on the <p>).',
       // A cap of at least this many px on a block that is not text, a control or an overlay is a page container's cap.
       // Measures in ch or em are text measures and never count.
@@ -125,6 +126,7 @@ const config = {
       allow: [
         { selector: /\.campaign-compose-sheet\b|\.studio-notices\b|\.email-text\b/, reason: 'an email at its own width: the composer\'s sheet (680px) and its notices, and an email\'s plain text (800px)' },
         { selector: /\.onboarding-workspace\b/, reason: 'the onboarding header\'s workspace picker: half the header, and a longer name wraps' },
+        { selector: /\.onboarding(?:--(?:narrow|choice|wide))?(?![\w-])|\.onboarding-notice(?![\w-])/, reason: 'Ryan: onboarding is a centred reading column (2026-11-25)' },
       ],
     },
     'no-label-truncation': {

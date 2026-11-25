@@ -167,7 +167,7 @@ function KeysDialog({ onClose }: { onClose: () => void }) {
       {error && <Alert tone="danger">{error}</Alert>}
       {secret ? <Alert tone="success" title="Shown once: copy it now">
         <span className="op-key-secret"><SecretCode>{secret}</SecretCode><CopyButton value={secret} label="Copy key" /></span>
-        <code className="op-key-usage">{`BANE_URL=${origin} BANE_UI_NOTES_KEY=${secret.slice(0, 15)}… node --import tsx api/scripts/ui-notes.ts list --status open --json --screenshots ./notes`}</code>
+        <code className="op-key-usage">{`NIGHTMAIL_URL=${origin} NIGHTMAIL_UI_NOTES_KEY=${secret.slice(0, 15)}… node --import tsx api/scripts/ui-notes.ts list --status open --json --screenshots ./notes`}</code>
       </Alert> : <form className="op-key-form" onSubmit={create}>
         <Field label="Name" htmlFor="ui-note-key-name"><Input id="ui-note-key-name" value={name} maxLength={100} onChange={event => setName(event.target.value)} required /></Field>
         <Field label="Expires"><Select value={days} onValueChange={setDays} options={[{ value: '7', label: 'In 7 days' }, { value: '30', label: 'In 30 days' }, { value: '90', label: 'In 90 days' }]} /></Field>

@@ -38,7 +38,10 @@ export type EmailSnapshot = {
   unsubscribeUrl?: string;
   /** A sent required notice's email, which has no unsubscribe URL to keep: its body is re-rendered the same way. */
   requiredNotice?: true;
-  /** Bane-authored notice with a recipient-only capability; reads withhold it. */
+  /** A campaign copy or campaign test: the origin of its links (src/link-domains.ts), where its inline pictures are linked
+   *  from (src/linked-images.ts). None: its pictures stay attached. */
+  linkOrigin?: string;
+  /** Nightmail-authored notice with a recipient-only capability; reads withhold it. */
   sealed?: boolean;
   /** Sent from a receiving address or inbox: a reply, a new conversation, a forward or a mail-client submission. Reading it needs mailbox access. */
   mailbox?: boolean;
@@ -52,6 +55,9 @@ export type CampaignDraft = {
   /** Only stored in the launch review: the workspace's postal address its footer shows. A review from before postal
    *  addresses has none until the campaign starts sending (src/sending.ts frozenPostalAddress). */
   postalAddress?: string;
+  /** Only stored in the launch review: the origin of the links Nightmail adds to its copies (src/link-domains.ts). A
+   *  review on the link domain (or from before link hosts) has none: each copy asks when it is made. */
+  linkOrigin?: string;
   name: string; from: string; fromName?: string; previewText?: string; replyTo?: string[]; region: string; subject: string; html?: string;
   attachments: string[]; tracking: boolean; unsubscribePageUrl?: string;
   /** A required notice (src/sending.ts): to everyone in the audience but the suppressed, without an unsubscribe link. */

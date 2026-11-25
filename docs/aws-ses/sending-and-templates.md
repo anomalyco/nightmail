@@ -81,7 +81,7 @@ Illustrative JSON only; not a send instruction or production-ready campaign payl
         "Text": { "Data": "Thank you for your order.", "Charset": "UTF-8" },
         "Html": { "Data": "<p>Thank you for your order.</p>", "Charset": "UTF-8" }
       },
-      "Headers": [{ "Name": "X-Bane-Reference", "Value": "example-reference" }]
+      "Headers": [{ "Name": "X-Nightmail-Reference", "Value": "example-reference" }]
     }
   },
   "ConfigurationSetName": "transactional",
@@ -129,7 +129,7 @@ Illustrative request; the unsubscribe value is deliberately omitted because Nigh
         "Html": "<p>Hello {{name}}, your update is ready.</p>"
       },
       "TemplateData": "{\"name\":\"reader\"}",
-      "Headers": [{ "Name": "X-Bane-Campaign", "Value": "example-campaign" }]
+      "Headers": [{ "Name": "X-Nightmail-Campaign", "Value": "example-campaign" }]
     }
   },
   "BulkEmailEntries": [
@@ -145,7 +145,7 @@ Illustrative request; the unsubscribe value is deliberately omitted because Nigh
       "ReplacementEmailContent": {
         "ReplacementTemplate": { "ReplacementTemplateData": "{\"name\":\"Sam\"}" }
       },
-      "ReplacementHeaders": [{ "Name": "X-Bane-Reference", "Value": "example-two" }]
+      "ReplacementHeaders": [{ "Name": "X-Nightmail-Reference", "Value": "example-two" }]
     }
   ]
 }
