@@ -6,7 +6,7 @@ import { SignInConsent } from '../../../components/LegalLinks'
 import { CopyAction } from '../../../components/motion'
 import { NightmailWordmark } from '../../../components/NightmailLogo'
 import { WaitlistLine } from '../get-started'
-import { formatCount, nightmail, PROVIDERS } from './data'
+import { formatCount, nightmail, PROVIDERS, TERMS } from './data'
 import type { LandingVariant } from './variant'
 import { Bars } from './bars'
 import { PriceTable } from './table'
@@ -42,7 +42,7 @@ export function LandingPage({ variant, cta, visitor, full, notice, onMachine }: 
 
       {notice && <div className="lc-notice">{notice}</div>}
       <div className="lc-actions">
-        {cta('lc-start')}
+        {cta('ui-button ui-button--primary lc-start')}
         <CopyAction value={AGENT_INSTRUCTION} label="Copy setup instructions for your agent" text="Copy for your agent" className="lc-copy" />
       </div>
       {visitor && <SignInConsent className="lc-consent" />}
@@ -65,7 +65,7 @@ export function LandingPage({ variant, cta, visitor, full, notice, onMachine }: 
       <section className="lc-section" aria-labelledby="lc-pricing">
         <h2 id="lc-pricing">Pricing</h2>
         <p>{nightmail.perThousand} per 1,000 emails after {formatCount(nightmail.freeSent)} free every month, paid from prepaid credit: top-ups start at {nightmail.minTopUp} and last {nightmail.expiresAfterMonths} months. No plans, no seats and no charge per contact.</p>
-        <p className="lc-aside"><Link to="/pricing">Price calculator</Link>. Compared in full: {PROVIDERS.map((c, i) => <span key={c.slug}>{i ? ', ' : ''}<Link to={c.path}>{c.offer.vendor}</Link></span>)}.</p>
+        <p className="lc-aside">{TERMS} <Link to="/pricing">Price calculator</Link>. Compared in full: {PROVIDERS.map((c, i) => <span key={c.slug}>{i ? ', ' : ''}<Link to={c.path}>{c.offer.vendor}</Link></span>)}.</p>
       </section>
     </main>
     <footer className="lc-foot">

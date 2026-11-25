@@ -1,5 +1,5 @@
 import { useRef, useState, type CSSProperties, type PointerEvent } from 'react'
-import { checkedPhrase, formatCount, ours, PROVIDERS, theirs, TERMS } from './data'
+import { formatCount, ours, PROVIDERS, sourceLine, theirs } from './data'
 
 // Option C: the cost curve, wider than the text column. A month's bill against the emails sent, both on log scales:
 // Nightmail's line is exact at every volume (its price per email), each provider's line is its own checked price at each
@@ -41,7 +41,7 @@ export function Curve() {
   const at = PROVIDERS.flatMap(c => { const q = theirs(c, emails); return q && (c.offer.ladder === 'complete' || c.steps.includes(emails)) ? [{ c, q }] : [] }).sort((a, b) => a.q.usd - b.q.usd)
   const next = at[0], top = at.at(-1)
   return <figure className="lc-figure lc-curve" aria-labelledby="lc-curve-title">
-    <p id="lc-curve-title" className="lc-figure-title">Nightmail’s line runs under every other email API’s price, from {formatCount(FROM)} to {formatCount(TO)} emails a month.</p>
+    <p id="lc-curve-title" className="lc-figure-title">Nightmail’s line runs under every other email API’s price, at every volume.</p>
     <div className="lc-curve-read" aria-live="polite">
       <span className="lc-read-at">{formatCount(emails)} emails</span>
       <span className="lc-read-us">Nightmail <b>{us.text}</b></span>
@@ -64,6 +64,6 @@ export function Curve() {
       <span className="lc-label-us" style={{ top: `${ly(ours(TO).usd) * 100}%` }} aria-hidden="true">Nightmail</span>
       <span className="lc-label-others" aria-hidden="true">{PROVIDERS.length} other email APIs</span>
     </div>
-    <figcaption className="lc-note">{TERMS} Each grey line or dot is one provider’s price at the volumes its page prices, {checkedPhrase()}.</figcaption>
+    <p className="lc-note">{sourceLine()} Each grey line or dot is one provider.</p>
   </figure>
 }

@@ -37,5 +37,5 @@ export default function Landing({ variant, start, notice }: HomeProps & { varian
     history.pushState(history.state, '', url); setMachine(true); scrollTo(0, 0)
   }
   if (machine) return <Suspense fallback={null}><Factory format={shown()} start={start} notice={notice} /></Suspense>
-  return <LandingPage variant={variant} visitor={visitor} full={full} notice={notice} onMachine={openMachine} cta={className => <StartButton start={start} className={className} />} />
+  return <LandingPage variant={variant} visitor={visitor} full={full} notice={notice} onMachine={openMachine} cta={className => <StartButton start={start} className={className} warm />} />
 }

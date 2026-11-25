@@ -36,8 +36,10 @@ export function checkedPhrase() {
   const days = [...new Set(PROVIDERS.map(c => c.offer.checked))].sort()
   return days.length === 1 ? `checked ${dayOf(days[0]!)}` : `checked between ${dayOf(days[0]!)} and ${dayOf(days.at(-1)!)}`
 }
-/** What every price assumes, in a line (the comparison pages' own terms). */
-export const TERMS = 'List prices on each provider’s own pricing page, before tax: its cheapest plan or pay-as-you-go for the month, one recipient per email.'
+/** Under the comparison, in a line: whose prices, and when they were read. */
+export const sourceLine = () => `Each provider’s list price for a month, ${checkedPhrase()}.`
+/** What every price assumes (the comparison pages' own terms), with the pricing section's small print. */
+export const TERMS = 'Each provider’s price is its list price on its own pricing page, before tax: its cheapest plan or pay-as-you-go for the month, one recipient per email.'
 
 export const short = (n: number) => n >= 1_000_000 ? `${n / 1_000_000}M` : n >= 1000 ? `${n / 1000}k` : String(n)
 export { formatCount, nightmail }

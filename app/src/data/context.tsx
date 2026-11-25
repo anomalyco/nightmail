@@ -41,6 +41,15 @@ type Session = { identity: Identity | null; logout: () => Promise<void>; switchW
   /** A sign-in is under way (its button shows it). */
   signingIn: boolean
   notice: string | null; dismissNotice: () => void }
+/** How long a prepared sign-in (its address at the account service) serves the press that follows it (ApiProvider): the
+ *  account service keeps its pushed request at least 50 s (gone by 110 s; measured 25 Nov 2026), so 45 s. */
+const SIGN_IN_READY_MS = 45_000
+/** A connection to the account service, opened as a sign-in's address arrives, so the navigation there doesn't wait for one. */
+function preconnect(href: string) {
+  const origin = new URL(href).origin
+  if (document.querySelector(`link[rel="preconnect"][href="${origin}"]`)) return
+  document.head.append(Object.assign(document.createElement('link'), { rel: 'preconnect', href: origin }))
+}
 const homeChunk = chunk(() => import('../features/home'))
 export const loadHome = homeChunk.preload
 export const HomePage = homeChunk.page(m => m.HomePage)
@@ -451,10 +460,13 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   // Before a session is known, a 401 from the boot prefetch is answered by /v1/me itself.
   useEffect(() => { const denied = () => { if (!isPublicPath(window.location.pathname) && cache.getQueryData(['identity']) === undefined) return; cache.clear(); void identity.refetch() }; window.addEventListener('nightmail:unauthorized', denied); return () => window.removeEventListener('nightmail:unauthorized', denied) }, [cache])
   async function logout() { setAuthError(null); try { await signOutAccount() } catch (error) { setAuthError(error) } }
-  // Every sign-in request replaces the browser's single OAuth state cookie, so it starts on pointer down
-  // (the click that follows is milliseconds away) rather than on hover or focus. The pending request is
-  // used by that click only; a pointer down that never becomes a click is dropped after a few seconds.
-  const signIn = useRef<{ at: number; url: Promise<string> } | null>(null)
+  // Every sign-in request replaces the browser's single OAuth state cookie, so it starts as late as the page can know a
+  // press is coming: on pointer down, or for the new homepage's Get started (home/landing) when the pointer rests on the
+  // button or it takes focus (the press then finds the account service's address ready, instead of waiting the ~0.6 s the
+  // request takes). One prepared request serves the press that follows within SIGN_IN_READY_MS; another hover or the
+  // pointer down in that time reuses it rather than starting a second, so its cookie isn't replaced in between. Its
+  // answer also opens a connection to the account service ahead of the navigation there.
+  const signIn = useRef<{ at: number; url: Promise<string>; focus?: WorkspaceFocus } | null>(null)
   // select: the account service shows its account chooser first (the waitlist screen's "Use a different account").
   // method: it asks for that sign-in (staff tools need Google).
   function accountUrl(select = false, method?: 'google', focus?: WorkspaceFocus) {
@@ -476,11 +488,12 @@ export function ApiProvider({ children }: { children: ReactNode }) {
       return url.href
     })
   }
+  const ready = (held: typeof signIn.current, focus?: WorkspaceFocus): held is NonNullable<typeof held> => !!held && held.focus === focus && Date.now() - held.at < SIGN_IN_READY_MS
   function prepareLogin(event: { button: number }, focus?: WorkspaceFocus) {
-    if (busy || event.button !== 0) return
+    if (busy || event.button !== 0 || ready(signIn.current, focus)) return
     const url = accountUrl(false, undefined, focus)
-    signIn.current = {at: Date.now(), url}
-    url.catch(() => { if (signIn.current?.url === url) signIn.current = null })
+    signIn.current = {at: Date.now(), url, focus}
+    url.then(preconnect, () => { if (signIn.current?.url === url) signIn.current = null })
   }
   const login = () => startLogin(false)
   async function startLogin(select: boolean, method?: 'google', focus?: WorkspaceFocus) {
@@ -488,7 +501,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     if (focus) rememberLandingFocus(focus, window.location.pathname)
     const pending = signIn.current
     signIn.current = null
-    try { const url = await (!select && !method && pending && Date.now() - pending.at < 5000 ? pending.url : accountUrl(select, method, focus)); expectAccount(); analytics().flush(); window.location.assign(url) }
+    try { const url = await (!select && !method && ready(pending, focus) ? pending.url : accountUrl(select, method, focus)); expectAccount(); analytics().flush(); window.location.assign(url) }
     catch (error) { setAuthError(error); setBusy(false) }
   }
   const signedOut = !checkIdentity || (identity.error instanceof ApiError && identity.error.status === 401 && identity.error.code === 'AUTH_REQUIRED')
