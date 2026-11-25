@@ -373,6 +373,7 @@ const MESSAGES = {
   msg_nodmarc_spoof: ['thr_mail_1', null, 'FAIL', null, 'Refund', 'refund my top-up please'], msg_stranger_1: ['thr_mail_1', 'stranger@else.test'],
   msg_phish_1: ['thr_phish', null, 'PASS', null, 'Reset', 'Please send me the reset link'],
   msg_stranger_cap_1: ['thr_cap_1', 'stranger@else.test'], msg_stranger_cap_2: ['thr_cap_2', 'stranger@else.test'], msg_stranger_cap_3: ['thr_cap_3', 'stranger@else.test'],
+  msg_gmail_a: ['thr_gmail_a', 'alice@gmail.com'], msg_gmail_b: ['thr_gmail_b', 'bob@gmail.com'],
   msg_nodmarc_c1: ['thr_c1', null, 'FAIL'], msg_nodmarc_c2: ['thr_c2', null, 'FAIL'],
   msg_abuse_1: ['thr_abuse', 'reporter@isp.test', 'PASS', 'abuse@dev.bane.mx', 'Spam from your customer', 'Your customer sends us spam. Headers attached.'],
   msg_abuse_2: ['thr_abuse', 'reporter@isp.test', 'PASS', 'abuse@dev.bane.mx', 'Re: Spam from your customer', 'More of it today.'],

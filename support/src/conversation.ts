@@ -4,7 +4,7 @@ import type { Env } from './env.js';
 import { gate, LINK_ORIGINS, plainText } from './gate.js';
 import { addTicketNote, expectation, fileTicket, masked, openFollowUp, ticketEmail, type FiledTicket, type TicketContext } from './tickets.js';
 import { addressHash, MissingSecret, newId } from './tokens.js';
-import { alertOnce, countToday, holdOverCap, limits, mailAllowed, registrableDomain, ticketAllowed } from './limits.js';
+import { alertOnce, countToday, holdOverCap, limits, mailAllowed, PUBLIC_MAILBOX_DOMAINS, registrableDomain, ticketAllowed } from './limits.js';
 import { external, WorkQueue, type NewWork, type Outcome, type WorkRow, type WorkState } from './work.js';
 import { attachmentLink, deleteConversationUploads, MAX_ATTACHMENTS, modelImage, safeName, storeImage, type Attachment } from './attachments.js';
 import { cleanImage, ImageRejected, IMAGE_TYPES, MAX_IMAGE_BYTES } from './image.js';
@@ -587,7 +587,10 @@ export class SupportConversation extends DurableObject<Env> {
     if (opening) this.record({ id: newId('msg'), role: 'user', kind: null, text: opening, at: new Date().toISOString(), tools: [] });
     const pair = new WebSocketPair();
     this.ctx.acceptWebSocket(pair[1]);
-    if (Number.isFinite(expRaw) && expRaw > 0) pair[1].serializeAttachment({ exp: expRaw });
+    if (Number.isFinite(expRaw) && expRaw > 0) {
+      pair[1].serializeAttachment({ ...(Number.isFinite(iatRaw) && iatRaw > 0 ? { iat: iatRaw } : {}), exp: expRaw });
+      await this.arm();
+    }
     const messages = this.history();
     this.sendTo(pair[1], this.hello(meta));
     this.sendTo(pair[1], { type: 'history', messages, pending: { consent: this.pendingConsent(), ticket: this.pendingTicket(meta), actions: cards } });
@@ -868,7 +871,7 @@ export class SupportConversation extends DurableObject<Env> {
           progress.emailed = true; save();
         }
       } else {
-        const open = this.ctx.getWebSockets().length > 0;
+        const open = (await this.recheckSocketSessions()) > 0;
         if (!progress.recorded) {
           this.update(m => { m.lastActivity = Date.now(); });
           this.record({ id: reply.id, role: 'staff', kind: 'staff', text: reply.text, at, tools: [], author });
@@ -894,9 +897,50 @@ export class SupportConversation extends DurableObject<Env> {
     if (meta.channel === 'email' && !progress.recorded) { this.record({ id: reply.id, role: 'staff', kind: 'staff', text: reply.text, at, tools: [], author }); progress.recorded = true; save(); }
     return settle('sent');
   }
+  private nextSocketExpiry(): number | null {
+    let earliest: number | null = null;
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as { exp?: number } | null;
+      if (att?.exp && (earliest === null || att.exp < earliest)) earliest = att.exp;
+    }
+    return earliest;
+  }
+  private pruneExpiredSockets(now = Date.now()) {
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as { exp?: number } | null;
+      if (att?.exp && now >= att.exp) { try { ws.close(4401, 'expired'); } catch { /* closed */ } }
+    }
+  }
+  private async recheckSocketSessions(): Promise<number> {
+    const now = Date.now();
+    const live: WebSocket[] = [];
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as { iat?: number; exp?: number } | null;
+      if (att?.exp && now >= att.exp) { try { ws.close(4401, 'expired'); } catch { /* closed */ } continue; }
+      live.push(ws);
+    }
+    if (!live.length || !this.meta()?.registered) return live.length;
+    let scope: PlatformReply<Scope>;
+    try { scope = await this.stamped<Scope>('GET', '/v1/support/scope'); } catch { return live.length; }
+    if (scope.status !== 200) return live.length;
+    const active = scope.body.user.activeSession !== false;
+    const since = scope.body.user.sessionSince ? Date.parse(scope.body.user.sessionSince) : NaN;
+    let open = 0;
+    for (const ws of live) {
+      const att = ws.deserializeAttachment() as { iat?: number; exp?: number } | null;
+      if (!active || (att?.iat && Number.isFinite(since) && att.iat + 5_000 < since)) {
+        try { ws.close(4401, 'expired'); } catch { /* closed */ }
+      } else open++;
+    }
+    return open;
+  }
   private broadcast(message: Outgoing) {
-    const frame = JSON.stringify({ v: 1, ...message, seq: ++this.seq });
-    for (const ws of this.ctx.getWebSockets()) { try { ws.send(frame); } catch { /* closed */ } }
+    const now = Date.now(), frame = JSON.stringify({ v: 1, ...message, seq: ++this.seq });
+    for (const ws of this.ctx.getWebSockets()) {
+      const att = ws.deserializeAttachment() as { exp?: number } | null;
+      if (att?.exp && now >= att.exp) { try { ws.close(4401, 'expired'); } catch { /* closed */ } continue; }
+      try { ws.send(frame); } catch { /* closed */ }
+    }
   }
   private sendTo(ws: WebSocket, message: Outgoing) {
     try { ws.send(JSON.stringify({ v: 1, ...message, seq: ++this.seq })); } catch { /* closed */ }
@@ -1362,7 +1406,7 @@ export class SupportConversation extends DurableObject<Env> {
     if (!(await count(this.env, `${await this.person(meta)}:${email ? 'email_turns' : 'turns'}`, email ? cap.turnsPerEmailSender : cap.turnsPerPerson)).ok) return { ok: false, global: false };
     if (email && !verifiedEmail) {
       const domain = registrableDomain(meta.email ?? meta.conversationId);
-      if (domain && !(await count(this.env, `domain:${await addressHash(domain)}:email_turns`, cap.turnsPerEmailDomain)).ok) return { ok: false, global: false };
+      if (domain && !PUBLIC_MAILBOX_DOMAINS.has(domain) && !(await count(this.env, `domain:${await addressHash(domain)}:email_turns`, cap.turnsPerEmailDomain)).ok) return { ok: false, global: false };
       if (!(await count(this.env, 'global:turns:general', cap.turnsGeneralPerDay)).ok) return { ok: false, global: true };
       return { ok: true, global: false };
     }
@@ -1949,6 +1993,7 @@ export class SupportConversation extends DurableObject<Env> {
 
   override async alarm() {
     if (!this.meta()) return;
+    this.pruneExpiredSockets();
     await this.work.drain(item => this.run(item), (item, state) => this.finished(item, state), () => this.deadline());
     // The inbox: what a failed mirror left, and the state this drain changed (blocked work, a ticket).
     await this.mirror();
@@ -1973,8 +2018,10 @@ export class SupportConversation extends DurableObject<Env> {
     const meta = this.meta();
     if (!meta) return null;
     const own = !meta.closedAt ? meta.lastActivity + this.idle(meta) : meta.closedAt + KEEP_AFTER_CLOSE_MS > Date.now() || !this.work.open() ? meta.closedAt + KEEP_AFTER_CLOSE_MS : null;
-    // A mirror that failed is retried at its time, beside the rest.
-    return meta.mirrorDueAt ? own === null ? meta.mirrorDueAt : Math.min(own, meta.mirrorDueAt) : own;
+    // A mirror that failed is retried at its time, and open sockets close when their token expires.
+    const socketExp = this.nextSocketExpiry();
+    const candidates = [own, meta.mirrorDueAt ?? null, socketExp].filter((t): t is number => t !== null);
+    return candidates.length ? Math.min(...candidates) : null;
   }
   private arm() { return this.work.arm(this.deadline()); }
 

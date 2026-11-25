@@ -52,6 +52,16 @@ export function limits(env: Env): Limits {
 export const today = (now = Date.now()) => new Date(now).toISOString().slice(0, 10);
 
 const TWO_LABEL_PSL = new Set(['co.uk', 'org.uk', 'ac.uk', 'gov.uk', 'com.au', 'net.au', 'org.au', 'co.nz', 'com.br', 'co.jp', 'ne.jp', 'or.jp', 'co.in', 'com.mx', 'co.za', 'com.sg', 'com.hk', 'co.kr', 'com.tr', 'com.ar']);
+/** Large public mailbox providers whose non-member senders are bounded per address and by the global general cap rather than sharing one per-domain cap. */
+export const PUBLIC_MAILBOX_DOMAINS: ReadonlySet<string> = new Set([
+  'gmail.com', 'googlemail.com',
+  'outlook.com', 'hotmail.com', 'live.com', 'msn.com',
+  'icloud.com', 'me.com', 'mac.com',
+  'yahoo.com', 'ymail.com', 'rocketmail.com',
+  'proton.me', 'protonmail.com', 'pm.me',
+  'fastmail.com', 'fastmail.fm',
+  'hey.com', 'aol.com', 'zoho.com', 'gmx.com', 'gmx.net', 'mail.com',
+]);
 /** Registrable domain of an email address (lowercase), for per-domain general-email caps. */
 export function registrableDomain(email: string): string {
   const domain = email.trim().toLowerCase().split('@').pop() ?? '';

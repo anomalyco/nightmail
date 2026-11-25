@@ -745,6 +745,35 @@ describe('support Worker', () => {
     again.ws.close();
   }, 180_000);
 
+  test('public mailbox providers are bounded per address rather than sharing one domain budget, and idle sockets close on sign-out', async () => {
+    const isolated = new Miniflare({ cf: false, telemetry: { enabled: false }, workers: [worker('support', baseEnv({ LIMIT_TURNS_GENERAL_PER_DAY: text('5'), LIMIT_TURNS_PER_EMAIL_DOMAIN: text('1'), LIMIT_TURNS_PER_EMAIL_SENDER: text('2') })),
+      { config: { name: 'fake-bane', compatibilityDate: '2026-09-08', manifest: { mainModule: 'bane.js', modules: { 'bane.js': { type: 'esm', contents: FAKE_BANE } } }, env: {} } }] } as never);
+    try {
+      await migrate(isolated);
+      // Two distinct Gmail senders each get answered even with LIMIT_TURNS_PER_EMAIL_DOMAIN=1.
+      assert.equal((await signedHook('msg_gmail_a', 'thr_gmail_a', 'alice@gmail.com', { instance: isolated })).status, 200);
+      assert.equal((await signedHook('msg_gmail_b', 'thr_gmail_b', 'bob@gmail.com', { instance: isolated })).status, 200);
+      const a = await eventually(async () => (await replies('thr_gmail_a', isolated))[0]);
+      const b = await eventually(async () => (await replies('thr_gmail_b', isolated))[0]);
+      assert.ok(a && !a[3].text.includes('can’t answer automatically'), a?.[3].text);
+      assert.ok(b && !b[3].text.includes('can’t answer automatically'), b?.[3].text);
+      // An idle open chat socket whose user signs out is closed with 4401 before receiving a staff push.
+      const started = await (await isolated.dispatchFetch(`${SUPPORT}/chat/start`, { method: 'POST', headers: { 'content-type': 'application/json', origin: ORIGIN }, body: JSON.stringify({ handoff: handoff('usr_idle_so') }) })).json() as any;
+      const chat = await connect(started.socketUrl, isolated);
+      await chat.until(f => f.type === 'history');
+      await fakeHook('/__session', { userId: 'usr_idle_so', activeSession: false }, isolated);
+      const fb = await isolated.getWorker('fake-bane');
+      await fb.fetch('http://fake-bane/__inbox', { method: 'POST', body: JSON.stringify({ id: started.conversationId, reply: { id: 'msg_staffso00000001', text: 'Staff reply after sign-out', staffName: 'Dana' } }) });
+      await isolated.dispatchFetch(`${SUPPORT}/hooks/nightmail-wake`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ conversationId: started.conversationId }) });
+      // The signed-out socket is closed before broadcasting, so the staff reply goes by email instead of pushing over WS.
+      const delivered = await eventually(async () => (await fakeCalls(isolated)).find(c => c[0] === 'markDelivery' && c[2] === 'msg_staffso00000001' && c[3] === 'sent'), 15_000);
+      assert.ok(delivered, 'Staff reply delivered.');
+      const emailed = (await fakeCalls(isolated)).find(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[5] === 'staff-msg_staffso00000001');
+      assert.ok(emailed, 'Closed signed-out socket fell back to email delivery.');
+      assert.ok(!chat.frames.some(f => f.kind === 'staff'), 'Signed-out socket must not receive staff reply push.');
+    } finally { await isolated.dispose(); }
+  }, 180_000);
+
   /** A new chat's first turn for this person in this workspace: its conversation and the turn's context (<customer> on). */
   async function firstTurn(user: string, workspace = 'ws_acme') {
     const chat = await chatIn(mf, handoff(user, false, workspace)), models = recorded.length, tag = `(notes check ${user} ${workspace})`;
