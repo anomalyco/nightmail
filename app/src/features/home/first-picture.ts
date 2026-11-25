@@ -13,6 +13,7 @@ import phoneBoard1 from './factory/phone/board1.webp'
 import phoneBoard2 from './factory/phone/board2.webp'
 import type { Format } from './factory/manifest'
 import { UPRIGHT } from './frame'
+import { landingVariant } from './landing/variant'
 
 // The homepage's first picture, apart from the page's code so the app can start loading it before that code arrives
 // (App.tsx, beside the session check): which frame a window gets, and its poster. home.html paints the same pictures
@@ -38,7 +39,7 @@ export const STILL_SPRITES = [phoneBoard0, phoneBoard1, phoneBoard2], STILL_BOAR
  *  it finds its JPEG when the page renders). */
 export function preloadFirstPicture() {
   const format = shown()
-  if (document.getElementById('home-shell')) return
+  if (document.getElementById('home-shell') || landingVariant()) return
   const link = document.createElement('link')
   link.rel = 'preload'; link.as = 'image'; link.type = 'image/avif'; link.href = POSTERS[format].src; link.fetchPriority = 'high'
   link.setAttribute('imagesrcset', POSTERS[format].avif); link.setAttribute('imagesizes', POSTER_SIZES)

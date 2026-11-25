@@ -41,11 +41,11 @@ const SHELL_CSS = '#price-shell{position:absolute;top:0;left:0;z-index:214748300
  *  characters, and preloaded. The painted page knows only these (its CSS leaves out the app's own faces of those
  *  families: WHOLE_FACES), so it fetches nothing else; once the app's stylesheet is in, they still serve these
  *  characters (defined after its faces) and the whole fonts only the others. */
-const BASIC = 'U+0020-007E,U+00A0,U+00A9,U+00AB,U+00AE,U+00B7,U+00BB,U+00D7,U+2010-2027,U+2030,U+2039-203A,U+20AC,U+2122,U+2190-2193,U+2212,U+2713,U+FEFF,U+FFFD'
+export const BASIC = 'U+0020-007E,U+00A0,U+00A9,U+00AB,U+00AE,U+00B7,U+00BB,U+00D7,U+2010-2027,U+2030,U+2039-203A,U+20AC,U+2122,U+2190-2193,U+2212,U+2713,U+FEFF,U+FFFD'
 /** What public/theme.js may set on <html> before the first paint, which the page's CSS may select. */
-const THEME_ATTRIBUTES = ['data-theme', 'data-shell', 'data-member', 'data-overview-panel', 'style']
-const WHOLE_FACES = /@font-face\{font-family:(?:Inter|OpenTUI Mono|"Inter"|"OpenTUI Mono");[^}]*\}/g
-const FIRST_FONTS = [{ family: 'Inter', file: 'inter-basic.woff2', weight: '100 900' }, { family: 'OpenTUI Mono', file: 'opentui-regular-basic.woff2', weight: '400' }, { family: 'OpenTUI Mono', file: 'opentui-bold-basic.woff2', weight: '700' }]
+export const THEME_ATTRIBUTES = ['data-theme', 'data-shell', 'data-member', 'data-overview-panel', 'style']
+export const WHOLE_FACES = /@font-face\{font-family:(?:Inter|OpenTUI Mono|"Inter"|"OpenTUI Mono");[^}]*\}/g
+export const FIRST_FONTS = [{ family: 'Inter', file: 'inter-basic.woff2', weight: '100 900' }, { family: 'OpenTUI Mono', file: 'opentui-regular-basic.woff2', weight: '400' }, { family: 'OpenTUI Mono', file: 'opentui-bold-basic.woff2', weight: '700' }]
 
 export function pricePages(): Plugin {
   let publicDir = '', root = ''
@@ -146,7 +146,7 @@ export const priceFirstFiles = (files: string[]) => [/^assets\/(?:moondust-\d+|w
   .flatMap(pattern => files.filter(name => pattern.test(name)))
 
 /** The stylesheets the chunks of these modules load, theirs and their imports'. */
-function pageCss(bundle: Rollup.OutputBundle, modules: string[]) {
+export function pageCss(bundle: Rollup.OutputBundle, modules: string[]) {
   const css = new Set<string>(), seen = new Set<string>()
   const visit = (chunk: Rollup.OutputChunk) => {
     if (seen.has(chunk.fileName)) return

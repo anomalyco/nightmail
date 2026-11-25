@@ -1,5 +1,5 @@
 // (With extensions: the build's config imports this file, price-pages.ts.)
-import { productName, publicOrigin } from '../../../../api/src/brand.ts'
+import { apiKeyEnv, productName, publicOrigin, sdkPackage } from '../../../../api/src/brand.ts'
 import { COMPARISONS, OFFERS } from './compare/index.ts'
 import { PRICE_PAGES, type PricePage } from './pages.ts'
 import { FIRST_STEP, PANEL_IDS, PANELS } from './panels.ts'
@@ -95,11 +95,29 @@ export function pricingMarkdown(): string {
   ].join('\n\n') + '\n'
 }
 
+/** The homepage's steps for an agent asked to set up sending (its "Copy for your agent" points here): the device flow for
+ *  its own key (api/src/agent-setup.ts, the same one the dashboard's agent prompt falls back to), the docs, a first send
+ *  from the workspace's built-in domain (api/src/builtin-domain.ts) and the person's own domain after it. */
+function agentSteps() {
+  return [
+    `## For agents: set up sending`,
+    `If a person asked you to send email from their project with ${productName}:`,
+    [
+      `1. Get your own API key with a device code: POST ${url('/v1/agent/device')} with the JSON body {"client_name":"<your name>"}. Show the person its verification_uri_complete and user_code; they sign in there (a new account signs up the same way) and approve. Poll POST ${url('/v1/agent/device/token')} with {"device_code":"<device_code>"} every interval seconds until it returns the key (AUTHORIZATION_PENDING means keep waiting).`,
+      `2. Save the key as ${apiKeyEnv} in the project's environment (a gitignored .env), never in code or a commit: it's shown once.`,
+      `3. Read ${url('/llms.txt')} and ${url('/docs.md')} before writing code. Use the TypeScript SDK (npm i ${sdkPackage}) or the REST API with the key as a bearer token, from server code only.`,
+      `4. Send from the workspace's domain (GET /v1/domains lists it). A new workspace starts with a built-in nightmail.email domain that for now sends only to its members' own sign-in addresses, so send the first email to the person's own address with POST /v1/emails/send. 202 means queued, not delivered.`,
+      `5. To email anyone else, ask the person which domain to send from, add it with POST /v1/domains and give them its DNS records; it verifies by itself once they resolve.`,
+    ].join('\n'),
+  ].join('\n\n')
+}
+
 export function homeMarkdown(): string {
   return [
     `# ${productName}`,
     `> ${productName} is an email API on Amazon SES: send, receive and reply on your own domains. ${nightmail.perThousand} per 1,000 emails, sent or received via API. Free every month: ${free}.`,
     `Canonical page: ${url('/')}`,
+    agentSteps(),
     `## What it costs`,
     terms(),
     `That’s the whole bill. [Price calculator](${url('/pricing.md')})`,

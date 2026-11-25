@@ -1,7 +1,8 @@
-import { useEffect, useSyncExternalStore, type ReactNode } from 'react'
+import { lazy, Suspense, useEffect, useSyncExternalStore, type ReactNode } from 'react'
 import { productName } from '../../../../api/src/brand'
 import { FactoryHome } from './factory-home'
 import { afterFirstPicture, shown, UPRIGHT } from './first-picture'
+import { landingVariant } from './landing/variant'
 
 /** What the page's button does: signs a visitor in (Get started), or opens the dashboard for someone signed in. */
 export type HomeStart = { signedIn: true } | { signedIn: false; onSignIn: () => void; onSignInIntent: (event: { button: number }) => void; busy: boolean }
@@ -14,6 +15,9 @@ const watch = (changed: () => void) => {
   query.addEventListener('change', changed)
   return () => query.removeEventListener('change', changed)
 }
+
+// The new homepage's options (landing/variant.ts): only where a review build asks for one; any other build has none.
+const Landing = import.meta.env.DEV || import.meta.env.VITE_DESIGN_SHEET === '1' ? lazy(() => import('./landing')) : null
 
 // The homepage, signed in or out.
 export function HomePage(props: HomeProps) {
@@ -33,5 +37,7 @@ export function HomePage(props: HomeProps) {
     })
     return () => { wait(); cancel() }
   }, [signedIn])
+  const variant = Landing && landingVariant()
+  if (Landing && variant) return <Suspense fallback={null}><Landing variant={variant} {...props} /></Suspense>
   return <FactoryHome key={home} format={home} {...props} />
 }

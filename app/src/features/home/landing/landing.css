@@ -1,0 +1,168 @@
+/* The new homepage's options (index.tsx): one 768 px column of text on a plain page, the wordmark centred over it, and a
+   comparison that may run wider than the column, centred on it. One spacing scale, doubling (s1 inside a line, s2
+   between related lines, s3 between a heading and what follows it, s4 around the comparison, s5 between sections);
+   a phone steps the two largest down. Flat: solid fills, no rules, no shadows. */
+.landing {
+  --lc-s1: 8px; --lc-s2: 16px; --lc-s3: 24px; --lc-s4: 48px; --lc-s5: 96px;
+  --lc-bg: var(--color-surface); --lc-well: var(--color-layer-1); --lc-us: var(--color-accent-data); --lc-them: var(--color-series);
+  --lc-column: 768px; --lc-bleed: min(1120px, 100cqw - 48px);
+  container-type: inline-size; display: flex; flex-direction: column; box-sizing: border-box; min-height: 100svh;
+  padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px) env(safe-area-inset-left, 0px);
+  overflow-x: clip; background: var(--lc-bg); color: var(--color-text);
+  font: 400 16px/1.6 var(--font-body); letter-spacing: -.006em; font-variant-numeric: tabular-nums;
+}
+:root[data-theme='dark'] .landing { --lc-bg: var(--color-deep); --lc-well: #1C1C1C; --lc-them: #4A4A4A; }
+:root:has(.landing), :root:has(.landing) body { background: var(--lc-bg, var(--color-surface)); }
+:root[data-theme='dark']:has(.landing), :root[data-theme='dark']:has(.landing) body { background: var(--color-deep); }
+.landing *, .landing *::before, .landing *::after { box-sizing: border-box; }
+.lc-main { width: min(var(--lc-column), 100% - 48px); margin: 0 auto; padding: var(--lc-s4) 0 0; flex: 1; }
+.landing a { color: inherit; text-decoration-line: underline; text-decoration-thickness: from-font; text-underline-offset: .2em; text-decoration-color: color-mix(in srgb, currentColor 35%, transparent); transition: text-decoration-color var(--motion-duration), color var(--motion-duration); }
+@media (hover: hover) and (pointer: fine) { .landing a:hover { text-decoration-color: currentColor; color: var(--color-text); } }
+/* This page keeps its own focus ring, as the other public pages do (tokens.css). */
+.landing :is(a, button, pre):focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: 3px; border-radius: var(--radius-xs); }
+
+/* The wordmark, centred over the column. */
+.lc-head { display: flex; justify-content: center; margin-bottom: var(--lc-s4); }
+.lc-mark-link { display: block; padding: var(--lc-s1); margin: calc(-1 * var(--lc-s1)); color: var(--color-logo); }
+.lc-mark.nightmail-wordmark { --logo-cap: 20px; display: block; fill: currentColor; }
+
+.lc-lead { margin: 0; font-size: 28px; font-weight: 600; line-height: 1.3; letter-spacing: -.022em; text-wrap: balance; }
+.lc-figure { margin: var(--lc-s4) 0 0; }
+.lc-figure-title { margin: 0; font-size: 16px; line-height: 1.5; color: var(--color-muted); text-wrap: pretty; }
+.lc-figure-title b { color: var(--color-text); font-weight: 600; }
+.lc-note { margin-top: 12px; font-size: 13px; line-height: 1.5; color: var(--color-faint); text-wrap: pretty; }
+.lc-short { display: none; }
+
+/* The way in: Get started (the waitlist's words laid out with it: get-started.tsx) and the agent's copy, side by side. */
+.lc-notice { margin-top: var(--lc-s4); }
+.lc-actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 40px; }
+.lc-notice + .lc-actions { margin-top: var(--lc-s2); }
+.lc-start, .landing .lc-copy { --button-pad-x: 18px; height: 44px; padding: 0 var(--button-pad-x); border-radius: var(--radius-lg); font: 600 15px/1 var(--font-body); letter-spacing: -.01em; }
+.lc-start { display: inline-flex; align-items: center; justify-content: center; border: 0; background: var(--color-accent); color: var(--color-on-accent); text-decoration: none !important; cursor: pointer; transition: background-color var(--motion-duration), transform 160ms var(--ease-out-strong); }
+.lc-start .srt-cta-label { display: inline-flex; align-items: center; gap: 8px; }
+.lc-start .srt-cta-arrow { transition: translate 200ms var(--ease-out-strong); }
+@media (hover: hover) and (pointer: fine) { .lc-start:hover:not(:disabled) { background: var(--color-accent-hover); } .lc-start:hover:not(:disabled) .srt-cta-arrow { translate: 3px 0; } }
+.lc-start:active:not(:disabled) { background: var(--color-accent-pressed); transform: scale(.98); }
+.lc-start[data-busy] { cursor: progress; }
+.landing .lc-copy { background: var(--color-control); font-weight: 500; }
+.lc-consent { margin: 12px 0 0; font-size: 13px; line-height: 1.5; color: var(--color-faint); }
+.lc-wait { margin: 4px 0 0; font-size: 13px; line-height: 1.5; color: var(--color-text); }
+
+/* The sections: a heading and a line or two each. */
+.lc-section { margin-top: var(--lc-s5); }
+.lc-section + .lc-section { margin-top: var(--lc-s4); }
+.lc-section h2 { margin: 0 0 var(--lc-s1); font-size: 18px; font-weight: 600; line-height: 1.4; letter-spacing: -.012em; }
+.lc-section p { margin: 0; color: var(--color-muted); text-wrap: pretty; }
+.lc-section p + p { margin-top: var(--lc-s2); }
+.lc-section .lc-aside { margin-top: var(--lc-s2); font-size: 14px; color: var(--color-faint); }
+.lc-section code { font: 13px/1 var(--font-mono); color: var(--color-text); }
+.lc-code { margin: var(--lc-s2) 0 0; padding: var(--lc-s2) 20px; overflow-x: auto; overscroll-behavior-x: contain; border-radius: var(--radius-lg); background: var(--lc-well); font: 13px/1.7 var(--font-mono); color: var(--color-text); scrollbar-width: none; }
+.lc-code code { font: inherit; }
+
+.lc-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--lc-s2) var(--lc-s3); width: min(var(--lc-column), 100% - 48px); margin: var(--lc-s5) auto 0; padding: 0 0 var(--lc-s4); font-size: 13px; color: var(--color-faint); }
+.lc-foot nav { display: flex; flex-wrap: wrap; gap: var(--lc-s1) 20px; }
+.lc-foot p { margin: 0; }
+.landing .lc-foot a { text-decoration: none; }
+.lc-machine { appearance: none; margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; cursor: pointer; }
+@media (hover: hover) and (pointer: fine) { .landing .lc-foot a:hover, .lc-machine:hover { color: var(--color-text); } }
+
+/* ── A: bars at one volume ── */
+.lc-bars-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: var(--lc-s2) var(--lc-s3); margin-bottom: var(--lc-s3); }
+.lc-bars-head .lc-figure-title { flex: 1 1 320px; min-height: 3em; }
+.lc-volumes { display: flex; gap: var(--space-2); padding: var(--space-2); border-radius: var(--radius-lg); background: var(--lc-well); }
+.lc-volumes button { appearance: none; min-width: 52px; height: 32px; padding: 0 12px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--color-muted); font: 13px/1 var(--font-mono); cursor: pointer; transition: background-color var(--motion-duration), color var(--motion-duration); }
+@media (hover: hover) and (pointer: fine) { .lc-volumes button:hover { color: var(--color-text); } }
+.lc-volumes button[aria-checked='true'] { background: var(--lc-bg); color: var(--color-text); }
+.lc-bars-list { --row: 28px; position: relative; height: calc(var(--rows) * var(--row)); margin: 0; padding: 0; list-style: none; }
+.lc-bars-list li { position: absolute; inset: 0 0 auto; display: grid; grid-template-columns: 136px minmax(0, 1fr); align-items: center; height: var(--row); transform: translateY(calc(var(--i) * var(--row))); transition: transform 420ms var(--ease-out-strong); font-size: 14px; }
+.lc-bar-name { overflow: hidden; color: var(--color-muted); white-space: nowrap; text-overflow: ellipsis; }
+.landing .lc-bar-name a { text-decoration-color: transparent; }
+.lc-bar-track { container-type: inline-size; position: relative; height: 100%; }
+.lc-bar-fill { position: absolute; top: 50%; left: 0; width: calc((100cqw - 88px) * var(--share)); height: 10px; margin-top: -5px; border-radius: var(--radius-2xs); background: var(--lc-them); transition: width 420ms var(--ease-out-strong); }
+.lc-bar-value { position: absolute; top: 50%; left: calc((100cqw - 88px) * var(--share) + 10px); translate: 0 -50%; color: var(--color-muted); font: 13px/1 var(--font-mono); white-space: nowrap; transition: left 420ms var(--ease-out-strong); }
+.lc-bars-list li[data-us] .lc-bar-name, .lc-bars-list li[data-us] .lc-bar-value { color: var(--color-text); font-weight: 600; }
+.lc-bars-list li[data-us] .lc-bar-fill { background: var(--lc-us); }
+.lc-bars-list li[data-none] .lc-bar-value { left: 0; color: var(--color-faint); font-family: var(--font-body); }
+@media (prefers-reduced-motion: reduce) { .lc-bars-list li, .lc-bar-fill, .lc-bar-value { transition: opacity .15s; } }
+
+/* ── B: the table ── */
+.lc-table .lc-figure-title { margin-bottom: var(--lc-s3); }
+.lc-table-wrap { margin-inline: -12px; }
+.lc-table table { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: fixed; font-size: 14px; }
+.lc-table col.lc-col-name { width: 34%; }
+.lc-table :is(th, td) { height: 34px; padding: 0 12px; text-align: right; white-space: nowrap; }
+.lc-table :is(thead th, tbody th) { text-align: left; font-weight: 400; }
+.lc-table thead th { height: 32px; color: var(--color-faint); font-size: 13px; vertical-align: bottom; padding-bottom: 8px; }
+.lc-table thead th:not(:first-child) { text-align: right; font-family: var(--font-mono); }
+.lc-table tbody th { overflow: hidden; color: var(--color-muted); text-overflow: ellipsis; }
+.landing .lc-table tbody th a { text-decoration-color: transparent; }
+.lc-table td { color: var(--color-muted); font: 14px/1 var(--font-mono); }
+.lc-table tr.lc-us :is(th, td) { height: 56px; background: var(--lc-well); color: var(--color-text); }
+.lc-table tr.lc-us th { border-radius: var(--radius-lg) 0 0 var(--radius-lg); font-weight: 600; font-size: 16px; }
+.lc-table tr.lc-us td:last-child { border-radius: 0 var(--radius-lg) var(--radius-lg) 0; }
+.lc-table tr.lc-us td { font: 700 22px/1 var(--font-mono); color: var(--lc-us); }
+.lc-table tr.lc-gap :is(th, td) { height: 30px; padding-bottom: 6px; vertical-align: top; padding-top: 6px; color: var(--color-faint); font-size: 12px; }
+.lc-table tr.lc-gap th { font-size: 13px; }
+.lc-table tr.lc-gap + tr :is(th, td) { padding-top: 0; }
+
+/* ── C: the curve ── */
+.lc-curve { width: var(--lc-bleed); margin-inline: calc((100% - var(--lc-bleed)) / 2); }
+.lc-curve .lc-figure-title { width: min(var(--lc-column), 100%); margin-inline: auto; }
+.lc-curve .lc-note { width: min(var(--lc-column), 100%); margin-inline: auto; }
+.lc-curve-read { display: flex; flex-wrap: wrap; gap: 4px 24px; min-height: 24px; margin: var(--lc-s3) 0 var(--lc-s2) 56px; font-size: 14px; color: var(--color-muted); }
+.lc-curve-read b { color: var(--color-text); font: 600 14px/1 var(--font-mono); }
+.lc-read-at { color: var(--color-text); font-family: var(--font-mono); font-size: 13px; }
+.lc-read-us, .lc-read-us b { color: var(--lc-us); }
+.lc-read-who { color: var(--color-faint); }
+.lc-curve-plot { position: relative; height: 360px; margin: 0 0 28px 56px; touch-action: pan-y; cursor: crosshair; user-select: none; -webkit-user-select: none; }
+.lc-curve-plot svg { position: absolute; inset: 0; width: 100%; height: 100%; overflow: visible; }
+.lc-curve-plot path { fill: none; vector-effect: non-scaling-stroke; stroke-linejoin: round; stroke-linecap: round; }
+.lc-other { stroke: var(--lc-them); stroke-width: 1.5px; }
+.lc-ours { stroke: var(--lc-us); stroke-width: 3px; }
+.lc-dot { position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px; border-radius: 50%; background: var(--lc-them); }
+.lc-grid { position: absolute; pointer-events: none; }
+.lc-grid-y { left: 0; right: 0; height: 0; border-top: 1px solid var(--color-gridline); }
+.lc-grid-y > span { position: absolute; right: calc(100% + 10px); top: 0; translate: 0 -50%; color: var(--color-faint); font: 12px/1 var(--font-mono); }
+.lc-grid-x { top: 0; bottom: 0; width: 0; border-left: 1px solid var(--color-gridline); }
+.lc-grid-x > span { position: absolute; top: calc(100% + 10px); left: 0; translate: -50% 0; color: var(--color-faint); font: 12px/1 var(--font-mono); white-space: nowrap; }
+.lc-grid-x[data-edge='start'] > span { translate: 0 0; }
+.lc-grid-x[data-edge='end'] { border-left: 0; }
+.lc-grid-x[data-edge='end'] > span { translate: -100% 0; }
+.lc-grid-x[data-minor] { border-left-style: dashed; }
+.lc-guide { position: absolute; top: 0; bottom: 0; width: 0; border-left: 1px solid var(--color-border-strong); pointer-events: none; }
+.lc-guide > span { position: absolute; left: 0; width: 7px; height: 7px; margin: -3.5px 0 0 -4px; border-radius: 50%; background: var(--color-muted); }
+.lc-guide > .lc-mark-us { width: 11px; height: 11px; margin: -5.5px 0 0 -6px; background: var(--lc-us); box-shadow: 0 0 0 3px var(--lc-bg); }
+.lc-label-us { position: absolute; right: 0; translate: 0 10px; color: var(--lc-us); font-size: 13px; font-weight: 600; pointer-events: none; }
+.lc-label-others { position: absolute; top: 8px; left: 12px; color: var(--color-faint); font-size: 13px; pointer-events: none; }
+
+/* A phone: the column is the screen less its margins, and each comparison fits it. */
+@media (max-width: 639px) {
+  .landing { --lc-s4: 40px; --lc-s5: 64px; --lc-bleed: calc(100cqw - 32px); }
+  .lc-main, .lc-foot { width: calc(100% - 32px); }
+  .lc-main { padding-top: 24px; }
+  .lc-mark.nightmail-wordmark { --logo-cap: 15px; }
+  .lc-head { margin-bottom: 36px; }
+  .lc-lead { font-size: 22px; line-height: 1.32; }
+  .lc-long { display: none; }
+  .lc-short { display: inline; }
+  .lc-actions > * { flex: 1 1 auto; }
+  .lc-foot { flex-direction: column; }
+  .lc-bars-head .lc-figure-title { flex-basis: 100%; min-height: 4.5em; }
+  .lc-volumes { width: 100%; }
+  .lc-volumes button { flex: 1; padding: 0; }
+  .lc-bars-list li { grid-template-columns: 104px minmax(0, 1fr); font-size: 13px; }
+  .lc-bar-fill { width: calc((100cqw - 64px) * var(--share)); }
+  .lc-bar-value { left: calc((100cqw - 64px) * var(--share) + 8px); font-size: 12px; }
+  .lc-bars-list li[data-none] .lc-bar-value { left: 0; }
+  .lc-table-wrap { margin-inline: -8px; }
+  .lc-table col.lc-col-name { width: 27%; }
+  .lc-table :is(th, td) { padding: 0 6px; font-size: 13px; }
+  .lc-table td { font-size: 12px; }
+  .lc-code { margin-inline: -16px; border-radius: 0; padding-inline: 16px; font-size: 12px; mask-image: linear-gradient(to right, #000 calc(100% - 24px), transparent); }
+  .lc-table tr.lc-us td { font-size: 17px; }
+  .lc-table tr.lc-us th { font-size: 14px; }
+  .lc-curve-read { margin-left: 40px; gap: 2px 16px; min-height: 48px; font-size: 13px; }
+  .lc-curve-plot { height: 280px; margin-left: 40px; }
+  .lc-grid-x[data-minor] > span { display: none; }
+  .lc-label-others { left: 8px; }
+}
