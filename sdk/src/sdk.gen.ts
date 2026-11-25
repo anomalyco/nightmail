@@ -4861,7 +4861,7 @@ export const listInboundAddresses = <ThrowOnError extends boolean = false>(optio
 /**
  * Create a receivable address
  *
- * Admin only. The domain must be verified for this workspace; mail arrives once its receiving MX record is active. Hosted, an address on one of your own verified domains (or a subdomain of one) where nothing receives yet turns receiving on at its host, as addReceivingHost does, and the answer’s receiving.dns names the MX record to publish; a host whose mail another provider receives today is refused with RECEIVING_HOST_IN_USE and the call that moves it. Permanent addresses claim earlier unrouted mail (kept 30 days) for their address or rules; temporary addresses start empty. Expiry stops new delivery and sending without deleting history.
+ * Admin only. Mail arrives once the domain is verified and its receiving MX record is active. Hosted, an address on one of your own domains (or a subdomain of one), verified or still being verified, where nothing receives yet turns receiving on at its host, as addReceivingHost does, and the answer’s receiving names the MX record to publish, the host’s status and whether the domain is verified yet; a host whose mail another provider receives today is refused with RECEIVING_HOST_IN_USE and the call that moves it. Permanent addresses claim earlier unrouted mail (kept 30 days) for their address or rules; temporary addresses start empty. Expiry stops new delivery and sending without deleting history.
  *
  * @deprecated
  */

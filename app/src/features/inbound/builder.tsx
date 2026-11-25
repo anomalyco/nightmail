@@ -10,14 +10,14 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, ConfirmDialog, Dialog, Field, Input, SearchField, Select, type SelectOption } from '../../components/ui'
+import { Alert, Button, ConfirmDialog, Dialog, Field, Input, SearchField, Select, StatusDot, type SelectOption } from '../../components/ui'
 import { mergeAddresses, useAddressOptions, useResolvedAddresses } from '../../data/addresses'
 import { useDebounced } from '../../lib/pagination'
 import { PrivateAddress } from '../../components/PrivateAddress'
-import { useApi, useApiDef, useRequestScope, useSession, useWorkspaceAccess } from '../../data/context'
+import { useApi, useApiDef, useApiQuery, useRequestScope, useSession, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
 import { isSubdomainName, rootMxWarning } from '../settings/domain-records'
-import { moveReason } from '../settings/receiving-hosts'
+import { hostStatus, moveReason, useReceivingHosts } from '../settings/receiving-hosts'
 import { isAbortError, request } from '../../data/live'
 import { invalidate, invalidateResources } from '../../data/invalidation'
 import { ApiError, errorText, type InboundAddress, type MailboxDomain } from '../../data/types'
@@ -48,12 +48,24 @@ function TurnOnReceiving({ host, domainId }: { host: string; domainId: string })
     {host === domain.data?.name && <> {rootMxWarning(host)}</>}
   </Alert>
 }
-type CreatedReceiving = { domainId: string; host: string; turnedOn: boolean; dns: { type: 'MX'; name: string; value: string; priority: number }[] }
-/** After an address is created on a host that doesn't route mail here yet: the MX record that makes it receive. */
+type CreatedReceiving = { domainId: string; host: string; turnedOn: boolean; status?: string; verified?: boolean; dns: { type: 'MX'; name: string; value: string; priority: number }[] }
+/**
+ * After an address is created on a host that doesn't route mail here yet: the MX record that makes it receive, with the
+ * host's status read again every 15 seconds until it receives, and, while its domain is still being verified, a line
+ * saying mail waits for that too (with a link to its records).
+ */
 function ReceivingSetupNote({ setup }: { setup: CreatedReceiving }) {
   const record = setup.dns[0]
-  return <Alert tone="info" title={setup.turnedOn ? `Receiving is on for ${setup.host}` : `${setup.host} doesn’t receive mail yet`}>
-    {record ? <>Publish this MX record at your DNS provider: <code>{record.name}</code> MX {record.priority} <code>{record.value}</code>. Mail arrives once it’s live.</> : 'Publish its MX record at your DNS provider.'}
+  const hosts = useReceivingHosts(setup.domainId, true, 15_000)
+  const domain = useApiQuery(['nightmail', 'domain', setup.domainId], (api, signal) => api.domains.get(setup.domainId, signal), { interval: current => current && (current.status === 'verified' || current.sending === 'verified') ? false : 15_000, enabled: setup.verified === false })
+  const host = hosts.data?.find(item => item.name === setup.host)
+  const verified = setup.verified !== false || domain.data?.status === 'verified' || domain.data?.sending === 'verified'
+  const receiving = host?.status === 'active' && verified
+  const status = host ? hostStatus[host.status] : null
+  return <Alert tone={receiving ? 'success' : 'info'} title={receiving ? `${setup.host} receives mail` : setup.turnedOn ? `Receiving is on for ${setup.host}` : `${setup.host} doesn’t receive mail yet`}>
+    {record && !receiving && <>Publish this MX record at your DNS provider: <code>{record.name}</code> MX {record.priority} <code>{record.value}</code>. Mail arrives once it’s live.</>}
+    {!verified && <> Its domain is still being verified, so mail waits for that too: <Link to={`/domains/${setup.domainId}`}>see its records</Link>.</>}
+    <span className="builder-receiving-status"><StatusDot tone={receiving ? 'success' : status?.tone ?? 'warning'}>{receiving ? 'Receiving' : !verified && host?.status === 'active' ? 'Waiting for verification' : status?.label ?? 'Waiting for MX'}</StatusDot></span>
   </Alert>
 }
 const lifetimes = [{ value: '', label: 'Always' }, { value: '3600', label: '1 hour' }, { value: '86400', label: '1 day' }, { value: '604800', label: '7 days' }, { value: '2592000', label: '30 days' }]

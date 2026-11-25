@@ -24686,16 +24686,28 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.equal((await hosts(own.id)).some((h: Json) => h.host === `busy.${own.name}`), false);
       assert.equal((await db.query('SELECT count(*)::int AS n FROM mailboxes WHERE workspace_id=$1 AND address=$2', [wid, `team@busy.${own.name}`])).rows[0].n, 0);
 
-      // An unverified domain, and a domain that isn't the workspace's: refused, each naming its fix.
+      // A domain added a minute ago and still being verified (ws_417245a5): the address is made all the same and receiving
+      // turned on at its host; the answer says the domain isn't verified yet, and mail waits for that and the MX record.
       const pending = await claim('rx-pending', false);
-      assert.match(error(await create(`hello@${pending.name}`), 409, 'MAILBOX_DOMAIN_NOT_ENABLED').message, new RegExp(`isn’t verified yet\\. Publish the DNS records GET /v1/domains/${pending.id} lists`));
+      const early = ok(await create(`hello@${pending.name}`), 201);
+      assert.deepEqual([early.address, early.receiving.host, early.receiving.turnedOn, early.receiving.verified], [`hello@${pending.name}`, pending.name, true, false]);
+      assert.deepEqual(early.receiving.dns.map((r: Json) => [r.type, r.name]), [['MX', pending.name]]);
+      assert.ok(['provisioning', 'waiting_for_mx'].includes(early.receiving.status), early.receiving.status);
+      assert.deepEqual((await hosts(pending.id)).map((h: Json) => h.host), [pending.name]);
+      // Nothing routes before ownership is proven, whatever MX shows: the host isn't active, and the claim doesn't receive.
+      assert.notEqual((await db.query('SELECT receiving_state FROM domain_claims WHERE workspace_id=$1 AND name=$2', [wid, pending.name])).rows[0].receiving_state, 'active');
+      // A claim released for want of its ownership record, and a domain that isn't the workspace's: refused, each naming its fix.
+      const released = await claim('rx-released', false);
+      await db.query("UPDATE domain_claims SET created_at=now()-interval '73 hours' WHERE workspace_id=$1 AND name=$2", [wid, released.name]);
+      assert.match(error(await create(`hello@${released.name}`), 409, 'MAILBOX_DOMAIN_NOT_ENABLED').message, /was released: its ownership record wasn’t published within 72 hours\. Add it again with POST \/v1\/domains/);
       assert.match(error(await create(`hello@${unique('elsewhere')}.example`), 409, 'MAILBOX_DOMAIN_NOT_ENABLED').message, /isn’t on one of this workspace’s domains\. Add the domain with POST \/v1\/domains/);
-      assert.deepEqual(await hosts(pending.id), []);
+      assert.deepEqual(await hosts(released.id), []);
+      const never = await claim('rx-never', false);
 
       // updateInboundDomain on a domain that has never received names how to turn receiving on; acceptSubdomains, hosted,
       // names the hosts call instead.
-      assert.match(error(await local('PATCH', `/v1/inbound/domains/${pending.id}`, { catchAll: 'store' }), 409, 'MAILBOX_DOMAIN_NOT_ENABLED').message,
-        new RegExp(`doesn’t receive mail yet, so it has no catch-all to change\\. Turn receiving on with POST /v1/inbound/domains/${pending.id}/enable`));
+      assert.match(error(await local('PATCH', `/v1/inbound/domains/${never.id}`, { catchAll: 'store' }), 409, 'MAILBOX_DOMAIN_NOT_ENABLED').message,
+        new RegExp(`doesn’t receive mail yet, so it has no catch-all to change\\. Turn receiving on with POST /v1/inbound/domains/${never.id}/enable`));
       assert.match(error(await local('PATCH', `/v1/inbound/domains/${own.id}`, { acceptSubdomains: true }), 409, 'HOSTED_RECEIVING_MANAGED').message, new RegExp(escape(`POST /v1/inbound/domains/${own.id}/hosts`)));
       assert.equal(ok(await local('PATCH', `/v1/inbound/domains/${own.id}`, { catchAll: 'store' })).catchAll, 'store');
 

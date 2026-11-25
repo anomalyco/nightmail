@@ -4913,7 +4913,7 @@ export type InboundAddress = {
 
 export type CreatedInboundAddress = InboundAddress & {
     /**
-     * Present while the host doesn’t route mail here yet: hosted, an address on your own verified domain turns receiving on at its host if it was off.
+     * Present while the host doesn’t route mail here yet: hosted, an address on one of your own domains, verified or still being verified, turns receiving on at its host if it was off.
      */
     receiving?: {
         /**
@@ -4928,6 +4928,14 @@ export type CreatedInboundAddress = InboundAddress & {
          * Whether creating the address turned receiving on at this host (it didn’t receive mail before).
          */
         turnedOn: boolean;
+        /**
+         * The host’s receiving status now: waiting_for_mx until its MX record is live (poll getInboundDomain or listReceivingHosts).
+         */
+        status: 'off' | 'provisioning' | 'waiting_for_mx' | 'active' | 'disabling' | 'disabled' | 'failed';
+        /**
+         * Whether the domain is verified. Until it is (its DNS records: getDomain), mail waits even with the MX record live.
+         */
+        verified: boolean;
         /**
          * The MX record to publish at the host, if it isn’t already: mail arrives once it is.
          */

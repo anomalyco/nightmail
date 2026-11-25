@@ -10,7 +10,7 @@ import { receivingIssueTitle } from './receiving-issue-title'
 import { settingsColumns } from './skeletons'
 import { isSubdomainName, relativeHost, rootMxWarning } from './domain-records'
 
-const hostStatus: Record<ReceivingHost['status'], { label: string; tone: Tone }> = {
+export const hostStatus: Record<ReceivingHost['status'], { label: string; tone: Tone }> = {
   pending: { label: 'Waiting for MX', tone: 'warning' }, active: { label: 'Receiving', tone: 'success' }, mixed: { label: 'Receiving, MX shared', tone: 'warning' },
   lost: { label: 'MX missing', tone: 'danger' }, failed: { label: 'Failed', tone: 'danger' }, removed: { label: 'Removed', tone: 'neutral' },
 }

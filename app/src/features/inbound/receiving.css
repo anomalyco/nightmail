@@ -342,3 +342,6 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
   /* Stacked, the two ways are alternatives, not steps: no arrow between them. */
   .flow-fork__way + .flow-fork__way::before, .flow-fork__way + .flow-fork__way::after { content: none; }
 }
+
+/* The address builder's receiving note: the host's live status on its own line under the MX record. */
+.builder-receiving-status { display: block; margin-top: var(--space-6); }

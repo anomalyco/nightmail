@@ -14965,6 +14965,23 @@
                     "type": "boolean",
                     "description": "Whether creating the address turned receiving on at this host (it didn’t receive mail before)."
                   },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "off",
+                      "provisioning",
+                      "waiting_for_mx",
+                      "active",
+                      "disabling",
+                      "disabled",
+                      "failed"
+                    ],
+                    "description": "The host’s receiving status now: waiting_for_mx until its MX record is live (poll getInboundDomain or listReceivingHosts)."
+                  },
+                  "verified": {
+                    "type": "boolean",
+                    "description": "Whether the domain is verified. Until it is (its DNS records: getDomain), mail waits even with the MX record live."
+                  },
                   "dns": {
                     "type": "array",
                     "items": {
@@ -15000,9 +15017,11 @@
                   "domainId",
                   "host",
                   "turnedOn",
+                  "status",
+                  "verified",
                   "dns"
                 ],
-                "description": "Present while the host doesn’t route mail here yet: hosted, an address on your own verified domain turns receiving on at its host if it was off."
+                "description": "Present while the host doesn’t route mail here yet: hosted, an address on one of your own domains, verified or still being verified, turns receiving on at its host if it was off."
               }
             }
           }
@@ -62439,7 +62458,7 @@
         "operationId": "createInboundAddress",
         "deprecated": true,
         "summary": "Create a receivable address",
-        "description": "Admin only. The domain must be verified for this workspace; mail arrives once its receiving MX record is active. Hosted, an address on one of your own verified domains (or a subdomain of one) where nothing receives yet turns receiving on at its host, as addReceivingHost does, and the answer’s receiving.dns names the MX record to publish; a host whose mail another provider receives today is refused with RECEIVING_HOST_IN_USE and the call that moves it. Permanent addresses claim earlier unrouted mail (kept 30 days) for their address or rules; temporary addresses start empty. Expiry stops new delivery and sending without deleting history.",
+        "description": "Admin only. Mail arrives once the domain is verified and its receiving MX record is active. Hosted, an address on one of your own domains (or a subdomain of one), verified or still being verified, where nothing receives yet turns receiving on at its host, as addReceivingHost does, and the answer’s receiving names the MX record to publish, the host’s status and whether the domain is verified yet; a host whose mail another provider receives today is refused with RECEIVING_HOST_IN_USE and the call that moves it. Permanent addresses claim earlier unrouted mail (kept 30 days) for their address or rules; temporary addresses start empty. Expiry stops new delivery and sending without deleting history.",
         "requestBody": {
           "required": true,
           "content": {
