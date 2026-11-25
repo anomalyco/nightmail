@@ -165,7 +165,8 @@ export async function processJobs(runtime: Runtime, handlers: JobHandlerResolver
     // A job that fails for good is never due again: its available_at is when it failed, which the health tick counts
     // within the hour (src/health.ts jobs-failed), where a retry's is when it is next due.
     await settle(runtime.db.update(jobs).set({ status: retry ? 'pending' : 'failed', leaseUntil: null, lastError: code, availableAt: new Date(Date.now() + (retry ? delay : 0)).toISOString(), ...(job.type==='mailbox.webhook' && job.webhook?{payload:{...handlerPayload,maxAttempts:mailboxWebhookAttempts(job.webhook)}}:handlerPayload!==job.payload?{payload:handlerPayload}:{}) }).where(fence));
-    logError(error, { ...context, code, retryable: retry, claimMs, claimBatchSize, jobMs: Date.now() - jobStarted });
+    // SES feedback routinely arrives before its email's provider id is recorded; until the attempts run out that is a wait, not a failure.
+    logError(error, { ...context, code, retryable: retry, claimMs, claimBatchSize, jobMs: Date.now() - jobStarted }, retry && code === 'SES_EMAIL_NOT_FOUND' ? 'warn' : 'error');
   };
   const handle = async (job: Claimed, index: number, claimMs: number, claimBatchSize: number) => {
     const jobStarted = Date.now();

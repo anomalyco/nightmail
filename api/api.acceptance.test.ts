@@ -38756,6 +38756,29 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
+  // Feedback that arrives before its email is matched retries as a warning; only its last attempt is an error line.
+  test('an unmatched feedback recovery logs a warning while it retries and an error when it gives up', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const [{ processJobs, MAX_ATTEMPTS }, { ApiError }, { sql }] = await Promise.all([import('./src/jobs.js'), import('./src/core.js'), import('drizzle-orm')]);
+      const id = unique('unmatched-recovery'), wid = runtime.config.workspaceId;
+      const handlers = { 'operation.simulatedFeedbackRecovery': async () => { throw new ApiError(409, 'SES_EMAIL_NOT_FOUND', 'The SES message is not yet associated with a local email.', undefined, true); } };
+      await runtime.db.execute(sql`CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP`);
+      try {
+        await db.query(`INSERT INTO jobs (id, workspace_id, type, payload, status, attempts, available_at) VALUES ($1, $2, 'operation.simulatedFeedbackRecovery', '{}'::jsonb, 'pending', 0, now() - interval '1 second')`, [id, wid]);
+        const attempt = async (attempts: number) => {
+          await db.query(`UPDATE jobs SET status='pending', attempts=$2, available_at=now()-interval '1 second' WHERE id=$1`, [id, attempts]);
+          const lines: { level: string; code: string; retryable: boolean }[] = [];
+          const capture = (line: string) => { try { const entry = JSON.parse(line); if (entry.jobId === id && entry.code === 'SES_EMAIL_NOT_FOUND') lines.push({ level: entry.level, code: entry.code, retryable: entry.retryable }); } catch {} };
+          const mocks = (['info', 'warn', 'error'] as const).map(level => t.mock.method(console, level, capture));
+          try { assert.equal(await processJobs(runtime, handlers, 1, 1), 1); } finally { for (const mock of mocks) mock.mock.restore(); }
+          return [lines, (await db.query('SELECT status FROM jobs WHERE id=$1', [id])).rows[0].status];
+        };
+        assert.deepEqual(await attempt(0), [[{ level: 'warn', code: 'SES_EMAIL_NOT_FOUND', retryable: true }], 'pending']);
+        assert.deepEqual(await attempt(MAX_ATTEMPTS - 1), [[{ level: 'error', code: 'SES_EMAIL_NOT_FOUND', retryable: false }], 'failed']);
+      } finally { await runtime.db.execute(sql`DROP TABLE IF EXISTS pg_temp.jobs`); }
+    });
+  });
+
   test('a real SQL fanout failure rolls back receipt, status and events before a successful callback retry', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, jobs, db }) => {
       const { operationJobs } = await import('./src/operations.js');
