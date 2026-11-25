@@ -14,6 +14,7 @@ import { createHarness, MODEL, promptFragments } from './agent/opencode.js';
 import { actionTitle, NOTE_MAX, ToolFailure, toolNames, type ActionProposal, type TicketInput, type ToolHost } from './agent/tools.js';
 import { fenced, toolResult, untrusted } from './agent/projection.js';
 import { addresses, hostedDomain, productName } from '../../api/src/brand.js';
+import { waitForPendingReport } from '../../api/src/internal-report-retry.js';
 
 // One support conversation (chat or email) per Durable Object (design §1). It holds:
 // - its conversation ID, the only identity it ever passes to Nightmail: Nightmail registered the conversation from its own
@@ -368,13 +369,18 @@ export class SupportConversation extends DurableObject<Env> {
    * its workspace: here, and again in Nightmail. It reads no billing, activity, request logs, webhooks, notes or proposals,
    * and no received mail (Nightmail answers whom an unbound one is for: nobody).
    */
-  private stamped<T = unknown>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<PlatformReply<T>> {
-    if (this.meta()?.channel === 'email') {
-      const [route = '', query = ''] = path.split('?');
-      const allowed = method === 'GET' ? EMAIL_ROUTES.test(route) && new URLSearchParams(query).get('direction') !== 'received' : route === '/v1/support/scope';
-      if (!allowed) return Promise.reject(new ToolFailure(EMAIL_READS_ONLY));
+  private async stamped<T = unknown>(method: 'GET' | 'POST', path: string, body?: unknown): Promise<PlatformReply<T>> {
+    const signal = this.abort?.signal ?? this.emailTurn?.stop.signal;
+    for (;;) {
+      if (this.meta()?.channel === 'email') {
+        const [route = '', query = ''] = path.split('?');
+        const allowed = method === 'GET' ? EMAIL_ROUTES.test(route) && new URLSearchParams(query).get('direction') !== 'received' : route === '/v1/support/scope';
+        if (!allowed) throw new ToolFailure(EMAIL_READS_ONLY);
+      }
+      const reply = await this.env.BANE.request<T>(this.own(), method, path, body);
+      if (reply.status !== 202 || !await waitForPendingReport(method, path, reply.body, reply.retryAfter, signal)) return reply;
+      signal?.throwIfAborted();
     }
-    return this.env.BANE.request<T>(this.own(), method, path, body);
   }
   /**
    * Whether a fresh scope gives this conversation less than its last turn ran with: a workspace gone, a lower role,
@@ -426,7 +432,9 @@ export class SupportConversation extends DurableObject<Env> {
       const reply = await this.stamped('GET', `/v1/support/context?workspaceId=${encodeURIComponent(workspace)}`);
       if (reply.status !== 200) return null;
       const body = meta.channel === 'email' ? emailView('/v1/support/context', reply.body) : reply.body;
-      this.context = { workspaceId: workspace, at, text: `<account read="${new Date(at).toISOString().slice(0, 16)}Z">\n${toolResult(body, this.hidden())}\n</account>` };
+      const asOf = reply.body && typeof reply.body === 'object' && 'asOf' in reply.body && typeof reply.body.asOf === 'string' ? Date.parse(reply.body.asOf) : NaN;
+      const readAt = Number.isFinite(asOf) ? Math.min(at, asOf) : at;
+      this.context = { workspaceId: workspace, at: readAt, text: `<account read="${new Date(readAt).toISOString().slice(0, 16)}Z">\n${toolResult(body, this.hidden())}\n</account>` };
       return this.context.text;
     } catch (error) { logError(error, { event: 'support', code: 'CONTEXT_READ_FAILED' }, 'warn'); return null; }
   }
