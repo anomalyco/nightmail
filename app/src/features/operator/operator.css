@@ -1,5 +1,6 @@
 /* The operator console: a review queue, and one workspace's standing, score, limit math and evidence. Tables use the
-   shared 53px rows and render as cards on a phone. */
+   shared 53px rows and render as cards on a phone. Borderless: no rule draws a row, a column, a fact or a control, and
+   no row is striped; a standalone fact is one solid well on the page, with nothing set inside it. */
 .op-page { display: flex; flex-direction: column; gap: var(--page-gap); min-width: 0; }
 .op-page > .ui-tabs + .data-toolbar { margin-top: 0; }
 .op-page > .data-toolbar { padding-bottom: 0; }
@@ -15,10 +16,13 @@
 .op-email { display: block; min-width: 0; }
 .op-email .private-address__value { flex: 0 1 auto; min-width: 0; overflow: hidden; }
 .op-email .private-address[data-revealed] > .private-address__value { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* No rule under a row or beside a rail (the shared table and split draw none in the borderless console either). */
+.op-page .ui-table :is(th, td) { border-bottom: 0; }
+.op-page .ui-split > .ui-split__rail { border-right: 0; }
 
-/* Facts: a hairline, a label and the value. 56px tall in every state. */
-.op-facts { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-24); margin: 0; }
-.op-facts > div { min-width: 0; height: 56px; padding-top: var(--space-12); border-top: 1px solid var(--color-border); }
+/* Facts: each a solid well with its label and the value. 56px tall in every state. */
+.op-facts { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: var(--space-8); margin: 0; }
+.op-facts > div { min-width: 0; height: 56px; padding: 6px var(--space-12); border-radius: var(--radius-sm); background: var(--color-well, var(--color-layer-1)); }
 .op-facts dt { height: 16px; color: var(--color-muted); font-family: var(--font-body); font-size: var(--text-xs); line-height: var(--leading-xs); }
 /* Sign-ups: four facts in one row; two rows of two on a phone. */
 .op-facts.op-facts--four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -28,9 +32,9 @@
 .op-health-what { font-family: var(--font-mono); font-size: var(--text-xs); }
 .op-health-stale { color: var(--color-danger); }
 
-/* Label and value rows, 32px each. */
+/* Label and value rows, 32px each, apart by alignment alone. */
 .op-rows { margin: 0; }
-.op-rows > div { display: grid; grid-template-columns: 184px minmax(0, 1fr); gap: var(--space-12); align-items: baseline; min-height: 32px; padding-block: 6px; border-top: 1px solid var(--color-border-muted); font-size: var(--text-sm); line-height: var(--leading-sm); font-variant-numeric: tabular-nums; }
+.op-rows > div { display: grid; grid-template-columns: 184px minmax(0, 1fr); gap: var(--space-12); align-items: baseline; min-height: 32px; padding-block: 6px; font-size: var(--text-sm); line-height: var(--leading-sm); font-variant-numeric: tabular-nums; }
 .op-rows dt { color: var(--color-muted); font-family: var(--font-body); font-size: var(--text-xs); }
 .op-rows dd { margin: 0; min-width: 0; font-family: var(--font-mono); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .op-rows dd :is(.ui-button, .ui-input, .ui-select-trigger, select) { font-family: var(--font-body); }
@@ -40,8 +44,9 @@
 .op-rows--single dd.op-free { display: flex; align-items: center; gap: var(--space-12); overflow: visible; }
 .op-reasons { display: flex; flex-direction: column; gap: var(--space-8); margin: 0 0 var(--space-12); padding: 0; list-style: none; font-size: var(--text-sm); line-height: var(--leading-sm); }
 .op-reasons li { display: flex; flex-direction: column; gap: 2px; }
-.op-reason { margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; text-decoration: underline; text-decoration-color: var(--color-border); text-underline-offset: 3px; cursor: pointer; }
+.op-reason { margin: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; text-decoration: underline; text-decoration-color: var(--color-faint); text-underline-offset: 3px; cursor: pointer; }
 @media (hover: hover) { .op-reason:hover { text-decoration-color: currentColor; } }
+.op-reason:focus-visible { text-decoration-color: currentColor; }
 .op-siblings { display: flex; flex-wrap: wrap; gap: var(--space-8) var(--space-16); margin: 0; padding: 0; list-style: none; font-size: var(--text-sm); }
 .op-more { align-self: flex-start; margin-top: var(--space-12); }
 /* The waitlist: its count under the table, and the export at the toolbar's end (its icon alone on a phone). */
@@ -49,9 +54,19 @@
 .op-dialog-fields { display: flex; flex-direction: column; gap: var(--space-16); }
 .op-dialog-fields .ui-textarea { min-height: 88px; }
 .op-dialog-fields .op-add-date { align-self: flex-start; }
+/* The dialogs' fields (the sign-up limit, open to anyone or held): solid control fills, a stronger step on hover and
+   focus, a danger-tinted fill when invalid; never an outline or a ring. */
+.op-dialog-fields .ui-input { background: var(--color-overlay-control, var(--color-control, var(--color-surface))); }
+@media (hover: hover) and (pointer: fine) { .op-dialog-fields .ui-input:hover:not(:disabled, :focus, [aria-invalid='true']) { background: var(--color-overlay-control-hover, var(--color-control-hover, var(--color-layer-2))); } }
+.op-dialog-fields .ui-input:is(:focus, :focus-visible) { background: var(--color-overlay-control-focus, var(--color-control-focus, var(--color-layer-2))); }
+.op-dialog-fields .ui-input:disabled { background: var(--color-overlay-control, var(--color-control, var(--color-surface))); color: var(--color-muted); }
+.op-dialog-fields .ui-button--secondary { background: var(--color-overlay-control, var(--color-control, var(--color-surface))); }
+@media (hover: hover) and (pointer: fine) { .op-dialog-fields .ui-button--secondary:hover:not(:disabled) { background: var(--color-overlay-control-hover, var(--color-control-hover, var(--color-layer-2))); } }
+.op-dialog-fields .ui-button--secondary:focus-visible { background: var(--color-overlay-control-focus, var(--color-control-focus, var(--color-layer-2))); }
+.op-dialog-fields .ui-input[aria-invalid='true'] { background: var(--color-control-invalid, var(--color-danger-bg)); }
 
 /* UI notes: a 64 × 36 screenshot thumbnail fits the 53px row; the bulk menu keeps its width as the count changes. */
-.op-shot { display: block; width: 64px; height: 36px; overflow: hidden; border-radius: 4px; background: var(--color-layer-2); box-shadow: inset 0 0 0 .5px var(--color-border); }
+.op-shot { display: block; width: 64px; height: 36px; overflow: hidden; border-radius: 4px; background: var(--color-chip, var(--color-layer-2)); }
 .op-shot img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; }
 .op-notes td[data-col='select'], .op-notes th[data-col='select'] { padding-right: 0; }
 /* The select-all box sits in the header row's text line, so the loaded header is as tall as the skeleton's. */
@@ -59,9 +74,9 @@
 .ui-button.op-bulk { min-width: 132px; justify-content: space-between; }
 .ui-dialog.op-note-dialog { width: min(720px, calc(100vw - 32px)); }
 /* The screenshot at its own size (never enlarged), centred; a tall one scrolls inside its frame. */
-.op-note-shot { display: grid; flex: none; place-items: center; max-height: 360px; min-height: 96px; padding: var(--space-12); overflow: auto; border-radius: var(--radius-sm); background: var(--color-layer-2); }
+.op-note-shot { display: grid; flex: none; place-items: center; max-height: 360px; min-height: 96px; padding: var(--space-12); overflow: auto; border-radius: var(--radius-sm); background: var(--color-well, var(--color-layer-2)); }
 .op-note-shot a { display: block; max-width: 100%; }
-.op-note-shot img { display: block; width: 100%; height: auto; border-radius: 4px; box-shadow: 0 0 0 .5px var(--color-border); }
+.op-note-shot img { display: block; width: 100%; height: auto; border-radius: 4px; }
 .op-note-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-12); }
 .op-note-styles, .op-rows code { font-family: var(--font-mono); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .op-confirm { margin-right: auto; color: var(--color-danger); font-size: var(--text-sm); }
@@ -71,7 +86,7 @@
 .op-key-secret code, .op-key-usage { font-family: var(--font-mono); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .op-key-usage { display: block; margin-top: var(--space-8); color: var(--color-muted); }
 .op-keys { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; font-size: var(--text-sm); }
-.op-keys li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-12); min-height: 40px; border-top: 1px solid var(--color-border-muted); }
+.op-keys li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-12); min-height: 40px; }
 
 /* Abuse: the facet rail beside the clusters; one cluster beside the list of the others. */
 .ui-split.op-abuse { --facet-width: 176px; }
@@ -82,18 +97,20 @@
 .op-cluster-rail__row { display: flex; align-items: center; gap: var(--space-12); height: 32px; margin: 0 calc(-1 * var(--space-6)); padding: 0 var(--space-6); border-radius: 4px; color: inherit; text-decoration: none; }
 a.op-cluster-rail__row[aria-current='page'] { background: var(--color-active-bg); }
 @media (hover: hover) and (pointer: fine) { a.op-cluster-rail__row:hover { background: var(--color-hover); } }
+a.op-cluster-rail__row:focus-visible { background: var(--color-hover); text-decoration: none; }
 .op-cluster-rail__why { flex: 1; color: var(--color-muted); font-size: var(--text-sm); }
-/* Reasons: a label, the count it was judged on and its points, 32px a row. */
+/* Reasons: a label, the count it was judged on and its points, 32px a row, apart by alignment alone. */
 .op-why, .op-links { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; font-size: var(--text-sm); line-height: var(--leading-sm); }
-.op-why li { display: grid; grid-template-columns: minmax(0, 1fr) 64px 48px; align-items: center; gap: var(--space-12); min-height: 32px; border-top: 1px solid var(--color-border-muted); font-variant-numeric: tabular-nums; }
+.op-why li { display: grid; grid-template-columns: minmax(0, 1fr) 64px 48px; align-items: center; gap: var(--space-12); min-height: 32px; font-variant-numeric: tabular-nums; }
 .op-why__count, .op-why__points { font-family: var(--font-mono); font-size: var(--text-xs); text-align: right; }
 .op-why__count { color: var(--color-muted); }
-.op-links li { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); align-items: center; gap: var(--space-12); min-height: 32px; border-top: 1px solid var(--color-border-muted); }
+.op-links li { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); align-items: center; gap: var(--space-12); min-height: 32px; }
 .op-links .op-muted-id { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-/* The drawing is as tall as its rows, up to 264px; a larger cluster scales down inside that. */
+/* The drawing is as tall as its rows, up to 264px; a larger cluster scales down inside that. Links are drawn in the
+   neutral series ink, not a rule colour. */
 .op-graph { margin-bottom: var(--space-12); }
 .op-graph svg { display: block; width: 100%; height: 100%; }
-.op-graph__edge { fill: none; stroke: var(--color-border-strong); stroke-width: 1; }
+.op-graph__edge { fill: none; stroke: var(--color-series); stroke-width: 1; }
 .op-graph__edge--strong { stroke: var(--color-series-strong); stroke-width: 1.25; }
 .op-graph__edge--partial { stroke-dasharray: 3 3; }
 .op-graph__node { fill: var(--color-surface); stroke: var(--color-text); stroke-width: 1.25; }
@@ -105,7 +122,7 @@ a.op-cluster-rail__row[aria-current='page'] { background: var(--color-active-bg)
 .op-slack__fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-12); }
 .op-slack code { font-family: var(--font-mono); font-size: var(--text-xs); overflow-wrap: anywhere; }
 .op-slack__actions { display: flex; flex-wrap: wrap; gap: var(--space-8); }
-.op-slack__actions span { padding: 2px var(--space-8); border-radius: 4px; box-shadow: var(--shadow-button); font-size: var(--text-xs); }
+.op-slack__actions span { padding: 2px var(--space-8); border-radius: 4px; background: var(--color-chip, var(--color-layer-2)); font-size: var(--text-xs); }
 .op-slack__context { color: var(--color-muted); font-size: var(--text-xs); }
 
 /* Glass: groups of 40px metric rows in as many columns as fit, one on a phone. A row is a label with a muted hint, a
@@ -127,7 +144,7 @@ a.op-cluster-rail__row[aria-current='page'] { background: var(--color-active-bg)
 @media (max-width: 640px) {
   .op-key-form { grid-template-columns: minmax(0, 1fr); }
   .op-note-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .op-facts, .op-facts.op-facts--four { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 var(--space-16); }
+  .op-facts, .op-facts.op-facts--four { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-8); }
   .op-rows > div { grid-template-columns: 112px minmax(0, 1fr); }
   .data-toolbar.op-waitlist-tools { flex-wrap: nowrap; gap: var(--space-8); }
   .data-toolbar.op-waitlist-tools > .cluster { flex: 1 1 auto; width: auto; }

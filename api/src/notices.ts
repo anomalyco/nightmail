@@ -4,7 +4,8 @@ import { addresses, productName } from './brand.js';
 // paragraphs (what happened, what it means for their mail right now, what to do next), one link and one line saying
 // why it was sent. customerNotice() is pure and returns the subject with a text part and an HTML part that carry the
 // same words; the HTML part sets a line length, the link as a button and its own dark colours, and nothing else (no
-// images, no background). A notice never says how a check works: no scores, rates, thresholds or provider names.
+// images, no background). A notice never says how a check works: no scores, rates, thresholds or provider names. The
+// domain setup reminder alone also lists the DNS records to publish and links the customer's own DNS provider's page.
 //
 // Words a customer chose (a workspace's name, a campaign's) are shown through shownName, an address through
 // plainAddress and a domain through hostName, and nowhere but where a template puts them. The invitation goes to an
@@ -15,7 +16,10 @@ import { addresses, productName } from './brand.js';
 // (account-notices.ts). scripts/render-notices.ts renders every one in a mail client, for review.
 
 export type Notice = { subject: string; text: string; html: string };
-type Parts = { subject: string; lines: string[]; action: { label: string; url: string }; why: string };
+/** `records`: DNS records to publish, after the lines, each ready to copy; `link`: one more place to go, under them (a DNS provider's page). */
+type Parts = { subject: string; lines: string[]; records?: SetupRecord[]; link?: { label: string; url: string }; action: { label: string; url: string }; why: string };
+/** A DNS record as the setup reminder lists it: the name as the DNS provider asks for it (relative to the zone when known). */
+export type SetupRecord = { type: string; name: string; value: string };
 
 const escapeHtml = (v: string) => v.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 const NAME_LENGTH = 40, PHONE_DIGITS = 7;
@@ -48,19 +52,28 @@ export function shownName(value: string): string {
 export const plainAddress = (value: string) => value.length <= 254 && /^[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(value) ? value.toLowerCase() : null;
 /** A domain's name an account email may print: a host's letters, digits, hyphens and dots, or null. */
 const hostName = (value: string) => value.length <= 253 && /^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/.test(value) ? value.toLowerCase() : null;
+// A record's name and value as Nightmail made them: a host with underscores, and a token, a host or SPF text.
+const recordName = (value: string) => value.length <= 253 && /^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$/.test(value);
+const recordValue = (value: string) => value.length <= 255 && /^[A-Za-z0-9 ._:=~-]+$/.test(value);
 const day = (value: Date) => value.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+// A deadline to the minute: a day alone reads as "all of that day", and in most time zones the moment falls on another date.
+const moment = (value: Date) => `${day(value)} at ${value.toISOString().slice(11, 16)} UTC`;
 const count = (value: number) => value.toLocaleString('en-US');
 const owes = (workspace: string, owed: string, since: Date | null) => since ? `${workspace} has owed ${owed} since ${day(since)}.` : `${workspace} owes ${owed}.`;
 
 // The dashboard's ink, muted text and primary button (app/src/styles/tokens.css), light and dark. Colours a client
 // can't override stay readable on its own canvas: the page sets no background.
-const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif";
+const FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif", MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace";
 const DARK = '@media (prefers-color-scheme:dark){.nm-text{color:#ededed!important}.nm-why{color:#a3a3a3!important;border-top-color:#2e2e2e!important}.nm-action{background:#314770!important;border-color:#556f9d!important;color:#ffffff!important}}';
 
 /** One notice as an email: the same words as text and as HTML. */
 export function notice(p: Parts): Notice {
-  const text = `${p.lines.join('\n\n')}\n\n${p.action.label}: ${p.action.url}\n\n${p.why}\n`;
-  const paragraphs = p.lines.map(line => `<p style="margin:0 0 14px">${escapeHtml(line)}</p>`).join('');
+  const records = p.records ?? [];
+  const text = [p.lines.join('\n\n'), ...records.map(r => `${r.type} record\nName: ${r.name}\nValue: ${r.value}`), ...p.link ? [`${p.link.label}: ${p.link.url}`] : [], `${p.action.label}: ${p.action.url}`, p.why].join('\n\n') + '\n';
+  const field = (label: string, value: string) => `<tr><td class="nm-why" style="padding:2px 12px 2px 0;vertical-align:top;font-size:13px;color:#5d5d5d">${label}</td><td style="padding:2px 0;font:14px/1.5 ${MONO};word-break:break-all">${escapeHtml(value)}</td></tr>`;
+  const paragraphs = p.lines.map(line => `<p style="margin:0 0 14px">${escapeHtml(line)}</p>`).join('')
+    + records.map(r => `<p style="margin:0 0 4px;font-weight:600">${escapeHtml(r.type)} record</p><table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:0 0 14px">${field('Name', r.name)}${field('Value', r.value)}</table>`).join('')
+    + (p.link ? `<p style="margin:0 0 14px"><a href="${escapeHtml(p.link.url)}" style="color:inherit;text-decoration:underline">${escapeHtml(p.link.label)}</a></p>` : '');
   const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="light dark"><meta name="supported-color-schemes" content="light dark"><title>${escapeHtml(p.subject)}</title><style>${DARK}</style></head>`
     + `<body style="margin:0;padding:0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td style="padding:20px 16px 28px">`
     + `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:520px"><tr><td class="nm-text" style="font:15px/1.6 ${FONT};color:#171717">`
@@ -77,6 +90,9 @@ export type NoticeInput =
   | Workspace & { kind: 'resumed'; limit?: boolean; /** Marketing stays on hold after this resume. */ marketingHeld?: boolean }
   | Workspace & { kind: 'campaign_paused'; campaign: { id: string; name: string } }
   | Workspace & { kind: 'domain_unverified'; domain: { id: string; name: string } }
+  /** missing: of the domain's `total` sending records, the ones public DNS lacks or has with another value. host: where its DNS is hosted, when known. */
+  | Workspace & { kind: 'domain_setup'; domain: { id: string; name: string }; missing: SetupRecord[]; total: number; wrong: boolean; host: { name: string; url: string | null } | null; releasesAt: Date | null }
+  | Workspace & { kind: 'no_domain' }
   | Workspace & { kind: 'evaluation_finished'; limited: boolean }
   | Workspace & { kind: 'low_balance'; balance: string; emails: number }
   | Workspace & { kind: 'out_of_credit'; receivingUntil: Date | null }
@@ -141,6 +157,24 @@ export function customerNotice(origin: string, n: NoticeInput): Notice {
         `Mail from addresses at ${name} is refused until the records are back. Your other domains are not affected.`,
         'The domain’s page lists the records to publish.'] });
     }
+    case 'domain_setup': {
+      const host = hostName(n.domain.name), name = host ?? 'the domain', provider = n.host?.name ?? null;
+      const records = n.missing.filter(r => /^(?:TXT|CNAME|MX)$/.test(r.type) && recordName(r.name) && recordValue(r.value));
+      const all = records.length === n.total, which = n.total === 1 ? 'its record' : all ? `all ${n.total} of its records` : `${records.length} of its ${n.total} records`;
+      const gap = n.wrong ? `${which} ${records.length === 1 ? 'is' : 'are'} missing from public DNS or ${records.length === 1 ? 'has' : 'have'} another value there`
+        : `public DNS doesn’t have ${n.total === 1 ? 'its record' : all ? `any of its ${n.total} records` : which} yet`;
+      return notice({ subject: host ? `Finish setting up ${host}` : 'Finish setting up your domain', action: { label: 'Open the domain', url: `${base}/domains/${encodeURIComponent(n.domain.id)}` },
+        why: `${productName} sends this once for each domain, to the owners and admins of ${w}. To reach us, write to ${addresses.support}.`, records,
+        link: provider && n.host?.url ? { label: `Open ${provider} DNS`, url: n.host.url } : undefined, lines: [
+          `${host ? `${host} was` : 'A domain was'} added over an hour ago, but ${gap}.`,
+          `Mail from addresses at ${name} can’t be sent until they are published.${n.releasesAt ? ` If the ownership record is still missing on ${moment(n.releasesAt)}, the domain is released.` : ''}`,
+          provider ? `Its DNS is hosted at ${provider}. Add ${records.length === 1 ? 'this record' : 'these records'} there:` : `Add ${records.length === 1 ? 'this record' : 'these records'} where its DNS is hosted:`] });
+    }
+    case 'no_domain': return notice({ subject: 'Add your domain to start sending', action: { label: 'Add your domain', url: `${base}/domains` },
+      why: `${productName} sends this once, to the owners and admins of ${w}. To reach us, write to ${addresses.support}.`, lines: [
+        `${w === 'your workspace' ? 'Your workspace' : w} was created over an hour ago, but it has no domain yet.`,
+        `${productName} sends from your own domain, so nothing can be sent until you add one.`,
+        'It takes about 5 minutes: add the domain, then copy the records it lists to where its DNS is hosted.'] });
     case 'low_balance': return notice({ subject: `The balance of ${w} is low`, action: billing('Add credit'), why: members, lines: [
       `The prepaid balance of ${w} is ${n.balance}, enough for about ${count(n.emails)} more emails.`,
       'Sending and receiving continue. When the balance reaches $0, sending pauses.',

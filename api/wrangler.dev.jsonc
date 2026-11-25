@@ -41,6 +41,11 @@
     "UI_NOTES_SUBJECTS": "",
     // Dashboard usage analytics (docs/analytics.md): batches go to the ANALYTICS bucket, never Postgres. "off" discards them.
     "DASHBOARD_ANALYTICS": "on",
+    // The domain setup reminder email (src/domain-setup.ts). Off: turning it on sends real email to customers.
+    // The DNS check and the dashboard's banner run either way.
+    "DOMAIN_SETUP_REMINDER": "off",
+    // The email to a new workspace with no domain an hour after sign-up (src/domain-setup.ts). Off for the same reason.
+    "NO_DOMAIN_REMINDER": "off",
     // Abuse monitoring (src/abuse.ts) records from this instant on, never earlier (dev holds synthetic data only). Remove
     // to turn it off; expiry still runs. To turn it on again, set a new instant: one in the past starts from the next run.
     "NIGHTMAIL_ABUSE_MONITORING": "2026-11-23T00:00:00Z",

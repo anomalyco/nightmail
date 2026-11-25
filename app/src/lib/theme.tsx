@@ -22,7 +22,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     document.documentElement.dataset.theme = theme
     document.documentElement.style.colorScheme = theme
     // Both theme-color tags (light and dark system themes) take the chosen theme's frame colour.
-    for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.setAttribute('content', theme === 'dark' ? '#080808' : '#FAFAFA')
+    for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.setAttribute('content', theme === 'dark' ? '#111111' : '#EFEFEF')
   }, [theme])
 
   useEffect(() => {

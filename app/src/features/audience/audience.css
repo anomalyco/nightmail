@@ -10,11 +10,14 @@
 .audience-summary { min-height: var(--space-20); gap: var(--space-8) var(--space-24); }
 .section > .audience-summary { margin-bottom: var(--space-12); }
 .audience-summary strong { font-family: var(--font-mono); font-weight: 400; font-variant-numeric: tabular-nums; }
+/* Dates in Audience's tables read as data: mono, a size down, like the counts beside them. */
+.audience-page .ui-table td:is([data-col='created'], [data-col='updated'], [data-col='updatedAt'], [data-col='at'], [data-col='time']) { font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
 .audience-properties { gap: var(--space-24) var(--space-32); }
 .audience-properties .ui-facts { grid-template-columns: 140px minmax(0, 1fr); }
 .cluster.audience-links { gap: var(--space-8) var(--space-16); }
 .audience-editor { gap: var(--space-24); }
-.audience-editor > .section { margin: 0; padding-top: var(--space-24); border-top: 1px solid var(--color-border-muted); }
+/* The editor's sections sit apart by space alone, no rule between them. */
+.audience-editor > .section { margin: 0; padding-top: var(--space-24); }
 .audience-name { max-width: 480px; }
 .audience-rule { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 34px; gap: var(--space-12); align-items: start; }
 
@@ -38,9 +41,10 @@
 .ui-dialog.audience-import-dialog .ui-dialog__footer { flex-wrap: wrap; }
 .audience-import-status { flex: 1 0 100%; margin: 0; font-size: var(--text-xs); line-height: var(--leading-xs); }
 .audience-import-file { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-8); }
-.audience-consent { display: flex; flex-direction: column; gap: var(--space-8); padding-top: var(--space-16); border-top: 1px solid var(--color-border-muted); }
-/* Under the preview the table's last rule already divides: no second one. */
-.audience-import-preview + .audience-consent { padding-top: 0; border-top: 0; }
+/* Consent sits apart from the fields above it by space, no rule. */
+.audience-consent { display: flex; flex-direction: column; gap: var(--space-8); padding-top: var(--space-16); }
+/* Under the preview the table's own rhythm already sets it apart. */
+.audience-import-preview + .audience-consent { padding-top: 0; }
 .audience-result p { margin: 0; }
 .audience-review-bar { justify-content: space-between; gap: var(--space-8) var(--space-16); }
 /* The count (up to two lines) and five sample addresses fit this height, so the dialog keeps its size when the count arrives. */
@@ -60,8 +64,8 @@
 .audience-condition--property > .audience-condition-subject { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
 .audience-condition-day { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
 .audience-condition-day > .ui-input { flex: 1 1 auto; }
-/* A nested group: its rule as one line, and Edit as JSON beside it (the builder edits one level). */
-.audience-condition-group { grid-column: 1 / 4; display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); min-width: 0; padding: var(--space-4) var(--space-4) var(--space-4) var(--space-12); border: 1px solid var(--color-border-muted); border-radius: var(--radius-sm); }
+/* A nested group: its rule as one line on a solid well, and Edit as JSON beside it (the builder edits one level). */
+.audience-condition-group { --color-hover: var(--color-well-hover); grid-column: 1 / 4; display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); min-width: 0; min-height: var(--control-height); padding: var(--space-4) var(--space-4) var(--space-4) var(--space-12); border-radius: var(--radius-sm); background: var(--color-well); }
 .audience-condition-group > .ui-button { flex-shrink: 0; }
 .ui-textarea.audience-json { font-family: var(--font-mono); font-size: var(--text-xs); line-height: var(--leading-xs); }
 

@@ -20,6 +20,8 @@ export function useMediaQuery(query: string) {
     () => false,
   )
 }
+/** The modifier shortcut hints name: ⌘ on Apple devices, Ctrl elsewhere (with a space before the key it modifies). */
+export const modKey = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.userAgent) ? '⌘' : 'Ctrl '
 export const useCompactShell = () => useMediaQuery(SHELL_COMPACT)
 export const usePhone = () => useMediaQuery(PHONE)
 export const useTouch = () => useMediaQuery(TOUCH)

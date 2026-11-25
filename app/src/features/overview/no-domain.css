@@ -1,0 +1,20 @@
+/* No domain yet: Overview's first card. Its sentence, then Add domain, then a dismiss button in the corner. */
+.ov-no-domain { display: grid; grid-template-columns: minmax(0, 1fr) auto auto auto; align-items: center; gap: var(--space-8) var(--space-16); padding: var(--space-16); border-radius: var(--radius-sm); background: var(--color-layer-1); }
+.ov-no-domain__text { display: flex; flex-direction: column; gap: var(--space-4); min-width: 0; }
+.ov-no-domain__text h2 { font-size: var(--text-md); line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
+.ov-no-domain__text p { color: var(--color-muted); font-size: var(--text-sm); line-height: var(--leading-sm); text-wrap: pretty; }
+.ov-no-domain__dismiss { align-self: start; }
+/* The test sender's offer, a quiet line before Add domain (absent where the installation has none: the columns collapse). */
+.ov-no-domain__test { min-width: 0; white-space: nowrap; }
+/* A desktop's card is one fixed height, so Latest emails can fit its rows under it from the first frame (latest.ts). */
+@media (min-width: 900px) {
+  .ov-no-domain { box-sizing: border-box; height: 76px; }
+  .ov-no-domain__text p { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+}
+@media (max-width: 640px) {
+  .ov-no-domain { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'text dismiss' 'action action' 'test test'; align-items: start; }
+  .ov-no-domain__test { grid-area: test; justify-self: center; }
+  .ov-no-domain__text { grid-area: text; }
+  .ov-no-domain__dismiss { grid-area: dismiss; }
+  .ov-no-domain__action { grid-area: action; height: 44px; justify-content: center; }
+}

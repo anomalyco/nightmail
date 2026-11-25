@@ -47,6 +47,9 @@ export interface Actor {
   /** A dashboard session's sign-in proved hosted staff (a Google Workspace sign-in, account-policy.ts). Staff tools need it. */
   staff?: boolean;
   role?: string; receivingConsent?:boolean; grantId?:string; tokenId?:string;
+  /** An API key an agent received through agent setup (agent-setup.ts): it never administers keys or reaches billing
+   *  (keyAdminRefusal, agentSetupRefusal). */
+  agentSetup?: boolean;
   // Number of emails queued per region, for a bounded post-commit wake.
   dispatchTargets?: Map<string, { count: number; priority: boolean }>;
   dispatchAccount?: { aws_account_id: string; kind: ReadyConnection['kind']; maxSendRate?: number };
@@ -100,6 +103,10 @@ export interface Config {
   uiNotesSubjects?: { issuer: string; subject: string }[];
   /** Dashboard usage analytics (src/analytics.ts, DASHBOARD_ANALYTICS=on): off unless set. */
   dashboardAnalytics?: boolean;
+  /** Hosted: email a domain's owners once when it is still pending an hour after it was added (src/domain-setup.ts, DOMAIN_SETUP_REMINDER=on). Off unless set. */
+  domainSetupReminder?: boolean;
+  /** Hosted: email a new workspace's owners once when it has no domain an hour after sign-up (src/domain-setup.ts, NO_DOMAIN_REMINDER=on). Off unless set. */
+  noDomainReminder?: boolean;
   analyticsPush?: { url: string; secret: string };
   /** Self-hosted: subjects (or '*') that become owners of 'default' at their first sign-in. */
   defaultWorkspaceOwners: '*' | string[];
@@ -522,15 +529,27 @@ export function receivingAdminRefusal(a: Actor | undefined, change?: string): Ap
   return lastingRefusal(a, change, need);
 }
 /** Key administration (auth.ts manageKeys, and the deprecated inbound key routes): why it refuses this actor, or null.
- *  It takes unrestricted manage and a lasting credential. */
+ *  It takes unrestricted manage and a lasting credential that is not an agent's own setup key: an agent that received
+ *  its key through agent setup can't make itself, or anyone, another API key or agent token. */
 export function keyAdminRefusal(a: Actor): ApiError | null {
   const need: Required = { permission: 'configuration', level: 'write' };
   if (!a.permissions.includes('manage')) return denied('PERMISSION_DENIED', 'This operation requires manage permission.', need);
   const temporary = lastingRefusal(a, KEY_CHANGE, need);
   if (temporary) return temporary;
+  if (a.agentSetup) return denied('PERMISSION_DENIED', `A key an agent received at setup can't ${KEY_CHANGE}. An owner or admin does that in the dashboard (API keys).`, { ...need, person: 'admin' });
   if (a.domains.length) return denied('PERMISSION_DENIED', 'Key administration requires unrestricted management access.', { ...need, scope: 'workspace' });
   return null;
 }
+/** Billing (its balance, payments and top-ups): an agent's setup key never reaches it, reads included. REST refuses it in
+ *  app.ts and the MCP listing leaves it out (mcp.ts refusal), with the same answer. */
+/** agentSetupRefusal's credential routes: an inbox connection's key and a mail client password, which would outlive the
+ *  agent's key when it is revoked. Inbox routes authenticate after the /v1 guard, so createInbox's own key (inboxes.ts,
+ *  from its body) and app passwords (inbox-passwords.ts) are refused in their handlers too; this keeps the MCP listing. */
+const agentCredentialRoute = (method: string, path: string) => method.toUpperCase() === 'POST' && (path === '/v1/inbox-connections' || /^\/v1\/inboxes\/[^/]+\/app-passwords$/.test(path));
+export const agentCredentialRefusal = () => denied('PERMISSION_DENIED', 'A key an agent received at setup can\'t create inbox keys or mail client passwords: they would outlive it when it is revoked. An owner or admin does that in the dashboard.', { person: 'admin' });
+export const agentSetupRefusal = (a: Actor | undefined, path: string, method = 'GET') => !a?.agentSetup ? null
+  : /^\/v1\/billing(?:\/|$)/.test(path) ? denied('PERMISSION_DENIED', 'A key an agent received at setup can\'t read or change billing. An owner or admin does that in the dashboard (Settings → Billing).', { person: 'admin' })
+  : agentCredentialRoute(method, path) ? agentCredentialRefusal() : null;
 /** createAgentToken: only an MCP approval delegates a temporary token. Why it refuses this actor, or null. */
 export const agentTokenMintRefusal = (a: Actor) => a.credential === 'mcp' && a.keyId.startsWith('mcp_') ? null
   : denied('MCP_AUTHORIZATION_REQUIRED', 'Temporary agent tokens can only be delegated directly from an MCP OAuth approval.', { credential: 'signIn' });

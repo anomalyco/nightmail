@@ -1,150 +1,184 @@
-/* Overview: a main column and a 312px detail column. Every async block has a fixed height, matched by its skeleton.
-   The header ends where the main column does, so the range and stream sit over the figures they filter. */
-.page-surface > .ui-page-header:has(+ .ov-split) { --ov-aside: calc(312px + var(--space-32)); margin-bottom: var(--space-16); }
-.page-surface > .ui-page-header:has(+ .ov-split):not(:has(.ov-controls[data-wide])) { padding-right: var(--ov-aside); }
-.ov-controls { flex-wrap: nowrap; gap: var(--space-12); }
-.ov-controls .ui-tabs { min-height: var(--control-height); overflow: visible; border-bottom: 0; }
-.ov-controls .ui-tab { height: var(--control-height); }
-.ov-controls .ui-select-trigger { width: 128px; }
-.overview-reputation { display: inline-flex; align-items: center; gap: var(--space-8); padding-right: var(--space-12); border-right: 1px solid var(--color-border-muted); color: inherit; text-decoration: none; white-space: nowrap; }
+/* Overview (index.tsx): an edge-to-edge console with no rules. A 44px control strip, four figures as solid 82px wells
+   8px apart, then the main column (the 172px activity band over the latest emails) beside a 296px inspector rail on a
+   calm surface of its own. Everything sits on the page's 16px gutter and parts by surface and space, never by a line
+   (latest.ts adds up these heights). Every async block has a fixed height, matched by its skeleton. */
+.ov-page { display: flex; flex: 1; flex-direction: column; min-width: 0; min-height: 0; }
+.ov-page > .ui-loading-layout { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+/* A group's label: tracked mono capitals, faint. */
+.ov-label { margin: 0; color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); line-height: var(--leading-label); font-weight: 400; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+
+/* The control strip: the title, then the range, the stream and the panel toggle. */
+.ui-page-header.ov-strip { flex: none; flex-wrap: nowrap; gap: var(--space-12); height: 44px; min-height: 44px; margin: 0; padding: 0 var(--space-8) 0 var(--space-16); }
+.ov-strip > .cluster:last-child { flex-wrap: nowrap; gap: var(--space-8); min-width: 0; }
+.ov-controls { flex-wrap: nowrap; gap: var(--space-8); }
+/* The range: a flat segmented switch, a solid control track with its selected segment a solid step off it (white on
+   light, #3A3A3A on dark), no outline. It keeps no page bleed (ui.css gives a phone's tab strips one), so the 8px gap
+   to the stream picker stays. */
+.ov-controls .ui-tabs { gap: 0; height: 28px; min-height: 0; margin: 0; padding: 2px; overflow: visible; border-radius: var(--radius-sm); background: var(--color-control); }
+.ov-controls .ui-tabs__marker { display: none; }
+.ov-controls .ui-tab { height: 24px; min-width: 38px; padding: 0 var(--space-8); border-radius: 4px; font-family: var(--font-mono); font-size: var(--text-xs); transition: background var(--motion-duration) var(--ease-standard), color var(--motion-duration) var(--ease-standard); }
+.ov-controls .ui-tab[aria-selected='true'] { background: var(--color-segment); color: var(--color-text); }
+.ov-controls .ui-tab:focus-visible:not([aria-selected='true']) { background: var(--color-control-focus); }
+.ov-controls .ui-tab[aria-selected='true']:focus-visible { text-decoration: underline; text-underline-offset: 3px; }
+.ov-controls .ui-select-trigger { width: 136px; }
+.overview-reputation { display: inline-flex; align-items: center; gap: var(--space-8); padding-right: var(--space-8); color: inherit; text-decoration: none; white-space: nowrap; }
 @media (hover: hover) and (pointer: fine) { .overview-reputation:hover .muted { color: var(--color-text); } }
+.overview-reputation:focus-visible .muted { color: var(--color-text); }
+.ov-lead { flex: none; padding: var(--space-4) var(--space-16) var(--space-12); }
 
-.ov-split { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr) 312px; gap: var(--space-32); align-items: start; }
-.ov-split__main { display: flex; flex-direction: column; gap: var(--space-20); min-width: 0; }
-.ov-split__aside { display: flex; flex-direction: column; gap: var(--space-20); min-width: 0; }
-.ov-split__aside > * + * { padding-top: var(--space-16); border-top: 1px solid var(--color-border-muted); }
-.ov-aside-skeleton { display: flex; flex-direction: column; gap: var(--space-12); }
-.ov-aside-skeleton > span { display: block; border-radius: var(--radius-sm); background: var(--color-layer-1); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
-/* The daily limit's row, then the next steps. */
-.ov-aside-skeleton > span:first-child { height: 30px; }
-.ov-aside-skeleton > span:last-child { height: 120px; }
-
-/* Figures: four 104px tiles (two by two on a phone: 216px). A tile is a link to its mail in Logs: its name and a hint,
-   the figure, and either its buckets as columns or, for a rate, a 20-cell gauge that ends at the limit named under it.
-   Flat fills, no borders. */
-.ov-tiles { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-8); }
-.ov-tile { display: flex; flex-direction: column; min-width: 0; height: 104px; padding: var(--space-12); border-radius: var(--radius-sm); background: var(--color-layer-1); color: inherit; text-decoration: none; }
-a.ov-tile:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
-@media (hover: hover) and (pointer: fine) { a.ov-tile:hover { background: var(--color-layer-2); } }
-/* Where there is no sidebar to carry it (the compact shell), the sender score is a row under the tiles: its own card
-   (features/score, 56px), filled like a tile instead of outlined. */
-.ov-tiles > .gauge-card { grid-column: 1 / -1; padding: 0 var(--space-12); background: var(--color-layer-1); box-shadow: none; }
-.ov-tiles > .gauge-card > .gauge-alert { box-shadow: 0 0 0 2px var(--color-layer-1); }
-.ov-tile__head { display: flex; align-items: baseline; gap: var(--space-8); height: 16px; color: var(--color-muted); font-size: var(--text-sm); line-height: 16px; white-space: nowrap; }
-/* The hint is laid out from the tile's right edge and pulled back by its own width, so a tweening count moves nothing. */
-.ov-tile__hint { position: relative; flex: 1; align-self: stretch; min-width: 0; color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); font-variant-numeric: tabular-nums; }
-.ov-tile__hint > span { position: absolute; top: 0; left: 100%; transform: translateX(-100%); }
-.ov-tile__value { height: 28px; margin-top: var(--space-4); color: var(--color-text); font-family: var(--font-mono); font-size: 22px; line-height: 28px; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.ov-tile[data-zone='near'] .ov-tile__value { color: var(--color-warning); }
-.ov-tile[data-zone='over'] .ov-tile__value { color: var(--color-danger); }
-.ov-tile__chart { display: flex; flex-direction: column; justify-content: flex-end; height: 26px; margin-top: auto; }
-.ov-tile__columns { height: 26px; margin-top: auto; }
-.ov-tile__chart--loading { display: block; border-radius: 2px; background: var(--color-layer-2); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
-.ov-columns { display: block; width: 100%; height: 26px; }
+/* Figures: four equal solid wells (#1F1F1F dark, #F4F4F4 light), 82px, 6px corners, 8px apart, on the page's 16px
+   gutter; no outline and no divider. A well is a link to its mail in Logs: a mono label with its hint at the right, the
+   figure (a rate names its limit beside it), and its buckets as sparkbars or, for a rate, a 20-cell gauge that ends at
+   the limit. Hover and focus are a solid step. */
+.ov-kpis { display: grid; flex: none; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-8); padding: 0 var(--space-16); }
+.ov-kpi { display: flex; flex-direction: column; min-width: 0; height: 82px; padding: var(--space-12) var(--space-12) 10px; border-radius: var(--radius-sm); background: var(--color-well); color: inherit; text-decoration: none; }
+a.ov-kpi:focus-visible { background: var(--color-well-hover); text-decoration: none; }
+@media (hover: hover) and (pointer: fine) { a.ov-kpi:hover { background: var(--color-well-hover); } }
+.ov-kpi__head { display: flex; align-items: center; gap: var(--space-8); height: 14px; color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); line-height: 14px; letter-spacing: var(--tracking-label); text-transform: uppercase; white-space: nowrap; }
+/* The hint is laid out from the column's right edge and pulled back by its own width, so a tweening count moves nothing. */
+.ov-kpi__hint { position: relative; flex: 1; align-self: stretch; min-width: 0; color: var(--color-faint); letter-spacing: 0; text-transform: none; font-variant-numeric: tabular-nums; }
+.ov-kpi__hint > span { position: absolute; top: 0; left: 100%; transform: translateX(-100%); }
+.ov-kpi__value { display: flex; align-items: baseline; gap: var(--space-8); height: 28px; margin-top: var(--space-4); white-space: nowrap; }
+.ov-kpi__figure { color: var(--color-text); font-family: var(--font-mono); font-size: 22px; line-height: 28px; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.ov-kpi__limit { color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); }
+.ov-kpi[data-zone='near'] .ov-kpi__figure { color: var(--color-warning); }
+.ov-kpi[data-zone='over'] .ov-kpi__figure { color: var(--color-danger); }
+.ov-kpi__spark { display: flex; align-items: flex-end; height: 14px; margin-top: auto; }
+.ov-kpi__spark--gauge { align-items: center; }
+.ov-kpi__spark--loading { display: block; height: 6px; margin-bottom: 4px; border-radius: 1px; background: var(--color-layer-2); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
+.ov-columns { display: block; width: 100%; height: 14px; }
 .ov-columns--sent rect { fill: var(--color-accent-data); }
 .ov-columns--delivered rect { fill: var(--color-success-marker); }
-.ov-gauge { display: grid; grid-template-columns: repeat(20, minmax(0, 1fr)); gap: 2px; height: 12px; }
-.ov-gauge > i { background: color-mix(in oklch, var(--color-text) 10%, transparent); }
+.ov-gauge { display: grid; flex: 1; grid-template-columns: repeat(20, minmax(0, 1fr)); gap: 2px; height: 6px; }
+.ov-gauge > i { background: var(--color-tick); }
 .ov-gauge > i[data-on] { background: var(--color-accent-data); }
 .ov-gauge[data-zone='near'] > i[data-on] { background: var(--color-warning-marker); }
 .ov-gauge[data-zone='over'] > i[data-on] { background: var(--color-danger-marker); }
-.ov-gauge__limit { height: 10px; margin-top: var(--space-4); color: var(--color-faint); font-family: var(--font-mono); font-size: 10.5px; line-height: 10px; text-align: right; }
-.ov-split__aside .next-steps__title { color: var(--color-muted); font-family: var(--font-body); font-size: var(--text-xs); font-weight: 400; }
+/* Where there is no sidebar to carry it (the compact shell), the sender score is a row under the figures. */
+.ov-kpis > .gauge-card { grid-column: 1 / -1; padding: 0 var(--space-12); border-radius: var(--radius-sm); background: var(--color-well); box-shadow: none; }
+.ov-kpis > .gauge-card:is(:hover, :focus-visible) { background: var(--color-well-hover); }
 
-/* Activity: a 20px head (the lines' key, at its right) and a 196px plot. */
-.ov-chart { display: flex; flex-direction: column; gap: var(--space-4); }
-.ov-chart__head { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-16); height: 20px; }
-.ov-chart__plot { position: relative; height: 196px; }
-.ov-legend { display: flex; flex: none; align-items: center; gap: var(--space-16); color: var(--color-muted); font-size: var(--text-xs); white-space: nowrap; }
+/* The body: the main column beside the inspector rail, 8px under the wells and 8px apart, on the 16px gutter. The rail
+   is its own calm solid surface (#141414 dark, #F5F5F5 light), its right edge level with the last well's; hover and
+   controls inside it take the frame's solid steps. */
+.ov-split { display: grid; flex: 1; grid-template-columns: minmax(0, 1fr) 296px; column-gap: var(--space-24); min-width: 0; min-height: 0; padding: var(--space-8) var(--space-16) var(--space-16); }
+.ov-split__main { display: flex; flex-direction: column; min-width: 0; }
+.ov-split__aside { display: flex; flex-direction: column; gap: var(--space-20); min-width: 0; padding: var(--space-6) 0 0; background: none; }
+/* The rail: compact sections 20px apart, no rule between; labels in mono capitals. */
+.ov-split__aside > * { flex: none; }
+.ov-split__aside > .gauge-card { height: 56px; margin-inline: calc(-1 * var(--space-8)); padding: 0 var(--space-8); border-radius: var(--radius-sm); background: none; box-shadow: none; }
+.ov-split__aside > .gauge-card:is(:hover, :focus-visible) { background: var(--color-hover); }
+.ov-split__aside :is(.setup-rail__head h2, .next-steps__title) { color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); line-height: var(--leading-label); font-weight: 400; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.ov-split__aside .setup-rail__head { height: 24px; }
+.ov-rail-section { display: flex; flex-direction: column; gap: var(--space-4); }
+.ov-rail-section > .ov-label { display: flex; align-items: center; height: 24px; }
+.ov-split__aside .next-steps { gap: var(--space-4); }
+.ov-split__aside .next-steps a { min-height: 34px; font-size: var(--text-md); }
+.ov-split__aside .next-steps a .muted { font-family: var(--font-mono); font-size: var(--text-label); }
+.ov-campaigns__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); height: 24px; }
+.ov-campaigns__head .ui-button { margin-inline-end: calc(-1 * var(--button-pad-x)); }
+/* The standing (Warn and up) leads the rail as a section in its tone's words, not a tinted card. */
+.ov-split__aside > .standing-card { padding: 0; border: 0; border-radius: 0; background: none; }
+.ov-aside-skeleton { display: flex; flex-direction: column; gap: var(--space-12); }
+.ov-aside-skeleton > span { display: block; border-radius: var(--radius-xs); background: var(--color-hover); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
+.ov-aside-skeleton > span:first-child { height: 30px; }
+.ov-aside-skeleton > span:last-child { height: 120px; }
+
+/* Activity: a 172px band (its label and the lines' key, then a 135px plot) straight on the canvas: no box, no axis
+   rules, only ultra-quiet horizontal reference lines (app.css). */
+.ov-chart { display: flex; flex: none; flex-direction: column; gap: var(--space-4); height: 172px; padding: var(--space-6) 0; }
+.ov-chart__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); height: 20px; }
+.ov-chart__plot { position: relative; height: 135px; }
+.ov-legend { display: flex; flex: none; align-items: center; gap: var(--space-16); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-label); white-space: nowrap; }
 .ov-legend > span { display: inline-flex; align-items: center; gap: var(--space-6); }
-.ov-legend i { width: 12px; height: 2px; }
+.ov-legend i { width: 10px; height: 2px; }
 :is(.ov-legend, .ov-readout) .ov-key--sent { background: var(--color-accent-data); }
 :is(.ov-legend, .ov-readout) .ov-key--delivered { background: var(--color-success-marker); }
 :is(.ov-legend, .ov-readout) .ov-key--bounces { background: var(--color-warning-marker); }
 :is(.ov-legend, .ov-readout) .ov-key--complaints { background: var(--color-danger-marker); }
-/* The plot: emails over a flat navy wash, the outcomes on their own scale, dots ringed in the page colour. */
+/* The plot: solid 2px lines over the quiet reference lines, no fill under them; the outcomes on their own scale, dots
+   ringed in the page colour. */
 .ov-activity { position: absolute; inset: 0; }
 .ov-activity > svg { display: block; width: 100%; height: 100%; overflow: visible; touch-action: pan-y; }
-.ov-activity [data-point]:focus-visible { outline: none; stroke: var(--color-accent-data); stroke-width: 1.5; }
-.ov-wash { fill: color-mix(in oklch, var(--color-accent-data) 10%, transparent); }
+.ov-activity [data-point]:focus-visible { outline: none; stroke: var(--color-accent-data); stroke-width: 1; }
+.ov-wash { display: none; }
 .ov-line { fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-.ov-line--sent { stroke: var(--color-accent-data); stroke-width: 2.25; }
+.ov-line--sent { stroke: var(--color-accent-data); }
 .ov-line--bounces { stroke: var(--color-warning-marker); }
 .ov-line--complaints { stroke: var(--color-danger-marker); }
 .ov-dot { stroke: var(--color-surface); stroke-width: 2; }
 .ov-dot--sent { fill: var(--color-accent-data); }
 .ov-dot--bounces { fill: var(--color-warning-marker); }
 .ov-dot--complaints { fill: var(--color-danger-marker); }
-.ov-crosshair { stroke: var(--color-muted); shape-rendering: crispEdges; }
+.ov-crosshair { stroke: var(--color-border-strong); shape-rendering: crispEdges; }
 .ov-activity .ov-end--sent { fill: var(--color-accent-data); }
 .ov-activity .ov-end--bounces { fill: var(--color-warning-marker); }
 .ov-activity .ov-end--complaints { fill: var(--color-danger-marker); }
 :root:not([data-theme='dark']) .ov-activity .ov-end--bounces { fill: var(--color-warning); }
 :root:not([data-theme='dark']) .ov-activity .ov-end--complaints { fill: var(--color-danger); }
-/* The readout beside the crosshair: flat, one hairline, no shadow. */
-.ov-readout { position: absolute; top: 0; z-index: 2; display: grid; gap: var(--space-4); padding: var(--space-8) var(--space-12) var(--space-12); border: 1px solid var(--color-border-strong); border-radius: var(--radius-sm); background: var(--color-layer-2); font-size: var(--text-xs); pointer-events: none; }
-.ov-readout strong { margin-bottom: var(--space-4); color: var(--color-text); font-family: var(--font-mono); font-size: var(--text-label); font-weight: 400; }
+/* The readout beside the crosshair: a small overlay, a solid elevated surface on a soft drop, no edge line. */
+.ov-readout { position: absolute; top: 0; z-index: 2; display: grid; gap: 2px; padding: var(--space-6) var(--space-8) var(--space-8); border: 0; border-radius: var(--radius-xs); background: var(--color-overlay-surface); box-shadow: var(--shadow-popover); font-size: var(--text-xs); line-height: 16px; pointer-events: none; }
+.ov-readout strong { margin-bottom: 2px; color: var(--color-text); font-family: var(--font-mono); font-size: var(--text-label); font-weight: 400; }
 .ov-readout span { display: flex; align-items: center; gap: var(--space-8); color: var(--color-muted); }
-.ov-readout i { flex: none; width: 8px; height: 8px; }
+.ov-readout i { flex: none; width: 6px; height: 6px; }
 .ov-readout b { display: flex; gap: var(--space-8); margin-left: auto; color: var(--color-text); font-family: var(--font-mono); font-weight: 400; font-variant-numeric: tabular-nums; }
 .ov-readout em { min-width: 40px; color: var(--color-faint); font-style: normal; text-align: right; }
 .ov-readout em[data-zone='near'] { color: var(--color-warning); }
 .ov-readout em[data-zone='over'] { color: var(--color-danger); }
 .ov-chart__plot .ui-empty-state { height: 100%; justify-content: center; padding: 0; }
-.ov-chart__plot--loading { border-radius: var(--radius-sm); background: var(--color-layer-1); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
+.ov-chart__plot--loading { border-radius: var(--radius-xs); background: var(--color-layer-1); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
 
-/* Latest emails use Logs' stream rows (.logs-table, 28px), as many as fill the column (latest.ts). On a phone the card
-   dividers stay inside the page's margins, like the facts' hairlines. */
-.ov-latest .ui-section-header { height: 24px; margin-bottom: var(--space-4); }
-.ov-split .ui-cards { --bleed: 0px; }
-/* Recent campaigns close the detail column in the next steps' list style; "All" sits on the title row. */
-.ov-campaigns__head { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); height: 24px; }
-/* Phone: the section links ("Logs", "All") and the range tabs are 44px targets; the links sit in a 44px header. */
+/* Latest emails: Logs' dense 32px rows under a 32px label row, as many as fill the column (latest.ts). The label sits
+   on the gutter, level with the wells' edges; the head's bar spans the column and the rows' text sits 12px inside it. */
+.ov-latest { display: flex; flex-direction: column; min-width: 0; }
+.ov-latest .ui-section-header { flex: none; flex-wrap: nowrap; height: 32px; margin: 0; padding: 0; }
+.ov-latest .ui-section-header h2 { color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); line-height: var(--leading-label); font-weight: 400; letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.ov-table .ui-table :is(th, td):first-child { padding-left: var(--space-12); }
+
+/* Phone: the section links ("Logs", "All") and the range segments are 44px targets. */
 @media (max-width: 640px) {
   .ov-latest .ui-section-header, .ov-campaigns__head { height: 44px; margin-bottom: 0; }
   :is(.ov-latest .ui-section-header, .ov-campaigns__head) .ui-button { height: 44px; }
-  .ov-controls .ui-tab { min-width: 44px; }
   .ov-legend { gap: var(--space-12); }
   .ov-readout { padding: var(--space-6) var(--space-8) var(--space-8); gap: 2px; font-size: 11px; }
   .ov-readout span { gap: var(--space-6); }
   .ov-readout em { min-width: 34px; }
 }
-
-@media (max-width: 1200px) {
-  .ov-split { grid-template-columns: minmax(0, 1fr) 280px; gap: var(--space-28); }
-  .page-surface > .ui-page-header:has(+ .ov-split) { --ov-aside: calc(280px + var(--space-28)); }
-}
-/* One column: the main column, the detail column, then the latest emails (index.tsx). The detail column takes a row,
-   and its gap, only once it has something to show. */
+@media (max-width: 1200px) { .ov-split { grid-template-columns: minmax(0, 1fr) 272px; } }
+/* One column: the main column, the rail, then the latest emails (index.tsx). The rail takes a row only once it has
+   something to show. */
 @media (max-width: 960px) {
-  .ov-split { grid-template-columns: minmax(0, 1fr); }
+  .ov-split { grid-template-columns: minmax(0, 1fr); row-gap: var(--space-16); }
   .ov-split__aside:empty { display: none; }
-  .page-surface > .ui-page-header:has(+ .ov-split) { --ov-aside: 0px; }
 }
-/* The panel toggle (index.tsx) keeps the header's top-right corner, over the detail column or the page's edge, and the
-   controls end before it. Hidden (panel.ts), the detail column is gone and the main column takes its width; one column
-   always shows it, so there is no toggle there. */
+/* The panel toggle closes the strip. Hidden (panel.ts), the rail is gone and the main column takes its width; one
+   column always shows it, so there is no toggle there. */
 .ui-page-header .ov-panel-toggle { display: none; }
 @media (min-width: 961px) {
-  .page-surface > .ui-page-header:has(+ .ov-split) { --ov-toggle: calc(var(--control-height) + var(--space-12)); position: relative; padding-right: var(--ov-toggle); }
-  .ui-page-header .ov-panel-toggle { position: absolute; top: 0; right: 0; display: inline-flex; }
-  :root[data-overview-panel='hidden'] .page-surface > .ui-page-header:has(+ .ov-split) { --ov-aside: var(--ov-toggle); }
+  .ui-page-header .ov-panel-toggle { display: inline-flex; }
   :root[data-overview-panel='hidden'] .ov-split { grid-template-columns: minmax(0, 1fr); }
   :root[data-overview-panel='hidden'] .ov-split__aside { display: none; }
 }
-/* Phone: the controls take their own row (range tabs, then the stream filter filling the rest); the four tiles are a
-   2 × 2 grid. Heights stay fixed, as above. */
+/* The compact shell (tablets and phones) scrolls the document inside the page's margins: the strip's controls take
+   their own row, the wells sit inside the margins, and the range segments grow to 44px targets. */
+@media (max-width: 899px) {
+  .ui-page-header.ov-strip { flex-wrap: wrap; height: auto; min-height: 0; margin-bottom: var(--space-12); padding: 0; }
+  .ov-controls .ui-tabs { height: 44px; }
+  .ov-controls .ui-tab { height: 40px; min-width: 44px; }
+  .ov-kpis { padding: 0; }
+  .ov-lead { padding-inline: 0; }
+  .ov-split { padding: var(--space-8) 0 0; }
+}
 @media (max-width: 640px) {
-  .page-surface > .ui-page-header:has(+ .ov-split) > .cluster:last-child, .ov-controls { flex: 1 1 100%; }
+  .ov-strip > .cluster:last-child, .ov-controls { flex: 1 1 100%; }
   .ov-controls .ui-tabs { flex: none; }
   .ov-controls .ui-select-trigger { flex: 1; width: auto; min-width: 0; }
   /* The SES chip keeps its label and verdict; the rates (in its title and on Settings) don't fit beside the tabs. */
   .overview-reputation > .muted:last-child:not(:first-child) { display: none; }
-  .ov-split { gap: var(--space-28); }
-  .ov-tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ov-kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 
 /* A new range or stream: the old figures stay up and dim once the new ones take over 100 ms, then brighten as they
    arrive. Opacity only, so nothing moves. */
-.ov-tile, .ov-chart { transition: opacity 200ms var(--ease-swap), background var(--motion-duration); }
-.ov-tiles[data-stale] > .ov-tile, .ov-chart[data-stale] { opacity: .6; transition: opacity 200ms var(--ease-swap) 100ms, background var(--motion-duration); }
+.ov-kpi, .ov-chart { transition: opacity 200ms var(--ease-swap), background var(--motion-duration); }
+.ov-kpis[data-stale] > .ov-kpi, .ov-chart[data-stale] { opacity: .6; transition: opacity 200ms var(--ease-swap) 100ms, background var(--motion-duration); }

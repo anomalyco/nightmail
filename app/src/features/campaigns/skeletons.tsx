@@ -1,10 +1,11 @@
-import { ChevronRight, MoreHorizontal } from 'lucide-react'
+import { AlignCenter, AlignLeft, AlignRight, Bold, Braces, ChevronRight, ImagePlus, Italic, MoreHorizontal, Redo2, Shapes, SlidersHorizontal, Type, Undo2, X, type LucideIcon } from 'lucide-react'
 import {
-  Button, ControlSkeleton, Field, IconButton, LoadingRegion, PageHeader, SearchField, SectionHeader,
-  Select, Skeleton, SkeletonText, TableSkeleton, Tabs, type SkeletonColumn,
+  Button, ControlSkeleton, Field, Icon, IconButton, LoadingRegion, PageHeader, SearchField, SectionHeader,
+  Select, Skeleton, SkeletonText, StatusBadge, TableSkeleton, Tabs, type SkeletonColumn,
 } from '../../components/ui'
+import { Notices } from '../../components/Notices'
 import { CampaignsHeader } from './header'
-import { usePhone } from '../../lib/media'
+import { modKey, usePhone } from '../../lib/media'
 import { useSearchParams } from 'react-router'
 import { useWorkspaceAccess } from '../../data/context'
 import { newsletterPath } from '../newsletters/shared'
@@ -44,8 +45,20 @@ export function CampaignAudienceSkeleton() {
   </LoadingRegion>
 }
 
+// The composer's tools and panel as the editor opens them (EmailComposer, disabled until it is ready), so the studio's
+// rail (from 900 px) and its docked Style panel (from 1150 px) are in place from the first frame; below 900 px
+// the toolbar row on the sheet. Outside the studio (a preview dialog) only the toolbar row and the canvas show.
+const railTools: LucideIcon[][] = [[Type, ImagePlus, Shapes, Braces], [Bold, Italic, AlignLeft, AlignCenter, AlignRight], [Undo2, Redo2], [SlidersHorizontal]]
 export function ComposerSkeleton() {
-  return <LoadingRegion label="Loading composer" className="composer-loading"><div className="composer-skeleton-tools"><ControlSkeleton width={90} /><ControlSkeleton width={28} /><ControlSkeleton width={28} /></div><div className="composer-skeleton-canvas"><SkeletonText width="55%" lineHeight={36} /><SkeletonText /><SkeletonText width="80%" /><SkeletonText width="60%" /></div></LoadingRegion>
+  return <LoadingRegion label="Loading composer" className="composer-loading">
+    <div className="composer-rail composer-skeleton-rail" aria-hidden="true">{railTools.map((group, index) => <div key={index} className="composer-rail__group">{group.map((glyph, tool) => <span key={tool} className="composer-skeleton-tool"><Icon icon={glyph} /></span>)}</div>)}</div>
+    <div className="composer-skeleton-tools"><ControlSkeleton width={90} /><ControlSkeleton width={28} /><ControlSkeleton width={28} /></div>
+    <div className="composer-skeleton-canvas"><SkeletonText width="55%" lineHeight={36} /><SkeletonText /><SkeletonText width="80%" /><SkeletonText width="60%" /></div>
+    <div className="composer-inspector composer-skeleton-panel" aria-hidden="true">
+      <div className="composer-inspector-header"><span className="composer-inspector-title">Style</span><span className="composer-skeleton-tool composer-skeleton-tool--sm"><Icon icon={X} /></span></div>
+      <p className="composer-inspector-hint">Select a block to style it.</p>
+    </div>
+  </LoadingRegion>
 }
 
 export function CampaignRouteSkeleton({ kind, isNew = false }: { kind: 'list' | 'editor' | 'review' | 'templates' | 'template'; isNew?: boolean }) {
@@ -62,26 +75,29 @@ export function CampaignRouteSkeleton({ kind, isNew = false }: { kind: 'list' | 
     </>
   }
   if (kind === 'template') return <div className="campaign-compose-page template-compose-page">
-    <PageHeader title="Edit template" backTo="/campaigns/templates" actions={<><span className="campaign-sync-status"><span className="campaign-sync-dot" /></span>{phone ? <><Button variant="primary" disabled>Publish</Button><IconButton label="More actions" disabled><MoreHorizontal size={16} /></IconButton></> : <><Button variant="ghost" disabled>Preview</Button><Button variant="ghost" disabled>Archive</Button><Button variant="secondary" disabled>Use template</Button><Button variant="primary" disabled>Publish</Button></>}</>} />
+    <PageHeader title="Edit template" backTo="/campaigns/templates" actions={<>{!phone && <span className="campaign-sync-status"><span className="campaign-sync-dot" /></span>}{phone ? <><Button variant="primary" disabled>Publish</Button><IconButton label="More actions" disabled><Icon icon={MoreHorizontal} /></IconButton></> : <><Button variant="ghost" disabled>Preview</Button><Button variant="ghost" disabled>Archive</Button><Button variant="secondary" disabled>Use template</Button><Button variant="primary" disabled>Publish</Button></>}</>} />
     <LoadingRegion label="Loading template editor" className="campaign-compose-workspace">
-      <div className="campaign-compose-scroll"><div className="campaign-compose-sheet">
+      <div className="campaign-compose-scroll"><div className="studio-notices"><Notices /></div><div className="campaign-compose-sheet">
         <div className="campaign-compose-metadata" aria-hidden="true">
-          {['Name', 'Purpose', 'Subject', 'Inbox preview', 'From name', 'Reply to'].map(label => <div className="campaign-compose-row" key={label}><span className="muted">{label}</span><ControlSkeleton /></div>)}
+          {['Name', 'Purpose', 'Subject', 'Inbox preview', 'From name', 'Reply to'].map(label => <div className="campaign-compose-row" key={label}><span>{label}</span><ControlSkeleton /></div>)}
         </div>
         <ComposerSkeleton />
       </div></div>
     </LoadingRegion>
   </div>
+  // The loaded editor's bar (index.tsx): back, the path, the name and Draft; the presence place, the save status, the
+  // actions with Continue's shortcut. Then the sheet's From and Subject rows, and the composer.
   if (kind === 'editor') return <div className="campaign-compose-page campaign-studio">
-    <CampaignBar back={issueOf ? newsletterPath(issueOf) : undefined} title={<><h1 className="sr-only">{issueOf ? 'New issue' : isNew ? 'Create campaign' : 'Edit campaign'}</h1><div className="studio-name studio-name--loading">{isNew ? <span className="muted">{issueOf ? 'Untitled issue' : 'Untitled campaign'}</span> : <SkeletonText width={180} />}</div></>} steps={<CampaignSteps step="write" />} actions={<>
-      {!phone && <span className="campaign-sync-status"><span className="campaign-sync-dot" />{isNew ? 'New draft' : 'Connecting…'}</span>}
-      {phone ? <><Button variant="primary" disabled>Continue</Button><IconButton label="More actions" disabled><MoreHorizontal size={16} /></IconButton></> : <>{isNew && <Button variant="ghost" disabled>Use a template</Button>}<Button variant="secondary" disabled>Send test</Button><Button variant="primary" disabled>Continue</Button></>}
+    <CampaignBar back={issueOf ? newsletterPath(issueOf) : undefined} crumb={issueOf ? <SkeletonText width={88} lineHeight={18} /> : 'Campaigns'} title={<><h1 className="sr-only">{issueOf ? 'New issue' : isNew ? 'Create campaign' : 'Edit campaign'}</h1><div className="studio-name studio-name--loading">{isNew ? <span className="studio-name__placeholder">{issueOf ? 'Untitled issue' : 'Untitled campaign'}</span> : <SkeletonText width={180} />}</div></>} status={<StatusBadge status="draft" tone="neutral" />} steps={<CampaignSteps step="write" />} actions={<>
+      <div className="campaign-presence" data-reserve aria-hidden="true" />
+      {!phone && <span className="campaign-sync-status"><span className="campaign-sync-dot" /><span>{isNew ? 'New draft' : 'Connecting…'}</span></span>}
+      {phone ? <><Button variant="primary" disabled>Continue</Button><IconButton label="More actions" disabled><Icon icon={MoreHorizontal} /></IconButton></> : <>{isNew && <Button variant="ghost" disabled>Use a template</Button>}<Button variant="secondary" disabled>Send test</Button><Button variant="primary" disabled>Continue<kbd className="ui-kbd" aria-hidden="true">{modKey}↩</kbd></Button></>}
     </>} />
     <LoadingRegion label="Loading campaign editor" className="campaign-compose-workspace">
-      <div className="campaign-compose-scroll"><div className="campaign-compose-sheet">
+      <div className="campaign-compose-scroll"><div className="studio-notices"><Notices /></div><div className="campaign-compose-sheet">
         <div className="campaign-compose-metadata" aria-hidden="true">
-          <div className="campaign-compose-row campaign-compose-sender"><span className="muted">From</span><ControlSkeleton /><Button variant="ghost" size="sm" className="campaign-sender-toggle" disabled>Reply to<ChevronRight size={14} aria-hidden="true" /></Button></div>
-          <div className="campaign-compose-row campaign-compose-subject"><span className="muted">Subject</span><ControlSkeleton /><Button className="campaign-preview-toggle" variant="ghost" size="sm" disabled>Inbox preview</Button></div>
+          <div className="campaign-compose-row campaign-compose-sender"><span>From</span><ControlSkeleton /><Button variant="ghost" size="sm" className="campaign-sender-toggle" disabled>Reply-To<Icon icon={ChevronRight} size="sm" /></Button></div>
+          <div className="campaign-compose-row campaign-compose-subject"><span>Subject</span><ControlSkeleton /><Button className="campaign-preview-toggle" variant="ghost" size="sm" disabled>Preview text</Button></div>
         </div>
         <ComposerSkeleton />
       </div></div>

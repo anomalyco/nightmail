@@ -2,7 +2,7 @@ import { createRoute, z } from '@hono/zod-openapi';
 import { createHmac, hkdfSync, randomBytes } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { auditContext, auditInsert } from './audit.js';
-import { actorMailAccess, ApiError, denied, errors, id, isoTime, json, lasting, response, security, type App, type Ctx, type MailboxAccess } from './core.js';
+import { actorMailAccess, agentCredentialRefusal, ApiError, denied, errors, id, isoTime, json, lasting, response, security, type App, type Ctx, type MailboxAccess } from './core.js';
 
 export function passwordDigest(pepper: string, value: string) {
   return createHmac('sha256', hkdfSync('sha256', pepper, '', 'bane:protocol-password:v1', 32))
@@ -49,8 +49,10 @@ export function registerInboxPasswords(app: App, access: (c: Ctx) => MailboxAcce
       responses: { 201: response(item.extend({ password: z.string() })), ...errors },
     }),
     async (c) => {
-      const wid = manager(c, true),
-        bid = c.req.valid('param').id,
+      const wid = manager(c, true);
+      // Inbox routes authenticate after the /v1 guard, so the agent key's refusal is checked here too (core.ts).
+      if (c.get('actor')?.agentSetup) throw agentCredentialRefusal();
+      const bid = c.req.valid('param').id,
         q = c.req.valid('json'),
         kid = id('app'),
         password = Buffer.from(randomBytes(16)).toString('hex').match(/.{4}/g)!.join('-'),

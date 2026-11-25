@@ -1,6 +1,7 @@
-/* Standalone docs (signed out): a sticky header above the docs frame. */
+/* Standalone docs (signed out): a sticky header above the docs frame. The header and the contents column sit on the
+   page's own surface, set apart by spacing and alignment, with no rule or shaded panel around them. */
 .docs-page { --docs-top: 58px; min-height: 100vh; background: var(--color-surface); color: var(--color-text); }
-.docs-header { position: sticky; z-index: 5; top: 0; display: flex; height: var(--docs-top); align-items: center; justify-content: space-between; padding-inline: 24px; border-bottom: 1px solid var(--color-border); background: color-mix(in srgb, var(--color-surface) 94%, transparent); backdrop-filter: blur(12px); }
+.docs-header { position: sticky; z-index: 5; top: 0; display: flex; height: var(--docs-top); align-items: center; justify-content: space-between; padding-inline: 24px; background: var(--color-surface); }
 .docs-brand { display: flex; align-items: baseline; gap: 8px; color: inherit; text-decoration: none; }
 .docs-brand strong { font-family: 'OpenTUI Mono', monospace; font-size: var(--text-md); }
 .docs-brand span, .docs-header nav { color: var(--color-muted); }
@@ -11,7 +12,8 @@
    (a phone, a narrow window). A container query, so the dashboard's sidebar counts. */
 .docs-frame { container: docs / inline-size; }
 .docs-layout { display: grid; grid-template-columns: 232px minmax(0, 1fr); column-gap: clamp(28px, 4cqi, 56px); align-items: start; }
-.docs-toc { position: sticky; top: 0; display: flex; flex-direction: column; gap: var(--space-16); height: calc(100dvh - 2 * var(--page-inset) - 2 * var(--space-24)); min-height: 0; }
+/* The contents sit straight on the page's surface: only the search field and the hovered or current link are filled. */
+.docs-toc { position: sticky; top: 0; display: flex; flex-direction: column; gap: var(--space-16); height: calc(100dvh - 2 * var(--page-inset) - 2 * var(--space-24)); min-height: 0; padding: var(--space-12) var(--space-12) 0; }
 .docs-toc > .ui-input, .docs-toc > .ui-control-skeleton { flex-shrink: 0; }
 /* The list scrolls under a short fade at its bottom edge instead of stopping hard. */
 .docs-toc-scroll { --fade-pad-x: var(--focus-reach); flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; margin-inline: calc(-1 * var(--focus-reach)); padding: 0 var(--focus-reach) var(--space-24); }
@@ -27,8 +29,7 @@
 /* Text measures are in em, not ch: a ch is the current font's 0, which differs between the local fallback and Inter,
    so a ch-wide column changed width when the web font arrived (CLS 0.0023 on a cold load). 45em is 72 Inter ch. */
 .docs-operation-header { display: flex; flex-direction: column; gap: var(--space-8); padding-bottom: var(--space-24); }
-/* One hairline between sections, never doubled by a list's own last row. */
-.docs-operation > * + * { border-top: 1px solid var(--color-border-muted); }
+/* Sections part by their own padding, no rule between them. */
 .docs-operation-header h1 { margin: 0; font-size: 26px; line-height: 1.2; }
 .docs-operation-header > p { max-width: 45em; margin: 0; color: var(--color-muted); line-height: 1.55; }
 .docs-section { display: flex; flex-direction: column; gap: var(--space-12); padding-block: var(--space-24); }
@@ -37,7 +38,7 @@
 @media (max-width: 760px) { .docs-operation-header h1 { font-size: 22px; } }
 
 .docs-page .docs-layout { grid-template-columns: 292px minmax(0, 1fr); column-gap: 0; }
-.docs-page .docs-toc { top: var(--docs-top); height: calc(100dvh - var(--docs-top)); padding: 20px 16px 0 24px; border-right: 1px solid var(--color-border); }
+.docs-page .docs-toc { top: var(--docs-top); height: calc(100dvh - var(--docs-top)); padding: 20px 16px 0 24px; }
 .docs-page .docs-main { padding: 48px clamp(28px, 7vw, 96px) 80px; }
 .docs-page .docs-main [id] { scroll-margin-top: calc(var(--docs-top) + var(--space-16)); }
 

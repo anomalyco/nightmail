@@ -2,11 +2,11 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { useGuardedMutation } from '../../lib/single-flight'
 import { Send } from 'lucide-react'
-import { Alert, Button, ErrorText, SectionHeader, Tabs } from '../../components/ui'
+import { Alert, Button, ErrorText, SectionHeader, Tabs, useToast } from '../../components/ui'
 import { CopyAction } from '../../components/motion'
 import { useApiQuery, usePublicOrigin, useSession } from '../../data/context'
 import { request } from '../../data/live'
-import type { Domain } from '../../data/types'
+import { errorText, type Domain } from '../../data/types'
 import './developer.css'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { MaskedText } from './agent-setup'
@@ -55,20 +55,25 @@ export function useTestSender() {
 }
 
 // "Or send yourself a test first": a test from the shared test sender to the signed-in user's own address, before any
-// domain is verified. It is an ordinary POST /v1/emails/send, as an agent or app would make it. `status` shows where it
-// went in place of the button once sent (only then: the address is the page's only one, and onboarding has no privacy
-// toggle to reveal it); without it the caller confirms the send (onSent). Errors show under it.
-export function SelfTest({ onSent, status = false }: { onSent?: (id: string) => void; status?: boolean }) {
+// domain is verified. It is an ordinary POST /v1/emails/send, as an agent or app would make it. `confirm` is what replaces
+// the button once it is sent: where it went (onboarding, which has no Logs), a link to it in Logs (Overview's card), or
+// nothing when the caller says so itself (onSent, the setup steps). It is rendered only then: the address it names is the
+// page's only one, and onboarding has no privacy toggle to reveal it. `toastErrors`: a card of a fixed height says a
+// refusal in a toast instead of under the button.
+export function SelfTest({ onSent, confirm, toastErrors = false }: { onSent?: (id: string) => void; confirm?: 'address' | 'logs'; toastErrors?: boolean }) {
   const sender = useTestSender()
+  const toast = useToast()
   const test = useGuardedMutation({ target: 'test-sender', mutationFn: () => request<{ id: string }>('/v1/emails/send', { method: 'POST', idempotencyKey: crypto.randomUUID(),
     body: { from: sender!.address, to: sender!.to, subject: `Test email from ${productName}`, text: `It works. This test came from ${productName} before you added a domain.` } }),
-    onSuccess: data => onSent?.(data.id) })
+    onSuccess: data => onSent?.(data.id), onError: error => { if (toastErrors) toast(errorText(error), 'error') } })
   if (!sender) return null
-  const sent = status && test.isSuccess
+  const sent = confirm && test.isSuccess ? test.data : null
   return <div className="self-test">
-    {sent ? <span className="self-test__sent muted" role="status">Sent to <PrivateAddress value={sender.to} /> from “{sender.name}”.</span>
+    {sent ? <span className="self-test__sent muted" role="status">{confirm === 'logs'
+      ? <>Test sent. <Link to={`/logs/${encodeURIComponent(sent.id)}`}>View in Logs</Link></>
+      : <>Sent to <PrivateAddress value={sender.to} /> from “{sender.name}”.</>}</span>
       : <button type="button" className="self-test__button" disabled={test.isPending} aria-busy={test.isPending || undefined} data-analytics="test-sender/send" onClick={() => test.mutate()}>Or send yourself a test first</button>}
-    {test.error ? <span className="self-test__error" role="alert"><ErrorText error={test.error} /></span> : null}
+    {test.error && !toastErrors ? <span className="self-test__error" role="alert"><ErrorText error={test.error} /></span> : null}
   </div>
 }
 

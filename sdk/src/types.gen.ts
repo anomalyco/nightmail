@@ -491,6 +491,107 @@ export type UpdateApiKey = {
     };
 };
 
+export type AgentSetupToken = {
+    id: string;
+    /**
+     * nm_setup_…, shown once.
+     */
+    token: string;
+    expiresAt: string;
+    permissions: Array<'read' | 'send' | 'manage'>;
+};
+
+export type AgentSetupStatus = {
+    id: string;
+    status: 'waiting' | 'connected' | 'expired' | 'replaced';
+    expiresAt: string;
+    connectedAt: string | null;
+    keyId: string | null;
+    keyName: string | null;
+};
+
+export type AgentKey = {
+    /**
+     * The API key (nm_…), shown once. Save it as NIGHTMAIL_API_KEY in the project's environment, never in code or a commit.
+     */
+    key: string;
+    keyId: string;
+    /**
+     * Agent (set up <date>), under API keys, where a person revokes it.
+     */
+    name: string;
+    workspaceId: string;
+    /**
+     * The workspace's name: tell the person, so they can confirm the key is in theirs.
+     */
+    workspaceName: string;
+    /**
+     * read, send and manage, on every sender domain: send email, manage domains, inboxes, receiving, webhooks and campaigns. It can't create API keys, agent tokens, inbox connection keys, inbox keys or mail-client (IMAP/SMTP) passwords; members, billing and deleting the workspace are a person's.
+     */
+    permissions: Array<'read' | 'send' | 'manage'>;
+    /**
+     * The API origin to call.
+     */
+    baseUrl: string;
+    mcp: {
+        url: string;
+        /**
+         * A remote MCP server entry that reads the key from NIGHTMAIL_API_KEY.
+         */
+        config: {
+            [key: string]: unknown;
+        };
+    };
+    nextStep: string;
+};
+
+export type AgentDeviceAuthorization = {
+    /**
+     * nm_device_…: keep it private; only pollAgentDeviceToken takes it.
+     */
+    device_code: string;
+    /**
+     * Show this to the person: they confirm it matches.
+     */
+    user_code: string;
+    verification_uri: string;
+    /**
+     * The page with the user code filled in: the link to give the person.
+     */
+    verification_uri_complete: string;
+    expires_in: number;
+    /**
+     * Seconds to wait between polls.
+     */
+    interval: number;
+};
+
+export type AgentDeviceRequest = {
+    userCode: string;
+    /**
+     * What the agent says it is: its claim, not verified.
+     */
+    clientName: string | null;
+    status: 'pending' | 'approved' | 'denied' | 'used' | 'expired';
+    createdAt: string;
+    expiresAt: string;
+    /**
+     * What its key gets once approved.
+     */
+    permissions: Array<'read' | 'send' | 'manage'>;
+};
+
+export type AgentDeviceApproval = {
+    userCode: string;
+    status: 'approved';
+    workspaceId: string;
+};
+
+export type AgentDeviceDenial = {
+    userCode: string;
+    status: 'denied';
+};
+
 export type ContactRead = Contact & {
     /**
      * Up to 50 list IDs on paginated contact reads (200 on getContact), sorted by ID.
@@ -2229,7 +2330,7 @@ export type DomainReadiness = {
         status: 'pending' | 'verified';
         note?: string;
         /**
-         * verifyDomain only, for pending sending and MAIL FROM records: what public DNS (Cloudflare 1.1.1.1, answers cached up to 30 seconds) shows for this record now. Null when DNS did not answer in time; absent on other reads and records.
+         * For pending sending and MAIL FROM records: what public DNS (Cloudflare 1.1.1.1) shows for this record. verifyDomain looks it up now (answers cached up to 30 seconds). Other reads show the last background check, which runs every 15 to 60 minutes for a Hosted domain still pending an hour after it was added. Null when DNS did not answer in time; absent before any check and on other records.
          */
         publicDns?: {
             /**
@@ -2243,6 +2344,23 @@ export type DomainReadiness = {
             checkedAt: string;
         } | null;
     }>;
+    /**
+     * Where this domain’s DNS is hosted, from its zone’s NS records, alongside publicDns: null when the provider is not one Nightmail recognizes.
+     */
+    dnsHost?: {
+        /**
+         * The provider, e.g. Cloudflare, Vercel, Route 53, GoDaddy or Namecheap.
+         */
+        name: string;
+        /**
+         * The zone it hosts, which record names are relative to there.
+         */
+        zone: string;
+        /**
+         * The provider's DNS page for the zone, when it has a known address.
+         */
+        url: string | null;
+    } | null;
     /**
      * Hosted only: when this domain is released if its records are still unproven (72 hours after it was added). Null once ownership has been proven.
      */
@@ -6902,6 +7020,539 @@ export type UpdateApiKeyResponses = {
 };
 
 export type UpdateApiKeyResponse = UpdateApiKeyResponses[keyof UpdateApiKeyResponses];
+
+export type CreateAgentSetupTokenData = {
+    body?: never;
+    path?: never;
+    query?: never;
+    url: '/v1/agent/setup-tokens';
+};
+
+export type CreateAgentSetupTokenErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type CreateAgentSetupTokenError = CreateAgentSetupTokenErrors[keyof CreateAgentSetupTokenErrors];
+
+export type CreateAgentSetupTokenResponses = {
+    /**
+     * Success
+     */
+    201: AgentSetupToken;
+};
+
+export type CreateAgentSetupTokenResponse = CreateAgentSetupTokenResponses[keyof CreateAgentSetupTokenResponses];
+
+export type GetAgentSetupTokenData = {
+    body?: never;
+    path: {
+        id: string;
+    };
+    query?: never;
+    url: '/v1/agent/setup-tokens/{id}';
+};
+
+export type GetAgentSetupTokenErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type GetAgentSetupTokenError = GetAgentSetupTokenErrors[keyof GetAgentSetupTokenErrors];
+
+export type GetAgentSetupTokenResponses = {
+    /**
+     * Success
+     */
+    200: AgentSetupStatus;
+};
+
+export type GetAgentSetupTokenResponse = GetAgentSetupTokenResponses[keyof GetAgentSetupTokenResponses];
+
+export type ExchangeAgentSetupTokenData = {
+    body: {
+        /**
+         * The setup token from the prompt.
+         */
+        token: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/v1/agent/setup';
+};
+
+export type ExchangeAgentSetupTokenErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Expired, or replaced by a newer one; use error.code.
+     */
+    410: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type ExchangeAgentSetupTokenError = ExchangeAgentSetupTokenErrors[keyof ExchangeAgentSetupTokenErrors];
+
+export type ExchangeAgentSetupTokenResponses = {
+    /**
+     * Success
+     */
+    201: AgentKey;
+};
+
+export type ExchangeAgentSetupTokenResponse = ExchangeAgentSetupTokenResponses[keyof ExchangeAgentSetupTokenResponses];
+
+export type StartAgentDeviceAuthorizationData = {
+    body?: {
+        /**
+         * What the agent is, shown to the person as its claim.
+         */
+        client_name?: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/v1/agent/device';
+};
+
+export type StartAgentDeviceAuthorizationErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type StartAgentDeviceAuthorizationError = StartAgentDeviceAuthorizationErrors[keyof StartAgentDeviceAuthorizationErrors];
+
+export type StartAgentDeviceAuthorizationResponses = {
+    /**
+     * Success
+     */
+    200: AgentDeviceAuthorization;
+};
+
+export type StartAgentDeviceAuthorizationResponse = StartAgentDeviceAuthorizationResponses[keyof StartAgentDeviceAuthorizationResponses];
+
+export type PollAgentDeviceTokenData = {
+    body: {
+        device_code: string;
+        /**
+         * Optional, as RFC 8628 clients send it.
+         */
+        grant_type?: 'urn:ietf:params:oauth:grant-type:device_code';
+    };
+    path?: never;
+    query?: never;
+    url: '/v1/agent/device/token';
+};
+
+export type PollAgentDeviceTokenErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type PollAgentDeviceTokenError = PollAgentDeviceTokenErrors[keyof PollAgentDeviceTokenErrors];
+
+export type PollAgentDeviceTokenResponses = {
+    /**
+     * Success
+     */
+    201: AgentKey;
+};
+
+export type PollAgentDeviceTokenResponse = PollAgentDeviceTokenResponses[keyof PollAgentDeviceTokenResponses];
+
+export type LookUpAgentDeviceData = {
+    body: {
+        /**
+         * The code the agent shows, with or without its hyphen.
+         */
+        userCode: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/v1/agent/device/lookup';
+};
+
+export type LookUpAgentDeviceErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type LookUpAgentDeviceError = LookUpAgentDeviceErrors[keyof LookUpAgentDeviceErrors];
+
+export type LookUpAgentDeviceResponses = {
+    /**
+     * Success
+     */
+    200: AgentDeviceRequest;
+};
+
+export type LookUpAgentDeviceResponse = LookUpAgentDeviceResponses[keyof LookUpAgentDeviceResponses];
+
+export type ApproveAgentDeviceData = {
+    body: {
+        /**
+         * The code the agent shows, with or without its hyphen.
+         */
+        userCode: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/v1/agent/device/approve';
+};
+
+export type ApproveAgentDeviceErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Expired, or replaced by a newer one; use error.code.
+     */
+    410: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type ApproveAgentDeviceError = ApproveAgentDeviceErrors[keyof ApproveAgentDeviceErrors];
+
+export type ApproveAgentDeviceResponses = {
+    /**
+     * Success
+     */
+    200: AgentDeviceApproval;
+};
+
+export type ApproveAgentDeviceResponse = ApproveAgentDeviceResponses[keyof ApproveAgentDeviceResponses];
+
+export type DenyAgentDeviceData = {
+    body: {
+        /**
+         * The code the agent shows, with or without its hyphen.
+         */
+        userCode: string;
+    };
+    path?: never;
+    query?: never;
+    url: '/v1/agent/device/deny';
+};
+
+export type DenyAgentDeviceErrors = {
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    400: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    401: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    403: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    404: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    409: ApiError;
+    /**
+     * Expired, or replaced by a newer one; use error.code.
+     */
+    410: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    413: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    422: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    429: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    500: ApiError;
+    /**
+     * Request failed; use error.code and requestId to diagnose.
+     */
+    503: ApiError;
+};
+
+export type DenyAgentDeviceError = DenyAgentDeviceErrors[keyof DenyAgentDeviceErrors];
+
+export type DenyAgentDeviceResponses = {
+    /**
+     * Success
+     */
+    200: AgentDeviceDenial;
+};
+
+export type DenyAgentDeviceResponse = DenyAgentDeviceResponses[keyof DenyAgentDeviceResponses];
 
 export type ListContactsData = {
     body?: never;

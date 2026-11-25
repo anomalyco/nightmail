@@ -52,7 +52,7 @@ export function byoSessionStatements(purpose: ByoPurpose, s: ByoScope): Statemen
     // Requesting production access: read the account's state, then ask once (requestProductionAccess).
     case 'account': return [allow(['ses:GetAccount', 'ses:PutAccountDetails'], '*')];
     case 'read': return identity([]);
-    case 'verify': return identity(['ses:CreateEmailIdentity', 'ses:TagResource']);
+    case 'verify': return identity(['ses:CreateEmailIdentity', 'ses:TagResource', 'ses:PutEmailIdentityFeedbackAttributes']);
     case 'delete': return identity(['ses:DeleteEmailIdentity']);
     case 'mailfrom': return identity(['ses:PutEmailIdentityMailFromAttributes']);
     // The stack is always in us-east-2 (the template asserts it); Nightmail reads its status and outputs.

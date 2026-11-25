@@ -18,7 +18,7 @@ export function RouteSkeleton() {
   const operator = useSession()?.identity?.operator
   const phone = usePhone()
   const [section, id, view] = pathname.split('/').filter(Boolean)
-  if (!section) return <OverviewRouteSkeleton />
+  if (!section || section === 'overview') return <OverviewRouteSkeleton />
   if (section === 'logs') return !id ? <LogsRouteSkeleton /> : isReceivedId(id) ? <ReceivedEmailSkeleton /> : <EmailDetailSkeleton />
   if (section === 'campaigns') return id === 'templates' ? <CampaignRouteSkeleton kind={view ? 'template' : 'templates'} /> : <CampaignRouteSkeleton kind={!id ? 'list' : view === 'review' ? 'review' : 'editor'} isNew={id === 'new'} />
   if (section === 'newsletters') return <NewsletterRouteSkeleton id={id} />

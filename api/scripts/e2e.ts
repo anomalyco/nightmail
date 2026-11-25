@@ -319,6 +319,16 @@ async function devBoundaries() {
   await denied('bindMcpConnection',{path:fake,body:{workspaceId:prefix,receiving:false}});
   await denied('createAgentToken',{body:{permissions:['read'], domains:[domain], expiresInSeconds:30, purpose:prefix}},403,'MCP_AUTHORIZATION_REQUIRED');
   await denied('revokeAgentToken',{path:fake},404,'NOT_FOUND');
+  // Agent setup: an agent's side runs live without approving anything; minting and deciding are a signed-in person's.
+  await step('exchangeAgentSetupToken: refuses a token it never issued',()=>expectDenial(()=>api('exchangeAgentSetupToken',{body:{token:`${secretPrefixes.agentSetup}${'0'.repeat(32)}.${'0'.repeat(64)}`}}),400,'SETUP_TOKEN_INVALID'));
+  await step('startAgentDeviceAuthorization: a device code waits for a person',async()=>{
+    const started=await api('startAgentDeviceAuthorization',{body:{client_name:prefix}});
+    check(/^[A-Z]{4}-[A-Z]{4}$/.test(started.user_code)&&started.verification_uri_complete===`${started.verification_uri}?code=${started.user_code}`&&started.interval>=1,'unexpected device authorization');
+    await expectDenial(()=>api('pollAgentDeviceToken',{body:{device_code:started.device_code}}),400,'AUTHORIZATION_PENDING');
+  });
+  await denied('createAgentSetupToken',{});
+  await denied('getAgentSetupToken',{path:fake});
+  for (const op of ['lookUpAgentDevice','approveAgentDevice','denyAgentDevice'] as const) await denied(op,{body:{userCode:'BCDF-GHJK'}});
   for (const op of ['getConnection','listConnectionRegions','refreshConnectionScan','getConnectionRegionStatus'] as const) await denied(op,{},403,'PERMISSION_DENIED');
   await denied('verifyConnection',{body:{awsAccountId:'000000000000'}},403,'PERMISSION_DENIED');
   await denied('importConnectionDomains',{body:{revision:1,candidateIds:[prefix],confirm:true}},403,'PERMISSION_DENIED');

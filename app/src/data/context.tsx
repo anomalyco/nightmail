@@ -23,6 +23,7 @@ import { analytics } from '../lib/analytics'
 import { Analytics } from '../components/Analytics'
 import { NightmailWordmark } from '../components/NightmailLogo'
 import { isKnownPath } from '../lib/routes'
+import { DESIGN_SHEET_PATH, designSheetEnabled } from '../lib/design-sheet'
 
 // The tab's account and workspace. logout signs out of this tab's account only; another connected account takes its place.
 type Session = { identity: Identity | null; logout: () => Promise<void>; switchWorkspace: (id: string, path?: string) => Promise<void>
@@ -216,7 +217,7 @@ function SignInLinkForm({ to }: { to: string | null }) {
 }
 /** Pages anyone can open, signed in or not. Continuing an emailed support request (features/support/continue.tsx) is one:
  *  a person signed in without a workspace has no /v1/me but can confirm it, and someone signed out signs in from it. */
-export const isPublicPath = (path: string) => path === '/docs' || path.startsWith('/docs/') || path === '/legal' || path.startsWith('/legal/') || path === '/pricing' || path.startsWith('/compare/') || path.startsWith('/support/continue/')
+export const isPublicPath = (path: string) => path === '/docs' || path.startsWith('/docs/') || path === '/legal' || path.startsWith('/legal/') || path === '/pricing' || path.startsWith('/compare/') || path.startsWith('/support/continue/') || (designSheetEnabled && path === DESIGN_SHEET_PATH)
 export function ApiProvider({ children }: { children: ReactNode }) {
   // The docs, the legal pages and the price pages are public: they render signed out, and /v1/me only adds the workspace's context.
   const { pathname } = useLocation(), publicRoute = isPublicPath(pathname)

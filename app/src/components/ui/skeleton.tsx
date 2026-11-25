@@ -16,5 +16,5 @@ export function LoadingRegion({ children, label = 'Loading content', className =
   return <div className={`ui-loading-layout ${className}`} aria-busy="true"><span role="status" className="sr-only">{label}</span>{children}</div>
 }
 export function PaginationSkeleton() {
-  return <div className="ui-pagination" aria-hidden="true"><Skeleton width={125} /><div className="cluster"><ControlSkeleton width={34} /><Skeleton width={42} /><ControlSkeleton width={34} /></div></div>
+  return <div className="ui-pagination" aria-hidden="true"><Skeleton width={125} /><div className="cluster"><ControlSkeleton width="var(--control-height)" /><Skeleton width={42} /><ControlSkeleton width="var(--control-height)" /></div></div>
 }

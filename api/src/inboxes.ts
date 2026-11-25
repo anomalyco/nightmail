@@ -1,6 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, budgetedRead, denied, digest, id, randomSecret, readLimit, readLimitNote, errors, json, response, type App, type Ctx, type DbExecutor, type MailboxAccess } from './core.js';
+import { agentCredentialRefusal, ApiError, budgetedRead, denied, digest, id, randomSecret, readLimit, readLimitNote, errors, json, response, type App, type Ctx, type DbExecutor, type MailboxAccess } from './core.js';
 import { buildBoundedPageJson, PAGE_MAX_BYTES, withBoundedRead } from './read-bounds.js';
 import { fitPageByBytes, INBOUND_ADDRESS_PAGE_LIMIT, INBOUND_ADDRESS_STORE_LIMIT, messageFieldCount, sliceJsonbArray, withReadLease } from './inbound-bounds.js';
 import { longPoll, reservePolls } from './auth.js';
@@ -189,6 +189,7 @@ export function registerInboxes(app: App, access: (c: Ctx, p?: MailboxPermission
     const manageAddress = v.admin && !grantId;
     if(input.type==='persistent'&&!v.admin) throw denied('ADMIN_REQUIRED','Creating a persistent inbox requires workspace management permission.',{ permission: 'inboxes', level: 'write', scope: 'workspace' });
     if(input.type==='persistent'&&(input.ttlSeconds!==86400||input.graceHours!==24))throw new ApiError(422,'VALIDATION_FAILED','A persistent inbox has no lease or grace period.');
+    if (input.credential && c.get('actor')?.agentSetup) throw agentCredentialRefusal();
     if(input.credential&&grantId)throw new ApiError(422,'USE_INBOX_CONNECTION','An MCP approval can’t create an inbox key with the inbox. Create the inbox, then call createInboxConnection for its key.');
     if (input.localPart && !manageAddress) throw denied('PERMISSION_DENIED','This credential must omit localPart and use a generated address.',{ permission: 'inboxes', level: 'write', scope: 'workspace', credential: 'notDelegated' },'localPart');
     if (!inboxStoreReady(c.env)) throw new ApiError(503, 'INBOXES_UNAVAILABLE', 'Agent inboxes are not enabled on this deployment yet.');

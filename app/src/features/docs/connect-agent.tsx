@@ -9,6 +9,7 @@ import { usePhone } from '../../lib/media'
 import { CopyAction } from '../../components/motion'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { useApiDef, useApiQuery, usePublicOrigin, useSession, useWorkspaceAccess } from '../../data/context'
+import { AgentSetupStatus, agentPrompt, useAgentSetup } from './agent-setup'
 import { queries } from '../../data/queries'
 import { inboxKeyEnv } from '../../../../api/src/brand'
 import { request } from '../../data/live'
@@ -130,6 +131,24 @@ function ConnectedAgents({ onLeave }: { onLeave: () => void }) {
   </section>
 }
 
+/**
+ * For any coding agent, MCP or not: the agent prompt with a one-time setup token in each copy (agent-setup.tsx), as
+ * onboarding and Docs copy it. The agent exchanges the token for its own API key; the line below says when it did.
+ */
+function SetupPrompt() {
+  const identity = useSession()?.identity
+  const origin = usePublicOrigin()
+  const setup = useAgentSetup(true)!
+  const prompt = (setupToken: string | undefined) => agentPrompt({ origin: origin!, domain: undefined, email: identity?.email ?? null, multiTenant: identity?.multiTenant === true, setupToken })
+  return <section className="stack connect-agent__prompt" aria-label="Agent prompt">
+    <div className="connect-agent__prompt-row" data-pending={!origin || undefined} inert={!origin}>
+      <span className="connect-agent__prompt-text"><strong>Any coding agent</strong><span className="muted">Paste the prompt; your agent gets its own API key.</span></span>
+      <CopyAction value={setup.copy(prompt)} label="Copy prompt" size="sm" />
+    </div>
+    <AgentSetupStatus setup={setup} />
+  </section>
+}
+
 type Inbox = { id: string; address: string; name: string | null; status: string; type: 'ephemeral' | 'sandbox' }
 type Connection = { id: string | null; config: object; nextStep: string; key: string | null; client: McpClient }
 
@@ -140,6 +159,7 @@ type Connection = { id: string | null; config: object; nextStep: string; key: st
  */
 export function ConnectAgentDialog({ open, onOpenChange, inboxId }: { open: boolean; onOpenChange: (open: boolean) => void; inboxId?: string }) {
   const { canAdminister } = useWorkspaceAccess()
+  const identity = useSession()?.identity
   const url = useMcpUrl()
   const [view, setView] = useState<'agent' | 'inbox'>('agent')
   const [client, setClient] = useState<McpClient>('opencode')
@@ -188,7 +208,7 @@ export function ConnectAgentDialog({ open, onOpenChange, inboxId }: { open: bool
     : result ? <Button variant="primary" onClick={close}>Done</Button>
     : <><Button disabled={busy} onClick={() => { setView('agent'); setError('') }}>Back</Button><Button variant="primary" loading={busy} disabled={!chosen} onClick={() => void create()}>Create API key</Button></>
   return <Dialog open={open} onOpenChange={next => { if (!next) close() }} title={inboxView ? 'Connect an agent to one inbox' : 'Connect an agent'} analytics="Connect an agent" className="connect-agent-dialog" sensitive={!!result} footer={footer}>
-    {!inboxView ? <div className="stack connect-agent"><McpSignInSetup urlLine={false} client={signIn} onClient={setSignIn} /><ConnectedAgents onLeave={close} /></div> : <div className="stack">
+    {!inboxView ? <div className="stack connect-agent">{canAdminister && identity && <SetupPrompt />}<McpSignInSetup urlLine={false} client={signIn} onClient={setSignIn} /><ConnectedAgents onLeave={close} /></div> : <div className="stack">
       {!result && <>
         {searchable && <SearchField aria-label="Search inboxes" placeholder="Search address or name" value={query} onChange={event => setQuery(event.target.value)} />}
         {inboxes.error && !inboxes.data && !active.length ? <ErrorState error={inboxes.error} onRetry={() => void inboxes.refetch()} />

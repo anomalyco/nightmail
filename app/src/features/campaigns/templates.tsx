@@ -7,6 +7,7 @@ import { invalidate } from '../../data/invalidation'
 import { errorText, type CampaignTemplate, type CampaignTemplateDraft, type CampaignTemplateSummary } from '../../data/types'
 import { SearchField, Button, ConfirmDialog, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, Field, IconButton, Input, PageHeader, Pagination, PaginationSkeleton, Select, SkeletonText, StatusBadge, useToast } from '../../components/ui'
 import { EmailPreview } from '../../components/EmailPreview'
+import { Notices } from '../../components/Notices'
 import { date, shortDateTime, time } from '../../lib/format'
 import { CampaignAttachments, type CampaignAttachmentsRef } from './CampaignAttachments'
 import type { EmailComposerRef } from './EmailComposer'
@@ -209,7 +210,7 @@ function TemplateEditor({ initial }: {initial: CampaignTemplate}) {
         <Button variant="primary" title={upToDate ? 'New campaigns use this version' : 'New campaigns use the published version'} disabled={archived || saving || !ready || upToDate} onClick={() => void publish()}>{upToDate ? 'Published' : 'Publish'}</Button>
       </>}
     </>} />
-    <section className="campaign-compose-workspace" aria-label="Template composer"><div className="campaign-compose-scroll"><div className="campaign-compose-sheet">
+    <section className="campaign-compose-workspace" aria-label="Template composer"><div className="campaign-compose-scroll"><div className="studio-notices"><Notices /></div><div className="campaign-compose-sheet">
       <div className="campaign-compose-metadata">
         <div className="campaign-compose-row"><label htmlFor="template-name">Name</label><Input id="template-name" placeholder="Template name" value={draft.name} disabled={archived} aria-invalid={!draft.name.trim() || undefined} onChange={event => change('name', event.target.value)} /></div>
         <div className="campaign-compose-row"><label htmlFor="template-description">Purpose</label><Input id="template-description" placeholder="When to use it" value={draft.description} disabled={archived} onChange={event => change('description', event.target.value)} /></div>

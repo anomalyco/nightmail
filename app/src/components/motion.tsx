@@ -6,7 +6,8 @@ import './motion.css'
 const cx = (...values: Array<string | false | null | undefined>) => values.filter(Boolean).join(' ')
 
 // A labelled copy button whose icon morphs to a check and whose label rolls Copy → Copied.
-export function CopyAction({ value, label, variant = 'secondary', size = 'md', compact = false, className }: { value: string; label: string; variant?: 'secondary' | 'ghost' | 'primary'; size?: 'sm' | 'md'; compact?: boolean; className?: string }) {
+/** value: the text, or a function that makes it when clicked (a prompt with a fresh setup token). */
+export function CopyAction({ value, label, variant = 'secondary', size = 'md', compact = false, className }: { value: string | (() => Promise<string>); label: string; variant?: 'secondary' | 'ghost' | 'primary'; size?: 'sm' | 'md'; compact?: boolean; className?: string }) {
   const { copy, copied } = useCopy()
   return <>
     <button type="button" className={cx('ui-button', `ui-button--${variant}`, `ui-button--${size}`, 'copy-action', compact && 'copy-action--compact', className)} data-copied={copied || undefined} aria-label={label} title={label} onClick={() => void copy(value)}>

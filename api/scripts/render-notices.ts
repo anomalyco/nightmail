@@ -47,6 +47,10 @@ account('resumed', 'A pause ends', { kind: 'resumed', workspace });
 account('resumed-marketing-held', 'A pause ends, marketing still on hold (an owner’s own resume)', { kind: 'resumed', workspace, marketingHeld: true });
 account('campaign-paused', 'A campaign pauses itself', { kind: 'campaign_paused', workspace, campaign: { id: 'cmp_8f3k2n', name: 'Autumn catalogue' } });
 account('domain-unverified', 'A domain stops verifying', { kind: 'domain_unverified', workspace, domain: { id: 'dom_41xq7c', name: 'driftwood.example' } });
+account('domain-setup', 'A new domain’s records are still missing an hour on', { kind: 'domain_setup', workspace, domain: { id: 'dom_41xq7c', name: 'driftwood.example' }, total: 4, wrong: false,
+  missing: [{ type: 'TXT', name: '_nightmail', value: '6f1c2d9e-4b7a-4e0f-9a3c-2d8b5e7f1a04' }, { type: 'CNAME', name: 'q3v7kd2mxa4t6n8p1r5s9u0w2y4b6c8e._domainkey', value: 'q3v7kd2mxa4t6n8p1r5s9u0w2y4b6c8e.dkim.amazonses.com' }],
+  host: { name: 'Cloudflare', url: 'https://dash.cloudflare.com/?to=/:account/driftwood.example/dns/records' }, releasesAt: date('2026-11-27') });
+account('no-domain', 'A new workspace has no domain an hour on', { kind: 'no_domain', workspace });
 account('limit-reached', 'The daily limit is reached', { kind: 'limit_reached', workspace });
 account('evaluation-passed', 'The new-sender evaluation ends well', { kind: 'evaluation_finished', workspace, limited: false });
 account('evaluation-limited', 'The new-sender evaluation ends with a limit', { kind: 'evaluation_finished', workspace, limited: true });

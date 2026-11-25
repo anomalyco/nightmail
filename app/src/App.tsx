@@ -27,6 +27,10 @@ const supportAction = chunk(() => import('./features/support/actions'))
 const legal = chunk(() => import('./features/legal'))
 const pricing = chunk(() => import('./features/pricing'))
 const supportContinue = chunk(() => import('./features/support/continue'))
+const connect = chunk(() => import('./features/connect'))
+// Dev and VITE_DESIGN_SHEET=1 builds only (lib/design-sheet.ts). The test is written out here, not imported, so the
+// bundler sees a constant and leaves the chunk out of any other build.
+const DesignSheetPage = import.meta.env.DEV || import.meta.env.VITE_DESIGN_SHEET === '1' ? chunk(() => import('./features/design-sheet')).page(m => m.DesignSheetPage) : null
 const loadOnboarding = onboarding.preload
 const loadOverview = overview.preload
 const loadLogs = logs.preload
@@ -93,6 +97,7 @@ const LegalPage = legal.page(m => m.LegalPage)
 // One component for every price page, so moving between them keeps the page (features/pricing/index.tsx).
 const PricePage = pricing.page(m => m.PricePage)
 const SupportContinuePage = supportContinue.page(m => m.SupportContinuePage)
+const ConnectPage = connect.page(m => m.ConnectPage)
 
 // Preload the first screen's code alongside /v1/me. A workspace that may need onboarding waits instead.
 const noop = () => {}
@@ -101,6 +106,7 @@ if (initialPath === '/legal' || initialPath.startsWith('/legal/')) loadLegal().c
 else if (initialPath === '/pricing' || initialPath.startsWith('/compare/')) pricing.preload().catch(noop)
 else if (initialPath.startsWith('/support/continue/')) supportContinue.preload().catch(noop)
 else if (initialPath === '/onboarding') loadOnboarding().catch(noop)
+else if (initialPath === '/connect') connect.preload().catch(noop)
 // The docs are public: signed out or in, their code loads alongside /v1/me.
 else if (['/docs', '/developer'].some(path => initialPath.startsWith(path))) loadDocs().catch(noop)
 // "/" is the homepage, signed in or out, on a hosted installation: a remembered workspace means one, and so does a first
@@ -172,7 +178,7 @@ export function App() {
   return <AppErrorBoundary><Routes>{routes}</Routes></AppErrorBoundary>
 }
 // The route table, also given to analytics (a page view names its template) and to the signed-out pages (lib/routes.ts).
-const routes = <><Route path="legal/:doc?" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><LegalPage /></Suspense></ChunkFallback.Provider>} /><Route path="pricing" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="compare/:vendor" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="onboarding" element={<OnboardingRoute />} /><Route path="support/continue/:id/:message" element={<ChunkFallback.Provider value={<BootLoader />}><SupportContinuePage /></ChunkFallback.Provider>} /><Route index element={<RootPage />} /><Route element={<DashboardGate />}>
+const routes = <><Route path="legal/:doc?" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><LegalPage /></Suspense></ChunkFallback.Provider>} /><Route path="pricing" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="compare/:vendor" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="onboarding" element={<OnboardingRoute />} /><Route path="connect" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><ConnectPage /></Suspense></ChunkFallback.Provider>} /><Route path="support/continue/:id/:message" element={<ChunkFallback.Provider value={<BootLoader />}><SupportContinuePage /></ChunkFallback.Provider>} /><Route index element={<RootPage />} />{DesignSheetPage && <Route path="_design-sheet" element={<ChunkFallback.Provider value={<BootLoader />}><DesignSheetPage /></ChunkFallback.Provider>} />}<Route element={<DashboardGate />}>
     <Route path="overview" element={<OverviewPage />} />
     <Route path="logs" element={<LogsPage />} /><Route path="logs/received/:id" element={<Moved to={params => `/logs/${encodeURIComponent(params.id ?? '')}`} />} /><Route path="logs/:id" element={<LogDetailPage />} />
     <Route path="receiving/endpoints" element={<Navigate replace to="/receiving?tab=destinations" />}/><Route path="receiving/rituals/*" element={<RitualsRedirect />} /><Route path="receiving/rules/new" element={<NewRulePage />} /><Route path="receiving/rules/new/script" element={<RulePage />} /><Route path="receiving/rules/new/:recipe" element={<NewRecipeRoute />} /><Route path="receiving/rules/:key" element={<RulePage />} /><Route path="receiving/rules/:key/code" element={<Moved to={params => `/receiving/rules/${encodeURIComponent(params.key ?? '')}`} />} /><Route path="receiving/rules" element={<Navigate replace to="/receiving?tab=rules" />} /><Route path="receiving/routing" element={<Navigate replace to="/receiving" />} /><Route path="receiving/trace" element={<TracePage />} /><Route path="receiving" element={<ReceivingPage />} /><Route path="receiving/inbox" element={<InboundPage />} /><Route path="receiving/addresses/:id" element={<InboundAddressDetailPage />} /><Route path="receiving/webhooks" element={<WebhooksListRedirect />} /><Route path="receiving/webhooks/:id" element={<InboundWebhookDetailPage />} />

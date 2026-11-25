@@ -7,27 +7,26 @@ import { SignInConsent } from '../../components/LegalLinks'
 import { EndBand, endBand } from '../home/end-band'
 import { WaitlistLine } from '../home/get-started'
 import { toneVars } from '../home/tones'
-import { calculatorPath, Checked, CheckedOn, CheckedPages, Cite, Ours, Terms } from './content'
+import { calculatorPath, Checked, CheckedPages, Cite, Ours, ReadOn, Terms } from './content'
 import { Features } from './features'
 import { FlapRow } from './splitflap'
 import { PRICE_LINKS } from './live'
 import { Bolts, keySound, reducedMotion, SoundSwitch, useReplay, useTypedWord } from './eggs'
 import { play, wake } from './sound'
 import { OFFERS } from './compare'
-import { claim, formatCount, money, nightmail, nightmailBill, theirPrice, ucOf, type Comparison, type Usage } from './prices'
+import { claim, formatCount, money, nightmail, nightmailBill, sourcesOf, theirPrice, ucOf, type Comparison, type Usage } from './prices'
 
 // The price pages' hall (Hall): a dark wall under one pendant lamp, with the board and its console hung in it, the same
 // for the three pages, so moving between them changes the board, not the room (scene.tsx; calculator.tsx is the
-// calculator's board). A comparison page (/compare/mailchimp, /compare/resend): the two prices on a board hung in the
+// calculator's board). A comparison page (/compare/<slug>): the two prices on a board hung in the
 // homepage's factory, as its hero's boards hang. The reader's own size is set on a fader on the console under it, over the vendor's own
 // published sizes (comparison.steps: each one priced by the vendor and cheaper on Nightmail, as the pre-merge check
 // proves). On the board: the prices on split-flap tiles (lit for Nightmail, unlit for the competitor), which turn as
 // a real split-flap board's do (splitflap.tsx), and each price as a bar of forty pigeonholes on one scale, the
 // competitor's every one, Nightmail's its share, lit in the homepage's periwinkle, the only colour, a pigeonhole at a
-// time. Along the board's foot, its small print: what both prices are for, the plan, and the day and page the
-// competitor's was read on. The console under it has the fader and the page's two ways on, Get started (the key) and Try your numbers. Then what else Nightmail does
+// time. Along the board's foot, its small print: what both prices are for, and the competitor's plan. The console under it has the fader and the page's two ways on, Get started (the key) and Try your numbers. Then what else Nightmail does
 // (features.tsx, a wall of the homepage machine's concrete), the close with Get started again, and the page's end
-// (BoardEnd): the homepage's row of links with Sources, and the wordmark. The page is the same scene in either theme.
+// (BoardEnd): Sources, the homepage's row of links, and the wordmark. The page is the same scene in either theme.
 // Every figure keeps the room of the widest it can show, so nothing moves as the fader does.
 // The board hangs on a dark wall under one pendant lamp, which comes down on its cord from the top of the window (the
 // page has no bar: PriceFrame's scene). Nightmail is named by its wordmark wherever it is a display word: the headline
@@ -173,8 +172,8 @@ export function ComparisonBoard({ comparison: c, start }: { comparison: Comparis
         <Cells lit={lit} mine settle={settle} />
         <div className="cb-row"><FlapRow text={vendor} width={vendor.length} className="cb-name" size="name" x={[0, .32]} row={2} {...flaps} /><FlapRow text={money(p.theirs.cents)} width={room.price.length} end className="cb-price" size="big" x={[.72, 1]} row={2} {...flaps} /></div>
         <Cells lit={CELLS} settle={settle} />
-        {/* The board's small print: what both prices are for, the plan, and where and when it was read. */}
-        <div className="cb-foot"><p>{theirs.map(line => <span key={line}>{line}</span>)}</p><p><span>{vendor} {p.theirs.plan}, list price</span><Checked source={{ checked: c.offer.checked, url: c.offer.pricing }} /></p></div>
+        {/* The board's small print: what both prices are for, and the plan. (Where and when it was read: Sources.) */}
+        <div className="cb-foot"><p>{theirs.map(line => <span key={line}>{line}</span>)}</p><p><span>{vendor} {p.theirs.plan}, list price</span></p></div>
       </div>
     </div>
     {/* The console: the fader, then the page's two ways on: the calculator, quietly, and Get started, the key. What
@@ -206,13 +205,14 @@ export function ComparisonBelow({ comparison: c, start }: { comparison: Comparis
   </>
 }
 
-/** The page's end, as the homepage ends (machines.tsx, .mx-end): one small row of links on the scene's own dark, and
- *  the wordmark across the page's end (end-band.tsx) in the machine's night tones, measured before the first paint. The
- *  row is the homepage's (by Anomaly, API docs, Terms, Privacy) with the other price pages (not this one) and Sources,
- *  which opens the sources and small print in place under the row (#sources opens it too): the competitor's sourced
- *  facts, the pricing terms and the trademark line, which a legal review depends on. */
+/** The page's end: its Sources, in small print, then as the homepage ends (machines.tsx, .mx-end): one small row of
+ *  links on the scene's own dark, and the wordmark across the page's end (end-band.tsx) in the machine's night tones,
+ *  measured before the first paint. Sources has what the prices assume and where and when they were read, the
+ *  competitor's sourced facts, every page a figure was read on, the pricing terms and the trademark line, which a legal
+ *  review depends on: here, out of the page's way, rather than beside the figures. The row is the homepage's (by
+ *  Anomaly, API docs, Terms, Privacy) with the other price pages (not this one). */
 export function BoardEnd({ comparison: c }: { comparison?: Comparison | null }) {
-  const ref = useRef<HTMLElement>(null), [W, setW] = useState(0), [open, setOpen] = useState(false)
+  const ref = useRef<HTMLElement>(null), [W, setW] = useState(0)
   // An envelope resting on the wordmark slides off when it's clicked, and another lands in its place.
   const nudge = (event: { target: EventTarget | null }) => {
     const letter = (event.target as Element).closest?.('.srt-rest') as SVGGElement | null
@@ -228,27 +228,25 @@ export function BoardEnd({ comparison: c }: { comparison?: Comparison | null }) 
     observer.observe(node)
     return () => observer.disconnect()
   }, [])
-  useEffect(() => { if (window.location.hash === '#sources') setOpen(true) }, [])
   const phone = W < 900, inset = { left: 0, right: 0, bottom: 0 }, band = W ? endBand(W, phone, inset) : null
   const here = c ? c.path : '/pricing'
   return <footer className="mx-end cb-end" ref={ref} onClick={nudge} style={{ ...toneVars(true), ...band ? { '--mx-band': `${band.h}px` } : {} } as CSSProperties}>
-    <nav aria-label="Site links">
-      <a className="srt-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={18} /></a>
-      {PRICE_LINKS.filter(([path]) => path !== here).map(([path, label]) => <Link key={path} to={path}>{label}</Link>)}
-      <button type="button" className="cb-sources-toggle" aria-expanded={open} aria-controls="sources" onClick={() => setOpen(now => !now)}>Sources</button>
-      <a href="/docs">API docs</a><Link to="/legal/terms">Terms</Link><Link to="/legal/privacy">Privacy</Link>
-    </nav>
-    <section className="cb-sources" id="sources" hidden={!open} aria-labelledby="sources-title">
-      <h2 id="sources-title" className="cb-sources-title">Sources and small print</h2>
+    <section className="cb-sources" id="sources" aria-labelledby="sources-title">
+      <h2 id="sources-title" className="cb-sources-title">Sources</h2>
       {c ? <>
         <p className="price-note">{c.assume} Monthly billing, no promotions. <Checked source={{ checked: c.offer.checked, url: c.offer.pricing }} /></p>
         <p className="price-note">Nightmail charges {nightmail.perThousand} per 1,000 emails after {formatCount(nightmail.freeSent)} sent and {formatCount(nightmail.freeReceived)} received free a month.</p>
         <Terms floor={null} />
         <ul className="price-facts">{c.rows.map(fact => <li key={fact.text}>{fact.text}{fact.source && <Cite source={fact.source} />}</li>)}</ul>
-        <CheckedOn facts={c.rows} />
+        <p className="price-note cb-read"><ReadOn sources={sourcesOf(c)} /></p>
       </> : <p className="price-note">Monthly billing, list prices before tax, no promotions: each vendor’s cheapest plan that holds your numbers. <CheckedPages offers={OFFERS} />.</p>}
       <p className="price-note">Product names belong to their owners and only identify their products. Nightmail isn’t affiliated with them.</p>
     </section>
+    <nav aria-label="Site links">
+      <a className="srt-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={18} /></a>
+      {PRICE_LINKS.filter(([path]) => path !== here).map(([path, label]) => <Link key={path} to={path}>{label}</Link>)}
+      <a href="/docs">API docs</a><Link to="/legal/terms">Terms</Link><Link to="/legal/privacy">Privacy</Link>
+    </nav>
     {band && <EndBand W={W} phone={phone} inset={inset} />}
   </footer>
 }

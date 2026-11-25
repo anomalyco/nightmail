@@ -4,7 +4,7 @@ import * as SelectPrimitive from '@radix-ui/react-select';
 import * as DropdownPrimitive from '@radix-ui/react-dropdown-menu';
 import * as CheckboxPrimitive from '@radix-ui/react-checkbox';
 import * as SwitchPrimitive from '@radix-ui/react-switch';
-import { ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, LoaderCircle, MoreHorizontal, Search, X } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown, ChevronLeft, ChevronRight, Copy, LoaderCircle, MoreHorizontal, Search, X, type LucideIcon } from 'lucide-react';
 import { Link, useLocation, useNavigate } from 'react-router';
 import { label as formatLabel } from '../../lib/format';
 import { ApiError, errorText, permissionCodes, tooBroadCode, tryAgain } from '../../data/types';
@@ -14,12 +14,13 @@ import { SkeletonText, PaginationSkeleton, ControlSkeleton } from './skeleton';
 import { Sheet, SheetOpenEffects, useSheetDrag } from './sheet';
 import { isDuplicateSubmission } from '../../lib/single-flight';
 import { useDialogAnalytics, useFieldErrorAnalytics } from '../Analytics';
+import { Icon } from './icon';
 
 const cx = (...values: (string | false | null | undefined)[]) => values.filter(Boolean).join(' ');
 export type Tone = 'neutral' | 'success' | 'warning' | 'danger' | 'info';
 export type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { variant?: 'primary' | 'secondary' | 'ghost' | 'danger'; size?: 'sm' | 'md'; loading?: boolean };
 export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button({ variant = 'secondary', size = 'md', loading, disabled, className, children, type = 'button', ...props }, ref) {
-  return <button data-component="Button" {...props} ref={ref} type={type} disabled={disabled || loading} aria-busy={loading || undefined} className={cx('ui-button', `ui-button--${variant}`, `ui-button--${size}`, className)}>{loading && <LoaderCircle className="ui-spinner" size={14} aria-hidden="true" />}{children}</button>;
+  return <button data-component="Button" {...props} ref={ref} type={type} disabled={disabled || loading} aria-busy={loading || undefined} className={cx('ui-button', `ui-button--${variant}`, `ui-button--${size}`, className)}>{loading && <Icon icon={LoaderCircle} size="sm" className="ui-spinner" />}{children}</button>;
 });
 export const IconButton = forwardRef<HTMLButtonElement, ButtonProps & { label: string }>(function IconButton({ label, className, variant = 'ghost', loading, children, ...props }, ref) {
   // A caller's title (for example why the action is unavailable) wins over the label.
@@ -35,7 +36,7 @@ export const SecretInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTML
 });
 // A list's search box: the magnifier, type=search and the shared width (.search-box). Props go to the input.
 export const SearchField = forwardRef<HTMLInputElement, Omit<InputHTMLAttributes<HTMLInputElement>, 'type'>>(function SearchField({ className, ...props }, ref) {
-  return <div data-component="SearchField" className={cx('search-box', className)}><Search size={16} aria-hidden="true" /><Input {...props} ref={ref} type="search" /></div>;
+  return <div data-component="SearchField" className={cx('search-box', className)}><Icon icon={Search} size="md" /><Input {...props} ref={ref} type="search" /></div>;
 });
 export const Textarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement>>(function Textarea({ className, ...props }, ref) {
   return <textarea data-component="Textarea" {...props} ref={ref} className={cx('ui-input', 'ui-textarea', className)} />;
@@ -58,10 +59,10 @@ function SheetSelect({ value, onValueChange, options, shown, placeholder, id, na
   const trigger = useRef<HTMLButtonElement>(null);
   const current = options.find(option => option.value === value);
   return <>
-    <button ref={trigger} type="button" data-component="Select" {...aria} id={id} aria-haspopup="dialog" aria-expanded={open} disabled={disabled} className={cx('ui-input', 'ui-select-trigger', className)} data-placeholder={current ? undefined : ''} onClick={() => setOpen(true)}><span>{current ? shown(current) : placeholder}</span><span aria-hidden="true"><ChevronDown size={14} /></span></button>
+    <button ref={trigger} type="button" data-component="Select" {...aria} id={id} aria-haspopup="dialog" aria-expanded={open} disabled={disabled} className={cx('ui-input', 'ui-select-trigger', className)} data-placeholder={current ? undefined : ''} onClick={() => setOpen(true)}><span>{current ? shown(current) : placeholder}</span><span aria-hidden="true"><Icon icon={ChevronDown} size="sm" /></span></button>
     {name && <input type="hidden" name={name} value={value} />}
     <Sheet open={open} onOpenChange={setOpen} title={aria['aria-label'] ?? placeholder} className="ui-action-sheet" returnFocus={trigger}>
-      <div className={cx('ui-action-sheet__items', menuClassName)} role="group" aria-label={aria['aria-label'] ?? placeholder}>{options.map(option => <button key={option.value} type="button" aria-pressed={option.value === value} disabled={option.disabled} className="ui-action-sheet__item" onClick={() => { setOpen(false); onValueChange(option.value); }}><span className="ui-action-sheet__label">{shown(option)}</span>{option.value === value && <Check size={14} aria-hidden="true" />}</button>)}</div>
+      <div className={cx('ui-action-sheet__items', menuClassName)} role="group" aria-label={aria['aria-label'] ?? placeholder}>{options.map(option => <button key={option.value} type="button" aria-pressed={option.value === value} disabled={option.disabled} className="ui-action-sheet__item" onClick={() => { setOpen(false); onValueChange(option.value); }}><span className="ui-action-sheet__label">{shown(option)}</span>{option.value === value && <Icon icon={Check} size="sm" />}</button>)}</div>
       <button type="button" className="ui-action-sheet__item ui-action-sheet__cancel" onClick={() => setOpen(false)}>Cancel</button>
     </Sheet>
   </>;
@@ -79,13 +80,13 @@ export function Select({ value, onValueChange, options, mask = false, menuClassN
     const known = options.some(option => option.value === value);
     return <select data-component="Select" {...aria} id={id} name={name} disabled={disabled} required={required} className={cx('ui-input', 'ui-select-trigger', 'ui-native-select', className)} value={known ? value : ''} data-placeholder={known ? undefined : ''} onChange={event => onValueChange(event.target.value)}>{!known && <option value="" disabled hidden>{placeholder}</option>}{options.map(option => <option key={option.value} value={option.value} disabled={option.disabled}>{optionText(option)}</option>)}</select>;
   }
-  return <SelectPrimitive.Root value={value === '' && hasEmptyOption ? emptyValue : value} onValueChange={next => onValueChange(next === emptyValue ? '' : next)} name={name} disabled={disabled} required={required}><SelectPrimitive.Trigger data-component="Select" {...aria} id={id} className={cx('ui-input', 'ui-select-trigger', className)} onPointerEnter={event => { const label = event.currentTarget.firstElementChild, selected = options.find(option => option.value === value); event.currentTarget.title = !mask && label && selected && label.scrollWidth > label.clientWidth ? optionText(selected) : ''; }}><SelectPrimitive.Value placeholder={placeholder} /><SelectPrimitive.Icon><ChevronDown size={14} aria-hidden="true" /></SelectPrimitive.Icon></SelectPrimitive.Trigger><SelectPrimitive.Portal><SelectPrimitive.Content className={cx('ui-popover', 'ui-select-content', menuClassName)} position="popper" sideOffset={4}><SelectPrimitive.ScrollUpButton className="ui-select-scroll"><ChevronDown size={14} className="ui-rotate" /></SelectPrimitive.ScrollUpButton><SelectPrimitive.Viewport>{options.map(option => <SelectPrimitive.Item key={option.value} value={option.value === '' ? emptyValue : option.value} disabled={option.disabled} className="ui-select-item"><SelectPrimitive.ItemText>{shown(option)}</SelectPrimitive.ItemText><SelectPrimitive.ItemIndicator><Check size={14} /></SelectPrimitive.ItemIndicator></SelectPrimitive.Item>)}</SelectPrimitive.Viewport><SelectPrimitive.ScrollDownButton className="ui-select-scroll"><ChevronDown size={14} /></SelectPrimitive.ScrollDownButton></SelectPrimitive.Content></SelectPrimitive.Portal></SelectPrimitive.Root>;
+  return <SelectPrimitive.Root value={value === '' && hasEmptyOption ? emptyValue : value} onValueChange={next => onValueChange(next === emptyValue ? '' : next)} name={name} disabled={disabled} required={required}><SelectPrimitive.Trigger data-component="Select" {...aria} id={id} className={cx('ui-input', 'ui-select-trigger', className)} onPointerEnter={event => { const label = event.currentTarget.firstElementChild, selected = options.find(option => option.value === value); event.currentTarget.title = !mask && label && selected && label.scrollWidth > label.clientWidth ? optionText(selected) : ''; }}><SelectPrimitive.Value placeholder={placeholder} /><SelectPrimitive.Icon><Icon icon={ChevronDown} size="sm" /></SelectPrimitive.Icon></SelectPrimitive.Trigger><SelectPrimitive.Portal><SelectPrimitive.Content className={cx('ui-popover', 'ui-select-content', menuClassName)} position="popper" sideOffset={4}><SelectPrimitive.ScrollUpButton className="ui-select-scroll"><Icon icon={ChevronDown} size="sm" className="ui-rotate" /></SelectPrimitive.ScrollUpButton><SelectPrimitive.Viewport>{options.map(option => <SelectPrimitive.Item key={option.value} value={option.value === '' ? emptyValue : option.value} disabled={option.disabled} className="ui-select-item"><SelectPrimitive.ItemText>{shown(option)}</SelectPrimitive.ItemText><SelectPrimitive.ItemIndicator><Icon icon={Check} size="sm" /></SelectPrimitive.ItemIndicator></SelectPrimitive.Item>)}</SelectPrimitive.Viewport><SelectPrimitive.ScrollDownButton className="ui-select-scroll"><Icon icon={ChevronDown} size="sm" /></SelectPrimitive.ScrollDownButton></SelectPrimitive.Content></SelectPrimitive.Portal></SelectPrimitive.Root>;
 }
 type CheckProps = { checked: boolean; onCheckedChange: (checked: boolean) => void; label: ReactNode; disabled?: boolean; id?: string; name?: string; 'aria-describedby'?: string; 'aria-invalid'?: boolean };
 export function Checkbox({ checked, onCheckedChange, label, disabled, id: suppliedId, ...props }: CheckProps) {
   const generatedId = useId();
   const id = suppliedId ?? generatedId;
-  return <div data-component="Checkbox" className="ui-check-field"><CheckboxPrimitive.Root {...props} id={id} checked={checked} onCheckedChange={value => onCheckedChange(value === true)} disabled={disabled} className="ui-checkbox"><CheckboxPrimitive.Indicator><Check size={12} strokeWidth={2} /></CheckboxPrimitive.Indicator></CheckboxPrimitive.Root><label htmlFor={id}>{label}</label></div>;
+  return <div data-component="Checkbox" className="ui-check-field"><CheckboxPrimitive.Root {...props} id={id} checked={checked} onCheckedChange={value => onCheckedChange(value === true)} disabled={disabled} className="ui-checkbox"><CheckboxPrimitive.Indicator><Icon icon={Check} size="xs" /></CheckboxPrimitive.Indicator></CheckboxPrimitive.Root><label htmlFor={id}>{label}</label></div>;
 }
 export function Switch({ checked, onCheckedChange, label, disabled, id: suppliedId, ...props }: CheckProps) {
   const generatedId = useId();
@@ -158,7 +159,7 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
   const sheet = usePhone();
   const drag = useSheetDrag(() => onOpenChange(false), sheet && dismissible);
   // Native input autofocus can precede Radix's callback; retain the external opener, not the mounted input.
-  return <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}><DialogPrimitive.Portal><DialogPrimitive.Overlay className="ui-dialog-overlay" /><DialogPrimitive.Content data-component="Dialog" data-sensitive={sensitive || undefined} {...drag} onEscapeKeyDown={dismissible ? undefined : event => event.preventDefault()} onInteractOutside={dismissible ? undefined : event => event.preventDefault()} className={cx('ui-dialog', size === 'lg' && 'ui-dialog--lg', sheet && 'ui-dialog--sheet', className)} aria-describedby={description ? descriptionId : undefined} onFocusCapture={event => { const previous = event.relatedTarget; if (previous instanceof HTMLElement && previous !== document.body && !event.currentTarget.contains(previous)) returnFocus.current = previous; }} onOpenAutoFocus={event => { const focused = document.activeElement; const dialog = event.target; if (focused instanceof HTMLElement && (!(dialog instanceof HTMLElement) || !dialog.contains(focused))) returnFocus.current = focused; if (dialog instanceof HTMLElement && !dialog.contains(focused)) { event.preventDefault(); (matches(TOUCH) ? null : dialog.querySelector<HTMLElement>(DIALOG_FIELD))?.focus(); if (!dialog.contains(document.activeElement)) dialog.focus(); } }} onCloseAutoFocus={event => { const target = returnTo?.current?.isConnected ? returnTo.current : returnFocus.current; if (target?.isConnected) { event.preventDefault(); target.focus(); } }}>{sheet && <><SheetOpenEffects /><div className="ui-sheet__grab" aria-hidden="true"><span /></div></>}<div className="ui-dialog__header"><div className="ui-dialog__heading">{status}<DialogPrimitive.Title className="ui-dialog__title">{title}</DialogPrimitive.Title></div>{actions && <div className="ui-dialog__actions">{actions}</div>}<DialogPrimitive.Close asChild><IconButton label="Close dialog"><X size={16} /></IconButton></DialogPrimitive.Close></div>{description && <DialogPrimitive.Description id={descriptionId} className="ui-dialog__description">{description}</DialogPrimitive.Description>}<div className="ui-dialog__body">{children}</div>{footer && <div className="ui-dialog__footer">{footer}</div>}</DialogPrimitive.Content></DialogPrimitive.Portal></DialogPrimitive.Root>;
+  return <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}><DialogPrimitive.Portal><DialogPrimitive.Overlay className="ui-dialog-overlay" /><DialogPrimitive.Content data-component="Dialog" data-sensitive={sensitive || undefined} {...drag} onEscapeKeyDown={dismissible ? undefined : event => event.preventDefault()} onInteractOutside={dismissible ? undefined : event => event.preventDefault()} className={cx('ui-dialog', size === 'lg' && 'ui-dialog--lg', sheet && 'ui-dialog--sheet', className)} aria-describedby={description ? descriptionId : undefined} onFocusCapture={event => { const previous = event.relatedTarget; if (previous instanceof HTMLElement && previous !== document.body && !event.currentTarget.contains(previous)) returnFocus.current = previous; }} onOpenAutoFocus={event => { const focused = document.activeElement; const dialog = event.target; if (focused instanceof HTMLElement && (!(dialog instanceof HTMLElement) || !dialog.contains(focused))) returnFocus.current = focused; if (dialog instanceof HTMLElement && !dialog.contains(focused)) { event.preventDefault(); (matches(TOUCH) ? null : dialog.querySelector<HTMLElement>(DIALOG_FIELD))?.focus(); if (!dialog.contains(document.activeElement)) dialog.focus(); } }} onCloseAutoFocus={event => { const target = returnTo?.current?.isConnected ? returnTo.current : returnFocus.current; if (target?.isConnected) { event.preventDefault(); target.focus(); } }}>{sheet && <><SheetOpenEffects /><div className="ui-sheet__grab" aria-hidden="true"><span /></div></>}<div className="ui-dialog__header"><div className="ui-dialog__heading">{status}<DialogPrimitive.Title className="ui-dialog__title">{title}</DialogPrimitive.Title></div>{actions && <div className="ui-dialog__actions">{actions}</div>}<DialogPrimitive.Close asChild><IconButton label="Close dialog"><Icon icon={X} size="md" /></IconButton></DialogPrimitive.Close></div>{description && <DialogPrimitive.Description id={descriptionId} className="ui-dialog__description">{description}</DialogPrimitive.Description>}<div className="ui-dialog__body">{children}</div>{footer && <div className="ui-dialog__footer">{footer}</div>}</DialogPrimitive.Content></DialogPrimitive.Portal></DialogPrimitive.Root>;
 }
 const actionFailed = 'Couldn’t complete the action. Try again.';
 export function ConfirmDialog({ open, onOpenChange, title, description, confirmLabel = 'Confirm', onConfirm, pending, danger = false, returnFocus }: { open: boolean; onOpenChange: (open: boolean) => void; title: string; description: ReactNode; confirmLabel?: string; onConfirm: () => void | Promise<unknown>; pending?: boolean; danger?: boolean; returnFocus?: RefObject<HTMLElement | null> }) {
@@ -173,7 +174,8 @@ export function ConfirmDialog({ open, onOpenChange, title, description, confirmL
   return <Dialog open={open} onOpenChange={next => { if (!working) onOpenChange(next); }} returnFocus={returnFocus} title={title} status={danger ? <span className="ui-dialog__dot ui-tone--danger" aria-hidden="true" /> : undefined} description={description} footer={<><Button disabled={working} onClick={() => onOpenChange(false)}>{confirmLabel.startsWith('Cancel') ? 'Go back' : 'Cancel'}</Button><Button variant={danger ? 'danger' : 'primary'} loading={working} onClick={confirm}>{confirmLabel}</Button></>}>{error ? <Alert tone="danger"><ErrorText error={error} fallback={actionFailed} /></Alert> : null}</Dialog>;
 }
 export type MenuItem = { label: string; onSelect: () => void; icon?: ReactNode; destructive?: boolean; disabled?: boolean; hint?: ReactNode };
-export function DropdownMenu({ items, label = 'More actions', trigger, title, align = 'end', onOpenChange }: { items: MenuItem[]; label?: string; trigger?: ReactNode; title?: ReactNode; align?: 'start' | 'end'; onOpenChange?: (open: boolean) => void }) {
+// side: where the menu opens from its trigger (below by default; a vertical rail's menus open to its right).
+export function DropdownMenu({ items, label = 'More actions', trigger, title, align = 'end', side, onOpenChange }: { items: MenuItem[]; label?: string; trigger?: ReactNode; title?: ReactNode; align?: 'start' | 'end'; side?: 'top' | 'right' | 'bottom' | 'left'; onOpenChange?: (open: boolean) => void }) {
   const phone = usePhone();
   const [open, setOpen] = useState(false);
   const opener = useRef<HTMLElement | null>(null);
@@ -185,10 +187,10 @@ export function DropdownMenu({ items, label = 'More actions', trigger, title, al
   // A phone gets an action sheet: full-width rows at the bottom of the screen, and Cancel.
   if (phone) {
     const show = (event: { currentTarget: HTMLElement }) => { opener.current = event.currentTarget; changeOpen(true); };
-    const button = trigger && isValidElement(trigger) ? cloneElement(trigger as ReactElement<{ onClick?: (event: { currentTarget: HTMLElement }) => void }>, { onClick: show }) : <IconButton label={label} onClick={show}><MoreHorizontal size={16} /></IconButton>;
+    const button = trigger && isValidElement(trigger) ? cloneElement(trigger as ReactElement<{ onClick?: (event: { currentTarget: HTMLElement }) => void }>, { onClick: show }) : <IconButton label={label} onClick={show}><Icon icon={MoreHorizontal} size="md" /></IconButton>;
     return <>{button}<ActionSheet open={open} onOpenChange={changeOpen} title={title ?? label} items={items} returnFocus={opener} /></>;
   }
-  return <DropdownPrimitive.Root open={onOpenChange ? open : undefined} onOpenChange={onOpenChange ? changeOpen : undefined}><DropdownPrimitive.Trigger asChild>{trigger ?? <IconButton label={label}><MoreHorizontal size={16} /></IconButton>}</DropdownPrimitive.Trigger><DropdownPrimitive.Portal><DropdownPrimitive.Content align={align} sideOffset={4} className="ui-popover ui-menu">{items.map((item, index) => <DropdownPrimitive.Item key={`${item.label}-${index}`} onSelect={item.onSelect} disabled={item.disabled} className={cx('ui-menu-item', item.destructive && 'ui-menu-item--danger')}><span className="ui-menu-icon">{item.icon}</span>{item.hint ? <span className="ui-action-sheet__label">{item.label}<span className="ui-action-sheet__hint">{item.hint}</span></span> : item.label}</DropdownPrimitive.Item>)}</DropdownPrimitive.Content></DropdownPrimitive.Portal></DropdownPrimitive.Root>;
+  return <DropdownPrimitive.Root open={onOpenChange ? open : undefined} onOpenChange={onOpenChange ? changeOpen : undefined}><DropdownPrimitive.Trigger asChild>{trigger ?? <IconButton label={label}><Icon icon={MoreHorizontal} size="md" /></IconButton>}</DropdownPrimitive.Trigger><DropdownPrimitive.Portal><DropdownPrimitive.Content align={align} side={side} sideOffset={side === 'right' || side === 'left' ? 8 : 4} className="ui-popover ui-menu">{items.map((item, index) => <DropdownPrimitive.Item key={`${item.label}-${index}`} onSelect={item.onSelect} disabled={item.disabled} className={cx('ui-menu-item', item.destructive && 'ui-menu-item--danger')}><span className="ui-menu-icon">{item.icon}</span>{item.hint ? <span className="ui-action-sheet__label">{item.label}<span className="ui-action-sheet__hint">{item.hint}</span></span> : item.label}</DropdownPrimitive.Item>)}</DropdownPrimitive.Content></DropdownPrimitive.Portal></DropdownPrimitive.Root>;
 }
 // The actions run once the sheet has started closing, so a confirmation they open takes focus cleanly.
 export function ActionSheet({ open, onOpenChange, title, items, returnFocus }: { open: boolean; onOpenChange: (open: boolean) => void; title: ReactNode; items: MenuItem[]; returnFocus?: RefObject<HTMLElement | null> }) {
@@ -293,7 +295,7 @@ export function TableSkeleton({ columns, rows = 5, pagination = false, className
 export function Pagination({ page, pageSize, total, nextCursor, onPageChange }: { page: number; pageSize: number; total?: number; nextCursor?: string | null; onPageChange: (page: number) => void; count?: number }) {
   if (total === undefined && page <= 1 && !nextCursor) return null;
   if (total === undefined) {
-    return <nav className="ui-pagination" aria-label="Pagination"><div className="cluster"><IconButton variant="secondary" label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)}><ChevronLeft size={14} /></IconButton><span aria-live="polite">Page {page.toLocaleString()}</span><IconButton variant="secondary" label="Next page" disabled={!nextCursor} onClick={() => onPageChange(page + 1)}><ChevronRight size={14} /></IconButton></div></nav>;
+    return <nav className="ui-pagination" aria-label="Pagination"><div className="cluster"><IconButton variant="secondary" label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)}><Icon icon={ChevronLeft} size="sm" /></IconButton><span aria-live="polite">Page {page.toLocaleString()}</span><IconButton variant="secondary" label="Next page" disabled={!nextCursor} onClick={() => onPageChange(page + 1)}><Icon icon={ChevronRight} size="sm" /></IconButton></div></nav>;
   }
   return <NumberedPagination page={page} pageSize={pageSize} total={total} onPageChange={onPageChange} />
 }
@@ -303,7 +305,7 @@ function NumberedPagination({ page, pageSize, total, onPageChange }: { page: num
   useEffect(() => { if (page !== validPage) onPageChange(validPage); }, [page, validPage, onPageChange]);
   if (page !== validPage) return <nav className="ui-pagination" aria-label="Pagination"><span className="muted" role="status">Updating page…</span></nav>;
   if (pages === 1) return null;
-  return <nav className="ui-pagination" aria-label="Pagination"><span className="muted">{total === 0 ? '0 results' : `${((page - 1) * pageSize + 1).toLocaleString()}–${Math.min(page * pageSize, total).toLocaleString()} of ${total.toLocaleString()}`}</span><div className="cluster"><IconButton variant="secondary" label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)}><ChevronLeft size={14} /></IconButton><span aria-live="polite">{page} / {pages}</span><IconButton variant="secondary" label="Next page" disabled={page >= pages} onClick={() => onPageChange(page + 1)}><ChevronRight size={14} /></IconButton></div></nav>;
+  return <nav className="ui-pagination" aria-label="Pagination"><span className="muted">{total === 0 ? '0 results' : `${((page - 1) * pageSize + 1).toLocaleString()}–${Math.min(page * pageSize, total).toLocaleString()} of ${total.toLocaleString()}`}</span><div className="cluster"><IconButton variant="secondary" label="Previous page" disabled={page <= 1} onClick={() => onPageChange(page - 1)}><Icon icon={ChevronLeft} size="sm" /></IconButton><span aria-live="polite">{page} / {pages}</span><IconButton variant="secondary" label="Next page" disabled={page >= pages} onClick={() => onPageChange(page + 1)}><Icon icon={ChevronRight} size="sm" /></IconButton></div></nav>;
 }
 // The back arrow returns to where you came from, like the browser's Back, when you got here inside the dashboard: the
 // previous page comes back with its tab, filters and scroll. Opened directly (a pasted or new-tab link), it goes up to
@@ -313,15 +315,18 @@ export function BackLink({ to }: { to: string }) {
   return <Link className="ui-button ui-button--secondary ui-icon-button" to={to} aria-label="Go back" onClick={event => {
     if (location.key === 'default' || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
     event.preventDefault(); navigate(-1)
-  }}><ArrowLeft size={16} /></Link>
+  }}><Icon icon={ArrowLeft} size="md" /></Link>
 }
-// `subtitle`: one line of facts under the title (an email's sender and date), aligned with the title's text.
-export function PageHeader({ title, actions, backTo, subtitle }: { title: ReactNode; actions?: ReactNode; backTo?: string; subtitle?: ReactNode }) {
-  return <header data-component="PageHeader" className="ui-page-header"><div className="cluster">{backTo && <BackLink to={backTo} />}{subtitle ? <div className="ui-page-header__text"><h1>{title}</h1>{subtitle}</div> : <h1>{title}</h1>}</div>{actions && <div className="cluster">{actions}</div>}</header>;
+// `subtitle`: one line of facts under the title (an email's sender and date), aligned with the title's text. `eyebrow`: a
+// small muted type label over the title (a detail page's kind: "Sent email"); `leading`: a mark between the back button
+// and the title (DetailHeader's icon square).
+export type PageHeaderProps = { title: ReactNode; actions?: ReactNode; backTo?: string; subtitle?: ReactNode; eyebrow?: ReactNode; leading?: ReactNode; className?: string };
+export function PageHeader({ title, actions, backTo, subtitle, eyebrow, leading, className }: PageHeaderProps) {
+  return <header data-component="PageHeader" className={cx('ui-page-header', eyebrow != null && 'ui-page-header--eyebrow', className)}><div className="cluster">{backTo && <BackLink to={backTo} />}{leading}{subtitle || eyebrow != null ? <div className="ui-page-header__text">{eyebrow != null && <span className="ui-page-header__eyebrow">{eyebrow}</span>}<h1>{title}</h1>{subtitle}</div> : <h1>{title}</h1>}</div>{actions && <div className="cluster">{actions}</div>}</header>;
 }
 // Detail that opens from its heading (a native details element): the summary stays in view, the rest is one click away.
 export function Disclosure({ title, headingAs: Heading = 'h3', hint, id, defaultOpen, className, children }: { title: ReactNode; headingAs?: 'h2' | 'h3' | 'h4'; hint?: ReactNode; id?: string; defaultOpen?: boolean; className?: string; children: ReactNode }) {
-  return <details data-component="Disclosure" id={id} open={defaultOpen || undefined} className={cx('ui-disclosure', className)}><summary><Heading>{title}</Heading>{hint && <span className="ui-disclosure__hint muted">{hint}</span>}<ChevronRight size={16} aria-hidden="true" /></summary><div className="ui-disclosure__body">{children}</div></details>;
+  return <details data-component="Disclosure" id={id} open={defaultOpen || undefined} className={cx('ui-disclosure', className)}><summary><Heading>{title}</Heading>{hint && <span className="ui-disclosure__hint muted">{hint}</span>}<Icon icon={ChevronRight} size="sm" /></summary><div className="ui-disclosure__body">{children}</div></details>;
 }
 export function SectionHeader({ title, actions }: { title: ReactNode; actions?: ReactNode }) {
   return <div data-component="SectionHeader" className="ui-section-header"><h2>{title}</h2>{actions && <div className="cluster">{actions}</div>}</div>;
@@ -345,10 +350,11 @@ export function StatusDot({ tone, children, note, title, muted = false }: { tone
 }
 // `timer`: a notice that dismisses itself shows the time it has left as a thin bar that empties (paused while `paused`).
 export function Alert({ tone = 'neutral', title, children, onDismiss, timer, ...rest }: { tone?: Tone; title?: ReactNode; children: ReactNode; onDismiss?: () => void; timer?: { duration: number; paused: boolean } } & Omit<HTMLAttributes<HTMLDivElement>, 'title' | 'children'>) {
-  return <div data-component="Alert" {...rest} className={cx('ui-alert', `ui-tone--${tone}`)} role={tone === 'danger' ? 'alert' : 'status'}><div>{title && <div className="ui-alert__title">{title}</div>}<div>{children}</div></div>{onDismiss && <IconButton label="Dismiss notification" onClick={onDismiss}><X size={14} /></IconButton>}{timer && <span className="ui-alert__timer" aria-hidden="true" style={{ animationDuration: `${timer.duration}ms`, animationPlayState: timer.paused ? 'paused' : 'running' }} />}</div>;
+  return <div data-component="Alert" {...rest} className={cx('ui-alert', `ui-tone--${tone}`)} role={tone === 'danger' ? 'alert' : 'status'}><div>{title && <div className="ui-alert__title">{title}</div>}<div>{children}</div></div>{onDismiss && <IconButton label="Dismiss notification" onClick={onDismiss}><Icon icon={X} size="md" /></IconButton>}{timer && <span className="ui-alert__timer" aria-hidden="true" style={{ animationDuration: `${timer.duration}ms`, animationPlayState: timer.paused ? 'paused' : 'running' }} />}</div>;
 }
-export function EmptyState({ title, description, action, headingAs: Heading = 'h3' }: { title: string; description?: string; action?: ReactNode; headingAs?: 'h1' | 'h3' }) {
-  return <div data-component="EmptyState" className="ui-empty-state"><Heading>{title}</Heading>{description && <p className="muted">{description}</p>}{action && <div>{action}</div>}</div>;
+/** `icon`: an optional static 32px mark over the title, muted. One action at most. */
+export function EmptyState({ title, description, action, icon, headingAs: Heading = 'h3' }: { title: string; description?: string; action?: ReactNode; icon?: LucideIcon; headingAs?: 'h1' | 'h3' }) {
+  return <div data-component="EmptyState" className="ui-empty-state">{icon && <Icon icon={icon} size="xl" tone="muted" className="ui-empty-state__icon" />}<Heading>{title}</Heading>{description && <p className="muted">{description}</p>}{action && <div className="ui-empty-state__action">{action}</div>}</div>;
 }
 // An API error's message is plain language; its `reference` (code and request ID) follows as secondary detail for support.
 export function ErrorText({ error, fallback = tryAgain }: { error: unknown; fallback?: string }) {
@@ -437,14 +443,24 @@ export function SecretDialog({ secret, title, onClose, children, description = '
  * Copies text to the clipboard, for every copy control. `copied` holds for 1.8 s after a copy, for a button's check;
  * `done`, when given, is toasted instead, for a copy from a menu or action sheet. A failure says so in a toast.
  */
+/** Text made after the click (a prompt with a fresh setup token). Safari keeps the click's permission to write only for a
+ *  ClipboardItem whose text is still a promise; elsewhere, or where that is refused, the text is written once it's made. */
+async function writeLater(make: () => Promise<string>) {
+  const text = make();
+  if (typeof ClipboardItem !== 'undefined' && navigator.clipboard.write) {
+    try { await navigator.clipboard.write([new ClipboardItem({ 'text/plain': text.then(value => new Blob([value], { type: 'text/plain' })) })]); return; }
+    catch { /* Written below, once the text is ready. */ }
+  }
+  await navigator.clipboard.writeText(await text);
+}
 export function useCopy() {
   const toast = useContext(ToastContext);
   const [copied, setCopied] = useState(false);
   const [failed, setFailed] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(timer.current), []);
-  const copy = useCallback(async (value: string, done?: string) => {
-    try { await navigator.clipboard.writeText(value); } catch { setFailed(true); toast?.('Couldn’t copy to clipboard.', 'error'); return false; }
+  const copy = useCallback(async (value: string | (() => Promise<string>), done?: string) => {
+    try { await (typeof value === 'string' ? navigator.clipboard.writeText(value) : writeLater(value)); } catch { setFailed(true); toast?.('Couldn’t copy to clipboard.', 'error'); return false; }
     if (done) toast?.(done, 'success');
     setCopied(true); setFailed(false);
     clearTimeout(timer.current);
@@ -455,5 +471,5 @@ export function useCopy() {
 }
 export function CopyButton({ value, label = 'Copy' }: { value: string; label?: string }) {
   const { copy, copied, failed } = useCopy();
-  return <span className="cluster"><IconButton label={copied ? 'Copied' : label} onClick={() => void copy(value)}>{copied ? <Check size={14} /> : <Copy size={14} />}</IconButton><span className="sr-only" role="status">{copied ? 'Copied to clipboard' : failed ? 'Couldn’t copy to clipboard' : ''}</span></span>;
+  return <span className="cluster"><IconButton label={copied ? 'Copied' : label} onClick={() => void copy(value)}>{copied ? <Icon icon={Check} size="sm" /> : <Icon icon={Copy} size="sm" />}</IconButton><span className="sr-only" role="status">{copied ? 'Copied to clipboard' : failed ? 'Couldn’t copy to clipboard' : ''}</span></span>;
 }

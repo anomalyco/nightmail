@@ -1,3 +1,5 @@
+/* Onboarding: flat and calm on the page's surface. No rule, outline or ring draws a card, a row, a step mark or a
+   control: a choice is one solid well, a field a solid control fill, and focus shows the hover fill. */
 /* Shell */
 .onboarding-shell { display: flex; flex-direction: column; height: 100dvh; background: var(--color-deep); }
 .onboarding-header { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); min-height: 48px; padding: var(--space-8) var(--space-12) var(--space-8) var(--space-16); }
@@ -13,7 +15,11 @@
 .onboarding-surface .ui-button:active:not(:disabled) { transform: scale(.97); }
 .onboarding-surface .ui-button--md { height: 32px; padding-inline: var(--space-12); }
 .onboarding-surface .copy-action.ui-button--sm:not(.copy-action--compact) { height: 26px; padding-left: 9px; }
-.onboarding-surface .ui-input { height: 36px; padding-inline: var(--space-12); font-size: var(--text-md); }
+.onboarding-surface .ui-input { height: 36px; padding-inline: var(--space-12); background: var(--color-control, var(--color-layer-1)); font-size: var(--text-md); }
+@media (hover: hover) and (pointer: fine) { .onboarding-surface .ui-input:hover:not(:disabled, :focus, [aria-invalid='true']) { background: var(--color-control-hover, var(--color-layer-2)); } }
+.onboarding-surface .ui-input:is(:focus, :focus-visible) { background: var(--color-control-focus, var(--color-layer-2)); }
+.onboarding-surface .ui-input:disabled { background: var(--color-layer-1); }
+.onboarding-surface .ui-input[aria-invalid='true'] { background: var(--color-control-invalid, var(--color-danger-bg)); }
 .onboarding-surface .ui-field__label { line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
 .onboarding-surface .ui-field__hint { line-height: 18px; }
 /* Loading keeps the button's width: the label stays laid out (invisible) and the spinner sits on top. */
@@ -27,7 +33,7 @@
 .onboarding-slot > :not([data-active]) { visibility: hidden; }
 .onboarding-reserve[data-hidden] { visibility: hidden; }
 /* Under the domain form: the test sender's offer, then Skip for now at the end of the row. */
-.onboarding-more { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-12); }
+.onboarding-more { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-12); }
 .onboarding-more > .onboarding-skip { flex: none; margin-left: auto; }
 .onboarding-error { color: var(--color-danger); }
 
@@ -35,14 +41,13 @@
 .onboarding-progress { display: flex; align-items: center; width: 100%; max-width: 640px; margin: 0 auto var(--space-40); padding: 0; list-style: none; }
 .onboarding-progress li { display: flex; align-items: center; gap: var(--space-8); flex: 0 0 auto; min-width: 0; }
 .onboarding-progress li + li { flex: 1 1 auto; }
-.onboarding-progress-line { position: relative; flex: 1; min-width: 20px; height: 2px; margin: 0 var(--space-6) 0 var(--space-4); border-radius: 1px; background: var(--color-border); overflow: hidden; }
+.onboarding-progress-line { position: relative; flex: 1; min-width: 20px; height: 2px; margin: 0 var(--space-6) 0 var(--space-4); border-radius: 1px; background: var(--color-track); overflow: hidden; }
 .onboarding-progress-line::after { content: ''; position: absolute; inset: 0; background: var(--color-contrast); transform: scaleX(0); transform-origin: left; transition: transform 200ms var(--ease-in-out-strong); }
 .onboarding-progress li:is([data-state='done'], [data-state='current']) .onboarding-progress-line::after { transform: scaleX(1); }
-.onboarding-progress-mark { display: inline-grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--color-border-strong); color: var(--color-muted); font-size: var(--text-xs); font-weight: var(--font-weight-bold); font-variant-numeric: tabular-nums; transition: background-color 200ms ease 160ms, color 200ms ease 160ms, box-shadow 200ms ease 160ms; }
+.onboarding-progress-mark { display: inline-grid; place-items: center; width: 26px; height: 26px; flex-shrink: 0; border-radius: 50%; background: var(--color-control, var(--color-layer-2)); color: var(--color-muted); font-size: var(--text-xs); font-weight: var(--font-weight-bold); font-variant-numeric: tabular-nums; transition: background-color 200ms ease 160ms, color 200ms ease 160ms; }
 .onboarding-progress-mark > * { grid-area: 1 / 1; transition: opacity 180ms ease-out 160ms, transform 200ms var(--ease-out-strong) 160ms; }
 .onboarding-progress-mark > svg { width: 12px; height: 12px; opacity: 0; transform: scale(.4); }
-.onboarding-progress li:is([data-state='done'], [data-state='current']) .onboarding-progress-mark { background: var(--color-contrast); color: var(--color-on-contrast); box-shadow: 0 0 0 4px var(--color-layer-2); }
-.onboarding-progress li[data-state='done'] .onboarding-progress-mark { box-shadow: 0 0 0 0 var(--color-layer-2); }
+.onboarding-progress li:is([data-state='done'], [data-state='current']) .onboarding-progress-mark { background: var(--color-contrast); color: var(--color-on-contrast); }
 .onboarding-progress li[data-state='done'] .onboarding-progress-mark > span { opacity: 0; transform: scale(.4); }
 .onboarding-progress li[data-state='done'] .onboarding-progress-mark > svg { opacity: 1; transform: none; }
 /* The bold copy below the label reserves the current step's width, so nothing moves when weight changes. */
@@ -69,21 +74,24 @@
 .onboarding-intro--center { align-items: center; text-align: center; }
 .onboarding-title { font-size: 28px; line-height: 34px; font-weight: var(--font-weight-bold); letter-spacing: -.5px; text-wrap: balance; }
 
-/* Sending choice: two substantial cards, each its name and the one fact that decides it, that lift on hover and press in on click. */
+/* Sending choice: two substantial wells, each its name and the one fact that decides it, a stronger step on hover and
+   focus, pressing in on click. */
 .onboarding-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-16); }
-.onboarding-option { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-6); min-width: 0; padding: var(--space-24); border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-surface); box-shadow: none; color: var(--color-text); font: inherit; text-align: left; cursor: pointer; transition: border-color 100ms ease-out, box-shadow 180ms var(--ease-out-strong), transform 180ms var(--ease-out-strong); }
-.onboarding-option:focus-visible { outline-offset: 3px; }
+.onboarding-option { display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-6); min-width: 0; padding: var(--space-24); border: 0; border-radius: 8px; background: var(--color-well, var(--color-layer-1)); box-shadow: none; color: var(--color-text); font: inherit; text-align: left; cursor: pointer; transition: background-color 100ms ease-out, transform 180ms var(--ease-out-strong); }
+.onboarding-option:focus-visible { background: var(--color-well-hover, var(--color-layer-2)); }
+.onboarding-option:focus-visible .onboarding-option-go { color: var(--color-text); }
+.onboarding-option:focus-visible .onboarding-option-icon { background: var(--color-contrast); color: var(--color-on-contrast); }
 .onboarding-option:active { transform: scale(.985); transition-duration: 100ms; }
-.onboarding-option-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; margin-bottom: var(--space-12); border-radius: 8px; background: none; box-shadow: inset 0 0 0 1px var(--color-border); color: var(--color-text); transition: background-color 100ms ease-out, color 100ms ease-out; }
+.onboarding-option-icon { display: grid; place-items: center; width: 36px; height: 36px; flex-shrink: 0; margin-bottom: var(--space-12); border-radius: 8px; background: none; color: var(--color-text); transition: background-color 100ms ease-out, color 100ms ease-out; }
 .onboarding-option-icon > svg { width: 16px; height: 16px; }
 .onboarding-option-icon--aws > svg { width: 24px; height: 24px; }
 .onboarding-option-title { font-size: var(--text-md); line-height: 22px; font-weight: var(--font-weight-bold); letter-spacing: -.1px; }
-.onboarding-option-value { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); align-self: stretch; margin-top: auto; padding-top: var(--space-12); border-top: 1px solid var(--color-border-muted); font-size: var(--text-sm); line-height: var(--leading-sm); }
+.onboarding-option-value { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); align-self: stretch; margin-top: auto; padding-top: var(--space-12); font-size: var(--text-sm); line-height: var(--leading-sm); }
 .onboarding-option-value strong { font-weight: var(--font-weight-bold); }
 .onboarding-option-go { display: inline-flex; align-items: center; gap: var(--space-6); color: var(--color-muted); white-space: nowrap; transition: color 100ms ease-out; }
 .onboarding-option-go svg { width: 14px; height: 14px; transition: transform 180ms var(--ease-out-strong); }
 @media (hover: hover) and (pointer: fine) {
-  .onboarding-option:hover { border-color: var(--color-border-strong); background: var(--color-hover); transition-duration: 0ms; }
+  .onboarding-option:hover { background: var(--color-well-hover, var(--color-layer-2)); transition-duration: 0ms; }
   .onboarding-option:hover:active { transform: scale(.985); }
   .onboarding-option:hover .onboarding-option-icon { background: var(--color-contrast); color: var(--color-on-contrast); transition-duration: 0ms; }
   .onboarding-option:hover .onboarding-option-go { color: var(--color-text); transition-duration: 0ms; }
@@ -98,16 +106,19 @@
 .onboarding-inline-form > .ui-button { height: 36px; margin-top: calc(var(--leading-sm) + var(--space-8)); }
 .onboarding-skip { min-height: 32px; padding: 0 var(--space-4); border: 0; background: none; color: var(--color-muted); font-size: var(--text-sm); text-decoration: underline; text-decoration-color: transparent; text-underline-offset: 4px; transition: color 100ms ease-out, text-decoration-color 100ms ease-out; }
 @media (hover: hover) and (pointer: fine) { .onboarding-skip:hover:not(:disabled) { color: var(--color-text); text-decoration-color: currentColor; transition-duration: 0ms; } }
+.onboarding-skip:focus-visible { color: var(--color-text); text-decoration-color: currentColor; }
 
-/* Connect AWS (BYO step 2): one task, a live status, and clear ways out. */
+/* Connect AWS (BYO step 2): one task, a live status in one solid well (its state in the ink and the mark, never a tinted
+   box), and clear ways out. */
 .onboarding-back { display: inline-flex; align-items: center; gap: var(--space-4); align-self: flex-start; min-height: 24px; margin: 0 0 var(--space-4) calc(-1 * var(--space-4)); padding: 0 var(--space-4); border: 0; border-radius: 4px; background: none; color: var(--color-muted); font-size: var(--text-sm); transition: color 100ms ease-out; }
 @media (hover: hover) and (pointer: fine) { .onboarding-back:hover:not(:disabled) { color: var(--color-text); transition-duration: 0ms; } }
+.onboarding-back:focus-visible { color: var(--color-text); }
 .onboarding-connect-actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-8); }
-.onboarding-connect-status { display: flex; align-items: flex-start; gap: var(--space-12); padding: 14px var(--space-16); border-radius: 8px; box-shadow: inset 0 0 0 1px var(--color-border); font-size: var(--text-sm); line-height: var(--leading-sm); transition: background-color 240ms ease, box-shadow 240ms ease, color 240ms ease; }
+.onboarding-connect-status { display: flex; align-items: flex-start; gap: var(--space-12); padding: 14px var(--space-16); border-radius: 8px; background: var(--color-well, var(--color-layer-1)); font-size: var(--text-sm); line-height: var(--leading-sm); transition: color 240ms ease; }
 .onboarding-connect-status p { display: grid; }
 .onboarding-connect-status strong { font-weight: var(--font-weight-bold); }
-.onboarding-connect-status[data-state='ready'] { background: var(--color-success-bg); box-shadow: inset 0 0 0 1px var(--color-success-border); color: var(--color-success); }
-.onboarding-connect-status[data-state='failed'] { box-shadow: inset 0 0 0 1px var(--color-danger-border); color: var(--color-danger); }
+.onboarding-connect-status[data-state='ready'] { color: var(--color-success); }
+.onboarding-connect-status[data-state='failed'] { color: var(--color-danger); }
 /* Dot while waiting, a check once connected, a cross on failure: one 20px mark that morphs. */
 .onboarding-connect-mark { --mark: var(--color-faint); display: inline-grid; place-items: center; width: 20px; height: 20px; flex-shrink: 0; border-radius: 50%; transition: background-color 240ms ease; }
 .onboarding-connect-status[data-state='awaiting_role'] .onboarding-connect-mark { --mark: var(--color-warning-marker); }
@@ -126,6 +137,7 @@
 .onboarding-disclosure svg { transition: transform 160ms var(--ease-out-strong); }
 .onboarding-disclosure[aria-expanded='true'] svg { transform: rotate(90deg); }
 @media (hover: hover) and (pointer: fine) { .onboarding-disclosure:hover { color: var(--color-text); transition-duration: 0ms; } }
+.onboarding-disclosure:focus-visible { color: var(--color-text); }
 .onboarding-trouble-body { margin-top: var(--space-12); animation: onboarding-rise 220ms var(--ease-out-strong) both; }
 
 /* Connect AWS for a connected account: the note under the link, then the choice of region and domains. */
@@ -134,17 +146,17 @@
 .onboarding-access[data-state='granted'] { color: var(--color-success); }
 .onboarding-access[data-state='denied'] { color: var(--color-danger); }
 .onboarding-access > span { flex: 1 1 220px; }
-.onboarding-found { display: flex; flex-direction: column; min-width: 0; margin: 0; padding: 0; border: 0; border-top: 1px solid var(--color-border-muted); }
+.onboarding-found { display: flex; flex-direction: column; min-width: 0; margin: 0; padding: 0; border: 0; }
 .onboarding-found legend { padding: 0 0 var(--space-8); font-size: var(--text-sm); font-weight: var(--font-weight-bold); }
-.onboarding-found-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-height: 44px; border-bottom: 1px solid var(--color-border-muted); }
+.onboarding-found-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-height: 44px; }
 .onboarding-found-row code { font-size: var(--text-sm); overflow-wrap: anywhere; }
 .onboarding-found-note { flex-shrink: 0; color: var(--color-muted); font-size: var(--text-xs); }
 .onboarding-access-form { display: flex; flex-direction: column; gap: var(--space-16); }
 .onboarding-failed-intent { display: block; }
 
-/* Imported domains: plain hairline rows, like the DNS records. */
-.onboarding-imported { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--color-border-muted); }
-.onboarding-imported li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); padding-block: 10px; border-bottom: 1px solid var(--color-border-muted); }
+/* Imported domains: plain rows, apart by spacing and alignment alone. */
+.onboarding-imported { margin: 0; padding: 0; list-style: none; }
+.onboarding-imported li { display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); padding-block: 10px; }
 .onboarding-imported code { min-width: 0; font-size: var(--text-sm); line-height: var(--leading-sm); overflow-wrap: anywhere; }
 
 /* DNS step */
@@ -161,11 +173,10 @@
 .onboarding-actions::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 24px; background: linear-gradient(to bottom, transparent, var(--color-surface)); pointer-events: none; }
 .onboarding-step:has(.onboarding-actions) { padding-bottom: var(--space-8); }
 
-/* Agent step: plain sections divided by hairlines, no cards. */
+/* Agent step: plain sections apart by 24px of space, no rules and no cards. */
 .onboarding-agent-steps { display: flex; flex-direction: column; }
 .onboarding-agent-steps .developer-section { max-width: none; margin: 0; padding-block: var(--space-24); gap: var(--space-12); }
 .onboarding-agent-steps > :first-child .developer-section, .onboarding-agent-steps > .developer-section:first-child { padding-top: 0; }
-.onboarding-agent-steps > * + * { border-top: 1px solid var(--color-border-muted); }
 .onboarding-agent-steps .ui-section-header { margin-bottom: 0; min-height: 24px; }
 .onboarding-agent-steps .ui-section-header h2 { font-size: var(--text-md); line-height: var(--leading-sm); }
 .onboarding-agent-steps .developer-copy { font-size: var(--text-sm); }

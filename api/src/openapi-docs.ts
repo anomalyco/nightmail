@@ -1,4 +1,5 @@
 import { webhookSignatureGuide } from './webhook-signature-guide.js';
+import { agentSetupGuide } from './agent-setup-guide.js';
 import type { App } from './core.js';
 import { apiKeyEnv, productName, publicOrigin, sdkPackage } from './brand.js';
 import { permissionExtension, permissionOf } from './operation-permissions.js';
@@ -122,7 +123,7 @@ export const quickstart: { title: string; text: string; code?: string }[] = [
   { title: 'Reply', text: 'POST /v1/inbound/threads/{threadId}/reply answers the newest message from its receiving address and sets In-Reply-To and References.' },
 ];
 // Guides beyond the first five minutes, for /docs.md and /llms.txt; the dashboard shows the same text as a Docs guide.
-export const guides: { id: string; title: string; text: string; code?: string; language?: string }[] = [webhookSignatureGuide];
+export const guides: { id: string; title: string; text: string; code?: string; language?: string }[] = [agentSetupGuide, webhookSignatureGuide];
 // Getting started first; account and installation plumbing last.
 const tagOrder = ['Emails', 'Domains', 'Inbound addresses', 'Inbound threads', 'Inbound webhooks', 'Inbound events', 'Inbound domains', 'Webhooks', 'Events', 'Metrics', 'Attachments', 'Templates', 'Campaigns', 'Newsletters', 'Audience', 'Consent', 'ApiKeys', 'Settings', 'Regions', 'Workspaces', 'Auth'];
 const tagRank = (tag: string) => { const index = tagOrder.indexOf(tag); return index === -1 ? tagOrder.length : index; };

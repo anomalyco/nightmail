@@ -1,8 +1,9 @@
-/* The support chat (SupportPanel.tsx). Desktop: a card docked above the Help button in the page's bottom-right corner,
+/* The support chat (SupportPanel.tsx). Borderless: one solid overlay surface on a soft drop, no edge line or inner rule;
+   spacing separates the header, the conversation and the message box. Desktop: a card docked above the Help button in the page's bottom-right corner,
    growing out of it; the page stays usable beside it. Phone: a sheet above the tab bar. Motion is micro only: the
    panel's open and close, entrances, the caret, the status line's dot, sheen and labels. Under reduced motion each
    keeps a short fade and loses its travel. */
-.support-panel { --dock: calc(var(--launcher-inset) + var(--launcher-size) + var(--space-12)); --rest: max(var(--dock), calc(var(--keyboard-inset, 0px) + var(--space-8))); position: fixed; right: var(--launcher-inset); bottom: var(--rest); z-index: 40; display: flex; flex-direction: column; width: min(400px, calc(100vw - var(--sidebar-width) - 2 * var(--launcher-inset))); height: min(640px, calc(100dvh - var(--rest) - 84px)); overflow: hidden; background: var(--color-surface); color: var(--color-text); border-radius: var(--radius-lg); box-shadow: var(--shadow-dialog); outline: none; transform-origin: calc(100% - var(--launcher-size) / 2) calc(100% + var(--space-12) + var(--launcher-size) / 2); opacity: 0; transform: translateY(6px) scale(.97); visibility: hidden; transition: opacity 140ms ease-out, transform 160ms ease-out, visibility 0s 160ms; }
+.support-panel { --dock: calc(var(--launcher-inset) + var(--launcher-size) + var(--space-12)); --rest: max(var(--dock), calc(var(--keyboard-inset, 0px) + var(--space-8))); position: fixed; right: var(--launcher-inset); bottom: var(--rest); z-index: 40; display: flex; flex-direction: column; width: min(400px, calc(100vw - var(--sidebar-width) - 2 * var(--launcher-inset))); height: min(640px, calc(100dvh - var(--rest) - 84px)); overflow: hidden; --support-bg: var(--color-overlay-surface, var(--color-layer-1)); background: var(--support-bg); color: var(--color-text); border-radius: var(--radius-lg); box-shadow: var(--shadow-dialog); outline: none; transform-origin: calc(100% - var(--launcher-size) / 2) calc(100% + var(--space-12) + var(--launcher-size) / 2); opacity: 0; transform: translateY(6px) scale(.97); visibility: hidden; transition: opacity 140ms ease-out, transform 160ms ease-out, visibility 0s 160ms; }
 .support-panel[data-open] { opacity: 1; transform: none; visibility: visible; transition: opacity 180ms var(--ease-out-strong), transform 260ms var(--ease-out-strong), visibility 0s; }
 @starting-style { .support-panel[data-open] { opacity: 0; transform: translateY(6px) scale(.97); } }
 /* A tablet (the compact shell, wider than a phone): Help is in the top bar, so the card hangs from under it on the right,
@@ -18,7 +19,7 @@
 .support-overlay[data-open] { opacity: 1; visibility: visible; transition: opacity 240ms ease-out, visibility 0s; }
 html:has(.support-overlay[data-open]) { overflow: hidden; }
 
-.support-panel__header { display: flex; flex: none; align-items: center; gap: var(--space-12); height: 56px; padding: 0 var(--space-8) 0 var(--space-16); border-bottom: 1px solid var(--color-border-muted); }
+.support-panel__header { display: flex; flex: none; align-items: center; gap: var(--space-12); height: 56px; padding: 0 var(--space-8) 0 var(--space-16); }
 .support-panel--sheet .support-panel__header { height: 48px; touch-action: none; }
 .support-panel__mark { flex: none; }
 .support-panel__heading { flex: 1; min-width: 0; }
@@ -31,11 +32,14 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-panel__dot { width: 6px; height: 6px; flex: none; border-radius: 50%; background: var(--dot); transition: background-color 240ms ease; }
 .support-panel__subtitle-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; animation: support-fade 200ms ease-out; }
 .support-panel__actions { display: flex; align-items: center; gap: 2px; }
+/* Keyboard focus in the panel is a solid fill: the overlay's own hover step (the panel floats over the page). */
+.support-panel .ui-button--ghost:focus-visible { background: var(--color-overlay-hover, var(--color-hover)); color: var(--color-text); }
+.support-panel .ui-button--primary:focus-visible { background: var(--color-accent-hover); }
 
 /* The card keeps 84 px free at the top, so on a short window it never covers a page's header actions (44 px tall on touch). */
 /* The conversation grows down from the top; while the reader is at the bottom it follows the newest line. */
 .support-log { flex: 1; min-height: 0; overflow-y: auto; overflow-anchor: none; overscroll-behavior: contain; outline: none; }
-.support-log:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+.support-log:focus-visible { background: var(--color-overlay-hover, var(--color-active-bg)); }
 /* --tray: the screenshot tray's height while it covers the bottom of the conversation (AttachmentTray). */
 .support-log__inner { display: flex; flex-direction: column; gap: var(--space-20); padding: var(--space-20) var(--space-16) calc(var(--space-24) + var(--tray, 0px)); }
 .support-loading { display: flex; flex-direction: column; gap: var(--space-20); }
@@ -52,17 +56,17 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-text li::marker { color: var(--color-muted); }
 .support-text strong { font-weight: var(--font-weight-bold); }
 .support-text a { color: var(--color-text); text-decoration-color: color-mix(in srgb, var(--color-text) 40%, transparent); text-underline-offset: 3px; }
-.support-text a:hover { text-decoration-color: currentColor; }
-.support-text code { padding: 1px 4px; border-radius: 4px; background: var(--color-layer-2); font-size: 12px; }
-.support-text pre { padding: var(--space-8) var(--space-12); overflow-wrap: anywhere; white-space: pre-wrap; border-radius: var(--radius-sm); background: var(--color-layer-1); box-shadow: inset 0 0 0 1px var(--color-border-muted); font-size: 12px; line-height: 18px; }
+.support-text a:is(:hover, :focus-visible) { text-decoration-color: currentColor; }
+.support-text code { padding: 1px 4px; border-radius: 4px; background: var(--color-chip, var(--color-layer-2)); font-size: 12px; }
+.support-text pre { padding: var(--space-8) var(--space-12); overflow-wrap: anywhere; white-space: pre-wrap; border-radius: var(--radius-sm); background: var(--color-well, var(--color-layer-2)); font-size: 12px; line-height: 18px; }
 .support-text pre code { padding: 0; background: none; }
 .support-message--notice .support-text { color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
 /* A reply from someone on the team: their name over it, as a small mono label (the agent's answers carry none). */
 .support-message__author { margin: 0; color: var(--color-muted); font-family: var(--font-body); font-size: var(--text-xs); line-height: 16px; }
-/* The person's own messages: on the right, in a quiet block. No tails, no avatar. */
+/* The person's own messages: on the right, on one solid step. No tails, no avatar, no edge. */
 .support-message--user { display: flex; flex-direction: column; align-items: flex-end; gap: var(--space-4); padding-left: 12%; }
 .support-user-images { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: var(--space-6); max-width: 100%; }
-.support-user-images img { display: block; width: 120px; height: 84px; object-fit: cover; object-position: top left; border-radius: var(--radius-sm); outline: 1px solid var(--color-border); outline-offset: -1px; background: var(--color-layer-2); }
+.support-user-images img { display: block; width: 120px; height: 84px; object-fit: cover; object-position: top left; border-radius: var(--radius-sm); background: var(--color-layer-2); }
 .support-user-images__placeholder { display: flex; flex-direction: column; justify-content: center; gap: 2px; width: 120px; height: 84px; padding: var(--space-8) var(--space-12); border-radius: var(--radius-sm); background: var(--color-layer-2); color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .support-user-images__placeholder svg { margin-bottom: 2px; }
 .support-user-images__name { overflow: hidden; color: var(--color-text); text-overflow: ellipsis; white-space: nowrap; }
@@ -90,10 +94,13 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 @keyframes support-roll-in { from { opacity: 0; transform: translateY(6px); filter: blur(2px); } }
 @keyframes support-roll-out { to { opacity: 0; transform: translateY(-6px); filter: blur(2px); } }
 
-/* Cards in the conversation: the consent request and the filed ticket. */
-.support-card { padding: var(--space-12); border-radius: var(--radius-sm); background: none; box-shadow: inset 0 0 0 1px var(--color-border); font-size: var(--text-sm); line-height: var(--leading-sm); animation: support-card-in 280ms var(--ease-out-strong) both; }
+/* Cards in the conversation: the consent request and the filed ticket, each one solid step off the panel, no edge. */
+.support-card { padding: var(--space-12); border-radius: var(--radius-sm); background: var(--color-well, var(--color-layer-2)); font-size: var(--text-sm); line-height: var(--leading-sm); animation: support-card-in 280ms var(--ease-out-strong) both; }
 .support-message[data-restored] .support-card { animation: none; }
 .support-card p { margin: 0; overflow-wrap: anywhere; }
+.support-card .ui-button--secondary { background: var(--color-control, var(--color-surface)); }
+@media (hover: hover) and (pointer: fine) { .support-card .ui-button--secondary:hover:not(:disabled) { background: var(--color-control-hover, var(--color-layer-1)); } }
+.support-card .ui-button--secondary:focus-visible { background: var(--color-control-focus, var(--color-layer-1)); }
 .support-card__body { margin-top: var(--space-4); color: var(--color-muted); }
 .support-card__actions { display: grid; margin-top: var(--space-12); }
 .support-card__choice, .support-card__resolved { grid-area: 1 / 1; display: flex; align-items: center; gap: var(--space-8); margin: 0; transition: opacity 180ms ease-out, transform 240ms var(--ease-out-strong), filter 240ms var(--ease-out-strong), visibility 0s; }
@@ -116,7 +123,7 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-action-dialog__status .ui-status__dot { flex: none; margin-top: calc((var(--leading-sm) - 6px) / 2); }
 .support-action-dialog__status .ui-status-dot__value { overflow: visible; }
 .support-ticket { display: flex; align-items: flex-start; gap: var(--space-12); }
-.support-ticket__mark { display: grid; flex: none; place-items: center; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; background: var(--color-success-bg); color: var(--color-success); box-shadow: inset 0 0 0 1px var(--color-success-border); animation: support-mark-in 320ms var(--ease-out-strong) 100ms both; }
+.support-ticket__mark { display: grid; flex: none; place-items: center; width: 18px; height: 18px; margin-top: 1px; border-radius: 50%; background: var(--color-success-marker); color: var(--support-bg); animation: support-mark-in 320ms var(--ease-out-strong) 100ms both; }
 .support-message[data-restored] .support-ticket__mark { animation: none; }
 .support-ticket__text { flex: 1; min-width: 0; }
 .support-ticket__title { display: flex; align-items: baseline; justify-content: space-between; gap: var(--space-12); }
@@ -141,9 +148,11 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 /* The message box: grows with what is typed up to six lines; Enter sends, Shift+Enter starts a line. While the agent
    writes and the box is empty, Send turns into Stop. */
 .support-composer { position: relative; flex: none; padding: var(--space-4) var(--space-12) var(--space-12); }
-.support-composer__box { display: flex; align-items: flex-end; gap: var(--space-8); padding: 4px 4px 4px 12px; border-radius: var(--radius-sm); outline: 1px solid transparent; background: var(--color-surface); box-shadow: var(--shadow-button); transition: outline-color var(--motion-duration), box-shadow var(--motion-duration); }
-.support-composer__box:focus-within { outline-color: var(--color-focus); box-shadow: none; }
-.support-composer__box[data-disabled] { background: var(--color-layer-1); }
+/* The box is a solid control fill a step off the panel: a stronger step on hover and while typing, never an outline. */
+.support-composer__box { display: flex; align-items: flex-end; gap: var(--space-8); padding: 4px 4px 4px 12px; border-radius: var(--radius-sm); background: var(--color-overlay-control, var(--color-control, var(--color-surface))); transition: background-color var(--motion-duration) var(--ease-standard); }
+@media (hover: hover) and (pointer: fine) { .support-composer__box:hover:not(:focus-within):not([data-disabled]) { background: var(--color-overlay-control-hover, var(--color-control-hover, var(--color-layer-2))); } }
+.support-composer__box:focus-within { background: var(--color-overlay-control-focus, var(--color-control-focus, var(--color-layer-2))); }
+.support-composer__box[data-disabled] { background: var(--color-well, var(--color-layer-2)); }
 .support-composer__input { flex: 1; min-width: 0; height: 28px; max-height: 132px; padding: 4px 0; border: 0; background: none; color: var(--color-text); font: inherit; font-size: var(--text-md); line-height: 20px; resize: none; outline: none; }
 .support-composer__input::placeholder { color: var(--color-muted); opacity: 1; }
 .support-composer__input:disabled { cursor: not-allowed; }
@@ -157,16 +166,16 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
    TRAY_THUMBS): the status line just above the message box, the thumbnails above it, a short fade above the top one. */
 .support-tray { display: contents; }
 .support-tray[hidden] { display: none; }
-.support-tray__thumbs, .support-tray__line { position: absolute; left: 0; right: 0; z-index: 1; background: var(--color-surface); }
+.support-tray__thumbs, .support-tray__line { position: absolute; left: 0; right: 0; z-index: 1; background: var(--support-bg); }
 .support-tray__line { bottom: 100%; height: 24px; padding: 4px var(--space-12); }
 .support-tray__thumbs { bottom: calc(100% + 24px); height: 60px; display: flex; gap: var(--space-8); margin: 0; padding: var(--space-8) var(--space-12) var(--space-4); list-style: none; }
-.support-tray__thumbs::before, .support-tray__line:only-child::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 12px; background: linear-gradient(to bottom, transparent, var(--color-surface)); pointer-events: none; }
+.support-tray__thumbs::before, .support-tray__line:only-child::before { content: ''; position: absolute; left: 0; right: 0; bottom: 100%; height: 12px; background: linear-gradient(to bottom, transparent, var(--support-bg)); pointer-events: none; }
 .support-thumb { position: relative; flex: none; width: 48px; height: 48px; animation: support-card-in 240ms var(--ease-out-strong) both; }
-.support-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top left; border-radius: var(--radius-sm); outline: 1px solid var(--color-border); outline-offset: -1px; background: var(--color-layer-2); transition: opacity 200ms ease-out; }
+.support-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top left; border-radius: var(--radius-sm); background: var(--color-layer-2); transition: opacity 200ms ease-out; }
 .support-thumb[data-state='uploading'] img { opacity: .55; }
-.support-thumb[data-state='failed'] img { opacity: .55; outline-color: var(--color-danger-border); }
+.support-thumb[data-state='failed'] img { opacity: .55; }
 .support-thumb__bar { position: absolute; left: 5px; right: 5px; bottom: 5px; height: 2px; border-radius: 1px; background: var(--color-accent-data); transform-origin: left; transition: transform 220ms var(--ease-out-strong); }
-.support-thumb__remove { position: absolute; top: -6px; right: -6px; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: var(--color-contrast); color: var(--color-on-contrast); box-shadow: 0 0 0 2px var(--color-surface); transition: transform 160ms var(--ease-out-strong); }
+.support-thumb__remove { position: absolute; top: -6px; right: -6px; display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; background: var(--color-contrast); color: var(--color-on-contrast); transition: transform 160ms var(--ease-out-strong); }
 .support-thumb__remove::after { content: ''; position: absolute; inset: -9px; }
 .support-thumb__remove:active { transform: scale(.9); }
 .support-thumb__remove svg { width: 10px; height: 10px; }
@@ -178,15 +187,15 @@ html:has(.support-overlay[data-open]) { overflow: hidden; }
 .support-tray__mark { display: inline-grid; flex: none; place-items: center; width: 12px; height: 12px; }
 .support-tray__mark svg { width: 12px; height: 12px; }
 .support-tray__percent { font-variant-numeric: tabular-nums; }
-/* Dragging a file over the panel: the whole panel is the drop target. */
-.support-drop { position: absolute; inset: var(--space-8); z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-6); border: 1px dashed var(--color-border-strong); border-radius: var(--radius-sm); background: color-mix(in srgb, var(--color-surface) 94%, transparent); color: var(--color-text); font-size: var(--text-sm); pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 120ms ease-out, visibility 0s 120ms; }
+/* Dragging a file over the panel: the whole panel is the drop target, a solid well over the conversation. */
+.support-drop { position: absolute; inset: var(--space-8); z-index: 3; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-6); border-radius: var(--radius-sm); background: var(--color-well, var(--color-layer-2)); color: var(--color-text); font-size: var(--text-sm); pointer-events: none; opacity: 0; visibility: hidden; transition: opacity 120ms ease-out, visibility 0s 120ms; }
 .support-drop[data-active] { opacity: 1; visibility: visible; transition: opacity 120ms ease-out, visibility 0s; }
 .support-drop svg { margin-bottom: var(--space-4); color: var(--color-muted); }
 .support-composer__icons { display: inline-grid; place-items: center; }
 .support-composer__icons > svg { grid-area: 1 / 1; transition: opacity 140ms ease-out, transform 220ms var(--ease-out-strong); }
 .support-composer__icons > svg:last-child, .support-composer__send[data-stop] .support-composer__icons > svg:first-child { opacity: 0; transform: scale(.5); }
 .support-composer__send[data-stop] .support-composer__icons > svg:last-child { opacity: 1; transform: none; }
-.support-composer--closed { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-height: 56px; padding: var(--space-12) var(--space-16); border-top: 1px solid var(--color-border-muted); color: var(--color-muted); }
+.support-composer--closed { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-height: 56px; padding: var(--space-12) var(--space-16); color: var(--color-muted); }
 @media (pointer: coarse), (max-width: 899px) {
   .support-composer__input { height: 36px; padding-block: 7px; font-size: 16px; line-height: 22px; }
   .ui-button.support-composer__send, .ui-button.support-composer__attach { width: 36px; height: 36px; }

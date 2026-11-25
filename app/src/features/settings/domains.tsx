@@ -16,6 +16,7 @@ import { DomainDetailSkeleton, domainColumns } from './skeletons'
 import { DnsRecordTable, DnsWaitNote, DomainRecords, dnsChecks, domainState, recordRow, recordsFor, useDnsSetup, useDomain, zoneLines, type DnsChecks } from './domain-records'
 import { invalidate, invalidateResources, resourceOf } from '../../data/invalidation'
 import { ReceivingHosts, useReceivingHosts } from './receiving-hosts'
+import { DomainSetupAlert, setupGap } from './domain-setup-alert'
 
 function downloadDnsRecords(domain: string, records: DnsRecord[]) {
   const text = `; DNS records for ${domain}\n; Import into your DNS provider or add each record manually.\n${zoneLines(records)}\n`
@@ -198,6 +199,8 @@ function DomainDetail() {
   // Before the domain receives, its own host's row offers the root or a subdomain instead (Check now in the header checks MX too).
   const receivingActions = multiTenant && receivingRecord && receivingRecord.status !== 'verified' ? [{ label: onRoot ? 'Use a subdomain instead' : `Use ${current.name} instead`, icon: <ArrowLeftRight size={16} />, onSelect: () => void chooseHost(onRoot ? null : current.name) }] : undefined
   const sesUrl = `https://${current.regionId}.console.aws.amazon.com/ses/home?region=${encodeURIComponent(current.regionId)}#/identities/${encodeURIComponent(current.name)}`
+  // Check now's answers, or until it is pressed the background check's that the domain's reads carry (domain-setup-alert.tsx).
+  const pressed = checks?.id === id ? checks.found : undefined, gap = setupGap(current, pressed)
   return <div className="stack">
     <PageHeader title={current.name} backTo={then || '/domains'} actions={<>
       <StatusBadge status={state.status} tone={state.tone} />
@@ -207,8 +210,9 @@ function DomainDetail() {
     </>} />
     <MutationError error={verify.error ?? choose.error} />
     {!multiTenant && regionId !== current.regionId && <Alert tone="info">This domain belongs to {current.regionId}. <Button variant="ghost" onClick={() => setRegionId(current.regionId)}>Switch to {current.regionId}</Button></Alert>}
+    {gap && <DomainSetupAlert domain={current} gap={gap} page />}
     <div className="domain-sections">
-      <DomainRecords domain={current} setup={dns.setup} checks={checks?.id === id ? checks.found : new Map()} receivingView={multiTenant ? { off: receiving.data?.status === 'off', actions: receivingActions } : undefined} mailFrom={{ onEdit: openMailFrom, onRemove: () => { removeMailFrom.reset(); setRemovingMailFrom({ open: true, name: current.mailFromDomain ?? '' }) } }} actions={current.records.length > 0 && <Button onClick={() => downloadDnsRecords(current.name, current.records)}>Download .txt</Button>} />
+      <DomainRecords domain={current} setup={dns.setup} checks={pressed ?? dnsChecks(current)} receivingView={multiTenant ? { off: receiving.data?.status === 'off', actions: receivingActions } : undefined} mailFrom={{ onEdit: openMailFrom, onRemove: () => { removeMailFrom.reset(); setRemovingMailFrom({ open: true, name: current.mailFromDomain ?? '' }) } }} actions={current.records.length > 0 && <Button onClick={() => downloadDnsRecords(current.name, current.records)}>Download .txt</Button>} />
       <DnsWaitNote domain={current} />
       {multiTenant && <ReceivingSettings domainId={id} domainName={current.name} receiving={receiving} hosts={hosts} />}
       {!multiTenant && <MailboxReceiving domainId={id} domainName={current.name} />}

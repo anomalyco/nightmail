@@ -1,7 +1,7 @@
 import { createMcpHandler, Server, type CallToolResult, type Tool } from '@modelcontextprotocol/server';
 import { CfWorkerJsonSchemaValidator } from '@modelcontextprotocol/server/validators/cf-worker';
 import { bearerActor, dispatchAsActor, dispatchAsMailboxAccess, workspaceBearer } from './auth.js';
-import { agentTokenMintRefusal, denied, digest, keyAdminRefusal, requiredFor, type Required, lastingRefusal, memberAdminManage, memberAdminRefusal, ModuleLoadError, receivingAdminRefusal, requestOrigin, withOuterRequest, workspaceMailAccess, type Actor, type MailboxAccess, type App, type RequestOrigin, type Runtime } from './core.js';
+import { agentSetupRefusal, agentTokenMintRefusal, denied, digest, keyAdminRefusal, requiredFor, type Required, lastingRefusal, memberAdminManage, memberAdminRefusal, ModuleLoadError, receivingAdminRefusal, requestOrigin, withOuterRequest, workspaceMailAccess, type Actor, type MailboxAccess, type App, type RequestOrigin, type Runtime } from './core.js';
 import { getMcpGrantActor, withMcpAuthorization } from './mcp-auth.js';
 import { chooseWorkspace, setDefaultWorkspace, WorkspaceChoice, type McpConnection } from './oidc-resource.js';
 import { buildMcpCatalog, TOOLSETS, EMAIL_SEND_CONFIRMATION, EMAIL_SEND_ROUTING, type McpOperation } from './mcp-catalog.js';
@@ -186,7 +186,7 @@ function refusal(op: McpOperation, actor: Actor): Required | null {
   if (mail === 'UNRESTRICTED_KEY_REQUIRED' || (op.unrestricted && actor.domains.length)) return { ...need, scope: 'workspace' };
   if (mail === 'ADMIN_REQUIRED') return need;
   if ((op.receivingConsent && actor.grantId && !actor.receivingConsent) || (op.ownerOnly && actor.role === 'member')) return { ...need, person: 'admin' };
-  const guard = (op.keyAdmin && keyAdminRefusal(actor)) || (op.agentTokenMint && agentTokenMintRefusal(actor))
+  const guard = agentSetupRefusal(actor, op.path, op.method) || (op.keyAdmin && keyAdminRefusal(actor)) || (op.agentTokenMint && agentTokenMintRefusal(actor))
     || (op.receivingAdmin && receivingAdminRefusal(actor, op.write ? 'change receiving configuration' : undefined))
     || (op.lasting && lastingRefusal(actor, 'make lasting changes', need)) || (op.memberAdmin && memberAdminRefusal(actor, memberAdminManage(op.method, op.path)));
   if (guard) return guard.required ?? need;

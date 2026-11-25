@@ -66,7 +66,8 @@ export const yearlyFloor = (uc: bigint) => uc > 0n && uc * 12n < ucOf(CREDIT.min
 
 // ---------------------------------------------------------------- competitors priced in tiers
 
-export type Tier = { size: number; cents: number; sends?: number; overage?: number; source: Source }
+/** overage: cents per 1,000 past the tier, from its own source when the tier's page doesn't give it. */
+export type Tier = { size: number; cents: number; sends?: number; overage?: number; overageSource?: Source; source: Source }
 export type Plan = {
   name: string
   /** Seats the plan includes (null: unlimited); undefined when the vendor's price doesn't depend on them. */
@@ -92,6 +93,9 @@ export type Offer = {
   ladder: 'complete' | 'points'
   /** What the vendor sells past its last tier. */
   beyond?: { text: string; source: Source }
+  /** How a smaller tier and its overage is named after the plan, in the vendor's words: ", pay as you go" (the default),
+   *  " plus overage". */
+  payg?: string
   counts: string
   plans: Plan[]
 }
@@ -143,6 +147,8 @@ function payg(offer: Offer, size: number, price: number) {
   return found
 }
 
+const paygName = (offer: Offer, plan: Plan) => `${plan.name}${offer.payg ?? ', pay as you go'}`
+
 /** A vendor's line on the calculator's board, as a buyer would pay it: its cheapest plan that holds the numbers, or
  *  pay-as-you-go where that costs less. Vendors with no price read for the numbers have none. */
 export type VendorRow = { offer: Offer; plan: string; cents: number }
@@ -151,7 +157,7 @@ export function vendorRows(offers: readonly Offer[], u: Usage): VendorRow[] {
     if (offer.unit === 'contacts' && u.contacts === 0) return []
     const q = quote(offer, u)
     if (q.kind !== 'price') return []
-    if (q.payg) return [{ offer, plan: `${q.payg.plan.name}, pay as you go`, cents: q.payg.cents }]
+    if (q.payg) return [{ offer, plan: paygName(offer, q.payg.plan), cents: q.payg.cents }]
     return [{ offer, plan: offer.unit === 'contacts' && offer.name.endsWith(' marketing') && !/marketing/i.test(q.plan.name) ? `${q.plan.name} marketing` : q.plan.name, cents: q.cents }]
   })
 }
@@ -216,7 +222,7 @@ export function comparisonOf(entry: Entry): Comparison {
 }
 /** Every source an entry cites: its price points, its plans' limits and its rows. */
 export const sourcesOf = (entry: Pick<Entry, 'offer' | 'rows'>): Source[] => [
-  ...entry.offer.plans.flatMap(plan => [...plan.tiers.map(tier => tier.source), ...plan.seats ? [plan.seats.source] : [], ...plan.max ? [plan.max.source] : []]),
+  ...entry.offer.plans.flatMap(plan => [...plan.tiers.flatMap(tier => tier.overageSource ? [tier.source, tier.overageSource] : [tier.source]), ...plan.seats ? [plan.seats.source] : [], ...plan.max ? [plan.max.source] : []]),
   ...entry.offer.beyond ? [entry.offer.beyond.source] : [], ...entry.rows.flatMap(row => row.source ? [row.source] : []),
 ]
 /** The last day any of an entry's figures was read: when its page last changed (the sitemap's lastmod). */
@@ -229,7 +235,7 @@ export const tierSizes = (offer: Offer, from: number, to: number) =>
 export function theirPrice(offer: Offer, u: Usage): { cents: number; plan: string } | null {
   const q = quote(offer, u)
   if (q.kind !== 'price') return null
-  return q.payg ? { cents: q.payg.cents, plan: `${q.payg.plan.name}, pay as you go` } : { cents: q.cents, plan: q.plan.name }
+  return q.payg ? { cents: q.payg.cents, plan: paygName(offer, q.payg.plan) } : { cents: q.cents, plan: q.plan.name }
 }
 /** Every size the control can show: its steps, and on a 'complete' ladder every 1,000 between the first and the last. */
 export function reachable(c: Comparison): number[] {
@@ -269,7 +275,10 @@ export function entryProblems(entry: Entry, today: string, panels: readonly stri
   if (!entry.offer.plans.length) at('offer.plans', 'lists no plans.')
   entry.offer.plans.forEach((plan, p) => {
     if (!plan.tiers.length) at(`offer.plans[${p}] (${plan.name})`, 'lists no price points.')
-    plan.tiers.forEach((tier, t) => checkSource(`offer.plans[${p}].tiers[${t}] (${plan.name} at ${tier.size})`, tier.source))
+    plan.tiers.forEach((tier, t) => {
+      checkSource(`offer.plans[${p}].tiers[${t}] (${plan.name} at ${tier.size})`, tier.source)
+      if (tier.overageSource) checkSource(`offer.plans[${p}].tiers[${t}].overageSource`, tier.overageSource)
+    })
     if (plan.seats) checkSource(`offer.plans[${p}].seats`, plan.seats.source)
     if (plan.max) checkSource(`offer.plans[${p}].max`, plan.max.source)
   })

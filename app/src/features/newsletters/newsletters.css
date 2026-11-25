@@ -1,9 +1,11 @@
 /* A newsletter's page: its readers, how they are growing, and its issues. Its tables use the shared row height. */
 .ui-table-scroll.newsletter-issues, .ui-table-scroll.newsletters-table { --table-row-height: 53px; }
-.newsletter-readers { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: var(--space-40); align-items: stretch; height: 96px; padding-bottom: var(--space-8); }
+/* Readers: the count and the growth bars on one solid well (no edge line), its 88px content held in a fixed height so
+   the well is as tall loading as loaded. Controls in it step off the well. */
+.newsletter-readers { --color-hover: var(--color-raised-hover); --color-control: var(--color-raised-control); --color-control-hover: var(--color-raised-control-hover); --color-control-focus: var(--color-raised-control-focus); --color-control-pressed: var(--color-raised-control-pressed); display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 440px); gap: var(--space-40); align-items: stretch; height: 112px; padding: var(--space-12) var(--space-16); border-radius: var(--radius-sm); background: var(--color-well); }
 .newsletter-readers__count { display: flex; flex-direction: column; align-items: flex-start; justify-content: space-between; gap: var(--space-8); min-width: 0; }
 .newsletter-readers__count > a:first-child { color: var(--color-text); text-decoration: none; }
-.newsletter-readers__count > a:first-child:hover { text-decoration: underline; text-underline-offset: 4px; }
+.newsletter-readers__count > a:first-child:is(:hover, :focus-visible) { text-decoration: underline; text-underline-offset: 4px; }
 .newsletter-readers__count strong { margin-right: var(--space-6); font-family: var(--font-mono); font-size: var(--text-xl); line-height: var(--leading-xl); font-weight: var(--font-weight-regular); letter-spacing: -.5px; }
 .newsletter-readers__count .ui-skeleton-line { height: var(--leading-xl); }
 .newsletter-growth { display: flex; flex-direction: column; gap: var(--space-8); min-width: 0; margin: 0; }
@@ -11,9 +13,11 @@
 .newsletter-growth__bars span { flex: 1; min-width: 0; border-radius: 1px; background: var(--color-accent-data); }
 .newsletter-growth__caption { display: flex; justify-content: space-between; gap: var(--space-16); height: var(--leading-xs); color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .newsletter-issue { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* When an issue went out reads as data: mono, a size down, like the counts beside it. */
+.newsletter-issues .ui-table td[data-col='sent'] { font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
 .newsletter-new > .ui-field { max-width: 420px; }
 
 @media (max-width: 900px) {
-  .newsletter-readers { grid-template-columns: minmax(0, 1fr); gap: var(--space-16); height: 152px; }
+  .newsletter-readers { grid-template-columns: minmax(0, 1fr); gap: var(--space-16); height: 168px; }
   .newsletter-readers__count { flex-direction: row; align-items: center; height: 44px; }
 }

@@ -14,6 +14,8 @@ import { SendingLimitsGuide } from '../score/limits'
 import './setup.css'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { resourceOf } from '../../data/invalidation'
+import { setupGap, type SetupGap } from '../settings/domain-setup-alert'
+import type { Domain } from '../../data/types'
 
 // The hosted limit as GET /v1/me reports it, refreshed with the overview so usage stays current.
 export function useSendingLimit() { return useSendingLimitRead().limit }
@@ -74,7 +76,9 @@ export type SetupStep = { key: string; done: boolean; title: string; action?: Re
 // not a step: once these are done, the next steps offer it (score/index.tsx).
 // `loading` is true until the setup read (shared with the next steps) settles, so the page can hold its layout until it knows.
 // A failed read is `error` (with `retry`): the steps' place says so, rather than looking like finished setup.
-export function useSetupSteps(): { loading: boolean; steps: SetupStep[] | null; current?: SetupStep; open?: SetupStep[]; error?: unknown; retry?: () => void } {
+// `stuck`: the newest domain whose records public DNS still lacks an hour after it was added, for the banner above the steps
+// (shown also once the steps are done, while another domain waits).
+export function useSetupSteps(): { loading: boolean; steps: SetupStep[] | null; current?: SetupStep; open?: SetupStep[]; error?: unknown; retry?: () => void; stuck?: { domain: Domain; gap: SetupGap } | null; hasDomain?: boolean } {
   const { multiTenant, canAdminister } = useWorkspaceAccess()
   const identity = useSession()?.identity
   const client = useQueryClient()
@@ -93,12 +97,14 @@ export function useSetupSteps(): { loading: boolean; steps: SetupStep[] | null; 
   if (setup.error) return { loading: false, steps: null, error: setup.error, retry: () => void setup.refetch() }
   if (!setup.data.domains || !setup.data.apiKeys) return { loading: false, steps: null }
   const items = setup.data.domains, keyed = setup.data.apiKeys.active > 0
+  const hasDomain = items.length > 0
+  const stuck = items.flatMap(domain => { const gap = setupGap(domain); return gap ? [{ domain, gap }] : [] })[0] ?? null
   const verified = items.find(domain => domain.status === 'verified')
   // The setup read carries the ten newest domains; an older verified one still counts (the session's domain summary).
   const domainDone = !!verified || (identity?.connection?.domains?.verified ?? 0) > 0
   const pending = items.find(domain => domain.status !== 'verified')
   const sent = setup.data.emails.any || !!testId
-  if (domainDone && keyed && sent && !testId) return { loading: false, steps: null }
+  if (domainDone && keyed && sent && !testId) return { loading: false, steps: null, stuck, hasDomain }
   const steps: SetupStep[] = [
     // Until a domain verifies, Hosted mail can send a test to the user's own address from the shared test sender; the
     // first email's step then confirms it, as it does a test from the domain.
@@ -116,7 +122,7 @@ export function useSetupSteps(): { loading: boolean; steps: SetupStep[] | null; 
   const current = steps.find(step => !step.done)
   // The first email's step stays open once sent, so its confirmation and the link to Logs are seen.
   const open = steps.filter(step => step === current || (step.key === 'send' && (!!testId || (!step.done && domainDone))))
-  return { loading: false, steps, current, open }
+  return { loading: false, steps, current, open, stuck, hasDomain }
 }
 
 // Numbered steps in Overview's detail column; only the current step is open, with its action. A finished step's number

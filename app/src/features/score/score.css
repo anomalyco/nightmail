@@ -1,4 +1,4 @@
-/* Sender score. Flat: a hairline card, mono figures, colour only on the grade bands and the parts' states.
+/* Sender score. Flat: a solid card (no edge line), mono figures, colour only on the grade bands and the parts' states.
    Every block has a fixed height in every state (loading, calibrating, graded), so loading never shifts layout. */
 [data-grade='aplus'] { --grade-fill: var(--grade-aplus); }
 [data-grade='a'] { --grade-fill: var(--grade-a); }
@@ -7,11 +7,11 @@
 [data-grade='d'] { --grade-fill: var(--grade-d); }
 [data-grade='f'] { --grade-fill: var(--grade-f); }
 
-.gauge-card { position: relative; isolation: isolate; display: block; overflow: hidden; border-radius: var(--radius-sm); background: var(--color-surface); box-shadow: inset 0 0 0 1px var(--color-border-muted); color: var(--color-text); text-decoration: none; font-variant-numeric: tabular-nums; }
+.gauge-card { position: relative; isolation: isolate; display: block; overflow: hidden; border-radius: var(--radius-sm); background: var(--color-layer-1); color: var(--color-text); text-decoration: none; font-variant-numeric: tabular-nums; }
 .gauge-card > * { position: relative; z-index: 1; }
 /* Every score view is a button that opens the explainer. */
 button.gauge-card { width: 100%; border: 0; font: inherit; text-align: left; cursor: pointer; }
-button.gauge-card:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+button.gauge-card:focus-visible { background: var(--color-layer-2); }
 .gauge-skeleton { position: absolute; inset: 0; border-radius: inherit; background: var(--color-layer-1); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
 
 .gauge-dial { display: block; overflow: visible; }
@@ -32,9 +32,9 @@ button.gauge-card:focus-visible { outline: 2px solid var(--color-focus); outline
 /* Compact: the sidebar card, full sidebar width and 56px tall. */
 .gauge-card--compact { display: flex; align-items: center; gap: 12px; height: 56px; padding: 0 14px 0 10px; transition: background var(--motion-duration), transform 160ms var(--ease-out-strong); }
 .gauge-card--compact:active { transform: scale(.98); }
-@media (hover: hover) and (pointer: fine) { .gauge-card--compact:hover { background: var(--color-layer-1); } }
+@media (hover: hover) and (pointer: fine) { .gauge-card--compact:hover { background: var(--color-layer-2); } }
 .gauge-card--compact .gauge-dial { flex: none; width: 60px; height: 34px; }
-.gauge-card--compact:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.gauge-card--compact:focus-visible { background: var(--color-layer-2); }
 .gauge-stack { display: flex; flex: 1; flex-direction: column; gap: 2px; min-width: 0; }
 /* One 24px line in every state: the graded number keeps a fixed slot before its grade; ungraded or unread, a dash. */
 .gauge-readout { display: flex; align-items: baseline; gap: 8px; height: 24px; line-height: 24px; }
@@ -46,7 +46,6 @@ button.gauge-card:focus-visible { outline: 2px solid var(--color-focus); outline
 .next-steps__title { font-size: var(--text-sm); line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
 .next-steps ul { margin: 0; padding: 0; list-style: none; }
 .next-steps li { animation: row-enter 220ms var(--ease-out-strong) both; animation-delay: calc(var(--i, 0) * 40ms); }
-.next-steps li + li { border-top: 1px solid var(--color-border-muted); }
 .next-steps a { display: flex; align-items: center; gap: var(--space-8); min-height: 36px; color: var(--color-text); text-decoration: none; font-size: var(--text-sm); }
 .next-steps a > :first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .next-steps a .muted { font-size: var(--text-xs); white-space: nowrap; }
@@ -55,9 +54,11 @@ button.gauge-card:focus-visible { outline: 2px solid var(--color-focus); outline
   .next-steps a:hover > :first-child { text-decoration: underline; text-underline-offset: 4px; }
   .next-steps a:hover svg { transform: translate(2px, -2px); }
 }
+.next-steps a:focus-visible { text-decoration: none; }
+.next-steps a:focus-visible > :first-child { color: var(--color-text); text-decoration: underline; text-underline-offset: 4px; }
 
 /* The sidebar card's standing dot (Warn and up), in the card's top-right corner: positioned, so it never moves anything. */
-.gauge-card > .gauge-alert { position: absolute; top: 8px; right: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--tone-marker); box-shadow: 0 0 0 2px var(--color-surface); animation: gauge-alert-in 240ms var(--ease-out-strong) both; }
+.gauge-card > .gauge-alert { position: absolute; top: 8px; right: 8px; width: 6px; height: 6px; border-radius: 50%; background: var(--tone-marker); animation: gauge-alert-in 240ms var(--ease-out-strong) both; }
 @keyframes gauge-alert-in { from { opacity: 0; transform: scale(.4); } }
 
 /* Phone: 44px targets for the next steps and the standing card's link. */
@@ -67,8 +68,7 @@ button.gauge-card:focus-visible { outline: 2px solid var(--color-focus); outline
 }
 
 /* Overview's standing card (Warn and up): tone from the step, three parts and the release action. */
-.standing-card { display: flex; flex-direction: column; gap: var(--space-12); padding: var(--space-12); border: 1px solid var(--tone-border); border-radius: var(--radius-sm); background: var(--tone-bg); font-size: var(--text-sm); line-height: var(--leading-sm); scroll-margin-top: var(--space-24); }
-.ov-split__aside > .standing-card + * { border-top: 0; }
+.standing-card { display: flex; flex-direction: column; gap: var(--space-12); padding: var(--space-12); border: 0; border-radius: var(--radius-sm); background: var(--tone-bg); font-size: var(--text-sm); line-height: var(--leading-sm); scroll-margin-top: var(--space-24); }
 .standing-card__head { display: flex; align-items: center; gap: var(--space-8); }
 .standing-card__head h2 { flex: 1; min-width: 0; color: var(--tone-ink); font-size: var(--text-sm); line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
 .standing-card__dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--tone-marker); }
@@ -87,7 +87,7 @@ button.gauge-card:focus-visible { outline: 2px solid var(--color-focus); outline
 .score-about .ui-dialog__body { display: flex; flex-direction: column; gap: var(--space-16); }
 /* The body scrolls; its blocks keep their full height instead of shrinking into each other. */
 .score-about .ui-dialog__body > * { flex-shrink: 0; }
-.score-about__status { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: var(--space-16); row-gap: var(--space-8); min-height: 56px; padding: var(--space-12) 0; border-bottom: 1px solid var(--color-border-muted); font-variant-numeric: tabular-nums; }
+.score-about__status { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: var(--space-16); row-gap: var(--space-8); min-height: 56px; padding: var(--space-12) 0; font-variant-numeric: tabular-nums; }
 .score-about__status > b { min-width: 2ch; font-family: var(--font-mono); font-size: 30px; line-height: 32px; font-weight: 400; letter-spacing: -.03em; text-align: left; }
 .score-about__status-text { display: flex; flex-direction: column; gap: 2px; font-size: var(--text-sm); line-height: var(--leading-sm); }
 .score-about__status-text .muted { font-size: var(--text-xs); line-height: var(--leading-xs); }
@@ -97,7 +97,7 @@ button.gauge-card:focus-visible { outline: 2px solid var(--color-focus); outline
 .score-about__history { display: flex; align-items: flex-end; gap: 2px; width: 98px; height: 20px; }
 .score-about__history > span { flex: 1; height: 100%; border-radius: 0; background: var(--color-series); transform-origin: bottom; }
 .score-about__history > span[data-last] { background: var(--color-series-strong); }
-.score-about__limit { grid-column: 1 / -1; padding-top: var(--space-8); border-top: 1px solid var(--color-border-muted); font-family: var(--font-mono); font-size: var(--text-xs); line-height: var(--leading-xs); text-wrap: pretty; }
+.score-about__limit { grid-column: 1 / -1; padding-top: var(--space-8); font-family: var(--font-mono); font-size: var(--text-xs); line-height: var(--leading-xs); text-wrap: pretty; }
 .score-about__section ul { display: flex; flex-direction: column; gap: var(--space-4); margin: 0; padding-inline-start: var(--space-20); text-wrap: pretty; }
 .score-about__progress { grid-column: 1 / -1; position: relative; display: block; height: 4px; overflow: hidden; border-radius: 2px; background: var(--color-layer-2); }
 .score-about__progress > i { position: absolute; inset: 0 auto 0 0; width: var(--share); border-radius: inherit; background: var(--color-contrast); }

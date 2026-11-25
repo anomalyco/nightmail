@@ -6,6 +6,7 @@ import { Link } from 'react-router'
 import { CopyAction } from '../../components/motion'
 import { builtins, ctxFields, emailFields, endpointPayloads, RITUALS_PER_ADDRESS, type Field } from '../../../../api/src/ritual-schema'
 import { webhookSignatureGuide } from '../../../../api/src/webhook-signature-guide'
+import { agentSetupGuide } from '../../../../api/src/agent-setup-guide'
 import { McpSetup } from './agent-setup'
 import { credentials } from './credentials'
 import { imapPorts, smtpPorts, useMailServers } from './mail-settings'
@@ -176,8 +177,9 @@ export const guides: Guide[] = [
   {
     id: 'mcp', title: 'Connect an agent (MCP)', summary: `Let OpenCode, Claude Code, Codex, Cursor, ChatGPT and other agents work with ${productName}: as you, with an API key, or with one inbox.`,
     body: () => <>
-      <Section title="Three ways to connect">
+      <Section title="Ways to connect">
         <Table head={['Connect', 'What the agent can reach', 'Set up']} rows={[
+          [<strong key="p">With the agent prompt</strong>, 'Its own API key in this workspace: send email, and manage domains, inboxes and receiving. It can\'t create API keys, inbox connection keys, inbox keys or mail-client (IMAP/SMTP) passwords, and never reaches members or billing. The prompt you copy carries a one-time setup token; without it, the agent asks for a code you approve.', <Link key="l" to={`/docs/${agentSetupGuide.id}`}>How it works</Link>],
           [<strong key="a">Sign in as you</strong>, 'What you approve in the browser: read, send or full access. It signs in with your Anomaly account (GitHub or Google); choose its workspace and receiving tools in Settings → Account.', 'The setup below, then sign in from your client.'],
           [<strong key="k">With an API key</strong>, 'Exactly what the key can do, in this workspace only. No browser sign-in: the key goes in the config’s Authorization header. An agent token works the same way.', <Link key="l" to="/api-keys?create=read_send">Create key</Link>],
           [<strong key="b">One agent inbox</strong>, 'Only that inbox, with an API key for it: read its mail and, if allowed, reply. Nothing else in the workspace.', <Link key="c" to="/api-keys?connect=1">Connect an agent</Link>],
@@ -196,6 +198,15 @@ export const guides: Guide[] = [
       </Section>
       <MailServers />
     </>,
+  },
+  {
+    // The same words and code as /docs.md and /llms.txt (api/src/agent-setup-guide.ts).
+    id: agentSetupGuide.id, title: agentSetupGuide.title, summary: agentSetupGuide.summary,
+    body: () => <Section title="A setup token or a device code">
+      <p>{agentSetupGuide.text}</p>
+      <Code label="agent setup">{agentSetupGuide.code}</Code>
+      <p>Copy the prompt from <Link to="/docs#agent-prompt">the overview</Link> or Connect an agent in the sidebar; approve a code at <Link to="/connect">/connect</Link>. The agent’s key is listed in <Link to="/api-keys">API keys</Link>.</p>
+    </Section>,
   },
   {
     // The same words and code as /docs.md and /llms.txt (api/src/webhook-signature-guide.ts).

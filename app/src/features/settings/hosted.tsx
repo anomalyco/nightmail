@@ -163,15 +163,16 @@ function SendingRows() {
 // Three rows whatever loads, so the rows below never move.
 function ConnectedAccountRows({ connection }: { connection: ProviderConnection | null }) {
   const update = useApiMutation(() => connectionApi.updateStack(), undefined, true, invalidate.connection)
-  // The template row keeps its code element while loading: on a phone that decides whether the row stacks.
-  if (!connection) return <><Row title="Role template"><span className="cluster settings-inline settings-version"><code><Skeleton width={32} height={20} /></code></span></Row>{['Production access', 'Health'].map(title => <Row key={title} title={title}><Skeleton width={140} height={20} /></Row>)}</>
-  const { stack, health } = connection
+  const stack = connection?.stack
+  const templateRow = <Row title="Role template" error={update.error ? <MutationError error={update.error} /> : undefined}><span className="cluster settings-inline settings-version"><code>{connection ? stack?.version ?? '—' : <Skeleton width={32} height={20} />}</code>
+      {update.data ? <a href={update.data.consoleUrl} target="_blank" rel="noopener noreferrer">Review update in AWS<ArrowUpRight size={14} aria-hidden="true" /></a>
+        : <Button size="sm" disabled={!stack?.updateAvailable} aria-hidden={!stack?.updateAvailable || undefined} loading={update.isPending} onClick={() => update.mutate(undefined)}>Prepare update</Button>}</span></Row>
+  if (!connection) return <>{templateRow}{['Production access', 'Health'].map(title => <Row key={title} title={title}><Skeleton width={140} height={20} /></Row>)}</>
+  const { health } = connection
   const ready = connection.scan?.regions.filter(region => region.sendingState === 'ready') ?? []
   const sandboxed = ready.filter(region => !region.facts.production)
   return <>
-    <Row title="Role template" error={update.error ? <MutationError error={update.error} /> : undefined}><span className="cluster settings-inline settings-version"><code>{stack?.version ?? '—'}</code>
-      {update.data ? <a href={update.data.consoleUrl} target="_blank" rel="noopener noreferrer">Review update in AWS<ArrowUpRight size={14} aria-hidden="true" /></a>
-        : stack?.updateAvailable ? <Button size="sm" loading={update.isPending} onClick={() => update.mutate(undefined)}>Prepare update</Button> : null}</span></Row>
+    {templateRow}
     <Row title="Production access">{!ready.length ? '—' : sandboxed.length ? `SES sandbox in ${sandboxed.map(region => region.regionLabel).join(', ')}` : ready.map(region => region.regionLabel).join(', ')}</Row>
     {/* The banner above shows the first finding; this row adds any others. */}
     <Row title="Health">{!health ? 'Not checked yet' : health.issues.length ? <span className="settings-attention">{health.issues.length === 1 ? 'Needs attention' : health.issues.slice(1).map(issue => issue.message).join(' ')}</span> : `Checked ${ago(health.checkedAt)}`}</Row>

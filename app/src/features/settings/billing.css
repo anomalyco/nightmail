@@ -1,9 +1,9 @@
 /* Settings → Billing: the balance in large tabular figures with Add credit beside it, then rows like every settings row
    (this month's usage, the free allowance, the card, auto-recharge) and the history table. Every block has a fixed
    height, so values arriving never move what is below them. */
-.billing-balance { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 20px 44px; gap: var(--space-4) var(--space-16); height: 84px; border-bottom: 1px solid var(--color-border-muted); }
-/* The page starts with the balance, where the other sections start with their action: no hairline or space over it. */
-.billing-rows:has(> .billing-balance:first-child) { border-top: 0; }
+/* The balance is the page's one solid block, above the plain rows, its figures centred in the block's fixed height. Its
+   only control is the primary Add credit, so no filled control sits on its fill. */
+.billing-balance { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: 20px 44px; align-content: center; gap: var(--space-4) var(--space-16); height: 84px; margin-bottom: var(--space-8); padding-inline: var(--space-16); border-radius: var(--radius-sm); background: var(--color-layer-1); }
 .billing-balance__add { grid-area: 1 / 2 / -1 / 3; align-self: center; }
 /* This month: the counts, then what they cost. On a phone the cost sits over the counts, both at the right edge. It
    fills the control, so its box is the same while the figures load and after. */
@@ -14,6 +14,7 @@
 button.billing-balance__amount { justify-self: start; gap: var(--space-4); padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--color-text); cursor: pointer; }
 button.billing-balance__amount > svg { flex: none; color: var(--color-muted); transition: transform 160ms var(--ease-out-strong), color var(--motion-duration); }
 @media (hover: hover) and (pointer: fine) { button.billing-balance__amount:hover > svg { color: var(--color-text); transform: translateX(2px); } }
+button.billing-balance__amount:focus-visible > svg { color: var(--color-text); }
 .billing-balance__amount--plan { font-family: var(--font-body); font-size: 30px; font-weight: var(--font-weight-bold); letter-spacing: -.01em; }
 /* The free allowance's meters, and the daily limit's row while there is one: it opens its steps, a short numbered ladder. */
 .usage-meter { display: inline-flex; align-items: center; gap: var(--space-12); }
@@ -27,13 +28,15 @@ button.billing-balance__amount > svg { flex: none; color: var(--color-muted); tr
 .usage-limit__title > svg { flex: none; color: var(--color-muted); transition: transform 180ms var(--ease-out-strong), color var(--motion-duration); }
 .usage-limit[open] .usage-limit__title > svg { transform: rotate(180deg); }
 @media (hover: hover) and (pointer: fine) { .usage-limit > summary:hover .usage-limit__title > svg { color: var(--color-text); } }
-.usage-limit > summary:focus-visible { outline-offset: calc(-1 * var(--focus-width)); }
+.usage-limit > summary:focus-visible .usage-limit__title > svg { color: var(--color-text); }
 .usage-steps-section { display: flex; flex-direction: column; gap: var(--space-12); padding-top: var(--space-12); }
 .usage-limit__title .ui-status { margin-left: var(--space-4); }
-.usage-steps { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--color-border-muted); }
-.usage-steps > li { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: var(--space-12); align-items: start; min-height: 80px; padding: var(--space-12) 0; border-bottom: 1px solid var(--color-border-muted); }
-.usage-steps__mark { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; box-shadow: inset 0 0 0 1px var(--color-border-strong); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
-.usage-steps > li[data-current] .usage-steps__mark { background: var(--color-contrast); box-shadow: none; color: var(--color-on-contrast); }
+/* The ladder: its steps on the page's surface, parted by their rhythm; each mark a solid disc, the current one the text
+   colour. */
+.usage-steps { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.usage-steps > li { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: var(--space-12); align-items: start; min-height: 80px; padding: var(--space-12) 0; }
+.usage-steps__mark { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; background: var(--color-layer-1); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
+.usage-steps > li[data-current] .usage-steps__mark { background: var(--color-contrast); color: var(--color-on-contrast); }
 .usage-steps > li[data-done] .usage-steps__mark { color: var(--color-text); }
 .usage-steps__body { display: flex; flex-direction: column; gap: 2px; min-width: 0; font-size: var(--text-sm); line-height: var(--leading-sm); }
 .usage-steps__body b { font-variant-numeric: tabular-nums; }
@@ -54,17 +57,19 @@ button.billing-balance__amount > svg { flex: none; color: var(--color-muted); tr
 
 /* Balance details and auto-recharge open as dialogs: the balance's parts as label and value lines, the amounts as rows. */
 .billing-about .ui-dialog__body, .billing-recharge-dialog .ui-dialog__body { display: flex; flex-direction: column; gap: var(--space-12); }
-.billing-facts { display: flex; flex-direction: column; gap: var(--space-8); margin: 0; }
+/* Label and value lines on the dialog's surface, parted by their rhythm. */
+.billing-facts { display: flex; flex-direction: column; gap: 0; margin: 0; }
 .billing-facts > div { display: flex; justify-content: space-between; gap: var(--space-12); }
 .billing-facts dt { color: var(--color-muted); font-size: var(--text-xs); }
 .billing-facts dd { margin: 0; font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
-.billing-facts > div { align-items: baseline; padding-bottom: var(--space-8); border-bottom: 1px solid var(--color-border-muted); }
+.billing-facts > div { align-items: baseline; padding-block: var(--space-6); }
 .billing-recharge-dialog .settings-row { grid-template-columns: minmax(0, 1fr) auto; }
 
 .billing-amount { font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .billing-amount[data-sign='in'] { color: var(--color-success); }
 .billing-link { position: relative; display: inline-flex; align-items: center; gap: 2px; color: var(--color-muted); text-decoration: none; font-size: var(--text-xs); white-space: nowrap; }
 @media (hover: hover) and (pointer: fine) { .billing-link:hover { color: var(--color-text); } }
+.billing-link:focus-visible { color: var(--color-text); }
 @media (pointer: coarse), (max-width: 899px) { .billing-link::after { content: ''; position: absolute; inset: -14px -8px; } }
 .billing-links { justify-content: flex-start; gap: var(--space-12); flex-wrap: nowrap; }
 .billing-table td[data-col='amount'], .billing-table td[data-col='after'] { font-variant-numeric: tabular-nums; }
@@ -79,19 +84,23 @@ button.billing-balance__amount > svg { flex: none; color: var(--color-muted); tr
 /* Add credit: amounts as one row of choices, then how to pay. */
 .billing-add .ui-dialog__body { display: flex; flex-direction: column; gap: var(--space-12); }
 .billing-choice { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: var(--space-6); }
-.billing-choice__item, .billing-method { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-8); height: 36px; padding: 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: var(--color-surface); box-shadow: var(--shadow-button); color: var(--color-text); font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; transition: box-shadow var(--motion-duration), background var(--motion-duration), transform 160ms var(--ease-out-strong); }
-.billing-choice__item[aria-checked='true'], .billing-method[aria-checked='true'] { box-shadow: inset 0 0 0 1.5px var(--color-contrast); font-weight: var(--font-weight-bold); }
+/* Each choice is a solid control fill; the picked one is the text colour as a fill, like a ticked box. */
+.billing-choice__item, .billing-method { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-8); height: 36px; padding: 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: var(--color-control); color: var(--color-text); font: inherit; font-variant-numeric: tabular-nums; cursor: pointer; transition: color var(--motion-duration), background var(--motion-duration), transform 160ms var(--ease-out-strong); }
+.billing-choice__item[aria-checked='true'], .billing-method[aria-checked='true'] { background: var(--color-contrast); color: var(--color-on-contrast); font-weight: var(--font-weight-bold); }
+:is(.billing-choice__item, .billing-method)[aria-checked='true']:focus-visible { background: var(--color-contrast-hover); }
 .billing-choice__item:active:not(:disabled), .billing-method:active:not(:disabled) { transform: scale(.98); }
 .billing-choice__item:disabled, .billing-method:disabled { cursor: not-allowed; opacity: .6; }
-@media (hover: hover) and (pointer: fine) { .billing-choice__item:hover:not(:disabled, [aria-checked='true']), .billing-method:hover:not(:disabled, [aria-checked='true']) { background: var(--color-layer-2); } }
+@media (hover: hover) and (pointer: fine) { .billing-choice__item:hover:not(:disabled, [aria-checked='true']), .billing-method:hover:not(:disabled, [aria-checked='true']) { background: var(--color-control-hover); } }
+:is(.billing-choice__item, .billing-method):focus-visible:not([aria-checked='true']) { background: var(--color-control-focus); }
 .billing-methods { display: flex; flex-direction: column; gap: var(--space-6); }
 .billing-method { justify-content: flex-start; height: 44px; padding-inline: var(--space-12); }
-.billing-method svg { color: var(--color-muted); }
+.billing-method:not([aria-checked='true']) svg { color: var(--color-muted); }
 .billing-add .billing-add__custom { width: 100%; }
 .billing-add__confirm { margin: 0; text-wrap: pretty; }
 .billing-add__terms { margin: 0; font-size: var(--text-sm); line-height: var(--leading-sm); text-wrap: pretty; }
 .billing-add__terms a { color: inherit; text-decoration-line: underline; text-decoration-thickness: from-font; text-underline-offset: .18em; transition: color var(--motion-duration); }
 @media (hover: hover) { .billing-add__terms a:hover { color: var(--color-text); } }
+.billing-add__terms a:focus-visible { color: var(--color-text); }
 
 @media (max-width: 640px) {
   /* Values sit in a fixed column one control tall, so a skeleton and the value it becomes share one box; the label takes

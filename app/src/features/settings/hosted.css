@@ -1,19 +1,20 @@
-/* Hosted settings: a grouped rail (Console's settings layout) and one section at a time. */
+/* Hosted settings: a grouped rail on the page's surface beside one section at a time. */
 .hosted-settings { display: grid; flex: 1; grid-template-columns: 196px minmax(0, 1fr); gap: var(--space-40); align-items: start; }
 .settings-rail { position: sticky; top: 0; display: flex; flex-direction: column; gap: var(--space-20); }
 .settings-rail__groups { display: flex; flex-direction: column; gap: var(--space-20); }
-.settings-rail__title { display: flex; align-items: center; min-height: var(--control-height); font-size: var(--text-lg); line-height: var(--leading-lg); font-weight: var(--font-weight-bold); letter-spacing: -.18px; }
+.settings-rail__title { display: flex; align-items: center; min-height: var(--control-height); font-size: var(--text-title); line-height: var(--leading-title); font-weight: var(--font-weight-semibold); letter-spacing: var(--tracking-title); }
 .settings-rail__group { display: flex; flex-direction: column; gap: 2px; }
 .settings-rail a { display: flex; align-items: center; height: 28px; padding-inline: var(--space-8); border-radius: 4px; color: var(--color-muted); text-decoration: none; transition: background-color var(--motion-duration), color var(--motion-duration); }
 @media (hover: hover) and (pointer: fine) { .settings-rail a:hover { color: var(--color-text); background: var(--color-hover); } }
-.settings-rail a[aria-current='page'] { color: var(--color-text); background: var(--color-layer-2); font-weight: var(--font-weight-bold); }
+.settings-rail a:focus-visible { color: var(--color-text); background: var(--color-hover); text-decoration: none; }
+.settings-rail a[aria-current='page'] { color: var(--color-text); background: var(--color-active-bg); font-weight: var(--font-weight-bold); }
 .settings-rail a[data-locked] { justify-content: space-between; gap: var(--space-4); }
 .settings-rail a[data-locked] svg { color: var(--color-faint); }
 .hosted-settings__content { display: flex; flex-direction: column; gap: var(--space-24); min-width: 0; padding-top: 52px; animation: section-enter 120ms ease-out both; }
 .hosted-settings__content > .ui-section-header { margin-bottom: calc(-1 * var(--space-12)); }
 .settings-actions { display: flex; justify-content: flex-end; align-items: center; gap: var(--space-8); }
 .hosted-settings__content > .settings-actions { margin-bottom: calc(-1 * var(--space-12)); }
-.hosted-settings__content .settings-rule { border-top: 0; padding-top: 0; }
+.hosted-settings__content .settings-rule { padding-top: 0; }
 .hosted-settings__content .section { margin-block: 0; }
 .hosted-settings__content .ui-table-scroll { --table-row-height: 53px; }
 
@@ -22,14 +23,16 @@
 :is(.settings-row__control, .settings-people td, .settings-facts dd, .mcp-approval__who) .private-address__value { flex: 0 1 auto; min-width: 0; overflow: hidden; }
 :is(.settings-row__control, .settings-people td, .settings-facts dd, .mcp-approval__who) .private-address[data-revealed] > .private-address__value { overflow: visible; white-space: normal; word-break: break-all; }
 
-/* Rows: 53px each, label left and control right, split by hairlines. */
-.settings-rows { display: flex; flex-direction: column; border-top: 1px solid var(--color-border-muted); }
-.settings-row { display: grid; grid-template-columns: minmax(140px, 240px) minmax(0, 1fr); align-items: center; gap: var(--space-24); height: 53px; border-bottom: 1px solid var(--color-border-muted); }
+/* Rows: 53px each, label left and control right, straight on the page's surface: no fill and no rule, so a field or a
+   button in a row is the only solid step. Alignment and the fixed rhythm part them. */
+.settings-rows { display: flex; flex-direction: column; }
+.settings-row { display: grid; grid-template-columns: minmax(140px, 240px) minmax(0, 1fr); align-items: center; gap: var(--space-24); height: 53px; }
 .settings-row__label { display: flex; flex-direction: column; min-width: 0; }
 .settings-row__label > span { overflow: clip; text-overflow: ellipsis; white-space: nowrap; }
 .settings-row__label .muted { font-size: var(--text-xs); line-height: var(--leading-xs); }
 .settings-row__control { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-8); min-width: 0; text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .settings-inline { flex-wrap: nowrap; }
+.settings-version .ui-button[aria-hidden='true'] { display: none; }
 /* A connected AWS account's health finding: the message, in the warning tone. */
 .settings-attention { color: var(--color-warning); text-align: right; }
 .settings-name { position: relative; display: flex; align-items: center; justify-content: flex-end; gap: var(--space-8); width: 100%; }
@@ -53,6 +56,7 @@
 .settings-score__grade { font-family: var(--font-mono); font-weight: 700; }
 .settings-score svg { align-self: center; color: var(--color-muted); transition: transform 160ms var(--ease-out-strong); }
 @media (hover: hover) and (pointer: fine) { .settings-score:hover svg { transform: translate(2px, -2px); } .settings-score:hover svg.lucide-chevron-right { transform: translateX(2px); } }
+.settings-score:focus-visible { background: var(--color-hover); text-decoration: none; }
 .settings-danger { margin-top: var(--space-24); }
 .settings-danger .settings-row__label > span:first-child { color: var(--color-danger); }
 
@@ -62,13 +66,13 @@
   .hosted-settings { grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-20); }
   .settings-rail { position: static; gap: var(--space-12); }
   .settings-rail__groups { flex-direction: row; gap: var(--space-6); margin-inline: calc(-1 * var(--bleed, 0px)); padding-inline: var(--bleed, 0px); overflow-x: auto; }
-  /* The strip scrolls, so it clips: padding keeps room around the tabs' focus rings, with negative margins so nothing moves, and the hairline under the tabs is a background where the border was. */
-  .settings-rail__groups { padding-block: var(--focus-reach); margin-block: calc(-1 * var(--focus-reach)) calc(1px - var(--focus-reach)); background: linear-gradient(var(--color-border), var(--color-border)) left bottom calc(var(--focus-reach) - 1px) / 100% 1px no-repeat; }
+  /* The strip scrolls, so it clips: padding keeps room around the tabs, with negative margins so nothing moves. No
+     track under the tabs: the current one alone carries its marker. */
+  .settings-rail__groups { padding-block: var(--focus-reach); margin-block: calc(-1 * var(--focus-reach)); }
   .settings-rail__group { display: contents; }
   .settings-rail a { position: relative; flex: none; height: var(--control-height); padding-inline: var(--space-8); border-radius: 0; }
   .settings-rail a[aria-current='page'] { background: none; }
-  .settings-rail a:focus-visible { outline-offset: calc(-1 * var(--focus-width)); }
-  .settings-rail a[aria-current='page']::after { content: ''; position: absolute; inset: auto 0 0; height: 1px; background: var(--color-faint); }
+  .settings-rail a[aria-current='page']::after { content: ''; position: absolute; inset: auto 0 0; height: 1px; background: var(--color-text); }
   .hosted-settings__content { padding-top: 0; }
 }
 @media (max-width: 640px) {
@@ -86,6 +90,8 @@
   .settings-row:has(.settings-score--late) { grid-template-columns: auto minmax(0, 1fr); }
   .settings-inline:has(> code) { flex-wrap: nowrap; min-width: 0; max-width: 100%; }
   .settings-inline > code { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  /* Reserve the real action's size even before the connection tells us whether it needs an update. */
+  .settings-version .ui-button[aria-hidden='true'] { display: inline-flex; visibility: hidden; }
   .settings-name { justify-content: flex-start; }
   .settings-name-input.ui-input { flex: 1; width: auto; }
 }

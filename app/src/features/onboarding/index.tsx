@@ -7,12 +7,12 @@ import { CopyAction, LiveStatus } from '../../components/motion'
 import { BootLoader } from '../../components/BootLoader'
 import { ThemeToggle } from '../../components/ThemeToggle'
 import { AccountSwitcher } from '../../components/AccountSwitcher'
-import { useApiMutation, useApiQuery, usePublicOrigin, useSession } from '../../data/context'
+import { useApiMutation, useApiQuery, usePublicOrigin, useSession, useWorkspaceAccess } from '../../data/context'
 import { connectionApi, retryableConnectionErrors, useConnectionCache } from '../../data/connections'
 import { agentStep, finishedStep, readRegionalDomain, setDomainStep, setRegionalDomain, type OnboardingStage } from '../../data/onboarding'
 import { ConnectAwsRegional, PendingDomain, createStack, domainHint, waitingForStack } from './aws'
 import { DnsWaitNote, DomainRecords, useDnsSetup, useDomain } from '../settings/domain-records'
-import { AgentPrompt, McpSetup, agentPrompt } from '../docs/agent-setup'
+import { AgentPrompt, McpSetup, agentPrompt, useAgentSetup } from '../docs/agent-setup'
 import { FirstSend, SelfTest } from '../docs/first-send'
 import { domainPattern, normalizeDomain } from '../../lib/domain'
 import { ApiError, errorText, type ConnectionKind, type ConnectionState, type ProviderConnection } from '../../data/types'
@@ -424,7 +424,7 @@ function AddDomain({ draft, onDraftChange, queued, onQueuedChange, ready, hosted
       <Button type="submit" variant="primary" loading={create.isPending || queued} data-analytics="onboarding/domain/add">Add domain<ArrowRight size={16} aria-hidden /></Button>
     </form>
     <div className="onb-rise onboarding-reserve onboarding-more" style={rise(3)} data-hidden={!ready || undefined} inert={!ready}>
-      {hosted && <SelfTest status />}
+      {hosted && <SelfTest confirm="address" />}
       <button type="button" className="onboarding-skip" disabled={create.isPending} data-analytics="onboarding/domain/skip" onClick={onFinish}>Skip for now</button>
     </div>
   </div>
@@ -468,6 +468,9 @@ function AgentSetup({ domainId, onFinish }: { domainId: string; onFinish: () => 
   const identity = useSession()?.identity
   const origin = usePublicOrigin()
   const domain = useDomain(domainId)
+  // An owner's or admin's copied prompt carries a setup token: the agent gets its own key without one made here.
+  const { canAdminister } = useWorkspaceAccess()
+  const setup = useAgentSetup(Boolean(identity) && canAdminister)
   const [scope, setScope] = useState<KeyScope>('send')
   const create = useApiMutation((api, input: { scope: KeyScope; domain: string | null }) => api.keys.create(input.scope === 'send'
     ? { name: input.domain ? `Send from ${input.domain}` : 'Send only', permissions: ['send'], domains: input.domain ? [input.domain] : [] }
@@ -481,7 +484,8 @@ function AgentSetup({ domainId, onFinish }: { domainId: string; onFinish: () => 
   }
   if (domain.isPending) return <BootLoader inline />
   if (domain.error && !missing) return <ErrorState error={domain.error} onRetry={() => void domain.refetch()} />
-  const prompt = origin ? agentPrompt({ origin, domain: current, email: identity?.email ?? null, multiTenant: identity?.multiTenant === true, testSender: identity?.testSender }) : null
+  const promptFor = (setupToken: string | null | undefined) => agentPrompt({ origin: origin!, domain: current, email: identity?.email ?? null, multiTenant: identity?.multiTenant === true, setupToken, testSender: identity?.testSender })
+  const prompt = origin ? promptFor(setup ? null : undefined) : null
   // The tab names the key's reach: an app's key sends from this domain only; a coding agent's manages the workspace.
   const scopes = [
     { value: 'send', label: current ? `Send only · ${current.name}` : 'Send only' },
@@ -506,7 +510,7 @@ function AgentSetup({ domainId, onFinish }: { domainId: string; onFinish: () => 
         <span className="sr-only" role="status">{secret ? 'API key created. It is shown once.' : ''}</span>
       </section>
       <div className="onb-rise" style={rise(2)}><FirstSend domain={current} apiKey={secret} title="Send with cURL or the SDK" compact /></div>
-      <div className="onb-rise" style={rise(3)}><AgentPrompt prompt={prompt} compact /></div>
+      <div className="onb-rise" style={rise(3)}><AgentPrompt prompt={prompt} compact setup={setup} copy={setup?.copy(promptFor)} download={origin ? promptFor(undefined) : undefined} /></div>
       <div className="onb-rise" style={rise(4)}><McpSetup compact /></div>
     </div>
     <div className="onboarding-actions">

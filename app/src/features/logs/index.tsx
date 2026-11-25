@@ -4,7 +4,7 @@ import { Download, Paperclip, Search, X } from 'lucide-react'
 import { useApiDef, useApiQuery, useLogsVisibility, useRegion, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
 import type { LogDirection, LogEntry, ReceivedEmailDetail, TimeRange } from '../../data/types'
-import { Alert, Button, CopyButton, DataTable, EmptyState, ErrorState, Input, PaginationSkeleton, PageHeader, Pagination, SectionHeader, Select, Sheet, StatusBadge, Tabs } from '../../components/ui'
+import { Alert, Button, CopyButton, DataTable, EmptyState, ErrorState, Icon, Input, PaginationSkeleton, PageHeader, Pagination, SectionHeader, Select, Sheet, StatusBadge, Tabs } from '../../components/ui'
 import { ReceivedEmailPreview } from '../../components/EmailPreview'
 import { date, fileSize, label, time } from '../../lib/format'
 import { downloadCsv } from '../../lib/download'
@@ -43,14 +43,18 @@ export function LogsPage() {
   const campaignId = params.get('campaign') || undefined
   return <Logs key={`${regionId}:${campaignId ?? ''}`} regionId={regionId} campaignId={campaignId} />
 }
-// The sidebar's region selector already names the region; repeat it only when it is hidden or a campaign filter shows another region.
-// Hosted logs span every region and name none.
+// The console's one control strip opens with the title, the direction and the range; the search, filters and export
+// follow in the same 40px bar (Logs below). The sidebar's region selector already names the region; repeat it only when
+// it is hidden or a campaign filter shows another region. Hosted logs span every region and name none.
 function LogsHeader({ regionId, direction, onDirection, locked, range, onRange }: { regionId: string; direction: LogDirection; onDirection: (value: LogDirection) => void; locked?: boolean; range: TimeRange; onRange: (value: TimeRange) => void }) {
   const selected = useRegion().regionId
   const { canAdminister, multiTenant } = useWorkspaceAccess()
-  return <PageHeader title="Logs" actions={<div className="cluster logs-controls">{!multiTenant && (!canAdminister || regionId !== selected) && <span className="muted">{regionId}</span>}
-    <Tabs label="Direction" value={direction} onValueChange={value => onDirection(value as LogDirection)} disabled={locked} items={directions} />
-    <Tabs label="Time range" value={range} onValueChange={value => onRange(value as TimeRange)} items={logRanges} /></div>} />
+  return <div className="logs-bar__head"><h1 className="logs-bar__title">Logs</h1>{!multiTenant && (!canAdminister || regionId !== selected) && <span className="logs-bar__region">{regionId}</span>}
+    <div className="cluster logs-controls">
+      <Tabs label="Direction" value={direction} onValueChange={value => onDirection(value as LogDirection)} disabled={locked} items={directions} />
+      <Tabs label="Time range" value={range} onValueChange={value => onRange(value as TimeRange)} items={logRanges} />
+    </div>
+  </div>
 }
 // Everything that decides the rows is in the URL (view, q, status, stream, page), so Back from an email, a reload or a
 // shared link shows the same page of the same list. Filters replace the entry instead of adding one per keystroke.
@@ -114,11 +118,11 @@ function Logs({ regionId, campaignId }: { regionId: string; campaignId?: string 
   // An export is the rows on screen for the filters shown: while the next filter's rows load, the previous rows stay up
   // but can't be exported, and neither can rows while the search box holds text the list hasn't searched for yet.
   const exportable = !authorizationLost && Boolean(query.data?.items.length) && !query.isPlaceholderData && draft.trim() === searched
-  return <div className="logs-page"><LogsHeader regionId={campaign.data?.regionId ?? regionId} direction={direction} onDirection={setDirection} locked={Boolean(campaignId)} range={range} onRange={value => update({ range: value === '30d' ? null : value })} />
-    <div className="data-toolbar"><div className="cluster">{campaignId && <Button variant="secondary" aria-label={`Remove campaign filter: ${campaign.data?.name ?? campaignId}`} onClick={clearCampaign} title={campaign.data?.name}><span className="logs-campaign-chip">Campaign: {campaign.data?.name ?? campaignId}</span><X size={14} aria-hidden /></Button>}<div className="search-box"><Search size={16} /><Input type="search" aria-label="Search logs" placeholder="Search logs" maxLength={200} value={draft} onChange={event => type(event.target.value)} /></div>
+  return <div className="logs-page"><div className="logs-bar"><LogsHeader regionId={campaign.data?.regionId ?? regionId} direction={direction} onDirection={setDirection} locked={Boolean(campaignId)} range={range} onRange={value => update({ range: value === '30d' ? null : value })} />
+    <div className="logs-bar__tools">{campaignId && <Button variant="secondary" size="sm" aria-label={`Remove campaign filter: ${campaign.data?.name ?? campaignId}`} onClick={clearCampaign} title={campaign.data?.name}><span className="logs-campaign-chip">Campaign: {campaign.data?.name ?? campaignId}</span><Icon icon={X} size="sm" /></Button>}<div className="search-box logs-search"><Icon icon={Search} size="sm" /><Input type="search" aria-label="Search logs" placeholder="Search logs" maxLength={200} value={draft} onChange={event => type(event.target.value)} /><kbd className="ui-kbd" aria-hidden="true">/</kbd></div>
       <Select className="logs-filter" aria-label="Email status" value={visibleStatus} onValueChange={setStatus} options={['all', ...visibleStatuses].map(value => ({ ...option(value), disabled: !withStream(value, stream) }))} />
-      <Select className="logs-filter" aria-label="Email stream filter" value={stream} disabled={receivedOnly} onValueChange={value => update({ stream: value })} options={streams} /></div>
-      <Button className="logs-export" aria-label="Export this page as CSV" title="Download the rows on this page as a CSV file" disabled={!exportable} onClick={() => downloadCsv(campaignId ? `nightmail-${campaignId}-logs-page.csv` : 'nightmail-logs-page.csv', logCsvRows(query.data?.items ?? [], !multiTenant))}><Download size={16} /><span>Export CSV</span></Button>
+      <Select className="logs-filter" aria-label="Email stream filter" value={stream} disabled={receivedOnly} onValueChange={value => update({ stream: value })} options={streams} />
+      <Button className="logs-export" aria-label="Export this page as CSV" title="Download the rows on this page as a CSV file" disabled={!exportable} onClick={() => downloadCsv(campaignId ? `nightmail-${campaignId}-logs-page.csv` : 'nightmail-logs-page.csv', logCsvRows(query.data?.items ?? [], !multiTenant))}><Icon icon={Download} /><span>Export</span></Button></div>
     </div>
     {query.isError ? <ErrorState error={query.error} onRetry={() => query.refetch()} /> : <LogsBody counts={cut?.counts} asOf={cut?.asOf} from={cut?.from} viewKey={authorizationLost ? `denied:${view}` : view} filters={filters} blank={blank}>
       <DataTable<LogEntry> className="logs-table" tableRef={tableRef} loading={authorizationLost || query.isPending || (campaignOnly && campaign.isPending)} skeletonRows={pageSize} minRows={pageSize} rows={authorizationLost ? [] : query.data?.items ?? []} rowKey={row => `${query.isPlaceholderData ? 'previous:' : ''}${row.direction}:${row.id}`} rowHref={logHref} rowLabel={logRowLabel} onRowIntent={rowIntent} columns={scheduled.columns(logsViewColumns(direction))}

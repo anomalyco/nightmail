@@ -6,7 +6,7 @@ import { reserveMemory, runInMemoryScope, type MemoryLease } from './isolate-mem
 import { IMPORT_PREVIEW_RATE_PER_MINUTE, importPreviewReservationBytes } from './audience.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { getPath } from 'hono/utils/url';
-import { actor, budgetExhausted, mailboxRoute, memberRefused, receivingConsentRoute, unrestrictedRoute, ApiError, apiFailureBody, describeApiFailure, denied, requiredHeader, requiredHeaderValue, requiredOf, unrestrictedRequired, databaseCodeOf, errorCodeOf, id, lazyModule, log, logError, ModuleLoadError, newRequestId, secureResponse, SECURITY_HEADERS, timed, wrapModuleLoad } from './core.js';
+import { actor, agentSetupRefusal, budgetExhausted, mailboxRoute, memberRefused, receivingConsentRoute, unrestrictedRoute, ApiError, apiFailureBody, describeApiFailure, denied, requiredHeader, requiredHeaderValue, requiredOf, unrestrictedRequired, databaseCodeOf, errorCodeOf, id, lazyModule, log, logError, ModuleLoadError, newRequestId, secureResponse, SECURITY_HEADERS, timed, wrapModuleLoad } from './core.js';
 import type { App, Runtime } from './core.js';
 import type { AppEnv, Ctx } from './core.js';
 import { authenticate, registerAuth, requireReceivingConsent } from './auth.js';
@@ -17,7 +17,7 @@ import { SLOW_REQUEST_MS } from './log.js';
 import { authenticatedCreates } from './idempotency.js';
 import { addresses, clientIpHeader, headerPrefix, healthService, productName, requestHeaderNames } from './brand.js';
 
-type RouteGroup = 'analytics' | 'disk-alert' | 'auth-ui' | 'mcp' | 'auth' | 'operator' | 'support' | 'audience' | 'audience-query' | 'newsletters' | 'templates' | 'sending-emails' | 'sending-other' | 'ops-domains' | 'ops-events' | 'ops-other' | 'ses-regions' | 'mailbox' | 'workspaces' | 'provider-connections' | 'public-stats' | 'overview' | 'billing';
+type RouteGroup = 'analytics' | 'disk-alert' | 'auth-ui' | 'mcp' | 'auth' | 'agent-setup' | 'operator' | 'support' | 'audience' | 'audience-query' | 'newsletters' | 'templates' | 'sending-emails' | 'sending-other' | 'ops-domains' | 'ops-events' | 'ops-other' | 'ses-regions' | 'mailbox' | 'workspaces' | 'provider-connections' | 'public-stats' | 'overview' | 'billing';
 // Internal areas: /v1/operator/* answers only Nightmail operators and /v1/support/* only support grants (src/support.ts).
 const operatorPath = (pathname: string) => pathname === '/v1/operator' || pathname.startsWith('/v1/operator/');
 const supportPath = (pathname: string) => pathname === '/v1/support' || pathname.startsWith('/v1/support/');
@@ -34,6 +34,7 @@ function routeGroupFor(pathname: string): RouteGroup | null {
   if (pathname === '/v1/me' || pathname.startsWith('/v1/mcp-connections/') || pathname === '/v1/agents' || pathname.startsWith('/v1/agents/') || pathname === '/api/auth' || pathname.startsWith('/api/auth/') || pathname.startsWith('/.well-known/') || pathname === '/mcp/login' || pathname === '/mcp/consent') return 'auth-ui';
   if (pathname === '/mcp' || pathname.startsWith('/mcp/')) return 'mcp';
   if (pathname === '/v1/api-keys' || pathname.startsWith('/v1/api-keys/') || pathname === '/v1/agent-tokens' || pathname.startsWith('/v1/agent-tokens/')) return 'auth';
+  if (pathname.startsWith('/v1/agent/')) return 'agent-setup';
   if (snsIngress(pathname)) return 'ops-events';
   if (pathname === '/v1/domains' || pathname.startsWith('/v1/domains/')) return 'ops-domains';
   if (/^\/v1\/(?:settings|webhooks|metrics|sender-score|usage)(?:\/|$)/.test(pathname) || pathname === '/unsubscribe' || pathname.startsWith('/unsubscribe/')) return 'ops-other';
@@ -72,6 +73,7 @@ function loadGroupRegistrar(group: Exclude<RouteGroup, 'mcp'>): Promise<(app: Ap
       case 'analytics': return (await import('./analytics.js')).registerAnalytics;
       case 'disk-alert': return (await import('./disk-alert.js')).registerDiskAlert;
       case 'auth': return registerAuth;
+      case 'agent-setup': return (await import('./agent-setup.js')).registerAgentSetup;
       case 'auth-ui': {
         const [{ registerMcpAuth }, { registerDashboardAuth }] = await Promise.all([import('./mcp-auth.js'), import('./dashboard-auth.js')]);
         return (target: App) => { registerMcpAuth(target); registerDashboardAuth(target); };
@@ -222,6 +224,8 @@ function createShell(loadDocs: () => Promise<{ doc: Record<string, any>; createL
     // A UI note's screenshot link is its own short-lived credential (src/ui-notes.ts), as is a stored preview's (src/preview-images.ts).
     if (['GET', 'HEAD'].includes(c.req.method) && /^\/v1\/preview-images\/[^/]+$/.test(c.req.path)) return next();
     if (c.req.method === 'GET' && /^\/v1\/ui-notes\/screenshots\/[^/]+$/.test(c.req.path)) return next();
+    // An agent's setup token and device code are its credentials (src/agent-setup.ts); the routes check them themselves.
+    if (c.req.method === 'POST' && /^\/v1\/agent\/(?:setup|device|device\/token)$/.test(c.req.path)) return next();
     // The homepage's installation-wide aggregates, and whether sign-ups are open, are public; neither returns anything
     // workspace-scoped.
     if (c.req.path === '/v1/public/stats' || c.req.path === '/v1/public/signups') return next();
@@ -295,6 +299,7 @@ function createShell(loadDocs: () => Promise<{ doc: Record<string, any>; createL
       ? 'Campaign audience and delivery operations require an unrestricted credential.' : 'Workspace-wide operations require a key without domain restrictions.', requiredOf(c));
     return next();
   });
+  app.use('/v1/*', (c, next) => { const refusal = agentSetupRefusal(c.get('actor'), c.req.path, c.req.method); if (refusal) throw refusal; return next(); });
   // Path guards are shared with the MCP listing (core.ts). Mailbox paths check receiving consent after mailboxAuth.
   app.use('/v1/*', (c, next) => receivingConsentRoute(c.req.path) && !mailboxRoute(c.req.path) ? requireReceivingConsent(c, next) : next());
   // Idempotency-Key on every create that does not handle it itself (inbound paths register their own after inbox auth).
@@ -380,8 +385,8 @@ export async function createOpenApiApp(): Promise<App> {
     import('./mailbox.js'), import('./workspaces.js'), import('./provider-connections.js'), import('./mcp.js'), import('./public-stats.js'), import('./overview-setup.js'), import('./operator.js'),
     import('./audit.js'), import('./support.js'), import('./support-conversations.js'), import('./support-inbox.js'), import('./ui-notes.js'),
   ]));
-  const [{ registerBilling }, { registerStripeWebhook }, { registerNewsletters }] = await wrapModuleLoad(() => Promise.all([import('./billing/routes.js'), import('./billing/stripe-webhook.js'), import('./newsletters.js')]));
-  registerMcpAuth(full); registerDashboardAuth(full); registerAuth(full); registerAudience(full); registerAudienceQuery(full); registerNewsletters(full);
+  const [{ registerBilling }, { registerStripeWebhook }, { registerNewsletters }, { registerAgentSetup }] = await wrapModuleLoad(() => Promise.all([import('./billing/routes.js'), import('./billing/stripe-webhook.js'), import('./newsletters.js'), import('./agent-setup.js')]));
+  registerMcpAuth(full); registerDashboardAuth(full); registerAuth(full); registerAgentSetup(full); registerAudience(full); registerAudienceQuery(full); registerNewsletters(full);
   registerTemplates(full); registerSending(full); registerOperations(full); registerSesRegions(full); registerMailbox(full);
   registerWorkspaces(full); registerProviderConnections(full); registerMcp(full); registerPublicStats(full); registerOverviewSetup(full); registerOperator(full);
   registerAudit(full); registerSupport(full); registerSupportOperator(full); registerSupportConversations(full); registerSupportInbox(full); registerUiNotes(full);

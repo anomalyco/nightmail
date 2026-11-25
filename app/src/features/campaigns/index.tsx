@@ -13,10 +13,11 @@ import { PostalAddressDialog } from '../../components/PostalAddress'
 import { newsletterPath, useNewsletterOf, useShowNewsletter } from '../newsletters/shared'
 import {
   Button, Checkbox, ConfirmDialog, Dialog, DropdownMenu, EmptyState, ErrorState,
-  Field, IconButton, Input, PageHeader, SectionHeader, Select, SkeletonText,
+  Field, Icon, IconButton, Input, PageHeader, SectionHeader, Select, SkeletonText,
   StatusBadge, Tabs, useToast,
 } from '../../components/ui'
 import { EmailPreview } from '../../components/EmailPreview'
+import { Notices } from '../../components/Notices'
 import { Checks, checksCount, checksSummary, LOW_SENDABILITY } from '../../components/EmailInsight'
 import { date, label, number, percent } from '../../lib/format'
 import { CampaignAudienceSkeleton, CampaignRouteSkeleton } from './skeletons'
@@ -40,7 +41,7 @@ import { composerLoading, invalidSender } from './copy'
 import { AddressList, PrivateAddress } from '../../components/PrivateAddress'
 import { localLabel, parseUtc, ScheduleField, scheduleError, utcLabel } from '../../components/ScheduleField'
 import { useSingleFlight } from '../../lib/single-flight'
-import { usePhone } from '../../lib/media'
+import { modKey, usePhone } from '../../lib/media'
 import { useLeaveGuard } from '../../lib/leave-guard'
 import { emailIsValid, replyToAddresses, replyToError } from './reply-to'
 import { mergeCampaign, mergeFieldsText, type MergeField } from './merge'
@@ -418,18 +419,32 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
   const senderDetailsOpen = senderOpen || Boolean(senderValidation)
   const toggleSender = () => { const next = !senderOpen; setSenderOpen(next); if (next) requestAnimationFrame(() => document.getElementById('campaign-reply-to')?.focus({ preventScroll: true })) }
   const review = () => void save('review')
+  // ⌘↩ (Ctrl+Enter) continues to Review whenever Continue could, from anywhere in the studio, the email included: it is
+  // read before the editor's own Mod-Enter (a line break), which Shift+Enter still makes.
+  const blocked = saveDisabled || pending || autosavePaused
+  const continueKey = useRef<(() => void) | undefined>(undefined)
+  continueKey.current = blocked ? undefined : review
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey) || event.shiftKey || event.altKey || event.isComposing || document.querySelector('[role="dialog"], [role="alertdialog"]')) return
+      event.preventDefault(); event.stopPropagation()
+      if (!event.repeat) continueKey.current?.()
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [])
   return <div className="campaign-compose-page campaign-studio">
-    <CampaignBar back={issueOf ? newsletterPath(issueOf.id) : undefined} title={<>
+    <CampaignBar back={issueOf ? newsletterPath(issueOf.id) : undefined} crumb={issueOf?.name ?? 'Campaigns'} title={<>
       <h1 className="sr-only">{issueOf ? accepted ? 'Edit issue' : 'New issue' : accepted ? 'Edit campaign' : 'Create campaign'}</h1>
       <Input id="campaign-name" className="studio-name" aria-label={issueOf ? 'Issue name' : 'Campaign name'} placeholder={issueOf ? 'Untitled issue' : 'Untitled campaign'} value={form.name} onChange={event => change('name', event.target.value)} required disabled={controlsDisabled} />
-    </>} steps={<CampaignSteps step="write" onReview={saveDisabled || pending || autosavePaused ? undefined : review} />} actions={<>
+    </>} status={<StatusBadge status={accepted?.status ?? 'draft'} tone={accepted?.status === 'failed' ? 'danger' : 'neutral'} />} steps={<CampaignSteps step="write" onReview={blocked ? undefined : review} />} actions={<>
       <CampaignPresence present={present} room />
       {!phone && <div className="campaign-sync-status" role="status" data-state={syncState} data-actionable={syncActionable || undefined} title={syncTitle}>
         <span className="campaign-sync-dot" aria-hidden="true" />
         {syncActionable ? <Button variant="ghost" size="sm" disabled={pending} onClick={syncAction}>{syncLabel}</Button> : <span>{syncLabel}</span>}
       </div>}
       {phone ? <>
-        <Button variant="primary" disabled={saveDisabled || pending || autosavePaused} loading={preparing} onClick={review}>Continue</Button>
+        <Button variant="primary" disabled={blocked} loading={preparing} onClick={review}>Continue</Button>
         <DropdownMenu label="More actions" trigger={<IconButton label={syncActionable ? `More actions. ${syncLabel}` : 'More actions'} className="campaign-menu-trigger" data-state={syncActionable ? syncState : undefined}><MoreHorizontal size={16} /></IconButton>} items={[
           ...(syncActionable ? [{ label: `${syncLabel} · ${remote ? 'Choose' : error && !autosavePaused ? 'Details' : 'Retry'}`, hint: syncTitle, disabled: pending, onSelect: syncAction }] : []),
           // A new draft offers a template; once it has saved (named), a test send.
@@ -437,28 +452,29 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
         ]} />
       </> : <>
         {!accepted && <Button variant="ghost" disabled={pending} onClick={() => setTemplatesOpen(true)}>Use a template</Button>}
-        <Button variant="secondary" disabled={!accepted || saveDisabled || pending || autosavePaused} title={!accepted ? `Name the ${thing} first` : undefined} onClick={() => save('test')}>Send test</Button>
-        <Button variant="primary" disabled={saveDisabled || pending || autosavePaused} loading={preparing} onClick={review} data-analytics="campaigns/review">Continue</Button>
+        <Button variant="secondary" disabled={!accepted || blocked} title={!accepted ? `Name the ${thing} first` : undefined} onClick={() => save('test')}>Send test</Button>
+        <Button variant="primary" disabled={blocked} loading={preparing} onClick={review} aria-keyshortcuts="Meta+Enter Control+Enter" data-analytics="campaigns/review">Continue<kbd className="ui-kbd" aria-hidden="true">{modKey}↩</kbd></Button>
       </>}
     </>} />
     {options.isError && <ErrorState error={options.error} onRetry={() => options.refetch()} />}
     <PresenceOverlay room={room} />
     <section className="campaign-compose-workspace" aria-label={issueOf ? 'Issue composer' : 'Campaign composer'}>
       <div className="campaign-compose-scroll">
+        <div className="studio-notices"><Notices /></div>
         <div className="campaign-compose-sheet">
           <div className="campaign-compose-metadata">
-            <div className="campaign-compose-row campaign-compose-sender"><label htmlFor="campaign-from-email">From</label><CampaignSenderInput key={`${generation}.${rebased.sender}`} name={form.fromName} email={form.fromEmail} domains={choices.domains.map(domain => domain.name)} disabled={controlsDisabled || options.isPending} onChange={({name, email}) => {const domain = email.split('@')[1]?.toLowerCase(); const supports = (parent: string) => domain === parent || domain?.endsWith(`.${parent}`); const match = choices.domains.find(item => supports(item.name) && item.regionId === formRef.current.regionId) ?? choices.domains.find(item => supports(item.name)); if (name !== formRef.current.fromName || email !== formRef.current.fromEmail || (match && match.regionId !== formRef.current.regionId)) updateForm({...formRef.current, fromName: name, fromEmail: email, ...(match ? {regionId: match.regionId} : {})}); markDirty()}} /><Button variant="ghost" size="sm" className="campaign-sender-toggle" aria-expanded={senderDetailsOpen} aria-controls="campaign-sender-details" onClick={toggleSender}>Reply to<ChevronRight size={14} aria-hidden="true" /></Button></div>
+            <div className="campaign-compose-row campaign-compose-sender"><label htmlFor="campaign-from-email">From</label><CampaignSenderInput key={`${generation}.${rebased.sender}`} name={form.fromName} email={form.fromEmail} domains={choices.domains.map(domain => domain.name)} disabled={controlsDisabled || options.isPending} onChange={({name, email}) => {const domain = email.split('@')[1]?.toLowerCase(); const supports = (parent: string) => domain === parent || domain?.endsWith(`.${parent}`); const match = choices.domains.find(item => supports(item.name) && item.regionId === formRef.current.regionId) ?? choices.domains.find(item => supports(item.name)); if (name !== formRef.current.fromName || email !== formRef.current.fromEmail || (match && match.regionId !== formRef.current.regionId)) updateForm({...formRef.current, fromName: name, fromEmail: email, ...(match ? {regionId: match.regionId} : {})}); markDirty()}} /><Button variant="ghost" size="sm" className="campaign-sender-toggle" aria-expanded={senderDetailsOpen} aria-controls="campaign-sender-details" onClick={toggleSender}>Reply-To<Icon icon={ChevronRight} size="sm" /></Button></div>
             <div id="campaign-sender-details" className="campaign-compose-preview" data-open={senderDetailsOpen || undefined} aria-hidden={!senderDetailsOpen} inert={!senderDetailsOpen}>
               <div>
-                <div className="campaign-compose-row"><label htmlFor="campaign-reply-to">Reply to</label><Input id="campaign-reply-to" type="text" inputMode="email" autoCapitalize="none" spellCheck={false} placeholder="reply@example.com" value={replyToText} aria-invalid={Boolean(replyToValidation) || undefined} aria-describedby={replyToValidation ? 'campaign-reply-to-error' : undefined} onChange={event => { const value = event.target.value; setReplyToText(value); setReplyToLeft(false); updateForm({...formRef.current, replyTo: replyToAddresses(value)}); markDirty() }} onBlur={() => setReplyToLeft(true)} disabled={controlsDisabled} /></div>
+                <div className="campaign-compose-row"><label htmlFor="campaign-reply-to">Reply-To</label><Input id="campaign-reply-to" type="text" inputMode="email" autoCapitalize="none" spellCheck={false} placeholder="reply@example.com" value={replyToText} aria-invalid={Boolean(replyToValidation) || undefined} aria-describedby={replyToValidation ? 'campaign-reply-to-error' : undefined} onChange={event => { const value = event.target.value; setReplyToText(value); setReplyToLeft(false); updateForm({...formRef.current, replyTo: replyToAddresses(value)}); markDirty() }} onBlur={() => setReplyToLeft(true)} disabled={controlsDisabled} /></div>
                 {replyToValidation && <div id="campaign-reply-to-error" className="campaign-compose-feedback ui-field__error" role="alert">{replyToValidation}</div>}
               </div>
             </div>
             {(domainCursor || choices.next) && <div className="campaign-compose-feedback cluster"><Button onClick={() => setDomainCursor(undefined)}>First domains</Button><Button disabled={!choices.next} onClick={() => setDomainCursor(choices.next ?? undefined)}>More domains</Button></div>}
             {!options.isPending && choices.domains.length === 0 && <div className="campaign-compose-feedback campaign-note" data-tone="warning"><span>No verified domains on this page · <Link to="/domains">Add a domain</Link></span></div>}
-            <div className="campaign-compose-row campaign-compose-subject"><label htmlFor="campaign-subject">Subject</label><Input id="campaign-subject" placeholder="Add a subject" value={form.subject} onChange={event => change('subject', event.target.value)} disabled={controlsDisabled} /><Button className="campaign-preview-toggle" variant="ghost" size="sm" disabled={controlsDisabled} aria-expanded={previewOpen} aria-controls="campaign-preview-row" onClick={() => {setPreviewOpen(!previewOpen); if (!previewOpen) requestAnimationFrame(() => previewInput.current?.focus({preventScroll: true}))}}>Inbox preview</Button></div>
+            <div className="campaign-compose-row campaign-compose-subject"><label htmlFor="campaign-subject">Subject</label><Input id="campaign-subject" placeholder="Add a subject" value={form.subject} onChange={event => change('subject', event.target.value)} disabled={controlsDisabled} /><Button className="campaign-preview-toggle" variant="ghost" size="sm" disabled={controlsDisabled} aria-expanded={previewOpen} aria-controls="campaign-preview-row" onClick={() => {setPreviewOpen(!previewOpen); if (!previewOpen) requestAnimationFrame(() => previewInput.current?.focus({preventScroll: true}))}}>Preview text</Button></div>
             <div id="campaign-preview-row" className="campaign-compose-preview" data-open={previewOpen || undefined} aria-hidden={!previewOpen} inert={!previewOpen}>
-              <div><div className="campaign-compose-row"><label htmlFor="campaign-preview">Inbox preview</label><Input ref={previewInput} id="campaign-preview" maxLength={200} placeholder="Shown after the subject" value={form.previewText} onChange={event => change('previewText', event.target.value)} disabled={controlsDisabled} /></div></div>
+              <div><div className="campaign-compose-row"><label htmlFor="campaign-preview">Preview</label><Input ref={previewInput} id="campaign-preview" aria-label="Preview text" maxLength={200} placeholder="Shown after the subject" value={form.previewText} onChange={event => change('previewText', event.target.value)} disabled={controlsDisabled} /></div></div>
             </div>
           </div>
           <ChunkFallback.Provider value={<ComposerSkeleton />}><EmailComposer key={`${generation}.${rebased.body}`} ref={composer} personalize attachmentIds={form.attachments ?? []} knownAttachmentIds={[...seenAttachments.current]} initialHtml={form.html} disabled={controlsDisabled} onReady={handleComposerReady} onDirty={handleComposerDirty} onBusy={value => {busyRef.current = value || attachmentsBusy || guard.current || loadingLatest; setComposerBusy(value); if (value) markDirty()}} onAttach={() => {markDirty(); attachments.current?.open()}} /></ChunkFallback.Provider>
@@ -1031,7 +1047,7 @@ function CampaignReview({ campaign: latest, stats, settings, stale, refreshing, 
     ...(unreadNote ? [['warning', unreadNote] as ['warning', ReactNode]] : []),
     ...(error ? [['danger', error] as ['danger', ReactNode]] : []),
   ]
-  const bar = <CampaignBar back={campaign.archivedAt ? '/campaigns?archived=true' : issueOf ? newsletterPath(issueOf.id) : '/campaigns'} title={<h1 className="studio-title">{campaign.name}</h1>} steps={draft && <CampaignSteps step="review" writeTo={campaignRoute(campaign, 'edit')} />} actions={<><CampaignPresence present={present} room={draft} />{stale && <span className="campaign-note" data-tone="warning" title="Showing the last available counts.">Couldn’t refresh</span>}{!campaignEditable(campaign) && !finished && sentSomething && <Link className="ui-button ui-button--secondary ui-button--md" to={`/logs?campaign=${encodeURIComponent(campaign.id)}`}>View logs</Link>}<StatusBadge status={campaignDisplayStatus(campaign)} />{campaign.archivedAt && <CampaignArchiveButton campaign={campaign} />}</>} />
+  const bar = <CampaignBar back={campaign.archivedAt ? '/campaigns?archived=true' : issueOf ? newsletterPath(issueOf.id) : '/campaigns'} crumb={issueOf?.name ?? 'Campaigns'} title={<h1 className="studio-title">{campaign.name}</h1>} steps={draft && <CampaignSteps step="review" writeTo={campaignRoute(campaign, 'edit')} />} actions={<><CampaignPresence present={present} room={draft} />{stale && <span className="campaign-note" data-tone="warning" title="Showing the last available counts.">Couldn’t refresh</span>}{!campaignEditable(campaign) && !finished && sentSomething && <Link className="ui-button ui-button--secondary ui-button--md" to={`/logs?campaign=${encodeURIComponent(campaign.id)}`}>View logs</Link>}<StatusBadge status={campaignDisplayStatus(campaign)} />{campaign.archivedAt && <CampaignArchiveButton campaign={campaign} />}</>} />
   const dialogs = <>
     <ConfirmDialog open={confirmation !== null} onOpenChange={open => { if (!open && !sendMutation.isPending) setConfirmation(null) }} title={confirmation?.mode === 'schedule' ? `Schedule this ${thing}?` : `Send this ${thing} now?`} description={confirmation?.mode === 'schedule' ? `Send “${campaign.name}”${origin} to ${recipients}${audienceName} on ${utcLabel(confirmation.scheduledAt!)} (${localLabel(confirmation.scheduledAt!)}).${paceSummary(confirmation)}${cost}${noticeNote}${scoreNote} You can change this until sending starts.` : `Send “${campaign.name}”${origin} to ${recipients}${audienceName} now.${paceSummary(confirmation)}${cost}${noticeNote || ' Consent is checked again as each email sends.'}${scoreNote} You can’t undo this.`} confirmLabel={confirmation?.mode === 'schedule' ? 'Schedule' : 'Send now'} onConfirm={confirmSend} pending={sendMutation.isPending} />
     {draft && testOpen && <TestEmailDialog campaign={campaign} open={testOpen} onOpenChange={setTestOpen} />}

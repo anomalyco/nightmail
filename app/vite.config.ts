@@ -123,7 +123,9 @@ const inlineScriptsKept = (): Plugin => ({
 })
 
 export default defineConfig({
-  define: { __NIGHTMAIL_BUILD__: JSON.stringify(buildSha) },
+  // VITE_DESIGN_SHEET is always a literal, set or not, so a build without it folds the design sheet's gate to false and
+  // drops its chunk (src/lib/design-sheet.ts).
+  define: { __NIGHTMAIL_BUILD__: JSON.stringify(buildSha), 'import.meta.env.VITE_DESIGN_SHEET': JSON.stringify(process.env.VITE_DESIGN_SHEET ?? '') },
   // (The homepage's station kit is inlined whatever its size: it is one lazily loaded stylesheet, features/home/machines.tsx.)
   build: { assetsInlineLimit: file => file.includes('/features/home/kit/') || undefined, rolldownOptions: { input: { index: fileURLToPath(new URL('./index.html', import.meta.url)) } } },
   plugins: [slimReactEmail, legalMarkdown, react(), fileHeaders(), publicOrigin, brandedBootScript(), publicBeacon, homeShell(), pricePages(), inlineScriptsKept()],

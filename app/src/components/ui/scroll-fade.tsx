@@ -67,45 +67,26 @@ export function watchScrollFades(root: HTMLElement = document.body) {
   })
   observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['class'] })
   document.addEventListener('focusin', revealFocus)
-  document.addEventListener('focusout', releaseClippedFocus)
-  return () => { observer.disconnect(); document.removeEventListener('focusin', revealFocus); document.removeEventListener('focusout', releaseClippedFocus); cancelAnimationFrame(frame); for (const { stop } of tracked.values()) stop(); tracked.clear() }
+  return () => { observer.disconnect(); document.removeEventListener('focusin', revealFocus); cancelAnimationFrame(frame); for (const { stop } of tracked.values()) stop(); tracked.clear() }
 }
 
-// Keyboard focus lands with its whole ring in view. Chrome leaves a control that is already partly visible where it is
-// (the last tab of a sideways rail, a field half below the fold), so it is scrolled the rest of the way, nearest edge
-// first; the area's scroll-padding keeps it clear of the edge, the fade and the ring. A control that a text clip cuts
-// (an address past a cell's ellipsis) can't be scrolled into view, so its ring moves to that clip (data-focus-clipped).
+// Keyboard focus lands in view. Chrome leaves a control that is already partly visible where it is (the last tab of a
+// sideways rail, a field half below the fold), so it is scrolled the rest of the way, nearest edge first; the area's
+// scroll-padding keeps it clear of the edge and the fade.
 function revealFocus(event: FocusEvent) {
   const el = event.target
   if (!(el instanceof HTMLElement)) return
   requestAnimationFrame(() => {
     if (document.activeElement !== el || !el.matches(':focus-visible')) return
-    // The ring is the control's own outline, or a row's or card's drawn around it (:has(:focus-visible)).
-    let ring: HTMLElement = el
-    for (let n: HTMLElement | null = el, depth = 0; n && depth < 5; n = n.parentElement, depth++) {
-      const style = getComputedStyle(n)
-      if (style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0) { ring = n; break }
-    }
-    const style = getComputedStyle(ring), reach = Math.max(0, parseFloat(style.outlineWidth) + parseFloat(style.outlineOffset) || 0)
-    const r = ring.getBoundingClientRect()
-    const outside = (c: { left: number; top: number; right: number; bottom: number }) => r.left - reach < c.left - .5 || r.top - reach < c.top - .5 || r.right + reach > c.right + .5 || r.bottom + reach > c.bottom + .5
+    const r = el.getBoundingClientRect()
+    const outside = (c: { left: number; top: number; right: number; bottom: number }) => r.left < c.left - .5 || r.top < c.top - .5 || r.right > c.right + .5 || r.bottom > c.bottom + .5
     let hidden = outside({ left: 0, top: 0, right: innerWidth, bottom: innerHeight })
-    for (let n = ring.parentElement; n && !hidden; n = n.parentElement) {
+    for (let n = el.parentElement; n && !hidden; n = n.parentElement) {
       const s = getComputedStyle(n)
       if (!/auto|scroll/.test(s.overflowX + s.overflowY)) continue
       const c = n.getBoundingClientRect()
       hidden = outside({ left: c.left + n.clientLeft, top: c.top + n.clientTop, right: c.left + n.clientLeft + n.clientWidth, bottom: c.top + n.clientTop + n.clientHeight })
     }
-    if (hidden) ring.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-    // The control itself, not just its ring, cut by a clip on an axis that clips.
-    const after = ring.getBoundingClientRect()
-    for (let n = ring.parentElement; n && n !== document.body; n = n.parentElement) {
-      const s = getComputedStyle(n), x = /hidden|clip/.test(s.overflowX), y = /hidden|clip/.test(s.overflowY)
-      if (!x && !y) continue
-      const c = n.getBoundingClientRect()
-      if (x && (after.left < c.left - .5 || after.right > c.right + .5) || y && (after.top < c.top - .5 || after.bottom > c.bottom + .5)) { n.setAttribute('data-focus-clipped', ''); return }
-    }
+    if (hidden) el.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   })
 }
-
-function releaseClippedFocus() { for (const el of document.querySelectorAll('[data-focus-clipped]')) el.removeAttribute('data-focus-clipped') }

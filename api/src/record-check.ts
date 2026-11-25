@@ -35,6 +35,36 @@ function compare(record: CheckedRecord, values: string[]): Omit<PublicDns, 'chec
   return relevant.some(matches) ? { state: 'found', values: [] } : relevant.length ? { state: 'wrong_value', values: shown } : { state: 'missing', values: [] };
 }
 
+// Where a domain's DNS is hosted, from its zone's NS records, so the dashboard and the setup reminder can say where to add
+// the records and link that provider's DNS page. Only providers whose nameservers are theirs alone; any other is null.
+export type DnsHost = { name: string; zone: string; url: string | null };
+const PROVIDERS: [RegExp, string, ((zone: string) => string) | null][] = [
+  [/\.ns\.cloudflare\.com$/, 'Cloudflare', zone => `https://dash.cloudflare.com/?to=/:account/${zone}/dns/records`],
+  [/\.vercel-dns\.com$/, 'Vercel', () => 'https://vercel.com/dashboard/domains'],
+  [/\.awsdns-\d+\.(?:com|net|org|co\.uk)$/, 'Route 53', () => 'https://console.aws.amazon.com/route53/v2/hostedzones'],
+  [/\.domaincontrol\.com$/, 'GoDaddy', zone => `https://dcc.godaddy.com/control/portfolio/${zone}/settings?tab=dns`],
+  [/\.registrar-servers\.com$/, 'Namecheap', zone => `https://ap.www.namecheap.com/Domains/DomainControlPanel/${zone}/advancedns`],
+  [/\.digitalocean\.com$/, 'DigitalOcean', zone => `https://cloud.digitalocean.com/networking/domains/${zone}`],
+  [/\.ui-dns\.(?:com|de|org|biz)$/, 'IONOS', null], [/\.porkbun\.com$/, 'Porkbun', null], [/\.hover\.com$/, 'Hover', null],
+  [/\.gandi\.net$/, 'Gandi', null], [/\.ovh\.net$/, 'OVHcloud', null], [/\.hetzner\.(?:com|de)$/, 'Hetzner', null],
+  [/\.azure-dns\.(?:com|net|org|info)$/, 'Azure DNS', null], [/\.dnsimple\.com$/, 'DNSimple', null], [/\.name\.com$/, 'Name.com', null],
+];
+const HOST_TTL_MS = 30 * 60_000;
+const hostCache = new Map<string, { at: number; host: DnsHost | null }>();
+/** The provider that answers for `name`'s zone: the NS records at the name, or at the zone its SOA names. Null when unknown. */
+export async function dnsHost(name: string, signal: AbortSignal): Promise<DnsHost | null> {
+  const key = fqdn(name), hit = hostCache.get(key);
+  if (hit && Date.now() - hit.at < HOST_TTL_MS) return hit.host;
+  let zone = key, answer = await dns(zone, 'NS', signal);
+  const soa = answer.values.length ? '' : fqdn(answer.authority.find(r => r.type === 6)?.name ?? '');
+  if (soa.includes('.') && key.endsWith(`.${soa}`)) { zone = soa; answer = await dns(zone, 'NS', signal); }
+  const servers = answer.values.map(fqdn), found = PROVIDERS.find(([pattern]) => servers.length > 0 && servers.every(server => pattern.test(server)));
+  const host = found ? { name: found[1], zone, url: found[2]?.(zone) ?? null } : null;
+  hostCache.delete(key); hostCache.set(key, { at: Date.now(), host });
+  while (hostCache.size > MAX_ENTRIES) hostCache.delete(hostCache.keys().next().value!);
+  return host;
+}
+
 /** Adds publicDns to every pending sending and MAIL FROM record (DMARC is a recommendation; receiving has its own MX check). */
 export async function withPublicDns<T extends { dns: CheckedRecord[] }>(report: T): Promise<T> {
   const signal = AbortSignal.timeout(BUDGET_MS), checkedAt = new Date().toISOString();
@@ -44,4 +74,17 @@ export async function withPublicDns<T extends { dns: CheckedRecord[] }>(report: 
     catch { record.publicDns = null; }
   }));
   return report;
+}
+
+/**
+ * A pending domain's DNS as the background check saw it (domain_claims.setup_check): each pending record's publicDns
+ * and where the zone is hosted. Reads show it until the next check (src/domain-setup.ts), so no read asks DNS itself.
+ */
+export type SetupCheck = { checkedAt: string; host: DnsHost | null; records: { type: string; name: string; value: string; publicDns: PublicDns | null }[] };
+/** withPublicDns and dnsHost together, within the same three seconds: the report gains publicDns, the answer is what to store. */
+export async function checkSetup<T extends { name: string; dns: CheckedRecord[] }>(report: T): Promise<SetupCheck> {
+  // A domain with nothing left to publish needs no host either.
+  const waiting = report.dns.some(r => r.status !== 'verified' && (r.purpose === 'sending' || r.purpose === 'mail_from'));
+  const [, host] = await Promise.all([withPublicDns(report), waiting ? dnsHost(report.name, AbortSignal.timeout(BUDGET_MS)).catch(() => null) : null]);
+  return { checkedAt: new Date().toISOString(), host, records: report.dns.flatMap(r => r.publicDns === undefined ? [] : [{ type: r.type, name: r.name, value: r.value, publicDns: r.publicDns }]) };
 }

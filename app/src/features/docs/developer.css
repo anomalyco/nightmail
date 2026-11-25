@@ -67,15 +67,33 @@
 .connect-agent__open { align-self: flex-start; gap: var(--space-6); }
 .connect-agent__open svg { width: 14px; height: 14px; }
 .connect-agent__who > :last-child:not(:first-child) { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); }
-.connect-agent__agents { margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--color-border-muted); }
-.connect-agent__agent { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); height: 53px; border-bottom: 1px solid var(--color-border-muted); font-size: var(--text-sm); line-height: var(--leading-sm); }
+/* Connected agents: one 53px row each, straight on the dialog's surface. */
+.connect-agent__agents { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.connect-agent__agent { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); height: 53px; font-size: var(--text-sm); line-height: var(--leading-sm); }
 .connect-agent__agent[data-fresh] { animation: ui-appear 240ms ease-out; }
 .connect-agent__who { display: flex; flex-direction: column; min-width: 0; }
 .connect-agent__who > * { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .connect-agent__who a { color: var(--color-text); text-decoration: none; }
-.connect-agent__who a:hover { text-decoration: underline; text-underline-offset: 3px; }
+.connect-agent__who a:is(:hover, :focus-visible) { text-decoration: underline; text-underline-offset: 3px; }
 .connect-agent__done { display: inline-flex; flex-shrink: 0; align-items: center; gap: var(--space-4); color: var(--color-success); }
 .connect-agent__waiting { justify-content: flex-start; gap: var(--space-8); }
 .connect-agent__pulse { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: var(--color-muted); animation: connect-agent-pulse 1.6s ease-in-out infinite; }
 @keyframes connect-agent-pulse { 50% { opacity: .25; } }
 @media (prefers-reduced-motion: reduce) { .connect-agent__pulse, .connect-agent__agent[data-fresh] { animation: none; } }
+/* The agent prompt's setup line (agent-setup.tsx AgentSetupStatus): every state laid out in one cell, so a change never
+   moves what is below it. */
+.agent-setup-status { display: grid; min-width: 0; color: var(--color-muted); font-size: var(--text-sm); line-height: var(--leading-sm); }
+.agent-setup-status > p { grid-area: 1 / 1; display: flex; align-items: flex-start; gap: var(--space-8); min-width: 0; margin: 0; text-wrap: pretty; }
+.agent-setup-status > p:not([data-active]) { visibility: hidden; }
+.agent-setup-status > p[data-state='connected'] { color: var(--color-success); }
+.agent-setup-status > p[data-state='connected'][data-active] { animation: ui-appear 240ms ease-out; }
+.agent-setup-status strong { font-weight: var(--font-weight-bold); }
+.agent-setup-status__mark { display: inline-grid; place-items: center; width: 14px; height: var(--leading-sm); flex-shrink: 0; }
+@media (prefers-reduced-motion: reduce) { .agent-setup-status > p[data-active] { animation: none; } }
+/* Connect an agent's prompt for any coding agent, above the MCP sign-in. */
+.connect-agent__prompt { gap: var(--space-8); padding-bottom: var(--space-24); border-bottom: 1px solid var(--color-border-muted); }
+.connect-agent__prompt-row { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-height: 40px; font-size: var(--text-sm); line-height: var(--leading-sm); }
+.connect-agent__prompt-row[data-pending] { visibility: hidden; }
+.connect-agent__prompt-row > .copy-action { flex-shrink: 0; }
+.connect-agent__prompt-text { display: flex; flex-direction: column; min-width: 0; }
+.connect-agent__prompt-text strong { font-weight: var(--font-weight-bold); }

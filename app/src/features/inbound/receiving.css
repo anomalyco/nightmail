@@ -31,8 +31,8 @@
 .rcv-chain code, .rcv-cell code, .rcv-step code, .addr-path code { font-family: var(--font-mono); font-size: var(--text-sm); }
 .rcv-chain__then { margin-right: var(--space-4); color: var(--color-faint); }
 /* An empty cell's way to fill it reads as a link: the text's colour, underlined. */
-.rcv-add { color: var(--color-text); text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; white-space: nowrap; transition: text-decoration-color var(--motion-duration); }
-.rcv-add:hover { text-decoration-color: currentColor; }
+.rcv-add { color: var(--color-text); text-decoration: underline; text-decoration-color: var(--color-faint); text-underline-offset: 3px; white-space: nowrap; transition: text-decoration-color var(--motion-duration); }
+.rcv-add:is(:hover, :focus-visible) { text-decoration-color: currentColor; }
 
 /* One fixed-height loading block, replaced by the tabs once the one read arrives. */
 .rcv-skeleton { display: grid; gap: var(--space-16); }
@@ -51,28 +51,27 @@
 .rcv-filter:hover { background: var(--color-hover); color: var(--color-text); }
 .rcv-filter:active { transform: scale(.97); }
 .rcv-filter[aria-pressed='true'] { background: var(--color-active-bg); color: var(--color-text); }
-.rcv-filter:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+.rcv-filter:focus-visible:not([aria-pressed='true']) { background: var(--color-hover); color: var(--color-text); }
 /* A tab's own actions, on the right above its table. */
 .rcv-kindline { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-16); min-height: var(--control-height); }
 .rcv-foot { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-16); min-height: var(--control-height); font-family: var(--font-mono); font-size: var(--text-sm); transition: opacity 160ms ease-out; }
 .rcv-foot[data-busy] { opacity: .6; }
 .rcv-foot .ui-pagination { margin: 0; }
 
-/* A new account's three steps. */
-.rcv-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 0; padding: 0; list-style: none; border-top: 1px solid var(--color-border-muted); }
-.rcv-step { display: flex; gap: var(--space-12); padding: var(--space-20) var(--space-20) var(--space-20) 0; }
-.rcv-step + .rcv-step { padding-left: var(--space-20); border-left: 1px solid var(--color-border-muted); }
-.rcv-step__n { display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; border: 1px solid var(--color-border-strong); border-radius: 50%; color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); }
-.rcv-step[data-done] .rcv-step__n { border-color: var(--color-success-border); background: var(--color-success-bg); color: var(--color-success); }
+/* A new account's three steps: columns on the canvas, set apart by 24px alone (their buttons are the only fills). */
+.rcv-steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-24); margin: 0; padding: 0; list-style: none; }
+.rcv-step { display: flex; gap: var(--space-12); }
+.rcv-step__n { display: inline-grid; place-items: center; flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--color-layer-1); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); }
+.rcv-step[data-done] .rcv-step__n { color: var(--color-success); }
 .rcv-step__body { display: grid; align-content: start; justify-items: start; gap: var(--space-8); min-width: 0; }
 .rcv-step__body h3 { margin: 0; font-size: var(--text-md); line-height: 22px; font-weight: var(--font-weight-bold); }
 .rcv-step__body p { margin: 0; font-size: var(--text-sm); line-height: var(--leading-sm); }
-.rcv-steps__aside { grid-column: 1 / -1; padding-top: var(--space-12); border-top: 1px solid var(--color-border-muted); }
+.rcv-steps__aside { grid-column: 1 / -1; }
 
-/* An address's path: Route → Rules → Goes to, each step with its actions. */
-.addr-path { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr); border-block: 1px solid var(--color-border-muted); }
-.addr-step { display: grid; grid-template-rows: auto 1fr auto; align-content: start; gap: var(--space-8); min-width: 0; padding: var(--space-16) var(--space-16) var(--space-16) 0; scroll-margin-top: var(--space-24); }
-.addr-step + .addr-arrow + .addr-step { padding-left: var(--space-16); }
+/* An address's path: Route → Rules → Goes to, each step a column on the canvas with its actions, the arrows' 24px
+   between them: no boxes. */
+.addr-path { display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) auto minmax(0, 1fr); }
+.addr-step { display: grid; grid-template-rows: auto 1fr auto; align-content: start; gap: var(--space-8); min-width: 0; scroll-margin-top: var(--space-24); }
 .addr-arrow { display: grid; place-items: center; width: 24px; color: var(--color-faint); font-family: var(--font-mono); }
 .addr-step h2 { margin: 0; font-size: var(--text-md); line-height: 22px; font-weight: var(--font-weight-bold); }
 .addr-step > p { margin: 0; color: var(--color-muted); font-size: var(--text-sm); line-height: var(--leading-sm); }
@@ -87,14 +86,12 @@
 .addr-step__actions .ui-select-trigger { min-width: 0; width: 180px; }
 .addr-recent { display: grid; margin: 0; padding: 0; list-style: none; }
 .addr-recent a { display: grid; grid-template-columns: minmax(140px, 30%) minmax(0, 1fr) 72px; gap: var(--space-16); align-items: center; min-height: 44px; margin: 0 calc(-1 * var(--space-8)); padding: 0 var(--space-8); border-radius: var(--radius-sm); color: var(--color-text); text-decoration: none; transition: background var(--motion-duration); }
-.addr-recent li + li { border-top: 1px solid var(--color-border-muted); }
-.addr-recent a:hover { background: var(--color-hover); }
+.addr-recent a:is(:hover, :focus-visible) { background: var(--color-hover); }
 .addr-recent span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
 .addr-recent time { color: var(--color-muted); font-size: var(--text-xs); text-align: right; font-variant-numeric: tabular-nums; }
 .addr-patterns { display: grid; gap: var(--space-8); max-width: 520px; margin-top: var(--space-8); }
 .addr-patterns ul { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
-.addr-patterns li { display: flex; align-items: center; gap: var(--space-8); min-height: 40px; border-top: 1px solid var(--color-border-muted); }
-.addr-patterns li:last-child { border-bottom: 1px solid var(--color-border-muted); }
+.addr-patterns li { display: flex; align-items: center; gap: var(--space-8); min-height: 40px; }
 .addr-patterns li > .rcv-match { flex: 1; }
 .addr-patterns__add { display: flex; gap: var(--space-8); }
 .addr-patterns__add .ui-input { flex: 1; font-family: var(--font-mono); }
@@ -105,11 +102,10 @@
 .trace-picker__body { min-height: 252px; }
 .trace-picker__empty { margin: 0; font-size: var(--text-sm); }
 .trace-recent { display: grid; margin: 0; padding: 0; list-style: none; }
-.trace-recent__row { display: grid; grid-template-columns: minmax(120px, 22%) minmax(0, 1fr) minmax(140px, 26%) 64px; align-items: center; gap: var(--space-16); width: 100%; min-height: 40px; padding: 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer; transition: background var(--motion-duration), box-shadow 160ms ease-out; }
-li + li > .trace-recent__row { border-top: 1px solid var(--color-border-muted); }
+.trace-recent__row { display: grid; grid-template-columns: minmax(120px, 22%) minmax(0, 1fr) minmax(140px, 26%) 64px; align-items: center; gap: var(--space-16); width: 100%; min-height: 40px; padding: 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer; transition: background var(--motion-duration); }
 .trace-recent__row:hover { background: var(--color-hover); }
 .trace-recent__row[aria-checked='true'] { background: var(--color-active-bg); }
-.trace-recent__row:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
+.trace-recent__row:focus-visible:not([aria-checked='true']) { background: var(--color-hover); }
 .trace-recent__row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 .trace-recent__time { color: var(--color-muted); font-size: var(--text-xs); text-align: right; font-variant-numeric: tabular-nums; }
 .trace-sample { display: grid; grid-template-columns: minmax(220px, 320px) minmax(0, 1fr); gap: var(--space-16); align-items: start; }
@@ -123,19 +119,22 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 .trace-view__bar { display: flex; align-items: center; justify-content: space-between; min-height: var(--control-height); font-size: var(--text-sm); }
 .trace-recipient { display: grid; gap: var(--space-12); }
 .trace-recipient__head { display: flex; align-items: baseline; gap: var(--space-8); min-width: 0; font-size: var(--text-sm); }
-.trace-ritual { border: 1px solid var(--color-border-muted); border-radius: var(--radius-lg); overflow: hidden; }
-.trace-ritual h3 { display: flex; align-items: center; gap: var(--space-8); margin: 0; padding: var(--space-8) var(--space-12); border-bottom: 1px solid var(--color-border-muted); font-size: var(--text-sm); font-weight: var(--font-weight-regular); }
+/* A rule's run: its name on a solid head bar, then the code on its well beside the steps. */
+.trace-ritual { display: grid; gap: var(--space-4); }
+.trace-ritual h3 { display: flex; align-items: center; gap: var(--space-8); margin: 0; padding: var(--space-8) var(--space-12); border-radius: var(--radius-sm); background: var(--color-thead); font-size: var(--text-sm); font-weight: var(--font-weight-regular); }
 .trace-ritual h3 code { font-family: var(--font-mono); }
 .trace-ritual h3 .muted { margin-left: auto; font-size: var(--text-xs); }
 .trace-ritual__body { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
-.trace-code { margin: 0; padding: var(--space-8) 0; list-style: none; background: var(--color-layer-1); overflow-x: auto; font-family: var(--font-mono); font-size: var(--text-xs); line-height: 20px; }
+.trace-code { margin: 0; padding: var(--space-8) 0; list-style: none; border-radius: var(--radius-sm); background: var(--color-layer-1); overflow-x: auto; font-family: var(--font-mono); font-size: var(--text-xs); line-height: 20px; }
 .trace-code li { display: grid; grid-template-columns: 36px minmax(0, 1fr); padding-right: var(--space-12); transition: background 180ms ease-out; }
 .trace-code li[data-active] { background: var(--color-active-bg); }
 .trace-code__n { padding-right: var(--space-8); color: var(--color-faint); text-align: right; user-select: none; }
 .trace-code code { white-space: pre; color: var(--color-text); }
-.trace-cond { border-radius: 3px; background: transparent; color: inherit; box-shadow: inset 0 -1px 0 var(--color-border-strong); transition: background 220ms ease-out, box-shadow 220ms ease-out, color 220ms ease-out; }
-.trace-cond[data-state='true'] { background: var(--color-success-bg); box-shadow: inset 0 0 0 1px var(--color-success-border); color: var(--color-success); }
-.trace-cond[data-state='false'] { background: var(--color-danger-bg); box-shadow: inset 0 0 0 1px var(--color-danger-border); color: var(--color-danger); }
+/* A condition is underlined until it runs, then its result in the status ink (no fill: it sits on the code's well). */
+.trace-cond { border-radius: 3px; background: transparent; color: inherit; text-decoration: underline; text-decoration-color: var(--color-faint); text-underline-offset: 3px; transition: background 220ms ease-out, text-decoration-color 220ms ease-out, color 220ms ease-out; }
+.trace-cond:is([data-state='true'], [data-state='false']) { text-decoration-color: transparent; }
+.trace-cond[data-state='true'] { color: var(--color-success); }
+.trace-cond[data-state='false'] { color: var(--color-danger); }
 .trace-steps { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 2px; margin: 0; padding: var(--space-8); list-style: none; }
 .trace-step { display: flex; align-items: center; gap: var(--space-8); min-height: 30px; padding: var(--space-4) var(--space-8); border-radius: var(--radius-sm); font-size: var(--text-sm); transition: opacity 220ms ease-out, transform 260ms var(--ease-out-strong), background 220ms ease-out; }
 .trace-step[data-state='pending'] { opacity: 0; transform: translateY(4px); }
@@ -154,13 +153,13 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 .trace-omen__bar { height: 6px; border-radius: 3px; background: var(--color-layer-2); overflow: hidden; }
 .trace-omen__bar > span { display: block; height: 100%; background: var(--color-accent-data); transform-origin: left; transition: transform 520ms var(--ease-out-strong); }
 .trace-omen__value { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); text-align: right; font-variant-numeric: tabular-nums; }
-.trace-result { display: flex; align-items: center; gap: var(--space-16); min-height: 44px; padding: var(--space-8) var(--space-12); border-radius: var(--radius-lg); background: var(--color-layer-1); transition: opacity 260ms ease-out, transform 300ms var(--ease-out-strong); }
+.trace-result { display: flex; align-items: center; gap: var(--space-16); min-height: 44px; padding-block: var(--space-8); transition: opacity 260ms ease-out, transform 300ms var(--ease-out-strong); }
 .trace-result[data-state='pending'] { opacity: 0; transform: translateY(4px); }
 .trace-result__title { flex: none; color: var(--color-muted); font-size: var(--text-xs); }
 .trace-result__items { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-16); }
 .trace-chip { display: inline-flex; align-items: center; gap: var(--space-6); font-size: var(--text-sm); }
 .trace-chip[data-tone='warning'] { color: var(--color-warning); }
-.trace-chip--label { padding: 0 6px; border: 1px solid var(--color-border); border-radius: 4px; color: var(--color-muted); font-size: var(--text-xs); line-height: 18px; }
+.trace-chip--label { padding: 0 6px; border-radius: 4px; background: var(--color-chip); color: var(--color-muted); font-size: var(--text-xs); line-height: 18px; }
 .trace-warning { color: var(--color-warning); font-size: var(--text-xs); }
 
 @media (prefers-reduced-motion: reduce) {
@@ -169,9 +168,8 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 }
 @media (max-width: 900px) {
   .rcv-steps, .addr-path { grid-template-columns: minmax(0, 1fr); }
-  .rcv-step + .rcv-step { padding-left: 0; border-left: 0; border-top: 1px solid var(--color-border-muted); }
+  .addr-path { row-gap: var(--space-24); }
   .addr-arrow { display: none; }
-  .addr-step + .addr-arrow + .addr-step { padding-left: 0; border-top: 1px solid var(--color-border-muted); }
   .trace-ritual__body, .trace-sample { grid-template-columns: minmax(0, 1fr); }
   .rcv-toolbar { flex-wrap: wrap; }
 }
@@ -182,7 +180,7 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 .addr-skeleton > span { display: block; height: 120px; border-radius: var(--radius-sm); background: var(--color-layer-1); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
 .addr-skeleton > span:nth-child(2) { height: 200px; }
 .addr-skeleton > span:nth-child(3) { height: 240px; }
-.rcv-filter-chip { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; height: var(--control-height); padding: 0 2px 0 10px; border: 1px solid var(--color-border); border-radius: var(--radius-sm); font-family: var(--font-mono); font-size: var(--text-sm); }
+.rcv-filter-chip { display: inline-flex; align-items: center; gap: 2px; min-width: 0; max-width: 100%; height: var(--control-height); padding: 0 2px 0 10px; border-radius: var(--radius-sm); background: var(--color-chip); font-family: var(--font-mono); font-size: var(--text-sm); }
 /* Phone: the kind filters scroll sideways in one row, the domain picker and search take full rows, and a route's card
    shows its rules then where its mail goes. */
 @media (max-width: 640px) {
@@ -251,8 +249,6 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
   .rcv-card-to { overflow: visible; overflow-x: clip; }
   .rcv-card-to .rcv-add { display: inline-block; padding-block: 14px; margin-block: -14px; }
 }
-/* An address in a clipped line keeps its focus ring inside the clip. */
-.receiving-clip .private-address:focus-visible { outline-offset: -2px; }
 .rcv-kindline > .cluster { flex: none; flex-wrap: nowrap; }
 .rcv-kindline > .rcv-filter-chip { margin-right: auto; }
 .rcv-toolbar__end > .cluster { flex: none; flex-wrap: nowrap; }
@@ -264,7 +260,7 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 .addr-root[data-tab='mail'] > .mailbox-page { flex: 1; min-height: 0; }
 .addr-root > .ui-tabs + .mailbox-page .mailbox-toolbar { padding-top: 0; }
 .addr-facts { max-width: 640px; }
-.addr-danger { padding-top: var(--space-16); border-top: 1px solid var(--color-border-muted); }
+.addr-danger { padding-top: var(--space-24); }
 
 /* Kinds: one line at every width, whole labels with their counts; the row scrolls sideways when they don't fit. */
 .rcv-kinds { display: flex; flex: 1 1 auto; gap: var(--space-4); min-width: 0; margin-left: calc(-1 * var(--space-8)); padding: var(--focus-reach, 3px) var(--focus-reach, 3px) var(--focus-reach, 3px) var(--space-8); overflow-x: auto; scrollbar-width: none; }
@@ -272,31 +268,32 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 .rcv-kind { display: inline-flex; flex: none; align-items: center; gap: var(--space-6); height: var(--control-height); padding: 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-muted); font: inherit; font-size: var(--text-sm); white-space: nowrap; cursor: pointer; transition: background var(--motion-duration), color var(--motion-duration); }
 @media (hover: hover) and (pointer: fine) { .rcv-kind:hover { background: var(--color-hover); color: var(--color-text); } }
 .rcv-kind[aria-pressed='true'] { background: var(--color-active-bg); color: var(--color-text); }
-.rcv-kind:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 1px; }
+.rcv-kind:focus-visible:not([aria-pressed='true']) { background: var(--color-hover); color: var(--color-text); }
 .rcv-kind__count { color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .rcv-toolbar > .rcv-kinds + .rcv-toolbar__end { margin-left: auto; }
 .rcv-last { display: inline-flex; align-items: baseline; justify-content: flex-end; gap: var(--space-8); font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
 .rcv-last .rcv-unread { font-family: var(--font-body); font-size: var(--text-xs); }
 
-/* The list and, beside it from 1180 px, the chosen address's flow. */
+/* The list and, beside it from 1180 px, the chosen address's flow (under the list when it doesn't fit beside it): the
+   flow sits on the canvas, 24px from the list, its boxes the only step. */
 .rcv-browse { display: grid; grid-template-columns: minmax(0, 1fr); gap: var(--space-24); align-items: start; }
 .rcv-browse[data-docked] { grid-template-columns: minmax(0, 1fr) 360px; }
 .rcv-browse__list { display: flex; flex-direction: column; gap: var(--space-12); min-width: 0; }
-.rcv-browse > .flow-panel { position: sticky; top: 0; padding-left: var(--space-24); border-left: 1px solid var(--color-border-muted); }
-.rcv-browse__list > .flow-panel { padding-top: var(--space-16); border-top: 1px solid var(--color-border-muted); }
+.rcv-browse__list > .flow-panel { margin-top: var(--space-12); }
+.rcv-browse > .flow-panel { position: sticky; top: 0; }
 .rcv-table tr[data-selected] > td { background: var(--color-active-bg); }
 
-/* The flow: Receive, Process, Deliver, each a hairline box, joined by a short line with an arrowhead. Neutral; a test
-   ticks what the email took and quiets the rest. */
+/* The flow: Receive, Process, Deliver, each a flat solid box one step off the canvas, joined by a short stem with an
+   arrowhead. Neutral; a test ticks what the email took, fills the boxes it went through a step stronger and quiets the
+   rest. */
 .flow { display: grid; margin: 0; padding: 0; list-style: none; }
-.flow-stage { position: relative; display: grid; gap: var(--space-4); padding: var(--space-8) var(--space-12); border: 1px solid var(--color-border-muted); border-radius: var(--radius-md); background: var(--color-surface); transition: border-color 160ms ease-out; }
+.flow-stage { position: relative; display: grid; gap: var(--space-4); padding: var(--space-8) var(--space-12); border-radius: var(--radius-md); background: var(--color-layer-1); transition: background 160ms ease-out; }
 .flow-stage + .flow-stage { margin-top: 24px; }
-.flow-stage + .flow-stage::before { content: ''; position: absolute; left: 50%; top: -25px; width: 1px; height: 18px; background: var(--color-border-strong); }
-.flow-stage + .flow-stage::after { content: ''; position: absolute; left: calc(50% - 4px); top: -8px; border: 4px solid transparent; border-top: 5px solid var(--color-border-strong); border-bottom: 0; }
+.flow-stage + .flow-stage::before, .flow-fork__way::before { content: ''; position: absolute; left: calc(50% - 1px); top: -24px; width: 2px; height: 17px; background: var(--color-series); }
+.flow-stage + .flow-stage::after, .flow-fork__way::after { content: ''; position: absolute; left: calc(50% - 4px); top: -7px; width: 8px; height: 5px; background: var(--color-series); clip-path: polygon(0 0, 100% 0, 50% 100%); }
 .flow-stage__head { display: flex; align-items: center; gap: var(--space-6); height: 20px; color: var(--color-muted); font-size: var(--text-xs); }
 .flow-stage__body { display: grid; }
 .flow-item { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-8); min-height: 40px; padding-block: var(--space-4); transition: opacity 160ms ease-out; }
-.flow-item + .flow-item { border-top: 1px solid var(--color-border-muted); }
 .flow-item:not(:has(> .flow-item__icon)) { grid-template-columns: minmax(0, 1fr) auto; }
 .flow-item__icon { display: inline-grid; place-items: center; width: 16px; }
 .flow-item__text { display: grid; min-width: 0; }
@@ -308,7 +305,7 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 .flow-code { font-family: var(--font-mono); font-size: var(--text-xs); }
 .flow-via { margin-left: var(--space-8); color: var(--color-faint); font-size: var(--text-xs); }
 .flow[data-tested] .flow-item[data-hit='no'] { opacity: .45; }
-.flow[data-tested] .flow-stage:has([data-hit='yes']) { border-color: var(--color-border-strong); }
+.flow[data-tested] .flow-stage:has([data-hit='yes']) { background: var(--color-active-bg); }
 
 /* The panel: its actions, the sample a test sends, then the flow. */
 .flow-panel { display: grid; align-content: start; gap: var(--space-12); min-width: 0; }
@@ -319,7 +316,8 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 .flow-sample__fields { padding-top: var(--space-12); }
 .addr-flow { max-width: 480px; }
 .flow-skeleton { display: grid; gap: 24px; }
-.flow-skeleton > span { display: block; height: 70px; border-radius: var(--radius-md); background: var(--color-layer-1); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
+/* As tall as a box with one item: 8 + 20 + 4 + 40 + 8. */
+.flow-skeleton > span { display: block; height: 80px; border-radius: var(--radius-md); background: var(--color-layer-1); animation: ui-pulse 1.2s ease-in-out infinite alternate; }
 @media (max-width: 640px) {
   .rcv-kinds { flex: none; margin-inline: calc(-1 * var(--bleed, 0px)); padding-inline: var(--bleed, 0px); }
   .rcv-toolbar > .rcv-kinds + .rcv-toolbar__end { margin-left: 0; }
@@ -330,8 +328,6 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 .flow-fork { position: relative; margin-top: 24px; }
 .flow-fork__ways { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: var(--space-12); }
 .flow-fork__way { align-content: start; }
-.flow-fork__way::before { content: ''; position: absolute; left: 50%; top: -25px; width: 1px; height: 18px; background: var(--color-border-strong); }
-.flow-fork__way::after { content: ''; position: absolute; left: calc(50% - 4px); top: -8px; border: 4px solid transparent; border-top: 5px solid var(--color-border-strong); border-bottom: 0; }
 .flow-fork__way + .flow-fork__way { margin-top: 0; }
 /* What comes after the split isn't one of its ways: a gap, no arrow. */
 .flow-fork + .flow-stage { margin-top: var(--space-12); }

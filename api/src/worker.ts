@@ -575,6 +575,8 @@ export default {
       if (runtime.config.multiTenant) await (await core.wrapModuleLoad(() => import('./signups.js'))).signupsTick(runtime);
       // Billing: the auto-recharge sweep and Stripe reconciliation (elected every 5 minutes).
       if (runtime.config.multiTenant) try { await (await core.wrapModuleLoad(() => import('./billing/stripe-jobs.js'))).billingMinute(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'BILLING_MINUTE_FAILED' }); }
+      // New domains whose records are still missing an hour on: a DNS check each (elected every 5 minutes, src/domain-setup.ts).
+      if (runtime.config.multiTenant) try { await (await core.wrapModuleLoad(() => import('./domain-setup.js'))).domainSetupTick(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'DOMAIN_SETUP_TICK_FAILED' }); }
       // Last, as it can take minutes: retention of the sent-side tables (elected every 15 minutes).
       try { await (await core.wrapModuleLoad(() => import('./maintenance.js'))).retentionTick(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'RETENTION_TICK_FAILED' }); }
     }, concurrency + 2, undefined, waitUntilOf(ctx)); // The minute cron drains jobs too: as in queue(), nothing waits for the second classifier's queue.

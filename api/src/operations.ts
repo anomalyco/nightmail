@@ -28,6 +28,7 @@ import { forDelivery, workspaceConnection, type ReadyConnection } from './provid
 import { byoEnabled } from './byo-pilot.js';
 import { awsError, byoFeedbackUrl, claimTenantName, feedbackUrl, mxOwnerTag, POOL_INSTALLATION } from './ses-setup.js';
 import type { RoutineIngress } from './sending.js';
+import type { SetupCheck } from './record-check.js';
 import type { FeedbackItem } from './core.js';
 import { realDestination } from './hosted-sending.js';
 import { webhookSecretBinding as mailboxSecretBinding } from './mailbox-events.js';
@@ -66,7 +67,7 @@ const deliverySchema = z.object({ id: z.string(), webhookId: z.string(), eventId
 const attemptSchema = z.object({ id: z.string(), deliveryId: z.string(), statusCode: z.number().nullable(), error: z.string().nullable(), durationMs: z.number(), createdAt: z.string() }).openapi('WebhookAttempt');
 const dnsState = z.enum(['pending','verified']);
 const publicDns = z.object({ state:z.enum(['found','missing','wrong_value']).describe('found: public DNS has this record as listed (it may still take SES a few minutes to verify). missing: nothing of this type at the name. wrong_value: the name has a record of this type with another value.'), values:z.array(z.string()).describe('wrong_value only: what public DNS has at the name instead (at most 5). Empty otherwise.'), checkedAt:z.string() })
-  .nullable().optional().describe('verifyDomain only, for pending sending and MAIL FROM records: what public DNS (Cloudflare 1.1.1.1, answers cached up to 30 seconds) shows for this record now. Null when DNS did not answer in time; absent on other reads and records.');
+  .nullable().optional().describe('For pending sending and MAIL FROM records: what public DNS (Cloudflare 1.1.1.1) shows for this record. verifyDomain looks it up now (answers cached up to 30 seconds). Other reads show the last background check, which runs every 15 to 60 minutes for a Hosted domain still pending an hour after it was added. Null when DNS did not answer in time; absent before any check and on other records.');
 const dnsRecord = z.object({ name:z.string(), type:z.enum(['CNAME','TXT','MX']), value:z.string(), priority:z.number().optional(), purpose:z.enum(['sending','receiving','mail_from','dmarc']), status:dnsState, note:z.string().optional(), publicDns });
 const dmarcSchema=z.object({status:z.enum(['missing','invalid','none','quarantine','reject']),record:z.string().nullable(),source:z.string().nullable().describe('Domain publishing the effective TXT record; may be the organizational domain.'),adkim:z.enum(['r','s']),aspf:z.enum(['r','s']),alignment:z.object({dkim:z.boolean(),spf:z.boolean()})}).nullable().describe('Last DNS and SES observation for this From domain. Null when unchecked, unavailable or stale. Alignment describes configured identifiers, not a delivery verdict.');
 export const receivingIssueSchema = z.object({
@@ -75,6 +76,8 @@ export const receivingIssueSchema = z.object({
   provider: z.string().nullable().optional(), target: z.string().nullable().optional().describe('The existing CNAME target.'), suggestion: z.string().nullable().optional().describe('A free subdomain to use instead.'),
 }).openapi('ReceivingIssue');
 const domainSchema = z.object({ id: z.string(), name: z.string(), region: z.string(), verificationStatus: z.string(), verified: z.boolean(), dkimStatus: z.string(), dmarc:dmarcSchema, ready: z.boolean(), sending:dnsState, receiving:dnsState, mailFromDomain: z.string().nullable(), mailFromStatus: z.string().nullable(), dnsStatus: z.enum(['available', 'unavailable']), dnsUnavailableReason: z.string().nullable(), dns: z.array(dnsRecord),
+  dnsHost: z.object({ name: z.string().describe('The provider, e.g. Cloudflare, Vercel, Route 53, GoDaddy or Namecheap.'), zone: z.string().describe('The zone it hosts, which record names are relative to there.'), url: z.string().nullable().describe('The provider\'s DNS page for the zone, when it has a known address.') })
+    .nullable().optional().describe(`Where this domain\u2019s DNS is hosted, from its zone\u2019s NS records, alongside publicDns: null when the provider is not one ${productName} recognizes.`),
   releasesAt: z.string().nullable().optional().describe('Hosted only: when this domain is released if its records are still unproven (72 hours after it was added). Null once ownership has been proven.'),
   receivingIssue: receivingIssueSchema.nullable().optional().describe('Hosted only: receiving needs attention. Set by the DNS checks that run when a receiving host is suggested or chosen, on Check now and in the hourly recheck. Null when the receiving record is clear.') }).openapi('DomainReadiness');
 const accountSchema = z.object({ region: z.string(), productionAccess: z.boolean(), sendingEnabled: z.boolean(), enforcementStatus: z.string(), quota: z.object({ max24HourSend: z.number(), maxSendRate: z.number(), sentLast24Hours: z.number() }) }).openapi('SesAccount');
@@ -291,13 +294,13 @@ const claimTag = tagKey('domain-claim');
 type Readiness = z.infer<typeof domainSchema>;
 type DomainRef = Pick<Readiness,'id'|'name'|'region'>;
 type ProofTimes={receiving_proved_at?:Date|string|null;receiving_identity_at?:Date|string|null;receiving_proof_missed_at?:Date|string|null};
-export type HostedDomain = DomainRef & ClaimState & ProofTimes & { connection: ReadyConnection & { tenant_state: TenantState;legacy?:boolean }; token: string; proof_label: ProofLabel; identity: IdentityFacts | null; claim_scope:'account'|'exclusive'|'txt'; pool_receiving:boolean; receiving_setup:ReceivingSetup|null; expired:boolean; check_txt:boolean; created_at:string; ever_proven:boolean; dns_first:boolean; hosts: ReceivingHostRow[] };
+export type HostedDomain = DomainRef & ClaimState & ProofTimes & { setup_check: SetupCheck | null; connection: ReadyConnection & { tenant_state: TenantState;legacy?:boolean }; token: string; proof_label: ProofLabel; identity: IdentityFacts | null; claim_scope:'account'|'exclusive'|'txt'; pool_receiving:boolean; receiving_setup:ReceivingSetup|null; expired:boolean; check_txt:boolean; created_at:string; ever_proven:boolean; dns_first:boolean; hosts: ReceivingHostRow[] };
 /** The domain's receiving hosts, its own row first: what every hosted read of a claim carries. `d` is operation_domains. */
 const unavailableDomain = () => new ApiError(409, 'DOMAIN_UNAVAILABLE', 'This SES identity is unavailable for this domain claim.');
 const ownsIdentity = (identity: GetEmailIdentityCommandOutput, token: string) => hasTags(identity.Tags, [{ Key: claimTag, Value: token }]);
 function hostedDomainSelect(wid:string, domainId:string, lock:SQL=sql``) {
   return sql`SELECT d.id,d.name,d.region,to_jsonb(pc) AS connection,dc.token,dc.proof_label,dc.claim_scope,dc.sending_state,dc.receiving_state,dc.receiving_host,dc.lost_since,dc.receiving_lost_since,dc.identity,
-    dc.receiving_proved_at,dc.receiving_identity_at,dc.receiving_proof_missed_at,dc.created_at,dc.ever_proven,dc.dns_first,domain_claim_expired(dc) AS expired,dc.created_at <= now()-interval '1 hour' AS check_txt,${domainHosts()} AS hosts,${receivingSetup()} AS receiving_setup,
+    dc.receiving_proved_at,dc.receiving_identity_at,dc.receiving_proof_missed_at,dc.created_at,dc.ever_proven,dc.dns_first,dc.setup_check,domain_claim_expired(dc) AS expired,dc.created_at <= now()-interval '1 hour' AS check_txt,${domainHosts()} AS hosts,${receivingSetup()} AS receiving_setup,
     EXISTS(SELECT 1 FROM provider_pool_regions p WHERE p.region=pc.region AND p.aws_account_id=pc.aws_account_id AND ${poolReceives()}) AS pool_receiving
     FROM operation_domains d JOIN domain_claims dc ON dc.name=d.name AND dc.workspace_id=d.workspace_id
     JOIN domain_sending_bindings b ON b.domain_id=d.id AND b.connection_id=dc.connection_id AND b.region=d.region
@@ -380,7 +383,7 @@ async function domainReadiness(runtime: Runtime, row: DomainRef, identity?: GetE
 const platformClaim = (config:Config,wid:string,row:{name:string;identity:IdentityFacts|null;connection:Pick<ReadyConnection,'kind'> & {legacy?:boolean}}) =>
   !!row.identity?.adopted && row.connection.kind==='shared' && row.connection.legacy!==false && platformDomainOwner(config,wid) && platformHosts(config).includes(row.name);
 const claimProof = (row: {connection:Pick<ReadyConnection,'kind'> & {legacy?:boolean};token:string;proof_label:ProofLabel;identity?:IdentityFacts|null;claim_scope?:string}, proven=false) => ({ token:row.token,label:row.proof_label,shared:row.connection.kind==='shared',regional:row.connection.legacy===false,proven,imported:row.connection.kind==='byo' && row.identity?.imported===true,txtOwned:row.claim_scope==='txt' });
-type ClaimRow = DomainRef & ClaimState & ProofTimes & { token:string; proof_label:ProofLabel; identity:IdentityFacts|null; connection:Pick<ReadyConnection,'kind'> & {legacy?:boolean}; created_at?:string|Date; ever_proven?:boolean; dns_first?:boolean; hosts?:ReceivingHostRow[] };
+type ClaimRow = DomainRef & ClaimState & ProofTimes & { setup_check?:SetupCheck|null; token:string; proof_label:ProofLabel; identity:IdentityFacts|null; connection:Pick<ReadyConnection,'kind'> & {legacy?:boolean}; created_at?:string|Date; ever_proven?:boolean; dns_first?:boolean; hosts?:ReceivingHostRow[] };
 const hour=3600_000;
 const proofTime=(at:Date|string|null|undefined)=>at?new Date(at).getTime():0;
 const proofUntil=(row:ProofTimes)=>Math.min(proofTime(row.receiving_proved_at)+72*hour,row.receiving_proof_missed_at?proofTime(row.receiving_proof_missed_at)+48*hour:Infinity);
@@ -432,6 +435,15 @@ export function derivedReadiness(row: ClaimRow): Readiness {
   // No DNS setup is authorized by a send-only operator attestation. The adopted platform domain also receives: it
   // shows only its receiving MX, since its DKIM records predate the claim and the attestation replaces the TXT.
   if (facts?.adopted) report.dns=facts.receivingChoice || row.receiving_state!=='off' ? report.dns.filter(r=>r.purpose==='receiving') : [];
+  // The last background DNS check of a domain still pending (domain-setup.ts): each pending record's state, and its DNS host.
+  const check=row.setup_check;
+  if (check && !held) {
+    for (const r of report.dns) if (r.status==='pending' && (r.purpose==='sending' || r.purpose==='mail_from')) {
+      const seen=check.records.find(c=>c.type===r.type && c.name===r.name && c.value===r.value);
+      if (seen) r.publicDns=seen.publicDns;
+    }
+    report.dnsHost=check.host;
+  }
   if (row.created_at!==undefined && row.ever_proven===false && !held) report.releasesAt=new Date(new Date(row.created_at).getTime()+72*3600_000).toISOString();
   else if (row.ever_proven!==undefined) report.releasesAt=null;
   return report;
@@ -562,6 +574,15 @@ function recoverIdentity(runtime:Runtime,wid:string,domainId:string,token:string
       const regionalByo=current.connection.kind==='byo' && current.connection.legacy===false;
       const pooled=current.connection.kind==='shared' && runtime.config.trustedPool;
       const identity=await ensureIdentity(client,current.name,token,pooled?POOL_INSTALLATION:current.connection.legacy===false || (runtime.config.regionalSending && current.connection.kind==='shared')?current.connection.id:undefined,regionalByo || pooled);
+      // A configuration-set SNS destination already receives feedback. Do this only after create or a
+      // tag-checked recovery, never on a customer import or an operator-adopted identity.
+      if (!('FeedbackForwardingStatus' in identity) || identity.FeedbackForwardingStatus !== false) {
+        try { await sesCall(({PutEmailIdentityFeedbackAttributesCommand}) => client.send(new PutEmailIdentityFeedbackAttributesCommand({EmailIdentity:current.name,EmailForwardingEnabled:false}))); }
+        catch (error) {
+          if (!(error instanceof ApiError)) throw error;
+          log('warn',{code:'SES_FEEDBACK_FORWARDING_NOT_DISABLED',workspaceId:wid,domain:current.name,region:current.region,reason:error.code});
+        }
+      }
       if (regionalByo) {
         const entry=JSON.stringify([identityJournalEntry(current)]);
         await db.execute(sql`UPDATE provider_connection_regions SET ownership_journal=ownership_journal||${entry}::jsonb WHERE connection_id=${current.connection.id} AND region=${current.region} AND NOT ownership_journal @> ${entry}::jsonb`);
@@ -703,11 +724,11 @@ const domainVerify: JobHandler = async (runtime,payload,job) => {
         (!ses?.VerificationStatus || ['PENDING','NOT_STARTED'].includes(ses.VerificationStatus)) && (!ses?.DkimAttributes?.Status || ses.DkimAttributes.Status==='NOT_STARTED');
       if (!(e instanceof ApiError) || e.code!=='SES_IDENTITY_NOT_FOUND' || row.identity && !reset) throw e;
     }
-    // The claim exists but the creating request never reached SES: the job owns the identity from here (ensureIdentity proves ownership itself).
-    if (!identity) {
+    // Recover an interrupted create, including a lost create acknowledgement before feedback forwarding was disabled.
+    if (!identity || (!row.identity && identity.FeedbackForwardingStatus === true && ownsIdentity(identity,row.token))) {
       const recovered=await recoverIdentity(runtime,job.workspaceId,row.id,row.token,client);
       if (!recovered) return;
-      identity={...recovered,VerificationStatus:'PENDING',$metadata:{}};
+      identity??={...recovered,VerificationStatus:'PENDING',$metadata:{}};
     }
     else if (row.identity?.adopted) {
       // Runtime IAM intentionally denies membership reads/writes on these ARNs. An SES send
@@ -884,7 +905,7 @@ export async function domainPage(c: Ctx, a: Actor, q: DomainQuery): Promise<z.in
   const allowed = a.domains.length ? or(...a.domains.map(parent => or(eq(domains.name, parent), like(domains.name, `%.${parent}`)))) : undefined;
   const where = and(scoped(domains, a), allowed, q.region ? eq(domains.region, region(c.env, q.region)) : c.env.config.multiTenant ? undefined : inArray(domains.region, c.env.config.regions), q.cursor ? lt(domains.id, q.cursor) : undefined);
   if (c.env.config.multiTenant) {
-    const [rows,quota]=await Promise.all([c.env.db.select({row:domains,hosts:sql<ReceivingHostRow[]>`${domainHosts(sql`${domains}`)}`,token:domainClaims.token,proof_label:domainClaims.proofLabel,claim_scope:domainClaims.claimScope,sending_state:domainClaims.sendingState,receiving_state:domainClaims.receivingState,receiving_host:domainClaims.receivingHost,receiving_proved_at:sql<string>`domain_claims.receiving_proved_at`,receiving_identity_at:sql<string>`domain_claims.receiving_identity_at`,receiving_proof_missed_at:sql<string>`domain_claims.receiving_proof_missed_at`,lost_since:domainClaims.lostSince,receiving_lost_since:domainClaims.receivingLostSince,identity:domainClaims.identity,created_at:domainClaims.createdAt,ever_proven:domainClaims.everProven,kind:sql<'shared'|'byo'>`pc.kind`,legacy:sql<boolean>`pc.legacy`}).from(domains)
+    const [rows,quota]=await Promise.all([c.env.db.select({row:domains,hosts:sql<ReceivingHostRow[]>`${domainHosts(sql`${domains}`)}`,token:domainClaims.token,proof_label:domainClaims.proofLabel,claim_scope:domainClaims.claimScope,sending_state:domainClaims.sendingState,receiving_state:domainClaims.receivingState,receiving_host:domainClaims.receivingHost,receiving_proved_at:sql<string>`domain_claims.receiving_proved_at`,receiving_identity_at:sql<string>`domain_claims.receiving_identity_at`,receiving_proof_missed_at:sql<string>`domain_claims.receiving_proof_missed_at`,lost_since:domainClaims.lostSince,receiving_lost_since:domainClaims.receivingLostSince,identity:domainClaims.identity,created_at:domainClaims.createdAt,ever_proven:domainClaims.everProven,setup_check:sql<SetupCheck|null>`domain_claims.setup_check`,kind:sql<'shared'|'byo'>`pc.kind`,legacy:sql<boolean>`pc.legacy`}).from(domains)
       .innerJoin(domainClaims,and(eq(domainClaims.name,domains.name),eq(domainClaims.workspaceId,domains.workspaceId)))
       .innerJoin(sql`regional_connections pc`,sql`pc.id=${domainClaims.connectionId} AND pc.workspace_id=${domains.workspaceId} AND pc.region=${domains.region} AND ${connectionReady()}`)
       .where(where).orderBy(desc(domains.id)).limit(q.limit+1),a.domains.length || q.countedElsewhere ? undefined : domainQuota(c.env.db,a.workspaceId)]);
@@ -1136,10 +1157,19 @@ export function registerOperations(app: App) {
     if(!result.rowCount) throw denied('PERMISSION_DENIED','Domain setup requires owner or admin access to the original workspace and domain.',{ permission: 'configuration', level: 'write', person: 'admin' });
     return back(userId);
   });
-  for (const verifyRoute of [false, true]) app.openapi(createRoute({ method: verifyRoute ? 'post' : 'get', path: verifyRoute ? '/v1/domains/{id}/verify' : '/v1/domains/{id}', operationId: verifyRoute ? 'verifyDomain' : 'getDomain', description: verifyRoute ? 'On MX, request a background verification and return the current stored status, with what public DNS shows now for each pending sending and MAIL FROM record (dns[].publicDns), so a missing or mistyped record can be named. Read the domain again for updates.' : 'On MX, read the stored DNS records and verification status without an AWS call.', tags: ['Domains'], security, request: { params: IdParams }, responses: { 200: response(domainSchema), ...errors } }), async c => {
+  for (const verifyRoute of [false, true]) app.openapi(createRoute({ method: verifyRoute ? 'post' : 'get', path: verifyRoute ? '/v1/domains/{id}/verify' : '/v1/domains/{id}', operationId: verifyRoute ? 'verifyDomain' : 'getDomain', description: verifyRoute ? 'On MX, request a background verification and return the current stored status, with what public DNS shows now for each pending sending and MAIL FROM record (dns[].publicDns), so a missing or mistyped record can be named, and where the domain\'s DNS is hosted (dnsHost). Read the domain again for updates.' : 'On MX, read the stored DNS records and verification status without an AWS call.', tags: ['Domains'], security, request: { params: IdParams }, responses: { 200: response(domainSchema), ...errors } }), async c => {
     const a = actor(c, verifyRoute ? 'manage' : 'read');
+    // Check now: what public DNS shows now for each pending record, and where the zone is hosted. A Hosted domain the
+    // background check already follows (a stored check, domain-setup.ts) keeps this answer, so its banner moves with it.
+    const checked = async (report: Readiness) => {
+      const stored = c.env.config.multiTenant && report.sending === 'pending' && report.dnsHost !== undefined;
+      const check = await (await wrapModuleLoad(() => import('./record-check.js'))).checkSetup(report);
+      if (check.records.length) report.dnsHost = check.host;
+      if (stored) await c.env.db.execute(sql`UPDATE domain_claims SET setup_check=${JSON.stringify(check)}::jsonb WHERE workspace_id=${a.workspaceId} AND name=${report.name} AND sending_state='pending' AND setup_check IS NOT NULL`);
+      return report;
+    };
     if (c.env.config.multiTenant) {
-      if (verifyRoute) return c.json(await (await wrapModuleLoad(() => import('./record-check.js'))).withPublicDns(await verifyHostedDomain(c.env,a,c.req.valid('param').id)),200);
+      if (verifyRoute) return c.json(await checked(await verifyHostedDomain(c.env,a,c.req.valid('param').id)),200);
       const mode=a.credential==='dashboard' && c.req.method==='GET' ? 'dashboard' : undefined;
       const row=await hostedDomain(c.env.db,a.workspaceId,c.req.valid('param').id,false,mode ? {domains:a.domains,mode,platformAccount:c.env.config.platformAccount} : undefined) ?? notFound('Domain'); allowedDomain(a,row.name);
       // A stale dashboard may read persisted facts; its opportunistic recheck was fenced in SQL.
@@ -1148,7 +1178,7 @@ export function registerOperations(app: App) {
     }
     const [row] = await c.env.db.select().from(domains).where(and(scoped(domains, a), eq(domains.id, c.req.valid('param').id))); if (!row) return notFound('Domain'); allowedDomain(a, row.name);
     const report = await domainReadiness(c.env,row,undefined,verifyRoute?'verify':'read');
-    return c.json(verifyRoute ? await (await wrapModuleLoad(() => import('./record-check.js'))).withPublicDns(report) : report, 200);
+    return c.json(verifyRoute ? await checked(report) : report, 200);
   });
   app.openapi(createRoute({method:'delete',path:'/v1/domains/{id}',operationId:'deleteDomain',tags:['Domains'],security,description:'MX only. Delete this claim’s tagged SES identity and release the domain. Does not remove DNS records.',request:{params:IdParams},responses:{200:response(z.object({deleted:z.literal(true)})),...errors}}),async c=>{
     const a=actor(c,'manage'); if (!c.env.config.multiTenant) return notFound('Endpoint');
@@ -2287,4 +2317,4 @@ const publishBatchJob: JobHandler = async (runtime, payload, job) => {
     }
   });
 };
-export const operationJobs: Record<string, JobHandler> = { 'domain.placement': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./placement.js'))).shadowPlacement(...args); }), 'domain.verify': retryDatabaseFailures(domainVerify), 'domain.mx': retryDatabaseFailures(domainMx), 'operation.webhook': retryDatabaseFailures(webhookJob), 'operation.resumeDeliveries': retryDatabaseFailures(resumeDeliveries), 'operation.ses': retryDatabaseFailures(sesJob), 'operation.simulatedFeedback': retryDatabaseFailures(simulatedFeedbackJob), 'operation.simulatedFeedbackRecovery': retryDatabaseFailures(simulatedFeedbackRecovery), 'operation.publish': retryDatabaseFailures(publishJob), 'operation.publishBatch': retryDatabaseFailures(publishBatchJob) };
+export const operationJobs: Record<string, JobHandler> = { 'domain.placement': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./placement.js'))).shadowPlacement(...args); }), 'domain.verify': retryDatabaseFailures(domainVerify), 'domain.setupCheck': retryDatabaseFailures(async (...args) => { await (await wrapModuleLoad(() => import('./domain-setup.js'))).domainSetupCheckJob(...args); }), 'domain.mx': retryDatabaseFailures(domainMx), 'operation.webhook': retryDatabaseFailures(webhookJob), 'operation.resumeDeliveries': retryDatabaseFailures(resumeDeliveries), 'operation.ses': retryDatabaseFailures(sesJob), 'operation.simulatedFeedback': retryDatabaseFailures(simulatedFeedbackJob), 'operation.simulatedFeedbackRecovery': retryDatabaseFailures(simulatedFeedbackRecovery), 'operation.publish': retryDatabaseFailures(publishJob), 'operation.publishBatch': retryDatabaseFailures(publishBatchJob) };

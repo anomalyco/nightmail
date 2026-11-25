@@ -53,7 +53,7 @@
       }
     },
     {
-      "Effect": "Allow", "Action": ["ses:PutEmailIdentityMailFromAttributes", "ses:DeleteEmailIdentity", "ses:CreateTenantResourceAssociation", "ses:DeleteTenantResourceAssociation", "ses:ListResourceTenants"],
+      "Effect": "Allow", "Action": ["ses:PutEmailIdentityMailFromAttributes", "ses:PutEmailIdentityFeedbackAttributes", "ses:DeleteEmailIdentity", "ses:CreateTenantResourceAssociation", "ses:DeleteTenantResourceAssociation", "ses:ListResourceTenants"],
       "Resource": "arn:aws:ses:us-east-1:YOUR_AWS_ACCOUNT_ID:identity/?*.??*",
       "Condition": {
         "StringLike": {"aws:ResourceTag/bane:domain-claim": "????????-????-4???-????-????????????"},

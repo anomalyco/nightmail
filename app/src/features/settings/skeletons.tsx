@@ -147,7 +147,7 @@ export function EndpointFieldsSkeleton({ isNew = false, selectedRegions = false 
     {!multiTenant && <div className="stack settings-region-scope"><div className="ui-field"><span className="ui-field__label">Region scope</span><ControlSkeleton /></div>
     {selectedRegions && <div className="settings-choices"><ControlSkeleton width={135} /><ControlSkeleton width={135} /></div>}</div>}
     <div className="stack"><div>Events</div><div className="settings-choices settings-choices--events">{['Sent', 'Delivered', 'Bounced', 'Complained', 'Rejected', 'Rendering failed', 'Delivery delayed', 'Opened', 'Clicked', 'Contact subscription changed', 'Sending standing changed'].map(event => <div className="ui-check-field" key={event} aria-hidden="true"><Skeleton width={14} height={14} /><span>{event}</span></div>)}</div></div>
-    <div className="ui-field webhook-headers"><span className="ui-field__label">Headers</span><div className="webhook-headers__actions"><Skeleton width={isNew ? 100 : 124} height={24} /></div></div>
+    <div className="ui-field webhook-headers"><span className="ui-field__label">Headers</span><div className="webhook-headers__actions"><Skeleton width={isNew ? 100 : 124} height="var(--control-height-sm)" /></div></div>
   </div>
 }
 

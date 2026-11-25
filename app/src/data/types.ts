@@ -171,12 +171,12 @@ export interface DisconnectSummary {
   leftBehind: { region: string; kind: string; resource: string }[]
   stack: { name: string; consoleUrl: string } | null
 }
-/** What public DNS showed for a pending record when Check now ran (verifyDomain); null when DNS didn't answer. */
+/** What public DNS showed for a pending record: when Check now ran (verifyDomain), or at the API's last background check; null when DNS didn't answer. */
 export interface PublicDns { state: 'found' | 'missing' | 'wrong_value'; values: string[]; checkedAt: string }
 export interface DnsRecord { id: string; type: 'TXT' | 'CNAME' | 'MX'; name: string; value: string; status: 'verified' | 'pending' | 'not_checked'; purpose?: DnsRecordPurpose; note?: string; publicDns?: PublicDns | null }
 // Why receiving at `host` needs attention, from the API's DNS checks. Blocking issues can't work until DNS or the choice changes.
 export interface ReceivingIssue { code: 'cname' | 'foreign_mx' | 'split' | 'wildcard' | 'bane_record' | 'host_taken' | 'claimed' | 'delegated' | 'mx_missing' | 'wrong_region' | 'null_mx' | 'proof_stale' | 'identity_stale'; host: string; blocking: boolean; message: string; provider?: string | null; target?: string | null; suggestion?: string | null }
-export interface Domain { receivingIssue?: ReceivingIssue | null; releasesAt?: string | null; dmarc?: Dmarc | null; dnsStatus?: 'available' | 'unavailable'; dnsUnavailableReason?: string | null; id: string; regionId: RegionId; name: string; status: 'verified' | 'pending' | 'issue'; verified?: boolean; dkimStatus?: 'verified' | 'pending' | 'failed'; mailFromDomain?: string | null; mailFromStatus: 'verified' | 'pending' | 'not_configured' | 'failed'; sending?: 'pending' | 'verified'; receiving?: 'pending' | 'verified'; records: DnsRecord[]; createdAt: ISODate }
+export interface Domain { dnsHost?: { name: string; zone: string; url: string | null } | null; receivingIssue?: ReceivingIssue | null; releasesAt?: string | null; dmarc?: Dmarc | null; dnsStatus?: 'available' | 'unavailable'; dnsUnavailableReason?: string | null; id: string; regionId: RegionId; name: string; status: 'verified' | 'pending' | 'issue'; verified?: boolean; dkimStatus?: 'verified' | 'pending' | 'failed'; mailFromDomain?: string | null; mailFromStatus: 'verified' | 'pending' | 'not_configured' | 'failed'; sending?: 'pending' | 'verified'; receiving?: 'pending' | 'verified'; records: DnsRecord[]; createdAt: ISODate }
 export type MailboxDomainStatus = 'off' | 'provisioning' | 'waiting_for_mx' | 'active' | 'disabling' | 'disabled' | 'failed'
 export interface MailboxDomain {
   id: string; name: string; region: RegionId; status: MailboxDomainStatus; catchAll: 'create_address' | 'store'

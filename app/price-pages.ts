@@ -122,7 +122,7 @@ export function pricePages(): Plugin {
           `<link rel="preload" href="${wall.phone}" as="image" type="image/avif" media="(max-width: 640px)" />`,
           `<link rel="preload" href="${wall.wide}" as="image" type="image/avif" media="(min-width: 641px)" />`,
         ].map(line => `\n    ${line}`).join(''))
-        set(/(<script src="\/theme.js")(?=><\/script>)/, ' data-plain="#sources"')
+        set(/(<script src="\/theme.js")(?=><\/script>)/, ' data-plain=""')
         // Nothing is drawn until the whole painted page has arrived (#root follows it): over a slow connection a page drawn
         // while its HTML streams in grows as each row's rest arrives (Chrome; other browsers ignore it).
         set(/(<\/title>)/, '\n    <link rel="expect" href="#root" blocking="render" />')

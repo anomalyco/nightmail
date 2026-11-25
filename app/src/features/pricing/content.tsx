@@ -34,11 +34,11 @@ export function Cite({ source: { checked, url } }: { source: Source }) {
   const label = `${host(url)}, checked ${dayOf(checked)}`
   return <a className="price-cite" href={url} target="_blank" rel="noopener noreferrer" title={label} aria-label={`Source: ${label}`}><ArrowUpRight size={14} aria-hidden="true" /></a>
 }
-/** The days a list of claims was read on, and where, said once under it. */
-export function CheckedOn({ facts }: { facts: { source?: Source }[] }) {
-  const sources = facts.flatMap(fact => fact.source ? [fact.source] : [])
-  const days = [...new Set(sources.map(source => dayOf(source.checked)))], hosts = [...new Set(sources.map(source => host(source.url)))]
-  return days.length ? <p className="price-note">Checked {days.join(', ')} on {hosts.length === 1 ? hosts[0] : 'each vendor’s own page'}.</p> : null
+/** Every page a comparison's figures were read on, each a link, and the days: "Pages read on 24 Nov 2026: a, b and c." */
+export function ReadOn({ sources }: { sources: Source[] }) {
+  const pages = [...new Map(sources.map(source => [source.url, source])).values()], days = [...new Set(sources.map(source => source.checked))].sort().map(dayOf)
+  const page = (url: string) => { const u = new URL(url); return host(url) + u.pathname.replace(/\/$/, '') }
+  return <>Pages read on {days.join(', ')}: {pages.map((source, i) => <span key={source.url}>{i > 0 && (i === pages.length - 1 ? ' and ' : ', ')}<a href={source.url} target="_blank" rel="noopener noreferrer">{page(source.url)}</a></span>)}.</>
 }
 /** A Nightmail figure, marked with the usage it prices. */
 export function Ours({ sent, received, children }: { sent: number; received: number; children: string }) {

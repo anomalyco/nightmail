@@ -1,0 +1,18 @@
+/* /connect (features/connect): the onboarding shell and type, with the facts and grants of one agent to approve. */
+.connect-lead { margin: 0; font-size: var(--text-sm); line-height: var(--leading-sm); text-wrap: pretty; }
+.connect-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-8) var(--space-16); margin: 0; padding: var(--space-16) 0; border-block: 1px solid var(--color-border-muted); font-size: var(--text-sm); line-height: var(--leading-sm); }
+.connect-facts dt { color: var(--color-muted); }
+.connect-facts dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }
+.connect-facts code { font-size: var(--text-md); font-weight: var(--font-weight-bold); letter-spacing: .08em; }
+.connect-grants { display: flex; flex-direction: column; gap: var(--space-8); font-size: var(--text-sm); line-height: var(--leading-sm); }
+.connect-grants h2 { margin: 0; font-size: var(--text-sm); line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
+.connect-grants ul { display: flex; flex-direction: column; gap: var(--space-6); margin: 0; padding: 0; list-style: none; }
+.connect-grants li { display: flex; align-items: flex-start; gap: var(--space-8); color: var(--color-muted); }
+.connect-grants li[data-can] { color: var(--color-text); }
+.connect-grants li > svg { flex-shrink: 0; margin-top: 3px; }
+.connect-grants li[data-can] > svg { color: var(--color-success); }
+.connect-grants p { margin: 0; }
+.connect-another { margin-left: auto; }
+@media (max-width: 640px) {
+  .connect-another { margin-left: 0; align-self: center; }
+}

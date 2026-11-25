@@ -1,4 +1,5 @@
-/* Guided DNS records (onboarding): headings with one quiet status, then plain hairline rows. */
+/* Guided DNS records (onboarding): headings with one quiet status, then the records under a solid head bar: plain rows,
+   no stripes and no rules. */
 .dns-guided { display: flex; flex-direction: column; gap: var(--space-28); min-width: 0; }
 .dns-guided-bar { display: flex; align-items: center; justify-content: space-between; gap: var(--space-16); }
 .dns-guided-bar h2 { font-size: var(--text-sm); line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
@@ -10,10 +11,9 @@
 .dns-group-copy { margin-top: var(--space-4); font-size: var(--text-sm); line-height: var(--leading-sm); text-wrap: pretty; }
 
 .dns-columns, .dns-row { display: grid; grid-template-columns: var(--dns-columns); gap: var(--space-16); }
-.dns-columns { margin-top: var(--space-16); padding-bottom: var(--space-6); border-bottom: 1px solid var(--color-border-muted); color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); }
+.dns-columns { margin-top: var(--space-16); padding: var(--space-6) var(--space-12); border-radius: var(--radius-sm); background: var(--color-thead); color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .dns-rows { margin: 0; padding: 0; list-style: none; }
-.dns-row { align-items: start; padding-block: var(--space-8); }
-.dns-row + .dns-row { border-top: 1px solid var(--color-border-muted); }
+.dns-row { align-items: start; padding: var(--space-8) var(--space-12); border-radius: var(--radius-sm); }
 .dns-label { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; }
 .dns-cell { min-width: 0; font-size: var(--text-sm); line-height: var(--leading-sm); }
 .dns-cell code { font-size: var(--text-sm); line-height: var(--leading-sm); }
@@ -30,8 +30,10 @@
 
 @media (max-width: 760px) {
   .dns-columns { display: none; }
-  .dns-rows { margin-top: var(--space-12); border-top: 1px solid var(--color-border-muted); }
-  .dns-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'type status' 'name name' 'value value'; gap: var(--space-4) var(--space-12); padding-block: var(--space-12); }
+  /* Each record a solid card, 6px from the next. */
+  .dns-rows { display: grid; gap: var(--space-6); margin-top: var(--space-12); }
+  .dns-row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'type status' 'name name' 'value value'; gap: var(--space-4) var(--space-12); padding: var(--space-12); }
+  .dns-row { background: var(--color-card); }
   .dns-row > .dns-type { grid-area: type; }
   .dns-row > .dns-status { grid-area: status; padding-top: 0; }
   .dns-row > .dns-cell:nth-child(2) { grid-area: name; }
@@ -47,10 +49,10 @@
 .dns-connect[data-hidden] { visibility: hidden; }
 @media (max-width: 640px) { .dns-connect { flex-direction: column; align-items: stretch; } .dns-connect .ui-button { height: 40px; } }
 
-/* Domain page: plain sections split by hairlines, no boxes (same rhythm as onboarding). */
+/* Domain page: plain sections set apart by space alone, no boxes and no rules (same rhythm as onboarding). */
 .domain-sections { display: flex; flex-direction: column; min-width: 0; }
 .domain-sections > .section { margin-block: 0; }
-.domain-sections > :not(:first-child) { margin-top: var(--space-24); padding-top: var(--space-24); border-top: 1px solid var(--color-border-muted); }
+.domain-sections > :not(:first-child) { margin-top: var(--space-40); }
 .ui-section-header > .domain-group-title { gap: var(--space-8); }
 .domain-group-title h3 { font-size: var(--text-sm); line-height: var(--leading-sm); font-weight: var(--font-weight-bold); }
 .settings-facts.domain-facts { display: flex; flex-wrap: wrap; gap: var(--space-8) var(--space-40); }
@@ -73,7 +75,7 @@
 /* Pending records: quiet guidance under the records, no box. */
 .dns-wait { display: flex; flex-direction: column; gap: var(--space-6); max-width: 72ch; color: var(--color-muted); font-size: var(--text-sm); line-height: var(--leading-sm); text-wrap: pretty; }
 .dns-wait a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
-.dns-wait a:hover { color: var(--color-text); }
+.dns-wait a:is(:hover, :focus-visible) { color: var(--color-text); }
 .dns-issue { margin-top: var(--space-12); max-width: 72ch; }
 @media (max-width: 560px) { .settings-facts.domain-facts { display: grid; gap: 0; } }
 
@@ -100,9 +102,9 @@
 .ui-table-scroll.domain-records td[data-col='type'], .domain-record-type { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); font-weight: var(--font-weight-regular); }
 .domain-record-status { display: flex; min-width: 0; }
 /* Add custom MAIL FROM: one quiet row in place of its two records, under the table's last row. */
-.domain-records-add { display: flex; align-items: center; height: var(--row-height); padding: var(--space-6) var(--space-12); border-top: 1px solid var(--color-border-muted); }
+.domain-records-add { display: flex; align-items: center; height: var(--row-height); padding: var(--space-6) var(--space-12); }
 .domain-records-add > .ui-button--ghost { margin-inline-start: -11px; }
-.ui-cards.domain-records + .domain-records-add { margin-inline: calc(-1 * var(--bleed, 0px)); padding-inline: var(--bleed, 0px); border-top: 0; }
+.ui-cards.domain-records + .domain-records-add { margin-inline: calc(-1 * var(--bleed, 0px)); padding-inline: var(--bleed, 0px); }
 .ui-table-scroll.domain-records .settings-copy-cell code { flex: 0 1 auto; overflow: visible; text-overflow: clip; white-space: normal; overflow-wrap: anywhere; }
 .ui-table-scroll.domain-records .settings-copy-cell > .ui-button { flex: none; }
 @media (pointer: coarse) {

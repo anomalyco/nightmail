@@ -79,7 +79,7 @@ export type OauthScopePrefix = typeof oauthScopePrefixes[number];
 export const requestedScopes = (config: { oauthScopePrefix?: OauthScopePrefix }) => (['read', 'send', 'manage'] as const).map(p => `${config.oauthScopePrefix ?? 'bane'}:${p}`);
 
 /** Prefixes of the secrets this service issues, by kind. New secrets get these. */
-export const secretPrefixes = { apiKey: 'nm_', addressKey: 'nm_mbx_', agentToken: 'nm_agent_', supportGrant: 'nm_support_', notesKey: 'nm_notes_' } as const;
+export const secretPrefixes = { apiKey: 'nm_', addressKey: 'nm_mbx_', agentToken: 'nm_agent_', supportGrant: 'nm_support_', notesKey: 'nm_notes_', agentSetup: 'nm_setup_', deviceCode: 'nm_device_' } as const;
 /** Earlier prefixes stay valid: bane_… and, before it, OpenSend's os_…. Remove after rename cleanup. */
 export const legacySecretPrefixes = ['bane', 'os'] as const;
 /** What a key list shows of a new secret: its kind's prefix and the first 8 characters after it. */

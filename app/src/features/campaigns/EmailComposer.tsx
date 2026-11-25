@@ -2,8 +2,9 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useSta
 import { EmailEditor, type EmailEditorRef } from '@react-email/editor'
 import type {} from '@react-email/editor/extensions'
 import { defaultSlashCommands, Inspector } from '@react-email/editor/ui'
-import { AlignCenter, AlignLeft, AlignRight, Bold, Box, ChevronDown, Columns2, Heading2, ImagePlus, Italic, List, Minus, MousePointer2, Paperclip, Plus, Redo2, SlidersHorizontal, Type, Undo2, UserRound, X } from 'lucide-react'
-import { Button, DropdownMenu, IconButton, SkeletonText } from '../../components/ui'
+import { AlignCenter, AlignLeft, AlignRight, Bold, Box, Braces, ChevronDown, Columns2, Heading2, ImagePlus, Italic, List, LoaderCircle, Minus, MousePointer2, Paperclip, Plus, Redo2, Shapes, SlidersHorizontal, Type, Undo2, UserRound, X, type LucideIcon } from 'lucide-react'
+import { Button, DropdownMenu, Icon, IconButton, SkeletonText, type MenuItem } from '../../components/ui'
+import { modKey, useMediaQuery } from '../../lib/media'
 import { useApi } from '../../data/context'
 import type { Attachment, AttachmentApi } from '../../data/types'
 import { attachmentLimit, composerLoading, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS } from './copy'
@@ -18,11 +19,15 @@ import { errorText } from '../../data/types'
 // API. Opening converts block HTML to editor blocks; saving converts blocks back.
 type Draft = ComposedDraft
 export type EmailComposerRef = { prepare: () => Promise<Draft> }
-// personalize offers {{placeholder}} insertions.
+// personalize offers {{placeholder}} insertions. The composer sits in the campaign studio (campaigns.css): from 900 px its
+// tools are a floating rail at the desk's left edge (Text, Image, Components, Variables, then formatting, Undo and Redo,
+// and Style), and from 1150 px the Style panel is docked open at the right edge; below 900 px the tools are a
+// toolbar on the sheet and the panel opens over the page.
 // knownAttachmentIds: the attachments of this draft's other versions (a merge can leave the form without an image the
 // body still shows); the composer looks there for an image's attachment when attachmentIds lacks it.
 type Props = { attachmentIds?: string[]; knownAttachmentIds?: string[]; attachmentApi?: AttachmentApi; initialHtml: string; disabled?: boolean; personalize?: boolean; onReady: () => void; onDirty: () => void; onAttach?: () => void; onBusy?: (busy: boolean) => void }
 const linkForms = '[data-re-link-selector-form], [data-re-link-bm-form], [data-re-btn-bm-form], [data-re-img-bm-form]'
+const variables = [['Name', 'name'], ['First name', 'firstName'], ['Email', 'email']] as const
 
 // The library's slash menu reads this shared list and has no image entry, although the
 // editor supports images. Route "/image" to the mounted composer's file picker. The menu
@@ -54,7 +59,12 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
   const busyListener = useRef(onBusy)
   busyListener.current = onBusy
   const [error, setError] = useState('')
-  const [inspectorOpen, setInspectorOpen] = useState(false)
+  const railed = useMediaQuery('(min-width: 900px)')
+  const wide = useMediaQuery('(min-width: 1150px)')
+  // The panel's open state: null keeps the default (docked open from 1150 px, closed below) until someone toggles it.
+  const [panelChoice, setPanelChoice] = useState<boolean | null>(null)
+  const panelShown = panelChoice ?? wide
+  const docked = wide && panelShown
   const inspector = useRef<HTMLElement>(null)
   const editor = useRef<EmailEditorRef>(null)
   const fileInput = useRef<HTMLInputElement>(null)
@@ -109,7 +119,7 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
   // Run after child option reconciliation so the name and paste boundary remain installed.
   useEffect(() => { if (editor.current) synchronizeEditor(editor.current) })
   useEffect(() => {
-    if (!inspectorOpen || !inspector.current) return
+    if (!panelShown || !inspector.current) return
     const label = () => {
       inspector.current?.querySelectorAll<HTMLInputElement>('input, select, textarea').forEach(control => {
         if (control.getAttribute('aria-label')) return
@@ -148,7 +158,7 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
     const observer = new MutationObserver(label)
     observer.observe(inspector.current, { childList: true, subtree: true })
     return () => observer.disconnect()
-  }, [inspectorOpen])
+  }, [panelShown])
   useEffect(() => {
     pickImage = () => { if (!locked) { onDirty(); fileInput.current?.click() } }
     return () => { pickImage = null }
@@ -293,6 +303,26 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
     }, false, true)
   }
   const inactive = locked || !ready
+  const chooseImage = () => { if (inactive) return; onDirty(); fileInput.current?.click() }
+  // The rail's Text: one click inserts at the caret (the editor keeps focus; see keepFocus).
+  const insertText = () => command(e => e.chain().focus().setParagraph().run(), true, true)
+  const keepFocus = (event: { target: EventTarget; preventDefault: () => void }) => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }
+  // Everything the rail's Components (and the toolbar's Insert, with the variables) can add at the caret.
+  const componentItems: MenuItem[] = [
+    { label: 'Text', icon: <Icon icon={Type} />, onSelect: () => insertFromMenu(e => e.chain().focus().setParagraph().run()) },
+    { label: 'Heading', icon: <Icon icon={Heading2} />, onSelect: () => insertFromMenu(e => e.chain().focus().setHeading({ level: 2 }).run()) },
+    { label: 'Button', icon: <Icon icon={MousePointer2} />, onSelect: () => insertFromMenu(e => e.chain().focus().setButton().run()) },
+    { label: 'Image', icon: <Icon icon={ImagePlus} />, onSelect: () => { onDirty(); fileInput.current?.click() } },
+    { label: 'Attachment', icon: <Icon icon={Paperclip} />, disabled: !onAttach, onSelect: () => onAttach?.() },
+    { label: 'Bullet list', icon: <Icon icon={List} />, onSelect: () => insertFromMenu(e => e.chain().focus().toggleBulletList().run()) },
+    { label: 'Divider', icon: <Icon icon={Minus} />, onSelect: () => insertFromMenu(e => e.chain().focus().setHorizontalRule().run()) },
+    { label: 'Styled section', icon: <Icon icon={Box} />, onSelect: () => insertFromMenu(e => e.chain().focus().insertSection().run()) },
+    { label: '2 columns', icon: <Icon icon={Columns2} />, onSelect: () => insertFromMenu(e => e.chain().focus().insertColumns(2).run()) },
+  ]
+  const variableItems: MenuItem[] = personalize ? variables.map(([text, key]) => ({ label: text, icon: <Icon icon={UserRound} />, onSelect: () => insertFromMenu(e => e.chain().focus().insertContent(`{{${key}}}`).run()) })) : []
+  const togglePanel = () => setPanelChoice(!panelShown)
+  const fileField = <input ref={fileInput} type="file" hidden accept="image/png,image/jpeg,image/gif,image/webp,image/avif" onChange={event => void insertImage(event.target.files?.[0])} />
+  const tool = (label: string, icon: LucideIcon, run: () => void, title = label) => <IconButton label={label} title={title} disabled={inactive} onClick={run}><Icon icon={icon} /></IconButton>
   return <div className="email-composer" data-inactive={locked || undefined} onClickCapture={event => { if (locked) { event.preventDefault(); event.stopPropagation() } }} onKeyDownCapture={event => {
     if (event.key === 'Escape' && (event.target as Element).closest(linkForms)) {
       event.preventDefault()
@@ -303,38 +333,50 @@ export const EmailComposer = forwardRef<EmailComposerRef, Props>(function EmailC
       requestAnimationFrame(() => { if (trigger?.isConnected) trigger.focus(); else editor.current?.editor?.commands.focus() })
     } else if (locked) { event.preventDefault(); event.stopPropagation() }
   }}>
-    <div className="composer-toolbar">
-      <div className="composer-tools ui-scroll-fade" aria-label="Email formatting" onMouseDown={event => { if ((event.target as HTMLElement).closest('button')) event.preventDefault() }}>
-        <DropdownMenu label="Insert" align="start" trigger={<Button size="sm" variant="ghost" disabled={inactive}><Plus size={16} />Insert<ChevronDown size={14} /></Button>} items={[
-          { label: 'Text', icon: <Type size={16} />, onSelect: () => insertFromMenu(e => e.chain().focus().setParagraph().run()) },
-          { label: 'Heading', icon: <Heading2 size={16} />, onSelect: () => insertFromMenu(e => e.chain().focus().setHeading({ level: 2 }).run()) },
-          { label: 'Button', icon: <MousePointer2 size={16} />, onSelect: () => insertFromMenu(e => e.chain().focus().setButton().run()) },
-          { label: 'Image', icon: <ImagePlus size={16} />, onSelect: () => { onDirty(); fileInput.current?.click() } },
-          { label: 'Attachment', icon: <Paperclip size={16} />, disabled: !onAttach, onSelect: () => onAttach?.() },
-          { label: 'Bullet list', icon: <List size={16} />, onSelect: () => insertFromMenu(e => e.chain().focus().toggleBulletList().run()) },
-          { label: 'Divider', icon: <Minus size={16} />, onSelect: () => insertFromMenu(e => e.chain().focus().setHorizontalRule().run()) },
-          { label: 'Styled section', icon: <Box size={16} />, onSelect: () => insertFromMenu(e => e.chain().focus().insertSection().run()) },
-          { label: '2 columns', icon: <Columns2 size={16} />, onSelect: () => insertFromMenu(e => e.chain().focus().insertColumns(2).run()) },
-          ...(personalize ? [['Name', 'name'], ['First name', 'firstName'], ['Email', 'email']].map(([label, key]) => ({ label, icon: <UserRound size={16} />, onSelect: () => insertFromMenu(e => e.chain().focus().insertContent(`{{${key}}}`).run()) })) : []),
-        ]} />
-        <div className="cluster"><IconButton size="sm" label="Bold" disabled={inactive} onClick={() => command(e => e.chain().focus().toggleBold().run())}><Bold size={16} /></IconButton><IconButton size="sm" label="Italic" disabled={inactive} onClick={() => command(e => e.chain().focus().toggleItalic().run())}><Italic size={16} /></IconButton></div>
-        <div className="cluster"><IconButton size="sm" label="Align left" disabled={inactive} onClick={() => align('left')}><AlignLeft size={16} /></IconButton><IconButton size="sm" label="Align center" disabled={inactive} onClick={() => align('center')}><AlignCenter size={16} /></IconButton><IconButton size="sm" label="Align right" disabled={inactive} onClick={() => align('right')}><AlignRight size={16} /></IconButton></div>
-        <Button size="sm" variant="ghost" disabled={inactive} aria-pressed={inspectorOpen} onClick={() => setInspectorOpen(value => !value)}><SlidersHorizontal size={16} />Design</Button>
-        {busy && <span className="muted" role="status">Preparing…</span>}
-        <div className="cluster composer-history"><IconButton size="sm" label="Undo" disabled={inactive} onClick={() => command(e => e.chain().focus().undo().run())}><Undo2 size={16} /></IconButton><IconButton size="sm" label="Redo" disabled={inactive} onClick={() => command(e => e.chain().focus().redo().run())}><Redo2 size={16} /></IconButton></div>
-        <input ref={fileInput} type="file" hidden accept="image/png,image/jpeg,image/gif,image/webp,image/avif" onChange={event => void insertImage(event.target.files?.[0])} />
+    {railed ? <nav className="composer-rail" aria-label="Email formatting" onMouseDown={keepFocus}>
+      <div className="composer-rail__group">
+        {tool('Text', Type, insertText)}
+        {tool('Image', ImagePlus, chooseImage)}
+        <DropdownMenu label="Components" side="right" align="start" trigger={<IconButton label="Components" disabled={inactive}><Icon icon={Shapes} /></IconButton>} items={componentItems} />
+        {personalize && <DropdownMenu label="Variables" side="right" align="start" trigger={<IconButton label="Variables" disabled={inactive}><Icon icon={Braces} /></IconButton>} items={variableItems} />}
       </div>
-    </div>
+      <div className="composer-rail__group">
+        {tool('Bold', Bold, () => command(e => e.chain().focus().toggleBold().run()), `Bold ${modKey}B`)}
+        {tool('Italic', Italic, () => command(e => e.chain().focus().toggleItalic().run()), `Italic ${modKey}I`)}
+        {tool('Align left', AlignLeft, () => align('left'))}
+        {tool('Align center', AlignCenter, () => align('center'))}
+        {tool('Align right', AlignRight, () => align('right'))}
+      </div>
+      <div className="composer-rail__group">
+        {tool('Undo', Undo2, () => command(e => e.chain().focus().undo().run()), `Undo ${modKey}Z`)}
+        {tool('Redo', Redo2, () => command(e => e.chain().focus().redo().run()), `Redo ${modKey}⇧Z`)}
+      </div>
+      <div className="composer-rail__group">
+        <IconButton label="Style" title={panelShown ? 'Hide style' : 'Show style'} disabled={inactive} aria-pressed={panelShown} onClick={togglePanel}><Icon icon={SlidersHorizontal} /></IconButton>
+      </div>
+      {busy && <span className="composer-rail__busy" role="status"><Icon icon={LoaderCircle} size="sm" className="ui-spinner" /><span className="sr-only">Preparing…</span></span>}
+      {fileField}
+    </nav> : <div className="composer-toolbar">
+      <div className="composer-tools ui-scroll-fade" aria-label="Email formatting" onMouseDown={keepFocus}>
+        <DropdownMenu label="Insert" align="start" trigger={<Button size="sm" variant="ghost" disabled={inactive}><Icon icon={Plus} />Insert<Icon icon={ChevronDown} size="sm" /></Button>} items={[...componentItems, ...variableItems]} />
+        <div className="cluster"><IconButton size="sm" label="Bold" disabled={inactive} onClick={() => command(e => e.chain().focus().toggleBold().run())}><Icon icon={Bold} /></IconButton><IconButton size="sm" label="Italic" disabled={inactive} onClick={() => command(e => e.chain().focus().toggleItalic().run())}><Icon icon={Italic} /></IconButton></div>
+        <div className="cluster"><IconButton size="sm" label="Align left" disabled={inactive} onClick={() => align('left')}><Icon icon={AlignLeft} /></IconButton><IconButton size="sm" label="Align center" disabled={inactive} onClick={() => align('center')}><Icon icon={AlignCenter} /></IconButton><IconButton size="sm" label="Align right" disabled={inactive} onClick={() => align('right')}><Icon icon={AlignRight} /></IconButton></div>
+        <Button size="sm" variant="ghost" disabled={inactive} aria-pressed={panelShown} onClick={togglePanel}><Icon icon={SlidersHorizontal} />Style</Button>
+        {busy && <span className="muted" role="status">Preparing…</span>}
+        <div className="cluster composer-history"><IconButton size="sm" label="Undo" disabled={inactive} onClick={() => command(e => e.chain().focus().undo().run())}><Icon icon={Undo2} /></IconButton><IconButton size="sm" label="Redo" disabled={inactive} onClick={() => command(e => e.chain().focus().redo().run())}><Icon icon={Redo2} /></IconButton></div>
+        {fileField}
+      </div>
+    </div>}
     {error && <p className="campaign-note composer-error" data-tone="danger" role="alert">{error}</p>}
     <div className="composer-visual">
       <div className="composer-canvas" onClickCapture={event => { if ((event.target as HTMLElement).closest('a')) event.preventDefault() }}>
-        {!ready && <div className="composer-starting" role="status"><SkeletonText width="55%" lineHeight={36} /><SkeletonText /><SkeletonText width="80%" /><span className="sr-only">Loading visual composer</span></div>}
+        {!ready && <div className="composer-starting" role="status"><SkeletonText width="55%" lineHeight={36} /><SkeletonText /><SkeletonText width="80%" /><SkeletonText width="60%" /><span className="sr-only">Loading visual composer</span></div>}
         <EmailEditor key={generation} ref={editor} content={content as Record<string, unknown>} theme={theme} editable={!locked} placeholder="Write, or type / for blocks…" onUploadImage={upload} className="composer-document" onReady={instance => { synchronizeEditor(instance); trackCaret(instance); setReady(!hydrating); if (!hydrating) { console.info(`[${productName} timing] campaign editor ready`, { navigationMs: Number(performance.now().toFixed(1)) }); onReady() } }} onUpdate={() => { changed.current = true; onDirty() }}>
-          <Inspector.Root ref={inspector} className="composer-inspector" hidden={!inspectorOpen}>
-            <div className="composer-inspector-header"><strong>Design</strong><IconButton size="sm" label="Close design panel" onClick={() => setInspectorOpen(false)}><X size={16} /></IconButton></div>
+          <Inspector.Root ref={inspector} className="composer-inspector" hidden={!panelShown} data-docked={docked || undefined} data-closed={panelShown ? undefined : ''}>
+            <div className="composer-inspector-header"><span className="composer-inspector-title">Style</span><IconButton size="sm" label="Close style" onClick={() => setPanelChoice(false)}><Icon icon={X} /></IconButton></div>
             <Inspector.Breadcrumb />
             {/* Styles are per block (api/src/block-style.ts): no document-wide controls, and a text selection offers its block's. */}
-            <Inspector.Document>{() => <p className="composer-inspector-hint">No block selected</p>}</Inspector.Document>
+            <Inspector.Document>{() => <p className="composer-inspector-hint">Select a block to style it.</p>}</Inspector.Document>
             <Inspector.Node />
             <Inspector.Text>{() => <Inspector.Breadcrumb>{segments => { const block = segments.at(-1); return block && block.node.nodeType !== 'body' ? <Button size="sm" variant="secondary" className="composer-inspector-action" onClick={block.focus}>Style this block</Button> : null }}</Inspector.Breadcrumb>}</Inspector.Text>
           </Inspector.Root>

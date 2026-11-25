@@ -1,43 +1,109 @@
 body { font-variant-numeric: tabular-nums; }
 code, pre, .identifier { font-family: var(--font-mono); font-size: inherit; }
-button svg, .ui-button svg { width: var(--space-16); height: var(--space-16); stroke-width: 1.5; }
+/* A bare Lucide glyph in a button is 16px at stroke 1.5; an <Icon> (components/ui/icon.tsx) keeps its own size and stroke.
+   (:where keeps the exclusion from adding weight, so a context's own icon rule still wins as before.) */
+button svg:not(:where(.ui-icon)), .ui-button svg:not(:where(.ui-icon)) { width: var(--space-16); height: var(--space-16); stroke-width: 1.5; }
 .app-shell { display: flow-root; height: 100dvh; overflow: hidden; background: var(--color-deep); }
-/* The sidebar opens with the wordmark and, beside it, the theme button: one 24 px row, 16 px from the top. The
-   workspace picker follows under it. */
-.sidebar { position: fixed; inset: 0 auto 0 0; width: var(--sidebar-width); background: var(--color-deep); z-index: 20; display: flex; flex-direction: column; gap: var(--space-16); padding: 56px var(--sidebar-gutter) var(--page-inset); overflow-y: auto; }
+/* The cockpit (from 900 px): a 224px sidebar and a 44px command bar on one deep frame (an L, so the canvas inside it has
+   one even edge all round), and the page as a solid canvas with its inner corner rounded. No rule draws any of them. */
+/* The frame, a phone's bars, onboarding's header and the signed-out pages sit on deep: hover, selection and controls there
+   take deep's own solid steps. */
+:is(.sidebar, .topbar, .mobile-bar, .tab-bar, .onboarding-header, .signed-out) { --color-hover: var(--color-deep-hover); --color-active-bg: var(--color-deep-active); --color-pressed: var(--color-deep-active); --color-control: var(--color-deep-control); --color-control-hover: var(--color-deep-control-hover); --color-control-focus: var(--color-deep-control-focus); --color-control-pressed: var(--color-deep-control-pressed); }
+/* The one surface step beyond the page (layer-1: the email preview's matte, a phone's card, a notice) keeps the same
+   distance to its hover, focus, selection and controls as the canvas does: the raised set, a step off layer-1. */
+:is(.email-detail__preview, .ui-card, .ui-alert) { --color-hover: var(--color-raised-hover); --color-active-bg: var(--color-raised-active); --color-pressed: var(--color-raised-active); --color-control: var(--color-raised-control); --color-control-hover: var(--color-raised-control-hover); --color-control-focus: var(--color-raised-control-focus); --color-control-pressed: var(--color-raised-control-pressed); }
+/* A selected row already wears the selection fill: keyboard focus on it takes one step past it. */
+.ui-table tr[data-selected]:is(:focus-visible, :has(.ui-row-link:focus-visible)) > td { background: var(--color-raised-control-focus); }
+.sidebar { position: fixed; inset: 0 auto 0 0; z-index: 20; display: flex; flex-direction: column; width: var(--sidebar-width); padding: 0; overflow-y: auto; background: var(--color-deep); }
+/* The wordmark's row is as tall as the command bar beside it, so the two read as one band. */
+.sidebar-head { display: flex; flex: none; align-items: center; height: var(--topbar-height); padding: 0 var(--space-16); }
 /* The wordmark's link: in the sidebar, in a phone's top bar, and in a page's header (onboarding, the legal pages). */
 .wordmark { height: var(--space-24); display: flex; align-items: center; color: var(--color-text); text-decoration: none; }
-/* In the sidebar its first stem stands on the text's left edge: the picker's name and the navigation labels (gutter +
-   inset). */
-.sidebar .wordmark { position: absolute; top: var(--space-16); left: calc(var(--sidebar-gutter) + var(--sidebar-inset)); }
+.wordmark:focus-visible { border-radius: var(--radius-xs); background: var(--color-hover); }
 /* The brand's marks (components/NightmailLogo.tsx): the brand's ink on a pale theme, its paper on a dark one. The
-   wordmark is sized by its cap height, 13 px: 139 px across, which leaves the sidebar's row room for the theme button. */
+   wordmark is sized by its cap height: 12 px caps, 129 px across. */
 .nightmail-logo { display: block; flex: none; color: var(--color-logo); fill: currentColor; }
-.nightmail-wordmark { --logo-cap: 13px; width: calc(var(--logo-cap) * 10.72); height: var(--logo-cap); }
-/* The same top and height as the wordmark's row, so the button is centred on it. */
-.theme-toggle { position: absolute; top: var(--space-16); right: var(--sidebar-gutter); }
-.sidebar-context { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--space-6); }
-/* The picker's name starts on the navigation labels' left edge. */
+.nightmail-wordmark { --logo-cap: 12px; width: calc(var(--logo-cap) * 10.72); height: var(--logo-cap); }
+.sidebar-context { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--space-6); padding: var(--space-4) var(--space-8) var(--space-8); }
+.sidebar-context:empty { display: none; }
 .sidebar-context > :is(.ui-select-trigger, select) { padding-inline: var(--sidebar-inset); }
-.main-navigation { flex-shrink: 0; margin-top: var(--space-16); display: flex; flex-direction: column; gap: var(--space-4); }
-.main-navigation a { min-height: 32px; display: flex; align-items: center; padding-inline: var(--sidebar-inset); border-radius: 4px; font-size: var(--text-sm); line-height: var(--leading-sm); color: var(--color-muted); text-decoration: none; transition: color var(--motion-duration), background var(--motion-duration); }
-.main-navigation a:hover { color: var(--color-text); background: var(--color-hover); }
-/* The page you're on: a neutral fill and the brighter text. */
-.main-navigation a.active { color: var(--color-text); background: var(--color-active-bg); font-weight: var(--font-weight-bold); }
-.main-navigation a[data-locked] { justify-content: space-between; }
-.main-navigation__title, .more-sheet__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.main-navigation a[data-locked] svg { color: var(--color-faint); }
-.sidebar-footer { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--space-16); margin-top: auto; padding-inline: var(--sidebar-inset); }
-/* Connect an agent, first in the footer: a row like the navigation's, its label on theirs, its mark on the right. */
-.sidebar-connect { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); min-height: 32px; margin-inline: calc(-1 * var(--sidebar-inset)); padding: 0 var(--sidebar-inset); border: 0; border-radius: 4px; background: none; color: var(--color-text); font: inherit; font-size: var(--text-sm); line-height: var(--leading-sm); text-align: left; cursor: pointer; transition: background var(--motion-duration); }
-.sidebar-connect:hover { background: var(--color-hover); }
-.sidebar-connect:focus-visible { outline: 2px solid var(--color-focus); outline-offset: -2px; }
-.sidebar-connect svg { width: 14px; height: 14px; color: var(--color-muted); }
-/* The sender score card spans the sidebar's inner width and always holds 56px. */
-.sidebar-score-slot { height: 56px; margin-inline: calc(-1 * var(--sidebar-gutter)); }
+/* Four tight groups (Mail, Marketing, Infra, Workspace), each a mono label over 28px rows: a static 15px glyph, the
+   page, and its G shortcut at the row's end. */
+.main-navigation { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--space-12); padding: var(--space-8) var(--space-8) var(--space-16); }
+.nav-group { display: flex; flex-direction: column; gap: 1px; }
+.nav-group__label { display: flex; align-items: center; height: 24px; padding: 0 var(--sidebar-inset); color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); line-height: var(--leading-label); letter-spacing: var(--tracking-label); text-transform: uppercase; user-select: none; }
+.main-navigation a { display: flex; align-items: center; gap: var(--space-8); height: 28px; padding-inline: var(--sidebar-inset); border-radius: var(--radius-sm); color: var(--color-muted); font-size: var(--text-md); line-height: 18px; text-decoration: none; transition: color var(--motion-duration) var(--ease-standard), background var(--motion-duration) var(--ease-standard); }
+.main-navigation a > .ui-icon { --icon-size: 15px; color: var(--color-faint); transition: color var(--motion-duration) var(--ease-standard); }
+.main-navigation a > .ui-shortcut { opacity: .8; }
+@media (hover: hover) and (pointer: fine) { .main-navigation a:hover { color: var(--color-text); background: var(--color-hover); } .main-navigation a:hover > .ui-icon { color: var(--color-muted); } }
+.main-navigation a:focus-visible { color: var(--color-text); background: var(--color-hover); text-decoration: none; }
+/* The page you're on: a neutral fill, the brighter text and glyph. */
+.main-navigation a.active { color: var(--color-text); background: var(--color-active-bg); font-weight: var(--font-weight-medium); }
+.main-navigation a.active > .ui-icon { color: var(--color-text); }
+.main-navigation__title, .more-sheet__title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.main-navigation a[data-locked] > .ui-icon:last-child { --icon-size: 12px; color: var(--color-faint); }
+/* The footer: legal links, privacy mode, SES's quota (self-hosted), then the sender score as one 32px row at the bottom;
+   set off from the navigation by space, its rows on the navigation's 8px gutter and inset. */
+.sidebar-footer { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--space-4); margin-top: auto; padding: var(--space-8); }
+.sidebar-footer > .legal-footer-links { padding: 0 var(--sidebar-inset); }
+.sidebar-footer > .privacy-toggle { min-height: 28px; padding: 0 var(--sidebar-inset); border-radius: var(--radius-sm); }
+.sidebar-footer > :is(.sidebar-setup, .sidebar-quota:not(:empty)) { padding: var(--space-8) var(--sidebar-inset); }
+.sidebar-score-slot { height: 56px; }
+.sidebar .sidebar-score-slot { height: 32px; }
+/* In the sidebar the score card is a readout row: SENDER SCORE on the left, 86 · B on the right, no dial. */
+.sidebar .sidebar-score-slot > .gauge-card--compact { height: 32px; gap: var(--space-8); padding: 0 var(--sidebar-inset); border-radius: var(--radius-sm); background: none; box-shadow: none; }
+@media (hover: hover) and (pointer: fine) { .sidebar .sidebar-score-slot > .gauge-card--compact:hover { background: var(--color-hover); } }
+.sidebar .sidebar-score-slot > .gauge-card--compact:focus-visible { background: var(--color-hover); }
+.sidebar .sidebar-score-slot .gauge-dial { display: none; }
+.sidebar .sidebar-score-slot .gauge-stack { flex-direction: row; align-items: center; justify-content: space-between; gap: var(--space-8); }
+.sidebar .sidebar-score-slot .gauge-eyebrow { color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); line-height: var(--leading-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.sidebar .sidebar-score-slot .gauge-readout { align-items: center; gap: 0; height: 32px; line-height: 32px; }
+.sidebar .sidebar-score-slot .gauge-readout b { min-width: 0; font-size: var(--text-xs); line-height: 16px; letter-spacing: 0; }
+.sidebar .sidebar-score-slot .gauge-grade { font-size: var(--text-xs); line-height: 16px; font-weight: 400; }
+.sidebar .sidebar-score-slot .gauge-grade::before { content: '·'; margin: 0 var(--space-6); color: var(--color-faint); }
+.sidebar .sidebar-score-slot .gauge-alert { top: 13px; right: 6px; box-shadow: none; }
+.sidebar .sidebar-score-slot .gauge-skeleton { inset: 9px var(--sidebar-inset); border-radius: 3px; }
+/* The command bar, on the frame: where you are (workspace / page), the quick jumper in the middle (a solid field), then
+   the search hint, the theme and Connect an agent. */
+.topbar { position: fixed; top: 0; right: 0; left: var(--sidebar-width); z-index: 15; display: grid; grid-template-columns: minmax(0, 1fr) minmax(220px, 380px) minmax(0, 1fr); align-items: center; gap: var(--space-16); height: var(--topbar-height); padding: 0 var(--space-12) 0 var(--space-16); background: var(--color-deep); }
+.topbar__crumbs { display: flex; align-items: center; gap: var(--space-8); min-width: 0; font-size: var(--text-md); line-height: 18px; white-space: nowrap; }
+.topbar__workspace { min-width: 0; overflow: hidden; color: var(--color-muted); text-overflow: ellipsis; }
+.topbar__sep { flex: none; color: var(--color-faint); }
+.topbar__section { flex: none; color: var(--color-text); font-weight: var(--font-weight-medium); }
+.command-trigger { display: flex; align-items: center; gap: var(--space-8); width: 100%; height: 28px; padding: 0 5px 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: var(--color-control); color: var(--color-faint); font-size: var(--text-md); line-height: 18px; text-align: left; cursor: pointer; transition: background var(--motion-duration) var(--ease-standard), color var(--motion-duration) var(--ease-standard); }
+.command-trigger > span { flex: 1; min-width: 0; overflow: hidden; color: var(--color-muted); text-overflow: ellipsis; white-space: nowrap; }
+/* Its ⌘K cap is set into the field. */
+.command-trigger > .ui-kbd { background: var(--color-kbd-inset); }
+@media (hover: hover) and (pointer: fine) { .command-trigger:hover { background: var(--color-control-hover); color: var(--color-muted); } }
+.command-trigger:focus-visible { background: var(--color-control-focus); color: var(--color-muted); }
+.command-trigger:active { background: var(--color-control-pressed); }
+.topbar__end { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-4); min-width: 0; }
+.topbar__hint { display: inline-flex; align-items: center; gap: var(--space-6); margin-right: var(--space-8); color: var(--color-faint); font-size: var(--text-xs); white-space: nowrap; }
+.topbar :is(.theme-toggle, .topbar__connect) { width: 28px; height: 28px; }
+@media (max-width: 1100px) { .topbar { grid-template-columns: minmax(0, 1fr) minmax(200px, 300px) auto; } .topbar__hint { display: none; } }
+/* The quick jumper (components/CommandMenu.tsx): a field, the pages with their shortcuts, and the keys that drive it. */
+.ui-dialog.command-menu { width: min(560px, calc(100vw - 32px)); }
+.command-menu .ui-dialog__body { display: flex; flex-direction: column; padding: 0; }
+.command-menu__field { position: sticky; top: 0; z-index: 1; display: flex; flex: none; align-items: center; gap: var(--space-8); height: 44px; padding: var(--space-4) var(--space-16) 0; background: var(--color-overlay-surface); }
+.command-menu__input { flex: 1; min-width: 0; height: 100%; padding: 0; border: 0; background: none; color: var(--color-text); font-size: var(--text-md); outline: none; }
+.command-menu__input::placeholder { color: var(--color-faint); }
+.command-menu__list { display: flex; flex-direction: column; margin: 0; padding: var(--space-4); list-style: none; }
+.command-menu__item { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto auto; align-items: center; gap: var(--space-8); height: 32px; padding: 0 var(--space-8); border-radius: var(--radius-xs); color: var(--color-muted); font-size: var(--text-md); cursor: pointer; }
+.command-menu__item[aria-selected='true'] { background: var(--color-active-bg); color: var(--color-text); }
+.command-menu__icon { display: grid; place-items: center; color: inherit; }
+.command-menu__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.command-menu__group { color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); letter-spacing: var(--tracking-label); text-transform: uppercase; }
+.command-menu__keys { display: inline-flex; gap: 2px; }
+.command-menu__empty { padding: var(--space-16) var(--space-8); color: var(--color-muted); font-size: var(--text-md); }
+.command-menu .ui-dialog__footer { justify-content: flex-start; padding: var(--space-8) var(--space-16); }
+.command-menu__foot { display: flex; gap: var(--space-16); color: var(--color-faint); font-size: var(--text-xs); }
+.command-menu__foot > span { display: inline-flex; align-items: center; gap: 4px; }
+.command-menu__foot > span > .ui-kbd:last-of-type { margin-right: 2px; }
+.ui-dialog--sheet.command-menu .ui-dialog__footer { display: none; }
 .sidebar-setup { display: flex; flex-direction: column; gap: var(--space-4); color: var(--color-text); font-size: var(--text-xs); line-height: var(--leading-xs); text-decoration: none; }
 .sidebar-setup-action { color: var(--color-accent-text); }
-.sidebar-setup:hover .sidebar-setup-action { text-decoration: underline; text-underline-offset: 3px; }
+.sidebar-setup:is(:hover, :focus-visible) .sidebar-setup-action { text-decoration: underline; text-underline-offset: 3px; }
+.sidebar-setup:focus-visible { color: var(--color-text); text-decoration: none; }
 .sidebar-quota:empty { display: none; }
 .sidebar-quota { flex-shrink: 0; display: flex; flex-direction: column; gap: var(--space-8); color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
 /* Holds the loaded quota's height (label, meter, count) so the footer stays put while SES is checked. */
@@ -46,30 +112,33 @@ button svg, .ui-button svg { width: var(--space-16); height: var(--space-16); st
 /* Terms, Privacy and the legal overview (components/LegalLinks.tsx), first in the sidebar footer and the More sheet's. */
 .legal-footer-links { display: flex; flex-wrap: wrap; gap: 0 var(--space-12); color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .legal-footer-links a { padding-block: var(--space-4); color: inherit; text-decoration: none; transition: color var(--motion-duration); }
-.legal-footer-links a:hover { color: var(--color-text); }
+.legal-footer-links a:is(:hover, :focus-visible) { color: var(--color-text); }
 /* Privacy mode (components/PrivacyToggle.tsx): the whole row is the button; the switch only shows its state. */
 .privacy-toggle { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); width: 100%; padding: 0; border: 0; border-radius: 2px; background: none; color: var(--color-text); font: inherit; font-size: var(--text-xs); line-height: var(--leading-xs); text-align: left; cursor: pointer; }
-.privacy-toggle:focus-visible { outline: 2px solid var(--color-focus); outline-offset: 2px; }
+.privacy-toggle:focus-visible { background: var(--color-hover); color: var(--color-text); }
 /* Fields that hold addresses (sender lists, a dry run's recipient): blurred like every address, revealed by hover or focus,
    and in the clear with privacy mode off (the default). */
 html[data-privacy='on'] .private-field:not(:hover, :focus) { color: transparent; text-shadow: 0 0 .31em var(--color-text); }
 html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color: transparent; text-shadow: 0 0 .31em var(--color-muted); }
 /* "By continuing you agree to…" under a sign-in button. */
 .sign-in-consent a { color: inherit; text-decoration-line: underline; text-decoration-thickness: from-font; text-underline-offset: .18em; transition: color var(--motion-duration); }
-.sign-in-consent a:hover { color: var(--color-text); }
+.sign-in-consent a:is(:hover, :focus-visible) { color: var(--color-text); }
 .quota-label span:last-child { color: var(--color-text); }
 .quota-meter { display: block; height: 3px; width: 100%; border: 0; border-radius: 2px; background: var(--color-layer-2); appearance: none; overflow: hidden; }
 .quota-meter::-webkit-meter-bar { background: var(--color-layer-2); border: 0; border-radius: 2px; height: 3px; }
 .quota-meter::-webkit-meter-optimum-value { background: var(--color-accent-data); }
 .quota-meter::-moz-meter-bar { background: var(--color-accent-data); }
-.page-surface { display: flex; flex-direction: column; margin: var(--page-inset) var(--page-inset) var(--page-inset) var(--sidebar-width); padding: var(--space-24) var(--space-32); height: calc(100dvh - 2 * var(--page-inset)); min-height: 0; background: var(--color-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-raised); position: relative; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+.page-surface { display: flex; flex-direction: column; margin: var(--topbar-height) 0 0 var(--sidebar-width); padding: var(--space-20) var(--space-24); height: calc(100dvh - var(--topbar-height)); min-height: 0; border-start-start-radius: var(--radius-lg); background: var(--color-surface); position: relative; min-width: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
+/* Console pages (Overview, Logs, a sent email) run edge to edge from 900 px: each lays out its own strips and solid
+   surfaces on the page's 16px gutter, and a notice above one sits on that gutter too, as a solid strip of its own. */
+.app-shell:not(.app-shell--compact) .page-surface:has(> :is(.ov-page, .logs-page, .email-detail)) { padding: 0; }
+.app-shell:not(.app-shell--compact) .page-surface:has(> :is(.ov-page, .logs-page, .email-detail)) > :is(.standing-banner, .page-notice) { margin: var(--space-8) var(--space-16) 0; padding: var(--space-8) var(--space-12); }
+.app-shell:not(.app-shell--compact) .page-surface:has(> :is(.ov-page, .logs-page, .email-detail)) > .page-notice { padding: 0; }
 .page-surface > :is(.stack, .audience-page, .ui-loading-layout) { flex: 1; }
 .page-surface > .stack { gap: var(--page-gap); }
 .page-surface > .stack > .section { margin-block: 0; }
-.page-surface:focus { outline: none; }
 /* Route transitions: a new page (or a skeleton giving way to content) crossfades in 120 ms. Opacity only, no movement. */
 .page-surface > :not(.page-notice) { animation: section-enter 120ms ease-out both; }
-.main-navigation a { transition: color var(--motion-duration), background var(--motion-duration), transform 160ms var(--ease-out-strong); }
 .main-navigation a:active { transform: scale(.98); }
 .page-notice { flex-shrink: 0; margin-bottom: var(--page-gap); }
 /* The standing banner (restrict, pause) on every dashboard page. What happened has a reserved line (two below 1100 px, three
@@ -77,7 +146,8 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
 .page-surface > .standing-banner { animation: none; }
 /* The billing banner (an empty balance) and the setup banner (a member before sending is set up) share it; its two lines are fixed text, so both always fit their reserved lines. */
 .standing-banner + .standing-banner { margin-top: calc(-1 * var(--page-gap) + var(--space-8)); }
-.standing-banner { flex-shrink: 0; display: flex; align-items: center; gap: var(--space-12); margin-bottom: var(--page-gap); padding: var(--space-8) var(--space-12); border: 1px solid var(--tone-border); border-radius: var(--radius-sm); background: var(--tone-bg); color: var(--color-text); font-size: var(--text-sm); line-height: var(--leading-sm); }
+/* Flat: a solid neutral strip (no rule), the tone in its icon's ink and the line's own words; no tinted box. */
+.standing-banner { flex-shrink: 0; display: flex; align-items: center; gap: var(--space-12); margin-bottom: var(--page-gap); padding: var(--space-8) var(--space-12); border: 0; border-radius: var(--radius-sm); background: var(--color-layer-1); color: var(--color-text); font-size: var(--text-md); line-height: var(--leading-sm); }
 .standing-banner__icon { flex: none; align-self: flex-start; margin-top: 2px; color: var(--tone-ink); }
 .standing-banner__text { flex: 1; min-width: 0; }
 .standing-banner__text > p { height: var(--leading-sm); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -115,11 +185,11 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
 /* Signed out on a page that needs a session (data/context.tsx): the wordmark over one centred column. */
 .signed-out { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: var(--space-32); min-height: 100dvh; padding: max(var(--space-40), env(safe-area-inset-top)) max(var(--space-24), env(safe-area-inset-right)) max(var(--space-40), env(safe-area-inset-bottom)) max(var(--space-24), env(safe-area-inset-left)); text-align: center; }
 .signed-out__body { display: flex; flex-direction: column; gap: var(--space-16); width: min(100%, 360px); }
-.signed-out__body h1 { font-size: var(--text-lg); line-height: var(--leading-lg); text-wrap: balance; }
+.signed-out__body h1 { font-size: var(--text-title); line-height: var(--leading-title); font-weight: var(--font-weight-semibold); letter-spacing: var(--tracking-title); text-wrap: balance; }
 .signed-out__body > p { text-wrap: pretty; }
 .signed-out__body > .ui-alert { text-align: start; }
 .signed-out__link { align-self: center; color: var(--color-muted); text-decoration: underline; text-underline-offset: .18em; }
-.signed-out__link:hover { color: var(--color-text); }
+.signed-out__link:is(:hover, :focus-visible) { color: var(--color-text); }
 .signed-out__body [data-own-address] { overflow-wrap: anywhere; }
 .signed-out__link-form { display: flex; flex-direction: column; gap: var(--space-8); text-align: start; }
 /* Every line the form can say, stacked in one cell: the cell keeps the longest's height whichever shows. */
@@ -128,14 +198,25 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
 .signed-out__status > [data-shown] { visibility: visible; }
 .signed-out__links { display: flex; justify-content: center; gap: var(--space-24); }
 .signed-out__links a { color: var(--color-muted); text-decoration: underline; text-underline-offset: .18em; }
-.signed-out__links a:hover { color: var(--color-text); }
+.signed-out__links a:is(:hover, :focus-visible) { color: var(--color-text); }
+/* Flat and calm on the page's ground: no rule, outline or ring. A notice is one solid step off the ground (its tone in
+   its ink), a field a solid control fill, and focus shows the hover fill. */
+.signed-out__body > .ui-alert { border-color: transparent; background: var(--color-surface); }
+.signed-out__body .ui-button--secondary { background: var(--color-deep-control, var(--color-surface)); }
+@media (hover: hover) and (pointer: fine) { .signed-out__body .ui-button--secondary:hover:not(:disabled) { background: var(--color-deep-control-hover, var(--color-layer-1)); } }
+.signed-out__body .ui-button--secondary:focus-visible { background: var(--color-deep-control-focus, var(--color-layer-2)); }
+.signed-out__body .ui-button--primary:focus-visible { background: var(--color-accent-hover); }
+.signed-out__link-form .ui-input { background: var(--color-deep-control, var(--color-surface)); }
+@media (hover: hover) and (pointer: fine) { .signed-out__link-form .ui-input:hover:not(:disabled, :focus, [aria-invalid='true']) { background: var(--color-deep-control-hover, var(--color-layer-1)); } }
+.signed-out__link-form .ui-input:is(:focus, :focus-visible) { background: var(--color-deep-control-focus, var(--color-layer-2)); }
+.signed-out__link-form .ui-input[aria-invalid='true'] { background: var(--color-control-invalid, var(--color-danger-bg)); }
 .between { justify-content: space-between; }
 .nowrap { white-space: nowrap; }
 .text-warning { color: var(--color-warning); }
-/* Charts: a hairline grid and muted mono axes. */
+/* Charts: no box and no axis rules; ultra-quiet horizontal reference lines (crisp, all one step) and muted mono labels. */
 .chart-label { fill: var(--color-faint); font-family: var(--font-mono); font-size: 10.5px; font-variant-numeric: tabular-nums; }
-.chart-grid { stroke: var(--color-border-muted); shape-rendering: crispEdges; }
-.chart-grid--base { stroke: var(--color-border); }
+.chart-grid { stroke: var(--color-gridline); shape-rendering: crispEdges; }
+.chart-grid--base { stroke: var(--color-gridline); }
 .search-box { display: flex; align-items: center; position: relative; width: 392px; max-width: 100%; min-width: 220px; flex-shrink: 1; }
 .search-box > svg { position: absolute; left: var(--space-12); color: var(--color-muted); pointer-events: none; }
 .search-box .ui-input { padding-left: var(--space-32); width: min(392px, 100%); }
@@ -143,26 +224,25 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
 .logs-page { display: flex; flex: 1; min-height: 0; flex-direction: column; }
 .logs-page > .ui-page-header { margin-bottom: var(--space-12); }
 .logs-page > .data-toolbar { padding-bottom: var(--space-12); }
-/* A log stream: 28px mono rows (--row-height-dense), the exception to the tables' row height it shares with the
-   support inbox's list (features/support-inbox). */
-.logs-table { --table-row-height: var(--row-height-dense); }
+/* A log stream: 32px mono rows (--row-height-log) on an ultra-quiet alternating band, no rules; the subject in Inter.
+   The exception to the tables' row height, shared with the support inbox's list (features/support-inbox). Hover and
+   selection (ui.css) outrank the band. */
+.logs-table { --table-row-height: var(--row-height-log); }
 .logs-table .ui-table { font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: -.01em; }
-.logs-table .ui-table .log-subject { font-family: var(--font-body); font-size: var(--text-sm); letter-spacing: 0; }
-.logs-table .ui-table td { border-bottom-color: transparent; }
-@media (hover: hover) and (pointer: fine) { .logs-table .ui-table tbody tr.ui-table__clickable:hover { background: var(--color-hover); } }
+.logs-table .ui-table .log-subject { font-family: var(--font-body); font-size: var(--text-md); letter-spacing: 0; }
+.logs-table :where(.ui-table tbody tr:not(.ui-table-spacer):nth-child(even)) > td { background: var(--color-row-alt); }
 .logs-table .ui-status { font-family: var(--font-mono); font-size: var(--text-xs); }
 /* The time: a muted date, the bright time. */
 .log-time { color: var(--color-text); white-space: nowrap; }
 .log-time__date { color: var(--color-faint); }
 /* The direction tabs sit in the page header, at control height, like Overview's range. */
 .logs-controls { flex-wrap: nowrap; gap: var(--space-12); }
-.logs-controls .ui-tabs { min-height: var(--control-height); border-bottom: 0; }
+.logs-controls .ui-tabs { min-height: var(--control-height); }
 .logs-controls .ui-tab { height: var(--control-height); }
-.logs-table .ui-table th { height: 30px; padding-block: var(--space-4); }
+.logs-table .ui-table th { height: 28px; padding-block: 0; color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); font-weight: 400; letter-spacing: var(--tracking-label); text-transform: uppercase; }
 .logs-table .ui-table td { padding-block: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .logs-table .ui-table :is(th, td):last-child { padding-inline: var(--space-6); text-overflow: clip; }
 .logs-table .ui-table td:last-child svg { display: block; }
-.logs-table .ui-table tbody tr:nth-child(even):not(.ui-table-spacer) { background: color-mix(in srgb, var(--color-hover) 45%, transparent); }
 .logs-table + .ui-pagination, .logs-table .ui-pagination { min-height: 48px; padding-block: var(--space-8); }
 /* Every mailbox address (PrivateAddress): its first two characters, then a blurred run where the rest will be. The rest
    is not in the page until the address is hovered or focused; the run is drawn from filler, never from the address.
@@ -193,16 +273,16 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
 .email-detail-grid > section { min-width: 0; min-height: 0; }
 .email-detail-grid > section:first-child { display: flex; flex-direction: column; }
 .email-detail-grid .ui-email-preview { flex: 1; height: auto; min-height: 400px; }
-.email-detail-grid .ui-tabs { padding-top: 0; border-bottom: 0; min-height: var(--control-height); padding-bottom: var(--space-12); }
-.delivery-timeline { overflow-y: auto; border-left: 1px solid var(--color-border); padding-left: var(--space-28); }
+.email-detail-grid .ui-tabs { padding-top: 0; min-height: var(--control-height); padding-bottom: var(--space-12); }
+.delivery-timeline { overflow-y: auto; padding-left: var(--space-28); }
 .delivery-timeline ol { list-style: none; padding: 0; margin: 0; }
 .delivery-timeline li { display: grid; grid-template-columns: 16px minmax(0, 1fr); gap: var(--space-12); padding-top: var(--space-20); }
 .delivery-timeline p { margin-top: var(--space-8); }
 .email-preview-skeleton { height: 400px; padding: var(--space-24); display: flex; flex-direction: column; gap: var(--space-16); background: var(--color-email-surface); }
-.email-preview-skeleton .ui-skeleton-block { background: color-mix(in srgb, var(--color-email-text) 12%, var(--color-email-surface)); }
+.email-preview-skeleton .ui-skeleton-block { background: #E3E3E3; }
 .plain-text-preview { flex: 1; min-height: 400px; margin: 0; padding: var(--space-24); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; background: var(--color-email-surface); color: var(--color-email-text); font-family: var(--font-email); line-height: 1.5; }
 .message-source { flex: 1; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 360px; overflow: auto; margin: 0; padding-top: var(--space-16); line-height: var(--leading-sm); }
-.message-identifiers { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-12); padding-top: var(--space-20); border-top: 1px solid var(--color-border); font-size: var(--text-xs); color: var(--color-muted); }
+.message-identifiers { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: var(--space-12); padding-top: var(--space-20); font-size: var(--text-xs); color: var(--color-muted); }
 .log-subject { display: inline-flex; align-items: center; gap: var(--space-6); max-width: 100%; }
 .log-subject svg { flex: none; color: var(--color-muted); }
 .log-subject > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -232,15 +312,17 @@ html[data-privacy='on'] .private-field:not(:hover, :focus)::placeholder { color:
   .delivery-timeline { overflow-y: visible; }
   .email-metadata { grid-template-columns: minmax(0, 1fr); gap: var(--space-16); }
 }
-.overview-reputation { display: inline-flex; align-items: center; gap: var(--space-8); padding-right: var(--space-12); border-right: 1px solid var(--color-border); color: inherit; text-decoration: none; }
-.overview-reputation:hover .muted { color: var(--color-text); }
+.overview-reputation { display: inline-flex; align-items: center; gap: var(--space-8); padding-right: var(--space-8); color: inherit; text-decoration: none; }
+.overview-reputation:is(:hover, :focus-visible) .muted { color: var(--color-text); }
+.overview-reputation:focus-visible { text-decoration: none; }
 .invitation-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: var(--space-8) var(--space-16); margin: 0; }
 .invitation-facts dt { color: var(--color-muted); }
 .invitation-facts dd { margin: 0; overflow-wrap: anywhere; }
 
 /* A quiet link from a concept to its guide in Docs. */
 .guide-link { flex: none; color: var(--color-muted); font-size: var(--text-xs); font-weight: var(--font-weight-regular); text-decoration: underline; text-decoration-color: var(--color-border-strong); text-underline-offset: 3px; }
-.guide-link:hover { color: var(--color-text); }
+.guide-link:is(:hover, :focus-visible) { color: var(--color-text); }
+.guide-link:focus-visible { text-decoration-color: currentColor; }
 /* Phones and portrait tablets (AppShell, below 900 px): a top bar with the workspace and theme, the page, and a bottom
    tab bar. The document scrolls, not the page card, so the browser's own bars collapse and a tap on the status bar
    scrolls to the top. Safe-area insets keep everything clear of notches and the home indicator. */
@@ -260,28 +342,28 @@ body:has(.app-shell--compact) .ui-toasts { --toast-offset: 56px; }
 /* Positioned (not static), so a touch screen's enlarged hit area (ui.css, .ui-button--sm::after) stays on the button
    instead of spreading over the whole bar: a tap on the workspace picker used to switch the theme. */
 .mobile-bar .theme-toggle { position: relative; inset: auto; flex: none; width: 44px; height: 44px; }
-.app-shell--compact .page-surface { --page-pad: max(var(--space-16), env(safe-area-inset-left), env(safe-area-inset-right)); height: auto; min-height: calc(100dvh - var(--mobile-bar-height) - var(--tab-bar-height) - env(safe-area-inset-top) - env(safe-area-inset-bottom)); margin: 0; padding: var(--space-20) var(--page-pad) var(--space-32); overflow-x: clip; overflow-y: visible; border-radius: 0; box-shadow: 0 -.5px 0 var(--color-border-muted); overscroll-behavior: auto; }
-.tab-bar { position: fixed; inset: auto 0 0; z-index: 30; display: grid; grid-template-columns: repeat(5, minmax(0, 128px)); justify-content: center; height: calc(var(--tab-bar-height) + env(safe-area-inset-bottom)); padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: color-mix(in srgb, var(--color-deep) 94%, transparent); box-shadow: 0 -.5px 0 var(--color-border); backdrop-filter: blur(12px); }
+.app-shell--compact .page-surface { --page-pad: max(var(--space-16), env(safe-area-inset-left), env(safe-area-inset-right)); height: auto; min-height: calc(100dvh - var(--mobile-bar-height) - var(--tab-bar-height) - env(safe-area-inset-top) - env(safe-area-inset-bottom)); margin: 0; padding: var(--space-16) var(--page-pad) var(--space-32); overflow-x: clip; overflow-y: visible; border-radius: 0; box-shadow: none; overscroll-behavior: auto; }
+.tab-bar { position: fixed; inset: auto 0 0; z-index: 30; display: grid; grid-template-columns: repeat(5, minmax(0, 128px)); justify-content: center; height: calc(var(--tab-bar-height) + env(safe-area-inset-bottom)); padding: 0 env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left); background: var(--color-deep); }
 .tab-bar__item { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; min-width: 0; padding: 0; border: 0; background: none; color: var(--color-muted); font-size: 11px; line-height: 14px; text-decoration: none; -webkit-tap-highlight-color: transparent; transition: color var(--motion-duration); }
-.tab-bar__icon { position: relative; display: grid; place-items: center; width: 52px; height: 28px; transition: transform 160ms var(--ease-out-strong); }
-.tab-bar__icon::before { content: ''; position: absolute; inset: 0; border-radius: 14px; background: var(--color-layer-2); opacity: 0; transform: scaleX(.6); transition: opacity 160ms ease-out, transform 240ms var(--ease-out-strong); }
+.tab-bar__icon { position: relative; display: grid; place-items: center; width: 44px; height: 26px; transition: transform 160ms var(--ease-out-strong); }
+.tab-bar__icon::before { content: ''; position: absolute; inset: 0; border-radius: var(--radius-sm); background: var(--color-active-bg); opacity: 0; transform: scaleX(.6); transition: opacity 160ms ease-out, transform 240ms var(--ease-out-strong); }
 .tab-bar__icon svg { position: relative; width: 20px; height: 20px; stroke-width: 1.6; }
 .tab-bar__label { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tab-bar__item:is(.active, [data-active]) { color: var(--color-text); font-weight: var(--font-weight-bold); }
 .tab-bar__item:is(.active, [data-active]) .tab-bar__icon::before { opacity: 1; transform: none; }
 .tab-bar__item:active .tab-bar__icon { transform: scale(.92); }
-.tab-bar__item:focus-visible { outline-offset: -4px; }
+.tab-bar__item:focus-visible { background: var(--color-hover); color: var(--color-text); text-decoration: none; }
 /* More: the rest of the pages, then the sidebar's footer (sender score, SES quota). */
 .more-sheet__links { display: flex; flex-direction: column; margin: 0 calc(-1 * var(--focus-reach)); }
-.more-sheet__link:focus-visible { outline-offset: calc(-1 * var(--focus-width)); }
+.more-sheet__link:focus-visible { background: var(--color-hover); text-decoration: none; }
 .more-sheet__link { display: flex; align-items: center; gap: var(--space-12); min-height: 52px; padding-inline: calc(var(--space-8) - var(--focus-reach)); border-radius: var(--radius-sm); color: var(--color-text); font-size: 15px; text-decoration: none; transition: background-color 120ms ease; }
 .more-sheet__lock { margin-left: auto; color: var(--color-faint); }
 .more-sheet__link:active { background: var(--color-pressed); transition-duration: 0ms; }
-.more-sheet__link.active { background: var(--color-layer-2); font-weight: var(--font-weight-bold); }
+.more-sheet__link.active { background: var(--color-active-bg); font-weight: var(--font-weight-bold); }
 button.more-sheet__link { width: calc(100% + 2 * var(--focus-reach)); margin: 0; border: 0; background: none; font: inherit; font-size: 15px; text-align: left; cursor: pointer; }
 .more-sheet__icon { display: grid; place-items: center; width: 28px; color: var(--color-muted); }
 .more-sheet__icon svg { width: 20px; height: 20px; stroke-width: 1.6; }
-.more-sheet__footer { display: flex; flex-direction: column; gap: var(--space-12); margin-top: var(--space-12); padding-top: var(--space-12); border-top: 1px solid var(--color-border-muted); }
+.more-sheet__footer { display: flex; flex-direction: column; gap: var(--space-12); margin-top: var(--space-16); padding-top: var(--space-8); }
 .more-sheet__footer:not(:has(> :not(.sidebar-quota:empty))) { display: none; }
 .more-sheet__footer .sidebar-score-slot { margin: 0; }
 /* Touch targets: the legal links and privacy mode are full 44px rows here. */
@@ -295,7 +377,7 @@ button.more-sheet__link { width: calc(100% + 2 * var(--focus-reach)); margin: 0;
 @media (max-width: 640px) {
   .ui-page-header { gap: var(--space-12); margin-bottom: var(--space-16); }
   .ui-page-header > .cluster:first-child { flex-wrap: nowrap; min-width: 0; max-width: 100%; }
-  .ui-page-header h1 { min-width: 0; font-size: 20px; line-height: 28px; overflow-wrap: anywhere; }
+  .ui-page-header h1 { min-width: 0; overflow-wrap: anywhere; }
   /* Here the box never runs past its line: masked, the run is cut there; revealed, a longer address wraps inside it. */
   :is(.ui-page-header h1, dd, .email-metadata) .private-address__value { flex: 0 1 auto; min-width: 0; overflow: hidden; }
   :is(.ui-page-header h1, dd, .email-metadata) .private-address[data-revealed] > .private-address__value { overflow: visible; white-space: normal; overflow-wrap: anywhere; }
@@ -309,11 +391,11 @@ button.more-sheet__link { width: calc(100% + 2 * var(--focus-reach)); margin: 0;
 }
 /* The top bar's workspace picker reads as the bar's title, not a form field. */
 .mobile-bar__context > :is(.ui-select-trigger, select) { box-shadow: none; background: none; font-weight: var(--font-weight-bold); field-sizing: content; }
-.mobile-bar__context > :is(.ui-select-trigger, select):focus-visible { box-shadow: none; outline: 2px solid var(--color-focus); }
+.mobile-bar__context > :is(.ui-select-trigger, select):focus-visible { background: var(--color-control-focus); }
 /* A form's own Save and Cancel stay in reach above the tab bar while its fields scroll. */
 /* A phone scrolls the document: Tab brings a control clear of the tab bar (56px, --tab-bar-height) and its ring. */
 html:has(.app-shell--compact) { scroll-padding-bottom: calc(56px + env(safe-area-inset-bottom) + var(--focus-reach)); }
-.app-shell--compact .form-actions { position: sticky; bottom: calc(var(--tab-bar-height) + env(safe-area-inset-bottom)); z-index: 2; flex-wrap: nowrap; margin-inline: calc(-1 * var(--bleed)); padding: var(--space-12) var(--bleed); background: color-mix(in srgb, var(--color-surface) 94%, transparent); box-shadow: 0 -.5px 0 var(--color-border-muted); backdrop-filter: blur(12px); }
+.app-shell--compact .form-actions { position: sticky; bottom: calc(var(--tab-bar-height) + env(safe-area-inset-bottom)); z-index: 2; flex-wrap: nowrap; margin-inline: calc(-1 * var(--bleed)); padding: var(--space-12) var(--bleed); background: var(--color-layer-1); }
 @media (max-width: 640px) { .app-shell--compact .form-actions > .ui-button { flex: 1 1 0; } }
 /* Contact support (components/ContactSupport.tsx): the share choice with its note under it, and the reference to copy. */
 .contact-support__share { display: flex; flex-direction: column; gap: var(--space-4); }
@@ -329,7 +411,7 @@ html:has(.app-shell--compact) { scroll-padding-bottom: calc(56px + env(safe-area
 .account-avatar { display: inline-flex; flex: none; align-items: center; justify-content: center; border-radius: 50%; background: var(--color-layer-3); color: var(--color-text); font-weight: var(--font-weight-bold); line-height: 1; }
 .account-avatar--md { width: 28px; height: 28px; font-size: var(--text-xs); }
 .account-menu { display: flex; flex-direction: column; width: 288px; max-height: min(480px, var(--radix-dropdown-menu-content-available-height)); }
-.account-menu__group + .account-menu__group { margin-top: var(--space-4); padding-top: var(--space-4); box-shadow: inset 0 1px var(--color-border-muted); }
+.account-menu__group + .account-menu__group { margin-top: var(--space-8); }
 .account-menu__account { min-height: 44px; }
 .account-menu__account[aria-current] { cursor: default; }
 .account-menu__who { display: flex; flex: 1; flex-direction: column; min-width: 0; }
@@ -362,9 +444,13 @@ html:has(.app-shell--compact) { scroll-padding-bottom: calc(56px + env(safe-area
    while the chat was closed. */
 :root { --launcher-size: 32px; --launcher-inset: calc(var(--page-inset) + var(--space-16)); }
 .app-shell--support .page-surface { padding-bottom: calc(var(--space-16) + var(--launcher-size) + var(--space-8)); }
-.ui-button.support-launcher { position: fixed; right: var(--launcher-inset); bottom: var(--launcher-inset); z-index: 41; width: var(--launcher-size); height: var(--launcher-size); padding: 0; border-radius: var(--radius-sm); color: var(--color-muted); box-shadow: var(--shadow-popover); }
+/* It floats over any surface, so it takes a fill a clear step off all of them. */
+.ui-button.support-launcher { position: fixed; right: var(--launcher-inset); bottom: var(--launcher-inset); z-index: 41; width: var(--launcher-size); height: var(--launcher-size); padding: 0; border-radius: var(--radius-sm); background: var(--color-layer-2); color: var(--color-muted); }
+/* Full-bleed pages keep their last row's controls clear of the Help button instead of padding the page. */
+.app-shell--support .logs-page .ui-pagination { padding-right: calc(var(--launcher-size) + 2 * var(--space-16)); }
 .ui-button.support-launcher[aria-expanded='true'], .ui-button.support-launcher:focus-visible { color: var(--color-text); }
-@media (hover: hover) and (pointer: fine) { .ui-button.support-launcher:hover { color: var(--color-text); transition-duration: 0ms; } }
+@media (hover: hover) and (pointer: fine) { .ui-button.support-launcher:hover { background: var(--color-layer-3); color: var(--color-text); transition-duration: 0ms; } }
+.ui-button.support-launcher:focus-visible { background: var(--color-layer-3); }
 .support-launcher__icons { display: inline-grid; place-items: center; }
 .support-launcher__icons > svg { grid-area: 1 / 1; transition: opacity 140ms ease-out, transform 240ms var(--ease-out-strong); }
 .support-launcher__icons > svg:last-child, [aria-expanded='true'] > .support-launcher__icons > svg:first-child { opacity: 0; transform: scale(.6) rotate(-45deg); }

@@ -72,7 +72,7 @@ export function ContactDetailBodySkeleton() {
 }
 export function SegmentEditorBodySkeleton() {
   return <div className="stack audience-editor"><div className="audience-name"><FieldSkeleton label="Segment name" /></div>
-    <section className="section stack"><SectionHeader title="Conditions" actions={<ControlSkeleton width={104} />} /><div className="cluster"><span>Match</span><ControlSkeleton width={220} /></div><div className="audience-rules"><div className="audience-rule audience-rule--head" aria-hidden="true"><span>Field</span><span>Condition</span><span>Value</span><span /></div><div className="audience-rule"><ControlSkeleton /><ControlSkeleton /><ControlSkeleton /><ControlSkeleton width={34} /></div></div><div className="cluster"><ControlSkeleton width={133} /></div></section>
+    <section className="section stack"><SectionHeader title="Conditions" actions={<ControlSkeleton width={104} />} /><div className="cluster"><span>Match</span><ControlSkeleton width={220} /></div><div className="audience-rules"><div className="audience-rule audience-rule--head" aria-hidden="true"><span>Field</span><span>Condition</span><span>Value</span><span /></div><div className="audience-rule"><ControlSkeleton /><ControlSkeleton /><ControlSkeleton /><ControlSkeleton width="var(--control-height)" /></div></div><div className="cluster"><ControlSkeleton width={133} /></div></section>
     <section className="section stack"><SectionHeader title="Matching contacts" actions={<ControlSkeleton width={220} />} /><AudienceSummarySkeleton /></section></div>
 }
 export function AudienceRouteSkeleton({ kind, isNew = false }: { kind: 'contacts' | 'contact' | 'lists' | 'list' | 'segments' | 'segment'; isNew?: boolean }) {

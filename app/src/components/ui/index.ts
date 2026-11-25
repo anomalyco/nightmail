@@ -1,5 +1,9 @@
 export { Button, IconButton, Input, SearchField, Textarea, Field, Select, Checkbox, Switch, Tabs, Dialog, ConfirmDialog, DropdownMenu, ActionSheet, DataTable, Pagination, PageHeader, BackLink, SectionHeader, Disclosure, StatusBadge, StatusDot, statusTone, Alert, EmptyState, ErrorState, ErrorText, MutationError, fieldError, CopyButton, useCopy, SecretCode, SecretDialog, SecretInput, ToastProvider, ToastScope, useToast } from './primitives';
-export type { ButtonProps, SelectProps, SelectOption, DialogProps, Column, Tone, SkeletonColumn, CardSlot, MenuItem } from './primitives';
+export type { ButtonProps, SelectProps, SelectOption, DialogProps, Column, Tone, SkeletonColumn, CardSlot, MenuItem, PageHeaderProps } from './primitives';
+export { Icon, ICON_SIZES, ICON_STROKES } from './icon';
+export type { IconSize, IconTone } from './icon';
+export { ListPage, ListToolbar, DetailHeader, FactsRow, Identifier } from './patterns';
+export type { Fact } from './patterns';
 export { Sheet } from './sheet';
 export { elapsed, FacetRail, KeyValues, Meter, MetricRow, Sparkline, SplitPane, Waterfall } from './data';
 export type { Facet, FacetGroup, WaterfallRow } from './data';

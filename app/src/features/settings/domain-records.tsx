@@ -14,6 +14,7 @@ import './settings.css'
 import './domain-records.css'
 import { expectAccount } from '../../data/accounts'
 import { productName } from '../../../../api/src/brand'
+import { checkKey, type DnsChecks } from './domain-setup-alert'
 
 // Hosted reads are DB-only, so poll briskly while visible; self-hosted reads call SES and stay slow.
 export function useDomain(id: string, recheckUntil = 0) {
@@ -98,9 +99,8 @@ const purposeLabel = (record: DnsRecord) => {
 export const recordRow = (record: DnsRecord, status?: RecordRow['status']): RecordRow => ({ record, purpose: purposeLabel(record), status: status ?? (record.status === 'verified' ? { label: 'Verified', tone: 'success', detail: record.note } : { label: 'Pending', tone: 'warning', detail: record.note }) })
 
 // Check now (verifyDomain) looks each pending sending and MAIL FROM record up in public DNS. Its answers are kept by
-// record, since the page's polls read the domain without them.
-export type DnsChecks = Map<string, PublicDns | null>
-export const checkKey = (record: Pick<DnsRecord, 'type' | 'name' | 'value'>) => `${record.type} ${record.name} ${record.value}`
+// record, since the page's polls read the domain without them (reads carry only the background check's, once it runs).
+export { checkKey, type DnsChecks }
 export const dnsChecks = (domain: Domain): DnsChecks => new Map(domain.records.flatMap(record => record.publicDns !== undefined ? [[checkKey(record), record.publicDns] as const] : []))
 const required = (record: DnsRecord) => record.status !== 'verified' && (purposeOf(record) === 'sending' || purposeOf(record) === 'mail_from')
 function checkedStatus(record: DnsRecord, check: PublicDns | null | undefined): RecordRow['status'] | undefined {

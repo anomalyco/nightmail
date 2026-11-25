@@ -101,37 +101,54 @@
   color-scheme: light;
   --color-email-surface: #FFFFFF;
   --color-email-text: #181818;
-  --color-brand: #798ABA; /* a periwinkle accent, oklch(0.638 0.075 269.2): 3.3:1 on deep, 3.0:1 on layer-2 */
+  --color-brand: #798ABA; /* a periwinkle accent, oklch(0.638 0.075 269.2): 3.0:1 on deep */
   --color-logo: #0A0B0F; /* the brand's ink: the wordmark and the stamp on a pale ground; docs/brand.md */
-  --color-contrast: #161616;
-  --color-contrast-hover: #333333;
+  --color-contrast: #111111;
+  --color-contrast-hover: #2B2B2B;
   --color-on-contrast: #FFFFFF;
   --shadow-on-contrast: 0 .5px .5px rgb(0 0 0 / 30%);
   --color-complaint: var(--color-danger);
   --color-neutral-marker: var(--color-faint);
   --color-overlay: rgb(0 0 0 / 40%);
   --color-shadow: rgb(0 0 0 / 8%);
-  --color-hover: rgb(0 0 0 / 4%);
-  --color-pressed: rgb(0 0 0 / 8%);
   --color-transparent: transparent;
   --font-body: 'Inter', 'Inter Fallback', sans-serif;
   --font-mono: 'OpenTUI Mono', 'OpenTUI Mono Fallback', monospace;
   --font-email: 'Inter', Arial, sans-serif;
-  /* Labels over data: small, muted, in the mono face, tracked out. */
+  /* Type (operator console): Inter for the interface, OpenTUI Mono for data (IDs, counts, shortcuts, timestamps,
+     figures). Tight, one size per role:
+     label 11/14 (tracked mono group labels and keycaps) · xs 12/16 (field labels, table headers, metadata, statuses)
+     · sm 12/16 (dense secondary controls, mono values) · md 13/18 (body, tables, inputs, buttons, navigation)
+     · section 13/18 semibold (section titles) · heading 14/20 (dialogs, empty states) · lg 16/22
+     · title 18/24 semibold (page titles) · xl 24/30. A phone steps body and titles up a size (below). */
   --text-label: 11px;
+  --leading-label: 14px;
   --tracking-label: .06em;
   --tracking-email: -0.01em;
   --text-xs: 12px;
-  --text-sm: 13px;
-  --text-md: 14px;
-  --text-lg: 18px;
-  --text-xl: 30px;
+  --text-sm: 12px;
+  --text-md: 13px;
+  --text-section: 13px;
+  --text-heading: 14px;
+  --text-lg: 16px;
+  --text-title: 18px;
+  --text-xl: 24px;
   --leading-xs: 16px;
-  --leading-sm: 20px;
-  --leading-lg: 24px;
-  --leading-xl: 36px;
-  --font-weight-regular: 440;
-  --font-weight-bold: 530;
+  --leading-sm: 16px;
+  --leading-md: 18px;
+  --leading-section: 18px;
+  --leading-heading: 20px;
+  --leading-lg: 22px;
+  --leading-title: 24px;
+  --leading-xl: 30px;
+  --tracking-body: -0.003em;
+  --tracking-section: -0.006em;
+  --tracking-heading: -0.01em;
+  --tracking-title: -0.015em;
+  --font-weight-regular: 400;
+  --font-weight-medium: 500;
+  --font-weight-semibold: 600;
+  --font-weight-bold: 600;
   --space-4: 4px;
   --space-6: 6px;
   --space-8: 8px;
@@ -142,27 +159,35 @@
   --space-28: 28px;
   --space-32: 32px;
   --space-40: 40px;
+  --radius-xs: 4px;
   --radius-sm: 6px;
-  --radius-lg: 6px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
   --control-height: 28px;
-  /* The focus ring, and how far it reaches outside its control (width + offset; a plain length, because Chrome drops a
-     calc() in overflow-clip-margin): the room a clipping edge leaves for it (ui.css). */
+  --control-height-sm: 24px;
+  /* The dashboard draws no focus rings: focus shows the hover cue (ui.css). The homepage and price pages keep rings of
+     their own, from --focus-width and --color-focus. --focus-reach is the room a scroll area keeps at its edges. */
   --focus-width: 2px;
-  --focus-offset: 2px;
   --focus-reach: 4px;
-  --row-height: 44px;
-  --row-height-lg: 56px;
-  /* Log and event streams only (Logs, Overview's latest mail, delivery and thread timelines): one mono line. */
+  --row-height: 53px;
+  --row-height-lg: 44px;
+  /* Event timelines (delivery waterfall, facts): one mono line. */
   --row-height-dense: 28px;
-  --facet-width: 192px;
-  --sidebar-width: 232px;
-  /* The sidebar's edge padding, and the inset of content inside its boxes (workspace picker, navigation links). The
-     wordmark, the picker's name and the navigation labels share one left edge: gutter + inset. */
-  --sidebar-gutter: var(--space-12);
-  --sidebar-inset: var(--space-12);
-  --page-inset: 8px;
-  --page-gap: var(--space-20);
-  --motion-duration: 85ms;
+  /* Mail streams (Logs, Overview's latest mail): one dense row per message. */
+  --row-height-log: 32px;
+  --facet-width: 188px;
+  /* The cockpit: a 224px sidebar and a 44px command bar on one deep frame, the page a canvas inside it. No rule draws
+     any of them: the frame and the canvas are two solid surfaces. */
+  --sidebar-width: 224px;
+  --topbar-height: 44px;
+  /* The sidebar's edge padding, and the inset of content inside its rows (workspace picker, navigation links). */
+  --sidebar-gutter: var(--space-8);
+  --sidebar-inset: var(--space-8);
+  --page-inset: 0px;
+  --page-gap: var(--space-16);
+  /* Colour, fill and border changes on controls, links, rows and tabs. */
+  --motion-duration: 150ms;
+  --ease-standard: cubic-bezier(.4, 0, .2, 1);
   /* Micro-interactions: strong ease-out for enters and feedback (120–250 ms), ease-in-out for on-screen moves. */
   --ease-out-strong: cubic-bezier(.23, 1, .32, 1);
   --ease-in-out-strong: cubic-bezier(.77, 0, .175, 1);
@@ -170,118 +195,274 @@
   --ease-swap: cubic-bezier(.2, .8, .2, 1);
   /* Sheets: the iOS drawer curve. */
   --ease-drawer: cubic-bezier(.32, .72, 0, 1);
-  /* Flat: surfaces and controls are drawn by a hairline, never lifted by a shadow. Overlays (popovers, dialogs) keep one. */
-  --shadow-raised: 0 0 0 1px var(--color-border-muted);
-  --shadow-button: inset 0 0 0 1px var(--color-border);
-  --shadow-popover: 0 8px 16px rgb(0 0 0 / 4%), 0 4px 8px rgb(0 0 0 / 8%), 0 0 0 .5px rgb(0 0 0 / 12%);
-  --shadow-dialog: 0 16px 32px rgb(0 0 0 / 4%), 0 8px 16px rgb(0 0 0 / 8%), 0 0 0 .5px rgb(0 0 0 / 12%);
-  /* Sender score grade bands (the gauge's arcs). B is the data navy: a bright blue read as a second accent. */
-  --grade-aplus: #13804A; --grade-a: #2EAF5A; --grade-b: var(--color-accent-data); --grade-c: #E7AF36; --grade-d: #EE7B30; --grade-f: #D92E3C;
+  /* Borderless: no hairline, outline or 1px inset shadow draws a surface or a control; a solid step off what is under
+     it does. Only overlays (popovers, menus, dialogs, the command palette) lift, on a soft drop with no edge line. */
+  --shadow-raised: none;
+  --shadow-button: none;
+  --shadow-popover: 0 8px 24px rgb(0 0 0 / 10%), 0 2px 6px rgb(0 0 0 / 6%);
+  --shadow-dialog: 0 16px 40px rgb(0 0 0 / 14%), 0 4px 12px rgb(0 0 0 / 6%);
+  /* Sender score grade bands (the gauge's arcs), solid like the status colours. B is the data blue. */
+  --grade-aplus: #15803D; --grade-a: #16A34A; --grade-b: var(--color-accent-data); --grade-c: #CA8A04; --grade-d: #EA580C; --grade-f: #DC2626;
 }
 
 :root[data-theme='dark'] {
-  --grade-aplus: #3DD68C; --grade-a: #6BD586; --grade-b: var(--color-accent-data); --grade-c: #F2CF76; --grade-d: #F59A5B; --grade-f: #F17471;
+  --grade-aplus: #22C55E; --grade-a: #4ADE80; --grade-b: var(--color-accent-data); --grade-c: #FACC15; --grade-d: #FB923C; --grade-f: #EF4444;
   color-scheme: dark;
-  --color-brand: #798ABA; /* the same colour as light: 5.9:1 on deep */
+  --color-brand: #798ABA; /* the same colour as light: 5.5:1 on deep */
   --color-logo: #F4F2EC; /* the brand's paper: the marks on a dark ground */
-  --color-contrast: #EDEDED;
+  --color-contrast: #F2F2F2;
   --color-contrast-hover: #FFFFFF;
-  --color-on-contrast: #161616;
+  --color-on-contrast: #111111;
   --shadow-on-contrast: none;
   --color-overlay: rgb(0 0 0 / 60%);
   --color-shadow: rgb(0 0 0 / 30%);
-  --color-hover: rgb(255 255 255 / 6%);
-  --color-pressed: rgb(255 255 255 / 10%);
-  --shadow-raised: 0 0 0 1px var(--color-border-muted);
-  --shadow-button: inset 0 0 0 1px var(--color-border);
-  --shadow-popover: 0 8px 16px rgb(0 0 0 / 30%), 0 4px 8px rgb(0 0 0 / 30%), 0 0 0 .5px rgb(255 255 255 / 16%), 0 -.5px rgb(255 255 255 / 6%);
-  --shadow-dialog: 0 16px 32px rgb(0 0 0 / 30%), 0 8px 16px rgb(0 0 0 / 30%), 0 0 0 .5px rgb(255 255 255 / 16%), 0 -.5px rgb(255 255 255 / 6%);
+  --shadow-popover: 0 8px 24px rgb(0 0 0 / 40%), 0 2px 6px rgb(0 0 0 / 30%);
+  --shadow-dialog: 0 16px 40px rgb(0 0 0 / 50%), 0 4px 12px rgb(0 0 0 / 30%);
 }
 
-/* ── Colour (Signal Log) ──
-   OKLCH throughout. True neutral greys for every surface, line and text; one navy accent used only on buttons and chart
-   items; a data palette of matched lightness and chroma for multi-series charts; status colours (ok, warn, error, info)
-   only on status dots and words. Selection, the active page, tabs, toggles and focus are neutral: brighter text, a
-   neutral fill or a rule, and a neutral high-contrast focus ring.
-   The accent is an ink navy: muted and slate-leaning, one hue (263) with a role per lightness. A navy fill with white
-   text, a 1px lighter edge that keeps a fill visible on near-black (no glow), a lighter tint for chart items, and a
-   light navy-blue for link text on dark.
-   Contrast (WCAG 2): white on every fill step 7:1 or more (light 12.3:1, dark 9.3:1); the dark edge 3.8:1 on the
-   surface; links 9.3:1 (light) and 9.3:1 (dark); chart series 6.0:1 (light) and 6.7:1 (dark); status inks 5.6:1 or
-   more on light and 8:1 or more on dark. */
+/* ── Colour (operator console, borderless) ──
+   Concrete: an untinted neutral scale (R = G = B), and every surface, fill and step a solid colour, never one laid over
+   another at partial strength. Nothing is drawn by a hairline, an outline or a 1px inset shadow: an area is a solid
+   surface, a control is a solid fill a step off the surface it sits on, and spacing and alignment do the rest. Two
+   surfaces that meet differ by a clear step, or sit apart on the canvas with a gap between them.
+   The frame: the sidebar and the command bar share the deep surface (one L, so the canvas inside it has one even edge).
+   Light: an #EFEFEF frame around a #FFFFFF canvas; wells #F4F4F4, rails #F5F5F5 and #F6F6F6, table heads #F3F3F3, the
+   email's matte #EFEFEF, the campaign desk #EAEAEA. Controls #F0F0F0 (hover #E6E6E6, keyboard focus #DCDCDC, pressed
+   #D4D4D4); on the frame, the rails and the grey bars #E4E4E4. Text #111111 / #555555 / #666666.
+   Dark: a #111111 frame around a #181818 canvas; wells #1F1F1F, bars #1E1E1E to #202020, rails #141414, the matte and
+   the desk #131313. Controls #232323 (hover #2C2C2C, keyboard focus #323232, pressed #383838); #1F1F1F on the frame and
+   the rails, #2A2A2A on the bars. Text #F2F2F2 / #A3A3A3 / #949494.
+   Faint text and the status inks keep 4.5:1 on every grey they sit on (frame, wells, rails, controls, selected rows).
+   The primary action is the text colour as a fill: #111111 with white text on light, #F2F2F2 with #111111 text on dark.
+   Hue appears only as solid status inks and markers (ok, warn, error, info) and chart series, never as a wash behind
+   them. Selection, the active page, tabs, toggles and focus are neutral: brighter text or a stronger solid fill;
+   keyboard focus is a solid step, never a ring. */
 :root {
-  /* Light: markers and series at L .62 (warnings .70: amber reads dirty lower), inks at L .50. */
-  --mark-l: .62; --mark-c: .14; --warn-l: .70; --ink-l: .50; --ink-c: .12;
-  --hue-ok: 152; --hue-warn: 85; --hue-error: 27; --hue-info: 250;
-  --hue-received: 190; --hue-opened: 300; --hue-clicked: 345;
-  --l-deep: .985; --l-surface: 1; --l-layer-1: .982; --l-layer-2: .962; --l-layer-3: .945; --l-text: .205; --l-muted: .48; --l-faint: .555;
-  /* An unticked checkbox's or radio's edge: 3:1 or more against the control and the surface or dialog around it. */
-  --l-control-edge: .64;
-  /* Ink navy: a fill with white text, hover and pressed steps (darker on light), its edge, text and charts. */
-  --color-accent: oklch(.33 .07 263);
-  --color-accent-hover: oklch(.29 .065 263);
-  --color-accent-pressed: oklch(.26 .06 263);
-  --color-accent-edge: transparent;
-  --color-accent-text: oklch(.40 .08 263);
-  --color-accent-data: oklch(.50 .08 262);
-  --color-on-accent: #FFFFFF;
-}
-:root[data-theme='dark'] {
-  --mark-l: .74; --mark-c: .13; --warn-l: .80; --ink-l: .82; --ink-c: .11;
-  --l-deep: .135; --l-surface: .16; --l-layer-1: .195; --l-layer-2: .225; --l-layer-3: .27; --l-text: .945; --l-muted: .72; --l-faint: .62;
-  --l-control-edge: .52;
-  /* On near-black the fill lifts a little, hover goes lighter (white stays 7:1) and a 1px edge outlines it. */
-  --color-accent: oklch(.40 .075 262);
-  --color-accent-hover: oklch(.45 .08 262);
-  --color-accent-pressed: oklch(.35 .07 262);
-  --color-accent-edge: oklch(.54 .08 262);
-  --color-accent-text: oklch(.77 .065 260);
-  --color-accent-data: oklch(.68 .08 260);
-}
-:root {
-  --color-deep: oklch(var(--l-deep) 0 0);
+  --color-deep: #EFEFEF;
   --color-canvas: var(--color-deep);
-  --color-surface: oklch(var(--l-surface) 0 0);
-  --color-layer-1: oklch(var(--l-layer-1) 0 0);
-  --color-layer-2: oklch(var(--l-layer-2) 0 0);
-  --color-layer-3: oklch(var(--l-layer-3) 0 0);
-  --color-text: oklch(var(--l-text) 0 0);
-  --color-muted: oklch(var(--l-muted) 0 0);
-  --color-faint: oklch(var(--l-faint) 0 0);
-  --color-border: oklch(var(--l-text) 0 0 / 9%);
-  --color-border-muted: oklch(var(--l-text) 0 0 / 6.5%);
-  --color-border-strong: oklch(var(--l-text) 0 0 / 17%);
-  --color-control-edge: oklch(var(--l-control-edge) 0 0);
-  /* Neutral ink for secondary series and tracks. */
-  --color-series: oklch(var(--l-text) 0 0 / 30%);
-  --color-series-strong: oklch(var(--l-text) 0 0 / 64%);
-  --color-track: oklch(var(--l-text) 0 0 / 7%);
-  /* Selected rows, the active page, pressed facets, text selection: a neutral fill. Focus: the text colour's ring. */
-  --color-active-bg: oklch(var(--l-text) 0 0 / 8%);
+  --color-surface: #FFFFFF;
+  --color-layer-1: #F5F5F5;
+  --color-layer-2: #E8E8E8;
+  --color-layer-3: #D8D8D8;
+  /* A surface floating over the page. A container that repaints its own --color-surface (the composer's email sheet)
+     sets these again: a custom property resolves where it is declared. */
+  --color-overlay-surface: var(--color-surface);
+  /* Controls (fields, selects, secondary and icon buttons, segmented tracks, keycaps): a solid fill a step off the canvas,
+     and a stronger step on hover, keyboard focus and press. The frame and the rails (deep-*), the grey bars (raised-*)
+     and overlays (overlay-*) take sets of their own, set in scope where they sit (app.css, ui.css, each page). */
+  --color-control: #F0F0F0;
+  --color-control-hover: #E6E6E6;
+  --color-control-focus: #DCDCDC;
+  --color-control-pressed: #D4D4D4;
+  /* An invalid field: a solid danger-tinted fill, its message in red under it. */
+  --color-control-invalid: #FBEBEB;
+  --color-control-invalid-focus: #F6DCDC;
+  /* The selected segment of a segmented switch; an unticked checkbox's or radio's fill (with no edge, the fill alone keeps
+     3:1 against every surface it sits on, WCAG 1.4.11); a keycap set into a control. */
+  --color-segment: #FFFFFF;
+  --color-checkbox: #858585;
+  --color-checkbox-focus: #666666;
+  --color-kbd-inset: #FFFFFF;
+  /* Hover, press and selection of rows, links and ghost buttons, on the canvas and in each scope. */
+  --color-hover: #F0F0F0;
+  --color-pressed: #E6E6E6;
+  --color-active-bg: #E8E8E8;
+  --color-deep-hover: #E4E4E4;
+  --color-deep-active: #DCDCDC;
+  --color-deep-control: #E4E4E4;
+  --color-deep-control-hover: #DCDCDC;
+  --color-deep-control-focus: #D4D4D4;
+  --color-deep-control-pressed: #CCCCCC;
+  --color-raised-hover: #E8E8E8;
+  --color-raised-active: #E0E0E0;
+  --color-raised-control: #E4E4E4;
+  --color-raised-control-hover: #DCDCDC;
+  --color-raised-control-focus: #D4D4D4;
+  --color-raised-control-pressed: #CCCCCC;
+  --color-overlay-hover: #F0F0F0;
+  --color-overlay-active: #E6E6E6;
+  --color-overlay-control: #F0F0F0;
+  --color-overlay-control-hover: #E6E6E6;
+  --color-overlay-control-focus: #DCDCDC;
+  --color-overlay-control-pressed: #D4D4D4;
+  /* The surfaces that take the place of rules. Overview: the figures' wells and the inspector rail. Logs: the filter
+     rail. Tables: the head's bar, every other row of a mail stream, and a phone's card. A sent email: the facts strip,
+     the matte behind the preview and the inspector. The campaign studio: its bar, the sender rows, the toolbar, the
+     panel and its block buttons. Chips (a tag, a thread's count) and the chart's reference lines. */
+  /* At most one surface step beyond the page canvas (--color-layer-1): no nested panels or stacked shades. */
+  --color-well: var(--color-layer-1);
+  --color-well-hover: var(--color-layer-2);
+  --color-rail: transparent;
+  --color-facets: transparent;
+  --color-thead: var(--color-layer-1);
+  --color-row-alt: transparent;
+  --color-card: var(--color-layer-1);
+  --color-strip: transparent;
+  --color-matte: var(--color-layer-1);
+  --color-inspector: transparent;
+  --color-studio-bar: var(--color-surface);
+  --color-studio-meta: var(--color-surface);
+  --color-studio-tools: var(--color-surface);
+  --color-studio-panel: var(--color-surface);
+  --color-block: #E8E8E8;
+  --color-block-hover: #DEDEDE;
+  --color-chip: #E8E8E8;
+  --color-gridline: #F0F0F0;
+  --color-text: #111111;
+  --color-muted: #555555;
+  --color-faint: #666666;
+  /* Rules for the pages outside the console that still draw them; the console and its controls draw none. */
+  --color-border-muted: #E5E5E5;
+  --color-border: #D0D0D0;
+  --color-border-strong: #A3A3A3;
+  --color-control-edge: #8A8A8A;
+  /* Neutral ink for secondary series, meter tracks and a gauge's empty cells. */
+  --color-series: #B3B3B3;
+  --color-series-strong: #5C5C5C;
+  --color-track: #E6E6E6;
+  --color-tick: #E2E2E2;
+  /* The campaign studio's desk around the white email sheet. */
+  --color-desk: #EAEAEA;
   --color-focus: var(--color-text);
-  /* Status: ink for words, marker for dots, a 10% tint and a 30% rule (alerts and banners). */
-  --color-success: oklch(var(--ink-l) var(--ink-c) var(--hue-ok));
-  --color-success-marker: oklch(var(--mark-l) var(--mark-c) var(--hue-ok));
-  --color-success-bg: oklch(var(--mark-l) var(--mark-c) var(--hue-ok) / 10%);
-  --color-success-border: oklch(var(--mark-l) var(--mark-c) var(--hue-ok) / 30%);
-  --color-warning: oklch(var(--ink-l) var(--ink-c) var(--hue-warn));
-  --color-warning-marker: oklch(var(--warn-l) var(--mark-c) var(--hue-warn));
-  --color-warning-bg: oklch(var(--warn-l) var(--mark-c) var(--hue-warn) / 10%);
-  --color-warning-border: oklch(var(--warn-l) var(--mark-c) var(--hue-warn) / 34%);
-  --color-danger: oklch(var(--ink-l) calc(var(--ink-c) + .04) var(--hue-error));
-  --color-danger-marker: oklch(var(--mark-l) calc(var(--mark-c) + .04) var(--hue-error));
-  --color-danger-bg: oklch(var(--mark-l) calc(var(--mark-c) + .04) var(--hue-error) / 10%);
-  --color-danger-border: oklch(var(--mark-l) calc(var(--mark-c) + .04) var(--hue-error) / 32%);
-  --color-info: oklch(var(--ink-l) var(--ink-c) var(--hue-info));
-  --color-info-marker: oklch(var(--mark-l) var(--mark-c) var(--hue-info));
-  --color-info-bg: oklch(var(--mark-l) var(--mark-c) var(--hue-info) / 10%);
-  --color-info-border: oklch(var(--mark-l) var(--mark-c) var(--hue-info) / 30%);
-  /* Data: one hue per kind of mail for multi-series charts, at the markers' lightness and chroma. Sent is the blue. */
+  /* The primary action: a #111111 fill, white text, a lighter hover and a black press; text actions in the text colour.
+     A shortcut's letters inside the primary button are on-accent-muted. */
+  --color-accent: #111111;
+  --color-accent-hover: #2B2B2B;
+  --color-accent-pressed: #000000;
+  --color-accent-edge: transparent;
+  --color-accent-text: #111111;
+  --color-on-accent: #FFFFFF;
+  --color-on-accent-edge: #585858;
+  --color-on-accent-muted: #BCBCBC;
+  /* Data: the one blue, for the sent series, its chart line and meters. */
+  --color-accent-data: #1D4ED8;
+  /* Status: ink for words, marker for dots and lines. On light the ink is a step deeper than its marker, for 4.5:1 on
+     the greys (a status's -bg, a row's hover, a phone's card). */
+  --color-success: #147839;
+  --color-success-marker: #15803D;
+  --color-warning: #AA4E09;
+  --color-warning-marker: #B45309;
+  --color-danger: #CB2323;
+  --color-danger-marker: #DC2626;
+  --color-info: #1D4ED8;
+  --color-info-marker: #1D4ED8;
+  /* Data: one hue per kind of mail for multi-series charts. */
+  --color-series-received: #0E7490;
+  --color-series-opened: #7E22CE;
+  --color-series-clicked: #BE185D;
+}
+
+:root[data-theme='dark'] {
+  --color-deep: #111111;
+  --color-surface: #181818;
+  --color-layer-1: #202020;
+  --color-layer-2: #2A2A2A;
+  --color-layer-3: #363636;
+  --color-overlay-surface: #242424;
+  --color-control: #232323;
+  --color-control-hover: #2C2C2C;
+  --color-control-focus: #323232;
+  --color-control-pressed: #383838;
+  --color-control-invalid: #2E1F1F;
+  --color-control-invalid-focus: #3A2424;
+  --color-segment: #3A3A3A;
+  --color-checkbox: #767676;
+  --color-checkbox-focus: #949494;
+  --color-kbd-inset: #111111;
+  --color-hover: #242424;
+  --color-pressed: #2C2C2C;
+  --color-active-bg: #2B2B2B;
+  --color-deep-hover: #242424;
+  --color-deep-active: #2B2B2B;
+  --color-deep-control: #1F1F1F;
+  --color-deep-control-hover: #262626;
+  --color-deep-control-focus: #2C2C2C;
+  --color-deep-control-pressed: #323232;
+  --color-raised-hover: #2A2A2A;
+  --color-raised-active: #323232;
+  --color-raised-control: #2A2A2A;
+  --color-raised-control-hover: #323232;
+  --color-raised-control-focus: #383838;
+  --color-raised-control-pressed: #3E3E3E;
+  --color-overlay-hover: #2E2E2E;
+  --color-overlay-active: #343434;
+  --color-overlay-control: #2E2E2E;
+  --color-overlay-control-hover: #363636;
+  --color-overlay-control-focus: #3C3C3C;
+  --color-overlay-control-pressed: #424242;
+  /* At most one surface step beyond the page canvas (--color-layer-1): no nested panels or stacked shades. */
+  --color-well: var(--color-layer-1);
+  --color-well-hover: var(--color-layer-2);
+  --color-rail: transparent;
+  --color-facets: transparent;
+  --color-thead: var(--color-layer-1);
+  --color-row-alt: transparent;
+  --color-card: var(--color-layer-1);
+  --color-strip: transparent;
+  --color-matte: var(--color-layer-1);
+  --color-inspector: transparent;
+  --color-studio-bar: var(--color-surface);
+  --color-studio-meta: var(--color-surface);
+  --color-studio-tools: var(--color-surface);
+  --color-studio-panel: var(--color-surface);
+  --color-block: #242424;
+  --color-block-hover: #2C2C2C;
+  --color-chip: #2C2C2C;
+  --color-gridline: #222222;
+  --color-text: #F2F2F2;
+  --color-muted: #A3A3A3;
+  --color-faint: #949494;
+  --color-border-muted: #2B2B2B;
+  --color-border: #3A3A3A;
+  --color-border-strong: #525252;
+  --color-control-edge: #707070;
+  --color-series: #5C5C5C;
+  --color-series-strong: #A3A3A3;
+  --color-track: #2C2C2C;
+  --color-tick: #2E2E2E;
+  --color-desk: #131313;
+  /* On near-black the primary is a near-white fill with #111111 text; hover goes to white, pressed a step down. */
+  --color-accent: #F2F2F2;
+  --color-accent-hover: #FFFFFF;
+  --color-accent-pressed: #D4D4D4;
+  --color-accent-edge: transparent;
+  --color-accent-text: #F2F2F2;
+  --color-on-accent: #111111;
+  --color-on-accent-edge: #B0B0B0;
+  --color-on-accent-muted: #4F4F4F;
+  --color-accent-data: #3B82F6;
+  /* On dark a marker is the full-strength colour and its ink a step lighter, for words on near-black. */
+  --color-success: #4ADE80;
+  --color-success-marker: #22C55E;
+  --color-warning: #FBBF24;
+  --color-warning-marker: #F59E0B;
+  --color-danger: #F87171;
+  --color-danger-marker: #EF4444;
+  --color-info: #60A5FA;
+  --color-info-marker: #3B82F6;
+  --color-series-received: #06B6D4;
+  --color-series-opened: #A855F7;
+  --color-series-clicked: #EC4899;
+}
+
+/* Either theme: a notice or status mark sits on a solid neutral surface (the tone's -bg), its colour in the dot and the
+   ink alone. (The -border tones are for pages outside the console that still draw rules.) The kinds of mail that share
+   a status take its marker. */
+:root {
+  --color-success-bg: var(--color-layer-1);
+  --color-success-border: var(--color-border);
+  --color-warning-bg: var(--color-layer-1);
+  --color-warning-border: var(--color-border);
+  --color-danger-bg: var(--color-layer-1);
+  --color-danger-border: var(--color-border);
+  --color-info-bg: var(--color-layer-1);
+  --color-info-border: var(--color-border);
   --color-series-sent: var(--color-accent-data);
-  --color-series-received: oklch(var(--mark-l) var(--mark-c) var(--hue-received));
   --color-series-delivered: var(--color-success-marker);
-  --color-series-opened: oklch(var(--mark-l) var(--mark-c) var(--hue-opened));
-  --color-series-clicked: oklch(var(--mark-l) var(--mark-c) var(--hue-clicked));
   --color-series-bounced: var(--color-warning-marker);
   --color-series-complained: var(--color-danger-marker);
+}
+/* A phone or tablet reads at arm's length: body and titles a size up, the rest of the scale as on a desktop. */
+@media (max-width: 899px) {
+  :root { --text-md: 14px; --leading-md: 20px; --text-title: 20px; --leading-title: 28px; }
 }

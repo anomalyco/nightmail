@@ -47,7 +47,7 @@
   document.documentElement.dataset.theme = theme
   document.documentElement.style.colorScheme = theme
   // The browser's own bars (a phone's status bar, Safari's toolbar) take the page's frame colour.
-  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.setAttribute('content', theme === 'dark' ? '#080808' : '#FAFAFA')
+  for (const meta of document.querySelectorAll('meta[name="theme-color"]')) meta.setAttribute('content', theme === 'dark' ? '#111111' : '#EFEFEF')
 })()
 
 // Overview's detail column, where this browser hid it (features/overview/panel.ts): laid out without it from the first paint.

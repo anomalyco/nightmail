@@ -1,14 +1,16 @@
-import type { ReactNode } from 'react'
-import { Download } from 'lucide-react'
+import { useState, type ReactNode } from 'react'
+import { Check, Download } from 'lucide-react'
 import { SectionHeader } from '../../components/ui'
 import { CopyAction } from '../../components/motion'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { isMailbox } from '../../lib/private-address'
-import type { Domain } from '../../data/types'
+import { useApiQuery } from '../../data/context'
+import { request } from '../../data/live'
+import { errorText, type Domain } from '../../data/types'
 import { recordsFor } from '../settings/domain-records'
 import { McpSignInSetup } from './connect-agent'
 import './developer.css'
-import { apiKeyEnv, productName, productSlug, sdkPackage } from '../../../../api/src/brand'
+import { apiKeyEnv, productName, productSlug, sdkPackage, secretPrefixes } from '../../../../api/src/brand'
 
 function receivingMx(domain: Domain) {
   const record = recordsFor(domain, 'receiving').find(row => row.type === 'MX')
@@ -16,13 +18,29 @@ function receivingMx(domain: Domain) {
   return record ? { name: record.name, host: match ? match[2] : record.value, priority: match ? match[1] : '10' } : null
 }
 
-// domain is undefined when the reader is signed out and the workspace's domains are unknown.
-// `testSender`: the shared test sender (GET /v1/me), offered until a domain is verified so an agent can send a first email at once.
-export function agentPrompt({ origin, domain, email, multiTenant, testSender }: { origin: string; domain: Domain | null | undefined; email: string | null; multiTenant: boolean; testSender?: { address: string; perDay: number } | null }) {
+/** What the prompt says in place of the setup token until it is copied, when copying adds one. */
+export const setupTokenPlaceholder = `${secretPrefixes.agentSetup}… (added when you copy this prompt)`
+// The agent's own API key (api/src/agent-setup.ts): from the setup token a copy carries, else the device flow, which an
+// owner or admin approves at /connect.
+function keyLines(origin: string, token: string | null | undefined) {
+  const device = `POST ${origin}/v1/agent/device (JSON body {"client_name":"<your name>"}), show me its verification_uri_complete and user_code, then poll POST ${origin}/v1/agent/device/token with {"device_code":"<device_code>"} every interval seconds until it returns the key (AUTHORIZATION_PENDING means keep waiting).`
+  const keep = `Save the key it returns as ${apiKeyEnv} in the project's environment (a gitignored .env), never in code or a commit; it's shown once. It sends email and manages domains, inboxes and receiving; it can't create API keys, inbox connection keys, inbox keys or mail-client (IMAP/SMTP) passwords, and can't manage members or billing.`
+  if (token === undefined) return [`- No ${apiKeyEnv} yet? Get your own key with a device code: ${device} ${keep}`]
+  return [
+    `- Get your own API key first: exchange this one-time setup token (it works once, for 15 minutes) with POST ${origin}/v1/agent/setup and the JSON body {"token":"${token ?? setupTokenPlaceholder}"}. ${keep}`,
+    `- If the setup token was already used or has expired, use a device code instead: ${device}`,
+  ]
+}
+
+// domain is undefined when the reader is signed out and the workspace's domains are unknown. setupToken: the token a
+// copy carries, null for its placeholder (the prompt as shown before copying), undefined for a prompt without one.
+// testSender: the shared test sender (GET /v1/me), offered until a domain is verified so an agent can send a first email at once.
+export function agentPrompt({ origin, domain, email, multiTenant, setupToken, testSender }: { origin: string; domain: Domain | null | undefined; email: string | null; multiTenant: boolean; setupToken?: string | null; testSender?: { address: string; perDay: number } | null }) {
   const lines = [
     `Set up ${productName} email in this project.`,
     '',
     `- API base URL: ${origin}`,
+    ...keyLines(origin, setupToken),
     `- Read the docs first: ${origin}/llms.txt (agent-readable index) and ${origin}/docs.md (API reference index; each tag links its full Markdown reference).`,
     `- Install the TypeScript SDK: npm i ${sdkPackage}. Create the client with createClient from '${sdkPackage}/client' (baseUrl ${origin}) and call it from server code only.`,
     `- Auth: bearer API key from the ${apiKeyEnv} environment variable. Never hardcode it or ship it to a browser.`,
@@ -74,15 +92,68 @@ function downloadText(name: string, text: string) {
   Object.assign(document.createElement('a'), { href: `data:text/plain;charset=utf-8,${encodeURIComponent(text + '\n')}`, download: name }).click()
 }
 
+type SetupStatus = { id: string; status: 'waiting' | 'connected' | 'expired' | 'replaced'; keyName: string | null }
+export type AgentSetupState = 'idle' | SetupStatus['status'] | 'failed'
+export type AgentSetup = { state: AgentSetupState; keyName: string | null; error: unknown;
+  /** Copy's value for a prompt: a fresh setup token in it each time. Without one (the mint failed), the prompt's device flow. */
+  copy: (prompt: (token: string | undefined) => string) => () => Promise<string> }
+
+/**
+ * The setup token a copied prompt carries (api/src/agent-setup.ts), for an owner or admin: each copy mints one, which
+ * replaces their unused one, and the newest is watched until the agent exchanges it, so the prompt can say it connected.
+ * Null for everyone else, whose prompt has the device flow instead.
+ */
+export function useAgentSetup(enabled: boolean): AgentSetup | null {
+  const [minted, setMinted] = useState<string | null>(null)
+  const [error, setError] = useState<unknown>(null)
+  const watched = useApiQuery(['agent-setup', minted ?? ''], (_api, signal) => request<SetupStatus>(`/v1/agent/setup-tokens/${encodeURIComponent(minted!)}`, { signal }),
+    { enabled: enabled && minted !== null, interval: data => !data || data.status === 'waiting' ? 3000 : false })
+  if (!enabled) return null
+  const status = minted && watched.data?.id === minted ? watched.data : null
+  return { state: error ? 'failed' : !minted ? 'idle' : status?.status ?? 'waiting', keyName: status?.keyName ?? null, error,
+    copy: prompt => async () => {
+      try {
+        const made = await request<{ id: string; token: string }>('/v1/agent/setup-tokens', { method: 'POST' })
+        setMinted(made.id); setError(null)
+        return prompt(made.token)
+      } catch (failure) { setError(failure); return prompt(undefined) }
+    } }
+}
+
+// Every state is laid out in one cell, so the line never changes the section's height.
+const sampleKey = 'Agent (set up 0000-00-00)'
+const setupLines: Record<AgentSetupState, (keyName: string) => ReactNode> = {
+  idle: () => 'Copying adds a one-time setup token, so your agent gets its own API key. Revoke it any time under API keys.',
+  waiting: () => 'Waiting for your agent to use the setup token. It works once, for 15 minutes.',
+  connected: keyName => <>Your agent connected. Its key is <strong>{keyName}</strong>, under API keys.</>,
+  expired: () => 'The setup token expired before your agent used it. Copy the prompt again for a new one.',
+  replaced: () => 'A newer copy replaced this setup token. Use the prompt you copied last.',
+  failed: () => 'Couldn’t add a setup token, so the copied prompt connects with a device code instead.',
+}
+export function AgentSetupStatus({ setup }: { setup: AgentSetup }) {
+  const { state } = setup, keyName = setup.keyName ?? sampleKey
+  return <div className="agent-setup-status" data-state={state}>
+    {(Object.keys(setupLines) as AgentSetupState[]).map(key => <p key={key} data-state={key} data-active={key === state || undefined} aria-hidden={key !== state || undefined}>
+      {(key === 'connected' || key === 'waiting') && <span className="agent-setup-status__mark" aria-hidden="true">{key === 'connected' ? <Check size={14} strokeWidth={2.5} /> : <span className="connect-agent__pulse" />}</span>}
+      <span>{setupLines[key](key === state ? keyName : sampleKey)}</span>
+    </p>)}
+    <span className="sr-only" role="status">{state === 'idle' ? '' : state === 'connected' ? `Your agent connected. Its key is ${keyName}.` : state === 'failed' ? `Couldn’t add a setup token: ${errorText(setup.error)}` : String(setupLines[state](keyName))}</span>
+  </div>
+}
+
 // A null prompt is still loading: the section keeps its place and its actions stay hidden. `compact` (onboarding) is the
-// prompt and its actions without the docs' paragraph on how to use it.
-export function AgentPrompt({ prompt, compact = false }: { prompt: string | null; compact?: boolean }) {
+// prompt and its actions without the docs' paragraph on how to use it. With `setup` (an owner or admin), copying puts a
+// fresh setup token in the prompt (`copy` makes it), and the line above it says when the agent used it. A download never
+// has one, so no live credential lands in a file: it is `download`, the prompt with the device flow instead.
+export function AgentPrompt({ prompt, compact = false, setup, copy, download }: { prompt: string | null; compact?: boolean; setup?: AgentSetup | null; copy?: () => Promise<string>; download?: string }) {
+  const value = setup && copy ? copy : prompt ?? ''
   return <section id="agent-prompt" className="section stack developer-section" aria-label="Agent prompt" aria-busy={prompt === null || undefined}>
     <SectionHeader title="Agent prompt" actions={<span className="developer-icon-actions" data-pending={prompt === null || undefined} inert={prompt === null}>
-      <button type="button" className="ui-button ui-button--ghost ui-button--sm developer-copy-icon" aria-label="Download agent prompt as .txt" title="Download as .txt" onClick={() => downloadText(`${productSlug}-agent-prompt.txt`, prompt ?? '')}><Download size={14} aria-hidden="true" /></button>
-      <CopyAction value={prompt ?? ''} label="Copy agent prompt" variant="ghost" size="sm" compact className="developer-copy-icon" />
+      <button type="button" className="ui-button ui-button--ghost ui-button--sm developer-copy-icon" aria-label="Download agent prompt as .txt" title="Download as .txt" onClick={() => downloadText(`${productSlug}-agent-prompt.txt`, download ?? prompt ?? '')}><Download size={14} aria-hidden="true" /></button>
+      <CopyAction value={value} label="Copy agent prompt" variant="ghost" size="sm" compact className="developer-copy-icon" />
     </span>} />
     {!compact && <p className="muted developer-copy">Paste this into your coding agent, or download it as a .txt file for it to read. It has this workspace’s real values; the API key stays in your environment.</p>}
+    {setup && <AgentSetupStatus setup={setup} />}
     <pre className="developer-code developer-code--prompt" tabIndex={0} aria-label="Agent prompt"><code><MaskedText text={prompt ?? ''} /></code></pre>
   </section>
 }

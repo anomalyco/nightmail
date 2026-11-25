@@ -47,6 +47,11 @@
     "UI_NOTES_SUBJECTS": "https://account.anoma.ly 0YLDsWUOonmIl3RQqb3yHQ",
     // Dashboard usage analytics (docs/analytics.md): batches go to the ANALYTICS bucket, never Postgres. "off" discards them.
     "DASHBOARD_ANALYTICS": "on",
+    // The domain setup reminder email (src/domain-setup.ts). Off: turning it on sends real email to customers.
+    // The DNS check and the dashboard's banner run either way.
+    "DOMAIN_SETUP_REMINDER": "off",
+    // The email to a new workspace with no domain an hour after sign-up (src/domain-setup.ts). Off for the same reason.
+    "NO_DOMAIN_REMINDER": "off",
     // Abuse monitoring (src/abuse.ts) records from this instant on, monitor-only (NIGHTMAIL_ABUSE_ENFORCE stays unset).
     "NIGHTMAIL_ABUSE_MONITORING": "2026-11-21T15:30:00Z",
     "ACCOUNT_CLIENT_ID": "bane-production",

@@ -1,5 +1,7 @@
 /* UI notes mode: every part is fixed to the viewport, so the page under it never moves. The layer adds no box of its
-   own; its parts stack above the page (sidebar 20, tab bar 30, Help 41) and below dialogs (80), except the note panel. */
+   own; its parts stack above the page (sidebar 20, tab bar 30, Help 41) and below dialogs (80), except the note panel.
+   The panel, the pill and the tray are solid overlay surfaces on a soft drop, with no edge or inner rule; only the
+   outline and the highlight around the element being noted draw a line, on purpose. */
 .uin-layer { display: contents; }
 .uin-outline, .uin-highlight { position: fixed; top: 0; left: 0; z-index: 62; pointer-events: none; border-radius: 3px; }
 .uin-outline { outline: 1.5px solid var(--color-accent); outline-offset: 1px; background: color-mix(in srgb, var(--color-accent) 7%, transparent); }
@@ -27,10 +29,9 @@ html[data-ui-notes-armed], html[data-ui-notes-armed] * { cursor: crosshair !impo
 @media (hover: hover) and (pointer: fine) { .uin-pin:hover { background: var(--color-contrast-hover); transition-duration: 0ms; } }
 
 /* The note panel: beside its element, growing from the side that faces it. */
-.uin-panel { position: fixed; top: 0; left: 0; z-index: 95; width: min(344px, calc(100vw - 24px)); padding: var(--space-12); border-radius: var(--radius-sm); background: var(--color-layer-1); box-shadow: var(--shadow-popover);
-  color: var(--color-text); font-size: var(--text-sm); line-height: var(--leading-sm); transform-origin: top left; animation: uin-pop 160ms var(--ease-out-strong); transition: background-color 200ms ease-out; }
+.uin-panel { position: fixed; top: 0; left: 0; z-index: 95; width: min(344px, calc(100vw - 24px)); padding: var(--space-12); border-radius: var(--radius-sm); background: var(--color-overlay-surface, var(--color-layer-1)); box-shadow: var(--shadow-popover);
+  color: var(--color-text); font-size: var(--text-sm); line-height: var(--leading-sm); transform-origin: top left; animation: uin-pop 160ms var(--ease-out-strong); }
 .uin-panel[data-side='top'] { transform-origin: bottom left; }
-.uin-panel:has(.uin-confirm) { background: color-mix(in srgb, var(--color-danger) 10%, var(--color-layer-1)); }
 .uin-form { display: flex; flex-direction: column; gap: var(--space-8); min-width: 0; }
 .uin-head { display: flex; align-items: center; gap: var(--space-8); min-width: 0; min-height: 24px; }
 .uin-where { overflow: hidden; font-weight: var(--font-weight-bold); text-overflow: ellipsis; white-space: nowrap; }
@@ -45,11 +46,13 @@ html[data-ui-notes-armed], html[data-ui-notes-armed] * { cursor: crosshair !impo
 .uin-moved a { color: inherit; }
 .uin-error { color: var(--color-danger); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .uin-chips { display: flex; flex-wrap: wrap; gap: var(--space-4); }
-.uin-chip { height: 24px; padding: 0 var(--space-8); border: 0; border-radius: 4px; background: var(--color-layer-2); color: var(--color-muted); font-size: var(--text-xs); line-height: 24px; white-space: nowrap;
+.uin-chip { height: 24px; padding: 0 var(--space-8); border: 0; border-radius: 4px; background: var(--color-chip, var(--color-layer-2)); color: var(--color-muted); font-size: var(--text-xs); line-height: 24px; white-space: nowrap;
   transition: background-color 100ms ease-out, color 100ms ease-out, scale 120ms var(--ease-out-strong); }
 .uin-chip[aria-pressed='true'] { background: var(--color-contrast); color: var(--color-on-contrast); }
 .uin-chip:active { scale: .96; }
 @media (hover: hover) and (pointer: fine) { .uin-chip:hover:not([aria-pressed='true']) { background: var(--color-layer-3); color: var(--color-text); transition-duration: 0ms; } }
+.uin-chip:focus-visible:not([aria-pressed='true']) { background: var(--color-layer-3); color: var(--color-text); }
+.uin-chip[aria-pressed='true']:focus-visible { background: var(--color-contrast-hover); }
 .uin-foot { display: flex; align-items: center; justify-content: flex-end; gap: var(--space-6); min-height: 28px; margin-top: var(--space-4); }
 .uin-confirm { margin-right: auto; color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); white-space: nowrap; }
 .uin-confirm { color: var(--color-danger); font-family: var(--font-body); }
@@ -60,21 +63,24 @@ html[data-ui-notes-armed], html[data-ui-notes-armed] * { cursor: crosshair !impo
 
 /* The tray: a pill at the bottom left that says notes mode is on, and the page's notes above it. */
 .uin-tray { position: fixed; left: calc(var(--sidebar-width) + var(--page-inset) + var(--space-16)); bottom: var(--launcher-inset); z-index: 64; }
-.uin-pill { display: inline-flex; align-items: center; gap: var(--space-6); height: var(--launcher-size); padding: 0 var(--space-12) 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: var(--color-layer-1); color: var(--color-text);
+.uin-pill { display: inline-flex; align-items: center; gap: var(--space-6); height: var(--launcher-size); padding: 0 var(--space-12) 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: var(--color-overlay-surface, var(--color-layer-1)); color: var(--color-text);
   box-shadow: var(--shadow-popover); font-weight: var(--font-weight-bold); white-space: nowrap; transition: scale 120ms var(--ease-out-strong); }
 .uin-pill:active { scale: .97; }
+.uin-pill:focus-visible { background: var(--color-overlay-hover, var(--color-hover)); }
+.uin-pin:focus-visible { background: var(--color-contrast-hover); }
 .uin-pill__dot { width: 6px; height: 6px; border-radius: 50%; background: var(--color-accent); }
 .uin-pill__count { min-width: 1ch; color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); font-variant-numeric: tabular-nums; }
 .uin-tray__panel { position: absolute; bottom: calc(100% + var(--space-8)); left: 0; display: flex; flex-direction: column; width: min(344px, calc(100vw - 24px)); max-height: min(420px, 60dvh); padding: var(--space-4);
-  border-radius: var(--radius-sm); background: var(--color-layer-1); box-shadow: var(--shadow-popover); transform-origin: bottom left; animation: uin-pop 160ms var(--ease-out-strong); }
+  border-radius: var(--radius-sm); background: var(--color-overlay-surface, var(--color-layer-1)); box-shadow: var(--shadow-popover); transform-origin: bottom left; animation: uin-pop 160ms var(--ease-out-strong); }
 .uin-list { flex: 1; min-height: 0; margin: 0; padding: 0; overflow: auto; list-style: none; }
 .uin-row { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: var(--space-8); width: 100%; min-height: 32px; padding: var(--space-4) var(--space-8); border: 0; border-radius: 4px; background: transparent; text-align: left; }
 .uin-row[data-resolved] { color: var(--color-muted); }
-@media (hover: hover) and (pointer: fine) { .uin-row:hover { background: var(--color-hover); transition-duration: 0ms; } }
+@media (hover: hover) and (pointer: fine) { .uin-row:hover { background: var(--color-overlay-hover, var(--color-hover)); transition-duration: 0ms; } }
+.uin-row:focus-visible { background: var(--color-overlay-hover, var(--color-hover)); }
 .uin-row__body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .uin-row__tag { color: var(--color-muted); font-size: var(--text-xs); white-space: nowrap; }
 .uin-tray__empty { padding: var(--space-8); color: var(--color-muted); }
-.uin-tray__foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); margin-top: var(--space-4); padding: var(--space-4) var(--space-4) 0 var(--space-8); border-top: 1px solid var(--color-border-muted); }
+.uin-tray__foot { display: flex; align-items: center; justify-content: space-between; gap: var(--space-8); margin-top: var(--space-8); padding: 0 var(--space-4) 0 var(--space-8); }
 .uin-tray__foot a { color: var(--color-accent); text-decoration: none; }
 @media (max-width: 899px) {
   .uin-tray { left: var(--space-12); bottom: calc(var(--tab-bar-height, 56px) + env(safe-area-inset-bottom) + var(--space-12)); }

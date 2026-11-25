@@ -1,6 +1,6 @@
-import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType, type NavLinkProps } from 'react-router'
-import { BookOpen, Ellipsis, Globe, Inbox, KeyRound, LayoutGrid, LifeBuoy, Lock, Newspaper, Plug, ScrollText, Send, Settings, ShieldCheck, Users } from 'lucide-react'
+import { BookOpen, Ellipsis, Globe, Inbox, KeyRound, LayoutGrid, LifeBuoy, Lock, Newspaper, Plug, ScrollText, Search, Send, Settings, ShieldCheck, Users, type LucideIcon } from 'lucide-react'
 import { useRegion, useSession, useWorkspaceAccess } from '../data/context'
 import { preloadRouteChunk, sidebarPaths, usePrefetchQueries, usePrefetchRoute, useRouteIntent } from '../data/prefetch'
 import { useRegionCatalog, useRegionDiscovery } from '../data/regions'
@@ -9,14 +9,13 @@ import { chunk, ChunkFallback } from '../lib/preloadable'
 import { queries } from '../data/queries'
 import { useScoreAbout } from '../lib/score-about'
 import { openConnectAgent, useConnectAgentOpen } from '../lib/connect-agent'
-import { Alert, Button, EmptyState, ErrorState, Select, Sheet, Skeleton, SkeletonText, useToast } from './ui'
-import { useCompactShell } from '../lib/media'
+import { Alert, Button, EmptyState, ErrorState, Icon, IconButton, Select, Sheet, Skeleton, SkeletonText, useToast, type IconSize } from './ui'
+import { CommandMenu, type Command } from './CommandMenu'
+import { modKey, useCompactShell } from '../lib/media'
 import { RouteSkeleton } from './RouteSkeleton'
 import { ThemeToggle } from './ThemeToggle'
 import { AccountSwitcher } from './AccountSwitcher'
-import { StandingBanner } from './StandingBanner'
-import { BillingBanner } from './BillingBanner'
-import { SetupBanner } from './SetupBanner'
+import { Notices } from './Notices'
 import { LegalFooterLinks } from './LegalLinks'
 import { PrivacyToggle } from './PrivacyToggle'
 import { NightmailWordmark } from './NightmailLogo'
@@ -50,9 +49,17 @@ const selfHostedLinks: readonly NavItem[] = [['/operator', 'Health']]
 // thumb-tap away and always in view, and More, a sheet with the rest. A drawer would hide every destination behind a
 // button; the tab bar keeps the main ones visible and says where you are.
 const tabs = ['/overview', '/logs', '/receiving', '/campaigns']
-const icons: Record<string, ReactNode> = { '/overview': <LayoutGrid />, '/logs': <ScrollText />, '/receiving': <Inbox />, '/campaigns': <Send />, '/audience': <Users />, '/domains': <Globe />, '/api-keys': <KeyRound />, '/docs': <BookOpen />, '/settings': <Settings />, '/support': <LifeBuoy />, '/operator': <ShieldCheck /> }
-const iconOf = (path: string) => icons[path] ?? (path.startsWith('/newsletters') ? <Newspaper /> : null)
+const icons: Record<string, LucideIcon> = { '/overview': LayoutGrid, '/logs': ScrollText, '/receiving': Inbox, '/campaigns': Send, '/audience': Users, '/domains': Globe, '/api-keys': KeyRound, '/docs': BookOpen, '/settings': Settings, '/support': LifeBuoy, '/operator': ShieldCheck }
+const glyphOf = (path: string) => icons[path] ?? (path.startsWith('/newsletters') ? Newspaper : null)
+const iconOf = (path: string, size: IconSize = 'md') => { const glyph = glyphOf(path); return glyph ? <Icon icon={glyph} size={size} /> : null }
 const current = (path: string, pathname: string) => pathname === path || pathname.startsWith(`${path}/`)
+// The sidebar's four groups. A newsletter sits with Campaigns; staff and self-hosted pages close Workspace.
+const groups = [['Mail', ['/overview', '/logs', '/receiving']], ['Marketing', ['/campaigns', '/audience']], ['Infra', ['/domains', '/api-keys']], ['Workspace', ['/docs', '/settings']]] as const
+const groupOf = (path: string) => path.startsWith('/newsletters') ? 'Marketing' : groups.find(([, paths]) => (paths as readonly string[]).includes(path))?.[0] ?? 'Workspace'
+// Keyboard-first: G then a letter opens a page from anywhere you aren't typing (G O Overview, G L Logs…), and ⌘K jumps.
+const goKeys: Record<string, string> = { '/overview': 'O', '/logs': 'L', '/receiving': 'R', '/campaigns': 'C', '/audience': 'A', '/domains': 'D', '/api-keys': 'K', '/settings': 'S' }
+const typing = (target: EventTarget | null) => Boolean((target as HTMLElement | null)?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]'))
+const commandKey = `${modKey}K`
 // A link of the navigation. `on`: undefined lets the address decide, as everywhere; a boolean decides for it.
 function Nav({ on, className, ...props }: Omit<NavLinkProps, 'className' | 'children' | 'style'> & { on?: boolean; className?: string; children: ReactNode }) {
   return on === undefined ? <NavLink className={className} {...props} /> : <Link className={[className, on && 'active'].filter(Boolean).join(' ') || undefined} aria-current={on ? 'page' : undefined} {...props} />
@@ -196,6 +203,37 @@ export function AppShell() {
     document.addEventListener('keydown', onKey)
     return () => document.removeEventListener('keydown', onKey)
   }, [])
+  // ⌘K (Ctrl+K) opens or closes the quick jumper, except inside the email editor, where it is the editor's own.
+  const [commandOpen, setCommandOpen] = useState(false)
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key.toLowerCase() !== 'k' || !(event.metaKey || event.ctrlKey) || event.altKey || event.shiftKey || event.defaultPrevented) return
+      if ((event.target as HTMLElement | null)?.closest?.('[contenteditable=""], [contenteditable="true"]')) return
+      event.preventDefault(); setCommandOpen(open => !open)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
+  // G then a letter, within a second, opens that page (goKeys), unless you are typing or a dialog or menu has focus.
+  const go = useRef(navigate)
+  go.current = navigate
+  useEffect(() => {
+    let armed = 0
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey || event.defaultPrevented || event.repeat || typing(event.target)) return
+      if ((event.target as HTMLElement | null)?.closest?.('[role="dialog"], [role="menu"], [role="listbox"]')) return
+      const key = event.key.toUpperCase()
+      if (armed && Date.now() - armed < 1000) {
+        armed = 0
+        const path = Object.keys(goKeys).find(item => goKeys[item] === key)
+        if (path) { event.preventDefault(); go.current(path) }
+        return
+      }
+      armed = key === 'G' && !event.shiftKey ? Date.now() : 0
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [])
   function changeRegion(id: string) {
     setRegionId(id)
     const parts = location.pathname.split('/').filter(Boolean)
@@ -233,11 +271,14 @@ export function AppShell() {
     </> : discovery.isFetching ? <><div className="quota-label"><span>Checking SES…</span><Skeleton width={28} /></div><Skeleton height={3} /><SkeletonText lineHeight={18} /></> : needsProvisioning ? null : <><span>SES · {discovery.isError ? 'Check failed' : label(current?.discoveryStatus ?? 'not_discovered')}</span><Link to="/settings">Set up SES</Link></>}</div>
     {access.multiTenant && <div className="sidebar-score-slot"><SidebarScore /></div>}
   </>
-  const overlays = <>{connectHost}{support.mode && <SupportHost chat={support} />}{notesOn && <UiNotesLayer />}</>
+  // The quick jumper lists every page of the navigation, grouped as the sidebar groups them.
+  const commands = useMemo<Command[]>(() => links.map(([path, title]) => ({ path, title, group: groupOf(path), icon: glyphOf(path), keys: goKeys[path], locked: !access.canAdminister && adminOnly.has(path) })), [links.map(([path, title]) => `${path}:${title}`).join('\n'), access.canAdminister]) // eslint-disable-line react-hooks/exhaustive-deps
+  const grouped = groups.map(([name]) => ({ name, links: links.filter(([path]) => groupOf(path) === name) })).filter(group => group.links.length)
+  const section = links.find(([path]) => on(path) ?? (location.pathname === path || location.pathname.startsWith(`${path}/`)))?.[1] ?? 'Overview'
+  const workspaceName = access.multiTenant ? session?.identity?.workspaces?.find(item => item.id === session?.identity?.workspaceId)?.name ?? 'Workspace' : regionId || productName
+  const overlays = <>{connectHost}{support.mode && <SupportHost chat={support} />}{notesOn && <UiNotesLayer />}<CommandMenu open={commandOpen} onOpenChange={setCommandOpen} commands={commands} /></>
   const main = <main ref={content} id="main-content" className="page-surface" tabIndex={-1}>{session?.notice && <div className="page-notice"><Alert tone="danger" title="Invitation not accepted" onDismiss={session.dismissNotice}>{session.notice}</Alert></div>}
-    <SetupBanner />
-    <StandingBanner />
-    <BillingBanner />
+    <Notices />
     <ChunkFallback.Provider value={<RouteSkeleton />}><Suspense fallback={<RouteSkeleton />}>
       {needsRegion && regions.isError && !regions.data ? <ErrorState error={regions.error} onRetry={() => regions.refetch()} />
         : needsRegion && (regions.isPending ? !regionId : !current && enabled.length > 0) ? <RouteSkeleton />
@@ -261,13 +302,27 @@ export function AppShell() {
   return <div className={support.mode ? 'app-shell app-shell--support' : 'app-shell'}>
     <a className="skip-link" href="#main-content">Skip to content</a>
     <aside className="sidebar">
-      <NavLink className="wordmark" to="/overview" aria-label={`${productName.toLowerCase()} overview`}><NightmailWordmark /></NavLink>
-      <ThemeToggle />
+      <div className="sidebar-head"><NavLink className="wordmark" to="/overview" aria-label={`${productName.toLowerCase()} overview`}><NightmailWordmark /></NavLink></div>
       <div className="sidebar-context">{context}</div>
       {/* Members see every page: owner and admin ones carry a lock and explain who can use them. */}
-      <nav className="main-navigation" aria-label="Main navigation">{links.map(([path, title]) => <Nav key={path} to={path} on={on(path)} {...locked(path) ? lockedProps : intent(path)}><span className="main-navigation__title">{title}</span>{locked(path) && <Lock size={12} aria-label="Owners and admins only" />}</Nav>)}</nav>
-      <div className="sidebar-footer"><button type="button" className="sidebar-connect" onPointerEnter={preloadConnectAgent} onFocus={preloadConnectAgent} onClick={openConnectAgent}>Connect an agent<Plug aria-hidden="true" /></button>{footer}</div>
+      <nav className="main-navigation" aria-label="Main navigation">{grouped.map(group => <div key={group.name} className="nav-group" role="group" aria-labelledby={`nav-group-${group.name}`}>
+        <span id={`nav-group-${group.name}`} className="nav-group__label">{group.name}</span>
+        {group.links.map(([path, title]) => <Nav key={path} to={path} on={on(path)} {...locked(path) ? lockedProps : intent(path)}>
+          {iconOf(path, 'sm')}<span className="main-navigation__title">{title}</span>
+          {locked(path) ? <Icon icon={Lock} size="xs" label="Owners and admins only" /> : goKeys[path] && <span className="ui-shortcut" aria-hidden="true">G {goKeys[path]}</span>}
+        </Nav>)}
+      </div>)}</nav>
+      <div className="sidebar-footer">{footer}</div>
     </aside>
+    <header className="topbar">
+      <nav className="topbar__crumbs" aria-label="Breadcrumb"><span className="topbar__workspace" data-private title={workspaceName}>{workspaceName}</span><span className="topbar__sep" aria-hidden="true">/</span><span className="topbar__section" aria-current="page">{section}</span></nav>
+      <button type="button" className="command-trigger" aria-haspopup="dialog" aria-keyshortcuts="Meta+K Control+K" onClick={() => setCommandOpen(true)}><Icon icon={Search} size="sm" /><span>Search or jump…</span><kbd className="ui-kbd">{commandKey}</kbd></button>
+      <div className="topbar__end">
+        <span className="topbar__hint" aria-hidden="true"><kbd className="ui-kbd">/</kbd>Search</span>
+        <ThemeToggle />
+        <IconButton className="topbar__connect" label="Connect an agent" title="Connect an agent" onPointerEnter={preloadConnectAgent} onFocus={preloadConnectAgent} onClick={openConnectAgent}><Icon icon={Plug} /><span className="sr-only">Connect an agent</span></IconButton>
+      </div>
+    </header>
     {scoreHost}
     {main}
     {support.mode && <SupportTrigger chat={support} floating />}
@@ -303,12 +358,12 @@ function TabBar({ links, intent, footer, locked, connect, on }: { links: readonl
   const close = () => { if (open) navigate(-1) }
   return <>
     <nav className="tab-bar" aria-label="Main navigation">
-      {links.filter(([path]) => tabs.includes(path)).map(([path, title]) => <Nav key={path} className="tab-bar__item" to={path} on={on(path)} {...intent(path)}><span className="tab-bar__icon" aria-hidden="true">{iconOf(path)}</span><span className="tab-bar__label">{title}</span></Nav>)}
-      <button ref={moreButton} type="button" className="tab-bar__item" aria-haspopup="dialog" aria-expanded={open} aria-current={inMore ? 'page' : undefined} data-active={inMore || open || undefined} onClick={show}><span className="tab-bar__icon" aria-hidden="true"><Ellipsis /></span><span className="tab-bar__label">More</span></button>
+      {links.filter(([path]) => tabs.includes(path)).map(([path, title]) => <Nav key={path} className="tab-bar__item" to={path} on={on(path)} {...intent(path)}><span className="tab-bar__icon" aria-hidden="true">{iconOf(path, 'lg')}</span><span className="tab-bar__label">{title}</span></Nav>)}
+      <button ref={moreButton} type="button" className="tab-bar__item" aria-haspopup="dialog" aria-expanded={open} aria-current={inMore ? 'page' : undefined} data-active={inMore || open || undefined} onClick={show}><span className="tab-bar__icon" aria-hidden="true"><Icon icon={Ellipsis} size="lg" /></span><span className="tab-bar__label">More</span></button>
     </nav>
     <Sheet open={open} onOpenChange={next => { if (!next) close() }} title="More" hideTitle className="more-sheet" returnFocus={moreButton}>
-      <nav className="more-sheet__links" aria-label="More pages">{more.map(([path, title]) => <Nav key={path} className="more-sheet__link" to={path} replace on={on(path)} {...locked(path) ? lockedProps : intent(path)}><span className="more-sheet__icon" aria-hidden="true">{iconOf(path)}</span><span className="more-sheet__title">{title}</span>{locked(path) && <Lock className="more-sheet__lock" size={14} aria-label="Owners and admins only" />}</Nav>)}
-        {connect && <button type="button" className="more-sheet__link" onPointerDown={preloadConnectAgent} onClick={() => { close(); openConnectAgent() }}><span className="more-sheet__icon" aria-hidden="true"><Plug /></span>Connect an agent</button>}</nav>
+      <nav className="more-sheet__links" aria-label="More pages">{more.map(([path, title]) => <Nav key={path} className="more-sheet__link" to={path} replace on={on(path)} {...locked(path) ? lockedProps : intent(path)}><span className="more-sheet__icon" aria-hidden="true">{iconOf(path, 'lg')}</span><span className="more-sheet__title">{title}</span>{locked(path) && <Icon className="more-sheet__lock" icon={Lock} size="sm" label="Owners and admins only" />}</Nav>)}
+        {connect && <button type="button" className="more-sheet__link" onPointerDown={preloadConnectAgent} onClick={() => { close(); openConnectAgent() }}><span className="more-sheet__icon" aria-hidden="true"><Icon icon={Plug} size="lg" /></span>Connect an agent</button>}</nav>
       <div className="more-sheet__footer">{footer}</div>
     </Sheet>
   </>

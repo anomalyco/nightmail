@@ -4,7 +4,7 @@ import { Link, Navigate, useLocation, useNavigate, useNavigationType, useParams 
 import { Alert, EmptyState, ErrorState, Input, SkeletonText, Tabs } from '../../components/ui'
 import { CopyAction } from '../../components/motion'
 import { useApiQuery, useCanonicalOrigin, useSession, useWorkspaceAccess } from '../../data/context'
-import { AgentPrompt, agentPrompt } from './agent-setup'
+import { AgentPrompt, agentPrompt, useAgentSetup } from './agent-setup'
 import { guides, type Guide } from './guides'
 import { SendingLimitsGuide } from '../score/limits'
 import { DocsArticleSkeleton, useDocsAudience } from './frame'
@@ -185,15 +185,18 @@ function useAgentPrompt() {
   const withDomain = Boolean(identity) && canAdminister
   const origin = useDocsOrigin()
   const domains = useApiQuery(['domains', 'agent-prompt'], (api, signal) => api.domains.list({ page: 1, pageSize: 10, refresh: false }, signal), { enabled: withDomain })
-  if ((!identity && checkingSession) || (withDomain && domains.isPending)) return null
+  // An admin's copied prompt carries a setup token; everyone else's has the device flow.
+  const setup = useAgentSetup(withDomain)
+  if ((!identity && checkingSession) || (withDomain && domains.isPending)) return { prompt: null, setup }
   // Prefer a verified domain for the test send; any domain still gives the agent its DNS context.
   const items = domains.data?.items ?? []
   const domain = withDomain ? items.find(row => row.status === 'verified') ?? items[0] ?? null : undefined
-  return agentPrompt({ origin, domain, email: identity?.email ?? null, multiTenant, testSender: withDomain ? identity?.testSender : null })
+  const promptFor = (setupToken: string | null | undefined) => agentPrompt({ origin, domain, email: identity?.email ?? null, multiTenant, setupToken, testSender: withDomain ? identity?.testSender : null })
+  return { prompt: promptFor(setup ? null : undefined), setup, copy: setup?.copy(promptFor), download: promptFor(undefined) }
 }
 
 function DocsOverview({ document, all }: {document: Document; all: Operation[]}) {
-  const prompt = useAgentPrompt()
+  const { prompt, setup, copy, download } = useAgentPrompt()
   const groups = [...new Set(all.map(operation => operation.tag))]
   const install = `npm install ${sdkPackage}`
   return <article className="docs-operation docs-overview">
@@ -202,7 +205,7 @@ function DocsOverview({ document, all }: {document: Document; all: Operation[]})
     <section id="guides" className="docs-section" aria-labelledby="docs-guides"><h2 id="docs-guides">Guides</h2><div className="docs-resource-list">
       {guides.map(guide => <Link key={guide.id} to={`/docs/${guide.id}`}><strong>{guide.title}</strong><span>{guide.summary}</span></Link>)}
     </div></section>
-    <AgentPrompt prompt={prompt} />
+    <AgentPrompt prompt={prompt} setup={setup} copy={copy} download={download} />
     <section id="sdk" className="docs-section"><h2>TypeScript SDK</h2><p className="muted">Generated client and types, <a href={`https://www.npmjs.com/package/${sdkPackage}`}>published on npm</a>. Call it from a trusted server with an API key.</p><div className="docs-install"><code>{install}</code><CopyAction value={install} label="Copy install command" variant="ghost" size="sm" compact className="developer-copy-icon" /></div></section>
     <section id="formats" className="docs-section"><h2>Documentation formats</h2><div className="docs-resource-list">
       <a href="/docs.md"><strong>Markdown reference</strong><span>API index for agents and text tools, with a complete reference per tag.</span></a>

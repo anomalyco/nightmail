@@ -122,7 +122,7 @@ export const workspaceBearer = (token: string) => /^(?:nm|bane|os)_(?!mbx_)/.tes
 /** The key a secret names, if it works now. `ended`: an expired key too, flagged, so its refusal can say when it ended
  *  (charge it with NOT credential.ended, so the refused request is never charged). */
 const apiKeyRow = (c: Ctx, hash: string, ended = false) => sql`
-  SELECT k.id, k.workspace_id, k.id AS key_id, k.permissions, k.domains, g.grant_id,
+  SELECT k.id, k.workspace_id, k.id AS key_id, k.permissions, k.domains, g.grant_id, k.agent_setup_id IS NOT NULL AS agent_setup,
     ${ended ? sql`k.expires_at::text AS expires_at, coalesce(k.expires_at <= now(), false) AS ended,` : sql``} ${c.env.config.apiRateLimitPerMinute}::int AS max_requests
   FROM api_keys k LEFT JOIN mail_grant_objects g ON g.workspace_id=k.workspace_id AND g.kind='api_key' AND g.resource=k.id
   WHERE k.hash = ${hash} AND k.revoked_at IS NULL ${ended ? sql`` : sql`AND (k.expires_at IS NULL OR k.expires_at > now())`}`;
@@ -159,7 +159,7 @@ export async function bearerActor(c: Ctx, token: string): Promise<Actor> {
   // A send's duplicate that reaches another isolate (a cold fingerprint) must not wait on the budget row either.
   const idem = c.req.method==='POST' && ['/v1/emails/send','/v1/emails/batch'].includes(c.req.path) ? c.req.header('Idempotency-Key') : undefined;
   const gate = idem!==undefined && validIdempotencyKey(idem) ? idempotencyGate(c.req.path,idem) : undefined;
-  const key = await timed(c, 'budget-db', () => chargeCredential<Pick<Actor, 'permissions' | 'domains'> & { id: string; workspace_id: string; grant_id:string|null; expires_at: string | null; ended: boolean }>(c, apiKeys, apiKeyRow(c, hash, true), sql`NOT credential.ended${gate ? sql` AND ${gate}` : sql``}`));
+  const key = await timed(c, 'budget-db', () => chargeCredential<Pick<Actor, 'permissions' | 'domains'> & { id: string; workspace_id: string; grant_id:string|null; agent_setup: boolean; expires_at: string | null; ended: boolean }>(c, apiKeys, apiKeyRow(c, hash, true), sql`NOT credential.ended${gate ? sql` AND ${gate}` : sql``}`));
   if (!key) throw new ApiError(401, 'AUTH_INVALID', 'The API key is invalid or has been revoked.');
   if (key.ended) throw keyExpired(key.expires_at!);
   let grant:Actor|null=null;
@@ -168,7 +168,7 @@ export async function bearerActor(c: Ctx, token: string): Promise<Actor> {
     grant=await getMcpGrantActor(c.env,'mcp_'+key.grant_id,key.workspace_id,undefined,'lasting');
     if (grant?.workspaceId!==key.workspace_id || !grant.permissions.includes('manage')) throw new ApiError(401,'AUTH_INVALID','The originating management approval is no longer active.');
   } else rememberFingerprint(hash);
-  return { grantId:grant?.grantId, receivingConsent:grant?.receivingConsent, userId:grant?.userId, keyId: key.id, workspaceId: key.workspace_id, permissions: key.permissions, domains: key.domains, credential: 'apiKey' };
+  return { grantId:grant?.grantId, receivingConsent:grant?.receivingConsent, userId:grant?.userId, keyId: key.id, workspaceId: key.workspace_id, permissions: key.permissions, domains: key.domains, credential: 'apiKey', ...(key.agent_setup ? { agentSetup: true } : {}) };
 }
 
 export const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {

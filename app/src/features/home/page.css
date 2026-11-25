@@ -38,6 +38,9 @@
 .srt-cta[data-busy] { cursor: progress; }
 .srt-cta-arrow { transition: translate 200ms var(--srt-ease); }
 /* Focus: a square ring round a square button, clear of it. */
+/* The marketing pages keep their focus rings (these keys draw their own): their links too, now that ui.css drops the
+   dashboard's global ring. */
+.srt-page a:focus-visible { outline: var(--focus-width) solid var(--color-focus); outline-offset: 3px; border-radius: 2px; }
 .srt-cta:focus-visible { outline: none; }
 .srt-cta:focus-visible::after { content: ''; position: absolute; inset: -7px; border: var(--focus-width) solid var(--color-focus); pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .srt-cta::before, .srt-cta-label, .srt-cta-arrow { transition: none; } }

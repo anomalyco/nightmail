@@ -1,7 +1,8 @@
+import type { ReactNode } from 'react'
 import { Download, Search } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 import { useRegion, useWorkspaceAccess } from '../../data/context'
-import { Button, Input, LoadingRegion, PageHeader, SectionHeader, Select, Skeleton, SkeletonText, TableSkeleton, Tabs } from '../../components/ui'
+import { BackLink, Button, FactsRow, Icon, Input, LoadingRegion, PageHeader, SectionHeader, Select, Skeleton, SkeletonText, TableSkeleton, Tabs } from '../../components/ui'
 import { rememberedPageSize } from '../../lib/pagination'
 import { logsViewColumnDefs } from './rows'
 import { label } from '../../lib/format'
@@ -23,21 +24,31 @@ export function LogsRouteSkeleton() {
   const statusLabel = status && status !== 'all' ? label(status) : 'All statuses', streamLabel = direction !== 'received' && status !== 'received' && status !== 'spam' && (stream === 'transactional' || stream === 'marketing') ? label(stream) : 'All streams'
   // The filters beside the list, as Logs lists them for this direction, without counts yet.
   const statuses = logStatuses(direction, { campaign, canAdminister }), streams = direction !== 'received' && !receivedStatuses.includes(status ?? '')
-  return <div className="logs-page"><PageHeader title="Logs" actions={<div className="cluster logs-controls">{!multiTenant && !canAdminister && <span className="muted">{regionId}</span>}<Tabs label="Direction" value={direction} onValueChange={() => {}} disabled items={[{ value: 'all', label: 'All' }, { value: 'sent', label: 'Sent' }, { value: 'received', label: 'Received' }]} /><Tabs label="Time range" value={logRange(params.get('range'))} onValueChange={() => {}} disabled items={logRanges} /></div>} />
-    <div className="data-toolbar"><div className="cluster">{campaign && <Skeleton width={160} height={28} />}<div className="search-box"><Search size={16} /><Input type="search" aria-label="Search logs" placeholder="Search logs" disabled /></div><Select className="logs-filter" value="all" onValueChange={() => {}} disabled options={[{ value: 'all', label: statusLabel }]} /><Select className="logs-filter" value="all" onValueChange={() => {}} disabled options={[{ value: 'all', label: streamLabel }]} /></div><Button className="logs-export" disabled><Download size={16} /><span>Export CSV</span></Button></div>
+  return <div className="logs-page"><div className="logs-bar"><div className="logs-bar__head"><h1 className="logs-bar__title">Logs</h1>{!multiTenant && !canAdminister && <span className="logs-bar__region">{regionId}</span>}<div className="cluster logs-controls"><Tabs label="Direction" value={direction} onValueChange={() => {}} disabled items={[{ value: 'all', label: 'All' }, { value: 'sent', label: 'Sent' }, { value: 'received', label: 'Received' }]} /><Tabs label="Time range" value={logRange(params.get('range'))} onValueChange={() => {}} disabled items={logRanges} /></div></div>
+    <div className="logs-bar__tools">{campaign && <Skeleton width={160} height="var(--control-height-sm)" />}<div className="search-box logs-search"><Icon icon={Search} size="sm" /><Input type="search" aria-label="Search logs" placeholder="Search logs" disabled /><kbd className="ui-kbd" aria-hidden="true">/</kbd></div><Select className="logs-filter" value="all" onValueChange={() => {}} disabled options={[{ value: 'all', label: statusLabel }]} /><Select className="logs-filter" value="all" onValueChange={() => {}} disabled options={[{ value: 'all', label: streamLabel }]} /><Button className="logs-export" disabled><Icon icon={Download} /><span>Export</span></Button></div></div>
     <LogsBody counts={undefined} filters={{ statuses, streams }}><TableSkeleton className="logs-table" columns={logsViewColumnDefs(direction)} rows={rememberedPageSize('logs') || 16} pagination /></LogsBody></div>
 }
+/** A sent email's 44px header bar on a desktop: back, the kind of mail in mono, the subject on one line, and at its end
+ *  the status and the copyable ID (email-detail.tsx). */
+export function EmailBar({ title, end }: { title: ReactNode; end?: ReactNode }) {
+  return <header className="email-bar"><BackLink to="/logs" /><span className="email-bar__tag">Sent email</span><h1 className="email-bar__title" title={typeof title === 'string' ? title : undefined}>{title}</h1>{end && <div className="email-bar__end">{end}</div>}</header>
+}
+// A sent email's facts on a desktop, in FactsRow order (email-detail.tsx EmailFacts); its ID is in the bar.
+export const emailFactLabels = (multiTenant: boolean) => ['From', 'To', 'Stream', 'Sent', ...multiTenant ? [] : ['Region']]
+const factWidths: Record<string, number> = { From: 160, To: 160, Stream: 80, Sent: 120, Region: 72 }
 // A sent email in the window's layout (detail-layout.ts): the header, the delivery, the preview's toolbar and its empty
 // stage, and from 1200 px the details column. The score's place has a placeholder only in that column: elsewhere it
 // appears where nothing else depends on it.
 export function EmailDetailSkeleton() {
   const { mode } = useDetailLayout()
+  const { multiTenant } = useWorkspaceAccess()
   // A phone or tablet: the subject, the status line, the preview's one row of controls and its frame.
   if (mode === 'stack') return <div className="email-detail" data-mode={mode}><PageHeader title={<SkeletonText width={240} lineHeight={24} />} backTo="/logs" subtitle={<div className="email-status"><SkeletonText width={180} /></div>} />
     <LoadingRegion label="Loading email"><div className="email-detail__body"><section className="email-detail__preview"><div className="ev" data-compact><div className="ev-toolbar"><Skeleton width={112} height={28} /></div>
       <div className="ev-stage"><div className="ev-canvas"><div className="ev-placeholder" /></div></div></div></section></div></LoadingRegion></div>
   const delivery = <div className="delivery" data-vertical={mode !== 'panel' || undefined}>{mode === 'panel' ? <SkeletonText width={300} lineHeight={28} /> : <div className="delivery__skeleton">{[96, 80, 112].map(width => <SkeletonText key={width} width={width} lineHeight={28} />)}</div>}</div>
-  return <div className="email-detail" data-mode={mode}><PageHeader title={<SkeletonText width={320} lineHeight={24} />} backTo="/logs" subtitle={<div className="email-facts"><div className="email-facts__line"><SkeletonText width={240} /></div><div className="email-facts__line"><SkeletonText width={420} /></div></div>} />
+  return <div className="email-detail" data-mode={mode}><EmailBar title={<SkeletonText width={320} lineHeight={24} />} end={<><SkeletonText width={72} /><SkeletonText width={180} /></>} />
+    <FactsRow className="email-facts" items={emailFactLabels(multiTenant).map(name => ({ label: name, value: <SkeletonText width={factWidths[name]} /> }))} />
     <LoadingRegion label="Loading email">
       {mode === 'panel' && delivery}
       <div className="email-detail__body">

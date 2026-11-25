@@ -352,6 +352,22 @@ async function domain(db, workspaceId, conn, name, { receiving = false, mailFrom
   return { id, mdom, host: name };
 }
 
+// A domain added two hours ago whose records never went live, as the background DNS check (api/src/domain-setup.ts) left
+// it: the TXT and one DKIM CNAME missing at Cloudflare. Its page and Overview show the setup banner.
+async function stuck(db, workspaceId, conn, name) {
+  const id = 'dom_' + name.replace(/\W/g, '_'), tokens = [0, 1, 2].map(i => `${name.replace(/\W/g, '').slice(0, 10)}${i}p4w8v6dkim`);
+  const identity = { ses: { VerificationStatus: 'PENDING', VerifiedForSendingStatus: false, DkimAttributes: { Status: 'PENDING', SigningEnabled: true, SigningAttributesOrigin: 'AWS_SES', SigningHostedZone: 'dkim.amazonses.com', Tokens: tokens } }, proven: false, mx: null, note: null };
+  const { rows: [{ token }] } = await db.query("INSERT INTO domain_claims(workspace_id,name,connection_id,sending_state,receiving_state,identity,ever_proven,created_at) VALUES($1,$2,$3,'pending','off',$4::jsonb,false,now()-interval '2 hours') RETURNING token",
+    [workspaceId, name, conn, JSON.stringify(identity)]);
+  await db.query('INSERT INTO operation_domains(id,workspace_id,name,region) VALUES($1,$2,$3,$4)', [id, workspaceId, name, REGION]);
+  const checkedAt = ago(6), seen = state => ({ state, values: [], checkedAt });
+  const records = [...tokens.map((t, i) => ({ type: 'CNAME', name: `${t}._domainkey.${name}`, value: `${t}.dkim.amazonses.com`, publicDns: seen(i === 2 ? 'missing' : 'found') })),
+    { type: 'TXT', name: `_nightmail.${name}`, value: token, publicDns: seen('missing') }];
+  const host = { name: 'Cloudflare', zone: name, url: `https://dash.cloudflare.com/?to=/:account/${name}/dns/records` };
+  await db.query('UPDATE domain_claims SET setup_check=$3::jsonb WHERE workspace_id=$1 AND name=$2', [workspaceId, name, JSON.stringify({ checkedAt, host, records })]);
+  return { id };
+}
+
 const RECEIPT_TEXT = 'Northwind\n\nThanks for your order.\n\nOrder 4821 is confirmed and ships within two business days.\n\nWalnut desk organizer  $48.00\nShipping  $6.00\nTotal  $54.00\n\nView your order: https://northwind.example/orders/4821\n\nNorthwind, 120 Harbor Street, Portland, OR 97209';
 const RECEIPT_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Your receipt</title></head><body style="margin:0;background:#f4f4f5">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f5"><tr><td align="center" style="padding:32px 16px">
@@ -881,13 +897,13 @@ export async function seed(fx) {
   await db.query("INSERT INTO mail_messages(id, workspace_id, direction, thread_id, subject, from_address, received_at) VALUES ($1, 'ws_fresh', 'inbound', 'thr_niacontinue', 'Why did my first campaign bounce at Outlook?', 'nia@lumenlabs.example', now() - interval '2 hours')", [continueMessage]);
   await db.query("INSERT INTO support_conversations(id, channel, pending_address, verification, mode) VALUES ($1, 'email', 'nia@lumenlabs.example', 'none', 'pending_signin')", [continueConversation]);
   await db.query("INSERT INTO support_email_signins(conversation_id, message_id, address) VALUES ($1, $2, 'nia@lumenlabs.example')", [continueConversation, continueMessage]);
-  await domain(db, 'ws_fresh', await hosted(db, 'ws_fresh'), 'lumenlabs.example');
+  const freshConn = await hosted(db, 'ws_fresh');
+  await domain(db, 'ws_fresh', freshConn, 'lumenlabs.example');
+  const stuckDomain = await stuck(db, 'ws_fresh', freshConn, 'lumenmail.example');
   await fx.signIn('ona', 'ona@fieldnotes.example', 'Ona Field', { id: 'ws_new', name: 'Field Notes' });
-  // Tessera: Hosted mail and a domain still waiting for its DNS records, so Overview's setup offers a test from the shared
-  // test sender beside View records.
-  await fx.signIn('tess', 'tess@tessera.example', 'Tess Ray', { id: 'ws_nodomain', name: 'Tessera' });
-  await db.query("INSERT INTO domain_claims(workspace_id,name,connection_id,sending_state) VALUES('ws_nodomain','tessera.example',$1,'pending')", [await hosted(db, 'ws_nodomain')]);
-  await db.query("INSERT INTO operation_domains(id,workspace_id,name,region) VALUES('dom_tessera_example','ws_nodomain','tessera.example',$1)", [REGION]);
+  // Sending is ready but no domain was added: onboarding's domain step was skipped (cls.mjs `skipped`), so Overview asks for one.
+  await fx.signIn('pia', 'pia@pinestudio.example', 'Pia Lund', { id: 'ws_skipped', name: 'Pine Studio' });
+  await hosted(db, 'ws_skipped');
   // Connecting their own AWS account, one workspace per moment of the connect step (onboarding/aws.tsx).
   await connectedAccount(fx, db, 'bea', 'Juniper', 'stack');
   await connectedAccount(fx, db, 'bo', 'Kestrel', 'refused');
@@ -903,6 +919,8 @@ export async function seed(fx) {
   // An MCP client dana connected as a labelled profile, waiting for its workspace (its page is /settings/mcp/<id>).
   const mcp = 'mcp_at_cls_fixture';
   await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,workspace_id,permissions,expires_at,issued_at,profile) VALUES($1,'https://account.anoma.ly','user_dana','user_dana','opencode',NULL,'{read,send}',now()+interval '1 day',0,'work')", [mcp]);
+  // An agent waiting at /connect with its device code (api/src/agent-setup.ts): Connect · agent code approves or denies it.
+  await db.query("INSERT INTO agent_setups(id,kind,secret_hash,user_code,client_name,expires_at) VALUES ($1,'device',repeat('0',64),'BCDFGHJK','OpenCode',now()+interval '1 day')", ['ags_' + 'c'.repeat(32)]);
   // API keys' agent tokens: that agent with two short-lived tokens it made in Northwind, and Sam's agent with one (an
   // owner sees another member's agent once it has made tokens here).
   await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,workspace_id,permissions,expires_at,issued_at) VALUES('mcp_at_cls_sam','https://account.anoma.ly','user_sam','user_sam','claude-code',NULL,'{read}',now()+interval '1 day',0)");
@@ -962,7 +980,7 @@ export async function seed(fx) {
   await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,workspace_id,permissions,expires_at,issued_at,profile,receiving) VALUES('mcp_at_cls_live','https://account.anoma.ly','user_kai','user_kai','opencode','ws_live','{read,send,manage}',now()+interval '1 day',0,'work',true)");
   fx.liveKey = agent.secret;
   return {
-    ...newsletterIds, mcp, abuseCluster, restricted: 'ws_harbor', email, junkEmail, bouncedEmail: failed.bounced, delayedEmail: failed.delayed, receivedEmail: 'msg_northwind_invoice', threadEmail: thread.email, threadReceived: thread.received, supportThread: thread.thread, domain: nw.id, sendingDomain: sendingDomain.id, address: A.support.id, inbox, inboundWebhook: crmId,
+    ...newsletterIds, mcp, deviceCode: 'BCDF-GHJK', abuseCluster, restricted: 'ws_harbor', email, junkEmail, bouncedEmail: failed.bounced, delayedEmail: failed.delayed, receivedEmail: 'msg_northwind_invoice', threadEmail: thread.email, threadReceived: thread.received, supportThread: thread.thread, domain: nw.id, sendingDomain: sendingDomain.id, stuckDomain: stuckDomain.id, address: A.support.id, inbox, inboundWebhook: crmId,
     webhook: hook.webhook?.id ?? hook.id, list: list.id, contact: contact.id, campaign: campaign.id, template: template.id ?? template.template?.id, segment: segment.id, propertySegment: propertySegment.id, supportConversation, supportAction, continueConversation, continueMessage,
   };
 }

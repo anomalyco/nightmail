@@ -1,6 +1,7 @@
 import type { CSSProperties, ReactNode } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { DropdownMenu, type MenuItem, type Tone } from './primitives';
+import { Icon } from './icon';
 
 // Data display (Signal Log): flat, hairline-drawn pieces for dense pages. Labels are small and muted, values mono with
 // tabular figures, and colour only says how something went (a tone's dot, ink or bar). Every piece has a fixed height in
@@ -51,7 +52,7 @@ export function FacetRail({ groups, label = 'Facets', countSlot }: { groups: Fac
         // Keep the count's slot and the focused control; only the changing value is replaced.
         const value = item.count === null || item.count === undefined ? '–' : `${item.count.toLocaleString()}${item.atLeast ? '+' : ''}`;
         const noChoices = Boolean(item.onMenuOpenChange && item.menu?.length === 0);
-        const body = <><span className={cx('ui-facet__dot', `ui-tone--${item.tone ?? 'neutral'}`, item.series && `ui-series--${item.series}`, (item.dot === false || (!item.tone && !item.series)) && 'ui-facet__dot--none')} aria-hidden="true" /><span className="ui-facet__label">{item.label}{item.menu && !noChoices && <ChevronDown size={12} aria-hidden="true" />}</span><span className="ui-facet__count" style={countSlot && { inlineSize: countSlot.width, whiteSpace: 'nowrap' }} title={item.count == null ? undefined : countSlot?.detail}>{countSlot ? <span key={value}>{value}</span> : value}</span></>;
+        const body = <><span className={cx('ui-facet__dot', `ui-tone--${item.tone ?? 'neutral'}`, item.series && `ui-series--${item.series}`, (item.dot === false || (!item.tone && !item.series)) && 'ui-facet__dot--none')} aria-hidden="true" /><span className="ui-facet__label">{item.label}{item.menu && !noChoices && <Icon icon={ChevronDown} size="xs" />}</span><span className="ui-facet__count" style={countSlot && { inlineSize: countSlot.width, whiteSpace: 'nowrap' }} title={item.count == null ? undefined : countSlot?.detail}>{countSlot ? <span key={value}>{value}</span> : value}</span></>;
         const empty = !item.count || undefined;
         return <li key={item.key}>{item.menu ? <DropdownMenu items={item.menu} label={item.menuLabel} align="start" onOpenChange={item.onMenuOpenChange} trigger={<button type="button" className="ui-facet" aria-label={item.menuLabel} aria-disabled={noChoices || undefined} tabIndex={noChoices ? -1 : undefined} aria-pressed={item.selected ?? false} data-empty={empty}>{body}</button>} />
           : item.onSelect ? <button type="button" className="ui-facet" aria-pressed={item.selected ?? false} data-empty={empty} onClick={item.onSelect}>{body}</button> : <span className="ui-facet" data-empty={empty} title={item.title}>{body}</span>}</li>;

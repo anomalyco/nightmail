@@ -6,7 +6,7 @@
 .setup-rail ol { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
 .setup-rail li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: var(--space-12); padding-block: 6px; font-size: var(--text-sm); line-height: var(--leading-sm); animation: row-enter 220ms var(--ease-out-strong) both; animation-delay: calc(var(--i, 0) * 40ms); }
 /* The mark holds the number and a check in one cell; finishing a step cross-fades and pops the check in. */
-.setup-rail__mark { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--color-surface); box-shadow: var(--shadow-button); color: var(--color-muted); font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; transition: background-color 200ms ease, box-shadow 200ms ease, color 200ms ease; }
+.setup-rail__mark { display: inline-grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: var(--color-control); color: var(--color-muted); font-size: 11px; line-height: 1; font-variant-numeric: tabular-nums; transition: background-color 200ms ease, box-shadow 200ms ease, color 200ms ease; }
 .setup-rail__mark > * { grid-area: 1 / 1; transition: opacity 160ms ease-out, transform 220ms var(--ease-out-strong); }
 .setup-rail__mark > svg { opacity: 0; transform: scale(.5) rotate(-20deg); }
 li[data-done] > .setup-rail__mark { background: var(--color-contrast); box-shadow: none; color: var(--color-on-contrast); }
@@ -26,9 +26,8 @@ li[data-done] > .setup-rail__mark > svg { opacity: 1; transform: none; }
 .limit-row { position: relative; display: flex; flex-direction: column; gap: var(--space-6); width: 100%; padding: 0; border: 0; background: none; color: inherit; font: inherit; font-size: var(--text-sm); line-height: var(--leading-sm); text-align: left; cursor: pointer; }
 .limit-row::before { content: ''; position: absolute; inset: -6px -8px; border-radius: var(--radius-sm); transition: background var(--motion-duration); }
 .limit-row > * { position: relative; }
-@media (hover: hover) and (pointer: fine) { .limit-row:hover::before { background: var(--color-layer-1); } }
-.limit-row:focus-visible { outline: none; }
-.limit-row:focus-visible::before { outline: 2px solid var(--color-focus); }
+@media (hover: hover) and (pointer: fine) { .limit-row:hover::before { background: var(--color-hover); } }
+.limit-row:focus-visible::before { background: var(--color-hover); }
 .limit-row__label { display: inline-flex; align-items: center; gap: var(--space-6); }
 .limit-row__label > svg { color: var(--color-muted); }
 .limit-row__note { display: flex; align-items: baseline; gap: var(--space-6); margin: 0; color: var(--color-muted); font-size: var(--text-xs); line-height: var(--leading-xs); font-variant-numeric: tabular-nums; text-wrap: pretty; }

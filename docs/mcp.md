@@ -9,6 +9,8 @@ There are two ways to connect:
 | **Sign in as you** (OAuth) | You, in any of your workspaces, with the access you approve (read, send or manage) intersected with your role in each | Add the URL; the client opens your browser to sign in |
 | **An API key or agent token** | That credential, in its own workspace, with exactly its permissions | Add the URL with an `Authorization: Bearer …` header; no browser |
 
+An agent without any credential gets its own API key first, from the [setup token in a copied prompt or a device code](#an-agents-own-key-a-setup-token-or-a-device-code), then connects with it as a key.
+
 Keys limited to receiving addresses or one agent inbox (`nm_mbx_…`) connect the same way as other keys. See [Agent inboxes](#agent-inboxes).
 
 If you authorised your client against `https://opensend.mx/mcp` or `https://bane.mx/mcp`, reconnect it to `https://nightmail.dev/mcp` and approve access again.
@@ -32,6 +34,15 @@ Pass a workspace API key (`nm_…`) or an agent token (`nm_agent_…`) as the be
 ```
 
 In the dashboard, **API keys → Create key** shows this setup for OpenCode, Claude Code and Cursor right after the key is made. Every tool call is an API request made with that credential: Nightmail checks the key on each call (revoked, expired, its minute budget, an agent token's approval), and the API answers exactly as it would over HTTP. The listing offers what the API allows the credential. A temporary agent token never administers keys, webhooks, rules or routes, and only a signed-in approval mints agent tokens. Tools take no `workspace` argument: naming the key's own workspace is accepted, and any other is refused with `403 WORKSPACE_ACCESS_DENIED`. A key is the right choice for a headless agent or a remote machine where a browser sign-in is awkward. Keep it out of committed configs: reference an environment variable, as above.
+
+### An agent's own key: a setup token or a device code
+
+A coding agent can get its own API key without one made by hand, then connect here with it as above (the response includes that config, reading the key from `NIGHTMAIL_API_KEY`):
+
+- **The agent prompt.** When an owner or admin copies the agent prompt (onboarding, Docs, or **Connect an agent** in the sidebar), the copy carries a one-time setup token (`nm_setup_…`, 15 minutes). The agent exchanges it with `POST /v1/agent/setup` `{"token":"nm_setup_…"}`. Copying again replaces an unused token, and the dashboard says when the agent connected.
+- **A device code** (RFC 8628), for an agent started without the prompt: `POST /v1/agent/device` returns `device_code`, `user_code`, `verification_uri_complete`, `expires_in` and `interval`. The person opens the link (`/connect?code=…`), signs in, chooses the workspace and approves; the agent polls `POST /v1/agent/device/token` `{"device_code":"nm_device_…"}` every `interval` seconds, answered `400 AUTHORIZATION_PENDING`, `SLOW_DOWN`, `ACCESS_DENIED` or `EXPIRED_TOKEN` until it returns the key once.
+
+Either way the key is named "Agent (set up <date>)", with read, send and manage on every domain: it sends and manages domains, inboxes, receiving, webhooks, audience and campaigns. It **can't** create API keys, agent tokens, inbox connection keys, inbox keys or mail-client (IMAP/SMTP) passwords, and never reaches members or billing, so the agent can't make itself a credential that would outlive its key. It creates and reads inboxes with its own key. It is listed under API keys, where a person revokes it, and Activity records who set it up. Only an owner or admin mints a setup token or approves a code; tokens and codes are single-use, stored hashed and rate limited.
 
 ### Choose a catalog
 
