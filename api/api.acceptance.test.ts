@@ -34335,6 +34335,30 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.deepEqual(await day(), [400, 2, 'pacing_window']);
       await nextDay();
       assert.deepEqual(await day(), [700, 2, null]);
+      // A setting whose growth isn't a whole number, an odd usual day and a registration not known yet: every day of the
+      // plan is still whole recipients, in the review and in the launched campaign.
+      for (let d = 1; d <= 3; d++) await db.query(`INSERT INTO sending_metrics_hourly(workspace_id,region,kind,hour,emails,accepted,delivered,bounced,complained)
+        VALUES ($1,$2,'marketing',date_trunc('hour',now(),'UTC')-make_interval(days=>$3::int),3001,3001,3001,0,0)`, [wid, REGION, d]);
+      runtime.config.rampLines = { established: { first: 1_000, cleanFactor: 2, growth: 1.5, maxBatches: 6 } };
+      const uneven = await create('Uneven growth'), unevenPath = `/v1/campaigns/${uneven.id}`;
+      const sized = ok(await local('GET', `${unevenPath}/audience?readiness=true`)).readiness;
+      assert.deepEqual([sized.domain.registeredAt, sized.history.workspace.usualDay, sized.plan.batches.slice(0, 3), sized.plan.batches.every(Number.isInteger),
+        sized.plan.batches.reduce((sum: number, n: number) => sum + n, 0)], [null, 3_001, [6_002, 9_003, 13_505], true, sized.list.recipients]);
+      ok(await local('POST', `${unevenPath}/send`, { revision: uneven.revision, pacing: { plan: 'recommended', rateShare: 1 } }), 202);
+      assert.deepEqual(ok(await local('GET', unevenPath)).delivery.pacing.plan, sized.plan.batches);
+      ok(await local('POST', `${unevenPath}/cancel`));
+      // If sizing the plan by the setting fails, the review is the one without the setting, says so and is never "ready":
+      // the preview answers, and a launch goes on with it.
+      runtime.config.rampLines = { get established(): never { throw new Error('Sizing failed.'); } } as never;
+      const unsized = await create('Unsized'), soft = ok(await local('GET', `/v1/campaigns/${unsized.id}/audience?readiness=true`)).readiness;
+      assert.deepEqual([soft.verdict, soft.required?.reason, soft.plan.batches, soft.findings.at(-1).code], ['ramp_required', 'NEW_DOMAIN', review.plan.batches, 'PLAN_UNAVAILABLE']);
+      const tiny = ok(await local('POST', '/v1/campaigns', { name: 'Small, unsized', from, subject: 'Small', html: '<p>Fixture.</p>', audience: { listId: small.id } }), 201);
+      const tinyReview = ok(await local('GET', `/v1/campaigns/${tiny.id}/audience?readiness=true`)).readiness;
+      assert.deepEqual([tinyReview.verdict, tinyReview.plan, tinyReview.findings.map((f: Json) => f.code).includes('PLAN_UNAVAILABLE')], ['ramp_recommended', null, true]);
+      const softLaunch = ok(await local('POST', `/v1/campaigns/${unsized.id}/send`, { revision: unsized.revision, pacing: { plan: 'recommended', rateShare: 1 } }), 202);
+      assert.deepEqual([softLaunch.readiness.findings.at(-1).code, softLaunch.readiness.plan.batches], ['PLAN_UNAVAILABLE', review.plan.batches]);
+      ok(await local('POST', `/v1/campaigns/${unsized.id}/cancel`));
+      runtime.config.rampLines = {};
     });
   });
   test('send guards: a recipient domain where the campaign\'s mail mostly bounced is skipped for the rest of it; replies naming a blocklist pause the campaign, with one operator alert, and the sender resumes only once they stop; a plan opens its next batch only after a healthy day', async t => {

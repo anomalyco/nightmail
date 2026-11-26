@@ -538,7 +538,7 @@ export function rampLines(override: import('./ramp-lines.js').RampLinesOverride 
 }
 /** The reason codes CampaignReadiness.reasons has always had: kept as they are for clients that switch on them. */
 export const LEGACY_READINESS_REASONS = ['NEW_DOMAIN', 'SIZE_JUMP', 'NO_HISTORY', 'RISKY_LIST', 'NEVER_MAILED', 'NO_DMARC', 'BOUNCES', 'COMPLAINTS'] as const;
-export const READINESS_REASONS = [...LEGACY_READINESS_REASONS, 'NEW_REGISTRATION', 'NEW_HERE', 'USUAL_JUMP', 'NEW_LINK_DOMAIN', 'BLOCKLISTED_BEFORE', 'BLOCKLIST_UNCOUNTED'] as const;
+export const READINESS_REASONS = [...LEGACY_READINESS_REASONS, 'NEW_REGISTRATION', 'NEW_HERE', 'USUAL_JUMP', 'NEW_LINK_DOMAIN', 'BLOCKLISTED_BEFORE', 'BLOCKLIST_UNCOUNTED', 'PLAN_UNAVAILABLE'] as const;
 /** How a newer reason reads in the legacy list; none for a blocklist (findings and required.reason say it). */
 export const LEGACY_REASON: Partial<Record<(typeof READINESS_REASONS)[number], (typeof LEGACY_READINESS_REASONS)[number]>> = { NEW_REGISTRATION: 'NEW_DOMAIN', NEW_HERE: 'NEW_DOMAIN', NEW_LINK_DOMAIN: 'NEW_DOMAIN', USUAL_JUMP: 'SIZE_JUMP' };
 export type ReadinessReason = (typeof READINESS_REASONS)[number];
@@ -595,12 +595,12 @@ export function judgeReadiness(f: ReadinessFacts): { verdict: Verdict; reasons: 
  * The plan's daily batches for `recipients`: the first day the larger of the plan's first batch and cleanFactor times
  * `base` (the largest clean send or the usual day), each next `growth` times the last, at most maxBatches days, the last
  * taking the rest; one batch when they fit in the first. `split`: at least two days, the first the size that with the
- * growth covers the rest in two.
+ * growth covers the rest in two. Whole recipients: a fractional growth or clean factor is rounded each day.
  */
 export function rampPlan(recipients: number, base: number, o: { young?: boolean; split?: boolean; lines?: RampLines } = {}): number[] {
   const lines = o.lines ?? RAMP_LINES, p = o.young ? lines.young : lines.established, batches: number[] = [];
-  let left = Math.max(0, Math.floor(recipients)), size = Math.max(p.first, p.cleanFactor * base);
+  let left = Math.max(0, Math.floor(recipients)), size = Math.round(Math.max(p.first, p.cleanFactor * base));
   if (o.split && size >= left) size = Math.max(1, Math.ceil(left / (1 + p.growth)));
-  while (left > 0) { const n = batches.length === p.maxBatches - 1 ? left : Math.min(left, size); batches.push(n); left -= n; size *= p.growth; }
+  while (left > 0) { const n = batches.length === p.maxBatches - 1 ? left : Math.min(left, size); batches.push(n); left -= n; size = Math.round(size * p.growth); }
   return batches;
 }
