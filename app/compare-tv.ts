@@ -140,7 +140,7 @@ function guideMarkdown(checked: string) {
   const listing = (c: Comparison) => { const b = billAt(c, middle(c)); return `- [${c.title}](${canonicalOrigin}${c.path}.md): ${sizeWords(c, b.size)}, ${productName} ${b.ours}, ${c.offer.vendor} ${b.theirs ?? 'no price read'}${b.plan ? ` (${b.plan})` : ''}. ${c.lead} ${claim(c).replaceAll('\u00a0', ' ')}, read ${checkedDay(c)}.` }
   return [`# ${productName} compared with ${CHANNELS.length} email services`, `Canonical page: ${canonicalOrigin}/compare`,
     `What a month costs on ${productName} and on each service, from each service’s own pricing page, last read ${checked}: list prices before tax, monthly billing, the cheapest plan that holds the size or pay-as-you-go where that costs less.`,
-    `## Sending APIs by price at ${formatCount(ranked.columns[1]!)} emails a month`, `In ${ranked.unit}. A dash: no plan priced at that size.`,
+    `## Cheapest at ${formatCount(ranked.columns[1]!)} emails a month? ${ranked.rows.length} sending APIs priced`, `${productName} costs less than each of them at every size shown, as read on each one’s own pricing page on ${checked}. In ${ranked.unit}; a dash: no plan priced at that size.`,
     [`| Service | ${ranked.columns.map(formatCount).join(' | ')} |`, `| --- | ${ranked.columns.map(() => '---:').join(' | ')} |`, `| ${productName} | ${ranked.ours.join(' | ')} |`,
       ...ranked.rows.map(row => `| [${row.channel.comparison.offer.vendor}](${canonicalOrigin}${row.channel.comparison.path}.md) | ${row.bills.map(bill => bill.theirs ?? '—').join(' | ')} |`)].join('\n'),
     ...GROUPS.flatMap(group => [`## ${group.title}`, CHANNELS.filter(channel => channel.comparison.focus === group.focus).map(channel => listing(channel.comparison)).join('\n')]),

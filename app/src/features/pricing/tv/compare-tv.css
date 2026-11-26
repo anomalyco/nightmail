@@ -171,6 +171,7 @@
 .ctv-listing-bills { color: var(--soft); font-weight: 400; text-transform: none; letter-spacing: 0; }
 .ctv-listing-bills [data-ours] { color: var(--ours); }
 .ctv-listing-line { margin-top: 4px !important; color: var(--faint); font-size: 14px; line-height: 20px; text-wrap: pretty; }
+.ctv-ranked-says { margin: -6px 0 16px; color: var(--soft); font-size: 15px; line-height: 1.5; text-wrap: pretty; }
 .ctv-qa h3 { margin-bottom: 4px; }
 .ctv-qa p { margin-top: 0 !important; color: var(--soft); }
 .ctv-more { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 0 20px; margin: 0; padding: 0; list-style: none; }

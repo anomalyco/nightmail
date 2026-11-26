@@ -305,7 +305,8 @@ export function GuidePage() {
         <h1 className="ctv-h1">Nightmail compared with {CHANNELS.length} email services</h1>
         <p className="ctv-lead">Each channel is one comparison: what a month costs on Nightmail and on the other service, from that service’s own pricing page, last read {guideChecked()}. In it: {listOf(GROUPS.map(group => `${CHANNELS.filter(channel => channel.comparison.focus === group.focus).length} ${group.noun}`))}.</p>
         <section className="ctv-guide" id="ranked" aria-labelledby="ranked-title">
-          <h2 id="ranked-title">Sending APIs by price at {formatCount(ranked.columns[1]!)} emails a month</h2>
+          <h2 id="ranked-title">Cheapest at {formatCount(ranked.columns[1]!)} emails a month? {ranked.rows.length} sending APIs priced</h2>
+          <p className="ctv-ranked-says">Nightmail costs less than each of them at every size shown, as read on each one’s own pricing page on {guideChecked()}.</p>
           <table className="ctv-grid">
             <caption>Sizes in {ranked.unit}. Nightmail first, then each service from the cheapest at {formatCount(ranked.columns[1]!)} to the dearest. No figure where the service’s page prices no plan at that size.</caption>
             <thead><tr><th scope="col">Channel</th>{ranked.columns.map(n => <th key={n} scope="col"><Size n={n} /></th>)}</tr></thead>

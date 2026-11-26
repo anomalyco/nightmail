@@ -54,7 +54,8 @@ const SECTIONS: { id: string; title: string; columns: number[]; is: (c: Comparis
   { id: 'sending', title: 'Sending APIs', columns: [10_000, 100_000, 1_000_000], is: c => c.model.per === 'email' },
   { id: 'receiving', title: 'Receiving', columns: [20_000, 100_000, 2_000_000], is: c => c.model.per === 'received' },
   { id: 'agents', title: 'Agent inboxes', columns: [10, 50, 100], is: c => c.model.per === 'inbox' },
-  { id: 'newsletters', title: 'Newsletters', columns: [1_000, 10_000, 100_000], is: c => c.model.per === 'contact' },
+  // (Not below 5,000 contacts: beehiiv, EmailOctopus and Loops are free there too, so Nightmail costs no less.)
+  { id: 'newsletters', title: 'Newsletters', columns: [5_000, 10_000, 100_000], is: c => c.model.per === 'contact' },
 ]
 export const GUIDE: GuideSection[] = SECTIONS.map(section => {
   const rows = CHANNELS.filter(channel => section.is(channel.comparison)).map(channel => ({ channel, bills: section.columns.map(size => billAt(channel.comparison, size)) }))
@@ -62,5 +63,9 @@ export const GUIDE: GuideSection[] = SECTIONS.map(section => {
   rows.sort((a, b) => mid(a) - mid(b) || a.channel.n - b.channel.n)
   // Nightmail's bill at a column is the same whichever comparison it is read from (the usage is the section's).
   const ours = section.columns.map((size, i) => rows[0]!.bills[i]!.ours)
+  // The guide says Nightmail costs less than each service at every size it shows (Ryan, 26 Nov: only providers we beat):
+  // the build stops on a column where that isn't so.
+  for (const row of rows) for (const bill of row.bills) if (bill.theirsCents !== null && !(bill.oursUc < BigInt(bill.theirsCents) * 1_000_000n))
+    throw new Error(`The guide's ${section.title} column at ${formatCount(bill.size)} shows Nightmail at ${bill.ours} and ${row.channel.comparison.offer.vendor} at ${bill.theirs}: pick sizes where Nightmail costs less (tv/channels.ts, SECTIONS).`)
   return { id: section.id, title: section.title, unit: unitOf(rows[0]!.channel.comparison), columns: section.columns, ours, rows }
 })
