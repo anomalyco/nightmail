@@ -32754,11 +32754,11 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const { planWindowHealthy, blocklistPause } = await import('./src/send-guards.js');
       const { rampLines } = await import('./src/standing-model.js');
       const list = ok(await local('POST', '/v1/lists', { name: unique('guards') }), 201);
-      // 150 subscribers at a domain that no longer takes mail joined first, then 150 elsewhere: the send goes in that order.
+      // 150 subscribers at a domain that no longer takes mail, and 600 elsewhere.
       const join = async (where: string) => db.query(`INSERT INTO audience_list_members (workspace_id, list_id, contact_id) SELECT workspace_id, $2, id FROM audience_contacts WHERE workspace_id = $1 AND ${where}`, [ws, list.id]);
       await db.query("INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent) SELECT 'con_' || md5($1 || $2 || n::text), $1, 'p' || n || '@' || $3, 'subscribed' FROM generate_series(1, 150) AS n", [ws, tag, dead]);
       await join(`email LIKE '%@${dead}'`);
-      await db.query("INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent) SELECT 'con_' || md5($1 || $2 || 'g' || n::text), $1, 'g' || n || '-' || $2 || '@example.net', 'subscribed' FROM generate_series(1, 150) AS n", [ws, tag]);
+      await db.query("INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent) SELECT 'con_' || md5($1 || $2 || 'g' || n::text), $1, 'g' || n || '-' || $2 || '@example.net', 'subscribed' FROM generate_series(1, 600) AS n", [ws, tag]);
       await join(`email LIKE '%-${tag}@example.net'`);
       await db.query(`INSERT INTO sending_region_limits (workspace_id, region, max_send_rate, checked_at) VALUES ($1, $2, 5000, clock_timestamp())
         ON CONFLICT ON CONSTRAINT sending_region_limits_pkey DO UPDATE SET max_send_rate = 5000, max_24_hour_send = 0, sent_last_24_hours = 0, checked_at = clock_timestamp()`, [ws, REGION]);
