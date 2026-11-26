@@ -32784,13 +32784,13 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.deepEqual([await sentTo(dead), later.delivery.canceled > 0, later.delivery.expanded > 100], [deadFirst, true, true]);
       // A plan's day: unhealthy (all bounced), so the same batch again; a clean one opens the next.
       const since = new Date(Date.now() - 3 * 86_400_000).toISOString();
-      assert.equal(await planWindowHealthy(db as never, ws, campaign.id, since), false);
+      assert.equal(await planWindowHealthy(runtime.db, ws, campaign.id, since), false);
       // Replies naming a blocklist: paused, one operator alert, and no resume while they keep arriving.
       await db.query("UPDATE sending_emails SET status = 'delivered' WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@example.net'", [campaign.id]);
       const { rows: listed } = await db.query("SELECT id FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@example.net' ORDER BY id LIMIT 3", [campaign.id]);
       for (const { id } of listed) await db.query("INSERT INTO sending_email_events (id, workspace_id, email_id, type, data, simulated, created_at) VALUES ($1, $2, $3, 'non_permanent_bounce', $4, false, now())",
         [unique('event'), ws, id, JSON.stringify({ bounceType: 'Transient', bounceSubType: 'General', diagnosticCode: '554 5.7.1 An URL in this email is listed by Spamhaus DBL' })]);
-      assert.equal((await blocklistPause(db as never, ws, campaign.id, rampLines(null)))?.code, 'BLOCKLISTED');
+      assert.equal((await blocklistPause(runtime.db, ws, campaign.id, rampLines(null)))?.code, 'BLOCKLISTED');
       await nextWindow();
       const paused = await view();
       assert.deepEqual([paused.state, paused.delivery.pauseReason.code], ['paused', 'BLOCKLISTED']);
@@ -32803,7 +32803,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // With the replies gone and the bounces cleared, a day counts as healthy again.
       await db.query("DELETE FROM sending_email_events WHERE workspace_id = $1 AND type = 'non_permanent_bounce'", [ws]);
       await db.query("UPDATE sending_emails SET status = 'delivered' WHERE campaign_id = $1", [campaign.id]);
-      assert.equal(await planWindowHealthy(db as never, ws, campaign.id, since), true);
+      assert.equal(await planWindowHealthy(runtime.db, ws, campaign.id, since), true);
     });
   });
   test('campaign list probe follows standing: in good standing, recipients an earlier campaign delivered to with clean, mature feedback go out without the probe; swapped or unresolved recipients, a growing or capped sender, and a sender that falls below mid-campaign are probed', async t => {
