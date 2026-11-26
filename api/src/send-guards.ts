@@ -21,22 +21,27 @@ import { BLOCKLIST_PAUSE, RAMP, type RampLines } from './standing-model.js';
 const REPLY = sql`coalesce(v.data->>'diagnosticCode', v.data #>> '{bounce,bouncedRecipients,0,diagnosticCode}', v.data #>> '{deliveryDelay,delayedRecipients,0,diagnosticCode}')`;
 // A cheap first pass in SQL; blocklistNamed decides.
 const NAMES = '(spamhaus|uribl|surbl|spamcop|barracuda|brbl|block ?list|black ?list|deny ?list|dnsbl|rbl|dbl|sbl|xbl|pbl)';
+// The most failed emails a count reads: far more than any listing needs to show at several organisations.
+const FAILED_READ = 20_000;
 
 /**
  * Replies naming a blocklist to this campaign's mail that arrived since `since` (an instant) or in the last `minutes`. Read
- * from the campaign's bounced and delayed mail (the campaign's status index), then each one's feedback, never from every
- * event of the workspace: a large send has hundreds of thousands of events an hour, and only a few thousand failures.
+ * from the campaign's bounced and delayed mail first (the campaign's status index, materialized so the planner can't start
+ * from the events instead), then each one's feedback by its email (the events' page index): never a range of every event
+ * of the workspace, which a large send fills with hundreds of thousands an hour against a few thousand failures.
  * At most 500 replies read. Answers how many of the campaign's emails drew one, and from how many receiving organisations
  * (the recipient domain's registered domain), so repeated delays of one email, or one organisation's many addresses or
  * domains, count once.
  */
 export async function campaignBlocklistReplies(db: DbExecutor, workspaceId: string, campaignId: string, window: { minutes: number } | { since: string }) {
   const from = 'since' in window ? sql`${window.since}::timestamptz` : sql`now() - make_interval(mins => ${window.minutes})`;
-  const { rows } = await db.execute<{ id: string; domain: string; reply: string | null }>(sql`SELECT e.id, lower(split_part(e.to_addresses->>0, '@', 2)) AS domain, v.reply FROM sending_emails e
-      CROSS JOIN LATERAL (SELECT ${REPLY} AS reply FROM sending_email_events v WHERE v.workspace_id = e.workspace_id AND v.email_id = e.id
+  const { rows } = await db.execute<{ id: string; domain: string; reply: string | null }>(sql`WITH failed AS MATERIALIZED (
+      SELECT e.id, e.workspace_id, lower(split_part(e.to_addresses->>0, '@', 2)) AS domain FROM sending_emails e
+      WHERE e.workspace_id = ${workspaceId} AND e.campaign_id = ${campaignId} AND e.status IN ('bounced', 'delayed') AND e.updated_at > ${from} LIMIT ${FAILED_READ}
+    ) SELECT f.id, f.domain, v.reply FROM failed f
+      CROSS JOIN LATERAL (SELECT ${REPLY} AS reply FROM sending_email_events v WHERE v.workspace_id = f.workspace_id AND v.email_id = f.id
         AND v.type IN ('bounce', 'non_permanent_bounce', 'delivery_delay') AND v.created_at > ${from}) v
-    WHERE e.workspace_id = ${workspaceId} AND e.campaign_id = ${campaignId} AND e.status IN ('bounced', 'delayed') AND e.updated_at > ${from}
-      AND v.reply ~* ${NAMES} LIMIT 500`);
+    WHERE v.reply ~* ${NAMES} LIMIT 500`);
   const named = rows.filter(row => blocklistNamed(row.reply));
   const organisations = new Set(await Promise.all([...new Set(named.map(row => row.domain))].map(async domain => (domain && (await placementRoot(domain)).root) || domain)));
   return { emails: new Set(named.map(row => row.id)).size, organisations: organisations.size };
@@ -75,8 +80,9 @@ export async function stoppedDomains(db: DbExecutor, campaignId: string) {
   return new Set(rows.map(row => row.domain));
 }
 
-/** Whether a plan's last daily window stayed within the ramp check's lines and drew no blocklist reply: then its next batch opens. */
-export async function planWindowHealthy(db: DbExecutor, workspaceId: string, campaignId: string, windowStartedAt: string) {
+/** How a plan's last daily window went, and whether it stayed within the ramp check's lines with no blocklist reply: then its next batch opens. */
+export type PlanDay = { healthy: boolean; accepted: number; bounced: number; complained: number; blocklistReplies: number };
+export async function planWindowHealthy(db: DbExecutor, workspaceId: string, campaignId: string, windowStartedAt: string): Promise<PlanDay> {
   const c = RAMP.check;
   const { rows: [w] } = await db.execute<{ accepted: number; bounced: number; complained: number }>(sql`SELECT
       count(*) FILTER (WHERE e.status <> 'suppressed' AND (e.provider_id IS NOT NULL OR e.event_outcomes & 1 <> 0))::int AS accepted,
@@ -84,7 +90,16 @@ export async function planWindowHealthy(db: DbExecutor, workspaceId: string, cam
     FROM sending_emails e WHERE e.workspace_id = ${workspaceId} AND e.created_at >= ${windowStartedAt}::timestamptz AND e.campaign_id = ${campaignId}`);
   const accepted = Number(w?.accepted ?? 0), bounced = Number(w?.bounced ?? 0), complained = Number(w?.complained ?? 0);
   const clean = (accepted < c.bounceMinimum || bounced <= accepted * c.bounceRate) && (complained < c.complaints || complained <= accepted * c.complaintRate);
-  return clean && (await campaignBlocklistReplies(db, workspaceId, campaignId, { since: windowStartedAt })).emails === 0;
+  const blocklistReplies = (await campaignBlocklistReplies(db, workspaceId, campaignId, { since: windowStartedAt })).emails;
+  return { healthy: clean && blocklistReplies === 0, accepted, bounced, complained, blocklistReplies };
+}
+/** What a held plan tells its sender: why the day didn't count as healthy, and what lets the plan grow. */
+export function planHeldWhy(day: PlanDay) {
+  const c = RAMP.check, why: ('bounces' | 'complaints' | 'blocklist')[] = [];
+  if (day.accepted >= c.bounceMinimum && day.bounced > day.accepted * c.bounceRate) why.push('bounces');
+  if (day.complained >= c.complaints && day.complained > day.accepted * c.complaintRate) why.push('complaints');
+  if (day.blocklistReplies > 0) why.push('blocklist');
+  return why;
 }
 /** The window a BLOCKLISTED campaign's resume waits for no new reply: the setting's, else the public default (the guard may have been turned off since). */
 export const blocklistWindow = (lines: RampLines) => (lines.blocklistPause ?? BLOCKLIST_PAUSE).windowMinutes;

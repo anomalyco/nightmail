@@ -211,6 +211,10 @@ export function CampaignPacing({ campaign }: { campaign: Campaign }) {
       {/* Hosted always pauses on high bounces or complaints. */}
       {!multiTenant && <Checkbox label="Auto-pause on high bounces or complaints" checked={autoPause} onCheckedChange={value => { setAutoPause(value); setError('') }} disabled={busy} />}
     </form>}
+    {/* A plan held on the same batch after a day that wasn't healthy (api/src/send-guards.ts), and what lets it grow. */}
+    {pacing?.held && <p className="campaign-note" data-tone="warning"><span>Sending batch {number(pacing.held.batch)} again since {relativeTime(pacing.held.since)}: the last day had {pacing.held.why.map(why => ({ bounces: 'too many hard bounces', complaints: 'too many spam complaints', blocklist: 'replies naming a blocklist' })[why]).join(' and ') || 'too many failures'}. {pacing.held.toGrow}</span></p>}
+    {/* Recipient domains this campaign stopped sending to because nearly all of its mail there bounced for good. */}
+    {expansion.stoppedDomains && expansion.stoppedDomains.length > 0 && <p className="campaign-note"><span>Stopped sending to {expansion.stoppedDomains.length === 1 ? 'one recipient domain' : `${number(expansion.stoppedDomains.length)} recipient domains`} where nearly every message bounced: {expansion.stoppedDomains.slice(0, 5).map(item => item.domain).join(', ')}{expansion.stoppedDomains.length > 5 ? ` and ${number(expansion.stoppedDomains.length - 5)} more` : ''}. The rest of the recipients there are counted as canceled.</span></p>}
     {error && <p className="campaign-note" data-tone="danger" role="alert">{error}</p>}
   </div>
 }

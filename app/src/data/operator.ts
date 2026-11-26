@@ -51,6 +51,7 @@ export interface OperatorHealth {
   campaigns: HealthCampaign[] | null; feedbackLagSeconds: number | null
   routes: { route: string; count: number; errors: number; p50Ms: number; p95Ms: number; slowestMs: number; behind: boolean }[] | null
   errors: { kind: 'code' | 'sqlstate' | 'error'; code: string; count: number }[] | null; requests: { count: number; errors: number } | null
+  settings?: { feature: string; settings: string[] }[]
   database: { connections: number; maxConnections: number; longTransactions: number; oldestTransactionSeconds: number; slowQueries: number; lockWaits: number; sizeBytes: number; diskBytes: number | null } | null
 }
 /**

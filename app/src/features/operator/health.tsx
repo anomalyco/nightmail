@@ -42,6 +42,8 @@ function rows(health: OperatorHealth): Row[] {
         detail: health.database.longTransactions ? `oldest ${span(health.database.oldestTransactionSeconds)}` : '', state: alerted('database-transaction') },
       { id: 'database:queries', area: 'Database', what: 'Queries', now: `${number(health.database.slowQueries)} over 30 s`, detail: `${number(health.database.lockWaits)} waiting on a lock`, state: alerted('database-slow-queries', 'database-lock-waits') },
     ] : []),
+    // A setting that was set but not valid: the Worker turned that feature off (OPTIONAL_FEATURE_DISABLED). Names only.
+    ...(health.settings ?? []).map(item => ({ id: `setting:${item.feature}`, area: 'Setting', what: item.settings.join(', '), now: 'Turned off: not a valid value', detail: label(item.feature), state: 'warning' as const })),
   ]
   const order = { critical: 0, warning: 1, ok: 2 }
   return [

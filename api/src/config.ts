@@ -291,6 +291,8 @@ const featureSettings = {
 } satisfies Record<string, (keyof typeof values.shape)[]>;
 type Feature = keyof typeof featureSettings;
 const reported = new Set<Feature>();
+/** The optional features this installation turned off because a setting was set but not valid (or not set in full): for the operator Health page, by name only, never a value. */
+export const disabledSettings = () => [...reported].map(feature => ({ feature, settings: [...featureSettings[feature]] as string[] }));
 function disabled(feature: Feature) {
   if (!reported.has(feature)) {
     reported.add(feature);

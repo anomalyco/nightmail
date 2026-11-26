@@ -1,5 +1,5 @@
 import { queueListRisk } from './list-risk-lines.js';
-import { blocklistPause, blocklistWindow, campaignBlocklistReplies, planWindowHealthy, stopDeadDomains, stoppedDomains } from './send-guards.js';
+import { blocklistPause, blocklistWindow, campaignBlocklistReplies, planHeldWhy, planWindowHealthy, stopDeadDomains, stoppedDomains } from './send-guards.js';
 import { cachedDashboardRead, mailRevision } from './dashboard-cache.js';
 import { talliesEnabled } from './sending-tallies.js';
 import { boundRequestBody } from './request-body.js';
@@ -249,11 +249,14 @@ async function activeFeedbackLag(db: DbExecutor): Promise<FeedbackLag | null> {
 const Delivery = z.object({ total: z.number().int().describe('Fixed recipient count once the audience is frozen (recipients expected while a large audience is being captured).'), prepared: z.number().int().describe('Recipients whose message was validated.'), expanded: z.number().int().describe('Recipients materialized as immutable email records.'), canceled: z.number().int().describe('Recipients canceled before materialization. Materialized cancellations remain in counts.byStatus.canceled.'), error: Failure.nullable().describe('Why the campaign failed or was canceled by the system.'),
   pacing: z.object({ perDay: z.number().int().nullable().describe('Maximum recipients released per rolling 24-hour window; null means no daily cap.'), autoPause: z.boolean().describe('Pause automatically when bounce or complaint rates exceed safe thresholds.'), rateShare: z.number().describe('Maximum fraction of the SES per-second send rate this campaign uses; 1 is the full rate.'), windowStartedAt: z.string().nullable(), windowExpanded: z.number().int().describe('Recipients released in the current 24-hour window.'), nextWindowAt: z.string().nullable().describe('When the next 24-hour window opens, when a daily cap is set.'),
     plan: z.array(z.number().int()).nullable().describe('Sent with the recommended plan: its daily batches (one 24-hour window each; the last repeats). Null otherwise.'), batch: z.number().int().nullable().describe('With a plan: the batch the current window releases, from 1.'),
+    held: z.object({ since: z.string(), batch: z.number().int().describe('The batch the plan repeats, from 1.'), why: z.array(z.enum(['bounces', 'complaints', 'blocklist'])).describe('What made the last day unhealthy: hard bounces over 3% of at least 100 accepted, complaints over 0.08% (at least 2), or a reply naming a blocklist.'), toGrow: z.string().describe('What lets the plan open its next batch, in a sentence.') }).nullable().optional().describe('With a plan whose growth is checked: held on the same batch since the day before it was not healthy; null while it grows.'),
     firstBatch: z.object({ size: z.number().int().describe('Recipients the first day starts with.'), waitMinutes: z.number().int().describe('Minutes it then waits for their bounces and rejections before the rest of the day\'s batch.') }).nullable().optional().describe('With a plan: its first day\'s small batch and the wait after it.') }),
   consent: z.object({ source: z.string(), confirmedAt: z.string() }).nullable().describe('The consent source confirmed at launch, if any.'),
   pausedAt: z.string().nullable(), pauseReason: Failure.nullable(),
   deliveredOnly: z.boolean().describe('After a resumed list-probe quarantine: the rest goes only to contacts this workspace delivered to before; the others are counted in canceled. Never for a required notice.'),
   waiting: z.object({ reason: z.enum(['pacing_window', 'ses_daily_quota', 'hosted_daily_quota', 'list_probe', 'balance', 'feedback_lag', 'ramp', 'link_record']), linkHold: z.enum(['daily_budget', 'blocklist']).optional().describe('When present, the daily pacing window is the shared link allowance, or the link record is held for operator review.'), until: z.string() }).nullable().describe('Why releasing recipients is currently held, and the best estimate of until when. list_probe: Hosted sent the first recipients (the list probe) and waits for their bounces and complaints before releasing the rest. feedback_lag: releasing is briefly held while priority safety feedback (bounces/complaints) catches up. ramp: a Hosted sender\'s first large campaigns release in growing hourly steps (sendEstimate.ramp); this hour\'s step is used up, or its delivery results are still coming in before the next step. link_record: the campaign has no host for its unsubscribe link right now (its workspace\'s sending is paused, or with own link hosts, its domain\'s isn\'t active yet); it continues by itself.'),
+  stoppedDomains: z.array(z.object({ domain: z.string(), resolved: z.number().int().describe('Messages there with a result when it stopped.'), bounced: z.number().int().describe('Of those, hard bounces.'), stoppedAt: z.string() })).optional()
+    .describe('Recipient domains this campaign stopped sending to because nearly all of its mail there bounced for good (the rest of its recipients there are counted in canceled), oldest first, at most 50. Empty unless the guard is on.'),
   feedbackLag: z.object({ oldestMs: z.number().int(), lane: z.enum(['routine', 'priority']) }).nullable().describe('Present while a campaign is preparing, sending, or paused when delivery feedback ingestion is at least 2 minutes behind.') }).describe('The current launch: null until the campaign is sent or scheduled, and cleared by a new revision.').openapi('CampaignDelivery');
 /** The daily cap of a campaign's `index`th 24-hour window: its plan's batch (the last repeating), else pacePerDay; null for none. */
 const dailyCap = (row: Pick<typeof campaigns.$inferSelect, 'pacePlan' | 'pacePerDay' | 'windowIndex'>, index = row.windowIndex) =>
@@ -264,7 +267,8 @@ const firstBatchWait = (row: Pick<typeof campaigns.$inferSelect, 'pacePlan' | 'p
   const until = Date.parse(windowStartedAt) + row.paceFirstWaitMinutes * 60_000;
   return nowMs < until ? until : null;
 };
-function deliveryView(row: Omit<typeof campaigns.$inferSelect, 'draft' | 'stats'>, feedbackLag: FeedbackLag | null = null) {
+type StoppedDomain = { domain: string; resolved: number; bounced: number; stoppedAt: string };
+function deliveryView(row: Omit<typeof campaigns.$inferSelect, 'draft' | 'stats'>, feedbackLag: FeedbackLag | null = null, stopped: StoppedDomain[] = []) {
   if (!row.reviewId) return null;
   const next = dailyCap(row) !== null && row.windowStartedAt ? new Date(Date.parse(row.windowStartedAt) + DAY_MS).toISOString() : null;
   const wait = row.waitingReason === 'link_budget' ? { reason: 'pacing_window', linkHold: 'daily_budget' }
@@ -272,10 +276,11 @@ function deliveryView(row: Omit<typeof campaigns.$inferSelect, 'draft' | 'stats'
   return Delivery.parse({ total: row.total, prepared: row.prepared, expanded: row.expanded, canceled: row.canceled, error: row.error ?? null,
     pacing: { perDay: row.pacePerDay, autoPause: row.autoPause, rateShare: row.rateShare ?? 1, windowStartedAt: row.windowStartedAt, windowExpanded: row.windowExpanded, nextWindowAt: next,
       plan: row.pacePlan, batch: row.pacePlan ? Math.min(row.windowIndex, row.pacePlan.length - 1) + 1 : null,
-      firstBatch: row.pacePlan && row.paceFirstBatch && row.paceFirstWaitMinutes ? { size: row.paceFirstBatch, waitMinutes: row.paceFirstWaitMinutes } : null },
+      firstBatch: row.pacePlan && row.paceFirstBatch && row.paceFirstWaitMinutes ? { size: row.paceFirstBatch, waitMinutes: row.paceFirstWaitMinutes } : null,
+      held: row.pacePlan && row.planHeld ? { ...row.planHeld, toGrow: 'It opens its next batch after a day with hard bounces at most 3% of what was accepted, complaints under 0.08% and no reply naming a blocklist: remove the addresses that bounce or complain, and fix whatever the blocklist lists.' } : null },
     consent: row.consent ? { source: row.consent.source, confirmedAt: row.consent.confirmedAt } : null,
     pausedAt: row.pausedAt, pauseReason: row.pauseReason ?? null, deliveredOnly: row.deliveredOnly, waiting: row.waitingReason && row.waitingUntil ? { ...wait, until: row.waitingUntil } : null,
-    feedbackLag: ['preparing', 'sending', 'paused'].includes(row.state) ? feedbackLag : null });
+    feedbackLag: ['preparing', 'sending', 'paused'].includes(row.state) ? feedbackLag : null, stoppedDomains: stopped });
 }
 const CampaignRamp = z.object({ step: z.number().int().describe('The step the campaign releases at, from 1.'), steps: z.number().int().describe('How many steps the ramp has; past the last one only the other limits apply.'), ceilingPerHour: z.number().int().describe('Most recipients this step releases in its hour.'),
   startedAt: z.string().nullable().describe('When this step\'s hour started: its first release. Null before it.'), released: z.number().int().describe('Recipients released since this step\'s hour started.') })
@@ -641,10 +646,20 @@ async function campaignViews<T extends CampaignRow>(runtime: Runtime, a: Actor, 
   const lag = rows.some(row => row.reviewId && ['preparing', 'sending', 'paused'].includes(row.state))
     ? await activeFeedbackLag(db).catch(() => null)
     : null;
+  // Recipient domains a campaign stopped sending to (src/send-guards.ts), for its sender: one read by the table's key.
+  const stopped = new Map<string, StoppedDomain[]>();
+  const launched = rows.filter(row => row.reviewId).map(row => row.id);
+  if (launched.length) for (const item of (await db.execute<StoppedDomain & { campaign_id: string }>(sql`SELECT campaign_id, domain, resolved, bounced,
+      to_char(stopped_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "stoppedAt" FROM campaign_stopped_domains
+      WHERE campaign_id = ANY(${sql.param(launched)}::text[]) AND workspace_id = ${a.workspaceId} ORDER BY campaign_id, stopped_at, domain`)).rows) {
+    const list = stopped.get(item.campaign_id) ?? [];
+    if (list.length < 50) list.push({ domain: item.domain, resolved: item.resolved, bounced: item.bounced, stoppedAt: item.stoppedAt });
+    stopped.set(item.campaign_id, list);
+  }
   return rows.map(row => {
     const counts = emptyCounts();
     for (const item of grouped) if (item.campaignId === row.id) { counts.byStatus[item.status] = Number(item.count); counts.total += Number(item.count); }
-    return { ...row, url: campaignUrl(runtime, row), counts, delivery: deliveryView(row, lag), ...estimates ? { sendEstimate: estimates.get(row.id) ?? null } : {} };
+    return { ...row, url: campaignUrl(runtime, row), counts, delivery: deliveryView(row, lag, stopped.get(row.id)), ...estimates ? { sendEstimate: estimates.get(row.id) ?? null } : {} };
   });
 }
 /**
@@ -4405,7 +4420,7 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
   // before the send locks: the release below holds the workspace's admission row, which every send waits on. Judged a few
   // minutes early too, so a day that ends while this step runs still has its judgement.
   const judged = guardLines.planHealth && row.pacePlan?.length && row.windowStartedAt && Date.now() - Date.parse(row.windowStartedAt) >= DAY_MS - 10 * 60_000
-    ? { window: row.windowStartedAt, healthy: await planWindowHealthy(runtime.db, a.workspaceId, row.id, row.windowStartedAt) } : null;
+    ? { window: row.windowStartedAt, day: await planWindowHealthy(runtime.db, a.workspaceId, row.id, row.windowStartedAt) } : null;
   const released = await runtime.db.transaction(async db => {
     const held = await lockSendScope(db, a.workspaceId, { campaignId: row.id });
     const campaign = await findCampaign(db, a, row.id, true);
@@ -4427,8 +4442,11 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
     const opening = dailyCap(campaign) !== null && (!campaign.windowStartedAt || Date.now() - Date.parse(campaign.windowStartedAt) >= DAY_MS);
     // A plan opens its next batch only after a healthy day (judged above); otherwise the same batch again. A window another
     // run opened meanwhile isn't opening here, so the judgement always matches the window it opens after.
-    const grows = !(opening && campaign.windowStartedAt && campaign.pacePlan?.length) || !guardLines.planHealth || (judged?.window === campaign.windowStartedAt ? judged.healthy : true);
+    const grows = !(opening && campaign.windowStartedAt && campaign.pacePlan?.length) || !guardLines.planHealth || (judged?.window === campaign.windowStartedAt ? judged.day.healthy : true);
     if (!grows) log('info', { code: 'CAMPAIGN_PLAN_HELD', campaignId: campaign.id, batch: campaign.windowIndex + 1 });
+    // The sender sees a held plan, since when and why (delivery.pacing.held); it clears when the plan grows again.
+    if (opening && campaign.windowStartedAt && campaign.pacePlan?.length && guardLines.planHealth && judged?.window === campaign.windowStartedAt && (!grows || campaign.planHeld))
+      await db.execute(sql`UPDATE sending_campaigns SET plan_held=${grows ? null : JSON.stringify({ since: campaign.planHeld?.since ?? now(), batch: campaign.windowIndex + 1, why: planHeldWhy(judged.day) })}::jsonb WHERE workspace_id=${a.workspaceId} AND id=${campaign.id}`);
     const windowStart = opening ? now() : campaign.windowStartedAt, windowIndex = opening && campaign.windowStartedAt ? campaign.windowIndex + (grows ? 1 : 0) : campaign.windowIndex;
     const windowUsed = opening ? 0 : campaign.windowExpanded, dayCap = dailyCap(campaign, windowIndex);
     // In the first window, before the first small batch's wait is over, only the first small batch goes.

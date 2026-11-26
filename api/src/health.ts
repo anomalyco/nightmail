@@ -118,9 +118,10 @@ const Health = z.object({
   requests: z.object({ count: z.number().int(), errors: z.number().int() }).nullable().describe('The last 15 minutes.'),
   database: z.object({ connections: z.number().int(), maxConnections: z.number().int(), longTransactions: z.number().int(), oldestTransactionSeconds: z.number().int(), slowQueries: z.number().int(), lockWaits: z.number().int(),
     sizeBytes: z.number(), diskBytes: z.number().nullable().describe('DATABASE_DISK_GB, when set.') }).nullable(),
+  settings: z.array(z.object({ feature: z.string(), settings: z.array(z.string()) })).optional().describe('Optional features this Worker turned off because their setting was set but not valid, or only in part (OPTIONAL_FEATURE_DISABLED in its log): their names, never a value.'),
 }).openapi('OperatorHealth');
 type Health = z.infer<typeof Health>;
-type Measured = Omit<Health, 'generatedAt' | 'stale' | 'delivery' | 'alerts'>;
+type Measured = Omit<Health, 'generatedAt' | 'stale' | 'delivery' | 'alerts' | 'settings'>;
 type Rollup = Measured & { memory: Memory };
 
 /** A quantile's upper bound from a latency histogram: the bucket it falls in, or the slowest request for the last one. */
@@ -539,7 +540,8 @@ export async function readHealth(runtime: Pick<Runtime, 'db' | 'config'>): Promi
   const empty: Measured = { queues: [], jobs: null, campaigns: null, feedbackLagSeconds: null, routes: null, errors: null, requests: null, database: null };
   const { memory: _, ...measured } = state?.rollup ?? { ...empty, memory: null };
   return { generatedAt: state?.generatedAt ?? null, stale: state?.stale ?? true, delivery: runtime.config.operatorSlackWebhookUrl ? 'slack' : 'off',
-    alerts: alerts.filter(alert => isKind(alert.kind)).map(alert => ({ ...alert, label: KINDS[alert.kind as Kind].label, words: alert.words.replaceAll('`', ''), runbook: runbookOf(alert.kind as Kind) })), ...measured };
+    alerts: alerts.filter(alert => isKind(alert.kind)).map(alert => ({ ...alert, label: KINDS[alert.kind as Kind].label, words: alert.words.replaceAll('`', ''), runbook: runbookOf(alert.kind as Kind) })), ...measured,
+    settings: (await import('./config.js')).disabledSettings() };
 }
 
 export function registerHealth(app: App) {
