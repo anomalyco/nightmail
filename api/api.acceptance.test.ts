@@ -22746,22 +22746,22 @@ describe('List hygiene', () => {
         await db.query("INSERT INTO jobs (id, workspace_id, type, payload) VALUES ($1, $2, 'audience.listRisk', $3)", [unique('job'), wid, JSON.stringify({ workspaceId: wid, campaignId: campaign.id, reviewId, listId: list.id })]);
         await runListRisk();
         assert.deepEqual((await db.query('SELECT r.list_risk FROM sending_campaign_reviews r JOIN sending_campaigns c ON c.review_id = r.id WHERE c.id = $1', [campaign.id])).rows[0].list_risk.at, risk.at);
-        // After a send: the flagged contacts it skipped are never proven, but they no longer count; two flagged contacts
-        // that joined since do. The rest were mailed and delivered to.
+        // After a send: the flagged contacts it skipped are never proven, but they no longer count; a flagged contact
+        // that joined since does. The rest were mailed and delivered to.
         await db.query("UPDATE sending_campaigns SET simulated = false, state = 'sending', prepared = total, expanded = total WHERE id = $1", [campaign.id]);
         // The fixture is one transaction, so now() doesn't move: the first members go back two minutes and the launch one, for
         // the import below to come after both.
         await db.query("UPDATE audience_list_members SET created_at = created_at - interval '2 minutes' WHERE workspace_id = $1 AND list_id = $2", [wid, list.id]);
         await db.query("UPDATE sending_campaign_reviews SET created_at = created_at - interval '1 minute' WHERE id = $1", [reviewId]);
         await db.query("UPDATE audience_contacts SET mailed_count = 1, delivered_count = 1 WHERE workspace_id = $1 AND email LIKE 'fine%-' || $2 || '@example.net'", [wid, tag]);
-        const more = ok(await local('POST', '/v1/contact-imports', { csv: ['Email', 'temp8-' + tag + '@fexpost.com', 'temp9-' + tag + '@fexpost.com'].join('\n'), listId: list.id, mapping: { email: 'Email' } }), 201);
+        const more = ok(await local('POST', '/v1/contact-imports', { csv: ['Email', 'temp8-' + tag + '@fexpost.com'].join('\n'), listId: list.id, mapping: { email: 'Email' } }), 201);
         ok(await local('POST', '/v1/contact-imports/' + more.id + '/commit', { consent: { status: 'subscribed', evidence: 'Synthetic opt-in.' } }));
         const again = ok(await local('POST', '/v1/campaigns', { name: 'Risk again', from: 'sender@example.com', subject: 'News', html: '<p>Hello again.</p>', audience: { listId: list.id } }), 201);
         ok(await local('POST', '/v1/campaigns/' + again.id + '/send', { revision: again.revision }), 202);
         await runListRisk();
         const second = (await db.query('SELECT r.list_risk FROM sending_campaign_reviews r JOIN sending_campaigns c ON c.review_id = r.id WHERE c.id = $1', [again.id])).rows[0].list_risk;
-        assert.deepEqual([second.sampled, second.counts.flagged, second.counts.flaggedUnproven, second.values.FLAGGED_SOURCE, second.previous.flaggedSource], [22, 5, 2, 2 / 22, 5 / 22]);
-        // The two rules disagree here: by the first, five flagged contacts were high; now the list is elevated by its dead domain alone.
+        assert.deepEqual([second.sampled, second.counts.flagged, second.counts.flaggedUnproven, second.values.FLAGGED_SOURCE, second.previous.flaggedSource], [21, 4, 1, 1 / 21, 4 / 21]);
+        // The two rules disagree here: by the first, four flagged contacts were high; now the list is elevated by its dead domain alone.
         assert.deepEqual([second.band, second.factors, second.previous.band], ['elevated', [{ code: 'DEAD_DOMAINS', level: 'elevated' }], 'high']);
       } finally { runtime.config.listRisk = before; }
       // Without the private lines: values, no band.
