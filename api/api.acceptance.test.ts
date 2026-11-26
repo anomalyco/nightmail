@@ -21671,6 +21671,94 @@ describe('List hygiene', () => {
       }
     });
   });
+  test('delivery history: finished mail is folded once into per-domain counts by outcome and failure class, the mail history of the contacts campaigns and marketing went to, and blocklist rejections by From domain and link host; recent, simulated, multi-recipient and transactional-to-contact mail are left as the design says; one leased writer', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { deliveryHistoryHourly, bounceClass, blocklistNamed } = await import('./src/delivery-history.js');
+      // The classes, from replies mail servers write.
+      const cls = (diagnostic: string, type = 'bounce', subType = 'General') => bounceClass({ type, subType, diagnostic });
+      assert.deepEqual([cls('550 5.1.1 <x@example.com>: Recipient address rejected: User unknown'), cls('550 5.1.2 Host or domain name not found'),
+        cls('452 4.2.2 Mailbox full', 'non_permanent_bounce'), cls('554 5.7.1 Service unavailable; Client host blocked using zen.spamhaus.org'),
+        cls('550 rejected (URIBL_DBL_SPAM)'), cls('550 5.7.26 Unauthenticated email is not accepted'), cls('421 4.7.28 Rate limited', 'non_permanent_bounce'),
+        cls('554 5.7.1 Message rejected as spam'), bounceClass({ type: 'validation_suppressed' }), cls(''), cls('', 'bounce', 'NoEmail')],
+      ['user_unknown', 'dead_domain', 'mailbox_full', 'blocklist', 'blocklist', 'auth', 'reputation', 'policy', 'validation', 'other', 'user_unknown']);
+      assert.deepEqual([blocklistNamed('Host classified as spam by b.barracudacentral.org'), blocklistNamed('listed on a blocklist'), blocklistNamed('5.7.1 content rejected'), blocklistNamed(null)], ['barracuda', 'other', null, null]);
+
+      const ws = unique('ws_history'), tag = unique('dh').toLowerCase().replace(/[^a-z0-9]/g, ''), good = tag + '-good.example', dead = tag + '-dead.example', corp = tag + '-corp.example';
+      const base = Date.now() - 2 * 86_400_000, at = (i: number) => new Date(base + i * 60_000).toISOString();
+      const contact = async (email: string) => { const id = unique('con'); await db.query('INSERT INTO audience_contacts(id,workspace_id,email) VALUES ($1,$2,$3)', [id, ws, email]); return id; };
+      const [a, b, d, f] = [await contact('a@' + good), await contact('b@' + dead), await contact('d@' + corp), await contact('f@' + good)];
+      type Mail = { to: string[]; i: number; status: string; o: number; campaign?: boolean; simulated?: boolean; provider?: boolean; created?: string; snapshot?: Json; events?: [string, Json][] };
+      const send = async (m: Mail) => {
+        const id = unique('email');
+        await db.query("INSERT INTO sending_emails (id, workspace_id, region, actor_key_id, campaign_id, from_address, to_addresses, cc_addresses, bcc_addresses, subject, snapshot, simulated, status, provider_id, event_outcomes, created_at) VALUES ($1,$2,'us-east-1','fixture',$3,'news@brand.example',$4,'[]','[]','Synthetic',$5,$6,$7,$8,$9,$10)",
+          [id, ws, m.campaign === false ? null : unique('campaign'), JSON.stringify(m.to), JSON.stringify(m.snapshot ?? {}), !!m.simulated, m.status, m.provider === false ? null : unique('provider'), m.o, m.created ?? at(m.i)]);
+        for (const [type, data] of m.events ?? []) await db.query('INSERT INTO sending_email_events (id, workspace_id, email_id, type, data, simulated, created_at) VALUES ($1,$2,$3,$4,$5,false,$6)', [unique('event'), ws, id, type, JSON.stringify(data), at(m.i + 0.5)]);
+      };
+      const unsubscribe = { unsubscribeUrl: 'https://links.example.net/unsubscribe/u_synthetic' };
+      await send({ to: ['a@' + good], i: 1, status: 'delivered', o: 1 | 2 | 16 });
+      await send({ to: ['a@' + good], i: 2, status: 'delayed', o: 1 | 128, events: [['non_permanent_bounce', { bounceType: 'Transient', bounceSubType: 'MailboxFull', diagnosticCode: '452 4.2.2 Mailbox full' }]] });
+      await send({ to: ['b@' + dead], i: 3, status: 'bounced', o: 1 | 4, events: [['bounce', { bounceType: 'Permanent', bounceSubType: 'General', diagnosticCode: '550 5.1.1 User unknown' }]] });
+      await send({ to: ['c@' + dead], i: 4, status: 'bounced', o: 1 | 4, events: [['bounce', { bounceType: 'Permanent', bounceSubType: 'General', diagnosticCode: '550 5.1.1 No such user here' }]] });
+      await send({ to: ['d@' + corp], i: 5, status: 'delayed', o: 1 | 128, snapshot: unsubscribe, events: [['non_permanent_bounce', { bounceType: 'Transient', bounceSubType: 'General', diagnosticCode: '554 An URL in this email is listed by Spamhaus DBL' }]] });
+      await send({ to: ['e@' + corp], i: 6, status: 'suppressed', o: 1, events: [['validation_suppressed', { bounceType: 'Permanent', bounceSubType: 'EmailValidationSuppressed' }]] });
+      await send({ to: ['f@' + good], i: 7, status: 'delivered', o: 1 | 2, campaign: false, snapshot: { kind: 'transactional' } });
+      // Not counted: two recipients, simulated, not accepted, and too recent for its feedback to be in.
+      await send({ to: ['a@' + good, 'b@' + dead], i: 8, status: 'delivered', o: 1 | 2, campaign: false });
+      await send({ to: ['a@' + good], i: 9, status: 'delivered', o: 1 | 2, simulated: true });
+      await send({ to: ['a@' + good], i: 10, status: 'rejected', o: 0, provider: false });
+      await send({ to: ['a@' + good], i: 11, status: 'delivered', o: 1 | 2, created: new Date(Date.now() - 3_600_000).toISOString() });
+
+      // Start the one writer three days back, as a fresh installation would start 30 days back.
+      const rewind = async () => {
+        for (let i = 0; i < 50; i++) {
+          const { rowCount } = await db.query("INSERT INTO delivery_history_state AS s (id, cursor_at, cursor_id) VALUES ('rollup', now() - interval '3 days', '') ON CONFLICT (id) DO UPDATE SET cursor_at=excluded.cursor_at, cursor_id='' WHERE s.lease_until IS NULL OR s.lease_until <= now()");
+          if (rowCount) return;
+          await new Promise(resolve => setTimeout(resolve, 200));
+        }
+        assert.fail('the rollup lease was never free');
+      };
+      await rewind();
+      const run = await deliveryHistoryHourly(runtime, { budgetMs: 60_000 });
+      assert.ok(run && run.counted >= 7, JSON.stringify(run));
+      const stats = async () => Object.fromEntries((await db.query('SELECT * FROM delivery_domain_stats WHERE workspace_id=$1 ORDER BY domain', [ws])).rows.map((r: Json) => [r.domain, r]));
+      const pick = (r: Json) => ({ sent: +r.sent, delivered: +r.delivered, hard: +r.hard_bounced, soft: +r.soft_failed, opened: +r.opened, since: r.failed_since_delivery,
+        classes: Object.fromEntries(['user_unknown', 'dead_domain', 'mailbox_full', 'blocklist', 'validation', 'policy'].map(c => [c, +r[c]]).filter(([, n]) => n)) });
+      const first = await stats();
+      assert.deepEqual(Object.keys(first).sort(), [corp, dead, good].sort());
+      assert.deepEqual(pick(first[good]), { sent: 3, delivered: 2, hard: 0, soft: 1, opened: 1, since: 0, classes: { mailbox_full: 1 } });
+      assert.deepEqual(pick(first[dead]), { sent: 2, delivered: 0, hard: 2, soft: 0, opened: 0, since: 2, classes: { user_unknown: 2 } });
+      assert.deepEqual(pick(first[corp]), { sent: 2, delivered: 0, hard: 0, soft: 1, opened: 0, since: 1, classes: { blocklist: 1, validation: 1 } });
+      assert.equal(new Date(first[good].last_delivered).toISOString(), at(7));
+      // Blocklist rejections by the workspace, the day it was sent, its From domain, its link host and the list named.
+      assert.deepEqual((await db.query('SELECT day::text, from_domain, link_host, list, rejections FROM delivery_blocklist_daily WHERE workspace_id=$1', [ws])).rows,
+        [{ day: at(5).slice(0, 10), from_domain: 'brand.example', link_host: 'links.example.net', list: 'spamhaus', rejections: 1 }]);
+      // Contacts: campaign and marketing mail only.
+      const history = async () => Object.fromEntries((await db.query('SELECT id, mailed_count, delivered_count, first_mailed_at, last_mailed_at, soft_failures FROM audience_contacts WHERE workspace_id=$1', [ws])).rows
+        .map((r: Json) => [r.id, [r.mailed_count, r.delivered_count, r.soft_failures, r.first_mailed_at && new Date(r.first_mailed_at).toISOString(), r.last_mailed_at && new Date(r.last_mailed_at).toISOString()]]));
+      const contacts = await history();
+      assert.deepEqual(contacts[a], [2, 1, 1, at(1), at(2)]);
+      assert.deepEqual(contacts[b], [1, 0, 0, at(3), at(3)]);
+      assert.deepEqual(contacts[d], [1, 0, 1, at(5), at(5)]);
+      assert.deepEqual(contacts[f], [0, 0, 0, null, null]);
+
+      // Read once: another run adds nothing, and a run while the lease is held does nothing.
+      await deliveryHistoryHourly(runtime, { budgetMs: 60_000 });
+      assert.deepEqual(await stats(), first);
+      assert.deepEqual(await history(), contacts);
+      await db.query("UPDATE delivery_history_state SET lease_until=now() + interval '1 minute' WHERE id='rollup'");
+      try { assert.equal(await deliveryHistoryHourly(runtime), null); } finally { await db.query("UPDATE delivery_history_state SET lease_until=NULL WHERE id='rollup'"); }
+
+      // A later delivery to the dead domain starts its count of failures since a delivery again.
+      await send({ to: ['g@' + dead], i: 12, status: 'delivered', o: 1 | 2 });
+      await send({ to: ['h@' + dead], i: 13, status: 'bounced', o: 1 | 4, events: [['bounce', { bounceType: 'Permanent', bounceSubType: 'General', diagnosticCode: '550 5.1.1 User unknown' }]] });
+      await rewind();
+      await db.query('DELETE FROM delivery_domain_stats WHERE workspace_id=$1', [ws]);
+      await db.query('UPDATE audience_contacts SET mailed_count=0, delivered_count=0, first_mailed_at=NULL, last_mailed_at=NULL, soft_failures=0 WHERE workspace_id=$1', [ws]);
+      await db.query('DELETE FROM delivery_blocklist_daily WHERE workspace_id=$1', [ws]);
+      await deliveryHistoryHourly(runtime, { budgetMs: 60_000 });
+      assert.deepEqual(pick((await stats())[dead]), { sent: 4, delivered: 1, hard: 3, soft: 0, opened: 0, since: 1, classes: { user_unknown: 3 } });
+    });
+  });
 });
 
 describe('Operational configuration and public event boundaries', () => {

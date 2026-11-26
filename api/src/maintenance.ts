@@ -330,6 +330,9 @@ async function retentionDrains(runtime: Runtime): Promise<Drain[]> {
     expired('abuse_alerts', 'abuse_alerts', at('created_at'), sql`created_at < now()-interval '1 year'`),
     // An erasure's floor outlives every record it could still apply to (the sign-in log, 30 days; signals, 90).
     expired('abuse_floors', 'abuse_floors', at('ignore_through'), sql`ignore_through < now()-interval '90 days'`),
+    // Delivery history (src/delivery-history.ts): a recipient domain 180 days after a workspace last mailed it; blocklist counts after 180 days.
+    expired('delivery_domain_stats', 'delivery_domain_stats', at('last_seen'), sql`last_seen < now() - interval '180 days'`),
+    expired('delivery_blocklist_daily', 'delivery_blocklist_daily', at('day'), sql`day < current_date - 180`),
     // The audit trail past its retention (src/audit.ts RETENTION); the table refuses to delete anything earlier. No row
     // locks: the application may not update it (42501), and only the hourly run takes it.
     { name: 'audit_events', oldest: sql`SELECT min(retain_until) FROM audit_events WHERE retain_until <= now()`, statement: () => sql`WITH gone AS (DELETE FROM audit_events WHERE id IN
@@ -676,6 +679,8 @@ export async function hourlyUpkeep(runtime: Runtime, mailboxRuntime: () => Promi
     ['BYO_HEALTH_QUEUE_FAILED', async () => { await (await import('./byo-regional.js')).queueByoHealth(runtime); }],
     // Abuse monitoring (src/abuse.ts): a bounded, leased slice. Hosted, and only while it is on.
     ['ABUSE_HOURLY_FAILED', async () => { await (await import('./abuse.js')).abuseHourly(runtime); }],
+    // Delivery history (src/delivery-history.ts): finished mail folded into per-domain and per-contact history, leased and bounded.
+    ['DELIVERY_HISTORY_FAILED', async () => { await (await import('./delivery-history.js')).deliveryHistoryHourly(runtime); }],
     // Daily exact recount of sending_campaign_tallies and sending_metrics_hourly.
     ['SENDING_TALLIES_RECOUNT_FAILED', async () => { await recountSendingTallies(runtime); }],
     // The daily exact recount of every list's counts.
