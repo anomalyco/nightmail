@@ -9,3 +9,6 @@ CREATE TABLE IF NOT EXISTS domain_registrations (
   checked_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS domain_registrations_checked ON domain_registrations (checked_at);
+-- A plan's first small batch (src/standing-model.ts RampLines.firstBatch): the first day releases this many, waits this many
+-- minutes for their bounces and rejections, then the rest of the day's batch. Nullable: metadata only.
+ALTER TABLE sending_campaigns ADD COLUMN IF NOT EXISTS pace_first_batch integer, ADD COLUMN IF NOT EXISTS pace_first_wait_minutes integer;
