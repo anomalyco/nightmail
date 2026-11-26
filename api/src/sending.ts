@@ -48,7 +48,7 @@ import { RATES } from './billing/money.js';
 import { RecipientWarning, recipientWarnings, RiskBreakdown } from './list-hygiene.js';
 import { assertBuiltinInput, assertBuiltinRecipients, assertBuiltinStillSends, awaitBuiltinSetup, BUILTIN_NOTE, isBuiltinHost } from './builtin-domain.js';
 import { ATTACHMENT_LIMITS_TEXT, ATTACHMENT_REFUSALS_TEXT, ATTACHMENT_RULES_TEXT, UPLOAD_HEADERS } from './attachment-limits.js';
-import { estimateFinish, judgeReadiness, RAMP, RAMP_HOUR_MS, rampPlan, rampStart, READINESS_REASONS, type RampAt, type ReadinessReason } from './standing-model.js';
+import { estimateFinish, judgeReadiness, RAMP, RAMP_HOUR_MS, rampLines, rampStart, READINESS_REASONS, type RampAt, type ReadinessReason } from './standing-model.js';
 
 type HtmlParser = typeof import('parse5').parse;
 const loadParse5 = lazyModule((): Promise<HtmlParser> => import('parse5').then(m => m.parse));
@@ -498,13 +498,18 @@ const EmailQuery = PageQuery.extend({ campaignId: z.string().max(120).optional()
 const CampaignQuery = PageQuery.extend({ region: Region.optional(), state: CampaignStateValue.optional(), archived: z.enum(['true', 'false']).default('false').describe('False lists active campaigns; true lists archived campaigns only.'), search: z.string().trim().min(1).max(200).optional(),
   listId: z.string().min(1).max(120).optional().describe('Only campaigns whose audience list is this one: a newsletter\u2019s issues.'),
   newsletter: z.enum(['true', 'false']).optional().describe('true: only campaigns whose audience list is a newsletter. false: only the others, with no list or a list that is not a newsletter.') }).describe('Newest created campaigns first, excluding archived campaigns by default, with an opaque cursor bound to the filters. Search is literal, case-insensitive name, subject or ID text.').openapi('ListCampaignsQuery');
-const HistoryFigures = z.object({ largestSend: z.number().int().describe('Most recipients SES accepted from one campaign in the last 90 days.'), sent: z.number().int().describe('Recipients SES accepted in the last 30 days.'),
+const HistoryFigures = z.object({ largestSend: z.number().int().describe('Most recipients SES accepted from one campaign in the last 90 days.'),
+  firstSentAt: z.string().nullable().optional().describe('When this workspace first had mail accepted (workspace history only); null with none.'),
+  usualDay: z.number().int().optional().describe('The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none.'), sent: z.number().int().describe('Recipients SES accepted in the last 30 days.'),
   bounceRate: z.number().nullable().describe('Hard bounces ÷ accepted over the last 30 days; null with nothing sent.'), complaintRate: z.number().nullable().describe('Complaints ÷ accepted over the last 30 days; null with nothing sent.') });
 const CampaignReadiness = z.object({
   verdict: z.enum(['ready', 'ramp_recommended', 'ramp_required']).describe('ready: send as you like. ramp_recommended: the plan is suggested. ramp_required: a Hosted send this large, from a new domain or far above anything its domain has sent, goes out with the plan (pacing.plan "recommended"), a daily limit no larger than its first day, or a confirmed consent source (consent); 422 RAMP_REQUIRED otherwise.'),
   summary: z.string().nullable().describe('Why, in one or two plain sentences, when a ramp is recommended or required.'),
   reasons: z.array(z.object({ code: z.enum(READINESS_REASONS), message: z.string() })).describe('Every finding behind the verdict.'),
-  domain: z.object({ name: z.string(), firstSeenAt: z.string().nullable().describe('When the From domain (or the domain it is under) was added to this workspace.'), ageDays: z.number().int().nullable(),
+  domain: z.object({ name: z.string(), firstSeenAt: z.string().nullable().describe('When the From domain (or the domain it is under) was added to this workspace.'), ageDays: z.number().int().nullable().describe('Days since it was added to this workspace: its history here, not its age.'),
+    registeredAt: z.string().nullable().optional().describe('When its registrable domain was registered (YYYY-MM-DD), from public registry data; null when not known (never taken for old).'),
+    registeredDays: z.number().int().nullable().optional().describe('Days since registeredAt; null when not known.'),
+    linkDomain: z.object({ name: z.string().describe('The registrable domain the links go on, when it is not the From domain\'s.'), registeredAt: z.string().nullable(), registeredDays: z.number().int().nullable() }).nullable().optional(),
     dmarc: z.enum(['reject', 'quarantine', 'none', 'missing', 'invalid']).nullable().describe('The DMARC policy last observed; null when not checked yet.'),
     mailFrom: z.enum(['verified', 'pending', 'failed', 'not_configured']).describe('The custom MAIL FROM domain (aligned SPF).'),
     linkHost: z.enum(['not_configured']).describe('Kept for compatibility, always not_configured: ownLinkHost and linkOrigin say where the links go.'),
@@ -517,9 +522,10 @@ const CampaignReadiness = z.object({
     createdAt: z.string().nullable(), lastSentAt: z.string().nullable().describe('When a campaign last went to this list.'),
     lastImport: z.object({ at: z.string(), contacts: z.number().int(), consent: z.string().nullable().describe('The consent evidence it was imported with, if any.') }).nullable() }),
   sizeJump: z.number().nullable().describe('This send ÷ the largest campaign its domain sent in the last 90 days; null without one.'),
+  usualJump: z.number().nullable().optional().describe('This send ÷ the workspace\'s usual day (history.workspace.usualDay); null without one.'),
   plan: z.object({ batches: z.array(z.number().int()).describe('Recipients per day, in order: one batch a day, the most engaged first and never-mailed last.'),
     seconds: z.number().int().nullable().describe('How long the plan takes from its start, the hourly ramp included.') }).nullable().describe('The recommended daily batches; null when one day covers everyone.'),
-  required: z.object({ by: z.enum(['NEW_DOMAIN', 'SIZE_JUMP']), maxPerDay: z.number().int().describe('The largest daily limit that counts as a ramp: the plan\'s first day.') }).nullable(),
+  required: z.object({ by: z.enum(['NEW_REGISTRATION', 'NEW_DOMAIN', 'SIZE_JUMP']), maxPerDay: z.number().int().describe('The largest daily limit that counts as a ramp: the plan\'s first day.') }).nullable(),
 }).describe('Whether this campaign is ready to send as it is: its domain, its sender\'s history, its list and how much larger it is than before, with a verdict and a plan. Hosted shared sending with live SES can require the plan; elsewhere it is advice.').openapi('CampaignReadiness');
 const AudienceCounts = z.object({ matched: z.number().int(), eligible: z.number().int(), suppressed: z.number().int(), unsubscribed: z.number().int(),
   risky: z.number().int().describe('Contacts who could receive it but are flagged as risky (a disposable inbox, a mistyped provider, a role address, an address known to be undeliverable): the send skips them. Not in eligible.'),
@@ -665,20 +671,26 @@ async function sendEstimates(runtime: Runtime, db: DbExecutor, a: Actor, rows: C
 async function sendReadiness(runtime: Runtime, db: DbExecutor, a: Actor, row: { id: string; draft: CampaignDraft },
   audience: { recipients: number; matched: number | null; risky: number; neverMailed: number | null; lastSent: string | null }) {
   const domain = (row.draft.from.split('@')[1] ?? '').toLowerCase(), listId = row.draft.audience?.listId ?? null, r = RAMP.readiness, c = RAMP.check;
-  const clean = sql`bounced<=accepted*${c.bounceRate}::float8 AND (complained<${c.complaints}::int OR complained<=accepted*${c.complaintRate}::float8)`;
+  // Clean: within the ramp check's bounce and complaint lines, and no reply named a blocklist in the days it went out (src/delivery-history.ts).
+  const clean = sql`bounced<=accepted*${c.bounceRate}::float8 AND (complained<${c.complaints}::int OR complained<=accepted*${c.complaintRate}::float8) AND NOT blocked`;
   const [f] = (await db.execute<{ first_seen: string | null; dmarc: string | null; mail_from: string | null; ws_largest: number; dom_largest: number; dom_clean: number;
-    dom_accepted: number; dom_bounced: number; dom_complained: number; ws_accepted: number | null; ws_bounced: number | null; ws_complained: number | null;
+    dom_accepted: number; dom_bounced: number; dom_complained: number; ws_accepted: number | null; ws_bounced: number | null; ws_complained: number | null; usual_day: number | null; first_sent: string | null;
     list_created: string | null; last_import: { at: string; contacts: number; consent: string | null } | null; rate: number; hosted: boolean }>(sql`WITH dom AS (
       SELECT dc.created_at, dc.identity->'dmarc'->>'status' AS dmarc, dc.identity->'ses'->'MailFromAttributes'->>'MailFromDomainStatus' AS mail_from FROM domain_claims dc
       WHERE dc.workspace_id=${a.workspaceId} AND (dc.name=${domain} OR right(${domain}, length(dc.name)+1)='.'||dc.name) ORDER BY length(dc.name) DESC LIMIT 1
     ), sent AS MATERIALIZED (
-      SELECT c.created_at, lower(split_part(c.draft->>'from','@',2)) AS domain, t.accepted, t.bounced, t.complained FROM sending_campaigns c
+      SELECT c.created_at, lower(split_part(c.draft->>'from','@',2)) AS domain, t.accepted, t.bounced, t.complained,
+        EXISTS (SELECT 1 FROM delivery_blocklist_daily b WHERE b.workspace_id=c.workspace_id AND b.from_domain=lower(split_part(c.draft->>'from','@',2))
+          AND b.day BETWEEN c.created_at::date AND c.created_at::date+3 AND b.rejections>0) AS blocked FROM sending_campaigns c
       CROSS JOIN LATERAL (SELECT coalesce(sum(accepted),0)::float8 AS accepted, coalesce(sum(bounced),0)::float8 AS bounced, coalesce(sum(complained),0)::float8 AS complained
         FROM sending_campaign_tallies t WHERE t.workspace_id=c.workspace_id AND t.campaign_id=c.id AND NOT t.simulated) t
       WHERE c.workspace_id=${a.workspaceId} AND c.id<>${row.id} AND NOT c.simulated AND c.expanded>0 AND c.created_at>now()-make_interval(days=>${r.lookbackDays}::int)
     ), hours AS (
       SELECT sum(accepted)::float8 AS a, sum(bounced)::float8 AS b, sum(complained)::float8 AS c FROM (SELECT hour, sum(accepted) AS accepted, sum(bounced) AS bounced, sum(complained) AS complained
         FROM sending_metrics_hourly WHERE workspace_id=${a.workspaceId} AND hour>=now()-make_interval(days=>${r.windowDays}::int) GROUP BY hour HAVING sum(simulated)=0) x
+    ), days AS (
+      SELECT date_trunc('day', hour) AS day, sum(accepted)::float8 AS a FROM sending_metrics_hourly WHERE workspace_id=${a.workspaceId} AND hour>=now()-interval '14 days'
+      GROUP BY 1 HAVING sum(simulated)=0 AND sum(accepted)>0
     )
     SELECT (SELECT created_at::text FROM dom) AS first_seen, (SELECT dmarc FROM dom) AS dmarc, (SELECT mail_from FROM dom) AS mail_from,
       coalesce((SELECT max(accepted) FROM sent),0)::int AS ws_largest, coalesce((SELECT max(accepted) FROM sent WHERE domain=${domain}),0)::int AS dom_largest,
@@ -687,6 +699,8 @@ async function sendReadiness(runtime: Runtime, db: DbExecutor, a: Actor, row: { 
       coalesce((SELECT sum(bounced) FROM sent WHERE domain=${domain} AND created_at>now()-make_interval(days=>${r.windowDays}::int)),0)::int AS dom_bounced,
       coalesce((SELECT sum(complained) FROM sent WHERE domain=${domain} AND created_at>now()-make_interval(days=>${r.windowDays}::int)),0)::int AS dom_complained,
       (SELECT a FROM hours)::bigint AS ws_accepted, (SELECT b FROM hours)::bigint AS ws_bounced, (SELECT c FROM hours)::bigint AS ws_complained,
+      (SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY a) FROM days)::bigint AS usual_day,
+      (SELECT min(hour)::text FROM sending_metrics_hourly WHERE workspace_id=${a.workspaceId} AND accepted>0 AND simulated=0) AS first_sent,
       (SELECT created_at::text FROM audience_lists WHERE workspace_id=${a.workspaceId} AND id=${listId}) AS list_created,
       (SELECT jsonb_build_object('at',i.created_at,'contacts',i.imported,'consent',(SELECT ca.evidence FROM audience_consent_audit ca WHERE ca.workspace_id=i.workspace_id
           AND ca.contact_id=i.sample_contact_ids[1] AND ca.import_id=i.id LIMIT 1))
@@ -695,16 +709,29 @@ async function sendReadiness(runtime: Runtime, db: DbExecutor, a: Actor, row: { 
       ${runtime.config.multiTenant ? sharedConnection(a.workspaceId) : sql`false`} AS hosted`)).rows;
   const live = !!f!.hosted && !isSimulatedSes(runtime), ageDays = f!.first_seen ? Math.floor((Date.now() - Date.parse(f!.first_seen)) / DAY_MS) : null;
   const links = await linkReview(runtime, db, a.workspaceId, row.draft.from);
+  // How old the From domain and the domain its links go on are on the internet (src/domain-age.ts), apart from how long they have sent here.
+  const age = await wrapModuleLoad(() => import('./domain-age.js'));
+  const fromRoot = await age.registrableRoot(domain), linkRoot = await age.registrableRoot(links.origin ? new URL(links.origin).hostname : null);
+  const registered = await age.registeredDays(db, [fromRoot, linkRoot]), reg = fromRoot ? registered.get(fromRoot) ?? null : null;
+  const link = linkRoot && linkRoot !== fromRoot ? { name: linkRoot, registeredAt: registered.get(linkRoot)?.at ?? null, registeredDays: registered.get(linkRoot)?.days ?? null } : null;
+  const usualDay = Number(f!.usual_day ?? 0), firstSentDays = f!.first_sent ? Math.floor((Date.now() - Date.parse(f!.first_sent)) / DAY_MS) : null;
   const dmarc = f!.dmarc && ['reject', 'quarantine', 'none', 'missing', 'invalid'].includes(f!.dmarc) ? f!.dmarc as 'reject' | 'quarantine' | 'none' | 'missing' | 'invalid' : null;
   const n = audience.recipients, wsAccepted = Number(f!.ws_accepted ?? 0);
   const judged = judgeReadiness({ recipients: n, matched: audience.matched, risky: audience.risky, neverMailed: audience.neverMailed, domainAgeDays: ageDays,
     dmarc: dmarc === null ? null : !['missing', 'invalid'].includes(dmarc), largestSend: f!.dom_largest, largestCleanSend: f!.dom_clean,
-    accepted: wsAccepted, bounced: Number(f!.ws_bounced ?? 0), complained: Number(f!.ws_complained ?? 0), enforced: live });
-  const batches = rampPlan(n, f!.dom_clean), first = batches[0] ?? 0, fmt = (v: number) => v.toLocaleString('en-US'), share = (v: number, of: number) => `${(100 * v / of).toFixed(of && v / of < 0.1 ? 1 : 0)}%`;
+    accepted: wsAccepted, bounced: Number(f!.ws_bounced ?? 0), complained: Number(f!.ws_complained ?? 0), enforced: live,
+    registeredDays: reg?.days ?? null, linkRegisteredDays: link?.registeredDays ?? null, usualDay, lines: rampLines(runtime.config.rampLines) });
+  const batches = judged.plan, first = batches[0] ?? 0, fmt = (v: number) => v.toLocaleString('en-US'), share = (v: number, of: number) => `${(100 * v / of).toFixed(of && v / of < 0.1 ? 1 : 0)}%`;
   const rampAt = live ? rampStart(await rampHistory(db, a.workspaceId)) : RAMP.steps.length;
   const seconds = batches.length > 1 ? estimateFinish({ recipients: n, start: 0, ratePerSecond: Number(f!.rate), perDay: batches, ramp: rampAt < RAMP.steps.length ? { step: rampAt, startedAt: null, released: 0 } : null }) : null;
+  const ago = (days: number | null) => days === null ? 'recently' : days === 0 ? 'today' : days === 1 ? 'yesterday' : `${fmt(days)} days ago`;
+  const month = (at: string | null) => at ? new Date(at + 'T00:00:00Z').toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' }) : 'an unknown date';
   const messages: Record<ReadinessReason, () => string> = {
-    NEW_DOMAIN: () => `${domain} was added ${ageDays === 0 ? 'today' : ageDays === 1 ? 'yesterday' : `${ageDays} days ago`}.`,
+    NEW_DOMAIN: () => `${domain} was added ${ago(ageDays)}, and when it was registered isn't known yet.`,
+    NEW_HERE: () => `${fromRoot ?? domain} was registered in ${month(reg?.at ?? null)}; it was added here ${ago(ageDays)}${firstSentDays !== null && firstSentDays !== ageDays ? ` and this workspace first sent mail ${ago(firstSentDays)}` : ''}.`,
+    NEW_REGISTRATION: () => `${fromRoot ?? domain} was registered ${ago(reg?.days ?? null)} (${month(reg?.at ?? null)}). Mailbox providers distrust mail from a domain that new.`,
+    NEW_LINK_DOMAIN: () => `Its links go on ${link?.name}, registered ${ago(link?.registeredDays ?? null)}.`,
+    USUAL_JUMP: () => `This send is ${fmt(Math.round(judged.usualJump!))} times this workspace's usual day (${fmt(usualDay)} emails).`,
     SIZE_JUMP: () => `This send is ${fmt(Math.round(judged.jump!))} times the largest campaign ${domain} sent in the last ${r.lookbackDays} days (${fmt(f!.dom_largest)}).`,
     NO_HISTORY: () => f!.dom_largest ? `${domain}'s largest campaign in the last ${r.lookbackDays} days went to ${fmt(f!.dom_largest)} people.` : `${domain} hasn't sent a campaign in the last ${r.lookbackDays} days.`,
     RISKY_LIST: () => `${fmt(audience.risky)} risky addresses (${share(audience.risky, audience.matched ?? 1)} of the list) will be skipped.`,
@@ -713,20 +740,21 @@ async function sendReadiness(runtime: Runtime, db: DbExecutor, a: Actor, row: { 
     BOUNCES: () => `${share(Number(f!.ws_bounced), wsAccepted)} of the last ${r.windowDays} days' mail bounced.`,
     COMPLAINTS: () => `${share(Number(f!.ws_complained), wsAccepted)} of the last ${r.windowDays} days' mail was marked as spam.`,
   };
-  const summary = judged.requiredBy === 'NEW_DOMAIN' ? `This domain is new and this list is much larger than anything it has sent. Mailbox providers block new senders who send to huge lists at once, so we'll send ${fmt(first)} today and grow from there.`
+  const summary = judged.requiredBy === 'NEW_REGISTRATION' ? `This domain was registered recently and this list is much larger than anything it has sent. Mailbox providers block new domains that send to huge lists at once, so we'll send ${fmt(first)} today and grow from there.`
+    : judged.requiredBy === 'NEW_DOMAIN' ? `This domain is new and this list is much larger than anything it has sent. Mailbox providers block new senders who send to huge lists at once, so we'll send ${fmt(first)} today and grow from there.`
     : judged.requiredBy === 'SIZE_JUMP' ? `This list is much larger than anything this domain has sent. Mailbox providers block senders who jump to huge lists at once, so we'll send ${fmt(first)} today and grow from there.`
     : judged.verdict === 'ramp_recommended' && batches.length > 1 ? `Send this over ${batches.length} days: ${fmt(first)} of the most engaged recipients first, people never mailed before last.` : null;
   const rate = (part: number, whole: number) => whole > 0 ? part / whole : null;
   return CampaignReadiness.parse({ verdict: judged.verdict, summary, reasons: judged.reasons.map(code => ({ code, message: messages[code]() })),
     domain: { name: domain, firstSeenAt: f!.first_seen ? new Date(f!.first_seen).toISOString() : null, ageDays, dmarc,
       mailFrom: f!.mail_from === 'SUCCESS' ? 'verified' : f!.mail_from === 'PENDING' ? 'pending' : f!.mail_from === 'FAILED' || f!.mail_from === 'TEMPORARY_FAILURE' ? 'failed' : 'not_configured',
-      linkHost: 'not_configured', ownLinkHost: links.own, linkOrigin: links.origin },
-    history: { workspace: { largestSend: f!.ws_largest, sent: wsAccepted, bounceRate: rate(Number(f!.ws_bounced ?? 0), wsAccepted), complaintRate: rate(Number(f!.ws_complained ?? 0), wsAccepted) },
+      linkHost: 'not_configured', ownLinkHost: links.own, linkOrigin: links.origin, registeredAt: reg?.at ?? null, registeredDays: reg?.days ?? null, linkDomain: link },
+    history: { workspace: { largestSend: f!.ws_largest, firstSentAt: f!.first_sent ? new Date(f!.first_sent).toISOString() : null, usualDay, sent: wsAccepted, bounceRate: rate(Number(f!.ws_bounced ?? 0), wsAccepted), complaintRate: rate(Number(f!.ws_complained ?? 0), wsAccepted) },
       domain: { largestSend: f!.dom_largest, sent: f!.dom_accepted, bounceRate: rate(f!.dom_bounced, f!.dom_accepted), complaintRate: rate(f!.dom_complained, f!.dom_accepted) } },
     list: { recipients: n, risky: audience.risky, neverMailed: audience.neverMailed, createdAt: f!.list_created ? new Date(f!.list_created).toISOString() : null,
       lastSentAt: audience.lastSent ? new Date(audience.lastSent).toISOString() : null,
       lastImport: f!.last_import ? { at: new Date(f!.last_import.at).toISOString(), contacts: f!.last_import.contacts, consent: f!.last_import.consent } : null },
-    sizeJump: judged.jump === null ? null : Math.round(judged.jump * 10) / 10,
+    sizeJump: judged.jump === null ? null : Math.round(judged.jump * 10) / 10, usualJump: judged.usualJump === null ? null : Math.round(judged.usualJump * 10) / 10,
     plan: batches.length > 1 ? { batches, seconds: seconds === null ? null : Math.round(seconds / 1000) } : null,
     required: judged.requiredBy ? { by: judged.requiredBy, maxPerDay: first } : null });
 }

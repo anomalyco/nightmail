@@ -105,7 +105,7 @@ export interface CampaignReadiness {
     linkHost: 'not_configured'; ownLinkHost: { hostname: string; active: boolean } | null; linkOrigin: string | null }
   history: { workspace: HistoryFigures; domain: HistoryFigures }
   list: { recipients: number; risky: number; neverMailed: number | null; createdAt: ISODate | null; lastSentAt: ISODate | null; lastImport: { at: ISODate; contacts: number; consent: string | null } | null }
-  sizeJump: number | null; plan: { batches: number[]; seconds: number | null } | null; required: { by: 'NEW_DOMAIN' | 'SIZE_JUMP'; maxPerDay: number } | null
+  sizeJump: number | null; plan: { batches: number[]; seconds: number | null } | null; required: { by: 'NEW_REGISTRATION' | 'NEW_DOMAIN' | 'SIZE_JUMP'; maxPerDay: number } | null
 }
 type ReviewDisplayPart<T> = { data: T; error?: never } | { data?: never; status: number; retryAfter?: number;
   error: { code: string; message: string; field?: string; requestId: string; retryable: boolean; details?: Record<string, unknown>[] } }

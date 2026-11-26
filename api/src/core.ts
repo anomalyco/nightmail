@@ -140,6 +140,8 @@ export interface Config {
   hygieneLists?: boolean;
   /** NIGHTMAIL_HYGIENE_DNS: the DNS-over-HTTPS resolver list hygiene checks recipient domains with (src/mail-dns.ts). Null: no domain checks. */
   hygieneDnsUrl?: string | null;
+  /** NIGHTMAIL_RAMP: the send review's private ramp sizing (src/ramp-lines.ts). Null: the defaults. */
+  rampLines?: import('./ramp-lines.js').RampLinesOverride | null;
   /** NIGHTMAIL_ABUSE_MONITORING: abuse monitoring (src/abuse.ts) records from this instant on. Undefined: off. */
   abuseMonitoring?: { since: string };
   /** ABUSE_SLACK_WEBHOOK_URL, else OPERATOR_SLACK_WEBHOOK_URL: where abuse-monitoring alerts are posted (src/abuse-alerts.ts). Undefined: stored only. */
