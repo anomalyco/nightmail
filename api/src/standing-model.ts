@@ -536,11 +536,12 @@ export function judgeReadiness(f: ReadinessFacts): { verdict: Verdict; reasons: 
   const jump = f.largestSend > 0 ? n / f.largestSend : null, usualJump = f.usualDay > 0 ? n / f.usualDay : null;
   const young = f.registeredDays !== null && f.registeredDays < lines.newRegistrationDays;
   const newHere = f.domainAgeDays !== null && f.domainAgeDays < r.newDomainDays;
+  // A blocklist first: it outranks everything else the review says.
   const reasons: ReadinessReason[] = [];
-  if (young) reasons.push('NEW_REGISTRATION');
-  else if (newHere) reasons.push(f.registeredDays === null ? 'NEW_DOMAIN' : 'NEW_HERE');
   if (f.blocklisted) reasons.push('BLOCKLISTED_BEFORE');
   else if (f.blocklistUncounted) reasons.push('BLOCKLIST_UNCOUNTED');
+  if (young) reasons.push('NEW_REGISTRATION');
+  else if (newHere) reasons.push(f.registeredDays === null ? 'NEW_DOMAIN' : 'NEW_HERE');
   if (f.linkRegisteredDays !== null && f.linkRegisteredDays < lines.newRegistrationDays) reasons.push('NEW_LINK_DOMAIN');
   if (jump !== null && jump > rec.jump) reasons.push('SIZE_JUMP');
   if (usualJump !== null && usualJump > lines.usualJump && n > f.largestCleanSend && !reasons.includes('SIZE_JUMP')) reasons.push('USUAL_JUMP');
