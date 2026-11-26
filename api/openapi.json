@@ -6252,6 +6252,44 @@
                 ],
                 "description": "With a plan: the batch the current window releases, from 1."
               },
+              "held": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "since": {
+                    "type": "string"
+                  },
+                  "batch": {
+                    "type": "integer",
+                    "description": "The batch the plan repeats, from 1."
+                  },
+                  "why": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "enum": [
+                        "bounces",
+                        "complaints",
+                        "blocklist"
+                      ]
+                    },
+                    "description": "What made the last day unhealthy: hard bounces over 3% of at least 100 accepted, complaints over 0.08% (at least 2), or a reply naming a blocklist."
+                  },
+                  "toGrow": {
+                    "type": "string",
+                    "description": "What lets the plan open its next batch, in a sentence."
+                  }
+                },
+                "required": [
+                  "since",
+                  "batch",
+                  "why",
+                  "toGrow"
+                ],
+                "description": "With a plan whose growth is checked: held on the same batch since the day before it was not healthy; null while it grows."
+              },
               "firstBatch": {
                 "type": [
                   "object",
@@ -6368,6 +6406,35 @@
               "until"
             ],
             "description": "Why releasing recipients is currently held, and the best estimate of until when. list_probe: Hosted sent the first recipients (the list probe) and waits for their bounces and complaints before releasing the rest. feedback_lag: releasing is briefly held while priority safety feedback (bounces/complaints) catches up. ramp: a Hosted sender's first large campaigns release in growing hourly steps (sendEstimate.ramp); this hour's step is used up, or its delivery results are still coming in before the next step. link_record: the campaign has no host for its unsubscribe link right now (its workspace's sending is paused, or with own link hosts, its domain's isn't active yet); it continues by itself."
+          },
+          "stoppedDomains": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "domain": {
+                  "type": "string"
+                },
+                "resolved": {
+                  "type": "integer",
+                  "description": "Messages there with a result when it stopped."
+                },
+                "bounced": {
+                  "type": "integer",
+                  "description": "Of those, hard bounces."
+                },
+                "stoppedAt": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "domain",
+                "resolved",
+                "bounced",
+                "stoppedAt"
+              ]
+            },
+            "description": "Recipient domains this campaign stopped sending to because nearly all of its mail there bounced for good (the rest of its recipients there are counted in canceled), oldest first, at most 50. Empty unless the guard is on."
           },
           "feedbackLag": {
             "type": [

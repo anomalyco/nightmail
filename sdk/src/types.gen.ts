@@ -1981,6 +1981,24 @@ export type CampaignDelivery = {
          */
         batch: number | null;
         /**
+         * With a plan whose growth is checked: held on the same batch since the day before it was not healthy; null while it grows.
+         */
+        held?: {
+            since: string;
+            /**
+             * The batch the plan repeats, from 1.
+             */
+            batch: number;
+            /**
+             * What made the last day unhealthy: hard bounces over 3% of at least 100 accepted, complaints over 0.08% (at least 2), or a reply naming a blocklist.
+             */
+            why: Array<'bounces' | 'complaints' | 'blocklist'>;
+            /**
+             * What lets the plan open its next batch, in a sentence.
+             */
+            toGrow: string;
+        } | null;
+        /**
          * With a plan: its first day's small batch and the wait after it.
          */
         firstBatch?: {
@@ -2021,6 +2039,21 @@ export type CampaignDelivery = {
         linkHold?: 'daily_budget' | 'blocklist';
         until: string;
     } | null;
+    /**
+     * Recipient domains this campaign stopped sending to because nearly all of its mail there bounced for good (the rest of its recipients there are counted in canceled), oldest first, at most 50. Empty unless the guard is on.
+     */
+    stoppedDomains?: Array<{
+        domain: string;
+        /**
+         * Messages there with a result when it stopped.
+         */
+        resolved: number;
+        /**
+         * Of those, hard bounces.
+         */
+        bounced: number;
+        stoppedAt: string;
+    }>;
     /**
      * Present while a campaign is preparing, sending, or paused when delivery feedback ingestion is at least 2 minutes behind.
      */
