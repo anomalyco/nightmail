@@ -47,7 +47,7 @@ async function policy(runtime: Runtime) {
     readiness: !cfg.multiTenant && !sim ? { fingerprint: await credentialFingerprint(cfg), target: discoveryTarget(cfg) } : null };
 }
 /** A campaign's pause codes that quarantine it: the automatic pause, the list probe and the ramp's check of a step. */
-export const QUARANTINE_CODES = ['LIST_QUALITY', 'BOUNCE_RATE_HIGH', 'COMPLAINT_RATE_HIGH'];
+export const QUARANTINE_CODES = ['LIST_QUALITY', 'BOUNCE_RATE_HIGH', 'COMPLAINT_RATE_HIGH', 'BLOCKLISTED'];
 /** What the database's ramp check (ramp_refusal and ramp_clean_hour, migration 501) is told of RAMP: each step's hourly
  * ceiling, how much of one an hour must release to prove it, the clean, mature history that places a sender, and the
  * quarantines that pause a workspace's marketing (RAMP_PAUSED). */

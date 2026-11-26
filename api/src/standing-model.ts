@@ -500,23 +500,41 @@ export type ReadinessFacts = {
  *    maxBatches days. minimumSplit: a send the review recommends a ramp for is split into two days or more when larger than this.
  *  - firstBatch: a ramp's first day starts with this many, then waits waitMinutes for their bounces and rejections before
  *    the rest of the day's batch.
+ *  - blocklistPause: a campaign pauses (BLOCKLISTED) once replies naming a blocklist arrived in windowMinutes from `replies`
+ *    different receiving domains; the sender can resume it once none has arrived for windowMinutes, an operator any time
+ *    (src/send-guards.ts).
+ *  - domainStop: a campaign stops releasing to a recipient domain where, of the mail it sent there in windowMinutes, at
+ *    least `sent` have a result and bouncedShare or more of those bounced for good (never a large mailbox provider).
+ *  - planHealth: a plan opens its next daily batch only after a healthy day.
+ * The three send guards are off unless the setting names them (null, null, false): unset, a campaign sends as before. A
+ * guard named with no numbers takes the public defaults (BLOCKLIST_PAUSE, DOMAIN_STOP).
  */
 export type RampLines = {
   newRegistrationDays: number; usualJump: number; minimumSplit: number;
   young: { first: number; cleanFactor: number; growth: number; maxBatches: number };
   established: { first: number; cleanFactor: number; growth: number; maxBatches: number };
   firstBatch: { size: number; waitMinutes: number };
+  blocklistPause: { replies: number; windowMinutes: number } | null;
+  domainStop: { sent: number; bouncedShare: number; windowMinutes: number } | null;
+  planHealth: boolean;
 };
+export const BLOCKLIST_PAUSE = { replies: 3, windowMinutes: 30 };
+export const DOMAIN_STOP = { sent: 20, bouncedShare: 0.8, windowMinutes: 120 };
 export const RAMP_LINES: RampLines = {
   newRegistrationDays: RAMP.readiness.newDomainDays, usualJump: RAMP.readiness.recommended.jump, minimumSplit: 2_000,
   young: { first: RAMP.plan.firstBatch, cleanFactor: RAMP.plan.cleanFactor, growth: RAMP.plan.growth, maxBatches: RAMP.plan.maxBatches },
   established: { first: RAMP.plan.firstBatch, cleanFactor: RAMP.plan.cleanFactor, growth: RAMP.plan.growth, maxBatches: RAMP.plan.maxBatches },
   firstBatch: { size: 2_000, waitMinutes: 60 },
+  blocklistPause: null,
+  domainStop: null,
+  planHealth: false,
 };
 /** RAMP_LINES with an override's values. */
-export function rampLines(override: { [K in keyof RampLines]?: RampLines[K] extends object ? Partial<RampLines[K]> : RampLines[K] } | null | undefined): RampLines {
+export function rampLines(override: import('./ramp-lines.js').RampLinesOverride | null | undefined): RampLines {
   if (!override) return RAMP_LINES;
-  return { ...RAMP_LINES, ...override, young: { ...RAMP_LINES.young, ...override.young }, established: { ...RAMP_LINES.established, ...override.established }, firstBatch: { ...RAMP_LINES.firstBatch, ...override.firstBatch } } as RampLines;
+  return { ...RAMP_LINES, ...override, young: { ...RAMP_LINES.young, ...override.young }, established: { ...RAMP_LINES.established, ...override.established }, firstBatch: { ...RAMP_LINES.firstBatch, ...override.firstBatch },
+    blocklistPause: override.blocklistPause ? { ...BLOCKLIST_PAUSE, ...override.blocklistPause } : null, domainStop: override.domainStop ? { ...DOMAIN_STOP, ...override.domainStop } : null,
+    planHealth: override.planHealth ?? false } as RampLines;
 }
 /** The reason codes CampaignReadiness.reasons has always had: kept as they are for clients that switch on them. */
 export const LEGACY_READINESS_REASONS = ['NEW_DOMAIN', 'SIZE_JUMP', 'NO_HISTORY', 'RISKY_LIST', 'NEVER_MAILED', 'NO_DMARC', 'BOUNCES', 'COMPLAINTS'] as const;

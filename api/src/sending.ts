@@ -1,4 +1,5 @@
 import { queueListRisk } from './list-risk-lines.js';
+import { blocklistPause, blocklistWindow, campaignBlocklistReplies, planWindowHealthy, stopDeadDomains, stoppedDomains } from './send-guards.js';
 import { cachedDashboardRead, mailRevision } from './dashboard-cache.js';
 import { talliesEnabled } from './sending-tallies.js';
 import { boundRequestBody } from './request-body.js';
@@ -49,7 +50,7 @@ import { RATES } from './billing/money.js';
 import { RecipientWarning, recipientWarnings, RiskBreakdown } from './list-hygiene.js';
 import { assertBuiltinInput, assertBuiltinRecipients, assertBuiltinStillSends, awaitBuiltinSetup, BUILTIN_NOTE, isBuiltinHost } from './builtin-domain.js';
 import { ATTACHMENT_LIMITS_TEXT, ATTACHMENT_REFUSALS_TEXT, ATTACHMENT_RULES_TEXT, UPLOAD_HEADERS } from './attachment-limits.js';
-import { estimateFinish, judgeReadiness, LEGACY_READINESS_REASONS, LEGACY_REASON, RAMP, RAMP_HOUR_MS, rampLines, rampStart, READINESS_REASONS, type RampAt, type ReadinessReason } from './standing-model.js';
+import { estimateFinish, judgeReadiness, LEGACY_READINESS_REASONS, LEGACY_REASON, RAMP, RAMP_HOUR_MS, rampLines, rampStart, READINESS_REASONS, type RampAt, type RampLines, type ReadinessReason } from './standing-model.js';
 
 type HtmlParser = typeof import('parse5').parse;
 const loadParse5 = lazyModule((): Promise<HtmlParser> => import('parse5').then(m => m.parse));
@@ -2880,6 +2881,12 @@ export function registerSending(app: App) {
     if (!campaignResumable(campaign)) throw new ApiError(409, 'CAMPAIGN_NOT_PAUSED', 'Only a paused campaign, or one that failed after releasing recipients, can be resumed.');
     if (campaign.state === 'paused' && campaign.quarantines >= 2 && QUARANTINE_CODES.includes(campaign.pauseReason?.code ?? ''))
       throw new ApiError(409, 'QUARANTINE_REVIEW_REQUIRED', 'This campaign was quarantined twice for list quality. An operator reviews it before it sends again: ask for a review from the dashboard.');
+    // Paused for blocklist replies: the sender resumes once none has arrived for the window; an operator can release it any time.
+    if (campaign.state === 'paused' && campaign.pauseReason?.code === 'BLOCKLISTED') {
+      const window = blocklistWindow(rampLines(c.env.config.rampLines));
+      if ((await campaignBlocklistReplies(db, a.workspaceId, campaign.id, { minutes: window })).emails)
+        throw new ApiError(409, 'BLOCKLIST_REPLIES_ARRIVING', 'Replies naming a blocklist are still arriving for this campaign. Fix the listed domain or link and resume once they stop, or ask for a review.');
+    }
     await requiredNoticesAllowed(db, campaign.draft, a.workspaceId);
     const ref = { workspaceId: a.workspaceId, id: campaign.id }, next = runningState(campaign);
     await db.execute(resumeCampaign(ref, next));
@@ -3588,7 +3595,10 @@ const campaignOutcomes = (wid: string, campaign: SQL) => sql`SELECT
     count(*) FILTER (WHERE status <> 'suppressed' AND (provider_id IS NOT NULL OR status IN ('accepted','sent','delivered','bounced','complained','delayed')))::int AS accepted,
     count(*) FILTER (WHERE status = 'bounced')::int AS bounced, count(*) FILTER (WHERE status = 'complained')::int AS complained, max(created_at) AS last
     FROM sending_emails WHERE workspace_id = ${wid} AND campaign_id = ${campaign}`;
-async function campaignHealth(db: DbExecutor, a: Actor, campaignId: string, hosted = false, probe?: number): Promise<{ code: string; message: string } | null> {
+async function campaignHealth(db: DbExecutor, a: Actor, campaignId: string, hosted = false, probe?: number, lines?: RampLines): Promise<{ code: string; message: string } | null> {
+  // Replies naming a blocklist first (src/send-guards.ts): the probe and every later check.
+  const listed = lines ? await blocklistPause(db, a.workspaceId, campaignId, lines) : null;
+  if (listed) return listed;
   const [row] = (await db.execute<{ accepted: number; bounced: number; complained: number }>(campaignOutcomes(a.workspaceId, sql`${campaignId}`))).rows;
   const percent = (part: number, whole: number) => `${(100 * part / whole).toFixed(2)}%`;
   if (probe !== undefined && row!.accepted && (row!.bounced / row!.accepted > PROBE.bounceRate || row!.complained >= PROBE.complaints))
@@ -4266,6 +4276,7 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
   // opens; a resume restarts the 30 minutes so a deliberate resume is not immediately re-paused.
   const hosted = runtime.config.multiTenant && row.account?.kind === 'shared';
   // `rampStep`: a ramp step's batch paused it. That batch is done with: a resume starts a new hour on the same step.
+  const guardLines = rampLines(runtime.config.rampLines);
   const quarantine = async (unhealthy: { code: string; message: string }, rampStep?: number) => {
     const paused = await runtime.db.transaction(async tx => {
       const moved = await tx.execute(hosted ? quarantineCampaign(ref, unhealthy) : pauseCampaign(ref, unhealthy));
@@ -4275,6 +4286,8 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
       return moved;
     });
     if (paused.rows.length) log('warn', { code: 'CAMPAIGN_AUTO_PAUSED', campaignId: row.id, reason: unhealthy.code, ...rampStep === undefined ? {} : { rampStep: rampStep + 1 } });
+    // A blocklist is everyone's problem on a shared pool: one operator alert (src/operator-alerts.ts).
+    if (paused.rows.length && unhealthy.code === 'BLOCKLISTED') await (await wrapModuleLoad(() => import('./operator-alerts.js'))).blocklistAlert(runtime.db, a.workspaceId, row.id);
     return 'done' as const;
   };
   // The list probe: release only the probe, wait for its feedback, then check it before releasing the rest. A sender in
@@ -4304,7 +4317,7 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
     if (row.autoPause && (row.priorityLagMs ?? 0) >= FEEDBACK_LAG_HOLD_MS) {
       return hold('feedback_lag', new Date(dbNow + 60_000).toISOString());
     }
-    const unhealthy = await campaignHealth(runtime.db, a, row.id, true, probe);
+    const unhealthy = await campaignHealth(runtime.db, a, row.id, true, probe, guardLines);
     if (unhealthy) return quarantine(unhealthy);
     await runtime.db.execute(clearProbe(ref));
   } else if (probe !== null) probeLeft = probe - row.expanded;
@@ -4316,8 +4329,10 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
     return hold('feedback_lag', new Date(dbNow + 60_000).toISOString());
   }
   if (row.autoPause && (!row.healthCheckedAt || nowMs - Date.parse(row.healthCheckedAt) >= AUTO_PAUSE.intervalMs)) {
-    const unhealthy = await campaignHealth(runtime.db, a, row.id, hosted);
+    const unhealthy = await campaignHealth(runtime.db, a, row.id, hosted, undefined, guardLines);
     if (unhealthy) return quarantine(unhealthy);
+    // Recipient domains this campaign's mail mostly bounced at lately: the rest there is skipped (src/send-guards.ts).
+    await stopDeadDomains(runtime.db, a.workspaceId, row.id, guardLines).catch(() => log('warn', { code: 'CAMPAIGN_DOMAIN_STOP_FAILED', campaignId: row.id }));
     await runtime.db.execute(noteHealthChecked(ref));
   }
   // Daily pacing: at most pacePerDay recipients, or the plan's batch, per rolling 24-hour window.
@@ -4387,6 +4402,11 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
     if (screened <= 0) return 'again';
   }
   const draft = row.reviewDraft!, limits_ = limitsTable(runtime);
+  // A plan opens its next batch only after a healthy day (src/send-guards.ts, when the setting turns it on). Judged here,
+  // before the send locks: the release below holds the workspace's admission row, which every send waits on. Judged a few
+  // minutes early too, so a day that ends while this step runs still has its judgement.
+  const judged = guardLines.planHealth && row.pacePlan?.length && row.windowStartedAt && Date.now() - Date.parse(row.windowStartedAt) >= DAY_MS - 10 * 60_000
+    ? { window: row.windowStartedAt, healthy: await planWindowHealthy(runtime.db, a.workspaceId, row.id, row.windowStartedAt) } : null;
   const released = await runtime.db.transaction(async db => {
     const held = await lockSendScope(db, a.workspaceId, { campaignId: row.id });
     const campaign = await findCampaign(db, a, row.id, true);
@@ -4406,7 +4426,11 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
     // A capped campaign opens a new 24-hour window when the previous one has elapsed (or on its first release); with a
     // plan, each window after the first is its next batch.
     const opening = dailyCap(campaign) !== null && (!campaign.windowStartedAt || Date.now() - Date.parse(campaign.windowStartedAt) >= DAY_MS);
-    const windowStart = opening ? now() : campaign.windowStartedAt, windowIndex = opening && campaign.windowStartedAt ? campaign.windowIndex + 1 : campaign.windowIndex;
+    // A plan opens its next batch only after a healthy day (judged above); otherwise the same batch again. A window another
+    // run opened meanwhile isn't opening here, so the judgement always matches the window it opens after.
+    const grows = !(opening && campaign.windowStartedAt && campaign.pacePlan?.length) || !guardLines.planHealth || (judged?.window === campaign.windowStartedAt ? judged.healthy : true);
+    if (!grows) log('info', { code: 'CAMPAIGN_PLAN_HELD', campaignId: campaign.id, batch: campaign.windowIndex + 1 });
+    const windowStart = opening ? now() : campaign.windowStartedAt, windowIndex = opening && campaign.windowStartedAt ? campaign.windowIndex + (grows ? 1 : 0) : campaign.windowIndex;
     const windowUsed = opening ? 0 : campaign.windowExpanded, dayCap = dailyCap(campaign, windowIndex);
     // In the first window, before the first small batch's wait is over, only the first small batch goes.
     const windowCap = dayCap !== null && (windowIndex === 0 && campaign.paceFirstBatch && campaign.pacePlan?.length && (opening || firstBatchWait(campaign, 0, windowStart, Date.now()) !== null))
@@ -4438,11 +4462,12 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
     // Refuse unknown future hash formats before releasing any row so the campaign pauses intact instead of burning recipients.
     if (chunk.some(recipient => !isSupportedContentHash(recipient.content_hash))) throw unsupportedHashFormat();
     const delivered = campaign.deliveredOnly ? await deliveredBefore(db, a.workspaceId, campaign.id, chunk.map(r => r.recipient.email)) : null;
+    const stopped = await stoppedDomains(db, campaign.id), stoppedAt = (email: string) => stopped.size > 0 && stopped.has(email.slice(email.lastIndexOf('@') + 1).toLowerCase());
     const affordable = allowed.hostedLeft ?? Number.POSITIVE_INFINITY;
     // The processed prefix: every recipient up to the last affordable one that is sent; skipped ones cost nothing.
     const processed: typeof chunk = [], recipients: typeof chunk = [];
     for (const r of chunk) {
-      const send = !r.screen_rejected && (!delivered || delivered.has(r.recipient.email.toLowerCase()));
+      const send = !r.screen_rejected && (!delivered || delivered.has(r.recipient.email.toLowerCase())) && !stoppedAt(r.recipient.email);
       if (send && recipients.length >= affordable) break;
       processed.push(r); if (send) recipients.push(r);
     }

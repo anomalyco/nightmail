@@ -393,7 +393,7 @@ jobs:
       # read by the environment's own role (github/nightmail-<stage>). That role also
       # mints the short-lived Cloudflare token; no Cloudflare credential is stored.
       # Optional ones (MAILGW_API_TOKEN, OPERATOR_SLACK_WEBHOOK_URL, JEVF_API_KEY,
-      # NIGHTMAIL_POSTMASTER_CREDENTIALS) are read by deploy-worker.sh instead: this action
+      # NIGHTMAIL_POSTMASTER_CREDENTIALS, NIGHTMAIL_LIST_RISK, NIGHTMAIL_RAMP) are read by deploy-worker.sh instead: this action
       # fails on a secret that does not exist.
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e1253824e5c10ff9df46874f81ed3ec929e19cfd # v6.3.0

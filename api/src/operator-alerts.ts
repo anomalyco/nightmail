@@ -31,6 +31,7 @@ const CARDS = {
   signin_slow: { emoji: ':snail:', label: 'Sign-in mail slow' },
   signups_low: { emoji: ':hourglass_flowing_sand:', label: 'Sign-ups nearly full' },
   signups_full: { emoji: ':no_entry:', label: 'Sign-ups are full' },
+  blocklisted: { emoji: ':rotating_light:', label: 'Blocklist replies' },
 } as const;
 // The installation's own cards, about no one workspace: queued under 'platform' and opening the Operator area.
 const PLATFORM_KINDS = new Set<string>(['share_full', 'signin_slow', 'signups_low', 'signups_full']);
@@ -67,7 +68,7 @@ export const slackCard = (card: { emoji: string; label: string } | null, words: 
     accessory: { type: 'button', action_id: 'open', text: { type: 'plain_text', text: 'Open', emoji: false }, url } }],
 });
 
-/** The Slack message for one alert (slackCard), its button opening the Operator area. Null for a payload that is not one of the nine. */
+/** The Slack message for one alert (slackCard), its button opening the Operator area. Null for a payload that is not one of the ten. */
 export function operatorCard(publicUrl: string, p: Record<string, unknown>, workspace: { id: string; name: string | null }) {
   const kind = p.kind as Kind, name = cardName(workspace.name ?? '');
   if (typeof kind !== 'string' || !Object.hasOwn(CARDS, kind)) return null;
@@ -81,6 +82,7 @@ export function operatorCard(publicUrl: string, p: Record<string, unknown>, work
     : kind === 'signin_slow' && whole(p.slow) && whole(p.mail) && Number(p.slow) > 0 ? `${share(Number(p.slow), Number(p.mail))} over ${SLOW_SIGN_IN.seconds} seconds.`
     : kind === 'signups_low' && whole(p.open) && whole(p.limit) ? `${count(p.open)} of ${count(p.limit)} places left. ${RAISE}`
     : kind === 'signups_full' && whole(p.limit) ? `All ${count(p.limit)} places are taken. ${RAISE}`
+    : kind === 'blocklisted' ? `${name}: a campaign paused because receiving servers named a blocklist.`
     : null;
   if (!words) return null;
   const origin = publicUrl.replace(/\/$/, '');
@@ -251,3 +253,11 @@ const deliver: JobHandler = async (runtime, payload, job) => {
   await postSlack(url, card, 'OPERATOR_ALERT_FAILED');
 };
 export const operatorAlertJobs: Record<string, JobHandler> = { [JOB]: retryDatabaseFailures(deliver) };
+
+/**
+ * A campaign paused because replies named a blocklist (src/send-guards.ts): "Driftwood: a campaign paused because receiving
+ * servers named a blocklist." Once per campaign (its episode), however often it pauses again. Never names the domain or link.
+ */
+export async function blocklistAlert(db: DbExecutor, workspaceId: string, campaignId: string) {
+  return queue(db, workspaceId, 'blocklisted', {}, { daily: false, episode: campaignId });
+}
