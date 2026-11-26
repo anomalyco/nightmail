@@ -77,11 +77,9 @@ function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void
 
 // ---------------------------------------------------------------- changes
 
-type Confirming = { action: 'pause' | 'resume' | 'resolve'; conversation: SupportConversation }
+type Confirming = { action: 'resume'; conversation: SupportConversation }
 const confirmCopy: Record<Confirming['action'], { title: string; description: string; confirm: string; done: string }> = {
-  pause: { title: 'Pause the agent?', description: 'It stops answering this customer until someone hands back.', confirm: 'Pause agent', done: 'Agent paused' },
   resume: { title: 'Hand back to the agent?', description: 'It answers the customer’s next message.', confirm: 'Hand back', done: 'Handed back to the agent' },
-  resolve: { title: 'Resolve this ticket?', description: 'The customer isn’t told.', confirm: 'Resolve ticket', done: 'Ticket resolved' },
 }
 const failedText = 'Couldn’t complete the action. Try again.'
 /** Every change the inbox makes: shown at once in every list and the conversation, put back if the API refuses it, then read again. */
@@ -124,8 +122,7 @@ function useInboxActions() {
         () => supportInboxApi.done(c.id, ticketId, crypto.randomUUID()),
         { after: () => toast(ticketId ? 'Marked done. Ticket resolved.' : 'Marked done', 'success', { action: { label: 'Undo', onSelect: () => void undo(c, ticketId) }, duration: 5000 }) }).catch(() => {})
     },
-    confirm: ({ action, conversation }: Confirming) => act(conversation, action, action === 'pause' ? x => ({ ...x, agentState: 'paused', pausedBy: { kind: 'staff', userId: me.userId, name: me.name }, pausedAt: now(), done: null })
-      : action === 'resume' ? x => ({ ...x, agentState: 'active', pausedBy: null, pausedAt: null }) : x => ({ ...x, ticket: x.ticket && { ...x.ticket, resolvedAt: now() } }), { done: confirmCopy[action].done, quiet: true }),
+    confirm: ({ action, conversation }: Confirming) => act(conversation, action, x => ({ ...x, agentState: 'active', pausedBy: null, pausedAt: null }), { done: confirmCopy[action].done, quiet: true }),
     read: (c: SupportConversation, read: boolean, seq?: number) => run(c, x => ({ ...x, unread: !read }), () => supportInboxApi.read(c.id, read, seq), { reread: false }).catch(() => {}),
     wake: (c: SupportConversation) => run(c, x => x, () => supportInboxApi.wake(c.id)).then(r => toast(r.woken ? 'Support service woken' : 'The support service didn’t answer', r.woken ? 'success' : 'error'), () => {}),
     reply: (c: SupportConversation, text: string, key: string) => {
@@ -159,14 +156,12 @@ function useInboxActions() {
   }
 }
 type Actions = ReturnType<typeof useInboxActions>
-/** onDone: a conversation's own Mark done, which also opens the next one. */
-function menuItems(c: SupportConversation, { canAct, actions, onConfirm, open, onDone }: { canAct: boolean; actions: Actions; onConfirm: (confirming: Confirming) => void; open?: () => void; onDone?: () => void }): MenuItem[] {
+/** showDone: false on the conversation page where Done is already its own header button. */
+function menuItems(c: SupportConversation, { canAct, actions, onConfirm, showDone = true }: { canAct: boolean; actions: Actions; onConfirm: (confirming: Confirming) => void; showDone?: boolean }): MenuItem[] {
   const items: (MenuItem | false)[] = [
-    Boolean(open) && { label: 'Open', onSelect: open! },
-    canAct && c.needsYou !== null && { label: c.ticket && !c.ticket.resolvedAt ? 'Mark done and resolve ticket' : 'Mark done', onSelect: onDone ?? (() => void actions.done(c)) },
+    showDone && canAct && c.needsYou !== null && { label: c.ticket && !c.ticket.resolvedAt ? 'Mark done and resolve ticket' : 'Mark done', onSelect: () => void actions.done(c) },
     { label: c.unread ? 'Mark read' : 'Mark unread', onSelect: () => void actions.read(c, c.unread) },
-    canAct && c.status !== 'closed' && c.channel !== 'agent_feedback' && (c.agentState === 'paused' ? { label: 'Hand back to the agent…', onSelect: () => onConfirm({ action: 'resume', conversation: c }) } : { label: 'Pause agent…', onSelect: () => onConfirm({ action: 'pause', conversation: c }) }),
-    canAct && Boolean(c.ticket && !c.ticket.resolvedAt) && { label: 'Resolve ticket…', onSelect: () => onConfirm({ action: 'resolve', conversation: c }) },
+    canAct && c.status !== 'closed' && c.channel !== 'agent_feedback' && c.agentState === 'paused' && { label: 'Hand back to the agent…', onSelect: () => onConfirm({ action: 'resume', conversation: c }) },
     canAct && c.blockedWork > 0 && c.channel !== 'agent_feedback' && { label: 'Retry now', onSelect: () => void actions.wake(c) },
   ]
   return items.filter((item): item is MenuItem => Boolean(item))
@@ -174,7 +169,7 @@ function menuItems(c: SupportConversation, { canAct, actions, onConfirm, open, o
 function ConfirmAction({ confirming, onClose, actions }: { confirming: Confirming | null; onClose: () => void; actions: Actions }) {
   const last = useRef(confirming)
   if (confirming) last.current = confirming
-  const shown = confirming ?? last.current, copy = shown ? confirmCopy[shown.action] : confirmCopy.pause
+  const shown = confirming ?? last.current, copy = confirmCopy.resume
   return <ConfirmDialog open={confirming !== null} onOpenChange={open => { if (!open) onClose() }} title={copy.title} description={copy.description} confirmLabel={copy.confirm} onConfirm={() => shown ? actions.confirm(shown) : undefined} />
 }
 
@@ -321,7 +316,7 @@ export function SupportInboxPage() {
     { ...def('preview'), render: c => <Preview c={c} /> },
     { ...def('status'), render: c => { const s = triageOf(c); return <StatusBadge status={s.text} tone={s.tone} /> }, cardRender: c => triageOf(c).text },
     { ...def('activity'), render: c => <time className="nowrap" dateTime={lastActivity(c)} title={when(lastActivity(c))}>{ago(lastActivity(c))}</time> },
-    { ...def('actions'), render: c => <DropdownMenu label="Conversation actions" title={titleOf(c)} items={menuItems(c, { canAct, actions, onConfirm: setConfirming, open: () => open(c) })} /> },
+    { ...def('actions'), render: c => <DropdownMenu label="Conversation actions" title={titleOf(c)} items={menuItems(c, { canAct, actions, onConfirm: setConfirming })} /> },
   ]
   const empty = q || channel ? <EmptyState title="No conversation matches" action={<Button onClick={() => { setSearch(''); setChannel('') }}>Clear filters</Button>} />
     : <EmptyState title={view === 'needs_you' ? 'Nothing needs you' : 'No support conversations yet'} />
@@ -400,7 +395,7 @@ export function SupportConversationPage() {
   if (!role) return <StaffOnly />
   if (!valid) return <EmptyState headingAs="h1" title="Page not found" action={<Link to="/support">Return to support</Link>} />
   if (!conversation) return detail.isError ? <div className="sinbox-conversation-page"><PageHeader backTo="/support" title="Conversation" /><ErrorState error={detail.error} onRetry={() => void detail.refetch()} /></div> : <SupportConversationSkeleton panel={!phone} />
-  const menu = <DropdownMenu label="Conversation actions" title={titleOf(conversation)} trigger={phone ? undefined : <ActionsTrigger />} items={menuItems(conversation, { canAct, actions, onConfirm: setConfirming, onDone: finish })} />
+  const menu = <DropdownMenu label="Conversation actions" title={titleOf(conversation)} trigger={phone ? undefined : <ActionsTrigger />} items={menuItems(conversation, { canAct, actions, onConfirm: setConfirming, showDone: false })} />
   const marks = canAct && conversation.needsYou !== null
   return <div className="sinbox-conversation-page">
     <PageHeader backTo="/support" title={<span className="sinbox-title" title={titleOf(conversation)}>{titleOf(conversation)}</span>} subtitle={<Facts c={conversation} />}
@@ -430,8 +425,9 @@ function Facts({ c }: { c: SupportConversation }) {
 // same moment: a take-over comes before the reply that made it).
 type Entry = { key: string; at: number; event: SupportEvent; message?: never } | { key: string; at: number; message: SupportMessage; event?: never }
 function timelineOf(detail: SupportDetail): Entry[] {
+  const events = detail.events.filter(event => event.kind !== 'opened' && !(event.kind === 'paused' && event.details?.reply === true))
   const entries: (Entry & { rank: number; order: number })[] = [
-    ...detail.events.map((event, order) => ({ key: event.id, at: Date.parse(event.at), event, rank: event.kind === 'closed' ? 2 : 0, order })),
+    ...events.map((event, order) => ({ key: event.id, at: Date.parse(event.at), event, rank: event.kind === 'closed' ? 2 : 0, order })),
     ...detail.messages.map(message => ({ key: message.id, at: Date.parse(message.at), message, rank: 1, order: message.seq })),
   ]
   return entries.sort((a, b) => a.at - b.at || a.rank - b.rank || a.order - b.order)
@@ -440,7 +436,7 @@ const heldWhy: Record<HeldReason, string> = {
   paused: 'Not sent: staff took over after the agent wrote it.', gate: 'Not sent: the output check held it.', access: 'Not sent: the customer’s access changed before it went out.',
   closed: 'Not sent: the conversation ended first.', earlier: 'Not sent: an earlier version of the agent wrote it.',
 }
-const deliveryBadge: Record<string, { text: string; tone: Tone } | undefined> = { queued: { text: 'Queued', tone: 'warning' }, failed: { text: 'Not sent', tone: 'danger' }, sent: { text: 'Sent', tone: 'success' } }
+const deliveryBadge: Record<string, { text: string; tone: Tone } | undefined> = { queued: { text: 'Queued', tone: 'warning' }, failed: { text: 'Not sent', tone: 'danger' } }
 const held = (m: SupportMessage) => m.author === 'agent' && (m.delivery === 'held' || m.kind === 'held')
 const size = (bytes: number | null) => bytes === null ? '' : bytes < 1024 ? `${bytes} B` : bytes < 1024 * 1024 ? `${Math.round(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`
 
@@ -560,9 +556,9 @@ function EventLine({ e, c }: { e: SupportEvent; c: SupportDetail['conversation']
 }
 
 /** The agent's ticket brief, folded: its own summary, above the messages and never in place of them. */
-function AiSummary({ brief }: { brief: SupportBrief }) {
+function AiSummary({ brief, subject }: { brief: SupportBrief; subject: string }) {
   return <details className="sinbox-summary">
-    <summary><Bot size={14} aria-hidden="true" /><span className="sinbox-summary__label">AI summary</span><span className="sinbox-summary__title">{brief.title}</span><ChevronRight size={14} aria-hidden="true" className="sinbox-summary__chevron" /></summary>
+    <summary><Bot size={14} aria-hidden="true" /><span className="sinbox-summary__label">AI summary</span>{brief.title !== subject && <span className="sinbox-summary__title">{brief.title}</span>}<ChevronRight size={14} aria-hidden="true" className="sinbox-summary__chevron" /></summary>
     <dl className="sinbox-summary__body">
       <div><dt>Summary</dt><dd>{brief.summary}</dd></div>
       {brief.ask && <div><dt>What they asked</dt><dd>{brief.ask}</dd></div>}
@@ -588,7 +584,7 @@ function Transcript({ detail, canAct, actions, composer }: { detail: SupportDeta
   // A fresh reply starts from an empty box: nothing of the held answer is carried over.
   const edit = (m: SupportMessage, fresh: boolean) => { updateInboxDraft(user, detail.conversation.id, () => ({ text: fresh ? '' : m.text.trim(), key: crypto.randomUUID(), mode: 'reply', draftOf: m.id, failed: null })); composer.current?.focus('reply') }
   return <div className="sinbox-transcript">
-    {detail.brief && <AiSummary brief={detail.brief} />}
+    {detail.brief && <AiSummary brief={detail.brief} subject={titleOf(detail.conversation)} />}
     {detail.earlierMessages > 0 && <p className="sinbox-earlier">{number(detail.earlierMessages)} earlier {detail.earlierMessages === 1 ? 'message isn’t' : 'messages aren’t'} shown.</p>}
     {entries.length ? <ol className="sinbox-timeline">{entries.map(entry => entry.event ? <EventLine key={entry.key} e={entry.event} c={detail.conversation} /> : <Message key={entry.key} m={entry.message} detail={detail} canAct={canAct} actions={actions} onEdit={edit} />)}</ol>
       : <EmptyState title="No messages yet" />}
@@ -598,8 +594,7 @@ function Transcript({ detail, canAct, actions, composer }: { detail: SupportDeta
 
 type ComposerHandle = { focus: (mode?: ComposeMode) => void }
 type ComposeMode = 'reply' | 'note'
-// The staff reply, or an internal note. While the agent is handling the conversation a reply waits behind Take over (r),
-// or, when the agent is blocked, behind Retry now; sending a reply pauses the agent. A note needs no take-over and
+// The staff reply, or an internal note. Sending a reply pauses the agent if it is active; typing does not. A note
 // changes nothing for the customer or the agent. What is typed, and a reply that failed with why, stay with the
 // conversation until sent or discarded, wherever staff go meanwhile.
 const Composer = forwardRef<ComposerHandle, { detail: SupportDetail; actions: Actions }>(function Composer({ detail, actions }, ref) {
@@ -607,19 +602,11 @@ const Composer = forwardRef<ComposerHandle, { detail: SupportDetail; actions: Ac
   const draft = useSyncExternalStore(subscribeInboxDrafts, () => inboxDraft(user, c.id)), text = draft?.text ?? ''
   // Closed, or agent feedback (api/src/feedback.ts, filed by an agent's credential): nobody to reply to, so notes only.
   const feedback = c.channel === 'agent_feedback', closed = c.status === 'closed' || feedback, mode: ComposeMode = closed ? 'note' : draft?.mode ?? 'reply'
-  const [taken, setTaken] = useState(false)
   const field = useRef<HTMLTextAreaElement>(null)
   const setMode = (next: ComposeMode) => updateInboxDraft(user, c.id, () => ({ mode: next }))
-  const take = (next: ComposeMode = 'reply') => { if (next === 'reply') setTaken(true); if (next !== mode) setMode(next); requestAnimationFrame(() => field.current?.focus()) }
-  useImperativeHandle(ref, () => ({ focus: take }), [mode])
-  const handling = c.agentState === 'active'
-  if (mode === 'reply' && handling && !taken && !text && !draft?.failed) {
-    const blocked = c.blockedWork > 0, noReply = c.needsYou?.reasons.includes('no_reply') ?? false
-    return <div className="sinbox-composer sinbox-composer--idle" data-blocked={blocked || noReply || undefined}>
-      <span>{blocked ? 'The agent is blocked: its work here is waiting.' : noReply ? 'No reply sent: the customer is still waiting for one.' : 'The agent is handling this.'}</span>
-      <span className="cluster">{blocked && <Button onClick={() => void actions.wake(c)}>Retry now</Button>}<Button variant="ghost" onClick={() => take('note')}>Add note</Button><Button onClick={() => take('reply')}>Take over</Button></span>
-    </div>
-  }
+  const focus = (next: ComposeMode = 'reply') => { if (next !== mode && !closed) setMode(next); requestAnimationFrame(() => field.current?.focus()) }
+  useImperativeHandle(ref, () => ({ focus }), [mode, closed])
+  const handling = c.agentState === 'active', blocked = !feedback && c.blockedWork > 0
   const note = mode === 'note', offline = !note && !detail.replyAvailable
   function send(event?: FormEvent) {
     event?.preventDefault()
@@ -643,9 +630,10 @@ const Composer = forwardRef<ComposerHandle, { detail: SupportDetail; actions: Ac
     : c.channel === 'email' ? <>Replying as {me} · an email in this thread{target.address ? <> to <PrivateAddress value={target.address} /></> : ''}, from {productName} support{!target.verified && '. Their email didn’t pass DMARC, so it may not be delivered'}{handling ? '. Sending pauses the agent.' : '.'}</>
     : <>Replying as {me} in their chat{target.address ? <> (emailed to <PrivateAddress value={target.address} /> if it’s closed)</> : ''}{handling ? '. Sending pauses the agent.' : '.'}</>
   return <form className="sinbox-composer" data-mode={mode} data-filled={text ? true : undefined} data-unavailable={offline || undefined} onSubmit={send}>
+    {blocked && <div className="sinbox-composer__blocked"><span>The agent’s work here is stuck.</span><Button size="sm" onClick={() => void actions.wake(c)}>Retry now</Button></div>}
     {!closed && <div className="sinbox-composer__modes" role="group" aria-label="Write">
-      <button type="button" aria-pressed={!note} onClick={() => take('reply')}>Reply</button>
-      <button type="button" aria-pressed={note} onClick={() => take('note')}>Note</button>
+      <button type="button" aria-pressed={!note} onClick={() => focus('reply')}>Reply</button>
+      <button type="button" aria-pressed={note} onClick={() => focus('note')}>Note</button>
     </div>}
     {editing && <p className="sinbox-composer__editing">{editing.heldReason && freshOnly[editing.heldReason] ? 'A fresh reply instead of the agent’s held answer, which can’t be sent.' : 'Editing the agent’s held answer: sending it goes out as your reply.'} <button type="button" onClick={() => updateInboxDraft(user, c.id, () => ({ draftOf: null }))}>Keep it separate</button></p>}
     <Textarea ref={field} aria-label={note ? 'Internal note' : 'Reply'} placeholder={note ? 'Add an internal note' : `Reply to ${name}`} value={text} maxLength={8000} disabled={offline}
