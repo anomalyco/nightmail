@@ -33391,7 +33391,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const unset = rampLines(null);
       assert.deepEqual([unset.blocklistPause, unset.domainStop, unset.planHealth], [null, null, false]);
       const original = runtime.config.rampLines;
-      runtime.config.rampLines = { blocklistPause: {}, domainStop: {}, planHealth: true };
+      // The first day's 100 are drawn from the list at random (about 20 at the dead domain): stopping after 5 results there keeps it certain.
+      runtime.config.rampLines = { blocklistPause: {}, domainStop: { sent: 5 }, planHealth: true };
       t.after(() => { runtime.config.rampLines = original; });
       const list = ok(await local('POST', '/v1/lists', { name: unique('guards') }), 201);
       // 150 subscribers at a domain that no longer takes mail, and 600 elsewhere.
@@ -33418,7 +33419,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const sentTo = async (domain: string) => (await db.query("SELECT count(*)::int AS n FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@' || $2", [campaign.id, domain])).rows[0].n;
       await db.query("UPDATE sending_emails SET status = CASE WHEN to_addresses->>0 LIKE '%@' || $2 THEN 'bounced' ELSE 'delivered' END, provider_id = 'sim_' || id WHERE campaign_id = $1", [campaign.id, dead]);
       const deadFirst = await sentTo(dead);
-      assert.ok(deadFirst >= 20, String(deadFirst));
+      assert.ok(deadFirst >= 5, String(deadFirst));
       await nextWindow();
       // The same run checked the campaign, stopped the domain, then released the next day.
       assert.deepEqual((await db.query('SELECT domain, resolved, bounced FROM campaign_stopped_domains WHERE campaign_id = $1', [campaign.id])).rows, [{ domain: dead, resolved: deadFirst, bounced: deadFirst }]);
