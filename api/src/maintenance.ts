@@ -333,6 +333,8 @@ async function retentionDrains(runtime: Runtime): Promise<Drain[]> {
     // Delivery history (src/delivery-history.ts): a recipient domain 180 days after a workspace last mailed it; blocklist counts after 180 days.
     expired('delivery_domain_stats', 'delivery_domain_stats', at('last_seen'), sql`last_seen < now() - interval '180 days'`),
     expired('delivery_blocklist_daily', 'delivery_blocklist_daily', at('day'), sql`day < current_date - 180`),
+    // Recipient domains campaigns stopped releasing to (src/send-guards.ts), 90 days on.
+    expired('campaign_stopped_domains', 'campaign_stopped_domains', at('stopped_at'), sql`stopped_at < now() - interval '90 days'`),
     // The audit trail past its retention (src/audit.ts RETENTION); the table refuses to delete anything earlier. No row
     // locks: the application may not update it (42501), and only the hourly run takes it.
     { name: 'audit_events', oldest: sql`SELECT min(retain_until) FROM audit_events WHERE retain_until <= now()`, statement: () => sql`WITH gone AS (DELETE FROM audit_events WHERE id IN

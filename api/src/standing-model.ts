@@ -500,23 +500,32 @@ export type ReadinessFacts = {
  *    maxBatches days. minimumSplit: a send the review recommends a ramp for is split into two days or more when larger than this.
  *  - firstBatch: a ramp's first day starts with this many, then waits waitMinutes for their bounces and rejections before
  *    the rest of the day's batch.
+ *  - blocklistPause: a campaign pauses (BLOCKLISTED) once `replies` replies naming a blocklist arrived in windowMinutes;
+ *    the sender can resume it once none has arrived for windowMinutes, an operator any time (src/send-guards.ts).
+ *  - domainStop: a campaign stops releasing to a recipient domain where, of the mail it sent there in windowMinutes, at
+ *    least `sent` have a result and bouncedShare or more of those bounced for good (never a large mailbox provider).
  */
 export type RampLines = {
   newRegistrationDays: number; usualJump: number; minimumSplit: number;
   young: { first: number; cleanFactor: number; growth: number; maxBatches: number };
   established: { first: number; cleanFactor: number; growth: number; maxBatches: number };
   firstBatch: { size: number; waitMinutes: number };
+  blocklistPause: { replies: number; windowMinutes: number };
+  domainStop: { sent: number; bouncedShare: number; windowMinutes: number };
 };
 export const RAMP_LINES: RampLines = {
   newRegistrationDays: RAMP.readiness.newDomainDays, usualJump: RAMP.readiness.recommended.jump, minimumSplit: 2_000,
   young: { first: RAMP.plan.firstBatch, cleanFactor: RAMP.plan.cleanFactor, growth: RAMP.plan.growth, maxBatches: RAMP.plan.maxBatches },
   established: { first: RAMP.plan.firstBatch, cleanFactor: RAMP.plan.cleanFactor, growth: RAMP.plan.growth, maxBatches: RAMP.plan.maxBatches },
   firstBatch: { size: 2_000, waitMinutes: 60 },
+  blocklistPause: { replies: 3, windowMinutes: 30 },
+  domainStop: { sent: 20, bouncedShare: 0.8, windowMinutes: 120 },
 };
 /** RAMP_LINES with an override's values. */
 export function rampLines(override: { [K in keyof RampLines]?: RampLines[K] extends object ? Partial<RampLines[K]> : RampLines[K] } | null | undefined): RampLines {
   if (!override) return RAMP_LINES;
-  return { ...RAMP_LINES, ...override, young: { ...RAMP_LINES.young, ...override.young }, established: { ...RAMP_LINES.established, ...override.established }, firstBatch: { ...RAMP_LINES.firstBatch, ...override.firstBatch } } as RampLines;
+  return { ...RAMP_LINES, ...override, young: { ...RAMP_LINES.young, ...override.young }, established: { ...RAMP_LINES.established, ...override.established }, firstBatch: { ...RAMP_LINES.firstBatch, ...override.firstBatch },
+    blocklistPause: { ...RAMP_LINES.blocklistPause, ...override.blocklistPause }, domainStop: { ...RAMP_LINES.domainStop, ...override.domainStop } } as RampLines;
 }
 export const READINESS_REASONS = ['NEW_DOMAIN', 'SIZE_JUMP', 'NO_HISTORY', 'RISKY_LIST', 'NEVER_MAILED', 'NO_DMARC', 'BOUNCES', 'COMPLAINTS', 'NEW_REGISTRATION', 'NEW_HERE', 'USUAL_JUMP', 'NEW_LINK_DOMAIN', 'BLOCKLISTED_BEFORE', 'BLOCKLIST_UNCOUNTED'] as const;
 export type ReadinessReason = (typeof READINESS_REASONS)[number];

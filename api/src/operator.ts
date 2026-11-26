@@ -139,11 +139,11 @@ export function registerOperator(app: App) {
     // The queue: anything above ok, watched workspaces and quarantined campaigns, most severe first. A search spans all.
     const { rows } = await c.env.db.execute<z.infer<typeof QueueItem>>(sql`SELECT w.id AS "workspaceId",w.name,s.step,s.since::text AS since,s.score::float AS score,s.daily_limit AS "dailyLimit",
         coalesce((SELECT json_agg(json_build_object('code',r->>'code','message',r->>'message')) FROM jsonb_array_elements(s.reasons) r),'[]') AS reasons,pc.paused_at IS NOT NULL AS paused,
-        (SELECT count(*)::int FROM sending_campaigns sc WHERE sc.workspace_id=w.id AND sc.state='paused' AND sc.pause_reason->>'code' IN ('LIST_QUALITY','BOUNCE_RATE_HIGH','COMPLAINT_RATE_HIGH')) AS quarantined,
+        (SELECT count(*)::int FROM sending_campaigns sc WHERE sc.workspace_id=w.id AND sc.state='paused' AND sc.pause_reason->>'code' IN ('LIST_QUALITY','BOUNCE_RATE_HIGH','COMPLAINT_RATE_HIGH','BLOCKLISTED')) AS quarantined,
         s.watch,jsonb_array_length(s.strikes)::int AS strikes
       FROM sender_standing s JOIN workspaces w ON w.id=s.workspace_id JOIN provider_connections pc ON pc.workspace_id=s.workspace_id AND pc.kind='shared'
       WHERE ${search ? sql`(w.id=${q.q} OR w.name ILIKE ${search})` : q.step ? sql`s.step=${q.step}` : sql`(s.step<>'ok' OR s.watch OR EXISTS (SELECT FROM sending_campaigns sc WHERE sc.workspace_id=w.id AND sc.state='paused'
-        AND sc.pause_reason->>'code' IN ('LIST_QUALITY','BOUNCE_RATE_HIGH','COMPLAINT_RATE_HIGH')))`}
+        AND sc.pause_reason->>'code' IN ('LIST_QUALITY','BOUNCE_RATE_HIGH','COMPLAINT_RATE_HIGH','BLOCKLISTED')))`}
       ORDER BY CASE s.step WHEN 'pause' THEN 0 WHEN 'restrict' THEN 1 WHEN 'warn' THEN 2 WHEN 'notice' THEN 3 ELSE 4 END,s.since LIMIT ${q.limit}`);
     return c.json({ data: rows }, 200);
   });

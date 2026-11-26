@@ -183,6 +183,35 @@ fi
 unset grant
 if [[ $postmaster == off || $postmaster == 'not set' ]]; then obsolete+=(NIGHTMAIL_POSTMASTER_CREDENTIALS); fi
 echo "Gmail Postmaster: nightmail/$STAGE/NIGHTMAIL_POSTMASTER_CREDENTIALS is $postmaster."
+# Private lines (api/src/list-risk-lines.ts, api/src/ramp-lines.ts), optional: nightmail/<stage>/NIGHTMAIL_LIST_RISK and
+# nightmail/<stage>/NIGHTMAIL_RAMP, each a JSON object: the list-risk measure's band lines, and the send review's ramp
+# sizing and a campaign's send guards. As the Postmaster grant above: set and a JSON object of at most 4000 characters,
+# bound with the app secrets as one line; not set (or scheduled for deletion), the Worker keeps none and the code's
+# defaults apply (one left from before is deleted here); malformed, the binding is removed. Any other read failure
+# leaves the Worker as it is. None of these fails the deploy. Not credentials, but kept out of the repository and the log.
+for name in NIGHTMAIL_LIST_RISK NIGHTMAIL_RAMP; do
+  lines_err="$tmp/$name.err"
+  lines_state=off
+  if value=$(aws secretsmanager get-secret-value --secret-id "nightmail/$STAGE/$name" --query SecretString --output text 2>"$lines_err"); then
+    if value=$(jq -ce 'select(type=="object")' <<<"$value" 2>/dev/null) && (( ${#value} <= 4000 )); then
+      echo "::add-mask::$value"
+      # shellcheck disable=SC2016 # A jq program: $ENV is jq's, not the shell's.
+      with_value=$(LINES_NAME=$name LINES_VALUE=$value jq '. + {($ENV.LINES_NAME): $ENV.LINES_VALUE}' "$secrets_file") && printf '%s\n' "$with_value" > "$secrets_file"
+      unset with_value
+      lines_state=bound
+    else
+      echo "::warning::nightmail/$STAGE/$name is not a JSON object of at most 4000 characters: its defaults apply."
+    fi
+  elif grep -qE 'ResourceNotFoundException|marked for deletion' "$lines_err"; then
+    lines_state='not set'
+  else
+    lines_state=unknown
+    echo "::warning::nightmail/$STAGE/$name could not be read; the Worker's value is left as it was."
+  fi
+  unset value
+  if [[ $lines_state == off || $lines_state == 'not set' ]]; then obsolete+=("$name"); fi
+  echo "Private lines: nightmail/$STAGE/$name is $lines_state."
+done
 if [[ -n ${link_token:-} ]]; then
   # shellcheck disable=SC2016 # A jq program: $ENV is jq's, not the shell's.
   with_link=$(NIGHTMAIL_LINK_SAAS_TOKEN=$link_token jq '. + ($ENV | {NIGHTMAIL_LINK_SAAS_TOKEN})' "$secrets_file") && printf '%s\n' "$with_link" > "$secrets_file"
