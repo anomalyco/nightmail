@@ -101,7 +101,7 @@ export interface AudiencePreview { matched: number; suppressed: number; unsubscr
 type HistoryFigures = { largestSend: number; sent: number; bounceRate: number | null; complaintRate: number | null }
 export interface CampaignReadiness {
   verdict: 'ready' | 'ramp_recommended' | 'ramp_required'; summary: string | null; reasons: { code: string; message: string }[]
-  domain: { name: string; firstSeenAt: ISODate | null; ageDays: number | null; dmarc: 'reject' | 'quarantine' | 'none' | 'missing' | 'invalid' | null; mailFrom: 'verified' | 'pending' | 'failed' | 'not_configured'
+  domain: { name: string; firstSeenAt: ISODate | null; ageDays: number | null; registeredAt?: string | null; registeredDays?: number | null; dmarc: 'reject' | 'quarantine' | 'none' | 'missing' | 'invalid' | null; mailFrom: 'verified' | 'pending' | 'failed' | 'not_configured'
     linkHost: 'not_configured'; ownLinkHost: { hostname: string; active: boolean } | null; linkOrigin: string | null }
   history: { workspace: HistoryFigures; domain: HistoryFigures }
   list: { recipients: number; risky: number; neverMailed: number | null; createdAt: ISODate | null; lastSentAt: ISODate | null; lastImport: { at: ISODate; contacts: number; consent: string | null } | null }
