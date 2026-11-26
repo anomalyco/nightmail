@@ -34351,12 +34351,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // the preview answers, and a launch goes on with it.
       runtime.config.rampLines = { get established(): never { throw new Error('Sizing failed.'); } } as never;
       const unsized = await create('Unsized'), soft = ok(await local('GET', `/v1/campaigns/${unsized.id}/audience?readiness=true`)).readiness;
-      assert.deepEqual([soft.verdict, soft.required?.reason, soft.plan.batches, soft.findings.at(-1).code], ['ramp_required', 'NEW_DOMAIN', review.plan.batches, 'PLAN_UNAVAILABLE']);
+      assert.deepEqual([soft.verdict, soft.required?.reason, soft.plan.batches, typeof soft.unavailable, sized.unavailable], ['ramp_required', 'NEW_DOMAIN', review.plan.batches, 'string', undefined]);
       const tiny = ok(await local('POST', '/v1/campaigns', { name: 'Small, unsized', from, subject: 'Small', html: '<p>Fixture.</p>', audience: { listId: small.id } }), 201);
       const tinyReview = ok(await local('GET', `/v1/campaigns/${tiny.id}/audience?readiness=true`)).readiness;
-      assert.deepEqual([tinyReview.verdict, tinyReview.plan, tinyReview.findings.map((f: Json) => f.code).includes('PLAN_UNAVAILABLE')], ['ramp_recommended', null, true]);
+      assert.deepEqual([tinyReview.verdict, tinyReview.plan, tinyReview.summary, typeof tinyReview.unavailable], ['ramp_recommended', null, tinyReview.unavailable, 'string']);
       const softLaunch = ok(await local('POST', `/v1/campaigns/${unsized.id}/send`, { revision: unsized.revision, pacing: { plan: 'recommended', rateShare: 1 } }), 202);
-      assert.deepEqual([softLaunch.readiness.findings.at(-1).code, softLaunch.readiness.plan.batches], ['PLAN_UNAVAILABLE', review.plan.batches]);
+      assert.deepEqual([typeof softLaunch.readiness.unavailable, softLaunch.readiness.plan.batches], ['string', review.plan.batches]);
       ok(await local('POST', `/v1/campaigns/${unsized.id}/cancel`));
       runtime.config.rampLines = {};
     });

@@ -538,7 +538,7 @@ export function rampLines(override: import('./ramp-lines.js').RampLinesOverride 
 }
 /** The reason codes CampaignReadiness.reasons has always had: kept as they are for clients that switch on them. */
 export const LEGACY_READINESS_REASONS = ['NEW_DOMAIN', 'SIZE_JUMP', 'NO_HISTORY', 'RISKY_LIST', 'NEVER_MAILED', 'NO_DMARC', 'BOUNCES', 'COMPLAINTS'] as const;
-export const READINESS_REASONS = [...LEGACY_READINESS_REASONS, 'NEW_REGISTRATION', 'NEW_HERE', 'USUAL_JUMP', 'NEW_LINK_DOMAIN', 'BLOCKLISTED_BEFORE', 'BLOCKLIST_UNCOUNTED', 'PLAN_UNAVAILABLE'] as const;
+export const READINESS_REASONS = [...LEGACY_READINESS_REASONS, 'NEW_REGISTRATION', 'NEW_HERE', 'USUAL_JUMP', 'NEW_LINK_DOMAIN', 'BLOCKLISTED_BEFORE', 'BLOCKLIST_UNCOUNTED'] as const;
 /** How a newer reason reads in the legacy list; none for a blocklist (findings and required.reason say it). */
 export const LEGACY_REASON: Partial<Record<(typeof READINESS_REASONS)[number], (typeof LEGACY_READINESS_REASONS)[number]>> = { NEW_REGISTRATION: 'NEW_DOMAIN', NEW_HERE: 'NEW_DOMAIN', NEW_LINK_DOMAIN: 'NEW_DOMAIN', USUAL_JUMP: 'SIZE_JUMP' };
 export type ReadinessReason = (typeof READINESS_REASONS)[number];

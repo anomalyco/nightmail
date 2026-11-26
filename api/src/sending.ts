@@ -524,7 +524,8 @@ const CampaignReadiness = z.object({
   verdict: z.enum(['ready', 'ramp_recommended', 'ramp_required']).describe('ready: send as you like. ramp_recommended: the plan is suggested. ramp_required: a Hosted send this large, from a new domain or far above anything its domain has sent, goes out with the plan (pacing.plan "recommended"), a daily limit no larger than its first day, or a confirmed consent source (consent); 422 RAMP_REQUIRED otherwise.'),
   summary: z.string().nullable().describe('Why, in one or two plain sentences, when a ramp is recommended or required.'),
   reasons: z.array(z.object({ code: z.enum(LEGACY_READINESS_REASONS), message: z.string() })).describe('The findings behind the verdict in the original codes, one per code: a newly registered domain, one new here and a new link domain read NEW_DOMAIN, a jump over the usual day SIZE_JUMP; blocklist findings appear only in findings. Prefer findings.'),
-  findings: z.array(z.object({ code: z.enum(READINESS_REASONS), message: z.string() })).optional().describe('Every finding behind the verdict, with its own code: NEW_REGISTRATION (registered recently, from public registry data), NEW_HERE (registered long ago, new to this workspace), NEW_DOMAIN (added recently, registration not known), USUAL_JUMP, NEW_LINK_DOMAIN, BLOCKLISTED_BEFORE (an earlier send drew replies naming a blocklist and none has finished without since), BLOCKLIST_UNCOUNTED (a recent send\'s blocklist replies aren\'t counted yet, so it isn\'t taken for clean), PLAN_UNAVAILABLE (the plan couldn\'t be sized just now, so the review leaves that part out and recommends a ramp at least), and the original codes.'),
+  findings: z.array(z.object({ code: z.enum(READINESS_REASONS), message: z.string() })).optional().describe('Every finding behind the verdict, with its own code: NEW_REGISTRATION (registered recently, from public registry data), NEW_HERE (registered long ago, new to this workspace), NEW_DOMAIN (added recently, registration not known), USUAL_JUMP, NEW_LINK_DOMAIN, BLOCKLISTED_BEFORE (an earlier send drew replies naming a blocklist and none has finished without since), BLOCKLIST_UNCOUNTED (a recent send\'s blocklist replies aren\'t counted yet, so it isn\'t taken for clean), and the original codes.'),
+  unavailable: z.string().optional().describe('Present when part of the review couldn\'t be worked out just now (sizing the plan): what was left out, in a sentence. The review is then the one without that part, and its verdict is at least ramp_recommended.'),
   domain: z.object({ name: z.string(), firstSeenAt: z.string().nullable().describe('When the From domain (or the domain it is under) was added to this workspace.'), ageDays: z.number().int().nullable().describe('Days since it was added to this workspace: its history here, not its age.'),
     registeredAt: z.string().nullable().optional().describe('When its registrable domain was registered (YYYY-MM-DD), from public registry data; null when not known (never taken for old).'),
     registeredDays: z.number().int().nullable().optional().describe('Days since registeredAt; null when not known.'),
@@ -707,7 +708,7 @@ async function sendEstimates(runtime: Runtime, db: DbExecutor, a: Actor, rows: C
 type ReviewedAudience = { recipients: number; matched: number | null; risky: number; neverMailed: number | null; lastSent: string | null };
 /**
  * The send review. With the private ramp lines (NIGHTMAIL_RAMP) it sizes the plan by them; that part is optional, so if
- * it fails (an error or a statement past its limit) the review is the one without them, plus PLAN_UNAVAILABLE, and never
+ * it fails (an error or a statement past its limit) the review is the one without them, says so (unavailable), and never
  * less cautious than ramp_recommended: a preview never fails on it, and a launch goes on with that review (a ramp it
  * requires without the lines is still required). `savepoint`: `db` is a transaction (a launch), which a failed
  * statement would otherwise end.
@@ -723,9 +724,8 @@ async function sendReadiness(runtime: Runtime, db: DbExecutor, a: Actor, row: { 
     if (o.savepoint) await db.execute(sql`ROLLBACK TO SAVEPOINT send_review_ramp`);
     log('error', { code: 'SEND_REVIEW_PLAN_UNAVAILABLE', campaignId: row.id, errorType: (error as Error)?.name ?? typeof error, sqlState: (error as { code?: unknown })?.code ?? null });
     const plain = await reviewSend(runtime, db, a, row, audience, false);
-    const message = 'This send\'s plan couldn\'t be sized just now, so this review leaves that part out and recommends sending in batches.';
-    return { ...plain, verdict: plain.verdict === 'ready' ? 'ramp_recommended' as const : plain.verdict, summary: plain.summary ?? message,
-      findings: [...plain.findings ?? [], { code: 'PLAN_UNAVAILABLE' as const, message }] };
+    const unavailable = 'This send\'s plan couldn\'t be sized just now, so this review leaves that part out and recommends sending in batches.';
+    return { ...plain, verdict: plain.verdict === 'ready' ? 'ramp_recommended' as const : plain.verdict, summary: plain.summary ?? unavailable, unavailable };
   }
 }
 async function reviewSend(runtime: Runtime, db: DbExecutor, a: Actor, row: { id: string; draft: CampaignDraft }, audience: ReviewedAudience, tuned: boolean) {
@@ -801,7 +801,6 @@ async function reviewSend(runtime: Runtime, db: DbExecutor, a: Actor, row: { id:
     NEW_LINK_DOMAIN: () => `Its links go on ${link?.name}, registered ${ago(link?.registeredDays ?? null)}.`,
     BLOCKLISTED_BEFORE: () => `Replies to this workspace's mail ${linkHost && linkHost !== domain ? `from ${domain} or with links on ${linkHost}` : `from ${domain}`} named a blocklist on ${f!.blocked_day}, and no send has finished without one since.`,
     BLOCKLIST_UNCOUNTED: () => `The last send's blocklist replies aren't counted yet, so it isn't treated as a clean send.`,
-    PLAN_UNAVAILABLE: () => `This send's plan couldn't be sized just now.`,
     USUAL_JUMP: () => `This send is ${fmt(Math.round(judged.usualJump!))} times this workspace's usual day (${fmt(usualDay)} emails).`,
     SIZE_JUMP: () => `This send is ${fmt(Math.round(judged.jump!))} times the largest campaign ${domain} sent in the last ${r.lookbackDays} days (${fmt(f!.dom_largest)}).`,
     NO_HISTORY: () => f!.dom_largest ? `${domain}'s largest campaign in the last ${r.lookbackDays} days went to ${fmt(f!.dom_largest)} people.` : `${domain} hasn't sent a campaign in the last ${r.lookbackDays} days.`,
