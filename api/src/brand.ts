@@ -137,3 +137,5 @@ export const legacyClientIpHeaders = ['x-bane-client-ip', 'x-opensend-client-ip'
  *  address's mail with the inbox routes. The cutover removes these and lets /v1/inboxes list and create addresses, which its
  *  Inbox schema (replyOnly, retention mode) can't describe without a breaking change. */
 export const legacyAddressOperations = ['listInboundAddresses', 'createInboundAddress', 'getInboundAddress', 'updateInboundAddress', 'deleteInboundAddress'] as const;
+
+// Disposable landing-batch CI proof; no runtime change.
