@@ -48,7 +48,7 @@
   // pages' phone picker, whose options are addresses) goes to that page, and a copy button (data-shell-copy names the
   // element whose text it copies) copies at once, as the app's do, and shows it has (data-copied, the app's mark).
   shell.addEventListener('change', event => {
-    const picker = event.isTrusted && event.target instanceof Element && event.target.closest('select[data-shell-navigate]')
+    const picker = event.target instanceof Element && event.target.closest('select[data-shell-navigate]')
     if (picker && picker.value) location.assign(picker.value)
   })
   shell.addEventListener('click', event => {

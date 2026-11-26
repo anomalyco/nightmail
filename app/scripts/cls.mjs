@@ -678,6 +678,7 @@ const phonePages = new Set([
   'Docs · signed out',
   'Docs · signed out operation',
   'Docs · signed out operation far down',
+  'Docs · signed out operation, picked on a phone',
   'Docs · operation',
   'Signed out',
   'Support chat',
