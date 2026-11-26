@@ -39,15 +39,19 @@ try {
       const phone = width < 600
       const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, deviceScaleFactor: phone ? 2 : 1, isMobile: phone, hasTouch: phone, colorScheme: scheme })
       const page = await context.newPage()
-      let path = ''
+      let path = '', failed = []
       page.on('pageerror', error => problems.push(`${path} (${view}): ${error.message.split('\n')[0]}`))
+      // What the page asked for that didn't come, named when it isn't painted or the app doesn't take over.
+      page.on('response', response => { if (response.status() >= 400 && !response.url().endsWith('/v1/me')) failed.push(`${response.status()} ${new URL(response.url()).pathname}`) })
+      page.on('requestfailed', request => failed.push(`${request.failure()?.errorText ?? 'failed'} ${new URL(request.url()).pathname}`))
+      const why = async () => { const state = await page.evaluate(() => ({ shell: document.documentElement.dataset.shell ?? 'on', hint: localStorage.getItem('nightmail.session') })).catch(() => ({})); return `shell ${state.shell}, session hint ${state.hint}${failed.length ? `; ${failed.slice(0, 4).join(', ')}` : ''}` }
       for (let i = lane; i < paths.length; i += lanes) {
-        path = paths[i]
-        await page.goto(fx.origin + path, { waitUntil: 'load', timeout: 30_000 })
-        if (!await page.evaluate(() => !!document.getElementById('page-shell'))) { problems.push(`${path} (${view}): not painted`); continue }
+        path = paths[i], failed = []
+        const response = await page.goto(fx.origin + path, { waitUntil: 'load', timeout: 30_000 })
+        if (!await page.evaluate(() => !!document.getElementById('page-shell'))) { problems.push(`${path} (${view}): not painted (HTTP ${response?.status()}; ${await why()})`); continue }
         const before = await place(page), pressed = Date.now()
         await page.keyboard.press('Shift')
-        if (!await page.waitForFunction(() => !document.getElementById('page-shell'), null, { timeout: 30_000 }).then(() => true, () => false)) { problems.push(`${path} (${view}): the app never took over`); continue }
+        if (!await page.waitForFunction(() => !document.getElementById('page-shell'), null, { timeout: 30_000 }).then(() => true, () => false)) { problems.push(`${path} (${view}): the app never took over (${await why()})`); continue }
         slowest = Math.max(slowest, Date.now() - pressed)
         const after = await place(page)
         if (after.words !== before.words) {
