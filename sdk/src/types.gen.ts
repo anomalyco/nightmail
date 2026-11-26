@@ -1973,6 +1973,19 @@ export type CampaignDelivery = {
          * With a plan: the batch the current window releases, from 1.
          */
         batch: number | null;
+        /**
+         * With a plan: its first day's small batch and the wait after it.
+         */
+        firstBatch?: {
+            /**
+             * Recipients the first day starts with.
+             */
+            size: number;
+            /**
+             * Minutes it then waits for their bounces and rejections before the rest of the day's batch.
+             */
+            waitMinutes: number;
+        } | null;
     };
     /**
      * The consent source confirmed at launch, if any.
@@ -2357,7 +2370,7 @@ export type CampaignAudienceCounts = {
          * Every finding behind the verdict.
          */
         reasons: Array<{
-            code: 'NEW_DOMAIN' | 'SIZE_JUMP' | 'NO_HISTORY' | 'RISKY_LIST' | 'NEVER_MAILED' | 'NO_DMARC' | 'BOUNCES' | 'COMPLAINTS' | 'NEW_REGISTRATION' | 'NEW_HERE' | 'USUAL_JUMP' | 'NEW_LINK_DOMAIN';
+            code: 'NEW_DOMAIN' | 'SIZE_JUMP' | 'NO_HISTORY' | 'RISKY_LIST' | 'NEVER_MAILED' | 'NO_DMARC' | 'BOUNCES' | 'COMPLAINTS' | 'NEW_REGISTRATION' | 'NEW_HERE' | 'USUAL_JUMP' | 'NEW_LINK_DOMAIN' | 'BLOCKLISTED_BEFORE' | 'BLOCKLIST_UNCOUNTED';
             message: string;
         }>;
         domain: {
@@ -2517,12 +2530,28 @@ export type CampaignAudienceCounts = {
              */
             batches: Array<number>;
             /**
+             * The first day's small batch and wait, inside its batch; null when the first day is small already.
+             */
+            firstBatch?: {
+                /**
+                 * Recipients the first day starts with.
+                 */
+                size: number;
+                /**
+                 * Minutes it then waits for their bounces and rejections before the rest of the day's batch.
+                 */
+                waitMinutes: number;
+            } | null;
+            /**
              * How long the plan takes from its start, the hourly ramp included.
              */
             seconds: number | null;
         } | null;
         required: {
-            by: 'NEW_REGISTRATION' | 'NEW_DOMAIN' | 'SIZE_JUMP';
+            /**
+             * BLOCKLISTED: mail from this From domain or with these links drew replies naming a blocklist and no send has finished without any since; a consent confirmation does not waive it.
+             */
+            by: 'NEW_REGISTRATION' | 'BLOCKLISTED' | 'NEW_DOMAIN' | 'SIZE_JUMP';
             /**
              * The largest daily limit that counts as a ramp: the plan's first day.
              */
@@ -2670,7 +2699,7 @@ export type CampaignQueued = {
          * Every finding behind the verdict.
          */
         reasons: Array<{
-            code: 'NEW_DOMAIN' | 'SIZE_JUMP' | 'NO_HISTORY' | 'RISKY_LIST' | 'NEVER_MAILED' | 'NO_DMARC' | 'BOUNCES' | 'COMPLAINTS' | 'NEW_REGISTRATION' | 'NEW_HERE' | 'USUAL_JUMP' | 'NEW_LINK_DOMAIN';
+            code: 'NEW_DOMAIN' | 'SIZE_JUMP' | 'NO_HISTORY' | 'RISKY_LIST' | 'NEVER_MAILED' | 'NO_DMARC' | 'BOUNCES' | 'COMPLAINTS' | 'NEW_REGISTRATION' | 'NEW_HERE' | 'USUAL_JUMP' | 'NEW_LINK_DOMAIN' | 'BLOCKLISTED_BEFORE' | 'BLOCKLIST_UNCOUNTED';
             message: string;
         }>;
         domain: {
@@ -2830,12 +2859,28 @@ export type CampaignQueued = {
              */
             batches: Array<number>;
             /**
+             * The first day's small batch and wait, inside its batch; null when the first day is small already.
+             */
+            firstBatch?: {
+                /**
+                 * Recipients the first day starts with.
+                 */
+                size: number;
+                /**
+                 * Minutes it then waits for their bounces and rejections before the rest of the day's batch.
+                 */
+                waitMinutes: number;
+            } | null;
+            /**
              * How long the plan takes from its start, the hourly ramp included.
              */
             seconds: number | null;
         } | null;
         required: {
-            by: 'NEW_REGISTRATION' | 'NEW_DOMAIN' | 'SIZE_JUMP';
+            /**
+             * BLOCKLISTED: mail from this From domain or with these links drew replies naming a blocklist and no send has finished without any since; a consent confirmation does not waive it.
+             */
+            by: 'NEW_REGISTRATION' | 'BLOCKLISTED' | 'NEW_DOMAIN' | 'SIZE_JUMP';
             /**
              * The largest daily limit that counts as a ramp: the plan's first day.
              */

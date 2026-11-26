@@ -6232,6 +6232,27 @@
                   "null"
                 ],
                 "description": "With a plan: the batch the current window releases, from 1."
+              },
+              "firstBatch": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "size": {
+                    "type": "integer",
+                    "description": "Recipients the first day starts with."
+                  },
+                  "waitMinutes": {
+                    "type": "integer",
+                    "description": "Minutes it then waits for their bounces and rejections before the rest of the day's batch."
+                  }
+                },
+                "required": [
+                  "size",
+                  "waitMinutes"
+                ],
+                "description": "With a plan: its first day's small batch and the wait after it."
               }
             },
             "required": [
@@ -7356,7 +7377,9 @@
                         "NEW_REGISTRATION",
                         "NEW_HERE",
                         "USUAL_JUMP",
-                        "NEW_LINK_DOMAIN"
+                        "NEW_LINK_DOMAIN",
+                        "BLOCKLISTED_BEFORE",
+                        "BLOCKLIST_UNCOUNTED"
                       ]
                     },
                     "message": {
@@ -7697,6 +7720,27 @@
                     },
                     "description": "Recipients per day, in order: one batch a day, the most engaged first and never-mailed last."
                   },
+                  "firstBatch": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "size": {
+                        "type": "integer",
+                        "description": "Recipients the first day starts with."
+                      },
+                      "waitMinutes": {
+                        "type": "integer",
+                        "description": "Minutes it then waits for their bounces and rejections before the rest of the day's batch."
+                      }
+                    },
+                    "required": [
+                      "size",
+                      "waitMinutes"
+                    ],
+                    "description": "The first day's small batch and wait, inside its batch; null when the first day is small already."
+                  },
                   "seconds": {
                     "type": [
                       "integer",
@@ -7721,9 +7765,11 @@
                     "type": "string",
                     "enum": [
                       "NEW_REGISTRATION",
+                      "BLOCKLISTED",
                       "NEW_DOMAIN",
                       "SIZE_JUMP"
-                    ]
+                    ],
+                    "description": "BLOCKLISTED: mail from this From domain or with these links drew replies naming a blocklist and no send has finished without any since; a consent confirmation does not waive it."
                   },
                   "maxPerDay": {
                     "type": "integer",
@@ -8196,7 +8242,9 @@
                         "NEW_REGISTRATION",
                         "NEW_HERE",
                         "USUAL_JUMP",
-                        "NEW_LINK_DOMAIN"
+                        "NEW_LINK_DOMAIN",
+                        "BLOCKLISTED_BEFORE",
+                        "BLOCKLIST_UNCOUNTED"
                       ]
                     },
                     "message": {
@@ -8537,6 +8585,27 @@
                     },
                     "description": "Recipients per day, in order: one batch a day, the most engaged first and never-mailed last."
                   },
+                  "firstBatch": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "size": {
+                        "type": "integer",
+                        "description": "Recipients the first day starts with."
+                      },
+                      "waitMinutes": {
+                        "type": "integer",
+                        "description": "Minutes it then waits for their bounces and rejections before the rest of the day's batch."
+                      }
+                    },
+                    "required": [
+                      "size",
+                      "waitMinutes"
+                    ],
+                    "description": "The first day's small batch and wait, inside its batch; null when the first day is small already."
+                  },
                   "seconds": {
                     "type": [
                       "integer",
@@ -8561,9 +8630,11 @@
                     "type": "string",
                     "enum": [
                       "NEW_REGISTRATION",
+                      "BLOCKLISTED",
                       "NEW_DOMAIN",
                       "SIZE_JUMP"
-                    ]
+                    ],
+                    "description": "BLOCKLISTED: mail from this From domain or with these links drew replies naming a blocklist and no send has finished without any since; a consent confirmation does not waive it."
                   },
                   "maxPerDay": {
                     "type": "integer",
