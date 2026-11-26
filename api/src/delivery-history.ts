@@ -11,9 +11,11 @@ import { log, logError, type DbExecutor, type Runtime } from './core.js';
 // One writer: the hourly rollup below, under a lease, reads finished mail a day old or more (its feedback is in by then)
 // by a cursor over (created_at, id), a page at a time, and writes a page's sums and its cursor in one transaction, so a
 // message is counted once. It starts 30 days back, which is everything the log still holds. The send path and feedback
-// handling are untouched. Counted: mail SES accepted, to exactly one recipient (campaigns and nearly all API sends), not
-// simulated. Not counted: mail that waited more than a day between its creation and its sending (held by a pause or a
-// quota, or scheduled that far ahead): the cursor has passed it by then, and waiting for it would hold up everyone else.
+// handling are untouched. Opens, clicks and complaints that arrive after that day aren't counted here (the contact's
+// last_open_at and last_click_at still see them). Counted: mail SES accepted, to exactly one recipient (campaigns and
+// nearly all API sends), not simulated. Not counted: mail that waited more than a day between its creation and its
+// sending (held by a pause or a quota, or scheduled that far ahead): the cursor has passed it by then, and waiting for it
+// would hold up everyone else.
 
 export const BOUNCE_CLASSES = ['user_unknown', 'dead_domain', 'mailbox_full', 'blocklist', 'policy', 'reputation', 'auth', 'validation', 'other'] as const;
 export type BounceClass = (typeof BOUNCE_CLASSES)[number];
@@ -31,8 +33,9 @@ const BLOCKLISTS: [string, RegExp][] = [
   ['barracuda', /barracudacentral|(?<![a-z0-9])brbl(?![a-z0-9])|barracuda reputation/i],
   ['other', new RegExp(String.raw`(?<![a-z0-9])(?:block|black|deny)[ -]?list(?:ed)?(?![a-z0-9])|(?<![a-z0-9])dnsbl(?![a-z0-9])|${LISTED}(?<![a-z0-9])rbl(?![a-z0-9])`, 'i')],
 ];
-/** The reply without the addresses it quotes (<user@host> and bare user@host). */
-const withoutAddresses = (reply: string) => reply.replace(/<[^<>]*>/g, ' ').replace(/[^\s<>]+@[^\s<>]+/g, ' ');
+/** The reply's first 2,000 characters (the receiving server writes it, and its length), without the addresses it quotes
+ *  (<user@host> and bare user@host). Bounded so no reply can make the matching slow. */
+const withoutAddresses = (reply: string) => reply.slice(0, 2_000).replace(/<[^<>]*>/g, ' ').replace(/[^\s<>@]{1,64}@[^\s<>]+/g, ' ');
 export function blocklistNamed(reply: string | null | undefined): string | null {
   if (!reply) return null;
   const said = withoutAddresses(reply);
@@ -40,14 +43,16 @@ export function blocklistNamed(reply: string | null | undefined): string | null 
   return null;
 }
 
-const AUTH = /\b5\.7\.(?:26|27|509|515)\b|unauthenticated|\b(?:dmarc|spf|dkim)\b(?!=pass)[^.]{0,40}(?:fail|reject|policy)/i;
-const FULL = /\b[45]\.2\.2\b|mailbox (?:is )?full|over ?quota|quota (?:exceeded|full)|insufficient (?:system )?storage|out of storage/i;
-const DEAD_DOMAIN = /\b5\.1\.2\b|\b5\.4\.4\b|host (?:or domain name )?not found|domain (?:name )?(?:does not exist|not found|doesn't exist)|nxdomain|no mx|null mx|unrouteable|unroutable|name service error|no route to host/i;
-const USER_UNKNOWN = /\b5\.1\.[136]\b|user unknown|unknown (?:user|recipient)|no such (?:user|mailbox|recipient|address)|(?:mailbox|user|recipient|address|account) (?:does not exist|doesn't exist|not found|unavailable|disabled|is disabled|inactive)|invalid (?:recipient|mailbox|address)|not a valid (?:mailbox|address|recipient)/i;
+// An enhanced status code standing on its own, never digits inside an IP address or a version (10.5.1.3, 5.1.1.20).
+const code = (codes: string) => String.raw`(?<![\w.])(?:${codes})(?!\w|\.\d)`;
+const AUTH = new RegExp(code(String.raw`5\.7\.(?:26|27|509|515)`) + String.raw`|unauthenticated|\b(?:dmarc|spf|dkim)\b(?!=pass)[^.]{0,40}(?:fail|reject|policy)`, 'i');
+const FULL = new RegExp(code(String.raw`[45]\.2\.2`) + String.raw`|mailbox (?:is )?full|over ?quota|quota (?:exceeded|full)|insufficient (?:system )?storage|out of storage`, 'i');
+const DEAD_DOMAIN = new RegExp(code(String.raw`5\.1\.2|5\.4\.4`) + String.raw`|host (?:or domain name )?not found|domain (?:name )?(?:does not exist|not found|doesn't exist)|nxdomain|no mx|null mx|unrouteable|unroutable|name service error|no route to host`, 'i');
+const USER_UNKNOWN = new RegExp(code(String.raw`5\.1\.[136]`) + String.raw`|user unknown|unknown (?:user|recipient)|no such (?:user|mailbox|recipient|address)|(?:mailbox|user|recipient|address|account) (?:does not exist|doesn't exist|not found|unavailable|disabled|is disabled|inactive)|invalid (?:recipient|mailbox|address)|not a valid (?:mailbox|address|recipient)`, 'i');
 // 5.1.0 is used both for unknown recipients and for sender or spam rejections: only after the policy checks.
-const ADDRESS_FALLBACK = /\b5\.1\.0\b|recipient (?:address )?rejected|address rejected/i;
-const REPUTATION = /\b4\.7\.(?:28|650)\b|tss04|rate limit|too many (?:messages|connections|emails|recipients)|throttl|reputation|temporarily (?:deferred|rate)|grey ?list|gray ?list/i;
-const POLICY = /\b5\.7\.\d{1,3}\b|spam|policy|content|rejected by|message rejected|access denied|not accepted|security/i;
+const ADDRESS_FALLBACK = new RegExp(code(String.raw`5\.1\.0`) + String.raw`|recipient (?:address )?rejected|address rejected`, 'i');
+const REPUTATION = new RegExp(code(String.raw`4\.7\.(?:28|650)`) + String.raw`|tss04|rate limit|too many (?:messages|connections|emails|recipients)|throttl|reputation|temporarily (?:deferred|rate)|grey ?list|gray ?list`, 'i');
+const POLICY = new RegExp(code(String.raw`5\.7\.\d{1,3}`) + String.raw`|spam|policy|content|rejected by|message rejected|access denied|not accepted|security`, 'i');
 
 /**
  * Why a message failed, from SES's event: its type (bounce, non_permanent_bounce, validation_suppressed, delivery_delay),
@@ -57,7 +62,7 @@ const POLICY = /\b5\.7\.\d{1,3}\b|spam|policy|content|rejected by|message reject
 export function bounceClass(e: { type: string; subType?: string | null; status?: string | null; diagnostic?: string | null }): BounceClass {
   if (e.type === 'validation_suppressed' || e.subType === 'EmailValidationSuppressed') return 'validation';
   if (blocklistNamed(e.diagnostic)) return 'blocklist';
-  const said = (e.status ?? '') + ' ' + withoutAddresses(e.diagnostic ?? '');
+  const said = (e.status ?? '').slice(0, 20) + ' ' + withoutAddresses(e.diagnostic ?? '');
   if (e.subType === 'ContentRejected' || e.subType === 'AttachmentRejected') return 'policy';
   if (AUTH.test(said)) return 'auth';
   if (e.subType === 'MailboxFull' || FULL.test(said)) return 'mailbox_full';
@@ -70,7 +75,9 @@ export function bounceClass(e: { type: string; subType?: string | null; status?:
   return 'other';
 }
 
-const ROLLUP = { page: 2_000, budgetMs: 20_000, matureHours: 24, backDays: 30, statementMs: 5_000, lockMs: 1_000, lease: '10 minutes', maxBudgetMs: 5 * 60_000 } as const;
+// 500 a page: a page's contact update holds those contacts until it commits, and a send to them waits that long. On
+// packed pages (no room for a HOT update) 2,000 contacts took 2.3–2.6 s at the 2M scale; 500 keep it well under a second.
+const ROLLUP = { page: 500, budgetMs: 20_000, matureHours: 24, backDays: 30, statementMs: 5_000, lockMs: 1_000, lease: '10 minutes', maxBudgetMs: 5 * 60_000 } as const;
 const OUTCOME = { accepted: 1, delivered: 2, bounced: 4, complained: 8, opened: 16, clicked: 32, delayed: 128 } as const;
 type Mail = { id: string; workspace_id: string; at: string; status: string; o: number; simulated: boolean; single: boolean; accepted: boolean; marketing: boolean; rcpt: string | null; from_domain: string; link_host: string | null };
 type Feedback = { email_id: string; type: string; sub_type: string | null; status: string | null; diagnostic: string | null };
@@ -141,7 +148,8 @@ async function foldPage(tx: DbExecutor, cursor: { at: string; id: string }, leas
     if (ok) { c.delivered++; c.soft = 0; c.reset = true; } else if (soft) c.soft++;
     contacts.set(contactKey, c);
   }
-  // Sums in a fixed order of keys, so two writers could never wait on each other (there is only one, under the lease).
+  // Sums in a fixed order of keys (one writer, under the lease). Contacts are locked first in (workspace, email) order, the
+  // order the dispatcher and SES feedback lock them in, so a page and a send never deadlock on two contacts.
   const ds = [...domains].sort(([a], [b]) => a < b ? -1 : 1).map(([key, d]) => ({ key: JSON.parse(key) as [string, string], d }));
   if (ds.length) await tx.execute(sql`INSERT INTO delivery_domain_stats AS s (workspace_id, domain, sent, delivered, hard_bounced, soft_failed, complained, opened, clicked,
       ${sql.raw(BOUNCE_CLASSES.join(', '))}, failed_since_delivery, first_seen, last_seen, last_delivered)
@@ -155,6 +163,8 @@ async function foldPage(tx: DbExecutor, cursor: { at: string; id: string }, leas
       failed_since_delivery=CASE WHEN excluded.last_delivered IS NOT NULL THEN excluded.failed_since_delivery ELSE s.failed_since_delivery+excluded.failed_since_delivery END,
       first_seen=least(s.first_seen, excluded.first_seen), last_seen=greatest(s.last_seen, excluded.last_seen), last_delivered=greatest(s.last_delivered, excluded.last_delivered)`);
   const cs = [...contacts].sort(([a], [b]) => a < b ? -1 : 1).map(([key, c]) => ({ key: JSON.parse(key) as [string, string], c }));
+  if (cs.length) await tx.execute(sql`SELECT 1 FROM audience_contacts c JOIN unnest(${arr(cs.map(x => x.key[0]), 'text')}, ${arr(cs.map(x => x.key[1]), 'text')}) AS u(w, email)
+    ON c.workspace_id=u.w AND c.email=u.email ORDER BY c.workspace_id, c.email FOR UPDATE OF c`);
   if (cs.length) await tx.execute(sql`UPDATE audience_contacts c SET mailed_count=c.mailed_count+u.mailed, delivered_count=c.delivered_count+u.delivered,
       first_mailed_at=least(coalesce(c.first_mailed_at, u.first), u.first), last_mailed_at=greatest(c.last_mailed_at, u.last),
       soft_failures=CASE WHEN u.reset THEN u.soft ELSE least(c.soft_failures+u.soft, 32767) END
