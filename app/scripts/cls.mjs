@@ -1000,6 +1000,8 @@ async function measure(browser, job, fx) {
       if (job.firstTouch === 'keyboard') {
         for (let i = 0; i < 15 && !await page.evaluate(() => document.activeElement === document.querySelector('#page-shell .ui-subnav__scroll a')); i++) await page.keyboard.press('Tab');
         for (let i = 0; i < 3; i++) await page.keyboard.press('PageDown');
+        // PageDown scrolls smoothly: read where the column comes to rest.
+        await page.waitForFunction(() => new Promise(done => { const box = document.querySelector('#page-shell .ui-subnav__scroll'), at = box?.scrollTop; setTimeout(() => done(!box || (at > 0 && box.scrollTop === at)), 150); }), null, { timeout: 5_000 }).catch(() => {});
         contents = await page.evaluate(() => document.getElementById('page-shell') && document.activeElement === document.querySelector('#page-shell .ui-subnav__scroll a') ? document.querySelector('#page-shell .ui-subnav__scroll').scrollTop : null);
         if (contents === null) problems.push('the keyboard reached the contents only after the app took over: the case was not exercised');
       }
