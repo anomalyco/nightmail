@@ -32657,7 +32657,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // A brand-new domain's first campaign: the young plan, required.
       const fresh = judgeReadiness({ ...facts, recipients: 60_000, registeredDays: 5, domainAgeDays: 2, largestSend: 0, largestCleanSend: 0 });
       assert.deepEqual([fresh.verdict, fresh.requiredBy, fresh.reasons.slice(0, 2)], ['ramp_required', 'NEW_REGISTRATION', ['NEW_REGISTRATION', 'NO_HISTORY']]);
-      const youngLines = { newRegistrationDays: 30, usualJump: 10, minimumSplit: 2_000, young: { first: 500, cleanFactor: 2, growth: 2, maxBatches: 8 }, established: { first: 10_000, cleanFactor: 2, growth: 4, maxBatches: 5 }, firstBatch: { size: 5_000, waitMinutes: 120 } };
+      const youngLines = { newRegistrationDays: 30, usualJump: 10, minimumSplit: 2_000, young: { first: 500, cleanFactor: 2, growth: 2, maxBatches: 8 }, established: { first: 10_000, cleanFactor: 2, growth: 4, maxBatches: 5 }, firstBatch: { size: 5_000, waitMinutes: 120 }, blocklistPause: { replies: 3, windowMinutes: 30 }, domainStop: { sent: 20, bouncedShare: 0.8, windowMinutes: 120 } };
       assert.deepEqual(judgeReadiness({ ...facts, recipients: 60_000, registeredDays: 5, domainAgeDays: 2, largestSend: 0, largestCleanSend: 0, lines: youngLines }).plan, [500, 1_000, 2_000, 4_000, 8_000, 16_000, 28_500]);
       // An established domain at its usual volume: ready. A small sender's 500-recipient list: ready.
       assert.equal(judgeReadiness({ ...established, recipients: 90_000, largestSend: 100_000, largestCleanSend: 100_000, usualDay: 30_000 }).verdict, 'ready');
@@ -32772,14 +32772,16 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       };
       await run('campaign.run'); await run('campaign.run');
       assert.equal((await view()).delivery.expanded, 100);
-      // The first day's 100 all went to the dead domain and bounced for good: the rest there is skipped.
-      await db.query("UPDATE sending_emails SET status = 'bounced', provider_id = 'sim_' || id WHERE campaign_id = $1", [campaign.id]);
-      await nextWindow();
-      assert.deepEqual((await db.query('SELECT domain, resolved, bounced FROM campaign_stopped_domains WHERE campaign_id = $1', [campaign.id])).rows, [{ domain: dead, resolved: 100, bounced: 100 }]);
+      // The first day's mail to the dead domain bounced for good, the rest was delivered: the rest there is skipped.
       const sentTo = async (domain: string) => (await db.query("SELECT count(*)::int AS n FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@' || $2", [campaign.id, domain])).rows[0].n;
+      await db.query("UPDATE sending_emails SET status = CASE WHEN to_addresses->>0 LIKE '%@' || $2 THEN 'bounced' ELSE 'delivered' END, provider_id = 'sim_' || id WHERE campaign_id = $1", [campaign.id, dead]);
+      const deadFirst = await sentTo(dead);
+      assert.ok(deadFirst >= 20, String(deadFirst));
+      await nextWindow();
+      assert.deepEqual((await db.query('SELECT domain, resolved, bounced FROM campaign_stopped_domains WHERE campaign_id = $1', [campaign.id])).rows, [{ domain: dead, resolved: deadFirst, bounced: deadFirst }]);
       await run('campaign.run');
       const later = await view();
-      assert.deepEqual([await sentTo(dead), later.delivery.canceled >= 50, await sentTo('example.net') > 0], [100, true, true]);
+      assert.deepEqual([await sentTo(dead), later.delivery.canceled > 0, later.delivery.expanded > 100], [deadFirst, true, true]);
       // A plan's day: unhealthy (all bounced), so the same batch again; a clean one opens the next.
       const since = new Date(Date.now() - 3 * 86_400_000).toISOString();
       assert.equal(await planWindowHealthy(db as never, ws, campaign.id, since), false);
