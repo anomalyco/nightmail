@@ -91,7 +91,7 @@ function pageLink({ latency, bytesPerSecond }) {
   };
 }
 
-export async function start(repo, { log = () => {}, servers = 1, delay = null, fontDelay = 0, throttle = null } = {}) {
+export async function start(repo, { dist = 'app/dist', log = () => {}, servers = 1, delay = null, fontDelay = 0, throttle = null } = {}) {
   const api = join(repo, 'api');
   const require = createRequire(join(api, 'package.json'));
   const pg = require('pg');
@@ -158,18 +158,18 @@ export async function start(repo, { log = () => {}, servers = 1, delay = null, f
 
     // The Node API serves api/public: point it at the build without copying it into the tree.
     const pub = join(api, 'public');
-    if (!existsSync(join(repo, 'app/dist/index.html'))) throw new Error('CLS gate: build the dashboard first (bun run build in app/).');
+    if (!existsSync(join(repo, dist, 'index.html'))) throw new Error(`CLS gate: build the dashboard first (bun run build in app/; ${dist}).`);
     if (existsSync(pub) || (() => { try { return lstatSync(pub).isSymbolicLink(); } catch { return false; } })()) {
-      if (!lstatSync(pub).isSymbolicLink()) throw new Error(`CLS gate: ${pub} exists; remove it so the gate can serve app/dist.`);
+      if (!lstatSync(pub).isSymbolicLink()) throw new Error(`CLS gate: ${pub} exists; remove it so the gate can serve ${dist}.`);
       rmSync(pub);
     }
-    symlinkSync(join(repo, 'app/dist'), pub, 'dir');
+    symlinkSync(join(repo, dist), pub, 'dir');
     cleanups.push(() => rmSync(pub, { force: true }));
 
     // Shaper servers in front of the API: they apply the gate's per-route API delay, serve web fonts from memory
     // (or after fontDelay for CLS_FONTS=late) and cache immutable /assets/* responses across runs, so the browser needs
     // no CDP Fetch interception (context.route) and one or two API processes stay well inside the 6000/min peer budget.
-    const fontDir = join(repo, 'app/dist/fonts');
+    const fontDir = join(repo, dist, 'fonts');
     const fonts = new Map(readdirSync(fontDir).filter(f => f.endsWith('.woff2')).map(f => [f, readFileSync(join(fontDir, f))]));
     const assetCache = new Map(), links = new Map();
     const bulk = new Agent({ keepAlive: true, maxSockets: 128 });

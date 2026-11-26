@@ -372,6 +372,7 @@ jobs:
           VITE_SUPPORT_CHAT: ${{ needs.authorize.outputs.stage == 'dev' && 'true' || 'staff' }}
           VITE_PUBLIC_URL: ${{ needs.authorize.outputs.stage == 'dev' && 'https://dev.nightmail.dev' || 'https://nightmail.dev' }}
           VITE_FACTORY_MEDIA: ${{ needs.authorize.outputs.stage == 'dev' && 'https://media.dev.nightmail.dev/factory/' || 'https://media.nightmail.dev/factory/' }}
+          VITE_HOME: ${{ needs.authorize.outputs.stage == 'dev' && 'tv' || '' }}
 
       # The environment picks the stage. No variable or secret name carries a
       # stage prefix: each stage reads the same keys from its own nightmail/<stage>/

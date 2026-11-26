@@ -4,12 +4,14 @@ import { execFileSync } from 'node:child_process'
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig, loadEnv, type Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import { MAX_RULES, withFileRules } from './asset-headers.ts'
 import { renderLegal } from './legal-markdown.ts'
 import { homeFirstFiles, homeShell } from './home-shell.ts'
+import { televisionFirstFiles, televisionHome } from './home-tv.ts'
 import { priceFirstFiles, pricePages } from './price-pages.ts'
+import * as televisionWords from './src/features/home/tv/readable.ts'
 import { headerPrefix, publicOrigin as hostedOrigin } from '../api/src/brand.ts'
 
 // @react-email/editor's own "react-email" imports resolve to a slim shim (src/features/campaigns/react-email-shim.ts
@@ -23,7 +25,7 @@ const slimReactEmail: Plugin = {
 // dist/_headers for Cloudflare: public/_headers, then a cache rule for each built file under assets/ and each font
 // (asset-headers.ts explains why they are listed by name). The files every page loads come first, because past
 // Cloudflare's rule limit the rest only revalidate.
-const fileHeaders = (): Plugin => {
+const fileHeaders = (homeFirst: (files: string[]) => string[]): Plugin => {
   let publicDir = '', outDir = ''
   return {
     name: 'nightmail:file-headers', apply: 'build',
@@ -36,9 +38,9 @@ const fileHeaders = (): Plugin => {
         first.add(name)
         if (file.type === 'chunk') for (const dependency of [...file.imports, ...file.viteMetadata?.importedCss ?? []]) add(dependency)
       }
-      // The dashboard's entry, then what the homepage's first screen loads (home-shell.ts), then the price pages' (price-pages.ts).
+      // The dashboard's entry, then what the homepage's first screen loads (home-shell.ts, or home-tv.ts), then the price pages' (price-pages.ts).
       for (const file of Object.values(bundle)) if (file.type === 'chunk' && file.isEntry && file.name === 'index') add(file.fileName)
-      for (const file of homeFirstFiles(Object.keys(bundle))) add(file)
+      for (const file of homeFirst(Object.keys(bundle))) if (file.startsWith('fonts/')) first.add(file); else add(file)
       for (const file of priceFirstFiles(Object.keys(bundle))) add(file)
       const fonts = readdirSync(resolve(publicDir, 'fonts')).sort().map(name => `fonts/${name}`)
       const { headers, uncached } = withFileRules(readFileSync(resolve(publicDir, '_headers'), 'utf8'), [...first, ...fonts, ...Object.keys(bundle).sort()])
@@ -122,15 +124,23 @@ const inlineScriptsKept = (): Plugin => ({
   } },
 })
 
-export default defineConfig({
-  // VITE_DESIGN_SHEET is always a literal, set or not, so a build without it folds the design sheet's gate to false and
-  // drops its chunk (src/lib/design-sheet.ts).
-  define: { __NIGHTMAIL_BUILD__: JSON.stringify(buildSha), 'import.meta.env.VITE_DESIGN_SHEET': JSON.stringify(process.env.VITE_DESIGN_SHEET ?? '') },
-  // (The homepage's station kit is inlined whatever its size: it is one lazily loaded stylesheet, features/home/machines.tsx.)
-  build: { assetsInlineLimit: file => file.includes('/features/home/kit/') || undefined, rolldownOptions: { input: { index: fileURLToPath(new URL('./index.html', import.meta.url)) } } },
-  plugins: [slimReactEmail, legalMarkdown, react(), fileHeaders(), publicOrigin, brandedBootScript(), publicBeacon, homeShell(), pricePages(), inlineScriptsKept()],
-  server: {
-    host: '127.0.0.1', port: 5173, strictPort: true,
-    proxy: Object.fromEntries(['/v1', '/api/auth', '/mcp', '/.well-known', '/unsubscribe', '/health', '/openapi.json', '/internal'].map(path => [path, {target: 'http://127.0.0.1:8793', changeOrigin: false}])),
-  },
+// The homepage a build has (features/home): the factory's, or with VITE_HOME=tv the television (home-tv.ts says what that
+// changes). The deploy sets it per stage (.github/workflows/deploy.yml). The dev server also reads it from app/.env.local;
+// a build reads only its own environment, so an env file left on a machine can't change what a build ships.
+const isTelevision = (command: string, mode: string) => (command === 'serve' ? loadEnv(mode, fileURLToPath(new URL('.', import.meta.url)), 'VITE_HOME') : process.env).VITE_HOME === 'tv'
+
+export default defineConfig(({ command, mode }) => {
+  const tv = isTelevision(command, mode)
+  return {
+    // VITE_DESIGN_SHEET is always a literal, set or not, so a build without it folds the design sheet's gate to false and
+    // drops its chunk (src/lib/design-sheet.ts).
+    define: { __NIGHTMAIL_BUILD__: JSON.stringify(buildSha), 'import.meta.env.VITE_DESIGN_SHEET': JSON.stringify(process.env.VITE_DESIGN_SHEET ?? '') },
+    // (The homepage's station kit is inlined whatever its size: it is one lazily loaded stylesheet, features/home/machines.tsx.)
+    build: { assetsInlineLimit: file => file.includes('/features/home/kit/') || undefined, rolldownOptions: { input: { index: fileURLToPath(new URL('./index.html', import.meta.url)) } } },
+    plugins: [slimReactEmail, legalMarkdown, react(), fileHeaders(tv ? televisionFirstFiles : homeFirstFiles), publicOrigin, brandedBootScript(), publicBeacon, ...tv ? televisionHome() : [homeShell()], pricePages(tv ? televisionWords : undefined), inlineScriptsKept()],
+    server: {
+      host: '127.0.0.1', port: 5173, strictPort: true,
+      proxy: Object.fromEntries(['/v1', '/api/auth', '/mcp', '/.well-known', '/unsubscribe', '/health', '/openapi.json', '/internal'].map(path => [path, {target: 'http://127.0.0.1:8793', changeOrigin: false}])),
+    },
+  }
 })

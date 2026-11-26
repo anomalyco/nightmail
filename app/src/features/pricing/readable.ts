@@ -15,7 +15,7 @@ const url = (path: string) => publicOrigin + path
 export const markdownPath = (path: string) => path === '/' ? '/index.md' : `${path}.md`
 const host = (page: string) => new URL(page).hostname.replace(/^www\./, '')
 const cell = (text: string) => text.replaceAll('|', '\\|')
-const table = (head: string[], rows: string[][], right: number[] = []) => [
+export const table = (head: string[], rows: string[][], right: number[] = []) => [
   `| ${head.join(' | ')} |`, `| ${head.map((_, i) => right.includes(i) ? '---:' : '---').join(' | ')} |`, ...rows.map(row => `| ${row.map(cell).join(' | ')} |`),
 ].join('\n')
 const free = `${formatCount(nightmail.freeSent)} sent and ${formatCount(nightmail.freeReceived)} received`
@@ -27,7 +27,7 @@ const terms = () => [
 ].join('\n')
 /** Every page a comparison's figures were read on, once each, with the day. */
 const pagesRead = (c: Comparison) => [...new Map(sourcesOf(c).map(source => [source.url, source])).values()]
-const trademarks = `Product names belong to their owners and only identify their products. ${productName} isn’t affiliated with them.`
+export const trademarks = `Product names belong to their owners and only identify their products. ${productName} isn’t affiliated with them.`
 const comparisonLinks = (except?: string) => COMPARISONS.filter(c => c.slug !== except).map(c => `- [${c.title}](${url(markdownPath(c.path))}): ${c.description}`).join('\n')
 
 /** A comparison's page in Markdown: its headline, the board at every size its fader reaches, the rows with their
@@ -95,11 +95,14 @@ export function pricingMarkdown(): string {
   ].join('\n\n') + '\n'
 }
 
-export function homeMarkdown(): string {
+/** The homepage's twin, /index.md: the factory homepage's lead, or another's with more sections after its address (the
+ *  television's: home/tv/readable.ts). */
+export function homeMarkdown(lead = `${productName} is an email API on Amazon SES: send, receive and reply on your own domains. ${nightmail.perThousand} per 1,000 emails, sent or received via API. Free every month: ${free}.`, more: string[] = []): string {
   return [
     `# ${productName}`,
-    `> ${productName} is an email API on Amazon SES: send, receive and reply on your own domains. ${nightmail.perThousand} per 1,000 emails, sent or received via API. Free every month: ${free}.`,
+    `> ${lead}`,
     `Canonical page: ${url('/')}`,
+    ...more,
     `## What it costs`,
     terms(),
     `That’s the whole bill. [Price calculator](${url('/pricing.md')})`,
@@ -130,8 +133,8 @@ export function llmsSiteIndex(): string {
   ].join('\n\n') + '\n\n'
 }
 /** llms-full.txt: every page's Markdown twin, one after another. */
-export function llmsFull(): string {
-  return [`# ${productName}: the website in full`, `> The homepage, the price calculator and every comparison, as Markdown. API documentation: ${url('/docs.md')}.`, ...markdownFiles().map(({ source }) => source.trim().replace(/^# /, '## ').replace(/\n(#{2,5}) /g, '\n#$1 '))].join('\n\n') + '\n'
+export function llmsFull(files = markdownFiles()): string {
+  return [`# ${productName}: the website in full`, `> The homepage, the price calculator and every comparison, as Markdown. API documentation: ${url('/docs.md')}.`, ...files.map(({ source }) => source.trim().replace(/^# /, '## ').replace(/\n(#{2,5}) /g, '\n#$1 '))].join('\n\n') + '\n'
 }
 
 // ---------------------------------------------------------------- structured data (JSON-LD)

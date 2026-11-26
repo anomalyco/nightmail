@@ -1,0 +1,15 @@
+/* The television homepage's first screen, painted from home.html before any of the app's code (home-tv.ts inlines this
+   before the app's stylesheet cut down to the page): the television as the app first renders it, over the place the
+   page will take, until the page has drawn its own picture (tv.tsx, takeOver). The page is dark whatever the system's
+   theme (tv.css, :root:has(.chy)); %FLOOR% is its dark, filled in by home-tv.ts. */
+#home-shell { position: absolute; top: 0; left: 0; z-index: 2147483000; width: 100%; }
+html[data-shell='off'] #home-shell { display: none; }
+/* Until the parser reaches #root, which follows the first screen, a browser that draws that early shows the page's dark
+   rather than the system theme's (Chrome draws nothing before it: link rel=expect). */
+html:not([data-shell='off']):not(:has(#root)), html:not([data-shell='off']):not(:has(#root)) body { background: %FLOOR%; }
+/* Behind the glass, the tape's still, where the page's canvas goes. */
+#home-shell .hs-still { display: block; width: 100%; height: 100%; }
+/* The way in and the line under it for a visitor, or for a browser that has had a dashboard (theme.js: data-member);
+   pressed before the page's code is in, Get started shows it is on its way. */
+html:not([data-member]) #home-shell .hs-member, html[data-member] #home-shell .hs-visitor { display: none; }
+#home-shell .chyp-go[data-busy] { cursor: progress; }

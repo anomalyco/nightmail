@@ -1,0 +1,162 @@
+.chy {
+  --bg: #050607;
+  --ink: #ECEBE8;
+  --faint: #8C8B88;
+  --button: #97A5F2;
+  --button-hover: #AAB6F7;
+  --button-ink: #0E0F16;
+  --ease-out: cubic-bezier(.23, 1, .32, 1);
+  position: relative;
+  box-sizing: border-box;
+  min-height: 100dvh;
+  padding: 0 24px;
+  overflow: clip;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+:root:has(.chy) { color-scheme: dark; }
+:root:has(.chy) body { background: #050607; }
+/* Nothing on this page shows a focus ring (Ryan's call: a ring round a photographed object breaks the picture). */
+.chy :focus, .chy :focus-visible { outline: none; }
+.chy-col { --table: .155; --h: min((100dvh - 86px) / (1 + var(--table)), (100vw - 48px) / 1.5136, 860px); position: relative; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100dvh; max-width: 48rem; margin: 0 auto; padding: 24px 0 20px; text-align: center; }
+
+
+/* The scene is one photograph: the television on its table in a dark room, lit by its own screen, the glass open so
+   the live picture shows through. .chy-set is the television's own box (as tall as the window allows, never wider than
+   it), and the photograph is laid out around it, fading into the page at its edges. --light follows the picture: the
+   room dims when the set is switched off and flares with a burst of static. */
+/* It is the picture that is centred on the page, not the cabinet: the controls are all on the right of the tube, so
+   the set stands .057 of its width to the right (and may be no wider than leaves that much room). */
+.chy-set { --light: 0; position: relative; left: calc(var(--h) * .0774); flex: none; width: calc(var(--h) * 1.3587); height: var(--h); margin: 0; }
+.chy-set > span { position: absolute; pointer-events: none; }
+/* The wall is the page itself: plain, with the screen's light on it as one smooth pool behind the set. */
+.chy-glow { inset: -42% -52% -24%; background: radial-gradient(closest-side at 46% 50%, rgb(var(--tint, 96 124 190) / 26%), rgb(var(--tint, 96 124 190) / 13%) 36%, rgb(var(--tint, 96 124 190) / 4%) 68%, transparent); opacity: min(var(--light), 1.3); }
+/* The table runs out into the dark at both sides of the page. */
+.chy-scene { position: absolute; max-width: none; pointer-events: none; user-select: none; -webkit-user-drag: none; filter: brightness(calc(.4 + .6 * min(var(--light), 1.3))) drop-shadow(0 0 6px rgb(0 0 0 / 80%)); mask-image: linear-gradient(90deg, transparent 0, #000 17%, #000 83%, transparent 100%); }
+/* The picture's light on the table follows the picture. The photograph's own pool of light (a plain cool white) is
+   the wood's response to a lit screen; over it lie two stretched, blurred copies of the picture, upside down: one
+   multiplies the pool by the picture's colours (a dark picture leaves the table dark, a red bar lights it red under
+   itself), the other adds a little of the same colour where the wood was not lit at all. */
+.chy-reflect { position: absolute; left: -14%; top: 96.7%; width: 117%; height: 19%; pointer-events: none; mask-image: linear-gradient(transparent 0, #000 10%, #000 60%, transparent 100%), linear-gradient(90deg, transparent 4%, #000 20%, #000 80%, transparent 96%); mask-composite: intersect; -webkit-mask-composite: source-in; }
+.chy-reflect-shade { mix-blend-mode: multiply; filter: blur(calc(var(--h) * .036)); }
+.chy-reflect-tint { mix-blend-mode: screen; filter: saturate(1.3) blur(calc(var(--h) * .045)); opacity: .3; }
+.chy-screen { position: absolute; left: 8.5%; top: 10.8%; width: 71.6%; height: 72.7%; padding: 0; border: 0; overflow: hidden; background: #020203; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.chy-screen canvas { display: block; width: 100%; height: 100%; }
+/* The maker's name on the cabinet's lower rail, under the tube: silvered, pressed into the plastic. It is the way home. */
+.chy-badge { position: absolute; left: 44.3%; top: 91.6%; display: flex; padding: 4px 6px; color: #9A9DA6; opacity: .78; transform: translate(-50%, -50%); filter: drop-shadow(0 1px 0 rgb(0 0 0 / 85%)) drop-shadow(0 -.5px 0 rgb(255 255 255 / 10%)); border-radius: 3px; transition: opacity .15s; }
+.chy-badge .nightmail-wordmark { --logo-cap: calc(var(--h) * .0165); color: currentColor; }
+@media (hover: hover) { .chy-badge:hover { opacity: 1; } }
+.chy-unlit { border-radius: 50%; background: radial-gradient(#3A1512 30%, #1A1211 70%, transparent 72%); }
+/* The controls on the photograph are real: a key's cap is its own piece of the picture, standing proud of a dark well
+   until it is pressed, and it stays down while its channel is on. The knobs are drawn, so they can turn: a knurled
+   ring and a face with its pointer turn together, under light that stays where it is. */
+.chy-key, .chy-knob, .chy-grille { position: absolute; padding: 0; border: 0; background: none; cursor: pointer; -webkit-tap-highlight-color: transparent; touch-action: none; }
+.chy-grille { border-radius: 3px; touch-action: manipulation; }
+.chy-well, .chy-cap { position: absolute; border-radius: 9%; pointer-events: none; }
+.chy-well { background-image: none !important; background-color: #050506; box-shadow: 0 0 0 1px #050506, inset 0 2px 3px rgb(0 0 0 / 90%); }
+.chy-cap { filter: brightness(1.12); box-shadow: 0 2px 1.5px rgb(0 0 0 / 85%), 0 0 0 .5px rgb(0 0 0 / 70%), inset 0 1px 0 rgb(255 255 255 / 14%); transform: translateY(-5%); transition: transform .22s cubic-bezier(.3, 1.7, .5, 1), filter .15s, box-shadow .15s; }
+@media (hover: hover) { .chy-key:hover .chy-cap { filter: brightness(1.5); } }
+.chy-key[aria-pressed='true'] .chy-cap { transform: translateY(5%) scale(.975); filter: brightness(.78); box-shadow: 0 0 0 .5px rgb(0 0 0 / 80%), inset 0 1px 2px rgb(0 0 0 / 60%); transition-duration: .07s; transition-timing-function: ease-out; }
+.chy-key:active .chy-cap { transform: translateY(9%) scale(.96); filter: brightness(.66); box-shadow: inset 0 2px 3px rgb(0 0 0 / 70%); transition-duration: .05s; transition-timing-function: ease-out; }
+/* Channel 8 has a lamp behind its key: a warm bulb, the brightest thing on the panel in a dark room. It lights the key
+   from within (close to white at its centre), leaks out round its edges into the well, and spills onto the panel and
+   the edges of the keys beside it; it breathes slowly between lit and bright while the set is on and the channel is not.
+   Its key also takes a press a little beyond its cap (down and to the sides, clear of key 7 and the knob), since it is
+   the one people are asked to press. */
+.chy-key[data-air]::before { content: ''; position: absolute; inset: 0 -45% -55%; }
+.chy-lamp { position: absolute; inset: -125% -90%; border-radius: 50%; pointer-events: none; background: radial-gradient(closest-side, rgb(255 206 140 / 85%), rgb(255 172 92 / 52%) 22%, rgb(255 150 70 / 24%) 45%, rgb(255 136 58 / 9%) 70%, rgb(255 128 50 / 2.5%) 88%, transparent); mix-blend-mode: screen; opacity: 0; transition: opacity .25s; }
+.chy-key[data-air] .chy-cap::after { content: ''; position: absolute; inset: 0; border-radius: inherit; background: radial-gradient(75% 85% at 50% 52%, rgb(255 246 222), rgb(255 214 150 / 92%) 38%, rgb(255 170 90 / 62%) 72%, rgb(255 150 70 / 40%)); mix-blend-mode: screen; opacity: 0; transition: opacity .25s; }
+.chy-key[data-lit] .chy-lamp, .chy-key[data-lit] .chy-cap::after { animation: chy-lamp-on .9s ease-out, chy-lamp 3.2s ease-in-out .9s infinite; }
+@keyframes chy-lamp-on { from { opacity: 0; } to { opacity: .72; } }
+@keyframes chy-lamp { 0%, 100% { opacity: .72; } 50% { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .chy-key[data-lit] .chy-lamp, .chy-key[data-lit] .chy-cap::after { animation: none; opacity: .9; } }
+/* A knob is a photograph of one, taken in flat light so it can turn; the light on it is laid over and stays put: a
+   highlight toward the top left, shade toward the bottom right, and under it the shadow it throws on the panel. */
+.chy-knob { border-radius: 50%; }
+.chy-knob::before { content: ''; position: absolute; inset: 7%; border-radius: 50%; box-shadow: 0 5px 7px 1px rgb(0 0 0 / 92%), 0 1px 2px 1px #000, 0 0 0 1.5px rgb(0 0 0 / 80%); transition: box-shadow .12s; }
+.chy-dial, .chy-dial-light { position: absolute; inset: 1%; border-radius: 50%; pointer-events: none; }
+.chy-dial { background: center / 100% 100% no-repeat; filter: brightness(.6) contrast(1.12); transform: rotate(var(--turn)); transition: transform .34s cubic-bezier(.3, 1.5, .5, 1); }
+.chy-knob[data-held] .chy-dial { transition: none; }
+.chy-dial-light { inset: 4%; background: radial-gradient(circle at 36% 26%, rgb(255 255 255 / 20%), transparent 44%), conic-gradient(from 315deg, rgb(255 255 255 / 20%) 0deg, transparent 75deg, rgb(0 0 0 / 46%) 165deg, rgb(0 0 0 / 46%) 205deg, transparent 290deg, rgb(255 255 255 / 20%) 360deg); transition: opacity .15s; }
+@media (hover: hover) { .chy-knob:hover .chy-dial { filter: brightness(.82) contrast(1.12); } }
+.chy-knob:active::before { box-shadow: 0 2px 3px rgb(0 0 0 / 92%), 0 1px 2px 1px #000, 0 0 0 1.5px rgb(0 0 0 / 80%); }
+.chy-knob:active .chy-dial, .chy-knob:active .chy-dial-light { scale: .975; }
+
+/* The remote: a canvas that goes where the remote is (on the table, or with the pointer), and the place on the table
+   it is picked up from and put back to. */
+.chy-remote { position: absolute; left: 0; top: 0; z-index: 3; pointer-events: none; will-change: transform; }
+.chy-remote-spot { position: absolute; z-index: 2; padding: 0; border: 0; border-radius: 14px; background: none; cursor: grab; -webkit-tap-highlight-color: transparent; }
+.chy-remote-spot[aria-pressed='true'] { cursor: grabbing; }
+
+/* Without WebGL2 the same list, set plainly on the glass. */
+.chy-flat { position: absolute; inset: 0; display: flex; flex-direction: column; justify-content: center; gap: 2.2%; margin: 0; padding: 8% 9%; list-style: none; background: #05060F; font: 700 clamp(11px, 3.1cqw, 22px) / 1.2 var(--font-mono); text-align: left; color: #E9E8DF; container-type: inline-size; }
+.chy-flat li { display: flex; justify-content: space-between; }
+.chy-flat li:first-child { margin-bottom: 4%; }
+.chy-flat [data-ours] { color: #9DAEFF; }
+.chy-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* Under the table: the way in, then the terms line, clear of the table's front edge (which the photograph carries
+   .155 of the set's height below the set). */
+.chy-under { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: calc(var(--table) * var(--h) + 12px); }
+/* What a sign-in has to say, or that no place is open: over the page's head, out of the flow, so its coming moves
+   nothing. Dark whatever the system's theme, as the page is. */
+.chy-notice { position: absolute; z-index: 6; top: 16px; left: 50%; width: min(520px, 100% - 32px); translate: -50% 0; text-align: left; }
+.chy-notice .ui-alert { background: #202020; color: var(--ink); }
+.chy-consent { margin: 0; color: var(--faint); font-size: 13px; line-height: 18px; }
+.chy-consent a { color: inherit; }
+/* Copy for your agent, after the terms and API docs: a word like theirs, underlined as they are, with its two words in
+   one cell (Copied takes no more room). Its press reaches a little round the words, for a thumb. */
+.chy-copy { position: relative; display: inline-grid; padding: 0; border: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; cursor: pointer; transition: color .15s; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+.chy-copy::after { content: ''; position: absolute; inset: -10px -4px; }
+.chy-copy > span { grid-area: 1 / 1; justify-self: start; text-decoration-line: underline; text-decoration-thickness: from-font; text-underline-offset: .18em; transition: opacity .16s ease-out; }
+.chy-copy > span:last-child, .chy-copy[data-copied] > span:first-child { opacity: 0; }
+.chy-copy[data-copied] > span:last-child { opacity: 1; }
+.chy .chy-consent a:focus-visible, .chy-copy:focus-visible, .chy-copy[data-copied] { color: var(--ink); }
+@media (hover: hover) { .chy .chy-consent a:hover, .chy-copy:hover { color: var(--ink); } }
+
+/* A phone: the set is at the top of the screen and the whole of it fits the width, with the same narrow margin
+   either side, so nothing of it is cut and it is centred as a whole; the way in and the terms sit under it on the same centre line. */
+@media (max-width: 640px) {
+  .chy { padding: 0 20px 24px; }
+  /* the page's foot padding is part of the first screen, so the page does not scroll by it */
+  .chy-col { --h: calc((100vw - 20px) / 1.3587); min-height: calc(100dvh - 24px); justify-content: flex-start; padding-top: calc(14px + env(safe-area-inset-top, 0px)); }
+  .chy-set { left: 0; }
+  /* the notice: in the dark under the table, above the way in, so it covers nothing of the picture */
+  .chy-notice { top: calc(14px + env(safe-area-inset-top, 0px) + var(--h) * (1 + var(--table)) + 12px); width: 100%; }
+  /* The rest of the screen is shared out, so none of it is left empty at the foot: the way in stands in the middle of
+     what is under the table (the empty first item balances the terms line), and the terms are at the foot. */
+  .chy-under { flex: 1 1 auto; justify-content: space-between; gap: 16px; align-self: stretch; }
+  .chy-under::before { content: ''; }
+}
+
+/* The label. --stripe is the width of its border; the stripes are an airmail envelope's, red, paper, blue, paper. Round
+   it, a little of the screen's light (the picture's colour, --tint, and level, --light) and its shadow on the wood.
+   It lifts a little under the pointer and goes down when pressed. */
+.chyp { --stripe: calc(var(--h) * .0125); position: absolute; z-index: 2; left: 44.3%; top: 103.2%; width: 38%; translate: -50% 0; display: grid; padding: var(--stripe); background: repeating-linear-gradient(-45deg, #D23B2D 0 calc(var(--stripe) * 1.25), #F6F1E3 0 calc(var(--stripe) * 2.5), #2F4FA8 0 calc(var(--stripe) * 3.75), #F6F1E3 0 calc(var(--stripe) * 5)); border-radius: 2px; box-shadow: 0 0 calc(var(--h) * .07) rgb(var(--tint, 150 165 255) / calc(55% * min(var(--light, 1), 1.25))), 0 calc(var(--h) * .012) calc(var(--h) * .018) rgb(0 0 0 / 80%); transition: translate .18s var(--ease-out), filter .18s; }
+.chyp-go { display: grid; place-content: center; height: calc(var(--h) * .086); padding: 0 1em; border: 0; border-radius: 1px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .2 0 0 0 -.07'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E"), #F6F1E3; color: #0A0B0F; font: 700 calc(var(--h) * .041) / 1 var(--font-mono); letter-spacing: -.01em; word-spacing: -.22em; text-transform: uppercase; text-decoration: none; white-space: nowrap; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+.chyp-go .srt-cta-label { display: inline-flex; justify-content: center; align-items: center; gap: .42em; }
+.chyp-go .srt-cta-label[data-off] { display: none; }
+.chyp-go:has(.srt-cta-label:first-child[data-off]), a.chyp-go { font-size: calc(var(--h) * .032); }
+.chyp-go .srt-cta-label::after { content: ''; flex: none; width: .56em; height: .68em; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
+@media (hover: hover) { .chyp:hover { translate: -50% -2px; filter: brightness(1.06); } }
+.chyp:active { translate: -50% 1px; filter: brightness(.94); }
+.chyp-go[data-busy] { cursor: progress; }
+@media (prefers-reduced-motion: reduce) { .chyp { transition: none; } }
+/* Under the table (a phone): the same label in the page's flow, as wide as the page's column and taller on a taller
+   screen, so it carries its share of the space. */
+.chyp-under { display: none; --stripe: clamp(7px, 1dvh, 10px); position: relative; left: auto; top: auto; width: min(440px, 100%); margin: 0; translate: none; box-shadow: 0 0 44px rgb(var(--tint, 150 165 255) / calc(48% * min(var(--light, 1), 1.25))), 0 6px 12px rgb(0 0 0 / 70%); }
+.chyp-under .chyp-go { height: clamp(58px, 9.6dvh, 88px); font-size: clamp(21px, 3.2dvh, 29px); }
+.chyp-under .chyp-go:has(.srt-cta-label:first-child[data-off]), .chyp-under a.chyp-go { font-size: 17px; }
+.chyp-under:hover, .chyp-under:active { translate: none; }
+@media (max-width: 640px) {
+  .chyp:not(.chyp-under) { display: none; }
+  .chyp-under { display: grid; }
+}
+/* The button is the homepage's own (home/start.tsx): its arrow and its spinner give way to the tape's play mark, which
+   is drawn after the words. */
+.chyp-go .srt-cta-arrow { display: none; }
+.chyp-go .ui-spinner { display: none; }

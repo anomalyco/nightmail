@@ -322,6 +322,16 @@ jobs:
           CLS_SHARD_COUNT: ${{ strategy.job-total }}
           CLS_PG_URL: postgresql://postgres:fixture-admin@127.0.0.1:5432/postgres
         run: node scripts/cls.mjs
+      # The television homepage, the dev stage's "/" (VITE_HOME=tv: deploy.yml), built beside the production one and
+      # measured on its own (scripts/cls.mjs, CLS_HOME=tv), in one shard.
+      - name: Measure layout shift on the television homepage
+        if: matrix.shard == 1
+        working-directory: app
+        env:
+          VITE_HOME: tv
+          CLS_HOME: tv
+          CLS_PG_URL: postgresql://postgres:fixture-admin@127.0.0.1:5432/postgres
+        run: ./node_modules/.bin/vite build --outDir dist-tv && node scripts/cls.mjs
       - name: Upload the shift sources
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

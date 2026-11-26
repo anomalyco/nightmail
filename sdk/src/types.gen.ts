@@ -15973,7 +15973,7 @@ export type UnsubscribeByLinkError = UnsubscribeByLinkErrors[keyof UnsubscribeBy
 
 export type UnsubscribeByLinkResponses = {
     /**
-     * Confirmation page; GET never changes consent (link scanners prefetch footer links).
+     * Confirmation page, or the preference page where the workspace has topics (the topics this address gets, to clear, the ones it left, and everything); GET never changes consent (link scanners prefetch footer links).
      */
     200: UnsubscribeConfirmationHtml;
 };
@@ -16036,7 +16036,7 @@ export type UnsubscribeOneClickError = UnsubscribeOneClickErrors[keyof Unsubscri
 
 export type UnsubscribeOneClickResponses = {
     /**
-     * Marketing consent is now unsubscribed (RFC 8058 one-click or the confirmation form); for a link from mail with a topic, the contact is unsubscribed from that topic only.
+     * Marketing consent is now unsubscribed (RFC 8058 one-click or the confirmation form); for a link from mail with a topic, the contact is unsubscribed from that topic only. The preference page’s forms only remove: preferences=save records opt-outs from the topics it showed that were left unchecked (asking for a topic to be turned on is ignored and records nothing), and preferences=all unsubscribes from everything.
      */
     200: UnsubscribeConfirmationHtml;
 };

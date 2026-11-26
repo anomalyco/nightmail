@@ -17,7 +17,7 @@ import { applyClaim, connectionReady, domainHosts, receivingSetup, type Receivin
 import { WORKSPACE_FOCUS, type WorkspaceFocus } from './workspace-focus.js';
 import { SETUP_LIMITS, SETUP_SENDER } from './setup-email.js';
 import { jobs } from './db/core.js';
-import { contacts, mergeSuppression, topics } from './db/audience.js';
+import { contacts, mergeSuppression } from './db/audience.js';
 import { lasting, RECEIVING_HOST_CHANGE, EmailEventData, withoutVerdict, WEBHOOK_CHANGE, webhookUrlHint, WebhookUrlHint, readCursor, nextCursor, budgetedRead, readLimit, readLimitNote } from './core.js';
 import { emails } from './db/sending.js';
 import { sesRegions } from './db/ses-regions.js';
@@ -1774,7 +1774,7 @@ function registerPublicEvents(app: App) {
   const tokenParams = z.object({ token: z.string().regex(TOKEN) }).openapi('UnsubscribeToken');
   const invalidPage = { 404: { ...errors[404], description: 'The link is malformed or unknown: an HTML page saying so to a browser (Accept: text/html), the JSON error otherwise.', content: { ...errors[404]!.content, 'text/html': { schema: z.string() } } } };
   const pageRedirect = { 303: { description: 'The confirmation form of a campaign with its own unsubscribe page: the opt-out is recorded, then the browser continues to that page with unsubscribe_token. A one-click POST is never redirected (RFC 8058 section 3.1).', headers: { Location: { schema: { type: 'string' as const } } } } };
-  for (const method of ['get', 'post'] as const) app.openapi(createRoute({ method, path: '/unsubscribe/{token}', operationId: method === 'get' ? 'unsubscribeByLink' : 'unsubscribeOneClick', tags: ['Consent'], security: [], request: { params: tokenParams }, responses: { 200: { description: method === 'get' ? 'Confirmation page; GET never changes consent (link scanners prefetch footer links).' : 'Marketing consent is now unsubscribed (RFC 8058 one-click or the confirmation form); for a link from mail with a topic, the contact is unsubscribed from that topic only.', content: { 'text/html': { schema: z.string().openapi('UnsubscribeConfirmationHtml') } } }, ...(method === 'post' ? pageRedirect : {}), ...errors, ...(method === 'get' ? invalidPage : {}) } }), async c => {
+  for (const method of ['get', 'post'] as const) app.openapi(createRoute({ method, path: '/unsubscribe/{token}', operationId: method === 'get' ? 'unsubscribeByLink' : 'unsubscribeOneClick', tags: ['Consent'], security: [], request: { params: tokenParams }, responses: { 200: { description: method === 'get' ? 'Confirmation page, or the preference page where the workspace has topics (the topics this address gets, to clear, the ones it left, and everything); GET never changes consent (link scanners prefetch footer links).' : 'Marketing consent is now unsubscribed (RFC 8058 one-click or the confirmation form); for a link from mail with a topic, the contact is unsubscribed from that topic only. The preference page\u2019s forms only remove: preferences=save records opt-outs from the topics it showed that were left unchecked (asking for a topic to be turned on is ignored and records nothing), and preferences=all unsubscribes from everything.', content: { 'text/html': { schema: z.string().openapi('UnsubscribeConfirmationHtml') } } }, ...(method === 'post' ? pageRedirect : {}), ...errors, ...(method === 'get' ? invalidPage : {}) } }), async c => {
     const raw = c.req.valid('param').token;
     const [token] = await c.env.db.select().from(unsubscribeTokens).where(eq(unsubscribeTokens.tokenHash, await digest(raw)));
     // The confirmation form may continue to the campaign's own page: browsers apply form-action to that redirect too.
@@ -1784,22 +1784,74 @@ function registerPublicEvents(app: App) {
     // confirmation. Mailbox one-click (RFC 8058, List-Unsubscribe-Post) and the confirmation form are POSTs.
     // A page's host may contain & and quotes (a URL host allows them): written as text, never markup.
     const destination = token.pageUrl ? ` After unsubscribing, you’ll continue to ${escapeText(new URL(token.pageUrl).host)}.` : '';
-    // Mail with a topic unsubscribes from that topic alone (src/topics.ts); its name is the sender's text, written as text.
-    const [topic] = token.topicId ? await c.env.db.select({ name: topics.name }).from(topics).where(and(eq(topics.workspaceId, token.workspaceId), eq(topics.id, token.topicId))).limit(1) : [];
-    const what = topic ? `${escapeText(topic.name)} emails` : 'marketing emails', from = topic ? 'this sender. Their other emails are unchanged' : 'this workspace';
-    if (method === 'get') return c.html(unsubscribePage(`Unsubscribe from ${what}?`, `<p>You will no longer receive ${what} from ${from}.${destination}</p><form method="post"><input type="hidden" name="confirm" value="footer"><button type="submit" style="font:inherit;font-weight:600;padding:10px 18px;border:0;border-radius:8px;background:#111;color:#fff;cursor:pointer">Unsubscribe</button></form>`), 200);
-    const form = await c.req.parseBody().catch(() => ({} as Record<string, unknown>)), source = form.confirm === 'footer' ? 'footer-confirm' as const : 'rfc8058-post' as const;
-    // The audience helpers commit consent, audit, and the subscription event outbox atomically.
     const audience = await wrapModuleLoad(() => import('./audience.js'));
+    // What this link may show (src/topics.ts): the workspace's topics and this address's choices, never its address or
+    // anyone else's. A workspace without topics, on a link without one, keeps the plain confirmation.
+    const prefs = await audience.linkPreferences(c.env.db, token.workspaceId, token.email, token.topicId);
+    const linked = prefs.linked, named = linked ? escapeText(linked.name) : '';
+    if (method === 'get') {
+      if (!linked && !prefs.topics.length) return c.html(unsubscribePage('Unsubscribe from marketing emails?', `<p>You will no longer receive marketing emails from this workspace.${destination}</p><form method="post"><input type="hidden" name="confirm" value="footer">${button('Unsubscribe')}</form>`), 200);
+      return c.html(unsubscribePage('Email preferences', preferencesBody(prefs, destination)), 200);
+    }
+    const form = await c.req.parseBody({ all: true }).catch(() => ({} as Record<string, unknown>));
+    const list = (value: unknown) => (Array.isArray(value) ? value : value === undefined ? [] : [value]).filter((item): item is string => typeof item === 'string');
+    const again = prefs.topics.length ? '<p><a href="" style="color:inherit">Back to your email preferences</a></p>' : '';
+    // The preference page's own forms: Save, and everything from a link about one topic. One-click and the confirmation
+    // below never carry these fields.
+    if (form.preferences === 'save') {
+      const changed = await audience.recordPreferences(c.env, token.workspaceId, token.email, list(form.shown), new Set(list(form.topic)));
+      if (!changed) return c.html(unsubscribePage('Nothing changed', `<p>You’re unsubscribed from all marketing emails from this sender.</p>${again}`), 200);
+      // The page only removes: a topic asked to be turned on is ignored (recordPreferences), so only what was left can show here.
+      const names = changed.map(choice => escapeText(choice.name)).join(', ');
+      return c.html(unsubscribePage(names ? 'Preferences saved' : 'Nothing changed', `${names ? `<p>You’ll no longer receive: ${names}.</p>` : '<p>Nothing changed.</p>'}${again}`), 200);
+    }
+    if (form.preferences === 'all') {
+      await audience.recordUnsubscribe(c.env, token.workspaceId, token.email, 'preferences');
+      return c.html(unsubscribePage('You’re unsubscribed', '<p>You will no longer receive marketing emails from this sender.</p>'), 200);
+    }
+    const source = form.confirm === 'footer' ? 'footer-confirm' as const : 'rfc8058-post' as const;
+    // A link from mail with a topic opts out of that topic alone; any other, of all marketing. The audience helpers commit
+    // consent, audit, and the subscription event outbox atomically.
     if (token.topicId) await audience.recordTopicUnsubscribe(c.env, token.workspaceId, token.email, token.topicId, source);
     else await audience.recordUnsubscribe(c.env, token.workspaceId, token.email, source);
     // Only a person confirming in a browser continues to the campaign's own page; RFC 8058 forbids redirecting one-click.
     if (form.confirm === 'footer' && token.pageUrl) return c.redirect(unsubscribePageLink(token.pageUrl, raw), 303);
-    return c.html(unsubscribePage('You’re unsubscribed', `<p>You will no longer receive ${what} from ${from}.</p>`), 200);
+    if (token.topicId) return c.html(unsubscribePage('You’re unsubscribed', `<p>You will no longer receive ${linked ? `${named} emails` : 'these emails'} from this sender. Their other emails are unchanged.</p>${again}`), 200);
+    return c.html(unsubscribePage('You’re unsubscribed', '<p>You will no longer receive marketing emails from this workspace.</p>'), 200);
   });
 }
 
 const escapeText = (text: string) => text.replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
+const button = (label: string, secondary = false) => `<button type="submit" style="font:inherit;font-weight:600;padding:10px 18px;min-height:44px;border:0;border-radius:8px;${secondary ? 'background:#ececec;color:#111' : 'background:#111;color:#fff'};cursor:pointer">${label}</button>`;
+/**
+ * The hosted preference page (no script, no account): the link's own topic first, as one button, then every topic of the
+ * workspace as a checkbox with Save, then everything. Each is its own POST form; a GET changes nothing. A person
+ * unsubscribed from everything sees that and no choices: only fresh consent, recorded by the sender, lifts it.
+ */
+function preferencesBody(prefs: { consent: string | null; topics: { id: string; name: string; description: string; subscribed: boolean; chosen: boolean }[]; linked: { name: string; subscribed: boolean } | null }, destination: string) {
+  if (prefs.consent === 'unsubscribed') return '<p>You’re unsubscribed from all marketing emails from this sender, so you don’t get any of these. To get them again, ask the sender.</p>';
+  const muted = 'color:#595959';
+  const linked = prefs.linked && (prefs.linked.subscribed
+    ? `<form method="post"><input type="hidden" name="confirm" value="footer"><p>Stop receiving ${escapeText(prefs.linked.name)} emails from this sender. Their other emails don’t change.${destination}</p>${button(`Unsubscribe from ${escapeText(prefs.linked.name)}`)}</form>`
+    : `<p>You’ve unsubscribed from ${escapeText(prefs.linked.name)} emails. To get them again, ask the sender.</p>`);
+  // The page only removes. A topic the person still gets is a checkbox they can clear; one they left shows as off, with no
+  // control (no name, so nothing is posted for it, script or not); an opt-in topic they never joined isn't offered at all.
+  // Only a subscriber has choices: anyone else gets no marketing at all.
+  const listed = prefs.consent === 'subscribed' ? prefs.topics.filter(topic => topic.subscribed || topic.chosen) : [], current = listed.some(topic => topic.subscribed);
+  const text = (topic: { name: string; description: string }, note?: string) => `<span><span style="display:block;font-weight:500">${escapeText(topic.name)}</span>${topic.description ? `<span style="display:block;${muted}">${escapeText(topic.description)}</span>` : ''}${note ? `<span style="display:block;${muted}">${note}</span>` : ''}</span>`;
+  const box = 'width:20px;height:20px;margin:2px 0 0;flex:none;accent-color:#111';
+  // With nothing left to clear there is nothing to save: the topics show without a form.
+  const choices = listed.length ? `${current ? '<form method="post" style="margin:32px 0 0"><input type="hidden" name="preferences" value="save">' : '<div style="margin:32px 0 0">'}
+    <fieldset style="border:0;padding:0;margin:0"><legend style="padding:0;font-weight:600">Your topics</legend>${current ? `<p style="margin:4px 0 0;${muted}">Clear any you no longer want, then save.</p>` : ''}${listed.map(topic => topic.subscribed
+      ? `<input type="hidden" name="shown" value="${escapeText(topic.id)}"><label style="display:flex;gap:12px;align-items:flex-start;min-height:44px;padding:10px 0;cursor:pointer"><input type="checkbox" name="topic" value="${escapeText(topic.id)}" checked style="${box}">${text(topic)}</label>`
+      : `<div style="display:flex;gap:12px;align-items:flex-start;min-height:44px;padding:10px 0"><input type="checkbox" disabled aria-label="${escapeText(topic.name)}: unsubscribed" style="${box}">${text(topic, 'You’ve unsubscribed from this. To get it again, ask the sender.')}</div>`).join('')}
+    </fieldset>${current ? `${button('Save')}</form>` : '</div>'}` : '';
+  // A link about one topic leaves everything with the page's own field; any other link's confirmation is today's.
+  const all = prefs.linked
+    ? `<form method="post" style="margin:32px 0 0"><input type="hidden" name="preferences" value="all"><p style="${muted}">Or stop all marketing emails from this sender.</p>${button('Unsubscribe from all', true)}</form>`
+    : `<form method="post" style="margin:32px 0 0"><input type="hidden" name="confirm" value="footer"><p style="${muted}">Or stop all marketing emails from this sender.${destination}</p>${button('Unsubscribe from all', !!choices)}</form>`;
+  return `${linked ?? ''}${choices}${all}`;
+}
 function unsubscribePage(title: string, body: string) {
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>body,body *{letter-spacing:-0.01em}</style><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;letter-spacing:-0.01em;margin:48px;line-height:1.5"><main><h1 style="font-size:24px">${title}</h1>${body}</main></body></html>`;
 }

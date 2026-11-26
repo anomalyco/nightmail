@@ -14,8 +14,10 @@
 //   CLS_SHOTS=1        screenshot every page, not only failing ones
 //   CLS_PHONE=0        skip the phone pass
 //   CLS_FONTS=late     deliver web fonts 1.8 s late, to measure the fallback-to-web-font swap
+//   CLS_HOME=tv        measure the television homepage instead (below), over app/dist-tv: build it first with
+//                      VITE_HOME=tv ./node_modules/.bin/vite build --outDir dist-tv
 // Writes .cls/report.json (every shift with its source elements), .cls/summary.md (also appended to
-// $GITHUB_STEP_SUMMARY) and a screenshot per failing page with the shifted elements outlined.
+// $GITHUB_STEP_SUMMARY) and a screenshot per failing page with the shifted elements outlined (with CLS_HOME=tv, in .cls/tv).
 //
 // Live rules (`live`): on Driftwood's rules page, an agent's API key saves the open rule once the page has settled
 // (`apply`: the change lands in the editor and a toast names who made it), or after a keystroke in the editor
@@ -30,6 +32,12 @@
 // other pages on CI's 4-core runner, their page.goto ran past 60 s (Nov 16). Signed out measures it running `alone`,
 // after every other page, one at a time. Pages that only start from the homepage, or show it as Signed out does with
 // another button, see it `still` (reduced motion: the same layout, one frame drawn).
+//
+// The television homepage (features/home/tv) is "/" in a build made with VITE_HOME=tv: the dev stage's (deploy.yml), not
+// production's. CLS_HOME=tv measures its pages alone, on desktop and phone, over that build (app/dist-tv; ci.yml runs it
+// in one shard after the rest): signed out, playing `alone` as the factory does; signed in and its button to Overview,
+// `still`. Its first screen comes from home.html (home-tv.ts) and the app takes over by itself (tv/shell/boot.js: once
+// the first pictures are in, or after 8 s), with no input: a load waits for that takeover, so it is measured too.
 //
 // Dialogs (`dialog`): once the page has settled, the control whose text starts with `dialog` opens its dialog (a bottom
 // sheet on a phone), and the measurement covers the load and the open dialog together, once its entrance has ended.
@@ -53,7 +61,8 @@ import { chromium } from 'playwright-core';
 import { liveSource, seed, start } from './cls-fixture.mjs';
 
 const LIMIT = 0.001, JOB_TIMEOUT_MS = 90_000;
-const app = resolve(dirname(fileURLToPath(import.meta.url)), '..'), repo = resolve(app, '..'), out = join(app, '.cls');
+const television = process.env.CLS_HOME === 'tv';
+const app = resolve(dirname(fileURLToPath(import.meta.url)), '..'), repo = resolve(app, '..'), out = join(app, '.cls', television ? 'tv' : '');
 const only = process.env.CLS_ONLY ? new RegExp(process.env.CLS_ONLY, 'i') : null;
 // Each in-flight page owns a renderer. Leave room for the fixture API, other shards and their databases.
 const workers = Number(process.env.CLS_WORKERS) || Math.min(8, availableParallelism() * 2);
@@ -416,6 +425,12 @@ const pages = ids => [
   ['Support · continue email', `/support/continue/${ids.continueConversation}/${ids.continueMessage}`, { user: 'nia', dialog: 'Continue' }],
 ];
 
+// The television homepage's pages (CLS_HOME=tv, above), each also in the phone pass.
+const televisionPages = [
+  ['Signed out · television', '/', { user: null, alone: true }],
+  ['Homepage · signed in · television', '/', { still: true }],
+  ['Overview · from the television', '/overview', { from: '/', click: 'Open dashboard', still: true }],
+];
 // The phone pass: the pages someone opens on a phone (every list as cards, the details they open, Settings), light only.
 const phonePages = new Set(['Segment · property rules', 'Newsletter', 'Newsletter · one draft', 'Newsletter · new', 'New newsletter', 'New issue', 'Campaigns · with newsletters', 'Overview', 'Overview · setup', 'Overview · first run', 'Overview · first run · one step', 'Overview · first run · all done', 'Overview · first run · remembered', 'Overview · first run · dismissed', 'Overview · range', 'Overview · stream', 'Overview · panel hidden', 'Logs · from an Overview tile', 'Homepage · signed in', 'Overview · from the homepage', 'Logs', 'Logs · range', 'Sent email', 'Sent email · junk-like', 'Sent email · images held back', 'Sent email · bounced', 'Sent email · delayed', 'Sent email · bounced details', 'Sent email · checks sheet', 'Received email', 'Received email · details sheet', 'Sent email · thread', 'Received email · thread', 'Received email · from its thread', 'Sent email · thread sheet', 'Mail routing', 'Mail routing · rules', 'Mail routing · new rule', 'Mail routing · recipe form', 'Mail routing · recipe rule', 'Mail routing · rule editor', 'Mail routing · rule editor · new script', 'Mail routing · flow panel', 'Mail routing · typed address', 'Mail routing · why it went here dialog', 'Mail routing · address', 'Mail routing · address · deleted', 'Mail routing · address · where mail goes', 'Mail routing · address · settings', 'Mail routing · agent inboxes', 'Mail routing · destinations', 'Campaigns', 'Campaign review', 'Campaign review · send', 'Campaign review · ramp', 'Templates', 'Audience', 'Lists', 'Domains', 'Domain', 'Domain · custom MAIL FROM', 'Domain · records missing', 'Domain · records correct', 'Domains · built-in', 'Domain · built-in', 'Onboarding · get started', 'Onboarding · get started by hand', 'Onboarding · get started provisioning', 'Onboarding · get started own domain', 'API keys', 'Settings', 'Settings · members', 'Settings · activity', 'Settings · billing', 'Settings · billing · owed', 'Settings · billing · free', 'Settings · billing · member', 'Settings · billing · old usage link', 'Settings · balance dialog', 'Settings · webhook', 'Settings · MCP connection', 'Onboarding', 'Onboarding · AWS stack', 'Onboarding · AWS refused', 'Onboarding · AWS choose', 'Onboarding · AWS sandbox', 'Onboarding · AWS production access', 'Onboarding · AWS setting up', 'Mail routing · inbox', 'Mail routing · endpoints', 'Onboarding · AWS disconnecting', 'Connect · agent code', 'Connect · type a code', 'Settings · sending · AWS', 'Two accounts · switch', 'Operator', 'Operator · workspace', 'Operator · UI notes', 'Operator · waitlist', 'Operator · health', 'Operator · sign-ups', 'Operator · sign-up limit dialog', 'Operator · abuse', 'Operator · abuse · cluster', 'Operator · abuse · alerts', 'Operator · abuse · Slack card', 'Glass', 'Glass · not an operator', 'Glass · deliverability', 'Support', 'Support · AI handling', 'Support · waiting on customer', 'Support · conversation', 'Support · email conversation', 'Support · customer sheet', 'Support · confirm a change', 'Overview · UI notes mode', 'Operator · without UI notes', 'Overview · restricted', 'Campaigns · restricted', 'Signed out', 'Signed out · deep link', 'Signed out · page not found', 'Signed out · waitlist', 'Signed out · waitlist, place ready', 'Signed out · waitlist, place held', 'Signed out · waitlist, link expired', 'Signed out · sign-in link', 'Legal', 'Legal · terms', 'Legal · privacy', 'Pricing', 'Pricing · large', 'Compare · Mailchimp', 'Compare · Mailchimp · steel frame', 'Compare · Resend', 'Compare · AgentMail', 'Compare · Bird', 'Compare · Mailgun', 'Compare · Mailjet', 'Compare · Mandrill', 'Compare · Postmark', 'Compare · SendGrid', 'Compare · Nylas', 'Compare · Robotomail', 'Compare · Postfleet', 'Compare · Lumbox', 'Compare · Mails.ai', 'Compare · Dead Simple Email', 'Compare · Agent Identity', 'Compare · Inkbox', 'Compare · beehiiv', 'Compare · MailerLite', 'Compare · Buttondown', 'Compare · EmailOctopus', 'Compare · Ghost(Pro)', 'Compare · AWeber', 'Compare · Loops', 'Compare · Brevo', 'Docs', 'Docs · MCP guide', 'Docs · section', 'Docs · signed out', 'Signed out', 'Support chat', 'Overview · sending limits dialog', 'Overview · sender score dialog', 'Overview · sender score dialog · not graded', 'Overview · daily limit dialog · evaluation', 'Overview · connect agent sheet', 'Overview · More sheet', 'API keys · create key dialog', 'API keys · SMTP login dialog', 'API keys · edit key dialog', 'Mail routing · new address dialog', 'Settings · invite dialog', 'Settings · postal address dialog', 'Settings · add credit dialog', 'Domain · add custom MAIL FROM dialog', 'Domain · change custom MAIL FROM dialog', 'Support · continue email', 'Compare · MailerSend', 'Compare · Mailtrap', 'Compare · SMTP2GO', 'Compare · AhaSend', 'Compare · CloudMailin', 'Compare · SocketLabs', 'Compare · MailPace', 'Compare · UniOne', 'Compare · MailChannels']);
 const devices = {
@@ -673,6 +688,10 @@ async function measure(browser, job, fx) {
     const missing = !lateFonts ? [] : await page.evaluate(() => Promise.all([...document.fonts].filter(f => f.family.includes('Fallback')).map(f => f.load().then(() => null, () => `${f.family} ${f.weight} ${f.unicodeRange}`))));
     for (const face of missing.filter(Boolean)) problems.push(`no local font for ${face}: install fonts-liberation and fonts-dejavu-core, or measure on a machine with Arial and Menlo`);
     await settle(page, net);
+    if (television && await page.evaluate(() => !!document.getElementById('home-shell'))) {
+      await page.waitForFunction(() => !document.getElementById('home-shell'), null, { timeout: 30_000 }).catch(() => problems.push('the app never took over from the homepage\'s first screen'));
+      await settle(page, net);
+    }
     // A price page paints from its HTML first and its app takes over at the reader's first key or touch (app/price-pages.ts,
     // features/pricing/index.tsx): wake it, as a reader would, so the painted page and the takeover are both measured and
     // an in-app click lands in the app.
@@ -1042,7 +1061,7 @@ os.execv(chrome, [chrome, *sys.argv[1:]])
 const browserPromise = chromium.launch({ ...chrome ? { executablePath: chrome } : { channel: 'chrome' }, args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'] })
   .finally(() => { if (launcherDir) rmSync(launcherDir, { recursive: true, force: true }); });
 browserPromise.catch(() => {});
-const fx = await start(repo, { servers: Math.min(2, Math.ceil(workers / 8)), delay: apiDelay, fontDelay: lateFonts ? FONT_DELAY_MS : 0, throttle, log: message => console.log(`${elapsed()} ${message}`) }).catch(async error => {
+const fx = await start(repo, { dist: television ? 'app/dist-tv' : 'app/dist', servers: Math.min(2, Math.ceil(workers / 8)), delay: apiDelay, fontDelay: lateFonts ? FONT_DELAY_MS : 0, throttle, log: message => console.log(`${elapsed()} ${message}`) }).catch(async error => {
   await browserPromise.then(b => b.close(), () => {});
   throw error;
 });
@@ -1053,8 +1072,8 @@ try {
   console.log(`${elapsed()} seeded`);
   const jobs = [];
   const passes = [['desktop', 'light'], ['desktop', 'dark'], ...process.env.CLS_PHONE === '0' ? [] : [['phone', 'light']]];
-  for (const [pass, scheme] of passes) for (const [name, path, { user = 'dana', from, click, row, switchTo, support, live, leave, notes, dialog, tab, menu, still, alone, phoneOnly, notFound, waitlist, guard, panel, skipped, step, start, wide }] of pages(ids)) {
-    if (only && !only.test(name) || pass === 'phone' && !phonePages.has(name) || phoneOnly && pass !== 'phone') continue;
+  for (const [pass, scheme] of passes) for (const [name, path, { user = 'dana', from, click, row, switchTo, support, live, leave, notes, dialog, tab, menu, still, alone, phoneOnly, notFound, waitlist, guard, panel, skipped, step, start, wide }] of television ? televisionPages : pages(ids)) {
+    if (only && !only.test(name) || pass === 'phone' && !television && !phonePages.has(name) || phoneOnly && pass !== 'phone') continue;
     // `wide` pages take the desktop passes at 3440 × 1440.
     const device = wide && pass === 'desktop' ? 'wide' : pass;
     const slug = `${name}-${device === 'phone' ? 'phone' : scheme}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');

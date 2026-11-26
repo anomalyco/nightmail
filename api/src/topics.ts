@@ -39,13 +39,18 @@ const named = <T>(work: Promise<T>) => work.catch(error => { throw databaseCodeO
 const activeCount = (workspaceId: string) => sql`(SELECT count(*) FROM audience_topics WHERE workspace_id = ${workspaceId} AND archived_at IS NULL)`;
 const topicView = (row: typeof topics.$inferSelect) => ({ id: row.id, workspaceId: row.workspaceId, name: row.name, description: row.description, subscribedByDefault: row.subscribedByDefault, archivedAt: isoTime(row.archivedAt), createdAt: isoTime(row.createdAt)!, updatedAt: isoTime(row.updatedAt)! });
 
+/** Every topic that isn't archived, and `include` whether archived or not, with the contact's state of each (none for a
+ *  null contact: each topic's default), oldest first. */
+export async function topicStates(db: DbExecutor, workspaceId: string, contactId: string | null, include: string | null) {
+  const { rows } = await db.execute<{ id: string; name: string; description: string; subscribed: boolean; chosen: boolean; updatedAt: string | null; archived: boolean }>(sql`
+    SELECT t.id, t.name, t.description, coalesce(c.subscribed, t.subscribed_by_default) AS subscribed, c.topic_id IS NOT NULL AS chosen, c.updated_at AS "updatedAt", t.archived_at IS NOT NULL AS archived
+    FROM audience_topics t LEFT JOIN audience_contact_topics c ON c.workspace_id = t.workspace_id AND c.topic_id = t.id AND c.contact_id = ${contactId}
+    WHERE t.workspace_id = ${workspaceId} AND (t.archived_at IS NULL OR t.id = ${include}) ORDER BY t.id`);
+  return rows.map(row => ({ ...row, updatedAt: isoTime(row.updatedAt) }));
+}
 /** Every topic that isn't archived with the contact's state of it, oldest first (ContactTopic, plus its description). */
 export async function contactTopicStates(db: DbExecutor, workspaceId: string, contactId: string) {
-  const { rows } = await db.execute<{ topicId: string; name: string; description: string; subscribed: boolean; chosen: boolean; updatedAt: string | null }>(sql`
-    SELECT t.id AS "topicId", t.name, t.description, coalesce(c.subscribed, t.subscribed_by_default) AS subscribed, c.topic_id IS NOT NULL AS chosen, c.updated_at AS "updatedAt"
-    FROM audience_topics t LEFT JOIN audience_contact_topics c ON c.workspace_id = t.workspace_id AND c.contact_id = ${contactId} AND c.topic_id = t.id
-    WHERE t.workspace_id = ${workspaceId} AND t.archived_at IS NULL ORDER BY t.id`);
-  return rows.map(row => ({ ...row, updatedAt: isoTime(row.updatedAt) }));
+  return (await topicStates(db, workspaceId, contactId, null)).map(({ id, archived: _, ...row }) => ({ topicId: id, ...row }));
 }
 
 /** A send's topic as its audience reads it (src/audience.ts consented). subscribedByDefault never changes. */

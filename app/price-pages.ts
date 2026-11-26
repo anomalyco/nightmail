@@ -9,7 +9,8 @@ import { PRICE_LINKS, PRICE_PAGES_LIVE } from './src/features/pricing/live.ts'
 import { PRICE_PAGES } from './src/features/pricing/pages.ts'
 import { PANEL_IDS } from './src/features/pricing/panels.ts'
 import { entryProblems, lastChecked } from './src/features/pricing/prices.ts'
-import { jsonLd, llmsFull, llmsSiteIndex, markdownFiles, markdownPath, structuredData } from './src/features/pricing/readable.ts'
+import * as readable from './src/features/pricing/readable.ts'
+import { jsonLd, llmsSiteIndex, markdownPath } from './src/features/pricing/readable.ts'
 
 // The public price pages and what's made with them (features/pricing):
 // - pricing.html and compare/<slug>.html, one for every comparison's entry (compare/index.ts): index.html with the
@@ -27,7 +28,8 @@ import { jsonLd, llmsFull, llmsSiteIndex, markdownFiles, markdownPath, structure
 // The canonical address, og:url, the twins' links and the sitemap name the hosted site (brand.ts) on every stage; the
 // card is fetched from the stage's own host, as index.html's is. While PRICE_PAGES_LIVE is false each page asks search
 // engines not to index it and the sitemap leaves it out. The build stops on an entry without its sources (prices.ts,
-// entryProblems) and on a footer link to a page that doesn't exist.
+// entryProblems) and on a footer link to a page that doesn't exist. What the twins and the structured data say of the
+// homepage and the product comes from `words`: readable.ts, or with the television homepage features/home/tv/readable.ts.
 const attr = (value: string) => value.replaceAll('&', '&amp;').replaceAll('"', '&quot;').replaceAll('<', '&lt;')
 const prerenderModule = fileURLToPath(new URL('./src/features/pricing/prerender.tsx', import.meta.url))
 const bootScript = fileURLToPath(new URL('./src/features/home/shell/boot.js', import.meta.url))
@@ -47,7 +49,7 @@ const THEME_ATTRIBUTES = ['data-theme', 'data-shell', 'data-member', 'data-overv
 const WHOLE_FACES = /@font-face\{font-family:(?:Inter|OpenTUI Mono|"Inter"|"OpenTUI Mono");[^}]*\}/g
 const FIRST_FONTS = [{ family: 'Inter', file: 'inter-basic.woff2', weight: '100 900' }, { family: 'OpenTUI Mono', file: 'opentui-regular-basic.woff2', weight: '400' }, { family: 'OpenTUI Mono', file: 'opentui-bold-basic.woff2', weight: '700' }]
 
-export function pricePages(): Plugin {
+export function pricePages(words: Pick<typeof readable, 'llmsFull' | 'markdownFiles' | 'structuredData'> = readable): Plugin {
   let publicDir = '', root = ''
   return {
     name: 'nightmail:price-pages', apply: 'build', enforce: 'post',
@@ -114,7 +116,7 @@ export function pricePages(): Plugin {
         if (!PRICE_PAGES_LIVE) set(/(<meta charset="UTF-8" \/>)/, '\n    <meta name="robots" content="noindex" />')
         // The page, painted, with what it needs to show: its CSS, its first picture, and its structured data.
         const shell = prerender.renderShell(page)
-        set(/(<link rel="manifest" href="\/site.webmanifest" \/>)/, `\n    <script type="application/ld+json">${jsonLd(structuredData(page))}</script>`)
+        set(/(<link rel="manifest" href="\/site.webmanifest" \/>)/, `\n    <script type="application/ld+json">${jsonLd(words.structuredData(page))}</script>`)
         html = html.replace(/\s*<link rel="preload" href="\/fonts\/[^"]+" as="font" type="font\/woff2" crossorigin \/>/g, '')
         set(/(<script src="\/theme.js"><\/script>)/, [
           ...fonts.map(font => `<link rel="preload" href="${font.url}" as="font" type="font/woff2" crossorigin />`),
@@ -130,9 +132,9 @@ export function pricePages(): Plugin {
         html = html.replace('<div id="root"></div>', `<div id="price-shell">${shell}</div>\n    <div id="root"></div>\n    <script src="${boot}" defer data-shell="price-shell" data-press="button" data-wait="none" data-keep=".boot-loader, .price-page" data-css="${styles[0]}" data-preload="${preload.join(' ')}" data-entry="${entry[0]}"></script>`)
         this.emitFile({ type: 'asset', fileName: page.file, source: html })
       }
-      for (const { file, source } of markdownFiles()) this.emitFile({ type: 'asset', fileName: file, source })
+      for (const { file, source } of words.markdownFiles()) this.emitFile({ type: 'asset', fileName: file, source })
       this.emitFile({ type: 'asset', fileName: 'llms-site.txt', source: llmsSiteIndex() })
-      this.emitFile({ type: 'asset', fileName: 'llms-full.txt', source: llmsFull() })
+      this.emitFile({ type: 'asset', fileName: 'llms-full.txt', source: words.llmsFull() })
       const listed = [{ path: '/', modified: null as string | null }, ...PRICE_PAGES_LIVE ? PRICE_PAGES.map(page => ({ path: page.path, modified: page.comparison ? lastChecked(page.comparison) : null })) : []]
       this.emitFile({ type: 'asset', fileName: 'robots.txt', source: `User-agent: *\nAllow: /\n\nSitemap: ${canonicalOrigin}/sitemap.xml\n` })
       this.emitFile({ type: 'asset', fileName: 'sitemap.xml', source: `<?xml version="1.0" encoding="UTF-8"?>\n<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n${listed.map(({ path, modified }) => `  <url><loc>${canonicalOrigin}${path}</loc>${modified ? `<lastmod>${modified}</lastmod>` : ''}</url>\n`).join('')}</urlset>\n` })
