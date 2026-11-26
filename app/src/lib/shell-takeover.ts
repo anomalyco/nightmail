@@ -1,24 +1,30 @@
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { focusInPlace } from '../components/ui/scroll-fade'
 
 /** A page its own file paints before the app's code (app/painted-page.ts: the same page in a shell over #root, with its
  *  CSS) goes as the app's page is first drawn, in the same frame and at the same place, so nothing moves and nothing the
  *  reader did is undone: the page's scroll stays, every box they scrolled (the contents, a code block sideways) is where
  *  they left it, their focus moves to the same control here, their selection selects the same words, the rows they
  *  opened stay open, what they typed or slid is set here, and a button they pressed while the app loaded (home/shell/
- *  boot.js holds it) is pressed here. A painted picker the reader has open (a native select) is theirs until they close
- *  it: boot.js follows their pick, and the takeover waits.
+ *  boot.js holds it) is pressed here. A painted picker the reader has open (a native select's list) is theirs until they
+ *  close it: boot.js follows their pick, and the takeover waits for it (only while it is open, which every current
+ *  browser can tell, :open; where one can't, while it has focus, for 30 s at most).
  *  shell: the shell's id; page: the app's page under #root; ready: whether the app's page has all it shows (a reference
  *  page waits for the API definition and this installation's address, and the painted page stays over it until then).
  *  Whether there was one. */
 export function useShellTakeover(shellId: string, page: string, ready = true) {
   const [painted] = useRef([typeof document !== 'undefined' && document.getElementById(shellId) !== null]).current
   const carried = useRef<{ typed: (string | null)[]; pressed: Place | null } | null>(null)
-  const [, retry] = useState(0)
+  const [, retry] = useState(0), waited = useRef<number | null>(null)
   useLayoutEffect(() => {
     const shell = document.getElementById(shellId)
     if (!shell || !ready) return
     const picking = document.activeElement instanceof HTMLSelectElement && shell.contains(document.activeElement) ? document.activeElement : null
-    if (picking) { picking.addEventListener('blur', () => retry(n => n + 1), { once: true }); return }
+    if (picking) {
+      const open = isOpen(picking)
+      waited.current ??= performance.now()
+      if (open === true || (open === null && performance.now() - waited.current < 30_000)) { setTimeout(() => retry(n => n + 1), 250); return }
+    }
     const focused = placeOf(shell, document.activeElement), opened = [...shell.querySelectorAll('details')].map(row => row.open)
     const scrolled = scrollsOf(shell.firstElementChild), selected = selectionIn(shell.firstElementChild)
     const held = window as Window & { __nightmailShellPress?: Element }
@@ -32,7 +38,8 @@ export function useShellTakeover(shellId: string, page: string, ready = true) {
     app?.querySelectorAll('details').forEach((row, i) => { if (opened[i]) row.open = true })
     for (const box of scrolled) { const into = placed(app, box.key)[box.nth]; if (into) { into.scrollTop = box.top; into.scrollLeft = box.left } }
     if (selected && app) select(app, selected)
-    atPlace(app, focused)?.focus({ preventScroll: true })
+    const focus = atPlace(app, focused)
+    if (focus) focusInPlace(focus)
   })
   useEffect(() => {
     const was = carried.current, app = document.querySelector(page)
@@ -46,7 +53,7 @@ export function useShellTakeover(shellId: string, page: string, ready = true) {
 }
 // The controls a reader can see: a painted page may draw one in two forms and show the one for the theme (a legal page's
 // theme switch, features/legal/prerender.tsx), where the app draws only that one.
-const controls = (root: ParentNode | null) => [...root?.querySelectorAll<HTMLElement>('a[href], button, input') ?? []].filter(control => control.getClientRects().length > 0)
+const controls = (root: ParentNode | null) => [...root?.querySelectorAll<HTMLElement>('a[href], button, input, select') ?? []].filter(control => control.getClientRects().length > 0)
 // A control's place, the same on the painted page and the app's: which of the controls with its class it is (Get started
 // and the Open dashboard drawn in its place for someone signed in share theirs), or for one without a class, of those
 // with its tag, address and words. Not its place among all controls: signed in, the app's page has no sign-in consent
@@ -96,4 +103,8 @@ function select(root: Element, [start, end]: [number, number]) {
     if (began && end <= seen + length) { range.setEnd(node, end - seen); getSelection()?.removeAllRanges(); getSelection()?.addRange(range); return }
     seen += length
   }
+}
+// Whether a select's list is open (:open), or null where the browser can't tell.
+function isOpen(select: HTMLSelectElement): boolean | null {
+  try { return select.matches(':open') } catch { return null }
 }

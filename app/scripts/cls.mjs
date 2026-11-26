@@ -307,6 +307,7 @@ const pages = ids => [
   // scrolled stay where they left them, and a pick in the phone's page picker goes to that page.
   ['Docs · signed out operation, contents scrolled first', '/docs/api/sendEmail', { user: null, firstTouch: 'contents' }],
   ['Docs · signed out operation, picked on a phone', '/docs/api/sendEmail', { user: null, firstTouch: 'pick', phoneOnly: true }],
+  ['Docs · signed out operation, contents scrolled by keyboard first', '/docs/api/sendEmail', { user: null, firstTouch: 'keyboard' }],
   // No connection yet: Get started is up at once, whole, while onboarding starts Hosted mail.
   ['Onboarding', '/onboarding', { user: 'ona' }],
   // Get started on the built-in domain, ready (onboarding/get-started.tsx): the Agent tab, and By hand's key and send example.
@@ -993,13 +994,22 @@ async function measure(browser, job, fx) {
         }
       }
       const painted = await page.evaluate(() => !!document.getElementById('page-shell')) ? await words() : null;
-      // The contents the reader scrolled before the app is up stay where they left them.
-      const contents = job.firstTouch === 'contents' ? await page.evaluate(() => { const box = document.querySelector('#page-shell .ui-subnav__scroll'); box.scrollTop += 400; return box.scrollTop; }) : null;
+      // The contents the reader scrolled before the app is up stay where they left them: by a script (as a wheel would), or
+      // by the keyboard (Tab to the first contents link, then PageDown), where their focus stays on that link.
+      let contents = job.firstTouch === 'contents' ? await page.evaluate(() => { const box = document.querySelector('#page-shell .ui-subnav__scroll'); box.scrollTop += 400; return box.scrollTop; }) : null;
+      if (job.firstTouch === 'keyboard') {
+        for (let i = 0; i < 15 && !await page.evaluate(() => document.activeElement === document.querySelector('#page-shell .ui-subnav__scroll a')); i++) await page.keyboard.press('Tab');
+        for (let i = 0; i < 3; i++) await page.keyboard.press('PageDown');
+        contents = await page.evaluate(() => document.getElementById('page-shell') && document.activeElement === document.querySelector('#page-shell .ui-subnav__scroll a') ? document.querySelector('#page-shell .ui-subnav__scroll').scrollTop : null);
+        if (contents === null) problems.push('the keyboard reached the contents only after the app took over: the case was not exercised');
+      }
       await page.keyboard.press('Shift');
       await page.waitForFunction(() => !document.querySelector('#price-shell, #page-shell'), null, { timeout: 30_000 }).catch(() => problems.push('the app never took over from the painted page'));
       if (contents !== null) {
+        await page.waitForTimeout(300);
         const now = await page.evaluate(() => document.querySelector('#root .ui-subnav__scroll')?.scrollTop ?? null);
         if (now === null || Math.abs(now - contents) > 1) problems.push(`the contents scrolled to ${contents} before the app took over are at ${now} after`);
+        if (job.firstTouch === 'keyboard' && !await page.evaluate(() => document.activeElement === document.querySelector('#root .ui-subnav__scroll a'))) problems.push('the keyboard focus on the first contents link was not kept');
       }
       if (painted !== null) {
         const app = await words();

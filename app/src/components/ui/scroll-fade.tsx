@@ -72,10 +72,18 @@ export function watchScrollFades(root: HTMLElement = document.body) {
 
 // Keyboard focus lands in view. Chrome leaves a control that is already partly visible where it is (the last tab of a
 // sideways rail, a field half below the fold), so it is scrolled the rest of the way, nearest edge first; the area's
-// scroll-padding keeps it clear of the edge and the fade.
+// scroll-padding keeps it clear of the edge and the fade. Not focus a page puts back where the reader had it
+// (focusInPlace): they may have scrolled away from it, and the next Tab brings it into view as it would have.
+let inPlace: Element | null = null
+/** Focus a control without bringing it into view: the reader's own focus, carried from a page painted before the app
+ *  (lib/shell-takeover.ts), scrolled away from as they left it. */
+export function focusInPlace(el: HTMLElement) {
+  inPlace = el
+  try { el.focus({ preventScroll: true }) } finally { inPlace = null }
+}
 function revealFocus(event: FocusEvent) {
   const el = event.target
-  if (!(el instanceof HTMLElement)) return
+  if (!(el instanceof HTMLElement) || el === inPlace) return
   requestAnimationFrame(() => {
     if (document.activeElement !== el || !el.matches(':focus-visible')) return
     const r = el.getBoundingClientRect()
