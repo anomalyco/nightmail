@@ -2456,6 +2456,10 @@ export type CampaignAudienceCounts = {
             code: 'NEW_DOMAIN' | 'SIZE_JUMP' | 'NO_HISTORY' | 'RISKY_LIST' | 'NEVER_MAILED' | 'NO_DMARC' | 'BOUNCES' | 'COMPLAINTS' | 'NEW_REGISTRATION' | 'NEW_HERE' | 'USUAL_JUMP' | 'NEW_LINK_DOMAIN' | 'BLOCKLISTED_BEFORE' | 'BLOCKLIST_UNCOUNTED';
             message: string;
         }>;
+        /**
+         * Present when part of the review couldn't be worked out just now (sizing the plan): what was left out, in a sentence. The review is then the one without that part, and its verdict is at least ramp_recommended.
+         */
+        unavailable?: string;
         domain: {
             name: string;
             /**
@@ -2800,6 +2804,10 @@ export type CampaignQueued = {
             code: 'NEW_DOMAIN' | 'SIZE_JUMP' | 'NO_HISTORY' | 'RISKY_LIST' | 'NEVER_MAILED' | 'NO_DMARC' | 'BOUNCES' | 'COMPLAINTS' | 'NEW_REGISTRATION' | 'NEW_HERE' | 'USUAL_JUMP' | 'NEW_LINK_DOMAIN' | 'BLOCKLISTED_BEFORE' | 'BLOCKLIST_UNCOUNTED';
             message: string;
         }>;
+        /**
+         * Present when part of the review couldn't be worked out just now (sizing the plan): what was left out, in a sentence. The review is then the one without that part, and its verdict is at least ramp_recommended.
+         */
+        unavailable?: string;
         domain: {
             name: string;
             /**

@@ -7588,6 +7588,10 @@
                 },
                 "description": "Every finding behind the verdict, with its own code: NEW_REGISTRATION (registered recently, from public registry data), NEW_HERE (registered long ago, new to this workspace), NEW_DOMAIN (added recently, registration not known), USUAL_JUMP, NEW_LINK_DOMAIN, BLOCKLISTED_BEFORE (an earlier send drew replies naming a blocklist and none has finished without since), BLOCKLIST_UNCOUNTED (a recent send's blocklist replies aren't counted yet, so it isn't taken for clean), and the original codes."
               },
+              "unavailable": {
+                "type": "string",
+                "description": "Present when part of the review couldn't be worked out just now (sizing the plan): what was left out, in a sentence. The review is then the one without that part, and its verdict is at least ramp_recommended."
+              },
               "domain": {
                 "type": "object",
                 "properties": {
@@ -8493,6 +8497,10 @@
                   ]
                 },
                 "description": "Every finding behind the verdict, with its own code: NEW_REGISTRATION (registered recently, from public registry data), NEW_HERE (registered long ago, new to this workspace), NEW_DOMAIN (added recently, registration not known), USUAL_JUMP, NEW_LINK_DOMAIN, BLOCKLISTED_BEFORE (an earlier send drew replies naming a blocklist and none has finished without since), BLOCKLIST_UNCOUNTED (a recent send's blocklist replies aren't counted yet, so it isn't taken for clean), and the original codes."
+              },
+              "unavailable": {
+                "type": "string",
+                "description": "Present when part of the review couldn't be worked out just now (sizing the plan): what was left out, in a sentence. The review is then the one without that part, and its verdict is at least ramp_recommended."
               },
               "domain": {
                 "type": "object",
