@@ -500,7 +500,8 @@ export type ReadinessFacts = {
  *    maxBatches days. minimumSplit: a send the review recommends a ramp for is split into two days or more when larger than this.
  *  - firstBatch: a ramp's first day starts with this many, then waits waitMinutes for their bounces and rejections before
  *    the rest of the day's batch.
- *  - blocklistPause: a campaign pauses (BLOCKLISTED) once `replies` replies naming a blocklist arrived in windowMinutes;
+ *  - blocklistPause: a campaign pauses (BLOCKLISTED) once `replies` replies naming a blocklist, from `domains` different
+ *    recipient domains or more, arrived in windowMinutes;
  *    the sender can resume it once none has arrived for windowMinutes, an operator any time (src/send-guards.ts).
  *  - domainStop: a campaign stops releasing to a recipient domain where, of the mail it sent there in windowMinutes, at
  *    least `sent` have a result and bouncedShare or more of those bounced for good (never a large mailbox provider).
@@ -510,7 +511,7 @@ export type RampLines = {
   young: { first: number; cleanFactor: number; growth: number; maxBatches: number };
   established: { first: number; cleanFactor: number; growth: number; maxBatches: number };
   firstBatch: { size: number; waitMinutes: number };
-  blocklistPause: { replies: number; windowMinutes: number };
+  blocklistPause: { replies: number; domains: number; windowMinutes: number };
   domainStop: { sent: number; bouncedShare: number; windowMinutes: number };
 };
 export const RAMP_LINES: RampLines = {
@@ -518,7 +519,7 @@ export const RAMP_LINES: RampLines = {
   young: { first: RAMP.plan.firstBatch, cleanFactor: RAMP.plan.cleanFactor, growth: RAMP.plan.growth, maxBatches: RAMP.plan.maxBatches },
   established: { first: RAMP.plan.firstBatch, cleanFactor: RAMP.plan.cleanFactor, growth: RAMP.plan.growth, maxBatches: RAMP.plan.maxBatches },
   firstBatch: { size: 2_000, waitMinutes: 60 },
-  blocklistPause: { replies: 3, windowMinutes: 30 },
+  blocklistPause: { replies: 3, domains: 3, windowMinutes: 30 },
   domainStop: { sent: 20, bouncedShare: 0.8, windowMinutes: 120 },
 };
 /** RAMP_LINES with an override's values. */

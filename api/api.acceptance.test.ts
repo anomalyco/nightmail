@@ -32779,7 +32779,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // A brand-new domain's first campaign: the young plan, required.
       const fresh = judgeReadiness({ ...facts, recipients: 60_000, registeredDays: 5, domainAgeDays: 2, largestSend: 0, largestCleanSend: 0 });
       assert.deepEqual([fresh.verdict, fresh.requiredBy, fresh.reasons.slice(0, 2)], ['ramp_required', 'NEW_REGISTRATION', ['NEW_REGISTRATION', 'NO_HISTORY']]);
-      const youngLines = { newRegistrationDays: 30, usualJump: 10, minimumSplit: 2_000, young: { first: 500, cleanFactor: 2, growth: 2, maxBatches: 8 }, established: { first: 10_000, cleanFactor: 2, growth: 4, maxBatches: 5 }, firstBatch: { size: 5_000, waitMinutes: 120 }, blocklistPause: { replies: 3, windowMinutes: 30 }, domainStop: { sent: 20, bouncedShare: 0.8, windowMinutes: 120 } };
+      const youngLines = { newRegistrationDays: 30, usualJump: 10, minimumSplit: 2_000, young: { first: 500, cleanFactor: 2, growth: 2, maxBatches: 8 }, established: { first: 10_000, cleanFactor: 2, growth: 4, maxBatches: 5 }, firstBatch: { size: 5_000, waitMinutes: 120 }, blocklistPause: { replies: 3, domains: 3, windowMinutes: 30 }, domainStop: { sent: 20, bouncedShare: 0.8, windowMinutes: 120 } };
       assert.deepEqual(judgeReadiness({ ...facts, recipients: 60_000, registeredDays: 5, domainAgeDays: 2, largestSend: 0, largestCleanSend: 0, lines: youngLines }).plan, [500, 1_000, 2_000, 4_000, 8_000, 16_000, 28_500]);
       // An established domain at its usual volume: ready. A small sender's 500-recipient list: ready.
       assert.equal(judgeReadiness({ ...established, recipients: 90_000, largestSend: 100_000, largestCleanSend: 100_000, usualDay: 30_000 }).verdict, 'ready');
@@ -32880,8 +32880,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const join = async (where: string) => db.query(`INSERT INTO audience_list_members (workspace_id, list_id, contact_id) SELECT workspace_id, $2, id FROM audience_contacts WHERE workspace_id = $1 AND ${where}`, [ws, list.id]);
       await db.query("INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent) SELECT 'con_' || md5($1 || $2 || n::text), $1, 'p' || n || '@' || $3, 'subscribed' FROM generate_series(1, 150) AS n", [ws, tag, dead]);
       await join(`email LIKE '%@${dead}'`);
-      await db.query("INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent) SELECT 'con_' || md5($1 || $2 || 'g' || n::text), $1, 'g' || n || '-' || $2 || '@example.net', 'subscribed' FROM generate_series(1, 600) AS n", [ws, tag]);
-      await join(`email LIKE '%-${tag}@example.net'`);
+      await db.query("INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent) SELECT 'con_' || md5($1 || $2 || 'g' || n::text), $1, 'g' || n || '-' || $2 || '@m' || (n % 4) || '.example.net', 'subscribed' FROM generate_series(1, 600) AS n", [ws, tag]);
+      await join(`email LIKE '%-${tag}@m_.example.net'`);
       await db.query(`INSERT INTO sending_region_limits (workspace_id, region, max_send_rate, checked_at) VALUES ($1, $2, 5000, clock_timestamp())
         ON CONFLICT ON CONSTRAINT sending_region_limits_pkey DO UPDATE SET max_send_rate = 5000, max_24_hour_send = 0, sent_last_24_hours = 0, checked_at = clock_timestamp()`, [ws, REGION]);
       const campaign = ok(await local('POST', '/v1/campaigns', { name: unique('guards'), from: 'sender@example.com', subject: 'News', html: '<p>News for you.</p>', audience: { listId: list.id } }), 201);
@@ -32895,7 +32895,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await run('campaign.run'); await run('campaign.run');
       assert.equal((await view()).delivery.expanded, 100);
       // The first day's mail to the dead domain bounced for good, the rest was delivered: the rest there is skipped.
-      const sentTo = async (domain: string) => (await db.query("SELECT count(*)::int AS n FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@' || $2", [campaign.id, domain])).rows[0].n;
+      const sentTo = async (domain: string) => (await db.query("SELECT count(*)::int AS n FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%' || $2", [campaign.id, domain])).rows[0].n;
       await db.query("UPDATE sending_emails SET status = CASE WHEN to_addresses->>0 LIKE '%@' || $2 THEN 'bounced' ELSE 'delivered' END, provider_id = 'sim_' || id WHERE campaign_id = $1", [campaign.id, dead]);
       const deadFirst = await sentTo(dead);
       assert.ok(deadFirst >= 20, String(deadFirst));
@@ -32903,13 +32903,20 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // The same run checked the campaign, stopped the domain, then released the next day.
       assert.deepEqual((await db.query('SELECT domain, resolved, bounced FROM campaign_stopped_domains WHERE campaign_id = $1', [campaign.id])).rows, [{ domain: dead, resolved: deadFirst, bounced: deadFirst }]);
       const later = await view();
-      assert.deepEqual([await sentTo(dead), later.delivery.canceled > 0, later.delivery.expanded > 100], [deadFirst, true, true]);
+      assert.deepEqual([await sentTo(dead), later.delivery.canceled > 0, later.delivery.expanded > 100, await sentTo('.example.net') > 0], [deadFirst, true, true, true]);
       // A plan's day: unhealthy (all bounced), so the same batch again; a clean one opens the next.
       const since = new Date(Date.now() - 3 * 86_400_000).toISOString();
       assert.equal(await planWindowHealthy(runtime.db, ws, campaign.id, since), false);
       // Replies naming a blocklist: paused, one operator alert, and no resume while they keep arriving.
-      await db.query("UPDATE sending_emails SET status = 'delivered' WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@example.net'", [campaign.id]);
-      const { rows: listed } = await db.query("SELECT id FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@example.net' ORDER BY id LIMIT 3", [campaign.id]);
+      await db.query("UPDATE sending_emails SET status = 'delivered' WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%.example.net'", [campaign.id]);
+      // One receiving domain alone never pauses it, however many replies it sends.
+      const one = (await db.query("SELECT id FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@m1.example.net' ORDER BY id LIMIT 5", [campaign.id])).rows;
+      const reply = (id: string) => db.query("INSERT INTO sending_email_events (id, workspace_id, email_id, type, data, simulated, created_at) VALUES ($1, $2, $3, 'non_permanent_bounce', $4, false, now())",
+        [unique('event'), ws, id, JSON.stringify({ bounceType: 'Transient', bounceSubType: 'General', diagnosticCode: '554 5.7.1 An URL in this email is listed by Spamhaus DBL' })]);
+      await db.query("UPDATE sending_emails SET status = 'delayed', updated_at = now() WHERE id = ANY($1)", [one.map((r: Json) => r.id)]);
+      for (const { id } of one) await reply(id);
+      assert.equal(await blocklistPause(runtime.db, ws, campaign.id, rampLines(null)), null);
+      const { rows: listed } = await db.query("SELECT DISTINCT ON (split_part(to_addresses->>0, '@', 2)) id FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%.example.net' AND to_addresses->>0 NOT LIKE '%@m1.example.net' ORDER BY split_part(to_addresses->>0, '@', 2), id LIMIT 3", [campaign.id]);
       // Deferred by servers that check the DBL: still waiting to be delivered.
       await db.query("UPDATE sending_emails SET status = 'delayed', updated_at = now() WHERE id = ANY($1)", [listed.map(r => r.id)]);
       for (const { id } of listed) await db.query("INSERT INTO sending_email_events (id, workspace_id, email_id, type, data, simulated, created_at) VALUES ($1, $2, $3, 'non_permanent_bounce', $4, false, now())",

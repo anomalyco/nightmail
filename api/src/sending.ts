@@ -2876,10 +2876,10 @@ export function registerSending(app: App) {
     if (!campaignResumable(campaign)) throw new ApiError(409, 'CAMPAIGN_NOT_PAUSED', 'Only a paused campaign, or one that failed after releasing recipients, can be resumed.');
     if (campaign.state === 'paused' && campaign.quarantines >= 2 && QUARANTINE_CODES.includes(campaign.pauseReason?.code ?? ''))
       throw new ApiError(409, 'QUARANTINE_REVIEW_REQUIRED', 'This campaign was quarantined twice for list quality. An operator reviews it before it sends again: ask for a review from the dashboard.');
-    // Paused for blocklist replies: the sender resumes once none has arrived for the window; an operator can release it any time.
+    // Paused for blocklist replies: the sender resumes once they no longer come from several domains in the window; an operator any time.
     if (campaign.state === 'paused' && campaign.pauseReason?.code === 'BLOCKLISTED') {
-      const window = rampLines(c.env.config.rampLines).blocklistPause.windowMinutes;
-      if (await campaignBlocklistReplies(db, a.workspaceId, campaign.id, { minutes: window }))
+      const pause = rampLines(c.env.config.rampLines).blocklistPause, recent = await campaignBlocklistReplies(db, a.workspaceId, campaign.id, { minutes: pause.windowMinutes });
+      if (recent.replies && recent.domains >= pause.domains)
         throw new ApiError(409, 'BLOCKLIST_REPLIES_ARRIVING', 'Replies naming a blocklist are still arriving for this campaign. Fix the listed domain or link and resume once they stop, or ask for a review.');
     }
     await requiredNoticesAllowed(db, campaign.draft, a.workspaceId);

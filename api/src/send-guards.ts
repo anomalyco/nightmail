@@ -7,8 +7,8 @@ import { RAMP, type RampLines } from './standing-model.js';
 // A sending campaign's guards, beside the automatic pause (src/sending.ts campaignHealth and the release loop). Lines from
 // RampLines (the private NIGHTMAIL_RAMP setting overrides them).
 //  - Blocklist replies: a receiving server that names a blocklist (src/delivery-history.ts blocklistNamed) is saying a domain
-//    or link in the mail is listed. Enough of them in a short window pause the campaign (BLOCKLISTED); the sender can
-//    resume once none has arrived for the window, an operator any time (Operator → release), and an operator alert goes out.
+//    or link in the mail is listed. Enough of them, from enough different recipient domains, in a short window pause the
+//    campaign (BLOCKLISTED); the sender can resume once they no longer come from enough domains in the window, an operator any time (Operator → release), and an operator alert goes out.
 //  - Dead recipient domains: a domain where this campaign's mail mostly bounced for good in the last window is skipped for
 //    the rest of the send. Large mailbox providers never are: a bounce rate there is the list's problem, which the
 //    automatic pause answers.
@@ -25,20 +25,22 @@ const NAMES = '(spamhaus|uribl|surbl|spamcop|barracuda|brbl|block ?list|black ?l
  * event of the workspace: a large send has hundreds of thousands of events an hour, and only a few thousand failures.
  * At most 500 replies read.
  */
-export async function campaignBlocklistReplies(db: DbExecutor, workspaceId: string, campaignId: string, window: { minutes: number } | { since: string }) {
+export async function campaignBlocklistReplies(db: DbExecutor, workspaceId: string, campaignId: string, window: { minutes: number } | { since: string }): Promise<{ replies: number; domains: number }> {
   const from = 'since' in window ? sql`${window.since}::timestamptz` : sql`now() - make_interval(mins => ${window.minutes})`;
-  const { rows } = await db.execute<{ reply: string | null }>(sql`SELECT v.reply FROM sending_emails e
+  const { rows } = await db.execute<{ reply: string | null; domain: string }>(sql`SELECT v.reply, lower(split_part(e.to_addresses->>0, '@', 2)) AS domain FROM sending_emails e
       CROSS JOIN LATERAL (SELECT ${REPLY} AS reply FROM sending_email_events v WHERE v.workspace_id = e.workspace_id AND v.email_id = e.id
         AND v.type IN ('bounce', 'non_permanent_bounce', 'delivery_delay') AND v.created_at > ${from}) v
     WHERE e.workspace_id = ${workspaceId} AND e.campaign_id = ${campaignId} AND e.status IN ('bounced', 'delayed') AND e.updated_at > ${from}
       AND v.reply ~* ${NAMES} LIMIT 500`);
-  return rows.filter(row => blocklistNamed(row.reply)).length;
+  const named = rows.filter(row => blocklistNamed(row.reply));
+  return { replies: named.length, domains: new Set(named.map(row => row.domain)).size };
 }
 
 /** The pause a campaign gets once enough blocklist replies arrived in the window, else null. */
 export async function blocklistPause(db: DbExecutor, workspaceId: string, campaignId: string, lines: RampLines) {
-  const replies = await campaignBlocklistReplies(db, workspaceId, campaignId, { minutes: lines.blocklistPause.windowMinutes });
-  if (replies < lines.blocklistPause.replies) return null;
+  // From several recipient domains: one receiving server alone, hostile or misconfigured, can't pause a campaign.
+  const { replies, domains } = await campaignBlocklistReplies(db, workspaceId, campaignId, { minutes: lines.blocklistPause.windowMinutes });
+  if (replies < lines.blocklistPause.replies || domains < lines.blocklistPause.domains) return null;
   return { code: 'BLOCKLISTED', message: `Paused automatically: ${replies.toLocaleString('en-US')} replies from receiving servers named a blocklist, so a domain or link in this campaign is probably listed. Find which one and fix it before sending more. You can resume once no new ones arrive, or ask for a review.` };
 }
 
@@ -75,5 +77,5 @@ export async function planWindowHealthy(db: DbExecutor, workspaceId: string, cam
     FROM sending_emails e WHERE e.workspace_id = ${workspaceId} AND e.created_at >= ${windowStartedAt}::timestamptz AND e.campaign_id = ${campaignId}`);
   const accepted = Number(w?.accepted ?? 0), bounced = Number(w?.bounced ?? 0), complained = Number(w?.complained ?? 0);
   const clean = (accepted < c.bounceMinimum || bounced <= accepted * c.bounceRate) && (complained < c.complaints || complained <= accepted * c.complaintRate);
-  return clean && (await campaignBlocklistReplies(db, workspaceId, campaignId, { since: windowStartedAt })) === 0;
+  return clean && (await campaignBlocklistReplies(db, workspaceId, campaignId, { since: windowStartedAt })).replies === 0;
 }
