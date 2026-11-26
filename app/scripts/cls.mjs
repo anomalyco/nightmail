@@ -309,6 +309,20 @@ const pages = ids => [
   ['Docs · signed out operation, contents scrolled first', '/docs/api/sendEmail', { user: null, firstTouch: 'contents' }],
   ['Docs · signed out operation, picked on a phone', '/docs/api/sendEmail', { user: null, firstTouch: 'pick', phoneOnly: true }],
   ['Docs · signed out operation, contents scrolled by keyboard first', '/docs/api/sendEmail', { user: null, firstTouch: 'keyboard' }],
+  // The overview and the guides are painted too, as a visitor sees them (no account data, no token), the MCP guide in a
+  // phone's form where the window is one (a picker in place of the client tabs); the overview answers its own sections, and
+  // an old address (/docs#guide-rituals) is the app's from the start, which moves it.
+  ['Docs · signed out MCP guide', '/docs/mcp', { user: null }],
+  ['Docs · signed out keys guide', '/docs/keys', { user: null }],
+  ['Docs · signed out rules guide', '/docs/rules', { user: null }],
+  ['Docs · signed out at a section', '/docs#sending-limits', { user: null }],
+  ['Docs · signed out old address', '/docs#guide-rituals', { user: null, lands: '/docs/rules' }],
+  // First actions on a painted guide: the page scrolled by the wheel, a client tab pressed, the agent prompt copied, a
+  // client picked on a phone.
+  ['Docs · signed out rules guide, scrolled by the wheel first', '/docs/rules', { user: null, firstTouch: 'wheel' }],
+  ['Docs · signed out MCP guide, a tab pressed first', '/docs/mcp', { user: null, firstTouch: 'tab' }],
+  ['Docs · signed out, the agent prompt copied first', '/docs', { user: null, firstTouch: 'copy' }],
+  ['Docs · signed out MCP guide, a client picked on a phone', '/docs/mcp', { user: null, firstTouch: 'pick-client', phoneOnly: true }],
   // No connection yet: Get started is up at once, whole, while onboarding starts Hosted mail.
   ['Onboarding', '/onboarding', { user: 'ona' }],
   // Get started on the built-in domain, ready (onboarding/get-started.tsx): the Agent tab, and By hand's key and send example.
@@ -701,6 +715,9 @@ const phonePages = new Set([
   'Docs · signed out operation',
   'Docs · signed out operation far down',
   'Docs · signed out operation, picked on a phone',
+  'Docs · signed out MCP guide',
+  'Docs · signed out at a section',
+  'Docs · signed out MCP guide, a client picked on a phone',
   'Docs · operation',
   'Signed out',
   'Support chat',
@@ -822,15 +839,16 @@ async function settle(page, net) {
 // browser's scrollend after its last scroll, where it has the event, and in any case its position the same over 10 frames
 // and 300 ms. A loaded runner draws few frames, and a short wait read a column still finishing its smooth scroll as at
 // rest (2037, then 2040, in a merge queue run on Nov 26). watchScroll goes before the action, so no scrollend is missed;
-// restOf after it, which answers where the box rests and where it was when watched, or that it never came to rest.
-const watchScroll = (page, selector) => page.evaluate(selector => {
-  const box = document.querySelector(selector);
+// restOf after it, which answers where the box rests and where it was when watched, or that it never came to rest. With
+// no selector, the page's own scroll, whose events go to the document.
+const watchScroll = (page, selector = null) => page.evaluate(selector => {
+  const box = selector ? document.querySelector(selector) : document.scrollingElement, events = selector ? box : document;
   const watch = window.__clsScroll = { box, from: box?.scrollTop ?? null, scrolled: 0, ended: 0 };
-  box?.addEventListener('scroll', () => { watch.scrolled = performance.now(); }, { passive: true });
-  box?.addEventListener('scrollend', () => { watch.ended = performance.now(); });
+  events?.addEventListener('scroll', () => { watch.scrolled = performance.now(); }, { passive: true });
+  events?.addEventListener('scrollend', () => { watch.ended = performance.now(); });
 }, selector);
 const restOf = page => page.evaluate(limit => new Promise(done => {
-  const watch = window.__clsScroll, box = watch?.box, began = performance.now(), ends = !!box && 'onscrollend' in box;
+  const watch = window.__clsScroll, box = watch?.box, began = performance.now(), ends = !!box && 'onscrollend' in window;
   let at = box?.scrollTop, same = 0, since = began;
   const frame = () => {
     if (!box?.isConnected) return done({ gone: true, from: watch?.from ?? null });
@@ -967,6 +985,11 @@ async function measure(browser, job, fx) {
     // A signed-in browser has been to the dashboard, which remembers it: the marketing pages ask for its session (data/live.ts, sessionLikely).
     if (job.user) await context.addInitScript(() => { try { localStorage.setItem('nightmail.session', 'in'); } catch {} });
     await context.addInitScript(probe);
+    // A copy made on the painted page is read back from the clipboard, as a reader's paste would, and counted: it is made once.
+    if (job.firstTouch === 'copy') {
+      await context.grantPermissions(['clipboard-read', 'clipboard-write'], { origin });
+      await context.addInitScript(() => { window.__clsCopies = 0; const write = navigator.clipboard?.writeText.bind(navigator.clipboard); if (write) navigator.clipboard.writeText = text => { window.__clsCopies++; return write(text); }; });
+    }
     // Privacy mode on (lib/privacy.ts; off by default), so the masking checks and the review screenshots see addresses masked.
     // (Init scripts run in every frame too, and an email preview's sandboxed frame has no storage.)
     await context.addInitScript(() => { try { localStorage.setItem('nightmail.privacy.v2', 'on'); } catch {} });
@@ -1018,6 +1041,8 @@ async function measure(browser, job, fx) {
     const missing = !lateFonts ? [] : await page.evaluate(() => Promise.all([...document.fonts].filter(f => f.family.includes('Fallback')).map(f => f.load().then(() => null, () => `${f.family} ${f.weight} ${f.unicodeRange}`))));
     for (const face of missing.filter(Boolean)) problems.push(`no local font for ${face}: install fonts-liberation and fonts-dejavu-core, or measure on a machine with Arial and Menlo`);
     await settle(page, net);
+    // An old address is the app's from the start, which moves it to the page it names now.
+    if (job.lands && new URL(page.url()).pathname !== job.lands) problems.push(`${job.path} ended at ${new URL(page.url()).pathname}, not ${job.lands}`);
     if (television && await page.evaluate(() => !!document.getElementById('home-shell'))) {
       await page.waitForFunction(() => !document.getElementById('home-shell'), null, { timeout: 30_000 }).catch(() => problems.push('the app never took over from the homepage\'s first screen'));
       await settle(page, net);
@@ -1039,7 +1064,32 @@ async function measure(browser, job, fx) {
           await settle(page, net);
         }
       }
-      const painted = await page.evaluate(() => !!document.getElementById('page-shell')) ? await words() : null;
+      // (Not where the reader's first action changes what the app shows once it takes over: a tab pressed, a client picked.
+      // Their own pages are compared without one.)
+      const painted = !['tab', 'pick-client'].includes(job.firstTouch) && await page.evaluate(() => !!document.getElementById('page-shell')) ? await words() : null;
+      // A client tab pressed, the agent prompt copied, a client picked: on the painted page, before the app is up.
+      const action = { tab: 'Claude Code', copy: 'Copy agent prompt', 'pick-client': 'claude' }[job.firstTouch] ?? null;
+      let copied = null, copiedText = null;
+      if (job.firstTouch === 'tab') await page.locator('#page-shell .ui-tab:visible', { hasText: action }).first().click().catch(() => problems.push(`the painted page has no “${action}” tab to press`));
+      if (job.firstTouch === 'copy') {
+        await page.locator(`#page-shell button[aria-label="${action}"]`).click().catch(() => problems.push(`the painted page has no “${action}” button`));
+        copied = await page.waitForFunction(label => document.querySelector(`#page-shell button[aria-label="${label}"]`)?.hasAttribute('data-copied') ?? 'app', action, { timeout: 5_000 }).then(handle => handle.jsonValue(), () => false);
+        const text = copiedText = await page.evaluate(() => navigator.clipboard.readText()).catch(() => '');
+        if (copied === false || !text.startsWith('Set up ')) problems.push(`the painted “${action}” didn't copy the prompt at once (marked ${copied}, clipboard “${text.slice(0, 30)}”)`);
+      }
+      // The page scrolled by the wheel, read once it is at rest (restOf), before the app takes over and after.
+      let scrolled = null;
+      if (job.firstTouch === 'wheel') {
+        await page.mouse.move(800, 500);
+        await watchScroll(page);
+        await page.mouse.wheel(0, 900);
+        const rest = await restOf(page);
+        if (rest.moving) problems.push(`the page never came to rest after the wheel scrolled it (still moving after 15 s, at ${rest.top} from ${rest.from}): the case was not measured`);
+        else if (!await page.evaluate(() => !!document.getElementById('page-shell'))) problems.push('the wheel reached the page only after the app took over: the case was not exercised');
+        else if (!(rest.top > rest.from)) problems.push(`the wheel didn't scroll the painted page (at ${rest.top} from ${rest.from}): the case was not exercised`);
+        else scrolled = rest;
+      }
+      if (job.firstTouch === 'pick-client') await page.selectOption('#page-shell select[data-shell-media^="phone"]:visible', action).catch(() => problems.push('the painted MCP guide has no client picker on a phone'));
       // The contents the reader scrolled before the app is up stay where they left them: by a script (as a wheel would), or
       // by the keyboard (Tab to the first contents link, then PageDown, which scrolls smoothly), where their focus stays on
       // that link. Each position is read once the column is at rest (restOf), on the painted page and in the app's.
@@ -1068,11 +1118,30 @@ async function measure(browser, job, fx) {
         else if (now.top > contents.top + 2) problems.push(`the contents moved on from where the reader left them: at rest at ${contents.top} before the app took over, at ${now.top} after`);
         if (job.firstTouch === 'keyboard' && !await page.evaluate(() => document.activeElement === document.querySelector('#root .ui-subnav__scroll a'))) problems.push('the keyboard focus on the first contents link was not kept');
       }
+      if (scrolled !== null) {
+        await watchScroll(page);
+        const now = await restOf(page);
+        if (now.moving) problems.push(`the page never came to rest after the app took over (still moving after 15 s, at ${now.top})`);
+        else if (now.top < scrolled.top - 1) problems.push(`the page went back toward where it started: at rest at ${scrolled.top} before the app took over (scrolled from ${scrolled.from}), at ${now.top} after`);
+        else if (now.top > scrolled.top + 2) problems.push(`the page moved on from where the reader left it: at rest at ${scrolled.top} before the app took over, at ${now.top} after`);
+      }
+      if (action) {
+        // The tab pressed or the client picked is the app's choice once it has taken over: waited for, up to 5 s.
+        const chosen = kind => kind === 'tab' ? document.querySelector('#root .connect-agent__setup .ui-tab[aria-selected=true]')?.textContent : document.querySelector('#root .connect-agent__setup select')?.value;
+        if (job.firstTouch === 'tab' || job.firstTouch === 'pick-client') await page.waitForFunction(([kind, want]) => (kind === 'tab' ? document.querySelector('#root .connect-agent__setup .ui-tab[aria-selected=true]')?.textContent : document.querySelector('#root .connect-agent__setup select')?.value) === want, [job.firstTouch, action], { timeout: 5_000 }).catch(async () => {
+          const now = await page.evaluate(chosen, job.firstTouch);
+          problems.push(job.firstTouch === 'tab' ? `the “${action}” tab pressed before the app took over isn't the chosen one after (“${now}”)` : `the client picked before the app took over isn't the chosen one after (${now})`);
+        });
+        // What the painted button copied is what the app's copies: the prompt its box shows.
+        if (job.firstTouch === 'copy' && copied !== false && await page.evaluate(text => document.querySelector('#root .agent-prompt__box code')?.textContent !== text, copiedText)) problems.push('the painted page copied a prompt other than the one the app shows');
+      }
       if (painted !== null) {
         const app = await words();
         if (app !== painted) { let at = 0; while (app[at] === painted[at]) at++; problems.push(`the painted page's words differ from the app's after it takes over, at character ${at}: “…${painted.slice(Math.max(0, at - 40), at + 60)}…” painted, “…${app.slice(Math.max(0, at - 40), at + 60)}…” in the app`); }
       }
       await settle(page, net);
+      // One press, one copy: the app doesn't make it again once it has taken over.
+      if (job.firstTouch === 'copy') { const copies = await page.evaluate(() => window.__clsCopies); if (copies !== 1) problems.push(`the agent prompt was copied ${copies} times for one press`); }
     }
     if (job.support) {
       // Open the chat and let the greeting finish: the panel is idle and no caret is left in it: from the sidebar's Help, the
@@ -1471,12 +1540,12 @@ try {
   console.log(`${elapsed()} seeded`);
   const jobs = [];
   const passes = [['desktop', 'light'], ['desktop', 'dark'], ...process.env.CLS_PHONE === '0' ? [] : [['phone', 'light']]];
-  for (const [pass, scheme] of passes) for (const [name, path, { user = 'dana', from, click, row, switchTo, support, live, leave, notes, disclose, dialog, tab, menu, still, alone, phoneOnly, notFound, waitlist, guard, panel, skipped, step, start, wide, firstTouch }] of television ? televisionPages : pages(ids)) {
+  for (const [pass, scheme] of passes) for (const [name, path, { user = 'dana', from, click, row, switchTo, support, live, leave, notes, disclose, dialog, tab, menu, still, alone, phoneOnly, notFound, waitlist, guard, panel, skipped, step, start, wide, firstTouch, lands }] of television ? televisionPages : pages(ids)) {
     if (only && !only.test(name) || pass === 'phone' && !television && !phonePages.has(name) || phoneOnly && pass !== 'phone') continue;
     // `wide` pages take the desktop passes at 3440 × 1440.
     const device = wide && pass === 'desktop' ? 'wide' : pass;
     const slug = `${name}-${device === 'phone' ? 'phone' : scheme}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const load = { name, path, user, scheme, device, support, live, leave: leave && device === 'desktop' && scheme === 'light', notes, panel, skipped, step, start, disclose, dialog, tab, menu, still, alone, notFound, waitlist, guard: guard && device === 'desktop' && scheme === 'light' ? guard : undefined, firstTouch, mode: 'load', slug: slug + '-load' };
+    const load = { name, path, user, scheme, device, support, live, leave: leave && device === 'desktop' && scheme === 'light', notes, panel, skipped, step, start, disclose, dialog, tab, menu, still, alone, notFound, waitlist, guard: guard && device === 'desktop' && scheme === 'light' ? guard : undefined, firstTouch, lands, mode: 'load', slug: slug + '-load' };
     jobs.push(load);
     if (from) jobs.push({ name, path, user, from, click, row, switchTo, support, notes, panel, skipped, step, start, still, alone, scheme, device, mode: 'in-app', slug: slug + '-in-app' });
   }

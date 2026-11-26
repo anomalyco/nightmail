@@ -29,12 +29,12 @@
   try { if (localStorage.getItem('nightmail.dashboard-ready')) root.dataset.member = '' } catch {}
 })()
 
-// A painted page (app/painted-page.ts: the price pages, the legal and reference pages) is drawn at build time for its
+// A painted page (app/painted-page.ts: the price pages, the legal and docs pages) is drawn at build time for its
 // plain address, so the app draws it instead, from the start (home/shell/boot.js), wherever the address could change what
 // it shows: a query key the app may read (the calculator's sizes, ?auth=, ?invitation=, ?account=), or the hash its
 // script tag names (data-plain). A tracking key (utm_*, ref, a click ID) is read by no page, so it never does: whoever
 // follows a tagged link, crawler or reader, gets the same painted page. A page painted for an address (data-origin: the
-// reference pages, whose examples name it) is the app's anywhere else. A page painted for visitors (data-members) is the
+// docs pages, whose examples name it) is the app's anywhere else. A page painted for visitors (data-members) is the
 // app's from the start too where this browser has signed in, as far as data/live.ts sessionLikely can tell, so a member
 // gets the app as before.
 ;(() => {
@@ -43,6 +43,13 @@
   const tracking = name => name.startsWith('utm_') || ['ref', 'gclid', 'gbraid', 'wbraid', 'dclid', 'fbclid', 'msclkid', 'twclid', 'li_fat_id', 'mc_cid', 'mc_eid', 'igshid', 'yclid', 'srsltid', '_hsenc', '_hsmi'].includes(name)
   if ([...new URLSearchParams(location.search).keys()].some(name => !tracking(name)) || (set.plain && location.hash === set.plain)) document.documentElement.dataset.shell = 'off'
   if (set.origin && location.origin !== set.origin) document.documentElement.dataset.shell = 'off'
+  // A page that names the hashes it answers (data-anchors: the docs overview's sections) is the app's at any other: the
+  // app moves an old address elsewhere (/docs#guide-rituals, /docs#sendEmail; features/docs/index.tsx, legacyPath).
+  if (set.anchors !== undefined && location.hash.length > 1) {
+    let id = ''
+    try { id = decodeURIComponent(location.hash.slice(1)) } catch {}
+    if (!set.anchors.split(' ').includes(id)) document.documentElement.dataset.shell = 'off'
+  }
   if (set.members === undefined) return
   let hint = null, likely = false
   try { hint = localStorage.getItem('nightmail.session'); likely = hint === 'in' || (hint === null && (localStorage.getItem('nightmail.dashboard-ready') !== null || sessionStorage.getItem('nightmail.account') !== null)) } catch {}

@@ -90,10 +90,12 @@ export type Paint = PaintCss & {
   members?: boolean
   /** The address the page is painted for (its examples name it): anywhere else, theme.js turns the shell off. */
   origin?: string
+  /** The hashes the page answers itself (its elements' ids): with any other, theme.js turns the shell off. */
+  anchors?: string[]
 }
 
 /** The theme.js attributes a painted page's script tag carries (public/theme.js). */
-const themeAttributes = (page: Pick<Paint, 'members' | 'origin'>) => ` data-plain=""${page.members ? ' data-members=""' : ''}${page.origin ? ` data-origin="${page.origin}"` : ''}`
+const themeAttributes = (page: Pick<Paint, 'members' | 'origin' | 'anchors'>) => ` data-plain=""${page.members ? ' data-members=""' : ''}${page.origin ? ` data-origin="${page.origin}"` : ''}${page.anchors ? ` data-anchors="${page.anchors.join(' ')}"` : ''}`
 
 /** template (an appFiles template with this page's head) with the page painted over #root. Throws on a template that
  *  isn't index.html's shape. */

@@ -126,16 +126,18 @@ export function sitePages({ address }: { address: string | null }): Plugin {
         return String((asset as { source: string | Uint8Array }).source)
       }).join('')
       const { module: shell } = await runnerImport<typeof import('./src/features/legal/prerender.tsx')>(legalShell, { root, configFile: false, logLevel: 'error', plugins: [legalMarkdown(), noCss] })
-      // The reference pages, where the build knows its address: drawn by the app's docs page (prerender.tsx) from the API
-      // definition it fetches, with one stylesheet for all of them (the docs' CSS cut down to what any of them uses).
-      const painter = address ? (await runnerImport<typeof import('./src/features/docs/prerender.tsx')>(docsShell, { root, configFile: false, logLevel: 'error', plugins: [noCss] })).module.docsPainter(document as never, address) : null
-      const reference = new Map(painter ? pages.flatMap(page => page.operation ? [[page.path, painter(page.path)] as const] : []) : [])
-      const docsPaint = { shell: 'page-shell', css: [...new Set([files.css.slice(1), ...pageCss(bundle, ['/features/docs/index.tsx'])])].map(file => {
+      // The docs pages (the overview, the 10 guides, the 289 operations' reference), where the build knows its address: drawn
+      // by the app's docs page as a signed-out visitor sees it (prerender.tsx) from the API definition it fetches, with one
+      // stylesheet for all of them (the docs' CSS cut down to what any of them uses).
+      const docsModule = address ? (await runnerImport<typeof import('./src/features/docs/prerender.tsx')>(docsShell, { root, configFile: false, logLevel: 'error', plugins: [noCss] })).module : null
+      const painter = docsModule?.docsPainter(document as never, address!) ?? null
+      const reference = new Map(painter ? pages.flatMap(page => page.path === '/docs' || page.path.startsWith('/docs/') ? [[page.path, painter(page.path)] as const] : []) : [])
+      const docsPaint = { shell: 'page-shell', extraCss: docsModule?.MEDIA_CSS, css: [...new Set([files.css.slice(1), ...pageCss(bundle, ['/features/docs/index.tsx'])])].map(file => {
         const asset = bundle[file]
         if (asset?.type !== 'asset') this.error(`The docs' stylesheet ${file} isn't in the bundle.`)
         return String((asset as { source: string | Uint8Array }).source)
       }).join('') }
-      const sheet = reference.size ? `/${this.getFileName(this.emitFile({ type: 'asset', name: 'docs-painted.css', source: paintedCss(docsPaint, files.template + [...reference.values()].join('')) }))}` : undefined
+      const sheet = reference.size ? `/${this.getFileName(this.emitFile({ type: 'asset', name: 'docs-painted.css', source: paintedCss(docsPaint, files.template + [...reference.values()].map(drawn => drawn.html).join('')) }))}` : undefined
       for (const page of pages) {
         const card = linkCard(page.card)
         if (!bundle[card.file]) this.emitFile({ type: 'asset', fileName: card.file, source: card.source })
@@ -161,14 +163,17 @@ export function sitePages({ address }: { address: string | null }): Plugin {
           if (page.painted.html !== undefined && !body.includes(page.painted.html)) return this.error(`${page.path} is painted without its document's HTML as legal-markdown.ts compiles it: the app's page and this one would differ.`)
           html = paint(html, { shell: 'page-shell', body, css: legalCss, extraCss: THEME_SWITCH, keep: '.boot-loader, .legal-page', boot: `/${boot}`, files, members: true, wholeFaces: true })
         }
-        const body = reference.get(page.path)
-        if (body !== undefined) {
-          // What the operation's Markdown copy says of it, as the page says it: its name, call, description and parameters.
-          const operation = operations.find(item => item.id === page.operation)!
-          const said = [operation.summary, operation.path, operation.description, ...operationParameters(operation)].filter(Boolean).map(text => reactText(text))
-          const missing = said.find(text => !body.includes(text))
-          if (missing !== undefined) return this.error(`${page.path} is painted without “${missing}”, which its API definition says.`)
-          html = paint(html, { ...docsPaint, body, keep: '.boot-loader, .docs-page', boot: `/${boot}`, files, sheet, members: true, origin: address! })
+        const drawn = reference.get(page.path)
+        if (drawn) {
+          // What the page's Markdown copy says of it, as the page says it: an operation's name, call, description and
+          // parameters; a guide's title and summary; the overview's description of the API.
+          const operation = operations.find(item => item.id === page.operation), guide = GUIDE_NAMES.find(item => page.path === `/docs/${item.id}`)
+          const said = (operation ? [operation.summary, operation.path, operation.description, ...operationParameters(operation)] : guide ? [guide.title, guide.summary] : [document.info.description ?? '']).filter(Boolean).map(text => reactText(text))
+          const missing = said.find(text => !drawn.html.includes(text))
+          if (missing !== undefined) return this.error(`${page.path} is painted without “${missing}”, which its own copy says.`)
+          // The overview answers only its own sections' addresses (#agent-prompt, #sending-limits): any other hash is a page the
+          // app moves elsewhere (/docs#guide-rituals, /docs#sendEmail: index.tsx legacyPath), so theme.js lets the app draw it.
+          html = paint(html, { ...docsPaint, body: drawn.html, keep: '.boot-loader, .docs-page', boot: `/${boot}`, files, sheet, members: true, origin: address!, anchors: page.path === '/docs' ? drawn.anchors : undefined })
         }
         this.emitFile({ type: 'asset', fileName: `${page.path.slice(1)}.html`, source: html })
         if (page.twin) this.emitFile({ type: 'asset', fileName: page.markdown.slice(1), source: page.twin })

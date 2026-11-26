@@ -28,7 +28,7 @@ export function useShellTakeover(shellId: string, page: string, ready = true) {
     const focused = placeOf(shell, document.activeElement), opened = [...shell.querySelectorAll('details')].map(row => row.open)
     const scrolled = scrollsOf(shell.firstElementChild), selected = selectionIn(shell.firstElementChild)
     const held = window as Window & { __nightmailShellPress?: Element }
-    carried.current = { typed: [...shell.querySelectorAll('input')].map(input => input.value !== input.defaultValue ? input.value : null), pressed: placeOf(shell, held.__nightmailShellPress) }
+    carried.current = { typed: fields(shell).map(field => field.value !== initial(field) ? field.value : null), pressed: placeOf(shell, held.__nightmailShellPress) }
     delete held.__nightmailShellPress
     shell.remove()
     document.querySelector('[data-shell-css]')?.remove()
@@ -45,15 +45,27 @@ export function useShellTakeover(shellId: string, page: string, ready = true) {
     const was = carried.current, app = document.querySelector(page)
     if (!was || !app) return
     carried.current = null
-    const inputs = [...app.querySelectorAll('input')], setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!
-    was.typed.forEach((value, i) => { const input = inputs[i]; if (value !== null && input) { setValue.call(input, value); input.dispatchEvent(new Event('input', { bubbles: true })) } })
+    // What the reader typed in a field or chose in a picker, set in the same field of the app's page as their own change.
+    const inputs = fields(app)
+    was.typed.forEach((value, i) => {
+      const field = inputs[i]
+      if (value === null || !field) return
+      Object.getOwnPropertyDescriptor(Object.getPrototypeOf(field), 'value')!.set!.call(field, value)
+      field.dispatchEvent(new Event(field instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true }))
+    })
     atPlace(app, was.pressed)?.click()
   })
   return painted
 }
-// The controls a reader can see: a painted page may draw one in two forms and show the one for the theme (a legal page's
-// theme switch, features/legal/prerender.tsx), where the app draws only that one.
-const controls = (root: ParentNode | null) => [...root?.querySelectorAll<HTMLElement>('a[href], button, input, select') ?? []].filter(control => control.getClientRects().length > 0)
+// The controls a reader can see: a painted page may draw one in two forms and show the one for the theme or the window (a
+// legal page's theme switch, features/legal/prerender.tsx; a guide's tabs or picker, features/docs/prerender.tsx), where the
+// app draws only that one.
+const shown = (el: Element) => el.getClientRects().length > 0
+// The fields and pickers a reader can see, in order, and what each held when the page arrived.
+const fields = (root: ParentNode) => [...root.querySelectorAll<HTMLInputElement | HTMLSelectElement>('input, select')].filter(shown)
+const initial = (field: HTMLInputElement | HTMLSelectElement) => field instanceof HTMLSelectElement ? [...field.options].find(option => option.defaultSelected)?.value ?? field.options[0]?.value ?? '' : field.defaultValue
+// (A code block or box the reader can focus to scroll it by keyboard is one: tabindex="0".)
+const controls = (root: ParentNode | null) => [...root?.querySelectorAll<HTMLElement>('a[href], button, input, select, [tabindex="0"]') ?? []].filter(shown)
 // A control's place, the same on the painted page and the app's: which of the controls with its class it is (Get started
 // and the Open dashboard drawn in its place for someone signed in share theirs), or for one without a class, of those
 // with its tag, address and words. Not its place among all controls: signed in, the app's page has no sign-in consent
@@ -72,11 +84,11 @@ const atPlace = (root: ParentNode | null, place: Place | null) => place ? contro
 // tag), and where it is scrolled to.
 type Scrolled = { key: string; nth: number; top: number; left: number }
 const boxKey = (el: HTMLElement) => typeof el.className === 'string' && el.className ? `.${el.className}` : el.tagName
-const placed = (root: ParentNode | null, key: string) => [...root?.querySelectorAll<HTMLElement>('*') ?? []].filter(el => el instanceof HTMLElement && boxKey(el) === key)
+const placed = (root: ParentNode | null, key: string) => [...root?.querySelectorAll<HTMLElement>('*') ?? []].filter(el => el instanceof HTMLElement && boxKey(el) === key && shown(el))
 function scrollsOf(root: Element | null): Scrolled[] {
   const seen = new Map<string, number>(), boxes: Scrolled[] = []
   for (const el of root?.querySelectorAll<HTMLElement>('*') ?? []) {
-    if (!(el instanceof HTMLElement)) continue
+    if (!(el instanceof HTMLElement) || !shown(el)) continue
     const key = boxKey(el), nth = seen.get(key) ?? 0
     seen.set(key, nth + 1)
     if (el.scrollHeight <= el.clientHeight && el.scrollWidth <= el.clientWidth) continue
@@ -85,21 +97,33 @@ function scrollsOf(root: Element | null): Scrolled[] {
   }
   return boxes
 }
-// A selection inside the painted page, as offsets into its text, which the app's page has the same of.
+// A selection inside the painted page, as offsets into the text a reader sees there, which the app's page has the same of.
+const seenText = (root: Element) => {
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, { acceptNode: node => node.parentElement && shown(node.parentElement) ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT })
+  const nodes: Text[] = []
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) nodes.push(node as Text)
+  return nodes
+}
 function selectionIn(root: Element | null): [number, number] | null {
   const selection = getSelection()
   if (!root || !selection || selection.isCollapsed || selection.rangeCount === 0) return null
   const range = selection.getRangeAt(0)
   if (!root.contains(range.startContainer) || !root.contains(range.endContainer)) return null
-  const offset = (node: Node, at: number) => { const before = document.createRange(); before.setStart(root, 0); before.setEnd(node, at); return before.toString().length }
-  return [offset(range.startContainer, range.startOffset), offset(range.endContainer, range.endOffset)]
+  let seen = 0, start = -1, end = -1
+  for (const node of seenText(root)) {
+    if (node === range.startContainer) start = seen + range.startOffset
+    if (node === range.endContainer) end = seen + range.endOffset
+    seen += node.data.length
+  }
+  return start >= 0 && end >= 0 ? [start, end] : null
 }
 function select(root: Element, [start, end]: [number, number]) {
-  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT), range = document.createRange()
+  const range = document.createRange()
   let seen = 0, began = false
-  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
-    const length = (node as Text).data.length
-    if (!began && start <= seen + length) { range.setStart(node, start - seen); began = true }
+  for (const node of seenText(root)) {
+    const length = node.data.length
+    // A start where one text ends and the next begins is at the next one's start: the words selected, not the line before.
+    if (!began && start < seen + length) { range.setStart(node, start - seen); began = true }
     if (began && end <= seen + length) { range.setEnd(node, end - seen); getSelection()?.removeAllRanges(); getSelection()?.addRange(range); return }
     seen += length
   }

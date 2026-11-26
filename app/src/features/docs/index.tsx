@@ -145,7 +145,7 @@ function anchor(hash: string) { try { return decodeURIComponent(hash.slice(1)) }
 // Guides under their names before a rename: rules were called rituals.
 const renamedGuides: Record<string, string> = { rituals: 'rules' }
 // Links from before the docs had pages of their own: /docs#guide-rituals, /docs#mcp and /docs#sendEmail.
-function legacyPath(hash: string, all: Operation[]): string | null {
+export function legacyPath(hash: string, all: Operation[]): string | null {
   const id = anchor(hash)
   if (id === 'mcp') return '/docs/mcp'
   const named = id.startsWith('guide-') ? renamedGuides[id.slice('guide-'.length)] ?? id.slice('guide-'.length) : null
@@ -261,9 +261,11 @@ export function DocsPage() {
   const title = missing ? 'Page not found' : page.kind === 'guide' ? page.guide.title : page.kind === 'operation' ? current?.summary ?? 'API reference' : `${productName} API`
   const description = page.kind === 'guide' ? page.guide.summary : current ? operationDescription(current) : spec?.info.description ?? defaultDescription
   useDocumentMeta(docsTitle(page.kind === 'overview' ? null : title), description)
-  // A reference page's own file paints it for a visitor before this code (app/site-pages.ts, prerender.tsx): this page
-  // takes its place once it has what it shows, the API definition and this installation's address.
-  const painted = useShellTakeover('page-shell', '#root .docs-page', (Boolean(spec) && Boolean(site.origin)) || site.foreign)
+  // A docs page's own file paints it for a visitor before this code (app/site-pages.ts, prerender.tsx): this page takes
+  // its place once it has what it shows: the API definition, this installation's address, and the session check's answer
+  // (a visitor's agent prompt and settings are drawn only once it's in: useAgentPrompt, MailServers).
+  const checking = useIsFetching({ queryKey: ['identity'] }) > 0
+  const painted = useShellTakeover('page-shell', '#root .docs-page', (Boolean(spec) && Boolean(site.origin) && !checking) || site.foreign)
   useAnchorScroll(Boolean(site.origin) && (page.kind === 'guide' || missing || Boolean(spec)), painted)
   const legacy = page.kind === 'overview' && location.hash ? legacyPath(location.hash, all) : null
   if (legacy) return <Navigate replace to={legacy} />

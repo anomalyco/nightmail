@@ -348,6 +348,14 @@ jobs:
           CLS_SHARD_COUNT: ${{ strategy.job-total }}
           CLS_PG_URL: postgresql://postgres:fixture-admin@127.0.0.1:5432/postgres
         run: node scripts/cls.mjs
+      # Every painted docs page (the overview, the guides, every operation's reference) says word for word what the app's
+      # says once it takes over, and keeps the reader's place (scripts/docs-sweep.mjs), in one shard.
+      - name: Compare every painted docs page with the app's
+        if: matrix.shard == 'alone'
+        working-directory: app
+        env:
+          CLS_PG_URL: postgresql://postgres:fixture-admin@127.0.0.1:5432/postgres
+        run: node scripts/docs-sweep.mjs
       # The television homepage, the dev stage's "/" (VITE_HOME=tv: deploy.yml), built beside the production one and
       # measured on its own (scripts/cls.mjs, CLS_HOME=tv), in one shard.
       - name: Measure layout shift on the television homepage

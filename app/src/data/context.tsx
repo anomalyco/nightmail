@@ -48,6 +48,12 @@ const ApiContext = createContext<Api | null>(null)
 const RequestScopeContext = createContext<RequestScope | null>(null)
 const SessionContext = createContext<Session | null>(null)
 export const useSession = () => useContext(SessionContext)
+/** The data contexts as a signed-out visitor's page has them, for a page drawn at build time (features/docs/prerender.tsx):
+ *  no session, and an API no query may call (each query a visitor's page draws from is disabled, or seeded beforehand). */
+export function VisitorData({ children }: { children: ReactNode }) {
+  const none = new Proxy({}, { get: (_target, name) => { throw new Error(`A page drawn at build time asked the API (${String(name)}).`) } }) as Api
+  return <ApiContext.Provider value={none}><SessionContext.Provider value={null}>{children}</SessionContext.Provider></ApiContext.Provider>
+}
 /** The account/workspace scope of the mounted provider generation; passing it to request() fails closed after a switch. */
 export const useRequestScope = () => useContext(RequestScopeContext) ?? currentScope()
 /** Logs row prefetch and rendering share this key, but never a cache entry across visibility bands. */
@@ -558,7 +564,9 @@ export function useCanonicalOrigin() {
       if (!response.ok) throw new Error('Couldn’t load this installation’s address.')
       return ((await response.json()) as { origin?: string }).origin ?? null
     } })
-  return { ...canonicalOrigin({ identity, instance: instance.data, page: window.location.origin }), error: identity ? null : instance.error, retry: () => void instance.refetch() }
+  // (Drawn at build time there is no window: the page is drawn at the installation's own address, features/docs/prerender.tsx.)
+  const page = typeof window === 'undefined' ? instance.data ?? '' : window.location.origin
+  return { ...canonicalOrigin({ identity, instance: instance.data, page }), error: identity ? null : instance.error, retry: () => void instance.refetch() }
 }
 export function usePublicOrigin(): string | null { return useCanonicalOrigin().origin }
 export function useApi() {
