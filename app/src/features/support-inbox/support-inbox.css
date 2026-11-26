@@ -141,7 +141,7 @@
 .sinbox-composer__modes button::before { content: ''; position: absolute; inset: -12px -8px; }
 .sinbox-composer__modes button[aria-pressed='true'] { color: var(--color-text); }
 @media (hover: hover) and (pointer: fine) { .sinbox-composer__modes button[aria-pressed='false']:hover { color: var(--color-muted); } }
-.sinbox-composer__blocked { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); color: var(--color-warning); font-size: var(--text-xs); line-height: var(--leading-xs); }
+.sinbox-composer__blocked { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); padding-bottom: var(--space-4); color: var(--color-warning); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .sinbox-composer__actions { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); }
 .sinbox-composer__hint { min-width: 0; color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .sinbox-composer__failed { min-width: 0; color: var(--color-danger); font-size: var(--text-xs); line-height: var(--leading-xs); }
@@ -197,6 +197,8 @@ a.sinbox-list__main:focus-visible { text-decoration: underline; text-underline-o
   .sinbox-subtitle { flex-wrap: wrap; align-content: flex-start; height: 40px; }
   .sinbox-subtitle > .sinbox-fact:nth-child(3) { flex-basis: 100%; min-width: 0; }
   .sinbox-subtitle > .sinbox-fact:nth-child(3)::before { content: none; }
+  .sinbox-composer__actions { flex-direction: column; align-items: stretch; gap: var(--space-8); }
+  .sinbox-composer__buttons { justify-content: flex-end; }
 }
 /* A card leaves out what a row has nothing for (no ticket). */
 .sinbox-table .ui-card__segment:empty { display: none; }

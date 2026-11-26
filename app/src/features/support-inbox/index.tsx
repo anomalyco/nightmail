@@ -77,8 +77,9 @@ function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void
 
 // ---------------------------------------------------------------- changes
 
-type Confirming = { action: 'resume'; conversation: SupportConversation }
+type Confirming = { action: 'pause' | 'resume'; conversation: SupportConversation }
 const confirmCopy: Record<Confirming['action'], { title: string; description: string; confirm: string; done: string }> = {
+  pause: { title: 'Pause the agent?', description: 'It stops answering this customer until someone hands back.', confirm: 'Pause agent', done: 'Agent paused' },
   resume: { title: 'Hand back to the agent?', description: 'It answers the customer’s next message.', confirm: 'Hand back', done: 'Handed back to the agent' },
 }
 const failedText = 'Couldn’t complete the action. Try again.'
@@ -122,7 +123,8 @@ function useInboxActions() {
         () => supportInboxApi.done(c.id, ticketId, crypto.randomUUID()),
         { after: () => toast(ticketId ? 'Marked done. Ticket resolved.' : 'Marked done', 'success', { action: { label: 'Undo', onSelect: () => void undo(c, ticketId) }, duration: 5000 }) }).catch(() => {})
     },
-    confirm: ({ action, conversation }: Confirming) => act(conversation, action, x => ({ ...x, agentState: 'active', pausedBy: null, pausedAt: null }), { done: confirmCopy[action].done, quiet: true }),
+    confirm: ({ action, conversation }: Confirming) => act(conversation, action, action === 'pause' ? x => ({ ...x, agentState: 'paused', pausedBy: { kind: 'staff', userId: me.userId, name: me.name }, pausedAt: now(), done: null })
+      : x => ({ ...x, agentState: 'active', pausedBy: null, pausedAt: null }), { done: confirmCopy[action].done, quiet: true }),
     read: (c: SupportConversation, read: boolean, seq?: number) => run(c, x => ({ ...x, unread: !read }), () => supportInboxApi.read(c.id, read, seq), { reread: false }).catch(() => {}),
     wake: (c: SupportConversation) => run(c, x => x, () => supportInboxApi.wake(c.id)).then(r => toast(r.woken ? 'Support service woken' : 'The support service didn’t answer', r.woken ? 'success' : 'error'), () => {}),
     reply: (c: SupportConversation, text: string, key: string) => {
@@ -161,7 +163,7 @@ function menuItems(c: SupportConversation, { canAct, actions, onConfirm, showDon
   const items: (MenuItem | false)[] = [
     showDone && canAct && c.needsYou !== null && { label: c.ticket && !c.ticket.resolvedAt ? 'Mark done and resolve ticket' : 'Mark done', onSelect: () => void actions.done(c) },
     { label: c.unread ? 'Mark read' : 'Mark unread', onSelect: () => void actions.read(c, c.unread) },
-    canAct && c.status !== 'closed' && c.channel !== 'agent_feedback' && c.agentState === 'paused' && { label: 'Hand back to the agent…', onSelect: () => onConfirm({ action: 'resume', conversation: c }) },
+    canAct && c.status !== 'closed' && c.channel !== 'agent_feedback' && (c.agentState === 'paused' ? { label: 'Hand back to the agent…', onSelect: () => onConfirm({ action: 'resume', conversation: c }) } : { label: 'Pause agent…', onSelect: () => onConfirm({ action: 'pause', conversation: c }) }),
     canAct && c.blockedWork > 0 && c.channel !== 'agent_feedback' && { label: 'Retry now', onSelect: () => void actions.wake(c) },
   ]
   return items.filter((item): item is MenuItem => Boolean(item))
@@ -169,7 +171,7 @@ function menuItems(c: SupportConversation, { canAct, actions, onConfirm, showDon
 function ConfirmAction({ confirming, onClose, actions }: { confirming: Confirming | null; onClose: () => void; actions: Actions }) {
   const last = useRef(confirming)
   if (confirming) last.current = confirming
-  const shown = confirming ?? last.current, copy = confirmCopy.resume
+  const shown = confirming ?? last.current, copy = shown ? confirmCopy[shown.action] : confirmCopy.pause
   return <ConfirmDialog open={confirming !== null} onOpenChange={open => { if (!open) onClose() }} title={copy.title} description={copy.description} confirmLabel={copy.confirm} onConfirm={() => shown ? actions.confirm(shown) : undefined} />
 }
 
@@ -625,12 +627,12 @@ const Composer = forwardRef<ComposerHandle, { detail: SupportDetail; actions: Ac
   }
   const name = c.customer?.name ?? 'the customer', me = identity?.name ?? 'you', target = detail.replyTarget
   const editing = !note && draft?.draftOf ? detail.messages.find(m => m.id === draft.draftOf && !m.draft) : undefined
-  const hint = feedback ? 'An agent filed this report: there’s nobody to reply to. Resolve it or mark it done; notes are for staff.' : note ? 'Only staff see notes. The customer and the agent never do.'
+  const hint = feedback ? 'An agent filed this report: there’s nobody to reply to. Mark it done when handled; notes are for staff.' : note ? 'Only staff see notes. The customer and the agent never do.'
     : offline ? 'The support service is offline, so replies are off.'
     : c.channel === 'email' ? <>Replying as {me} · an email in this thread{target.address ? <> to <PrivateAddress value={target.address} /></> : ''}, from {productName} support{!target.verified && '. Their email didn’t pass DMARC, so it may not be delivered'}{handling ? '. Sending pauses the agent.' : '.'}</>
     : <>Replying as {me} in their chat{target.address ? <> (emailed to <PrivateAddress value={target.address} /> if it’s closed)</> : ''}{handling ? '. Sending pauses the agent.' : '.'}</>
   return <form className="sinbox-composer" data-mode={mode} data-filled={text ? true : undefined} data-unavailable={offline || undefined} onSubmit={send}>
-    {blocked && <div className="sinbox-composer__blocked"><span>The agent’s work here is stuck.</span><Button size="sm" onClick={() => void actions.wake(c)}>Retry now</Button></div>}
+    {blocked && <div className="sinbox-composer__blocked"><span>The agent’s work here is stuck.</span><Button onClick={() => void actions.wake(c)}>Retry now</Button></div>}
     {!closed && <div className="sinbox-composer__modes" role="group" aria-label="Write">
       <button type="button" aria-pressed={!note} onClick={() => focus('reply')}>Reply</button>
       <button type="button" aria-pressed={note} onClick={() => focus('note')}>Note</button>
