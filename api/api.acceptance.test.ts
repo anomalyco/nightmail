@@ -21765,9 +21765,8 @@ describe('List hygiene', () => {
       const wid = runtime.config.workspaceId, tag = unique('lr').toLowerCase().replace(/[^a-z0-9]/g, ''), dead = tag + '-dead.example';
       const list = ok(await local('POST', '/v1/lists', { name: unique('risk') }), 201);
       const emails = [...[1, 2, 3].map(i => 'temp' + i + '-' + tag + '@fexpost.com'), ...[1, 2, 3, 4, 5].map(i => 'p' + i + '@' + dead), ...Array.from({ length: 12 }, (_, i) => 'fine' + i + '-' + tag + '@example.net')];
-      const ids = [];
-      for (const email of emails) ids.push(ok(await local('POST', '/v1/contacts', { email }), 201).id);
-      ok(await local('POST', '/v1/lists/' + list.id + '/members', { contactIds: ids }));
+      const imported = ok(await local('POST', '/v1/contact-imports', { csv: ['Email', ...emails].join('\n'), listId: list.id, mapping: { email: 'Email' } }), 201);
+      ok(await local('POST', '/v1/contact-imports/' + imported.id + '/commit', { consent: { status: 'subscribed', evidence: 'Synthetic opt-in.' } }));
       // This workspace's mail to the dead domain mostly failed for good (src/delivery-history.ts writes this row).
       await db.query('INSERT INTO delivery_domain_stats (workspace_id, domain, sent, hard_bounced, user_unknown, first_seen, last_seen) VALUES ($1, $2, 20, 15, 15, now(), now())', [wid, dead]);
       const before = runtime.config.listRisk;
