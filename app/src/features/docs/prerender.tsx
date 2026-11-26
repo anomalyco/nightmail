@@ -26,7 +26,14 @@ export function docsPainter(spec: Document, origin: string) {
     if (!light!.includes('<div class="ui-subnav__scroll">')) throw new Error(`${path} has no contents column to keep the open page in view.`)
     // The example's tabs underline the chosen one with a marker the app places by measuring it (ui/primitives.tsx, Tabs);
     // without the marker's class, the tab's own underline (ui.css) draws the same line in the same place.
-    return light!.replace('<div class="ui-subnav__scroll">', '<div class="ui-subnav__scroll" data-shell-reveal="[aria-current=&quot;page&quot;]">')
+    // What works before the app is up (home/shell/boot.js): the phone's page picker goes to the page picked, and a copy
+    // button copies what it names, as the app's do.
+    const marked = light!.replace('<div class="ui-subnav__scroll">', '<div class="ui-subnav__scroll" data-shell-reveal="[aria-current=&quot;page&quot;]">')
       .replaceAll('class="ui-tabs ui-tabs--marker"', 'class="ui-tabs"')
+      .replace('<select class="ui-input ui-select-trigger ui-native-select"', '<select class="ui-input ui-select-trigger ui-native-select" data-shell-navigate=""')
+      .replace(/(<button [^>]*aria-label="Copy endpoint path")/, '$1 data-shell-copy="#page-shell .docs-endpoint code"')
+      .replace(/(<button [^>]*aria-label="Copy code example")/, '$1 data-shell-copy="#page-shell .docs-example-panels pre[data-active] code"')
+    if (!marked.includes('data-shell-navigate') || (marked.includes('aria-label="Copy endpoint path"') && !marked.includes('.docs-endpoint code"'))) throw new Error(`${path}'s picker or copy button isn't drawn as prerender.tsx expects.`)
+    return marked
   }
 }

@@ -44,9 +44,23 @@
     if (inner.top < outer.top || inner.bottom > outer.bottom - 24) box.scrollTop += inner.top - outer.top - outer.height / 3
   }
 
+  // What works on the painted page itself, before the app is up: a pick in a page picker (data-shell-navigate: the reference
+  // pages' phone picker, whose options are addresses) goes to that page, and a copy button (data-shell-copy names the
+  // element whose text it copies) copies at once, as the app's do, and shows it has (data-copied, the app's mark).
+  shell.addEventListener('change', event => {
+    const picker = event.isTrusted && event.target instanceof Element && event.target.closest('select[data-shell-navigate]')
+    if (picker && picker.value) location.assign(picker.value)
+  })
   shell.addEventListener('click', event => {
     // Only a press a person made is held for the app: a click a script dispatched is not.
     if (!event.isTrusted) return
+    const copy = event.target instanceof Element && event.target.closest('button[data-shell-copy]')
+    if (copy) {
+      const text = document.querySelector(copy.dataset.shellCopy)?.textContent
+      if (text != null && navigator.clipboard) navigator.clipboard.writeText(text).then(() => { copy.dataset.copied = ''; setTimeout(() => { delete copy.dataset.copied }, 1800) }, () => {})
+      start()
+      return
+    }
     const button = event.target instanceof Element && event.target.closest(set.press || 'button.fac-cta')
     if (!button) return
     window.__nightmailShellPress = button

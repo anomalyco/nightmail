@@ -21,8 +21,9 @@ export const shellCss = (id: string) => `#${id}{position:absolute;top:0;left:0;z
 export const BASIC = 'U+0020-007E,U+00A0,U+00A9,U+00AB,U+00AE,U+00B7,U+00BB,U+00D7,U+2010-2027,U+2030,U+2039-203A,U+20AC,U+2122,U+2190-2193,U+2212,U+2713,U+FEFF,U+FFFD'
 export const FIRST_FONTS = [{ family: 'Inter', file: 'inter-basic.woff2', weight: '100 900' }, { family: 'OpenTUI Mono', file: 'opentui-regular-basic.woff2', weight: '400' }, { family: 'OpenTUI Mono', file: 'opentui-bold-basic.woff2', weight: '700' }].map(font => ({ ...font, url: `/fonts/${font.file}` }))
 export const firstFaces = FIRST_FONTS.map(font => `@font-face{font-family:'${font.family}';src:url(${font.url}) format('woff2');font-style:normal;font-weight:${font.weight};font-display:swap;unicode-range:${BASIC}}`).join('')
-/** What public/theme.js may set on <html> before the first paint, which the page's CSS may select. */
-export const THEME_ATTRIBUTES = ['data-theme', 'data-shell', 'data-member', 'data-overview-panel', 'style']
+/** What a script may set before the app is up, which the page's CSS may select: public/theme.js on <html> before the first
+ *  paint, and home/shell/boot.js on a copy button it has copied with (data-copied, as the app's CopyAction). */
+export const THEME_ATTRIBUTES = ['data-theme', 'data-shell', 'data-member', 'data-overview-panel', 'style', 'data-copied']
 export const WHOLE_FACES = /@font-face\{font-family:(?:Inter|OpenTUI Mono|"Inter"|"OpenTUI Mono");[^}]*\}/g
 
 /** The app's files in index.html, and index.html without them (the boot script starts them). Null where it isn't shaped
