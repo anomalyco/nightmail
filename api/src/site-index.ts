@@ -20,6 +20,9 @@ export const isPublicPage = (pathname: string) => pathname === '/' || /^\/(?:pri
 /** An address under the directories the build writes the site's own pages into (app/price-pages.ts): a comparison
  *  (/compare/<vendor>) or a vendor's pricing page (/pricing/<vendor>). The Worker serves them from the build's files. */
 export const isSitePage = (pathname: string) => /^\/(?:compare|pricing)\//.test(pathname);
+/** The docs' and legal pages and their Markdown twins (app/site-pages.ts): files the Worker answers from the assets, as it
+ *  does the price pages, untransformed (worker.ts), so Cloudflare adds nothing to them. */
+export const isDocsOrLegalPage = (pathname: string) => /^\/(?:docs|legal)(?:\/|$)/.test(pathname);
 /** Where one of those the build didn't make is (and /compare, without its page): nowhere (404), never the dashboard. */
 export const isMissingComparePage = (pathname: string) => pathname === '/compare' || isSitePage(pathname);
 /** Where a reference page the build didn't make is (app/site-pages.ts writes one per operation): not found, rather than
