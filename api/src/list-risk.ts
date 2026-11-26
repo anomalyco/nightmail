@@ -8,6 +8,9 @@ import { LIST_RISK_FACTORS, type ListRiskFactor, type ListRiskLines } from './li
 // campaign tallies). Recorded on the review of every marketing campaign to a list (sending_campaign_reviews.list_risk,
 // migration 543) by a job its launch queues; nothing reads it to decide anything yet.
 //  - FLAGGED_SOURCE: contacts flagged risky, those the send skips included: how the list was gathered, not who gets mail.
+//    Counted only among contacts not yet proven that joined the list after its last send (all of them before its first):
+//    a flagged contact the send skips is never proven, so counting it after a clean send would keep the list's first
+//    gathering against it for good. A share of the whole sample, so a few new contacts on a large list weigh little.
 //  - DEAD_DOMAINS: contacts at a domain where this workspace's mail mostly failed for good (DEAD_DOMAIN below).
 //  - UNENGAGED: of contacts mailed at least UNENGAGED.mailed times over UNENGAGED.days or more, those with no open or click in that time.
 //  - NEVER_MAILED: contacts never mailed (no delivery history and no tracked open or click).
@@ -16,28 +19,57 @@ import { LIST_RISK_FACTORS, type ListRiskFactor, type ListRiskLines } from './li
 // Also recorded: soft-failing contacts and proven ones (delivered to before, or opened or clicked), so that how much a
 // list's history should outweigh how it was gathered can be judged from real reviews before anything acts on it.
 // A band (low, elevated, high) only with NIGHTMAIL_LIST_RISK set (src/list-risk-lines.ts): any factor over its high
-// line, or two over their elevated lines, is high; one is elevated. NEVER_MAILED is never high: a new opt-in list is all
-// never-mailed.
+// line, or two over their elevated lines, is high; one is elevated. NEVER_MAILED is never high, and never one of the
+// two: a new opt-in list is all never-mailed. On a sample, a factor counts toward high only when it is over the line by
+// more than the sample's error (95%), so a list doesn't turn high on the luck of the draw; read in full, it has none.
+// The record also keeps the band by the first rule (previous: every flagged contact, no margin, NEVER_MAILED as a
+// second factor), so the two can be compared on real launches before either decides anything.
 const SAMPLE = 10_000;
 const DEAD_DOMAIN = { sent: 10, failedShare: 0.5, failedSinceDelivery: 10 } as const;
 const UNENGAGED = { mailed: 5, days: 180, minimumBase: 100 } as const;
 const LAST_SEND = { minimumAccepted: 100 } as const;
 const RECENT_DAYS = 14;
+// The sample's error at 95%: a share of a uniform sample of n is within this many standard errors of the list's.
+const Z = 1.96;
 export type Band = 'low' | 'elevated' | 'high';
 export type ListRisk = {
-  version: 1; at: string; listId: string;
+  version: 2; at: string; listId: string;
   /** Contacts read: all of them up to SAMPLE, else a uniform sample of SAMPLE. */
   sampled: number; exact: boolean;
-  counts: { flagged: number; deadDomains: number; unengaged: number; unengagedBase: number; neverMailed: number; softFailing: number; proven: number; byReason: Record<Risk, number> };
+  counts: { flagged: number; flaggedUnproven: number; deadDomains: number; unengaged: number; unengagedBase: number; neverMailed: number; softFailing: number; proven: number; byReason: Record<Risk, number> };
   lastSend: { campaignId: string; accepted: number; bounced: number; complained: number } | null;
   recentBlocklist: number;
   values: Partial<Record<ListRiskFactor, number>>;
   band: Band | null;
   factors: { code: ListRiskFactor; level: 'elevated' | 'high' }[];
+  /** The band by the first rule, for comparison: FLAGGED_SOURCE over every flagged contact, no margin, NEVER_MAILED a second factor. */
+  previous: { flaggedSource: number | null; band: Band | null; factors: { code: ListRiskFactor; level: 'elevated' | 'high' }[] };
 };
+type Values = Partial<Record<ListRiskFactor, number>>;
 
-/** The factors' values and, with lines, the band. */
-export function bandListRisk(values: Partial<Record<ListRiskFactor, number>>, lines: ListRiskLines | null): Pick<ListRisk, 'band' | 'factors'> {
+/**
+ * The band of the factors' values, with lines. `error` is each sampled share's error (none when the list was read in full):
+ * a factor counts toward high, at its high line or as one of two at their elevated lines, only past the line by more
+ * than that. NEVER_MAILED is listed but never counts toward high.
+ */
+export function bandListRisk(values: Values, lines: ListRiskLines | null, error: Values = {}): Pick<ListRisk, 'band' | 'factors'> {
+  if (!lines) return { band: null, factors: [] };
+  const factors: ListRisk['factors'] = [];
+  let toHigh = 0, high = false;
+  for (const code of LIST_RISK_FACTORS) {
+    const value = values[code], line = lines[code];
+    if (value === undefined || !line) continue;
+    const margin = error[code] ?? 0, sure = (at: number | undefined) => at !== undefined && (margin ? value - margin > at : value >= at);
+    if (code !== 'NEVER_MAILED' && sure(line.high)) { factors.push({ code, level: 'high' }); high = true; continue; }
+    if (line.elevated !== undefined && value >= line.elevated) factors.push({ code, level: 'elevated' });
+    else if (code !== 'NEVER_MAILED' && line.high !== undefined && value >= line.high) factors.push({ code, level: 'elevated' });
+    if (code !== 'NEVER_MAILED' && sure(line.elevated)) toHigh++;
+  }
+  const band: Band = high || toHigh >= 2 ? 'high' : factors.length ? 'elevated' : 'low';
+  return { band, factors };
+}
+/** The first rule's band, kept beside the current one for comparison (ListRisk.previous). */
+export function bandListRiskBefore(values: Values, lines: ListRiskLines | null): Pick<ListRisk, 'band' | 'factors'> {
   if (!lines) return { band: null, factors: [] };
   const factors: ListRisk['factors'] = [];
   for (const code of LIST_RISK_FACTORS) {
@@ -52,17 +84,27 @@ export function bandListRisk(values: Partial<Record<ListRiskFactor, number>>, li
 
 /** Measures one list of a workspace. A few bounded statements: a sample of the list by primary key, its domains' history, the last campaign's tallies. */
 export async function measureListRisk(db: DbExecutor, workspaceId: string, listId: string, lines: ListRiskLines | null, excludeCampaignId: string | null = null): Promise<ListRisk> {
+  const { rows: [last] } = await db.execute<{ id: string; accepted: number; bounced: number; complained: number; launched_at: string | null }>(sql`SELECT c.id, t.accepted, t.bounced, t.complained,
+      (SELECT r.created_at FROM sending_campaign_reviews r WHERE r.workspace_id = c.workspace_id AND r.id = c.review_id) AS launched_at
+    FROM sending_campaigns c CROSS JOIN LATERAL (SELECT coalesce(sum(accepted), 0)::int AS accepted, coalesce(sum(bounced), 0)::int AS bounced, coalesce(sum(complained), 0)::int AS complained
+      FROM sending_campaign_tallies t WHERE t.workspace_id = c.workspace_id AND t.campaign_id = c.id AND NOT t.simulated) t
+    WHERE c.workspace_id = ${workspaceId} AND c.list_id = ${listId} AND NOT c.simulated AND c.expanded > 0 ${excludeCampaignId ? sql`AND c.id <> ${excludeCampaignId}` : sql``}
+    ORDER BY c.created_at DESC LIMIT 1`);
+  // Contacts that joined after the list's last send are the part its history says nothing about yet.
+  const since = last?.launched_at ?? null;
   const reasons = RISKS.map(r => sql`count(*) FILTER (WHERE c.risk = ${r})::int AS ${sql.identifier('r_' + r)}`);
   const { rows: [m] } = await db.execute<Record<string, number>>(sql`WITH picked AS MATERIALIZED (
-      SELECT m.contact_id FROM audience_list_members m WHERE m.workspace_id = ${workspaceId} AND m.list_id = ${listId}
+      SELECT m.contact_id, m.created_at AS joined_at FROM audience_list_members m WHERE m.workspace_id = ${workspaceId} AND m.list_id = ${listId}
       ORDER BY hashtextextended(m.contact_id, 0) LIMIT ${SAMPLE + 1}
     ), c AS MATERIALIZED (
-      SELECT c.* FROM picked p CROSS JOIN LATERAL (
+      SELECT p.joined_at, c.* FROM picked p CROSS JOIN LATERAL (
         SELECT c.workspace_id, c.deleted_at, c.email, c.risk, c.mailed_count, c.delivered_count, c.first_mailed_at, c.observed_since, c.last_open_at, c.last_click_at, c.soft_failures
         FROM audience_contacts c WHERE c.id = p.contact_id LIMIT 1) c
       WHERE c.workspace_id = ${workspaceId} AND c.deleted_at IS NULL
     )
     SELECT (SELECT count(*) FROM picked)::int AS picked, count(*)::int AS n, count(*) FILTER (WHERE c.risk IS NOT NULL)::int AS flagged,
+      count(*) FILTER (WHERE c.risk IS NOT NULL AND NOT (c.delivered_count > 0 OR c.last_open_at IS NOT NULL OR c.last_click_at IS NOT NULL)
+        ${since ? sql`AND c.joined_at > ${since}::timestamptz` : sql``})::int AS flagged_unproven,
       count(*) FILTER (WHERE d.sent >= ${DEAD_DOMAIN.sent} AND (d.user_unknown + d.dead_domain + d.validation) >= d.sent * ${DEAD_DOMAIN.failedShare}::float8
         OR d.failed_since_delivery >= ${DEAD_DOMAIN.failedSinceDelivery})::int AS dead_domains,
       count(*) FILTER (WHERE c.mailed_count >= ${UNENGAGED.mailed} AND c.first_mailed_at <= now() - make_interval(days => ${UNENGAGED.days}))::int AS unengaged_base,
@@ -72,24 +114,26 @@ export async function measureListRisk(db: DbExecutor, workspaceId: string, listI
       count(*) FILTER (WHERE c.soft_failures >= 3)::int AS soft_failing,
       count(*) FILTER (WHERE c.delivered_count > 0 OR c.last_open_at IS NOT NULL OR c.last_click_at IS NOT NULL)::int AS proven, ${sql.join(reasons, sql`, `)}
     FROM c LEFT JOIN delivery_domain_stats d ON d.workspace_id = ${workspaceId} AND d.domain = split_part(c.email, '@', 2)`);
-  const { rows: [last] } = await db.execute<{ id: string; accepted: number; bounced: number; complained: number }>(sql`SELECT c.id, t.accepted, t.bounced, t.complained
-    FROM sending_campaigns c CROSS JOIN LATERAL (SELECT coalesce(sum(accepted), 0)::int AS accepted, coalesce(sum(bounced), 0)::int AS bounced, coalesce(sum(complained), 0)::int AS complained
-      FROM sending_campaign_tallies t WHERE t.workspace_id = c.workspace_id AND t.campaign_id = c.id AND NOT t.simulated) t
-    WHERE c.workspace_id = ${workspaceId} AND c.list_id = ${listId} AND NOT c.simulated AND c.expanded > 0 ${excludeCampaignId ? sql`AND c.id <> ${excludeCampaignId}` : sql``}
-    ORDER BY c.created_at DESC LIMIT 1`);
   const { rows: [blocked] } = await db.execute<{ n: number }>(sql`SELECT coalesce(sum(rejections), 0)::int AS n FROM delivery_blocklist_daily
     WHERE workspace_id = ${workspaceId} AND day >= current_date - ${RECENT_DAYS}::int`);
   const n = Number(m!.n), share = (k: number) => n ? k / n : 0;
-  const counts = { flagged: Number(m!.flagged), deadDomains: Number(m!.dead_domains), unengaged: Number(m!.unengaged), unengagedBase: Number(m!.unengaged_base),
+  const counts = { flagged: Number(m!.flagged), flaggedUnproven: Number(m!.flagged_unproven), deadDomains: Number(m!.dead_domains), unengaged: Number(m!.unengaged), unengagedBase: Number(m!.unengaged_base),
     neverMailed: Number(m!.never_mailed), softFailing: Number(m!.soft_failing), proven: Number(m!.proven), byReason: Object.fromEntries(RISKS.map(r => [r, Number(m!['r_' + r])])) as Record<Risk, number> };
   const values: ListRisk['values'] = {};
-  if (n) { values.FLAGGED_SOURCE = share(counts.flagged); values.DEAD_DOMAINS = share(counts.deadDomains); values.NEVER_MAILED = share(counts.neverMailed); }
+  if (n) { values.FLAGGED_SOURCE = share(counts.flaggedUnproven); values.DEAD_DOMAINS = share(counts.deadDomains); values.NEVER_MAILED = share(counts.neverMailed); }
   if (counts.unengagedBase >= UNENGAGED.minimumBase) values.UNENGAGED = counts.unengaged / counts.unengagedBase;
   if (last && last.accepted >= LAST_SEND.minimumAccepted) { values.LAST_SEND_BOUNCES = last.bounced / last.accepted; values.LAST_SEND_COMPLAINTS = last.complained / last.accepted; }
   values.RECENT_BLOCKLIST = Number(blocked?.n ?? 0);
-  return { version: 1, at: new Date().toISOString(), listId, sampled: n, exact: Number(m!.picked) <= SAMPLE, counts,
+  // Each sampled share's error; none when every contact was read. Last send and blocklist replies are counted in full.
+  const exact = Number(m!.picked) <= SAMPLE, error: Values = {};
+  const err = (p: number, base: number) => exact || !base ? 0 : Z * Math.sqrt(p * (1 - p) / base);
+  for (const code of ['FLAGGED_SOURCE', 'DEAD_DOMAINS', 'NEVER_MAILED'] as const) if (values[code] !== undefined) error[code] = err(values[code]!, n);
+  if (values.UNENGAGED !== undefined) error.UNENGAGED = err(values.UNENGAGED, counts.unengagedBase);
+  const before = { ...values, ...n ? { FLAGGED_SOURCE: share(counts.flagged) } : {} };
+  return { version: 2, at: new Date().toISOString(), listId, sampled: n, exact, counts,
     lastSend: last ? { campaignId: last.id, accepted: last.accepted, bounced: last.bounced, complained: last.complained } : null,
-    recentBlocklist: values.RECENT_BLOCKLIST, values, ...bandListRisk(values, lines) };
+    recentBlocklist: values.RECENT_BLOCKLIST, values, ...bandListRisk(values, lines, error),
+    previous: { flaggedSource: before.FLAGGED_SOURCE ?? null, ...bandListRiskBefore(before, lines) } };
 }
 
 /** audience.listRisk: records the measure on a launched campaign's review, once, as the list stood at launch (queued by the launch). */
