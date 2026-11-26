@@ -14,7 +14,7 @@ import { FlapRow } from './splitflap'
 import { PRICE_LINKS } from './live'
 import { Bolts, keySound, reducedMotion, SoundSwitch, useReplay, useTypedWord } from './eggs'
 import { play, wake } from './sound'
-import { OFFERS } from './compare'
+import { COMPARISONS, OFFERS } from './compare'
 import { claim, formatCount, listOf, money, nightmail, nightmailBill, offerSize, sourcesOf, theirPrice, ucOf, UNITS, usageLines, type Comparison, type Usage } from './prices'
 
 // The price pages' hall (Hall): a dark wall under one pendant lamp, with the board and its console hung in it, the same
@@ -213,7 +213,8 @@ export function ComparisonBelow({ comparison: c, start }: { comparison: Comparis
  *  measured before the first paint. Sources has what the prices assume and where and when they were read, the
  *  competitor's sourced facts, every page a figure was read on, the pricing terms and the trademark line, which a legal
  *  review depends on: here, out of the page's way, rather than beside the figures. The row is the homepage's (by
- *  Anomaly, API docs, Terms, Privacy) with the other price pages (not this one). */
+ *  Anomaly, API docs, Terms, Privacy) with the other price pages (not this one). Above it, a comparison links the others of
+ *  its kind (developer, newsletter, agent inboxes: its focus), so each is a link away from the rest, for readers and crawlers. */
 export function BoardEnd({ comparison: c }: { comparison?: Comparison | null }) {
   const ref = useRef<HTMLElement>(null), [W, setW] = useState(0)
   // An envelope resting on the wordmark slides off when it's clicked, and another lands in its place.
@@ -245,6 +246,7 @@ export function BoardEnd({ comparison: c }: { comparison?: Comparison | null }) 
       </> : <p className="price-note">Monthly billing, list prices before tax, no promotions: each vendor’s cheapest plan that holds your numbers. <CheckedPages offers={OFFERS} />.</p>}
       <p className="price-note">Product names belong to their owners and only identify their products. Nightmail isn’t affiliated with them.</p>
     </section>
+    {c && <nav className="cb-more" aria-label="More comparisons"><span>More comparisons:</span>{COMPARISONS.filter(other => other.focus === c.focus && other.slug !== c.slug).map(other => <Link key={other.path} to={other.path}>{other.title.replace('Nightmail ', '')}</Link>)}</nav>}
     <nav aria-label="Site links">
       <a className="srt-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={18} /></a>
       {PRICE_LINKS.filter(([path]) => path !== here).map(([path, label]) => <Link key={path} to={path}>{label}</Link>)}
