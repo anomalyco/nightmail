@@ -19,13 +19,19 @@ const REPLY = sql`coalesce(v.data->>'diagnosticCode', v.data #>> '{bounce,bounce
 // A cheap first pass in SQL; blocklistNamed decides.
 const NAMES = '(spamhaus|uribl|surbl|spamcop|barracuda|brbl|block ?list|black ?list|deny ?list|dnsbl|rbl|dbl|sbl|xbl|pbl)';
 
-/** Replies naming a blocklist to this campaign's mail that arrived since `since` (an instant) or in the last `minutes`. At most 500 read. */
+/**
+ * Replies naming a blocklist to this campaign's mail that arrived since `since` (an instant) or in the last `minutes`. Read
+ * from the campaign's bounced and delayed mail (the campaign's status index), then each one's feedback, never from every
+ * event of the workspace: a large send has hundreds of thousands of events an hour, and only a few thousand failures.
+ * At most 500 replies read.
+ */
 export async function campaignBlocklistReplies(db: DbExecutor, workspaceId: string, campaignId: string, window: { minutes: number } | { since: string }) {
   const from = 'since' in window ? sql`${window.since}::timestamptz` : sql`now() - make_interval(mins => ${window.minutes})`;
-  const { rows } = await db.execute<{ reply: string | null }>(sql`SELECT ${REPLY} AS reply FROM sending_email_events v
-      JOIN sending_emails e ON e.id = v.email_id AND e.workspace_id = v.workspace_id
-    WHERE v.workspace_id = ${workspaceId} AND v.created_at > ${from} AND v.type IN ('bounce', 'non_permanent_bounce', 'delivery_delay')
-      AND e.campaign_id = ${campaignId} AND ${REPLY} ~* ${NAMES} LIMIT 500`);
+  const { rows } = await db.execute<{ reply: string | null }>(sql`SELECT v.reply FROM sending_emails e
+      CROSS JOIN LATERAL (SELECT ${REPLY} AS reply FROM sending_email_events v WHERE v.workspace_id = e.workspace_id AND v.email_id = e.id
+        AND v.type IN ('bounce', 'non_permanent_bounce', 'delivery_delay') AND v.created_at > ${from}) v
+    WHERE e.workspace_id = ${workspaceId} AND e.campaign_id = ${campaignId} AND e.status IN ('bounced', 'delayed') AND e.updated_at > ${from}
+      AND v.reply ~* ${NAMES} LIMIT 500`);
   return rows.filter(row => blocklistNamed(row.reply)).length;
 }
 

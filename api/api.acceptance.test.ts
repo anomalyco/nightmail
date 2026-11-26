@@ -32788,6 +32788,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // Replies naming a blocklist: paused, one operator alert, and no resume while they keep arriving.
       await db.query("UPDATE sending_emails SET status = 'delivered' WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@example.net'", [campaign.id]);
       const { rows: listed } = await db.query("SELECT id FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@example.net' ORDER BY id LIMIT 3", [campaign.id]);
+      // Deferred by servers that check the DBL: still waiting to be delivered.
+      await db.query("UPDATE sending_emails SET status = 'delayed', updated_at = now() WHERE id = ANY($1)", [listed.map(r => r.id)]);
       for (const { id } of listed) await db.query("INSERT INTO sending_email_events (id, workspace_id, email_id, type, data, simulated, created_at) VALUES ($1, $2, $3, 'non_permanent_bounce', $4, false, now())",
         [unique('event'), ws, id, JSON.stringify({ bounceType: 'Transient', bounceSubType: 'General', diagnosticCode: '554 5.7.1 An URL in this email is listed by Spamhaus DBL' })]);
       assert.equal((await blocklistPause(runtime.db, ws, campaign.id, rampLines(null)))?.code, 'BLOCKLISTED');
