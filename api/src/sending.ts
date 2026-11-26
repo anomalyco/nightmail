@@ -3049,7 +3049,8 @@ async function launch(runtime: Runtime, db: DbExecutor, a: Actor, campaignId: st
   const contentHash = await digest(canonical({ version: 2, draft: reviewed, rendered }));
   await db.insert(campaignReviews).values({ id: reviewId, rendererVersion: CAMPAIGN_RENDERER_VERSION, workspaceId: a.workspaceId, campaignId, revision: row.revision, draft: reviewed, contentHash, rendered, capturedAt, capturedCount, staticPrepared: false });
   // The list-risk measure of a marketing campaign's list, recorded on this review by a job (src/list-risk.ts); it decides nothing.
-  if (!draft.requiredNotice && draft.audience?.listId) await db.execute(queueListRisk(a.workspaceId, campaignId, reviewId, draft.audience.listId));
+  if (!draft.requiredNotice && draft.audience?.listId) await db.execute(queueListRisk(a.workspaceId, campaignId, reviewId, draft.audience.listId,
+    readiness ? { verdict: readiness.verdict, required: readiness.required?.by ?? null, reasons: readiness.reasons.map(reason => reason.code) } : null));
   await reserveCampaign(runtime, db, held, a, a.keyId, queued);
   // Who confirmed the notice and when, in the workspace's Activity.
   if (draft.requiredNotice) await recordAudit(db, c, { action: 'campaign.required_notice_confirmed', workspaceId: a.workspaceId, target: { type: 'campaign', id: campaignId },

@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { log, type DbExecutor, type JobHandler, type Runtime } from './core.js';
 import { RISKS, type Risk } from './list-hygiene.js';
-import { LIST_RISK_FACTORS, type ListRiskFactor, type ListRiskLines } from './list-risk-lines.js';
+import { LIST_RISK_FACTORS, type ListRiskFactor, type ListRiskLines, type ReviewAtLaunch } from './list-risk-lines.js';
 
 // The list-risk measure: how a campaign's list was collected and how it has fared, from this workspace's own contacts
 // and mail only (the delivery history of src/delivery-history.ts, the contacts' risk flags of src/list-hygiene.ts and the
@@ -34,6 +34,8 @@ export type ListRisk = {
   values: Partial<Record<ListRiskFactor, number>>;
   band: Band | null;
   factors: { code: ListRiskFactor; level: 'elevated' | 'high' }[];
+  /** What the send review said at launch (verdict, what required a ramp, its reason codes); absent on reviews from before it was kept. */
+  review?: ReviewAtLaunch | null;
 };
 
 /** The factors' values and, with lines, the band. */
@@ -94,12 +96,12 @@ export async function measureListRisk(db: DbExecutor, workspaceId: string, listI
 
 /** audience.listRisk: records the measure on a launched campaign's review, once, as the list stood at launch (queued by the launch). */
 export const listRiskJob: JobHandler = async (runtime: Runtime, payload) => {
-  const { campaignId, reviewId, listId } = payload as { campaignId?: string; reviewId?: string; listId?: string };
+  const { campaignId, reviewId, listId, review } = payload as { campaignId?: string; reviewId?: string; listId?: string; review?: ReviewAtLaunch | null };
   const workspaceId = (payload as { workspaceId?: string }).workspaceId;
   if (!campaignId || !reviewId || !listId || !workspaceId) return;
   await runtime.db.transaction(async tx => {
     await tx.execute(sql`SELECT set_config('statement_timeout', '15000', true)`);
-    const risk = await measureListRisk(tx, workspaceId, listId, runtime.config.listRisk ?? null, campaignId);
+    const risk: ListRisk = { ...await measureListRisk(tx, workspaceId, listId, runtime.config.listRisk ?? null, campaignId), review: review ?? null };
     const { rowCount } = await tx.execute(sql`UPDATE sending_campaign_reviews SET list_risk = ${JSON.stringify(risk)}::jsonb
       WHERE workspace_id = ${workspaceId} AND id = ${reviewId} AND list_risk IS NULL`);
     if (rowCount) log('info', { code: 'LIST_RISK_RECORDED', workspaceId, campaignId, band: risk.band, sampled: risk.sampled });
