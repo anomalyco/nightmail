@@ -311,6 +311,7 @@
 .cb-sources { width: min(100%, 720px); margin-bottom: var(--space-32); padding-top: var(--space-20); box-shadow: inset 0 1px 0 var(--color-border-muted); text-align: start; }
 .cb-read { overflow-wrap: anywhere; }
 .cb-read a { color: var(--color-text); text-decoration-line: underline; text-decoration-thickness: from-font; text-underline-offset: .18em; text-decoration-color: var(--color-border-strong); }
+.cb-more { max-width: 720px; margin-bottom: var(--space-24); }
 .cb-sources-title { margin: 0 0 var(--space-4); color: var(--color-text); font-size: var(--text-sm); font-weight: 600; line-height: var(--leading-sm); }
 .cb-sources .price-terms { margin-top: var(--space-12); }
 .cb-sources .price-facts { margin-top: var(--space-12); color: var(--color-muted); font-size: var(--text-sm); line-height: var(--leading-sm); }
