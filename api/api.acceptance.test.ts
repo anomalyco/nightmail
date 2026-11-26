@@ -32755,16 +32755,16 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const { rampLines } = await import('./src/standing-model.js');
       const list = ok(await local('POST', '/v1/lists', { name: unique('guards') }), 201);
       // 150 subscribers at a domain that no longer takes mail joined first, then 150 elsewhere: the send goes in that order.
-      const join = async (where: string) => db.query(\`INSERT INTO audience_list_members (workspace_id, list_id, contact_id) SELECT workspace_id, $2, id FROM audience_contacts WHERE workspace_id = $1 AND \${where}\`, [ws, list.id]);
+      const join = async (where: string) => db.query(`INSERT INTO audience_list_members (workspace_id, list_id, contact_id) SELECT workspace_id, $2, id FROM audience_contacts WHERE workspace_id = $1 AND ${where}`, [ws, list.id]);
       await db.query("INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent) SELECT 'con_' || md5($1 || $2 || n::text), $1, 'p' || n || '@' || $3, 'subscribed' FROM generate_series(1, 150) AS n", [ws, tag, dead]);
-      await join(\`email LIKE '%@\${dead}'\`);
+      await join(`email LIKE '%@${dead}'`);
       await db.query("INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent) SELECT 'con_' || md5($1 || $2 || 'g' || n::text), $1, 'g' || n || '-' || $2 || '@example.net', 'subscribed' FROM generate_series(1, 150) AS n", [ws, tag]);
-      await join(\`email LIKE '%-\${tag}@example.net'\`);
-      await db.query(\`INSERT INTO sending_region_limits (workspace_id, region, max_send_rate, checked_at) VALUES ($1, $2, 5000, clock_timestamp())
-        ON CONFLICT ON CONSTRAINT sending_region_limits_pkey DO UPDATE SET max_send_rate = 5000, max_24_hour_send = 0, sent_last_24_hours = 0, checked_at = clock_timestamp()\`, [ws, REGION]);
+      await join(`email LIKE '%-${tag}@example.net'`);
+      await db.query(`INSERT INTO sending_region_limits (workspace_id, region, max_send_rate, checked_at) VALUES ($1, $2, 5000, clock_timestamp())
+        ON CONFLICT ON CONSTRAINT sending_region_limits_pkey DO UPDATE SET max_send_rate = 5000, max_24_hour_send = 0, sent_last_24_hours = 0, checked_at = clock_timestamp()`, [ws, REGION]);
       const campaign = ok(await local('POST', '/v1/campaigns', { name: unique('guards'), from: 'sender@example.com', subject: 'News', html: '<p>News for you.</p>', audience: { listId: list.id } }), 201);
-      ok(await local('POST', \`/v1/campaigns/\${campaign.id}/send\`, { revision: campaign.revision, pacing: { perDay: 100, rateShare: 1 } }), 202);
-      const view = async () => ok(await local('GET', \`/v1/campaigns/\${campaign.id}\`));
+      ok(await local('POST', `/v1/campaigns/${campaign.id}/send`, { revision: campaign.revision, pacing: { perDay: 100, rateShare: 1 } }), 202);
+      const view = async () => ok(await local('GET', `/v1/campaigns/${campaign.id}`));
       const nextWindow = async () => {
         await db.query("UPDATE sending_campaigns SET window_started_at = window_started_at - interval '25 hours', health_checked_at = health_checked_at - interval '25 hours', waiting_until = now() WHERE id = $1", [campaign.id]);
         await db.query("UPDATE jobs SET available_at = clock_timestamp() WHERE type = 'campaign.run' AND status = 'pending' AND workspace_id = $1", [ws]);
@@ -32794,9 +32794,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.deepEqual([paused.state, paused.delivery.pauseReason.code], ['paused', 'BLOCKLISTED']);
       assert.doesNotMatch(paused.delivery.pauseReason.message, /spamhaus|example/i, 'It names neither the list nor the domain.');
       assert.equal((await db.query("SELECT count(*)::int AS n FROM jobs WHERE type = 'operator.alert' AND payload->>'kind' = 'blocklisted' AND workspace_id = $1", [ws])).rows[0].n, 1);
-      error(await local('POST', \`/v1/campaigns/\${campaign.id}/resume\`, {}), 409, 'BLOCKLIST_REPLIES_ARRIVING');
+      error(await local('POST', `/v1/campaigns/${campaign.id}/resume`, {}), 409, 'BLOCKLIST_REPLIES_ARRIVING');
       await db.query("UPDATE sending_email_events SET created_at = now() - interval '31 minutes' WHERE workspace_id = $1 AND type = 'non_permanent_bounce'", [ws]);
-      ok(await local('POST', \`/v1/campaigns/\${campaign.id}/resume\`, {}));
+      ok(await local('POST', `/v1/campaigns/${campaign.id}/resume`, {}));
       assert.equal((await view()).state, 'sending');
       // With the replies gone and the bounces cleared, a day counts as healthy again.
       await db.query("DELETE FROM sending_email_events WHERE workspace_id = $1 AND type = 'non_permanent_bounce'", [ws]);
