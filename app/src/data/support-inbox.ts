@@ -33,7 +33,15 @@ export interface SupportMessage {
   files: { id: string; name: string | null; type: string | null; size: number | null }[]; email: SupportEmail | null; deliveredAt: string | null; at: string
   draft: { outcome: 'sent' | 'edited' | 'replaced' | 'discarded'; by: { userId: string; name: string | null }; at: string; replyId: string | null } | null
 }
-export type SupportEventKind = 'opened' | 'ticket' | 'priority' | 'paused' | 'resumed' | 'resolved' | 'done' | 'undone' | 'closed'
+export type SupportEventKind = 'opened' | 'ticket' | 'priority' | 'paused' | 'resumed' | 'resolved' | 'done' | 'undone' | 'closed' | 'approved' | 'declined'
+/** A one-click decision a staff email linked to (api/src/support-approvals.ts): only a signed-in operator's confirm runs it. */
+export interface SupportApproval {
+  id: string; conversationId: string; kind: string; label: string; effect: string; risky: boolean; reason: string; proposedBy: 'nightmail' | 'agent'
+  state: 'proposed' | 'approved' | 'declined' | 'failed' | 'expired'; createdAt: string; expiresAt: string; decidedAt: string | null
+  decidedBy: { userId: string; name: string | null } | null; result: Record<string, unknown> | null
+  /** Send the held answer: exactly what would go, and why it can't, when it can't. */
+  preview: { text: string | null; blocked: string | null } | null
+}
 export interface SupportEvent { id: string; kind: SupportEventKind; by: { userId: string; name: string | null } | null; details: Record<string, unknown>; at: string }
 export interface SupportBrief { title: string; summary: string; ask: string; recommendation: string }
 export interface SupportWorkspace { id: string; name: string; role: string; joinedAt: string; createdAt: string; members: number; inScope: boolean; contentShared: boolean; sending: { kind: string; region: string | null; paused: boolean } | null; standing: string | null }
@@ -83,6 +91,10 @@ export const supportInboxApi = {
   /** Undo Mark done (whoever marked it, for a few minutes): a ticket Done resolved opens again. */
   undoDone: (conversationId: string, idempotencyKey: string) => request<SupportConversation>(`${base}/${id(conversationId)}/done`, { method: 'DELETE', idempotencyKey }),
   wake: (conversationId: string) => request<{ id: string; woken: boolean }>(`${base}/${id(conversationId)}/wake`, { method: 'POST' }),
+  /** An approval, through its emailed link's token. Reading it changes nothing. */
+  approval: (conversationId: string, approvalId: string, token: string, signal?: AbortSignal) => request<SupportApproval>(`${base}/${id(conversationId)}/approvals/${id(approvalId)}?token=${id(token)}`, { signal }),
+  decideApproval: (conversationId: string, approvalId: string, token: string, decision: 'approve' | 'decline', idempotencyKey: string) =>
+    request<SupportApproval>(`${base}/${id(conversationId)}/approvals/${id(approvalId)}`, { method: 'POST', body: { token, decision }, idempotencyKey }),
   read: (conversationId: string, read: boolean, seq?: number) => request<{ id: string; unread: boolean }>(`${base}/${id(conversationId)}/read`, { method: 'PUT', body: seq === undefined ? { read } : { read, seq } }),
 }
 

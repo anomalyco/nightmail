@@ -6332,6 +6332,14 @@
                   "link_record"
                 ]
               },
+              "linkHold": {
+                "type": "string",
+                "enum": [
+                  "daily_budget",
+                  "blocklist"
+                ],
+                "description": "When present, the daily pacing window is the shared link allowance, or the link record is held for operator review."
+              },
               "until": {
                 "type": "string"
               }
@@ -7373,6 +7381,35 @@
                         "NEVER_MAILED",
                         "NO_DMARC",
                         "BOUNCES",
+                        "COMPLAINTS"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                },
+                "description": "The findings behind the verdict in the original codes, one per code: a newly registered domain, one new here and a new link domain read NEW_DOMAIN, a jump over the usual day SIZE_JUMP; blocklist findings appear only in findings. Prefer findings."
+              },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "NEW_DOMAIN",
+                        "SIZE_JUMP",
+                        "NO_HISTORY",
+                        "RISKY_LIST",
+                        "NEVER_MAILED",
+                        "NO_DMARC",
+                        "BOUNCES",
                         "COMPLAINTS",
                         "NEW_REGISTRATION",
                         "NEW_HERE",
@@ -7391,7 +7428,7 @@
                     "message"
                   ]
                 },
-                "description": "Every finding behind the verdict."
+                "description": "Every finding behind the verdict, with its own code: NEW_REGISTRATION (registered recently, from public registry data), NEW_HERE (registered long ago, new to this workspace), NEW_DOMAIN (added recently, registration not known), USUAL_JUMP, NEW_LINK_DOMAIN, BLOCKLISTED_BEFORE (an earlier send drew replies naming a blocklist and none has finished without since), BLOCKLIST_UNCOUNTED (a recent send's blocklist replies aren't counted yet, so it isn't taken for clean), and the original codes."
               },
               "domain": {
                 "type": "object",
@@ -7480,6 +7517,10 @@
                       "not_configured"
                     ],
                     "description": "The custom MAIL FROM domain (aligned SPF)."
+                  },
+                  "sharedLinkPacing": {
+                    "type": "boolean",
+                    "description": "This campaign shares the link domain’s daily sending allowance."
                   },
                   "linkHost": {
                     "type": "string",
@@ -7764,12 +7805,20 @@
                   "by": {
                     "type": "string",
                     "enum": [
+                      "NEW_DOMAIN",
+                      "SIZE_JUMP"
+                    ],
+                    "description": "Kept as it was: a newly registered domain reads NEW_DOMAIN and a blocklist SIZE_JUMP. reason says which."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
                       "NEW_REGISTRATION",
                       "BLOCKLISTED",
                       "NEW_DOMAIN",
                       "SIZE_JUMP"
                     ],
-                    "description": "BLOCKLISTED: mail from this From domain or with these links drew replies naming a blocklist and no send has finished without any since; a consent confirmation does not waive it."
+                    "description": "What requires the ramp. BLOCKLISTED: mail from this From domain or with these links drew replies naming a blocklist and no send has finished without any since; a consent confirmation does not waive it."
                   },
                   "maxPerDay": {
                     "type": "integer",
@@ -8238,6 +8287,35 @@
                         "NEVER_MAILED",
                         "NO_DMARC",
                         "BOUNCES",
+                        "COMPLAINTS"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                },
+                "description": "The findings behind the verdict in the original codes, one per code: a newly registered domain, one new here and a new link domain read NEW_DOMAIN, a jump over the usual day SIZE_JUMP; blocklist findings appear only in findings. Prefer findings."
+              },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "NEW_DOMAIN",
+                        "SIZE_JUMP",
+                        "NO_HISTORY",
+                        "RISKY_LIST",
+                        "NEVER_MAILED",
+                        "NO_DMARC",
+                        "BOUNCES",
                         "COMPLAINTS",
                         "NEW_REGISTRATION",
                         "NEW_HERE",
@@ -8256,7 +8334,7 @@
                     "message"
                   ]
                 },
-                "description": "Every finding behind the verdict."
+                "description": "Every finding behind the verdict, with its own code: NEW_REGISTRATION (registered recently, from public registry data), NEW_HERE (registered long ago, new to this workspace), NEW_DOMAIN (added recently, registration not known), USUAL_JUMP, NEW_LINK_DOMAIN, BLOCKLISTED_BEFORE (an earlier send drew replies naming a blocklist and none has finished without since), BLOCKLIST_UNCOUNTED (a recent send's blocklist replies aren't counted yet, so it isn't taken for clean), and the original codes."
               },
               "domain": {
                 "type": "object",
@@ -8345,6 +8423,10 @@
                       "not_configured"
                     ],
                     "description": "The custom MAIL FROM domain (aligned SPF)."
+                  },
+                  "sharedLinkPacing": {
+                    "type": "boolean",
+                    "description": "This campaign shares the link domain’s daily sending allowance."
                   },
                   "linkHost": {
                     "type": "string",
@@ -8629,12 +8711,20 @@
                   "by": {
                     "type": "string",
                     "enum": [
+                      "NEW_DOMAIN",
+                      "SIZE_JUMP"
+                    ],
+                    "description": "Kept as it was: a newly registered domain reads NEW_DOMAIN and a blocklist SIZE_JUMP. reason says which."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
                       "NEW_REGISTRATION",
                       "BLOCKLISTED",
                       "NEW_DOMAIN",
                       "SIZE_JUMP"
                     ],
-                    "description": "BLOCKLISTED: mail from this From domain or with these links drew replies naming a blocklist and no send has finished without any since; a consent confirmation does not waive it."
+                    "description": "What requires the ramp. BLOCKLISTED: mail from this From domain or with these links drew replies naming a blocklist and no send has finished without any since; a consent confirmation does not waive it."
                   },
                   "maxPerDay": {
                     "type": "integer",
@@ -75241,7 +75331,7 @@
           }
         ],
         "summary": "Tell Nightmail what got in your way",
-        "description": "Tell Nightmail what got in your way while doing a task: what happened and what would have made it easier, with the request ID of a call that went wrong if you have one. Only message is needed; any other field (such as severity or kind, which an earlier version asked for) is ignored. It is filed as a support ticket for the Nightmail team, who read every one, with this credential's workspace and the key, sign-in or token that sent it; nobody is emailed and no reply comes back, so carry on with the task after sending it.\n\nAny credential that can read may send it (API keys, including ones limited to sender domains, agent tokens and MCP sign-ins), for its own workspace: at most 20 reports an hour from one credential and 50 from one workspace (429 FEEDBACK_RATE_LIMITED, with Retry-After). Anything in message or context that looks like a key, token or password is removed before it is stored; redacted says how many. Send one report per distinct problem.",
+        "description": "Tell Nightmail what got in your way while doing a task: what happened and what would have made it easier, with the request ID of a call that went wrong if you have one. Only message is needed; any other field (such as severity or kind, which an earlier version asked for) is ignored. It is filed as a support ticket for the Nightmail team, who read every one, with this credential's workspace and the key, sign-in or token that sent it; no reply comes back, so carry on with the task after sending it.\n\nAny credential that can read may send it (API keys, including ones limited to sender domains, agent tokens and MCP sign-ins), for its own workspace: at most 20 reports an hour from one credential and 50 from one workspace (429 FEEDBACK_RATE_LIMITED, with Retry-After). Anything in message or context that looks like a key, token or password is removed before it is stored; redacted says how many. Send one report per distinct problem.",
         "requestBody": {
           "required": true,
           "content": {

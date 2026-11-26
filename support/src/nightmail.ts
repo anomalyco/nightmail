@@ -28,7 +28,7 @@ export type MirroredMessage = { id: string; author: 'customer' | 'agent' | 'syst
   /** A held answer's: staff paused the agent, the output gate held it, access shrank, the conversation ended, or an earlier build wrote it. */
   reason?: 'paused' | 'gate' | 'access' | 'closed' | 'earlier';
   delivery?: 'sent' | 'failed' | 'held'; at?: string };
-export type MirroredState = { subject?: string; ticket?: { id: string; type: string; severity: 'P1' | 'P2' | 'P3'; brief?: { title: string; summary: string; ask: string; recommendation: string } }; turns?: number; costUsd?: number; blockedWork?: number; pauseForTicket?: true };
+export type MirroredState = { subject?: string; ticket?: { id: string; type: string; severity: 'P1' | 'P2' | 'P3'; brief?: { title: string; summary: string; ask: string; recommendation: string; tried?: { tool: string; finding: string }[] } }; turns?: number; costUsd?: number; blockedWork?: number; pauseForTicket?: true };
 /** Whether staff paused the agent: checked before every turn and every send. */
 export type InboxState = { id: string; status: 'open' | 'ticketed' | 'closed'; agentState: 'active' | 'paused'; pausedBy: 'staff' | 'ticket' | null; pausedAt: string | null; queuedReplies: number };
 /** A staff reply waiting for this Worker to deliver it. */
@@ -82,7 +82,12 @@ export interface SupportPlatform {
   inboxState(conversationId: string): Promise<PlatformReply<InboxState>>;
   pullOutbox(conversationId?: string): Promise<PlatformReply<{ data: OutboxReply[] }>>;
   markDelivery(conversationId: string, messageId: string, status: 'sent' | 'failed'): Promise<PlatformReply<{ id: string; delivery: 'sent' | 'failed'; deliveredAt: string | null }>>;
+  // One path to a human (api/src/support-staff-mail.ts): the staff emails Nightmail wrote, and each one sent.
+  staffMail(): Promise<PlatformReply<{ data: StaffEmail[] }>>;
+  staffMailSent(key: string, sent: { threadId: string; messageId: string }): Promise<PlatformReply<{ key: string; sentAt: string }>>;
 }
+/** A staff email to send from the support address to the team: a new thread, or a reply in threadId to replyToMessageId. */
+export type StaffEmail = { key: string; threadId: string | null; replyToMessageId: string | null; subject: string; text: string; html: string };
 /** A platform reply's body, or (any other status than `ok`) a NightmailError the work queue can classify. */
 export function platformBody<T>(reply: PlatformReply<T>, ok = [200, 201]): T {
   if (ok.includes(reply.status)) return reply.body;
@@ -146,16 +151,16 @@ export function nightmailApi(env: Env, which: 'support' | 'intake' = 'support') 
     events: (query: { addressId?: string; after?: string; limit: number }) =>
       call<{ data: InboundEvent[]; cursor: string }>('GET', `/v1/inbound/events?${new URLSearchParams({ types: 'message.received', limit: String(query.limit), ...(query.addressId ? { addressId: query.addressId } : {}), ...(query.after ? { after: query.after } : {}) })}`),
     /** A new conversation from the support address, or from `addressId` when the caller pinned one (ticket emails, the chat follow-up thread). */
-    startThread: (input: { to: string[]; subject: string; text: string; replyTo?: string[]; addressId?: string }, idempotencyKey: string) =>
+    startThread: (input: { to: string[]; subject: string; text: string; html?: string; replyTo?: string[]; addressId?: string }, idempotencyKey: string) =>
       call<{ id: string; threadId: string }>('POST', '/v1/inbound/threads', { addressId: env.SUPPORT_ADDRESS_ID, ...input }, idempotencyKey),
     /**
      * A reply in an email conversation, only to the reviewed recipients (Nightmail refuses a reply whose recipients changed),
      * from the address and under the key chosen once when the reply was queued (conversation.ts `route`). addressId null:
      * the address the message came in on. A retry sends the same request, so Nightmail replays it instead of sending twice.
      */
-    reply: (threadId: string, input: { replyToMessageId: string; text: string; to: string; subject?: string; addressId: string | null }, idempotencyKey: string) =>
+    reply: (threadId: string, input: { replyToMessageId: string; text: string; html?: string; to: string; subject?: string; addressId: string | null }, idempotencyKey: string) =>
       call<{ id: string; threadId: string }>('POST', `/v1/inbound/threads/${encodeURIComponent(threadId)}/reply`, {
-        ...(input.addressId === null ? {} : { addressId: input.addressId }), replyToMessageId: input.replyToMessageId, text: input.text, to: [input.to], cc: [], expectedRecipients: { to: [input.to], cc: [], bcc: [] },
+        ...(input.addressId === null ? {} : { addressId: input.addressId }), replyToMessageId: input.replyToMessageId, text: input.text, ...input.html ? { html: input.html } : {}, to: [input.to], cc: [], expectedRecipients: { to: [input.to], cc: [], bcc: [] },
         ...(input.subject ? { subject: input.subject } : {}),
       }, idempotencyKey),
   };

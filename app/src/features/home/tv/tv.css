@@ -22,7 +22,7 @@
 :root:has(.chy) body { background: #050607; }
 /* Nothing on this page shows a focus ring (Ryan's call: a ring round a photographed object breaks the picture). */
 .chy :focus, .chy :focus-visible { outline: none; }
-.chy-col { --table: .155; --h: min((100dvh - 86px) / (1 + var(--table)), (100vw - 48px) / 1.5136, 860px); position: relative; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100dvh; max-width: 48rem; margin: 0 auto; padding: 24px 0 20px; text-align: center; }
+.chy-col { --table: .155; --h: min((100dvh - 112px) / (1 + var(--table)), (100vw - 48px) / 1.5136, 860px); position: relative; box-sizing: border-box; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100dvh; max-width: 48rem; margin: 0 auto; padding: 24px 0 20px; text-align: center; }
 
 
 /* The scene is one photograph: the television on its table in a dark room, lit by its own screen, the glass open so
@@ -99,13 +99,22 @@
 .chy-flat [data-ours] { color: #9DAEFF; }
 .chy-sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
-/* Under the table: the way in, then the terms line, clear of the table's front edge (which the photograph carries
-   .155 of the set's height below the set). */
-.chy-under { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 12px; margin-top: calc(var(--table) * var(--h) + 12px); }
-/* What a sign-in has to say, or that no place is open: over the page's head, out of the flow, so its coming moves
-   nothing. Dark whatever the system's theme, as the page is. */
-.chy-notice { position: absolute; z-index: 6; top: 16px; left: 50%; width: min(520px, 100% - 32px); translate: -50% 0; text-align: left; }
-.chy-notice .ui-alert { background: #202020; color: var(--ink); }
+/* Under the table: the way in, a line for what there is to say about it, then the terms line, clear of the table's
+   front edge (which the photograph carries .155 of the set's height below the set). */
+.chy-under { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; gap: 8px; margin-top: calc(var(--table) * var(--h) + 12px); }
+.chy-way { display: grid; justify-items: center; max-width: 100%; }
+/* That no place is open, or what a sign-in has to say: one quiet line under the way in, in the terms' type, with
+   nothing behind it. Its line is kept whether or not there is anything on it (--h leaves room for it), so its words
+   arrive without moving anything. */
+.chy-notice { min-height: 18px; color: #C2C1BD; font-size: 13px; line-height: 18px; text-wrap: balance; }
+.chy-notice p { margin: 0; }
+/* A sign-in's own notice comes as an Alert (components/ui): here it is its words alone, its title first. */
+.chy-notice .ui-alert { display: block; padding: 0; border-radius: 0; background: none; color: inherit; }
+.chy-notice .ui-alert::before { content: none; }
+.chy-notice .ui-alert div { display: inline; }
+.chy-notice .ui-alert__title { margin: 0; color: var(--ink); }
+.chy-notice .ui-alert__title::after { content: '. '; }
+.chy-notice .ui-tone--danger { color: #F2A79E; }
 .chy-consent { margin: 0; color: var(--faint); font-size: 13px; line-height: 18px; }
 .chy-consent a { color: inherit; }
 /* Copy for your agent, after the terms and API docs: a word like theirs, underlined as they are, with its two words in
@@ -125,11 +134,12 @@
   /* the page's foot padding is part of the first screen, so the page does not scroll by it */
   .chy-col { --h: calc((100vw - 20px) / 1.3587); min-height: calc(100dvh - 24px); justify-content: flex-start; padding-top: calc(14px + env(safe-area-inset-top, 0px)); }
   .chy-set { left: 0; }
-  /* the notice: in the dark under the table, above the way in, so it covers nothing of the picture */
-  .chy-notice { top: calc(14px + env(safe-area-inset-top, 0px) + var(--h) * (1 + var(--table)) + 12px); width: 100%; }
   /* The rest of the screen is shared out, so none of it is left empty at the foot: the way in stands in the middle of
-     what is under the table (the empty first item balances the terms line), and the terms are at the foot. */
-  .chy-under { flex: 1 1 auto; justify-content: space-between; gap: 16px; align-self: stretch; }
+     what is under the table (the empty first item balances the terms line), and the terms are at the foot. The
+     notice hangs under the way in, out of the flow, in the room the gap always leaves for its two lines. */
+  .chy-under { flex: 1 1 auto; justify-content: space-between; gap: 56px; align-self: stretch; }
+  .chy-way { position: relative; align-self: stretch; }
+  .chy-notice { position: absolute; top: calc(100% + 10px); left: 0; right: 0; min-height: 0; }
   .chy-under::before { content: ''; }
 }
 
@@ -138,9 +148,10 @@
    It lifts a little under the pointer and goes down when pressed. */
 .chyp { --stripe: calc(var(--h) * .0125); position: absolute; z-index: 2; left: 44.3%; top: 103.2%; width: 38%; translate: -50% 0; display: grid; padding: var(--stripe); background: repeating-linear-gradient(-45deg, #D23B2D 0 calc(var(--stripe) * 1.25), #F6F1E3 0 calc(var(--stripe) * 2.5), #2F4FA8 0 calc(var(--stripe) * 3.75), #F6F1E3 0 calc(var(--stripe) * 5)); border-radius: 2px; box-shadow: 0 0 calc(var(--h) * .07) rgb(var(--tint, 150 165 255) / calc(55% * min(var(--light, 1), 1.25))), 0 calc(var(--h) * .012) calc(var(--h) * .018) rgb(0 0 0 / 80%); transition: translate .18s var(--ease-out), filter .18s; }
 .chyp-go { display: grid; place-content: center; height: calc(var(--h) * .086); padding: 0 1em; border: 0; border-radius: 1px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .2 0 0 0 -.07'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E"), #F6F1E3; color: #0A0B0F; font: 700 calc(var(--h) * .041) / 1 var(--font-mono); letter-spacing: -.01em; word-spacing: -.22em; text-transform: uppercase; text-decoration: none; white-space: nowrap; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+/* Its two wordings (Get started, and Join the waitlist when no place is open) share one cell, the one not said
+   hidden in place (ui.css), so the change from one to the other moves nothing. The longer one is set smaller. */
 .chyp-go .srt-cta-label { display: inline-flex; justify-content: center; align-items: center; gap: .42em; }
-.chyp-go .srt-cta-label[data-off] { display: none; }
-.chyp-go:has(.srt-cta-label:first-child[data-off]), a.chyp-go { font-size: calc(var(--h) * .032); }
+.chyp-go .srt-cta-wait, a.chyp-go { font-size: calc(var(--h) * .032); }
 .chyp-go .srt-cta-label::after { content: ''; flex: none; width: .56em; height: .68em; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
 @media (hover: hover) { .chyp:hover { translate: -50% -2px; filter: brightness(1.06); } }
 .chyp:active { translate: -50% 1px; filter: brightness(.94); }
@@ -150,7 +161,7 @@
    screen, so it carries its share of the space. */
 .chyp-under { display: none; --stripe: clamp(7px, 1dvh, 10px); position: relative; left: auto; top: auto; width: min(440px, 100%); margin: 0; translate: none; box-shadow: 0 0 44px rgb(var(--tint, 150 165 255) / calc(48% * min(var(--light, 1), 1.25))), 0 6px 12px rgb(0 0 0 / 70%); }
 .chyp-under .chyp-go { height: clamp(58px, 9.6dvh, 88px); font-size: clamp(21px, 3.2dvh, 29px); }
-.chyp-under .chyp-go:has(.srt-cta-label:first-child[data-off]), .chyp-under a.chyp-go { font-size: 17px; }
+.chyp-under .chyp-go .srt-cta-wait, .chyp-under a.chyp-go { font-size: 17px; }
 .chyp-under:hover, .chyp-under:active { translate: none; }
 @media (max-width: 640px) {
   .chyp:not(.chyp-under) { display: none; }

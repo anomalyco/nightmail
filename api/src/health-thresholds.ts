@@ -129,7 +129,7 @@ export const CAMPAIGNS = {
   waitingSeconds: 900, probeSeconds: 1_800,
   /** Waiting on its own daily pace is the customer's choice, and on the ramp's hourly steps by design (a step's hour, then
    *  at most an hour for its results: src/standing-model.ts RAMP): never an alert. */
-  waitingIgnored: ['pacing_window', 'ramp'],
+  waitingIgnored: ['pacing_window', 'ramp', 'link_budget', 'link_listing'],
   remindMinutes: 60,
   /**
    * Bounces and complaints on settled mail (delivered + bounced), once this much has settled: the lines Amazon's own

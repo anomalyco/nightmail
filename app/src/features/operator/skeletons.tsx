@@ -424,13 +424,13 @@ export const vdmColumns = [['isp', 'ISP'], ['send', 'Sent'], ['delivered', 'Deli
 /** Mailbox providers (api/src/deliverability.ts PROVIDERS) and VDM's rows: every provider has a row, mail or none. */
 export const PROVIDER_SLOTS = 7, VDM_SLOTS = 6
 export type DeliverabilityRow = { cells: ReactNode[]; tones?: (Tone | undefined)[]; empty?: boolean }
-export type DeliverabilityFill = { tile: (key: string) => GlassTileFill; providers: DeliverabilityRow[]; vdm: { status: ReactNode; rows: DeliverabilityRow[] }; row: (group: string, row: string) => GlassFill }
+export type DeliverabilityFill = { domainCount: number; tile: (key: string) => GlassTileFill; providers: DeliverabilityRow[]; vdm: { status: ReactNode; rows: DeliverabilityRow[] }; row: (group: string, row: string) => GlassFill }
 export const deliverabilityGroups: GlassGroupDef[] = [
   { key: 'engagement', title: 'Engagement', rows: [{ key: 'opened', label: 'Opened', spark: true }, { key: 'human', label: 'Opened by people', spark: true }, { key: 'machine', label: 'Opened by machines only' },
     { key: 'clicked', label: 'Clicked', spark: true }, { key: 'cto', label: 'Clicks per opener' },
     { key: 'note', note: 'Over delivered mail. Apple Mail Privacy Protection and link scanners open mail by themselves; SES flags those opens, counted here as machines. Clicks are the firmer signal.' }] },
   { key: 'ses', title: 'SES accounts', to: ['/operator?view=health', 'Health'], rows: slots('region', GLASS_REGION_SLOTS) },
-  { key: 'domains', title: 'Our domains', rows: [...slots('dbl', 2), ...slots('postmaster', 2)] },
+  { key: 'domains', title: 'Domains', rows: [{ key: 'budget', label: 'Shared link recipients today' }, ...slots('dbl', 2), ...slots('postmaster', 2)] },
   { key: 'standing', title: 'Standing', to: ['/operator', 'Queue'], rows: [{ key: 'grades', cells: GRADE_SLOTS }, { key: 'steps', cells: STEP_SLOTS }] },
   { key: 'complaints', title: 'Most complaints', to: ['/operator', 'Queue'], rows: slots('ws', 10) },
   { key: 'bounces', title: 'Most bounces', to: ['/operator', 'Queue'], rows: slots('ws', 10) },
@@ -453,7 +453,8 @@ export function DeliverabilityBoard({ fill, controls, stale = false }: { fill?: 
       <SectionHeader title="By mailbox provider · worst first" />
       <DeliverabilityTable label="By mailbox provider" columns={providerColumns} rows={fill?.providers} slots={PROVIDER_SLOTS} className="dlv-table--providers" />
     </section>
-    <GlassGroupList groups={deliverabilityGroups} row={fill?.row} />
+    <GlassGroupList groups={deliverabilityGroups.map(group => group.key === 'domains' && fill && fill.domainCount > 2
+      ? { ...group, rows: [...group.rows, ...Array.from({ length: fill.domainCount - 2 }, (_, i) => ({ key: `dbl:${i + 2}` }))] } : group)} row={fill?.row} />
     <section className="glass-section" aria-label="Amazon VDM estimates">
       <SectionHeader title="Amazon VDM · estimates" />
       <p className="dlv-status">{fill ? fill.vdm.status : <Skeleton width={320} height={12} />}</p>

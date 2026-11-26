@@ -163,6 +163,12 @@ own daily pace: never an alert).
 
 **Then** `docs/sending-limits.md`.
 
+### link-domain-held
+Glass → Deliverability shows the registered domain, the latest Spamhaus DBL result and when it was checked.
+Marketing releases using that domain wait; existing unsubscribe links still work. Investigate the source before resuming.
+After a clear check, a signed-in operator can POST `{"reason":"…"}` (at least ten characters) to
+`/v1/operator/glass/link-domains/{domain}/resume`. The audit records who resumed it and why.
+
 ### campaign-paused
 Nightmail paused a campaign (a quarantine after its list probe, an auto-pause on bounces or complaints, a
 failure), not its owner. Open until it is resumed or canceled, or for a day.

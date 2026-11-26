@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent } from 'react'
 import { Link } from 'react-router'
 import { productName, publicOrigin } from '../../../../../api/src/brand'
-import { Alert, useCopy } from '../../../components/ui'
+import { useCopy } from '../../../components/ui'
 import { SignInConsent } from '../../../components/LegalLinks'
 import { NightmailWordmark } from '../../../components/NightmailLogo'
 import type { HomeProps, HomeStart } from '..'
@@ -562,9 +562,9 @@ function takeOver(set: HTMLElement | null) {
 /** The homepage: the television, the price list it plays, and the way in. */
 export function TvHome({ start, notice }: HomeProps) {
   const visitor = !start.signedIn
-  // No place open (signups-open.ts): the button says Join the waitlist, and the notice says why, unless a sign-in has
-  // something of its own to say there.
-  const full = useSignupsFull(visitor), said = notice || (full ? <Alert tone="info">Full for now. Join the waitlist and we’ll email you when a place opens.</Alert> : null)
+  // No place open (signups-open.ts): the button says Join the waitlist, and a line under it says why, unless a sign-in
+  // has something of its own to say there. The line is in the page from the start (empty), so its words move nothing.
+  const full = useSignupsFull(visitor), said = notice || <p role="status">{full ? 'Full for now. Join the waitlist and we’ll email you when a place opens.' : ''}</p>
   const [flat, setFlat] = useState(false), [on, setOn] = useState(true), [channel, setChannel] = useState(0), [bad, setBad] = useState(0), [muted, setMuted] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   const deck = useRef<Deck>({ channel: 0, power: true, bad: 0, thumpAt: -1e9, switchAt: -1e9, note: '', noteAt: -1e9, air: null, wake: () => {}, hear: () => {}, glow: [.38, .49, .75], level: 0 }).current
@@ -616,7 +616,6 @@ export function TvHome({ start, notice }: HomeProps) {
   </>
   return <main className="chy">
     <div className="chy-col">
-      {said && <div className="chy-notice">{said}</div>}
       {/* In words, for whoever can't see the picture: the price, what is free, and the tape's opening page (channel 1). */}
       <h1 className="chy-sr">{PER_THOUSAND} per {count(1000)} emails</h1>
       <p className="chy-sr">The first {count(nightmail.freeSent)} emails sent each month are free.</p>
@@ -646,7 +645,7 @@ export function TvHome({ start, notice }: HomeProps) {
         <Label start={start} />
       </div>
       <div className="chy-under">
-        <Label start={start} under />
+        <div className="chy-way"><Label start={start} under /><div className="chy-notice">{said}</div></div>
         {visitor ? <SignInConsent className="chy-consent" after={<More lead />} /> : <p className="chy-consent"><More /></p>}
       </div>
     </div>

@@ -207,3 +207,7 @@ a.sinbox-list__main:focus-visible { text-decoration: underline; text-underline-o
 /* A card leaves out what a row has nothing for (no ticket). */
 .sinbox-table .ui-card__segment:empty { display: none; }
 .sinbox-sheet .sinbox-panel__body { padding-bottom: var(--space-8); }
+
+/* An approval's preview: exactly what would be sent, as text (never rendered), and why it can't go when it can't. */
+.sinbox-approval__preview { margin: var(--space-12) 0 0; padding: var(--space-12) var(--space-16); max-height: 240px; overflow: auto; border-radius: var(--radius-md); background: var(--color-layer-1); color: var(--color-text); font-size: var(--text-sm); line-height: var(--leading-sm); white-space: pre-wrap; overflow-wrap: anywhere; }
+.sinbox-approval__blocked { margin: var(--space-12) 0 0; color: var(--color-warning); font-size: var(--text-sm); line-height: var(--leading-sm); }

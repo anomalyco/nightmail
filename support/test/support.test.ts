@@ -9,6 +9,7 @@ import { addresses } from '../../api/src/brand.js';
 import { perThousandUsd, RATES } from '../../api/src/billing/rates.js';
 import { MAIL_PORTS, mailServerHosts } from '../../api/src/mail-servers.js';
 import { conversationLines, ticketEmail } from '../src/tickets.js';
+import { attachmentLink } from '../src/attachments.js';
 import { mailAllowed } from '../src/limits.js';
 import { fenced, project, toolResult, unfenced, untrusted } from '../src/agent/projection.js';
 import { customerBlock, notesBlock, oneLine } from '../src/agent/context.js';
@@ -466,8 +467,9 @@ describe('support Worker', () => {
     again.ws.close();
   }, 180_000);
 
-  test('a refund request files one ticket, emails the team and opens the customer’s follow-up thread', async () => {
+  test('a refund request files one ticket, hands it to Nightmail’s staff mail with its brief, and opens the customer’s follow-up thread', async () => {
     const started = await post('/chat/start', { handoff: handoff() });
+    await fakeHook('/__inbox', { id: started.body.conversationId, channel: 'chat' });
     const chat = await connect(started.body.socketUrl);
     await chat.until(f => f.type === 'history');
     chat.send({ type: 'user.message', clientMessageId: 'r1', text: 'Can I get a refund of my duplicate top-up?' });
@@ -483,16 +485,18 @@ describe('support Worker', () => {
     assert.deepEqual(JSON.parse(row.details), { topic: 'refund' });
     assert.ok(row.recommendation.includes('Refund the second $25'));
     assert.equal((await db.prepare('SELECT status, ticket_id FROM conversations WHERE id = ?').bind(started.body.conversationId).first<any>()).status, 'ticketed');
-    // Both are work of their own, sent by the alarm.
+    // The customer's follow-up is work of its own, sent by the alarm. The team hears through Nightmail's staff mail
+    // (api/src/support-staff-mail.ts): the ticket goes there with its brief, what the agent checked included.
     const ticketSends = async () => (await fakeCalls()).filter(c => c[0] === 'api' && c[1] === 'POST' && c[2] === '/v1/inbound/threads' && c[3].text.includes(filed.ticketId));
-    const sends = (await eventually(async () => (await ticketSends()).length >= 2 ? ticketSends() : undefined)) ?? [];
-    const team = sends.find(c => c[3].to[0] === 'ryan@anoma.ly'), customer = sends.find(c => c[3].to[0] === 'ada@acme.test');
-    assert.ok(team && customer, JSON.stringify(sends));
-    assert.equal(team[3].addressId, 'adr_support'); assert.equal(team[3].subject, `[Nightmail billing] ${filed.ticketId}: Duplicate $25 top-up (P3)`);
-    assert.ok(team[3].text.includes('Recommendation\nRefund the second $25') && team[3].text.includes('Customer: ') && team[3].text.includes('> Please refund my duplicate top-up'));
-    assert.equal(team[5], `ticket-${filed.ticketId}`, 'Idempotent per ticket.');
-    assert.equal(team[4], `Bearer bane_mbx_${'7'.repeat(64)}`);
-    assert.match(customer[3].text, new RegExp(`passed your request to the Nightmail team as ${filed.ticketId}`));
+    const customer = await eventually(async () => (await ticketSends()).find(c => c[3].to[0] === 'ada@acme.test'));
+    assert.match(customer?.[3].text, new RegExp(`passed your request to the Nightmail team as ${filed.ticketId}`));
+    assert.equal(customer[4], `Bearer bane_mbx_${'7'.repeat(64)}`);
+    const mirrored = await eventually(async () => (await fakeCalls()).find(c => c[0] === 'mirrorState' && c[1] === started.body.conversationId && c[2].ticket?.id === filed.ticketId));
+    assert.deepEqual(mirrored?.[2].ticket.brief, { title: 'Duplicate $25 top-up', summary: 'Ada asks for a refund of a duplicate top-up. The ledger shows two identical top-ups. She wants one refunded.',
+      ask: 'Please refund my duplicate top-up', recommendation: 'Refund the second $25 top-up (billing error).', tried: [{ tool: 'get_billing', finding: 'two $25 top-ups 40 s apart' }] });
+    await new Promise(r => setTimeout(r, 500));
+    assert.ok(!(await ticketSends()).some(c => c[3].to[0] === 'ryan@anoma.ly'), 'Nothing to the team from here: Nightmail’s staff mail is the one email.');
+    assert.ok((await db.prepare('SELECT notified_at FROM tickets WHERE id = ?').bind(filed.ticketId).first<{ notified_at: number | null }>())?.notified_at, 'Handed over, so the sweep never emails it either.');
     chat.ws.close();
     // Reconnecting to a ticketed conversation replays the full ticket card fields (never only ticketId).
     const rejoined = await connect(started.body.socketUrl);
@@ -1977,33 +1981,33 @@ describe('support Worker', () => {
       assert.deepEqual(answered.map(c => [c[5], c[3].text]), [[`reply-${message}`, GENERAL]]);
     });
 
-    test('ticket work created during the inbox keeps its retry, and an elapsed idle or retention deadline never schedules the past', async () => {
-      const thread = 'thr_busy', message = 'msg_busy_1';
-      // Rita is over today's answers, so her email files a ticket for the team while it is processed.
-      // An email's person is counted by their address (Nightmail keeps the account).
+    test('work created during the inbox keeps its retry, and an elapsed idle or retention deadline never schedules the past', async () => {
+      const thread = 'thr_busy', message = 'msg_busy_1', path = `/v1/inbound/threads/${thread}/reply`;
+      // Rita is over today's answers, so her email gets the busy reply (and a ticket, which the team hears of through
+      // Nightmail's staff mail, not an email from here). An email's person is counted by their address.
       await (await db()).prepare("INSERT INTO daily_counters (day, key, n) VALUES (?, ?, 1000)").bind(new Date().toISOString().slice(0, 10), `sender:${await addressHash('rita@acme.test')}:email_turns`).run();
-      await outage('/v1/inbound/threads', 503);
+      await outage(path, 503);
       await hook(message, thread, 'rita@acme.test');
       const id = await conversationOf(thread);
       let run = await drive(id, { tick: true });
-      const notify = run.rows.find(r => r.kind === 'notify')!;
-      assert.deepEqual([notify?.state, run.alarm], ['pending', notify?.due_at], 'The team email’s retry is the next alarm, not the 7-day idle time.');
-      assert.ok(notify.due_at >= run.before + 60_000);
-      assert.match((await replies(thread, instance))[0]?.[3].text ?? '', /can’t answer automatically/);
+      const answer = run.rows.find(r => r.id === `answer:${message}`)!;
+      assert.deepEqual([answer?.state, run.alarm], ['pending', answer?.due_at], 'The busy reply’s retry is the next alarm, not the 7-day idle time.');
+      assert.ok(answer.due_at >= run.before + 60_000);
+      assert.ok(!run.rows.some(r => r.kind === 'notify'), 'No ticket email from here.');
       // Its idle time passes: it closes, and the retry is still the next alarm.
       run = await drive(id, { age: 8 * 86_400_000, tick: true });
-      assert.ok(run.meta?.closedAt && run.alarm === notify.due_at, JSON.stringify(run));
+      assert.ok(run.meta?.closedAt && run.alarm === answer.due_at, JSON.stringify(run));
       // Its retention passes too: kept while the email is unsent, and the alarm is the retry, never a time in the past.
       run = await drive(id, { age: 8 * 86_400_000, tick: true });
-      assert.ok(run.meta && run.alarm === notify.due_at && run.alarm >= run.before, JSON.stringify(run));
+      assert.ok(run.meta && run.alarm === answer.due_at && run.alarm >= run.before, JSON.stringify(run));
       // Sent once after the repair; nothing is left, so the conversation is deleted.
-      await outage('/v1/inbound/threads');
-      run = await drive(id, { expire: notify.id, tick: true });
+      await outage(path);
+      run = await drive(id, { expire: answer.id, tick: true });
       assert.deepEqual([run.meta, run.rows, run.alarm], [null, [], null]);
-      assert.deepEqual((await sends(notify.id.replace('notify:', 'ticket-'))).map(c => c[6]), [503, 202]);
+      assert.match((await replies(thread, instance))[0]?.[3].text ?? '', /can’t answer automatically/);
     });
 
-    test('a chat ticket’s team email and follow-up are retried until sent, once each, as first built', async () => {
+    test('a chat ticket’s follow-up is retried until sent, once, as first built; the team hears through Nightmail’s staff mail', async () => {
       await outage('/v1/inbound/threads', 503);
       const start = await instance.dispatchFetch(`${SUPPORT}/chat/start`, { method: 'POST', headers: { 'content-type': 'application/json', origin: ORIGIN }, body: JSON.stringify({ handoff: handoff() }) });
       const started = await start.json() as any;
@@ -2019,21 +2023,19 @@ describe('support Worker', () => {
       assert.ok(filed && await until(f => f.type === 'message.end' && f.text?.includes('passed this')));
       ws.close();
       let run = await drive(started.conversationId, { tick: true });
-      assert.deepEqual([states(run)[`notify:${filed.ticketId}`], states(run)[`followup:${filed.ticketId}`]], ['pending', 'pending']);
-      // Past a second, so links signed again on a retry would differ.
-      await new Promise(r => setTimeout(r, 1100));
+      assert.deepEqual([states(run)[`notify:${filed.ticketId}`], states(run)[`followup:${filed.ticketId}`]], [undefined, 'pending']);
       await outage('/v1/inbound/threads');
-      for (const item of [`notify:${filed.ticketId}`, `followup:${filed.ticketId}`]) await drive(started.conversationId, { expire: item });
+      await drive(started.conversationId, { expire: `followup:${filed.ticketId}` });
       run = await drive(started.conversationId, { tick: true });
-      assert.deepEqual([states(run)[`notify:${filed.ticketId}`], states(run)[`followup:${filed.ticketId}`]], ['done', 'done']);
+      assert.equal(states(run)[`followup:${filed.ticketId}`], 'done');
       await drive(started.conversationId, { tick: true });
-      const team = await sends(`ticket-${filed.ticketId}`), followUp = await sends(`followup-${filed.ticketId}`);
-      assert.deepEqual([team.map(c => c[6]), followUp.map(c => c[6])], [[503, 202], [503, 202]]);
-      for (const tries of [team, followUp]) assert.deepEqual(tries[1].slice(1, 6), tries[0].slice(1, 6), 'The retry is the first request, byte for byte.');
-      assert.deepEqual([team[0][3].to, followUp[0][3].to], [['ryan@anoma.ly'], ['ada@acme.test']]);
-      assert.match(team[0][3].text, /\/attachments\/conv_[a-z2-7]{26}\/att_[a-z2-7]{16}\?exp=\d+&sig=/, 'With the screenshot’s link, signed once.');
+      const followUp = await sends(`followup-${filed.ticketId}`);
+      assert.deepEqual(followUp.map(c => c[6]), [503, 202]);
+      assert.deepEqual(followUp[1].slice(1, 6), followUp[0].slice(1, 6), 'The retry is the first request, byte for byte.');
+      assert.deepEqual(followUp[0][3].to, ['ada@acme.test']);
+      assert.deepEqual(await sends(`ticket-${filed.ticketId}`), [], 'No ticket email from here.');
       const ticket = await (await db()).prepare('SELECT notified_at, followup_thread_id FROM tickets WHERE id = ?').bind(filed.ticketId).first<any>();
-      assert.ok(ticket.notified_at && ticket.followup_thread_id);
+      assert.ok(ticket.notified_at && ticket.followup_thread_id, 'Handed to Nightmail’s staff mail, and the follow-up thread kept.');
     });
 
     // The staff inbox (Nightmail's /support): the fake keeps it in memory, and a conversation is in it once registered.
@@ -2695,6 +2697,29 @@ describe('support Worker', () => {
     const sent = async (key: string) => (await fakeCalls(instance)).filter(c => c[0] === 'api' && c[5] === key);
     const delivered = async (key: string) => (await sent(key)).filter(c => c[6] < 300 && !c[7]);
 
+    test('one path to a human: the staff emails Nightmail wrote go from the support address to the team, the first starting a thread and the next replying in it under the same subject, each once; one that fails goes on the next sweep', async () => {
+      const queue = async (mail: object) => assert.equal((await (await instance.getWorker('fake-bane')).fetch('http://fake-bane/__staffmail', { method: 'POST', body: JSON.stringify(mail) })).status, 204);
+      const first = `staff-${'a'.repeat(24)}-1`, second = `staff-${'a'.repeat(24)}-2`, subject = 'Review a held answer to Ada at Acme Prod';
+      await queue({ key: first, group: 'g1', subject, text: 'The first email.', html: '<p>The first email.</p>' });
+      await outage('/v1/inbound/threads', 503);
+      await sweep(); await settle();
+      assert.equal((await delivered(first)).length, 0);
+      assert.ok(!(await fakeCalls(instance)).some(c => c[0] === 'staffMailSent'), 'Not reported sent.');
+      await outage('/v1/inbound/threads');
+      await sweep(); await settle();
+      const [started] = await delivered(first);
+      assert.deepEqual([started?.[2], started?.[3].addressId, started?.[3].to, started?.[3].subject, started?.[3].text, started?.[3].html], ['/v1/inbound/threads', 'adr_support', ['ryan@anoma.ly'], subject, 'The first email.', '<p>The first email.</p>']);
+      const reported = (await fakeCalls(instance)).filter(c => c[0] === 'staffMailSent');
+      assert.deepEqual(reported.map(c => c[1]), [first]);
+      await queue({ key: second, group: 'g1', update: true, subject, text: 'Since the last email: they wrote again.', html: '<p>Since the last email: they wrote again.</p>' });
+      await sweep(); await settle();
+      const [replied] = await delivered(second);
+      assert.deepEqual([replied?.[2], replied?.[3].replyToMessageId, replied?.[3].to, replied?.[3].expectedRecipients, replied?.[3].subject, replied?.[3].html],
+        [`/v1/inbound/threads/${reported[0]![2].threadId}/reply`, 'msg_new', ['ryan@anoma.ly'], { to: ['ryan@anoma.ly'], cc: [], bcc: [] }, subject, '<p>Since the last email: they wrote again.</p>']);
+      await sweep(); await settle();
+      assert.deepEqual([(await delivered(first)).length, (await delivered(second)).length], [1, 1], 'Each once.');
+    }, 120_000);
+
     test('the sweep wakes conversations whose answer waits for a sign-in, the longest due first, 50 at a time, so one claimed past the first 200 is reached and answered once', async () => {
       const d1 = await db(), ns = await instance.getDurableObjectNamespace('CONVERSATION', 'support');
       // A real conversation whose answer waits for Sia's sign-in.
@@ -3079,11 +3104,9 @@ describe('support Worker', () => {
     const details = JSON.parse(row.details);
     assert.deepEqual([row.type, row.severity, details.bug.affected, details.bug.reproSteps.length, details.bug.requestIds.length, details.bug.errorCodes], ['bug', 'P2', 'POST /v1/webhooks/{id}/test', 2, 2, ['500 INTERNAL_ERROR']]);
     assert.equal(JSON.parse(row.attachments).length, 5);
-    const team = (await fakeCalls()).find(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && c[3].subject?.startsWith('[Nightmail bug]'));
-    assert.equal(team[3].subject, `[Nightmail bug] ${filed.ticketId}: Webhook test returns 500 for every endpoint (P2)`);
-    assert.ok(team[3].text.includes('Reproduction\n1. Open Webhooks\n2. Press Send test on any endpoint') && team[3].text.includes(`Request IDs: req_${'a'.repeat(32)}`) && team[3].text.includes('Errors seen: 500 INTERNAL_ERROR'), team[3].text);
-    const link = String(team[3].text).match(/webhooks page\.png \(image\/png, \d+ KB\): (\S+)/)?.[1];
-    assert.ok(link, 'The ticket email links the screenshot.');
+    assert.ok(!(await fakeCalls()).some(c => c[0] === 'api' && c[2] === '/v1/inbound/threads' && String(c[3].text).includes(filed.ticketId) && c[3].to?.[0] === 'ryan@anoma.ly'), 'The team hears through Nightmail’s staff mail.');
+    // A screenshot's signed link, as a ticket email from here (a conversation Nightmail never registered) or intake carries it.
+    const link = await attachmentLink({ PUBLIC_URL: SUPPORT, SUPPORT_ROOT_SECRET: ROOT } as never, started.body.conversationId, { id: uploaded.body.attachment.id });
     const file = await mf.dispatchFetch(link!);
     assert.deepEqual([file.status, file.headers.get('content-type'), file.headers.get('content-security-policy')], [200, 'image/png', "default-src 'none'; sandbox"]);
     assert.ok(!Buffer.from(await file.arrayBuffer()).includes(SECRET_TEXT));

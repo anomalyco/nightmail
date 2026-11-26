@@ -86,7 +86,8 @@ function fill(d: Deliverability, stream: DeliverabilityStream, region: string): 
       return [`region:${i}`, { label: r.region, hint: parts.filter(Boolean).join(' · '), value: <StatusBadge status={words} tone={tone} /> }]
     })),
     domains: {
-      ...Object.fromEntries([0, 1].map(i => { const b = d.blocklist[i]; return [`dbl:${i}`, b ? { label: b.domain, hint: `Spamhaus DBL${b.checkedAt ? ` · checked ${since(b.checkedAt)}` : ''}`,
+      budget: { hint: 'UTC day · used / limit', value: d.linkBudget ? `${number(d.linkBudget.used)} / ${number(d.linkBudget.limit)}` : '—' },
+      ...Object.fromEntries(Array.from({ length: Math.max(2, d.blocklist.length) }, (_, i) => { const b = d.blocklist[i]; return [`dbl:${i}`, b ? { label: b.domain, hint: `Spamhaus DBL${b.held ? ' · release held' : ''}${b.checkedAt ? ` · checked ${since(b.checkedAt)}` : ''}`,
         value: b.status === 'listed' ? <StatusBadge status="Listed" tone="danger" /> : b.status === 'clear' ? <StatusBadge status="Clear" tone="success" /> : b.status === 'unconfigured' ? 'No DQS key' : b.status === 'unknown' ? 'Unknown' : '—',
         tone: b.status === 'unconfigured' || b.status === 'unknown' ? 'warning' : undefined } : empty(false, '')] })),
       // Gmail Postmaster Tools: Google's reputation for the domain and its users' spam reports (Gmail's complaints).
@@ -129,7 +130,7 @@ function fill(d: Deliverability, stream: DeliverabilityStream, region: string): 
     : r.vdm.status === 'disabled' ? `${r.region}: VDM is off` : r.vdm.status === 'error' ? `${r.region}: not readable (${r.vdm.error}); the runtime's IAM user needs ses:BatchGetMetricData` : `${r.region}: not read yet`
   const days = regions[0]?.vdm
   const status = regions.length ? `Amazon's estimates from Virtual Deliverability Manager, single-recipient mail only${days ? `, ${date(days.since, { month: 'short', day: 'numeric', timeZone: 'UTC' })}–${date(days.until, { month: 'short', day: 'numeric', timeZone: 'UTC' })}` : ''}. ${regions.map(vdmWords).join(' · ')}` : 'No pool region.'
-  return { tile: key => tiles[key] ?? { value: '—' }, providers: providerRows, vdm: { status, rows: vdmRows }, row: (group, row) => groupRows[group]?.[row] ?? { value: '—' } }
+  return { domainCount: d.blocklist.length, tile: key => tiles[key] ?? { value: '—' }, providers: providerRows, vdm: { status, rows: vdmRows }, row: (group, row) => groupRows[group]?.[row] ?? { value: '—' } }
 }
 
 /** The board's read for the period in the address; the page header shows when it is from. */

@@ -1,3 +1,4 @@
+import { recipientPage as unsubscribePage } from './link-hosts.js';
 import { DASHBOARD_CACHE_NOTE, dashboardRead } from './dashboard-cache.js';
 import { talliesEnabled } from './sending-tallies.js';
 import { registerSenderScore } from './sender-score.js';
@@ -1851,9 +1852,6 @@ function preferencesBody(prefs: { consent: string | null; topics: { id: string; 
     ? `<form method="post" style="margin:32px 0 0"><input type="hidden" name="preferences" value="all"><p style="${muted}">Or stop all marketing emails from this sender.</p>${button('Unsubscribe from all', true)}</form>`
     : `<form method="post" style="margin:32px 0 0"><input type="hidden" name="confirm" value="footer"><p style="${muted}">Or stop all marketing emails from this sender.${destination}</p>${button('Unsubscribe from all', !!choices)}</form>`;
   return `${linked ?? ''}${choices}${all}`;
-}
-function unsubscribePage(title: string, body: string) {
-  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>body,body *{letter-spacing:-0.01em}</style><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;letter-spacing:-0.01em;margin:48px;line-height:1.5"><main><h1 style="font-size:24px">${title}</h1>${body}</main></body></html>`;
 }
 function registerMetrics(app: App) {
   // The window's aggregate is one statement that reads every email in it (a 30-day Overview reads all retained mail):

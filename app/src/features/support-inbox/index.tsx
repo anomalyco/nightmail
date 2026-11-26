@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode, type RefObject } from 'react'
 import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { Archive, Bot, Check, CheckCheck, ChevronRight, Flag, Hand, Image as ImageIcon, Inbox, Info, Mail, MessageSquare, Paperclip, Ticket, Undo2, X } from 'lucide-react'
+import { Archive, Bot, Check, CheckCheck, ChevronRight, CircleCheck, CircleX, Flag, Hand, Image as ImageIcon, Inbox, Info, Mail, MessageSquare, Paperclip, Ticket, Undo2, X } from 'lucide-react'
 import { Button, ConfirmDialog, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, KeyValues, PageHeader, StatusBadge, StatusDot, Textarea, useToast, type Column, type MenuItem, type Tone } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { ReceivedEmailPreview } from '../../components/EmailPreview'
@@ -178,9 +178,48 @@ function ConfirmAction({ confirming, onClose, actions }: { confirming: Confirmin
   return <ConfirmDialog open={confirming !== null} onOpenChange={open => { if (!open) onClose() }} title={copy.title} description={copy.description} confirmLabel={copy.confirm} onConfirm={() => shown ? actions.confirm(shown) : undefined} />
 }
 
+/**
+ * A decision a staff email linked to (?approval=…&token=…, api/src/support-approvals.ts), ready to confirm. Opening the
+ * link did nothing: only Approve here (the operator role) runs it. Not now leaves it waiting; Decline closes it.
+ */
+function ApprovalPrompt({ conversationId, canAct }: { conversationId: string; canAct: boolean }) {
+  const [params, setParams] = useSearchParams(), approvalId = params.get('approval'), token = params.get('token')
+  const client = useQueryClient(), toast = useToast(), key = useRef(crypto.randomUUID()), [busy, setBusy] = useState<'approve' | 'decline' | null>(null)
+  const linked = Boolean(approvalId && token)
+  const approval = useQuery({ queryKey: ['support-inbox', 'approval', conversationId, approvalId], queryFn: ({ signal }) => supportInboxApi.approval(conversationId, approvalId!, token!, signal), enabled: linked, retry: false, staleTime: Infinity })
+  const close = () => setParams(previous => { const next = new URLSearchParams(previous); next.delete('approval'); next.delete('token'); return next }, { replace: true })
+  useEffect(() => { if (linked && approval.isError) { toast('That approval link isn’t valid any more. The conversation is open as it is.', 'error'); close() } }, [linked, approval.isError])
+  const a = approval.data
+  if (!linked || !a) return null
+  async function decide(decision: 'approve' | 'decline') {
+    setBusy(decision)
+    try {
+      const decided = await supportInboxApi.decideApproval(conversationId, a!.id, token!, decision, key.current)
+      const why = typeof decided.result?.message === 'string' ? decided.result.message : 'Try it from the conversation.'
+      toast(decided.state === 'approved' ? `Done: ${decided.label.toLowerCase()}.` : decided.state === 'failed' ? `${decided.label} didn’t go through. ${why}` : 'Declined.', decided.state === 'failed' ? 'error' : 'success')
+      void client.invalidateQueries({ queryKey: inboxKeys.detail(conversationId) })
+      close()
+    } catch (error) { toast(error instanceof ApiError ? error.message : failedText, 'error') }
+    finally { setBusy(null) }
+  }
+  const waiting = a.state === 'proposed', by = a.decidedBy?.name ?? 'Staff', blocked = waiting ? a.preview?.blocked ?? null : null
+  const status = a.state === 'expired' ? 'Expired. Act on it from the conversation if it still needs doing.'
+    : a.state === 'approved' ? `${by} approved it${a.decidedAt ? ` ${shortDateTime(a.decidedAt)}` : ''}.` : a.state === 'declined' ? `${by} declined it.` : a.state === 'failed' ? `${by} approved it, and it failed.` : null
+  return <Dialog open onOpenChange={open => { if (!open && !busy) close() }} title={a.label} description={a.effect}
+    footer={waiting && canAct ? <><Button variant="ghost" disabled={busy !== null} loading={busy === 'decline'} onClick={() => void decide('decline')}>Decline</Button>
+      <Button disabled={busy !== null} onClick={close}>Not now</Button><Button variant="primary" disabled={busy !== null || blocked !== null} loading={busy === 'approve'} onClick={() => void decide('approve')}>Approve</Button></>
+      : <Button onClick={close}>Close</Button>}>
+    <KeyValues items={[['Why', a.reason], ['Proposed by', a.proposedBy === 'agent' ? 'The support agent' : `${productName}, in the email to staff`],
+      [waiting ? 'Expires' : 'State', status ?? shortDateTime(a.expiresAt)], ...(!canAct && waiting ? [['Who can approve', 'Staff with the operator role']] as [string, string][] : [])]} />
+    {waiting && a.preview?.text && <blockquote className="sinbox-approval__preview" aria-label="What would be sent">{a.preview.text}</blockquote>}
+    {blocked && <p className="sinbox-approval__blocked" role="status">{blocked}</p>}
+  </Dialog>
+}
+
 // ---------------------------------------------------------------- cells
 
-const ticketText = (c: SupportConversation) => !c.ticket ? null : `${[c.ticket.severity, c.ticket.type && label(c.ticket.type)].filter(Boolean).join(' ') || 'Ticket'}${c.ticket.resolvedAt ? ' · resolved' : ''}`
+// A ticket Nightmail opened because the conversation needed a person (api/src/support-staff-mail.ts) is type staff.
+const ticketText = (c: SupportConversation) => !c.ticket ? null : `${[c.ticket.severity, c.ticket.type && (c.ticket.type === 'staff' ? 'needs a person' : label(c.ticket.type))].filter(Boolean).join(' ') || 'Ticket'}${c.ticket.resolvedAt ? ' · resolved' : ''}`
 function agentOf(c: SupportConversation): { text: string; by?: string; tone: Tone } {
   if (c.agentState === 'active') return { text: c.status === 'closed' ? 'Closed' : 'Active', tone: c.status === 'closed' ? 'neutral' : 'success' }
   return { text: 'Paused', by: c.pausedBy?.kind === 'ticket' ? 'the ticket' : c.pausedBy?.name ?? undefined, tone: 'warning' }
@@ -376,6 +415,7 @@ export function SupportConversationPage() {
     </div> : detail.isError ? <ErrorState error={detail.error} onRetry={() => void detail.refetch()} /> : <ConversationBodySkeleton panel={!phone} />}
     {phone && detail.data && <Dialog open={sheet} onOpenChange={setSheet} title="Customer" className="sinbox-sheet"><CustomerPanel detail={detail.data} /></Dialog>}
     <ConfirmAction confirming={confirming} onClose={() => setConfirming(null)} actions={actions} />
+    <ApprovalPrompt conversationId={id} canAct={canAct} />
     <ShortcutsDialog open={keysOpen} onClose={() => setKeysOpen(false)} />
   </div>
 }
@@ -492,12 +532,12 @@ function Files({ conversationId, files }: { conversationId: string; files: Suppo
 }
 
 // What happened besides the messages, as one quiet line each.
-const eventIcon: Record<SupportEventKind, typeof Info> = { opened: Inbox, ticket: Ticket, priority: Flag, paused: Hand, resumed: Bot, resolved: CheckCheck, done: Check, undone: Undo2, closed: Archive }
+const eventIcon: Record<SupportEventKind, typeof Info> = { opened: Inbox, ticket: Ticket, priority: Flag, paused: Hand, resumed: Bot, resolved: CheckCheck, done: Check, undone: Undo2, closed: Archive, approved: CircleCheck, declined: CircleX }
 function eventText(e: SupportEvent, c: SupportDetail['conversation']) {
   const who = e.by ? e.by.name ?? 'Staff' : null, d = e.details as Record<string, string | boolean | null | undefined>
   switch (e.kind) {
     case 'opened': return c.channel === 'agent_feedback' ? 'Filed by an agent' : `Opened by ${c.channel === 'email' ? 'email' : 'chat'}`
-    case 'ticket': return `The agent filed a ticket${d.type ? ` · ${label(String(d.type))}` : ''}${d.severity ? ` · ${d.severity}` : ''}`
+    case 'ticket': return d.by === 'nightmail' ? `Ticket opened: this needs a person${d.severity ? ` · ${d.severity}` : ''}` : `The agent filed a ticket${d.type ? ` · ${label(String(d.type))}` : ''}${d.severity ? ` · ${d.severity}` : ''}`
     case 'priority': return `Priority ${d.from ?? '—'} → ${d.to ?? '—'}`
     case 'paused': return d.by === 'ticket' ? 'Handed to you: the agent stopped for the ticket' : d.reply ? `${who ?? 'Staff'} replied and took over from the agent` : `${who ?? 'Staff'} paused the agent`
     case 'resumed': return `${who ?? 'Staff'} handed back to the agent`
@@ -505,8 +545,11 @@ function eventText(e: SupportEvent, c: SupportDetail['conversation']) {
     case 'done': return `${who ?? 'Staff'} marked it done`
     case 'undone': return `${who ?? 'Staff'} undid Done`
     case 'closed': return 'Conversation closed'
+    case 'approved': return d.failed ? `${who ?? 'Staff'} approved ${approvalWords(d.kind)}, and it failed` : `${who ?? 'Staff'} approved ${approvalWords(d.kind)}`
+    case 'declined': return `${who ?? 'Staff'} declined ${approvalWords(d.kind)}`
   }
 }
+const approvalWords = (kind: unknown) => kind === 'retry_work' ? 'retrying the stuck work' : 'a proposed action'
 function EventLine({ e, c }: { e: SupportEvent; c: SupportDetail['conversation'] }) {
   const Icon = e.kind !== 'opened' ? eventIcon[e.kind] ?? Info : c.channel === 'chat' ? MessageSquare : c.channel === 'agent_feedback' ? Bot : Mail
   return <li className="sinbox-event" data-kind={e.kind}><Icon size={14} aria-hidden="true" /><span className="sinbox-event__text">{eventText(e, c)}</span><time dateTime={e.at} title={when(e.at)}>{shortDateTime(e.at)}</time></li>

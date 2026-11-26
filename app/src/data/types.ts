@@ -100,12 +100,12 @@ export interface AudiencePreview { matched: number; suppressed: number; unsubscr
 // The API's CampaignReadiness: the send review of a marketing campaign (api/src/standing-model.ts RAMP.readiness).
 type HistoryFigures = { largestSend: number; sent: number; bounceRate: number | null; complaintRate: number | null }
 export interface CampaignReadiness {
-  verdict: 'ready' | 'ramp_recommended' | 'ramp_required'; summary: string | null; reasons: { code: string; message: string }[]
+  verdict: 'ready' | 'ramp_recommended' | 'ramp_required'; summary: string | null; reasons: { code: string; message: string }[]; findings?: { code: string; message: string }[]
   domain: { name: string; firstSeenAt: ISODate | null; ageDays: number | null; registeredAt?: string | null; registeredDays?: number | null; dmarc: 'reject' | 'quarantine' | 'none' | 'missing' | 'invalid' | null; mailFrom: 'verified' | 'pending' | 'failed' | 'not_configured'
-    linkHost: 'not_configured'; ownLinkHost: { hostname: string; active: boolean } | null; linkOrigin: string | null }
+    sharedLinkPacing?: boolean; linkHost: 'not_configured'; ownLinkHost: { hostname: string; active: boolean } | null; linkOrigin: string | null }
   history: { workspace: HistoryFigures; domain: HistoryFigures }
   list: { recipients: number; risky: number; neverMailed: number | null; createdAt: ISODate | null; lastSentAt: ISODate | null; lastImport: { at: ISODate; contacts: number; consent: string | null } | null }
-  sizeJump: number | null; plan: { batches: number[]; seconds: number | null } | null; required: { by: 'NEW_REGISTRATION' | 'NEW_DOMAIN' | 'SIZE_JUMP'; maxPerDay: number } | null
+  sizeJump: number | null; plan: { batches: number[]; seconds: number | null } | null; required: { by: 'NEW_DOMAIN' | 'SIZE_JUMP'; reason?: 'NEW_REGISTRATION' | 'BLOCKLISTED' | 'NEW_DOMAIN' | 'SIZE_JUMP'; maxPerDay: number } | null
 }
 type ReviewDisplayPart<T> = { data: T; error?: never } | { data?: never; status: number; retryAfter?: number;
   error: { code: string; message: string; field?: string; requestId: string; retryable: boolean; details?: Record<string, unknown>[] } }
@@ -125,7 +125,7 @@ export interface Campaign { stats?: CampaignListStats | null; counts?: { total: 
 // pacing, pausedAt, pauseReason, waiting, and rateShare are optional so older API responses still type-check.
 // rateShare is the fraction (0.05–1) of the SES per-second send rate the campaign may use; 1 is the full rate.
 export interface CampaignPacing { perDay: number | null; autoPause: boolean; rateShare?: number; windowStartedAt: ISODate | null; windowExpanded: number; nextWindowAt: ISODate | null; plan?: number[] | null; batch?: number | null }
-export interface CampaignDelivery { total: number; prepared: number; expanded: number; canceled: number; error: { code: string; message: string } | null; pacing?: CampaignPacing; pausedAt?: ISODate | null; pauseReason?: { code: string; message: string } | null; waiting?: { reason: 'pacing_window' | 'ses_daily_quota' | 'hosted_daily_quota' | 'list_probe' | 'balance' | 'feedback_lag' | 'ramp' | 'link_record'; until: ISODate } | null; feedbackLag?: { oldestMs: number; lane: 'routine' | 'priority' } | null }
+export interface CampaignDelivery { total: number; prepared: number; expanded: number; canceled: number; error: { code: string; message: string } | null; pacing?: CampaignPacing; pausedAt?: ISODate | null; pauseReason?: { code: string; message: string } | null; waiting?: { reason: 'pacing_window' | 'ses_daily_quota' | 'hosted_daily_quota' | 'list_probe' | 'balance' | 'feedback_lag' | 'ramp' | 'link_record'; linkHold?: 'daily_budget' | 'blocklist'; until: ISODate } | null; feedbackLag?: { oldestMs: number; lane: 'routine' | 'priority' } | null }
 // The API's Campaign.sendEstimate: what is left to release, the region's planned rate, where the sender is on the ramp
 // (api/src/standing-model.ts RAMP; step counts from 1) and when the last recipient is expected to go out.
 export interface CampaignRamp { step: number; steps: number; ceilingPerHour: number; startedAt: ISODate | null; released: number }

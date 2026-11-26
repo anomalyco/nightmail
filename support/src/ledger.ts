@@ -1,5 +1,5 @@
 import type { Env } from './env.js';
-import { platformBody, type OutboxReply } from './nightmail.js';
+import { nightmailApi, platformBody, type OutboxReply } from './nightmail.js';
 import { INTAKE, type Mailbox } from './intake.js';
 import { countToday, overflowRow, resendNotices } from './limits.js';
 import { replay } from './replay.js';
@@ -95,7 +95,7 @@ export async function blockUnconfigured(env: Env, input: { messageId: string; th
 /** Every five minutes: each step on its own, so one failing never stops the others. */
 export async function sweep(env: Env, now = Date.now()) {
   const result: Record<string, number> = {};
-  const steps: [string, () => Promise<number>][] = [['notices', () => resendNotices(env, now)], ['intake', () => acceptConfigured(env, now)], ['tickets', () => ticketMail(env, now)], ['staff', () => staffReplies(env)], ['signins', () => signinWakes(env, now)],
+  const steps: [string, () => Promise<number>][] = [['notices', () => resendNotices(env, now)], ['intake', () => acceptConfigured(env, now)], ['tickets', () => ticketMail(env, now)], ['staffMail', () => staffMail(env)], ['staff', () => staffReplies(env)], ['signins', () => signinWakes(env, now)],
     ['replaySupport', () => replay(env, 'support', now)], ['replayIntake', () => replay(env, 'intake', now)]];
   for (const [name, step] of steps) {
     try { result[name] = await step(); }
@@ -118,6 +118,28 @@ async function signinWakes(env: Env, now: number) {
     await env.DB.prepare("UPDATE support_work SET due_at = ? WHERE flow = 'support' AND object = ? AND kind = 'answer' AND state = 'parked' AND due_at <= ?").bind(now + MINUTES_5, row.object, now).run();
     try { await env.CONVERSATION.get(env.CONVERSATION.idFromString(row.object)).wake(); n++; }
     catch (error) { logError(error, { event: 'email', code: 'SIGNIN_WAKE_FAILED' }, 'warn'); }
+  }
+  return n;
+}
+
+/**
+ * One path to a human (api/src/support-staff-mail.ts): the staff emails Nightmail wrote, each sent from the support
+ * address to the team (TICKET_TO, the one place it is kept) under its own key, then reported sent. A thread's first
+ * email starts it; later ones reply in it under the same subject. A failed send is tried again on the next sweep, as
+ * the same email under the same key, so it never goes twice.
+ */
+async function staffMail(env: Env) {
+  if (!env.TICKET_TO || !env.SUPPORT_ADDRESS_ID) return 0;
+  const due = platformBody(await env.BANE.staffMail()).data, api = nightmailApi(env);
+  let n = 0;
+  for (const mail of due) {
+    try {
+      const sent = mail.threadId && mail.replyToMessageId
+        ? await api.reply(mail.threadId, { replyToMessageId: mail.replyToMessageId, to: env.TICKET_TO, subject: mail.subject, text: mail.text, html: mail.html, addressId: env.SUPPORT_ADDRESS_ID }, mail.key)
+        : await api.startThread({ to: [env.TICKET_TO], subject: mail.subject, text: mail.text, html: mail.html }, mail.key);
+      platformBody(await env.BANE.staffMailSent(mail.key, { threadId: sent.threadId, messageId: sent.id }));
+      n++;
+    } catch (error) { logError(error, { event: 'ticket', code: 'STAFF_MAIL_FAILED', key: mail.key }, 'warn'); }
   }
   return n;
 }

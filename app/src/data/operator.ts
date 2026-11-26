@@ -99,7 +99,8 @@ export interface Deliverability {
   regions: { region: string; place: string; sending: boolean
     ses: CheckState & { enforcement: string | null; sendingEnabled: boolean | null; productionAccess: boolean | null; vdm: boolean | null; engagement: boolean | null; error: string | null }
     vdm: CheckState & { error: string | null; since: string; until: string; previousSince: string; providers: { provider: MailProvider | 'all'; current: VdmCounts; previous: VdmCounts }[] } }[]
-  blocklist: (CheckState & { domain: string })[]
+  linkBudget: { used: number; limit: number } | null
+  blocklist: (CheckState & { domain: string; held: boolean })[]
   postmaster: (CheckState & { domain: string; url: string; error: string | null; spamRatio: { current: number | null; previous: number | null }
     latest: { day: string; spamRatio: number | null; spf: number | null; dkim: number | null; dmarc: number | null; deliveryErrorRatio: number | null } | null })[]
   standing: { grades: Record<GlassGrade, number>; calibrating: number; steps: Record<StandingStep, number> }

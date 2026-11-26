@@ -6281,7 +6281,7 @@ export const createBillingCardSetup = <ThrowOnError extends boolean = false>(opt
 /**
  * Tell Nightmail what got in your way
  *
- * Tell Nightmail what got in your way while doing a task: what happened and what would have made it easier, with the request ID of a call that went wrong if you have one. Only message is needed; any other field (such as severity or kind, which an earlier version asked for) is ignored. It is filed as a support ticket for the Nightmail team, who read every one, with this credential's workspace and the key, sign-in or token that sent it; nobody is emailed and no reply comes back, so carry on with the task after sending it.
+ * Tell Nightmail what got in your way while doing a task: what happened and what would have made it easier, with the request ID of a call that went wrong if you have one. Only message is needed; any other field (such as severity or kind, which an earlier version asked for) is ignored. It is filed as a support ticket for the Nightmail team, who read every one, with this credential's workspace and the key, sign-in or token that sent it; no reply comes back, so carry on with the task after sending it.
  *
  * Any credential that can read may send it (API keys, including ones limited to sender domains, agent tokens and MCP sign-ins), for its own workspace: at most 20 reports an hour from one credential and 50 from one workspace (429 FEEDBACK_RATE_LIMITED, with Retry-After). Anything in message or context that looks like a key, token or password is removed before it is stored; redacted says how many. Send one report per distinct problem.
  */

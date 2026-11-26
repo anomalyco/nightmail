@@ -86,6 +86,8 @@ export function CampaignProgress({ campaign }: { campaign: Campaign }) {
     ? wait.reason === 'feedback_lag'
       ? 'Waiting for delivery reports to catch up.'
       // No host for its unsubscribe link right now (the workspace's sending is paused): it continues by itself.
+      : wait.linkHold === 'daily_budget' ? 'The shared link domain reached its daily limit, so the remaining recipients will get this campaign on later days.'
+      : wait.linkHold === 'blocklist' ? 'Sending will continue once an operator clears this link domain for marketing.'
       : wait.reason === 'link_record'
         ? 'It continues by itself once this workspace’s sending resumes.'
       : wait.reason === 'list_probe'

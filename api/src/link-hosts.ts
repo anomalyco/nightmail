@@ -1,8 +1,9 @@
+import { addresses, productName } from './brand.js';
 /**
  * Link hosts (src/link-domains.ts): the link domain (links.nightmailedge.com, Hosted) and customers' own links.<domain>
  * (custom hostnames, when on), names of the link zone, which Cloudflare routes to the Worker (a `*\/*` route on that zone).
  * Such a host answers the links in customer mail and nothing else: no dashboard, API, docs or redirect to this
- * installation's own domain on a name customer mail carries. No imports, so the Worker decides before it loads the API.
+ * installation's own domain on a name customer mail carries. The Worker decides before it loads the API.
  */
 /** The label of a domain's link host. */
 export const LINK_LABEL = 'links';
@@ -31,4 +32,17 @@ export function linkHostRequest(enabled: boolean, host: string, path: string, ow
   // Certificate validation (HTTP DCV) for the host's own certificate: Cloudflare answers it, never this Worker's 404.
   if (DCV_PATH.test(path)) return 'pass';
   return LINK_PATH.test(path) ? 'link' : 'missing';
+}
+
+export function recipientPage(title: string, body: string) {
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>${title}</title><style>body,body *{letter-spacing:-0.01em}</style><body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;letter-spacing:-0.01em;margin:48px;line-height:1.5"><main><h1 style="font-size:24px">${title}</h1>${body}</main></body></html>`;
+}
+
+/** The informational root is only for the shared host and its dedicated zone apex. */
+export function sharedLinkPage(request: Request, shared: string | undefined) {
+  const url = new URL(request.url);
+  if (!shared || url.pathname !== '/' || !(url.hostname === shared || shared === `links.${url.hostname}`)) return null;
+  if (request.method !== 'GET' && request.method !== 'HEAD') return new Response(null, { status: 405, headers: { allow: 'GET, HEAD' } });
+  const html = recipientPage(`${productName} email links`, `<p>This domain hosts unsubscribe links and images for email sent through ${productName}.</p><p>To stop receiving a sender’s emails, use the unsubscribe link in their message.</p><p>To report spam or an abusive link, forward the message to <a href="mailto:${addresses.abuse}">${addresses.abuse}</a>.</p>`);
+  return new Response(request.method === 'HEAD' ? null : html, { headers: { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'public, max-age=300' } });
 }

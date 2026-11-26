@@ -1,7 +1,8 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
-import { errors, logError, response, security, type App, type Runtime } from './core.js';
-import { operatorActor } from './operator.js';
+import { ApiError, json, errors, logError, response, security, type App, type Runtime } from './core.js';
+import { linkBudget, linkRoot, lockLinkDomain } from './link-domains.js';
+import { mutate, operatorActor } from './operator.js';
 import { cachedDashboardRead } from './dashboard-cache.js';
 import { PROVIDER_NAMES, type Provider } from './deliverability.js';
 import { GRADE_BANDS, GRADES, type Grade } from './standing-model.js';
@@ -50,7 +51,8 @@ const Board = z.object({
       vdm: z.boolean().nullable(), engagement: z.boolean().nullable(), error: z.string().nullable() }),
     vdm: Check.extend({ error: z.string().nullable(), since: z.string(), until: z.string(), previousSince: z.string(),
       providers: z.array(z.object({ provider: z.union([z.enum(PROVIDER_NAMES), z.literal('all')]), current: Vdm, previous: Vdm })) }) })),
-  blocklist: z.array(Check.extend({ domain: z.string() })).describe('Spamhaus DBL through NIGHTMAIL_PLACEMENT_DBL_ZONE: listed, clear, unknown or unconfigured.'),
+  linkBudget: z.object({ used: int, limit: int }).nullable(),
+  blocklist: z.array(Check.extend({ domain: z.string(), held: z.boolean() })).describe('Spamhaus DBL through NIGHTMAIL_PLACEMENT_DBL_ZONE: listed, clear, unknown or unconfigured.'),
   postmaster: z.array(Check.extend({ domain: z.string(), url: z.string(), error: z.string().nullable(),
     latest: z.object({ day: z.string(), spamRatio: z.number().nullable(), spf: z.number().nullable(), dkim: z.number().nullable(), dmarc: z.number().nullable(), deliveryErrorRatio: z.number().nullable() }).nullable()
       .describe('Google\u2019s latest day for the domain: published a day or two late, and only for a day with enough mail to Gmail.'),
@@ -76,8 +78,12 @@ export const platformDomains = (config: Pick<Runtime['config'], 'publicUrl' | 'b
   .filter(name => name.includes('.') && !/^[\d.]+$|^\[|:/.test(name));
 /** The domains whose Spamhaus DBL listing the board checks: the platform's own, and the link domain's zone (nightmailedge.com),
  *  which every customer's campaign and marketing links share (src/link-domains.ts), so one listing there is everyone's. */
-export const blocklistDomains = (config: Pick<Runtime['config'], 'publicUrl' | 'builtinDomain' | 'linkHost' | 'linkHosts'>) => [...new Set([...platformDomains(config),
-  ...[config.linkHost, config.linkHosts?.target].flatMap(host => host ? [host.split('.').slice(-2).join('.')] : [])])];
+async function linkDomains(runtime: Pick<Runtime, 'db' | 'config'>) {
+  const own = (await runtime.db.execute<{ hostname: string }>(sql`SELECT hostname FROM link_hosts WHERE status='active'
+    UNION SELECT subject FROM deliverability_checks WHERE held_at IS NOT NULL`)).rows;
+  const hosts = [runtime.config.linkHost, ...own.map(r => r.hostname)].filter((h): h is string => !!h);
+  return new Set(await Promise.all(hosts.map(linkRoot)));
+}
 
 type Raw = {
   bounds: { since: string; until: string; prev: string; today: string }; coverage: string | null;
@@ -85,7 +91,7 @@ type Raw = {
   series: ({ at: string; kind: string; region: string } & CountsRow)[];
   grades: Record<Grade | 'calibrating', number>; steps: DeliverabilityBoard['standing']['steps'];
   top: { id: string; accepted: number; bounced: number; complained: number }[];
-  checks: { kind: string; subject: string; status: string | null; detail: Record<string, unknown> | null; checked_at: string | null }[];
+  checks: { kind: string; subject: string; status: string | null; held: boolean; detail: Record<string, unknown> | null; checked_at: string | null }[];
   pool: { region: string; sending: boolean }[];
   vdm: { region: string; isp: string; metric: string; current: boolean; value: number }[];
   vdm_days: { since: string; until: string; prev: string };
@@ -109,19 +115,20 @@ export async function readDeliverability(runtime: Pick<Runtime, 'db' | 'config'>
           'restrict',count(*) FILTER (WHERE s.step='restrict'),'pause',count(*) FILTER (WHERE s.step='pause')) FROM sender_standing s) AS steps,
       (SELECT coalesce(json_agg(t),'[]') FROM ((SELECT * FROM ws WHERE complained>0 ORDER BY complained DESC,bounced DESC,id LIMIT 10)
         UNION (SELECT * FROM ws WHERE bounced>0 ORDER BY bounced DESC,complained DESC,id LIMIT 10)) t) AS top,
-      (SELECT coalesce(json_agg(json_build_object('kind',kind,'subject',subject,'status',status,'detail',detail,'checked_at',${utc(sql`checked_at`)})),'[]') FROM deliverability_checks) AS checks,
+      (SELECT coalesce(json_agg(json_build_object('kind',kind,'subject',subject,'status',status,'held',held_at IS NOT NULL,'detail',detail,'checked_at',${utc(sql`checked_at`)})),'[]') FROM deliverability_checks) AS checks,
       (SELECT coalesce(json_agg(json_build_object('region',p.region,'sending',${poolSends()}) ORDER BY p.region),'[]') FROM provider_pool_regions p) AS pool,
       (SELECT coalesce(json_agg(v),'[]') FROM (SELECT region,isp,metric,day>win.today-${days}::int AS current,sum(value) AS value FROM deliverability_vdm_daily,win
         WHERE day>win.today-${days * 2}::int AND day<=win.today GROUP BY 1,2,3,4) v) AS vdm,
       (SELECT json_build_object('since',(today-${days - 1}::int)::text,'until',today::text,'prev',(today-${days * 2 - 1}::int)::text) FROM win) AS vdm_days,
       (SELECT coalesce(json_agg(p ORDER BY p.domain,p.day),'[]') FROM (SELECT domain,day::text AS day,day>win.today-${days}::int AS current,spam_ratio,spf_ratio,dkim_ratio,dmarc_ratio,(delivery_errors->>'rate')::float8 AS error_ratio
         FROM deliverability_postmaster_daily,win WHERE day>win.today-${Math.max(days * 2, 14)}::int AND day<=win.today) p) AS postmaster`);
-  return shape(r!, window, unit, runtime.config);
+  const [domains, budget] = await Promise.all([linkDomains(runtime), linkBudget(runtime.db, runtime.config)]);
+  return shape(r!, window, unit, runtime.config, domains, budget && { used: budget.used, limit: budget.limit });
 }
 
 const zeroCounts = (): CountsRow => Object.fromEntries(COUNT_KEYS.map(k => [k, 0])) as CountsRow;
 const zeroVdm = () => Object.fromEntries(Object.values(VDM_METRICS).map(k => [k, 0])) as z.infer<typeof Vdm>;
-function shape(r: Raw, window: DeliverabilityWindow, unit: 'hour' | 'day', config: Pick<Runtime['config'], 'publicUrl' | 'builtinDomain' | 'linkHost' | 'linkHosts'>): DeliverabilityBoard {
+function shape(r: Raw, window: DeliverabilityWindow, unit: 'hour' | 'day', config: Pick<Runtime['config'], 'publicUrl' | 'builtinDomain' | 'linkHost' | 'linkHosts'>, links: Set<string>, budget: DeliverabilityBoard['linkBudget']): DeliverabilityBoard {
   const counts = (row: Partial<CountsRow>) => Object.fromEntries(COUNT_KEYS.map(k => [k, Number(row[k] ?? 0)])) as CountsRow;
   const cube = new Map<string, DeliverabilityBoard['cube'][number]>();
   for (const row of r.cube) {
@@ -163,7 +170,8 @@ function shape(r: Raw, window: DeliverabilityWindow, unit: 'hour' | 'day', confi
     cube: [...cube.values()].sort((a, b) => a.provider.localeCompare(b.provider) || a.kind.localeCompare(b.kind) || a.region.localeCompare(b.region)),
     series: r.series.map(s => ({ at: s.at, kind: s.kind, region: s.region, ...counts(s) })),
     regions,
-    blocklist: blocklistDomains(config).map(domain => { const c = check('dbl', domain); return { domain, status: c?.status ?? null, checkedAt: c?.checked_at ?? null }; }),
+    linkBudget: budget,
+    blocklist: [...new Set([...domains, ...links, ...r.checks.filter(c => c.held).map(c => c.subject)])].map(domain => { const c = check('dbl', domain); return { domain, held: !!c?.held, status: c?.status ?? null, checkedAt: c?.checked_at ?? null }; }),
     postmaster: domains.map(domain => {
       const c = check('postmaster', domain), days = r.postmaster.filter(p => p.domain === domain), last = days.at(-1);
       const mean = (list: typeof days) => { const known = list.filter(p => p.spam_ratio !== null); return known.length ? known.reduce((n, p) => n + Number(p.spam_ratio), 0) / known.length : null; };
@@ -192,14 +200,15 @@ const errorName = (error: unknown) => (error as { name?: string })?.name && (err
 export async function refreshDeliverabilitySources(runtime: Runtime, { fetch: get = fetch }: { fetch?: typeof fetch } = {}) {
   if (!runtime.config.multiTenant) return;
   try {
-    const { rows } = await runtime.db.execute<{ kind: 'ses' | 'vdm' | 'dbl' | 'postmaster'; subject: string; account: string | null }>(sql`WITH wanted(kind,subject,account,every) AS (
+    const links = await linkDomains(runtime);
+    const { rows } = await runtime.db.execute<{ kind: 'ses' | 'vdm' | 'dbl' | 'postmaster'; subject: string; account: string | null; lease: string }>(sql`WITH wanted(kind,subject,account,every) AS (
         SELECT 'ses',region,aws_account_id,interval '10 minutes' FROM provider_pool_regions
         UNION ALL SELECT 'vdm',region,aws_account_id,interval '1 hour' FROM provider_pool_regions
-        UNION ALL SELECT 'dbl',d,NULL,interval '1 hour' FROM unnest(${sql.param(blocklistDomains(runtime.config))}::text[]) d
+        UNION ALL SELECT 'dbl',d,NULL,interval '1 hour' FROM unnest(${sql.param([...new Set([...platformDomains(runtime.config), ...links])])}::text[]) d
         UNION ALL SELECT 'postmaster',d,NULL,interval '6 hours' FROM unnest(${sql.param(runtime.config.postmaster ? platformDomains(runtime.config) : [])}::text[]) d
       ), claimed AS (INSERT INTO deliverability_checks AS c (kind,subject,next_at) SELECT kind,subject,now()+every FROM wanted
-        ON CONFLICT (kind,subject) DO UPDATE SET next_at=excluded.next_at WHERE c.next_at<=now() RETURNING c.kind,c.subject)
-      SELECT c.kind,c.subject,w.account FROM claimed c JOIN wanted w USING (kind,subject) ORDER BY c.kind='vdm',c.kind,c.subject`);
+        ON CONFLICT (kind,subject) DO UPDATE SET next_at=excluded.next_at WHERE c.next_at<=now() RETURNING c.kind,c.subject,c.next_at)
+      SELECT c.kind,c.subject,w.account,c.next_at::text AS lease FROM claimed c JOIN wanted w USING (kind,subject) ORDER BY c.kind='vdm',c.kind,c.subject`);
     if (!rows.length) return;
     const { loadDispatchTransport, poolSes } = await import('./dispatcher.js');
     let transport: Awaited<ReturnType<typeof loadDispatchTransport>> | undefined, google: Promise<string> | undefined;
@@ -223,11 +232,14 @@ export async function refreshDeliverabilitySources(runtime: Runtime, { fetch: ge
           }
         }
       } catch (error) {
-        status = 'error'; detail = { error: errorName(error) };
+        status = row.kind === 'dbl' ? 'unknown' : 'error'; detail = { error: errorName(error) };
         logError(error, { code: 'DELIVERABILITY_SOURCE_FAILED', kind: row.kind, subject: row.subject }, 'warn');
       }
       // A failed check is tried again in 15 minutes rather than at its next time (a deploy, a revoked grant put right).
-      await runtime.db.execute(sql`UPDATE deliverability_checks SET status=${status},detail=${detail ? JSON.stringify(detail) : null}::jsonb,checked_at=now()${status === 'error' ? sql`,next_at=least(next_at,now()+interval '15 minutes')` : sql``} WHERE kind=${row.kind} AND subject=${row.subject}`);
+      const listing = status === 'listed' && links.has(row.subject);
+      const update = sql`UPDATE deliverability_checks SET ${listing ? sql`held_at=coalesce(held_at,now()),` : sql``}status=${status},detail=${detail ? JSON.stringify(detail) : null}::jsonb,checked_at=now()${status === 'error' || status === 'unknown' ? sql`,next_at=least(next_at,now()+interval '15 minutes')` : sql``} WHERE kind=${row.kind} AND subject=${row.subject} AND next_at=${row.lease}::timestamptz`;
+      if (listing) await runtime.db.transaction(async tx => { await tx.execute(lockLinkDomain(row.subject)); await tx.execute(update); });
+      else await runtime.db.execute(update);
     }
   } catch (error) { logError(error, { code: 'DELIVERABILITY_SOURCE_FAILED' }, 'warn'); }
 }
@@ -309,6 +321,16 @@ async function blocklisted(runtime: Runtime, domain: string) {
 }
 
 export function registerGlassDeliverability(app: App) {
+  app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'post', path: '/v1/operator/glass/link-domains/{domain}/resume', operationId: 'operatorResumeLinkDomain',
+    request: { params: z.object({ domain: z.string().max(253) }), body: json(z.object({ reason: z.string().trim().min(10).max(1000) }).strict()) },
+    responses: { 200: response(z.object({ ok: z.literal(true) })), ...errors } }), async c => {
+    const operator = await operatorActor(c, 'operator'), { domain } = c.req.valid('param'), body = c.req.valid('json');
+    return c.json(await mutate(c, operator, 'platform', body, async tx => {
+      const resumed = await tx.execute(sql`UPDATE deliverability_checks SET held_at=NULL WHERE kind='dbl' AND subject=${domain} AND held_at IS NOT NULL AND status='clear' RETURNING subject`);
+      if (!resumed.rows.length) throw new ApiError(409, 'LINK_DOMAIN_NOT_CLEARED', 'Resume a held domain after its listing has cleared.');
+      return { result: { ok: true as const }, audit: { action: 'link-domain-resume', reason: body.reason, internal: { domain } } };
+    }), 200);
+  });
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'get', path: '/v1/operator/glass/deliverability', operationId: 'operatorGetGlassDeliverability',
     description: `The platform's deliverability, for operators: our mail by mailbox provider, kind and region for a period and the one before, engagement, SES account health and Amazon VDM's estimates per region, Spamhaus DBL, standing and the workspaces with the most complaints and bounces. One statement over rollups, cached ${GLASS_DELIVERABILITY_TTL_SECONDS} seconds.`,
     request: { query: z.object({ window: z.enum(['24h', '7d', '30d']).default('7d') }) },

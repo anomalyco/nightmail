@@ -31,6 +31,9 @@ const OPERATOR_ROUTES: [method: string, path: RegExp][] = [
   ['POST', /^\/v1\/operator\/support\/conversations\/conv_[a-z2-7]{26}\/state$/],
   ['GET', /^\/v1\/operator\/support\/outbox$/],
   ['POST', /^\/v1\/operator\/support\/conversations\/conv_[a-z2-7]{26}\/messages\/msg_[a-z2-7]{16}\/delivery$/],
+  // One path to a human (src/support-staff-mail.ts): the staff emails due, and each one sent.
+  ['POST', /^\/v1\/operator\/support\/staff-mail$/],
+  ['POST', /^\/v1\/operator\/support\/staff-mail\/staff-[0-9a-f]{24}-[0-9]{1,6}\/sent$/],
 ];
 const SUPPORT_READ = /^\/v1\/support\/[A-Za-z0-9_./-]{1,200}$/;
 /** The writes a conversation makes: narrowing its scope to one workspace, and keeping a note about its person. */
@@ -54,6 +57,8 @@ export function stampedAllows(method: string, path: string) {
   return (method === 'GET' && SUPPORT_READ.test(path)) || STAMPED_WRITES.some(([m, p]) => m === method && p.test(path));
 }
 
+/** A staff email the support platform sends (src/support-staff-mail.ts): a new thread, or a reply in threadId under replyToMessageId. */
+export type StaffEmail = { key: string; threadId: string | null; replyToMessageId: string | null; subject: string; text: string; html: string };
 export type PlatformReply<T = unknown> = { status: number; body: T; requestId: string | null; retryAfter: string | null };
 export type HandoffClaims = {
   id: string; kind: string; userId: string; email: string; role: string; workspace: { id: string; name: string };
@@ -198,6 +203,14 @@ export function supportPlatform(dispatch: (request: Request, conversation?: stri
     /** Record a staff reply's delivery: sent, or failed for good. */
     markDelivery: (conversationId: string, messageId: string, status: 'sent' | 'failed') =>
       call<{ id: string; delivery: 'sent' | 'failed'; deliveredAt: string | null }>('POST', `/v1/operator/support/conversations/${encodeURIComponent(String(conversationId))}/messages/${encodeURIComponent(String(messageId))}/delivery`, { status }),
+    /**
+     * The staff emails due (src/support-staff-mail.ts writes them now, then answers every one not yet sent, oldest first):
+     * send each from the support address to the team, starting its thread or replying in it, then report it sent.
+     */
+    staffMail: () => call<{ data: StaffEmail[] }>('POST', '/v1/operator/support/staff-mail', {}),
+    /** A staff email went out: its thread and message, so the next one in the thread replies to it. */
+    staffMailSent: (key: string, sent: { threadId: string; messageId: string }) =>
+      call<{ key: string; sentAt: string }>('POST', `/v1/operator/support/staff-mail/${encodeURIComponent(String(key))}/sent`, sent),
     /**
      * A /v1/support request for one registered conversation: a GET, or a write (POST /v1/support/scope or notes). The
      * conversation rides on the runtime, never in the request; Nightmail derives the customer from its row and answers

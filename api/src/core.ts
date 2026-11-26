@@ -176,6 +176,7 @@ export interface Config {
   linkedImages: boolean;
   /** Hosted: the link domain the links in campaign and marketing mail go on (NIGHTMAIL_LINK_HOST, src/link-domains.ts). */
   linkHost?: string;
+  linkWarmup?: { initial: number; full: number; days: number; workspacePercent: number };
   /** Own link hosts (src/link-domains.ts), off unless set: the Cloudflare for SaaS zone customers' links.<domain> CNAMEs
    *  reach (`target`, a name in that zone) and the token that edits its custom hostnames. `workspaces` (Hosted,
    *  NIGHTMAIL_LINK_HOST_WORKSPACES): the only workspaces they are for, none when empty; absent (self-hosted), every one. */

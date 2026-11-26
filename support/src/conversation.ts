@@ -147,8 +147,9 @@ type Transcript = { id: string; role: 'user' | 'assistant' | 'staff'; kind: 'fir
 type HeldReason = NonNullable<MirroredMessage['reason']>;
 /** What the staff inbox shows of a ticket: the brief the agent filed (null: an earlier ticket whose row has none). */
 type Brief = NonNullable<NonNullable<MirroredState['ticket']>['brief']>;
-const briefOf = (t: { title: string; summary: string; ask: string; recommendation: string }): Brief =>
-  ({ title: t.title.slice(0, 200), summary: t.summary.slice(0, 1200), ask: t.ask.slice(0, 600), recommendation: t.recommendation.slice(0, 800) });
+const briefOf = (t: { title: string; summary: string; ask: string; recommendation: string; tried?: TicketInput['tried'] }): Brief =>
+  ({ title: t.title.slice(0, 200), summary: t.summary.slice(0, 1200), ask: t.ask.slice(0, 600), recommendation: t.recommendation.slice(0, 800),
+    ...t.tried?.length ? { tried: t.tried.slice(0, 12).map(x => ({ tool: x.tool.slice(0, 60), finding: x.finding.slice(0, 400) })) } : {} });
 type Outgoing = Record<string, unknown> & { type: string };
 /** The access a turn runs with, compared turn to turn. */
 type Effective = { workspaces: { id: string; role: string }[]; content: string | null; bound: string | null };
@@ -534,6 +535,11 @@ export class SupportConversation extends DurableObject<Env> {
    */
   async ensure({ kind, ctx, input, ticket }: { kind: 'notify' | 'followup'; ctx: TicketContext; input: TicketInput; ticket: FiledTicket }) {
     if (!this.meta()) this.save({ ...this.fresh(ctx.conversationId, ctx.channel), status: 'closed', closedAt: Date.now(), ticketId: ticket.id });
+    // Nightmail's staff mail tells the team about a conversation it registered (harnessTicket): only the row is marked.
+    if (kind === 'notify' && this.meta()!.registered) {
+      await this.env.DB.prepare('UPDATE tickets SET notified_at = ? WHERE id = ? AND notified_at IS NULL').bind(Date.now(), ticket.id).run();
+      return { added: false };
+    }
     const added = this.work.insert(kind === 'notify'
       ? { kind, id: `notify:${ticket.id}`, payload: { ticketId: ticket.id, key: `ticket-${ticket.id}`, input: { addressId: this.env.SUPPORT_ADDRESS_ID, to: [this.env.TICKET_TO], ...ticketEmail(this.env, ctx, ticket, input) } } satisfies Notify }
       : { kind, id: `followup:${ticket.id}`, payload: { addressId: this.env.SUPPORT_ADDRESS_ID, ctx, ticket } satisfies FollowUp });
@@ -1448,9 +1454,13 @@ export class SupportConversation extends DurableObject<Env> {
       // Emailing the team and, for a chat, opening the customer's follow-up thread are work of their own, retried until
       // sent. Each is the request built now (its screenshot links signed once), from the address configured now.
       const category = input.details.topic ?? input.type, expect = expectation(input);
+      // A conversation Nightmail registered: the ticket reaches the team through Nightmail's staff mail (one thread per
+      // conversation, api/src/support-staff-mail.ts), from the brief mirrored with it, and the row says it was handed
+      // over. Any other (from before registration) is emailed from here, as before.
+      if (meta.registered) await this.env.DB.prepare('UPDATE tickets SET notified_at = ? WHERE id = ? AND notified_at IS NULL').bind(Date.now(), filed.id).run();
       this.ctx.storage.transactionSync(() => {
         this.update(m => { m.ticketId = filed.id; m.status = 'ticketed'; m.ticket = { id: filed.id, type: input.type, severity: input.severity, category, replyTo: filed.replyTo, expect, brief: briefOf(input) }; });
-        this.work.insert({ kind: 'notify', id: `notify:${filed.id}`, payload: { ticketId: filed.id, key: `ticket-${filed.id}`,
+        if (!meta.registered) this.work.insert({ kind: 'notify', id: `notify:${filed.id}`, payload: { ticketId: filed.id, key: `ticket-${filed.id}`,
           input: { addressId: this.env.SUPPORT_ADDRESS_ID, to: [this.env.TICKET_TO], ...ticketEmail(this.env, ctx, filed, input, this.ticketMessages()) } } satisfies Notify });
         if (meta.channel === 'chat') this.work.insert({ kind: 'followup', id: `followup:${filed.id}`, payload: { addressId: this.env.SUPPORT_ADDRESS_ID, ctx, ticket: filed } satisfies FollowUp });
       });

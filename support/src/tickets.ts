@@ -5,8 +5,9 @@ import { newId } from './tokens.js';
 import { productName } from '../../api/src/brand.js';
 
 // Tickets (design §7, with the owner's changes: email, not Slack; typed). One per conversation, stored in D1 (internal
-// only), emailed to the Nightmail team from the support address through Nightmail's own API with the type in the subject
-// ("[Nightmail bug] …"). For a chat, the customer also gets a short email that opens the follow-up thread the team replies in.
+// only). The team hears of a conversation Nightmail registered through Nightmail's staff mail (api/src/support-staff-mail.ts,
+// sent by the sweep); an intake ticket, or one of a conversation Nightmail never registered, is emailed from here with the
+// type in the subject ("[Nightmail bug] …"). For a chat, the customer also gets a short email that opens the follow-up thread the team replies in.
 // Staff work them in Nightmail's Support inbox, where each conversation's ticket shows (api/src/support-inbox.ts).
 
 /** The model an intake ticket names: no agent, and no conversation in the Support inbox. */

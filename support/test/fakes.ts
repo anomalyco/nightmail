@@ -23,6 +23,8 @@ let closeFailures = 0;
 // Nightmail's 404 for one it never registered; down makes every inbox call answer 503.
 const inbox = new Map();
 let inboxDown = false;
+// Staff emails a test queued: { key, group, thread (the group to reply in, for a later one), subject, text, html }, and each group's thread once sent.
+const staffMail = [], staffThreads = new Map();
 const missing = () => ok({ error: { code: 'NOT_FOUND' } }, 404), unavailable = () => ok({ error: { code: 'UNAVAILABLE' } }, 503);
 const inboxState = (id, c) => ({ id, status: c.status, agentState: c.paused ? 'paused' : 'active', pausedBy: c.paused || null, pausedAt: c.paused ? new Date().toISOString() : null, queuedReplies: c.outbox.filter(r => !r.delivery).length });
 const ok = (body, status = 200) => ({ status, body, requestId: 'req_' + '0'.repeat(32), retryAfter: null });
@@ -262,6 +264,21 @@ export class SupportPlatform extends WorkerEntrypoint {
     if (inboxDown) return unavailable();
     return ok({ data: [...inbox].filter(([cid]) => id === undefined || cid === id).flatMap(([cid, c]) => c.outbox.filter(r => !r.delivery).map(r => ({ id: r.id, conversationId: cid, channel: c.channel, text: r.text, staffName: r.staffName, createdAt: r.createdAt }))) });
   }
+  // One path to a human (api/src/support-staff-mail.ts): the staff emails a test queued (/__staffmail), and each one sent.
+  async staffMail() {
+    calls.push(['staffMail']);
+    if (inboxDown) return unavailable();
+    return ok({ data: staffMail.filter(m => !m.sent && (!m.thread || staffThreads.has(m.thread))).map(m => ({ key: m.key, subject: m.subject, text: m.text, html: m.html,
+      threadId: m.thread ? staffThreads.get(m.thread).threadId : null, replyToMessageId: m.thread ? staffThreads.get(m.thread).messageId : null })) });
+  }
+  async staffMailSent(key, sent) {
+    calls.push(['staffMailSent', key, sent]);
+    const mail = staffMail.find(m => m.key === key);
+    if (!mail) return missing();
+    mail.sent = true;
+    staffThreads.set(mail.group, sent);
+    return ok({ key, sentAt: new Date().toISOString() });
+  }
   async markDelivery(id, messageId, status) {
     calls.push(['markDelivery', id, messageId, status]);
     const reply = inbox.get(id)?.outbox.find(r => r.id === messageId);
@@ -287,6 +304,7 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/__calls') return Response.json(calls);
     // The staff inbox: register a conversation, pause or resume its agent, queue a staff reply, take Nightmail down; and read it.
+    if (url.pathname === '/__staffmail') { const { group, update, ...mail } = await request.json(); staffMail.push({ ...mail, group, thread: update ? group : null, sent: false }); return new Response(null, { status: 204 }); }
     if (url.pathname === '/__inbox') {
       if (request.method === 'GET') { const c = inbox.get(url.searchParams.get('id')); return Response.json(c ?? null); }
       const { id, channel, paused, reply, down } = await request.json();
