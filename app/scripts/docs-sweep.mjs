@@ -26,7 +26,7 @@ const started = Date.now()
 const browser = await chromium.launch({ ...process.env.CLS_CHROME ? { executablePath: process.env.CLS_CHROME } : { channel: 'chrome' }, args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'] })
 const fx = await start(repo, { dist: 'app/dist', port: Number(painted[1]) })
 const problems = []
-let read = 0, slowest = 0
+let done = 0, waited = 0, slowest = 0
 // What a reader has in front of them: the page's words (the frame, menus and contents too) and where it and its contents are scrolled.
 const place = page => page.evaluate(() => {
   const root = document.getElementById('page-shell') ?? document.querySelector('#root > *')
@@ -39,28 +39,42 @@ try {
       const phone = width < 600
       const context = await browser.newContext({ viewport: { width, height: phone ? 844 : 900 }, deviceScaleFactor: phone ? 2 : 1, isMobile: phone, hasTouch: phone, colorScheme: scheme })
       const page = await context.newPage()
-      let path = '', failed = []
-      page.on('pageerror', error => problems.push(`${path} (${view}): ${error.message.split('\n')[0]}`))
+      let path = '', failed = [], errors = []
+      page.on('pageerror', error => errors.push(error.message.split('\n')[0]))
       // What the page asked for that didn't come, named when it isn't painted or the app doesn't take over.
       page.on('response', response => { if (response.status() >= 400 && !response.url().endsWith('/v1/me')) failed.push(`${response.status()} ${new URL(response.url()).pathname}`) })
       page.on('requestfailed', request => failed.push(`${request.failure()?.errorText ?? 'failed'} ${new URL(request.url()).pathname}`))
       const why = async () => { const state = await page.evaluate(() => ({ shell: document.documentElement.dataset.shell ?? 'on', hint: localStorage.getItem('nightmail.session') })).catch(() => ({})); return `shell ${state.shell}, session hint ${state.hint}${failed.length ? `; ${failed.slice(0, 4).join(', ')}` : ''}` }
-      for (let i = lane; i < paths.length; i += lanes) {
-        path = paths[i], failed = []
+      // One page: painted, then the app's once a key wakes it. Null when it was read, else what went wrong.
+      const read = async () => {
+        failed = [], errors = []
         const response = await page.goto(fx.origin + path, { waitUntil: 'load', timeout: 30_000 })
-        if (!await page.evaluate(() => !!document.getElementById('page-shell'))) { problems.push(`${path} (${view}): not painted (HTTP ${response?.status()}; ${await why()})`); continue }
+        if (!await page.evaluate(() => !!document.getElementById('page-shell'))) return `not painted (HTTP ${response?.status()}; ${await why()})`
         const before = await place(page), pressed = Date.now()
         await page.keyboard.press('Shift')
-        if (!await page.waitForFunction(() => !document.getElementById('page-shell'), null, { timeout: 30_000 }).then(() => true, () => false)) { problems.push(`${path} (${view}): the app never took over (${await why()})`); continue }
+        if (!await page.waitForFunction(() => !document.getElementById('page-shell'), null, { timeout: 30_000 }).then(() => true, () => false)) return `the app never took over (${await why()})`
         slowest = Math.max(slowest, Date.now() - pressed)
         const after = await place(page)
         if (after.words !== before.words) {
           let at = 0
           while (after.words[at] === before.words[at]) at++
-          problems.push(`${path} (${view}): the words differ at character ${at}: “…${before.words.slice(Math.max(0, at - 40), at + 60)}…” painted, “…${after.words.slice(Math.max(0, at - 40), at + 60)}…” in the app`)
+          return `the words differ at character ${at}: “…${before.words.slice(Math.max(0, at - 40), at + 60)}…” painted, “…${after.words.slice(Math.max(0, at - 40), at + 60)}…” in the app`
         }
-        if (after.page !== before.page || Math.abs(after.contents - before.contents) > 1) problems.push(`${path} (${view}): scrolled to ${before.page} (contents ${before.contents}) painted, ${after.page} (contents ${after.contents}) in the app`)
-        read++
+        if (after.page !== before.page || Math.abs(after.contents - before.contents) > 1) return `scrolled to ${before.page} (contents ${before.contents}) painted, ${after.page} (contents ${after.contents}) in the app`
+        return errors[0] ?? null
+      }
+      for (let i = lane; i < paths.length; i += lanes) {
+        path = paths[i]
+        let problem = await read()
+        // The fixture's server admits 6,000 requests a minute from one address (api/src/server.ts), which a fast machine
+        // can pass: a page refused so (429) is read again once the minute turns.
+        for (let tries = 0; problem && failed.some(request => request.startsWith('429 ')) && tries < 2; tries++) {
+          await new Promise(wake => setTimeout(wake, 60_000 - Date.now() % 60_000 + 500))
+          waited++
+          problem = await read()
+        }
+        if (problem) problems.push(`${path} (${view}): ${problem}`)
+        else done++
       }
       await context.close()
     }))
@@ -69,6 +83,6 @@ try {
   await browser.close()
   await fx.stop()
 }
-console.log(`${read} docs pages read, painted and in the app (${guides.length} guides and overview, ${reference.length} reference pages${all ? ', each in four views' : ''}); slowest takeover ${slowest} ms; ${((Date.now() - started) / 1000).toFixed(0)} s`)
+console.log(`${done} docs pages read, painted and in the app (${guides.length} guides and overview, ${reference.length} reference pages${all ? ', each in four views' : ''}); slowest takeover ${slowest} ms; ${waited} read again after the server's limit of a minute; ${((Date.now() - started) / 1000).toFixed(0)} s`)
 for (const problem of problems) console.log(`  ${problem}`)
 if (problems.length) process.exitCode = 1
