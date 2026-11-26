@@ -32748,6 +32748,62 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.deepEqual(await day(), [700, 2, null]);
     });
   });
+  test('send guards: a recipient domain where the campaign\'s mail mostly bounced is skipped for the rest of it; replies naming a blocklist pause the campaign, with one operator alert, and the sender resumes only once they stop; a plan opens its next batch only after a healthy day', async t => {
+    await simulatedSesFixture(t, async ({ runtime, local, run, db }) => {
+      const ws = runtime.config.workspaceId, tag = unique('guard').toLowerCase().replace(/[^a-z0-9]/g, ''), dead = tag + '-dead.example';
+      const { planWindowHealthy, blocklistPause } = await import('./src/send-guards.js');
+      const { rampLines } = await import('./src/standing-model.js');
+      const list = ok(await local('POST', '/v1/lists', { name: unique('guards') }), 201);
+      // 150 subscribers at a domain that no longer takes mail joined first, then 150 elsewhere: the send goes in that order.
+      const join = async (where: string) => db.query(\`INSERT INTO audience_list_members (workspace_id, list_id, contact_id) SELECT workspace_id, $2, id FROM audience_contacts WHERE workspace_id = $1 AND \${where}\`, [ws, list.id]);
+      await db.query("INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent) SELECT 'con_' || md5($1 || $2 || n::text), $1, 'p' || n || '@' || $3, 'subscribed' FROM generate_series(1, 150) AS n", [ws, tag, dead]);
+      await join(\`email LIKE '%@\${dead}'\`);
+      await db.query("INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent) SELECT 'con_' || md5($1 || $2 || 'g' || n::text), $1, 'g' || n || '-' || $2 || '@example.net', 'subscribed' FROM generate_series(1, 150) AS n", [ws, tag]);
+      await join(\`email LIKE '%-\${tag}@example.net'\`);
+      await db.query(\`INSERT INTO sending_region_limits (workspace_id, region, max_send_rate, checked_at) VALUES ($1, $2, 5000, clock_timestamp())
+        ON CONFLICT ON CONSTRAINT sending_region_limits_pkey DO UPDATE SET max_send_rate = 5000, max_24_hour_send = 0, sent_last_24_hours = 0, checked_at = clock_timestamp()\`, [ws, REGION]);
+      const campaign = ok(await local('POST', '/v1/campaigns', { name: unique('guards'), from: 'sender@example.com', subject: 'News', html: '<p>News for you.</p>', audience: { listId: list.id } }), 201);
+      ok(await local('POST', \`/v1/campaigns/\${campaign.id}/send\`, { revision: campaign.revision, pacing: { perDay: 100, rateShare: 1 } }), 202);
+      const view = async () => ok(await local('GET', \`/v1/campaigns/\${campaign.id}\`));
+      const nextWindow = async () => {
+        await db.query("UPDATE sending_campaigns SET window_started_at = window_started_at - interval '25 hours', health_checked_at = health_checked_at - interval '25 hours', waiting_until = now() WHERE id = $1", [campaign.id]);
+        await db.query("UPDATE jobs SET available_at = clock_timestamp() WHERE type = 'campaign.run' AND status = 'pending' AND workspace_id = $1", [ws]);
+        await run('campaign.run');
+      };
+      await run('campaign.run'); await run('campaign.run');
+      assert.equal((await view()).delivery.expanded, 100);
+      // The first day's 100 all went to the dead domain and bounced for good: the rest there is skipped.
+      await db.query("UPDATE sending_emails SET status = 'bounced', provider_id = 'sim_' || id WHERE campaign_id = $1", [campaign.id]);
+      await nextWindow();
+      assert.deepEqual((await db.query('SELECT domain, resolved, bounced FROM campaign_stopped_domains WHERE campaign_id = $1', [campaign.id])).rows, [{ domain: dead, resolved: 100, bounced: 100 }]);
+      const sentTo = async (domain: string) => (await db.query("SELECT count(*)::int AS n FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@' || $2", [campaign.id, domain])).rows[0].n;
+      await run('campaign.run');
+      const later = await view();
+      assert.deepEqual([await sentTo(dead), later.delivery.canceled >= 50, await sentTo('example.net') > 0], [100, true, true]);
+      // A plan's day: unhealthy (all bounced), so the same batch again; a clean one opens the next.
+      const since = new Date(Date.now() - 3 * 86_400_000).toISOString();
+      assert.equal(await planWindowHealthy(db as never, ws, campaign.id, since), false);
+      // Replies naming a blocklist: paused, one operator alert, and no resume while they keep arriving.
+      await db.query("UPDATE sending_emails SET status = 'delivered' WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@example.net'", [campaign.id]);
+      const { rows: listed } = await db.query("SELECT id FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@example.net' ORDER BY id LIMIT 3", [campaign.id]);
+      for (const { id } of listed) await db.query("INSERT INTO sending_email_events (id, workspace_id, email_id, type, data, simulated, created_at) VALUES ($1, $2, $3, 'non_permanent_bounce', $4, false, now())",
+        [unique('event'), ws, id, JSON.stringify({ bounceType: 'Transient', bounceSubType: 'General', diagnosticCode: '554 5.7.1 An URL in this email is listed by Spamhaus DBL' })]);
+      assert.equal((await blocklistPause(db as never, ws, campaign.id, rampLines(null)))?.code, 'BLOCKLISTED');
+      await nextWindow();
+      const paused = await view();
+      assert.deepEqual([paused.state, paused.delivery.pauseReason.code], ['paused', 'BLOCKLISTED']);
+      assert.doesNotMatch(paused.delivery.pauseReason.message, /spamhaus|example/i, 'It names neither the list nor the domain.');
+      assert.equal((await db.query("SELECT count(*)::int AS n FROM jobs WHERE type = 'operator.alert' AND payload->>'kind' = 'blocklisted' AND workspace_id = $1", [ws])).rows[0].n, 1);
+      error(await local('POST', \`/v1/campaigns/\${campaign.id}/resume\`, {}), 409, 'BLOCKLIST_REPLIES_ARRIVING');
+      await db.query("UPDATE sending_email_events SET created_at = now() - interval '31 minutes' WHERE workspace_id = $1 AND type = 'non_permanent_bounce'", [ws]);
+      ok(await local('POST', \`/v1/campaigns/\${campaign.id}/resume\`, {}));
+      assert.equal((await view()).state, 'sending');
+      // With the replies gone and the bounces cleared, a day counts as healthy again.
+      await db.query("DELETE FROM sending_email_events WHERE workspace_id = $1 AND type = 'non_permanent_bounce'", [ws]);
+      await db.query("UPDATE sending_emails SET status = 'delivered' WHERE campaign_id = $1", [campaign.id]);
+      assert.equal(await planWindowHealthy(db as never, ws, campaign.id, since), true);
+    });
+  });
   test('campaign list probe follows standing: in good standing, recipients an earlier campaign delivered to with clean, mature feedback go out without the probe; swapped or unresolved recipients, a growing or capped sender, and a sender that falls below mid-campaign are probed', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, run }) => {
       const wid = runtime.config.workspaceId, pool = '111122223334', domain = 'clean-list.example', from = `news@${domain}`;
