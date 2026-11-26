@@ -32374,6 +32374,16 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.deepEqual([young.verdict, young.required.by, young.reasons[0].code], ['ramp_required', 'NEW_REGISTRATION', 'NEW_REGISTRATION']);
       assert.match(young.summary, /^This domain was registered recently/);
       await db.query('DELETE FROM domain_registrations WHERE root=$1', [domain]);
+      // The hourly pass looks registrations up (here with a stand-in for RDAP): unknown stays unknown, and the review judges by when it was added.
+      const { refreshRegistrations } = await import('./src/domain-age.js');
+      const lookups: string[] = [], lookup = async (root: string) => { lookups.push(root); return root === domain ? Date.parse('2022-12-01T00:00:00Z') : null; };
+      for (let i = 0; i < 100 && !lookups.includes(domain); i++) await refreshRegistrations(runtime, lookup);
+      assert.deepEqual((await db.query('SELECT to_char(registered_at, $2) AS at, status FROM domain_registrations WHERE root=$1', [domain, 'YYYY-MM-DD'])).rows, [{ at: '2022-12-01', status: 'known' }]);
+      const looked = lookups.length;
+      await refreshRegistrations(runtime, lookup);
+      assert.ok(!lookups.slice(looked).includes(domain), 'A known date is not looked up again for 30 days.');
+      assert.equal(ok(await local('GET', `${path}/audience?readiness=true`)).readiness.domain.registeredAt, '2022-12-01');
+      await db.query('DELETE FROM domain_registrations WHERE root=$1', [domain]);
       // All at once, or a daily limit over the plan's first day: refused, with why.
       const refused = error(await local('POST', `${path}/send`, { revision: c.revision }), 422, 'RAMP_REQUIRED');
       assert.ok(refused.message.startsWith(review.summary), refused.message);

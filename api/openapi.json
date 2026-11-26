@@ -7352,7 +7352,11 @@
                         "NEVER_MAILED",
                         "NO_DMARC",
                         "BOUNCES",
-                        "COMPLAINTS"
+                        "COMPLAINTS",
+                        "NEW_REGISTRATION",
+                        "NEW_HERE",
+                        "USUAL_JUMP",
+                        "NEW_LINK_DOMAIN"
                       ]
                     },
                     "message": {
@@ -7383,6 +7387,50 @@
                     "type": [
                       "integer",
                       "null"
+                    ],
+                    "description": "Days since it was added to this workspace: its history here, not its age."
+                  },
+                  "registeredAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "When its registrable domain was registered (YYYY-MM-DD), from public registry data; null when not known (never taken for old)."
+                  },
+                  "registeredDays": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "description": "Days since registeredAt; null when not known."
+                  },
+                  "linkDomain": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "The registrable domain the links go on, when it is not the From domain's."
+                      },
+                      "registeredAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "registeredDays": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "registeredAt",
+                      "registeredDays"
                     ]
                   },
                   "dmarc": {
@@ -7467,6 +7515,17 @@
                         "type": "integer",
                         "description": "Most recipients SES accepted from one campaign in the last 90 days."
                       },
+                      "firstSentAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "When this workspace first had mail accepted (workspace history only); null with none."
+                      },
+                      "usualDay": {
+                        "type": "integer",
+                        "description": "The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none."
+                      },
                       "sent": {
                         "type": "integer",
                         "description": "Recipients SES accepted in the last 30 days."
@@ -7500,6 +7559,17 @@
                       "largestSend": {
                         "type": "integer",
                         "description": "Most recipients SES accepted from one campaign in the last 90 days."
+                      },
+                      "firstSentAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "When this workspace first had mail accepted (workspace history only); null with none."
+                      },
+                      "usualDay": {
+                        "type": "integer",
+                        "description": "The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none."
                       },
                       "sent": {
                         "type": "integer",
@@ -7607,6 +7677,13 @@
                 ],
                 "description": "This send ÷ the largest campaign its domain sent in the last 90 days; null without one."
               },
+              "usualJump": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "This send ÷ the workspace's usual day (history.workspace.usualDay); null without one."
+              },
               "plan": {
                 "type": [
                   "object",
@@ -7643,6 +7720,7 @@
                   "by": {
                     "type": "string",
                     "enum": [
+                      "NEW_REGISTRATION",
                       "NEW_DOMAIN",
                       "SIZE_JUMP"
                     ]
@@ -8114,7 +8192,11 @@
                         "NEVER_MAILED",
                         "NO_DMARC",
                         "BOUNCES",
-                        "COMPLAINTS"
+                        "COMPLAINTS",
+                        "NEW_REGISTRATION",
+                        "NEW_HERE",
+                        "USUAL_JUMP",
+                        "NEW_LINK_DOMAIN"
                       ]
                     },
                     "message": {
@@ -8145,6 +8227,50 @@
                     "type": [
                       "integer",
                       "null"
+                    ],
+                    "description": "Days since it was added to this workspace: its history here, not its age."
+                  },
+                  "registeredAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "When its registrable domain was registered (YYYY-MM-DD), from public registry data; null when not known (never taken for old)."
+                  },
+                  "registeredDays": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "description": "Days since registeredAt; null when not known."
+                  },
+                  "linkDomain": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "The registrable domain the links go on, when it is not the From domain's."
+                      },
+                      "registeredAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "registeredDays": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "registeredAt",
+                      "registeredDays"
                     ]
                   },
                   "dmarc": {
@@ -8229,6 +8355,17 @@
                         "type": "integer",
                         "description": "Most recipients SES accepted from one campaign in the last 90 days."
                       },
+                      "firstSentAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "When this workspace first had mail accepted (workspace history only); null with none."
+                      },
+                      "usualDay": {
+                        "type": "integer",
+                        "description": "The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none."
+                      },
                       "sent": {
                         "type": "integer",
                         "description": "Recipients SES accepted in the last 30 days."
@@ -8262,6 +8399,17 @@
                       "largestSend": {
                         "type": "integer",
                         "description": "Most recipients SES accepted from one campaign in the last 90 days."
+                      },
+                      "firstSentAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "When this workspace first had mail accepted (workspace history only); null with none."
+                      },
+                      "usualDay": {
+                        "type": "integer",
+                        "description": "The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none."
                       },
                       "sent": {
                         "type": "integer",
@@ -8369,6 +8517,13 @@
                 ],
                 "description": "This send ÷ the largest campaign its domain sent in the last 90 days; null without one."
               },
+              "usualJump": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "This send ÷ the workspace's usual day (history.workspace.usualDay); null without one."
+              },
               "plan": {
                 "type": [
                   "object",
@@ -8405,6 +8560,7 @@
                   "by": {
                     "type": "string",
                     "enum": [
+                      "NEW_REGISTRATION",
                       "NEW_DOMAIN",
                       "SIZE_JUMP"
                     ]

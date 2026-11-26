@@ -2357,7 +2357,7 @@ export type CampaignAudienceCounts = {
          * Every finding behind the verdict.
          */
         reasons: Array<{
-            code: 'NEW_DOMAIN' | 'SIZE_JUMP' | 'NO_HISTORY' | 'RISKY_LIST' | 'NEVER_MAILED' | 'NO_DMARC' | 'BOUNCES' | 'COMPLAINTS';
+            code: 'NEW_DOMAIN' | 'SIZE_JUMP' | 'NO_HISTORY' | 'RISKY_LIST' | 'NEVER_MAILED' | 'NO_DMARC' | 'BOUNCES' | 'COMPLAINTS' | 'NEW_REGISTRATION' | 'NEW_HERE' | 'USUAL_JUMP' | 'NEW_LINK_DOMAIN';
             message: string;
         }>;
         domain: {
@@ -2366,7 +2366,26 @@ export type CampaignAudienceCounts = {
              * When the From domain (or the domain it is under) was added to this workspace.
              */
             firstSeenAt: string | null;
+            /**
+             * Days since it was added to this workspace: its history here, not its age.
+             */
             ageDays: number | null;
+            /**
+             * When its registrable domain was registered (YYYY-MM-DD), from public registry data; null when not known (never taken for old).
+             */
+            registeredAt?: string | null;
+            /**
+             * Days since registeredAt; null when not known.
+             */
+            registeredDays?: number | null;
+            linkDomain?: {
+                /**
+                 * The registrable domain the links go on, when it is not the From domain's.
+                 */
+                name: string;
+                registeredAt: string | null;
+                registeredDays: number | null;
+            } | null;
             /**
              * The DMARC policy last observed; null when not checked yet.
              */
@@ -2407,6 +2426,14 @@ export type CampaignAudienceCounts = {
                  */
                 largestSend: number;
                 /**
+                 * When this workspace first had mail accepted (workspace history only); null with none.
+                 */
+                firstSentAt?: string | null;
+                /**
+                 * The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none.
+                 */
+                usualDay?: number;
+                /**
                  * Recipients SES accepted in the last 30 days.
                  */
                 sent: number;
@@ -2427,6 +2454,14 @@ export type CampaignAudienceCounts = {
                  * Most recipients SES accepted from one campaign in the last 90 days.
                  */
                 largestSend: number;
+                /**
+                 * When this workspace first had mail accepted (workspace history only); null with none.
+                 */
+                firstSentAt?: string | null;
+                /**
+                 * The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none.
+                 */
+                usualDay?: number;
                 /**
                  * Recipients SES accepted in the last 30 days.
                  */
@@ -2470,6 +2505,10 @@ export type CampaignAudienceCounts = {
          */
         sizeJump: number | null;
         /**
+         * This send ÷ the workspace's usual day (history.workspace.usualDay); null without one.
+         */
+        usualJump?: number | null;
+        /**
          * The recommended daily batches; null when one day covers everyone.
          */
         plan: {
@@ -2483,7 +2522,7 @@ export type CampaignAudienceCounts = {
             seconds: number | null;
         } | null;
         required: {
-            by: 'NEW_DOMAIN' | 'SIZE_JUMP';
+            by: 'NEW_REGISTRATION' | 'NEW_DOMAIN' | 'SIZE_JUMP';
             /**
              * The largest daily limit that counts as a ramp: the plan's first day.
              */
@@ -2631,7 +2670,7 @@ export type CampaignQueued = {
          * Every finding behind the verdict.
          */
         reasons: Array<{
-            code: 'NEW_DOMAIN' | 'SIZE_JUMP' | 'NO_HISTORY' | 'RISKY_LIST' | 'NEVER_MAILED' | 'NO_DMARC' | 'BOUNCES' | 'COMPLAINTS';
+            code: 'NEW_DOMAIN' | 'SIZE_JUMP' | 'NO_HISTORY' | 'RISKY_LIST' | 'NEVER_MAILED' | 'NO_DMARC' | 'BOUNCES' | 'COMPLAINTS' | 'NEW_REGISTRATION' | 'NEW_HERE' | 'USUAL_JUMP' | 'NEW_LINK_DOMAIN';
             message: string;
         }>;
         domain: {
@@ -2640,7 +2679,26 @@ export type CampaignQueued = {
              * When the From domain (or the domain it is under) was added to this workspace.
              */
             firstSeenAt: string | null;
+            /**
+             * Days since it was added to this workspace: its history here, not its age.
+             */
             ageDays: number | null;
+            /**
+             * When its registrable domain was registered (YYYY-MM-DD), from public registry data; null when not known (never taken for old).
+             */
+            registeredAt?: string | null;
+            /**
+             * Days since registeredAt; null when not known.
+             */
+            registeredDays?: number | null;
+            linkDomain?: {
+                /**
+                 * The registrable domain the links go on, when it is not the From domain's.
+                 */
+                name: string;
+                registeredAt: string | null;
+                registeredDays: number | null;
+            } | null;
             /**
              * The DMARC policy last observed; null when not checked yet.
              */
@@ -2681,6 +2739,14 @@ export type CampaignQueued = {
                  */
                 largestSend: number;
                 /**
+                 * When this workspace first had mail accepted (workspace history only); null with none.
+                 */
+                firstSentAt?: string | null;
+                /**
+                 * The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none.
+                 */
+                usualDay?: number;
+                /**
                  * Recipients SES accepted in the last 30 days.
                  */
                 sent: number;
@@ -2701,6 +2767,14 @@ export type CampaignQueued = {
                  * Most recipients SES accepted from one campaign in the last 90 days.
                  */
                 largestSend: number;
+                /**
+                 * When this workspace first had mail accepted (workspace history only); null with none.
+                 */
+                firstSentAt?: string | null;
+                /**
+                 * The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none.
+                 */
+                usualDay?: number;
                 /**
                  * Recipients SES accepted in the last 30 days.
                  */
@@ -2744,6 +2818,10 @@ export type CampaignQueued = {
          */
         sizeJump: number | null;
         /**
+         * This send ÷ the workspace's usual day (history.workspace.usualDay); null without one.
+         */
+        usualJump?: number | null;
+        /**
          * The recommended daily batches; null when one day covers everyone.
          */
         plan: {
@@ -2757,7 +2835,7 @@ export type CampaignQueued = {
             seconds: number | null;
         } | null;
         required: {
-            by: 'NEW_DOMAIN' | 'SIZE_JUMP';
+            by: 'NEW_REGISTRATION' | 'NEW_DOMAIN' | 'SIZE_JUMP';
             /**
              * The largest daily limit that counts as a ramp: the plan's first day.
              */
