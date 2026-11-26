@@ -32885,7 +32885,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await db.query(`INSERT INTO sending_region_limits (workspace_id, region, max_send_rate, checked_at) VALUES ($1, $2, 5000, clock_timestamp())
         ON CONFLICT ON CONSTRAINT sending_region_limits_pkey DO UPDATE SET max_send_rate = 5000, max_24_hour_send = 0, sent_last_24_hours = 0, checked_at = clock_timestamp()`, [ws, REGION]);
       const campaign = ok(await local('POST', '/v1/campaigns', { name: unique('guards'), from: 'sender@example.com', subject: 'News', html: '<p>News for you.</p>', audience: { listId: list.id } }), 201);
-      ok(await local('POST', `/v1/campaigns/${campaign.id}/send`, { revision: campaign.revision, pacing: { perDay: 100, rateShare: 1 } }), 202);
+      ok(await local('POST', `/v1/campaigns/${campaign.id}/send`, { revision: campaign.revision, pacing: { perDay: 300, rateShare: 1 } }), 202);
       const view = async () => ok(await local('GET', `/v1/campaigns/${campaign.id}`));
       const nextWindow = async () => {
         await db.query("UPDATE sending_campaigns SET window_started_at = window_started_at - interval '25 hours', health_checked_at = health_checked_at - interval '25 hours', waiting_until = now() WHERE id = $1", [campaign.id]);
@@ -32893,7 +32893,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         await run('campaign.run');
       };
       await run('campaign.run'); await run('campaign.run');
-      assert.equal((await view()).delivery.expanded, 100);
+      assert.equal((await view()).delivery.expanded, 300);
       // The first day's mail to the dead domain bounced for good, the rest was delivered: the rest there is skipped.
       const sentTo = async (domain: string) => (await db.query("SELECT count(*)::int AS n FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%' || $2", [campaign.id, domain])).rows[0].n;
       await db.query("UPDATE sending_emails SET status = CASE WHEN to_addresses->>0 LIKE '%@' || $2 THEN 'bounced' ELSE 'delivered' END, provider_id = 'sim_' || id WHERE campaign_id = $1", [campaign.id, dead]);
@@ -32903,7 +32903,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // The same run checked the campaign, stopped the domain, then released the next day.
       assert.deepEqual((await db.query('SELECT domain, resolved, bounced FROM campaign_stopped_domains WHERE campaign_id = $1', [campaign.id])).rows, [{ domain: dead, resolved: deadFirst, bounced: deadFirst }]);
       const later = await view();
-      assert.deepEqual([await sentTo(dead), later.delivery.canceled > 0, later.delivery.expanded > 100, await sentTo('.example.net') > 0], [deadFirst, true, true, true]);
+      assert.deepEqual([await sentTo(dead), later.delivery.canceled > 0, later.delivery.expanded > 300, await sentTo('.example.net') > 0], [deadFirst, true, true, true]);
       // A plan's day: unhealthy (all bounced), so the same batch again; a clean one opens the next.
       const since = new Date(Date.now() - 3 * 86_400_000).toISOString();
       assert.equal(await planWindowHealthy(runtime.db, ws, campaign.id, since), false);
