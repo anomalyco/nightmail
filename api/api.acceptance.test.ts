@@ -22748,7 +22748,7 @@ describe('List hygiene', () => {
         assert.deepEqual((await db.query('SELECT r.list_risk FROM sending_campaign_reviews r JOIN sending_campaigns c ON c.review_id = r.id WHERE c.id = $1', [campaign.id])).rows[0].list_risk.at, risk.at);
         // After a send: the flagged contacts it skipped are never proven, but they no longer count; two flagged contacts
         // that joined since do. The rest were mailed and delivered to.
-        await db.query('UPDATE sending_campaigns SET simulated = false, expanded = 20 WHERE id = $1', [campaign.id]);
+        await db.query('UPDATE sending_campaigns SET simulated = false, prepared = total, expanded = total WHERE id = $1', [campaign.id]);
         await db.query("UPDATE audience_contacts SET mailed_count = 1, delivered_count = 1 WHERE workspace_id = $1 AND email LIKE 'fine%-' || $2 || '@example.net'", [wid, tag]);
         const more = ok(await local('POST', '/v1/contact-imports', { csv: ['Email', 'temp8-' + tag + '@fexpost.com', 'temp9-' + tag + '@fexpost.com'].join('\n'), listId: list.id, mapping: { email: 'Email' } }), 201);
         ok(await local('POST', '/v1/contact-imports/' + more.id + '/commit', { consent: { status: 'subscribed', evidence: 'Synthetic opt-in.' } }));
