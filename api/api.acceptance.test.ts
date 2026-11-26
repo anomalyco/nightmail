@@ -21760,8 +21760,10 @@ describe('List hygiene', () => {
     });
   });
   test('list risk: a marketing campaign\'s launch records the measure of its list on its review (flagged contacts, contacts at domains this workspace\'s mail failed at, never mailed), banded only with the private lines, and the send review\'s verdict is unchanged', async t => {
-    await simulatedSesFixture(t, async ({ runtime, db, local, run }) => {
-      const { bandListRisk } = await import('./src/list-risk.js');
+    await simulatedSesFixture(t, async ({ runtime, db, local, jobs }) => {
+      const { bandListRisk, listRiskJob } = await import('./src/list-risk.js');
+      // The job the launch queued (the dispatcher's map names it: scripts/check-premerge.ts checks that).
+      const runListRisk = async () => { for (const job of (await jobs('audience.listRisk')).filter(j => j.status === 'pending')) { await listRiskJob(runtime, job.payload, { id: job.id, attempts: 1, workspaceId: job.workspace_id } as never); await db.query("UPDATE jobs SET status = 'done' WHERE id = $1", [job.id]); } };
       const wid = runtime.config.workspaceId, tag = unique('lr').toLowerCase().replace(/[^a-z0-9]/g, ''), dead = tag + '-dead.example';
       const list = ok(await local('POST', '/v1/lists', { name: unique('risk') }), 201);
       const emails = [...[1, 2, 3].map(i => 'temp' + i + '-' + tag + '@fexpost.com'), ...[1, 2, 3, 4, 5].map(i => 'p' + i + '@' + dead), ...Array.from({ length: 12 }, (_, i) => 'fine' + i + '-' + tag + '@example.net')];
@@ -21777,7 +21779,7 @@ describe('List hygiene', () => {
         const launched = ok(await local('POST', '/v1/campaigns/' + campaign.id + '/send', { revision: campaign.revision }), 202);
         // The review's verdict is what it was before the measure existed: it reads nothing of it.
         assert.equal(launched.readiness.verdict, preview.readiness.verdict);
-        await run('audience.listRisk');
+        await runListRisk();
         const { rows: [review] } = await db.query('SELECT r.list_risk FROM sending_campaign_reviews r JOIN sending_campaigns c ON c.review_id = r.id WHERE c.id = $1', [campaign.id]);
         const risk = review.list_risk;
         assert.deepEqual([risk.sampled, risk.exact, risk.counts.flagged, risk.counts.byReason.disposable, risk.counts.deadDomains, risk.counts.neverMailed, risk.lastSend], [20, true, 3, 3, 5, 20, null]);
@@ -21788,7 +21790,7 @@ describe('List hygiene', () => {
         // Recorded once: the review keeps the measure as the list stood at launch.
         const reviewId = (await db.query('SELECT review_id FROM sending_campaigns WHERE id = $1', [campaign.id])).rows[0].review_id;
         await db.query("INSERT INTO jobs (id, workspace_id, type, payload) VALUES ($1, $2, 'audience.listRisk', $3)", [unique('job'), wid, JSON.stringify({ workspaceId: wid, campaignId: campaign.id, reviewId, listId: list.id })]);
-        await run('audience.listRisk');
+        await runListRisk();
         assert.deepEqual((await db.query('SELECT r.list_risk FROM sending_campaign_reviews r JOIN sending_campaigns c ON c.review_id = r.id WHERE c.id = $1', [campaign.id])).rows[0].list_risk.at, risk.at);
       } finally { runtime.config.listRisk = before; }
       // Without the private lines: values, no band.
