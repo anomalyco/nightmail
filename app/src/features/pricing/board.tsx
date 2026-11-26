@@ -16,6 +16,7 @@ import { Bolts, keySound, reducedMotion, SoundSwitch, useReplay, useTypedWord } 
 import { play, wake } from './sound'
 import { OFFERS } from './compare'
 import { claim, formatCount, listOf, money, nightmail, nightmailBill, offerSize, sourcesOf, theirPrice, ucOf, UNITS, usageLines, type Comparison, type Usage } from './prices'
+import { ownPages } from './docs/registry'
 
 // The price pages' hall (Hall): a dark wall under one pendant lamp, with the board and its console hung in it, the same
 // for the three pages, so moving between them changes the board, not the room (scene.tsx; calculator.tsx is the
@@ -215,6 +216,28 @@ export function ComparisonBelow({ comparison: c, start }: { comparison: Comparis
  *  review depends on: here, out of the page's way, rather than beside the figures. The row is the homepage's (by
  *  Anomaly, API docs, Terms, Privacy) with the other price pages (not this one). */
 export function BoardEnd({ comparison: c }: { comparison?: Comparison | null }) {
+  // The vendor's own pages beside this comparison (docs/registry.ts: "SendGrid pricing"), so each links the others.
+  const own = c ? ownPages(c.slug) : []
+  return <PageEnd here={c ? c.path : '/pricing'}>
+    <section className="cb-sources" id="sources" aria-labelledby="sources-title">
+      <h2 id="sources-title" className="cb-sources-title">Sources</h2>
+      {c ? <>
+        <p className="price-note">{c.assume} Monthly billing, no promotions. <Checked source={{ checked: c.offer.checked, url: c.offer.pricing }} /></p>
+        <p className="price-note">Nightmail charges {nightmail.perThousand} per 1,000 emails after {formatCount(nightmail.freeSent)} sent and {formatCount(nightmail.freeReceived)} received free a month.</p>
+        <Terms floor={null} />
+        <ul className="price-facts">{c.rows.map(fact => <li key={fact.text}>{fact.text}{fact.source && <Cite source={fact.source} />}</li>)}</ul>
+        <p className="price-note cb-read"><ReadOn sources={sourcesOf(c)} /></p>
+        {own.length ? <p className="price-note cb-read">Every {c.vendor} plan, and what a month costs at each size: {own.map((path, i) => <span key={path}>{i > 0 && ', '}<Link to={path}>{c.vendor} pricing</Link></span>)}.</p> : null}
+      </> : <p className="price-note">Monthly billing, list prices before tax, no promotions: each vendor’s cheapest plan that holds your numbers. <CheckedPages offers={OFFERS} />.</p>}
+      <p className="price-note">Product names belong to their owners and only identify their products. Nightmail isn’t affiliated with them.</p>
+    </section>
+  </PageEnd>
+}
+
+/** A price page's end (BoardEnd's, and the pricing pages' in docs/page.tsx): `children` (its Sources), then one small row
+ *  of links on the scene's own dark, the homepage's with the price pages other than `here`, and the wordmark across the
+ *  page's end (end-band.tsx) in the machine's night tones, measured before the first paint. */
+export function PageEnd({ here, children }: { here: string; children: ReactNode }) {
   const ref = useRef<HTMLElement>(null), [W, setW] = useState(0)
   // An envelope resting on the wordmark slides off when it's clicked, and another lands in its place.
   const nudge = (event: { target: EventTarget | null }) => {
@@ -232,19 +255,8 @@ export function BoardEnd({ comparison: c }: { comparison?: Comparison | null }) 
     return () => observer.disconnect()
   }, [])
   const phone = W < 900, inset = { left: 0, right: 0, bottom: 0 }, band = W ? endBand(W, phone, inset) : null
-  const here = c ? c.path : '/pricing'
   return <footer className="mx-end cb-end" ref={ref} onClick={nudge} style={{ ...toneVars(true), ...band ? { '--mx-band': `${band.h}px` } : {} } as CSSProperties}>
-    <section className="cb-sources" id="sources" aria-labelledby="sources-title">
-      <h2 id="sources-title" className="cb-sources-title">Sources</h2>
-      {c ? <>
-        <p className="price-note">{c.assume} Monthly billing, no promotions. <Checked source={{ checked: c.offer.checked, url: c.offer.pricing }} /></p>
-        <p className="price-note">Nightmail charges {nightmail.perThousand} per 1,000 emails after {formatCount(nightmail.freeSent)} sent and {formatCount(nightmail.freeReceived)} received free a month.</p>
-        <Terms floor={null} />
-        <ul className="price-facts">{c.rows.map(fact => <li key={fact.text}>{fact.text}{fact.source && <Cite source={fact.source} />}</li>)}</ul>
-        <p className="price-note cb-read"><ReadOn sources={sourcesOf(c)} /></p>
-      </> : <p className="price-note">Monthly billing, list prices before tax, no promotions: each vendor’s cheapest plan that holds your numbers. <CheckedPages offers={OFFERS} />.</p>}
-      <p className="price-note">Product names belong to their owners and only identify their products. Nightmail isn’t affiliated with them.</p>
-    </section>
+    {children}
     <nav aria-label="Site links">
       <a className="srt-by" href="https://anoma.ly" target="_blank" rel="noopener" title="Anomaly (opens in a new tab)">by <AnomalyLogo height={18} /></a>
       {PRICE_LINKS.filter(([path]) => path !== here).map(([path, label]) => <Link key={path} to={path}>{label}</Link>)}

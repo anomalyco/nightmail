@@ -16,8 +16,11 @@
 //   CLS_FONTS=late     deliver web fonts 1.8 s late, to measure the fallback-to-web-font swap
 //   CLS_HOME=tv        measure the television homepage instead (below), over app/dist-tv: build it first with
 //                      VITE_HOME=tv ./node_modules/.bin/vite build --outDir dist-tv
+//   CLS_PRICES=verdict measure the price pages' next version instead (below), over app/dist-verdict: build it first with
+//                      VITE_HOME=tv VITE_PRICE_PAGES=verdict ./node_modules/.bin/vite build --outDir dist-verdict
 // Writes .cls/report.json (every shift with its source elements), .cls/summary.md (also appended to
-// $GITHUB_STEP_SUMMARY) and a screenshot per failing page with the shifted elements outlined (with CLS_HOME=tv, in .cls/tv).
+// $GITHUB_STEP_SUMMARY) and a screenshot per failing page with the shifted elements outlined (with CLS_HOME=tv, in .cls/tv;
+// with CLS_PRICES=verdict, in .cls/verdict).
 //
 // Live rules (`live`): on Driftwood's rules page, an agent's API key saves the open rule once the page has settled
 // (`apply`: the change lands in the editor and a toast names who made it), or after a keystroke in the editor
@@ -62,8 +65,8 @@ import { chromium } from 'playwright-core';
 import { liveSource, seed, start } from './cls-fixture.mjs';
 
 const LIMIT = 0.001, JOB_TIMEOUT_MS = 90_000;
-const television = process.env.CLS_HOME === 'tv';
-const app = resolve(dirname(fileURLToPath(import.meta.url)), '..'), repo = resolve(app, '..'), out = join(app, '.cls', television ? 'tv' : '');
+const television = process.env.CLS_HOME === 'tv', verdict = process.env.CLS_PRICES === 'verdict';
+const app = resolve(dirname(fileURLToPath(import.meta.url)), '..'), repo = resolve(app, '..'), out = join(app, '.cls', television ? 'tv' : verdict ? 'verdict' : '');
 const only = process.env.CLS_ONLY ? new RegExp(process.env.CLS_ONLY, 'i') : null;
 // Each in-flight page owns a renderer. Leave room for the fixture API, other shards and their databases.
 const workers = Number(process.env.CLS_WORKERS) || Math.min(8, availableParallelism() * 2);
@@ -385,6 +388,8 @@ const pages = ids => [
   ['Compare · MailPace', '/compare/mailpace', { user: null, from: '/pricing', click: 'MailPace' }],
   ['Compare · UniOne', '/compare/unione', { user: null, from: '/pricing', click: 'UniOne' }],
   ['Compare · MailChannels', '/compare/mailchannels', { user: null, from: '/pricing', click: 'MailChannels' }],
+  // A vendor's pricing page production doesn't build yet (VITE_PRICE_PAGES, below) is not found.
+  ['Pricing · unknown vendor', '/pricing/nobody', { user: null, notFound: true }],
   ['Support chat', '/logs', { from: '/overview', support: true }],
   ['Overview · sending limits dialog', '/overview', { user: 'rae', dialog: 'Daily limit' }],
   ['Overview · sender score dialog', '/overview', { dialog: 'Sender score' }],
@@ -446,6 +451,17 @@ const televisionPages = [
   ['Signed out · television', '/', { user: null, alone: true }],
   ['Homepage · signed in · television', '/', { still: true }],
   ['Overview · from the television', '/overview', { from: '/', click: 'Open dashboard', still: true }],
+];
+// The price pages' next version (features/pricing/live.ts, PRICE_PAGES_VERDICT), in a build made with VITE_PRICE_PAGES=verdict:
+// the dev stage's (deploy.yml), not production's yet. CLS_PRICES=verdict measures these alone, on desktop and phone, over
+// that build (app/dist-verdict; ci.yml runs it in the same shard as the television's): each vendor's pricing page
+// (features/pricing/docs/), cold and from its comparison's Sources, and the comparison from it; an unknown vendor's.
+const verdictPages = [
+  ['Pricing · SendGrid', '/pricing/sendgrid', { user: null, from: '/compare/sendgrid', click: 'SendGrid pricing' }],
+  ['Pricing · Resend', '/pricing/resend', { user: null, from: '/compare/resend', click: 'Resend pricing' }],
+  ['Pricing · Mailchimp', '/pricing/mailchimp', { user: null, from: '/compare/mailchimp', click: 'Mailchimp pricing' }],
+  ['Compare · SendGrid · from its pricing', '/compare/sendgrid', { user: null, from: '/pricing/sendgrid', click: 'Nightmail vs SendGrid' }],
+  ['Pricing · unknown vendor', '/pricing/nobody', { user: null, notFound: true }],
 ];
 // The phone pass: the pages someone opens on a phone (every list as cards, the details they open, Settings), light only.
 const phonePages = new Set([
@@ -1282,7 +1298,7 @@ os.execv(chrome, [chrome, *sys.argv[1:]])
 const browserPromise = chromium.launch({ ...chrome ? { executablePath: chrome } : { channel: 'chrome' }, args: ['--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE 127.0.0.1'] })
   .finally(() => { if (launcherDir) rmSync(launcherDir, { recursive: true, force: true }); });
 browserPromise.catch(() => {});
-const fx = await start(repo, { dist: television ? 'app/dist-tv' : 'app/dist', servers: Math.min(2, Math.ceil(workers / 8)), delay: apiDelay, fontDelay: lateFonts ? FONT_DELAY_MS : 0, throttle, log: message => console.log(`${elapsed()} ${message}`) }).catch(async error => {
+const fx = await start(repo, { dist: television ? 'app/dist-tv' : verdict ? 'app/dist-verdict' : 'app/dist', servers: Math.min(2, Math.ceil(workers / 8)), delay: apiDelay, fontDelay: lateFonts ? FONT_DELAY_MS : 0, throttle, log: message => console.log(`${elapsed()} ${message}`) }).catch(async error => {
   await browserPromise.then(b => b.close(), () => {});
   throw error;
 });
@@ -1293,8 +1309,8 @@ try {
   console.log(`${elapsed()} seeded`);
   const jobs = [];
   const passes = [['desktop', 'light'], ['desktop', 'dark'], ...process.env.CLS_PHONE === '0' ? [] : [['phone', 'light']]];
-  for (const [pass, scheme] of passes) for (const [name, path, { user = 'dana', from, click, row, switchTo, support, live, leave, notes, disclose, dialog, tab, menu, still, alone, phoneOnly, notFound, waitlist, guard, panel, skipped, step, start, wide }] of television ? televisionPages : pages(ids)) {
-    if (only && !only.test(name) || pass === 'phone' && !television && !phonePages.has(name) || phoneOnly && pass !== 'phone') continue;
+  for (const [pass, scheme] of passes) for (const [name, path, { user = 'dana', from, click, row, switchTo, support, live, leave, notes, disclose, dialog, tab, menu, still, alone, phoneOnly, notFound, waitlist, guard, panel, skipped, step, start, wide }] of television ? televisionPages : verdict ? verdictPages : pages(ids)) {
+    if (only && !only.test(name) || pass === 'phone' && !television && !verdict && !phonePages.has(name) || phoneOnly && pass !== 'phone') continue;
     // `wide` pages take the desktop passes at 3440 × 1440.
     const device = wide && pass === 'desktop' ? 'wide' : pass;
     const slug = `${name}-${device === 'phone' ? 'phone' : scheme}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -1330,7 +1346,7 @@ try {
 }
 results = results.filter(Boolean);
 if (process.env.SHARD_REPORT) {
-  const id = television ? 'tv' : exclusive ? 'alone' : String(shard);
+  const id = television ? 'tv' : verdict ? 'verdict' : exclusive ? 'alone' : String(shard);
   appendFileSync(process.env.SHARD_REPORT, JSON.stringify({ id, ran: results.length, total: inventorySize }) + '\n');
 }
 const { markdown, failed } = summarize(results, ((Date.now() - began) / 1000).toFixed(0));

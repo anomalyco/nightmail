@@ -295,7 +295,8 @@ jobs:
           path: ~/.bun/install/cache
           key: bun-1.3.14-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('api/bun.lock', 'app/bun.lock') }}
       - run: for pkg in api app; do (cd "$pkg" && bun install --frozen-lockfile); done
-      - run: cd app && ./node_modules/.bin/vite build
+      # The dev stage's price pages (VITE_PRICE_PAGES=verdict: deploy.yml), as the Worker it runs is the dev stage's.
+      - run: cd app && VITE_PRICE_PAGES=verdict ./node_modules/.bin/vite build
       - name: Migrations (fresh and upgraded), the Worker under wrangler dev, and every route
         working-directory: api
         env:
@@ -359,6 +360,18 @@ jobs:
           CLS_HOME: tv
           CLS_PG_URL: postgresql://postgres:fixture-admin@127.0.0.1:5432/postgres
         run: ./node_modules/.bin/vite build --outDir dist-tv && node scripts/cls.mjs
+      # The price pages' next version, the dev stage's (VITE_PRICE_PAGES=verdict: deploy.yml), built beside the production one
+      # and measured on its own (scripts/cls.mjs, CLS_PRICES=verdict), in the same shard.
+      - name: Measure layout shift on the price pages' next version
+        if: matrix.shard == 'alone'
+        working-directory: app
+        env:
+          VITE_HOME: tv
+          VITE_PRICE_PAGES: verdict
+          SHARD_REPORT: *shard-report
+          CLS_PRICES: verdict
+          CLS_PG_URL: postgresql://postgres:fixture-admin@127.0.0.1:5432/postgres
+        run: ./node_modules/.bin/vite build --outDir dist-verdict && node scripts/cls.mjs
       - *publish-shard
       - name: Upload the shift sources
         if: failure()
@@ -452,7 +465,7 @@ jobs:
           inventories = {
               'acceptance': [['integration-contract', 'integration-rest', 'simulated-a-h', 'simulated-rest']],
               'support': [['chat', 'queues']],
-              'cls': [[*map(str, range(8)), 'alone'], ['tv']],
+              'cls': [[*map(str, range(8)), 'alone'], ['tv'], ['verdict']],
           }[suite]
           expected = {shard for group in inventories for shard in group}
           seen, errors = {}, []

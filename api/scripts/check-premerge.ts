@@ -276,13 +276,17 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
     // size its fader can reach, with the competitor's price there.
         "const boards = Object.entries(compare.comparisons).map(([id, c]) => ({ id, html: at('/compare/' + id, h(Fragment, null, h(scene.Scene, { comparison: c }), h(scene.BoardEnd, { comparison: c }))) }))",
     "const reach = Object.entries(compare.comparisons).map(([id, c]) => ({ id, sizes: prices.reachable(c).map(size => { const u = c.use(size), t = prices.theirPrice(c.offer, u); return { size, sent: u.sent, received: u.received, theirs: t ? t.cents : null } }) }))",
+    // Each vendor's pricing page (docs/), as the build paints it (prerender.tsx), with its end.
+    "const pages = await import('./src/features/pricing/pages.ts'), prerender = await import('./src/features/pricing/prerender.tsx')",
+    'const docs = pages.PRICE_PAGES.filter(page => page.doc).map(page => ({ path: page.path, html: prerender.renderShell(page) }))',
     'const { OFFERS, comparisons, resendOverage, resendReceived } = compare',
-    "process.stdout.write(JSON.stringify({ calculator, boards, reach, data: { OFFERS, comparisons, resendOverage, resendReceived } }, (_k, v) => typeof v === 'bigint' ? String(v) : v))",
+    "process.stdout.write(JSON.stringify({ calculator, boards, reach, docs, data: { OFFERS, comparisons, resendOverage, resendReceived } }, (_k, v) => typeof v === 'bigint' ? String(v) : v))",
   ].join('\n')
-  type Rendered = { calculator: { input: Record<string, string>; path: string; html: string }[]; boards: { id: string; html: string }[]; reach: { id: string; sizes: { size: number; sent: number; received: number; theirs: number | null }[] }[]; data: unknown }
+  type Rendered = { calculator: { input: Record<string, string>; path: string; html: string }[]; boards: { id: string; html: string }[]; docs: { path: string; html: string }[]; reach: { id: string; sizes: { size: number; sent: number; received: number; theirs: number | null }[] }[]; data: unknown }
   let out: Rendered | null = null
   try {
-    out = JSON.parse(execFileSync('node', ['--import', import.meta.resolve('tsx'), '--input-type=module', '-e', script], { cwd: new URL('app/', root), encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] })) as Rendered
+    // (With the price pages' next version on, as the dev stage builds them: app/src/features/pricing/live.ts.)
+    out = JSON.parse(execFileSync('node', ['--import', import.meta.resolve('tsx'), '--input-type=module', '-e', script], { cwd: new URL('app/', root), encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, VITE_PRICE_PAGES: 'verdict' } })) as Rendered
   } catch (error) {
     if (/Cannot find (module|package) '(react|react-dom|react-router|lucide-react)/.test(String((error as { stderr?: string }).stderr))) warn('Price pages', 'Skipped: run bun install in app/ to render the price pages.')
     else fail('Price pages', `Rendering the price pages failed: ${String((error as { stderr?: string }).stderr ?? error).slice(0, 600)}`, file)
@@ -355,7 +359,17 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
       if (!dated.test(html)) fail('Price pages', `${where} doesn't give the day its prices were checked and a link to the vendor's page.`, file)
       if (/\bNaN\b|undefined|Infinity/.test(page)) fail('Price pages', `${where} shows NaN, undefined or Infinity.`, file)
     }
-    if (failed === before) console.log(`Price pages: ${out.calculator.length} calculator inputs and ${out.boards.length} comparison pages match src/billing/rates.ts; ${sources.length} competitor sources have a link, a day and a quote.`)
+    // A vendor's pricing page: every Nightmail figure (the verdict's and each size's) is the billed price for the usage it
+    // is marked with, the price and the free allowance are the billing code's, and its figures carry the day they were read
+    // and the vendor's page. (That Nightmail costs less at each size in its table, the build checks: docs/vendor-pricing.ts.)
+    for (const { path, html } of out.docs) {
+      const page = text(html)
+      checkFigures(path, html, 3)
+      for (const term of terms.slice(0, 2)) if (!page.includes(term)) fail('Price pages', `${path} doesn't say “${term}”, as src/billing/rates.ts has it.`, file)
+      if (!/checked \d{1,2} \w{3} \d{4}/.test(page) || !/<a href="https:\/\//.test(html)) fail('Price pages', `${path} doesn't give the day its prices were checked and a link to the vendor's page.`, file)
+      if (/\bNaN\b|undefined|Infinity/.test(page)) fail('Price pages', `${path} shows NaN, undefined or Infinity.`, file)
+    }
+    if (failed === before) console.log(`Price pages: ${out.calculator.length} calculator inputs, ${out.boards.length} comparison pages and ${out.docs.length} pricing pages match src/billing/rates.ts; ${sources.length} competitor sources have a link, a day and a quote.`)
   }
 }
 

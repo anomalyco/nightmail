@@ -19,7 +19,7 @@
     "directory": "../app/dist",
     "binding": "ASSETS",
     "not_found_handling": "none",
-    "run_worker_first": ["/", "/pricing", "/compare", "/compare/*", "/v1", "/v1/*", "/api", "/api/*", "/mcp", "/mcp/*", "/.well-known", "/.well-known/*", "/unsubscribe", "/unsubscribe/*", "/i/*", "/health", "/health/*", "/internal/*", "/openapi.json", "/docs.md", "/docs/operations/*", "/docs/tags/*", "/llms.txt"]
+    "run_worker_first": ["/", "/pricing", "/pricing/*", "/compare", "/compare/*", "/v1", "/v1/*", "/api", "/api/*", "/mcp", "/mcp/*", "/.well-known", "/.well-known/*", "/unsubscribe", "/unsubscribe/*", "/i/*", "/health", "/health/*", "/internal/*", "/openapi.json", "/docs.md", "/docs/operations/*", "/docs/tags/*", "/llms.txt"]
   },
   "vars": {
     "NIGHTMAIL_MAIL_BUCKET": "nightmail-prod-mail",

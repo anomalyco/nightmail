@@ -6,6 +6,7 @@ import { publicOrigin as canonicalOrigin } from '../api/src/brand.ts'
 import { CRAWL_DISALLOW } from '../api/src/site-index.ts'
 import { pruneCss, usedNames } from './critical-css.ts'
 import { ENTRIES } from './src/features/pricing/compare/index.ts'
+import { docProblems } from './src/features/pricing/docs/index.ts'
 import { PRICE_LINKS, PRICE_PAGES_LIVE } from './src/features/pricing/live.ts'
 import { PRICE_PAGES } from './src/features/pricing/pages.ts'
 import { PANEL_IDS } from './src/features/pricing/panels.ts'
@@ -14,7 +15,8 @@ import * as readable from './src/features/pricing/readable.ts'
 import { jsonLd, llmsSiteIndex, markdownPath } from './src/features/pricing/readable.ts'
 
 // The public price pages and what's made with them (features/pricing):
-// - pricing.html and compare/<slug>.html, one for every comparison's entry (compare/index.ts): index.html with the
+// - pricing.html, compare/<slug>.html, one for every comparison's entry (compare/index.ts), and pricing/<vendor>.html, one
+//   for every vendor's pricing page (docs/: the build stops on one too thin to stand alone, docProblems): index.html with the
 //   page's own title, description, canonical address, link preview (its card included: pages.ts), Markdown twin and
 //   structured data, and the page itself painted from the HTML alone (prerender.tsx: the scene as the app first draws
 //   it, in #price-shell) with the CSS it needs inlined (critical-css.ts), so it shows before any of the app's code.
@@ -58,7 +60,7 @@ export function pricePages(words: Pick<typeof readable, 'llmsFull' | 'markdownFi
     configResolved(config) { publicDir = config.publicDir; root = config.root },
     generateBundle: { order: 'post', async handler(_options, bundle) {
       const today = new Date().toISOString().slice(0, 10)
-      const problems = ENTRIES.flatMap(entry => entryProblems(entry, today, PANEL_IDS))
+      const problems = [...ENTRIES.flatMap(entry => entryProblems(entry, today, PANEL_IDS)), ...docProblems()]
       if (new Set(ENTRIES.map(entry => entry.slug)).size !== ENTRIES.length) problems.push('Two comparisons have the same slug.')
       for (const [path] of PRICE_LINKS) if (!PRICE_PAGES.some(page => page.path === path)) problems.push(`live.ts links ${path}, which is no price page.`)
       for (const page of PRICE_PAGES) {
@@ -78,7 +80,7 @@ export function pricePages(words: Pick<typeof readable, 'llmsFull' | 'markdownFi
       const take = (pattern: RegExp) => { const found = [...template.matchAll(pattern)].map(match => match[1]!); template = template.replace(pattern, ''); return found }
       const entry = take(/\s*<script type="module" crossorigin src="([^"]+)"><\/script>/g), preload = take(/\s*<link rel="modulepreload" crossorigin href="([^"]+)">/g), styles = take(/\s*<link rel="stylesheet" crossorigin href="([^"]+)">/g)
       if (entry.length !== 1 || styles.length !== 1 || !template.includes('<div id="root"></div>')) return this.error('index.html is not shaped as the price pages expect: one entry module and one stylesheet, and #root.')
-      const css = [...new Set([styles[0]!.slice(1), ...pageCss(bundle, ['/features/pricing/index.tsx', '/features/pricing/board-page.tsx'])])].map(file => {
+      const css = [...new Set([styles[0]!.slice(1), ...pageCss(bundle, ['/features/pricing/index.tsx', '/features/pricing/board-page.tsx', '/features/pricing/docs/doc-page.tsx'])])].map(file => {
         const asset = bundle[file]
         if (asset?.type !== 'asset') this.error(`The price pages' stylesheet ${file} isn't in the bundle.`)
         return String((asset as { source: string | Uint8Array }).source)
@@ -99,8 +101,8 @@ export function pricePages(words: Pick<typeof readable, 'llmsFull' | 'markdownFi
       const { module: prerender } = await runnerImport<typeof import('./src/features/pricing/prerender.tsx')>(prerenderModule, { root, configFile: false, logLevel: 'error' })
 
       for (const page of PRICE_PAGES) {
-        if (!existsSync(resolve(publicDir, page.card.file))) return this.error(`${page.path}'s card, public/${page.card.file}, is missing: what it shows has changed (features/pricing/pages.ts). Make it with node scripts/price-cards.mjs and delete the old one.`)
-        const title = page.searchTitle, canonical = canonicalOrigin + page.path, image = `${origin}/${page.card.file}`
+        if (page.card && !existsSync(resolve(publicDir, page.card.file))) return this.error(`${page.path}'s card, public/${page.card.file}, is missing: what it shows has changed (features/pricing/pages.ts). Make it with node scripts/price-cards.mjs and delete the old one.`)
+        const title = page.searchTitle, canonical = canonicalOrigin + page.path, card = page.card
         let html = template
         const set = (pattern: RegExp, value: string) => {
           if (!pattern.test(html)) this.error(`index.html has no ${pattern.source} for ${page.file}.`)
@@ -112,14 +114,17 @@ export function pricePages(words: Pick<typeof readable, 'llmsFull' | 'markdownFi
         set(/(<meta property="og:description" content=")[^"]*/, attr(page.description))
         set(/(<meta name="twitter:title" content=")[^"]*/, attr(title))
         set(/(<meta name="twitter:description" content=")[^"]*/, attr(page.description))
-        for (const name of ['property="og:image"', 'name="twitter:image"']) set(new RegExp(`(<meta ${name} content=")[^"]*`), attr(image))
-        for (const name of ['property="og:image:alt"', 'name="twitter:image:alt"']) set(new RegExp(`(<meta ${name} content=")[^"]*`), attr(page.card.alt))
-        set(/(<meta property="og:image:type" content=")[^"]*/, 'image/jpeg')
-        // The card's size as its file has it (a card cut short once said 630 and was 542 high).
-        const size = jpegSize(readFileSync(resolve(publicDir, page.card.file)))
-        if (!size) return this.error(`public/${page.card.file} is no JPEG with a size this build can read.`)
-        set(/(<meta property="og:image:width" content=")[^"]*/, String(size.width))
-        set(/(<meta property="og:image:height" content=")[^"]*/, String(size.height))
+        // The page's own card, or with none (a pricing page's, until the cards' one style: pages.ts) index.html's.
+        if (card) {
+          for (const name of ['property="og:image"', 'name="twitter:image"']) set(new RegExp(`(<meta ${name} content=")[^"]*`), attr(`${origin}/${card.file}`))
+          for (const name of ['property="og:image:alt"', 'name="twitter:image:alt"']) set(new RegExp(`(<meta ${name} content=")[^"]*`), attr(card.alt))
+          set(/(<meta property="og:image:type" content=")[^"]*/, 'image/jpeg')
+          // The card's size as its file has it (a card cut short once said 630 and was 542 high).
+          const size = jpegSize(readFileSync(resolve(publicDir, card.file)))
+          if (!size) return this.error(`public/${card.file} is no JPEG with a size this build can read.`)
+          set(/(<meta property="og:image:width" content=")[^"]*/, String(size.width))
+          set(/(<meta property="og:image:height" content=")[^"]*/, String(size.height))
+        }
         set(/(<!-- Link previews\.)[^>]*-->/, ' This page\'s own (app/price-pages.ts). -->')
         set(/(<meta property="og:type" content="website" \/>)/, `\n    <meta property="og:url" content="${attr(canonical)}" />\n    <link rel="canonical" href="${attr(canonical)}" />`)
         set(/(<link rel="alternate" type="text\/markdown" href=")[^"]*(?=" title=")/, attr(canonicalOrigin + markdownPath(page.path)))
@@ -131,7 +136,8 @@ export function pricePages(words: Pick<typeof readable, 'llmsFull' | 'markdownFi
         html = html.replace(/\s*<link rel="preload" href="\/fonts\/[^"]+" as="font" type="font\/woff2" crossorigin \/>/g, '')
         set(/(<script src="\/theme.js"><\/script>)/, [
           ...fonts.map(font => `<link rel="preload" href="${font.url}" as="font" type="font/woff2" crossorigin />`),
-          `<link rel="preload" as="image" imagesrcset="${moondust.x1} 1x, ${moondust.x2} 2x" type="image/avif" fetchpriority="high" />`,
+          // (The board's concrete: a pricing page has no board.)
+          ...page.doc ? [] : [`<link rel="preload" as="image" imagesrcset="${moondust.x1} 1x, ${moondust.x2} 2x" type="image/avif" fetchpriority="high" />`],
           `<link rel="preload" href="${wall.phone}" as="image" type="image/avif" media="(max-width: 640px)" />`,
           `<link rel="preload" href="${wall.wide}" as="image" type="image/avif" media="(min-width: 641px)" />`,
         ].map(line => `\n    ${line}`).join(''))

@@ -137,13 +137,17 @@ const inlineScriptsKept = (): Plugin => ({
 // changes). The deploy sets it per stage (.github/workflows/deploy.yml). The dev server also reads it from app/.env.local;
 // a build reads only its own environment, so an env file left on a machine can't change what a build ships.
 const isTelevision = (command: string, mode: string) => (command === 'serve' ? loadEnv(mode, fileURLToPath(new URL('.', import.meta.url)), 'VITE_HOME') : process.env).VITE_HOME === 'tv'
+// The price pages' next version (features/pricing/live.ts, PRICE_PAGES_VERDICT): VITE_PRICE_PAGES=verdict, which the deploy
+// sets for the dev stage only, read the same way, and written into the app's code as a literal, so an env file can't set
+// it for a build and a build without it drops what it gates.
+const isVerdict = (command: string, mode: string) => (command === 'serve' ? loadEnv(mode, fileURLToPath(new URL('.', import.meta.url)), 'VITE_PRICE_PAGES') : process.env).VITE_PRICE_PAGES === 'verdict'
 
 export default defineConfig(({ command, mode }) => {
   const tv = isTelevision(command, mode)
   return {
     // VITE_DESIGN_SHEET is always a literal, set or not, so a build without it folds the design sheet's gate to false and
     // drops its chunk (src/lib/design-sheet.ts).
-    define: { __NIGHTMAIL_BUILD__: JSON.stringify(buildSha), 'import.meta.env.VITE_DESIGN_SHEET': JSON.stringify(process.env.VITE_DESIGN_SHEET ?? '') },
+    define: { __NIGHTMAIL_BUILD__: JSON.stringify(buildSha), 'import.meta.env.VITE_DESIGN_SHEET': JSON.stringify(process.env.VITE_DESIGN_SHEET ?? ''), __NIGHTMAIL_PRICE_PAGES__: JSON.stringify(isVerdict(command, mode)) },
     // (The homepage's station kit is inlined whatever its size: it is one lazily loaded stylesheet, features/home/machines.tsx.)
     build: { assetsInlineLimit: file => file.includes('/features/home/kit/') || undefined, rolldownOptions: { input: { index: fileURLToPath(new URL('./index.html', import.meta.url)) } } },
     plugins: [slimReactEmail, legalMarkdown, react(), fileHeaders(tv ? televisionFirstFiles : homeFirstFiles), publicOrigin, brandedBootScript(), publicBeacon, ...tv ? televisionHome() : [homeShell()], pricePages(tv ? televisionWords : undefined), inlineScriptsKept()],

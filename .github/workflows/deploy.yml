@@ -367,12 +367,15 @@ jobs:
       # VITE_FACTORY_MEDIA is where the desktop homepage's render sets are published: the stage's R2 media bucket
       # (infra/pulumi) on its media host. Until a set is published there (app/scripts/factory-media.mjs), the
       # homepage shows its poster.
+      # VITE_PRICE_PAGES=verdict builds the price pages' next version (app/src/features/pricing/live.ts: the vendors' pricing
+      # pages and the verdict look) on the dev stage only, until it is approved for production.
       - uses: ./.github/actions/build-release
         env:
           VITE_SUPPORT_CHAT: ${{ needs.authorize.outputs.stage == 'dev' && 'true' || 'staff' }}
           VITE_PUBLIC_URL: ${{ needs.authorize.outputs.stage == 'dev' && 'https://dev.nightmail.dev' || 'https://nightmail.dev' }}
           VITE_FACTORY_MEDIA: ${{ needs.authorize.outputs.stage == 'dev' && 'https://media.dev.nightmail.dev/factory/' || 'https://media.nightmail.dev/factory/' }}
           VITE_HOME: tv
+          VITE_PRICE_PAGES: ${{ needs.authorize.outputs.stage == 'dev' && 'verdict' || '' }}
 
       # The environment picks the stage. No variable or secret name carries a
       # stage prefix: each stage reads the same keys from its own nightmail/<stage>/

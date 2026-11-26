@@ -467,7 +467,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     // Assign path components rather than resolving an untrusted redirect parameter. Signing in from the homepage or a
     // price page (their Get started), or from an address the dashboard doesn't have, opens Overview.
     const callback = new URL(window.location.origin), path = window.location.pathname
-    callback.pathname = path === '/' || path === '/pricing' || path.startsWith('/compare/') || !isKnownPath(path) ? '/overview' : path
+    callback.pathname = path === '/' || (__NIGHTMAIL_PRICE_PAGES__ ? /^\/pricing(?:\/|$)/.test(path) : path === '/pricing') || path.startsWith('/compare/') || !isKnownPath(path) ? '/overview' : path
     callback.search = window.location.search
     callback.hash = window.location.hash
     callback.searchParams.delete('auth'); callback.searchParams.delete('place'); callback.searchParams.delete('position')

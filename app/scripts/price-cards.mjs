@@ -17,7 +17,7 @@ try {
   const browser = await chromium.launch(process.env.CLS_CHROME ? { executablePath: process.env.CLS_CHROME } : { channel: 'chrome' })
   const only = process.argv.slice(2)
   mkdirSync('public/og', { recursive: true })
-  for (const page of PRICE_PAGES.filter(page => !only.length || only.includes(page.path))) {
+  for (const page of PRICE_PAGES.filter(page => page.card && (!only.length || only.includes(page.path)))) {
     // Each page's headline and its whole board, centred, with the wall around them. (The window is wide enough for a
     // tall board's 1200 × 630 frame: a clip past its edge is cut, and the card comes out narrower than it says.)
     // The window is also tall enough for the whole frame: a frame past its foot came out shorter than 630 (the

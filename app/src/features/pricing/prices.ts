@@ -1,5 +1,6 @@
 import { CREDIT, perThousandUsd, RATES, STORAGE_AFTER_DAYS, usd } from '../../../../api/src/billing/rates.ts'
 import type { WorkspaceFocus } from '../../../../api/src/workspace-focus.ts'
+import { ownPages } from './docs/registry.ts'
 
 // The price pages' arithmetic (features/pricing): Nightmail's prices, from the billing code (api/src/billing/rates.ts) so a
 // page can't drift from what is billed, and the shape of a competitor's, which each competitor's entry fills in
@@ -260,17 +261,29 @@ export function opening(entry: Pick<Entry, 'offer' | 'model'>, u: Usage) {
       : m.per === 'received' ? `${formatCount(u.received)} emails received a month` : `${formatCount(u.sent)} emails a month`
   return { size, theirs: money(theirs.cents), plan: theirs.plan, ours: nightmailBill(u.sent, u.received).text, day: dayOf(entry.offer.checked) }
 }
+/** The first of `texts` from `min` to `max` characters long, else the first at most `max`, else the last: a title (60) or a
+ *  description (160) from the longest way of saying it to the shortest. */
+export const fitWords = (texts: string[], max: number, min = 0) => texts.find(text => text.length <= max && text.length >= min) ?? texts.find(text => text.length <= max) ?? texts.at(-1)!
 /** A comparison's title and description in search results and link previews, made from its data: led by what someone
  *  types ("<vendor> alternative", "<vendor> pricing"), then the board's opening size with both monthly prices and the day
- *  the vendor's were read, and how the vendor charges (its lead's first sentence) or what else the page has. The title
- *  fits 60 characters and the description 160 (price-pages.ts checks both): the first of these that fits. */
+ *  the vendor's were read, and how the vendor charges (its lead's first sentence) or what else the page has. A vendor with
+ *  pages of its own for those searches (docs/registry.ts: /pricing/<slug>) leaves them to those, and its comparison is the
+ *  head-to-head: "Nightmail vs <vendor>: price at every size". The title fits 60 characters and the description 160
+ *  (price-pages.ts checks both): the first of these that fits. */
 function searchWords(entry: Entry, u: Usage): { searchTitle: string; description: string } {
   const { vendor } = entry, { size, theirs, plan, ours, day } = opening(entry, u)
-  const named = entry.aka ? `${vendor} (${entry.aka})` : vendor, title = `${named} alternative: Nightmail vs ${vendor} pricing`
-  const head = `${named} pricing vs Nightmail, checked ${day}: ${size}, `, how = entry.lead.split(/(?<=\.) /)[0]!
+  const named = entry.aka ? `${vendor} (${entry.aka})` : vendor, how = entry.lead.split(/(?<=\.) /)[0]!
+  if (ownPages(entry.slug).length) {
+    const head = `Nightmail vs ${named}, checked ${day}: at ${size}, ${vendor} ${theirs}`
+    return { searchTitle: fitWords([`Nightmail vs ${vendor}: price at every size`, `Nightmail vs ${vendor}`], 60), description: fitWords([
+      `${head} (${plan}), Nightmail ${ours}. Every size ${vendor} prices, side by side.`, `${head}, Nightmail ${ours}. Every size ${vendor} prices, side by side.`,
+      `${head} (${plan}), Nightmail ${ours}. ${how}`, `${head}, Nightmail ${ours}. ${how}`, `${head}, Nightmail ${ours}. Both prices at every size.`, `${head}, Nightmail ${ours}.`,
+    ], 160, 140) }
+  }
+  const title = `${named} alternative: Nightmail vs ${vendor} pricing`, head = `${named} pricing vs Nightmail, checked ${day}: ${size}, `
   const prices = [`${head}${vendor} ${theirs} (${plan}), Nightmail ${ours}.`, `${head}${vendor} ${theirs}, Nightmail ${ours}.`]
   const words = [...prices.map(text => `${text} ${how}`), ...prices.map(text => `${text} See every size and what each includes.`), ...prices]
-  return { searchTitle: title.length <= 60 ? title : `${named} alternative and pricing · Nightmail`, description: words.find(text => text.length <= 160) ?? words.at(-1)! }
+  return { searchTitle: fitWords([title, `${named} alternative and pricing · Nightmail`], 60), description: fitWords(words, 160) }
 }
 /** A comparison's unit as its page names it: the fader's label, the board's head and a size in a sentence. */
 export const UNITS = {

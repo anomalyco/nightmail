@@ -17,8 +17,11 @@ export const CRAWL_DISALLOW = ['/v1/', '/api/', '/mcp', '/internal/', '/unsubscr
  *  sign-in, so the Worker and the Node server send it with X-Robots-Tag: noindex. */
 export const isPublicPage = (pathname: string) => pathname === '/' || pathname === '/pricing' || /^\/(?:compare|docs|legal)(?:\/|$)/.test(pathname);
 
-/** Where a page under /compare/ that the build didn't make is: nowhere (404), never the dashboard. */
-export const isMissingComparePage = (pathname: string) => pathname === '/compare' || pathname.startsWith('/compare/');
+/** An address under the directories the build writes the site's own pages into (app/price-pages.ts): a comparison
+ *  (/compare/<vendor>) or a vendor's pricing page (/pricing/<vendor>). The Worker serves them from the build's files. */
+export const isSitePage = (pathname: string) => /^\/(?:compare|pricing)\//.test(pathname);
+/** Where one of those the build didn't make is (and /compare, until it has a page): nowhere (404), never the dashboard. */
+export const isMissingComparePage = (pathname: string) => pathname === '/compare' || isSitePage(pathname);
 
 export function withSiteIndex(llms: string, site: string): string {
   const lines = site.trim();

@@ -13,9 +13,15 @@ import './pricing.css'
 const boardPage = () => import('./board-page')
 const PriceScene = lazy(() => boardPage().then(m => ({ default: m.PriceScene })))
 const BoardEnd = lazy(() => boardPage().then(m => ({ default: m.BoardEnd })))
+// A vendor's pricing page (/pricing/<vendor>, docs/) is a module of its own too, in a build that has them: live.ts's
+// PRICE_PAGES_VERDICT, read here as the literal vite.config.ts writes for it, because only a literal at the import
+// drops the module from a build without them.
+const docPage = __NIGHTMAIL_PRICE_PAGES__ ? () => import('./docs/doc-page') : () => Promise.reject(new Error('No pricing pages in this build.'))
+const DocPageScene = lazy(() => docPage().then(m => ({ default: m.DocPageScene })))
+const DocEnd = lazy(() => docPage().then(m => ({ default: m.DocEnd })))
 
-// Public pages, no sign-in: the price calculator (/pricing) and one comparison per competitor (/compare/:vendor), linked
-// from the homepage's footer and from each other (live.ts).
+// Public pages, no sign-in: the price calculator (/pricing), one comparison per competitor (/compare/:vendor) and a
+// pricing page for some of them (/pricing/:vendor, docs/), linked from the homepage's footer and from each other (live.ts).
 
 // Prose here uses proportional figures, and the local fallback faces are sized for the tabular ones (tokens.css): text
 // painted before the web fonts arrive rewraps when they do. So the pages wait for them, as long as 3 seconds.
@@ -24,7 +30,7 @@ const fontsReady = Promise.race([
   new Promise(resolve => setTimeout(resolve, 3000)),
 ]).catch(() => {})
 
-const pageLinks = (label: (page: (typeof PRICE_PAGES)[number]) => string) => PRICE_PAGES.map(page => <NavLink key={page.path} to={page.path} end>{label(page)}</NavLink>)
+const pageLinks = (label: (page: (typeof PRICE_PAGES)[number]) => string) => PRICE_PAGES.filter(page => !page.doc).map(page => <NavLink key={page.path} to={page.path} end>{label(page)}</NavLink>)
 
 /** The page each price page's own file paints before this code (app/price-pages.ts, #price-shell: the same scene, over
  *  this one until now, with its CSS). It goes as this page is first drawn, in the same frame and at the same place, so
@@ -100,7 +106,12 @@ export function PricePage() {
   const page = PRICE_PAGES.find(p => p.path === (vendor === null ? '/pricing' : `/compare/${vendor}`))
   // The board's frame in the homepage's steel, while its concrete waits for a yes (board.tsx): ?frame=steel.
   const [search] = useSearchParams()
-  if (vendor !== null && !comparison) return <PriceFrame title={`Page not found · ${productName.toLowerCase()}`}><EmptyState headingAs="h1" title="Page not found" action={<Link to="/pricing">Price calculator</Link>} /></PriceFrame>
+  // A vendor's pricing page (/pricing/<vendor>: docs/), or not found.
+  if (pathname.startsWith('/pricing/')) {
+    const doc = PRICE_PAGES.find(p => p.path === pathname.replace(/\/+$/, ''))?.doc
+    if (doc) return <PriceFrame title={doc.searchTitle} end={<DocEnd doc={doc} />} scene><DocPageScene doc={doc} /></PriceFrame>
+  }
+  if ((vendor !== null && !comparison) || pathname.startsWith('/pricing/')) return <PriceFrame title={`Page not found · ${productName.toLowerCase()}`}><EmptyState headingAs="h1" title="Page not found" action={<Link to="/pricing">Price calculator</Link>} /></PriceFrame>
   // The tab's title is the one the page's HTML carries (price-pages.ts), so search engines read one title either way.
   return <PriceFrame title={page!.searchTitle} end={<BoardEnd comparison={comparison} />} scene>
     <PriceScene comparison={comparison} frame={search.get('frame')} />
