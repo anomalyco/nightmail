@@ -5742,6 +5742,11 @@ describe('Hosted MCP OAuth and tools', () => {
         sendingSignIn: { kind: 'signIn', role: 'owner', consent: 'send', grants: [...delegatedReads, 'sendEmail:on'], covers: ['workspace', 'domain'], actor: sending.actor },
         readingSignIn: { kind: 'signIn', role: 'owner', consent: 'read', grants: delegatedReads, covers: ['workspace', 'domain'], actor: reading.actor },
       };
+      // What /mcp lists each workspace key and agent token, one tool per operation: below, exactly the operations REST lets
+      // it call, writes included. (A key limited to addresses or an inbox is listed its inbox tools, a narrower set.)
+      const catalog = (await import('./src/mcp-catalog.js')).buildMcpCatalog(await createOpenApiApp()), listed: Record<string, Set<string>> = {};
+      for (const [label, { bearer, kind }] of Object.entries(credentials)) if (bearer && kind !== 'addressKey')
+        listed[label] = new Set((ok(await request('POST', '/mcp?codemode=false', bearer, { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, rpcHeaders)).result.tools as Json[]).map(tool => tool.name as string));
       const rank = { member: 0, admin: 1, owner: 2, any: 0 } as const;
       const admits = (h: Holder, row: Row) => {
         if (row.access === 'public') return true;
@@ -5823,6 +5828,8 @@ describe('Hosted MCP OAuth and tools', () => {
               unhelpful.push(`${id} ${label}: ${refusal?.code} "${refusal?.message}"`);
             outcomes.add(expected);
             if (expected === refused) mismatches.push(`${id} ${label}: the table ${expected ? 'admits' : 'refuses'} it, REST answered ${answer}`);
+            // A tool the credential is listed always reaches its handler, and none it may call is left out.
+            if (listed[label] && catalog.has(id) && listed[label].has(id) === refused) mismatches.push(`${id} ${label}: /mcp ${refused ? 'lists' : 'leaves out'} it, REST answered ${answer}`);
           }
           // Every row is exercised both ways: by a credential that has what it needs and by one that lacks it.
           if (!row.access) assert.equal(outcomes.size, 2, `${id}: every credential is ${[...outcomes][0] ? 'admitted' : 'refused'}`);
