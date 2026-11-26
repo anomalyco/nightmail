@@ -21679,11 +21679,16 @@ describe('List hygiene', () => {
       assert.deepEqual([cls('550 5.1.1 <x@example.com>: Recipient address rejected: User unknown'), cls('550 5.1.2 Host or domain name not found'),
         cls('452 4.2.2 Mailbox full', 'non_permanent_bounce'), cls('554 5.7.1 Service unavailable; Client host blocked using zen.spamhaus.org'),
         cls('550 rejected (URIBL_DBL_SPAM)'), cls('550 5.7.26 Unauthenticated email is not accepted'), cls('421 4.7.28 Rate limited', 'non_permanent_bounce'),
-        cls('554 5.7.1 Message rejected as spam'), bounceClass({ type: 'validation_suppressed' }), cls(''), cls('', 'bounce', 'NoEmail')],
-      ['user_unknown', 'dead_domain', 'mailbox_full', 'blocklist', 'blocklist', 'auth', 'reputation', 'policy', 'validation', 'other', 'user_unknown']);
-      assert.deepEqual([blocklistNamed('Host classified as spam by b.barracudacentral.org'), blocklistNamed('listed on a blocklist'), blocklistNamed('5.7.1 content rejected'), blocklistNamed(null)], ['barracuda', 'other', null, null]);
+        cls('554 5.7.1 Message rejected as spam'), bounceClass({ type: 'validation_suppressed' }), cls(''), cls('', 'bounce', 'NoEmail'),
+        // Addresses, host names and queue IDs that happen to hold a zone's letters, and policy replies worded as a rejected recipient.
+        cls('550 5.1.1 <ops@pbl.example>: Recipient address rejected: User unknown'), cls('554 5.7.1 <u@example.com>: Recipient address rejected: Access denied'),
+        cls('452 4.2.2 <dmarc@example.com>: Mailbox full', 'non_permanent_bounce'), cls('550 5.7.1 Rejected as spam (spf=pass dkim=pass dmarc=pass)'), cls('550 5.1.0 Address rejected')],
+      ['user_unknown', 'dead_domain', 'mailbox_full', 'blocklist', 'blocklist', 'auth', 'reputation', 'policy', 'validation', 'other', 'user_unknown',
+        'user_unknown', 'policy', 'mailbox_full', 'policy', 'user_unknown']);
+      assert.deepEqual([blocklistNamed('Host classified as spam by b.barracudacentral.org'), blocklistNamed('listed on a blocklist'), blocklistNamed('5.7.1 content rejected'), blocklistNamed(null),
+        blocklistNamed('250 2.0.0 ok id=4928sbl19 via mail-dbl01.example.net'), blocklistNamed('550 Client host blocked using dbl')], ['barracuda', 'other', null, null, null, 'spamhaus']);
 
-      const ws = unique('ws_history'), tag = unique('dh').toLowerCase().replace(/[^a-z0-9]/g, ''), good = tag + '-good.example', dead = tag + '-dead.example', corp = tag + '-corp.example';
+      const ws = unique('ws_history'), tag = unique('dh').toLowerCase().replace(/[^a-z0-9]/g, ''), good = tag + '-good.example', dead = tag + '-dead.example', corp = tag + '-corp.example', relay = tag + '-relay.example';
       const base = Date.now() - 2 * 86_400_000, at = (i: number) => new Date(base + i * 60_000).toISOString();
       const contact = async (email: string) => { const id = unique('con'); await db.query('INSERT INTO audience_contacts(id,workspace_id,email) VALUES ($1,$2,$3)', [id, ws, email]); return id; };
       const [a, b, d, f] = [await contact('a@' + good), await contact('b@' + dead), await contact('d@' + corp), await contact('f@' + good)];
@@ -21702,6 +21707,8 @@ describe('List hygiene', () => {
       await send({ to: ['d@' + corp], i: 5, status: 'delayed', o: 1 | 128, snapshot: unsubscribe, events: [['non_permanent_bounce', { bounceType: 'Transient', bounceSubType: 'General', diagnosticCode: '554 An URL in this email is listed by Spamhaus DBL' }]] });
       await send({ to: ['e@' + corp], i: 6, status: 'suppressed', o: 1, events: [['validation_suppressed', { bounceType: 'Permanent', bounceSubType: 'EmailValidationSuppressed' }]] });
       await send({ to: ['f@' + good], i: 7, status: 'delivered', o: 1 | 2, campaign: false, snapshot: { kind: 'transactional' } });
+      // A relay accepted it (a delivery event), then returned it: a bounce, not a delivery.
+      await send({ to: ['r@' + relay], i: 7.5, status: 'bounced', o: 1 | 2 | 4, events: [['bounce', { bounceType: 'Permanent', bounceSubType: 'General', diagnosticCode: '550 5.1.1 User unknown' }]] });
       // Not counted: two recipients, simulated, not accepted, and too recent for its feedback to be in.
       await send({ to: ['a@' + good, 'b@' + dead], i: 8, status: 'delivered', o: 1 | 2, campaign: false });
       await send({ to: ['a@' + good], i: 9, status: 'delivered', o: 1 | 2, simulated: true });
@@ -21719,12 +21726,13 @@ describe('List hygiene', () => {
       };
       await rewind();
       const run = await deliveryHistoryHourly(runtime, { budgetMs: 60_000 });
-      assert.ok(run && run.counted >= 7, JSON.stringify(run));
+      assert.ok(run && run.counted >= 8, JSON.stringify(run));
       const stats = async () => Object.fromEntries((await db.query('SELECT * FROM delivery_domain_stats WHERE workspace_id=$1 ORDER BY domain', [ws])).rows.map((r: Json) => [r.domain, r]));
       const pick = (r: Json) => ({ sent: +r.sent, delivered: +r.delivered, hard: +r.hard_bounced, soft: +r.soft_failed, opened: +r.opened, since: r.failed_since_delivery,
         classes: Object.fromEntries(['user_unknown', 'dead_domain', 'mailbox_full', 'blocklist', 'validation', 'policy'].map(c => [c, +r[c]]).filter(([, n]) => n)) });
       const first = await stats();
-      assert.deepEqual(Object.keys(first).sort(), [corp, dead, good].sort());
+      assert.deepEqual(Object.keys(first).sort(), [corp, dead, good, relay].sort());
+      assert.deepEqual(pick(first[relay]), { sent: 1, delivered: 0, hard: 1, soft: 0, opened: 0, since: 1, classes: { user_unknown: 1 } });
       assert.deepEqual(pick(first[good]), { sent: 3, delivered: 2, hard: 0, soft: 1, opened: 1, since: 0, classes: { mailbox_full: 1 } });
       assert.deepEqual(pick(first[dead]), { sent: 2, delivered: 0, hard: 2, soft: 0, opened: 0, since: 2, classes: { user_unknown: 2 } });
       assert.deepEqual(pick(first[corp]), { sent: 2, delivered: 0, hard: 0, soft: 1, opened: 0, since: 1, classes: { blocklist: 1, validation: 1 } });
