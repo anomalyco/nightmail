@@ -77,7 +77,7 @@ export function compareTvPages(): Plugin {
       ].map((page, i) => ({ title: real.title, description: real.description, canonical: canonicalOrigin + real.path, card: real.card, data: withQuestions(structuredData(real), pages.questions(c), i === 3 ? c : null), ...page }))
       const checked = pages.guideChecked()
       made.push({ file: 'compare.html', element: createElement(pages.GuidePage), set: true, title: 'Email API alternatives and pricing compared',
-        description: `${productName} beside ${CHANNELS.length} services: ${listOf(GROUPS.map(group => group.title.toLowerCase()))}. A month's price on each, from its own pricing page, read ${checked}.`,
+        description: `${productName} beside ${listOf(GROUPS.map(group => `${CHANNELS.filter(channel => channel.comparison.focus === group.focus).length} ${group.noun}`))}: a month's price on each, from its own pricing page, read ${checked}.`,
         canonical: canonicalOrigin + '/compare', card: { file: 'og.png', alt: '' }, data: guideData(checked), markdown: 'compare.md' })
       made.push({ file: 'compare/resend-tv2-card.html', element: createElement(pages.VerdictCard, { c }), set: false, title: real.title, description: real.description, canonical: canonicalOrigin + real.path, card: real.card, data: null })
 

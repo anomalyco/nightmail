@@ -303,7 +303,7 @@ export function GuidePage() {
       <Stage c={resend} screen={<GuideScreen />} />
       <div className="ctv-col ctv-col-wide">
         <h1 className="ctv-h1">Nightmail compared with {CHANNELS.length} email services</h1>
-        <p className="ctv-lead">Each channel is one comparison: what a month costs on Nightmail and on the other service, from that service’s own pricing page, last read {guideChecked()}. {listOf(GROUPS.map(group => `${group.title.toLowerCase()} (${CHANNELS.filter(channel => channel.comparison.focus === group.focus).length})`))}.</p>
+        <p className="ctv-lead">Each channel is one comparison: what a month costs on Nightmail and on the other service, from that service’s own pricing page, last read {guideChecked()}. In it: {listOf(GROUPS.map(group => `${CHANNELS.filter(channel => channel.comparison.focus === group.focus).length} ${group.noun}`))}.</p>
         <section className="ctv-guide" id="ranked" aria-labelledby="ranked-title">
           <h2 id="ranked-title">Sending APIs by price at {formatCount(ranked.columns[1]!)} emails a month</h2>
           <table className="ctv-grid">

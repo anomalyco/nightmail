@@ -10,14 +10,14 @@ import { claim, dayOf, formatCount, money, nightmailBill, theirPrice, UNITS, typ
  *  homepage's tape compares those), each group in the order compare/index.ts lists it. The channels are numbered in this
  *  order. */
 export const GROUPS = [
-  { focus: 'developer', id: 'developer', title: 'Developer email APIs' },
-  { focus: 'newsletter', id: 'newsletter', title: 'Newsletter and marketing' },
-  { focus: 'agents', id: 'agents', title: 'Agent inboxes' },
+  { focus: 'developer', id: 'developer', title: 'Developer email APIs', noun: 'developer email APIs' },
+  { focus: 'newsletter', id: 'newsletter', title: 'Newsletter and marketing', noun: 'newsletter and marketing services' },
+  { focus: 'agents', id: 'agents', title: 'Agent inboxes', noun: 'services for agent inboxes' },
 ] as const
 export const CHANNELS = GROUPS.flatMap(group => COMPARISONS.filter(c => c.focus === group.focus)).map((comparison, i) => ({ n: i + 1, comparison }))
 export const groupOf = (c: Comparison) => GROUPS.find(group => group.focus === c.focus)!
 /** The other comparisons of a comparison's group, in channel order. */
-export const neighbours = (c: Comparison) => CHANNELS.filter(channel => channel.comparison.focus === c.focus && channel.comparison !== c)
+export const neighbours = (c: Comparison) => CHANNELS.filter(channel => channel.comparison.focus === c.focus && channel.comparison.slug !== c.slug)
 export type Channel = (typeof CHANNELS)[number]
 export const channelOf = (slug: string) => CHANNELS.find(channel => channel.comparison.slug === slug)!
 /** "CH 01" */

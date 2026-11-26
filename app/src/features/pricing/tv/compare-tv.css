@@ -180,7 +180,7 @@
 .ctv-end { box-sizing: border-box; max-width: calc(720px + 48px); margin: 72px auto 0; padding: 12px 24px calc(28px + env(safe-area-inset-bottom, 0px)); }
 .ctv[data-direction='guide'] .ctv-end { max-width: calc(880px + 48px); }
 .ctv-end nav { display: flex; flex-wrap: wrap; gap: 0 20px; padding-top: 12px; border-top: 1px solid var(--line); }
-.ctv-end a { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; color: var(--faint); font-size: 13px; }
+.ctv-end a { display: inline-flex; align-items: center; min-width: 44px; min-height: 44px; color: var(--faint); font-size: 13px; }
 
 @media (max-width: 640px) {
   /* The homepage's phone layout fills the screen down to the terms; here the words follow the set instead. */
