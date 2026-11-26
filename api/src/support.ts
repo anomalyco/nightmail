@@ -6,6 +6,7 @@ import { AuditEntry, AuditFilters, auditContext, auditInsert, customerTrail, ope
 import { supportRead, withRedactedReply } from './deliverability.js';
 import { GOOD_STANDING, limitRequest, type Step } from './standing-model.js';
 import { cached, registerSupportDeliverability } from './support-deliverability.js';
+import { registerSupportReceiving } from './support-receiving.js';
 import { ERROR_CODE, groupLines, LOG_RETENTION_DAYS, LOG_ROWS, LogsUnavailable, requestLines, ROUTE_TEMPLATE } from './support-logs.js';
 import { CONVERSATION_ID, keyId, signSupportToken } from './support-platform.js';
 import { ceilingFor, routedOnly, sectionIds } from './support-conversations.js';
@@ -32,11 +33,12 @@ import { productName } from './brand.js';
 /** Requests per minute per support conversation. */
 export const SUPPORT_RATE_PER_MINUTE = 120;
 /**
- * The deliverability reads (src/support-deliverability.ts) aggregate up to 30 days of mail, and the request reads ask
- * Workers Logs (src/support-logs.ts): each costs 5 of the 120.
+ * The deliverability reads (src/support-deliverability.ts) aggregate up to 30 days of mail, the routes read tallies 7 days of
+ * deliveries per destination (src/support-receiving.ts), and the request reads ask Workers Logs (src/support-logs.ts): each
+ * costs 5 of the 120.
  */
 export const SUPPORT_EXPENSIVE_WEIGHT = 5;
-const EXPENSIVE = /^\/v1\/support\/(?:deliverability\/[^/]+|screen|campaigns(?:\/[^/]+(?:\/lint)?)?|audience\/health|domains\/[^/]+\/health|emails\/[^/]+\/lint|requests(?:\/[^/]+)?)$/;
+const EXPENSIVE = /^\/v1\/support\/(?:deliverability\/[^/]+|screen|campaigns(?:\/[^/]+(?:\/lint)?)?|audience\/health|domains\/[^/]+\/health|emails\/[^/]+\/lint|requests(?:\/[^/]+)?|receiving\/routes)$/;
 export const supportWeight = (path: string) => EXPENSIVE.test(path) ? SUPPORT_EXPENSIVE_WEIGHT : 1;
 const supportRequired = () => new ApiError(403, 'SUPPORT_GRANT_REQUIRED', `This area is for ${productName} support, for an open support conversation.`);
 
@@ -87,8 +89,8 @@ export const operatorGate: MiddlewareHandler<AppEnv> = async (c, next) => {
  * dashboard counterpart admits (SUPPORT_CEILINGS), charges the conversation's minute budget (supportWeight: 5 for an
  * aggregate read, else 1), writes the internal support.read row and, the first time the conversation reads a workspace,
  * the customer-visible "support.view". A route without a ceiling is refused, and an email conversation is refused a
- * chat's own routes (changes, notes, billing, the activity trail, request logs and webhooks): it reads only the account's
- * status, domains and sending, and narrows its workspace.
+ * chat's own routes (changes, notes, billing, the activity trail, request logs, webhooks and receiving configuration): it
+ * reads only the account's status, domains and sending, and narrows its workspace.
  */
 export const supportGate: MiddlewareHandler<AppEnv> = async (c, next) => {
   const conversationId = c.env.supportConversation;
@@ -127,7 +129,7 @@ export const supportGate: MiddlewareHandler<AppEnv> = async (c, next) => {
   if (!conv) {
     // Nothing was charged or logged: say why when it is an email conversation asking for a chat's route.
     if (ceiling.chatOnly && (await c.env.db.execute(sql`SELECT FROM support_conversations WHERE id = ${conversationId} AND channel = 'email' AND status <> 'closed' AND user_id IS NOT NULL`)).rows.length)
-      throw new ApiError(403, 'SUPPORT_CHAT_ONLY', 'An email support conversation reads only the account’s status, domains and sending, and narrows its workspace: changes, notes, billing, the activity trail, request logs and webhooks are a chat’s.');
+      throw new ApiError(403, 'SUPPORT_CHAT_ONLY', 'An email support conversation reads only the account’s status, domains and sending, and narrows its workspace: changes, notes, billing, the activity trail, request logs, webhooks and receiving configuration are a chat’s.');
     throw supportRequired();
   }
   if (conv.used > limit) { c.header('Retry-After', '60'); throw new ApiError(429, 'REQUEST_RATE_LIMITED', `A support conversation may make ${limit} requests a minute. Retry after the window resets.`, undefined, true); }
@@ -572,4 +574,5 @@ export function registerSupport(app: App) {
         : `Nothing recorded: the request changed nothing${logsAvailable ? ` and is not in the last ${LOG_RETENTION_DAYS} days of request logs` : ''}, belongs to another account, or is older than the retention window. Ask for the time, the route and the error code shown.` }, 200);
   });
   registerSupportDeliverability(app, meta, WorkspaceFilter);
+  registerSupportReceiving(app, meta, WorkspaceFilter);
 }

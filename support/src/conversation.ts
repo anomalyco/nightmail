@@ -11,6 +11,7 @@ import { cleanImage, ImageRejected, IMAGE_TYPES, MAX_IMAGE_BYTES } from './image
 import { customerBlock, firstName, notesBlock, oneLine, type Customer, type Note } from './agent/context.js';
 import type { Harness, HarnessEvent, TurnResult } from './agent/harness.js';
 import { createHarness, MODEL, promptFragments } from './agent/opencode.js';
+import { searchDocs } from './agent/docs.js';
 import { actionTitle, NOTE_MAX, ToolFailure, toolNames, type ActionProposal, type TicketInput, type ToolHost } from './agent/tools.js';
 import { fenced, toolResult, untrusted } from './agent/projection.js';
 import { addresses, hostedDomain, productName } from '../../api/src/brand.js';
@@ -73,9 +74,9 @@ const helpLine = (origin: string) => `For anything about your account, sign in t
 /** What the email model is told when it reaches for an account tool in a general (unverified) turn. */
 const GENERAL_ONLY = `Email answers are general: you can’t see or change any ${productName} account from email. Answer from what you know about ${productName}; the reply ends with a line (added for you) telling them to sign in and press Help for anything about their account.`;
 /** What any email turn is told when it reaches for a change, a note or content access. */
-const EMAIL_READS_ONLY = `By email you read only the account's status, domains and sending. Billing, API keys, the activity log, request logs and webhooks are answered in Help in the dashboard, and so is any change: tell them to sign in to ${productName}, open Help and ask there (they confirm a change on the card). Notes and message content are for a chat too.`;
-/** The only /v1/support reads an email conversation makes: status, domains, standing and aggregate deliverability summaries (Nightmail refuses the rest for email too). */
-const EMAIL_ROUTES = /^\/v1\/support\/(?:context|workspaces|domains|domains\/[^/]+\/health|standing|deliverability\/(?:metrics|bounces)|scope)$/;
+const EMAIL_READS_ONLY = `By email you read only the account's status, domains and sending. Billing, API keys, the activity log, request logs, webhooks and receiving routes are answered in Help in the dashboard, and so is any change: tell them to sign in to ${productName}, open Help and ask there (they confirm a change on the card). Notes and message content are for a chat too.`;
+/** The only /v1/support reads an email conversation makes: status, domains and receiving hosts, standing and aggregate deliverability summaries (Nightmail refuses the rest for email too). */
+const EMAIL_ROUTES = /^\/v1\/support\/(?:context|workspaces|domains|domains\/[^/]+\/health|receiving\/hosts|standing|deliverability\/(?:metrics|bounces)|scope)$/;
 const ACCESS_CHANGED = 'This conversation ended because your access to a workspace changed. Open Help to start a new one.';
 /** A chat from before the stamp: it ends at its next message. */
 const LEGACY_ENDED = 'This conversation has ended. Open Help to start a new one.';
@@ -1400,6 +1401,8 @@ export class SupportConversation extends DurableObject<Env> {
         if (reply.status === 200) return toolResult(reply.body, this.hidden());
         return refusedChange(reply, 'Use a domain ID from list_domains.');
       },
+      // Public text bundled with this Worker: no stamp, so a general email turn may search it too.
+      searchDocs: (query: string) => searchDocs(query),
     };
   }
 

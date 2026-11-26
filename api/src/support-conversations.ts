@@ -30,7 +30,8 @@ type Ceiling = { method: 'GET' | 'POST'; path: string; roles: SupportRole[]; cou
  * decides them. A role reads a workspace here exactly when its own session may call the counterpart there. A route
  * missing here is refused to every conversation. `views: false`: reading it names no workspace's data, so it writes no
  * customer-visible "support viewed" row. `chatOnly`: an email conversation is refused (it proposes nothing, keeps no notes, and
- * reads only the account's status, domains and sending: never billing, the activity trail, request logs or webhooks).
+ * reads only the account's status, domains and sending: never billing, the activity trail, request logs, webhooks or
+ * receiving configuration).
  */
 export const SUPPORT_CEILINGS: Ceiling[] = [
   // Its domains, webhook failures and activity follow their own counterparts (CONTEXT_SECTIONS).
@@ -63,6 +64,14 @@ export const SUPPORT_CEILINGS: Ceiling[] = [
   { method: 'GET', path: '/v1/support/emails/{id}/lint', roles: EVERYONE, counterpart: 'GET /v1/emails', chatOnly: true },
   { method: 'GET', path: '/v1/support/campaigns/{id}/lint', roles: EVERYONE, counterpart: 'GET /v1/campaigns', chatOnly: true },
   { method: 'GET', path: '/v1/support/audience/health', roles: EVERYONE, counterpart: 'GET /v1/lists', chatOnly: true },
+  // Receiving (src/support-receiving.ts) is an owner's or admin's in the dashboard. Its hosts are a domain's status, which
+  // email reads too; routes, endpoints and held addresses are receiving configuration, a chat's. Receiving domains and
+  // releasing a held address are behind mailbox.ts admin(); GET /v1/inbound/policy is that same gate without the region
+  // settings the domains list also needs, so it stands in for both.
+  { method: 'GET', path: '/v1/support/receiving/hosts', roles: MANAGERS, counterpart: 'GET /v1/inbound/policy' },
+  { method: 'GET', path: '/v1/support/receiving/routes', roles: MANAGERS, counterpart: 'GET /v1/routing', chatOnly: true },
+  { method: 'GET', path: '/v1/support/receiving/retired', roles: MANAGERS, counterpart: 'GET /v1/inbound/policy', chatOnly: true },
+  { method: 'GET', path: '/v1/support/receiving/forwards', roles: MANAGERS, counterpart: 'GET /v1/endpoints', chatOnly: true },
   { method: 'GET', path: '/v1/support/scope', roles: EVERYONE, counterpart: 'GET /v1/me', views: false },
   { method: 'POST', path: '/v1/support/scope', roles: EVERYONE, counterpart: 'GET /v1/me', views: false },
   // Notes are the person's own (src/support-notes.ts), filtered by their memberships, never a workspace's data.

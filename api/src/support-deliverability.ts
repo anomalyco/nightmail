@@ -13,7 +13,7 @@ import { productName } from './brand.js';
 // (hourly at most 72 hours); at most 20 groups plus other and 50 rows. Recipients appear as domains and providers only,
 // diagnostics are redacted, and message content only in the workspace whose content the customer shared.
 
-type Meta = (operationId: string, description: string) => { method: 'get'; operationId: string; tags: string[]; security: Record<string, string[]>[]; description: string };
+export type SupportMeta = (operationId: string, description: string) => { method: 'get'; operationId: string; tags: string[]; security: Record<string, string[]>[]; description: string };
 const DAY = d.DAY_MS, HOUR = d.HOUR_MS;
 
 /** The one workspace an aggregate reads: the workspaceId filter, or the conversation's only workspace. */
@@ -23,7 +23,8 @@ function oneWorkspace(c: Ctx) {
   if (list.length !== 1) throw new ApiError(422, 'WORKSPACE_REQUIRED', `This conversation covers ${list.length} workspaces; aggregates read one. Pass workspaceId (see GET /v1/support/workspaces).`, 'workspaceId');
   return { workspaceId: list[0]!.id };
 }
-const narrowed = (c: Ctx) => { const scope = c.get('support')!, filter = c.req.query('workspaceId'); return scope.workspaces.filter(w => !filter || w.id === filter).map(w => w.id); };
+/** The conversation's workspaces this read covers: all of them in scope (supportGate filtered them by the route's roles), or the workspaceId filter's one. */
+export const narrowed = (c: Ctx) => { const scope = c.get('support')!, filter = c.req.query('workspaceId'); return scope.workspaces.filter(w => !filter || w.id === filter).map(w => w.id); };
 const ids = (list: string[]) => sql`${sql.param(list)}::text[]`;
 /**
  * 60 seconds per (workspace, route, parameters) in the dashboard cache; the result says when it was computed. A read by
@@ -45,7 +46,7 @@ function windowOf(q: { since?: string; until?: string }, granularity: 'day' | 'h
 const Domain = z.string().trim().toLowerCase().max(253).regex(/^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9-]{2,63}$/, 'A domain name such as example.com.');
 const Since = (days: number) => ({ since: z.iso.datetime().optional().describe(`Window start (default: ${days} days before until). At most 30 days back.`), until: z.iso.datetime().optional().describe('Window end (default: now).') });
 
-export function registerSupportDeliverability(app: App, meta: Meta, WorkspaceFilter: z.ZodObject<{ workspaceId: z.ZodOptional<z.ZodString> }>) {
+export function registerSupportDeliverability(app: App, meta: SupportMeta, WorkspaceFilter: z.ZodObject<{ workspaceId: z.ZodOptional<z.ZodString> }>) {
   const Severity = z.enum(['info', 'notice', 'serious', 'critical']);
   const Finding = z.object({ severity: Severity, code: z.string(), message: z.string().describe('Plain words with the numbers; the usual cause and fix.'), scope: z.string().nullable().describe('The provider, domain, campaign or list it is about, or null for the whole read.'),
     evidence: z.record(z.string(), z.number()).describe('The numbers behind it: counts, rates as fractions, thresholds.') }).openapi('SupportFinding');

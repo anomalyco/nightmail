@@ -49,6 +49,7 @@ export function resolveJobHandler(type: string): Promise<JobHandler | undefined>
     if (type.startsWith('standing.')) return (await import('./standing.js')).standingJobs[type];
     if (type === 'audience.newsletterReaders') return (await import('./newsletters.js')).newsletterJobs[type];
     if (type === 'hygiene.resolveDomains') return (await import('./list-hygiene.js')).resolveDomainsJob;
+    if (type === 'audience.listRisk') return (await import('./list-risk.js')).listRiskJob;
     if (type.startsWith('billing.')) return (await import('./billing/jobs.js')).billingJobs[type];
     if (type === 'account.notify') return (await import('./account-notices.js')).accountNoticeJobs[type];
     if (type === 'logs.facetFold') return (await import('./log-facet-fold.js')).logFacetJob;

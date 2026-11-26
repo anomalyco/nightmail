@@ -26,8 +26,12 @@ export const untrusted = (text: string, source?: 'chat' | 'email') => `<untruste
 
 /** Fields support routes return that are about Nightmail's side of the conversation, never the customer's data. */
 const DROP = new Set(['grant', 'operatorId', 'operator', 'ticketRef', 'token', 'tokenHash', 'internal', 'ipNetwork', 'userAgent', 'actorLabel', 'retainUntil', 'watch', 'watchFlag', 'handoffId', 'via']);
-/** Text written by other people (recipients, mail servers, the customer's own content): data, never instructions. */
-const UNTRUSTED = new Set(['subject', 'diagnostic', 'diagnosticCode', 'text', 'html', 'snippet', 'lastError', 'pauseReason', 'reason', 'message', 'name', 'previewText', 'replyText', 'body']);
+/**
+ * Text written by other people (recipients, mail servers, the customer's own content such as a route's pattern and note,
+ * the docs search_docs quotes): data, never instructions.
+ */
+const UNTRUSTED = new Set(['subject', 'diagnostic', 'diagnosticCode', 'text', 'html', 'snippet', 'lastError', 'pauseReason', 'reason', 'message', 'name', 'previewText', 'replyText', 'body',
+  'note', 'match', 'page', 'section']);
 /**
  * Internal IDs the model never needs (a conversation names its person itself), removed from every tool result and the
  * prefetched summary: people's, actors' and support's. Workspace, domain, campaign, email, delivery, webhook, request and

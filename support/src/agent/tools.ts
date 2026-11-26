@@ -39,6 +39,8 @@ export interface ToolHost {
   propose(proposal: ActionProposal): Promise<string>;
   /** Chat only, owners and admins: re-checks a domain's DNS now (no confirmation: it changes only the stored status). */
   recheckDomain(domainId: string): Promise<string>;
+  /** Every turn: the published docs' sections that best match, each with its link (agent/docs.ts). Public text: no account. */
+  searchDocs(query: string): unknown;
 }
 /** The longest note Nightmail keeps (NOTE_MAX_LENGTH in api/src/support-notes.ts). */
 export const NOTE_MAX = 1000;
@@ -198,6 +200,17 @@ export const TOOLS: ToolSpec[] = [
   { name: 'audience_health', description: 'List hygiene per list or workspace: consent mix, suppressions by reason, engagement recency and stale share, role and typo addresses, provider mix, and recent imports with their first-send bounce and complaint rates. No addresses. When sampled is true on a view, present its counts and shares explicitly as estimates from sampleSize contacts, never as exact totals.',
     params: { workspaceId: workspaceParam, listId: { type: 'string', description: 'Only this list', optional: true, max: 120, pattern: ID } },
     label: fixed('Checking your audience’s health…', 'Checked your audience’s health'), execute: read((a, h) => `/v1/support/audience/health${query(a, h, ['listId'])}`) },
+  { name: 'receiving_hosts', description: 'Receiving domains and their hosts: each host’s state (pending until its MX is seen, active, mixed beside another provider, lost when its MX disappeared, failed, removed), the MX record it needs, its last MX check and when it ran, any DNS issue, its catch-all and how many addresses it has.',
+    params: { workspaceId: workspaceParam }, label: fixed('Checking your receiving domains…', 'Checked your receiving domains'), execute: read((a, h) => `/v1/support/receiving/hosts${query(a, h)}`) },
+  { name: 'receiving_routes', description: 'Where received mail goes: the receiving routes (a recipient pattern to inboxes, webhooks and forwards, kept or dropped) and each destination’s results: an endpoint’s deliveries in the last 7 days by status and its latest failure, an inbox’s stored and held mail.',
+    params: { workspaceId: workspaceParam }, label: fixed('Checking where your received mail goes…', 'Checked where your received mail goes'), execute: read((a, h) => `/v1/support/receiving/routes${query(a, h)}`) },
+  { name: 'held_addresses', description: 'Addresses of deleted inboxes that are still held, so creating them again answers 409 ADDRESS_RETIRED, and when each frees.',
+    params: { workspaceId: workspaceParam }, label: fixed('Checking addresses held after a deletion…', 'Checked addresses held after a deletion'), execute: read((a, h) => `/v1/support/receiving/retired${query(a, h)}`) },
+  { name: 'pending_verifications', description: `Verification emails ${productName} sent that nobody has confirmed yet: forwards waiting for their recipient (from which address and when it went, whether its 24-hour link is open, lapsed or was declined, and the recipient’s domain). A domain is verified by DNS, never by email: use list_domains or domain_health for that.`,
+    params: { workspaceId: workspaceParam }, label: fixed('Checking verification emails still waiting…', 'Checked verification emails still waiting'), execute: read((a, h) => `/v1/support/receiving/forwards${query(a, h)}`) },
+  { name: 'search_docs', description: `Search ${productName}’s published docs (sending limits and the sender score, receiving and routing, rules and endpoints, agent inboxes, MCP, list hygiene, the SDK) for how something works, a limit, a setting or a dashboard path. Returns up to 3 short excerpts, each with its link: cite the link you used. Search instead of guessing; when nothing matches, say you don’t know.`,
+    params: { query: { type: 'string', description: 'A few keywords, e.g. "catch-all addresses per hour" or "release marketing"', max: 200 } },
+    label: fixed('Searching the docs…', 'Searched the docs'), execute: async (a, h) => toolResult(h.searchDocs(String(a.query ?? '')), h.hidden()) },
   { name: 'choose_workspace', description: 'When the customer has several workspaces and you need account data, call this with the workspace they named (an ID from the verified list in <customer>). Narrows access to that one workspace.',
     params: { workspaceId: { type: 'string', description: 'A workspace ID from <customer>', max: 100, pattern: ID } },
     label: fixed('Switching to that workspace…', 'Switched workspace'), execute: (a, h) => h.chooseWorkspace(String(a.workspaceId)) },
@@ -251,23 +264,25 @@ export const TOOL_NAMES = TOOLS.map(t => t.name);
  * api/src/support-conversations.ts), and the changes only they may make: offered only for a workspace in scope with one
  * of those roles.
  */
-export const MANAGER_TOOLS: ReadonlySet<string> = new Set(['list_domains', 'domain_health', 'list_webhook_deliveries', 'get_billing', 'get_audit', 'api_errors', 'explain_request', 'propose_action', 'recheck_domain']);
-/** An unverified email reads no account: its turns answer through reply and can file a ticket, nothing else. */
-const EMAIL_TOOLS: ReadonlySet<string> = new Set(['reply', 'file_ticket']);
+export const MANAGER_TOOLS: ReadonlySet<string> = new Set(['list_domains', 'domain_health', 'list_webhook_deliveries', 'get_billing', 'get_audit', 'api_errors', 'explain_request', 'propose_action', 'recheck_domain',
+  'receiving_hosts', 'receiving_routes', 'held_addresses', 'pending_verifications']);
+/** An unverified email reads no account: its turns answer through reply, can search the public docs and file a ticket, nothing else. */
+const EMAIL_TOOLS: ReadonlySet<string> = new Set(['reply', 'search_docs', 'file_ticket']);
 /**
- * Everything a verified email may call: account status, domains, standing and aggregate deliverability summaries (by role),
- * workspace choice, reply and file_ticket. Individual sent-mail metadata, delivery events, campaigns, screens, audience
- * data, billing, the activity trail, request logs, webhook deliveries, changes, notes and content access require the
- * signed-in dashboard Help chat (and Nightmail enforces the same boundary).
+ * Everything a verified email may call: account status, domains and receiving hosts, standing and aggregate deliverability
+ * summaries (by role), the docs, workspace choice, reply and file_ticket. Individual sent-mail metadata, delivery events,
+ * campaigns, screens, audience data, billing, the activity trail, request logs, webhook deliveries, receiving routes,
+ * held addresses and confirmations, changes, notes and content access require the signed-in dashboard Help chat (and
+ * Nightmail enforces the same boundary).
  */
-export const EMAIL_TOOLS_VERIFIED: ReadonlySet<string> = new Set(['account_context', 'list_workspaces', 'list_domains', 'domain_health', 'get_standing',
-  'delivery_metrics', 'bounce_reasons', 'choose_workspace', 'reply', 'file_ticket']);
+export const EMAIL_TOOLS_VERIFIED: ReadonlySet<string> = new Set(['account_context', 'list_workspaces', 'list_domains', 'domain_health', 'receiving_hosts', 'get_standing',
+  'delivery_metrics', 'bounce_reasons', 'search_docs', 'choose_workspace', 'reply', 'file_ticket']);
 export type Turn = { channel: 'chat'; manager: boolean } | { channel: 'email'; verified?: false } | { channel: 'email'; verified: true; manager: boolean };
 /**
- * The tools one turn may call. A chat's: account tools by role (the owner/admin ones only for a manager), workspace
- * choice, content access, tickets, add_note and the changes, never reply (chat text streams). A verified email's: the
- * reads of EMAIL_TOOLS_VERIFIED by role, workspace choice, reply and file_ticket. Any other email's: reply and file_ticket
- * only. OpenCode's session permissions offer exactly these; the plugin refuses any other call.
+ * The tools one turn may call. A chat's: account tools by role (the owner/admin ones only for a manager), the docs,
+ * workspace choice, content access, tickets, add_note and the changes, never reply (chat text streams). A verified email's:
+ * the reads of EMAIL_TOOLS_VERIFIED by role, the docs, workspace choice, reply and file_ticket. Any other email's: reply,
+ * the docs and file_ticket only. OpenCode's session permissions offer exactly these; the plugin refuses any other call.
  */
 export function toolNames(turn: Turn): string[] {
   if (turn.channel === 'email' && !turn.verified) return TOOL_NAMES.filter(name => EMAIL_TOOLS.has(name));

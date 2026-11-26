@@ -9732,6 +9732,88 @@ describe('Hosted MCP OAuth and tools', () => {
         assert.deepEqual(ok(await send('GET', `/v1/support-actions/${pause.id}`, session(boss))).parts, pause.parts);
         ok(reply(await platform.closeConversation(id)));
       });
+
+      await t.test('17 receiving reads: hosts, routes and their deliveries, held addresses and waiting forwards, of an owner’s or admin’s own workspaces only; never another workspace’s, never a member’s; email reads only the hosts', async () => {
+        const { encrypt } = await import('./src/operations.js');
+        // Harbor has an owner, an admin and a member; Pier, another customer, has the same kinds of rows, which Harbor never reads.
+        const keeper = await sessionFixture(t), helper = await sessionFixture(t), viewer = await sessionFixture(t), stranger = await sessionFixture(t), harbor = unique('harbor-ws'), pier = unique('pier-ws');
+        await db.query('INSERT INTO workspaces(id,name,slug) VALUES ($1,$1,$1),($2,$2,$2)', [harbor, pier]);
+        await db.query(`INSERT INTO workspace_members(id,workspace_id,user_id,role) VALUES ($1,$2,$3,'owner'),($4,$2,$5,'admin'),($6,$2,$7,'member'),($8,$9,$10,'owner')`,
+          [unique('mem'), harbor, keeper.userId, unique('mem'), helper.userId, unique('mem'), viewer.userId, unique('mem'), pier, stranger.userId]);
+        await db.query("DELETE FROM workspace_members WHERE workspace_id='default' AND user_id=ANY($1)", [[keeper, helper, viewer, stranger].map(f => f.userId)]);
+        // Harbor receives on its domain and on a second host whose MX went missing an hour ago; Pier on its own domain.
+        const harborDomain = `harbor-${hex().slice(0, 10)}.example`, pierDomain = `pier-${hex().slice(0, 10)}.example`, harborDom = unique('mdom'), lostHost = unique('mdom'), pierDom = unique('mdom');
+        const checkedAt = new Date(Date.now() - 600_000).toISOString();
+        const missing = { state: 'missing', expected: { type: 'MX', name: `in.${harborDomain}`, value: `inbound-smtp.${REGION}.amazonaws.com`, priority: 10 }, records: [], providers: [], message: 'No MX record.', checkedAt };
+        await db.query("INSERT INTO mailbox_domains(id, workspace_id, domain_id, name, region, status, checked_at) VALUES ($1, $2, $1, $3, $4, 'active', now()), ($5, $6, $5, $7, $4, 'active', now())", [harborDom, harbor, harborDomain, REGION, pierDom, pier, pierDomain]);
+        await db.query("INSERT INTO mailbox_domains(id, workspace_id, domain_id, parent_id, name, receiving_host, region, status, mx, checked_at, lost_since) VALUES ($1, $2, $3, $3, $4, $4, $5, 'active', $6, $7, now() - interval '1 hour')",
+          [lostHost, harbor, harborDom, `in.${harborDomain}`, REGION, JSON.stringify(missing), checkedAt]);
+        // Harbor's help address, and an inbox deleted ten minutes ago whose mail isn't erased yet: its address is still held, as
+        // is one retired for 20 more days (a lapsed one is free). Pier has a retired address of its own.
+        const desk = `mbx_${hex().slice(0, 32)}`, gone = `mbx_${hex().slice(0, 32)}`, pierBox = `mbx_${hex().slice(0, 32)}`;
+        await db.query('INSERT INTO mailboxes(id, workspace_id, domain_id, address) VALUES ($1, $2, $3, $4), ($5, $6, $7, $8)', [desk, harbor, harborDom, `help@${harborDomain}`, pierBox, pier, pierDom, `help@${pierDomain}`]);
+        await db.query("INSERT INTO mailboxes(id, workspace_id, domain_id, address, kind, retention_mode, expires_at, delete_after) VALUES ($1, $2, $3, $4, 'inbox', 'ephemeral', now() - interval '1 hour', now() - interval '10 minutes')", [gone, harbor, harborDom, `bye@${harborDomain}`]);
+        await db.query("INSERT INTO mailbox_addresses(workspace_id, address, mailbox_id, kind) VALUES ($1, $2, $3, 'primary')", [harbor, `bye@${harborDomain}`, gone]);
+        await db.query("INSERT INTO mail_retired_addresses VALUES ($1, $2, now() + interval '20 days'), ($1, $3, now() - interval '1 day'), ($4, $5, now() + interval '5 days')", [harbor, `old@${harborDomain}`, `lapsed@${harborDomain}`, pier, `theirs@${pierDomain}`]);
+        // A webhook each, with deliveries, and a forward each still waiting for its recipient.
+        const hook = `mwh_${hex().slice(0, 24)}`, pierHook = `mwh_${hex().slice(0, 24)}`, forward = `con_${hex().slice(0, 24)}`, pierForward = `con_${hex().slice(0, 24)}`;
+        await db.query("INSERT INTO mailbox_webhooks(id, workspace_id, name, url, event_types, encrypted_secret) VALUES ($1, $2, 'helpdesk', 'https://example.com/hooks/harbor-secret-path', '[]', 'fixture'), ($3, $4, 'pier-desk', 'https://example.com/hooks/pier', '[]', 'fixture')", [hook, harbor, pierHook, pier]);
+        await db.query(`INSERT INTO mailbox_webhooks(id, workspace_id, type, key, encrypted_target, event_types, verified, expires_at, requested_at, request_from) VALUES
+          ($1, $2, 'forward', 'to-teammate', $3, '[]', false, now() + interval '20 hours', now() - interval '4 hours', $4), ($5, $6, 'forward', 'pier-forward', $7, '[]', false, now() + interval '1 hour', now(), $8)`,
+          [forward, harbor, await encrypt(runtime, 'teammate@example.net', `${harbor}:endpoint:${forward}`), `help@${harborDomain}`, pierForward, pier, await encrypt(runtime, 'friend@example.org', `${pier}:endpoint:${pierForward}`), `help@${pierDomain}`]);
+        for (const [status, code, why] of [['delivered', 200, null], ['delivered', 200, null], ['failed', 502, 'Bad gateway']] as const)
+          await db.query("INSERT INTO mailbox_webhook_deliveries(id, workspace_id, webhook_id, payload, status, attempt_count, last_status_code, last_error) VALUES ($1, $2, $3, '{}', $4, 1, $5, $6)", [unique('mwd'), harbor, hook, status, code, why]);
+        await db.query("INSERT INTO mailbox_webhook_deliveries(id, workspace_id, webhook_id, payload, status, attempt_count, last_status_code, last_error) VALUES ($1, $2, $3, '{}', 'failed', 3, 500, 'Pier is down')", [unique('mwd'), pier, pierHook]);
+        // Harbor's route delivers to its help address, its webhook and, by an ID only Pier has, to nothing Harbor can read.
+        await db.query("INSERT INTO mail_routes(id, workspace_id, key, domain_id, match, destinations, note) VALUES ($1, $2, 'help', $3, $4, $5, 'Typed by the owner'), ($6, $7, NULL, $8, $9, $10, 'Pier note')",
+          [unique('rte'), harbor, harborDom, `help@${harborDomain}`, JSON.stringify([desk, hook, pierHook]), unique('rte'), pier, pierDom, `help@${pierDomain}`, JSON.stringify([pierHook, pierForward])]);
+        const own = await chat(keeper, harbor), deputyChat = await chat(helper, harbor), memberChat = await chat(viewer, harbor), theirs = await chat(stranger, pier);
+        const get = async (id: string, path: string) => ok(await stamped(id, 'GET', path));
+
+        // Hosts, each with its state, the MX it needs and its last check.
+        const hosts = (await get(own, '/v1/support/receiving/hosts')).data as Json[];
+        assert.deepEqual(hosts.map(h => [h.workspaceId, h.domain, h.host, h.status]), [[harbor, harborDomain, harborDomain, 'active'], [harbor, harborDomain, `in.${harborDomain}`, 'lost']]);
+        const lost = hosts[1]!;
+        assert.deepEqual([lost.domainId, lost.lastCheckedAt, lost.mx.state, lost.mx.checkedAt, lost.expectedMx.name, Date.now() - Date.parse(lost.lostSince) > 3_000_000], [harborDom, checkedAt, 'missing', checkedAt, `in.${harborDomain}`, true]);
+        // Routes, and each destination's results: the webhook's last 7 days and its latest failure, never its URL; Pier's
+        // endpoint, though Harbor's route names it, is never read.
+        const routes = await get(own, '/v1/support/receiving/routes'), by = Object.fromEntries((routes.destinations as Json[]).map(d => [d.id, d]));
+        assert.deepEqual(routes.data.map((r: Json) => [r.workspaceId, r.key, r.match, r.note, r.to]), [[harbor, 'help', `help@${harborDomain}`, 'Typed by the owner', [desk, hook, pierHook]]]);
+        assert.deepEqual([by[desk].type, by[desk].name, by[desk].state, typeof by[desk].stored.messages], ['inbox', `help@${harborDomain}`, 'active', 'number']);
+        assert.deepEqual([by[hook].type, by[hook].name, by[hook].state, by[hook].last7d, by[hook].lastFailure.lastStatusCode, by[hook].lastFailure.lastError], ['webhook', 'helpdesk', 'ready', { delivered: 2, failed: 1, pending: 0, paused: 0 }, 502, 'Bad gateway']);
+        assert.deepEqual([by[pierHook].type, by[pierHook].workspaceId, by[pierHook].last7d, by[pierHook].name], ['unknown', '', null, null]);
+        // Held addresses (the deleted inbox's first, then by when each frees) and the forward waiting, its recipient's domain only.
+        assert.deepEqual((await get(own, '/v1/support/receiving/retired')).data.map((h: Json) => [h.workspaceId, h.address, h.state, h.deletedAt !== null, h.freesAt !== null]),
+          [[harbor, `bye@${harborDomain}`, 'deleting', true, false], [harbor, `old@${harborDomain}`, 'retired', false, true]]);
+        const forwards = (await get(own, '/v1/support/receiving/forwards')).data as Json[];
+        assert.deepEqual(forwards.map(f => [f.workspaceId, f.id, f.name, f.status, f.recipientDomain, f.requestedFrom]), [[harbor, forward, 'to-teammate', 'pending', 'example.net', `help@${harborDomain}`]]);
+        const all = JSON.stringify([hosts, routes, forwards]);
+        for (const never of ['harbor-secret-path', 'teammate@example.net', 'pier-desk', 'Pier is down', 'Pier note', pierDomain, pierForward, pier]) assert.ok(!all.includes(never), never);
+        // The routes read counts 5 of the conversation's 120 a minute; the others 1.
+        const used = async (id: string) => (await db.query('SELECT used FROM support_conversations WHERE id = $1', [id])).rows[0].used as number;
+        await db.query("UPDATE support_conversations SET used = 0, window_start = date_trunc('minute', now()) WHERE id = $1", [own]);
+        await get(own, '/v1/support/receiving/routes');
+        assert.equal(await used(own), 5);
+        await get(own, '/v1/support/receiving/forwards');
+        assert.equal(await used(own), 6);
+        assert.equal((await lastRead(own))?.route, '/v1/support/receiving/forwards', 'Each read is on the support trail.');
+        // An admin reads them too; a member reads none of them, and naming the workspace is 404, as is naming another one.
+        assert.deepEqual((await get(deputyChat, '/v1/support/receiving/forwards')).data.map((f: Json) => f.id), [forward]);
+        for (const path of ['hosts', 'routes', 'retired', 'forwards']) {
+          assert.deepEqual((await get(memberChat, `/v1/support/receiving/${path}`)).data, [], `A member reads no ${path}.`);
+          error(await stamped(memberChat, 'GET', `/v1/support/receiving/${path}?workspaceId=${harbor}`), 404);
+          error(await stamped(own, 'GET', `/v1/support/receiving/${path}?workspaceId=${pier}`), 404);
+        }
+        // Pier's own conversation reads only Pier.
+        const pierRead = JSON.stringify([await get(theirs, '/v1/support/receiving/hosts'), await get(theirs, '/v1/support/receiving/routes'), await get(theirs, '/v1/support/receiving/retired'), await get(theirs, '/v1/support/receiving/forwards')]);
+        assert.ok(pierRead.includes(pierDomain) && pierRead.includes(pierForward) && !pierRead.includes(harbor) && !pierRead.includes(harborDomain) && !pierRead.includes(forward), pierRead.slice(0, 400));
+        // By email, the owner reads the hosts; routes, held addresses and forwards are a chat's.
+        const mailed = await email(keeper.email);
+        assert.equal(mailed.body.mode, 'member');
+        assert.deepEqual((await get(mailed.id, `/v1/support/receiving/hosts?workspaceId=${harbor}`)).data.map((h: Json) => h.host), [harborDomain, `in.${harborDomain}`]);
+        for (const path of ['routes', 'retired', 'forwards']) error(await stamped(mailed.id, 'GET', `/v1/support/receiving/${path}?workspaceId=${harbor}`), 403, 'SUPPORT_CHAT_ONLY');
+        for (const done of [own, deputyChat, memberChat, theirs, mailed.id]) ok(reply(await platform.closeConversation(done)));
+      });
     });
   });
 
@@ -22167,6 +22249,46 @@ describe('List hygiene', () => {
       await db.query('DELETE FROM delivery_blocklist_daily WHERE workspace_id=$1', [ws]);
       await deliveryHistoryHourly(runtime, { budgetMs: 60_000 });
       assert.deepEqual(pick((await stats())[dead]), { sent: 4, delivered: 1, hard: 3, soft: 0, opened: 0, since: 1, classes: { user_unknown: 3 } });
+    });
+  });
+  test('list risk: a marketing campaign\'s launch records the measure of its list on its review (flagged contacts, contacts at domains this workspace\'s mail failed at, never mailed), banded only with the private lines, and the send review\'s verdict is unchanged', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local, jobs }) => {
+      const { bandListRisk, listRiskJob } = await import('./src/list-risk.js');
+      // The job the launch queued (the dispatcher's map names it: scripts/check-premerge.ts checks that).
+      const runListRisk = async () => { for (const job of (await jobs('audience.listRisk')).filter(j => j.status === 'pending')) { await listRiskJob(runtime, job.payload, { id: job.id, attempts: 1, workspaceId: job.workspace_id } as never); await db.query("UPDATE jobs SET status = 'done' WHERE id = $1", [job.id]); } };
+      const wid = runtime.config.workspaceId, tag = unique('lr').toLowerCase().replace(/[^a-z0-9]/g, ''), dead = tag + '-dead.example';
+      const list = ok(await local('POST', '/v1/lists', { name: unique('risk') }), 201);
+      const emails = [...[1, 2, 3].map(i => 'temp' + i + '-' + tag + '@fexpost.com'), ...[1, 2, 3, 4, 5].map(i => 'p' + i + '@' + dead), ...Array.from({ length: 12 }, (_, i) => 'fine' + i + '-' + tag + '@example.net')];
+      const imported = ok(await local('POST', '/v1/contact-imports', { csv: ['Email', ...emails].join('\n'), listId: list.id, mapping: { email: 'Email' } }), 201);
+      ok(await local('POST', '/v1/contact-imports/' + imported.id + '/commit', { consent: { status: 'subscribed', evidence: 'Synthetic opt-in.' } }));
+      // This workspace's mail to the dead domain mostly failed for good (src/delivery-history.ts writes this row).
+      await db.query('INSERT INTO delivery_domain_stats (workspace_id, domain, sent, hard_bounced, user_unknown, first_seen, last_seen) VALUES ($1, $2, 20, 15, 15, now(), now())', [wid, dead]);
+      const before = runtime.config.listRisk;
+      runtime.config.listRisk = { FLAGGED_SOURCE: { elevated: 0.05, high: 0.12 }, DEAD_DOMAINS: { elevated: 0.2, high: 0.4 }, NEVER_MAILED: { elevated: 0.7, high: 0.9 } };
+      try {
+        const campaign = ok(await local('POST', '/v1/campaigns', { name: 'Risk', from: 'sender@example.com', subject: 'News', html: '<p>Hello there.</p>', audience: { listId: list.id } }), 201);
+        const preview = ok(await local('GET', '/v1/campaigns/' + campaign.id + '/audience?readiness=true'));
+        const launched = ok(await local('POST', '/v1/campaigns/' + campaign.id + '/send', { revision: campaign.revision }), 202);
+        // The review's verdict is what it was before the measure existed: it reads nothing of it.
+        assert.equal(launched.readiness.verdict, preview.readiness.verdict);
+        await runListRisk();
+        const { rows: [review] } = await db.query('SELECT r.list_risk FROM sending_campaign_reviews r JOIN sending_campaigns c ON c.review_id = r.id WHERE c.id = $1', [campaign.id]);
+        const risk = review.list_risk;
+        assert.deepEqual([risk.sampled, risk.exact, risk.counts.flagged, risk.counts.byReason.disposable, risk.counts.deadDomains, risk.counts.neverMailed, risk.counts.proven, risk.lastSend], [20, true, 3, 3, 5, 20, 0, null]);
+        assert.deepEqual([risk.values.FLAGGED_SOURCE, risk.values.DEAD_DOMAINS, risk.values.NEVER_MAILED, risk.values.UNENGAGED], [0.15, 0.25, 1, undefined]);
+        // FLAGGED_SOURCE over its high line; NEVER_MAILED over its high line counts only as elevated.
+        assert.equal(risk.band, 'high');
+        assert.deepEqual(risk.factors, [{ code: 'FLAGGED_SOURCE', level: 'high' }, { code: 'DEAD_DOMAINS', level: 'elevated' }, { code: 'NEVER_MAILED', level: 'elevated' }]);
+        // Recorded once: the review keeps the measure as the list stood at launch.
+        const reviewId = (await db.query('SELECT review_id FROM sending_campaigns WHERE id = $1', [campaign.id])).rows[0].review_id;
+        await db.query("INSERT INTO jobs (id, workspace_id, type, payload) VALUES ($1, $2, 'audience.listRisk', $3)", [unique('job'), wid, JSON.stringify({ workspaceId: wid, campaignId: campaign.id, reviewId, listId: list.id })]);
+        await runListRisk();
+        assert.deepEqual((await db.query('SELECT r.list_risk FROM sending_campaign_reviews r JOIN sending_campaigns c ON c.review_id = r.id WHERE c.id = $1', [campaign.id])).rows[0].list_risk.at, risk.at);
+      } finally { runtime.config.listRisk = before; }
+      // Without the private lines: values, no band.
+      assert.deepEqual(bandListRisk({ FLAGGED_SOURCE: 0.5 }, null), { band: null, factors: [] });
+      assert.deepEqual(bandListRisk({ NEVER_MAILED: 1 }, { NEVER_MAILED: { elevated: 0.7, high: 0.9 } }), { band: 'elevated', factors: [{ code: 'NEVER_MAILED', level: 'elevated' }] });
+      assert.deepEqual(bandListRisk({ FLAGGED_SOURCE: 0.001 }, { FLAGGED_SOURCE: { elevated: 0.05 } }), { band: 'low', factors: [] });
     });
   });
 });
