@@ -6,6 +6,7 @@ import { render } from "../aws-shared/runtime-policies.mjs";
 import { byoBroker } from "./byo-broker.js";
 import { byoSetup } from "./byo-setup.js";
 import { mailGateway } from "./mail-gateway.js";
+import { productionMailLifecycle } from "./live-mail-retention.js";
 import {prepareDevMail,prepareProductionMail,prepareRuntime} from './nightmail-dev.js';
 import { deadLetterAlarm, receivingAlarm } from './receiving-alarm.js';
 import { bucketPolicy, deliveryPolicy, feedbackPolicy, inboundPolicy, lifecycleRules, POOL_STREAMS, poolEventDestination, publicAccessBlock, receiptRule, redrivePolicy } from '../../api/src/mail-controls.js';
@@ -131,9 +132,10 @@ new cf.R2BucketLifecycle("analytics-lifecycle", { accountId: cloudflareAccountId
 if (nightmailCloud) {
   for (const purpose of ['mail', 'attachments']) {
     const name = `${cloudPrefix}-${purpose}`;
-    new cf.R2Bucket(`nightmail-${purpose}`, { accountId: cloudflareAccountId, name, jurisdiction: 'default', storageClass: 'Standard' }, {
+    const liveBucket = new cf.R2Bucket(`nightmail-${purpose}`, { accountId: cloudflareAccountId, name, jurisdiction: 'default', storageClass: 'Standard' }, {
       ...adopt(`${cloudflareAccountId}/${name}/default`, cloudflare), ignoreChanges: ['location'],
     });
+    if (production && purpose === 'mail') productionMailLifecycle(cloudflareAccountId, liveBucket.name, cloudflare);
   }
 }
 
