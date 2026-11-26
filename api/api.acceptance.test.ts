@@ -22749,7 +22749,9 @@ describe('List hygiene', () => {
         // After a send: the flagged contacts it skipped are never proven, but they no longer count; two flagged contacts
         // that joined since do. The rest were mailed and delivered to.
         await db.query("UPDATE sending_campaigns SET simulated = false, state = 'sending', prepared = total, expanded = total WHERE id = $1", [campaign.id]);
-        // The fixture is one transaction, so now() doesn't move: the launch goes a minute back for the import below to come after it.
+        // The fixture is one transaction, so now() doesn't move: the first members go back two minutes and the launch one, for
+        // the import below to come after both.
+        await db.query("UPDATE audience_list_members SET created_at = created_at - interval '2 minutes' WHERE workspace_id = $1 AND list_id = $2", [wid, list.id]);
         await db.query("UPDATE sending_campaign_reviews SET created_at = created_at - interval '1 minute' WHERE id = $1", [reviewId]);
         await db.query("UPDATE audience_contacts SET mailed_count = 1, delivered_count = 1 WHERE workspace_id = $1 AND email LIKE 'fine%-' || $2 || '@example.net'", [wid, tag]);
         const more = ok(await local('POST', '/v1/contact-imports', { csv: ['Email', 'temp8-' + tag + '@fexpost.com', 'temp9-' + tag + '@fexpost.com'].join('\n'), listId: list.id, mapping: { email: 'Email' } }), 201);
