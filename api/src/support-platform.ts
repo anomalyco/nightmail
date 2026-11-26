@@ -6,8 +6,9 @@ import type { Config } from './core.js';
 // rotation, and is revoked by removing the binding or the entrypoint.
 //
 // It answers exactly what the support Worker needs and nothing else (PR #137 review L2): verify a handoff, register and
-// close a support conversation, the /v1/support/* requests stamped with a conversation (request), and the inbox: mirror
-// a conversation's transcript and state, and pull and acknowledge the staff replies it delivers. Each call runs through
+// close a support conversation, the /v1/support/* requests stamped with a conversation (request), the inbox: mirror
+// a conversation's transcript and state, and pull and acknowledge the staff replies it delivers; and the feedback triage
+// agent's reads and its one note (src/feedback-triage.ts), each keyed by the report's own conversation. Each call runs through
 // the normal routes, so validation, audit rows and budgets are the same as for an operator. Operator paths act as
 // `service:bane-support`; /v1/support/* needs a registered conversation that only request() can name: it rides on the
 // runtime, never in a header, query parameter or body.
@@ -34,6 +35,12 @@ const OPERATOR_ROUTES: [method: string, path: RegExp][] = [
   // One path to a human (src/support-staff-mail.ts): the staff emails due, and each one sent.
   ['POST', /^\/v1\/operator\/support\/staff-mail$/],
   ['POST', /^\/v1\/operator\/support\/staff-mail\/staff-[0-9a-f]{24}-[0-9]{1,6}\/sent$/],
+  // The feedback triage agent (src/feedback-triage.ts): the reports due, and for one report its request trace, the
+  // reports beside it and its one note. Nothing else: no route that sends, replies, resolves or changes an account.
+  ['POST', /^\/v1\/operator\/support\/feedback\/due$/],
+  ['GET', /^\/v1\/operator\/support\/feedback\/conv_[a-z2-7]{26}\/requests\/req_[0-9a-f]{32}$/],
+  ['GET', /^\/v1\/operator\/support\/feedback\/conv_[a-z2-7]{26}\/related$/],
+  ['POST', /^\/v1\/operator\/support\/feedback\/conv_[a-z2-7]{26}\/triage$/],
 ];
 const SUPPORT_READ = /^\/v1\/support\/[A-Za-z0-9_./-]{1,200}$/;
 /** The writes a conversation makes: narrowing its scope to one workspace, and keeping a note about its person. */
@@ -42,8 +49,13 @@ const STAMPED_WRITES: [method: string, path: RegExp][] = [
   ['POST', /^\/v1\/support\/notes$/],
 ];
 
-/** The writes about the person's account (src/support-actions.ts): proposing a change they confirm signed in, and re-checking a domain's DNS. */
-const ACTION_WRITES: [method: string, path: RegExp][] = [['POST', /^\/v1\/support\/actions$/], ['POST', /^\/v1\/support\/domains\/[A-Za-z0-9_-]{1,120}\/verify$/]];
+/**
+ * The writes about the person's account (src/support-actions.ts): proposing a change they confirm signed in, the safe
+ * actions (re-checking a domain's or a receiving host's DNS, resending a forward confirmation), and proposing a risky
+ * change to staff, which only an operator's approval runs.
+ */
+const ACTION_WRITES: [method: string, path: RegExp][] = [['POST', /^\/v1\/support\/actions$/], ['POST', /^\/v1\/support\/domains\/[A-Za-z0-9_-]{1,120}\/verify$/],
+  ['POST', /^\/v1\/support\/receiving\/hosts\/[A-Za-z0-9_-]{1,120}\/recheck$/], ['POST', /^\/v1\/support\/receiving\/forwards\/[A-Za-z0-9_-]{1,120}\/resend$/], ['POST', /^\/v1\/support\/approvals$/]];
 
 /** Whether the binding may make this call without a conversation: the operator support routes. */
 export function supportPlatformAllows(method: string, path: string) {
@@ -57,6 +69,10 @@ export function stampedAllows(method: string, path: string) {
   return (method === 'GET' && SUPPORT_READ.test(path)) || STAMPED_WRITES.some(([m, p]) => m === method && p.test(path));
 }
 
+/** An agent feedback report the triage agent reads (src/feedback-triage.ts): text is untrusted, as its filer wrote it. */
+export type FeedbackReport = { conversationId: string; ticketId: string; filedAt: string; operation: string | null; requestId: string | null; text: string };
+/** The triage agent's note on a report: its words, a suggested classification, and earlier reports from the same workspace. */
+export type TriageNoteInput = { summary: string; cause: string; classification: 'bug' | 'docs_gap' | 'neither'; duplicates: string[] };
 /** A staff email the support platform sends (src/support-staff-mail.ts): a new thread, or a reply in threadId under replyToMessageId. */
 export type StaffEmail = { key: string; threadId: string | null; replyToMessageId: string | null; subject: string; text: string; html: string };
 export type PlatformReply<T = unknown> = { status: number; body: T; requestId: string | null; retryAfter: string | null };
@@ -211,6 +227,16 @@ export function supportPlatform(dispatch: (request: Request, conversation?: stri
     /** A staff email went out: its thread and message, so the next one in the thread replies to it. */
     staffMailSent: (key: string, sent: { threadId: string; messageId: string }) =>
       call<{ key: string; sentAt: string }>('POST', `/v1/operator/support/staff-mail/${encodeURIComponent(String(key))}/sent`, sent),
+    /** Claims the agent feedback reports still to read (at most `limit`, at most 5), oldest first: each is handed out at most twice. */
+    feedbackDue: (limit: number) => call<{ data: FeedbackReport[] }>('POST', '/v1/operator/support/feedback/due', { limit }),
+    /** One request's trace, in the report's own workspace only: any other request ID is 404. */
+    feedbackRequest: (conversationId: string, requestId: string) =>
+      call('GET', `/v1/operator/support/feedback/${encodeURIComponent(String(conversationId))}/requests/${encodeURIComponent(String(requestId))}`),
+    /** The earlier reports from the report's own workspace, and counts of the same operation elsewhere. */
+    feedbackRelated: (conversationId: string) => call('GET', `/v1/operator/support/feedback/${encodeURIComponent(String(conversationId))}/related`),
+    /** The triage agent's one note on a report: 201 once, 409 after. */
+    feedbackTriage: (conversationId: string, note: TriageNoteInput) =>
+      call<{ conversationId: string; ticketId: string | null; messageId: string; classification: string; createdAt: string }>('POST', `/v1/operator/support/feedback/${encodeURIComponent(String(conversationId))}/triage`, note),
     /**
      * A /v1/support request for one registered conversation: a GET, or a write (POST /v1/support/scope or notes). The
      * conversation rides on the runtime, never in the request; Nightmail derives the customer from its row and answers

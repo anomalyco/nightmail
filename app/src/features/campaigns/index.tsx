@@ -74,7 +74,7 @@ const campaignMessageReady = (campaign: Campaign) => Boolean(campaign.name.trim(
 const olderCampaign = (candidate: Campaign, baseline: Campaign) => (candidate.revision ?? 1) < (baseline.revision ?? 1) || ((candidate.revision ?? 1) === (baseline.revision ?? 1) && Date.parse(candidate.updatedAt) < Date.parse(baseline.updatedAt))
 const campaignInput = (campaign: Campaign): CampaignInput => ({
   id: campaign.id, revision: campaign.revision, draft: campaign.draft, attachments: campaign.attachments, regionId: campaign.regionId,
-  name: campaign.name, subject: campaign.subject, previewText: campaign.previewText, fromName: campaign.fromName, fromEmail: campaign.fromEmail, replyTo: campaign.replyTo, unsubscribePageUrl: campaign.unsubscribePageUrl, requiredNotice: campaign.requiredNotice,
+  name: campaign.name, subject: campaign.subject, previewText: campaign.previewText, fromName: campaign.fromName, fromEmail: campaign.fromEmail, replyTo: campaign.replyTo, unsubscribePageUrl: campaign.unsubscribePageUrl, requiredNotice: campaign.requiredNotice, topicId: campaign.topicId,
   listId: campaign.listId, segmentId: campaign.segmentId, html: campaign.html, defaults: Object.fromEntries(Object.entries(campaign.draft?.defaults ?? {}).map(([key, value]) => [key, String(value)])),
 })
 
@@ -868,8 +868,9 @@ function useReviewAudienceOptions(campaign: Campaign, enabled: boolean) {
   const [cursor, setCursor] = useState<string | undefined>()
   const [segmentCursor, setSegmentCursor] = useState<string | undefined>()
   const options = useApiQuery(['campaign-audience-options', cursor ?? '', segmentCursor ?? ''], async (api, signal) => {
-    const [listPage, segmentPage] = await Promise.all([api.lists.list({ pageSize: 100, cursor, counts: false }, signal), api.segments.list({ pageSize: 100, cursor: segmentCursor }, signal)])
-    return { lists: [...listPage.items].sort((a, b) => a.name.localeCompare(b.name)), segments: [...segmentPage.items].sort((a, b) => a.name.localeCompare(b.name)), next: listPage.nextCursor, nextSegment: segmentPage.nextCursor }
+    // Topics (at most 100 that aren't archived) come with the first page of lists, so the picker's fields arrive together.
+    const [listPage, segmentPage, topics] = await Promise.all([api.lists.list({ pageSize: 100, cursor, counts: false }, signal), api.segments.list({ pageSize: 100, cursor: segmentCursor }, signal), api.topics.list({}, signal)])
+    return { lists: [...listPage.items].sort((a, b) => a.name.localeCompare(b.name)), segments: [...segmentPage.items].sort((a, b) => a.name.localeCompare(b.name)), topics, next: listPage.nextCursor, nextSegment: segmentPage.nextCursor }
   }, { enabled })
   const lists = options.data?.lists ?? [], segments = options.data?.segments ?? []
   // The chosen list or segment may not be on the loaded page: read its name, so it never shows as an ID.
@@ -879,7 +880,8 @@ function useReviewAudienceOptions(campaign: Campaign, enabled: boolean) {
   const chosenSegment = useApiQuery(['segments', campaign.segmentId ?? ''], (api, signal) => api.segments.get(campaign.segmentId!, signal), { enabled: segmentMissing })
   const listName = lists.find(list => list.id === campaign.listId)?.name ?? chosenList.data?.name
   const segmentName = segments.find(segment => segment.id === campaign.segmentId)?.name ?? chosenSegment.data?.name
-  return { cursor, setCursor, segmentCursor, setSegmentCursor, options, lists, segments, listMissing, segmentMissing, chosenList, chosenSegment, listName, segmentName }
+  const topics = options.data?.topics ?? [], topicName = campaign.topicId ? topics.find(topic => topic.id === campaign.topicId)?.name ?? (options.data ? 'an archived topic' : undefined) : undefined
+  return { cursor, setCursor, segmentCursor, setSegmentCursor, options, lists, segments, topics, listMissing, segmentMissing, chosenList, chosenSegment, listName, segmentName, topicName }
 }
 
 function AudiencePicker({ campaign, audience, notices, disabled }: { campaign: Campaign; audience: ReturnType<typeof useReviewAudienceOptions>; notices: boolean; disabled?: boolean }) {
@@ -887,7 +889,7 @@ function AudiencePicker({ campaign, audience, notices, disabled }: { campaign: C
   const toast = useToast()
   const accept = useCampaignCache(), staleRefetch = useStaleRefetch()
   const [saving, setSaving] = useState(false)
-  const { cursor, setCursor, segmentCursor, setSegmentCursor, options, lists, segments, listMissing, segmentMissing, chosenList, chosenSegment } = audience
+  const { cursor, setCursor, segmentCursor, setSegmentCursor, options, lists, segments, topics, listMissing, segmentMissing, chosenList, chosenSegment } = audience
   async function save(change: Partial<CampaignInput>) {
     setSaving(true)
     try { accept(await saveChange(api, campaign, change)) }
@@ -904,9 +906,18 @@ function AudiencePicker({ campaign, audience, notices, disabled }: { campaign: C
     {(cursor || options.data?.next) && <div className="cluster"><Button onClick={() => setCursor(undefined)}>First lists</Button><Button disabled={!options.data?.next} onClick={() => setCursor(options.data?.next ?? undefined)}>More lists</Button></div>}
     <Field label="Segment" htmlFor="campaign-segment"><Select id="campaign-segment" aria-label="Segment" disabled={off || !campaign.listId} value={campaign.segmentId ?? ''} onValueChange={value => void choose(campaign.listId, value || null)} options={[{ value: '', label: 'Everyone on the list' }, ...(campaign.segmentId && segmentMissing ? [{ value: campaign.segmentId, label: chosenSegment.data?.name ? `Only ${chosenSegment.data.name}` : chosenSegment.isError ? 'Segment not found' : 'Loading segment…' }] : []), ...segments.map(segment => ({ value: segment.id, label: `Only ${segment.name}` })), ...(!options.isPending && !segments.length ? [{ value: '__none', label: 'No segments yet. Create one in Audience.', disabled: true }] : [])]} /></Field>
     {(segmentCursor || options.data?.nextSegment) && <div className="cluster"><Button disabled={!segmentCursor} onClick={() => setSegmentCursor(undefined)}>First segments</Button><Button disabled={!options.data?.nextSegment} onClick={() => setSegmentCursor(options.data?.nextSegment ?? undefined)}>More segments</Button></div>}
+    {/* The kind of mail it is (Audience → Topics): people who opted out of the topic are skipped, and its unsubscribe link
+        opts out of that topic alone. A required notice has no unsubscribe, so no topic. */}
+    {!campaign.requiredNotice && <Field label="Topic" htmlFor="campaign-topic" hint={campaign.topicId ? 'People who opted out of it are skipped, and its unsubscribe link stops this topic only.' : 'Its unsubscribe link stops all marketing.'}><Select id="campaign-topic" aria-label="Topic" disabled={off} value={campaign.topicId} onValueChange={value => { if (!saving && value !== campaign.topicId) void save({ topicId: value }) }} options={options.isPending ? [{ value: campaign.topicId, label: 'Loading topics…', disabled: true }] : [{ value: '', label: 'No topic' }, ...(campaign.topicId && !topics.some(topic => topic.id === campaign.topicId) ? [{ value: campaign.topicId, label: 'Archived topic: choose another' }] : []), ...topics.map(topic => ({ value: topic.id, label: topic.name })), ...(!topics.length ? [{ value: '__none', label: 'No topics yet. Create one in Audience.', disabled: true }] : [])]} /></Field>}
     {/* A campaign that is already a notice keeps the choice, so it can go back to marketing if notices were turned off. */}
-    {(notices || campaign.requiredNotice) && <Field label="Kind" htmlFor="campaign-kind" hint={campaign.requiredNotice ? 'Reaches people who unsubscribed too, with no unsubscribe link.' : undefined}><Select id="campaign-kind" aria-label="Kind" disabled={disabled || saving} value={campaign.requiredNotice ? 'notice' : 'marketing'} onValueChange={value => { if (!saving && (value === 'notice') !== campaign.requiredNotice) void save({ requiredNotice: value === 'notice' }) }} options={[{ value: 'marketing', label: 'Marketing' }, { value: 'notice', label: 'Required notice', disabled: !notices }]} /></Field>}
+    {(notices || campaign.requiredNotice) && <Field label="Kind" htmlFor="campaign-kind" hint={campaign.requiredNotice ? 'Reaches people who unsubscribed too, with no unsubscribe link.' : undefined}><Select id="campaign-kind" aria-label="Kind" disabled={disabled || saving} value={campaign.requiredNotice ? 'notice' : 'marketing'} onValueChange={value => { if (!saving && (value === 'notice') !== campaign.requiredNotice) void save({ requiredNotice: value === 'notice', ...(value === 'notice' ? { topicId: '' } : {}) }) }} options={[{ value: 'marketing', label: 'Marketing' }, { value: 'notice', label: 'Required notice', disabled: !notices }]} /></Field>}
   </div>
+}
+
+// A sent campaign's topic by name: active topics are one read (shared with the picker), and one archived since shows as such.
+function TopicName({ id }: { id: string }) {
+  const topics = useApiQuery(['topics', 'active'], (api, signal) => api.topics.list({}, signal))
+  return topics.isPending ? <SkeletonText width={120} /> : <>{topics.data?.find(topic => topic.id === id)?.name ?? 'Archived topic'}</>
 }
 
 // Where the campaign goes: the list (and segment) by name, never by id.
@@ -1009,7 +1020,7 @@ function CampaignReview({ campaign: latest, stats, settings, stale, refreshing, 
     refresh()
   }, [campaign.revision, display.error, refresh])
   const audienceOptions = useReviewAudienceOptions(campaign, draft)
-  const { listName, segmentName } = audienceOptions
+  const { listName, segmentName, topicName } = audienceOptions
   const perDay = Number(pace.perDay.trim().replaceAll(',', ''))
   const paceError = pace.limit ? perDayError(perDay) : ''
   const paceDays = pace.limit && !paceError && audience.data?.eligible ? Math.ceil(audience.data.eligible / perDay) : null
@@ -1108,10 +1119,16 @@ function CampaignReview({ campaign: latest, stats, settings, stale, refreshing, 
   </>
   if (draft) {
     const eligible = audience.data?.eligible ?? 0
-    const segmentLabel = segmentName ? ` · only ${segmentName}` : ''
+    const segmentLabel = `${segmentName ? ` · only ${segmentName}` : ''}${topicName ? ` · ${topicName}` : ''}`
+    // With a topic, what it does to the number, where the count is: the API counts it as launch captures it (approximate only
+    // when counting it on a large list ran out of time).
+    const about = audience.data?.approximate ? 'about ' : '', chosenTopic = audienceOptions.topics.find(topic => topic.id === campaign.topicId)
+    const recipientsLead = (counts: NonNullable<typeof audience.data>) => !campaign.topicId || campaign.requiredNotice ? `${number(counts.matched)} on the list`
+      : chosenTopic && !chosenTopic.subscribedByDefault ? `${about ? 'About ' : ''}${number(counts.eligible)} opted in to ${chosenTopic.name}, of ${number(counts.matched)} on the list`
+      : `${about ? 'About ' : ''}${number(counts.eligible)} will get it · ${about}${number(counts.topicExcluded ?? 0)} ${chosenTopic ? `opted out of ${chosenTopic.name}` : 'left out by the topic'} · ${number(counts.matched)} on the list`
     const toSummary = !campaign.listId ? 'No list chosen'
       : !audience.data ? `${listName ?? 'Your list'}${audience.isError ? ' · couldn’t count' : ''}`
-      : eligible ? `${number(eligible)} ${eligible === 1 ? 'contact' : 'contacts'} in ${listName ?? 'your list'}${segmentLabel}${campaign.requiredNotice ? ' · required notice' : ''}`
+      : eligible ? `${audience.data.approximate ? 'About ' : ''}${number(eligible)} ${eligible === 1 ? 'contact' : 'contacts'} in ${listName ?? 'your list'}${segmentLabel}${campaign.requiredNotice ? ' · required notice' : ''}`
       // One text node, so the list's name arriving moves nothing (the summary is right-aligned: campaigns.css).
       : <span className="review-warn">{`Nobody in ${listName ?? 'your list'} can receive it yet`}</span>
     const scoreSummary = sendability.data ? checksSummary(sendability.data) : missing.length ? 'After the message is complete' : !campaign.listId ? 'After you choose a list' : sendability.error ? 'Couldn’t check' : 'Checking…'
@@ -1126,7 +1143,7 @@ function CampaignReview({ campaign: latest, stats, settings, stale, refreshing, 
       <div className="review-stages">
         <ReviewStage n={1} id="to" title="Recipients" open={openRow === 'to'} done={Boolean(campaign.listId && eligible)} onOpen={() => setOpenRow('to')} summary={toSummary} footer={next('to')}>
           <AudiencePicker campaign={campaign} audience={audienceOptions} notices={settings.data?.requiredNotices === true} disabled={sendMutation.isPending} />
-          {audience.data && campaign.listId && <p className="review-detail">{number(audience.data.matched)} on the list{audience.data.suppressed ? ` · ${number(audience.data.suppressed)} suppressed` : ''}{audience.data.unsubscribed ? <> · {number(audience.data.unsubscribed)} not subscribed · <Link to={`/audience/lists/${encodeURIComponent(campaign.listId)}?status=unknown`}>Fix</Link></> : null}{audience.data.risky ? <> · {number(audience.data.risky)} risky skipped ({riskBreakdown(audience.data.riskyByReason, number)}) · <Link to={`/audience/lists/${encodeURIComponent(campaign.listId)}?status=risky`}>Review</Link></> : null}</p>}
+          {audience.data && campaign.listId && <p className="review-detail">{recipientsLead(audience.data)}{audience.data.suppressed ? ` · ${number(audience.data.suppressed)} suppressed` : ''}{audience.data.unsubscribed - (audience.data.topicExcluded ?? 0) > 0 ? <> · {number(audience.data.unsubscribed - (audience.data.topicExcluded ?? 0))} not subscribed · <Link to={`/audience/lists/${encodeURIComponent(campaign.listId)}?status=unknown`}>Fix</Link></> : null}{audience.data.risky ? <> · {number(audience.data.risky)} risky skipped ({riskBreakdown(audience.data.riskyByReason, number)}) · <Link to={`/audience/lists/${encodeURIComponent(campaign.listId)}?status=risky`}>Review</Link></> : null}</p>}
         </ReviewStage>
         <ReviewStage n={2} id="message" title="Message" open={openRow === 'message'} done={!missing.length && !missingFallbacks.length} onOpen={() => setOpenRow('message')} summary={messageSummary} footer={next('message')}>
           <div className="review-message">
@@ -1151,7 +1168,7 @@ function CampaignReview({ campaign: latest, stats, settings, stale, refreshing, 
         <ReviewStage n={4} id="when" title="Send" open={openRow === 'when'} done={false} onOpen={() => setOpenRow('when')} summary={whenSummary} footer={<>
           {campaign.requiredNotice && <div className="review-confirm"><Checkbox label="This is a required notice, with no promotion." checked={noticeConfirmed} disabled={sendMutation.isPending} onCheckedChange={value => { setNoticeConfirmed(value); setError('') }} /></div>}
           {notes.length > 0 && <ul className="campaign-notes">{notes.map(([tone, text], index) => <li key={index} className="campaign-note" data-tone={tone} role={tone === 'danger' ? 'alert' : undefined}><span>{text}</span></li>)}</ul>}
-          <Button variant="primary" loading={sendMutation.isPending} disabled={!canAdminister || Boolean(readinessError) || Boolean(audience.data && !audience.data.eligible)} onClick={requestConfirmation} data-analytics={mode === 'schedule' ? 'campaigns/schedule' : 'campaigns/send'}>{mode === 'schedule' ? 'Schedule' : eligible ? `Send to ${number(eligible)} ${eligible === 1 ? 'contact' : 'contacts'}` : 'Send now'}</Button>
+          <Button variant="primary" loading={sendMutation.isPending} disabled={!canAdminister || Boolean(readinessError) || Boolean(audience.data && !audience.data.eligible)} onClick={requestConfirmation} data-analytics={mode === 'schedule' ? 'campaigns/schedule' : 'campaigns/send'}>{mode === 'schedule' ? 'Schedule' : eligible ? `Send to ${about}${number(eligible)} ${eligible === 1 ? 'contact' : 'contacts'}` : 'Send now'}</Button>
         </>}>
           <Tabs value={mode} onValueChange={value => { if (!sendMutation.isPending) { setMode(value as 'now' | 'schedule'); setError(''); setScheduleProblem('') } }} items={[{ value: 'now', label: 'Send now' }, { value: 'schedule', label: 'Schedule' }]} />
           {mode === 'schedule' && <ScheduleField id="campaign-schedule" value={scheduled} onChange={value => { setScheduled(value); setScheduleProblem(''); setError('') }} error={scheduleProblem} disabled={sendMutation.isPending} />}
@@ -1193,7 +1210,7 @@ function CampaignReview({ campaign: latest, stats, settings, stale, refreshing, 
         </>}
       </section>
       <section className="campaign-fields campaign-message">
-        <dl className="ui-facts campaign-message-details">{campaign.requiredNotice && <><dt>Kind</dt><dd>Required notice</dd></>}<dt>From</dt><dd><SenderLines name={campaign.fromName} address={campaign.fromEmail} /></dd>{campaign.replyTo.length > 0 && <><dt>Reply to</dt><dd><AddressList values={campaign.replyTo} /></dd></>}<dt>Subject</dt><dd>{campaign.subject}</dd>{campaign.previewText && <><dt>Inbox preview</dt><dd>{campaign.previewText}</dd></>}</dl>
+        <dl className="ui-facts campaign-message-details">{campaign.requiredNotice && <><dt>Kind</dt><dd>Required notice</dd></>}{campaign.topicId && <><dt>Topic</dt><dd><TopicName id={campaign.topicId} /></dd></>}<dt>From</dt><dd><SenderLines name={campaign.fromName} address={campaign.fromEmail} /></dd>{campaign.replyTo.length > 0 && <><dt>Reply to</dt><dd><AddressList values={campaign.replyTo} /></dd></>}<dt>Subject</dt><dd>{campaign.subject}</dd>{campaign.previewText && <><dt>Inbox preview</dt><dd>{campaign.previewText}</dd></>}</dl>
         <CampaignRenderedPreview campaign={campaign} transform={previewHtml} />
       </section>
     </div>

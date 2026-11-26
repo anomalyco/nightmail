@@ -437,18 +437,20 @@ const reachable = (requiredNotice: boolean, topic?: TopicRule | null) => sql`NOT
 const riskyColumns = (risk: SQL, risky: SQL = sql`true`) => sql.join(RISKS.map(r => sql`count(*) FILTER (WHERE ${risky} AND ${risk} = ${r})::int AS ${sql.identifier(`risky_${r}`)}`), sql`, `);
 type RiskyRow = { [K in `risky_${Risk}`]: number };
 const riskyOf = (row: RiskyRow) => riskCounts(RISKS.map(r => ({ risk: r, count: row[`risky_${r}`] })));
-export type AudienceCountsResult = { matched: number; eligible: number; suppressed: number; unsubscribed: number; risky: number; riskyByReason: RiskCounts };
+export type AudienceCountsResult = { matched: number; eligible: number; suppressed: number; unsubscribed: number; risky: number; riskyByReason: RiskCounts; topicExcluded?: number; approximate?: true };
 /** Read-only counts of the live audience (the dashboard's pre-send check); nothing is frozen or locked. */
 export async function countCampaignAudience(db: DbExecutor, identity: Actor, spec: z.infer<typeof AudienceSpec>, requiredNotice = false, topic?: TopicRule | null): Promise<AudienceCountsResult> {
   const conditions = await audienceConditions(db, identity, spec, false);
-  const [row] = (await db.execute<{ matched: number; eligible: number; suppressed: number; unsubscribed: number } & RiskyRow>(sql`SELECT count(*)::int AS matched,
+  if (requiredNotice) topic = null;
+  const [row] = (await db.execute<{ matched: number; eligible: number; suppressed: number; unsubscribed: number; excluded: number } & RiskyRow>(sql`SELECT count(*)::int AS matched,
       count(*) FILTER (WHERE ${reachable(requiredNotice, topic)})::int AS eligible,
+      ${topic ? sql`count(*) FILTER (WHERE NOT ${contacts.suppressed} AND ${contacts.marketingConsent} = 'subscribed' AND NOT ${topicChoiceReaches(topic)})::int` : sql`0`} AS excluded,
       count(*) FILTER (WHERE ${contacts.suppressed})::int AS suppressed,
       count(*) FILTER (WHERE NOT ${contacts.suppressed} AND NOT (${consented(requiredNotice, topic)}))::int AS unsubscribed,
       ${riskyColumns(sql`${contacts.risk}`, sql`NOT ${contacts.suppressed} AND ${consented(requiredNotice, topic)} AND ${skipped}`)}
     FROM ${contacts} ${topicJoin(topic)} WHERE ${and(scope(contacts, identity), isNull(contacts.deletedAt), ...conditions)}`)).rows;
   const risky = riskyOf(row!);
-  return { matched: row!.matched, eligible: row!.eligible, suppressed: row!.suppressed, unsubscribed: row!.unsubscribed, risky: risky.total, riskyByReason: risky.byReason };
+  return { matched: row!.matched, eligible: row!.eligible, suppressed: row!.suppressed, unsubscribed: row!.unsubscribed, risky: risky.total, riskyByReason: risky.byReason, ...topic ? { topicExcluded: row!.excluded } : {} };
 }
 /** The list's members campaigns skip as risky, by reason: the workspace's flagged contacts (migration 498's partial index)
  *  joined to the list's memberships by hash. Run it with nested loops off (riskyByHash): on statistics from before the
@@ -461,6 +463,28 @@ const listRisky = (identity: Pick<Actor, 'workspaceId'>, listId: string, require
       ${requiredNotice ? sql`` : sql`AND c.marketing_consent = 'subscribed'`} ${topic ? sql`AND ${topicChoiceReaches(topic)}` : sql``}
       AND EXISTS (SELECT 1 FROM audience_list_members m WHERE m.workspace_id = c.workspace_id AND m.list_id = ${listId} AND m.contact_id = c.id)
     GROUP BY c.risk) r)`;
+/**
+ * listTopicOut under a time budget, in a savepoint whose settings end with it. The read probes a large list's memberships
+ * and contacts for each of the topic's choices: about 1 s warm for 100,000 opt-outs of a 2,000,000-member list, and up to
+ * 10 s the first time those tables are read (a freshly written lab copy). Past the budget it falls back to the topic's own
+ * rows in the workspace, as if each chooser were a subscriber on this list (approximate): fewer reached for a topic people
+ * leave, more for one they join. When even that runs out, none left out (approximate): never fewer than the list holds.
+ */
+const TOPIC_COUNT_MS = 1500, TOPIC_FALLBACK_MS = 500;
+async function boundedTopicOut(db: DbExecutor, identity: Pick<Actor, 'workspaceId'>, listId: string, topic: TopicRule, subscribed: number): Promise<{ out: number; approximate?: true }> {
+  const within = async <T>(ms: number, work: (tx: DbExecutor) => Promise<T>): Promise<T | null> => (db as Database).transaction(async tx => {
+    await tx.execute(sql`SAVEPOINT topic_count`);
+    try { await tx.execute(sql.raw(`SET LOCAL statement_timeout = '${ms}ms'`)); return await work(tx); }
+    catch (error) { if (!statementTimedOut(error)) throw error; return null; }
+    finally { await tx.execute(sql`ROLLBACK TO SAVEPOINT topic_count`); await tx.execute(sql`RELEASE SAVEPOINT topic_count`); }
+  });
+  const exact = await within(TOPIC_COUNT_MS, tx => listTopicOut(tx, identity, listId, topic, subscribed));
+  if (exact !== null) return { out: exact };
+  const chose = await within(TOPIC_FALLBACK_MS, async tx => Number((await tx.execute<{ n: number }>(sql`SELECT count(*)::int AS n FROM audience_contact_topics
+    WHERE workspace_id = ${identity.workspaceId} AND topic_id = ${topic.id} AND subscribed = ${!topic.subscribedByDefault}`)).rows[0]?.n ?? 0));
+  if (chose === null) return { out: 0, approximate: true };
+  return { out: topic.subscribedByDefault ? Math.min(chose, subscribed) : Math.max(0, subscribed - chose), approximate: true };
+}
 /** Of a list's subscribers (not suppressed, not deleted), how many its topic doesn't reach: those who opted out of it, or
  *  for a topic nobody gets by default, all but those who opted in. Read from the topic's own choices (the table's key
  *  prefix) joined to their contacts and memberships by key, never from the whole list: the list's counts
@@ -495,15 +519,17 @@ export async function countCampaignAudienceForDisplay(db: DbExecutor, identity: 
     WHERE l.workspace_id = ${identity.workspaceId} AND l.id = ${spec.listId}
     GROUP BY l.id`), true);
   if (!row) return notFound('List');
-  // A topic's opt-outs are counted with the unsubscribed, as countCampaignAudience counts them.
-  const out = topic ? await listTopicOut(db, identity, spec.listId, topic, row.subscribed) : 0;
-  const notSubscribed = row.unsubscribed + row.unknown, risky = riskyFrom(row.risky);
+  // A topic's opt-outs are counted with the unsubscribed, as countCampaignAudience counts them, in bounded time: past it the
+  // counts are approximate (boundedTopicOut).
+  const counted = topic ? await boundedTopicOut(db, identity, spec.listId, topic, row.subscribed) : null;
+  const out = counted?.out ?? 0, notSubscribed = row.unsubscribed + row.unknown, risky = riskyFrom(row.risky);
   return {
     matched: row.subscribed + notSubscribed + row.suppressed,
     eligible: Math.max(0, (requiredNotice ? row.subscribed + notSubscribed : row.subscribed - out) - risky.total),
     suppressed: row.suppressed,
     unsubscribed: requiredNotice ? 0 : notSubscribed + out,
     risky: risky.total, riskyByReason: risky.byReason,
+    ...topic ? { topicExcluded: out } : {}, ...counted?.approximate ? { approximate: true as const } : {},
   };
 }
 export const SYNC_CAPTURE_MAX_LIST_MEMBERS = 5_000;
@@ -566,9 +592,11 @@ export async function estimateCampaignAudience(
                coalesce(sum(subscribed + unsubscribed + unknown), 0)::int AS reachable, ${listRisky(identity, spec.listId, requiredNotice, topic)} AS risky
         FROM audience_list_counts
         WHERE workspace_id = ${identity.workspaceId} AND list_id = ${spec.listId}`), false)).rows;
-      const subscribed = tally?.subscribed ?? 0, out = topic ? await listTopicOut(db, identity, spec.listId, topic, subscribed) : 0;
-      const risky = riskyFrom(tally?.risky ?? null), expected = (requiredNotice ? (tally?.reachable ?? 0) : subscribed - out) - risky.total;
-      if (expected > 0) return { queued: expected, risky };
+      // A topic's count is bounded in time; past it the launch judges the list's subscribers, an upper bound, as when
+      // counting a segment runs out (approximate), so a large send can't skip a required ramp by not being counted.
+      const subscribed = tally?.subscribed ?? 0, counted = topic ? await boundedTopicOut(db, identity, spec.listId, topic, subscribed) : null;
+      const out = counted?.approximate ? 0 : counted?.out ?? 0, risky = riskyFrom(tally?.risky ?? null), expected = (requiredNotice ? (tally?.reachable ?? 0) : subscribed - out) - risky.total;
+      if (expected > 0) return { queued: expected, risky, ...counted?.approximate ? { approximate: true as const } : {} };
     }
   }
   await db.execute(sql`SAVEPOINT audience_estimate`);

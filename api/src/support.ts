@@ -8,7 +8,7 @@ import { GOOD_STANDING, limitRequest, type Step } from './standing-model.js';
 import { cached, registerSupportDeliverability } from './support-deliverability.js';
 import { registerSupportReceiving } from './support-receiving.js';
 import { registerSupportSmtp } from './smtp-refusals.js';
-import { ERROR_CODE, groupLines, LOG_RETENTION_DAYS, LOG_ROWS, LogsUnavailable, requestLines, ROUTE_TEMPLATE } from './support-logs.js';
+import { ERROR_CODE, groupLines, LOG_RETENTION_DAYS, LOG_ROWS, LogsUnavailable, requestLines, ROUTE_TEMPLATE, type RequestLine } from './support-logs.js';
 import { CONVERSATION_ID, keyId, signSupportToken } from './support-platform.js';
 import { ceilingFor, routedOnly, sectionIds } from './support-conversations.js';
 import { productName } from './brand.js';
@@ -170,6 +170,37 @@ function scoped(c: Ctx, roles?: ('owner' | 'admin' | 'member')[]) {
   return { scope, ids: workspaces.map(w => w.id), workspaces };
 }
 const ids = (list: string[]) => sql`${sql.param(list)}::text[]`;
+const DAY = 86_400_000, RECENT_REQUEST_HOURS = 6;
+/**
+ * What Nightmail recorded for one request in these workspaces: its request lines from Workers Logs (the last
+ * LOG_RETENTION_DAYS days), the changes it made, the campaign launches it started and the routing versions it wrote.
+ * GET /v1/support/requests/{requestId} answers it for a conversation's workspaces, and the feedback triage agent's trace
+ * (src/feedback-triage.ts) for the one workspace a report belongs to. The request line is looked for in the last 6 hours
+ * first (most requests quoted are recent, and a short window answers several times faster), then in the whole retention
+ * window; the database reads run meanwhile.
+ */
+export async function requestTrace(c: Ctx, list: string[], requestId: string) {
+  const db = c.env.db, observability = c.env.config.observability;
+  const logLines = async () => {
+    if (!observability) return { logs: [] as Omit<RequestLine, 'requestId'>[], logsAvailable: false };
+    try {
+      const now = Date.now(), { lines } = await cached(c, 'request', list, requestId, async () => {
+        const recent = await requestLines(observability, { workspaceIds: list, from: now - RECENT_REQUEST_HOURS * 3_600_000, to: now + 60_000, requestId, limit: 20 });
+        return recent.lines.length ? recent : requestLines(observability, { workspaceIds: list, from: now - LOG_RETENTION_DAYS * DAY, to: now + 60_000, requestId, limit: 20 });
+      });
+      return { logs: lines.map(({ requestId: _r, ...line }) => line), logsAvailable: true };
+    } catch (error) { if (!(error instanceof LogsUnavailable)) throw error; return { logs: [], logsAvailable: false }; }
+  };
+  const [{ logs, logsAvailable }, { data: auditEvents }, { rows: campaigns }, { rows: routing }] = await Promise.all([
+    logLines(), customerTrail(db, list, AuditFilters.parse({ requestId, limit: 20 })),
+    list.length ? db.execute<{ workspaceId: string; id: string; name: string; state: string; error: unknown }>(sql`SELECT workspace_id AS "workspaceId", id, coalesce(draft ->> 'name', id) AS name, state, error
+      FROM sending_campaigns WHERE request_id = ${requestId} AND workspace_id = ANY(${ids(list)}) LIMIT 20`) : { rows: [] },
+    list.length ? db.execute<{ workspaceId: string; version: number; resourceId: string; at: string }>(sql`SELECT workspace_id AS "workspaceId", version, resource_id AS "resourceId", created_at::text AS at
+      FROM mail_routing_audit WHERE request_id = ${requestId} AND workspace_id = ANY(${ids(list)}) LIMIT 50`) : { rows: [] },
+  ]);
+  const changed = !!(auditEvents.length || campaigns.length || routing.length);
+  return { requestId, found: changed || logs.length > 0, changed, logs, logsAvailable, auditEvents, campaigns, routingVersions: routing.map(r => ({ ...r, at: new Date(r.at).toISOString() })) };
+}
 /** A conversation reads received mail as the dashboard shows it to the role (actorMailAccess): a member only mail on receiving addresses. */
 function receivedAsMember(workspaces: SupportScope['workspaces']) {
   const members = routedOnly(workspaces);
@@ -503,7 +534,7 @@ export function registerSupport(app: App) {
     return c.json(await customerTrail(c.env.db, scoped(c, ['owner', 'admin']).ids, filters), 200);
   });
   // The customer's own requests, from this Worker's request lines in Workers Logs (src/support-logs.ts).
-  const DAY = 86_400_000, RECENT_REQUEST_HOURS = 6, Retention = z.literal(`${LOG_RETENTION_DAYS} days`).describe('How long Workers Logs keep request lines.');
+  const Retention = z.literal(`${LOG_RETENTION_DAYS} days`).describe('How long Workers Logs keep request lines.');
   const Principal = z.string().describe('How the caller authenticated: dashboard, apiKey, mcp, agentToken, inboxKey…; never which key or user.');
   const RequestGroup = z.object({ route: z.string().describe('The route template (/v1/emails/:id), never a path.'), method: z.string(), status: z.number(), code: z.string().nullable().describe(`The error code ${productName} answered with.`),
     principal: Principal, count: z.number(), firstSeen: z.string(), lastSeen: z.string(),
@@ -549,30 +580,9 @@ export function registerSupport(app: App) {
     note: z.string(),
   }).openapi('SupportRequestTrace');
   app.openapi(createRoute({ ...meta('getSupportRequest', `What ${productName} recorded for one API request (the x-request-id a customer quotes): its request line from Workers Logs (route, status, error code, duration; the last ${LOG_RETENTION_DAYS} days), the changes it made, campaign launches and routing versions.`), path: '/v1/support/requests/{requestId}', request: { query: WorkspaceFilter, params: z.object({ requestId: z.string().regex(/^req_[0-9a-f]{32}$/) }) }, responses: { 200: response(RequestTrace), ...errors } }), async c => {
-    const { scope, ids: list } = scoped(c), requestId = c.req.valid('param').requestId, db = c.env.db, observability = c.env.config.observability;
-    // The request line is looked for in the last 6 hours first (most requests a customer quotes are recent, and a short
-    // window answers several times faster), then in the whole retention window. The database reads run meanwhile.
-    const logLines = async () => {
-      if (!observability) return { logs: [] as z.infer<typeof RequestTrace>['logs'], logsAvailable: false };
-      try {
-        const now = Date.now(), { lines } = await cached(c, 'request', list, requestId, async () => {
-          const recent = await requestLines(observability, { workspaceIds: list, from: now - RECENT_REQUEST_HOURS * 3_600_000, to: now + 60_000, requestId, limit: 20 });
-          return recent.lines.length ? recent : requestLines(observability, { workspaceIds: list, from: now - LOG_RETENTION_DAYS * DAY, to: now + 60_000, requestId, limit: 20 });
-        });
-        return { logs: lines.map(({ requestId: _r, ...line }) => line), logsAvailable: true };
-      } catch (error) { if (!(error instanceof LogsUnavailable)) throw error; return { logs: [], logsAvailable: false }; }
-    };
-    const [{ logs, logsAvailable }, { data: auditEvents }, { rows: campaigns }, { rows: routing }] = await Promise.all([
-      logLines(), customerTrail(db, list, AuditFilters.parse({ requestId, limit: 20 })),
-      list.length ? db.execute<{ workspaceId: string; id: string; name: string; state: string; error: unknown }>(sql`SELECT workspace_id AS "workspaceId", id, coalesce(draft ->> 'name', id) AS name, state, error
-        FROM sending_campaigns WHERE request_id = ${requestId} AND workspace_id = ANY(${ids(list)}) LIMIT 20`) : { rows: [] },
-      list.length ? db.execute<{ workspaceId: string; version: number; resourceId: string; at: string }>(sql`SELECT workspace_id AS "workspaceId", version, resource_id AS "resourceId", created_at::text AS at
-        FROM mail_routing_audit WHERE request_id = ${requestId} AND workspace_id = ANY(${ids(list)}) LIMIT 50`) : { rows: [] },
-    ]);
-    const changed = !!(auditEvents.length || campaigns.length || routing.length), found = changed || logs.length > 0;
-    return c.json({ requestId, found, logs, logsAvailable, auditEvents, campaigns, routingVersions: routing.map(r => ({ ...r, at: new Date(r.at).toISOString() })),
-      note: changed ? 'Changes recorded for this request.' : found ? `Logged, but it changed nothing ${productName} stores: see logs for its route, status and error code.`
-        : `Nothing recorded: the request changed nothing${logsAvailable ? ` and is not in the last ${LOG_RETENTION_DAYS} days of request logs` : ''}, belongs to another account, or is older than the retention window. Ask for the time, the route and the error code shown.` }, 200);
+    const { changed, ...trace } = await requestTrace(c, scoped(c).ids, c.req.valid('param').requestId);
+    return c.json({ ...trace, note: changed ? 'Changes recorded for this request.' : trace.found ? `Logged, but it changed nothing ${productName} stores: see logs for its route, status and error code.`
+      : `Nothing recorded: the request changed nothing${trace.logsAvailable ? ` and is not in the last ${LOG_RETENTION_DAYS} days of request logs` : ''}, belongs to another account, or is older than the retention window. Ask for the time, the route and the error code shown.` }, 200);
   });
   registerSupportDeliverability(app, meta, WorkspaceFilter);
   registerSupportReceiving(app, meta, WorkspaceFilter);

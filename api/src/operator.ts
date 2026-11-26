@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, dashboardSession, errors, json, notFound, response, security, type App, type Ctx, type DbExecutor } from './core.js';
+import { ApiError, dashboardSession, errors, json, notFound, response, security, type App, type Ctx, type DbExecutor, type Runtime } from './core.js';
 import { operatorRole, type OperatorRole } from './operator-identity.js';
 import { applyChange, type Change } from './standing.js';
 import { loadDisplayedStanding, scoreView, StandingSchema } from './sender-score.js';
@@ -131,6 +131,84 @@ const standingOf = async (db: DbExecutor, id: string) => (await db.execute<{ ste
   FROM sender_standing s JOIN provider_connections pc ON pc.workspace_id=s.workspace_id AND pc.kind='shared' WHERE s.workspace_id=${id}`)).rows[0] ?? null;
 const operatorReason = (code: string, message: string) => [{ code, metric: 'external' as const, value: 0, count: 0, threshold: 0, minimum: 0, window: null, step: 'pause' as const, message }];
 
+// The console's changes, each a function of the caller's transaction that answers its result and the audit row to write.
+// Each route below runs one inside mutate(); an approved support proposal (support-approvals.ts) runs the same one and
+// writes the same row, so a change staff approve from an email is exactly the console's.
+type Reasons = { reason: string; ticketRef?: string; internal?: Record<string, unknown> };
+type Standing = NonNullable<Awaited<ReturnType<typeof standingOf>>>;
+type Built = Omit<Change, 'workspaceId' | 'actor' | 'expectVersion'>;
+export type OperatorChange<T> = Promise<{ result: T; audit: OperatorAudit }>;
+const done = (result: { version: number; step: string } | null | undefined) => ({ ok: true as const, version: result?.version ?? null, step: result?.step ?? null });
+/** A standing change (pause, resume, the marketing hold) through applyChange, with the standing before and after. */
+async function standingChange(tx: DbExecutor, operator: OperatorIdentity, wid: string, body: Reasons, action: string, build: (current: Standing) => Built, expectVersion?: number): OperatorChange<ReturnType<typeof done>> {
+  const before = await standingOf(tx, wid);
+  if (!before) notFound('Hosted workspace');
+  const result = await applyChange(tx, { workspaceId: wid, actor: { kind: 'operator', id: operator.userId, via: 'console' }, expectVersion, ...build(before!),
+    details: { reason: body.reason, ...(body.ticketRef ? { ticketRef: body.ticketRef } : {}), ...build(before!).details } });
+  const after = await standingOf(tx, wid);
+  return { result: done(result), audit: { action, before, after, reason: body.reason, ticketRef: body.ticketRef, internal: body.internal } };
+}
+export const operatorChanges = {
+  pause: (tx: DbExecutor, operator: OperatorIdentity, wid: string, body: Reasons, expectVersion?: number) => standingChange(tx, operator, wid, body, 'operator-pause', current => {
+    if (current.paused) throw new ApiError(409, 'ALREADY_PAUSED', 'This workspace is already paused.');
+    // The reason is for the audit and the operator timeline; customers see that Nightmail paused it after a review.
+    return { kind: 'operator', step: 'pause', pauseKind: 'full', pause: { message: `Hosted sending paused by ${productName} after a review. Ask for a review from the dashboard for details.` }, reasons: operatorReason('OPERATOR_PAUSE', `${productName} paused sending after a review.`) };
+  }, expectVersion),
+  resume: (tx: DbExecutor, operator: OperatorIdentity, wid: string, body: Reasons & { restore: 50 | 100 }, caps: Runtime['config']['hostedSendCaps'], expectVersion?: number) => standingChange(tx, operator, wid, body, 'operator-resume', current => {
+    if (!current.paused) throw new ApiError(409, 'NOT_PAUSED', 'This workspace is not paused.');
+    return { kind: 'operator', step: 'warn', resume: { percent: body.restore, caps }, details: { restore: body.restore } };
+  }, expectVersion),
+  marketing: (tx: DbExecutor, operator: OperatorIdentity, wid: string, body: Reasons & { held: boolean }, expectVersion?: number) => standingChange(tx, operator, wid, body, body.held ? 'operator-hold-marketing' : 'operator-release-marketing', current => body.held
+    ? { kind: 'operator', marketingHold: true, step: current.step === 'pause' ? 'pause' : 'restrict', reasons: current.step === 'pause' ? undefined : [{ ...operatorReason('OPERATOR_HOLD', `${productName} holds marketing after a review.`)[0]!, step: 'restrict' }] }
+    : { kind: 'operator', marketingHold: false, step: current.step === 'restrict' ? 'warn' : current.step as Change['step'] }, expectVersion),
+  /** The daily limit's override (null: back to the score's limit), with a standing event. */
+  limit: async (tx: DbExecutor, operator: OperatorIdentity, wid: string, body: Reasons & { daily: number | null; expiresAt?: string | null }, expectVersion?: number): OperatorChange<ReturnType<typeof done>> => {
+    const current = await standingOf(tx, wid);
+    if (expectVersion !== undefined && current && current.version !== expectVersion) throw new ApiError(412, 'STANDING_VERSION_CHANGED', `The standing changed since version ${expectVersion} (now ${current.version}).`);
+    const { rows: [before] } = await tx.execute<{ daily: number | null; expiresAt: string | null; restoreCap: number | null }>(sql`SELECT w.send_cap_override AS daily,w.send_cap_override_expires_at AS "expiresAt",
+      CASE WHEN pc.restore_until>now() THEN pc.restore_cap END AS "restoreCap" FROM workspaces w JOIN provider_connections pc ON pc.workspace_id=w.id AND pc.kind='shared' WHERE w.id=${wid} FOR UPDATE OF w,pc`);
+    await tx.execute(sql`UPDATE workspaces SET send_cap_override=${body.daily},send_cap_override_expires_at=${body.daily === null ? null : body.expiresAt ?? null}::timestamptz WHERE id=${wid}`);
+    // An operator's explicit limit is the decision: it ends a resume's reduced limit (kept in the audit's before).
+    if (body.daily !== null && before?.restoreCap) await tx.execute(sql`UPDATE provider_connections SET restore_cap=NULL,restore_until=NULL WHERE workspace_id=${wid} AND kind='shared'`);
+    await tx.execute(sql`WITH s AS (UPDATE sender_standing SET sequence=sequence+1 WHERE workspace_id=${wid} RETURNING workspace_id,sequence,step)
+      INSERT INTO standing_events(id,workspace_id,sequence,kind,from_step,to_step,actor,details) SELECT 'stev_'||replace(gen_random_uuid()::text,'-',''),workspace_id,sequence,'limit',step,step,
+        ${JSON.stringify({ kind: 'operator', id: operator.userId, via: 'console' })}::jsonb,${JSON.stringify({ override: { from: before, to: { daily: body.daily, expiresAt: body.expiresAt ?? null } }, reason: body.reason })}::jsonb FROM s`);
+    return { result: { ok: true as const, version: current?.version ?? null, step: current?.step ?? null }, audit: { action: 'operator-set-limit', before, after: { daily: body.daily, expiresAt: body.expiresAt ?? null }, reason: body.reason, ticketRef: body.ticketRef, internal: body.internal } };
+  },
+  /** Lifts the growth pace after the evaluation (src/standing-model.ts GROWTH). */
+  liftGrowth: async (tx: DbExecutor, operator: OperatorIdentity, wid: string, body: Reasons, expectVersion?: number): OperatorChange<ReturnType<typeof done>> => {
+    const { rows: [before] } = await tx.execute<{ until: string | null; cap: number | null }>(sql`SELECT growth_until AS until,growth_cap AS cap FROM sender_standing WHERE workspace_id=${wid} FOR UPDATE`);
+    if (!before?.until || Date.parse(before.until) <= Date.now() || before.cap === null) throw new ApiError(409, 'GROWTH_NOT_ACTIVE', 'This workspace has no growth pace to lift.');
+    await tx.execute(sql`UPDATE sender_standing SET growth_until=NULL,growth_cap=NULL,growth_hour=NULL,growth_quality=NULL WHERE workspace_id=${wid}`);
+    const result = await applyChange(tx, { workspaceId: wid, actor: { kind: 'operator', id: operator.userId, via: 'console' }, expectVersion, kind: 'operator', details: { growthLifted: before, reason: body.reason } });
+    return { result: done(result), audit: { action: 'operator-lift-growth', before, after: { until: null, cap: null }, reason: body.reason, ticketRef: body.ticketRef } };
+  },
+  /** The domain limit (null: back to the default of 100). Lowering it removes nothing. */
+  domainLimit: async (tx: DbExecutor, wid: string, body: Reasons & { limit: number | null }): OperatorChange<{ ok: true; domainLimit: z.infer<typeof DomainLimit> }> => {
+    const { rows: [before] } = await tx.execute<{ limit: number | null }>(sql`SELECT domain_limit AS "limit" FROM workspaces WHERE id=${wid} FOR NO KEY UPDATE`);
+    if (!before) notFound('Workspace');
+    await tx.execute(sql`UPDATE workspaces SET domain_limit=${body.limit} WHERE id=${wid}`);
+    const { rows: [view] } = await tx.execute<{ domainLimit: z.infer<typeof DomainLimit> }>(sql`SELECT (${domainLimitOf(wid)}) AS "domainLimit"`);
+    return { result: { ok: true as const, domainLimit: view!.domainLimit }, audit: { action: 'operator-set-domain-limit', before: { limit: before!.limit }, after: { limit: body.limit }, reason: body.reason, ticketRef: body.ticketRef } };
+  },
+  /** Releases a paused Hosted campaign (a quarantine's review): it sends again, or waits for its schedule. */
+  releaseCampaign: async (tx: DbExecutor, operator: OperatorIdentity, campaignId: string, body: Reasons, workspaceId?: string): OperatorChange<ReturnType<typeof done>> => {
+    const { rows: [campaign] } = await tx.execute<{ workspace_id: string; state: string; expanded: number; request_id: string | null; scheduled_at: string | null; pause_reason: { code: string } | null; quarantines: number; name: string }>(sql`SELECT c.workspace_id,c.state,c.expanded,c.request_id,c.scheduled_at,c.pause_reason,c.quarantines,coalesce(c.draft->>'name',c.id) AS name
+      FROM sending_campaigns c JOIN provider_connections pc ON pc.workspace_id=c.workspace_id AND pc.kind='shared' WHERE c.id=${campaignId}`);
+    if (!campaign || (workspaceId !== undefined && campaign.workspace_id !== workspaceId)) notFound('Campaign');
+    if (campaign!.state !== 'paused') throw new ApiError(409, 'CAMPAIGN_NOT_PAUSED', 'Only a paused campaign can be released.');
+    const wid = campaign!.workspace_id, ref = { workspaceId: wid, id: campaignId };
+    const next = campaign!.scheduled_at && Date.parse(campaign!.scheduled_at) > Date.now() && campaign!.expanded === 0 ? 'scheduled' as const : 'sending' as const;
+    if (!(await tx.execute(resumeCampaign(ref, next))).rows.length) throw new ApiError(409, 'CAMPAIGN_LOCKED', 'The campaign changed meanwhile; reload it.');
+    await tx.execute(clearProbe(ref));
+    await tx.execute(queueCampaignRun(ref, campaign!.request_id ? { requestId: campaign!.request_id } : {}, next === 'scheduled' ? campaign!.scheduled_at : null));
+    const result = await applyChange(tx, { workspaceId: wid, actor: { kind: 'operator', id: operator.userId, via: 'console' }, kind: 'release', details: { campaignId, campaignName: campaign!.name, reason: body.reason } });
+    return { result: done(result), audit: { action: 'operator-release-campaign', before: { campaignId, pauseReason: campaign!.pause_reason, quarantines: campaign!.quarantines }, after: { campaignId, state: next }, reason: body.reason, ticketRef: body.ticketRef } };
+  },
+};
+/** A Hosted workspace (shared sending), or 404: the console's standing, limit and growth changes need one. */
+export const hostedWorkspaceOf = (db: DbExecutor, id: string) => hostedWorkspace(db, id);
+
 export function registerOperator(app: App) {
   registerOperatorLists(app);
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'get', path: '/v1/operator/workspaces', operationId: 'operatorListWorkspaces',
@@ -206,83 +284,48 @@ export function registerOperator(app: App) {
   });
 
   const MutationBody = z.object({ reason: Reason, ticketRef: TicketRef }).strict();
-  const done = z.object({ ok: z.literal(true), version: z.number().int().nullable(), step: z.string().nullable() });
+  const Done = z.object({ ok: z.literal(true), version: z.number().int().nullable(), step: z.string().nullable() });
   const ReviewedBody = z.object({ reason: Reason.optional(), evidence: Evidence.optional(), ticketRef: TicketRef }).strict();
-  const change = async (c: Ctx, wid: string, body: { reason: string; ticketRef?: string; internal?: Record<string, unknown> }, action: string, build: (current: NonNullable<Awaited<ReturnType<typeof standingOf>>>) => Omit<Change, 'workspaceId' | 'actor' | 'expectVersion'>) => {
+  /** A Hosted workspace's change, as the signed-in operator, in mutate(). */
+  const change = async <T>(c: Ctx, wid: string, body: unknown, work: (tx: DbExecutor, operator: OperatorIdentity, expectVersion: number | undefined) => OperatorChange<T>) => {
     const operator = await operatorActor(c, 'operator');
     await hostedWorkspace(c.env.db, wid);
-    return mutate(c, operator, wid, body, async (tx, expectVersion) => {
-      const before = await standingOf(tx, wid);
-      if (!before) notFound('Hosted workspace');
-      const result = await applyChange(tx, { workspaceId: wid, actor: { kind: 'operator', id: operator.userId, via: 'console' }, expectVersion, ...build(before!),
-        details: { reason: body.reason, ...(body.ticketRef ? { ticketRef: body.ticketRef } : {}), ...build(before!).details } });
-      const after = await standingOf(tx, wid);
-      return { result: { ok: true as const, version: result?.version ?? null, step: result?.step ?? null }, audit: { action, before, after, reason: body.reason, ticketRef: body.ticketRef, internal: body.internal } };
-    });
+    return mutate(c, operator, wid, body, (tx, expectVersion) => work(tx, operator, expectVersion));
   };
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'post', path: '/v1/operator/workspaces/{id}/pause', operationId: 'operatorPauseWorkspace', request: { params: WorkspaceParam, headers: z.object(Mutation), body: json(ReviewedBody) },
-    responses: { 200: response(done), ...errors } }), async c => {
+    responses: { 200: response(Done), ...errors } }), async c => {
     const body = reasoned(c.req.valid('json')), wid = c.req.valid('param').id;
     await operatorActor(c, 'operator'); await evidenceFor(c.env.db, wid, body.internal);
-    return c.json(await change(c, wid, body, 'operator-pause', current => {
-      if (current.paused) throw new ApiError(409, 'ALREADY_PAUSED', 'This workspace is already paused.');
-      // The reason is for the audit and the operator timeline; customers see that Nightmail paused it after a review.
-      return { kind: 'operator', step: 'pause', pauseKind: 'full', pause: { message: `Hosted sending paused by ${productName} after a review. Ask for a review from the dashboard for details.` }, reasons: operatorReason('OPERATOR_PAUSE', `${productName} paused sending after a review.`) };
-    }), 200);
+    return c.json(await change(c, wid, body, (tx, operator, expectVersion) => operatorChanges.pause(tx, operator, wid, body, expectVersion)), 200);
   });
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'post', path: '/v1/operator/workspaces/{id}/resume', operationId: 'operatorResumeWorkspace',
     request: { params: WorkspaceParam, headers: z.object(Mutation), body: json(z.object({ reason: Reason, ticketRef: TicketRef, restore: z.union([z.literal(50), z.literal(100)]).default(50) }).strict()) },
-    responses: { 200: response(done), ...errors } }), async c => {
+    responses: { 200: response(Done), ...errors } }), async c => {
     const body = c.req.valid('json'), wid = c.req.valid('param').id;
-    return c.json(await change(c, wid, body, 'operator-resume', current => {
-      if (!current.paused) throw new ApiError(409, 'NOT_PAUSED', 'This workspace is not paused.');
-      return { kind: 'operator', step: 'warn', resume: { percent: body.restore, caps: c.env.config.hostedSendCaps }, details: { restore: body.restore } };
-    }), 200);
+    return c.json(await change(c, wid, body, (tx, operator, expectVersion) => operatorChanges.resume(tx, operator, wid, body, c.env.config.hostedSendCaps, expectVersion)), 200);
   });
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'put', path: '/v1/operator/workspaces/{id}/marketing', operationId: 'operatorSetMarketingHold',
     request: { params: WorkspaceParam, headers: z.object(Mutation), body: json(z.object({ held: z.boolean(), reason: Reason, ticketRef: TicketRef }).strict()) },
-    responses: { 200: response(done), ...errors } }), async c => {
+    responses: { 200: response(Done), ...errors } }), async c => {
     const body = c.req.valid('json'), wid = c.req.valid('param').id;
-    return c.json(await change(c, wid, body, body.held ? 'operator-hold-marketing' : 'operator-release-marketing', current => body.held
-      ? { kind: 'operator', marketingHold: true, step: current.step === 'pause' ? 'pause' : 'restrict', reasons: current.step === 'pause' ? undefined : [{ ...operatorReason('OPERATOR_HOLD', `${productName} holds marketing after a review.`)[0]!, step: 'restrict' }] }
-      : { kind: 'operator', marketingHold: false, step: current.step === 'restrict' ? 'warn' : current.step as Change['step'] }), 200);
+    return c.json(await change(c, wid, body, (tx, operator, expectVersion) => operatorChanges.marketing(tx, operator, wid, body, expectVersion)), 200);
   });
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'put', path: '/v1/operator/workspaces/{id}/limit', operationId: 'operatorSetLimit',
     request: { params: WorkspaceParam, headers: z.object(Mutation), body: json(z.object({ daily: z.number().int().min(1).max(10_000_000).nullable().describe('null returns the workspace to the score limit.'),
       expiresAt: z.iso.datetime().nullable().optional().describe('When the override ends (at most a year ahead); omit or null for no expiry.'), reason: Reason.optional(), evidence: Evidence.optional(), ticketRef: TicketRef }).strict()) },
-    responses: { 200: response(done), ...errors } }), async c => {
+    responses: { 200: response(Done), ...errors } }), async c => {
     const body = reasoned(c.req.valid('json')), wid = c.req.valid('param').id;
     if (body.expiresAt && (Date.parse(body.expiresAt) <= Date.now() || Date.parse(body.expiresAt) > Date.now() + 366 * 86_400_000)) throw new ApiError(422, 'INVALID_EXPIRY', 'Choose an expiry between now and a year from now.', 'expiresAt');
     const operator = await operatorActor(c, 'operator');
     await hostedWorkspace(c.env.db, wid); await evidenceFor(c.env.db, wid, body.internal);
-    return c.json(await mutate(c, operator, wid, body, async (tx, expectVersion) => {
-      const current = await standingOf(tx, wid);
-      if (expectVersion !== undefined && current && current.version !== expectVersion) throw new ApiError(412, 'STANDING_VERSION_CHANGED', `The standing changed since version ${expectVersion} (now ${current.version}).`);
-      const { rows: [before] } = await tx.execute<{ daily: number | null; expiresAt: string | null; restoreCap: number | null }>(sql`SELECT w.send_cap_override AS daily,w.send_cap_override_expires_at AS "expiresAt",
-        CASE WHEN pc.restore_until>now() THEN pc.restore_cap END AS "restoreCap" FROM workspaces w JOIN provider_connections pc ON pc.workspace_id=w.id AND pc.kind='shared' WHERE w.id=${wid} FOR UPDATE OF w,pc`);
-      await tx.execute(sql`UPDATE workspaces SET send_cap_override=${body.daily},send_cap_override_expires_at=${body.daily === null ? null : body.expiresAt ?? null}::timestamptz WHERE id=${wid}`);
-      // An operator's explicit limit is the decision: it ends a resume's reduced limit (kept in the audit's before).
-      if (body.daily !== null && before?.restoreCap) await tx.execute(sql`UPDATE provider_connections SET restore_cap=NULL,restore_until=NULL WHERE workspace_id=${wid} AND kind='shared'`);
-      await tx.execute(sql`WITH s AS (UPDATE sender_standing SET sequence=sequence+1 WHERE workspace_id=${wid} RETURNING workspace_id,sequence,step)
-        INSERT INTO standing_events(id,workspace_id,sequence,kind,from_step,to_step,actor,details) SELECT 'stev_'||replace(gen_random_uuid()::text,'-',''),workspace_id,sequence,'limit',step,step,
-          ${JSON.stringify({ kind: 'operator', id: operator.userId, via: 'console' })}::jsonb,${JSON.stringify({ override: { from: before, to: { daily: body.daily, expiresAt: body.expiresAt ?? null } }, reason: body.reason })}::jsonb FROM s`);
-      return { result: { ok: true as const, version: current?.version ?? null, step: current?.step ?? null }, audit: { action: 'operator-set-limit', before, after: { daily: body.daily, expiresAt: body.expiresAt ?? null }, reason: body.reason, ticketRef: body.ticketRef, internal: body.internal } };
-    }), 200);
+    return c.json(await mutate(c, operator, wid, body, (tx, expectVersion) => operatorChanges.limit(tx, operator, wid, body, expectVersion)), 200);
   });
   // The growth pace after the evaluation (src/standing-model.ts GROWTH): an operator lifts it for a known, legitimate
   // launch; the workspace then sends at its per-minute pace. Audited, with a standing event.
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'post', path: '/v1/operator/workspaces/{id}/growth/lift', operationId: 'operatorLiftGrowth',
-    request: { params: WorkspaceParam, headers: z.object(Mutation), body: json(MutationBody) }, responses: { 200: response(done), ...errors } }), async c => {
+    request: { params: WorkspaceParam, headers: z.object(Mutation), body: json(MutationBody) }, responses: { 200: response(Done), ...errors } }), async c => {
     const body = c.req.valid('json'), wid = c.req.valid('param').id;
-    const operator = await operatorActor(c, 'operator');
-    await hostedWorkspace(c.env.db, wid);
-    return c.json(await mutate(c, operator, wid, body, async (tx, expectVersion) => {
-      const { rows: [before] } = await tx.execute<{ until: string | null; cap: number | null }>(sql`SELECT growth_until AS until,growth_cap AS cap FROM sender_standing WHERE workspace_id=${wid} FOR UPDATE`);
-      if (!before?.until || Date.parse(before.until) <= Date.now() || before.cap === null) throw new ApiError(409, 'GROWTH_NOT_ACTIVE', 'This workspace has no growth pace to lift.');
-      await tx.execute(sql`UPDATE sender_standing SET growth_until=NULL,growth_cap=NULL,growth_hour=NULL,growth_quality=NULL WHERE workspace_id=${wid}`);
-      const result = await applyChange(tx, { workspaceId: wid, actor: { kind: 'operator', id: operator.userId, via: 'console' }, expectVersion, kind: 'operator', details: { growthLifted: before, reason: body.reason } });
-      return { result: { ok: true as const, version: result?.version ?? null, step: result?.step ?? null }, audit: { action: 'operator-lift-growth', before, after: { until: null, cap: null }, reason: body.reason, ticketRef: body.ticketRef } };
-    }), 200);
+    return c.json(await change(c, wid, body, (tx, operator, expectVersion) => operatorChanges.liftGrowth(tx, operator, wid, body, expectVersion)), 200);
   });
   // A workspace's domain limit (default 100). Lowering it below the current count removes nothing; it only refuses new
   // domains until the workspace is under it again. Any Hosted workspace, shared or BYO sending.
@@ -291,31 +334,16 @@ export function registerOperator(app: App) {
     responses: { 200: response(z.object({ ok: z.literal(true), domainLimit: DomainLimit })), ...errors } }), async c => {
     const body = c.req.valid('json'), wid = c.req.valid('param').id;
     const operator = await operatorActor(c, 'operator');
-    return c.json(await mutate(c, operator, wid, body, async tx => {
-      const { rows: [before] } = await tx.execute<{ limit: number | null }>(sql`SELECT domain_limit AS "limit" FROM workspaces WHERE id=${wid} FOR NO KEY UPDATE`);
-      if (!before) notFound('Workspace');
-      await tx.execute(sql`UPDATE workspaces SET domain_limit=${body.limit} WHERE id=${wid}`);
-      const { rows: [view] } = await tx.execute<{ domainLimit: z.infer<typeof DomainLimit> }>(sql`SELECT (${domainLimitOf(wid)}) AS "domainLimit"`);
-      return { result: { ok: true as const, domainLimit: view!.domainLimit }, audit: { action: 'operator-set-domain-limit', before: { limit: before!.limit }, after: { limit: body.limit }, reason: body.reason, ticketRef: body.ticketRef } };
-    }), 200);
+    return c.json(await mutate(c, operator, wid, body, tx => operatorChanges.domainLimit(tx, wid, body)), 200);
   });
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'post', path: '/v1/operator/campaigns/{id}/release', operationId: 'operatorReleaseCampaign',
-    request: { params: WorkspaceParam, headers: z.object(Mutation), body: json(MutationBody) }, responses: { 200: response(done), ...errors } }), async c => {
+    request: { params: WorkspaceParam, headers: z.object(Mutation), body: json(MutationBody) }, responses: { 200: response(Done), ...errors } }), async c => {
     const body = c.req.valid('json'), campaignId = c.req.valid('param').id;
     const operator = await operatorActor(c, 'operator');
-    const { rows: [campaign] } = await c.env.db.execute<{ workspace_id: string; state: string; expanded: number; request_id: string | null; scheduled_at: string | null; pause_reason: { code: string } | null; quarantines: number; name: string }>(sql`SELECT c.workspace_id,c.state,c.expanded,c.request_id,c.scheduled_at,c.pause_reason,c.quarantines,coalesce(c.draft->>'name',c.id) AS name
-      FROM sending_campaigns c JOIN provider_connections pc ON pc.workspace_id=c.workspace_id AND pc.kind='shared' WHERE c.id=${campaignId}`);
+    const { rows: [campaign] } = await c.env.db.execute<{ workspace_id: string }>(sql`SELECT c.workspace_id FROM sending_campaigns c JOIN provider_connections pc ON pc.workspace_id=c.workspace_id AND pc.kind='shared' WHERE c.id=${campaignId}`);
     if (!campaign) notFound('Campaign');
-    if (campaign!.state !== 'paused') throw new ApiError(409, 'CAMPAIGN_NOT_PAUSED', 'Only a paused campaign can be released.');
-    const wid = campaign!.workspace_id, ref = { workspaceId: wid, id: campaignId };
-    return c.json(await mutate(c, operator, wid, body, async tx => {
-      const next = campaign!.scheduled_at && Date.parse(campaign!.scheduled_at) > Date.now() && campaign!.expanded === 0 ? 'scheduled' as const : 'sending' as const;
-      if (!(await tx.execute(resumeCampaign(ref, next))).rows.length) throw new ApiError(409, 'CAMPAIGN_LOCKED', 'The campaign changed meanwhile; reload it.');
-      await tx.execute(clearProbe(ref));
-      await tx.execute(queueCampaignRun(ref, campaign!.request_id ? { requestId: campaign!.request_id } : {}, next === 'scheduled' ? campaign!.scheduled_at : null));
-      const result = await applyChange(tx, { workspaceId: wid, actor: { kind: 'operator', id: operator.userId, via: 'console' }, kind: 'release', details: { campaignId, campaignName: campaign!.name, reason: body.reason } });
-      return { result: { ok: true as const, version: result?.version ?? null, step: result?.step ?? null }, audit: { action: 'operator-release-campaign', before: { campaignId, pauseReason: campaign!.pause_reason, quarantines: campaign!.quarantines }, after: { campaignId, state: next }, reason: body.reason, ticketRef: body.ticketRef } };
-    }), 200);
+    const wid = campaign!.workspace_id;
+    return c.json(await mutate(c, operator, wid, body, tx => operatorChanges.releaseCampaign(tx, operator, campaignId, body, wid)), 200);
   });
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'get', path: '/v1/operator/actions', operationId: 'operatorListActions',
     request: { query: z.object({ workspaceId: z.string().max(100).optional(), operator: z.string().max(100).optional(), cursor: Cursor, limit: z.coerce.number().int().min(1).max(200).default(100) }) },

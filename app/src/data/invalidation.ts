@@ -19,6 +19,8 @@ export const invalidate = {
   lists: ['lists', 'campaign-audience-options', 'campaign-audience', 'newsletter', 'newsletters', 'activity'] as const,
   listRemove: ['lists', 'contacts', 'segments', 'campaign-audience-options', 'campaign-audience', 'newsletter', 'newsletters', 'activity'] as const,
   segments: ['segments', 'campaign-audience-options', 'campaign-audience', 'activity'] as const,
+  // A topic's name shows on contacts and campaigns; archiving one changes who a campaign with it counts.
+  topics: ['topics', 'contacts', 'campaign-audience', 'activity'] as const,
   campaignArchive: ['campaign', 'campaigns', 'overview', 'activity'] as const,
   campaignTest: ['logs', 'emails', 'overview', 'overview-setup', 'sending-limit'] as const,
   campaignSend: ['campaign', 'campaigns', 'campaign-stats', 'campaign-audience', 'overview', 'overview-setup', 'logs', 'emails', 'sender-score', 'sending-limit', 'billing', 'billing-ledger', 'billing-history', 'billing-usage', 'usage', 'activity'] as const,

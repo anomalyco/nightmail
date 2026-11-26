@@ -1,15 +1,28 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
-import { actorMailAccess, ApiError, errors, id, isoTime, json, log, memberRefused, notFound, response, wrapModuleLoad, type Actor, type App, type Ctx, type DbExecutor, type Runtime } from './core.js';
+import { actorMailAccess, ApiError, errors, id, isoTime, json, log, memberRefused, notFound, receivingAdminRefusal, response, wrapModuleLoad, type Actor, type App, type Ctx, type DbExecutor, type Runtime } from './core.js';
 import { placementRoot } from './domain-registry.js';
 import { auditContext, auditInsert, systemContext, type AuditContext, type AuditEvent } from './audit.js';
 import { productName } from './brand.js';
 import type { EndpointRecord } from './db/mailbox.js';
+import { AGENT_KINDS, cappedCredit, CREDIT_CAP_CENTS, KINDS as APPROVALS, propose as proposeApproval } from './support-approvals.js';
+import { event } from './support-inbox.js';
 
 // Support actions (api/README.md "Support integration"). A support conversation proposes one of a few fixed changes for
 // its person; only that person, signed in to the dashboard, confirms it, and confirming runs the same function as the
 // change's public route. Nightmail writes what the person approves from its own rows, so neither the support platform
-// nor its model chooses the words. A DNS re-check needs no confirmation: it changes nothing but the stored status.
+// nor its model chooses the words.
+//
+// Safe actions the agent takes on its own, for an owner or admin of the conversation's workspace, with no confirmation:
+// each is reversible or changes nothing but stored state, and each is recorded (a customer-visible entry by support, an
+// internal support.action, and a line on the conversation's timeline in the staff inbox). Each target takes turns
+// across every conversation (support_action_slots, migration 564):
+// - re-check a sending domain's DNS, or a receiving host's (its domain's Check now, which checks its MX too): once a
+//   minute per domain or host;
+// - resend a forward's confirmation email (the dashboard's Send again): nothing is forwarded until the recipient allows
+//   it, and the new link replaces the earlier one; once in 10 minutes per forward, within the endpoint's own daily limits.
+// Risky changes (limits, pauses, credit, a campaign's release) the agent only proposes to staff (POST /v1/support/approvals,
+// src/support-approvals.ts): a signed-in operator approves each in the dashboard, and only that runs it.
 
 const KINDS = {
   retry_webhook_delivery: { route: '/v1/webhooks/{id}/deliveries/{deliveryId}/retry', access: 'webhooks', target: 'Delivery' },
@@ -17,11 +30,15 @@ const KINDS = {
   retry_inbound_delivery: { route: '/v1/inbound/webhooks/{id}/deliveries/{deliveryId}/retry', access: 'receiving', target: 'Delivery' },
   test_inbound_webhook: { route: '/v1/inbound/webhooks/{id}/test', access: 'receiving', target: 'Webhook' },
   redeliver_message: { route: '/v1/inbound/messages/{messageId}/redeliver', access: 'receiving', target: 'Message' },
-  pause_campaign: { route: '/v1/campaigns/{id}/pause', access: 'campaigns', target: 'Campaign' },
+  // The workspace's owner pauses its own campaign from support: an admin, whose own session may pause it in the dashboard,
+  // is offered no card for it (decision on #915), and an owner demoted since the proposal can't confirm it.
+  pause_campaign: { route: '/v1/campaigns/{id}/pause', access: 'campaigns', target: 'Campaign', owner: true },
 } as const;
 type Kind = keyof typeof KINDS;
 /** Open proposals per conversation, and how long one stays open. */
 export const OPEN_ACTIONS = 3, ACTION_HOURS = 24;
+/** Risky proposals to staff waiting per conversation (POST /v1/support/approvals). */
+export const OPEN_PROPOSALS = 3;
 /**
  * How long a confirmed inbound-webhook test may stay running: its post (at most 30 seconds) happens after its claim
  * commits, so a request that died in between never records the answer. After this the action settles as failed with
@@ -32,9 +49,10 @@ export const RUNNING_MINUTES = 5;
 /** A person's dashboard actor in a workspace, as a signed-in session gets it (account-login.ts accountSessionActor). */
 const personActor = (keyId: string, workspaceId: string, role: string, credential: 'dashboard' | 'support'): Actor =>
   ({ keyId, workspaceId, role, permissions: role === 'member' ? ['read', 'send'] : ['manage'], domains: [], credential });
-/** Why the change's public route refuses this actor, or null: its path guard (app.ts memberRefused), then its own check. */
+/** Why this actor may not make the change, or null: a kind marked owner, anyone but the owner; then the public route's path guard (app.ts memberRefused) and its own check. */
 function refusal(kind: Kind, a: Actor) {
   const { route, access } = KINDS[kind];
+  if ('owner' in KINDS[kind] && a.role !== 'owner') return new ApiError(403, 'PERMISSION_DENIED', 'From support, only the workspace’s owner can make this change. An owner or admin can still do it in the dashboard.');
   const allowed = !memberRefused(a, 'POST', route) && (access === 'webhooks' ? a.permissions.includes('manage') && !a.domains.length
     : access === 'receiving' ? actorMailAccess(a)?.admin === true : a.permissions.includes('manage') || a.permissions.includes('send'));
   return allowed ? null : new ApiError(403, 'PERMISSION_DENIED', 'This operation requires a workspace owner or admin.');
@@ -224,6 +242,54 @@ async function settled(db: DbExecutor, row: Row) {
   return done ?? (await db.execute<Row>(sql`SELECT ${columns} FROM support_actions WHERE id = ${row.id}`)).rows[0]!;
 }
 
+/** How often a safe action may run for one target, in seconds. */
+export const ACTION_TURNS = { verify_domain: 60, recheck_receiving_host: 60, resend_forward: 600 } as const;
+type SafeKind = keyof typeof ACTION_TURNS;
+/**
+ * A safe action's turn for its target, in the action's own transaction (a failed action gives it back): refused while the
+ * same action ran for the same target within its window, from whichever conversation.
+ */
+async function takeTurn(tx: DbExecutor, kind: SafeKind, target: string) {
+  const { rows } = await tx.execute(sql`INSERT INTO support_action_slots(kind, target) VALUES (${kind}, ${target})
+    ON CONFLICT (kind, target) DO UPDATE SET at = now() WHERE support_action_slots.at <= now() - make_interval(secs => ${ACTION_TURNS[kind]}) RETURNING 1`);
+  if (rows.length) return;
+  const seconds = ACTION_TURNS[kind], error = new ApiError(429, 'SUPPORT_ACTION_TOO_SOON', `This was just done for the same ${kind === 'resend_forward' ? 'forward' : kind === 'verify_domain' ? 'domain' : 'receiving host'}: it can run again ${seconds >= 120 ? `${seconds / 60} minutes` : `${seconds} seconds`} after the last time.`, undefined, true);
+  error.retryAfterSeconds = seconds;
+  throw error;
+}
+type Conversation = { id: string; userId: string; workspaces: { id: string; role: string }[] };
+/** Support acting for the conversation's person: who the customer's activity says did it, and for whom. */
+const supportContext = (c: Ctx, conversation: Conversation): AuditContext => ({ ...auditContext(c), actor: { type: 'support', id: conversation.id, userId: conversation.userId, via: 'support', label: `${productName} support` } });
+/** A safe action's internal trail and timeline line, in its transaction: `kind`, its target and what it names. */
+async function recordAction(tx: DbExecutor, context: AuditContext, conversation: Conversation, workspaceId: string, kind: SafeKind, target: { type: string; id: string }, details: Record<string, unknown>) {
+  await tx.execute(auditInsert(context, { workspaceId, userId: conversation.userId, target, ticketRef: conversation.id, action: 'support.action', details: { kind, ...details }, internal: true }));
+  await tx.execute(event(conversation.id, 'action', null, { kind, target, ...details }));
+}
+/**
+ * Re-checks a domain's DNS now, as the customer's own Check now does (Domains, or Check MX now under Receiving: both
+ * verify the domain, and the verification checks its receiving MX too), for an owner or admin: queues a background
+ * verification and answers the stored status. The customer sees that support re-checked it, and for whom.
+ */
+async function recheckDomain(c: Ctx, conversation: Conversation, domainId: string, as: { kind: 'verify_domain' | 'recheck_receiving_host'; target: { type: string; id: string }; details?: Record<string, unknown> }) {
+  const { rows: [domain] } = await c.env.db.execute<{ workspace_id: string; name: string }>(sql`SELECT workspace_id, name FROM operation_domains
+    WHERE id = ${domainId} AND workspace_id = ANY(${sql.param(conversation.workspaces.map(w => w.id))}::text[])`);
+  if (!domain) notFound('Domain');
+  const a = personActor(conversation.id, domain!.workspace_id, conversation.workspaces.find(w => w.id === domain!.workspace_id)!.role, 'support');
+  if (memberRefused(a, 'POST', '/v1/domains/{id}/verify') || !a.permissions.includes('manage')) throw new ApiError(403, 'PERMISSION_DENIED', 'This operation requires a workspace owner or admin.');
+  c.set('actor', a);
+  // The re-check and its trail commit together: the customer sees that support checked the domain, and for whom.
+  const context = supportContext(c, conversation);
+  const readiness = await c.env.db.transaction(async tx => {
+    await takeTurn(tx, as.kind, as.target.id);
+    const readiness = await (await wrapModuleLoad(() => import('./operations.js'))).verifyHostedDomain({ ...c.env, db: tx }, a, domainId);
+    const queued = a.wakeJobs === 1, details = { domain: domain!.name, ...as.details, queued };
+    await tx.execute(auditInsert(context, { workspaceId: domain!.workspace_id, userId: conversation.userId, target: { type: 'domain', id: domainId }, ticketRef: conversation.id, action: 'domain.verify', details, internal: false }));
+    await recordAction(tx, context, conversation, domain!.workspace_id, as.kind, as.target, details);
+    return readiness;
+  });
+  return { readiness, workspaceId: domain!.workspace_id, queued: a.wakeJobs === 1 };
+}
+
 export function registerSupportActions(app: App) {
   const tags = ['Support (internal)'], security: Record<string, string[]>[] = [{ bearerAuth: [] }];
   const describe = (text: string) => `${text} Internal: for ${productName} support, for one support conversation, never for customers.`;
@@ -236,7 +302,7 @@ export function registerSupportActions(app: App) {
   };
 
   // A proposal needs a workspace where the person may act: with none, nothing in any body could be one.
-  app.use('/v1/support/actions', async (c, next) => {
+  for (const path of ['/v1/support/actions', '/v1/support/approvals']) app.use(path, async (c, next) => {
     if (c.req.method === 'POST' && c.get('support')?.conversation && !c.get('support')!.workspaces.length) notFound('Workspace');
     await next();
   });
@@ -284,24 +350,98 @@ export function registerSupportActions(app: App) {
   app.openapi(createRoute({ hide: true, method: 'post', path: '/v1/support/domains/{id}/verify', operationId: 'recheckSupportDomain', tags, security,
     description: describe('Re-check a domain’s DNS now, as the customer’s own “Verify” does (an owner or admin’s domain only): queues a background verification and answers the stored status. Needs no confirmation.'),
     request: { params: z.object({ id: Id }) }, responses: { 200: response(Recheck), ...errors } }), async c => {
-    const conversation = conversationOf(c), domainId = c.req.valid('param').id;
-    const { rows: [domain] } = await c.env.db.execute<{ workspace_id: string; name: string }>(sql`SELECT workspace_id, name FROM operation_domains
-      WHERE id = ${domainId} AND workspace_id = ANY(${sql.param(conversation.workspaces.map(w => w.id))}::text[])`);
-    if (!domain) notFound('Domain');
-    const a = personActor(conversation.id, domain!.workspace_id, conversation.workspaces.find(w => w.id === domain!.workspace_id)!.role, 'support');
-    if (memberRefused(a, 'POST', '/v1/domains/{id}/verify') || !a.permissions.includes('manage')) throw new ApiError(403, 'PERMISSION_DENIED', 'This operation requires a workspace owner or admin.');
+    const { readiness, workspaceId, queued } = await recheckDomain(c, conversationOf(c), c.req.valid('param').id, { kind: 'verify_domain', target: { type: 'domain', id: c.req.valid('param').id } });
+    return c.json({ id: readiness.id, workspaceId, name: readiness.name, verificationStatus: readiness.verificationStatus, verified: readiness.verified, dkimStatus: readiness.dkimStatus,
+      sending: readiness.sending, receiving: readiness.receiving, mailFromStatus: readiness.mailFromStatus, recheckQueued: queued }, 200);
+  });
+
+  const HostRecheck = z.object({ id: z.string(), workspaceId: z.string(), domainId: z.string(), host: z.string(), status: z.string().describe('The host\u2019s stored state before this check finishes: read receiving_hosts again shortly.'),
+    lastCheckedAt: z.string().nullable(), recheckQueued: z.boolean().describe('False when a check was already due: read the hosts again shortly.') }).openapi('SupportReceivingHostRecheck');
+  app.openapi(createRoute({ hide: true, method: 'post', path: '/v1/support/receiving/hosts/{id}/recheck', operationId: 'recheckSupportReceivingHost', tags, security,
+    description: describe(`Re-check a receiving host's MX now (an owner or admin's), as the customer's own Check MX now does: its domain is verified in the background, MX included, and the host's stored state is answered. Needs no confirmation. Once a minute per host.`),
+    request: { params: z.object({ id: Id }) }, responses: { 200: response(HostRecheck), ...errors } }), async c => {
+    const conversation = conversationOf(c), hostId = c.req.valid('param').id;
+    const host = async () => (await c.env.db.execute<{ id: string; workspace_id: string; domain_id: string; host: string; status: string; checked_at: string | null }>(sql`SELECT id, workspace_id, domain_id,
+        coalesce(receiving_host, name) AS host, status, checked_at::text AS checked_at FROM mailbox_domains WHERE id = ${hostId} AND workspace_id = ANY(${sql.param(conversation.workspaces.map(w => w.id))}::text[])`)).rows[0];
+    const found = await host();
+    if (!found) notFound('Receiving host');
+    const { queued } = await recheckDomain(c, conversation, found!.domain_id, { kind: 'recheck_receiving_host', target: { type: 'receiving_host', id: hostId }, details: { host: found!.host } });
+    const now = (await host())!;
+    return c.json({ id: now.id, workspaceId: now.workspace_id, domainId: now.domain_id, host: now.host, status: now.status, lastCheckedAt: isoTime(now.checked_at), recheckQueued: queued }, 200);
+  });
+
+  const Resent = z.object({ id: z.string(), workspaceId: z.string(), name: z.string().nullable(), status: z.literal('pending'), requestedAt: z.string().nullable(), expiresAt: z.string().nullable(),
+    recipientDomain: z.string().nullable().describe('The domain of the address it forwards to (never the whole address).') }).openapi('SupportForwardResent');
+  app.openapi(createRoute({ hide: true, method: 'post', path: '/v1/support/receiving/forwards/{id}/resend', operationId: 'resendSupportForwardConfirmation', tags, security,
+    description: describe(`Email a forward's recipient a new confirmation link (an owner or admin's forward not yet confirmed), as the dashboard's Send again does: the new link replaces the earlier one. Needs no confirmation: nothing is forwarded until the recipient allows it. Once in 10 minutes per forward, within the endpoint's own daily limits.`),
+    request: { params: z.object({ id: Id }) }, responses: { 200: response(Resent), ...errors } }), async c => {
+    const conversation = conversationOf(c), endpointId = c.req.valid('param').id;
+    const { rows: [forward] } = await c.env.db.execute<{ workspace_id: string; key: string | null }>(sql`SELECT workspace_id, key FROM mailbox_webhooks WHERE id = ${endpointId} AND type = 'forward'
+      AND workspace_id = ANY(${sql.param(conversation.workspaces.map(w => w.id))}::text[])`);
+    if (!forward) notFound('Forward');
+    const wid = forward!.workspace_id, a = personActor(conversation.id, wid, conversation.workspaces.find(w => w.id === wid)!.role, 'support');
+    const refused = receivingAdminRefusal(a, 'resend a forward confirmation');
+    if (refused) throw refused;
     c.set('actor', a);
-    // The re-check and its trail commit together: the customer sees that support checked the domain, and for whom.
-    const context: AuditContext = { ...auditContext(c), actor: { type: 'support', id: conversation.id, userId: conversation.userId, via: 'support', label: `${productName} support` } };
-    const readiness = await c.env.db.transaction(async tx => {
-      const readiness = await (await wrapModuleLoad(() => import('./operations.js'))).verifyHostedDomain({ ...c.env, db: tx }, a, domainId);
-      const trail = { workspaceId: domain!.workspace_id, userId: conversation.userId, target: { type: 'domain', id: domainId }, ticketRef: conversation.id };
-      await tx.execute(auditInsert(context, { ...trail, action: 'domain.verify', details: { domain: domain!.name, queued: a.wakeJobs === 1 }, internal: false }));
-      await tx.execute(auditInsert(context, { ...trail, action: 'support.action', details: { kind: 'verify_domain', domain: domain!.name, queued: a.wakeJobs === 1 }, internal: true }));
-      return readiness;
+    const context = supportContext(c, conversation), { resendForwardConfirmation } = await wrapModuleLoad(() => import('./endpoints.js'));
+    await c.env.db.transaction(async tx => {
+      await takeTurn(tx, 'resend_forward', endpointId);
+      if (!await resendForwardConfirmation(c, tx, wid, { id: endpointId })) notFound('Forward');
+      const details = { endpoint: forward!.key };
+      await tx.execute(auditInsert(context, { workspaceId: wid, userId: conversation.userId, target: { type: 'endpoint', id: endpointId }, ticketRef: conversation.id, action: 'endpoint.verification', details, internal: false }));
+      await recordAction(tx, context, conversation, wid, 'resend_forward', { type: 'endpoint', id: endpointId }, details);
     });
-    return c.json({ id: readiness.id, workspaceId: domain!.workspace_id, name: readiness.name, verificationStatus: readiness.verificationStatus, verified: readiness.verified, dkimStatus: readiness.dkimStatus,
-      sending: readiness.sending, receiving: readiness.receiving, mailFromStatus: readiness.mailFromStatus, recheckQueued: a.wakeJobs === 1 }, 200);
+    // The confirmation email is queued: the request wakes the jobs once it commits, as the dashboard's does.
+    a.wakeJobs = 1;
+    const { rows: [now] } = await c.env.db.execute<{ requested_at: string | null; expires_at: string | null; target: string | null }>(sql`SELECT requested_at::text, expires_at::text, encrypted_target AS target FROM mailbox_webhooks WHERE id = ${endpointId} AND workspace_id = ${wid}`);
+    let recipientDomain: string | null = null;
+    try { const address = await (await wrapModuleLoad(() => import('./operations.js'))).decrypt(c.env, now!.target!, `${wid}:endpoint:${endpointId}`); recipientDomain = address.slice(address.lastIndexOf('@') + 1).toLowerCase() || null; } catch { /* Named by its endpoint alone. */ }
+    return c.json({ id: endpointId, workspaceId: wid, name: forward!.key, status: 'pending' as const, requestedAt: isoTime(now?.requested_at), expiresAt: isoTime(now?.expires_at), recipientDomain }, 200);
+  });
+
+  // ---------- risky changes: proposed to staff, never run here ----------
+  const ProposalBody = z.object({
+    kind: z.enum(AGENT_KINDS as [string, ...string[]]).describe(AGENT_KINDS.map(k => `${k}: ${APPROVALS[k].label}`).join('; ')),
+    reason: z.string().trim().min(10).max(400).describe('Why, in plain words, for staff: what the customer asked and what the reads showed.'),
+    daily: z.number().int().optional().describe('raise_daily_limit: the daily limit to set.'), limit: z.number().int().optional().describe('raise_domain_limit: the domain limit to set.'),
+    campaignId: Id.optional().describe('release_campaign: the paused campaign.'),
+    amountCents: z.number().int().optional().describe('grant_credit: the promotional credit asked for, in cents. A proposal grants at most 10,000 ($100): a larger ask, up to 100,000, is capped, and staff see the ask. One credit proposal waits per conversation at a time.'),
+  }).strict().openapi('SupportApprovalProposal');
+  const Proposed = z.object({ id: z.string(), kind: z.string(), label: z.string(), summary: z.string(), state: z.literal('proposed'), expiresAt: z.string() }).openapi('SupportApprovalProposed');
+  app.openapi(createRoute({ hide: true, method: 'post', path: '/v1/support/approvals', operationId: 'proposeSupportApproval', tags, security,
+    description: describe(`Propose a risky change to ${productName} staff for the conversation's workspace (an owner or admin's): a limit, a pause or resume, the marketing hold's or a campaign's release, or promotional credit (at most $100 a proposal, one waiting per conversation; a larger ask is capped and shown). Nothing runs here: it waits for a signed-in operator's approval in the dashboard, from the staff email, for 72 hours; the conversation gets a ticket if it has none open. At most ${OPEN_PROPOSALS} open per conversation; the same proposal again answers the open one.`),
+    request: { body: json(ProposalBody) }, responses: { 200: response(Proposed), 201: response(Proposed), ...errors } }), async c => {
+    const conversation = conversationOf(c), { kind: name, reason, ...fields } = c.req.valid('json'), kind = name as (typeof AGENT_KINDS)[number];
+    if (conversation.workspaces.length !== 1) throw new ApiError(422, 'WORKSPACE_REQUIRED', 'A proposal is for one workspace: pass workspaceId.', 'workspaceId');
+    // Credit: one proposal grants at most CREDIT_CAP_CENTS; a larger ask (up to the console's own $1,000) is capped, and the
+    // ask is kept so staff see it. More is for a person to start themselves.
+    const credit = kind === 'grant_credit' && typeof fields.amountCents === 'number' && fields.amountCents <= 100_000 ? cappedCredit(fields.amountCents) : {};
+    const wid = conversation.workspaces[0]!.id, parsed = APPROVALS[kind].payload!.safeParse({ workspaceId: wid, ...fields, ...credit });
+    if (!parsed.success) throw new ApiError(422, 'VALIDATION_FAILED', `${kind} takes ${Object.keys(APPROVALS[kind].payload!.shape).filter(k => k !== 'workspaceId').join(', ') || 'nothing but the reason'}, in range.`);
+    const payload = parsed.data as Record<string, unknown>;
+    if (kind === 'release_campaign' && !(await c.env.db.execute(sql`SELECT FROM sending_campaigns WHERE id = ${String(payload.campaignId)} AND workspace_id = ${wid}`)).rows.length) notFound('Campaign');
+    const context = supportContext(c, conversation);
+    const made = await c.env.db.transaction(async tx => {
+      // Proposals for one conversation take turns: the count below sees every one proposed before it.
+      await tx.execute(sql`SELECT id FROM support_conversations WHERE id = ${conversation.id} FOR UPDATE`);
+      const { rows: [open] } = await tx.execute<{ n: number; same: boolean; credit: boolean }>(sql`SELECT count(*)::int AS n, bool_or(kind = ${kind} AND payload = ${JSON.stringify(payload)}::jsonb) AS same,
+          bool_or(kind = 'grant_credit') AS credit FROM support_approvals
+        WHERE conversation_id = ${conversation.id} AND proposed_by = 'agent' AND state = 'proposed' AND expires_at > now()`);
+      if (!open?.same && kind === 'grant_credit' && open?.credit) throw new ApiError(409, 'SUPPORT_CREDIT_PROPOSAL_OPEN', `This conversation already has a credit proposal waiting for staff: one at a time, and at most ${'$'}${CREDIT_CAP_CENTS / 100} each. More is for a person: file a ticket.`);
+      if (!open?.same && open!.n >= OPEN_PROPOSALS) throw new ApiError(409, 'SUPPORT_PROPOSALS_OPEN', `This conversation already has ${OPEN_PROPOSALS} proposals waiting for staff.`);
+      const approval = await proposeApproval(tx, { conversationId: conversation.id, kind, reason, proposedBy: 'agent', payload });
+      if (approval.created) {
+        // It needs a person now: a ticket (if none is open) puts it in Needs you, and the staff email carries the approval.
+        await (await wrapModuleLoad(() => import('./support-staff-mail.js'))).openStaffTicket(tx, conversation.id, 'P3', true);
+        await tx.execute(sql`UPDATE support_conversations SET done_at = NULL, done_by = NULL WHERE id = ${conversation.id} AND done_at IS NOT NULL`);
+        await tx.execute(event(conversation.id, 'proposed', null, { approval: approval.id, kind, label: APPROVALS[kind].label, summary: APPROVALS[kind].summary!(payload) }));
+        await tx.execute(auditInsert(context, { workspaceId: wid, userId: conversation.userId, target: { type: 'support_approval', id: approval.id }, ticketRef: conversation.id, action: 'support.proposal',
+          details: { kind, payload }, internal: true }));
+      }
+      return approval;
+    });
+    if (made.created) log('info', { code: 'SUPPORT_APPROVAL_PROPOSED', conversationId: conversation.id, approvalId: made.id, kind });
+    return c.json({ id: made.id, kind, label: APPROVALS[kind].label, summary: APPROVALS[kind].summary!(payload), state: 'proposed' as const, expiresAt: made.expiresAt.toISOString() }, made.created ? 201 : 200);
   });
 
   // ---------- the customer's own session: only the person a proposal is for, while a member of its workspace ----------

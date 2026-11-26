@@ -284,6 +284,29 @@ async function existingWorkspace(db: DbExecutor, wid: string) {
   if (!row) notFound('Workspace');
 }
 type Posted = { applied: boolean; entryId?: string; balanceUc: string; promoUc: string };
+type MoneyWork = (tx: DbExecutor, before: Account, who: string, operatorId: string) => Promise<Posted | Account>;
+/** One operator money change in the caller's transaction, with the account before and after and the audit row to write (billingAudit). */
+async function moneyWork(tx: DbExecutor, operator: OperatorIdentity, wid: string, body: { reason: string; ticketRef?: string }, action: string, change: MoneyWork) {
+  // Lock order: the account first (billing_post locks it again, then writes the ledger).
+  await tx.execute(sql`INSERT INTO billing_accounts(workspace_id) VALUES (${wid}) ON CONFLICT DO NOTHING`);
+  const before = await accountOf(tx, wid, true);
+  const posted = await change(tx, before, `operator:${operator.userId}`, operator.userId);
+  const after = await accountOf(tx, wid);
+  return { result: { ok: true as const, ...('applied' in posted ? { applied: posted.applied, entryId: posted.entryId ?? null } : {}), account: after },
+    audit: { action, before, after, reason: body.reason, ticketRef: body.ticketRef } };
+}
+/** Credit granted by an operator: promotional credit is a grant (spent first, never refunded); paid credit is an adjustment to the paid bucket. `source` makes it once. */
+const credit = (wid: string, body: { bucket: 'promo' | 'paid'; reason: string; ticketRef?: string }, uc: bigint, source: (operatorId: string) => string): MoneyWork => (tx, _before, who, operatorId) => {
+  const key = source(operatorId), detail = { reason: body.reason, ...(body.ticketRef ? { ticketRef: body.ticketRef } : {}) };
+  return body.bucket === 'promo' ? post(tx, wid, 'grant', `grant:${key}`, 0n, uc, detail, who) : post(tx, wid, 'adjustment', `adjustment:${key}`, uc, 0n, detail, who);
+};
+/**
+ * Promotional credit an operator grants, in the caller's transaction, as POST /v1/operator/billing/{wid}/credits does:
+ * an approved support proposal (support-approvals.ts) runs it, with the approval as the ledger source (so once), and
+ * writes the same billing audit row.
+ */
+export const grantPromoCredit = (tx: DbExecutor, operator: OperatorIdentity, wid: string, body: { amountCents: number; reason: string; ticketRef?: string }, source: string) =>
+  moneyWork(tx, operator, wid, body, 'billing-credit-promo', credit(wid, { ...body, bucket: 'promo' }, BigInt(body.amountCents) * 1_000_000n, () => source));
 const post = async (tx: DbExecutor, wid: string, kind: LedgerKind, source: string, paid: bigint, promo: bigint, detail: Record<string, unknown>, who: string) =>
   (await tx.execute<{ r: Posted }>(sql`SELECT billing_post(${wid}::text,${kind}::text,${source}::text,${paid.toString()}::bigint,${promo.toString()}::bigint,${JSON.stringify(detail)}::jsonb,${who}::text) AS r`)).rows[0]!.r;
 const isoAt = (column: ReturnType<typeof sql>) => sql`to_char(${column} AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS"Z"')`;
@@ -291,7 +314,7 @@ const isoAt = (column: ReturnType<typeof sql>) => sql`to_char(${column} AT TIME 
  * An operator's billing change in the audit trail (#137): billing.<action>, kept 7 years (retention 'billing'), with the
  * reason, ticket, before and after, in the transaction that makes the change. workspaceId null is a person's flag.
  */
-const billingAudit = (tx: DbExecutor, c: Ctx, operator: OperatorIdentity, workspaceId: string | null, audit: OperatorAudit & { userId?: string }) =>
+export const billingAudit = (tx: DbExecutor, c: Ctx, operator: OperatorIdentity, workspaceId: string | null, audit: OperatorAudit & { userId?: string }) =>
   recordAudit(tx, operatorContext(c, { id: operator.userId, role: operator.role, via: 'console', userId: operator.userId }), {
     action: `billing.${audit.action.replace(/^billing-/, '').replace(/-/g, '_')}`, workspaceId, userId: audit.userId ?? null,
     target: workspaceId ? { type: 'workspace', id: workspaceId } : { type: 'user', id: audit.userId ?? null },
@@ -337,18 +360,10 @@ function registerOperatorBilling(app: App) {
       free: { ...free, until: free.until ? new Date(free.until).toISOString() : null } }, 200);
   });
 
-  const moneyChange = async (c: Ctx, wid: string, body: { reason: string; ticketRef?: string }, action: string, change: (tx: DbExecutor, before: Account, who: string, operatorId: string) => Promise<Posted | Account>) => {
+  const moneyChange = async (c: Ctx, wid: string, body: { reason: string; ticketRef?: string }, action: string, change: MoneyWork) => {
     const operator = await operatorActor(c, 'operator');
     await existingWorkspace(c.env.db, wid);
-    return mutate(c, operator, wid, body, async tx => {
-      // Lock order: the account first (billing_post locks it again, then writes the ledger).
-      await tx.execute(sql`INSERT INTO billing_accounts(workspace_id) VALUES (${wid}) ON CONFLICT DO NOTHING`);
-      const before = await accountOf(tx, wid, true);
-      const posted = await change(tx, before, `operator:${operator.userId}`, operator.userId);
-      const after = await accountOf(tx, wid);
-      return { result: { ok: true as const, ...('applied' in posted ? { applied: posted.applied, entryId: posted.entryId ?? null } : {}), account: after },
-        audit: { action, before, after, reason: body.reason, ticketRef: body.ticketRef } };
-    }, (tx, audit) => billingAudit(tx, c, operator, wid, audit));
+    return mutate(c, operator, wid, body, tx => moneyWork(tx, operator, wid, body, action, change), (tx, audit) => billingAudit(tx, c, operator, wid, audit));
   };
   const Done = z.object({ ok: z.literal(true), applied: z.boolean().optional(), entryId: z.string().nullable().optional(), account: z.unknown() });
 
@@ -356,11 +371,7 @@ function registerOperatorBilling(app: App) {
     request: { params: WorkspaceParam, headers: MoneyMutation, body: json(z.object({ amountCents: z.number().int().min(1).max(100_000), bucket: z.enum(['promo', 'paid']).default('promo'), reason: Reason,
       ticketRef: z.string().trim().min(1).max(200).optional() }).strict()) }, responses: { 200: response(Done), ...errors } }), async c => {
     const wid = c.req.valid('param').wid, body = c.req.valid('json'), uc = BigInt(body.amountCents) * 1_000_000n;
-    return c.json(await moneyChange(c, wid, body, `billing-credit-${body.bucket}`, (tx, _before, who, operatorId) => {
-      const key = sourceKey(c, operatorId), detail = { reason: body.reason, ...(body.ticketRef ? { ticketRef: body.ticketRef } : {}) };
-      // Promotional credit is a grant (spent first, never refunded); paid credit is an adjustment to the paid bucket.
-      return body.bucket === 'promo' ? post(tx, wid, 'grant', `grant:${key}`, 0n, uc, detail, who) : post(tx, wid, 'adjustment', `adjustment:${key}`, uc, 0n, detail, who);
-    }), 200);
+    return c.json(await moneyChange(c, wid, body, `billing-credit-${body.bucket}`, credit(wid, body, uc, operatorId => sourceKey(c, operatorId))), 200);
   });
 
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'post', path: '/v1/operator/billing/{wid}/adjustments', operationId: 'operatorAdjustBilling',

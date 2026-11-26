@@ -136,6 +136,35 @@ export const guides: Guide[] = [
     </>,
   },
   {
+    id: 'topics', title: 'Topics and unsubscribes', summary: 'Let people stop one kind of marketing email, such as events or product news, and keep the rest.',
+    body: () => <>
+      <Section title="What a topic is">
+        <p>A topic is a kind of marketing email you send: <em>Product updates</em>, <em>Events</em>, <em>Newsletter</em>. Give a campaign or a marketing send a topic, and its unsubscribe link stops that topic alone: the person keeps getting your other marketing. Unsubscribing from everything is always there too, and it always wins. Transactional email has no topic and no unsubscribe.</p>
+        <p>Make topics in <Link to="/audience/topics">Audience → Topics</Link>. Each has a name and a line of description, both shown to people on the preference page, and decides once, when it’s made, who gets it without having chosen.</p>
+      </Section>
+      <Section title="Who gets an email with a topic">
+        <Table head={['Person', 'Gets it?']} rows={[
+          ['Subscribed to marketing, never chose', 'Yes, unless only people who opt in get the topic'],
+          ['Opted out of the topic', 'No'],
+          ['Opted in to the topic', 'Yes'],
+          ['Unsubscribed from all marketing', 'Never, whatever they chose for topics'],
+          ['Suppressed (a bounce or a complaint)', 'Never'],
+        ]} />
+        <p>A send to someone who opted out of its topic is refused with the reason <code>topic_unsubscribed</code>. A campaign leaves them out of its audience and its counts, and skips anyone who opts out after it was sent but before their email goes, shown in Logs as suppressed. Archiving a topic keeps every opt-out: campaigns already sent with it keep skipping those people.</p>
+      </Section>
+      <Section title="Sending with a topic">
+        <p>On a campaign, choose the topic under <strong>Recipients</strong> while you review it. Over the API, set <code>topicId</code> on <Link to="/docs/api/sendEmail">sendEmail</Link> or a <Link to="/docs/api/sendEmailBatch">sendEmailBatch</Link> item with <code>kind: "marketing"</code>, or on the campaign’s draft. A required notice has no topic: it has no unsubscribe link.</p>
+      </Section>
+      <Section title="The unsubscribe link and the preference page">
+        <p>Mailbox providers show an unsubscribe button from the email’s <code>List-Unsubscribe</code> header. Pressed, it opts the person out of the email’s topic in one step, or out of all marketing for an email without a topic. The footer link opens a preference page instead: the email’s topic as one button, the topics they still get as boxes to clear, and Unsubscribe from all. It only removes: a topic they left, or an opt-in topic they never joined, can’t be turned on there. To get one again they ask you, and you record it on their contact. The page needs no account, shows nothing but their own topics, and changes nothing until they press a button.</p>
+        <p>A campaign with its own unsubscribe page still records the topic opt-out when that page posts the token back.</p>
+      </Section>
+      <Section title="Over the API">
+        <p>List and make topics with <Link to="/docs/api/listTopics">listTopics</Link>, <Link to="/docs/api/createTopic">createTopic</Link> and <Link to="/docs/api/updateTopic">updateTopic</Link>. A contact’s choices are on <Link to="/docs/api/getContact">getContact</Link> (<code>topics</code>); record one with <Link to="/docs/api/updateContactConsent">updateContactConsent</Link> and <code>topicId</code>. Turning a topic back on for someone who opted out needs <code>confirmResubscribe</code>. Every change is in the contact’s consent history and sends a <code>contact.subscription_changed</code> webhook event with <code>topicId</code>.</p>
+      </Section>
+    </>,
+  },
+  {
     id: 'endpoints', title: 'Endpoints and routes', summary: 'Where mail can go besides the Inbox, and the difference between a route and a rule.',
     body: () => <>
       <Section title="Endpoints">

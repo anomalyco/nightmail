@@ -22,7 +22,7 @@ const ESCAPED = /&(?:amp|lt|gt|#x(?:226E|226F|FE64|FE65|FF1C|FF1E));/g;
  */
 export const unfenced = (text: string) => text.replace(ESCAPED, e => e === '&amp;' ? '&' : e === '&lt;' ? '<' : e === '&gt;' ? '>' : String.fromCharCode(parseInt(e.slice(3, -1), 16)));
 /** Outside text as the model reads it: fenced, inside <untrusted> (naming where it came from, when the harness knows). */
-export const untrusted = (text: string, source?: 'chat' | 'email') => `<untrusted${source ? ` source="${source}"` : ''}>${fenced(text)}</untrusted>`;
+export const untrusted = (text: string, source?: 'chat' | 'email' | 'report') => `<untrusted${source ? ` source="${source}"` : ''}>${fenced(text)}</untrusted>`;
 
 /** Fields support routes return that are about Nightmail's side of the conversation, never the customer's data. */
 const DROP = new Set(['grant', 'operatorId', 'operator', 'ticketRef', 'token', 'tokenHash', 'internal', 'ipNetwork', 'userAgent', 'actorLabel', 'retainUntil', 'watch', 'watchFlag', 'handoffId', 'via']);

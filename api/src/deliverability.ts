@@ -212,8 +212,8 @@ export async function deliveryMetrics(db: DbExecutor, wid: string, q: MetricsQue
   const { rows: extras } = await db.execute<{ bucket: string; unsubscribed: number; screened: number; rejected: number }>(sql`SELECT bucket, sum(unsubscribed)::int AS unsubscribed,
       sum(screened)::int AS screened, sum(rejected)::int AS rejected FROM (
       -- People who unsubscribed in each bucket, from a topic or from everything (src/topics.ts), each once.
-      SELECT bucket, count(DISTINCT contact_id)::int AS unsubscribed, 0 AS screened, 0 AS rejected FROM (
-        SELECT ${bucketOf(q.granularity, sql`occurred_at`)} AS bucket, contact_id FROM audience_consent_audit
+      SELECT bucket, count(*)::int AS unsubscribed, 0 AS screened, 0 AS rejected FROM (
+        SELECT DISTINCT ${bucketOf(q.granularity, sql`occurred_at`)} AS bucket, contact_id FROM audience_consent_audit
         WHERE workspace_id = ${wid} AND status = 'unsubscribed' AND source IN ('footer-confirm', 'rfc8058-post', 'ses-subscription', 'preferences')
           AND occurred_at >= ${q.since}::timestamptz AND occurred_at < ${q.until}::timestamptz) u GROUP BY bucket
       UNION ALL SELECT ${bucketOf(q.granularity, sql`hour`)}, 0, screened, rejected FROM hosted_screen_hourly

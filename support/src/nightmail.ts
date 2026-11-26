@@ -85,7 +85,17 @@ export interface SupportPlatform {
   // One path to a human (api/src/support-staff-mail.ts): the staff emails Nightmail wrote, and each one sent.
   staffMail(): Promise<PlatformReply<{ data: StaffEmail[] }>>;
   staffMailSent(key: string, sent: { threadId: string; messageId: string }): Promise<PlatformReply<{ key: string; sentAt: string }>>;
+  // The feedback triage agent (api/src/feedback-triage.ts, triage.ts): the reports due (claimed, each at most twice), and
+  // for one report, by its conversation, a request's trace and the reports beside it (its own workspace only), and its one note.
+  feedbackDue(limit: number): Promise<PlatformReply<{ data: FeedbackReport[] }>>;
+  feedbackRequest(conversationId: string, requestId: string): Promise<PlatformReply>;
+  feedbackRelated(conversationId: string): Promise<PlatformReply>;
+  feedbackTriage(conversationId: string, note: TriageNoteInput): Promise<PlatformReply<{ conversationId: string; ticketId: string | null; messageId: string; classification: string; createdAt: string }>>;
 }
+/** An agent feedback report to triage: Nightmail's facts, and its text as its filer wrote it (untrusted). */
+export type FeedbackReport = { conversationId: string; ticketId: string; filedAt: string; operation: string | null; requestId: string | null; text: string };
+/** The triage agent's one note: its summary and likely cause, a suggested classification, and duplicates by ticket ID. */
+export type TriageNoteInput = { summary: string; cause: string; classification: 'bug' | 'docs_gap' | 'neither'; duplicates: string[] };
 /** A staff email to send from the support address to the team: a new thread, or a reply in threadId to replyToMessageId. */
 export type StaffEmail = { key: string; threadId: string | null; replyToMessageId: string | null; subject: string; text: string; html: string };
 /** A platform reply's body, or (any other status than `ok`) a NightmailError the work queue can classify. */

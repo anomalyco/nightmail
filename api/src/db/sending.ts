@@ -144,6 +144,8 @@ export const campaigns = pgTable('sending_campaigns', {
   // in (from 0), the largest daily cap that counts as a ramp when one was required (null: none was), and the consent
   // source its sender confirmed.
   pacePlan: integer('pace_plan').array(), windowIndex: integer('window_index').notNull().default(0), rampRequiredCap: integer('ramp_required_cap'),
+  // A plan's first small batch and the wait after it, inside the first day's batch (migration 546).
+  paceFirstBatch: integer('pace_first_batch'), paceFirstWaitMinutes: integer('pace_first_wait_minutes'),
   consent: jsonb('consent').$type<{ source: string; confirmedBy: string | null; confirmedAt: string }>(),
 }, t => [index('sending_campaigns_page').on(t.workspaceId, t.id), index('sending_campaigns_created_page').on(t.workspaceId, t.createdAt.desc(), t.id.desc()), index('sending_campaigns_archive_page').on(t.workspaceId, t.archivedAt, t.createdAt.desc(), t.id.desc()),
   index('sending_campaigns_list_page').on(t.workspaceId, t.listId, t.createdAt.desc(), t.id.desc()).where(sql`${t.listId} IS NOT NULL`)]);

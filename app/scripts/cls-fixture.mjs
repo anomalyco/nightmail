@@ -912,6 +912,9 @@ export async function seed(fx) {
   const propertySegment = await dana.api('POST', '/v1/segments', { name: 'Waiting companies', rule: { operator: 'and', rules: [
     { field: 'property', key: 'status', type: 'string', operator: 'eq', value: 'waiting' }, { field: 'property', key: 'joined_at', type: 'date', operator: 'before', value: '2026-11-20' },
     { field: 'property', key: 'mailbox', type: 'string', operator: 'eq', value: 'company' }, { field: 'property', key: 'attempts', type: 'number', operator: 'gt', value: 0 }, { field: 'property', key: 'let_in_at', type: 'date', operator: 'notSet' }] } });
+  // Topics (Audience · Topics, and the contact's Topics section): one everyone subscribed gets, one only those who opt in.
+  await dana.api('POST', '/v1/topics', { name: 'Product updates', description: 'New features and changes, about once a month.' });
+  await dana.api('POST', '/v1/topics', { name: 'Events', description: 'Invitations to talks and meetups.', subscribedByDefault: false });
   const template = await dana.api('POST', '/v1/templates', { name: 'Receipt' });
   const campaign = await dana.api('POST', '/v1/campaigns', { name: 'November product update', subject: 'What shipped in November', from: 'news@mail.northwind.example', html: '<p>Hello</p>' });
   // Review's Send stage (Campaign review · send, · ramp): a campaign to 40 subscribers, which the send review finds ready,

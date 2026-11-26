@@ -1,12 +1,15 @@
 import type { SupportPlatform } from './nightmail.js';
 import type { SupportConversation } from './conversation.js';
 import type { SupportIntake } from './intake.js';
+import type { SupportTriage } from './triage.js';
 
 /** The support Worker's bindings (wrangler.dev.jsonc / wrangler.prod.jsonc). */
 export interface Env {
   CONVERSATION: DurableObjectNamespace<SupportConversation>;
   /** abuse@, privacy@, legal@: one object per thread, tickets only, no agent (intake.ts). */
   INTAKE: DurableObjectNamespace<SupportIntake>;
+  /** The feedback triage agent: one object per agent feedback report while it is read, notes only (triage.ts). */
+  TRIAGE: DurableObjectNamespace<SupportTriage>;
   DB: D1Database;
   /** Nightmail's SupportPlatform entrypoint (RPC). */
   BANE: Service & SupportPlatform;

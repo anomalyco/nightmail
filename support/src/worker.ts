@@ -11,6 +11,7 @@ import { FAVICON_LINKS, favicon } from './favicon.js';
 import { addresses, productName } from '../../api/src/brand.js';
 export { SupportConversation } from './conversation.js';
 export { SupportIntake, INTAKE, type Mailbox } from './intake.js';
+export { SupportTriage } from './triage.js';
 
 // The support Worker (support/README.md): chat starts and resumes, the conversation WebSocket, Nightmail's inbound webhook
 // for support@nightmail.dev, its content-free wakes, and the page an old confirm link opens. Every conversation is one

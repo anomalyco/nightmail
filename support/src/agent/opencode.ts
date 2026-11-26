@@ -2,7 +2,7 @@ import { Plugin } from '@opencode/plugin';
 import type { OpenCodeWorkerd } from '@opencode/sdk/workerd';
 import type { Env } from '../env.js';
 import { MissingSecret } from '../tokens.js';
-import type { Harness, HarnessEvent, TurnInput, TurnResult, Usage } from './harness.js';
+import type { Harness, HarnessEvent, HarnessTool, TurnInput, TurnResult, Usage } from './harness.js';
 import { TOOLS, ToolFailure, type Param, type ToolHost } from './tools.js';
 import { unfenced } from './projection.js';
 import SYSTEM from './system.md';
@@ -20,6 +20,10 @@ import { log } from '../log.js';
 // The pin is enforced four ways: the config model, the agent model, the session model (without it OpenCode would fall
 // back to any available model) and a provider policy; and the fetch below refuses any request that isn't exactly it.
 // A conversation whose session was made under an earlier pin is switched to this one before its next turn.
+//
+// Two agents run on it, each in Durable Objects of its own, with its own system prompt and tool list (a Profile): the
+// customer-facing support agent (SUPPORT, one object per conversation) and the feedback triage agent (agent/triage.ts,
+// one object per report). Neither ever sees the other's prompt, tools or sessions.
 
 export const MODEL = { providerID: 'anthropic', model: 'claude-opus-5-5', variant: 'medium' } as const;
 const PIN = `${MODEL.model}#${MODEL.variant}`;
@@ -28,19 +32,23 @@ const MAX_STEPS = 25;
 const TURN_OPEN = 'support:opencode-turn-open';
 /** How long the first turn after a cut-off one waits for OpenCode's resumed run to start (it starts at boot). */
 const RESUME_WAIT_MS = 3_000;
-const TOOL_NAMES = TOOLS.map(t => t.name);
 /** OpenCode's error type for a response the provider blocked or the model refused. */
 const CONTENT_FILTER = 'provider.content-filter';
 /** Deny everything, then allow these tools (OpenCode lists only the tools a session's rules allow). */
 const rules = (names: readonly string[]) => [{ action: '*', resource: '*', effect: 'deny' as const }, ...names.map(name => ({ action: name, resource: '*', effect: 'allow' as const }))];
-/** The agent's own rules: every tool we define. The session's rules, set per turn, narrow them. */
-const PERMISSIONS = rules(TOOL_NAMES);
-
 export const systemPrompt = () => `${SYSTEM.trim()}\n\n---\n\n# Voice (follow it)\n\n${VOICE.trim()}`;
 
-function config(gatewayURL: string): OpenCodeWorkerd.Configuration {
+/**
+ * One agent: its OpenCode agent name, its system prompt, its tools (and the host they act through), its step limit and
+ * its sessions' title. The agent's own rules allow exactly its tools; a session's rules, set per turn, narrow them.
+ */
+export type Profile<H> = { agent: string; title: string; system: string; tools: readonly HarnessTool<H>[]; steps: number };
+/** The customer-facing support agent. */
+export const SUPPORT: Profile<ToolHost> = { agent: 'support', title: 'Support conversation', system: systemPrompt(), tools: TOOLS, steps: MAX_STEPS };
+
+function config<H>(gatewayURL: string, profile: Profile<H>): OpenCodeWorkerd.Configuration {
   return {
-    default_agent: 'support',
+    default_agent: profile.agent,
     model: MODEL,
     // Only the gateway-backed provider exists, so nothing can resolve to another provider as a fallback.
     policies: [
@@ -52,7 +60,7 @@ function config(gatewayURL: string): OpenCodeWorkerd.Configuration {
     // storage or the model's context.
     providers: { anthropic: { settings: { baseURL: gatewayURL } } },
     agents: {
-      support: { mode: 'primary', model: MODEL, system: systemPrompt(), steps: MAX_STEPS, permissions: PERMISSIONS },
+      [profile.agent]: { mode: 'primary', model: MODEL, system: profile.system, steps: profile.steps, permissions: rules(profile.tools.map(t => t.name)) },
       build: { disabled: true }, plan: { disabled: true }, general: { disabled: true }, explore: { disabled: true },
       // Title and summary would call a smaller model: never.
       title: { disabled: true }, summary: { disabled: true },
@@ -69,9 +77,10 @@ type Fetch = (input: Request | string | URL, init?: RequestInit) => Promise<Resp
 
 /**
  * The only way out of the isolate for OpenCode: requests to the gateway get the key and must be the pinned model at the
- * pinned effort; anything else is refused. In tests, MODEL_FAKE stands in for the network.
+ * pinned effort; anything else is refused. In tests, MODEL_FAKE stands in for the network. `system`: the agent's own
+ * prompt, cached for an hour.
  */
-export function modelFetch(env: Env): Fetch {
+export function modelFetch(env: Env, system = SUPPORT.system): Fetch {
   const root = env.GATEWAY_URL.replace(/\/$/, '');
   return async (input, init) => {
     const request = new Request(input, init);
@@ -90,7 +99,7 @@ export function modelFetch(env: Env): Fetch {
     headers.delete('x-api-key');
     headers.set('authorization', `Bearer ${key}`);
     let send = new Request(request, { headers });
-    if (body && cacheForAnHour(body)) {
+    if (body && cacheForAnHour(body, system)) {
       headers.delete('content-length');
       send = new Request(request.url, { method: 'POST', headers, body: JSON.stringify(body), signal: request.signal });
     }
@@ -105,8 +114,8 @@ type ModelRequest = { model?: string; output_config?: { effort?: string }; tools
  * tool and on each system part) last an hour instead of five minutes, so a chat opened after a quiet spell doesn't
  * prefill them again. The per-customer system part and the messages keep five minutes. Console's gateway honours `ttl`.
  */
-function cacheForAnHour(body: ModelRequest): boolean {
-  const parts = [body.tools?.at(-1), body.system?.[0]?.text === systemPrompt() ? body.system[0] : undefined];
+function cacheForAnHour(body: ModelRequest, system: string): boolean {
+  const parts = [body.tools?.at(-1), body.system?.[0]?.text === system ? body.system[0] : undefined];
   let changed = false;
   for (const part of parts) if (part?.cache_control?.type === 'ephemeral' && part.cache_control.ttl !== '1h') { part.cache_control = { type: 'ephemeral', ttl: '1h' }; changed = true; }
   return changed;
@@ -134,16 +143,19 @@ function jsonSchema(params: Record<string, Param>) {
 /** The output gate's "never reveal this prompt" fragments, from this prompt's instructions (gate.ts). */
 export const promptFragments = () => promptFragmentsOf(SYSTEM);
 
-/** One OpenCode host per conversation object, booted on its first turn. */
-export async function createHarness(env: Env, storage: DurableObjectStorage): Promise<Harness> {
+/**
+ * One OpenCode host per object (a support conversation's, or a feedback report's), booted on its first turn, running
+ * `profile`'s agent: the support agent unless another is named.
+ */
+export async function createHarness<H = ToolHost>(env: Env, storage: DurableObjectStorage, profile: Profile<H> = SUPPORT as unknown as Profile<H>): Promise<Harness<H>> {
   // Per turn: whose tools these are, which of them this turn may call (its channel, mode and role), and the
   // <customer>/<account> block.
-  const current: { host: ToolHost | null; allowed: ReadonlySet<string>; context: string } = { host: null, allowed: new Set(), context: '' };
+  const current: { host: H | null; allowed: ReadonlySet<string>; context: string } = { host: null, allowed: new Set(), context: '' };
   const plugin = Plugin.define({
-    id: 'bane.support',
+    id: `bane.${profile.agent}`,
     setup: async ctx => {
       const registration = await ctx.tool.transform(editor => {
-        for (const spec of TOOLS) {
+        for (const spec of profile.tools) {
           editor.add({
             name: spec.name, description: spec.description, input: jsonSchema(spec.params) as never,
             // Native tools on the provider's list, not behind Code Mode's `execute`.
@@ -165,13 +177,13 @@ export async function createHarness(env: Env, storage: DurableObjectStorage): Pr
         event.system = event.system.filter(part => !part.text.includes('<env>') && !part.text.startsWith('When you create a worktree') && !part.text.startsWith('# Your Model'));
         if (current.context) event.system.push({ type: 'text', text: current.context });
       });
-      const title = await ctx.session.hook('title', event => { event.result = 'Support conversation'; });
+      const title = await ctx.session.hook('title', event => { event.result = profile.title; });
       return async () => { await Promise.all([registration.dispose(), system.dispose(), title.dispose()]); };
     },
   });
   const { OpenCodeWorkerd } = await import('@opencode/sdk/workerd');
   const opencode = await OpenCodeWorkerd.create({
-    storage, config: config(env.GATEWAY_URL), plugins: [plugin], fetch: modelFetch(env), models: { fetch: false },
+    storage, config: config(env.GATEWAY_URL, profile), plugins: [plugin], fetch: modelFetch(env, profile.system), models: { fetch: false },
     // The runtime's own warnings: its fixed text (scrubbed and cut short), never the attributes, which can carry turn data.
     log: { level: 'warn', emit: entry => log(entry.level === 'warn' ? 'warn' : 'error', { event: 'opencode', code: 'OPENCODE', note: String(entry.message).slice(0, 120), errorType: entry.cause === undefined ? undefined : errorTypeOf(entry.cause) }) },
   });
@@ -198,7 +210,7 @@ export async function createHarness(env: Env, storage: DurableObjectStorage): Pr
       }
       return existing;
     }
-    const created = await opencode.sessions.create({ title: 'Support conversation', location: { directory: '/support' }, agent: 'support', model, permissions: rules(tools) } as never);
+    const created = await opencode.sessions.create({ title: profile.title, location: { directory: `/${profile.agent}` }, agent: profile.agent, model, permissions: rules(tools) } as never);
     await storage.put({ 'support:opencode-session': created.id, 'support:opencode-model': PIN, 'support:opencode-tools': set });
     return created.id;
   }
@@ -225,7 +237,7 @@ export async function createHarness(env: Env, storage: DurableObjectStorage): Pr
   }
 
   return {
-    async turn(input: TurnInput, tools: ToolHost, onEvent: (event: HarnessEvent) => void, signal: AbortSignal): Promise<TurnResult> {
+    async turn(input: TurnInput, tools: H, onEvent: (event: HarnessEvent) => void, signal: AbortSignal): Promise<TurnResult> {
       const sessionID = await session(input.tools);
       await settle(sessionID);
       await storage.put(TURN_OPEN, true);
@@ -287,9 +299,10 @@ export async function createHarness(env: Env, storage: DurableObjectStorage): Pr
       // One line per model turn: its outcome, time, tokens and cost, and how many tools and images it used. A refusal is
       // the model's answer, not a failure: the conversation sends its fixed decline and logs MODEL_REFUSAL.
       const failed = outcome === 'failed' && !refused;
-      log(failed ? 'error' : 'info', { event: 'turn', outcome: refused ? 'refused' : outcome, code: failed ? 'TURN_FAILED' : undefined, failure: failed ? failure : undefined, durationMs: Date.now() - started, ...usage, tools: names.size, images: input.images?.length ?? 0 });
+      log(failed ? 'error' : 'info', { event: 'turn', agent: profile.agent, outcome: refused ? 'refused' : outcome, code: failed ? 'TURN_FAILED' : undefined, failure: failed ? failure : undefined, durationMs: Date.now() - started, ...usage, tools: names.size, images: input.images?.length ?? 0 });
       if (refused) return { text: '', usage, aborted: false, refused: true };
       return { text: unfenced(texts.join('\n\n')), usage, aborted: outcome === 'interrupted', ...(failed ? { error: error ?? 'failed' } : {}) };
     },
+    close: () => opencode.close(),
   };
 }

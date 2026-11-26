@@ -1,4 +1,3 @@
-import { recipientPage as unsubscribePage } from './link-hosts.js';
 import { DASHBOARD_CACHE_NOTE, dashboardRead } from './dashboard-cache.js';
 import { talliesEnabled } from './sending-tallies.js';
 import { registerSenderScore } from './sender-score.js';
@@ -1795,8 +1794,16 @@ function registerPublicEvents(app: App) {
       return c.html(unsubscribePage('Email preferences', preferencesBody(prefs, destination)), 200);
     }
     const form = await c.req.parseBody({ all: true }).catch(() => ({} as Record<string, unknown>));
+    // One link saves preferences at most PREFERENCE_SAVES_PER_MINUTE times a minute (a person saves a few): this bounds the
+    // work a flood of Saves on one link makes. An opt-out (the mailbox's one-click, the confirmation, everything) is never
+    // refused: each is one idempotent write, and refusing one would keep someone on a list because another copy of their
+    // link was busy.
+    if (form.preferences === 'save' && !await chargeBudget(c.env, token.workspaceId, `unsubscribe:${token.tokenHash.slice(0, 32)}`, PREFERENCE_SAVES_PER_MINUTE)) {
+      c.header('Retry-After', '60');
+      return c.html(unsubscribePage('Too many requests', '<p>This link was used many times in the last minute. Try again in a minute.</p>'), 429);
+    }
     const list = (value: unknown) => (Array.isArray(value) ? value : value === undefined ? [] : [value]).filter((item): item is string => typeof item === 'string');
-    const again = prefs.topics.length ? '<p><a href="" style="color:inherit">Back to your email preferences</a></p>' : '';
+    const again = prefs.topics.length ? '<p><a href="">Back to your email preferences</a></p>' : '';
     // The preference page's own forms: Save, and everything from a link about one topic. One-click and the confirmation
     // below never carry these fields.
     if (form.preferences === 'save') {
@@ -1822,36 +1829,49 @@ function registerPublicEvents(app: App) {
   });
 }
 
+const PREFERENCE_SAVES_PER_MINUTE = 10;
 const escapeText = (text: string) => text.replace(/[&<>"']/g, ch => `&#${ch.charCodeAt(0)};`);
-const button = (label: string, secondary = false) => `<button type="submit" style="font:inherit;font-weight:600;padding:10px 18px;min-height:44px;border:0;border-radius:8px;${secondary ? 'background:#ececec;color:#111' : 'background:#111;color:#fff'};cursor:pointer">${label}</button>`;
+const button = (label: string, secondary = false) => `<button type="submit"${secondary ? ' class="secondary"' : ''}>${label}</button>`;
 /**
  * The hosted preference page (no script, no account): the link's own topic first, as one button, then every topic of the
  * workspace as a checkbox with Save, then everything. Each is its own POST form; a GET changes nothing. A person
  * unsubscribed from everything sees that and no choices: only fresh consent, recorded by the sender, lifts it.
  */
-function preferencesBody(prefs: { consent: string | null; topics: { id: string; name: string; description: string; subscribed: boolean; chosen: boolean }[]; linked: { name: string; subscribed: boolean } | null }, destination: string) {
+function preferencesBody(prefs: { consent: string | null; topics: { id: string; name: string; description: string; subscribed: boolean; chosen: boolean }[]; linked: { id: string; name: string; subscribed: boolean } | null }, destination: string) {
   if (prefs.consent === 'unsubscribed') return '<p>You’re unsubscribed from all marketing emails from this sender, so you don’t get any of these. To get them again, ask the sender.</p>';
-  const muted = 'color:#595959';
-  const linked = prefs.linked && (prefs.linked.subscribed
-    ? `<form method="post"><input type="hidden" name="confirm" value="footer"><p>Stop receiving ${escapeText(prefs.linked.name)} emails from this sender. Their other emails don’t change.${destination}</p>${button(`Unsubscribe from ${escapeText(prefs.linked.name)}`)}</form>`
-    : `<p>You’ve unsubscribed from ${escapeText(prefs.linked.name)} emails. To get them again, ask the sender.</p>`);
   // The page only removes. A topic the person still gets is a checkbox they can clear; one they left shows as off, with no
   // control (no name, so nothing is posted for it, script or not); an opt-in topic they never joined isn't offered at all.
   // Only a subscriber has choices: anyone else gets no marketing at all.
   const listed = prefs.consent === 'subscribed' ? prefs.topics.filter(topic => topic.subscribed || topic.chosen) : [], current = listed.some(topic => topic.subscribed);
-  const text = (topic: { name: string; description: string }, note?: string) => `<span><span style="display:block;font-weight:500">${escapeText(topic.name)}</span>${topic.description ? `<span style="display:block;${muted}">${escapeText(topic.description)}</span>` : ''}${note ? `<span style="display:block;${muted}">${note}</span>` : ''}</span>`;
-  const box = 'width:20px;height:20px;margin:2px 0 0;flex:none;accent-color:#111';
+  // The link's topic first: its button while they get it; once left, a line, unless its own row below already says so.
+  const linked = prefs.linked && (prefs.linked.subscribed
+    ? `<form method="post"><input type="hidden" name="confirm" value="footer"><p>Stop receiving ${escapeText(prefs.linked.name)} emails from this sender. Their other emails don’t change.${destination}</p>${button(`Unsubscribe from ${escapeText(prefs.linked.name)}`)}</form>`
+    : listed.some(topic => topic.id === prefs.linked!.id) ? '' : `<p>You’ve unsubscribed from ${escapeText(prefs.linked.name)} emails. To get them again, ask the sender.</p>`);
+  const text = (topic: { name: string; description: string }, note?: string) => `<span><span class="name">${escapeText(topic.name)}</span>${topic.description ? `<span class="muted">${escapeText(topic.description)}</span>` : ''}${note ? `<span class="muted">${note}</span>` : ''}</span>`;
   // With nothing left to clear there is nothing to save: the topics show without a form.
-  const choices = listed.length ? `${current ? '<form method="post" style="margin:32px 0 0"><input type="hidden" name="preferences" value="save">' : '<div style="margin:32px 0 0">'}
-    <fieldset style="border:0;padding:0;margin:0"><legend style="padding:0;font-weight:600">Your topics</legend>${current ? `<p style="margin:4px 0 0;${muted}">Clear any you no longer want, then save.</p>` : ''}${listed.map(topic => topic.subscribed
-      ? `<input type="hidden" name="shown" value="${escapeText(topic.id)}"><label style="display:flex;gap:12px;align-items:flex-start;min-height:44px;padding:10px 0;cursor:pointer"><input type="checkbox" name="topic" value="${escapeText(topic.id)}" checked style="${box}">${text(topic)}</label>`
-      : `<div style="display:flex;gap:12px;align-items:flex-start;min-height:44px;padding:10px 0"><input type="checkbox" disabled aria-label="${escapeText(topic.name)}: unsubscribed" style="${box}">${text(topic, 'You’ve unsubscribed from this. To get it again, ask the sender.')}</div>`).join('')}
+  const choices = listed.length ? `${current ? '<form method="post"><input type="hidden" name="preferences" value="save">' : '<div class="topics">'}
+    <fieldset><legend>Your topics</legend>${current ? '<p class="muted hint">Clear any you no longer want, then save.</p>' : ''}${listed.map(topic => topic.subscribed
+      ? `<input type="hidden" name="shown" value="${escapeText(topic.id)}"><label class="topic"><input type="checkbox" name="topic" value="${escapeText(topic.id)}" checked>${text(topic)}</label>`
+      : `<div class="topic off"><input type="checkbox" disabled aria-label="${escapeText(topic.name)}: unsubscribed">${text(topic, 'You’ve unsubscribed from this. To get it again, ask the sender.')}</div>`).join('')}
     </fieldset>${current ? `${button('Save')}</form>` : '</div>'}` : '';
   // A link about one topic leaves everything with the page's own field; any other link's confirmation is today's.
   const all = prefs.linked
-    ? `<form method="post" style="margin:32px 0 0"><input type="hidden" name="preferences" value="all"><p style="${muted}">Or stop all marketing emails from this sender.</p>${button('Unsubscribe from all', true)}</form>`
-    : `<form method="post" style="margin:32px 0 0"><input type="hidden" name="confirm" value="footer"><p style="${muted}">Or stop all marketing emails from this sender.${destination}</p>${button('Unsubscribe from all', !!choices)}</form>`;
+    ? `<form method="post"><input type="hidden" name="preferences" value="all"><p class="muted">Or stop all marketing emails from this sender.</p>${button('Unsubscribe from all', true)}</form>`
+    : `<form method="post"><input type="hidden" name="confirm" value="footer"><p class="muted">Or stop all marketing emails from this sender.${destination}</p>${button('Unsubscribe from all', !!choices)}</form>`;
   return `${linked ?? ''}${choices}${all}`;
+}
+// Light and dark, as the reader's system is: black ink and buttons on white, or the reverse. The forms sit apart by space.
+const PAGE_STYLE = `body,body *{letter-spacing:-0.01em}
+body{margin:48px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;line-height:1.5;color:#111;background:#fff}
+h1{font-size:24px;line-height:1.25;margin:0 0 16px}p{margin:0 0 16px}a{color:inherit}.muted{color:#595959}
+main>*+form,main>*+.topics{margin-top:32px}fieldset{border:0;padding:0;margin:0 0 16px}legend{padding:0;font-weight:600}.hint{margin:4px 0 0}
+.topic{display:flex;gap:12px;align-items:flex-start;min-height:44px;padding:10px 0;cursor:pointer}.topic.off{cursor:default}.topic .name{display:block;font-weight:500}.topic .muted{display:block}
+input[type=checkbox]{width:20px;height:20px;margin:2px 0 0;flex:none;accent-color:#111}
+button{font:inherit;font-weight:600;padding:10px 18px;min-height:44px;border:0;border-radius:8px;cursor:pointer;background:#111;color:#fff}button.secondary{background:#ececec;color:#111}
+@media (max-width:480px){body{margin:32px 24px}}
+@media (prefers-color-scheme:dark){body{color:#ededed;background:#111}.muted{color:#a3a3a3}input[type=checkbox]{accent-color:#ededed}button{background:#ededed;color:#111}button.secondary{background:#2b2b2b;color:#ededed}}`;
+function unsubscribePage(title: string, body: string) {
+  return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark"><title>${title}</title><style>${PAGE_STYLE}</style><body><main><h1>${title}</h1>${body}</main></body></html>`;
 }
 function registerMetrics(app: App) {
   // The window's aggregate is one statement that reads every email in it (a 30-day Overview reads all retained mail):

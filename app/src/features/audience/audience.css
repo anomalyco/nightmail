@@ -12,6 +12,12 @@
 .audience-contact__name::before { content: '·'; margin-right: var(--space-8); color: var(--color-faint); }
 /* Lists: the counts keep their widths, so a narrow window scrolls the table sideways before the name gets too short. */
 .audience-lists .ui-table { min-width: 800px; }
+/* Topics: the description takes the slack after the name; a narrow window scrolls sideways before either gets too short. */
+.audience-topics .ui-table { min-width: 860px; }
+.audience-topics td[data-col='count'] { font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* A contact's topics: each a switch with its name and, muted beside it, where its state comes from, on a row a thumb can hit. */
+.audience-topics-list { display: flex; flex-direction: column; margin: 0; padding: 0; list-style: none; }
+.audience-topics-list > li { display: flex; align-items: center; min-height: 44px; }
 .data-toolbar .ui-select-trigger.audience-status-filter { width: 170px; }
 .audience-summary > .ui-skeleton-line { width: auto; }
 .audience-page > .data-toolbar > .cluster { flex-wrap: wrap; }

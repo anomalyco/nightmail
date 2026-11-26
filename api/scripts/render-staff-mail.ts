@@ -38,7 +38,7 @@ const row = (r: Partial<StaffRow>): StaffRow => ({
   last_author: 'agent', last_text: null, last_held: true, queued: 0, opening: null, done_at: null, done_by: null, done_by_name: null, unread: true, needs_you: true, urgency: 2, since: minutesAgo(40),
   why_ticket: true, why_blocked: false, why_failed: false, why_paused: false, why_no_reply: true,
   brief: null, evidence: null, staff_thread: null, staff_seq: 0, staff_reasons: [], role: 'owner', max_seq: 3, held_reason: null, held_seq: null,
-  first_words: { text: 'Why did my bounce rate jump on the last campaign? It was 0.4% last month and now it says 6%.\nI only sent to the same list as always, plus the people who signed up at the Oct 25 event.\nIs something wrong with my domain?\nThanks, Ada', at: minutesAgo(40) }, fresh_words: null, operation: null, request_id: null, filed_at: null, failed_by: null, ...r,
+  first_words: { text: 'Why did my bounce rate jump on the last campaign? It was 0.4% last month and now it says 6%.\nI only sent to the same list as always, plus the people who signed up at the Oct 25 event.\nIs something wrong with my domain?\nThanks, Ada', at: minutesAgo(40) }, fresh_words: null, operation: null, request_id: null, filed_at: null, failed_by: null, triage_summary: null, ...r,
 });
 const reasons = (r: StaffRow) => (['ticket', 'blocked', 'failed', 'paused', 'no_reply'] as const).filter(x => r[`why_${x}`]);
 const conversation = (name: string, title: string, r: StaffRow, first = true, approval: { label: string; url: string } | null = null) => {
@@ -57,7 +57,8 @@ conversation('blocked', 'Stuck work, with an approve link', row({ why_ticket: fa
   { label: 'Retry the stuck work', url: `${origin}/support/conv_7qk2m4xw9tbp3n6hr5vjc8sdfa?approval=apr_r4t6y2u3i4o5p6a7s2d3f4g5hk&token=Q2xvc2VyIGxvb2sgYXQgdGhlIHRva2VuIGhlcmU` });
 const report = (id: string, text: string, minutes: number, operation: string | null, request: string | null) => row({ id, channel: 'agent_feedback', mode: 'unverified', verification: 'none', user_id: null, user_name: null, user_email: null,
   ticket_type: 'agent_feedback', ticket_id: `tkt_${id.slice(5, 21)}`, why_no_reply: false, evidence: { filedBy: 'the API key "deploy bot"' }, operation, request_id: request, filed_at: minutesAgo(minutes), first_words: { text, at: minutesAgo(minutes) } });
-const one = report('conv_f1x7m2q9k4v8t3n6p5r2h7d9wb', 'Deleting an inbox kept its address: creating one with the same address again answers 409 ADDRESS_TAKEN.', 9, 'createInbox', 'req_' + '3f'.repeat(16));
+const one = { ...report('conv_f1x7m2q9k4v8t3n6p5r2h7d9wb', 'Deleting an inbox kept its address: creating one with the same address again answers 409 ADDRESS_TAKEN.', 9, 'createInbox', 'req_' + '3f'.repeat(16)),
+  triage_summary: 'A deleted inbox’s address is held for a while, so creating it again is refused; the docs explain the hold, but the error’s name does not.' };
 add('feedback-report', 'One agent feedback report', feedbackEmail(origin, [one], true, subjectOf('feedback', one, whoOf(one).short)));
 const two = report('conv_g2y8n3r4l5w9u4p7q6s3j8e2xc', 'The receiving host check stays pending after its MX record resolves.', 7, 'getInboundDomain', null);
 add('feedback-group', 'Two reports from one workspace, close together', feedbackEmail(origin, [one, two], true, `2 agent feedback reports from ${whoOf(one).short}`));

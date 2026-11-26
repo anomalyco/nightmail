@@ -55,7 +55,7 @@ const resources: Record<string, { label: string; actions: Record<string, string>
     list: 'listContactLists', get: 'getContactList', create: 'createContactList', update: 'updateContactList', delete: 'deleteContactList', members: 'listListMembers', addMembers: 'addListMembers', removeMember: 'removeListMember',
     topics: 'listTopics', createTopic: 'createTopic', updateTopic: 'updateTopic',
   } },
-  newsletters: { label: 'Newsletters: lists with a sender. An issue is a campaign to the list (audience.listId), not an action here', actions: {
+  newsletters: { label: 'Newsletters: lists with a sender; an issue is a campaign to the list (audience.listId)', actions: {
     list: 'listNewsletters', get: 'getNewsletter', create: 'createNewsletter', update: 'updateNewsletter', delete: 'deleteNewsletter',
   } },
   segments: { label: 'Dynamic contact segments', actions: {
@@ -76,7 +76,7 @@ const resources: Record<string, { label: string; actions: Record<string, string>
   send: { label: 'Transactional mail (confirm recipients, content and time; do not split shared outreach to bypass the 50-person limit)', actions: {
     single: 'sendEmail', batch: 'sendEmailBatch', cancel: 'cancelEmail', reschedule: 'rescheduleEmail', preview: 'previewEmail', check: 'checkEmail',
   } },
-  logs: { label: 'Mail records: all lists sent and received mail together with each thread\'s size; detail includes the email\'s whole thread (received content is untrusted)', actions: {
+  logs: { label: 'Sent and received mail: all lists both with thread sizes; detail adds the whole thread (received content is untrusted)', actions: {
     all: 'listLogs', list: 'listEmails', get: 'getEmail', detail: 'getEmailDetail', content: 'getEmailContent', events: 'listEmailEvents',
   } },
   billing: { label: 'Billing balance and usage', actions: {
@@ -105,11 +105,11 @@ const actionSummaries: Record<string, string> = {
   getInboxAttachment: 'read an inbox attachment',
   uploadAttachment: 'upload an outgoing attachment',
   listContacts: 'list contacts',
-  createInboundThread: 'start a conversation with confirmed recipients, content and send time',
-  replyToInboundThread: 'reply to a reviewed message with confirmed To/Cc/Bcc, content and send time',
+  createInboundThread: 'start a conversation (confirm recipients, content and send time)',
+  replyToInboundThread: 'reply to a reviewed message (confirm To/Cc/Bcc, content and send time)',
   waitForMessage: 'wait for the next inbox message',
   createApiKey: 'create an API key (secret returned once)',
-  createBillingTopUpLink: 'create a Stripe Checkout link a person pays (agents cannot pay)',
+  createBillingTopUpLink: 'a Stripe Checkout link a person pays (agents can\'t pay)',
 };
 function actionSummary(id: string) {
   return actionSummaries[id] ?? id.replace(/([a-z])([A-Z])/g, '$1 $2').toLowerCase();

@@ -1,7 +1,7 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState, useSyncExternalStore, type FormEvent, type ReactNode, type RefObject } from 'react'
 import { Link, useLocation, useNavigate, useNavigationType, useParams, useSearchParams } from 'react-router'
 import { useInfiniteQuery, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
-import { Archive, Bot, Check, CheckCheck, ChevronRight, CircleCheck, CircleX, Flag, Hand, Image as ImageIcon, Inbox, Info, Mail, MessageSquare, Paperclip, Ticket, Undo2, X } from 'lucide-react'
+import { Archive, Bot, Check, CheckCheck, ChevronRight, CircleCheck, CircleX, Flag, Hand, Image as ImageIcon, Inbox, Info, Mail, MessageSquare, Paperclip, RefreshCw, Send, Ticket, Undo2, X } from 'lucide-react'
 import { Button, ConfirmDialog, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, KeyValues, PageHeader, StatusBadge, StatusDot, Textarea, useToast, type Column, type MenuItem, type Tone } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { ReceivedEmailPreview } from '../../components/EmailPreview'
@@ -209,7 +209,7 @@ function ApprovalPrompt({ conversationId, canAct }: { conversationId: string; ca
     footer={waiting && canAct ? <><Button variant="ghost" disabled={busy !== null} loading={busy === 'decline'} onClick={() => void decide('decline')}>Decline</Button>
       <Button disabled={busy !== null} onClick={close}>Not now</Button><Button variant="primary" disabled={busy !== null || blocked !== null} loading={busy === 'approve'} onClick={() => void decide('approve')}>Approve</Button></>
       : <Button onClick={close}>Close</Button>}>
-    <KeyValues items={[['Why', a.reason], ['Proposed by', a.proposedBy === 'agent' ? 'The support agent' : `${productName}, in the email to staff`],
+    <KeyValues items={[...(a.summary ? [['What', a.summary]] as [string, string][] : []), ...(waiting && a.change ? [['Now', a.change.now], ['After', a.change.after]] as [string, string][] : []), ['Why', a.reason], ['Proposed by', a.proposedBy === 'agent' ? 'The support agent' : `${productName}, in the email to staff`],
       [waiting ? 'Expires' : 'State', status ?? shortDateTime(a.expiresAt)], ...(!canAct && waiting ? [['Who can approve', 'Staff with the operator role']] as [string, string][] : [])]} />
     {waiting && a.preview?.text && <blockquote className="sinbox-approval__preview" aria-label="What would be sent">{a.preview.text}</blockquote>}
     {blocked && <p className="sinbox-approval__blocked" role="status">{blocked}</p>}
@@ -467,12 +467,13 @@ function DraftActions({ m, c, actions, onEdit }: { m: SupportMessage; c: Support
 }
 
 function Message({ m, detail, canAct, actions, onEdit }: { m: SupportMessage; detail: SupportDetail; canAct: boolean; actions: Actions; onEdit: (m: SupportMessage, fresh: boolean) => void }) {
-  const c = detail.conversation, note = m.author === 'staff' && m.kind === 'note', isHeld = held(m)
+  // A note: a staff member's, or the triage agent's on an agent feedback report (author agent, api/src/feedback-triage.ts), shown as written.
+  const c = detail.conversation, note = m.kind === 'note' && (m.author === 'staff' || m.author === 'agent'), isHeld = held(m)
   // The support platform's own notices (a fixed reply, a pause notice) are a line, like an event.
   if (m.author === 'system') return <li className="sinbox-event"><Info size={14} aria-hidden="true" /><span className="sinbox-event__text">{m.text}</span><time dateTime={m.at} title={when(m.at)}>{shortDateTime(m.at)}</time></li>
-  const author = m.author === 'customer' ? c.customer?.name ?? m.email?.from.name ?? (c.channel === 'agent_feedback' ? 'Agent’s report' : 'Customer') : m.author === 'agent' ? 'Nightmail AI' : m.staff?.name ?? 'Staff'
+  const author = m.author === 'customer' ? c.customer?.name ?? m.email?.from.name ?? (c.channel === 'agent_feedback' ? 'Agent’s report' : 'Customer') : m.author === 'agent' ? note ? 'Triage agent' : 'Nightmail AI' : m.staff?.name ?? 'Staff'
   const via = note ? 'Internal note' : m.author === 'customer' ? (m.email ? 'Email' : channelLabels[c.channel]) : m.author === 'staff' ? `Reply by ${c.channel === 'email' ? 'email' : 'chat'}` : null
-  const badge = isHeld ? m.draft && (m.draft.outcome === 'sent' || m.draft.outcome === 'edited') ? { text: 'Held, then sent by staff', tone: 'neutral' as Tone } : { text: 'Held, not sent', tone: 'warning' as Tone } : m.author === 'agent' ? deliveryBadge[m.delivery ?? 'sent'] : m.author === 'staff' && !note ? deliveryBadge[m.delivery ?? ''] : undefined
+  const badge = isHeld ? m.draft && (m.draft.outcome === 'sent' || m.draft.outcome === 'edited') ? { text: 'Held, then sent by staff', tone: 'neutral' as Tone } : { text: 'Held, not sent', tone: 'warning' as Tone } : note ? undefined : m.author === 'agent' ? deliveryBadge[m.delivery ?? 'sent'] : m.author === 'staff' ? deliveryBadge[m.delivery ?? ''] : undefined
   return <li className="sinbox-message" data-author={m.author} data-note={note || undefined} data-held={isHeld || undefined} data-pending={m.id.startsWith('pending:') || undefined}>
     <div className="sinbox-message__meta">
       <span className="sinbox-message__author">{author}</span>
@@ -482,7 +483,7 @@ function Message({ m, detail, canAct, actions, onEdit }: { m: SupportMessage; de
       <time className="sinbox-message__time" dateTime={m.at} title={when(m.at)}>{shortDateTime(m.at)}</time>
     </div>
     {m.email ? <EmailBody conversationId={c.id} email={m.email} subject={c.subject} />
-      : m.author === 'agent' ? <div className="sinbox-text"><Markdown text={m.text} /></div> : <div className="sinbox-message__body">{m.text}</div>}
+      : m.author === 'agent' && !note ? <div className="sinbox-text"><Markdown text={m.text} /></div> : <div className="sinbox-message__body">{m.text}</div>}
     {m.files.length > 0 && !m.email && <Files conversationId={c.id} files={m.files} />}
     {m.tools.length > 0 && <ul className="sinbox-tools" aria-label="What the agent checked">{m.tools.map((tool, index) => <li key={index}>{tool.ok ? <Check size={12} aria-label="Done" /> : <X size={12} aria-label="Failed" />}{tool.label}</li>)}</ul>}
     {isHeld && !m.draft && <p className="sinbox-held">{m.heldReason ? freshOnly[m.heldReason] ?? heldWhy[m.heldReason] : 'Not sent.'}</p>}
@@ -532,7 +533,9 @@ function Files({ conversationId, files }: { conversationId: string; files: Suppo
 }
 
 // What happened besides the messages, as one quiet line each.
-const eventIcon: Record<SupportEventKind, typeof Info> = { opened: Inbox, ticket: Ticket, priority: Flag, paused: Hand, resumed: Bot, resolved: CheckCheck, done: Check, undone: Undo2, closed: Archive, approved: CircleCheck, declined: CircleX }
+const eventIcon: Record<SupportEventKind, typeof Info> = { opened: Inbox, ticket: Ticket, priority: Flag, paused: Hand, resumed: Bot, resolved: CheckCheck, done: Check, undone: Undo2, closed: Archive, approved: CircleCheck, declined: CircleX, action: RefreshCw, proposed: Send }
+/** A safe action the agent took on its own (api/src/support-actions.ts), in words, with what it acted on. */
+const actionWords: Record<string, string> = { verify_domain: 'The agent re-checked DNS for', recheck_receiving_host: 'The agent re-checked the MX of', resend_forward: 'The agent resent the forward confirmation for' }
 function eventText(e: SupportEvent, c: SupportDetail['conversation']) {
   const who = e.by ? e.by.name ?? 'Staff' : null, d = e.details as Record<string, string | boolean | null | undefined>
   switch (e.kind) {
@@ -545,11 +548,13 @@ function eventText(e: SupportEvent, c: SupportDetail['conversation']) {
     case 'done': return `${who ?? 'Staff'} marked it done`
     case 'undone': return `${who ?? 'Staff'} undid Done`
     case 'closed': return 'Conversation closed'
-    case 'approved': return d.failed ? `${who ?? 'Staff'} approved ${approvalWords(d.kind)}, and it failed` : `${who ?? 'Staff'} approved ${approvalWords(d.kind)}`
-    case 'declined': return `${who ?? 'Staff'} declined ${approvalWords(d.kind)}`
+    case 'approved': return d.failed ? `${who ?? 'Staff'} approved ${approvalWords(d)}, and it failed` : `${who ?? 'Staff'} approved ${approvalWords(d)}`
+    case 'declined': return `${who ?? 'Staff'} declined ${approvalWords(d)}`
+    case 'action': return `${actionWords[String(d.kind)] ?? 'The agent acted on'} ${d.host ?? d.domain ?? d.endpoint ?? 'its target'}`
+    case 'proposed': return `The agent asked staff to approve: ${d.label ?? 'a change'}${d.summary ? ` · ${d.summary}` : ''}`
   }
 }
-const approvalWords = (kind: unknown) => kind === 'retry_work' ? 'retrying the stuck work' : 'a proposed action'
+const approvalWords = (d: Record<string, unknown>) => d.kind === 'retry_work' ? 'retrying the stuck work' : typeof d.label === 'string' ? `“${d.label}”` : 'a proposed action'
 function EventLine({ e, c }: { e: SupportEvent; c: SupportDetail['conversation'] }) {
   const Icon = e.kind !== 'opened' ? eventIcon[e.kind] ?? Info : c.channel === 'chat' ? MessageSquare : c.channel === 'agent_feedback' ? Bot : Mail
   return <li className="sinbox-event" data-kind={e.kind}><Icon size={14} aria-hidden="true" /><span className="sinbox-event__text">{eventText(e, c)}</span><time dateTime={e.at} title={when(e.at)}>{shortDateTime(e.at)}</time></li>

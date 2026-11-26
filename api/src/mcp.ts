@@ -159,7 +159,7 @@ export const workspaceTools: Tool[] = [
   { name: 'setDefaultWorkspace', description: 'Set the workspace this connection’s calls use when they name none. One of your own workspaces, by ID, slug or name.',
     inputSchema: { type: 'object', properties: { workspace: WORKSPACE_ARG }, required: ['workspace'], additionalProperties: false }, outputSchema: WORKSPACE_LIST, annotations: { readOnlyHint: false, idempotentHint: true, openWorldHint: false } },
 ];
-export const workspaceResource: Tool = { name: 'workspaces', description: 'Your workspaces, your role and access in each, and the default (list), or set the default (setDefault). Every tool takes workspace, an ID or name; without it, the default.',
+export const workspaceResource: Tool = { name: 'workspaces', description: 'Your workspaces with your role and access, and the default (list), or set it (setDefault). Every tool takes workspace (ID or name); without it, the default.',
   inputSchema: { type: 'object', properties: { action: { type: 'string', enum: ['list', 'setDefault'] }, workspace: { type: 'string' } }, required: ['action'] }, annotations: { idempotentHint: true, openWorldHint: false } };
 
 /**

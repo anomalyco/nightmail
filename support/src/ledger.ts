@@ -1,7 +1,7 @@
 import type { Env } from './env.js';
 import { nightmailApi, platformBody, type OutboxReply } from './nightmail.js';
 import { INTAKE, type Mailbox } from './intake.js';
-import { countToday, overflowRow, resendNotices } from './limits.js';
+import { countToday, limits, overflowRow, resendNotices, today } from './limits.js';
 import { replay } from './replay.js';
 import { fromRow, type TicketRow } from './tickets.js';
 import type { Flow } from './work.js';
@@ -15,12 +15,15 @@ import { log, logError } from './log.js';
 // parked for their sender's sign-in (a claim's own wake can be lost), and the replay poller (replay.ts), which accepts
 // mail no webhook delivered. It also pulls the staff inbox's replies (api/src/support-inbox.ts) and hands each to its
 // conversation: a wake does the same for one conversation at once, and pulling is what lets staff reply at all (they can
-// only while it happens).
+// only while it happens). And it hands new agent feedback reports to the triage agent (triage.ts), before the staff
+// emails, so a report's note is usually written before the email about it.
 
 export type Source = 'webhook' | 'poller';
 const DAY = 86_400_000, MINUTES_10 = 600_000, MINUTES_5 = 300_000;
 /** Conversations with an answer parked for a sign-in, woken per sweep. */
 const SIGNIN_WAKES = 50;
+/** Agent feedback reports the triage agent starts reading per sweep, and the daily counter they count against. */
+const TRIAGE_PER_SWEEP = 5, TRIAGE_KEY = 'global:triage';
 
 /** Whether the flow already accepted or kept this message: a later delivery of it changes nothing. */
 export async function ledgered(env: Env, flow: Flow, messageId: string) {
@@ -95,7 +98,7 @@ export async function blockUnconfigured(env: Env, input: { messageId: string; th
 /** Every five minutes: each step on its own, so one failing never stops the others. */
 export async function sweep(env: Env, now = Date.now()) {
   const result: Record<string, number> = {};
-  const steps: [string, () => Promise<number>][] = [['notices', () => resendNotices(env, now)], ['intake', () => acceptConfigured(env, now)], ['tickets', () => ticketMail(env, now)], ['staffMail', () => staffMail(env)], ['staff', () => staffReplies(env)], ['signins', () => signinWakes(env, now)],
+  const steps: [string, () => Promise<number>][] = [['notices', () => resendNotices(env, now)], ['intake', () => acceptConfigured(env, now)], ['tickets', () => ticketMail(env, now)], ['triage', () => triageFeedback(env, now)], ['staffMail', () => staffMail(env)], ['staff', () => staffReplies(env)], ['signins', () => signinWakes(env, now)],
     ['replaySupport', () => replay(env, 'support', now)], ['replayIntake', () => replay(env, 'intake', now)]];
   for (const [name, step] of steps) {
     try { result[name] = await step(); }
@@ -140,6 +143,27 @@ async function staffMail(env: Env) {
       platformBody(await env.BANE.staffMailSent(mail.key, { threadId: sent.threadId, messageId: sent.id }));
       n++;
     } catch (error) { logError(error, { event: 'ticket', code: 'STAFF_MAIL_FAILED', key: mail.key }, 'warn'); }
+  }
+  return n;
+}
+
+/**
+ * The feedback triage agent (agent/triage.ts): agent feedback reports without a note, claimed from Nightmail (each at
+ * most twice) and each handed to an object of its own, which reads it in its alarm and writes its one note. Within the
+ * daily cap: past it nothing more is claimed today, and a report not read within a day goes without a note (staff are
+ * emailed about it all the same).
+ */
+async function triageFeedback(env: Env, now: number) {
+  if (!env.CONSOLE_GATEWAY_KEY) return 0;
+  const cap = limits(env).triagePerDay;
+  const used = (await env.DB.prepare('SELECT n FROM daily_counters WHERE day = ? AND key = ?').bind(today(now), TRIAGE_KEY).first<{ n: number }>())?.n ?? 0;
+  if (used >= cap) return 0;
+  const due = platformBody(await env.BANE.feedbackDue(Math.min(TRIAGE_PER_SWEEP, cap - used))).data;
+  let n = 0;
+  for (const report of due) {
+    if (!(await countToday(env, TRIAGE_KEY, cap, now)).ok) { log('warn', { event: 'triage', code: 'TRIAGE_DAILY_CAP_REACHED', limit: cap }); break; }
+    try { if (await env.TRIAGE.get(env.TRIAGE.idFromName(report.conversationId)).start(report)) n++; }
+    catch (error) { logError(error, { event: 'triage', code: 'TRIAGE_START_FAILED' }, 'warn'); }
   }
   return n;
 }

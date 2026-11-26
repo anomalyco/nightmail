@@ -37,8 +37,12 @@ export interface ToolHost {
   note(text: string): Promise<string>;
   /** Chat only, owners and admins: proposes one change the customer confirms signed in, on its card. Nothing runs here. */
   propose(proposal: ActionProposal): Promise<string>;
-  /** Chat only, owners and admins: re-checks a domain's DNS now (no confirmation: it changes only the stored status). */
-  recheckDomain(domainId: string): Promise<string>;
+  /**
+   * Chat only, owners and admins: one of the safe actions (re-check a domain's or receiving host's DNS, resend a forward
+   * confirmation) or a proposal to staff, POSTed for the chat's own workspace. Answers Nightmail's body; a refusal throws
+   * ToolFailure with a customer-safe message (`notFound` for a 404).
+   */
+  act(path: string, body: Record<string, unknown> | undefined, notFound: string): Promise<unknown>;
   /** Every turn: the published docs' sections that best match, each with its link (agent/docs.ts). Public text: no account. */
   searchDocs(query: string): unknown;
 }
@@ -132,6 +136,25 @@ const seg = (value: unknown) => encodeURIComponent(id(value));
 const read = (path: (a: Record<string, unknown>, h: ToolHost) => string) => async (args: Record<string, unknown>, host: ToolHost) => toolResult(await host.read(path(args, host)), host.hidden());
 const fixed = (running: string, done: string) => () => ({ running, done });
 const providerName = (p: unknown) => typeof p === 'string' && p ? ({ gmail: 'Gmail', microsoft: 'Outlook', yahoo: 'Yahoo', apple: 'iCloud', proton: 'Proton', gmx: 'GMX' } as Record<string, string>)[p] ?? p : null;
+
+/** The risky changes the agent may only propose to staff (api/src/support-approvals.ts AGENT_KINDS), with the numbers each takes. */
+export const STAFF_KINDS = ['raise_daily_limit', 'raise_domain_limit', 'lift_growth_pace', 'pause_sending', 'resume_sending', 'release_marketing', 'release_campaign', 'grant_credit'] as const;
+const STAFF_FIELDS: Record<(typeof STAFF_KINDS)[number], readonly ('daily' | 'limit' | 'campaignId' | 'amountCents')[]> = {
+  raise_daily_limit: ['daily'], raise_domain_limit: ['limit'], lift_growth_pace: [], pause_sending: [], resume_sending: [], release_marketing: [], release_campaign: ['campaignId'], grant_credit: ['amountCents'],
+};
+/** The model's propose_to_staff arguments as the body for its kind: the reason and that kind's own fields, nothing else. */
+export function staffProposal(args: Record<string, unknown>) {
+  const kind = String(args.kind ?? '') as (typeof STAFF_KINDS)[number];
+  if (!(STAFF_KINDS as readonly string[]).includes(kind)) throw new ToolFailure(`Pick kind from: ${STAFF_KINDS.join(', ')}.`);
+  const reason = String(args.reason ?? '').trim();
+  if (reason.length < 10) throw new ToolFailure('Give staff the reason: what the customer asked and what your reads showed (at least a sentence).');
+  const body: Record<string, unknown> = { kind, reason: reason.slice(0, 400) };
+  for (const key of STAFF_FIELDS[kind]) {
+    if (!present(args[key])) throw new ToolFailure(`${kind} needs ${key}${key === 'campaignId' ? ', from an earlier tool result for this customer' : ''}.`);
+    body[key] = key === 'campaignId' ? actionId(args[key]) : Math.trunc(Number(args[key]));
+  }
+  return body;
+}
 
 export const TOOLS: ToolSpec[] = [
   { name: 'account_context', description: 'Start here for any account question: who the customer is, their workspaces and roles, sending setup and limits, domains and verification, failures in the last 24 hours, open enforcement, recent changes and request IDs.',
@@ -246,7 +269,7 @@ export const TOOLS: ToolSpec[] = [
   { name: 'add_note', description: `Keep a short note about this customer for a later support chat with them: a durable fact that would help next time, such as their setup, what was tried and what it showed, a preference, or something you or the ${productName} team promised. The customer never sees notes. Never put secrets, credentials, codes or keys in one, and never copy their messages or email content wholesale: write the fact in a sentence or two. At most one or two per conversation.`,
     params: { text: { type: 'string', description: `The note, under ${NOTE_MAX} characters, e.g. "Sends from news.acme.com through Cloudflare DNS; DKIM CNAMEs were proxied, fixed Nov 4."`, max: NOTE_MAX } },
     label: fixed('Noting that for next time…', 'Noted that for next time'), execute: (a, h) => h.note(String(a.text ?? '')) },
-  { name: 'propose_action', description: `Propose one change for the customer to confirm on a card in this chat, signed in to ${productName}: retry a failed webhook delivery (retry_webhook_delivery: webhookId, deliveryId), send a test event to a webhook (test_webhook: webhookId), the same for receiving webhooks (retry_inbound_delivery: webhookId, deliveryId; test_inbound_webhook: webhookId), redeliver a received message to its route's webhooks (redeliver_message: messageId, optionally webhookId for one endpoint), or pause a sending campaign (pause_campaign: campaignId). Take the IDs from earlier tool results, and propose only what they show would help. ${productName} writes what the customer sees, and nothing changes until they press Confirm on the card: never on your call, and never on anything they type. At most 3 open at once.`,
+  { name: 'propose_action', description: `Propose one change for the customer to confirm on a card in this chat, signed in to ${productName}: retry a failed webhook delivery (retry_webhook_delivery: webhookId, deliveryId), send a test event to a webhook (test_webhook: webhookId), the same for receiving webhooks (retry_inbound_delivery: webhookId, deliveryId; test_inbound_webhook: webhookId), redeliver a received message to its route's webhooks (redeliver_message: messageId, optionally webhookId for one endpoint), or pause a sending campaign (pause_campaign: campaignId; only for the workspace's owner, and never in the same answer as asking the team to pause_sending). Take the IDs from earlier tool results, and propose only what they show would help. ${productName} writes what the customer sees, and nothing changes until they press Confirm on the card: never on your call, and never on anything they type. At most 3 open at once.`,
     params: {
       kind: { type: 'enum', values: ACTION_KINDS, description: 'The change' },
       webhookId: { type: 'string', description: 'The webhook (retry and test kinds; optional for redeliver_message)', optional: true, max: 120, pattern: ACTION_ID },
@@ -255,11 +278,36 @@ export const TOOLS: ToolSpec[] = [
       campaignId: { type: 'string', description: 'The campaign (pause_campaign)', optional: true, max: 120, pattern: ACTION_ID },
     },
     label: fixed('Preparing a change for you to confirm…', 'Prepared a change for you to confirm'), execute: async (a, h) => h.propose(actionProposal(a)) },
+  { name: 'recheck_receiving_host', description: `Re-check a receiving host's MX now, as the customer's own Check MX now does, after they changed the record: ${productName} verifies its domain in the background, MX included, and answers the host's stored state. It needs no confirmation and changes nothing but that state, at most once a minute per host. Read receiving_hosts again in a minute for the result.`,
+    params: { hostId: { type: 'string', description: 'The host ID (id) from receiving_hosts', max: 120, pattern: ACTION_ID } },
+    label: fixed('Re-checking your receiving domain’s MX…', 'Re-checked your receiving domain’s MX'),
+    execute: async (a, h) => toolResult(await h.act(`/v1/support/receiving/hosts/${encodeURIComponent(actionId(a.hostId))}/recheck`, undefined, 'Use a host ID from receiving_hosts.'), h.hidden()) },
+  { name: 'resend_forward_link', description: `Email a forward's recipient a new confirmation link, as the dashboard's Send again does, when the first one was lost or lapsed (pending_verifications shows which). The new link replaces the earlier one, nothing is forwarded until the recipient allows it, and it needs no confirmation. At most once in 10 minutes per forward, within the forward's own daily limits.`,
+    params: { forwardId: { type: 'string', description: 'The forward ID (id) from pending_verifications', max: 120, pattern: ACTION_ID } },
+    label: fixed('Resending the forward confirmation…', 'Resent the forward confirmation'),
+    execute: async (a, h) => toolResult(await h.act(`/v1/support/receiving/forwards/${encodeURIComponent(actionId(a.forwardId))}/resend`, undefined, 'Use a forward ID from pending_verifications.'), h.hidden()) },
+  { name: 'propose_to_staff', description: `Ask ${productName}'s team to approve a risky change for this customer's workspace that you can never make yourself: raise_daily_limit (daily), raise_domain_limit (limit), lift_growth_pace, pause_sending, resume_sending, release_marketing, release_campaign (campaignId of a paused campaign; never in the same answer as a card to pause that campaign), grant_credit (amountCents of promotional credit: at most 10,000, $100, per proposal; a larger ask is capped at $100 and the team sees what they asked; one credit proposal waits at a time, and more is for a person: file a ticket). Use it only when your reads show it is warranted and the customer wants it; give the numbers and your reason. Nothing changes until a person on the team approves it; the team replies in this conversation. Refunds, deleting anything, members, roles, keys, MCP grants and content access aren't here: file a ticket for those. At most 3 waiting per conversation.`,
+    params: {
+      kind: { type: 'enum', values: STAFF_KINDS, description: 'The change' },
+      reason: { type: 'string', description: 'For staff: what the customer asked and what your reads showed, in a few sentences', max: 400 },
+      daily: { type: 'number', description: 'raise_daily_limit: the daily limit to set', optional: true, min: 1, max: 10_000_000 },
+      limit: { type: 'number', description: 'raise_domain_limit: the domain limit to set', optional: true, min: 1, max: 10_000 },
+      campaignId: { type: 'string', description: 'release_campaign: the paused campaign', optional: true, max: 120, pattern: ACTION_ID },
+      amountCents: { type: 'number', description: 'grant_credit: the promotional credit they asked for, in cents (at most 10,000 is proposed; a larger ask is capped)', optional: true, min: 1, max: 100_000 },
+    },
+    label: fixed('Asking the team to approve a change…', 'Asked the team to approve a change'),
+    execute: async (a, h) => {
+      const proposed = await h.act('/v1/support/approvals', staffProposal(a), 'Check the campaign ID came from an earlier tool result for this customer.') as { label?: unknown; summary?: unknown; state?: unknown };
+      if (typeof proposed?.label !== 'string' || typeof proposed.summary !== 'string' || proposed.state !== 'proposed') throw new ToolFailure(`Couldn’t ask the team just now. File a ticket instead.`);
+      return `Asked ${productName}’s team to approve: ${proposed.label} (${proposed.summary}). Nothing has changed: a person on the team decides, and replies in this conversation. Tell the customer you’ve asked the team and what for; never say it’s done or promise when.`;
+    } },
   { name: 'recheck_domain', description: `Re-check a sending domain's DNS now, as the customer's own Check now does, after they changed a record: ${productName} queues a verification and answers the stored status. It needs no confirmation and changes nothing but that status. Read domain_health again in a minute for the result.`,
     params: { domainId: { type: 'string', description: 'The domain ID from list_domains', max: 120, pattern: ACTION_ID } },
-    label: fixed('Re-checking your domain’s DNS…', 'Re-checked your domain’s DNS'), execute: async (a, h) => h.recheckDomain(actionId(a.domainId)) },
+    label: fixed('Re-checking your domain’s DNS…', 'Re-checked your domain’s DNS'),
+    execute: async (a, h) => toolResult(await h.act(`/v1/support/domains/${encodeURIComponent(actionId(a.domainId))}/verify`, undefined, 'Use a domain ID from list_domains.'), h.hidden()) },
 ];
 export const TOOL_NAMES = TOOLS.map(t => t.name);
+
 
 /**
  * Tools whose /v1/support routes Nightmail lets only owners and admins read (SUPPORT_CEILINGS in
@@ -267,7 +315,7 @@ export const TOOL_NAMES = TOOLS.map(t => t.name);
  * of those roles.
  */
 export const MANAGER_TOOLS: ReadonlySet<string> = new Set(['list_domains', 'domain_health', 'list_webhook_deliveries', 'get_billing', 'get_audit', 'api_errors', 'explain_request', 'propose_action', 'recheck_domain',
-  'receiving_hosts', 'receiving_routes', 'held_addresses', 'pending_verifications', 'smtp_refusals']);
+  'receiving_hosts', 'receiving_routes', 'held_addresses', 'pending_verifications', 'smtp_refusals', 'recheck_receiving_host', 'resend_forward_link', 'propose_to_staff']);
 /** An unverified email reads no account: its turns answer through reply, can search the public docs and file a ticket, nothing else. */
 const EMAIL_TOOLS: ReadonlySet<string> = new Set(['reply', 'search_docs', 'file_ticket']);
 /**

@@ -22,7 +22,7 @@ export function RouteSkeleton() {
   if (section === 'logs') return !id ? <LogsRouteSkeleton /> : <EmailDetailSkeleton kind={isReceivedId(id) ? 'received' : 'sent'} />
   if (section === 'campaigns') return id === 'templates' ? <CampaignRouteSkeleton kind={view ? 'template' : 'templates'} /> : <CampaignRouteSkeleton kind={!id ? 'list' : view === 'review' ? 'review' : 'editor'} isNew={id === 'new'} />
   if (section === 'newsletters') return <NewsletterRouteSkeleton id={id} />
-  if (section === 'audience') return id === 'lists' ? <AudienceRouteSkeleton kind={view ? 'list' : 'lists'} /> : id === 'segments' ? <AudienceRouteSkeleton kind={view ? 'segment' : 'segments'} isNew={view === 'new'} /> : <AudienceRouteSkeleton kind={view ? 'contact' : 'contacts'} />
+  if (section === 'audience') return id === 'lists' ? <AudienceRouteSkeleton kind={view ? 'list' : 'lists'} /> : id === 'segments' ? <AudienceRouteSkeleton kind={view ? 'segment' : 'segments'} isNew={view === 'new'} /> : id === 'topics' ? <AudienceRouteSkeleton kind="topics" /> : <AudienceRouteSkeleton kind={view ? 'contact' : 'contacts'} />
   if (section === 'api-keys') return <SettingsRouteSkeleton kind="keys" />
   if (section === 'domains') return <SettingsRouteSkeleton kind={id ? 'domain' : 'domains'} />
   if (section === 'operator') return <OperatorRouteSkeleton operator={operator} />

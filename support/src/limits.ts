@@ -33,6 +33,8 @@ export const DEFAULT_LIMITS = {
   /** Within support@'s unauthenticated bucket, per From address (each such email gets a sign-in reply): one forged address can't spend it all. */
   mailUnauthenticatedPerAddress: 3,
   mailPerDay: 2000,
+  /** Agent feedback reports the triage agent reads a day (triage.ts): past it, the rest wait, and get no note if a day goes by. */
+  triagePerDay: 100,
   /** "Confirm it's me" links per address a day, and the least time between two for the same open confirmation. */
   confirmsPerAddress: 3,
   confirmResendMinutes: 60,

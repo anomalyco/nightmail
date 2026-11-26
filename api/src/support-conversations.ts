@@ -58,6 +58,11 @@ export const SUPPORT_CEILINGS: Ceiling[] = [
   { method: 'POST', path: '/v1/support/actions', roles: MANAGERS, counterpart: 'GET /v1/webhooks', chatOnly: true },
   { method: 'GET', path: '/v1/support/actions/{id}', roles: MANAGERS, counterpart: 'GET /v1/webhooks', chatOnly: true },
   { method: 'POST', path: '/v1/support/domains/{id}/verify', roles: MANAGERS, counterpart: 'GET /v1/domains', chatOnly: true },
+  // Safe actions the agent takes alone (support-actions.ts): a receiving host's Check MX now is its domain's Check now; a
+  // forward's Send again is an endpoint's. Risky changes it only proposes to staff, for a workspace it may act for.
+  { method: 'POST', path: '/v1/support/receiving/hosts/{id}/recheck', roles: MANAGERS, counterpart: 'GET /v1/domains', chatOnly: true },
+  { method: 'POST', path: '/v1/support/receiving/forwards/{id}/resend', roles: MANAGERS, counterpart: 'GET /v1/endpoints', chatOnly: true },
+  { method: 'POST', path: '/v1/support/approvals', roles: MANAGERS, counterpart: 'GET /v1/api-keys', chatOnly: true },
   { method: 'GET', path: '/v1/support/screen', roles: EVERYONE, counterpart: 'GET /v1/emails', chatOnly: true },
   { method: 'GET', path: '/v1/support/campaigns', roles: EVERYONE, counterpart: 'GET /v1/campaigns', chatOnly: true },
   { method: 'GET', path: '/v1/support/campaigns/{id}', roles: EVERYONE, counterpart: 'GET /v1/campaigns', chatOnly: true },

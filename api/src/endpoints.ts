@@ -396,6 +396,20 @@ async function requestConfirmation(c: Ctx, tx: DbExecutor, w: string, endpointId
   });
 }
 
+/**
+ * Emails a forward's recipient a new confirmation link (sendEndpointVerification), in the caller's transaction, as the
+ * request's actor: refused unless the endpoint is a forward not yet confirmed. The support agent's resend runs this too.
+ * The new link replaces the earlier one, which stops working. null: no such endpoint in the workspace.
+ */
+export async function resendForwardConfirmation(c: Ctx, tx: DbExecutor, w: string, where: { id: string } | { name: string }, from?: string) {
+  const row = await lockEndpoint(tx, c, w, where, false);
+  if (!row) return null;
+  if (row.type !== 'forward') throw new ApiError(422, 'VERIFICATION_NOT_NEEDED', `${row.type} endpoints need no recipient confirmation.`);
+  if (row.verified) throw new ApiError(409, 'ALREADY_CONFIRMED', `${row.key} is already confirmed.`);
+  await requestConfirmation(c, tx, w, row.id, await decrypt(c.env, row.encryptedTarget!, targetBinding(w, row.id)), from);
+  return row;
+}
+
 export function registerEndpoints(app: App) {
   const manage = 'create, change, test or delete endpoints';
   const findEndpoint = async (db: DbExecutor, w: string, name: string) => { const row = (await endpointRows(db, w, { name, limit: 1 }))[0]; if (!row) throw missingEndpoint(name); return row; };
@@ -456,13 +470,7 @@ export function registerEndpoints(app: App) {
   });
   app.openapi(createRoute({ ...meta, method: 'post', path: `${base}/{name}/verification`, operationId: 'sendEndpointVerification', summary: 'Email a forward recipient a new confirmation link', description: 'For a pending, expired or (after 30 days) declined forward. The recipient must open the link and choose Allow; no API call can confirm on their behalf.', request: { params: NameParam, body: json(z.object({ from: z.string().max(254).optional() }).strict()) }, responses: { 202: response(Endpoint), ...errors } }), async c => {
     const w = receivingAdmin(c, manage).workspaceId, name = c.req.valid('param').name, q = c.req.valid('json');
-    await c.env.db.transaction(async tx => {
-      const row = await lockEndpoint(tx, c, w, { name }, false);
-      if (!row) throw missingEndpoint(name);
-      if (row.type !== 'forward') throw new ApiError(422, 'VERIFICATION_NOT_NEEDED', `${row.type} endpoints need no recipient confirmation.`);
-      if (row.verified) throw new ApiError(409, 'ALREADY_CONFIRMED', `${name} is already confirmed.`);
-      await requestConfirmation(c, tx, w, row.id, await decrypt(c.env, row.encryptedTarget!, targetBinding(w, row.id)), q.from);
-    });
+    await c.env.db.transaction(async tx => { if (!await resendForwardConfirmation(c, tx, w, { name }, q.from)) throw missingEndpoint(name); });
     c.get('actor').wakeJobs = 1;
     return c.json(await endpointView(c.env, w, await findEndpoint(c.env.db, w, name)), 202);
   });

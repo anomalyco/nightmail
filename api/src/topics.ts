@@ -1,6 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, asc, eq, gt, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
-import { actor, ApiError, databaseCodeOf, errors, IdParams, isoTime, json, notFound, page, PageQuery, response, rowId, security, type Actor, type App, type DbExecutor } from './core.js';
+import { actor, ApiError, databaseCodeOf, errors, IdParams, isoTime, json, notFound, page, PageQuery, response, rowId, security, statementTimedOut, type Actor, type App, type Database, type DbExecutor } from './core.js';
 import { consentAudit, topics } from './db/audience.js';
 import { enqueue } from './jobs.js';
 
@@ -24,8 +24,9 @@ const TopicPatch = z.object({
   name: Name.optional(), description: Description.optional(),
   archived: z.boolean().optional().describe('true archives the topic: it leaves the topic list and the preference page, and new sends can\u2019t name it, while sends already launched with it keep skipping the people who opted out of it. false brings it back, with every choice made about it.'),
 }).strict().describe('subscribedByDefault is fixed when the topic is made: it can\u2019t change who gets the topic without their choice.');
-const TopicQuery = PageQuery.extend({ archived: z.enum(['true', 'false']).default('false').describe('true lists the archived topics instead.') }).openapi('ListTopicsQuery');
-export const Topic = z.object({ id: z.string(), workspaceId: z.string(), name: z.string(), description: z.string(), subscribedByDefault: z.boolean(), archivedAt: z.string().nullable(), createdAt: z.string(), updatedAt: z.string() }).openapi('Topic');
+const TopicQuery = PageQuery.extend({ archived: z.enum(['true', 'false']).default('false').describe('true lists the archived topics instead.'), counts: z.enum(['true', 'false']).default('false').describe('true adds each topic\u2019s counts (counts).') }).openapi('ListTopicsQuery');
+const TopicCounts = z.object({ optedIn: z.number().int(), optedOut: z.number().int() }).nullable().describe('With counts=true on listTopics: how many contacts have opted in to the topic and out of it (each recorded choice, a deleted contact\u2019s included), as of the read. null when counting took longer than its time limit.');
+export const Topic = z.object({ id: z.string(), workspaceId: z.string(), name: z.string(), description: z.string(), subscribedByDefault: z.boolean(), archivedAt: z.string().nullable(), createdAt: z.string(), updatedAt: z.string(), counts: TopicCounts.optional() }).openapi('Topic');
 export const ContactTopic = z.object({
   topicId: z.string(), name: z.string(),
   subscribed: z.boolean().describe('Whether sends with this topic reach the contact, as far as the topic goes: the contact\u2019s own choice, or the topic\u2019s default without one. Mail is still sent only while the contact is subscribed to marketing and not suppressed.'),
@@ -118,12 +119,26 @@ export async function recordTopicChoices(tx: DbExecutor, workspaceId: string, co
   return changed.map(choice => choice.topicId);
 }
 
+/** The choices recorded about each of `ids`, by side, in one statement of at most TOPIC_COUNTS_MS (each topic's choices are
+ *  its key prefix); null when that runs out, so the topic list never waits on a large workspace's counts. */
+const TOPIC_COUNTS_MS = 1000;
+async function topicCounts(db: DbExecutor, workspaceId: string, ids: string[]): Promise<Map<string, { optedIn: number; optedOut: number }> | null> {
+  if (!ids.length) return new Map();
+  return (db as Database).transaction(async tx => {
+    await tx.execute(sql.raw(`SET LOCAL statement_timeout = '${TOPIC_COUNTS_MS}ms'`));
+    const { rows } = await tx.execute<{ id: string; opted_in: number; opted_out: number }>(sql`SELECT topic_id AS id, count(*) FILTER (WHERE subscribed)::int AS opted_in, count(*) FILTER (WHERE NOT subscribed)::int AS opted_out
+      FROM audience_contact_topics WHERE workspace_id = ${workspaceId} AND topic_id = ANY(${sql.param(ids)}::text[]) GROUP BY topic_id`);
+    return new Map(rows.map(row => [row.id, { optedIn: row.opted_in, optedOut: row.opted_out }]));
+  }).catch(error => { if (statementTimedOut(error)) return null; throw error; });
+}
+
 export function registerTopics(app: App) {
   const tags = ['Audience'];
   app.openapi(createRoute({ method: 'get', path: '/v1/topics', operationId: 'listTopics', tags, security, description: 'The workspace\u2019s topics, oldest first: the kinds of marketing mail it sends. A marketing send or campaign may name one, and its one-click unsubscribe then opts the person out of that topic only. A contact\u2019s choices are on getContact (topics) and set with updateContactConsent (topicId).', request: { query: TopicQuery }, responses: { 200: response(page(Topic)), ...errors } }), async c => {
     const a = actor(c), query = c.req.valid('query');
     const rows = await c.env.db.select().from(topics).where(and(eq(topics.workspaceId, a.workspaceId), query.archived === 'true' ? isNotNull(topics.archivedAt) : isNull(topics.archivedAt), query.cursor ? gt(topics.id, query.cursor) : undefined)).orderBy(asc(topics.id)).limit(query.limit + 1);
-    return c.json({ data: rows.slice(0, query.limit).map(topicView), nextCursor: rows.length > query.limit ? rows[query.limit - 1]!.id : null }, 200);
+    const listed = rows.slice(0, query.limit), counted = query.counts === 'true' ? await topicCounts(c.env.db, a.workspaceId, listed.map(row => row.id)) : undefined;
+    return c.json({ data: listed.map(row => ({ ...topicView(row), ...counted === undefined ? {} : { counts: counted ? counted.get(row.id) ?? { optedIn: 0, optedOut: 0 } : null } })), nextCursor: rows.length > query.limit ? rows[query.limit - 1]!.id : null }, 200);
   });
   app.openapi(createRoute({ method: 'post', path: '/v1/topics', operationId: 'createTopic', tags, security, description: `Make a topic, a kind of marketing mail recipients can opt out of on its own (up to ${TOPICS_MAX} that aren\u2019t archived). Recipients see its name and description on the preference page. subscribedByDefault is fixed once made.`, request: { body: json(TopicInput) }, responses: { 201: response(Topic), ...errors } }), async c => {
     const a = actor(c, 'manage'), input = c.req.valid('json'), now = new Date().toISOString();

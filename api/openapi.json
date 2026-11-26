@@ -3450,6 +3450,25 @@
           },
           "updatedAt": {
             "type": "string"
+          },
+          "counts": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "optedIn": {
+                "type": "integer"
+              },
+              "optedOut": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "optedIn",
+              "optedOut"
+            ],
+            "description": "With counts=true on listTopics: how many contacts have opted in to the topic and out of it (each recorded choice, a deleted contact’s included), as of the read. null when counting took longer than its time limit."
           }
         },
         "required": [
@@ -6232,6 +6251,27 @@
                   "null"
                 ],
                 "description": "With a plan: the batch the current window releases, from 1."
+              },
+              "firstBatch": {
+                "type": [
+                  "object",
+                  "null"
+                ],
+                "properties": {
+                  "size": {
+                    "type": "integer",
+                    "description": "Recipients the first day starts with."
+                  },
+                  "waitMinutes": {
+                    "type": "integer",
+                    "description": "Minutes it then waits for their bounces and rejections before the rest of the day's batch."
+                  }
+                },
+                "required": [
+                  "size",
+                  "waitMinutes"
+                ],
+                "description": "With a plan: its first day's small batch and the wait after it."
               }
             },
             "required": [
@@ -7323,6 +7363,17 @@
               "no_mail_domain"
             ]
           },
+          "topicExcluded": {
+            "type": "integer",
+            "description": "With a topic: the subscribed contacts it leaves out (who opted out of it, or for a topic only people who opt in get, who didn’t). Counted in unsubscribed, not in eligible."
+          },
+          "approximate": {
+            "type": "boolean",
+            "enum": [
+              true
+            ],
+            "description": "The topic’s effect on this list couldn’t be counted in time: eligible and topicExcluded are estimated from the workspace’s choices about the topic. Sending counts it exactly."
+          },
           "readiness": {
             "type": [
               "object",
@@ -7372,7 +7423,42 @@
                     "message"
                   ]
                 },
-                "description": "Every finding behind the verdict."
+                "description": "The findings behind the verdict in the original codes, one per code: a newly registered domain, one new here and a new link domain read NEW_DOMAIN, a jump over the usual day SIZE_JUMP; blocklist findings appear only in findings. Prefer findings."
+              },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "NEW_DOMAIN",
+                        "SIZE_JUMP",
+                        "NO_HISTORY",
+                        "RISKY_LIST",
+                        "NEVER_MAILED",
+                        "NO_DMARC",
+                        "BOUNCES",
+                        "COMPLAINTS",
+                        "NEW_REGISTRATION",
+                        "NEW_HERE",
+                        "USUAL_JUMP",
+                        "NEW_LINK_DOMAIN",
+                        "BLOCKLISTED_BEFORE",
+                        "BLOCKLIST_UNCOUNTED"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                },
+                "description": "Every finding behind the verdict, with its own code: NEW_REGISTRATION (registered recently, from public registry data), NEW_HERE (registered long ago, new to this workspace), NEW_DOMAIN (added recently, registration not known), USUAL_JUMP, NEW_LINK_DOMAIN, BLOCKLISTED_BEFORE (an earlier send drew replies naming a blocklist and none has finished without since), BLOCKLIST_UNCOUNTED (a recent send's blocklist replies aren't counted yet, so it isn't taken for clean), and the original codes."
               },
               "domain": {
                 "type": "object",
@@ -7391,6 +7477,50 @@
                     "type": [
                       "integer",
                       "null"
+                    ],
+                    "description": "Days since it was added to this workspace: its history here, not its age."
+                  },
+                  "registeredAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "When its registrable domain was registered (YYYY-MM-DD), from public registry data; null when not known (never taken for old)."
+                  },
+                  "registeredDays": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "description": "Days since registeredAt; null when not known."
+                  },
+                  "linkDomain": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "The registrable domain the links go on, when it is not the From domain's."
+                      },
+                      "registeredAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "registeredDays": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "registeredAt",
+                      "registeredDays"
                     ]
                   },
                   "dmarc": {
@@ -7479,6 +7609,17 @@
                         "type": "integer",
                         "description": "Most recipients SES accepted from one campaign in the last 90 days."
                       },
+                      "firstSentAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "When this workspace first had mail accepted (workspace history only); null with none."
+                      },
+                      "usualDay": {
+                        "type": "integer",
+                        "description": "The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none."
+                      },
                       "sent": {
                         "type": "integer",
                         "description": "Recipients SES accepted in the last 30 days."
@@ -7512,6 +7653,17 @@
                       "largestSend": {
                         "type": "integer",
                         "description": "Most recipients SES accepted from one campaign in the last 90 days."
+                      },
+                      "firstSentAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "When this workspace first had mail accepted (workspace history only); null with none."
+                      },
+                      "usualDay": {
+                        "type": "integer",
+                        "description": "The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none."
                       },
                       "sent": {
                         "type": "integer",
@@ -7619,6 +7771,13 @@
                 ],
                 "description": "This send ÷ the largest campaign its domain sent in the last 90 days; null without one."
               },
+              "usualJump": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "This send ÷ the workspace's usual day (history.workspace.usualDay); null without one."
+              },
               "plan": {
                 "type": [
                   "object",
@@ -7631,6 +7790,27 @@
                       "type": "integer"
                     },
                     "description": "Recipients per day, in order: one batch a day, the most engaged first and never-mailed last."
+                  },
+                  "firstBatch": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "size": {
+                        "type": "integer",
+                        "description": "Recipients the first day starts with."
+                      },
+                      "waitMinutes": {
+                        "type": "integer",
+                        "description": "Minutes it then waits for their bounces and rejections before the rest of the day's batch."
+                      }
+                    },
+                    "required": [
+                      "size",
+                      "waitMinutes"
+                    ],
+                    "description": "The first day's small batch and wait, inside its batch; null when the first day is small already."
                   },
                   "seconds": {
                     "type": [
@@ -7657,7 +7837,18 @@
                     "enum": [
                       "NEW_DOMAIN",
                       "SIZE_JUMP"
-                    ]
+                    ],
+                    "description": "Kept as it was: a newly registered domain reads NEW_DOMAIN and a blocklist SIZE_JUMP. reason says which."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "NEW_REGISTRATION",
+                      "BLOCKLISTED",
+                      "NEW_DOMAIN",
+                      "SIZE_JUMP"
+                    ],
+                    "description": "What requires the ramp. BLOCKLISTED: mail from this From domain or with these links drew replies naming a blocklist and no send has finished without any since; a consent confirmation does not waive it."
                   },
                   "maxPerDay": {
                     "type": "integer",
@@ -8138,7 +8329,42 @@
                     "message"
                   ]
                 },
-                "description": "Every finding behind the verdict."
+                "description": "The findings behind the verdict in the original codes, one per code: a newly registered domain, one new here and a new link domain read NEW_DOMAIN, a jump over the usual day SIZE_JUMP; blocklist findings appear only in findings. Prefer findings."
+              },
+              "findings": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string",
+                      "enum": [
+                        "NEW_DOMAIN",
+                        "SIZE_JUMP",
+                        "NO_HISTORY",
+                        "RISKY_LIST",
+                        "NEVER_MAILED",
+                        "NO_DMARC",
+                        "BOUNCES",
+                        "COMPLAINTS",
+                        "NEW_REGISTRATION",
+                        "NEW_HERE",
+                        "USUAL_JUMP",
+                        "NEW_LINK_DOMAIN",
+                        "BLOCKLISTED_BEFORE",
+                        "BLOCKLIST_UNCOUNTED"
+                      ]
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ]
+                },
+                "description": "Every finding behind the verdict, with its own code: NEW_REGISTRATION (registered recently, from public registry data), NEW_HERE (registered long ago, new to this workspace), NEW_DOMAIN (added recently, registration not known), USUAL_JUMP, NEW_LINK_DOMAIN, BLOCKLISTED_BEFORE (an earlier send drew replies naming a blocklist and none has finished without since), BLOCKLIST_UNCOUNTED (a recent send's blocklist replies aren't counted yet, so it isn't taken for clean), and the original codes."
               },
               "domain": {
                 "type": "object",
@@ -8157,6 +8383,50 @@
                     "type": [
                       "integer",
                       "null"
+                    ],
+                    "description": "Days since it was added to this workspace: its history here, not its age."
+                  },
+                  "registeredAt": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "description": "When its registrable domain was registered (YYYY-MM-DD), from public registry data; null when not known (never taken for old)."
+                  },
+                  "registeredDays": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "description": "Days since registeredAt; null when not known."
+                  },
+                  "linkDomain": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "name": {
+                        "type": "string",
+                        "description": "The registrable domain the links go on, when it is not the From domain's."
+                      },
+                      "registeredAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "registeredDays": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "name",
+                      "registeredAt",
+                      "registeredDays"
                     ]
                   },
                   "dmarc": {
@@ -8245,6 +8515,17 @@
                         "type": "integer",
                         "description": "Most recipients SES accepted from one campaign in the last 90 days."
                       },
+                      "firstSentAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "When this workspace first had mail accepted (workspace history only); null with none."
+                      },
+                      "usualDay": {
+                        "type": "integer",
+                        "description": "The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none."
+                      },
                       "sent": {
                         "type": "integer",
                         "description": "Recipients SES accepted in the last 30 days."
@@ -8278,6 +8559,17 @@
                       "largestSend": {
                         "type": "integer",
                         "description": "Most recipients SES accepted from one campaign in the last 90 days."
+                      },
+                      "firstSentAt": {
+                        "type": [
+                          "string",
+                          "null"
+                        ],
+                        "description": "When this workspace first had mail accepted (workspace history only); null with none."
+                      },
+                      "usualDay": {
+                        "type": "integer",
+                        "description": "The usual day: the median of the mail accepted on the days it sent in the last 14 days (workspace history only); 0 with none."
                       },
                       "sent": {
                         "type": "integer",
@@ -8385,6 +8677,13 @@
                 ],
                 "description": "This send ÷ the largest campaign its domain sent in the last 90 days; null without one."
               },
+              "usualJump": {
+                "type": [
+                  "number",
+                  "null"
+                ],
+                "description": "This send ÷ the workspace's usual day (history.workspace.usualDay); null without one."
+              },
               "plan": {
                 "type": [
                   "object",
@@ -8397,6 +8696,27 @@
                       "type": "integer"
                     },
                     "description": "Recipients per day, in order: one batch a day, the most engaged first and never-mailed last."
+                  },
+                  "firstBatch": {
+                    "type": [
+                      "object",
+                      "null"
+                    ],
+                    "properties": {
+                      "size": {
+                        "type": "integer",
+                        "description": "Recipients the first day starts with."
+                      },
+                      "waitMinutes": {
+                        "type": "integer",
+                        "description": "Minutes it then waits for their bounces and rejections before the rest of the day's batch."
+                      }
+                    },
+                    "required": [
+                      "size",
+                      "waitMinutes"
+                    ],
+                    "description": "The first day's small batch and wait, inside its batch; null when the first day is small already."
                   },
                   "seconds": {
                     "type": [
@@ -8423,7 +8743,18 @@
                     "enum": [
                       "NEW_DOMAIN",
                       "SIZE_JUMP"
-                    ]
+                    ],
+                    "description": "Kept as it was: a newly registered domain reads NEW_DOMAIN and a blocklist SIZE_JUMP. reason says which."
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "NEW_REGISTRATION",
+                      "BLOCKLISTED",
+                      "NEW_DOMAIN",
+                      "SIZE_JUMP"
+                    ],
+                    "description": "What requires the ramp. BLOCKLISTED: mail from this From domain or with these links drew replies naming a blocklist and no send has finished without any since; a consent confirmation does not waive it."
                   },
                   "maxPerDay": {
                     "type": "integer",
@@ -29552,6 +29883,21 @@
             "required": false,
             "description": "true lists the archived topics instead.",
             "name": "archived",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "true",
+                "false"
+              ],
+              "default": "false",
+              "description": "true adds each topic’s counts (counts)."
+            },
+            "required": false,
+            "description": "true adds each topic’s counts (counts).",
+            "name": "counts",
             "in": "query"
           }
         ],

@@ -14,11 +14,12 @@
   "minify": true,
   // The system prompt and the voice guide are Markdown files bundled as text.
   "rules": [{ "type": "Text", "globs": ["**/*.md"], "fallthrough": true }],
-  "durable_objects": { "bindings": [{ "name": "CONVERSATION", "class_name": "SupportConversation" }, { "name": "INTAKE", "class_name": "SupportIntake" }] },
+  // TRIAGE: the feedback triage agent (src/triage.ts), one object per agent feedback report while it is read.
+  "durable_objects": { "bindings": [{ "name": "CONVERSATION", "class_name": "SupportConversation" }, { "name": "INTAKE", "class_name": "SupportIntake" }, { "name": "TRIAGE", "class_name": "SupportTriage" }] },
   "migrations": [{ "tag": "transfer-from-bane-support-dev", "transferred_classes": [
     { "from_script": "bane-support-dev", "from": "SupportConversation", "to": "SupportConversation" },
     { "from_script": "bane-support-dev", "from": "SupportIntake", "to": "SupportIntake" }
-  ] }],
+  ] }, { "tag": "feedback-triage", "new_sqlite_classes": ["SupportTriage"] }],
   // Copied from the original dev database in anomaly-dev (ENAM).
   "d1_databases": [{ "binding": "DB", "database_name": "nightmail-support-dev", "database_id": "85618a27-e93c-4089-af60-ca8b32248f5e", "migrations_dir": "migrations" }],
   // Screenshots (chat uploads and email image attachments): private, with a 90-day lifecycle rule (support/README.md).

@@ -472,39 +472,117 @@ export function estimateFinish(o: { recipients: number; start: number; ratePerSe
 /** What the review judges a marketing campaign by (src/sending.ts sendReadiness gathers it). */
 export type ReadinessFacts = {
   recipients: number; matched: number | null; risky: number; neverMailed: number | null;
+  /** Days since this workspace added the From domain (or the domain it is under). */
   domainAgeDays: number | null; dmarc: boolean | null;
-  largestSend: number; largestCleanSend: number; accepted: number; bounced: number; complained: number;
+  /** Days since the From domain's registrable domain was registered, from public registry data (RDAP); null when unknown. */
+  registeredDays: number | null;
+  /** The same for the registrable domain its links go on; null when unknown or the same as the From domain's. */
+  linkRegisteredDays: number | null;
+  largestSend: number; largestCleanSend: number;
+  /** The workspace's usual day: the median of its daily accepted mail over its active days of the last two weeks. */
+  usualDay: number;
+  /** A send of this workspace from this From domain or on this link domain drew replies naming a blocklist, and no send has finished cleanly since. */
+  blocklisted?: boolean;
+  /** Whether the blocklist replies of a recent send aren't counted yet (the delivery history hasn't reached it). */
+  blocklistUncounted?: boolean;
+  accepted: number; bounced: number; complained: number;
   /** Whether a ramp can be required (Hosted live sending); elsewhere the most it says is a recommendation. */
   enforced: boolean;
+  lines?: RampLines;
 };
-export const READINESS_REASONS = ['NEW_DOMAIN', 'SIZE_JUMP', 'NO_HISTORY', 'RISKY_LIST', 'NEVER_MAILED', 'NO_DMARC', 'BOUNCES', 'COMPLAINTS'] as const;
+/**
+ * How the review sizes a ramp. The defaults are RAMP's; the private NIGHTMAIL_RAMP setting (src/ramp-lines.ts) overrides
+ * them per installation.
+ *  - newRegistrationDays: a domain registered more recently than this is new to the internet (NEW_REGISTRATION).
+ *  - usualJump: a send more than this many times the usual day, and larger than any clean send before, is a jump (USUAL_JUMP).
+ *  - young: the plan of a newly registered domain; established: everyone else's. Each: the first day (at least),
+ *    cleanFactor times the larger of the largest clean send and the usual day (at least), growth per day, at most
+ *    maxBatches days. minimumSplit: a send the review recommends a ramp for is split into two days or more when larger than this.
+ *  - firstBatch: a ramp's first day starts with this many, then waits waitMinutes for their bounces and rejections before
+ *    the rest of the day's batch.
+ */
+export type RampLines = {
+  newRegistrationDays: number; usualJump: number; minimumSplit: number;
+  young: { first: number; cleanFactor: number; growth: number; maxBatches: number };
+  established: { first: number; cleanFactor: number; growth: number; maxBatches: number };
+  firstBatch: { size: number; waitMinutes: number };
+};
+export const RAMP_LINES: RampLines = {
+  newRegistrationDays: RAMP.readiness.newDomainDays, usualJump: RAMP.readiness.recommended.jump, minimumSplit: 2_000,
+  young: { first: RAMP.plan.firstBatch, cleanFactor: RAMP.plan.cleanFactor, growth: RAMP.plan.growth, maxBatches: RAMP.plan.maxBatches },
+  established: { first: RAMP.plan.firstBatch, cleanFactor: RAMP.plan.cleanFactor, growth: RAMP.plan.growth, maxBatches: RAMP.plan.maxBatches },
+  firstBatch: { size: 2_000, waitMinutes: 60 },
+};
+/** RAMP_LINES with an override's values. */
+export function rampLines(override: { [K in keyof RampLines]?: RampLines[K] extends object ? Partial<RampLines[K]> : RampLines[K] } | null | undefined): RampLines {
+  if (!override) return RAMP_LINES;
+  return { ...RAMP_LINES, ...override, young: { ...RAMP_LINES.young, ...override.young }, established: { ...RAMP_LINES.established, ...override.established }, firstBatch: { ...RAMP_LINES.firstBatch, ...override.firstBatch } } as RampLines;
+}
+/** The reason codes CampaignReadiness.reasons has always had: kept as they are for clients that switch on them. */
+export const LEGACY_READINESS_REASONS = ['NEW_DOMAIN', 'SIZE_JUMP', 'NO_HISTORY', 'RISKY_LIST', 'NEVER_MAILED', 'NO_DMARC', 'BOUNCES', 'COMPLAINTS'] as const;
+export const READINESS_REASONS = [...LEGACY_READINESS_REASONS, 'NEW_REGISTRATION', 'NEW_HERE', 'USUAL_JUMP', 'NEW_LINK_DOMAIN', 'BLOCKLISTED_BEFORE', 'BLOCKLIST_UNCOUNTED'] as const;
+/** How a newer reason reads in the legacy list; none for a blocklist (findings and required.reason say it). */
+export const LEGACY_REASON: Partial<Record<(typeof READINESS_REASONS)[number], (typeof LEGACY_READINESS_REASONS)[number]>> = { NEW_REGISTRATION: 'NEW_DOMAIN', NEW_HERE: 'NEW_DOMAIN', NEW_LINK_DOMAIN: 'NEW_DOMAIN', USUAL_JUMP: 'SIZE_JUMP' };
 export type ReadinessReason = (typeof READINESS_REASONS)[number];
 export type Verdict = 'ready' | 'ramp_recommended' | 'ramp_required';
-/** The verdict, what it is for, and which of NEW_DOMAIN or SIZE_JUMP requires the ramp (RAMP.readiness). */
-export function judgeReadiness(f: ReadinessFacts): { verdict: Verdict; reasons: ReadinessReason[]; requiredBy: 'NEW_DOMAIN' | 'SIZE_JUMP' | null; jump: number | null } {
-  const r = RAMP.readiness, rec = r.recommended, n = f.recipients;
-  const jump = f.largestSend > 0 ? n / f.largestSend : null;
-  const newDomain = f.domainAgeDays !== null && f.domainAgeDays < r.newDomainDays;
+export type RequiredBy = 'NEW_REGISTRATION' | 'BLOCKLISTED' | 'NEW_DOMAIN' | 'SIZE_JUMP';
+/**
+ * The verdict, its reasons, what requires the ramp, and the plan (RAMP.readiness, RampLines). How old the domain is on
+ * the internet and how long it has sent here are told apart: a domain registered recently gets the young plan, and the
+ * ramp can be required for it; an established domain new here, or a send far above its usual day and anything it sent
+ * cleanly before, gets a plan sized from that history. A domain whose registration is unknown is judged as before, by when
+ * it was added here: unknown is never taken for old. A send after one that drew blocklist replies, until a send finishes
+ * without any, must ramp (BLOCKLISTED; a consent confirmation doesn't waive it). A plan recommended or required is never a
+ * single day, and its first day starts with a small batch and a wait (firstBatch).
+ */
+export function judgeReadiness(f: ReadinessFacts): { verdict: Verdict; reasons: ReadinessReason[]; requiredBy: RequiredBy | null; jump: number | null; usualJump: number | null; plan: number[]; firstBatch: RampLines['firstBatch'] | null } {
+  const r = RAMP.readiness, rec = r.recommended, n = f.recipients, lines = f.lines ?? RAMP_LINES;
+  // Without lines (the private NIGHTMAIL_RAMP setting unset or invalid) the review is exactly what it was before them:
+  // registration, the usual day and blocklist replies change no verdict and no plan, and no plan is split or opens small.
+  const tuned = !!f.lines, registeredDays = tuned ? f.registeredDays : null, linkRegisteredDays = tuned ? f.linkRegisteredDays : null;
+  const usualDay = tuned ? f.usualDay : 0, blocklisted = tuned && !!f.blocklisted, blocklistUncounted = tuned && !!f.blocklistUncounted;
+  const jump = f.largestSend > 0 ? n / f.largestSend : null, usualJump = usualDay > 0 ? n / usualDay : null;
+  const young = registeredDays !== null && registeredDays < lines.newRegistrationDays;
+  const newHere = f.domainAgeDays !== null && f.domainAgeDays < r.newDomainDays;
+  // A blocklist first: it outranks everything else the review says.
   const reasons: ReadinessReason[] = [];
-  if (newDomain) reasons.push('NEW_DOMAIN');
+  if (blocklisted) reasons.push('BLOCKLISTED_BEFORE');
+  else if (blocklistUncounted) reasons.push('BLOCKLIST_UNCOUNTED');
+  if (young) reasons.push('NEW_REGISTRATION');
+  else if (newHere) reasons.push(registeredDays === null ? 'NEW_DOMAIN' : 'NEW_HERE');
+  if (linkRegisteredDays !== null && linkRegisteredDays < lines.newRegistrationDays) reasons.push('NEW_LINK_DOMAIN');
   if (jump !== null && jump > rec.jump) reasons.push('SIZE_JUMP');
+  if (usualJump !== null && usualJump > lines.usualJump && n > f.largestCleanSend && !reasons.includes('SIZE_JUMP')) reasons.push('USUAL_JUMP');
   if (f.largestSend < rec.establishedSend) reasons.push('NO_HISTORY');
   if (f.matched && f.risky > rec.riskyShare * f.matched) reasons.push('RISKY_LIST');
   if (f.neverMailed !== null && n > 0 && f.neverMailed > rec.neverMailedShare * n) reasons.push('NEVER_MAILED');
   if (f.dmarc === false) reasons.push('NO_DMARC');
   if (f.accepted > 0 && f.bounced > rec.bounceRate * f.accepted) reasons.push('BOUNCES');
   if (f.accepted > 0 && f.complained > rec.complaintRate * f.accepted) reasons.push('COMPLAINTS');
-  // A new domain whose clean campaigns here already cover this send in the plan's first day has no plan to require: it
-  // stays a reason (ramp_recommended) rather than a requirement whose daily limit is the whole list.
-  const planned = (rampPlan(n, f.largestCleanSend)[0] ?? 0) < n;
-  const requiredBy = !f.enforced || n < r.required.recipients ? null : newDomain && planned ? 'NEW_DOMAIN' : n > r.required.jump * f.largestSend ? 'SIZE_JUMP' : null;
-  const verdict: Verdict = requiredBy ? 'ramp_required' : n >= rec.recipients && reasons.length ? 'ramp_recommended' : 'ready';
-  return { verdict, reasons, requiredBy, jump };
+  const base = Math.max(f.largestCleanSend, usualDay);
+  let plan = rampPlan(n, base, { young, lines });
+  // A domain whose clean sends here already cover this send in the plan's first day has no plan to require: it stays a
+  // reason (ramp_recommended) rather than a requirement whose daily limit is the whole list.
+  const planned = plan.length > 1;
+  const requiredBy: RequiredBy | null = f.enforced && blocklisted && n >= rec.recipients ? 'BLOCKLISTED' : !f.enforced || n < r.required.recipients ? null : young && planned ? 'NEW_REGISTRATION'
+    : registeredDays === null && newHere && planned ? 'NEW_DOMAIN' : n > r.required.jump * f.largestSend ? 'SIZE_JUMP' : null;
+  // A send whose blocklist replies aren't counted yet is said, and isn't taken for clean, but recommends no ramp by itself:
+  // otherwise every sender who sent yesterday would be told to ramp today.
+  const verdict: Verdict = requiredBy ? 'ramp_required' : n >= rec.recipients && reasons.some(code => code !== 'BLOCKLIST_UNCOUNTED') ? 'ramp_recommended' : 'ready';
+  if (tuned && verdict !== 'ready' && plan.length === 1 && n > lines.minimumSplit) plan = rampPlan(n, base, { young, lines, split: true });
+  const firstBatch = tuned && verdict !== 'ready' && plan.length > 1 && plan[0]! > lines.firstBatch.size ? lines.firstBatch : null;
+  return { verdict, reasons, requiredBy, jump, usualJump, plan, firstBatch };
 }
-/** The plan's daily batches for `recipients` (RAMP.plan); one batch when they fit in the first. */
-export function rampPlan(recipients: number, largestCleanSend: number): number[] {
-  const p = RAMP.plan, batches: number[] = [];
-  let left = Math.max(0, Math.floor(recipients)), size = Math.max(p.firstBatch, p.cleanFactor * largestCleanSend);
+/**
+ * The plan's daily batches for `recipients`: the first day the larger of the plan's first batch and cleanFactor times
+ * `base` (the largest clean send or the usual day), each next `growth` times the last, at most maxBatches days, the last
+ * taking the rest; one batch when they fit in the first. `split`: at least two days, the first the size that with the
+ * growth covers the rest in two.
+ */
+export function rampPlan(recipients: number, base: number, o: { young?: boolean; split?: boolean; lines?: RampLines } = {}): number[] {
+  const lines = o.lines ?? RAMP_LINES, p = o.young ? lines.young : lines.established, batches: number[] = [];
+  let left = Math.max(0, Math.floor(recipients)), size = Math.max(p.first, p.cleanFactor * base);
+  if (o.split && size >= left) size = Math.max(1, Math.ceil(left / (1 + p.growth)));
   while (left > 0) { const n = batches.length === p.maxBatches - 1 ? left : Math.min(left, size); batches.push(n); left -= n; size *= p.growth; }
   return batches;
 }

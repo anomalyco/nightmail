@@ -19,15 +19,19 @@ export function brandLookalike(host:string) {
 }
 
 const registrations = new Map<string,{created:number;expires:number}>(); // Public dates only, no cross-request I/O.
-async function rdapAge(root:string,signal:AbortSignal) {
-  const now=Date.now(), cached=registrations.get(root);
-  if(cached && cached.expires>now) return Math.floor((now-cached.created)/day);
+/** When a registrable domain was registered (ms), from its registry's RDAP record; null when the registry gives none. */
+export async function rdapRegistered(root:string,signal:AbortSignal) {
   const base=await rdapBase(root.split('.').at(-1)!); if(!base) return null;
   const data=z.object({ldhName:z.string(),events:z.array(z.object({eventAction:z.string(),eventDate:z.string()}))}).parse(
     await boundedJson(`${base.replace(/\/$/,'')}/domain/${root}`,'application/rdap+json',signal,256*1024));
   if(data.ldhName.toLowerCase()!==root) return null;
   const created=Date.parse(data.events.find(e=>e.eventAction==='registration')?.eventDate??'');
-  if(!Number.isFinite(created) || created>now) return null;
+  return Number.isFinite(created) && created<=Date.now() ? created : null;
+}
+async function rdapAge(root:string,signal:AbortSignal) {
+  const now=Date.now(), cached=registrations.get(root);
+  if(cached && cached.expires>now) return Math.floor((now-cached.created)/day);
+  const created=await rdapRegistered(root,signal); if(created===null) return null;
   if(registrations.size>=256) registrations.delete(registrations.keys().next().value!);
   registrations.set(root,{created,expires:now+3_600_000}); return Math.floor((now-created)/day);
 }

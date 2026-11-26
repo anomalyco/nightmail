@@ -343,6 +343,8 @@ async function retentionDrains(runtime: Runtime): Promise<Drain[]> {
     // with it the sender address it kept; a Message-ID's binding once its Date is too old to bind anyway.
     expired('support_email_signins', 'support_email_signins', at('created_at'), sql`signed_in_at IS NULL AND created_at < now() - interval '7 days'`),
     expired('support_email_bindings', 'support_email_bindings', at('created_at'), sql`created_at < now() - interval '7 days'`),
+    // The support agent's safe actions take turns per target for at most 10 minutes (src/support-actions.ts ACTION_TURNS).
+    expired('support_action_slots', 'support_action_slots', at('at'), sql`at < now() - interval '1 day'`),
     // SMTP refusals (src/smtp-refusals.ts) are kept 7 days for support.
     expired('smtp_refusals', 'smtp_refusals', at('at'), sql`at < now() - interval '7 days'`),
     // Support transcripts (src/support-inbox.ts), their events and their subjects go 90 days after the conversation closed
@@ -683,6 +685,8 @@ export async function hourlyUpkeep(runtime: Runtime, mailboxRuntime: () => Promi
     ['ABUSE_HOURLY_FAILED', async () => { await (await import('./abuse.js')).abuseHourly(runtime); }],
     // Delivery history (src/delivery-history.ts): finished mail folded into per-domain and per-contact history, leased and bounded.
     ['DELIVERY_HISTORY_FAILED', async () => { await (await import('./delivery-history.js')).deliveryHistoryHourly(runtime); }],
+    // Registration dates of the domains sent from and linked on (src/domain-age.ts), for the send review. Hosted only.
+    ['DOMAIN_REGISTRATIONS_FAILED', async () => { await (await import('./domain-age.js')).refreshRegistrations(runtime); }],
     // Daily exact recount of sending_campaign_tallies and sending_metrics_hourly.
     ['SENDING_TALLIES_RECOUNT_FAILED', async () => { await recountSendingTallies(runtime); }],
     // The daily exact recount of every list's counts.

@@ -1,4 +1,5 @@
 import { parseListRiskLines } from './list-risk-lines.js';
+import { parseRampLines } from './ramp-lines.js';
 import { createPrivateKey, hkdfSync } from 'node:crypto';
 import { z } from 'zod';
 import { ApiError, log } from './core.js';
@@ -130,6 +131,8 @@ const values = z.object({
   NIGHTMAIL_HYGIENE_LISTS: z.enum(['on','off']).default('on'),
   // The list-risk measure's private lines (src/list-risk-lines.ts): JSON. Unset, the measure records no band.
   NIGHTMAIL_LIST_RISK: z.string().optional().refine(raw => raw === undefined || parseListRiskLines(raw) !== null, 'JSON of list-risk lines'),
+  // The send review's private ramp sizing (src/ramp-lines.ts): JSON. Unset, the defaults in src/standing-model.ts.
+  NIGHTMAIL_RAMP: z.string().optional().refine(raw => raw === undefined || parseRampLines(raw) !== null, 'JSON of ramp lines'),
   NIGHTMAIL_HYGIENE_DNS: z.union([z.literal('off'), z.string().url().refine(u => u.startsWith('https://'), 'Use an https:// DNS-over-HTTPS URL, or off.')]).optional(),
   STRIPE_SECRET_KEY: optional(z.string().regex(/^(?:sk|rk)_(?:test|live)_[A-Za-z0-9_]+$/)),
   STRIPE_WEBHOOK_SECRET: optional(z.string().regex(/^whsec_[A-Za-z0-9_]+$/)),
@@ -268,7 +271,7 @@ export function deriveEncryptionKey(secret: string): string {
 // and live sending policy keep their fail-closed checks. Report names only, once per feature per isolate.
 const featureSettings = {
   builtinDomains: ['NIGHTMAIL_BUILTIN_DOMAIN', 'NIGHTMAIL_BUILTIN_SEND_SCOPE'],
-  listHygiene: ['NIGHTMAIL_HYGIENE_LISTS'], dnsHygiene: ['NIGHTMAIL_HYGIENE_DNS'], listRisk: ['NIGHTMAIL_LIST_RISK'],
+  listHygiene: ['NIGHTMAIL_HYGIENE_LISTS'], dnsHygiene: ['NIGHTMAIL_HYGIENE_DNS'], listRisk: ['NIGHTMAIL_LIST_RISK'], rampLines: ['NIGHTMAIL_RAMP'],
   linkHosts: ['NIGHTMAIL_LINK_SAAS_ZONE_ID', 'NIGHTMAIL_LINK_SAAS_TOKEN', 'NIGHTMAIL_LINK_SAAS_TARGET', 'NIGHTMAIL_LINK_HOST_WORKSPACES'],
   sharedLinks: ['NIGHTMAIL_LINK_HOST'], linkWarmup: ['NIGHTMAIL_LINK_WARMUP'],
   postmaster: ['NIGHTMAIL_POSTMASTER_CREDENTIALS'],
@@ -425,6 +428,7 @@ export function loadConfig(input: Record<string, unknown>): Config {
     abuseMonitoring: v.MULTI_TENANT==='true' && v.NIGHTMAIL_ABUSE_MONITORING ? { since: new Date(v.NIGHTMAIL_ABUSE_MONITORING).toISOString() } : undefined,
     hygieneLists: v.NIGHTMAIL_HYGIENE_LISTS === 'on',
     listRisk: parseListRiskLines(v.NIGHTMAIL_LIST_RISK),
+    rampLines: parseRampLines(v.NIGHTMAIL_RAMP),
     hygieneDnsUrl: v.NIGHTMAIL_HYGIENE_DNS === 'off' ? null : v.NIGHTMAIL_HYGIENE_DNS ?? (v.MULTI_TENANT === 'true' ? 'https://cloudflare-dns.com/dns-query' : null),
     abuseEnforce: v.MULTI_TENANT==='true' && v.NIGHTMAIL_ABUSE_ENFORCE==='true', abuseSlackWebhookUrl: v.MULTI_TENANT==='true' ? v.ABUSE_SLACK_WEBHOOK_URL ?? v.OPERATOR_SLACK_WEBHOOK_URL : undefined,
     operatorSlackWebhookUrl: v.MULTI_TENANT==='true' ? v.OPERATOR_SLACK_WEBHOOK_URL : undefined,

@@ -3,8 +3,8 @@ import { Link, useParams, useSearchParams } from 'react-router'
 import { useApiMutation, useApiDef, useApiQuery, useRegion, useWorkspaceAccess } from '../../data/context'
 import { invalidate } from '../../data/invalidation'
 import { queries } from '../../data/queries'
-import type { Contact, ContactInput, ConsentInput } from '../../data/types'
-import { SearchField, Alert, Button, Checkbox, ControlSkeleton, DataTable, Dialog, EmptyState, ErrorState, Field, Input, LoadingRegion, PageHeader, Pagination, PaginationSkeleton, SectionHeader, Select, SkeletonText, StatusBadge, fieldError, MutationError, useToast } from '../../components/ui'
+import type { Contact, ContactInput, ContactTopic, ConsentInput } from '../../data/types'
+import { SearchField, Alert, Button, Checkbox, ConfirmDialog, ControlSkeleton, DataTable, Dialog, EmptyState, ErrorState, Field, Input, LoadingRegion, PageHeader, Pagination, PaginationSkeleton, SectionHeader, Select, SkeletonText, StatusBadge, Switch, fieldError, MutationError, useToast } from '../../components/ui'
 import { activityColumns, AudienceRouteSkeleton, consentColumns } from './skeletons'
 import { ContactStatus, ContactTable, date, ListPicker, nameTitle, noUnknown, riskLabels, riskSkipped, statusOptions, suppressionText, useAllowRisk, useAudienceLists } from './shared'
 import { ImportContactsDialog } from './import'
@@ -79,7 +79,7 @@ export function ContactDetailPage() {
   const query = useApiQuery(['contacts', id], (api, signal) => api.contacts.get(id, signal))
   return query.isPending ? <AudienceRouteSkeleton kind="contact" /> : query.isError ? <><PageHeader title="Contact" backTo="/audience" /><ErrorState error={query.error} onRetry={() => query.refetch()} /></> : <ContactDetails key={id} contact={query.data} />
 }
-const consentSources: Record<string, string> = { dashboard: 'Dashboard', api: 'API', mcp: 'MCP', 'agent-token': 'Agent token', import: 'CSV import', audienceql: 'Bulk update', 'footer-confirm': 'Unsubscribe link', 'rfc8058-post': 'One-click unsubscribe', 'ses-subscription': 'SES unsubscribe' }
+const consentSources: Record<string, string> = { dashboard: 'Dashboard', api: 'API', mcp: 'MCP', 'agent-token': 'Agent token', import: 'CSV import', audienceql: 'Bulk update', 'footer-confirm': 'Unsubscribe link', 'rfc8058-post': 'One-click unsubscribe', 'ses-subscription': 'SES unsubscribe', preferences: 'Preference page' }
 const consentAction = (status: Contact['status']) => status === 'subscribed' ? 'Unsubscribe' : status === 'unsubscribed' ? 'Resubscribe' : 'Subscribe'
 function ContactDetails({ contact }: { contact: Contact }) {
   const { regionId } = useRegion()
@@ -105,7 +105,8 @@ function ContactDetails({ contact }: { contact: Contact }) {
     <div className="audience-summary cluster">{contact.name && <PrivateAddress value={contact.email} />}<ContactStatus contact={contact} />{contact.suppressionReason && <span>{suppressionText(contact.suppressionReason)}</span>}{contact.risk && <RiskNote risk={contact.risk} skipped={riskSkipped(contact)} />}</div>
     <div className="section audience-properties"><section><SectionHeader title="Properties" /><dl className="ui-facts">{contact.country && <><dt>Country</dt><dd>{contact.country}</dd></>}<dt>Added</dt><dd>{date(contact.createdAt)}</dd><dt>Last opened</dt><dd>{date(contact.lastOpenedAt)}</dd>{customProperties(contact).map(([key, value]) => <Fragment key={key}><dt>{key === 'plan' ? 'Plan' : <AddressText text={key} />}</dt><dd><AddressText text={value} /></dd></Fragment>)}</dl></section></div>
     <section className="section"><SectionHeader title="Lists" />{lists.isPending ? <LoadingRegion label="Loading list memberships"><SkeletonText width={170} /></LoadingRegion> : lists.isError ? <ErrorState error={lists.error} onRetry={() => lists.refetch()} /> : <div className="cluster audience-links">{contact.listIds.length ? contact.listIds.map(id => <Link key={id} to={`/audience/lists/${id}`}>{lists.data.find(list => list.id === id)?.name || 'Unnamed list'}</Link>) : <span className="muted">Not on any lists.</span>}</div>}</section>
-    <ConsentHistory id={contact.id} />
+    {contact.topics?.length ? <ContactTopics contact={contact} /> : null}
+    <ConsentHistory id={contact.id} topics={contact.topics ?? []} />
     {!history.isPending && <ContactActivity key={`${contact.email}:${regionId}`} email={contact.email} />}
     {edit && <ContactEditor contact={contact} onClose={() => setEdit(false)} />}
     <Dialog open={confirm} onOpenChange={open => { if (!status.isPending) setConfirm(open) }} title={`${verb} ${nameTitle(contact.name) ?? 'this contact'}?`} description={subscribing ? 'Records that they agreed to marketing email.' : 'Transactional email still sends.'} footer={<><Button onClick={() => setConfirm(false)} disabled={status.isPending}>Cancel</Button><Button variant="primary" type="submit" form="contact-consent" loading={status.isPending}>{verb}</Button></>}><form id="contact-consent" className="stack" onSubmit={event => { event.preventDefault(); void changeStatus() }}>
@@ -129,8 +130,25 @@ function ContactActivity({ email }: { email: string }) {
   return <section className="section"><SectionHeader title={multiTenant ? 'Emails' : `Emails in ${regionId}`} />{query.isError ? <ErrorState error={query.error} onRetry={() => query.refetch()} /> : <><DataTable rows={query.data?.items || []} loading={query.isPending} skeletonRows={5} minRows={5} rowKey={row => row.id} empty={<EmptyState title="No email activity" />} columns={[{ ...activityColumns[0], render: row => <Link className="audience-cell-text" title={row.subject} to={`/logs/${row.id}`}>{row.subject}</Link> }, { ...activityColumns[1], render: row => <StatusBadge status={row.status} /> }, { ...activityColumns[2], render: row => date(row.sentAt) }]} />{query.isPending ? <PaginationSkeleton /> : <Pagination page={page} pageSize={5} total={query.data.total} nextCursor={query.data.nextCursor} onPageChange={setPage} />}</>}</section>
 }
 
-function ConsentHistory({ id }: { id: string }) {
+// Each topic and whether its mail reaches the contact, with a switch. Turning one back on after they opted out of it needs
+// the same confirmation as resubscribing; while they're unsubscribed from everything no topic reaches them.
+const topicState = (topic: ContactTopic) => topic.chosen ? topic.subscribed ? 'Opted in' : 'Opted out' : topic.subscribed ? 'Gets it by default' : 'Not opted in'
+function ContactTopics({ contact }: { contact: Contact }) {
+  const [asking, setAsking] = useState<ContactTopic | null>(null)
+  const change = useApiMutation((api, input: ConsentInput) => api.consent(contact.id, input), undefined, false, invalidate.contactConsent, contact.id)
+  const set = (topic: ContactTopic, on: boolean, confirmResubscribe = false) => change.mutateAsync({ status: on ? 'subscribed' : 'unsubscribed', topicId: topic.topicId, confirmResubscribe })
+  const blocked = contact.status !== 'subscribed'
+  return <section className="section"><SectionHeader title="Topics" />
+    {blocked && <p className="muted">{contact.status === 'suppressed' ? 'Suppressed: no email reaches this address.' : contact.status === 'unsubscribed' ? 'Unsubscribed from all marketing, so no topic reaches them.' : 'No topic reaches them until they subscribe to marketing.'}</p>}
+    <MutationError error={asking ? null : change.error} />
+    <ul className="audience-topics-list">{contact.topics!.map(topic => <li key={topic.topicId}><Switch checked={topic.subscribed} disabled={change.isPending} label={<>{topic.name} <span className="muted">· {topicState(topic)}</span></>}
+      onCheckedChange={on => { change.reset(); if (on && topic.chosen) setAsking(topic); else void set(topic, on).catch(() => {}) }} /></li>)}</ul>
+    <ConfirmDialog open={!!asking} onOpenChange={open => { if (!open) setAsking(null) }} title={`Turn ${asking?.name ?? 'this topic'} back on?`} description="They opted out of it before. Turn it back on only if they asked for it again." confirmLabel="They asked again" pending={change.isPending} onConfirm={async () => { await set(asking!, true, true); setAsking(null) }} />
+  </section>
+}
+
+function ConsentHistory({ id, topics }: { id: string; topics: ContactTopic[] }) {
   const pagination = useCursorPagination(), cursor = pagination.cursor
   const query = useApiQuery(['consent-history', id, cursor], api => api.consentHistory(id, cursor))
-  return <section className="section"><SectionHeader title="Consent history" />{query.isError ? <ErrorState error={query.error} onRetry={() => query.refetch()} /> : <><DataTable loading={query.isPending} skeletonRows={1} rows={query.data?.items ?? []} rowKey={row => row.id} empty={<EmptyState title="No consent recorded yet" />} columns={[{ ...consentColumns[0], render: row => row.status === 'subscribed' ? 'Subscribed' : 'Unsubscribed' }, { ...consentColumns[1], render: row => consentSources[row.source] ?? row.source, cardRender: row => { const source = consentSources[row.source] ?? row.source; return row.policyVersion ? `${source} · Policy ${row.policyVersion}` : source } }, { ...consentColumns[2], render: row => row.evidence ? <span className="audience-cell-text" title={row.evidence}>{row.evidence}</span> : '—', cardRender: row => row.evidence || null }, { ...consentColumns[3], render: row => row.policyVersion || '—' }, { ...consentColumns[4], render: row => date(row.occurredAt) }]} />{query.data && <Pagination page={pagination.page} pageSize={20} nextCursor={query.data.nextCursor} onPageChange={next => pagination.onPageChange(next, query.data?.nextCursor)} />}</>}</section>
+  return <section className="section"><SectionHeader title="Consent history" />{query.isError ? <ErrorState error={query.error} onRetry={() => query.refetch()} /> : <><DataTable loading={query.isPending} skeletonRows={1} rows={query.data?.items ?? []} rowKey={row => row.id} empty={<EmptyState title="No consent recorded yet" />} columns={[{ ...consentColumns[0], render: row => { const status = row.status === 'subscribed' ? 'Subscribed' : 'Unsubscribed', topic = row.topicId ? topics.find(item => item.topicId === row.topicId)?.name ?? 'a topic' : null; return topic ? <span className="audience-cell-text" title={`${status} · ${topic}`}>{status} · {topic}</span> : status } }, { ...consentColumns[1], render: row => consentSources[row.source] ?? row.source, cardRender: row => { const source = consentSources[row.source] ?? row.source; return row.policyVersion ? `${source} · Policy ${row.policyVersion}` : source } }, { ...consentColumns[2], render: row => row.evidence ? <span className="audience-cell-text" title={row.evidence}>{row.evidence}</span> : '—', cardRender: row => row.evidence || null }, { ...consentColumns[3], render: row => row.policyVersion || '—' }, { ...consentColumns[4], render: row => date(row.occurredAt) }]} />{query.data && <Pagination page={pagination.page} pageSize={20} nextCursor={query.data.nextCursor} onPageChange={next => pagination.onPageChange(next, query.data?.nextCursor)} />}</>}</section>
 }

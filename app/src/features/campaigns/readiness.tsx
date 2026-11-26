@@ -22,6 +22,8 @@ function linksLine(domain: CampaignReadiness['domain']) {
   return own?.active ? `${host}, this domain’s own` : own ? `${host}, until ${own.hostname} is set up` : host
 }
 const rate = (value: number | null) => value === null ? null : percent(value, value < 0.01 ? 2 : 1)
+// When the registrable domain was registered (public registry data); nothing when not known yet.
+const registered = (at: string | null | undefined) => at ? `registered ${new Date(`${at}T00:00:00Z`).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' })}` : null
 const added = (days: number | null) => days === null ? 'not added to this workspace' : days === 0 ? 'added today' : days === 1 ? 'added yesterday' : `added ${number(days)} days ago`
 function history(h: CampaignReadiness['history']['domain']) {
   if (!h.sent && !h.largestSend) return 'nothing in the last 30 days'
@@ -56,7 +58,7 @@ export function ReadinessPanel({ readiness, start, choice, onChoice, consent, on
       </Field>
     </div>}
     <dl className="review-facts">
-      <dt>Domain</dt><dd>{[domain.name, added(domain.ageDays), domain.dmarc ? dmarcLabels[domain.dmarc] : 'DMARC not checked yet', mailFromLabels[domain.mailFrom]].join(' · ')}</dd>
+      <dt>Domain</dt><dd>{[domain.name, registered(domain.registeredAt), added(domain.ageDays), domain.dmarc ? dmarcLabels[domain.dmarc] : 'DMARC not checked yet', mailFromLabels[domain.mailFrom]].filter(Boolean).join(' · ')}</dd>
       <dt>Links</dt><dd>{linksLine(domain)}{domain.sharedLinkPacing && ' · If the shared link domain reaches its daily limit, the remaining recipients will get this campaign on later days.'}</dd>
       <dt>This domain</dt><dd>{history(readiness.history.domain)}</dd>
       <dt>Workspace</dt><dd>{history(readiness.history.workspace)}</dd>
@@ -64,6 +66,6 @@ export function ReadinessPanel({ readiness, start, choice, onChoice, consent, on
       {readiness.sizeJump !== null && readiness.sizeJump > 1 && <><dt>Size</dt><dd>{number(Math.round(readiness.sizeJump))}× this domain’s largest campaign</dd></>}
     </dl>
     {domain.ownLinkHost && !domain.ownLinkHost.active && domain.linkOrigin && <p className="campaign-note" data-tone="warning"><span>Links in this campaign go on {hostOf(domain.linkOrigin)}, not {domain.ownLinkHost.hostname}: that link host isn’t set up yet. Copies made once it is go there.</span></p>}
-    {readiness.reasons.length > 0 && <ul className="campaign-notes" aria-label="What the review found">{readiness.reasons.map(reason => <li key={reason.code} className="campaign-note"><span>{reason.message}</span></li>)}</ul>}
+    {(readiness.findings ?? readiness.reasons).length > 0 && <ul className="campaign-notes" aria-label="What the review found">{(readiness.findings ?? readiness.reasons).map(reason => <li key={reason.code} className="campaign-note"><span>{reason.message}</span></li>)}</ul>}
   </section>
 }

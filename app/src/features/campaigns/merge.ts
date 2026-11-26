@@ -10,7 +10,7 @@ import { blockHtmlToDocument, documentToBlockHtml } from './block-content'
 // fallbacks key by key.
 const groups = {
   name: ['name'], sender: ['fromName', 'fromEmail', 'regionId'], replyTo: ['replyTo'], subject: ['subject'], previewText: ['previewText'],
-  audience: ['listId', 'segmentId'], unsubscribePageUrl: ['unsubscribePageUrl'], requiredNotice: ['requiredNotice'],
+  audience: ['listId', 'segmentId', 'topicId'], unsubscribePageUrl: ['unsubscribePageUrl'], requiredNotice: ['requiredNotice'],
 } as const satisfies Record<string, readonly (keyof CampaignInput)[]>
 export type MergeField = keyof typeof groups | 'html' | 'defaults'
 export type Merged = { input: CampaignInput; conflicts: MergeField[]; taken: Set<MergeField> }

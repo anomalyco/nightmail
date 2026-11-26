@@ -59,6 +59,7 @@ const ContactDetailPage = audience.page(m => m.ContactDetailPage)
 const ListsPage = audience.page(m => m.ListsPage)
 const ListDetailPage = audience.page(m => m.ListDetailPage)
 const SegmentsPage = audience.page(m => m.SegmentsPage)
+const TopicsPage = audience.page(m => m.TopicsPage)
 const SegmentEditorPage = audience.page(m => m.SegmentEditorPage)
 const ApiKeysPage = settings.page(m => m.ApiKeysPage)
 const DomainsPage = settings.page(m => m.DomainsPage)
@@ -195,7 +196,7 @@ const routes = <><Route path="legal/:doc?" element={<ChunkFallback.Provider valu
     <Route path="newsletters" element={<NewslettersPage />} /><Route path="newsletters/new" element={<NewNewsletterPage />} /><Route path="newsletters/:id" element={<NewsletterPage />} />
     <Route path="audience" element={<ContactsPage />} /><Route path="audience/contacts/:id" element={<ContactDetailPage />} />
     <Route path="audience/lists" element={<ListsPage />} /><Route path="audience/lists/:id" element={<ListDetailPage />} />
-    <Route path="audience/segments" element={<SegmentsPage />} /><Route path="audience/segments/new" element={<SegmentEditorPage />} /><Route path="audience/segments/:id" element={<SegmentEditorPage />} />
+    <Route path="audience/segments" element={<SegmentsPage />} /><Route path="audience/segments/new" element={<SegmentEditorPage />} /><Route path="audience/segments/:id" element={<SegmentEditorPage />} /><Route path="audience/topics" element={<TopicsPage />} />
     <Route path="api-keys" element={<ApiKeysPage />} /><Route path="domains" element={<DomainsPage />} /><Route path="domains/:id" element={<DomainDetailPage />} />
     <Route path="settings" element={<SettingsPage />} /><Route path="settings/mcp/:id" element={<McpApprovalPage />} /><Route path="settings/webhooks/new" element={<WebhookDetailPage />} /><Route path="settings/webhooks/:id" element={<WebhookDetailPage />} />
     <Route path="templates" element={<Moved to={() => '/campaigns/templates'} />} /><Route path="templates/:id" element={<Moved to={params => `/campaigns/templates/${id(params)}`} />} />

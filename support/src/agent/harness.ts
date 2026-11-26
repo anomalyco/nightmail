@@ -1,4 +1,4 @@
-import type { ToolHost } from './tools.js';
+import type { Param, ToolHost } from './tools.js';
 
 // The seam between the conversation (Durable Object, protocol, stamp, gate) and the agent runtime (OpenCode, see
 // opencode.ts). The conversation only needs: run one turn of the agent with this input, report its tool steps as they
@@ -26,6 +26,11 @@ export type TurnInput = {
  */
 export type TurnResult = { text: string; usage: Usage; aborted: boolean; error?: string; refused?: boolean };
 
-export interface Harness {
-  turn(input: TurnInput, tools: ToolHost, onEvent: (event: HarnessEvent) => void, signal: AbortSignal): Promise<TurnResult>;
+/** A tool the harness offers the model: its schema, and what it does through the turn's host (`H`). */
+export type HarnessTool<H> = { name: string; description: string; params: Record<string, Param>; execute: (args: Record<string, unknown>, host: H) => Promise<string> };
+
+export interface Harness<H = ToolHost> {
+  turn(input: TurnInput, tools: H, onEvent: (event: HarnessEvent) => void, signal: AbortSignal): Promise<TurnResult>;
+  /** Stops OpenCode, so its object's storage can be removed. */
+  close(): Promise<void>;
 }

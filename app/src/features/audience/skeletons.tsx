@@ -49,6 +49,16 @@ export const segmentColumns: SkeletonColumn[] = [
   { key: 'rule', label: 'Conditions', card: 'line' },
   { key: 'updatedAt', label: 'Updated', width: 124, card: 'hide' },
 ]
+// Topics (topics.tsx): the name takes the slack; a card shows the description under it, and the menu at its end.
+export const topicColumns: SkeletonColumn[] = [
+  { key: 'name', label: 'Name', width: '24%', card: 'title' },
+  { key: 'description', label: 'Description', card: 'line' },
+  { key: 'default', label: 'Who gets it', width: 280, card: 'line' },
+  // How many chose: out of a topic everyone gets, in to an opt-in one. A dash until counted, so the row never moves.
+  { key: 'count', label: <span title="How many have opted out of a topic everyone gets, or in to an opt-in one, counted when the page opened">Choices</span>, width: 132, align: 'right', card: 'line' },
+  { key: 'created', label: 'Created', width: 124, card: 'hide' },
+  { key: 'actions', label: '', width: 56, align: 'right', skeleton: <span />, card: 'end' },
+]
 export const activityColumns: SkeletonColumn[] = [
   { key: 'subject', label: 'Email' },
   { key: 'status', label: 'Latest event', width: 144, skeleton: <SkeletonText width={90} /> },
@@ -84,12 +94,13 @@ export function SegmentEditorBodySkeleton() {
     <section className="section stack"><SectionHeader title="Conditions" actions={<ControlSkeleton width={104} />} /><div className="cluster"><span>Match</span><ControlSkeleton width={220} /></div><div className="audience-rules"><div className="audience-rule audience-rule--head" aria-hidden="true"><span>Field</span><span>Condition</span><span>Value</span><span /></div><div className="audience-rule"><ControlSkeleton /><ControlSkeleton /><ControlSkeleton /><ControlSkeleton width="var(--control-height)" /></div></div><div className="cluster"><ControlSkeleton width={133} /></div></section>
     <section className="section stack"><SectionHeader title="Matching contacts" actions={<ControlSkeleton width={220} />} /><AudienceSummarySkeleton /></section></div>
 }
-export function AudienceRouteSkeleton({ kind, isNew = false }: { kind: 'contacts' | 'contact' | 'lists' | 'list' | 'segments' | 'segment'; isNew?: boolean }) {
+export function AudienceRouteSkeleton({ kind, isNew = false }: { kind: 'contacts' | 'contact' | 'lists' | 'list' | 'segments' | 'segment' | 'topics'; isNew?: boolean }) {
   const [params] = useSearchParams()
   const status = statusOptions.some(option => option.value === params.get('status')) ? params.get('status')! : ''
   if (kind === 'contact') return <LoadingRegion className="audience-page" label="Loading contact"><PageHeader title={<SkeletonText width={64} lineHeight={24} />} backTo="/audience" actions={<><ControlSkeleton width={109} /><ControlSkeleton width={111} /></>} /><ContactDetailBodySkeleton /></LoadingRegion>
   if (kind === 'list') return <LoadingRegion className="audience-page" label="Loading list"><PageHeader title={<SkeletonText width={96} lineHeight={24} />} backTo="/audience/lists" actions={<><ControlSkeleton width={85} /><ControlSkeleton width={120} /></>} /><AudienceMembersSkeleton /></LoadingRegion>
   if (kind === 'segment') return <LoadingRegion className="audience-page" label="Loading segment"><PageHeader title={isNew ? 'Create segment' : 'Edit segment'} backTo="/audience/segments" actions={<ControlSkeleton width={121} />} /><SegmentEditorBodySkeleton /></LoadingRegion>
+  if (kind === 'topics') return <LoadingRegion className="audience-page" label="Loading topics"><AudienceHeader actions={<ControlSkeleton width={113} />} /><div className="data-toolbar"><Select className="audience-status-filter" aria-label="Show" value="active" onValueChange={() => {}} options={[{ value: 'active', label: 'Active topics' }]} disabled /></div><TableSkeleton className="audience-topics" columns={topicColumns} rows={5} /></LoadingRegion>
   const contacts = kind === 'contacts'
   return <LoadingRegion className="audience-page" label={`Loading ${kind}`}><AudienceHeader actions={<>{contacts && <ControlSkeleton width={120} />}<ControlSkeleton width={contacts ? 98 : kind === "lists" ? 85 : 121} /></>} />
     <div className="data-toolbar"><div className="cluster">{contacts ? <><SearchField className="search-box--list" aria-label="Search contacts" placeholder="Search email or name" disabled /><Select className="audience-status-filter" aria-label="Filter by status" value="" onValueChange={() => {}} options={[{ value: '', label: 'All contacts' }]} disabled /><div className="audience-list-filter"><ControlSkeleton /></div></> : <ControlSkeleton width={320} />}</div></div>
