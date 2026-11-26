@@ -21759,6 +21759,45 @@ describe('List hygiene', () => {
       assert.deepEqual(pick((await stats())[dead]), { sent: 4, delivered: 1, hard: 3, soft: 0, opened: 0, since: 1, classes: { user_unknown: 3 } });
     });
   });
+  test('list risk: a marketing campaign\'s launch records the measure of its list on its review (flagged contacts, contacts at domains this workspace\'s mail failed at, never mailed), banded only with the private lines, and the send review\'s verdict is unchanged', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local, run }) => {
+      const { bandListRisk } = await import('./src/list-risk.js');
+      const wid = runtime.config.workspaceId, tag = unique('lr').toLowerCase().replace(/[^a-z0-9]/g, ''), dead = tag + '-dead.example';
+      const list = ok(await local('POST', '/v1/lists', { name: unique('risk') }), 201);
+      const emails = [...[1, 2, 3].map(i => 'temp' + i + '-' + tag + '@fexpost.com'), ...[1, 2, 3, 4, 5].map(i => 'p' + i + '@' + dead), ...Array.from({ length: 12 }, (_, i) => 'fine' + i + '-' + tag + '@example.net')];
+      const ids = [];
+      for (const email of emails) ids.push(ok(await local('POST', '/v1/contacts', { email }), 201).id);
+      ok(await local('POST', '/v1/lists/' + list.id + '/members', { contactIds: ids }));
+      // This workspace's mail to the dead domain mostly failed for good (src/delivery-history.ts writes this row).
+      await db.query('INSERT INTO delivery_domain_stats (workspace_id, domain, sent, hard_bounced, user_unknown, first_seen, last_seen) VALUES ($1, $2, 20, 15, 15, now(), now())', [wid, dead]);
+      const before = runtime.config.listRisk;
+      runtime.config.listRisk = { FLAGGED_SOURCE: { elevated: 0.01, high: 0.1 }, DEAD_DOMAINS: { elevated: 0.01, high: 0.5 }, NEVER_MAILED: { elevated: 0.5, high: 0.6 } };
+      try {
+        const campaign = ok(await local('POST', '/v1/campaigns', { name: 'Risk', from: 'sender@example.com', subject: 'News', html: '<p>Hello there.</p>', audience: { listId: list.id } }), 201);
+        const preview = ok(await local('GET', '/v1/campaigns/' + campaign.id + '/audience?readiness=true'));
+        const launched = ok(await local('POST', '/v1/campaigns/' + campaign.id + '/send', { revision: campaign.revision }), 202);
+        // The review's verdict is what it was before the measure existed: it reads nothing of it.
+        assert.equal(launched.readiness.verdict, preview.readiness.verdict);
+        await run('audience.listRisk');
+        const { rows: [review] } = await db.query('SELECT r.list_risk FROM sending_campaign_reviews r JOIN sending_campaigns c ON c.review_id = r.id WHERE c.id = $1', [campaign.id]);
+        const risk = review.list_risk;
+        assert.deepEqual([risk.sampled, risk.exact, risk.counts.flagged, risk.counts.byReason.disposable, risk.counts.deadDomains, risk.counts.neverMailed, risk.lastSend], [20, true, 3, 3, 5, 20, null]);
+        assert.deepEqual([risk.values.FLAGGED_SOURCE, risk.values.DEAD_DOMAINS, risk.values.NEVER_MAILED, risk.values.UNENGAGED], [0.15, 0.25, 1, undefined]);
+        // FLAGGED_SOURCE over its high line; NEVER_MAILED over its high line counts only as elevated.
+        assert.equal(risk.band, 'high');
+        assert.deepEqual(risk.factors, [{ code: 'FLAGGED_SOURCE', level: 'high' }, { code: 'DEAD_DOMAINS', level: 'elevated' }, { code: 'NEVER_MAILED', level: 'elevated' }]);
+        // Recorded once: the review keeps the measure as the list stood at launch.
+        const reviewId = (await db.query('SELECT review_id FROM sending_campaigns WHERE id = $1', [campaign.id])).rows[0].review_id;
+        await db.query("INSERT INTO jobs (id, workspace_id, type, payload) VALUES ($1, $2, 'audience.listRisk', $3)", [unique('job'), wid, JSON.stringify({ workspaceId: wid, campaignId: campaign.id, reviewId, listId: list.id })]);
+        await run('audience.listRisk');
+        assert.deepEqual((await db.query('SELECT r.list_risk FROM sending_campaign_reviews r JOIN sending_campaigns c ON c.review_id = r.id WHERE c.id = $1', [campaign.id])).rows[0].list_risk.at, risk.at);
+      } finally { runtime.config.listRisk = before; }
+      // Without the private lines: values, no band.
+      assert.deepEqual(bandListRisk({ FLAGGED_SOURCE: 0.5 }, null), { band: null, factors: [] });
+      assert.deepEqual(bandListRisk({ NEVER_MAILED: 1 }, { NEVER_MAILED: { elevated: 0.5, high: 0.6 } }), { band: 'elevated', factors: [{ code: 'NEVER_MAILED', level: 'elevated' }] });
+      assert.deepEqual(bandListRisk({ FLAGGED_SOURCE: 0.001 }, { FLAGGED_SOURCE: { elevated: 0.01 } }), { band: 'low', factors: [] });
+    });
+  });
 });
 
 describe('Operational configuration and public event boundaries', () => {

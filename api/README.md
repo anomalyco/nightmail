@@ -102,6 +102,7 @@ node -e 'console.log(require("node:crypto").randomBytes(32).toString("hex"))'
 | `NIGHTMAIL_ABUSE_ENFORCE` | Hosted only. Reserved for a later release: defaults to `false`, and nothing reads it yet. |
 | `NIGHTMAIL_HYGIENE_LISTS` | `on` (default) syncs list hygiene's open lists from GitHub once a day; `off` uses the vendored snapshot only. Sources and licenses: [docs/list-hygiene.md](../docs/list-hygiene.md). |
 | `NIGHTMAIL_HYGIENE_DNS` | The DNS-over-HTTPS resolver list hygiene checks recipient domains with (MX, null MX, NXDOMAIN; never SMTP). Hosted defaults to `https://cloudflare-dns.com/dns-query`; self-hosted defaults to none. `off` turns the checks off. |
+| `NIGHTMAIL_LIST_RISK` | Optional, private: JSON lines the list-risk measure bands a campaign's list by (`src/list-risk-lines.ts`). The measure is recorded on every marketing campaign's review either way and decides nothing; unset, it records no band. |
 | `TYPESAFE_API_KEY` | Required for Hosted live SES when `NIGHTMAIL_HOSTED_SCREEN=true`; missing configuration fails startup. Optional for explicit `screen: true` elsewhere. Use a TypeSafe AI key or an OpenCode Console key with OpenCode's `JEV_ENDPOINT`. Store it as a secret (`wrangler secret put` on Cloudflare). |
 | `JEV_ENDPOINT` | Optional Jev endpoint (default `https://api.typesafe.ai/v1/systemone`). OpenCode's free tier is `https://opencode.ai/inference/systemone/v1/systemone` with `JEV_MODEL=jev-1.13-free`. |
 | `JEV_MODEL` | Optional Jev model for the content screen (default `jev-latest`). |
