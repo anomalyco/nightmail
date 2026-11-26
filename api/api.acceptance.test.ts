@@ -32778,8 +32778,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const deadFirst = await sentTo(dead);
       assert.ok(deadFirst >= 20, String(deadFirst));
       await nextWindow();
+      // The same run checked the campaign, stopped the domain, then released the next day.
       assert.deepEqual((await db.query('SELECT domain, resolved, bounced FROM campaign_stopped_domains WHERE campaign_id = $1', [campaign.id])).rows, [{ domain: dead, resolved: deadFirst, bounced: deadFirst }]);
-      await run('campaign.run');
       const later = await view();
       assert.deepEqual([await sentTo(dead), later.delivery.canceled > 0, later.delivery.expanded > 100], [deadFirst, true, true]);
       // A plan's day: unhealthy (all bounced), so the same batch again; a clean one opens the next.
