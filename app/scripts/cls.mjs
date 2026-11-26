@@ -249,6 +249,7 @@ const pages = ids => [
   ['Operator · abuse · cluster', `/operator/abuse/${ids.abuseCluster}`, { from: '/operator?view=abuse', row: 'Several accounts · Shared card' }],
   ['Operator · abuse · alerts', '/operator?view=abuse&show=alerts', { from: '/operator?view=abuse', click: 'Alerts' }],
   ['Operator · abuse · Slack card', '/operator?view=abuse&show=alerts', { dialog: 'High risk' }],
+  ['Operator · lists', '/operator?view=lists', { from: '/operator', click: 'Lists' }],
   // Health: six facts and one table of what the minute tick last wrote, the open alerts first.
   ['Operator · health', '/operator?view=health', { from: '/operator', click: 'Health' }],
   // Glass: the board's tiles, funnel, region rows (two at least), metric rows and feed column have fixed sizes, and feed

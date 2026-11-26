@@ -153,6 +153,17 @@ export const clusterColumnDefs: SkeletonColumn[] = [
   { key: 'workspaces', label: 'Workspaces', width: 112, align: 'right', card: 'inline' },
   { key: 'changed', label: 'Changed', width: 168, card: 'line' },
 ]
+// Operator → Lists (./lists.tsx): one row per launched campaign to a list.
+export const listColumnDefs: SkeletonColumn[] = [
+  { key: 'campaign', label: 'Campaign', card: 'title' },
+  { key: 'band', label: 'List risk', width: 132, card: 'aside' },
+  { key: 'flagged', label: 'Flagged', width: 96, align: 'right', card: 'inline' },
+  { key: 'review', label: 'Review said', width: 168, card: 'inline' },
+  { key: 'bounced', label: 'Bounced', width: 96, align: 'right', card: 'inline' },
+  { key: 'blocklist', label: 'Blocklist', width: 96, align: 'right', card: 'inline' },
+  { key: 'probe', label: 'Probe', width: 112, card: 'inline' },
+  { key: 'launched', label: 'Launched', width: 168, card: 'line' },
+]
 export const alertColumnDefs: SkeletonColumn[] = [
   { key: 'alert', label: 'Alert', card: 'title' },
   { key: 'status', label: 'Status', width: 132, card: 'aside' },
@@ -214,9 +225,9 @@ export function OperatorClusterSkeleton({ actions }: { actions: boolean }) {
   </>
 }
 
-const baseTabs = [{ value: 'queue', label: 'Review queue' }, { value: 'signups', label: 'Sign-ups' }, { value: 'abuse', label: 'Abuse' }, { value: 'actions', label: 'Actions' }, { value: 'waitlist', label: 'Waitlist' }, { value: 'health', label: 'Health' }]
-/** The tab a /operator address opens: ?view=signups, ?view=abuse, ?view=actions, ?view=waitlist or ?view=health, else the review queue. */
-export const operatorView = (search: string) => { const view = new URLSearchParams(search).get('view'); return view === 'actions' || view === 'waitlist' || view === 'abuse' || view === 'signups' || view === 'health' ? view : 'queue' }
+const baseTabs = [{ value: 'queue', label: 'Review queue' }, { value: 'signups', label: 'Sign-ups' }, { value: 'abuse', label: 'Abuse' }, { value: 'lists', label: 'Lists' }, { value: 'actions', label: 'Actions' }, { value: 'waitlist', label: 'Waitlist' }, { value: 'health', label: 'Health' }]
+/** The tab a /operator address opens: ?view=signups, ?view=abuse, ?view=lists, ?view=actions, ?view=waitlist or ?view=health, else the review queue. */
+export const operatorView = (search: string) => { const view = new URLSearchParams(search).get('view'); return view === 'actions' || view === 'waitlist' || view === 'abuse' || view === 'lists' || view === 'signups' || view === 'health' ? view : 'queue' }
 const notesTabs = [...baseTabs, { value: 'notes', label: 'UI notes' }]
 /** UI notes has a tab only for the people the API allows (GET /v1/me uiNotes). */
 export const useOperatorTabs = () => useSession()?.identity?.uiNotes === true ? notesTabs : baseTabs
@@ -239,12 +250,12 @@ export function WaitlistToolbar({ search = '', onSearch, onExport, exporting = f
 export function OperatorQueueSkeleton({ view = 'queue', search = '', canAct = false }: { view?: string; search?: string; canAct?: boolean }) {
   return <>
     <PageHeader title="Operator" actions={view === 'signups' && canAct ? <SetLimitTrigger disabled /> : undefined} />
-    <LoadingRegion label={view === 'waitlist' ? 'Loading the waitlist' : view === 'abuse' ? 'Loading related accounts' : view === 'signups' ? 'Loading sign-ups' : view === 'health' ? 'Loading health' : 'Loading the review queue'}><div className="op-page">
+    <LoadingRegion label={view === 'waitlist' ? 'Loading the waitlist' : view === 'abuse' ? 'Loading related accounts' : view === 'lists' ? 'Loading lists' : view === 'signups' ? 'Loading sign-ups' : view === 'health' ? 'Loading health' : 'Loading the review queue'}><div className="op-page">
       <Tabs value={view} onValueChange={() => {}} disabled items={useOperatorTabs()} label="Operator views" />
       {view === 'queue' && <QueueToolbar disabled />}
       {view === 'waitlist' && <WaitlistToolbar disabled />}
       {view === 'signups' && <SignupFacts />}
-      {view === 'abuse' ? <AbuseSkeleton search={search} /> : view === 'health' ? <HealthSkeleton /> : <TableSkeleton columns={view === 'queue' ? queueColumnDefs : view === 'waitlist' ? waitlistColumnDefs : view === 'signups' ? signupColumnDefs : actionColumnDefs} rows={6} />}
+      {view === 'abuse' ? <AbuseSkeleton search={search} /> : view === 'health' ? <HealthSkeleton /> : <TableSkeleton columns={view === 'queue' ? queueColumnDefs : view === 'waitlist' ? waitlistColumnDefs : view === 'signups' ? signupColumnDefs : view === 'lists' ? listColumnDefs : actionColumnDefs} rows={6} />}
     </div></LoadingRegion>
   </>
 }

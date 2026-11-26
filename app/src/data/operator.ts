@@ -126,6 +126,16 @@ export interface SlackCard { text: string; blocks: { type: string; text?: { text
 /** An operator's decision on an alert. watch: reviewed, raised again only at a higher level. dismiss: not abuse. by: their sign-in address. */
 export interface AbuseReview { action: 'watch' | 'dismiss'; at: string; by: string | null }
 export interface AbuseAlert { id: string; clusterId: string; band: 'review' | 'high'; score: number; kind: 'new' | 'raised' | 'grew'; workspaces: number; status: 'stored' | 'sent' | 'failed'; attempts: number; createdAt: string; sentAt: string | null; payload: SlackCard; review: AbuseReview | null }
+/** Operator → Lists (GET /v1/operator/lists): a recent marketing campaign to a list, its launch's list-risk measure (shares and counts), what the review said and what happened. */
+export type ListRiskBand = 'low' | 'elevated' | 'high'
+export interface OperatorListRow {
+  campaignId: string; campaignName: string; workspaceId: string; workspaceName: string; launchedAt: string; recipients: number; state: string
+  measure: { sampled: number; exact: boolean; band: ListRiskBand | null; factors: { code: string; level: 'elevated' | 'high' }[]; values: Record<string, number>
+    counts: { flagged: number; deadDomains: number; unengaged: number; unengagedBase: number; neverMailed: number; softFailing: number; proven?: number } } | null
+  review: { verdict: string; required: string | null; reasons: string[] } | null
+  outcome: { accepted: number; delivered: number; bounced: number; complained: number; probe: 'passed' | 'quarantined' | 'none'; pauseCode: string | null
+    failures: { read: number; classes: Record<string, number>; blocklistReplies: number } }
+}
 /** An action taken from the abuse view: the note stays in the staff audit; the workspace's own records get a fixed reason. */
 export type AbuseEvidence = { cluster: string; note: string; ticketRef?: string }
 export type OperatorReceipt = { ok: true; version: number | null; step: string | null }
@@ -185,6 +195,10 @@ export const operatorApi = {
   abuseClusters: async (input: { band?: AbuseBand; cursor?: string; limit?: number }, signal?: AbortSignal): Promise<AbuseClusterPage> => {
     const page = await request<{ data: AbuseCluster[] } & Omit<AbuseClusterPage, 'items'>>(`${base}/abuse/clusters${query({ band: input.band, cursor: input.cursor, limit: input.limit ?? 50 })}`, { signal })
     return { items: page.data, nextCursor: page.nextCursor, counts: page.counts, alerts: page.alerts, monitoring: page.monitoring }
+  },
+  lists: async (input: { cursor?: string }, signal?: AbortSignal) => {
+    const page = await request<{ data: OperatorListRow[]; nextCursor: string | null }>(`${base}/lists${query({ cursor: input.cursor, limit: 20 })}`, { signal })
+    return { items: page.data, nextCursor: page.nextCursor }
   },
   abuseCluster: (clusterId: string, signal?: AbortSignal) => request<AbuseClusterDetail>(`${base}/abuse/clusters/${id(clusterId)}`, { signal }),
   abuseAlerts: async (input: { cluster?: string; cursor?: string; limit?: number }, signal?: AbortSignal) => {

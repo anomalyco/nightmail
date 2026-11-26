@@ -14,6 +14,7 @@ import { factorFormats } from '../score'
 import { actionColumnDefs, ActionsTrigger, dailyLimitError, campaignColumnDefs, domainColumnDefs, factorColumnDefs, facts, memberColumnDefs, operatorView, useOperatorTabs, OperatorWorkspaceSkeleton, StaffOnly, QueueToolbar, queueColumnDefs, SetLimitTrigger, SignupFacts, signupColumnDefs, timelineColumnDefs, waitlistColumnDefs, WaitlistToolbar } from './skeletons'
 import { useDebounced } from '../../lib/pagination'
 import { AbuseView } from './abuse'
+import { ListsView } from './lists'
 import { HealthView } from './health'
 
 // The operator console (lazy, /operator): Nightmail staff with a platform role review flagged Hosted workspaces and act on
@@ -45,7 +46,7 @@ export function OperatorPage() {
     <PageHeader title="Operator" actions={view === 'signups' && role === 'operator' ? <SetLimit /> : undefined} />
     <div className="op-page">
       <Tabs value={view} label="Operator views" items={tabs} onValueChange={value => value === 'notes' ? navigate('/operator/notes') : setParams(previous => { const next = new URLSearchParams(previous); next.delete('band'); next.delete('show'); if (value === 'queue') next.delete('view'); else next.set('view', value); return next }, { replace: true })} />
-      {view === 'queue' ? <Queue /> : view === 'signups' ? <Signups /> : view === 'abuse' ? <AbuseView /> : view === 'waitlist' ? <Waitlist /> : view === 'health' ? <HealthView /> : <Actions />}
+      {view === 'queue' ? <Queue /> : view === 'signups' ? <Signups /> : view === 'abuse' ? <AbuseView /> : view === 'lists' ? <ListsView /> : view === 'waitlist' ? <Waitlist /> : view === 'health' ? <HealthView /> : <Actions />}
     </div>
   </>
 }

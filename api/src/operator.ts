@@ -11,6 +11,7 @@ import { placesOpened, readPlaces, setLimit } from './signups.js';
 import { waitlistNoticeStatus } from './account-notices.js';
 import { ScreenComparison, screenComparison } from './screen-comparison.js';
 import { diskAlertSetup } from './disk-alert.js';
+import { registerOperatorLists } from './operator-lists.js';
 
 // The operator API: Anomaly staff with a platform role act on any Hosted workspace through one audited path. The
 // /operator dashboard area, Ryan's support platform (phase 2) and scripts are its clients. Roles live in
@@ -131,6 +132,7 @@ const standingOf = async (db: DbExecutor, id: string) => (await db.execute<{ ste
 const operatorReason = (code: string, message: string) => [{ code, metric: 'external' as const, value: 0, count: 0, threshold: 0, minimum: 0, window: null, step: 'pause' as const, message }];
 
 export function registerOperator(app: App) {
+  registerOperatorLists(app);
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'get', path: '/v1/operator/workspaces', operationId: 'operatorListWorkspaces',
     request: { query: z.object({ step: z.enum(['notice', 'warn', 'restrict', 'pause']).optional(), q: z.string().trim().max(200).optional(), limit: z.coerce.number().int().min(1).max(200).default(100) }) },
     responses: { 200: response(z.object({ data: z.array(QueueItem) })), ...errors } }), async c => {

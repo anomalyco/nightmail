@@ -968,6 +968,12 @@ export async function seed(fx) {
 
   await billing(db);
   const newsletterIds = await newsletters(fx);
+  // Operator → Lists: the latest sent issue carries the list-risk measure its launch recorded (src/list-risk.ts) and what the review said.
+  await db.query("UPDATE sending_campaigns SET simulated=false WHERE id=$1", [newsletterIds.issueSent]);
+  await db.query("UPDATE sending_campaign_reviews SET list_risk=$2::jsonb WHERE campaign_id=$1", [newsletterIds.issueSent, JSON.stringify({ version: 1, at: ago(3 * 1440), listId: newsletterIds.newsletter,
+    sampled: 3200, exact: true, counts: { flagged: 21, deadDomains: 4, unengaged: 0, unengagedBase: 0, neverMailed: 140, softFailing: 2, proven: 3010, byReason: { invalid: 0, disposable: 12, typo_domain: 5, role: 4, dead: 0, no_mail_domain: 0 } },
+    lastSend: null, recentBlocklist: 0, values: { FLAGGED_SOURCE: 21 / 3200, DEAD_DOMAINS: 4 / 3200, NEVER_MAILED: 140 / 3200, RECENT_BLOCKLIST: 0 }, band: 'low', factors: [],
+    review: { verdict: 'ready', required: null, reasons: [] } })]);
   const { conversation: supportConversation, email: supportEmail, action: supportAction } = await supportInbox(db, hook.webhook?.id ?? hook.id);
 
   // Lumen Labs: verified domain, no key, no mail. Field Notes: no sending connection yet.
