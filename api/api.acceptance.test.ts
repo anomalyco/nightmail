@@ -992,6 +992,10 @@ test('optional Worker secrets disable only their feature on a partial rollout; c
     assert.equal(errors.filter(e=>e.feature===feature).length,1,feature+' is logged once');
   }
   assert.ok(!lines.join('').includes(token));
+  // The operator Health page lists them by their settings' names (src/config.ts disabledSettings), never a value.
+  const shown=(await import('./src/config.js')).disabledSettings();
+  assert.ok(shown.some(item=>item.feature==='stripe' && item.settings.includes('STRIPE_SECRET_KEY')));
+  assert.ok(!JSON.stringify(shown).includes(token));
   const invalidBuiltin=loadConfig({...base,PUBLIC_URL:'https://app.example.org',NIGHTMAIL_BUILTIN_DOMAIN:'example.org'});
   assert.equal(invalidBuiltin.builtinDomain,undefined,'An overlapping built-in parent uses its existing off switch.');
   const badScope=loadConfig({...base,NIGHTMAIL_BUILTIN_DOMAIN:'mail.example.org',NIGHTMAIL_BUILTIN_SEND_SCOPE:'typo',NIGHTMAIL_HYGIENE_DNS:'invalid',NIGHTMAIL_HYGIENE_LISTS:'invalid'});
@@ -33408,6 +33412,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       };
       await run('campaign.run'); await run('campaign.run');
       assert.equal((await view()).delivery.expanded, 100);
+      // As a plan of daily batches, so the healthy-day check applies to it too.
+      await db.query('UPDATE sending_campaigns SET pace_plan = ARRAY[100, 300] WHERE id = $1', [campaign.id]);
       // The first day's mail to the dead domain bounced for good, the rest was delivered: the rest there is skipped.
       const sentTo = async (domain: string) => (await db.query("SELECT count(*)::int AS n FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@' || $2", [campaign.id, domain])).rows[0].n;
       await db.query("UPDATE sending_emails SET status = CASE WHEN to_addresses->>0 LIKE '%@' || $2 THEN 'bounced' ELSE 'delivered' END, provider_id = 'sim_' || id WHERE campaign_id = $1", [campaign.id, dead]);
@@ -33418,9 +33424,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.deepEqual((await db.query('SELECT domain, resolved, bounced FROM campaign_stopped_domains WHERE campaign_id = $1', [campaign.id])).rows, [{ domain: dead, resolved: deadFirst, bounced: deadFirst }]);
       const later = await view();
       assert.deepEqual([await sentTo(dead), later.delivery.canceled > 0, later.delivery.expanded > 100], [deadFirst, true, true]);
+      // Its sender sees the domain it stopped, and that the plan repeats its first batch because of the bounces.
+      assert.deepEqual(later.delivery.stoppedDomains.map((item: Json) => [item.domain, item.resolved, item.bounced, typeof item.stoppedAt]), [[dead, deadFirst, deadFirst, 'string']]);
+      assert.deepEqual([later.delivery.pacing.held.batch, later.delivery.pacing.held.why, typeof later.delivery.pacing.held.toGrow], [1, ['bounces'], 'string']);
       // A plan's day: unhealthy (all bounced), so the same batch again; a clean one opens the next.
       const since = new Date(Date.now() - 3 * 86_400_000).toISOString();
-      assert.equal(await planWindowHealthy(runtime.db, ws, campaign.id, since), false);
+      assert.equal((await planWindowHealthy(runtime.db, ws, campaign.id, since)).healthy, false);
       // Replies naming a blocklist: paused, one operator alert, and no resume while they keep arriving.
       await db.query("UPDATE sending_emails SET status = 'delivered' WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@example.net'", [campaign.id]);
       const { rows: listed } = await db.query("SELECT id FROM sending_emails WHERE campaign_id = $1 AND to_addresses->>0 LIKE '%@example.net' ORDER BY id LIMIT 3", [campaign.id]);
@@ -33448,7 +33457,10 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // With the replies gone and the bounces cleared, a day counts as healthy again.
       await db.query("DELETE FROM sending_email_events WHERE workspace_id = $1 AND type = 'non_permanent_bounce'", [ws]);
       await db.query("UPDATE sending_emails SET status = 'delivered' WHERE campaign_id = $1", [campaign.id]);
-      assert.equal(await planWindowHealthy(runtime.db, ws, campaign.id, since), true);
+      assert.equal((await planWindowHealthy(runtime.db, ws, campaign.id, since)).healthy, true);
+      // The next day opens the next batch, and the plan is no longer shown as held.
+      await nextWindow();
+      assert.deepEqual([(await view()).delivery.pacing.held, (await view()).delivery.pacing.batch], [null, 2]);
     });
   });
   test('campaign list probe follows standing: in good standing, recipients an earlier campaign delivered to with clean, mature feedback go out without the probe; swapped or unresolved recipients, a growing or capped sender, and a sender that falls below mid-campaign are probed', async t => {

@@ -4,6 +4,7 @@ import { ApiError, databaseCodeOf, errors, log, logError, response, security, tr
 import { CAMPAIGNS, DATABASE, DLQ, JOBS, JOBS_LATE, QUEUE, QUEUES, REQUESTS, SQLSTATES, TICK, WAKE_QUEUES } from './health-thresholds.js';
 import { countDatabaseError, LATENCY_BUCKETS, WRITE_LIMITS } from './health-counters.js';
 import { slackCard } from './operator-alerts.js';
+import { disabledSettings } from './config.js';
 import { postSlack } from './reputation-alerts.js';
 
 // Health: the system says when something falls behind (docs/operations.md is the runbook).
@@ -541,7 +542,7 @@ export async function readHealth(runtime: Pick<Runtime, 'db' | 'config'>): Promi
   const { memory: _, ...measured } = state?.rollup ?? { ...empty, memory: null };
   return { generatedAt: state?.generatedAt ?? null, stale: state?.stale ?? true, delivery: runtime.config.operatorSlackWebhookUrl ? 'slack' : 'off',
     alerts: alerts.filter(alert => isKind(alert.kind)).map(alert => ({ ...alert, label: KINDS[alert.kind as Kind].label, words: alert.words.replaceAll('`', ''), runbook: runbookOf(alert.kind as Kind) })), ...measured,
-    settings: (await import('./config.js')).disabledSettings() };
+    settings: disabledSettings() };
 }
 
 export function registerHealth(app: App) {
