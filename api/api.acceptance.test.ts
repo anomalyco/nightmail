@@ -22757,7 +22757,7 @@ describe('List hygiene', () => {
           const row = ok(await local('GET', '/v1/operator/lists?limit=50')).data.find((r: Json) => r.campaignId === campaign.id);
           assert.deepEqual([row.measure.band, row.measure.values.FLAGGED_SOURCE, row.measure.counts.deadDomains, row.review.verdict, row.outcome.probe, row.outcome.failures.read],
             ['high', 0.15, 5, launched.readiness.verdict, 'none', 0]);
-          assert.deepEqual(row.review.reasons, launched.readiness.reasons.map((r: Json) => r.code));
+          assert.deepEqual(row.review.reasons, (launched.readiness.findings ?? launched.readiness.reasons).map((r: Json) => r.code));
           assert.ok(!JSON.stringify(row).includes('@'), 'No address in a row.');
           await setOperator(db, [AUTH_SUBJECT, 'off', '--reason', 'Synthetic list reviewer done']);
           await db.query('UPDATE nightmail_sessions SET staff=false WHERE user_id IN (SELECT user_id FROM workspace_members WHERE workspace_id=$1)', [wid]);
