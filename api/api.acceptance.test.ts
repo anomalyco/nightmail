@@ -22396,6 +22396,8 @@ describe('List hygiene', () => {
           const { setOperator } = await import('./scripts/set-operator.js');
           await setOperator(db, [AUTH_SUBJECT, 'operator:read', '--reason', 'Synthetic list reviewer']);
           await db.query('UPDATE nightmail_sessions SET staff=true WHERE user_id IN (SELECT user_id FROM workspace_members WHERE workspace_id=$1)', [wid]);
+          // Simulated sends are left out of the list: this one stands in for a real one.
+          await db.query('UPDATE sending_campaigns SET simulated=false WHERE id=$1', [campaign.id]);
           const row = ok(await local('GET', '/v1/operator/lists?limit=50')).data.find((r: Json) => r.campaignId === campaign.id);
           assert.deepEqual([row.measure.band, row.measure.values.FLAGGED_SOURCE, row.measure.counts.deadDomains, row.review.verdict, row.outcome.probe, row.outcome.failures.read],
             ['high', 0.15, 5, launched.readiness.verdict, 'none', 0]);
