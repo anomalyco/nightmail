@@ -1,7 +1,7 @@
 import * as oidc from 'oauth4webapi';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { ApiError, digest, log, logError, wrapModuleLoad, type Actor, type Ctx, type DbExecutor, type Runtime } from './core.js';
+import { ApiError, digest, log, logError, wrapModuleLoad, type AccountRequestMetrics, type Actor, type Ctx, type DbExecutor, type Runtime } from './core.js';
 import { setCookie } from 'hono/cookie';
 import { onboardNewUser, pendingInvitation } from './workspaces.js';
 import { acceptedMethods, githubVerifiedAddress, isStaffSignIn, provenMailbox, PROVIDER_IDENTITY_CLAIM, providerIdentity, type ProviderIdentity } from './account-policy.js';
@@ -62,12 +62,14 @@ function loginIssue(error: unknown, requiredAcr?: string[]) {
 type Provider = { metadata: oidc.AuthorizationServer; client: oidc.Client; authentication: oidc.ClientAuth; callback: string; options: { signal: () => AbortSignal } };
 const PROVIDER_TTL_MS = 600_000;
 let cachedProvider: { key: string; at: number; value: Promise<Provider> } | null = null;
-async function provider(runtime: Runtime): Promise<Provider> {
+async function provider(runtime: Runtime, metrics?: AccountRequestMetrics): Promise<Provider> {
   const { accountIssuer, accountClient, publicUrl } = runtime.config;
   if (!accountIssuer || !accountClient) throw new ApiError(503, 'AUTH_NOT_CONFIGURED', 'Configure the OIDC client to enable dashboard sign-in.');
   // Kept per configuration: a changed client, key or required sign-in method (which decides whether pushed requests apply) reads it again.
   const key = JSON.stringify([accountIssuer, accountClient.id, accountClient.algorithm, accountClient.privateKey, publicUrl, runtime.config.accountRequiredAcr ?? null]);
-  if (cachedProvider?.key === key && Date.now() - cachedProvider.at < PROVIDER_TTL_MS) return cachedProvider.value;
+  const cached = cachedProvider?.key === key && Date.now() - cachedProvider.at < PROVIDER_TTL_MS ? cachedProvider.value : null;
+  if (metrics) metrics.discoveryCacheHit = cached !== null; // Includes joining an in-flight discovery.
+  if (cached) return cached;
   const value = (async () => {
     const issuer = new URL(accountIssuer);
     const options = { signal: () => AbortSignal.timeout(6000) };
@@ -140,11 +142,30 @@ async function connectedAccounts(runtime: Runtime, jar: Jar, db: DbExecutor = ru
   return { accounts, dead: jar.slots.filter(s => !live.has(s.hash)).map(s => s.slot) };
 }
 
-export async function beginAccountLogin(runtime: Runtime, returnUrl: URL, peer: string, prompt?: 'select_account', method?: 'google') {
+// Count actual fetches, not calls into the OIDC library: signing can fail before a request goes out.
+function countFetch(metrics: AccountRequestMetrics, key: 'parRequests' | 'tokenRequests', send: typeof nonceFetch) {
+  let requests = 0;
+  metrics[key] = requests;
+  return (url: string, init: RequestInit) => {
+    metrics[key] = ++requests;
+    return send(url, init);
+  };
+}
+
+export async function beginAccountLogin(runtime: Runtime, returnUrl: URL, peer: string, prompt?: 'select_account', method?: 'google',
+  timings?: { name: string; durationMs: number }[], metrics: AccountRequestMetrics = {}) {
+  const timer = (name: string) => {
+    const start = performance.now();
+    return () => { timings?.push({ name, durationMs: performance.now() - start }); };
+  };
   const origin = new URL(runtime.config.publicUrl).origin;
   if (returnUrl.origin !== origin || returnUrl.username || returnUrl.password) throw loginFailed();
-  await reserveAuthState(runtime.db, await digest(peer));
-  const { metadata, client, authentication, callback, options } = await provider(runtime);
+  const endReserve = timer('reserve-db');
+  try { await reserveAuthState(runtime.db, await digest(peer)); } finally { endReserve(); }
+  const endDiscovery = timer('oidc-discovery');
+  let resolved: Provider;
+  try { resolved = await provider(runtime, metrics); } finally { endDiscovery(); }
+  const { metadata, client, authentication, callback, options } = resolved;
   const state = oidc.generateRandomState(), binding = oidc.generateRandomState();
   const verifier = oidc.generateRandomCodeVerifier(), nonce = oidc.generateRandomNonce();
   let params = new URLSearchParams({ client_id:client.client_id, response_type:'code', scope:'openid profile email', redirect_uri:callback,
@@ -163,15 +184,23 @@ export async function beginAccountLogin(runtime: Runtime, returnUrl: URL, peer: 
   if (runtime.config.multiTenant || runtime.config.staffGoogleDomains.length) idToken[PROVIDER_IDENTITY_CLAIM] = {essential:true};
   if (Object.keys(idToken).length) params.set('claims', JSON.stringify({id_token:idToken}));
   if (metadata.pushed_authorization_request_endpoint) {
-    const response = await oidc.pushedAuthorizationRequest(metadata, client, authentication, params, options);
-    const pushed = await oidc.processPushedAuthorizationResponse(metadata, client, response);
-    params = new URLSearchParams({client_id:client.client_id, request_uri:pushed.request_uri});
+    const endPar = timer('oidc-par');
+    try {
+      const response = await oidc.pushedAuthorizationRequest(metadata, client, authentication, params, {
+        ...options, [oidc.customFetch]: countFetch(metrics, 'parRequests', fetch),
+      });
+      const pushed = await oidc.processPushedAuthorizationResponse(metadata, client, response);
+      params = new URLSearchParams({client_id:client.client_id, request_uri:pushed.request_uri});
+    } finally { endPar(); }
   } else if (metadata.require_pushed_authorization_requests) throw loginFailed();
   const url = new URL(metadata.authorization_endpoint!);
   if (url.protocol !== 'https:') throw loginFailed();
   for (const [key,value] of params) url.searchParams.set(key,value);
-  await runtime.db.execute(sql`INSERT INTO nightmail_login_flows(state_hash,cookie_hash,issuer,client_id,nonce,verifier,return_url,expires_at)
-    VALUES (${await digest(state)},${await digest(binding)},${metadata.issuer},${client.client_id},${nonce},${verifier},${returnUrl.href},now()+interval '10 minutes')`);
+  const endInsert = timer('flow-insert-db');
+  try {
+    await runtime.db.execute(sql`INSERT INTO nightmail_login_flows(state_hash,cookie_hash,issuer,client_id,nonce,verifier,return_url,expires_at)
+      VALUES (${await digest(state)},${await digest(binding)},${metadata.issuer},${client.client_id},${nonce},${verifier},${returnUrl.href},now()+interval '10 minutes')`);
+  } finally { endInsert(); }
   return { url:url.href, binding };
 }
 
@@ -213,7 +242,7 @@ class AccountLimit extends Error {}
 /** The callback names no sign-in this browser started, or one already finished: a browser that asks for the same callback
  * twice gets this the second time. */
 class FlowGone extends Error {}
-export async function finishAccountLogin(runtime: Runtime, url: URL, binding: string, jar: Jar = { slots: [], selected: null, preferred: null }, onFlow?: (returnUrl: string) => void, network?: RequestNetwork, timings?: { name: string; durationMs: number }[]) {
+export async function finishAccountLogin(runtime: Runtime, url: URL, binding: string, jar: Jar = { slots: [], selected: null, preferred: null }, onFlow?: (returnUrl: string) => void, network?: RequestNetwork, timings?: { name: string; durationMs: number }[], metrics: AccountRequestMetrics = {}) {
   // Where a sign-in's time goes, on its request log (timings): the account service's round trips and our own writes.
   const phase = async <T>(name: string, work: () => Promise<T>) => { const started = performance.now(); try { return await work(); } finally { timings?.push({ name, durationMs: performance.now() - started }); } };
   const state = url.searchParams.get('state');
@@ -231,8 +260,9 @@ export async function finishAccountLogin(runtime: Runtime, url: URL, binding: st
   // asks for its nonce first (use_dpop_nonce). One ephemeral key per sign-in proves the exchange and the userinfo
   // read; an issuer that doesn't advertise DPoP gets none.
   const DPoP = metadata.dpop_signing_alg_values_supported?.includes('ES256') ? oidc.DPoP(client, await oidc.generateKeyPair('ES256'), seededProof(new URL(metadata.token_endpoint ?? metadata.issuer).origin)) : undefined;
+  const tokenFetch = countFetch(metrics, 'tokenRequests', nonceFetch);
   const { response, tokens } = await phase('oidc-token', () => retryDPoPNonce(async () => {
-    const response = await oidc.authorizationCodeGrantRequest(metadata, client, authentication, params, callback, flow.verifier, { ...options, DPoP });
+    const response = await oidc.authorizationCodeGrantRequest(metadata, client, authentication, params, callback, flow.verifier, { ...options, DPoP, [oidc.customFetch]: tokenFetch });
     return { response, tokens: await oidc.processAuthorizationCodeResponse(metadata, client, response, {requireIdToken:true,expectedNonce:flow.nonce}) };
   }));
   await phase('oidc-signature', () => oidc.validateApplicationLevelSignature(metadata, response, options));
@@ -557,7 +587,9 @@ export async function accountBrowserRoute(c: Ctx) {
     if (servedOrigin(runtime, c.req.url) !== origin) return c.json({url:`${origin}/`});
     // A sixth account is refused before the account service is asked, on every sign-in; the callback checks again.
     if ((await connectedAccounts(runtime, await jar())).accounts.length >= MAX_ACCOUNTS) throw new ApiError(409,'ACCOUNT_LIMIT',`A browser can connect at most ${MAX_ACCOUNTS} accounts. Sign out of one to add another.`);
-    const start = await beginAccountLogin(runtime,new URL(input.data.callbackURL),c.req.header(clientIpHeader) ?? 'unknown',input.data.prompt,input.data.method).catch(error=>{
+    const metrics: AccountRequestMetrics = {};
+    c.set('accountRequestMetrics', metrics);
+    const start = await beginAccountLogin(runtime,new URL(input.data.callbackURL),c.req.header(clientIpHeader) ?? 'unknown',input.data.prompt,input.data.method,c.get('serverTimings'),metrics).catch(error=>{
       const issue = loginIssue(error, runtime.config.accountRequiredAcr);
       if (issue) throw new ApiError(403,'SIGN_IN_DENIED',issue.message);
       throw error;
@@ -569,8 +601,10 @@ export async function accountBrowserRoute(c: Ctx) {
     const binding = readCookie(runtime,c.req.raw.headers,'login') ?? '';
     clearCookie(c,'login');
     let started: string | undefined;
+    const metrics: AccountRequestMetrics = {};
+    c.set('accountRequestMetrics', metrics);
     try {
-      const { session,slot,userId,returnUrl } = await finishAccountLogin(runtime,new URL(c.req.url),binding,await jar(),url => { started = url; },requestNetwork(c.req.raw.headers),c.get('serverTimings'));
+      const { session,slot,userId,returnUrl } = await finishAccountLogin(runtime,new URL(c.req.url),binding,await jar(),url => { started = url; },requestNetwork(c.req.raw.headers),c.get('serverTimings'),metrics);
       setCookie(c,cookieName(runtime,slotName(slot)),session,cookieOptions(runtime,SESSION_SECONDS));
       // The account just signed in becomes this browser's default, and the page it returns to opens as it.
       setCookie(c,cookieName(runtime,'account'),userId,cookieOptions(runtime,SESSION_SECONDS));
