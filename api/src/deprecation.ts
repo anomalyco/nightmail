@@ -7,10 +7,6 @@ import { WRITE_LIMITS } from './health-counters.js';
 export const retiringOperations = new Map<string, string | null>([
   ['listInboxAppPasswords', 'listAppPasswords'],
   ['inviteWorkspaceMember', 'createWorkspaceInvitation'],
-  ['createSegment', null], ['getSegment', null], ['updateSegment', null],
-  ['deleteSegment', null], ['previewSegment', null],
-  ['queryAudience', null], ['planAudienceMutation', null], ['applyAudiencePlan', null],
-  ['updateInboundScanPolicy', null],
 ]);
 const deprecatedFrom = new Date('2026-11-27T00:00:00Z');
 const sunset = new Date('2027-02-25T23:59:59Z');
