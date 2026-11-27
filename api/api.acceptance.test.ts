@@ -46438,7 +46438,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await db.query(`UPDATE jobs SET payload=jsonb_set(payload,'{delivery,postedAt}',to_jsonb((now()-interval '61 minutes')::text)) WHERE id=$1`, [second]);
       const third = await reputationJob(db, ops, trip('2026-11-27T12:00:00Z'));
       assert.equal(await runReputationCard(t, runtime, db, third, () => 200, posted), 'done');
-      assert.deepEqual([posted.splice(0).map(mentioned), (await f.mentions()).filter((row: Json) => row.kind === 'builtin_tripped').map((row: Json) => [row.mentioned, row.over])], [[false], [[true, false], [false, false], [false, true]]]);
+      // The three trips' decisions, in no particular order (the first two were decided at the same instant): mentioned, a repeat, over the six.
+      assert.deepEqual([posted.splice(0).map(mentioned), (await f.mentions()).filter((row: Json) => row.kind === 'builtin_tripped').map((row: Json) => JSON.stringify([row.mentioned, row.over])).sort()],
+        [[false], ['[false,false]', '[false,true]', '[true,false]']]);
     });
   });
   test('MX reputation cards in the operator channel keep the abuse alerts\' guarantees: each kind posts at most one card in any rolling hour and one over it waits for its place, never dropped; a 429 waits without spending a try; an unanswered card is posted at most twice; a refused one is retried until it goes', async t => {
