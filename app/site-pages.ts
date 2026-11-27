@@ -1,3 +1,5 @@
+import { pruneCss, usedNames } from './critical-css.ts'
+import { dashboardNoticeHtml, dashboardNoticeStyles, dashboardReference } from '../api/src/dashboard-reference.ts'
 import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runnerImport, type Plugin } from 'vite'
@@ -143,7 +145,7 @@ export function sitePages({ address }: { address: string | null }): Plugin {
         return String((asset as { source: string | Uint8Array }).source)
       }).join('')
       const { module: shell } = await runnerImport<typeof import('./src/features/legal/prerender.tsx')>(legalShell, { root, configFile: false, logLevel: 'error', plugins: [legalMarkdown(), noCss] })
-      // The docs pages (the overview, the 10 guides, the 289 operations' reference), where the build knows its address: drawn
+      // The docs pages (the overview, the 10 guides, the published operations' reference), where the build knows its address: drawn
       // by the app's docs page as a signed-out visitor sees it (prerender.tsx) from the API definition it fetches, with one
       // stylesheet for all of them (the docs' CSS cut down to what any of them uses).
       const docsModule = address ? (await runnerImport<typeof import('./src/features/docs/prerender.tsx')>(docsShell, { root, configFile: false, logLevel: 'error', plugins: [noCss] })).module : null
@@ -154,6 +156,8 @@ export function sitePages({ address }: { address: string | null }): Plugin {
         if (asset?.type !== 'asset') this.error(`The docs' stylesheet ${file} isn't in the bundle.`)
         return String((asset as { source: string | Uint8Array }).source)
       }).join('') }
+      // The servers' 410 notice uses the same reference styles, including on builds without painted pages.
+      this.emitFile({ type: 'asset', fileName: dashboardNoticeStyles, source: pruneCss(docsPaint.css, usedNames(dashboardNoticeHtml)) })
       const sheet = reference.size ? `/${this.getFileName(this.emitFile({ type: 'asset', name: 'docs-painted.css', source: paintedCss(docsPaint, files.template + [...reference.values()].map(drawn => drawn.html).join('')) }))}` : undefined
       for (const page of pages) {
         const card = linkCard(page.card)
@@ -211,6 +215,10 @@ export function sitePages({ address }: { address: string | null }): Plugin {
       const sitemap = bundle['sitemap.xml']
       if (sitemap?.type !== 'asset' || !String(sitemap.source).includes('</urlset>')) return this.error('The site\'s pages join sitemap.xml, which price-pages.ts writes first: the bundle has none.')
       sitemap.source = String(sitemap.source).replace('</urlset>', pages.map(page => `  <url><loc>${publicOrigin}${page.path}</loc>${page.modified ? `<lastmod>${page.modified}</lastmod>` : ''}</url>\n`).join('') + '</urlset>')
+      // Cloudflare serves existing assets before the Worker. Neither old spelling may mask its 301/410.
+      for (const id of dashboardReference.keys()) {
+        if (bundle[`docs/api/${id}.html`] || bundle[`docs/operations/${id}.md`]) this.error(`Unexpected dashboard reference asset: ${id}`)
+      }
       // An old name redirects to its new page (site-index.ts): the page must exist, and the old name must be no operation's.
       for (const [old, now] of Object.entries(RENAMED_OPERATIONS)) if (!pages.some(page => page.path === `/docs/api/${now}`) || pages.some(page => page.path === `/docs/api/${old}`)) this.error(`RENAMED_OPERATIONS (api/src/site-index.ts) sends ${old} to ${now}, which has no reference page, or ${old} is an operation again.`)
       if (!pages.some(page => page.path === '/docs/api/sendEmail')) this.error(`The docs pages have no sendEmail: api/openapi.json isn't ${productName}'s API definition.`)

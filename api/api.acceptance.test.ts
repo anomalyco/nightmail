@@ -2300,7 +2300,7 @@ test('Account switcher: two accounts in one browser switch, stay apart on every 
     assert.equal((await request('/v1/contacts','POST',{email:contact},as(p))).status,201);
     markers.set(p.id!,[tag,contact,p.email,p.workspace!]);
   }
-  const document = JSON.parse(await readFile(new URL('./openapi.json',import.meta.url),'utf8')) as {paths:Record<string,{get?:unknown}>};
+  const document = (await import('./scripts/registered-document.js')).registeredDocument as {paths:Record<string,{get?:unknown}>};
   const routes = Object.entries(document.paths).filter(([path,ops])=>ops.get && !path.includes('{')).map(([path])=>path);
   assert.ok(routes.length >= 40, 'every parameterless GET route');
   for (const [self, other] of [[personal, work], [work, personal]] as const) for (const path of routes) {
@@ -3805,6 +3805,47 @@ describe('Public contract and authentication', () => {
       assert.match(await reply.text(), /revokeAgentToken/, 'A HEAD must not replace the document with its own empty body.');
     }
     assert.equal((await fetch(BASE + path, { method: 'HEAD', headers })).status, 200);
+  });
+  test('public reference: only dashboard-session operations leave discovery; their old pages never serve the shell', async () => {
+    const { registeredDocument } = await import('./scripts/registered-document.js');
+    const { dashboardReference } = await import('./src/dashboard-reference.js');
+    const published = ok(await http('GET', '/openapi.json'));
+    assert.deepEqual(published, JSON.parse(await readFile(new URL('./openapi.json', import.meta.url), 'utf8')));
+    const sentence = 'This operation is only used by the dashboard from a signed-in session, so it is not in the public API reference.';
+    const ids = new Set<string>();
+    for (const [path, item] of Object.entries<Json>(registeredDocument.paths)) for (const [method, operation] of Object.entries<Json>(item)) {
+      if (!operation.operationId) continue;
+      const retained = published.paths[path]?.[method];
+      if (operation['x-nightmail-permission'].credential === 'dashboard') {
+        assert.equal(retained, undefined, operation.operationId);
+        ids.add(operation.operationId);
+      } else assert.equal(JSON.stringify(retained), JSON.stringify(operation), operation.operationId);
+    }
+    assert.deepEqual(ids, new Set(dashboardReference.keys()));
+    for (const [id, destination] of dashboardReference) {
+      for (const path of [`/docs/api/${id}`, `/docs/api/${id}/`, `/docs/api/${id}.html`, `/docs/operations/${id}.md`]) {
+        let representationBytes: number | undefined;
+        for (const agent of ['Mozilla/5.0', 'Googlebot', 'GPTBot']) for (const method of ['GET', 'HEAD']) {
+          const response = await fetch(BASE + path, { method, headers: { 'user-agent': agent }, redirect: 'manual' });
+          const body = await response.text(), markdown = path.endsWith('.md');
+          assert.deepEqual([response.status, response.headers.get('location')], [destination ? 301 : 410, destination], `${agent} ${method} ${path}`);
+          if (!destination) {
+            if (method === 'GET') representationBytes = Buffer.byteLength(body);
+            assert.equal(response.headers.get('content-length'), String(representationBytes));
+            assert.equal(response.headers.get('x-robots-tag'), 'noindex');
+            assert.equal(response.headers.get('content-type'), markdown ? 'text/markdown; charset=utf-8' : 'text/html; charset=utf-8');
+          }
+          if (destination || method === 'HEAD') assert.equal(body, '');
+          else if (markdown) assert.equal(body, `${sentence}\n\n[API docs](/docs)\n\n[the dashboard](/)\n`);
+          else {
+            assert.ok(body.includes(sentence));
+            assert.match(body, /<meta name="robots" content="noindex">/);
+            assert.deepEqual([...body.matchAll(/<a href="([^"]+)">([^<]+)<\/a>/g)].map(m => m.slice(1)), [['/docs', 'API docs'], ['/', 'the dashboard']]);
+            assert.doesNotMatch(body, /<script\b|<style\b| style=/i);
+          }
+        }
+      }
+    }
   });
   test('health and OpenAPI are public, protected routes require credentials', async () => {
     const healthReply = await http('GET', '/health');
@@ -6162,7 +6203,7 @@ describe('Hosted MCP OAuth and tools', () => {
   // every route answers as it does there.
   test('permission table: every operation states the permission its guards enforce, for keys, people, sign-ins and agent tokens', async t => {
     await simulatedSesFixture(t, async ({ db, request, runtime }) => {
-      const [{ createApp, createOpenApiApp }, { createOpenApiDocument }, { dispatchAsActor }, { getMcpGrantActor }, { OPERATION_PERMISSIONS, permissionExtension, permissionOf }] = await Promise.all([
+      const [{ createApp, createOpenApiApp }, { createRegisteredDocument }, { dispatchAsActor }, { getMcpGrantActor }, { OPERATION_PERMISSIONS, permissionExtension, permissionOf }] = await Promise.all([
         import('./src/app.js'), import('./src/openapi-docs.js'), import('./src/auth.js'), import('./src/mcp-auth.js'), import('./src/operation-permissions.js')]);
       type Row = import('./src/operation-permissions.js').OperationPermission;
       runtime.config.multiTenant = true;
@@ -6171,7 +6212,7 @@ describe('Hosted MCP OAuth and tools', () => {
       // Agent inboxes keep their mail in object storage: a map stands in for the bucket.
       const objects = new Map<string, Uint8Array>();
       runtime.mailR2 = { write: true, name: 'permission-table', bucket: { put: async (k: string, b: Uint8Array) => { objects.set(k, b); } } as unknown as R2Bucket };
-      const app = createApp(), spec = createOpenApiDocument(await createOpenApiApp()) as Json, w = runtime.config.workspaceId;
+      const app = createApp(), spec = createRegisteredDocument(await createOpenApiApp()) as Json, w = runtime.config.workspaceId;
       const key = async (body: Json) => { const made = ok(await request('POST', '/v1/api-keys', MANAGER, { name: unique('permission-table'), ...body }), 201); secrets.add(made.secret); return made.secret as string; };
       const issuer = process.env.ACCOUNT_ISSUER ?? 'https://account.anoma.ly';
       const person = async (role: string) => {
@@ -6853,7 +6894,7 @@ describe('Hosted MCP OAuth and tools', () => {
         // Reading a domain's hosts stays allowed: an unknown domain is not found, not refused.
         error(await http('GET', '/v1/inbound/domains/dom_fixture/hosts', agent.token), 404, 'NOT_FOUND');
         // MCP discovery asks the same predicate (lastingRoute), so it hides exactly these writes from a temporary token.
-        const { lastingRoute } = await import('./src/core.js'), spec = JSON.parse(await readFile(new URL('./openapi.json', import.meta.url), 'utf8'));
+        const { lastingRoute } = await import('./src/core.js'), spec = (await import('./scripts/registered-document.js')).registeredDocument;
         const hostRoutes = Object.entries(spec.paths as Record<string, Json>).filter(([path]) => /^\/v1\/inbound\/domains|^\/v1\/domains\/\{id\}\/receiving-host$/.test(path))
           .flatMap(([path, ops]) => Object.keys(ops).map(method => [method.toUpperCase(), path, ops[method].operationId] as const));
         assert.deepEqual(hostRoutes.filter(([method, path]) => lastingRoute(method, path)).map(([, , op]) => op).sort(), ['addReceivingHost', 'chooseReceivingHost', 'createInboundSubdomain', 'disableInboundDomain',
@@ -16373,9 +16414,9 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
   // a new one fails this test until it is; a key of anything but a send must never expire, money and launches included.
   test('retention: an Idempotency-Key expires only on a send route; every other route\'s key, and any path near one, is kept', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const [{ cleanup }, { readFile }, { AUTHENTICATED_CREATES, MAILBOX_CREATES }, { PgDialect }] = await Promise.all([import('./src/maintenance.js'), import('node:fs/promises'),
+      const [{ cleanup }, { AUTHENTICATED_CREATES, MAILBOX_CREATES }, { PgDialect }] = await Promise.all([import('./src/maintenance.js'),
         import('./src/idempotency.js'), import('drizzle-orm/pg-core')]);
-      const wid = runtime.config.workspaceId, spec = JSON.parse(await readFile(new URL('./openapi.json', import.meta.url), 'utf8'));
+      const wid = runtime.config.workspaceId, spec = (await import('./scripts/registered-document.js')).registeredDocument;
       // Every route that claims a key: those that declare the header, the creates the middleware covers, and two that claim
       // one without declaring it (the dashboard's test send, and the raw upload, which isn't in the spec).
       const routes = new Map<string, string>([['uploadAttachmentBytes', '/v1/attachments/upload']]);
@@ -16589,7 +16630,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
     assert.deepEqual([misplaced.field, misplaced.message.startsWith('A key with access type addresses takes its permissions in access.mail (read, send (reply and start conversations from those addresses), modify (mark read, archive, label) and create (create agent inboxes)) and has no sender domains: move ["read","send"] from permissions to access.mail.')], ['permissions', true]);
     assert.match(error(await http('POST', '/v1/api-keys', sender.secret, { name: 'Replies', permissions: ['receive'] }), 403, 'PERMISSION_DENIED').message, /so it can't create, list or revoke API keys\. Create keys in the dashboard under API keys → Create key, or with a full-access key via POST \/v1\/api-keys\./);
     // A guessed route says where the endpoint is.
-    assert.match(error(await http('DELETE', `/v1/api-keys/${replyKey.id}`, full), 404, 'NOT_FOUND').message, /^Route not found: no endpoint answers DELETE on this path\. Revoke a key with POST \/v1\/api-keys\/\{id\}\/revoke\.(?: .*)? Every operation is listed in \/openapi\.json, \/llms\.txt and \/docs\.md\.$/);
+    assert.match(error(await http('DELETE', `/v1/api-keys/${replyKey.id}`, full), 404, 'NOT_FOUND').message, /^Route not found: no endpoint answers DELETE on this path\. Revoke a key with POST \/v1\/api-keys\/\{id\}\/revoke\.(?: .*)? Public operations are listed in \/openapi\.json, \/llms\.txt and \/docs\.md\.$/);
     const visible = await allPages('/v1/emails', domainReader.secret);
     assert.ok(visible.some(row => row.id === allowed.id));
     assert.ok(visible.every(row => /@(?:[^@]+\.)?allowed\.example\.com$/i.test(row.from)), JSON.stringify(visible.map(row => row.from)));
@@ -23577,6 +23618,9 @@ describe('Billing: API, MCP and notices', () => {
         assert.equal(fake.count(/^POST \/v1\/payment_methods\/[^/]+\/detach$/), 1);
         const setup = ok(await local('POST', '/v1/billing/payment-method'), 201);
         assert.match(setup.checkoutUrl, /^https:\/\/checkout\.stripe\.test\//);
+        const checkout = ok(await local('POST', '/v1/billing/top-ups', { amountCents: 2500, method: 'checkout' }), 201);
+        assert.equal(checkout.status, 'pending');
+        assert.match(checkout.checkoutUrl, /^https:\/\/checkout\.stripe\.test\//);
       });
     });
   });
@@ -26667,11 +26711,11 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       // (and an Allow header), or the closest route for the method, as templates from the route table, never the path sent.
       const slash = await request('POST', '/v1/domains/', key.secret, { name: 'x.example' }), slashBody = slash.body.error;
       assert.deepEqual([slash.status, slashBody.code, slashBody.retryable, slashBody.details], [404, 'NOT_FOUND', false, [{ closest: { method: 'POST', path: '/v1/domains' } }]]);
-      assert.equal(slashBody.message, 'Route not found: no endpoint answers POST on this path. POST /v1/domains exists: send it without the extra slash. Every operation is listed in /openapi.json, /llms.txt and /docs.md.');
+      assert.equal(slashBody.message, 'Route not found: no endpoint answers POST on this path. POST /v1/domains exists: send it without the extra slash. Public operations are listed in /openapi.json, /llms.txt and /docs.md.');
       assert.equal(lines.find(l => l.event === 'request' && l.requestId === slash.headers.get('x-request-id'))!.path, '/v1/domains/');
       const method = await request('PUT', '/v1/domains', key.secret, {}), methodBody = method.body.error;
       assert.deepEqual([method.status, methodBody.details, method.headers.get('allow')], [404, [{ path: '/v1/domains', allowedMethods: ['GET', 'POST'] }], 'GET, POST']);
-      assert.match(methodBody.message, /^Route not found: no endpoint answers PUT on this path\. \/v1\/domains doesn’t take PUT; it takes GET, POST\. Every operation/);
+      assert.match(methodBody.message, /^Route not found: no endpoint answers PUT on this path\. \/v1\/domains doesn’t take PUT; it takes GET, POST\. Public operations/);
       const guess = await request('GET', '/v1/domains/dom_0123456789/dns-setup/mdom_0123456789', key.secret), guessBody = guess.body.error;
       assert.deepEqual([guess.status, guessBody.details], [404, [{ closest: { method: 'GET', path: '/v1/domains/{id}/dns-setup' } }]]);
       assert.ok(!JSON.stringify(guessBody).includes('0123456789'), 'The answer never echoes what the caller put in the path.');
@@ -51282,6 +51326,24 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
             DISPATCHER: { idFromName(n) { return n; }, get() { return { async fetch() { return Response.json({ ok: true }); } }; } },
           };
 
+          // Even with a 200 SPA asset behind it, a removed reference never fetches the shell.
+          const { dashboardReference } = await import(mod('src/dashboard-reference.js'));
+          for (const [id, destination] of dashboardReference) {
+            for (const path of ['/docs/api/'+id, '/docs/api/'+id+'/', '/docs/api/'+id+'.html', '/docs/operations/'+id+'.md']) {
+              for (const agent of ['Mozilla/5.0','Googlebot','GPTBot']) for (const method of ['GET','HEAD']) {
+                const res = await worker.fetch(new Request('https://dev.bane.mx'+path, {method, headers:{'user-agent':agent}}), env);
+                const body = await res.text();
+                assert.deepEqual([res.status,res.headers.get('location')], [destination ? 301 : 410,destination], path);
+                if (!destination) assert.equal(res.headers.get('x-robots-tag'), 'noindex');
+                if (destination || method === 'HEAD') assert.equal(body, '');
+                else {
+                  assert.ok(body.includes('This operation is only used by the dashboard from a signed-in session, so it is not in the public API reference.'));
+                  const links = path.endsWith('.md') ? ['[API docs](/docs)', '[the dashboard](/)'] : ['<a href="/docs">API docs</a>', '<a href="/">the dashboard</a>'];
+                  for (const link of links) assert.ok(body.includes(link), path);
+                }
+              }
+            }
+          }
           const sharedEnv = { ...env, NIGHTMAIL_LINK_HOST: 'links.example.net' };
           for (const host of ['links.example.net','example.net']) {
             const info = await worker.fetch(new Request('https://'+host+'/'),sharedEnv);

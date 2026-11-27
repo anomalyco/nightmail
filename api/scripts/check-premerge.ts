@@ -7,6 +7,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { register } from 'node:module';
 import { isDeepStrictEqual } from 'node:util';
 import ts from 'typescript';
+import { registeredDocument } from './registered-document.js';
 
 const api = new URL('../', import.meta.url), root = new URL('../', api);
 const git = (...args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 64 << 20 }).trim();
@@ -28,7 +29,7 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
 // The live run enforces it again at the end; this catches it before merge. A string literal ('op'), an object
 // key (op: 'reason') or SKIP.op in scripts/e2e.ts counts; comments do not.
 {
-  const spec = JSON.parse(readFileSync(new URL('openapi.json', api), 'utf8')) as { paths: Record<string, Record<string, { operationId?: string }>> };
+  const spec = registeredDocument as { paths: Record<string, Record<string, { operationId?: string }>> };
   const operations = Object.values(spec.paths).flatMap(item => Object.values(item)).map(op => op.operationId).filter((id): id is string => !!id);
   const file = 'api/scripts/e2e.ts', source = ts.createSourceFile(file, readFileSync(new URL('scripts/e2e.ts', api), 'utf8'), ts.ScriptTarget.Latest, true);
   const named = new Set<string>(), called = new Set<string>();
@@ -41,7 +42,7 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
   };
   visit(source);
   const missing = operations.filter(op => !named.has(op));
-  for (const op of missing) fail('E2E coverage', `${op} is in openapi.json but neither called nor skipped in the live dev E2E, which fails the dev deploy after merge. Call it in a step with api('${op}', …), or add it to SKIP with the reason it cannot run against dev.`, file);
+  for (const op of missing) fail('E2E coverage', `${op} is registered but neither called nor skipped in the live dev E2E, which fails the dev deploy after merge. Call it in a step with api('${op}', …), or add it to SKIP with the reason it cannot run against dev.`, file);
   // Behaviour a release has to prove live, where a skip doesn't count: these are called with api('…') in a dev step.
   // Every address is an inbox (#362): a temporary address's mail and folders through the inbox routes, by its address ID.
   const live = ['listInboxMessages', 'getInboxMessage', 'listInboxFolders', 'getInboxChanges', 'updateInboxMessage', 'copyInboxMessage', 'moveInboxMessage', 'deleteInboxMessage', 'expungeInboxFolder'];
@@ -213,18 +214,18 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
 {
   const before = failed, file = 'api/src/operation-permissions.ts';
   const { OPERATION_PERMISSIONS, permissionExtension } = await import('../src/operation-permissions.js'), { PERMISSIONS } = await import('../src/core.js');
-  const spec = JSON.parse(readFileSync(new URL('openapi.json', api), 'utf8')) as { paths: Record<string, Record<string, Record<string, unknown> & { operationId?: string }>> };
+  const spec = registeredDocument as { paths: Record<string, Record<string, Record<string, unknown> & { operationId?: string }>> };
   const operations = Object.values(spec.paths).flatMap(item => Object.values(item)).filter(op => op.operationId);
   const valid = (row: Record<string, unknown> | undefined) => !!row && (row.access ? ['public', 'staff', 'any'].includes(String(row.access)) && Object.keys(row).every(k => ['access', 'text'].includes(k))
     : row.permission ? Object.hasOwn(PERMISSIONS, String(row.permission)) && (row.permission === 'sendEmail' ? row.level === 'on' : ['read', 'write'].includes(String(row.level)))
     : ['any', 'admin', 'owner'].includes(String(row.person)) && (row.level === undefined || ['read', 'write'].includes(String(row.level))) && !row.scope);
   for (const op of operations) {
     const row = op[permissionExtension] as Record<string, unknown> | undefined;
-    if (!row) fail('Permissions', `${op.operationId} states no permission: it has no ${permissionExtension} in api/openapi.json. Add its row to ${file} with what its guards enforce (a permission and level, a person, or public), run bun run sdk in api/, and run the acceptance test "permission table".`, file);
+    if (!row) fail('Permissions', `${op.operationId} states no permission: it has no ${permissionExtension} in the registered contract. Add its row to ${file} with what its guards enforce (a permission and level, a person, or public), run bun run sdk in api/, and run the acceptance test "permission table".`, file);
     else if (!valid(row)) fail('Permissions', `${op.operationId}'s ${permissionExtension} is not a valid row: ${JSON.stringify(row)}. See OperationPermission in ${file}.`, file);
   }
   const ids = new Set(operations.map(op => op.operationId));
-  for (const id of Object.keys(OPERATION_PERMISSIONS).filter(id => !ids.has(id))) fail('Permissions', `${file} has a row for ${id}, which is not an operation in api/openapi.json. Remove the row, or run bun run sdk in api/ if the operation is new.`, file);
+  for (const id of Object.keys(OPERATION_PERMISSIONS).filter(id => !ids.has(id))) fail('Permissions', `${file} has a row for ${id}, which is not an operation in the registered contract. Remove the row, or run bun run sdk in api/ if the operation is new.`, file);
   if (failed === before) console.log(`Permissions: all ${operations.length} operations state the permission they need.`);
 }
 
