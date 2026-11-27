@@ -83,8 +83,12 @@ const values = z.object({
   NIGHTMAIL_BUILTIN_SEND_SCOPE: z.enum(['anyone', 'members']).default('anyone'),
   // Hosted only, off unless set: while built-in domains send to members only, a reply (replyToInboundThread) may go once
   // to the sender of the message it answers, when that sender passed authentication (src/builtin-domain.ts
-  // builtinReplyException). "<per workspace a day>,<per recipient a day>". Unset or not two numbers: off, as before.
+  // builtinReplyException). "<per workspace a day>,<per recipient a day>" (the second not for support's address, which every
+  // workspace may answer). Unset or not two numbers: off, as before.
   NIGHTMAIL_BUILTIN_REPLIES: z.string().regex(/^\d{1,5},\d{1,4}$/).optional(),
+  // Hosted only, with NIGHTMAIL_BUILTIN_REPLIES: such replies to support (NIGHTMAIL_SUPPORT_ADDRESS_IDS) from every built-in
+  // domain together, a rolling day. Unset, zero or not a number: support is one of our own addresses, never answered.
+  NIGHTMAIL_BUILTIN_SUPPORT_REPLIES: z.string().regex(/^\d{1,5}$/).optional(),
   // Hosted only: a list (lst_…) of the platform workspace above that everyone who joins the waitlist or signs up is
   // kept in as a contact, with properties to segment by (src/signups.ts). Unset, or not a list ID: nothing is written.
   NIGHTMAIL_SIGNUPS_LIST_ID: z.unknown().optional(),
@@ -274,7 +278,7 @@ export function deriveEncryptionKey(secret: string): string {
 // Only these independent integrations may be disabled by bad configuration. Auth/encryption, database
 // and live sending policy keep their fail-closed checks. Report names only, once per feature per isolate.
 const featureSettings = {
-  builtinDomains: ['NIGHTMAIL_BUILTIN_DOMAIN', 'NIGHTMAIL_BUILTIN_SEND_SCOPE'], builtinReplies: ['NIGHTMAIL_BUILTIN_REPLIES'],
+  builtinDomains: ['NIGHTMAIL_BUILTIN_DOMAIN', 'NIGHTMAIL_BUILTIN_SEND_SCOPE'], builtinReplies: ['NIGHTMAIL_BUILTIN_REPLIES'], builtinSupportReplies: ['NIGHTMAIL_BUILTIN_SUPPORT_REPLIES'],
   listHygiene: ['NIGHTMAIL_HYGIENE_LISTS'], dnsHygiene: ['NIGHTMAIL_HYGIENE_DNS'], listRisk: ['NIGHTMAIL_LIST_RISK'], rampLines: ['NIGHTMAIL_RAMP'],
   linkHosts: ['NIGHTMAIL_LINK_SAAS_ZONE_ID', 'NIGHTMAIL_LINK_SAAS_TOKEN', 'NIGHTMAIL_LINK_SAAS_TARGET', 'NIGHTMAIL_LINK_HOST_WORKSPACES'],
   sharedLinks: ['NIGHTMAIL_LINK_HOST'], linkWarmup: ['NIGHTMAIL_LINK_WARMUP'],
@@ -420,7 +424,7 @@ export function loadConfig(input: Record<string, unknown>): Config {
     mailServers: v.MAILGW_API_TOKEN ? mailServerHosts(v.MAILGW_PUBLIC_DOMAIN ?? url.hostname) : undefined,
     platformAccount: v.NIGHTMAIL_PLATFORM_AWS_ACCOUNT, platformDomainWorkspace: v.MULTI_TENANT==='true' ? v.NIGHTMAIL_PLATFORM_DOMAIN_WORKSPACE : undefined, notifyFrom: v.MULTI_TENANT==='true' ? v.NIGHTMAIL_NOTIFY_FROM : undefined,
     builtinDomain: v.MULTI_TENANT==='true' ? builtinParent(v.NIGHTMAIL_BUILTIN_DOMAIN, [url.origin, ...previousOrigins]) : undefined, builtinScope: v.NIGHTMAIL_BUILTIN_SEND_SCOPE,
-    builtinReplies: v.MULTI_TENANT==='true' && v.NIGHTMAIL_BUILTIN_REPLIES ? (([perDay, perRecipientPerDay]) => ({ perDay: perDay!, perRecipientPerDay: perRecipientPerDay! }))(v.NIGHTMAIL_BUILTIN_REPLIES.split(',').map(Number)) : null,
+    builtinReplies: v.MULTI_TENANT==='true' && v.NIGHTMAIL_BUILTIN_REPLIES ? (([perDay, perRecipientPerDay]) => ({ perDay: perDay!, perRecipientPerDay: perRecipientPerDay!, supportPerDay: Number(v.NIGHTMAIL_BUILTIN_SUPPORT_REPLIES ?? 0) }))(v.NIGHTMAIL_BUILTIN_REPLIES.split(',').map(Number)) : null,
     signupsListId: v.MULTI_TENANT==='true' ? signupsListId(v.NIGHTMAIL_SIGNUPS_LIST_ID) : undefined,
     support: v.MULTI_TENANT==='true' ? { url: supportSigningKey ? v.NIGHTMAIL_SUPPORT_URL : undefined, signingKey: supportSigningKey, addressIds: supportAddressIds } : undefined,
     observability: v.MULTI_TENANT==='true' && v.CF_OBSERVABILITY_TOKEN && v.CF_OBSERVABILITY_ACCOUNT_ID && v.CF_OBSERVABILITY_SCRIPT

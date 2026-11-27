@@ -85,6 +85,9 @@
     // Meanwhile a reply may go once to someone outside the workspace who wrote to it and passed authentication
     // (src/builtin-domain.ts): at most this many a workspace a day, and to one person a day from all workspaces together.
     "NIGHTMAIL_BUILTIN_REPLIES": "5,2",
+    // Such replies to our support (NIGHTMAIL_SUPPORT_ADDRESS_IDS) skip the per-person count above, so they have a total of
+    // their own: at most this many a day from all workspaces together, well inside support's shared daily intake.
+    "NIGHTMAIL_BUILTIN_SUPPORT_REPLIES": "300",
     // Abuse monitoring (src/abuse.ts) records from this instant on, monitor-only.
     "NIGHTMAIL_ABUSE_MONITORING": "2026-11-21T15:30:00Z",
     "ACCOUNT_CLIENT_ID": "bane-production",

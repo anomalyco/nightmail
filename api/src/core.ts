@@ -130,7 +130,7 @@ export interface Config {
   builtinDomain?: string;
   builtinScope: 'anyone' | 'members';
   /** NIGHTMAIL_BUILTIN_REPLIES: a reply from a built-in domain may go once to a verified sender (builtin-domain.ts builtinReplyException); null: off. */
-  builtinReplies?: { perDay: number; perRecipientPerDay: number } | null;
+  builtinReplies?: { perDay: number; perRecipientPerDay: number; /** NIGHTMAIL_BUILTIN_SUPPORT_REPLIES; 0: support is never answered. */ supportPerDay: number } | null;
   /** Hosted only: the platform workspace's list of waitlist joins and sign-ups (src/signups.ts signupsList). */
   signupsListId?: string;
   /** Hosted only: the support platform's operator credential, its URL and the handoff signing key (src/support.ts). */
@@ -294,7 +294,7 @@ export type AppEnv = { Bindings: Runtime; Variables: { actor: Actor; boundedBody
   pollWaitMs?: number;
   rateLimitedWorkspace?: string; // The verified credential's workspace, when the budget refuses it before the actor is set.
   /** The error code and field a failed request answered with, for its request log line. `unmatched`: no route did. */
-  failure?: { code: string; mcpStale?: import('./mcp-session.js').StaleReason; field?: string; databaseCode?: string; unmatched?: boolean; origin?: { originClass: string; fetchSite?: string }; attachmentTypes?: AttachmentTypes };
+  failure?: { code: string; mcpStale?: import('./mcp-session.js').StaleReason; field?: string; databaseCode?: string; unmatched?: boolean; origin?: { originClass: string; fetchSite?: string }; attachmentTypes?: AttachmentTypes; reason?: string };
   /** Who a protocol handler authenticated (MCP authenticates inside its route), for the request log line. */
   principal?: { type: string; workspace?: string }; support?: SupportScope } };
 export type App = OpenAPIHono<AppEnv>;
@@ -353,6 +353,8 @@ export class ApiError extends Error {
   retryAfterSeconds?: number;
   /** What the request log may say about a refused attachment (screened-html.ts attachmentTypes): types, never its name or content. */
   attachmentTypes?: AttachmentTypes;
+  /** Which condition refused it, as a fixed code the request log may carry (builtin-domain.ts BuiltinReplyRefusal), never text. */
+  logReason?: string;
   constructor(public status: number, public code: string, message: string, public field?: string, public retryable = false, public resetAt?: string) { super(message); }
 }
 /** Classify once, whether the error is the whole response or a failed part of a private dashboard read. */

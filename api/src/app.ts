@@ -235,7 +235,7 @@ function logRequest(c: Ctx, durationMs: number, retiringRoutes: ReadonlyMap<stri
     event: 'request', requestId: c.get('requestId'), route, method: c.req.method, status, durationMs, slow: durationMs >= SLOW_REQUEST_MS || undefined,
     ...(noticeDay && { deprecationDay: noticeDay, deprecationEvent: 'attempt' }),
     ...(failure?.mcpStale ? { protocolEra: 'legacy', staleReason: failure.mcpStale } : {}),
-    code, field: failure?.field, databaseCode: failure?.databaseCode, attachment: failure?.attachmentTypes,
+    code, field: failure?.field, reason: failure?.reason, databaseCode: failure?.databaseCode, attachment: failure?.attachmentTypes,
     // Which endpoint a caller expected, scrubbed (unmatchedTemplate): only for a path no route answered.
     path: route === 'unmatched' ? unmatchedPath(c, workspace || undefined) : undefined,
     originClass: refusedOrigin ? !origin ? 'missing' : origin === 'null' ? 'null' : 'cross-site' : failure?.origin?.originClass, fetchSite: failure?.origin?.fetchSite,
@@ -450,7 +450,7 @@ function createShell(loadDocs: () => Promise<{ doc: Record<string, any>; createL
     // Messages, record keys and unsupported keys are caller text: log only the schema's own top-level field names.
     const field = responseError.logField !== undefined ? responseError.logField || undefined : schemaFields(responseError.field);
     // The request line (logRequest) carries the code; an unexpected failure also logs its stack.
-    c.set('failure', { code: responseError.code, field, databaseCode: databaseCodeOf(error), origin: responseError.origin, attachmentTypes: responseError.attachmentTypes });
+    c.set('failure', { code: responseError.code, field, databaseCode: databaseCodeOf(error), origin: responseError.origin, attachmentTypes: responseError.attachmentTypes, reason: responseError.logReason });
     // Best effort, and never this request's failure: limitReached and dailyLimitAlert log what they could not queue.
     if (responseError.limitReachedFor) {
       await (await import('./account-notices.js')).limitReached(c.env, responseError.limitReachedFor).catch(() => {});
