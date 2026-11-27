@@ -46115,7 +46115,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // An hour on, the next pause mentions and says how many went out without one.
       await db.query(`UPDATE operator_mentions SET at=at-interval '61 minutes'`);
       await f.pause(await f.workspace('Gannet'));
-      const next = await postOperatorAlerts(t, runtime, db), note = '2 urgent cards before this one went out without a mention (more than 6 an hour).';
+      const next = await postOperatorAlerts(t, runtime, db), note = '2 urgent cards before this one went out without a mention (hourly limit reached, or check failed).';
       assert.deepEqual(next.map(card => [card.text, cardLine(card), card.blocks[0].accessory.text.text]), [[`${LEAD} Paused: Gannet, too many bounces. ${note}`, `${LEAD} :double_vertical_bar: *Paused* Gannet, too many bounces. ${note}`, 'Open']]);
       assert.deepEqual((await f.mentions()).filter((row: Json) => row.over).map((row: Json) => row.told), [true, true], 'Told once: the next mention says nothing of them.');
     });
@@ -46220,7 +46220,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         // An hour on, sending disabled on a healthy account is worse than healthy: mentioned.
         await db.query(`UPDATE operator_mentions SET at=at-interval '61 minutes'`);
         // It also says the pause that went out over the six without a mention.
-        assert.deepEqual(await read({ EnforcementStatus: 'HEALTHY', SendingEnabled: false }), ['ok', 'HEALTHY+sending_disabled', [card('sending disabled. 1 urgent card before this one went out without a mention (more than 6 an hour).', true)]]);
+        assert.deepEqual(await read({ EnforcementStatus: 'HEALTHY', SendingEnabled: false }), ['ok', 'HEALTHY+sending_disabled', [card('sending disabled. 1 urgent card before this one went out without a mention (hourly limit reached, or check failed).', true)]]);
         assert.deepEqual((await f.mentions()).filter((row: Json) => row.kind === 'amazon_account').map((row: Json) => [row.subject, row.capped, row.mentioned]),
           [[region, false, true], [region, false, false], [region, false, true]], 'Healthy again is never asked: only worse is.');
       } finally { await done(); }
@@ -46267,7 +46267,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.deepEqual((await postOperatorAlerts(t, runtime, db)).map(card => card.text), ['Paused: Osprey, too many bounces.']);
       assert.deepEqual((await f.mentions()).map((row: Json) => [row.kind, row.mentioned, row.over]), [['abuse_high', false, true], ['paused', false, true]]);
       await f.pause(await f.workspace('Plover'));
-      assert.deepEqual((await postOperatorAlerts(t, runtime, db)).map(card => card.text), [`${LEAD} Paused: Plover, too many bounces. 2 urgent cards before this one went out without a mention (more than 6 an hour).`]);
+      assert.deepEqual((await postOperatorAlerts(t, runtime, db)).map(card => card.text), [`${LEAD} Paused: Plover, too many bounces. 2 urgent cards before this one went out without a mention (hourly limit reached, or check failed).`]);
       // The ledger missing (a database without its migration): the card posts unmentioned, as without the setting.
       await db.query('ALTER TABLE operator_mentions RENAME TO operator_mentions_away');
       try {

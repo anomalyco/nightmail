@@ -80,7 +80,7 @@ async function dropMention(runtime: Pick<Runtime, 'db'>, card: string | SQL) {
 const LOOKALIKE: Record<string, string> = { '*': '\u2217', '_': '\u02cd', '~': '\u223c', '`': '\u02cb' };
 /** Plain text as mrkdwn that reads the same: no markup, no mention or link of its own. */
 const asMrkdwn = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/[*_~`]/g, c => LOOKALIKE[c]!);
-export const skippedWords = (n: number) => `${n.toLocaleString('en-US')} urgent ${n === 1 ? 'card' : 'cards'} before this one went out without a mention (more than ${MENTION_LIMITS.perHour} an hour).`;
+export const skippedWords = (n: number) => `${n.toLocaleString('en-US')} urgent ${n === 1 ? 'card' : 'cards'} before this one went out without a mention (hourly limit reached, or check failed).`;
 type Message = Record<string, unknown> & { text: string; blocks?: { type: string; text?: { type: string; text: string } }[] };
 /**
  * The card with the mention: before its words in the notification text and in its first section (turned into mrkdwn
