@@ -228,10 +228,10 @@
   .onboarding-surface .ui-input { height: 44px; font-size: var(--text-lg); }
   .onboarding-connect-actions { flex-direction: column; align-items: stretch; }
   .onboarding-actions .ui-button { flex: 1; }
-  /* Get started: full-width actions, and two lines kept for the test email's line, which names the domain once it exists. */
+  /* Get started: full-width actions. The test email's line is one line at any phone width (it names no address), held by
+     its sizer, so nothing keeps a second line for it. */
   .onb-key__slot > span:first-child, .onb-key__slot .ui-button, .onb-start-test .first-send-test > .ui-button { width: 100%; }
   .onb-key__slot { justify-items: stretch; }
   .onb-start-test .first-send-test { align-items: stretch; }
-  .onb-start-test .first-send-test > .muted { min-height: calc(2 * var(--leading-sm)); }
   .onb-panel .agent-prompt__box { min-height: 200px; }
 }
