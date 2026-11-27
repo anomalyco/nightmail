@@ -27,17 +27,25 @@
 /* Responses: one row per status on the page's surface, 2px apart; a summary fills only on hover, and a schema opens
    under its row. */
 .docs-responses { --docs-status-width: 36px; display: flex; flex-direction: column; gap: var(--space-2); }
-.docs-responses summary, .docs-responses > .docs-response { padding: var(--space-12); border-radius: var(--radius-sm); }
-.docs-responses summary { display: flex; cursor: pointer; gap: var(--space-12); align-items: baseline; list-style: none; transition: background-color var(--motion-duration) var(--ease-standard); }
-.docs-responses summary:is(:hover, :focus-visible) { background: var(--color-hover); }
-.docs-responses summary::-webkit-details-marker { display: none; }
-.docs-responses summary::after { content: ''; align-self: center; flex-shrink: 0; width: 10px; height: 10px; margin-left: auto; background: var(--color-muted); mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; transition: transform 150ms; }
-.docs-responses details[open] > summary::after { transform: rotate(180deg); }
+.docs-responses summary, .docs-responses > .docs-response, .docs-variants summary { padding: var(--space-12); border-radius: var(--radius-sm); }
+:is(.docs-responses, .docs-variants) summary { display: flex; cursor: pointer; gap: var(--space-12); align-items: baseline; list-style: none; transition: background-color var(--motion-duration) var(--ease-standard); }
+:is(.docs-responses, .docs-variants) summary:is(:hover, :focus-visible) { background: var(--color-hover); }
+:is(.docs-responses, .docs-variants) summary::-webkit-details-marker { display: none; }
+:is(.docs-responses, .docs-variants) summary::after { content: ''; align-self: center; flex-shrink: 0; width: 10px; height: 10px; margin-left: auto; background: var(--color-muted); mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 10 10'%3E%3Cpath d='M2 3.5l3 3 3-3' fill='none' stroke='%23000' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center / contain no-repeat; transition: transform 150ms; }
+:is(.docs-responses, .docs-variants) details[open] > summary::after { transform: rotate(180deg); }
 .docs-responses summary code { min-width: var(--docs-status-width); }
 .docs-response { display: flex; flex-wrap: wrap; gap: var(--space-4) var(--space-12); align-items: baseline; }
 .docs-response > code { min-width: var(--docs-status-width); }
 .docs-response > span { flex: 1 1 14em; min-width: 0; }
-@media (prefers-reduced-motion: reduce) { .docs-responses summary::after { transition: none; } }
+@media (prefers-reduced-motion: reduce) { :is(.docs-responses, .docs-variants) summary::after { transition: none; } }
+/* A body's variants: one row each, its title and the fields it takes on one line (cut short where the line ends), its
+   field list under it once opened. */
+.docs-variants { display: flex; flex-direction: column; gap: var(--space-2); }
+.docs-variants summary > code { flex-shrink: 0; }
+.docs-variants summary > span { min-width: 0; overflow: hidden; color: var(--color-muted); font-size: var(--text-sm); text-overflow: ellipsis; white-space: nowrap; }
+.docs-variants details > p { max-width: 46.5em; margin: var(--space-4) var(--space-12) 0; color: var(--color-muted); font-size: var(--text-sm); line-height: 1.45; }
+.docs-variants details > .docs-field-list { margin: 0 0 var(--space-12) var(--space-12); }
+.docs-schema-empty > span { color: var(--color-muted); }
 .docs-responses details > .docs-schema, .docs-responses details > .docs-schema-inline { margin: var(--space-4) var(--space-12) var(--space-16) calc(2 * var(--space-12) + var(--docs-status-width)); }
 .docs-install { display: flex; align-items: center; gap: var(--space-8); min-width: 0; min-height: 28px; }
 .docs-install > code { min-width: 0; overflow-x: auto; white-space: nowrap; }
@@ -104,6 +112,6 @@
 /* Touch: the next-guide link, a response's summary and an operation's row are 44 px tall. */
 @media (pointer: coarse) {
   .docs-guide-next a { display: inline-flex; align-items: center; min-height: 44px; }
-  .docs-responses summary { min-height: 44px; align-items: center; }
+  :is(.docs-responses, .docs-variants) summary { min-height: 44px; align-items: center; }
   .docs-overview-groups section a { min-height: 44px; }
 }

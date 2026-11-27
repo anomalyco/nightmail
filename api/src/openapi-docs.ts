@@ -4,6 +4,7 @@ import { agentSetupGuide } from './agent-setup-guide.js';
 import type { App } from './core.js';
 import { apiKeyEnv, productName, publicOrigin, sdkPackage } from './brand.js';
 import { permissionExtension, permissionOf } from './operation-permissions.js';
+import { describeBody, responseRows, schemaType, type Field } from './schema-fields.js';
 
 type Json = Record<string, any>;
 const METHODS = ['get', 'post', 'put', 'patch', 'delete'] as const;
@@ -185,37 +186,50 @@ export function createOpenApiDocument(app: App) {
 
 function title(value: string) { return value.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(' ').map((word, index) => /^mcp$/i.test(word) ? 'MCP' : index === 0 ? word[0].toUpperCase() + word.slice(1).toLowerCase() : word.toLowerCase()).join(' '); }
 function markdownText(value: unknown) { return String(value ?? '').replaceAll('|', '\\|').replace(/\s+/g, ' ').trim(); }
-function schemaType(document: Json, input: Json): string {
-  const schema = resolve(document, input);
-  if (schema.oneOf || schema.anyOf) return (schema.oneOf ?? schema.anyOf).map((value: Json) => schemaType(document, value)).join(' or ');
-  if (Array.isArray(schema.type)) return schema.type.join(' or ');
-  if (schema.type === 'array') return `${schemaType(document, schema.items)}[]`;
-  return schema.type ?? (schema.properties ? 'object' : 'value');
-}
-function schemaMarkdown(document: Json, input: Json | undefined, heading: string): string {
+const fieldTable = (fields: Field[]) => `| Field | Type | Required | Description |\n| --- | --- | --- | --- |\n${fields.map(field => `| \`${field.path}\` | ${markdownText(field.type)} | ${field.required ? 'yes' : 'no'} | ${markdownText(field.description)} |`).join('\n')}\n`
+/** A body as its reference page lists it (schema-fields.ts): its fields, each variant's, "No fields" or its type. */
+function bodyMarkdown(document: Json, input: Json | undefined, heading: string, level = '###'): string {
   if (!input) return '';
-  const schema = resolve(document, input);
-  const properties = Object.entries<Json>(schema.properties ?? {});
-  const description = schema.description ? `\n${schema.description}\n` : '';
-  if (!properties.length) return `### ${heading}\n${description}\nType: \`${schemaType(document, schema)}\`\n`;
-  const required = new Set(schema.required ?? []);
-  const rows = properties.map(([name, property]) => `| \`${name}\` | ${schemaType(document, property)} | ${required.has(name) ? 'yes' : 'no'} | ${markdownText(resolve(document, property).description)} |`).join('\n');
-  return `### ${heading}\n${description}\n| Field | Type | Required | Description |\n| --- | --- | --- | --- |\n${rows}\n`;
+  const body = describeBody(document, input);
+  const head = `${level} ${heading}\n${body.description ? `\n${body.description}\n` : ''}\n`;
+  if (body.kind === 'fields') return `${head}${fieldTable(body.fields)}`;
+  if (body.kind === 'variants') return `${head}One of ${body.variants.length}:\n\n${body.variants.map(variant => `${level}# ${variant.title}\n\n${variant.description ? `${variant.description}\n\n` : ''}${variant.fields.length ? fieldTable(variant.fields) : 'No fields.\n'}`).join('\n')}`;
+  if (body.kind === 'empty') return `${head}No fields.\n`;
+  return `${head}Type: \`${body.type}\`\n`;
 }
 function operationEntries(document: Json) {
   const result: Array<{ path: string; method: string; pathItem: Json; operation: Json }> = [];
   for (const [path, pathItem] of Object.entries<Json>(document.paths ?? {})) for (const method of METHODS) if (pathItem[method]?.operationId) result.push({ path, method, pathItem, operation: pathItem[method] });
   return result;
 }
-function operationMarkdown(document: Json, entry: ReturnType<typeof operationEntries>[number]) {
+// A tag's reference lists many operations, many answering with the same body (the error body on nearly every one, a
+// Campaign on nine): there, a named body two or more of them use is listed once, at the top (sharedMarkdown), and each
+// operation names it. An operation's own copy lists every body in full, as its page does.
+const nameOf = (schema: Json | undefined) => typeof schema?.$ref === 'string' ? schema.$ref.split('/').at(-1) as string : null;
+function sharedBodies(entries: ReturnType<typeof operationEntries>): Map<string, Json> {
+  const uses = new Map<string, { schema: Json; count: number }>();
+  for (const { operation } of entries) for (const schema of [operation.requestBody?.content?.['application/json']?.schema, ...responseRows(operation.responses ?? {}).map(row => row.schema)]) {
+    const name = nameOf(schema);
+    if (name) uses.set(name, { schema: schema!, count: (uses.get(name)?.count ?? 0) + 1 });
+  }
+  return new Map([...uses].filter(([, use]) => use.count > 1).map(([name, use]) => [name, use.schema]));
+}
+const sharedMarkdown = (document: Json, shared: Map<string, Json>) => shared.size ? `## Bodies used by several operations\n\n${[...shared].map(([name, schema]) => bodyMarkdown(document, schema, name, '###')).join('\n')}\n---\n\n` : '';
+function operationMarkdown(document: Json, entry: ReturnType<typeof operationEntries>[number], shared = new Map<string, Json>()) {
   const { path, method, pathItem, operation } = entry;
   const params = [...(pathItem.parameters ?? []), ...(operation.parameters ?? [])].map((parameter: Json) => resolve(document, parameter));
   const parameterRows = params.length ? `### Parameters\n\n| Name | In | Type | Required | Description |\n| --- | --- | --- | --- | --- |\n${params.map((parameter: Json) => `| \`${parameter.name}\` | ${parameter.in} | ${schemaType(document, parameter.schema)} | ${parameter.required ? 'yes' : 'no'} | ${markdownText(parameter.description)} |`).join('\n')}\n` : '';
   const body = operation.requestBody?.content?.['application/json']?.schema;
-  const responseRows = Object.entries<Json>(operation.responses ?? {}).map(([status, response]) => `| \`${status}\` | ${markdownText(response.description)} | ${response.content?.['application/json']?.schema ? schemaType(document, response.content['application/json'].schema) : '—'} |`).join('\n');
+  const rows = responseRows(operation.responses ?? {});
+  const responseTable = rows.map(row => `| ${row.statuses.map(status => `\`${status}\``).join(', ')} | ${markdownText(row.description)} | ${row.schema ? markdownText(schemaType(document, row.schema)) : '—'} |`).join('\n');
+  const responseBodies = rows.flatMap(row => {
+    if (!row.schema) return [];
+    const heading = `${row.statuses.join(', ')}: ${markdownText(row.description)}`, name = nameOf(row.schema);
+    return [name && shared.has(name) ? `#### ${heading}\n\nBody: \`${name}\`, listed under Bodies used by several operations at the top.\n` : bodyMarkdown(document, row.schema, heading, '####')];
+  }).join('\n');
   const samples = Object.fromEntries((operation['x-codeSamples'] ?? []).map((item: Json) => [item.lang, item.source]));
   const permission = operation[permissionExtension]?.text;
-  return `## ${title(operation.operationId)}\n\n\`${method.toUpperCase()} ${path}\`\n\n${operation.description ?? ''}\n\nOperation ID: \`${operation.operationId}\`\n\n${permission ? `Permission: ${permission}\n\n` : ''}${parameterRows}\n${schemaMarkdown(document, body, 'Request body')}\n### TypeScript SDK\n\n\`\`\`ts\n${samples.TypeScript ?? ''}\n\`\`\`\n\n### cURL\n\n\`\`\`sh\n${samples.Shell ?? ''}\n\`\`\`\n\n### Responses\n\n| Status | Description | Schema |\n| --- | --- | --- |\n${responseRows}\n`;
+  return `## ${title(operation.operationId)}\n\n\`${method.toUpperCase()} ${path}\`\n\n${operation.description ?? ''}\n\nOperation ID: \`${operation.operationId}\`\n\n${permission ? `Permission: ${permission}\n\n` : ''}${parameterRows}\n${nameOf(body) && shared.has(nameOf(body)!) ? `### Request body\n\nBody: \`${nameOf(body)}\`, listed under Bodies used by several operations at the top.\n` : bodyMarkdown(document, body, 'Request body')}\n### TypeScript SDK\n\n\`\`\`ts\n${samples.TypeScript ?? ''}\n\`\`\`\n\n### cURL\n\n\`\`\`sh\n${samples.Shell ?? ''}\n\`\`\`\n\n### Responses\n\n| Status | Description | Schema |\n| --- | --- | --- |\n${responseTable}\n${responseBodies ? `\n${responseBodies}` : ''}`;
 }
 
 // Tag groups in the document's tag order, operations in path order within each.
@@ -276,7 +290,8 @@ export function createMarkdownDocs(document: Json, operationId?: string): string
 export function createTagMarkdownDocs(document: Json, slug: string): string | null {
   const group = grouped(document, operationEntries(document)).find(({ tag }) => tagSlug(tag) === slug);
   if (!group) return null;
-  return `${intro(document)}[API index](/docs.md)\n\n# ${group.tag}\n\n${group.entries.map(entry => operationMarkdown(document, entry)).join('\n---\n\n')}`;
+  const shared = sharedBodies(group.entries);
+  return `${intro(document)}[API index](/docs.md)\n\n# ${group.tag}\n\n${sharedMarkdown(document, shared)}${group.entries.map(entry => operationMarkdown(document, entry, shared)).join('\n---\n\n')}`;
 }
 
 export function createLlmsText(document: Json): string {

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { createOpenApiApp } from '../src/app.js';
 import { createLlmsText, createMarkdownDocs, createOpenApiDocument, createTagMarkdownDocs, tagSlug } from '../src/openapi-docs.js';
+import { NO_FIELD_BODIES } from '../src/schema-fields.js';
 
 // Agents load these files whole, so each must fit comfortably in a model's context. The reference is split by tag
 // (/docs/tags/<slug>.md) under the /docs.md index; a tag that outgrows its cap should be split into smaller tags.
@@ -37,7 +38,12 @@ for (const operation of operations) {
   assert.ok(focused?.includes(`Operation ID: \`${id}\``), `${id} focused Markdown is missing its identity.`);
   assert.ok(focused?.includes('### TypeScript SDK') && focused.includes('### cURL'), `${id} focused Markdown is missing code examples.`);
   assert.ok(!focused?.includes('[object Object]'), `${id} focused Markdown contains an unserialized value.`);
+  // Every body lists its fields, as the operation's page does (schema-fields.ts): none by name or type only, and "No fields"
+  // only where the request body has none (NO_FIELD_BODIES).
+  assert.ok(!/^Type: `/m.test(focused!), `${id} focused Markdown shows a body by its type only: list its fields (api/src/schema-fields.ts).`);
+  assert.ok(!/^No fields\.$/m.test(focused!) || NO_FIELD_BODIES.has(id), `${id} focused Markdown says a body has no fields.`);
 }
+for (const field of ['createSender', 'requestFrom', 'confirmation', 'type: forward']) assert.ok(createMarkdownDocs(document, 'createEndpoint')!.includes(field), `createEndpoint's Markdown doesn't name ${field}.`);
 assert.equal(createMarkdownDocs(document, 'missingOperation'), null);
 assert.equal(createTagMarkdownDocs(document, 'missing-tag'), null);
 console.log(`Verified llms.txt (${bytes(llms)} B), /docs.md (${bytes(index)} B), ${tags.length} tag references (largest ${largest} B) and ${operations.length} focused Markdown operation pages.`);

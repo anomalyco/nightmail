@@ -2,6 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runnerImport, type Plugin } from 'vite'
 import { productName, publicOrigin } from '../api/src/brand.ts'
+import { describeBody, NO_FIELD_BODIES, responseRows } from '../api/src/schema-fields.ts'
 import { isPublicPage, RENAMED_OPERATIONS } from '../api/src/site-index.ts'
 import { legalMarkdown, renderLegal } from './legal-markdown.ts'
 import { linkCard, maxLine, shareTitle, withCard, type CardWords } from './link-card.ts'
@@ -56,6 +57,22 @@ const reactText = (text: string) => text.replace(/&/g, '&amp;').replace(/</g, '&
 /** An operation's parameter names, where its definition lists them inline (a $ref'd one is checked by the page itself). */
 const operationParameters = (operation: { operation: Record<string, any>; pathItem: Record<string, any> }) =>
   [...(Array.isArray(operation.pathItem.parameters) ? operation.pathItem.parameters : []), ...(Array.isArray(operation.operation.parameters) ? operation.operation.parameters : [])].flatMap(parameter => typeof parameter?.name === 'string' ? [parameter.name as string] : [])
+
+/** An operation's bodies as its page lists them (api/src/schema-fields.ts, which its Markdown copy lists the same way):
+ *  every field and variant the page must name, and any body it would show by name only, with no fields, which stops the
+ *  build (but for the request bodies that have none, NO_FIELD_BODIES). */
+function bodies(document: Record<string, any>, operation: { id: string; operation: Record<string, any> }) {
+  const schemas: [string, Record<string, any> | undefined][] = [['request body', operation.operation.requestBody?.content?.['application/json']?.schema], ...responseRows(operation.operation.responses ?? {}).map(row => [`${row.statuses.join(', ')} response`, row.schema] as [string, Record<string, any> | undefined])]
+  const names: string[] = [], nameOnly: string[] = []
+  for (const [where, schema] of schemas) {
+    if (!schema) continue
+    const body = describeBody(document, schema)
+    if (body.kind === 'fields') names.push(...body.fields.map(field => field.path))
+    else if (body.kind === 'variants') names.push(...body.variants.flatMap(variant => [variant.title, ...variant.fields.map(field => field.path)]))
+    else if (!(body.kind === 'empty' && where === 'request body' && NO_FIELD_BODIES.has(operation.id))) nameOnly.push(`its ${where} (${body.kind === 'value' ? body.type : 'an object with no fields'})`)
+  }
+  return { names, nameOnly }
+}
 
 /** A legal document's date as its front matter writes it ("26 November 2026"), as a sitemap's lastmod (2026-11-26). */
 function isoDay(day: string): string {
@@ -171,6 +188,12 @@ export function sitePages({ address }: { address: string | null }): Plugin {
           const said = (operation ? [operation.summary, operation.path, operation.description, ...operationParameters(operation)] : guide ? [guide.title, guide.summary] : [document.info.description ?? '']).filter(Boolean).map(text => reactText(text))
           const missing = said.find(text => !drawn.html.includes(text))
           if (missing !== undefined) return this.error(`${page.path} is painted without “${missing}”, which its own copy says.`)
+          if (operation) {
+            const { names, nameOnly } = bodies(document, operation)
+            if (nameOnly.length) return this.error(`${page.path} shows ${nameOnly.join(' and ')} by name only, with none of its fields: list them (api/src/schema-fields.ts), or add the operation to NO_FIELD_BODIES if the body truly has none.`)
+            const unnamed = names.find(name => !drawn.html.includes(`<code>${reactText(name)}</code>`))
+            if (unnamed !== undefined) return this.error(`${page.path} is painted without its body's “${unnamed}”, which its Markdown copy lists.`)
+          }
           // The overview answers only its own sections' addresses (#agent-prompt, #sending-limits): any other hash is a page the
           // app moves elsewhere (/docs#guide-rituals, /docs#sendEmail: index.tsx legacyPath), so theme.js lets the app draw it.
           html = paint(html, { ...docsPaint, body: drawn.html, keep: '.boot-loader, .docs-page', boot: `/${boot}`, files, sheet, members: true, origin: address!, anchors: page.path === '/docs' ? drawn.anchors : undefined })

@@ -313,6 +313,10 @@ const pages = ids => [
   // phone's form where the window is one (a picker in place of the client tabs); the overview answers its own sections, and
   // an old address (/docs#guide-rituals) is the app's from the start, which moves it.
   ['Docs · signed out MCP guide', '/docs/mcp', { user: null }],
+  // A body in variants (each folded under its title) and one merged from a shared schema and its own fields
+  // (api/src/schema-fields.ts), each listed field by field.
+  ['Docs · signed out operation with variants', '/docs/api/createEndpoint', { user: null }],
+  ['Docs · signed out operation with a merged body', '/docs/api/getInboundMessage', { user: null }],
   ['Docs · signed out keys guide', '/docs/keys', { user: null }],
   ['Docs · signed out rules guide', '/docs/rules', { user: null }],
   ['Docs · signed out at a section', '/docs#sending-limits', { user: null }],
@@ -718,6 +722,8 @@ const phonePages = new Set([
   'Docs · signed out operation far down',
   'Docs · signed out operation, picked on a phone',
   'Docs · signed out MCP guide',
+  'Docs · signed out operation with variants',
+  'Docs · signed out operation with a merged body',
   'Docs · signed out at a section',
   'Docs · signed out MCP guide, a client picked on a phone',
   'Docs · operation',

@@ -13,6 +13,7 @@ import { docsTitle, operationDescription, operationEntries, tagTitle } from './m
 import './docs.css'
 import { productName, productSlug, publicOrigin, sdkPackage } from '../../../../api/src/brand'
 import { useShellTakeover } from '../../lib/shell-takeover'
+import { describeBody, resolveSchema, responseRows, schemaType, type Field } from '../../../../api/src/schema-fields'
 
 type Schema = Record<string, any>
 export type Operation = { id: string; method: string; path: string; tag: string; summary: string; description: string; permission?: string; parameters: Schema[]; requestBody?: Schema; responses: Record<string, Schema>; samples: {lang: string; label: string; source: string}[] }
@@ -23,19 +24,6 @@ const permissionExtension = `x-${productSlug}-permission`
 // Examples are written for the hosted origin; this instance's own goes in their place, so a copied command works here.
 const here = (code: string, origin: string) => code.replaceAll(publicOrigin, origin)
 
-function resolve(document: Document, value?: Schema): Schema {
-  if (!value?.$ref) return value ?? {}
-  const [, , section, name] = value.$ref.split('/')
-  return (document.components as Schema | undefined)?.[section]?.[name] ?? {}
-}
-function typeLabel(document: Document, input: Schema): string {
-  const schema = resolve(document, input)
-  if (schema.oneOf || schema.anyOf) return (schema.oneOf ?? schema.anyOf).map((value: Schema) => typeLabel(document, value)).join(' or ')
-  if (Array.isArray(schema.type)) return schema.type.join(' or ')
-  if (schema.type === 'array') return `${typeLabel(document, schema.items)}[]`
-  return schema.type ?? (schema.properties ? 'object' : 'value')
-}
-function schemaName(input: Schema): string | null { return typeof input?.$ref === 'string' ? input.$ref.split('/').at(-1) ?? null : null }
 export function operations(document?: Document): Operation[] {
   if (!document) return []
   const result: Operation[] = operationEntries(document).map(({ operation, pathItem, ...entry }) => ({ ...entry, permission: operation[permissionExtension]?.text, parameters: [...(Array.isArray(pathItem.parameters) ? pathItem.parameters : []), ...(Array.isArray(operation.parameters) ? operation.parameters : [])], requestBody: operation.requestBody, responses: operation.responses ?? {}, samples: operation['x-codeSamples'] ?? [] }))
@@ -66,28 +54,29 @@ function Quickstart({ steps }: { steps: QuickstartStep[] }) {
   </section>
 }
 
+// A body as schema-fields.ts describes it, which the API's Markdown copy lists the same way: its fields; each variant's,
+// folded under its title with its fields named, so a long list reads as a short one; "No fields"; or its type.
+function FieldList({ fields }: { fields: Field[] }) {
+  return <div className="docs-field-list">{fields.map(({ path, type, required, description }) => <div className="docs-field" key={path}>
+    <div><code>{path}</code>{required && <span className="docs-required">required</span>}<span className="docs-type">{type}</span></div>
+    {description && <p>{description}</p>}
+  </div>)}</div>
+}
 function SchemaDefinition({ document, input }: {document: Document; input: Schema}) {
-  const name = schemaName(input)
-  const schema = resolve(document, input)
-  const required = new Set<string>(schema.required ?? [])
-  const properties = Object.entries<Schema>(schema.properties ?? {})
-  if (!properties.length) return <div className="docs-schema-inline"><code>{name ?? typeLabel(document, schema)}</code>{schema.description && <p>{schema.description}</p>}</div>
-  // One level of nesting, named by its path (template.name, headers[].value), so an object field's shape is documented too.
-  const fields = properties.flatMap(([property, definition]) => {
-    const field = { path: property, required: required.has(property), definition }
-    const value = resolve(document, definition), items = value.type === 'array' ? resolve(document, value.items) : null
-    const nested = value.properties ? { prefix: `${property}.`, schema: value } : items?.properties ? { prefix: `${property}[].`, schema: items } : null
-    if (!nested) return [field]
-    const inner = new Set<string>(nested.schema.required ?? [])
-    return [field, ...Object.entries<Schema>(nested.schema.properties).map(([child, definition]) => ({ path: `${nested.prefix}${child}`, required: inner.has(child), definition }))]
-  })
+  const body = describeBody(document, input)
+  if (body.kind === 'value') return <div className="docs-schema-inline"><code>{body.name ?? body.type}</code>{body.description && <p>{body.description}</p>}</div>
+  if (body.kind === 'empty') return <div className="docs-schema-inline docs-schema-empty"><span>No fields.</span>{body.description && <p>{body.description}</p>}</div>
   return <div className="docs-schema">
-    {name && <code className="docs-schema-name">{name}</code>}
-    {schema.description && <p className="muted">{schema.description}</p>}
-    <div className="docs-field-list">{fields.map(({ path, required, definition }) => <div className="docs-field" key={path}>
-      <div><code>{path}</code>{required && <span className="docs-required">required</span>}<span className="docs-type">{typeLabel(document, definition)}</span></div>
-      {resolve(document, definition).description && <p>{resolve(document, definition).description}</p>}
-    </div>)}</div>
+    {body.name && <code className="docs-schema-name">{body.name}</code>}
+    {body.description && <p className="muted">{body.description}</p>}
+    {body.kind === 'fields' ? <FieldList fields={body.fields} /> : <>
+      <p className="muted">One of {body.variants.length}:</p>
+      <div className="docs-variants">{body.variants.map(variant => <details key={variant.title}>
+        <summary><code>{variant.title}</code><span>{variant.fields.filter(field => !field.path.includes('.')).map(field => field.path).join(', ')}</span></summary>
+        {variant.description && <p>{variant.description}</p>}
+        {variant.fields.length ? <FieldList fields={variant.fields} /> : <p>No fields.</p>}
+      </details>)}</div>
+    </>}
   </div>
 }
 
@@ -98,17 +87,9 @@ function OperationPage({ document, operation: raw }: {document: Document; operat
   const [language, setLanguage] = useState(operation.samples[0]?.label ?? 'TypeScript SDK')
   const sample = operation.samples.find(item => item.label === language) ?? operation.samples[0]
   const body = operation.requestBody?.content?.['application/json']?.schema
-  const parameters = operation.parameters.map(parameter => resolve(document, parameter))
+  const parameters = operation.parameters.map(parameter => resolveSchema(document, parameter))
   // Statuses with the same description and body (the ten "Request failed" rows) are one row.
-  const responses = useMemo(() => {
-    const rows: { statuses: string[]; response: Schema; schema?: Schema }[] = []
-    for (const [status, response] of Object.entries(operation.responses)) {
-      const schema = response.content?.['application/json']?.schema
-      const same = rows.find(row => row.response.description === response.description && JSON.stringify(row.schema) === JSON.stringify(schema))
-      if (same) same.statuses.push(status); else rows.push({ statuses: [status], response, schema })
-    }
-    return rows
-  }, [operation.responses])
+  const responses = useMemo(() => responseRows(operation.responses), [operation.responses])
   return <article className="docs-operation">
     <header className="docs-operation-header">
       <h1>{operation.summary}</h1>
@@ -122,11 +103,11 @@ function OperationPage({ document, operation: raw }: {document: Document; operat
       {/* Every language shares one cell, so switching tabs never changes the section's height. */}
       <div className="docs-example-panels">{operation.samples.map(item => <pre key={item.label} className="docs-code" tabIndex={0} aria-label={`${item.label} example`} data-active={item.label === sample.label || undefined} inert={item.label !== sample.label}><code>{item.source}</code></pre>)}</div>
     </section>}
-    {parameters.length > 0 && <section className="docs-section"><h2>Parameters</h2><div className="docs-field-list">{parameters.map(parameter => <div className="docs-field" key={`${parameter.in}:${parameter.name}`}><div><code>{parameter.name}</code>{parameter.required && <span className="docs-required">required</span>}<span className="docs-type">{parameter.in} · {typeLabel(document, parameter.schema)}</span></div>{parameter.description && <p>{parameter.description}</p>}</div>)}</div></section>}
+    {parameters.length > 0 && <section className="docs-section"><h2>Parameters</h2><div className="docs-field-list">{parameters.map(parameter => <div className="docs-field" key={`${parameter.in}:${parameter.name}`}><div><code>{parameter.name}</code>{parameter.required && <span className="docs-required">required</span>}<span className="docs-type">{parameter.in} · {schemaType(document, parameter.schema)}</span></div>{parameter.description && <p>{parameter.description}</p>}</div>)}</div></section>}
     {body && <section className="docs-section"><h2>Request body</h2><SchemaDefinition document={document} input={body} /></section>}
-    <section className="docs-section"><h2>Responses</h2><div className="docs-responses">{responses.map(({ statuses, response, schema }) => schema
-      ? <details key={statuses[0]} open={statuses[0]!.startsWith('2')}><summary><code>{statuses.join(', ')}</code><span>{response.description}</span></summary><SchemaDefinition document={document} input={schema} /></details>
-      : <div key={statuses[0]} className="docs-response"><code>{statuses.join(', ')}</code><span>{response.description}</span></div>)}</div></section>
+    <section className="docs-section"><h2>Responses</h2><div className="docs-responses">{responses.map(({ statuses, description, schema }) => schema
+      ? <details key={statuses[0]} open={statuses[0]!.startsWith('2')}><summary><code>{statuses.join(', ')}</code><span>{description}</span></summary><SchemaDefinition document={document} input={schema} /></details>
+      : <div key={statuses[0]} className="docs-response"><code>{statuses.join(', ')}</code><span>{description}</span></div>)}</div></section>
   </article>
 }
 
