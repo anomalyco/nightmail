@@ -217,8 +217,7 @@ function WaitlistPage({ busy, error, waitUntil, onSwitch }: { busy: boolean; err
     </SignInLinkViews>
     {error ? <Alert tone="danger">{errorText(error)}</Alert> : null}
     <nav className="signed-out__links" aria-label={productName}>
-      {/* Held, it names what waits, about as wide as its label, so the row stays even and still while it counts. */}
-      <SignInButton variant="ghost" className="signed-out__quiet" loading={busy} waitUntil={waitUntil} waitLabel={time => `Another account in ${time}`} onClick={onSwitch} data-analytics="sign-in/waitlist-switch">Use a different account</SignInButton>
+      <SignInButton variant="ghost" className="signed-out__quiet" loading={busy} waitUntil={waitUntil} onClick={onSwitch} data-analytics="sign-in/waitlist-switch">Use a different account</SignInButton>
       <Link to="/">Homepage</Link><Link to="/docs">Docs</Link>
     </nav>
   </SignedOutPage>
@@ -228,14 +227,14 @@ function WaitlistPage({ busy, error, waitUntil, onSwitch }: { busy: boolean; err
 // moves nothing. Busy or held it is unavailable but never disabled: a disabled button drops keyboard focus, and the
 // screen reader's place, to the page. Presses (Enter and Space too) are ignored instead, and its name stays the action's,
 // so the countdown isn't read out every second; the provider's status line said why once.
-function SignInButton({ waitUntil, waitLabel = time => `Try again in ${time}`, loading = false, children, onClick, ...props }: Omit<ComponentProps<typeof Button>, 'children' | 'disabled'> & { waitUntil: Wait | null; waitLabel?: (time: string) => string; children: string }) {
+function SignInButton({ waitUntil, loading = false, children, onClick, ...props }: Omit<ComponentProps<typeof Button>, 'children' | 'disabled'> & { waitUntil: Wait | null; children: string }) {
   const left = useSecondsLeft(waitUntil), shown = left ? 'wait' : loading ? 'busy' : 'idle', unavailable = shown !== 'idle'
   return <Button {...props} aria-disabled={unavailable || undefined} aria-busy={loading || undefined} aria-label={left ? children : undefined} onClick={event => { if (!unavailable) onClick?.(event) }}><span className="signed-out__countdown">
     <span data-shown={shown === 'idle' || undefined} aria-hidden={shown !== 'idle' || undefined}>{children}</span>
     <span className="signed-out__busy" data-shown={shown === 'busy' || undefined} aria-hidden={shown !== 'busy' || undefined}><Icon icon={LoaderCircle} size="sm" className="ui-spinner" />{children}</span>
-    <span data-shown={shown === 'wait' || undefined} aria-hidden>{waitLabel(countdown(left))}</span>
+    <span data-shown={shown === 'wait' || undefined} aria-hidden>Try again in {countdown(left)}</span>
     {/* Never shown: the wait at its widest (two-digit minutes), so the box doesn't grow as the countdown starts. */}
-    <span aria-hidden>{waitLabel('00:00')}</span>
+    <span aria-hidden>Try again in 00:00</span>
   </span></Button>
 }
 // A sign-in link to an address with a place (api/src/signups.ts sendSigninLink): the refused sign-in's own address when a

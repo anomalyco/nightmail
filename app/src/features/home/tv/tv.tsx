@@ -5,7 +5,6 @@ import { useCopy } from '../../../components/ui'
 import { SignInConsent } from '../../../components/LegalLinks'
 import { NightmailWordmark } from '../../../components/NightmailLogo'
 import type { HomeProps, HomeStart } from '..'
-import { useSignupsFull } from '../signups-open'
 import { StartButton } from '../start'
 import { MONTHS, OPENING, PER_THOUSAND, VOLUMES, count, usd, type Volume } from './data'
 import { Heading, Words } from './words'
@@ -658,9 +657,9 @@ function takeOver(set: HTMLElement | null) {
 /** The homepage: the television, the price list it plays, and the way in. */
 export function TvHome({ start, notice }: HomeProps) {
   const visitor = !start.signedIn
-  // No place open (signups-open.ts): the button says Join the waitlist, and a line under it says why, unless a sign-in
-  // has something of its own to say there. The line is in the page from the start (empty), so its words move nothing.
-  const full = useSignupsFull(visitor), said = notice || <p role="status">{full ? 'Full for now. Join the waitlist and we’ll email you when a place opens.' : ''}</p>
+  // Under the button: what a sign-in has to say, in a line that is in the page from the start (empty), so its words move
+  // nothing. With no place open the button says Join the waitlist itself.
+  const said = notice || <p role="status" />
   const [flat, setFlat] = useState(false), [on, setOn] = useState(true), [channel, setChannel] = useState(0), [bad, setBad] = useState(0), [muted, setMuted] = useState(false)
   const box = useRef<HTMLDivElement>(null)
   const deck = useRef<Deck>({ channel: 0, number: 1, subtitles: false, power: true, bad: 0, thumpAt: -1e9, switchAt: -1e9, note: '', noteAt: -1e9, air: null, wake: () => {}, hear: () => {}, glow: [.38, .49, .75], level: 0 }).current

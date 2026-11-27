@@ -321,7 +321,7 @@ a.ui-tab { text-decoration: none; }
    under it saying sign-ups are full keeps its place the same way. */
 .srt-cta-labels { display: grid; place-items: center; }
 .srt-cta-labels > .srt-cta-label { grid-area: 1 / 1; }
-.srt-cta-labels > [data-off], .srt-wait-line[data-off] { visibility: hidden; }
+.srt-cta-labels > [data-off] { visibility: hidden; }
 .srt-cta-retry { font-variant-numeric: tabular-nums; }
 .ui-toasts { position: fixed; bottom: var(--space-24); right: var(--space-24); z-index: 100; display: flex; flex-direction: column; gap: var(--space-8); width: min(420px, calc(100vw - 48px)); pointer-events: none; }
 .ui-toasts .ui-alert { pointer-events: auto; background: var(--color-overlay-surface); box-shadow: var(--shadow-popover); animation: toast-in 220ms var(--ease-out-strong); }
