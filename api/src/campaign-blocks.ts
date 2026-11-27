@@ -152,12 +152,23 @@ block HTML, including edits made in the dashboard composer. Send the complete re
 live. Preview campaigns through previewCampaign and templates through previewTemplate; neither
 workflow requires browser automation.`;
 
-export class BlockContentError extends Error {}
+/** Which rule refused the content. A request log may carry it with `element`; both come from fixed lists, never the content. */
+export type BlockContentRule = 'document' | 'complexity' | 'loose_text' | 'comment' | 'markup' | 'element' | 'element_in_text' | 'element_in_list_item' | 'element_in_quote'
+  | 'attribute' | 'attribute_value' | 'span_style' | 'link_href' | 'link_in_button' | 'link_top_level' | 'button_href' | 'image_src' | 'image_content'
+  | 'list_child' | 'list_depth' | 'code_block' | 'div' | 'columns_nested' | 'columns_count' | 'section_nested' | 'section_in_column' | 'placeholder';
+// Elements a refusal may name in a log: HTML's own, anything else is 'other'.
+const KNOWN_ELEMENTS = new Set(['a', 'b', 'blockquote', 'body', 'br', 'button', 'center', 'code', 'dd', 'del', 'div', 'dl', 'dt', 'em', 'figcaption', 'figure', 'font', 'form', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'head', 'hr', 'html', 'i', 'iframe', 'img', 'input', 'li', 'link', 'meta', 'ol', 'p', 'picture', 'pre', 's', 'script', 'section', 'small', 'source', 'span', 'strike', 'strong', 'style', 'sub', 'sup', 'svg', 'table', 'tbody', 'td', 'tfoot', 'th', 'thead', 'tr', 'u', 'ul', 'video']);
+export class BlockContentError extends Error {
+  readonly element?: string;
+  constructor(readonly rule: BlockContentRule, message: string, element?: Element) { super(message); if (element) this.element = KNOWN_ELEMENTS.has(element.tagName) ? element.tagName : 'other'; }
+  /** The refusal as a request log may carry it: the rule, and the element it is about. */
+  get logReason() { return this.element ? `${this.rule}:${this.element}` : this.rule; }
+}
 
-function fail(message: string): never { throw new BlockContentError(`${message} Email content is block HTML; call getContentGuide in MCP or GET /v1/campaign-content-guide for the vocabulary.`); }
+function fail(rule: BlockContentRule, message: string, element?: Element): never { throw new BlockContentError(rule, `${message} Email content is block HTML; call getContentGuide in MCP or GET /v1/campaign-content-guide for the vocabulary.`, element); }
 function blockFragment(html: string) {
   const fragment = boundedHtmlFragment(html);
-  if (!fragment) fail('Content exceeds the HTML complexity limit. Simplify its nesting, elements or attributes.');
+  if (!fragment) fail('complexity', 'Content exceeds the HTML complexity limit. Simplify its nesting, elements or attributes.');
   return fragment;
 }
 const describe = (element: Element) => `<${element.tagName}>`;
@@ -169,8 +180,8 @@ const attribute = (element: Element, name: string) => element.attrs.find(a => a.
 function allowAttributes(element: Element, allowed: Record<string, (value: string) => boolean>) {
   for (const { name, value } of attrs(element)) {
     const check = allowed[name];
-    if (!check) fail(`Unsupported attribute ${name} on ${describe(element)}.`);
-    if (!check(value)) fail(`Invalid ${name} value on ${describe(element)}.`);
+    if (!check) fail('attribute', `Unsupported attribute ${name} on ${describe(element)}.`, element);
+    if (!check(value)) fail('attribute_value', `Invalid ${name} value on ${describe(element)}.`, element);
   }
 }
 const alignment = (value: string) => ALIGNMENTS.has(value);
@@ -181,16 +192,16 @@ const customStyle = (element: Element) => sanitizeBlockStyle(attribute(element, 
 
 function checkInline(parent: Element, node: Node, inButton: boolean) {
   if (isText(node)) return;
-  if (!isElement(node) || node.namespaceURI !== 'http://www.w3.org/1999/xhtml') fail(`Unsupported content inside ${describe(parent)}.`);
+  if (!isElement(node) || node.namespaceURI !== 'http://www.w3.org/1999/xhtml') fail('markup', `Unsupported content inside ${describe(parent)}.`, parent);
   const tag = node.tagName;
-  if (!INLINE_TAGS.has(tag)) fail(`Unsupported ${describe(node)} inside ${describe(parent)}.`);
+  if (!INLINE_TAGS.has(tag)) fail(parent.tagName === 'li' ? 'element_in_list_item' : parent.tagName === 'blockquote' ? 'element_in_quote' : 'element_in_text', `Unsupported ${describe(node)} inside ${describe(parent)}.`, node);
   if (tag === 'a') {
-    if (inButton) fail('Buttons cannot contain links.');
+    if (inButton) fail('link_in_button', 'Buttons cannot contain links.');
     allowAttributes(node, { href, target: value => value === '_blank' || value === '_self', rel: anything, style: safeStyle });
-    if (!attribute(node, 'href')) fail('Links require an href.');
+    if (!attribute(node, 'href')) fail('link_href', 'Links require an href.');
   } else if (tag === 'span') {
     allowAttributes(node, { style: value => /^\s*text-transform\s*:\s*uppercase\s*;?\s*$/i.test(value) || safeStyle(value) });
-    if (!attribute(node, 'style')) fail('<span> is only supported with style="text-transform:uppercase".');
+    if (!attribute(node, 'style')) fail('span_style', '<span> is only supported with style="text-transform:uppercase".');
   } else allowAttributes(node, {});
   for (const child of node.childNodes) checkInline(node, child, inButton || tag === 'a');
 }
@@ -198,26 +209,26 @@ function checkInlineChildren(element: Element, inButton = false) { for (const ch
 
 function checkImage(element: Element) {
   allowAttributes(element, { src: value => IMAGE_SRC.test(value.trim()), alt: anything, width: value => DIMENSION.test(value.trim()), height: value => DIMENSION.test(value.trim()), align: alignment, style: safeStyle });
-  if (!attribute(element, 'src')) fail('Images require a src.');
-  if (element.childNodes.some(child => !(isText(child) && !child.value.trim()))) fail('Images cannot contain content.');
+  if (!attribute(element, 'src')) fail('image_src', 'Images require a src.');
+  if (element.childNodes.some(child => !(isText(child) && !child.value.trim()))) fail('image_content', 'Images cannot contain content.');
 }
 function checkList(element: Element, depth: number) {
   allowAttributes(element, { ...(element.tagName === 'ol' ? { start: (value: string) => /^[0-9]{1,6}$/.test(value) } : {}), style: safeStyle });
   for (const child of element.childNodes) {
     if (isText(child) && !child.value.trim()) continue;
-    if (!isElement(child) || child.tagName !== 'li') fail(`${describe(element)} may only contain <li> items.`);
+    if (!isElement(child) || child.tagName !== 'li') fail('list_child', `${describe(element)} may only contain <li> items.`, isElement(child) ? child : undefined);
     allowAttributes(child, { style: safeStyle });
     for (const item of child.childNodes) {
-      if (isElement(item) && (item.tagName === 'ul' || item.tagName === 'ol')) { if (depth >= 3) fail('Lists nest at most three levels.'); checkList(item, depth + 1); }
+      if (isElement(item) && (item.tagName === 'ul' || item.tagName === 'ol')) { if (depth >= 3) fail('list_depth', 'Lists nest at most three levels.'); checkList(item, depth + 1); }
       else if (isElement(item) && item.tagName === 'p') { allowAttributes(item, { align: alignment, style: safeStyle }); checkInlineChildren(item); }
       else checkInline(child, item, false);
     }
   }
 }
 function checkBlock(node: Node, inColumn: boolean) {
-  if (isText(node)) { if (node.value.trim()) fail('Text must be inside a block such as <p>.'); return; }
-  if (node.nodeName === '#comment') fail('Comments are not supported.');
-  if (!isElement(node) || node.namespaceURI !== 'http://www.w3.org/1999/xhtml') fail('Unsupported markup in campaign content.');
+  if (isText(node)) { if (node.value.trim()) fail('loose_text', 'Text must be inside a block such as <p>.'); return; }
+  if (node.nodeName === '#comment') fail('comment', 'Comments are not supported.');
+  if (!isElement(node) || node.namespaceURI !== 'http://www.w3.org/1999/xhtml') fail('markup', 'Unsupported markup in campaign content.');
   const tag = node.tagName;
   if (HEADINGS.has(tag) || tag === 'p') { allowAttributes(node, { align: alignment, style: safeStyle }); checkInlineChildren(node); return; }
   if (tag === 'ul' || tag === 'ol') { checkList(node, 1); return; }
@@ -233,7 +244,7 @@ function checkBlock(node: Node, inColumn: boolean) {
     allowAttributes(node, { style: safeStyle });
     const children = node.childNodes.filter(child => !(isText(child) && !child.value.trim()));
     const code = children.length === 1 && isElement(children[0]!) && children[0]!.tagName === 'code' ? children[0] as Element : undefined;
-    if (!code || code.childNodes.some(child => !isText(child))) fail('Code blocks are <pre><code> with text only.');
+    if (!code || code.childNodes.some(child => !isText(child))) fail('code_block', 'Code blocks are <pre><code> with text only.');
     allowAttributes(code, {});
     return;
   }
@@ -243,32 +254,32 @@ function checkBlock(node: Node, inColumn: boolean) {
     const button = node.attrs.some(a => a.name === 'data-button');
     if (button) {
       allowAttributes(node, { 'data-button': anything, href, align: alignment, style: safeStyle });
-      if (!attribute(node, 'href')) fail('Buttons require an href.');
+      if (!attribute(node, 'href')) fail('button_href', 'Buttons require an href.');
       checkInlineChildren(node, true);
       return;
     }
     allowAttributes(node, { href, target: value => value === '_blank' || value === '_self', rel: anything, style: safeStyle });
     const children = node.childNodes.filter(child => !(isText(child) && !child.value.trim()));
     if (children.length === 1 && isElement(children[0]!) && children[0]!.tagName === 'img') { checkImage(children[0] as Element); return; }
-    fail('A top-level <a> must be a button (<a data-button href>) or wrap a single <img>.');
+    fail('link_top_level', 'A top-level <a> must be a button (<a data-button href>) or wrap a single <img>.');
   }
   if (tag === 'div') {
     const count = attribute(node, 'data-columns');
-    if (count === undefined) fail('<div> is only supported as data-columns / data-column layout.');
-    if (inColumn) fail('Columns cannot be nested.');
+    if (count === undefined) fail('div', '<div> is only supported as data-columns / data-column layout.');
+    if (inColumn) fail('columns_nested', 'Columns cannot be nested.');
     allowAttributes(node, { 'data-columns': value => ['2', '3', '4'].includes(value) });
     const columns = node.childNodes.filter(child => !(isText(child) && !child.value.trim()));
-    if (columns.length !== Number(count) || columns.some(column => !isElement(column) || column.tagName !== 'div' || attribute(column, 'data-column') === undefined)) fail(`data-columns="${count}" requires exactly ${count} <div data-column> children.`);
+    if (columns.length !== Number(count) || columns.some(column => !isElement(column) || column.tagName !== 'div' || attribute(column, 'data-column') === undefined)) fail('columns_count', `data-columns="${count}" requires exactly ${count} <div data-column> children.`);
     for (const column of columns as Element[]) { allowAttributes(column, { 'data-column': anything, style: safeStyle }); for (const child of column.childNodes) checkBlock(child, true); }
     return;
   }
   if (tag === 'section') {
-    if (inColumn) fail('Styled sections cannot be nested inside columns.');
+    if (inColumn) fail('section_in_column', 'Styled sections cannot be nested inside columns.');
     allowAttributes(node, { style: safeStyle });
-    for (const child of node.childNodes) { if (isElement(child) && child.tagName === 'section') fail('Styled sections cannot be nested.'); checkBlock(child, false); }
+    for (const child of node.childNodes) { if (isElement(child) && child.tagName === 'section') fail('section_nested', 'Styled sections cannot be nested.'); checkBlock(child, false); }
     return;
   }
-  fail(`Unsupported ${describe(node)} in campaign content.`);
+  fail('element', `Unsupported ${describe(node)} in campaign content.`, node);
 }
 
 /**
@@ -276,7 +287,7 @@ function checkBlock(node: Node, inColumn: boolean) {
  * Drafts may keep href="#" placeholders on links and buttons; `complete` rejects them.
  */
 export function validateBlockHtml(html: string, options: { complete?: boolean } = {}): void {
-  if (/<\s*(?:!doctype|\/?(?:html|head|body)\b)/i.test(html)) fail('Send content blocks only, without <!doctype>, <html>, <head> or <body> wrappers.');
+  if (/<\s*(?:!doctype|\/?(?:html|head|body)\b)/i.test(html)) fail('document', 'Send content blocks only, without <!doctype>, <html>, <head> or <body> wrappers.');
   const fragment = blockFragment(html);
   for (const node of fragment.childNodes) checkBlock(node, false);
   if (options.complete) {
@@ -284,7 +295,7 @@ export function validateBlockHtml(html: string, options: { complete?: boolean } 
     while (pending.length) {
       const node = pending.pop()!;
       if (!isElement(node)) continue;
-      if (node.tagName === 'a' && attribute(node, 'href')?.trim() === '#') fail('A link or button still has the # placeholder; set its URL.');
+      if (node.tagName === 'a' && attribute(node, 'href')?.trim() === '#') fail('placeholder', 'A link or button still has the # placeholder; set its URL.');
       pending.push(...node.childNodes);
     }
   }

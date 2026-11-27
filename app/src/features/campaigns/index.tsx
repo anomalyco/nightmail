@@ -32,14 +32,14 @@ export { TemplatesPage, TemplateEditorPage } from './templates'
 import { TemplatePickerDialog } from './templates'
 import './campaigns.css'
 import type { EmailComposerRef } from './EmailComposer'
-import { draftAttachments } from './composer-content'
+import { contentRefused, draftAttachments } from './composer-content'
 import { composer as composerChunk, EmailComposer } from './composer-chunk'
 import { ChunkFallback } from '../../lib/preloadable'
 import { CampaignSenderInput, SenderLines } from './CampaignSenderInput'
 import { AttachmentList, CampaignAttachments, type CampaignAttachmentsRef } from './CampaignAttachments'
 import { campaignVersion, useCampaignSync } from './useCampaignSync'
 import { ComposerSkeleton } from './skeletons'
-import { composerLoading, invalidSender } from './copy'
+import { composerLoading, invalidSender, layoutRefused } from './copy'
 import { AddressList, PrivateAddress } from '../../components/PrivateAddress'
 import { localLabel, parseUtc, ScheduleField, scheduleError, utcLabel } from '../../components/ScheduleField'
 import { useSingleFlight } from '../../lib/single-flight'
@@ -436,8 +436,9 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
         else creation.current.ambiguous = true
       }
       setAutosavePaused(true)
-      if (automatic) setError(errorText(cause))
-      else reportError(errorText(cause))
+      const message = contentRefused(cause) ? layoutRefused : errorText(cause)
+      if (automatic) setError(message)
+      else reportError(message)
       sync.checkNow()
     } finally {
       guard.current = false

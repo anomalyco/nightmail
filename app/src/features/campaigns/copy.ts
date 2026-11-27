@@ -5,3 +5,4 @@ export const attachmentLimit = `Up to ${MAX_ATTACHMENTS} attachments, 25 MiB in 
 export const composerLoading = 'The composer is still loading. Try again.'
 export const invalidSender = 'Enter a valid sender address.'
 export const publishFirst = 'Publish this template to start campaigns from it'
+export const layoutRefused = 'Couldn’t save this layout. Your edits are kept; undo your last change.'

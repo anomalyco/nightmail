@@ -11,14 +11,14 @@ import { Notices } from '../../components/Notices'
 import { date, shortDateTime, time } from '../../lib/format'
 import { CampaignAttachments, type CampaignAttachmentsRef } from './CampaignAttachments'
 import type { EmailComposerRef } from './EmailComposer'
-import { draftAttachments, onIdle, warmTemplateEditor } from './composer-content'
+import { blockStructure, contentRefused, draftAttachments, onIdle, warmTemplateEditor } from './composer-content'
 import { composer as composerChunk, EmailComposer } from './composer-chunk'
 import { queries } from '../../data/queries'
 import { ChunkFallback } from '../../lib/preloadable'
 import { CampaignRouteSkeleton, ComposerSkeleton, templateColumns } from './skeletons'
 import { RowProblem } from './steps'
 import { CampaignsHeader } from './header'
-import { publishFirst } from './copy'
+import { layoutRefused, publishFirst } from './copy'
 import './campaigns.css'
 import { replyToAddresses, replyToError } from './reply-to'
 import { useLeaveGuard } from '../../lib/leave-guard'
@@ -138,6 +138,8 @@ function TemplateEditor({ initial }: {initial: CampaignTemplate}) {
   const [error, setError] = useState('')
   const version = useRef(0)
   const savingRef = useRef(false)
+  // The block structure of the last content the API refused: saving the same structure again is not sent.
+  const refused = useRef<string | null>(null)
   // Reply to stays as typed (commas and spaces included); the draft gets the split addresses, and autosave waits while
   // one of them isn't an address yet.
   const [replyToText, setReplyToText] = useState(() => initial.draft.replyTo.join(', '))
@@ -166,16 +168,24 @@ function TemplateEditor({ initial }: {initial: CampaignTemplate}) {
     if (replyToError(draftRef.current.replyTo.join(', '))) { fail(`Reply to: ${replyToError(draftRef.current.replyTo.join(', '))}`); return null }
     savingRef.current = true; setSaving(true); setError('')
     const submittedVersion = version.current
+    let html = ''
     try {
       const content = await composer.current?.prepare()
       if (!content) throw new Error('The editor is still loading. Try again in a moment.')
-      const submitted = templateDraft({...draftRef.current, html: content.html, attachments: draftAttachments(draftRef.current.attachments, content)})
+      html = content.html
+      if (refused.current === blockStructure(html)) { setError(layoutRefused); return null }
+      const submitted = templateDraft({...draftRef.current, html, attachments: draftAttachments(draftRef.current.attachments, content)})
       const updated = await api.templates.update(templateRef.current.id, templateRef.current.revision, submitted)
+      refused.current = null
       remember(updated)
       await refreshLists()
       setTemplate(updated); draftRef.current = version.current === submittedVersion ? updated.draft : draftRef.current; if (version.current === submittedVersion) { setDraft(updated.draft); setDirty(false) }
       return updated
-    } catch (cause) { fail(errorText(cause)); return null }
+    } catch (cause) {
+      if (contentRefused(cause)) { refused.current = blockStructure(html); fail(layoutRefused) }
+      else fail(errorText(cause))
+      return null
+    }
     finally { savingRef.current = false; setSaving(false) }
   }
   // Publish and Archive run one at a time per action: a second press before the first answers would send the same revision again.

@@ -37,7 +37,15 @@ const TemplatePreviewImage = z.object({ data: z.string().describe('Canonical bas
 const Removed = z.object({ id: z.string(), deleted: z.literal(true) });
 const Query = PageQuery.extend({ search: z.string().trim().min(1).max(200).optional(), archived: z.enum(['true', 'false']).default('false'), publishedOnly: z.enum(['true', 'false']).default('false') });
 
-function assertContent(html?: string, complete = false) { if (!html) return; try { validateBlockHtml(html, { complete }); } catch (error) { if (error instanceof BlockContentError) throw new ApiError(422, 'TEMPLATE_CONTENT_INVALID', error.message, 'html'); throw error; } }
+function assertContent(html?: string, complete = false) {
+  if (!html) return;
+  try { validateBlockHtml(html, { complete }); } catch (error) {
+    if (!(error instanceof BlockContentError)) throw error;
+    const refused = new ApiError(422, 'TEMPLATE_CONTENT_INVALID', error.message, 'html');
+    refused.logReason = error.logReason;
+    throw refused;
+  }
+}
 function templateUrl(runtime: Runtime, templateId: string) { return new URL(`/campaigns/templates/${encodeURIComponent(templateId)}`, runtime.config.publicUrl).href; }
 function view(runtime: Runtime, row: typeof templates.$inferSelect) { return Template.parse({ ...row, published: row.published ?? null, publishedRevision: row.publishedRevision ?? null, archivedAt: row.archivedAt ?? null, url: templateUrl(runtime, row.id) }); }
 const templateSummaryColumns = {
