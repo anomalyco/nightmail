@@ -14,7 +14,7 @@ import { credentialFingerprint, discoveryTarget } from './ses-region-state.js';
 import { mxResourceName, POOL_INSTALLATION, setupResources } from './ses-setup.js';
 import { forDelivery, type ReadyConnection } from './provider-credentials.js';
 import { wakeWebhooks } from './jobs.js';
-import { probationBudgetAlert, shareFullAlert } from './operator-alerts.js';
+import { probationBudgetAlert, probationWaitingAlert, shareFullAlert } from './operator-alerts.js';
 import type { CampaignScreen } from './screen.js';
 import { outbound } from './screen-calls.js';
 import { SEND_LIMITS } from './send-limits.js';
@@ -654,28 +654,56 @@ async function originDecisions(prepared: Prepared[], db: DbExecutor) {
 // is kept to the provider in-flight width: a platform reset can only strand what was actually mid-call.
 // Campaign rows are shared-locked before their email rows (cancel and the run job take the campaign row
 // first too); the campaign itself is never written here, so concurrent shards never serialize on it.
-type BudgetPass = 'off' | 'exempt' | 'meter' | 'wait';
-type ClaimRow = { id:string; status:EmailStatus | 'meter'; reason:string | null; webhooks:number; card?:{ hour?:number; day?:number; waiting?:boolean }; expires_ms?:number };
-async function claimGroup(runtime: Runtime, prepared: Prepared[], origins: Map<string, boolean>, db: DbExecutor, pass: BudgetPass) {
-  const input = prepared.map((item, position) => ({
+type BudgetPass = 'off' | 'exempt' | 'meter' | 'wait' | 'park';
+type BudgetRun = {
+  closed: Set<boolean>; retryHour?: string; unavailable?: boolean; waitingCard?: boolean;
+  turn?: Promise<void>; charged: WeakSet<Mail>; refunds: { wid:string; key:string }[];
+};
+const nextBudgetHour = sql`date_trunc('hour',statement_timestamp(),'UTC') + interval '1 hour'`;
+const budgetSpread = sql`(hashtextextended(e.id,0) & 32767) * interval '1 millisecond'`;
+const verifiedMember = (workspace:SQL,address:SQL) => sql`EXISTS (SELECT FROM workspace_members m JOIN nightmail_users u ON u.id=m.user_id
+  WHERE m.workspace_id=${workspace} AND u.email_verified AND lower(u.email)=${address})`;
+type ClaimRow = { id:string; status:EmailStatus | 'meter' | 'valid' | 'invalid'; held?:boolean; retry_hour?:string; reason:string | null; webhooks:number; card?:{ hour?:number; day?:number; waiting?:boolean }; expires_ms?:number };
+type ClaimInput = ReturnType<typeof claimInput>;
+function claimInput(item:Prepared, position:number, mcpAllowed=false) {
+  return {
     position,
     id: item.mail.id, workspace_id: item.mail.workspaceId, dispatch_version: item.mail.dispatchVersion, status: 'queued', campaign_id: item.mail.campaignId,
-    actor_key_id: item.mail.actorKeyId, sender: item.snapshot.from.toLowerCase(), mcp_allowed: item.mail.actorKeyId.startsWith('mcp_') && origins.get(mcpOrigin(item)) === true,
+    actor_key_id: item.mail.actorKeyId, sender: item.snapshot.from.toLowerCase(), mcp_allowed: mcpAllowed,
     feedback_topic: item.owner.feedbackTopic, binding:item.review?.draft.binding ?? item.mail.snapshot.binding, destinations: [...item.snapshot.to, ...item.snapshot.cc, ...item.snapshot.bcc].map(email => email.toLowerCase()),
     hosted:!!item.owner.tenantName,marketing: item.snapshot.kind === 'marketing', notice: item.review?.draft.requiredNotice === true,
     // The topic it is about (src/topics.ts): a campaign's, frozen in its review, or a marketing send's own.
     topic_id: item.snapshot.kind !== 'marketing' || item.review?.draft.requiredNotice ? null : (item.review ? item.review.draft.topicId : item.snapshot.topicId) ?? null, held_stream: item.snapshot.kind !== 'transactional' || !!item.mail.campaignId || !!item.snapshot.bulk, reply_authors: item.snapshot.replyAuthors, snapshot: item.stored ?? null,
     token_hash: item.unsubscribe?.tokenHash ?? null, token_email: item.unsubscribe?.email ?? null, token_page: item.unsubscribe?.page ?? null,
     event_id: rowId('event'), external_id: `attempt-start:${item.mail.id}:${item.mail.dispatchVersion}`, attempt: item.mail.dispatchVersion + 1,
-  }));
+  };
+}
+async function claimGroup(runtime:Runtime, region:string, input:ClaimInput[], db:DbExecutor, pass:BudgetPass, budget:BudgetRun) {
   const rows = sql`SELECT * FROM jsonb_to_recordset(${JSON.stringify(input)}::jsonb)
         AS x(position int, id text, workspace_id text, dispatch_version int, status text, campaign_id text, actor_key_id text, sender text, mcp_allowed boolean, hosted boolean, feedback_topic text, binding jsonb, destinations jsonb, marketing boolean, notice boolean, topic_id text, held_stream boolean, reply_authors jsonb, snapshot jsonb, token_hash text, token_email text, token_page text, event_id text, external_id text, attempt int)`;
-  const claimed = await db.execute<ClaimRow>(sql`WITH ${claimCtes(runtime, prepared[0]!.mail.region, rows, pass)}
-    SELECT id,status,error_code AS reason,(SELECT count(*)::int FROM webhook_jobs) AS webhooks,
-      ${pass === 'meter' ? sql`b.card,extract(epoch FROM b.charged_hour + interval '1 hour' - clock_timestamp())::float8*1000 AS expires_ms FROM claimed c LEFT JOIN metered b USING(id)` : sql`NULL AS card,NULL::float8 AS expires_ms FROM claimed`}
-    ${pass === 'exempt' ? sql`UNION ALL SELECT id,'meter',NULL,0,NULL,NULL FROM classified WHERE outside_cost>0` : sql``}`);
+  const claimed = await db.execute<ClaimRow>(sql`WITH ${claimCtes(runtime,region,rows,pass,budget)}
+    SELECT c.id,c.status,c.error_code AS reason,(SELECT count(*)::int FROM webhook_jobs) AS webhooks,
+      ${pass === 'meter' ? sql`b.card,extract(epoch FROM b.charged_hour + interval '1 hour' - clock_timestamp())::float8*1000 AS expires_ms,x.held_at_claim AS held,(${nextBudgetHour})::text AS retry_hour FROM claimed c JOIN classified x USING(id) LEFT JOIN metered b USING(id)` : sql`NULL AS card,NULL::float8 AS expires_ms,false AS held,NULL::text AS retry_hour FROM claimed c`}
+    ${pass === 'exempt' ? sql`UNION ALL SELECT id,'meter',NULL,0,NULL,NULL,held_at_claim,NULL FROM classified WHERE outside_cost>0` : sql``}
+    ${pass === 'meter' ? sql`UNION ALL SELECT b.id,'queued',b.reason,0,b.card,NULL,x.held_at_claim,(${nextBudgetHour})::text FROM metered b JOIN classified x USING(id) WHERE b.reason='PROBATION_BUDGET_WAIT'
+      UNION ALL SELECT NULL,CASE WHEN EXISTS(SELECT FROM bad_meter) THEN 'invalid' ELSE 'valid' END,NULL,(SELECT count(*)::int FROM claimed)+(SELECT count(*)::int FROM metered WHERE reason='PROBATION_BUDGET_WAIT'),NULL,NULL,false,NULL` : sql``}`);
+  if (pass==='meter') {
+    // Roll back the debit AND the attempting transition on any incomplete or malformed election.
+    const check=claimed.rows.findIndex(r=>r.status==='valid');
+    if (check<0 || claimed.rows[check]!.webhooks!==claimed.rows.length-1) throw new TypeError('Incomplete probation debit result');
+    claimed.rows.splice(check,1);
+    const ids=new Set(input.map(x=>x.id));
+    for (const row of claimed.rows) {
+      const card=row.card;
+      const usageValid=card?.hour===undefined && card?.day===undefined || Number.isSafeInteger(card?.hour) && Number.isSafeInteger(card?.day);
+      const cardValid=card==null || typeof card==='object' && !Array.isArray(card) && (card.waiting===undefined || card.waiting===true) && usageValid;
+      if (!ids.delete(row.id) || !['attempting','queued','suppressed','canceled'].includes(row.status) ||
+          typeof row.held!=='boolean' || !row.retry_hour || !Number.isFinite(Date.parse(row.retry_hour)) ||
+          (row.expires_ms!=null && !Number.isFinite(row.expires_ms)) || !cardValid) throw new TypeError('Malformed probation debit result');
+    }
+  }
   const card = claimed.rows.find(r => r.card?.hour !== undefined || r.card?.waiting)?.card;
-  if (card) await probationBudgetAlert(runtime,db,card,input[0]!.event_id);
+  if (card?.hour!==undefined) await probationBudgetAlert(runtime,db,card,input[0]!.event_id);
   return claimed.rows;
 }
 /**
@@ -690,7 +718,7 @@ export function forwardStillAllowed(runtime: Pick<Runtime, 'config'>, x: SQL) {
     AND h.verified AND h.declined_at IS NULL AND NOT h.paused AND NOT EXISTS(SELECT FROM jsonb_array_elements_text(f.grants) gid WHERE NOT mail_receiving_grant(f.workspace_id,gid,${receivingPolicy(runtime.config)}::jsonb))
     FOR SHARE OF f, h)`;
 }
-function claimCtes(runtime: Runtime, region: string, input: SQL, pass: BudgetPass) {
+function claimCtes(runtime: Runtime, region: string, input: SQL, pass: BudgetPass, budget:BudgetRun) {
   const active = pass !== 'off', caps = runtime.config.dispatch.probationBudget;
   const routeGuard = runtime.config.multiTenant ? sql`AND EXISTS (SELECT 1 FROM provider_connections pc WHERE pc.workspace_id=x.workspace_id AND pc.paused_at IS NULL
           AND NOT (x.held_stream AND hosted_marketing_held(x.workspace_id)) FOR SHARE)
@@ -703,24 +731,30 @@ function claimCtes(runtime: Runtime, region: string, input: SQL, pass: BudgetPas
   const classify = active ? sql`classified AS MATERIALIZED (
     SELECT x.*, e.error_code AS previous_error, ${heldStream(sql`e`)} AS held_at_claim, CASE WHEN x.hosted AND x.workspace_id IS DISTINCT FROM ${runtime.config.platformDomainWorkspace ?? null}::text
       AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL AND ${probationReason(sql`x.workspace_id`)} IS NOT NULL
-      THEN (SELECT count(*)::int FROM dest d WHERE d.email_id=x.id AND NOT EXISTS (
-        SELECT FROM workspace_members m JOIN nightmail_users u ON u.id=m.user_id
-        WHERE m.workspace_id=x.workspace_id AND u.email_verified AND lower(u.email)=d.email))
+      THEN (SELECT count(*)::int FROM dest d WHERE d.email_id=x.id AND NOT ${verifiedMember(sql`x.workspace_id`,sql`d.email`)})
       ELSE 0 END AS outside_cost
     FROM input x JOIN eligibility el USING(id) JOIN sending_emails e ON e.workspace_id=x.workspace_id AND e.id=x.id
-      AND e.status=x.status AND e.dispatch_version=x.dispatch_version WHERE true ${routeGuard}
+      AND e.status=x.status AND e.dispatch_version=x.dispatch_version WHERE (e.scheduled_at IS NULL OR e.scheduled_at<=statement_timestamp()) ${routeGuard}
     ORDER BY e.workspace_id,e.id FOR UPDATE OF e
   ),` : sql``;
-  const meter = pass === 'meter' ? sql`metered AS MATERIALIZED (
+  const isClosed=sql`held_at_claim=ANY(${sql.param([...budget.closed])}::boolean[])`;
+  const meter = pass === 'meter' ? sql`expected_meter AS MATERIALIZED (SELECT * FROM classified WHERE outside_cost>0 AND NOT (${isClosed})), metered AS MATERIALIZED (
     SELECT m.* FROM (SELECT jsonb_agg(jsonb_build_object('id',id,'wid',workspace_id,'domain',split_part(sender,'@',2),
       'n',jsonb_array_length(destinations),'cost',outside_cost,'direct',NOT held_at_claim)
-      ORDER BY position) AS batch FROM classified WHERE outside_cost>0) g
+      ORDER BY position) AS batch FROM expected_meter) g
       CROSS JOIN LATERAL probation_claim(g.batch,${caps!.hourly},${caps!.daily}) m
+  ), bad_meter AS (
+    SELECT FROM expected_meter x FULL JOIN metered b USING(id) WHERE x.id IS NULL OR b.id IS NULL OR
+      (x.outside_cost=b.outside_cost AND jsonb_typeof(b.card)='object' AND
+        ((b.reason IS NULL AND b.charged_hour=date_trunc('hour',clock_timestamp(),'UTC')) OR
+         (b.reason IN ('HOSTED_BURST_LIMIT','PROBATION_BUDGET_WAIT') AND b.charged_hour IS NULL))) IS NOT TRUE
+    UNION ALL SELECT FROM metered GROUP BY id HAVING count(*)<>1
   ),` : sql``;
   const individual = sql`SELECT x.id, CASE WHEN ${burst} THEN NULL::text ELSE 'HOSTED_BURST_LIMIT' END AS reason
     FROM ${active ? sql`classified` : sql`input`} x JOIN eligibility el USING(id) ${active ? sql`WHERE x.outside_cost=0` : sql``} ORDER BY x.workspace_id,x.sender,x.id`;
-  const budgets = sql`SELECT i.*,i.reason IS NULL AS allowed FROM (${individual}) i
-    ${pass === 'meter' ? sql`UNION ALL SELECT id,reason,reason IS NULL FROM metered` :
+  const budgets = pass==='park' ? sql`SELECT id,'PROBATION_BUDGET_WAIT' AS reason,false AS allowed
+    FROM classified WHERE outside_cost>0 AND (${!!budget.unavailable} OR ${isClosed})` : sql`SELECT i.*,i.reason IS NULL AS allowed FROM (${individual}) i
+    ${pass === 'meter' ? sql`UNION ALL SELECT id,reason,reason IS NULL FROM metered WHERE reason IS DISTINCT FROM 'PROBATION_BUDGET_WAIT'` :
       pass === 'wait' ? sql`UNION ALL SELECT id,'PROBATION_BUDGET_WAIT',false FROM classified WHERE outside_cost>0` : sql``}`;
 
   return sql`input AS MATERIALIZED (${input}
@@ -795,7 +829,7 @@ function claimCtes(runtime: Runtime, region: string, input: SQL, pass: BudgetPas
     ), ${classify} ${meter} budget AS MATERIALIZED (${budgets}), claimed AS (
       UPDATE sending_emails e SET simulated = ${isSimulatedSes(runtime)},
         status = CASE WHEN NOT b.allowed THEN 'queued' WHEN NOT el.origin_ok OR NOT el.binding_ok OR NOT el.campaign_allowed THEN 'canceled' WHEN el.suppression_reason IS NULL THEN 'attempting' ELSE 'suppressed' END,
-        scheduled_at=CASE ${pass === 'wait' ? sql`WHEN b.reason='PROBATION_BUDGET_WAIT' THEN clock_timestamp()+interval '3 seconds'` : sql``} WHEN NOT b.allowed THEN date_trunc('minute',statement_timestamp())+interval '1 minute' ELSE e.scheduled_at END,
+        scheduled_at=CASE ${(pass === 'wait' || pass==='park') && budget.unavailable ? sql`WHEN b.reason='PROBATION_BUDGET_WAIT' THEN clock_timestamp()+interval '3 seconds'` : sql`WHEN b.reason='PROBATION_BUDGET_WAIT' THEN ${nextBudgetHour}+${budgetSpread}`} WHEN NOT b.allowed THEN date_trunc('minute',statement_timestamp())+interval '1 minute' ELSE e.scheduled_at END,
         attempt_started_at = CASE WHEN b.allowed AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL THEN clock_timestamp() ELSE e.attempt_started_at END,
         error_code = CASE WHEN NOT b.allowed THEN b.reason WHEN NOT el.binding_ok AND x.binding IS NOT NULL THEN 'SENDER_BINDING_CHANGED' WHEN NOT el.origin_ok OR NOT el.binding_ok THEN 'ORIGIN_KEY_REVOKED' WHEN NOT el.campaign_allowed THEN 'CAMPAIGN_CANCELED' WHEN el.suppression_reason IS NULL THEN CASE WHEN e.error_code NOT IN ('PROBATION_BUDGET_WAIT','HOSTED_BURST_LIMIT') THEN e.error_code END ELSE 'RECIPIENT_INELIGIBLE' END,
         suppression_reason = CASE WHEN el.origin_ok AND el.binding_ok AND el.campaign_allowed THEN el.suppression_reason END,
@@ -996,7 +1030,7 @@ async function recordOutcomes(runtime: Runtime, outcomes: Outcome[]) {
 
 // `finishing` collects campaigns whose rows this run moved out of the queue; they are checked for completion in one
 // statement once the queue is draining (a short batch, the time budget or the end of the run), never per group.
-type Lane = { attachmentBytes:number; advanced: number; bytesReleased?:Promise<void>; notifyBytes?:()=>void; deferred: DeferredStream[]; gate: GateState; refresh?: Promise<boolean>; held: { recipients: number }; pacing: Pacing; shadowOn: boolean; options: Required<Pick<DispatcherOptions, 'batchSize' | 'sendConcurrency' | 'quotaRefreshMs'>> & DispatcherOptions; finishing: Map<string, CampaignRef>; send: (item: Prepared, deadline: number) => Promise<Outcome>; record: (outcomes: Outcome[]) => Promise<void>; counters: DispatcherReport; phase: <T>(name: string, work: () => Promise<T>) => Promise<T> };
+type Lane = { budget:BudgetRun; attachmentBytes:number; advanced: number; bytesReleased?:Promise<void>; notifyBytes?:()=>void; deferred: DeferredStream[]; gate: GateState; refresh?: Promise<boolean>; held: { recipients: number }; pacing: Pacing; shadowOn: boolean; options: Required<Pick<DispatcherOptions, 'batchSize' | 'sendConcurrency' | 'quotaRefreshMs'>> & DispatcherOptions; finishing: Map<string, CampaignRef>; send: (item: Prepared, deadline: number) => Promise<Outcome>; record: (outcomes: Outcome[]) => Promise<void>; counters: DispatcherReport; phase: <T>(name: string, work: () => Promise<T>) => Promise<T> };
 function chunk<T>(items: T[], size: number): T[][] { const out: T[][] = []; for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size)); return out; }
 const cost = (item: Prepared) => item.snapshot.to.length + item.snapshot.cc.length + item.snapshot.bcc.length;
 const quotaRetry = (gate: GateState, refreshMs: number) => Math.ceil(Math.max(Date.now() + Math.min(1000, refreshMs), gate.refreshAt ?? 0, gate.dailyBlockedUntil ?? 0));
@@ -1139,7 +1173,8 @@ async function dispatchBatch(base: Runtime, lane: Lane, leased: Leased[]): Promi
   return { processed: result.blocked ? 0 : leased.length, blocked: result.blocked };
 }
 
-async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner: Owner })[]) {
+async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner: Owner })[], recheck=false) {
+  const parked:ClaimInput[]=[];
   const {gate, options, counters, phase} = lane;
   if (dailyRemaining(gate) <= 0) {
     counters.quotaRetryAt = quotaRetry(gate, options.quotaRefreshMs);
@@ -1189,7 +1224,7 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
           // object never holds the page, and ordinary campaign pages share the
           // claim and result writer instead of issuing one claim per object.
           if(coalesce && !finished) await Promise.race([workers,new Promise(resolve=>setTimeout(resolve,10))]);
-          await dispatchPrepared(base,lane,available.splice(0));
+          await dispatchPrepared(base,lane,available.splice(0),parked,recheck);
         }
         else await new Promise<void>(resolve=>{notify=resolve;});
       }
@@ -1215,7 +1250,7 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
           for (const group of chunk(page,options.sendConcurrency)) {
             for(const p of await Promise.all(group.map(prepare))) if(p) prepared.push(p);
           }
-          await dispatchPrepared(base,lane,prepared);
+          await dispatchPrepared(base,lane,prepared,parked,recheck);
         } else await streamPage(page,true);
       });}finally{lane.attachmentBytes-=bytes;lane.bytesReleased=undefined;lane.notifyBytes?.();lane.notifyBytes=undefined;}
       page=[];bytes=0;files=0;content=0;
@@ -1228,7 +1263,19 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
     if(page.length)await flush();
   } else {
     const prepared = await phase('prepare', () => Promise.all(ready.map(prepare)));
-    await dispatchPrepared(base, lane, prepared.filter((item): item is Prepared => item !== undefined));
+    await dispatchPrepared(base, lane, prepared.filter((item): item is Prepared => item !== undefined),parked,recheck);
+  }
+  if (parked.length) {
+    // Only this lease's rows. The same eligibility, live membership, standing and version
+    // checks as the claim run once for the batch, without reading any budget object.
+    const waits=await phase('claim',()=>claimGroup(base,options.region,parked,base.db,'park',lane.budget));
+    const pending=new Set(parked.map(x=>x.id));
+    for (const row of waits) pending.delete(row.id);
+    counters.deferred+=waits.length;
+    lane.advanced+=waits.length;
+    // A member, a graduate, or a row that changed under the lease still gets the
+    // normal election. Re-prepare only these; never retain attachments across pages.
+    if (pending.size) await dispatchReady(base,lane,ready.filter(x=>pending.has(x.mail.id)),true);
   }
   if (unscreened.length) await base.db.execute(sql`UPDATE sending_emails e SET screened = false, lease_until = NULL
     FROM jsonb_to_recordset(${JSON.stringify(unscreened.map(m => ({ workspace_id: m.workspaceId, id: m.id, version: m.dispatchVersion, status: 'queued' })))}::jsonb) x(workspace_id text, id text, version int, status text)
@@ -1243,6 +1290,7 @@ function deferBurst(deferred:DeferredStream[],workspace_id:string,stream:Deferre
 async function recordBatch(base: Runtime,lane: Lane,outcomes: Outcome[]) {
   await lane.phase('record', () => recordOutcomes(base,outcomes));
   for (const outcome of outcomes) {
+    if (lane.budget.charged.has(outcome.mail) && (outcome.type==='reject' || requeued(outcome))) lane.budget.refunds.push({wid:outcome.mail.workspaceId,key:`attempt-start:${outcome.mail.id}:${outcome.mail.dispatchVersion}`});
     logEmail(lane, outcome.mail, outcome.trace, outcome.type === 'dispatch_deferred' ? 'deferred' : outcome.type, outcome.errorCode ?? (typeof outcome.data.code === 'string' ? outcome.data.code : undefined));
     if(outcome.type==='acceptance_unknown' || outcome.type==='provider_throttled' || outcome.errorCode==='SES_TENANT_SENDING_PAUSED') log(outcome.type==='acceptance_unknown' || outcome.errorCode==='SES_ACCOUNT_SENDING_PAUSED' || outcome.errorCode==='SES_CREDENTIALS_INVALID' ? 'error' : 'warn',{code:outcome.errorCode,region:outcome.mail.region,stream:outcome.mail.snapshot.kind});
     if (outcome.type === 'accepted') lane.counters.sent++; else if (requeued(outcome)) lane.counters.deferred++; else lane.counters.skipped++;
@@ -1298,7 +1346,7 @@ export function interleaveByOwner<T>(items: readonly T[], kindOf: (item: T) => E
   for (const item of items) (kindOf(item) === 'transactional' ? tx : mkt).push(item);
   return [...roundRobin(tx), ...roundRobin(mkt)];
 }
-async function dispatchPrepared(base: Runtime, lane: Lane, prepared: Prepared[]) {
+async function dispatchPrepared(base: Runtime, lane: Lane, prepared: Prepared[], parked:ClaimInput[], recheck:boolean) {
   if (!prepared.length) return;
   const {gate, options, counters, phase} = lane;
   const pendingRecords: Promise<void>[] = [];
@@ -1313,6 +1361,12 @@ async function dispatchPrepared(base: Runtime, lane: Lane, prepared: Prepared[])
     let expectedTxSlot = Math.max(gate.txAllowedAt ?? 0, (gate.brakeUntil ?? 0) > now ? gate.nextAllowedAt : 0, now);
     let expectedMktSlot = Math.max(gate.nextAllowedAt, gate.marketingAllowedAt ?? 0, now);
     const group = candidates.filter(item => {
+      const held=item.snapshot.kind!=='transactional' || !!item.mail.campaignId || !!item.snapshot.bulk;
+      if (!recheck && item.owner.probation && item.owner.tenantName && item.mail.workspaceId!==base.config.platformDomainWorkspace &&
+          !item.mail.actorKeyId.startsWith('mcp_') && (lane.budget.unavailable || lane.budget.closed.has(held))) {
+        parked.push({...claimInput(item,parked.length),snapshot:null});
+        return false;
+      }
       // Don't enter attempting in the first place for a predictably distant slot. The actual
       // sender also enforces this deadline if priority arrivals or a concurrent lane change it.
       const isTx = item.snapshot.kind === 'transactional';
@@ -1341,7 +1395,9 @@ async function dispatchPrepared(base: Runtime, lane: Lane, prepared: Prepared[])
     const claim = (items: Prepared[], pass:BudgetPass) => {
       const work = async (db:DbExecutor) => {
         if (pass === 'meter') await db.execute(sql`SELECT set_config('lock_timeout','100ms',true),set_config('statement_timeout','2s',true)`);
-        return claimGroup(base,items,checkMcp ? await originDecisions(items,db) : new Map(),db,pass);
+        const grants=checkMcp ? await originDecisions(items,db) : undefined;
+        const input=items.map((p,i)=>claimInput(p,i,p.mail.actorKeyId.startsWith('mcp_') && grants?.get(mcpOrigin(p))===true));
+        return claimGroup(base,options.region,input,db,pass,lane.budget);
       };
       return phase('claim', () => checkMcp || pass === 'meter' ? base.db.transaction(work) : work(base.db));
     };
@@ -1387,7 +1443,7 @@ async function dispatchPrepared(base: Runtime, lane: Lane, prepared: Prepared[])
       for (const send of sends) if (send.status === 'rejected') { await Promise.all(pendingRecords); throw send.reason; }
     };
     const rows = await claim(group,budgets ? 'exempt' : 'off');
-    const pending = new Set(rows.filter(r=>r.status==='meter').map(r=>r.id));
+    const pending = new Map(rows.filter(r=>r.status==='meter').map(r=>[r.id,r.held!]));
     if (!pending.size) { await finishClaim(group,rows); continue; }
 
     // Start the already-claimed unmetered calls before touching the shared bucket.
@@ -1398,17 +1454,47 @@ async function dispatchPrepared(base: Runtime, lane: Lane, prepared: Prepared[])
     const before = Date.now();
     try {
       let result:ClaimRow[];
-      try { result = await claim(metered,'meter'); }
-      catch (error) {
-        // The metered transaction rolled back; re-elect only still-queued versions
-        // without referencing the unavailable object.
-        if (!['42P01','42703','42883','55P03','57014','42501','40001','40P01'].includes(databaseCodeOf(error) ?? '')) throw error;
-        log('warn',{code:'PROBATION_BUDGET_UNAVAILABLE',databaseCode:databaseCodeOf(error)});
-        result = await claim(metered,'wait');
-      }
+      // Serialize only this run's metered elections (never exempt sends or SES). A sibling
+      // lane entering after the first refusal cannot debit that class again in this pass.
+      const state=lane.budget, prior=state.turn;
+      let release!:()=>void;
+      state.turn=new Promise(resolve=>{release=resolve;});
+      try {
+        await prior;
+        // Mail already leased when a sibling closed the class joins the one bulk
+        // update after the exempt queue drains. Don't issue another meter/wait claim for it.
+        const open=metered.filter(p=>!state.unavailable && !state.closed.has(pending.get(p.mail.id)!));
+        const alreadyClosed=metered.filter(p=>!open.includes(p));
+        result=[];
+        if (open.length) {
+          try { result=await claim(open,'meter'); }
+          catch (error) {
+            state.unavailable=true;
+            log('warn',{code:'PROBATION_BUDGET_UNAVAILABLE',errorClass:error instanceof Error?error.name:typeof error,databaseCode:databaseCodeOf(error)});
+            result=await claim(open,'wait');
+          }
+          for (const row of result) if (row.reason==='PROBATION_BUDGET_WAIT' && row.retry_hour) {
+            state.closed.add(row.held!);state.retryHour=row.retry_hour;
+            if (row.card?.waiting) state.waitingCard=true;
+            alreadyClosed.push(open.find(p=>p.mail.id===row.id)!);
+          }
+        }
+        if (alreadyClosed.length) {
+          // A recheck is rare: the envelope changed between the park and the claim.
+          // Its destination/lease is fenced again; it must neither leak nor stay leased.
+          if (recheck) {
+            const closedIds=new Set(alreadyClosed.map(p=>p.mail.id));
+            result=result.filter(r=>!closedIds.has(r.id)).concat(await claim(alreadyClosed,'wait'));
+          } else for(const p of alreadyClosed) {
+            parked.push({...claimInput(p,parked.length,p.mail.actorKeyId.startsWith('mcp_')),snapshot:null});
+            if (!result.some(r=>r.id===p.mail.id)) result.push({id:p.mail.id,status:'queued',reason:'PROBATION_BUDGET_WAIT',webhooks:0});
+          }
+        }
+      } finally {release();}
       // Do not start a provider call in an hour later than the one debited.
       // Postgres measured the interval; the pre-query host time errs early.
       const deadlines=new Map(result.filter(r=>r.expires_ms!=null).map(r=>[r.id,before+Number(r.expires_ms)]));
+      for (const p of metered) if (deadlines.has(p.mail.id)) lane.budget.charged.add(p.mail);
       await finishClaim(metered,result,deadlines);
     } finally { await exempt; }
 
@@ -1420,6 +1506,35 @@ async function dispatchPrepared(base: Runtime, lane: Lane, prepared: Prepared[])
   if (marketing.length || unpaced.length) await releaseLeases(base, [...marketing, ...unpaced]);
   if (direct.length) await releaseLeases(base, direct, counters.quotaRetryAt);
   await Promise.all(pendingRecords);
+}
+async function finishProbationRun(runtime:Runtime,lane:Lane) {
+  const budget=lane.budget;
+  if (budget.waitingCard && runtime.config.operatorSlackWebhookUrl) {
+    const {rows}=await runtime.db.execute<{mail:number;owners:number;until:string}>(sql`SELECT count(*)::int AS mail,
+      count(DISTINCT workspace_id)::int AS owners,${budget.retryHour}::text AS until FROM sending_emails
+      WHERE status='queued' AND error_code='PROBATION_BUDGET_WAIT'`);
+    if(rows[0]?.mail) await probationWaitingAlert(runtime,rows[0]);
+  }
+  if (!budget.refunds.length) return;
+  // Outcomes are already durable. Skipping a refund (lock, missing or lowered bucket,
+  // failed transaction) only under-uses the budget: never delay or replay a send for it.
+  try {
+    await runtime.db.transaction(async db=>{
+      await db.execute(sql`SELECT set_config('lock_timeout','50ms',true),set_config('statement_timeout','500ms',true)`);
+      await db.execute(sql`WITH owed AS MATERIALIZED (
+        SELECT e.id,e.probation_hour,e.probation_cost FROM sending_email_events e
+        JOIN jsonb_to_recordset(${JSON.stringify(budget.refunds)}::jsonb) x(wid text,key text)
+          ON e.workspace_id=x.wid AND e.external_id=x.key
+        WHERE e.probation_refund_owed ORDER BY e.id FOR UPDATE OF e SKIP LOCKED
+      ), totals AS (SELECT probation_hour,sum(probation_cost) AS n FROM owed GROUP BY probation_hour),
+      applied AS (
+        UPDATE probation_budget_hours b SET recipients=b.recipients-t.n FROM totals t
+        WHERE b.hour=t.probation_hour AND b.recipients>=t.n RETURNING b.hour
+      )
+      UPDATE sending_email_events e SET probation_refund_owed=false
+      FROM owed JOIN applied ON applied.hour=owed.probation_hour WHERE e.id=owed.id`);
+    });
+  } catch(error) {log('warn',{code:'PROBATION_REFUND_SKIPPED',databaseCode:databaseCodeOf(error)});}
 }
 async function flushFinishing(runtime: Runtime, lane: Lane) {
   if (!lane.finishing.size) return;
@@ -1445,7 +1560,7 @@ export async function runDispatcher(runtime: Runtime, options: DispatcherOptions
   const pacing: Pacing = { rateFactor: runtime.config.dispatch.rateFactor, txReservePercent: runtime.config.dispatch.txReservePercent ?? 15, targetRate: runtime.config.dispatch.targetRate, live: !isSimulatedSes(runtime) };
   const held = { recipients: 0 };
   const runClients = new Map<string, SESv2Client>();
-  const lane: Lane = { attachmentBytes:0,advanced:0,deferred: [], gate, pacing, shadowOn: !!runtime.config.shadow, held, finishing: new Map(), send: pacedSender(gate, options, pacing, counters, held), record: outcomeRecorder(ready => recordBatch(runtime, lane, ready)), counters, phase, options: { ...options, batchSize: options.batchSize ?? 24, sendConcurrency: options.sendConcurrency ?? 6, quotaRefreshMs: options.quotaRefreshMs ?? QUOTA_REFRESH_MS } };
+  const lane: Lane = { budget:{closed:new Set(),charged:new WeakSet(),refunds:[]}, attachmentBytes:0,advanced:0,deferred: [], gate, pacing, shadowOn: !!runtime.config.shadow, held, finishing: new Map(), send: pacedSender(gate, options, pacing, counters, held), record: outcomeRecorder(ready => recordBatch(runtime, lane, ready)), counters, phase, options: { ...options, batchSize: options.batchSize ?? 24, sendConcurrency: options.sendConcurrency ?? 6, quotaRefreshMs: options.quotaRefreshMs ?? QUOTA_REFRESH_MS } };
   // The owner cursor rotates where each lease starts, so every owner gets a turn, but a lease
   // never wraps past the last owner. One that started after the cursor and reached the end
   // empty-handed has not looked at the owners before it: with exactly a lease's worth of owners
@@ -1547,6 +1662,7 @@ export async function runDispatcher(runtime: Runtime, options: DispatcherOptions
   const results = await Promise.allSettled([normal(), priority()]);
   for (const result of results) if (result.status === 'rejected') throw result.reason;
   await flushFinishing(runtime, lane);
+  await finishProbationRun(runtime,lane);
   if (blocked) counters.idle = true;
   const paceUntil = Math.max(gate.nextAllowedAt, gate.marketingAllowedAt ?? 0);
   if (paceUntil >= Date.now() + MAX_PRE_SEND_MS) { counters.paceRetryAt = Math.ceil(paceUntil); counters.idle = true; }

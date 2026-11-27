@@ -87,7 +87,8 @@ export function operatorCard(publicUrl: string, p: Record<string, unknown>, work
     : kind === 'probation_budget_half' && whole(p.hour) && whole(p.day) && whole(p.hourly) && whole(p.daily)
       ? [Number(p.hour)*2 >= Number(p.hourly) && `Hour: ${count(p.hour)} of ${count(p.hourly)}.`,
          Number(p.day)*2 >= Number(p.daily) && `Day: ${count(p.day)} of ${count(p.daily)}.`].filter(Boolean).join(' ')
-    : kind === 'probation_mail_waiting' ? 'Outside mail is queued until sending capacity is available.'
+    : kind === 'probation_mail_waiting' && whole(p.mail) && whole(p.owners) && typeof p.until==='string' && Number.isFinite(Date.parse(p.until))
+      ? `${count(p.mail)} ${p.mail===1?'email':'emails'} from ${count(p.owners)} ${p.owners===1?'workspace':'workspaces'} waiting; capacity is checked again at ${new Date(p.until).toISOString().slice(11,16)} UTC.`
     : kind === 'share_full' && whole(p.used) && whole(p.share) ? `${count(p.used)} of ${count(p.share)}.`
     : kind === 'signin_slow' && whole(p.slow) && whole(p.mail) && Number(p.slow) > 0 ? `${share(Number(p.slow), Number(p.mail))} over ${SLOW_SIGN_IN.seconds} seconds.`
     : kind === 'signups_low' && whole(p.open) && whole(p.limit) ? `${count(p.open)} of ${count(p.limit)} places left. ${RAISE}`
@@ -194,7 +195,9 @@ export async function probationBudgetAlert(runtime: Runtime, db: DbExecutor, car
   const caps = runtime.config.dispatch.probationBudget;
   if (!caps || !runtime.config.operatorSlackWebhookUrl) return;
   if (card.hour !== undefined) await queue(db, PLATFORM, 'probation_budget_half', { ...caps, hour:card.hour, day:card.day }, { daily:false, savepoint:true, episode });
-  if (card.waiting) await queue(db, PLATFORM, 'probation_mail_waiting', {}, { daily:false, savepoint:true, episode });
+}
+export function probationWaitingAlert(runtime:Runtime, counts:{mail:number;owners:number;until:string}) {
+  return queue(runtime.db,PLATFORM,'probation_mail_waiting',counts,{daily:true});
 }
 
 /** Customer share full: the dispatcher's quota sample that found the share used up when the previous one had not. */

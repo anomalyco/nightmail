@@ -48369,6 +48369,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   async function probationFixture(t: TestContext, tenants: number, quota = 200) {
     assert.ok(fixtureWorker, 'Global dispatch fixtures require the isolated loopback runner.');
     const db = await fixtureDatabase(t), tag = unique('pb'), region = 'ap-south-2', account = '123450000127';
+    // Creating 10,000 independently verified domains runs the real proof-election trigger.
+    // Its setup timeout is separate from the timed dispatch queries.
+    if(tenants>1000) await db.query("SET statement_timeout='20min'");
     const owners = Array.from({length:tenants}, (_,i)=>tag+'-'+i), platform = owners[0]!;
     const [{nodeRuntime}, {runDispatcher}, {SESv2Client, GetAccountCommand, SendEmailCommand}] =
       await Promise.all([import('./src/adapters/node.js'),import('./src/dispatcher.js'),import('@aws-sdk/client-sesv2')]);
@@ -48531,7 +48534,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const cards=(await db.query("SELECT payload FROM jobs WHERE payload->>'kind'=ANY($1) ORDER BY payload->>'kind'",[kinds])).rows;
     const words=cards.map(r=>operatorCard('https://example.invalid',r.payload,{id:'platform',name:null})?.text);
     assert.match(words[0]!,/^Probation sending budget at 50%: Hour: \d+ of 50\./);
-    assert.equal(words[1],'Probation mail waiting: Outside mail is queued until sending capacity is available.');
+    assert.match(words[1]!,/^Probation mail waiting: 1 email from 1 workspace waiting; capacity is checked again at \d\d:00 UTC\.$/);
     // A direct-address campaign without any bulk marker is held at the same floor.
     const campaignMail=unique('campaign-mail');
     await seed([{wid,id:campaignMail}]);
@@ -48546,7 +48549,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     assert.ok(!calls.some(c=>c.id===campaignMail));
     const reserve=unique('reserve');
     await seed([{wid:tx,id:reserve}]); await dispatch(); assert.ok(calls.some(c=>c.id===reserve));
-    assert.equal((await db.query("SELECT count(*)::int n FROM jobs WHERE payload->>'kind'=$1",[kinds[1]])).rows[0].n,2);
+    assert.equal((await db.query("SELECT count(*)::int n FROM jobs WHERE payload->>'kind'=$1",[kinds[1]])).rows[0].n,1);
   });
 
   test('probation budget: missing, locked and timed-out debits hold only outside mail and recover on restart',async t=>{
@@ -48633,6 +48636,139 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     assert.equal(calls.filter(c=>c.id===id).length,1);
     assert.equal((await db.query('SELECT status FROM sending_emails WHERE id=$1',[id])).rows[0].status,'acceptance_unknown');
     assert.equal((await db.query('SELECT sum(recipients)::int n FROM probation_budget_hours')).rows[0].n,1);
+  });
+
+  test('probation budget: a locked, lowered or missing refund bucket never blocks saving exempt outcomes',async t=>{
+    const f=await probationFixture(t,2,1000),{db,owners,platform}=f,wid=owners[1]!;
+    const holder=await fixtureDatabase(t);
+    cleanup(t,()=>db.query('TRUNCATE probation_budget_hours').then(()=>{}));
+    for (const fault of ['healthy','locked','lowered','missing']){
+      await db.query('TRUNCATE probation_budget_hours');
+      const id=unique('refusal'),exempt=Array.from({length:60},()=>unique('platform'));
+      await f.seed([{wid,id}]);await f.seed(exempt.map(id=>({wid:platform,id})));
+      f.respond(async email=>{
+        if(email!==id)return;
+        if(fault==='locked') {
+          await holder.query("BEGIN; SET LOCAL idle_in_transaction_session_timeout='8s'; LOCK TABLE probation_budget_hours IN ACCESS EXCLUSIVE MODE");
+        } else if(fault==='missing') await db.query('DELETE FROM probation_budget_hours');
+        else if(fault==='lowered') await db.query('UPDATE probation_budget_hours SET recipients=0');
+        throw Object.assign(new Error('definite refusal'),{$metadata:{httpStatusCode:400}});
+      });
+      const start=performance.now();
+      try {
+        await f.dispatch();
+        const elapsed=performance.now()-start;
+        assert.equal((await db.query("SELECT count(*)::int n FROM sending_emails WHERE id=ANY($1) AND status='accepted'",[exempt])).rows[0].n,60);
+        assert.equal((await db.query("SELECT status FROM sending_emails WHERE id=$1",[id])).rows[0].status,'rejected');
+        assert.ok(elapsed<2000,fault+' took '+elapsed+'ms');
+        t.diagnostic(fault+': all 60 platform results durable in '+Math.round(elapsed)+'ms');
+      } finally {if(fault==='locked')await holder.query('ROLLBACK');}
+      assert.equal((await db.query('SELECT coalesce(sum(recipients),0)::int n FROM probation_budget_hours')).rows[0].n,fault==='locked'?1:0);
+      assert.equal((await db.query("SELECT probation_refund_owed FROM sending_email_events WHERE email_id=$1 AND type='dispatch_attempt'",[id])).rows[0].probation_refund_owed,fault!=='healthy');
+    }
+  });
+
+  test('probation budget: arbitrary SQL and JS errors, missing function, null and malformed decisions fail closed once per run',async t=>{
+    const f=await probationFixture(t,3,1000),{db,owners,platform}=f,[,wid,good]=owners as [string,string,string];
+    const sig='probation_claim(jsonb,integer,integer)',original=(await db.query('SELECT pg_get_functiondef($1::regprocedure) AS def',[sig])).rows[0].def;
+    await db.query("INSERT INTO sender_standing(workspace_id,phase,daily_limit) VALUES($1,'graded',NULL) ON CONFLICT(workspace_id) DO UPDATE SET phase='graded',daily_limit=NULL",[good]);
+    await db.query('TRUNCATE probation_budget_hours');
+    cleanup(t,async()=>{await db.query(original);await db.query('TRUNCATE probation_budget_hours');});
+    const warnings=t.mock.method(console,'warn');
+    for(const fault of ['raise','null','wrong','absent','js']){
+      const outside=Array.from({length:12},()=>unique('meter')),exempt=Array.from({length:70},()=>unique('exempt'));
+      await f.seed([...outside.map(id=>({wid,id})),...exempt.map((id,i)=>({wid:i%2?platform:good,id}))]);
+      const begin='CREATE OR REPLACE FUNCTION probation_claim(batch jsonb,hourly integer,daily integer) RETURNS TABLE (id text, reason text, charged_hour timestamptz, outside_cost integer, card jsonb) LANGUAGE plpgsql VOLATILE AS $$ BEGIN ';
+      if(fault==='absent')await db.query('DROP FUNCTION '+sig);
+      if(fault==='raise')await db.query(begin+"RAISE EXCEPTION 'synthetic unexpected SQLSTATE'; END $$");
+      if(fault==='null')await db.query(begin+'RETURN NEXT; END $$');
+      if(fault==='wrong')await db.query(begin+"RETURN QUERY SELECT x.id,NULL::text,date_trunc('hour',now(),'UTC'),0,'{}'::jsonb FROM jsonb_to_recordset(batch) x(id text); END $$");
+      const run=f.workers[0]!.runtime;
+      const transact=run.db.transaction.bind(run.db);
+      const js=fault==='js'?t.mock.method(run.db,'transaction',async (...args:Parameters<typeof transact>)=>{
+        if(String(args[0]).includes('claimGroup')) throw new TypeError('synthetic meter failure');
+        return transact(...args);
+      }):undefined;
+      const before=warnings.mock.callCount(),start=performance.now();
+      try {await f.dispatch();} finally {js?.mock.restore();await db.query(original);}
+      assert.ok(performance.now()-start<2000,fault);
+      assert.equal((await db.query("SELECT count(*)::int n FROM sending_emails WHERE id=ANY($1) AND status='accepted'",[exempt])).rows[0].n,70,fault);
+      assert.equal(warnings.mock.calls.slice(before).filter(c=>String(c.arguments[0]).includes('PROBATION_BUDGET_UNAVAILABLE')).length,1,fault);
+      assert.equal((await db.query("SELECT count(*)::int n FROM sending_emails WHERE id=ANY($1) AND status='queued' AND scheduled_at IS NOT NULL AND lease_until IS NULL",[outside])).rows[0].n,12,fault);
+      assert.equal(f.calls.filter(c=>outside.includes(c.id)).length,0,fault);
+      await db.query('UPDATE sending_emails SET scheduled_at=NULL WHERE id=ANY($1)',[outside]);await f.dispatch(1);
+      assert.equal(f.calls.filter(c=>outside.includes(c.id)).length,12,fault);
+      await db.query('DELETE FROM hosted_burst_windows WHERE workspace_id=$1',[wid]);
+    }
+  });
+
+  test('probation budget backlog: compare full, idle and rollover runs with the same unmetered queue on dev',{skip:!process.env.NIGHTMAIL_PROBATION_BACKLOG},async t=>{
+    const base=process.env.NIGHTMAIL_PROBATION_BASE==='1';
+    const cases=[[50,0],[50,1000],[50,4000],[50,25000],[10000,10000],[1,500]] as const;
+    for(const [workspaces,n] of cases) for(const rollover of (n===25000?[false,true]:[false])){
+      const scenario=rollover?'rollover':String(n);
+      if(!['all',scenario].includes(process.env.NIGHTMAIL_PROBATION_BACKLOG!)) continue;
+      await t.test(scenario,async t=>{
+        const f=await probationFixture(t,workspaces+2,1000),{db,owners,platform}=f;
+        const good=owners.at(-1)!,ring=owners.slice(1,-1);
+        await db.query("SET statement_timeout='120s'");
+        // Set the existing synthetic workspace allowance high enough for dev to drain
+        // the identical offered queue without encountering an unrelated minute cap.
+        await db.query('UPDATE workspaces SET send_cap_override=3000000 WHERE id=ANY($1)',[ring]);
+        await db.query("INSERT INTO sender_standing(workspace_id,phase,daily_limit) VALUES($1,'graded',NULL) ON CONFLICT(workspace_id) DO UPDATE SET phase='graded',daily_limit=NULL",[good]);
+        if(!base){
+          await db.query('TRUNCATE probation_budget_hours');cleanup(t,()=>db.query('TRUNCATE probation_budget_hours').then(()=>{}));
+          await db.query("INSERT INTO probation_budget_hours(hour,recipients) VALUES(date_trunc('hour',now(),'UTC')-$1::interval,2000)",[rollover?'2 hours':'1 hour']);
+        }
+        const offered=Array.from({length:n},(_,i)=>({wid:ring[i%workspaces]!,id:f.tag+'-outside-'+String(i).padStart(5,'0')}));
+        for(let i=0;i<n;i+=1000)await f.seed(offered.slice(i,i+1000));
+        if(rollover)await db.query("UPDATE sending_emails SET scheduled_at=now()-interval '1 second',error_code='PROBATION_BUDGET_WAIT' WHERE workspace_id=ANY($1) AND status='queued'",[ring]);
+        const member=n===500?unique('member-msg'):null;
+        if(member){
+          await db.query("INSERT INTO workspace_members(id,user_id,workspace_id,role) VALUES($1,$2,$3,'member')",[unique('member'),manager!.userId,ring[0]]);
+          await f.seed([{wid:ring[0]!,id:member,to:[manager!.email]}]);
+        }
+        await db.query('ANALYZE sending_emails; ANALYZE workspaces; ANALYZE provider_connections; ANALYZE provider_connection_regions');
+        let trips=0,debits=0,parks=0,maxPark=0;
+        const original=pg.Client.prototype.query;
+        // Count at the wire without retaining every large SQL string in a mock's call history.
+        pg.Client.prototype.query=function(this:pg.Client,...args:any[]){
+          const text=typeof args[0]==='string'?args[0]:args[0]?.text;
+          trips++;
+          if(text?.includes('CROSS JOIN LATERAL probation_claim'))debits++;
+          if(text?.includes("budget AS MATERIALIZED (SELECT id,'PROBATION_BUDGET_WAIT' AS reason")){
+            parks++;
+            const params=args[0]?.values??args[1];
+            const rows=params.find((v:unknown)=>typeof v==='string' && v.startsWith('[{') && v.includes('"dispatch_version"'));
+            maxPark=Math.max(maxPark,JSON.parse(rows).length);
+          }
+          return (original as Function).apply(this,args);
+        } as typeof original;
+        try {
+          for(const first of [true,false]){
+            await f.seed(Array.from({length:40},(_,i)=>({wid:i%2?good:platform,id:unique('newer')})));
+            const start=performance.now(),from=f.calls.length;
+            trips=debits=parks=maxPark=0;
+            const report=await f.dispatch(0,1,{lanes:1});
+            const elapsed=Math.round(performance.now()-start),sent=f.calls.slice(from);
+            const last=(wid:string)=>Math.round(sent.filter(c=>c.wid===wid).at(-1)!.time-start);
+            const outside=sent.filter(c=>c.wid!==good && c.wid!==platform && c.id!==member).length;
+            const phase=first?(rollover?'rollover':'first'):'next';
+            const row={version:base?'dev':'pr',workspaces,n,phase,elapsed,trips,leases:report.batches,debits,parks,maxPark,
+              platform:last(platform),good:last(good),member:member && first?Math.round(sent.find(c=>c.id===member)!.time-start):null,outside};
+            console.info('PB_BACKLOG '+JSON.stringify(row));
+            assert.equal(sent.filter(c=>c.wid===good).length,20);assert.equal(sent.filter(c=>c.wid===platform).length,20);
+            assert.equal(outside,first?(base?n:rollover?2000:0):0);
+            if(!base){
+              assert.ok(maxPark<=24);assert.ok(parks<=report.batches);
+              if(!rollover || !first)assert.ok(debits<=(first && n?1:0));
+              const queued=(await db.query("SELECT count(*)::int n FROM sending_emails WHERE workspace_id=ANY($1) AND status='queued' AND error_code='PROBATION_BUDGET_WAIT' AND scheduled_at>now()",[ring])).rows[0].n;
+              assert.equal(queued,n-(rollover?2000:0));
+            }
+          }
+        }finally{pg.Client.prototype.query=original;}
+      });
+    }
   });
 
   test('probation budget mixed throughput: eight shards at 170ms, saturated new senders alongside platform mail',{skip:process.env.NIGHTMAIL_PROBATION_BENCH!=='1'},async t=>{

@@ -11,7 +11,8 @@ CREATE TABLE probation_budget_hours (
 
 -- Private dispatch metadata. Public email events expose their JSON data;
 -- these columns are intentionally separate and NULL for unmetered attempts.
-ALTER TABLE sending_email_events ADD COLUMN probation_hour timestamptz, ADD COLUMN probation_cost integer;
+ALTER TABLE sending_email_events ADD COLUMN probation_hour timestamptz, ADD COLUMN probation_cost integer,
+  ADD COLUMN probation_refund_owed boolean NOT NULL DEFAULT false;
 
 -- Only eligible, version-fenced, locked emails with outside recipients reach
 -- this function. One lock order across hours, including claims straddling UTC
@@ -23,7 +24,7 @@ DECLARE
   h timestamptz;
   hourly_used bigint; daily_used bigint; added integer := 0;
   half boolean; hit_half boolean; wait_hour integer; wait_day integer;
-  hour_cap integer; day_cap integer;
+  hour_cap integer; day_cap integer; direct_full boolean := false; bulk_full boolean := false;
   r record; result jsonb := '[]'; alert jsonb := '{}';
 BEGIN
   IF batch IS NULL THEN RETURN; END IF;
@@ -46,7 +47,8 @@ BEGIN
     reason := NULL;
     hour_cap := CASE WHEN r.direct THEN hourly ELSE floor(hourly*0.9) END;
     day_cap := CASE WHEN r.direct THEN daily ELSE floor(daily*0.9) END;
-    IF hourly_used+added+r.cost > hour_cap OR daily_used+added+r.cost > day_cap THEN
+    IF (r.direct AND direct_full) OR (NOT r.direct AND bulk_full) OR hourly_used+added+r.cost > hour_cap OR daily_used+added+r.cost > day_cap THEN
+      IF r.direct THEN direct_full := true; ELSE bulk_full := true; END IF;
       reason := 'PROBATION_BUDGET_WAIT';
       IF wait_hour IS NULL THEN
         wait_hour := hour_cap-r.cost; wait_day := day_cap-r.cost;
@@ -72,20 +74,15 @@ BEGIN
     FROM jsonb_to_recordset(result) x(id text,reason text,cost integer);
 END $$;
 
--- The outcome writer deduplicates attempt-result events by (workspace_id,
--- external_id). Only a newly inserted definite non-send returns its frozen
--- charge. An interrupted claim, missing result or ambiguous call keeps it.
-CREATE FUNCTION probation_refund() RETURNS trigger LANGUAGE plpgsql AS $$
-DECLARE charged record;
+-- The unique result insert marks only its existing attempt, never a bucket.
+-- This also works for a dispatcher of the previous release during rollout.
+CREATE FUNCTION probation_note_refund() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-  SELECT e.probation_hour,e.probation_cost INTO charged FROM sending_email_events e WHERE e.workspace_id=NEW.workspace_id
-    AND e.external_id='attempt-start:'||substr(NEW.external_id,length('attempt-result:')+1);
-  IF charged.probation_hour IS NOT NULL THEN
-    UPDATE probation_budget_hours SET recipients=recipients-charged.probation_cost
-      WHERE hour=charged.probation_hour;
-  END IF;
+  UPDATE sending_email_events SET probation_refund_owed=true
+    WHERE workspace_id=NEW.workspace_id AND external_id='attempt-start:'||substr(NEW.external_id,length('attempt-result:')+1)
+      AND probation_hour IS NOT NULL;
   RETURN NULL;
 END $$;
-CREATE TRIGGER refund_probation_attempt AFTER INSERT ON sending_email_events FOR EACH ROW
+CREATE TRIGGER note_probation_refund AFTER INSERT ON sending_email_events FOR EACH ROW
   WHEN (NEW.external_id LIKE 'attempt-result:%' AND NEW.type IN ('reject','provider_throttled','dispatch_deferred'))
-  EXECUTE FUNCTION probation_refund();
+  EXECUTE FUNCTION probation_note_refund();
