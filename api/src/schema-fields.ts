@@ -2,7 +2,8 @@
 // painted at build time too) and the API's Markdown copies (openapi-docs.ts: /docs/operations/<id>.md, the tag
 // references) both draw from here, so a page and its copy name the same fields in the same order.
 // - Fields: the schema's own, merged from every part of an allOf (a shared schema plus a few fields), with their
-//   required flags; an object field's fields one level down, named by their path (template.name, headers[].value).
+//   required flags; an object field's fields one level down, named by their path (template.name, headers[].value),
+//   an object that may be null's too (risk.score). A field that is one of several objects shows its type.
 // - Variants (a oneOf or anyOf of objects): each with its own fields, titled by what tells them apart in the schema
 //   itself: the one property each variant fixes to its own value ("type: slack"), else the variant's own title, else
 //   "Variant 1", "Variant 2"… with its schema's name where it has one. Nothing here adds to api/openapi.json.
@@ -56,13 +57,21 @@ export function schemaType(document: Json, input: Json | undefined): string {
   return schema.type ?? (schema.properties ? 'object' : 'value')
 }
 
-/** An object's fields, with an object field's own fields one level down (an array of objects' as name[].field). */
+/** A field's object: its schema merged, or the one object of an "object or null" (a oneOf or anyOf of it and null). */
+function orNull(document: Json, input: Json | undefined): Json {
+  const schema = merged(document, input), union: Json[] | undefined = schema.oneOf ?? schema.anyOf
+  if (!Array.isArray(union)) return schema
+  const parts = union.map(part => merged(document, part)), objects = parts.filter(hasFields)
+  return objects.length === 1 && parts.every(part => part === objects[0] || part.type === 'null') ? objects[0]! : schema
+}
+/** An object's fields, with an object field's own fields one level down (an array of objects' as name[].field; an object
+ *  that may be null's too). */
 function fieldsOf(document: Json, schema: Json): Field[] {
   const required = new Set<string>(schema.required ?? [])
   const row = (path: string, definition: Json, isRequired: boolean): Field => ({ path, type: schemaType(document, definition), required: isRequired, description: resolveSchema(document, definition).description ?? null })
   return Object.entries<Json>(schema.properties ?? {}).flatMap(([property, definition]) => {
     const field = row(property, definition, required.has(property))
-    const value = merged(document, definition), items = value.type === 'array' ? merged(document, value.items) : null
+    const value = orNull(document, definition), items = value.type === 'array' ? orNull(document, value.items) : null
     const nested = hasFields(value) ? { prefix: `${property}.`, schema: value } : items && hasFields(items) ? { prefix: `${property}[].`, schema: items } : null
     if (!nested) return [field]
     const inner = new Set<string>(nested.schema.required ?? [])
