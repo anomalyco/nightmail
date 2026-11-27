@@ -291,9 +291,11 @@ export type MailboxAccess = { keyId: string; grantId?:string; workspaceId: strin
 export type SupportScope = { userId: string; contentWorkspaceId: string | null;
   workspaces: { id: string; name: string; role: 'owner' | 'admin' | 'member' }[];
   conversation: { id: string; channel: 'chat' | 'email'; verification: string; workspaceId: string | null } };
+export type AccountRequestMetrics = { discoveryCacheHit?: boolean; parRequests?: number; tokenRequests?: number };
 export type AppEnv = { Bindings: Runtime; Variables: { actor: Actor; boundedBody?: boolean; importLease?: import('./isolate-memory.js').MemoryLease; importLeaseTransferred?: boolean; requestId: string; serverTimings: { name: string; durationMs: number }[]; mailboxAccess?: MailboxAccess;
   /** Elapsed time asleep between long-poll reads; queries and reauthorization are active request time. */
   pollWaitMs?: number;
+  accountRequestMetrics?: AccountRequestMetrics;
   rateLimitedWorkspace?: string; // The verified credential's workspace, when the budget refuses it before the actor is set.
   /** The error code and field a failed request answered with, for its request log line. `unmatched`: no route did. */
   failure?: { code: string; mcpStale?: import('./mcp-session.js').StaleReason; field?: string; databaseCode?: string; unmatched?: boolean; origin?: { originClass: string; fetchSite?: string }; attachmentTypes?: AttachmentTypes; reason?: string };

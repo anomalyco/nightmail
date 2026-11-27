@@ -24,7 +24,7 @@ const slow = (fields: Record<string, unknown>) => [fields.durationMs, fields.run
 // Sample routine successes at the source, NOT whole invocations: a sampled-out request still logs every failure, and
 // a kept line carries its `sampleRate` so counts are estimated as 1/sampleRate lines each. A slow one is never sampled.
 function sampleRate(level: 'info' | 'warn' | 'error', fields: Record<string, unknown>) {
-  if (level !== 'info' || logContext.sample === false || slow(fields) || fields.deprecationEvent === 'attempt') return 1;
+  if (level !== 'info' || logContext.sample === false || slow(fields) || fields.deprecationEvent === 'attempt' || fields.accountStart === true) return 1;
   if (typeof fields.code === 'string' && ROUTINE_CODES.has(fields.code)) return 0.01;
   return typeof fields.status === 'number' && fields.status < 400 ? 0.1 : 1;
 }

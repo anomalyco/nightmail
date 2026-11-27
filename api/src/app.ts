@@ -241,6 +241,8 @@ function logRequest(c: Ctx, durationMs: number, retiringRoutes: ReadonlyMap<stri
     path: route === 'unmatched' ? unmatchedPath(c, workspace || undefined) : undefined,
     originClass: refusedOrigin ? !origin ? 'missing' : origin === 'null' ? 'null' : 'cross-site' : failure?.origin?.originClass, fetchSite: failure?.origin?.fetchSite,
     workspace, principal: principalOf(c, route),
+    accountStart: (c.req.method === 'POST' && c.req.path === '/api/auth/sign-in/account') || undefined,
+    ...c.get('accountRequestMetrics'),
     timings: timings.length ? Object.fromEntries(timings.map(item => [item.name, Number(item.durationMs.toFixed(1))])) : undefined,
   });
 }
