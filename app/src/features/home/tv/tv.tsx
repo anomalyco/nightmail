@@ -654,6 +654,9 @@ function takeOver(set: HTMLElement | null) {
   const shell = document.getElementById('home-shell')
   if (!shell) return
   const focused = ['.chyp-go', '.chy-screen'].find(control => shell.contains(document.activeElement) && document.activeElement?.closest(control))
+  // Get started pressed there is on its way here too: its play mark goes on blinking in step (tv.css, chyp-play).
+  const blink = shell.querySelector('.chyp-go[data-busy]')?.getAnimations({ subtree: true })[0]?.startTime
+  if (blink != null) for (const label of set?.closest('.chy')?.querySelectorAll('.chyp-go[data-busy]') ?? []) for (const step of label.getAnimations({ subtree: true })) step.startTime = blink
   shell.remove()
   if (focused) [...set?.closest('.chy')?.querySelectorAll<HTMLElement>(focused) ?? []].find(el => el.getClientRects().length)?.focus()
 }
@@ -665,6 +668,10 @@ export function TvHome({ start, notice }: HomeProps) {
   // has something of its own to say there. The line is in the page from the start (empty), so its words move nothing.
   const full = useSignupsFull(visitor), said = notice || <p role="status">{full ? 'Full for now. Join the waitlist and we’ll email you when a place opens.' : ''}</p>
   const [flat, setFlat] = useState(false), [on, setOn] = useState(true), [channel, setChannel] = useState(0), [bad, setBad] = useState(0), [muted, setMuted] = useState(false)
+  // Get started pressed on home.html's first screen is on its way from this page's first render, as that screen drew it
+  // (so its takeover changes nothing), until the sign-in the press starts (below) says so itself.
+  const [pressed, setPressed] = useState(() => visitor && !!(globalThis as { __nightmailHomeStart?: boolean }).__nightmailHomeStart)
+  const way = pressed && !start.signedIn ? { ...start, busy: true } : start
   const box = useRef<HTMLDivElement>(null)
   const deck = useRef<Deck>({ channel: 0, number: 1, subtitles: false, power: true, bad: 0, switchAt: -1e9, note: '', noteAt: -1e9, air: null, wake: () => {}, hear: () => {}, glow: [.38, .49, .75], level: 0 }).current
   // The sound starts with the visitor's first use of the set (a browser plays nothing before that); the speaker's
@@ -680,6 +687,7 @@ export function TvHome({ start, notice }: HomeProps) {
   useEffect(() => {
     const shell = window as Window & { __nightmailHomeStart?: boolean; __nightmailShellZap?: boolean }
     if (shell.__nightmailHomeStart && !start.signedIn) { delete shell.__nightmailHomeStart; start.onSignIn() }
+    setPressed(false)
     if (shell.__nightmailShellZap) { delete shell.__nightmailShellZap; sound.current?.start(); noise('channel'); next() }
     const late = setTimeout(() => takeOver(box.current), 3000)
     return () => clearTimeout(late)
@@ -787,10 +795,10 @@ export function TvHome({ start, notice }: HomeProps) {
         <Dial y={KNOB_Y[0]!} label="Tracking" stops={[-55, 0, 55]} index={bad} onIndex={i => { noise('knob'); setBad(i); deck.bad = i; deck.wake() }} onAngle={angle => { deck.bad = (angle + 55) / 55; deck.wake() }} />
         <Dial y={KNOB_Y[1]!} label="Power" stops={[-50, 40]} index={Number(on)} onIndex={i => { noise('knob', .7); noise(i === 1 ? 'on' : 'off', .6, .05); if (i === 1) noise('tape', .3, .9); setOn(i === 1); deck.power = i === 1; deck.wake() }} />
         <Remote light={deck} onZap={() => { noise('remote'); next() }} onDigit={digit} onHold={to => { held.current = to }} />
-        <Label start={start} />
+        <Label start={way} />
       </div>
       <div className="chy-under">
-        <div className="chy-way"><Label start={start} under /><div className="chy-notice">{said}</div></div>
+        <div className="chy-way"><Label start={way} under /><div className="chy-notice">{said}</div></div>
         {visitor ? <SignInConsent className="chy-consent" after={<More lead />} /> : <p className="chy-consent"><More /></p>}
       </div>
       <Words />

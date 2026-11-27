@@ -9,7 +9,6 @@ html[data-shell='off'] #home-shell { display: none; }
 html:not([data-shell='off']):not(:has(#root)), html:not([data-shell='off']):not(:has(#root)) body { background: %FLOOR%; }
 /* Behind the glass, the tape's still, where the page's canvas goes. */
 #home-shell .hs-still { display: block; width: 100%; height: 100%; }
-/* The way in and the line under it for a visitor, or for a browser that has had a dashboard (theme.js: data-member);
-   pressed before the page's code is in, Get started shows it is on its way. */
+/* The way in and the line under it for a visitor, or for a browser that has had a dashboard (theme.js: data-member).
+   Pressed before the page's code is in, Get started is drawn on its way by tv.css's rules (home-tv.ts keeps them). */
 html:not([data-member]) #home-shell .hs-member, html[data-member] #home-shell .hs-visitor { display: none; }
-#home-shell .chyp-go[data-busy] { cursor: progress; }
