@@ -37238,29 +37238,74 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
-  test('account notices: an invitation (only from a workspace with a verified domain or past its evaluation, in fixed words that name the inviter by address and not the workspace), the daily limit, the evaluation\'s end, a lost domain, a waitlist admission and a sign-in link are each emailed once; what no longer holds, an exempt workspace and a used-up invitation allowance send nothing; a send that fails is retried and ends failed after its last attempt', async t => {
+  test('account notices: an invitation (only from a workspace that is not paused and has a verified domain of its own or is past its evaluation, in fixed words that name the inviter by address and not the workspace), the daily limit, the evaluation\'s end, a lost domain, a waitlist admission and a sign-in link are each emailed once; what no longer holds, an exempt workspace and a used-up invitation allowance send nothing; a send that fails is retried and ends failed after its last attempt', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
       const { wid, name, platform, pool, fresh } = await noticeFixture(runtime, db);
       const { accountNotifyJob, domainUnverified, evaluationFinished, limitReached, waitlistAdmitted, INVITATION_EMAILS } = await import('./src/account-notices.js');
       const { ApiError } = await import('./src/core.js'), { JobDeferred, MAX_ATTEMPTS } = await import('./src/jobs.js');
       const { applyChange } = await import('./src/standing.js');
       // Runs each pending account.notify job twice (a retry), and returns the notices' kinds and how they ended.
-      const deliver = async () => {
-        const jobs = (await db.query(`SELECT j.id,j.payload,j.workspace_id FROM jobs j WHERE j.type='account.notify' AND j.status='pending' AND j.workspace_id=ANY($1)`, [[wid, platform]])).rows;
+      const deliver = async (workspaces = [wid, platform]) => {
+        const jobs = (await db.query(`SELECT j.id,j.payload,j.workspace_id FROM jobs j WHERE j.type='account.notify' AND j.status='pending' AND j.workspace_id=ANY($1)`, [workspaces])).rows;
         for (const j of jobs) { for (let i = 0; i < 2; i++) await accountNotifyJob(runtime, j.payload, { id: j.id, attempts: i + 1, workspaceId: j.workspace_id }); await db.query(`UPDATE jobs SET status='completed' WHERE id=$1`, [j.id]); }
         return (await db.query(`SELECT kind,status FROM account_notices WHERE id=ANY($1) ORDER BY kind`, [jobs.map(j => j.payload.noticeId)])).rows.map(r => `${r.kind}:${r.status}`);
       };
       const notices = async (kind: string) => (await db.query(`SELECT count(*)::int AS n FROM account_notices WHERE workspace_id=$1 AND kind=$2`, [wid, kind])).rows[0].n;
       const invite = async (email: string) => ok(await local('POST', '/v1/workspaces/current/invitations', { email, role: 'admin' }), 201);
 
-      // A workspace with no verified domain that has not finished its evaluation emails nobody: the invitation is made,
-      // the inviter is told why and shares its link, and no allowance is spent.
+      // A workspace with no verified domain of its own that has not finished its evaluation emails nobody: the invitation
+      // is made, the inviter is told why and shares its link, and no allowance is spent. Made as production makes one: a
+      // sign-up on an installation with built-in domains, whose Hosted mail starts in the same request (SES synthetic here),
+      // so its built-in domain is verified within seconds. That domain is not its own.
       const allowances = async () => (await db.query(`SELECT count(*)::int AS n FROM api_request_budgets WHERE key_id LIKE 'invitation-email%'`)).rows[0].n;
-      const early = await invite('early@elsewhere.example');
-      assert.deepEqual([early.emailed, early.notEmailedReason], [false, 'new_workspace']);
+      const [{ onboardNewUser }, { startHostedMail }, { pauseHostedByOperator }, { SESv2Client, CreateTenantCommand, UpdateReputationEntityPolicyCommand, CreateTenantResourceAssociationCommand }, { STSClient }] = await Promise.all([
+        import('./src/workspaces.js'), import('./src/provider-connections.js'), import('./src/states.js'), import('@aws-sdk/client-sesv2'), import('@aws-sdk/client-sts')]);
+      const ohio = 'us-east-2', parent = 'nightmail-fixture.email', { liveEnabled, aws, regionalSending, platformAccount, builtinDomain } = runtime.config;
+      Object.assign(runtime.config, { liveEnabled: true, aws: { accessKeyId: 'fixture-invitations', secretAccessKey: 'fixture-only' }, regionalSending: true, platformAccount: undefined, builtinDomain: parent });
+      await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket,inbound_topic_arn,receiving_state) VALUES ($1,$2,$3,'ready','fixture',$4,'ready') ON CONFLICT DO NOTHING`,
+        [ohio, pool, `arn:aws:sns:${ohio}:${pool}:bane-feedback`, `arn:aws:sns:${ohio}:${pool}:bane-inbound`]);
+      await db.query('INSERT INTO builtin_parent(name,ok,ses,checked_at) VALUES($1,true,$2,now())', [parent, JSON.stringify({ VerificationStatus: 'SUCCESS', VerifiedForSendingStatus: true, DkimAttributes: { SigningAttributesOrigin: 'AWS_SES', SigningEnabled: true, Status: 'SUCCESS' } })]);
+      const sts = t.mock.method(STSClient.prototype, 'send', async () => ({ Account: pool, Arn: `arn:aws:iam::${pool}:user/fixture` }));
+      const ses = t.mock.method(SESv2Client.prototype, 'send', async (cmd: any) => {
+        if (cmd instanceof CreateTenantCommand) return { TenantName: cmd.input.TenantName, TenantArn: `arn:aws:ses:${ohio}:${pool}:tenant/${cmd.input.TenantName}/fixture` };
+        if (cmd instanceof UpdateReputationEntityPolicyCommand || cmd instanceof CreateTenantResourceAssociationCommand) return {};
+        throw new Error(`Unexpected SES call ${cmd.constructor.name}`);
+      });
+      const user = unique('signup'), address = `${user}@example.net`, issuer = process.env.ACCOUNT_ISSUER ?? 'https://account.anoma.ly';
+      await db.query('INSERT INTO nightmail_users(id,name,email,email_verified) VALUES($1,$2,$3,true)', [user, user, address]);
+      const signedUp = await onboardNewUser(runtime.db, { id: user, name: user, email: address }, true, ohio, null, runtime.config) as string;
+      const hosted = await startHostedMail(runtime, signedUp, { actor: { type: 'member', id: user, userId: user, via: 'dashboard' }, requestId: null, ipNetwork: null, userAgent: null }, { kind: 'shared' }, true);
+      if ('started' in hosted) await hosted.started;
+      sts.mock.restore(); ses.mock.restore();
+      Object.assign(runtime.config, { liveEnabled, aws, regionalSending, platformAccount, builtinDomain });
+      assert.deepEqual((await db.query(`SELECT sending_state,identity ? 'builtin' AS builtin FROM domain_claims WHERE workspace_id=$1`, [signedUp])).rows, [{ sending_state: 'verified', builtin: true }]);
+      // Its owner, signed in to the dashboard.
+      const token = createHash('sha256').update(randomUUID()).digest('base64url'), cookie = `${COOKIE_NAME}=${token}`;
+      secrets.add(token); secrets.add(cookie);
+      await db.query('INSERT INTO nightmail_oidc_identities VALUES($1,$2,$3)', [issuer, user, user]);
+      await db.query("INSERT INTO nightmail_sessions(token_hash,user_id,issuer,subject,verified_email,staff,expires_at) VALUES($1,$2,$3,$2,$4,false,now()+interval '1 hour')", [createHash('sha256').update(token).digest('hex'), user, issuer, address]);
+      const inviteFrom = async (email: string) => ok(await local('POST', '/v1/workspaces/current/invitations', { email, role: 'admin' }, 'live', { cookie }), 201);
+      const signedUpNotices = async () => (await db.query(`SELECT count(*)::int AS n FROM account_notices WHERE workspace_id=$1 AND kind='invitation'`, [signedUp])).rows[0].n;
+      const early = await inviteFrom('early@elsewhere.example');
+      assert.deepEqual([early.workspaceId, early.emailed, early.notEmailedReason], [signedUp, false, 'new_workspace']);
       assert.match(early.nextStep, /^No email was sent: Nightmail emails invitations once this workspace has a verified domain or has finished its evaluation\. Share acceptUrl with early@elsewhere\.example yourself/);
-      assert.deepEqual([await notices('invitation'), await allowances(), await deliver()], [0, 0, []]);
-      // One with a verified domain does (one past its evaluation: below, where its standing is set).
+      assert.deepEqual([await signedUpNotices(), await allowances(), await deliver([signedUp])], [0, 0, []]);
+      // A verified domain of its own: it does (one past its evaluation: below, where the fixture workspace's standing is set).
+      const { rows: [connection] } = await db.query('SELECT id FROM provider_connections WHERE workspace_id=$1', [signedUp]);
+      await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES ('own.example',$1,$2,'verified')`, [signedUp, connection.id]);
+      assert.equal((await inviteFrom('own@elsewhere.example')).emailed, true);
+      assert.deepEqual([await deliver([signedUp]), (await fresh()).map(r => r.to_addresses[0])], [['invitation:sent'], ['own@elsewhere.example']]);
+      // A paused workspace emails nobody: one queued before the pause is not sent, and one made during it is made, its
+      // inviter told no email went out (as for any reason without words of its own), and no allowance spent.
+      assert.equal((await inviteFrom('queued@elsewhere.example')).emailed, true);
+      assert.equal((await runtime.db.execute(pauseHostedByOperator(signedUp, 'Synthetic review'))).rows.length, 1);
+      assert.deepEqual([await deliver([signedUp]), await fresh()], [['invitation:suppressed'], []]);
+      const spent = await allowances(), paused = await inviteFrom('paused@elsewhere.example');
+      assert.deepEqual([paused.emailed, paused.notEmailedReason], [false, 'paused']);
+      assert.match(paused.nextStep, /^No email was sent\. Share acceptUrl with paused@elsewhere\.example yourself/);
+      assert.deepEqual([await signedUpNotices(), await allowances(), await deliver([signedUp])], [2, spent, []]);
+
+      // The fixture workspace, with a verified domain of its own.
       await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES ('team.example',$1,$1,'verified')`, [wid]);
 
       // An invitation goes to an address outside the workspace from this installation's own sender, and the names

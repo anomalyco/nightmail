@@ -5,6 +5,7 @@ import { LINK_LABEL, LINK_RETENTION_DAYS } from './link-hosts.js';
 import { placementRoot } from './domain-registry.js';
 import { cname, fqdn } from './public-dns.js';
 import { productName, servedDomains } from './brand.js';
+import { workspacePaused } from './states.js';
 
 /**
  * Where the links Nightmail puts in customer mail live: the unsubscribe link (footer, text part and List-Unsubscribe),
@@ -106,10 +107,8 @@ export async function linkAllowance(db: DbExecutor, config: Config, wid: string,
   if (!b) return null;
   return { left: b.left, reason: 'link_budget' as const, until: b.until };
 }
-/** Whether the workspace may link on the link domain: not paused (a paused connection, an operator's pause or the abuse
- *  path, or the standing ladder's pause step). */
-export const mayLink = (workspaceId: string) => sql`(NOT EXISTS (SELECT 1 FROM provider_connections pc WHERE pc.workspace_id=${workspaceId} AND pc.paused_at IS NOT NULL)
-  AND NOT EXISTS (SELECT 1 FROM sender_standing s WHERE s.workspace_id=${workspaceId} AND s.step='pause'))`;
+/** Whether the workspace may link on the link domain: not paused (states.ts workspacePaused). */
+export const mayLink = (workspaceId: string) => sql`(NOT ${workspacePaused(workspaceId)})`;
 /** Where a message's links go: `shared` when on the link domain, whose use the sender records (recordLinkUse). */
 export type LinkChoice = { origin: string; shared?: { host: string } };
 /**

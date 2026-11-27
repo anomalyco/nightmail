@@ -5,6 +5,8 @@ import { RATES } from './billing/money.js';
 import { SEND_LIMITS } from './send-limits.js';
 import { customerNotice, plainAddress, type Notice, type NoticeInput, type ScoreCard } from './notices.js';
 import { LINK_MINUTES, signinLinkUrl, supportLinkUrl } from './signups.js';
+import { builtinClaim } from './domain-claims.js';
+import { workspacePaused } from './states.js';
 
 // Sending the account emails (src/notices.ts writes them). Three jobs send one each, every one through deliverNotice:
 // standing.notify (standing.ts: paused, marketing on hold, warning, resumed, campaign paused), billing.notify
@@ -158,23 +160,25 @@ export const INVITATION_EMAILS = { workspaceDay: 20, addressDay: 5, pair: 3 } as
 const budget = (db: DbExecutor, workspace: string, key: string, limit: number) => db.execute(sql`INSERT INTO api_request_budgets AS b(workspace_id,key_id,window_start,used) VALUES(${workspace},${key},date_trunc('day',now()),1)
   ON CONFLICT(workspace_id,key_id) DO UPDATE SET used=CASE WHEN b.window_start=excluded.window_start THEN b.used+1 ELSE 1 END,window_start=excluded.window_start
   WHERE b.window_start<>excluded.window_start OR b.used<${limit} RETURNING 1`).then(r => r.rows.length > 0);
-/** Why an invitation was not emailed: nothing here sends one, the workspace is not yet one that may, or an allowance is used. */
-export type InvitationNotEmailed = 'not_available' | 'new_workspace' | 'allowance_used';
+/** Why an invitation was not emailed: nothing here sends one, the workspace is paused or not yet one that may, or an allowance is used. */
+export type InvitationNotEmailed = 'not_available' | 'paused' | 'new_workspace' | 'allowance_used';
 /**
  * The invitation's email, queued in the transaction that made the invitation. Null when it is queued, otherwise why
  * none goes out (the inviter then shares the link): the installation has no sender for it or the inviter no verified
- * plain address to be named by; the workspace has neither a verified domain nor finished its evaluation (an email from
- * this installation's own address to any address is not for an account that signed up a minute ago); or an allowance
- * is used. The order matters: a workspace that may not email spends no allowance.
+ * plain address to be named by; the workspace is paused (states.ts workspacePaused); the workspace has neither a
+ * verified domain of its own nor finished its evaluation (an email from this installation's own address to any address
+ * is not for an account that signed up a minute ago). Its built-in domain is not its own: every new Hosted workspace's
+ * is verified from the start. Or an allowance is used. The order matters: a workspace that may not email spends no allowance.
  */
 export async function inviteByEmail(runtime: Runtime, tx: DbExecutor, invitation: { id: string; workspaceId: string; email: string }, inviterId: string, addressHash: string): Promise<InvitationNotEmailed | null> {
   if (!runtime.config.multiTenant || !runtime.config.notifyFrom || !runtime.config.platformDomainWorkspace) return 'not_available';
   try {
     await tx.execute(sql`SAVEPOINT invitation_email`);
-    const { rows: [may] } = await tx.execute<{ inviter: string | null; established: boolean }>(sql`SELECT (SELECT u.email FROM nightmail_users u WHERE u.id=${inviterId} AND u.email_verified) AS inviter,
-      EXISTS (SELECT FROM domain_claims dc WHERE dc.workspace_id=${invitation.workspaceId} AND dc.sending_state='verified')
+    const { rows: [may] } = await tx.execute<{ inviter: string | null; paused: boolean; established: boolean }>(sql`SELECT (SELECT u.email FROM nightmail_users u WHERE u.id=${inviterId} AND u.email_verified) AS inviter,
+      ${workspacePaused(invitation.workspaceId)} AS paused,
+      EXISTS (SELECT FROM domain_claims dc WHERE dc.workspace_id=${invitation.workspaceId} AND dc.sending_state='verified' AND NOT ${builtinClaim(sql`dc`)})
         OR EXISTS (SELECT FROM sender_standing s WHERE s.workspace_id=${invitation.workspaceId} AND s.phase='graded') AS established`);
-    const refused = !may?.inviter || !plainAddress(may.inviter) ? 'not_available' : !may.established ? 'new_workspace' : null;
+    const refused = !may?.inviter || !plainAddress(may.inviter) ? 'not_available' : may.paused ? 'paused' : !may.established ? 'new_workspace' : null;
     if (refused) { await tx.execute(sql`RELEASE SAVEPOINT invitation_email`); return refused; }
     const queued = await budget(tx, invitation.workspaceId, 'invitation-email', INVITATION_EMAILS.workspaceDay) && await budget(tx, 'global', `invitation-email:${addressHash}`, INVITATION_EMAILS.addressDay)
       && (await tx.execute(noticeInsert({ workspaceId: invitation.workspaceId, kind: 'invitation', dedupe: `invitation:${invitation.id}`, data: { invitationId: invitation.id, address: addressHash },
@@ -263,7 +267,7 @@ export const accountNotifyJob: JobHandler = retryDatabaseFailures(async (runtime
       CASE WHEN l.kind='no_domain' THEN EXISTS (SELECT FROM domain_claims dc WHERE dc.workspace_id=l.workspace_id AND NOT coalesce(dc.identity ? 'builtin',false)) END AS "hasDomain",
       CASE WHEN l.kind='no_domain' THEN (SELECT b.name FROM builtin_domains b WHERE b.workspace_id=l.workspace_id AND b.revoked_at IS NULL) END AS builtin,
       (SELECT json_build_object('email',i.email,'role',i.role,'expiresAt',i.expires_at,'inviterEmail',u.email) FROM workspace_invitations i JOIN nightmail_users u ON u.id=i.inviter_id
-        WHERE i.id=l.data->>'invitationId' AND i.workspace_id=l.workspace_id AND i.status='pending' AND i.expires_at>now()) AS invitation,
+        WHERE i.id=l.data->>'invitationId' AND i.workspace_id=l.workspace_id AND i.status='pending' AND i.expires_at>now() AND NOT ${workspacePaused(sql`l.workspace_id`)}) AS invitation,
       (SELECT json_build_object('email',sl.email,'conversation',sl.conversation_id,'message',sl.message_id) FROM nightmail_signin_links sl WHERE l.kind='signin_link' AND sl.id=l.data->>'linkId' AND sl.expires_at>now()) AS link
     FROM leased l LEFT JOIN workspaces w ON w.id=l.workspace_id`);
   if (!row) return heldNotice(runtime.db, 'account_notices', noticeId);

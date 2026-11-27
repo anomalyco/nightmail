@@ -487,7 +487,7 @@ export interface ByoRegion { region: string; regionLabel: string; scanState: str
 export interface ByoCandidate { id: string; domain: string; region: string; regionLabel: string; selectable: boolean; status: 'verified' | 'signing_pending' | 'not_verified' | 'incomplete' | 'already_bound' | 'overlap'; sandbox: boolean | null }
 export interface WorkspaceInvitation { id: string; workspaceId: string; email: string; role: WorkspaceRole; expiresAt: string; acceptUrl: string }
 /** A new invitation: emailed says whether the invitee was sent the link, and notEmailedReason why not. */
-export interface CreatedWorkspaceInvitation extends WorkspaceInvitation { emailed?: boolean; notEmailedReason?: 'not_available' | 'new_workspace' | 'allowance_used' | null }
+export interface CreatedWorkspaceInvitation extends WorkspaceInvitation { emailed?: boolean; notEmailedReason?: 'not_available' | 'paused' | 'new_workspace' | 'allowance_used' | null }
 export interface WorkspaceInvitationPreview { id: string; workspaceId: string; workspaceName: string; workspaceSlug: string; inviterEmail: string; role: WorkspaceRole; expiresAt: string; status: 'pending' | 'accepted' }
 export interface Attachment { disposition?: 'attachment' | 'inline'; contentId?: string | null; id: string; filename: string; contentType: string; size: number }
 export interface ConsentInput { status: "subscribed" | "unsubscribed"; topicId?: string; source?: string; evidence?: string; policyVersion?: string; occurredAt?: string; confirmResubscribe?: boolean }

@@ -369,6 +369,9 @@ export const pauseHostedSending = (unhealthy: SQL) => sql`WITH h AS MATERIALIZED
 /** Queues the job that sets the workspace's SES tenants to match its pause (retry-safe by id; the job reads the current state). */
 export const queueTenantStatus = (workspaces: SQL) => sql`INSERT INTO jobs(id,type,workspace_id,payload) SELECT 'hosted.tenantStatus:'||workspace_id,'hosted.tenantStatus',workspace_id,'{}'::jsonb FROM (${workspaces}) w
   ON CONFLICT(id) DO UPDATE SET status='pending',attempts=0,available_at=now(),lease_until=NULL,last_error=NULL WHERE jobs.status<>'running'`;
+/** Whether the workspace is paused: its connection (an operator's pause or the abuse path) or the standing ladder's pause step. */
+export const workspacePaused = (workspaceId: string | SQL) => sql`(EXISTS (SELECT 1 FROM provider_connections pc WHERE pc.workspace_id=${workspaceId} AND pc.paused_at IS NOT NULL)
+  OR EXISTS (SELECT 1 FROM sender_standing s WHERE s.workspace_id=${workspaceId} AND s.step='pause'))`;
 /** What Nightmail wants the SES tenants to be: disabled while paused (and not resuming), enabled otherwise. */
 export const desiredTenantStatus = (pc: SQL = sql`pc`) => sql`CASE WHEN ${pc}.paused_at IS NOT NULL AND ${pc}.resume_pending_at IS NULL THEN 'DISABLED' ELSE 'ENABLED' END`;
 /**
