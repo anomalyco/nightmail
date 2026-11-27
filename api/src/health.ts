@@ -6,6 +6,7 @@ import { countDatabaseError, LATENCY_BUCKETS, WRITE_LIMITS } from './health-coun
 import { slackCard, supportCostAlert } from './operator-alerts.js';
 import { aiCostToday } from './support-ai-cost.js';
 import { disabledSettings } from './config.js';
+import { sesHealth, type SesMemory } from './ses-quota-health.js';
 import { postSlack } from './reputation-alerts.js';
 import { mentionFor, sendMentioned } from './operator-mention.js';
 
@@ -14,7 +15,7 @@ import { mentionFor, sendMentioned } from './operator-mention.js';
 // Once a minute (the Worker's minute cron, the Node runner's loop) healthTick measures the installation from cheap
 // sources only: the queue metrics the cron already reads, the due and failed heads of the jobs table through its
 // indexes, the campaigns that are running, the counters each process flushes (src/health-counters.ts) and
-// pg_stat_activity. It never reads sending_emails or sending_email_events. What it finds is written to one row
+// pg_stat_activity. Hosted SES throughput reads one completed minute of dispatch events. What it finds is written to one row
 // (health_state.rollup), which is all GET /v1/operator/health and the Operator area's Health tab read, and compared
 // with the thresholds in src/health-thresholds.ts.
 //
@@ -29,10 +30,18 @@ const slack: HealthPost = (url, card) => postSlack(url, card, 'HEALTH_ALERT_FAIL
 
 type Severity = 'critical' | 'warning';
 /** Which probe an alert's condition is read from: an alert neither opens nor clears on a tick whose probe failed. */
-type Section = 'queues' | 'jobs' | 'campaigns' | 'requests' | 'database';
+type Section = 'queues' | 'jobs' | 'campaigns' | 'requests' | 'database' | 'ses';
 // critical: customers' mail or requests are affected now. warning: it will be, or it needs a look today.
 // The kind is the first part of every key and its section in docs/operations.md; unit says what the alert's value counts.
 const KINDS = {
+  'ses-tenants': { emoji: ':warning:', label: 'SES tenants', severity: 'warning', unit: 'share', section: 'ses' },
+  'ses-identities': { emoji: ':warning:', label: 'SES identities', severity: 'warning', unit: 'share', section: 'ses' },
+  'ses-configuration-sets': { emoji: ':warning:', label: 'SES configuration sets', severity: 'warning', unit: 'share', section: 'ses' },
+  'ses-daily': { emoji: ':warning:', label: 'SES daily allowance', severity: 'warning', unit: 'share', section: 'ses' },
+  'ses-rate': { emoji: ':warning:', label: 'SES sending rate', severity: 'warning', unit: 'share', section: 'ses' },
+  'ses-setup': { emoji: ':warning:', label: 'SES setup wait', severity: 'warning', unit: 'seconds', section: 'ses' },
+  'ses-signup-places': { emoji: ':warning:', label: 'Sign-up places exceed tenant capacity', severity: 'warning', unit: 'places', section: 'ses' },
+  'ses-unread': { emoji: ':warning:', label: 'SES reading unavailable', severity: 'warning', unit: 'readings', section: 'ses' },
   'queue-behind': { emoji: ':hourglass_flowing_sand:', label: 'Queue behind', severity: 'critical', unit: 'seconds', section: 'queues' },
   'dead-letters': { emoji: ':warning:', label: 'Dead letters', severity: 'critical', unit: 'messages', section: 'queues' },
   'jobs-behind': { emoji: ':hourglass_flowing_sand:', label: 'Jobs behind', severity: 'critical', unit: 'seconds', section: 'jobs' },
@@ -106,7 +115,7 @@ export type Sample = { queues: QueueSample[]; late: Late[] | null; failed: Faile
  * What the next tick compares with: how many ticks each condition has held, and each sending campaign's minute samples
  * (when, released, accepted).
  */
-export type Memory = { streaks: Record<string, number>; campaigns: Record<string, [at: number, released: number, accepted: number | null][]>; criticalKeys?: string[]; criticalClears?: Record<string, number> };
+export type Memory = { ses?: SesMemory; streaks: Record<string, number>; campaigns: Record<string, [at: number, released: number, accepted: number | null][]>; criticalKeys?: string[]; criticalClears?: Record<string, number> };
 export const emptyMemory = (): Memory => ({ streaks: {}, campaigns: {} });
 
 const Queue = z.object({ name: z.string(), depth: z.number().int(), oldestSeconds: z.number().int(), behind: z.boolean(),
@@ -410,9 +419,10 @@ async function measure(runtime: Pick<Runtime, 'db' | 'config'>, queues: QueueSam
   return { queues, late, failed, campaigns, counters, database };
 }
 
-const runbookOf = (kind: Kind) => `docs/operations.md#${kind}`;
+const runbookOf = (kind: Kind) => `docs/operations.md#${KINDS[kind].section === 'ses' ? 'ses-capacity' : kind}`;
 const queueLabel = (key: string) => key === 'queue-behind:feedback-priority' ? 'Bounce and complaint reports' : 'Delivery reports';
 function openLine(f: Finding) {
+  if (KINDS[f.kind].section === 'ses') return f.words;
   const subject = f.key.slice(f.kind.length + 1);
   switch (f.kind) {
     case 'queue-behind': return `${queueLabel(f.key)} are ${span(f.value)} behind`;
@@ -502,7 +512,11 @@ export async function healthTick(runtime: Pick<Runtime, 'db' | 'config'>, input:
     }
     statements += PROBES * 4; // Each probe: BEGIN, the limits, the read, COMMIT.
     const sample = await measure(runtime, input.queues ?? []);
+    const ses = await sesHealth(runtime, memory.ses);
     const { rollup, findings, blind } = evaluate(sample, memory, Math.floor(Date.now() / 1000), config.databaseDiskBytes ?? null);
+    findings.push(...ses.findings);
+    if (ses.registryUnknown) blind.add('ses');
+    rollup.memory.ses = ses.memory;
     // One line a minute per running campaign: what was released and accepted, how fast against what it may, and what came back.
     for (const c of rollup.campaigns ?? []) {
       const row = sample.campaigns!.find(row => safe(row.id) === c.id)!, rounded = (n: number | null) => n === null ? undefined : Math.round(n * 10) / 10;
@@ -518,7 +532,7 @@ export async function healthTick(runtime: Pick<Runtime, 'db' | 'config'>, input:
     const { rows: held, recovered } = await run(findings.length ? 3 : 2, async tx => {
       const rows = (await tx.execute<Held>(sql`SELECT key,kind,severity,extract(epoch FROM now()-since)::float8 AS age,
         extract(epoch FROM now()-seen_at)::float8 AS unseen,extract(epoch FROM now()-sent_at)::float8 AS sent FROM health_alerts`)).rows;
-      const recovered = rows.filter(a => !found.has(a.key) && isKind(a.kind) && !blind.has(KINDS[a.kind].section) && a.unseen >= TICK.clearMinutes * 60);
+      const recovered = rows.filter(a => !found.has(a.key) && !ses.blind.has(a.key) && isKind(a.kind) && !blind.has(KINDS[a.kind].section) && a.unseen >= TICK.clearMinutes * 60);
       // Remember the highest severity across a downgrade. Only critical recoveries can mute a future critical open:
       // an escalation above a past warning is actionable immediately. This bounded memory survives Worker turnover.
       const peaks = new Set(rows.filter(wasCritical).map(a => a.key));
@@ -548,6 +562,7 @@ export async function healthTick(runtime: Pick<Runtime, 'db' | 'config'>, input:
     const spend = findings.find(f => f.kind === 'support-ai-cost');
     if (spend && url) await run(1, tx => supportCostAlert(tx, spend.value, SUPPORT_AI.dailyLineUsd));
     const known = new Map(held.map(a => [a.key, a]));
+    if (ses.failure && !known.has('ses-unread:section')) log('warn', { code: 'SES_HEALTH_UNREADABLE', cause: ses.failure });
     const critical = findings.filter(f => f.severity === 'critical');
     const canClear = (a: Held) => wasPaged(a) && a.age - a.unseen >= TICK.longMinutes * 60;
     // As before, an overflow card stands for all its keys and only counts as sent if Slack accepted it.

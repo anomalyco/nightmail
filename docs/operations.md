@@ -385,3 +385,23 @@ November open nothing: `jobs-failed` counts the last hour's failures only.
   `campaign-bounces` lag by that job's interval. The release rate is exact either way.
 - The hosted MCP server has no health tool: operator routes are never MCP tools, and an MCP sign-in carries no
   proof of a staff sign-in the way a dashboard session does. An agent reads the route with an agent key.
+
+### SES capacity
+
+Health checks each ready hosted sending region independently. Request quota increases in the affected region.
+Tenants and configuration sets warn at 70% and become critical at 85%; identities warn at 60% and become
+critical at 80%. CloudWatch is sampled every 15 minutes. If it supplies usage but not a quota, the finding
+labels the repository limit (10,000 per resource per region). “Could not be read” retains the last AWS
+observation and shows Nightmail’s own count separately; it does not resolve an AWS capacity finding.
+Check the daily `SES_QUOTA_SOURCES` log for the source actually available to the runtime. Each failed
+CloudWatch attempt logs `SES_QUOTA_READ_FAILED` with the region, batch and cause. A failed batch is tried
+once without quota expressions. The whole SES section of a Health tick has a 500 ms budget; if it expires
+or stored readings are malformed, Health keeps the previous SES state and logs `SES_HEALTH_UNREADABLE` on opening.
+
+Daily recipients warn at 70% and become critical at 85% of the rolling 24-hour limit. Check the dispatcher’s
+quota sample (at most ten minutes old). Sending rate warns after ten completed minutes at 80%; at 95% it
+only pages if at least five of those minutes had an SES rate throttle or a transactional pacing deferral
+more than five seconds after its dispatch attempt started. Pause or spread large
+campaigns while requesting more capacity. Runnable setup work waiting two/five minutes with contention
+warns/pages: check setup retries, then pace sign-ups. Setup API speed is fixed. If Ohio has more open and held
+sign-up places than remaining tenants, raise the regional tenant quota or lower the sign-up limit.
