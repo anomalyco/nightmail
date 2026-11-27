@@ -33,6 +33,10 @@
 .developer-icon-actions[data-pending] { visibility: hidden; }
 
 .first-send-test { display: flex; align-items: center; flex-wrap: wrap; gap: var(--space-12); }
+/* TestSentLine: queued, delivered and any other outcome in one cell; only the one that applies shows. */
+.first-send-line { display: inline-grid; }
+.first-send-line > * { grid-area: 1 / 1; }
+.first-send-line > :not([data-shown]) { visibility: hidden; }
 /* Copy sits at the top-right of the code it copies. */
 .developer-snippet { position: relative; min-width: 0; }
 .developer-snippet > .developer-code { padding-right: calc(var(--space-8) + var(--control-height-sm) + var(--space-16)); }

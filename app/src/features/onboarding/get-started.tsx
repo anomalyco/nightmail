@@ -9,7 +9,7 @@ import { usePrefetchRoute } from '../../data/prefetch'
 import type { ApiKeyInput, Domain } from '../../data/types'
 import { analytics } from '../../lib/analytics'
 import { AgentPromptPanel, MaskedText, agentPrompt, useAgentSetup } from '../docs/agent-setup'
-import { TestSentLine, sendLanguages, sendSnippets, useTestSend } from '../docs/first-send'
+import { TestSentLine, TestSentSizer, sendLanguages, sendSnippets, useTestSend } from '../docs/first-send'
 import { useDomain } from '../settings/domain-records'
 import { BUILTIN_CAPS, BUILTIN_UNSUPPORTED, builtinLimitsText } from '../../../../api/src/builtin-limits'
 import { Kbd, useStepKeys } from './keys'
@@ -154,6 +154,7 @@ function TestEmail({ domain, sends, recheck, onLeave, onSent, onSettled }: { dom
       <span className="muted onboarding-slot onb-test-line" role="status">
         <span data-active={line === 'busy' || undefined} aria-hidden={line !== 'busy' || undefined}>Sending…</span>
         <span data-active={line === 'sent' || undefined} aria-hidden={line !== 'sent' || undefined}>{state.phase === 'sent' && <TestSentLine id={state.id} to={to} simulated={state.simulated} onLeave={onLeave} onSettled={onSettled} />}</span>
+        <span aria-hidden><TestSentSizer to={to} /></span>
         <span data-active={line === 'failed' || undefined} aria-hidden={line !== 'failed' || undefined}>{state.phase === 'failed' && <>
           <span className="onboarding-error"><ErrorText error={state.error} /></span> <button type="button" className="onb-retry" onClick={() => setState({ phase: 'waiting' })}>Try again</button>
         </>}</span>
