@@ -9029,7 +9029,8 @@ describe('Hosted MCP OAuth and tools', () => {
       runtime.storage = { async put(key, body) { objects.set(key, body); }, async get(key) { const body = objects.get(key); return body ? { body, contentType: 'application/json' } : null; }, async delete(key) { objects.delete(key); } };
       const png = Buffer.alloc(3 * MiB, 9);
       runtime.renderHtmlImage = browserImageRenderer({ async quickAction() { return new Response(png, { headers: { 'content-length': String(png.byteLength) } }); } } as never);
-      const template = ok(await local('POST', '/v1/templates', { name: 'MCP preview' }), 201);
+      const created = ok(await local('POST', '/v1/templates', { name: 'MCP preview' }), 201);
+      const template = ok(await local('PATCH', `/v1/templates/${created.id}`, { revision: created.revision, draft: { ...created.draft, html: '<p>MCP preview</p>' } }));
       const reply = await fetch(new Request(`${PUBLIC_ORIGIN}/mcp?codemode=true`, { method: 'POST', headers: { ...rpcHeaders, 'content-type': 'application/json', authorization: `Bearer ${token}` },
         body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name: 'renderCampaignTemplatePreviewImage', arguments: { templateId: template.id } } }) }));
       const text = await reply.text(), result = (JSON.parse(text) as Json).result;
@@ -44526,6 +44527,14 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       runtime.renderHtmlImage = async () => { renders++; return { data: Uint8Array.of(1), mimeType: 'image/png' }; };
       runtime.importPublicImage = async () => { imports++; return { data: Uint8Array.of(2), contentType: 'image/png' }; };
       const template = ok(await local('POST', '/v1/templates', { name: 'Preview' }), 201);
+      // A template with nothing to render, as a new one is (or its published revision), is the caller's to fix: 422 before
+      // the renderer or the budget, never a server error.
+      const empty = error(await local('GET', `/v1/templates/${template.id}/preview-image`), 422, 'TEMPLATE_INCOMPLETE');
+      assert.deepEqual([empty.field, empty.retryable, empty.message], ['html', false, 'This template has no content to render yet. Add content to its draft, then preview it.']);
+      const published = ok(await local('POST', `/v1/templates/${template.id}/publish`, { revision: template.revision }));
+      assert.equal(error(await local('GET', `/v1/templates/${template.id}/preview-image?published=true`), 422, 'TEMPLATE_INCOMPLETE').message, 'This template’s published revision has no content to render. Add content to its draft and publish it, then preview it.');
+      assert.equal(renders, 0);
+      ok(await local('PATCH', `/v1/templates/${template.id}`, { revision: published.revision, draft: { ...template.draft, html: '<p>Preview</p>' } }));
       const campaign = ok(await local('POST', '/v1/campaigns', { name: 'Preview' }), 201);
       const previews = [`/v1/templates/${template.id}/preview-image`, `/v1/campaigns/${campaign.id}/preview-image`];
       const key = async (permission: string) => ok(await local('POST', '/v1/api-keys', { name: 'Preview', permissions: [permission] }), 201);
