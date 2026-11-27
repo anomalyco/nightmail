@@ -285,7 +285,7 @@ async function standings(db: DbExecutor, list: string[]) {
       jsonb_build_object('dailyOverride', w.send_cap_override, 'pendingOverride', w.pending_cap_override, 'exempt', w.exempt_hosted_quotas,
         'overrideExpiresAt', to_jsonb(w) ->> 'send_cap_override_expires_at') AS limits,
       -- What the customer's own score card and banners show (#115), never operator-only fields such as the watch flag.
-      (SELECT jsonb_build_object('step', s.step, 'since', s.since, 'reasons', s.reasons, 'phase', s.phase, 'score', s.score, 'dailyLimit', s.daily_limit, 'factors', s.factors,
+      (SELECT jsonb_build_object('step', s.step, 'since', s.since, 'reasons', s.reasons, 'phase', s.phase, 'score', s.score, 'dailyLimit', hosted_display_cap(w.id,s.daily_limit), 'factors', s.factors,
         'pauseKind', s.pause_kind, 'marketingHold', s.marketing_hold, 'releaseUntil', s.release_until, 'releasePercent', s.release_percent, 'strikes', jsonb_array_length(s.strikes),
         'strikeUntil', s.strike_until, 'version', s.version) FROM sender_standing s WHERE s.workspace_id = w.id) AS standing,
       (SELECT coalesce(jsonb_object_agg(status, n), '{}') FROM (SELECT status, count(*)::int AS n FROM (SELECT status FROM sending_emails
@@ -526,9 +526,10 @@ export function registerSupport(app: App) {
     request: { query: WorkspaceFilter.extend({ requestedLimit: z.coerce.number().int().min(1).max(10_000_000).optional().describe('The daily limit the customer asks for; echoed as limitRequest.requested.') }) },
     responses: { 200: response(z.object({ data: z.array(StandingDetail) })), ...errors } }), async c => {
     const list = scoped(c).ids, requested = c.req.valid('query').requestedLimit;
-    type History = { workspace_id: string; phase: 'seed' | 'calibrating' | 'graded' | null; step: Step | null; daily: number | null; days: z.infer<typeof StandingDetail>['history']['days']; changes: z.infer<typeof StandingDetail>['history']['changes'] };
+    type History = { week_binding: boolean; workspace_id: string; phase: 'seed' | 'calibrating' | 'graded' | null; step: Step | null; daily: number | null; days: z.infer<typeof StandingDetail>['history']['days']; changes: z.infer<typeof StandingDetail>['history']['changes'] };
     const { rows, history } = await supportRead(c.env.db, async tx => ({ rows: await standings(tx, list), history: list.length ? (await tx.execute<History>(sql`SELECT w.id AS workspace_id,
         s.phase, s.step, s.daily_limit AS daily,
+        (SELECT (allowance->>'weekBinding')::boolean FROM hosted_allowance_read(w.id,0,0,500,NULL,NULL,10)) AS week_binding,
         (SELECT coalesce(json_agg(json_build_object('day', d.day::text, 'score', d.score::float8, 'quality', d.quality::float8, 'limit', d.daily_limit, 'step', d.step, 'accepted', d.accepted, 'bounced', d.bounced,
           'complained', d.complained, 'rejected', d.rejected) ORDER BY d.day), '[]') FROM sender_score_daily d WHERE d.workspace_id = w.id AND d.day > (now() AT TIME ZONE 'UTC')::date - 60) AS days,
         (SELECT coalesce(json_agg(x ORDER BY x.at DESC), '[]') FROM (SELECT e.at, e.kind, e.from_step AS "from", e.to_step AS "to", ARRAY(SELECT r->>'code' FROM jsonb_array_elements(e.reasons) r WHERE r ? 'code') AS reasons,
@@ -538,7 +539,7 @@ export function registerSupport(app: App) {
     return c.json({ data: rows.map(row => {
       const h = history.find(x => x.workspace_id === row.workspaceId)!;
       return { ...row, history: { days: h.days, changes: h.changes.map(x => ({ ...x, at: new Date(x.at).toISOString() })) },
-        limitRequest: { ...limitRequest({ phase: h.phase, step: h.step, daily: h.daily }), requested: requested ?? null } };
+        limitRequest: { ...limitRequest({ phase: h.phase, step: h.step, daily: h.daily, weekBinding: h.week_binding }), requested: requested ?? null } };
     }) }, 200);
   });
   const Billing = z.object({ available: z.boolean().describe('False until billing is enabled on this installation.'), data: z.array(z.object({ workspaceId: z.string(), account: z.record(z.string(), z.unknown()).nullable(),

@@ -9,7 +9,7 @@ export const realDestination = (address: string) => !address.toLowerCase().endsW
 export const hostedCost = (to: string | string[], cc: string[] = [], bcc: string[] = []) =>
   (Array.isArray(to) ? to.length : 1) + cc.length + bcc.length;
 
-export type HostedAllowance = ({ cap: number; marketingCap: number } | { cap: null; marketingCap: null }) & { used: number; resetAt: string | null; nextChangeAt: string; pauseReason: string | null; pendingCapOverride: number | null; exemptHostedQuotas: boolean; nextCap?: number | null; nextCapAt?: string | null; marketingHeld?: boolean; marketingHoldReason?: string | null; step?: string; marketingHourCap?: number | null; marketingHourUsed?: number; marketingHourResetAt?: string | null; marketingDayCap?: number | null };
+export type HostedAllowance = ({ cap: number; marketingCap: number } | { cap: null; marketingCap: null }) & { strictEvaluation?: boolean; weekBinding?: boolean; standingCap?: number | null; standingMarketingCap?: number | null; used: number; resetAt: string | null; nextChangeAt: string; pauseReason: string | null; pendingCapOverride: number | null; exemptHostedQuotas: boolean; nextCap?: number | null; nextCapAt?: string | null; marketingHeld?: boolean; marketingHoldReason?: string | null; step?: string; marketingHourCap?: number | null; marketingHourUsed?: number; marketingHourResetAt?: string | null; marketingDayCap?: number | null };
 // The current UTC hour plus the preceding 23 buckets. The same statement as admission,
 // independent of how many envelopes or destinations were admitted in those hours.
 // `read` is for display (GET /v1/me): the same figures from hosted_allowance_read, which takes no row locks.

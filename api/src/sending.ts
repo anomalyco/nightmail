@@ -1531,7 +1531,7 @@ const releaseScheduled: JobHandler = retryDatabaseFailures(async (runtime, paylo
     if (row?.status !== 'scheduled') return null;
     if (row.early) throw new JobDeferred(row.scheduledAt!);
     const s = row.snapshot, files = [...new Set(s.attachments)], marketing = s.kind === 'marketing' || !!s.bulk;
-    const mail: AdmissionMail = { host: row.from.split('@')[1]!.toLowerCase(), region: s.requestedRegion, kind: s.kind, attachments: files, bodyBytes: contentBytes(s) };
+    const mail: AdmissionMail = { host: row.from.split('@')[1]!.toLowerCase(), region: s.requestedRegion, kind: s.kind, attachments: files, bodyBytes: contentBytes(s), recipients: [...s.to,...s.cc,...s.bcc] };
     const heldSince = typeof payload.heldSince === 'string' ? Date.parse(payload.heldSince) : null;
     // Held: it stays scheduled, at the time it tries again, and its job keeps when its RAMP_HOLD_MS started (now for a pause).
     const hold = async (code: string, until: number, data: Record<string, unknown> = {}) => {
@@ -1582,7 +1582,7 @@ const releaseScheduled: JobHandler = retryDatabaseFailures(async (runtime, paylo
     // held, the workspace's own pauses hold it too.
     if (d.code === 'RAMP_LIMIT_REACHED') return hold(d.code, Date.parse(d.resetAt!) + spread(HOLD_SPREAD_MS));
     if (d.code === 'RAMP_PAUSED') return hold(d.code, Date.now() + HOLD_RECHECK_MS + spread(HOLD_RECHECK_MS), { campaignId: d.campaignId, pauseCode: d.pauseCode });
-    if (heldSince !== null && (d.code === 'HOSTED_SENDING_PAUSED' || d.code === 'MARKETING_HELD')) return hold(d.code, Date.now() + HOLD_RECHECK_MS + spread(HOLD_RECHECK_MS));
+    if (d.outside || (heldSince !== null && (d.code === 'HOSTED_SENDING_PAUSED' || d.code === 'MARKETING_HELD'))) return hold(d.code, Date.now() + HOLD_RECHECK_MS + spread(HOLD_RECHECK_MS));
     if (RELEASE_WAITS.has(d.code) && row.waits) throw new JobDeferred(new Date(Date.now() + RELEASE_RETRY_MS).toISOString());
     const { rows: [rejected] } = await tx.execute<{ n: number }>(sql`WITH rejected AS (UPDATE sending_emails SET status='rejected',error_code=${d.code},updated_at=clock_timestamp()
         WHERE workspace_id=${wid} AND id=${emailId} AND status='scheduled' RETURNING ${terminalColumns}
@@ -1868,10 +1868,10 @@ async function prepareFrontDoor(runtime: Runtime, a: Actor, out: Outgoing[], bat
   await checkRecipientsEligible(runtime.db, a.workspaceId, out, batch, skipSuppression || isSystemNoticeKey(a.keyId));
   await screenOutgoingAtAccept(runtime, a, out, decided, pre!.probation !== null, batch, runtime.db);
 }
-// A built-in domain's mail also names its recipients: send_admission checks them against its send scope and caps.
+// Hosted admission checks the addressed envelope for a complaint hold and the built-in domain's send scope.
 const admissionMails = (runtime: Runtime, out: Outgoing[]): AdmissionMail[] => out.map(({ snapshot: s, duplicate, invalid, oversize }) => ({ host: s.from.split('@')[1]!.toLowerCase(), region: s.region || undefined,
   kind: s.kind, attachments: [...new Set(s.attachments)], bodyBytes: contentBytes(s), duplicate: !!duplicate, invalid: !!invalid, oversize: !!oversize,
-  ...(isBuiltinHost(runtime.config, s.from.split('@')[1]!) ? { recipients: [...s.to, ...s.cc, ...s.bcc].map(e => e.toLowerCase()) } : {}) }));
+  ...(runtime.config.multiTenant || isBuiltinHost(runtime.config, s.from.split('@')[1]!) ? { recipients: [...s.to, ...s.cc, ...s.bcc].map(e => e.toLowerCase()) } : {}) }));
 
 /**
  * Admits a send in one statement: the API key's authentication and budget (a warm key), the idempotency claim, the
@@ -3279,7 +3279,7 @@ export async function ingestRoutineSesEvents(runtime: Runtime, inputs: RoutineIn
       WHERE e.region = x.region AND e.simulated = x.simulated ${topicMatch}
         AND (x.job_workspace IS NULL OR e.workspace_id = x.job_workspace)
     ), locked AS MATERIALIZED (
-      SELECT x.ordinal, e.id, e.workspace_id, e.simulated, e.status, e.provider_id ${effects ? sql`, e.to_addresses,e.cc_addresses,e.bcc_addresses` : sql``} FROM raw x
+      SELECT x.ordinal, e.id, e.workspace_id, e.simulated, e.status, e.provider_id,e.evaluation_outside IS NOT NULL AS evaluating ${effects ? sql`, e.to_addresses,e.cc_addresses,e.bcc_addresses` : sql``} FROM raw x
       JOIN (SELECT ordinal, min(id) AS id FROM candidates GROUP BY ordinal HAVING count(*) = 1) c USING (ordinal)
       JOIN sending_emails e ON e.id = c.id
       WHERE e.provider_id = x.provider_id OR (e.id = x.tagged_email_id AND e.provider_id IS NULL AND e.status IN ('attempting','acceptance_unknown'))
@@ -3292,7 +3292,7 @@ export async function ingestRoutineSesEvents(runtime: Runtime, inputs: RoutineIn
         AND r.trusted_topic_arn = 'arn:aws:sns:' || r.region || ':' || r.trusted_account_id || ':bane-' || left(encode(sha256(convert_to(s.installation_id, 'UTF8')), 'hex'), 20) || '-feedback'
       GROUP BY s.workspace_id
     )`}, input AS (
-      SELECT x.*, coalesce(l.workspace_id, x.job_workspace) AS workspace_id, l.status, ${effects ? sql`l.to_addresses,l.cc_addresses,l.bcc_addresses,` : sql``}
+      SELECT x.*, coalesce(l.workspace_id, x.job_workspace) AS workspace_id, l.status,l.evaluating, ${effects ? sql`l.to_addresses,l.cc_addresses,l.bcc_addresses,` : sql``}
         coalesce(x.recovery_type, CASE WHEN x.type = 'receipt' AND l.status = 'attempting' AND l.provider_id IS NULL THEN 'operation.ses' END) AS job_type,
         CASE WHEN x.type <> 'receipt' AND (l.provider_id IS NOT NULL OR l.status = 'acceptance_unknown') THEN l.id END AS email_id,
         CASE WHEN l.id IS NULL AND x.job_workspace IS NULL THEN 'SES_EMAIL_NOT_FOUND'
@@ -3372,10 +3372,13 @@ export async function ingestRoutineSesEvents(runtime: Runtime, inputs: RoutineIn
          x.data || jsonb_build_object('emailId', x.email_id, 'providerId', x.provider_id), x.simulated,
          -- SES's event time, except accepted mail (not simulated): the database's clock, as the abuse sample's mark relies on.
          CASE WHEN x.type='accepted' AND NOT x.simulated THEN clock_timestamp() ELSE x.event_time END,
-         ${mx && effects ? sql`CASE WHEN x.type IN ('bounce','complaint') AND jsonb_typeof(x.effects->'reported')='array'
+         ${mx ? sql`CASE WHEN x.evaluating AND x.type='delivery' AND jsonb_typeof(x.payload#>'{message,delivery,recipients}')='array' THEN ARRAY(
+           SELECT encode(sha256(convert_to(x.email_id,'UTF8') || decode('00','hex') || convert_to(lower(address),'UTF8')),'hex')
+           FROM jsonb_array_elements_text(x.payload#>'{message,delivery,recipients}') address)
+           ${effects ? sql`WHEN x.type IN ('bounce','complaint') AND jsonb_typeof(x.effects->'reported')='array'
            AND EXISTS(SELECT FROM provider_feedback_history WHERE topic_arn=x.topic_arn AND kind='shared') THEN ARRAY(
            SELECT encode(sha256(convert_to(x.email_id,'UTF8') || decode('00','hex') || convert_to(r.address,'UTF8')),'hex')
-           FROM recipients r WHERE r.event_id=x.event_id AND r.address NOT LIKE '%@simulator.amazonses.com' ORDER BY r.address) END` : sql`NULL`}
+           FROM recipients r WHERE r.event_id=x.event_id AND r.address NOT LIKE '%@simulator.amazonses.com' ORDER BY r.address)` : sql``} END` : sql`NULL`}
        FROM matched x WHERE (SELECT count(*) FROM shared_locks) >= 0 ORDER BY x.workspace_id,x.email_id,x.ordinal
       ON CONFLICT DO NOTHING RETURNING *
     ), outcome_totals AS (
@@ -4469,7 +4472,7 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
     await requiredNoticesAllowed(db, draft, a.workspaceId, 'Paused: required notices were turned off for this workspace, so nobody more is sent this notice. Resume it once they are on again, or cancel it.');
     // The admission decision on this release: a pause or hold, the reviewed binding (fencing the insert against a
     // disable or reclaim since the precheck), and how many recipients the Hosted limit and the balance afford.
-    const release = await admission(runtime, a.workspaceId, actorJson(a), { stage: 'release', locks: held, mails: [reviewedMail(draft)] }, sql`jsonb_build_object('simulated',${campaign.simulated}::boolean)`);
+    const release = await admission(runtime, a.workspaceId, actorJson(a), { stage: 'release', locks: held, reviewId: campaign.reviewId!, expanded: campaign.expanded, mails: [reviewedMail(draft)] }, sql`jsonb_build_object('simulated',${campaign.simulated}::boolean)`);
     const [buffer] = await db.select({ total: sql<number>`count(*)::int`, campaign: sql<number>`count(*) FILTER (WHERE ${emails.campaignId} = ${campaign.id})::int`,
       decision: sql<Released | Refused>`${release}`,
       rate: sql<number>`coalesce((SELECT max_send_rate FROM ${limits_} WHERE workspace_id=${a.workspaceId} AND region=${draft.region}),0)`,

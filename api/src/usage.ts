@@ -39,9 +39,9 @@ const Usage = z.object({
     cap: z.number().int().nullable().describe('Recipients allowed per rolling 24 hours; null when this workspace has no daily limit.'),
     used: z.number().int().describe('Recipients charged in the rolling 24 hours, SES mailbox simulator addresses included.'),
     resetAt: z.iso.datetime().nullable().describe('When capacity next frees up or the limit changes.'),
-    step: z.number().int().nullable().describe('Index into steps of the step this workspace is on; null past them: no daily limit (cap null), or one set by the score, a warning or an operator.'),
+    step: z.number().int().nullable().describe('Index into steps of the step this workspace is on; null past them: no daily limit (cap null), or a limit set by the first-week ceiling, the score, a warning or an operator.'),
   }).nullable().describe('Null until the workspace connects hosted sending.'),
-  steps: z.array(Step).describe(`The daily limits a new workspace passes through: only the evaluation. After it, a workspace in good standing (score ${GOOD_STANDING} and up, no warning) has no daily limit; bad signals set one (GET /v1/sender-score). Only real SES acceptances count: simulated sends and simulator addresses use the limit but never end the evaluation.`),
+  steps: z.array(Step).describe(`The evaluation step. After the evaluation and any unpaid first-week ceiling, a workspace in good standing (score ${GOOD_STANDING} and up, no warning) has no daily limit; bad signals set one (GET /v1/sender-score). Only real SES acceptances count: simulated sends and simulator addresses use the limit but never end the evaluation.`),
   simulated: z.boolean().describe('This installation simulates SES: no email leaves it, and simulated sends never count against the daily limit.'),
 }).openapi('Usage');
 
@@ -52,7 +52,7 @@ export const PRICING = { currency: 'USD', perThousand: Number(RATES.emailUc) * 1
 
 export function registerUsage(app: App) {
   app.openapi(createRoute({ method: 'get', path: '/v1/usage', operationId: 'getUsage', tags: ['Metrics'], security, summary: 'Plan, pricing and sending limits',
-    description: 'Hosted only. Pricing and whether billing charges yet, this month\'s sent and received counts against their free allowances (' + RATES.freeSentEmails.toLocaleString('en-US') + ' sent and ' + RATES.freeReceivedEmails.toLocaleString('en-US') + ' received), counted separately (received only for credentials that may read all received mail), and the rolling daily sending limit (none in good standing) with the evaluation before it. Workspace-wide: keys restricted to domains get 403. ' + DASHBOARD_CACHE_NOTE,
+    description: 'Hosted only. Pricing and whether billing charges yet, this month\'s sent and received counts against their free allowances (' + RATES.freeSentEmails.toLocaleString('en-US') + ' sent and ' + RATES.freeReceivedEmails.toLocaleString('en-US') + ' received), counted separately (received only for credentials that may read all received mail), and the rolling daily sending limit (including any unpaid first-week ceiling) with the evaluation before it. Workspace-wide: keys restricted to domains get 403. ' + DASHBOARD_CACHE_NOTE,
     responses: { 200: response(Usage), ...errors } }), async c => {
     if (!c.env.config.multiTenant) return notFound('Endpoint');
     const a = actor(c, 'read');
@@ -73,7 +73,10 @@ export function registerUsage(app: App) {
         (SELECT mode FROM billing_config WHERE singleton) AS enforcement`);
       const steps = usageSteps(c.env.config.hostedSendCaps), allowance = row?.allowance ?? null;
       // A cap that matches no step was set by the score, a warning or an operator; none is past every step.
-      const index = allowance?.cap == null ? -1 : steps.findIndex(s => s.cap === allowance.cap);
+      if (allowance?.strictEvaluation !== undefined) {
+        steps[0]!.requires = 'Evaluation counts 500 distinct outside recipients across two domains. Verified workspace members do not count.';
+      }
+      const index = allowance?.cap == null || allowance.weekBinding || allowance.strictEvaluation === false ? -1 : steps.findIndex(s => s.cap === allowance.cap);
       return {
         billing: { enabled: row?.enforcement === 'enforce', enforcement: row?.enforcement ?? 'off' }, pricing: PRICING,
         month: { from: month, sent: row?.sent ?? 0, received: receiving ? row?.received ?? 0 : null, billedSent: row?.billed_sent ?? 0, billedReceived: receiving ? row?.billed_received ?? 0 : null },
@@ -84,7 +87,8 @@ export function registerUsage(app: App) {
     };
     if (a.credential !== 'dashboard') return c.json(await compute(), 200);
     // The scope keeps the two views apart: a member's read is never served an owner's received count.
-    const body = await dashboardRead(c, ['usage', a.workspaceId, receiving ? 'all' : 'sent', Math.floor(Date.now() / 60_000)].join('|'), compute);
+    const week = (await c.env.db.execute(sql`SELECT 1 WHERE hosted_week_until(${a.workspaceId}) IS NOT NULL`)).rows.length > 0;
+    const body = await dashboardRead(c, ['usage', a.workspaceId, week, receiving ? 'all' : 'sent', Math.floor(Date.now() / 60_000)].join('|'), compute);
     c.header('x-nightmail-usage-cache', body.cache);
     return c.json(body.value, 200);
   });

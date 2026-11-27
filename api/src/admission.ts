@@ -25,12 +25,12 @@ import { RAMP } from './standing-model.js';
 export type Stage = 'send' | 'launch' | 'reserve' | 'release' | 'prepare';
 /** One message as admission sees it. `invalid` and `oversize` are TypeScript's own findings, reported after every rule. */
 export type AdmissionMail = { host: string; region?: string; kind: 'transactional' | 'marketing'; attachments: string[]; bodyBytes: number; duplicate?: boolean; invalid?: boolean; oversize?: boolean;
-  /** A built-in domain's mail (builtin-domain.ts): every recipient, lowercased, for its send scope and caps. */
+  /** The addressed envelope, for Hosted complaint holds and the built-in domain's scope and caps. */
   recipients?: string[] };
 export type AdmittedAsset = { id: string; size: number; contentId: string | null; contentType: string };
 export type Admitted = { allowed: true; mails: { region: string; binding: SendingBinding | null; connection: ReadyConnection | null }[]; billing: BillingGate | null; assets: AdmittedAsset[]; shared: boolean };
 export type Released = { allowed: true; hostedLeft: number | null; nextChangeAt: string | null; billing: { enforced: boolean; freeSentLeft: number; affordable: number; availableUc: string } | null };
-export type Refused = { allowed: false; code: string; item?: number; reason?: string | null; cap?: number; window?: 'hour' | 'day' | 'minute'; reserved?: boolean; field?: string; resetAt?: string;
+export type Refused = { allowed: false; code: string; outside?: boolean; item?: number; reason?: string | null; cap?: number; window?: 'hour' | 'day' | 'minute'; reserved?: boolean; field?: string; resetAt?: string;
   allowance?: HostedAllowance; incoming?: number; marketing?: number; regional?: boolean; failed?: boolean; host?: string; billing: BillingGate | null;
   /** RAMP_LIMIT_REACHED (ramp_refusal, migration 501): the step (from 1) of `steps`, what the hour holds, how many more fit
    * and Retry-After's seconds; for a send scheduled for later, the marketing scheduled within a day of it and a day's budget. */
@@ -82,7 +82,7 @@ export type AdmissionRequest = {
   campaign?: { id: string; revision: number };
   /** A scheduled single send (UTC instant): admitted now without charges, and as a send again at its time. */
   scheduledAt?: string;
-  incoming?: number; autoPause?: boolean;
+  incoming?: number; autoPause?: boolean; reviewId?: string; expanded?: number;
   /** Replaces the installation's built-in policy for this one decision: only a reply builtinReplyException allowed. */
   builtin?: ReturnType<typeof builtinPolicy>;
 };
@@ -109,7 +109,7 @@ export function refusal(runtime: Runtime, d: Refused, local: { batch?: boolean; 
   switch (d.code) {
     case 'BALANCE_EXHAUSTED': return balanceExhausted(runtime.config, d.billing!);
     case 'HOSTED_SENDING_PAUSED': return item(new ApiError(409, d.code, d.reason ?? 'Hosted sending is paused for this workspace.'));
-    case 'MARKETING_HELD': return marketingHeld(d.reason);
+    case 'MARKETING_HELD': return d.outside ? new ApiError(409, d.code, 'Spam complaints paused sending outside this workspace. Verified workspace members can still receive mail.') : marketingHeld(d.reason);
     case 'SEND_LIMIT_REACHED': {
       const h = d.allowance!, marketing = d.marketing ?? 0, incoming = d.incoming ?? 0;
       if (d.window === 'hour') {
@@ -117,6 +117,13 @@ export function refusal(runtime: Runtime, d: Refused, local: { batch?: boolean; 
         return new ApiError(429, d.code, `Hosted marketing is limited to ${count(h.marketingHourCap!)} recipients an hour; ${count(h.marketingHourUsed ?? 0)} are used this hour. The next hour starts at ${resetAt}.${marketing > h.marketingHourCap! ? ' This submission exceeds the hourly limit.' : ''}`, undefined, marketing <= h.marketingHourCap!, resetAt);
       }
       const resetAt = h.resetAt ? new Date(h.resetAt).toISOString() : undefined, retryable = incoming <= h.cap! && marketing <= h.marketingCap!;
+      if (h.weekBinding && incoming + h.used > h.cap! && resetAt) {
+        const paymentHelps = (h.standingCap == null || incoming + h.used <= h.standingCap)
+          && (!marketing || h.standingMarketingCap == null || marketing + h.used <= h.standingMarketingCap)
+          && d.billing?.mode === 'prepaid' && runtime.config.billing?.stripe;
+        const message = `Your first-week allowance of 500 recipients/day reopens at ${resetAt}${paymentHelps ? '; add $20 in Settings → Billing to send sooner' : ''}.`;
+        return new ApiError(429, d.code, message, undefined, true, resetAt);
+      }
       return new ApiError(429, d.code, `Hosted sending is limited to ${h.cap} recipients per rolling 24 hours; ${count(h.used)} are used.${d.reserved ? ` Marketing stops at ${h.marketingCap} to reserve transactional capacity.` : ''}${resetAt ? ` Rolling usage expires at ${resetAt}.` : ''}${!retryable ? ' This submission exceeds the available limit.' : ''}`, undefined, retryable, resetAt);
     }
     case 'RAMP_LIMIT_REACHED': {
@@ -178,6 +185,8 @@ export function admitted<T extends { allowed: true }>(runtime: Runtime, d: T | R
   const b = (d as { billing?: unknown }).billing;
   if (b && typeof b === 'object' && 'ok' in b) shadowBilling(b as BillingGate, workspaceId);
   if (!d.allowed) {
+    if (d.outside || (d.window === 'day' && d.allowance?.weekBinding && Number(d.allowance.used) + (d.incoming ?? 0) > d.allowance.cap!))
+      log('info', { code: 'HOSTED_FIRST_WEEK_REFUSAL', workspaceId, rule: d.outside ? 'complaint' : 'daily', refusal: d.code });
     const error = refusal(runtime, d, local);
     // A send refused at the daily limit is also told by email and to the operators, each at most once a day (app.ts
     // onError, account-notices.ts and operator-alerts.ts).

@@ -324,9 +324,10 @@ export function belowClearLine(input: LadderInput) {
  * A person can still review a capped workspace and set an operator override.
  */
 export type LimitRequest = { eligibleForAutoApproval: false; reasons: { code: string; message: string }[]; maxAuto: 0 };
-export function limitRequest(o: { phase: ScoreState['phase'] | null; step: Step | null; daily: number | null }): LimitRequest {
+export function limitRequest(o: { phase: ScoreState['phase'] | null; step: Step | null; daily: number | null; weekBinding?: boolean }): LimitRequest {
   const reason = o.phase === null ? { code: 'NO_STANDING', message: `This workspace has no sender standing (${productName} Hosted sending only), so a limit request goes to a person.` }
     : o.phase !== 'graded' ? { code: 'EVALUATING', message: `The evaluation lifts the limit by itself once the first ${EVALUATION.recipients} real recipients' delivery results are in.` }
+    : o.weekBinding ? { code: 'SCORE_CAP', message: 'The first-week limit is 500 recipients per day until a qualifying top-up or hour 168.' }
     : o.daily === null ? { code: 'NO_DAILY_LIMIT', message: 'This workspace has no daily limit: there is nothing to raise. Only the per-minute pace applies.' }
     : o.step !== null && stepRank(o.step) >= stepRank('warn') ? { code: 'LADDER_STEP', message: `The limit is frozen while the workspace is at ${o.step}. It lifts once the step clears and the score is ${GOOD_STANDING} or more; a person can review it sooner.` }
     : { code: 'SCORE_CAP', message: `The score sets this limit. It lifts by itself at ${GOOD_STANDING} or more; a person can review it sooner.` };

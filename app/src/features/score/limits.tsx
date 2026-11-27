@@ -24,9 +24,9 @@ export function limitStory(report: SenderScore | undefined, builtin?: BuiltinDom
   const limit = report.limit, hold = holds[report.standing?.step ?? 'ok']
   const pace = limit && `Sending is paced at up to ${number(limit.perMinute)} a minute; more waits its turn.`
   const raise = (text: string) => ({ kind: 'raise' as const, text }), later = { kind: 'after' as const, text: 'Your sender score sets it again.' }
-  if (limit?.restore) return { now: perDay(limit.restore.daily, limit.restore.until), why: 'Sending was resumed after a pause, so the limit is lower for a while.', next: later, pace }
+  if (limit?.restore && limit.daily === limit.restore.daily) return { now: perDay(limit.restore.daily, limit.restore.until), why: 'Sending was resumed after a pause, so the limit is lower for a while.', next: later, pace }
   if (limit?.source === 'exempt') return { now: 'No daily limit.', why: 'This workspace is exempt from daily limits.', next: null, pace }
-  if (limit?.override) return { now: perDay(limit.override.daily, limit.override.expiresAt), why: `${productName} set it for this workspace.`, next: raise('Ask support to change it.'), pace }
+  if (limit?.override && limit.daily === limit.override.daily) return { now: perDay(limit.override.daily, limit.override.expiresAt), why: `${productName} set it for this workspace.`, next: raise('Ask support to change it.'), pace }
   if (limit && hold && limit.daily !== null) return { now: perDay(limit.daily), why: hold[0], next: raise(`It lifts once ${hold[1]} and your score is ${GOOD_STANDING} or more.`), pace }
   if (limit?.strikeCapUntil && limit.daily !== null) return { now: perDay(limit.daily, limit.strikeCapUntil), why: 'A second pause within 90 days halved it.', next: later, pace }
   if (!limit || limit.source === 'calibrating') return { now: `Your first ${number(report.needed)} recipients, once.`, why: 'They are your evaluation: their delivery results set your first sender score.',
