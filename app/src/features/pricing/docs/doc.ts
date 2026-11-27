@@ -1,7 +1,7 @@
 // (With extensions: the build's config imports this file, through pages.ts and readable.ts.)
 import { productName, publicOrigin } from '../../../../../api/src/brand.ts'
 import type { WorkspaceFocus } from '../../../../../api/src/workspace-focus.ts'
-import { answerMarkdown, linesOf, plain, type Block, type PageDoc, type Question, type Section, type Text } from '../page/shape.ts'
+import { answerMarkdown, linesOf, plain, type Block, type PageDoc, type Question, type Section, type Table, type Text } from '../page/shape.ts'
 import { dayOf, sourceNote, type Source } from '../prices.ts'
 import { faqPage } from '../questions.ts'
 import { START } from '../start.ts'
@@ -42,6 +42,7 @@ const host = (page: string) => new URL(page).hostname.replace(/^www\./, '')
 export const pageName = (page: string) => host(page) + new URL(page).pathname.replace(/\/$/, '')
 /** A site path's Markdown twin, the way the twins link one another. */
 const twin = (path: string) => url(path === '/' ? '/index.md' : `${path.replace(/[?#].*$/, '')}.md`)
+export { folded } from '../page/shape.ts'
 const inline = (text: Text) => text.map(part => typeof part === 'string' ? part : 'href' in part ? `[${part.text}](${part.href.startsWith('/') ? twin(part.href) : part.href})` : part.ours).join('')
 const cell = (text: string) => text.replaceAll('|', '\\|').replaceAll('\n', ' ')
 export const trademarks = `Product names belong to their owners and only identify their products. ${productName} isn’t affiliated with them.`
@@ -55,8 +56,8 @@ export const pagesOf = (sources: Source[]) => [...sources.reduce((pages, source)
 
 function block(b: Block): string {
   if (b.kind === 'p') return inline(b.text)
-  if (b.kind === 'list') return b.items.map(item => `- ${inline(item)}`).join('\n')
-  return [inline(b.caption), [
+  if (b.kind === 'list') return (b.full ?? b.items).map(item => `- ${inline(item)}`).join('\n')
+  return [inline(b.method ?? b.caption), [
     `| ${b.head.join(' | ')} |`, `| ${b.head.map((_, i) => b.numeric.includes(i) ? '---:' : '---').join(' | ')} |`,
     ...b.rows.map(row => `| ${row.cells.map(text => cell(inline(text))).join(' | ')} |`),
   ].join('\n')].join('\n\n')

@@ -45798,13 +45798,14 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // Operator alerts (src/operator-alerts.ts): one Slack card when a customer may be in trouble. Slack is faked here.
   const OPERATOR_HOOK = 'https://hooks.slack.com/services/T0FIXTURE/B0FIXTURE/operatoralerts';
   const cardLine = (card: Json) => card.blocks[0].text.text as string;
-  /** Posts each pending operator alert as the job runner would, to a fake Slack answering status; returns what was posted. */
-  async function postOperatorAlerts(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client, status = 200) {
+  /** Posts each pending operator alert as the job runner would, to a fake Slack answering status (or what status says for each card); returns what was posted. */
+  async function postOperatorAlerts(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client, status: number | ((card: Json) => number) = 200) {
     const { operatorAlertJobs } = await import('./src/operator-alerts.js'), posted: Json[] = [];
-    await t.test(`operator alerts posted, Slack answering ${status}`, async t => {
+    await t.test(`operator alerts posted, Slack answering ${typeof status === 'number' ? status : 'by card'}`, async t => {
       t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
         assert.deepEqual([String(url), init?.method, init?.redirect], [OPERATOR_HOOK, 'POST', 'manual']);
-        posted.push(JSON.parse(String(init!.body))); return new Response(null, { status });
+        const card = JSON.parse(String(init!.body));
+        posted.push(card); return new Response(null, { status: typeof status === 'number' ? status : status(card) });
       });
       for (const job of (await db.query(`SELECT id,workspace_id,payload,attempts FROM jobs WHERE type='operator.alert' AND status='pending' ORDER BY id`)).rows) {
         try {
@@ -46006,6 +46007,298 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   // Health (src/health.ts): the incidents of 23 November 2026, each as the sample the minute tick would have read.
+  // Mentions of the operator on urgent cards (src/operator-mention.ts). The user is a fixture; Slack is faked.
+  const MENTION = 'U0FIXTURE', LEAD = '<@U0FIXTURE>', ABUSE_HOOK = 'https://hooks.slack.com/services/T0FIXTURE/B0FIXTURE/mentions';
+  /** A clean slate for one mentions test: no mentions decided, no operator card or abuse alert of an earlier test waiting or holding a place. */
+  async function mentionFixture(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client) {
+    await db.query('DELETE FROM operator_mentions');
+    await db.query(`UPDATE jobs SET status='completed' WHERE type='operator.alert' AND status='pending'`);
+    await db.query(`UPDATE abuse_alerts SET status='stale',stale_reason='expired' WHERE status='stored'`);
+    await db.query(`UPDATE abuse_alerts SET claimed_at=claimed_at-interval '2 hours' WHERE claimed_at>now()-interval '1 hour'`);
+    Object.assign(runtime.config, { operatorSlackWebhookUrl: OPERATOR_HOOK, abuseSlackWebhookUrl: ABUSE_HOOK, operatorSlackMention: MENTION });
+    t.after(() => { Object.assign(runtime.config, { operatorSlackWebhookUrl: undefined, abuseSlackWebhookUrl: undefined, operatorSlackMention: undefined }); });
+    const alerts = await import('./src/operator-alerts.js');
+    const workspace = async (name: string) => { const id = unique('mention'); await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$2,$1)', [id, name]); return id; };
+    // As src/standing.ts applyChange queues them, in its transaction.
+    const pause = (id: string) => runtime.db.transaction(tx => alerts.standingAlert(tx, id, 'pause', [{ code: 'HOSTED_BOUNCES', metric: 'bounces', step: 'pause' }]));
+    const amazon = (id: string) => runtime.db.transaction(tx => alerts.standingAlert(tx, id, 'pause', [{ code: 'SES_TENANT_PAUSED', metric: 'external', step: 'pause' }], { tenant: `arn:aws:ses:us-east-2:111122223333:tenant/t-${id}/tn-1` }));
+    const hold = (id: string) => runtime.db.transaction(tx => alerts.standingAlert(tx, id, 'restrict', []));
+    const mentions = async () => (await db.query('SELECT kind,subject,capped,mentioned,over,told_by IS NOT NULL AS told,skipped FROM operator_mentions ORDER BY at,card')).rows;
+    // A high cluster, and an alert about it stored with its job, as noteAlert stores one.
+    const cluster = `acl_${randomUUID().replaceAll('-', '').slice(0, 24)}`;
+    await db.query(`INSERT INTO abuse_clusters(id,score,band,peak,accounts,workspaces,reasons,members,edges) VALUES ($1,85,'high',85,3,2,'[]','[]','[]')`, [cluster]);
+    const { slackCard } = await import('./src/abuse-alerts.js');
+    const stored = async (band: 'review' | 'high', kind: 'new' | 'grew') => {
+      const id = `aal_${randomUUID().replaceAll('-', '').slice(0, 24)}`, score = band === 'high' ? 85 : 60;
+      const payload = slackCard(runtime.config.publicUrl, { cluster, band, score, kind, accounts: 3, reasons: [{ code: 'SHARED_CARD', points: 30 }], workspaces: ['ws_mention_a', 'ws_mention_b'], sent: { emails: 120, bounced: 6, complained: 1 } });
+      await db.query(`WITH a AS (INSERT INTO abuse_alerts(id,cluster_id,band,score,kind,workspaces,payload,members) VALUES ($1,$2,$3,$4,$5,2,$6,'{}') RETURNING id)
+        INSERT INTO jobs(id,type,workspace_id,payload) SELECT 'abuse-alert:'||id,'abuse.alert','platform',jsonb_build_object('alertId',id) FROM a`, [id, cluster, band, score, kind, JSON.stringify(payload)]);
+      return id;
+    };
+    return { workspace, pause, amazon, hold, mentions, cluster, stored };
+  }
+  /** Runs one abuse alert's job as the runner would: 'done', or how long it waits; Slack answers with answer(card) (a status, or an error to throw). */
+  async function postAbuseAlert(t: TestContext, runtime: import('./src/core.js').Runtime, id: string, answer: (card: Json) => number | Error, posted: Json[]) {
+    const { abuseAlertJobs } = await import('./src/abuse-alerts.js'), { JobDeferred } = await import('./src/jobs.js');
+    let result = '';
+    await t.test('abuse alert posted', async t => {
+      t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
+        assert.equal(String(url), ABUSE_HOOK);
+        const card = JSON.parse(String(init!.body)), reply = answer(card); posted.push(card);
+        if (reply instanceof Error) throw reply;
+        return new Response(null, { status: reply });
+      });
+      try { await abuseAlertJobs['abuse.alert']!(runtime, { alertId: id }, { id: `abuse-alert:${id}`, workspaceId: 'platform', attempts: 1 }); result = 'done'; }
+      catch (error) { result = error instanceof JobDeferred ? `waits ${Math.round((Date.parse(error.availableAt) - Date.now()) / 1000)} s` : String((error as { code?: string }).code ?? error); }
+    });
+    return result;
+  }
+  test('MX operator mentions: a pause, Amazon\'s pause, a high abuse alert and a held link domain\'s opening card mention the operator production names, at most once per kind and subject an hour and 6 an hour in all; cards over the 6 post unmentioned and the next mentioned card says how many were not', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { loadConfig } = await import('./src/config.js'), { healthTick } = await import('./src/health.js'), { MENTION_LIMITS, MENTIONS } = await import('./src/operator-mention.js');
+      // The setting: a Slack user ID, hosted only, in the production configuration and nowhere else. Anything else is no mention.
+      const settings = (extra: Json) => loadConfig({ PUBLIC_URL: 'https://alerts.example', BANE_ROOT_SECRET: 'local-fixture-'.repeat(4), MULTI_TENANT: 'true', ACCOUNT_REQUIRED_ACR: 'urn:anomaly:acr:google', ...extra });
+      assert.deepEqual([settings({}), settings({ OPERATOR_SLACK_MENTION: '' }), settings({ OPERATOR_SLACK_MENTION: 'U0A960VPPMX' }), settings({ OPERATOR_SLACK_MENTION: '<!channel>' }), settings({ OPERATOR_SLACK_MENTION: 'u0a960vppmx' }),
+        loadConfig({ PUBLIC_URL: 'https://alerts.example', BANE_ROOT_SECRET: 'local-fixture-'.repeat(4), OPERATOR_SLACK_MENTION: 'U0A960VPPMX' })].map(c => c.operatorSlackMention),
+        [undefined, undefined, 'U0A960VPPMX', undefined, undefined, undefined]);
+      const configured = async (file: string) => /"OPERATOR_SLACK_MENTION":\s*"([^"]*)"/.exec(await readFile(new URL(file, import.meta.url), 'utf8'))?.[1];
+      assert.deepEqual([await configured('./wrangler.prod.jsonc'), await configured('./wrangler.dev.jsonc'), runtime.config.operatorSlackMention, MENTION_LIMITS.perHour, MENTIONS],
+        ['U0A960VPPMX', undefined, undefined, 6, { paused: 'capped', amazon_paused: 'capped', abuse_high: 'capped', link_domain_held: 'capped', amazon_account: 'own' }]);
+      const f = await mentionFixture(t, runtime, db);
+
+      // Unset: the card exactly as without this, and nothing decided.
+      runtime.config.operatorSlackMention = undefined;
+      await f.pause(await f.workspace('Brightwater'));
+      assert.deepEqual((await postOperatorAlerts(t, runtime, db)).map(card => [card.text, cardLine(card)]), [['Paused: Brightwater, too many bounces.', ':double_vertical_bar: *Paused* Brightwater, too many bounces.']]);
+      assert.deepEqual(await f.mentions(), []);
+      runtime.config.operatorSlackMention = MENTION;
+
+      // A held link domain: Health's opening card mentions (1 of 6), in mrkdwn that reads as the plain line did; its
+      // reminder and its cleared card don't.
+      const domain = `mention-${randomUUID().slice(0, 8)}.example`, key = `link-domain-held:${domain}`;
+      const health: Json[] = [], post = async (url: string, card: Json) => { assert.equal(url, OPERATOR_HOOK); health.push(card); };
+      const tick = async () => { await healthTick(runtime, { queues: [] }, { post, force: true }); return health.splice(0).filter(card => String(card.text).includes(domain)); };
+      await db.query(`INSERT INTO deliverability_checks(kind,subject,status,checked_at,held_at) VALUES ('dbl',$1,'listed',now(),now())`, [domain]);
+      try {
+        const line = `Marketing link domain held: Marketing releases using ${domain} are paused after a confirmed DBL listing.`;
+        assert.deepEqual((await tick()).map(card => [card.text, card.blocks[0].text]), [[`${LEAD} ${line}`, { type: 'mrkdwn', text: `${LEAD} ${line.replace(domain, `\`${domain}\``)}`, verbatim: true }]]);
+        await db.query(`UPDATE health_alerts SET sent_at=now()-interval '16 minutes' WHERE key=$1`, [key]);
+        assert.deepEqual((await tick()).map(card => card.text), [line], 'A reminder: unmentioned.');
+        await db.query('UPDATE deliverability_checks SET held_at=NULL WHERE subject=$1', [domain]);
+        await db.query(`UPDATE health_alerts SET seen_at=now()-interval '4 minutes',since=now()-interval '30 minutes' WHERE key=$1`, [key]);
+        assert.deepEqual((await tick()).map(card => card.text), [`Resolved: marketing link domain held (${domain})`], 'Cleared: unmentioned.');
+      } finally { await db.query('DELETE FROM deliverability_checks WHERE subject=$1', [domain]); }
+
+      // A high abuse alert mentions (2 of 6); another about the same cluster within the hour doesn't; a review one never does.
+      const abuse: Json[] = [];
+      for (const id of [await f.stored('high', 'new'), await f.stored('high', 'grew'), await f.stored('review', 'new')]) assert.equal(await postAbuseAlert(t, runtime, id, () => 200, abuse), 'done');
+      assert.deepEqual(abuse.map(card => [card.text, card.blocks[0].text.text.split('\n')[0]]), [
+        [`${LEAD} High risk 85: 3 related accounts`, `${LEAD} :rotating_light: *High risk 85: 3 related accounts*`],
+        ['High risk 85: 3 related accounts (new member)', ':rotating_light: *High risk 85: 3 related accounts (new member)*'],
+        ['Review risk 60: 3 related accounts', ':mag: *Review risk 60: 3 related accounts*'],
+      ]);
+      assert.deepEqual([abuse[0].blocks.length, abuse[0].blocks[0].text.text.split('\n').slice(1), abuse[0].blocks[1]], [2, abuse[1].blocks[0].text.text.split('\n').slice(1), abuse[1].blocks[1]], 'The rest of the card as it was.');
+
+      // Amazon's pause and five pauses: four more mention (6 of 6), the last two post unmentioned. A marketing hold never mentions.
+      const kestrel = await f.workspace('Kestrel'), paused = [await f.workspace('Avocet'), await f.workspace('Bittern'), await f.workspace('Curlew'), await f.workspace('Dunlin'), await f.workspace('Egret')];
+      await f.amazon(kestrel); for (const id of paused) await f.pause(id);
+      await f.hold(kestrel);
+      const burst = await postOperatorAlerts(t, runtime, db);
+      assert.deepEqual(burst.map(card => card.text.startsWith(LEAD)), [true, false, true, true, true, false, false]);
+      assert.deepEqual(burst.slice(0, 2).map(card => [card.text, cardLine(card)]), [
+        [`${LEAD} Amazon paused: Kestrel, Ohio.`, `${LEAD} :cloud: *Amazon paused* Kestrel, Ohio.`],
+        ['Marketing on hold: Kestrel.', ':mega: *Marketing on hold* Kestrel.'],
+      ]);
+      const counted = (rows: Json[]) => rows.reduce((n: Record<string, number>, row: Json) => ({ ...n, [`${row.kind}:${row.mentioned ? 'mentioned' : row.over ? 'over' : 'repeat'}`]: (n[`${row.kind}:${row.mentioned ? 'mentioned' : row.over ? 'over' : 'repeat'}`] ?? 0) + 1 }), {});
+      assert.deepEqual(counted(await f.mentions()), { 'link_domain_held:mentioned': 1, 'abuse_high:mentioned': 1, 'abuse_high:repeat': 1, 'amazon_paused:mentioned': 1, 'paused:mentioned': 3, 'paused:over': 2 });
+
+      // An hour on, the next pause mentions and says how many went out without one.
+      await db.query(`UPDATE operator_mentions SET at=at-interval '61 minutes'`);
+      await f.pause(await f.workspace('Gannet'));
+      const next = await postOperatorAlerts(t, runtime, db), note = '2 urgent cards before this one went out without a mention (more than 6 an hour).';
+      assert.deepEqual(next.map(card => [card.text, cardLine(card), card.blocks[0].accessory.text.text]), [[`${LEAD} Paused: Gannet, too many bounces. ${note}`, `${LEAD} :double_vertical_bar: *Paused* Gannet, too many bounces. ${note}`, 'Open']]);
+      assert.deepEqual((await f.mentions()).filter((row: Json) => row.over).map((row: Json) => row.told), [true, true], 'Told once: the next mention says nothing of them.');
+    });
+  });
+  test('MX operator mentions: a card Slack refuses with its mention is posted again at once without it, for an operator card, a high abuse alert and Health; a 429, a server error or no answer keeps the mention and the card\'s own waits and tries, and a high alert is still posted at most twice', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { healthTick } = await import('./src/health.js'), { SlackRefused } = await import('./src/reputation-alerts.js'), { rateLimitWait } = await import('./src/abuse-alerts.js');
+      const f = await mentionFixture(t, runtime, db), mentioned = (card: Json) => String(card.text).startsWith(LEAD);
+      const job = async (id: string) => (await db.query(`SELECT status,attempts,last_error FROM jobs WHERE type='operator.alert' AND workspace_id=$1`, [id])).rows[0];
+
+      // An operator card: Slack answers 400 to the mentioned one. The same card goes at once without it, and the job is done.
+      const heron = await f.workspace('Heron'); await f.pause(heron);
+      const refused = await postOperatorAlerts(t, runtime, db, card => mentioned(card) ? 400 : 200);
+      assert.deepEqual(refused.map(card => card.text), [`${LEAD} Paused: Heron, too many bounces.`, 'Paused: Heron, too many bounces.']);
+      assert.deepEqual([await job(heron), await f.mentions()], [{ status: 'completed', attempts: 1, last_error: null }, [{ kind: 'paused', subject: heron, capped: true, mentioned: false, over: false, told: false, skipped: 0 }]]);
+      // Refused without the mention too: the card's own failure, retried as before, still mentioned next time.
+      const ibis = await f.workspace('Ibis'); await f.pause(ibis);
+      assert.deepEqual((await postOperatorAlerts(t, runtime, db, 400)).map(mentioned), [true, false]);
+      assert.deepEqual(await job(ibis), { status: 'pending', attempts: 1, last_error: 'OPERATOR_ALERT_FAILED' });
+      // A server error with the mention is the card's own outcome: no second post now, retried later with the mention.
+      const jacana = await f.workspace('Jacana'); await f.pause(jacana);
+      await db.query(`UPDATE jobs SET status='completed' WHERE type='operator.alert' AND workspace_id=$1`, [ibis]);
+      assert.deepEqual((await postOperatorAlerts(t, runtime, db, 500)).map(mentioned), [true]);
+      assert.deepEqual((await postOperatorAlerts(t, runtime, db)).map(card => card.text), [`${LEAD} Paused: Jacana, too many bounces.`]);
+
+      // A high abuse alert. Refused with the mention: posted again without it, and that post is the one judged: sent, one try.
+      const state = async (id: string) => (await db.query('SELECT status,attempts,timeouts,limited,error FROM abuse_alerts WHERE id=$1', [id])).rows[0];
+      const posts: Json[] = [], first = await f.stored('high', 'new');
+      assert.equal(await postAbuseAlert(t, runtime, first, card => mentioned(card) ? 400 : 200, posts), 'done');
+      assert.deepEqual([posts.splice(0).map(mentioned), await state(first)], [[true, false], { status: 'sent', attempts: 1, timeouts: 0, limited: 0, error: null }]);
+      // A 429 to the mentioned post: the wait #1014 sets, no try spent, the mention kept; then posted with it. (The cluster
+      // was told an hour ago, so its mention is free again.)
+      await db.query(`UPDATE operator_mentions SET at=at-interval '61 minutes'`);
+      const second = await f.stored('high', 'grew');
+      const limited = await postAbuseAlert(t, runtime, second, () => 429, posts);
+      assert.deepEqual([limited, posts.splice(0).map(mentioned), await state(second)], [`waits ${rateLimitWait(undefined, 1, 86_400)} s`, [true], { status: 'stored', attempts: 1, timeouts: 0, limited: 1, error: 'HTTP_429' }]);
+      assert.equal(await postAbuseAlert(t, runtime, second, () => 200, posts), 'done');
+      assert.deepEqual([posts.splice(0).map(mentioned), (await state(second)).status], [[true], 'sent']);
+      // No answer, twice: the same mentioned card both times, and never a third post.
+      await db.query(`UPDATE operator_mentions SET at=at-interval '61 minutes'`);
+      const third = await f.stored('high', 'grew'), timeout = () => Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+      assert.match(await postAbuseAlert(t, runtime, third, timeout, posts), /^waits /);
+      await db.query(`UPDATE abuse_alerts SET claimed_at=claimed_at-interval '6 minutes' WHERE id=$1`, [third]);
+      assert.equal(await postAbuseAlert(t, runtime, third, timeout, posts), 'done');
+      assert.equal(await postAbuseAlert(t, runtime, third, () => 200, posts), 'done');
+      assert.deepEqual([posts.splice(0).map(mentioned), (await state(third)).status], [[true, true], 'unconfirmed']);
+
+      // Health: the opening card Slack refuses with the mention goes at once without it, and counts as sent.
+      const domain = `refused-${randomUUID().slice(0, 8)}.example`, health: Json[] = [];
+      await db.query(`INSERT INTO deliverability_checks(kind,subject,status,checked_at,held_at) VALUES ('dbl',$1,'listed',now(),now())`, [domain]);
+      try {
+        await healthTick(runtime, { queues: [] }, { force: true, post: async (_url, card) => { if (String(card.text).includes(domain)) health.push(card); if (mentioned(card)) throw new SlackRefused('HEALTH_ALERT_FAILED', 400, null); } });
+        assert.deepEqual([health.map(mentioned), (await db.query('SELECT sent_at IS NOT NULL AS sent FROM health_alerts WHERE key=$1', [`link-domain-held:${domain}`])).rows[0]], [[true, false], { sent: true }]);
+      } finally { await db.query('DELETE FROM deliverability_checks WHERE subject=$1', [domain]); await db.query('DELETE FROM health_alerts WHERE key=$1', [`link-domain-held:${domain}`]); }
+    });
+  });
+  /** Amazon's GetAccount for a region of the test's own, read as the 10-minute check reads it (the simulator answers the others). read returns the check's status, the state told and the operator cards posted. */
+  async function amazonAccountReads(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client, region: string, pool: string) {
+    const { refreshDeliverabilitySources } = await import('./src/glass-deliverability.js'), { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
+    const multiTenant = runtime.config.multiTenant; runtime.config.multiTenant = true; t.after(() => { runtime.config.multiTenant = multiTenant; });
+    await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture') ON CONFLICT DO NOTHING`, [region, pool, `arn:aws:sns:${region}:${pool}:mentions`]);
+    // Amazon's answer for this region: an account, or a failed read.
+    let answer: Json | Error = {};
+    const send = SESv2Client.prototype.send;
+    t.mock.method(SESv2Client.prototype, 'send', async function (this: InstanceType<typeof SESv2Client>, command: unknown, ...rest: unknown[]) {
+      if (command instanceof GetAccountCommand && await this.config.region() === region) {
+        if (answer instanceof Error) throw answer;
+        return { ProductionAccessEnabled: true, VdmAttributes: { VdmEnabled: 'DISABLED' }, ...answer };
+      }
+      return (send as (...args: unknown[]) => Promise<unknown>).call(this, command, ...rest);
+    });
+    const read = async (account: Json | Error) => {
+      answer = account;
+      await db.query(`UPDATE deliverability_checks SET next_at=now() WHERE kind='ses' AND subject=$1`, [region]);
+      await refreshDeliverabilitySources(runtime, { fetch: (async () => { throw new Error('No request expected'); }) as typeof fetch });
+      const check = (await db.query(`SELECT status,told FROM deliverability_checks WHERE kind='ses' AND subject=$1`, [region])).rows[0];
+      return [check.status, check.told, (await postOperatorAlerts(t, runtime, db)).map(card => [card.text, cardLine(card), card.blocks[0].accessory.url])];
+    };
+    const done = async () => { await db.query('DELETE FROM deliverability_checks WHERE subject=$1', [region]); await db.query('DELETE FROM provider_pool_regions WHERE region=$1 AND aws_account_id=$2', [region, pool]); };
+    return { read, done };
+  }
+  test('MX operator mentions: Amazon\'s account status for a region posts one card per change of state from the 10-minute read and mentions when it gets worse, even with the 6 mentions of the hour used, at most once per region an hour; healthy again posts unmentioned, a first healthy reading posts nothing and a failed read changes nothing', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const f = await mentionFixture(t, runtime, db), region = 'ap-southeast-7', { read, done } = await amazonAccountReads(t, runtime, db, region, '555566667777');
+      try {
+        const glass = `${PUBLIC_ORIGIN}/glass?view=deliverability`, card = (words: string, mention = false) => [`${mention ? `${LEAD} ` : ''}Amazon account: Thailand (ap-southeast-7): ${words}`, `${mention ? `${LEAD} ` : ''}:cloud: *Amazon account* Thailand (ap-southeast-7): ${words}`, glass];
+
+        // The first reading, healthy: told, no card.
+        assert.deepEqual(await read({ EnforcementStatus: 'HEALTHY', SendingEnabled: true }), ['ok', 'healthy', []]);
+        // A ring's pauses have used the hour's six mentions. Probation still mentions: outside the six, and not counted in them.
+        await db.query(`INSERT INTO operator_mentions(card,kind,subject,capped,mentioned) SELECT 'ring-'||g,'paused','ring-'||g,true,true FROM generate_series(1,6) g`);
+        assert.deepEqual(await read({ EnforcementStatus: 'PROBATION', SendingEnabled: true }), ['ok', 'PROBATION', [card('on probation.', true)]]);
+        await f.pause(await f.workspace('Kittiwake'));
+        assert.deepEqual((await postOperatorAlerts(t, runtime, db)).map(c => c.text), ['Paused: Kittiwake, too many bounces.'], 'The six are still used: a pause is over them.');
+        // A failed read changes nothing.
+        assert.deepEqual(await read(Object.assign(new Error('Rate exceeded'), { name: 'ThrottlingException' })), ['error', 'PROBATION', []]);
+        // Worse again within the hour: its card, unmentioned (once per region an hour); the same state again: nothing.
+        assert.deepEqual(await read({ EnforcementStatus: 'SHUTDOWN', SendingEnabled: false }), ['ok', 'SHUTDOWN+sending_disabled', [card('shut down, sending disabled.')]]);
+        assert.deepEqual(await read({ EnforcementStatus: 'SHUTDOWN', SendingEnabled: false }), ['ok', 'SHUTDOWN+sending_disabled', []]);
+        // Healthy again: unmentioned.
+        assert.deepEqual(await read({ EnforcementStatus: 'HEALTHY', SendingEnabled: true }), ['ok', 'healthy', [card('healthy again.')]]);
+        // An hour on, sending disabled on a healthy account is worse than healthy: mentioned.
+        await db.query(`UPDATE operator_mentions SET at=at-interval '61 minutes'`);
+        // It also says the pause that went out over the six without a mention.
+        assert.deepEqual(await read({ EnforcementStatus: 'HEALTHY', SendingEnabled: false }), ['ok', 'HEALTHY+sending_disabled', [card('sending disabled. 1 urgent card before this one went out without a mention (more than 6 an hour).', true)]]);
+        assert.deepEqual((await f.mentions()).filter((row: Json) => row.kind === 'amazon_account').map((row: Json) => [row.subject, row.capped, row.mentioned]),
+          [[region, false, true], [region, false, false], [region, false, true]], 'Healthy again is never asked: only worse is.');
+      } finally { await done(); }
+    });
+  });
+  test('MX operator mentions: a read of Amazon\'s account status without a recognised enforcement status is no reading: no card and nothing told, whether the field is missing or its value unknown', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      await mentionFixture(t, runtime, db);
+      const { read, done } = await amazonAccountReads(t, runtime, db, 'ca-west-1', '555566668888');
+      try {
+        assert.deepEqual(await read({ EnforcementStatus: 'HEALTHY', SendingEnabled: true }), ['ok', 'healthy', []]);
+        assert.deepEqual(await read({ SendingEnabled: true }), ['ok', 'healthy', []], 'No status: nothing.');
+        assert.deepEqual(await read({ EnforcementStatus: 'HEALTHY', SendingEnabled: true }), ['ok', 'healthy', []], 'So healthy again is nothing either.');
+        assert.deepEqual(await read({ EnforcementStatus: 'SUSPENDED', SendingEnabled: true }), ['ok', 'healthy', []], 'A status it does not know: nothing.');
+        assert.deepEqual(await read({ EnforcementStatus: 'HEALTHY', SendingEnabled: true }), ['ok', 'healthy', []]);
+        assert.deepEqual((await read({ EnforcementStatus: 'PROBATION', SendingEnabled: true }))[2], [[`${LEAD} Amazon account: Calgary (ca-west-1): on probation.`, `${LEAD} :cloud: *Amazon account* Calgary (ca-west-1): on probation.`, `${PUBLIC_ORIGIN}/glass?view=deliverability`]], 'A real change still posts.');
+      } finally { await done(); }
+    });
+  });
+  test('MX operator mentions: deciding a mention waits at most a second for its lock; with the lock held, or the ledger missing, the card posts unmentioned at once, stays so on a retry and is counted as not mentioned, and an abuse alert is still posted at most twice', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const f = await mentionFixture(t, runtime, db), holder = await fixtureDatabase(t), mentioned = (card: Json) => String(card.text).startsWith(LEAD);
+      const timeout = () => Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+      // Another session holds the mention lock throughout.
+      await holder.query('BEGIN'); await holder.query(`SELECT pg_advisory_xact_lock(hashtextextended('operator.mention',0))`);
+      const osprey = await f.workspace('Osprey'), posts: Json[] = [], alert = await f.stored('high', 'new');
+      try {
+        // A pause: unmentioned within the limit. Slack refuses that post (500), so the job will try again.
+        await f.pause(osprey);
+        let started = Date.now();
+        assert.deepEqual((await postOperatorAlerts(t, runtime, db, 500)).map(mentioned), [false]);
+        assert.ok(Date.now() - started < 2500, `Posted within the lock limit (${Date.now() - started} ms).`);
+        // A high abuse alert Slack doesn't answer, twice: each try within the limit, unmentioned, and never a third post.
+        started = Date.now();
+        assert.match(await postAbuseAlert(t, runtime, alert, timeout, posts), /^waits /);
+        await db.query(`UPDATE abuse_alerts SET claimed_at=claimed_at-interval '6 minutes' WHERE id=$1`, [alert]);
+        assert.equal(await postAbuseAlert(t, runtime, alert, timeout, posts), 'done');
+        assert.equal(await postAbuseAlert(t, runtime, alert, () => 200, posts), 'done');
+        assert.ok(Date.now() - started < 5000, `Three tries within the limits (${Date.now() - started} ms).`);
+        assert.deepEqual([posts.map(mentioned), (await db.query('SELECT status FROM abuse_alerts WHERE id=$1', [alert])).rows[0].status], [[false, false], 'unconfirmed']);
+      } finally { await holder.query('ROLLBACK'); }
+      // Released: the pause's retry is still unmentioned (decided once: never a late mention). The next card mentions and
+      // counts the two that went out without one.
+      assert.deepEqual((await postOperatorAlerts(t, runtime, db)).map(card => card.text), ['Paused: Osprey, too many bounces.']);
+      assert.deepEqual((await f.mentions()).map((row: Json) => [row.kind, row.mentioned, row.over]), [['abuse_high', false, true], ['paused', false, true]]);
+      await f.pause(await f.workspace('Plover'));
+      assert.deepEqual((await postOperatorAlerts(t, runtime, db)).map(card => card.text), [`${LEAD} Paused: Plover, too many bounces. 2 urgent cards before this one went out without a mention (more than 6 an hour).`]);
+      // The ledger missing (a database without its migration): the card posts unmentioned, as without the setting.
+      await db.query('ALTER TABLE operator_mentions RENAME TO operator_mentions_away');
+      try {
+        await f.pause(await f.workspace('Quail'));
+        assert.deepEqual((await postOperatorAlerts(t, runtime, db)).map(card => card.text), ['Paused: Quail, too many bounces.']);
+      } finally { await db.query('ALTER TABLE operator_mentions_away RENAME TO operator_mentions'); }
+    });
+  });
+  test('MX operator mentions: a held link domain\'s mentioned card shows the domain exactly as Health has it, in a code span, whatever characters it holds; unmentioned, its card is as before', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { healthTick } = await import('./src/health.js');
+      await mentionFixture(t, runtime, db);
+      // _ and * reach the card as they are; Health never prints ~ or a backtick (safe()): that domain reads "other".
+      const tag = randomUUID().slice(0, 6), plain = `links_rv*${tag}.example`, odd = `links~rv\`${tag}.example`, keys = [plain, odd].map(d => `link-domain-held:${d}`);
+      const line = (domain: string, code = false) => `Marketing link domain held: Marketing releases using ${code ? `\`${domain}\`` : domain} are paused after a confirmed DBL listing.`;
+      const tick = async () => (await healthTick(runtime, { queues: [] }, { post: async () => {}, force: true })).cards.filter(c => keys.includes(c.key))
+        .map(c => [c.key === keys[0] ? 'plain' : 'odd', c.state, c.card.text, (c.card as Json).blocks[0].text]).sort((a, b) => String(a[0]).localeCompare(String(b[0])));
+      await db.query(`INSERT INTO deliverability_checks(kind,subject,status,checked_at,held_at) VALUES ('dbl',$1,'listed',now(),now()),('dbl',$2,'listed',now(),now())`, [plain, odd]);
+      try {
+        assert.deepEqual(await tick(), [
+          ['odd', 'open', `${LEAD} ${line('other')}`, { type: 'mrkdwn', text: `${LEAD} ${line('other', true)}`, verbatim: true }],
+          ['plain', 'open', `${LEAD} ${line(plain)}`, { type: 'mrkdwn', text: `${LEAD} ${line(plain, true)}`, verbatim: true }],
+        ]);
+        await db.query(`UPDATE health_alerts SET sent_at=now()-interval '16 minutes' WHERE key=ANY($1)`, [keys]);
+        assert.deepEqual(await tick(), [
+          ['odd', 'reminder', line('other'), { type: 'plain_text', text: line('other'), emoji: false }],
+          ['plain', 'reminder', line(plain), { type: 'plain_text', text: line(plain), emoji: false }],
+        ], 'Unmentioned: as before.');
+      } finally { await db.query('DELETE FROM deliverability_checks WHERE subject=ANY($1)', [[plain, odd]]); await db.query('DELETE FROM health_alerts WHERE key=ANY($1)', [keys]); }
+    });
+  });
   test('MX health: each incident of 23 November is an alert within its minutes, with a stable key, a severity and the number that matters, in words that carry numbers, codes and IDs only; a failed probe neither opens nor clears', async () => {
     const { evaluate, emptyMemory } = await import('./src/health.js'), { LATENCY_BUCKETS } = await import('./src/health-counters.js');
     type Sample = import('./src/health.js').Sample;

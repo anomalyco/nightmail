@@ -7,6 +7,7 @@ import { slackCard, supportCostAlert } from './operator-alerts.js';
 import { aiCostToday } from './support-ai-cost.js';
 import { disabledSettings } from './config.js';
 import { postSlack } from './reputation-alerts.js';
+import { mentionFor, sendMentioned } from './operator-mention.js';
 
 // Health: the system says when something falls behind (docs/operations.md is the runbook).
 //
@@ -443,7 +444,8 @@ const refusing = { since: 0, sent: 0, ended: 0, lastClear: 0, clearTries: 0 };
 const longMs = TICK.longMinutes * 60_000, flapMs = TICK.flapMinutes * 60_000;
 const mayPage = (since: number, lastClear: number, now: number) => !lastClear || since - lastClear >= flapMs || now - since >= longMs;
 
-export type HealthCard = { key: string; state: 'open' | 'reminder' | 'cleared'; card: SlackMessage; /** A summary card stands for these alerts too. */ covers?: string[] };
+export type HealthCard = { key: string; state: 'open' | 'reminder' | 'cleared'; card: SlackMessage; /** A summary card stands for these alerts too. */ covers?: string[];
+  /** Posted mentioning the operator (src/operator-mention.ts) as this card, its kind and subject there. */ mention?: { kind: string; subject: string; card: SlackMessage } };
 export type TickResult = { ran: boolean; ms: number; statements: number; open: number; cards: HealthCard[] };
 /**
  * One tick: elect, measure, write the rollup, reconcile the alerts, post their cards. Never throws, and nothing awaits
@@ -462,7 +464,16 @@ export async function healthTick(runtime: Pick<Runtime, 'db' | 'config'>, input:
   const result = (ran: boolean, open = 0): TickResult => ({ ran, ms: Date.now() - started, statements, open, cards });
   const send = async (card: HealthCard) => {
     if (!url) return false;
-    try { await post(url, card.card); cards.push(card); return true; }
+    try {
+      // A card that may mention the operator (a held link domain's opening card), decided once for its episode (since), so
+      // a card Slack refused is posted the same way next tick (src/operator-mention.ts).
+      const episode = sql`'health:'||${card.key}::text||':'||(SELECT extract(epoch FROM since)::bigint FROM health_alerts WHERE key=${card.key})::text`;
+      if (card.mention) statements += 4;
+      const mention = card.mention ? await mentionFor(runtime, { id: episode, kind: card.mention.kind, subject: card.mention.subject }) : null;
+      let sent = card.card;
+      await sendMentioned(runtime, async message => { await post(url, message); sent = message; }, card.card, mention, episode, card.mention?.card);
+      cards.push({ ...card, card: sent }); return true;
+    }
     catch { log('warn', { code: 'HEALTH_ALERT_FAILED', alert: card.key.split(':')[0] }); return false; }
   };
   let memory: Memory;
@@ -554,6 +565,14 @@ export async function healthTick(runtime: Pick<Runtime, 'db' | 'config'>, input:
       return !wasPaged(a) && mayPage(now - (a?.age ?? 0) * 1000, rollup.memory.criticalClears![f.key] ?? 0, now);
     }), TICK.cards, openLine);
     const clears = fit('cleared', recovered.filter(canClear), TICK.cards - fresh.length, a => clearLine(a.key, a.kind as Kind));
+    // A held link domain's opening card mentions the operator; its reminders and its cleared card never do. Mentioned, its
+    // line is mrkdwn with the domain in a code span, exactly as Health has it (safe(): no backtick, no ~), only &, < and >
+    // escaped, so it can be copied as it is.
+    for (const card of fresh) {
+      const f = critical.find(finding => finding.key === card.key);
+      if (f?.kind === 'link-domain-held') card.mention = { kind: 'link_domain_held', subject: f.key.slice(f.kind.length + 1), card: { ...card.card,
+        blocks: [{ ...(card.card.blocks as Record<string, unknown>[])[0], text: { type: 'mrkdwn', text: `${KINDS[f.kind].label}: ${f.words}`.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'), verbatim: true } }] } };
+    }
     const reminders = critical.filter(f => { const a = known.get(f.key); return wasPaged(a) && a!.sent! >= f.remindMinutes * 60; })
       .slice(0, TICK.cards - fresh.length - clears.length).map((f): HealthCard => ({ key: f.key, state: 'reminder', card: cardOf(openLine(f)) }));
     // One after the other, inside the budget. A card that did not go out leaves its row as it was: the next tick tries again.

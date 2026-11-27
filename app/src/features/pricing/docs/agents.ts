@@ -2,8 +2,8 @@
 import { productName, publicOrigin } from '../../../../../api/src/brand.ts'
 import { fitWords, formatCount, money, nightmail, quote, shownSources, type Source } from '../prices.ts'
 import { billAt, ORDERED } from '../page/comparison.ts'
-import { factsSection } from '../page/facts.ts'
-import { plain, type Doc, type Section, type Table, type Text } from './doc.ts'
+import { briefFactsSection } from '../page/facts.ts'
+import { folded, plain, type Doc, type Section, type Table, type Text } from './doc.ts'
 import { checkedOn, DASH, month, spelled } from './alternatives.ts'
 
 // /email-for-ai-agents: what a month of email costs for agents, on Nightmail and on every agent-inbox service the
@@ -51,8 +51,9 @@ export function emailForAgents(): Doc {
   const terms = `${productName}: ${nightmail.perThousand} per 1,000 emails, sent or received, after ${formatCount(nightmail.freeSent)} sent and ${formatCount(nightmail.freeReceived)} received free a month${allFree ? `, so up to ${formatCount(freeInboxes)} inboxes with this mail cost nothing on a domain of your own (the built-in domain sends only to your workspace’s members)` : ''}.`
   const table = (rows: (typeof group)[number][], note: string): Table => ({ kind: 'table', numeric: [1, 2, 3], caption: [note], head, rows: [nightmailRow, ...rows.map(row)] })
   const sections: Section[] = [
-    { id: 'agents', title: `Email for AI agents: a month at ${AGENT_SIZES.join(', ')} inboxes`, quiet: true, blocks: [table(shown, `${claim} Each inbox receives ${m.receivedPerInbox} and sends ${m.sentPerInbox} emails a month. ${terms} The others: monthly list prices before tax, each one’s least expensive plan for the size, checked ${when}; each name links to its comparison and the page it was read on.${dash(shown)}`)] },
-    factsSection(),
+    { id: 'agents', title: `Email for AI agents: a month at ${AGENT_SIZES.join(', ')} inboxes`, quiet: true, blocks: [folded(table(shown, `These are the ${group.length} agent-inbox services ${productName} has compared itself with, not every one. ${claim} Each inbox receives ${m.receivedPerInbox} and sends ${m.sentPerInbox} emails a month. ${terms} The others: monthly list prices before tax, each one’s least expensive plan for the size, checked ${when}; each name links to its comparison and the page it was read on.${dash(shown)}`))] },
+    // Its price facts, the free allowance first, then that an inbox costs nothing (PANELS.receive) and agents' MCP.
+    briefFactsSection([{ shared: 'free' }, 'No charge per inbox', { shared: 'agents' }, { shared: 'teammates' }], []),
   ]
   const read = (rows: (typeof group)[number][]) => rows.flatMap(({ c, bills }) => shownSources(bills.flatMap(b => { const q = quote(c.offer, b.u); return q.kind === 'price' ? [q.tier.source] : [] }), c.offer))
   const cited = read(shown), all: Source[] = [...new Map(read(group).map(source => [source.url, source])).values()]
@@ -67,7 +68,7 @@ export function emailForAgents(): Doc {
     `${lead}, and ${shown.length} others from ${money(lowest)}.`,
   ], 160, 140)
   return {
-    path, title: 'Email for AI agents', searchTitle, description, h1, answer: [[caption]], sections, questions: [],
+    path, title: 'Email for AI agents', searchTitle, description, h1, answer: [[caption]], caption: [`Per ${AGENT_SIZES[1]} agent inboxes, ${m.receivedPerInbox} in and ${m.sentPerInbox} out each · checked ${when.replaceAll(' ', '\u00a0')}`], sections, questions: [],
     cardWords: { lines: [`${productName} ${middle.ours}.`, `${shown.length} others from ${money(lowest)}.`], caption: fitWords([`${AGENT_SIZES[1]} agent inboxes, ${each}, checked ${when}.`, `${AGENT_SIZES[1]} agent inboxes, checked ${when}.`], 70) },
     sources: [], cited, copy: { sections: copySections, questions: [], sources: all, related: [] },
     related: [

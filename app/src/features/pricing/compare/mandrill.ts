@@ -44,7 +44,7 @@ export const mandrill: Entry = {
   lead: 'Mandrill sells email in blocks of 25,000 a month, on top of a Mailchimp plan. Nightmail charges for each email.',
   assume: 'One recipient each, nothing received, Mandrill’s cheapest number of blocks, without the Mailchimp plan it needs. List prices before tax.',
   rows: [
-    fact('No plan to buy first', 'No plan to buy first.', 'Mandrill is an add-on to Mailchimp’s Standard and Premium plans.', read(MANDRILL, 'Transactional Email is available as an add-on to Mailchimp’s Standard and Premium plans, or the legacy Monthly Plan.'), 'Works on its own, with no other plan to buy'),
+    fact('No plan to buy first', 'No plan to buy first.', 'Mandrill is an add-on to Mailchimp’s Standard and Premium plans.', read(MANDRILL, 'Transactional Email is available as an add-on to Mailchimp’s Standard and Premium plans, or the legacy Monthly Plan.'), { text: 'Works on its own, with no other plan to buy', brief: 'No plan to buy first' }),
     fact('Free every month', `${formatCount(nightmail.freeSent)} sent and ${formatCount(nightmail.freeReceived)} received free every month.`, 'Mandrill’s demo is 500 emails, once, to your own domain.', read('https://mailchimp.com/help/transactional-email-demo/', 'You can send up to 500 transactional emails to any email address on your verified domain. … The emails included with the demo do not expire or renew.'), { shared: 'free' }),
   ],
   // Mandrill's readers first see the API, the allowances and the campaigns it leaves to Mailchimp.

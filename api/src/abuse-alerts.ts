@@ -7,6 +7,7 @@ import { ApiError, errors, json, log, notFound, response, security, type App, ty
 import { JobDeferred, MAX_ATTEMPTS, retryDatabaseFailures } from './jobs.js';
 import { operatorActor } from './operator.js';
 import { postSlack, SlackRefused } from './reputation-alerts.js';
+import { mentionFor, sendMentioned } from './operator-mention.js';
 
 // Abuse monitoring, part 3: the alert outbox and its review. When a cluster first reaches a level a person should look
 // at (review or high), climbs a level or gains a member there, one alert is stored with its Slack message, and one job
@@ -26,7 +27,8 @@ import { postSlack, SlackRefused } from './reputation-alerts.js';
 //
 // A message holds no personal data and no evidence: a risk level, reasons in fixed words, counts, workspace IDs and a
 // link into the Operator area (a staff sign-in). Never a workspace's name (it can be a person's), an address, a domain,
-// a signal's value or anything a customer wrote. The payload and the webhook URL are never logged.
+// a signal's value or anything a customer wrote. The payload and the webhook URL are never logged. A high alert, as it
+// is posted, mentions the operator production's configuration names (src/operator-mention.ts); a review one never does.
 
 const rank = (band: Band) => BANDS.indexOf(band);
 export type AlertKind = 'new' | 'raised' | 'grew';
@@ -62,7 +64,8 @@ const share = (part: number, whole: number, digits: number) => `${(part / whole 
 /**
  * The Slack message for one alert: one line (level, score, accounts) and three bullets (who, why, what they sent), with
  * a button to its cluster in the Operator area. Built only from a level, numbers, reason codes on the fixed list and IDs
- * of a safe shape; anything else is left out. No mentions, no unfurls.
+ * of a safe shape; anything else is left out. No unfurls, and no mention in the stored message: a high alert mentions
+ * the operator only as it is posted (deliver, src/operator-mention.ts).
  */
 export function slackCard(publicUrl: string, alert: { cluster: string; band: 'review' | 'high'; score: number; kind: AlertKind; accounts: number; reasons: Reason[]; workspaces: string[]; sent: Sent }) {
   const origin = publicUrl.replace(/\/$/, ''), ids = alert.workspaces.filter(id => SAFE_ID.test(id)), more = ids.length - WORKSPACES_SHOWN, { emails, bounced, complained } = alert.sent;
@@ -231,12 +234,12 @@ const deliver: JobHandler = async (runtime, payload, job) => {
   const id = typeof payload.alertId === 'string' && /^aal_[0-9a-f]{24}$/.test(payload.alertId) ? payload.alertId : null;
   if (!id) throw new ApiError(500, 'JOB_PAYLOAD_INVALID', 'Invalid abuse alert job.');
   const url = runtime.config.abuseSlackWebhookUrl;
-  type Decision = { post: unknown } | { wait: string } | null;
+  type Decision = { post: unknown; band: 'review' | 'high'; cluster: string } | { wait: string } | null;
   const decision = await runtime.db.transaction(async (tx): Promise<Decision> => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('abuse.alert', 0))`);
     // until: when its last post settles, if not yet (in flight: answer not recorded, under 2 minutes; unanswered: the
     // pause before its one more try).
-    const { rows: [a] } = await tx.execute<{ status: string; band: 'review' | 'high'; payload: unknown; reason: string | null; until: string | null; posting: boolean; timeouts: number }>(sql`SELECT a.status,a.band,a.payload,a.posting,a.timeouts,${staleReason} AS reason,
+    const { rows: [a] } = await tx.execute<{ status: string; band: 'review' | 'high'; cluster: string; payload: unknown; reason: string | null; until: string | null; posting: boolean; timeouts: number }>(sql`SELECT a.status,a.band,a.cluster_id AS cluster,a.payload,a.posting,a.timeouts,${staleReason} AS reason,
       CASE WHEN a.posting AND a.claimed_at>now()-interval '2 minutes' THEN ${utc(sql`(a.claimed_at+interval '2 minutes')`)}
         WHEN NOT a.posting AND a.timeouts>0 AND a.claimed_at>now()-make_interval(secs=>${AFTER_TIMEOUT_MS / 1000}) THEN ${utc(sql`(a.claimed_at+make_interval(secs=>${AFTER_TIMEOUT_MS / 1000}))`)} END AS until
       FROM abuse_alerts a LEFT JOIN abuse_clusters c ON c.id=a.cluster_id WHERE a.id=${id} FOR UPDATE OF a`);
@@ -260,12 +263,15 @@ const deliver: JobHandler = async (runtime, payload, job) => {
     // Its turn comes after theirs: they take the places left, and it waits for the next one.
     if ((line?.ahead ?? 0) >= free) return { wait: new Date(Date.now() + 30_000).toISOString() };
     await tx.execute(sql`UPDATE abuse_alerts SET claimed_at=now(),posting=true,timeouts=${unanswered} WHERE id=${id}`);
-    return { post: a.payload };
+    return { post: a.payload, band: a.band, cluster: a.cluster };
   });
   if (!decision) return;
   // Waiting is not a try: the attempts its refused posts used are kept.
   if ('wait' in decision) { log('info', { code: 'ABUSE_ALERT_WAITING', until: decision.wait }); throw new JobDeferred(decision.wait, undefined, true); }
-  try { await postSlack(url!, decision.post as Record<string, unknown>, 'ABUSE_ALERT_FAILED', POST_TIMEOUT_MS); }
+  // A high alert mentions the operator, decided once for the alert, so its one more try posts it the same way; one Slack
+  // refuses with the mention goes again at once without it, and that post is the one judged below (operator-mention.ts).
+  const mention = decision.band === 'high' ? await mentionFor(runtime, { id, kind: 'abuse_high', subject: decision.cluster }) : null;
+  try { await sendMentioned(runtime, message => postSlack(url!, message, 'ABUSE_ALERT_FAILED', POST_TIMEOUT_MS), decision.post as Record<string, unknown> & { text: string }, mention, id); }
   catch (error) {
     if (!(error instanceof ApiError) && error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
       // Unanswered: it keeps its place, and gets one more try after a pause; the second unanswered post is the last.

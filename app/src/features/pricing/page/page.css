@@ -74,7 +74,6 @@
 /* Join the waitlist and Open dashboard, the longer wordings, a step smaller (as tv.css sets them on the homepage). */
 .pp .pp-label .chyp-go .srt-cta-wait, .pp .pp-label a.chyp-go { font-size: 13px; }
 .pp-consent { margin: 0; color: var(--faint); font-size: 12px; line-height: 16px; text-wrap: balance; }
-.pp-full { min-height: 16px; }
 .pp .pp-consent a { text-decoration-color: rgb(140 139 136 / 50%); }
 
 /* The page under the verdict. The first section (the price table) follows it closely; the rest are spaced apart. */
@@ -114,25 +113,26 @@
 .pp-qa summary::-webkit-details-marker { display: none; }
 .pp-qa summary::after { content: '+'; content: '+' / ''; flex: none; color: var(--faint); font: 700 15px / 1 var(--font-mono); }
 .pp-qa[open] summary::after { content: '−'; content: '−' / ''; }
-.pp-qa h3 { margin: 0; color: var(--soft); font-size: 14px; font-weight: 500; line-height: 1.4; }
+.pp-qa h3, .pp-qa-q { margin: 0; color: var(--soft); font-size: 14px; font-weight: 500; line-height: 1.4; }
 /* An answer's links name the vendor's page by its address, which can be longer than a phone is wide. */
 .pp-qa p a { overflow-wrap: anywhere; }
-@media (hover: hover) { .pp-qa summary:hover h3 { color: var(--ink); } }
-.pp-qa summary:focus-visible h3, .pp-qa[open] h3 { color: var(--ink); }
+@media (hover: hover) { .pp-qa summary:hover :is(h3, .pp-qa-q) { color: var(--ink); } }
+.pp-qa summary:focus-visible :is(h3, .pp-qa-q), .pp-qa[open] :is(h3, .pp-qa-q) { color: var(--ink); }
+/* How a page compared, closed, straight under its table: one more row, the table's last rule its top edge. */
+.pp-qa.pp-method { margin-top: 0; border-top: 0; }
+.pp-method p { overflow-wrap: anywhere; }
 .pp-qa p { margin: 0 0 14px; color: var(--soft); font-size: 14px; line-height: 1.55; text-wrap: pretty; }
 /* The facts under the table: one line each. */
 #facts .pp-list { gap: 6px; margin: 0; }
 #facts .pp-list li { padding-left: .2em; }
 #facts .pp-list li::marker { color: var(--ours); }
-/* The other comparisons: "vs SendGrid", each on one line, as many to a line as fit. */
-.pp-more { display: flex; flex-wrap: wrap; gap: 0 20px; margin: 0; padding: 0; list-style: none; }
-.pp-more a { display: flex; align-items: center; min-height: 44px; color: var(--soft); font-size: 14px; white-space: nowrap; }
 .pp-print { margin-top: 48px; padding-top: 14px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; line-height: 18px; }
 .pp-print p { margin: 0; overflow-wrap: anywhere; }
 .pp-print p + p { margin-top: 6px; }
-.pp-end { box-sizing: border-box; max-width: calc(720px + 48px); margin: 24px auto 0; padding: 0 24px calc(20px + env(safe-area-inset-bottom, 0px)); }
+/* The page's related pages and the site's, one quiet row of links (wrapping), each on one line. */
+.pp-end { box-sizing: border-box; max-width: calc(720px + 48px); margin: 48px auto 0; padding: 0 24px calc(20px + env(safe-area-inset-bottom, 0px)); }
 .pp-end nav { display: flex; flex-wrap: wrap; gap: 0 20px; }
-.pp-end a { display: inline-flex; align-items: center; min-height: 44px; color: var(--faint); font-size: 13px; }
+.pp-end a { display: inline-flex; align-items: center; min-height: 44px; color: var(--faint); font-size: 13px; white-space: nowrap; }
 
 /* /compare with the set: the homepage's television (tv.css) above the page, its glass showing the first table. */
 .pp .pp-stage { min-height: 0; padding: 0 24px; }
@@ -179,7 +179,7 @@
   .pp .pp-stage { padding: 0 20px; }
   .pp .pp-stage .chy-col { --h: calc((100vw - 20px) / 1.3587); padding-top: 8px; }
   .pp .pp-stage .chy-set { left: 0; }
-  .pp-more { gap: 0 16px; }
+  .pp-end nav { gap: 0 16px; }
   .pp-table:not([data-fold]) tr[data-mark] > :first-child { box-shadow: -8px 0 0 var(--bar); }
   .pp-table:not([data-fold]) tr[data-mark] > :last-child { box-shadow: 8px 0 0 var(--bar); }
 }

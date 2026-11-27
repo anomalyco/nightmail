@@ -90,6 +90,9 @@
     "NIGHTMAIL_BUILTIN_SUPPORT_REPLIES": "300",
     // Abuse monitoring (src/abuse.ts) records from this instant on, monitor-only.
     "NIGHTMAIL_ABUSE_MONITORING": "2026-11-21T15:30:00Z",
+    // Urgent operator cards (a pause, Amazon's pause or account status, a high abuse alert, a held link domain) mention
+    // this Slack user, so Slack notifies their phone (src/operator-mention.ts). A user ID, not a secret; empty: no mention.
+    "OPERATOR_SLACK_MENTION": "U0A960VPPMX",
     "ACCOUNT_CLIENT_ID": "bane-production",
     "MULTI_TENANT": "true",
     "NIGHTMAIL_PLATFORM_AWS_ACCOUNT": "009882681002",

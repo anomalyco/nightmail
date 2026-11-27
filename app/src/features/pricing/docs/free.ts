@@ -2,10 +2,10 @@
 import { productName, publicOrigin } from '../../../../../api/src/brand.ts'
 import { BUILTIN_CAPS } from '../../../../../api/src/builtin-limits.ts'
 import { EVALUATION, GROWTH } from '../../../../../api/src/standing-model.ts'
-import { formatCount, nightmail, shownSources, type Comparison, type Source } from '../prices.ts'
+import { formatCount, listOf, nightmail, shownSources, type Comparison, type Source } from '../prices.ts'
 import { ORDERED } from '../page/comparison.ts'
-import { factsSection } from '../page/facts.ts'
-import { plain, type Doc, type Section, type Table, type Text } from './doc.ts'
+import { briefFactsSection } from '../page/facts.ts'
+import { folded, plain, type Doc, type Section, type Table, type Text } from './doc.ts'
 import { checkedOn, month as monthOf, spelled } from './alternatives.ts'
 
 // /free-email-api: the search for a free tier (many arrive after SendGrid's became a trial), answered with what the data
@@ -129,8 +129,10 @@ export function freeEmailApi(): Doc {
   const what = `free ${unit}${kinds.has('trial') && unit === 'plans' ? ' and trials' : ''}`
   const caption = `${productName}, beside ${spelled(apis.rows.length)} email APIs’ ${what} · checked ${when.replaceAll(' ', '\u00a0')}`
   const sections: Section[] = [
-    { id: 'free', title: 'Free email API plans', quiet: true, blocks: [table(apis.rows, note)] },
-    factsSection(),
+    // Under the table, only How we compared, which holds the scope sentence and the rest.
+    { id: 'free', title: 'Free email API plans', quiet: true, blocks: [folded(table(apis.rows, note))] },
+    // (Its headline and first row are the free allowance: the list says the rest.)
+    briefFactsSection([], [], { free: false }),
   ]
   const copySections: Section[] = byGroup.slice(1).filter(g => g.rows.length).map(g => ({ id: g.focus, title: g.title, blocks: [table(g.rows, [`The ${g.rows.length} of ${g.all.length} ${g.unit} ${productName} has compared itself with whose free allowance is smaller than its own, or is a trial; this is not every one.`])] }))
   const all: Source[] = [...new Map(listed.map(r => shownSources([r.source!], r.c.offer)[0]!).map(s => [s.url, s])).values()]
@@ -145,7 +147,7 @@ export function freeEmailApi(): Doc {
     `Free email APIs, checked ${when}: ${productName}, ${free}, beside the ${apis.rows.length} of ${apis.all.length} compared with ${smaller}.`,
   ].find(text => text.length <= 160 && text.length >= 140) ?? ''
   const doc: Doc = {
-    path, title: 'Free email API plans', searchTitle, description, h1, answer: [[caption]], sections, questions: [],
+    path, title: 'Free email API plans', searchTitle, description, h1, answer: [[caption]], caption: [`${apis.rows.length} ${listOf(['smaller free plans', ...kinds.has('trial') ? ['trials'] : [], ...kinds.has('once') ? ['one-offs'] : []])} · checked ${when.replaceAll(' ', '\u00a0')}`], sections, questions: [],
     cardWords: { lines: [`${formatCount(nightmail.freeSent)} emails free.`, 'Every month.'], caption: [`${productName}, beside ${spelled(apis.rows.length)} email APIs’ ${what}, checked ${when}.`, `Beside ${apis.rows.length} email APIs’ ${what}, checked ${when}.`].find(t => t.length <= 70)! },
     sources: [], cited, copy: { sections: copySections, questions: [], sources: all, related: [] }, lead,
     related: [

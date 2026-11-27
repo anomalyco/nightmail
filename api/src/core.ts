@@ -157,6 +157,8 @@ export interface Config {
   abuseSlackWebhookUrl?: string;
   /** OPERATOR_SLACK_WEBHOOK_URL: where the operator alerts (src/operator-alerts.ts) and the health alerts (src/health.ts) are posted. Undefined: nothing is posted. */
   operatorSlackWebhookUrl?: string;
+  /** OPERATOR_SLACK_MENTION: the Slack user ID urgent operator cards mention (src/operator-mention.ts). Undefined: no card mentions anyone. */
+  operatorSlackMention?: string;
   /** DATABASE_DISK_GB in bytes: the Health page shows the database's size against it. Undefined: the size alone. */
   databaseDiskBytes?: number;
   /** DEPLOY_SHA and DEPLOY_AT: the commit this deploy runs and when it went out (Glass). Null when not set. */

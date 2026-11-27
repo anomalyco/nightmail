@@ -2,10 +2,10 @@
 import { productName } from '../../../../../api/src/brand.ts'
 import { dayOf, fitWords, formatCount, lastChecked, listOf, money, nightmail, quote, shownSources, sourceNote, sourcesOf, ucOf, type Comparison, type Plan, type Source, type Tier } from '../prices.ts'
 import { billAt, middle, perSize, priceTable, verdictHeading, verdictOf } from '../page/comparison.ts'
-import { factsSection, rowLines } from '../page/facts.ts'
+import { briefFactsSection, rowLines } from '../page/facts.ts'
 import { comparisonQuestions } from '../questions.ts'
 import { ALTERNATIVES_VENDORS } from './registry.ts'
-import { plain, type Doc, type Question, type Section, type Text } from './doc.ts'
+import { folded, plain, type Doc, type Question, type Section, type Text } from './doc.ts'
 
 // A vendor's pricing page (/pricing/<slug>, "SendGrid pricing"): the verdict, Get started, and one table, what the vendor
 // costs at each size its own page prices beside Nightmail, with one note under it (Ryan: "headline, button, comparison
@@ -145,11 +145,11 @@ export function vendorPricing(c: Comparison, pricingPages: { slug: string; vendo
   const sizesTable: Section = {
     id: 'sizes', title: `What ${vendor} costs at each size`, quiet: true,
     blocks: [
-      priceTable(c, [`${c.assume} Monthly billing, no promotions. ${productName}: ${nightmail.perThousand} per 1,000 emails, sent or received, after ${formatCount(nightmail.freeSent)} sent and ${formatCount(nightmail.freeReceived)} received free a month. ${productName} costs less than ${vendor} at every size in this table. `, ...readAt(tableRead)], verdictAt.n),
+      folded(priceTable(c, [`${c.assume} Monthly billing, no promotions. ${productName}: ${nightmail.perThousand} per 1,000 emails, sent or received, after ${formatCount(nightmail.freeSent)} sent and ${formatCount(nightmail.freeReceived)} received free a month. ${productName} costs less than ${vendor} at every size in this table. `, ...readAt(tableRead)], verdictAt.n)),
     ],
   }
   // Then what Nightmail has that the vendor charges for or lacks, and the facts every price page says (page/facts.ts).
-  const sections: Section[] = [sizesTable, factsSection(rowLines(c.rows))]
+  const sections: Section[] = [sizesTable, briefFactsSection(rowLines(c.rows))]
 
   // ---------------------------------------------------------------- the questions, from the same facts
 
