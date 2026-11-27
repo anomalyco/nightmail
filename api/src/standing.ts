@@ -6,6 +6,7 @@ import { customerNotice, type NoticeInput } from './notices.js';
 import { queueTenantStatus, resumeHostedConnection, tenantStatusDrift, terminalColumns, terminalEvents, type HostedCaps } from './states.js';
 import { dailyLimit, ESTABLISHED, GOOD_STANDING, establishedBy, EVALUATION, evaluated, FREEZE_FLOOR, GROWTH, moveScore, nextGrowth, nextStanding, noticeReasons, quality, stepRank, type DayEvidence, type GrowthHour, type DomainAuth, type Factor, type LadderInput, type Reason, type ScoreState, type Step, type TrackRecord, type Window } from './standing-model.js';
 import { DISPLAY_SCORE_ID_PREFIX, DISPLAY_SCORE_JOB } from './sender-score.js';
+import { probationReason } from './hosted-sending.js';
 import { productName } from './brand.js';
 import { checkSignInMail, standingAlert } from './operator-alerts.js';
 
@@ -16,7 +17,7 @@ import { checkSignInMail, standingAlert } from './operator-alerts.js';
 
 export type StandingActor = { kind: 'system' | 'owner' | 'operator'; id?: string | null; via?: 'job' | 'dashboard' | 'console' | 'script' | 'ses' };
 export type StandingRow = {
-  workspace_id: string; phase: ScoreState['phase']; first_recipients: number; calibrated_at: string | null; score: string | null; day_score: string | null; score_day: string | null;
+  restrict_on_probation: boolean; outside_hold: boolean; other_restrict: boolean; workspace_id: string; phase: ScoreState['phase']; first_recipients: number; calibrated_at: string | null; score: string | null; day_score: string | null; score_day: string | null;
   target: string; quality: string; volume: number; factors: Factor[]; band_limit: number | null; daily_limit: number | null; step: Step; reasons: Reason[]; since: string; clear_since: string | null;
   pause_kind: 'bounce' | 'full' | null; marketing_hold: boolean; release_until: string | null; release_percent: number | null; last_release_at: string | null; last_self_resume_at: string | null;
   strikes: { at: string; reason: string; kind: string }[]; strike_until: string | null; watch: boolean; notified: Record<string, string>; evidence_at: string | null; computed_at: string | null; version: number; sequence: number;
@@ -48,7 +49,8 @@ export async function applyChange(db: DbExecutor, change: Change): Promise<{ eve
   const wid = change.workspaceId;
   await db.execute(sql`WITH created AS (INSERT INTO sender_standing(workspace_id,daily_limit,band_limit) SELECT workspace_id,${EVALUATION.limit}::int,${EVALUATION.limit}::int FROM provider_connections WHERE workspace_id=${wid} AND kind='shared' ON CONFLICT DO NOTHING RETURNING workspace_id) ${retireDisplayAtBirth}`);
   // A pause that is resuming (waiting for its SES tenants to be enabled again) counts as lifted: a new pause re-arms it.
-  const [row] = (await db.execute<StandingRow & { paused_at: string | null; held: boolean; exempt: boolean; connection_id: string }>(sql`SELECT s.*,CASE WHEN pc.resume_pending_at IS NULL THEN pc.paused_at END AS paused_at,
+  const [row] = (await db.execute<StandingRow & { paused_at: string | null; held: boolean; strict: boolean; probation: boolean; exempt: boolean; connection_id: string }>(sql`SELECT s.*,CASE WHEN pc.resume_pending_at IS NULL THEN pc.paused_at END AS paused_at,
+    w.created_at>=hosted_strict_since() AND NOT w.exempt_hosted_quotas AS strict,${probationReason(sql`w.id`)} IS NOT NULL AS probation,
     pc.marketing_held_at IS NOT NULL AS held,w.exempt_hosted_quotas AS exempt,pc.id AS connection_id FROM sender_standing s
     JOIN provider_connections pc ON pc.workspace_id=s.workspace_id AND pc.kind='shared' JOIN workspaces w ON w.id=s.workspace_id WHERE s.workspace_id=${wid} FOR UPDATE OF s,pc`)).rows;
   if (!row) return null;
@@ -64,8 +66,11 @@ export async function applyChange(db: DbExecutor, change: Change): Promise<{ eve
   const releaseUntil = change.release ? new Date(now.getTime() + change.release.hours * 3600_000).toISOString() : change.resume?.marketingHours || escalated ? null : step === 'ok' || step === 'notice' ? null : row.release_until;
   const marketingHold = change.marketingHold ?? (change.resume?.marketingHours ? true : row.marketing_hold);
   const reasons = change.reasons ?? (step === row.step ? row.reasons : []);
+  const restrictOnProbation = row.strict && step === 'restrict' && (previousStep === 'restrict' ? row.restrict_on_probation : row.probation);
+  const outsideHold = restrictOnProbation && !change.release && (row.outside_hold || reasons.some(r => r.step === 'restrict' && r.metric === 'complaints'));
+  const otherRestrict = restrictOnProbation && (row.other_restrict || row.held || !outsideHold || reasons.some(r => r.step === 'restrict' && r.metric !== 'complaints'));
   const sequence = Number(row.sequence) + 1, version = row.version + 1, eventId = id('stev');
-  await db.execute(sql`UPDATE sender_standing SET step=${step},reasons=${JSON.stringify(reasons)}::jsonb,since=${step !== row.step ? at : row.since}::timestamptz,
+  await db.execute(sql`UPDATE sender_standing SET restrict_on_probation=${restrictOnProbation},outside_hold=${outsideHold},other_restrict=${otherRestrict},step=${step},reasons=${JSON.stringify(reasons)}::jsonb,since=${step !== row.step ? at : row.since}::timestamptz,
     clear_since=${step !== row.step ? null : row.clear_since}::timestamptz,pause_kind=${step === 'pause' ? change.pauseKind ?? row.pause_kind ?? 'full' : null},
     marketing_hold=${marketingHold},release_until=${releaseUntil}::timestamptz,release_percent=${change.release?.percent ?? (releaseUntil ? row.release_percent : null)}::smallint,
     last_release_at=${change.touch?.lastRelease ? at : row.last_release_at}::timestamptz,last_self_resume_at=${change.touch?.lastSelfResume ? at : row.last_self_resume_at}::timestamptz,
@@ -123,7 +128,7 @@ export async function applyChange(db: DbExecutor, change: Change): Promise<{ eve
 }
 
 // ---------- the job ----------
-type Candidate = StandingRow & { connection_id: string; paused_at: string | null; pause_reason: string | null; marketing_hold_reason: string | null; legacy_hold: boolean; exempt: boolean; screened_workspace: boolean; accepted_total: number; accepted_day: number;
+type Candidate = StandingRow & { strict: boolean; week_until: string | null; witnesses: { accepted: number; resolved: number }; connection_id: string; paused_at: string | null; pause_reason: string | null; marketing_hold_reason: string | null; legacy_hold: boolean; exempt: boolean; screened_workspace: boolean; accepted_total: number; accepted_day: number;
   sponsor_key: string; pace: number | null; override: boolean;
   days: DayEvidence[] | null; domains: DomainAuth[] | null; win: { day: Window; week: Window } | null; screen: { screened: number; rejected: number } | null };
 const MAIL_ACCEPTED = sql`e.status<>'suppressed' AND (e.provider_id IS NOT NULL OR e.status IN ('accepted','sent','delivered','bounced','complained','delayed') OR e.event_outcomes & 1 <> 0)`;
@@ -137,8 +142,44 @@ const MAIL_REAL = sql`NOT e.simulated AND hosted_real_cost(e.to_addresses||e.cc_
  */
 async function refreshEvidence(db: DbExecutor, limit: number) {
   const { rows: [r] } = await db.execute<{ n: number }>(sql`WITH due AS (
-      SELECT workspace_id,evidence_at FROM sender_standing WHERE evidence_at IS NULL OR evidence_at<now()-CASE WHEN phase='calibrating' THEN interval '5 minutes' ELSE interval '1 hour' END
+      SELECT workspace_id,evidence_at,phase FROM sender_standing WHERE evidence_at IS NULL OR evidence_at<now()-CASE WHEN phase='calibrating' THEN interval '5 minutes' ELSE interval '1 hour' END
       ORDER BY evidence_at NULLS FIRST LIMIT ${limit} FOR UPDATE SKIP LOCKED
+    ), evaluating AS MATERIALIZED (
+      SELECT d.workspace_id FROM due d JOIN workspaces w ON w.id=d.workspace_id
+      JOIN provider_connections pc ON pc.workspace_id=w.id AND pc.kind='shared'
+      WHERE d.phase<>'graded' AND w.created_at>=hosted_strict_since() AND NOT w.exempt_hosted_quotas
+    ), destinations AS (
+      SELECT e.workspace_id,e.id AS email_id,e.created_at,k.i,lower((e.to_addresses||e.cc_addresses||e.bcc_addresses)->>(k.i-1)) AS address
+      FROM evaluating d JOIN sending_emails e ON e.workspace_id=d.workspace_id AND e.evaluation_outside IS NOT NULL AND ${MAIL_REAL} AND ${MAIL_ACCEPTED}
+      CROSS JOIN LATERAL unnest(e.evaluation_outside) k(i)
+    ), fingerprints AS (
+      SELECT d.*,sha256(convert_to(d.workspace_id,'UTF8')||decode('00','hex')||convert_to(address,'UTF8')) AS address_hash,
+        sha256(convert_to(d.workspace_id,'UTF8')||decode('00','hex')||convert_to(split_part(address,'@',2),'UTF8')) AS domain_hash FROM destinations d
+    ), first_mail AS (
+      SELECT DISTINCT ON (workspace_id,address_hash) workspace_id,address_hash,domain_hash,email_id,i AS position,created_at
+      FROM fingerprints ORDER BY workspace_id,address_hash,created_at,email_id,i
+    ), sample AS (
+      -- Keep the existing witnesses even after log expiry. Fill 499 in order, then take the earliest witness
+      -- that completes the two-domain requirement. More mail to that first domain cannot fill the last slot.
+      SELECT w.workspace_id,w.address_hash,w.domain_hash,w.email_id,w.position,true AS existing,NULL::timestamptz AS created_at
+      FROM evaluating d JOIN hosted_evaluation_recipients w USING(workspace_id)
+      UNION ALL SELECT f.workspace_id,f.address_hash,f.domain_hash,f.email_id,f.position,false,f.created_at FROM first_mail f
+      WHERE NOT EXISTS (SELECT FROM hosted_evaluation_recipients w WHERE w.workspace_id=f.workspace_id AND w.address_hash=f.address_hash)
+    ), numbered AS (
+      SELECT s.*,row_number() OVER w AS n,first_value(domain_hash) OVER w AS first_domain FROM sample s
+      WINDOW w AS (PARTITION BY workspace_id ORDER BY existing DESC,created_at,email_id,address_hash)
+    ), qualified AS (
+      SELECT n.*,min(n.n) FILTER (WHERE domain_hash<>first_domain) OVER (PARTITION BY workspace_id) AS other_domain FROM numbered n
+    ), witnessed AS (
+      INSERT INTO hosted_evaluation_recipients AS w(workspace_id,address_hash,domain_hash,email_id,position,resolved)
+      SELECT q.workspace_id,q.address_hash,q.domain_hash,q.email_id,q.position,coalesce(
+        (jsonb_array_length(e.to_addresses||e.cc_addresses||e.bcc_addresses)=1 AND (e.status IN ('delivered','bounced') OR e.event_outcomes & 6 <> 0))
+        OR EXISTS (SELECT FROM sending_email_events v WHERE v.workspace_id=q.workspace_id AND v.email_id=q.email_id AND NOT v.simulated
+          AND v.type IN ('delivery','bounce') AND encode(sha256(convert_to(q.email_id,'UTF8')||decode('00','hex')||
+            convert_to(lower((e.to_addresses||e.cc_addresses||e.bcc_addresses)->>(q.position-1)),'UTF8')),'hex')=ANY(v.recipient_hashes)),false)
+      FROM qualified q LEFT JOIN sending_emails e ON e.workspace_id=q.workspace_id AND e.id=q.email_id
+      WHERE q.n<${EVALUATION.recipients} OR (q.other_domain IS NOT NULL AND q.n=greatest(${EVALUATION.recipients},q.other_domain))
+      ON CONFLICT(workspace_id,address_hash) DO UPDATE SET resolved=true WHERE excluded.resolved AND NOT w.resolved
     ), mail AS (
       SELECT d.workspace_id,(e.created_at AT TIME ZONE 'UTC')::date AS day,${MAIL_ACCEPTED} AS accepted,
         (e.status='delivered' OR e.event_outcomes & 2 <> 0) AS delivered,(e.status='bounced' OR e.event_outcomes & 4 <> 0) AS bounced,
@@ -237,7 +278,8 @@ async function candidates(runtime: Runtime, limit: number, only?: string) {
         OR EXISTS (SELECT FROM hosted_screen_hourly v WHERE v.workspace_id=s.workspace_id AND v.hour>=date_trunc('hour',now(),'UTC')-interval '23 hours')
         OR EXISTS (SELECT FROM provider_connections pc WHERE pc.workspace_id=s.workspace_id AND pc.kind='shared' AND (pc.marketing_held_at IS NOT NULL OR pc.paused_at IS NOT NULL)))`}
       ORDER BY s.computed_at NULLS FIRST LIMIT ${limit})
-    SELECT c.*,pc.id AS connection_id,CASE WHEN pc.resume_pending_at IS NULL THEN pc.paused_at END AS paused_at,pc.pause_reason,
+    SELECT c.*,w.created_at>=hosted_strict_since() AND NOT w.exempt_hosted_quotas AS strict,hosted_week_until(w.id) AS week_until,
+      (SELECT json_build_object('accepted',count(*),'resolved',count(*) FILTER (WHERE resolved)) FROM hosted_evaluation_recipients er WHERE er.workspace_id=c.workspace_id) AS witnesses,pc.id AS connection_id,CASE WHEN pc.resume_pending_at IS NULL THEN pc.paused_at END AS paused_at,pc.pause_reason,
       pc.marketing_held_at IS NOT NULL AS legacy_hold,pc.marketing_hold_reason,(SELECT exempt_hosted_quotas FROM workspaces WHERE id=c.workspace_id) AS exempt,${screened} AND pc.kind='shared' AS screened_workspace,
       (SELECT coalesce(sum(accepted),0)::int FROM sender_score_daily d WHERE d.workspace_id=c.workspace_id) AS accepted_total,
       -- What SES accepted in the rolling 24 hours: what a ladder step freezes a workspace without a limit at.
@@ -264,7 +306,7 @@ async function candidates(runtime: Runtime, limit: number, only?: string) {
       -- Screen verdicts in the current epoch, counted when the dispatcher's screen judged the mail (src/dispatcher.ts).
       (SELECT json_build_object('screened',coalesce(sum(v.screened),0),'rejected',coalesce(sum(v.rejected),0)) FROM hosted_screen_hourly v
         WHERE v.workspace_id=c.workspace_id AND v.epoch=coalesce(pc.resumed_at,'-infinity') AND v.hour>=date_trunc('hour',now(),'UTC')-interval '23 hours') AS screen
-    FROM c JOIN provider_connections pc ON pc.workspace_id=c.workspace_id AND pc.kind='shared'`)).rows;
+    FROM c JOIN workspaces w ON w.id=c.workspace_id JOIN provider_connections pc ON pc.workspace_id=c.workspace_id AND pc.kind='shared'`)).rows;
 }
 
 function ladderInput(row: Pick<Candidate, 'win' | 'screen'>): LadderInput {
@@ -294,8 +336,8 @@ export async function refreshStanding(runtime: Runtime, options: { now?: Date; o
   for (const row of rows) {
     const q = quality(row.days ?? [], row.domains ?? [], row.screened_workspace, today);
     // Mail older than the 180 days of evidence counts as resolved: it has had its results.
-    const counted = evaluated(row.days ?? []), mail = { accepted: row.accepted_total, resolved: counted.resolved + Math.max(0, row.accepted_total - counted.accepted) };
-    const moved = moveScore({ phase: row.phase, firstRecipients: row.first_recipients, calibratedAt: row.calibrated_at, score: row.score === null ? null : Number(row.score), dayScore: row.day_score === null ? null : Number(row.day_score), scoreDay: row.score_day }, q.target, mail, now);
+    const counted = evaluated(row.days ?? []), mail = row.strict && row.phase !== 'graded' ? row.witnesses : { accepted: row.accepted_total, resolved: counted.resolved + Math.max(0, row.accepted_total - counted.accepted) };
+    const moved = moveScore({ phase: row.strict && row.phase === 'seed' ? 'calibrating' : row.phase, firstRecipients: row.first_recipients, calibratedAt: row.calibrated_at, score: row.score === null ? null : Number(row.score), dayScore: row.day_score === null ? null : Number(row.day_score), scoreDay: row.score_day }, q.target, mail, now);
     const input = ladderInput(row);
     const prev = { step: row.step, reasons: row.reasons, since: row.since, clearSince: row.clear_since, pauseKind: row.pause_kind };
     let next = nextStanding(prev, input, now);
@@ -328,10 +370,12 @@ export async function refreshStanding(runtime: Runtime, options: { now?: Date; o
     // The evaluation's end (the first grade) is emailed once, with what the sender score is: not to a first-party
     // workspace (no limit applies to it), not to one that skips the growth pace (its track record or an operator's limit
     // says more than this email), and not when it ends in a warning, a hold or a pause, which has its own email.
-    if (graduated && !row.exempt && !established && !row.paused_at && stepRank(next.step) < stepRank('warn')) finished.push({ workspaceId: row.workspace_id, limited: limits.limit !== null });
+    if (graduated && !row.exempt && !established && !row.paused_at && stepRank(next.step) < stepRank('warn')) finished.push({ workspaceId: row.workspace_id, limited: limits.limit !== null || !!row.week_until });
     // An owner's marketing release and an operator's hold after a self-resume both end on their own.
     const releaseExpired = !!row.release_until && Date.parse(row.release_until) <= now.getTime();
-    if (next.step !== prev.step || releaseExpired || row.legacy_hold) {
+    const newRestrictCause = next.step === 'restrict' && row.restrict_on_probation && next.reasons.some(r =>
+      r.step === 'restrict' && (r.metric === 'complaints' ? !row.outside_hold : !row.other_restrict));
+    if (next.step !== prev.step || releaseExpired || row.legacy_hold || newRestrictCause) {
       const pause = next.step === 'pause' && !row.paused_at;
       const why = next.reasons.find(r => r.step === 'pause');
       const message = pause ? `Hosted sending paused: ${why ? `${PAUSE_LEAD[why.metric]}. ${why.message}` : 'the reputation ladder reached pause.'}` : '';
@@ -385,7 +429,8 @@ export async function refreshStanding(runtime: Runtime, options: { now?: Date; o
     updated AS (UPDATE sender_standing s SET phase=r.phase,first_recipients=r.first_recipients,calibrated_at=r.calibrated_at,score=r.score,day_score=r.day_score,score_day=r.score_day,target=r.target,
       quality=r.quality,volume=r.volume,factors=r.factors,band_limit=r.band_limit,daily_limit=r.daily_limit,clear_since=CASE WHEN s.step=r.step THEN r.clear_since ELSE s.clear_since END,
       reasons=CASE WHEN s.version=r.version AND s.step=r.step AND r.step IN ('ok','notice') THEN r.reasons ELSE s.reasons END,
-      strike_until=r.strike_until,growth_until=r.growth_until,growth_cap=r.growth_cap,growth_hour=r.growth_hour,growth_quality=r.growth_quality,computed_at=now() FROM r WHERE s.workspace_id=r.workspace_id RETURNING s.*)
+      strike_until=r.strike_until,growth_until=r.growth_until,growth_cap=r.growth_cap,growth_hour=r.growth_hour,growth_quality=r.growth_quality,computed_at=now() FROM r WHERE s.workspace_id=r.workspace_id RETURNING s.*),
+    retired AS (DELETE FROM hosted_evaluation_recipients w USING updated s WHERE s.phase='graded' AND w.workspace_id=s.workspace_id)
     INSERT INTO sender_score_daily(workspace_id,day,score,quality,target,daily_limit,step) SELECT workspace_id,(now() AT TIME ZONE 'UTC')::date,score,quality,target,daily_limit,step FROM updated
     ON CONFLICT(workspace_id,day) DO UPDATE SET score=excluded.score,quality=excluded.quality,target=excluded.target,daily_limit=excluded.daily_limit,step=excluded.step`);
   for (const f of finished) await evaluationFinished(runtime.db, f.workspaceId, f.limited);

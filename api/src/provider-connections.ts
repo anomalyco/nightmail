@@ -27,12 +27,12 @@ const Connection = z.object({ id: z.string(), kind: Kind, region: z.string(), st
 export const ConnectionSummary = z.object({ kind: Kind, region: z.string(), state: State, tenant: Tenant,
   sendingPause: z.object({ at: z.iso.datetime(), reason: z.string() }).nullable().describe('Hosted reputation hold: sending and dispatch are paused until operator review. Receiving is unaffected.'),
   sendingLimit: z.object({
-    cap: z.number().int().nullable().describe('Recipients allowed per rolling 24 hours. Null when this workspace has no daily limit: in good standing (GET /v1/sender-score) or exempt.'),
+    cap: z.number().int().nullable().describe('Recipients allowed per rolling 24 hours. Null when this workspace has no daily limit: see GET /v1/sender-score.'),
     used: z.number().int().describe('Recipients charged in the current rolling 24 hours, including SES simulator addresses.'),
     resetAt: z.iso.datetime().nullable().describe('When capacity next frees up or the limit changes.'),
     nextCap: z.number().int().nullable().describe('After a resume, the limit that applies when its reduced limit ends; null otherwise, and null when no daily limit follows.'),
     nextCapAt: z.iso.datetime().nullable().describe('When nextCap applies.'),
-  }).nullable().optional().describe('Hosted only: the daily limit (set by the sender score) that POST /v1/emails/send enforces with 429 SEND_LIMIT_REACHED.'),
+  }).nullable().optional().describe('Hosted only: the effective daily limit that POST /v1/emails/send enforces with 429 SEND_LIMIT_REACHED.'),
   standing: z.object({ step: z.enum(['ok', 'notice', 'warn', 'restrict', 'pause']), marketingHeld: z.boolean() }).nullable().optional()
     .describe('Hosted only: the enforcement step summary. GET /v1/sender-score has the reasons, the limit math and what an owner can release.'),
   domains: z.object({ total: z.number().int(), verified: z.number().int() }).optional().describe('Domains of its own the workspace claimed and how many can send. The built-in domain is not one of them.'),
@@ -441,6 +441,10 @@ async function create(runtime: Runtime, wid: string, input: z.infer<typeof Creat
     const row = (await runtime.db.execute<Row & { queued: boolean }>(sql`WITH pool AS (SELECT aws_account_id FROM provider_pool_regions p WHERE region=${region} AND ${poolSends()}), connection AS (
       INSERT INTO provider_connections(id,workspace_id,kind,region,state,tenant_state,aws_account_id,managed_tenant,pool_tenant_name) VALUES (${id('conn')},${wid},'shared',${region},'ready',${isSimulatedSes(runtime) ? 'ready' : 'pending'},(SELECT aws_account_id FROM pool),${!!runtime.config.regionalSending},${runtime.config.trustedPool?poolTenantName(wid,'probation'):null})
       ON CONFLICT(workspace_id) DO UPDATE SET aws_account_id=coalesce(provider_connections.aws_account_id,excluded.aws_account_id) WHERE provider_connections.kind='shared' AND provider_connections.region=excluded.region RETURNING *),
+      -- Publish the strict evaluation on connection, before the standing worker first sees this workspace.
+      evaluation AS (INSERT INTO sender_standing(workspace_id,daily_limit,band_limit)
+        SELECT c.workspace_id,500,500 FROM connection c JOIN workspaces w ON w.id=c.workspace_id
+        WHERE w.created_at>=hosted_strict_since() AND NOT w.exempt_hosted_quotas ON CONFLICT DO NOTHING),
       settings AS (UPDATE ses_installation_settings s SET default_region=c.region,enabled_regions=CASE WHEN EXISTS(SELECT FROM provider_connection_regions r WHERE r.connection_id=c.id AND NOT r.legacy AND r.sending_state='ready') THEN s.enabled_regions ELSE jsonb_build_array(c.region) END FROM connection c WHERE c.workspace_id=s.workspace_id),
       stale AS (UPDATE ses_region_discovery d SET credentials_fingerprint=NULL,report=NULL FROM connection c WHERE c.workspace_id=d.workspace_id AND d.report IS NOT NULL),
       queued AS (${queueTenantJob(sql`SELECT c.id,c.workspace_id FROM connection c JOIN pool USING (aws_account_id) WHERE c.tenant_state<>'ready'`, tenantJobAfterSeconds)} RETURNING 1),

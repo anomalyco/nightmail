@@ -150,11 +150,11 @@ export type ConnectionSummary = {
         reason: string;
     } | null;
     /**
-     * Hosted only: the daily limit (set by the sender score) that POST /v1/emails/send enforces with 429 SEND_LIMIT_REACHED.
+     * Hosted only: the effective daily limit that POST /v1/emails/send enforces with 429 SEND_LIMIT_REACHED.
      */
     sendingLimit?: {
         /**
-         * Recipients allowed per rolling 24 hours. Null when this workspace has no daily limit: in good standing (GET /v1/sender-score) or exempt.
+         * Recipients allowed per rolling 24 hours. Null when this workspace has no daily limit: see GET /v1/sender-score.
          */
         cap: number | null;
         /**
@@ -3595,12 +3595,12 @@ export type Metrics = {
 
 export type SenderScore = {
     /**
-     * warmup during the evaluation: until 500 real recipients were accepted and their delivery results are in (90% of them, or an hour after the 500th) (Hosted), or the first 500 emails (self-hosted).
+     * warmup during the evaluation: until 500 qualifying recipients were accepted and their delivery results are in (90% of them, or an hour after the 500th) (Hosted), or the first 500 emails (self-hosted).
      */
     state: 'warmup' | 'graded';
     emails: {
         /**
-         * Real recipients accepted, counted up to 500.
+         * Evaluation progress, up to 500. New Hosted workspaces count distinct outside addresses; the sample must span two domains.
          */
         firstEmails: number;
         last30Days: number;
@@ -3618,7 +3618,7 @@ export type SenderScore = {
      */
     gradedBy: string | null;
     /**
-     * 0–100, one decimal; null while warming up. The quality of the last 30 days of mail, recounted hourly: 75 and up has no daily limit.
+     * 0–100, one decimal; null while warming up. The quality of the last 30 days of mail, recounted hourly: 75 and up has no score-based daily limit.
      */
     score: number | null;
     grade: 'A+' | 'A' | 'B' | 'C' | 'D' | 'F' | null;
@@ -3690,11 +3690,11 @@ export type SenderScoreFactor = {
 };
 
 /**
- * Hosted only: the daily limit the score sets (none in good standing), the pace and what changes them.
+ * Hosted only: the effective daily limit, the pace and what changes them.
  */
 export type SenderLimit = {
     /**
-     * Recipients per rolling 24 hours that admission enforces now. Null when there is no daily limit (unlimited): a workspace in good standing (score 75 and up, no warning) or an exempt one.
+     * Recipients per rolling 24 hours that admission enforces now. Null when there is no daily limit (unlimited): an exempt workspace, or good standing without an applicable first-week ceiling.
      */
     daily: number | null;
     /**
@@ -3702,7 +3702,7 @@ export type SenderLimit = {
      */
     unlimited: boolean;
     /**
-     * calibrating: the evaluation (the first 500 real recipients); score: set by the score and the ladder, none in good standing; override: set by Nightmail; exempt: none.
+     * Source of the standing limit, before any first-week ceiling. calibrating: the evaluation; score: set by the score and the ladder, none in good standing; override: set by Nightmail; exempt: none.
      */
     source: 'calibrating' | 'score' | 'override' | 'exempt';
     /**
@@ -3753,15 +3753,15 @@ export type SenderLimit = {
         until: string;
     } | null;
     /**
-     * Recipients a minute the workspace may send (pacing that protects the shared pool, not a daily limit): clamp(daily ÷ 20, 50, 500), or without a daily limit a quarter of the pool's SES rate, at least 500. Half of it per sending domain.
+     * Recipients a minute the workspace may send (pacing that protects the shared pool, not a daily limit): clamp(standing daily limit ÷ 20, 50, 500), or without a daily limit a quarter of the pool's SES rate, at least 500. Half of it per sending domain.
      */
     perMinute: number;
     /**
-     * Marketing recipients an hour: max(25, daily ÷ 4); without a daily limit, what the per-minute pace allows (perMinute × 60).
+     * Marketing recipients an hour before the separate first-week ceiling: max(25, standing daily limit ÷ 4); without a standing limit, what the per-minute pace allows (perMinute × 60).
      */
     marketingPerHour: number;
     /**
-     * Recipients of the daily limit marketing may not use, kept for transactional mail: max(100, 10%). 0 without a daily limit and during the evaluation, whose recipients may all be marketing.
+     * Recipients of the standing limit marketing may not use, kept for transactional mail: max(100, 10%). 0 without a daily limit and during the evaluation, whose recipients may all be marketing.
      */
     transactionalReserve: number;
 } | null;
@@ -3771,7 +3771,7 @@ export type SenderLimit = {
  */
 export type SenderStanding = {
     /**
-     * ok; notice (dashboard only); warn (limit frozen: no rises, and a workspace without one is limited to what SES accepted from it in the last 24 hours, at least 10,000; owners emailed); restrict (marketing held, transactional flows, limit frozen); pause (all sending stopped).
+     * ok; notice (dashboard only); warn (limit frozen: no rises, and a workspace without one is limited to what SES accepted from it in the last 24 hours, at least 10,000; owners emailed); restrict (limit frozen; complaints on probation hold outside mail in new workspaces, otherwise marketing is held); pause (all sending stopped).
      */
     step: 'ok' | 'notice' | 'warn' | 'restrict' | 'pause';
     reasons: Array<StandingReason>;
@@ -3807,7 +3807,7 @@ export type SenderStanding = {
     version: number;
     sequence: number;
     /**
-     * Why Nightmail still checks this workspace as a new sender; null in good standing, which it reaches by itself. evaluation: its first 500 real recipients; growth: the growth pace after them; standing: a daily limit set by the score, a freeze or a strike, or a step from warn up. Until then a campaign over 500 recipients sends a list probe first, and mail is delivered as the copy the content screen read (style sheets inlined, @media and dark-mode rules left out) with the attachment allowlist, except from domains Nightmail placed on its trusted tier. The image-to-text rule applies in good standing too.
+     * Why Nightmail still checks this workspace as a new sender; null in good standing, which it reaches by itself. evaluation: its initial recipient sample; growth: the growth pace after them; standing: a daily limit set by the score, a freeze or a strike, or a step from warn up. Until then a campaign over 500 recipients sends a list probe first, and mail is delivered as the copy the content screen read (style sheets inlined, @media and dark-mode rules left out) with the attachment allowlist, except from domains Nightmail placed on its trusted tier. The image-to-text rule applies in good standing too.
      */
     probation: 'evaluation' | 'growth' | 'standing' | null;
 } | null;
@@ -3919,12 +3919,12 @@ export type Usage = {
          */
         resetAt: string | null;
         /**
-         * Index into steps of the step this workspace is on; null past them: no daily limit (cap null), or one set by the score, a warning or an operator.
+         * Index into steps of the step this workspace is on; null past them: no daily limit (cap null), or a limit set by the first-week ceiling, the score, a warning or an operator.
          */
         step: number | null;
     } | null;
     /**
-     * The daily limits a new workspace passes through: only the evaluation. After it, a workspace in good standing (score 75 and up, no warning) has no daily limit; bad signals set one (GET /v1/sender-score). Only real SES acceptances count: simulated sends and simulator addresses use the limit but never end the evaluation.
+     * The evaluation step. After the evaluation and any unpaid first-week ceiling, a workspace in good standing (score 75 and up, no warning) has no daily limit; bad signals set one (GET /v1/sender-score). Only real SES acceptances count: simulated sends and simulator addresses use the limit but never end the evaluation.
      */
     steps: Array<{
         /**

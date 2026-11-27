@@ -30372,6 +30372,206 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       connection: async () => (await db.query(`SELECT paused_at,pause_reason,resume_pending_at,tenant_generation::int AS generation FROM provider_connections WHERE id=$1`, [wid])).rows[0],
       applied: async () => (await db.query(`SELECT region,applied,generation::int AS generation FROM hosted_tenant_status WHERE connection_id=$1 ORDER BY region`, [wid])).rows };
   }
+  // Rollback-only fixture: exercise a real week on either side of activation without depending on the release date.
+  async function strictWeekFixture(runtime: import('./src/core.js').Runtime, db: pg.Client) {
+    const f = await hostedHoldFixture(runtime, db);
+    await db.query(`DO $$ BEGIN EXECUTE format('CREATE OR REPLACE FUNCTION hosted_strict_since() RETURNS timestamptz
+      LANGUAGE sql IMMUTABLE PARALLEL SAFE AS %L',format('SELECT %L::timestamptz',now()-interval '9 days')); END $$`);
+    const member = 'owner@held.example';
+    await db.query('UPDATE nightmail_users SET email=$1,email_verified=true WHERE id=$2', [member,manager!.userId]);
+    return { ...f, member };
+  }
+
+  test('strict first week: evaluation remembers distinct outside recipients, waits for two domains, and preserves pre-cutoff grading', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { wid,member } = await strictWeekFixture(runtime,db), { refreshStanding } = await import('./src/standing.js');
+      const capture = async (addresses: string[]) => (await db.query('SELECT hosted_evaluation_outside($1,$2::jsonb) AS positions',[wid,JSON.stringify(addresses)])).rows[0].positions;
+      const births = (seconds: number) => db.query("UPDATE workspaces SET created_at=hosted_strict_since()+make_interval(secs=>$2) WHERE id=$1",[wid,seconds]);
+      const seeds = (n: number, address: string, numbered = false, delivered = true) => db.query(`INSERT INTO sending_emails
+        (id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,status,event_outcomes,evaluation_outside)
+        SELECT $1||n,$2,$3,'fixture','me@held.example',a.too,'[]','[]','Evaluation','{}',false,$6,CASE WHEN $6='delivered' THEN 3 ELSE 1 END,
+          hosted_evaluation_outside($2,a.too) FROM generate_series(1,$4::int) n CROSS JOIN LATERAL
+          (SELECT jsonb_build_array((CASE WHEN $7 THEN n::text ELSE '' END)||$5::text) AS too) a`,[unique('witness'),wid,REGION,n,address,delivered?'delivered':'sent',numbered]);
+      const grade = async (now = new Date()) => {
+        await db.query('UPDATE sender_standing SET evidence_at=NULL WHERE workspace_id=$1',[wid]);
+        await refreshStanding(runtime,{only:wid,now});
+        return (await db.query('SELECT phase,first_recipients,calibrated_at FROM sender_standing WHERE workspace_id=$1',[wid])).rows[0];
+      };
+      await db.query('SAVEPOINT legacy_evaluation');
+      await births(-1);
+      assert.equal(await capture([member]),null);
+      await seeds(500,member);
+      assert.equal((await grade()).phase,'graded','The legacy evaluation counts repeated member mail.');
+      await db.query('ROLLBACK TO legacy_evaluation');
+      await births(0);
+      assert.deepEqual(await capture([member.toUpperCase(),'not-a-member@held.example','success@simulator.amazonses.com']),[2]);
+      await seeds(500,member);
+      assert.equal((await grade()).first_recipients,0);
+      await db.query('SAVEPOINT clean_evaluation');
+      await seeds(501,'@held.example',true);
+      await seeds(10,'1@HELD.EXAMPLE');
+      assert.deepEqual(await grade(),{ phase:'calibrating',first_recipients:499,calibrated_at:null });
+      await db.query('DELETE FROM sending_emails WHERE workspace_id=$1',[wid]);
+      assert.equal((await grade(new Date(Date.now()+7200000))).calibrated_at,null,'Even after log expiry and maturity, one domain cannot grade.');
+      await seeds(1,'outside@elsewhere.example');
+      assert.equal((await grade()).phase,'graded');
+      assert.equal((await db.query('SELECT FROM hosted_evaluation_recipients WHERE workspace_id=$1',[wid])).rowCount,0);
+      await db.query('ROLLBACK TO clean_evaluation');
+      await seeds(448,'@first.invalid',true);
+      await seeds(50,'@other.invalid',true,false);
+      const envelope = unique('partial'), pair = ['first@partial.invalid','second@partial.invalid'];
+      await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,status,event_outcomes,evaluation_outside)
+        VALUES ($1,$2,$3,'fixture','me@held.example',$4,'[]','[]','Partial','{}',false,'delivered',3,hosted_evaluation_outside($2,$4))`,[envelope,wid,REGION,JSON.stringify(pair)]);
+      const feedback = (address: string) => db.query(`INSERT INTO sending_email_events(id,workspace_id,email_id,type,simulated,recipient_hashes)
+        VALUES ($1,$2,$3,'delivery',false,ARRAY[encode(sha256(convert_to($3,'UTF8')||decode('00','hex')||convert_to($4,'UTF8')),'hex')])`,[unique('result'),wid,envelope,address]);
+      await feedback(pair[0]!); await feedback(pair[0]!);
+      const at = new Date();
+      const waiting = await grade(at);
+      assert.equal(waiting.phase,'calibrating');
+      assert.equal(waiting.first_recipients,500);
+      assert.equal((await db.query('SELECT count(*)::int AS n FROM hosted_evaluation_recipients WHERE workspace_id=$1 AND resolved',[wid])).rows[0].n,449);
+      assert.equal((await grade(new Date(+at+3599999))).phase,'calibrating');
+      await db.query('SAVEPOINT awaiting_feedback');
+      assert.equal((await grade(new Date(+at+3600000))).phase,'graded');
+      await db.query('ROLLBACK TO awaiting_feedback');
+      await feedback(pair[1]!);
+      assert.equal((await grade(at)).phase,'graded','450 distinct confirmed witnesses grade immediately.');
+    });
+  });
+
+  test('strict first week: UTC cohort and 168-hour boundaries, paid top-up, and effective limits across admission and reads', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local, request }) => {
+      const { wid,from } = await strictWeekFixture(runtime,db);
+      const key = ok(await local('POST','/v1/api-keys',{name:'Week one',permissions:['read','send']}),201).secret; secrets.add(key);
+      await db.query(`INSERT INTO sender_standing(workspace_id,phase,score,band_limit,daily_limit) VALUES ($1,'graded',95,NULL,NULL)`,[wid]);
+      const cap = async () => {
+        const score = ok(await request('GET','/v1/sender-score',key)), usage = ok(await request('GET','/v1/usage',key));
+        const value = ok(await request('GET','/v1/me',key)).connection.sendingLimit.cap;
+        assert.deepEqual([score.limit.daily,usage.daily.cap,score.standing.probation],[value,value,null]);
+        return value;
+      };
+      const birth = (when: string) => db.query(`UPDATE workspaces SET created_at=${when} WHERE id=$1`,[wid]);
+      const send = () => request('POST','/v1/emails/send',key,mail({from,to:'reader@outside.invalid'}));
+      await birth("hosted_strict_since()-interval '1 second'");
+      assert.equal(await cap(),null);
+      await birth("now()-interval '168 hours'+interval '1 second'");
+      assert.equal(await cap(),500);
+      await birth("now()-interval '168 hours'");
+      assert.equal(await cap(),null);
+      await birth('now()');
+      await db.query(`INSERT INTO hosted_usage_hourly(workspace_id,hour,recipients,marketing) VALUES($1,date_trunc('hour',now()),500,0)`,[wid]);
+      const bureauCap = async () => (await db.query('SELECT hosted_display_cap($1,NULL) AS cap',[wid])).rows[0].cap;
+      assert.equal(await bureauCap(),500);
+      await db.query('UPDATE workspaces SET send_cap_override=600 WHERE id=$1',[wid]);
+      const opens = async (incoming: number) => (await db.query("SELECT allowance->>'resetAt' AS opens FROM hosted_allowance_read($1,$2,0,500,NULL,NULL,10)",[wid,incoming])).rows[0].opens;
+      assert.equal(await opens(601),null,'Even a payment or week expiry cannot fit this batch under the independent cap.');
+      assert.ok(await opens(600),'This batch fits once the week ends and the independent cap has room.');
+      await db.query('UPDATE workspaces SET send_cap_override=NULL WHERE id=$1',[wid]);
+      const payment = unique('payment');
+      await db.query(`INSERT INTO billing_payment_attempts(id,workspace_id,kind,status,amount_uc,idempotency_key,created_by)
+        VALUES ($1,$2,'checkout','pending',2000000000,$1,'fixture')`,[payment,wid]);
+      const unpaid = error(await send(),429,'SEND_LIMIT_REACHED');
+      assert.equal(unpaid.message,`Your first-week allowance of 500 recipients/day reopens at ${unpaid.resetAt}.`);
+      runtime.config.billing = { stripe: { secretKey:'sk_test_fake',webhookSecret:STRIPE_TEST_WEBHOOK_SECRET,automaticTax:false,creditProduct:'nightmail_credit',taxCode:'txcd_10103001',apiBase:STRIPE_TEST_BASE } };
+      const fundable = error(await send(),429,'SEND_LIMIT_REACHED');
+      assert.equal(fundable.message,`Your first-week allowance of 500 recipients/day reopens at ${unpaid.resetAt}; add $20 in Settings → Billing to send sooner.`);
+      await db.query("UPDATE billing_payment_attempts SET status='succeeded',amount_uc=1999999999 WHERE id=$1",[payment]);
+      assert.equal(await cap(),500);
+      await db.query("UPDATE billing_payment_attempts SET amount_uc=2000000000,settled_at=now() WHERE id=$1",[payment]);
+      assert.equal(await cap(),null); assert.equal(await bureauCap(),null); ok(await send(),202);
+      await db.query("UPDATE sender_standing SET phase='calibrating',score=NULL,daily_limit=500 WHERE workspace_id=$1",[wid]);
+      const refusal = error(await send(),429,'SEND_LIMIT_REACHED');
+      assert.doesNotMatch(refusal.message,/add credit|First-week/i);
+    });
+  });
+
+  test('strict first week: a complaint after lease holds outside transactional mail before charging; verified members still dispatch', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local }) => {
+      const { wid,pool,from,member } = await strictWeekFixture(runtime,db);
+      const { applyChange } = await import('./src/standing.js'), { runDispatcher } = await import('./src/dispatcher.js');
+      const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
+      const complaint = {step:'restrict',code:'COMPLAINTS_RESTRICT',metric:'complaints',value:0.001,count:3,threshold:0.001,minimum:3,window:'24h',message:'Synthetic complaint line.'} as const;
+      const restrict = () => runtime.db.transaction(tx => applyChange(tx,{workspaceId:wid,actor:{kind:'system'},kind:'step',step:'restrict',reasons:[complaint]}));
+      const release = () => runtime.db.transaction(tx => applyChange(tx,{workspaceId:wid,actor:{kind:'owner'},kind:'release',step:'warn',release:{percent:50,hours:48}}));
+      const send = (to: string, bcc?: string[]) => local('POST','/v1/emails/send',mail({from,to,...bcc ? {bcc} : {}}));
+      const drain = () => runDispatcher(runtime,{region:REGION,accountId:pool,lanes:1});
+      await db.query("UPDATE workspaces SET created_at=hosted_strict_since()-interval '1 second' WHERE id=$1",[wid]);
+      await restrict(); assert.equal((await db.query("SELECT outside FROM hosted_hold_scope($1)",[wid])).rows[0].outside,false);
+      const pending = ok(await send('nonmember@held.example'),202).id;
+      await release();
+      await db.query("UPDATE workspaces SET created_at=hosted_strict_since()+interval '1 second' WHERE id=$1",[wid]);
+      const inbox = ok(await send(member),202).id;
+      let checkedLease = false;
+      const calls: string[] = [];
+      t.mock.method(SESv2Client.prototype,'send', async (cmd: any) => {
+        if (cmd instanceof GetAccountCommand) {
+          if (!checkedLease) {
+            assert.equal((await db.query('SELECT lease_until IS NOT NULL AS leased FROM sending_emails WHERE id=$1',[pending])).rows[0].leased,true);
+            await restrict(); checkedLease=true;
+          }
+          return {SendingEnabled:true,SendQuota:{MaxSendRate:1000,Max24HourSend:100000,SentLast24Hours:0}};
+        }
+        calls.push(cmd.input.Destination.ToAddresses[0]); return {MessageId:randomUUID()};
+      });
+      assert.equal((await drain()).sent,1);
+      assert.deepEqual(calls,[member]);
+      assert.deepEqual((await db.query('SELECT id,status FROM sending_emails WHERE id=ANY($1) ORDER BY status',[[pending,inbox]])).rows,
+        [{id:inbox,status:'accepted'},{id:pending,status:'queued'}]);
+      assert.equal((await db.query("SELECT coalesce(sum(used),0)::int AS used FROM hosted_burst_windows WHERE workspace_id=$1 AND scope=''",[wid])).rows[0].used,1);
+      assert.match(error(await send(member,['outside@held.example']),409,'MARKETING_HELD').message,/Spam complaints/);
+      await db.query(`INSERT INTO billing_payment_attempts(id,workspace_id,kind,status,amount_uc,idempotency_key,created_by)
+        VALUES ('paid',$1,'recharge','succeeded',2000000000,'paid','fixture')`,[wid]);
+      error(await send('reader@outside.invalid'),409,'MARKETING_HELD');
+      await release();
+      await db.query("UPDATE sending_emails SET lease_until=NULL WHERE id=$1",[pending]);
+      assert.equal((await drain()).sent,1); assert.deepEqual(calls,[member,'nonmember@held.example']);
+    });
+  });
+
+  test('strict first week: complaint scope follows the scheduled envelope and frozen campaign audience, independent holds still apply', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local, run }) => {
+      const { wid,from,member,pause } = await strictWeekFixture(runtime,db), outside = 'nonmember@held.example';
+      const { applyChange } = await import('./src/standing.js');
+      const complaint = {step:'restrict',code:'COMPLAINTS_RESTRICT',metric:'complaints',value:0.001,count:3,threshold:0.001,minimum:3,window:'24h',message:'Synthetic complaint.'} as const;
+      const change = (step: 'restrict'|'ok', metric: 'complaints'|'bounces' = 'complaints') => runtime.db.transaction(tx =>
+        applyChange(tx,{workspaceId:wid,actor:{kind:'system'},kind:'step',step,reasons:step === 'ok' ? [] : [{...complaint,metric}]}));
+      const post = (to: string, extra: Json = {}) => local('POST','/v1/emails/send',mail({from,to,...extra}));
+      await db.query("INSERT INTO sender_standing(workspace_id,phase,score,band_limit,daily_limit) VALUES ($1,'graded',95,NULL,NULL)",[wid]);
+      await change('restrict'); ok(await post(outside),202); // Already established before its first restrict.
+      assert.equal((await db.query('SELECT outside FROM hosted_hold_scope($1)',[wid])).rows[0].outside,false);
+      await change('ok');
+      await db.query("UPDATE sender_standing SET phase='calibrating',score=NULL,daily_limit=500 WHERE workspace_id=$1",[wid]);
+      const scheduledAt = new Date(Date.now()+300000).toISOString();
+      const scheduled = await Promise.all([member,outside].map(async to => ok(await post(to,{scheduledAt}),202).id));
+      await change('restrict');
+      await db.query("UPDATE sending_emails SET scheduled_at=now()-interval '1 second' WHERE id=ANY($1::text[])",[scheduled]);
+      await run('sending.release');
+      const scheduledRows = (await db.query('SELECT status,error_code FROM sending_emails WHERE id=ANY($1::text[]) ORDER BY status',[scheduled])).rows;
+      assert.deepEqual(scheduledRows,[{status:'queued',error_code:null},{status:'scheduled',error_code:null}]);
+      const launch = async (addresses: string[]) => {
+        const list = ok(await local('POST','/v1/lists',{name:unique('scope')}),201);
+        for (const email of addresses) {
+          await db.query(`INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent) VALUES ($1,$2,$3,'subscribed') ON CONFLICT DO NOTHING`,[unique('con'),wid,email]);
+          await db.query('INSERT INTO audience_list_members(workspace_id,list_id,contact_id) SELECT workspace_id,$2,id FROM audience_contacts WHERE workspace_id=$1 AND email=$3',[wid,list.id,email]);
+        }
+        const c = ok(await local('POST','/v1/campaigns',{name:unique('scope'),from,subject:'Member notice',html:'<p>Fixture</p>',audience:{listId:list.id}}),201);
+        ok(await local('POST',`/v1/campaigns/${c.id}/send`,{revision:c.revision}),202);
+        await run('campaign.run');
+        return ok(await local('GET',`/v1/campaigns/${c.id}`));
+      };
+      assert.equal((await launch([member])).delivery.expanded,1);
+      const mixed = await launch([member,outside]);
+      assert.deepEqual([mixed.state,mixed.delivery.expanded,mixed.delivery.pauseReason.code],['paused',0,'MARKETING_HELD']);
+      await change('ok'); await change('restrict','bounces');
+      ok(await post(outside),202);
+      await change('restrict'); // A complaint joining a bounce restrict at the same step latches both causes.
+      error(await post(outside),409,'MARKETING_HELD');
+      error(await post(member,{kind:'marketing'}),409,'MARKETING_HELD');
+      ok(await post(member),202);
+      await pause(); error(await post(member),409,'HOSTED_SENDING_PAUSED');
+    });
+  });
+
   test('MX review: screen verdicts count when the screen judges, so spam queued before a resume pauses; simulator-only mail and unperformed screens do not dilute', async t => {
     // A subtest owns the classifier stub, so its tracker resets before the fixture's network guard (as the screen benchmark does).
     await simulatedSesFixture(t, async ({ runtime, local, db }) => t.test('synthetic classifier', async t => {

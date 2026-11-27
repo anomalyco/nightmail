@@ -353,6 +353,7 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
   const tick=sql`date_trunc('minute',statement_timestamp())`;
   // A marketing hold leaves the held stream queued (heldStream); transactional mail keeps flowing.
   const dueForOwner = sql`FROM sending_emails e WHERE ${queued} AND e.workspace_id = o.workspace_id AND ${available} AND (NOT o.marketing_held OR NOT ${heldStream(sql`e`)})
+    ${mx ? sql`AND (NOT o.outside_hold OR NOT hosted_has_outside(o.workspace_id,e.to_addresses||e.cc_addresses||e.bcc_addresses))` : sql``}
     -- A boolean range is an index condition on 061's expression. Equality to true is
     -- simplified to a text comparison and can scan the kind index over delivered mail.
     ${priorityOnly ? sql`AND ${transactional} > false` : sql``}
@@ -386,9 +387,9 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
   const txUnheld = sql`(NOT ${heldStream(sql`e`)})`;
   // Transactional has buckets of its own only where marketing paces at the full pool rate (owners.split_tx, migration 457).
   const split = sql`(o.split_tx AND ${txUnheld})`;
-  const ownersSql = mx ? sql`SELECT q.workspace_id,hosted_marketing_held(q.workspace_id) AS marketing_held,${liveMx?sql`(pc.kind='shared' AND NOT w.exempt_hosted_quotas)`:sql`false`} AS customer ${liveMx?sql`,p.cap,p.tx_cap,coalesce(p.pool_paced AND g.key IS NULL,false) AS split_tx,p.cap-coalesce(bm.used,0) AS mkt_remaining,p.tx_cap-coalesce(bt.used,0) AS tx_remaining,g.cap-g.used AS growth_left,pc.kind='shared' AS required_screen,
+  const ownersSql = mx ? sql`SELECT q.workspace_id,scope.marketing AS marketing_held,scope.outside AS outside_hold,${liveMx?sql`(pc.kind='shared' AND NOT w.exempt_hosted_quotas)`:sql`false`} AS customer ${liveMx?sql`,p.cap,p.tx_cap,coalesce(p.pool_paced AND g.key IS NULL,false) AS split_tx,p.cap-coalesce(bm.used,0) AS mkt_remaining,p.tx_cap-coalesce(bt.used,0) AS tx_remaining,g.cap-g.used AS growth_left,pc.kind='shared' AS required_screen,
     (${!!runtime.config.trustedPool} AND pc.pool_tier='trusted' AND NOT pc.legacy_names) AS trusted`:sql``}
-    FROM all_owners q JOIN ${sendingConnections(runtime)} pc USING(workspace_id)
+    FROM all_owners q JOIN ${sendingConnections(runtime)} pc USING(workspace_id) CROSS JOIN LATERAL hosted_hold_scope(q.workspace_id) scope
     ${liveMx?sql`LEFT JOIN workspaces w ON w.id=q.workspace_id
       LEFT JOIN hosted_burst_windows bm ON bm.workspace_id=q.workspace_id AND bm.scope='' AND bm.minute=${tick}
       LEFT JOIN hosted_burst_windows bt ON bt.workspace_id=q.workspace_id AND bt.scope='#tx' AND bt.minute=${tick}
@@ -752,6 +753,8 @@ function claimCtes(runtime: Runtime, region: string, input: SQL) {
             WHEN x.marketing AND NOT x.notice AND NOT ${topicAllows(sql`c.workspace_id`, sql`c.id`, sql`x.topic_id`)} THEN 'topic_unsubscribed' END AS reason) cause
           WHERE d.email_id=x.id AND cause.reason IS NOT NULL ORDER BY d.n LIMIT 1) AS suppression_reason
       FROM input x
+      ${runtime.config.multiTenant ? sql`WHERE NOT EXISTS (SELECT FROM sponsor_state ss WHERE ss.workspace_id=x.workspace_id AND ss.paused)
+        AND hosted_claim_open(x.workspace_id,x.held_stream,x.destinations)` : sql``}
     ), budget AS MATERIALIZED (SELECT x.id,${runtime.config.multiTenant && !isSimulatedSes(runtime) ? sql`CASE WHEN x.hosted AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL
         THEN hosted_burst_ok(x.workspace_id,split_part(x.sender,'@',2),jsonb_array_length(x.destinations),NOT x.held_stream) ELSE true END` : sql`true`} AS allowed
       FROM input x JOIN eligibility el USING(id) ORDER BY x.workspace_id,x.sender,x.id), claimed AS (
@@ -761,16 +764,15 @@ function claimCtes(runtime: Runtime, region: string, input: SQL) {
         attempt_started_at = CASE WHEN b.allowed AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL THEN clock_timestamp() ELSE e.attempt_started_at END,
         error_code = CASE WHEN NOT b.allowed THEN 'HOSTED_BURST_LIMIT' WHEN NOT el.binding_ok AND x.binding IS NOT NULL THEN 'SENDER_BINDING_CHANGED' WHEN NOT el.origin_ok OR NOT el.binding_ok THEN 'ORIGIN_KEY_REVOKED' WHEN NOT el.campaign_allowed THEN 'CAMPAIGN_CANCELED' WHEN el.suppression_reason IS NULL THEN nullif(e.error_code,'HOSTED_BURST_LIMIT') ELSE 'RECIPIENT_INELIGIBLE' END,
         suppression_reason = CASE WHEN el.origin_ok AND el.binding_ok AND el.campaign_allowed THEN el.suppression_reason END,
-        ${runtime.config.multiTenant && !isSimulatedSes(runtime) ? sql`feedback_topic_arn=x.feedback_topic,` : sql``} snapshot = CASE WHEN b.allowed THEN coalesce(x.snapshot, e.snapshot) ELSE e.snapshot END, lease_until = NULL, updated_at = clock_timestamp()
+        ${runtime.config.multiTenant && !isSimulatedSes(runtime) ? sql`feedback_topic_arn=x.feedback_topic,
+        evaluation_outside=CASE WHEN b.allowed AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL
+          THEN hosted_evaluation_outside(x.workspace_id,x.destinations) END,` : sql``} snapshot = CASE WHEN b.allowed THEN coalesce(x.snapshot, e.snapshot) ELSE e.snapshot END, lease_until = NULL, updated_at = clock_timestamp()
       FROM input x JOIN eligibility el ON el.id = x.id JOIN budget b ON b.id=x.id
       -- e.status is compared with x.status ('queued' in every input row), never a literal, so sending_emails has no condition
       -- of its own: the planner reaches it only by primary key from each input row, since any other way reads the whole
       -- table. With a literal it could scan a queued-only partial index instead, and when the statistics were taken while
       -- nothing was queued it did: every queued row for each batch, the hold check for each pair (20,000 rows, 5 seconds).
       WHERE e.workspace_id = x.workspace_id AND e.id = x.id AND e.status = x.status AND e.dispatch_version = x.dispatch_version
-        ${runtime.config.multiTenant ? sql`AND EXISTS (SELECT 1 FROM provider_connections pc WHERE pc.workspace_id=x.workspace_id AND pc.paused_at IS NULL
-          AND NOT (x.held_stream AND hosted_marketing_held(x.workspace_id)) FOR SHARE)
-          AND NOT EXISTS (SELECT 1 FROM sponsor_state ss WHERE ss.workspace_id=x.workspace_id AND ss.paused)` : sql``}
       RETURNING e.id,e.workspace_id,e.status,e.region,e.simulated,e.error_code,e.suppression_reason,e.dispatch_version
     ), token AS (
       INSERT INTO operation_unsubscribe_tokens(token_hash, workspace_id, email, page_url, topic_id)

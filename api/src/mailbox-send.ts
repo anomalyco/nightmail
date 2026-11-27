@@ -51,7 +51,7 @@ export async function resolveAttachments(runtime:Runtime, mailbox:Pick<MailboxRo
     // A built-in domain sends no attachments (send_admission refuses them too): say so before any file is stored.
     if(isBuiltinHost(runtime.config,from.split('@')[1]!)) throw builtinRefusal(runtime.config,{code:'BUILTIN_DOMAIN_UNSUPPORTED',field:'attachments',host:from.split('@')[1]!.toLowerCase()});
     const region=regionalSending(runtime) ? sql`NULL::text` : sql`(SELECT region FROM mailbox_domains d WHERE d.id=${mailbox.domainId} AND d.workspace_id=${scope.workspaceId})`;
-    const mail=sql`jsonb_build_object('mails',jsonb_build_array(jsonb_build_object('host',${from.split('@')[1]!.toLowerCase()}::text,'region',${region},'kind','transactional','attachments','[]'::jsonb,'bodyBytes',0)))`;
+    const mail=sql`jsonb_build_object('mails',jsonb_build_array(jsonb_build_object('host',${from.split('@')[1]!.toLowerCase()}::text,'region',${region},'kind','transactional','recipients','[]'::jsonb,'attachments','[]'::jsonb,'bodyBytes',0)))`;
     const check=await admission(runtime,scope.workspaceId,actorJson({keyId:'',domains:[]}),{stage:'send',locks:'none'},mail);
     admitted(runtime,(await runtime.db.execute<{s:Admitted|Refused}>(sql`SELECT ${check} AS s`)).rows[0]!.s,scope.workspaceId);
   }
