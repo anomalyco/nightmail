@@ -258,7 +258,7 @@ function ReputationSummary({ report, regionId }: { report: SesDiscovery | undefi
   const reputation = report?.reputation
   if (!report?.account || !reputation?.available) return null
   const worst = [accountStatus(report.account.enforcementStatus), rateStatus('bounceRate', reputation.bounceRate), rateStatus('complaintRate', reputation.complaintRate)].filter(status => status.label !== 'No data' && status.label !== 'Unknown').sort((a, b) => severity[b.tone] - severity[a.tone])[0]
-  return <Link className="overview-reputation" to={`/settings?region=${encodeURIComponent(regionId)}`} title={`SES account reputation: ${ratePercent(reputation.bounceRate)} bounce · ${ratePercent(reputation.complaintRate)} complaint`}>
+  return <Link className="overview-reputation" to={`/settings?region=${encodeURIComponent(regionId)}`} title="SES account reputation">
     <span className="muted">SES</span>{worst && <StatusBadge status={worst.label} tone={worst.tone} />}<span className="muted">{ratePercent(reputation.bounceRate)} bounce · {ratePercent(reputation.complaintRate)} complaint</span>
   </Link>
 }

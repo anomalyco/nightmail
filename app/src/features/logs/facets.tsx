@@ -80,6 +80,6 @@ export function logFacetGroups(counts: LogCounts | undefined, filters: RailFilte
 
 /** The list's body with its filters beside it. `blank`: a log with no mail at all keeps the rail's place, empty. */
 export function LogsBody({ counts, asOf, from, viewKey, filters, blank, children }: { counts: LogCounts | undefined; asOf?: string | null; from?: string; viewKey?: string; filters: RailFilters; blank?: boolean; children: ReactNode }) {
-  const detail = from ? `Exact counts from ${from}${asOf ? `, as of ${asOf}` : ''}.` : undefined
+  const detail = from ? `Counts from ${from}${asOf ? `, as of ${asOf}` : ''}.` : undefined
   return <SplitPane className="logs-split" rail={blank ? null : <FacetRail key={viewKey} label="Filters" countSlot={{ width: countWidth, detail }} groups={logFacetGroups(counts, filters)} />}>{children}</SplitPane>
 }

@@ -60,7 +60,7 @@ export function DailyLimit({ report }: { report: SenderScore | undefined }) {
   if (builtin) {
     const used = builtin.used ?? 0, left = Math.max(0, builtin.perDay - used), text = `${number(left)} of ${number(builtin.perDay)} left`
     return <section className="daily-limit" aria-label="Daily limit">
-      <button type="button" className="limit-row" onClick={() => setExplaining(true)} title={`${number(used)} of ${number(builtin.perDay)} recipients from ${builtin.name} in the last 24 hours. Your own domain lifts it.`} aria-label={`Daily limit: ${text}, from your built-in domain. How limits work`}>
+      <button type="button" className="limit-row" onClick={() => setExplaining(true)} title={`${number(used)} of ${number(builtin.perDay)} recipients from ${builtin.name} in the last 24 hours.`} aria-label={`Daily limit: ${text}, from your built-in domain. How limits work`}>
         <span className="limit-row__text"><span className="limit-row__label">Daily limit<Info size={12} aria-hidden="true" /></span><span className="muted">{text}</span></span>
         <span className="limit-row__track" data-full={used / Math.max(1, builtin.perDay) >= 0.9 || undefined}><i style={{ width: `${Math.min(1, used / Math.max(1, builtin.perDay)) * 100}%` }} /></span>
       </button>

@@ -202,7 +202,7 @@ export function FirstRunStrip({ setup, done, onSent, onLeave }: { setup: SetupRe
         doneLine={<>Sent. <Link to={test.data ? `/logs/${encodeURIComponent(test.data.id)}` : '/logs?view=sent'}>View in Logs</Link></>}
         action={done && <Button variant={next === 'send' ? 'primary' : 'secondary'} size="sm" className="ov-start__action" loading={test.isPending} disabled={!setup.sendFrom || !to || test.isSuccess} onClick={() => test.mutate()} data-analytics="overview/start/test"><Send size={14} aria-hidden />Send a test email</Button>} />
       <Step index={1} title={titles.domain} done={done?.domain} known={!!done} live={live}
-        line={setup.pendingDomain ? <>Waiting for the DNS records of {setup.pendingDomain.name}.</> : builtin?.scope === 'members' ? 'Email anyone, not only your team.' : builtin ? `Send more than ${number(builtin.perDay)} a day.` : 'Send from your own name.'}
+        line={setup.pendingDomain ? <>Waiting for the DNS records of {setup.pendingDomain.name}.</> : null}
         doneLine={setup.ownVerified ? `${setup.ownVerified.name} is verified.` : 'Verified.'}
         action={done && <Link className={`ui-button ui-button--${next === 'domain' ? 'primary' : 'secondary'} ui-button--sm ov-start__action`} to={setup.pendingDomain ? `/domains/${setup.pendingDomain.id}` : '/domains?add'} data-analytics="overview/start/domain"><Globe size={14} aria-hidden />{setup.pendingDomain ? 'View records' : 'Add domain'}</Link>} />
       <Step index={2} title={titles.agent} done={done?.agent} known={!!done} live={live}
