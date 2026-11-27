@@ -112,11 +112,13 @@ export function registerTemplates(app: App) {
     refuseHead(c);
     const identity = actor(c, 'send'), row = await findTemplate(c.env.db, identity.workspaceId, c.req.valid('param').id), published = c.req.valid('query').published === 'true', draft = published ? row.published : row.draft;
     if (!draft) throw new ApiError(404, 'NOT_FOUND', 'This template has no published revision.');
+    // Nothing to render is the caller's to fix, answered before the renderer is asked (it fails on an empty page) and before the render budget.
+    if (!draft.html?.trim()) throw new ApiError(422, 'TEMPLATE_INCOMPLETE', published ? 'This template’s published revision has no content to render. Add content to its draft and publish it, then preview it.' : 'This template has no content to render yet. Add content to its draft, then preview it.', 'html');
     if (!c.env.renderHtmlImage) throw new ApiError(503, 'PREVIEW_RENDERING_UNAVAILABLE', 'Visual template preview rendering is not configured.', undefined, true);
     await chargeRenderBudget(c, identity.workspaceId);
     assertContent(draft.html);
     const inline = (await assetRows(c.env.db, identity.workspaceId, draft.attachments)).filter(asset => asset.disposition === 'inline' && asset.contentId), render = c.env.renderHtmlImage;
-    const link = await renderPreview(c.env, identity.workspaceId, draft.html ? renderBlockHtml(draft.html, { title: draft.subject }) : '', inline, async item => {
+    const link = await renderPreview(c.env, identity.workspaceId, renderBlockHtml(draft.html, { title: draft.subject }), inline, async item => {
       const stored = await c.env.storage.get(item.storageKey);
       if (!stored || stored.body.length !== item.size || await checksum(stored.body) !== item.checksum) throw new ApiError(503, 'TEMPLATE_ASSET_STORAGE_UNAVAILABLE', 'An inline template image is missing or changed.', undefined, true);
       return stored.body;
