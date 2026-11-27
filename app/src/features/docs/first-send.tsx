@@ -54,23 +54,22 @@ export function useSettlingEmail(id: string | undefined, onSettled?: () => void)
 
 /** What a test send says once sent: queued, then delivered or how else it went, as soon as it does, and the link to Logs.
  *  Delivered from a real send, it says to check spam too (a new domain's first mail can land there). Each way it can
- *  read is laid out in one cell, so a status arriving moves nothing, the link included. A final status reads "Bounced to
- *  {address}"; the others don't read as "… to" (complained, rejected, canceled…), so they read "To {address}: rejected". */
-export function TestSentLine({ id, to, simulated, onLeave, onSettled }: { id: string; to: string; simulated?: boolean; onLeave?: () => void; onSettled?: () => void }) {
+ *  read is laid out in one cell, so a status arriving moves nothing, the link included. */
+export function TestSentLine({ id, simulated, onLeave, onSettled }: { id: string; to: string; simulated?: boolean; onLeave?: () => void; onSettled?: () => void }) {
   const status = useSettlingEmail(id, onSettled)
-  const address = <PrivateAddress value={to} />, as = simulated ? ' (simulated)' : ''
+  const as = simulated ? ' (simulated)' : ''
   const logs = <Link className="first-send-logs" to={`/logs/${encodeURIComponent(id)}`} onClick={onLeave}>View in Logs</Link>
   const shown = !status || pendingEmailStatuses.includes(status) ? 'queued' : status === 'delivered' ? 'delivered' : 'other'
   return <span className="first-send-line">
-    <span data-shown={shown === 'queued' || undefined} aria-hidden={shown !== 'queued' || undefined}>Queued to {address}{as}. {logs}</span>
-    <span data-shown={shown === 'delivered' || undefined} aria-hidden={shown !== 'delivered' || undefined}>Delivered to {address}{as}.{simulated ? '' : ' Check spam too.'} {logs}</span>
-    <span data-shown={shown === 'other' || undefined} aria-hidden={shown !== 'other' || undefined}>{status === 'bounced' ? <>Bounced to {address}</> : <>To {address}: {status ? label(status).toLowerCase() : ''}</>}{as}. {logs}</span>
+    <span data-shown={shown === 'queued' || undefined} aria-hidden={shown !== 'queued' || undefined}>Queued{as}. {logs}</span>
+    <span data-shown={shown === 'delivered' || undefined} aria-hidden={shown !== 'delivered' || undefined}>Delivered{as}.{simulated ? '' : ' Check spam too.'} {logs}</span>
+    <span data-shown={shown === 'other' || undefined} aria-hidden={shown !== 'other' || undefined}>{status ? label(status) : ''}{as}. {logs}</span>
   </span>
 }
 /** The longest TestSentLine (delivered, with the spam hint), never shown: a slot that holds it keeps the line's height
  *  from the start, so the delivered line moves nothing under it. */
-export function TestSentSizer({ to }: { to: string }) {
-  return <>Delivered to <PrivateAddress value={to} />. Check spam too. <span className="first-send-logs">View in Logs</span></>
+export function TestSentSizer(_: { to: string }) {
+  return <>Delivered. Check spam too. <span className="first-send-logs">View in Logs</span></>
 }
 
 // `onLeave` runs before View in Logs opens the email: onboarding finishes there, so the dashboard opens instead of sending
