@@ -9,6 +9,7 @@ import { ROOM_PEER_HEADER } from './campaign-room-protocol.js';
 import type { SupportPlatformApi } from './support-platform.js';
 import { SECURITY_HEADERS } from './security-headers.js';
 import { clientIpHeader, clientNetworkHeader, healthService, legacyClientIpHeaders, requestHeaderNames, setting } from './brand.js';
+import { oldDashboardReference } from './dashboard-reference.js';
 import { isMissingComparePage, isMissingDocsPage, isMissingLegalPage, isPublicPage, movedPage, SITE_INDEX, withSiteIndex } from './site-index.js';
 import { linkHostRequest, sharedLinkPage } from './link-hosts.js';
 export { DispatcherShard, CampaignRoom };
@@ -359,6 +360,10 @@ export default {
       let origin: string | undefined; try { origin = new URL(String((env as { PUBLIC_URL?: unknown }).PUBLIC_URL)).origin; if (origin === 'null') origin = undefined; } catch { origin = undefined; }
       return fastSecure(new Response(request.method==='HEAD'?null:JSON.stringify({status:'ok',service:healthService,multiTenant,...(origin ? { origin } : {}),analytics}), { headers: { 'content-type': 'application/json; charset=UTF-8', 'cache-control': 'no-store', 'x-request-id': requestId } }));
     }
+    if (!linkHost && pathname.startsWith('/docs/') && (request.method === 'GET' || request.method === 'HEAD')) {
+      const old = oldDashboardReference(pathname, request.method);
+      if (old) return fastSecure(old);
+    }
     const staticDoc = (request.method === 'GET' || request.method === 'HEAD') && (['/openapi.json', '/docs.md', '/llms.txt'].includes(pathname) || pathname.startsWith('/docs/operations/') || pathname.startsWith('/docs/tags/'));
     const assets = (env as unknown as { ASSETS?: Fetcher }).ASSETS;
     if (assets && (request.method === 'GET' || request.method === 'HEAD') && !staticDoc && !linkHost && !/^\/(?:health|v1|api|mcp|\.well-known|unsubscribe|internal|i)(?:\/|$)/.test(pathname)) {
@@ -618,6 +623,8 @@ export default {
         // Health (src/health.ts), once dispatch recovery has run or failed: what is falling behind, on the Health page and as
         // Slack cards, including a database that refuses the tick's own write. Started here and awaited by nothing: it runs
         // beside the steps below on a connection of its own, so neither can delay or skip the other.
+        if (runtime.config.multiTenant && runtime.config.liveEnabled)
+          afterwards(env, ctx, async rt => { await (await import('./ses-quota-health.js')).sampleSesCounts(rt); });
         afterwards(env, ctx, async health => {
           const [{ healthTick }, { flushCounters }] = await Promise.all([import('./health.js'), import('./health-counters.js')]);
           await flushCounters(health.db); await healthTick(health, { queues: queues.sort((a,b)=>a.name<b.name?-1:1) });

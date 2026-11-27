@@ -123,6 +123,9 @@ const values = z.object({
   // marketing hold, the daily limit, a full customer share, slow sign-in mail; and the health alerts (src/health.ts): a
   // queue, the jobs, a campaign, a route or the database falling behind. Unset, nothing is posted. Treat as a secret.
   OPERATOR_SLACK_WEBHOOK_URL: optional(z.string().url().max(2048).refine(value => value.startsWith('https://hooks.slack.com/'), 'Use a Slack incoming webhook URL.')),
+  // Hosted only: the Slack user ID (U…) that urgent operator cards mention, so Slack notifies their phone
+  // (src/operator-mention.ts). Not a secret: production's is in wrangler.prod.jsonc. Unset, no card mentions anyone.
+  OPERATOR_SLACK_MENTION: optional(z.string().regex(/^[UW][A-Z0-9]{2,30}$/, 'Use a Slack user ID (U…).')),
   // The commit this deploy runs and when it was deployed (.github/scripts/deploy-worker.sh sets both; Docker may). Glass
   // shows them; a value that isn't a commit or a time is ignored, never an error.
   DEPLOY_SHA: z.unknown().optional(),
@@ -287,7 +290,7 @@ const featureSettings = {
   mailGateway: ['MAILGW_API_TOKEN', 'MAILGW_PUBLIC_DOMAIN'],
   stripe: ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET', 'STRIPE_AUTOMATIC_TAX', 'STRIPE_API_BASE'],
   diskWebhook: ['PLANETSCALE_WEBHOOK_SECRET'],
-  operatorAlerts: ['OPERATOR_SLACK_WEBHOOK_URL'], abuseAlerts: ['ABUSE_SLACK_WEBHOOK_URL'], reputationAlerts: ['REPUTATION_ALERT_SLACK_URL'],
+  operatorAlerts: ['OPERATOR_SLACK_WEBHOOK_URL'], operatorMention: ['OPERATOR_SLACK_MENTION'], abuseAlerts: ['ABUSE_SLACK_WEBHOOK_URL'], reputationAlerts: ['REPUTATION_ALERT_SLACK_URL'],
   secondaryClassifier: ['JEVF_API_KEY', 'JEVF_ENDPOINT', 'JEVF_MODEL', 'JEVF_DEADLINE_MS', 'JEVF_MAX_CONCURRENCY', 'JEVF_SCREEN_THRESHOLD'],
   dashboardAnalytics: ['DASHBOARD_ANALYTICS'], supportAgentAccess: ['SUPPORT_AGENT_ACCESS'], domainSetupReminder: ['DOMAIN_SETUP_REMINDER'], noDomainReminder: ['NO_DOMAIN_REMINDER'],
   placementShadow: ['NIGHTMAIL_PLACEMENT_SHADOW'], abuseMonitoring: ['NIGHTMAIL_ABUSE_MONITORING'],
@@ -436,6 +439,7 @@ export function loadConfig(input: Record<string, unknown>): Config {
     hygieneDnsUrl: v.NIGHTMAIL_HYGIENE_DNS === 'off' ? null : v.NIGHTMAIL_HYGIENE_DNS ?? (v.MULTI_TENANT === 'true' ? 'https://cloudflare-dns.com/dns-query' : null),
     abuseSlackWebhookUrl: v.MULTI_TENANT==='true' ? v.ABUSE_SLACK_WEBHOOK_URL ?? v.OPERATOR_SLACK_WEBHOOK_URL : undefined,
     operatorSlackWebhookUrl: v.MULTI_TENANT==='true' ? v.OPERATOR_SLACK_WEBHOOK_URL : undefined,
+    operatorSlackMention: v.MULTI_TENANT==='true' ? v.OPERATOR_SLACK_MENTION : undefined,
     databaseDiskBytes: v.DATABASE_DISK_GB === undefined ? undefined : v.DATABASE_DISK_GB * 1024 ** 3,
     deploy: { sha: typeof v.DEPLOY_SHA === 'string' && /^[0-9a-f]{7,40}$/.test(v.DEPLOY_SHA) ? v.DEPLOY_SHA : null,
       at: typeof v.DEPLOY_AT === 'string' && Number.isFinite(Date.parse(v.DEPLOY_AT)) ? new Date(v.DEPLOY_AT).toISOString() : null },

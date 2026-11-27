@@ -187,7 +187,7 @@ export function vendorRows(offers: readonly Offer[], u: Usage): VendorRow[] {
 export type SharedFact = 'free' | 'domains' | 'contacts' | 'teammates' | 'campaigns' | 'agents'
 /** A row as a line of a page's facts list (page/facts.ts): a plain statement about Nightmail, or one of the shared
  *  facts the row comes down to. */
-export type Line = string | { shared: SharedFact }
+export type Line = string | { shared: SharedFact } | { text: string; brief: string }
 /** short: the same claim in a few words, for a list that is scanned; note: what stands behind it, in a line; line: the
  *  row in a page's facts list, where its first sentence alone wouldn't read as plain words (or says a shared fact). */
 export type Fact = { text: string; short?: string; note?: string; line?: Line | Line[]; source: Source }

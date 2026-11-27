@@ -1,7 +1,6 @@
 import { Fragment, type CSSProperties, type ReactNode } from 'react'
 import { SignInConsent } from '../../../components/LegalLinks'
 import { NightmailWordmark } from '../../../components/NightmailLogo'
-import { WaitlistLine } from '../../home/get-started'
 import type { Start } from '../board'
 import { dayOf, type Source } from '../prices'
 import { answerRuns, linesOf, plain, type Block, type Inline, type PageDoc, type Question, type Table, type Text } from './shape'
@@ -40,15 +39,18 @@ function Caption({ text }: { text: Text }) {
 /** The way in, the price pages' own (board.tsx, Start): the homepage's button in the television's airmail label
  *  (home/tv/tv.css, .chyp) at an ordinary button's size. Painted (page/prerender.tsx) it is a visitor's Get started; the
  *  app's (view.tsx) signs in with the page's focus, says Join the waitlist when no place is open (home/signups-open.ts),
- *  and is Open dashboard for someone signed in. Under it for a visitor, the terms signing in agrees to and the waitlist
- *  line, which is always laid out and shown only when no place is open, so its arrival moves nothing. */
+ *  and is Open dashboard for someone signed in. Under it for a visitor, only the terms signing in agrees to: the button's
+ *  own words say when it is a waitlist. */
 function Way({ start }: { start?: Start }) {
   if (!start) return null
   return <div className="pp-way">
     <div className="chyp chyp-under pp-label">{start.button('chyp-go')}</div>
-    {!start.signedIn && <><SignInConsent className="pp-consent" /><WaitlistLine className="pp-consent pp-full" full={start.full} /></>}
+    {!start.signedIn && <SignInConsent className="pp-consent" />}
   </div>
 }
+
+/** The trademark sentence: in a page's "How we compared" where it has one, else in its small print. */
+const TRADEMARKS = 'Product names belong to their owners and only identify their products. Nightmail isn’t affiliated with them.'
 
 /** The heading: each line its own, the first of several in the screen's periwinkle (a verdict leads with Nightmail's),
  *  set as large as its longest line fits the column (--chars, page.css). */
@@ -68,21 +70,25 @@ function Crumbs({ doc }: { doc: PageDoc }) {
 /** A table: figures right-aligned in the page's mono, a row marked under the screen's blue bar (the size the verdict
  *  quotes), a row with a Nightmail figure in periwinkle. A last column of words (a plan's name) folds under the figures
  *  on a phone. */
-function TableBlock({ table }: { table: Table }) {
+function TableBlock({ table, sources = [] }: { table: Table; sources?: Source[] }) {
   const last = table.head.length - 1, fold = table.head.length > 3 && !table.numeric.includes(last), ours = table.head.indexOf('Nightmail')
   const align = (i: number) => table.numeric.includes(i) ? 'end' : undefined
-  return <table className="pp-table" data-fold={fold ? '' : undefined}>
-    <caption><Run text={table.caption} /></caption>
+  return <><table className="pp-table" data-fold={fold ? '' : undefined}>
+    {table.caption.length > 0 && <caption><Run text={table.caption} /></caption>}
     <thead><tr>{table.head.map((head, i) => <th key={i} scope="col" data-align={align(i)} data-ours={i === ours ? '' : undefined} data-last={fold && i === last ? '' : undefined}>{head}</th>)}</tr></thead>
     <tbody>{table.rows.map((row, r) => <tr key={r} data-mark={row.mark ? '' : undefined}>{row.cells.map((cell, i) => i === 0
       ? <th key={i} scope="row"><Run text={cell} /></th>
       : <td key={i} data-align={align(i)} data-ours={i === ours ? '' : undefined} data-last={fold && i === last ? '' : undefined}><Run text={cell} /></td>)}</tr>)}</tbody>
   </table>
+  {/* The whole note, closed: everything that makes the figures honest, in the page's HTML, out of a reader's way. */}
+  {table.method && <details className="pp-qa pp-method"><summary><span className="pp-qa-q">How we compared</span></summary>
+    <p><Run text={table.method} /></p>{sources.length > 0 && <Checked sources={sources} />}<p>{TRADEMARKS}</p>
+  </details>}</>
 }
-function BlockView({ block }: { block: Block }) {
+function BlockView({ block, sources }: { block: Block; sources?: Source[] }) {
   if (block.kind === 'p') return <p className="pp-p"><Run text={block.text} /></p>
   if (block.kind === 'list') return <ul className="pp-list">{block.items.map((item, i) => <li key={i}><Run text={item} /></li>)}</ul>
-  return <TableBlock table={block} />
+  return <TableBlock table={block} sources={sources} />
 }
 
 /** The pages read, by day: "Checked 25 Nov 2026 on resend.com/pricing." */
@@ -94,20 +100,27 @@ function Checked({ sources }: { sources: Source[] }) {
   return <p>{days.map((day, d) => { const on = pages.filter(source => source.checked === day); return <Fragment key={day}>{`${d === 0 ? 'Checked ' : '; '}${dayOf(day)} on `}{on.map((source, i) => <Fragment key={source.url}>{join(i, on.length)}<a href={source.url} target="_blank" rel="noopener noreferrer">{pageName(source.url)}</a></Fragment>)}</Fragment> })}.</p>
 }
 
+// (Home is the wordmark at the top; API docs last, the first to go when a row would pass six.)
+const SITE_LINKS = [{ title: 'Pricing', path: '/pricing' }, { title: 'Compare', path: '/compare' }, { title: 'Terms', path: '/legal/terms' }, { title: 'Privacy', path: '/legal/privacy' }, { title: 'API docs', path: '/docs' }]
+
 export function PricePageView({ doc, set, start }: { doc: PageDoc; set?: ReactNode; start?: Start }) {
+  const method = doc.sections.flatMap(section => section.blocks).find(block => block.kind === 'table' && block.method), folded = method !== undefined
+  // At most six, the page's own related pages first; /compare keeps all of its own (the index of the vendor and use pages).
+  const links = [...doc.related, ...SITE_LINKS].filter((link, i, all) => link.path !== doc.path && all.findIndex(other => other.path === link.path) === i).slice(0, doc.path === '/compare' ? undefined : 6)
   return <div className="pp" data-set={set ? '' : undefined}>
     <Crumbs doc={doc} />
     {set}
     <main className="pp-col">
       <section className="pp-hero" aria-labelledby="pp-h1">
         <Heading doc={doc} id="pp-h1" />
-        {doc.answer.map((text, i) => <p key={i} className="pp-caption"><Caption text={text} /></p>)}
+        {(doc.caption ? [doc.caption] : doc.answer).map((text, i) => <p key={i} className="pp-caption"><Caption text={text} /></p>)}
         <Way start={start} />
       </section>
       {doc.sections.map((section, i) => <section key={section.id} id={section.id} className="pp-section" aria-labelledby={`${section.id}-title`}>
         {/* Quiet, or a page's only section and a table (a vendor's price page): its title for screen readers only. */}
         <h2 id={`${section.id}-title`} className={section.quiet || (doc.sections.length === 1 && section.blocks[0]?.kind === 'table') ? 'sr-only' : 'pp-h2'}>{section.title}</h2>
-        {section.blocks.map((block, j) => <BlockView key={j} block={block} />)}
+        {/* The pages read go in the first table's How we compared, where it has one. */}
+        {section.blocks.map((block, j) => <BlockView key={j} block={block} sources={block === method ? doc.sources : undefined} />)}
       </section>)}
       {doc.questions.length > 0 && <section id="questions" className="pp-section" aria-labelledby="questions-title">
         <h2 id="questions-title" className="pp-h2">Questions</h2>
@@ -115,17 +128,14 @@ export function PricePageView({ doc, set, start }: { doc: PageDoc; set?: ReactNo
             word), out of a visitor's way. */}
         {doc.questions.map(item => <details key={item.id} className="pp-qa"><summary><h3>{item.question}</h3></summary><p><Answer item={item} /></p></details>)}
       </section>}
-      {doc.related.length > 0 && <nav className="pp-section" aria-labelledby="related-title">
-        <h2 id="related-title" className="pp-h2">More</h2>
-        <ul className="pp-more">{doc.related.map(page => <li key={page.path}><a href={page.path}>{page.title}</a></li>)}</ul>
-      </nav>}
-      <footer className="pp-print">
+      {!folded && <footer className="pp-print">
         {doc.sources.length > 0 && <Checked sources={doc.sources} />}
-        <p>Product names belong to their owners and only identify their products. Nightmail isn’t affiliated with them.</p>
-      </footer>
+        <p>{TRADEMARKS}</p>
+      </footer>}
     </main>
-    <footer className="pp-end"><nav aria-label="Site links">
-      <a href="/">Home</a><a href="/pricing">Pricing</a>{doc.path !== '/compare' && <a href="/compare">Compare</a>}<a href="/docs">API docs</a><a href="/legal/terms">Terms</a><a href="/legal/privacy">Privacy</a>
+    {/* One quiet row: the page's related pages, then the site's, each once. */}
+    <footer className="pp-end"><nav aria-label="More pages">
+      {links.map(link => <a key={link.path} href={link.path}>{link.title}</a>)}
     </nav></footer>
   </div>
 }

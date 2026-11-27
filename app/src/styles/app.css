@@ -144,6 +144,11 @@ html[data-privacy='on']:not([data-peek]) .private-field:not(:focus)::placeholder
 .app-shell:not(.app-shell--compact) .page-surface:has(> :is(.ov-page, .logs-page, .email-detail)) { padding: 0; }
 .app-shell:not(.app-shell--compact) .page-surface:has(> :is(.ov-page, .logs-page, .email-detail)) > :is(.standing-banner, .page-notice) { margin: var(--space-8) var(--space-16) 0; padding: var(--space-8) var(--space-12); }
 .app-shell:not(.app-shell--compact) .page-surface:has(> :is(.ov-page, .logs-page, .email-detail)) > .page-notice { padding: 0; }
+/* Pages that drop the page's padding once they mount (a campaign's composer and review, a support conversation) keep a
+   banner above them where a padded page puts it, so it doesn't move as they arrive or leave. */
+.page-surface:has(.campaign-compose-page, .campaign-review, > .sinbox-chat) > .standing-banner { margin-inline: var(--space-16); }
+.page-surface:has(.campaign-compose-page, .campaign-review, > .sinbox-chat) > .standing-banner:first-child { margin-top: var(--space-16); }
+.app-shell--compact .page-surface:has(.campaign-compose-page, .campaign-review, > .sinbox-chat) > .standing-banner { margin-inline: var(--page-pad); }
 .page-surface > :is(.stack, .audience-page, .ui-loading-layout) { flex: 1; }
 .page-surface > .stack { gap: var(--page-gap); }
 .page-surface > .stack > .section { margin-block: 0; }
@@ -182,6 +187,15 @@ html[data-privacy='on']:not([data-peek]) .private-field:not(:focus)::placeholder
 @media (max-width: 640px) { .onboarding-shell .agent-waiting { right: var(--space-8); bottom: calc(env(safe-area-inset-bottom) + var(--space-8)); width: calc(100vw - 2 * var(--space-8)); } }
 @media (prefers-reduced-motion: reduce) { .agent-waiting, .agent-waiting__pulse { animation: none; } }
 .standing-banner__fix { flex: none; }
+/* An announced change to the legal pages (components/PolicyBanner.tsx): one sentence of fixed text with its link in it, not
+   a problem, so not bold; Dismiss in the top right corner at every width (a phone's banners otherwise wrap their button
+   under the text). */
+.policy-banner .standing-banner__what { font-weight: var(--font-weight-regular); }
+.policy-banner .standing-banner__what a { white-space: nowrap; text-decoration-line: underline; text-decoration-thickness: from-font; text-underline-offset: .18em; }
+.standing-banner.policy-banner { flex-wrap: nowrap; }
+.policy-banner > .standing-banner__text { flex-basis: auto; }
+.policy-banner__dismiss { flex: none; align-self: flex-start; }
+@media (max-width: 899px) { .policy-banner__dismiss { margin-block: calc((var(--leading-sm) - var(--control-height-sm)) / 2); } }
 /* Below 1100 px the text wraps instead of being cut (the reserved lines are two, three on a phone); below 900 px the button drops below it. */
 @media (max-width: 1100px) {
   .standing-banner__text > p { white-space: normal; text-overflow: clip; }
@@ -189,7 +203,7 @@ html[data-privacy='on']:not([data-peek]) .private-field:not(:focus)::placeholder
   .standing-banner__text > .standing-banner__what { display: -webkit-box; height: calc(2 * var(--leading-sm)); -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
   .standing-banner__text > .standing-banner__what:has(.ui-skeleton-block) { display: flex; align-items: flex-start; padding-top: var(--space-4); }
   /* The billing banner's text is fixed, so it needs no reserved lines. */
-  .billing-banner .standing-banner__text > .standing-banner__what, .setup-banner .standing-banner__text > .standing-banner__what { display: block; height: auto; -webkit-line-clamp: unset; }
+  .billing-banner .standing-banner__text > .standing-banner__what, .setup-banner .standing-banner__text > .standing-banner__what, .policy-banner .standing-banner__text > .standing-banner__what { display: block; height: auto; -webkit-line-clamp: unset; }
 }
 @media (max-width: 899px) {
   .standing-banner { flex-wrap: wrap; align-items: flex-start; }
@@ -198,7 +212,7 @@ html[data-privacy='on']:not([data-peek]) .private-field:not(:focus)::placeholder
 }
 @media (max-width: 640px) {
   .standing-banner__text > .standing-banner__what { height: calc(3 * var(--leading-sm)); -webkit-line-clamp: 3; }
-  .billing-banner .standing-banner__text > .standing-banner__what, .setup-banner .standing-banner__text > .standing-banner__what { height: auto; -webkit-line-clamp: unset; }
+  .billing-banner .standing-banner__text > .standing-banner__what, .setup-banner .standing-banner__text > .standing-banner__what, .policy-banner .standing-banner__text > .standing-banner__what { height: auto; -webkit-line-clamp: unset; }
 }
 .skip-link { position: fixed; top: -80px; left: var(--space-24); z-index: 150; padding: var(--space-8) var(--space-12); background: var(--color-accent); color: var(--color-on-accent); border-radius: var(--radius-sm); }
 .skip-link:focus { top: var(--space-8); }

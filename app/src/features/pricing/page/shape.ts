@@ -16,14 +16,23 @@ export type Inline = string | { text: string; href: string } | { ours: string; s
 export type Text = Inline[]
 export type Table = {
   kind: 'table'
-  /** What the figures assume and where they were read: said with the table. */
+  /** What the figures assume and where they were read: said with the table. With a method, empty: the note is all in
+   *  How we compared (docs/index.ts checks it). */
   caption: Text
+  /** The full note on how the figures were read (which services, the basis, the rates, the day, the pages): in a closed
+   *  "How we compared" under the table (page.tsx), and in place of the caption in the Markdown twin (docs/doc.ts). */
+  method?: Text
   head: string[]
   rows: { cells: Text[]; mark?: boolean }[]
   /** The columns whose figures align right. */
   numeric: number[]
 }
-export type Block = { kind: 'p'; text: Text } | { kind: 'list'; items: Text[] } | Table
+/** A list's full: the longer list the Markdown twin keeps where the page shows a short one (facts.ts, briefFactsSection). */
+/** A table as a page shows it: nothing under it but its whole note, folded into "How we compared" (page.tsx; the owner:
+ *  "i don't think we need the thing that says list prices before tax"); the Markdown twin keeps the note where the caption
+ *  was (docs/doc.ts). */
+export const folded = ({ caption, ...table }: Table): Table => ({ caption: [], method: caption, ...table })
+export type Block = { kind: 'p'; text: Text } | { kind: 'list'; items: Text[]; full?: Text[] } | Table
 /** quiet: its title is for screen readers only (the price table straight under the verdict: page.tsx); a page whose
  *  only section is a table has it so without saying. */
 export type Section = { id: string; title: string; blocks: Block[]; quiet?: boolean }
@@ -54,6 +63,9 @@ export type PageDoc = {
   h1: string | Text[]
   /** The opening lines under it: the size and the day, or the figures an assistant would quote with the day. */
   answer: Text[]
+  /** The line under the heading as the page shows it, where it is shorter than answer (at most 10 words, with the day):
+   *  answer stays the Markdown twin's, the card's and llms.txt's. */
+  caption?: Text
   sections: Section[]
   questions: Question[]
   /** Every page a figure was read on, once each, with the day. */

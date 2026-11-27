@@ -116,7 +116,7 @@ Identity is `(issuer, subject)`. An issuer can assert a verified address that th
 
 ### Permissions
 
-Every operation states what it needs: `x-nightmail-permission` in `api/openapi.json`, from its row in `api/src/operation-permissions.ts`. A row records what the operation's guards enforce today: a permission and level with the scope, role or kind of credential it also needs, a person, or no credential. The docs and MCP `describe_tool` show it. The acceptance test `permission table` calls every operation with keys, keys limited to addresses or one inbox, people of each role, an owner's MCP sign-in approved for each level and agent tokens, and fails when a row admits or refuses a credential that REST does not. It then calls every scoped row on real resources inside and outside a limited key's sender domain or addresses: inside, the key must reach the handler's own answer (not a refusal, not the 404 that hides what is outside a key's limits); outside, it must be refused or hidden.
+Every registered operation states what it needs: `x-nightmail-permission` in the full contract (and in `api/openapi.json` for published operations), from its row in `api/src/operation-permissions.ts`. A row records what the operation's guards enforce today: a permission and level with the scope, role or kind of credential it also needs, a person, or no credential. The docs and MCP `describe_tool` show it. The acceptance test `permission table` calls every operation with keys, keys limited to addresses or one inbox, people of each role, an owner's MCP sign-in approved for each level and agent tokens, and fails when a row admits or refuses a credential that REST does not. It then calls every scoped row on real resources inside and outside a limited key's sender domain or addresses: inside, the key must reach the handler's own answer (not a refusal, not the 404 that hides what is outside a key's limits); outside, it must be refused or hidden.
 
 **Fails when** an operation has no `x-nightmail-permission` or an invalid one, or the table has a row for an operation that no longer exists.
 
@@ -135,6 +135,12 @@ Every statement that inserts into `sending_email_events` gives `created_at`, in 
 The abuse sample records how far it has read each workspace (`api/src/abuse.ts` `sampleBound`). It relies on this: an insert takes its write lock on the table when the statement starts, before any row is stamped, so a `clock_timestamp()` stamp is never earlier than the lock. A stamp from `now()`, `transaction_timestamp()` or `current_timestamp` (the transaction's start), from `statement_timestamp()` (just before the lock), from the column default or from another clock can become visible behind the mark and never be read. The check parses the value in `created_at`'s position, so a `clock_timestamp()` elsewhere in the statement doesn't count.
 
 **Fails when** an insert gives `created_at` anything else for accepted mail, leaves it to the default, or can't be read as `INSERT … (columns) SELECT/VALUES …`. **Fix:** stamp accepted mail with `clock_timestamp()` in the insert, or add the marker if the statement never writes type `accepted`.
+
+### Announced changes
+
+A change to the legal pages that takes effect later (`api/src/policy-changes.ts`) has the day it was announced and the day it takes effect. The pages show that day as their updated date, and the build refuses a change that takes effect less than 31 days after it (`app/legal-markdown.ts`: 30 days' notice, and a day for it to reach production). **Fails when** a pull request adds a change or edits its `announced` day to anything but the day the check runs (UTC). In the merge queue that is the day it merges, so a change written on Friday and merged on Monday fails until its day is Monday's.
+
+**Fix:** set `announced` to today. If that leaves less than 31 days before `from`, the build says so: move `from` too, and the wording that names it follows by itself. A pull request that doesn't touch the days isn't checked.
 
 ### BYO role templates
 

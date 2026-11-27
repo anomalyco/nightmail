@@ -192,7 +192,8 @@ const errorName = (error: unknown) => (error as { name?: string })?.name && (err
  * Brings Amazon's and Spamhaus's figures up to date, from the minute tick (worker.ts, runner.ts): each region's
  * GetAccount every 10 minutes, its VDM figures and each platform domain's DBL listing every hour. Each check is elected
  * once (deliverability_checks.next_at), so any number of processes run it once. Reads go out with the platform's own
- * credentials (the runtime's IAM user needs ses:GetAccount and ses:BatchGetMetricData); Gmail Postmaster Tools, every
+ * credentials (the runtime's IAM user needs ses:GetAccount and ses:BatchGetMetricData); a region's GetAccount that
+ * changed state is an Amazon account card (operator-alerts.ts amazonAccountAlert). Gmail Postmaster Tools, every
  * 6 hours, with the OAuth grant in NIGHTMAIL_POSTMASTER_CREDENTIALS when it is set (through `fetch`, which a test passes
  * in: the acceptance fixtures own the global one). Never throws: a failed check is
  * kept with its error's name, logged, and run again at its next time.
@@ -240,6 +241,8 @@ export async function refreshDeliverabilitySources(runtime: Runtime, { fetch: ge
       const update = sql`UPDATE deliverability_checks SET ${listing ? sql`held_at=coalesce(held_at,now()),` : sql``}status=${status},detail=${detail ? JSON.stringify(detail) : null}::jsonb,checked_at=now()${status === 'error' || status === 'unknown' ? sql`,next_at=least(next_at,now()+interval '15 minutes')` : sql``} WHERE kind=${row.kind} AND subject=${row.subject} AND next_at=${row.lease}::timestamptz`;
       if (listing) await runtime.db.transaction(async tx => { await tx.execute(lockLinkDomain(row.subject)); await tx.execute(update); });
       else await runtime.db.execute(update);
+      // A read of Amazon's account status that succeeded: a change of state is an operator card (operator-alerts.ts).
+      if (row.kind === 'ses' && status === 'ok' && detail) await (await import('./operator-alerts.js')).amazonAccountAlert(runtime, row.subject, detail);
     }
   } catch (error) { logError(error, { code: 'DELIVERABILITY_SOURCE_FAILED' }, 'warn'); }
 }

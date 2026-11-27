@@ -3,13 +3,13 @@ import { productName } from '../../../../../api/src/brand.ts'
 import { COMPARISONS } from '../compare/index.ts'
 import { comparisonQuestions } from '../questions.ts'
 import { dayOf, formatCount, lastChecked, money, nightmail, nightmailBill, shownSources, sourcesOf, theirPrice, type Comparison, type Usage } from '../prices.ts'
-import { factsSection, rowLines } from './facts.ts'
-import type { PageDoc, Table, Text } from './shape.ts'
+import { briefFactsSection, rowLines } from './facts.ts'
+import { folded, type PageDoc, type Table, type Text } from './shape.ts'
 import { ownPages } from '../docs/registry.ts'
 
 // A comparison (/compare/<slug>) as a page (shape.ts): the verdict first, both prices at the comparison's middle size and
 // the day they were read; then the price table, every size the vendor's own page prices; the questions (questions.ts);
-// what the figures assume and Nightmail's terms; the other comparisons of its kind; the pages read. Every figure is the
+// what the figures assume and Nightmail's terms, and the pages read, folded under the table; the vendor's other pages. Every figure is the
 // price pages' arithmetic (prices.ts), Nightmail's from the billing code.
 
 /** The comparison's three groups, as /compare lists them and each page's More links and breadcrumb name them. */
@@ -62,27 +62,27 @@ export function priceTable(c: Comparison, caption: Text, mark: number): Table {
 }
 
 export function comparisonDoc(c: Comparison): PageDoc {
-  const vendor = c.offer.vendor, v = verdictOf(c), opening = middle(c)
+  const vendor = c.offer.vendor, v = verdictOf(c), opening = middle(c), m = c.model
   // (Only what the pre-merge check asks a comparison to tell a buyer; the rate and the free allowance are the facts'.)
   const terms: Text = [`${c.assume} Monthly billing, no promotions. ${productName} is prepaid. Top-ups start at ${nightmail.minTopUp} and expire ${nightmail.expiresAfterMonths} months after purchase; received mail kept past ${nightmail.storageAfterDays} days is ${nightmail.storagePerGb} per GB a month after ${nightmail.freeStorageGb} GB free.`]
   return {
     path: c.path, title: c.title, searchTitle: c.searchTitle, description: c.description,
     h1: verdictHeading(c, v),
     answer: [[v.at]],
-    sections: [{ id: 'sizes', title: `A month at each size ${vendor} prices`, quiet: true, blocks: [priceTable(c, terms, opening)] },
-    // What Nightmail has that the vendor charges for or lacks, each row as one plain line, then the facts every page
-    // says (facts.ts).
-    factsSection(rowLines(c.rows))],
+    // (The line under the heading is answer, the verdict's size and the day: by contacts or inboxes, the count and the mail
+    // it means, perSize, since the headline's figures hold only at that mail.)
+    // The table, and under it only How we compared, closed, with the whole note and the pages read (page.tsx).
+    sections: [{ id: 'sizes', title: `A month at each size ${vendor} prices`, quiet: true, blocks: [folded(priceTable(c, terms, opening))] },
+    // What Nightmail has that the vendor charges for or lacks, in four short lines (facts.ts, briefFacts).
+    briefFactsSection(rowLines(c.rows))],
     questions: comparisonQuestions(c),
     sources: shownSources(sourcesOf(c), c.offer),
-    // The vendor's own pages first (docs/registry.ts: its pricing and alternatives pages), then the other comparisons of
-    // its kind.
+    // The vendor's own pages (docs/registry.ts: its pricing and alternatives pages), then every comparison on /compare,
+    // which lists them all (Ryan: one quiet row of at most six links).
     related: [...ownPages(c.slug).map(path => path.startsWith('/alternatives/')
       ? { title: `${vendor} alternatives`, path, line: `${productName} and the services nearest ${vendor} in price, at three sizes.` }
-      : { title: `${vendor} pricing`, path, line: `Every ${vendor} plan, and what a month costs at each size.` }), ...ORDERED.filter(other => other.focus === c.focus && other.slug !== c.slug).map(other => {
-      const o = verdictOf(other)
-      return { title: `vs ${other.offer.vendor}`, path: other.path, line: `${o.at.replaceAll('\u00a0', ' ').replace(/^Per/, 'At')}: ${productName} ${o.ours}, ${other.offer.vendor} ${o.theirs}.` }
-    })],
+      : { title: `${vendor} pricing`, path, line: `Every ${vendor} plan, and what a month costs at each size.` }),
+      { title: 'All comparisons', path: '/compare', line: `${productName} beside every email service it is compared with.` }],
     crumbs: [{ name: productName, path: '/' }, { name: 'Compare', path: '/compare' }, { name: vendor, path: c.path }],
     about: { name: vendor, url: c.offer.pricing }, modified: lastChecked(c), focus: c.focus,
     llms: `${productName} ${v.ours}, ${vendor} ${v.theirs}: ${v.at.replaceAll('\u00a0', ' ').toLowerCase()}.`,

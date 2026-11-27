@@ -54,7 +54,8 @@ if(process.argv[1] && import.meta.url===pathToFileURL(process.argv[1]).href){
  const [action,...files]=process.argv.slice(2);
  if(action==='inventory') {
    const {createOpenApiApp}=await import('../src/app.js'), app=await createOpenApiApp();
-   const open=JSON.parse(readFileSync(new URL('../openapi.json',import.meta.url),'utf8')), rows=new Map();
+   const {createRegisteredDocument}=await import('../src/openapi-docs.js');
+   const open=createRegisteredDocument(app), rows=new Map();
    for(const [route,pathItem] of Object.entries(open.paths)) for(const [v,o] of Object.entries(pathItem)) {
      const method=v.toUpperCase(); if(!verbs.has(method) || !o.operationId) continue;
      rows.set(method+' '+route,{method,route,operation:o.operationId,group:o.tags[0],permission:o['x-nightmail-permission'],surface:'openapi'});

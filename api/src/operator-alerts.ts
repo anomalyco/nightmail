@@ -3,6 +3,7 @@ import { ApiError, log, type DbExecutor, type JobHandler, type Runtime } from '.
 import { retryDatabaseFailures } from './jobs.js';
 import { hostedAllowance } from './hosted-sending.js';
 import { postSlack } from './reputation-alerts.js';
+import { mentionFor, sendMentioned } from './operator-mention.js';
 
 // Operator alerts (hosted): one Slack card when a customer may be in trouble, posted to OPERATOR_SLACK_WEBHOOK_URL.
 // Each moment queues an operator.alert job in one statement that never fails what it reports; the job posts through
@@ -21,6 +22,13 @@ import { postSlack } from './reputation-alerts.js';
 //
 // The database disk card is the exception to the queue: it must post while the database refuses writes, so it never
 // touches it (src/disk-alert.ts).
+//
+// Amazon account is the installation's view of Amazon's own account status for each region (GetAccount, read every 10
+// minutes for Glass: glass-deliverability.ts): one card each time a region's state changes, healthy being HEALTHY with
+// sending enabled. A failed read changes nothing; a region's first reading posts only if it isn't healthy.
+//
+// Paused, Amazon paused and Amazon account getting worse mention the operator (src/operator-mention.ts), when production's
+// configuration names one; every other card, and every card without it, posts as it always has.
 
 const JOB = 'operator.alert', PLATFORM = 'platform';
 const CARDS = {
@@ -35,9 +43,10 @@ const CARDS = {
   signups_full: { emoji: ':no_entry:', label: 'Sign-ups are full' },
   blocklisted: { emoji: ':rotating_light:', label: 'Blocklist replies' },
   support_ai_cost: { emoji: ':money_with_wings:', label: 'Support AI cost' },
+  amazon_account: { emoji: ':cloud:', label: 'Amazon account' },
 } as const;
 // The installation's own cards, about no one workspace: queued under 'platform' and opening the Operator area.
-const PLATFORM_KINDS = new Set<string>(['share_full', 'signin_slow', 'signups_low', 'signups_full', 'support_ai_cost']);
+const PLATFORM_KINDS = new Set<string>(['share_full', 'signin_slow', 'signups_low', 'signups_full', 'support_ai_cost', 'amazon_account']);
 const RAISE = 'Raise the limit in Operator → Sign-ups.';
 type Kind = keyof typeof CARDS;
 const REASONS = { bounces: 'too many bounces', complaints: 'too many spam complaints', screen: 'too much mail flagged as spam', review: 'after a review' } as const;
@@ -64,6 +73,9 @@ const count = (n: unknown) => Number(n).toLocaleString('en-US');
 const share = (slow: number, mail: number) => mail / slow >= 2 ? `1 in ${Math.round(mail / slow)}` : slow >= mail ? 'All' : 'Most';
 const whole = (v: unknown) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 const cents = (n: number) => `$${(n / 100).toFixed(2)}`;
+/** Amazon's account status for a region in words: "on probation", "shut down, sending disabled", "healthy again". */
+const accountWords = (p: Record<string, unknown>) => p.healthy === true ? 'healthy again'
+  : [p.enforcement === 'PROBATION' ? 'on probation' : p.enforcement === 'SHUTDOWN' ? 'shut down' : null, p.sending === false ? 'sending disabled' : null].filter(Boolean).join(', ');
 
 /** One card: an emoji, a bold label and a few words, an Open button, and the same words as the plain-text fallback. */
 export const slackCard = (card: { emoji: string; label: string } | null, words: string, url: string) => ({
@@ -88,10 +100,11 @@ export function operatorCard(publicUrl: string, p: Record<string, unknown>, work
     : kind === 'signups_full' && whole(p.limit) ? `All ${count(p.limit)} places are taken. ${RAISE}`
     : kind === 'blocklisted' ? `${name}: a campaign paused because receiving servers named a blocklist.`
     : kind === 'support_ai_cost' && whole(p.cents) && whole(p.lineCents) ? `${cents(Number(p.cents))} since midnight UTC, past the ${cents(Number(p.lineCents))} daily line. Nothing stops: the turn caps still apply.`
+    : kind === 'amazon_account' && typeof p.region === 'string' && /^[a-z]{2}(-[a-z]+)+-\d$/.test(p.region) ? `${typeof p.place === 'string' && p.place ? `${p.place} (${p.region})` : p.region}: ${accountWords(p)}.`
     : null;
   if (!words) return null;
   const origin = publicUrl.replace(/\/$/, '');
-  const url = kind === 'signups_low' || kind === 'signups_full' ? `${origin}/operator?view=signups` : kind === 'support_ai_cost' ? `${origin}/glass` : PLATFORM_KINDS.has(kind) ? `${origin}/operator` : `${origin}/operator/workspaces/${encodeURIComponent(workspace.id)}`;
+  const url = kind === 'signups_low' || kind === 'signups_full' ? `${origin}/operator?view=signups` : kind === 'support_ai_cost' ? `${origin}/glass` : kind === 'amazon_account' ? `${origin}/glass?view=deliverability` : PLATFORM_KINDS.has(kind) ? `${origin}/operator` : `${origin}/operator/workspaces/${encodeURIComponent(workspace.id)}`;
   return slackCard(card, words, url);
 }
 
@@ -262,9 +275,13 @@ const deliver: JobHandler = async (runtime, payload, job) => {
   // AWS's region code, shown by its place name (us-east-2: Ohio).
   const region = payload.kind === 'amazon_paused' && typeof payload.region === 'string' && /^[a-z]{2}(-[a-z]+)+-\d$/.test(payload.region)
     ? (await import('./byo-regional.js')).regionLabels[payload.region] ?? payload.region : null;
-  const card = operatorCard(runtime.config.publicUrl, { ...payload, ...(payload.kind === 'amazon_paused' ? { region } : {}) }, { id: job.workspaceId, name });
+  const place = payload.kind === 'amazon_account' && typeof payload.region === 'string' ? (await import('./region-labels.js')).regionLabels[payload.region] ?? null : null;
+  const card = operatorCard(runtime.config.publicUrl, { ...payload, ...(payload.kind === 'amazon_paused' ? { region } : {}), ...(place ? { place } : {}) }, { id: job.workspaceId, name });
   if (!card) throw new ApiError(500, 'JOB_PAYLOAD_INVALID', 'Invalid operator alert job.');
-  await postSlack(url, card, 'OPERATOR_ALERT_FAILED');
+  // Mentioned or not, decided once for this job (src/operator-mention.ts). Amazon account mentions only when it got worse.
+  const account = payload.kind === 'amazon_account';
+  const mention = !account || payload.worse === true ? await mentionFor(runtime, { id: job.id, kind: String(payload.kind), subject: account ? String(payload.region) : job.workspaceId }) : null;
+  await sendMentioned(runtime, message => postSlack(url, message, 'OPERATOR_ALERT_FAILED'), card, mention, job.id);
 };
 export const operatorAlertJobs: Record<string, JobHandler> = { [JOB]: retryDatabaseFailures(deliver) };
 
@@ -274,4 +291,37 @@ export const operatorAlertJobs: Record<string, JobHandler> = { [JOB]: retryDatab
  */
 export async function blocklistAlert(db: DbExecutor, workspaceId: string, campaignId: string) {
   return queue(db, workspaceId, 'blocklisted', {}, { daily: false, episode: campaignId });
+}
+
+/** The enforcement statuses GetAccount reports. A read with none of them is no reading. */
+const ENFORCEMENT = new Set(['HEALTHY', 'PROBATION', 'SHUTDOWN']);
+/** A region's state: healthy, or the enforcement status and whether sending is disabled ("PROBATION", "SHUTDOWN+sending_disabled"). */
+const accountState = (enforcement: string, sending: boolean) => enforcement === 'HEALTHY' && sending ? 'healthy' : `${enforcement}${sending ? '' : '+sending_disabled'}`;
+/** How bad a state is: healthy; not healthy but sending; or sending stopped (shut down or disabled). */
+const accountRank = (state: string) => state === 'healthy' ? 0 : /^SHUTDOWN|\+sending_disabled$/.test(state) ? 2 : 1;
+/**
+ * Amazon account: the 10-minute GetAccount read for a region (glass-deliverability.ts refreshDeliverabilitySources), only
+ * a read that succeeded. Queues a card when the region's state differs from the last one told (deliverability_checks.told),
+ * in the transaction that records it, so a card that can't be queued leaves it untold for the next read. The first
+ * reading is told without a card when healthy. A worse state than the last told one mentions the operator. A read without
+ * a recognised enforcement status (ENFORCEMENT) is no reading: no card, nothing told. Never throws.
+ */
+export async function amazonAccountAlert(runtime: Runtime, region: string, detail: Record<string, unknown>) {
+  const enforcement = typeof detail.enforcement === 'string' && ENFORCEMENT.has(detail.enforcement) ? detail.enforcement : null;
+  if (!enforcement) return false;
+  const sending = detail.sendingEnabled !== false, state = accountState(enforcement, sending);
+  try {
+    return await runtime.db.transaction(async tx => {
+      const { rows: [row] } = await tx.execute<{ told: string | null }>(sql`SELECT told FROM deliverability_checks WHERE kind='ses' AND subject=${region} FOR UPDATE`);
+      if (!row || row.told === state) return false;
+      await tx.execute(sql`UPDATE deliverability_checks SET told=${state} WHERE kind='ses' AND subject=${region}`);
+      if ((row.told === null && state === 'healthy') || !runtime.config.operatorSlackWebhookUrl) return false;
+      const worse = accountRank(state) > accountRank(row.told ?? 'healthy');
+      if (await queue(tx, PLATFORM, 'amazon_account', { region, enforcement, sending, healthy: state === 'healthy', worse }, { daily: false, savepoint: true, episode: `${region}:${Date.now()}` })) return true;
+      throw new Error('not queued');
+    });
+  } catch {
+    log('warn', { code: 'OPERATOR_ALERT_NOT_QUEUED', kind: 'amazon_account' });
+    return false;
+  }
 }

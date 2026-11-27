@@ -3,6 +3,7 @@ title: Acceptable Use Policy
 description: What you may and may not do with Nightmail, the published sending limits and enforcement thresholds, and how to report abuse.
 updated: 26 November 2026
 effective: 22 November 2026
+changes: abuseHolds
 ---
 
 Nightmail shares sending infrastructure and reputation among its customers, so one sender's spam hurts everyone's delivery. This policy says what you may and may not do with Nightmail. It's part of the [Terms of Service](/legal/terms), and it applies to you, everyone in your workspaces, and every Agent (API key, MCP client, AI agent, inbox key or app password) that acts for you.
@@ -97,7 +98,9 @@ Most problems are handled by Nightmail's automatic sender score. It moves throug
 3. **Restrict.** We hold your **marketing** mail and pause campaigns. Transactional mail (receipts, password resets) keeps flowing. You can resume from the dashboard after fixing the cause, at a reduced rate at first.
 4. **Pause.** **All sending stops.** Your inboxes, receiving and dashboard keep working. Queued mail waits 72 hours, then is canceled. Some pauses you can lift yourself; others need our review.
 
-The [thresholds below](#sending-limits-and-thresholds) say exactly when each step happens. Each pause leaves a strike for 90 days, and repeated pauses make recovery slower.
+The [thresholds below](#sending-limits-and-thresholds) say exactly when each step happens, except a hold for review. Each pause except a hold for review leaves a strike for 90 days, and repeated pauses make recovery slower.
+
+**Hold for review{{before abuseHolds:, from {{date abuseHolds}}}}.** When several workspaces that are new senders or below good standing ([section 10](#score-and-daily-limit)) send the same or nearly the same message to many people outside those workspaces, we may pause their sending automatically until a person has reviewed it. A hold for review leaves no strike, and a person reviews every one. See the [Terms of Service, section 8.2](/legal/terms#the-enforcement-ladder).
 
 **Serious abuse skips the ladder.** For phishing, malware, fraud, illegal content, or when Amazon pauses your sending, we may pause or close the account at once, cancel queued mail, suppress addresses, keep evidence, and report to the authorities where the law requires.
 
@@ -120,6 +123,7 @@ These are the current limits and thresholds for Hosted sending. We may change th
 - A new workspace's first 500 real recipients are its evaluation, transactional or marketing. It can send no more until their delivery results are in, about an hour after the 500th. Its score is then the quality of those 500: good mail has no daily limit from then on.
 - For 24 clean hours after the evaluation, sending grows: up to 1,000 recipients an hour across your workspaces at first, then up to twice the distinct recipients of the last hour whose results are in and clean. A good sender doubles every hour; mail over it waits in the queue.
 - The score is recomputed hourly from your mail of the last 30 days, recent days counting most. A limit appears only when the score falls under 73, and lifts again at 75.
+- A workspace is a **new sender** during its evaluation and the growth after it. After that, it's in **good standing** while it has no daily limit and isn't at the Warn, Restrict or Pause step ([section 9](#how-we-enforce-this-policy)).
 - The per-minute pace protects the shared infrastructure, so one sender can't crowd out the others.
 - After the evaluation, under a daily limit, marketing can use it except a reserve for transactional mail: the larger of 100 or 10% of the limit. During the evaluation all of it may be marketing.
 
@@ -145,7 +149,7 @@ Nightmail checks every 10 minutes. Each feedback or screen line needs a count an
 | Complaints | 0.05% and at least 2 in 24 hours, or 0.05% and at least 3 in 7 days | 0.1% and at least 3 in 24 hours | 0.3% and at least 5 in 24 hours, or 0.15% and at least 10 in 7 days |
 | Hard bounces | 2% and at least 10 in 24 hours, or 1.5% and at least 10 in 7 days | Marketing 4% and at least 25, or any mail 8% and at least 50, in 24 hours | Transactional mail 5% and at least 50 in 24 hours |
 | Spam-screen rejections ÷ screened | 2% and at least 3 in 24 hours | 5% and at least 10 in 24 hours | 10% and at least 25 in 24 hours |
-| External | – | – | Amazon paused the workspace's sending, or confirmed abuse |
+| External | – | – | Amazon paused the workspace's sending, confirmed abuse, or{{before abuseHolds:, from {{date abuseHolds}},}} a [hold for review](#how-we-enforce-this-policy) |
 
 ### Campaign list check
 

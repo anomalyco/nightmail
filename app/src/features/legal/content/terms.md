@@ -3,6 +3,7 @@ title: Terms of Service
 description: The agreement between you and Anomaly for using Nightmail: accounts, prepaid billing, refunds and credit expiry, sending limits, your data, and how disputes are resolved.
 updated: 26 November 2026
 effective: 20 November 2026
+changes: abuseHolds
 ---
 
 These Terms of Service (the "Terms") are a binding agreement between you and **Anomaly Innovations, Inc.** ("Anomaly", "we", "us"). They cover Nightmail: the hosted email service at nightmail.dev, its API, dashboard, SDK, MCP server, and IMAP and SMTP access (together, the "Service").
@@ -161,7 +162,9 @@ Nightmail checks sending quality about every 10 minutes. Each step needs both a 
 | **Restrict** | A banner and an email. | **Marketing mail is held** and campaigns pause. Transactional mail keeps flowing. |
 | **Pause** | A red banner and an email. | **All sending stops.** Receiving, inboxes and the dashboard keep working. Mail already queued is held for 72 hours, then canceled. |
 
-A pause happens for high complaint or spam-screen rates, high bounce rates on transactional mail, confirmed abuse, or when Amazon pauses your workspace's sending. Otherwise, bounces alone only hold marketing.
+A pause happens for high complaint or spam-screen rates, high bounce rates on transactional mail, confirmed abuse, when Amazon pauses your workspace's sending, or{{before abuseHolds:, from {{date abuseHolds}},}} as a **hold for review**. Otherwise, bounces alone only hold marketing.
+
+**Hold for review{{before abuseHolds:, from {{date abuseHolds}}}}.** When several workspaces that are new senders or below good standing ([Acceptable Use Policy, section 10](/legal/acceptable-use#score-and-daily-limit)) send the same or nearly the same message to many people outside those workspaces, we may pause their sending automatically until a person has reviewed it ([Privacy Policy, section 5.7](/legal/privacy#linking-related-accounts)). A hold for review leaves no strike, and a person reviews every one.
 
 ### 8.3 Other reasons we may limit or suspend
 
@@ -180,7 +183,8 @@ We'll tell you why and what to do, unless the law or an active investigation pre
 - **Restrict:** an owner can resume marketing from the dashboard after 24 hours, once every 14 days, at 50% of the previous allowance for 48 hours.
 - **Pause caused by transactional bounces:** an owner can resume once every 30 days, at 50% of the previous limit for 48 hours.
 - **Any other pause** needs our review.
-- Each pause leaves a **strike** for 90 days. A second strike limits you to 50% for 7 days; a third means every resume needs our review.
+- **Hold for review** ({{before abuseHolds:from {{date abuseHolds}}, }}[section 8.2](#the-enforcement-ladder)): a person reviews every one; you don't need to ask. When it's lifted, sending resumes at the limit you had before.
+- Each pause except a hold for review leaves a **strike** for 90 days. A second strike limits you to 50% for 7 days; a third means every resume needs our review.
 - **Appeals:** use Help in the dashboard, or email [support@nightmail.dev](mailto:support@nightmail.dev). A person at Anomaly reviews every appeal. We aim to respond within one business day.
 
 ## 9. Your data

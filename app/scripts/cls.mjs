@@ -80,7 +80,7 @@ if (!Number.isSafeInteger(shards) || shards < 1 || (exclusive ? shards < 2 : !Nu
 const began = Date.now();
 const elapsed = () => `${((Date.now() - began) / 1000).toFixed(1)}s`;
 
-// [name, path, { user, from, click, row, switchTo, support, notes, panel, dialog, tab, still, alone, phoneOnly, notFound, waitlist }]. The in-app navigation starts on `from` and clicks the
+// [name, path, { user, from, click, row, switchTo, support, notes, panel, policyNotice, dialog, tab, still, alone, phoneOnly, notFound, waitlist }]. The in-app navigation starts on `from` and clicks the
 // control whose text starts with `click`, the table row containing `row`, picks the workspace `switchTo` in the account
 // switcher, or else a link to `path`; with none of those (pages reached from a dropdown menu) it pushes `path` through
 // the router's history. It must land on `path`. `support` opens the support chat first (`'menu'`: from the workspace menu's
@@ -88,6 +88,7 @@ const elapsed = () => `${((Date.now() - began) / 1000).toFixed(1)}s`;
 // `tab` clicks the tab whose text starts with it once the page has settled, and the measurement covers both;
 // `phoneOnly` measures a page in the phone pass alone (a control only a phone shows); `notFound` is a page that must say "Page not found";
 // `waitlist` is the address the refused sign-in's cookie names; `panel` is Overview's saved detail-column choice;
+// `policyNotice` is an announced legal change whose dashboard notice this browser dismissed (components/PolicyBanner.tsx);
 // `skipped` is a workspace whose onboarding domain step this browser skipped (data/onboarding.ts); `start` is
 // [workspace, how this browser left Overview's get-started strip for it] (features/overview/first-run.tsx); `wide`
 // measures the page on a 3440 × 1440 1x screen instead of the 1440 × 900 desktop.
@@ -116,6 +117,8 @@ const pages = ids => [
   ['Overview · stream', '/overview?stream=marketing', {}],
   // The detail column hidden (features/overview/panel.ts): the main column takes its width from the first paint.
   ['Overview · panel hidden', '/overview', { from: '/logs', panel: 'hidden' }],
+  // Until an announced legal change takes effect its notice is on every page (api/src/policy-changes.ts); dismissed, it isn't.
+  ['Overview · policy notice dismissed', '/overview', { from: '/logs', policyNotice: 'abuseHolds' }],
   ['Logs · from an Overview tile', '/logs?view=sent&status=bounced&range=24h', { from: '/overview', click: 'Bounced' }],
   // "/" is the homepage signed in too: its button opens Overview (cold, then in the app).
   ['Homepage · signed in', '/', { still: true }],
@@ -546,6 +549,9 @@ const phonePages = new Set([
   'Overview · range',
   'Overview · stream',
   'Overview · panel hidden',
+  'Overview · policy notice dismissed',
+  // The policy notice over the standing and billing banners, as a phone stacks them.
+  'Overview · restricted',
   'Logs · from an Overview tile',
   'Homepage · signed in',
   'Overview · from the homepage',
@@ -1020,6 +1026,8 @@ async function measure(browser, job, fx) {
     if (job.start) await context.addInitScript(([workspace, value]) => { try { localStorage.setItem(`nightmail.overview.start.${workspace}`, value); } catch {} }, job.start);
     // Overview's detail column hidden, as its toggle leaves it (features/overview/panel.ts).
     if (job.panel) await context.addInitScript(panel => { try { localStorage.setItem('nightmail.overview-panel', panel); } catch {} }, job.panel);
+    // An announced legal change's notice dismissed in this browser (components/PolicyBanner.tsx).
+    if (job.policyNotice) await context.addInitScript(change => { try { localStorage.setItem('nightmail.policy-notice', change); } catch {} }, job.policyNotice);
     page = await context.newPage();
     net = network(page);
     page.on('request', request => {
@@ -1641,14 +1649,14 @@ try {
   console.log(`${elapsed()} seeded`);
   const jobs = [];
   const passes = [['desktop', 'light'], ['desktop', 'dark'], ...process.env.CLS_PHONE === '0' ? [] : [['phone', 'light']]];
-  for (const [pass, scheme] of passes) for (const [name, path, { user = 'dana', from, click, row, switchTo, support, live, leave, notes, disclose, dialog, tab, menu, still, alone, phoneOnly, notFound, waitlist, guard, panel, skipped, step, start, wide, firstTouch, lands }] of television ? televisionPages : pages(ids)) {
+  for (const [pass, scheme] of passes) for (const [name, path, { user = 'dana', from, click, row, switchTo, support, live, leave, notes, disclose, dialog, tab, menu, still, alone, phoneOnly, notFound, waitlist, guard, panel, policyNotice, skipped, step, start, wide, firstTouch, lands }] of television ? televisionPages : pages(ids)) {
     if (only && !only.test(name) || pass === 'phone' && !television && !phonePages.has(name) || phoneOnly && pass !== 'phone') continue;
     // `wide` pages take the desktop passes at 3440 × 1440.
     const device = wide && pass === 'desktop' ? 'wide' : pass;
     const slug = `${name}-${device === 'phone' ? 'phone' : scheme}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const load = { name, path, user, scheme, device, support, live, leave: leave && device === 'desktop' && scheme === 'light', notes, panel, skipped, step, start, disclose, dialog, tab, menu, still, alone, notFound, waitlist, guard: guard && device === 'desktop' && scheme === 'light' || guard === 'sign-in-press' && device === 'phone' ? guard : undefined, firstTouch, lands, mode: 'load', slug: slug + '-load' };
+    const load = { name, path, user, scheme, device, support, live, leave: leave && device === 'desktop' && scheme === 'light', notes, panel, policyNotice, skipped, step, start, disclose, dialog, tab, menu, still, alone, notFound, waitlist, guard: guard && device === 'desktop' && scheme === 'light' || guard === 'sign-in-press' && device === 'phone' ? guard : undefined, firstTouch, lands, mode: 'load', slug: slug + '-load' };
     jobs.push(load);
-    if (from) jobs.push({ name, path, user, from, click, row, switchTo, support, notes, panel, skipped, step, start, still, alone, scheme, device, mode: 'in-app', slug: slug + '-in-app' });
+    if (from) jobs.push({ name, path, user, from, click, row, switchTo, support, notes, panel, policyNotice, skipped, step, start, still, alone, scheme, device, mode: 'in-app', slug: slug + '-in-app' });
   }
   // Multi-step jobs (Support chat, live rules, Overview's full warm-up) start first so none trails alone at the end.
   const weight = job => (job.support ? 4 : 0) + (job.live ? 2 : 0) + (job.name === 'Overview' && job.mode === 'load' ? 3 : 0);

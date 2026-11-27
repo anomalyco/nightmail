@@ -28,6 +28,7 @@ try {
   let sharedSetup: Promise<void> | undefined, lastSharedSetup = 0;
   let publicStats: Promise<void> | undefined, lastPublicStats = 0;
   let display: Promise<void> | undefined, lastDisplay = 0;
+  let sesCounts: Promise<void> | undefined;
   let health: Promise<unknown> | undefined, lastHealth = 0;
   let hourly: Promise<unknown> | undefined, sentRetention: Promise<unknown> | undefined, lastSentRetention = 0;
   // In-process pacing state per account/region. Run one runner per installation (or split
@@ -102,6 +103,8 @@ try {
         // queues here: the jobs table is the queue. This process's own counts (its jobs' database errors) go first.
         if (!health && Date.now() - lastHealth >= 60_000) {
           lastHealth = Date.now();
+          if (!sesCounts && runtime.config.multiTenant && runtime.config.liveEnabled)
+            sesCounts = import('./ses-quota-health.js').then(m => m.sampleSesCounts(runtime)).catch(error => logError(error, { code: 'SES_SAMPLER_FAILED' }, 'warn')).finally(() => { sesCounts = undefined; });
           health = flushCounters(runtime.db).then(() => healthTick(runtime)).finally(() => { health = undefined; });
         }
         // GET /v1/public/stats serves only what this writes. In the background, so dispatch never waits on it.
@@ -146,7 +149,7 @@ try {
         await setTimeout(5000);
       }
     }
-  } finally { stopped=true;await facets;await hooks;await general;await sampler;await sharedSetup;await publicStats;await display;await health;await hourly;await sentRetention; await listener?.end(); await close(); }
+  } finally { stopped=true;await facets;await hooks;await general;await sampler;await sharedSetup;await publicStats;await display;await health;await sesCounts;await hourly;await sentRetention; await listener?.end(); await close(); }
 } catch (error) {
   logError(error, { code: error instanceof ApiError ? error.code : 'STARTUP_FAILED' });
   process.exitCode = 1;

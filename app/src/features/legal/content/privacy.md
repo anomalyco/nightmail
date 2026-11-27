@@ -3,6 +3,7 @@ title: Privacy Policy
 description: How Anomaly handles personal data in Nightmail: what we collect about customers, how we process the mail customers send and receive, screening and AI, retention, and your rights.
 updated: 26 November 2026
 effective: 20 November 2026
+changes: abuseHolds
 ---
 
 This policy explains how **Anomaly Innovations, Inc.** ("Anomaly", "we", "us") handles personal data in **Nightmail**, the email service at nightmail.dev: its website, API, dashboard, SDK, MCP server, and IMAP and SMTP access.
@@ -68,7 +69,7 @@ Customers can send their data to places they choose: their webhooks, Slack or Di
 | --- | --- | --- |
 | Provide the service: sign you in, run workspaces, send and receive mail as customers instruct | Account data; customer mail as processor | Contract |
 | Billing: take payments, keep the balance, send receipts and notices, handle refunds and disputes | Billing and usage data | Contract; legal obligation (tax and accounting records) |
-| Security, fraud and abuse prevention: spam screening, sender scores and limits, card-fraud checks, noticing related accounts, investigating abuse reports | Usage data; abuse and fraud signals; screening results; message metadata and content as screened or fingerprinted ([section 5](#automated-screening-and-ai)) | Legitimate interests (protecting recipients, customers and our infrastructure) |
+| Security, fraud and abuse prevention: spam screening, sender scores and limits, card-fraud checks, noticing related accounts, {{before abuseHolds: from {{date abuseHolds}} }}holds for review ([section 5.7](#linking-related-accounts)), investigating abuse reports | Usage data; abuse and fraud signals; screening results; message metadata and content as screened or fingerprinted ([section 5](#automated-screening-and-ai)) | Legitimate interests (protecting recipients, customers and our infrastructure) |
 | Support, including the AI support agent | Account data; support conversations; message content only with your permission | Contract; consent for message content |
 | Service and policy notices | Contact details | Contract; legitimate interests |
 | Product news and service status emails to customers | Contact details | Legitimate interests (telling customers about the service they use). You can unsubscribe at any time. |
@@ -103,7 +104,8 @@ The classifier is **Jev**, from **TypeSafe AI**. Nightmail calls TypeSafe's API 
 ### 5.4 People and automated decisions
 
 - Anomaly staff who review abuse see a workspace's score history, bounce and complaint counts by recipient domain, and, for the last 7 days, the **subject line (first 120 characters) and score** of each rejected message. They don't see message bodies.
-- A workspace can ask for a person to review any warning, hold or pause (see the [Terms of Service](/legal/terms#getting-back-and-appeals)).
+- A workspace can ask for a person to review any warning, hold or pause, and tell us why it thinks the decision is wrong (see the [Terms of Service](/legal/terms#getting-back-and-appeals)).
+- **Holds for review.** {{before abuseHolds: From {{date abuseHolds}}, abuse monitoring}}{{after abuseHolds: Abuse monitoring}} can pause a workspace's sending automatically in one case ([section 5.7](#linking-related-accounts)). A person reviews every such hold, whether or not you ask.
 - These decisions concern a customer's sending account, not the people in the customer's mail.
 
 ### 5.5 Training
@@ -120,14 +122,21 @@ The classifier is **Jev**, from **TypeSafe AI**. Nightmail calls TypeSafe's API 
 
 ### 5.7 Linking related accounts
 
-**Abuse monitoring started on 21 November 2026 at 15:30 UTC**, as named in [section 2](#data-about-our-customers). It is monitor-only: it doesn't block, pause or limit accounts by itself.
+**Abuse monitoring started on 21 November 2026 at 15:30 UTC**, as named in [section 2](#data-about-our-customers). {{before abuseHolds: Before {{date abuseHolds}}, it is monitor-only: it doesn't block, pause or limit accounts by itself. From {{date abuseHolds}} at 00:00 UTC, it}}{{after abuseHolds: It}} can pause sending in one case, a **hold for review**, described below. Otherwise it doesn't block, pause or limit accounts by itself.
 
-- **Why.** To notice one person or operation using several accounts: to send spam or commit payment fraud through more than one, to come back after a pause, or to multiply the free allowance.
+- **Why.** To notice one person or operation using several accounts: to send spam or commit payment fraud through more than one, to come back after a pause, or to multiply the free allowance. {{before abuseHolds:From {{date abuseHolds}}, also}}{{after abuseHolds:Also}} to stop the same mail going out from several workspaces at once while a person looks at it (the hold for review below).
 - **What we compare.** The abuse and fraud signals of accounts ([section 2](#data-about-our-customers)). For mail that Amazon accepted from Nightmail's shared (Hosted) sending pool, we also take **fingerprints** from a small sample of messages: a keyed numeric summary of the wording, and keyed codes of the domains the message links to and is sent from. We don't fingerprint mail sent through your own AWS account, mail that wasn't sent (still scheduled, or cancelled, suppressed or rejected), or any message or campaign created before monitoring started.
 - **This compares customers with each other.** Signals and fingerprints from different workspaces are kept together so that equal values can be found. It's the one place where data taken from your workspace is compared with other customers'. No customer can see anything about another.
 - **What these records hold.** No message text, subject, recipient or address. A fingerprint can't be turned back into a message. Because we hold the key, we can tell whether a message or domain we already have matches one. The messages themselves stay in your sending log for 30 days, as before.
 - **Who sees it.** When accounts share signals, Anomaly staff who review abuse can see which accounts look related and which kinds of signal they share, never the values behind the codes.
-- **A person decides.** Nothing is blocked, paused or limited automatically because accounts look related. A workspace can ask for a review as in [section 5.4](#people-and-automated-decisions).
+{{before abuseHolds: - **A person decides.** Before {{date abuseHolds}}, nothing is blocked, paused or limited automatically because accounts look related. A workspace can ask for a review as in [section 5.4](#people-and-automated-decisions).
+}}- **Hold for review{{before abuseHolds:, from {{date abuseHolds}}}}.**
+  - **When.** If several workspaces that are new senders or below good standing ([Acceptable Use Policy, section 10](/legal/acceptable-use#score-and-daily-limit)) send the same or nearly the same message to many people outside those workspaces, we may pause their sending automatically, without a person deciding first.
+  - **What it does.** Sending stops, as in any pause ([Terms, section 8.2](/legal/terms#the-enforcement-ladder)). Receiving, inboxes and the dashboard keep working, and nothing in the workspace is deleted. Mail already queued waits up to 72 hours; if the hold is still on then, that mail is canceled.
+  - **What it isn't.** A hold isn't a finding that you broke our rules. It leaves no strike ([Terms, section 8.4](/legal/terms#getting-back-and-appeals)), and it never closes an account or workspace.
+  - **How you're told.** Owners and admins get an email, and the dashboard shows that sending is held for review.
+  - **Review.** A person at Anomaly reviews every hold and decides whether to lift it. You don't need to ask, but you can tell us more at any time: use **Help** in the dashboard or email [support@nightmail.dev](mailto:support@nightmail.dev). When a hold is lifted, sending resumes at the limit the workspace had before.
+  - **What doesn't cause a hold.** Accounts aren't held, limited or closed automatically because they look related in other ways, such as sharing a network, a payment card or the domain of a sign-in email address. A workspace that is no longer a new sender and is in good standing is never held.
 - **Your choices.** You can ask what these records hold about your account, object to it, or ask us to erase it ([section 11](#your-rights)). We don't use these signals for anything else, and we don't sell them or share them outside Anomaly.
 
 ## 6. Support access
@@ -220,7 +229,11 @@ Nightmail is a business service and isn't for children. You must be at least **1
 ## 14. Changes
 
 We'll post updates on this page and tell customers by email or in the dashboard at least 30 days before material changes take effect.
+{{before abuseHolds:
+**Announced changes.**
 
+- **{{date abuseHolds}}:** holds for review ([section 5.7](#linking-related-accounts)), with matching changes to the [Terms of Service](/legal/terms#the-enforcement-ladder) and the [Acceptable Use Policy](/legal/acceptable-use#how-we-enforce-this-policy). Announced on {{announced abuseHolds}}.
+}}
 ## 15. Contact
 
 Anomaly Innovations, Inc.\

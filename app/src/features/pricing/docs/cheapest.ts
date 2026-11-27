@@ -2,8 +2,8 @@
 import { productName, publicOrigin } from '../../../../../api/src/brand.ts'
 import { fitWords, formatCount, money, nightmail, quote, shownSources, type Source } from '../prices.ts'
 import { billAt, ORDERED } from '../page/comparison.ts'
-import { factsSection } from '../page/facts.ts'
-import { plain, type Doc, type Section, type Table, type Text } from './doc.ts'
+import { briefFactsSection } from '../page/facts.ts'
+import { folded, plain, type Doc, type Section, type Table, type Text } from './doc.ts'
 import { checkedOn, DASH, month, spelled } from './alternatives.ts'
 
 // /cheapest-email-api: the search "cheapest email API", answered with what the data shows and no more. The comparisons
@@ -53,8 +53,8 @@ export function cheapestEmailApi(): Doc {
   const rule = `the ${spelled(Math.min(SHOWN_CHEAPEST, priced.length))} lowest, and any priced the same as the last of them`
   const visibleNote: Text = [`${scope} The table shows the ${shown.length} lowest of those with a price read at ${at} emails a month (${rule}); `, { text: 'the comparisons page', href: '/compare' }, ` has every one. ${claim} ${terms} ${basis}, checked ${when}; each name links to its comparison and the page it was read on.${dash(shown)}`]
   const sections: Section[] = [
-    { id: 'apis', title: `Email APIs: a month at ${CHEAPEST_SIZES.map(formatCount).join(', ')} emails`, quiet: true, blocks: [table(shown, visibleNote)] },
-    factsSection(),
+    { id: 'apis', title: `Email APIs: a month at ${CHEAPEST_SIZES.map(formatCount).join(', ')} emails`, quiet: true, blocks: [folded(table(shown, visibleNote))] },
+    briefFactsSection(),
   ]
   const read = (rows: (typeof group)[number][]) => rows.flatMap(({ c, bills }) => shownSources(bills.flatMap(b => { const q = quote(c.offer, b.u); return q.kind === 'price' ? [q.tier.source, ...q.payg?.tier.overageSource ? [q.payg.tier.overageSource] : []] : [] }), c.offer))
   const cited = read(shown), all: Source[] = [...new Map(read(group).map(source => [source.url, source])).values()]
@@ -72,7 +72,7 @@ export function cheapestEmailApi(): Doc {
     `Email API prices, checked ${when}: ${productName} and ${n} email-sending APIs it compared itself with. ${at} emails a month: ${productName} ${middle.ours}, others from ${money(lowestAll)}.`,
   ], 160, 140)
   const doc: Doc = {
-    path, title: 'Email API prices', searchTitle, description, h1, answer: [[caption]], sections, questions: [],
+    path, title: 'Email API prices', searchTitle, description, h1, answer: [[caption]], caption: [`${capital(spelled(shown.length))} of ${n} email APIs, per ${at} emails a month · checked ${when.replaceAll(' ', '\u00a0')}`], sections, questions: [],
     cardWords: { lines: [`${productName} ${middle.ours}.`, `${shown.length} others from ${money(lowest)}.`], caption: fitWords([`${capital(spelled(shown.length))} of ${n} email APIs compared, ${at} emails a month.`, `${capital(spelled(shown.length))} of ${n} email APIs compared, checked ${when}.`], 70) },
     sources: [], cited, copy: { sections: copySections, questions: [], sources: all, related: [] }, lead: scope,
     related: [

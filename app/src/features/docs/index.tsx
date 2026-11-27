@@ -11,6 +11,7 @@ import { DocsArticleSkeleton, useDocsAudience } from './frame'
 import { openApiQuery } from './openapi'
 import { docsTitle, operationDescription, operationEntries, tagTitle } from './meta'
 import './docs.css'
+import { dashboardReference } from '../../../../api/src/dashboard-reference'
 import { productName, productSlug, publicOrigin, sdkPackage } from '../../../../api/src/brand'
 import { useShellTakeover } from '../../lib/shell-takeover'
 import { describeBody, resolveSchema, responseRows, schemaType, type Field } from '../../../../api/src/schema-fields'
@@ -128,6 +129,8 @@ const renamedGuides: Record<string, string> = { rituals: 'rules' }
 // Links from before the docs had pages of their own: /docs#guide-rituals, /docs#mcp and /docs#sendEmail.
 export function legacyPath(hash: string, all: Operation[]): string | null {
   const id = anchor(hash)
+  const replacement = dashboardReference.get(id)
+  if (replacement) return replacement
   if (id === 'mcp') return '/docs/mcp'
   const named = id.startsWith('guide-') ? renamedGuides[id.slice('guide-'.length)] ?? id.slice('guide-'.length) : null
   if (named && guides.some(guide => guide.id === named)) return `/docs/${named}`
@@ -252,6 +255,8 @@ export function DocsPage() {
   useAnchorScroll(Boolean(site.origin) && (page.kind === 'guide' || missing || Boolean(spec)), painted)
   const legacy = page.kind === 'overview' && location.hash ? legacyPath(location.hash, all) : null
   if (legacy) return <Navigate replace to={legacy} />
+  const replacement = page.kind === 'operation' && dashboardReference.get(page.id)
+  if (replacement) return <Navigate replace to={replacement} />
   const renamed = renamedGuides[splat.replace(/\/$/, '')]
   if (renamed) return <Navigate replace to={`/docs/${renamed}${location.hash}`} />
   return <DocsView spec={spec} all={all} page={page} missing={missing} title={title} site={site} inShell={inShell} pending={query.isPending} error={query.isError ? query.error : null} retry={() => query.refetch()} />
