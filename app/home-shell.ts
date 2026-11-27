@@ -68,7 +68,7 @@ export function homeShell(): Plugin {
           + `<div class="fac-stage" style="${attr(Object.entries(vars).map(([key, value]) => `${key}:${value}`).join(';'))}"><div class="fac-frame"><picture>${soft}</picture><picture>${full}</picture>`
           + `<button type="button" class="fac-cta hs-visitor" data-cta="sign-in" style="${box}"><span class="srt-cta-label">Get started${ARROW}${BUSY}</span></button>`
           + `<a class="fac-cta hs-member" href="/overview" style="${box}"><span class="srt-cta-label">Open dashboard${ARROW}</span></a></div></div>`
-          + '<div class="fac-under"><p class="sign-in-consent fac-consent">By continuing you agree to the <a href="/legal/terms">Terms of Service</a> and <a href="/legal/privacy">Privacy Policy</a>. We’ll email you product news and service status. Unsubscribe any time.<span aria-hidden="true"> · </span><a href="/docs">API docs</a></p></div>'
+          + '<div class="fac-under"><p class="sign-in-consent fac-consent">By continuing you accept the <a href="/legal/terms">Terms</a>, <a href="/legal/privacy">Privacy Policy</a> and product email (unsubscribe any time).<span aria-hidden="true"> · </span><a href="/docs">API docs</a></p></div>'
           + '</section></main></div>'
       }
       html = html

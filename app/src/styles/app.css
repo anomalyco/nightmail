@@ -130,8 +130,8 @@ button svg:not(:where(.ui-icon)), .ui-button svg:not(:where(.ui-icon)) { width: 
    pointing at them with ⇧ held (lib/privacy.ts), and in the clear with privacy mode off (the default). */
 html[data-privacy='on']:not([data-peek]) .private-field:not(:focus), html[data-privacy='on'][data-peek] .private-field:not(:hover, :focus) { color: transparent; text-shadow: 0 0 .31em var(--color-text); }
 html[data-privacy='on']:not([data-peek]) .private-field:not(:focus)::placeholder, html[data-privacy='on'][data-peek] .private-field:not(:hover, :focus)::placeholder { color: transparent; text-shadow: 0 0 .31em var(--color-muted); }
-/* "By continuing you agree to…" under a sign-in button. */
-.sign-in-consent a { color: inherit; text-decoration-line: underline; text-decoration-thickness: from-font; text-underline-offset: .18em; transition: color var(--motion-duration); }
+/* "By continuing you accept…" under a sign-in button. */
+.sign-in-consent a { white-space: nowrap; color: inherit; text-decoration-line: underline; text-decoration-thickness: from-font; text-underline-offset: .18em; transition: color var(--motion-duration); }
 .sign-in-consent a:is(:hover, :focus-visible) { color: var(--color-text); }
 .quota-label span:last-child { color: var(--color-text); }
 .quota-meter { display: block; height: 3px; width: 100%; border: 0; border-radius: var(--radius-2xs); background: var(--color-layer-2); appearance: none; overflow: hidden; }
@@ -255,6 +255,8 @@ html[data-privacy='on']:not([data-peek]) .private-field:not(:focus)::placeholder
 .signed-out__links .ui-button.signed-out__quiet:focus-visible { background: none; color: var(--color-text); }
 /* 44 px to tap, without moving the line. */
 @media (pointer: coarse) { .signed-out__links :is(a, .ui-button.signed-out__quiet) { padding: var(--space-12); margin: calc(-1 * var(--space-12)); } }
+/* Too narrow for one row: "Use a different account" on its own line, Homepage and Docs under it, held or not. */
+@media (max-width: 359px) { .signed-out__links .ui-button.signed-out__quiet { flex-basis: 100%; } }
 /* Flat and calm on the page's ground: no rule, outline or ring. A notice is one solid step off the ground (its tone in
    its ink), a field a solid control fill, and focus shows the hover fill. */
 .signed-out__body > .ui-alert { border-color: transparent; background: var(--color-surface); }

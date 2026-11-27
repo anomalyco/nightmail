@@ -200,23 +200,25 @@ function waitlistAddress() {
 }
 // What the refusal says (api/src/account-login.ts). ?place=held (a place is held for the address) or ?place=ready (one is
 // open), but the sign-in didn't show the address is the person's (GitHub without it as its verified primary email, a
-// password, a Google account on another provider's address): one click emails it a sign-in link. Otherwise the address
+// password, a Google account on another provider's address): one click emails it a sign-in link, and ?via=github says
+// the refused sign-in was GitHub's. Otherwise the address
 // waits, every place taken, and ?position=N says where in the order a raise lets the waitlist in (1 is next); someone
 // told they're in who signed in with another address asks for a link to that one. ?link=expired: the sign-in link it
 // followed was used or ran out.
 function WaitlistPage({ busy, error, waitUntil, onSwitch }: { busy: boolean; error: unknown; waitUntil: Wait | null; onSwitch: () => void }) {
   const [email] = useState(waitlistAddress), [search] = useState(() => new URLSearchParams(window.location.search))
   const place = search.get('place'), ready = (place === 'held' || place === 'ready') && email !== null, expired = search.get('link') === 'expired'
-  const position = /^[1-9]\d{0,6}$/.test(search.get('position') ?? '') ? Number(search.get('position')) : null
+  const position = /^[1-9]\d{0,6}$/.test(search.get('position') ?? '') ? Number(search.get('position')) : null, github = search.get('via') === 'github'
   return <SignedOutPage>
     <SignInLinkViews to={ready ? email : null} open={expired} title={ready ? `There’s a place for you in ${productName}` : `${productName} is full for now`}>
       {expired ? <Alert tone="info">That link no longer works.</Alert> : null}
-      {ready ? <p>This sign-in didn’t confirm <bdi data-own-address="">{email}</bdi> is yours.</p>
+      {ready ? <p>This sign-in didn’t confirm <bdi data-own-address="">{email}</bdi> is yours.{github ? ' GitHub counts only verified primary emails.' : null}</p>
         : <p>{position ? `You’re number ${position.toLocaleString('en-US')} on the waitlist.` : 'You’re on the waitlist.'} We’ll email you when a place opens.</p>}
     </SignInLinkViews>
     {error ? <Alert tone="danger">{errorText(error)}</Alert> : null}
     <nav className="signed-out__links" aria-label={productName}>
-      <SignInButton variant="ghost" className="signed-out__quiet" loading={busy} waitUntil={waitUntil} onClick={onSwitch} data-analytics="sign-in/waitlist-switch">Use a different account</SignInButton>
+      {/* Held, it names what waits, about as wide as its label, so the row stays even and still while it counts. */}
+      <SignInButton variant="ghost" className="signed-out__quiet" loading={busy} waitUntil={waitUntil} waitLabel={time => `Another account in ${time}`} onClick={onSwitch} data-analytics="sign-in/waitlist-switch">Use a different account</SignInButton>
       <Link to="/">Homepage</Link><Link to="/docs">Docs</Link>
     </nav>
   </SignedOutPage>
@@ -226,12 +228,14 @@ function WaitlistPage({ busy, error, waitUntil, onSwitch }: { busy: boolean; err
 // moves nothing. Busy or held it is unavailable but never disabled: a disabled button drops keyboard focus, and the
 // screen reader's place, to the page. Presses (Enter and Space too) are ignored instead, and its name stays the action's,
 // so the countdown isn't read out every second; the provider's status line said why once.
-function SignInButton({ waitUntil, loading = false, children, onClick, ...props }: Omit<ComponentProps<typeof Button>, 'children' | 'disabled'> & { waitUntil: Wait | null; children: string }) {
+function SignInButton({ waitUntil, waitLabel = time => `Try again in ${time}`, loading = false, children, onClick, ...props }: Omit<ComponentProps<typeof Button>, 'children' | 'disabled'> & { waitUntil: Wait | null; waitLabel?: (time: string) => string; children: string }) {
   const left = useSecondsLeft(waitUntil), shown = left ? 'wait' : loading ? 'busy' : 'idle', unavailable = shown !== 'idle'
   return <Button {...props} aria-disabled={unavailable || undefined} aria-busy={loading || undefined} aria-label={left ? children : undefined} onClick={event => { if (!unavailable) onClick?.(event) }}><span className="signed-out__countdown">
     <span data-shown={shown === 'idle' || undefined} aria-hidden={shown !== 'idle' || undefined}>{children}</span>
     <span className="signed-out__busy" data-shown={shown === 'busy' || undefined} aria-hidden={shown !== 'busy' || undefined}><Icon icon={LoaderCircle} size="sm" className="ui-spinner" />{children}</span>
-    <span data-shown={shown === 'wait' || undefined} aria-hidden>Try again in {countdown(left)}</span>
+    <span data-shown={shown === 'wait' || undefined} aria-hidden>{waitLabel(countdown(left))}</span>
+    {/* Never shown: the wait at its widest (two-digit minutes), so the box doesn't grow as the countdown starts. */}
+    <span aria-hidden>{waitLabel('00:00')}</span>
   </span></Button>
 }
 // A sign-in link to an address with a place (api/src/signups.ts sendSigninLink): the refused sign-in's own address when a

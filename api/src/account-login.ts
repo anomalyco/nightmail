@@ -44,7 +44,7 @@ type Refusal = { place?: 'held' | 'open' | null; staleLink?: boolean };
 class NotAdmitted extends Error { constructor(readonly reason: string, readonly refusal: Refusal = {}) { super(reason); } }
 /** A refused hosted sign-in whose verified address is now on the waitlist: the refusal screen names it, and where it
  *  stands in the order a raise lets the waitlist in (null: not known). */
-class Waitlisted extends Error { constructor(readonly email: string, readonly refusal: Refusal, readonly position: number | null) { super('waitlist'); } }
+class Waitlisted extends Error { constructor(readonly email: string, readonly refusal: Refusal, readonly position: number | null, readonly github = false) { super('waitlist'); } }
 
 function loginIssue(error: unknown, requiredAcr?: string[]) {
   const issuerError = error instanceof oidc.AuthorizationResponseError || error instanceof oidc.ResponseBodyError ? error.error : undefined;
@@ -350,7 +350,7 @@ export async function finishAccountLogin(runtime: Runtime, url: URL, binding: st
       if (await joinWaitlist(runtime, emailAtLogin, name).catch(() => false)) {
         // Where it waits, only when no place is ready for it: then the screen offers the way to take that one instead.
         const position = error.refusal.place ? null : await waitlistPosition(runtime.db, emailAtLogin).catch(() => null);
-        throw new Waitlisted(emailAtLogin.toLowerCase(), error.refusal, position);
+        throw new Waitlisted(emailAtLogin.toLowerCase(), error.refusal, position, upstream?.provider === 'github');
       }
     }
     throw loginFailed();
@@ -608,6 +608,8 @@ export async function accountBrowserRoute(c: Ctx) {
       // The waitlist screen says how to take a place held for the address (place=held: a sign-in link to it) or open
       // (place=ready), and that a sign-in link it followed no longer works (link=expired).
       if (error instanceof Waitlisted && error.refusal.place) back.searchParams.set('place', error.refusal.place === 'held' ? 'held' : 'ready');
+      // via=github: that refused sign-in was GitHub's, so the screen can say GitHub counts only a verified primary email.
+      if (error instanceof Waitlisted && error.refusal.place && error.github) back.searchParams.set('via', 'github');
       if (error instanceof Waitlisted && error.refusal.staleLink) back.searchParams.set('link', 'expired');
       // position=N: where the address waits, 1 next (signups.ts waitlistPosition).
       if (error instanceof Waitlisted && error.position) back.searchParams.set('position', String(error.position));
