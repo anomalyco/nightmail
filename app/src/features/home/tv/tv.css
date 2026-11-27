@@ -163,24 +163,34 @@ main.chy .chy-set { cursor: pointer; touch-action: manipulation; -webkit-tap-hig
 
 /* The label. --stripe is the width of its border; the stripes are an airmail envelope's, red, paper, blue, paper. Round
    it, a little of the screen's light (the picture's colour, --tint, and level, --light) and its shadow on the wood.
-   It lifts a little under the pointer and goes down when pressed. */
-.chyp { --stripe: calc(var(--h) * .0125); position: absolute; z-index: 2; left: 44.3%; top: 103.2%; width: 38%; translate: -50% 0; display: grid; padding: var(--stripe); background: repeating-linear-gradient(-45deg, #D23B2D 0 calc(var(--stripe) * 1.25), #F6F1E3 0 calc(var(--stripe) * 2.5), #2F4FA8 0 calc(var(--stripe) * 3.75), #F6F1E3 0 calc(var(--stripe) * 5)); border-radius: 2px; box-shadow: 0 0 calc(var(--h) * .07) rgb(var(--tint, 150 165 255) / calc(55% * min(var(--light, 1), 1.25))), 0 calc(var(--h) * .012) calc(var(--h) * .018) rgb(0 0 0 / 80%); transition: translate .18s var(--ease-out), filter .18s; }
+   It lifts a little under the pointer and goes down when pressed (--chyp-lift, below). */
+.chyp { --stripe: calc(var(--h) * .0125); position: absolute; z-index: 2; left: 44.3%; top: 103.2%; width: 38%; translate: -50% var(--chyp-lift, 0px); display: grid; padding: var(--stripe); background: repeating-linear-gradient(-45deg, #D23B2D 0 calc(var(--stripe) * 1.25), #F6F1E3 0 calc(var(--stripe) * 2.5), #2F4FA8 0 calc(var(--stripe) * 3.75), #F6F1E3 0 calc(var(--stripe) * 5)); border-radius: 2px; box-shadow: 0 0 calc(var(--h) * .07) rgb(var(--tint, 150 165 255) / calc(55% * min(var(--light, 1), 1.25))), 0 calc(var(--h) * .012) calc(var(--h) * .018) rgb(0 0 0 / 80%); transition: translate .18s var(--ease-out), filter .18s; }
 .chyp-go { display: grid; place-content: center; height: calc(var(--h) * .086); padding: 0 1em; border: 0; border-radius: 1px; background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .2 0 0 0 -.07'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23n)'/%3E%3C/svg%3E"), #F6F1E3; color: #0A0B0F; font: 700 calc(var(--h) * .041) / 1 var(--font-mono); letter-spacing: -.01em; word-spacing: -.22em; text-transform: uppercase; text-decoration: none; white-space: nowrap; cursor: pointer; -webkit-tap-highlight-color: transparent; }
 /* Its two wordings (Get started, and Join the waitlist when no place is open) share one cell, the one not said
    hidden in place (ui.css), so the change from one to the other moves nothing. The longer one is set smaller. */
 .chyp-go .srt-cta-label { display: inline-flex; justify-content: center; align-items: center; gap: .42em; }
 .chyp-go .srt-cta-wait, a.chyp-go { font-size: calc(var(--h) * .032); }
 .chyp-go .srt-cta-label::after { content: ''; flex: none; width: .56em; height: .68em; background: currentColor; clip-path: polygon(0 0, 100% 50%, 0 100%); }
-@media (hover: hover) { .chyp:hover { translate: -50% -2px; filter: brightness(1.06); } }
-.chyp:active { translate: -50% 1px; filter: brightness(.94); }
+@media (hover: hover) { .chyp:hover { --chyp-lift: -2px; filter: brightness(1.06); } }
+.chyp:active { --chyp-lift: 1px; filter: brightness(.94); }
+/* While the sign-in it started is on its way (data-busy: home/get-started.tsx, or shell/boot.js for a press before the
+   app), it stays pressed and the play mark blinks once a second, like a deck's play light; still Get started, in the
+   same place. Held after a refused start (aria-disabled, not busy), it is neither lifted nor pressed and its words are
+   a quieter ink. The paper never goes see-through in either: the stripes behind it would show through (ui.css's
+   unavailable button is half transparent). */
+.chyp:has(> [data-busy]) { --chyp-lift: 1px; filter: brightness(.94); }
+.chyp:has(> [aria-disabled='true']:not([data-busy])) { --chyp-lift: 0px; filter: none; }
+.chyp-go:is(:disabled, [aria-disabled='true']) { opacity: 1; }
+.chyp .chyp-go[aria-disabled='true']:not([data-busy]) { color: color-mix(in srgb, #0A0B0F 60%, #F6F1E3); }
 .chyp-go[data-busy] { cursor: progress; }
-@media (prefers-reduced-motion: reduce) { .chyp { transition: none; } }
+.chyp-go[data-busy] .srt-cta-label::after { animation: chyp-play 1s step-end infinite; }
+@keyframes chyp-play { 50% { visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) { .chyp { transition: none; } .chyp-go[data-busy] .srt-cta-label::after { animation: none; } }
 /* Under the table (a phone): the same label in the page's flow, as wide as the page's column and taller on a taller
    screen, so it carries its share of the space. */
 .chyp-under { display: none; --stripe: clamp(7px, 1dvh, 10px); position: relative; left: auto; top: auto; width: min(440px, 100%); margin: 0; translate: none; box-shadow: 0 0 44px rgb(var(--tint, 150 165 255) / calc(48% * min(var(--light, 1), 1.25))), 0 6px 12px rgb(0 0 0 / 70%); }
 .chyp-under .chyp-go { height: clamp(58px, 9.6dvh, 88px); font-size: clamp(21px, 3.2dvh, 29px); }
 .chyp-under .chyp-go .srt-cta-wait, .chyp-under a.chyp-go { font-size: 17px; }
-.chyp-under:hover, .chyp-under:active { translate: none; }
 @media (max-width: 640px) {
   .chyp:not(.chyp-under) { display: none; }
   .chyp-under { display: grid; }

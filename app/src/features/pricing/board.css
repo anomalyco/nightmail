@@ -174,9 +174,13 @@
 .cb-key::before { content: ''; position: absolute; inset: 3px 0 0 2px; background: var(--srt-cta); box-shadow: 0 -2px 0 var(--srt-cta-top), -1px 0 0 var(--srt-cta-side), -1px -2px 0 var(--srt-cta-side), 2px 3px 4px rgb(0 0 0 / 22%); outline: 1px solid var(--srt-cta-edge); outline-offset: -5px; transition: background-color 150ms var(--cb-ease), translate 90ms var(--cb-ease), box-shadow 90ms var(--cb-ease); }
 .cb-key .srt-cta-label { position: relative; display: inline-flex; align-items: center; gap: .45em; transition: translate 90ms var(--cb-ease); }
 .cb-key .srt-cta-arrow { transition: translate 200ms var(--cb-ease); }
-@media (hover: hover) and (pointer: fine) { .cb-key:hover::before { background: var(--srt-cta-hover); } .cb-key:hover .srt-cta-arrow { translate: 4px 0; } }
-.cb-key:active::before { box-shadow: 0 0 0 var(--srt-cta-top), 0 0 0 var(--srt-cta-side), 0 0 0 var(--srt-cta-side), 0 0 0 rgb(0 0 0 / 0%); translate: -1px -2px; }
-.cb-key:active .srt-cta-label { translate: -1px -2px; }
+@media (hover: hover) and (pointer: fine) { .cb-key:hover:not(:disabled, [aria-disabled='true'])::before { background: var(--srt-cta-hover); } .cb-key:hover:not(:disabled, [aria-disabled='true']) .srt-cta-arrow { translate: 4px 0; } }
+.cb-key:active:not(:disabled, [aria-disabled='true'])::before { box-shadow: 0 0 0 var(--srt-cta-top), 0 0 0 var(--srt-cta-side), 0 0 0 var(--srt-cta-side), 0 0 0 rgb(0 0 0 / 0%); translate: -1px -2px; }
+.cb-key:active:not(:disabled, [aria-disabled='true']) .srt-cta-label { translate: -1px -2px; }
+/* While a sign-in is on its way (its spinner) or held after a refused one, it stays solid, as the homepage's key does:
+   half transparent (ui.css's unavailable button), the plate would show through it. */
+.cb-key:is(:disabled, [aria-disabled='true']) { opacity: 1; }
+.cb-key[data-busy] { cursor: progress; }
 .cb-key:focus-visible { outline: none; }
 .cb-key:focus-visible::after { content: ''; position: absolute; inset: -7px; border: var(--focus-width) solid var(--cb-mine); pointer-events: none; }
 

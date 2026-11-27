@@ -46,8 +46,10 @@ type Still = { light: number; tint: string; reflect: { shade: string; tint: stri
 const BASIC = 'U+0020-007E,U+00A0,U+00A9,U+00AB,U+00AE,U+00B7,U+00BB,U+00D7,U+2010-2027,U+2030,U+2039-203A,U+20AC,U+2122,U+2190-2193,U+2212,U+2713,U+FEFF,U+FFFD'
 const FIRST_FONTS = [{ family: 'Inter', file: 'inter-basic.woff2', weight: '100 900' }, { family: 'OpenTUI Mono', file: 'opentui-bold-basic.woff2', weight: '700' }]
 const WHOLE_FACES = /@font-face\{font-family:(?:Inter|OpenTUI Mono|"Inter"|"OpenTUI Mono");[^}]*\}/g
-/** What public/theme.js may set on <html> before the first paint, which the page's CSS may select. */
-const THEME_ATTRIBUTES = ['data-theme', 'data-shell', 'data-member', 'data-overview-panel', 'style']
+/** What a script may set before the app is up, which the page's CSS may select: public/theme.js on <html> before the first
+ *  paint, and shell/boot.js on a Get started pressed while the app loads (data-busy), so the label is drawn busy by
+ *  tv.css's own rules, as the app draws it. */
+const THEME_ATTRIBUTES = ['data-theme', 'data-shell', 'data-member', 'data-overview-panel', 'style', 'data-busy']
 /** Left out of the page's render: its stylesheets, and the dashboard's data layer (data/prefetch.ts, for Open dashboard's
  *  link, which a visitor's page doesn't render), which opens a channel as it loads that would keep the build running. */
 const STUBS: [RegExp, string][] = [[/\.css$/, 'export default ""'], [/\/data\/prefetch(?:\.ts)?$/, 'export const useRouteIntent = () => () => ({})']]
