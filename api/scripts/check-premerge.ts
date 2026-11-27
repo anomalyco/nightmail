@@ -86,6 +86,40 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
   if (failed === before) console.log(`Worker routes: ${paths.length} API paths reach the Worker in both wrangler configs and src/worker.ts.`);
 }
 
+// 2b. The camera. The hosted homepage alone may ask for it (its television's glass shows the visitor:
+// app/src/features/home/tv/crt/mirror.ts): the Worker gives "/" HOME_PERMISSIONS_POLICY, which differs from the rest
+// in camera=(self) only. Every other page keeps camera=(): the files Workers Assets serves before the Worker (the
+// price, docs and legal pages, /home) through app/public/_headers' "/*" rule, which no other rule there may change,
+// and whatever the Worker answers itself, a self-hosted "/" included.
+{
+  const before = failed, file = 'app/public/_headers';
+  const { HOME_PERMISSIONS_POLICY, SECURITY_HEADERS } = await import('../src/security-headers.js');
+  const policy = SECURITY_HEADERS['Permissions-Policy'] ?? '', closed = /(?:^|,\s*)camera=\(\)(?:,|$)/;
+  if (!closed.test(policy)) fail('Camera', `SECURITY_HEADERS' Permissions-Policy must say camera=() (it says "${policy}").`, 'api/src/security-headers.ts');
+  if (HOME_PERMISSIONS_POLICY !== policy.replace('camera=()', 'camera=(self)')) fail('Camera', 'HOME_PERMISSIONS_POLICY must be SECURITY_HEADERS\' Permissions-Policy with camera=(self) in place of camera=(), and nothing else changed.', 'api/src/security-headers.ts');
+  // _headers: a path line, then its indented headers.
+  const rules: { path: string; headers: [string, string][] }[] = [];
+  for (const line of readFileSync(new URL(file, root), 'utf8').split('\n')) {
+    if (!line.trim() || line.trimStart().startsWith('#')) continue;
+    if (!/^\s/.test(line)) rules.push({ path: line.trim(), headers: [] });
+    else { const at = line.indexOf(':'); rules.at(-1)?.headers.push([line.slice(0, at).trim().toLowerCase(), line.slice(at + 1).trim()]); }
+  }
+  const sets = rules.flatMap(rule => rule.headers.filter(([name]) => name === 'permissions-policy').map(([, value]) => ({ path: rule.path, value })));
+  if (sets.length !== 1 || sets[0]!.path !== '/*' || sets[0]!.value !== policy) fail('Camera', `${file} must set Permissions-Policy once, on "/*", to SECURITY_HEADERS' value, so every file it serves keeps camera=().`, file);
+  // The Worker, with the assets binding answering as Workers Assets does (its "/*" headers on every file).
+  const worker = (await import('../src/worker.js')).default as { fetch(request: Request, env: unknown, ctx: unknown): Promise<Response> };
+  const assets = { fetch: async () => new Response('<!doctype html>', { headers: { 'content-type': 'text/html', 'permissions-policy': policy } }) };
+  const hosted = { ASSETS: assets, MULTI_TENANT: 'true', ADMISSION: { limit: async () => ({ success: false }) } }, selfHosted = { ...hosted, MULTI_TENANT: 'false' };
+  const camera = async (path: string, env: unknown) => (await worker.fetch(new Request(`https://premerge.invalid${path}`), env, { waitUntil() {}, passThroughOnException() {} })).headers.get('permissions-policy');
+  const home = await camera('/', hosted);
+  if (home !== HOME_PERMISSIONS_POLICY) fail('Camera', `The hosted homepage "/" must carry HOME_PERMISSIONS_POLICY (it carried "${home}").`, 'api/src/worker.ts');
+  for (const [path, env] of [['/', selfHosted], ['/home', hosted], ['/pricing', hosted], ['/compare/resend', hosted], ['/docs', hosted], ['/legal/privacy', hosted], ['/overview', hosted]] as const) {
+    const got = await camera(path, env);
+    if (!got || !closed.test(got)) fail('Camera', `${path}${env === selfHosted ? ' on a self-hosted installation' : ''} must keep camera=() (it carried "${got}").`, 'api/src/worker.ts');
+  }
+  if (failed === before) console.log('Camera: the hosted homepage alone may ask for it; every other page keeps camera=().');
+}
+
 // 3. Migrations. src/migrate.ts tracks applied filenames in nightmail_migrations and runs every unapplied
 // /^\d+_[a-z_]+\.sql$/ file in name order (refusing a changed file). Any unused three-digit number is accepted so
 // independent PRs can merge in any order; duplicate numbers (two files with the same number, or a number already on

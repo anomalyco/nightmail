@@ -11,6 +11,7 @@ import { MONTHS, OPENING, PER_THOUSAND, VOLUMES, count, usd, type Volume } from 
 import { Heading, Words } from './words'
 import { Remote, type RoomLight } from './crt/remote'
 import type { Broadcast } from './crt/commercial/play'
+import type { Mirror } from './crt/mirror'
 import scene from './crt/scene.webp'
 import knob from './crt/knob.webp'
 import someone from './crt/someone.mp4'
@@ -169,9 +170,11 @@ void main() { vec2 p = vec2(gl_VertexID == 1 ? 3. : -1., gl_VertexID == 2 ? 3. :
 
 const FRAG = `#version 300 es
 precision highp float;
-uniform sampler2D uTape, uSomeone;
+uniform sampler2D uTape, uSomeone, uMirror;
 uniform vec2 uRes;
-uniform float uTime, uPower, uStatic, uRoll, uTrack, uBad, uJump, uStill, uAir, uOsd, uTilt, uGone;
+uniform float uTime, uPower, uStatic, uRoll, uTrack, uBad, uJump, uStill, uAir, uOsd, uTilt, uGone, uMan, uMirrorOn;
+uniform vec2 uMirrorFit;
+uniform vec3 uManAt;
 out vec4 o;
 
 // ---------------------------------------------------------------- tuning: the tube
@@ -184,6 +187,8 @@ const float BLACK = .040;       // how far "black" is from black (a tube glows)
 const float VIGNETTE = .26;     // darkening toward the corners
 const float GLASS = 1.;         // the room reflected in the glass
 const float SOMEONE = .17;      // how plainly someone stands in it once the set has been off a while (0: nobody)
+const float MIRROR = .2;        // how bright the visitor's own reflection is, once they have let the camera show it
+const float GREY = .6;          // how much of its colour the glass takes out of that reflection
 // ---------------------------------------------------------------- tuning: the tape
 const float BLEED = .016;       // colour smeared to the right, in screen widths
 const float SOFT = .0019;       // softness of the picture
@@ -276,6 +281,26 @@ void main() {
   col *= step(0., s.x) * step(s.x, 1.) * smoothstep(0., .25, uPower) * (1. + (1. - uPower) * 2.5);
   col += vec3(1.8, 1.9, 2.2) * (1. - smoothstep(.05, .7, uPower)) * exp(-pow((uv.y - .5) / (.004 + .03 * uPower), 2.)) * step(abs(p.x), max(w, .02)) * step(.001, uPower);
 
+  // the visitor in the glass (uMirrorOn, with the set off and their camera let in, tv.tsx): a dim reflection on the
+  // glass, not a picture on the tube (no scanlines, no phosphor), mirrored, bent with the glass and a little more, as a
+  // convex face shows more, soft (a coarse level of the camera's picture), mostly grey and cool. near: where it is
+  // brighter than its surroundings, the visitor lit by their own screen, which hides the man behind them (below).
+  float near = 0.;
+  if (uMirrorOn > 0. && uPower < .05) {
+    vec2 m = (q * 1.06) * .5 + .5;
+    m = vec2(1. - m.x, m.y);
+    m = (m - .5) * uMirrorFit + .5;
+    // (a camera held upright shows more than the glass is wide: its sides fade into the dark glass)
+    float inside = smoothstep(0., .1, m.x) * smoothstep(1., .9, m.x) * smoothstep(0., .06, m.y) * smoothstep(1., .94, m.y);
+    vec3 me = textureLod(uMirror, m, 1.5).rgb * inside;
+    float l = dot(textureLod(uMirror, m, 3.6).rgb, vec3(.299, .587, .114)) * inside, around = dot(textureLod(uMirror, m, 6.).rgb, vec3(.299, .587, .114));
+    near = smoothstep(.0, .07, l - around);
+    me = mix(me, vec3(l), GREY) * vec3(.92, .97, 1.06);
+    me *= 1. - .55 * pow(r2 * .5, 1.2);
+    // (its contrast lowered too: a dark glass gives back a faint, flat image, never a black)
+    col += GLASS * MIRROR * (pow(me, vec3(.9)) * .85 + .02) * uMirrorOn;
+  }
+
   // the room in the glass: a soft window of light high on the left, a faint sheen beside it
   col += GLASS * vec3(.030, .032, .038) * smoothstep(.62, .05, length((uv - vec2(.2, .13)) * vec2(1., 2.4)));
   col += GLASS * vec3(.010, .011, .014) * smoothstep(.16, 0., abs(uv.x - .13 - uv.y * .05)) * smoothstep(1., .2, uv.y);
@@ -285,22 +310,27 @@ void main() {
   // brighter in the file than it is shown, so only its light is added and the glass shows through him). Two seconds
   // after the set goes dark he starts to come out of it, and over the next twelve he is there, standing still; then
   // he moves (the tube plays the film). He is gone the moment the set comes on.
+  // With the visitor in the glass too (uMirrorOn), he stands further back, behind them: smaller, his head over their
+  // shoulder, and hidden wherever they are (near). As their reflection comes up he steps back to there.
   if (uGone > 0. && uPower < .05) {
+    // (only with the visitor there: without them he is exactly where he always stands)
+    vec2 at = uMirrorOn > 0. ? mix(uv, (uv - uManAt.xy) / max(uManAt.z, .01) + vec2(.6, .2), uMirrorOn) : uv;
     // (his darks lifted a little, so the clothes are there to be made out, not only the face and hands)
-    vec3 he = pow(texture(uSomeone, uv).rgb, vec3(.82));
+    vec3 he = pow(texture(uSomeone, at).rgb, vec3(.82)) * step(0., at.y) * step(at.y, 1.) * step(0., at.x) * step(at.x, 1.);
     he *= .86 + .28 * hash(gl_FragCoord.xy * .37 + frame * 3.);
-    col += GLASS * SOMEONE * he * smoothstep(2., 14., uGone);
+    col += GLASS * SOMEONE * he * uMan * (1. - .92 * near * uMirrorOn);
   }
   o = vec4(pow(max(col, 0.), vec3(.92)), 1.);
 }`
 
 const clamp = (v: number) => Math.min(1, Math.max(0, v))
 const easeOut = (v: number) => 1 - (1 - clamp(v)) ** 3
+const smooth = (from: number, to: number, v: number) => { const k = clamp((v - from) / (to - from)); return k * k * (3 - 2 * k) }
 
 /** The set's controls, as the tube reads them every frame. channel: which of STATIONS is on, and number: what the set
  *  calls it on screen. wake: draw again (the tube sets it). air: the commercial, once it is ready to be shown on
  *  channel 8; subtitles: whether what it says is also written on the screen. */
-type Deck = RoomLight & { channel: number; number: number; subtitles: boolean; power: boolean; bad: number; thumpAt: number; switchAt: number; note: string; noteAt: number; air: Broadcast | null; wake: () => void; hear: (snow: number, bad: number, on: boolean) => void }
+type Deck = RoomLight & { mirror: HTMLVideoElement | null; mirrorAt: number; channel: number; number: number; subtitles: boolean; power: boolean; bad: number; thumpAt: number; switchAt: number; note: string; noteAt: number; air: Broadcast | null; wake: () => void; hear: (snow: number, bad: number, on: boolean) => void }
 
 function Tube({ deck, onLight, onFlat }: { deck: Deck; onLight: (level: number) => void; onFlat: () => void }) {
   const canvas = useRef<HTMLCanvasElement>(null)
@@ -316,7 +346,7 @@ function Tube({ deck, onLight, onFlat }: { deck: Deck; onLight: (level: number) 
     gl.attachShader(program, shader(gl.VERTEX_SHADER, VERT)); gl.attachShader(program, shader(gl.FRAGMENT_SHADER, FRAG)); gl.linkProgram(program)
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(program)); onFlat(); return }
     gl.useProgram(program)
-    const u = Object.fromEntries(['uTape', 'uRes', 'uTime', 'uPower', 'uStatic', 'uRoll', 'uTrack', 'uBad', 'uJump', 'uStill', 'uAir', 'uOsd', 'uTilt', 'uGone', 'uSomeone'].map(name => [name, gl.getUniformLocation(program, name)]))
+    const u = Object.fromEntries(['uTape', 'uRes', 'uTime', 'uPower', 'uStatic', 'uRoll', 'uTrack', 'uBad', 'uJump', 'uStill', 'uAir', 'uOsd', 'uTilt', 'uGone', 'uSomeone', 'uMan', 'uMirror', 'uMirrorOn', 'uMirrorFit', 'uManAt'].map(name => [name, gl.getUniformLocation(program, name)]))
     const texture = gl.createTexture()
     gl.bindTexture(gl.TEXTURE_2D, texture)
     for (const [key, value] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]] as const) gl.texParameteri(gl.TEXTURE_2D, key, value)
@@ -330,6 +360,15 @@ function Tube({ deck, onLight, onFlat }: { deck: Deck; onLight: (level: number) 
     for (const [key, value] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]] as const) gl.texParameteri(gl.TEXTURE_2D, key, value)
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255]))
     gl.activeTexture(gl.TEXTURE0); gl.uniform1i(u.uSomeone!, 1)
+    // The visitor's own reflection (the shader's uMirror, on the third unit): a black pixel, until they let the camera
+    // in (crt/mirror.ts); then the camera's picture goes in here, each frame the tube draws, and nowhere else, with its
+    // levels for the softness.
+    const visitor = gl.createTexture()
+    let man = 0, manHeld = 0
+    gl.activeTexture(gl.TEXTURE2); gl.bindTexture(gl.TEXTURE_2D, visitor)
+    for (const [key, value] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR_MIPMAP_LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]] as const) gl.texParameteri(gl.TEXTURE_2D, key, value)
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, 1, 1, 0, gl.RGBA, gl.UNSIGNED_BYTE, new Uint8Array([0, 0, 0, 255])); gl.generateMipmap(gl.TEXTURE_2D)
+    gl.activeTexture(gl.TEXTURE0); gl.uniform1i(u.uMirror!, 2); gl.uniform2f(u.uMirrorFit!, 1, 1); gl.uniform3f(u.uManAt!, .71, .29, .66)
     const look = () => {
       if (!alive || !clip || clip.readyState < 2) return
       gl.activeTexture(gl.TEXTURE1); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, clip); gl.activeTexture(gl.TEXTURE0)
@@ -442,6 +481,24 @@ function Tube({ deck, onLight, onFlat }: { deck: Deck; onLight: (level: number) 
       gl.uniform1i(u.uTape!, 0); gl.uniform2f(u.uRes!, el.width, el.height); gl.uniform1f(u.uTime!, (now - began) / 1000)
       gl.uniform1f(u.uPower!, power); gl.uniform1f(u.uStatic!, Math.max(snow, hiccup)); gl.uniform1f(u.uRoll!, roll >= 1 ? 0 : roll); gl.uniform1f(u.uJump!, jump)
       gl.uniform1f(u.uTrack!, track); gl.uniform1f(u.uBad!, bad); gl.uniform1f(u.uStill!, still ? 1 : 0); gl.uniform1f(u.uAir!, air ? 1 : 0); gl.uniform1f(u.uOsd!, nothing ? 1 : 0); gl.uniform1f(u.uTilt!, aired?.tilt ?? 0); const gone = deck.power || still || !stands ? 0 : (now - offAt) / 1000
+      // The visitor's reflection: the camera's picture into its texture; it comes up over two seconds (at once with
+      // reduced motion), and with it there the man comes later, behind them.
+      const face = !deck.power && deck.mirror && deck.mirror.readyState >= 2 ? deck.mirror : null
+      if (face) {
+        gl.activeTexture(gl.TEXTURE2); gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, face); gl.generateMipmap(gl.TEXTURE_2D); gl.activeTexture(gl.TEXTURE0)
+        // (the camera's picture covers the glass; one held upright, a phone's, shows more of itself, the visitor smaller,
+        // and the man stands further off to the side, smaller still, clear of their head)
+        const va = face.videoWidth / Math.max(1, face.videoHeight), sa = el.width / Math.max(1, el.height), upright = va < 1, wider = upright ? 1.45 : 1
+        gl.uniform2f(u.uMirrorFit!, Math.min(1, sa / va) * wider, Math.min(1, va / sa) * wider)
+        gl.uniform3f(u.uManAt!, upright ? .8 : .71, upright ? .22 : .29, upright ? .5 : .66)
+      }
+      const seen = face ? (now - deck.mirrorAt) / 1000 : 0
+      gl.uniform1f(u.uMirrorOn!, face ? (still ? 1 : easeOut((seen - .2) / 2)) : 0)
+      // (he comes later with the visitor there, five to fifteen seconds after they do; one already standing in the
+      // glass stays)
+      if (!face) manHeld = man
+      man = face ? Math.max(manHeld, smooth(5, 15, seen)) : smooth(2, 14, gone)
+      gl.uniform1f(u.uMan!, man)
       if (clip && gone > MOVES && !moving) { moving = true; void clip.play().catch(() => {}) }
       if (moving && !clip!.ended) look()
       gl.uniform1f(u.uGone!, gone)
@@ -458,7 +515,7 @@ function Tube({ deck, onLight, onFlat }: { deck: Deck; onLight: (level: number) 
       draw(now)
       last = now
       // (a broadcast is the visitor's own choice to watch, so it plays on)
-      if (calm.matches && !deck.air) { cancelAnimationFrame(raf); raf = 0 }
+      if (calm.matches && !deck.air && !deck.mirror) { cancelAnimationFrame(raf); raf = 0 }
     }
     const start = () => { if (!raf) raf = requestAnimationFrame(loop) }
     deck.wake = start
@@ -476,7 +533,7 @@ function Tube({ deck, onLight, onFlat }: { deck: Deck; onLight: (level: number) 
       deck.wake = () => {}
       alive = false
       if (clip) { clip.pause(); clip.removeAttribute('src'); clip.load() }
-      gl.deleteTexture(texture); gl.deleteTexture(glass); gl.deleteProgram(program)
+      gl.deleteTexture(texture); gl.deleteTexture(glass); gl.deleteTexture(visitor); gl.deleteProgram(program)
     }
   }, [deck, onLight, onFlat])
   return <canvas ref={canvas} aria-hidden="true" />
@@ -632,6 +689,12 @@ const GitHub = () => <a className="chy-github" href={repositoryUrl} target="_bla
   <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27s1.36.09 2 .27c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z" /></svg>
 </a>
 
+/** Whether the browser already refuses the camera to this page, without asking: a permission refused before, or a page
+ *  whose Permissions-Policy allows none (every page but the hosted homepage). A browser that can't say is not a no. */
+const refusedAlready = async () => { try { return (await navigator.permissions.query({ name: 'camera' as PermissionName })).state === 'denied' } catch { return false } }
+/** Two frames on: what the page has just drawn is on the screen. */
+const painted = () => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+
 /** What "Copy for your agent" copies: the homepage's Markdown twin, whose steps an agent follows (pricing/readable.ts). */
 const AGENT_INSTRUCTION = `Set up ${productName} to send email from this project. Read ${publicOrigin}/index.md and follow its steps for agents.`
 // In the terms line, set as its links are. Its two words share one cell, so saying Copied moves nothing.
@@ -660,15 +723,47 @@ export function TvHome({ start, notice }: HomeProps) {
   const visitor = !start.signedIn
   // No place open (signups-open.ts): the button says Join the waitlist, and a line under it says why, unless a sign-in
   // has something of its own to say there. The line is in the page from the start (empty), so its words move nothing.
-  const full = useSignupsFull(visitor), said = notice || <p role="status">{full ? 'Full for now. Join the waitlist and we’ll email you when a place opens.' : ''}</p>
+  // The camera for the glass's reflection (crt/mirror.ts): asked for only when the visitor switches the set off with
+  // the power knob, and never again in the visit once they have said no (or the browser says no for them); stopped the
+  // moment the set comes on, the tab is hidden or the page goes, and started again only by the next switch-off. The
+  // line under the way in says what it is for, on the screen before the browser's own question and as long as that is
+  // open; while the camera is on, a screen reader is told how to stop it.
+  const camera = useRef<{ refused: boolean; asking: boolean; open: Mirror | null }>({ refused: false, asking: false, open: null }).current
+  const [asking, setAsking] = useState(false), [looking, setLooking] = useState(false)
+  const full = useSignupsFull(visitor), said = notice || <p role="status">{full ? 'Full for now. Join the waitlist and we’ll email you when a place opens.' : asking ? 'For your reflection. Stays on your device.' : ''}</p>
   const [flat, setFlat] = useState(false), [on, setOn] = useState(true), [channel, setChannel] = useState(0), [bad, setBad] = useState(0), [muted, setMuted] = useState(false)
   const box = useRef<HTMLDivElement>(null)
-  const deck = useRef<Deck>({ channel: 0, number: 1, subtitles: false, power: true, bad: 0, thumpAt: -1e9, switchAt: -1e9, note: '', noteAt: -1e9, air: null, wake: () => {}, hear: () => {}, glow: [.38, .49, .75], level: 0 }).current
+  const deck = useRef<Deck>({ mirror: null, mirrorAt: 0, channel: 0, number: 1, subtitles: false, power: true, bad: 0, thumpAt: -1e9, switchAt: -1e9, note: '', noteAt: -1e9, air: null, wake: () => {}, hear: () => {}, glow: [.38, .49, .75], level: 0 }).current
   // The sound starts with the visitor's first use of the set (a browser plays nothing before that); the speaker's
   // grille turns it off and on.
   const sound = useRef<Sound | null>(null), fresh = useRef(false)
   useEffect(() => { const made = sound.current = createSound(); deck.hear = made.set; return () => { deck.hear = () => {}; made.stop() } }, [deck])
   const say = (note: string) => { deck.note = note; deck.noteAt = performance.now(); deck.wake() }
+  const close = useRef(() => {
+    camera.open?.stop(); camera.open = null
+    deck.mirror = null; setLooking(false); deck.wake()
+  }).current
+  const look = async () => {
+    if (camera.refused || camera.asking || camera.open) return
+    camera.asking = true
+    try {
+      // no camera to ask for, or one the browser refuses already: today's dark glass, and nothing asked
+      if (!navigator.mediaDevices?.getUserMedia || await refusedAlready()) { camera.refused = true; return }
+      setAsking(true)
+      await painted()
+      const { openMirror } = await import('./crt/mirror')
+      const made = await openMirror()
+      if (!made) { camera.refused = true; return }
+      // switched on again, or gone from view, while the browser was asking: not wanted now
+      if (deck.power || document.hidden) { made.stop(); return }
+      camera.open = made; deck.mirror = made.video; deck.mirrorAt = performance.now(); setLooking(true); deck.wake()
+    } catch { camera.refused = true } finally { camera.asking = false; setAsking(false) }
+  }
+  useEffect(() => {
+    const hidden = () => { if (document.hidden) close() }
+    document.addEventListener('visibilitychange', hidden); addEventListener('pagehide', close)
+    return () => { document.removeEventListener('visibilitychange', hidden); removeEventListener('pagehide', close); close() }
+  }, [close])
   const noise = (name: Noise, level?: number, after?: number) => sound.current?.play(name, level, after)
   const light = useRef((level: number) => { box.current?.style.setProperty('--light', level.toFixed(3)); takeOver(box.current) }).current
   const fall = useRef(() => { setFlat(true); box.current?.style.setProperty('--light', '1'); requestAnimationFrame(() => takeOver(box.current)) }).current
@@ -764,10 +859,11 @@ export function TvHome({ start, notice }: HomeProps) {
         })}
         <button type="button" className="chy-grille" style={at(.882, .713, .1, .3)} aria-label="Sound" aria-pressed={!muted} onClick={() => { const to = fresh.current ? false : !muted; setMuted(to); sound.current?.mute(to); say(to ? 'MUTE' : 'SOUND ON') }} />
         <Dial y={KNOB_Y[0]!} label="Tracking" stops={[-55, 0, 55]} index={bad} onIndex={i => { noise('knob'); setBad(i); deck.bad = i; deck.wake() }} onAngle={angle => { deck.bad = (angle + 55) / 55; deck.wake() }} />
-        <Dial y={KNOB_Y[1]!} label="Power" stops={[-50, 40]} index={Number(on)} onIndex={i => { noise('knob', .7); noise(i === 1 ? 'on' : 'off', .6, .05); if (i === 1) noise('tape', .3, .9); setOn(i === 1); deck.power = i === 1; deck.wake() }} />
+        <Dial y={KNOB_Y[1]!} label="Power" stops={[-50, 40]} index={Number(on)} onIndex={i => { noise('knob', .7); noise(i === 1 ? 'on' : 'off', .6, .05); if (i === 1) noise('tape', .3, .9); setOn(i === 1); deck.power = i === 1; if (i === 1) close(); else void look(); deck.wake() }} />
         <Remote light={deck} onZap={() => { noise('remote'); tune(deck.channel >= CHANNELS.length ? 0 : (deck.channel + 1) % CHANNELS.length) }} onDigit={digit} />
         <Label start={start} />
       </div>
+      <span className="chy-sr" role="status">{looking ? 'Camera on, in the glass. Turn the set on to stop it.' : ''}</span>
       <div className="chy-under">
         <div className="chy-way"><Label start={start} under /><div className="chy-notice">{said}</div></div>
         {visitor ? <SignInConsent className="chy-consent" after={<More lead />} /> : <p className="chy-consent"><More /></p>}

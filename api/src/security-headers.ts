@@ -14,3 +14,7 @@ export const SECURITY_HEADERS: Readonly<Record<string, string>> = {
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=()',
   'Strict-Transport-Security': 'max-age=31536000; includeSubDomains',
 };
+/** The hosted homepage's Permissions-Policy (worker.ts sets it on "/" alone): its television's glass may show the visitor
+ *  from their camera, asked for when they switch the set off (app/src/features/home/tv/crt/mirror.ts). Only the camera
+ *  differs; every other page and response keeps SECURITY_HEADERS' camera=(). */
+export const HOME_PERMISSIONS_POLICY = 'camera=(self), microphone=(), geolocation=(), payment=(), usb=()';

@@ -42,6 +42,8 @@ Nightmail handles personal data in two different roles.
 
 **Cookies.** Nightmail uses a session cookie (up to 7 days) and short-lived sign-in cookies (10 minutes). After a refused sign-in, one of them holds your email address so the page can show where we'll write to you. The Nightmail website and dashboard use **no analytics or advertising cookies**, and dashboard usage records store nothing on your device.
 
+**Camera.** If you switch off the television on our homepage and allow your camera, its picture is shown as a reflection on your device only; it is not recorded, stored or sent to us, and the camera stops when you switch the set on or leave the page.
+
 ## 3. Data in our customers' mail
 
 ### 3.1 Sending
