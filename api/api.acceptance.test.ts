@@ -46447,6 +46447,296 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     assert.deepEqual(held(3), ['abuse-sample-held warning 3: the sample set no new marks 3 runs in a row: a database session it can\'t see the start of is writing sent-mail events, or its check failed (ABUSE_SAMPLE_MARKS_HELD in Workers logs). Until a run sets them, workspaces with nothing to sample are read again every run. No mail is skipped.']);
   });
 
+  test('SES capacity: regional readings, quota fallback, blind sources and a stuck transport cannot stop Health or resolve an AWS alert', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { sampleSesCounts } = await import('./src/ses-quota-health.js'), { healthTick } = await import('./src/health.js');
+      const ohio = 'us-east-2', virginia = 'us-east-1', account = '111122223333';
+      runtime.config.multiTenant = runtime.config.liveEnabled = true;
+      runtime.config.platformAccount = account;
+      for (const region of [ohio, virginia]) {
+        await db.query("INSERT INTO provider_pool_regions(region,aws_account_id,sending_state,feedback_topic_arn) VALUES ($1,$2,'ready',$3)", [region, account, `arn:aws:sns:${region}:${account}:feedback`]);
+        await db.query('INSERT INTO provider_account_limits(aws_account_id,region,refresh_after,checked_at,max_send_rate,max_24_hour_send,sent_last_24_hours) VALUES ($1,$2,now(),now(),200,100000,72000)', [account, region]);
+      }
+      const post = async () => {}, tick = () => healthTick(runtime, { queues: [{ name: 'feedback-dlq', depth: 1, oldestMs: 3000 }] }, { force: true, post });
+      const alerts = async () => (await db.query('SELECT key,words,severity FROM health_alerts ORDER BY key')).rows;
+      const words = async (key: string) => (await alerts()).find(a => a.key===key)?.words as string | undefined;
+      const elect = () => db.query("UPDATE ses_quota_samples SET attempted_at=now()-interval '16 minutes'");
+      const ageAlerts = () => db.query("UPDATE health_alerts SET seen_at=now()-interval '5 minutes'");
+      const sourceLog = t.mock.method(console,'info',()=>{});
+      let used = 7200, calls = 0;
+      let stamp = new Date(Date.now()-60000);
+      const series = (Id: string, n: number, at = stamp) => ({ Id, StatusCode: 'Complete' as const, Values: [n], Timestamps: [at] });
+      const normal: NonNullable<Parameters<typeof sampleSesCounts>[1]> = async (pool, query) => {
+        calls++;
+        assert.deepEqual(query.MetricDataQueries?.filter(q => q.Expression).map(q=>q.Expression), ['SERVICE_QUOTA(tenant)','SERVICE_QUOTA(emailidentity)','SERVICE_QUOTA(configurationset)']);
+        assert.deepEqual(query.MetricDataQueries?.filter(q => q.MetricStat).map(q => [q.MetricStat!.Metric!.Namespace, q.MetricStat!.Metric!.MetricName, q.MetricStat!.Stat, Object.fromEntries(q.MetricStat!.Metric!.Dimensions!.map(d=>[d.Name,d.Value]))]),
+          ['Tenant','EmailIdentity','ConfigurationSet'].map(Resource=>['AWS/Usage','ResourceCount','Maximum',{Service:'SES',Type:'Resource',Class:'None',Resource}]));
+        return ['tenant','emailidentity','configurationset'].flatMap(id=>[series(id,pool.region===ohio ? used : 0), series(id+'quota',10000)]);
+      };
+      await db.query('UPDATE nightmail_signup_limit SET places=3000+(SELECT count(*) FROM nightmail_signups)+(SELECT count(*) FROM nightmail_waitlist WHERE let_in_at IS NOT NULL)');
+      await sampleSesCounts(runtime, normal); await sampleSesCounts(runtime, normal);
+      assert.equal(calls,2,'one regional batch, even with two ticks');
+      await tick();
+      for (const [kind,label,ask] of [['tenants','tenants','tenant'],['identities','identities','email identity'],['configuration-sets','configuration sets','configuration set']]) {
+        assert.equal(await words(`ses-${kind}:${ohio}`), `Ohio has 7,200 of 10,000 SES ${label} (72%); 2,800 remain. Request a higher SES ${ask} count in Ohio.`);
+      }
+      assert.equal(await words('ses-daily:'+ohio), 'SES accepted 72,000 of 100,000 recipients in the last 24 hours in Ohio (72%); 28,000 remain. Pace large campaigns or request a higher SES 24-hour sending quota.');
+      assert.equal(await words('ses-signup-places:'+ohio),'3,000 sign-up places are open but Ohio has room for 2,800 more SES tenants. Raise the SES tenant count before these places fill, or lower the sign-up limit.');
+      assert.equal(await words('ses-unread:'+virginia+':ses-tenants'),undefined,'fresh AWS zero is readable');
+
+      await db.query('UPDATE nightmail_signup_limit SET places=2801+(SELECT count(*) FROM nightmail_signups)');
+      await db.query("INSERT INTO nightmail_waitlist(email,let_in_at) VALUES('held-capacity@example.test',now())");
+      await tick();
+      assert.match(await words('ses-signup-places:'+ohio) ?? '', /2,800 sign-up places are open and 1 is held/);
+      const { sesHealth } = await import('./src/ses-quota-health.js');
+      const reminders = (await sesHealth(runtime)).findings.filter(f=>['ses-signup-places','ses-tenants','ses-identities','ses-configuration-sets'].includes(f.kind));
+      assert.equal(reminders.length,4); assert.ok(reminders.every(f=>f.remindMinutes===1440));
+      used=9000; await elect(); await sampleSesCounts(runtime, normal);
+      await db.query('UPDATE provider_account_limits SET sent_last_24_hours=90000 WHERE region=$1',[ohio]);
+      await db.query('UPDATE nightmail_signup_limit SET places=500'); await ageAlerts();
+      runtime.config.operatorSlackWebhookUrl=OPERATOR_HOOK;
+      const critical = await tick();
+      assert.ok(critical.cards.some(c=>c.card.text.includes('Ohio has 9,000 of 10,000 SES')));
+      assert.equal(await words('ses-signup-places:'+ohio),undefined,'lowering the gate clears the comparison');
+      const snapshot = (await db.query('SELECT last_good FROM ses_quota_samples WHERE region=$1',[ohio])).rows[0].last_good;
+      const isolated = async () => {
+        // An old generated_at and absent unrelated row make this proof of a NEW summary and finding.
+        await ageAlerts(); await db.query("UPDATE health_state SET generated_at='2001-01-01'; DELETE FROM health_alerts WHERE key='dead-letters:feedback-dlq'");
+        await tick();
+        assert.match(await words('ses-unread:'+ohio+':ses-tenants') ?? '', /could not be read.*Last AWS count: 9,000 at .*Nightmail's own count: 0/);
+        assert.ok((await alerts()).some(a=>a.key==='ses-tenants:'+ohio && a.severity==='critical'));
+        assert.ok(await words('dead-letters:feedback-dlq'));
+        assert.match(await words('ses-daily:'+ohio) ?? '', /90,000 of 100,000/);
+        const state=(await db.query('SELECT generated_at FROM health_state')).rows[0];
+        assert.ok(Date.now()-new Date(state.generated_at).getTime()<120000);
+      };
+      const warnings = t.mock.method(console,'warn',()=>{});
+      for (const mode of ['hanging','denied','throttled','empty','partial','stale'] as const) {
+        stamp = new Date(stamp.getTime()+1000);
+        await elect();
+        let aborted = false;
+        const batches: number[] = [], before = warnings.mock.calls.length;
+        await sampleSesCounts(runtime, async (pool, query, signal) => {
+          if (pool.region!==ohio) return normal(pool,query,signal);
+          batches.push(query.MetricDataQueries!.length);
+          if (mode==='hanging') { signal.addEventListener('abort',()=>{aborted=true;}); return new Promise(()=>{}); }
+          if (mode==='denied' || mode==='throttled') throw Object.assign(new Error('private response text'), {
+            name: mode==='denied' ? 'AccessDeniedException' : 'ThrottlingException', $metadata:{httpStatusCode:mode==='denied' ? 403 : 429} });
+          if (mode==='empty') return [];
+          const bad = mode==='stale' ? series('tenant',0,new Date(Date.now()-2*3600000)) : { ...series('tenant',0), StatusCode: 'PartialData' as const };
+          return [bad,series('emailidentity',7200)];
+        },100);
+        const lines=warnings.mock.calls.slice(before).map(c=>JSON.parse(String(c.arguments[0]))).filter(l=>l.code==='SES_QUOTA_READ_FAILED');
+        assert.equal(lines.length,batches.length); assert.ok(lines.every(l=>l.region===ohio && !JSON.stringify(l).includes('private response text')));
+        if (['denied','throttled','hanging'].includes(mode)) {
+          assert.deepEqual(batches,[6,3]); assert.deepEqual(lines.map(l=>l.batch),['usage+quota','usage']);
+          assert.ok(lines.every(l=>l.cause===({denied:'AccessDeniedException',throttled:'ThrottlingException',hanging:'Timeout'})[mode as 'denied'|'throttled'|'hanging']
+            && l.httpStatus===(mode==='denied'?403:mode==='throttled'?429:null)));
+        } else {
+          assert.deepEqual(batches,[6]); assert.equal(lines[0].series.tenant,mode==='empty'?'Missing':mode==='partial'?'PartialData':'Complete:no-usable-point');
+        }
+        if (mode==='hanging') assert.ok(aborted,'the SDK receives the deadline even when the stub never settles');
+        await isolated();
+        assert.deepEqual((await db.query('SELECT last_good FROM ses_quota_samples WHERE region=$1',[ohio])).rows[0].last_good.Tenant,snapshot.Tenant);
+        if (mode==='partial') assert.match(await words('ses-identities:'+ohio) ?? '', /72%.*limit is from the repository/);
+        assert.equal(await words('ses-unread:'+virginia+':ses-tenants'),undefined);
+      }
+      // A rejected quota expression cannot hide usable counts; the three-query fallback has no expressions.
+      await elect();
+      const requests:number[] = [];
+      await sampleSesCounts(runtime,async(pool,query,signal)=>{
+        if (pool.region!==ohio) return normal(pool,query,signal);
+        requests.push(query.MetricDataQueries!.length);
+        if (query.MetricDataQueries!.some(q=>q.Expression)) throw Object.assign(new Error(),{name:'ValidationError',$metadata:{httpStatusCode:400}});
+        return [series('tenant',9000,new Date(snapshot.Tenant.at)),series('emailidentity',7200),series('configurationset',0)];
+      });
+      assert.deepEqual(requests,[6,3]); await tick();
+      assert.match(await words('ses-tenants:'+ohio) ?? '', /90%.*limit is from the repository/);
+      await elect(); await sampleSesCounts(runtime,async()=>[]); await isolated();
+
+      // Health can finish WHILE the elected request is outstanding, without needing its timeout to fire.
+      await elect();
+      let entered!: () => void, release!: () => void;
+      const inFlight = new Promise<void>(resolve => { entered=resolve; });
+      const response = new Promise<void>(resolve => { release=resolve; });
+      const sampling = sampleSesCounts(runtime, async (pool,query,signal) => {
+        if (pool.region!==ohio) return normal(pool,query,signal);
+        entered(); await response; return [];
+      });
+      await inFlight;
+      try { await isolated(); } finally { release(); await sampling; }
+
+      // A still-recent but older zero is not a new observation of a previously full account.
+      await elect();
+      await sampleSesCounts(runtime, async () => [series('tenant',0,new Date(snapshot.Tenant.at-60000))]);
+      await isolated();
+
+      // Daily and setup still have independent transactions when the sampler's whole relation is missing.
+      await db.query('ALTER TABLE ses_quota_samples RENAME TO fixture_unavailable_ses_samples');
+      await sampleSesCounts(runtime, normal); await isolated();
+      await db.query('ALTER TABLE fixture_unavailable_ses_samples RENAME TO ses_quota_samples');
+      stamp = new Date();
+      await elect(); used=0; await sampleSesCounts(runtime, normal); await ageAlerts(); await tick();
+      assert.equal(await words('ses-tenants:'+ohio),undefined,'only a fresh AWS reading resolves the AWS capacity alert');
+      await db.query("UPDATE provider_account_limits SET checked_at=now()-interval '11 minutes'"); await ageAlerts(); await tick();
+      assert.match(await words('ses-unread:'+ohio+':ses-daily') ?? '',/could not be read/);
+      assert.match(await words('ses-daily:'+ohio) ?? '',/90%/);
+      // With only our journal available its evidence can open a warning of its own, never an AWS finding.
+      stamp=new Date(); await elect();
+      await sampleSesCounts(runtime, async () => [series('tenant',0),series('tenantquota',2)]);
+      await db.query(`INSERT INTO hosted_tenant_ownership(workspace_id,region,arn) SELECT 'cap-'||n,$1,'arn:aws:ses:'||$1||':'||$2||':tenant/test/'||n FROM generate_series(1,2) n`,[ohio,account]);
+      await elect(); await sampleSesCounts(runtime,async()=>[]); await tick();
+      assert.match(await words('ses-tenants:'+ohio+':estimate') ?? '', /own count.*100%.*AWS usage could not be read/);
+      assert.equal(await words('ses-tenants:'+ohio),undefined);
+      assert.equal(sourceLog.mock.calls.filter(c=>String(c.arguments[0]).includes('SES_QUOTA_SOURCES')).length,2,'one provenance record per region per day');
+    });
+  });
+
+  test('SES capacity: ten completed minutes of envelope recipients, scoped to the account that actually sent; only contention makes a near-full rate critical', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { sesHealth } = await import('./src/ses-quota-health.js');
+      runtime.config.liveEnabled = runtime.config.multiTenant = true;
+      const wid = runtime.config.workspaceId, region='us-east-2', account='111122223333', key=account+':'+region, topic=`arn:aws:sns:${region}:${account}:feedback`;
+      await db.query("INSERT INTO provider_pool_regions(region,aws_account_id,sending_state,feedback_topic_arn) VALUES ($1,$2,'ready',$3)",[region,account,topic]);
+      await db.query("INSERT INTO provider_connections(id,workspace_id,region,kind,aws_account_id,state,tenant_state) VALUES($1,$1,$2,'shared',$3,'ready','pending')",[wid,region,account]);
+      await db.query('INSERT INTO provider_account_limits(aws_account_id,region,refresh_after,checked_at,max_send_rate,max_24_hour_send,sent_last_24_hours) VALUES($1,$2,now(),now(),1,100000,0)',[account,region]);
+      const now=Date.now(), minute=Math.floor(now/60000)*60000-60000;
+      t.mock.method(Date,'now',()=>now);
+      // Two envelopes of 30 recipients, not 60 messages. Keep Bcc and Cc in the cost.
+      const mail = unique('cap-mail');
+      await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,status,feedback_topic_arn)
+        VALUES($1,$2,$3,'fixture','from@example.test','["to@example.test"]','["cc@example.test"]',(SELECT jsonb_agg('bcc'||g||'@example.test') FROM generate_series(1,28) g),'fixture','{"kind":"transactional"}',false,'accepted',$4)`,[mail,wid,region,topic]);
+      const event = (type:string,code:string, simulated=false) => db.query(`INSERT INTO sending_email_events(id,workspace_id,email_id,type,external_id,data,simulated,created_at)
+        VALUES ($1,$2,$3,$4,$1,jsonb_build_object('code',$5::text),$6,$7::timestamptz)`,[unique('cap-event'),wid,mail,type,code,simulated,new Date(minute+1000)]);
+      await event('accepted',''); await event('accepted',''); await event('accepted','',true);
+      const prior = (n:number, impacted:number) => ({[key]:{good:{},minutes:Array.from({length:n},(_,i)=>({
+        at:minute-(i+1)*60000,recipients:63,limit:1,throttled:i<impacted?1:0,waiting:3 // Old shape: these waits had no duration.
+      }))}});
+      const find = async (kind:string,n=9,impacted=0) => (await sesHealth(runtime,prior(n,impacted))).findings.find(f=>f.kind===kind);
+      assert.equal(await find('ses-rate',8,5),undefined);
+      assert.equal((await find('ses-rate'))?.severity,'warning','running at the intended pace is never a page');
+      await event('provider_throttled','SES_DAILY_QUOTA_EXHAUSTED');
+      assert.equal((await find('ses-rate',9,4))?.severity,'warning','a daily cap is not a send-rate throttle');
+      for (let i=0;i<6;i++) await event('provider_throttled','SES_THROTTLED');
+      assert.equal((await find('ses-rate'))?.severity,'warning','many throttles in one minute are still one impacted minute');
+      assert.equal((await find('ses-rate',9,3))?.severity,'warning');
+      assert.equal((await find('ses-rate',9,4))?.severity,'critical');
+      await db.query("DELETE FROM sending_email_events WHERE email_id=$1 AND type='provider_throttled'",[mail]);
+      await event('dispatch_deferred','PACING_WAIT');
+      await event('dispatch_attempt','');
+      await db.query(`UPDATE sending_email_events SET external_id=(CASE WHEN type='dispatch_attempt' THEN 'attempt-start:' ELSE 'attempt-result:' END)||email_id||':1',
+        created_at=CASE WHEN type='dispatch_attempt' THEN $2::timestamptz-interval '5 seconds' ELSE $2::timestamptz END
+        WHERE email_id=$1 AND type IN ('dispatch_attempt','dispatch_deferred')`,[mail,new Date(minute+1000)]);
+      assert.equal((await find('ses-rate',9,4))?.severity,'warning','a normal five-second slot wait does not count');
+      await db.query("UPDATE sending_email_events SET created_at=created_at-interval '1 millisecond' WHERE email_id=$1 AND type='dispatch_attempt'",[mail]);
+      assert.equal((await find('ses-rate'))?.severity,'warning','one long eligible wait cannot page');
+      assert.match((await find('ses-rate',9,4))?.words ?? '', /In 5 of 10 minutes/);
+      await db.query("UPDATE sending_emails SET feedback_topic_arn='arn:aws:sns:us-east-2:999999999999:byo' WHERE id=$1",[mail]);
+      assert.equal(await find('ses-rate'),undefined,'mail sent by another account is not regional hosted usage');
+
+      const job=unique('setup');
+      await db.query(`INSERT INTO jobs(id,workspace_id,type,payload,available_at) VALUES($1,$2,'tenant.provision',jsonb_build_object('connectionId',$2::text),now()-interval '2 minutes')`,[job,wid]);
+      assert.equal(await find('ses-setup'),undefined,'one runnable job, without contention, is not an SES warning');
+      await db.query("UPDATE jobs SET last_error='AWS_THROTTLED' WHERE id=$1",[job]);
+      assert.equal((await find('ses-setup'))?.severity,'warning');
+      await db.query("UPDATE jobs SET available_at=now()-interval '5 minutes' WHERE id=$1",[job]);
+      assert.equal((await find('ses-setup'))?.severity,'critical');
+      await db.query("UPDATE jobs SET available_at=now()+interval '5 minutes' WHERE id=$1",[job]);
+      assert.equal(await find('ses-setup'),undefined,'a scheduled retry is not runnable');
+    });
+  });
+
+  test('SES capacity: regional state recovery across versions', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { healthTick } = await import('./src/health.js'), { sampleSesCounts } = await import('./src/ses-quota-health.js');
+      runtime.config.multiTenant=runtime.config.liveEnabled=true;
+      const ohio='us-east-2', virginia='us-east-1', account='111122223333', key=account+':'+ohio;
+      const high={at:Date.now()-60000,used:9000,limit:10000,source:'AWS'};
+      for (const region of [ohio,virginia]) {
+        await db.query("INSERT INTO provider_pool_regions(region,aws_account_id,sending_state) VALUES($1,$2,'ready')",[region,account]);
+        await db.query(`INSERT INTO ses_quota_samples(region,account,attempted_at,finished_at,latest,last_good) VALUES($1,$2,now(),now(),$3,$3)`,
+          [region,account,JSON.stringify({Tenant:high})]);
+      }
+      const tick=async()=>{
+        await db.query("DELETE FROM health_alerts WHERE key='dead-letters:feedback-dlq'; UPDATE health_state SET generated_at='2001-01-01'");
+        const started=performance.now();
+        await healthTick(runtime,{queues:[{name:'feedback-dlq',depth:1,oldestMs:3000}]},{force:true,post:async()=>{}});
+        assert.ok(performance.now()-started<1000);
+        assert.equal((await db.query("SELECT generated_at>now()-interval '1 minute' AS wrote FROM health_state")).rows[0].wrote,true);
+        assert.equal((await db.query("SELECT FROM health_alerts WHERE key='dead-letters:feedback-dlq'")).rowCount,1);
+      };
+      const memory=async()=>(await db.query("SELECT rollup->'memory'->'ses' AS ses FROM health_state")).rows[0].ses;
+      const tenant=async()=>(await db.query("SELECT severity,words,seen_at>now()-interval '1 minute' AS seen FROM health_alerts WHERE key=$1",['ses-tenants:'+ohio])).rows[0];
+      const corruptMemory=()=>db.query("UPDATE health_state SET rollup=jsonb_set(rollup,ARRAY['memory','ses',$1],$2::jsonb)",[key,JSON.stringify({minutes:42})]);
+      const sample=async(used:number)=>{
+        await db.query("UPDATE ses_quota_samples SET attempted_at=now()-interval '16 minutes' WHERE region=$1",[ohio]);
+        await sampleSesCounts(runtime,async()=>['tenant','tenantquota'].map(Id=>({Id,StatusCode:'Complete',Values:[Id==='tenant'?used:10000],Timestamps:[new Date()]})));
+      };
+      await tick();
+      await t.test('Wrong-shape regional memory rebuilds without resetting another region',async()=>{
+        const va=account+':'+virginia, minute={at:Math.floor(Date.now()/60000)*60000-120000,limit:200,recipients:81,throttled:0};
+        await db.query("UPDATE health_state SET rollup=jsonb_set(rollup,ARRAY['memory','ses',$1,'minutes'],$2::jsonb)",[va,JSON.stringify([minute])]);
+        const logs=t.mock.method(console,'warn',()=>{});
+        await corruptMemory(); await tick(); await tick();
+        const ses=await memory();
+        assert.deepEqual(ses[key].good.Tenant,high);
+        assert.deepEqual(ses[va].minutes,[minute]); assert.deepEqual(ses[va].good.Tenant,high);
+        const resets=logs.mock.calls.map(c=>JSON.parse(String(c.arguments[0]))).filter(l=>l.code==='SES_HEALTH_MEMORY_RESET');
+        assert.deepEqual(resets.map(l=>l.region),[ohio]);
+      });
+      await t.test('Unknown stored fields leave known AWS findings readable',async()=>{
+        const extra={Tenant:{...high,used:9200,futureUnit:'items'},FutureResource:{version:2}};
+        await db.query('UPDATE ses_quota_samples SET latest=$2,last_good=$2 WHERE region=$1',[ohio,JSON.stringify(extra)]);
+        await tick();
+        assert.match((await tenant()).words,/9,200 of 10,000/);
+        assert.deepEqual((await memory())[key].good,{Tenant:{...high,used:9200}});
+      });
+      await t.test('An invalid known point is discarded and the next good sample restores the finding',async()=>{
+        const invalid={Tenant:{...high,at:'9999999999999999',used:0},EmailIdentity:high};
+        await db.query('UPDATE ses_quota_samples SET latest=$2,last_good=$2 WHERE region=$1',[ohio,JSON.stringify(invalid)]);
+        await db.query("UPDATE health_alerts SET seen_at=now()-interval '5 minutes'"); await tick();
+        assert.equal((await tenant()).seen,false); assert.equal((await tenant()).severity,'critical');
+        assert.equal((await memory())[key].good.Tenant.used,9200);
+        assert.equal((await db.query("SELECT FROM health_alerts WHERE key='ses-identities:us-east-2' AND severity='critical'")).rowCount,1);
+        await sample(9400); await tick();
+        assert.match((await tenant()).words,/9,400 of 10,000/); assert.equal((await tenant()).seen,true);
+      });
+      await t.test('An open critical survives a memory reset and is reported again on fresh AWS evidence',async()=>{
+        await corruptMemory();
+        await db.query("UPDATE ses_quota_samples SET latest='null',last_good='{}' WHERE region=$1",[ohio]);
+        await db.query("UPDATE health_alerts SET seen_at=now()-interval '5 minutes'"); await tick();
+        assert.deepEqual((await memory())[key].good,{}); assert.equal((await tenant()).severity,'critical'); assert.equal((await tenant()).seen,false);
+        assert.equal((await db.query("SELECT FROM health_alerts WHERE key='ses-unread:us-east-2:ses-tenants' AND words LIKE '%could not be read%'")).rowCount,1);
+        await sample(9600); await tick();
+        const alert=await tenant(); assert.equal(alert.severity,'critical'); assert.equal(alert.seen,true);
+        assert.match(alert.words,/9,600 of 10,000/);
+      });
+    });
+  });
+
+  test('SES capacity: locked sampler storage costs its own reading; unrelated Health writes still commit', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { sampleSesCounts }=await import('./src/ses-quota-health.js'), { healthTick }=await import('./src/health.js');
+      runtime.config.multiTenant=runtime.config.liveEnabled=true;
+      await db.query("INSERT INTO provider_pool_regions(region,aws_account_id,sending_state) VALUES('us-east-2','111122223333','ready'),('us-east-1','111122223333','ready')");
+      const locker=new pg.Client({connectionString:FIXTURE_DATABASE_URL}); await locker.connect();
+      try {
+        await locker.query('BEGIN'); await locker.query("SET LOCAL lock_timeout='2s'");
+        await locker.query('LOCK TABLE ses_quota_samples,hosted_tenant_ownership,hosted_adoptions,nightmail_waitlist,nightmail_signup_limit IN ACCESS EXCLUSIVE MODE');
+        let calls=0;
+        await sampleSesCounts(runtime,async()=>{calls++;return [];});
+        assert.equal(calls,0);
+        await db.query("UPDATE health_state SET generated_at='2001-01-01'");
+        await db.query("DELETE FROM health_alerts WHERE key='dead-letters:feedback-dlq'");
+        const started=performance.now();
+        await healthTick(runtime,{queues:[{name:'feedback-dlq',depth:1,oldestMs:3000}]},{force:true,post:async()=>{}});
+        const ms=Math.round(performance.now()-started); t.diagnostic(`SES capacity: five locked tables, two regions: full Health tick ${ms} ms`); assert.ok(ms<1000);
+        assert.equal((await db.query("SELECT generated_at>now()-interval '1 minute' AS wrote FROM health_state")).rows[0].wrote,true);
+        assert.equal((await db.query("SELECT count(*)::int AS n FROM health_alerts WHERE key IN ('dead-letters:feedback-dlq','ses-unread:section')")).rows[0].n,2);
+      } finally { await locker.query('ROLLBACK'); await locker.end(); }
+    });
+  });
+
   test('MX health: warnings stay on Health; critical opens, reminders and long recoveries are single plain Slack lines; short flaps stay quiet across ticks; operator and self-hosted access', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, request }) => {
       const { healthTick } = await import('./src/health.js'), type = `health.fixture.${unique('t').slice(-8)}`, key = `jobs-failed:${type}`, path = '/v1/operator/health', c = (text: string) => '`' + text + '`';

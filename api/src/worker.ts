@@ -618,6 +618,8 @@ export default {
         // Health (src/health.ts), once dispatch recovery has run or failed: what is falling behind, on the Health page and as
         // Slack cards, including a database that refuses the tick's own write. Started here and awaited by nothing: it runs
         // beside the steps below on a connection of its own, so neither can delay or skip the other.
+        if (runtime.config.multiTenant && runtime.config.liveEnabled)
+          afterwards(env, ctx, async rt => { await (await import('./ses-quota-health.js')).sampleSesCounts(rt); });
         afterwards(env, ctx, async health => {
           const [{ healthTick }, { flushCounters }] = await Promise.all([import('./health.js'), import('./health-counters.js')]);
           await flushCounters(health.db); await healthTick(health, { queues: queues.sort((a,b)=>a.name<b.name?-1:1) });
