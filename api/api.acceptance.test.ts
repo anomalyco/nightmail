@@ -37288,7 +37288,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const signedUpNotices = async () => (await db.query(`SELECT count(*)::int AS n FROM account_notices WHERE workspace_id=$1 AND kind='invitation'`, [signedUp])).rows[0].n;
       const early = await inviteFrom('early@elsewhere.example');
       assert.deepEqual([early.workspaceId, early.emailed, early.notEmailedReason], [signedUp, false, 'new_workspace']);
-      assert.match(early.nextStep, /^No email was sent: Nightmail emails invitations once this workspace has a verified domain or has finished its evaluation\. Share acceptUrl with early@elsewhere\.example yourself/);
+      assert.match(early.nextStep, /^No email was sent: Nightmail emails invitations once this workspace has its own verified domain or has finished its evaluation\. Share acceptUrl with early@elsewhere\.example yourself/);
       assert.deepEqual([await signedUpNotices(), await allowances(), await deliver([signedUp])], [0, 0, []]);
       // A verified domain of its own: it does (one past its evaluation: below, where the fixture workspace's standing is set).
       const { rows: [connection] } = await db.query('SELECT id FROM provider_connections WHERE workspace_id=$1', [signedUp]);

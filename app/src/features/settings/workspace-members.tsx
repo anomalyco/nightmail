@@ -96,7 +96,7 @@ export function Invitations({ owner }: { owner: boolean }) {
 // line of its own, such as a paused workspace, opens as not_available does). The address follows on its own line.
 const inviteAnswer = {
   emailed: 'We emailed this link to:',
-  new_workspace: 'Invitations are emailed once this workspace has a verified domain or finishes its evaluation. For now, send this link to:',
+  new_workspace: 'Invitations are emailed once this workspace has its own verified domain or finishes its evaluation. For now, send this link to:',
   allowance_used: 'Today’s invitation emails are used. Send this link to:',
   not_available: 'No email was sent. Send this link to:',
 } as const

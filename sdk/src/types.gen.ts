@@ -6589,7 +6589,7 @@ export type CreatedWorkspaceInvitation = WorkspaceInvitation & {
      */
     emailed: boolean;
     /**
-     * Why no email went out, null when one did. not_available: this installation sends no invitation email, or your account has no verified address to be named by. paused: this workspace is paused. new_workspace: invitations are emailed once the workspace has a verified domain or has finished its evaluation. allowance_used: the invitation emails for today, or to this address, are used.
+     * Why no email went out, null when one did. not_available: this installation sends no invitation email, or your account has no verified address to be named by. paused: this workspace is paused. new_workspace: invitations are emailed once the workspace has its own verified domain or has finished its evaluation. allowance_used: the invitation emails for today, or to this address, are used.
      */
     notEmailedReason: 'not_available' | 'paused' | 'new_workspace' | 'allowance_used' | null;
     /**
