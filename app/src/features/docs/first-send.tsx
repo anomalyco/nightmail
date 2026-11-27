@@ -59,7 +59,7 @@ export function useSettlingEmail(id: string | undefined, onSettled?: () => void)
 export function TestSentLine({ id, to, simulated, onLeave, onSettled }: { id: string; to: string; simulated?: boolean; onLeave?: () => void; onSettled?: () => void }) {
   const status = useSettlingEmail(id, onSettled)
   const address = <PrivateAddress value={to} />, as = simulated ? ' (simulated)' : ''
-  const logs = <Link to={`/logs/${encodeURIComponent(id)}`} onClick={onLeave}>View in Logs</Link>
+  const logs = <Link className="first-send-logs" to={`/logs/${encodeURIComponent(id)}`} onClick={onLeave}>View in Logs</Link>
   const shown = !status || pendingEmailStatuses.includes(status) ? 'queued' : status === 'delivered' ? 'delivered' : 'other'
   return <span className="first-send-line">
     <span data-shown={shown === 'queued' || undefined} aria-hidden={shown !== 'queued' || undefined}>Queued to {address}{as}. {logs}</span>
@@ -70,7 +70,7 @@ export function TestSentLine({ id, to, simulated, onLeave, onSettled }: { id: st
 /** The longest TestSentLine (delivered, with the spam hint), never shown: a slot that holds it keeps the line's height
  *  from the start, so the delivered line moves nothing under it. */
 export function TestSentSizer({ to }: { to: string }) {
-  return <>Delivered to <PrivateAddress value={to} />. Check spam too. <span>View in Logs</span></>
+  return <>Delivered to <PrivateAddress value={to} />. Check spam too. <span className="first-send-logs">View in Logs</span></>
 }
 
 // `onLeave` runs before View in Logs opens the email: onboarding finishes there, so the dashboard opens instead of sending
