@@ -37,6 +37,8 @@
 .first-send-line { display: inline-grid; }
 .first-send-line > * { grid-area: 1 / 1; }
 .first-send-line > :not([data-shown]) { visibility: hidden; }
+/* View in Logs wraps whole, never "View in" at a line's end and "Logs" under it. */
+.first-send-logs { white-space: nowrap; }
 /* Copy sits at the top-right of the code it copies. */
 .developer-snippet { position: relative; min-width: 0; }
 .developer-snippet > .developer-code { padding-right: calc(var(--space-8) + var(--control-height-sm) + var(--space-16)); }
