@@ -7,7 +7,7 @@ import { CampaignRoom } from './campaign-room.js';
 import { durableInboxWake } from './inbox-wake.js';
 import { ROOM_PEER_HEADER } from './campaign-room-protocol.js';
 import type { SupportPlatformApi } from './support-platform.js';
-import { SECURITY_HEADERS } from './security-headers.js';
+import { HOME_PERMISSIONS_POLICY, SECURITY_HEADERS } from './security-headers.js';
 import { clientIpHeader, clientNetworkHeader, healthService, legacyClientIpHeaders, requestHeaderNames, setting } from './brand.js';
 import { oldDashboardReference } from './dashboard-reference.js';
 import { isMissingComparePage, isMissingDocsPage, isMissingLegalPage, isPublicPage, movedPage, SITE_INDEX, withSiteIndex } from './site-index.js';
@@ -373,7 +373,8 @@ export default {
       // A hashed build file or a link-preview card (og/<name>-<hash>.png: app/link-card.ts) that isn't there is not found.
       if (pathname.startsWith('/assets/') || pathname.startsWith('/og/')) return fastSecure(new Response(null, { status: 404, headers: { 'cache-control': 'no-store' } }));
       const home = pathname === '/' && ('MULTI_TENANT' in env ? env.MULTI_TENANT : undefined) === 'true';
-      if (home) { const page = await assets.fetch(new Request(new URL('/home', url), request)); if (page.ok || page.status === 304) return untransformed(page, request); }
+      // (It alone may ask for the camera: HOME_PERMISSIONS_POLICY, over the camera=() its file has from _headers.)
+      if (home) { const page = await assets.fetch(new Request(new URL('/home', url), request)); if (page.ok || page.status === 304) { const answer = untransformed(page, request); answer.headers.set('Permissions-Policy', HOME_PERMISSIONS_POLICY); return answer } }
       // The price, comparison, docs and legal pages are files, served before this Worker (wrangler configs: not in
       // run_worker_first); one reaches it only when there is no such file: not found below, or moved.
       const shell = await assets.fetch(new Request(new URL('/', url), request));
