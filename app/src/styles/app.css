@@ -219,35 +219,42 @@ html[data-privacy='on']:not([data-peek]) .private-field:not(:focus)::placeholder
 .signed-out__link:is(:hover, :focus-visible) { color: var(--color-text); }
 .signed-out__body [data-own-address] { overflow-wrap: anywhere; }
 .signed-out__link-form { display: flex; flex-direction: column; gap: var(--space-8); text-align: start; }
-/* A sign-in link (context.tsx SignInLinkForm): asking, and what to do once asked, in one cell sized for the taller, so the
-   answer moves nothing. */
-.signed-out__link-box { display: grid; }
-.signed-out__link-box > * { grid-area: 1 / 1; }
-.signed-out__link-box[data-sent] > .signed-out__link-form, .signed-out__link-box[data-sent] > .signed-out__link-form *, .signed-out__link-box:not([data-sent]) > .signed-out__link-sent, .signed-out__link-box:not([data-sent]) > .signed-out__link-sent * { visibility: hidden; }
-.signed-out__link-sent { display: flex; flex-direction: column; gap: var(--space-8); }
-.signed-out__link-sent > p { margin: 0; text-wrap: pretty; }
+/* The waitlist screen (context.tsx SignInLinkViews): asking, and what to do once asked, in one cell sized for the taller,
+   so the answer moves nothing. */
+.signed-out__views { display: grid; }
+.signed-out__views > * { grid-area: 1 / 1; }
+.signed-out__views[data-sent] > .signed-out__view:first-child, .signed-out__views[data-sent] > .signed-out__view:first-child *, .signed-out__views:not([data-sent]) > .signed-out__view + .signed-out__view, .signed-out__views:not([data-sent]) > .signed-out__view + .signed-out__view * { visibility: hidden; }
+.signed-out__view { display: flex; flex-direction: column; gap: var(--space-16); }
+/* Asked, the answer sits in the middle of the cell the form reserved, not at its top over a hole. */
+.signed-out__view + .signed-out__view { align-self: center; }
+.signed-out__view > p { margin: 0; text-wrap: pretty; }
+.signed-out__view > .ui-alert { text-align: start; border-color: transparent; background: var(--color-surface); }
+.signed-out__view > h1 > span:empty::before { content: '\00a0'; }
 /* The address on a line of its own, so a typo shows and the text around it wraps the same for any address. */
 .signed-out__link-address { font-weight: var(--font-weight-medium); }
-.signed-out__link-text { display: grid; }
-.signed-out__link-text > span { grid-area: 1 / 1; visibility: hidden; }
-.signed-out__link-text > [data-shown] { visibility: visible; }
-.signed-out__link-title { min-height: var(--leading-heading); font-size: var(--text-heading); line-height: var(--leading-heading); font-weight: var(--font-weight-semibold); }
-.signed-out__link-actions { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--space-8); margin-top: var(--space-8); }
+.signed-out__reveal { align-self: center; }
+.signed-out__reveal[aria-expanded='true'] > svg { rotate: 180deg; }
+.signed-out__link-actions { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(0, 1fr); gap: var(--space-8); }
 /* A button's labels in one box (its label, busy, the wait), so going from one to another moves nothing. */
 .signed-out__countdown { display: grid; justify-items: center; font-variant-numeric: tabular-nums; }
 .signed-out__busy { display: inline-flex; align-items: center; gap: var(--space-8); }
 .signed-out__countdown > span { grid-area: 1 / 1; visibility: hidden; }
 .signed-out__countdown > [data-shown] { visibility: visible; }
-.signed-out__status > [data-tone='danger'] { color: var(--color-danger); }
 /* Every line the form can say, stacked in one cell: the cell keeps the longest's height whichever shows. */
-.signed-out__status { display: grid; text-align: center; text-wrap: pretty; }
+.signed-out__status { display: grid; color: var(--color-danger); text-align: center; text-wrap: pretty; }
 .signed-out__status > span { grid-area: 1 / 1; visibility: hidden; }
 .signed-out__status > [data-shown] { visibility: visible; }
-.signed-out__links { display: flex; justify-content: center; gap: var(--space-24); }
-.signed-out__links a { color: var(--color-muted); text-decoration: underline; text-underline-offset: .18em; }
+.signed-out__links { display: flex; flex-wrap: wrap; justify-content: center; align-items: baseline; gap: var(--space-8) var(--space-24); }
+.signed-out__links a, .signed-out__links .signed-out__quiet { color: var(--color-muted); text-decoration: underline; text-underline-offset: .18em; }
 .signed-out__links a:is(:hover, :focus-visible) { color: var(--color-text); }
+/* "Use a different account" reads as one of the row's links, and keeps its countdown and hold (SignInButton). */
+.signed-out__links .ui-button.signed-out__quiet { height: auto; padding: 0; background: none; font-weight: inherit; }
+/* As a link it says nothing while a start is out (it is leaving the page), so its labels are as wide as the label. */
+.signed-out__quiet .signed-out__busy > svg { display: none; }
+@media (hover: hover) and (pointer: fine) { .signed-out__links .ui-button.signed-out__quiet:hover:not([aria-disabled='true']) { background: none; color: var(--color-text); } }
+.signed-out__links .ui-button.signed-out__quiet:focus-visible { background: none; color: var(--color-text); }
 /* 44 px to tap, without moving the line. */
-@media (pointer: coarse) { .signed-out__links a { padding: var(--space-12); margin: calc(-1 * var(--space-12)); } }
+@media (pointer: coarse) { .signed-out__links :is(a, .ui-button.signed-out__quiet) { padding: var(--space-12); margin: calc(-1 * var(--space-12)); } }
 /* Flat and calm on the page's ground: no rule, outline or ring. A notice is one solid step off the ground (its tone in
    its ink), a field a solid control fill, and focus shows the hover fill. */
 .signed-out__body > .ui-alert { border-color: transparent; background: var(--color-surface); }
