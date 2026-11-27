@@ -1,6 +1,6 @@
 import { getTableColumns, sql, type SQL } from 'drizzle-orm';
 import type { Attachment, SESv2Client, SendEmailCommandInput } from '@aws-sdk/client-sesv2';
-import { ApiError, databaseConflict, getSes, isSimulatedSes, rowId, lazyModule, log, logError, ModuleLoadError, preloadSesTransport, transientDatabaseError, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
+import { ApiError, databaseCodeOf, databaseConflict, getSes, isSimulatedSes, rowId, lazyModule, log, logError, ModuleLoadError, preloadSesTransport, transientDatabaseError, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
 import { attachments, emails, type EmailSnapshot, type EmailStatus, type CampaignDraft, type ReviewedRecipient } from './db/sending.js';
 import { approvedOriginUser, checkedDispatchAttachments, customerCredits, formattedSender, inlineMessage, LINK_RECORD_RECHECK_MS, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, sesDailyReserve, sizeCheck, statusForEvent, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
 import { receivingPolicy } from './mailbox-ingest-input.js';
@@ -14,7 +14,7 @@ import { credentialFingerprint, discoveryTarget } from './ses-region-state.js';
 import { mxResourceName, POOL_INSTALLATION, setupResources } from './ses-setup.js';
 import { forDelivery, type ReadyConnection } from './provider-credentials.js';
 import { wakeWebhooks } from './jobs.js';
-import { shareFullAlert } from './operator-alerts.js';
+import { probationBudgetAlert, shareFullAlert } from './operator-alerts.js';
 import type { CampaignScreen } from './screen.js';
 import { outbound } from './screen-calls.js';
 import { SEND_LIMITS } from './send-limits.js';
@@ -654,8 +654,11 @@ async function originDecisions(prepared: Prepared[], db: DbExecutor) {
 // is kept to the provider in-flight width: a platform reset can only strand what was actually mid-call.
 // Campaign rows are shared-locked before their email rows (cancel and the run job take the campaign row
 // first too); the campaign itself is never written here, so concurrent shards never serialize on it.
-async function claimGroup(runtime: Runtime, prepared: Prepared[], origins: Map<string, boolean>, db: DbExecutor) {
-  const input = prepared.map(item => ({
+type BudgetPass = 'off' | 'exempt' | 'meter' | 'wait';
+type ClaimRow = { id:string; status:EmailStatus | 'meter'; reason:string | null; webhooks:number; card?:{ hour?:number; day?:number; waiting?:boolean }; expires_ms?:number };
+async function claimGroup(runtime: Runtime, prepared: Prepared[], origins: Map<string, boolean>, db: DbExecutor, pass: BudgetPass) {
+  const input = prepared.map((item, position) => ({
+    position,
     id: item.mail.id, workspace_id: item.mail.workspaceId, dispatch_version: item.mail.dispatchVersion, status: 'queued', campaign_id: item.mail.campaignId,
     actor_key_id: item.mail.actorKeyId, sender: item.snapshot.from.toLowerCase(), mcp_allowed: item.mail.actorKeyId.startsWith('mcp_') && origins.get(mcpOrigin(item)) === true,
     feedback_topic: item.owner.feedbackTopic, binding:item.review?.draft.binding ?? item.mail.snapshot.binding, destinations: [...item.snapshot.to, ...item.snapshot.cc, ...item.snapshot.bcc].map(email => email.toLowerCase()),
@@ -666,9 +669,14 @@ async function claimGroup(runtime: Runtime, prepared: Prepared[], origins: Map<s
     event_id: rowId('event'), external_id: `attempt-start:${item.mail.id}:${item.mail.dispatchVersion}`, attempt: item.mail.dispatchVersion + 1,
   }));
   const rows = sql`SELECT * FROM jsonb_to_recordset(${JSON.stringify(input)}::jsonb)
-        AS x(id text, workspace_id text, dispatch_version int, status text, campaign_id text, actor_key_id text, sender text, mcp_allowed boolean, hosted boolean, feedback_topic text, binding jsonb, destinations jsonb, marketing boolean, notice boolean, topic_id text, held_stream boolean, reply_authors jsonb, snapshot jsonb, token_hash text, token_email text, token_page text, event_id text, external_id text, attempt int)`;
-  const claimed = await db.execute<{ id: string; status: EmailStatus; webhooks:number }>(sql`WITH ${claimCtes(runtime, prepared[0]!.mail.region, rows)} SELECT id,status,(SELECT count(*)::int FROM webhook_jobs) AS webhooks FROM claimed`);
-  return {statuses:new Map(claimed.rows.map(row => [row.id, row.status])),webhooks:claimed.rows[0]?.webhooks??0};
+        AS x(position int, id text, workspace_id text, dispatch_version int, status text, campaign_id text, actor_key_id text, sender text, mcp_allowed boolean, hosted boolean, feedback_topic text, binding jsonb, destinations jsonb, marketing boolean, notice boolean, topic_id text, held_stream boolean, reply_authors jsonb, snapshot jsonb, token_hash text, token_email text, token_page text, event_id text, external_id text, attempt int)`;
+  const claimed = await db.execute<ClaimRow>(sql`WITH ${claimCtes(runtime, prepared[0]!.mail.region, rows, pass)}
+    SELECT id,status,error_code AS reason,(SELECT count(*)::int FROM webhook_jobs) AS webhooks,
+      ${pass === 'meter' ? sql`b.card,extract(epoch FROM b.charged_hour + interval '1 hour' - clock_timestamp())::float8*1000 AS expires_ms FROM claimed c LEFT JOIN metered b USING(id)` : sql`NULL AS card,NULL::float8 AS expires_ms FROM claimed`}
+    ${pass === 'exempt' ? sql`UNION ALL SELECT id,'meter',NULL,0,NULL,NULL FROM classified WHERE outside_cost>0` : sql``}`);
+  const card = claimed.rows.find(r => r.card?.hour !== undefined || r.card?.waiting)?.card;
+  if (card) await probationBudgetAlert(runtime,db,card,input[0]!.event_id);
+  return claimed.rows;
 }
 /**
  * A forward's email is sent only while its endpoint is still a confirmed, unpaused forward and every approval behind it
@@ -682,7 +690,39 @@ export function forwardStillAllowed(runtime: Pick<Runtime, 'config'>, x: SQL) {
     AND h.verified AND h.declined_at IS NULL AND NOT h.paused AND NOT EXISTS(SELECT FROM jsonb_array_elements_text(f.grants) gid WHERE NOT mail_receiving_grant(f.workspace_id,gid,${receivingPolicy(runtime.config)}::jsonb))
     FOR SHARE OF f, h)`;
 }
-function claimCtes(runtime: Runtime, region: string, input: SQL) {
+function claimCtes(runtime: Runtime, region: string, input: SQL, pass: BudgetPass) {
+  const active = pass !== 'off', caps = runtime.config.dispatch.probationBudget;
+  const routeGuard = runtime.config.multiTenant ? sql`AND EXISTS (SELECT 1 FROM provider_connections pc WHERE pc.workspace_id=x.workspace_id AND pc.paused_at IS NULL
+          AND NOT (x.held_stream AND hosted_marketing_held(x.workspace_id)) FOR SHARE)
+          AND NOT EXISTS (SELECT 1 FROM sponsor_state ss WHERE ss.workspace_id=x.workspace_id AND ss.paused)` : sql``;
+  const burst = runtime.config.multiTenant && !isSimulatedSes(runtime) ? sql`CASE WHEN x.hosted AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL
+        THEN hosted_burst_ok(x.workspace_id,split_part(x.sender,'@',2),jsonb_array_length(x.destinations),NOT x.held_stream) ELSE true END` : sql`true`;
+  // The first pass can claim every exempt email even when the budget migration is missing.
+  // Only eligible rows at their current version enter the debit. Re-elect them after the
+  // first pass: a change of standing, membership, consent, route or queued version wins.
+  const classify = active ? sql`classified AS MATERIALIZED (
+    SELECT x.*, e.error_code AS previous_error, ${heldStream(sql`e`)} AS held_at_claim, CASE WHEN x.hosted AND x.workspace_id IS DISTINCT FROM ${runtime.config.platformDomainWorkspace ?? null}::text
+      AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL AND ${probationReason(sql`x.workspace_id`)} IS NOT NULL
+      THEN (SELECT count(*)::int FROM dest d WHERE d.email_id=x.id AND NOT EXISTS (
+        SELECT FROM workspace_members m JOIN nightmail_users u ON u.id=m.user_id
+        WHERE m.workspace_id=x.workspace_id AND u.email_verified AND lower(u.email)=d.email))
+      ELSE 0 END AS outside_cost
+    FROM input x JOIN eligibility el USING(id) JOIN sending_emails e ON e.workspace_id=x.workspace_id AND e.id=x.id
+      AND e.status=x.status AND e.dispatch_version=x.dispatch_version WHERE true ${routeGuard}
+    ORDER BY e.workspace_id,e.id FOR UPDATE OF e
+  ),` : sql``;
+  const meter = pass === 'meter' ? sql`metered AS MATERIALIZED (
+    SELECT m.* FROM (SELECT jsonb_agg(jsonb_build_object('id',id,'wid',workspace_id,'domain',split_part(sender,'@',2),
+      'n',jsonb_array_length(destinations),'cost',outside_cost,'direct',NOT held_at_claim)
+      ORDER BY position) AS batch FROM classified WHERE outside_cost>0) g
+      CROSS JOIN LATERAL probation_claim(g.batch,${caps!.hourly},${caps!.daily}) m
+  ),` : sql``;
+  const individual = sql`SELECT x.id, CASE WHEN ${burst} THEN NULL::text ELSE 'HOSTED_BURST_LIMIT' END AS reason
+    FROM ${active ? sql`classified` : sql`input`} x JOIN eligibility el USING(id) ${active ? sql`WHERE x.outside_cost=0` : sql``} ORDER BY x.workspace_id,x.sender,x.id`;
+  const budgets = sql`SELECT i.*,i.reason IS NULL AS allowed FROM (${individual}) i
+    ${pass === 'meter' ? sql`UNION ALL SELECT id,reason,reason IS NULL FROM metered` :
+      pass === 'wait' ? sql`UNION ALL SELECT id,'PROBATION_BUDGET_WAIT',false FROM classified WHERE outside_cost>0` : sql``}`;
+
   return sql`input AS MATERIALIZED (${input}
     ), key_state AS MATERIALIZED (
       SELECT id, workspace_id, permissions, domains FROM api_keys WHERE revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())
@@ -752,14 +792,12 @@ function claimCtes(runtime: Runtime, region: string, input: SQL) {
             WHEN x.marketing AND NOT x.notice AND NOT ${topicAllows(sql`c.workspace_id`, sql`c.id`, sql`x.topic_id`)} THEN 'topic_unsubscribed' END AS reason) cause
           WHERE d.email_id=x.id AND cause.reason IS NOT NULL ORDER BY d.n LIMIT 1) AS suppression_reason
       FROM input x
-    ), budget AS MATERIALIZED (SELECT x.id,${runtime.config.multiTenant && !isSimulatedSes(runtime) ? sql`CASE WHEN x.hosted AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL
-        THEN hosted_burst_ok(x.workspace_id,split_part(x.sender,'@',2),jsonb_array_length(x.destinations),NOT x.held_stream) ELSE true END` : sql`true`} AS allowed
-      FROM input x JOIN eligibility el USING(id) ORDER BY x.workspace_id,x.sender,x.id), claimed AS (
+    ), ${classify} ${meter} budget AS MATERIALIZED (${budgets}), claimed AS (
       UPDATE sending_emails e SET simulated = ${isSimulatedSes(runtime)},
         status = CASE WHEN NOT b.allowed THEN 'queued' WHEN NOT el.origin_ok OR NOT el.binding_ok OR NOT el.campaign_allowed THEN 'canceled' WHEN el.suppression_reason IS NULL THEN 'attempting' ELSE 'suppressed' END,
-        scheduled_at=CASE WHEN NOT b.allowed THEN date_trunc('minute',statement_timestamp())+interval '1 minute' ELSE e.scheduled_at END,
+        scheduled_at=CASE ${pass === 'wait' ? sql`WHEN b.reason='PROBATION_BUDGET_WAIT' THEN clock_timestamp()+interval '3 seconds'` : sql``} WHEN NOT b.allowed THEN date_trunc('minute',statement_timestamp())+interval '1 minute' ELSE e.scheduled_at END,
         attempt_started_at = CASE WHEN b.allowed AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL THEN clock_timestamp() ELSE e.attempt_started_at END,
-        error_code = CASE WHEN NOT b.allowed THEN 'HOSTED_BURST_LIMIT' WHEN NOT el.binding_ok AND x.binding IS NOT NULL THEN 'SENDER_BINDING_CHANGED' WHEN NOT el.origin_ok OR NOT el.binding_ok THEN 'ORIGIN_KEY_REVOKED' WHEN NOT el.campaign_allowed THEN 'CAMPAIGN_CANCELED' WHEN el.suppression_reason IS NULL THEN nullif(e.error_code,'HOSTED_BURST_LIMIT') ELSE 'RECIPIENT_INELIGIBLE' END,
+        error_code = CASE WHEN NOT b.allowed THEN b.reason WHEN NOT el.binding_ok AND x.binding IS NOT NULL THEN 'SENDER_BINDING_CHANGED' WHEN NOT el.origin_ok OR NOT el.binding_ok THEN 'ORIGIN_KEY_REVOKED' WHEN NOT el.campaign_allowed THEN 'CAMPAIGN_CANCELED' WHEN el.suppression_reason IS NULL THEN CASE WHEN e.error_code NOT IN ('PROBATION_BUDGET_WAIT','HOSTED_BURST_LIMIT') THEN e.error_code END ELSE 'RECIPIENT_INELIGIBLE' END,
         suppression_reason = CASE WHEN el.origin_ok AND el.binding_ok AND el.campaign_allowed THEN el.suppression_reason END,
         ${runtime.config.multiTenant && !isSimulatedSes(runtime) ? sql`feedback_topic_arn=x.feedback_topic,` : sql``} snapshot = CASE WHEN b.allowed THEN coalesce(x.snapshot, e.snapshot) ELSE e.snapshot END, lease_until = NULL, updated_at = clock_timestamp()
       FROM input x JOIN eligibility el ON el.id = x.id JOIN budget b ON b.id=x.id
@@ -768,20 +806,24 @@ function claimCtes(runtime: Runtime, region: string, input: SQL) {
       -- table. With a literal it could scan a queued-only partial index instead, and when the statistics were taken while
       -- nothing was queued it did: every queued row for each batch, the hold check for each pair (20,000 rows, 5 seconds).
       WHERE e.workspace_id = x.workspace_id AND e.id = x.id AND e.status = x.status AND e.dispatch_version = x.dispatch_version
-        ${runtime.config.multiTenant ? sql`AND EXISTS (SELECT 1 FROM provider_connections pc WHERE pc.workspace_id=x.workspace_id AND pc.paused_at IS NULL
-          AND NOT (x.held_stream AND hosted_marketing_held(x.workspace_id)) FOR SHARE)
-          AND NOT EXISTS (SELECT 1 FROM sponsor_state ss WHERE ss.workspace_id=x.workspace_id AND ss.paused)` : sql``}
-      RETURNING e.id,e.workspace_id,e.status,e.region,e.simulated,e.error_code,e.suppression_reason,e.dispatch_version
+        ${active ? sql`` : routeGuard}
+      RETURNING e.id,e.workspace_id,e.status,e.region,e.simulated,e.error_code,e.suppression_reason,e.dispatch_version,e.scheduled_at
     ), token AS (
       INSERT INTO operation_unsubscribe_tokens(token_hash, workspace_id, email, page_url, topic_id)
       SELECT x.token_hash, c.workspace_id, x.token_email, x.token_page, x.topic_id FROM claimed c JOIN input x ON x.id = c.id WHERE x.token_hash IS NOT NULL AND c.status = 'attempting'
       ON CONFLICT DO NOTHING
     ), attempt AS (
-      INSERT INTO sending_email_events(id, workspace_id, email_id, type, external_id, simulated, data, created_at)
+      INSERT INTO sending_email_events(id, workspace_id, email_id, type, external_id, simulated, data, created_at${pass === 'meter' ? sql`,probation_hour,probation_cost` : sql``}) /* premerge-accepted: never (dispatch_attempt) */
       SELECT x.event_id, c.workspace_id, c.id, 'dispatch_attempt', x.external_id, ${isSimulatedSes(runtime)}::boolean,
-        jsonb_build_object('attempt', x.attempt, 'providerCallPlanned', true, 'providerCallSimulated', ${isSimulatedSes(runtime)}::boolean), clock_timestamp()
-      FROM claimed c JOIN input x ON x.id = c.id WHERE c.status = 'attempting' ON CONFLICT DO NOTHING
-    ), ${terminalEvents(sql`SELECT * FROM claimed WHERE status IN ('suppressed','canceled')`)}`;
+        jsonb_build_object('attempt', x.attempt, 'providerCallPlanned', true, 'providerCallSimulated', ${isSimulatedSes(runtime)}::boolean), clock_timestamp()${pass === 'meter' ? sql`,b.charged_hour,b.outside_cost` : sql``}
+      FROM claimed c JOIN input x ON x.id=c.id ${pass === 'meter' ? sql`LEFT JOIN metered b ON b.id=c.id` : sql``} WHERE c.status = 'attempting' ON CONFLICT DO NOTHING
+    ), ${active ? sql`waiting AS (
+      INSERT INTO sending_email_events(id,workspace_id,email_id,type,simulated,data) /* premerge-accepted: never (dispatch_deferred) */
+      SELECT public.row_id('event'),c.workspace_id,c.id,'dispatch_deferred',c.simulated,
+        jsonb_build_object('code',c.error_code,'providerCalled',false,'until',c.scheduled_at)
+      FROM claimed c JOIN classified x USING(id)
+      WHERE c.status='queued' AND c.error_code='PROBATION_BUDGET_WAIT' AND c.error_code IS DISTINCT FROM x.previous_error
+    ),` : sql``} ${terminalEvents(sql`SELECT * FROM claimed WHERE status IN ('suppressed','canceled')`)}`;
 }
 
 function redactDenial(runtime: Runtime, failure: { name?: string; message?: string; $metadata?: { httpStatusCode?: number; requestId?: string } }) {
@@ -965,7 +1007,7 @@ const quotaRetry = (gate: GateState, refreshMs: number) => Math.ceil(Math.max(Da
 // daily allowance, the burst limit) is info; anything else is warn. A campaign's flow-control lines are kept 1 in 10, since a
 // campaign can send 50 a second and an invocation keeps 256 KB of log lines; each kept one says sampleRate. Failures and
 // every other deferral are always kept.
-const FLOW = new Set(['PACING_WAIT', 'DAILY_ALLOWANCE', 'HOSTED_BURST_LIMIT']);
+const FLOW = new Set(['PACING_WAIT', 'DAILY_ALLOWANCE', 'HOSTED_BURST_LIMIT', 'PROBATION_BUDGET_WAIT']);
 function logEmail(lane: Lane, mail: Mail, trace: Trace | undefined, outcome: string, reason?: string) {
   try {
     const routine = outcome === 'accepted' || FLOW.has(reason ?? ''), rate = routine && mail.snapshot.kind === 'marketing' ? 0.1 : 1;
@@ -1294,44 +1336,82 @@ async function dispatchPrepared(base: Runtime, lane: Lane, prepared: Prepared[])
     // Read MCP grants in the claim's transaction and hold their SHARE locks through the durable attempt, never during
     // SES I/O, so a grant revoked during an earlier group's sends stops this group. Other origins need just the claim.
     const checkMcp = group.some(item => item.mail.actorKeyId.startsWith('mcp_'));
-    let webhooks=0;
-    const claim = async (items: Prepared[], db: DbExecutor) => {
-      const result=await claimGroup(base,items,checkMcp ? await originDecisions(items,db) : new Map(),db); webhooks=result.webhooks; return result.statuses;
+    const budgets = base.config.dispatch.probationBudget && !isSimulatedSes(base) &&
+      group.some(item => item.owner.tenantName && item.mail.workspaceId !== base.config.platformDomainWorkspace);
+    const claim = (items: Prepared[], pass:BudgetPass) => {
+      const work = async (db:DbExecutor) => {
+        if (pass === 'meter') await db.execute(sql`SELECT set_config('lock_timeout','100ms',true),set_config('statement_timeout','2s',true)`);
+        return claimGroup(base,items,checkMcp ? await originDecisions(items,db) : new Map(),db,pass);
+      };
+      return phase('claim', () => checkMcp || pass === 'meter' ? base.db.transaction(work) : work(base.db));
     };
-    const statuses = await phase('claim', () => checkMcp ? base.db.transaction(tx => claim(group, tx)) : claim(group, base.db));
-    lane.advanced += group.length;
-    if (webhooks) pendingRecords.push(wakeWebhooks(base,webhooks));
-    for(const item of group) if(statuses.get(item.mail.id)==='queued') { deferBurst(lane.deferred,item.mail.workspaceId,item.snapshot.kind); logEmail(lane, item.mail, item.trace, 'deferred', 'HOSTED_BURST_LIMIT'); }
-    const attempting = group.filter(item => statuses.get(item.mail.id) === 'attempting');
-    for (const item of group) if (statuses.get(item.mail.id) !== 'attempting') lane.held.recipients -= cost(item);
-    const lost = group.filter(item => !statuses.has(item.mail.id));
-    counters.skipped += group.length - attempting.length;
-    if (lost.length) logLost(lost.length);
-    // A campaign row settled by the claim itself (canceled or suppressed) may have been the campaign's last; check now.
-    const settled = group.filter(item => item.mail.campaignId && ['canceled', 'suppressed'].includes(statuses.get(item.mail.id) ?? ''));
-    if (settled.length) pendingRecords.push(phase('finish', () => finishSettledCampaigns(base, [...new Map(settled.map(item => [item.mail.campaignId!, { workspace_id: item.mail.workspaceId, campaign_id: item.mail.campaignId! }])).values()])));
-    if (!attempting.length) continue;
-    // Each message takes its own evenly spaced slot, so the provider sees a steady stream at the target
-    // rate rather than one burst per group; a throttled response brakes every lane on this shard.
-    // Record the complete claim together, even on a fast database. Start a
-    // bounded flush at the first result so a stuck provider cannot hold its
-    // siblings' IDs. Singleton claims and the last response flush immediately.
-    const ready: Outcome[] = [];
-    let received = 0;
-    let cancel: (() => void) | undefined;
-    const flush = () => {
-      cancel?.(); cancel = undefined;
-      if (!ready.length) return;
-      const write = lane.record(ready.splice(0));
-      void write.catch(() => {}); // Observe immediately; propagate the write error when the batch joins.
-      pendingRecords.push(write);
+    const finishClaim = async (items:Prepared[], rows:ClaimRow[], deadlines?: Map<string,number>) => {
+      const statuses = new Map(rows.filter(r=>r.status!=='meter').map(r=>[r.id,r.status]));
+      lane.advanced += items.length;
+      const webhooks=rows.reduce((n,r)=>Math.max(n,r.webhooks),0);
+      if (webhooks) pendingRecords.push(wakeWebhooks(base,webhooks));
+      for(const item of items) if(statuses.get(item.mail.id)==='queued') {
+        const reason = rows.find(r=>r.id===item.mail.id && r.status==='queued')!.reason!;
+        if (reason==='HOSTED_BURST_LIMIT') deferBurst(lane.deferred,item.mail.workspaceId,item.snapshot.kind);
+        logEmail(lane,item.mail,item.trace,'deferred',reason);
+      }
+      const attempting = items.filter(item => statuses.get(item.mail.id) === 'attempting');
+      for (const item of items) if (statuses.get(item.mail.id) !== 'attempting') lane.held.recipients -= cost(item);
+      const lost = items.filter(item => !statuses.has(item.mail.id));
+      counters.skipped += items.length - attempting.length;
+      if (lost.length) logLost(lost.length);
+      // A campaign row settled by the claim itself (canceled or suppressed) may have been the campaign's last; check now.
+      const settled = items.filter(item => item.mail.campaignId && ['canceled', 'suppressed'].includes(statuses.get(item.mail.id) ?? ''));
+      if (settled.length) pendingRecords.push(phase('finish', () => finishSettledCampaigns(base, [...new Map(settled.map(item => [item.mail.campaignId!, { workspace_id: item.mail.workspaceId, campaign_id: item.mail.campaignId! }])).values()])));
+      if (!attempting.length) return;
+      // Each message takes its own evenly spaced slot, so the provider sees a steady stream at the target
+      // rate rather than one burst per group; a throttled response brakes every lane on this shard.
+      // Record the complete claim together, even on a fast database. Start a
+      // bounded flush at the first result so a stuck provider cannot hold its
+      // siblings' IDs. Singleton claims and the last response flush immediately.
+      const ready: Outcome[] = [];
+      let received = 0;
+      let cancel: (() => void) | undefined;
+      const flush = () => {
+        cancel?.(); cancel = undefined;
+        if (!ready.length) return;
+        const write = lane.record(ready.splice(0));
+        void write.catch(() => {}); // Observe immediately; propagate the write error when the batch joins.
+        pendingRecords.push(write);
+      };
+      const sends = await phase('send', () => Promise.allSettled(attempting.map(async item => {
+        ready.push(await lane.send(item, Math.min(claimDeadline,deadlines?.get(item.mail.id) ?? Infinity)));
+        if (++received < attempting.length) cancel ??= (options.schedulePartialFlush ?? schedulePartialFlush)(flush);
+      })));
+      flush();
+      for (const send of sends) if (send.status === 'rejected') { await Promise.all(pendingRecords); throw send.reason; }
     };
-    const sends = await phase('send', () => Promise.allSettled(attempting.map(async item => {
-      ready.push(await lane.send(item, claimDeadline));
-      if (++received < attempting.length) cancel ??= (options.schedulePartialFlush ?? schedulePartialFlush)(flush);
-    })));
-    flush();
-    for (const send of sends) if (send.status === 'rejected') { await Promise.all(pendingRecords); throw send.reason; }
+    const rows = await claim(group,budgets ? 'exempt' : 'off');
+    const pending = new Set(rows.filter(r=>r.status==='meter').map(r=>r.id));
+    if (!pending.size) { await finishClaim(group,rows); continue; }
+
+    // Start the already-claimed unmetered calls before touching the shared bucket.
+    // Even a missing migration or a timeout cannot strand them in attempting.
+    const exempt = finishClaim(group.filter(item=>!pending.has(item.mail.id)),rows.filter(r=>r.status!=='meter'));
+    void exempt.catch(()=>{});
+    const metered = group.filter(item=>pending.has(item.mail.id));
+    const before = Date.now();
+    try {
+      let result:ClaimRow[];
+      try { result = await claim(metered,'meter'); }
+      catch (error) {
+        // The metered transaction rolled back; re-elect only still-queued versions
+        // without referencing the unavailable object.
+        if (!['42P01','42703','42883','55P03','57014','42501','40001','40P01'].includes(databaseCodeOf(error) ?? '')) throw error;
+        log('warn',{code:'PROBATION_BUDGET_UNAVAILABLE',databaseCode:databaseCodeOf(error)});
+        result = await claim(metered,'wait');
+      }
+      // Do not start a provider call in an hour later than the one debited.
+      // Postgres measured the interval; the pre-query host time errs early.
+      const deadlines=new Map(result.filter(r=>r.expires_ms!=null).map(r=>[r.id,before+Number(r.expires_ms)]));
+      await finishClaim(metered,result,deadlines);
+    } finally { await exempt; }
+
   }
   // Local marketing allowance is not a regional hold: a sibling may still have capacity. Do not
   // hide the tail of its queue for a minute. Oversize transactional envelopes still get backoff.
