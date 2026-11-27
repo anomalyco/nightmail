@@ -28692,8 +28692,6 @@
             "secureDashboardSession": []
           }
         ],
-        "deprecated": true,
-        "description": "Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it.",
         "requestBody": {
           "required": true,
           "content": {
@@ -28869,8 +28867,6 @@
             "secureDashboardSession": []
           }
         ],
-        "deprecated": true,
-        "description": "Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it.",
         "parameters": [
           {
             "schema": {
@@ -29030,8 +29026,6 @@
             "secureDashboardSession": []
           }
         ],
-        "deprecated": true,
-        "description": "Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it.",
         "parameters": [
           {
             "schema": {
@@ -29213,8 +29207,6 @@
             "secureDashboardSession": []
           }
         ],
-        "deprecated": true,
-        "description": "Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it.",
         "parameters": [
           {
             "schema": {
@@ -29392,8 +29384,7 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it. Bounded to 1000 matches. Unknown observation history is never classified as inactive. Counts separate suppressed and other non-consenting contacts. Each statement stops after 15 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.",
-        "deprecated": true,
+        "description": "Bounded to 1000 matches. Unknown observation history is never classified as inactive. Counts separate suppressed and other non-consenting contacts. Each statement stops after 15 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.",
         "parameters": [
           {
             "schema": {
@@ -30975,8 +30966,7 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it. Execute a bounded read-only AudienceQL SELECT against the virtual contacts schema. Results are bounded by response size as well as LIMIT (truncated is true when capped). Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.",
-        "deprecated": true,
+        "description": "Execute a bounded read-only AudienceQL SELECT against the virtual contacts schema. Results are bounded by response size as well as LIMIT (truncated is true when capped). Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.",
         "requestBody": {
           "required": true,
           "content": {
@@ -31148,8 +31138,7 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it. Create a 15-minute immutable plan for a bounded AudienceQL bulk mutation. Does not modify contacts or memberships. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters. At most 10,000 contacts per plan; newest 25 unapplied plans kept per workspace.",
-        "deprecated": true,
+        "description": "Create a 15-minute immutable plan for a bounded AudienceQL bulk mutation. Does not modify contacts or memberships. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters. At most 10,000 contacts per plan; newest 25 unapplied plans kept per workspace.",
         "requestBody": {
           "required": true,
           "content": {
@@ -31322,8 +31311,7 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it. Apply an immutable AudienceQL plan once. Prior opt-outs require confirmResubscribe.",
-        "deprecated": true,
+        "description": "Apply an immutable AudienceQL plan once. Prior opt-outs require confirmResubscribe.",
         "requestBody": {
           "required": true,
           "content": {
@@ -61464,8 +61452,7 @@
             "secureDashboardSession": []
           }
         ],
-        "description": "Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it. Non-PASS virus scans are always quarantined. Store non-PASS spam scans without normal receipt notifications, or quarantine them privately.",
-        "deprecated": true,
+        "description": "Non-PASS virus scans are always quarantined. Store non-PASS spam scans without normal receipt notifications, or quarantine them privately.",
         "requestBody": {
           "required": true,
           "content": {

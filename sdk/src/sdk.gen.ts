@@ -773,11 +773,6 @@ export const listSegments = <ThrowOnError extends boolean = false>(options?: Opt
     ...options
 });
 
-/**
- * Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it.
- *
- * @deprecated
- */
 export const createSegment = <ThrowOnError extends boolean = false>(options: Options<CreateSegmentData, ThrowOnError>): RequestResult<CreateSegmentResponses, CreateSegmentErrors, ThrowOnError> => (options.client ?? client).post<CreateSegmentResponses, CreateSegmentErrors, ThrowOnError>({
     security: [
         { scheme: 'bearer', type: 'http' },
@@ -800,11 +795,6 @@ export const createSegment = <ThrowOnError extends boolean = false>(options: Opt
     }
 });
 
-/**
- * Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it.
- *
- * @deprecated
- */
 export const deleteSegment = <ThrowOnError extends boolean = false>(options: Options<DeleteSegmentData, ThrowOnError>): RequestResult<DeleteSegmentResponses, DeleteSegmentErrors, ThrowOnError> => (options.client ?? client).delete<DeleteSegmentResponses, DeleteSegmentErrors, ThrowOnError>({
     security: [
         { scheme: 'bearer', type: 'http' },
@@ -823,11 +813,6 @@ export const deleteSegment = <ThrowOnError extends boolean = false>(options: Opt
     ...options
 });
 
-/**
- * Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it.
- *
- * @deprecated
- */
 export const getSegment = <ThrowOnError extends boolean = false>(options: Options<GetSegmentData, ThrowOnError>): RequestResult<GetSegmentResponses, GetSegmentErrors, ThrowOnError> => (options.client ?? client).get<GetSegmentResponses, GetSegmentErrors, ThrowOnError>({
     security: [
         { scheme: 'bearer', type: 'http' },
@@ -846,11 +831,6 @@ export const getSegment = <ThrowOnError extends boolean = false>(options: Option
     ...options
 });
 
-/**
- * Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it.
- *
- * @deprecated
- */
 export const updateSegment = <ThrowOnError extends boolean = false>(options: Options<UpdateSegmentData, ThrowOnError>): RequestResult<UpdateSegmentResponses, UpdateSegmentErrors, ThrowOnError> => (options.client ?? client).patch<UpdateSegmentResponses, UpdateSegmentErrors, ThrowOnError>({
     security: [
         { scheme: 'bearer', type: 'http' },
@@ -874,9 +854,7 @@ export const updateSegment = <ThrowOnError extends boolean = false>(options: Opt
 });
 
 /**
- * Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it. Bounded to 1000 matches. Unknown observation history is never classified as inactive. Counts separate suppressed and other non-consenting contacts. Each statement stops after 15 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.
- *
- * @deprecated
+ * Bounded to 1000 matches. Unknown observation history is never classified as inactive. Counts separate suppressed and other non-consenting contacts. Each statement stops after 15 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.
  */
 export const previewSegment = <ThrowOnError extends boolean = false>(options: Options<PreviewSegmentData, ThrowOnError>): RequestResult<PreviewSegmentResponses, PreviewSegmentErrors, ThrowOnError> => (options.client ?? client).post<PreviewSegmentResponses, PreviewSegmentErrors, ThrowOnError>({
     security: [
@@ -1061,9 +1039,7 @@ export const updateTopic = <ThrowOnError extends boolean = false>(options: Optio
 });
 
 /**
- * Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it. Execute a bounded read-only AudienceQL SELECT against the virtual contacts schema. Results are bounded by response size as well as LIMIT (truncated is true when capped). Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.
- *
- * @deprecated
+ * Execute a bounded read-only AudienceQL SELECT against the virtual contacts schema. Results are bounded by response size as well as LIMIT (truncated is true when capped). Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters.
  */
 export const queryAudience = <ThrowOnError extends boolean = false>(options: Options<QueryAudienceData, ThrowOnError>): RequestResult<QueryAudienceResponses, QueryAudienceErrors, ThrowOnError> => (options.client ?? client).post<QueryAudienceResponses, QueryAudienceErrors, ThrowOnError>({
     security: [
@@ -1088,9 +1064,7 @@ export const queryAudience = <ThrowOnError extends boolean = false>(options: Opt
 });
 
 /**
- * Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it. Create a 15-minute immutable plan for a bounded AudienceQL bulk mutation. Does not modify contacts or memberships. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters. At most 10,000 contacts per plan; newest 25 unapplied plans kept per workspace.
- *
- * @deprecated
+ * Create a 15-minute immutable plan for a bounded AudienceQL bulk mutation. Does not modify contacts or memberships. Each statement stops after 5 seconds: a request that needs longer is refused with 422 READ_TOO_LARGE. Narrow the dates or filters. At most 10,000 contacts per plan; newest 25 unapplied plans kept per workspace.
  */
 export const planAudienceMutation = <ThrowOnError extends boolean = false>(options: Options<PlanAudienceMutationData, ThrowOnError>): RequestResult<PlanAudienceMutationResponses, PlanAudienceMutationErrors, ThrowOnError> => (options.client ?? client).post<PlanAudienceMutationResponses, PlanAudienceMutationErrors, ThrowOnError>({
     security: [
@@ -1115,9 +1089,7 @@ export const planAudienceMutation = <ThrowOnError extends boolean = false>(optio
 });
 
 /**
- * Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it. Apply an immutable AudienceQL plan once. Prior opt-outs require confirmResubscribe.
- *
- * @deprecated
+ * Apply an immutable AudienceQL plan once. Prior opt-outs require confirmResubscribe.
  */
 export const applyAudiencePlan = <ThrowOnError extends boolean = false>(options: Options<ApplyAudiencePlanData, ThrowOnError>): RequestResult<ApplyAudiencePlanResponses, ApplyAudiencePlanErrors, ThrowOnError> => (options.client ?? client).post<ApplyAudiencePlanResponses, ApplyAudiencePlanErrors, ThrowOnError>({
     security: [
@@ -4634,9 +4606,7 @@ export const getInboundScanPolicy = <ThrowOnError extends boolean = false>(optio
 });
 
 /**
- * Deprecated, with no replacement. Removed after 25 February 2027. Tell support if you rely on it. Non-PASS virus scans are always quarantined. Store non-PASS spam scans without normal receipt notifications, or quarantine them privately.
- *
- * @deprecated
+ * Non-PASS virus scans are always quarantined. Store non-PASS spam scans without normal receipt notifications, or quarantine them privately.
  */
 export const updateInboundScanPolicy = <ThrowOnError extends boolean = false>(options: Options<UpdateInboundScanPolicyData, ThrowOnError>): RequestResult<UpdateInboundScanPolicyResponses, UpdateInboundScanPolicyErrors, ThrowOnError> => (options.client ?? client).patch<UpdateInboundScanPolicyResponses, UpdateInboundScanPolicyErrors, ThrowOnError>({
     security: [

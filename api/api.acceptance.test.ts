@@ -4227,6 +4227,47 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
         const losses = errors.mock.calls.map(c => JSON.parse(String(c.arguments[0]))).filter(v => v.code === 'DEPRECATED_CALL_WRITE_LOST');
         assert.deepEqual(losses.map(v => [v.operation, v.lostWrites]), [['inviteWorkspaceMember', 1]]);
       });
+      await mx.test('segments, AudienceQL and inbound scan policy serve successes and refusals without retirement notices', async t => {
+        const owner = await workspaceFixture(address(), true);
+        const { ApiError } = await import('./src/core.js');
+        const writes: Promise<void>[] = [];
+        const rt = { ...runtime, detach: (work: (env: typeof runtime) => Promise<void>) => {
+          const pending = work(runtime); writes.push(pending); return pending;
+        } };
+        const send = (method: string, path: string, body?: Json, headers: Record<string, string> = { cookie: owner.cookie }) =>
+          http(method, path, undefined, body, { origin, ...headers }, 5000, origin, r => app.fetch(r, rt));
+        const check = (reply: Reply, status: number) => {
+          for (const name of ['deprecation', 'sunset', 'link']) assert.equal(reply.headers.get(name), null, name);
+          return status < 400 ? ok(reply, status) : error(reply, status);
+        };
+        // Four routes do not look up an addressable resource (AudienceQL returns 422 for an unknown list).
+        // For them inject NOT_FOUND at session lookup, so the 404 still goes through the matched route's response middleware.
+        async function exercise(method: string, path: string, body: Json | undefined, success: number, missing?: { path: string; body?: Json }) {
+          check(await send(method, path, body, {}), 401);
+          check(await send(method, path, body, { cookie: owner.cookie, ...select(b.org.id) }), 403);
+          if (missing) check(await send(method, missing.path, missing.body ?? body), 404);
+          else {
+            const lookup = t.mock.method(rt.db, 'execute', () => { throw new ApiError(404, 'NOT_FOUND', 'Synthetic missing resource.'); });
+            try { check(await send(method, path, body), 404); } finally { lookup.mock.restore(); }
+          }
+          if (body === undefined) check(await send(method, '/v1/segments/' + 'x'.repeat(121)), 422);
+          else check(await send(method, path, { unexpected: true }), 422);
+          return check(await send(method, path, body), success);
+        }
+        const segments = '/v1/segments', query = '/v1/audience-query';
+        const segment = await exercise('POST', segments, { name: 'Retained segment', rule: { field: 'email', operator: 'contains', value: '@' } }, 201);
+        const path = segments + '/' + segment.id, missing = { path: segments + '/missing' };
+        await exercise('GET', path, undefined, 200, missing);
+        await exercise('PATCH', path, { name: 'Renamed' }, 200, missing);
+        await exercise('POST', path + '/preview', {}, 200, { path: missing.path + '/preview' });
+        await exercise('DELETE', path, undefined, 200, missing);
+        await exercise('POST', query + '/query', { statement: 'SELECT id FROM contacts LIMIT 1' }, 200);
+        const plan = await exercise('POST', query + '/plan', { statement: "UPDATE contacts SET name = 'Kept' WHERE name = 'Before' LIMIT 1" }, 201);
+        await exercise('POST', query + '/apply', { planId: plan.id }, 200, { path: query + '/apply', body: { planId: 'aqp_' + '0'.repeat(32) } });
+        await exercise('PATCH', '/v1/inbound/policy', { spam: 'quarantine' }, 200);
+        await Promise.all(writes);
+        assert.equal((await pool.query('SELECT count(*)::int AS n FROM deprecated_call_days WHERE workspace_id=$1', [owner.org.id])).rows[0].n, 0);
+      });
       await mx.test('50 sequential deprecated calls give 50 recorded calls and a complete usage window, including a budget refusal', async t => {
         const { nodeRuntime } = await import('./src/adapters/node.js');
         const { mkdtemp, mkdir, writeFile, rm } = await import('node:fs/promises');
@@ -4255,10 +4296,10 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
         // Await only the response, never the previous count. Each write takes longer than a call.
         for (let i = 1; i <= 50; i++) {
           if (i === 50) rt.config.apiRateLimitPerMinute = 0;
-          const reply = await http('GET', '/v1/segments/missing', key, undefined, {}, 5000, origin, r => app.fetch(r, rt));
-          if (i === 50) error(reply, 429, 'REQUEST_RATE_LIMITED'); else error(reply, 404, 'NOT_FOUND');
+          const reply = await http('POST', base + '/members', key, { email: ownerEmail, role: 'member' }, {}, 5000, origin, r => app.fetch(r, rt));
+          if (i === 50) error(reply, 429, 'REQUEST_RATE_LIMITED'); else error(reply, 403, 'DASHBOARD_AUTH_REQUIRED');
         }
-        const count = async () => Number((await pool.query(`SELECT sum(calls) AS n FROM ${schema}.deprecated_call_days WHERE operation='getSegment' AND workspace_id=$1`, [owner.org.id])).rows[0].n);
+        const count = async () => Number((await pool.query(`SELECT sum(calls) AS n FROM ${schema}.deprecated_call_days WHERE operation='inviteWorkspaceMember' AND workspace_id=$1`, [owner.org.id])).rows[0].n);
         const deadline = Date.now() + 5000;
         while (await count() < 50 && Date.now() < deadline) await new Promise(done => setTimeout(done, 10));
         assert.equal(await count(), 50);
@@ -4280,7 +4321,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           { env: { ...process.env, DATABASE_URL: url.href, NIGHTLY_REPORT_DIR: dir }, encoding: 'utf8' });
         const report = JSON.parse(out);
         assert.equal(report.status, 'complete', out);
-        assert.deepEqual(report.operations.find((r: Json) => r.operation === 'getSegment'), { operation: 'getSegment', recordedCalls: '50', distinctRecordedWorkspaces: 1 });
+        assert.deepEqual(report.operations.find((r: Json) => r.operation === 'inviteWorkspaceMember'), { operation: 'inviteWorkspaceMember', recordedCalls: '50', distinctRecordedWorkspaces: 1 });
       });
       const invitation=ok(await local('POST',`${base}/invitations`,{email:guestEmail,role:'member'},a.cookie),201);
       // The link opens the dashboard's review of it, not the homepage at the site's root.
