@@ -19386,11 +19386,12 @@
                 ],
                 "enum": [
                   "not_available",
+                  "paused",
                   "new_workspace",
                   "allowance_used",
                   null
                 ],
-                "description": "Why no email went out, null when one did. not_available: this installation sends no invitation email, or your account has no verified address to be named by. new_workspace: invitations are emailed once the workspace has a verified domain or has finished its evaluation. allowance_used: the invitation emails for today, or to this address, are used."
+                "description": "Why no email went out, null when one did. not_available: this installation sends no invitation email, or your account has no verified address to be named by. paused: this workspace is paused. new_workspace: invitations are emailed once the workspace has its own verified domain or has finished its evaluation. allowance_used: the invitation emails for today, or to this address, are used."
               },
               "nextStep": {
                 "type": "string",
@@ -67897,7 +67898,7 @@
       },
       "post": {
         "operationId": "inviteWorkspaceMember",
-        "description": "Deprecated: use `createWorkspaceInvitation`. Removed after 25 February 2027. Invite an email address. Membership starts only after acceptance by the verified address. Hosted, the invitee is emailed the link once the workspace has a verified domain or has finished its evaluation (emailed says so; at most 20 invitation emails a workspace a day); otherwise share the returned URL. An invitation never grants more than the inviter's role, and an owner invitation is made only in the dashboard.",
+        "description": "Deprecated: use `createWorkspaceInvitation`. Removed after 25 February 2027. Invite an email address. Membership starts only after acceptance by the verified address. Hosted, the invitee is emailed the link once the workspace has its own verified domain or has finished its evaluation (emailed says so; at most 20 invitation emails a workspace a day); otherwise share the returned URL. An invitation never grants more than the inviter's role, and an owner invitation is made only in the dashboard.",
         "tags": [
           "Workspaces"
         ],
@@ -68054,7 +68055,7 @@
     "/v1/workspaces/current/invitations": {
       "post": {
         "operationId": "createWorkspaceInvitation",
-        "description": "Invite an email address. Membership starts only after acceptance by the verified address. Hosted, the invitee is emailed the link once the workspace has a verified domain or has finished its evaluation (emailed says so; at most 20 invitation emails a workspace a day); otherwise share the returned URL. An invitation never grants more than the inviter's role, and an owner invitation is made only in the dashboard. Owners and admins, in the dashboard or over their own MCP sign-in; API keys and agent tokens get 403 DASHBOARD_AUTH_REQUIRED.",
+        "description": "Invite an email address. Membership starts only after acceptance by the verified address. Hosted, the invitee is emailed the link once the workspace has its own verified domain or has finished its evaluation (emailed says so; at most 20 invitation emails a workspace a day); otherwise share the returned URL. An invitation never grants more than the inviter's role, and an owner invitation is made only in the dashboard. Owners and admins, in the dashboard or over their own MCP sign-in; API keys and agent tokens get 403 DASHBOARD_AUTH_REQUIRED.",
         "tags": [
           "Workspaces"
         ],

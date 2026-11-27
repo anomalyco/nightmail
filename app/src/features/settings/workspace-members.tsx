@@ -92,11 +92,11 @@ export function Invitations({ owner }: { owner: boolean }) {
   </section>
 }
 
-// How the answer to an invitation opens: it was emailed, or why the link is the inviter's to send. The address follows
-// on its own line.
+// How the answer to an invitation opens: it was emailed, or why the link is the inviter's to send (a reason without a
+// line of its own, such as a paused workspace, opens as not_available does). The address follows on its own line.
 const inviteAnswer = {
   emailed: 'We emailed this link to:',
-  new_workspace: 'Invitations are emailed once this workspace has a verified domain or finishes its evaluation. For now, send this link to:',
+  new_workspace: 'Invitations are emailed once this workspace has its own verified domain or finishes its evaluation. For now, send this link to:',
   allowance_used: 'Today’s invitation emails are used. Send this link to:',
   not_available: 'No email was sent. Send this link to:',
 } as const
@@ -122,7 +122,8 @@ export function InviteDialog({ open, owner, onOpenChange }: { open: boolean; own
   // as the taller of the two from the start and the footer stays where it is. The answer's height does not depend on
   // what the answer is: every opening line is laid out and one shown, and the address and the link keep to one line each.
   // The link works only for the invited address; its expiry is in Invitations, where it can be copied again.
-  const answer = created ? created.emailed ? 'emailed' : created.notEmailedReason ?? 'not_available' : null
+  const reason = created?.notEmailedReason
+  const answer = created ? created.emailed ? 'emailed' : reason && reason in inviteAnswer ? reason : 'not_available' : null
   return <Dialog sensitive={created !== null} open={open} onOpenChange={next => { if (created) { if (!next) close() } else if (!create.isPending) { if (next) onOpenChange(true); else close() } }}
     title={created ? created.emailed ? 'Invitation sent' : 'Share this invitation link' : 'Invite teammate'}
     footer={created ? <Button key="done" variant="primary" autoFocus onClick={close}>Done</Button> : <><Button disabled={create.isPending} onClick={close}>Cancel</Button><Button className="settings-invite__submit" variant="primary" loading={create.isPending} type="submit" form="invite-member">Invite</Button></>}>
