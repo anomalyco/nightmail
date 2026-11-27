@@ -914,11 +914,10 @@ export async function seed(fx) {
   // A role address list hygiene flags (Audience · risky): campaigns skip it until someone sends to it anyway.
   const risky = await dana.api('POST', '/v1/contacts', { email: 'noreply@example.net' });
   await dana.api('POST', `/v1/lists/${list.id}/members`, { contactIds: [...contacts, risky].map(c => c.id) });
-  const segment = await dana.api('POST', '/v1/segments', { name: 'Pro plan', rule: { field: 'plan', operator: 'eq', value: 'pro' } });
-  // Property rules (Segment · property rules): a string, a day and a presence check.
-  const propertySegment = await dana.api('POST', '/v1/segments', { name: 'Waiting companies', rule: { operator: 'and', rules: [
-    { field: 'property', key: 'status', type: 'string', operator: 'eq', value: 'waiting' }, { field: 'property', key: 'joined_at', type: 'date', operator: 'before', value: '2026-11-20' },
-    { field: 'property', key: 'mailbox', type: 'string', operator: 'eq', value: 'company' }, { field: 'property', key: 'attempts', type: 'number', operator: 'gt', value: 0 }, { field: 'property', key: 'let_in_at', type: 'date', operator: 'notSet' }] } });
+  // A campaign given a segment through the API, which the dashboard can't choose (Campaign review's guard: Review names it
+  // and a save from Review keeps it).
+  const keptSegment = await dana.api('POST', '/v1/segments', { name: 'Kept through the API', rule: { field: 'plan', operator: 'eq', value: 'pro' } });
+  await dana.api('POST', '/v1/campaigns', { name: 'Segment kept', subject: 'Segment kept', from: 'news@mail.northwind.example', html: '<p>Hello</p>', audience: { listId: list.id, segmentId: keptSegment.id } });
   // Topics (Audience · Topics, and the contact's Topics section): one everyone subscribed gets, one only those who opt in.
   await dana.api('POST', '/v1/topics', { name: 'Product updates', description: 'New features and changes, about once a month.' });
   await dana.api('POST', '/v1/topics', { name: 'Events', description: 'Invitations to talks and meetups.', subscribedByDefault: false });
@@ -1156,6 +1155,6 @@ export async function seed(fx) {
   fx.liveKey = agent.secret;
   return {
     ...newsletterIds, mcp, deviceCode: 'BCDF-GHJK', abuseCluster, restricted: 'ws_harbor', email, junkEmail, imageEmail, bouncedEmail: failed.bounced, delayedEmail: failed.delayed, receivedEmail: 'msg_northwind_invoice', threadEmail: thread.email, threadReceived: thread.received, supportThread: thread.thread, domain: nw.id, sendingDomain: sendingDomain.id, stuckDomain: stuckDomain.id, correctDomain: correctDomain.id, noDnsDomain: noDnsDomain.id, wildcardDomain: wildcardDomain.id, parkedDomain: parkedDomain.id, builtinDomain: builtinDomain.id, address: A.support.id, inbox, inboundWebhook: crmId,
-    webhook: hook.webhook?.id ?? hook.id, list: list.id, contact: contact.id, campaign: campaign.id, readyCampaign: readyCampaign.id, rampCampaign: rampCampaign.id, template: template.id ?? template.template?.id, segment: segment.id, propertySegment: propertySegment.id, supportConversation, supportEmail, supportAction, supportFeedback, continueConversation, continueMessage, linkConversation, linkMessage, answerConversation, answerMessage, outConversation, outMessage,
+    webhook: hook.webhook?.id ?? hook.id, list: list.id, contact: contact.id, campaign: campaign.id, readyCampaign: readyCampaign.id, rampCampaign: rampCampaign.id, template: template.id ?? template.template?.id, supportConversation, supportEmail, supportAction, supportFeedback, continueConversation, continueMessage, linkConversation, linkMessage, answerConversation, answerMessage, outConversation, outMessage,
   };
 }

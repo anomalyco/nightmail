@@ -1,6 +1,6 @@
 import { Fragment } from 'react'
 import { useSearchParams } from 'react-router'
-import { SearchField, ControlSkeleton, FieldSkeleton, LoadingRegion, PageHeader, SectionHeader, Select, SkeletonText, TableSkeleton, Tabs, type SkeletonColumn } from '../../components/ui'
+import { SearchField, ControlSkeleton, LoadingRegion, PageHeader, SectionHeader, Select, SkeletonText, TableSkeleton, Tabs, type SkeletonColumn } from '../../components/ui'
 import { AudienceHeader } from './header'
 import { consentTitle, statusOptions } from './consent'
 import { rememberedPageSize } from '../../lib/pagination'
@@ -43,12 +43,6 @@ export const listColumns: SkeletonColumn[] = [
   { key: 'total', label: 'Total', width: 88, align: 'right', card: 'aside' },
   { key: 'created', label: 'Created', width: 124, card: 'hide' },
 ]
-// The loaded table's own columns (segments.tsx), so the route skeleton and the list agree.
-export const segmentColumns: SkeletonColumn[] = [
-  { key: 'name', label: 'Name', width: '32%', card: 'title' },
-  { key: 'rule', label: 'Conditions', card: 'line' },
-  { key: 'updatedAt', label: 'Updated', width: 124, card: 'hide' },
-]
 // Topics (topics.tsx): the name takes the slack; a card shows the description under it, and the menu at its end.
 export const topicColumns: SkeletonColumn[] = [
   { key: 'name', label: 'Name', width: '24%', card: 'title' },
@@ -89,21 +83,15 @@ export function ContactDetailBodySkeleton() {
     <div className="section audience-properties"><section><SectionHeader title="Properties" /><dl className="ui-facts">{['Country', 'Added', 'Last opened'].map(label => <Fragment key={label}><dt>{label}</dt><dd><SkeletonText width="65%" /></dd></Fragment>)}</dl></section></div>
   </>
 }
-export function SegmentEditorBodySkeleton() {
-  return <div className="stack audience-editor"><div className="audience-name"><FieldSkeleton label="Segment name" /></div>
-    <section className="section stack"><SectionHeader title="Conditions" actions={<ControlSkeleton width={104} />} /><div className="cluster"><span>Match</span><ControlSkeleton width={220} /></div><div className="audience-rules"><div className="audience-rule audience-rule--head" aria-hidden="true"><span>Field</span><span>Condition</span><span>Value</span><span /></div><div className="audience-rule"><ControlSkeleton /><ControlSkeleton /><ControlSkeleton /><ControlSkeleton width="var(--control-height)" /></div></div><div className="cluster"><ControlSkeleton width={133} /></div></section>
-    <section className="section stack"><SectionHeader title="Matching contacts" actions={<ControlSkeleton width={220} />} /><AudienceSummarySkeleton /></section></div>
-}
-export function AudienceRouteSkeleton({ kind, isNew = false }: { kind: 'contacts' | 'contact' | 'lists' | 'list' | 'segments' | 'segment' | 'topics'; isNew?: boolean }) {
+export function AudienceRouteSkeleton({ kind }: { kind: 'contacts' | 'contact' | 'lists' | 'list' | 'topics' }) {
   const [params] = useSearchParams()
   const status = statusOptions.some(option => option.value === params.get('status')) ? params.get('status')! : ''
   if (kind === 'contact') return <LoadingRegion className="audience-page" label="Loading contact"><PageHeader title={<SkeletonText width={64} lineHeight={24} />} backTo="/audience" actions={<><ControlSkeleton width={109} /><ControlSkeleton width={111} /></>} /><ContactDetailBodySkeleton /></LoadingRegion>
   if (kind === 'list') return <LoadingRegion className="audience-page" label="Loading list"><PageHeader title={<SkeletonText width={96} lineHeight={24} />} backTo="/audience/lists" actions={<><ControlSkeleton width={85} /><ControlSkeleton width={120} /></>} /><AudienceMembersSkeleton /></LoadingRegion>
-  if (kind === 'segment') return <LoadingRegion className="audience-page" label="Loading segment"><PageHeader title={isNew ? 'Create segment' : 'Edit segment'} backTo="/audience/segments" actions={<ControlSkeleton width={121} />} /><SegmentEditorBodySkeleton /></LoadingRegion>
   if (kind === 'topics') return <LoadingRegion className="audience-page" label="Loading topics"><AudienceHeader actions={<ControlSkeleton width={113} />} /><div className="data-toolbar"><Select className="audience-status-filter" aria-label="Show" value="active" onValueChange={() => {}} options={[{ value: 'active', label: 'Active topics' }]} disabled /></div><TableSkeleton className="audience-topics" columns={topicColumns} rows={5} /></LoadingRegion>
   const contacts = kind === 'contacts'
-  return <LoadingRegion className="audience-page" label={`Loading ${kind}`}><AudienceHeader actions={<>{contacts && <ControlSkeleton width={120} />}<ControlSkeleton width={contacts ? 98 : kind === "lists" ? 85 : 121} /></>} />
+  return <LoadingRegion className="audience-page" label={`Loading ${kind}`}><AudienceHeader actions={<>{contacts && <ControlSkeleton width={120} />}<ControlSkeleton width={contacts ? 98 : 85} /></>} />
     <div className="data-toolbar"><div className="cluster">{contacts ? <><SearchField className="search-box--list" aria-label="Search contacts" placeholder="Search email or name" disabled /><Select className="audience-status-filter" aria-label="Filter by status" value="" onValueChange={() => {}} options={[{ value: '', label: 'All contacts' }]} disabled /><div className="audience-list-filter"><ControlSkeleton /></div></> : <ControlSkeleton width={320} />}</div></div>
-    <TableSkeleton className={contacts ? 'audience-contacts' : kind === 'lists' ? 'audience-lists' : undefined} columns={contacts ? contactColumnsFor(status) : kind === 'lists' ? listColumns : segmentColumns} rows={contacts ? rememberedPageSize('contacts') || 8 : 5} pagination />
+    <TableSkeleton className={contacts ? 'audience-contacts' : 'audience-lists'} columns={contacts ? contactColumnsFor(status) : listColumns} rows={contacts ? rememberedPageSize('contacts') || 8 : 5} pagination />
   </LoadingRegion>
 }

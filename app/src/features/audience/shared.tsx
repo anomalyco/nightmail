@@ -126,24 +126,3 @@ export function ContactTable({ contacts, lists = [], members = false, status, lo
   } }))} />
 }
 
-// A segment's public rule (API SegmentRule) as one readable line: `Country is DE`, `Not opened in 90 days`,
-// `Plan is pro and (Country is DE or Country is FR)`, `joined_at is before 2026-11-20`.
-type PublicRule = { field?: string; key?: string; type?: string; operator?: string; value?: unknown; days?: unknown; rules?: PublicRule[] }
-const ruleFields: Record<string, string> = { email: 'Email', firstName: 'First name', plan: 'Plan', country: 'Country' }
-const propertyVerbs: Record<string, string> = { 'string:eq': 'is', 'string:neq': 'is not', 'string:contains': 'contains', 'number:eq': '=', 'number:lt': '<', 'number:gt': '>', 'date:before': 'is before', 'date:after': 'is after', 'date:on': 'is on' }
-export function ruleSummary(rule: unknown, nested = false): string {
-  const r = (rule ?? {}) as PublicRule
-  if (Array.isArray(r.rules)) {
-    const parts = r.rules.map(child => ruleSummary(child, true))
-    const text = parts.join(r.operator === 'or' ? ' or ' : ' and ')
-    return nested && parts.length > 1 ? `(${text})` : text || 'Everyone'
-  }
-  if (r.field === 'lastOpenAt' || r.field === 'lastClickAt') {
-    const verb = r.field === 'lastOpenAt' ? 'opened' : 'clicked', days = number(Number(r.days))
-    return r.operator === 'inactive' ? `Not ${verb} in ${days} days` : `${verb[0].toUpperCase()}${verb.slice(1)} in the last ${days} days`
-  }
-  if (r.field === 'property') return r.operator === 'set' || r.operator === 'notSet' ? `${r.key ?? ''} ${r.operator === 'set' ? 'is set' : 'is not set'}`
-    : `${r.key ?? ''} ${propertyVerbs[`${r.type}:${r.operator}`] ?? r.operator ?? 'is'} ${String(r.value ?? '')}`
-  const op = r.operator === 'neq' ? 'is not' : r.operator === 'contains' ? 'contains' : 'is'
-  return `${ruleFields[r.field ?? ''] ?? r.field ?? 'Value'} ${op} ${String(r.value ?? '')}`
-}

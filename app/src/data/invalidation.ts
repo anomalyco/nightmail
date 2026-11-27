@@ -12,13 +12,12 @@ export const staleAfterWrite = (queryKey: readonly unknown[], refreshSes: boolea
 // Audited writes include 'activity' so Settings -> Activity stays fresh when visited (never refetched unless mounted).
 // When unsure, include the affected resource rather than risking stale data.
 export const invalidate = {
-  contactProfile: ['contacts', 'segments', 'campaign-audience', 'activity'] as const,
-  contactMembership: ['contacts', 'lists', 'segments', 'newsletter', 'newsletters', 'campaign-audience', 'activity'] as const,
-  contactConsent: ['contacts', 'consent-history', 'lists', 'segments', 'newsletter', 'newsletters', 'campaign-audience', 'activity'] as const,
-  audienceBulk: ['contacts', 'consent-history', 'lists', 'segments', 'newsletter', 'newsletters', 'campaign-audience', 'activity'] as const,
+  contactProfile: ['contacts', 'campaign-audience', 'activity'] as const,
+  contactMembership: ['contacts', 'lists', 'newsletter', 'newsletters', 'campaign-audience', 'activity'] as const,
+  contactConsent: ['contacts', 'consent-history', 'lists', 'newsletter', 'newsletters', 'campaign-audience', 'activity'] as const,
+  audienceBulk: ['contacts', 'consent-history', 'lists', 'newsletter', 'newsletters', 'campaign-audience', 'activity'] as const,
   lists: ['lists', 'campaign-audience-options', 'campaign-audience', 'newsletter', 'newsletters', 'activity'] as const,
-  listRemove: ['lists', 'contacts', 'segments', 'campaign-audience-options', 'campaign-audience', 'newsletter', 'newsletters', 'activity'] as const,
-  segments: ['segments', 'campaign-audience-options', 'campaign-audience', 'activity'] as const,
+  listRemove: ['lists', 'contacts', 'campaign-audience-options', 'campaign-audience', 'newsletter', 'newsletters', 'activity'] as const,
   // A topic's name shows on contacts and campaigns; archiving one changes who a campaign with it counts.
   topics: ['topics', 'contacts', 'campaign-audience', 'activity'] as const,
   campaignArchive: ['campaign', 'campaigns', 'overview', 'activity'] as const,
@@ -60,8 +59,8 @@ export function invalidateResources(client: QueryClient, resources: readonly str
   // Review reads these together, so either source changing invalidates the presentation result.
   if (set.has('campaign-audience') || set.has('email-check')) set.add('campaign-review-display')
   const active = client.invalidateQueries({ predicate: query => query.queryKey[0] === 'nightmail' && set.has(resourceOf(query.queryKey)) })
-  // Domain, list, and segment changes also mark cached campaign-options stale without refetching while unmounted.
-  if (!set.has('campaign-options') && (set.has('domains') || set.has('lists') || set.has('segments'))) {
+  // Domain and list changes also mark cached campaign-options stale without refetching while unmounted.
+  if (!set.has('campaign-options') && (set.has('domains') || set.has('lists'))) {
     void client.invalidateQueries({ predicate: query => query.queryKey[0] === 'nightmail' && resourceOf(query.queryKey) === 'campaign-options', refetchType: 'none' }).catch(() => {})
   }
   return active

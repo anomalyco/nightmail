@@ -171,7 +171,7 @@ Current facts for general questions, in chat and email: answer from these, with 
 
 | Signal | Threshold | Usual cause → fix |
 | --- | --- | --- |
-| Complaints (per provider) | > 0.05% notice, > 0.1% serious, ≥ 0.3% critical | Unwanted mail → send to an engaged segment, confirm opt-in, send less often |
+| Complaints (per provider) | > 0.05% notice, > 0.1% serious, ≥ 0.3% critical | Unwanted mail → confirm opt-in, send less often, and send only to people who asked for it |
 | Hard bounces | > 2%; > 5% means a list problem | Old, bought or mistyped list → stop mailing that source, validate at signup |
 | First-send hard bounces on a recent import | > 3% | That import's source |
 | `5.7.26` or `5.7.1` unauthenticated (Gmail), `5.7.509` or `5.7.515` (Outlook) | any | Authentication → fix DMARC or alignment on that domain |

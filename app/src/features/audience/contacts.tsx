@@ -70,7 +70,7 @@ function ContactEditor({ contact, onClose }: { contact?: Contact; onClose: () =>
   </Dialog>
 }
 
-// Imported and API-set properties (plan, say), which segments match on, after the fields every contact has.
+// Imported and API-set properties (plan, say), after the fields every contact has.
 // Country is a property too, already shown above as its own row. Names and values are free text: addresses in them are
 // masked like any other (AddressText).
 const customProperties = (contact: Contact) => Object.entries(contact.properties ?? {}).filter(([key, value]) => key !== 'country' && value !== null && value !== '').map(([key, value]): [string, string] => [key, String(value)])

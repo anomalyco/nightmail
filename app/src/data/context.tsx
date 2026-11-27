@@ -94,7 +94,7 @@ const authMessages: Record<string, string> = {
 // The section of the current page, without a record from the previous account or workspace in it.
 export function sectionPath(pathname = window.location.pathname) {
   const [section, child] = pathname.split('/').filter(Boolean)
-  return (section === 'audience' && ['lists', 'segments'].includes(child)) || (section === 'campaigns' && child === 'templates') ? `/${section}/${child}` : section ? `/${section}` : '/'
+  return (section === 'audience' && child === 'lists') || (section === 'campaigns' && child === 'templates') ? `/${section}/${child}` : section ? `/${section}` : '/'
 }
 const reviewRoute = /^\/campaigns\/([^/]+)\/review\/?$/
 // Review's boot observers can unmount or restart while the same identity is in flight. Cancel their wait,

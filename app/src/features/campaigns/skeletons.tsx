@@ -119,7 +119,7 @@ export function CampaignRouteSkeleton({ kind, isNew = false, summary }: { kind: 
         <div className="review-stage__head"><span className="campaign-steps__mark review-stage__mark" aria-hidden="true">{index + 1}</span><span className="review-stage__title">{title}</span><span className="review-stage__summary"><SkeletonText width={140} /></span></div>
         {index === 0 && <div className="review-stage__body"><div className="review-stage__content"><div className="campaign-audience-picker">
           <Field label="List" htmlFor="campaign-list-loading"><Select id="campaign-list-loading" aria-label="Recipient list" value="" onValueChange={() => {}} options={[{ value: '', label: 'Loading lists…' }]} disabled /></Field>
-          <Field label="Segment" htmlFor="campaign-segment-loading"><Select id="campaign-segment-loading" aria-label="Segment" value="" onValueChange={() => {}} options={[{ value: '', label: 'Everyone on the list' }]} disabled /></Field>
+          <Field label="Topic" htmlFor="campaign-topic-loading" hint="Its unsubscribe link stops all marketing."><Select id="campaign-topic-loading" aria-label="Topic" value="" onValueChange={() => {}} options={[{ value: '', label: 'Loading topics…' }]} disabled /></Field>
         </div></div><div className="review-stage__footer"><Button variant="primary" disabled>Next</Button></div></div>}
       </section>)}
     </LoadingRegion>

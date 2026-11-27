@@ -59,14 +59,14 @@ No tool call: the answer is in the Reference.
 
 ### 3. Deliverability coaching (chat)
 
-**Customer:** Our newsletter is landing in spam at Gmail. It was fine until last week.
+**Customer:** People keep marking our newsletter as spam. What are we doing wrong?
 
-> Gmail started filing you as spam with your Nov 4 newsletter: Gmail clicks fell from 2.9% (64 of 2,207) to 0.4% (9 of 2,315), while Outlook and Yahoo held at about 2.6%. Nov 4 was the first send to the 1,850 contacts imported into *Webinar leads*, and 131 of them hard-bounced (7.1%), which usually means people who never signed up.
+> 41 of your last 5,120 sends were reported as spam (0.8%), well past the 0.3% where Gmail starts filing mail as spam. 37 of the 41 came from *Webinar leads*, the 1,850 contacts imported on Nov 2, and list hygiene flagged 212 of them as disposable or mistyped addresses.
 >
 > Here's what I'd do:
-> 1. Stop sending to *Webinar leads* until those contacts confirm.
-> 2. Send the next issue to engaged readers: Audience → Segments → Create segment, *Clicked a link* in the last 90 days.
-> 3. Add `news.acme.com` to Google Postmaster Tools to see Gmail's spam rate.
+> 1. Stop sending to *Webinar leads* until those contacts confirm they want the newsletter, and leave hygiene's flagged addresses unallowed so campaigns keep skipping them.
+> 2. Give product news its own topic (Audience → Topics), so people who only want that can opt out of the rest instead of reporting you.
+> 3. Say in the first line why they're getting this email. People who don't recognise a newsletter report it rather than use the unsubscribe link every marketing email already has.
 
 ### 4. Outlook `5.7.515` (chat)
 

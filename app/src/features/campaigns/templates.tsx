@@ -35,7 +35,7 @@ export function useStartFromTemplate() {
   const { regionId } = useRegion()
   // Hosted campaigns follow their From domain's region, so they need no selected region.
   const { multiTenant } = useWorkspaceAccess()
-  const mutation = useApiMutation((client, template: {id: string; name: string}) => client.campaigns.save({ templateId: template.id, idempotencyKey: crypto.randomUUID(), regionId, name: template.name, subject: '', previewText: '', fromName: '', fromEmail: '', listId: '', segmentId: null, html: '' }), undefined, false, invalidate.campaignCreate, regionId)
+  const mutation = useApiMutation((client, template: {id: string; name: string}) => client.campaigns.save({ templateId: template.id, idempotencyKey: crypto.randomUUID(), regionId, name: template.name, subject: '', previewText: '', fromName: '', fromEmail: '', listId: '', html: '' }), undefined, false, invalidate.campaignCreate, regionId)
   async function start(template: {id: string; name: string}) {
     try { const campaign = await mutation.mutateAsync(template); navigate(`/campaigns/${encodeURIComponent(campaign.id)}/edit`) }
     catch (error) { toast(errorText(error), 'error') }

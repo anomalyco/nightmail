@@ -180,7 +180,8 @@ const pages = ids => [
   ['Campaigns', '/campaigns', { from: '/overview' }],
   ['Campaign editor', `/campaigns/${ids.campaign}/edit`, { from: '/campaigns' }],
   ['New campaign', '/campaigns/new', { from: '/campaigns', click: 'Create campaign' }],
-  ['Campaign review', `/campaigns/${ids.campaign}/review`, { from: '/campaigns' }],
+  // guard: a segment set through the API (cls-fixture.mjs, Segment kept) is named on Review and kept by a save from it.
+  ['Campaign review', `/campaigns/${ids.campaign}/review`, { from: '/campaigns', guard: 'api-segment-kept' }],
   // The Send stage open (#send): the send review (readiness) arrives with the audience count, last in the stage; ready,
   // and recommending daily batches (its dated plan and the choice between it and your own pace).
   ['Campaign review · send', `/campaigns/${ids.readyCampaign}/review#send`, { from: '/campaigns' }],
@@ -205,10 +206,9 @@ const pages = ids => [
   ['Lists', '/audience/lists', { from: '/audience' }],
   ['List', `/audience/lists/${ids.list}`, { from: '/audience/lists' }],
   ['List · risky', `/audience/lists/${ids.list}?status=risky`, { from: `/audience/lists/${ids.list}` }],
-  ['Segments', '/audience/segments', { from: '/audience' }],
-  ['Segment', `/audience/segments/${ids.segment}`, { from: '/audience/segments', row: 'Pro plan' }],
-  // Property rules: the name beside the field, a day with its zone, and a presence check without a value.
-  ['Segment · property rules', `/audience/segments/${ids.propertySegment}`, { from: '/audience/segments', row: 'Waiting companies' }],
+  // Segments left the dashboard: their old addresses land on Audience, without the old query.
+  ['Audience · old Segments address', '/audience/segments?page=2', { lands: '/audience' }],
+  ['Audience · old segment address', '/segments/seg_retired', { lands: '/audience' }],
   ['Topics', '/audience/topics', { from: '/audience' }],
   ['Domains', '/domains', { from: '/overview' }],
   ['Domain', `/domains/${ids.domain}`, { from: '/domains' }],
@@ -529,7 +529,7 @@ const televisionPages = [
 ];
 // The phone pass: the pages someone opens on a phone (every list as cards, the details they open, Settings), light only.
 const phonePages = new Set([
-  'Segment · property rules',
+  'Audience · old Segments address',
   'Newsletter',
   'Newsletter · one draft',
   'Newsletter · new',
@@ -1025,6 +1025,8 @@ async function measure(browser, job, fx) {
     page.on('request', request => {
       const url = request.url();
       if (/^https?:\/\//i.test(url) && !url.startsWith(origin)) problems.push(`external request ${url}`);
+      // Segments left the dashboard: it calls none of their operations (listSegments is retired once nothing does).
+      if (url.startsWith(origin + '/v1/segments')) problems.push(`the dashboard called a segment operation: ${request.method()} ${url.slice(origin.length)}`);
       // Every public page, as public/theme.js and data/live.ts read them (api/src/site-index.ts, PUBLIC_PAGE).
       if (!job.user && url === origin + '/v1/me' && isPublicPage(new URL(page.url()).pathname))
         problems.push('Public page asked for /v1/me without a sign-in hint');
@@ -1303,6 +1305,21 @@ async function measure(browser, job, fx) {
       await page.evaluate(() => { for (const n of window.__cls.nodes) if (n.isConnected && n.style) n.style.outline = '2px solid #f0f'; });
       result.screenshot = `${job.slug}.png`;
       await page.screenshot({ path: join(out, result.screenshot) });
+    }
+    if (job.guard === 'api-segment-kept' && job.mode === 'load') {
+      // A campaign given a segment through the API, which the dashboard can't choose: Review says so without reading it,
+      // and a save from Review (a topic) keeps the audience exactly as it was.
+      const dana = fx.sessions.dana, [kept] = (await fx.db.query("SELECT id FROM sending_campaigns WHERE draft->>'name' = 'Segment kept'")).rows;
+      const before = (await dana.api('GET', `/v1/campaigns/${kept.id}`)).draft.audience;
+      await page.goto(origin + `/campaigns/${kept.id}/review`);
+      const said = await page.getByText('And a segment set through the API.').waitFor({ timeout: 30_000 }).then(() => true, () => false);
+      if (!said) problems.push('Review didn’t say the campaign has a segment set through the API');
+      await page.locator('#campaign-topic').click();
+      await page.getByRole('option', { name: 'Product updates' }).click();
+      let after = null;
+      for (let i = 0; i < 40 && !after?.topicId; i++) { await page.waitForTimeout(250); after = (await dana.api('GET', `/v1/campaigns/${kept.id}`)).draft; }
+      if (!after?.topicId) problems.push('choosing a topic on Review saved nothing');
+      else if (JSON.stringify(after.audience) !== JSON.stringify(before)) problems.push(`a save from Review changed the audience set through the API: ${JSON.stringify(before)} → ${JSON.stringify(after.audience)}`);
     }
     if (job.guard === 'sign-in-press' && job.mode === 'load') {
       // A sign-in starts on a mouse's pointer down (data/context.tsx prepareLogin), never on a touch's: a scroll that begins

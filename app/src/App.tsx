@@ -58,9 +58,7 @@ const ContactsPage = audience.page(m => m.ContactsPage)
 const ContactDetailPage = audience.page(m => m.ContactDetailPage)
 const ListsPage = audience.page(m => m.ListsPage)
 const ListDetailPage = audience.page(m => m.ListDetailPage)
-const SegmentsPage = audience.page(m => m.SegmentsPage)
 const TopicsPage = audience.page(m => m.TopicsPage)
-const SegmentEditorPage = audience.page(m => m.SegmentEditorPage)
 const ApiKeysPage = settings.page(m => m.ApiKeysPage)
 const DomainsPage = settings.page(m => m.DomainsPage)
 const DomainDetailPage = settings.page(m => m.DomainDetailPage)
@@ -168,11 +166,12 @@ function RootPage() {
   if (!hosted) return <Navigate replace to={{ pathname: '/overview', search: location.search, hash: location.hash }} />
   return <ChunkFallback.Provider value={<BootLoader />}><HomePage start={{ signedIn: true }} /></ChunkFallback.Provider>
 }
-// Former sections that were folded into another page keep their links working, query and anchor included.
-function Moved({ to }: { to: (params: Readonly<Params>) => string }) {
+// Former sections that were folded into another page keep their links working, query and anchor included. A retired
+// section's links (`retired`) land on the page it lived in, without its query or anchor, which meant nothing there.
+function Moved({ to, retired = false }: { to: (params: Readonly<Params>) => string; retired?: boolean }) {
   const location = useLocation()
   const target = to(useParams())
-  return <Navigate replace to={`${target}${location.search}${target.includes('#') ? '' : location.hash}`} />
+  return <Navigate replace to={retired ? target : `${target}${location.search}${target.includes('#') ? '' : location.hash}`} />
 }
 const id = (params: Readonly<Params>) => encodeURIComponent(params.id ?? '')
 function useRememberDashboardReady() {
@@ -197,13 +196,13 @@ const routes = <><Route path="legal/:doc?" element={<ChunkFallback.Provider valu
     <Route path="newsletters" element={<NewslettersPage />} /><Route path="newsletters/new" element={<NewNewsletterPage />} /><Route path="newsletters/:id" element={<NewsletterPage />} />
     <Route path="audience" element={<ContactsPage />} /><Route path="audience/contacts/:id" element={<ContactDetailPage />} />
     <Route path="audience/lists" element={<ListsPage />} /><Route path="audience/lists/:id" element={<ListDetailPage />} />
-    <Route path="audience/segments" element={<SegmentsPage />} /><Route path="audience/segments/new" element={<SegmentEditorPage />} /><Route path="audience/segments/:id" element={<SegmentEditorPage />} /><Route path="audience/topics" element={<TopicsPage />} />
+    <Route path="audience/segments" element={<Moved retired to={() => '/audience'} />} /><Route path="audience/segments/:id" element={<Moved retired to={() => '/audience'} />} /><Route path="audience/topics" element={<TopicsPage />} />
     <Route path="api-keys" element={<ApiKeysPage />} /><Route path="domains" element={<DomainsPage />} /><Route path="domains/:id" element={<DomainDetailPage />} />
     <Route path="settings" element={<SettingsPage />} /><Route path="settings/mcp/:id" element={<McpApprovalPage />} /><Route path="settings/webhooks/new" element={<WebhookDetailPage />} /><Route path="settings/webhooks/:id" element={<WebhookDetailPage />} />
     <Route path="templates" element={<Moved to={() => '/campaigns/templates'} />} /><Route path="templates/:id" element={<Moved to={params => `/campaigns/templates/${id(params)}`} />} />
     <Route path="contacts" element={<Moved to={() => '/audience'} />} /><Route path="contacts/:id" element={<Moved to={params => `/audience/contacts/${id(params)}`} />} />
     <Route path="lists" element={<Moved to={() => '/audience/lists'} />} /><Route path="lists/:id" element={<Moved to={params => `/audience/lists/${id(params)}`} />} />
-    <Route path="segments" element={<Moved to={() => '/audience/segments'} />} /><Route path="segments/:id" element={<Moved to={params => `/audience/segments/${id(params)}`} />} />
+    <Route path="segments" element={<Moved retired to={() => '/audience'} />} /><Route path="segments/:id" element={<Moved retired to={() => '/audience'} />} />
     <Route path="settings/webhooks" element={<Moved to={() => '/settings#webhooks'} />} /><Route path="settings/workspace" element={<Moved to={() => '/settings#workspace'} />} /><Route path="settings/account" element={<Moved to={() => '/settings#account'} />} />
     <Route path="docs/*" element={<DocsPage />} /><Route path="developer" element={<Moved to={() => '/docs'} />} />
     <Route path="operator" element={<OperatorPage />} /><Route path="operator/notes" element={<OperatorNotesPage />} /><Route path="operator/agents" element={<OperatorAgentsPage />} /><Route path="operator/workspaces/:id" element={<OperatorWorkspacePage />} /><Route path="operator/abuse/:id" element={<OperatorClusterPage />} /><Route path="glass" element={<GlassPage />} />
