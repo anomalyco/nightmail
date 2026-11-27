@@ -2816,6 +2816,8 @@ export function registerSending(app: App) {
   app.openapi(createRoute({ method: 'get', path: '/v1/campaigns/{id}/preview-image', operationId: 'renderCampaignPreviewImage', description: 'Renders the saved campaign draft as a full-page, 720 px wide PNG for visual review. Inline CID images are embedded; remote HTTPS images are loaded by the isolated renderer.' + PREVIEW_ROUTE_NOTE, tags: ['Campaigns'], security, request: { params: IdParams }, responses: { ...previewResponses(CampaignPreviewImage), ...errors } }), async c => {
     refuseHead(c);
     const a = actor(c, 'send'), { row, footer } = await campaignWithFooter(c.env, a, c.req.valid('param').id);
+    // Nothing to render (renderCampaignContent renders no HTML) is the caller's to fix, answered before the renderer is asked and before the render budget.
+    if (!row.draft.html?.trim()) throw new ApiError(422, 'CAMPAIGN_INCOMPLETE', 'This campaign has no content to render yet. Add content to its draft, then preview it.', 'html');
     if (!c.env.renderHtmlImage) throw new ApiError(503, 'PREVIEW_RENDERING_UNAVAILABLE', 'Visual campaign preview rendering is not configured.', undefined, true);
     await chargeRenderBudget(c, a.workspaceId);
     const inline = (await attachmentRows(c.env.db, a, row.draft.attachments)).filter(item => item.disposition === 'inline' && item.contentId), render = c.env.renderHtmlImage;

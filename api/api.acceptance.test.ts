@@ -44536,6 +44536,10 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal(renders, 0);
       ok(await local('PATCH', `/v1/templates/${template.id}`, { revision: published.revision, draft: { ...template.draft, html: '<p>Preview</p>' } }));
       const campaign = ok(await local('POST', '/v1/campaigns', { name: 'Preview' }), 201);
+      // So is a campaign whose draft has nothing to render: the campaign API's own "add content first" answer.
+      const emptyCampaign = error(await local('GET', `/v1/campaigns/${campaign.id}/preview-image`), 422, 'CAMPAIGN_INCOMPLETE');
+      assert.deepEqual([emptyCampaign.field, emptyCampaign.retryable, emptyCampaign.message, renders], ['html', false, 'This campaign has no content to render yet. Add content to its draft, then preview it.', 0]);
+      ok(await local('PATCH', `/v1/campaigns/${campaign.id}`, { revision: campaign.revision, draft: { ...campaign.draft, html: '<p>Preview</p>' } }));
       const previews = [`/v1/templates/${template.id}/preview-image`, `/v1/campaigns/${campaign.id}/preview-image`];
       const key = async (permission: string) => ok(await local('POST', '/v1/api-keys', { name: 'Preview', permissions: [permission] }), 201);
       const reader = await key('read'), sender = await key('send');
