@@ -10,7 +10,7 @@ import { dayOf, listOf, nightmail, nightmailBill, theirPrice, type Usage } from 
 export const VOLUMES = [10_000, 50_000, 100_000, 250_000, 500_000, 1_000_000] as const
 export type Volume = (typeof VOLUMES)[number]
 /** The size a page opens on. */
-export const OPENING: Volume = 100_000
+export const OPENING: Volume = 50_000
 export const MIN_VOLUME = VOLUMES[0], MAX_VOLUME = VOLUMES[VOLUMES.length - 1]!
 
 const SLUGS = ['resend', 'sendgrid', 'postmark', 'mailgun', 'mailersend', 'smtp2go'] as const

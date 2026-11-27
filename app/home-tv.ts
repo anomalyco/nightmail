@@ -181,7 +181,7 @@ const swap: Plugin = {
 }
 
 /** index.html's description (said.ts) and its link preview's (og.png, below) words: the television's. */
-const ALT = 'A 1980s television on a table in a dark room, playing a price list: “$0.20 per 1,000 emails”, then what 100,000 emails cost on Nightmail ($19) and on SendGrid, Resend, MailerSend, Mailgun, SMTP2GO and Postmark ($34.95 to $115).'
+const ALT = 'A 1980s television on a table in a dark room, playing what 50,000 emails a month cost on Nightmail ($9) and on SendGrid, Resend, SMTP2GO, Mailgun, MailerSend and Postmark ($20 to $55).'
 const words: Plugin = {
   name: 'nightmail:television-words',
   transformIndexHtml(html) {

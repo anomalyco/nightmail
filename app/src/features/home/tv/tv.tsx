@@ -7,7 +7,7 @@ import { NightmailWordmark } from '../../../components/NightmailLogo'
 import type { HomeProps, HomeStart } from '..'
 import { useSignupsFull } from '../signups-open'
 import { StartButton } from '../start'
-import { MONTHS, OPENING, PER_THOUSAND, VOLUMES, count, usd, type Volume } from './data'
+import { MONTHS, OPENING, PER_THOUSAND, count, usd, type Volume } from './data'
 import { Heading, Words } from './words'
 import { Remote, type RoomLight } from './crt/remote'
 import type { Broadcast } from './crt/commercial/play'
@@ -40,23 +40,26 @@ const DRAG = 6
 
 // What is on: channel 1 is the tape (the page's own comparison); each of the next six says one more thing about what
 // Nightmail costs, every figure from the billing code (pricing/prices.ts: nightmail) or the comparison (data.ts). Channel 8 is on the air: Nightmail's old television commercial (crt/commercial), fetched and shown when its key is pressed.
-type Row = { name: string; value: string; ours: boolean }
-type Channel = { kind: 'list'; head?: string; title: string; rows: Row[]; tape?: boolean; cycle?: boolean } | { kind: 'air' } | { kind: 'bars' } | { kind: 'dead' }
+type Row = { name: string; value: string; ours: boolean; amount?: number }
+type Channel = { kind: 'list'; head?: string; title: string; rows: Row[]; tape?: boolean } | { kind: 'air' } | { kind: 'bars' } | { kind: 'dead' }
+// Whole dollars on monthly and yearly totals (a half rounds down, so no vendor is shown dearer than it is); per-1,000
+// rates keep their cents.
+const whole = (dollars: number) => `$${Math.ceil(dollars - .5).toLocaleString('en-US')}`
 const cents = (dollars: number) => usd(Math.round(dollars * 100) / 100)
-const month = (volume: Volume, value: (dollars: number, ours: boolean) => string = d => usd(d)): Row[] => MONTHS[volume].map(line => ({ name: line.name.toUpperCase(), value: value(line.dollars, line.ours), ours: line.ours }))
+const month = (volume: Volume, value: (dollars: number, ours: boolean) => string = d => whole(d)): Row[] => MONTHS[volume].map(line => ({ name: line.name.toUpperCase(), value: value(line.dollars, line.ours), ours: line.ours, amount: line.dollars }))
 const fact = (name: string, value: string): Row => ({ name, value, ours: false })
 const CHANNELS: Channel[] = [
-  { kind: 'list', tape: true, cycle: true, head: `${PER_THOUSAND} PER ${count(1000)} EMAILS`, title: `PER ${count(OPENING)} EMAILS`, rows: month(OPENING) },
+  { kind: 'list', tape: true, title: `${count(OPENING)} EMAILS A MONTH`, rows: month(OPENING) },
   // what is free every month, before anything is charged
   { kind: 'list', title: 'FREE EVERY MONTH', rows: [fact('EMAILS SENT', count(nightmail.freeSent)), fact('EMAILS RECEIVED', count(nightmail.freeReceived)), fact('STORAGE', `${nightmail.freeStorageGb} GB`)] },
   // what is charged after that, and what never is
   { kind: 'list', title: 'AFTER THE FREE ONES', rows: [fact(`${count(1000)} SENT`, nightmail.perThousand), fact(`${count(1000)} RECEIVED`, nightmail.perThousand), fact('CONTACTS', 'FREE'), fact('TEAMMATES', 'FREE')] },
   { kind: 'list', title: `PER ${count(1000)} EMAILS`, rows: month(OPENING, (d, ours) => ours ? PER_THOUSAND : cents(d / (OPENING / 1000))) },
-  { kind: 'list', title: `A YEAR AT ${count(OPENING)} A MONTH`, rows: month(OPENING, d => cents(d * 12)) },
+  { kind: 'list', title: `A YEAR AT ${count(OPENING)} A MONTH`, rows: month(OPENING, d => whole(d * 12)) },
   // what keeping received mail costs
   { kind: 'list', title: 'RECEIVED MAIL, KEPT', rows: [fact(`FIRST ${nightmail.storageAfterDays} DAYS`, 'FREE'), fact(`NEXT ${nightmail.freeStorageGb} GB`, 'FREE'), fact('EACH GB A MONTH', nightmail.storagePerGb)] },
-  // the largest month the tape plays, held still
-  { kind: 'list', title: `PER ${count(1_000_000)} EMAILS`, rows: month(1_000_000) },
+  // a million emails a month, held still
+  { kind: 'list', title: `${count(1_000_000)} EMAILS A MONTH`, rows: month(1_000_000) },
   { kind: 'air' },
 ]
 const TAPE = CHANNELS[0] as Extract<Channel, { kind: 'list' }>, AIR = CHANNELS.findIndex(channel => channel.kind === 'air')
@@ -80,35 +83,11 @@ const DEAD = STATIONS.length - 1, BARS = CHANNELS.length + NUMBERS.indexOf(0)
 /** Where a typed number tunes the set: channel 1 to 8, a number off the keys, or nowhere. */
 const stationOf = (number: number) => number >= 1 && number <= CHANNELS.length ? number - 1 : NUMBERS.includes(number) ? CHANNELS.length + NUMBERS.indexOf(number) : DEAD
 
-// The tape goes round the volumes, a page each, starting from the opening one. A page turns as a character generator
-// redraws a screen: the tape hiccups (a flick of static, the picture jumps a line or two and settles), then a
-// highlight bar runs down the screen, title first and then row by row, and under it each figure runs to the next
-// page's. Rows keep their places (the opening page's order) so each figure can be watched changing.
-const PAGE = 5200, COUNT = 620, FIRST = 140, STEP = 85, TURN = FIRST + 6 * STEP + COUNT
-const PAGES = [...VOLUMES.slice(VOLUMES.indexOf(OPENING)), ...VOLUMES.slice(0, VOLUMES.indexOf(OPENING))]
-const BILLS = Object.fromEntries(VOLUMES.map(volume => [volume, MONTHS[OPENING].map(line => MONTHS[volume].find(other => other.slug === line.slug)!.dollars)])) as Record<Volume, number[]>
-type Line = Row & { lit: number }
-type Page = { key: string; title: string; lit: number; rows: Line[]; since: number | null }
-/** The tape `ms` after its first page came up (before that, and with reduced motion, the opening page). since: how
- *  long ago this page began to turn in, while it still is. */
-function pageAt(ms: number): Page {
-  const at = Math.max(0, Math.floor(ms / PAGE)), since = at === 0 ? TURN : ms - at * PAGE, done = since >= TURN
-  const to = PAGES[at % PAGES.length]!, from = PAGES[(at + PAGES.length - 1) % PAGES.length]!
-  // one line's turn: how far its figure has run, and how bright the bar on it is (brightest as it arrives)
-  const line = (delay: number) => { const p = clamp((since - delay) / COUNT); return { k: easeOut(p), lit: p > 0 && p < 1 ? (1 - p) ** 1.6 : 0 } }
-  const run = (a: number, b: number, k: number) => a + (b - a) * k, head = line(0)
-  return {
-    key: `${at}:${done ? 1 : Math.round(since)}`, since: done ? null : since,
-    title: `PER ${count(head.k >= 1 ? to : Math.round(run(from, to, head.k) / 1000) * 1000)} EMAILS`, lit: head.lit,
-    rows: TAPE.rows.map((row, i) => { const l = line(FIRST + i * STEP); return { ...row, lit: l.lit, value: usd(l.k >= 1 ? BILLS[to][i]! : Math.round(run(BILLS[from][i]!, BILLS[to][i]!, l.k))) } }),
-  }
-}
-
 // The picture, drawn small (240 lines, as much as a tape holds) and left to the tube.
 // The table's light: MW x MH cells, the picture CW of them wide. COOL: the colour of a dark picture's light; LIFT: how
 // much of the photograph's own pool a black (but lit) screen leaves.
 const MW = 40, MH = 10, CW = 28, WALL = [96, 124, 190], COOL = [.84, .9, 1], LIFT = .66
-const TW = 320, TH = 240, INK = '#E9E8DF', OURS = '#9DAEFF', FONT = '700 16.5px Inter, "Helvetica Neue", Arial, sans-serif', CELL = 9.7
+const TW = 320, TH = 240, INK = '#E9E8DF', OURS = '#9DAEFF', BAR = '#4A5074', OUR_BAR = '#6F86FF', FONT = '700 16.5px Inter, "Helvetica Neue", Arial, sans-serif', CELL = 9.7
 // A VCR's on-screen type: every character in its own cell. Set from a face whose zero is open (a dotted zero reads as
 // an 8 once the tape has softened it), one character at a time.
 function type(ctx: CanvasRenderingContext2D, text: string, x: number, y: number, right = false) {
@@ -123,22 +102,27 @@ function type(ctx: CanvasRenderingContext2D, text: string, x: number, y: number,
   ctx.setTransform(1, 0, 0, 1, 0, 0)
 }
 /** bare: only the set's own type, on nothing (it is laid over the broadcast). */
-function drawPicture(ctx: CanvasRenderingContext2D, channel: Channel, rows: number, play: boolean, osd: string | null, page: Page | null, bare = false, caption: string | null = null) {
+function drawPicture(ctx: CanvasRenderingContext2D, channel: Channel, rows: number, play: boolean, osd: string | null, bare = false, caption: string | null = null) {
   if (bare) ctx.clearRect(0, 0, TW, TH)
   else { ctx.fillStyle = '#04050D'; ctx.fillRect(0, 0, TW, TH) }
   ctx.font = FONT
   ctx.textBaseline = 'alphabetic'
   if (channel.kind === 'list') {
-    // the tape leads with the price; the lines come up in this order: price, title, then the rows
-    const head = channel.head, top = head ? 62 : 70, under = 86, first = head ? 111 : 103, step = head ? 18 : 19, shown = head ? rows - 1 : rows
+    const head = channel.head, top = head ? 62 : 70, under = 86, first = head ? 111 : 103, step = head ? 18 : 18, shown = head ? rows - 1 : rows
     if (head && rows > 0) { ctx.fillStyle = OURS; type(ctx, head, 32, top) }
-    // the bar that runs down a turning page: a VCR menu's blue, behind the line being redrawn
-    const bar = (lit: number, y: number) => { if (lit > 0) { ctx.fillStyle = `rgb(40 62 200 / ${lit})`; ctx.fillRect(24, y - 14, TW - 48, 18) } }
-    if (shown > 0) { bar(page?.lit ?? 0, head ? under : top); ctx.fillStyle = INK; type(ctx, (page ?? channel).title, 32, head ? under : top) }
-    ;(page ?? channel).rows.slice(0, Math.max(0, shown - 1)).forEach((row, i) => {
+    if (shown > 0) { ctx.fillStyle = INK; type(ctx, channel.title, 32, head ? under : top) }
+    // Comparison rows carry a dollar amount: prices sit right-aligned in one column on the far right, and bars sit on
+    // their left growing toward the names from one shared baseline, with a small arrow in the margin for Nightmail.
+    const most = Math.max(0, ...channel.rows.map(row => row.amount ?? 0))
+    const barEnd = TW - 32 - Math.max(0, ...channel.rows.map(row => row.value.length)) * CELL - 7, reach = barEnd - 138
+    channel.rows.slice(0, Math.max(0, shown - 1)).forEach((row, i) => {
       const y = first + i * step
-      bar((row as Partial<Line>).lit ?? 0, y)
+      if (most > 0 && row.amount !== undefined) {
+        const w = Math.max(3, reach * row.amount / most)
+        ctx.fillStyle = row.ours ? OUR_BAR : BAR; ctx.fillRect(barEnd - w, y - 12, w, 13)
+      }
       ctx.fillStyle = row.ours ? OURS : INK
+      if (row.ours) { ctx.beginPath(); ctx.moveTo(17, y - 11); ctx.lineTo(26, y - 5.5); ctx.lineTo(17, y); ctx.closePath(); ctx.fill() }
       type(ctx, row.name, 32, y); type(ctx, row.value, TW - 32, y, true)
     })
   }
@@ -174,7 +158,7 @@ const FRAG = `#version 300 es
 precision highp float;
 uniform sampler2D uTape, uSomeone;
 uniform vec2 uRes;
-uniform float uTime, uPower, uStatic, uRoll, uTrack, uBad, uJump, uStill, uAir, uOsd, uTilt, uGone;
+uniform float uTime, uPower, uStatic, uRoll, uTrack, uBad, uStill, uAir, uOsd, uTilt, uGone;
 out vec4 o;
 
 // ---------------------------------------------------------------- tuning: the tube
@@ -182,22 +166,22 @@ const float CURVE = .022;       // how far the picture bends with the glass
 const float OVERSCAN = .03;     // how much of the picture the bezel hides
 const float SCAN = .30;         // depth of the scanlines
 const float MASK = .16;         // strength of the red/green/blue phosphor stripes
-const float BLOOM = .50;        // glow around bright text
+const float BLOOM = .16;        // glow around bright text
 const float BLACK = .040;       // how far "black" is from black (a tube glows)
 const float VIGNETTE = .26;     // darkening toward the corners
 const float GLASS = 1.;         // the room reflected in the glass
 const float SOMEONE = .17;      // how plainly someone stands in it once the set has been off a while (0: nobody)
 // ---------------------------------------------------------------- tuning: the tape
-const float BLEED = .016;       // colour smeared to the right, in screen widths
-const float SOFT = .0019;       // softness of the picture
-const float NOISE = .052;       // snow in the picture
-const float WOBBLE = .0006;     // each line's sideways shake
+const float BLEED = .002;       // colour smeared to the right, in screen widths
+const float SOFT = .0007;       // softness of the picture
+const float NOISE = .026;       // snow in the picture
+const float WOBBLE = .0002;     // each line's sideways shake
 const float BAND = .036;        // height of the tracking band
-const float BAND_SNOW = .55;    // how much of the band is torn static (1: as a worn tape)
-const float DROPOUTS = .12;     // how often a dropout streak crosses a line (0: never)
-const float BAND_TEAR = .016;   // how far the band drags lines sideways
+const float BAND_SNOW = .15;    // how much of the band is torn static (1: as a worn tape)
+const float DROPOUTS = 0.;      // how often a dropout streak crosses a line (0: never)
+const float BAND_TEAR = .003;   // how far the band drags lines sideways
 const float BAND_SPEED = .045;  // screens a second the band climbs
-const float HEAD = .022;        // height of the tear along the foot of the picture
+const float HEAD = .010;        // height of the tear along the foot of the picture
 // ---------------------------------------------------------------- tuning: a broadcast (channel 8)
 const float FIT = 1.045;        // it is drawn to the edges of its frame, so it is shown this much smaller (its edges carried
                                 // on under the bezel), to keep its band of type and its corners in sight
@@ -232,7 +216,7 @@ void main() {
 
   // a roll: the picture slides up through one frame, the blanking bar with it
   float seam = abs(s.y - (1. - uRoll));
-  s.y = fract(s.y + uRoll) + uJump;
+  s.y = fract(s.y + uRoll);
 
   float lines = min(240., floor(uRes.y / 3.)), line = floor(s.y * 240.);
   float n = hash(vec2(line, frame));
@@ -247,15 +231,15 @@ void main() {
   vec2 c = vec2(x, s.y);
 
   // luma: soft, with a faint ring on the edges; chroma: smeared in from the left, as tape carries colour
-  float Y = lum(c) * .62 + lum(c - vec2(SOFT, 0.)) * .25 + lum(c + vec2(SOFT, 0.)) * .25 - lum(c - vec2(SOFT * 3.2, 0.)) * .12;
+  float Y = lum(c) * .70 + lum(c - vec2(SOFT, 0.)) * .17 + lum(c + vec2(SOFT, 0.)) * .17 - lum(c - vec2(SOFT * 3.2, 0.)) * .04;
   vec2 IQ = vec2(0.); float sum = 0.;
   float bleed = BLEED * mix(1., AIR_BLEED, uAir);
-  for (int i = 0; i < 6; i++) { float f = float(i) / 5., k = 1. - f * .6; IQ += yiq(tape(c - vec2(bleed * f + .004, -.003))).yz * k; sum += k; }
+  for (int i = 0; i < 6; i++) { float f = float(i) / 5., k = 1. - f * .6; IQ += yiq(tape(c - vec2(bleed * f + .001, -.001))).yz * k; sum += k; }
   vec3 col = rgb(vec3(Y, IQ / sum * 1.15 * (1. - .6 * uBad * step(.5, hash(vec2(floor(t * 3.), 5.))))));
 
   // phosphor glow
   float glow = 0.;
-  for (int i = 0; i < 8; i++) { float a = float(i) * .7854, r = (i % 2 == 0 ? .011 : .026) * mix(1., AIR_GLOW, uAir); glow += lum(c + vec2(cos(a) * r, sin(a) * r * 1.33)); }
+  for (int i = 0; i < 8; i++) { float a = float(i) * .7854, r = (i % 2 == 0 ? .006 : .013) * mix(1., AIR_GLOW, uAir); glow += lum(c + vec2(cos(a) * r, sin(a) * r * 1.33)); }
   col += glow / 8. * BLOOM * vec3(.85, .92, 1.);
 
   // snow, the tracking band's torn static, the head-switch tear, a dropout now and then
@@ -319,7 +303,7 @@ function Tube({ deck, onLight, onFlat }: { deck: Deck; onLight: (level: number) 
     gl.attachShader(program, shader(gl.VERTEX_SHADER, VERT)); gl.attachShader(program, shader(gl.FRAGMENT_SHADER, FRAG)); gl.linkProgram(program)
     if (!gl.getProgramParameter(program, gl.LINK_STATUS)) { console.error(gl.getProgramInfoLog(program)); onFlat(); return }
     gl.useProgram(program)
-    const u = Object.fromEntries(['uTape', 'uRes', 'uTime', 'uPower', 'uStatic', 'uRoll', 'uTrack', 'uBad', 'uJump', 'uStill', 'uAir', 'uOsd', 'uTilt', 'uGone', 'uSomeone'].map(name => [name, gl.getUniformLocation(program, name)]))
+    const u = Object.fromEntries(['uTape', 'uRes', 'uTime', 'uPower', 'uStatic', 'uRoll', 'uTrack', 'uBad', 'uStill', 'uAir', 'uOsd', 'uTilt', 'uGone', 'uSomeone'].map(name => [name, gl.getUniformLocation(program, name)]))
     const texture = gl.createTexture()
     gl.bindTexture(gl.TEXTURE_2D, texture)
     for (const [key, value] of [[gl.TEXTURE_MIN_FILTER, gl.LINEAR], [gl.TEXTURE_MAG_FILTER, gl.LINEAR], [gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE], [gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE]] as const) gl.texParameteri(gl.TEXTURE_2D, key, value)
@@ -432,27 +416,24 @@ function Tube({ deck, onLight, onFlat }: { deck: Deck; onLight: (level: number) 
       const play = channel.kind === 'list' && !!channel.tape && (still || !first || boot >= 900)
       const said = now - deck.noteAt
       const osd = said < 2200 && said <= flick ? deck.note : flick < 2200 ? `CH ${String(deck.number).padStart(2, '0')}` : null
-      const page = channel.kind === 'list' && channel.cycle ? pageAt(still ? 0 : boot - 2100) : null
-      // a page turning: the tape's hiccup (seen, not heard)
-      const since = page?.since ?? null, hiccup = since === null ? 0 : .07 * clamp(1 - since / 200), jump = since === null ? 0 : .009 * Math.exp(-since / 110) * Math.cos(since / 30)
       const caption = air && deck.subtitles ? air.caption() : null
-      const key = [deck.channel, rows, play, osd, page?.key, !!air, caption].join()
-      if (key !== shown) { shown = key; drawPicture(ctx, channel, rows, play, osd, page, !!air, caption); if (!air) { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture); sample(picture) } }
+      const key = [deck.channel, rows, play, osd, !!air, caption].join()
+      if (key !== shown) { shown = key; drawPicture(ctx, channel, rows, play, osd, !!air, caption); if (!air) { gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, picture); sample(picture) } }
       if (air) broadcast(air)
       track += (trackTo - track) * .12
       bad += (deck.bad / 2 - bad) * .2
       size()
       gl.uniform1i(u.uTape!, 0); gl.uniform2f(u.uRes!, el.width, el.height); gl.uniform1f(u.uTime!, (now - began) / 1000)
-      gl.uniform1f(u.uPower!, power); gl.uniform1f(u.uStatic!, Math.max(snow, hiccup)); gl.uniform1f(u.uRoll!, roll >= 1 ? 0 : roll); gl.uniform1f(u.uJump!, jump)
+      gl.uniform1f(u.uPower!, power); gl.uniform1f(u.uStatic!, snow); gl.uniform1f(u.uRoll!, roll >= 1 ? 0 : roll)
       gl.uniform1f(u.uTrack!, track); gl.uniform1f(u.uBad!, bad); gl.uniform1f(u.uStill!, still ? 1 : 0); gl.uniform1f(u.uAir!, air ? 1 : 0); gl.uniform1f(u.uOsd!, nothing ? 1 : 0); gl.uniform1f(u.uTilt!, aired?.tilt ?? 0); const gone = deck.power || still || !stands ? 0 : (now - offAt) / 1000
       if (clip && gone > MOVES && !moving) { moving = true; void clip.play().catch(() => {}) }
       if (moving && !clip!.ended) look()
       gl.uniform1f(u.uGone!, gone)
       gl.drawArrays(gl.TRIANGLES, 0, 3)
-      reflect(power, Math.max(snow, hiccup))
+      reflect(power, snow)
       deck.hear(snow, bad, deck.power)
       onLight(power * (.9 + snow * .7 + (still ? 0 : Math.sin(now / 90) * .02)))
-      deck.level = power * (.9 + Math.max(snow, hiccup) * .7)
+      deck.level = power * (.9 + snow * .7)
     }
     // Tape runs at 30 frames a second, and stops while nobody can see it.
     const loop = (now: number) => {
