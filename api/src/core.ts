@@ -202,6 +202,7 @@ export interface Config {
   snsTopicArns: string[];
   // Subset of snsTopicArns that carries SES inbound receipt notifications for mailboxes.
   inboundTopicArns?: string[];
+  /** REPUTATION_ALERT_SLACK_URL, else (hosted) OPERATOR_SLACK_WEBHOOK_URL: where the reputation cards are posted (src/reputation-alerts.ts). Undefined: none are. */
   reputationAlertUrl?: string;
   // Outbound harm screening. Inbound Ritual questions always use the Jev entry.
   screen?: { primary: ScreenClassifier; mode: 'reject' | 'flag'; jev: ScreenModel; jevf?: JevFModel };

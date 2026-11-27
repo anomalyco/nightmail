@@ -6,7 +6,7 @@ import { operatorContext, recordAudit } from './audit.js';
 import { ApiError, errors, json, log, notFound, response, security, type App, type JobHandler } from './core.js';
 import { JobDeferred, MAX_ATTEMPTS, retryDatabaseFailures } from './jobs.js';
 import { operatorActor } from './operator.js';
-import { postSlack, SlackRefused } from './reputation-alerts.js';
+import { postSlack, rateLimitWait, SlackRefused } from './reputation-alerts.js';
 import { mentionFor, sendMentioned } from './operator-mention.js';
 
 // Abuse monitoring, part 3: the alert outbox and its review. When a cluster first reaches a level a person should look
@@ -156,11 +156,10 @@ const AFTER_TIMEOUT_MS = 5 * 60_000;
  * (about half an hour) the alert keeps waiting at the cap but counts as not delivered in Health (health.ts). It never
  * turns into tries: a webhook that limits us is alive, so the alert can still go out while it matters, and spending
  * tries would fail it within the hour for good. A 429 posts nothing, so the at-most-two-posts rule is untouched.
+ * The wait itself is reputation-alerts.ts rateLimitWait (RATE_LIMIT_*), which the reputation cards in the operator
+ * channel share.
  */
-const RATE_LIMIT_FLOOR_S = 30, RATE_LIMIT_CAP_S = 15 * 60;
-/** How long a 429 makes an alert wait: limited is its 429s in a row (this one included), left the seconds to its day's end. */
-export const rateLimitWait = (retryAfter: number | undefined, limited: number, left: number) =>
-  Math.max(1, Math.min(Math.max(retryAfter ?? 0, Math.min(RATE_LIMIT_FLOOR_S * 2 ** Math.max(0, limited - 1), RATE_LIMIT_CAP_S)), left));
+export { rateLimitWait };
 /**
  * How many times the sweep gives an alert a new job after its job failed for good (a run of database failures before
  * the post, or a lease exhausted). At most once an hour, inside the alert's day: then it is failed, never forgotten.

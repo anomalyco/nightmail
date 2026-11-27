@@ -208,7 +208,8 @@ const values = z.object({
   AWS_RUNTIME_CREDENTIALS: z.string().optional(),
   // Requests per minute allowed for each API key, agent token, MCP grant and mailbox key.
   API_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().min(60).max(100000).default(1200),
-  // Slack incoming webhook for hourly SES reputation threshold alerts. Treat as a secret.
+  // Slack incoming webhook for hourly SES reputation threshold alerts and the other reputation cards (src/reputation-alerts.ts).
+  // Hosted and unset, they go to OPERATOR_SLACK_WEBHOOK_URL, as abuse alerts do. Treat as a secret.
   REPUTATION_ALERT_SLACK_URL: optional(z.string().url().max(2048).refine(value => value.startsWith('https://hooks.slack.com/'), 'Use a Slack incoming webhook URL.')),
   // Jev's key for outbound fallback and inbound Ritual questions: a TypeSafe AI key, or an
   // OpenCode Console key when JEV_ENDPOINT is OpenCode's inference gateway. Treat as a secret.
@@ -465,7 +466,7 @@ export function loadConfig(input: Record<string, unknown>): Config {
     aws,
     // Resource names and trusted feedback bindings are hydrated from persisted setup state.
     snsTopicArns: [], inboundTopicArns: [],
-    reputationAlertUrl: v.REPUTATION_ALERT_SLACK_URL,
+    reputationAlertUrl: v.REPUTATION_ALERT_SLACK_URL ?? (v.MULTI_TENANT==='true' ? v.OPERATOR_SLACK_WEBHOOK_URL : undefined),
     screen,
     shadow: screen?.primary === 'jev' ? jevf : undefined,
     screenLimits: { messageBytes: v.JEV_MESSAGE_LIMIT_BYTES, campaignBytes: v.JEV_CAMPAIGN_LIMIT_BYTES },

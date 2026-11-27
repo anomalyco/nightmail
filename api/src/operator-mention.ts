@@ -26,6 +26,7 @@ export const MENTIONS: Record<string, 'capped' | 'own'> = {
   abuse_high: 'capped', // A high abuse-monitoring alert: new, risen to high, or a new member at high (abuse-alerts.ts).
   link_domain_held: 'capped', // A link domain held after a confirmed blocklist listing: Health's opening card only (health.ts).
   amazon_account: 'own', // Amazon's account status for a region became unhealthy or worse (operator-alerts.ts).
+  builtin_tripped: 'capped', // Built-in domains stopped sending, in the operator channel: once for the trip (reputation-alerts.ts).
 };
 export const MENTION_LIMITS = { perHour: 6 } as const;
 export type Mention = { user: string; skipped: number };

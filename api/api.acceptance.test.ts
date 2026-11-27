@@ -46063,7 +46063,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         [undefined, undefined, 'U0A960VPPMX', undefined, undefined, undefined]);
       const configured = async (file: string) => /"OPERATOR_SLACK_MENTION":\s*"([^"]*)"/.exec(await readFile(new URL(file, import.meta.url), 'utf8'))?.[1];
       assert.deepEqual([await configured('./wrangler.prod.jsonc'), await configured('./wrangler.dev.jsonc'), runtime.config.operatorSlackMention, MENTION_LIMITS.perHour, MENTIONS],
-        ['U0A960VPPMX', undefined, undefined, 6, { paused: 'capped', amazon_paused: 'capped', abuse_high: 'capped', link_domain_held: 'capped', amazon_account: 'own' }]);
+        ['U0A960VPPMX', undefined, undefined, 6, { paused: 'capped', amazon_paused: 'capped', abuse_high: 'capped', link_domain_held: 'capped', amazon_account: 'own', builtin_tripped: 'capped' }]);
       const f = await mentionFixture(t, runtime, db);
 
       // Unset: the card exactly as without this, and nothing decided.
@@ -46297,6 +46297,182 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           ['plain', 'reminder', line(plain), { type: 'plain_text', text: line(plain), emoji: false }],
         ], 'Unmentioned: as before.');
       } finally { await db.query('DELETE FROM deliverability_checks WHERE subject=ANY($1)', [[plain, odd]]); await db.query('DELETE FROM health_alerts WHERE key=ANY($1)', [keys]); }
+    });
+  });
+  // Reputation cards (src/reputation-alerts.ts) falling back to the operator channel. Slack is faked; the hooks are fixtures.
+  const REPUTATION_HOOK = 'https://hooks.slack.com/services/T0FIXTURE/B0FIXTURE/reputation';
+  /** Runs one reputation card's job as the runner would, Slack answering answer(card): 'done', how long it waits, or the error's code. */
+  async function runReputationCard(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client, id: string, answer: (card: Json) => number | Error, posted: Json[], hook = OPERATOR_HOOK) {
+    const { reputationAlertJobs } = await import('./src/reputation-alerts.js'), { JobDeferred } = await import('./src/jobs.js');
+    const [job] = (await db.query('SELECT id,workspace_id,payload,attempts FROM jobs WHERE id=$1', [id])).rows;
+    let result = '';
+    await t.test(`reputation card ${id}`, async t => {
+      t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
+        assert.equal(String(url), hook);
+        const card = JSON.parse(String(init!.body)), reply = answer(card); posted.push(card);
+        if (reply instanceof Error) throw reply;
+        return new Response(null, { status: reply });
+      });
+      try {
+        await reputationAlertJobs['reputation.alert']!(runtime, job.payload, { id: job.id, workspaceId: job.workspace_id, attempts: job.attempts + 1 });
+        await db.query(`UPDATE jobs SET status='completed',attempts=attempts+1 WHERE id=$1`, [id]); result = 'done';
+      } catch (error) {
+        if (error instanceof JobDeferred) {
+          await db.query(`UPDATE jobs SET status='pending',available_at=$2 WHERE id=$1`, [id, error.availableAt]);
+          result = `waits ${Math.round((Date.parse(error.availableAt) - Date.now()) / 1000)} s`;
+        } else { const code = String((error as { code?: string }).code ?? error); await db.query('UPDATE jobs SET attempts=attempts+1,last_error=$2 WHERE id=$1', [id, code]); result = code; }
+      }
+    });
+    return result;
+  }
+  /** A reputation card's job, as its producer queues it. */
+  const reputationJob = async (db: pg.Client, workspace: string, payload: Json) => {
+    const id = `job_${randomUUID().replaceAll('-', '')}`;
+    await db.query(`INSERT INTO jobs(id,type,workspace_id,payload) VALUES ($1,'reputation.alert',$2,$3)`, [id, workspace, JSON.stringify(payload)]);
+    return id;
+  };
+  const delivery = async (db: pg.Client, id: string) => (await db.query('SELECT status,attempts,payload FROM jobs WHERE id=$1', [id])).rows[0];
+  /** The operator channel's lanes free (no reputation card of an earlier test holds a place), and the reputation webhook reset after. */
+  async function reputationFixture(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client) {
+    await db.query(`UPDATE jobs SET payload=payload #- '{delivery,postedAt}' WHERE type='reputation.alert' AND payload ? 'delivery'`);
+    t.after(() => { runtime.config.reputationAlertUrl = undefined; });
+  }
+  test('MX reputation cards: hosted without a webhook of their own they go to the operator webhook, with one they go there as today; "AWS paused an SES tenant" is left out only in the operator channel', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { loadConfig } = await import('./src/config.js'), { tenantPausedText } = await import('./src/reputation-alerts.js');
+      const settings = (extra: Json) => loadConfig({ PUBLIC_URL: 'https://alerts.example', BANE_ROOT_SECRET: 'local-fixture-'.repeat(4), ACCOUNT_REQUIRED_ACR: 'urn:anomaly:acr:google', ...extra }).reputationAlertUrl;
+      assert.deepEqual([settings({ MULTI_TENANT: 'true' }), settings({ MULTI_TENANT: 'true', OPERATOR_SLACK_WEBHOOK_URL: OPERATOR_HOOK }), settings({ MULTI_TENANT: 'true', OPERATOR_SLACK_WEBHOOK_URL: OPERATOR_HOOK, REPUTATION_ALERT_SLACK_URL: REPUTATION_HOOK }),
+        settings({ OPERATOR_SLACK_WEBHOOK_URL: OPERATOR_HOOK }), settings({ REPUTATION_ALERT_SLACK_URL: REPUTATION_HOOK })], [undefined, OPERATOR_HOOK, REPUTATION_HOOK, undefined, REPUTATION_HOOK]);
+      const f = await mentionFixture(t, runtime, db); await reputationFixture(t, runtime, db);
+      const wid = await f.workspace('Ptarmigan'), posted: Json[] = [];
+      const tenant = { code: 'SES_TENANT_PAUSED', tenant: 'arn:aws:ses:us-east-2:111122223333:tenant/t-1/tn-1', cause: 'Trust and Safety review.', exempt: false };
+      const quota = { code: 'SES_IDENTITY_QUOTA_EXHAUSTED', region: 'us-east-2' };
+      // In the operator channel: the tenant card is left out ("Amazon paused" says it there), the quota card posts.
+      runtime.config.reputationAlertUrl = OPERATOR_HOOK;
+      const [skipped, quotaOps] = [await reputationJob(db, wid, tenant), await reputationJob(db, wid, quota)];
+      assert.deepEqual([await runReputationCard(t, runtime, db, skipped, () => 200, posted), await runReputationCard(t, runtime, db, quotaOps, () => 200, posted)], ['done', 'done']);
+      assert.deepEqual(posted.splice(0), [{ text: 'SES identity quota exhausted in us-east-2. Request regional identity capacity before onboarding more domains.' }]);
+      assert.equal((await delivery(db, skipped)).payload.delivery, undefined, 'Never tried.');
+      // In a channel of their own, both post as they always have.
+      runtime.config.reputationAlertUrl = REPUTATION_HOOK;
+      for (const payload of [tenant, quota]) assert.equal(await runReputationCard(t, runtime, db, await reputationJob(db, wid, payload), () => 200, posted, REPUTATION_HOOK), 'done');
+      assert.deepEqual(posted.splice(0).map(card => card.text), [tenantPausedText({ ...tenant, workspaceId: wid }, runtime.config.publicUrl), 'SES identity quota exhausted in us-east-2. Request regional identity capacity before onboarding more domains.']);
+    });
+  });
+  test('MX reputation cards: the first hourly reading of a region records its level without a card below Amazon\'s warning line and posts at or above it; after that a rise posts as before, a fall from a level only recorded stays quiet, and hosted each region has one ledger', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { checkReputationAlerts } = await import('./src/reputation-alerts.js'), { CloudWatchClient } = await import('@aws-sdk/client-cloudwatch');
+      const f = await mentionFixture(t, runtime, db), before = { ...runtime.config }; await reputationFixture(t, runtime, db);
+      Object.assign(runtime.config, { multiTenant: true, liveEnabled: true, aws: { accessKeyId: 'AKIAFIXTURE', secretAccessKey: 'fixture' }, reputationAlertUrl: OPERATOR_HOOK });
+      t.after(() => { Object.assign(runtime.config, { multiTenant: before.multiTenant, liveEnabled: before.liveEnabled, aws: before.aws, reputationAlertUrl: undefined }); });
+      // Three regions of a workspace's own settings (every hosted workspace has a row); CloudWatch answers for them only.
+      const [a, b, c] = ['eu-rep-1', 'eu-rep-2', 'eu-rep-3'], owner = await f.workspace('Shearwater');
+      await db.query(`INSERT INTO ses_installation_settings(workspace_id,installation_id,default_region,enabled_regions) VALUES ($1,'fixture',$2,$3)`, [owner, a, JSON.stringify([a, b, c])]);
+      const rates: Record<string, { bounce: number; complaint: number }> = {};
+      t.mock.method(CloudWatchClient.prototype, 'send', async function (this: InstanceType<typeof CloudWatchClient>) {
+        const rate = rates[await this.config.region()], at = [new Date()];
+        return { MetricDataResults: rate ? [{ Id: 'bounceLatest', Values: [rate.bounce], Timestamps: at }, { Id: 'complaintLatest', Values: [rate.complaint], Timestamps: at }] : [] };
+      });
+      const ledger = async () => (await db.query(`SELECT workspace_id,payload->>'region' AS region,payload->>'metric' AS metric,payload->>'level' AS level,(payload->>'silent')::boolean IS TRUE AS silent,status
+        FROM jobs WHERE type='reputation.alert' AND payload->>'region'=ANY($1) ORDER BY created_at,payload->>'region',payload->>'metric'`, [[a, b, c]])).rows;
+      const cards = async () => {
+        const posted: Json[] = [];
+        for (const { id } of (await db.query(`SELECT id FROM jobs WHERE type='reputation.alert' AND status='pending' AND payload->>'region'=ANY($1) ORDER BY created_at,id`, [[a, b, c]])).rows) await runReputationCard(t, runtime, db, id, () => 200, posted);
+        return posted.map(card => card.text);
+      };
+      const link = (region: string) => `<${runtime.config.publicUrl}/settings?region=${region}|View in Nightmail>`;
+      try {
+        // The first reading. a: bounces near the warning line (recorded, no card), complaints past it (posts); b: both
+        // fine (recorded); c: bounces near the line (recorded). One ledger a region, the installation's, not the workspace's.
+        Object.assign(rates, { [a]: { bounce: 0.045, complaint: 0.0012 }, [b]: { bounce: 0.01, complaint: 0 }, [c]: { bounce: 0.042, complaint: 0.0001 } });
+        assert.equal(await checkReputationAlerts(runtime), 1);
+        const first = (await ledger()).map(row => [row.workspace_id === runtime.config.workspaceId ? 'installation' : row.workspace_id, row.region, row.metric, row.level, row.silent, row.status]);
+        assert.deepEqual(first, [
+          ['installation', a, 'bounceRate', 'near_warning', true, 'completed'], ['installation', a, 'complaintRate', 'warning', false, 'pending'],
+          ['installation', b, 'bounceRate', 'ok', true, 'completed'], ['installation', b, 'complaintRate', 'ok', true, 'completed'],
+          ['installation', c, 'bounceRate', 'near_warning', true, 'completed'], ['installation', c, 'complaintRate', 'ok', true, 'completed'],
+        ]);
+        assert.deepEqual(await cards(), [`:warning: *Complaint rate at warning* · ${a}\n0.12% now  ·  warning 0.1%  ·  at risk 0.5%\n${link(a)}`]);
+        // The same readings an hour later: nothing new.
+        assert.equal(await checkReputationAlerts(runtime), 0);
+        // a's bounces cross the warning line, b's near it: both are changes, and post. c falls back below the line seven
+        // hours after it was recorded: a fall from a level nobody was told of is recorded, never posted.
+        Object.assign(rates, { [a]: { bounce: 0.052, complaint: 0.0012 }, [b]: { bounce: 0.041, complaint: 0 }, [c]: { bounce: 0.01, complaint: 0.0001 } });
+        await db.query(`UPDATE jobs SET created_at=created_at-interval '7 hours' WHERE type='reputation.alert' AND payload->>'region'=$1`, [c]);
+        assert.equal(await checkReputationAlerts(runtime), 2);
+        assert.deepEqual(await cards(), [`:warning: *Bounce rate at warning* · ${a}\n5.2% now  ·  warning 5%  ·  at risk 10%\n${link(a)}`, `:large_yellow_circle: *Bounce rate nearing warning* · ${b}\n4.1% now  ·  warning 5%  ·  at risk 10%\n${link(b)}`]);
+        assert.deepEqual((await ledger()).filter(row => row.region === c && row.metric === 'bounceRate').map(row => [row.level, row.silent]), [['near_warning', true], ['ok', true]]);
+        assert.equal((await ledger()).filter(row => row.workspace_id === owner).length, 0, 'Never the workspace\'s own ledger.');
+      } finally { await db.query('DELETE FROM ses_installation_settings WHERE workspace_id=$1', [owner]); }
+    });
+  });
+  test('MX reputation cards: "Built-in domains stopped sending" mentions the operator once for its trip, counted inside the six mentions an hour; no other reputation card mentions', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { builtinTrippedText } = await import('./src/reputation-alerts.js'), f = await mentionFixture(t, runtime, db); await reputationFixture(t, runtime, db);
+      runtime.config.reputationAlertUrl = OPERATOR_HOOK;
+      const parent = `trip-${randomUUID().slice(0, 6)}.example`;
+      const trip = (at: string) => ({ code: 'BUILTIN_PARENT_TRIPPED', parent, line: 'complaints', recipients: 20000, bounces: 120, complaints: 31, windowHours: 24, worst: 'ws_worst', paused: 1, at });
+      const posted: Json[] = [], ops = runtime.config.workspaceId, mentioned = (card: Json) => String(card.text).startsWith(LEAD);
+      // Five mentions this hour already: the trip's is the sixth. Slack refuses its first post (500): the retry carries the
+      // same mention, decided once for the trip.
+      await db.query(`INSERT INTO operator_mentions(card,kind,subject,capped,mentioned) SELECT 'earlier-'||g,'paused','earlier-'||g,true,true FROM generate_series(1,5) g`);
+      const first = await reputationJob(db, ops, trip('2026-11-27T10:00:00Z'));
+      assert.deepEqual([await runReputationCard(t, runtime, db, first, () => 500, posted), await runReputationCard(t, runtime, db, first, () => 200, posted)], ['REPUTATION_ALERT_FAILED', 'done']);
+      assert.deepEqual(posted.splice(0).map(card => card.text), [`${LEAD} ${builtinTrippedText(trip('2026-11-27T10:00:00Z'))}`, `${LEAD} ${builtinTrippedText(trip('2026-11-27T10:00:00Z'))}`]);
+      assert.deepEqual((await f.mentions()).filter((row: Json) => row.kind === 'builtin_tripped').map((row: Json) => [row.subject, row.capped, row.mentioned]), [[parent, true, true]]);
+      // The six are used: a pause posts unmentioned.
+      await f.pause(await f.workspace('Razorbill'));
+      assert.deepEqual((await postOperatorAlerts(t, runtime, db)).map(mentioned), [false]);
+      // Another trip within the hour (an operator reset it): its card, unmentioned (once per kind and subject an hour), after
+      // its lane's hour. A level card never mentions.
+      const second = await reputationJob(db, ops, trip('2026-11-27T10:40:00Z'));
+      assert.match(await runReputationCard(t, runtime, db, second, () => 200, posted), /^waits /);
+      await db.query(`UPDATE jobs SET payload=jsonb_set(payload,'{delivery,postedAt}',to_jsonb((now()-interval '61 minutes')::text)) WHERE id=$1`, [first]);
+      assert.equal(await runReputationCard(t, runtime, db, second, () => 200, posted), 'done');
+      const level = await reputationJob(db, ops, { region: `eu-rep-${randomUUID().slice(0, 4)}`, metric: 'bounceRate', level: 'warning', previous: 'ok', value: 0.05 });
+      assert.equal(await runReputationCard(t, runtime, db, level, () => 200, posted), 'done');
+      assert.deepEqual(posted.splice(0).map(mentioned), [false, false]);
+      // An hour on, with six other mentions this hour: a new trip is over the six, unmentioned, and counted as such.
+      await db.query(`UPDATE operator_mentions SET at=at-interval '61 minutes'`);
+      await db.query(`INSERT INTO operator_mentions(card,kind,subject,capped,mentioned) SELECT 'later-'||g,'paused','later-'||g,true,true FROM generate_series(1,6) g`);
+      await db.query(`UPDATE jobs SET payload=jsonb_set(payload,'{delivery,postedAt}',to_jsonb((now()-interval '61 minutes')::text)) WHERE id=$1`, [second]);
+      const third = await reputationJob(db, ops, trip('2026-11-27T12:00:00Z'));
+      assert.equal(await runReputationCard(t, runtime, db, third, () => 200, posted), 'done');
+      assert.deepEqual([posted.splice(0).map(mentioned), (await f.mentions()).filter((row: Json) => row.kind === 'builtin_tripped').map((row: Json) => [row.mentioned, row.over])], [[false], [[true, false], [false, false], [false, true]]]);
+    });
+  });
+  test('MX reputation cards in the operator channel keep the abuse alerts\' guarantees: each kind posts at most one card in any rolling hour and one over it waits for its place, never dropped; a 429 waits without spending a try; an unanswered card is posted at most twice; a refused one is retried until it goes', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db }) => {
+      const { rateLimitWait } = await import('./src/reputation-alerts.js'); await mentionFixture(t, runtime, db); await reputationFixture(t, runtime, db);
+      runtime.config.reputationAlertUrl = OPERATOR_HOOK;
+      const ops = runtime.config.workspaceId, posted: Json[] = [], region = `eu-lane-${randomUUID().slice(0, 4)}`;
+      const level = (metric: string, value: number) => ({ region, metric, level: 'warning', previous: 'near_warning', value });
+      const state = async (id: string) => { const row = await delivery(db, id); return { status: row.status, attempts: row.attempts, ...row.payload.delivery, postedAt: row.payload.delivery?.postedAt ? 'set' : null }; };
+      // Two bounce cards for one region within the hour: the second waits for the first's hour; complaints are another lane.
+      const [bounce1, bounce2, complaint] = [await reputationJob(db, ops, level('bounceRate', 0.05)), await reputationJob(db, ops, level('bounceRate', 0.051)), await reputationJob(db, ops, level('complaintRate', 0.001))];
+      const results = [await runReputationCard(t, runtime, db, bounce1, () => 200, posted), await runReputationCard(t, runtime, db, bounce2, () => 200, posted), await runReputationCard(t, runtime, db, complaint, () => 200, posted)];
+      assert.deepEqual([results[0], /^waits 36\d\d s$/.test(results[1]!), results[2], posted.splice(0).length], ['done', true, 'done', 2]);
+      await db.query(`UPDATE jobs SET payload=jsonb_set(payload,'{delivery,postedAt}',to_jsonb((now()-interval '61 minutes')::text)) WHERE id=$1`, [bounce1]);
+      assert.deepEqual([await runReputationCard(t, runtime, db, bounce2, () => 200, posted), posted.splice(0).length, (await state(bounce2)).attempts], ['done', 1, 1], 'Posted once its place came, its wait not a try.');
+      // A 429: the wait abuse alerts take (30 s, then 60), no try spent, the place given back; then it posts.
+      const quota = await reputationJob(db, ops, { code: 'SES_IDENTITY_QUOTA_EXHAUSTED', region });
+      assert.deepEqual([await runReputationCard(t, runtime, db, quota, () => 429, posted), await runReputationCard(t, runtime, db, quota, () => 429, posted)],
+        [`waits ${rateLimitWait(undefined, 1, 86_400)} s`, `waits ${rateLimitWait(undefined, 2, 86_400)} s`]);
+      assert.deepEqual(await state(quota), { status: 'pending', attempts: 0, lane: 'identity-quota', posting: false, unanswered: 0, limited: 2, postedAt: null });
+      assert.deepEqual([await runReputationCard(t, runtime, db, quota, () => 200, posted), posted.splice(0).length, (await state(quota)).status], ['done', 3, 'completed']);
+      // Unanswered twice: tried once more after five minutes, then never again, whatever retries follow.
+      const timeout = () => Object.assign(new Error('The operation was aborted due to timeout'), { name: 'TimeoutError' });
+      const exempt = await reputationJob(db, ops, { code: 'HOSTED_EXEMPT_OVER_LINE', line: 'complaints', scope: 'all', sends: 400, bounces: 2, complaints: 3, rejected: 0, screened: 400 });
+      assert.deepEqual([await runReputationCard(t, runtime, db, exempt, timeout, posted), await runReputationCard(t, runtime, db, exempt, timeout, posted), await runReputationCard(t, runtime, db, exempt, () => 200, posted)], ['waits 300 s', 'done', 'done']);
+      assert.deepEqual([posted.splice(0).length, (await state(exempt)).unconfirmed], [2, true]);
+      // A worker that stopped after sending left its post unanswered: the next try counts it, so a second unanswered one is the last.
+      const crashed = await reputationJob(db, ops, { code: 'BUILTIN_WORKSPACE_OVER_LINE', parent: 'nightmail.email', line: 'bounces', recipients: 1000, bounces: 60, complaints: 0, windowHours: 24, workspace: { recipients: 500, bounces: 55, complaints: 0 } });
+      await db.query(`UPDATE jobs SET payload=payload||jsonb_build_object('delivery',jsonb_build_object('lane','builtin-workspace:nightmail.email','posting',true,'unanswered',1)) WHERE id=$1`, [crashed]);
+      assert.deepEqual([await runReputationCard(t, runtime, db, crashed, () => 200, posted), posted.splice(0).length, (await state(crashed)).unconfirmed], ['done', 0, true]);
+      // Refused (a 500): the place goes back and the job retries as any job, a try spent; the next try posts it.
+      const refused = await reputationJob(db, ops, { code: 'BUILTIN_WORKSPACE_OVER_LINE', parent: 'nightmail.email', line: 'complaints', recipients: 1000, bounces: 0, complaints: 4, windowHours: 24, workspace: { recipients: 500, bounces: 0, complaints: 4 } });
+      assert.deepEqual([await runReputationCard(t, runtime, db, refused, () => 500, posted), (await state(refused)).postedAt, await runReputationCard(t, runtime, db, refused, () => 200, posted), posted.splice(0).length, (await state(refused)).attempts],
+        ['REPUTATION_ALERT_FAILED', null, 'done', 2, 2]);
     });
   });
   test('MX health: each incident of 23 November is an alert within its minutes, with a stable key, a severity and the number that matters, in words that carry numbers, codes and IDs only; a failed probe neither opens nor clears', async () => {

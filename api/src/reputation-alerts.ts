@@ -2,8 +2,9 @@ import { and, desc, eq, sql } from 'drizzle-orm';
 import { ApiError, lazyModule, log, type JobHandler, type Runtime } from './core.js';
 import { jobs } from './db/core.js';
 import { sesSettings } from './db/ses-regions.js';
-import { enqueue, retryDatabaseFailures } from './jobs.js';
+import { enqueue, JobDeferred, retryDatabaseFailures } from './jobs.js';
 import { productName } from './brand.js';
+import { mentionFor, sendMentioned } from './operator-mention.js';
 
 // SES console thresholds. "Near" alerts fire at 80% of a threshold.
 const THRESHOLDS = { bounceRate: { warning: 0.05, risk: 0.1 }, complaintRate: { warning: 0.001, risk: 0.005 } } as const;
@@ -38,7 +39,8 @@ const DAY_MS = 24 * 3600_000;
 
 /**
  * Hourly: compares each region's latest SES reputation rates with the last alerted level and
- * queues one Slack alert per change. The alert jobs are the dedupe ledger; completed jobs expire
+ * queues one Slack alert per change; a region's first reading records its level and posts only at FIRST_SIGHT_POSTS or
+ * above. The alert jobs are the dedupe ledger (a level recorded without a card is a completed job); completed jobs expire
  * after 30 days, so a sustained elevated level re-alerts at most monthly. A per-metric advisory
  * lock keeps overlapping checks from queueing the same alert twice.
  */
@@ -46,9 +48,12 @@ const loadReputationDeps = lazyModule(() => Promise.all([import('@aws-sdk/client
 export async function checkReputationAlerts(runtime: Runtime): Promise<number> {
   if (!runtime.config.reputationAlertUrl || !runtime.config.aws || !runtime.config.liveEnabled) return 0;
   // CloudWatch rates still describe one provider account. Read each region once, but keep alert ledgers per workspace.
+  // Hosted, that account is the platform's, the same for every workspace (each has a settings row), so each region has
+  // one ledger, the installation's: one per workspace would post the same card once for each of them.
   const settings = await runtime.db.select({ workspaceId: sesSettings.workspaceId, regions: sesSettings.enabledRegions }).from(sesSettings);
   const regions = new Set(settings.flatMap(row => row.regions));
   if (!regions.size) return 0;
+  const owners = runtime.config.multiTenant ? [{ workspaceId: runtime.config.workspaceId, regions: [...regions] }] : settings;
   const [{ CloudWatchClient }, { FetchHttpHandler }, { readReputation }] = await loadReputationDeps();
   let queued = 0;
   for (const region of regions) {
@@ -59,7 +64,7 @@ export async function checkReputationAlerts(runtime: Runtime): Promise<number> {
       for (const metric of Object.keys(THRESHOLDS) as Metric[]) {
         const value = reputation[metric];
         if (value == null) continue;
-        for (const owner of settings) if (owner.regions.includes(region) && await queueIfChanged(runtime, owner.workspaceId, region, metric, value)) queued++;
+        for (const owner of owners) if (owner.regions.includes(region) && await queueIfChanged(runtime, owner.workspaceId, region, metric, value)) queued++;
       }
     } finally { cw.destroy(); }
   }
@@ -80,6 +85,13 @@ export function decideAlert(metric: Metric, value: number, history: { level: Lev
   return { level: next, previous };
 }
 
+/**
+ * The first sight of a region's rate (nothing recorded for it: the day this shipped, or 30 days on with no card) records
+ * its level without a card, unless the level is FIRST_SIGHT_POSTS or above: Amazon's own warning line (5% bounces, 0.1%
+ * complaints), where it puts the account under review. A person must know that whenever it is first seen; a rate merely
+ * near a line on the first day is not news, and its next change posts as any change does.
+ */
+export const FIRST_SIGHT_POSTS: Level = 'warning';
 async function queueIfChanged(runtime: Runtime, workspaceId: string, region: string, metric: Metric, value: number) {
   return runtime.db.transaction(async tx => {
     await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${`${JOB}:${workspaceId}:${region}:${metric}`}))`);
@@ -87,9 +99,20 @@ async function queueIfChanged(runtime: Runtime, workspaceId: string, region: str
     const recent = await tx.select({ payload: jobs.payload, createdAt: jobs.createdAt }).from(jobs)
       .where(and(eq(jobs.workspaceId, workspaceId), eq(jobs.type, JOB), sql`${jobs.payload}->>'region' = ${region}`, sql`${jobs.payload}->>'metric' = ${metric}`, sql`${jobs.status} <> 'failed'`))
       .orderBy(desc(jobs.createdAt)).limit(24);
-    const history = recent.map(row => ({ level: (LEVELS as readonly string[]).includes(String(row.payload.level)) ? row.payload.level as Level : 'ok' as Level, at: Date.parse(row.createdAt) }));
+    const history = recent.map(row => ({ level: (LEVELS as readonly string[]).includes(String(row.payload.level)) ? row.payload.level as Level : 'ok' as Level, at: Date.parse(row.createdAt), silent: row.payload.silent === true }));
+    // A level recorded without a card: a completed job that is never posted, kept in the same ledger.
+    const record = (level: Level, previous: Level) => tx.execute(sql`INSERT INTO jobs(id,type,workspace_id,payload,status)
+      VALUES (public.row_id('job'),${JOB},${workspaceId},${JSON.stringify({ region, metric, level, previous, value, silent: true })}::jsonb,'completed')`);
+    if (!history.length) {
+      const level = levelFor(metric, value);
+      if (LEVELS.indexOf(level) < LEVELS.indexOf(FIRST_SIGHT_POSTS)) { await record(level, 'ok'); return false; }
+      await enqueue(tx, { type: JOB, workspaceId, payload: { region, metric, level, previous: 'ok', value } });
+      return true;
+    }
     const decision = decideAlert(metric, value, history, Date.now());
     if (!decision) return false;
+    // A fall from a level only recorded is recorded too: "back to normal" from a level nobody was told of says nothing.
+    if (history[0]!.silent && LEVELS.indexOf(decision.level) < LEVELS.indexOf(decision.previous)) { await record(decision.level, decision.previous); return false; }
     await enqueue(tx, { type: JOB, workspaceId, payload: { region, metric, ...decision, value } });
     return true;
   });
@@ -108,18 +131,110 @@ export function reputationAlertText(input: { region: string; metric: Metric; lev
   return `${title}\n${percent(input.value)} now  ·  warning ${percent(warning)}  ·  at risk ${percent(risk)}\n<${input.publicUrl}/settings?region=${encodeURIComponent(input.region)}|View in ${productName}>`;
 }
 
+/** The Slack message for one job, as it has always looked: plain text with its own emoji and link. */
+function reputationMessage(runtime: Runtime, payload: Record<string, unknown>, workspaceId: string): { text: string } {
+  if (payload.code === 'SES_IDENTITY_QUOTA_EXHAUSTED') return { text: `SES identity quota exhausted in ${payload.region}. Request regional identity capacity before onboarding more domains.` };
+  if (payload.code === 'HOSTED_EXEMPT_OVER_LINE') return { text: exemptAlertText({ ...payload, workspaceId }, runtime.config.publicUrl) };
+  if (payload.code === 'SES_TENANT_PAUSED') return { text: tenantPausedText({ ...payload, workspaceId }, runtime.config.publicUrl) };
+  if (payload.code === 'BUILTIN_PARENT_TRIPPED') return { text: builtinTrippedText(payload) };
+  if (payload.code === 'BUILTIN_WORKSPACE_OVER_LINE') return { text: builtinWorkspaceText(payload, workspaceId, runtime.config.publicUrl) };
+  const { region, metric, level, previous, value } = payload;
+  if (typeof region !== 'string' || !(metric === 'bounceRate' || metric === 'complaintRate') || !LEVELS.includes(level as Level) || !LEVELS.includes(previous as Level) || typeof value !== 'number') throw new ApiError(500, 'JOB_PAYLOAD_INVALID', 'Invalid reputation alert job.');
+  return { text: reputationAlertText({ region, metric, level: level as Level, previous: previous as Level, value, publicUrl: runtime.config.publicUrl }) };
+}
+
+/**
+ * Posts one card. To its own webhook (REPUTATION_ALERT_SLACK_URL), as it always has: a refused or unanswered post throws
+ * and the job retries. Falling back to the operator channel (config.ts, hosted), deliverToOperators: "AWS paused an SES
+ * tenant" is left out there, since "Amazon paused" (operator-alerts.ts) already says it in that channel.
+ */
 const deliver: JobHandler = async (runtime, payload, job) => {
   const url = runtime.config.reputationAlertUrl;
   if (!url) return;
-  if (payload.code === 'SES_IDENTITY_QUOTA_EXHAUSTED') return postSlack(url, { text: `SES identity quota exhausted in ${payload.region}. Request regional identity capacity before onboarding more domains.` });
-  if (payload.code === 'HOSTED_EXEMPT_OVER_LINE') return postSlack(url, { text: exemptAlertText({ ...payload, workspaceId: job.workspaceId }, runtime.config.publicUrl) });
-  if (payload.code === 'SES_TENANT_PAUSED') return postSlack(url, { text: tenantPausedText({ ...payload, workspaceId: job.workspaceId }, runtime.config.publicUrl) });
-  if (payload.code === 'BUILTIN_PARENT_TRIPPED') return postSlack(url, { text: builtinTrippedText(payload) });
-  if (payload.code === 'BUILTIN_WORKSPACE_OVER_LINE') return postSlack(url, { text: builtinWorkspaceText(payload, job.workspaceId, runtime.config.publicUrl) });
-  const { region, metric, level, previous, value } = payload;
-  if (typeof region !== 'string' || !(metric === 'bounceRate' || metric === 'complaintRate') || !LEVELS.includes(level as Level) || !LEVELS.includes(previous as Level) || typeof value !== 'number') throw new ApiError(500, 'JOB_PAYLOAD_INVALID', 'Invalid reputation alert job.');
-  await postSlack(url, { text: reputationAlertText({ region, metric, level: level as Level, previous: previous as Level, value, publicUrl: runtime.config.publicUrl }) });
+  const operators = url === runtime.config.operatorSlackWebhookUrl;
+  if (operators && payload.code === 'SES_TENANT_PAUSED') return;
+  const message = reputationMessage(runtime, payload, job.workspaceId);
+  if (!operators) return postSlack(url, message);
+  await deliverToOperators(runtime, url, payload, job, message);
 };
+
+/**
+ * A card's lane in the operator channel. Each lane posts at most one card in any rolling hour (OPERATORS_LANE_MS), so the
+ * channel gets at most two level cards a region (bounces, complaints), one each of built-in domains stopping and of one
+ * workspace over the built-in line, one first-party workspace over a line and one identity quota card: 2 a region + 4.
+ */
+export const operatorLane = (payload: Record<string, unknown>) => payload.code === 'BUILTIN_PARENT_TRIPPED' ? `builtin-stopped:${payload.parent}`
+  : payload.code === 'BUILTIN_WORKSPACE_OVER_LINE' ? `builtin-workspace:${payload.parent}` : payload.code === 'HOSTED_EXEMPT_OVER_LINE' ? 'first-party'
+  : payload.code === 'SES_IDENTITY_QUOTA_EXHAUSTED' ? 'identity-quota' : typeof payload.code === 'string' ? payload.code : `level:${payload.region}:${payload.metric}`;
+const OPERATORS_LANE_MS = 3_600_000;
+/** An unanswered post is tried once more after this; there is never a third (abuse-alerts.ts, the same rule). */
+const AFTER_TIMEOUT_MS = 5 * 60_000;
+/** How long a card may wait for Slack's 429s to clear (rateLimitWait's left), from when it was queued. */
+const FRESH_S = 86_400;
+/** Where a card's delivery to the operator channel stands, kept in its job's payload. */
+type Delivery = { lane: string; postedAt?: string | null; posting?: boolean; unanswered?: number; limited?: number; unconfirmed?: boolean };
+/**
+ * Posts a card to the operator channel with the abuse alerts' delivery guarantees (abuse-alerts.ts deliver):
+ * - its lane's place first (operatorLane): with a card of the same lane posted in the last hour it waits for an hour
+ *   after that one (JobDeferred, no try spent), never dropped;
+ * - a 429 gives the place back and waits (rateLimitWait, no try spent);
+ * - unanswered (no answer in postSlack's 10 seconds; Slack may have taken it): it keeps its place and is tried once more
+ *   after AFTER_TIMEOUT_MS, and a second unanswered post is the last (unconfirmed). A post whose answer was never
+ *   recorded (its worker stopped after sending) counts as unanswered, so it is posted at most twice, ever;
+ * - refused or unreachable: the place goes back and the job retries as any job (jobs.ts), its last try failing it,
+ *   which Health counts;
+ * - "Built-in domains stopped sending" mentions the operator (operator-mention.ts builtin_tripped, inside the six an hour),
+ *   once for the trip, its job.
+ */
+async function deliverToOperators(runtime: Runtime, url: string, payload: Record<string, unknown>, job: { id: string }, message: { text: string }) {
+  const lane = operatorLane(payload);
+  const save = async (db: Pick<Runtime['db'], 'execute'>, delivery: Delivery) => {
+    payload.delivery = delivery;
+    await db.execute(sql`UPDATE jobs SET payload=jsonb_set(payload,'{delivery}',${JSON.stringify(delivery)}::jsonb) WHERE id=${job.id}`);
+  };
+  type Turn = { post: Delivery & { unanswered: number }; left: number } | { wait: string } | null;
+  const turn = await runtime.db.transaction(async (tx): Promise<Turn> => {
+    await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended('reputation.operators',0))`);
+    const { rows: [row] } = await tx.execute<{ delivery: Delivery | null; left: number; now: string }>(sql`SELECT payload->'delivery' AS delivery,
+      extract(epoch FROM created_at+make_interval(secs=>${FRESH_S})-now())::float8 AS left,now()::text AS now FROM jobs WHERE id=${job.id} FOR UPDATE`);
+    const was: Delivery = row?.delivery ?? { lane };
+    const unanswered = (was.unanswered ?? 0) + (was.posting ? 1 : 0);
+    if (unanswered >= 2) {
+      await save(tx, { ...was, lane, posting: false, unanswered, unconfirmed: true });
+      log('warn', { code: 'REPUTATION_ALERT_UNCONFIRMED', lane }); return null;
+    }
+    const { rows: [taken] } = await tx.execute<{ wait: number | null }>(sql`SELECT extract(epoch FROM min((payload->'delivery'->>'postedAt')::timestamptz)+make_interval(secs=>${OPERATORS_LANE_MS / 1000})-now())::float8 AS wait FROM jobs
+      WHERE type=${JOB} AND id<>${job.id} AND created_at>now()-interval '2 days' AND payload->'delivery'->>'lane'=${lane}
+        AND (payload->'delivery'->>'postedAt')::timestamptz>now()-make_interval(secs=>${OPERATORS_LANE_MS / 1000})`);
+    if (taken?.wait != null) return { wait: new Date(Date.now() + Math.max(0, taken.wait) * 1000 + 1000).toISOString() };
+    const post = { ...was, lane, posting: true, unanswered, postedAt: row?.now ?? new Date().toISOString() };
+    await save(tx, post);
+    return { post, left: row?.left ?? FRESH_S };
+  });
+  if (!turn) return;
+  if ('wait' in turn) { log('info', { code: 'REPUTATION_ALERT_WAITING', lane, until: turn.wait }); throw new JobDeferred(turn.wait, undefined, true); }
+  const mention = payload.code === 'BUILTIN_PARENT_TRIPPED' ? await mentionFor(runtime, { id: job.id, kind: 'builtin_tripped', subject: String(payload.parent ?? '') }) : null;
+  try { await sendMentioned(runtime, card => postSlack(url, card, 'REPUTATION_ALERT_FAILED'), message, mention, job.id); }
+  catch (error) {
+    if (!(error instanceof ApiError) && error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
+      const unanswered = turn.post.unanswered + 1, last = unanswered >= 2;
+      await save(runtime.db, { ...turn.post, posting: false, unanswered, limited: 0, ...(last ? { unconfirmed: true } : {}) });
+      log('warn', { code: last ? 'REPUTATION_ALERT_UNCONFIRMED' : 'REPUTATION_ALERT_TIMEOUT', lane });
+      if (!last) throw new JobDeferred(new Date(Date.now() + AFTER_TIMEOUT_MS).toISOString(), undefined, true);
+      return;
+    }
+    const refused = error instanceof SlackRefused ? error : null;
+    if (refused?.status === 429) {
+      const limited = (turn.post.limited ?? 0) + 1, wait = rateLimitWait(refused.retryAfterSeconds, limited, turn.left);
+      await save(runtime.db, { ...turn.post, posting: false, postedAt: null, limited });
+      log('warn', { code: 'REPUTATION_ALERT_LIMITED', lane, limited, wait: Math.round(wait) });
+      throw new JobDeferred(new Date(Date.now() + wait * 1000).toISOString(), undefined, true);
+    }
+    await save(runtime.db, { ...turn.post, posting: false, postedAt: null, limited: 0 });
+    throw error instanceof ApiError ? error : new ApiError(503, 'REPUTATION_ALERT_FAILED', 'The alert could not be posted; it will be retried.', undefined, true);
+  }
+  await save(runtime.db, { ...turn.post, posting: false, limited: 0 });
+}
 /**
  * Posts one message to a Slack incoming webhook (these alerts, src/operator-alerts.ts and src/health.ts). It never follows a redirect,
  * so the message goes to the configured webhook only; a refusal throws a retryable error, and so does a timeout
@@ -138,6 +253,14 @@ const retryAfter = (header: string | null) => {
   const seconds = /^\d+$/.test(value) ? Number(value) : /^[A-Z][a-z]{2}, \d{2} [A-Z][a-z]{2} \d{4} \d{2}:\d{2}:\d{2} GMT$/.test(value) ? (Date.parse(value) - Date.now()) / 1000 : NaN;
   return Number.isFinite(seconds) ? Math.max(0, Math.ceil(seconds)) : null;
 };
+/**
+ * How long a 429 makes a card wait (abuse-alerts.ts explains the rule, #1014): limited is its 429s in a row (this one
+ * included), left the seconds until it would be stale. Never under RATE_LIMIT_FLOOR_S, doubling up to RATE_LIMIT_CAP_S,
+ * longer when Retry-After asks for more, never past left.
+ */
+const RATE_LIMIT_FLOOR_S = 30, RATE_LIMIT_CAP_S = 15 * 60;
+export const rateLimitWait = (retryAfter: number | undefined, limited: number, left: number) =>
+  Math.max(1, Math.min(Math.max(retryAfter ?? 0, Math.min(RATE_LIMIT_FLOOR_S * 2 ** Math.max(0, limited - 1), RATE_LIMIT_CAP_S)), left));
 /** Posts a message to a Slack webhook. No answer within timeoutMs rejects with fetch's TimeoutError: Slack may have taken it. */
 export async function postSlack(url: string, message: Record<string, unknown>, code = 'REPUTATION_ALERT_FAILED', timeoutMs = 10000) {
   const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(message), redirect: 'manual', signal: AbortSignal.timeout(timeoutMs) });
