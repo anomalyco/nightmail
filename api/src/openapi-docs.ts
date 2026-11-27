@@ -1,3 +1,4 @@
+import { dashboardReference } from './dashboard-reference.js';
 import { webhookSignatureGuide } from './webhook-signature-guide.js';
 import { builtinDomainGuide } from './builtin-limits.js';
 import { agentSetupGuide } from './agent-setup-guide.js';
@@ -70,6 +71,15 @@ function parameters(document: Json, pathItem: Json, operation: Json, location: s
   return [...(pathItem.parameters ?? []), ...(operation.parameters ?? [])].map(parameter => resolve(document, parameter)).filter(parameter => parameter.in === location);
 }
 
+// Choose a working credential for the example; a workspace operation may also admit a personal
+// MCP sign-in. This is not a test for excluding an operation from publication.
+function usesSessionExample(operation: Json): boolean {
+  const sec: Json[] = operation.security ?? [];
+  const hasSession = sec.some(s => 'dashboardSession' in s || 'secureDashboardSession' in s);
+  const hasBearer = sec.some(s => 'bearerAuth' in s);
+  return (hasSession && !hasBearer) || Boolean(operation.tags?.includes('Workspaces'));
+}
+
 function sdkSample(document: Json, path: string, method: string, pathItem: Json, operation: Json): string {
   const options: Json = {};
   const pathParameters = parameters(document, pathItem, operation, 'path');
@@ -86,7 +96,7 @@ function sdkSample(document: Json, path: string, method: string, pathItem: Json,
     if (operation.operationId === 'sendEmailBatch') options.body.emails = options.body.emails.map(completeEmail);
   }
   const renderedOptions = Object.entries(options).map(([key, value]) => `  ${key}: ${JSON.stringify(value, null, 2).replaceAll('\n', '\n  ')},`).join('\n');
-  if (isDashboardSessionOnly(operation)) return `import { createClient } from '${sdkPackage}/client';\nimport { ${operation.operationId} } from '${sdkPackage}';\n\n// Run in the signed-in dashboard, on its own origin.\nconst client = createClient({ baseUrl: window.location.origin, credentials: 'same-origin' });\nconst result = await ${operation.operationId}({\n  client,\n${renderedOptions ? `${renderedOptions}\n` : ''}  throwOnError: true,\n});\nconsole.log(result.data);`;
+  if (usesSessionExample(operation)) return `import { createClient } from '${sdkPackage}/client';\nimport { ${operation.operationId} } from '${sdkPackage}';\n\n// Run in the signed-in dashboard, on its own origin.\nconst client = createClient({ baseUrl: window.location.origin, credentials: 'same-origin' });\nconst result = await ${operation.operationId}({\n  client,\n${renderedOptions ? `${renderedOptions}\n` : ''}  throwOnError: true,\n});\nconsole.log(result.data);`;
   return `import { createClient } from '${sdkPackage}/client';\nimport { ${operation.operationId} } from '${sdkPackage}';\n\nconst client = createClient({\n  baseUrl: '${publicOrigin}',\n  auth: scheme => scheme.scheme === 'bearer'\n    ? process.env.${apiKeyEnv}\n    : undefined,\n});\n\nconst result = await ${operation.operationId}({\n  client,\n${renderedOptions ? `${renderedOptions}\n` : ''}  throwOnError: true,\n});\n\nconsole.log(result.data);`;
 }
 
@@ -101,7 +111,7 @@ function curlSample(document: Json, path: string, method: string, pathItem: Json
   if (operation.operationId === 'sendEmail') body = completeEmail(body);
   if (operation.operationId === 'sendEmailBatch') body.emails = body.emails.map(completeEmail);
   const lines = [`curl --request ${method.toUpperCase()} \\`, `  --url '${publicOrigin}${target}' \\`, `  --header "Authorization: Bearer $${apiKeyEnv}"`];
-  if (isDashboardSessionOnly(operation)) {
+  if (usesSessionExample(operation)) {
     lines[1] = `  --url "\${NIGHTMAIL_ORIGIN}${target}" \\`;
     lines[2] = `  --header "Origin: $NIGHTMAIL_ORIGIN" \\\n  --cookie "$NIGHTMAIL_COOKIE_JAR"`;
   }
@@ -149,23 +159,15 @@ const START_HERE_OPS = [
 ] as const;
 const SNS_WEBHOOK_OPS = new Set(['receiveSesSnsEvent', 'receiveCloudFormationSnsEvent']);
 const SELF_HOSTED_OPS = new Set(['configureRegion', 'provisionRegion', 'configureRegionAutoValidation']);
-const DASHBOARD_BEARER_OPS = new Set(['bindMcpConnection', 'listAgents', 'revokeAgent']);
-function isDashboardSessionOnly(operation: Json): boolean {
-  const sec: Json[] = operation.security ?? [];
-  const hasSession = sec.some(s => 'dashboardSession' in s || 'secureDashboardSession' in s);
-  const hasBearer = sec.some(s => 'bearerAuth' in s);
-  return (hasSession && !hasBearer) || Boolean(operation.tags?.includes('Workspaces'));
-}
 function operationMarker(operation: Json): string {
   const labels: string[] = [];
   if (operation.deprecated) labels.push('deprecated');
   if (SNS_WEBHOOK_OPS.has(operation.operationId)) labels.push('SNS webhook');
-  else if (isDashboardSessionOnly(operation) || DASHBOARD_BEARER_OPS.has(operation.operationId)) labels.push('dashboard-only');
   if (SELF_HOSTED_OPS.has(operation.operationId)) labels.push('self-hosted');
   return labels.length ? ` [${labels.join(', ')}]` : '';
 }
 
-export function createOpenApiDocument(app: App) {
+export function createRegisteredDocument(app: App) {
   const document = app.getOpenAPI31Document({ openapi: '3.1.0', info: { title: `${productName} API`, version: '0.1.0', description: 'Send, receive and reply to email on your own domains. 202 means queued, not delivered.' } }) as Json;
   document.info['x-quickstart'] = quickstart;
   const used = [...new Set(operationEntries(document).map(entry => entry.operation.tags?.[0] ?? 'API'))];
@@ -182,6 +184,31 @@ export function createOpenApiDocument(app: App) {
     ];
   }
   return document;
+}
+
+// Project from the enriched contract so a retained operation (including its examples) is identical
+// in both documents. Leave the original path items intact for SDK generation and route coverage.
+export function publicDocument(registered: Json): Json {
+  const paths: Json = {};
+  const omitted = new Set<string>();
+  for (const [path, item] of Object.entries<Json>(registered.paths)) {
+    const published = { ...item };
+    for (const method of METHODS) {
+      const operation = item[method];
+      if (!operation || !dashboardReference.has(operation.operationId)) continue;
+      if (operation[permissionExtension]?.credential !== 'dashboard' || omitted.has(operation.operationId))
+        throw new Error(`Review the dashboard guard for ${operation.operationId}.`);
+      omitted.add(operation.operationId);
+      delete published[method];
+    }
+    if (METHODS.some(method => published[method])) paths[path] = published;
+  }
+  for (const id of dashboardReference.keys()) if (!omitted.has(id)) throw new Error(`Unknown dashboard operation: ${id}`);
+  return { ...registered, paths };
+}
+
+export function createOpenApiDocument(app: App) {
+  return publicDocument(createRegisteredDocument(app));
 }
 
 function title(value: string) { return value.replace(/([a-z0-9])([A-Z])/g, '$1 $2').split(' ').map((word, index) => /^mcp$/i.test(word) ? 'MCP' : index === 0 ? word[0].toUpperCase() + word.slice(1).toLowerCase() : word.toLowerCase()).join(' '); }

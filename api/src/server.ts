@@ -10,6 +10,7 @@ import { closeAfterRefusal, nodeLogFacetLane, nodeRuntime } from './adapters/nod
 import { sql } from 'drizzle-orm';
 import { dispatchWakeKey } from './dispatcher.js';
 import { clientIpHeader, clientNetworkHeader, legacyClientIpHeaders } from './brand.js';
+import { oldDashboardReference } from './dashboard-reference.js';
 import { isMissingComparePage, isMissingDocsPage, isMissingLegalPage, isPublicPage, movedPage, SITE_INDEX, withSiteIndex } from './site-index.js';
 import { admissionDenied, admissionPeer, ApiError, digest, log, logError, guardPublicRequest, setLogContext, snsIngress } from './core.js';
 import { brotliCompress, constants, gzip } from 'node:zlib';
@@ -83,6 +84,8 @@ try {
   const app = createApp({ fallback: async (c, next) => {
     // API failures must remain JSON, never an apparently successful SPA response.
     if (!['GET', 'HEAD'].includes(c.req.method) || /^\/(?:health|v1|api|mcp|\.well-known|unsubscribe|i|docs\/(?:operations|tags))(?:\/|$)/.test(c.req.path) || ['/openapi.json', '/docs.md', '/llms.txt'].includes(c.req.path)) return next();
+    const old = oldDashboardReference(c.req.path, c.req.method);
+    if (old) return old;
     if (homepage && c.req.path === '/') { const response = await homepage(c, next); if (response) return response; }
     return assets(c, async () => {
       const response = await pages(c, async () => {

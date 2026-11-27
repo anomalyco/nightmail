@@ -17,6 +17,7 @@ import { noticeResponse, noticeText, retiringOperations } from './deprecation.js
 import { countRequest } from './health-counters.js';
 import { SLOW_REQUEST_MS } from './log.js';
 import { authenticatedCreates } from './idempotency.js';
+import { oldDashboardReference } from './dashboard-reference.js';
 import { addresses, clientIpHeader, headerPrefix, healthService, productName, requestHeaderNames } from './brand.js';
 
 type RouteGroup = 'linked-images' | 'analytics' | 'disk-alert' | 'auth-ui' | 'mcp' | 'auth' | 'agent-setup' | 'feedback' | 'operator' | 'support' | 'audience' | 'audience-query' | 'newsletters' | 'templates' | 'sending-emails' | 'sending-other' | 'ops-domains' | 'ops-events' | 'ops-other' | 'ses-regions' | 'mailbox' | 'workspaces' | 'provider-connections' | 'public-stats' | 'overview' | 'billing';
@@ -469,7 +470,7 @@ function createShell(loadDocs: () => Promise<{ doc: Record<string, any>; createL
     c.set('failure', { code: 'NOT_FOUND', unmatched: true });
     const advice = /^\/v1\//.test(c.req.path) ? unmatchedAdvice(routeTable(app), c.req.method, c.req.path) : null;
     if (advice?.details.allowedMethods) c.header('Allow', (advice.details.allowedMethods as string[]).join(', '));
-    return c.json({ error: { code: 'NOT_FOUND', message: `Route not found: no endpoint answers ${c.req.method} on this path.${routeHint(c.req.method, c.req.path)}${advice ? ` ${advice.message}` : ''} Every operation is listed in /openapi.json, /llms.txt and /docs.md.`, requestId: c.get('requestId'), retryable: false, ...(advice ? { details: [advice.details] } : {}) } }, 404);
+    return c.json({ error: { code: 'NOT_FOUND', message: `Route not found: no endpoint answers ${c.req.method} on this path.${routeHint(c.req.method, c.req.path)}${advice ? ` ${advice.message}` : ''} Public operations are listed in /openapi.json, /llms.txt and /docs.md.`, requestId: c.get('requestId'), retryable: false, ...(advice ? { details: [advice.details] } : {}) } }, 404);
   });
   // origin is PUBLIC_URL's, never the request's Host: the dashboard and Docs build every example and connection URL from it.
   // analytics: whether a signed-out dashboard page records its use (DASHBOARD_ANALYTICS); signed in, /v1/me says so.
@@ -500,7 +501,10 @@ function createShell(loadDocs: () => Promise<{ doc: Record<string, any>; createL
   const markdown = (c: Ctx, value: string) => { c.header('content-type', 'text/markdown; charset=utf-8'); c.header('cache-control', 'public, max-age=300'); return c.body(value); };
   app.get('/llms.txt', async c => { const { doc, createLlmsText } = await loadDocs(); return markdown(c, createLlmsText(doc)); });
   app.get('/docs.md', async c => { const { doc, createMarkdownDocs } = await loadDocs(); return markdown(c, createMarkdownDocs(doc)!); });
-  app.get('/docs/operations/*', async c => { const { doc, createMarkdownDocs } = await loadDocs(); const file = c.req.path.slice('/docs/operations/'.length); const operation = /^[A-Za-z][A-Za-z0-9_]{0,63}\.md$/.test(file) ? file.slice(0, -3) : ''; const value = operation ? createMarkdownDocs(doc, operation) : null; return value ? markdown(c, value) : c.json({ error: { code: 'NOT_FOUND', message: 'Documented operation not found.', requestId: c.get('requestId'), retryable: false } }, 404); });
+  app.get('/docs/operations/*', async c => {
+    const old = oldDashboardReference(c.req.path, c.req.method);
+    if (old) return old;
+    const { doc, createMarkdownDocs } = await loadDocs(); const file = c.req.path.slice('/docs/operations/'.length); const operation = /^[A-Za-z][A-Za-z0-9_]{0,63}\.md$/.test(file) ? file.slice(0, -3) : ''; const value = operation ? createMarkdownDocs(doc, operation) : null; return value ? markdown(c, value) : c.json({ error: { code: 'NOT_FOUND', message: 'Documented operation not found.', requestId: c.get('requestId'), retryable: false } }, 404); });
   app.get('/docs/tags/*', async c => { const { doc, createTagMarkdownDocs } = await loadDocs(); const file = c.req.path.slice('/docs/tags/'.length); const value = /^[a-z0-9-]{1,64}\.md$/.test(file) ? createTagMarkdownDocs(doc, file.slice(0, -3)) : null; return value ? markdown(c, value) : c.json({ error: { code: 'NOT_FOUND', message: 'Documented tag not found.', requestId: c.get('requestId'), retryable: false } }, 404); });
   return app;
 }

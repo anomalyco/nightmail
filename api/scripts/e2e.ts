@@ -915,7 +915,8 @@ async function inbound() {
     check(r.name === domain && r.region === region, 'wrong inbound domain');
     return r.mx?.state === 'active';
   }, r => r.mx?.state ?? 'unknown');
-  check(report.mx?.expected.name === domain && report.mx.records.length && report.mx.records.every(r => r.host === `inbound-smtp.${region}.amazonaws.com`), 'refusing self-loop: unexpected public mail exchanger');
+  const mx = report.mx;
+  check(mx && mx.expected.name === domain && mx.records.length && mx.records.every(r => r.host === `inbound-smtp.${region}.amazonaws.com`), 'refusing self-loop: unexpected public mail exchanger');
   await until('receiving MX active', () => api('getInboundDomain', { path: d }), row => row.status === 'active', row => row.status);
   async function address(email: string) {
     const row = await api('createInboundAddress', { body: { address: email, ttlSeconds: 600 } });

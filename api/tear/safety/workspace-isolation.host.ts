@@ -1,5 +1,4 @@
 import { createHash, generateKeyPairSync, randomBytes, randomUUID, sign } from "node:crypto";
-import { readFileSync } from "node:fs";
 import pg from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
 import { host, type HostEvent, type Observed } from "@tear/mbt";
@@ -205,7 +204,7 @@ interface OpenApiRoute {
   hasBody: boolean;
 }
 
-const openapiDoc = JSON.parse(readFileSync(new URL("../../openapi.json", import.meta.url), "utf8"));
+const { registeredDocument: openapiDoc } = await import("../../scripts/registered-document.js");
 
 function classifyGroup(p: string, method?: string): RouteGroup {
   if (

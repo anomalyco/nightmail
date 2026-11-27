@@ -1,8 +1,8 @@
-import { readFileSync } from 'node:fs';
+import { registeredDocument } from './registered-document.js';
 import { dereference, validate, type Schema } from '@cfworker/json-schema';
 
 type Operation = { operationId: string; responses: Record<string, {content?: Record<string,{schema?: Schema}>}> };
-const doc: {components: {schemas: Record<string,Schema>}; paths: Record<string,Record<string,Operation>>} = JSON.parse(readFileSync(new URL('../openapi.json',import.meta.url),'utf8'));
+const doc = registeredDocument as {components: {schemas: Record<string,Schema>}; paths: Record<string,Record<string,Operation>>};
 const operations = new Map(Object.values(doc.paths).flatMap(path => Object.values(path).filter(op=>op.operationId).map(op=>[op.operationId,op] as const)));
 export const contract = new Set(operations.keys());
 // Index only schema objects, not OpenAPI metadata, at their actual JSON pointers.

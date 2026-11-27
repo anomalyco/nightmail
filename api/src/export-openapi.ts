@@ -1,9 +1,15 @@
-import { writeFile } from 'node:fs/promises';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { createOpenApiApp } from './app.js';
-import { createOpenApiDocument } from './openapi-docs.js';
-const document = createOpenApiDocument(await createOpenApiApp());
-await writeFile(new URL('../openapi.json', import.meta.url), JSON.stringify(document, null, 2) + '\n');
-console.log(`Generated OpenAPI for ${Object.keys(document.paths ?? {}).length} paths.`);
+import { createRegisteredDocument, publicDocument } from './openapi-docs.js';
+const document = createRegisteredDocument(await createOpenApiApp());
+const published = publicDocument(document);
+if (process.argv.includes('--sdk')) {
+  // Build input only: never copy this full contract into a public directory.
+  await mkdir(new URL('../dist/', import.meta.url), { recursive: true });
+  await writeFile(new URL('../dist/openapi-sdk.json', import.meta.url), JSON.stringify(document));
+}
+await writeFile(new URL('../openapi.json', import.meta.url), JSON.stringify(published, null, 2) + '\n');
+console.log(`Generated OpenAPI for ${Object.keys(published.paths ?? {}).length} paths.`);
 
 // Every property name the description defines, walked as JSON Schema (properties, items, combinators), never into an
 // example, default, enum or const value: the only keys a logged schema path keeps (schemaIssues in log.ts).

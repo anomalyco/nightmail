@@ -9,6 +9,7 @@ import { ROOM_PEER_HEADER } from './campaign-room-protocol.js';
 import type { SupportPlatformApi } from './support-platform.js';
 import { SECURITY_HEADERS } from './security-headers.js';
 import { clientIpHeader, clientNetworkHeader, healthService, legacyClientIpHeaders, requestHeaderNames, setting } from './brand.js';
+import { oldDashboardReference } from './dashboard-reference.js';
 import { isMissingComparePage, isMissingDocsPage, isMissingLegalPage, isPublicPage, movedPage, SITE_INDEX, withSiteIndex } from './site-index.js';
 import { linkHostRequest, sharedLinkPage } from './link-hosts.js';
 export { DispatcherShard, CampaignRoom };
@@ -358,6 +359,10 @@ export default {
       // The installation's canonical origin (PUBLIC_URL), never the request's Host; omitted if PUBLIC_URL isn't a URL.
       let origin: string | undefined; try { origin = new URL(String((env as { PUBLIC_URL?: unknown }).PUBLIC_URL)).origin; if (origin === 'null') origin = undefined; } catch { origin = undefined; }
       return fastSecure(new Response(request.method==='HEAD'?null:JSON.stringify({status:'ok',service:healthService,multiTenant,...(origin ? { origin } : {}),analytics}), { headers: { 'content-type': 'application/json; charset=UTF-8', 'cache-control': 'no-store', 'x-request-id': requestId } }));
+    }
+    if (!linkHost && pathname.startsWith('/docs/') && (request.method === 'GET' || request.method === 'HEAD')) {
+      const old = oldDashboardReference(pathname, request.method);
+      if (old) return fastSecure(old);
     }
     const staticDoc = (request.method === 'GET' || request.method === 'HEAD') && (['/openapi.json', '/docs.md', '/llms.txt'].includes(pathname) || pathname.startsWith('/docs/operations/') || pathname.startsWith('/docs/tags/'));
     const assets = (env as unknown as { ASSETS?: Fetcher }).ASSETS;
