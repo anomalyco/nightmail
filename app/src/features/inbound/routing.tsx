@@ -100,7 +100,7 @@ function RouteDialog({ draft, version, destinations, owners, onClose, addressSea
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!normalized.includes('@')) return setProblem('Enter an address, a pattern or *@domain.')
-    if (action === 'deliver' && !selected.length) return setProblem('Choose at least one inbox, webhook or forward, or store it without an inbox.')
+    if (action === 'deliver' && !selected.length) return setProblem('Choose at least one inbox, webhook or forward.')
     const order = new Map(destinations.map((d, i) => [d.id, i]))
     try { await save.mutateAsync({ match: normalized, to: action === 'drop' ? 'drop' : action === 'keep' ? [] : [...selected].sort((a, b) => (order.get(a) ?? 0) - (order.get(b) ?? 0)), enabled }); onClose() } catch { /* Shown in the form. */ }
   }
@@ -139,9 +139,9 @@ function RouteDialog({ draft, version, destinations, owners, onClose, addressSea
           {moreWebhooks && <Button variant="ghost" size="sm" loading={moreWebhooks.loading} onClick={moreWebhooks.load}>Load more webhooks</Button>}
           {group('forward', 'Forwards', 'No forwards yet')}
         </>}
-        {action === 'drop' && <Alert tone="warning">Dropped mail is not stored and cannot be recovered. Its receipt still records that it arrived.</Alert>}
+        {action === 'drop' && <Alert tone="warning">Dropped mail is not stored and cannot be recovered.</Alert>}
         {losesOwner && <Alert tone="warning">Mail to <PrivateAddress value={normalized} /> will stop reaching {owner.displayName || <PrivateAddress value={owner.address} />}. Tick its inbox to keep it.</Alert>}
-        {route && <Switch checked={enabled} disabled={save.isPending} onCheckedChange={setEnabled} label="On; when off, the next rule applies" />}
+        {route && <Switch checked={enabled} disabled={save.isPending} onCheckedChange={setEnabled} label="On" />}
         {problem && <p className="ui-field__error" role="alert">{problem}</p>}
         {!fieldError(save.error, 'match') && !fieldError(save.error, 'to') && <MutationError error={save.error} />}
       </form>

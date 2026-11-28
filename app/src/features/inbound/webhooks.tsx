@@ -31,7 +31,7 @@ function validate(input: Draft, editing = false) {
     try { const url = new URL(input.url.trim()); if (url.protocol !== 'https:' || url.username || url.password) errors.url = 'Enter an HTTPS URL without embedded credentials.' } catch { errors.url = 'Enter a valid HTTPS URL.' }
   }
   if (!input.routeOnly && !input.eventTypes.length) errors.eventTypes = 'Choose at least one event.'
-  if (input.addressIds && !input.addressIds.length) errors.addressIds = 'Choose at least one address, or send events for every address.'
+  if (input.addressIds && !input.addressIds.length) errors.addressIds = 'Choose at least one address.'
   return errors
 }
 
@@ -124,7 +124,7 @@ function WebhookDetail() {
         <div><dt>Created</dt><dd>{date(current.createdAt)}</dd></div>
         {current.approval && <div><dt>Agent approval</dt><dd>{approvalLabel(current.approval)}</dd></div>}
       </dl>
-      {current.paused && <Alert tone="info">No new deliveries are queued. Events keep recording and stay readable through the events API.</Alert>}
+      {current.paused && <Alert tone="info">Events keep recording and stay readable through the events API.</Alert>}
       <section className="section section--bordered stack">
         <SectionHeader title="Recent deliveries" />
         {deliveries.error ? <ErrorState error={deliveries.error} onRetry={() => void deliveries.refetch()} /> : <DataTable skeletonRows={3} minRows={3} rows={deliveries.data ?? []} rowKey={row => row.id} empty={<EmptyState title="No deliveries yet" />}
@@ -145,7 +145,7 @@ function WebhookDetail() {
         </form>}
       </section>
     </>}
-    <ConfirmDialog open={confirm === 'rotate'} onOpenChange={open => { if (!open) setConfirm(null) }} title="Rotate signing secret?" description="The old secret stops working at once. Update your server with the new one." confirmLabel="Rotate secret" pending={rotate.isPending} onConfirm={async () => { setSecret((await rotate.mutateAsync()).secret) }} />
+    <ConfirmDialog open={confirm === 'rotate'} onOpenChange={open => { if (!open) setConfirm(null) }} title="Rotate signing secret?" description="The old secret stops working at once." confirmLabel="Rotate secret" pending={rotate.isPending} onConfirm={async () => { setSecret((await rotate.mutateAsync()).secret) }} />
     <ConfirmDialog open={confirm === 'delete'} onOpenChange={open => { if (!open) setConfirm(null) }} title="Delete this webhook?" description="Pending deliveries are dropped and addresses stop delivering to it. Events stay readable through the events API." confirmLabel="Delete webhook" danger pending={remove.isPending} onConfirm={async () => { await remove.mutateAsync(); navigate(list) }} />
     <SecretDialog secret={secret} title="New signing secret" onClose={() => setSecret(null)} />
   </div>

@@ -45,14 +45,14 @@ const kindCount = (counts: Overview['counts'], kind: KindFilter) => kind === 'al
 // Under each route's address: what it is, in a few words.
 function note(r: RouteEntry) {
   const a = r.address
-  if (r.kind === 'catch_all') return r.catchAll ? (r.catchAll === 'create_address' ? 'Catch-all · creates an address per recipient' : 'Catch-all · unknown addresses') : 'Catch-all route'
+  if (r.kind === 'catch_all') return 'Catch-all'
   if (r.kind === 'route') return kindNote.route
   if (r.kind === 'pattern') return a ? <>Wildcard for <PrivateAddress value={a.address} /></> : kindNote.pattern
   if (r.kind === 'inbox') return [kindNote.inbox, a?.displayName, expiresIn(a?.expiresAt)].filter(Boolean).join(' · ')
   if (a?.origin === 'auto') return kindNote.auto
   const also = a?.aliases.length ? <>also <AddressList values={a.aliases.map(x => x.slice(0, x.indexOf('@') + 1))} /></> : null
   const parts = [a?.displayName, a?.expiresAt ? expiresIn(a.expiresAt) : null, also].filter(Boolean)
-  return parts.length ? parts.map((part, i) => <span key={i}>{i > 0 && ' · '}{part}</span>) : 'Address'
+  return parts.length ? parts.map((part, i) => <span key={i}>{i > 0 && ' · '}{part}</span>) : null
 }
 // The same line as text for a tooltip, when the cell clips it. An address never goes in: it stays masked until revealed.
 const noteTitle = (r: RouteEntry) => r.kind === 'catch_all' || r.kind === 'route' || r.address?.origin === 'auto' ? undefined
@@ -143,7 +143,7 @@ function AddressesTab({ overview, fetching, filters, setFilter, page, onPage, on
           columns={[
             // One line per address: what it receives, the rules that process it (beside the list, the panel says it),
             // where it is delivered, and its last mail. A card: the address and its new mail, what it is, where it goes.
-            { key: 'match', label: 'Address', card: 'title', render: r => <div className="rcv-cell"><RouteIcon entry={r} /><div className="settings-cell-stack"><Match value={r.match} host={!filters.domain} /><span className="muted receiving-clip" title={noteTitle(r)}>{note(r)}</span></div></div>,
+            { key: 'match', label: 'Address', card: 'title', render: r => <div className="rcv-cell"><RouteIcon entry={r} /><div className="settings-cell-stack"><Match value={r.match} host={!filters.domain} />{note(r) ? <span className="muted receiving-clip" title={noteTitle(r)}>{note(r)}</span> : null}</div></div>,
               cardRender: r => <span className="rcv-cell"><RouteIcon entry={r} /><Match value={r.match} host={!filters.domain} /></span> },
             { key: 'note', label: 'Kind', table: false, card: 'line', render: r => note(r) },
             // Rules in plain words; an address without one says how to add one, on a phone too.
@@ -288,7 +288,7 @@ export function ReceivingPage() {
     if (change.first) return
     void client.invalidateQueries({ predicate: query => query.queryKey[0] === 'nightmail' && ['inbound-overview', 'inbound-endpoints'].includes(resourceOf(query.queryKey)) })
     if (change.actor?.self && change.actor.type === 'member') return
-    toast(`${change.versionMoved ? 'Addresses and rules' : 'Destinations'} updated by ${actorText(change.actor)}${change.versionMoved ? ` · version ${change.version}` : ''}`, 'info')
+    toast(`${change.versionMoved ? 'Addresses and rules' : 'Destinations'} updated by ${actorText(change.actor)}`, 'info')
   }, { endpoints: true })
   // Addresses and inboxes an agent makes or deletes don't move that version: coming back to the page (from the agent's
   // terminal or another tab) reads the lists again, so nothing deleted meanwhile is still there to open.

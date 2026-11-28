@@ -17,7 +17,7 @@ import { nameParts } from '../../lib/private-address'
 import '../settings/settings.css'
 import './inbound.css'
 import { PrivateAddress, Sender } from '../../components/PrivateAddress'
-import { inboxKeyEnv, productName } from '../../../../api/src/brand'
+import { inboxKeyEnv } from '../../../../api/src/brand'
 
 const route = '/receiving/inboxes'
 const DAY = 86_400_000
@@ -80,7 +80,7 @@ export function NewInboxDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   return <Dialog open={open} onOpenChange={next => { if (!create.isPending) onOpenChange(next) }} title="New agent inbox" analytics="inboxes/create" footer={<><Button disabled={create.isPending} onClick={close}>Cancel</Button><Button variant="primary" type="submit" form="agent-inbox-create" loading={create.isPending} disabled={domains.isPending}>Create inbox</Button></>}>
     <form id="agent-inbox-create" className="stack" onSubmit={submit} noValidate>
       <MutationError error={create.error} />
-      {noHost && <Alert tone="info">No domain receives mail yet, so this is a sandbox inbox for test mail only. For a real address, add a domain in <Link to="/domains">Domains</Link> and publish its receiving MX record.</Alert>}
+      {noHost && <Alert tone="info">No domain receives mail yet. For a real address, add a domain in <Link to="/domains">Domains</Link> and publish its receiving MX record.</Alert>}
       {/* Each choice says what the address is: a random one nobody can guess on a receiving host, or a sandbox. */}
       <Field label="Address" htmlFor="agent-inbox-type" error={fieldError(create.error, 'domain')}>
         <Select id="agent-inbox-type" value={type === 'sandbox' ? 'sandbox' : host || hosts[0] || ''} disabled={create.isPending} onValueChange={value => { if (value === 'sandbox') setType('sandbox'); else { setType('ephemeral'); setHost(value) } }}
@@ -270,7 +270,7 @@ function InboxDetail({ id }: { id: string }) {
             // A message's card: its subject and status, then the sender and any code it carries.
             { key: 'from', label: 'From', width: '22%', card: 'line', render: row => <span className="inbox-clip"><Sender name={row.from.name} address={row.from.address} nameOnly /></span> },
             { key: 'subject', label: 'Subject', card: 'title', render: row => <span className="inbox-clip" title={row.snippet ? `${row.subject || '(no subject)'}: ${row.snippet}` : undefined}>{row.subject || '(no subject)'}{row.snippet && <span className="muted"> · {row.snippet}</span>}</span>, cardRender: row => row.subject || '(no subject)' },
-            ...(codes ? [{ key: 'code', width: 128, label: <span title={`A one-time code ${productName} found in the message, such as a sign-up code`}>Code found</span>, card: 'inline' as const, render: (row: InboxMessage) => row.extract.codes[0] ? <code>{row.extract.codes[0]}</code> : <span className="muted">—</span>, cardRender: (row: InboxMessage) => row.extract.codes[0] ? <>Code <code>{row.extract.codes[0]}</code></> : 'No code' }] : []),
+            ...(codes ? [{ key: 'code', width: 128, label: 'Code found', card: 'inline' as const, render: (row: InboxMessage) => row.extract.codes[0] ? <code>{row.extract.codes[0]}</code> : <span className="muted">—</span>, cardRender: (row: InboxMessage) => row.extract.codes[0] ? <>Code <code>{row.extract.codes[0]}</code></> : 'No code' }] : []),
             { key: 'state', label: 'Status', width: 120, card: 'aside', render: row => { const state = messageState(row); return <StatusBadge status={state.label} tone={state.tone} /> } },
             { key: 'received', label: 'Received', width: 112, align: 'right', card: 'field', render: row => when(row.receivedAt) },
           ]} />

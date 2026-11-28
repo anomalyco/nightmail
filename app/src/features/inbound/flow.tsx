@@ -68,7 +68,7 @@ const local = (value: string) => value.slice(0, value.indexOf('@') + 1)
 /** What a row receives besides its own address, in a few words. */
 function receiveNote(entry: RouteEntry): ReactNode {
   const a = entry.address
-  if (entry.kind === 'catch_all') return 'Catch-all · any address without its own'
+  if (entry.kind === 'catch_all') return 'Catch-all'
   if (entry.kind === 'pattern') return a ? <>Wildcard for <PrivateAddress value={a.address} /></> : kindNote.pattern
   if (entry.kind === 'route') return kindNote.route
   if (entry.kind === 'inbox') return [kindNote.inbox, expiresIn(a?.expiresAt)].filter(Boolean).join(' · ')
@@ -165,7 +165,7 @@ function matchedBy(r: TraceRecipient, overview: Overview, addresses: Pick<Inboun
   if (r.tier === 'subaddress') return 'Caught by its address without the +tag'
   if (r.tier === 'catchall') return 'Caught by the catch-all'
   if (r.tier === 'default') return r.domainDefault === 'create_address' ? 'The catch-all creates it' : 'The catch-all keeps it'
-  return 'Its own address'
+  return null
 }
 /** The path one email took, from a test: where it was received and how, the rules that ran (ticked when they acted),
  *  and where it was delivered. Until the test answers it is one loading block, replaced whole (a stage that grew as

@@ -407,7 +407,7 @@ function RecipeEditor({ recipe, overview, addresses, preset, header, back, addre
           {remaining.length > 0 && targets.length < 10 && <Select className="address-select-trigger recipe-targets__add" menuClassName="address-select" aria-label="Add an address" value="" placeholder={targets.length ? 'Add another' : 'Choose an address'}
             onValueChange={v => { if (v) setTargets([...targets, v]) }} options={remaining.map(t => addressOption(t.value, t.label))} />}
         </div>
-        {addressesComplete && !targetsList.length && <p className="muted recipe-targets__empty">A rule runs on mail to one of your addresses or agent inboxes, and this workspace has none yet. <Link to="/receiving?new=address">Create an address</Link> or <Link to="/receiving/inboxes">an agent inbox</Link>, then come back.</p>}
+        {addressesComplete && !targetsList.length && <p className="muted recipe-targets__empty">No addresses yet. <Link to="/receiving?new=address">Create an address</Link> or <Link to="/receiving/inboxes">an agent inbox</Link>, then come back.</p>}
         {addressSearchable && <SearchField aria-label="Search addresses" placeholder="Search addresses" value={addressSearch} onChange={event => onAddressSearch(event.target.value)} />}
         {hasMoreAddresses && <Button variant="ghost" size="sm" loading={loadingMoreAddresses} onClick={onLoadMoreAddresses}>Load more addresses</Button>}
       </Field>
