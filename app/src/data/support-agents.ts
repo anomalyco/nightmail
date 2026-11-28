@@ -1,4 +1,4 @@
-import { request } from './live'
+import { request, type RequestScope } from './live'
 import { productName } from '../../../api/src/brand'
 import { mcpServerUrl } from '../../../api/src/mcp-clients'
 
@@ -11,13 +11,13 @@ export interface SupportAgentApproval { id: string; agent: SupportAgentConnectio
 
 const base = '/v1/operator/support-agents'
 export const supportAgentsKey = ['operator', 'support-agents'] as const
-export const supportAgentsApi = {
-  list: (signal?: AbortSignal) => request<{ data: SupportAgentApproval[] }>(base, { signal }),
-  lookUp: (userCode: string, signal?: AbortSignal) => request<SupportAgentRequest>(`${base}/lookup`, { method: 'POST', body: { userCode }, signal }),
-  approve: (userCode: string) => request<SupportAgentApproval>(`${base}/approve`, { method: 'POST', body: { userCode } }),
-  deny: (userCode: string) => request<{ userCode: string; status: 'denied' }>(`${base}/deny`, { method: 'POST', body: { userCode } }),
-  revoke: (id: string) => request<{ id: string; revoked: true }>(`${base}/${encodeURIComponent(id)}`, { method: 'DELETE' }),
-}
+export const supportAgentsApi = (scope: RequestScope) => ({
+  list: (signal?: AbortSignal) => request<{ data: SupportAgentApproval[] }>(base, { signal, scope }),
+  lookUp: (userCode: string, signal?: AbortSignal) => request<SupportAgentRequest>(`${base}/lookup`, { method: 'POST', body: { userCode }, signal, scope }),
+  approve: (userCode: string) => request<SupportAgentApproval>(`${base}/approve`, { method: 'POST', body: { userCode }, scope }),
+  deny: (userCode: string) => request<{ userCode: string; status: 'denied' }>(`${base}/deny`, { method: 'POST', body: { userCode }, scope }),
+  revoke: (id: string) => request<{ id: string; revoked: true }>(`${base}/${encodeURIComponent(id)}`, { method: 'DELETE', scope }),
+})
 
 /** What Copy for your agent copies: connect signed in as you, then the support inbox; the first call asks for approval. */
 export const supportAgentPrompt = (origin: string) => `Connect to ${productName}'s MCP server at ${mcpServerUrl(origin)} and sign in as me. Then use supportInbox to tell me what's waiting in support. The first time, it gives you a link and a code: show me both so I can approve you.`

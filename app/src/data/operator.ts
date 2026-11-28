@@ -1,4 +1,4 @@
-import { request } from './live'
+import { request, type RequestScope } from './live'
 import type { SenderScore, SenderStanding, StandingStep } from './types'
 
 // The operator API (/v1/operator/*): Nightmail staff with a platform role act on any Hosted workspace through one audited
@@ -162,60 +162,61 @@ const base = '/v1/operator', id = encodeURIComponent
 const query = (values: Record<string, string | number | undefined>) => { const params = new URLSearchParams(); for (const [key, value] of Object.entries(values)) if (value !== undefined && value !== '') params.set(key, String(value)); const text = params.toString(); return text ? `?${text}` : '' }
 const why = ({ reason, ticketRef }: OperatorWhy) => ({ reason: reason.trim(), ...ticketRef?.trim() ? { ticketRef: ticketRef.trim() } : {} })
 const evidence = ({ cluster, note, ticketRef }: AbuseEvidence) => ({ evidence: { cluster, note: note.trim() }, ...ticketRef?.trim() ? { ticketRef: ticketRef.trim() } : {} })
-const write = (path: string, method: 'POST' | 'PUT', body: unknown, guard: OperatorGuard) => request<OperatorReceipt>(`${base}${path}`, { method, body, idempotencyKey: guard.idempotencyKey, ifMatch: guard.ifMatch })
-
-export const operatorApi = {
-  queue: async (input: { step?: StandingStep; q?: string }, signal?: AbortSignal) => (await request<{ data: OperatorQueueItem[] }>(`${base}/workspaces${query({ step: input.step, q: input.q?.trim(), limit: 200 })}`, { signal })).data,
-  workspace: (workspaceId: string, signal?: AbortSignal) => request<OperatorWorkspace>(`${base}/workspaces/${id(workspaceId)}`, { signal }),
-  // Paged by the API's opaque cursor, so rows that share a timestamp are never skipped at a page boundary.
-  timeline: async (workspaceId: string, cursor: string | undefined, signal?: AbortSignal) => {
-    const page = await request<{ data: OperatorTimelineItem[]; nextCursor: string | null }>(`${base}/workspaces/${id(workspaceId)}/timeline${query({ cursor, limit: 50 })}`, { signal })
-    return { items: page.data, nextCursor: page.nextCursor }
-  },
-  actions: async (input: { workspaceId?: string; cursor?: string }, signal?: AbortSignal) => {
-    const page = await request<{ data: OperatorAction[]; nextCursor: string | null }>(`${base}/actions${query({ workspaceId: input.workspaceId, cursor: input.cursor, limit: 50 })}`, { signal })
-    return { items: page.data, nextCursor: page.nextCursor }
-  },
-  waitlist: async (input: { q?: string; cursor?: string; limit?: number }, signal?: AbortSignal) => {
-    const page = await request<{ data: WaitlistEntry[]; nextCursor: string | null; total: number }>(`${base}/waitlist${query({ q: input.q?.trim(), cursor: input.cursor, limit: input.limit ?? 100 })}`, { signal })
-    return { items: page.data, nextCursor: page.nextCursor, total: page.total }
-  },
-  signups: (signal?: AbortSignal) => request<SignupPlaces>(`${base}/signups`, { signal }),
-  health: (signal?: AbortSignal) => request<OperatorHealth>(`${base}/health`, { signal }),
-  glass: (signal?: AbortSignal) => request<Glass>(`${base}/glass`, { signal }),
-  glassDeliverability: (window: DeliverabilityWindow, signal?: AbortSignal) => request<Deliverability>(`${base}/glass/deliverability?window=${window}`, { signal }),
-  /** after: the newest event's time the page has; the answer is the events at or after it. */
-  glassActivity: (after?: string, signal?: AbortSignal) => request<GlassActivity>(`${base}/glass/activity${after ? `?after=${encodeURIComponent(after)}` : ''}`, { signal }),
-  setSignupLimit: (limit: number, raise: SignupRaise, guard: OperatorGuard) => request<SignupPlaces & { letIn: number; emailed: number; notEmailed: number | null }>(`${base}/signups`, { method: 'PUT', body: { limit, raise }, idempotencyKey: guard.idempotencyKey }),
-  allWorkspaces: async (input: { cursor?: string }, signal?: AbortSignal) => {
-    const page = await request<{ data: WorkspaceSummary[]; nextCursor: string | null }>(`${base}/signups/workspaces${query({ cursor: input.cursor, limit: 100 })}`, { signal })
-    return { items: page.data, nextCursor: page.nextCursor }
-  },
-  pause: (workspaceId: string, input: OperatorWhy, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/pause`, 'POST', why(input), guard),
-  liftGrowth: (workspaceId: string, input: OperatorWhy, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/growth/lift`, 'POST', why(input), guard),
-  resume: (workspaceId: string, input: OperatorWhy & { restore: 50 | 100 }, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/resume`, 'POST', { ...why(input), restore: input.restore }, guard),
-  marketing: (workspaceId: string, input: OperatorWhy & { held: boolean }, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/marketing`, 'PUT', { held: input.held, ...why(input) }, guard),
-  limit: (workspaceId: string, input: OperatorWhy & { daily: number | null; expiresAt: string | null }, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/limit`, 'PUT', { daily: input.daily, expiresAt: input.daily === null ? null : input.expiresAt, ...why(input) }, guard),
-  domainLimit: (workspaceId: string, input: OperatorWhy & { limit: number | null }, guard: OperatorGuard) => request<{ ok: true; domainLimit: OperatorDomainLimit }>(`${base}/workspaces/${id(workspaceId)}/domain-limit`, { method: 'PUT', body: { limit: input.limit, ...why(input) }, idempotencyKey: guard.idempotencyKey }),
-  releaseCampaign: (campaignId: string, input: OperatorWhy, guard: OperatorGuard) => write(`/campaigns/${id(campaignId)}/release`, 'POST', why(input), guard),
-  abuseClusters: async (input: { band?: AbuseBand; cursor?: string; limit?: number }, signal?: AbortSignal): Promise<AbuseClusterPage> => {
-    const page = await request<{ data: AbuseCluster[] } & Omit<AbuseClusterPage, 'items'>>(`${base}/abuse/clusters${query({ band: input.band, cursor: input.cursor, limit: input.limit ?? 50 })}`, { signal })
-    return { items: page.data, nextCursor: page.nextCursor, counts: page.counts, alerts: page.alerts, monitoring: page.monitoring }
-  },
-  lists: async (input: { cursor?: string }, signal?: AbortSignal) => {
-    const page = await request<{ data: OperatorListRow[]; nextCursor: string | null }>(`${base}/lists${query({ cursor: input.cursor, limit: 20 })}`, { signal })
-    return { items: page.data, nextCursor: page.nextCursor }
-  },
-  abuseCluster: (clusterId: string, signal?: AbortSignal) => request<AbuseClusterDetail>(`${base}/abuse/clusters/${id(clusterId)}`, { signal }),
-  abuseAlerts: async (input: { cluster?: string; cursor?: string; limit?: number }, signal?: AbortSignal) => {
-    const page = await request<{ data: AbuseAlert[]; nextCursor: string | null; delivery: 'slack' | 'off' }>(`${base}/abuse/alerts${query({ cluster: input.cluster, cursor: input.cursor, limit: input.limit ?? 50 })}`, { signal })
-    return { items: page.data, nextCursor: page.nextCursor, delivery: page.delivery }
-  },
-  abuseReview: (alertId: string, action: AbuseReview['action']) => request<AbuseAlert>(`${base}/abuse/alerts/${id(alertId)}/review`, { method: 'POST', body: { action } }),
-  abusePause: (workspaceId: string, input: AbuseEvidence, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/pause`, 'POST', evidence(input), guard),
-  abuseLimit: (workspaceId: string, input: AbuseEvidence & { daily: number }, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/limit`, 'PUT', { daily: input.daily, expiresAt: null, ...evidence(input) }, guard),
-  billing: (workspaceId: string, signal?: AbortSignal) => request<OperatorBilling>(`${base}/billing/${id(workspaceId)}`, { signal }),
-  /** Free (not billed): the workspace's own flag, or a person's (every workspace they own, bound to their sign-in). */
-  workspaceFree: (workspaceId: string, input: FreeInput, guard: OperatorGuard) => request(`${base}/billing/${id(workspaceId)}/free`, { method: 'PUT', body: { free: input.free, ...input.free && input.until ? { until: input.until } : {}, ...why(input) }, idempotencyKey: guard.idempotencyKey }),
-  personFree: (userId: string, input: FreeInput, guard: OperatorGuard) => request(`${base}/billing/people/${id(userId)}/free`, { method: 'PUT', body: { free: input.free, ...input.free && input.until ? { until: input.until } : {}, ...why(input) }, idempotencyKey: guard.idempotencyKey }),
+export const operatorApi = (scope: RequestScope) => {
+  const write = (path: string, method: 'POST' | 'PUT', body: unknown, guard: OperatorGuard) => request<OperatorReceipt>(`${base}${path}`, { method, body, idempotencyKey: guard.idempotencyKey, ifMatch: guard.ifMatch, scope })
+  return {
+    queue: async (input: { step?: StandingStep; q?: string }, signal?: AbortSignal) => (await request<{ data: OperatorQueueItem[] }>(`${base}/workspaces${query({ step: input.step, q: input.q?.trim(), limit: 200 })}`, { signal, scope })).data,
+    workspace: (workspaceId: string, signal?: AbortSignal) => request<OperatorWorkspace>(`${base}/workspaces/${id(workspaceId)}`, { signal, scope }),
+    // Paged by the API's opaque cursor, so rows that share a timestamp are never skipped at a page boundary.
+    timeline: async (workspaceId: string, cursor: string | undefined, signal?: AbortSignal) => {
+      const page = await request<{ data: OperatorTimelineItem[]; nextCursor: string | null }>(`${base}/workspaces/${id(workspaceId)}/timeline${query({ cursor, limit: 50 })}`, { signal, scope })
+      return { items: page.data, nextCursor: page.nextCursor }
+    },
+    actions: async (input: { workspaceId?: string; cursor?: string }, signal?: AbortSignal) => {
+      const page = await request<{ data: OperatorAction[]; nextCursor: string | null }>(`${base}/actions${query({ workspaceId: input.workspaceId, cursor: input.cursor, limit: 50 })}`, { signal, scope })
+      return { items: page.data, nextCursor: page.nextCursor }
+    },
+    waitlist: async (input: { q?: string; cursor?: string; limit?: number }, signal?: AbortSignal) => {
+      const page = await request<{ data: WaitlistEntry[]; nextCursor: string | null; total: number }>(`${base}/waitlist${query({ q: input.q?.trim(), cursor: input.cursor, limit: input.limit ?? 100 })}`, { signal, scope })
+      return { items: page.data, nextCursor: page.nextCursor, total: page.total }
+    },
+    signups: (signal?: AbortSignal) => request<SignupPlaces>(`${base}/signups`, { signal, scope }),
+    health: (signal?: AbortSignal) => request<OperatorHealth>(`${base}/health`, { signal, scope }),
+    glass: (signal?: AbortSignal) => request<Glass>(`${base}/glass`, { signal, scope }),
+    glassDeliverability: (window: DeliverabilityWindow, signal?: AbortSignal) => request<Deliverability>(`${base}/glass/deliverability?window=${window}`, { signal, scope }),
+    /** after: the newest event's time the page has; the answer is the events at or after it. */
+    glassActivity: (after?: string, signal?: AbortSignal) => request<GlassActivity>(`${base}/glass/activity${after ? `?after=${encodeURIComponent(after)}` : ''}`, { signal, scope }),
+    setSignupLimit: (limit: number, raise: SignupRaise, guard: OperatorGuard) => request<SignupPlaces & { letIn: number; emailed: number; notEmailed: number | null }>(`${base}/signups`, { method: 'PUT', body: { limit, raise }, idempotencyKey: guard.idempotencyKey, scope }),
+    allWorkspaces: async (input: { cursor?: string }, signal?: AbortSignal) => {
+      const page = await request<{ data: WorkspaceSummary[]; nextCursor: string | null }>(`${base}/signups/workspaces${query({ cursor: input.cursor, limit: 100 })}`, { signal, scope })
+      return { items: page.data, nextCursor: page.nextCursor }
+    },
+    pause: (workspaceId: string, input: OperatorWhy, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/pause`, 'POST', why(input), guard),
+    liftGrowth: (workspaceId: string, input: OperatorWhy, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/growth/lift`, 'POST', why(input), guard),
+    resume: (workspaceId: string, input: OperatorWhy & { restore: 50 | 100 }, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/resume`, 'POST', { ...why(input), restore: input.restore }, guard),
+    marketing: (workspaceId: string, input: OperatorWhy & { held: boolean }, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/marketing`, 'PUT', { held: input.held, ...why(input) }, guard),
+    limit: (workspaceId: string, input: OperatorWhy & { daily: number | null; expiresAt: string | null }, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/limit`, 'PUT', { daily: input.daily, expiresAt: input.daily === null ? null : input.expiresAt, ...why(input) }, guard),
+    domainLimit: (workspaceId: string, input: OperatorWhy & { limit: number | null }, guard: OperatorGuard) => request<{ ok: true; domainLimit: OperatorDomainLimit }>(`${base}/workspaces/${id(workspaceId)}/domain-limit`, { method: 'PUT', body: { limit: input.limit, ...why(input) }, idempotencyKey: guard.idempotencyKey, scope }),
+    releaseCampaign: (campaignId: string, input: OperatorWhy, guard: OperatorGuard) => write(`/campaigns/${id(campaignId)}/release`, 'POST', why(input), guard),
+    abuseClusters: async (input: { band?: AbuseBand; cursor?: string; limit?: number }, signal?: AbortSignal): Promise<AbuseClusterPage> => {
+      const page = await request<{ data: AbuseCluster[] } & Omit<AbuseClusterPage, 'items'>>(`${base}/abuse/clusters${query({ band: input.band, cursor: input.cursor, limit: input.limit ?? 50 })}`, { signal, scope })
+      return { items: page.data, nextCursor: page.nextCursor, counts: page.counts, alerts: page.alerts, monitoring: page.monitoring }
+    },
+    lists: async (input: { cursor?: string }, signal?: AbortSignal) => {
+      const page = await request<{ data: OperatorListRow[]; nextCursor: string | null }>(`${base}/lists${query({ cursor: input.cursor, limit: 20 })}`, { signal, scope })
+      return { items: page.data, nextCursor: page.nextCursor }
+    },
+    abuseCluster: (clusterId: string, signal?: AbortSignal) => request<AbuseClusterDetail>(`${base}/abuse/clusters/${id(clusterId)}`, { signal, scope }),
+    abuseAlerts: async (input: { cluster?: string; cursor?: string; limit?: number }, signal?: AbortSignal) => {
+      const page = await request<{ data: AbuseAlert[]; nextCursor: string | null; delivery: 'slack' | 'off' }>(`${base}/abuse/alerts${query({ cluster: input.cluster, cursor: input.cursor, limit: input.limit ?? 50 })}`, { signal, scope })
+      return { items: page.data, nextCursor: page.nextCursor, delivery: page.delivery }
+    },
+    abuseReview: (alertId: string, action: AbuseReview['action']) => request<AbuseAlert>(`${base}/abuse/alerts/${id(alertId)}/review`, { method: 'POST', body: { action }, scope }),
+    abusePause: (workspaceId: string, input: AbuseEvidence, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/pause`, 'POST', evidence(input), guard),
+    abuseLimit: (workspaceId: string, input: AbuseEvidence & { daily: number }, guard: OperatorGuard) => write(`/workspaces/${id(workspaceId)}/limit`, 'PUT', { daily: input.daily, expiresAt: null, ...evidence(input) }, guard),
+    billing: (workspaceId: string, signal?: AbortSignal) => request<OperatorBilling>(`${base}/billing/${id(workspaceId)}`, { signal, scope }),
+    /** Free (not billed): the workspace's own flag, or a person's (every workspace they own, bound to their sign-in). */
+    workspaceFree: (workspaceId: string, input: FreeInput, guard: OperatorGuard) => request(`${base}/billing/${id(workspaceId)}/free`, { method: 'PUT', body: { free: input.free, ...input.free && input.until ? { until: input.until } : {}, ...why(input) }, idempotencyKey: guard.idempotencyKey, scope }),
+    personFree: (userId: string, input: FreeInput, guard: OperatorGuard) => request(`${base}/billing/people/${id(userId)}/free`, { method: 'PUT', body: { free: input.free, ...input.free && input.until ? { until: input.until } : {}, ...why(input) }, idempotencyKey: guard.idempotencyKey, scope }),
+  }
 }

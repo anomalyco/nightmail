@@ -18,7 +18,7 @@ export function AgentWaiting() {
   const identity = useSession()?.identity
   const { pathname } = useLocation()
   const admin = identity?.role === 'owner' || identity?.role === 'admin'
-  const waiting = useApiQuery(['agent-device-waiting', identity?.workspaceId ?? ''], (_api, signal) => request<Waiting>('/v1/agent/device/waiting', { signal }),
+  const waiting = useApiQuery(['agent-device-waiting', identity?.workspaceId ?? ''], (api, signal) => request<Waiting>('/v1/agent/device/waiting', { signal, scope: api.scope }),
     { enabled: admin, interval: 15_000 })
   const agent = waiting.data?.data[0]
   if (!admin || !agent || pathname === '/connect' || Date.parse(agent.expiresAt) <= Date.now()) return null

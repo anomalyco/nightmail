@@ -3,9 +3,9 @@ import { Link, useNavigate, useLocation } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
 import { ArrowUpRight, Check, ChevronDown, ChevronRight, CreditCard, MoreHorizontal } from 'lucide-react'
 import { Alert, Button, ConfirmDialog, ControlSkeleton, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, IconButton, Input, Meter, Pagination, SectionHeader, Skeleton, StatusBadge, Switch, Tabs, useToast, type Column } from '../../components/ui'
-import { useApiDef, useApiQuery, useSession, useWorkspaceAccess } from '../../data/context'
+import { useApiDef, useApiQuery, useRequestScope, useSession, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
-import { request } from '../../data/live'
+import type { RequestScope } from '../../data/live'
 import { ApiError, errorText, type Identity } from '../../data/types'
 import type { Usage } from '../../data/usage'
 import { billingApi, billingStatus, cardBrand, centsUsd, declineText, fullDay, monthDay, parseDollars, priceUc, total, usd, type AutoRechargeInput, type BillingSummary, type LedgerEntry, type Payment } from '../../data/billing'
@@ -218,13 +218,13 @@ const useBillingState = () => useSession()?.identity?.billing
 
 // The summary's card: its brand and last four with Replace and Remove in a menu, or Add a card, which opens Stripe.
 function CardControl({ summary: b }: { summary: BillingSummary | undefined }) {
-  const refresh = useBillingRefresh(), toast = useToast()
+  const scope = useRequestScope(), refresh = useBillingRefresh(), toast = useToast()
   const [removing, setRemoving] = useState(false)
   const [busy, setBusy] = useState(false)
   if (!b) return <Skeleton width={120} height={20} />
   async function setup() {
     setBusy(true)
-    try { window.location.assign((await billingApi.setupCard()).checkoutUrl) } catch (error) { toast(errorText(error), 'error'); setBusy(false) }
+    try { window.location.assign((await billingApi(scope).setupCard()).checkoutUrl) } catch (error) { toast(errorText(error), 'error'); setBusy(false) }
   }
   const card = b.paymentMethod
   if (!card) return <Button variant="ghost" size="sm" className="billing-summary__add-card" loading={busy} onClick={() => void setup()}><CreditCard size={14} aria-hidden="true" />Add a card</Button>
@@ -232,7 +232,7 @@ function CardControl({ summary: b }: { summary: BillingSummary | undefined }) {
     <span>{cardLabel(card)}</span>
     <DropdownMenu label="Card actions" title={cardLabel(card)} trigger={<IconButton size="sm" label="Card actions"><MoreHorizontal size={16} aria-hidden="true" /></IconButton>} items={[{ label: 'Replace card', onSelect: () => void setup() }, { label: 'Remove card', destructive: true, onSelect: () => setRemoving(true) }]} />
     <ConfirmDialog open={removing} onOpenChange={setRemoving} danger title="Remove this card?" description={`${cardLabel(card)} is removed from Stripe and auto-recharge turns off.`} confirmLabel="Remove card"
-      onConfirm={async () => { try { await billingApi.removeCard() } catch (cause) { throw new Error(errorText(cause)) } refresh(); toast('Card removed. Auto-recharge is off.', 'success') }} />
+      onConfirm={async () => { try { await billingApi(scope).removeCard() } catch (cause) { throw new Error(errorText(cause)) } refresh(); toast('Card removed. Auto-recharge is off.', 'success') }} />
   </span>
 }
 
@@ -245,7 +245,7 @@ const dollars = (cents: number) => `$${(cents / 100).toLocaleString('en-US', { m
 // how it works and the terms open from Edit, and from turning it on, which asks before the card is charged; turning it
 // off is one click. Without a card the switch is off: the card row above it has Add a card.
 function AutoRecharge({ summary: b, Row }: { summary: BillingSummary | undefined; Row: (props: RowProps) => ReactNode }) {
-  const refresh = useBillingRefresh(), toast = useToast()
+  const scope = useRequestScope(), refresh = useBillingRefresh(), toast = useToast()
   const [editing, setEditing] = useState<'edit' | 'enable' | null>(null)
   const [pending, setPending] = useState(false)
   const settings = b?.autoRecharge
@@ -255,7 +255,7 @@ function AutoRecharge({ summary: b, Row }: { summary: BillingSummary | undefined
     : <span className="billing-recharge__amounts">{dollars(settings.amountCents)} below {dollars(settings.thresholdCents)}</span>
   async function turnOff() {
     setPending(true)
-    try { await billingApi.autoRecharge({ enabled: false, thresholdCents: settings!.thresholdCents, amountCents: settings!.amountCents, monthlyCapCents: settings!.monthlyCapCents }); refresh(); toast('Auto-recharge is off', 'success') }
+    try { await billingApi(scope).autoRecharge({ enabled: false, thresholdCents: settings!.thresholdCents, amountCents: settings!.amountCents, monthlyCapCents: settings!.monthlyCapCents }); refresh(); toast('Auto-recharge is off', 'success') }
     catch (cause) { toast(errorText(cause), 'error') } finally { setPending(false) }
   }
   return <Row title="Auto-recharge">
@@ -268,7 +268,7 @@ function AutoRecharge({ summary: b, Row }: { summary: BillingSummary | undefined
   </Row>
 }
 function RechargeDialog({ settings, hasCard, enable, capped, Row, onClose }: { settings: NonNullable<BillingSummary['autoRecharge']>; hasCard: boolean; enable: boolean; capped: boolean; Row: (props: RowProps) => ReactNode; onClose: () => void }) {
-  const refresh = useBillingRefresh(), toast = useToast()
+  const scope = useRequestScope(), refresh = useBillingRefresh(), toast = useToast()
   const initial = { threshold: (settings.thresholdCents / 100).toString(), amount: (settings.amountCents / 100).toString(), cap: (settings.monthlyCapCents / 100).toString() }
   const [form, setForm] = useState(initial)
   const [pending, setPending] = useState(false)
@@ -285,7 +285,7 @@ function RechargeDialog({ settings, hasCard, enable, capped, Row, onClose }: { s
     if (!valid || !hasCard || (!enable && !changed)) return
     const input: AutoRechargeInput = { enabled: enable || settings.enabled, thresholdCents: cents.threshold!, amountCents: cents.amount!, monthlyCapCents: cents.cap! }
     setPending(true); setError(null)
-    try { await billingApi.autoRecharge(input); refresh(); toast(enable ? 'Auto-recharge is on' : 'Auto-recharge saved', 'success'); onClose() }
+    try { await billingApi(scope).autoRecharge(input); refresh(); toast(enable ? 'Auto-recharge is on' : 'Auto-recharge saved', 'success'); onClose() }
     catch (cause) { setError(cause) } finally { setPending(false) }
   }
   return <Dialog open onOpenChange={next => { if (!next && !pending) onClose() }} title={enable ? 'Turn on auto-recharge' : 'Auto-recharge'} className="billing-recharge-dialog"
@@ -358,11 +358,11 @@ function wholeDays(entries: LedgerEntry[]) {
 const LEDGER_READ = 100, HISTORY_LINES = 10, LEDGER_READS = 8
 /** One page of history: ledger pages are read until they hold ten whole lines (three reads for a workspace that sends
  *  every hour), and the page ends where a day ends, so no day is split over two pages. */
-async function historyPage(cursor: string | undefined, signal: AbortSignal): Promise<{ data: Line[]; nextCursor: string | null }> {
+async function historyPage(scope: RequestScope | 'unscoped', cursor: string | undefined, signal: AbortSignal): Promise<{ data: Line[]; nextCursor: string | null }> {
   const entries: LedgerEntry[] = []
   let next = cursor
   for (let read = 1; ; read++) {
-    const page = await request<LedgerPage>(`/v1/billing/ledger?limit=${LEDGER_READ}${next ? `&cursor=${encodeURIComponent(next)}` : ''}`, { signal })
+    const page = await billingApi(scope).ledger(next, signal, LEDGER_READ)
     entries.push(...page.data)
     if (!page.nextCursor) return { data: historyLines(entries), nextCursor: null }
     next = page.nextCursor
@@ -404,7 +404,7 @@ function History() {
 // the browser then counts as that row moving.
 function LedgerTable() {
   const pagination = useCursorPagination(), cursor = pagination.cursorForPage(pagination.page)
-  const query = useApiQuery(['billing-history', cursor ?? null], (_api, signal) => historyPage(cursor, signal), { keepPrevious: true })
+  const query = useApiQuery(['billing-history', cursor ?? null], (api, signal) => historyPage(api.scope, cursor, signal), { keepPrevious: true })
   return <HistoryList query={query} pagination={pagination} columns={lineColumns} rowKey={line => line.key} empty={<EmptyState title="No balance changes yet" />} />
 }
 function PaymentsTable() {
@@ -442,6 +442,7 @@ function AddCredit({ open, onOpenChange, summary: b }: { open: boolean; onOpenCh
   const [confirming, setConfirming] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<unknown>(null)
+  const scope = useRequestScope()
   const [charging, setCharging] = useState<string | null>(null)
   useEffect(() => { if (open) { setConfirming(false); setError(null); setMethod(card ? 'saved_card' : 'checkout') } }, [open, card])
   const amount = preset === 'custom' ? parseDollars(custom) : preset
@@ -456,7 +457,7 @@ function AddCredit({ open, onOpenChange, summary: b }: { open: boolean; onOpenCh
     if (amount! > 20_000 && !confirming) { setConfirming(true); return }
     setBusy(true); setError(null)
     try {
-      const result = await billingApi.topUp({ amountCents: amount!, method })
+      const result = await billingApi(scope).topUp({ amountCents: amount!, method })
       if (result.checkoutUrl) { window.location.assign(result.checkoutUrl); return }
       if (result.status === 'succeeded' || result.status === 'failed') { setCharging(null); setBusy(false); refresh(); if (result.status === 'succeeded') { toast(added(amount!), 'success'); onOpenChange(false) } else setError(new Error('The card was declined.')); return }
       setCharging(result.attemptId)
@@ -489,7 +490,7 @@ function usePaymentPoll(id: string | null, done: (payment: Payment | undefined) 
   const started = useRef(0), finished = useRef<string | null>(null)
   const [expired, setExpired] = useState(false)
   useEffect(() => { started.current = Date.now(); finished.current = null; setExpired(false) }, [id])
-  const query = useApiQuery(['billing-payment', id], (_api, signal) => billingApi.payment(id!, signal), { enabled: !!id && !expired, interval: data => final(data) ? false : 2000 })
+  const query = useApiQuery(['billing-payment', id], (api, signal) => billingApi(api.scope).payment(id!, signal), { enabled: !!id && !expired, interval: data => final(data) ? false : 2000 })
   useEffect(() => {
     if (!id || finished.current === id) return
     const timedOut = Date.now() - started.current > 60_000

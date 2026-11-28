@@ -9,7 +9,7 @@ import { ThemeToggle } from '../../components/ThemeToggle'
 import { AccountSwitcher } from '../../components/AccountSwitcher'
 import { AgentWaiting } from '../../components/AgentWaiting'
 import { SupportHost, useSupportChat } from '../../components/SupportChat'
-import { useApiMutation, useApiQuery, useSession, useWorkspaceAccess } from '../../data/context'
+import { useApiMutation, useApiQuery, useRequestScope, useSession, useWorkspaceAccess } from '../../data/context'
 import { connectionApi, retryableConnectionErrors, useConnectionCache } from '../../data/connections'
 import { finishedStep, readDomainStep, readRegionalDomain, setDomainStep, setRegionalDomain, startStep, storedStage, useDomainStep, type OnboardingStage } from '../../data/onboarding'
 import { useSaveFocus } from '../../data/focus'
@@ -132,10 +132,11 @@ function OnboardingSteps({ stage }: { stage: NonNullable<OnboardingStage> }) {
   // A domain added while a connected AWS account sets up its region opens its records once it exists.
   const [regionalDomain, setPendingDomain] = useState(() => workspaceId ? readRegionalDomain(workspaceId) : null)
   const chooseRegional = (name: string | null) => { setRegionalDomain(workspaceId, name); setPendingDomain(name) }
+  const scope = useRequestScope()
   // Polls every 3 s while a BYO setup waits on AWS (only while the page is visible) and on focus.
   const connection = useQuery({
     queryKey: ['nightmail', 'connection'],
-    queryFn: ({ signal }) => connectionApi.get(signal),
+    queryFn: ({ signal }) => connectionApi(scope).get(signal),
     // Hosted's domain step needs nothing from it (the session has the built-in domain); a connected AWS account's does.
     enabled: sending || (choosingDomain && identity?.connection?.kind === 'byo'),
     // /v1/me already says there is no connection yet, so the choice shows without another request.
@@ -144,8 +145,8 @@ function OnboardingSteps({ stage }: { stage: NonNullable<OnboardingStage> }) {
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: query => sending && query.state.data?.kind === 'byo' ? 'always' : false,
   })
-  const shared = useConnectionMutation(() => connectionApi.create({ kind: 'shared' }))
-  const byo = useConnectionMutation(() => connectionApi.create({ kind: 'byo' }))
+  const shared = useConnectionMutation(() => connectionApi(scope).create({ kind: 'shared' }))
+  const byo = useConnectionMutation(() => connectionApi(scope).create({ kind: 'byo' }))
   const current = connection.data && connection.data.id !== dropped ? connection.data : null
   // Ready from a poll (auto-verify), another tab or an admin: continue to Add domain.
   useEffect(() => {
@@ -170,7 +171,7 @@ function OnboardingSteps({ stage }: { stage: NonNullable<OnboardingStage> }) {
     if (pending?.state === 'provisioning' || pending?.state === 'failed') toast(`If you made the ${productName} stack, delete it in AWS.`, 'info')
     void client.cancelQueries({ queryKey: ['nightmail', 'connection'] })
     void (async () => {
-      try { if (pending) await connectionApi.remove() }
+      try { if (pending) await connectionApi(scope).remove() }
       catch (error) { if (!(error instanceof ApiError && error.status === 404)) { toast(errorText(error), 'error'); setDropped(null); setPicked(pending ? 'byo' : null); return } }
       sync(null)
       if (next === 'shared') shared.mutate(undefined, { onError: () => setPicked(null) })
@@ -386,9 +387,10 @@ function ConnectAwsStep({ state, connection, onBack, onHosted }: { state: Connec
 
 // Fallback until auto-verify is everywhere: verify the role by its AWS account ID.
 function VerifyAccount({ connection }: { connection: ProviderConnection | null }) {
+  const scope = useRequestScope()
   const [account, setAccount] = useState('')
   const [accountError, setAccountError] = useState('')
-  const verify = useConnectionMutation((id: string) => retrying(() => connectionApi.verify(id)))
+  const verify = useConnectionMutation((id: string) => retrying(() => connectionApi(scope).verify(id)))
   async function submit(event: FormEvent) {
     event.preventDefault()
     const id = account.replace(/[\s-]/g, '')

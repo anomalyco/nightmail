@@ -38,7 +38,7 @@ type FieldType = 'slack' | 'discord' | 'chat' | 'forward' | 'webhook' | 'meaning
 type RecipeField = { name: string; type: FieldType; label: string; placeholder: string | null; hint: string | null }
 type Recipe = { id: string; group: string; name: string; description: string; sentence: string; fields: RecipeField[]; decisions: boolean }
 type Catalog = { groups: { id: string; title: string }[]; data: Recipe[] }
-const useRecipes = (enabled = true) => useApiQuery(['rule-recipes'], (_api, signal) => request<Catalog>('/v1/rules/recipes', { signal }), { enabled })
+const useRecipes = (enabled = true) => useApiQuery(['rule-recipes'], (api, signal) => request<Catalog>('/v1/rules/recipes', { signal, scope: api.scope }), { enabled })
 
 const icons: Record<string, LucideIcon> = {
   slack: Hash, discord: MessageSquare, forward: Forward, webhook: Webhook, 'junk-newsletters': Archive, 'block-senders': Ban,
@@ -293,7 +293,7 @@ function RecipeEditor({ recipe, overview, addresses, preset, header, back, addre
   header: (actions?: ReactNode) => ReactNode; back: string; addressSearch: string; onAddressSearch: (v: string) => void; addressSearchable: boolean; hasMoreAddresses: boolean; loadingMoreAddresses: boolean; onLoadMoreAddresses: () => void
   addressesComplete: boolean; refetchAddresses: () => void; refresh: () => Promise<unknown>
 }) {
-  const navigate = useNavigate(), toast = useToast()
+  const scope = useRequestScope(), navigate = useNavigate(), toast = useToast()
   const targetsList = addresses.flatMap(a => [{ value: a.id, label: a.address, expires: !!a.expiresAt }, ...a.aliases.map(alias => ({ value: alias, label: alias, expires: false }))])
   const labelOf = (value: string) => targetsList.find(t => t.value === value)?.label ?? value
   const [made, setMade] = useState<Made[]>([])
@@ -349,7 +349,7 @@ function RecipeEditor({ recipe, overview, addresses, preset, header, back, addre
     const url = urls[f.name]!.trim(), type = targetCheck(f.type, url).type!
     const base = type === 'forward' ? url.split('@')[0]! : labelOf(targets[0] ?? '').split('@')[0] || type
     const name = freeName(base, taken)
-    const post = (body: Record<string, unknown>) => request<Endpoint & { secret?: string }>('/v1/endpoints', { method: 'POST', body, idempotencyKey: idempotencyFor(attempt, body) })
+    const post = (body: Record<string, unknown>) => request<Endpoint & { secret?: string }>('/v1/endpoints', { method: 'POST', body, idempotencyKey: idempotencyFor(attempt, body), scope })
     let created: Endpoint & { secret?: string }
     if (type === 'forward') {
       // The API decides: on a domain this workspace verified nobody is asked; anywhere else the recipient agrees first,
@@ -375,7 +375,7 @@ function RecipeEditor({ recipe, overview, addresses, preset, header, back, addre
           params[f.name] = created.name
         } else params[f.name] = f.type === 'senders' ? splitSenders(value) : value
       }
-      await request('/v1/rules/recipes', { method: 'POST', body: { recipe: recipe.id, params, addresses: targets } })
+      await request('/v1/rules/recipes', { method: 'POST', body: { recipe: recipe.id, params, addresses: targets }, scope })
       await refresh()
       toast(asked ? `${recipe.name} is on. Forwarding starts once ${asked} agrees.` : `${recipe.name} is on`, 'success')
       if (webhook) setSecret(webhook); else navigate(LIST)

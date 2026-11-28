@@ -2,6 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { keepPreviousData, useInfiniteQuery } from '@tanstack/react-query'
 import { Button, CopyButton, DataTable, Dialog, EmptyState, ErrorState, Select, StatusBadge } from '../../components/ui'
 import { actionLabel, activityApi, activityAreas, type AuditEntry } from '../../data/activity'
+import { useRequestScope } from '../../data/context'
 import { ago, shortDateTime } from '../../lib/format'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { AddressText } from '../../components/AddressText'
@@ -81,11 +82,12 @@ function When({ at }: { at: string }) {
 }
 
 export function ActivitySection() {
+  const scope = useRequestScope()
   const [area, setArea] = useState('')
   const [open, setOpen] = useState<AuditEntry | null>(null)
   const activity = useInfiniteQuery({
     queryKey: ['nightmail', 'activity', area],
-    queryFn: ({ pageParam, signal }) => activityApi.list({ action: area || undefined, cursor: pageParam }, signal),
+    queryFn: ({ pageParam, signal }) => activityApi(scope).list({ action: area || undefined, cursor: pageParam }, signal),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: page => page.nextCursor ?? undefined,
     placeholderData: keepPreviousData,

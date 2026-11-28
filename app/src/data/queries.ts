@@ -53,15 +53,15 @@ export const queries = {
   }),
   appPasswords: () => def(['app-passwords'], (api, signal) => api.credentials.appPasswords(signal)),
   webhooks: (cursor?: string) => def(['webhooks', cursor], (api, signal) => api.webhooks.list(signal, cursor)),
-  connection: () => def(['connection'], (_api, signal) => connectionApi.get(signal)),
-  usage: () => def(['usage'], (_api, signal) => usageApi.get(signal)),
-  billing: () => def(['billing'], (_api, signal) => billingApi.get(signal)),
+  connection: () => def(['connection'], (api, signal) => connectionApi(api.scope).get(signal)),
+  usage: () => def(['usage'], (api, signal) => usageApi(api.scope).get(signal)),
+  billing: () => def(['billing'], (api, signal) => billingApi(api.scope).get(signal)),
   /** The workspace's name and postal address (GET /v1/settings/workspace): Settings and the campaign send prompt share it. */
   workspaceSettings: () => def(['workspace-settings'], (api, signal) => api.workspace.settings(signal)),
-  billingLedger: (cursor: string | undefined) => def(['billing-ledger', cursor ?? null], (_api, signal) => billingApi.ledger(cursor, signal)),
-  billingPayments: (cursor: string | undefined) => def(['billing-payments', cursor ?? null], (_api, signal) => billingApi.payments(cursor, signal)),
+  billingLedger: (cursor: string | undefined) => def(['billing-ledger', cursor ?? null], (api, signal) => billingApi(api.scope).ledger(cursor, signal)),
+  billingPayments: (cursor: string | undefined) => def(['billing-payments', cursor ?? null], (api, signal) => billingApi(api.scope).payments(cursor, signal)),
   // This month by meter (UTC): Plan & usage's AI decision count.
-  billingMonth: () => def(['billing-usage', 'month'], (_api, signal) => billingApi.usage({ granularity: 'month' }, signal)),
-  workspaceMembers: () => def(['workspace-members'], (_api, signal) => workspaceApi.members(signal)),
-  workspaceInvitations: () => def(['workspace-invitations'], (_api, signal) => workspaceApi.invitations(signal)),
+  billingMonth: () => def(['billing-usage', 'month'], (api, signal) => billingApi(api.scope).usage({ granularity: 'month' }, signal)),
+  workspaceMembers: () => def(['workspace-members'], (api, signal) => workspaceApi(api.scope).members(signal)),
+  workspaceInvitations: () => def(['workspace-invitations'], (api, signal) => workspaceApi(api.scope).invitations(signal)),
 }

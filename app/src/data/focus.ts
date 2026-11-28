@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { WORKSPACE_FOCUS, type WorkspaceFocus } from '../../../api/src/workspace-focus.js'
 import { analytics } from '../lib/analytics'
 import { useToast } from '../components/ui'
-import { request } from './live'
+import { useApi } from './context'
 import type { LandingFocus } from './landing-focus'
 import type { Identity, WorkspaceSettings } from './types'
 
@@ -17,12 +17,12 @@ export const focusLabels: Record<WorkspaceFocus, string> = { marketing: 'Marketi
  * landing link brought, data/landing-focus.ts). A failed save says so and keeps the choice for this visit.
  */
 export function useSaveFocus() {
-  const client = useQueryClient(), toast = useToast()
+  const api = useApi(), client = useQueryClient(), toast = useToast()
   return (focus: WorkspaceFocus[], landing?: Pick<LandingFocus, 'from'>) => {
     client.setQueryData<Identity>(['identity'], identity => identity && { ...identity, focus })
     client.setQueryData<WorkspaceSettings>(['nightmail', 'workspace-settings'], settings => settings && { ...settings, focus })
     analytics().track('focus_chosen', landing ? ['landing', ...focus, ...landing.from ? [landing.from] : []].join('/') : focus.length ? ['focus', ...focus].join('/') : 'focus/skip')
-    void request<WorkspaceSettings>('/v1/settings/workspace', { method: 'PATCH', body: { focus } })
+    void api.workspace.updateSettings({ focus })
       .catch(() => toast('Couldn’t save what you want to focus on. You can set it in Settings.', 'error'))
   }
 }

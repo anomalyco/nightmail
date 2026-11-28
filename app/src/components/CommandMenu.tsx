@@ -202,7 +202,7 @@ function useActions({ help, signOut }: { help: (() => void) | null; signOut: (()
         const { items } = await api.domains.list({ page: 1, pageSize: 10, refresh: false })
         const domain = items.find(item => !item.builtIn && item.status === 'verified') ?? items.find(item => item.builtIn && item.status === 'verified')
         if (!domain) { toast('Add and verify a domain to send a test email.', 'error', { action: { label: 'Domains', onSelect: () => navigate('/domains') } }); return }
-        const sent = await request<{ id: string }>(`/v1/domains/${encodeURIComponent(domain.id)}/test-send`, { method: 'POST', idempotencyKey: crypto.randomUUID() })
+        const sent = await request<{ id: string }>(`/v1/domains/${encodeURIComponent(domain.id)}/test-send`, { method: 'POST', idempotencyKey: crypto.randomUUID(), scope: api.scope })
         void client.invalidateQueries({ predicate: query => query.queryKey[0] === 'nightmail' && ['overview', 'overview-setup', 'logs', 'emails', 'sender-score', 'sending-limit'].includes(resourceOf(query.queryKey)) }).catch(() => {})
         toast(`Test email queued, from ${domain.name} to your own address.`, 'success', { action: { label: 'View', onSelect: () => navigate(`/logs/${encodeURIComponent(sent.id)}`) } })
       } catch (error) { if (!isAbortError(error)) toast(errorText(error, 'Couldn’t send the test email.'), 'error') }

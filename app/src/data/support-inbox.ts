@@ -1,5 +1,5 @@
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
-import { request } from './live'
+import { request, type RequestScope } from './live'
 
 // The support inbox (/v1/operator/support-inbox, api/src/support-inbox.ts): every support conversation, for Nightmail
 // staff. Like the rest of the operator API it is left out of the public SDK, so the inbox calls it with the dashboard's
@@ -72,38 +72,38 @@ export interface SupportInboxPage { data: SupportConversation[]; nextCursor: str
 export type SupportAction = 'pause' | 'resume' | 'resolve'
 
 const base = '/v1/operator/support-inbox', id = encodeURIComponent
-export const supportInboxApi = {
+export const supportInboxApi = (scope: RequestScope) => ({
   list: ({ view, q, channel, cursor }: { view: InboxView; q?: string; channel?: Channel; cursor?: string }, signal?: AbortSignal) => {
     const params = new URLSearchParams({ view, limit: '50' })
     if (q) params.set('q', q)
     if (channel) params.set('channel', channel)
     if (cursor) params.set('cursor', cursor)
-    return request<SupportInboxPage>(`${base}?${params}`, { signal })
+    return request<SupportInboxPage>(`${base}?${params}`, { signal, scope })
   },
-  detail: (conversationId: string, signal?: AbortSignal) => request<SupportDetail>(`${base}/${id(conversationId)}`, { signal }),
-  reply: (conversationId: string, text: string, idempotencyKey: string) => request<SupportMessage>(`${base}/${id(conversationId)}/replies`, { method: 'POST', body: { text }, idempotencyKey }),
+  detail: (conversationId: string, signal?: AbortSignal) => request<SupportDetail>(`${base}/${id(conversationId)}`, { signal, scope }),
+  reply: (conversationId: string, text: string, idempotencyKey: string) => request<SupportMessage>(`${base}/${id(conversationId)}/replies`, { method: 'POST', body: { text }, idempotencyKey, scope }),
   /** A held agent answer, sent as the agent wrote it (no text) or edited, as a staff reply: it pauses the agent like any reply. */
-  sendDraft: (conversationId: string, messageId: string, text: string | undefined, idempotencyKey: string) => request<SupportMessage>(`${base}/${id(conversationId)}/drafts/${id(messageId)}/send`, { method: 'POST', body: text === undefined ? {} : { text }, idempotencyKey }),
-  discardDraft: (conversationId: string, messageId: string, idempotencyKey: string) => request<SupportMessage>(`${base}/${id(conversationId)}/drafts/${id(messageId)}/discard`, { method: 'POST', idempotencyKey }),
+  sendDraft: (conversationId: string, messageId: string, text: string | undefined, idempotencyKey: string) => request<SupportMessage>(`${base}/${id(conversationId)}/drafts/${id(messageId)}/send`, { method: 'POST', body: text === undefined ? {} : { text }, idempotencyKey, scope }),
+  discardDraft: (conversationId: string, messageId: string, idempotencyKey: string) => request<SupportMessage>(`${base}/${id(conversationId)}/drafts/${id(messageId)}/discard`, { method: 'POST', idempotencyKey, scope }),
   /** An internal note: staff see it in the timeline; the customer and the agent never do. */
-  note: (conversationId: string, text: string, idempotencyKey: string) => request<SupportMessage>(`${base}/${id(conversationId)}/notes`, { method: 'POST', body: { text }, idempotencyKey }),
+  note: (conversationId: string, text: string, idempotencyKey: string) => request<SupportMessage>(`${base}/${id(conversationId)}/notes`, { method: 'POST', body: { text }, idempotencyKey, scope }),
   /** A customer email in full: all of its text and its HTML as stored (render it sandboxed, images off until asked). */
-  email: (conversationId: string, messageId: string, signal?: AbortSignal) => request<{ id: string; text: string; replyText: string; html: string | null; htmlTooComplex: boolean; bodyTruncated: boolean }>(`${base}/${id(conversationId)}/emails/${id(messageId)}`, { signal }),
-  emailAttachment: (conversationId: string, messageId: string, attachmentId: string) => request<{ url: string; expiresAt: string }>(`${base}/${id(conversationId)}/emails/${id(messageId)}/attachments/${id(attachmentId)}`),
+  email: (conversationId: string, messageId: string, signal?: AbortSignal) => request<{ id: string; text: string; replyText: string; html: string | null; htmlTooComplex: boolean; bodyTruncated: boolean }>(`${base}/${id(conversationId)}/emails/${id(messageId)}`, { signal, scope }),
+  emailAttachment: (conversationId: string, messageId: string, attachmentId: string) => request<{ url: string; expiresAt: string }>(`${base}/${id(conversationId)}/emails/${id(messageId)}/attachments/${id(attachmentId)}`, { scope }),
   /** A chat screenshot, held by the support service: a link for five minutes. */
-  file: (conversationId: string, attachmentId: string) => request<{ url: string; expiresAt: string }>(`${base}/${id(conversationId)}/files/${id(attachmentId)}`),
-  act: (conversationId: string, action: SupportAction, idempotencyKey: string) => request<SupportConversation>(`${base}/${id(conversationId)}/${action}`, { method: 'POST', idempotencyKey }),
+  file: (conversationId: string, attachmentId: string) => request<{ url: string; expiresAt: string }>(`${base}/${id(conversationId)}/files/${id(attachmentId)}`, { scope }),
+  act: (conversationId: string, action: SupportAction, idempotencyKey: string) => request<SupportConversation>(`${base}/${id(conversationId)}/${action}`, { method: 'POST', idempotencyKey, scope }),
   /** Mark done, for the ticket on screen (null for none): one filed since refuses it (409 SUPPORT_TICKET_CHANGED). */
-  done: (conversationId: string, ticketId: string | null, idempotencyKey: string) => request<SupportConversation>(`${base}/${id(conversationId)}/done`, { method: 'POST', body: { ticketId }, idempotencyKey }),
+  done: (conversationId: string, ticketId: string | null, idempotencyKey: string) => request<SupportConversation>(`${base}/${id(conversationId)}/done`, { method: 'POST', body: { ticketId }, idempotencyKey, scope }),
   /** Undo Mark done (whoever marked it, for a few minutes): a ticket Done resolved opens again. */
-  undoDone: (conversationId: string, idempotencyKey: string) => request<SupportConversation>(`${base}/${id(conversationId)}/done`, { method: 'DELETE', idempotencyKey }),
-  wake: (conversationId: string) => request<{ id: string; woken: boolean }>(`${base}/${id(conversationId)}/wake`, { method: 'POST' }),
+  undoDone: (conversationId: string, idempotencyKey: string) => request<SupportConversation>(`${base}/${id(conversationId)}/done`, { method: 'DELETE', idempotencyKey, scope }),
+  wake: (conversationId: string) => request<{ id: string; woken: boolean }>(`${base}/${id(conversationId)}/wake`, { method: 'POST', scope }),
   /** An approval, through its emailed link's token. Reading it changes nothing. */
-  approval: (conversationId: string, approvalId: string, token: string, signal?: AbortSignal) => request<SupportApproval>(`${base}/${id(conversationId)}/approvals/${id(approvalId)}?token=${id(token)}`, { signal }),
+  approval: (conversationId: string, approvalId: string, token: string, signal?: AbortSignal) => request<SupportApproval>(`${base}/${id(conversationId)}/approvals/${id(approvalId)}?token=${id(token)}`, { signal, scope }),
   decideApproval: (conversationId: string, approvalId: string, token: string, decision: 'approve' | 'decline', idempotencyKey: string) =>
-    request<SupportApproval>(`${base}/${id(conversationId)}/approvals/${id(approvalId)}`, { method: 'POST', body: { token, decision }, idempotencyKey }),
-  read: (conversationId: string, read: boolean, seq?: number) => request<{ id: string; unread: boolean }>(`${base}/${id(conversationId)}/read`, { method: 'PUT', body: seq === undefined ? { read } : { read, seq } }),
-}
+    request<SupportApproval>(`${base}/${id(conversationId)}/approvals/${id(approvalId)}`, { method: 'POST', body: { token, decision }, idempotencyKey, scope }),
+  read: (conversationId: string, read: boolean, seq?: number) => request<{ id: string; unread: boolean }>(`${base}/${id(conversationId)}/read`, { method: 'PUT', body: seq === undefined ? { read } : { read, seq }, scope }),
+})
 
 export const inboxKeys = {
   all: ['support-inbox'] as const,
@@ -111,15 +111,15 @@ export const inboxKeys = {
   list: (view: InboxView, q: string, channel: Channel | '') => ['support-inbox', 'list', view, q, channel] as const,
   detail: (conversationId: string) => ['support-inbox', 'detail', conversationId] as const,
 }
-export const listQuery = (view: InboxView, q: string, channel: Channel | '' = '') => ({
+export const listQuery = (scope: RequestScope, view: InboxView, q: string, channel: Channel | '' = '') => ({
   queryKey: inboxKeys.list(view, q, channel), initialPageParam: undefined as string | undefined,
-  queryFn: ({ pageParam, signal }: { pageParam: string | undefined; signal: AbortSignal }) => supportInboxApi.list({ view, q: q || undefined, channel: channel || undefined, cursor: pageParam }, signal),
+  queryFn: ({ pageParam, signal }: { pageParam: string | undefined; signal: AbortSignal }) => supportInboxApi(scope).list({ view, q: q || undefined, channel: channel || undefined, cursor: pageParam }, signal),
   getNextPageParam: (page: SupportInboxPage) => page.nextCursor ?? undefined,
 })
 // A conversation stays fresh for 15 seconds: hovering it, opening it and moving past it read it once.
 export const DETAIL_FRESH = 15_000
-export const detailQuery = (conversationId: string) => ({ queryKey: inboxKeys.detail(conversationId), queryFn: ({ signal }: { signal: AbortSignal }) => supportInboxApi.detail(conversationId, signal), staleTime: DETAIL_FRESH })
-export const prefetchConversation = (client: QueryClient, conversationId: string) => client.prefetchQuery(detailQuery(conversationId))
+export const detailQuery = (scope: RequestScope, conversationId: string) => ({ queryKey: inboxKeys.detail(conversationId), queryFn: ({ signal }: { signal: AbortSignal }) => supportInboxApi(scope).detail(conversationId, signal), staleTime: DETAIL_FRESH })
+export const prefetchConversation = (client: QueryClient, scope: RequestScope, conversationId: string) => client.prefetchQuery(detailQuery(scope, conversationId))
 
 // ---------- what the inbox shows before the API answers (optimistic updates) ----------
 

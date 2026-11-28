@@ -257,7 +257,7 @@ export function RulePage() {
   const addresses = useAddressOptions({ enabled: canAdminister, search: useDebounced(addressSearch) })
   // The Mail routing page's first read, usually cached: only its endpoints are used here, to name what the rule did.
   const overview = useOverview(firstOverview, false, canAdminister)
-  const recent = useApiQuery(['rule-recent'], (_api, signal) => request<{ data: Received[] }>('/v1/logs?direction=received&limit=24', { signal }).then(r => r.data), { enabled: canAdminister })
+  const recent = useApiQuery(['rule-recent'], (api, signal) => request<{ data: Received[] }>('/v1/logs?direction=received&limit=24', { signal, scope: api.scope }).then(r => r.data), { enabled: canAdminister })
   const [saved, setSaved] = useState<Saved | null>(null)
   const [loadError, setLoadError] = useState<Error | null>(null)
   // The rule's key (a new rule's is typed over the code), and the saved rule on screen ('' for a new one).

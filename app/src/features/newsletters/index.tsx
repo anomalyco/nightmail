@@ -64,13 +64,13 @@ function Sent({ issue }: { issue: Campaign }) {
 function sentLine(issue: Campaign) {
   const status = campaignDisplayStatus(issue)
   if (status !== 'done') return <Sent issue={issue} />
-  return [day(sentAt(issue)), `${number(issue.recipients)} ${issue.recipients === 1 ? 'reader' : 'readers'}`, rate(issue, 'opened') && `${rate(issue, 'opened')} opened`].filter(Boolean).join(' · ')
+  return [day(sentAt(issue)), issue.recipients !== undefined && `${number(issue.recipients)} ${issue.recipients === 1 ? 'reader' : 'readers'}`, rate(issue, 'opened') && `${rate(issue, 'opened')} opened`].filter(Boolean).join(' · ')
 }
 const issuePath = (issue: Campaign) => `/campaigns/${encodeURIComponent(issue.id)}/${campaignEditable(issue) ? 'edit' : 'review'}`
 const renders: Record<string, Pick<Column<Campaign>, 'render' | 'cardRender'>> = {
   subject: { render: issue => <span className="newsletter-issue" title={issue.subject.trim() || issue.name}>{issue.subject.trim() || issue.name}</span> },
   sent: { render: issue => <Sent issue={issue} />, cardRender: sentLine },
-  recipients: { render: issue => launched(issue) ? number(issue.recipients) : '' },
+  recipients: { render: issue => launched(issue) && issue.recipients !== undefined ? number(issue.recipients) : '' },
   opened: { render: issue => rate(issue, 'opened') },
   clicked: { render: issue => rate(issue, 'clicked') },
 }

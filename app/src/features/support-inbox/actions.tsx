@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { ConfirmDialog, Dialog, useToast, type MenuItem } from '../../components/ui'
-import { useSession } from '../../data/context'
+import { useRequestScope, useSession } from '../../data/context'
 import { ApiError } from '../../data/types'
 import { inboxKeys, patchConversation, snapshotInbox, supportInboxApi, type Channel, type HeldReason, type InboxView, type SupportAction, type SupportConversation, type SupportDetail, type SupportInboxPage, type SupportMessage } from '../../data/support-inbox'
 import { shortDateTime } from '../../lib/format'
@@ -82,6 +82,7 @@ const confirmCopy: Record<Confirming['action'], { title: string; description: st
 export const failedText = 'Couldn’t complete the action. Try again.'
 /** Every change the inbox makes: shown at once in every list and the conversation, put back if the API refuses it, then read again. */
 export function useInboxActions() {
+  const scope = useRequestScope(), inbox = supportInboxApi(scope)
   const client = useQueryClient(), toast = useToast(), identity = useSession()?.identity
   const me = { userId: identity?.id ?? '', name: identity?.name ?? null }
   // reread: false for a change the prediction already shows exactly (a read marker), so nothing is fetched again.
@@ -108,27 +109,27 @@ export function useInboxActions() {
   }
   const now = () => new Date().toISOString()
   const act = (c: SupportConversation, action: SupportAction, predict: (c: SupportConversation) => SupportConversation, options: { done?: string; quiet?: boolean } = {}) =>
-    run(c, predict, () => supportInboxApi.act(c.id, action, crypto.randomUUID()), options)
+    run(c, predict, () => inbox.act(c.id, action, crypto.randomUUID()), options)
   // Undo puts back what that Done changed: the conversation, and the ticket it resolved.
   const undo = (c: SupportConversation, ticketId: string | null) => run(c, x => ({ ...x, done: null, ticket: ticketId && x.ticket?.id === ticketId ? { ...x.ticket, resolvedAt: null } : x.ticket }),
-    () => supportInboxApi.undoDone(c.id, crypto.randomUUID()), { done: 'Back in Needs you' }).catch(() => {})
+    () => inbox.undoDone(c.id, crypto.randomUUID()), { done: 'Back in Needs you' }).catch(() => {})
   return {
     // Done is for this conversation and the ticket it showed when the key was pressed: one filed since refuses it.
     done: (c: SupportConversation) => {
       const ticketId = c.ticket && !c.ticket.resolvedAt ? c.ticket.id : null
       return run(c, x => ({ ...x, done: { at: now(), userId: me.userId, name: me.name }, ticket: ticketId && x.ticket ? { ...x.ticket, resolvedAt: now() } : x.ticket }),
-        () => supportInboxApi.done(c.id, ticketId, crypto.randomUUID()),
+        () => inbox.done(c.id, ticketId, crypto.randomUUID()),
         { after: () => toast(ticketId ? 'Marked done. Ticket resolved.' : 'Marked done', 'success', { action: { label: 'Undo', onSelect: () => void undo(c, ticketId) }, duration: 5000 }) }).catch(() => {})
     },
     confirm: ({ action, conversation }: Confirming) => act(conversation, action, action === 'pause' ? x => ({ ...x, agentState: 'paused', pausedBy: { kind: 'staff', userId: me.userId, name: me.name }, pausedAt: now(), done: null })
       : x => ({ ...x, agentState: 'active', pausedBy: null, pausedAt: null }), { done: confirmCopy[action].done, quiet: true }),
-    read: (c: SupportConversation, read: boolean, seq?: number) => run(c, x => ({ ...x, unread: !read }), () => supportInboxApi.read(c.id, read, seq), { reread: false }).catch(() => {}),
-    wake: (c: SupportConversation) => run(c, x => x, () => supportInboxApi.wake(c.id)).then(r => toast(r.woken ? 'Support service woken' : 'The support service didn’t answer', r.woken ? 'success' : 'error'), () => {}),
+    read: (c: SupportConversation, read: boolean, seq?: number) => run(c, x => ({ ...x, unread: !read }), () => inbox.read(c.id, read, seq), { reread: false }).catch(() => {}),
+    wake: (c: SupportConversation) => run(c, x => x, () => inbox.wake(c.id)).then(r => toast(r.woken ? 'Support service woken' : 'The support service didn’t answer', r.woken ? 'success' : 'error'), () => {}),
     reply: (c: SupportConversation, text: string, key: string) => {
       const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'reply', text, tools: [], attachments: [], staff: me, delivery: 'queued', heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
       const messages = (change: (list: SupportMessage[]) => SupportMessage[]) => client.setQueryData<SupportDetail>(inboxKeys.detail(c.id), d => d && { ...d, messages: change(d.messages) })
       return run(c, x => { messages(list => [...list, pending]); return { ...x, agentState: 'paused', pausedBy: { kind: 'staff', userId: me.userId, name: me.name }, pausedAt: x.pausedAt ?? now(), lastAuthor: 'staff', lastMessageAt: now(), messageCount: x.messageCount + 1, queuedReplies: x.queuedReplies + 1, done: null, unread: false } },
-        () => supportInboxApi.reply(c.id, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m)), done: c.agentState === 'active' ? 'Reply queued. The agent is paused.' : 'Reply queued' })
+        () => inbox.reply(c.id, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m)), done: c.agentState === 'active' ? 'Reply queued. The agent is paused.' : 'Reply queued' })
     },
     // A held answer sent as a staff reply: the reply shows at once and the answer says who sent it.
     sendDraft: (c: SupportConversation, draftId: string, text: string | undefined, key: string) => {
@@ -138,19 +139,19 @@ export function useInboxActions() {
       const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'reply', text: body, tools: [], attachments: [], staff: me, delivery: 'queued', heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
       const messages = (change: (list: SupportMessage[]) => SupportMessage[]) => client.setQueryData<SupportDetail>(inboxKeys.detail(c.id), d => d && { ...d, messages: change(d.messages) })
       return run(c, x => { messages(list => [...list.map(m => m.id === draftId ? { ...m, draft: decided(null) } : m), pending]); return { ...x, agentState: 'paused', pausedBy: { kind: 'staff', userId: me.userId, name: me.name }, pausedAt: x.pausedAt ?? now(), lastAuthor: 'staff', lastMessageAt: now(), messageCount: x.messageCount + 1, queuedReplies: x.queuedReplies + 1, done: null, unread: false } },
-        () => supportInboxApi.sendDraft(c.id, draftId, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m.id === draftId ? { ...m, draft: decided(sent.id) } : m)), done: 'Reply queued' })
+        () => inbox.sendDraft(c.id, draftId, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m.id === draftId ? { ...m, draft: decided(sent.id) } : m)), done: 'Reply queued' })
     },
     discardDraft: (c: SupportConversation, draftId: string) => {
       const messages = (change: (list: SupportMessage[]) => SupportMessage[]) => client.setQueryData<SupportDetail>(inboxKeys.detail(c.id), d => d && { ...d, messages: change(d.messages) })
       return run(c, x => { messages(list => list.map(m => m.id === draftId ? { ...m, draft: { outcome: 'discarded', by: me, at: now(), replyId: null } } : m)); return x },
-        () => supportInboxApi.discardDraft(c.id, draftId, crypto.randomUUID()), { after: dropped => messages(list => list.map(m => m.id === draftId ? dropped : m)), done: 'Draft discarded' }).catch(() => {})
+        () => inbox.discardDraft(c.id, draftId, crypto.randomUUID()), { after: dropped => messages(list => list.map(m => m.id === draftId ? dropped : m)), done: 'Draft discarded' }).catch(() => {})
     },
     // A note: shown at once in the timeline; it changes nothing the lists show.
     note: (c: SupportConversation, text: string, key: string) => {
       const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'note', text, tools: [], attachments: [], staff: me, delivery: null, heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
       const messages = (change: (list: SupportMessage[]) => SupportMessage[]) => client.setQueryData<SupportDetail>(inboxKeys.detail(c.id), d => d && { ...d, messages: change(d.messages) })
       return run(c, x => { messages(list => [...list, pending]); return { ...x, messageCount: x.messageCount + 1, unread: false } },
-        () => supportInboxApi.note(c.id, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m)), done: 'Note added' })
+        () => inbox.note(c.id, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m)), done: 'Note added' })
     },
   }
 }

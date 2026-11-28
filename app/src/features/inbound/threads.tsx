@@ -70,7 +70,7 @@ function ThreadList({ threads, threadId, onSelect, ...row }: { threads: InboundT
  *  its recorded AI answers through today's rules (testRules). Nothing is sent again. */
 function WhyItWentHere({ message, address, open, onOpenChange }: { message: InboundMessage; address?: InboundAddress; open: boolean; onOpenChange: (open: boolean) => void }) {
   const overview = useOverview(firstOverview, false, open)
-  const why = useApiQuery(['why-it-went-here', message.id], (_api, signal) => request<DryRun>('/v1/rules/test', { method: 'POST', body: { messageId: message.id }, signal }), { enabled: open })
+  const why = useApiQuery(['why-it-went-here', message.id], (api, signal) => request<DryRun>('/v1/rules/test', { method: 'POST', body: { messageId: message.id }, signal, scope: api.scope }), { enabled: open })
   const mine = new Set([address?.address, ...(address?.aliases ?? [])].filter((value): value is string => !!value))
   const recipient = why.data?.recipients.find(r => mine.has(r.address))?.address ?? why.data?.recipients[0]?.address ?? address?.address ?? ''
   const error = why.error ?? overview.error

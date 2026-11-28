@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { Link, useLocation, useNavigate } from 'react-router'
 import { ArrowUpRight } from 'lucide-react'
 import { ErrorState, StatusBadge, type Tone } from '../../components/ui'
+import { useRequestScope } from '../../data/context'
 import { operatorApi, type Deliverability, type DeliverabilityCounts, type MailProvider, type VdmCounts } from '../../data/operator'
 import { date, number, percent } from '../../lib/format'
 import { DELIVERABILITY_WINDOWS, DeliverabilityBoard, DeliverabilityControls, deliverabilitySettings, GLASS_REGION_SLOTS, type DeliverabilityFill, type DeliverabilityRow, type DeliverabilityStream, type GlassFill, type GlassTileFill } from './skeletons'
@@ -135,8 +136,9 @@ function fill(d: Deliverability, stream: DeliverabilityStream, region: string): 
 
 /** The board's read for the period in the address; the page header shows when it is from. */
 export function useDeliverability(enabled = true) {
+  const scope = useRequestScope()
   const { window } = deliverabilitySettings(useLocation().search)
-  return useQuery({ queryKey: ['operator', 'glass', 'deliverability', window], queryFn: ({ signal }) => operatorApi.glassDeliverability(window, signal), enabled,
+  return useQuery({ queryKey: ['operator', 'glass', 'deliverability', window], queryFn: ({ signal }) => operatorApi(scope).glassDeliverability(window, signal), enabled,
     staleTime: REFRESH_MS / 2, refetchInterval: REFRESH_MS, refetchIntervalInBackground: false, placeholderData: keepPreviousData })
 }
 export function DeliverabilityView() {

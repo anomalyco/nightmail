@@ -1,5 +1,4 @@
-import { request, selectedAccount } from './live'
-import { ApiError } from './types'
+import { request, type RequestScope } from './live'
 
 // UI notes (/v1/operator/ui-notes): Nightmail staff's design and bug notes on the dashboard itself, global to the deployment.
 // Left out of the public SDK, like the rest of the operator API, so the dashboard calls it with its own request helper.
@@ -44,24 +43,22 @@ const query = (filter: NoteFilter) => {
 }
 export const uiNotesKey = ['ui-notes'] as const
 
-export const uiNotesApi = {
-  list: (filter: NoteFilter, signal?: AbortSignal) => request<{ data: UiNote[]; nextCursor: string | null }>(`${base}${query(filter)}`, { signal }),
-  get: (noteId: string, signal?: AbortSignal) => request<UiNote>(`${base}/${id(noteId)}`, { signal }),
-  create: (input: NewNote) => request<UiNote>(base, { method: 'POST', body: input }),
-  update: (noteId: string, patch: NotePatch) => request<UiNote>(`${base}/${id(noteId)}`, { method: 'PATCH', body: patch }),
-  remove: (noteId: string) => request<{ id: string; deleted: true }>(`${base}/${id(noteId)}`, { method: 'DELETE' }),
-  // The image goes up as the request body, not JSON, with the account this tab acts as.
-  async screenshot(noteId: string, shot: { blob: Blob; width: number; height: number }) {
-    const account = selectedAccount()
-    const response = await fetch(`${base}/${id(noteId)}/screenshot?width=${shot.width}&height=${shot.height}`, { method: 'PUT', credentials: 'include', body: shot.blob,
-      headers: { Accept: 'application/json', 'Content-Type': shot.blob.type, ...(account ? { 'X-Nightmail-Account': account } : {}) } })
-    const data = await response.json().catch(() => null)
-    if (!response.ok) throw new ApiError(data?.error?.message ?? 'Couldn’t upload the screenshot.', data?.error?.code ?? `HTTP_${response.status}`, {}, data?.error?.requestId, response.status)
-    return data as UiNote
-  },
+export const uiNotesApi = (scope: RequestScope) => ({
+  list: (filter: NoteFilter, signal?: AbortSignal) => request<{ data: UiNote[]; nextCursor: string | null }>(`${base}${query(filter)}`, { signal, scope }),
+  get: (noteId: string, signal?: AbortSignal) => request<UiNote>(`${base}/${id(noteId)}`, { signal, scope }),
+  create: (input: NewNote) => request<UiNote>(base, { method: 'POST', body: input, scope }),
+  update: (noteId: string, patch: NotePatch) => request<UiNote>(`${base}/${id(noteId)}`, { method: 'PATCH', body: patch, scope }),
+  remove: (noteId: string) => request<{ id: string; deleted: true }>(`${base}/${id(noteId)}`, { method: 'DELETE', scope }),
+  // The image goes up as the request body, not JSON, pinned to this tab's scope.
+  screenshot: (noteId: string, shot: { blob: Blob; width: number; height: number }) =>
+    request<UiNote>(`${base}/${id(noteId)}/screenshot?width=${shot.width}&height=${shot.height}`, {
+      method: 'PUT',
+      scope,
+      file: { bytes: shot.blob, headers: { 'Content-Type': shot.blob.type } },
+    }),
   keys: {
-    list: async (signal?: AbortSignal) => (await request<{ data: NoteKey[] }>('/v1/operator/ui-note-keys', { signal })).data,
-    create: (input: { name: string; expiresInDays: number }) => request<NoteKey & { secret: string }>('/v1/operator/ui-note-keys', { method: 'POST', body: input }),
-    revoke: (keyId: string) => request<{ id: string; revoked: true }>(`/v1/operator/ui-note-keys/${id(keyId)}/revoke`, { method: 'POST' }),
+    list: async (signal?: AbortSignal) => (await request<{ data: NoteKey[] }>('/v1/operator/ui-note-keys', { signal, scope })).data,
+    create: (input: { name: string; expiresInDays: number }) => request<NoteKey & { secret: string }>('/v1/operator/ui-note-keys', { method: 'POST', body: input, scope }),
+    revoke: (keyId: string) => request<{ id: string; revoked: true }>(`/v1/operator/ui-note-keys/${id(keyId)}/revoke`, { method: 'POST', scope }),
   },
-}
+})

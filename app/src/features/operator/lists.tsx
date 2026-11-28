@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Alert, Button, DataTable, Dialog, EmptyState, ErrorState, ErrorText, StatusBadge, type Column, type Tone } from '../../components/ui'
+import { useRequestScope } from '../../data/context'
 import { isoTime, operatorApi, type ListRiskBand, type OperatorListRow } from '../../data/operator'
 import { label, number, shortDateTime } from '../../lib/format'
 import { listColumnDefs } from './skeletons'
@@ -41,9 +42,10 @@ const columns: Column<OperatorListRow>[] = [
 
 /** The Lists tab of /operator. A row opens what the measure, the review and the outcome each say. */
 export function ListsView() {
+  const scope = useRequestScope()
   const lists = useInfiniteQuery({
     queryKey: ['operator', 'lists'], initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam, signal }) => operatorApi.lists({ cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
+    queryFn: ({ pageParam, signal }) => operatorApi(scope).lists({ cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
   })
   const rows = (lists.data?.pages ?? []).flatMap(page => page.items)
   const [shown, setShown] = useState<OperatorListRow | null>(null)

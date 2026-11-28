@@ -5,6 +5,7 @@ import { useState, type FormEvent, type ReactNode } from 'react'
 import { AtSign, Check, Send, Sparkles, Workflow, type LucideIcon } from 'lucide-react'
 import { Alert, Checkbox, Field, Input, LoadingRegion, Select, StatusDot, Textarea } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
+import { useRequestScope } from '../../data/context'
 import { request } from '../../data/live'
 import { errorText, type InboundAddress } from '../../data/types'
 import { kindNote, outcomes, steps } from './concepts'
@@ -218,6 +219,7 @@ export const testAddress = (match: string) => match.startsWith('*@') ? 'someone'
 
 /** Runs the dry run (testRules) for one address with a sample email: nothing is sent or saved, and the AI isn't asked. */
 export function useFlowTest() {
+  const scope = useRequestScope()
   const [state, setState] = useState<{ address: string; outcome: TestOutcome | null; error: string | null; pending: boolean } | null>(null)
   // decisions: the questions the address's rules ask the AI, answered with the sample's chosen answer (1 yes, 0 no).
   async function run(address: string, sample: Sample, decisions: string[] = []) {
@@ -225,7 +227,7 @@ export function useFlowTest() {
     try {
       const assumed = sample.ai && decisions.length ? sample.ai : undefined
       const scores = assumed ? Object.fromEntries(decisions.map(name => [name, assumed === 'yes' ? 1 : 0])) : undefined
-      const result = await request<DryRun>('/v1/rules/test', { method: 'POST', body: { mime: mimeOf(address, sample), ...(scores ? { scores } : {}) } })
+      const result = await request<DryRun>('/v1/rules/test', { method: 'POST', body: { mime: mimeOf(address, sample), ...(scores ? { scores } : {}) }, scope })
       setState({ address, outcome: outcomeOf(result, address, assumed), error: null, pending: false })
     } catch (error) { setState({ address, outcome: null, error: errorText(error), pending: false }) }
   }

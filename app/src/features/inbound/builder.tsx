@@ -18,7 +18,7 @@ import { CopyAction } from '../../components/motion'
 import { mergeAddresses, useAddressOptions, useResolvedAddresses } from '../../data/addresses'
 import { useDebounced } from '../../lib/pagination'
 import { PrivateAddress } from '../../components/PrivateAddress'
-import { useApi, useApiDef, useApiQuery, useRequestScope, useSession, useWorkspaceAccess } from '../../data/context'
+import { useApi, useApiDef, useRequestScope, useSession, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
 import { isSubdomainName, rootMxWarning } from '../settings/domain-records'
 import { hostStatus, moveReason, useReceivingHosts } from '../settings/receiving-hosts'
@@ -79,7 +79,7 @@ type CreatedReceiving = { domainId: string; host: string; turnedOn: boolean; sta
 /** Where creating an address left its host: the MX record, and whether it receives yet (read again every 15 seconds). */
 function useReceivingSetup(setup: CreatedReceiving | null) {
   const hosts = useReceivingHosts(setup?.domainId ?? '', !!setup, 15_000)
-  const domain = useApiQuery(['nightmail', 'domain', setup?.domainId ?? ''], (api, signal) => api.domains.get(setup!.domainId, signal), { interval: current => current && (current.status === 'verified' || current.sending === 'verified') ? false : 15_000, enabled: !!setup && setup.verified === false })
+  const domain = useApiDef(queries.domain(setup?.domainId ?? ''), { interval: current => current && (current.status === 'verified' || current.sending === 'verified') ? false : 15_000, enabled: !!setup && setup.verified === false })
   const host = setup ? hosts.data?.find(item => item.name === setup.host) : undefined
   const verified = !setup || setup.verified !== false || domain.data?.status === 'verified' || domain.data?.sending === 'verified'
   const receiving = host?.status === 'active' && verified

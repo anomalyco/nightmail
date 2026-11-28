@@ -8,18 +8,18 @@ export type ConnectedAccount = { id: string; name: string; email: string | null;
 export type AccountList = { accounts: ConnectedAccount[]; active: string | null; limit: number; connection?: { id: string; account: string | null } }
 export const accountsKey = ['accounts'] as const
 export const accountApi = {
-  list: (signal?: AbortSignal, connection?: string) => request<AccountList>(`/api/auth/accounts${connection ? `?connection=${encodeURIComponent(connection)}` : ''}`, { signal }),
+  list: (signal?: AbortSignal, connection?: string) => request<AccountList>(`/api/auth/accounts${connection ? `?connection=${encodeURIComponent(connection)}` : ''}`, { signal, scope: 'unscoped' }),
   // The browser's default account: what a new tab, or a link opened outside the dashboard, acts as.
-  makeDefault: (account: string) => request<{ account: string }>('/api/auth/accounts/switch', { method: 'POST', body: { account } }),
-  signOut: (input: { account?: string; all?: true }) => request<{ success: true; accounts: string[]; active: string | null }>('/api/auth/sign-out', { method: 'POST', body: input }),
+  makeDefault: (account: string) => request<{ account: string }>('/api/auth/accounts/switch', { method: 'POST', body: { account }, scope: 'unscoped' }),
+  signOut: (input: { account?: string; all?: true }) => request<{ success: true; accounts: string[]; active: string | null }>('/api/auth/sign-out', { method: 'POST', body: input, scope: 'unscoped' }),
   // select: the account service shows its account chooser (Add account), and Nightmail learns only the account picked.
   signIn: async (callbackURL: string, select: boolean) => {
-    const { url } = await request<{ url: string }>('/api/auth/sign-in/account', { method: 'POST', body: { callbackURL, ...(select ? { prompt: 'select_account' } : {}) } })
+    const { url } = await request<{ url: string }>('/api/auth/sign-in/account', { method: 'POST', body: { callbackURL, ...(select ? { prompt: 'select_account' } : {}) }, scope: 'unscoped' })
     if (new URL(url).protocol !== 'https:') throw new Error('Invalid sign-in redirect.')
     return url
   },
   // A sign-in link to an address a raise let in. The answer is the same whether or not one was sent.
-  signInLink: (email: string) => request<{ requested: true }>('/api/auth/sign-in/link', { method: 'POST', body: { email } }),
+  signInLink: (email: string) => request<{ requested: true }>('/api/auth/sign-in/link', { method: 'POST', body: { email }, scope: 'unscoped' }),
 }
 // The tab's own account comes with the session (GET /v1/me), so a list of accounts is complete before the list arrives;
 // its workspaces are always the session's, which a rename has already updated.

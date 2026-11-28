@@ -1,3 +1,4 @@
+import type { RequestScope } from '../../data/live'
 import { supportActionsApi, supportApi, type CurrentSupportConversation } from '../../data/support'
 import { ApiError } from '../../data/types'
 import { FileError, parseServerMessage, sniff, type ClientMessage, type Connection, type FiledTicket, type SupportTransport, type TransportEvent } from './protocol'
@@ -85,14 +86,14 @@ async function post(origin: string, path: string, body: unknown): Promise<Starte
 }
 /** How many conversations one open() tries before it gives up for now (each a stale one /chat/resume refused). */
 const OPEN_TRIES = 4
-const currentConversation = async (): Promise<CurrentSupportConversation | null> => {
-  try { return (await supportApi.current()).conversation }
+const currentConversation = async (scope: RequestScope): Promise<CurrentSupportConversation | null> => {
+  try { return (await supportApi(scope).current()).conversation }
   catch (error) { throw error instanceof ApiError && error.code !== 'NETWORK_UNAVAILABLE' ? new StartError(error.status ?? 400, error.code) : new StartError(0, 'NETWORK') }
 }
 // The handoff from Nightmail. No token means support signing isn't configured here; a refusal (not a lost network) is final too.
-const handoff = async (shareContent: boolean) => {
+const handoff = async (scope: RequestScope, shareContent: boolean) => {
   let token: string | null
-  try { ({ token } = await supportApi.contact({ shareContent })) }
+  try { ({ token } = await supportApi(scope).contact({ shareContent })) }
   catch (error) { throw error instanceof ApiError && error.code !== 'NETWORK_UNAVAILABLE' ? new StartError(error.status ?? 400, error.code) : new StartError(0, 'NETWORK') }
   if (!token) throw new StartError(503, 'NO_HANDOFF')
   return token
@@ -100,9 +101,9 @@ const handoff = async (shareContent: boolean) => {
 
 /** Files a message the chat can't take as a ticket for the team (POST /v1/contact-support with ticket): Nightmail's own
  *  API, so it works while the support Worker is down. 429 is the person's hourly limit; anything else is kept and retried. */
-async function fileTicket(text: string): Promise<FiledTicket> {
+async function fileTicket(scope: RequestScope, text: string): Promise<FiledTicket> {
   try {
-    const { ticket } = await supportApi.contact({ shareContent: false, ticket: text })
+    const { ticket } = await supportApi(scope).contact({ shareContent: false, ticket: text })
     if (!ticket) throw new FileError('unreachable')
     return ticket
   } catch (error) {
@@ -111,7 +112,8 @@ async function fileTicket(text: string): Promise<FiledTicket> {
   }
 }
 
-export function createSocketTransport({ origin, userId, workspaceId, resume }: { origin: string; userId: string; workspaceId: string; resume?: string | null }): SupportTransport {
+export function createSocketTransport({ origin, userId, workspaceId, resume, scope }: { origin: string; userId: string; workspaceId: string; resume?: string | null; scope: RequestScope }): SupportTransport {
+  const support = supportApi(scope), actions = supportActionsApi(scope)
   forgetSaved(false)
   const key = storageKey(userId, workspaceId)
   // ?support=<conversationId> (`resume`) opens that chat conversation directly; otherwise keep the workspace's conversation.
@@ -137,7 +139,7 @@ export function createSocketTransport({ origin, userId, workspaceId, resume }: {
   const nextHandoff = async () => {
     if (unspent && Date.now() - unspent.at < 8 * 60_000) return unspent.token
     if (unreachable && !await answers()) throw new StartError(0, 'NETWORK')
-    const token = await handoff(false)
+    const token = await handoff(scope, false)
     unspent = { token, at: Date.now() }
     return token
   }
@@ -155,7 +157,7 @@ export function createSocketTransport({ origin, userId, workspaceId, resume }: {
     for (let tries = 0; ; tries++) {
       try {
         if (!conversationId) {
-          const found = await currentConversation()
+          const found = await currentConversation(scope)
           conversationId = found?.id && !refused.has(found.id) ? found.id : null
           if (!conversationId && !wantCreate) return null
         }
@@ -272,14 +274,14 @@ export function createSocketTransport({ origin, userId, workspaceId, resume }: {
     // so. The support Worker allows content only if Nightmail's scope agrees, so a failed call still sends the frame.
     async allowContent(requestId) {
       const conversationId = started?.conversationId ?? load(key)?.conversationId
-      if (conversationId) { try { await supportApi.allowContent(conversationId) } catch { /* The Worker asks Nightmail itself. */ } }
+      if (conversationId) { try { await support.allowContent(conversationId) } catch { /* The Worker asks Nightmail itself. */ } }
       send({ type: 'consent.respond', requestId, decision: 'allow' })
     },
-    readAction: (actionId, signal) => supportActionsApi.get(actionId, signal),
+    readAction: (actionId, signal) => actions.get(actionId, signal),
     // Nightmail runs the change for the person's session; the hint only wakes the agent, which reads what came of it
     // from Nightmail itself. A hint lost to a closed socket costs nothing: the agent reads it at its next turn.
     async decideAction(actionId, decision) {
-      const action = await supportActionsApi[decision](actionId)
+      const action = await actions[decision](actionId)
       send({ type: 'action.resolved', actionId })
       return action
     },
@@ -303,7 +305,7 @@ export function createSocketTransport({ origin, userId, workspaceId, resume }: {
     // The ticket's conversation is this person's chat now (Nightmail put the message in their open chat, or opened one):
     // reconnecting resumes it, never starts another.
     async file(text) {
-      const ticket = await fileTicket(text)
+      const ticket = await fileTicket(scope, text)
       wantCreate = false
       if (started?.conversationId !== ticket.conversationId) { started = null; save(key, { conversationId: ticket.conversationId }) }
       return ticket
@@ -315,13 +317,13 @@ export function createSocketTransport({ origin, userId, workspaceId, resume }: {
 
 /** No support Worker for this dashboard (supportOrigin() is null): refused from the start (a listener hears it as it
  *  subscribes, so the panel never shows a loading state first), so every message is filed as a ticket for the team. */
-export function createUnavailableTransport(): SupportTransport {
+export function createUnavailableTransport(scope: RequestScope): SupportTransport {
   const listeners = new Set<(event: TransportEvent) => void>()
   const refused: TransportEvent = { type: 'connection', state: 'unavailable', reason: 'NOT_CONFIGURED' }
   const refuse = () => { for (const listener of listeners) listener(refused) }
   const unavailable = () => Promise.reject(new Error(`${productName} support isn’t available here.`))
   return {
-    kind: 'live', connect: refuse, send: () => false, allowContent: async () => {}, readAction: unavailable, decideAction: unavailable, restart: refuse, file: fileTicket,
+    kind: 'live', connect: refuse, send: () => false, allowContent: async () => {}, readAction: unavailable, decideAction: unavailable, restart: refuse, file: text => fileTicket(scope, text),
     uploads: false, upload: unavailable, dispose: () => listeners.clear(),
     subscribe(listener) { listeners.add(listener); listener(refused); return () => { listeners.delete(listener) } },
   }

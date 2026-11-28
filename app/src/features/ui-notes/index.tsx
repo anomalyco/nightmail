@@ -7,7 +7,8 @@ import { Button, IconButton, Sheet, Textarea, useToast } from '../../components/
 import { usePhone, useTouch } from '../../lib/media'
 import { relativeTime } from '../../lib/format'
 import { isMac, notesModifier, notesModifierLabel, setUiNotesMode } from '../../lib/ui-notes-mode'
-import { noteKinds, noteSeverities, noteStatuses, resolved, statusLabel, uiNotesApi, uiNotesKey, type NoteKind, type NoteSeverity, type NoteStatus, type UiNote } from '../../data/ui-notes'
+import { useRequestScope } from '../../data/context'
+import { noteKinds, noteSeverities, noteStatuses, resolved, statusLabel, uiNotesApi, uiNotesKey, type NoteKind, type NotePatch, type NoteSeverity, type NoteStatus, type UiNote } from '../../data/ui-notes'
 import { describe, locate, ownElement, routeOf, screenshot, sensitiveElement } from './capture'
 import './notes.css'
 import { errorText } from '../../data/types'
@@ -29,9 +30,10 @@ const kindLabel = (kind: string) => kind[0]!.toUpperCase() + kind.slice(1)
 const noteTarget = (node: Element) => node instanceof SVGElement && node.ownerSVGElement ? node.closest('svg')! : node
 
 export function UiNotesLayer() {
+  const scope = useRequestScope()
   const location = useLocation(), route = routeOf(location.pathname)
   const client = useQueryClient(), toast = useToast(), phone = usePhone()
-  const notes = useQuery({ queryKey: [...uiNotesKey, 'page', route], queryFn: ({ signal }) => uiNotesApi.list({ route, limit: 200 }, signal).then(page => page.data), staleTime: 30_000 })
+  const notes = useQuery({ queryKey: [...uiNotesKey, 'page', route], queryFn: ({ signal }) => uiNotesApi(scope).list({ route, limit: 200 }, signal).then(page => page.data), staleTime: 30_000 })
   // Numbered in the order they were left, so a pin keeps its number.
   const ordered = useMemo(() => [...notes.data ?? []].sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)), [notes.data])
   const number = useMemo(() => new Map(ordered.map((note, index) => [note.id, index + 1])), [ordered])
@@ -125,7 +127,7 @@ export function UiNotesLayer() {
     replace(note); setDraft(null); setFresh(note.id); refresh()
     try {
       const image = await shot
-      if (image) replace(await uiNotesApi.screenshot(note.id, image))
+      if (image) replace(await uiNotesApi(scope).screenshot(note.id, image))
     } catch { toast('Note saved, but its screenshot didn’t upload.', 'error') }
   }
   const viewed = viewing ? ordered.find(note => note.id === viewing.id) ?? null : null
@@ -197,6 +199,7 @@ const saveKeys = isMac ? 'Meta+Enter' : 'Control+Enter'
 const submitKeys = (event: ReactKeyboardEvent, submit: () => void) => { if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) { event.preventDefault(); submit() } }
 
 function Composer({ draft, onClose, onSaved }: { draft: Draft; onClose: () => void; onSaved: (note: UiNote, shot: Promise<Shot>) => void }) {
+  const scope = useRequestScope()
   const [body, setBody] = useState(''), [kind, setKind] = useState<NoteKind>(lastKind), [severity, setSeverity] = useState<NoteSeverity | null>(null)
   const [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null)
   const field = useRef<HTMLTextAreaElement>(null)
@@ -207,7 +210,7 @@ function Composer({ draft, onClose, onSaved }: { draft: Draft; onClose: () => vo
     if (!body.trim()) { field.current?.focus(); return }
     setBusy(true); setError(null)
     try { localStorage.setItem(KIND_KEY, kind) } catch { /* Next note starts on the default. */ }
-    try { onSaved(await uiNotesApi.create({ body: body.trim(), kind, severity, url: draft.info.url, route: draft.info.route, context: draft.info.context, element: draft.info.element }), draft.shot) }
+    try { onSaved(await uiNotesApi(scope).create({ body: body.trim(), kind, severity, url: draft.info.url, route: draft.info.route, context: draft.info.context, element: draft.info.element }), draft.shot) }
     catch (cause) { setError(errorText(cause, 'Couldn’t save the note.')); setBusy(false) }
   }
   return <form className="uin-form" onSubmit={event => { event.preventDefault(); void submit() }} onKeyDown={event => submitKeys(event, () => void submit())}>
@@ -223,6 +226,7 @@ function Composer({ draft, onClose, onSaved }: { draft: Draft; onClose: () => vo
 // ---------------------------------------------------------------- one note
 
 function Viewer({ note, number, moved, onChange, onDelete, onClose }: { note: UiNote; number: number; moved: boolean; onChange: (note: UiNote) => void; onDelete: () => void; onClose: () => void }) {
+  const scope = useRequestScope()
   const [editing, setEditing] = useState(false), [body, setBody] = useState(note.body), [kind, setKind] = useState(note.kind), [severity, setSeverity] = useState(note.severity)
   const [confirm, setConfirm] = useState(false), [busy, setBusy] = useState<string | null>(null), [error, setError] = useState<string | null>(null)
   const location = useLocation()
@@ -232,7 +236,7 @@ function Viewer({ note, number, moved, onChange, onDelete, onClose }: { note: Ui
     setBusy(name); setError(null)
     try { await work() } catch (cause) { setError(errorText(cause, 'Couldn’t save the change.')) } finally { setBusy(null) }
   }
-  const patch = (name: string, change: Parameters<typeof uiNotesApi.update>[1]) => run(name, async () => { onChange(await uiNotesApi.update(note.id, change)); setEditing(false) })
+  const patch = (name: string, change: NotePatch) => run(name, async () => { onChange(await uiNotesApi(scope).update(note.id, change)); setEditing(false) })
   const here = `${location.pathname}${location.search}` === note.page.path
   return <div className="uin-form" onKeyDown={event => { if (editing) submitKeys(event, () => void patch('save', { body: body.trim(), kind, severity })) }}>
     <div className="uin-head"><span className="uin-number" data-status={note.status}>{number}</span><span className="uin-kind">{kindLabel(note.kind)}{note.severity ? ` · ${note.severity}` : ''}</span><IconButton size="sm" label="Close note" onClick={onClose}><X size={14} /></IconButton></div>
@@ -247,7 +251,7 @@ function Viewer({ note, number, moved, onChange, onDelete, onClose }: { note: Ui
     {error && <p className="uin-error" role="alert">{error}</p>}
     <div className="uin-foot">
       {confirm
-        ? <><span className="uin-confirm">Delete this note?</span><Button size="sm" variant="ghost" onClick={() => setConfirm(false)}>Keep</Button><Button size="sm" variant="danger" loading={busy === 'delete'} onClick={() => void run('delete', async () => { await uiNotesApi.remove(note.id); onDelete() })}>Delete</Button></>
+        ? <><span className="uin-confirm">Delete this note?</span><Button size="sm" variant="ghost" onClick={() => setConfirm(false)}>Keep</Button><Button size="sm" variant="danger" loading={busy === 'delete'} onClick={() => void run('delete', async () => { await uiNotesApi(scope).remove(note.id); onDelete() })}>Delete</Button></>
         : editing
           ? <><Button size="sm" variant="ghost" onClick={() => { setEditing(false); setBody(note.body); setKind(note.kind); setSeverity(note.severity) }}>Cancel</Button><Button size="sm" variant="primary" aria-keyshortcuts={saveKeys} loading={busy === 'save'} disabled={!body.trim()} onClick={() => void patch('save', { body: body.trim(), kind, severity })}>Save</Button></>
           : <><Button size="sm" variant="ghost" className="uin-delete" onClick={() => setConfirm(true)}>Delete</Button><Button size="sm" onClick={() => setEditing(true)}>Edit</Button>{!resolved(note.status) && <Button size="sm" variant="primary" loading={busy === 'status'} onClick={() => void patch('status', { status: 'fixed' })}>Resolve</Button>}</>}

@@ -2,7 +2,7 @@ import { useState, type ReactNode } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { Link } from 'react-router'
 import { Info } from 'lucide-react'
-import { useApiDef, useSession, useWorkspaceAccess } from '../../data/context'
+import { useApiDef, useRequestScope, useSession, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
 import { request } from '../../data/live'
 import type { BuiltinDomain, Identity, SenderScore, SendingLimit } from '../../data/types'
@@ -23,12 +23,13 @@ export function useBuiltinSending() { return useSendingLimitRead().builtin }
 // Whether the limit is still being read, so Overview's detail column can wait for it instead of growing a row.
 export function useSendingLimitPending() { return useSendingLimitRead().pending }
 function useSendingLimitRead() {
+  const scope = useRequestScope()
   const identity = useSession()?.identity
   const hosted = identity?.multiTenant === true && identity.connection?.kind === 'shared'
   // Seeded with the session's own /v1/me, so opening Overview doesn't ask again; it refreshes each minute.
   // An identity without the limit (the connection cache keeps only a summary) is not a seed: the limit is read.
   const live = useQuery({ queryKey: ['nightmail', 'sending-limit', identity?.workspaceId], enabled: hosted, refetchInterval: query => query.state.status === 'error' ? false : 60_000, refetchIntervalInBackground: false,
-    initialData: identity?.connection?.sendingLimit !== undefined ? identity ?? undefined : undefined, staleTime: 60_000, queryFn: ({ signal }) => request<Identity>('/v1/me', { signal }) })
+    initialData: identity?.connection?.sendingLimit !== undefined ? identity ?? undefined : undefined, staleTime: 60_000, queryFn: ({ signal }) => request<Identity>('/v1/me', { signal, scope }) })
   const connection = hosted ? (live.data ?? identity)?.connection : null, builtin = connection?.builtinDomain
   return { limit: connection?.sendingLimit ?? null, pending: hosted && live.isPending, builtin: sendsFromBuiltin(builtin) ? builtin : null }
 }

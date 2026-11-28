@@ -4,6 +4,7 @@ FROM bun AS dashboard
 WORKDIR /dashboard
 COPY app/package.json app/bun.lock ./
 RUN bun install --frozen-lockfile
+COPY sdk/src/types.gen.ts /sdk/src/types.gen.ts
 COPY app/ ./
 RUN bun run build
 

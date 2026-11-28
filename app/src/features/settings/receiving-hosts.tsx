@@ -38,7 +38,7 @@ const path = (domainId: string, hostId?: string) => `/v1/inbound/domains/${encod
 
 /** The hosts the domain receives on, read with the page so the section arrives at its final height. */
 export function useReceivingHosts(domainId: string, enabled: boolean, interval: number | false = false) {
-  return useApiQuery(['mailbox-domain', domainId, 'hosts'], (_api, signal) => request<{ data: ReceivingHost[] }>(path(domainId), { signal }).then(page => page.data.filter(host => host.status !== 'removed')), { enabled, interval: () => interval })
+  return useApiQuery(['mailbox-domain', domainId, 'hosts'], (api, signal) => request<{ data: ReceivingHost[] }>(path(domainId), { signal, scope: api.scope }).then(page => page.data.filter(host => host.status !== 'removed')), { enabled, interval: () => interval })
 }
 
 /** A domain receives on any set of hosts at once: the domain itself and any of its subdomains, each added and removed on its own. */
@@ -51,9 +51,9 @@ export function ReceivingHosts({ domainId, domainName, hosts, actions, title = <
   // Set once Move mail is confirmed: closing it any other way goes back to Add host with the name, to choose another.
   const moving = useRef(false)
   const [removing, setRemoving] = useState<ReceivingHost | null>(null)
-  const add = useApiMutation((_api, input: { name: string; confirm: boolean }) => request<ReceivingHost>(path(domainId), { method: 'POST', body: input }), 'Host added', true, invalidate.mailboxDomains, domainId)
-  const update = useApiMutation((_api, input: { id: string; catchAll: ReceivingHost['catchAll'] }) => request<ReceivingHost>(path(domainId, input.id), { method: 'PATCH', body: { catchAll: input.catchAll } }), 'Catch-all saved', false, invalidate.mailboxDomains, domainId)
-  const remove = useApiMutation((_api, id: string) => request<ReceivingHost>(path(domainId, id), { method: 'DELETE' }), 'Host removed', true, invalidate.mailboxDomains, domainId)
+  const add = useApiMutation((api, input: { name: string; confirm: boolean }) => request<ReceivingHost>(path(domainId), { method: 'POST', body: input, scope: api.scope }), 'Host added', true, invalidate.mailboxDomains, domainId)
+  const update = useApiMutation((api, input: { id: string; catchAll: ReceivingHost['catchAll'] }) => request<ReceivingHost>(path(domainId, input.id), { method: 'PATCH', body: { catchAll: input.catchAll }, scope: api.scope }), 'Catch-all saved', false, invalidate.mailboxDomains, domainId)
+  const remove = useApiMutation((api, id: string) => request<ReceivingHost>(path(domainId, id), { method: 'DELETE', scope: api.scope }), 'Host removed', true, invalidate.mailboxDomains, domainId)
   function open() { add.reset(); setName(''); setInvalid(''); setAdding(true) }
   async function submit(event: FormEvent) {
     event.preventDefault()

@@ -5,7 +5,7 @@ import { BadgeCheck, Bot, CirclePause, Globe, Link2, Megaphone, Send, ShieldAler
 import { ErrorState, PageHeader, Tooltip, type Tone } from '../../components/ui'
 import { useTween } from '../../components/motion'
 import { PrivateAddress } from '../../components/PrivateAddress'
-import { useSession } from '../../data/context'
+import { useRequestScope, useSession } from '../../data/context'
 import { ApiError } from '../../data/types'
 import { usd } from '../../data/billing'
 import { operatorApi, type Glass, type GlassCount, type GlassEvent, type GlassGrade, type GlassRegion } from '../../data/operator'
@@ -204,9 +204,10 @@ function eventText(e: GlassEvent): [ReactNode, ReactNode] {
 }
 const order = (a: GlassEvent, b: GlassEvent) => a.at < b.at ? 1 : a.at > b.at ? -1 : a.id < b.id ? 1 : a.id > b.id ? -1 : 0
 function useActivity(enabled: boolean) {
+  const scope = useRequestScope()
   const [state, setState] = useState<{ events: GlassEvent[]; fresh: Set<string> }>()
   const newest = useRef<string>(undefined)
-  const query = useQuery({ queryKey: ['operator', 'glass', 'activity'], queryFn: ({ signal }) => operatorApi.glassActivity(newest.current, signal), staleTime: 0, gcTime: 0, enabled,
+  const query = useQuery({ queryKey: ['operator', 'glass', 'activity'], queryFn: ({ signal }) => operatorApi(scope).glassActivity(newest.current, signal), staleTime: 0, gcTime: 0, enabled,
     refetchInterval: current => refused(current.state.error) ? false : POLL_MS, refetchIntervalInBackground: false })
   useEffect(() => {
     if (!query.data) return
@@ -239,10 +240,11 @@ export function GlassPage() {
   return operator ? <GlassView /> : <StaffOnly />
 }
 function GlassView() {
+  const scope = useRequestScope()
   const { search } = useLocation(), navigate = useNavigate(), view = glassView(search)
   // A failed refresh (the app retries nothing) keeps the last figures and tries again in 5 s; only a refusal stops it.
   // The live reads run while the live board is shown; the Deliverability board has its own (./deliverability).
-  const query = useQuery({ queryKey: ['operator', 'glass'], queryFn: ({ signal }) => operatorApi.glass(signal), staleTime: POLL_MS - 1_000, enabled: view === 'live',
+  const query = useQuery({ queryKey: ['operator', 'glass'], queryFn: ({ signal }) => operatorApi(scope).glass(signal), staleTime: POLL_MS - 1_000, enabled: view === 'live',
     refetchInterval: current => refused(current.state.error) ? false : POLL_MS, refetchIntervalInBackground: false })
   const activity = useActivity(view === 'live'), glass = query.data
   const deliverability = useDeliverability(view === 'deliverability'), dlv = deliverability.data

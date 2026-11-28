@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { DataTable, EmptyState, ErrorState, StatusBadge, type Column } from '../../components/ui'
+import { useRequestScope } from '../../data/context'
 import { operatorApi, type OperatorHealth } from '../../data/operator'
 import { ago, label, number, shortDateTime } from '../../lib/format'
 import { HealthFacts, healthColumnDefs } from './skeletons'
@@ -62,7 +63,8 @@ const columns: Column<Row>[] = [
 ]
 
 export function HealthView() {
-  const query = useQuery({ queryKey: ['operator', 'health'], queryFn: ({ signal }) => operatorApi.health(signal), staleTime: 10_000,
+  const scope = useRequestScope()
+  const query = useQuery({ queryKey: ['operator', 'health'], queryFn: ({ signal }) => operatorApi(scope).health(signal), staleTime: 10_000,
     refetchInterval: current => current.state.status === 'error' ? false : 30_000, refetchIntervalInBackground: false })
   const health = query.data, d = health?.database
   if (query.isError && !health) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />

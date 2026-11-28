@@ -138,7 +138,7 @@ function NameForm({ initial, canEdit }: { initial: string; canEdit: boolean }) {
 function EditableName({ initial }: { initial: string }) {
   const [name, setName] = useState(initial)
   const memberships = useMembershipCache()
-  const save = useApiMutation(async (_api, value: string) => { const renamed = await workspaceApi.rename(value); memberships.renamed(renamed); return renamed }, 'Saved', false, invalidate.workspace)
+  const save = useApiMutation(async (api, value: string) => { const renamed = await workspaceApi(api.scope).rename(value); memberships.renamed(renamed); return renamed }, 'Saved', false, invalidate.workspace)
   async function submit(event: FormEvent) { event.preventDefault(); try { await save.mutateAsync(name.trim()) } catch { /* inline */ } }
   const changed = name.trim() !== initial && name.trim() !== ''
   // Save keeps its place whether or not it is shown, so typing never moves the field.
@@ -173,7 +173,7 @@ function SendingRows() {
 // access, and the last health check's first finding.
 // Three rows whatever loads, so the rows below never move.
 function ConnectedAccountRows({ connection }: { connection: ProviderConnection | null }) {
-  const update = useApiMutation(() => connectionApi.updateStack(), undefined, true, invalidate.connection)
+  const update = useApiMutation(api => connectionApi(api.scope).updateStack(), undefined, true, invalidate.connection)
   const stack = connection?.stack
   const templateRow = <Row title="Role template" error={update.error ? <MutationError error={update.error} /> : undefined}><span className="cluster settings-inline settings-version"><code>{connection ? stack?.version ?? '—' : <Skeleton width={32} height={20} />}</code>
       {update.data ? <a href={update.data.consoleUrl} target="_blank" rel="noopener noreferrer">Review update in AWS<ArrowUpRight size={14} aria-hidden="true" /></a>
@@ -201,7 +201,7 @@ function ScoreRow() {
 // A connected AWS account's disconnect runs a cleanup in the account: its summary opens once confirmed.
 function DisconnectRow({ kind, connection }: { kind: 'shared' | 'byo' | undefined; connection: ProviderConnection | null | undefined }) {
   const regional = connection?.templateVersion === 'v5'
-  const disconnect = useApiMutation(() => connectionApi.remove(), regional ? undefined : 'Disconnected', true, invalidate.connection)
+  const disconnect = useApiMutation(api => connectionApi(api.scope).remove(), regional ? undefined : 'Disconnected', true, invalidate.connection)
   const [confirming, setConfirming] = useState(false)
   const [summary, setSummary] = useState<DisconnectSummary | null>(null)
   const sync = useConnectionCache()

@@ -1,4 +1,4 @@
-import { request } from './live'
+import { request, type RequestScope } from './live'
 
 // Billing (hosted only): a prepaid USD balance that usage comes off hourly, the free allowance, auto-recharge and the
 // saved card. Money crosses the API as integer micro-cents in strings (1¢ = 1,000,000 µ¢); inputs are whole cents.
@@ -31,18 +31,18 @@ export interface UsagePoint { start: string; meter: 'send' | 'receive' | 'omen' 
 export type AutoRechargeInput = { enabled: boolean; thresholdCents: number; amountCents: number; monthlyCapCents: number }
 type Page<T> = { data: T[]; nextCursor: string | null }
 
-export const billingApi = {
-  get: (signal?: AbortSignal) => request<BillingSummary>('/v1/billing', { signal }),
+export const billingApi = (scope: RequestScope | 'unscoped') => ({
+  get: (signal?: AbortSignal) => request<BillingSummary>('/v1/billing', { signal, scope }),
   usage: (query: { from?: string; to?: string; granularity?: 'hour' | 'day' | 'month'; meter?: UsagePoint['meter'] }, signal?: AbortSignal) =>
-    request<{ data: UsagePoint[] }>(`/v1/billing/usage?${new URLSearchParams(Object.entries(query).filter(([, v]) => v) as [string, string][])}`, { signal }),
-  ledger: (cursor: string | undefined, signal?: AbortSignal) => request<Page<LedgerEntry>>(`/v1/billing/ledger?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal }),
-  payments: (cursor: string | undefined, signal?: AbortSignal) => request<Page<Payment>>(`/v1/billing/payments?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal }),
-  payment: (id: string, signal?: AbortSignal) => request<Payment>(`/v1/billing/payments/${encodeURIComponent(id)}`, { signal }),
-  topUp: (input: { amountCents: number; method: 'checkout' | 'saved_card' }) => request<{ attemptId: string; status: PaymentStatus; checkoutUrl: string | null; expiresAt: string | null }>('/v1/billing/top-ups', { method: 'POST', body: input, idempotencyKey: crypto.randomUUID() }),
-  autoRecharge: (input: AutoRechargeInput) => request<BillingSummary>('/v1/billing/auto-recharge', { method: 'PUT', body: input }),
-  setupCard: () => request<{ checkoutUrl: string; expiresAt: string }>('/v1/billing/payment-method', { method: 'POST' }),
-  removeCard: () => request<BillingSummary>('/v1/billing/payment-method', { method: 'DELETE' }),
-}
+    request<{ data: UsagePoint[] }>(`/v1/billing/usage?${new URLSearchParams(Object.entries(query).filter(([, v]) => v) as [string, string][])}`, { signal, scope }),
+  ledger: (cursor: string | undefined, signal?: AbortSignal, limit = 20) => request<Page<LedgerEntry>>(`/v1/billing/ledger?limit=${limit}${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal, scope }),
+  payments: (cursor: string | undefined, signal?: AbortSignal) => request<Page<Payment>>(`/v1/billing/payments?limit=20${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, { signal, scope }),
+  payment: (id: string, signal?: AbortSignal) => request<Payment>(`/v1/billing/payments/${encodeURIComponent(id)}`, { signal, scope }),
+  topUp: (input: { amountCents: number; method: 'checkout' | 'saved_card' }) => request<{ attemptId: string; status: PaymentStatus; checkoutUrl: string | null; expiresAt: string | null }>('/v1/billing/top-ups', { method: 'POST', body: input, idempotencyKey: crypto.randomUUID(), scope }),
+  autoRecharge: (input: AutoRechargeInput) => request<BillingSummary>('/v1/billing/auto-recharge', { method: 'PUT', body: input, scope }),
+  setupCard: () => request<{ checkoutUrl: string; expiresAt: string }>('/v1/billing/payment-method', { method: 'POST', scope }),
+  removeCard: () => request<BillingSummary>('/v1/billing/payment-method', { method: 'DELETE', scope }),
+})
 
 // ---------- money for people ----------
 const UC_PER_CENT = 1_000_000n

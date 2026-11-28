@@ -8,7 +8,7 @@ import { Alert, Button, Checkbox, Dialog, ErrorState, Field, SearchField, Select
 import { usePhone } from '../../lib/media'
 import { CopyAction } from '../../components/motion'
 import { PrivateAddress } from '../../components/PrivateAddress'
-import { useApiDef, useApiQuery, usePublicOrigin, useSession, useWorkspaceAccess } from '../../data/context'
+import { useApiDef, useApiQuery, usePublicOrigin, useRequestScope, useSession, useWorkspaceAccess } from '../../data/context'
 import { AgentPromptPanel, agentPrompt, useAgentSetup } from './agent-setup'
 import { queries } from '../../data/queries'
 import { inboxKeyEnv } from '../../../../api/src/brand'
@@ -174,9 +174,10 @@ export function ConnectAgentDialog({ open, onOpenChange, inboxId }: { open: bool
   const inboxView = view === 'inbox' && canAdminister
   // A page of 100 active inboxes; past that, a search over address and name finds the rest. The inbox the dialog was
   // opened from, and the one last picked, stay in the list whatever the search shows.
+  const scope = useRequestScope()
   const search = useDebounced(query.trim())
-  const inboxes = useApiQuery(['agent-inboxes', 'connect', search], (_api, signal) => request<{ data: Inbox[]; nextCursor: string | null }>(`/v1/inboxes?status=active&limit=100${search ? `&q=${encodeURIComponent(search)}` : ''}`, { signal }), { enabled: open && inboxView, keepPrevious: true })
-  const opened = useApiQuery(['agent-inbox', inboxId], (_api, signal) => request<Inbox>(`/v1/inboxes/${encodeURIComponent(inboxId!)}`, { signal }), { enabled: open && canAdminister && !!inboxId })
+  const inboxes = useApiQuery(['agent-inboxes', 'connect', search], (api, signal) => request<{ data: Inbox[]; nextCursor: string | null }>(`/v1/inboxes?status=active&limit=100${search ? `&q=${encodeURIComponent(search)}` : ''}`, { signal, scope: api.scope }), { enabled: open && inboxView, keepPrevious: true })
+  const opened = useApiQuery(['agent-inbox', inboxId], (api, signal) => request<Inbox>(`/v1/inboxes/${encodeURIComponent(inboxId!)}`, { signal, scope: api.scope }), { enabled: open && canAdminister && !!inboxId })
   useEffect(() => {
     if (!open) return
     setView(inboxId && canAdminister ? 'inbox' : 'agent'); setMode('prompt'); setClient('opencode'); setSignIn('opencode'); setInbox(inboxId ?? ''); setQuery(''); setPicked(null); setReply(false); setResult(null); setError('')
@@ -191,7 +192,7 @@ export function ConnectAgentDialog({ open, onOpenChange, inboxId }: { open: bool
     if (!chosen) return
     setBusy(true); setError('')
     try {
-      const made = await request<{ id: string | null; config: object; nextStep: string }>('/v1/inbox-connections', { method: 'POST', body: { inboxes: [chosen], client, auth: 'key', reply }, idempotencyKey: crypto.randomUUID() })
+      const made = await request<{ id: string | null; config: object; nextStep: string }>('/v1/inbox-connections', { method: 'POST', body: { inboxes: [chosen], client, auth: 'key', reply }, idempotencyKey: crypto.randomUUID(), scope })
       // The key is inside the config, shown once; the snippet for every client is rebuilt from it.
       const bearer = JSON.stringify(made.config).match(/Bearer ((?:nm|bane)_mbx_[A-Za-z0-9_-]+)/)?.[1] ?? null // bane_: remove after rename cleanup
       setResult({ ...made, key: bearer, client })

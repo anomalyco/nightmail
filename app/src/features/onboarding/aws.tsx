@@ -4,7 +4,7 @@ import { ArrowLeft, ArrowRight, ArrowUpRight, Check, X } from 'lucide-react'
 import { Alert, Button, Checkbox, Dialog, Field, Input, Select, Textarea } from '../../components/ui'
 import { BootLoader } from '../../components/BootLoader'
 import { useGuardedMutation } from '../../lib/single-flight'
-import { useApiQuery } from '../../data/context'
+import { useApiQuery, useRequestScope } from '../../data/context'
 import { connectionApi } from '../../data/connections'
 import { domainPattern, normalizeDomain } from '../../lib/domain'
 import { ApiError, errorText, type ByoCandidate, type ByoRegion, type ProviderConnection } from '../../data/types'
@@ -100,17 +100,19 @@ function ChooseDomains({ connection, onChosen }: { connection: ProviderConnectio
   const [invalid, setInvalid] = useState('')
   const [asking, setAsking] = useState(false)
   const current = regions.find(item => item.region === region)
+  const scope = useRequestScope()
   const found = (connection.candidates ?? []).filter(candidate => candidate.region === region)
   const granted = current?.facts.production === true
   const choose = useGuardedMutation({
+    requestScope: scope,
     mutationFn: async ({ ids, name }: { ids: string[]; name: string }) => {
-      if (ids.length) await connectionApi.importDomains(scan.revision, ids)
-      if (name) await connectionApi.addDomain(name, region)
+      if (ids.length) await connectionApi(scope).importDomains(scan.revision, ids)
+      if (name) await connectionApi(scope).addDomain(name, region)
       return name
     },
     onSuccess: name => { onChosen(name || null); void client.invalidateQueries({ queryKey: ['nightmail', 'connection'] }) },
   })
-  const rescan = useGuardedMutation({ mutationFn: () => connectionApi.rescan(), onSuccess: () => void client.invalidateQueries({ queryKey: ['nightmail', 'connection'] }) })
+  const rescan = useGuardedMutation({ requestScope: scope, mutationFn: () => connectionApi(scope).rescan(), onSuccess: () => void client.invalidateQueries({ queryKey: ['nightmail', 'connection'] }) })
   function submit(event: FormEvent) {
     event.preventDefault()
     const name = draft.trim() ? normalizeDomain(draft) : ''
@@ -162,13 +164,15 @@ function Access({ region, onAsk }: { region: ByoRegion; onAsk: () => void }) {
 
 const useCaseText = (domain: string) => `We send transactional email from ${domain || 'our domain'} to our own customers: account notices, receipts and password resets. Every recipient signed up with us. ${productName} suppresses addresses that bounce or complain.`
 function ProductionAccessDialog({ open, onOpenChange, region, domain }: { open: boolean; onOpenChange: (open: boolean) => void; region: ByoRegion | undefined; domain: string }) {
+  const scope = useRequestScope()
   const client = useQueryClient()
   const [website, setWebsite] = useState('')
   const [useCase, setUseCase] = useState('')
   const [mailType, setMailType] = useState<'TRANSACTIONAL' | 'MARKETING'>('TRANSACTIONAL')
   useEffect(() => { if (open) { setWebsite(domain ? `https://${domain}` : ''); setUseCase(useCaseText(domain)); setMailType('TRANSACTIONAL') } }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   const ask = useGuardedMutation({
-    mutationFn: () => connectionApi.requestProductionAccess(region!.region, { websiteUrl: website.trim(), useCase: useCase.trim(), mailType }),
+    requestScope: scope,
+    mutationFn: () => connectionApi(scope).requestProductionAccess(region!.region, { websiteUrl: website.trim(), useCase: useCase.trim(), mailType }),
     onSuccess: () => { onOpenChange(false); void client.invalidateQueries({ queryKey: ['nightmail', 'connection'] }) },
   })
   const valid = /^https?:\/\/\S+\.\S+$/.test(website.trim()) && useCase.trim().length >= 40

@@ -3,7 +3,7 @@ import { Link, useNavigate, useSearchParams } from 'react-router'
 import { keepPreviousData, useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ExternalLink } from 'lucide-react'
 import { Alert, Button, Checkbox, ConfirmDialog, CopyButton, SecretCode, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, Field, Input, PageHeader, Select, StatusBadge, Tabs, Textarea, useToast, type Column, type MenuItem, type Tone } from '../../components/ui'
-import { useSession } from '../../data/context'
+import { useRequestScope, useSession } from '../../data/context'
 import { noteKinds, noteSeverities, noteStatuses, statusLabel, uiNotesApi, uiNotesKey, type NoteKind, type NoteSeverity, type NoteStatus, type UiNote } from '../../data/ui-notes'
 import { relativeTime, shortDateTime } from '../../lib/format'
 import { setUiNotesMode, useUiNotesMode } from '../../lib/ui-notes-mode'
@@ -19,10 +19,11 @@ const def = (key: string) => noteColumnDefs.find(column => column.key === key)!
 const kindLabel = (kind: string) => kind[0]!.toUpperCase() + kind.slice(1)
 const statusTone: Record<NoteStatus, Tone> = { open: 'warning', in_progress: 'info', fixed: 'success', wontfix: 'neutral' }
 const Status = ({ status }: { status: NoteStatus }) => <StatusBadge status={statusLabel[status]} tone={statusTone[status]} />
-type NotesPage = Awaited<ReturnType<typeof uiNotesApi.list>>
+type NotesPage = Awaited<ReturnType<ReturnType<typeof uiNotesApi>['list']>>
 const Thumb = ({ note }: { note: UiNote }) => <span className="op-shot">{note.screenshot && <img src={note.screenshot.url} alt="" loading="lazy" decoding="async" />}</span>
 
 export function OperatorNotesPage() {
+  const scope = useRequestScope(), notesApi = uiNotesApi(scope)
   // Only for the people the API allows (GET /v1/me uiNotes); the API answers 404 to everyone else.
   const identity = useSession()?.identity, role = identity?.uiNotes === true ? identity.operator ?? null : null, canAct = role === 'operator', tabs = useOperatorTabs()
   const navigate = useNavigate(), client = useQueryClient(), toast = useToast(), notesOn = useUiNotesMode(Boolean(role))
@@ -34,7 +35,7 @@ export function OperatorNotesPage() {
   useEffect(() => { if ((params.get('q') ?? '') !== q) setParam('q', q) }, [q]) // eslint-disable-line react-hooks/exhaustive-deps
   const filter = { status: status === 'all' ? undefined : status ? [status as NoteStatus] : ['open', 'in_progress'] as NoteStatus[], kind: kind ? [kind as NoteKind] : undefined, q: q || undefined }
   const notes = useInfiniteQuery({ queryKey: [...uiNotesKey, 'list', status, kind, q], initialPageParam: undefined as string | undefined, enabled: Boolean(role), placeholderData: keepPreviousData,
-    queryFn: ({ pageParam, signal }) => uiNotesApi.list({ ...filter, cursor: pageParam, limit: 100 }, signal), getNextPageParam: (page: NotesPage) => page.nextCursor ?? undefined })
+    queryFn: ({ pageParam, signal }) => notesApi.list({ ...filter, cursor: pageParam, limit: 100 }, signal), getNextPageParam: (page: NotesPage) => page.nextCursor ?? undefined })
   const rows = useMemo(() => notes.data?.pages.flatMap(page => page.data) ?? [], [notes.data])
   const [selected, setSelected] = useState<ReadonlySet<string>>(new Set())
   const [open, setOpen] = useState<string | null>(null)
@@ -49,7 +50,7 @@ export function OperatorNotesPage() {
     setSelected(new Set()); await refresh()
     toast(failed ? `${ids.length - failed} of ${ids.length} notes ${done}; ${failed} failed.` : `${ids.length} ${ids.length === 1 ? 'note' : 'notes'} ${done}.`, failed ? 'error' : 'success')
   }
-  const setStatus = (value: NoteStatus) => bulk(noteId => uiNotesApi.update(noteId, { status: value }), `marked ${statusLabel[value].toLowerCase()}`)
+  const setStatus = (value: NoteStatus) => bulk(noteId => notesApi.update(noteId, { status: value }), `marked ${statusLabel[value].toLowerCase()}`)
   const openOnPage = (note: UiNote) => { setUiNotesMode(true); navigate(note.page.path) }
   const allChecked = rows.length > 0 && rows.every(row => selected.has(row.id))
   const columns: Column<UiNote>[] = [
@@ -63,7 +64,7 @@ export function OperatorNotesPage() {
     { ...def('created'), render: note => <span className="op-cell" title={`${shortDateTime(note.createdAt)} UTC`}>{relativeTime(note.createdAt)}{note.author?.name ? ` · ${note.author.name.split(' ')[0]}` : ''}</span>, cardRender: note => relativeTime(note.createdAt) },
     { ...def('actions'), render: note => <DropdownMenu label="Note actions" title={note.body.slice(0, 60)} items={[
       { label: 'Open on its page', onSelect: () => openOnPage(note) },
-      ...canAct ? noteStatuses.filter(value => value !== note.status).map((value): MenuItem => ({ label: `Mark ${statusLabel[value].toLowerCase()}`, onSelect: () => void uiNotesApi.update(note.id, { status: value }).then(refresh, error => toast(errorText(error, 'Couldn’t update the note.'), 'error')) })) : [],
+      ...canAct ? noteStatuses.filter(value => value !== note.status).map((value): MenuItem => ({ label: `Mark ${statusLabel[value].toLowerCase()}`, onSelect: () => void notesApi.update(note.id, { status: value }).then(refresh, error => toast(errorText(error, 'Couldn’t update the note.'), 'error')) })) : [],
       ...canAct ? [{ label: 'Delete…', destructive: true, onSelect: () => setOpen(note.id) }] : [],
     ]} /> },
   ]
@@ -86,7 +87,7 @@ export function OperatorNotesPage() {
     {open && <NoteDialog noteId={open} initial={rows.find(row => row.id === open)} canAct={canAct} onClose={() => setOpen(null)} onChanged={() => void refresh()} onOpenOnPage={openOnPage} />}
     {keys && <KeysDialog onClose={() => setKeys(false)} />}
     <ConfirmDialog open={bulkDelete} onOpenChange={setBulkDelete} danger title={`Delete ${selected.size} ${selected.size === 1 ? 'note' : 'notes'}?`} description="Their screenshots are deleted too. This can’t be undone." confirmLabel="Delete"
-      onConfirm={() => bulk(noteId => uiNotesApi.remove(noteId), 'deleted')} />
+      onConfirm={() => bulk(noteId => notesApi.remove(noteId), 'deleted')} />
   </>
 }
 
@@ -94,7 +95,8 @@ export function OperatorNotesPage() {
 
 const Facts = ({ rows }: { rows: [string, ReactNode][] }) => <dl className="op-rows">{rows.filter(([, value]) => value !== null && value !== '').map(([title, value]) => <div key={title}><dt>{title}</dt><dd>{value}</dd></div>)}</dl>
 function NoteDialog({ noteId, initial, canAct, onClose, onChanged, onOpenOnPage }: { noteId: string; initial?: UiNote; canAct: boolean; onClose: () => void; onChanged: () => void; onOpenOnPage: (note: UiNote) => void }) {
-  const fetched = useQuery({ queryKey: [...uiNotesKey, 'note', noteId], queryFn: ({ signal }) => uiNotesApi.get(noteId, signal), initialData: initial, staleTime: 0 })
+  const scope = useRequestScope(), notesApi = uiNotesApi(scope)
+  const fetched = useQuery({ queryKey: [...uiNotesKey, 'note', noteId], queryFn: ({ signal }) => notesApi.get(noteId, signal), initialData: initial, staleTime: 0 })
   const note = fetched.data
   const [body, setBody] = useState(note?.body ?? ''), [kind, setKind] = useState<string>(note?.kind ?? 'other'), [severity, setSeverity] = useState<string>(note?.severity ?? '')
   const [status, setStatus] = useState<string>(note?.status ?? 'open'), [prUrl, setPrUrl] = useState(note?.prUrl ?? ''), [resolution, setResolution] = useState(note?.resolution ?? '')
@@ -107,12 +109,12 @@ function NoteDialog({ noteId, initial, canAct, onClose, onChanged, onOpenOnPage 
   function save(event: FormEvent) {
     event.preventDefault()
     if (!note) return
-    void run(() => uiNotesApi.update(note.id, { body: body.trim(), kind: kind as NoteKind, severity: (severity || null) as NoteSeverity | null, status: status as NoteStatus, prUrl: prUrl.trim() || null, resolution: resolution.trim() || null }))
+    void run(() => notesApi.update(note.id, { body: body.trim(), kind: kind as NoteKind, severity: (severity || null) as NoteSeverity | null, status: status as NoteStatus, prUrl: prUrl.trim() || null, resolution: resolution.trim() || null }))
   }
   const e = note?.element, styles = e ? Object.entries(e.styles).map(([name, value]) => `${name}: ${value}`).join('; ') : ''
   return <Dialog open onOpenChange={next => { if (!next && !busy) onClose() }} className="op-note-dialog" title={note ? `${kindLabel(note.kind)} note` : 'Note'}
     footer={!note ? undefined : confirm
-      ? <><span className="op-confirm">Delete this note and its screenshot?</span><Button onClick={() => setConfirm(false)} disabled={busy}>Keep</Button><Button variant="danger" loading={busy} onClick={() => void run(() => uiNotesApi.remove(note.id))}>Delete</Button></>
+      ? <><span className="op-confirm">Delete this note and its screenshot?</span><Button onClick={() => setConfirm(false)} disabled={busy}>Keep</Button><Button variant="danger" loading={busy} onClick={() => void run(() => notesApi.remove(note.id))}>Delete</Button></>
       : <>{canAct && <Button variant="ghost" className="op-delete" onClick={() => setConfirm(true)}>Delete</Button>}<Button onClick={() => onOpenOnPage(note)}>Open on page</Button>{canAct && <Button type="submit" form="op-note-form" variant="primary" loading={busy} disabled={!body.trim()}>Save</Button>}</>}>
     {!note ? fetched.isPending ? <p className="muted" role="status">Loading the note…</p> : <ErrorState error={fetched.error ?? 'This note was deleted.'} /> : <form id="op-note-form" className="op-dialog-fields" onSubmit={save}>
       {error && <Alert tone="danger">{error}</Alert>}
@@ -146,19 +148,20 @@ function NoteDialog({ noteId, initial, canAct, onClose, onChanged, onOpenOnPage 
 // ---------------------------------------------------------------- agent keys
 
 function KeysDialog({ onClose }: { onClose: () => void }) {
+  const scope = useRequestScope(), keysApi = uiNotesApi(scope).keys
   const client = useQueryClient()
-  const keys = useQuery({ queryKey: [...uiNotesKey, 'keys'], queryFn: ({ signal }) => uiNotesApi.keys.list(signal) })
+  const keys = useQuery({ queryKey: [...uiNotesKey, 'keys'], queryFn: ({ signal }) => keysApi.list(signal) })
   const [name, setName] = useState('Fix agent'), [days, setDays] = useState('30'), [busy, setBusy] = useState(false), [error, setError] = useState<string | null>(null)
   const [secret, setSecret] = useState<string | null>(null)
   const [revoking, setRevoking] = useState<{ id: string; name: string } | null>(null)
   async function create(event: FormEvent) {
     event.preventDefault()
     setBusy(true); setError(null)
-    try { setSecret((await uiNotesApi.keys.create({ name: name.trim(), expiresInDays: Number(days) })).secret); await client.invalidateQueries({ queryKey: [...uiNotesKey, 'keys'] }) }
+    try { setSecret((await keysApi.create({ name: name.trim(), expiresInDays: Number(days) })).secret); await client.invalidateQueries({ queryKey: [...uiNotesKey, 'keys'] }) }
     catch (cause) { setError(errorText(cause, 'Couldn’t create the key.')) } finally { setBusy(false) }
   }
   // ConfirmDialog shows a failure in the dialog and keeps it open.
-  const revoke = async (keyId: string) => { await uiNotesApi.keys.revoke(keyId); await client.invalidateQueries({ queryKey: [...uiNotesKey, 'keys'] }) }
+  const revoke = async (keyId: string) => { await keysApi.revoke(keyId); await client.invalidateQueries({ queryKey: [...uiNotesKey, 'keys'] }) }
   const live = (keys.data ?? []).filter(key => !key.revokedAt && Date.parse(key.expiresAt) > Date.now())
   const origin = window.location.origin
   return <Dialog sensitive={Boolean(secret)} open onOpenChange={next => { if (!next) onClose() }} title="Agent keys" className="op-keys-dialog"

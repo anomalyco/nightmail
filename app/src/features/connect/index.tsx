@@ -6,7 +6,7 @@ import { Alert, Button, Checkbox, Field, Input, Select } from '../../components/
 import { BootLoader } from '../../components/BootLoader'
 import { ThemeToggle } from '../../components/ThemeToggle'
 import { NightmailWordmark } from '../../components/NightmailLogo'
-import { useSession } from '../../data/context'
+import { useRequestScope, useSession } from '../../data/context'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { request } from '../../data/live'
 import { relativeTime } from '../../lib/format'
@@ -51,9 +51,10 @@ function ConnectSteps() {
   const code = readCode(params.get('code'))
   const [decided, setDecided] = useState<{ code: string; decision: Decision; workspace: string | null } | null>(null)
   // A code typed here is the person's confirmation; one that came in a link (anyone can send one) is confirmed below.
+  const scope = useRequestScope()
   const [typed, setTyped] = useState<string | null>(null)
   const looked = useQuery({ queryKey: ['agent-device', code], enabled: !!code, retry: false, staleTime: Infinity, gcTime: 0,
-    queryFn: ({ signal }) => request<AgentRequest>('/v1/agent/device/lookup', { method: 'POST', body: { userCode: code }, signal }) })
+    queryFn: ({ signal }) => request<AgentRequest>('/v1/agent/device/lookup', { method: 'POST', body: { userCode: code }, signal, scope }) })
   const choose = (next: string | null) => { setDecided(null); setTyped(next); setParams(next ? { code: next } : {}, { replace: true }) }
   let view: string, content: ReactNode
   if (decided && decided.code === code) { view = 'done'; content = <Decided decision={decided.decision} workspace={decided.workspace} onAnother={() => choose(null)} /> }
@@ -108,6 +109,7 @@ function expiresIn(at: string) {
 }
 
 function Review({ request: agent, typed, onDecided, onAnother }: { request: AgentRequest; typed: boolean; onDecided: (decision: Decision, workspace: string | null) => void; onAnother: () => void }) {
+  const scope = useRequestScope()
   const session = useSession(), identity = session?.identity
   // Hosted: the workspaces this person owns or administers; first the one whose setup token the agent held (it asked
   // with it), else the current one. Self-hosted has the one it is in.
@@ -123,7 +125,7 @@ function Review({ request: agent, typed, onDecided, onAnother }: { request: Agen
   async function decide(decision: Decision) {
     setBusy(decision); setError(null)
     try {
-      await request(`/v1/agent/device/${decision === 'approved' ? 'approve' : 'deny'}`, { method: 'POST', body: { userCode: agent.userCode }, ...(decision === 'approved' && hosted ? { workspace } : {}) })
+      await request(`/v1/agent/device/${decision === 'approved' ? 'approve' : 'deny'}`, { method: 'POST', body: { userCode: agent.userCode }, scope, ...(decision === 'approved' && hosted ? { workspace } : {}) })
       onDecided(decision, decision === 'approved' ? hosted?.find(item => item.id === workspace)?.name ?? null : null)
     } catch (failure) { setError(failure); setBusy(null) }
   }
