@@ -200,6 +200,10 @@ const values = z.object({
   // a throttled response drops the target back to the quota for ten seconds.
   DISPATCH_RATE_FACTOR: z.coerce.number().min(0.1).max(10).default(1),
   DISPATCH_DAILY_HEADROOM_PERCENT: z.coerce.number().min(0).max(100).default(10),
+  // Installation-wide outside recipients of live Hosted senders on probation.
+  NIGHTMAIL_PROBATION_BUDGET_ENABLED: z.enum(['true', 'false']).default('false'),
+  NIGHTMAIL_PROBATION_HOURLY: z.coerce.number().int().positive().max(2147483647).default(2000),
+  NIGHTMAIL_PROBATION_DAILY: z.coerce.number().int().positive().max(2147483647).default(10000),
   // Hosted: the percent of a shared account's daily SES limit all outside (non-exempt) workspaces together may use.
   HOSTED_CUSTOMER_SHARE_PERCENT: z.coerce.number().min(0).max(100).default(50),
   // Absolute live SES target in recipients per second; replaces the quota-derived rate when set.
@@ -461,7 +465,8 @@ export function loadConfig(input: Record<string, unknown>): Config {
     previousEncryptionKey: v.PREVIOUS_NIGHTMAIL_ROOT_SECRET ? deriveEncryptionKey(v.PREVIOUS_NIGHTMAIL_ROOT_SECRET) : v.ENCRYPTION_KEY,
     publicUrl: url.origin, linkHost, linkHosts, linkWarmup: v.NIGHTMAIL_LINK_WARMUP, linkedImages: (v.CAMPAIGN_IMAGES ?? (url.protocol === 'https:' ? 'linked' : 'embedded')) === 'linked', sesFeedbackUrl: v.SES_FEEDBACK_URL, regions, liveEnabled: v.ENABLE_LIVE_SES === 'true',
     simulatedSes: { latencyMs: v.SIMULATED_SES_LATENCY_MS, maxSendRate: v.SIMULATED_SES_RATE, deliveryDelayMs: v.SIMULATED_SES_DELIVERY_DELAY_MS },
-    dispatch: { rateFactor: v.DISPATCH_RATE_FACTOR, txReservePercent: 15, targetRate: v.DISPATCH_TARGET_RATE, dailyHeadroomPercent: v.DISPATCH_DAILY_HEADROOM_PERCENT, customerSharePercent: v.HOSTED_CUSTOMER_SHARE_PERCENT },
+    dispatch: { probationBudget: v.NIGHTMAIL_PROBATION_BUDGET_ENABLED === 'true' ? { hourly: v.NIGHTMAIL_PROBATION_HOURLY, daily: v.NIGHTMAIL_PROBATION_DAILY } : undefined,
+      rateFactor: v.DISPATCH_RATE_FACTOR, txReservePercent: 15, targetRate: v.DISPATCH_TARGET_RATE, dailyHeadroomPercent: v.DISPATCH_DAILY_HEADROOM_PERCENT, customerSharePercent: v.HOSTED_CUSTOMER_SHARE_PERCENT },
     aws,
     // Resource names and trusted feedback bindings are hydrated from persisted setup state.
     snsTopicArns: [], inboundTopicArns: [],

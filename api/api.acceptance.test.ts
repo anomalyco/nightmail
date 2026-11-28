@@ -49150,6 +49150,446 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
+  // Eight independently pooled runtimes share a private SES account/region. All
+  // SDK commands terminate in this process. Unlike simulatedSesFixture, writes
+  // commit so concurrent claimants and a replacement dispatcher see them.
+  async function probationFixture(t: TestContext, tenants: number, quota = 200) {
+    assert.ok(fixtureWorker, 'Global dispatch fixtures require the isolated loopback runner.');
+    const db = await fixtureDatabase(t), tag = unique('pb'), region = 'ap-south-2', account = '123450000127';
+    // Creating 10,000 independently verified domains runs the real proof-election trigger.
+    // Its setup timeout is separate from the timed dispatch queries.
+    if(tenants>1000) await db.query("SET statement_timeout='20min'");
+    const owners = Array.from({length:tenants}, (_,i)=>tag+'-'+i), platform = owners[0]!;
+    const [{nodeRuntime}, {runDispatcher}, {SESv2Client, GetAccountCommand, SendEmailCommand}] =
+      await Promise.all([import('./src/adapters/node.js'),import('./src/dispatcher.js'),import('@aws-sdk/client-sesv2')]);
+    const workers = Array.from({length:8},()=>nodeRuntime({...process.env,DATABASE_URL:FIXTURE_DATABASE_URL,ENABLE_LIVE_SES:'false'}));
+    const calls: {id:string; wid:string; time:number; destinations:number}[] = [];
+    let respond: (id:string)=>Promise<void> = async()=>{};
+    t.mock.method(SESv2Client.prototype,'send', async (cmd:any)=>{
+      if (cmd instanceof GetAccountCommand) return {SendingEnabled:true,SendQuota:{MaxSendRate:quota,Max24HourSend:5000000,SentLast24Hours:0}};
+      assert.ok(cmd instanceof SendEmailCommand);
+      const tags = cmd.input.EmailTags!, id = tags.find(x=>x.Name==='bane_email_id')!.Value!, wid=tags.find(x=>x.Name==='bane_workspace_id')!.Value!;
+      const d = cmd.input.Destination!;
+      calls.push({id,wid,time:performance.now(),destinations:(d.ToAddresses?.length??0)+(d.CcAddresses?.length??0)+(d.BccAddresses?.length??0)});
+      await respond(id); return {MessageId:randomUUID()};
+    });
+    for (const {runtime} of workers) {
+      Object.assign(runtime.config,{workspaceId:platform,multiTenant:true,liveEnabled:true,hostedScreen:false,platformDomainWorkspace:platform,aws:{accessKeyId:'fixture',secretAccessKey:'fixture'}});
+      runtime.config.dispatch.rateFactor=1.1;
+      runtime.config.dispatch.probationBudget={hourly:2000,daily:10000};
+      runtime.feedback={enqueue:async()=>{}};
+    }
+    cleanup(t,async()=>{
+      await Promise.all(workers.map(w=>w.close()));
+      for(const table of ['sending_email_events','operation_events','sending_emails','sending_region_limits','sending_stream_depth','sending_campaigns','domain_claims','provider_connections','api_keys','ses_installation_settings'])
+        await db.query('DELETE FROM '+table+' WHERE workspace_id=ANY($1)',[owners]);
+      await db.query('DELETE FROM provider_account_limits WHERE aws_account_id=$1',[account]);
+      await db.query('DELETE FROM provider_pool_regions WHERE aws_account_id=$1',[account]);
+      await db.query('DELETE FROM workspaces WHERE id=ANY($1)',[owners]);
+    });
+    await db.query("INSERT INTO provider_pool_regions(region,aws_account_id,sending_state,feedback_topic_arn) VALUES ($1,$2,'ready',$3)",[region,account,`arn:aws:sns:${region}:${account}:test`]);
+    for (const stmt of [
+      'INSERT INTO workspaces(id,name,slug) SELECT w,w,w FROM unnest($1::text[]) w',
+      `INSERT INTO ses_installation_settings(workspace_id,installation_id,default_region,enabled_regions) SELECT w,w,'us-east-1','["us-east-1"]' FROM unnest($1::text[]) w`,
+      "INSERT INTO provider_connections(id,workspace_id,region,state,kind,aws_account_id,tenant_state) SELECT w,w,$2,'ready','shared',$3,'ready' FROM unnest($1::text[]) w",
+      "INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) SELECT w||'.invalid',w,w,'verified' FROM unnest($1::text[]) w",
+      `INSERT INTO api_keys(id,workspace_id,name,hash,prefix,permissions,domains) SELECT w,w,'fixture',w,'fixture','["send"]','[]' FROM unnest($1::text[]) w`,
+    ]) await db.query(stmt,stmt.includes('$3') ? [owners,region,account] : [owners]);
+    await db.query('UPDATE workspaces SET exempt_hosted_quotas=true WHERE id=$1',[platform]);
+    type Seed = {wid:string; id:string; to?:string[]; cc?:string[]; bcc?:string[]; bulk?:boolean};
+    const seed = (rows:Seed[])=>db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated)
+      SELECT id,wid,$1,wid,'from@'||wid||'.invalid',dest,copy,blind,id,jsonb_build_object('kind','transactional','from','from@'||wid||'.invalid','region',$1::text,
+        'to',dest,'cc',copy,'bcc',blind,'replyTo','[]'::jsonb,'headers','[]'::jsonb,'attachments','[]'::jsonb,'subject',id,'text','fixture','tracking',false) ||
+        CASE WHEN bulk THEN '{"bulk":true}'::jsonb ELSE '{}' END,false
+      FROM jsonb_to_recordset($2::jsonb) x(id text,wid text,"to" jsonb,cc jsonb,bcc jsonb,bulk boolean)
+      CROSS JOIN LATERAL (SELECT coalesce("to",'["outside@example.invalid"]') AS dest,coalesce(cc,'[]') AS copy,coalesce(bcc,'[]') AS blind) a`,[region,JSON.stringify(rows)]);
+    const dispatch = (index=0,count=1,options:Partial<import('./src/dispatcher.js').DispatcherOptions>={}) =>
+      runDispatcher(workers[index]!.runtime,{region,accountId:account,shard:{index:index%count,count},lanes:2,...options});
+    const concurrent = () => Promise.all(workers.map((_,i)=>dispatch(i,8)));
+    return {db,tag,owners,platform,workers,calls,seed,dispatch,concurrent,respond:(fn:typeof respond)=>{respond=fn;}};
+  }
+
+  test('probation budget: eight shards and a Node runner share the final credits across fifty senders', async t=>{
+    const f=await probationFixture(t,51,1000),{db,owners,tag}=f;
+    await db.query('TRUNCATE probation_budget_hours');
+    cleanup(t,()=>db.query('TRUNCATE probation_budget_hours').then(()=>{}));
+    for (const w of f.workers) w.runtime.config.dispatch.probationBudget={hourly:101,daily:501};
+    const seeds=owners.slice(1).flatMap(wid=>Array.from({length:8},(_,i)=>({wid,id:wid+'-msg-'+i})));
+    await f.seed(seeds);
+    await Promise.all([f.concurrent(),f.dispatch()]);
+    assert.equal(f.calls.length,101);
+    assert.equal(new Set(f.calls.map(c=>c.id)).size,101);
+    const held=await db.query("SELECT count(*)::int AS n FROM sending_emails WHERE workspace_id=ANY($1) AND status='queued'",[owners]);
+    assert.equal(held.rows[0].n,299);
+    assert.equal((await db.query('SELECT sum(recipients)::int AS n FROM probation_budget_hours')).rows[0].n,101);
+    // Replace the dispatcher and advance the buckets rather than sleep a day.
+    await db.query("UPDATE probation_budget_hours SET hour=hour-interval '3 hours'");
+    await db.query("UPDATE sending_emails SET scheduled_at=NULL WHERE workspace_id=ANY($1) AND status='queued'",[owners]);
+    await f.concurrent(); assert.equal(f.calls.length,202);
+    assert.equal(new Set(f.calls.map(c=>c.id)).size,202);
+    assert.ok(f.calls.every(c=>c.id.startsWith(tag)));
+  });
+
+  test('probation budget: UTC boundary, half-hour and 23-hour-old charges keep the whole trailing window',async t=>{
+    const {db,owners,seed,dispatch,calls,workers}=await probationFixture(t,2);
+    for (const w of workers) w.runtime.config.dispatch.probationBudget={hourly:2000,daily:10000};
+    cleanup(t,()=>db.query('TRUNCATE probation_budget_hours').then(()=>{}));
+    const wid=owners[1]!;
+    for(const [spentAt,asOf,limit] of [
+      ['2030-01-01 12:59Z','2030-01-01 13:01Z',2000],
+      ['2030-01-01 12:59Z','2030-01-01 13:30Z',2000],
+      ['2030-01-01 12:59Z','2030-01-02 12:01Z',10000],
+    ] as const){
+      await db.query('TRUNCATE probation_budget_hours');
+      await db.query("INSERT INTO probation_budget_hours(hour,recipients) VALUES(date_trunc('hour',clock_timestamp(),'UTC')-(date_trunc('hour',$1::timestamptz)-date_trunc('hour',$2::timestamptz)),$3)",[asOf,spentAt,limit]);
+      await seed([{wid,id:unique('edge')}]); await dispatch(); assert.equal(calls.length,0,spentAt+' -> '+asOf);
+    }
+    await db.query("UPDATE probation_budget_hours SET hour=hour-interval '26 hours'");
+    await db.query("UPDATE sending_emails SET scheduled_at=NULL WHERE workspace_id=$1",[wid]);
+    await dispatch();assert.equal(calls.length,3);
+  });
+
+  test('probation budget: mixed recipients pay only outside cost; members, good standing and platform bypass the brake', async t=>{
+    const {db,workers,owners,platform,seed,dispatch,calls}=await probationFixture(t,3);
+    const [,wid,good]=owners as [string,string,string],member=manager!.email;
+    await db.query('TRUNCATE probation_budget_hours');cleanup(t,()=>db.query('TRUNCATE probation_budget_hours').then(()=>{}));
+    for(const w of workers) w.runtime.config.dispatch.probationBudget={hourly:50,daily:100};
+    await db.query("INSERT INTO workspace_members(id,user_id,workspace_id,role) VALUES($1,$2,$3,'member')",[unique('m'),manager!.userId,wid]);
+    await db.query("INSERT INTO sender_standing(workspace_id,phase,daily_limit) VALUES($1,'graded',NULL) ON CONFLICT(workspace_id) DO UPDATE SET phase='graded',daily_limit=NULL",[good]);
+    await seed([{wid,id:unique('mixed'),to:[member.toUpperCase()],cc:['outside1@example.invalid'],bcc:['outside2@example.invalid']}]);await dispatch();
+    assert.equal(calls.length,1);assert.equal(calls[0]!.destinations,3);
+    assert.equal((await db.query("SELECT probation_cost FROM sending_email_events WHERE email_id=$1 AND type='dispatch_attempt'",[calls[0]!.id])).rows[0].probation_cost,2);
+    assert.equal((await db.query('SELECT sum(recipients)::int AS n FROM probation_budget_hours')).rows[0].n,2);
+    await db.query("UPDATE probation_budget_hours SET recipients=50 WHERE hour=date_trunc('hour',clock_timestamp(),'UTC')");
+    const own=unique('own'),first=unique('platform'),graded=unique('graded'),outside=unique('wait');
+    await seed([{wid,id:outside},{wid,id:own,to:[member]},{wid:good,id:graded},{wid:platform,id:first}]);await dispatch();
+    assert.deepEqual(calls.slice(1).map(c=>c.id).sort(),[own,graded,first].sort());
+    assert.equal((await db.query('SELECT sum(recipients)::int AS n FROM probation_budget_hours')).rows[0].n,50);
+    assert.deepEqual((await db.query('SELECT status,attempt_started_at,provider_id FROM sending_emails WHERE id=$1',[outside])).rows,[{status:'queued',attempt_started_at:null,provider_id:null}]);
+    assert.deepEqual((await db.query('SELECT type FROM sending_email_events WHERE email_id=$1',[outside])).rows,[{type:'dispatch_deferred'}]);
+    assert.equal((await db.query("SELECT FROM operation_events WHERE data->>'emailId'=$1",[outside])).rowCount,0);
+  });
+
+  test('probation budget: a standing or verified membership change after lease takes effect at claim',async t=>{
+    const {db,owners,workers,seed,calls,dispatch}=await probationFixture(t,5);
+    const [,up,down,join,leave]=owners as [string,string,string,string,string];
+    const member=manager!.email,user=manager!.userId;
+    await db.query('TRUNCATE probation_budget_hours');
+    cleanup(t,()=>db.query('TRUNCATE probation_budget_hours').then(()=>{}));
+    await db.query("INSERT INTO probation_budget_hours(hour,recipients) VALUES(date_trunc('hour',now(),'UTC'),2000)");
+    const grade=(wid:string)=>db.query("INSERT INTO sender_standing(workspace_id,phase,daily_limit) VALUES($1,'graded',NULL) ON CONFLICT(workspace_id) DO UPDATE SET phase='graded',daily_limit=NULL",[wid]);
+    const add=(wid:string)=>db.query("INSERT INTO workspace_members(id,workspace_id,user_id,role) VALUES($1,$2,$3,'member')",[unique('member'),wid,user]);
+    await grade(down);await add(leave);
+    await seed([{wid:up,id:up},{wid:down,id:down},{wid:join,id:join,to:[member]},{wid:leave,id:leave,to:[member]}]);
+    const runtime=workers[0]!.runtime,execute=runtime.db.execute.bind(runtime.db);let changed=false;
+    t.mock.method(runtime.db,'execute',async (...args:Parameters<typeof execute>)=>{
+      const result=await execute(...args);
+      if(!changed && result.rows.some(r=>r.id===up && 'on_probation' in r)){
+        changed=true;
+        await grade(up);
+        await db.query("UPDATE sender_standing SET growth_until=now()+interval '1 day' WHERE workspace_id=$1",[down]);
+        await add(join);await db.query('DELETE FROM workspace_members WHERE workspace_id=$1 AND user_id=$2',[leave,user]);
+      }
+      return result;
+    });
+    await dispatch(0,1,{lanes:1,batchSize:24});assert.ok(changed);
+    assert.deepEqual(calls.map(c=>c.id).sort(),[up,join].sort());
+    await db.query("UPDATE sender_standing SET growth_until=NULL,daily_limit=100 WHERE workspace_id=$1",[down]);
+    await db.query('UPDATE sending_emails SET scheduled_at=NULL WHERE id=$1',[down]);
+    await dispatch(1);assert.ok(!calls.some(c=>c.id===down),'low standing remains metered');
+  });
+
+  test('probation budget: campaigns cannot spend the sign-in reserve; operators get one card per condition',async t=>{
+    const {db,workers,owners,seed,dispatch,calls}=await probationFixture(t,3);
+    const [,wid,tx]=owners as [string,string,string];
+    await db.query('TRUNCATE probation_budget_hours');
+    const kinds=['probation_budget_half','probation_mail_waiting'];
+    cleanup(t,async()=>{await db.query('TRUNCATE probation_budget_hours');await db.query("DELETE FROM jobs WHERE payload->>'kind'=ANY($1)",[kinds]);});
+    for(const w of workers){w.runtime.config.dispatch.probationBudget={hourly:50,daily:100};w.runtime.config.operatorSlackWebhookUrl='https://example.invalid/not-sent';}
+    const seedHour=()=>db.query("INSERT INTO probation_budget_hours(hour,recipients) VALUES(date_trunc('hour',clock_timestamp(),'UTC'),24)");
+    await seedHour();
+    const campaign=unique('campaign');
+    await db.query("INSERT INTO sending_campaigns(id,workspace_id,draft,state,total,prepared,expanded,review_id) VALUES($1,$2,'{}','sending',24,24,23,'fixture-review')",[campaign,wid]);
+    await seed(Array.from({length:22},(_,i)=>({wid,id:wid+'-bulk'+i,bulk:true})));
+    await db.query('UPDATE sending_emails SET campaign_id=$1 WHERE workspace_id=$2 AND id LIKE $3',[campaign,wid,'%bulk0']);
+    await dispatch();assert.equal(calls.length,21);
+    const signin=unique('signin');await seed([{wid:tx,id:signin}]);await dispatch();assert.ok(calls.some(c=>c.id===signin));
+    await db.query("UPDATE sending_emails SET scheduled_at=NULL WHERE workspace_id=$1 AND status='queued'",[wid]);
+    await dispatch();
+    assert.deepEqual((await db.query("SELECT payload->>'kind' AS kind,count(*)::int AS n FROM jobs WHERE payload->>'kind'=ANY($1) GROUP BY 1 ORDER BY 1",[kinds])).rows,kinds.map(kind=>({kind,n:1})));
+    const {operatorCard}=await import('./src/operator-alerts.js');
+    const cards=(await db.query("SELECT payload FROM jobs WHERE payload->>'kind'=ANY($1) ORDER BY payload->>'kind'",[kinds])).rows;
+    const words=cards.map(r=>operatorCard('https://example.invalid',r.payload,{id:'platform',name:null})?.text);
+    assert.match(words[0]!,/^Probation sending budget at 50%: Hour: \d+ of 50\./);
+    assert.match(words[1]!,/^Probation mail waiting: 1 email from 1 workspace waiting; capacity is checked again at \d\d:00 UTC\.$/);
+    // A direct-address campaign without any bulk marker is held at the same floor.
+    const campaignMail=unique('campaign-mail');
+    await seed([{wid,id:campaignMail}]);
+    await db.query('UPDATE sending_emails SET campaign_id=$1 WHERE id=$2',[campaign,campaignMail]);
+    await dispatch(); assert.ok(!calls.some(c=>c.id===campaignMail));
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM sending_email_events WHERE workspace_id=$1 AND type='dispatch_deferred'",[wid])).rows[0].n,2);
+    // A full earlier day binds even with a nearly empty hour; both windows recover together.
+    await db.query("UPDATE probation_budget_hours SET hour=hour-interval '26 hours'");
+    await db.query("INSERT INTO probation_budget_hours(hour,recipients) VALUES(date_trunc('hour',clock_timestamp(),'UTC')-interval '5 hours',90)");
+    await db.query('UPDATE sending_emails SET scheduled_at=NULL WHERE id=$1',[campaignMail]);
+    await dispatch();
+    assert.ok(!calls.some(c=>c.id===campaignMail));
+    const reserve=unique('reserve');
+    await seed([{wid:tx,id:reserve}]); await dispatch(); assert.ok(calls.some(c=>c.id===reserve));
+    assert.equal((await db.query("SELECT count(*)::int n FROM jobs WHERE payload->>'kind'=$1",[kinds[1]])).rows[0].n,1);
+  });
+
+  test('probation budget: missing, locked and timed-out debits hold only outside mail and recover on restart',async t=>{
+    const f=await probationFixture(t,3),{db,owners,platform,workers,seed,calls,dispatch}=f;
+    const [,wid,good]=owners as [string,string,string];
+    await db.query('TRUNCATE probation_budget_hours');cleanup(t,()=>db.query('TRUNCATE probation_budget_hours').then(()=>{}));
+    await db.query("INSERT INTO sender_standing(workspace_id,phase,daily_limit) VALUES($1,'graded',NULL) ON CONFLICT(workspace_id) DO UPDATE SET phase='graded',daily_limit=NULL",[good]);
+    await db.query("INSERT INTO workspace_members(id,user_id,workspace_id,role) VALUES($1,$2,$3,'member')",[unique('member'),manager!.userId,wid]);
+    const locker=await fixtureDatabase(t);
+    for(const fault of ['missing','lock','timeout'] as const){
+      const id=unique('outside'),own=unique('own'),first=unique('platform'),graded=unique('good'),before=calls.length;
+      await seed([{wid,id},{wid,id:own,to:[manager!.email]},{wid:platform,id:first},{wid:good,id:graded}]);
+      try {
+        if(fault==='missing') await db.query('ALTER TABLE probation_budget_hours RENAME TO probation_budget_offline');
+        if(fault==='lock'){await locker.query('BEGIN');await locker.query('LOCK TABLE probation_budget_hours IN ACCESS EXCLUSIVE MODE');}
+        if(fault==='timeout'){
+          await db.query("CREATE FUNCTION fixture_slow_probation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN PERFORM pg_sleep(3); RETURN NEW; END $$");
+          await db.query("CREATE TRIGGER slow_claim BEFORE UPDATE ON probation_budget_hours FOR EACH ROW EXECUTE FUNCTION fixture_slow_probation()");
+        }
+        const {initialGate}=await import('./src/dispatcher.js'),gate=initialGate();
+        const start=performance.now();const report=await dispatch(0,1,{gate});assert.equal(gate.dailyBlockedUntil,undefined);
+        assert.ok(performance.now()-start<5000,fault+' bounded');
+        assert.deepEqual(calls.slice(before).map(c=>c.id).sort(),[own,first,graded].sort(),fault);
+        assert.equal(report.quotaRetryAt,undefined);
+        const held=await db.query("SELECT status,attempt_started_at,scheduled_at>now() AS later FROM sending_emails WHERE id=$1",[id]);
+        assert.deepEqual(held.rows,[{status:'queued',attempt_started_at:null,later:true}]);
+      }finally{
+        if(fault==='missing')await db.query('ALTER TABLE probation_budget_offline RENAME TO probation_budget_hours');
+        if(fault==='lock')await locker.query('ROLLBACK');
+        if(fault==='timeout')await db.query('DROP FUNCTION fixture_slow_probation() CASCADE');
+      }
+      const delay=(await db.query('SELECT ceil(1000*extract(epoch FROM scheduled_at-clock_timestamp()))::int AS ms FROM sending_emails WHERE id=$1',[id])).rows[0].ms;
+      await new Promise(r=>setTimeout(r,Math.max(0,delay)+10)); await dispatch(1);
+      assert.equal(calls.filter(c=>c.id===id).length,1);
+    }
+  });
+
+  test('probation budget: definite refusal and throttled retry refund once; ambiguous acceptance stays charged after restart',async t=>{
+    const f=await probationFixture(t,2),{db,owners,seed,respond,dispatch,calls}=f,wid=owners[1]!;
+    await db.query('TRUNCATE probation_budget_hours');cleanup(t,()=>db.query('TRUNCATE probation_budget_hours').then(()=>{}));
+    const total=async()=>(await db.query('SELECT coalesce(sum(recipients),0)::int n FROM probation_budget_hours')).rows[0].n;
+    const id=unique('retry');await seed([{wid,id}]);
+    // Advance the fixture across a UTC hour while the provider has the envelope.
+    // The debit and attempt start move together; a new hour has unrelated usage.
+    respond(async()=>{
+      await db.query("UPDATE probation_budget_hours SET hour=hour-interval '1 hour'");
+      await db.query("UPDATE sending_email_events SET probation_hour=probation_hour-interval '1 hour' WHERE email_id=$1 AND type='dispatch_attempt'",[id]);
+      await db.query("INSERT INTO probation_budget_hours(hour,recipients) VALUES(date_trunc('hour',now(),'UTC'),11)");
+      throw Object.assign(new Error('Refused'),{$metadata:{httpStatusCode:429}});});await dispatch();
+    assert.deepEqual((await db.query('SELECT recipients::int AS n FROM probation_budget_hours ORDER BY hour')).rows,[{n:0},{n:11}]);
+    await db.query('UPDATE probation_budget_hours SET recipients=0 WHERE recipients=11');
+    const replay=await db.query(`INSERT INTO sending_email_events(id,workspace_id,email_id,type,external_id,data,simulated)
+      /* premerge-accepted: never (provider_throttled) */
+      SELECT public.row_id('event'),workspace_id,email_id,'provider_throttled',external_id,data,false FROM sending_email_events
+      WHERE email_id=$1 AND type='provider_throttled' ON CONFLICT DO NOTHING`,[id]);
+    assert.equal(replay.rowCount,0);assert.equal(await total(),0);
+    await db.query('UPDATE sending_emails SET scheduled_at=NULL WHERE id=$1',[id]);respond(async()=>{});await dispatch(1);
+    assert.equal(await total(),1);assert.equal(calls.filter(c=>c.id===id).length,2);
+    const {SesBodyError}=await import('./src/ses-body.js');
+    const uncalled=unique('uncalled');await seed([{wid,id:uncalled}]);respond(async()=>{throw new SesBodyError('fixture: unbuilt request');});await dispatch();
+    assert.equal(await total(),1);
+    assert.equal((await db.query("SELECT data->'providerCalled' AS called FROM sending_email_events WHERE email_id=$1 AND type='reject'",[uncalled])).rows[0].called,false);
+    const refused=unique('refused');await seed([{wid,id:refused}]);respond(async()=>{throw Object.assign(new Error('Rejected'),{$metadata:{httpStatusCode:400}});});await dispatch();
+    assert.equal(await total(),1);
+    const unknown=unique('unknown');await seed([{wid,id:unknown}]);respond(async()=>{throw new Error('No definitive response');});await dispatch();await dispatch(1);
+    assert.equal(await total(),2);assert.equal(calls.filter(c=>c.id===unknown).length,1);
+    assert.equal((await db.query('SELECT status FROM sending_emails WHERE id=$1',[unknown])).rows[0].status,'acceptance_unknown');
+  });
+
+  test('probation budget: losing the outcome writer after SES keeps the original charge through stale-attempt recovery',async t=>{
+    const {db,owners,workers,seed,dispatch,calls}=await probationFixture(t,2);
+    const wid=owners[1]!,id=unique('interrupted'),runtime=workers[0]!.runtime;
+    await db.query('TRUNCATE probation_budget_hours');cleanup(t,()=>db.query('TRUNCATE probation_budget_hours').then(()=>{}));
+    const {PgDialect}=await import('drizzle-orm/pg-core'),dialect=new PgDialect(),execute=runtime.db.execute.bind(runtime.db);
+    t.mock.method(runtime.db,'execute',async (query:Parameters<typeof execute>[0])=>{
+      const stmt=dialect.sqlToQuery((query as {getSQL():import('drizzle-orm').SQL}).getSQL());
+      if(stmt.params.some(v=>typeof v==='string' && v.includes('attempt-result:'+id))) throw Error('fixture: writer exited');
+      return execute(query);
+    });
+    await seed([{wid,id}]); await assert.rejects(dispatch(),/writer exited/);
+    assert.equal((await db.query("UPDATE sending_emails SET attempt_started_at=now()-interval '4 minutes' WHERE id=$1 AND status='attempting'",[id])).rowCount,1);
+    const {dispatchPartitions}=await import('./src/dispatch.js');
+    await dispatchPartitions(workers[1]!.runtime,true);await dispatch(1);
+    assert.equal(calls.filter(c=>c.id===id).length,1);
+    assert.equal((await db.query('SELECT status FROM sending_emails WHERE id=$1',[id])).rows[0].status,'acceptance_unknown');
+    assert.equal((await db.query('SELECT sum(recipients)::int n FROM probation_budget_hours')).rows[0].n,1);
+  });
+
+  test('probation budget: a locked, lowered or missing refund bucket never blocks saving exempt outcomes',async t=>{
+    const f=await probationFixture(t,2,1000),{db,owners,platform}=f,wid=owners[1]!;
+    const holder=await fixtureDatabase(t);
+    cleanup(t,()=>db.query('TRUNCATE probation_budget_hours').then(()=>{}));
+    for (const fault of ['healthy','locked','lowered','missing']){
+      await db.query('TRUNCATE probation_budget_hours');
+      const id=unique('refusal'),exempt=Array.from({length:60},()=>unique('platform'));
+      await f.seed([{wid,id}]);await f.seed(exempt.map(id=>({wid:platform,id})));
+      f.respond(async email=>{
+        if(email!==id)return;
+        if(fault==='locked') {
+          await holder.query("BEGIN; SET LOCAL idle_in_transaction_session_timeout='8s'; LOCK TABLE probation_budget_hours IN ACCESS EXCLUSIVE MODE");
+        } else if(fault==='missing') await db.query('DELETE FROM probation_budget_hours');
+        else if(fault==='lowered') await db.query('UPDATE probation_budget_hours SET recipients=0');
+        throw Object.assign(new Error('definite refusal'),{$metadata:{httpStatusCode:400}});
+      });
+      const start=performance.now();
+      try {
+        await f.dispatch();
+        const elapsed=performance.now()-start;
+        assert.equal((await db.query("SELECT count(*)::int n FROM sending_emails WHERE id=ANY($1) AND status='accepted'",[exempt])).rows[0].n,60);
+        assert.equal((await db.query("SELECT status FROM sending_emails WHERE id=$1",[id])).rows[0].status,'rejected');
+        assert.ok(elapsed<2000,fault+' took '+elapsed+'ms');
+        t.diagnostic(fault+': all 60 platform results durable in '+Math.round(elapsed)+'ms');
+      } finally {if(fault==='locked')await holder.query('ROLLBACK');}
+      assert.equal((await db.query('SELECT coalesce(sum(recipients),0)::int n FROM probation_budget_hours')).rows[0].n,fault==='locked'?1:0);
+      assert.equal((await db.query("SELECT probation_refund_owed FROM sending_email_events WHERE email_id=$1 AND type='dispatch_attempt'",[id])).rows[0].probation_refund_owed,fault!=='healthy');
+    }
+  });
+
+  test('probation budget: arbitrary SQL and JS errors, missing function, null and malformed decisions fail closed once per run',async t=>{
+    const f=await probationFixture(t,3,1000),{db,owners,platform}=f,[,wid,good]=owners as [string,string,string];
+    const sig='probation_claim(jsonb,integer,integer)',original=(await db.query('SELECT pg_get_functiondef($1::regprocedure) AS def',[sig])).rows[0].def;
+    await db.query("INSERT INTO sender_standing(workspace_id,phase,daily_limit) VALUES($1,'graded',NULL) ON CONFLICT(workspace_id) DO UPDATE SET phase='graded',daily_limit=NULL",[good]);
+    await db.query('TRUNCATE probation_budget_hours');
+    cleanup(t,async()=>{await db.query(original);await db.query('TRUNCATE probation_budget_hours');});
+    const warnings=t.mock.method(console,'warn');
+    for(const fault of ['raise','null','wrong','absent','js']){
+      const outside=Array.from({length:12},()=>unique('meter')),exempt=Array.from({length:70},()=>unique('exempt'));
+      await f.seed([...outside.map(id=>({wid,id})),...exempt.map((id,i)=>({wid:i%2?platform:good,id}))]);
+      const begin='CREATE OR REPLACE FUNCTION probation_claim(batch jsonb,hourly integer,daily integer) RETURNS TABLE (id text, reason text, charged_hour timestamptz, outside_cost integer, card jsonb) LANGUAGE plpgsql VOLATILE AS $$ BEGIN ';
+      if(fault==='absent')await db.query('DROP FUNCTION '+sig);
+      if(fault==='raise')await db.query(begin+"RAISE EXCEPTION 'synthetic unexpected SQLSTATE'; END $$");
+      if(fault==='null')await db.query(begin+'RETURN NEXT; END $$');
+      if(fault==='wrong')await db.query(begin+"RETURN QUERY SELECT x.id,NULL::text,date_trunc('hour',now(),'UTC'),0,'{}'::jsonb FROM jsonb_to_recordset(batch) x(id text); END $$");
+      const run=f.workers[0]!.runtime;
+      const transact=run.db.transaction.bind(run.db);
+      const js=fault==='js'?t.mock.method(run.db,'transaction',async (...args:Parameters<typeof transact>)=>{
+        if(String(args[0]).includes('claimGroup')) throw new TypeError('synthetic meter failure');
+        return transact(...args);
+      }):undefined;
+      const before=warnings.mock.callCount(),start=performance.now();
+      try {await f.dispatch();} finally {js?.mock.restore();await db.query(original);}
+      assert.ok(performance.now()-start<2000,fault);
+      assert.equal((await db.query("SELECT count(*)::int n FROM sending_emails WHERE id=ANY($1) AND status='accepted'",[exempt])).rows[0].n,70,fault);
+      assert.equal(warnings.mock.calls.slice(before).filter(c=>String(c.arguments[0]).includes('PROBATION_BUDGET_UNAVAILABLE')).length,1,fault);
+      assert.equal((await db.query("SELECT count(*)::int n FROM sending_emails WHERE id=ANY($1) AND status='queued' AND scheduled_at IS NOT NULL AND lease_until IS NULL",[outside])).rows[0].n,12,fault);
+      assert.equal(f.calls.filter(c=>outside.includes(c.id)).length,0,fault);
+      await db.query('UPDATE sending_emails SET scheduled_at=NULL WHERE id=ANY($1)',[outside]);await f.dispatch(1);
+      assert.equal(f.calls.filter(c=>outside.includes(c.id)).length,12,fault);
+      await db.query('DELETE FROM hosted_burst_windows WHERE workspace_id=$1',[wid]);
+    }
+  });
+
+  test('probation budget backlog: compare full, idle and rollover runs with the same unmetered queue on dev',{skip:!process.env.NIGHTMAIL_PROBATION_BACKLOG},async t=>{
+    const base=process.env.NIGHTMAIL_PROBATION_BASE==='1';
+    const cases=[[50,0],[50,1000],[50,4000],[50,25000],[10000,10000],[1,500]] as const;
+    for(const [workspaces,n] of cases) for(const rollover of (n===25000?[false,true]:[false])){
+      const scenario=rollover?'rollover':String(n);
+      if(!['all',scenario].includes(process.env.NIGHTMAIL_PROBATION_BACKLOG!)) continue;
+      await t.test(scenario,async t=>{
+        const f=await probationFixture(t,workspaces+2,1000),{db,owners,platform}=f;
+        const good=owners.at(-1)!,ring=owners.slice(1,-1);
+        await db.query("SET statement_timeout='120s'");
+        // Set the existing synthetic workspace allowance high enough for dev to drain
+        // the identical offered queue without encountering an unrelated minute cap.
+        await db.query('UPDATE workspaces SET send_cap_override=3000000 WHERE id=ANY($1)',[ring]);
+        await db.query("INSERT INTO sender_standing(workspace_id,phase,daily_limit) VALUES($1,'graded',NULL) ON CONFLICT(workspace_id) DO UPDATE SET phase='graded',daily_limit=NULL",[good]);
+        if(!base){
+          await db.query('TRUNCATE probation_budget_hours');cleanup(t,()=>db.query('TRUNCATE probation_budget_hours').then(()=>{}));
+          await db.query("INSERT INTO probation_budget_hours(hour,recipients) VALUES(date_trunc('hour',now(),'UTC')-$1::interval,2000)",[rollover?'2 hours':'1 hour']);
+        }
+        const offered=Array.from({length:n},(_,i)=>({wid:ring[i%workspaces]!,id:f.tag+'-outside-'+String(i).padStart(5,'0')}));
+        for(let i=0;i<n;i+=1000)await f.seed(offered.slice(i,i+1000));
+        if(rollover)await db.query("UPDATE sending_emails SET scheduled_at=now()-interval '1 second',error_code='PROBATION_BUDGET_WAIT' WHERE workspace_id=ANY($1) AND status='queued'",[ring]);
+        const member=n===500?unique('member-msg'):null;
+        if(member){
+          await db.query("INSERT INTO workspace_members(id,user_id,workspace_id,role) VALUES($1,$2,$3,'member')",[unique('member'),manager!.userId,ring[0]]);
+          await f.seed([{wid:ring[0]!,id:member,to:[manager!.email]}]);
+        }
+        await db.query('ANALYZE sending_emails; ANALYZE workspaces; ANALYZE provider_connections; ANALYZE provider_connection_regions');
+        let trips=0,debits=0,parks=0,maxPark=0;
+        const original=pg.Client.prototype.query;
+        // Count at the wire without retaining every large SQL string in a mock's call history.
+        pg.Client.prototype.query=function(this:pg.Client,...args:any[]){
+          const text=typeof args[0]==='string'?args[0]:args[0]?.text;
+          trips++;
+          if(text?.includes('CROSS JOIN LATERAL probation_claim'))debits++;
+          if(text?.includes("budget AS MATERIALIZED (SELECT id,'PROBATION_BUDGET_WAIT' AS reason")){
+            parks++;
+            const params=args[0]?.values??args[1];
+            const rows=params.find((v:unknown)=>typeof v==='string' && v.startsWith('[{') && v.includes('"dispatch_version"'));
+            maxPark=Math.max(maxPark,JSON.parse(rows).length);
+          }
+          return (original as Function).apply(this,args);
+        } as typeof original;
+        try {
+          for(const first of [true,false]){
+            await f.seed(Array.from({length:40},(_,i)=>({wid:i%2?good:platform,id:unique('newer')})));
+            const start=performance.now(),from=f.calls.length;
+            trips=debits=parks=maxPark=0;
+            const report=await f.dispatch(0,1,{lanes:1});
+            const elapsed=Math.round(performance.now()-start),sent=f.calls.slice(from);
+            const last=(wid:string)=>Math.round(sent.filter(c=>c.wid===wid).at(-1)!.time-start);
+            const outside=sent.filter(c=>c.wid!==good && c.wid!==platform && c.id!==member).length;
+            const phase=first?(rollover?'rollover':'first'):'next';
+            const row={version:base?'dev':'pr',workspaces,n,phase,elapsed,trips,leases:report.batches,debits,parks,maxPark,
+              platform:last(platform),good:last(good),member:member && first?Math.round(sent.find(c=>c.id===member)!.time-start):null,outside};
+            console.info('PB_BACKLOG '+JSON.stringify(row));
+            assert.equal(sent.filter(c=>c.wid===good).length,20);assert.equal(sent.filter(c=>c.wid===platform).length,20);
+            assert.equal(outside,first?(base?n:rollover?2000:0):0);
+            if(!base){
+              assert.ok(maxPark<=24);assert.ok(parks<=report.batches);
+              if(!rollover || !first)assert.ok(debits<=(first && n?1:0));
+              const queued=(await db.query("SELECT count(*)::int n FROM sending_emails WHERE workspace_id=ANY($1) AND status='queued' AND error_code='PROBATION_BUDGET_WAIT' AND scheduled_at>now()",[ring])).rows[0].n;
+              assert.equal(queued,n-(rollover?2000:0));
+            }
+          }
+        }finally{pg.Client.prototype.query=original;}
+      });
+    }
+  });
+
+  test('probation budget mixed throughput: eight shards at 170ms, saturated new senders alongside platform mail',{skip:process.env.NIGHTMAIL_PROBATION_BENCH!=='1'},async t=>{
+    for (const saturated of [true,false]) for (const [quota,n] of [[50,250],[200,1000],[1000,1500]] as const) {
+      await t.test((saturated?'full':'open')+' quota '+quota,async t=>{
+        const f=await probationFixture(t,33,quota),{db,platform,owners,seed,respond,concurrent,calls}=f;
+        const version=process.env.NIGHTMAIL_PROBATION_BASE==='1'?'base':'branch';
+        if(version==='branch') {
+          await db.query('TRUNCATE probation_budget_hours');
+          if(saturated) await db.query("INSERT INTO probation_budget_hours(hour,recipients) VALUES(date_trunc('hour',now(),'UTC'),2000)");
+        }
+        const rows=Array.from({length:n},(_,i)=>({wid:i%2===0?platform:owners[1+(i>>1)%32]!,id:'probation-bench-'+i.toString().padStart(5,'0')}));
+        await seed(rows);respond(async()=>{await new Promise(r=>setTimeout(r,170));});
+        const clientQuery=pg.Client.prototype.query;let exemptClaims=0,sharedClaims=0,controlTrips=0;
+        t.mock.method(pg.Client.prototype,'query',function(this:pg.Client,...args:any[]){
+          const q=typeof args[0]==='string'?args[0]:args[0]?.text;
+          if (/^(begin|commit|rollback)$|^SELECT set_config\('lock_timeout'/i.test(q?.trim())) controlTrips++;
+          if(q?.includes('key_state AS MATERIALIZED') && q.includes('attempt AS (')){
+            const values=args[0]?.values ?? args[1];
+            const ids=Array.isArray(values)?values.find(v=>typeof v==='string' && v.startsWith('[{') && v.includes('"dispatch_version"')):null;
+            if(ids && JSON.parse(ids).some((x:Json)=>x.workspace_id===platform)) exemptClaims++;
+            else sharedClaims++;
+          }
+          return (clientQuery as Function).apply(this,args);
+        });
+        const start=performance.now();await concurrent();
+        const elapsed=performance.now()-start,exempt=calls.filter(c=>c.wid===platform);
+        assert.equal(exempt.length,n/2);assert.equal(calls.length,saturated && version==='branch'?n/2:n);
+        assert.ok(exemptClaims>0);
+        t.diagnostic('PROBATION_BENCH '+JSON.stringify({version,saturated,quota,exempt:exempt.length,exemptPerSecond:exempt.length*1000/(exempt.at(-1)!.time+170-start),overallPerSecond:calls.length*1000/elapsed,exemptClaims,sharedClaims,controlTrips}));
+      });
+    }
+  });
+
   test('eight dispatch shards at 170ms synthetic SES latency measure per-shard capacity',async t=>{
     const db=await fixtureDatabase(t),wid=unique('bench-capacity'),region='ap-south-2';
     const [{nodeRuntime},{runDispatcher}]=await Promise.all([import('./src/adapters/node.js'),import('./src/dispatcher.js')]);

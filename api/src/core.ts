@@ -197,7 +197,7 @@ export interface Config {
   liveEnabled: boolean;
   simulatedSes: { latencyMs: number; maxSendRate: number; deliveryDelayMs: number };
   // Pacing target relative to the provider quota: factor (1.1 aims 10% above) and an optional absolute live rate.
-  dispatch: { rateFactor: number; txReservePercent?: number; targetRate?: number; dailyHeadroomPercent: number; customerSharePercent: number };
+  dispatch: { probationBudget?: { hourly: number; daily: number }; rateFactor: number; txReservePercent?: number; targetRate?: number; dailyHeadroomPercent: number; customerSharePercent: number };
   encryptionKey: string;
   previousEncryptionKey?: string;
   awsAccountId?: string;

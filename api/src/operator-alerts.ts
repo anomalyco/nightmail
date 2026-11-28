@@ -37,6 +37,8 @@ const CARDS = {
   marketing_held: { emoji: ':mega:', label: 'Marketing on hold' },
   amazon_paused: { emoji: ':cloud:', label: 'Amazon paused' },
   daily_limit: { emoji: ':no_entry_sign:', label: 'Daily limit' },
+  probation_budget_half: { emoji: ':bucket:', label: 'Probation sending budget at 50%' },
+  probation_mail_waiting: { emoji: ':hourglass_flowing_sand:', label: 'Probation mail waiting' },
   share_full: { emoji: ':bucket:', label: 'Customer share full' },
   signin_slow: { emoji: ':snail:', label: 'Sign-in mail slow' },
   signups_low: { emoji: ':hourglass_flowing_sand:', label: 'Sign-ups nearly full' },
@@ -46,7 +48,7 @@ const CARDS = {
   amazon_account: { emoji: ':cloud:', label: 'Amazon account' },
 } as const;
 // The installation's own cards, about no one workspace: queued under 'platform' and opening the Operator area.
-const PLATFORM_KINDS = new Set<string>(['share_full', 'signin_slow', 'signups_low', 'signups_full', 'support_ai_cost', 'amazon_account']);
+const PLATFORM_KINDS = new Set<string>(['probation_budget_half', 'probation_mail_waiting', 'share_full', 'signin_slow', 'signups_low', 'signups_full', 'support_ai_cost', 'amazon_account']);
 const RAISE = 'Raise the limit in Operator → Sign-ups.';
 type Kind = keyof typeof CARDS;
 const REASONS = { bounces: 'too many bounces', complaints: 'too many spam complaints', screen: 'too much mail flagged as spam', review: 'after a review' } as const;
@@ -94,6 +96,11 @@ export function operatorCard(publicUrl: string, p: Record<string, unknown>, work
     : kind === 'marketing_held' ? `${name}.`
     : kind === 'amazon_paused' ? `${name}${typeof p.region === 'string' && p.region ? `, ${p.region}` : ''}.`
     : kind === 'daily_limit' && whole(p.used) && whole(p.limit) ? `${name}, ${count(p.used)} of ${count(p.limit)}.`
+    : kind === 'probation_budget_half' && whole(p.hour) && whole(p.day) && whole(p.hourly) && whole(p.daily)
+      ? [Number(p.hour)*2 >= Number(p.hourly) && `Hour: ${count(p.hour)} of ${count(p.hourly)}.`,
+         Number(p.day)*2 >= Number(p.daily) && `Day: ${count(p.day)} of ${count(p.daily)}.`].filter(Boolean).join(' ')
+    : kind === 'probation_mail_waiting' && whole(p.mail) && whole(p.owners) && typeof p.until==='string' && Number.isFinite(Date.parse(p.until))
+      ? `${count(p.mail)} ${p.mail===1?'email':'emails'} from ${count(p.owners)} ${p.owners===1?'workspace':'workspaces'} waiting; capacity is checked again at ${new Date(p.until).toISOString().slice(11,16)} UTC.`
     : kind === 'share_full' && whole(p.used) && whole(p.share) ? `${count(p.used)} of ${count(p.share)}.`
     : kind === 'signin_slow' && whole(p.slow) && whole(p.mail) && Number(p.slow) > 0 ? `${share(Number(p.slow), Number(p.mail))} over ${SLOW_SIGN_IN.seconds} seconds.`
     : kind === 'signups_low' && whole(p.open) && whole(p.limit) ? `${count(p.open)} of ${count(p.limit)} places left. ${RAISE}`
@@ -195,6 +202,15 @@ export async function dailyLimitAlert(runtime: Runtime, workspaceId: string) {
 export function supportCostAlert(db: DbExecutor, costUsd: number, lineUsd: number) {
   const day = new Date().toISOString().slice(0, 10);
   return queue(db, PLATFORM, 'support_ai_cost', { cents: Math.round(costUsd * 100), lineCents: Math.round(lineUsd * 100) }, { daily: false, episode: day });
+}
+
+export async function probationBudgetAlert(runtime: Runtime, db: DbExecutor, card: { hour?:number; day?:number; waiting?:boolean }, episode: string) {
+  const caps = runtime.config.dispatch.probationBudget;
+  if (!caps || !runtime.config.operatorSlackWebhookUrl) return;
+  if (card.hour !== undefined) await queue(db, PLATFORM, 'probation_budget_half', { ...caps, hour:card.hour, day:card.day }, { daily:false, savepoint:true, episode });
+}
+export function probationWaitingAlert(runtime:Runtime, counts:{mail:number;owners:number;until:string}) {
+  return queue(runtime.db,PLATFORM,'probation_mail_waiting',counts,{daily:true});
 }
 
 /** Customer share full: the dispatcher's quota sample that found the share used up when the previous one had not. */
