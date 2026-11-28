@@ -88,7 +88,7 @@ function completeBodies(content: string, links: string, limitBytes: number, scop
   if (Buffer.byteLength(links) > MAX_SIGNAL_BYTES) throw tooManyHosts(links.split('\n').length);
   const bodies: string[] = [], width = MAX_BODY - Buffer.byteLength(prefix);
   let start = 0;
-  do {
+  for (;;) {
     if (bodies.length === most) throw tooLarge(bytes.length, limitBytes, scope);
     let end = Math.min(bytes.length, start + width);
     while (end < bytes.length && (bytes[end]! & 0xc0) === 0x80) end--;
@@ -96,7 +96,7 @@ function completeBodies(content: string, links: string, limitBytes: number, scop
     if (end === bytes.length) break;
     start = end - OVERLAP;
     while ((bytes[start]! & 0xc0) === 0x80) start--;
-  } while (true);
+  }
   return bodies;
 }
 function host(value: string) {

@@ -596,6 +596,32 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
   if (failed === before) console.log(`Announced changes: ${here.size} in ${file}, each announced on its own day.`);
 }
 
+// 15. Oxlint + anti-slop pack (.oxlintrc.json, api/scripts/lint/). Fails on any new diagnostic or any file/rule count
+// exceeding its grandfathered ceiling in api/scripts/lint-baseline.json.
+{
+  try {
+    console.log(execFileSync('node', ['--import', import.meta.resolve('tsx'), 'scripts/check-lint.ts'], { cwd: api, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] }).trimEnd());
+  } catch (error) {
+    const { stdout, stderr } = error as { stdout?: string; stderr?: string };
+    if (stdout?.trim()) console.log(stdout.trimEnd());
+    if (stderr?.trim()) console.error(stderr.trimEnd());
+    fail('Lint', 'Oxlint found diagnostics above api/scripts/lint-baseline.json (see output above). Fix the reported violations and run `bun run lint` in api/.', '.oxlintrc.json');
+  }
+}
+
+// 16. Code organization: non-test files warn > 800 / cap 1,500 lines, test files cap 1,000 lines, folders warn > 40 /
+// cap 60 non-test source files. Existing over-cap files and folders are ratcheted in api/scripts/code-org-exceptions.json.
+{
+  try {
+    console.log(execFileSync('node', ['--import', import.meta.resolve('tsx'), 'scripts/check-code-org.ts'], { cwd: api, encoding: 'utf8', maxBuffer: 64 << 20, stdio: ['ignore', 'pipe', 'pipe'] }).trimEnd());
+  } catch (error) {
+    const { stdout, stderr } = error as { stdout?: string; stderr?: string };
+    if (stdout?.trim()) console.log(stdout.trimEnd());
+    if (stderr?.trim()) console.error(stderr.trimEnd());
+    fail('Code organization', 'A file or folder exceeded its line/breadth cap or ratcheted ceiling in api/scripts/code-org-exceptions.json (see output above). Run `bun run code-org` in api/.', 'api/scripts/code-org-exceptions.json');
+  }
+}
+
 if (failed) {
   console.log(`\n${failed} pre-merge check${failed === 1 ? '' : 's'} failed. docs/ci.md explains each one and how to fix it.`);
   process.exitCode = 1;

@@ -9,7 +9,6 @@ import { request } from '../../data/live'
 import { errorText, type Domain } from '../../data/types'
 import { recordsFor } from '../settings/domain-records'
 import { McpSignInSetup } from './connect-agent'
-import { mcpServerUrl } from '../../../../api/src/mcp-clients'
 import './developer.css'
 import { apiKeyEnv, productName, sdkPackage, secretPrefixes } from '../../../../api/src/brand'
 import { builtinLimitsText } from '../../../../api/src/builtin-limits'
@@ -172,8 +171,7 @@ function PromptBox({ text }: { text: string }) {
 }
 
 // The hosted MCP server, set up as you: the same URL and one-line setups as Connect an agent (connect-agent.tsx).
-// `compact` (onboarding) is the setup alone, without the docs' lead line.
-export function McpSetup({ compact = false }: { compact?: boolean }) {
+export function McpSetup() {
   return <section id="mcp" className="section stack developer-section" aria-label="MCP server">
     <SectionHeader title="MCP server" />
     <McpSignInSetup />

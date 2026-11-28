@@ -7,7 +7,7 @@ import { useResolvedAddresses } from '../../data/addresses'
 import type { Agent, AgentTokenSummary, ApiKey, AppPassword, ApprovalTie } from '../../data/types'
 import { date, shortDateTime } from '../../lib/format'
 import { useCursorPagination } from '../../lib/pagination'
-import { actionLabel } from '../../data/activity'
+import { actionLabel, type AuditEntry } from '../../data/activity'
 import { Who } from './activity'
 import { accessLabel, agentAccess, approvalLabel, connectionTitle, domainScope, mailLabel, protocolLabel } from './key-labels'
 import { settingsColumns, type KeyTypeFilter } from './skeletons'
@@ -211,11 +211,15 @@ function KeyDetails({ row, fields, onClose, onRevoke, onEdit }: { row: Row | nul
   </Dialog>
 }
 
-// What changed in each entry, named by field: "name, domains".
-const fieldWords: Record<string, string> = { name: 'name', permissions: 'permissions', domains: 'domains', access: 'access', expiresAt: 'expiry' }
-function changedFields(summary: Record<string, unknown>) {
-  const before = (summary.before ?? {}) as Record<string, unknown>, after = (summary.after ?? {}) as Record<string, unknown>
-  return Object.keys(fieldWords).filter(field => (field in before || field in after) && JSON.stringify(before[field]) !== JSON.stringify(after[field])).map(field => fieldWords[field]).join(', ')
+// What changed in each entry, named by field: "name, domains". The audit summary keeps each side as JSON (secrets and
+// content removed), so its values stay unknown; only the names matter, and a field changed when its value, printed, differs.
+const fieldWords = { name: 'name', permissions: 'permissions', domains: 'domains', access: 'access', expiresAt: 'expiry' }
+type ChangeField = keyof typeof fieldWords
+type ChangeSide = { name?: unknown; permissions?: unknown; domains?: unknown; access?: unknown; expiresAt?: unknown }
+const changeSide = (value: unknown): ChangeSide => value !== null && typeof value === 'object' ? { ...value } : {}
+function changedFields(summary: AuditEntry['summary']) {
+  const before = changeSide(summary.before), after = changeSide(summary.after)
+  return (Object.keys(fieldWords) as ChangeField[]).filter(field => (field in before || field in after) && JSON.stringify(before[field]) !== JSON.stringify(after[field])).map(field => fieldWords[field]).join(', ')
 }
 function KeyChanges({ keyId }: { keyId: string }) {
   const changes = useApiDef(queries.keyChanges(keyId))

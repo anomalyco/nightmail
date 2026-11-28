@@ -30,7 +30,7 @@ if [[ $GITHUB_EVENT_NAME == merge_group ]]; then
   git diff --name-only --no-renames -z HEAD^1 HEAD -- api/openapi.json >> "$paths"
 fi
 # Advisories are published against unchanged lockfiles, so the audit runs on every PR, queue entry and direct push.
-api=false sdk=false dashboard=false acceptance=false gateway=false support=false audit=true
+api=false sdk=false dashboard=false acceptance=false gateway=false support=false lint=false audit=true
 while IFS= read -r -d '' path; do
   case "$path" in
     .github/workflows/*|.github/actions/*|.github/scripts/*|*/bun.lock|*/bun.lockb|*/Cargo.lock|*/package-lock.json|*/pnpm-lock.yaml|*/yarn.lock) all=true ;;
@@ -39,12 +39,15 @@ while IFS= read -r -d '' path; do
     support/VOICE.md|support/src/*.md) support=true ;;
     api/README.md|docs/mcp-coverage.md) acceptance=true ;;
     *.md) continue ;;
+    .oxlintrc.json) lint=true ;;
     api/*) api=true; acceptance=true ;;
     app/*) dashboard=true ;;
     sdk/*|mcp/*) sdk=true; acceptance=true ;;
-    support/*) support=true ;;
-    gateway/*) gateway=true ;;
-    domain-connect/*|infra/aws-shared/*|infra/pulumi/receiving-alarm.ts|.github/s3-fixture/*) acceptance=true ;;
+    support/*) support=true; lint=true ;;
+    gateway/*) gateway=true; lint=true ;;
+    domain-connect/*|infra/aws-shared/*|infra/pulumi/receiving-alarm.ts) acceptance=true; lint=true ;;
+    infra/*) lint=true ;;
+    .github/s3-fixture/*) acceptance=true ;;
   esac
   case "$path" in
     # The dashboard imports these API modules directly and renders /openapi.json. It does not import sdk/src.
@@ -60,7 +63,7 @@ while IFS= read -r -d '' path; do
 done < "$paths"
 if $all; then api=true; sdk=true; dashboard=true; acceptance=true; gateway=true; support=true; audit=true; fi
 build=false preview=false cls=false
-if $api || $dashboard || $sdk; then build=true; fi
+if $api || $dashboard || $sdk || $lint; then build=true; fi
 if $api || $dashboard; then preview=true; fi
 # The CLS fixture runs this API (migrations, server, read limits) and seeds its tables with raw SQL.
 if $api || $dashboard; then cls=true; fi

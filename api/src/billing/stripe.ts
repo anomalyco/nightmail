@@ -71,7 +71,9 @@ export async function stripeRequest<T extends StripeObject = StripeObject>(cfg: 
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt) await pause(200 * attempt + Math.random() * 200);
     let response: Response;
-    try { response = await fetch(url, { method, headers, body: method === 'POST' ? body : undefined, signal: AbortSignal.timeout(20_000) }); }
+    const init: RequestInit = { method, headers, signal: AbortSignal.timeout(20_000) };
+    if (method === 'POST') init.body = body;
+    try { response = await fetch(url, init); }
     catch { last = new StripeError(0, 'network', undefined, undefined, undefined, 'Stripe did not answer.'); continue; }
     let json: StripeObject | null = null;
     try { json = await response.json() as StripeObject; } catch { /* An error page: classified by status below. */ }

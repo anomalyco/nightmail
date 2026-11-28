@@ -1,0 +1,608 @@
+{
+  "api/src/abuse-alerts.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/account-login.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 4
+  },
+  "api/src/account-notices.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/account-policy.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/adapters/feedback-archive.ts": {
+    "anti-slop(no-unknown-returns)": 1
+  },
+  "api/src/adapters/simulated-ses.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/admission.ts": {
+    "anti-slop(no-unknown-returns)": 3
+  },
+  "api/src/analytics-traffic.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/analytics.ts": {
+    "unicorn(no-new-array)": 1
+  },
+  "api/src/app.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 5,
+    "unicorn(prefer-string-starts-ends-with)": 2
+  },
+  "api/src/audience-query.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/audience.ts": {
+    "anti-slop(no-chained-type-assertions)": 7,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/audit.ts": {
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 4
+  },
+  "api/src/auth.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/billing/cron.ts": {
+    "anti-slop(no-unknown-returns)": 1
+  },
+  "api/src/billing/notify.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/billing/routes.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 4
+  },
+  "api/src/billing/stripe.ts": {
+    "anti-slop(no-unknown-returns)": 2,
+    "anti-slop(no-unsafe-dictionary-type)": 5
+  },
+  "api/src/billing/types.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/bounded-html.ts": {
+    "anti-slop(no-chained-type-assertions)": 4,
+    "anti-slop(no-object-parameters)": 2
+  },
+  "api/src/brand.ts": {
+    "anti-slop(no-object-parameters)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/builtin-domain.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 2,
+    "unicorn(prefer-string-starts-ends-with)": 1
+  },
+  "api/src/byo-regional.ts": {
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 4,
+    "unicorn(prefer-string-starts-ends-with)": 2
+  },
+  "api/src/campaign-blocks.ts": {
+    "unicorn(prefer-string-starts-ends-with)": 3
+  },
+  "api/src/campaign-room.ts": {
+    "anti-slop(no-object-parameters)": 1
+  },
+  "api/src/config.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 3
+  },
+  "api/src/core.ts": {
+    "anti-slop(no-unknown-returns)": 2,
+    "anti-slop(no-unsafe-dictionary-type)": 9,
+    "unicorn(prefer-string-starts-ends-with)": 1
+  },
+  "api/src/db/core.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/db/mailbox.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 6
+  },
+  "api/src/db/operations.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/db/sending.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 5
+  },
+  "api/src/deliverability.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 3
+  },
+  "api/src/disk-alert.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 4
+  },
+  "api/src/dispatcher-do.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/dispatcher.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 3,
+    "eslint(no-useless-escape)": 1
+  },
+  "api/src/email-preview/css.ts": {
+    "unicorn(prefer-string-starts-ends-with)": 2
+  },
+  "api/src/endpoints.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2,
+    "eslint(no-useless-escape)": 1
+  },
+  "api/src/export-openapi.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/feedback-triage.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/glass-deliverability.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/glass.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/health.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/idempotency.ts": {
+    "anti-slop(no-reflect-get)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/inbound-overview.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/inbox-wake.ts": {
+    "unicorn(no-useless-spread)": 1
+  },
+  "api/src/inboxes.ts": {
+    "anti-slop(no-chained-type-assertions)": 2
+  },
+  "api/src/isolate-memory.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "unicorn(no-useless-spread)": 1
+  },
+  "api/src/jobs.ts": {
+    "anti-slop(no-unknown-returns)": 3,
+    "anti-slop(no-unsafe-dictionary-type)": 6
+  },
+  "api/src/linked-images.ts": {
+    "anti-slop(no-chained-type-assertions)": 1
+  },
+  "api/src/list-hygiene.ts": {
+    "eslint(no-useless-escape)": 2
+  },
+  "api/src/log.ts": {
+    "anti-slop(no-reflect-get)": 1,
+    "anti-slop(no-unknown-returns)": 2,
+    "anti-slop(no-unsafe-dictionary-type)": 4
+  },
+  "api/src/mailbox-events.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1,
+    "eslint(no-unused-vars)": 1
+  },
+  "api/src/mailbox-ingest-input.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/mailbox-ingest.ts": {
+    "anti-slop(no-chained-type-assertions)": 2,
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 2,
+    "eslint(no-useless-escape)": 1,
+    "unicorn(no-useless-spread)": 2
+  },
+  "api/src/mailbox-setup.ts": {
+    "anti-slop(no-chained-type-assertions)": 1
+  },
+  "api/src/mailbox-store.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/mailbox.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1,
+    "eslint(no-unused-vars)": 2
+  },
+  "api/src/mcp-catalog.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/mcp-clients.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/mcp-events.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 3
+  },
+  "api/src/mcp-resources.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/mcp-support.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/mcp.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1,
+    "unicorn(no-useless-spread)": 2
+  },
+  "api/src/openapi-docs.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/operations.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 12,
+    "eslint(no-unused-vars)": 1
+  },
+  "api/src/operator-alerts.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 5
+  },
+  "api/src/operator-lists.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 3
+  },
+  "api/src/operator-mention.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/operator.ts": {
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/outbound-content.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1,
+    "eslint(no-useless-escape)": 2
+  },
+  "api/src/overview-setup.ts": {
+    "anti-slop(no-unknown-returns)": 1
+  },
+  "api/src/preview-images.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/protocol-submit.ts": {
+    "eslint(no-useless-escape)": 1
+  },
+  "api/src/provider-credentials.ts": {
+    "eslint(no-unused-vars)": 1
+  },
+  "api/src/read-bounds.ts": {
+    "anti-slop(no-chained-type-assertions)": 6,
+    "unicorn(no-useless-spread)": 1
+  },
+  "api/src/receiving-hosts.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/reputation-alerts.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 6
+  },
+  "api/src/ritual-engine.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "anti-slop(no-object-parameters)": 1,
+    "anti-slop(no-unknown-returns)": 2,
+    "anti-slop(no-unsafe-dictionary-type)": 4
+  },
+  "api/src/ritual-pipeline.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/rituals.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/routing.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/schema-fields.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/screen-calls.ts": {
+    "anti-slop(no-object-parameters)": 2
+  },
+  "api/src/screen-comparison.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 5
+  },
+  "api/src/screen-shadow.ts": {
+    "anti-slop(no-object-parameters)": 2,
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/screen.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "anti-slop(no-object-parameters)": 2,
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 1,
+    "unicorn(no-new-array)": 1,
+    "unicorn(no-useless-spread)": 1
+  },
+  "api/src/screened-html.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "unicorn(prefer-string-starts-ends-with)": 2
+  },
+  "api/src/sender-display-score.ts": {
+    "eslint(no-unused-vars)": 1
+  },
+  "api/src/sending.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 7,
+    "eslint(no-unused-vars)": 1,
+    "unicorn(no-new-array)": 1,
+    "unicorn(no-useless-fallback-in-spread)": 2
+  },
+  "api/src/ses-regions.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "eslint(no-unused-vars)": 1
+  },
+  "api/src/ses-setup.ts": {
+    "anti-slop(no-unknown-returns)": 2,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/signups.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/standing.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 4,
+    "eslint(no-unused-vars)": 1
+  },
+  "api/src/states.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/support-actions.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 7
+  },
+  "api/src/support-approvals.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 7
+  },
+  "api/src/support-conversations.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/support-inbox.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 5
+  },
+  "api/src/support-logs.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "api/src/support-platform.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 3
+  },
+  "api/src/support-staff-mail.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "api/src/support.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 7
+  },
+  "api/src/templates.ts": {
+    "eslint(no-unused-vars)": 3
+  },
+  "api/src/topics.ts": {
+    "eslint(no-unused-vars)": 1
+  },
+  "api/src/usage.ts": {
+    "eslint(no-unused-vars)": 1
+  },
+  "api/src/worker.ts": {
+    "anti-slop(no-chained-type-assertions)": 6,
+    "anti-slop(no-reflect-get)": 1,
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 5
+  },
+  "api/src/workspaces.ts": {
+    "eslint(no-unused-vars)": 2
+  },
+  "app/src/components/EmailInsight.tsx": {
+    "anti-slop(no-unknown-returns)": 1
+  },
+  "app/src/components/EmailPreview.tsx": {
+    "eslint(no-useless-escape)": 1
+  },
+  "app/src/components/ui/primitives.tsx": {
+    "anti-slop(no-unknown-returns)": 1
+  },
+  "app/src/components/ui/tooltip.tsx": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/data/billing.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/data/invalidation.ts": {
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/data/live.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "app/src/data/log-facets.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/data/prefetch.ts": {
+    "anti-slop(no-unknown-returns)": 1
+  },
+  "app/src/data/regions.ts": {
+    "eslint(no-unused-vars)": 1
+  },
+  "app/src/data/support-inbox.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 3
+  },
+  "app/src/data/support.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/data/types.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 8
+  },
+  "app/src/features/audience/segments.tsx": {
+    "anti-slop(no-unsafe-dictionary-type)": 7
+  },
+  "app/src/features/campaigns/CampaignList.tsx": {
+    "eslint(no-unused-expressions)": 1
+  },
+  "app/src/features/campaigns/EmailComposer.tsx": {
+    "anti-slop(no-unsafe-dictionary-type)": 6
+  },
+  "app/src/features/campaigns/block-content.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 8
+  },
+  "app/src/features/campaigns/composer-content.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 4
+  },
+  "app/src/features/campaigns/composer-preview.tsx": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/features/campaigns/index.tsx": {
+    "eslint(no-unused-vars)": 2
+  },
+  "app/src/features/campaigns/merge.ts": {
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/features/campaigns/react-email-shim.ts": {
+    "anti-slop(no-chained-type-assertions)": 1
+  },
+  "app/src/features/campaigns/skeletons.tsx": {
+    "eslint(no-unused-vars)": 3
+  },
+  "app/src/features/campaigns/templates.tsx": {
+    "eslint(no-unused-expressions)": 2
+  },
+  "app/src/features/docs/index.tsx": {
+    "anti-slop(no-unsafe-dictionary-type)": 7
+  },
+  "app/src/features/docs/meta.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 3
+  },
+  "app/src/features/docs/openapi.ts": {
+    "anti-slop(no-unknown-returns)": 1
+  },
+  "app/src/features/home/factory/player.ts": {
+    "eslint(no-unused-expressions)": 1
+  },
+  "app/src/features/home/tv/tv.tsx": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "anti-slop(no-unknown-returns)": 1
+  },
+  "app/src/features/inbound/addresses.tsx": {
+    "eslint(no-unused-vars)": 1
+  },
+  "app/src/features/inbound/builder.tsx": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/features/inbound/recipes.tsx": {
+    "anti-slop(no-unknown-returns)": 2,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/features/inbound/rituals.tsx": {
+    "eslint(no-unused-vars)": 2
+  },
+  "app/src/features/inbound/trace.tsx": {
+    "anti-slop(no-unsafe-dictionary-type)": 1,
+    "eslint(no-unused-vars)": 1
+  },
+  "app/src/features/operator/deliverability.tsx": {
+    "eslint(no-unused-vars)": 1
+  },
+  "app/src/features/operator/index.tsx": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/features/operator/notes.tsx": {
+    "anti-slop(no-unknown-returns)": 2
+  },
+  "app/src/features/overview/index.tsx": {
+    "unicorn(no-new-array)": 1
+  },
+  "app/src/features/pricing/compare/nylas.ts": {
+    "eslint(no-unused-vars)": 1
+  },
+  "app/src/features/pricing/docs/alternatives.ts": {
+    "eslint(no-unused-vars)": 1
+  },
+  "app/src/features/pricing/docs/doc.ts": {
+    "eslint(no-unused-vars)": 1
+  },
+  "app/src/features/pricing/page/comparison.ts": {
+    "eslint(no-unused-vars)": 1
+  },
+  "app/src/features/pricing/page/page.tsx": {
+    "eslint(no-unused-vars)": 1
+  },
+  "app/src/features/pricing/readable.ts": {
+    "anti-slop(no-object-parameters)": 1
+  },
+  "app/src/features/pricing/sound.ts": {
+    "anti-slop(no-chained-type-assertions)": 1
+  },
+  "app/src/features/pricing/splitflap.tsx": {
+    "anti-slop(no-chained-type-assertions)": 1
+  },
+  "app/src/features/settings/activity.tsx": {
+    "anti-slop(no-unsafe-dictionary-type)": 3,
+    "unicorn(no-useless-spread)": 1,
+    "unicorn(prefer-string-starts-ends-with)": 2
+  },
+  "app/src/features/settings/billing.tsx": {
+    "anti-slop(no-unknown-returns)": 1
+  },
+  "app/src/features/settings/create-key.tsx": {
+    "anti-slop(no-unknown-returns)": 1,
+    "eslint(no-unused-vars)": 2
+  },
+  "app/src/features/settings/domains.tsx": {
+    "anti-slop(no-unknown-returns)": 2,
+    "eslint(no-unused-vars)": 1
+  },
+  "app/src/features/settings/webhook-patch.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/features/support-inbox/conversation.tsx": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/features/support/demo.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/features/support/socket.ts": {
+    "unicorn(prefer-string-starts-ends-with)": 2
+  },
+  "app/src/features/support/store.ts": {
+    "unicorn(no-useless-spread)": 1
+  },
+  "app/src/features/ui-notes/capture.ts": {
+    "anti-slop(no-chained-type-assertions)": 1
+  },
+  "app/src/lib/analytics.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "app/src/lib/countdown.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "app/src/lib/domain.ts": {
+    "eslint(no-useless-escape)": 2
+  },
+  "app/src/lib/flight.ts": {
+    "anti-slop(no-object-parameters)": 2
+  },
+  "support/src/agent/harness.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "support/src/agent/opencode.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 5
+  },
+  "support/src/agent/projection.ts": {
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "support/src/agent/tools.ts": {
+    "anti-slop(no-unknown-returns)": 3,
+    "anti-slop(no-unsafe-dictionary-type)": 10
+  },
+  "support/src/agent/triage.ts": {
+    "anti-slop(no-unknown-returns)": 3,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "support/src/conversation.ts": {
+    "anti-slop(no-unknown-returns)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 7
+  },
+  "support/src/limits.ts": {
+    "anti-slop(no-chained-type-assertions)": 1,
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "support/src/log.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2
+  },
+  "support/src/nightmail.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 1
+  },
+  "support/src/work.ts": {
+    "anti-slop(no-object-parameters)": 1
+  },
+  "support/src/worker.ts": {
+    "anti-slop(no-unsafe-dictionary-type)": 2,
+    "eslint(no-unused-vars)": 1
+  }
+}

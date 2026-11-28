@@ -4630,7 +4630,8 @@ const runCampaign: JobHandler = async (runtime, payload, job) => {
       } else if (await releaseStep(runtime, a, row, payload) === 'done') return;
       if (Date.now() - started >= RUN_BUDGET_MS) throw new JobDeferred(now(), payload);
     }
-  } catch (error) {
+  } catch (caught) {
+    let error: unknown = caught;
     if (error instanceof JobDeferred || error instanceof ModuleLoadError) throw error;
     if (error instanceof ApiError && error.code === 'AUDIENCE_CAPTURE_BUSY') {
       const busyCount = typeof payload._captureBusy === 'number' && Number.isInteger(payload._captureBusy) ? payload._captureBusy + 1 : 1;
