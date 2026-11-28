@@ -634,12 +634,13 @@ async function deleteClaimIdentity(runtime:Runtime,wid:string,row:Pick<HostedDom
   }
   await ignoreMissing(({ DeleteEmailIdentityCommand })=>client.send(new DeleteEmailIdentityCommand({EmailIdentity:row.name})));
 }
-/** Disconnect: a shared connection's tagged identities are deleted; BYO identities stay in AWS. The caller has fenced the
+/** Disconnect: a shared connection's tagged identities are deleted; BYO identities, adopted ones and the built-in domain
+ * (a name under the platform's parent identity, with none of its own) are not touched. The caller has fenced the
  * connection (state 'disconnecting'), so no claim read sees it any more; taking the claims' locks first waits out a write
  * already under way (an identity create). No transaction or lock is held across the AWS calls. */
 export async function deleteConnectionIdentities(runtime:Runtime,wid:string,connection:HostedDomain['connection'] & {region:string}) {
   if (connection.kind!=='shared') return;
-  const claims=(await runtime.db.transaction(db=>db.execute<{name:string;token:string;region:string;managed_tenant:boolean;pool_tenant_name:string|null}>(sql`SELECT dc.name,dc.token,b.region,r.managed_tenant,r.pool_tenant_name FROM domain_claims dc JOIN domain_sending_bindings b USING(workspace_id,name,connection_id) JOIN regional_connections r ON r.id=b.connection_id AND r.region=b.region WHERE dc.workspace_id=${wid} AND dc.connection_id=${connection.id} AND NOT coalesce(dc.identity ? 'adopted',false) FOR UPDATE OF dc`))).rows;
+  const claims=(await runtime.db.transaction(db=>db.execute<{name:string;token:string;region:string;managed_tenant:boolean;pool_tenant_name:string|null}>(sql`SELECT dc.name,dc.token,b.region,r.managed_tenant,r.pool_tenant_name FROM domain_claims dc JOIN domain_sending_bindings b USING(workspace_id,name,connection_id) JOIN regional_connections r ON r.id=b.connection_id AND r.region=b.region WHERE dc.workspace_id=${wid} AND dc.connection_id=${connection.id} AND NOT coalesce(dc.identity ?| array['adopted','builtin'],false) FOR UPDATE OF dc`))).rows;
   for (const claim of claims) await deleteClaimIdentity(runtime,wid,{...claim,connection:{...connection,managed_tenant:claim.managed_tenant,pool_tenant_name:claim.pool_tenant_name}});
 }
 async function releaseClaim(db:DbExecutor,wid:string,row:{token:string}) {
@@ -880,6 +881,8 @@ const domainVerify: JobHandler = async (runtime,payload,job) => {
       await db.execute(sql`UPDATE domain_claims SET ${observeProof(positive)}, receiving_identity_at=CASE WHEN ${current.connection.legacy===false} THEN receiving_identity_at WHEN ${identityVerified} THEN now() END WHERE workspace_id=${job.workspaceId} AND token=${row.token} AND connection_id=${current.connection.id}`);
       return saveObservation(db,current,job.workspaceId,sesFacts(identity),observation,{sending:report.ready,sendingRevoked:current.identity?.imported && !report.ready,identityVerified,proven:positive},dmarc);
     });
+    // A domain that has never had a DMARC answer (the resolver failed) retries soon, after its verification has committed.
+    if (outcome && dmarc===undefined && row.identity?.dmarc===undefined) throw dnsUnavailable();
     if (!outcome || (outcome.sending_state==='verified' && report.mailFromStatus!=='PENDING' && outcome.receiving_state!=='lost')) return; // MX-only upkeep owns receiving changes after sending verifies.
     // DKIM just propagated. Give a lagging TXT its own short retry sequence instead of inheriting
     // the hours-long DKIM backoff. A domain abandoned at this step still backs off normally.

@@ -213,6 +213,8 @@ export async function byoStackTopic(runtime: Runtime, arn: string) {
   if (!row || setupResources(row.id).topicName !== `${prefix}-feedback`) return;
   return (confirmation: Confirmation) => provision(runtime, row, account!, confirmation);
 }
+// The same code regional cleanup answers with (byo-regional.ts): a repeated DELETE finishes the disconnect.
+const disconnecting = () => new ApiError(409, 'CONNECTION_DISCONNECTING', 'This connection is being disconnected. Repeat DELETE /v1/connection to finish.');
 async function provision(runtime: Runtime, row: Row, account: string, confirmation?: Confirmation, audit?: AuditContext) {
   if (row.template_version==='v5') throw new ApiError(409,'REGIONAL_SETUP_REQUIRED','This connection requires regional setup, not stack import.');
   const roleArn = `arn:aws:iam::${account}:role/${stackName(row)}`;
@@ -224,6 +226,7 @@ async function provision(runtime: Runtime, row: Row, account: string, confirmati
       AND status='pending' AND (last_error='SNS_CONFIRMATION_PENDING' OR payload->>'retryCode'='SNS_CONFIRMATION_PENDING') AND available_at>now()`)).rowCount) await wakeByoJob(runtime,row.id);
     return row;
   }
+  if (row.state === 'disconnecting') throw disconnecting(); // Not an AWS failure: no transition leaves the fence.
   if (row.state === 'ready' && !confirmation) return row;
   if (row.template_version !== 'v4' && !confirmation) await loadSetupSdk();
   const credentials = await assume(runtime, row.region, roleArn, row.external_id!, true);
@@ -440,13 +443,13 @@ async function create(runtime: Runtime, wid: string, input: z.infer<typeof Creat
     // The statement's snapshot predates its insert, so only a new connection is audited, not a repeated choice.
     const row = (await runtime.db.execute<Row & { queued: boolean }>(sql`WITH pool AS (SELECT aws_account_id FROM provider_pool_regions p WHERE region=${region} AND ${poolSends()}), connection AS (
       INSERT INTO provider_connections(id,workspace_id,kind,region,state,tenant_state,aws_account_id,managed_tenant,pool_tenant_name) VALUES (${id('conn')},${wid},'shared',${region},'ready',${isSimulatedSes(runtime) ? 'ready' : 'pending'},(SELECT aws_account_id FROM pool),${!!runtime.config.regionalSending},${runtime.config.trustedPool?poolTenantName(wid,'probation'):null})
-      ON CONFLICT(workspace_id) DO UPDATE SET aws_account_id=coalesce(provider_connections.aws_account_id,excluded.aws_account_id) WHERE provider_connections.kind='shared' AND provider_connections.region=excluded.region RETURNING *),
+      ON CONFLICT(workspace_id) DO UPDATE SET aws_account_id=coalesce(provider_connections.aws_account_id,excluded.aws_account_id) WHERE provider_connections.kind='shared' AND provider_connections.region=excluded.region AND provider_connections.state<>'disconnecting' RETURNING *),
       settings AS (UPDATE ses_installation_settings s SET default_region=c.region,enabled_regions=CASE WHEN EXISTS(SELECT FROM provider_connection_regions r WHERE r.connection_id=c.id AND NOT r.legacy AND r.sending_state='ready') THEN s.enabled_regions ELSE jsonb_build_array(c.region) END FROM connection c WHERE c.workspace_id=s.workspace_id),
       stale AS (UPDATE ses_region_discovery d SET credentials_fingerprint=NULL,report=NULL FROM connection c WHERE c.workspace_id=d.workspace_id AND d.report IS NOT NULL),
       queued AS (${queueTenantJob(sql`SELECT c.id,c.workspace_id FROM connection c JOIN pool USING (aws_account_id) WHERE c.tenant_state<>'ready'`, tenantJobAfterSeconds)} RETURNING 1),
       audit AS (${audit(sql`connection`, sql`NOT EXISTS (SELECT FROM provider_connections p WHERE p.workspace_id=${wid})`)})
       SELECT c.*, EXISTS (SELECT 1 FROM queued) AS queued FROM connection c`)).rows[0];
-    if (!row) throw new ApiError(409,'CONNECTION_EXISTS','Disconnect the existing connection before choosing another.');
+    if (!row) { if ((await get(runtime, wid))?.state === 'disconnecting') throw disconnecting(); throw new ApiError(409,'CONNECTION_EXISTS','Disconnect the existing connection before choosing another.'); }
     return row;
   }
   const principalArn = (await platformIdentity(runtime)).arn;
@@ -456,6 +459,7 @@ async function create(runtime: Runtime, wid: string, input: z.infer<typeof Creat
     VALUES (${connectionId},${wid},${kind},${region},${crypto.randomUUID()},${principalArn},'v4','awaiting_role','ready',${prefix},${kind === 'byo' ? byoStackName(runtime.config.byoStackPrefix, connectionId) : null})
     ON CONFLICT(workspace_id) DO NOTHING RETURNING *), audit AS (${audit(sql`created`)}) SELECT * FROM created`);
   const row = result.rows[0] ?? await get(runtime, wid);
+  if (row?.state === 'disconnecting') throw disconnecting();
   if (!row || row.kind !== kind || row.region !== region) throw new ApiError(409, 'CONNECTION_EXISTS', 'Disconnect the existing connection before choosing another.');
   return row;
 }
@@ -600,16 +604,22 @@ export function registerProviderConnections(app: App) {
           if (!(await db.execute(sql`SELECT 1 FROM provider_connections WHERE workspace_id=${wid}`)).rowCount) return notFound('Connection');
           throw new ApiError(409, 'CONNECTION_IN_USE', 'Finish queued work or active setup before disconnecting.');
         }
-        if (row.state === 'disconnecting' && row.template_version !== 'v5') return row; // An earlier DELETE fenced it after these checks.
-        // Disconnect/reconnect must not serve as a workspace-controlled unpause.
+        // Disconnect/reconnect must not serve as a workspace-controlled unpause, even to finish an earlier DELETE.
         if (row.pause_reason) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', row.pause_reason);
+        if (row.state === 'disconnecting' && row.template_version !== 'v5') return row; // An earlier DELETE fenced it after these checks.
         if (row.template_version==='v5' || (await db.execute(sql`SELECT FROM provider_connection_regions WHERE connection_id=${row.id} AND NOT legacy AND NOT (${row.kind}='shared' AND region='us-east-1' AND pool_tenant_name IS NOT NULL AND receiving_state='off' AND sending_state='ready') LIMIT 1`)).rowCount) throw new ApiError(409,'REGIONAL_DISCONNECT_REQUIRED','A regional connection requires reviewed cleanup before disconnecting.');
         await db.execute(sql`UPDATE provider_connections SET state='disconnecting' WHERE id=${row.id}`);
         return row;
       });
       await (await wrapModuleLoad(() => import('./operations.js'))).deleteConnectionIdentities(c.env, wid, { id: row.id, kind: row.kind, region: row.region, aws_account_id: row.aws_account_id!, role_arn: row.role_arn!, external_id: row.external_id!, tenant_state: row.tenant_state });
-      // Both statements are no-ops once a concurrent DELETE has finished, so only one audits.
+      // A pause can land during the AWS cleanup: re-check it under the connection's lock (the fence's lock order) before
+      // releasing anything. The connection stays fenced; a DELETE after the resume finishes. Once a concurrent DELETE has
+      // finished, both statements are no-ops, so only one audits.
       await c.env.db.transaction(async db => {
+        await getRegionSettings(db, wid, 'update');
+        const fenced = (await db.execute<{ pause_reason: string | null }>(sql`SELECT pause_reason FROM provider_connections WHERE id=${row.id} AND state='disconnecting' FOR UPDATE`)).rows[0];
+        if (!fenced) return;
+        if (fenced.pause_reason) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', fenced.pause_reason);
         await db.execute(sql`WITH ${releaseConnectionClaims(wid, sql`SELECT ${row.id}::text AS id`)} SELECT 1`);
         await db.execute(sql`WITH deleted AS (DELETE FROM provider_connections WHERE id=${row.id} AND state='disconnecting' RETURNING id),
           audit AS (${auditInsert(auditContext(c), { action: 'connection.delete', workspaceId: wid, target: { type: 'connection', id: row.id }, before: { kind: row.kind, region: row.region, state: row.state } }, { from: sql`deleted` })}) SELECT 1`);

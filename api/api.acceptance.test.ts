@@ -4496,7 +4496,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
             default:throw Error(cmd.constructor.name);
           }
         });
-        let denyForwarding = false, loseCreateResponse = false, failTenantOnce = false, dropCreate = false,quotaFull=false,denyDelete=false;
+        let denyForwarding = false, loseCreateResponse = false, failTenantOnce = false, dropCreate = false,quotaFull=false,denyDelete=false,pauseOnDelete:string|undefined;
         const root = `${unique('claims')}.invalid`, domain = `mail.${root}`, foreign = `existing.${unique('ses')}.invalid`;
         const importParent=`${unique('import')}.invalid`,imported=`mail.${importParent}`, reserved=`${unique('reserved')}.invalid`;
         const verifiedIdentity = { VerificationStatus:'SUCCESS', VerifiedForSendingStatus:true, DkimAttributes:{ SigningEnabled:true, Status:'SUCCESS', Tokens:['fixture1','fixture2','fixture3'], SigningHostedZone:'dkim.amazonses.com' } };
@@ -4520,7 +4520,9 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
             }
             case 'ListResourceTenantsCommand': return {ResourceTenants:[...associations].filter(k=>k.endsWith(`:${i.ResourceArn}`)).map(k=>({TenantName:k.split(':')[0]}))};
             case 'DeleteTenantResourceAssociationCommand': assert.ok(associations.delete(`${i.TenantName}:${i.ResourceArn}`),'Never remove an association that does not exist'); return {};
-            case 'DeleteEmailIdentityCommand': if (denyDelete) { denyDelete=false; throw Object.assign(new Error('Synthetic delete denied'),{name:'AccessDenied'}); } assert.ok(identities.delete(`${account}:${i.EmailIdentity}`)); return {};
+            case 'DeleteEmailIdentityCommand': if (denyDelete) { denyDelete=false; throw Object.assign(new Error('Synthetic delete denied'),{name:'AccessDenied'}); }
+              if (pauseOnDelete) { await pool.query("UPDATE provider_connections SET paused_at=now(),pause_reason='Synthetic pause' WHERE workspace_id=$1",[pauseOnDelete]); pauseOnDelete=undefined; }
+              assert.ok(identities.delete(`${account}:${i.EmailIdentity}`)); return {};
             case 'ListEmailIdentitiesCommand': {
               assert.equal(account, customer);
               if (failImportRead) throw Object.assign(new Error('synthetic throttle'),{name:'ThrottlingException'});
@@ -5492,7 +5494,9 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
         const {rows:[j]}=await pool.query("SELECT * FROM jobs WHERE type='domain.verify' AND payload->>'domainId'=$1",[byoDomain.id]);
         await providerTest.test('BYO inbound uses its assumed role and per-domain rule, never the platform catch-all',async bt=>{
           const headers={'x-bane-environment':'live'},wid=a.org.id;
-          bt.mock.method(globalThis,'fetch',async(input:RequestInfo|URL)=>{assert.equal(new URL(String(input)).searchParams.get('type'),'MX');return Response.json({Status:0,Answer:[{name:domain,type:15,data:`10 inbound-smtp.${region}.amazonaws.com.`}]});});
+          bt.mock.method(globalThis,'fetch',async(input:RequestInfo|URL)=>{
+            // No DMARC record (an answer, not a failure, which would make the verifier retry for one).
+            const type=new URL(String(input)).searchParams.get('type');if(type==='TXT')return Response.json({Status:3});assert.equal(type,'MX');return Response.json({Status:0,Answer:[{name:domain,type:15,data:`10 inbound-smtp.${region}.amazonaws.com.`}]});});
           bt.mock.method(SESClient.prototype,'send',async function(this:InstanceType<typeof SESClient>,cmd:any){
             assert.equal((await this.config.credentials()).accessKeyId,'synthetic-customer');if(cmd.constructor.name==='DescribeActiveReceiptRuleSetCommand')return {Metadata:{Name:'customer-set'},Rules:[]};
             assert.equal(cmd.constructor.name,'CreateReceiptRuleCommand');assert.equal(cmd.input.RuleSetName,'customer-set');assert.deepEqual(cmd.input.Rule.Recipients,[domain]);return {};
@@ -5564,6 +5568,10 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
         // Disconnecting with a domain releases its claim instead of refusing: AWS keeps the identity, the
         // workspace keeps the name, nothing sends or routes on it, and the next connection re-proves it from scratch.
         const retained=calls.length;
+        // A fenced (disconnecting) connection can only be finished: choosing or verifying it again is a conflict, not 201 or 502.
+        const {rows:[fenced]}=await pool.query("UPDATE provider_connections SET state='disconnecting' WHERE workspace_id=$1 RETURNING aws_account_id",[a.org.id]);
+        error(await local('POST', path+'/verify', {awsAccountId:fenced.aws_account_id}, a.cookie),409,'CONNECTION_DISCONNECTING');
+        error(await choose('byo', a.cookie),409,'CONNECTION_DISCONNECTING'); error(await choose('shared', a.cookie),409,'CONNECTION_DISCONNECTING');
         ok(await local('DELETE', path, undefined, a.cookie)); ok(await local('DELETE', path, undefined, b.cookie));
         assert.equal(calls.length,retained,'BYO identities stay in the customer account.'); assert.ok(identities.has(`${customer}:${domain}`));
         assert.deepEqual((await pool.query('SELECT name,connection_id,claim_scope FROM domain_claims WHERE workspace_id=$1 AND name=ANY($2)',[a.org.id,[imported,'mail.'+reserved]])).rows,[{name:imported,connection_id:null,claim_scope:'txt'}]);
@@ -5586,8 +5594,14 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
         // AWS work runs after the fence commits: a failure leaves the connection disconnecting with its claims, and DELETE again resumes.
         denyDelete=true; error(await local('DELETE', path, undefined, a.cookie), 403, 'SES_ACCESS_DENIED');
         assert.equal(ok(await local('GET', path, undefined, a.cookie)).connection.state,'disconnecting'); assert.equal((await released())[0].connection_id,reconnected.id);
+        error(await choose('shared', a.cookie),409,'CONNECTION_DISCONNECTING');
+        // A pause landing during the AWS cleanup keeps the fence and the claims, and blocks every retry until it is lifted.
+        pauseOnDelete=a.org.id; error(await local('DELETE', path, undefined, a.cookie),409,'HOSTED_SENDING_PAUSED');
+        assert.equal((await released())[0].connection_id,reconnected.id); error(await local('DELETE', path, undefined, a.cookie),409,'HOSTED_SENDING_PAUSED');
+        assert.equal(ok(await local('GET', path, undefined, a.cookie)).connection.state,'disconnecting');
+        await pool.query('UPDATE provider_connections SET paused_at=NULL,pause_reason=NULL WHERE workspace_id=$1',[a.org.id]);
         ok(await local('DELETE', path, undefined, a.cookie));
-        assert.deepEqual(calls.slice(sharedCalls),['GetEmailIdentityCommand','ListResourceTenantsCommand','DeleteTenantResourceAssociationCommand','DeleteEmailIdentityCommand','GetEmailIdentityCommand','ListResourceTenantsCommand','DeleteEmailIdentityCommand']);
+        assert.deepEqual(calls.slice(sharedCalls),['GetEmailIdentityCommand','ListResourceTenantsCommand','DeleteTenantResourceAssociationCommand','DeleteEmailIdentityCommand','GetEmailIdentityCommand','ListResourceTenantsCommand','DeleteEmailIdentityCommand','GetEmailIdentityCommand']);
         assert.ok(!identities.has(`${platform}:${domain}`)); assert.equal(associations.size,[...associations].filter(k=>!k.endsWith(`:identity/${domain}`)).length);
         assert.equal((await released())[0].connection_id,null); assert.equal((await pool.query('SELECT 1 FROM operation_domains WHERE workspace_id=$1 AND name=$2',[a.org.id,domain])).rowCount,0);
         assert.deepEqual(ok(await local('GET', path, undefined, a.cookie)), { connection: null });
