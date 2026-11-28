@@ -39813,6 +39813,36 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await db.query('DELETE FROM public.mail_receipts WHERE workspace_id=$1', [wid]);
     }
   });
+  test('batched job settlement: a settlement that fails leaves its own job to the lease and settles none of its siblings', async t => {
+    if (!fixtureWorker) return t.skip('requires the loopback worker and real database connections');
+    const { processJobs } = await import('./src/jobs.js'), { drizzle } = await import('drizzle-orm/node-postgres'), { sql } = await import('drizzle-orm'), { ApiError } = await import('./src/core.js');
+    const db = await fixtureDatabase(t), wid = unique('settle'), schema = 'settle_' + randomUUID().replaceAll('-', '');
+    const rt = { ...fixtureWorker.runtime, db: drizzle(db), config: { ...fixtureWorker.runtime.config, workspaceId: wid } };
+    await db.query(`CREATE SCHEMA ${schema}`);
+    try {
+      await db.query(`SET search_path TO ${schema}, public`);
+      await db.query("CREATE TABLE jobs (LIKE public.jobs INCLUDING ALL); CREATE TABLE mail_ingest_turns (LIKE public.mail_ingest_turns INCLUDING ALL); CREATE TRIGGER mail_ingest_head AFTER INSERT OR UPDATE OR DELETE ON jobs FOR EACH ROW EXECUTE FUNCTION mail_ingest_head_change(); CREATE TRIGGER mail_ingest_admit BEFORE INSERT ON jobs FOR EACH ROW WHEN (NEW.type='mailbox.ingest' AND NEW.status IN ('pending','running')) EXECUTE FUNCTION mail_ingest_admit()");
+      await db.query("INSERT INTO jobs(id,type,workspace_id,payload) SELECT 'job_'||k,'mailbox.ingest',$1,jsonb_build_object('sesMessageId',k) FROM unnest(ARRAY['broken','plain','refused']) k", [wid]);
+      let batches = 0;
+      const handler = Object.assign(async () => { throw new Error('batch only'); }, { batch: async (_r: any, items: any[]) => {
+        batches++;
+        return items.map(({ job }) => {
+          // This job's records fail its completion statement (a NULL primary key).
+          if (job.id === 'job_broken') job.recordWithSettlement(sql`broken AS (INSERT INTO jobs(id,type,workspace_id,payload) VALUES(NULL,'fixture.none',${wid},'{}') RETURNING 1)`);
+          return job.id === 'job_refused' ? { id: job.id, error: new ApiError(503, 'FIXTURE_REFUSED', 'Fixture refusal.', undefined, true) } : { id: job.id };
+        });
+      } });
+      await assert.rejects(processJobs(rt, { 'mailbox.ingest': handler }, 10, 6, 4000, 'ingest'), (error: any) => /null value|not-null/.test(String(error?.cause?.message ?? error?.message)));
+      assert.equal(batches, 1, 'all three jobs ran as one batch');
+      assert.deepEqual((await db.query("SELECT id,status,last_error FROM jobs ORDER BY id")).rows, [
+        { id: 'job_broken', status: 'running', last_error: null },
+        { id: 'job_plain', status: 'completed', last_error: null },
+        { id: 'job_refused', status: 'pending', last_error: 'FIXTURE_REFUSED' },
+      ], 'the failed completion is left to its lease; its siblings settle with their own outcomes');
+    } finally {
+      await db.query(`DROP SCHEMA ${schema} CASCADE`);
+    }
+  });
   test('mail gateway: a signed folder edit waiting behind deletion is denied without a write',async t=>{
     const db=await fixtureDatabase(t),rt=fixtureWorker!.runtime,w=unique('gwdel'),bid=unique('mbx'),kid=unique('app');
     await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status,catch_all) VALUES($1,$2,$1,'gwdel.invalid',$3,'active','store')",[bid,w,REGION]);

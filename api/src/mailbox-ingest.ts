@@ -20,7 +20,6 @@ import { INBOUND_ADDRESS_ADDR_LIMIT, INBOUND_ADDRESS_NAME_LIMIT, INBOUND_ADDRESS
 import type { ReceivedNotification } from './mailbox-receipts.js';
 import { scheduleMailRecovery, stagingJobs } from './mailbox-staging.js';
 import { billed } from './billing/gate.js';
-import type { BillingPosition } from './billing/types.js';
 import { loopHeaderNames } from './brand.js';
 export { acceptInboundNotification } from './mailbox-receipts.js';
 
@@ -457,9 +456,8 @@ const claimedBy=(recipients:string[])=>sql`${mailReceipts.status}='pending' AND 
 const claimToken=(job:JobContext)=>`${job.id}|${job.leaseFence??''}`;
 // Billing's receive hold (an enforced prepaid workspace unpaid for 7 days): the raw message is parked under held/ in the
 // same pool bucket, with no lifecycle rule, and the receipt waits as held/BILLING_HOLD until a credit releases it
-// (billing_release_receive_holds). Thrown from the reservation, before anything is copied to the workspace.
+// (billing_release_receive_holds). Decided by the reservation, before anything is copied to the workspace.
 const HELD_PREFIX='held/';
-class BillingHold extends Error {}
 /** Parks a receipt for billing: copies the raw message to held/ (unless it is already there), then one statement. */
 async function parkHeld(runtime:Runtime,s3:S3,receipt:IngestInput,sourceKey:string,workspaceId:string,sesMessageId:string){
   try {
@@ -478,10 +476,9 @@ async function parkHeld(runtime:Runtime,s3:S3,receipt:IngestInput,sourceKey:stri
   log('info',{code:'BILLING_RECEIVE_HELD',workspaceId});
 }
 /** After a released receipt is stored, its parked copy goes (best effort; the row keeps no reference to it). */
-async function dropHeld(runtime:Runtime,receipt:IngestInput,workspaceId:string,key:string){
+async function dropHeld(s3:S3,receipt:IngestInput,workspaceId:string,key:string){
   try {
-    const s3=await mailboxS3(runtime,workspaceId,receipt.region,receipt.bucket,runtime.db,receipt.binding);
-    try { const {DeleteObjectCommand}=await loadIngestS3(); await s3.send(new DeleteObjectCommand({Bucket:receipt.bucket,Key:key})); } finally { s3.destroy(); }
+    const {DeleteObjectCommand}=await loadIngestS3(); await s3.send(new DeleteObjectCommand({Bucket:receipt.bucket,Key:key}));
   } catch (error) { if (error instanceof ModuleLoadError) throw error; log('warn',{code:'BILLING_HELD_OBJECT_LEFT',workspaceId}); }
 }
 type Claim={recipients?:string[];createdAt?:string};
@@ -533,7 +530,7 @@ async function planIngest(runtime:Runtime,job:JobContext,sesMessageId:string,poo
   const quarantine=verdicts.virus!=='PASS'?'MAILBOX_VIRUS_QUARANTINED':spam && receipt.spamPolicy==='quarantine'?'MAILBOX_SPAM_QUARANTINED':null;
   if(quarantine){
     const {CopyObjectCommand}=await loadIngestS3();
-    await (await pool.get(receipt)).send(new CopyObjectCommand({Bucket:receipt.bucket,Key:'quarantine/'+sesMessageId,CopySource:`${receipt.bucket}/${sourceKey}`,CopySourceIfMatch:receipt.notification.stagingEtag as string|undefined,TaggingDirective:'REPLACE'}));
+    await (await pool.get(receipt)).send(new CopyObjectCommand({Bucket:receipt.bucket,Key:'quarantine/'+sesMessageId,CopySource:`${receipt.bucket}/${sourceKey}`,CopySourceIfMatch:receipt.notification.stagingEtag as string|undefined,TaggingDirective:'REPLACE'})).catch(error=>{throw mapS3ReadError(error);});
     log('warn',{code:quarantine,workspaceId,virus:verdicts.virus??'missing',spam:verdicts.spam??'missing'});
     await runtime.db.update(mailReceipts).set({status:'failed',error:quarantine,processedAt:new Date().toISOString(),settledBy:claimToken(job)}).where(and(eq(mailReceipts.workspaceId,workspaceId),eq(mailReceipts.sesMessageId,sesMessageId),claimedBy(receipt.recipients)));
     return;
@@ -637,8 +634,8 @@ async function prepareMessage(runtime:Runtime,p:Planned,head:RawObjectHead){
   if(receipt.routing?.programs){const {ritualPipeline,projectEmail}=await import('./ritual-pipeline.js');const evaluated=await ritualPipeline(runtime,workspaceId,receipt.routing,projectEmail(message,attachments,verifiedAuthor),undefined,false,receipt.createdAt);plan=evaluated.plan;Object.assign(verdicts,{ritualScores:evaluated.answers},evaluated.omenCalls?{omenCalls:evaluated.omenCalls}:{},evaluated.acted.length?{ritualsActed:evaluated.acted}:{});}
   if(!p.initiallyKept&&keptRoute(receipt,plan)){
     if(p.unverifiedKept)throw new JobDeferred(new Date(Date.now()+60000).toISOString());
-    if(!copied.large)await keptStore.objects.put(keptStore.rawKey,raw,'message/rfc822');
-    else await copyRaw(keptStore.rawKey,'kept',keptStore);
+    // A denied or missing object fails now instead of retrying as an outage for two days.
+    await (copied.large?copyRaw(keptStore.rawKey,'kept',keptStore):keptStore.objects.put(keptStore.rawKey,raw,'message/rfc822')).catch(error=>{throw mapS3ReadError(error);});
     Object.assign(message,{rawKey:keptStore.rawKey,rawBucket:keptStore.bucket,lifecycle:'kept'});
   }
   const preview=message.lifecycle==='kept'?wirePreview(raw,sizeBytes):undefined;
@@ -657,57 +654,6 @@ function reserveMime(size:number){
   mimeBytes+=bytes;
   return bytes;
 }
-const ingestJob = async (runtime:Runtime, payload:Record<string,unknown>, job:JobContext,reserve:(size:number)=>void,claim:Claim) => {
-  const workspaceId=job.workspaceId,sesMessageId=String(payload.sesMessageId ?? ''),pool=s3Pool(runtime,workspaceId);
-  try {
-    const p=await planIngest(runtime,job,sesMessageId,pool,claim);
-    if(!p)return;
-    const {receipt,s3,sourceKey,messageRowId,keptStore,mightKeep}=p;
-    const readStarted=performance.now();
-    let head:RawObjectHead;
-    try {
-      head=await headWorkspaceRaw(s3,receipt.bucket,sourceKey,receipt.notification.stagingEtag as string|undefined);
-      const size=head.size;
-      reserve(size); // Before GET, copy, MIME or attachment work. Idempotent by receipt.
-      // The window row before the receipt, the order every route statement takes them in (157).
-      const reserved=await runtime.db.execute<{ok:boolean;fits:boolean;due:string|null;billing:BillingPosition|null}>(sql`WITH r AS MATERIALIZED (SELECT r.reserved_bytes FROM (SELECT 1) one
-          LEFT JOIN LATERAL (SELECT FROM mail_receive_windows WHERE workspace_id=${workspaceId} FOR UPDATE) w ON true
-          CROSS JOIN LATERAL (SELECT reserved_bytes FROM mail_receipts WHERE workspace_id=${workspaceId} AND ses_message_id=${sesMessageId} AND status='pending' FOR UPDATE) r),
-        policy AS MATERIALIZED (SELECT messages,bytes FROM mail_receive_policy(${workspaceId})),
-        -- The byte budget refills continuously (354): a message takes its bytes now, or the next bytes free up to a
-        -- quarter of an hour of refill ahead and waits for them (due); past that it waits for the next hour.
-        debit AS (INSERT INTO mail_receive_windows AS w(workspace_id,window_at,messages,bytes,level_at,byte_level) SELECT ${workspaceId},date_trunc('hour',now()),0,${size}::bigint,now(),${size}::bigint FROM r WHERE reserved_bytes IS NULL AND ${size}::bigint<=(SELECT bytes FROM policy)
-          ON CONFLICT(workspace_id) DO UPDATE SET byte_level=mail_receive_level(w.byte_level,w.level_at,(SELECT bytes FROM policy))+excluded.byte_level,message_level=mail_receive_level(w.message_level,w.level_at,(SELECT messages FROM policy)),level_at=greatest(w.level_at,excluded.level_at),
-            bytes=CASE WHEN w.window_at=excluded.window_at THEN w.bytes ELSE 0 END+excluded.bytes,messages=CASE WHEN w.window_at=excluded.window_at THEN w.messages ELSE 0 END,window_at=excluded.window_at
-          WHERE mail_receive_level(w.byte_level,w.level_at,(SELECT bytes FROM policy))+excluded.byte_level<=(SELECT bytes FROM policy)*1.25 RETURNING w.byte_level AS level),
-        charged AS (UPDATE mail_receipts SET reserved_bytes=${size} WHERE workspace_id=${workspaceId} AND ses_message_id=${sesMessageId} AND EXISTS(SELECT FROM debit) RETURNING 1)
-        ${mightKeep?sql`, candidate AS (INSERT INTO mail_candidate_uploads(batch,workspace_id,ses_message_id,bucket,region,message_id,keys) SELECT ${'raw:'+messageRowId},${workspaceId},${sesMessageId},${keptStore.bucket},${receipt.region},${messageRowId},ARRAY[${keptStore.rawKey}] FROM r ON CONFLICT(batch) DO UPDATE SET check_at=now()+interval '1 hour')`:sql``}
-        SELECT EXISTS(SELECT FROM charged UNION ALL SELECT FROM r WHERE reserved_bytes=${size}) AS ok,${size}::bigint<=bytes AND EXISTS(SELECT FROM r WHERE reserved_bytes IS NULL) AS fits,
-          (SELECT to_char((now()+make_interval(secs=>(level-bytes)*3600/bytes)) AT TIME ZONE 'UTC','YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') FROM debit WHERE level>bytes) AS due,
-          ${billed(runtime.config,workspaceId)?sql`billing_position(${workspaceId})`:sql`NULL::jsonb`} AS billing FROM policy`);
-      if(!reserved.rows[0]?.ok){
-        if(reserved.rows[0]?.fits) throw new JobDeferred(new Date((Math.floor(Date.now()/3600000)+1)*3600000).toISOString());
-        throw new ApiError(422,'MAILBOX_BYTE_BUDGET','Receipt exceeds the workspace byte budget.');
-      }
-      // Charged ahead: the job runs again when those bytes have refilled, and then finds them reserved.
-      if(reserved.rows[0]!.due) throw new JobDeferred(reserved.rows[0]!.due);
-      const billing=reserved.rows[0]!.billing;
-      // BYO workspaces pay SES themselves and are never held; their storage still bills.
-      if(billing?.receiveHeld && receipt.binding?.kind!=='byo')throw new BillingHold();
-    } catch (error) {
-      if (error instanceof BillingHold) return parkHeld(runtime,s3,receipt,sourceKey,workspaceId,sesMessageId);
-      throw mapS3ReadError(error);
-    }
-    const headMs=performance.now()-readStarted,prepared=await prepareMessage(runtime,p,head),{plan}=prepared.entry;
-    const row=await storeOne(runtime,prepared.entry,storeNotice(runtime.inboxWake,workspaceId,wakeTargets([plan])));
-    logIngested(p,prepared,headMs+prepared.rawMs,row);
-    // Committed: polls waiting on its inboxes read now (inbox-wake.ts).
-    await runtime.inboxWake?.notify(workspaceId, wakeTargets([plan]));
-    if(sourceKey.startsWith(HELD_PREFIX))await dropHeld(runtime,receipt,workspaceId,sourceKey);
-    await wakeWebhooks(runtime,row.queued_count);
-  } finally { await pool.destroy(); }
-};
-
 /** Re-queues receipts whose ingest job was lost (for example after a failed attempt ceiling). Hourly. */
 const recoveryPage='mailbox.recoverReceipts';
 export async function recoverMailReceipts(runtime: Runtime,continuation=false) {
@@ -778,9 +724,9 @@ async function finalizeIngestError(runtime: Runtime, payload: Record<string, unk
 }
 
 /**
- * Batched inbound ingest for >= 2 jobs in the same workspace claimed together: the single-job steps per receipt, with
+ * Inbound ingest for one job or several in the same workspace claimed together: the same steps per receipt, with
  * S3 HeadObject overlapped, one byte-window and billing check for the batch, the copy, parse, attachments and rules
- * overlapped, and every ready message committed under one ingest lane lock via mail_store_incoming_batch.
+ * overlapped, and two or more ready messages committed under one ingest lane lock via mail_store_incoming_batch.
  */
 async function ingestBatch(runtime: Runtime, items: JobBatchItem[]): Promise<JobBatchOutcome[]> {
   if (!items.length) return [];
@@ -868,13 +814,11 @@ async function ingestBatch(runtime: Runtime, items: JobBatchItem[]): Promise<Job
         logIngested(st.p!, st.prepared!, st.headMs! + st.prepared!.rawMs, row, batch);
         settle(st);
         stored.push(st);
-        if (st.p!.sourceKey.startsWith(HELD_PREFIX)) await dropHeld(runtime, st.p!.receipt, workspaceId, st.p!.sourceKey);
+        if (st.p!.sourceKey.startsWith(HELD_PREFIX)) await dropHeld(st.p!.s3, st.p!.receipt, workspaceId, st.p!.sourceKey);
       };
       let rows: { queued_count: number; wait_ms: number; hold_ms: number }[] | undefined;
-      try {
-        rows = ready.length === 1
-          ? [await storeOne(runtime, ready[0]!.prepared!.entry, notice(ready))]
-          : await storeIncomingBatch(runtime.db, workspaceId, ready.map(st => st.prepared!.entry), receivingPolicy(runtime.config), notice(ready));
+      if (ready.length > 1) try {
+        rows = await storeIncomingBatch(runtime.db, workspaceId, ready.map(st => st.prepared!.entry), receivingPolicy(runtime.config), notice(ready));
       } catch { /* Stored one at a time below. */ }
       if (rows) for (const [i, st] of ready.entries()) await committed(st, rows[i], ready.length);
       // Isolate a single conflicting/invalid item (e.g. 40001 ownership/retention race) without failing siblings.
@@ -893,21 +837,11 @@ async function ingestBatch(runtime: Runtime, items: JobBatchItem[]): Promise<Job
   return items.map(i => outcomes.get(i.job.id) ?? { id: i.job.id });
 }
 
+/** A single claimed job is a batch of one. */
 const mailboxIngestHandler: JobHandler = Object.assign(
   async (runtime: Runtime, payload: Record<string, unknown>, job: JobContext) => {
-    let reserved = 0;
-    const key = JSON.stringify([job.workspaceId, payload.sesMessageId]), claim: Claim = { recipients: job.ingest?.recipients, createdAt: job.ingest?.createdAt };
-    if (inProgress.has(key)) throw new JobDeferred(new Date(Date.now() + 2000).toISOString());
-    inProgress.add(key);
-    try {
-      await ingestJob(runtime, payload, job, size => { reserved = reserveMime(size); }, claim);
-    } catch (error) {
-      const outErr = await finalizeIngestError(runtime, payload, job, claim, error);
-      if (outErr !== undefined) throw outErr;
-    } finally {
-      mimeBytes -= reserved;
-      inProgress.delete(key);
-    }
+    const [outcome] = await ingestBatch(runtime, [{ payload, job }]);
+    if (outcome?.error !== undefined) throw outcome.error;
   },
   { batch: ingestBatch },
 );

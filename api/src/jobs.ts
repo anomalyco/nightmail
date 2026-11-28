@@ -3,7 +3,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 import { and, eq, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import { ApiError, databaseCodeOf, databaseConflict, databaseUnavailable, rowId, log, logError, ModuleLoadError, transientDatabaseError } from './core.js';
 import { countDatabaseError } from './health-counters.js';
-import type { ClaimedWebhook, DbExecutor, JobHandler, Runtime } from './core.js';
+import type { ClaimedWebhook, DbExecutor, JobBatchOutcome, JobHandler, Runtime } from './core.js';
 import { jobs } from './db/core.js';
 import { resolveRegionRuntime } from './ses-region-state.js';
 import { failCampaign, failScheduledRelease } from './states.js';
@@ -215,11 +215,26 @@ export async function processJobs(runtime: Runtime, handlers: JobHandlerResolver
     const payloads = group.map(j => stripLoadFailures(j.payload));
     const records = new Map<string, SQL>();
     const settle = (job: Claimed) => (update: SQLWrapper) => runtime.db.execute(withRecords(update, records.get(job.id)));
+    // Each settlement is its own statement: one that fails leaves only its own jobs to the durable lease, never
+    // settles its siblings as failed, and is rethrown once the rest have settled (as handle rethrows its own).
+    let settleFailed = false, settleFailure: unknown;
+    const settling = async (work: () => Promise<unknown>) => {
+      try { await work(); } catch (error) { if (!settleFailed) { settleFailed = true; settleFailure = error; } }
+    };
     try {
-      const outcomes = await handler(ownerRuntime, group.map((j, i) => ({
-        payload: payloads[i]!,
-        job: { id: j.id, attempts: j.attempts, workspaceId: j.workspace_id, leaseFence: j.lease_fence, webhook: j.webhook, ingest: j.ingest, deleteBinding: j.delete_binding, recordWithSettlement: ctes => { records.set(j.id, ctes); } },
-      })));
+      let outcomes: JobBatchOutcome[];
+      try {
+        outcomes = await handler(ownerRuntime, group.map((j, i) => ({
+          payload: payloads[i]!,
+          job: { id: j.id, attempts: j.attempts, workspaceId: j.workspace_id, leaseFence: j.lease_fence, webhook: j.webhook, ingest: j.ingest, deleteBinding: j.delete_binding, recordWithSettlement: ctes => { records.set(j.id, ctes); } },
+        })));
+      } catch (error) {
+        // The handler failed: no records commit with these.
+        for (let i = 0; i < group.length; i++) {
+          await settling(() => settleError(group[i]!, payloads[i]!, error, u => runtime.db.execute(u.getSQL()), claimMs, claimBatchSize, batchStarted));
+        }
+        return;
+      }
       const byId = new Map(outcomes.map(o => [o.id, o]));
       const done: Claimed[] = [];
       const failedItems: { job: Claimed; payload: Record<string, unknown>; error: unknown }[] = [];
@@ -229,32 +244,27 @@ export async function processJobs(runtime: Runtime, handlers: JobHandlerResolver
         else done.push(job);
       }
       // Jobs whose handler recorded nothing complete in one statement; the rest each with their records.
-      const plain = done.filter(j => !records.has(j.id));
-      if (plain.length) {
+      const plain = done.filter(j => !records.has(j.id)), completed = new Set<Claimed>();
+      if (plain.length) await settling(async () => {
         const ids = plain.map(j => j.id), attempts = plain.map(j => j.attempts), fences = plain.map(j => j.lease_fence);
         const stripped = plain.map(j => stripLoadFailures(j.payload) !== j.payload ? JSON.stringify(stripLoadFailures(j.payload)) : null);
         await runtime.db.execute(sql`UPDATE jobs j SET status='completed',lease_until=NULL,last_error=NULL,payload=coalesce(v.payload::jsonb,j.payload)
           FROM unnest(${sql.param(ids)}::text[],${sql.param(attempts)}::int[],${sql.param(fences)}::timestamptz[],${sql.param(stripped)}::text[]) AS v(id,attempts,lease_fence,payload)
           WHERE j.id=v.id AND j.attempts=v.attempts AND j.status='running' AND j.lease_until=v.lease_fence`);
-      }
-      for (const job of done) if (records.has(job.id)) await settle(job)(complete(job, stripLoadFailures(job.payload)));
-      if (done.length) {
-        const jobMs = Date.now() - batchStarted;
-        for (const job of done) {
-          log('info', { event: 'job', jobId: job.id, operation: job.type, attempt: job.attempts, workspaceId: job.workspace_id, code: 'JOB_COMPLETED', claimMs, claimBatchSize, jobMs, batchSize: done.length });
-        }
+        for (const job of plain) completed.add(job);
+      });
+      for (const job of done) if (records.has(job.id)) await settling(async () => { await settle(job)(complete(job, stripLoadFailures(job.payload))); completed.add(job); });
+      const jobMs = Date.now() - batchStarted;
+      for (const job of completed) {
+        log('info', { event: 'job', jobId: job.id, operation: job.type, attempt: job.attempts, workspaceId: job.workspace_id, code: 'JOB_COMPLETED', claimMs, claimBatchSize, jobMs, batchSize: done.length });
       }
       for (const item of failedItems) {
-        await settleError(item.job, item.payload, item.error, settle(item.job), claimMs, claimBatchSize, batchStarted);
-      }
-    } catch (error) {
-      for (let i = 0; i < group.length; i++) {
-        // The handler or a settlement statement failed: no records commit with these.
-        await settleError(group[i]!, payloads[i]!, error, u => runtime.db.execute(u.getSQL()), claimMs, claimBatchSize, batchStarted);
+        await settling(() => settleError(item.job, item.payload, item.error, settle(item.job), claimMs, claimBatchSize, batchStarted));
       }
     } finally {
       activeJobs -= group.length;
     }
+    if (settleFailed) throw settleFailure;
   };
   try {
     while (!failures.length && claims < maximumClaims && Date.now() - started < budgetMs) {
