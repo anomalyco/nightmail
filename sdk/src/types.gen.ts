@@ -4496,6 +4496,17 @@ export type CreateEndpoint = {
     createSender?: boolean;
 };
 
+export type UpdatedEndpoint = Endpoint & {
+    /**
+     * New webhook signing secret, shown once when moving an inbound-format webhook to a new URL.
+     */
+    secret?: string;
+    /**
+     * New X-Webhook-Verification-Token for an inbound-format webhook, shown once when its URL changes.
+     */
+    verificationToken?: string;
+};
+
 export type UpdateEndpoint = {
     /**
      * Calls per minute; extra calls wait for the next minute. Defaults: 600 for webhooks, 60 for Slack and forwards, 30 for Discord.
@@ -6519,6 +6530,17 @@ export type CreateInboundWebhook = {
 export type InboundWebhookList = {
     data: Array<InboundWebhook>;
     nextCursor: string | null;
+};
+
+export type UpdatedInboundWebhook = InboundWebhook & {
+    /**
+     * New signing secret, shown once when moving an inbound-format webhook to a new URL.
+     */
+    secret?: string;
+    /**
+     * inbound format: the X-Webhook-Verification-Token value, shown once when switching to inbound format or moving its URL.
+     */
+    verificationToken?: string;
 };
 
 export type UpdateInboundWebhook = {
@@ -18409,7 +18431,7 @@ export type UpdateEndpointResponses = {
     /**
      * Success
      */
-    200: Endpoint;
+    200: UpdatedEndpoint;
 };
 
 export type UpdateEndpointResponse = UpdateEndpointResponses[keyof UpdateEndpointResponses];
@@ -24730,7 +24752,7 @@ export type UpdateInboundWebhookResponses = {
     /**
      * Success
      */
-    200: InboundWebhook;
+    200: UpdatedInboundWebhook;
 };
 
 export type UpdateInboundWebhookResponse = UpdateInboundWebhookResponses[keyof UpdateInboundWebhookResponses];

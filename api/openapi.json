@@ -13457,6 +13457,26 @@
           }
         ]
       },
+      "UpdatedEndpoint": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Endpoint"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "secret": {
+                "type": "string",
+                "description": "New webhook signing secret, shown once when moving an inbound-format webhook to a new URL."
+              },
+              "verificationToken": {
+                "type": "string",
+                "description": "New X-Webhook-Verification-Token for an inbound-format webhook, shown once when its URL changes."
+              }
+            }
+          }
+        ]
+      },
       "UpdateEndpoint": {
         "type": "object",
         "properties": {
@@ -19129,6 +19149,26 @@
         "required": [
           "data",
           "nextCursor"
+        ]
+      },
+      "UpdatedInboundWebhook": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/InboundWebhook"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "secret": {
+                "type": "string",
+                "description": "New signing secret, shown once when moving an inbound-format webhook to a new URL."
+              },
+              "verificationToken": {
+                "type": "string",
+                "description": "inbound format: the X-Webhook-Verification-Token value, shown once when switching to inbound format or moving its URL."
+              }
+            }
+          }
         ]
       },
       "UpdateInboundWebhook": {
@@ -49041,7 +49081,7 @@
         ],
         "operationId": "updateEndpoint",
         "summary": "Edit an endpoint",
-        "description": "Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. A forward’s address is fixed (its recipient confirmed it); create a new forward instead.",
+        "description": "Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret and verificationToken once. A forward’s address is fixed (its recipient confirmed it); create a new forward instead.",
         "parameters": [
           {
             "schema": {
@@ -49071,7 +49111,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Endpoint"
+                  "$ref": "#/components/schemas/UpdatedEndpoint"
                 }
               }
             }
@@ -66625,7 +66665,7 @@
         "tags": [
           "Inbound webhooks"
         ],
-        "description": "Only supplied fields change. Changing format resets junk to that format's default unless junk is supplied too.",
+        "description": "Only supplied fields change. Changing format resets junk to that format's default unless junk is supplied too. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret (and verificationToken while inbound) once; switching to inbound format returns its verificationToken once.",
         "parameters": [
           {
             "schema": {
@@ -66654,7 +66694,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/InboundWebhook"
+                  "$ref": "#/components/schemas/UpdatedInboundWebhook"
                 }
               }
             }
