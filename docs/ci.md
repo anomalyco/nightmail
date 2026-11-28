@@ -57,7 +57,7 @@ CI, nightly and deploy use Blacksmith Ubuntu 24.04 (4 vCPUs for builds, tests an
 **Pulumi only runs when it has work.** `.github/scripts/pulumi-has-work.sh` compares the commit being deployed with the last healthy main Worker SHA for that stage, not the previous branch tip. Pulumi runs when one of these changed in that range:
 
 - `infra/`, except Markdown and the other stage's stack settings;
-- `api/src/mail-controls.ts`, the token action, or the script that checks the receiving set;
+- `api/src/mail-controls.ts`, `api/byo-templates/`, the token action, or the script that checks the receiving set;
 - the `pulumi` job in `deploy.yml`, including its CLI version, after expanding anchors and ignoring its `Require …` guard steps, the equivalent Ubuntu runner labels and the download-cache step.
 
 An edit to the verifier or scope script alone still runs the live tenant-routing check, before the main Worker migrates. A missing or non-ancestor base, unknown job change or manual dev dispatch requires Pulumi. No token is shared between jobs: each Cloudflare caller mints and uses its own IP-bound token.

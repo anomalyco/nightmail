@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
+import { useQueryClient } from '@tanstack/react-query'
 import { useApiMutation, useWorkspaceAccess } from '../../data/context'
-import { invalidate } from '../../data/invalidation'
+import { invalidate, invalidateResources } from '../../data/invalidation'
 import { ApiError, type ImportPreview, type RiskBreakdown } from '../../data/types'
 import { Alert, Button, Checkbox, DataTable, Dialog, Field, Input, Select, fieldError, MutationError } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
@@ -34,7 +35,7 @@ type Issue = ImportPreview['errors'][number]
 type Part = { csv: string; rows: number[]; skipped: Issue[] }
 /** What the parts' previews found together: their IDs in order, the valid rows, the first ten of them and of the errors. */
 type Review = { ids: string[]; total: number; rows: ImportPreview['rows']; errors: Issue[]; errorCount: number; risky: RiskBreakdown | null }
-type Imported = { imported: number; subscribed: number; errors: Issue[]; errorCount: number; risky: RiskBreakdown | null }
+type Imported = { imported: number; subscribed: number; errors: Issue[]; errorCount: number; risky: RiskBreakdown | null; stopped?: { committed: number; total: number } }
 // The parts' risky counts together (list hygiene): null while no part reported any.
 function addRisky(sum: RiskBreakdown | null, part: RiskBreakdown | null | undefined): RiskBreakdown | null {
   if (!part) return sum
@@ -128,7 +129,7 @@ async function withImportRetry<T>(work: () => Promise<T>, signal: AbortSignal, o
 
 export function ImportContactsDialog({ listId: initialListId = '', onClose }: { listId?: string; onClose: () => void }) {
   // Adding contacts to a list is an owner's or admin's call (the API wants manage for a list import); members import without one.
-  const { canAdminister } = useWorkspaceAccess()
+  const { canAdminister } = useWorkspaceAccess(), client = useQueryClient()
   const [listId, setListId] = useState(canAdminister ? initialListId : '')
   // The file's text stays out of the mutations' inputs: each write's input is serialized to guard against a double submit.
   const source = useRef(''), committed = useRef(new Map<number, ImportPreview>())
@@ -240,6 +241,17 @@ export function ImportContactsDialog({ listId: initialListId = '', onClose }: { 
     abortRef.current?.abort()
     abortRef.current = new AbortController()
     setProgress('')
+    if (committed.current.size > 0) {
+      let imported = 0, subscribed = 0, risky: RiskBreakdown | null = null
+      for (const part of committed.current.values()) {
+        imported += part.imported
+        subscribed += part.subscribed ?? 0
+        risky = addRisky(risky, part.risky)
+      }
+      void invalidateResources(client, invalidate.audienceBulk).catch(() => {})
+      setResult({ imported, subscribed, risky, errors: [], errorCount: 0, stopped: { committed: committed.current.size, total: preview?.ids.length ?? committed.current.size } })
+      return
+    }
     onClose()
   }
   const visibleError = (cause: unknown) => cause instanceof DOMException && cause.name === 'AbortError' ? null : cause
@@ -248,14 +260,14 @@ export function ImportContactsDialog({ listId: initialListId = '', onClose }: { 
   const riskyHref = listId ? `/audience/lists/${listId}?status=risky` : '/audience?status=risky'
   if (result) {
     const imported = result.imported, subscribed = result.subscribed ?? 0, risky = riskyCount(result.risky)
-    return <Dialog open onOpenChange={open => { if (!open) onClose() }} title="Import complete" footer={<>{!consent && imported > 0 && <Link className="ui-button ui-button--secondary ui-button--md" to={unknownHref} onClick={onClose}>Review unknown contacts</Link>}<Button variant="primary" onClick={onClose}>Done</Button></>}><div className="stack audience-result">
-      <p>{plural(imported, 'contact')} imported{consent ? ` · ${number(subscribed)} marked subscribed${subscribed < imported ? ` · ${number(imported - subscribed)} kept their earlier consent` : ''}` : ''}.</p>
+    return <Dialog open onOpenChange={open => { if (!open) onClose() }} title={result.stopped ? 'Import stopped' : 'Import complete'} footer={<>{!consent && imported > 0 && <Link className="ui-button ui-button--secondary ui-button--md" to={unknownHref} onClick={onClose}>Review unknown contacts</Link>}<Button variant="primary" onClick={onClose}>Done</Button></>}><div className="stack audience-result">
+      <p>{plural(imported, 'contact')} imported{result.stopped ? ` before stopping (${number(result.stopped.committed)} of ${number(result.stopped.total)} parts)` : ''}{consent ? ` · ${number(subscribed)} marked subscribed${subscribed < imported ? ` · ${number(imported - subscribed)} kept their earlier consent` : ''}` : ''}.</p>
       {!consent && imported > 0 && <p>They can’t receive campaigns until they consent.</p>}
       {risky && <p>{risky}: {riskBreakdown(result.risky!.byReason, number)}. {riskySkipped} <Link to={riskyHref} onClick={onClose}>Review them</Link></p>}
       {result.errorCount > 0 && <RejectedRows errors={result.errors} count={result.errorCount} skipped />}
     </div></Dialog>
   }
-  return <Dialog className="audience-import-dialog" open onOpenChange={open => { if (!open && !reading) handleCancel() }} title="Import contacts" footer={<>{progress && <p className="muted audience-import-status" role="status">{progress}</p>}<Button disabled={reading} onClick={handleCancel}>Cancel</Button>{preview ? <Button variant="primary" loading={commit.isPending} disabled={busy || !preview.total} onClick={() => void submitImport()}>{preview.total ? `Import ${plural(preview.total, 'contact')}` : 'Nothing to import'}</Button> : <Button variant="primary" loading={busy} disabled={!csv || !mapping.email} onClick={() => void submitPreview()}>Preview import</Button>}</>}>
+  return <Dialog className="audience-import-dialog" open dismissible={!reading && !commit.isPending} onOpenChange={open => { if (!open && !reading) handleCancel() }} title="Import contacts" footer={<>{progress && <p className="muted audience-import-status" role="status">{progress}</p>}<Button disabled={reading} onClick={handleCancel}>Cancel</Button>{preview ? <Button variant="primary" loading={commit.isPending} disabled={busy || !preview.total} onClick={() => void submitImport()}>{preview.total ? `Import ${plural(preview.total, 'contact')}` : 'Nothing to import'}</Button> : <Button variant="primary" loading={busy} disabled={!csv || !mapping.email} onClick={() => void submitPreview()}>Preview import</Button>}</>}>
     <div className="stack">
       <div className="stack audience-import-fields" hidden={Boolean(preview)}>
         {/* The columns are the mapping below once a file is read; the row and size limits are the file's errors. */}

@@ -640,7 +640,11 @@ impl Fixture {
                 false
             }
             None => {
-                conn.smtp.refuse_data();
+                if let Some(store) = conn.store.as_mut() {
+                    conn.smtp.refuse_data(store);
+                } else {
+                    conn.smtp.refuse_data(&mut crate::remote::Offline);
+                }
                 true
             }
         }

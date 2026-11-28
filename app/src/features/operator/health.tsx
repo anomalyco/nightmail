@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
-import { DataTable, EmptyState, ErrorState, StatusBadge, type Column } from '../../components/ui'
+import { Alert, DataTable, EmptyState, ErrorState, StatusBadge, type Column } from '../../components/ui'
 import { operatorApi, type OperatorHealth } from '../../data/operator'
+import { ApiError } from '../../data/types'
 import { ago, label, number, shortDateTime } from '../../lib/format'
 import { HealthFacts, healthColumnDefs } from './skeletons'
 
@@ -61,14 +62,18 @@ const columns: Column<Row>[] = [
   { ...def('detail'), render: row => row.detail ? <span className="op-cell muted" title={row.detail}>{row.detail}</span> : <span className="muted">—</span>, cardRender: row => row.detail || null },
 ]
 
+const refused = (error: unknown) => error instanceof ApiError && (error.status === 401 || error.status === 403)
+
 export function HealthView() {
+  // Keep polling every 30 s across transient failures; only an auth refusal stops it.
   const query = useQuery({ queryKey: ['operator', 'health'], queryFn: ({ signal }) => operatorApi.health(signal), staleTime: 10_000,
-    refetchInterval: current => current.state.status === 'error' ? false : 30_000, refetchIntervalInBackground: false })
-  const health = query.data, d = health?.database
-  if (query.isError && !health) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />
+    refetchInterval: current => refused(current.state.error) ? false : 30_000, refetchIntervalInBackground: false })
+  const health = query.data, d = health?.database, failed = query.isError, stopped = failed && refused(query.error)
+  if (failed && !health) return <ErrorState error={query.error} onRetry={() => void query.refetch()} />
   return <>
+    {failed && <Alert tone="warning" title="Refresh failed">{stopped ? 'Showing earlier figures.' : 'Showing earlier figures; retrying every 30 s.'}</Alert>}
     <HealthFacts values={health ? {
-      Measured: health.generatedAt ? <span className={health.stale ? 'op-health-stale' : undefined}>{measuredAgo(health.generatedAt)}</span> : <span className="op-health-stale">Never</span>,
+      Measured: health.generatedAt ? <span className={health.stale || failed ? 'op-health-stale' : undefined} title={failed ? (stopped ? 'The last refresh was refused' : 'The last refresh failed; retrying every 30 s') : undefined}>{measuredAgo(health.generatedAt)}</span> : <span className="op-health-stale">Never</span>,
       'Open alerts': number(health.alerts.length),
       'Feedback lag': health.feedbackLagSeconds === null ? '—' : span(health.feedbackLagSeconds),
       'Jobs due': health.jobs ? number(health.jobs.reduce((sum, job) => sum + job.pending, 0)) : '—',

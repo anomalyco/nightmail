@@ -118,9 +118,21 @@ export function useCampaignPresence(campaignId: string | null | undefined, view:
   }, [enabled, campaignId, view])
   // An agent drops out two minutes after its last read or save.
   useEffect(() => {
-    const next = Math.min(...[...agents.values()].map(agent => agent.at + AGENT_MS))
-    if (!Number.isFinite(next)) return
-    const timer = setTimeout(() => setNow(Date.now()), Math.max(0, next - Date.now()) + 50)
+    const active = [...agents.values()].map(agent => agent.at + AGENT_MS).filter(until => until > now)
+    if (!active.length) return
+    const next = Math.min(...active)
+    const timer = setTimeout(() => {
+      const current = Date.now()
+      setNow(current)
+      setAgents(map => {
+        let stale = false
+        for (const agent of map.values()) if (current - agent.at >= AGENT_MS) { stale = true; break }
+        if (!stale) return map
+        const kept = new Map<string, Agent>()
+        for (const [id, agent] of map) if (current - agent.at < AGENT_MS) kept.set(id, agent)
+        return kept
+      })
+    }, Math.max(0, next - Date.now()) + 50)
     return () => clearTimeout(timer)
   }, [agents, now])
   // In the order they arrived, so a face that arrives goes at the end and none of the others moves.

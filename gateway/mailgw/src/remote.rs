@@ -1529,6 +1529,9 @@ impl Submitter for Store {
     fn data(&mut self, chunk: &[u8]) -> bool {
         self.spool.as_mut().is_some_and(|s| s.write(chunk))
     }
+    fn abort(&mut self) {
+        drop(self.spool.take());
+    }
     /// The message streams to the API as the request body, with the envelope in x-bane-submit; both are signed, and the
     /// signature names the kind (api/src/protocol-admission.ts).
     fn submit(&mut self, s: Submission<'_>) -> Result<Sent, SubmitError> {

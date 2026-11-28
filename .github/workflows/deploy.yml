@@ -612,7 +612,7 @@ jobs:
       (needs.pulumi.result == 'success' || needs.pulumi.result == 'skipped') &&
       inputs.preview != true && vars.SUPPORT_DEPLOY == 'true'
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 15
+    timeout-minutes: 35
     permissions:
       contents: read
       actions: read

@@ -44,9 +44,11 @@ export function UiNotesLayer() {
   const [fresh, setFresh] = useState<string | null>(null)
   const outline = useRef<HTMLDivElement>(null)
   useEffect(() => { if (!fresh) return; const timer = setTimeout(() => setFresh(null), 1000); return () => clearTimeout(timer) }, [fresh])
+  // Close any open draft or viewer when navigating to a different route.
+  useEffect(() => { setDraft(null); setViewing(null) }, [route])
 
-  const replace = useCallback((note: UiNote) => client.setQueryData<UiNote[]>([...uiNotesKey, 'page', route], current => current?.some(item => item.id === note.id) ? current.map(item => item.id === note.id ? note : item) : [...current ?? [], note]), [client, route])
-  const remove = useCallback((noteId: string) => client.setQueryData<UiNote[]>([...uiNotesKey, 'page', route], current => current?.filter(item => item.id !== noteId)), [client, route])
+  const replace = useCallback((note: UiNote) => client.setQueryData<UiNote[]>([...uiNotesKey, 'page', note.page.route], current => current?.some(item => item.id === note.id) ? current.map(item => item.id === note.id ? note : item) : [...current ?? [], note]), [client])
+  const remove = useCallback((noteId: string, noteRoute = route) => client.setQueryData<UiNote[]>([...uiNotesKey, 'page', noteRoute], current => current?.filter(item => item.id !== noteId)), [client, route])
   const refresh = useCallback(() => void client.invalidateQueries({ queryKey: uiNotesKey, predicate: query => query.queryKey[1] !== 'page' }), [client])
 
   const open = useCallback((node: Element) => {
@@ -128,18 +130,19 @@ export function UiNotesLayer() {
       if (image) replace(await uiNotesApi.screenshot(note.id, image))
     } catch { toast('Note saved, but its screenshot didn’t upload.', 'error') }
   }
+  const activeDraft = draft?.info.route === route ? draft : null
   const viewed = viewing ? ordered.find(note => note.id === viewing.id) ?? null : null
   const unresolved = useMemo(() => ordered.filter(note => !resolved(note.status)), [ordered])
 
   return createPortal(<div data-ui-notes className="uin-layer">
     <div ref={outline} className="uin-outline" hidden />
     <Pins notes={unresolved} number={number} focus={focus} fresh={fresh} onMoved={setMoved} onOpen={(note, anchor) => { setDraft(null); setViewing({ id: note.id, anchor }) }} onFocus={setFocus} />
-    {draft && (phone
-      ? <Sheet open onOpenChange={next => { if (!next) setDraft(null) }} title="New note" className="uin-sheet"><Composer draft={draft} onClose={() => setDraft(null)} onSaved={saved} /></Sheet>
-      : <Anchored anchor={() => draft.target.isConnected ? draft.target.getBoundingClientRect() : null} label="New note"><Composer draft={draft} onClose={() => setDraft(null)} onSaved={saved} /></Anchored>)}
+    {activeDraft && (phone
+      ? <Sheet open onOpenChange={next => { if (!next) setDraft(null) }} title="New note" className="uin-sheet"><Composer draft={activeDraft} onClose={() => setDraft(null)} onSaved={saved} /></Sheet>
+      : <Anchored anchor={() => activeDraft.target.isConnected ? activeDraft.target.getBoundingClientRect() : null} label="New note"><Composer draft={activeDraft} onClose={() => setDraft(null)} onSaved={saved} /></Anchored>)}
     {viewing && viewed && (phone
-      ? <Sheet open onOpenChange={next => { if (!next) setViewing(null) }} title={`Note ${number.get(viewed.id)}`} className="uin-sheet"><Viewer note={viewed} number={number.get(viewed.id)!} moved={moved.has(viewed.id)} onChange={note => { replace(note); refresh() }} onDelete={() => { remove(viewed.id); setViewing(null); refresh() }} onClose={() => setViewing(null)} /></Sheet>
-      : <Anchored anchor={viewing.anchor} label={`Note ${number.get(viewed.id)}`} dismiss={() => setViewing(null)}><Viewer note={viewed} number={number.get(viewed.id)!} moved={moved.has(viewed.id)} onChange={note => { replace(note); refresh() }} onDelete={() => { remove(viewed.id); setViewing(null); refresh() }} onClose={() => setViewing(null)} /></Anchored>)}
+      ? <Sheet open onOpenChange={next => { if (!next) setViewing(null) }} title={`Note ${number.get(viewed.id)}`} className="uin-sheet"><Viewer note={viewed} number={number.get(viewed.id)!} moved={moved.has(viewed.id)} onChange={note => { replace(note); refresh() }} onDelete={() => { remove(viewed.id, viewed.page.route); setViewing(null); refresh() }} onClose={() => setViewing(null)} /></Sheet>
+      : <Anchored anchor={viewing.anchor} label={`Note ${number.get(viewed.id)}`} dismiss={() => setViewing(null)}><Viewer note={viewed} number={number.get(viewed.id)!} moved={moved.has(viewed.id)} onChange={note => { replace(note); refresh() }} onDelete={() => { remove(viewed.id, viewed.page.route); setViewing(null); refresh() }} onClose={() => setViewing(null)} /></Anchored>)}
     <Tray open={tray} onOpenChange={setTray} notes={ordered} number={number} moved={moved} loading={notes.isPending} onFocus={setFocus}
       onPick={(note, row) => {
         const target = moved.has(note.id) || resolved(note.status) ? null : locate(note.element)
