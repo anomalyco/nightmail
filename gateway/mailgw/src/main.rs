@@ -508,18 +508,7 @@ impl Gateway {
                             protocol,
                             "login refused during lockout"
                         );
-                        if matches!(port.protocol, Protocol::Imap) {
-                            let tag = r
-                                .bytes
-                                .split(|b| *b == b' ')
-                                .next()
-                                .unwrap_or(b"*")
-                                .to_vec();
-                            r.bytes = tag;
-                            r.bytes.extend(b" NO [UNAVAILABLE] Try again later\r\n")
-                        } else {
-                            r = Reply::one("454 4.7.0 Try again later");
-                        }
+                        rewrite_auth_unavailable(&mut r, port.protocol, "Try again later");
                     } else if identity.as_ref().is_some_and(|i| {
                         i.unavailable
                             .swap(false, std::sync::atomic::Ordering::Relaxed)
@@ -532,19 +521,11 @@ impl Gateway {
                             protocol,
                             "authentication service unavailable"
                         );
-                        if matches!(port.protocol, Protocol::Imap) {
-                            let tag = r
-                                .bytes
-                                .split(|b| *b == b' ')
-                                .next()
-                                .unwrap_or(b"*")
-                                .to_vec();
-                            r.bytes = tag;
-                            r.bytes
-                                .extend(b" NO [UNAVAILABLE] Authentication service unavailable\r\n")
-                        } else {
-                            r = Reply::one("454 4.7.0 Authentication service unavailable");
-                        }
+                        rewrite_auth_unavailable(
+                            &mut r,
+                            port.protocol,
+                            "Authentication service unavailable",
+                        );
                     } else {
                         tracing::info!(
                             service = "gateway",
@@ -847,6 +828,22 @@ async fn health_listener(
                 }
             }
         }
+    }
+}
+
+fn rewrite_auth_unavailable(r: &mut Reply, protocol: Protocol, message: &str) {
+    if matches!(protocol, Protocol::Imap) {
+        let tag = r
+            .bytes
+            .split(|b| *b == b' ')
+            .next()
+            .unwrap_or(b"*")
+            .to_vec();
+        r.bytes = tag;
+        r.bytes
+            .extend(format!(" NO [UNAVAILABLE] {message}\r\n").as_bytes());
+    } else {
+        *r = Reply::one(&format!("454 4.7.0 {message}"));
     }
 }
 

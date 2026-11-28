@@ -59,11 +59,6 @@ export async function logFacetSourceRows(db: DbExecutor, workspaceId: string, lo
   return cap - rest + Number(received?.n ?? 0);
 }
 
-/** Exact, unfiltered cross-tab for the two unrestricted dashboard viewer bands. */
-export async function readLogFacetCut(db: DbExecutor, workspaceId: string, from: string, region: string | null): Promise<LogFacetCut> {
-  return (await readLogFacetGeneration(db, workspaceId, from, region)).cut;
-}
-
 /**
  * The request's absolute lower bound and optionally a rolling lower bound anchored to this statement's UTC minute.
  * Both are lower bounds only, so even future-dated mail remains in scope. They share the MVCC snapshot

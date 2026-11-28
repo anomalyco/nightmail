@@ -22,7 +22,7 @@ panel ══ WebSocket socketUrl ═══════════════�
 
    | Status | Body | Meaning |
    | --- | --- | --- |
-   | `200` | `{ conversationId, chatToken, socketUrl, expiresAt }` | `socketUrl` already carries the token. `expiresAt` is ISO 8601 (12 hours). |
+   | `200` | `{ conversationId, chatToken, socketUrl, expiresAt }` | `socketUrl` already carries the token. `expiresAt` is ISO 8601 (15 minutes; renew with `/chat/resume`). |
    | `400` | `{ error: { code: "INVALID_REQUEST" } }` | No handoff in the body |
    | `401` | `{ error: { code: "HANDOFF_INVALID" } }` | Bad signature, wrong audience or expired: get a fresh handoff and retry once |
    | `409` | `{ error: { code: "HANDOFF_USED" } }` | This handoff already opened a conversation: get a fresh one |
@@ -135,7 +135,7 @@ The agent finishes its current answer by saying it has asked, and continues on i
 
 ```jsonc
 { "v": 1, "type": "ticket.filed", "seq": 10, "ticketId": "tkt_…",
-  "ticketType": "billing",         // billing | bug | deliverability | account | abuse_report | feature_request | other
+  "ticketType": "billing",         // billing | bug | deliverability | account | abuse_report | privacy | legal | feature_request | other
   "category": "refund",            // the topic within the type when there is one, else the type (kept for v1 panels)
   "replyTo": "a…@acme.com",        // masked: where the team will reply
   "expect": "usually within one business day" }

@@ -11,7 +11,7 @@ import { crc32, deflateSync } from 'node:zlib';
 import * as sdk from '../../sdk/src/sdk.gen.js';
 import { createClient } from '../../sdk/src/client/index.js';
 import type { SendEmailInput } from '../../sdk/src/types.gen.js';
-import { secretPrefixes } from '../src/brand.js';
+import { envNames, secretPrefixes } from '../src/brand.js';
 
 type Op = keyof typeof sdk;
 const dashboard = 'Requires a signed-in dashboard session, not an API key.';
@@ -45,7 +45,8 @@ const safeModeSkips: Partial<Record<Op, string>> = {
   addReceivingHost: hostChange, updateReceivingHost: hostChange, removeReceivingHost: hostChange,
   refreshConnectionScan: byoV2, importConnectionDomains: byoV2, getConnectionRegionStatus: byoV2, requestConnectionProductionAccess: byoV2, updateConnectionStack: byoV2,
 };
-const destructive = (process.env.NIGHTMAIL_E2E_ALLOW_DESTRUCTIVE ?? process.env.BANE_E2E_ALLOW_DESTRUCTIVE) === '1';
+const env = (name: string) => envNames(name).map(k => process.env[k]).find(v => v !== undefined);
+const destructive = env('E2E_ALLOW_DESTRUCTIVE') === '1';
 const SKIP: Partial<Record<Op,string>> = destructive ? {
   createWorkspace: 'OIDC dashboard only; no public delete for a newly created workspace.',
   createConnection: 'Would replace or reconfigure the sole shared Hosted connection; happy path requires a dashboard owner.',
@@ -140,7 +141,7 @@ Object.assign(SKIP, {
 const started = Date.now();
 const prefix = `e2e-${started}-${randomUUID().slice(0, 12)}`;
 // Workflows supply the verified domain and ID for their own installation.
-const setting = (suffix: string) => process.env[`NIGHTMAIL_E2E_${suffix}`] ?? process.env[`BANE_E2E_${suffix}`] ?? process.env[`OPENSEND_E2E_${suffix}`];
+const setting = (suffix: string) => env(`E2E_${suffix}`);
 const domain = setting('DOMAIN') ?? 'e2e.bane.mx', domainId = setting('DOMAIN_ID') ?? 'dom_1aa89a5a687348e89699f5cd97f5496b', region = setting('REGION') ?? 'us-east-2';
 const from = `${prefix}@${domain}`, inbox = `${prefix}-in@${domain}`;
 // SES supports +labels on all three mailboxes. Never reuse a real contact or retained suppression.

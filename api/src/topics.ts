@@ -1,6 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, asc, eq, gt, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
-import { actor, ApiError, databaseCodeOf, errors, IdParams, isoTime, json, notFound, page, PageQuery, response, rowId, security, statementTimedOut, type Actor, type App, type Database, type DbExecutor } from './core.js';
+import { actor, ApiError, databaseCodeOf, errors, IdParams, isoTime, json, notFound, page, PageQuery, response, rowId, security, statementTimedOut, type App, type Database, type DbExecutor } from './core.js';
 import { consentAudit, topics } from './db/audience.js';
 import { enqueue } from './jobs.js';
 

@@ -17,7 +17,7 @@ export async function external<T>(p: Promise<T>): Promise<T> {
   catch (e) { if (e instanceof NightmailError || e instanceof MissingSecret) throw e; throw new BindingError(); }
 }
 
-const permanent = new Set(['INBOUND_RECIPIENTS_CHANGED', 'REPLY_TO_AUTOMATED', 'REPLY_TO_NO_REPLY', 'SELF_SEND', 'RECIPIENT_REQUIRED']);
+const permanent = new Set(['INBOUND_RECIPIENTS_CHANGED', 'REPLY_TO_AUTOMATED', 'REPLY_TO_NO_REPLY', 'RECIPIENT_REQUIRED']);
 function failure(e: unknown, attempts: number, now: number) {
   const api = e instanceof NightmailError ? e : null;
   const code = api ? errorCodeOf(api.code) : e instanceof MissingSecret ? 'MISSING_SECRET' : e instanceof BindingError ? 'BINDING_ERROR' : 'UNKNOWN_ERROR';

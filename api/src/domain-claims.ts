@@ -148,7 +148,6 @@ export const regionalSending = (runtime: Pick<Runtime,'config'>) => runtime.conf
 // Dispatch/recovery readers always understand a persisted binding, including on flag rollback.
 export const sendingConnections = (runtime: Runtime) => sql.identifier(`regional_${isSimulatedSes(runtime) ? 'simulated' : 'sending'}_connections`);
 export type SendingBinding = { domain: string; connection: string; generation: number; account:string; topic:string|null };
-export type SenderRoute = { region: string; verified: boolean; binding: SendingBinding; connection: (ReadyConnection & { region:string; tenant_state:TenantState; pause_reason:string|null }) | null; platform_refused?: boolean };
 /** Every sender check (admission, campaigns, mailbox replies, dispatch) reads its closest claim through this call,
  * which also applies the running platform-domain policy; a refused route is never verified. It locks that claim, so a
  * send transaction reads it only under its send locks (send_admission takes the settings row before it, migration 323). */

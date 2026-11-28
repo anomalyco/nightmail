@@ -410,7 +410,6 @@ const askAi = (meaning: string) => `const asks = decisions(email, { match: ${JSO
 // address they run on stores its mail without an inbox (its route is []), so each side gets exactly its destination:
 // an inbox through inbox.deliver, a Slack, Discord, webhook or forward endpoint (not for junk), kept (store) or dropped.
 export const splitTests = ['always', 'from', 'subject', 'text', 'attachment'] as const;
-export type SplitTest = (typeof splitTests)[number];
 const deliverTo = (destination: string, kind: (endpoint: string) => EndpointType | undefined) => {
   if (destination === 'store') return 'return';
   if (destination === 'drop') return 'drop("sorted out")';

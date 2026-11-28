@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { rowId, type Database, type DbExecutor } from './core.js';
+import type { Database, DbExecutor } from './core.js';
 
 const SOURCE_PAGE = 2048, CHANGE_PACKETS = 128;
 type Coverage = { generation:string; floor:string; after_at:string|null; after_id:string|null; done:boolean;
@@ -16,12 +16,6 @@ export async function lockFacetCoverage(db:DbExecutor, workspace:string) {
     sent_tail_snapshot::text AS tail,sent_seed_xmax::text AS xmax,sent_witnesses_retired AS retired
     FROM log_facet_coverage WHERE workspace_id=${workspace} FOR NO KEY UPDATE SKIP LOCKED`);
   return c??null;
-}
-
-export async function initializeFacetCoverage(db:DbExecutor,workspace:string) {
-  await db.execute(sql`INSERT INTO log_facet_coverage(workspace_id,generation,covered_from)
-    VALUES(${workspace},${rowId('facets')},date_trunc('hour',statement_timestamp(),'UTC')-interval '768 hours')
-    ON CONFLICT(workspace_id) DO NOTHING`);
 }
 
 /** Call with a delta(region, minute, band, status, n) CTE. Bulk upsert in established key order on

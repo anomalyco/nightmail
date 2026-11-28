@@ -40,7 +40,7 @@ async function domainHistory(runtime:Runtime,wid:string,host:string,deadline:num
   }
 }
 
-type Workspace={name:string;ageDays:number;verifiedDomain:string|null;held:boolean;cleanDays:number|null};
+type Workspace={name:string;ageDays:number;held:boolean;cleanDays:number|null};
 type Network=Awaited<ReturnType<typeof publicSignals>>;
 function scorePlacement(net:Network,w:Workspace,history:History|null) {
   const reasons:string[]=[]; let score=0;
@@ -51,9 +51,8 @@ function scorePlacement(net:Network,w:Workspace,history:History|null) {
   if(net.exact.spf) points(1,'valid_spf');
   if(net.exact.dmarc==='valid' || (net.exact.dmarc==='absent' && net.parent?.dmarc==='valid')) points(1,'valid_dmarc');
   if(net.site==='live') points(1,'live_site');
-  const verified=!!w.verifiedDomain && [w.name,net.root].includes(w.verifiedDomain);
   const clean=w.ageDays>=30 && w.cleanDays!==null && w.cleanDays>=30;
-  if(verified || clean) points(2,verified?'verified_signup':'clean_workspace');
+  if(clean) points(2,'clean_workspace');
   const track=!!history && history.accepted>=1000 && history.spanDays>=14 && history.bounces*100<history.accepted && history.complaints*5000<history.accepted;
   if(track) points(3,'clean_domain_history');
   if(net.dbl==='listed') reasons.push('blocklisted');
@@ -61,11 +60,11 @@ function scorePlacement(net:Network,w:Workspace,history:History|null) {
   if(net.lookalike) reasons.push('brand_lookalike');
   const hold=net.dbl==='listed' || w.held || net.lookalike;
   if(net.dbl==='unknown' || net.dbl==='unconfigured') reasons.push('dbl_'+net.dbl);
-  if(!verified && !clean && !track) reasons.push('no_anchor');
+  if(!clean && !track) reasons.push('no_anchor');
   if(score<7) reasons.push('below_threshold');
   if(history===null) reasons.push('domain_history_unknown');
-  return {score,reasons,decision:hold?'hold':score>=7 && (verified || clean || track) && net.dbl==='clear'?'virginia':'ohio',
-    signals:{...net,workspaceAgeDays:w.ageDays,verifiedSignup:verified,cleanWorkspaceDays:w.cleanDays,activeHold:w.held,domainHistory:history}};
+  return {score,reasons,decision:hold?'hold':score>=7 && (clean || track) && net.dbl==='clear'?'virginia':'ohio',
+    signals:{...net,workspaceAgeDays:w.ageDays,verifiedSignup:false,cleanWorkspaceDays:w.cleanDays,activeHold:w.held,domainHistory:history}};
 }
 
 export const shadowPlacement:JobHandler=async(runtime,payload,{workspaceId:wid})=>{
@@ -77,7 +76,6 @@ export const shadowPlacement:JobHandler=async(runtime,payload,{workspaceId:wid})
     WHERE b.domain_id=${id} AND b.workspace_id=${wid} AND pc.kind='shared'`;
   const {rows:[w]}=await runtime.db.execute<Workspace>(sql`SELECT b.name,pc.paused_at IS NOT NULL AS held,
     (SELECT floor(extract(epoch FROM now()-w.created_at)/86400)::int FROM workspaces w WHERE w.id=b.workspace_id) AS "ageDays",
-    NULL::text AS "verifiedDomain",
     (SELECT CASE WHEN sum(h.accepted)>0 AND sum(h.bounces)*100<sum(h.accepted) AND sum(h.complaints)*5000<sum(h.accepted)
       AND max(h.hour) FILTER(WHERE h.accepted>0)>=now()-interval '2 days'
       THEN floor(extract(epoch FROM max(h.hour) FILTER(WHERE h.accepted>0)-min(h.hour) FILTER(WHERE h.accepted>0))/86400)::int END

@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { ApiError, statementTimedOut, type DbExecutor, type JobHandler, type Runtime } from './core.js';
+import { ApiError, statementTimedOut, type DbExecutor, type JobHandler } from './core.js';
 import { JobDeferred, retryDatabaseFailures } from './jobs.js';
 import { displayEvidenceColumns, displayScoreId, displayScoreView, DISPLAY_SCORE_ID_PREFIX, DISPLAY_SCORE_JOB, type SenderScore } from './sender-score.js';
 import type { DayEvidence, DomainAuth } from './standing-model.js';

@@ -68,7 +68,7 @@ export async function holdReceiving(tx:DbExecutor,c:Ctx){
   const grant=await getMcpGrantActor(c.env,'mcp_'+a.grantId,a.workspaceId,tx,approvalUse(a));
   if(grant?.workspaceId!==a.workspaceId||!grant.receivingConsent||!grant.permissions.includes('manage'))throw new ApiError(401,'AUTH_INVALID','The MCP approval behind this request was revoked while it ran. Nothing was changed.');
 }
-export async function ownReceiving(tx:DbExecutor,c:Ctx,kind:'endpoint'|'rituals'|'key'|'route',resource:string|string[]){
+export async function ownReceiving(tx:DbExecutor,c:Ctx,kind:'endpoint'|'key'|'route',resource:string|string[]){
   const a=c.get('actor');if(!a.grantId)return;
   await holdReceiving(tx,c);
   for(const r of Array.isArray(resource)?resource:[resource])await tx.execute(sql`INSERT INTO mail_grant_objects VALUES(${a.grantId},${a.workspaceId},${kind},${r}) ON CONFLICT DO NOTHING`);

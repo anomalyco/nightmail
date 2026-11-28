@@ -9,7 +9,7 @@ import { contacts, consentAudit, imports, listCounts, listMembers, lists, segmen
 import { enqueue, noteEnqueued } from './jobs.js';
 import { ContactTopic, contactTopicStates, recordTopicChoices, topicChoiceJoin, topicChoiceReaches, topicStates, type TopicRule } from './topics.js';
 import { MEMORY_LIMITS, reserveMemory, runInMemoryScope, type MemoryLease } from './isolate-memory.js';
-import { buildBoundedPageJson, PAGE_MAX_BYTES, READ_MAX_WAITERS, READ_RESERVATION_BYTES, streamTextPartsResponse, utf8Bytes, withBoundedRead } from './read-bounds.js';
+import { buildBoundedPageJson, PAGE_MAX_BYTES, streamTextPartsResponse, utf8Bytes, withBoundedRead } from './read-bounds.js';
 import { mailAddress, validMailAddressSql } from './outbound-content.js';
 import { SEND_LIMITS } from './send-limits.js';
 import { RAMP } from './standing-model.js';
@@ -22,8 +22,6 @@ export const CONTACT_PROPERTIES_DB_MAX_BYTES = 16_640;
 export const CONTACT_LIST_IDS_PAGE_MAX = 50;
 export const CONTACT_LIST_IDS_SINGLE_MAX = 200;
 export const AUDIENCE_READ_MAX_BYTES = PAGE_MAX_BYTES;
-export const AUDIENCE_READ_RESERVATION_BYTES = READ_RESERVATION_BYTES;
-export const AUDIENCE_READ_MAX_WAITERS = READ_MAX_WAITERS;
 const AUDIENCE_READ_SECONDS = 5;
 export { utf8Bytes };
 export function isContactSizeCheckViolation(err: unknown): boolean {
@@ -800,14 +798,6 @@ export async function snapshotCampaignAudience(
   }
   if (large) await db.execute(sql`SET LOCAL work_mem TO DEFAULT`);
   return checkedSnapshot({ matched, eligible, suppressed, unsubscribed, risky, captured, bytes: totalBytes, maxBytes }, requiredNotice);
-}
-export async function isSuppressed(runtime: Runtime, identity: Actor, email: string): Promise<boolean> {
-  const [row] = await runtime.db.select({ suppressed: contacts.suppressed }).from(contacts).where(and(scope(contacts, identity), eq(contacts.email, email.trim().toLowerCase()))).limit(1);
-  return row?.suppressed ?? false;
-}
-export async function canMarket(runtime: Runtime, identity: Actor, email: string): Promise<boolean> {
-  const [row] = await runtime.db.select().from(contacts).where(and(scope(contacts, identity), eq(contacts.email, email.trim().toLowerCase()))).limit(1);
-  return !!row && !row.deletedAt && !row.suppressed && row.marketingConsent === 'subscribed';
 }
 /** Who acted on an unsubscribe link, as the consent history records it: the mailbox's one-click (RFC 8058), the hosted
  *  confirmation, the hosted preference page (src/operations.ts), or SES's own subscription event. */

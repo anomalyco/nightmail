@@ -7,7 +7,7 @@ import { fenced, scrubIds, toolResult } from './projection.js';
 export type Customer = {
   channel: 'chat' | 'email'; userId: string | null; name: string | null; email: string | null; role: string | null;
   workspace: { id: string; name: string } | null; workspaces: { id: string; name: string; role: string }[];
-  verified: 'handoff' | 'dmarc' | 'signin' | 'magic_link' | 'agent' | null; contentAccess: boolean; page: string | null;
+  verified: 'handoff' | 'dmarc' | 'signin' | 'agent' | null; contentAccess: boolean; page: string | null;
 };
 
 /** A name (a person's, a workspace's) on one line: line breaks, other white space and control characters become one space. */

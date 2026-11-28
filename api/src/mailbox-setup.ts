@@ -52,7 +52,6 @@ async function awsConfig(region:string, credentials:NonNullable<Runtime['config'
 }
 import {storageBinding} from './mailbox-ingest-input.js';
 import { hasTags, tagKey, TAG_PREFIX } from './resource-tags.js';
-export {storageBinding};
 export async function mailboxS3(runtime: Runtime, wid:string, region: string, bucket:string, db:DbExecutor=runtime.db, resolved?:ReadyConnection|null) {
   let credentials=platformCredentials(runtime);
   if (runtime.config.multiTenant) {
@@ -155,7 +154,7 @@ async function ensureRegion(runtime: Runtime, region: string, installationId: st
     await aws('s3:PutBucketTagging', () => s3.send(new PutBucketTaggingCommand({ Bucket: names.bucket, Tagging: { TagSet: tags(installationId) } }), { abortSignal: signal }));
     await aws('s3:PutPublicAccessBlock', () => s3.send(new PutPublicAccessBlockCommand({ Bucket: names.bucket, PublicAccessBlockConfiguration: publicAccessBlock }), { abortSignal: signal }));
     await aws('s3:PutBucketPolicy', () => s3.send(new PutBucketPolicyCommand({ Bucket: names.bucket, Policy: JSON.stringify(bucketPolicy(names.bucket, region, account, names.rulePrefix)) }), { abortSignal: signal }));
-    await aws('s3:PutLifecycleConfiguration', () => s3.send(new PutBucketLifecycleConfigurationCommand({ Bucket: names.bucket, LifecycleConfiguration: {Rules:lifecycleRules(installationId===POOL_INSTALLATION)} }), { abortSignal: signal }));
+    await aws('s3:PutLifecycleConfiguration', () => s3.send(new PutBucketLifecycleConfigurationCommand({ Bucket: names.bucket, LifecycleConfiguration: {Rules:lifecycleRules(false)} }), { abortSignal: signal }));
 
     // Topic: CreateTopic is idempotent, so ownership is proven by tags, never by name alone.
     const expectedTopic = `arn:aws:sns:${region}:${account}:${names.topicName}`;
@@ -171,9 +170,7 @@ async function ensureRegion(runtime: Runtime, region: string, installationId: st
     await register(account,names.bucket,expectedTopic);
     const subscriptions = await aws('sns:ListSubscriptionsByTopic', () => sns.send(new ListSubscriptionsByTopicCommand({ TopicArn: expectedTopic }), { abortSignal: signal }));
     const subscription=subscriptions.Subscriptions?.find(sub => sub.Protocol === 'https' && sub.Endpoint === endpoint);
-    const subscribed=subscription ?? await aws('sns:Subscribe', () => sns.send(new SubscribeCommand({ TopicArn: expectedTopic, Protocol: 'https', Endpoint: endpoint, ReturnSubscriptionArn: false, Attributes: { RawMessageDelivery: 'false' } }), { abortSignal: signal }));
-    if (installationId===POOL_INSTALLATION && !subscribed.SubscriptionArn?.startsWith(expectedTopic+':')) throw new ApiError(503,'INBOUND_CONFIRMATION_PENDING','Waiting for confirmation of the inbound SNS subscription.',undefined,true);
-    if(installationId===POOL_INSTALLATION && runtime.config.receivingRedrive && region==='us-east-2') await aws('sns:SetSubscriptionAttributes',()=>sns.send(new sdk.sns.SetSubscriptionAttributesCommand({SubscriptionArn:subscribed.SubscriptionArn,AttributeName:'RedrivePolicy',AttributeValue:JSON.stringify({deadLetterTargetArn:`arn:aws:sqs:${region}:${account}:bane-inbound-dead-letters`})}),{abortSignal:signal}));
+    if (!subscription) await aws('sns:Subscribe', () => sns.send(new SubscribeCommand({ TopicArn: expectedTopic, Protocol: 'https', Endpoint: endpoint, ReturnSubscriptionArn: false, Attributes: { RawMessageDelivery: 'false' } }), { abortSignal: signal }));
 
     // One receipt rule set is active per account and region. Join an existing one; never replace it.
     // Activating a set changes how the whole account receives mail, so the runtime credentials cannot
@@ -184,7 +181,6 @@ async function ensureRegion(runtime: Runtime, region: string, installationId: st
   }
 }
 
-const ruleFor = receiptRule;
 function ruleMatches(rule: ReceiptRule, expected: ReceiptRule) {
   const action = rule.Actions?.length === 1 ? rule.Actions[0]!.S3Action : undefined;
   const want = expected.Actions![0]!.S3Action!;
@@ -304,7 +300,7 @@ export async function reconcileRegion(runtime: Runtime, region: string, workspac
     while (pending.length) plan.push({ name: `${names.rulePrefix}${String(++next).padStart(3, '0')}`, existing: undefined as unknown as ReceiptRule, recipients: pending.splice(0, RULE_CAPACITY) });
     let after = resources.rules.at(-1)?.Name;
     for (const item of plan) {
-      const rule = ruleFor(item.name, item.recipients, resources);
+      const rule = receiptRule(item.name, item.recipients, resources);
       if (!item.recipients.length) { if (item.existing) await resources.ses('ses:DeleteReceiptRule', new DeleteReceiptRuleCommand({ RuleSetName: resources.ruleSetName, RuleName: item.name })); continue; }
       if (!item.existing) { await resources.ses('ses:CreateReceiptRule', new CreateReceiptRuleCommand({ RuleSetName: resources.ruleSetName, Rule: rule, ...(after ? { After: after } : {}) })); after = item.name; }
       else if (!ruleMatches(item.existing, rule)) await resources.ses('ses:UpdateReceiptRule', new UpdateReceiptRuleCommand({ RuleSetName: resources.ruleSetName, Rule: rule }));

@@ -713,6 +713,35 @@ impl Imap {
                                     | Item::Rfc822Size
                             )
                         });
+                        let header_only = !meta_only
+                            && items.iter().all(|x| {
+                                matches!(
+                                    x,
+                                    Item::Flags
+                                        | Item::Uid
+                                        | Item::ModSeq
+                                        | Item::InternalDate
+                                        | Item::Rfc822Size
+                                        | Item::Envelope
+                                        | Item::Rfc822Header
+                                        | Item::BodyExt {
+                                            section: Some(
+                                                imap_codec::imap_types::fetch::Section::Header(
+                                                    None,
+                                                )
+                                                    | imap_codec::imap_types::fetch::Section::HeaderFields(
+                                                        None,
+                                                        _,
+                                                    )
+                                                    | imap_codec::imap_types::fetch::Section::HeaderFieldsNot(
+                                                        None,
+                                                        _,
+                                                    ),
+                                            ),
+                                            ..
+                                        }
+                                )
+                            });
                         let mut next_page = 0;
                         for (at, u) in uids.iter().enumerate() {
                             if !meta_only && uids.len() > 8 && at == next_page {
@@ -724,19 +753,9 @@ impl Imap {
                                 let e = &f.entries[j];
                                 s.budget()?;
                                 let loaded;
-                                let e = if items.iter().all(|x| {
-                                    matches!(
-                                        x,
-                                        Item::Flags
-                                            | Item::Uid
-                                            | Item::ModSeq
-                                            | Item::InternalDate
-                                            | Item::Rfc822Size
-                                    )
-                                }) {
+                                let e = if meta_only {
                                     e
                                 } else {
-                                    let header_only=items.iter().all(|x|matches!(x,Item::Flags|Item::Uid|Item::ModSeq|Item::InternalDate|Item::Rfc822Size|Item::Envelope|Item::Rfc822Header|Item::BodyExt{section:Some(imap_codec::imap_types::fetch::Section::Header(None)|imap_codec::imap_types::fetch::Section::HeaderFields(None,_)|imap_codec::imap_types::fetch::Section::HeaderFieldsNot(None,_)),..}));
                                     loaded = if header_only {
                                         s.header(&p, e)?
                                     } else {
@@ -1933,7 +1952,7 @@ mod tests {
         }
     }
 
-    /// An inbox at its folder limits (200 folders, 255-byte names) lists for any pattern
+    /// An inbox with 200 max-length folders (255-byte names; store limit is 1,000) lists for any pattern
     /// with work set by its folders: a run of wildcards is one wildcard, a literal pattern
     /// is a comparison, and a wildcard part too long for the listed names is refused before
     /// any folder is matched.

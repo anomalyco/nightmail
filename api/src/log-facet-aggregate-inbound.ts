@@ -4,11 +4,6 @@ import { lockFacetCoverage, mergeFacetCells } from './log-facet-aggregate-sent.j
 
 const MESSAGE_PAGE=256, DEADLINE_PAGE=512;
 type Progress={ after_at:string|null; after_id:string|null; seeded:boolean; clock:string; advancing:string|null };
-export async function initializeInboundFacetProgress(db:DbExecutor,workspace:string) {
-  await db.execute(sql`INSERT INTO log_facet_inbound_progress(workspace_id,generation)
-    SELECT workspace_id,generation FROM log_facet_coverage WHERE workspace_id=${workspace}
-    ON CONFLICT(workspace_id,generation) DO NOTHING`);
-}
 async function progress(db:DbExecutor,workspace:string,generation:string) {
   const {rows:[p]}=await db.execute<Progress>(sql`SELECT after_at::text,after_id,seeded,
     visibility_clock::text AS clock,advancing_to::text AS advancing FROM log_facet_inbound_progress

@@ -1,5 +1,5 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { and, asc, desc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
 import { actorMailAccess, budgetedRead, filteredInboxPasswords, mailboxRoute, readLimit, readLimitNote, receivingAdmin, receivingConsentRoute, workspaceMailAccess, ApiError, denied, requiredOf, restrictedArea, fullAccessRefusal, unrestrictedRequired, receivedMailRead, receivedMailRefusal, RECEIVING_HOST_CHANGE, admits, digest, errors, getSes, id, isoTime, json, lasting, lazyModule, log, ModuleLoadError, response, SuppressionEventData, type Actor, type App, type Ctx, type DbExecutor, type MailboxAccess, type Runtime } from './core.js';
 import { buildBoundedPageJson, PAGE_MAX_BYTES, withBoundedRead } from './read-bounds.js';
 import { hostInDomains } from './domain-mail.js';
@@ -7,7 +7,7 @@ import { authenticate, chargeCredential, createdInboxes, delegatedInbox, keyExpi
 import { boundRequestBody } from './request-body.js';
 import { auditContext, auditInsert, recordAudit } from './audit.js';
 import { domains } from './db/operations.js';
-import { claimReceivable, claimSends, connectionReady, hostTakesAddresses, receivingSetup, setupError, type ReceivingSetup } from './states.js';
+import { claimSends, connectionReady, hostTakesAddresses, receivingSetup, setupError, type ReceivingSetup } from './states.js';
 import { mailboxAddresses, mailboxDomains, mailboxes, mailboxKeys, mailboxThreads, mailMessages, type MailboxPermission } from './db/mailbox.js';
 import { expectedMx, checkMx, mxBlocksEnable } from './mailbox-dns.js';
 import { eventView, inboundEventTypes, latestCursor, readEvents, recordEvents } from './mailbox-events.js';
@@ -26,7 +26,7 @@ import { mailboxCreates, rolledBack } from './idempotency.js';
 import { registerLogs } from './logs.js';
 import { registerInboundOverview } from './inbound-overview.js';
 import { AddressState, assertInboundRecipients, createInboundThreadRoute, InboundAddressId, inboundReplyTarget, queueInboundThreadMessage, registerInboundThreadReads, replyToInboundThreadRoute, visibleThreadAddresses } from './inbound-threads.js';
-import { legacyAddressOperations, productName } from './brand.js';
+import { inboxKeyBearer, inboxKeyPrefix, legacyAddressOperations, productName } from './brand.js';
 import { followMxJob, receivingIssueSchema } from './operations.js';
 import { addHost, enableHosted, listHosts, planReceiving, receiveInTransaction, removeHost, updateHost } from './receiving-hosts.js';
 
@@ -68,8 +68,8 @@ export async function authorizeInboxKey(c:Ctx,token:string):Promise<MailboxAcces
 async function mailboxAuth(c: Ctx, next: () => Promise<void>) {
   const delegated=delegatedInbox(c.env);if(delegated){c.set('mailboxAccess',delegated);return next();}
   const token = c.req.header('authorization')?.match(/^Bearer (.+)$/i)?.[1];
-  if (token && /^(?:nm|bane|os)_mbx_/.test(token)) { // bane_/os_: remove after rename cleanup
-    if (!/^(?:nm|bane|os)_mbx_[0-9a-f]{64}$/.test(token)) throw new ApiError(401, 'AUTH_INVALID', 'The mailbox key is invalid or has been revoked.');
+  if (token && inboxKeyPrefix.test(token)) {
+    if (!inboxKeyBearer.test(token)) throw new ApiError(401, 'AUTH_INVALID', 'The mailbox key is invalid or has been revoked.');
     c.set('mailboxAccess', await authorizeInboxKey(c,token));
     return next();
   }

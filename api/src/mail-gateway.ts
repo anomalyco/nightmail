@@ -9,6 +9,7 @@ import { boundRequestBody } from './request-body.js';
 import { passwordDigest } from './inbox-passwords.js';
 import { receivingPolicy } from './mailbox-ingest-input.js';
 import { withMailObjects } from './mail-objects.js';
+import { flagNames } from './inbox-folders.js';
 import {objectProjection} from './protocol-preview.js';
 
 const bad = () => new ApiError(403, 'PROTOCOL_DENIED', 'Protocol access denied.');
@@ -92,7 +93,6 @@ function equal(a: string, b: string) {
 export const principal = (runtime: Runtime, protocol: 'imap' | 'smtp', identity: ReturnType<typeof sql>) =>
   sql`SELECT b.workspace_id AS w,b.id AS b,p.id AS k FROM inbox_app_passwords p JOIN mailboxes b ON b.id=p.inbox_id WHERE ${identity} AND p.revoked_at IS NULL AND ${protocol}=ANY(p.protocols) AND b.kind='inbox' AND b.retention_mode='forever' AND b.delete_after IS NULL AND NOT EXISTS(SELECT FROM mail_grant_objects g WHERE g.kind='protocol' AND g.workspace_id=b.workspace_id AND g.resource=p.id AND NOT mail_receiving_grant(b.workspace_id,g.grant_id,${receivingPolicy(runtime.config)}::jsonb))`;
 const folders = sql`(SELECT jsonb_agg(jsonb_build_object('key',f.role,'path',inbox_folder_path(f),'next',f.uid_next,'validity',f.uid_validity,'highest',f.highest_modseq,'subscribed',f.subscribed,'total',f.total,'unseen',f.unseen) ORDER BY role) FROM inbox_folders f WHERE f.inbox_id=a.b)`;
-const fields = ['flagged', 'answered', 'draft', 'forwarded', 'junk', 'notJunk', 'mdnSent'] as const;
 /** Snapshot entries per page: a 100,000-message folder selects in ten pages. */
 const PAGE = 10000;
 /** An IMAP keyword is any RFC 3501 atom (printable ASCII but ( ) { % * " \ ] and space), at most 64 characters;
@@ -358,7 +358,7 @@ export function registerMailGateway(app: App) {
     }
     // A single statement takes the phase-2 inbox fence, resolves UIDs and performs the batch.
     const flags = Object.fromEntries(
-      [...fields, 'read', 'deleted'].flatMap((k, i) => {
+      [...flagNames, 'read', 'deleted'].flatMap((k, i) => {
         const on = p.flags.some(
           (f) => f.toLowerCase() === (names[i] ?? (i === 7 ? '\\Seen' : '\\Deleted')).toLowerCase(),
         );

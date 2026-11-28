@@ -90,6 +90,9 @@ export const requestedScopes = (config: { oauthScopePrefix?: OauthScopePrefix })
 export const secretPrefixes = { apiKey: 'nm_', addressKey: 'nm_mbx_', agentToken: 'nm_agent_', supportGrant: 'nm_support_', notesKey: 'nm_notes_', agentSetup: 'nm_setup_', deviceCode: 'nm_device_' } as const;
 /** Earlier prefixes stay valid: bane_… and, before it, OpenSend's os_…. Remove after rename cleanup. */
 export const legacySecretPrefixes = ['bane', 'os'] as const;
+/** Current and earlier prefixes for address/inbox bearer keys (nm_mbx_, bane_mbx_, os_mbx_). */
+export const inboxKeyPrefix = /^(?:nm|bane|os)_mbx_/;
+export const inboxKeyBearer = /^(?:nm|bane|os)_mbx_[0-9a-f]{64}$/i;
 /** What a key list shows of a new secret: its kind's prefix and the first 8 characters after it. */
 export const shownPrefix = (secret: string) => secret.slice(0, secret.lastIndexOf('_') + 9);
 /** Any secret of ours (current or earlier prefix) inside text, for redaction. Use with replace or matchAll. */
