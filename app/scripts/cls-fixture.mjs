@@ -1071,9 +1071,10 @@ export async function seed(fx) {
   void nia;
   // Lumen Labs is a design partner: free (not billed) for 60 days, so its Billing page shows the free plan.
   await db.query("SELECT billing_set_workspace_free('ws_fresh', true, 'Design partner', now()+interval '60 days', 'operator:user_dana')");
-  // An MCP client dana connected as a labelled profile, waiting for its workspace (its page is /settings/mcp/<id>).
+  // An MCP client dana connected as a labelled profile, waiting for its workspace (its page is /settings/mcp/<id>). Each
+  // fixture approval's token was issued now, so it is active (nightmail_approval_active: 30 days after its newest token).
   const mcp = 'mcp_at_cls_fixture';
-  await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,workspace_id,permissions,expires_at,issued_at,profile) VALUES($1,'https://account.anoma.ly','user_dana','user_dana','opencode',NULL,'{read,send}',now()+interval '1 day',0,'work')", [mcp]);
+  await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,workspace_id,permissions,expires_at,issued_at,profile) VALUES($1,'https://account.anoma.ly','user_dana','user_dana','opencode',NULL,'{read,send}',now()+interval '1 day',floor(extract(epoch FROM now()))::bigint,'work')", [mcp]);
   // The same connection approved for the support inbox (api/src/support-agents.ts), and a second sign-in of it asking with a
   // code: Operator → Agents lists the one and opens the other's approval from its link.
   await db.query("INSERT INTO support_agent_approvals(id,grant_id,consent,user_id,expires_at,last_used_at) VALUES('sag_' || repeat('a',26),$1,'cls-consent-1','user_dana',now()+interval '30 days',now()-interval '5 minutes')", [mcp]);
@@ -1084,7 +1085,7 @@ export async function seed(fx) {
   await db.query("INSERT INTO agent_setups(id,kind,secret_hash,user_code,client_name,expires_at,for_workspace_id,for_user_id,for_prompt_copied_at) VALUES ($1,'device',repeat('0',64),'DFGHJKLM','Devin',now()+interval '14 minutes','ws_builtin','user_uma',now()-interval '6 hours')", ['ags_' + 'd'.repeat(32)]);
   // API keys' agent tokens: that agent with two short-lived tokens it made in Northwind, and Sam's agent with one (an
   // owner sees another member's agent once it has made tokens here).
-  await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,workspace_id,permissions,expires_at,issued_at) VALUES('mcp_at_cls_sam','https://account.anoma.ly','user_sam','user_sam','claude-code',NULL,'{read}',now()+interval '1 day',0)");
+  await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,workspace_id,permissions,expires_at,issued_at) VALUES('mcp_at_cls_sam','https://account.anoma.ly','user_sam','user_sam','claude-code',NULL,'{read}',now()+interval '1 day',floor(extract(epoch FROM now()))::bigint)");
   await db.query(`INSERT INTO agent_tokens(id,workspace_id,grant_id,permissions,domains,purpose,expires_at,created_at) VALUES
     ('agt_cls_import','ws_northwind',$1,'["read","send"]','[]','Import October contacts',now()+interval '50 minutes',now()-interval '10 minutes'),
     ('agt_cls_digest','ws_northwind',$1,'["send"]','["mail.northwind.example"]','Send the weekly digest',now()+interval '5 hours',now()-interval '1 hour'),
@@ -1152,7 +1153,7 @@ export async function seed(fx) {
   await kai.api('POST', '/v1/endpoints', { type: 'slack', name: 'support', url: 'https://hooks.slack.com/services/T0SYNTH/B0SYNTH/driftwoodfixture0a1' }, 201);
   await kai.api('PUT', '/v1/rules', { rules: [{ key: 'triage', source: liveSource(0) }], attachments: [{ rule: 'triage', target: desk.id, continue: false }] }, 200);
   const agent = await kai.api('POST', '/v1/api-keys', { name: 'Refund agent', permissions: ['read', 'send', 'manage'], domains: [] }, 201);
-  await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,workspace_id,permissions,expires_at,issued_at,profile,receiving) VALUES('mcp_at_cls_live','https://account.anoma.ly','user_kai','user_kai','opencode','ws_live','{read,send,manage}',now()+interval '1 day',0,'work',true)");
+  await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,workspace_id,permissions,expires_at,issued_at,profile,receiving) VALUES('mcp_at_cls_live','https://account.anoma.ly','user_kai','user_kai','opencode','ws_live','{read,send,manage}',now()+interval '1 day',floor(extract(epoch FROM now()))::bigint,'work',true)");
   fx.liveKey = agent.secret;
   return {
     ...newsletterIds, mcp, deviceCode: 'BCDF-GHJK', abuseCluster, restricted: 'ws_harbor', email, junkEmail, imageEmail, bouncedEmail: failed.bounced, delayedEmail: failed.delayed, receivedEmail: 'msg_northwind_invoice', threadEmail: thread.email, threadReceived: thread.received, supportThread: thread.thread, domain: nw.id, sendingDomain: sendingDomain.id, stuckDomain: stuckDomain.id, correctDomain: correctDomain.id, noDnsDomain: noDnsDomain.id, wildcardDomain: wildcardDomain.id, parkedDomain: parkedDomain.id, builtinDomain: builtinDomain.id, address: A.support.id, inbox, inboundWebhook: crmId,
