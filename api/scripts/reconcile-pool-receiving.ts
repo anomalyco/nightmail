@@ -1,7 +1,7 @@
 import {sql} from 'drizzle-orm';
 import {nodeRuntime} from '../src/adapters/node.js';
 import {requirePlatformAccount} from '../src/config.js';
-import type {Runtime} from '../src/core.js';
+import type { Runtime } from '../src/core/types.js';
 import {caller,platformCredentials} from '../src/provider-credentials.js';
 import {mailboxResources,preparePoolReceiving} from '../src/mailbox-setup.js';
 import {POOL_INSTALLATION} from '../src/ses-setup.js';

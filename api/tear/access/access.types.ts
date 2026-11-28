@@ -138,7 +138,7 @@ export function restAllows(op: CatalogOp, a: EvalActor): boolean {
     return hasPerm(a, "read");
   }
 
-  // Received mail reads: an API key limited to sender domains reads the mail addressed to them with read (core.ts
+  // Received mail reads: an API key limited to sender domains reads the mail addressed to them with read (core/access.ts
   // domainMailAccess); any other workspace credential as an address-scoped mailbox path.
   if (p.scope === "recipient") return a.domainLimited ? a.kind === "apiKey" && hasPerm(a, "read") : a.manage;
 

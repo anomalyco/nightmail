@@ -1,6 +1,6 @@
 import { z } from '@hono/zod-openapi';
 import { eq, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
-import type { DbExecutor } from './core.js';
+import type { DbExecutor } from './core/types.js';
 import { mailMessages as messages, mailboxMessages as links, mailboxes } from './db/mailbox.js';
 import { emails } from './db/sending.js';
 import { EmailStatusFilter } from './sending.js';

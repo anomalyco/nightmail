@@ -1,5 +1,8 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, digest, senderDomainAllowed, wrapModuleLoad, type Actor, type Ctx, type Runtime } from './core.js';
+import { ApiError, wrapModuleLoad } from './core/errors.js';
+import { digest } from './core/http.js';
+import { senderDomainAllowed } from './core/access.js';
+import type { Actor, Ctx, Runtime } from './core/types.js';
 import { apiKeys } from './db/core.js';
 import { mailboxKeys } from './db/mailbox.js';
 import { API_KEY, checkBudget, credentialCtes } from './auth.js';

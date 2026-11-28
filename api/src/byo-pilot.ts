@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { DbExecutor, Runtime } from './core.js';
+import type { DbExecutor, Runtime } from './core/types.js';
 
 export async function byoEnabled(r:Runtime,wid:string,locked?:DbExecutor) {
   if (!r.config.multiTenant || !r.config.byoV2) return false;

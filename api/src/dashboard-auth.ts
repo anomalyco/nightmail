@@ -3,7 +3,10 @@ import {and,asc,eq,isNotNull,sql} from 'drizzle-orm';
 import type {BillingAccountRow} from './billing/state.js';
 import {uiNotesAllowedQuery} from './operator-identity.js';
 import {lists} from './db/audience.js';
-import {ApiError,denied,errors,isSimulatedSes,response,security,timed,type App,type Runtime} from './core.js';
+import { ApiError, denied, errors } from './core/errors.js';
+import { isSimulatedSes } from './core/ses.js';
+import { response, security, timed } from './core/http.js';
+import type { App, Runtime } from './core/types.js';
 import {accountBrowserRoute,accountSessionActor,accountSessionUser,migrateLegacyCookies,requireDashboardOrigin,settleDefaultAccount} from './account-login.js';
 import {Workspace,WorkspaceRole,sessionMembershipsQuery,type SessionMembershipRow} from './workspaces.js';
 import {ConnectionSummary,connectionSummaryQuery,connectionSummaryOf,type ConnectionSummaryRow,HOSTED_STARTING_SECONDS} from './provider-connections.js';
@@ -13,7 +16,7 @@ import { WORKSPACE_FOCUS } from './workspace-focus.js';
 
 export async function verifiedDashboardUser(runtime:Runtime,headers:Headers,requireCurrentEmail=false) {
   // A bearer credential (API key, MCP or agent token) never rides the session cookie. It is refused with 403, as on
-  // every other dashboard-only route (core.ts); 401 is for a caller with no session at all.
+  // every other dashboard-only route (core/access.ts); 401 is for a caller with no session at all.
   if (headers.has('authorization')) throw denied('DASHBOARD_AUTH_REQUIRED','Use a signed-in dashboard session.',{credential:'dashboard'});
   const user=await accountSessionUser(runtime,headers,requireCurrentEmail);
   // Signed in, but this session's sign-in proves no mailbox for the account's address (hosted: an emailed link or code

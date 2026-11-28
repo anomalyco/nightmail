@@ -1,7 +1,10 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { SQL, sql } from 'drizzle-orm';
 import type { OperatorRole } from './operator-identity.js';
-import { ApiError, errors, memberAdminRefusal, notFound, requestOrigin, response, webhookUrlHint, type App, type Ctx, type DbExecutor, type Runtime } from './core.js';
+import { ApiError, errors, notFound } from './core/errors.js';
+import { memberAdminRefusal, webhookUrlHint } from './core/access.js';
+import { requestOrigin, type App, type Ctx, type DbExecutor, type Runtime } from './core/types.js';
+import { response } from './core/http.js';
 import { productName } from './brand.js';
 
 // The per-account audit trail (migration 260): one append-only table, written by recordAudit() inside the

@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm';
-import { log, logError, type DbExecutor, type Runtime } from './core.js';
+import { log } from './log.js';
+import { logError } from './core/errors.js';
+import type { DbExecutor, Runtime } from './core/types.js';
 import { EMAIL_OUTCOME_BITS as OUTCOME } from './email-outcomes.js';
 
 // First-party delivery history: what each workspace's own mail did, kept past the 30 days the sent-mail log keeps it

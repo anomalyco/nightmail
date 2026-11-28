@@ -1,7 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
 import { auditContext, auditInsert, recordAudit, type AuditContext } from './audit.js';
-import { ApiError, assertSesConfigured, denied, isSimulatedSes, errors, id, json, log, logError, ModuleLoadError, notFound, response, wrapModuleLoad, type App, type Ctx, type Runtime, type JobHandler } from './core.js';
+import { ApiError, denied, errors, logError, ModuleLoadError, notFound, wrapModuleLoad } from './core/errors.js';
+import { assertSesConfigured, isSimulatedSes } from './core/ses.js';
+import { id, json, response } from './core/http.js';
+import { log } from './log.js';
+import type { App, Ctx, Runtime, JobHandler } from './core/types.js';
 import { caller, assume, platformCredentials } from './provider-credentials.js';
 import { awsError, discoverSes, feedbackUrl, loadSetupSdk, POOL_INSTALLATION, poolTenantName, provisionSes, provisionTenant, setupResources, verifiedByoDomains, type SesDiscovery, byoStackName } from './ses-setup.js';
 import { builtinClaim, builtinSettingUp, importByoClaims, releaseConnectionClaims } from './domain-claims.js';

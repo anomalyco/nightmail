@@ -1,6 +1,8 @@
 import {createRoute,z} from '@hono/zod-openapi';
 import {sql} from 'drizzle-orm';
-import {ApiError,denied,errors,requiredOf,IdParams,response,security,type App,type Ctx} from './core.js';
+import { ApiError, denied, errors, requiredOf } from './core/errors.js';
+import { IdParams, response, security } from './core/http.js';
+import type { App, Ctx } from './core/types.js';
 import {protectedResourceMetadata} from './oidc-resource.js';
 import { productName } from './brand.js';
 export {authorizeResource as withMcpAuthorization,externalMcpGrant as getMcpGrantActor,approvalUse} from './oidc-resource.js';

@@ -12,7 +12,9 @@ import { dispatchWakeKey } from './dispatcher.js';
 import { clientIpHeader, clientNetworkHeader, legacyClientIpHeaders } from './brand.js';
 import { oldDashboardReference } from './dashboard-reference.js';
 import { isMissingComparePage, isMissingDocsPage, isMissingLegalPage, isPublicPage, movedPage, SITE_INDEX, withSiteIndex } from './site-index.js';
-import { admissionDenied, admissionPeer, ApiError, digest, log, logError, guardPublicRequest, setLogContext, snsIngress } from './core.js';
+import { admissionDenied, admissionPeer, digest, guardPublicRequest, snsIngress } from './core/http.js';
+import { ApiError, logError } from './core/errors.js';
+import { log, setLogContext } from './log.js';
 import { brotliCompress, constants, gzip } from 'node:zlib';
 import { promisify } from 'node:util';
 

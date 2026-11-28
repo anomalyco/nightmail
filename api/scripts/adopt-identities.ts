@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { SESv2Client,CreateTenantResourceAssociationCommand,GetEmailIdentityCommand,ListResourceTenantsCommand,DkimSigningAttributesOrigin } from '@aws-sdk/client-sesv2';
 import { GetCallerIdentityCommand,STSClient } from '@aws-sdk/client-sts';
 import { postgresConnection } from '../src/adapters/node.js';
-import { id } from '../src/core.js';
+import { id } from '../src/core/http.js';
 import { domainName,claimNameAllowed } from '../src/domain-claims.js';
 import { previousDomains,publicOrigin } from '../src/brand.js';
 import { adoptionFingerprint,matchesAdoption } from '../src/adopted-identity.js';

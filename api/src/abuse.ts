@@ -7,7 +7,9 @@ import { clientIpHeader, clientNetworkHeader } from './brand.js';
 import { isBuiltinHost } from './builtin-domain.js';
 import type { Client, Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { JobDeferred } from './jobs.js';
-import { databaseCodeOf, log, type JobHandler, type Runtime } from './core.js';
+import { databaseCodeOf } from './core/errors.js';
+import { log } from './log.js';
+import type { JobHandler, Runtime } from './core/types.js';
 import { placementRoot } from './domain-registry.js';
 import { isKnownDisposable, PUBLIC_MAILBOXES } from './list-hygiene.js';
 

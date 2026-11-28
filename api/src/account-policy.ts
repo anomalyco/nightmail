@@ -1,6 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { METHOD_ACR } from './config.js';
-import type { Config } from './core.js';
+import type { Config } from './core/types.js';
 
 // Who may sign up, decided by the sign-in itself and never by an email address: Anomaly account can assert a
 // verified address that the method used to sign in never vouched for (a GitHub-made account that later links a

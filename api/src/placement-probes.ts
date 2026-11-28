@@ -3,7 +3,7 @@ import { isIPv4, isIPv6 } from 'node:net';
 import tls from 'node:tls';
 import { domainToUnicode } from 'node:url';
 import { z } from 'zod';
-import type { Runtime } from './core.js';
+import type { Runtime } from './core/types.js';
 import { rdapBase } from './domain-registry.js';
 import { boundedJson, dns, fqdn } from './public-dns.js';
 import { productDomain, servedDomains } from './brand.js';

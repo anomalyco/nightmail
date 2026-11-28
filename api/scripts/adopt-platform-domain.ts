@@ -7,7 +7,7 @@ import { GetCallerIdentityCommand, STSClient } from '@aws-sdk/client-sts';
 import { postgresConnection } from '../src/adapters/node.js';
 import { requirePlatformAccount } from '../src/config.js';
 import { setting } from '../src/brand.js';
-import { id } from '../src/core.js';
+import { id } from '../src/core/http.js';
 import { adoptionFacts, adoptionFingerprint, matchesAdoption } from '../src/adopted-identity.js';
 import { claimNameAllowed, platformHost, releasedClaimCleanup } from '../src/domain-claims.js';
 import { inboundHost } from '../src/mailbox-dns.js';

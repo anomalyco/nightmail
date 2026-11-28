@@ -5,7 +5,7 @@ import { claimNameAllowed, domainName } from '../src/domain-claims.js';
 import { publicOrigin, setting } from '../src/brand.js';
 import { poolTenantName } from '../src/ses-setup.js';
 import { requirePlatformAccount } from '../src/config.js';
-import { id } from '../src/core.js';
+import { id } from '../src/core/http.js';
 
 export function requirePoolFlags(env:Record<string,string|undefined>) {
   if ([env.MULTI_TENANT,setting(env,'REGIONAL_SENDING'),setting(env,'TRUSTED_POOL')].some(v=>v!=='true')) throw new Error('Hosted regional sending and trusted-pool enrollment must both be enabled.');

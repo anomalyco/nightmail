@@ -94,7 +94,7 @@ const [
 ]);
 
 type GateState = import("../../src/dispatcher.ts").GateState;
-type Runtime = import("../../src/core.ts").Runtime;
+type Runtime = import("../../src/core/types.ts").Runtime;
 
 const { runtime } = nodeRuntime(env);
 const db = runtime.db;

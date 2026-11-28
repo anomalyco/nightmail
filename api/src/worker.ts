@@ -1,7 +1,7 @@
 import {gatewayLane} from './protocol-admission.js';
 import { getPath } from 'hono/utils/url';
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import type { Config, FeedbackItem, Runtime } from './core.js';
+import type { Config, FeedbackItem, Runtime } from './core/types.js';
 import { DispatcherShard, dispatcherName, shardCount, shardsForRate } from './dispatcher-do.js';
 import { CampaignRoom } from './campaign-room.js';
 import { durableInboxWake } from './inbox-wake.js';
@@ -64,14 +64,14 @@ function initRuntimeDeps() {
   return Promise.all([
     import('pg'), import('drizzle-orm/node-postgres'), import('drizzle-orm/sql'),
     import('./config.js'), import('./adapters/storage.js'),
-    import('./jobs.js'), import('./core.js'),
+    import('./jobs.js'), import('./core/errors.js'), import('./core/http.js'), import('./log.js'),
     import('./adapters/browser-rendering.js'), import('./adapters/public-image.js'), import('./adapters/feedback-queue.js'), import('./screen-shadow.js'),
-  ]).then(([{ Pool }, { drizzle }, { sql }, { CONFIG_KEYS, loadConfig }, { r2Storage }, { followDueJobs, jobConcurrency, WAKE_SCHEDULE_KEY }, core, { browserImageRenderer }, { publicImageImporter }, { feedbackSink, settleFeedbackBatch, legacyFeedbackCutover, workWake, batchFirstDeliveryLag, metricsEffectiveLagMs }, { enqueueShadow, consumeShadow, writeComparisons, writtenComparisons }]) => ({
-    Pool, drizzle, sql, CONFIG_KEYS, loadConfig, r2Storage, followDueJobs, jobConcurrency, WAKE_SCHEDULE_KEY, core, browserImageRenderer, publicImageImporter, feedbackSink, settleFeedbackBatch, legacyFeedbackCutover, workWake, batchFirstDeliveryLag, metricsEffectiveLagMs, enqueueShadow, consumeShadow, writeComparisons, writtenComparisons,
+  ]).then(([{ Pool }, { drizzle }, { sql }, { CONFIG_KEYS, loadConfig }, { r2Storage }, { followDueJobs, jobConcurrency, WAKE_SCHEDULE_KEY }, errors, http, logging, { browserImageRenderer }, { publicImageImporter }, { feedbackSink, settleFeedbackBatch, legacyFeedbackCutover, workWake, batchFirstDeliveryLag, metricsEffectiveLagMs }, { enqueueShadow, consumeShadow, writeComparisons, writtenComparisons }]) => ({
+    Pool, drizzle, sql, CONFIG_KEYS, loadConfig, r2Storage, followDueJobs, jobConcurrency, WAKE_SCHEDULE_KEY, core: { ...errors, ...http, ...logging }, browserImageRenderer, publicImageImporter, feedbackSink, settleFeedbackBatch, legacyFeedbackCutover, workWake, batchFirstDeliveryLag, metricsEffectiveLagMs, enqueueShadow, consumeShadow, writeComparisons, writtenComparisons,
   }));
 }
 async function toModuleLoadError(error: unknown): Promise<never> {
-  const core = await import('./core.js').catch(() => null);
+  const core = await import('./core/errors.js').catch(() => null);
   throw core ? (error instanceof core.ModuleLoadError ? error : new core.ModuleLoadError(error)) : error;
 }
 let runtimeDepsPromise: ReturnType<typeof initRuntimeDeps> | undefined;
@@ -149,7 +149,7 @@ async function roomVisit(env: Env, rooms: NonNullable<Env['CAMPAIGN_ROOMS']>, ro
 function quiet(room: string, now: number) { if (quietRooms.size > 1000) quietRooms.clear(); quietRooms.set(room, now + QUIET_MS); }
 
 // Every line names the Worker and the commit it runs (DEPLOY_SHA, set by .github/scripts/deploy-worker.sh).
-function stampLogs(env: Env, core: typeof import('./core.js')) {
+function stampLogs(env: Env, core: Pick<typeof import('./log.js'), 'setLogContext'>) {
   core.setLogContext({ service: 'worker', deploy: (env as unknown as Record<string, unknown>).DEPLOY_SHA });
 }
 

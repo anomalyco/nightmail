@@ -213,7 +213,7 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
 // src/operation-permissions.ts, which the acceptance test "permission table" checks against what REST enforces.
 {
   const before = failed, file = 'api/src/operation-permissions.ts';
-  const { OPERATION_PERMISSIONS, permissionExtension } = await import('../src/operation-permissions.js'), { PERMISSIONS } = await import('../src/core.js');
+  const { OPERATION_PERMISSIONS, permissionExtension } = await import('../src/operation-permissions.js'), { PERMISSIONS } = await import('../src/core/errors.js');
   const spec = registeredDocument as { paths: Record<string, Record<string, Record<string, unknown> & { operationId?: string }>> };
   const operations = Object.values(spec.paths).flatMap(item => Object.values(item)).filter(op => op.operationId);
   const valid = (row: Record<string, unknown> | undefined) => !!row && (row.access ? ['public', 'staff', 'any'].includes(String(row.access)) && Object.keys(row).every(k => ['access', 'text'].includes(k))

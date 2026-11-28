@@ -1,5 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
-import type { DbExecutor } from './core.js';
+import type { DbExecutor } from './core/types.js';
 
 // The one link between a Nightmail platform operator role and a user identity. The role is a row in platform_operators,
 // keyed by platform_operators.user_id, which references nightmail_users(id) (migration 278; it referenced auth_user before

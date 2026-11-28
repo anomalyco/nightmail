@@ -1,7 +1,10 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, eq, sql } from 'drizzle-orm';
 import { auditContext, auditInsert, recordAudit, type AuditContext } from './audit.js';
-import { ApiError, dashboardSession, denied, digest, errors, id, IdParams, json, logError, memberAdminRefusal, ModuleLoadError, notFound, response, wrapModuleLoad, type App, type Ctx, type DbExecutor } from './core.js';
+import { ApiError, denied, errors, logError, ModuleLoadError, notFound, wrapModuleLoad } from './core/errors.js';
+import { dashboardSession, memberAdminRefusal } from './core/access.js';
+import { digest, id, IdParams, json, response } from './core/http.js';
+import type { App, Ctx, DbExecutor } from './core/types.js';
 import type { WorkspaceFocus } from './workspace-focus.js';
 import { INVITATION_EMAILS, inviteByEmail } from './account-notices.js';
 import { baneUsers } from './db/users.js';
@@ -11,7 +14,7 @@ import { accountSessionPolicy } from './account-login.js';
 import { operatorRoleOf, type OperatorRole } from './operator-identity.js';
 import { productName } from './brand.js';
 import { shownName } from './notices.js';
-import type { Config } from './core.js';
+import type { Config } from './core/types.js';
 
 export const WorkspaceRole = z.enum(['owner', 'admin', 'member']);
 type Role = z.infer<typeof WorkspaceRole>;
@@ -147,7 +150,7 @@ function changeMember(c: Ctx, memberId: string, newRole?: Role) {
       before: { role: member.role }, ...(newRole ? { after: { role: newRole } } : {}) });
   });
 }
-/** Members and invitations: an owner or admin in person, in the dashboard or over their own MCP sign-in (core.ts). */
+/** Members and invitations: an owner or admin in person, in the dashboard or over their own MCP sign-in (core/access.ts). */
 function memberAdmin(c: Ctx, change: boolean) {
   if (!c.env.config.multiTenant) return notFound('Endpoint');
   const a = c.get('actor'), refusal = memberAdminRefusal(a, change);

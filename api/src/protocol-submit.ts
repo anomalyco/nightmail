@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { ApiError, type Ctx, type Runtime } from './core.js';
+import { ApiError } from './core/errors.js';
+import type { Ctx, Runtime } from './core/types.js';
 import { sendingConnections } from './domain-claims.js';
 import { withMemory } from './isolate-memory.js';
 import { SMTP_WIRE_LIMIT } from './mailbox-ingest.js';

@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 import { Client } from 'pg';
 import { postgresConnection } from '../src/adapters/node.js';
 import { auditInsert, systemContext } from '../src/audit.js';
-import { log } from '../src/core.js';
+import { log } from '../src/log.js';
 
 const usage = `Usage:
   set-billing-free.ts workspace WORKSPACE_ID on|off [--until YYYY-MM-DD] --reason "why (at least 10 characters)"

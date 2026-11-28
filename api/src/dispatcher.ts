@@ -1,6 +1,10 @@
 import { getTableColumns, sql, type SQL } from 'drizzle-orm';
 import type { Attachment, SESv2Client, SendEmailCommandInput } from '@aws-sdk/client-sesv2';
-import { ApiError, databaseCodeOf, databaseConflict, isSimulatedSes, rowId, lazyModule, log, logError, ModuleLoadError, preloadSesTransport, transientDatabaseError, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
+import { ApiError, databaseCodeOf, databaseConflict, lazyModule, logError, ModuleLoadError, transientDatabaseError, wrapModuleLoad } from './core/errors.js';
+import { isSimulatedSes, preloadSesTransport } from './core/ses.js';
+import { rowId } from './core/http.js';
+import { log } from './log.js';
+import type { Actor, DbExecutor, Runtime } from './core/types.js';
 import { attachments, emails, type EmailSnapshot, type EmailStatus, type CampaignDraft, type ReviewedRecipient } from './db/sending.js';
 import { approvedOriginUser, checkedDispatchAttachments, customerCredits, formattedSender, inlineMessage, LINK_RECORD_RECHECK_MS, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, recipientIneligibleReasonSql, resolveHostedContentPolicy, sesDailyReserve, sharedFormatRefusal, sizeCheck, statusForEvent, storageUnavailable, attachmentReads, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
 import { receivingPolicy } from './mailbox-ingest-input.js';
@@ -231,7 +235,7 @@ export const POOL_QUOTA_STALE_MS = 5 * 60_000;
  * throws: a region that can't be read is logged and tried again the next minute.
  */
 /** The platform's own SES client for a shared pool region: shared credentials, so the account must be the platform's
- *  (core.ts assertSharedAccount), and a runtime scoped to the region (core.ts region()). Quota and deliverability reads. */
+ *  (core/ses.ts assertSharedAccount), and a runtime scoped to the region (core/ses.ts region()). Quota and deliverability reads. */
 export function poolSes(runtime: Runtime, transport: DispatchTransport, region: string, account: string) {
   const scoped = { ...runtime, config: { ...runtime.config, regions: [region] } };
   const pool: ReadyConnection = { id: `pool:${region}`, kind: 'shared', aws_account_id: account, role_arn: '', external_id: '' };

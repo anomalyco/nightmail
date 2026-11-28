@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { Database, DbExecutor } from './core.js';
+import type { Database, DbExecutor } from './core/types.js';
 import { lockFacetCoverage, mergeFacetCells } from './log-facet-aggregate-sent.js';
 
 const MESSAGE_PAGE=256, DEADLINE_PAGE=512;

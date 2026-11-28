@@ -1,6 +1,8 @@
 import { sql } from 'drizzle-orm';
 import { createHash } from 'node:crypto';
-import { ApiError, assertSharedAccount, lazyModule, type Config, type Runtime } from './core.js';
+import { ApiError, lazyModule } from './core/errors.js';
+import { assertSharedAccount } from './core/ses.js';
+import type { Config, Runtime } from './core/types.js';
 import { connectionReady } from './states.js';
 import { productName } from './brand.js';
 import { requirePlatformAccount } from './config.js';

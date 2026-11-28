@@ -1,5 +1,5 @@
 import { createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
-import type { FeedbackItem, Runtime } from '../core.js';
+import type { FeedbackItem, Runtime } from '../core/types.js';
 import type { FeedbackSource } from './feedback-archive.js';
 
 // The feedback queue is an account-level resource: any Worker in the same Cloudflare account can

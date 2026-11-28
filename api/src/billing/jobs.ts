@@ -1,4 +1,4 @@
-import type { JobHandler } from '../core.js';
+import type { JobHandler } from '../core/types.js';
 import { restoreJob } from './restore.js';
 import { rechargeJob } from './stripe-jobs.js';
 import { notifyJob } from './notify.js';

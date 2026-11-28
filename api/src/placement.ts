@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { log, type JobHandler, type Runtime } from './core.js';
+import { log } from './log.js';
+import type { JobHandler, Runtime } from './core/types.js';
 import { placementRoot } from './domain-registry.js';
 import { publicSignals } from './placement-probes.js';
 

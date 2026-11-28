@@ -1,7 +1,7 @@
 import { Client } from 'pg';
 import { readdir, readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
-import { log } from './core.js';
+import { log } from './log.js';
 import { envNames, setting } from './brand.js';
 import { postgresConnection } from './adapters/node.js';
 import { drizzle } from 'drizzle-orm/node-postgres';

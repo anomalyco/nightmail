@@ -4,7 +4,7 @@ import { sql } from 'drizzle-orm';
 import { Buffer } from 'node:buffer';
 import { productName } from './brand.js';
 import { ATTACHMENT_FIELD_RULES, ATTACHMENT_LIMITS_TEXT, UPLOAD_HEADERS } from './attachment-limits.js';
-import { ApiError } from './core.js';
+import { ApiError } from './core/errors.js';
 import { SEND_LIMITS } from './send-limits.js';
 
 // Shared validation for sending, audience/consent and template reply addresses.

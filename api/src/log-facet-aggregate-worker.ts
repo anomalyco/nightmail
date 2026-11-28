@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
-import type { Database, DbExecutor } from './core.js';
-import { databaseCodeOf, log } from './core.js';
+import type { Database, DbExecutor } from './core/types.js';
+import { databaseCodeOf } from './core/errors.js';
+import { log } from './log.js';
 import { logFacetPeriod } from './log-facet-fold.js';
 import { advanceInboundFacetClock, drainDirtyFacetMessages, seedInboundFacetPage } from './log-facet-aggregate-inbound.js';
 import { captureFacetSignature, ensureFacetGeneration, expireFacetChanges, facetGenerationIntact, pruneFacetGeneration, pruneFacetViews, trimFacetFootprint } from './log-facet-aggregate-retention.js';

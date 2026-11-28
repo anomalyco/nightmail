@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { productName } from './brand.js';
-import type { Runtime } from './core.js';
+import type { Runtime } from './core/types.js';
 
 /**
  * New mail as MCP Events (SEP-3415, the io.modelcontextprotocol/events extension): an agent's client subscribes to

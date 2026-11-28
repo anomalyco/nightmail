@@ -1,5 +1,5 @@
 // Nightmail's structured logging, with no dependencies so the support Worker (support/) bundles the same fields, sampling and
-// redaction. core.ts re-exports it and adds logError, which knows ApiError and SQLSTATEs.
+// redaction. core/errors.ts adds logError, which knows ApiError and SQLSTATEs.
 // Structured logs: one JSON object per line. The Worker's lines go to Workers Logs, the Node API and runner's to
 // stdout (CloudWatch on Fargate); the mail gateway writes the same fields. Every request writes one `event: 'request'`
 // line (app.ts) and every unexpected failure one `logError` line with its stack. docs/ci.md describes the fields and the
@@ -130,7 +130,7 @@ export function stackFrames(error: unknown, limit = 12) {
  * What a schema refused, when an error is a Zod error (one of our own parses, such as a route checking the answer it is
  * about to send, refused a value): where and what kind, never the value. Up to 5 issues, each `path: what was wrong`,
  * such as `readiness.plan.batches.2: expected int, received number`.
- * - A path keeps indexes and only the keys in `fieldNames`, the field names the API itself publishes (core.ts passes
+ * - A path keeps indexes and only the keys in `fieldNames`, the field names the API itself publishes (core/errors.ts passes
  *   API_FIELD_NAMES, generated from openapi.json). Any other key reads `*`: a record's or a map's key is data a
  *   customer chose (a contact property, a metadata key, an address). A customer's key that equals a published name is
  *   written, and says nothing the API doesn't publish. The key a record refused is always `*`.

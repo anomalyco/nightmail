@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { logError, type Config, type Runtime } from './core.js';
+import { logError } from './core/errors.js';
+import type { Config, Runtime } from './core/types.js';
 import { log } from './log.js';
 
 // A second classifier in the shadow of the content screen. Each primary request not routed to the failover gate (src/screen.ts

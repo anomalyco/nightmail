@@ -5,7 +5,10 @@
 // /v1/inbound/webhooks (webhooks, named or not) are two views of it with the same checks and caps.
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, and, desc, eq, lt } from 'drizzle-orm';
-import { ApiError, digest, errors, id, isoTime, json, lasting, nextCursor, randomSecret, readCursor, receivingAdmin, response, security, WEBHOOK_CHANGE, webhookUrlHint, WebhookUrlHint, wrapModuleLoad, type App, type Ctx, type ClaimedWebhook, type DbExecutor, type MailboxAccess, type Runtime } from './core.js';
+import { ApiError, errors, wrapModuleLoad } from './core/errors.js';
+import { digest, id, isoTime, json, nextCursor, randomSecret, readCursor, response, security } from './core/http.js';
+import { lasting, receivingAdmin, WEBHOOK_CHANGE, webhookUrlHint, WebhookUrlHint } from './core/access.js';
+import type { App, Ctx, ClaimedWebhook, DbExecutor, MailboxAccess, Runtime } from './core/types.js';
 import { claimSends, hostTakesAddresses } from './states.js';
 import { assertBuiltinRecipients, assertBuiltinStillSends } from './builtin-domain.js';
 import { endpoints, mailAttachments, mailboxDomains, mailboxes, mailboxWebhookDeliveries, mailMessages, retainedMail, type EndpointRecord } from './db/mailbox.js';

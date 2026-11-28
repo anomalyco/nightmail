@@ -19,7 +19,8 @@ import { bootstrapLogFacet, LOG_FACET_BOOTSTRAP_TICK_MS } from './log-facet-boot
 import { syncOutboundMessages } from './mailbox-send.js';
 import { scheduleHoldRelease } from './mailbox-staging.js';
 import { queueStartupDiscovery } from './ses-regions.js';
-import { ApiError, log, logError, setLogContext } from './core.js';
+import { ApiError, logError } from './core/errors.js';
+import { log, setLogContext } from './log.js';
 setLogContext({ service: 'runner', deploy: process.env.DEPLOY_SHA });
 try {
   const { runtime, close } = nodeRuntime(process.env);

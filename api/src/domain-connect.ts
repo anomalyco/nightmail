@@ -1,6 +1,6 @@
 import { createHmac, hkdfSync, sign, timingSafeEqual } from 'node:crypto';
 import { z } from '@hono/zod-openapi';
-import type { Config } from './core.js';
+import type { Config } from './core/types.js';
 import { domainConnectProviderIds } from './brand.js';
 import { isProofRecord } from './states.js';
 

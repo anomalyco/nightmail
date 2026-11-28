@@ -1,5 +1,7 @@
 import { and, eq, sql } from 'drizzle-orm';
-import { ApiError, id, lazyModule, type ClaimedWebhook, type Runtime } from './core.js';
+import { ApiError, lazyModule } from './core/errors.js';
+import { id } from './core/http.js';
+import type { ClaimedWebhook, Runtime } from './core/types.js';
 import { mailMessages, retainedMail, type EndpointRecord, type MailAddress } from './db/mailbox.js';
 import { webhookSecretBinding } from './mailbox-events.js';
 import { safeForwardHtml } from './mailbox-send.js';

@@ -1,7 +1,7 @@
 import type { S3Client } from '@aws-sdk/client-s3';
 import type { MailObjects } from './mail-objects.js';
 import {mailKindTag} from './resource-tags.js';
-import { ApiError, lazyModule } from './core.js';
+import { ApiError, lazyModule } from './core/errors.js';
 
 const loadS3Commands = lazyModule(() => import('@aws-sdk/client-s3'));
 

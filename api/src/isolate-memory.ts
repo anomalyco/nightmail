@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ApiError, log } from './core.js';
+import { ApiError } from './core/errors.js';
+import { log } from './log.js';
 import { SEND_LIMITS } from './send-limits.js';
 
 // One byte budget for every path that holds large payloads in memory: raw uploads, attachment downloads, template asset

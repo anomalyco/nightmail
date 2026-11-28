@@ -1,6 +1,7 @@
 import { Validator, type Schema } from '@cfworker/json-schema';
 import type { Tool } from '@modelcontextprotocol/server';
-import { agentTokenMintRoute, keyAdminRoute, lastingRoute, mailboxRoute, memberAdminRoute, ownerRoute, receivingAdminRoute, receivingConsentRoute, unrestrictedRoute, type App } from './core.js';
+import { agentTokenMintRoute, keyAdminRoute, lastingRoute, mailboxRoute, memberAdminRoute, ownerRoute, receivingAdminRoute, receivingConsentRoute, unrestrictedRoute } from './core/access.js';
+import type { App } from './core/types.js';
 import { resourceInventory } from './mcp-resources.js';
 import { productName } from './brand.js';
 import { permissionOf } from './operation-permissions.js';
@@ -382,7 +383,7 @@ export function buildMcpCatalog(app: App): ReadonlyMap<string, McpOperation> {
       const receiving = ['routing', 'rules', 'endpoints'].includes(toolset) || (toolset === 'admin' && tag.startsWith('Inbound ')) || tag === 'Inbound addresses' || name === 'createInboxConnection';
       const tool: Tool = { name, description: descriptionFor(name, operation), inputSchema: input, outputSchema, annotations: { readOnlyHint: !write, destructiveHint: write && (method === 'delete' || /^(?:delete|remove|revoke|cancel|disable|rotate|restore|apply|release)/.test(name)), idempotentHint: !write || method === 'put', openWorldHint: true } };
       freeze(tool);
-      // The path guards are REST's own predicates (core.ts). On a mailbox path mailboxAuth, not a permission, decides.
+      // The path guards are REST's own predicates (core/access.ts). On a mailbox path mailboxAuth, not a permission, decides.
       const mailbox = mailboxRoute(path);
       const permission = ANY_AUTHENTICATED.has(name) || mailbox ? 'any' : MANAGE_LEVEL_READS.has(name) ? 'manage' : SEND_LEVEL.has(name) ? 'send' : READ_LEVEL_WRITES.has(name) ? 'read' : write ? 'manage' : 'read';
       const ownerOnly = receiving || ownerRoute(method, path);

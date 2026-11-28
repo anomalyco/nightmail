@@ -1,6 +1,7 @@
 import type { S3Client } from '@aws-sdk/client-s3';
 import {mailKindTag} from './resource-tags.js';
-import { ApiError, lazyModule, type Runtime, type Storage } from './core.js';
+import { ApiError, lazyModule } from './core/errors.js';
+import type { Runtime, Storage } from './core/types.js';
 import type { IngestInput } from './mailbox-ingest-input.js';
 import { assertMailboxKey, mailboxS3, receivedAttachmentKey, sentAttachmentKey, workspacePrefix } from './mailbox-setup.js';
 import type { ReadyConnection } from './provider-credentials.js';

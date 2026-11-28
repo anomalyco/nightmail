@@ -12,7 +12,12 @@ import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { GetEmailIdentityCommandOutput } from '@aws-sdk/client-sesv2';
 import { X509Certificate, verify } from 'node:crypto';
 import { isIP } from 'node:net';
-import { actor, ApiError, assertSesConfigured, chargeBudget, denied, requiredOf, restrictedArea, unrestrictedRequired, assertSharedAccount, isSimulatedSes, digest, errors, getSes, id, rowId, IdParams, json, lazyModule, log, logError, ModuleLoadError, notFound, PageQuery, preloadSesTransport, randomSecret, redactCapabilityData, region, response, security, senderDomainAllowed, simulatedTopic, taggedEmailId, wrapModuleLoad, type App, type Actor, type Ctx, type Config, type Database, type DbExecutor, type JobHandler, type Permission, type Runtime } from './core.js';
+import { actor, senderDomainAllowed } from './core/access.js';
+import { ApiError, denied, requiredOf, restrictedArea, unrestrictedRequired, errors, lazyModule, logError, ModuleLoadError, notFound, redactCapabilityData, wrapModuleLoad } from './core/errors.js';
+import { assertSesConfigured, assertSharedAccount, isSimulatedSes, getSes, preloadSesTransport, region, simulatedTopic, taggedEmailId } from './core/ses.js';
+import { chargeBudget, digest, id, rowId, IdParams, json, PageQuery, randomSecret, response, security } from './core/http.js';
+import { log } from './log.js';
+import type { App, Actor, Ctx, Config, Database, DbExecutor, JobHandler, Permission, Runtime } from './core/types.js';
 import { chargeManualDelivery, claimedWithWebhooks, enqueue, JobDeferred, WEBHOOK_ATTEMPTS, retryDatabaseFailures, webhookClaimCtes } from './jobs.js';
 import { ActionRetry, refusedForGood, retryAfterMs } from './ritual-retry.js';
 import { applyClaim, connectionReady, domainHosts, receivingSetup, type ReceivingSetup, hostGraceStart, identityOnly, LOST_GRACE_MS, poolReceives, poolSends, transitionClaim, type ClaimEvidence, type ClaimState, type HostEvidence, checkedHostStatus, hostRemoved, hostRoutes, type HostWrite, type IdentityFacts, type TenantState, PROOF_LABELS, proofRecordName, type ProofLabel } from './states.js';
@@ -20,7 +25,9 @@ import { WORKSPACE_FOCUS, type WorkspaceFocus } from './workspace-focus.js';
 import { SETUP_LIMITS, SETUP_SENDER } from './setup-email.js';
 import { jobs } from './db/core.js';
 import { contacts, mergeSuppression } from './db/audience.js';
-import { lasting, RECEIVING_HOST_CHANGE, EmailEventData, withoutVerdict, WEBHOOK_CHANGE, webhookUrlHint, WebhookUrlHint, readCursor, nextCursor, budgetedRead, readLimit, readLimitNote } from './core.js';
+import { lasting, RECEIVING_HOST_CHANGE, WEBHOOK_CHANGE, webhookUrlHint, WebhookUrlHint } from './core/access.js';
+import { EmailEventData, withoutVerdict } from './core/types.js';
+import { readCursor, nextCursor, budgetedRead, readLimit, readLimitNote } from './core/http.js';
 import { emails } from './db/sending.js';
 import { sesRegions } from './db/ses-regions.js';
 import { getRegionSettings, resolveRegionRuntime, withRegionSettings } from './ses-region-state.js';
@@ -33,7 +40,7 @@ import { byoEnabled } from './byo-pilot.js';
 import { awsError, byoFeedbackUrl, claimTenantName, feedbackUrl, mxOwnerTag, POOL_INSTALLATION } from './ses-setup.js';
 import type { RoutineIngress } from './sending.js';
 import type { SetupCheck } from './record-check.js';
-import type { FeedbackItem } from './core.js';
+import type { FeedbackItem } from './core/types.js';
 import { realDestination } from './hosted-sending.js';
 import { webhookSecretBinding as mailboxSecretBinding } from './mailbox-events.js';
 import { mailboxDomains, endpoints, type MxReport } from './db/mailbox.js';
@@ -2159,7 +2166,7 @@ const resumeDeliveries: JobHandler = async (runtime, payload, job) => {
   throw new JobDeferred(now());
 };
 const webhookJob: JobHandler = async (runtime, payload, job) => {
-  const delivery = job.webhook !== undefined ? job.webhook : (await runtime.db.execute<{webhook: import('./core.js').ClaimedWebhook | null}>(sql`WITH claimed AS (
+  const delivery = job.webhook !== undefined ? job.webhook : (await runtime.db.execute<{webhook: import('./core/types.js').ClaimedWebhook | null}>(sql`WITH claimed AS (
     SELECT ${job.id}::text id,${job.workspaceId}::text workspace_id,${JSON.stringify(payload)}::jsonb payload,'operation.webhook'::text type
   ), ${webhookClaimCtes} ${claimedWithWebhooks}`)).rows[0]?.webhook;
   if (!delivery) return;

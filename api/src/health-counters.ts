@@ -1,7 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { log, onErrorLine } from './log.js';
 import { REQUESTS } from './health-thresholds.js';
-import type { Database } from './core.js';
+import type { Database } from './core/types.js';
 
 // Request counters for the health tick (src/health.ts): every request adds to a map in this process, and every
 // FLUSH_MS the map is written to health_minutes in one statement, after a response (Workers) or on a timer (Node). So

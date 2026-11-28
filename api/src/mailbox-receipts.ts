@@ -1,5 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, log, type Runtime } from './core.js';
+import { ApiError } from './core/errors.js';
+import { log } from './log.js';
+import type { Runtime } from './core/types.js';
 import { claimReceives, connectionReady, hostEnabledSql, poolReceives } from './states.js';
 import { mailJson } from './mailbox-text.js';
 import { STAGING_PREFIX } from './mailbox-setup.js';

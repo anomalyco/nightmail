@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto';
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import { errors, json, log, notFound, response, type App, type Config, type Database, type DbExecutor } from './core.js';
+import { errors, notFound } from './core/errors.js';
+import { json, response } from './core/http.js';
+import { log } from './log.js';
+import type { App, Config, Database, DbExecutor } from './core/types.js';
 import { productName } from './brand.js';
 import { htmlToPlain, replyText } from './mailbox-store.js';
 import { safeMailText } from './inbox-content.js';

@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { Database, DbExecutor } from './core.js';
+import type { Database, DbExecutor } from './core/types.js';
 
 const SOURCE_PAGE = 2048, CHANGE_PACKETS = 128;
 type Coverage = { generation:string; floor:string; after_at:string|null; after_id:string|null; done:boolean;

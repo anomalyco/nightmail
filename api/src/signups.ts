@@ -1,6 +1,8 @@
 import { createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
 import { sql, type SQL } from 'drizzle-orm';
-import { id, log, type Config, type Database, type DbExecutor, type JobHandler, type Runtime } from './core.js';
+import { id } from './core/http.js';
+import { log } from './log.js';
+import type { Config, Database, DbExecutor, JobHandler, Runtime } from './core/types.js';
 import { productName } from './brand.js';
 import { JobDeferred, retryDatabaseFailures } from './jobs.js';
 import type { ListContactResult } from './audience.js';

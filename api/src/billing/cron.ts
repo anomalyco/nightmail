@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { log, type Runtime } from '../core.js';
+import { log } from '../log.js';
+import type { Runtime } from '../core/types.js';
 
 const SETTLE_BUDGET_MS = 60_000, SETTLE_CONCURRENCY = 4, SETTLE_PAGE = 500;
 const LAG_ALERT_MS = 3 * 3_600_000, BYO_FAIR_USE = 10_000_000;

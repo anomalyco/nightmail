@@ -2,7 +2,7 @@ import { dashboardReference } from './dashboard-reference.js';
 import { webhookSignatureGuide } from './webhook-signature-guide.js';
 import { builtinDomainGuide } from './builtin-limits.js';
 import { agentSetupGuide } from './agent-setup-guide.js';
-import type { App } from './core.js';
+import type { App } from './core/types.js';
 import { apiKeyEnv, productName, publicOrigin, sdkPackage } from './brand.js';
 import { permissionExtension, permissionOf } from './operation-permissions.js';
 import { describeBody, responseRows, schemaType, type Field } from './schema-fields.js';

@@ -1,5 +1,5 @@
 import { sql, type SQL, type SQLWrapper } from 'drizzle-orm';
-import type { Ctx } from './core.js';
+import type { Ctx } from './core/types.js';
 import { PAGE_MAX_BYTES, utf8Bytes, withBoundedRead } from './read-bounds.js';
 
 export const INBOUND_ADDRESS_STORE_LIMIT = 100;

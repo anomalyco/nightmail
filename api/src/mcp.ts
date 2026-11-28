@@ -1,7 +1,9 @@
 import { createMcpHandler, Server, type CallToolResult, type Tool } from '@modelcontextprotocol/server';
 import { CfWorkerJsonSchemaValidator } from '@modelcontextprotocol/server/validators/cf-worker';
 import { bearerActor, dispatchAsActor, dispatchAsMailboxAccess, workspaceBearer } from './auth.js';
-import { agentSetupRefusal, agentTokenMintRefusal, denied, keyAdminRefusal, requiredFor, type Required, lastingRefusal, memberAdminManage, memberAdminRefusal, ModuleLoadError, receivingAdminRefusal, requestOrigin, withOuterRequest, workspaceMailAccess, type Actor, type MailboxAccess, type App, type Ctx, type Runtime } from './core.js';
+import { agentSetupRefusal, agentTokenMintRefusal, keyAdminRefusal, lastingRefusal, memberAdminManage, memberAdminRefusal, receivingAdminRefusal, workspaceMailAccess } from './core/access.js';
+import { denied, requiredFor, type Required, ModuleLoadError } from './core/errors.js';
+import { requestOrigin, withOuterRequest, type Actor, type MailboxAccess, type App, type Ctx, type Runtime } from './core/types.js';
 import { getMcpGrantActor, withMcpAuthorization } from './mcp-auth.js';
 import { chooseWorkspace, setDefaultWorkspace, WorkspaceChoice, type McpConnection } from './oidc-resource.js';
 import { buildMcpCatalog, TOOLSETS, ALWAYS_LISTED, EMAIL_SEND_CONFIRMATION, EMAIL_SEND_ROUTING, FEEDBACK_INSTRUCTIONS, type McpOperation } from './mcp-catalog.js';
@@ -172,7 +174,7 @@ type Principal = { connection: McpConnection } | { key: Actor; bearer: string } 
 
 /**
  * The one access policy of every workspace credential, for listings and calls: the operations REST authorizes for
- * that actor, using REST's own guards (core.ts: mailboxAuth's workspaceMailAccess, requireReceivingConsent, notMember,
+ * that actor, using REST's own guards (core/access.ts: mailboxAuth's workspaceMailAccess, requireReceivingConsent, notMember,
  * the unrestricted-credential areas, receivingAdmin, key administration, agent-token minting, `lasting`, the changes
  * a temporary agent token never makes, and members and invitations, an owner's or admin's own sign-in), the operation's
  * REST permission (not its HTTP method) and dashboard-only administration. An approval's listing is what it may do in

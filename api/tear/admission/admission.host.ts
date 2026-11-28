@@ -72,7 +72,7 @@ const [
   import("../../scripts/set-hosted-limits.ts"),
   import("../../scripts/set-workspace-exemption.ts"),
   import("../../src/states.ts"),
-  import("../../src/core.ts"),
+  import("../../src/core/http.ts"),
   import("../../src/maintenance.ts"),
   import("../../src/dispatch.ts"),
   import("../../src/mailbox-ingest.ts"),

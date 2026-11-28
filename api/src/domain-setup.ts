@@ -1,5 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { log, logError, ModuleLoadError, wrapModuleLoad, type JobHandler, type Runtime } from './core.js';
+import { log } from './log.js';
+import { logError, ModuleLoadError, wrapModuleLoad } from './core/errors.js';
+import type { JobHandler, Runtime } from './core/types.js';
 import { LINK_RETENTION_DAYS } from './link-hosts.js';
 
 // The domain setup check. Someone adds a domain, sees its records and leaves, and nothing tells them the records never

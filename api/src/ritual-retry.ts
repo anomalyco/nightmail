@@ -1,4 +1,4 @@
-import { ApiError } from './core.js';
+import { ApiError } from './core/errors.js';
 import type { EndpointType } from './ritual-schema.js';
 
 /** A rule action that should run again later. Every endpoint type schedules retries through this one class. */

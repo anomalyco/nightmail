@@ -11,7 +11,10 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { manageKeys } from './auth.js';
-import { actor, admits, dashboardSession, errors, memberRefused, response, security, type App } from './core.js';
+import { actor, admits, dashboardSession, memberRefused } from './core/access.js';
+import { errors } from './core/errors.js';
+import { response, security } from './core/http.js';
+import type { App } from './core/types.js';
 import { apiKeys } from './db/core.js';
 import { webhooks } from './db/operations.js';
 import { byoWorkspace } from './domain-claims.js';

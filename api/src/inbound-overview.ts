@@ -11,7 +11,10 @@
 // withRegionSettings adds one single-row read on hosted regional sending only.
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import { ApiError, denied, errors, response, webhookUrlHint, type App, type Ctx, type MailboxAccess } from './core.js';
+import { ApiError, denied, errors } from './core/errors.js';
+import { response } from './core/http.js';
+import { webhookUrlHint } from './core/access.js';
+import type { App, Ctx, MailboxAccess } from './core/types.js';
 import type { mailboxes } from './db/mailbox.js';
 import { domains } from './db/operations.js';
 import { Endpoint, endpointColumns, endpointView, type EndpointRow } from './endpoints.js';

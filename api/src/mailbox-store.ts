@@ -1,5 +1,7 @@
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { ApiError, id, type DbExecutor, type Runtime } from './core.js';
+import { ApiError } from './core/errors.js';
+import { id } from './core/http.js';
+import type { DbExecutor, Runtime } from './core/types.js';
 import { mailboxAddresses, mailboxes, mailboxWriteLanes, mailMessages, type SendLimits } from './db/mailbox.js';
 import { mailText } from './mailbox-text.js';
 import { safeMailText } from './inbox-content.js';

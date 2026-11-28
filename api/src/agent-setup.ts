@@ -2,7 +2,9 @@ import { createRoute, z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
 import { Buffer } from 'node:buffer';
 import { timingSafeEqual } from 'node:crypto';
-import { ApiError, chargeBudget, denied, digest, errors, id, IdParams, isoTime, json, randomSecret, requestOrigin, response, wrapModuleLoad, type App, type Ctx, type DbExecutor } from './core.js';
+import { ApiError, denied, errors, wrapModuleLoad } from './core/errors.js';
+import { chargeBudget, digest, id, IdParams, isoTime, json, randomSecret, response } from './core/http.js';
+import { requestOrigin, type App, type Ctx, type DbExecutor } from './core/types.js';
 import { auditContext, auditInsert, ipNetwork, type AuditContext } from './audit.js';
 import { apiKeyEnv, productName, secretPrefixes, shownPrefix } from './brand.js';
 import { agentKeyName } from './agent-key-name.js';
@@ -42,7 +44,7 @@ const SETUP_MINUTES = 15, DEVICE_MINUTES = 15, POLL_SECONDS = 5;
 const LIMITS = { exchange: 30, device: 30, poll: 120, userCode: 10 } as const;
 // Device codes from every network together: a bound on the rows they keep (each a day past its 15 minutes).
 const DEVICES_PER_MINUTE = 600;
-// api_request_budgets rows for callers that have no workspace yet (core.ts chargeBudget), purged after a day like any.
+// api_request_budgets rows for callers that have no workspace yet (core/http.ts chargeBudget), purged after a day like any.
 const BUDGET = 'agent-setup';
 const dashboardSecurity = [{ dashboardSession: [] }, { secureDashboardSession: [] }] as Record<string, string[]>[];
 const tags = ['Auth'];

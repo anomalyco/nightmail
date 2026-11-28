@@ -1,5 +1,7 @@
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
-import { ApiError, id, type Ctx, type DbExecutor } from './core.js';
+import { ApiError } from './core/errors.js';
+import { id } from './core/http.js';
+import type { Ctx, DbExecutor } from './core/types.js';
 import { recordAudit } from './audit.js';
 import { mailboxDomains, mailboxes } from './db/mailbox.js';
 import type { domains } from './db/operations.js';

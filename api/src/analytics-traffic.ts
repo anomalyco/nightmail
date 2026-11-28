@@ -2,7 +2,8 @@ import { createHmac, randomBytes } from 'node:crypto';
 import { z } from 'zod';
 import type { AnalyticsRow } from './analytics.js';
 import { analyticsId, viewportClass } from './analytics-events.js';
-import { ApiError, logError, platformMessage, type Runtime, type Storage } from './core.js';
+import { ApiError, logError, platformMessage } from './core/errors.js';
+import type { Runtime, Storage } from './core/types.js';
 
 export const ANALYTICS_ROOT = 'analytics/v1/';
 export const analyticsStore = (runtime: Runtime): Storage => runtime.analyticsStorage ?? runtime.storage;

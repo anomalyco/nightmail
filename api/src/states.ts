@@ -1,7 +1,8 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { FREEZE_FLOOR } from './standing-model.js';
 import type { GetEmailIdentityCommandOutput } from '@aws-sdk/client-sesv2';
-import { id, withoutVerdictSql, type DbExecutor } from './core.js';
+import { id } from './core/http.js';
+import { withoutVerdictSql, type DbExecutor } from './core/types.js';
 import type { MxReport } from './db/mailbox.js';
 import { legacySlugs, productName, productSlug } from './brand.js';
 
@@ -321,7 +322,7 @@ export const verifyImportedClaims = (connection: string, domains: {name: string;
  * grace the domain's other hosts are in; a claim that lost its proof or identity has no such host, and one that may not
  * receive (`off`) is never touched. Each claim is then what its hosts make it, as the next check would write it.
  */
-export async function activateReceiving(db: Pick<import('./core.js').Database, 'transaction'>, workspaceId: string, connectionId: string, region: string, hosts: string[]) {
+export async function activateReceiving(db: Pick<import('./core/types.js').Database, 'transaction'>, workspaceId: string, connectionId: string, region: string, hosts: string[]) {
   // Claims first, then their hosts: the order every receiving write takes.
   await db.transaction(async tx => { await tx.execute(sql`SELECT FROM domain_claims dc WHERE dc.workspace_id=${workspaceId} AND dc.connection_id=${connectionId} AND dc.receiving_state<>'off' ORDER BY dc.name FOR UPDATE`);
     const activated = (await tx.execute<{ name: string }>(sql`UPDATE mailbox_domains m SET status='active',last_error=NULL,enabled_at=now(),updated_at=now()

@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { log, type DbExecutor } from './core.js';
+import { log } from './log.js';
+import type { DbExecutor } from './core/types.js';
 import { blocklistNamed } from './delivery-history.js';
 import { placementRoot } from './domain-registry.js';
 import { PUBLIC_MAILBOXES } from './list-hygiene.js';

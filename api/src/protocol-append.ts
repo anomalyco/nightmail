@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { ApiError, id, rowId, logError, type Ctx } from './core.js';
+import { ApiError, logError } from './core/errors.js';
+import { id, rowId } from './core/http.js';
+import type { Ctx } from './core/types.js';
 import { principal } from './mail-gateway.js';
 import { boundMailBucket, mailKey, withMailObjects, readMailBytes } from './mail-objects.js';
 import { parseInboundMime } from './mailbox-ingest.js';

@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { log, type DbExecutor, type JobHandler, type Runtime } from './core.js';
+import { log } from './log.js';
+import type { DbExecutor, JobHandler, Runtime } from './core/types.js';
 import { RISKS, type Risk } from './list-hygiene.js';
 import { LIST_RISK_FACTORS, type ListRiskFactor, type ListRiskLines, type ReviewAtLaunch } from './list-risk-lines.js';
 

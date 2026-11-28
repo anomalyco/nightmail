@@ -1,5 +1,5 @@
 import { pgTable, text, timestamp, integer, jsonb, index } from 'drizzle-orm/pg-core';
-import type { Permission } from '../core.js';
+import type { Permission } from '../core/types.js';
 export const apiKeys = pgTable('api_keys', {
   id: text('id').primaryKey(), workspaceId: text('workspace_id').notNull(),
   name: text('name').notNull(),
@@ -10,7 +10,7 @@ export const apiKeys = pgTable('api_keys', {
   revokedAt: timestamp('revoked_at', { withTimezone: true, mode: 'string' }),
   // When the key stops working; null: never (migration 360).
   expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }),
-  // The agent setup that made it (migration 469): such a key never administers keys (core.ts keyAdminRefusal).
+  // The agent setup that made it (migration 469): such a key never administers keys (core/access.ts keyAdminRefusal).
   agentSetupId: text('agent_setup_id'),
   // What that agent said it is, its claim (migration 510): listApiKeys agent.client.
   agentClient: text('agent_client'),

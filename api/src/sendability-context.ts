@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { type Actor, type Runtime } from './core.js';
+import type { Actor, Runtime } from './core/types.js';
 import { hostedAllowance, probationReason, type HostedAllowance } from './hosted-sending.js';
 import type { IdentityFacts } from './states.js';
 import { dmarcView } from './dmarc.js';

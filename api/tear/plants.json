@@ -51,7 +51,7 @@
   {
     "label": "access-2",
     "checker": "access",
-    "file": "api/src/core.ts",
+    "file": "api/src/core/access.ts",
     "old": "(?:domains|webhooks|agent-tokens)(?:\\/|$)|^\\/v1\\/regions\\/",
     "neu": "(?:domains|agent-tokens)(?:\\/|$)|^\\/v1\\/regions\\/"
   },
@@ -122,7 +122,7 @@
   {
     "label": "dbfaults-2-53300-not-transient",
     "checker": "db-faults",
-    "file": "api/src/core.ts",
+    "file": "api/src/core/errors.ts",
     "old": "new Set(['58000', '53300', '57P01'",
     "neu": "new Set(['58000', '57P01'"
   },

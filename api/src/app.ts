@@ -1,15 +1,21 @@
 import { OpenAPIHono } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
 import type { MiddlewareHandler } from 'hono';
-import { allowMalformedSns, notFound, snsIngress } from './core.js';
+import { allowMalformedSns, snsIngress } from './core/http.js';
+import { notFound } from './core/errors.js';
 import { boundRequestBody } from './request-body.js';
 import { reserveMemory, runInMemoryScope, type MemoryLease } from './isolate-memory.js';
 import { IMPORT_PREVIEW_RATE_PER_MINUTE, importPreviewReservationBytes } from './audience.js';
 import type { ContentfulStatusCode } from 'hono/utils/http-status';
 import { getPath } from 'hono/utils/url';
-import { actor, agentSetupRefusal, budgetExhausted, restrictedArea, filteredInboxPasswords, mailboxRoute, memberRefused, receivingConsentRoute, unrestrictedRoute, ApiError, apiFailureBody, describeApiFailure, denied, requiredHeader, requiredHeaderValue, requiredOf, unrestrictedRequired, databaseCodeOf, errorCodeOf, id, lazyModule, log, logError, ModuleLoadError, newRequestId, secureResponse, SECURITY_HEADERS, timed, wrapModuleLoad } from './core.js';
-import type { App, Runtime } from './core.js';
-import type { AppEnv, Ctx } from './core.js';
+import { actor, agentSetupRefusal, filteredInboxPasswords, mailboxRoute, memberRefused, receivingConsentRoute, unrestrictedRoute } from './core/access.js';
+import { budgetExhausted, id, secureResponse, timed } from './core/http.js';
+import { restrictedArea, ApiError, apiFailureBody, describeApiFailure, denied, requiredHeader, requiredHeaderValue, requiredOf, unrestrictedRequired, databaseCodeOf, lazyModule, logError, ModuleLoadError, wrapModuleLoad } from './core/errors.js';
+import { errorCodeOf, log } from './log.js';
+import { newRequestId } from './core/types.js';
+import { SECURITY_HEADERS } from './security-headers.js';
+import type { App, Runtime } from './core/types.js';
+import type { AppEnv, Ctx } from './core/types.js';
 import { authenticate, registerAuth, requireReceivingConsent } from './auth.js';
 import { withRegionSettings } from './ses-region-state.js';
 import { countEnqueued } from './jobs.js';
@@ -414,13 +420,13 @@ function createShell(loadDocs: () => Promise<{ doc: Record<string, any>; createL
   });
   // Audience records have no sender domain; guard mutations as well, since their responses can contain the saved record.
   // A sender-domain grant can edit untargeted drafts, not operate on a workspace audience. Check before idempotency:
-  // recorded launch responses also contain audience counts. The MCP listing uses the same predicate (core.ts).
+  // recorded launch responses also contain audience counts. The MCP listing uses the same predicate (core/access.ts).
   app.use('/v1/*', (c, next) => {
     if (unrestrictedRoute(c.req.path) && c.get('actor')?.domains.length) throw unrestrictedRequired(c.get('actor'), restrictedArea(c.req.path), requiredOf(c));
     return next();
   });
   app.use('/v1/*', (c, next) => { const refusal = agentSetupRefusal(c.get('actor'), c.req.path, c.req.method); if (refusal) throw refusal; return next(); });
-  // Path guards are shared with the MCP listing (core.ts). Mailbox paths check receiving consent after mailboxAuth.
+  // Path guards are shared with the MCP listing (core/access.ts). Mailbox paths check receiving consent after mailboxAuth.
   app.use('/v1/*', (c, next) => receivingConsentRoute(c.req.path) && !mailboxRoute(c.req.path) && !filteredInboxPasswords(c) ? requireReceivingConsent(c, next) : next());
   // Idempotency-Key on every create that does not handle it itself (inbound paths register their own after inbox auth).
   app.use('/v1/*', (c, next) => mailboxRoute(c.req.path) ? next() : authenticatedCreates(c, next));

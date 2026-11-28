@@ -8,7 +8,8 @@ import { Client } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { postgresConnection } from '../src/adapters/node.js';
 import { loadConfig } from '../src/config.js';
-import { log, type Runtime } from '../src/core.js';
+import { log } from '../src/log.js';
+import type { Runtime } from '../src/core/types.js';
 import { readFeedbackQuarantine, replayQuarantinedFeedback } from '../src/operations.js';
 import { authenticFeedbackArchive, feedbackArchiveBody } from '../src/adapters/feedback-archive.js';
 

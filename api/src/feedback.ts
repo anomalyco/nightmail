@@ -1,6 +1,9 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import { actor, ApiError, denied, errors, json, response, security, type Actor, type App, type Runtime } from './core.js';
+import { actor } from './core/access.js';
+import { ApiError, denied, errors } from './core/errors.js';
+import { json, response, security } from './core/http.js';
+import type { Actor, App, Runtime } from './core/types.js';
 import { ownSecretPattern, productName } from './brand.js';
 import { capabilityPattern, FORWARD_CONFIRM_TOKEN, FORWARD_STOP_TOKEN, SIGNIN_LINK_TOKEN, UNSUBSCRIBE_TOKEN } from './capabilities.js';
 import { maskedAddress } from './support-conversations.js';

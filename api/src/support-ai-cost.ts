@@ -1,5 +1,5 @@
 import { sql, type SQL } from 'drizzle-orm';
-import type { DbExecutor } from './core.js';
+import type { DbExecutor } from './core/types.js';
 import { SUPPORT_AI } from './health-thresholds.js';
 
 // What the support AI costs. Every model call's cost reaches Nightmail one of two ways, and each lands here as a row of

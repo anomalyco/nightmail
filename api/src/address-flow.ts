@@ -4,7 +4,10 @@
 // the same change to the address it creates, in the transaction that creates it.
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import { ApiError, errors, json, receivingAdmin, response, security, type App, type Ctx, type DbExecutor } from './core.js';
+import { ApiError, errors } from './core/errors.js';
+import { json, response, security } from './core/http.js';
+import { receivingAdmin } from './core/access.js';
+import type { App, Ctx, DbExecutor } from './core/types.js';
 import { recordAudit } from './audit.js';
 import { lockMailboxLane } from './mailbox-store.js';
 import { InboundAddressId } from './inbound-threads.js';

@@ -1,7 +1,10 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
 import { reservePolls } from './auth.js';
-import { errors, receivingAdmin, response, security, waitForPollTick, type Actor, type App, type Ctx, type DbExecutor } from './core.js';
+import { errors } from './core/errors.js';
+import { receivingAdmin } from './core/access.js';
+import { response, security } from './core/http.js';
+import { waitForPollTick, type Actor, type App, type Ctx, type DbExecutor } from './core/types.js';
 
 // The dashboard's live view of rules, routes and endpoints, for a person editing next to an agent that saves over MCP.
 // One long poll per open page: each tick is one statement of primary-key reads (the routing version every rule and

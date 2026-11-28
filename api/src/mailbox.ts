@@ -1,6 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, asc, eq, inArray, isNull, lt, or, sql } from 'drizzle-orm';
-import { actorMailAccess, budgetedRead, filteredInboxPasswords, mailboxRoute, readLimit, readLimitNote, receivingAdmin, receivingConsentRoute, workspaceMailAccess, ApiError, denied, requiredOf, restrictedArea, fullAccessRefusal, unrestrictedRequired, receivedMailRead, receivedMailRefusal, RECEIVING_HOST_CHANGE, admits, digest, errors, getSes, id, isoTime, json, lasting, lazyModule, log, ModuleLoadError, response, SuppressionEventData, type Actor, type App, type Ctx, type DbExecutor, type MailboxAccess, type Runtime } from './core.js';
+import { actorMailAccess, filteredInboxPasswords, mailboxRoute, receivingAdmin, receivingConsentRoute, workspaceMailAccess, RECEIVING_HOST_CHANGE, admits, lasting } from './core/access.js';
+import { budgetedRead, readLimit, readLimitNote, digest, id, isoTime, json, response } from './core/http.js';
+import { ApiError, denied, requiredOf, restrictedArea, fullAccessRefusal, unrestrictedRequired, receivedMailRead, receivedMailRefusal, errors, lazyModule, ModuleLoadError } from './core/errors.js';
+import { getSes } from './core/ses.js';
+import { log } from './log.js';
+import { SuppressionEventData, type Actor, type App, type Ctx, type DbExecutor, type MailboxAccess, type Runtime } from './core/types.js';
 import { buildBoundedPageJson, PAGE_MAX_BYTES, withBoundedRead } from './read-bounds.js';
 import { hostInDomains } from './domain-mail.js';
 import { authenticate, chargeCredential, createdInboxes, delegatedInbox, keyExpired, longPoll, requireReceivingConsent, reservePolls } from './auth.js';
@@ -639,7 +644,7 @@ export function registerMailbox(app: App) {
   registerRouting(app);
   registerRituals(app);
   // Agent inboxes use the same credentials and body bound as /v1/inbound; downloads are token-signed.
-  // mailboxRoute and receivingConsentRoute (core.ts) are the rules the MCP listing applies too.
+  // mailboxRoute and receivingConsentRoute (core/access.ts) are the rules the MCP listing applies too.
   const usesMailboxAuth = (c: Ctx) => mailboxRoute(c.req.path) || filteredInboxPasswords(c);
   app.use('/v1/*', (c, next) => usesMailboxAuth(c) ? mailboxAuth(c, next) : next());
   app.use('/v1/*', (c, next) => usesMailboxAuth(c) && receivingConsentRoute(c.req.path) ? requireReceivingConsent(c, next) : next());

@@ -1,6 +1,8 @@
 import { z } from '@hono/zod-openapi';
 import { and, eq, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
-import { ApiError, isoTime, redactCapabilityText, type DbExecutor, type MailboxAccess } from './core.js';
+import { ApiError, redactCapabilityText } from './core/errors.js';
+import { isoTime } from './core/http.js';
+import type { DbExecutor, MailboxAccess } from './core/types.js';
 import { mailboxMessages as links, mailMessages as messages, retainedMail } from './db/mailbox.js';
 import type { EmailSnapshot } from './db/sending.js';
 import { normalizeMessageId, snippetOf } from './mailbox-store.js';
