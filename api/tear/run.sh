@@ -2,10 +2,10 @@
 # On-demand runner for Nightmail's reworked TypeScript tear models.
 #
 # Usage (from api/ or via `bun run tear:ci`):
-#   bash tear/run.sh                      # per-PR default: 6 core checkers (campaigns + rotating guided seeds, ~5-6 min on exos)
-#   bash tear/run.sh all                  # all 6 core + 5 preventative safety models (campaigns + rotating guided seeds)
-#   bash tear/run.sh scheduled            # full scheduled suite: all 11 checkers + BFS edges to depth 2 + 20 deep walks/core (~15-16 min)
-#   bash tear/run.sh safety               # the 5 preventative safety models
+#   bash tear/run.sh                      # per-PR default: 9 core checkers (campaigns + rotating guided seeds)
+#   bash tear/run.sh all                  # all 9 core + 6 preventative safety models (campaigns + rotating guided seeds)
+#   bash tear/run.sh scheduled            # full scheduled suite: all 15 checkers + BFS edges to depth 2 + 20 deep walks/core
+#   bash tear/run.sh safety               # the 6 preventative safety models
 #   bash tear/run.sh dispatch access      # named checkers only
 #
 # Environment:
@@ -30,7 +30,7 @@ if [[ ! -d "$HERE/node_modules/@tear/mbt/src" ]] || [[ ! -x "$TEAR_BIN" ]] || [[
   bash "$HERE/setup.sh"
 fi
 
-CORE=(dispatch ses access admission inbox delivery campaign-lifecycle)
+CORE=(dispatch ses access admission inbox delivery campaign-lifecycle billing byo-regional)
 SAFETY=(campaign-collab campaign-attachments db-faults scale-reads tenant-isolation workspace-isolation)
 
 SCHEDULED_MODE=0
@@ -44,7 +44,7 @@ else
       safety) SELECTED+=("${SAFETY[@]}") ;;
       all) SELECTED+=("${CORE[@]}" "${SAFETY[@]}") ;;
       scheduled) SCHEDULED_MODE=1; SELECTED+=("${CORE[@]}" "${SAFETY[@]}") ;;
-      dispatch|ses|access|admission|inbox|delivery|campaign-lifecycle|campaign-collab|campaign-attachments|db-faults|scale-reads|tenant-isolation|workspace-isolation)
+      dispatch|ses|access|admission|inbox|delivery|campaign-lifecycle|billing|byo-regional|campaign-collab|campaign-attachments|db-faults|scale-reads|tenant-isolation|workspace-isolation)
         SELECTED+=("$arg") ;;
       *) echo "unknown checker: $arg" >&2; exit 2 ;;
     esac
@@ -101,7 +101,7 @@ default_seeds_for() {
   case "$name" in
     scale-reads) count=5 ;;
     tenant-isolation) count=20 ;;
-    campaign-lifecycle) count=30 ;;
+    campaign-lifecycle|billing|byo-regional) count=30 ;;
     workspace-isolation) count=15 ;;
     campaign-collab|campaign-attachments|db-faults) count=40 ;;
     *) count=60 ;;
@@ -112,7 +112,7 @@ default_seeds_for() {
 run_one() {
   local name="$1" model_file="" campaign_file="" extra=() is_core=0
   case "$name" in
-    dispatch|ses|access|admission|inbox|delivery|campaign-lifecycle)
+    dispatch|ses|access|admission|inbox|delivery|campaign-lifecycle|billing|byo-regional)
       model_file="$name/$name.model.ts"
       campaign_file="$name/campaigns/$name.json"
       is_core=1

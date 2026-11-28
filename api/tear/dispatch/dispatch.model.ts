@@ -64,8 +64,10 @@ type InstPhase =
 interface InstState {
   exists: boolean;
   ph: InstPhase;
-  nextSend: number;
-  outageUntil: number;
+  nextTxMs: number;
+  nextMktMs: number;
+  brakeUntilMs: number;
+  outageUntilMs: number;
   outageStreak: number;
   finishing: boolean;
 }
@@ -83,9 +85,10 @@ export interface DispatchState {
   mails: MailState[];
   camp: CampState;
   keys: KeyEntry[];
-  runnerNextSend: number;
-  runnerBrakeUntil: number;
-  runnerOutageUntil: number;
+  runnerNextTxMs: number;
+  runnerNextMktMs: number;
+  runnerBrakeUntilMs: number;
+  runnerOutageUntilMs: number;
   runnerOutageStreak: number;
   d: [InstState, InstState];
   directs: number;
@@ -95,7 +98,7 @@ export interface DispatchState {
 }
 
 function offInst(): InstState {
-  return { exists: false, ph: { kind: "off" }, nextSend: 0, outageUntil: 0, outageStreak: 0, finishing: false };
+  return { exists: false, ph: { kind: "off" }, nextTxMs: 0, nextMktMs: 0, brakeUntilMs: 0, outageUntilMs: 0, outageStreak: 0, finishing: false };
 }
 
 function emptyCamp(total: number): CampState {
@@ -121,9 +124,10 @@ function initialForPreset(preset: DispatchPreset): DispatchState {
     mails: [],
     camp: emptyCamp(cfg.recipients),
     keys: [],
-    runnerNextSend: 0,
-    runnerBrakeUntil: 0,
-    runnerOutageUntil: 0,
+    runnerNextTxMs: 0,
+    runnerNextMktMs: 0,
+    runnerBrakeUntilMs: 0,
+    runnerOutageUntilMs: 0,
     runnerOutageStreak: 0,
     d: [offInst(), offInst()],
     directs: 0,
@@ -174,9 +178,10 @@ function isRacy(s: DispatchState): boolean {
     return true;
   }
   if (s.camp.jobRacy && s.camp.job === t) return true;
-  if (s.runnerBrakeUntil > 0 && s.runnerBrakeUntil === t) return true;
-  if (s.runnerOutageUntil > 0 && (s.runnerOutageUntil === t || s.runnerOutageUntil === t + PRE_SEND)) return true;
-  if (s.d.some((i) => i.outageUntil > 0 && (i.outageUntil === t || i.outageUntil === t + PRE_SEND))) return true;
+  const secOf = (ms: number) => Math.floor(ms / 1000);
+  if (s.runnerBrakeUntilMs > 0 && secOf(s.runnerBrakeUntilMs) === t) return true;
+  if (s.runnerOutageUntilMs > 0 && (secOf(s.runnerOutageUntilMs) === t || secOf(s.runnerOutageUntilMs) === t + PRE_SEND)) return true;
+  if (s.d.some((i) => i.outageUntilMs > 0 && (secOf(i.outageUntilMs) === t || secOf(i.outageUntilMs) === t + PRE_SEND))) return true;
   if (s.snapshot !== null && s.snapshot.at + QUOTA_REFRESH === t) return true;
   if (s.ledger.some(([at]) => at + DAY === t)) return true;
   if (s.camp.sched === t) return true;
@@ -289,6 +294,36 @@ function claimRow(s: DispatchState, i: number, ver: number): boolean | null {
   return true;
 }
 
+function interleaveByOwner(s: DispatchState, items: number[], offset: number): number[] {
+  if (items.length <= 1) return items.slice();
+  const roundRobin = (stream: number[]) => {
+    if (stream.length <= 1) return stream;
+    const byOwner = new Map<boolean, number[]>();
+    for (const i of stream) {
+      const owner = s.mails[i]!.second;
+      let list = byOwner.get(owner);
+      if (!list) {
+        list = [];
+        byOwner.set(owner, list);
+      }
+      list.push(i);
+    }
+    if (byOwner.size <= 1) return stream;
+    const queues = [...byOwner.values()];
+    const shift = ((offset % queues.length) + queues.length) % queues.length;
+    if (shift) queues.push(...queues.splice(0, shift));
+    const out: number[] = [];
+    for (let idx = 0; out.length < stream.length; idx++) {
+      for (const q of queues) if (idx < q.length) out.push(q[idx]!);
+    }
+    return out;
+  };
+  const tx: number[] = [];
+  const mkt: number[] = [];
+  for (const i of items) (s.mails[i]!.marketing ? mkt : tx).push(i);
+  return [...roundRobin(tx), ...roundRobin(mkt)];
+}
+
 function fairPage(
   s: DispatchState,
   batch: number,
@@ -304,7 +339,7 @@ function fairPage(
       if (m.second !== second) continue;
       const cap = m.marketing ? marketing : transactional;
       if ((m.marketing && priority) || (cap !== null && m.cost > cap)) continue;
-      turns.push([turn, m.marketing ? 1 : 0, i]);
+      turns.push([m.marketing ? 1 : 0, turn, i]);
       turn += 1;
     }
   }
@@ -328,6 +363,7 @@ function drainQuota(s: DispatchState, q: number): void {
     return marketing ? Math.max(0, q - sent - reserve) - s.sentSince : room;
   };
   let finishing = false;
+  let batches = 0;
   for (;;) {
     let priority = false;
     if (fresh && left(true) <= 0) {
@@ -349,10 +385,11 @@ function drainQuota(s: DispatchState, q: number): void {
       for (const i of rows) s.mails[i]!.lease = null;
       break;
     }
+    const ordered = interleaveByOwner(s, rows, batches);
     const retry = Math.max(s.t + 1, s.snapshot ? s.snapshot.at + QUOTA_REFRESH : 0);
     let claims = 0;
-    for (let g = 0; g < rows.length; g += 6) {
-      const group = rows.slice(g, g + 6);
+    for (let g = 0; g < ordered.length; g += 6) {
+      const group = ordered.slice(g, g + 6);
       let held = 0;
       const claimed: [number, number][] = [];
       for (const i of group) {
@@ -374,6 +411,7 @@ function drainQuota(s: DispatchState, q: number): void {
         if (recordOutcome(s, i, out, ver, s.t)) finishing = true;
       }
     }
+    batches += 1;
     if (rows.length < batch) break;
     if (claims === 0 && marketing !== null) break;
   }
@@ -386,64 +424,90 @@ function drainRunner(s: DispatchState): void {
     return;
   }
   let finishing = false;
+  let nowMs = s.t * 1000 + 50;
+  let batches = 0;
   for (;;) {
-    if (s.runnerNextSend >= s.t + PRE_SEND) break;
+    const txBlocked = s.runnerNextTxMs >= nowMs + PRE_SEND * 1000;
+    const mktBlocked = s.runnerNextMktMs >= nowMs + PRE_SEND * 1000;
+    if (txBlocked) break;
     const batch = s.cfg!.drainBatch;
-    const rows = dueOrder(s).slice(0, batch);
+    const rows = dueOrder(s)
+      .filter((i) => !(mktBlocked && s.mails[i]!.marketing))
+      .slice(0, batch);
     if (rows.length === 0) break;
     for (const i of rows) s.mails[i]!.lease = s.t + LEASE;
-    for (let g = 0; g < rows.length; g += 6) {
-      const group = rows.slice(g, g + 6);
-      if (s.runnerNextSend >= s.t + PRE_SEND) {
-        for (const i of group) s.mails[i]!.lease = null;
-        continue;
-      }
-      const prep = s.t;
+    const ordered = interleaveByOwner(s, rows, batches);
+    for (let g = 0; g < ordered.length; g += 6) {
+      const group = ordered.slice(g, g + 6);
+      const prepMs = nowMs;
+      const eligible = group.filter((i) => {
+        const slot = s.mails[i]!.marketing ? s.runnerNextMktMs : s.runnerNextTxMs;
+        if (slot >= prepMs + PRE_SEND * 1000) {
+          s.mails[i]!.lease = null;
+          return false;
+        }
+        return true;
+      });
+      if (!eligible.length) continue;
       const claimed: [number, number][] = [];
-      for (const i of group) {
+      for (const i of eligible) {
         const ver = s.mails[i]!.ver;
         if (claimRow(s, i, ver) === true) claimed.push([i, ver]);
       }
       const outcomes: [number, Out, number, number, number | undefined][] = [];
-      let firstStart: number | null = null;
-      // idx=0 and a transactional idx=1 launch synchronously in the same pump() turn before idx=0's
-      // response settles, whenever the gate is neither braked nor in outage-probe mode at idx=0's start.
-      let secondInFlight = false;
+      let firstStartMs: number | null = null;
+      let raceConcurrent = false;
       for (let idx = 0; idx < claimed.length; idx++) {
         const [i, ver] = claimed[idx]!;
-        const early = idx === 1 && !s.mails[i]!.marketing && secondInFlight && firstStart !== null;
-        const start = early ? firstStart! : Math.max(s.t, s.runnerNextSend);
+        const isMkt = s.mails[i]!.marketing;
+        const early =
+          s.cfg!.preset === "outageRace" &&
+          idx === 1 &&
+          !isMkt &&
+          raceConcurrent &&
+          firstStartMs !== null;
+        const readyMs = isMkt ? s.runnerNextMktMs : s.runnerNextTxMs;
+        const startMs = early ? firstStartMs! : Math.max(nowMs, readyMs);
         if (idx === 0) {
-          firstStart = start;
-          secondInFlight = s.runnerBrakeUntil <= start && s.runnerOutageStreak === 0;
+          firstStartMs = startMs;
+          raceConcurrent = s.runnerOutageStreak === 0 && s.mails[i]!.p === "unk";
         }
-        if (start >= prep + PRE_SEND) {
-          const requeueAt = s.runnerOutageUntil > s.t ? s.runnerOutageUntil : undefined;
-          outcomes.push([i, "deferred", ver, s.t, requeueAt]);
+        if (startMs >= prepMs + PRE_SEND * 1000) {
+          const requeueAt = s.runnerOutageUntilMs > nowMs ? Math.floor(s.runnerOutageUntilMs / 1000) : undefined;
+          outcomes.push([i, "deferred", ver, Math.floor(nowMs / 1000), requeueAt]);
           continue;
         }
-        s.t = Math.max(s.t, start);
+        nowMs = Math.max(nowMs, startMs);
+        s.t = Math.floor(nowMs / 1000);
         const out = providerCall(s, i);
         if (out === "accepted") {
           s.runnerOutageStreak = 0;
         } else if (out === "throttled") {
-          s.runnerNextSend = Math.max(s.runnerNextSend, start + 1);
-          s.runnerBrakeUntil = Math.max(s.runnerBrakeUntil, start + 10);
-        } else if (out === "unknown" && s.runnerOutageUntil <= start) {
-          const wait = Math.min(OUTAGE_MAX_SECS, OUTAGE_SECS * 2 ** s.runnerOutageStreak);
-          s.runnerOutageUntil = start + wait;
+          if (isMkt) {
+            s.runnerNextMktMs = Math.max(s.runnerNextMktMs, startMs + 1000);
+          } else {
+            s.runnerBrakeUntilMs = Math.max(s.runnerBrakeUntilMs, startMs + 10_000);
+            s.runnerNextTxMs = Math.max(s.runnerNextTxMs, startMs + 250);
+            s.runnerNextMktMs = Math.max(s.runnerNextMktMs, startMs + 1000);
+          }
+        } else if (out === "unknown" && s.runnerOutageUntilMs <= startMs) {
+          const waitMs = Math.min(OUTAGE_MAX_SECS, OUTAGE_SECS * 2 ** s.runnerOutageStreak) * 1000;
+          s.runnerOutageUntilMs = startMs + waitMs;
           s.runnerOutageStreak += 1;
-          s.runnerNextSend = Math.max(s.runnerNextSend, s.runnerOutageUntil);
-          s.runnerBrakeUntil = Math.max(s.runnerBrakeUntil, s.runnerOutageUntil);
+          s.runnerNextTxMs = Math.max(s.runnerNextTxMs, s.runnerOutageUntilMs);
+          s.runnerNextMktMs = Math.max(s.runnerNextMktMs, s.runnerOutageUntilMs);
+          s.runnerBrakeUntilMs = Math.max(s.runnerBrakeUntilMs, s.runnerOutageUntilMs);
         }
-        outcomes.push([i, out, ver, start, undefined]);
+        outcomes.push([i, out, ver, Math.floor(startMs / 1000), undefined]);
       }
       for (const [i, out, ver, at, requeueAt] of outcomes) {
         if (recordOutcome(s, i, out, ver, at, requeueAt)) finishing = true;
       }
     }
+    batches += 1;
     if (rows.length < batch) break;
   }
+  s.t = Math.floor(nowMs / 1000);
   if (finishing) finishCampaign(s);
 }
 
@@ -451,8 +515,9 @@ function stepInst(s: DispatchState, k: 0 | 1): void {
   const inst = s.d[k];
   const ph = inst.ph;
   inst.exists = true;
+  const nowMs = s.t * 1000 + 50;
   const enterLease = () => {
-    if (inst.nextSend >= s.t + PRE_SEND) {
+    if (inst.nextTxMs >= nowMs + PRE_SEND * 1000) {
       if (inst.finishing) finishCampaign(s);
       inst.ph = { kind: "off" };
     } else {
@@ -465,7 +530,8 @@ function stepInst(s: DispatchState, k: 0 | 1): void {
       enterLease();
       break;
     case "lease": {
-      const first = dueOrder(s)[0];
+      const mktBlocked = inst.nextMktMs >= nowMs + PRE_SEND * 1000;
+      const first = dueOrder(s).find((i) => !(mktBlocked && s.mails[i]!.marketing));
       if (first === undefined) {
         if (inst.finishing) finishCampaign(s);
         inst.ph = { kind: "off" };
@@ -478,11 +544,12 @@ function stepInst(s: DispatchState, k: 0 | 1): void {
     case "claim": {
       const res = claimRow(s, ph.m, ph.ver);
       if (res === true) {
-        const start = Math.max(s.t, inst.nextSend);
-        if (start >= ph.prep + PRE_SEND) {
+        const isMkt = s.mails[ph.m]!.marketing;
+        const startMs = Math.max(nowMs, isMkt ? inst.nextMktMs : inst.nextTxMs);
+        if (startMs >= ph.prep * 1000 + 50 + PRE_SEND * 1000) {
           inst.ph = { kind: "record", m: ph.m, out: "deferred", ver: ph.ver };
         } else {
-          s.t = start;
+          s.t = Math.floor(startMs / 1000);
           inst.ph = { kind: "ses", m: ph.m, ver: ph.ver };
         }
       } else {
@@ -491,22 +558,33 @@ function stepInst(s: DispatchState, k: 0 | 1): void {
       break;
     }
     case "ses": {
+      const isMkt = s.mails[ph.m]!.marketing;
+      const sendMs = Math.max(nowMs, isMkt ? inst.nextMktMs : inst.nextTxMs);
+      s.t = Math.floor(sendMs / 1000);
       const out = providerCall(s, ph.m);
       if (out === "accepted") {
         inst.outageStreak = 0;
       } else if (out === "throttled") {
-        inst.nextSend = Math.max(inst.nextSend, s.t + 1);
-      } else if (out === "unknown" && inst.outageUntil <= s.t) {
-        const wait = Math.min(OUTAGE_MAX_SECS, OUTAGE_SECS * 2 ** inst.outageStreak);
-        inst.outageUntil = s.t + wait;
+        if (isMkt) {
+          inst.nextMktMs = Math.max(inst.nextMktMs, sendMs + 1000);
+        } else {
+          inst.brakeUntilMs = Math.max(inst.brakeUntilMs, sendMs + 10_000);
+          inst.nextTxMs = Math.max(inst.nextTxMs, sendMs + 250);
+          inst.nextMktMs = Math.max(inst.nextMktMs, sendMs + 1000);
+        }
+      } else if (out === "unknown" && inst.outageUntilMs <= sendMs) {
+        const waitMs = Math.min(OUTAGE_MAX_SECS, OUTAGE_SECS * 2 ** inst.outageStreak) * 1000;
+        inst.outageUntilMs = sendMs + waitMs;
         inst.outageStreak += 1;
-        inst.nextSend = Math.max(inst.nextSend, inst.outageUntil);
+        inst.nextTxMs = Math.max(inst.nextTxMs, inst.outageUntilMs);
+        inst.nextMktMs = Math.max(inst.nextMktMs, inst.outageUntilMs);
+        inst.brakeUntilMs = Math.max(inst.brakeUntilMs, inst.outageUntilMs);
       }
       inst.ph = { kind: "record", m: ph.m, out, ver: ph.ver };
       break;
     }
     case "record": {
-      const requeueAt = ph.out === "deferred" && inst.outageUntil > s.t ? inst.outageUntil : undefined;
+      const requeueAt = ph.out === "deferred" && inst.outageUntilMs > nowMs ? Math.floor(inst.outageUntilMs / 1000) : undefined;
       if (recordOutcome(s, ph.m, ph.out, ph.ver, s.t, requeueAt)) inst.finishing = true;
       enterLease();
       break;
@@ -808,6 +886,19 @@ function alphabetForPreset(preset: DispatchPreset): DispatchAction[] {
     { op: "Wait", seconds: 60 },
   ];
   switch (preset) {
+    case "outageRace":
+      return [
+        ...baseWaits,
+        { op: "Wait", seconds: 4 },
+        { op: "Wait", seconds: 15 },
+        { op: "Send", persona: "ok" },
+        { op: "Send", persona: "thr" },
+        { op: "Send", persona: "unk" },
+        { op: "Send", persona: "rej" },
+        { op: "SendMarketing", cost: 1, second: false },
+        { op: "Drain" },
+        { op: "Recover" },
+      ];
     case "owners":
       return [
         ...baseWaits,
@@ -894,32 +985,71 @@ function alphabetForPreset(preset: DispatchPreset): DispatchAction[] {
 
 const dispatchIdleRules: IdleRule<DispatchSnapshot>[] = [
   // Temporal rule 1 of 5 (dispatch.once is declarative below):
-  // brake: a throttled process waits 1 s (990 ms tolerance) before its next provider call.
+  // brake: stream-aware throttle brake (marketing >= 990 ms, transactional >= 240 ms).
   {
     id: "dispatch.brake",
-    description: "a throttled process waits 1 s before its next provider call",
+    description: "a throttled process respects stream-aware brake delays (>= 990 ms marketing, >= 240 ms transactional)",
     when: (s) => s.configured && s.sendLog.some((e) => e.out === "braked"),
     optional: true,
     check(s) {
-      const byProc = new Map<string, number>();
+      const byProc = new Map<string, { txSince: number; txUntil: number; mktSince: number; mktUntil: number }>();
       for (const e of s.sendLog) {
-        const pendingSince = byProc.get(e.proc);
-        if (pendingSince !== undefined) {
-          if (e.out === "braked") {
-            const nextSince = e.since ?? e.at;
-            if (nextSince < pendingSince) {
-              return `proc ${e.proc}: braked marker went backwards (${nextSince} < ${pendingSince})`;
-            }
-            byProc.set(e.proc, nextSince);
-            continue;
-          }
-          if (e.at < pendingSince + 990) {
-            return `proc ${e.proc}: next send (${e.mail}, ${e.out}) ran ${e.at - pendingSince}ms after brake (need >= 990ms)`;
-          }
-          byProc.delete(e.proc);
-        }
+        const hold = byProc.get(e.proc) ?? { txSince: 0, txUntil: 0, mktSince: 0, mktUntil: 0 };
         if (e.out === "braked") {
-          byProc.set(e.proc, e.since ?? e.at);
+          const since = e.since ?? e.at;
+          if (e.kind === "marketing") {
+            if (since + 990 > hold.mktUntil) {
+              hold.mktSince = since;
+              hold.mktUntil = since + 990;
+            }
+          } else {
+            if (since + 240 > hold.txUntil) {
+              hold.txSince = since;
+              hold.txUntil = since + 240;
+            }
+            if (since + 990 > hold.mktUntil) {
+              hold.mktSince = since;
+              hold.mktUntil = since + 990;
+            }
+          }
+          byProc.set(e.proc, hold);
+          continue;
+        }
+        const isMkt = e.campaign || e.kind === "marketing";
+        const requiredUntil = isMkt ? hold.mktUntil : hold.txUntil;
+        const brakeSince = isMkt ? hold.mktSince : hold.txSince;
+        const startAt = e.startedAt ?? e.at;
+        if (requiredUntil > 0 && startAt >= brakeSince) {
+          if (startAt < requiredUntil) {
+            const need = isMkt ? 990 : 240;
+            const elapsed = startAt - brakeSince;
+            return `proc ${e.proc}: next ${isMkt ? "marketing" : "transactional"} send (${e.mail}, ${e.out}) ran ${elapsed}ms after brake (need >= ${need}ms)`;
+          }
+          if (isMkt) hold.mktUntil = 0;
+          else hold.txUntil = 0;
+        }
+      }
+      return undefined;
+    },
+  },
+  // Outage hold must not be shortened by a concurrent transactional 429 brake.
+  {
+    id: "dispatch.outage-hold",
+    description: "a concurrent throttle brake never shortens an active outage hold",
+    when: (s) => s.configured && s.sendLog.some((e) => e.out === "unknown"),
+    optional: true,
+    check(s) {
+      const byProc = new Map<string, { settledAt: number; until: number }>();
+      for (const e of s.sendLog) {
+        if (e.out === "braked") continue;
+        const active = byProc.get(e.proc);
+        const startAt = e.startedAt ?? e.at;
+        if (active && startAt > active.settledAt + 50 && startAt < active.until) {
+          return `proc ${e.proc}: send (${e.mail}, ${e.out}) started ${startAt - active.settledAt}ms after outage (held until +${active.until - active.settledAt}ms)`;
+        }
+        if (active && startAt >= active.until) byProc.delete(e.proc);
+        if (e.out === "unknown" && !byProc.has(e.proc)) {
+          byProc.set(e.proc, { settledAt: e.at, until: e.at + 14_900 });
         }
       }
       return undefined;
@@ -1088,9 +1218,10 @@ export const dispatch = model<DispatchState, DispatchAction, DispatchObs, Dispat
     mails: [],
     camp: emptyCamp(0),
     keys: [],
-    runnerNextSend: 0,
-    runnerBrakeUntil: 0,
-    runnerOutageUntil: 0,
+    runnerNextTxMs: 0,
+    runnerNextMktMs: 0,
+    runnerBrakeUntilMs: 0,
+    runnerOutageUntilMs: 0,
     runnerOutageStreak: 0,
     d: [offInst(), offInst()],
     directs: 0,
@@ -1109,6 +1240,7 @@ export const dispatch = model<DispatchState, DispatchAction, DispatchObs, Dispat
         choice({ op: "Configure", preset: "owners" }, 2),
         choice({ op: "Configure", preset: "allowance" }, 2),
         choice({ op: "Configure", preset: "allowance2" }, 2),
+        choice({ op: "Configure", preset: "outageRace" }, 1),
         choice({ op: "Configure", preset: "quota2" }, 1),
         choice({ op: "Configure", preset: "quota3" }, 1),
         choice({ op: "Configure", preset: "quota4" }, 1),
@@ -1128,12 +1260,12 @@ export const dispatch = model<DispatchState, DispatchAction, DispatchObs, Dispat
       const next = initialForPreset(a.preset);
       return {
         next,
-        expect: next.cfg!.quota !== null ? anyReply() : exact(buildExpected(next, null)),
+        expect: next.cfg!.quota !== null || next.cfg!.preset === "outageRace" ? anyReply() : exact(buildExpected(next, null)),
       };
     }
 
     const next = cloneState(s);
-    if (next.cfg!.quota !== null) {
+    if (next.cfg!.quota !== null || next.cfg!.preset === "outageRace") {
       if (a.op === "Wait") next.t += a.seconds;
       else if (a.op === "Settle") next.t += 7 * (DAY + 60);
       return { next, expect: anyReply() };

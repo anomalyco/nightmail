@@ -47,7 +47,7 @@ export const ConnectionSummary = z.object({ kind: Kind, region: z.string(), stat
     .nullable().optional().describe('Hosted only: the subdomain of the installation\'s own domain this workspace sends and receives on before it verifies a domain of its own (sendEmail from any address at it), with who it sends to and its recipient caps. Absent when the installation has none; null until this workspace has one.'),
   attention: z.string().optional().describe('A connected AWS account\'s most pressing health finding, for a banner; absent when nothing needs attention.'),
 }).openapi('ConnectionSummary');
-type Row = { id: string; stack_name?: string | null; workspace_id: string; kind: 'shared' | 'byo'; region: string; state: ConnectionState; tenant_state: TenantState; aws_account_id: string | null; role_arn: string | null; external_id: string | null; platform_principal_arn: string | null; template_version: string | null; confirmed_message_id: string | null; imported_domains?: number; stack_template_version?: string | null; stack_deleted_at?: string | null; stack_error?: string | null; stack_id?: string | null; health?: { checkedAt: string; issues: { code: string; region?: string; message: string }[] } | null };
+type Row = { id: string; stack_name?: string | null; workspace_id: string; kind: 'shared' | 'byo'; region: string; state: ConnectionState; tenant_state: TenantState; aws_account_id: string | null; role_arn: string | null; external_id: string | null; platform_principal_arn: string | null; template_version: string | null; confirmed_message_id: string | null; paused_at?: string | null; pause_reason?: string | null; imported_domains?: number; stack_template_version?: string | null; stack_deleted_at?: string | null; stack_error?: string | null; stack_id?: string | null; health?: { checkedAt: string; issues: { code: string; region?: string; message: string }[] } | null };
 
 function owner(c: Ctx) {
   if (!c.env.config.multiTenant) return notFound('Endpoint');
@@ -592,12 +592,13 @@ export function registerProviderConnections(app: App) {
     const wid = owner(c);
     try {
       const current=await get(c.env,wid);
+      if (current?.paused_at || current?.pause_reason) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', current.pause_reason ?? 'Sending is paused for this workspace.');
       if (current?.template_version==='v5') {const result=await disconnectV5(c.env,wid,current.id,(db,conn)=>recordAudit(db,c,{action:'connection.delete',workspaceId:wid,target:{type:'connection',id:conn.id},before:{kind:'byo',region:conn.region,state:conn.state}}));c.get('actor').wakeJobs=1;return c.json(result,202);}
       // No AWS call runs in a transaction: fence the connection under the send-admission lock, delete its shared identities,
       // then release its claims and delete it. A failure leaves the fence (nothing sends on it); a repeated DELETE resumes.
       const row = await c.env.db.transaction(async db => {
         await getRegionSettings(db, wid, 'update'); // Serialize with send admission, which takes FOR SHARE on this row.
-        const row = (await db.execute<Row & { pause_reason: string | null }>(sql`SELECT * FROM provider_connections pc WHERE workspace_id=${wid} AND ${notProvisioning()}
+        const row = (await db.execute<Row & { paused_at: string | null; pause_reason: string | null }>(sql`SELECT * FROM provider_connections pc WHERE workspace_id=${wid} AND ${notProvisioning()}
           AND NOT EXISTS (SELECT 1 FROM sending_emails WHERE workspace_id=${wid} AND status IN ('queued','attempting','acceptance_unknown'))
           AND NOT EXISTS (SELECT 1 FROM sending_campaigns c WHERE c.workspace_id=${wid} AND ${campaignActive()}) FOR UPDATE`)).rows[0];
         if (!row) {
@@ -605,7 +606,7 @@ export function registerProviderConnections(app: App) {
           throw new ApiError(409, 'CONNECTION_IN_USE', 'Finish queued work or active setup before disconnecting.');
         }
         // Disconnect/reconnect must not serve as a workspace-controlled unpause, even to finish an earlier DELETE.
-        if (row.pause_reason) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', row.pause_reason);
+        if (row.paused_at || row.pause_reason) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', row.pause_reason ?? 'Sending is paused for this workspace.');
         if (row.state === 'disconnecting' && row.template_version !== 'v5') return row; // An earlier DELETE fenced it after these checks.
         if (row.template_version==='v5' || (await db.execute(sql`SELECT FROM provider_connection_regions WHERE connection_id=${row.id} AND NOT legacy AND NOT (${row.kind}='shared' AND region='us-east-1' AND pool_tenant_name IS NOT NULL AND receiving_state='off' AND sending_state='ready') LIMIT 1`)).rowCount) throw new ApiError(409,'REGIONAL_DISCONNECT_REQUIRED','A regional connection requires reviewed cleanup before disconnecting.');
         await db.execute(sql`UPDATE provider_connections SET state='disconnecting' WHERE id=${row.id}`);
@@ -617,9 +618,9 @@ export function registerProviderConnections(app: App) {
       // finished, both statements are no-ops, so only one audits.
       await c.env.db.transaction(async db => {
         await getRegionSettings(db, wid, 'update');
-        const fenced = (await db.execute<{ pause_reason: string | null }>(sql`SELECT pause_reason FROM provider_connections WHERE id=${row.id} AND state='disconnecting' FOR UPDATE`)).rows[0];
+        const fenced = (await db.execute<{ paused_at: string | null; pause_reason: string | null }>(sql`SELECT paused_at, pause_reason FROM provider_connections WHERE id=${row.id} AND state='disconnecting' FOR UPDATE`)).rows[0];
         if (!fenced) return;
-        if (fenced.pause_reason) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', fenced.pause_reason);
+        if (fenced.paused_at || fenced.pause_reason) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', fenced.pause_reason ?? 'Sending is paused for this workspace.');
         await db.execute(sql`WITH ${releaseConnectionClaims(wid, sql`SELECT ${row.id}::text AS id`)} SELECT 1`);
         await db.execute(sql`WITH deleted AS (DELETE FROM provider_connections WHERE id=${row.id} AND state='disconnecting' RETURNING id),
           audit AS (${auditInsert(auditContext(c), { action: 'connection.delete', workspaceId: wid, target: { type: 'connection', id: row.id }, before: { kind: row.kind, region: row.region, state: row.state } }, { from: sql`deleted` })}) SELECT 1`);

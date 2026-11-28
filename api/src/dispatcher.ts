@@ -301,12 +301,12 @@ export function reserve(gate: GateState, recipients: number, shard?: { index: nu
 export function brake(gate: GateState, kind?: EmailSnapshot['kind']) {
   const now = Date.now();
   if (kind === 'marketing') {
-    gate.marketingBrakeUntil = now + BRAKE_MS;
+    gate.marketingBrakeUntil = Math.max(gate.marketingBrakeUntil ?? 0, now + BRAKE_MS);
     gate.marketingAllowedAt = Math.max(gate.marketingAllowedAt ?? 0, now + 1000);
     return;
   }
-  gate.brakeUntil = now + BRAKE_MS;
-  gate.marketingBrakeUntil = now + BRAKE_MS;
+  gate.brakeUntil = Math.max(gate.brakeUntil ?? 0, now + BRAKE_MS);
+  gate.marketingBrakeUntil = Math.max(gate.marketingBrakeUntil ?? 0, now + BRAKE_MS);
   if (kind === 'transactional') {
     gate.nextAllowedAt = Math.max(gate.nextAllowedAt, now + 250);
     gate.txAllowedAt = Math.max(gate.txAllowedAt ?? 0, now + 250);

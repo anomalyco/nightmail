@@ -17,7 +17,7 @@ import { recordAudit, systemContext } from './audit.js';
 import { regionLabels } from './region-labels.js';
 
 export { regionLabels } from './region-labels.js';
-export type V5Connection={id:string;stack_name:string|null;workspace_id:string;requested_account:string|null;stack_id:string|null;stack_template_version:string|null;stack_deleted_at:string|null;stack_error:string|null;resource_prefix:string;disconnect_summary:z.infer<typeof DisconnectSummary>|null;health:{checkedAt:string;issues:{code:string;region?:string;message:string}[]}|null;aws_account_id:string|null;role_arn:string|null;external_id:string;inventory_revision:number;state:string;region:string;disconnect_error:{region:string|null;code:string}|null};
+export type V5Connection={id:string;stack_name:string|null;workspace_id:string;requested_account:string|null;stack_id:string|null;stack_template_version:string|null;stack_deleted_at:string|null;stack_error:string|null;resource_prefix:string;disconnect_summary:z.infer<typeof DisconnectSummary>|null;health:{checkedAt:string;issues:{code:string;region?:string;message:string}[]}|null;aws_account_id:string|null;role_arn:string|null;external_id:string;inventory_revision:number;state:string;region:string;paused_at:string|null;pause_reason:string|null;disconnect_error:{region:string|null;code:string}|null};
 type ScanRow={region:string;scan_state:string;scan_error:string|null;scan_facts:Inventory;scan_revision:string;sending_state:string;receiving_state:string;provision_error:string|null;ownership_journal:JournalEntry[]};
 const conflict=(code:string,message:string)=>new ApiError(409,code,message);
 const stale=()=>conflict('SCAN_STALE','Refresh the list and select verified domains from a completed regional scan.');
@@ -370,20 +370,22 @@ const provision=runV5(async(r,c,p,attempt)=>{
       if (published) return;
     }
     await r.db.execute(sql`UPDATE provider_connection_regions SET provision_error='SNS_CONFIRMATION_PENDING' WHERE ${owned}`);
-    throw defer(15_000,{...p,generation:gen});
+    throw defer(15_000,{...p,generation:gen,retries:0});
   } catch(e) {
     if (e instanceof JobDeferred || e instanceof ModuleLoadError) throw e;
     const err=awsError(e);
-    if (err.retryable) {
+    const retries=Math.max(attempt,Number(p.retries??0)+1);
+    if (err.retryable && retries<MAX_ATTEMPTS) {
       // Keep the journaled topic eligible for signed confirmations during backoff,
       // including when SNS accepted Subscribe but its response never reached us.
       await r.db.execute(sql`UPDATE provider_connection_regions SET provision_error=${err.code} WHERE ${owned}`);
-      throw defer(30_000,{...p,generation:gen});
+      throw defer(30_000,{...p,generation:gen,retries});
     }
-    // Failed for good: the region's selections close with its error in the same statement, so none waits in pending.
+    // Failed for good or out of retries: the region's selections close in the same statement, so none waits in pending.
+    const reason=err.retryable ? 'region_failed' : err.code;
     await r.db.execute(sql`WITH failed AS (UPDATE provider_connection_regions SET sending_state='failed',lease_until=NULL,provision_error=${err.code} WHERE ${owned} RETURNING connection_id,region)
-      UPDATE byo_domain_intents i SET closed_reason=${err.code} FROM failed f WHERE i.connection_id=f.connection_id AND i.region=f.region AND i.closed_reason IS NULL`);
-    throw err;
+      UPDATE byo_domain_intents i SET closed_reason=${reason} FROM failed f WHERE i.connection_id=f.connection_id AND i.region=f.region AND i.closed_reason IS NULL`);
+    throw err.retryable ? new ApiError(err.status, err.code, err.message, err.field, false) : err;
   }
 });
 
@@ -426,11 +428,13 @@ const setupJobs=(c:V5Connection)=>sql`workspace_id=${c.workspace_id} AND ((type 
 // Stops sending from the connection and records what its disconnect keeps. A forced fence (the stack is being deleted, so
 // the role is about to go) doesn't wait for outstanding mail: the dispatcher cancels mail still queued for a disabled
 // region, and the cleanup waits for running setup jobs and mail mid-attempt before it finishes.
+const pausedError=(c:Pick<V5Connection,'pause_reason'>)=>conflict('HOSTED_SENDING_PAUSED',c.pause_reason??'Sending is paused for this workspace.');
 async function fence(db:DbExecutor,c:V5Connection,forced:boolean) {
   // A stack being deleted has nothing left to delete.
   const summary=await disconnectSummary(db,forced?{...c,stack_deleted_at:c.stack_deleted_at??new Date().toISOString()}:c);
   await db.execute(sql`UPDATE jobs SET status='completed',lease_until=NULL,last_error=NULL WHERE ${setupJobs(c)} AND status='pending'`);
-  await db.execute(sql`UPDATE provider_connections SET state='disconnecting',disconnect_summary=${JSON.stringify(summary)}::jsonb${forced?sql`,stack_deleted_at=coalesce(stack_deleted_at,now())`:sql``} WHERE id=${c.id}`);
+  const fenced=await db.execute(sql`UPDATE provider_connections SET state='disconnecting',disconnect_summary=${JSON.stringify(summary)}::jsonb${forced?sql`,stack_deleted_at=coalesce(stack_deleted_at,now())`:sql``} WHERE id=${c.id}${forced?sql``:sql` AND paused_at IS NULL AND pause_reason IS NULL`}`);
+  if (!forced && !fenced.rowCount) throw pausedError(c);
   await db.execute(sql`UPDATE provider_connection_regions SET sending_state='disabled',generation=generation+1,lease_until=NULL WHERE connection_id=${c.id}`);
   await job(db,c,'byo.disconnect',disconnectId(c));
   return summary;
@@ -440,6 +444,7 @@ export async function disconnectV5(r:Runtime,wid:string,connectionId:string,audi
   return r.db.transaction(async db=>{
     await lockSendScope(db,wid,{settings:'update'});
     const c=await connection(db,wid,true);if (!c || c.id!==connectionId) throw stale();
+    if (c.paused_at || c.pause_reason) throw pausedError(c);
     if (c.state==='disconnecting') { await job(db,c,'byo.disconnect',disconnectId(c));return {operationId:disconnectId(c),summary:c.disconnect_summary??await disconnectSummary(db,c)}; }
     const busy=()=>conflict('CONNECTION_IN_USE','Finish outstanding mail, campaigns and running setup jobs before disconnecting.');
     if ((await db.execute(sql`SELECT FROM sending_emails WHERE workspace_id=${wid} AND status IN ('queued','attempting','acceptance_unknown') LIMIT 1`)).rowCount ||
@@ -479,13 +484,17 @@ const disconnect:JobHandler=retryDatabaseFailures(async(r,p,j)=>{
       const rr=(await db.execute<CleanupRegion>(sql`SELECT region,ownership_journal,feedback_topic_arn FROM provider_connection_regions WHERE connection_id=${c.id} AND
         (feedback_topic_arn IS NOT NULL OR EXISTS(SELECT FROM jsonb_array_elements(ownership_journal) e WHERE e->>'kind' IS DISTINCT FROM 'identity')) ORDER BY region LIMIT 1`)).rows[0];
       if (!rr) {
+        // Never release claims or delete a paused connection: clean up AWS resources first, then defer until resumed.
+        if (c.paused_at || c.pause_reason) return 'paused';
         const left=c.disconnect_summary?.leftBehind??[];
         if (left.length) await recordAudit(db,systemContext('job'),{action:'connection.cleanup',workspaceId:c.workspace_id,target:{type:'connection',id:c.id},after:{leftBehind:left.slice(0,50)},internal:false});
         await db.execute(sql`WITH ${releaseConnectionClaims(c.workspace_id,sql`SELECT ${c.id}::text AS id`)} SELECT 1`);
-        await db.execute(sql`DELETE FROM provider_connections WHERE id=${c.id} AND state='disconnecting'`);return false;
+        await db.execute(sql`DELETE FROM provider_connections WHERE id=${c.id} AND state='disconnecting'`);
+        return false;
       }
       return {c,rr};
     });
+    if (next==='paused') throw defer(30_000,p);
     if (next==='wait') throw defer(5000,p);
     if (!next) return;
     const {c,rr}=next;region=rr.region;

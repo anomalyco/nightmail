@@ -1,0 +1,790 @@
+{
+  "version": 1,
+  "modelId": "byo-regional",
+  "cases": [
+    {
+      "name": "smoke-import-provision-bind-disconnect",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "Verify"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        }
+      ],
+      "expected": {
+        "outcome": "pass",
+        "control": true
+      },
+      "note": "Control: full v5 import -> provision -> bind -> clean disconnect lifecycle"
+    },
+    {
+      "name": "canary-orphan-pending-intent",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        }
+      ],
+      "bug": "canary_orphan_intent",
+      "expected": {
+        "outcome": "fail",
+        "operator": "idle:byo.no-orphan-pending-intent",
+        "verdict": "idleViolation",
+        "canary": true
+      },
+      "note": "Canary: fabricated failed backing job on open intent verifies byo.no-orphan-pending-intent bites"
+    },
+    {
+      "name": "fresh-enroll-and-new-regional-domain",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "fresh"
+        },
+        {
+          "op": "Connect"
+        },
+        {
+          "op": "NewRegionalDomain",
+          "region": "us-east-2",
+          "domain": "gamma"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "Verify"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Fresh enroll -> new domain -> provision -> bind converges cleanly"
+    },
+    {
+      "name": "sns-confirmation-pending-then-confirm",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SetRegionFault",
+          "region": "us-east-2",
+          "fault": "wait_sns_confirm"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ConfirmTopic",
+          "region": "us-east-2"
+        },
+        {
+          "op": "SetRegionFault",
+          "region": "us-east-2",
+          "fault": "ok"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-2"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "SNS_CONFIRMATION_PENDING polls keep region eligible until ConfirmTopic arrives"
+    },
+    {
+      "name": "provision-access-denied-closes-intents-and-moves-region",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SetRegionFault",
+          "region": "us-east-2",
+          "fault": "access_denied"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-1",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-1"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-1"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Permanent AccessDenied fails region and closes intents atomically so domain moves cleanly to us-east-1"
+    },
+    {
+      "name": "provision-retryable-5xx-exhaustion-closes-intents-and-recovers",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SetRegionFault",
+          "region": "us-east-2",
+          "fault": "retryable_5xx"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2",
+          "runToExhaustion": true
+        },
+        {
+          "op": "NewRegionalDomain",
+          "region": "us-east-1",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-1"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-1"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Retryable 5xx exhaustion marks region failed and closes intents with region_failed so healthy region succeeds (pins Bug 3 / byo-1)"
+    },
+    {
+      "name": "provision-exhausted-same-region-retried-after-fix",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SetRegionFault",
+          "region": "us-east-2",
+          "fault": "retryable_5xx"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2",
+          "runToExhaustion": true
+        },
+        {
+          "op": "SetRegionFault",
+          "region": "us-east-2",
+          "fault": "ok"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-2"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "After provision exhaustion and fixing the region fault, re-selecting the same region succeeds cleanly"
+    },
+    {
+      "name": "bind-retryable-5xx-exhaustion-closes-intent-and-moves-region",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "SetRegionFault",
+          "region": "us-east-2",
+          "fault": "retryable_5xx"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-2",
+          "runToExhaustion": true
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-1",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-1"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-1"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-1"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Bind retry exhaustion closes the intent on final attempt so the domain can move to us-east-1"
+    },
+    {
+      "name": "bind-access-denied-closes-intent-immediately",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "beta"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "SetRegionFault",
+          "region": "us-east-2",
+          "fault": "access_denied"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "SetRegionFault",
+          "region": "us-east-2",
+          "fault": "ok"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "beta"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-2"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Non-retryable bind AccessDenied closes intent immediately and allows retry once fixed"
+    },
+    {
+      "name": "paused-connection-refuses-delete-connection",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "hosted"
+        },
+        {
+          "op": "OperatorPause"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "Verify"
+        },
+        {
+          "op": "OperatorResume"
+        },
+        {
+          "op": "Disconnect"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "DELETE /v1/connection refuses a paused connection with 409 HOSTED_SENDING_PAUSED and succeeds only after resume"
+    },
+    {
+      "name": "paused-mid-disconnect-blocks-delete-until-resumed",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "hosted"
+        },
+        {
+          "op": "SetDisconnectFault",
+          "fault": "pause_mid_disconnect"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "Verify"
+        },
+        {
+          "op": "OperatorResume"
+        },
+        {
+          "op": "Disconnect"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Operator pause landing during AWS identity cleanup fences disconnect without deleting until resumed (pins byo-3)"
+    },
+    {
+      "name": "disconnecting-refuses-all-mutations-with-409",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "NewRegionalDomain",
+          "region": "us-east-2",
+          "domain": "gamma"
+        },
+        {
+          "op": "Verify"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "All mutations while state='disconnecting' refuse cleanly with 409 CONNECTION_DISCONNECTING"
+    },
+    {
+      "name": "disconnect-recovers-after-transient-5xx",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "SetDisconnectFault",
+          "fault": "retryable_5xx"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "SetDisconnectFault",
+          "fault": "ok"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Disconnect cleanup recovers cleanly after transient AWS 5xx and removes journaled resources"
+    },
+    {
+      "name": "disconnect-access-denied-records-error-then-resumes",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "SetDisconnectFault",
+          "fault": "access_denied"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "SetDisconnectFault",
+          "fault": "ok"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Repeating DELETE /v1/connection after fixing AccessDenied re-queues byo.disconnect and completes cleanup"
+    },
+    {
+      "name": "two-regions-concurrent-domains-and-full-cleanup",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-1",
+          "domain": "beta"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-1"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-1"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "BindStep",
+          "region": "us-east-1"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Two provisioned regions bind distinct domains and disconnect cleanly across both regions"
+    },
+    {
+      "name": "disconnect-while-intent-pending-cancels-setup-jobs",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SetRegionFault",
+          "region": "us-east-2",
+          "fault": "wait_sns_confirm"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Disconnecting while a region is waiting for SNS confirmation fences setup and cleans journaled resources"
+    },
+    {
+      "name": "paused-v5-refuses-delete-connection",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "OperatorPause",
+          "reasonless": true
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "Verify"
+        },
+        {
+          "op": "OperatorResume"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "DisconnectStep"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "DELETE /v1/connection refuses a paused BYO v5 connection even when paused_at IS NOT NULL AND pause_reason IS NULL"
+    },
+    {
+      "name": "paused-v5-mid-disconnect-cleans-aws-and-defers-delete",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "OperatorPause"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "Verify"
+        },
+        {
+          "op": "OperatorResume"
+        },
+        {
+          "op": "DisconnectStep"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "A pause landing mid-disconnect still cleans regional AWS config sets/topics, defers final DB delete until resumed, and finishes after resume (pins byo-4)"
+    }
+  ]
+}

@@ -53,6 +53,27 @@ export async function requireDisposableDatabase(url: string | undefined, name = 
   return checked;
 }
 
+/** Installs the shared tear_clock schema/functions and rewrites public.* timestamp defaults to tear_clock.*. */
+export async function prepareTearClock(exec: (rawSql: string) => Promise<unknown>): Promise<void> {
+  await exec(`
+    CREATE SCHEMA IF NOT EXISTS tear_clock;
+    CREATE TABLE IF NOT EXISTS tear_clock.state(singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), off interval NOT NULL DEFAULT '0');
+    ALTER TABLE tear_clock.state ADD COLUMN IF NOT EXISTS horizon bigint NOT NULL DEFAULT 0;
+    ALTER TABLE tear_clock.state ADD COLUMN IF NOT EXISTS pinned timestamptz;
+    INSERT INTO tear_clock.state DEFAULT VALUES ON CONFLICT DO NOTHING;
+    CREATE OR REPLACE FUNCTION tear_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql VOLATILE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.clock_timestamp() + (SELECT off FROM tear_clock.state)) $$;
+    CREATE OR REPLACE FUNCTION tear_clock.now() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.now() + (SELECT off FROM tear_clock.state)) $$;
+    CREATE OR REPLACE FUNCTION tear_clock.statement_timestamp() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.statement_timestamp() + (SELECT off FROM tear_clock.state)) $$;
+    DO $$ DECLARE c record; BEGIN
+      FOR c IN SELECT table_name, column_name, column_default FROM information_schema.columns
+        WHERE table_schema='public' AND column_default ~ '(^|[^.])(now|clock_timestamp|statement_timestamp)\\(\\)' LOOP
+        EXECUTE format('ALTER TABLE public.%I ALTER COLUMN %I SET DEFAULT %s', c.table_name, c.column_name,
+          regexp_replace(c.column_default, '(^|[^.])(now|clock_timestamp|statement_timestamp)\\(\\)', '\\1tear_clock.\\2()', 'g'));
+      END LOOP;
+    END $$;
+  `);
+}
+
 if (process.argv[1] && new URL(import.meta.url).pathname === process.argv[1]) {
   requireDisposableDatabase(process.env.TEAR_DATABASE_URL ?? process.env.DATABASE_URL, 'TEAR_DATABASE_URL').catch(error => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);

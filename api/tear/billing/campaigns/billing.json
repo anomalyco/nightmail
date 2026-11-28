@@ -1,0 +1,491 @@
+{
+  "version": 1,
+  "modelId": "billing",
+  "cases": [
+    {
+      "name": "smoke-topup-and-usage",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "TopUp",
+          "method": "saved_card",
+          "amountCents": 2000,
+          "outcome": "paid"
+        },
+        {
+          "op": "SendUsage",
+          "amountCents": 1000
+        }
+      ],
+      "expected": {
+        "outcome": "pass",
+        "control": true
+      },
+      "note": "Control: basic saved-card top-up and settled usage preserve zero-sum ledger and credit lots"
+    },
+    {
+      "name": "canary-ledger-drift",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "SendUsage",
+          "amountCents": 1000
+        }
+      ],
+      "bug": "canary_ledger_drift",
+      "expected": {
+        "outcome": "fail",
+        "operator": "idle:billing.zero-sum-ledger",
+        "verdict": "idleViolation",
+        "canary": true
+      },
+      "note": "Canary: planted +1 uc balance drift verifies billing.zero-sum-ledger bites"
+    },
+    {
+      "name": "topup-idempotency-and-duplicate-webhook",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "TopUp",
+          "method": "checkout",
+          "amountCents": 2500,
+          "outcome": "paid"
+        },
+        {
+          "op": "WebhookInvoicePaid",
+          "target": "latest",
+          "mode": "duplicate"
+        },
+        {
+          "op": "WebhookInvoicePaid",
+          "target": "latest",
+          "mode": "exact"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Duplicate checkout/invoice paid webhooks credit the balance exactly once"
+    },
+    {
+      "name": "topup-card-declined-and-3ds",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "TopUp",
+          "method": "saved_card",
+          "amountCents": 2500,
+          "outcome": "card_declined"
+        },
+        {
+          "op": "TopUp",
+          "method": "saved_card",
+          "amountCents": 2500,
+          "outcome": "requires_action"
+        },
+        {
+          "op": "TopUp",
+          "method": "saved_card",
+          "amountCents": 2000,
+          "outcome": "paid"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Declined and requires_action top-ups fail cleanly without moving balance"
+    },
+    {
+      "name": "autorecharge-amount-mismatch-disables-loop",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "autoRecharge"
+        },
+        {
+          "op": "AutoRechargeTick",
+          "outcome": "amount_mismatch"
+        },
+        {
+          "op": "AutoRechargeTick",
+          "outcome": "paid"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Wrong-amount auto-recharge turns auto-recharge off so the next tick does not charge again (pins billing-1)"
+    },
+    {
+      "name": "autorecharge-decline-disables-loop",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "autoRecharge"
+        },
+        {
+          "op": "AutoRechargeTick",
+          "outcome": "card_declined"
+        },
+        {
+          "op": "AutoRechargeTick",
+          "outcome": "paid"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Declined auto-recharge disables recharge and stops retrying on subsequent ticks"
+    },
+    {
+      "name": "autorecharge-paid-and-reenable-after-new-card",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "autoRecharge"
+        },
+        {
+          "op": "AutoRechargeTick",
+          "outcome": "card_declined"
+        },
+        {
+          "op": "SaveCard",
+          "card": "B"
+        },
+        {
+          "op": "EnableAutoRecharge"
+        },
+        {
+          "op": "AutoRechargeTick",
+          "outcome": "paid"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Owner can save a fresh card and re-enable auto-recharge after a decline"
+    },
+    {
+      "name": "dispute-inquiry-warning-closed-reverses-exact",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "DisputeCreated",
+          "target": "first",
+          "status": "warning_needs_response"
+        },
+        {
+          "op": "DisputeClosed",
+          "target": "latest",
+          "status": "warning_closed"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Inquiry dispute closed as warning_closed reverses exact debit and lifts dispute-only block (pins billing-2)"
+    },
+    {
+      "name": "dispute-won-reverses-exact-and-unblocks",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "DisputeCreated",
+          "target": "first",
+          "status": "needs_response"
+        },
+        {
+          "op": "DisputeClosed",
+          "target": "latest",
+          "status": "won"
+        },
+        {
+          "op": "SaveCard",
+          "card": "A"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Won dispute restores credit and allows the unblocked card to be saved again"
+    },
+    {
+      "name": "dispute-lost-retains-debit-and-block",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "DisputeCreated",
+          "target": "first",
+          "status": "needs_response"
+        },
+        {
+          "op": "DisputeClosed",
+          "target": "latest",
+          "status": "lost"
+        },
+        {
+          "op": "SaveCard",
+          "card": "A"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Lost dispute keeps debit permanently and keeps the card blocked"
+    },
+    {
+      "name": "dispute-uncredited-amount-mismatch-debits-zero",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "autoRecharge"
+        },
+        {
+          "op": "AutoRechargeTick",
+          "outcome": "amount_mismatch"
+        },
+        {
+          "op": "DisputeCreated",
+          "target": "uncredited",
+          "status": "needs_response"
+        },
+        {
+          "op": "DisputeClosed",
+          "target": "latest",
+          "status": "won"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Disputing an uncredited amount_mismatch attempt debits 0 and writes no dispute row (pins billing-3)"
+    },
+    {
+      "name": "dispute-uncredited-late-payment-debits-zero",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "TopUp",
+          "method": "checkout",
+          "amountCents": 2500,
+          "outcome": "paid"
+        },
+        {
+          "op": "WebhookInvoicePaid",
+          "target": "latest",
+          "mode": "late"
+        },
+        {
+          "op": "DisputeCreated",
+          "target": "uncredited",
+          "status": "needs_response"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Late webhook on an expired checkout attempt never credits, and disputing it debits 0"
+    },
+    {
+      "name": "two-disputes-same-card-first-won-stays-blocked",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "TopUp",
+          "method": "saved_card",
+          "amountCents": 2000,
+          "outcome": "paid"
+        },
+        {
+          "op": "DisputeCreated",
+          "target": "first",
+          "status": "needs_response"
+        },
+        {
+          "op": "DisputeCreated",
+          "target": "latest",
+          "status": "needs_response"
+        },
+        {
+          "op": "DisputeClosed",
+          "target": "first",
+          "status": "won"
+        },
+        {
+          "op": "DisputeClosed",
+          "target": "latest",
+          "status": "won"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Winning the first of two disputes on a card keeps it blocked until the second also closes"
+    },
+    {
+      "name": "early-fraud-warning-block-monotonic-across-won-dispute",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "DisputeCreated",
+          "target": "first",
+          "status": "needs_response"
+        },
+        {
+          "op": "EarlyFraudWarning",
+          "target": "first"
+        },
+        {
+          "op": "DisputeClosed",
+          "target": "latest",
+          "status": "won"
+        },
+        {
+          "op": "SaveCard",
+          "card": "A"
+        },
+        {
+          "op": "EnableAutoRecharge"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Winning a dispute never lifts an early_fraud_warning card block"
+    },
+    {
+      "name": "partial-refund-then-dispute-caps-debit",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "Refund",
+          "target": "first",
+          "amountCents": 1000,
+          "outcome": "succeeded"
+        },
+        {
+          "op": "DisputeCreated",
+          "target": "first",
+          "status": "needs_response"
+        },
+        {
+          "op": "DisputeClosed",
+          "target": "latest",
+          "status": "won"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Dispute after partial refund debits only unrefunded credit and reverses cleanly on win"
+    },
+    {
+      "name": "refund-failed-releases-hold",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "Refund",
+          "target": "first",
+          "amountCents": 1000,
+          "outcome": "failed"
+        },
+        {
+          "op": "SendUsage",
+          "amountCents": 2000
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Failed Stripe refund releases its refund_hold back into balance and credit lots"
+    },
+    {
+      "name": "reconcile-after-stripe-5xx-and-wait",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "autoRecharge"
+        },
+        {
+          "op": "AutoRechargeTick",
+          "outcome": "stripe_5xx"
+        },
+        {
+          "op": "Wait",
+          "seconds": 360
+        },
+        {
+          "op": "ReconcileAttempt",
+          "target": "latest",
+          "stripeState": "paid"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Pending recharge after 5xx is reconciled cleanly once Stripe reports the invoice paid"
+    },
+    {
+      "name": "usage-into-debt-then-topup-repays-debt-before-lots",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "funded"
+        },
+        {
+          "op": "SendUsage",
+          "amountCents": 3000
+        },
+        {
+          "op": "TopUp",
+          "method": "saved_card",
+          "amountCents": 2000,
+          "outcome": "paid"
+        },
+        {
+          "op": "ForgetCard"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Usage exceeding balance enters debt (0 active lots); subsequent top-up pays debt first before filling credit lots"
+    }
+  ]
+}

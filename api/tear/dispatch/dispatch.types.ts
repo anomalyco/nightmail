@@ -8,6 +8,7 @@ export type DispatchPreset =
   | "owners"
   | "allowance"
   | "allowance2"
+  | "outageRace"
   | "quota2"
   | "quota3"
   | "quota4";
@@ -69,6 +70,7 @@ export const DISPATCH_PRESETS: Record<DispatchPreset, DispatchCfg> = {
   owners: exactCfg("owners", 0, null, "ok", { owners: 2, drainBatch: 2 }),
   allowance: exactCfg("allowance", 0, null, "ok", { exactQuota: 2 }),
   allowance2: exactCfg("allowance2", 0, null, "ok", { owners: 2, drainBatch: 2, exactQuota: 2 }),
+  outageRace: exactCfg("outageRace", 0, null, "ok"),
   quota2: quotaCfg("quota2", 2),
   quota3: quotaCfg("quota3", 3),
   quota4: quotaCfg("quota4", 4),
@@ -129,10 +131,12 @@ export type DispatchObs =
 
 export interface SendLogEntry {
   at: number;
+  startedAt?: number;
   proc: string;
   mail: string;
   out: string;
   campaign: boolean;
+  kind?: "transactional" | "marketing";
   since?: number;
 }
 
