@@ -50,7 +50,8 @@ process.on("uncaughtException", leak("uncaught-exception"));
 const RealDate = Date;
 let clockBase = 0;
 let clockReal = RealDate.now();
-const vnow = () => clockBase + (RealDate.now() - clockReal);
+let clockPinned = false;
+const vnow = () => (clockPinned ? clockBase : clockBase + (RealDate.now() - clockReal));
 
 class VirtualDate extends RealDate {
   constructor(...args: unknown[]) {
@@ -116,10 +117,11 @@ async function prepareDatabase() {
     CREATE SCHEMA IF NOT EXISTS tear_clock;
     CREATE TABLE IF NOT EXISTS tear_clock.state(singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), off interval NOT NULL DEFAULT '0');
     ALTER TABLE tear_clock.state ADD COLUMN IF NOT EXISTS horizon bigint NOT NULL DEFAULT 0;
+    ALTER TABLE tear_clock.state ADD COLUMN IF NOT EXISTS pinned timestamptz;
     INSERT INTO tear_clock.state DEFAULT VALUES ON CONFLICT DO NOTHING;
-    CREATE OR REPLACE FUNCTION tear_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql VOLATILE AS $$ SELECT pg_catalog.clock_timestamp() + (SELECT off FROM tear_clock.state) $$;
-    CREATE OR REPLACE FUNCTION tear_clock.now() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT pg_catalog.now() + (SELECT off FROM tear_clock.state) $$;
-    CREATE OR REPLACE FUNCTION tear_clock.statement_timestamp() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT pg_catalog.statement_timestamp() + (SELECT off FROM tear_clock.state) $$;
+    CREATE OR REPLACE FUNCTION tear_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql VOLATILE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.clock_timestamp() + (SELECT off FROM tear_clock.state)) $$;
+    CREATE OR REPLACE FUNCTION tear_clock.now() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.now() + (SELECT off FROM tear_clock.state)) $$;
+    CREATE OR REPLACE FUNCTION tear_clock.statement_timestamp() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.statement_timestamp() + (SELECT off FROM tear_clock.state)) $$;
     DO $$ DECLARE c record; BEGIN
       FOR c IN SELECT table_name, column_name, column_default FROM information_schema.columns
         WHERE table_schema='public' AND column_default ~ '(^|[^.])(now|clock_timestamp|statement_timestamp)\\(\\)' LOOP
@@ -158,6 +160,7 @@ interface HostConfig {
   recipients: Persona[];
   shards: boolean;
   invariants: boolean;
+  outageRace: boolean;
   owners: number;
   drainBatch: number;
 }
@@ -170,6 +173,7 @@ interface Trial {
   bug?: string;
   epoch: number;
   modelSec: number;
+  subMs: number;
   W: string;
   R: string;
   SECRET: string;
@@ -219,14 +223,19 @@ const regionName = (n: number) => `te-${letters(process.pid)}-${letters(n)}-1`;
 const owned = (t: Trial) => sql`workspace_id = ANY(${sql.param(t.OWNERS)}::text[])`;
 const nameOf = (t: Trial, id: string) => t.mails.get(id)?.name ?? `?${id.slice(-6)}`;
 
-async function setClock(epochMs: number, allowDrift: boolean) {
+async function setClock(epochMs: number, allowDrift: boolean, pinned = true) {
   const start = Math.max(epochMs, lastVirtual);
   if (start - epochMs > 940 && !allowDrift) {
     throw new Error(`clock drift: ${start - epochMs} ms of work in one model second`);
   }
   clockReal = RealDate.now();
   clockBase = start;
-  await db.execute(sql`UPDATE tear_clock.state SET off = ${clockBase - clockReal} * interval '1 millisecond'`);
+  clockPinned = pinned;
+  if (pinned) {
+    await db.execute(sql`UPDATE tear_clock.state SET off = ${clockBase - clockReal} * interval '1 millisecond', pinned = to_timestamp(${clockBase / 1000})`);
+  } else {
+    await db.execute(sql`UPDATE tear_clock.state SET off = ${clockBase - clockReal} * interval '1 millisecond', pinned = NULL`);
+  }
 }
 
 async function api(t: Trial, method: string, path: string, body?: unknown, headers: Record<string, string> = {}, secret = t.SECRET) {
@@ -284,12 +293,14 @@ const withinDay = (t: Trial) => t.sesAccepted.filter((at) => at > vnow() - 86_40
     t.unknownSesEmails.push(id);
     throw providerError(400, "MessageRejected", "unknown");
   }
+  const startedAt = vnow();
   mail.calls++;
   const campaign = mail.name.startsWith("c");
+  const kind: "transactional" | "marketing" = campaign || mail.marketing ? "marketing" : "transactional";
   const proc = store?.instance ? `${store.instance}#${store.generation}` : "runner";
   const recordSend = (out: string) => {
     const at = vnow();
-    t.sendLog.push({ at, proc, mail: mail.name, out, campaign });
+    t.sendLog.push({ at, startedAt, proc, mail: mail.name, out, campaign, kind });
     t.pendingHostEvents.push({ name: "send.call", data: { mail: mail.name, proc, out } });
     if (out === "accepted" || out === "unknown") {
       t.pendingHostEvents.push({ name: "send.committed", data: { mail: mail.name } });
@@ -317,6 +328,11 @@ const withinDay = (t: Trial) => t.sesAccepted.filter((at) => at > vnow() - 86_40
   }
   const outcome =
     mail.persona === "thr" && mail.calls === 1 ? "throttle" : mail.persona === "thr" ? "ok" : mail.persona;
+  // In outageRace preset, let sibling calls overlap in flight so a concurrent 429 settles right after a 5xx outage.
+  if (t.config.outageRace && !store?.instance) {
+    if (outcome === "unk") await new Promise((r) => setTimeout(r, 20));
+    else if (outcome === "throttle") await new Promise((r) => setTimeout(r, 40));
+  }
   recordSend(
     outcome === "throttle" ? "throttled" : outcome === "rej" ? "refused" : outcome === "unk" ? "unknown" : "accepted",
   );
@@ -324,7 +340,7 @@ const withinDay = (t: Trial) => t.sesAccepted.filter((at) => at > vnow() - 86_40
     const at = vnow();
     setImmediate(() => {
       if (activeTrial === t) {
-        t.sendLog.push({ at: vnow(), proc, mail: "", out: "braked", campaign: false, since: at });
+        t.sendLog.push({ at: vnow(), proc, mail: "", out: "braked", campaign: kind === "marketing", kind, since: at });
       }
     });
     throw providerError(429, "TooManyRequestsException", "Maximum sending rate exceeded.");
@@ -527,6 +543,7 @@ async function configureTrial(t: Trial, cfg: DispatchCfg): Promise<DispatchObs> 
     recipients,
     shards: cfg.quota !== null,
     invariants: cfg.quota !== null,
+    outageRace: cfg.preset === "outageRace",
     owners: cfg.owners,
     drainBatch: cfg.drainBatch,
   };
@@ -536,7 +553,8 @@ async function configureTrial(t: Trial, cfg: DispatchCfg): Promise<DispatchObs> 
   }
   t.epoch = Math.ceil((Math.max(lastVirtual, RealDate.now()) + 3_600_000) / 3_600_000) * 3_600_000;
   t.modelSec = 0;
-  await setClock(t.epoch + 50, true);
+  t.subMs = 50;
+  await setClock(t.epoch + t.subMs, true, true);
   t.W = `tear_${process.pid}_${traceSeq}`;
   t.R = regionName(traceSeq);
   t.SECRET = "bane_" + createHash("sha256").update(t.W).digest("hex");
@@ -724,7 +742,8 @@ async function runSettle(t: Trial) {
   for (let day = 0; day < 7; day++) {
     clockBase = vnow() + 86_400_000 + 60_000;
     clockReal = RealDate.now();
-    await db.execute(sql`UPDATE tear_clock.state SET off = ${clockBase - clockReal} * interval '1 millisecond'`);
+    clockPinned = false;
+    await db.execute(sql`UPDATE tear_clock.state SET off = ${clockBase - clockReal} * interval '1 millisecond', pinned = NULL`);
     await dispatchPartitions(runtime, true);
     await drainJobs(runtime, 20, 1, 15_000, "work");
     await nameReleased(t);
@@ -845,13 +864,14 @@ export const dispatchHost = host(dispatch, {
       bug: req.bug,
       epoch: 0,
       modelSec: 0,
+      subMs: 50,
       W: "",
       R: "",
       SECRET: "",
       SECRET2: "",
       OWNERS: [],
       CAMPAIGN: "",
-      config: { quota: -1, pace: null, seed: 0, recipients: [], shards: false, invariants: false, owners: 1, drainBatch: 24 },
+      config: { quota: -1, pace: null, seed: 0, recipients: [], shards: false, invariants: false, outageRace: false, owners: 1, drainBatch: 24 },
       mails: new Map(),
       byName: new Map(),
       names: 0,
@@ -886,13 +906,15 @@ export const dispatchHost = host(dispatch, {
     if (!t.configured) throw new Error("dispatch host: action before Configure");
     if (a.op === "Wait") {
       t.modelSec += a.seconds;
-      await setClock(t.epoch + t.modelSec * 1000 + 50, t.config.invariants);
+      t.subMs = 50;
+      await setClock(t.epoch + t.modelSec * 1000 + t.subMs, t.config.invariants, true);
       const obs = await readObs(t, null);
-      lastVirtual = vnow();
+      lastVirtual = t.epoch + t.modelSec * 1000 + t.subMs;
       return obs;
     }
 
-    await setClock(t.epoch + t.modelSec * 1000 + 50, t.config.invariants);
+    const paced = a.op === "Drain" || a.op === "Step" || a.op === "Settle";
+    await setClock(t.epoch + t.modelSec * 1000 + t.subMs, t.config.invariants, !paced);
     let result: unknown = null;
     switch (a.op) {
       case "Send":
@@ -948,8 +970,21 @@ export const dispatchHost = host(dispatch, {
         break;
     }
     const obs = await readObs(t, result);
-    lastVirtual = vnow();
-    t.modelSec = Math.max(t.modelSec, Math.floor((lastVirtual - t.epoch) / 1000));
+    if (paced) {
+      const now = vnow();
+      lastVirtual = now;
+      const sec = Math.floor((now - t.epoch) / 1000);
+      if (sec > t.modelSec) {
+        t.modelSec = sec;
+        t.subMs = Math.max(50, Math.min(900, Math.round(now - (t.epoch + sec * 1000))));
+      } else {
+        t.subMs = Math.min(900, Math.max(t.subMs + 1, Math.round(now - (t.epoch + t.modelSec * 1000))));
+      }
+      await setClock(t.epoch + t.modelSec * 1000 + t.subMs, true, true);
+    } else {
+      t.subMs = Math.min(t.subMs + 1, 900);
+      lastVirtual = t.epoch + t.modelSec * 1000 + t.subMs;
+    }
     return obs;
   },
 

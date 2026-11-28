@@ -1734,7 +1734,79 @@
       "expected": {
         "outcome": "pass"
       },
-      "note": "Virtual second t in DispatchObs bounds the post-throttle brake from above (pins dispatch-3-slow-brake)"
+      "note": "Virtual second t in DispatchObs bounds the post-throttle transactional brake from above (pins dispatch-3-slow-brake)"
+    },
+    {
+      "name": "marketing-throttle-brake-delays-next-send",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "throttle"
+        },
+        {
+          "op": "Launch"
+        },
+        {
+          "op": "Jobs"
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Wait",
+          "seconds": 4
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Marketing throttle imposes the full 1 s marketing brake and advances virtual second t by 1"
+    },
+    {
+      "name": "outage-hold-survives-concurrent-tx-throttle",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "outageRace"
+        },
+        {
+          "op": "Send",
+          "persona": "unk"
+        },
+        {
+          "op": "Send",
+          "persona": "thr"
+        },
+        {
+          "op": "Drain"
+        },
+        {
+          "op": "Wait",
+          "seconds": 4
+        },
+        {
+          "op": "Wait",
+          "seconds": 4
+        },
+        {
+          "op": "Wait",
+          "seconds": 4
+        },
+        {
+          "op": "Send",
+          "persona": "ok"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "Concurrent transactional 429 after 5xx outage never shortens brakeUntil below outageUntil (pins Bug 1)"
     }
   ]
 }

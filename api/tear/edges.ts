@@ -18,6 +18,8 @@ import { admission } from "./admission/admission.model.ts";
 import { inbox } from "./inbox/inbox.model.ts";
 import { delivery } from "./delivery/delivery.model.ts";
 import { campaignLifecycle } from "./campaign-lifecycle/campaign-lifecycle.model.ts";
+import { billing } from "./billing/billing.model.ts";
+import { byoRegional } from "./byo-regional/byo-regional.model.ts";
 
 interface EdgeProfile {
   name: string;
@@ -128,6 +130,33 @@ const MODELS: Record<string, { model: Model<any, any, any, any>; profiles: EdgeP
         maxDepth: 2,
         maxStates: 120,
         filter: (a) => !["Tick", "SetQuota", "InjectFeedbackLag"].includes(a.op),
+      },
+    ],
+  },
+  billing: {
+    model: billing,
+    profiles: [
+      {
+        name: "funded-d2",
+        starts: [[{ op: "Configure", preset: "funded" }]],
+        maxDepth: 2,
+        maxStates: 120,
+        filter: (a) => !["SetCardOutcome", "AdvanceClock", "SettleUsage"].includes(a.op),
+      },
+    ],
+  },
+  "byo-regional": {
+    model: byoRegional,
+    profiles: [
+      {
+        name: "ready-d2",
+        starts: [
+          [{ op: "Configure", preset: "readyToImport" }],
+          [{ op: "Configure", preset: "hosted" }],
+        ],
+        maxDepth: 2,
+        maxStates: 120,
+        filter: (a) => !["SetRegionFault", "SetDisconnectFault"].includes(a.op),
       },
     ],
   },

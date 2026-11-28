@@ -73,8 +73,8 @@
     "label": "dispatch-1",
     "checker": "dispatch",
     "file": "api/src/dispatcher.ts",
-    "old": "gate.nextAllowedAt = Math.max(gate.nextAllowedAt, Date.now() + 1000);",
-    "neu": "gate.nextAllowedAt = Math.max(gate.nextAllowedAt, Date.now() + 100);"
+    "old": "  if (kind === 'transactional') {\n    gate.nextAllowedAt = Math.max(gate.nextAllowedAt, now + 250);\n    gate.txAllowedAt = Math.max(gate.txAllowedAt ?? 0, now + 250);",
+    "neu": "  if (kind === 'transactional') {\n    gate.nextAllowedAt = Math.max(gate.nextAllowedAt, now + 50);\n    gate.txAllowedAt = Math.max(gate.txAllowedAt ?? 0, now + 50);"
   },
   {
     "label": "dispatch-2",
@@ -87,8 +87,8 @@
     "label": "dispatch-3-slow-brake",
     "checker": "dispatch",
     "file": "api/src/dispatcher.ts",
-    "old": "gate.nextAllowedAt = Math.max(gate.nextAllowedAt, Date.now() + 1000);",
-    "neu": "gate.nextAllowedAt = Math.max(gate.nextAllowedAt, Date.now() + 3000);"
+    "old": "  if (kind === 'transactional') {\n    gate.nextAllowedAt = Math.max(gate.nextAllowedAt, now + 250);\n    gate.txAllowedAt = Math.max(gate.txAllowedAt ?? 0, now + 250);",
+    "neu": "  if (kind === 'transactional') {\n    gate.nextAllowedAt = Math.max(gate.nextAllowedAt, now + 3000);\n    gate.txAllowedAt = Math.max(gate.txAllowedAt ?? 0, now + 3000);"
   },
   {
     "label": "collab-1-no-rowlock",
@@ -101,7 +101,7 @@
     "label": "attach-1-inline-as-attachment",
     "checker": "campaign-attachments",
     "file": "api/src/dispatcher.ts",
-    "old": "ContentDisposition: row.disposition === 'inline' ? 'INLINE' : 'ATTACHMENT'",
+    "old": "ContentDisposition: shown.inline ? 'INLINE' : 'ATTACHMENT'",
     "neu": "ContentDisposition: 'ATTACHMENT'"
   },
   {
@@ -130,15 +130,15 @@
     "label": "scale-1-seqscan-page",
     "checker": "scale-reads",
     "file": "api/src/audience.ts",
-    "old": "...contactFilters(identity, query), query.cursor ? gt(contacts.id, query.cursor) : undefined)).orderBy(asc(contacts.id))",
-    "neu": "...contactFilters(identity, query), query.cursor ? gt(contacts.id, query.cursor) : undefined)).orderBy(asc(contacts.name), asc(contacts.id))"
+    "old": "      ORDER BY ${contacts.id} ASC LIMIT ${query.limit + 1}`;",
+    "neu": "      ORDER BY ${contacts.name} ASC, ${contacts.id} ASC LIMIT ${query.limit + 1}`;"
   },
   {
     "label": "tenant-2-import-global-lock-3s",
     "checker": "tenant-isolation",
     "file": "api/src/audience.ts",
-    "old": "    const result = await c.env.db.transaction(async tx => {\n      const [job] = await tx.select().from(imports)",
-    "neu": "    const result = await c.env.db.transaction(async tx => {\n      await tx.execute(sql`LOCK TABLE sending_emails IN ACCESS EXCLUSIVE MODE`); await tx.execute(sql`SELECT pg_sleep(3)`);\n      const [job] = await tx.select().from(imports)"
+    "old": "          const [job] = await tx.select({ ...importMetaColumns, rowCount: sql<number>`jsonb_array_length(${imports.rows})::int` }).from(imports)",
+    "neu": "          await tx.execute(sql`LOCK TABLE sending_emails IN ACCESS EXCLUSIVE MODE`); await tx.execute(sql`SELECT pg_sleep(3)`);\n          const [job] = await tx.select({ ...importMetaColumns, rowCount: sql<number>`jsonb_array_length(${imports.rows})::int` }).from(imports)"
   },
   {
     "label": "tenant-1b-final-order-reversed",
@@ -151,8 +151,8 @@
     "label": "iso-1-support-imports-unscoped",
     "checker": "workspace-isolation",
     "file": "api/src/deliverability.ts",
-    "old": "    FROM i LEFT JOIN LATERAL (SELECT r->>'email' AS email FROM jsonb_array_elements(i.rows) r LIMIT 50000) x ON true",
-    "neu": "    FROM audience_imports i LEFT JOIN LATERAL (SELECT r->>'email' AS email FROM jsonb_array_elements(i.rows) r LIMIT 50000) x ON true"
+    "old": "      WHERE workspace_id = ${wid} AND status = 'committed' AND created_at >= now() - interval '90 days'",
+    "neu": "      WHERE status = 'committed' AND created_at >= now() - interval '90 days'"
   },
   {
     "label": "iso-2-campaign-foreign-audience",
@@ -174,5 +174,54 @@
     "file": "api/src/audience.ts",
     "old": "async function findContact(db: DbExecutor, identity: Actor, contactId: string) { const [row] = await db.select().from(contacts).where(and(scope(contacts, identity), eq(contacts.id, contactId), isNull(contacts.deletedAt))).limit(1); return row ?? notFound('Contact'); }",
     "neu": "async function findContact(db: DbExecutor, identity: Actor, contactId: string) { const [row] = await db.select().from(contacts).where(and(eq(contacts.id, contactId), isNull(contacts.deletedAt))).limit(1); return row ?? notFound('Contact'); }"
+  },
+  {
+    "label": "dispatch-4-brake-clobber",
+    "checker": "dispatch",
+    "file": "api/src/dispatcher.ts",
+    "old": "  gate.brakeUntil = Math.max(gate.brakeUntil ?? 0, now + BRAKE_MS);",
+    "neu": "  gate.brakeUntil = now + BRAKE_MS;"
+  },
+  {
+    "label": "billing-1-mismatch-keeps-recharge",
+    "checker": "billing",
+    "file": "api/src/billing/stripe.ts",
+    "old": "      if (a.kind === 'recharge') await stopRecharge(tx, a, account, code, message);",
+    "neu": "      if (a.kind === 'recharge') await tx.execute(sql`UPDATE billing_accounts SET recharge_pending_attempt=NULL, updated_at=now() WHERE workspace_id=${a.workspace_id} AND recharge_pending_attempt=${attemptId}`);"
+  },
+  {
+    "label": "billing-2-inquiry-no-reversal",
+    "checker": "billing",
+    "file": "api/src/billing/stripe.ts",
+    "old": "  if (dispute.status !== 'won' && dispute.status !== 'warning_closed') return;",
+    "neu": "  if (dispute.status !== 'won') return;"
+  },
+  {
+    "label": "billing-3-dispute-debits-uncredited",
+    "checker": "billing",
+    "file": "api/src/billing/stripe.ts",
+    "old": "    const left = a.status === 'succeeded' ? BigInt(a.amount_uc) - BigInt(a.refunded_uc) : 0n, credited = left > 0n ? left : 0n;",
+    "neu": "    const left = BigInt(a.amount_uc) - BigInt(a.refunded_uc), credited = left > 0n ? left : 0n;"
+  },
+  {
+    "label": "byo-1-provision-infinite-defer",
+    "checker": "byo-regional",
+    "file": "api/src/byo-regional.ts",
+    "old": "    if (err.retryable && retries<MAX_ATTEMPTS) {",
+    "neu": "    if (err.retryable) {"
+  },
+  {
+    "label": "byo-2-disconnecting-allows-mutations",
+    "checker": "byo-regional",
+    "file": "api/src/byo-regional.ts",
+    "old": "  if (c.state==='disconnecting') throw conflict('CONNECTION_DISCONNECTING','Regional cleanup is in progress.');",
+    "neu": "  // disconnecting guard removed"
+  },
+  {
+    "label": "byo-3-mid-disconnect-pause-bypass",
+    "checker": "byo-regional",
+    "file": "api/src/provider-connections.ts",
+    "old": "        if (fenced.paused_at || fenced.pause_reason) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', fenced.pause_reason ?? 'Sending is paused for this workspace.');",
+    "neu": "        // mid-disconnect pause guard removed"
   }
 ]
