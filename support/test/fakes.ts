@@ -23,6 +23,7 @@ let closeFailures = 0;
 // Nightmail's 404 for one it never registered; down makes every inbox call answer 503.
 const inbox = new Map();
 let inboxDown = false;
+let deliveryFailures = 0; // the next markDelivery calls that answer 503 (/__inbox failDelivery)
 const releases = [];
 // Staff emails a test queued: { key, group, thread (the group to reply in, for a later one), subject, text, html }, and each group's thread once sent.
 const staffMail = [], staffThreads = new Map();
@@ -84,7 +85,7 @@ const notes = new Map(); // userId → [note]
 // sends decides one: only the hook does, as the person's own Confirm or Decline would. A stamped outage refuses one path.
 const ACTION_FIELDS = { retry_webhook_delivery: [['webhookId', 'deliveryId'], []], test_webhook: [['webhookId'], []], retry_inbound_delivery: [['webhookId', 'deliveryId'], []],
   test_inbound_webhook: [['webhookId'], []], redeliver_message: [['messageId'], ['webhookId']], pause_campaign: [['campaignId'], []] };
-const actions = new Map(), stampedOutages = new Map();
+const actions = new Map(), stampedOutages = new Map(), stampedDelays = new Map();
 let actionIds = 0, actionLabel = '';
 const targetWorkspace = id => 'ws_' + String(id).split('_').pop();
 const actionView = a => ({ id: a.id, kind: a.kind, status: a.status, summary: a.summary, parts: { template: a.summary, labels: {} }, workspaceId: a.workspaceId, target: a.target,
@@ -208,6 +209,7 @@ export class SupportPlatform extends WorkerEntrypoint {
     if (c.channel === 'email' && chatOnly(url.pathname)) return refuse(403, 'SUPPORT_CHAT_ONLY');
     const outage = stampedOutages.get(url.pathname);
     if (outage) return { status: outage.status, body: { error: { code: outage.code ?? 'UNAVAILABLE' } }, requestId: null, retryAfter: outage.retryAfter ?? null };
+    if (stampedDelays.has(url.pathname)) await new Promise(resolve => setTimeout(resolve, stampedDelays.get(url.pathname)));
     const only = url.searchParams.get('workspaceId'), allowed = inScope(c).filter(w => !only || w.id === only);
     if (url.pathname === '/v1/support/actions' && method === 'POST') {
       const [required, optional] = ACTION_FIELDS[body?.kind] ?? [null, []], keys = Object.keys(body ?? {}).filter(k => k !== 'kind').sort();
@@ -398,6 +400,7 @@ export class SupportPlatform extends WorkerEntrypoint {
   }
   async markDelivery(id, messageId, status) {
     calls.push(['markDelivery', id, messageId, status]);
+    if (deliveryFailures > 0) { deliveryFailures--; return unavailable(); }
     const reply = inbox.get(id)?.outbox.find(r => r.id === messageId);
     if (!reply) return missing();
     if (reply.delivery === 'sent' && status !== 'sent') return ok({ error: { code: 'SUPPORT_REPLY_DELIVERED' } }, 409);
@@ -434,8 +437,9 @@ export default {
     if (url.pathname === '/__staffmail') { const { group, update, ...mail } = await request.json(); staffMail.push({ ...mail, group, thread: update ? group : null, sent: false }); return new Response(null, { status: 204 }); }
     if (url.pathname === '/__inbox') {
       if (request.method === 'GET') { const c = inbox.get(url.searchParams.get('id')); return Response.json(c ?? null); }
-      const { id, channel, paused, reply, down } = await request.json();
+      const { id, channel, paused, reply, down, failDelivery } = await request.json();
       if (down !== undefined) inboxDown = down;
+      if (failDelivery !== undefined) deliveryFailures = failDelivery;
       if (id && !inbox.has(id)) inbox.set(id, { channel: channel ?? 'chat', status: 'open', paused: null, messages: [], state: {}, outbox: [] });
       const c = id ? inbox.get(id) : null;
       if (c && paused !== undefined) c.paused = paused ? 'staff' : null;
@@ -500,13 +504,13 @@ export default {
     if (url.pathname === '/__close') { closeFailures = (await request.json()).fail ?? 0; return new Response(null, { status: 204 }); }
     // Support actions: read them all; the person decides one (status, with the API's result, error and delivery); its
     // read is refused or answers 404, or its sentence changes; the label the next proposals' sentences carry; a stamped
-    // path answers with an outage.
+    // path answers with an outage, or late (delayMs).
     if (url.pathname === '/__proposals') return Response.json(proposals);
     if (url.pathname === '/__actions') {
       if (request.method === 'GET') return Response.json([...actions.values()]);
       const { id, status, result, error, delivery, hidden, refused, summary, label, outage } = await request.json();
       if (label !== undefined) actionLabel = label;
-      if (outage) { if (outage.status) stampedOutages.set(outage.path, outage); else stampedOutages.delete(outage.path); }
+      if (outage) { if (outage.delayMs) stampedDelays.set(outage.path, outage.delayMs); else if (outage.status) stampedOutages.set(outage.path, outage); else { stampedOutages.delete(outage.path); stampedDelays.delete(outage.path); } }
       const a = id ? actions.get(id) : null;
       if (a && status) Object.assign(a, { status, result: result ?? null, error: error ?? null, delivery: delivery ?? null, resolvedAt: new Date().toISOString() });
       if (a && hidden !== undefined) a.hidden = hidden;
@@ -579,6 +583,9 @@ const MESSAGES = {
   msg_uc_early: ['thr_uc_early', 'una@acme.test', 'PASS', null, 'My bounces', 'Unclaimed probe: why are my Gmail bounces up?'],
   msg_uc_tk: ['thr_uc_tk', 'ulla@acme.test', 'PASS', null, 'Form fails', 'Ticket probe: the contact form fails after I submit it.'],
   msg_uc_cap: ['thr_uc_cap', 'uri@acme.test', 'PASS', null, 'My bounces', 'Unclaimed probe: why are my Gmail bounces up?'],
+  msg_uc_queued: ['thr_uc_queued', 'uca@acme.test', 'PASS', null, 'My bounces', 'Unclaimed probe: why are my Gmail bounces up?'],
+  msg_uj_1: ['thr_uj', 'ujo@acme.test', 'PASS', null, 'My bounces', 'Unclaimed probe: why are my Gmail bounces up?'],
+  msg_uj_2: ['thr_uj', 'ujo@acme.test', 'PASS', null, 'Re: My bounces', 'Reply probe: and why does my DKIM fail?'],
   msg_uc_forged: ['thr_uc_forged', 'ursa@acme.test', 'FAIL', null, 'Refund', 'Unclaimed probe: refund my top-up please.'],
   msg_uc_auto: ['thr_uc_auto', 'ugo@acme.test', 'PASS', null, 'Out of office', 'I am away until Monday.'],
   // The same sender writes again while the first waits on its claim, and again after its general answer; another address

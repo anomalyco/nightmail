@@ -24,37 +24,65 @@ export const CONVERSATION_ID = /^conv_[a-z2-7]{26}$/;
 /** The runtime fields a binding call runs with: the caller, and for request() its conversation. */
 export const platformRuntime = (conversation?: string) => ({ platformCaller: SUPPORT_PLATFORM_CALLER, ...(conversation ? { supportConversation: conversation } : {}) }) as { platformCaller: typeof SUPPORT_PLATFORM_CALLER; supportConversation?: string };
 
-const OPERATOR_ROUTES: [method: string, path: RegExp][] = [
-  ['GET', /^\/v1\/operator\/support\/handoffs\/sho_[0-9a-f]{32}$/],
-  ['POST', /^\/v1\/operator\/support\/conversations$/],
-  ['POST', /^\/v1\/operator\/support\/conversations\/conv_[a-z2-7]{26}\/close$/],
+/** The IDs an operator support path carries: each segment's whole shape, so a route matches nothing else. */
+const PATH_TOKENS = { handoffId: 'sho_[0-9a-f]{32}', conversationId: 'conv_[a-z2-7]{26}', messageId: 'msg_[a-z2-7]{16}', staffKey: 'staff-[0-9a-f]{24}-[0-9]{1,6}', requestId: 'req_[0-9a-f]{32}' } as const;
+type PathToken = keyof typeof PATH_TOKENS;
+type PathParams<T extends string> = T extends `${string}{${infer P extends PathToken}}${infer Rest}` ? { [K in P]: string } & PathParams<Rest> : unknown;
+/** The `{name}`s in a template that PATH_TOKENS doesn't know: a template naming one doesn't typecheck. */
+type UnknownTokens<T extends string> = T extends `${string}{${infer P}}${infer Rest}` ? (P extends PathToken ? UnknownTokens<Rest> : P) : never;
+type Query = Record<string, string | undefined>;
+/** An operator support route: `at` gives its method and its path for these IDs (encoded) and query parameters (unset ones left out). */
+type SupportRoute<P> = { at: (params: P, query?: Query) => [method: 'GET' | 'POST', path: string] };
+const OPERATOR_ROUTES: [method: string, path: RegExp][] = [];
+/**
+ * Declares one route the binding may call without a conversation: the allowlist entry (supportPlatformAllows) and the
+ * path the client below builds come from the same template, so they can't drift apart.
+ */
+function defineSupportRoute<const T extends string>(method: 'GET' | 'POST', template: T & ([UnknownTokens<T>] extends [never] ? unknown : never)): SupportRoute<PathParams<T>> {
+  OPERATOR_ROUTES.push([method, new RegExp(`^${template.replace(/\{(\w+)\}/g, (_, name: string) => {
+    if (!Object.hasOwn(PATH_TOKENS, name)) throw new Error(`Unknown path token {${name}} in ${template}`);
+    return PATH_TOKENS[name as PathToken];
+  })}$`)]);
+  return {
+    at: (params, query) => {
+      const path = template.replace(/\{(\w+)\}/g, (_, name: string) => encodeURIComponent(String((params as Record<string, unknown>)[name])));
+      const search = Object.entries(query ?? {}).flatMap(([key, value]) => value === undefined ? [] : [`${key}=${encodeURIComponent(String(value))}`]).join('&');
+      return [method, search ? `${path}?${search}` : path];
+    },
+  };
+}
+const conversation = '/v1/operator/support/conversations/{conversationId}', staffMail = '/v1/operator/support/staff-mail', feedback = '/v1/operator/support/feedback/{conversationId}';
+const ROUTES = {
+  handoff: defineSupportRoute('GET', '/v1/operator/support/handoffs/{handoffId}'),
+  register: defineSupportRoute('POST', '/v1/operator/support/conversations'),
+  close: defineSupportRoute('POST', `${conversation}/close`),
   // The inbox (src/support-inbox.ts): the transcript and state it mirrors, and the staff replies it delivers.
-  ['POST', /^\/v1\/operator\/support\/conversations\/conv_[a-z2-7]{26}\/messages$/],
-  ['GET', /^\/v1\/operator\/support\/conversations\/conv_[a-z2-7]{26}\/state$/],
-  ['POST', /^\/v1\/operator\/support\/conversations\/conv_[a-z2-7]{26}\/state$/],
-  ['GET', /^\/v1\/operator\/support\/outbox$/],
+  messages: defineSupportRoute('POST', `${conversation}/messages`),
+  inboxState: defineSupportRoute('GET', `${conversation}/state`),
+  mirrorState: defineSupportRoute('POST', `${conversation}/state`),
+  outbox: defineSupportRoute('GET', '/v1/operator/support/outbox'),
   // A chat as Nightmail holds it, with the messages the dashboard filed while the chat couldn't take them (support-conversations.ts fileChatTicket).
-  ['GET', /^\/v1\/operator\/support\/conversations\/conv_[a-z2-7]{26}\/filed$/],
+  filed: defineSupportRoute('GET', `${conversation}/filed`),
   // Emails whose sender asked to be answered by email instead (support-conversations.ts releaseGeneralAnswer).
-  ['GET', /^\/v1\/operator\/support\/general-answers$/],
-  ['POST', /^\/v1\/operator\/support\/conversations\/conv_[a-z2-7]{26}\/messages\/msg_[a-z2-7]{16}\/delivery$/],
-  // One path to a human (src/support-staff-mail.ts): the staff emails due, and each one sent.
-  ['POST', /^\/v1\/operator\/support\/staff-mail$/],
-  ['POST', /^\/v1\/operator\/support\/staff-mail\/staff-[0-9a-f]{24}-[0-9]{1,6}\/sent$/],
-  // A staff email that failed to send, and a reply to one (a note on its conversation, or nothing).
-  ['POST', /^\/v1\/operator\/support\/staff-mail\/staff-[0-9a-f]{24}-[0-9]{1,6}\/failed$/],
-  ['POST', /^\/v1\/operator\/support\/staff-mail\/replies$/],
+  generalAnswers: defineSupportRoute('GET', '/v1/operator/support/general-answers'),
+  delivery: defineSupportRoute('POST', `${conversation}/messages/{messageId}/delivery`),
+  // One path to a human (src/support-staff-mail.ts): the staff emails due, each one sent, one that failed to send, and a
+  // reply to one (a note on its conversation, or nothing).
+  staffMail: defineSupportRoute('POST', staffMail),
+  staffMailSent: defineSupportRoute('POST', `${staffMail}/{staffKey}/sent`),
+  staffMailFailed: defineSupportRoute('POST', `${staffMail}/{staffKey}/failed`),
+  staffMailReply: defineSupportRoute('POST', `${staffMail}/replies`),
   // The feedback triage agent (src/feedback-triage.ts): the reports due, and for one report its request trace, the
   // reports beside it, its one note and what reading it cost. Nothing else: no route that sends, replies, resolves or
   // changes an account.
-  ['POST', /^\/v1\/operator\/support\/feedback\/due$/],
-  ['GET', /^\/v1\/operator\/support\/feedback\/conv_[a-z2-7]{26}\/requests\/req_[0-9a-f]{32}$/],
-  ['GET', /^\/v1\/operator\/support\/feedback\/conv_[a-z2-7]{26}\/related$/],
-  ['POST', /^\/v1\/operator\/support\/feedback\/conv_[a-z2-7]{26}\/triage$/],
-  ['POST', /^\/v1\/operator\/support\/feedback\/conv_[a-z2-7]{26}\/usage$/],
+  feedbackDue: defineSupportRoute('POST', '/v1/operator/support/feedback/due'),
+  feedbackRequest: defineSupportRoute('GET', `${feedback}/requests/{requestId}`),
+  feedbackRelated: defineSupportRoute('GET', `${feedback}/related`),
+  feedbackTriage: defineSupportRoute('POST', `${feedback}/triage`),
+  feedbackUsage: defineSupportRoute('POST', `${feedback}/usage`),
   // Agent reports that ask something (src/feedback-triage.ts): their email conversations, claimed for the support agent.
-  ['POST', /^\/v1\/operator\/support\/agent-answers\/due$/],
-];
+  agentAnswersDue: defineSupportRoute('POST', '/v1/operator/support/agent-answers/due'),
+};
 const SUPPORT_READ = /^\/v1\/support\/[A-Za-z0-9_./-]{1,200}$/;
 /** The writes a conversation makes: narrowing its scope to one workspace, and keeping a note about its person. */
 const STAMPED_WRITES: [method: string, path: RegExp][] = [
@@ -147,6 +175,17 @@ export function supportPlatform(dispatch: (request: Request, conversation?: stri
     let parsed: unknown = null; try { parsed = text ? JSON.parse(text) : null; } catch { parsed = { error: { code: 'INVALID_RESPONSE', message: text.slice(0, 200) } }; }
     return { status: response.status, body: parsed as T, requestId: response.headers.get('x-request-id'), retryAfter: response.headers.get('retry-after') };
   }
+  /**
+   * A token this installation signed for `audience`, naming exactly `expected`, and expiring within `lifetime` seconds
+   * from now (a token minted for longer is refused).
+   */
+  async function verifySignedClaim(token: string, audience: string, lifetime: number, expected: Record<string, string>) {
+    const { support, publicUrl } = config();
+    if (!support?.signingKey) return false;
+    const claims = await signedClaims(support.signingKey, token), now = Math.floor(Date.now() / 1000);
+    return !!claims && claims.aud === audience && claims.iss === publicUrl && Object.entries(expected).every(([key, value]) => claims[key] === value)
+      && typeof claims.exp === 'number' && claims.exp > now && claims.exp <= now + lifetime;
+  }
   async function call<T>(method: string, path: string, body?: unknown): Promise<PlatformReply<T>> {
     const url = new URL(path, 'https://internal.invalid');
     if (!supportPlatformAllows(method, url.pathname)) return refuse(404, 'NOT_FOUND', 'The support platform cannot call this route.');
@@ -154,26 +193,15 @@ export function supportPlatform(dispatch: (request: Request, conversation?: stri
   }
   return {
     /** A wake for this conversation, issued by this installation in the last minute. */
-    async verifyWake(token: string, conversationId: string) {
-      const {support, publicUrl} = config();
-      if (!support?.signingKey || !CONVERSATION_ID.test(conversationId)) return false;
-      const claims = await signedClaims(support.signingKey, token), now = Math.floor(Date.now()/1000);
-      return !!claims && claims.aud === 'nightmail-support-wake' && claims.iss === publicUrl &&
-        claims.conversationId === conversationId && typeof claims.exp === 'number' && claims.exp > now && claims.exp <= now + 65;
-    },
+    verifyWake: async (token: string, conversationId: string) => CONVERSATION_ID.test(conversationId) && verifySignedClaim(token, 'nightmail-support-wake', 65, { conversationId }),
     /** A staff link to one screenshot of this conversation (GET /v1/operator/support-inbox/{id}/files/{attachmentId}), issued by this installation in the last five minutes. */
-    async verifyFile(token: string, conversationId: string, attachmentId: string) {
-      const { support, publicUrl } = config();
-      if (!support?.signingKey || !CONVERSATION_ID.test(conversationId) || !/^att_[a-z2-7]{16}$/.test(attachmentId)) return false;
-      const claims = await signedClaims(support.signingKey, token), now = Math.floor(Date.now() / 1000);
-      return !!claims && claims.aud === FILE_AUDIENCE && claims.iss === publicUrl && claims.conversationId === conversationId && claims.attachmentId === attachmentId
-        && typeof claims.exp === 'number' && claims.exp > now && claims.exp <= now + 305;
-    },
+    verifyFile: async (token: string, conversationId: string, attachmentId: string) =>
+      CONVERSATION_ID.test(conversationId) && /^att_[a-z2-7]{16}$/.test(attachmentId) && verifySignedClaim(token, FILE_AUDIENCE, 305, { conversationId, attachmentId }),
     /** A handoff JWS from the dashboard: its signed claims plus the stored row (used or not, the person's message). */
     async verifyHandoff(token: string): Promise<HandoffCheck> {
       const checked = await verifyHandoffToken(config(), token);
       if (!checked.ok) return checked;
-      const stored = await call<{ userId: string; workspaceId: string; usedAt: string | null; message: string | null; shareContent: boolean }>('GET', `/v1/operator/support/handoffs/${checked.claims.id}`);
+      const stored = await call<{ userId: string; workspaceId: string; usedAt: string | null; message: string | null; shareContent: boolean }>(...ROUTES.handoff.at({ handoffId: checked.claims.id }));
       if (stored.status === 404) return { ok: false, code: 'HANDOFF_NOT_FOUND' };
       if (stored.status !== 200) throw new Error(`Handoff lookup failed with ${stored.status}`);
       const row = stored.body;
@@ -185,64 +213,64 @@ export function supportPlatform(dispatch: (request: Request, conversation?: stri
      * message it received at a support address) and decides who the conversation is for. Once per handoff; repeating a
      * registration answers its current state.
      */
-    registerConversation: (body: { conversationId: string; evidence: ConversationEvidence }) => call<RegisteredConversation>('POST', '/v1/operator/support/conversations', body),
+    registerConversation: (body: { conversationId: string; evidence: ConversationEvidence }) => call<RegisteredConversation>(...ROUTES.register.at({}), body),
     /** End a conversation: every later request for it is refused. Repeating it is harmless. */
-    closeConversation: (conversationId: string) => call<{ id: string; status: 'closed'; closedAt: string }>('POST', `/v1/operator/support/conversations/${encodeURIComponent(String(conversationId))}/close`, {}),
+    closeConversation: (conversationId: string) => call<{ id: string; status: 'closed'; closedAt: string }>(...ROUTES.close.at({ conversationId }), {}),
     /** Mirror transcript entries into the inbox, in order. Appending an entry again (same ID) changes nothing. */
     mirrorMessages: (conversationId: string, messages: MirroredMessage[]) =>
-      call<{ data: { id: string; seq: number; created: boolean }[] }>('POST', `/v1/operator/support/conversations/${encodeURIComponent(String(conversationId))}/messages`, { messages }),
+      call<{ data: { id: string; seq: number; created: boolean }[] }>(...ROUTES.messages.at({ conversationId }), { messages }),
     /** Mirror a conversation's subject, ticket, counters and blocked work; answers its inbox state. */
-    mirrorState: (conversationId: string, state: MirroredState) => call<InboxState>('POST', `/v1/operator/support/conversations/${encodeURIComponent(String(conversationId))}/state`, state),
+    mirrorState: (conversationId: string, state: MirroredState) => call<InboxState>(...ROUTES.mirrorState.at({ conversationId }), state),
     /** A conversation's inbox state: whether staff paused the agent, before every turn and every send. */
-    inboxState: (conversationId: string) => call<InboxState>('GET', `/v1/operator/support/conversations/${encodeURIComponent(String(conversationId))}/state`),
+    inboxState: (conversationId: string) => call<InboxState>(...ROUTES.inboxState.at({ conversationId })),
     /** The staff replies waiting for delivery (one conversation's, after its wake), oldest first. Staff can reply only while this is polled. */
-    pullOutbox: (conversationId?: string) => call<{ data: OutboxReply[] }>('GET', `/v1/operator/support/outbox${conversationId === undefined ? '' : `?conversationId=${encodeURIComponent(String(conversationId))}`}`),
+    pullOutbox: (conversationId?: string) => call<{ data: OutboxReply[] }>(...ROUTES.outbox.at({}, { conversationId })),
     /**
      * The conversations whose sender asked, from the sign-in link, to be answered by email instead (one conversation's,
      * after its wake), oldest first: answer each in general, once, with no account access.
      */
-    generalAnswers: (conversationId?: string) => call<{ data: GeneralAnswerDue[] }>('GET', `/v1/operator/support/general-answers${conversationId === undefined ? '' : `?conversationId=${encodeURIComponent(String(conversationId))}`}`),
+    generalAnswers: (conversationId?: string) => call<{ data: GeneralAnswerDue[] }>(...ROUTES.generalAnswers.at({}, { conversationId })),
     /**
      * A chat as Nightmail holds it, with the customer's messages the dashboard filed as a ticket while the chat couldn't
      * take them: adopt one Nightmail opened (filed) as this person's chat in this workspace, and take each filed message
      * into the transcript under its own ID, as already with staff.
      */
-    filedConversation: (conversationId: string) => call<FiledConversation>('GET', `/v1/operator/support/conversations/${encodeURIComponent(String(conversationId))}/filed`),
+    filedConversation: (conversationId: string) => call<FiledConversation>(...ROUTES.filed.at({ conversationId })),
     /** Record a staff reply's delivery: sent, or failed for good. */
     markDelivery: (conversationId: string, messageId: string, status: 'sent' | 'failed') =>
-      call<{ id: string; delivery: 'sent' | 'failed'; deliveredAt: string | null }>('POST', `/v1/operator/support/conversations/${encodeURIComponent(String(conversationId))}/messages/${encodeURIComponent(String(messageId))}/delivery`, { status }),
+      call<{ id: string; delivery: 'sent' | 'failed'; deliveredAt: string | null }>(...ROUTES.delivery.at({ conversationId, messageId }), { status }),
     /**
      * The staff emails due (src/support-staff-mail.ts writes them now, then answers every one not yet sent, oldest first):
      * send each from the support address to the team, starting its thread or replying in it, then report it sent.
      */
-    staffMail: () => call<{ data: StaffEmail[] }>('POST', '/v1/operator/support/staff-mail', {}),
+    staffMail: () => call<{ data: StaffEmail[] }>(...ROUTES.staffMail.at({}), {}),
     /** A staff email went out: its thread and message, so the next one in the thread replies to it. */
     staffMailSent: (key: string, sent: { threadId: string; messageId: string }) =>
-      call<{ key: string; sentAt: string }>('POST', `/v1/operator/support/staff-mail/${encodeURIComponent(String(key))}/sent`, sent),
+      call<{ key: string; sentAt: string }>(...ROUTES.staffMailSent.at({ staffKey: key }), sent),
     /** A staff email failed to send this time (its error's code): after three tries it shows on Glass until it goes. */
     staffMailFailed: (key: string, failed: { code: string }) =>
-      call<{ key: string; attempts: number; failed: boolean; sent: boolean }>('POST', `/v1/operator/support/staff-mail/${encodeURIComponent(String(key))}/failed`, failed),
+      call<{ key: string; attempts: number; failed: boolean; sent: boolean }>(...ROUTES.staffMailFailed.at({ staffKey: key }), failed),
     /**
      * Before an email to a support address is a customer's: whether it replies to a staff email (reply false: it doesn't,
      * handle it as any support email), and if so the note it became on its conversation, or why none (ignored).
      */
     staffMailReply: (messageId: string, team: string | null) =>
-      call<StaffReply>('POST', '/v1/operator/support/staff-mail/replies', { messageId, team }),
+      call<StaffReply>(...ROUTES.staffMailReply.at({}), { messageId, team }),
     /** Claims the agent feedback reports still to read (at most `limit`, at most 5), oldest first: each is handed out at most twice. */
-    feedbackDue: (limit: number) => call<{ data: FeedbackReport[] }>('POST', '/v1/operator/support/feedback/due', { limit }),
+    feedbackDue: (limit: number) => call<{ data: FeedbackReport[] }>(...ROUTES.feedbackDue.at({}), { limit }),
     /** Claims the agent reports to answer by email (at most `limit`, at most 5), oldest first: each is handed out at most three times. */
-    agentAnswersDue: (limit: number) => call<{ data: AgentAnswer[] }>('POST', '/v1/operator/support/agent-answers/due', { limit }),
+    agentAnswersDue: (limit: number) => call<{ data: AgentAnswer[] }>(...ROUTES.agentAnswersDue.at({}), { limit }),
     /** One request's trace, in the report's own workspace only: any other request ID is 404. */
     feedbackRequest: (conversationId: string, requestId: string) =>
-      call('GET', `/v1/operator/support/feedback/${encodeURIComponent(String(conversationId))}/requests/${encodeURIComponent(String(requestId))}`),
+      call(...ROUTES.feedbackRequest.at({ conversationId, requestId })),
     /** The earlier reports from the report's own workspace, and counts of the same operation elsewhere. */
-    feedbackRelated: (conversationId: string) => call('GET', `/v1/operator/support/feedback/${encodeURIComponent(String(conversationId))}/related`),
+    feedbackRelated: (conversationId: string) => call(...ROUTES.feedbackRelated.at({ conversationId })),
     /** The triage agent's one note on a report: 201 once, 409 after. */
     feedbackTriage: (conversationId: string, note: TriageNoteInput) =>
-      call<{ conversationId: string; ticketId: string | null; messageId: string; classification: string; createdAt: string }>('POST', `/v1/operator/support/feedback/${encodeURIComponent(String(conversationId))}/triage`, note),
+      call<{ conversationId: string; ticketId: string | null; messageId: string; classification: string; createdAt: string }>(...ROUTES.feedbackTriage.at({ conversationId }), note),
     /** What one reading of a report cost: its model turns and US dollars, added to the support AI's spend. */
     feedbackUsage: (conversationId: string, usage: { turns: number; costUsd: number }) =>
-      call<{ conversationId: string; turns: number; costUsd: number }>('POST', `/v1/operator/support/feedback/${encodeURIComponent(String(conversationId))}/usage`, usage),
+      call<{ conversationId: string; turns: number; costUsd: number }>(...ROUTES.feedbackUsage.at({ conversationId }), usage),
     /**
      * A /v1/support request for one registered conversation: a GET, or a write (POST /v1/support/scope or notes). The
      * conversation rides on the runtime, never in the request; Nightmail derives the customer from its row and answers
