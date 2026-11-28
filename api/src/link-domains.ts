@@ -326,11 +326,16 @@ export async function checkLinkHost(runtime: Runtime, workspaceId: string, domai
     }
   }
   const woke = status === 'active' && row?.status !== 'active';
+  // Checks of one domain can overlap (Check now, the setup check, the link check). One that finds no custom hostname
+  // never replaces one a concurrent check recorded after this one read the row: the other check's POST made it, so this
+  // one's 1406 was answered NotOurs before that row existed, and writing NULL would orphan the hostname for good (every
+  // later check would answer NotOurs too). A hostname this check read and found gone is still cleared.
   await runtime.db.execute(sql`INSERT INTO link_hosts(workspace_id, domain, hostname, custom_hostname_id, status, detail, public_dns, verified_at, quota_full_at)
     VALUES(${workspaceId}, ${domain}, ${hostname}, ${id}, ${status}, ${detail}, ${seen ? JSON.stringify(seen) : null}::jsonb, CASE WHEN ${status}='active' THEN now() END, CASE WHEN ${quota}='hit' THEN now() END)
     ON CONFLICT (workspace_id, domain) DO UPDATE SET custom_hostname_id=excluded.custom_hostname_id, status=excluded.status, detail=excluded.detail,
       public_dns=excluded.public_dns, checked_at=now(), verified_at=CASE WHEN excluded.status='active' THEN coalesce(link_hosts.verified_at, now()) END,
-      quota_full_at=CASE WHEN ${quota}='hit' THEN now() WHEN ${quota}='waiting' THEN link_hosts.quota_full_at END, retired_at=NULL`);
+      quota_full_at=CASE WHEN ${quota}='hit' THEN now() WHEN ${quota}='waiting' THEN link_hosts.quota_full_at END, retired_at=NULL
+    WHERE excluded.custom_hostname_id IS NOT NULL OR link_hosts.custom_hostname_id IS NULL OR link_hosts.custom_hostname_id IS NOT DISTINCT FROM ${row?.custom_hostname_id ?? null}::text`);
   if (woke) await wakeLinkRecordHolds(runtime, workspaceId);
 }
 /** A link host just became active: the workspace's campaigns waiting for a link record (releaseStep, 'link_record') look

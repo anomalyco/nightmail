@@ -4722,6 +4722,11 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
             assert.equal(ok(await add(b.cookie,prefix+'-x2.invalid'),201).id,x2.id);
             const over=await add(b.cookie,prefix+'-x3.invalid');error(over,409,'DOMAIN_LIMIT_REACHED');assert.match(over.body.error.message,/has 101 of its 50 domains/);
             assert.deepEqual(ok(await setLimit(a.cookie,{limit:null,reason:'Return to the default limit'})).domainLimit,{used:101,limit:100,custom:false});
+            // Two retries of one change race with one Idempotency-Key: one change and audit row, and the same answer twice.
+            const retry={limit:120,reason:'Concurrent retries of one change'},key={'Idempotency-Key':unique('operator-retry')};
+            const raced=await Promise.all([1,2].map(()=>local('PUT',`/v1/operator/workspaces/${wid}/domain-limit`,retry,a.cookie,key)));
+            assert.deepEqual(raced.map(r=>[r.status,r.body.domainLimit]),[[200,{used:101,limit:120,custom:true}],[200,{used:101,limit:120,custom:true}]]);
+            assert.equal((await pool.query(`SELECT count(*)::int AS n FROM hosted_operator_audit WHERE workspace_id=$1 AND reason=$2`,[wid,retry.reason])).rows[0].n,1);
           } finally {
             for (const id of made) await local('DELETE',`/v1/domains/${id}`,undefined,b.cookie);
             await pool.query('DELETE FROM platform_operators WHERE user_id=$1',[operatorId]);
@@ -20697,6 +20702,16 @@ describe('Dashboard API capabilities', () => {
       await evaluation(fresh);
       assert.deepEqual(await growth(fresh), paced);
       assert.deepEqual([await growth(fresh), await audit(fresh)], [paced, { events: null, audit: null }], 'A new sender stays on the pace.');
+      // An operator lifts the pace (a new standing version) while a run is between its read and its write: the run's
+      // stale snapshot never puts the pace back.
+      const { PgDialect } = await import('drizzle-orm/pg-core'), dialect = new PgDialect(), execute = runtime.db.execute.bind(runtime.db);
+      const raced = t.mock.method(runtime.db, 'execute', async (query: Parameters<typeof execute>[0]) => {
+        if (dialect.sqlToQuery((query as { getSQL(): import('drizzle-orm').SQL }).getSQL()).sql.includes('updated AS (UPDATE sender_standing s SET phase=r.phase'))
+          await db.query('UPDATE sender_standing SET growth_until=NULL,growth_cap=NULL,growth_hour=NULL,growth_quality=NULL,version=version+1 WHERE workspace_id=$1', [fresh]);
+        return execute(query);
+      });
+      assert.deepEqual(await growth(fresh), skipped);
+      raced.mock.restore();
       // A new sender with an operator daily-limit override skips it, on the timeline and in the operator audit, once.
       const overridden = await workspace('override');
       await db.query('UPDATE workspaces SET send_cap_override=5000 WHERE id=$1', [overridden]);
@@ -22766,6 +22781,41 @@ describe('Billing: Stripe', () => {
     assert.equal(fake.invoices().find(i => i.metadata.bane_attempt === stuck)!.status, 'void');
     assert.deepEqual([(await account()).recharge_pending_attempt, (await account()).recharge_enabled], [null, true], 'A charge that never finished is not the card\'s fault.');
     assert.equal((await account()).balance, String(7000n * UC));
+  });
+
+  test('Reconciliation never pays a charge that may no longer run: auto-recharge turned off, the card replaced or blocked voids its invoice instead', async t => {
+    const { runtime, db, fake, wid, account, attempt, enforcement, saveCard, recharge, stripe } = await stripeFixture(t);
+    await enforcement('enforce'); await saveCard();
+    const warnings = t.mock.method(console, 'warn', () => {});
+    const autoRecharge = (enabled: boolean) => stripe.setAutoRecharge(runtime, wid, { enabled, thresholdCents: 10_000, amountCents: 2500, monthlyCapCents: 100_000 });
+    // Each charge's first payment goes unanswered: the attempt stays pending with an open invoice, for reconciliation.
+    const unanswered = async (open: () => Promise<string>) => {
+      fake.unavailable.push({ match: /\/pay$/, times: 3 });
+      const id = await open();
+      assert.equal((await attempt(id)).status, 'pending');
+      return id;
+    };
+    const stopped = async (id: string) => {
+      const pays = fake.count(/\/pay$/), status = await stripe.reconcileAttempt(runtime, id), a = await attempt(id);
+      return [status, a.failure_code, fake.invoices().find(i => i.metadata.bane_attempt === id)!.status, fake.count(/\/pay$/) - pays];
+    };
+    await autoRecharge(true);
+    const off = await unanswered(async () => { await recharge(); return (await account()).recharge_pending_attempt; });
+    await autoRecharge(false);
+    assert.deepEqual(await stopped(off), ['canceled', 'recharge_disabled', 'void', 0]);
+    assert.equal((await account()).recharge_pending_attempt, null);
+    await autoRecharge(true);
+    const replaced = await unanswered(async () => { await recharge(); return (await account()).recharge_pending_attempt; });
+    fake.card = { ...fake.card, last4: '1881', fingerprint: `fp_${randomUUID().slice(0, 12)}` }; await saveCard();
+    assert.deepEqual(await stopped(replaced), ['canceled', 'card_changed', 'void', 0]);
+    assert.deepEqual([(await account()).recharge_pending_attempt, (await account()).recharge_enabled], [null, true], 'Neither is the new card\'s fault.');
+    const top = await unanswered(async () => (await stripe.chargeSavedCardTopUp(runtime, { workspaceId: wid, amountCents: 2000, actor: 'user:fixture' })).attemptId);
+    const fingerprint = fake.card.fingerprint;
+    await db.query("INSERT INTO billing_blocked_cards(fingerprint, reason) VALUES ($1, 'dispute')", [fingerprint]);
+    cleanup(t, async () => { await db.query('DELETE FROM billing_blocked_cards WHERE fingerprint = $1', [fingerprint]); });
+    assert.deepEqual(await stopped(top), ['failed', 'card_blocked', 'void', 0]);
+    warnings.mock.restore();
+    assert.deepEqual([(await account()).balance, [...fake.objects.values()].filter(o => o.object === 'charge').length], ['0', 0]);
   });
 
   test('Refund: the hold lands before Stripe is called, a refusal releases it, and only unspent paid credit is refundable', async t => {
@@ -26452,10 +26502,25 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       await db.query("INSERT INTO audience_contacts(id,workspace_id,email,suppressed,suppression_reason) VALUES($1,$2,'retry-supp@example.invalid',true,'hard_bounce')", [unique('c'), wid]);
       const retryHeaders = { authorization: `Bearer ${key.secret}`, 'Idempotency-Key': unique('supp-retry') };
       const body = { from: 'a@held-sweep.invalid', to: 'retry-supp@example.invalid', subject: 'Retry', text: 'Hi' };
+      // The refusal's statement commits no receipt, so nothing has to delete one afterwards: a crash or a concurrent retry
+      // in between (simulated: any later delete of the key fails) used to leave a receipt that replayed a phantom 202.
+      const { PgDialect } = await import('drizzle-orm/pg-core'), dialect = new PgDialect(), execute = runtime.db.execute.bind(runtime.db);
+      const crash = t.mock.method(runtime.db, 'execute', async (query: Parameters<typeof execute>[0]) => {
+        if (dialect.sqlToQuery((query as { getSQL(): import('drizzle-orm').SQL }).getSQL()).sql.startsWith('DELETE FROM sending_idempotency')) throw new Error('Simulated crash before the receipt was deleted');
+        return execute(query);
+      });
       error(await local('POST', '/v1/emails/send', body, 'live', retryHeaders), 422, 'RECIPIENT_INELIGIBLE');
+      crash.mock.restore();
+      const receipts = async () => (await db.query('SELECT count(*)::int AS n FROM sending_idempotency WHERE workspace_id=$1 AND request_key=$2', [wid, retryHeaders['Idempotency-Key']])).rows[0].n;
+      assert.equal(await receipts(), 0);
       await db.query("UPDATE audience_contacts SET suppressed=false,suppression_reason=NULL WHERE workspace_id=$1 AND email='retry-supp@example.invalid'", [wid]);
       const retried = ok(await local('POST', '/v1/emails/send', body, 'live', retryHeaders), 202);
       assert.equal((await db.query('SELECT count(*)::int AS n FROM sending_emails WHERE id=$1', [retried.id])).rows[0].n, 1, 'Retried send after lifting suppression queues a real row.');
+      // A key that already sent still replays its receipt after the recipient is suppressed again; a different body conflicts.
+      await db.query("UPDATE audience_contacts SET suppressed=true,suppression_reason='hard_bounce' WHERE workspace_id=$1 AND email='retry-supp@example.invalid'", [wid]);
+      assert.equal(ok(await local('POST', '/v1/emails/send', body, 'live', retryHeaders), 202).id, retried.id);
+      error(await local('POST', '/v1/emails/send', { ...body, subject: 'Other' }, 'live', retryHeaders), 409, 'IDEMPOTENCY_CONFLICT');
+      assert.equal(await receipts(), 1);
       void run;
     }));
   });
@@ -37684,6 +37749,13 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const stuck = await add('stuck', '2 hours'), recent = await add('recent', '30 minutes');
         await domainSetupTick(runtime);
         assert.deepEqual((await db.query(`SELECT id FROM jobs WHERE type='domain.setupCheck' AND workspace_id=$1`, [wid])).rows.map(r => r.id), [`domain.setupCheck:${stuck.token}`]);
+        // With link hosts on, a link check is queued only for a domain no queued setup check covers (that one checks the
+        // link host too): never two checks of one link host racing at Cloudflare.
+        Object.assign(runtime.config, { linkHosts: { zoneId: '0'.repeat(32), token: 'acceptance-fixture-cloudflare-token', target: 'edge.links-fixture.example' } });
+        await db.query(`DELETE FROM job_schedule WHERE workspace_id='maintenance:domain-setup'`); await domainSetupTick(runtime);
+        Object.assign(runtime.config, { linkHosts: undefined });
+        await db.query(`DELETE FROM jobs WHERE id='domain.linkCleanup'`);
+        assert.deepEqual((await db.query(`DELETE FROM jobs WHERE type='domain.linkCheck' AND workspace_id=$1 RETURNING id`, [wid])).rows.map(r => r.id), [`domain.linkCheck:${recent.token}`]);
         await check(stuck);
         const read = ok(await local('GET', `/v1/domains/${stuck.id}`));
         assert.deepEqual(read.dnsHost, { name: 'Cloudflare', zone: stuck.name, url: `https://dash.cloudflare.com/?to=/:account/${stuck.name}/dns/records` });
@@ -47743,8 +47815,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           if(init?.method==='DELETE'){deleted.push(id);return Response.json({success:true,errors:[],result:{id}});}
           if(init?.method==='POST')posted.push(body.hostname);
           // Another installation on the zone made links.taken.example (ch_taken, recorded by no row here).
-          if(init?.method==='POST'&&body?.hostname==='links.taken.example')return Response.json({success:false,errors:[{code:1406}],result:null},{status:409});
-          if(url.searchParams.get('hostname')==='links.taken.example')return Response.json({success:true,errors:[],result:[{id:'ch_taken',status:'active',ssl:{status:'active'}}]});
+          if(init?.method==='POST'&&/^links\.(taken|raced)\.example$/.test(body?.hostname))return Response.json({success:false,errors:[{code:1406}],result:null},{status:409});
+          if(/^links\.(taken|raced)\.example$/.test(url.searchParams.get('hostname')??''))return Response.json({success:true,errors:[],result:[{id:'ch_taken',status:'active',ssl:{status:'active'}}]});
           // The zone's quota is used up.
           if(init?.method==='POST'&&/^links\.full\d?\.example$/.test(body?.hostname))return Response.json({success:false,errors:[{code:1405,message:'Quota exceeded.'}],result:null},{status:403});
           const known=id==='custom_hostnames'?'ch_legacy':id;
@@ -47816,6 +47888,20 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         await db.query("UPDATE link_hosts SET quota_full_at=now()-interval '61 minutes' WHERE quota_full_at IS NOT NULL");
         await checkLinkHost(runtime,wid,'full2.example');
         assert.deepEqual(posted,['links.full.example','links.full2.example'],'After the hour, the next check asks again.');
+        // Two checks of one domain race: the other one's POST made the custom hostname and recorded it after this one read
+        // the row, so this one's 1406 found no row of ours (NotOurs). Its NULL never replaces the other's hostname, which
+        // would orphan it: every later check would answer NotOurs too.
+        await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES ('raced.example',$1,$1,'verified')`,[wid]);
+        await db.query("INSERT INTO operation_domains(id,workspace_id,name,region) VALUES($1,$2,'raced.example',$3)",[unique('dom'),wid,REGION]);
+        const {PgDialect}=await import('drizzle-orm/pg-core'),dialect=new PgDialect(),execute=runtime.db.execute.bind(runtime.db);
+        const raced=t.mock.method(runtime.db,'execute',async(query:Parameters<typeof execute>[0])=>{
+          if(dialect.sqlToQuery((query as {getSQL():import('drizzle-orm').SQL}).getSQL()).sql.startsWith('INSERT INTO link_hosts('))
+            await db.query("INSERT INTO link_hosts(workspace_id,domain,hostname,custom_hostname_id,status) VALUES ($1,'raced.example','links.raced.example','ch_raced','active') ON CONFLICT DO NOTHING",[wid]);
+          return execute(query);
+        });
+        await checkLinkHost(runtime,wid,'raced.example');
+        raced.mock.restore();
+        assert.deepEqual((await db.query("SELECT custom_hostname_id,status FROM link_hosts WHERE workspace_id=$1 AND domain='raced.example'",[wid])).rows,[{custom_hostname_id:'ch_raced',status:'active'}]);
       } finally { globalThis.fetch=prior; await db.query('UPDATE link_hosts SET quota_full_at=NULL WHERE quota_full_at IS NOT NULL'); }
     });
   });

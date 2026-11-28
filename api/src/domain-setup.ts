@@ -15,7 +15,7 @@ import { LINK_RETENTION_DAYS } from './link-hosts.js';
 // created (noDomainNotices), once; Overview asks for one either way (its get-started strip and the daily limit's line,
 // features/overview/first-run.tsx and setup.tsx).
 // With link hosts on (src/link-domains.ts), it also queues a domain.linkCheck for each domain whose link host isn't
-// active yet: every 15 minutes for its first day, then every 6 hours; an active one, daily. The check makes the host a custom hostname once its
+// active yet (unless that domain's setup check, which checks the link host too, is queued): every 15 minutes for its first day, then every 6 hours; an active one, daily. The check makes the host a custom hostname once its
 // CNAME resolves, so a link record published after the domain verified needs no Check now. It never emails.
 
 export async function domainSetupTick(runtime: Runtime) {
@@ -40,6 +40,9 @@ export async function domainSetupTick(runtime: Runtime) {
         -- An active host is checked again daily: a custom hostname deleted at Cloudflare (by hand, a cleanup race, or dev's
         -- checks on the shared zone) is made again instead of leaving every link in the domain's mail unanswered.
         AND coalesce(h.checked_at,'-infinity')<=now()-CASE WHEN h.status='active' THEN interval '1 day' WHEN h.created_at>now()-interval '1 day' THEN interval '14 minutes' ELSE interval '6 hours' END
+        -- A domain with a setup check queued (above, or still running) has its link host checked by it: a second check at
+        -- the same time would only race it at Cloudflare.
+        AND NOT EXISTS (SELECT FROM jobs j WHERE j.id='domain.setupCheck:'||dc.token AND j.status IN ('pending','running'))
       ORDER BY h.checked_at NULLS FIRST LIMIT 100)
     INSERT INTO jobs(id,type,workspace_id,payload) SELECT 'domain.linkCheck:'||token,'domain.linkCheck',workspace_id,jsonb_build_object('domainId',id,'token',token) FROM due
     ON CONFLICT (id) DO UPDATE SET status='pending',attempts=0,available_at=now(),lease_until=NULL,last_error=NULL,payload=excluded.payload WHERE jobs.status IN ('completed','failed')

@@ -434,49 +434,68 @@ export async function disconnectV5(r:Runtime,wid:string,connectionId:string,audi
   });
 }
 
+type CleanupRegion={region:string;ownership_journal:JournalEntry[];feedback_topic_arn:string|null};
 const disconnect:JobHandler=retryDatabaseFailures(async(r,p,j)=>{
   if (!await byoEnabled(r,j.workspaceId)) throw defer(300_000);
   await Promise.all([loadStsSdk(), loadSetupSdk()]);
   let region:string|null=null;
   const ticket=sql`id=${j.id} AND workspace_id=${j.workspaceId} AND status='running' AND attempts=${j.attempts} AND payload->>'run'=${p.run}`;
+  // The locks of one cleanup step, in this order, each time: the settings, the connection, this run's job, the region.
+  const lockStep=async(db:DbExecutor)=>{
+    await getRegionSettings(db,j.workspaceId,'update');const c=await connection(db,j.workspaceId,true);
+    if (!c || c.id!==p.connectionId || c.state!=='disconnecting') return null;
+    return (await db.execute(sql`SELECT FROM jobs WHERE ${ticket} AND lease_until>clock_timestamp() FOR UPDATE`)).rowCount ? c : null;
+  };
   try {
-    const more=await r.db.transaction(async db=>{
-      await getRegionSettings(db,j.workspaceId,'update');const c=await connection(db,j.workspaceId,true);
-      if (!c || c.id!==p.connectionId || c.state!=='disconnecting') return false;
-      // Fence the worker through one bounded AWS removal and its checkpoint. Losing
-      // the response leaves the old journal; a retry proves absence or checks ownership anew.
-      if (!(await db.execute(sql`SELECT FROM jobs WHERE ${ticket} AND lease_until>clock_timestamp() FOR UPDATE`)).rowCount) return false;
+    // One bounded AWS removal per step, between two transactions, so no row lock or pooled connection waits on AWS.
+    // The run's job (its lease) fences the worker: the checkpoint commits only while this run still holds it and the
+    // region's journal is the one the removal started from. Losing the response, or the checkpoint, leaves the old
+    // journal; a retry proves absence or checks ownership anew.
+    const next=await r.db.transaction(async db=>{
+      const c=await lockStep(db);if (!c) return false;
       // After a forced fence, setup still running and mail still queued or mid-attempt settle before anything is removed:
       // setup could create a resource after its region was cleaned, and the dispatcher cancels queued mail and marks an
       // interrupted attempt unknown. Feedback SES sends later for mail already accepted is lost with the topic.
       if ((await db.execute(sql`SELECT FROM jobs WHERE ${setupJobs(c)} AND status='running' AND lease_until>clock_timestamp() LIMIT 1`)).rowCount ||
           (await db.execute(sql`SELECT FROM sending_emails WHERE workspace_id=${c.workspace_id} AND status IN ('queued','attempting') LIMIT 1`)).rowCount) return 'wait';
-      const rr=(await db.execute<{region:string;ownership_journal:JournalEntry[];feedback_topic_arn:string|null}>(sql`SELECT region,ownership_journal,feedback_topic_arn FROM provider_connection_regions WHERE connection_id=${c.id} AND
-        (feedback_topic_arn IS NOT NULL OR EXISTS(SELECT FROM jsonb_array_elements(ownership_journal) e WHERE e->>'kind' IS DISTINCT FROM 'identity')) ORDER BY region LIMIT 1 FOR UPDATE`)).rows[0];
+      const rr=(await db.execute<CleanupRegion>(sql`SELECT region,ownership_journal,feedback_topic_arn FROM provider_connection_regions WHERE connection_id=${c.id} AND
+        (feedback_topic_arn IS NOT NULL OR EXISTS(SELECT FROM jsonb_array_elements(ownership_journal) e WHERE e->>'kind' IS DISTINCT FROM 'identity')) ORDER BY region LIMIT 1`)).rows[0];
       if (!rr) {
         const left=c.disconnect_summary?.leftBehind??[];
         if (left.length) await recordAudit(db,systemContext('job'),{action:'connection.cleanup',workspaceId:c.workspace_id,target:{type:'connection',id:c.id},after:{leftBehind:left.slice(0,50)},internal:false});
         await db.execute(sql`WITH ${releaseConnectionClaims(c.workspace_id,sql`SELECT ${c.id}::text AS id`)} SELECT 1`);
         await db.execute(sql`DELETE FROM provider_connections WHERE id=${c.id} AND state='disconnecting'`);return false;
       }
-      region=rr.region;
+      return {c,rr};
+    });
+    if (next==='wait') throw defer(5000,p);
+    if (!next) return;
+    const {c,rr}=next;region=rr.region;
+    let removed:{remaining:JournalEntry[]}|{failure:unknown};
+    try { removed={remaining:await removeByoFeedbackResource(await scoped(r,c,rr.region,'cleanup'),rr.region,c.id,rr.ownership_journal,rr.feedback_topic_arn)}; }
+    catch(e) { if (e instanceof ModuleLoadError) throw e; removed={failure:e}; }
+    const more=await r.db.transaction(async db=>{
+      const now=await lockStep(db);if (!now) return false;
+      const journal=sql`connection_id=${now.id} AND region=${rr.region} AND ownership_journal=${JSON.stringify(rr.ownership_journal)}::jsonb AND feedback_topic_arn IS NOT DISTINCT FROM ${rr.feedback_topic_arn}`;
+      // Changed meanwhile: the next step reads it again.
+      if (!(await db.execute(sql`SELECT FROM provider_connection_regions WHERE ${journal} FOR UPDATE`)).rowCount) return true;
       let remaining:JournalEntry[];
-      try { remaining=await removeByoFeedbackResource(await scoped(r,c,region,'cleanup'),region,c.id,rr.ownership_journal,rr.feedback_topic_arn); }
-      catch(e) {
+      if ('remaining' in removed) remaining=removed.remaining;
+      else {
         // Once the stack is deleted (stack_deleted_at), what the role can't remove now it never will, and what was
         // changed in AWS isn't removed at all: list it in the summary and go on. Otherwise the owner fixes access and retries.
-        const code=awsError(e).code;
-        if (!c.stack_deleted_at || (code!=='AWS_ACCESS_DENIED' && code!=='BYO_CLEANUP_DRIFT')) throw e;
+        const code=awsError(removed.failure).code;
+        if (!now.stack_deleted_at || (code!=='AWS_ACCESS_DENIED' && code!=='BYO_CLEANUP_DRIFT')) throw removed.failure;
         const entries=rr.ownership_journal.filter(e=>e.kind!=='identity');
         const left=[...entries.map(e=>({region:rr.region,kind:e.kind,resource:e.resource})),...(rr.feedback_topic_arn && !entries.some(e=>e.resource===rr.feedback_topic_arn)?[{region:rr.region,kind:'topic',resource:rr.feedback_topic_arn}]:[])];
-        await db.execute(sql`UPDATE provider_connections SET disconnect_summary=jsonb_set(coalesce(disconnect_summary,'{"retained":[],"leftBehind":[],"stack":null}'::jsonb),'{leftBehind}',coalesce(disconnect_summary->'leftBehind','[]'::jsonb)||${JSON.stringify(left)}::jsonb) WHERE id=${c.id}`);
-        log('warn',{code:'BYO_CLEANUP_LEFT',connectionId:c.id,region:rr.region,reason:code,resources:left.length});
+        await db.execute(sql`UPDATE provider_connections SET disconnect_summary=jsonb_set(coalesce(disconnect_summary,'{"retained":[],"leftBehind":[],"stack":null}'::jsonb),'{leftBehind}',coalesce(disconnect_summary->'leftBehind','[]'::jsonb)||${JSON.stringify(left)}::jsonb) WHERE id=${now.id}`);
+        log('warn',{code:'BYO_CLEANUP_LEFT',connectionId:now.id,region:rr.region,reason:code,resources:left.length});
         remaining=rr.ownership_journal.filter(e=>e.kind==='identity');
       }
-      await db.execute(sql`UPDATE provider_connection_regions SET ownership_journal=${JSON.stringify(remaining)}::jsonb,feedback_topic_arn=${remaining.some(e=>e.kind==='topic')?rr.feedback_topic_arn:null} WHERE connection_id=${c.id} AND region=${region}`);
-      await db.execute(sql`UPDATE provider_connections SET disconnect_error=NULL WHERE id=${c.id}`);return true;
+      await db.execute(sql`UPDATE provider_connection_regions SET ownership_journal=${JSON.stringify(remaining)}::jsonb,feedback_topic_arn=${remaining.some(e=>e.kind==='topic')?rr.feedback_topic_arn:null} WHERE connection_id=${now.id} AND region=${rr.region}`);
+      await db.execute(sql`UPDATE provider_connections SET disconnect_error=NULL WHERE id=${now.id}`);return true;
     });
-    if (more) throw defer(more==='wait'?5000:1000,p);
+    if (more) throw defer(1000,p);
   } catch(e) {
     if (e instanceof JobDeferred || e instanceof ModuleLoadError) throw e;
     const err=awsError(e);await r.db.execute(sql`UPDATE provider_connections SET disconnect_error=${JSON.stringify({region,code:err.code})}::jsonb WHERE id=${p.connectionId} AND state='disconnecting' AND EXISTS(SELECT FROM jobs WHERE ${ticket})`);throw err;
@@ -502,11 +521,12 @@ export async function requestProductionAccess(r:Runtime,wid:string,region:string
     const review=current?{status:current.Status??'UNKNOWN',caseId:current.CaseId??null}:null;
     if (now.ProductionAccessEnabled) { await save(true,review);throw conflict('PRODUCTION_ACCESS_GRANTED',`${regionLabels[region]} already has production access. Nothing was changed.`); }
     if (review?.status==='PENDING') { await save(false,review);throw conflict('PRODUCTION_ACCESS_PENDING',`AWS is already reviewing a request for ${regionLabels[region]}${review.caseId?` (case ${review.caseId})`:''}.`); }
-    // The audit row is written before AWS is asked, so a request never goes unrecorded.
-    await r.db.transaction(async db=>{
-      await audit(db,c.id);
-      await client.send(new PutAccountDetailsCommand({ProductionAccessEnabled:true,MailType:input.mailType,WebsiteURL:input.websiteUrl,ContactLanguage:'EN',UseCaseDescription:input.useCase}));
-    });
+    // No transaction stays open while AWS answers. The audit row commits after it: for a request AWS took, or may have
+    // taken (its answer was lost), never for one it refused.
+    const recorded=()=>r.db.transaction(db=>audit(db,c.id));
+    try { await client.send(new PutAccountDetailsCommand({ProductionAccessEnabled:true,MailType:input.mailType,WebsiteURL:input.websiteUrl,ContactLanguage:'EN',UseCaseDescription:input.useCase})); }
+    catch(e) { if (awsError(e).retryable) await recorded();throw e; }
+    await recorded();
     const after=(await client.send(new GetAccountCommand({}))).Details?.ReviewDetails;
     const state={status:after?.Status??'PENDING',caseId:after?.CaseId??null};
     await save(false,state);
