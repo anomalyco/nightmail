@@ -315,6 +315,8 @@ export class Chat {
     const end = (text = '', redacted = false) => { ended = true; this.s.broadcast({ type: 'message.end', messageId, text, redacted }); };
     const settle = () => { if (!idle) { idle = true; this.s.broadcast({ type: 'status', busy: false }); } };
     const turn: ActiveTurn = this.s.turn = { channel: 'chat', stop: new AbortController(), stopReason: null, unticketed: false };
+    /** Read when it is asked: the panel's cancel can come during any await. */
+    const cancelled = () => turn.stopReason === 'cancelled';
     /** Cut short: ended here, and what the model spent so far (`charged`) saved. */
     const stopped = async (charged?: Meta) => { if (!await this.stoppedTurn(turn, messageId)) return false; ended = idle = true; if (charged) await this.s.saveUsage(charged); return true; };
     try {
@@ -325,6 +327,9 @@ export class Chat {
         const [agent, account, kept] = await Promise.all([this.s.agent(), this.a.account(meta), this.a.notes(meta)]);
         // A chat's answer is its text, so it has no reply tool; its account tools follow the role.
         const offered = toolNames({ channel: 'chat', manager: this.a.manager(meta) });
+        // Stopped while it was being set up (cancelled, closed): no model call, nothing spent.
+        if (await stopped()) return;
+        if (cancelled()) { end(); settle(); return; }
         // The text comes only with the result, once the turn has ended, and reaches the panel only after the gate has passed
         // it. Meanwhile the panel shows its working line and each step's label.
         result = await agent.turn({ text, context: [customerBlock(this.s.customer(meta)), account, kept, proposals].filter(Boolean).join('\n'), images, tools: offered }, this.a.toolHost(), (event: HarnessEvent) => {
@@ -334,7 +339,7 @@ export class Chat {
       } catch (error) {
         this.s.chargeLost(error, 1);
         if (await stopped()) return;
-        if (turn.stopReason === 'cancelled') return;
+        if (cancelled()) return;
         const missing = error instanceof MissingSecret ? error.secret : null;
         logError(error, { event: 'chat', code: missing ? 'SECRET_MISSING' : 'TURN_FAILED' });
         // The reply in progress ends empty, and the message goes to the team.
@@ -346,7 +351,7 @@ export class Chat {
       meta = this.s.charge(result.usage, 1, failedTurn(result, !!result.text.trim()));
       if (await stopped(meta)) return;
       // Cancelled from the panel: the reply ends empty, and nothing the model wrote is kept, shown or mirrored.
-      if (turn.stopReason === 'cancelled' || result.aborted) { end(); settle(); await this.s.saveUsage(meta); return; }
+      if (cancelled() || result.aborted) { end(); settle(); await this.s.saveUsage(meta); return; }
       let final = result.text.trim(), redacted = false, unticketed = false;
       // The model failed before it answered: the reply ends empty, and the message goes to the team.
       if (failedTurn(result, !!final)) {

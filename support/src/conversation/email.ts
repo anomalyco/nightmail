@@ -1,6 +1,6 @@
 import { nightmailApi, type Scope, type AgentAnswer } from '../nightmail.js';
 import { gate, LINK_ORIGINS, plainText } from '../gate.js';
-import { addTicketNote, openFollowUp } from '../tickets.js';
+import { addTicketNote } from '../tickets.js';
 import { addressHash, MissingSecret, newId } from '../tokens.js';
 import { holdOverCap, mailAllowed } from '../limits.js';
 import { external, type NewWork, type Outcome, type WorkRow } from '../work.js';
@@ -10,7 +10,7 @@ import { ToolFailure, toolNames } from '../agent/tools.js';
 import { untrusted } from '../agent/projection.js';
 import { productName } from '../../../api/src/brand.js';
 import { log, logError } from '../log.js';
-import { EMAIL_BURST, EMAIL_BURST_MS, FIXED_SUBJECT, FIXED, helpLine, HELD, NUDGE, ALREADY_REPLIED, FIXED_LABEL, SIGNIN_CHECKS, CLAIM_WAIT_MS, UNCLAIMED, CLAIMED, unclaimedLine, Snapshot, Incoming, Registration, Decision, Answer, Imported, AnswerRow, Forward, ForwardReason, Notify, Alert, FollowUp, ActiveTurn, StaffReply, internal, agentSnapshot, AGENT_SUBJECT, credentialOf, agentEmail, snapshotOf, receivedOn, dmarcOf, codeOf, platformError, bodyOf, freshKey, recipientOf, failedTurn, charged, answerJob, answerPayload, answerProgress, cappedRow, nextSignInCheck, decisionState } from './state.js';
+import { EMAIL_BURST, EMAIL_BURST_MS, FIXED_SUBJECT, FIXED, helpLine, HELD, NUDGE, ALREADY_REPLIED, FIXED_LABEL, SIGNIN_CHECKS, CLAIM_WAIT_MS, UNCLAIMED, CLAIMED, unclaimedLine, Snapshot, Incoming, Registration, Decision, Answer, Imported, AnswerRow, Forward, ForwardReason, ActiveTurn, internal, agentSnapshot, AGENT_SUBJECT, credentialOf, agentEmail, snapshotOf, receivedOn, dmarcOf, codeOf, platformError, bodyOf, freshKey, recipientOf, failedTurn, charged, answerJob, answerPayload, answerProgress, cappedRow, nextSignInCheck } from './state.js';
 import type { ConversationStore } from './store.js';
 import type { Access } from './actions.js';
 import type { Inbox } from './inbox.js';
@@ -75,6 +75,7 @@ export class Email {
     if (reply.status === 429 && code === 'SUPPORT_CONVERSATION_LIMIT') return { refused: 'limit' };
     throw platformError(reply, 'REGISTER_FAILED');
   }
+  /** An email work item: a message's decision, its answer or forward, or an earlier release's confirm link. */
   async run(item: WorkRow): Promise<Outcome> {
     const payload = JSON.parse(item.payload);
     switch (item.kind) {
@@ -88,28 +89,6 @@ export class Email {
         await external(this.s.env.CONVERSATION.get(this.s.env.CONVERSATION.idFromName(target)).enqueueInbound({ conversationId: target, threadId, messageId, deliveryId, ...linkedTicket ? { linkedTicket } : {} }));
         return {};
       }
-      case 'close': await this.s.closeRemote(); return {};
-      // A chat opening whose answer from Nightmail was never handled: closed here, and with Nightmail (the close item).
-      case 'opening': if (!this.s.meta()!.registered && this.s.meta()!.status !== 'closed') await this.s.close('ended'); return {};
-      case 'alert': { const { key, input } = payload as Alert; await external(nightmailApi(this.s.env).startThread(input, key)); return {}; }
-      case 'notify': {
-        const { ticketId, key, input } = payload as Notify;
-        const row = await external(this.s.env.DB.prepare('SELECT notified_at FROM tickets WHERE id = ?').bind(ticketId).first<{ notified_at: number | null }>());
-        if (!row) throw new Error('Missing ticket');
-        if (row.notified_at === null) {
-          await external(nightmailApi(this.s.env).startThread(input, key));
-          await external(this.s.env.DB.prepare('UPDATE tickets SET notified_at = ? WHERE id = ?').bind(Date.now(), ticketId).run());
-        }
-        return {};
-      }
-      case 'followup': {
-        // openFollowUp sends from SUPPORT_ADDRESS_ID: the address configured when the ticket was filed, on every try.
-        const { addressId, ctx, ticket } = payload as FollowUp;
-        const sent = await external(openFollowUp({ ...this.s.env, SUPPORT_ADDRESS_ID: addressId! }, ctx, ticket));
-        if (sent) this.s.update(m => { m.threadId ??= sent.threadId; });
-        return {};
-      }
-      case 'staff': return this.i.staffReply(item, payload as StaffReply);
       default: throw new Error('Unknown work kind');
     }
   }
@@ -172,30 +151,31 @@ export class Email {
       if (!meta.email) meta = this.s.update(m => { m.email = sender; });
       progress.registered = await this.registerEmail(next.messageId); save();
     }
-    const decision = decisionState(progress);
+    const registered = progress.registered;
     // The person's open email conversations are at Nightmail's cap (a chat never is held up by them): kept for the
     // team's digest, and the sender gets the busy reply once, under a key of its own, instead of silence.
-    if (decision.phase === 'busy_limit') {
-      await keep('open conversations per person');
-      if (!decision.busySent) {
-        const route = this.s.route(message, next.messageId, 'reply');
-        await external(nightmailApi(this.s.env).reply(message.threadId ?? next.threadId, { replyToMessageId: next.messageId, text: FIXED.busy(), to: sender, subject: FIXED_SUBJECT, addressId: route.addressId }, `${route.key}:busy`));
-        progress.busy = true; save();
+    if ('refused' in registered) {
+      if (registered.refused === 'limit') {
+        await keep('open conversations per person');
+        if (!progress.busy) {
+          const route = this.s.route(message, next.messageId, 'reply');
+          await external(nightmailApi(this.s.env).reply(message.threadId ?? next.threadId, { replyToMessageId: next.messageId, text: FIXED.busy(), to: sender, subject: FIXED_SUBJECT, addressId: route.addressId }, `${route.key}:busy`));
+          progress.busy = true; save();
+        }
+        return { state: 'held', result: progress };
       }
-      return { state: 'held', result: progress };
+      return this.forward(next, progress, save, sender, registered.refused);
     }
-    if (decision.phase === 'refused') return this.forward(next, progress, save, sender, decision.reason);
-    if (decision.phase !== 'accepted') throw new Error('A registered message is refused or accepted');
     // `email` is the address that writes; whom the conversation is for is Nightmail's (its scope, read when an answer is
     // written), never this address.
-    this.s.update(m => { m.email ??= sender; m.registered = true; m.mode = decision.mode; });
+    this.s.update(m => { m.email ??= sender; m.registered = true; m.mode = registered.mode; });
     this.arrived(next, message, progress, save, sender, dmarcPass);
     // Bound to its sender's account: a verified answer. A verified sender without one: the general answer. Anyone else:
     // the fixed reply with a sign-in for this message, the same whether or not the address has an account (M4, M5, R2);
     // and, if nobody claims it, a general answer only when its sender passed the same checks a general answer needs
     // (Nightmail's, kept with the registration). Automatic and looping mail and mail over the limits never got here.
-    const kind = decision.mode === 'member' ? 'member' : decision.mode === 'non_member' ? 'general' : 'signin';
-    return { result: progress, children: [this.answerFor(message, next, sender, dmarc, kind, decision.general)] };
+    const kind = registered.mode === 'member' ? 'member' : registered.mode === 'non_member' ? 'general' : 'signin';
+    return { result: progress, children: [this.answerFor(message, next, sender, dmarc, kind, registered.general === true)] };
   }
   /**
    * A customer email this conversation answers: in its transcript, and so the staff inbox, as it arrives (once), with what a
@@ -271,7 +251,7 @@ export class Email {
       // First looked at again when the claim wait ends, or (no general answer due) at the first sign-in check.
       return { state: 'parked', result: progress, dueAt: progress.challengedAt ? progress.challengedAt + CLAIM_WAIT_MS : Date.now() + SIGNIN_CHECKS[0]! * 60_000 };
     }
-    if (!progress.withheld && progress.text === undefined) await this.compose(answer, message, progress, save);
+    if (!progress.withheld && progress.text === undefined) await this.compose(item.id, answer, message, progress, save);
     if (progress.withheld) return this.withhold(answer, progress, save);
     // The answering limits refused the general answer at the claim wait's end: nothing is sent or filed (it is no reply,
     // and the inbox owes it none: its 'unanswered' entry), and it waits for its claim again, charged afresh then.
@@ -409,7 +389,7 @@ export class Email {
    * nothing it writes as text is sent. A turn that ends without a reply gets one hidden nudge, then the fixed busy reply
    * and a ticket. A scope offered during a verified turn that gives less stops the turn, and its answer is held.
    */
-  async compose(answer: Answer, message: Snapshot, progress: AnswerRow, save: () => void): Promise<void> {
+  async compose(id: string, answer: Answer, message: Snapshot, progress: AnswerRow, save: () => void): Promise<void> {
     const origin = new URL(this.s.env.NIGHTMAIL_ORIGIN).origin;
     if (answer.fixed) { progress.fixed = answer.fixed; progress.text = FIXED[answer.fixed](origin); progress.mode = 'general'; save(); return; }
     let meta = this.s.meta()!;
@@ -434,6 +414,11 @@ export class Email {
     // Email gets the link rule too: any URL outside Nightmail's own sites holds the reply.
     const gateScope = () => ({ ...this.a.gateScope(this.s.meta()!, progress.mode === 'verified'), emails: [answer.sender], linkOrigins: LINK_ORIGINS });
     if (progress.model === undefined) {
+      // A claim that came while this waited on Nightmail (signIns) is in the stored row, never in this copy: taken now,
+      // before whom it is written for is decided.
+      if (progress.verified === undefined && progress.unclaimed && !(JSON.parse(this.s.sql.exec<{ result: string }>('SELECT result FROM _support_work WHERE id = ?', id).one().result) as AnswerRow).unclaimed) {
+        delete progress.unclaimed; delete progress.joinedTo; delete progress.claimFor; save();
+      }
       if (progress.verified === undefined) {
         // Unclaimed at the claim wait's end: a general answer, with no account access at all (no scope read either).
         if (answer.member || (answer.signin && !progress.unclaimed)) {

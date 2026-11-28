@@ -214,7 +214,7 @@ export class Access {
     return (meta.workspace ? [meta.role] : meta.workspaces.map(w => w.role)).some(role => role === 'owner' || role === 'admin');
   }
   toolHost(): ToolHost {
-    /** A refused stamp mid-turn: the turn stops now, and the chat ends once it has (stoppedTurn). */
+    /** Less access mid-turn (a refused stamp, or a scope that gives less): the turn stops now, and a chat ends once it has (stoppedTurn). */
     const lost = () => { this.s.stopTurn('access_lost'); return new ToolFailure('Stopped: access to this account ended.'); };
     /** The email turn running now, if this is one. */
     const emailTurn = () => this.s.turn?.channel === 'email' ? this.s.turn : null;
@@ -319,14 +319,13 @@ export class Access {
         let reply: PlatformReply<Scope>;
         try { reply = await this.stamped<Scope>('POST', '/v1/support/scope', { workspaceId }); }
         catch (error) { logError(error, { event: 'email', code: 'SCOPE_CHOOSE_FAILED' }, 'warn'); throw new ToolFailure('Couldn’t open that workspace just now. Try again in a moment.'); }
-        const stop = () => { this.s.stopTurn('access_lost'); return new ToolFailure('Stopped: access to this account changed.'); };
         if (reply.status === 200) {
-          if (this.reduced(meta, reply.body) || !recipientOf(reply.body, meta.email)) throw stop();
+          if (this.reduced(meta, reply.body) || !recipientOf(reply.body, meta.email)) throw lost();
           const now = this.applyScope(reply.body);
           return `Now reading ${untrusted(oneLine(now.workspace?.name ?? chosen.name))} (${chosen.id}).`;
         }
         if (reply.status === 404) throw new ToolFailure('That is not one of the customer’s verified workspaces. Use an ID from <customer>.');
-        if (reply.status === 403) throw stop();
+        if (reply.status === 403) throw lost();
         throw new ToolFailure('Couldn’t open that workspace just now. Try again in a moment.');
       },
       requestContentAccess: async (workspaceId: string, why: string) => {

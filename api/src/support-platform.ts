@@ -28,6 +28,8 @@ export const platformRuntime = (conversation?: string) => ({ platformCaller: SUP
 const PATH_TOKENS = { handoffId: 'sho_[0-9a-f]{32}', conversationId: 'conv_[a-z2-7]{26}', messageId: 'msg_[a-z2-7]{16}', staffKey: 'staff-[0-9a-f]{24}-[0-9]{1,6}', requestId: 'req_[0-9a-f]{32}' } as const;
 type PathToken = keyof typeof PATH_TOKENS;
 type PathParams<T extends string> = T extends `${string}{${infer P extends PathToken}}${infer Rest}` ? { [K in P]: string } & PathParams<Rest> : unknown;
+/** The `{name}`s in a template that PATH_TOKENS doesn't know: a template naming one doesn't typecheck. */
+type UnknownTokens<T extends string> = T extends `${string}{${infer P}}${infer Rest}` ? (P extends PathToken ? UnknownTokens<Rest> : P) : never;
 type Query = Record<string, string | undefined>;
 /** An operator support route: `at` gives its method and its path for these IDs (encoded) and query parameters (unset ones left out). */
 type SupportRoute<P> = { at: (params: P, query?: Query) => [method: 'GET' | 'POST', path: string] };
@@ -36,8 +38,11 @@ const OPERATOR_ROUTES: [method: string, path: RegExp][] = [];
  * Declares one route the binding may call without a conversation: the allowlist entry (supportPlatformAllows) and the
  * path the client below builds come from the same template, so they can't drift apart.
  */
-function defineSupportRoute<const T extends string>(method: 'GET' | 'POST', template: T): SupportRoute<PathParams<T>> {
-  OPERATOR_ROUTES.push([method, new RegExp(`^${template.replace(/\{(\w+)\}/g, (_, name: PathToken) => PATH_TOKENS[name])}$`)]);
+function defineSupportRoute<const T extends string>(method: 'GET' | 'POST', template: T & ([UnknownTokens<T>] extends [never] ? unknown : never)): SupportRoute<PathParams<T>> {
+  OPERATOR_ROUTES.push([method, new RegExp(`^${template.replace(/\{(\w+)\}/g, (_, name: string) => {
+    if (!Object.hasOwn(PATH_TOKENS, name)) throw new Error(`Unknown path token {${name}} in ${template}`);
+    return PATH_TOKENS[name as PathToken];
+  })}$`)]);
   return {
     at: (params, query) => {
       const path = template.replace(/\{(\w+)\}/g, (_, name: string) => encodeURIComponent(String((params as Record<string, unknown>)[name])));

@@ -1,10 +1,11 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Env } from './env.js';
-import { ticketEmail, type FiledTicket, type TicketContext } from './tickets.js';
+import { openFollowUp, ticketEmail, type FiledTicket, type TicketContext } from './tickets.js';
+import { external, type Outcome, type WorkRow } from './work.js';
 import type { TicketInput } from './agent/tools.js';
 import { deleteConversationUploads } from './attachments.js';
-import type { FiledConversation, AgentAnswer, Handoff } from './nightmail.js';
-import { KEEP_AFTER_CLOSE_MS, type Meta, type Notify, type FollowUp, type StaffReply } from './conversation/state.js';
+import { nightmailApi, type FiledConversation, type AgentAnswer, type Handoff } from './nightmail.js';
+import { KEEP_AFTER_CLOSE_MS, type Alert, type Meta, type Notify, type FollowUp, type StaffReply } from './conversation/state.js';
 import { ConversationStore } from './conversation/store.js';
 import { Access } from './conversation/actions.js';
 import { Inbox } from './conversation/inbox.js';
@@ -98,11 +99,41 @@ export class SupportConversation extends DurableObject<Env> {
     await this.s.arm();
     return { woken };
   }
+  /** One work item: an email's (email.ts), or the conversation's own (its opening, close, a ticket's emails, a staff reply). */
+  private async run(item: WorkRow): Promise<Outcome> {
+    const payload = JSON.parse(item.payload);
+    switch (item.kind) {
+      case 'message': case 'answer': case 'confirm': case 'forward': return this.e.run(item);
+      case 'close': await this.s.closeRemote(); return {};
+      // A chat opening whose answer from Nightmail was never handled: closed here, and with Nightmail (the close item).
+      case 'opening': if (!this.s.meta()!.registered && this.s.meta()!.status !== 'closed') await this.s.close('ended'); return {};
+      case 'alert': { const { key, input } = payload as Alert; await external(nightmailApi(this.s.env).startThread(input, key)); return {}; }
+      case 'notify': {
+        const { ticketId, key, input } = payload as Notify;
+        const row = await external(this.s.env.DB.prepare('SELECT notified_at FROM tickets WHERE id = ?').bind(ticketId).first<{ notified_at: number | null }>());
+        if (!row) throw new Error('Missing ticket');
+        if (row.notified_at === null) {
+          await external(nightmailApi(this.s.env).startThread(input, key));
+          await external(this.s.env.DB.prepare('UPDATE tickets SET notified_at = ? WHERE id = ?').bind(Date.now(), ticketId).run());
+        }
+        return {};
+      }
+      case 'followup': {
+        // openFollowUp sends from SUPPORT_ADDRESS_ID: the address configured when the ticket was filed, on every try.
+        const { addressId, ctx, ticket } = payload as FollowUp;
+        const sent = await external(openFollowUp({ ...this.s.env, SUPPORT_ADDRESS_ID: addressId! }, ctx, ticket));
+        if (sent) this.s.update(m => { m.threadId ??= sent.threadId; });
+        return {};
+      }
+      case 'staff': return this.i.staffReply(item, payload as StaffReply);
+      default: throw new Error('Unknown work kind');
+    }
+  }
   override async alarm() {
     if (!this.s.meta()) return;
     // Answers parked for a sign-in whose check is due (the claim wait's end among them): asked here, the sweep's wake too.
     if (this.i.signInDue()) await this.i.signIns();
-    await this.s.work.drain(item => this.e.run(item), (item, state) => this.s.finished(item, state), () => this.s.deadline());
+    await this.s.work.drain(item => this.run(item), (item, state) => this.s.finished(item, state), () => this.s.deadline());
     // The inbox: what a failed mirror left, and the state this drain changed (blocked work, a ticket).
     await this.s.mirror();
     let meta = this.s.meta()!;

@@ -349,49 +349,29 @@ export function answerPayload(job: Exclude<AnswerJob, { kind: 'legacy_imported' 
   return { ...base, ...markers };
 }
 
-/** Whom a composing answer is written for: the bound account, in general, in general without a claim (or released from one), or (undecided) not known yet. `decided`: settled for good, before the model runs. */
-export type ComposingAccess = 'undecided' | 'verified' | 'general' | 'unclaimed' | 'released';
-/** The conversation's limits and the daily caps, checked once per answer. */
-export type TurnAdmission = { state: 'unchecked' } | { state: 'allowed' } | { state: 'refused'; reason: string | null };
-/** What the model wrote: an email frozen by the reply tool, free text from the build before it, or nothing (declined: a refusal). */
-export type ComposedDraft = { kind: 'replied'; text: string; gated: string[] | null } | { kind: 'free_text'; text: string } | { kind: 'none'; declined: boolean };
-/** The email an answer sends, frozen: its text, how it was written (a fixed reply's kind), and a verified one's recipient. */
-export type AnswerDelivery = { text: string; mode: 'general' | 'verified'; fixed: 'help' | 'busy' | 'decline' | null; recipient: string | null };
 /**
- * An answer item's progress (AnswerRow) as the one phase it is in. `joined`: added to an earlier answer of the same
- * sender (ANSWERING_RULE). `awaiting_signin`: its sign-in reply went. `composing`: being written. `capped_unclaimed`: the
- * answering limits refused its general answer, so it waits for a claim again. `skipped`: nothing to send (the team owns
- * the thread, staff paused the agent, added to a chat's ticket, or a follow-up with nothing to add). `ready`: the email to
- * send. `withheld`: written from the account and never to be sent. `held_final`: text an earlier build wrote, never sent.
- * Every waiting phase lists the later messages it also answers (`also`) and the sign-in checks so far.
+ * An answer item's progress (AnswerRow) as far as a sign-in check, a release or a later message joining it cares:
+ * `initial` (nothing done yet, as a follow-up is queued) or `awaiting_signin` (its sign-in reply went), `composing`
+ * (`unclaimed`: a general answer released without a claim; `decided`: whether it reads the account is settled; `drafted`:
+ * the model wrote, or declined to), `capped_unclaimed` (the answering limits refused its general answer, so it waits for a
+ * claim again), or `settled`: written, withheld, skipped or joined to another, which nothing here changes. The waiting
+ * phases list the later messages they also answer (`also`) and the sign-in checks so far.
  */
 export type AnswerProgress =
-  | { phase: 'initial'; also: string[]; checks: number }
-  | { phase: 'joined'; joinedTo: string }
-  | { phase: 'awaiting_signin'; challengedAt: number | null; also: string[]; checks: number }
-  | { phase: 'composing'; access: ComposingAccess; decided: boolean; admission: TurnAdmission; draft: ComposedDraft | undefined; also: string[]; checks: number }
+  | { phase: 'initial' | 'awaiting_signin'; challengedAt: number | null; also: string[]; checks: number }
+  | { phase: 'composing'; unclaimed: boolean; decided: boolean; drafted: boolean; also: string[]; checks: number }
   | { phase: 'capped_unclaimed'; released: boolean; unanswered: Record<string, string>; images: Record<string, string> | null; also: string[]; checks: number }
-  | { phase: 'skipped' }
-  | { phase: 'ready'; delivery: AnswerDelivery }
-  | { phase: 'withheld'; reason: 'reduced' | 'closed'; noticeOwed: boolean }
-  | { phase: 'held_final'; text: string; held: string | null };
+  | { phase: 'settled' };
 export function answerProgress(row: AnswerRow): AnswerProgress {
   const also = row.also ?? [], checks = row.checks ?? 0;
-  if (row.withheld) return { phase: 'withheld', reason: row.withheld, noticeOwed: row.noticed === false };
+  const composing = (): AnswerProgress => ({ phase: 'composing', unclaimed: row.unclaimed === true, decided: row.verified !== undefined, drafted: row.model !== undefined, also, checks });
+  if (row.withheld || row.text !== undefined) return { phase: 'settled' };
+  // Whom it is written for is decided: being written, whatever an earlier step left (a claim's release drops `capped`).
+  if (row.verified !== undefined) return composing();
   if (row.capped) return { phase: 'capped_unclaimed', released: row.released === true, unanswered: row.unanswered ?? {}, images: row.images ?? null, also, checks };
-  if (typeof row.text === 'string') return row.mode === 'general' || row.mode === 'verified'
-    ? { phase: 'ready', delivery: { text: row.text, mode: row.mode, fixed: row.fixed ?? null, recipient: row.recipient ?? null } } : { phase: 'held_final', text: row.text, held: row.held ?? null };
-  if (row.text === null) return { phase: 'skipped' };
-  if (row.unclaimed || row.verified !== undefined || row.allowed !== undefined || row.model !== undefined || row.owned !== undefined) {
-    const access: ComposingAccess = row.verified ? 'verified' : row.released ? 'released' : row.unclaimed ? 'unclaimed' : row.verified === false ? 'general' : 'undecided';
-    const admission: TurnAdmission = row.allowed === undefined ? { state: 'unchecked' } : row.allowed ? { state: 'allowed' } : { state: 'refused', reason: row.refused ?? null };
-    const draft: ComposedDraft | undefined = row.model === undefined ? undefined : row.model === null ? { kind: 'none', declined: row.declined === true }
-      : row.replied ? { kind: 'replied', text: row.model, gated: row.gated ?? null } : { kind: 'free_text', text: row.model };
-    return { phase: 'composing', access, decided: row.verified !== undefined, admission, draft, also, checks };
-  }
-  if (row.joinedTo) return { phase: 'joined', joinedTo: row.joinedTo };
-  if (row.challenged) return { phase: 'awaiting_signin', challengedAt: row.challengedAt ?? null, also, checks };
-  return { phase: 'initial', also, checks };
+  if (row.unclaimed || row.allowed !== undefined || row.model !== undefined || row.owned !== undefined) return composing();
+  if (row.joinedTo) return { phase: 'settled' };
+  return { phase: row.challenged ? 'awaiting_signin' : 'initial', challengedAt: row.challengedAt ?? null, also, checks };
 }
 /** A waiting phase as it is stored again: what answer() parks once the limits refused its general answer. */
 export function cappedRow(p: Extract<AnswerProgress, { phase: 'capped_unclaimed' }>): AnswerRow {
@@ -409,7 +389,7 @@ export const nextSignInCheck = (checks: number, now: number) => now + SIGNIN_CHE
 export function signInStep(job: AnswerJob, progress: AnswerProgress, parked: boolean, signed: Set<string> | null, now: number):
   { to: 'release' | 'unclaimed' | 'claim' } | { to: 'recheck'; dueAt: number; checks: number } | null {
   const id = job.base.messageId;
-  if (!parked) return progress.phase === 'composing' && progress.access === 'unclaimed' && !progress.decided && progress.draft === undefined && signed?.has(id) ? { to: 'claim' } : null;
+  if (!parked) return progress.phase === 'composing' && progress.unclaimed && !progress.decided && !progress.drafted && signed?.has(id) ? { to: 'claim' } : null;
   if (progress.phase !== 'initial' && progress.phase !== 'awaiting_signin' && progress.phase !== 'capped_unclaimed') return null;
   if (signed?.has(id)) return { to: 'release' };
   const claimBy = job.kind === 'signin' && job.generalAfterWait && progress.phase === 'awaiting_signin' && progress.challengedAt ? progress.challengedAt + CLAIM_WAIT_MS : null;
@@ -419,31 +399,11 @@ export function signInStep(job: AnswerJob, progress: AnswerProgress, parked: boo
   return { to: 'recheck', checks: progress.checks + 1, dueAt: claimBy === null ? later : Math.min(later, Math.max(claimBy, now + (now >= claimBy ? 60_000 : 0))) };
 }
 
-/**
- * Where a message's decision is (Decision, stored as it goes): not read yet, read and being judged, handed on before it
- * was registered (`target`, once chosen), refused by Nightmail for another conversation (`reason`), held at the sender's
- * open-conversation cap (`busySent`: its busy reply went), or registered here for an answer.
- */
-export type DecisionState =
-  | { phase: 'unfetched' }
-  | { phase: 'evaluating'; message: Snapshot }
-  | { phase: 'forwarding'; target: { target: string; key: string | null } }
-  | { phase: 'refused'; reason: 'different_sender' | 'not_verified' | 'closed' }
-  | { phase: 'busy_limit'; busySent: boolean }
-  | { phase: 'accepted'; mode: Mode; general: boolean };
-export function decisionState(d: Decision): DecisionState {
-  const r = d.registered;
-  if (r && 'refused' in r) return r.refused === 'limit' ? { phase: 'busy_limit', busySent: d.busy === true } : { phase: 'refused', reason: r.refused };
-  if (r) return { phase: 'accepted', mode: r.mode, general: r.general === true };
-  if (d.forward) return { phase: 'forwarding', target: d.forward };
-  return d.message ? { phase: 'evaluating', message: d.message } : { phase: 'unfetched' };
-}
-
 /** A staff reply's delivery, stored as it goes: what is done of it so far, or settled (sent, or failed for good and why). */
 export type StaffDeliveryRow = { recorded?: boolean; emailed?: boolean; failed?: string; sent?: boolean };
 export type StaffDeliveryState = { phase: 'pending'; recorded: boolean; emailed: boolean } | { phase: 'sent' } | { phase: 'failed'; reason: string };
 export const staffDelivery = (row: StaffDeliveryRow): StaffDeliveryState =>
-  row.failed ? { phase: 'failed', reason: row.failed } : row.sent ? { phase: 'sent' } : { phase: 'pending', recorded: row.recorded === true, emailed: row.emailed === true };
+  row.failed !== undefined ? { phase: 'failed', reason: row.failed } : row.sent ? { phase: 'sent' } : { phase: 'pending', recorded: row.recorded === true, emailed: row.emailed === true };
 
 
 export const SPECS = new Map(TOOLS.map(t => [t.name, t]));

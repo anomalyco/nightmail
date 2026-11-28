@@ -2036,6 +2036,22 @@ describe('support Worker', () => {
     chat.ws.close();
   }, 120_000);
 
+  test('a chat answer cancelled while it is being set up never reaches the model: it ends empty, and nothing is spent', async () => {
+    const chat = await chatAs('usr_cancelsetup', 'owner');
+    const models = recorded.length, mark = chat.frames.length;
+    await fakeHook('/__actions', { outage: { path: '/v1/support/notes', delayMs: 1500 } });
+    try {
+      chat.send({ type: 'user.message', clientMessageId: 'c_setupcancel', text: 'Setup cancel probe: why are my opens down?' });
+      await chat.until(f => chat.frames.indexOf(f) >= mark && f.type === 'message.start' && f.kind === 'reply');
+      chat.send({ type: 'cancel' });
+      await chat.until(f => chat.frames.indexOf(f) >= mark && f.type === 'status' && f.busy === false);
+    } finally { await fakeHook('/__actions', { outage: { path: '/v1/support/notes' } }); }
+    const frames = chat.frames.slice(mark), reply = frames.find(f => f.type === 'message.start' && f.kind === 'reply')?.messageId;
+    assert.deepEqual(frames.filter(f => f.type === 'message.end' && f.messageId === reply).map(f => f.text), ['']);
+    assert.ok(!recorded.slice(models).some(r => JSON.stringify(r).includes('Setup cancel probe')), 'No model call.');
+    chat.ws.close();
+  }, 120_000);
+
   test('M5: daily caps on turns, tickets, mail and confirm links; unverified email gets no model turn; the team is alerted once', async () => {
     const caps = new Miniflare({ cf: false, telemetry: { enabled: false }, workers: [worker('support', baseEnv({ LIMIT_TURNS_PER_DAY: text('2'), LIMIT_TICKETS_PER_PERSON: text('1'), LIMIT_MAIL_PER_SENDER: text('2'), LIMIT_CONFIRMS_PER_ADDRESS: text('1'), LIMIT_TICKETS_INTAKE_PER_MAILBOX: text('2') })),
       { config: { name: 'fake-bane', compatibilityDate: '2026-09-08', manifest: { mainModule: 'bane.js', modules: { 'bane.js': { type: 'esm', contents: FAKE_BANE } } }, env: {} } }] } as never);
@@ -3033,6 +3049,34 @@ describe('support Worker', () => {
       assert.deepEqual(await sentKeys('thr_uc_queued'), ['reply-msg_uc_queued', 'reply-msg_uc_queued:signin'], 'One answer, and no follow-up waits.');
       const sent = (await replies('thr_uc_queued', instance)).find(c => c[5] === 'reply-msg_uc_queued');
       assert.deepEqual([sent?.[3].text, sent?.[3].to], [VERIFIED_ANSWER, ['Uca@acme.test']]);
+    }, 180_000);
+
+    test('a reply that joined the follow-up of a general answer, claimed before it is written, gets the answer from the account and leaves the follow-up; it is never dropped as joined', async () => {
+      const { id } = await waitingOnClaim('usr_ujo', 'ujo@acme.test', 'msg_uj_1', 'thr_uj');
+      let run = await drive(id, { claimWait: 'answer:msg_uj_1', tick: true });
+      assert.equal(states(run)['answer:msg_uj_1:claimed'], 'parked', 'Its general answer went, and the follow-up from the account waits.');
+      await setInbox({ down: true });
+      try { await hook('msg_uj_2', 'thr_uj', 'ujo@acme.test'); run = await drive(id, { tick: true }); } finally { await setInbox({ down: false }); }
+      assert.equal(states(run)['answer:msg_uj_2'], 'pending', 'Joined the follow-up, and waiting for the inbox before its general answer is written.');
+      const claimed = async (message: string) => {
+        assert.equal(await claim(id, message, 'usr_ujo', instance), 200);
+        const pulls = (await fakeCalls(instance)).filter(c => c[0] === 'pullOutbox' && c[1] === id).length;
+        await wake(id);
+        await eventually(async () => (await fakeCalls(instance)).filter(c => c[0] === 'pullOutbox' && c[1] === id).length > pulls || undefined);
+      };
+      await claimed('msg_uj_2');
+      run = await drive(id, { expire: 'answer:msg_uj_2', tick: true });
+      assert.deepEqual([states(run)['answer:msg_uj_2'], states(run)['answer:msg_uj_1:claimed']], ['done', 'parked'], 'Answered on its own, not dropped as joined.');
+      assert.deepEqual(await sentKeys('thr_uj'), ['reply-msg_uj_1', 'reply-msg_uj_1:signin', 'reply-msg_uj_2']);
+      const sent = (await replies('thr_uj', instance)).find(c => c[5] === 'reply-msg_uj_2');
+      assert.deepEqual([sent?.[3].text, sent?.[3].to], [VERIFIED_ANSWER, ['Ujo@acme.test']]);
+      // The first message's claim later: its follow-up answers it alone, never the reply again.
+      const from = recorded.length;
+      await claimed('msg_uj_1');
+      run = await drive(id, { expire: 'answer:msg_uj_1:claimed', tick: true });
+      assert.equal(states(run)['answer:msg_uj_1:claimed'], 'done');
+      const followUp = recorded.slice(from).filter(r => about(r, 'Unclaimed probe'));
+      assert.ok(followUp.length && !followUp.some(r => about(r, 'Reply probe')), 'The follow-up no longer answers the reply too.');
     }, 180_000);
 
     test('a staff reply that failed for good is never sent on a retry: when Nightmail can’t record the failure, only that record is retried', async () => {

@@ -4,7 +4,7 @@ import { plainText } from '../gate.js';
 import { external, type Outcome, type WorkRow } from '../work.js';
 import { productName } from '../../../api/src/brand.js';
 import { log, logError } from '../log.js';
-import { Meta, Snapshot, StaffReply, AGENT_SUBJECT, answerJob, answerProgress, signInStep, staffDelivery, type StaffDeliveryRow } from './state.js';
+import { Meta, Snapshot, StaffReply, AGENT_SUBJECT, type AnswerRow, answerJob, answerProgress, signInStep, staffDelivery, type StaffDeliveryRow } from './state.js';
 import type { ConversationStore } from './store.js';
 import type { Access } from './actions.js';
 
@@ -123,15 +123,33 @@ export class Inbox {
     let released = 0;
     const moved = (written: number, code: string) => { if (written) { released++; log('info', { event: 'email', code, conversation: meta.conversationId }); } };
     for (const row of rows) {
-      const step = signInStep(answerJob(JSON.parse(row.payload)), answerProgress(JSON.parse(row.result)), row.state === 'parked', signed, now);
-      if (step?.to === 'release') moved(this.s.sql.exec("UPDATE _support_work SET state = 'pending', due_at = ?1, updated_at = ?1 WHERE id = ?2 AND state = 'parked'", now, row.id).rowsWritten, 'EMAIL_SIGNED_IN');
+      const job = answerJob(JSON.parse(row.payload)), step = signInStep(job, answerProgress(JSON.parse(row.result)), row.state === 'parked', signed, now);
+      // Claimed: answered from the account, so no longer one the limits refused in general (capped) or released in general.
+      if (step?.to === 'release') moved(this.s.sql.exec("UPDATE _support_work SET state = 'pending', due_at = ?1, result = json_remove(result, '$.capped', '$.released'), updated_at = ?1 WHERE id = ?2 AND state = 'parked'", now, row.id).rowsWritten, 'EMAIL_SIGNED_IN');
       else if (step?.to === 'unclaimed') moved(this.s.sql.exec("UPDATE _support_work SET state = 'pending', due_at = ?1, result = json_set(result, '$.unclaimed', json('true')), updated_at = ?1 WHERE id = ?2 AND state = 'parked'", now, row.id).rowsWritten, 'EMAIL_UNCLAIMED');
-      else if (step?.to === 'claim') moved(this.s.sql.exec("UPDATE _support_work SET due_at = ?1, result = json_remove(result, '$.unclaimed'), updated_at = ?1 WHERE id = ?2 AND state IN ('pending', 'blocked') AND json_extract(result, '$.verified') IS NULL", now, row.id).rowsWritten, 'EMAIL_SIGNED_IN');
+      else if (step?.to === 'claim') moved(this.claim(row.id, job.base.messageId, now), 'EMAIL_SIGNED_IN');
       else if (step?.to === 'recheck') this.s.sql.exec("UPDATE _support_work SET due_at = ?1, result = json_set(result, '$.checks', ?2), updated_at = ?3 WHERE id = ?4 AND state = 'parked'", step.dueAt, step.checks, now, row.id);
     }
     if (released) await this.s.arm();
     await this.s.work.mirror();
     return released;
+  }
+  /**
+   * A claim for an unclaimed answer nothing was written for yet (signIns): it is answered from the account on its own.
+   * One that joined an earlier answer's follow-up leaves it (that follow-up no longer answers it too), so it isn't
+   * dropped as joined. Only while whom it is written for is undecided: a turn already deciding keeps its general answer.
+   */
+  claim(id: string, messageId: string, now: number) {
+    return this.s.ctx.storage.transactionSync(() => {
+      const row = this.s.sql.exec<{ result: string }>("SELECT result FROM _support_work WHERE id = ? AND state IN ('pending', 'blocked') AND json_extract(result, '$.verified') IS NULL", id).toArray()[0];
+      if (!row) return 0;
+      const anchor = (JSON.parse(row.result) as AnswerRow).joinedTo;
+      this.s.sql.exec("UPDATE _support_work SET due_at = ?1, result = json_remove(result, '$.unclaimed', '$.joinedTo', '$.claimFor'), updated_at = ?1 WHERE id = ?2", now, id);
+      const kept = anchor ? this.s.sql.exec<{ result: string }>('SELECT result FROM _support_work WHERE id = ?', anchor).toArray()[0] : undefined;
+      const also = kept ? (JSON.parse(kept.result) as AnswerRow).also : undefined;
+      if (also?.includes(messageId)) this.s.sql.exec("UPDATE _support_work SET result = json_set(result, '$.also', json(?1)), updated_at = ?2 WHERE id = ?3", JSON.stringify(also.filter(m => m !== messageId)), now, anchor!);
+      return 1;
+    });
   }
   /**
    * "Answer me by email instead" (api/src/support-conversations.ts releaseGeneralAnswer): whoever opened the sign-in link
@@ -234,7 +252,7 @@ export class Inbox {
     } catch (error) {
       // A reply Nightmail refuses for good (no reply target, recipients changed): failed, so staff see it wasn't sent.
       if (error instanceof NightmailError && error.status >= 400 && error.status < 500 && error.status !== 429 && !['IDEMPOTENCY_IN_PROGRESS'].includes(error.code)) {
-        progress.failed = error.code; save();
+        progress.failed = error.code || 'SEND_FAILED'; save();
         return settle('failed');
       }
       throw error;
