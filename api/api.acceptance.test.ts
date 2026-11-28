@@ -12411,7 +12411,8 @@ describe('Hosted MCP OAuth and tools', () => {
           // Approve checks the cap again: a payload over $100 (made before the cap, or by hand) fails and grants nothing.
           const before = await grants();
           await db.query(`UPDATE support_approvals SET payload = jsonb_set(payload, '{amountCents}', '25000') WHERE id = $1`, [asked.body.id]);
-          const over = await decide(asked.body);
+          // Its link now carries the expiry moved above (the token signs it).
+          const over = await decide(lastHour.body);
           assert.deepEqual([over.state, over.result.error, await grants()], ['failed', 'SUPPORT_APPROVAL_OVER_CAP', before]);
           // And that it is the only credit proposal waiting: with a second one beside it (written by hand), approving fails.
           const small = reply(await proposeAs({ amountCents: 5000 }));
