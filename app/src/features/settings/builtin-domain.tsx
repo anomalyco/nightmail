@@ -9,7 +9,7 @@ import type { BuiltinDomain, Domain } from '../../data/types'
 /** Who it sends to and how many. Members only, it also says how to email anyone else. */
 export function builtinSending(builtin: Pick<BuiltinDomain, 'scope' | 'perDay'>) {
   return builtin.scope === 'members'
-    ? `For now it sends only to your workspace members’ own sign-in addresses, up to ${number(builtin.perDay)} a day. Add your own domain to email anyone.`
+    ? `For now it sends only to your workspace members’ own sign-in addresses, up to ${number(builtin.perDay)} a day.`
     : `It sends to anyone, up to ${number(builtin.perDay)} recipients a day.`
 }
 /** What it does now, for its page and Overview. */

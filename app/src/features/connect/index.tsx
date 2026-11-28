@@ -77,7 +77,7 @@ function EnterCode({ initial, error, onCode }: { initial: string; error: unknown
   return <div className="onboarding onboarding--narrow">
     <div className="onboarding-intro onb-rise" style={rise(0)}>
       <h1 className="onboarding-title">Connect an agent</h1>
-      <p className="muted connect-lead">Type the code your coding agent shows. You’ll see what it asks for before it gets anything.</p>
+      <p className="muted connect-lead">Type the code your coding agent shows.</p>
     </div>
     <form className="onboarding-inline-form onb-rise" style={rise(1)} onSubmit={submit} noValidate data-analytics="connect/code">
       <div className="onboarding-field">
@@ -152,7 +152,7 @@ function Review({ request: agent, typed, onDecided, onAnother }: { request: Agen
       <p className="muted">It’s listed under API keys as “<bdi>{agentKeyName(agent.clientName)}</bdi>”. Revoke it there any time.</p>
     </section>
     {!typed && canApprove && <div className="onb-rise" style={rise(4)}><Checkbox checked={confirmed} onCheckedChange={setConfirmed} disabled={!!busy} label={`I started this agent, and it shows ${agent.userCode}`} /></div>}
-    {!canApprove && <Alert tone="info">Only an owner or admin of a workspace can approve an agent. Ask one to open this link, or deny it.</Alert>}
+    {!canApprove && <Alert tone="info">Only an owner or admin of a workspace can approve an agent. Ask one to open this link.</Alert>}
     {error ? <Alert tone="danger">{errorText(error)}{error instanceof ApiError && <span className="ui-error-reference">{error.reference}</span>}</Alert> : null}
     <div className="onboarding-connect-actions connect-decide onb-rise" style={rise(5)}>
       <Button variant="primary" loading={busy === 'approved'} disabled={!canApprove || !confirmed || !!busy} onClick={() => void decide('approved')} data-analytics="connect/approve">Approve</Button>
@@ -168,7 +168,7 @@ function Decided({ decision, workspace, onAnother }: { decision: Decision; works
     <div className="onboarding-connect-status" data-state={approved ? 'ready' : 'failed'} role="status">
       <span className="onboarding-connect-mark" aria-hidden="true"><span className="onboarding-connect-dot" /><Check size={14} strokeWidth={3} /><X size={14} strokeWidth={3} /></span>
       <p><strong>{approved ? `Approved${workspace ? ` for ${workspace}` : ''}` : 'Denied'}</strong>
-        <span>{approved ? 'Your agent gets its key on its next check, within seconds. You can close this page.' : 'Your agent gets nothing. You can close this page.'}</span></p>
+        <span>{approved ? 'Your agent gets its key on its next check, within seconds. You can close this page.' : 'You can close this page.'}</span></p>
     </div>
     <div className="onboarding-connect-actions">
       {approved && <Link className="ui-button ui-button--secondary ui-button--md" to="/api-keys">Open API keys</Link>}
@@ -179,7 +179,7 @@ function Decided({ decision, workspace, onAnother }: { decision: Decision; works
 
 function Closed({ request: agent, onAnother }: { request: AgentRequest; onAnother: () => void }) {
   const text = agent.status === 'expired' ? 'This code expired. Start again in your agent for a new one.'
-    : agent.status === 'denied' ? 'This code was denied: the agent got nothing.'
+    : agent.status === 'denied' ? 'This code was denied.'
     : agent.status === 'approved' ? 'This code was already approved. Its agent gets its key on its next check.'
     : 'This code was already used: its agent has its key.'
   return <div className="onboarding onboarding--narrow">

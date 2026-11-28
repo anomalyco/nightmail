@@ -59,12 +59,12 @@ export function RecordsCorrectAlert() {
 /** `page`: on the domain's own page, which lists the records; elsewhere it links there. `actions`: the page's own (change the name, delete). */
 export function DomainSetupAlert({ domain, gap, page = false, actions }: { domain: Domain; gap: SetupGap; page?: boolean; actions?: ReactNode }) {
   if (gap.noDns) return <Alert tone="danger" title={`No DNS found for ${domain.name}`} data-domain-setup="" data-no-dns="">
-    {page ? 'Check the spelling, or that the domain is registered. Until it has DNS, its records can’t be published and it can’t verify.' : `Check the spelling, or that the domain is registered: mail from ${domain.name} can’t be sent until it has DNS.`}
+    {page ? 'Check the spelling, or that the domain is registered.' : `Check the spelling, or that the domain is registered: mail from ${domain.name} can’t be sent until it has DNS.`}
     {page ? actions && <span className="domain-setup-links">{actions}</span> : <span className="domain-setup-links"><Link to={`/domains/${domain.id}`}>Open the domain</Link></span>}
   </Alert>
   const one = gap.missing === 1, where = gap.host ? `at ${gap.host.name}` : 'where your DNS is hosted'
   return <Alert tone="warning" title={page ? gapTitle(gap) : `${domain.name}: ${gapTitle(gap)}`} data-domain-setup="">
-    {page ? `Public DNS doesn’t have ${one ? 'it' : 'them'} yet, so mail from ${domain.name} can’t be sent. ${gap.wildcard ? `${wildcardMessage(gap.wildcard, gap.host?.name)} Then press Check now.` : `Add ${one ? 'it' : 'them'} ${where}, then press Check now.`}`
+    {page ? (gap.wildcard ? `${wildcardMessage(gap.wildcard, gap.host?.name)} Then press Check now.` : `Add ${one ? 'it' : 'them'} ${where}, then press Check now.`)
       : `Mail from ${domain.name} can’t be sent until ${one ? 'it is' : 'they are'} published ${where}.${gap.wildcard ? ` ${wildcardMessage(gap.wildcard, gap.host?.name)}` : ''}`}
     {(!page || gap.host?.url) && <span className="domain-setup-links">
       {!page && <Link to={`/domains/${domain.id}`}>View records</Link>}

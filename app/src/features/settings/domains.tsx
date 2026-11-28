@@ -39,7 +39,7 @@ function sendingNote(domain: Domain) {
 // The status word alone; what setup still waits for is in its hover title and on the domain's page.
 function SendingCell({ domain }: { domain: Domain }) {
   const { status } = domainState(domain), note = sendingNote(domain)
-  return <StatusDot tone={domain.status === 'issue' ? 'danger' : domain.status === 'verified' ? 'success' : 'warning'} title={note ? `${status} · ${note}` : undefined}>{status}</StatusDot>
+  return <StatusDot tone={domain.status === 'issue' ? 'danger' : domain.status === 'verified' ? 'success' : 'warning'} title={note ?? undefined}>{status}</StatusDot>
 }
 
 // One line per domain: the host it receives at (the domain itself or a subdomain such as reply.), or Off. The column
@@ -50,7 +50,7 @@ function ReceivingCell({ domain, receiving, unknown = false, card = false }: { d
   const issue = domain.receivingIssue
   if (issue) return <StatusDot tone={issue.blocking ? 'danger' : 'warning'} note={receivingIssueReason(issue.code)} title={`${receivingIssueTitle(issue.code, issue.host)}. ${issue.message}`}>{issue.host}</StatusDot>
   if (unknown) return <span className="muted" title="Couldn’t load receiving status">—</span>
-  if (!receiving || receiving.status === 'off' || receiving.status === 'disabled') return <StatusDot tone="neutral" muted title="Receiving is off. Set it up on the domain’s page." note={<Link className="domain-setup-link" to={`/domains/${domain.id}`}>Set up</Link>}>Off</StatusDot>
+  if (!receiving || receiving.status === 'off' || receiving.status === 'disabled') return <StatusDot tone="neutral" muted note={<Link className="domain-setup-link" to={`/domains/${domain.id}`}>Set up</Link>}>Off</StatusDot>
   const status = receivingStatus[receiving.status]
   const detail = receiving.status === 'failed' ? receiving.lastError : receiving.status === 'waiting_for_mx' ? receiving.mx?.message : null
   return <StatusDot tone={status.tone} note={receiving.status !== 'active' ? status.label : card ? `${receiving.addressCount.toLocaleString('en-US')} ${receiving.addressCount === 1 ? 'address' : 'addresses'}` : undefined} title={[`${status.label} at ${receiving.name}`, detail].filter(Boolean).join('. ')}>{receiving.name}</StatusDot>
@@ -298,14 +298,13 @@ function DomainDetail() {
       onConfirm={() => choose.mutateAsync({ host: moveMail!.host, confirm: true })} />
     <Dialog open={renameOpen} onOpenChange={next => { if (!createRenamed.isPending) setRenameOpen(next) }} title="Change name" footer={<><Button disabled={createRenamed.isPending} onClick={() => setRenameOpen(false)}>Cancel</Button><Button variant="primary" loading={createRenamed.isPending} type="submit" form="rename-domain">Add and delete {current.name}</Button></>}>
       <form id="rename-domain" className="stack" onSubmit={submitRename} noValidate>
-        <p className="muted">Adds the domain with the corrected name, then deletes {current.name}.</p>
         <MutationError error={fieldError(createRenamed.error, 'name') ? null : createRenamed.error} />
         <Field label="Domain name" htmlFor="rename-domain-name" error={renameInvalid || fieldError(createRenamed.error, 'name')}><Input id="rename-domain-name" autoFocus required value={renameValue} onChange={event => setRenameValue(event.target.value)} disabled={createRenamed.isPending} placeholder="updates.acme.com" /></Field>
       </form>
     </Dialog>
-    <ConfirmDialog open={deleteOpen} onOpenChange={setDeleteOpen} title={`Delete ${current.name}?`} description="Sending from it stops. Its DNS records stay at your DNS provider until you remove them." confirmLabel="Delete domain" danger pending={remove.isPending} onConfirm={deleteDomain} />
+    <ConfirmDialog open={deleteOpen} onOpenChange={setDeleteOpen} title={`Delete ${current.name}?`} description="Sending from it stops." confirmLabel="Delete domain" danger pending={remove.isPending} onConfirm={deleteDomain} />
     <ConfirmDialog open={removingMailFrom.open} onOpenChange={open => setRemovingMailFrom(state => ({ ...state, open }))} title="Remove custom MAIL FROM?"
-      description={`Mail from ${current.name} goes back to the default MAIL FROM, amazonses.com. You can then delete the MX and SPF records for ${removingMailFrom.name} at your DNS provider.`} confirmLabel="Remove" danger pending={removeMailFrom.isPending} onConfirm={() => removeMailFrom.mutateAsync(id)} />
+      description={`Mail from ${current.name} goes back to the default MAIL FROM, amazonses.com.`} confirmLabel="Remove" danger pending={removeMailFrom.isPending} onConfirm={() => removeMailFrom.mutateAsync(id)} />
     <Dialog open={mailFromOpen} onOpenChange={next => {if (!configureMailFrom.isPending) setMailFromOpen(next)}} title={current.mailFromDomain ? 'Change custom MAIL FROM' : 'Add custom MAIL FROM'} footer={<><Button disabled={configureMailFrom.isPending} onClick={() => setMailFromOpen(false)}>Cancel</Button><Button variant="primary" loading={configureMailFrom.isPending} type="submit" form="configure-mail-from">Save</Button></>}>
       <form id="configure-mail-from" className="stack" onSubmit={submitMailFrom} noValidate>
         <MutationError error={configureMailFrom.error} />
@@ -325,8 +324,7 @@ function BuiltinDomainDetail({ domain, backTo }: { domain: Domain; backTo: strin
     <div className="domain-sections">
       <section className="section stack" aria-label="Built-in domain">
         <SectionHeader title="Built-in domain" />
-        <p className="muted domain-builtin-copy">{[`${productName} set this domain up for your workspace, so it needs no DNS.`, builtin?.name === domain.name ? builtinStatus(builtin) : null,
-          'Once a domain of your own verifies, it stops sending and keeps receiving.', `Mail to an address with no inbox or route of its own goes to ${BUILTIN_INBOX}@${domain.name}.`].filter(Boolean).join(' ')}</p>
+        <p className="muted domain-builtin-copy">{[`${productName} set this domain up for your workspace, so it needs no DNS.`, builtin?.name === domain.name ? builtinStatus(builtin) : null, `Mail to an address with no inbox or route of its own goes to ${BUILTIN_INBOX}@${domain.name}.`].filter(Boolean).join(' ')}</p>
         <div className="cluster"><Link className="ui-button ui-button--secondary ui-button--md" to={`/receiving?domain=${encodeURIComponent(domain.name)}`}>Open in Mail routing</Link><Link className="ui-button ui-button--secondary ui-button--md" to="/domains?add">Add your own domain</Link></div>
       </section>
     </div>
