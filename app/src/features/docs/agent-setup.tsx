@@ -46,7 +46,7 @@ export function agentPrompt({ origin, domain, email, multiTenant, setupToken }: 
     `- API base URL: ${origin}`,
     ...keyLines(origin, setupToken),
     `- Read the docs first: ${origin}/llms.txt (agent-readable index) and ${origin}/docs.md (API reference index; each tag links its full Markdown reference).`,
-    `- Install the TypeScript SDK: npm i ${sdkPackage}. Create the client with createClient from '${sdkPackage}/client' (baseUrl ${origin}) and call it from server code only.`,
+    `- TypeScript/Node: install ${sdkPackage} (npm i ${sdkPackage}), create the client with createClient from '${sdkPackage}/client' (baseUrl ${origin}), and call it from server code only. Other languages (Rust, Python, Go, etc.): call the HTTP API directly using ${origin}/openapi.json, and send an application User-Agent header (avoid default script User-Agents like Python-urllib).`,
     `- Auth: bearer API key from the ${apiKeyEnv} environment variable. Never hardcode it or ship it to a browser.`,
     // The attachment rules up front, so the agent doesn't find them one refused upload or send at a time.
     `- Attachments: ${ATTACHMENT_LIMITS_TEXT} ${ATTACHMENT_RULES_TEXT} A refusal names every attachment problem at once, in error.details.`,

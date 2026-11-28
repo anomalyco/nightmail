@@ -1,6 +1,6 @@
 import { Component, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { Link, NavLink, Outlet, useLocation, useNavigate, useNavigationType, type NavLinkProps } from 'react-router'
-import { BookOpen, Bot, Ellipsis, Globe, Inbox, KeyRound, LayoutGrid, LifeBuoy, Lock, LogOut, MessageCircleQuestionMark, Newspaper, ScrollText, Search, Send, Settings, ShieldCheck, Users, type LucideIcon } from 'lucide-react'
+import { BookOpen, Bot, Ellipsis, Globe, Inbox, KeyRound, LayoutGrid, LifeBuoy, Lock, LogOut, MessageCircleQuestionMark, Newspaper, ScrollText, Search, Send, Server, Settings, ShieldCheck, Users, type LucideIcon } from 'lucide-react'
 import { useRegion, useSession, useWorkspaceAccess } from '../data/context'
 import { preloadRouteChunk, sidebarPaths, usePrefetchQueries, usePrefetchRoute, useRouteIntent } from '../data/prefetch'
 import { useRegionCatalog, useRegionDiscovery } from '../data/regions'
@@ -40,9 +40,9 @@ const preloadConnectAgent = () => { void connectAgent.preload().catch(() => {}) 
 const UiNotesLayer = chunk(() => import('../features/ui-notes')).page(module => module.UiNotesLayer)
 
 // Members can't manage sending infrastructure; the API enforces this too.
-const adminOnly = new Set(['/api-keys', '/domains'])
+const adminOnly = new Set(['/api-keys', '/smtp-imap', '/domains'])
 type NavItem = readonly [path: string, title: string]
-const navigation: readonly NavItem[] = [['/overview', 'Overview'], ['/logs', 'Logs'], ['/receiving', 'Mail routing'], ['/campaigns', 'Campaigns'], ['/audience', 'Audience'], ['/domains', 'Domains'], ['/api-keys', 'API keys'], ['/docs', 'Docs'], ['/settings', 'Settings']]
+const navigation: readonly NavItem[] = [['/overview', 'Overview'], ['/logs', 'Logs'], ['/receiving', 'Mail routing'], ['/campaigns', 'Campaigns'], ['/audience', 'Audience'], ['/domains', 'Domains'], ['/api-keys', 'API keys'], ['/smtp-imap', 'SMTP & IMAP'], ['/docs', 'Docs'], ['/settings', 'Settings']]
 // Nightmail staff (a platform operator role in GET /v1/me) also get the support inbox and the operator console, last.
 const staffLinks: readonly NavItem[] = [['/support', 'Support'], ['/operator', 'Operator']]
 // A self-hosted installation has no operator area; the same address is its Health page (features/operator/health.tsx).
@@ -54,18 +54,18 @@ const operatorPages: readonly NavItem[] = [['/glass', 'Glass']]
 // thumb-tap away and always in view, and More, a sheet with the rest. A drawer would hide every destination behind a
 // button; the tab bar keeps the main ones visible and says where you are.
 const tabs = ['/overview', '/logs', '/receiving', '/campaigns']
-const icons: Record<string, LucideIcon> = { '/overview': LayoutGrid, '/logs': ScrollText, '/receiving': Inbox, '/campaigns': Send, '/audience': Users, '/domains': Globe, '/api-keys': KeyRound, '/docs': BookOpen, '/settings': Settings, '/support': LifeBuoy, '/operator': ShieldCheck, '/glass': LayoutGrid }
+const icons: Record<string, LucideIcon> = { '/overview': LayoutGrid, '/logs': ScrollText, '/receiving': Inbox, '/campaigns': Send, '/audience': Users, '/domains': Globe, '/api-keys': KeyRound, '/smtp-imap': Server, '/docs': BookOpen, '/settings': Settings, '/support': LifeBuoy, '/operator': ShieldCheck, '/glass': LayoutGrid }
 const glyphOf = (path: string) => icons[path] ?? (path.startsWith('/newsletters') ? Newspaper : null)
 const iconOf = (path: string, size: IconSize = 'md') => { const glyph = glyphOf(path); return glyph ? <Icon icon={glyph} size={size} /> : null }
 const current = (path: string, pathname: string) => pathname === path || pathname.startsWith(`${path}/`)
 // The sidebar's four groups. A newsletter sits with Campaigns; staff and self-hosted pages close Workspace.
-const groups = [['Mail', ['/overview', '/logs', '/receiving']], ['Marketing', ['/campaigns', '/audience']], ['Infra', ['/domains', '/api-keys']], ['Workspace', ['/docs', '/settings']]] as const
+const groups = [['Mail', ['/overview', '/logs', '/receiving']], ['Marketing', ['/campaigns', '/audience']], ['Infra', ['/domains', '/api-keys', '/smtp-imap']], ['Workspace', ['/docs', '/settings']]] as const
 const groupOf = (path: string) => path.startsWith('/newsletters') ? 'Marketing' : groups.find(([, paths]) => (paths as readonly string[]).includes(path))?.[0] ?? 'Workspace'
 // Keyboard-first: G then a letter opens a page from anywhere you aren't typing (G O Overview, G L Logs…; G R kept its
 // letter when Receiving became Mail routing), ⌘K finds any page or action, and J and K move through a list's rows.
-const goKeys: Record<string, string> = { '/overview': 'O', '/logs': 'L', '/receiving': 'R', '/campaigns': 'C', '/audience': 'A', '/domains': 'D', '/api-keys': 'K', '/settings': 'S' }
+const goKeys: Record<string, string> = { '/overview': 'O', '/logs': 'L', '/receiving': 'R', '/campaigns': 'C', '/audience': 'A', '/domains': 'D', '/api-keys': 'K', '/smtp-imap': 'M', '/settings': 'S' }
 // What else ⌘K finds each page by: its old name, the things on it.
-const pageWords: Record<string, string> = { '/overview': 'home dashboard', '/logs': 'emails sent received delivered bounced', '/receiving': 'receiving inbound addresses rules destinations inboxes', '/campaigns': 'marketing broadcast templates', '/audience': 'contacts lists segments subscribers', '/domains': 'dns dkim verify', '/api-keys': 'tokens smtp app passwords agents', '/docs': 'documentation guides reference', '/settings': 'billing members webhooks account', '/support': 'inbox conversations', '/operator': 'staff admin health', '/glass': 'live board deliverability health status' }
+const pageWords: Record<string, string> = { '/overview': 'home dashboard', '/logs': 'emails sent received delivered bounced', '/receiving': 'receiving inbound addresses rules destinations inboxes', '/campaigns': 'marketing broadcast templates', '/audience': 'contacts lists segments subscribers', '/domains': 'dns dkim verify', '/api-keys': 'tokens app passwords agents', '/smtp-imap': 'smtp imap mail app server port password', '/docs': 'documentation guides reference', '/settings': 'billing members webhooks account', '/support': 'inbox conversations', '/operator': 'staff admin health', '/glass': 'live board deliverability health status' }
 const commandId = (path: string) => path.startsWith('/newsletters') ? 'go-newsletter' : `go-${path.slice(1).replace(/[^a-z0-9]+/g, '-')}`
 const typing = (target: EventTarget | null) => Boolean((target as HTMLElement | null)?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]'))
 const commandKey = `${modKey}K`
@@ -78,6 +78,10 @@ export function AppShell() {
   const session = useSession()
   const access = useWorkspaceAccess()
   const location = useLocation()
+  // SMTP & IMAP is a page only where the installation has a mail gateway; without one it is as unknown as any address
+  // outside the shell (no entry, no ⌘K action, and /smtp-imap shows the not-found page).
+  const mailGateway = Boolean(session?.identity?.mailServers)
+  const pages = navigation.filter(([path]) => path !== '/smtp-imap' || mailGateway)
   const scoreAbout = useScoreAbout()
   // The support chat, hosted only: Help at the foot of the sidebar (in More on a phone or tablet, and ⌘K),
   // one conversation for the whole visit that stays open across pages. A self-hosted installation has no Help.
@@ -118,8 +122,8 @@ export function AppShell() {
   const prefetchQueries = usePrefetchQueries()
   // A newsletter is an item under its own name where Campaigns sits (features/newsletters/shared.ts has the rule).
   const newsletters = newsletterLinks(useNewsletters())
-  const latest = useRef({ prefetchRoute, pathname: location.pathname, canAdminister: access.canAdminister, newsletters })
-  latest.current = { prefetchRoute, pathname: location.pathname, canAdminister: access.canAdminister, newsletters }
+  const latest = useRef({ prefetchRoute, pathname: location.pathname, canAdminister: access.canAdminister, newsletters, mailGateway })
+  latest.current = { prefetchRoute, pathname: location.pathname, canAdminister: access.canAdminister, newsletters, mailGateway }
   const regionReady = access.multiTenant || Boolean(current)
   // The page in front of the user: its first-screen requests start with its code, not after it, on a cold load too.
   useEffect(() => {
@@ -199,7 +203,7 @@ export function AppShell() {
   }, [access.multiTenant, regions.data, current, enabled, setRegionId])
   // Docs pages name themselves (features/docs).
   const unlisted = session?.identity?.operator ? operatorPages : []
-  useEffect(() => { if (location.pathname === '/docs' || location.pathname.startsWith('/docs/')) return; document.title = `${[...unlisted, ...newsletters, ...navigation, ...(access.multiTenant ? staffLinks : selfHostedLinks)].find(([path]) => location.pathname.startsWith(path))?.[1] ?? productName.toLowerCase()} · ${productName.toLowerCase()}` }, [location.pathname, newsletters.map(([, title]) => title).join('\n'), unlisted.length]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (location.pathname === '/docs' || location.pathname.startsWith('/docs/')) return; document.title = `${[...unlisted, ...newsletters, ...pages, ...(access.multiTenant ? staffLinks : selfHostedLinks)].find(([path]) => location.pathname.startsWith(path))?.[1] ?? productName.toLowerCase()} · ${productName.toLowerCase()}` }, [location.pathname, newsletters.map(([, title]) => title).join('\n'), unlisted.length, mailGateway]) // eslint-disable-line react-hooks/exhaustive-deps
   // "/" jumps to the page's search box, as in most list-heavy tools, unless you are already typing somewhere.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
@@ -248,7 +252,9 @@ export function AppShell() {
       if (armed && Date.now() - armed < 1000) {
         armed = 0
         const path = Object.keys(goKeys).find(item => goKeys[item] === key)
-        if (path) { event.preventDefault(); go.current(path) }
+        // G M is SMTP & IMAP, which exists only where the installation has a mail gateway (the sidebar's rule, read from
+        // a ref so this listener keeps the current one).
+        if (path && (path !== '/smtp-imap' || latest.current.mailGateway)) { event.preventDefault(); go.current(path) }
         return
       }
       armed = key === 'G' && !event.shiftKey ? Date.now() : 0
@@ -269,7 +275,7 @@ export function AppShell() {
     }
   }
   // Members see every page: owner and admin ones carry a lock and open a short note on who can use them.
-  const links: readonly NavItem[] = [...navigation.flatMap(item => item[0] === '/campaigns' ? [...newsletters, item] : [item]), ...session?.identity?.operator || session?.identity?.staffSignIn ? staffLinks : session?.identity && !access.multiTenant ? selfHostedLinks : []]
+  const links: readonly NavItem[] = [...pages.flatMap(item => item[0] === '/campaigns' ? [...newsletters, item] : [item]), ...session?.identity?.operator || session?.identity?.staffSignIn ? staffLinks : session?.identity && !access.multiTenant ? selfHostedLinks : []]
   // An issue open in the composer or its review belongs to its newsletter: that item is marked, not Campaigns.
   const shown = useShownNewsletter(), issueOf = shown && location.pathname.startsWith('/campaigns/') ? newsletters.find(([path]) => path === `/newsletters/${encodeURIComponent(shown)}`)?.[0] ?? (newsletters[0]?.[0] === '/newsletters' ? '/newsletters' : null) : null
   // Your agents lives at /operator/agents (the address an agent's link carries) but belongs to Support, which opens it.

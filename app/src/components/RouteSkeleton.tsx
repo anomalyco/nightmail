@@ -5,7 +5,7 @@ import { isReceivedId } from '../features/logs/rows'
 import { CampaignRouteSkeleton } from '../features/campaigns/skeletons'
 import { NewsletterRouteSkeleton } from '../features/newsletters/skeletons'
 import { AudienceRouteSkeleton } from '../features/audience/skeletons'
-import { SettingsRouteSkeleton } from '../features/settings/skeletons'
+import { SettingsRouteSkeleton, SmtpImapRouteSkeleton } from '../features/settings/skeletons'
 import { GlassSkeleton, OperatorRouteSkeleton } from '../features/operator/skeletons'
 import { SupportRouteSkeleton } from '../features/support-inbox/skeletons'
 import { DocsSkeleton } from '../features/docs/frame'
@@ -14,7 +14,9 @@ import { Button, LoadingRegion, PageHeader } from './ui'
 
 export function RouteSkeleton() {
   const { pathname } = useLocation()
-  const operator = useSession()?.identity?.operator
+  const identity = useSession()?.identity
+  const operator = identity?.operator
+  const { canAdminister } = useWorkspaceAccess()
   const [section, id, view] = pathname.split('/').filter(Boolean)
   if (!section || section === 'overview') return <OverviewRouteSkeleton />
   if (section === 'logs') return !id ? <LogsRouteSkeleton /> : <EmailDetailSkeleton kind={isReceivedId(id) ? 'received' : 'sent'} />
@@ -22,6 +24,9 @@ export function RouteSkeleton() {
   if (section === 'newsletters') return <NewsletterRouteSkeleton id={id} />
   if (section === 'audience') return id === 'lists' ? <AudienceRouteSkeleton kind={view ? 'list' : 'lists'} /> : id === 'segments' ? <AudienceRouteSkeleton kind={view ? 'segment' : 'segments'} isNew={view === 'new'} /> : id === 'topics' ? <AudienceRouteSkeleton kind="topics" /> : <AudienceRouteSkeleton kind={view ? 'contact' : 'contacts'} />
   if (section === 'api-keys') return <SettingsRouteSkeleton kind="keys" />
+  // Without a mail gateway there is no SMTP or IMAP page: an unknown address has no skeleton either. A member gets
+  // the page's own locked note, never a flash of the hosts and settings before it.
+  if (section === 'smtp-imap') return identity?.mailServers && canAdminister ? <SmtpImapRouteSkeleton /> : null
   if (section === 'domains') return <SettingsRouteSkeleton kind={id ? 'domain' : 'domains'} />
   if (section === 'operator') return <OperatorRouteSkeleton operator={operator} />
   if (section === 'glass') return operator ? <GlassSkeleton /> : null

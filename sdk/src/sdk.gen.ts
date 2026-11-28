@@ -572,7 +572,7 @@ export const listContactConsentEvents = <ThrowOnError extends boolean = false>(o
 });
 
 /**
- * Set marketing subscription status, or with topicId the contact's choice about one topic (its sends reach a contact only while marketing consent is subscribed too; each topic change is a contact.subscription_changed event with topicId). Source, policy version, evidence and occurrence time are optional audit context; Nightmail records the actor and current time when omitted. Does not lift delivery suppression. Profile edits cannot establish consent; an import can only when its commit attests consent.
+ * Set marketing subscription status, or with topicId the contact's choice about one topic (its sends reach a contact only while marketing consent is subscribed too; each topic change is a contact.subscription_changed event with topicId). Look up a contact’s ID by email first with listContacts (GET /v1/contacts?email=<address>). Source, policy version, evidence and occurrence time are optional audit context; Nightmail records the actor and current time when omitted. Does not lift delivery suppression. Profile edits cannot establish consent; an import can only when its commit attests consent.
  */
 export const updateContactConsent = <ThrowOnError extends boolean = false>(options: Options<UpdateContactConsentData, ThrowOnError>): RequestResult<UpdateContactConsentResponses, UpdateContactConsentErrors, ThrowOnError> => (options.client ?? client).post<UpdateContactConsentResponses, UpdateContactConsentErrors, ThrowOnError>({
     security: [
@@ -2522,7 +2522,7 @@ export const sendDomainTestEmail = <ThrowOnError extends boolean = false>(option
 });
 
 /**
- * MX owner/admin dashboard only. Returns a signed provider consent URL for eligible pending records, never changes DNS itself. Inline discovery has a three-second budget; unsupported providers and discovery failures fall back to manual DNS. Receiving is offered only after DNS checks find the target empty.
+ * MX owner/admin dashboard only. Returns a signed provider consent URL for eligible pending records, never changes DNS itself. API keys and agents should read the domain’s DNS records from GET /v1/domains/{id} (dns[]) instead. Inline discovery has a three-second budget; unsupported providers and discovery failures fall back to manual DNS. Receiving is offered only after DNS checks find the target empty.
  */
 export const getDomainDnsSetup = <ThrowOnError extends boolean = false>(options: Options<GetDomainDnsSetupData, ThrowOnError>): RequestResult<GetDomainDnsSetupResponses, GetDomainDnsSetupErrors, ThrowOnError> => (options.client ?? client).get<GetDomainDnsSetupResponses, GetDomainDnsSetupErrors, ThrowOnError>({
     security: [{
@@ -2637,7 +2637,7 @@ export const listWebhooks = <ThrowOnError extends boolean = false>(options?: Opt
 });
 
 /**
- * Create an endpoint for email events. The response includes the signing secret (whsec_…) used for the Webhook-Signature header; store it on your server. Deliveries follow Standard Webhooks: Webhook-Signature is v1,<base64 HMAC-SHA256 of "{Webhook-Id}.{Webhook-Timestamp}.{raw body}"> keyed with the base64 bytes after whsec_. Set up over MCP, or with a key that was, it is tied to that approval: approval and nextStep in the result say until when.
+ * Create an endpoint for email events. The response includes the signing secret (whsec_…) used for the Webhook-Signature header; store it on your server. Deliveries follow Standard Webhooks: Webhook-Signature is v1,<base64 HMAC-SHA256 of "{Webhook-Id}.{Webhook-Timestamp}.{raw body}"> keyed with the base64 bytes after whsec_. Failed deliveries (408, 429, 5xx or network error) are tried up to 10 times with exponential backoff (15 s, 1 min, 4 min, 16 min, 64 min, ~4.3 h, then 12 h between remaining attempts, honoring Retry-After). Set up over MCP, or with a key that was, it is tied to that approval: approval and nextStep in the result say until when.
  */
 export const createWebhook = <ThrowOnError extends boolean = false>(options: Options<CreateWebhookData, ThrowOnError>): RequestResult<CreateWebhookResponses, CreateWebhookErrors, ThrowOnError> => (options.client ?? client).post<CreateWebhookResponses, CreateWebhookErrors, ThrowOnError>({
     security: [
@@ -4694,7 +4694,7 @@ export const updateInboundDomain = <ThrowOnError extends boolean = false>(option
 /**
  * Check MX records now
  *
- * Reads public DNS and reports who currently receives mail for the domain. Updates the receiving status when inbound is enabled. Hosted: also checks every receiving host of the domain again in the background within seconds, and keeps checking a host that waits for its MX for a while; read listReceivingHosts for each host’s status. Never changes DNS or AWS.
+ * Reads public DNS and reports who currently receives mail for the domain and each of its receiving hosts (hosts[]). Updates the receiving status when inbound is enabled. Hosted: also checks every receiving host of the domain again in the background within seconds, and keeps checking a host that waits for its MX for a while. Never changes DNS or AWS.
  */
 export const checkInboundDomain = <ThrowOnError extends boolean = false>(options: Options<CheckInboundDomainData, ThrowOnError>): RequestResult<CheckInboundDomainResponses, CheckInboundDomainErrors, ThrowOnError> => (options.client ?? client).post<CheckInboundDomainResponses, CheckInboundDomainErrors, ThrowOnError>({
     security: [

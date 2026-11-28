@@ -2,6 +2,6 @@
 export const credentials: { name: string; line: string; where: string }[] = [
   { name: 'API key', line: 'Your server, a script or an agent uses it: the whole workspace, sending only, or just chosen addresses or one inbox.', where: 'API keys → Create key' },
   { name: 'Agent token', line: 'An agent such as OpenCode or Claude Code signed in as you over MCP, and the short-lived tokens it makes. Revoking it revokes them all.', where: 'Create key → Agent token' },
-  { name: 'SMTP login', line: 'An API key that only sends, from chosen domains or addresses, for an app that sends over SMTP.', where: 'Create key → SMTP login' },
-  { name: 'App password', line: 'Lets a mail app (IMAP or SMTP) open a persistent inbox.', where: 'Create key → App password' },
+  { name: 'SMTP login', line: 'An API key that only sends, from chosen domains or addresses, for an app that sends over SMTP.', where: 'SMTP & IMAP → SMTP' },
+  { name: 'App password', line: 'Lets a mail app (IMAP or SMTP) open a persistent inbox.', where: 'SMTP & IMAP → IMAP' },
 ]

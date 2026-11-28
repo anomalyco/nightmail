@@ -53,10 +53,36 @@ export function visibleMail(text: string | null, html: string | null, extract = 
   const hasStylesheet=!!html && /<(?:style|link)\b/i.test(html);if(hasStylesheet)hiddenContent=true;
   const visible = fragment ? fragment.childNodes.map(walk).join('') : strip(text ?? '');
   if (html && !fragment) hiddenContent = true;
+  const PLAIN_URL = /\bhttps?:\/\/[^\s<>"'`]+/gi;
+  if (extract.includes('links') && links.length < 20) {
+    const seen = new Set(links.map(l => l.href));
+    for (const match of visible.matchAll(PLAIN_URL)) {
+      if (links.length >= 20) break;
+      let raw = match[0];
+      while (raw.length > 8) {
+        const last = raw[raw.length - 1]!;
+        if ('.,;:!?\'"'.includes(last)) { raw = raw.slice(0, -1); continue; }
+        if (last === ')' && (raw.match(/\)/g)?.length ?? 0) > (raw.match(/\(/g)?.length ?? 0)) { raw = raw.slice(0, -1); continue; }
+        if (last === ']' && (raw.match(/\]/g)?.length ?? 0) > (raw.match(/\[/g)?.length ?? 0)) { raw = raw.slice(0, -1); continue; }
+        if (last === '}' && (raw.match(/\}/g)?.length ?? 0) > (raw.match(/\{/g)?.length ?? 0)) { raw = raw.slice(0, -1); continue; }
+        break;
+      }
+      try {
+        const url = new URL(raw);
+        if (['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !seen.has(url.href)) {
+          seen.add(url.href);
+          links.push({ text: raw, href: url.href, mismatch: false });
+        }
+      } catch {
+        /* Not an absolute web link. */
+      }
+    }
+  }
   const codes = new Set<string>();
-  if (extract.includes('codes'))
-    for (const kw of visible.matchAll(/\b(?:code|verification|verify|otp|passcode|one[- ]time|pin)\b/gi)) {
-      const around = visible.slice(Math.max(0, kw.index! - 80), kw.index! + kw[0].length + 80);
+  if (extract.includes('codes')) {
+    const codeText = visible.replace(PLAIN_URL, ' ');
+    for (const kw of codeText.matchAll(/\b(?:code|verification|verify|otp|passcode|one[- ]time|pin)\b/gi)) {
+      const around = codeText.slice(Math.max(0, kw.index! - 80), kw.index! + kw[0].length + 80);
       for (const m of around.matchAll(/\b[A-Z0-9]{4,10}\b/gi))
         if (/\d/.test(m[0])) {
           codes.add(m[0]);
@@ -64,5 +90,6 @@ export function visibleMail(text: string | null, html: string | null, extract = 
         }
       if (codes.size === 5) break;
     }
+  }
   return { text: visible.trim(), hiddenContent, extract: { codes: [...codes], links } };
 }

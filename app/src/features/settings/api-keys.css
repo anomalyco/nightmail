@@ -25,6 +25,17 @@
 .keys-toolbar { align-items: center; gap: var(--space-8) var(--space-16); min-height: var(--control-height); }
 .keys-inactive { margin-left: auto; }
 @media (max-width: 640px) { .keys-toolbar { flex-wrap: wrap; } .keys-inactive { margin-left: 0; } }
+/* SMTP & IMAP (and the secret dialog after creating a login): key/value rows. A host is as small as the rest of its row
+   and wraps rather than being cut; its copy button (shown on hover, always on touch) is a 44 px target on touch. */
+.mail-settings .ui-identifier__value { font-size: inherit; white-space: normal; overflow-wrap: anywhere; }
+.mail-settings .ui-button { font-family: var(--font-body); }
+.mail-settings__server { display: flex; flex-direction: column; align-items: flex-start; }
+.mail-settings__password { display: inline-flex; margin-block: calc(-1 * var(--space-4)); }
+@media (pointer: coarse), (max-width: 899px) {
+  .mail-settings .ui-identifier .ui-icon-button { position: relative; }
+  .mail-settings .ui-identifier .ui-icon-button::after { content: ''; position: absolute; inset: -10px; }
+  .mail-settings__password .ui-button { min-height: 44px; }
+}
 /* Secondary links under the API key form for SMTP login and app password. */
 .keys-alt { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-4) var(--space-8); margin-top: var(--space-16); font-size: var(--text-sm); }
 .keys-alt > .cluster { gap: var(--space-4); }
@@ -96,3 +107,6 @@
 /* A card's title is a button once the card opens the details; keep its clipped name ending in an ellipsis. */
 .keys-table .ui-card__title > .ui-card__link { display: block; width: 100%; min-width: 0; }
 .keys-table .ui-card__link > span { display: block; overflow: clip; text-overflow: ellipsis; white-space: nowrap; }
+/* A card's access line (an app password's or inbox key's address after what it can do): the address takes the room
+   left and ends in an ellipsis, rather than the line clipping it away. */
+.keys-table .ui-card__segment > .private-address { min-width: 0; }
