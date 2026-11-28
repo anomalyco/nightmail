@@ -5,8 +5,9 @@ import { z } from '@hono/zod-openapi';
 import type { SESv2Client, Tenant } from '@aws-sdk/client-sesv2';
 import type { Subscription } from '@aws-sdk/client-sns';
 import type { CloudWatchClient } from '@aws-sdk/client-cloudwatch';
-import { ApiError, assertSesConfigured, lazyModule, logError, ModuleLoadError } from './core.js';
-import type { Config, Runtime } from './core.js';
+import { ApiError, lazyModule, logError, ModuleLoadError } from './core/errors.js';
+import { assertSesConfigured } from './core/ses.js';
+import type { Config, Runtime } from './core/types.js';
 import { claimNameAllowed, domainName } from './domain-claims.js';
 import type { IdentityFacts } from './states.js';
 import { FEEDBACK_EVENTS, feedbackPolicy, poolEventDestination, poolSuppression } from './mail-controls.js';
@@ -58,7 +59,7 @@ export type SesSetupOptions = { region: string; installationId: string; namespac
 export type SesProvisionOptions = SesSetupOptions & { registerTopic: (accountId: string, topicArn: string) => Promise<void> };
 
 // OPEN/CLICK destinations support tracking-enabled sends; per-message tracking overrides
-// in sending.ts still disable instrumentation when tracking:false. Consent stays in Nightmail.
+// in sending/front-door.ts still disable instrumentation when tracking:false. Consent stays in Nightmail.
 // SEND is intentionally absent: provider acceptance is already recorded from the SendEmail response,
 // and the callback would double feedback volume at the full send rate.
 const EVENTS = FEEDBACK_EVENTS;

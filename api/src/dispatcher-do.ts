@@ -1,16 +1,16 @@
 import { DurableObject } from 'cloudflare:workers';
 import type { Pool } from 'pg';
-import { shardsForRate, TARGET_SHARD_RATE, type GateState } from './dispatcher.js';
+import { shardsForRate, TARGET_SHARD_RATE, type GateState } from './sending/quota.js';
 export { shardsForRate, TARGET_SHARD_RATE };
-import type { Runtime } from './core.js';
+import type { Runtime } from './core/types.js';
 import { InboxWaiters, serveInboxWake } from './inbox-wake.js';
 
 function initDeps() {
   return Promise.all([
     import('pg'), import('drizzle-orm/node-postgres'), import('drizzle-orm/sql'),
-    import('./config.js'), import('./adapters/storage.js'), import('./dispatcher.js'),
-    import('./core.js'), import('./adapters/feedback-queue.js'), import('./health-counters.js'), import('./screen-shadow.js'),
-  ]).then(([{ Pool }, { drizzle }, { sql }, { loadConfig }, { r2Storage }, { initialGate, runDispatcher, dispatchWakeKey,shardLeaseSize }, { ApiError, log, logError, platformMessage, setLogContext }, { feedbackSink, workWake }, { countersDue, flushCounters }, { enqueueShadow }]) => ({
+    import('./config.js'), import('./adapters/storage.js'), import('./sending/quota.js'), import('./sending/dispatcher.js'),
+    import('./core/errors.js'), import('./log.js'), import('./adapters/feedback-queue.js'), import('./health-counters.js'), import('./screen-shadow.js'),
+  ]).then(([{ Pool }, { drizzle }, { sql }, { loadConfig }, { r2Storage }, { initialGate, shardLeaseSize }, { runDispatcher, dispatchWakeKey }, { ApiError, logError, platformMessage }, { log, setLogContext }, { feedbackSink, workWake }, { countersDue, flushCounters }, { enqueueShadow }]) => ({
     Pool, drizzle, sql, loadConfig, r2Storage, initialGate, runDispatcher, dispatchWakeKey,shardLeaseSize, ApiError, log, logError, platformMessage, setLogContext, feedbackSink, workWake, countersDue, flushCounters, enqueueShadow,
   }));
 }
@@ -18,7 +18,7 @@ let depsPromise: ReturnType<typeof initDeps> | undefined;
 function loadDeps() {
   return depsPromise ??= initDeps().catch(async error => {
     depsPromise = undefined;
-    const core = await import('./core.js').catch(() => null);
+    const core = await import('./core/errors.js').catch(() => null);
     throw core ? (error instanceof core.ModuleLoadError ? error : new core.ModuleLoadError(error)) : error;
   });
 }
@@ -28,7 +28,7 @@ function loadDeps() {
 // per-invocation setup the queue consumer did, and an evicted object resumes from storage
 // without bursting past its quota share. PostgreSQL rows remain the only queue.
 //
-// Content screening runs at API accept time (src/sending.ts) before anything enters the sending queue, so the mail room
+// Content screening runs at API accept time (src/sending/front-door.ts) before anything enters the sending queue, so the mail room
 // never calls a classifier and visitor wakes never interrupt running alarms. A wake arms the alarm when idle and nudges
 // priorityWake when running; the platform runs one alarm() at a time, so runs never overlap.
 
@@ -201,7 +201,7 @@ export class DispatcherShard extends DurableObject<Env> {
       // Module loading itself can fail; still log, close and retry so the shard never wedges.
       if (!deps) console.error(JSON.stringify({ level: 'error', timestamp: new Date().toISOString(), service: 'worker', code: 'DISPATCHER_DEPS_FAILED' }));
       else {
-        // `cause` says why (core.ts platformMessage): the platform's own words for a Durable Object storage or binding
+        // `cause` says why (core/errors.ts platformMessage): the platform's own words for a Durable Object storage or binding
         // failure, never a database error's text. The line is also counted (src/health-counters.ts), so a shard that
         // keeps failing becomes the dispatcher-failing alert (src/health.ts). The count is written after this run, on a
         // connection of its own that recovery never waits for.

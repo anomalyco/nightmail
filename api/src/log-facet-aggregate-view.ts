@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { DbExecutor } from './core.js';
+import type { DbExecutor } from './core/types.js';
 import { parseLogFacetCut, type LogFacetCut, type LogFacetPeriod } from './log-facet-source.js';
 import { captureFacetSignature, facetGenerationIntact } from './log-facet-aggregate-retention.js';
 

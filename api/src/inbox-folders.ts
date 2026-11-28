@@ -1,6 +1,8 @@
 import {createRoute,z} from '@hono/zod-openapi';
 import {sql} from 'drizzle-orm';
-import {ApiError,errors,json,response,security,type App,type Ctx,type MailboxAccess} from './core.js';
+import { ApiError, errors } from './core/errors.js';
+import { json, response, security } from './core/http.js';
+import type { App, Ctx, MailboxAccess } from './core/types.js';
 import type {MailboxPermission} from './db/mailbox.js';
 
 export const LegacyRole=z.enum(['inbox','sent','junk','archive','trash']);

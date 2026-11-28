@@ -1,6 +1,9 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, asc, eq, gt, isNotNull, isNull, sql, type SQL } from 'drizzle-orm';
-import { actor, ApiError, databaseCodeOf, errors, IdParams, isoTime, json, notFound, page, PageQuery, response, rowId, security, statementTimedOut, type App, type Database, type DbExecutor } from './core.js';
+import { actor } from './core/access.js';
+import { ApiError, databaseCodeOf, errors, notFound } from './core/errors.js';
+import { IdParams, isoTime, json, page, PageQuery, response, rowId, security, statementTimedOut } from './core/http.js';
+import type { App, Database, DbExecutor } from './core/types.js';
 import { consentAudit, topics } from './db/audience.js';
 import { enqueue } from './jobs.js';
 
@@ -54,7 +57,7 @@ export async function contactTopicStates(db: DbExecutor, workspaceId: string, co
   return (await topicStates(db, workspaceId, contactId, null)).map(({ id, archived: _, ...row }) => ({ topicId: id, ...row }));
 }
 
-/** A send's topic as its audience reads it (src/audience.ts consented). subscribedByDefault never changes. */
+/** A send's topic as its audience reads it (src/audience/counts.ts consented). subscribedByDefault never changes. */
 export type TopicRule = { id: string; subscribedByDefault: boolean };
 /**
  * The topic a send names: TOPIC_NOT_FOUND unless the workspace has it, and, with `active`, it isn't archived (a new send

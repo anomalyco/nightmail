@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
-import { ApiError, type PublicImage } from '../core.js';
+import { ApiError } from '../core/errors.js';
+import type { PublicImage } from '../core/types.js';
 
 const MAX_BYTES = 8 * 1024 * 1024;
 const types = new Set<PublicImage['contentType']>(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);

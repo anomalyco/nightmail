@@ -1,5 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { log, type Runtime } from './core.js';
+import { log } from './log.js';
+import type { Runtime } from './core/types.js';
 import { SlackRefused } from './reputation-alerts.js';
 import { WRITE_LIMITS } from './health-counters.js';
 

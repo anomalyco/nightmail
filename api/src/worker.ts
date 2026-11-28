@@ -1,7 +1,7 @@
 import {gatewayLane} from './protocol-admission.js';
 import { getPath } from 'hono/utils/url';
 import { WorkerEntrypoint } from 'cloudflare:workers';
-import type { Config, FeedbackItem, Runtime } from './core.js';
+import type { Config, FeedbackItem, Runtime } from './core/types.js';
 import { DispatcherShard, dispatcherName, shardCount, shardsForRate } from './dispatcher-do.js';
 import { CampaignRoom } from './campaign-room.js';
 import { durableInboxWake } from './inbox-wake.js';
@@ -64,14 +64,14 @@ function initRuntimeDeps() {
   return Promise.all([
     import('pg'), import('drizzle-orm/node-postgres'), import('drizzle-orm/sql'),
     import('./config.js'), import('./adapters/storage.js'),
-    import('./jobs.js'), import('./core.js'),
+    import('./jobs.js'), import('./core/errors.js'), import('./core/http.js'), import('./log.js'),
     import('./adapters/browser-rendering.js'), import('./adapters/public-image.js'), import('./adapters/feedback-queue.js'), import('./screen-shadow.js'),
-  ]).then(([{ Pool }, { drizzle }, { sql }, { CONFIG_KEYS, loadConfig }, { r2Storage }, { followDueJobs, jobConcurrency, WAKE_SCHEDULE_KEY }, core, { browserImageRenderer }, { publicImageImporter }, { feedbackSink, settleFeedbackBatch, legacyFeedbackCutover, workWake, batchFirstDeliveryLag, metricsEffectiveLagMs }, { enqueueShadow, consumeShadow, writeComparisons, writtenComparisons }]) => ({
-    Pool, drizzle, sql, CONFIG_KEYS, loadConfig, r2Storage, followDueJobs, jobConcurrency, WAKE_SCHEDULE_KEY, core, browserImageRenderer, publicImageImporter, feedbackSink, settleFeedbackBatch, legacyFeedbackCutover, workWake, batchFirstDeliveryLag, metricsEffectiveLagMs, enqueueShadow, consumeShadow, writeComparisons, writtenComparisons,
+  ]).then(([{ Pool }, { drizzle }, { sql }, { CONFIG_KEYS, loadConfig }, { r2Storage }, { followDueJobs, jobConcurrency, WAKE_SCHEDULE_KEY }, errors, http, logging, { browserImageRenderer }, { publicImageImporter }, { feedbackSink, settleFeedbackBatch, legacyFeedbackCutover, workWake, batchFirstDeliveryLag, metricsEffectiveLagMs }, { enqueueShadow, consumeShadow, writeComparisons, writtenComparisons }]) => ({
+    Pool, drizzle, sql, CONFIG_KEYS, loadConfig, r2Storage, followDueJobs, jobConcurrency, WAKE_SCHEDULE_KEY, core: { ...errors, ...http, ...logging }, browserImageRenderer, publicImageImporter, feedbackSink, settleFeedbackBatch, legacyFeedbackCutover, workWake, batchFirstDeliveryLag, metricsEffectiveLagMs, enqueueShadow, consumeShadow, writeComparisons, writtenComparisons,
   }));
 }
 async function toModuleLoadError(error: unknown): Promise<never> {
-  const core = await import('./core.js').catch(() => null);
+  const core = await import('./core/errors.js').catch(() => null);
   throw core ? (error instanceof core.ModuleLoadError ? error : new core.ModuleLoadError(error)) : error;
 }
 let runtimeDepsPromise: ReturnType<typeof initRuntimeDeps> | undefined;
@@ -149,7 +149,7 @@ async function roomVisit(env: Env, rooms: NonNullable<Env['CAMPAIGN_ROOMS']>, ro
 function quiet(room: string, now: number) { if (quietRooms.size > 1000) quietRooms.clear(); quietRooms.set(room, now + QUIET_MS); }
 
 // Every line names the Worker and the commit it runs (DEPLOY_SHA, set by .github/scripts/deploy-worker.sh).
-function stampLogs(env: Env, core: typeof import('./core.js')) {
+function stampLogs(env: Env, core: Pick<typeof import('./log.js'), 'setLogContext'>) {
   core.setLogContext({ service: 'worker', deploy: (env as unknown as Record<string, unknown>).DEPLOY_SHA });
 }
 
@@ -209,7 +209,7 @@ async function withRuntime<T>(env: Env, work: (runtime: Runtime) => Promise<T>, 
     return await work({ db, storage: r2Storage(env.ATTACHMENTS), config, shadow: shadowQueue && (items => { const sent = enqueueShadow(shadowQueue, items); if (keepShadow) keepShadow(sent); else handovers.push(sent); }), mailR2: env.MAIL && { bucket:env.MAIL,name:setting(env,'MAIL_BUCKET')!,write:setting(env,'MAIL_STORE')==='r2' }, jwksCacheScope: env.HYPERDRIVE,
       allowSnsCertMiss: async peer => (await env.SNS_CERT_MISSES.limit({key: `bane:sns-miss:${await core.digest(peer)}`})).success,
       allowMalformedSns: async peer => (await env.ADMISSION.limit({key:`bane:sns-malformed:${await core.digest(peer)}`})).success,
-      // Weighted so a peer's 20 failed SNS verifications a minute spend the limiter's 6,000 (operations.ts SnsFailureBudget).
+      // Weighted so a peer's 20 failed SNS verifications a minute spend the limiter's 6,000 (ses/sns-ingress.ts SnsFailureBudget).
       allowSnsFailure: async peer => (await env.ADMISSION.limit({key:`bane:sns-invalid:${await core.digest(peer)}`,delta:300} as RateLimitOptions)).success,
       // 6,000 units of 16 KiB a minute per workspace in each location: about 94 MiB of preview memory, eight previews at the limit.
       // The per-isolate budget is the memory bound, so a limiter that rejects the weight fails open.
@@ -417,7 +417,7 @@ export default {
       // The network Cloudflare resolved the client to, never a value the request carried.
       headers.delete(clientNetworkHeader);
       // A browser's WebSocket can't send headers: the campaign room's upgrade names its account and workspace in the query,
-      // which stand in for the headers the dashboard sends with every other request (sending.ts, the room route).
+      // which stand in for the headers the dashboard sends with every other request (campaigns/routes.ts, the room route).
       if (/^\/v1\/campaigns\/[^/]+\/room$/.test(pathname) && request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
         for (const name of ['account', 'workspace']) { const value = url.searchParams.get(name); if (value && !requestHeaderNames(name).some(header => headers.has(header))) headers.set(requestHeaderNames(name)[0]!, value); }
       }
@@ -466,7 +466,7 @@ export default {
       : batch.queue === queueName(env, 'FEEDBACK_DLQ_NAME', '') ? 'tagged-dlq'
       : batch.queue === queueName(env, 'LEGACY_FEEDBACK_DLQ_NAME', '') ? 'legacy-dlq' : undefined;
     if (feedbackLane) {
-      const { ingestFeedbackBatch, archiveQueueFeedback, retainLegacyFeedback, completeLegacyFeedback } = await core.wrapModuleLoad(() => import('./operations.js'));
+      const { ingestFeedbackBatch, archiveQueueFeedback, retainLegacyFeedback, completeLegacyFeedback } = await core.wrapModuleLoad(() => import('./ses/feedback.js'));
       // Each message is one verified callback; acknowledge and retry individually so one bad
       // payload never blocks a batch of routine deliveries. Only items this installation tagged at
       // /v1/events/ses are ingested. Only platform-dated, pre-cutover legacy items may drain unsigned;
@@ -494,7 +494,7 @@ export default {
             lastPriorityLagWrite = nowMs;
             lastPriorityLagHigh = fresh.oldestMs >= 60_000;
             try {
-              const { recordFeedbackLag } = await import('./sending.js');
+              const { recordFeedbackLag } = await import('./sending/events.js');
               await recordFeedbackLag(runtime.db, 'priority', fresh.count, fresh.oldestMs);
             } catch { /* Minute cron refreshes lag independently. */ }
           }
@@ -589,7 +589,7 @@ export default {
       try {
       if (lagSamples.length) {
         try {
-          const { recordFeedbackLag, FEEDBACK_LAG_MIN_DEPTH } = await import('./sending.js');
+          const { recordFeedbackLag, FEEDBACK_LAG_MIN_DEPTH } = await import('./sending/events.js');
           // Apply a depth floor on queue-level metrics(): a few poison/unmatchable messages sitting in Cloudflare retry
           // backoff carry their original enqueue timestamp but do not represent a stalled consumer backlog.
           for (const sample of lagSamples) {
@@ -598,16 +598,16 @@ export default {
           }
         } catch { core.log('warn', { code: 'FEEDBACK_LAG_RECORD_FAILED' }); }
       }
-      try { const { drainFeedbackRecovery } = await import('./operations.js'); await drainFeedbackRecovery(runtime); }
+      try { const { drainFeedbackRecovery } = await import('./ses/feedback.js'); await drainFeedbackRecovery(runtime); }
       catch { core.log('error',{code:'FEEDBACK_RECOVERY_DRAIN_FAILED'}); }
       await reconcileSharedConnections(runtime); // Installation work must not depend on a workspace or a successful queue drain.
       // A pool region nothing has sent through yet still gets its SES quota sampled (Glass, the customer share); never throws.
-      await (await core.wrapModuleLoad(() => import('./dispatcher.js'))).refreshPoolQuotas(runtime);
+      await (await core.wrapModuleLoad(() => import('./sending/quota.js'))).refreshPoolQuotas(runtime);
       // Glass's deliverability sources (SES health, VDM, Spamhaus DBL), each due at its own time; never throws.
       await (await core.wrapModuleLoad(() => import('./glass-deliverability.js'))).refreshDeliverabilitySources(runtime);
       try { await syncOutboundMessages(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'MAILBOX_OUTBOUND_SYNC_FAILED' }); }
       // Screen any pre-deploy or rollout-window rows held with screened=false outside the mail room before waking shards.
-      try { await (await core.wrapModuleLoad(() => import('./sending.js'))).screenHeldMail(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'HELD_SCREEN_SWEEP_FAILED' }); }
+      try { await (await core.wrapModuleLoad(() => import('./sending/held-screen.js'))).screenHeldMail(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'HELD_SCREEN_SWEEP_FAILED' }); }
       // Received mail queued for the refilling budget comes due within minutes; the drain below runs its release.
       try { await (await core.wrapModuleLoad(() => import('./mailbox-staging.js'))).scheduleHoldRelease(runtime); } catch (error) { core.log('warn', { code: error instanceof core.ApiError ? error.code : 'MAILBOX_HOLD_RELEASE_FAILED' }); }
       await Promise.allSettled((await dispatchPartitions(runtime, true)).map(({ region, accountId, kind, maxSendRate }) => wakeDispatchers(env, region, accountId, undefined, kind, false, maxSendRate)));

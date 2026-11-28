@@ -4,7 +4,10 @@ import { ANALYTICS_ROOT, analyticsStore, attribution, expireSalts, logAnalyticsF
 import { exportRange, exportRollups, partition, pushDue, rollupHour } from './analytics-rollups.js';
 import { sql } from 'drizzle-orm';
 import { z } from 'zod';
-import { ApiError, digest, log, type App, type Runtime } from './core.js';
+import { ApiError } from './core/errors.js';
+import { digest } from './core/http.js';
+import { log } from './log.js';
+import type { App, Runtime } from './core/types.js';
 import { clientIpHeader } from './brand.js';
 import { ANALYTICS_EVENT_TYPES, ANALYTICS_LIMITS, ANALYTICS_PATH, FUNNEL_STEPS, VALIDITY_REASONS, VIEWPORTS, analyticsId, analyticsName, fieldName, operationTemplate, routeTemplate, scrubLabel } from './analytics-events.js';
 

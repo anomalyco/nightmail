@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { Ctx, Database, Runtime } from './core.js';
+import type { Ctx, Database, Runtime } from './core/types.js';
 import { log } from './log.js';
 import { WRITE_LIMITS } from './health-counters.js';
 

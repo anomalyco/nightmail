@@ -11,14 +11,18 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, eq, gt, isNull, sql } from 'drizzle-orm';
 import { manageKeys } from './auth.js';
-import { actor, admits, dashboardSession, errors, memberRefused, response, security, type App } from './core.js';
+import { actor, admits, dashboardSession, memberRefused } from './core/access.js';
+import { errors } from './core/errors.js';
+import { response, security } from './core/http.js';
+import type { App } from './core/types.js';
 import { apiKeys } from './db/core.js';
 import { webhooks } from './db/operations.js';
 import { byoWorkspace } from './domain-claims.js';
 import { emails } from './db/sending.js';
 import { workspaceInvitations } from './db/workspaces.js';
-import { DomainPage, domainPage, domainReader, workspaceActor } from './operations.js';
-import { mailWhere } from './sending.js';
+import { DomainPage, domainPage, domainReader } from './domains/hosted.js';
+import { workspaceActor } from './webhooks/crypto.js';
+import { mailWhere } from './sending/schemas.js';
 import { withRegionSettings } from './ses-region-state.js';
 
 const Setup = z.object({

@@ -377,7 +377,7 @@ export function nextGrowth(prev: Growth, o: { graduated: boolean; established?: 
  * The campaign ramp and send readiness: one table. A Hosted sender's first large campaigns go out in hourly steps that
  * grow, as an SES or ESP warm-up schedule grows a new sender's volume, compressed from days to hours because Hosted mail
  * leaves shared IPs that are already warm: what is new is the sender's domain, its links and its list. The release loop
- * enforces it per campaign (src/sending.ts releaseStep), for marketing only and for every Hosted workspace, exempt and
+ * enforces it per campaign (src/campaigns/run.ts releaseStep), for marketing only and for every Hosted workspace, exempt and
  * first-party ones included (exemptions waive billing and limits, never bounce and complaint monitoring). Transactional
  * mail never waits for it.
  *  - steps: the hourly ceiling of each step, in order. Each step lasts at least an hour from its first release.
@@ -392,7 +392,7 @@ export function nextGrowth(prev: Growth, o: { graduated: boolean; established?: 
  *    more than `bounceRate` hard bounces of at least `bounceMinimum` accepted (the list probe's line and size), or more
  *    than `complaintRate` complaints counting at least `complaints` (the automatic pause's rate, the probe's count, so 1
  *    complaint in 300 is not enough) pause the campaign. The same lines judge a sender's history clean.
- *  - readiness: the review's verdict on a marketing campaign (src/sending.ts sendReadiness). Over `required.recipients`, a
+ *  - readiness: the review's verdict on a marketing campaign (src/campaigns/views.ts sendReadiness). Over `required.recipients`, a
  *    From domain first seen less than `newDomainDays` ago or a send over `required.jump` times the workspace's largest
  *    in `lookbackDays` (0 without one) needs the plan, a daily cap no larger than its first day, or a confirmed consent
  *    source (Hosted live sends; elsewhere it is a recommendation). Over `recommended.recipients`, a new domain, a send over
@@ -400,7 +400,7 @@ export function nextGrowth(prev: Growth, o: { graduated: boolean; established?: 
  *    theirs, no DMARC record, or the last `windowDays` days' bounces or complaints over theirs recommend the plan.
  *  - plan: one batch a day, the first the larger of `firstBatch` and `cleanFactor` times the largest clean previous send,
  *    each next `growth` times the last, at most `maxBatches`, the last taking the rest. Contacts who opened or clicked in
- *    `engagedDays` go first, then those mailed before, never-mailed last (src/audience.ts snapshotCampaignAudience).
+ *    `engagedDays` go first, then those mailed before, never-mailed last (src/audience/counts.ts snapshotCampaignAudience).
  *  - consent: the length of a confirmed consent source.
  * A sender with no history reaches the last step in nine clean hours, having released at most about 600,000 recipients.
  */
@@ -469,7 +469,7 @@ export function estimateFinish(o: { recipients: number; start: number; ratePerSe
   return left > 1e-6 ? null : Math.round(t);
 }
 
-/** What the review judges a marketing campaign by (src/sending.ts sendReadiness gathers it). */
+/** What the review judges a marketing campaign by (src/campaigns/views.ts sendReadiness gathers it). */
 export type ReadinessFacts = {
   recipients: number; matched: number | null; risky: number; neverMailed: number | null;
   /** Days since this workspace added the From domain (or the domain it is under). */

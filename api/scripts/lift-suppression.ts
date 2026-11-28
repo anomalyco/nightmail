@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { parseArgs } from 'node:util';
 import { Client } from 'pg';
 import { postgresConnection } from '../src/adapters/node.js';
-import { log } from '../src/core.js';
+import { log } from '../src/log.js';
 import { mxResourceName } from '../src/ses-setup.js';
 
 type Reason = 'BOUNCE' | 'COMPLAINT';

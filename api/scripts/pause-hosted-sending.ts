@@ -2,7 +2,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { parseArgs } from 'node:util';
 import { Client } from 'pg';
 import { postgresConnection } from '../src/adapters/node.js';
-import { log } from '../src/core.js';
+import { log } from '../src/log.js';
 import { pauseHostedByOperator } from '../src/states.js';
 
 // Pauses a Hosted workspace after an operator's review, with the reason in hosted_operator_audit in the same statement.

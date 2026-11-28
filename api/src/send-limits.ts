@@ -49,7 +49,7 @@ export const SEND_LIMITS = {
   /** What every large-attachment path in one isolate may hold at once (isolate-memory.ts): with the loaded app's
    * ~25 MB this keeps a Worker isolate under ~90 MB of its 128 MB. */
   isolateWorkingBytes: 64 * 1024 * 1024,
-  /** Verified attachment bytes an isolate keeps for the next message that sends them (sending.ts verifiedAttachment). Part
+  /** Verified attachment bytes an isolate keeps for the next message that sends them (sending/mime.ts verifiedAttachment). Part
    * of isolateWorkingBytes, not beside it: a reservation that needs their room drops them first. */
   attachmentCacheBytes: 32 * 1024 * 1024,
   /** How the encoded size is estimated: body parts grow by bodyFactor, each attachment is base64 grown by lineFactor

@@ -1,6 +1,8 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import { ApiError, errors, id, json, response, type App, type Ctx } from './core.js';
+import { ApiError, errors } from './core/errors.js';
+import { id, json, response } from './core/http.js';
+import type { App, Ctx } from './core/types.js';
 import { operatorRequired, requireOperator } from './audit.js';
 import { CONVERSATION_ID } from './support-platform.js';
 import { productName } from './brand.js';

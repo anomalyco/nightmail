@@ -1,4 +1,4 @@
-import { ApiError } from './core.js';
+import { ApiError } from './core/errors.js';
 import { setupResources } from './ses-setup.js';
 
 /** Why a connected account's role is assumed: the session's name is nightmail-<purpose>. */

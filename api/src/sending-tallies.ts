@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm';
-import { log, logError, type DbExecutor, type Runtime } from './core.js';
+import { log } from './log.js';
+import { logError } from './core/errors.js';
+import type { DbExecutor, Runtime } from './core/types.js';
 
 /** Triggers whose active presence guarantees sending_campaign_tallies and sending_metrics_hourly stay in sync. */
 const TALLY_TRIGGERS = ['sending_tally_insert', 'sending_tally_update', 'sending_tally_delete'] as const;

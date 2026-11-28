@@ -1,6 +1,8 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, json, errors, logError, response, security, type App, type Runtime } from './core.js';
+import { ApiError, errors, logError } from './core/errors.js';
+import { json, response, security } from './core/http.js';
+import type { App, Runtime } from './core/types.js';
 import { linkBudget, linkRoot, lockLinkDomain } from './link-domains.js';
 import { mutate, operatorActor } from './operator.js';
 import { cachedDashboardRead } from './dashboard-cache.js';
@@ -211,7 +213,7 @@ export async function refreshDeliverabilitySources(runtime: Runtime, { fetch: ge
         ON CONFLICT (kind,subject) DO UPDATE SET next_at=excluded.next_at WHERE c.next_at<=now() RETURNING c.kind,c.subject,c.next_at)
       SELECT c.kind,c.subject,w.account,c.next_at::text AS lease FROM claimed c JOIN wanted w USING (kind,subject) ORDER BY c.kind='vdm',c.kind,c.subject`);
     if (!rows.length) return;
-    const { loadDispatchTransport, poolSes } = await import('./dispatcher.js');
+    const { loadDispatchTransport, poolSes } = await import('./sending/quota.js');
     let transport: Awaited<ReturnType<typeof loadDispatchTransport>> | undefined, google: Promise<string> | undefined;
     for (const row of rows) {
       let status = 'ok', detail: Record<string, unknown> | null = null;

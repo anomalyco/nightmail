@@ -213,7 +213,7 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
 // src/operation-permissions.ts, which the acceptance test "permission table" checks against what REST enforces.
 {
   const before = failed, file = 'api/src/operation-permissions.ts';
-  const { OPERATION_PERMISSIONS, permissionExtension } = await import('../src/operation-permissions.js'), { PERMISSIONS } = await import('../src/core.js');
+  const { OPERATION_PERMISSIONS, permissionExtension } = await import('../src/operation-permissions.js'), { PERMISSIONS } = await import('../src/core/errors.js');
   const spec = registeredDocument as { paths: Record<string, Record<string, Record<string, unknown> & { operationId?: string }>> };
   const operations = Object.values(spec.paths).flatMap(item => Object.values(item)).filter(op => op.operationId);
   const valid = (row: Record<string, unknown> | undefined) => !!row && (row.access ? ['public', 'staff', 'any'].includes(String(row.access)) && Object.keys(row).every(k => ['access', 'text'].includes(k))
@@ -473,8 +473,8 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
   // Jobs a migration's SQL function inserts (triggers, send_admission and the like) need handlers too.
   for (const name of readdirSync(new URL('migrations/', api)).filter(n => n.endsWith('.sql')).sort()) insertedTypes(readFileSync(new URL(`migrations/${name}`, api), 'utf8'), `api/migrations/${name}`);
   const registries = await Promise.all([
-    import('../src/sending.js').then(m => ['api/src/sending.ts', m.jobHandlers] as const),
-    import('../src/operations.js').then(m => ['api/src/operations.ts', m.operationJobs] as const),
+    import('../src/sending/jobs.js').then(m => ['api/src/sending/jobs.ts', m.jobHandlers] as const),
+    import('../src/webhooks/operations.js').then(m => ['api/src/webhooks/operations.ts', m.operationJobs] as const),
     import('../src/ses-regions.js').then(m => ['api/src/ses-regions.ts', m.sesRegionJobs] as const),
     import('../src/reputation-alerts.js').then(m => ['api/src/reputation-alerts.ts', m.reputationAlertJobs] as const),
     import('../src/operator-alerts.js').then(m => ['api/src/operator-alerts.ts', m.operatorAlertJobs] as const),

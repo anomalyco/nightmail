@@ -1,4 +1,4 @@
-import { lazyModule } from './core.js';
+import { lazyModule } from './core/errors.js';
 
 // Request modules can import the lookup functions without loading the registry
 // snapshot. Claim validation needs the PSL, but never needs to build the RDAP map.

@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util';
 import { Client } from 'pg';
 import { postgresConnection } from '../src/adapters/node.js';
-import { log } from '../src/core.js';
+import { log } from '../src/log.js';
 
 export async function setWorkspaceExemption(db: Client, args: string[]) {
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { reason: { type: 'string' } } });

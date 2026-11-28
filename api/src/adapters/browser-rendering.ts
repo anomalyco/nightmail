@@ -1,4 +1,4 @@
-import type { RenderedImage } from '../core.js';
+import type { RenderedImage } from '../core/types.js';
 
 const WIDTH = 720;
 const MAX_IMAGE_BYTES = 8 * 1024 * 1024;

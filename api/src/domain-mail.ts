@@ -1,6 +1,6 @@
 import { sql, type SQLWrapper } from 'drizzle-orm';
 
-// Received mail a key limited to sender domains reads (core.ts domainMailAccess): the SQL both the message reads
+// Received mail a key limited to sender domains reads (core/access.ts domainMailAccess): the SQL both the message reads
 // (thread-view.ts visibleLinks, inbound-threads.ts) and the event log (mailbox-events.ts) apply. No imports beyond
 // drizzle, so neither pulls in the other.
 

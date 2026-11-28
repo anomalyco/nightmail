@@ -1,6 +1,6 @@
 import { Client } from 'pg';
 import { postgresConnection } from '../src/adapters/node.js';
-import { log } from '../src/core.js';
+import { log } from '../src/log.js';
 
 // Operator DB access only. Never exposed as a workspace API or dashboard setting.
 export async function setByoV2(db:Client,args:string[]) {

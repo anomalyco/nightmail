@@ -4,7 +4,7 @@
 // One atomic, audited transition. Never lower a larger override or change an already exempt workspace.
 //   STAGE=dev PUBLIC_URL=https://dev.nightmail.dev NIGHTMAIL_E2E_DOMAIN_ID=dom_... DATABASE_URL=... node --import tsx scripts/dev-e2e-fixture.ts
 import type { Client } from 'pg';
-import { log } from '../src/core.js';
+import { log } from '../src/log.js';
 
 export const DEV_E2E_SEND_CAP = 100_000;
 const FIXTURE_DOMAINS = ['e2e.bane.mx', 'e2e-va.bane.mx'];

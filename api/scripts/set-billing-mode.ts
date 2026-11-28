@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 import { Client } from 'pg';
 import { postgresConnection } from '../src/adapters/node.js';
 import { auditInsert, systemContext } from '../src/audit.js';
-import { log } from '../src/core.js';
+import { log } from '../src/log.js';
 
 const MODES = ['prepaid', 'exempt'] as const;
 

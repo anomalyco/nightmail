@@ -1,4 +1,4 @@
-import { ApiError } from './core.js';
+import { ApiError } from './core/errors.js';
 import { placementRoot } from './domain-registry.js';
 import { SHORTENERS, subjectStats, THRESHOLDS } from './deliverability.js';
 import { lint, PreviewLimitError, type Issue, type Client } from './email-preview/index.js';

@@ -291,7 +291,7 @@ function publicIssueBody(problem: Problem, windowEnd: string) {
 }
 
 // Per-request records, not errors: a classifier request that failed and an email the dispatcher deferred are logged at warn
-// on purpose (src/screen.ts, src/dispatcher.ts). The report counts them like any code but never files them as new.
+// on purpose (src/screen.ts, src/sending/dispatcher.ts). The report counts them like any code but never files them as new.
 const RECORD_CODES = ['CONTENT_SCREEN_CALL', 'DISPATCH_EMAIL'];
 function problems(target: Stage, today: Window, baseline: Window[]): Problem[] {
   const found: Problem[] = [];

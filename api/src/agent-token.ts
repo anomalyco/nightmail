@@ -1,7 +1,7 @@
 import { z } from '@hono/zod-openapi';
 import { Buffer } from 'node:buffer';
 import { hkdfSync } from 'node:crypto';
-import type { Config, Permission } from './core.js';
+import type { Config, Permission } from './core/types.js';
 import { secretPrefixes } from './brand.js';
 
 const Payload = z.object({

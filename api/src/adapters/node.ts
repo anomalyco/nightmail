@@ -5,8 +5,9 @@ import { request } from 'node:https';
 import { isIPv4, type LookupFunction } from 'node:net';
 import type { Duplex } from 'node:stream';
 import { loadConfig } from '../config.js';
-import { ApiError, log } from '../core.js';
-import type { Runtime, WebhookFetch } from '../core.js';
+import { ApiError } from '../core/errors.js';
+import { log } from '../log.js';
+import type { Runtime, WebhookFetch } from '../core/types.js';
 import { s3Storage } from './storage.js';
 import { InboxWaiters, MAX_WATCH_MS, onlyWhenWoken, readNotice, type InboxWake } from '../inbox-wake.js';
 

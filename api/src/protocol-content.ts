@@ -1,5 +1,7 @@
 import { sql, eq, and } from 'drizzle-orm';
-import { ApiError, id, logError, type Actor, type Ctx } from './core.js';
+import { ApiError, logError } from './core/errors.js';
+import { id } from './core/http.js';
+import type { Actor, Ctx } from './core/types.js';
 import { mailboxes } from './db/mailbox.js';
 import { principal } from './mail-gateway.js';
 import { boundMailBucket, mailKey, withMailObjects } from './mail-objects.js';

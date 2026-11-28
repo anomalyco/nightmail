@@ -1,6 +1,6 @@
 import { z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
-import type { Config, Runtime } from './core.js';
+import type { Config, Runtime } from './core/types.js';
 import { receivingPolicy } from './mailbox-ingest-input.js';
 
 // What an MCP approval made or changed is tied to it (mail_grant_objects): a key it created works, and a webhook it set

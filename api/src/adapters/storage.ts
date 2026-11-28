@@ -1,5 +1,5 @@
-import { ApiError, lazyModule, ModuleLoadError } from '../core.js';
-import type { Storage } from '../core.js';
+import { ApiError, lazyModule, ModuleLoadError } from '../core/errors.js';
+import type { Storage } from '../core/types.js';
 import { SEND_LIMITS } from '../send-limits.js';
 // The largest object written through Storage: an attachment.
 const MAX_OBJECT_BYTES = SEND_LIMITS.attachmentBytes;

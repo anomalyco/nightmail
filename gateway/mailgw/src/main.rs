@@ -635,7 +635,7 @@ fn api_backend(token: Option<String>, url: Option<String>) -> Result<Option<Arc<
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // One JSON object per line, like the API's logs (api/src/core.ts): CloudWatch Logs Insights reads the fields and
+    // One JSON object per line, like the API's logs (api/src/log.ts): CloudWatch Logs Insights reads the fields and
     // the nightly report (api/scripts/nightly-report.ts) counts `code` per day. Never log addresses or credentials.
     tracing_subscriber::fmt()
         .json()

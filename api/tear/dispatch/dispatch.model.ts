@@ -1055,7 +1055,7 @@ const dispatchIdleRules: IdleRule<DispatchSnapshot>[] = [
       return undefined;
     },
   },
-  // Temporal rule 2 of 5: backoff: a throttled row waits 2 s ±25% (jittered, src/dispatcher.ts) before retry: at least
+  // Temporal rule 2 of 5: backoff: a throttled row waits 2 s ±25% (jittered, src/sending/quota.ts) before retry: at least
   // 1.5 s (1490 ms tolerance).
   {
     id: "dispatch.backoff",

@@ -5,7 +5,8 @@ import { Pool } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { createApp } from '../src/app.js';
 import { loadConfig } from '../src/config.js';
-import { digest, id, type Runtime } from '../src/core.js';
+import { digest, id } from '../src/core/http.js';
+import type { Runtime } from '../src/core/types.js';
 import { drain } from '../src/dispatch.js';
 
 // Deliberately refuses production, existing development databases and real AWS.

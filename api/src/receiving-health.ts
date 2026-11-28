@@ -1,5 +1,5 @@
 import {sql} from 'drizzle-orm';
-import type {Runtime} from './core.js';
+import type { Runtime } from './core/types.js';
 import {TAG_PREFIX} from './resource-tags.js';
 import {healthService} from './brand.js';
 

@@ -2,7 +2,7 @@ import { setTimeout } from 'node:timers/promises';
 import { Client } from 'pg';
 import { nodeLogFacetLane, nodeRuntime, postgresConnection } from './adapters/node.js';
 import { drain,drainJobs } from './dispatch.js';
-import { refreshPoolQuotas, type GateState } from './dispatcher.js';
+import { refreshPoolQuotas, type GateState } from './sending/quota.js';
 import { refreshDeliverabilitySources } from './glass-deliverability.js';
 import { jobConcurrency } from './jobs.js';
 import { hourlyUpkeep, retentionTick } from './maintenance.js';
@@ -19,7 +19,8 @@ import { bootstrapLogFacet, LOG_FACET_BOOTSTRAP_TICK_MS } from './log-facet-boot
 import { syncOutboundMessages } from './mailbox-send.js';
 import { scheduleHoldRelease } from './mailbox-staging.js';
 import { queueStartupDiscovery } from './ses-regions.js';
-import { ApiError, log, logError, setLogContext } from './core.js';
+import { ApiError, logError } from './core/errors.js';
+import { log, setLogContext } from './log.js';
 setLogContext({ service: 'runner', deploy: process.env.DEPLOY_SHA });
 try {
   const { runtime, close } = nodeRuntime(process.env);
@@ -137,7 +138,7 @@ try {
           await seedAbuseStages(runtime);
           await drainSamples();
         }).catch(() => log('warn',{code:'ABUSE_SAMPLE_DRAIN_FAILED'})).finally(() => { sampler=undefined; });
-        if (recover) try { await (await import('./sending.js')).screenHeldMail(runtime); } catch (error) { log('warn', { code: error instanceof ApiError ? error.code : 'HELD_SCREEN_SWEEP_FAILED' }); }
+        if (recover) try { await (await import('./sending/held-screen.js')).screenHeldMail(runtime); } catch (error) { log('warn', { code: error instanceof ApiError ? error.code : 'HELD_SCREEN_SWEEP_FAILED' }); }
         if (recover) try { await scheduleHoldRelease(runtime); } catch (error) { log('warn', { code: error instanceof ApiError ? error.code : 'MAILBOX_HOLD_RELEASE_FAILED' }); }
         if (recover && runtime.config.multiTenant) try { await (await import('./billing/stripe-jobs.js')).billingMinute(runtime); } catch (error) { log('warn', { code: error instanceof ApiError ? error.code : 'BILLING_MINUTE_FAILED' }); }
         if (recover && runtime.config.multiTenant) try { await (await import('./domain-setup.js')).domainSetupTick(runtime); } catch (error) { log('warn', { code: error instanceof ApiError ? error.code : 'DOMAIN_SETUP_TICK_FAILED' }); }

@@ -1,5 +1,8 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, denied, isSimulatedSes, log, type Runtime } from './core.js';
+import { ApiError, denied } from './core/errors.js';
+import { isSimulatedSes } from './core/ses.js';
+import { log } from './log.js';
+import type { Runtime } from './core/types.js';
 import { SEND_LIMITS } from './send-limits.js';
 import { platformPolicy, regionalSending, unverifiedSender, type SendingBinding } from './domain-claims.js';
 import { marketingHeld, type HostedAllowance } from './hosted-sending.js';

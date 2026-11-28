@@ -1,4 +1,5 @@
-import { log, type Config } from './core.js';
+import { log } from './log.js';
+import type { Config } from './core/types.js';
 
 // The customer's own requests, from this Worker's request lines in Workers Logs (api/README.md "Support integration"):
 // app.ts writes one `event: 'request'` line per request (route template, method, status, code, workspace, principal,

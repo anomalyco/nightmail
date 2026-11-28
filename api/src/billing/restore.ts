@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { JobHandler } from '../core.js';
+import type { JobHandler } from '../core/types.js';
 
 /**
  * billing.restored (queued by billing_post on every credit): releases receive holds in batches and wakes campaign runs

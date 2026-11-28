@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { DbExecutor } from './core.js';
+import type { DbExecutor } from './core/types.js';
 import type { MxReport } from './db/mailbox.js';
 import { checkMx, delegatedZone } from './mailbox-dns.js';
 import { hostRemoved, hostRoutes, hostRoutesSql, isProofRecord, type HostStatus, type IdentityFacts } from './states.js';

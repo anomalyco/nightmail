@@ -1,5 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, log, type Config, type DbExecutor, type Runtime } from './core.js';
+import { ApiError } from './core/errors.js';
+import { log } from './log.js';
+import type { Config, DbExecutor, Runtime } from './core/types.js';
 import { builtinRefusal, isBuiltinHost } from './builtin-domain.js';
 import { LINK_LABEL, LINK_RETENTION_DAYS } from './link-hosts.js';
 import { placementRoot } from './domain-registry.js';

@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { logError, type Config, type Runtime } from './core.js';
+import { logError } from './core/errors.js';
+import type { Config, Runtime } from './core/types.js';
 import { log } from './log.js';
 
 // A second classifier in the shadow of the content screen. Each primary request not routed to the failover gate (src/screen.ts
@@ -10,7 +11,7 @@ import { log } from './log.js';
 //
 // What is awaited where:
 // - src/screen.ts evaluate keeps the request it just made (keepShadow): assignments into a buffer in memory, nothing awaited.
-// - When a dispatch run or a job drain has ended (src/dispatcher.ts runDispatcher, src/jobs.ts processJobs), flushShadow
+// - When a dispatch run or a job drain has ended (src/sending/dispatcher.ts runDispatcher, src/jobs.ts processJobs), flushShadow
 //   hands the buffer over and returns at once. Nothing in a run or a drain ever waits for the second classifier.
 // - On Node the hand-over is to a ShadowRunner in this process, which calls the second classifier in the background.
 //   On Cloudflare it is messages on a queue of its own (the JEVF_QUEUE binding, enqueueShadow), one per request, and

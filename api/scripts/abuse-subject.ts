@@ -4,7 +4,8 @@ import { Client } from 'pg';
 import { abuseSubject, EXCLUSION_SOURCES, type ExclusionSource, type SubjectTarget } from '../src/abuse.js';
 import { postgresConnection } from '../src/adapters/node.js';
 import { loadConfig } from '../src/config.js';
-import { log, type Runtime } from '../src/core.js';
+import { log } from '../src/log.js';
+import type { Runtime } from '../src/core/types.js';
 
 // What abuse monitoring (src/abuse.ts) holds about one person or workspace, for an access, objection or erasure request
 // that privacy@ has verified. It shows kinds and counts, never values, and never another customer's data.

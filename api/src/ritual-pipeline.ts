@@ -1,5 +1,6 @@
 import { z } from '@hono/zod-openapi';
-import { digest, type Runtime } from './core.js';
+import { digest } from './core/http.js';
+import type { Runtime } from './core/types.js';
 import { jevQuestions } from './screen.js';
 import { visibleMail } from './inbox-content.js';
 import { safeForwardHtml } from './mailbox-send.js';

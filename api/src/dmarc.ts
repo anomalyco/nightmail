@@ -1,4 +1,4 @@
-import { ModuleLoadError } from './core.js';
+import { ModuleLoadError } from './core/errors.js';
 import { placementRoot } from './domain-registry.js';
 import { dns, fqdn, txtText } from './public-dns.js';
 import type { IdentityFacts } from './states.js';

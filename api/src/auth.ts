@@ -1,8 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, eq, gt, isNull, sql, type SQL } from 'drizzle-orm';
 import type { MiddlewareHandler } from 'hono';
-import { ApiError, actor, agentTokenMintRefusal, denied, digest, requiredOf, errors, hasSessionCookie, id, IdParams, isoTime, json, keyAdminRefusal, PageQuery, page, randomSecret, response, security, senderDomainAllowed, timed, waitForPollTick, withOuterRequest, wrapModuleLoad } from './core.js';
-import type { Actor, App, AppEnv, Ctx, DbExecutor, MailboxAccess, RequestOrigin, Runtime } from './core.js';
+import { ApiError, denied, requiredOf, errors, wrapModuleLoad } from './core/errors.js';
+import { actor, agentTokenMintRefusal, keyAdminRefusal, senderDomainAllowed } from './core/access.js';
+import { digest, hasSessionCookie, id, IdParams, isoTime, json, PageQuery, page, randomSecret, response, security, timed } from './core/http.js';
+import { waitForPollTick, withOuterRequest } from './core/types.js';
+import type { Actor, App, AppEnv, Ctx, DbExecutor, MailboxAccess, RequestOrigin, Runtime } from './core/types.js';
 import { agentTokens, apiKeys } from './db/core.js';
 import { mailboxKeys } from './db/mailbox.js';
 import { AuditEntry, auditContext, auditInsert, keyTrail, LastChange, lastChanges, recordAudit, type AuditVia } from './audit.js';
@@ -250,11 +253,11 @@ export const authenticate: MiddlewareHandler<AppEnv> = async (c, next) => {
   } else if (authorization !== undefined) {
     const token = authorization.match(/^Bearer (.+)$/i)?.[1];
     if (!token || token.length > 16 * 1024) throw new ApiError(401, 'AUTH_INVALID', 'The API token is invalid or has been revoked.');
-    // A send with a key this isolate verified a minute ago admits the request in one statement (sending.ts).
+    // A send with a key this isolate verified a minute ago admits the request in one statement (sending/front-door.ts).
     if (API_KEY.test(token) && c.env.config.multiTenant && c.req.method==='POST' && ['/v1/emails/send','/v1/emails/batch'].includes(c.req.path)) {
       const hash = await digest(token);
       if((verifiedFingerprints.get(hash)??0)>Date.now()) {
-        const {tryAtomicKeyAdmission}=await wrapModuleLoad(()=>import('./sending.js'));
+        const {tryAtomicKeyAdmission}=await wrapModuleLoad(()=>import('./sending/front-door.js'));
         // The statement found no working key: revoked or expired since this isolate verified it, refused as bearerActor would.
         const response=await tryAtomicKeyAdmission(c,charge=>credentialCtes(apiKeys,sql`${apiKeyRow(c, hash)} AND g.grant_id IS NULL`,charge))
           .catch(async (failure: unknown) => { throw failure instanceof ApiError && failure.code === 'AUTH_INVALID' ? await keyRefusal(c.env.db, sql`k.hash = ${hash}`) : failure; });
@@ -373,7 +376,7 @@ export async function keyInputRefusal(c: Ctx, issues: readonly KeyIssue[], targe
 const keyInputHook = (operation: string) => async (result: { success: boolean; target: string; error?: { issues: readonly KeyIssue[] } }, c: Ctx) => {
   if (!result.success) throw await keyInputRefusal(c, result.error!.issues, result.target, operation);
 };
-/** Key administration's actor (core.ts keyAdminRefusal). */
+/** Key administration's actor (core/access.ts keyAdminRefusal). */
 export function manageKeys(c: Parameters<typeof actor>[0]) {
   // keyAdminRefusal first: it refuses what actor's manage check would, saying more to a key that isn't full access.
   const signedIn = c.get('actor'), refusal = signedIn && keyAdminRefusal(signedIn);

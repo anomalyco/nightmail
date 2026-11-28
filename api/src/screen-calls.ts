@@ -1,9 +1,11 @@
 import { sql } from 'drizzle-orm';
-import { log, logError, type Runtime } from './core.js';
+import { log } from './log.js';
+import { logError } from './core/errors.js';
+import type { Runtime } from './core/types.js';
 
 // content_screen_calls (migration 397): one row per classifier request, the same record as its CONTENT_SCREEN_CALL line
 // (src/screen.ts), for operators who read the database. A row waits in memory, per database client, until
-// flushScreenCalls writes them all in one INSERT when a dispatch run ends (src/dispatcher.ts runDispatcher) or a job drain
+// flushScreenCalls writes them all in one INSERT when a dispatch run ends (src/sending/dispatcher.ts runDispatcher) or a job drain
 // ends (src/jobs.ts processJobs). So no write sits between a lease and SES or inside a statement that records a send, and
 // a write that fails or takes more than two seconds drops its rows with one log line. A run that never ends (a deploy, an
 // evicted isolate) loses the rows it was holding; nothing waits for them. The INSERT runs under a transaction-local
@@ -12,7 +14,7 @@ import { log, logError, type Runtime } from './core.js';
 
 /** Outbound calls this isolate has in flight, by kind, for each classifier request's record: a Worker invocation waits for
  *  response headers on at most six connections at once, so a classifier request can queue behind SES sends while its
- *  deadline runs. The dispatcher counts its SES sends here (src/dispatcher.ts pacedSender); the classifier's own are
+ *  deadline runs. The dispatcher counts its SES sends here (src/sending/dispatcher.ts pacedSender); the classifier's own are
  *  counted in src/screen.ts. Records only: nothing reads it to decide anything. */
 export const outbound = { ses: 0 };
 

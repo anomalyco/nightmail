@@ -15,7 +15,7 @@
 // and the picture checks on attachments (hostedCopy, shownAttachment) apply to them too, as the screen reads no picture.
 import { defaultTreeAdapter, html as spec, serializeOuter, type DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
-import { ApiError } from './core.js';
+import { ApiError } from './core/errors.js';
 
 type Node = DefaultTreeAdapterMap['childNode'];
 type Element = DefaultTreeAdapterMap['element'];

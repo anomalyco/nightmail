@@ -3,7 +3,7 @@ import { Client } from 'pg';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { postgresConnection } from '../src/adapters/node.js';
 import { resumeHostedSending } from '../src/states.js';
-import { log } from '../src/core.js';
+import { log } from '../src/log.js';
 import { EVALUATION } from '../src/standing-model.js';
 
 // Resumes a paused or marketing-held Hosted workspace after review, in one statement with its audit row. The limit is

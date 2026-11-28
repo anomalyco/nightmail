@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { ApiError, log } from './core.js';
+import { ApiError } from './core/errors.js';
+import { log } from './log.js';
 import { SEND_LIMITS } from './send-limits.js';
 
 // One byte budget for every path that holds large payloads in memory: raw uploads, attachment downloads, template asset
@@ -122,7 +123,7 @@ const activeHolds = new Set<ActiveHold>();
 const waiting: Waiter[] = [];
 
 /**
- * Idle buffers kept for reuse (verified attachments, src/sending.ts verifiedAttachment). They are memory the isolate
+ * Idle buffers kept for reuse (verified attachments, src/sending/mime.ts verifiedAttachment). They are memory the isolate
  * holds just as a hold is, so the budget counts them: whenever holds, caches and a new reservation together would pass
  * it, the oldest cached bytes are dropped first. `evict(bytes)` drops at least that many, or everything it holds.
  */

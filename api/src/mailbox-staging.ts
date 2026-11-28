@@ -1,6 +1,8 @@
 import { sql } from 'drizzle-orm';
 import {mailKindTag} from './resource-tags.js';
-import { ApiError, lazyModule, log, type JobHandler, type Runtime } from './core.js';
+import { ApiError, lazyModule } from './core/errors.js';
+import { log } from './log.js';
+import type { JobHandler, Runtime } from './core/types.js';
 import { JobDeferred, retryDatabaseFailures } from './jobs.js';
 import { acceptInboundNotification, recoverHeldReceipts, sesIdPattern } from './mailbox-receipts.js';
 import { assertMailboxKey,mailboxS3, STAGING_PREFIX } from './mailbox-setup.js';

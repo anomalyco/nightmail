@@ -1,5 +1,9 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, id, isSimulatedSes, log, ModuleLoadError, type DbExecutor, type JobHandler, type Runtime } from './core.js';
+import { ApiError, ModuleLoadError } from './core/errors.js';
+import { id } from './core/http.js';
+import { isSimulatedSes } from './core/ses.js';
+import { log } from './log.js';
+import type { DbExecutor, JobHandler, Runtime } from './core/types.js';
 import { JobDeferred, MAX_ATTEMPTS, retryDatabaseFailures } from './jobs.js';
 import { RATES } from './billing/money.js';
 import { SEND_LIMITS } from './send-limits.js';
@@ -25,12 +29,12 @@ const keyOf = (origin: Origin) => 'standingEvent' in origin ? `standing:${origin
  * One notice to its recipients, from the platform workspace's own sender (NIGHTMAIL_NOTIFY_FROM), one email each.
  * 'unconfigured' when the installation has no such sender: the dashboard still shows what the email would have said.
  * `sealed`: the email carries a capability only its recipient may use (a sign-in link), so the platform workspace's own
- * readers see it withheld (sending.ts visibleEmailContent).
+ * readers see it withheld (campaigns/materialize.ts visibleEmailContent).
  */
 export async function deliverNotice(runtime: Runtime, to: string[], notice: Notice, origin: Origin, sealed = false): Promise<'sent' | 'unconfigured'> {
   const from = runtime.config.notifyFrom, sender = runtime.config.platformDomainWorkspace;
   if (!from || !sender || !runtime.config.multiTenant) return 'unconfigured';
-  const { sendSystemEmail } = await import('./sending.js');
+  const { sendSystemEmail } = await import('./sending/held-screen.js');
   try { await sendSystemEmail(runtime, sender, { from, to, ...notice, idempotencyKey: keyOf(origin), ...origin, sealed }); }
   catch (error) {
     // The key was used with other words: a build before this one sent this notice and its job is being retried.
@@ -102,7 +106,7 @@ export async function queueNotice(db: DbExecutor, n: Queued, savepoint = false):
 export const domainUnverified = (db: DbExecutor, workspaceId: string, domain: { id: string; name: string; lostSince: string | null }) =>
   queueNotice(db, { workspaceId, kind: 'domain_unverified', dedupe: `domain:${domain.id}:${domain.lostSince ?? ''}`, data: { domainId: domain.id, name: domain.name } }, true);
 
-/** A proven domain released because its ownership records were gone for 30 days (operations.ts expireDomainClaims). Once per claim. */
+/** A proven domain released because its ownership records were gone for 30 days (domains/hosted.ts expireDomainClaims). Once per claim. */
 export const domainReleased = (db: DbExecutor, workspaceId: string, domain: { name: string; token: string }) =>
   queueNotice(db, { workspaceId, kind: 'domain_released', dedupe: `domain-released:${domain.token}`, data: { name: domain.name } }, true);
 

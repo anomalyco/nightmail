@@ -4,7 +4,10 @@ import type { SESClient as SESClientType, ReceiptRule } from '@aws-sdk/client-se
 import type { LifecycleRule, S3Client as S3ClientType } from '@aws-sdk/client-s3';
 import type { SNSClient as SNSClientType } from '@aws-sdk/client-sns';
 import type { STSClient as STSClientType } from '@aws-sdk/client-sts';
-import { ApiError, assertSesConfigured, lazyModule, log, ModuleLoadError, type DbExecutor, type JobHandler, type Runtime } from './core.js';
+import { ApiError, lazyModule, ModuleLoadError } from './core/errors.js';
+import { assertSesConfigured } from './core/ses.js';
+import { log } from './log.js';
+import type { DbExecutor, JobHandler, Runtime } from './core/types.js';
 import { jobs } from './db/core.js';
 import { mailboxDomains, mailboxRegions,type MxReport } from './db/mailbox.js';
 import { enqueue, JobDeferred, MAX_ATTEMPTS, retryDatabaseFailures } from './jobs.js';

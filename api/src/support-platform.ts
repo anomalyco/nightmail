@@ -1,4 +1,4 @@
-import type { Config } from './core.js';
+import type { Config } from './core/types.js';
 import { ceilingFor } from './support-conversations.js';
 import type { AgentAnswer, Brief, ConversationEvidence, FeedbackReport, FiledConversation, GeneralAnswerDue, Handoff, HandoffCheck, HandoffClaims, InboxState, MirroredMessage, MirroredState, OutboxReply, PlatformReply, RegisteredConversation, StaffEmail, StaffReply, StaffReplyIgnored, SupportPlatformRpc, TriageNoteInput } from './support-contract.js';
 export type { AgentAnswer, Brief, ConversationEvidence, FeedbackReport, FiledConversation, GeneralAnswerDue, Handoff, HandoffCheck, HandoffClaims, InboxState, MirroredMessage, MirroredState, OutboxReply, PlatformReply, RegisteredConversation, StaffEmail, StaffReply, StaffReplyIgnored, SupportPlatformRpc, TriageNoteInput };

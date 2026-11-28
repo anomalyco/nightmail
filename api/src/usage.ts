@@ -1,6 +1,10 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import { actor, actorMailAccess, ApiError, errors, requiredOf, restrictedArea, unrestrictedRequired, isSimulatedSes, notFound, response, security, type App } from './core.js';
+import { actor, actorMailAccess } from './core/access.js';
+import { ApiError, errors, requiredOf, restrictedArea, unrestrictedRequired, notFound } from './core/errors.js';
+import { isSimulatedSes } from './core/ses.js';
+import { response, security } from './core/http.js';
+import type { App } from './core/types.js';
 import { DASHBOARD_CACHE_NOTE, dashboardRead } from './dashboard-cache.js';
 import { hostedAllowance, type HostedAllowance } from './hosted-sending.js';
 import { RATES } from './billing/money.js';

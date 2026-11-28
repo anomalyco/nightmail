@@ -1,6 +1,9 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, errors, json, log, notFound, response, type App, type DbExecutor } from './core.js';
+import { ApiError, errors, notFound } from './core/errors.js';
+import { json, response } from './core/http.js';
+import { log } from './log.js';
+import type { App, DbExecutor } from './core/types.js';
 import { supportPlatformOnly } from './support-conversations.js';
 import { CONVERSATION_ID } from './support-platform.js';
 import { requestTrace } from './support.js';

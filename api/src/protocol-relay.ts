@@ -1,5 +1,8 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, digest, senderDomainAllowed, wrapModuleLoad, type Actor, type Ctx, type Runtime } from './core.js';
+import { ApiError, wrapModuleLoad } from './core/errors.js';
+import { digest } from './core/http.js';
+import { senderDomainAllowed } from './core/access.js';
+import type { Actor, Ctx, Runtime } from './core/types.js';
 import { apiKeys } from './db/core.js';
 import { mailboxKeys } from './db/mailbox.js';
 import { API_KEY, checkBudget, credentialCtes } from './auth.js';
@@ -15,7 +18,7 @@ import { parseSubmission, sealedMime } from './submission-mime.js';
 /**
  * Send-only SMTP for apps. An app signs in to the mail gateway's SMTP with the username `apikey` and, as the password,
  * an API key that can only send: a workspace key with send alone, limited to sender domains, or a key for receiving
- * addresses with send alone. Its messages go through POST /v1/emails/send (sending.ts admitRelayed): the same
+ * addresses with send alone. Its messages go through POST /v1/emails/send (sending/front-door.ts admitRelayed): the same
  * admission, limits, screening, billing, suppression, events and dispatch checks as a request with that key, and the
  * key's own minute budget. It never opens a mailbox: IMAP refuses it and it has no folders.
  *
@@ -89,7 +92,7 @@ export async function relaySubmit(c: Ctx, p: Submitted) {
     subject: m.subject || '(no subject)', ...m.text?.trim() ? { text: m.text } : m.html ? {} : { text: ' ' }, ...m.html ? { html: m.html } : {},
     attachments, headers: submittedHeaders(m.headers.map(h => ({ name: h.originalKey, value: h.value }))), ...mime ? { mime } : {},
   }));
-  const { storeAttachmentBytes, admitRelayed, checkRelayed } = await wrapModuleLoad(() => import('./sending.js'));
+  const { storeAttachmentBytes } = await wrapModuleLoad(() => import('./sending/mime.js')), { admitRelayed, checkRelayed } = await wrapModuleLoad(() => import('./sending/front-door.js'));
   const a: Actor = { keyId: p.kid, workspaceId: key.workspace_id, permissions: ['send'], domains: key.domains };
   if (files.length) await checkRelayed(rt, a, messages([])[0]!);
   // One file decoded at a time, each let go once it is stored.

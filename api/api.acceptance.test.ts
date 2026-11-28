@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { createHash, createHmac, createPublicKey, generateKeyPairSync, hkdfSync, randomBytes, randomUUID, sign, verify as verifySignature, X509Certificate } from 'node:crypto';
 import pg from 'pg';
 import { readFile } from 'node:fs/promises';
-import { SnsCertificateState } from './src/operations.js';
+import { SnsCertificateState } from './src/ses/sns-ingress.js';
 import {bucketPolicy,deliveryPolicy,feedbackPolicy,inboundPolicy,lifecycleRules,POOL_STREAMS,poolEventDestination,poolSuppression,publicAccessBlock,receiptRule,redrivePolicy} from './src/mail-controls.js';
 // On Linux, Node gives a child a socket as stdin, which openssl cannot reopen through /dev/stdin, so pass a private temp file.
 async function selfSignedPem(key:import('node:crypto').KeyObject) {
@@ -257,7 +257,7 @@ test('Cloudflare static files: only files the deployed build has get a cache lif
   assert.equal(sent(capped.headers,'/assets/chunk-0.js').get('cache-control'),FILE_CACHE.assets);
 });
 /** Settle one tagged feedback message whose ingestion returns `outcome`, as the queue consumer does: its retry delay, 'ack', 'retired' (routine unmatched) or 'archived'. */
-async function settleOne(attempts:number,outcome:{ok:boolean;error?:string},item:import('./src/core.js').FeedbackItem={region:'us-east-2',topicArn:'fixture',messageId:'fixture',message:{}}){
+async function settleOne(attempts:number,outcome:{ok:boolean;error?:string},item:import('./src/core/types.js').FeedbackItem={region:'us-east-2',topicArn:'fixture',messageId:'fixture',message:{}}){
   const {settleFeedbackBatch,feedbackMac}=await import('./src/adapters/feedback-queue.js'),secrets={authSecret:'fixture-feedback-secret'},{mac:_,...body}=item;
   let settled:number|'ack'|undefined;
   const counts=await settleFeedbackBatch({secrets,lane:'tagged',sourceQueue:'fixture',messages:[{id:'fixture',attempts,timestamp:new Date(),body:{...body,mac:feedbackMac(secrets.authSecret,body)},
@@ -268,7 +268,7 @@ async function settleOne(attempts:number,outcome:{ok:boolean;error?:string},item
 test('feedback queue: only platform-dated pre-cutover legacy items drain unsigned; fresh forgeries and replays are refused',async()=>{
   const {authenticFeedback,authenticLegacyRecovery,classifyFeedback,feedbackMac,feedbackSink,legacyFeedbackCutover,settleFeedbackBatch}=await import('./src/adapters/feedback-queue.js');
   const feedbackVerdict=(...args:Parameters<typeof classifyFeedback>)=>classifyFeedback(...args).verdict;
-  type Item=import('./src/core.js').FeedbackItem;
+  type Item=import('./src/core/types.js').FeedbackItem;
   const secret=randomUUID(),previous=randomUUID(),sent:{body:Item}[]=[];
   const queue={send:async()=>{},sendBatch:async(messages:{body:Item}[])=>{sent.push(...messages);}} as unknown as Queue<Item>;
   const item:Item={region:'us-east-2',topicArn:'arn:aws:sns:us-east-2:000000000000:bane-feedback',messageId:randomUUID(),topicKind:'shared',
@@ -736,7 +736,7 @@ test('MCP: every API operation is a tool or a documented human step, and docs/mc
   for(const op of catalog.values()){assert.ok((TOOLSETS as readonly string[]).includes(op.toolset),op.tool.name);assert.equal(op.tool.outputSchema?.type,'object',op.tool.name);assert.match(op.tool.name,/^[a-z][A-Za-z]+$/,op.tool.name)}
   // Internal routes (operators and support grants) are never tools, whatever their security scheme.
   const bearer=Object.entries(spec.paths??{}).filter(([path])=>!/^\/v1\/(?:support|operator)\//.test(path)).flatMap(([,item])=>Object.values(item??{})).filter((o:Json)=>o?.security?.some((s:Json)=>s.bearerAuth)&&!o.operationId.endsWith('Ritual')&&!/Ritual[A-Z]|Rituals|OmenOptIns/.test(o.operationId)&&!['receiveSesSnsEvent','revealWebhookSecret','downloadInboundAttachment','getRuleVersion','createBillingTopUp','updateBillingAutoRecharge','createBillingCardSetup','deleteBillingPaymentMethod','bindMcpConnection','listAgents','revokeAgent'].includes(o.operationId)).map((o:Json)=>o.operationId as string);
-  // Members, invitations and Activity are session routes that an owner's or admin's own sign-in also calls (core.ts memberAdminRoute).
+  // Members, invitations and Activity are session routes that an owner's or admin's own sign-in also calls (core/access.ts memberAdminRoute).
   assert.deepEqual([...catalog.keys()].sort(), [...bearer,'waitForMessage','listWorkspaceMembers','listWorkspaceInvitations','createWorkspaceInvitation','revokeWorkspaceInvitation','listActivity'].sort());
   const { resourceTools, resourceInventory, listedTool } = await import('./src/mcp-resources.js'), { workspaceTools, workspaceResource } = await import('./src/mcp.js');
   assert.deepEqual(resourceInventory().map(x=>x.operation).sort(), [...catalog.keys()].sort());
@@ -843,7 +843,7 @@ const elapse = (db: pg.Client, ids: string[], ms: number) => db.query(`WITH move
 type Json = Record<string, any>;
 type Reply = { status: number; body: any; headers: Headers };
 const cleanScans={virusVerdict:{status:'PASS'},spamVerdict:{status:'PASS'}};
-async function expandFixtureOutbox(runtime:import('./src/core.js').Runtime,wid:string){
+async function expandFixtureOutbox(runtime:import('./src/core/types.js').Runtime,wid:string){
   const {mailboxEventJobs}=await import('./src/mailbox-events.js'),{sql}=await import('drizzle-orm');
   const rows=await runtime.db.execute<{id:string;payload:Json}>(sql`UPDATE jobs SET status='completed' WHERE type='mailbox.fanout' AND workspace_id=${wid} AND status='pending' RETURNING id,payload`);
   for(const row of rows.rows)await mailboxEventJobs['mailbox.fanout']!(runtime,row.payload,{id:row.id,workspaceId:wid,attempts:1});
@@ -981,7 +981,7 @@ after(async () => {
   }
 });
 test('capability links: unsubscribe, forward confirm and stop, and sign-in links are withheld by one grammar', async () => {
-  const { redactCapabilityText } = await import('./src/core.js'), { sealCapabilities } = await import('./src/mailbox-send.js'), { redactSecrets } = await import('./src/feedback.js');
+  const { redactCapabilityText } = await import('./src/core/errors.js'), { sealCapabilities } = await import('./src/mailbox-send.js'), { redactSecrets } = await import('./src/feedback.js');
   const { signinLinkUrl, newLinkId } = await import('./src/signups.js'), { forwardStopUrl } = await import('./src/endpoints.js');
   // Each made by its issuer: a stop link's HMAC and a sign-in link's ID and HMAC are base64url, the others hex.
   const unsubscribe = `u_${'a'.repeat(64)}`, confirm = `fwd_${'b'.repeat(64)}`;
@@ -1058,8 +1058,8 @@ test('retries: failures that happened together are spread out, up to each kind o
   assert.ok(new Set(batch).size > 100 && Math.min(...batch) >= 720_000 && Math.max(...batch) <= 1_200_000, 'A batch of failed webhooks does not come due at one instant.');
 });
 test('event webhooks: only 408, 429 and 5xx answers are retried, each retry waits out Retry-After, and overloaded answers open the endpoint\'s breaker', async t => {
-  const [{ nodeRuntime }, { operationJobs, encrypt }, { ActionRetry }, { JobDeferred }] = await Promise.all([
-    import('./src/adapters/node.js'), import('./src/operations.js'), import('./src/ritual-retry.js'), import('./src/jobs.js')]);
+  const [{ nodeRuntime }, { operationJobs }, { encrypt }, { ActionRetry }, { JobDeferred }] = await Promise.all([
+    import('./src/adapters/node.js'), import('./src/webhooks/operations.js'), import('./src/webhooks/crypto.js'), import('./src/ritual-retry.js'), import('./src/jobs.js')]);
   const instance = nodeRuntime({ DATABASE_URL: FIXTURE_DATABASE_URL, BANE_ROOT_SECRET: AUTH_SECRET, ACCOUNT_ISSUER: process.env.ACCOUNT_ISSUER, ACCOUNT_CLIENT_ID: 'fixture', ACCOUNT_CLIENT_PRIVATE_KEY: 'unused-by-session-fixture',
     AUTH_ALLOWED_SUBJECTS: AUTH_SUBJECT, PUBLIC_URL: PUBLIC_ORIGIN, DEFAULT_SES_REGION: REGION, ENABLE_LIVE_SES: 'false', S3_BUCKET: 'synthetic-webhook-fixture', S3_ACCESS_KEY_ID: 'synthetic-storage-id', S3_SECRET_ACCESS_KEY: 'synthetic-storage-secret' });
   cleanup(t, instance.close);
@@ -1115,7 +1115,7 @@ test('health: direct mail due and waiting warns at five minutes and pages at thi
   assert.deepEqual(tick({ due: 0, oldestSeconds: 0 }).rollup.directMail, { due: 0, oldestSeconds: 0, behind: false });
 });
 test('verified attachments: the isolate cache is part of the memory budget and gives way to a reservation', async () => {
-  const { verifiedAttachment } = await import('./src/sending.js'), { memoryStats, reserveMemory } = await import('./src/isolate-memory.js'), { SEND_LIMITS } = await import('./src/send-limits.js');
+  const { verifiedAttachment } = await import('./src/sending/mime.js'), { memoryStats, reserveMemory } = await import('./src/isolate-memory.js'), { SEND_LIMITS } = await import('./src/send-limits.js');
   const body = new Uint8Array(8 * 1024 * 1024).fill(7), checksum = createHash('sha256').update(body).digest('hex');
   let reads = 0;
   const runtime = { storage: { cacheScope: {}, async get() { reads++; return { body, contentType: 'application/octet-stream' }; } } } as never;
@@ -1133,7 +1133,7 @@ test('verified attachments: the isolate cache is part of the memory budget and g
   assert.equal(reads, 2, 'The reservation dropped the idle cached file, so it is read again.');
 });
 test('campaign health: a campaign\'s tallies count accepted, bounced and complained mail as its emails do', async t => {
-  const db = await fixtureDatabase(t), { drizzle } = await import('drizzle-orm/node-postgres'), { campaignOutcomes } = await import('./src/sending.js');
+  const db = await fixtureDatabase(t), { drizzle } = await import('drizzle-orm/node-postgres'), { campaignOutcomes } = await import('./src/campaigns/stats.js');
   const wid = unique('health-tallies'), campaign = unique('cmp');
   await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)', [wid]);
   cleanup(t, async () => { await db.query('DELETE FROM sending_emails WHERE workspace_id=$1', [wid]); await db.query('DELETE FROM sending_campaign_tallies WHERE workspace_id=$1', [wid]); await db.query('DELETE FROM workspaces WHERE id=$1', [wid]); });
@@ -1233,7 +1233,7 @@ test('OIDC dashboard callback verifies the token, consumes bound state once and 
   const origin = 'https://dashboard.example.org', issuer = 'https://oidc-login.example.org';
   const approved = `${randomUUID()}@example.org`, keys = generateKeyPairSync('ec',{namedCurve:'P-256'});
   const rp = generateKeyPairSync('ec',{namedCurve:'P-256'});
-  const runtime: import('./src/core.js').Runtime = { config:loadConfig({PUBLIC_URL:origin, ACCOUNT_ISSUER:issuer, ACCOUNT_CLIENT_ID:'dashboard',
+  const runtime: import('./src/core/types.js').Runtime = { config:loadConfig({PUBLIC_URL:origin, ACCOUNT_ISSUER:issuer, ACCOUNT_CLIENT_ID:'dashboard',
     ACCOUNT_CLIENT_PRIVATE_KEY:JSON.stringify({...rp.privateKey.export({format:'jwk'}),kid:'rp'}), BANE_ROOT_SECRET:'local-fixture-'.repeat(4), MULTI_TENANT:'true', ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google', AUTH_STAFF_GOOGLE_DOMAINS:'example.org', NIGHTMAIL_ABUSE_MONITORING:'2020-01-01T00:00:00Z'}),
     db:drizzle(db), snsCertificateState:new SnsCertificateState(), storage:{async put(){throw Error('unused');},async delete(){throw Error('unused');},async get(){throw Error('unused');}} };
   const {PROVIDER_IDENTITY_CLAIM} = await import('./src/account-policy.js');
@@ -1698,7 +1698,7 @@ test('Sign-up limit: places admit proven mailboxes, oldest waiting first, one ea
   const configInput = {PUBLIC_URL:origin, ACCOUNT_ISSUER:issuer, ACCOUNT_CLIENT_ID:'dashboard',
     ACCOUNT_CLIENT_PRIVATE_KEY:JSON.stringify({...rp.privateKey.export({format:'jwk'}),kid:'rp'}), BANE_ROOT_SECRET:'local-fixture-'.repeat(4), MULTI_TENANT:'true',
     ACCOUNT_REQUIRED_ACR:`${googleAcr} ${githubAcr} ${emailAcr}`, AUTH_STAFF_GOOGLE_DOMAINS:'example.org'};
-  const runtime: import('./src/core.js').Runtime = { config:loadConfig(configInput),
+  const runtime: import('./src/core/types.js').Runtime = { config:loadConfig(configInput),
     db:drizzle(pool), snsCertificateState:new SnsCertificateState(), storage:{async put(){throw Error('unused');},async delete(){throw Error('unused');},async get(){throw Error('unused');}} };
   // upstream: what the provider identity claim says of the address, when not the person's own address, verified.
   type Person = { subject: string; email: string; acr: string; provider: 'google' | 'github' | null; hd: string | null; upstream?: { email?: string; email_verified?: boolean } };
@@ -1842,7 +1842,7 @@ test('Sign-up limit: places admit proven mailboxes, oldest waiting first, one ea
   assert.deepEqual((await contactOf(second)).properties,{status:'waiting',joined_at:await firstAt(second),attempts:1,email_domain:'example.net',mailbox:'company'});
   assert.deepEqual(await contactOf(coder),{name:null,properties:{},consent:'unknown',suppressed:false,deleted:true,listed:false,consents:[]});
   // Opting out sticks: later attempts keep the contact up to date and never subscribe it again.
-  await (await import('./src/audience.js')).recordUnsubscribe(runtime,platform,third.email,'footer-confirm');
+  await (await import('./src/audience/consent.js')).recordUnsubscribe(runtime,platform,third.email,'footer-confirm');
   const closed = await places();
   assert.equal(closed.open,0);
 
@@ -2252,10 +2252,10 @@ test('Sign-up limit: places admit proven mailboxes, oldest waiting first, one ea
 test('Nightmail customers: every account that owns a workspace joins one list in the platform workspace, made once by two runs at once and found by ID after a rename, at its verified address with when it signed up; written as an account holder without touching opt-outs, suppression or deleted contacts; a deleted account and an old address come off, and a deleted list is not made again', async t => {
   const {drizzle} = await import('drizzle-orm/node-postgres');
   const {loadConfig} = await import('./src/config.js');
-  const {signupJobs, signupsTick, CUSTOMERS_LIST_NAME, CUSTOMERS_NOTICE} = await import('./src/signups.js'), {JobDeferred} = await import('./src/jobs.js'), {recordUnsubscribe} = await import('./src/audience.js');
+  const {signupJobs, signupsTick, CUSTOMERS_LIST_NAME, CUSTOMERS_NOTICE} = await import('./src/signups.js'), {JobDeferred} = await import('./src/jobs.js'), {recordUnsubscribe} = await import('./src/audience/consent.js');
   const db = await fixtureDatabase(t);
   const pool = new pg.Pool({connectionString:FIXTURE_DATABASE_URL, max:6, connectionTimeoutMillis:5_000}); cleanup(t,()=>pool.end());
-  const runtime: import('./src/core.js').Runtime = { db:drizzle(pool), config:loadConfig({...process.env, PUBLIC_URL:'https://customers.example.org', MULTI_TENANT:'true', ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google', NIGHTMAIL_HOSTED_SCREEN:'false', BANE_HOSTED_SCREEN:'false'}),
+  const runtime: import('./src/core/types.js').Runtime = { db:drizzle(pool), config:loadConfig({...process.env, PUBLIC_URL:'https://customers.example.org', MULTI_TENANT:'true', ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google', NIGHTMAIL_HOSTED_SCREEN:'false', BANE_HOSTED_SCREEN:'false'}),
     snsCertificateState:new SnsCertificateState(), storage:{async put(){throw Error('unused');},async delete(){throw Error('unused');},async get(){throw Error('unused');}} };
   const platform = `ws_${randomUUID().replaceAll('-','')}`, owned = `ws_${randomUUID().replaceAll('-','')}`, tag = randomUUID().slice(0,8), jobId = `signups.sync:${platform}`;
   runtime.config.platformDomainWorkspace = platform;
@@ -2386,7 +2386,7 @@ test('Account switcher: two accounts in one browser switch, stay apart on every 
   const db = await fixtureDatabase(t), app = createApp();
   const origin = 'https://dashboard.example.org', issuer = 'https://accounts-switch.example.org', googleAcr = 'urn:anomaly:acr:google';
   const keys = generateKeyPairSync('ec',{namedCurve:'P-256'}), rp = generateKeyPairSync('ec',{namedCurve:'P-256'});
-  const runtime: import('./src/core.js').Runtime = { config:loadConfig({PUBLIC_URL:origin, ACCOUNT_ISSUER:issuer, ACCOUNT_CLIENT_ID:'dashboard',
+  const runtime: import('./src/core/types.js').Runtime = { config:loadConfig({PUBLIC_URL:origin, ACCOUNT_ISSUER:issuer, ACCOUNT_CLIENT_ID:'dashboard',
     ACCOUNT_CLIENT_PRIVATE_KEY:JSON.stringify({...rp.privateKey.export({format:'jwk'}),kid:'rp'}), BANE_ROOT_SECRET:'local-fixture-'.repeat(4), MULTI_TENANT:'true', ACCOUNT_REQUIRED_ACR:googleAcr, AUTH_STAFF_GOOGLE_DOMAINS:'example.org'}),
     db:drizzle(db), snsCertificateState:new SnsCertificateState(), storage:{async put(){throw Error('unused');},async delete(){throw Error('unused');},async get(){throw Error('unused');}} };
   type Person = { subject: string; email: string; id?: string; workspace?: string };
@@ -2663,7 +2663,7 @@ test('Support email Continue: a sign-in that proves no mailbox gets 403 and two 
   const origin = 'https://dashboard.example.org', issuer = 'https://support-link.example.org';
   const googleAcr = 'urn:anomaly:acr:google', githubAcr = 'urn:anomaly:acr:github', emailAcr = 'urn:anomaly:acr:email';
   const keys = generateKeyPairSync('ec',{namedCurve:'P-256'}), rp = generateKeyPairSync('ec',{namedCurve:'P-256'});
-  const runtime: import('./src/core.js').Runtime = { config:loadConfig({PUBLIC_URL:origin, ACCOUNT_ISSUER:issuer, ACCOUNT_CLIENT_ID:'dashboard',
+  const runtime: import('./src/core/types.js').Runtime = { config:loadConfig({PUBLIC_URL:origin, ACCOUNT_ISSUER:issuer, ACCOUNT_CLIENT_ID:'dashboard',
     ACCOUNT_CLIENT_PRIVATE_KEY:JSON.stringify({...rp.privateKey.export({format:'jwk'}),kid:'rp'}), BANE_ROOT_SECRET:'local-fixture-'.repeat(4), MULTI_TENANT:'true',
     ACCOUNT_REQUIRED_ACR:`${googleAcr} ${githubAcr} ${emailAcr}`, AUTH_STAFF_GOOGLE_DOMAINS:'example.org'}),
     db:drizzle(db), snsCertificateState:new SnsCertificateState(), storage:{async put(){throw Error('unused');},async delete(){throw Error('unused');},async get(){throw Error('unused');}} };
@@ -2948,7 +2948,7 @@ test('MCP profiles: one client signed in as two accounts gets two approvals that
   const {createApp} = await import('./src/app.js');
   const db = await fixtureDatabase(t), app = createApp();
   const issuer = 'https://mcp-profiles.example.org', origin = 'https://bane.example.org', resource = origin+'/mcp';
-  const runtime: import('./src/core.js').Runtime = { config:{...loadConfig({PUBLIC_URL:origin, ACCOUNT_ISSUER:issuer, MULTI_TENANT:'true', ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google', BANE_ROOT_SECRET:'fixture-only-'.repeat(4)}),accountClient:{id:'fixture',privateKey:'unused',algorithm:'ES256' as const}},
+  const runtime: import('./src/core/types.js').Runtime = { config:{...loadConfig({PUBLIC_URL:origin, ACCOUNT_ISSUER:issuer, MULTI_TENANT:'true', ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google', BANE_ROOT_SECRET:'fixture-only-'.repeat(4)}),accountClient:{id:'fixture',privateKey:'unused',algorithm:'ES256' as const}},
     db:drizzle(db), snsCertificateState:new SnsCertificateState(), storage:{async put(){throw Error('unused');},async get(){throw Error('unused');},async delete(){throw Error('unused');}} };
   const signer = generateKeyPairSync('ec',{namedCurve:'P-256'});
   t.mock.method(globalThis,'fetch',async (url: string|URL) => {
@@ -3014,7 +3014,7 @@ test('MCP account resource validates issuer JWT, per-call workspaces, Nightmail-
   const { authorizeResource, externalMcpGrant, protectedResourceMetadata } = await import('./src/oidc-resource.js');
   const db = await fixtureDatabase(t);
   const issuer = 'https://resource-test.example.org', resource = 'https://bane.example.org/mcp';
-  const runtime: import('./src/core.js').Runtime = { config:loadConfig({ PUBLIC_URL:'https://bane.example.org', ACCOUNT_ISSUER:issuer, AUTH_ALLOWED_SUBJECTS:`subject,${AUTH_SUBJECT}`, BANE_ROOT_SECRET:'fixture-only-'.repeat(4) }), db:drizzle(db), snsCertificateState:new SnsCertificateState(),
+  const runtime: import('./src/core/types.js').Runtime = { config:loadConfig({ PUBLIC_URL:'https://bane.example.org', ACCOUNT_ISSUER:issuer, AUTH_ALLOWED_SUBJECTS:`subject,${AUTH_SUBJECT}`, BANE_ROOT_SECRET:'fixture-only-'.repeat(4) }), db:drizzle(db), snsCertificateState:new SnsCertificateState(),
     storage:{async put(){throw Error('unused');},async get(){throw Error('unused');},async delete(){throw Error('unused');}} };
   const signer = generateKeyPairSync('ec', {namedCurve:'P-256'}), holder = generateKeyPairSync('ec', {namedCurve:'P-256'});
   const jwk = holder.publicKey.export({format:'jwk'});
@@ -3242,7 +3242,7 @@ test('MCP cutover expires legacy approvals and tokens but keeps the objects they
     // The listing reads approvals through nightmail_approval_active, which takes the real table's rows: list from it.
     await db.query('DROP TABLE pg_temp.nightmail_resource_grants CASCADE');
     const [{drizzle},{loadConfig},{createApp}]=await Promise.all([import('drizzle-orm/node-postgres'),import('./src/config.js'),import('./src/app.js')]);
-    const runtime:import('./src/core.js').Runtime={config:loadConfig({...process.env,PUBLIC_URL:PUBLIC_ORIGIN}),db:drizzle(db),snsCertificateState:new SnsCertificateState(),storage:{async put(){throw Error('unused');},async get(){throw Error('unused');},async delete(){throw Error('unused');}}};
+    const runtime:import('./src/core/types.js').Runtime={config:loadConfig({...process.env,PUBLIC_URL:PUBLIC_ORIGIN}),db:drizzle(db),snsCertificateState:new SnsCertificateState(),storage:{async put(){throw Error('unused');},async get(){throw Error('unused');},async delete(){throw Error('unused');}}};
     const response=await createApp().fetch(new Request(PUBLIC_ORIGIN+'/v1/agents?includeInactive=true',{headers:{cookie:manager.cookie}}),runtime);
     const {data}=await response.json() as {data:{clientId:string;status:string;own:boolean}[]};
     assert.deepEqual(data.filter(g=>g.own).map(g=>[g.clientId,g.status]),[['legacy-client','expired']]);
@@ -3259,7 +3259,7 @@ test('an MCP client name is shown as one short line of the characters that are d
       shaped:'\u200D👩\u200D💻 ❤\uFE0F\uFE0F می\u200Cخواهم Sup\u00ADport\u034F\u200D',blank:'\u034F\u00AD\u206A',cells:'\u2800 \u3164\u{E0041}\uFEFF'};
     for(const [id,name] of Object.entries(names)) await db.query("INSERT INTO nightmail_expired_approvals(id,user_id,client_id,name,scopes,created_at,updated_at) VALUES($1,$2,$1,$3,'{bane:read}',now(),now())",['legacy_name_'+id,manager.userId,name]);
     const [{drizzle},{loadConfig},{createApp}]=await Promise.all([import('drizzle-orm/node-postgres'),import('./src/config.js'),import('./src/app.js')]);
-    const runtime:import('./src/core.js').Runtime={config:loadConfig({...process.env,PUBLIC_URL:PUBLIC_ORIGIN}),db:drizzle(db),snsCertificateState:new SnsCertificateState(),storage:{async put(){throw Error('unused');},async get(){throw Error('unused');},async delete(){throw Error('unused');}}};
+    const runtime:import('./src/core/types.js').Runtime={config:loadConfig({...process.env,PUBLIC_URL:PUBLIC_ORIGIN}),db:drizzle(db),snsCertificateState:new SnsCertificateState(),storage:{async put(){throw Error('unused');},async get(){throw Error('unused');},async delete(){throw Error('unused');}}};
     const {data}=await (await createApp().fetch(new Request(PUBLIC_ORIGIN+'/v1/agents?includeInactive=true',{headers:{cookie:manager.cookie}}),runtime)).json() as {data:{id:string;name:string|null}[]};
     const shown=(id:string)=>data.find(g=>g.id==='legacy_name_'+id)?.name;
     const label=`Desk helper notes ${'x'.repeat(142)}`;
@@ -3277,7 +3277,7 @@ test('forwards: a recipient’s Stop or Decline is recorded on the forward’s r
   // forward's own row (an edit, or a fault that never lets go).
   if(!fixtureWorker)return t.skip('requires the loopback worker and real database connections');
   const {drizzle}=await import('drizzle-orm/node-postgres'),{ensureRegionSettings}=await import('./src/ses-region-state.js'),{lockSendScope}=await import('./src/send-scope.js');
-  const {sendToEndpoint,forwardStopUrl}=await import('./src/endpoints.js'),{encrypt}=await import('./src/operations.js'),{createApp}=await import('./src/app.js');
+  const {sendToEndpoint,forwardStopUrl}=await import('./src/endpoints.js'),{encrypt}=await import('./src/webhooks/crypto.js'),{createApp}=await import('./src/app.js');
   const db=await fixtureDatabase(t),pool=new pg.Pool({connectionString:FIXTURE_DATABASE_URL,max:8,connectionTimeoutMillis:2000});t.after(()=>pool.end());
   const wid=unique('fwdstop'),host=`${wid}.invalid`,box=unique('mbx'),from=`desk@${host}`,rt={...fixtureWorker.runtime,db:drizzle(pool),config:{...fixtureWorker.runtime.config,workspaceId:wid}};
   const origin=new URL(rt.config.publicUrl).origin,app=createApp();
@@ -3499,7 +3499,7 @@ test('mail gateway: SMTP queues dispatchable content with a single database conn
     ['large text','Content-Type: text/plain\r\n\r\n'+('t'.repeat(998)+'\r\n').repeat(600)],
   ] as const) await t.test(label,async()=>{
     const res=await submit(mime),body=await res.json() as Json;assert.equal(res.status,200,JSON.stringify(body));
-    await (await import('./src/dispatcher.js')).dispatchDue(rt,REGION);
+    await (await import('./src/sending/dispatcher.js')).dispatchDue(rt,REGION);
     // The full harness also has a runner: it may already hold this message's lease.
     for(const until=Date.now()+5000;;){
       const {rows:[mail]}=await db.query('SELECT attempt_started_at,error_code FROM sending_emails WHERE id=$1 AND actor_key_id=$2',[body.id,kid]);
@@ -3608,7 +3608,7 @@ test('mail gateway: SMTP queues dispatchable content with a single database conn
     ['RECIPIENT_INELIGIBLE','550 5.7.1','Rejected',['example.invalid']],['CREDENTIAL_REVOKED','550 5.7.1','Rejected',['example.invalid']]]);
   assert.ok(!JSON.stringify(recorded).includes('@'),'No address is kept.');
   // At most SMTP_REFUSALS_PER_HOUR a workspace an hour: a client retrying into a send limit can't grow the table without bound.
-  {const {recordSmtpRefusal,SMTP_REFUSALS_PER_HOUR}=await import('./src/smtp-refusals.js'),{ApiError}=await import('./src/core.js');
+  {const {recordSmtpRefusal,SMTP_REFUSALS_PER_HOUR}=await import('./src/smtp-refusals.js'),{ApiError}=await import('./src/core/errors.js');
     await db.query(`INSERT INTO smtp_refusals(workspace_id,reply_code,reason,code) SELECT $1,'451 4.7.1','Send limit reached','REQUEST_RATE_LIMITED' FROM generate_series(1,$2::int)`,[wid,SMTP_REFUSALS_PER_HOUR-recorded.length]);
     const later:((runtime:typeof rt)=>Promise<void>)[]=[];rt.deferNudge=work=>{later.push(work);};
     for(let i=0;i<3;i++)recordSmtpRefusal(rt,kid,['x@example.invalid'],new ApiError(429,'REQUEST_RATE_LIMITED','x'));
@@ -3820,7 +3820,7 @@ test('mail gateway: the IMAP/SMTP score cap is the cap admission uses for the st
   const db=await fixtureDatabase(t),wid=unique('protocol-cap');
   await db.query('BEGIN');
   try {
-    const rt={db:drizzle(db),config:{hostedSendCaps:{firstWeek:100}}} as unknown as import('./src/core.js').Runtime;
+    const rt={db:drizzle(db),config:{hostedSendCaps:{firstWeek:100}}} as unknown as import('./src/core/types.js').Runtime;
     await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)',[wid]);
     assert.equal(await protocolScoreCap(rt,wid),EVALUATION.limit,'No stored standing: the calibration limit.');
     await gradedSender(db,wid,500);
@@ -4077,7 +4077,7 @@ describe('Public contract and authentication', () => {
     const { request: rawRequest } = await import('node:http');
     const spoofed = await new Promise<Json>((done, fail) => { const target = new URL('/health', BASE); rawRequest({ host: target.hostname, port: target.port, path: target.pathname, headers: { Host: 'attacker.example', 'X-Forwarded-Host': 'attacker.example', Accept: 'application/json' } }, res => { let body = ''; res.setEncoding('utf8'); res.on('data', chunk => { body += chunk; }); res.on('end', () => { try { done(JSON.parse(body)); } catch (error) { fail(error); } }); }).on('error', fail).end(); });
     assert.equal(spoofed.origin, PUBLIC_ORIGIN);
-    const { publicFailureBucket, admissionPeer } = await import('./src/core.js');
+    const { publicFailureBucket, admissionPeer } = await import('./src/core/http.js');
     assert.equal(admissionPeer('2001:0db8:0:0::3'),admissionPeer('2001:db8::ffff:abcd'));
     assert.notEqual(admissionPeer('2001:db8:0:1::3'),admissionPeer('2001:db8::3'));
     assert.equal(admissionPeer('::ffff:192.0.2.1'),'192.0.2.1');
@@ -4497,7 +4497,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
       const t=mx, [{createApp},{loadConfig},{drizzle}]=await Promise.all([import('./src/app.js'),import('./src/config.js'),import('drizzle-orm/node-postgres')]);
       const app=createApp(),origin='https://mock-oauth.bane.dev';
       const pool=new pg.Pool({connectionString:FIXTURE_DATABASE_URL}); cleanup(t,()=>pool.end());
-      const runtime:import('./src/core.js').Runtime={db:drizzle(pool),config:loadConfig({...process.env,PUBLIC_URL:origin,MULTI_TENANT:'true',ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google',NIGHTMAIL_HOSTED_SCREEN:'false',BANE_HOSTED_SCREEN:'false'}),snsCertificateState:new SnsCertificateState(),storage:{async put(){throw Error('unused')},async get(){throw Error('unused')},async delete(){throw Error('unused')}}};
+      const runtime:import('./src/core/types.js').Runtime={db:drizzle(pool),config:loadConfig({...process.env,PUBLIC_URL:origin,MULTI_TENANT:'true',ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google',NIGHTMAIL_HOSTED_SCREEN:'false',BANE_HOSTED_SCREEN:'false'}),snsCertificateState:new SnsCertificateState(),storage:{async put(){throw Error('unused')},async get(){throw Error('unused')},async delete(){throw Error('unused')}}};
       const local=async(method:string,path:string,body?:Json,cookie?:string,headers:Record<string,string>={})=>http(method,path,undefined,body,{origin,...(cookie?{cookie}:{}),...headers},5000,origin,r=>app.fetch(r,runtime));
       const base='/v1/workspaces/current',select=(id:string)=>({'X-Nightmail-Workspace':id}); // Other scenarios still select with X-Bane-Workspace.
       const {privateKey}=generateKeyPairSync('rsa',{modulusLength:2048});
@@ -4571,7 +4571,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
       });
       await mx.test('segments, AudienceQL and inbound scan policy serve successes and refusals without retirement notices', async t => {
         const owner = await workspaceFixture(address(), true);
-        const { ApiError } = await import('./src/core.js');
+        const { ApiError } = await import('./src/core/errors.js');
         const writes: Promise<void>[] = [];
         const rt = { ...runtime, detach: (work: (env: typeof runtime) => Promise<void>) => {
           const pending = work(runtime); writes.push(pending); return pending;
@@ -4674,7 +4674,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
       assert.equal(me.canCreateWorkspace,false);
       error(await local('POST','/v1/workspaces',{name:'Guest workspace'},guest),403,'WORKSPACE_LIMIT');
       await mx.test('MX connections: shared provisioning is regional; BYO verifies and uniquely claims an account with an external ID', async providerTest => {
-        const [{ STSClient }, { SESv2Client }, { SNSClient }, { getSes }] = await Promise.all([import('@aws-sdk/client-sts'), import('@aws-sdk/client-sesv2'), import('@aws-sdk/client-sns'), import('./src/core.js')]);
+        const [{ STSClient }, { SESv2Client }, { SNSClient }, { getSes }] = await Promise.all([import('@aws-sdk/client-sts'), import('@aws-sdk/client-sesv2'), import('@aws-sdk/client-sns'), import('./src/core/ses.js')]);
         const path = '/v1/connection', region = 'us-east-2', platform = '111111111111', customer = '222222222222';
         const platformKey = { accessKeyId: 'synthetic-platform', secretAccessKey: 'synthetic-platform-secret' };
         const callerArn = `arn:aws:iam::${platform}:user/synthetic-platform`;
@@ -4962,7 +4962,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           }
         });
         await providerTest.test('Domain Connect: inline cached discovery, sorted signature and workspace-bound dashboard return',async dc=>{
-          const { operationJobs }=await import('./src/operations.js'), {JobDeferred}=await import('./src/jobs.js');
+          const { operationJobs }=await import('./src/webhooks/operations.js'), {JobDeferred}=await import('./src/jobs.js');
           const { domainConnectProviderIds }=await import('./src/brand.js');
           const zone=`${unique('dc')}.co.uk`, name=`mail.${zone}`, pathFor=(id:string)=>`/v2/domainTemplates/providers/${id}/services/mail`, providerPath=pathFor('nightmail.dev');
           const cf='https://api.cloudflare.com/client/v4/dns/domainconnect';
@@ -5141,7 +5141,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           assert.deepEqual(calls.slice(before),['CreateEmailIdentityCommand','CreateEmailIdentityCommand','GetEmailIdentityCommand','PutEmailIdentityFeedbackAttributesCommand']);
           ok(await local('DELETE',`/v1/domains/${restored.id}`,undefined,b.cookie));
           // A request that died before any SES call leaves a claim with no identity. The verify job it reserved owns the identity from then on.
-          const {operationJobs:wedgeJobs}=await import('./src/operations.js'),{JobDeferred:Deferred}=await import('./src/jobs.js');
+          const {operationJobs:wedgeJobs}=await import('./src/webhooks/operations.js'),{JobDeferred:Deferred}=await import('./src/jobs.js');
           const wedged=`${unique('wedge')}.invalid`,wedgeStart=calls.length;
           dropCreate=true; error(await add(b.cookie,wedged),503,'SES_UNAVAILABLE');
           const {rows:[wedge]}=await pool.query("SELECT j.*,dc.identity FROM jobs j JOIN domain_claims dc ON j.id='domain.verify:'||dc.token WHERE dc.name=$1",[wedged]);
@@ -5175,7 +5175,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           const send = (from:string) => local('POST','/v1/emails/send',mail({ region,from }),undefined,{ authorization:`Bearer ${key}` });
           error(await send(`hi@sub.${domain}`),403,'SENDER_DOMAIN_NOT_VERIFIED');
           const detail = `/v1/domains/${created.id}`;
-          const {operationJobs}=await import('./src/operations.js'), {JobDeferred}=await import('./src/jobs.js');
+          const {operationJobs}=await import('./src/webhooks/operations.js'), {JobDeferred}=await import('./src/jobs.js');
           const {rows:[job]}=await pool.query("SELECT * FROM jobs WHERE type='domain.verify' AND payload->>'domainId'=$1",[created.id]);
           const check=(poll=0)=>operationJobs['domain.verify']!(runtime,{...job.payload,poll},{id:job.id,attempts:1,workspaceId:b.org.id});
           const pace=()=>pool.query("UPDATE job_schedule SET wake_not_before=now() WHERE workspace_id='domain.verify:platform'");
@@ -5471,7 +5471,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
               ok(await local('DELETE',`/v1/domains/${recent.id}`,undefined,b.cookie));
             });
             await it.test('Hourly expiry keeps a proven name whose ownership TXT is gone while SES still verifies its tagged identity, and frees it once that fails too',async()=>{
-              const {expireDomainClaims}=await import('./src/operations.js'),{sql}=await import('drizzle-orm');
+              const {expireDomainClaims}=await import('./src/domains/hosted.js'),{sql}=await import('drizzle-orm');
               const identity=identities.get(`${platform}:${domain}`)!,links=[...associations];
               const lapse=()=>pool.query("UPDATE domain_claims SET receiving_proved_at=now()-interval '62 days',receiving_proof_missed_at=now()-interval '31 days' WHERE name=$1",[domain]);
               const restarted=async()=>(await pool.query("SELECT receiving_proof_missed_at>now()-interval '1 hour' AS restarted FROM domain_claims WHERE name=$1",[domain])).rows;
@@ -5670,7 +5670,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
           assert.deepEqual([signedDomain.sending,signedDomain.verificationStatus,signedDomain.dkimStatus,signedDomain.mailFromDomain,signedDomain.mailFromStatus],['verified','SUCCESS','SUCCESS','bounce.'+imported,'SUCCESS']);
           assert.equal((await pool.query('SELECT workspace_id FROM domain_claims WHERE name=$1',[reserved])).rowCount,2,'An exclusive claim and an account-scoped import can have the exact same name.');
           error(await local('POST',`/v1/domains/${signedDomain.id}/mail-from`,{mailFromDomain:`another.${imported}`},a.cookie),409,'IMPORTED_IDENTITY_READ_ONLY');
-          const {sql}=await import('drizzle-orm'), {operationJobs}=await import('./src/operations.js'),{JobDeferred}=await import('./src/jobs.js');
+          const {sql}=await import('drizzle-orm'), {operationJobs}=await import('./src/webhooks/operations.js'),{JobDeferred}=await import('./src/jobs.js');
           async function canReserve(expected:boolean){
             const rollback=new Error('rollback workspace B reservations');
             await assert.rejects(runtime.db.transaction(async tx=>{
@@ -5735,7 +5735,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
             if(cmd.constructor.name==='CopyObjectCommand')copied=cmd.input.Key;return {};
           });
           // Verify and claim its new reconcile atomically so the separate, unmocked runner never takes it.
-          const {operationJobs}=await import('./src/operations.js'),{sql}=await import('drizzle-orm');
+          const {operationJobs}=await import('./src/webhooks/operations.js'),{sql}=await import('drizzle-orm');
           const scheduled=await runtime.db.transaction(async tx=>{
             await operationJobs['domain.verify']!({...runtime,db:tx},j.payload,{id:j.id,attempts:1,workspaceId:wid});
             return (await tx.execute<{id:string}>(sql`UPDATE jobs SET available_at=now()+interval '1 day' WHERE workspace_id=${wid} AND type='mailbox.reconcile' AND status='pending' RETURNING id`)).rows[0]!.id;
@@ -5887,7 +5887,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
       assert.deepEqual({ state: untouched.state, review: (await pool.query('SELECT review_id FROM sending_campaigns WHERE id=$1', [ownerCampaign.id])).rows[0].review_id }, { state: 'scheduled', review: ownerReview }, 'The owner\'s schedule and frozen audience stay.');
       const contact = ok(await local('POST', '/v1/contacts', { email: address() }, guest), 201);
       error(await local('GET', `/v1/contacts/${contact.id}`, undefined, b.cookie), 404);
-      const { originAllowed } = await import('./src/sending.js');
+      const { originAllowed } = await import('./src/sending/events.js');
       const queued = { workspaceId: a.org.id, actorKeyId: `user_${me.id}`, snapshot: { from: 'sender@example.com' } };
       assert.equal(await originAllowed(runtime, runtime.db, queued), true);
       assert.equal(await originAllowed(runtime, runtime.db, { ...queued, campaignId: 'campaign' }), false);
@@ -5934,8 +5934,8 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
 // Every permission refusal keeps its status, code and message, and adds what it needs: error.required, the same as the
 // Nightmail-Required-Permission header, and one sentence naming the permission.
 test('permission refusals: every refusal helper names the permission, scope, credential or person a request needs', async () => {
-  const core = await import('./src/core.js'), { ApiError } = core;
-  type Actor = import('./src/core.js').Actor;
+  const core = { ...await import('./src/core/errors.js'), ...await import('./src/core/access.js') }, { ApiError } = core;
+  type Actor = import('./src/core/types.js').Actor;
   const key = (permissions: Actor['permissions'], extra: Json = {}): Actor => ({ workspaceId: 'w', keyId: 'key_fixture', permissions, domains: [], credential: 'apiKey', ...extra });
   const session = (role: string): Actor => ({ workspaceId: 'w', keyId: 'user_fixture', permissions: ['read', 'send', 'manage'], domains: [], credential: 'dashboard', role });
   const agentToken = key(['read', 'manage'], { credential: 'agentToken' }), signIn = (permissions: Actor['permissions'], extra: Json = {}) => key(permissions, { credential: 'mcp', keyId: 'mcp_fixture', role: 'owner', ...extra });
@@ -6644,7 +6644,7 @@ describe('Hosted MCP OAuth and tools', () => {
           for (const label of Object.keys(credentials)) {
             const expected = admits(credentials[label]!, row), { refused, answer, error: refusal } = await call(label, entry, path, body);
             // A key that isn't full access, refused for what it can't do, says what it can do and how to get a key that can
-            // (core.ts credentialLimits, missingPermission, unrestrictedRequired), on every operation that refuses it so.
+            // (core/errors.ts credentialLimits, missingPermission, unrestrictedRequired), on every operation that refuses it so.
             if (refused && limitedKeys.has(label) && admits(credentials.manageKey!, row) && ['PERMISSION_DENIED', 'UNRESTRICTED_KEY_REQUIRED', 'ADMIN_REQUIRED'].includes(refusal?.code) && !/^This key (?:can only|is limited to)\b.*\bfull-access key\b/s.test(refusal?.message ?? ''))
               unhelpful.push(`${id} ${label}: ${refusal?.code} "${refusal?.message}"`);
             outcomes.add(expected);
@@ -7102,7 +7102,7 @@ describe('Hosted MCP OAuth and tools', () => {
       assert.equal(ok(await http('GET',`${path}/${owned.id}`,MANAGER,undefined,headers)).url,'••••'+url.slice(-4));ok(await http('DELETE',`${path}/${owned.id}`,MANAGER,undefined,headers));
     });
     await t.test('a temporary manage token reads and previews receiving configuration but makes no lasting change, routes included', async () => {
-      // Its own token: the shared one above lasts 30 seconds. Every refusal is the same rule (lasting in core.ts) and code.
+      // Its own token: the shared one above lasts 30 seconds. Every refusal is the same rule (lasting in core/access.ts) and code.
       const agent = await callTool(token, 'createAgentToken', { body: { permissions: ['read', 'manage'], expiresInSeconds: 600, domains: [], purpose: 'Synthetic lasting-change fixture' }, confirm: true }, 201);
       secrets.add(agent.token);
       const hook = ok(await http('POST', '/v1/inbound/webhooks', MANAGER, { url: 'https://example.com/synthetic-lasting', paused: true }), 201);
@@ -7143,7 +7143,7 @@ describe('Hosted MCP OAuth and tools', () => {
         // Reading a domain's hosts stays allowed: an unknown domain is not found, not refused.
         error(await http('GET', '/v1/inbound/domains/dom_fixture/hosts', agent.token), 404, 'NOT_FOUND');
         // MCP discovery asks the same predicate (lastingRoute), so it hides exactly these writes from a temporary token.
-        const { lastingRoute } = await import('./src/core.js'), spec = (await import('./scripts/registered-document.js')).registeredDocument;
+        const { lastingRoute } = await import('./src/core/access.js'), spec = (await import('./scripts/registered-document.js')).registeredDocument;
         const hostRoutes = Object.entries(spec.paths as Record<string, Json>).filter(([path]) => /^\/v1\/inbound\/domains|^\/v1\/domains\/\{id\}\/receiving-host$/.test(path))
           .flatMap(([path, ops]) => Object.keys(ops).map(method => [method.toUpperCase(), path, ops[method].operationId] as const));
         assert.deepEqual(hostRoutes.filter(([method, path]) => lastingRoute(method, path)).map(([, , op]) => op).sort(), ['addReceivingHost', 'chooseReceivingHost', 'createInboundSubdomain', 'disableInboundDomain',
@@ -8026,7 +8026,7 @@ describe('Hosted MCP OAuth and tools', () => {
 
   // PR #55 review P2 (both): the overview was missing from receivingConsentRoute, so credentials minted by a management
   // approval without receiving consent could read it over REST; and a read grant with consent was offered a tool REST
-  // refuses. It is now gated by core.ts's shared predicates (mailboxRoute, receivingConsentRoute), which REST and both MCP
+  // refuses. It is now gated by core/access.ts's shared predicates (mailboxRoute, receivingConsentRoute), which REST and both MCP
   // listings use. Receiving now follows the role (an owner or admin) instead of a consent checkbox.
   test('inbound overview: REST and both MCP listings require manage and an owner or admin', async t => {
     await simulatedSesFixture(t, async ({ db, request, runtime }) => {
@@ -8410,7 +8410,7 @@ describe('Hosted MCP OAuth and tools', () => {
   // Receiving in a simulated fixture workspace: one active domain (receive.example), staged mail served from memory, and
   // ingest, fanout and webhook delivery run in process. receive() returns one recipient's recorded routing and the
   // message's deliveries to a webhook; deliver() runs one delivery and returns its outcome.
-  async function receivingFixture(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client) {
+  async function receivingFixture(t: TestContext, runtime: import('./src/core/types.js').Runtime, db: pg.Client) {
     const { acceptInboundNotification, mailboxIngestJobs } = await import('./src/mailbox-ingest.js'), { mailboxEventJobs } = await import('./src/mailbox-events.js'), { S3Client } = await import('@aws-sdk/client-s3');
     const wid = runtime.config.workspaceId, bucket = unique('bucket'), topic = `arn:aws:sns:${REGION}:111122223333:inbound`, domain = unique('mdom');
     runtime.config.aws = { accessKeyId: 'synthetic', secretAccessKey: 'synthetic' };
@@ -8648,7 +8648,7 @@ describe('Hosted MCP OAuth and tools', () => {
 
   test('an endpoint edits in place: name, type, URL and pause; a blank URL keeps it, none is returned, and other workspaces are refused', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, request }) => {
-      const w = runtime.config.workspaceId, { decrypt } = await import('./src/operations.js');
+      const w = runtime.config.workspaceId, { decrypt } = await import('./src/webhooks/crypto.js');
       const slack = 'https://hooks.slack.com/services/T0EDIT/B0EDIT/editfixtureslack0001', discord = 'https://discord.com/api/webhooks/4242/editfixturediscord0002';
       const first = 'https://example.com/hooks/edit-first-0003', second = 'https://example.com/hooks/edit-second-0004';
       const seen: Json[] = [], keep = (body: Json) => { seen.push(body); return body; };
@@ -8720,7 +8720,7 @@ describe('Hosted MCP OAuth and tools', () => {
   // write under way on it and then see what it changed.
   test('endpoint writers: a confirm and the dispatcher’s forward check wait for a write under way on the endpoint, then see it', async t => {
     const [{ nodeRuntime }, { answerForward }, { forwardStillAllowed }, { encrypt }, { digest }, { sql }] = await Promise.all([import('./src/adapters/node.js'),
-      import('./src/endpoints.js'), import('./src/dispatcher.js'), import('./src/operations.js'), import('./src/core.js'), import('drizzle-orm')]);
+      import('./src/endpoints.js'), import('./src/sending/claim.js'), import('./src/webhooks/crypto.js'), import('./src/core/http.js'), import('drizzle-orm')]);
     const { runtime, close } = nodeRuntime({ ...process.env, DATABASE_URL: FIXTURE_DATABASE_URL }); cleanup(t, close);
     const db = await fixtureDatabase(t), w = unique('endpoint-locks');
     cleanup(t, async () => {
@@ -9074,7 +9074,7 @@ describe('Hosted MCP OAuth and tools', () => {
 
   test('R2: disabled OAuth client cancels queued sends from descendant keys, not independent keys',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,request,run})=>{
-      const {originAllowed}=await import('./src/sending.js');
+      const {originAllowed}=await import('./src/sending/events.js');
       const {token,consentId,clientId}=await oauthGrant(t,db,writableScope,request);
       const parent=ok(await request('POST','/mcp?codemode=true',token,{jsonrpc:'2.0',id:1,method:'tools/call',params:{name:'createApiKey',arguments:{confirm:true,body:{name:'R2 parent',permissions:['manage']}}}},rpcHeaders)).result.structuredContent;
       const child=ok(await request('POST','/v1/api-keys',parent.secret,{name:'R2 child',permissions:['send']}),201);
@@ -9290,7 +9290,7 @@ describe('Hosted MCP OAuth and tools', () => {
   // earlier claim group was sending still dispatched the later groups.
   test('single-tenant dispatch rereads an MCP grant in each claim: one revoked during an earlier group stops the next', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, request }) => {
-      const { runDispatcher } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
       assert.equal(runtime.config.multiTenant, false);
       const grant = 'mcp_' + (await oauthGrant(t, db, writableScope, request)).consentId, ids: string[] = [];
       for (let i = 0; i < 2; i++) ids.push(ok(await local('POST', '/v1/emails/send', mail()), 202).id);
@@ -11268,7 +11268,7 @@ describe('Hosted MCP OAuth and tools', () => {
       });
 
       await t.test('17 receiving reads: hosts, routes and their deliveries, held addresses and waiting forwards, of an owner’s or admin’s own workspaces only; never another workspace’s, never a member’s; email reads only the hosts', async () => {
-        const { encrypt } = await import('./src/operations.js');
+        const { encrypt } = await import('./src/webhooks/crypto.js');
         // Harbor has an owner, an admin and a member; Pier, another customer, has the same kinds of rows, which Harbor never reads.
         const keeper = await sessionFixture(t), helper = await sessionFixture(t), viewer = await sessionFixture(t), stranger = await sessionFixture(t), harbor = unique('harbor-ws'), pier = unique('pier-ws');
         await db.query('INSERT INTO workspaces(id,name,slug) VALUES ($1,$1,$1),($2,$2,$2)', [harbor, pier]);
@@ -11413,7 +11413,7 @@ describe('Hosted MCP OAuth and tools', () => {
         await db.query(`UPDATE support_action_slots SET at = now() - interval '61 seconds' WHERE kind = 'recheck_receiving_host' AND target = $1`, [host]);
         assert.equal(ok(await recheck(ownerChat)).id, host);
         // A forward's resend that its own code refuses (no permanent address to send from) records nothing and gives its turn back.
-        const forward = `con_${hex().slice(0, 24)}`, theirForward = `con_${hex().slice(0, 24)}`, { encrypt } = await import('./src/operations.js');
+        const forward = `con_${hex().slice(0, 24)}`, theirForward = `con_${hex().slice(0, 24)}`, { encrypt } = await import('./src/webhooks/crypto.js');
         await db.query(`INSERT INTO mailbox_webhooks(id, workspace_id, type, key, encrypted_target, event_types, verified, expires_at, requested_at, request_from) VALUES
           ($1, $2, 'forward', 'to-partner', $3, '[]', false, now() - interval '1 hour', now() - interval '25 hours', 'gone@example.invalid'), ($4, $5, 'forward', 'theirs', $6, '[]', false, now() + interval '1 hour', now(), 'x@example.invalid')`,
           [forward, shop, await encrypt(runtime, 'partner@example.net', `${shop}:endpoint:${forward}`), theirForward, acme, await encrypt(runtime, 'friend@example.org', `${acme}:endpoint:${theirForward}`)]);
@@ -13357,7 +13357,7 @@ describe('Hosted MCP OAuth and tools', () => {
       Object.assign(runtime.config, { multiTenant: true, allowedSubjects: [], staffGoogleDomains: [] });
       // The attachments bucket, in memory: the screenshot objects are checked directly.
       const objects = new Map<string, { body: Uint8Array; contentType: string }>();
-      const env: import('./src/core.js').Runtime = { ...runtime, storage: { put: async (key, body, contentType) => { objects.set(key, { body: new Uint8Array(body), contentType }); }, get: async key => objects.get(key) ?? null, delete: async key => { objects.delete(key); } } };
+      const env: import('./src/core/types.js').Runtime = { ...runtime, storage: { put: async (key, body, contentType) => { objects.set(key, { body: new Uint8Array(body), contentType }); }, get: async key => objects.get(key) ?? null, delete: async key => { objects.delete(key); } } };
       const app = (await import('./src/app.js')).createApp(), { screenshotLink } = await import('./src/ui-notes.js');
       const hex = () => (randomUUID() + randomUUID()).replaceAll('-', ''), sha = (v: string) => createHash('sha256').update(v).digest('hex');
       const send = async (method: string, path: string, headers: Record<string, string> = {}, body?: Json | Uint8Array, type = 'application/json'): Promise<Reply> => {
@@ -14256,7 +14256,7 @@ describe('Hosted MCP OAuth and tools', () => {
       const { token,consentId } = await oauthGrant(t, db, `${writableScope} bane:live`, request);
       const { credentialFingerprint, discoveryTarget } = await import('./src/ses-region-state.js');
       const { SESv2Client, GetAccountCommand, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const { mailMessages, mailAttachments } = await import('./src/db/mailbox.js');
       const { attachToMailboxes } = await import('./src/mailbox-store.js');
       const scope = { workspaceId: runtime.config.workspaceId }, topic = `arn:aws:sns:${REGION}:111122223333:inbound-test`;
@@ -14506,7 +14506,7 @@ describe('Hosted MCP OAuth and tools', () => {
 describe('DB region catalog and explicit SES setup', () => {
   test('MOCK AWS TRANSPORT: catalog changes are immediate, discovery is read-only, and provisioning is explicit and idempotent', async t => {
     const [{ createApp }, { nodeRuntime }, { drizzle }, { drainJobs }, { dispatchDue }, ses, sns, sts, { regionalLimits }] = await Promise.all([
-      import('./src/app.js'), import('./src/adapters/node.js'), import('drizzle-orm/node-postgres'), import('./src/dispatch.js'), import('./src/dispatcher.js'),
+      import('./src/app.js'), import('./src/adapters/node.js'), import('drizzle-orm/node-postgres'), import('./src/dispatch.js'), import('./src/sending/dispatcher.js'),
       import('@aws-sdk/client-sesv2'), import('@aws-sdk/client-sns'), import('@aws-sdk/client-sts'), import('./src/db/sending.js'),
     ]);
     const db = await fixtureDatabase(t);
@@ -15134,7 +15134,7 @@ describe('Lists, compound segments, imports and exports', () => {
     for (let i = 0; i < n; i++) { const row = await resource(t, key.secret, '/v1/contacts', { email: address() }); if (state) ok(await consent(key.secret, row.id, state)); rows.push(row); }
     return rows;
   };
-  // The suppression SES feedback writes for one address (operations.ts and sending.ts share mergeSuppression), and its lift (scripts/lift-suppression.ts).
+  // The suppression SES feedback writes for one address (ses/feedback.ts and sending/events.ts share mergeSuppression), and its lift (scripts/lift-suppression.ts).
   const suppress = async (db: pg.Client, wid: string, email: string) => {
     const [{ drizzle }, { sql }, { mergeSuppression }] = await Promise.all([import('drizzle-orm/node-postgres'), import('drizzle-orm'), import('./src/db/audience.js')]);
     await drizzle(db).execute(sql`INSERT INTO audience_contacts AS c(id,workspace_id,email,suppressed,suppression_reason,suppressed_at) VALUES (${unique('con')},${wid},${email},true,'hard_bounce',now())
@@ -15463,7 +15463,7 @@ describe('Lists, compound segments, imports and exports', () => {
     assert.deepEqual(ok(await http('GET', `/v1/lists/${list.id}`, key.secret)).counts, { total: 9, subscribed: 8, unsubscribed: 2, unknown: 0, suppressed: -1 });
     const logs: Json[] = [];
     for (const level of ['error', 'warn', 'info'] as const) t.mock.method(console, level, (line: string) => { try { logs.push(JSON.parse(line)); } catch { /* not a log line */ } });
-    const runtime = { db: drizzle(db) } as unknown as import('./src/core.js').Runtime;
+    const runtime = { db: drizzle(db) } as unknown as import('./src/core/types.js').Runtime;
     await db.query(`DELETE FROM job_schedule WHERE workspace_id='maintenance:audience-list-counts'`);
     assert.ok(await recountLists(runtime) >= 1);
     const drift = logs.filter(line => line.code === 'AUDIENCE_LIST_COUNTS_DRIFT' && line.list === list.id);
@@ -15761,7 +15761,7 @@ describe('Newsletters', () => {
       assert.equal((await jobs('sending.campaignStats'))[0].status, 'completed', 'A fresh count is not queued again.');
       // Once stale (the refresh interval is lowered to now), a count is queued again only when the job would count again:
       // reads of a quiet workspace queue nothing; a read after a new event for its mail, or new mail, does.
-      const { CAMPAIGN_STATS } = await import('./src/sending.js');
+      const { CAMPAIGN_STATS } = await import('./src/sending/schemas.js');
       const refresh = CAMPAIGN_STATS.readRefreshMs; t.after(() => { CAMPAIGN_STATS.readRefreshMs = refresh; });
       CAMPAIGN_STATS.readRefreshMs = 0;
       const job = async () => (await jobs('sending.campaignStats'))[0];
@@ -16029,7 +16029,7 @@ describe('Import property boundaries', () => {
   test('contact properties cap at 16 KiB across all write paths and audience reads page within the byte and isolate memory budgets', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, request }) => {
       const wid = runtime.config.workspaceId;
-      const { AUDIENCE_READ_MAX_BYTES, CONTACT_PROPERTIES_MAX_BYTES } = await import('./src/audience.js');
+      const { AUDIENCE_READ_MAX_BYTES, CONTACT_PROPERTIES_MAX_BYTES } = await import('./src/audience/schemas.js');
       const { memoryInUse, reserveMemory } = await import('./src/isolate-memory.js');
       const key = ok(await local('POST', '/v1/api-keys', { name: 'Audience bounds', permissions: ['read', 'manage'] }), 201).secret;
       const apiCall = (method: string, path: string, body?: Json) => request(method, path, key, body);
@@ -16262,9 +16262,9 @@ describe('Import property boundaries', () => {
       await db.query(`INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent) SELECT 'con_019a000000017'||substr(replace(gen_random_uuid()::text,'-',''),14),$1,'early_'||g||'@example.com','subscribed' FROM generate_series(1,100) g`, [wid]);
       await db.query(`INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent) SELECT 'con_019a000000097'||substr(replace(gen_random_uuid()::text,'-',''),14),$1,'late_'||g||'@example.com','subscribed' FROM generate_series(1,500) g`, [wid]);
       await db.query(`INSERT INTO audience_list_members(workspace_id,list_id,contact_id) SELECT $1,$2,id FROM audience_contacts WHERE workspace_id=$1 AND (email LIKE 'early_%' OR email LIKE 'late_%')`, [wid, probeList.id]);
-      const { snapshotCampaignAudience } = await import('./src/audience.js');
+      const { snapshotCampaignAudience } = await import('./src/audience/counts.js');
       const probeReviewId = 'rev_probe_' + randomUUID().replaceAll('-', '').slice(0, 12);
-      await snapshotCampaignAudience(runtime.db, { workspaceId: wid, keyId: 'fixture', permissions: ['read', 'write', 'manage', 'send'], domains: [], role: 'owner', credential: 'dashboard' } as never, { listId: probeList.id }, probeReviewId, [], false, { leading: (await import('./src/sending.js')).probeSize });
+      await snapshotCampaignAudience(runtime.db, { workspaceId: wid, keyId: 'fixture', permissions: ['read', 'write', 'manage', 'send'], domains: [], role: 'owner', credential: 'dashboard' } as never, { listId: probeList.id }, probeReviewId, [], false, { leading: (await import('./src/sending/schemas.js')).probeSize });
       const lateInFirst100 = (await db.query(`SELECT count(*)::int AS n FROM sending_review_recipients WHERE review_id=$1 AND ordinal<=100 AND recipient->>'email' LIKE 'late_%'`, [probeReviewId])).rows[0].n;
       assert.ok(lateInFirst100 >= 50 && lateInFirst100 <= 99, `Expected uniform mix of later UUIDv7 contacts in first 100 (got ${lateInFirst100}).`);
 
@@ -16378,7 +16378,7 @@ describe('Import property boundaries', () => {
   test('import follow-ups: 48 MiB commit lease, self-reclaiming stream holds, pre-parse auth/budget gates, and queued abort rollback', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
       const wid = runtime.config.workspaceId;
-      const { importStream, IMPORT_COMMIT_RESERVATION_BYTES, IMPORT_GET_RESERVATION_BYTES, importPreviewReservationBytes } = await import('./src/audience.js');
+      const { importStream } = await import('./src/audience/imports.js'), { IMPORT_COMMIT_RESERVATION_BYTES, IMPORT_GET_RESERVATION_BYTES, importPreviewReservationBytes } = await import('./src/audience/schemas.js');
       const { reserveMemory, memoryInUse } = await import('./src/isolate-memory.js');
       const { SEND_LIMITS } = await import('./src/send-limits.js');
       const { createApp } = await import('./src/app.js');
@@ -16485,7 +16485,7 @@ describe('Import property boundaries', () => {
       await db.query('ANALYZE audience_contacts, audience_list_members');
 
       // 1. A1-4: >50k skinny capture with priority + referenced personalization + hashed send order.
-      const { snapshotCampaignAudience } = await import('./src/audience.js');
+      const { snapshotCampaignAudience } = await import('./src/audience/counts.js');
       const actor = { workspaceId: wid, keyId: 'fixture', permissions: ['read', 'write', 'manage', 'send'], domains: [], role: 'owner', credential: 'dashboard' } as never;
       const revId = 'rev_skinny_' + randomUUID().replaceAll('-', '').slice(0, 12);
       const snap = await snapshotCampaignAudience(runtime.db, actor, { listId: bigList.id, priority: { property: 'plan', values: ['pro', 'free'] } }, revId, ['name', 'plan'], false);
@@ -16722,7 +16722,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
     await whileInFlight(wid, () => http('POST', '/v1/emails/send', key.secret, selfHosted, headers, 10_000));
     // Hosted: the one-statement admission claims the key in send_admission, first for a key the API has not
     // seen yet (it authenticates separately), then for a warm key, whose statement also charges the key's budget.
-    const [{ createApp }, { nodeRuntime }, { digest }] = await Promise.all([import('./src/app.js'), import('./src/adapters/node.js'), import('./src/core.js')]);
+    const [{ createApp }, { nodeRuntime }, { digest }] = await Promise.all([import('./src/app.js'), import('./src/adapters/node.js'), import('./src/core/http.js')]);
     const instance = nodeRuntime({ ...process.env, DATABASE_URL: FIXTURE_DATABASE_URL, MULTI_TENANT: 'true', ENABLE_LIVE_SES: 'false' }), app = createApp();
     const hosted = unique('ws-in-flight'), region = 'ap-south-2', acct = '123450000456', secret = `nm_${randomUUID().replaceAll('-', '')}${randomUUID().replaceAll('-', '')}`;
     try {
@@ -16752,7 +16752,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
   async function claimFirstFixture(t: TestContext) {
     const db = await fixtureDatabase(t);
     const [{ createApp }, { nodeRuntime }, { digest }, { credentialFingerprint, discoveryTarget }, { SESv2Client, TestRenderEmailTemplateCommand }] = await Promise.all([
-      import('./src/app.js'), import('./src/adapters/node.js'), import('./src/core.js'), import('./src/ses-region-state.js'), import('@aws-sdk/client-sesv2')]);
+      import('./src/app.js'), import('./src/adapters/node.js'), import('./src/core/http.js'), import('./src/ses-region-state.js'), import('@aws-sdk/client-sesv2')]);
     // This instance's connections carry their own application_name, so a test can tell its requests' lock waits from the
     // shard's job runner's (its job claims also read sending_campaigns).
     const appName = unique('claim-first'), url = new URL(FIXTURE_DATABASE_URL!); url.searchParams.set('application_name', appName);
@@ -17216,19 +17216,19 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
 
   test('a scheduled send is released once: a crash before its commit, racing releases and a retried job send it once', async t => {
     if (!fixtureWorker) return t.skip('requires the isolated loopback job runner');
-    const [{ jobHandlers }, { PgDialect }] = await Promise.all([import('./src/sending.js'), import('drizzle-orm/pg-core')]);
+    const [{ jobHandlers }, { PgDialect }] = await Promise.all([import('./src/sending/jobs.js'), import('drizzle-orm/pg-core')]);
     const key = await keyFixture(t);
     const receipt = ok(await http('POST', '/v1/emails/send', key.secret, mail({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })), 202);
     // Its time comes on a simulated clock: only the email's time moves, and its release job still waits an hour, so the
     // runner leaves the releases below to this test.
     await authDb!.query("UPDATE sending_emails SET scheduled_at=now()-interval '1 second' WHERE id=$1", [receipt.id]);
     const runtime = { ...fixtureWorker.runtime, config: { ...fixtureWorker.runtime.config, workspaceId: 'default' } };
-    const release = (rt: import('./src/core.js').Runtime = runtime) => jobHandlers['sending.release']!(rt, { emailId: receipt.id }, { id: `release:${receipt.id}`, attempts: 1, workspaceId: 'default' });
+    const release = (rt: import('./src/core/types.js').Runtime = runtime) => jobHandlers['sending.release']!(rt, { emailId: receipt.id }, { id: `release:${receipt.id}`, attempts: 1, workspaceId: 'default' });
     const row = async () => (await authDb!.query('SELECT status, created_at FROM sending_emails WHERE id=$1', [receipt.id])).rows[0];
     // The process dies between admitting it and committing: nothing was released, so the job's retry releases it.
     const dialect = new PgDialect(), pass = <T extends object>(target: T, name: PropertyKey) => { const value = Reflect.get(target, name); return typeof value === 'function' ? value.bind(target) : value; };
     const crashing = { ...runtime, db: new Proxy(runtime.db, { get: (db, name) => name !== 'transaction' ? pass(db, name)
-      : (work: (tx: import('./src/core.js').DbExecutor) => Promise<unknown>) => db.transaction(tx => work(new Proxy(tx, { get: (inner, method) => method !== 'execute' ? pass(inner, method)
+      : (work: (tx: import('./src/core/types.js').DbExecutor) => Promise<unknown>) => db.transaction(tx => work(new Proxy(tx, { get: (inner, method) => method !== 'execute' ? pass(inner, method)
         : (query: import('drizzle-orm').SQL) => dialect.sqlToQuery(query.getSQL()).sql.startsWith("UPDATE sending_emails SET status='queued'") ? Promise.reject(new Error('Simulated crash before commit')) : inner.execute(query) }))) }) };
     await assert.rejects(release(crashing), { code: 'OPERATION_TEMPORARILY_UNAVAILABLE', retryable: true });
     assert.equal((await row()).status, 'scheduled');
@@ -17251,7 +17251,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
   // run. Two real connections in a fixed order: the finalizer waits on the lock the real reschedule route holds.
   test('a reschedule that holds the email while a failed last attempt waits for it wins: the old run rejects nothing', async t => {
     if (!fixtureWorker) return t.skip('requires the isolated loopback job runner');
-    const [{ jobHandlers }, { MAX_ATTEMPTS }, { createApp }, { PgDialect }] = await Promise.all([import('./src/sending.js'), import('./src/jobs.js'), import('./src/app.js'), import('drizzle-orm/pg-core')]);
+    const [{ jobHandlers }, { MAX_ATTEMPTS }, { createApp }, { PgDialect }] = await Promise.all([import('./src/sending/jobs.js'), import('./src/jobs.js'), import('./src/app.js'), import('drizzle-orm/pg-core')]);
     const key = await keyFixture(t);
     const receipt = ok(await http('POST', '/v1/emails/send', key.secret, mail({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })), 202);
     // Its time has come (only the email's time moves: its release job waits an hour, so the runner leaves it to this test).
@@ -17262,8 +17262,8 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
     const gate = () => { let arrive!: () => void, go!: () => void; const reached = new Promise<void>(r => { arrive = r; }), opened = new Promise<void>(r => { go = r; }); return { reached, open: () => go(), wait: () => { arrive(); return opened; } }; };
     const finalizing = gate(), rescheduling = gate(), dialect = new PgDialect();
     const pass = <T extends object>(target: T, name: PropertyKey) => { const value = Reflect.get(target, name); return typeof value === 'function' ? value.bind(target) : value; };
-    const intercept = (base: import('./src/core.js').Runtime, onStatement: (text: string) => Promise<void> | void) => ({ ...base, db: new Proxy(base.db, { get: (db, name) => name !== 'transaction' ? pass(db, name)
-      : (work: (tx: import('./src/core.js').DbExecutor) => Promise<unknown>) => db.transaction(tx => work(new Proxy(tx, { get: (inner, method) => method !== 'execute' ? pass(inner, method)
+    const intercept = (base: import('./src/core/types.js').Runtime, onStatement: (text: string) => Promise<void> | void) => ({ ...base, db: new Proxy(base.db, { get: (db, name) => name !== 'transaction' ? pass(db, name)
+      : (work: (tx: import('./src/core/types.js').DbExecutor) => Promise<unknown>) => db.transaction(tx => work(new Proxy(tx, { get: (inner, method) => method !== 'execute' ? pass(inner, method)
         : async (query: import('drizzle-orm').SQL) => { await onStatement(dialect.sqlToQuery(query.getSQL()).sql); return inner.execute(query); } }))) }) });
     const base = { ...fixtureWorker.runtime, config: { ...fixtureWorker.runtime.config, workspaceId: 'default' } };
     // The worker's last attempt: its release fails before it commits, and its finalizer stops before it asks for the row.
@@ -17302,7 +17302,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
   // runs drive the real job runner (processJobs) over a session-local jobs table, so no other scenario's job is claimed.
   test('a scheduled send whose release runs out of attempts or leases is rejected and its sender told, never left waiting', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const [{ processJobs, MAX_ATTEMPTS }, { jobHandlers }, { PgDialect }, { sql }] = await Promise.all([import('./src/jobs.js'), import('./src/sending.js'), import('drizzle-orm/pg-core'), import('drizzle-orm')]);
+      const [{ processJobs, MAX_ATTEMPTS }, { jobHandlers }, { PgDialect }, { sql }] = await Promise.all([import('./src/jobs.js'), import('./src/sending/jobs.js'), import('drizzle-orm/pg-core'), import('drizzle-orm')]);
       const wid = runtime.config.workspaceId;
       const schedule = async () => { const { id } = ok(await local('POST', '/v1/emails/send', mail({ scheduledAt: new Date(Date.now() + 3_600_000).toISOString() })), 202); await elapse(db, [id], 3_601_000); return id as string; };
       const email = async (id: string) => (await db.query('SELECT status, error_code, provider_id FROM sending_emails WHERE id=$1', [id])).rows[0];
@@ -17312,7 +17312,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
       // Every release fails before it commits, as one would on a database that keeps refusing its write.
       const dialect = new PgDialect(), pass = <T extends object>(target: T, name: PropertyKey) => { const value = Reflect.get(target, name); return typeof value === 'function' ? value.bind(target) : value; };
       const failing = { ...runtime, db: new Proxy(runtime.db, { get: (base, name) => name !== 'transaction' ? pass(base, name)
-        : (work: (tx: import('./src/core.js').DbExecutor) => Promise<unknown>) => base.transaction(tx => work(new Proxy(tx, { get: (inner, method) => method !== 'execute' ? pass(inner, method)
+        : (work: (tx: import('./src/core/types.js').DbExecutor) => Promise<unknown>) => base.transaction(tx => work(new Proxy(tx, { get: (inner, method) => method !== 'execute' ? pass(inner, method)
           : (query: import('drizzle-orm').SQL) => dialect.sqlToQuery(query.getSQL()).sql.startsWith("UPDATE sending_emails SET status='queued'") ? Promise.reject(new Error('Simulated refusal')) : inner.execute(query) }))) }) };
       const ordinary = await schedule(), lost = await schedule(), sent = await schedule(), moved = await schedule();
       await runtime.db.execute(sql`CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP`);
@@ -17384,7 +17384,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
 
 describe('Billing: metering, gate and settlement', () => {
   // A Hosted (shared pool) workspace that sends live (not installation-simulated), so its recipients are billed.
-  async function billingFixture(runtime: import('./src/core.js').Runtime, db: pg.Client, local: (method: string, path: string, body?: Json) => Promise<Reply>, request: typeof http) {
+  async function billingFixture(runtime: import('./src/core/types.js').Runtime, db: pg.Client, local: (method: string, path: string, body?: Json) => Promise<Reply>, request: typeof http) {
     const wid = runtime.config.workspaceId, pool = '222233334444', domain = 'billing.example', from = `hello@${domain}`;
     Object.assign(runtime.config, { multiTenant: true, liveEnabled: true, aws: { accessKeyId: 'fixture-platform', secretAccessKey: 'fixture-only' } });
     await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture')`, [REGION, pool, `arn:aws:sns:${REGION}:${pool}:bane-feedback`]);
@@ -19540,7 +19540,7 @@ describe('Private attachment assets and campaign revisions', () => {
     cleanup(t, async () => { ok(await http('DELETE', `/v1/attachments/${json.id}`, key.secret), [200, 404]); });
     // The largest message (25 MiB of files and both 512 KiB body parts) fits SES's 40 MB after encoding, and the estimate
     // admission uses is never below the real size.
-    const [{ SESv2Client, SendEmailCommand }, { addSesBodySplice }, { inlineMessage }, { SEND_LIMITS, estimatedMimeBytes }] = await Promise.all([import('@aws-sdk/client-sesv2'), import('./src/ses-body.js'), import('./src/sending.js'), import('./src/send-limits.js')]);
+    const [{ SESv2Client, SendEmailCommand }, { addSesBodySplice }, { inlineMessage }, { SEND_LIMITS, estimatedMimeBytes }] = await Promise.all([import('@aws-sdk/client-sesv2'), import('./src/ses-body.js'), import('./src/sending/mime.js'), import('./src/send-limits.js')]);
     const file = new Uint8Array(max).map((_, i) => (i * 2654435761) >>> 24), html = `<p>${'x'.repeat(512 * 1024 - 7)}</p>`, text = 'y'.repeat(512 * 1024);
     const snapshot = { kind: 'transactional', from: 'sender@example.com', to: ['to@example.com'], cc: [], bcc: [], replyTo: [], subject: 'Largest', html, text, headers: [], attachments: [], region: REGION, tracking: false } as unknown as import('./src/db/sending.js').EmailSnapshot;
     const parts = [{ FileName: 'big.bin', ContentType: 'application/octet-stream', ContentDisposition: 'ATTACHMENT' as const, RawContent: file }, { FileName: 'logo.png', ContentType: 'image/png', ContentDisposition: 'INLINE' as const, ContentId: 'logo', RawContent: new Uint8Array([137, 80, 78, 71]) }];
@@ -20216,7 +20216,7 @@ describe('Dashboard API capabilities', () => {
     // Synthetic audit rows only: no live send, AWS call or dispatch job. Old creation times
     // prove stats have no implicit 30-day window. Raw feedback uses the real ingestion helper.
     const { nodeRuntime } = await import('./src/adapters/node.js');
-    const { recordEmailEvent } = await import('./src/sending.js');
+    const { recordEmailEvent } = await import('./src/sending/events.js');
     const { runtime, close } = nodeRuntime({ ...process.env, DATABASE_URL: FIXTURE_DATABASE_URL });
     cleanup(t, close);
     const fixtures = [
@@ -20311,7 +20311,7 @@ describe('Dashboard API capabilities', () => {
     for (const fromName of ['Acme Billing', 'Élodie 日本語', 'Acme 👩‍💻 Team', 'O\u2019Brien & Sons', 'Ärzte – Praxis', 'شركة أكمي\u200F Acme', 'Heart ❤\uFE0F Co', 'Team 1\uFE0F\u20E3', 'さくら Sakura', 'ᐃᓄᒃᑎᑐᑦ ᐸᐳ', '《新闻周刊》编辑部', 'Αθήνα \u24B7 Brand'])
       ok(await http('POST', '/v1/emails/send', key.secret, mail({ fromName })), 202);
     // Dispatch applies the same policy to names that were queued before it existed: the bare address is sent instead.
-    const { formattedSender } = await import('./src/sending.js');
+    const { formattedSender } = await import('./src/sending/mime.js');
     assert.equal(formattedSender('sender@example.com', 'billing\uFF20example.com'), 'sender@example.com');
     assert.equal(formattedSender('sender@example.com', 'security\u24D0paypal.com'), 'sender@example.com');
     assert.equal(formattedSender('sender@example.com', 'securitya\u20DDpaypal.com'), 'sender@example.com');
@@ -20451,7 +20451,7 @@ describe('Dashboard API capabilities', () => {
 
   // Existing standing fixtures are scoped to one workspace, not a shared queue drain. Advance just its display
   // handler to the fenced payload it would settle; the dedicated publication test below exercises real job settlement.
-  async function publishDisplayFixture(runtime: import('./src/core.js').Runtime, wid: string) {
+  async function publishDisplayFixture(runtime: import('./src/core/types.js').Runtime, wid: string) {
     const { sql } = await import('drizzle-orm');
     const { DISPLAY_SCORE_JOB, displayScoreId } = await import('./src/sender-score.js');
     const { senderDisplayScoreJob } = await import('./src/sender-display-score.js');
@@ -21174,7 +21174,7 @@ describe('Dashboard API capabilities', () => {
   test('sender score: the evaluation may be all marketing: a new workspace\'s first campaign goes out and ten identical notices in a batch are admitted; a score\'s limit keeps its transactional reserve', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, request, run, jobs }) => {
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { refreshStanding } = await import('./src/standing.js');
       const wid = runtime.config.workspaceId, acct = '112223330041', domain = 'first-newsletter.invalid', from = `news@${domain}`;
       Object.assign(runtime.config, { multiTenant: true, liveEnabled: true, aws: { accessKeyId: 'fixture', secretAccessKey: 'fixture' } });
@@ -21708,7 +21708,7 @@ describe('Sealed Logs facets', () => {
     const resumed = new Promise<void>(resolve => { release = resolve; });
     return { when, reached, release, pause: () => { hit(); return resumed; } };
   }
-  function stageDatabase(base: import('./src/core.js').Database, stages: ReturnType<typeof stage>[], retryOnly = false) {
+  function stageDatabase(base: import('./src/core/types.js').Database, stages: ReturnType<typeof stage>[], retryOnly = false) {
     let next = 0;
     const transaction: typeof base.transaction = async (work, config) => {
       const stop = config?.accessMode === 'read only' && (!retryOnly || config.isolationLevel === 'repeatable read') ? stages[next++] : undefined;
@@ -21727,7 +21727,7 @@ describe('Sealed Logs facets', () => {
     Promise.race([stop.reached, running.then(() => assert.fail('Operation completed before reaching its controlled stage.'))]);
 
   async function parkedRead(
-    runtime: import('./src/core.js').Runtime,
+    runtime: import('./src/core/types.js').Runtime,
     read: () => Promise<Reply>,
     whileParked?: () => Promise<unknown>,
   ) {
@@ -22056,7 +22056,7 @@ describe('Sealed Logs facets', () => {
     await worker.query('SELECT pg_advisory_lock(712008,hashtext($1))',[wid]);
     await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)',[wid]);
     await db.query("INSERT INTO workspace_members(id,user_id,workspace_id,role) VALUES($1,$2,$3,'owner')",[randomUUID(),person.userId,wid]);
-    const runtime:import('./src/core.js').Runtime={...fixtureWorker.runtime,db:drizzle(hp),config:{...fixtureWorker.runtime.config,multiTenant:true,workspaceId:wid},
+    const runtime:import('./src/core/types.js').Runtime={...fixtureWorker.runtime,db:drizzle(hp),config:{...fixtureWorker.runtime.config,multiTenant:true,workspaceId:wid},
       startLogFacetFold:()=>assert.fail('an aggregate dashboard must not enroll a legacy source scan'),startLogFacetAggregate:(_ws:string)=>{}};
     await ensureRegionSettings(runtime.db,runtime.config);
     cleanup(t,async()=>{
@@ -23538,7 +23538,7 @@ describe('Billing: Stripe', () => {
 describe('Hosted unsubscribe and dispatch-time consent', () => {
   test('punycode TLDs work for contact lookup, template replies, one-click and SES unsubscribeAll',async t=>{
     await simulatedSesFixture(t,async({runtime,local,request,db})=>{
-      const {ingestFeedbackBatch}=await import('./src/operations.js');
+      const {ingestFeedbackBatch}=await import('./src/ses/feedback.js');
       const to='a@example.xn--p1ai', contact=ok(await local('POST','/v1/contacts',{email:` ${to.toUpperCase()} `}),201);
       assert.equal(contact.email,to);assert.equal(page(await local('GET',`/v1/contacts?email=${to.toUpperCase()}`))[0].id,contact.id);
       const tpl=ok(await local('POST','/v1/templates',{name:'IDN fixture'}),201);
@@ -23873,8 +23873,8 @@ describe('Hosted unsubscribe and dispatch-time consent', () => {
   });
 
   test('a campaign’s own unsubscribe page changes only the footer link: List-Unsubscribe keeps its one HTTPS one-click address', async () => {
-    const { screenedAs, withUnsubscribe } = await import('./src/sending.js');
-    const runtime = { config: { publicUrl: 'https://mail.example' } } as unknown as import('./src/core.js').Runtime;
+    const { screenedAs, withUnsubscribe } = await import('./src/campaigns/materialize.js');
+    const runtime = { config: { publicUrl: 'https://mail.example' } } as unknown as import('./src/core/types.js').Runtime;
     const token = `u_${'ab'.repeat(32)}`, url = `https://mail.example/unsubscribe/${token}`, own = 'https://brand.example/prefs?list=news#top';
     const customer = { testCampaignId: null, from: 'news@brand.example', to: ['ana@example.net'], cc: [], bcc: [], replyTo: [], region: REGION, kind: 'marketing' as const,
       subject: 'Hello', html: '<p>Hello</p>', text: 'Hello', attachments: [], tracking: true, headers: [] as { Name: string; Value: string }[] };
@@ -24020,7 +24020,7 @@ describe('Hosted unsubscribe and dispatch-time consent', () => {
 
 describe('Billing: API, MCP and notices', () => {
   // A Hosted workspace with a shared connection; billing_config and billing_accounts start at their migration defaults.
-  async function hostedBilling(runtime: import('./src/core.js').Runtime, db: pg.Client) {
+  async function hostedBilling(runtime: import('./src/core/types.js').Runtime, db: pg.Client) {
     const wid = runtime.config.workspaceId, pool = '111122223333';
     Object.assign(runtime.config, { multiTenant: true });
     await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture') ON CONFLICT DO NOTHING`, [REGION, pool, `arn:aws:sns:${REGION}:${pool}:bane-feedback`]);
@@ -24676,7 +24676,7 @@ describe('Campaign postal address', () => {
         assert.ok(copy.text.endsWith(`\n\nUnsubscribe: ${url}\n${address}`), 'So does the text.');
       }
       // The copy as dispatched (rebuilt by the same footer) keeps the one-click headers on the recipient's own link.
-      const [{ sentCampaignContent }, { emails }, { eq }] = await Promise.all([import('./src/sending.js'), import('./src/db/sending.js'), import('drizzle-orm')]);
+      const [{ sentCampaignContent }, { emails }, { eq }] = await Promise.all([import('./src/campaigns/materialize.js'), import('./src/db/sending.js'), import('drizzle-orm')]);
       const unsubscribeHeaders = (snapshot: { headers: { Name: string; Value: string }[]; text?: string }) => {
         const url = snapshot.text?.match(/\n\nUnsubscribe: (\S+)/)?.[1];
         assert.ok(url?.includes('/unsubscribe/u_'));
@@ -24863,7 +24863,7 @@ describe('Required notices', () => {
       assert.deepEqual(await outcome(notice.id), { [email.subscribed]: 'sent', [email.unsubscribed]: 'sent', [email.unknown]: 'suppressed', [email.later]: 'sent' });
       assert.deepEqual(await outcome(marketing.id), { [email.subscribed]: 'sent', [email.later]: 'suppressed' });
       // The notice's emails: the postal address and no unsubscribe link, header or token.
-      const [{ sentCampaignContent }, { emails }, { eq }] = await Promise.all([import('./src/sending.js'), import('./src/db/sending.js'), import('drizzle-orm')]);
+      const [{ sentCampaignContent }, { emails }, { eq }] = await Promise.all([import('./src/campaigns/materialize.js'), import('./src/db/sending.js'), import('drizzle-orm')]);
       for (const row of (await released(notice.id)).filter(row => row.email !== email.unknown)) {
         const content = ok(await local('GET', `/v1/emails/${row.id}/content`));
         assert.ok(!/unsubscribe/i.test(content.html) && !/unsubscribe/i.test(content.text) && content.text.includes('sales tax applies to your plan.') && content.text.endsWith(`\n\n${FIXTURE_POSTAL_ADDRESS}`), 'The notice as delivered.');
@@ -25488,7 +25488,7 @@ describe('Operational configuration and public event boundaries', () => {
   });
 
   test('SES Auto Validation feedback records its subtype and suppresses the contact distinctly from a hard bounce', { skip: DATABASE_FIXTURE_SKIP }, async t => {
-    const [{ nodeRuntime }, { operationJobs }] = await Promise.all([import('./src/adapters/node.js'), import('./src/operations.js')]);
+    const [{ nodeRuntime }, { operationJobs }] = await Promise.all([import('./src/adapters/node.js'), import('./src/webhooks/operations.js')]);
     const db = await fixtureDatabase(t);
     const instance = nodeRuntime({ DATABASE_URL: FIXTURE_DATABASE_URL, BANE_ROOT_SECRET: AUTH_SECRET,
       ACCOUNT_ISSUER:process.env.ACCOUNT_ISSUER,ACCOUNT_CLIENT_ID:'fixture',ACCOUNT_CLIENT_PRIVATE_KEY:'unused-by-session-fixture', AUTH_ALLOWED_SUBJECTS: AUTH_SUBJECT,
@@ -25653,7 +25653,7 @@ describe('Operational configuration and public event boundaries', () => {
         const stored = (await db.query(`SELECT * FROM ${table} WHERE id=$1`, [endpoint.id])).rows[0];
         noValues(stored);
         assert.match(stored.encrypted_headers, /^v1\.[0-9a-f]{16}\.[0-9a-f]{24}\.[0-9a-f]+$/);
-        const { decrypt } = await import('./src/operations.js');
+        const { decrypt } = await import('./src/webhooks/crypto.js');
         const binding = `${runtime.config.workspaceId}:live:${table === 'mailbox_webhooks' ? 'mailbox:' : ''}${endpoint.id}`;
         assert.deepEqual(JSON.parse(await decrypt(runtime, stored.encrypted_headers, binding + ':headers')).headers, [hdr('Authorization'), hdr('X-Short', 'abc')]);
         await assert.rejects(decrypt(runtime, stored.encrypted_headers, binding), { code: 'KEY_ROTATION_REQUIRED' });
@@ -25689,7 +25689,7 @@ describe('Operational configuration and public event boundaries', () => {
         await db.query(`CREATE TEMP TABLE ${table} ON COMMIT DROP AS SELECT * FROM public.${table} WHERE workspace_id=$1`, [runtime.config.workspaceId]);
         ok(await local('PATCH', path, { headers: [{ name: 'Authorization', value }] }));
       }
-      const { reencryptWebhookSecrets } = await import('./src/operations.js');
+      const { reencryptWebhookSecrets } = await import('./src/webhooks/crypto.js');
       runtime.config = { ...runtime.config, encryptionKey: createHash('sha256').update(unique('new-root')).digest('hex'), previousEncryptionKey: runtime.config.encryptionKey };
       assert.deepEqual(await reencryptWebhookSecrets(runtime.db, runtime.config), { scanned: 2, reencrypted: 2, skipped: 0, conflicted: 0 });
       delete runtime.config.previousEncryptionKey;
@@ -25737,7 +25737,7 @@ describe('Operational configuration and public event boundaries', () => {
 
   test('SNS charges only certificate misses against the trusted peer budget', async t => {
     await simulatedSesFixture(t, async ({db, local, runtime}) => t.test('mocked certificate origin', async t => {
-      const { admissionPeer } = await import('./src/core.js');
+      const { admissionPeer } = await import('./src/core/http.js');
       const host=`https://sns.${REGION}.amazonaws.com/`, positive=snsCertName(), negative=snsCertName();
       const {privateKey}=generateKeyPairSync('rsa',{modulusLength:2048});
       const pem=await selfSignedPem(privateKey);
@@ -25789,7 +25789,7 @@ describe('Operational configuration and public event boundaries', () => {
 
   test('SNS stops verifying a peer whose signatures keep failing, for a minute, and keeps verifying SNS itself', async t => {
     await simulatedSesFixture(t, async ({ db, local, runtime }) => t.test('mocked certificate origin', async t => {
-      const { admissionPeer } = await import('./src/core.js'), { SnsFailureBudget, SnsCertificateState } = await import('./src/operations.js');
+      const { admissionPeer } = await import('./src/core/http.js'), { SnsFailureBudget, SnsCertificateState } = await import('./src/ses/sns-ingress.js');
       let now = Date.parse('2026-11-25T12:00:10Z');
       const budget = new SnsFailureBudget(() => now);
       Object.assign(runtime, { snsFailureBudget: budget, snsCertificateState: new SnsCertificateState() });
@@ -25823,7 +25823,7 @@ describe('Operational configuration and public event boundaries', () => {
   });
 
   test('SNS isolate limits simultaneous and rolling cold lookups independently of peer budgets', async () => {
-    const { SnsCertMissBudget } = await import('./src/operations.js');
+    const { SnsCertMissBudget } = await import('./src/ses/sns-ingress.js');
     let now=0, calls=0, finish!:()=>void;
     const gate=new Promise<void>(resolve=>{finish=resolve;}), budget=new SnsCertMissBudget(()=>now);
     const pending=Array.from({length:4},()=>budget.run(async()=>{calls++; await gate;}));
@@ -26037,7 +26037,7 @@ async function queryBudget(t:TestContext,db:pg.Client,{writeVolume=true}={}){
 const gradedSender = (db: { query: (text: string, values: unknown[]) => Promise<unknown> }, wid: string, limit = 10_000) => db.query(`INSERT INTO sender_standing(workspace_id,phase,first_recipients,score,target,quality,band_limit,daily_limit,computed_at,evidence_at)
   VALUES($1,'graded',100,90,90,95,$2,$2,now(),now()) ON CONFLICT(workspace_id) DO UPDATE SET phase='graded',score=90,target=90,quality=95,band_limit=$2,daily_limit=$2,computed_at=now(),evidence_at=now()`, [wid, limit]);
 async function simulatedSesFixture(t: TestContext, scenario: (fixture: {
-  runtime: import('./src/core.js').Runtime;
+  runtime: import('./src/core/types.js').Runtime;
   db: pg.Client;
   request: typeof http;
   local: (method: string, path: string, body?: Json, environment?: 'test' | 'live', headers?: Record<string, string>) => Promise<Reply>;
@@ -26048,8 +26048,8 @@ async function simulatedSesFixture(t: TestContext, scenario: (fixture: {
 }) => Promise<void>) {
   assert.ok(['localhost', '127.0.0.1', '[::1]'].includes(new URL(FIXTURE_DATABASE_URL!).hostname), 'Simulated SES fixtures require an isolated local database.');
   const [{ createApp }, { nodeRuntime }, { drizzle }, { jobHandlers }, { operationJobs }, { ensureRegionSettings }, { dispatchDue }, { JobDeferred }, { newsletterJobs }] = await Promise.all([
-    import('./src/app.js'), import('./src/adapters/node.js'), import('drizzle-orm/node-postgres'), import('./src/sending.js'),
-    import('./src/operations.js'), import('./src/ses-region-state.js'), import('./src/dispatcher.js'), import('./src/jobs.js'), import('./src/newsletters.js'),
+    import('./src/app.js'), import('./src/adapters/node.js'), import('drizzle-orm/node-postgres'), import('./src/sending/jobs.js'),
+    import('./src/webhooks/operations.js'), import('./src/ses-region-state.js'), import('./src/sending/dispatcher.js'), import('./src/jobs.js'), import('./src/newsletters.js'),
   ]);
   const db = await fixtureDatabase(t);
   const instance = nodeRuntime({ DATABASE_URL: FIXTURE_DATABASE_URL, BANE_ROOT_SECRET: AUTH_SECRET,
@@ -26375,7 +26375,7 @@ test('Hosted account re-home: drained legacy Ohio installation',async t=>{
   }
   await db.query('CREATE TABLE opensend_migrations (LIKE public.nightmail_migrations INCLUDING ALL); INSERT INTO opensend_migrations SELECT * FROM public.nightmail_migrations WHERE name NOT LIKE \'092_%\' AND name NOT LIKE \'398_%\'');
   await t.test('secretless migration preserves ciphertext and the legacy ledger; explicit rotation rewraps it',async mt=>{
-    const {loadConfig}=await import('./src/config.js'), {encrypt,decrypt}=await import('./src/operations.js'), {spawnSync}=await import('node:child_process');
+    const {loadConfig}=await import('./src/config.js'), {encrypt,decrypt}=await import('./src/webhooks/crypto.js'), {spawnSync}=await import('node:child_process');
     const url=new URL(FIXTURE_DATABASE_URL!);url.searchParams.set('options','-c search_path='+schema);
     const migrationEnv=(extra:Record<string,string>={})=>({PATH:process.env.PATH,DATABASE_URL:url.href,DEFAULT_SES_REGION:'us-east-2',...extra} as unknown as NodeJS.ProcessEnv);
     const migrate=(env:Record<string,string>={},failure?:RegExp)=>{
@@ -26583,7 +26583,7 @@ test('Hosted account re-home: drained legacy Ohio installation',async t=>{
   await t.test('late feedback jobs do not invalidate either fence; before-images are bounded chunks',async()=>{
     runId=run+'-feedback';await db.query(`INSERT INTO operation_webhooks(id,workspace_id,url,event_types,encrypted_secret) VALUES('fixture',$1,'https://callback.invalid','["email.opened","email.clicked"]','fixture')`,[w[0]]);
     await db.query(`INSERT INTO mail_messages(id,workspace_id,direction,thread_id,region,raw_bucket,raw_key) SELECT 'bulk-'||n,$1,'inbound','thread',$2,$3,$4||'raw/'||n||'.eml' FROM generate_series(1,260) n`,[w[0],r,bucket(old),prefix]);
-    const {ingestFeedbackBatch}=await import('./src/operations.js');
+    const {ingestFeedbackBatch}=await import('./src/ses/feedback.js');
     const late=async(kind:string)=>assert.deepEqual(await ingestFeedbackBatch(runtime,[{topicArn:topic(old),region:r,messageId:randomUUID(),message:{eventType:kind,mail:{messageId:'email_old',sendingAccountId:old},[kind.toLowerCase()]:{timestamp:new Date().toISOString()}}}]),[{ok:true}]);
     const plan=await command();await late('Open');const review=await command();assert.equal(review.planSha256,plan.planSha256);assert.notDeepEqual(review.jobs,plan.jobs);await apply(plan.planSha256);
     const sizes=await db.query(`SELECT (SELECT count(*)::int FROM jsonb_object_keys(before_image)) size FROM hosted_rehome_images WHERE relation='mail_messages' ORDER BY chunk`);assert.deepEqual(sizes.rows,[{size:256},{size:5}]);
@@ -26593,7 +26593,7 @@ test('Hosted account re-home: drained legacy Ohio installation',async t=>{
   runId+='-reconcile';await apply((await command()).planSha256);
   await t.test('flags-on reconciliation, fresh claim-tagged identities, receiving and signed historical feedback',async integration=>{
     const [{operationJobs},{reconcileSharedConnections},{JobDeferred},{SESv2Client},{SNSClient},{SESClient},{S3Client},{STSClient}]=await Promise.all([
-      import('./src/operations.js'),import('./src/provider-connections.js'),import('./src/jobs.js'),import('@aws-sdk/client-sesv2'),import('@aws-sdk/client-sns'),import('@aws-sdk/client-ses'),import('@aws-sdk/client-s3'),import('@aws-sdk/client-sts')]);
+      import('./src/webhooks/operations.js'),import('./src/provider-connections.js'),import('./src/jobs.js'),import('@aws-sdk/client-sesv2'),import('@aws-sdk/client-sns'),import('@aws-sdk/client-ses'),import('@aws-sdk/client-s3'),import('@aws-sdk/client-sts')]);
     const apiKey='os_'+'1'.repeat(64),app=createApp();await db.query(`INSERT INTO api_keys(id,workspace_id,name,hash,prefix,permissions,domains) VALUES('key',$1,'fixture',$2,'os_fixture','["manage","read","send"]','[]')`,[w[0],createHash('sha256').update(apiKey).digest('hex')]);
     const api=async(method:string,path:string,body?:Json)=>{const res=await app.fetch(new Request(origin+path,{method,headers:{authorization:'Bearer '+apiKey,'content-type':'application/json'},body:body?JSON.stringify(body):undefined}),runtime);return {status:res.status,headers:res.headers,body:await res.json()};};
     const sets=new Map<string,Json>(),topics=new Map<string,Json>(),setup=setupStore(sets,topics,dest),identities=new Map<string,Json>(),tenants=new Set<string>(),associations=new Set<string>();
@@ -26677,7 +26677,7 @@ test('Hosted account re-home: drained legacy Ohio installation',async t=>{
     assert.equal((await db.query(`UPDATE provider_connections SET paused_at=NULL,pause_reason=NULL WHERE kind='shared' AND pause_reason=$1`,['fixture hold'])).rowCount,1);
     assert.equal((await db.query(`SELECT FROM provider_connections WHERE resumed_at IS NOT NULL`)).rowCount,0);
     const sent=ok(await api('POST','/v1/emails/send',{from:'sender@'+names[0],to:'success@simulator.amazonses.com',subject:'Cutover fixture',text:'Simulated transport'}),202);
-    const {runDispatcher}=await import('./src/dispatcher.js');await runDispatcher(runtime,{region:r,accountId:dest,lanes:1});assert.equal(sends,1);
+    const {runDispatcher}=await import('./src/sending/dispatcher.js');await runDispatcher(runtime,{region:r,accountId:dest,lanes:1});assert.equal(sends,1);
     assert.deepEqual((await db.query('SELECT provider_id,feedback_topic_arn,status FROM sending_emails WHERE id=$1',[sent.id])).rows,[{provider_id:'fixture-new-send',feedback_topic_arn:topic(dest),status:'accepted'}]);
     const envelope=async(fields:Record<string,string>)=>{
       const body={...fields,SigningCertURL:certUrl,SignatureVersion:'2',Signature:Buffer.from(sign('RSA-SHA256',Buffer.from(Object.entries(fields).map(([k,v])=>`${k}\n${v}\n`).join('')),privateKey)).toString('base64')};
@@ -26702,7 +26702,7 @@ test('Hosted account re-home: drained legacy Ohio installation',async t=>{
     await db.query(`UPDATE provider_pool_regions SET sending_state='pending'`);
     const owner=await seedSession(db),host='cold-rehome.example.org';await db.query(`INSERT INTO workspace_members(id,workspace_id,user_id,role) VALUES('personal-owner',$1,$2,'owner')`,[personal,owner.userId]);
     const app=createApp(),api=async(method:string,path:string,body?:Json)=>{const res=await app.fetch(new Request(origin+path,{method,headers:{cookie:owner.cookie.replace(/^(?:__Host-)?nightmail/,'__Host-nightmail'),origin,'x-bane-workspace':personal,'content-type':'application/json'},body:body?JSON.stringify(body):undefined}),runtime);return {status:res.status,headers:res.headers,body:await res.json()};};
-    const {SESv2Client}=await import('@aws-sdk/client-sesv2'),{operationJobs}=await import('./src/operations.js'),{JobDeferred}=await import('./src/jobs.js');
+    const {SESv2Client}=await import('@aws-sdk/client-sesv2'),{operationJobs}=await import('./src/webhooks/operations.js'),{JobDeferred}=await import('./src/jobs.js');
     let tags:Json[]=[];const dkim={Status:'SUCCESS',SigningEnabled:true,SigningHostedZone:'dkim.amazonses.com',Tokens:['cold-a','cold-b','cold-c']};
     cold.mock.method(SESv2Client.prototype,'send',async function(this:InstanceType<typeof SESv2Client>,cmd:any){assert.equal(cmd.input.EmailIdentity,host);assert.equal((await this.config.credentials()).accessKeyId,'fixture-rehome');
       if(cmd.constructor.name==='PutEmailIdentityFeedbackAttributesCommand'){assert.equal(cmd.input.EmailForwardingEnabled,false);return {};}
@@ -26816,7 +26816,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         return specifier === 'cloudflare:workers' ? { shortCircuit:true, url:'data:text/javascript,export class DurableObject {constructor(ctx,env){this.ctx=ctx;this.env=env}} export class WorkerEntrypoint {constructor(ctx,env){this.ctx=ctx;this.env=env}}' } : next(specifier, context);
       } });
       const { DispatcherShard, shardsForRate, TARGET_SHARD_RATE } = await import('./src/dispatcher-do.js').finally(() => hook.deregister());
-      const { shardLeaseSize } = await import('./src/dispatcher.js');
+      const { shardLeaseSize } = await import('./src/sending/quota.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       assert.equal(TARGET_SHARD_RATE, 25);
       assert.deepEqual([shardsForRate(14), shardsForRate(50), shardsForRate(200), shardsForRate(1000), shardsForRate(null, 8)], [1, 2, 8, 40, 8]);
@@ -26871,8 +26871,8 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   test('mail room holds pre-deploy verdictless rows for screenHeldMail; sweep retries on outage, sends clean rows and rejects spam with email.rejected webhook; refused suppression frees idempotency key', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run }) => t.test('synthetic transports', async t => {
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
-      const { screenHeldMail } = await import('./src/sending.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
+      const { screenHeldMail } = await import('./src/sending/held-screen.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const wid = runtime.config.workspaceId, acct = '112223330006', origin = 'https://screen.synthetic.invalid', topic = `arn:aws:sns:${REGION}:${acct}:fixture`;
       const key = ok(await local('POST', '/v1/api-keys', { name: 'held-sweep', permissions: ['send', 'read'] }), 201);
@@ -26976,7 +26976,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   test('mid-batch stop interleaves owners across sendConcurrency chunks while keeping transactional first', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const { runDispatcher, initialGate, interleaveByOwner } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js'), { interleaveByOwner } = await import('./src/sending/claim.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       // Pure helper check: transactional stays first; marketing alternates owners; offset rotates start owner.
       const sample = [
@@ -27025,7 +27025,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // lease, claim, send, record and the next lease, which found nothing and ended the run.
   test('a dispatcher lease that passes the last owner wraps to the first, so a run never stops with mail due', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       // A region of its own: this workspace is its only owner, so a one-row lease's cursor is
       // the last owner, exactly as with 24 owners and the normal 24-row lease.
       const region = 'te-cursor-1', status = async (ids: string[]) => (await db.query('SELECT status FROM sending_emails WHERE id=ANY($1) ORDER BY id', [ids])).rows.map(r => r.status);
@@ -27055,8 +27055,8 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // that re-armed the Durable Object at once).
   test('a lease the marketing allowance cannot afford ends the run as a quota hold in a bounded number of statements', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { runDispatcher } = await import('./src/dispatcher.js');
-      const { sesDailyReserve } = await import('./src/sending.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
+      const { sesDailyReserve } = await import('./src/sending/schemas.js');
       const region = 'te-allowance-1', w = runtime.config.workspaceId, percent = runtime.config.dispatch.dailyHeadroomPercent;
       // 24 owners (one lease's worth), each with one two-recipient marketing envelope.
       const owners = Array.from({ length: 24 }, (_, i) => `${w}-o${String(i).padStart(2, '0')}`), later = `${w}-o24`;
@@ -27124,8 +27124,8 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // the specific envelopes the allowance cannot afford, and a batch that advanced nothing ends.
   test('the allowance skips specific unaffordable envelopes: one owner\'s full page holds, and mail behind oversized heads sends', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
-      const { sesDailyReserve } = await import('./src/sending.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
+      const { sesDailyReserve } = await import('./src/sending/schemas.js');
       const w = runtime.config.workspaceId, percent = runtime.config.dispatch.dailyHeadroomPercent, max = 100;
       const template = ok(await local('POST', '/v1/emails/send', mail()), 202).id, contacts = [address(), address()];
       // Owners with their own send key and two subscribed contacts; each owner's envelopes are
@@ -27376,7 +27376,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       await seen(await request('POST', '/mcp', forged, rpc, mcpHeaders), { route: '/mcp', status: 401, code: 'AUTH_INVALID' });
       await seen(await request('POST', '/mcp', undefined, rpc, { ...mcpHeaders, origin: 'https://elsewhere.example' }), { route: '/mcp', status: 403, code: 'ORIGIN_NOT_ALLOWED' });
       // A caller that does pass caller data still cannot log an address or a credential.
-      const { log } = await import('./src/core.js');
+      const { log } = await import('./src/log.js');
       log('warn', { code: 'LOG_SCRUB_FIXTURE', note: `to ${email} with ${forged}` });
       assert.match(lines.at(-1)!, /"note":"to \[email\] with \[redacted\]"/);
       // The review's real case: PostgreSQL refuses a NUL byte (SQLSTATE 22021) and the driver's message quotes the
@@ -27396,7 +27396,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // PR #131 recheck: an error's name and message are both caller-reachable text, and either can span lines that look
   // exactly like frames. stackFrames reads frames only after the exact header text, and keeps Nightmail's own.
   test('stack frames: an error name or message that looks like frames is never logged as one, and error fields are logged only as allowlisted strings', async t => {
-    const { stackFrames, errorTypeOf, databaseCodeOf, logError, log } = await import('./src/core.js');
+    const { stackFrames, errorTypeOf, log } = await import('./src/log.js'), { databaseCodeOf, logError } = await import('./src/core/errors.js');
     const real = '    at realHandler (worker.js:5:5)\n    at async Pool.query (/app/node_modules/pg/lib/client.js:9:9)\n    at async handler (/app/dist/app.js:7:3)';
     const formatted = (name: string, message: string) => {
       const error = Object.assign(new Error(message), { name });
@@ -27458,7 +27458,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // fractional plan day) is logged where it failed and what kind of value it got, never the value, whatever it holds.
   // A path keeps only the field names the API publishes: never a key a customer chose.
   test('an unexpected failure from a schema says which field it refused and what kind of value, never the value', async t => {
-    const [{ logError, schemaIssues }, { z }] = await Promise.all([import('./src/core.js'), import('zod')]);
+    const [{ logError, schemaIssues }, { z }] = await Promise.all([import('./src/core/errors.js'), import('zod')]);
     const lines: string[] = [];
     for (const level of ['error', 'warn', 'info'] as const) t.mock.method(console, level, (line: string) => lines.push(String(line)));
     const marker = 'schema-value-private-marker';
@@ -27509,7 +27509,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
 
   test('logging never throws and never runs a method, getter or toJSON of what it logs', async t => {
-    const { log, logError } = await import('./src/core.js');
+    const { log } = await import('./src/log.js'), { logError } = await import('./src/core/errors.js');
     const lines: string[] = [];
     for (const level of ['error', 'warn', 'info'] as const) t.mock.method(console, level, (line: string) => lines.push(String(line)));
     const marker = 'pr131-variant-private-marker', arrayMarker = 'pr131-array-proxy-private';
@@ -27582,7 +27582,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('MX shadow placement enqueues without probing, persists one private observation and never routes',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,jobs})=>{
-      const {loadConfig}=await import('./src/config.js'), {operationJobs}=await import('./src/operations.js');
+      const {loadConfig}=await import('./src/config.js'), {operationJobs}=await import('./src/webhooks/operations.js');
       const {SESv2Client}=await import('@aws-sdk/client-sesv2'), tls=(await import('node:tls')).default,{EventEmitter}=await import('node:events');
       const cfg={BANE_ROOT_SECRET:'fixture-'.repeat(6),PUBLIC_URL:'https://fixture.example.com'};
       assert.equal(loadConfig({...cfg,BANE_PLACEMENT_SHADOW:'true'}).placementShadow,false);
@@ -27802,7 +27802,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     await Promise.allSettled([prepare(),prepare()]);await prepare();
     assert.deepEqual(['SetTopicAttributesCommand','SetSubscriptionAttributesCommand','CreateTopicCommand','SubscribeCommand','CreateTenantCommand','CreateConfigurationSetCommand','CreateConfigurationSetEventDestinationCommand','PutConfigurationSetSuppressionOptionsCommand'].map(n=>calls.filter(c=>c===n).length),[0,0,0,1,1,0,0,0]);
     const added=ok(await api('POST','/v1/domains',{name:managed}),201);assert.equal(added.region,va);await assert.rejects(setDomainPool(db,[wid,managed,'probation','--reason','Synthetic pool placement'],flags),/Already bound/);
-    const {operationJobs}=await import('./src/operations.js');await operationJobs['domain.verify']!(runtime,{domainId:added.id,token:managedTags[0]!.Value},{workspaceId:wid,id:'verify',attempts:1});
+    const {operationJobs}=await import('./src/webhooks/operations.js');await operationJobs['domain.verify']!(runtime,{domainId:added.id,token:managedTags[0]!.Value},{workspaceId:wid,id:'verify',attempts:1});
     assert.equal(ok(await api('GET',`/v1/domains/${added.id}`)).ready,true);
     const {adoptionFacts}=await import('./src/adopted-identity.js');const rows=Array.from({length:12},(_,i)=>{const name=`adopted-${i}.fixture.test`;return {arn:`arn:aws:ses:${va}:${acct}:identity/${name}`,...adoptionFacts(identity(name) as any)};});
     const inventory={workspaceId:wid,installation:'opensend-042df6f752eaa1f62cb8',scope:'exclusive-send-only',identities:rows};
@@ -27835,7 +27835,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('Platform domain: only the configured workspace owns, sends and receives as it, after an operator adopts its existing identity',async t=>{
     const [{nodeRuntime},{createApp},{adoptPlatformDomain,revokePlatformDomain},{operationJobs},{acceptInboundNotification},{ensureRegionSettings},{SESv2Client},{render},{regionalSender,platformValidationMailbox,platformHosts},{storeIncoming},{sql},{JobDeferred}]=await Promise.all([
-      import('./src/adapters/node.js'),import('./src/app.js'),import('./scripts/adopt-platform-domain.js'),import('./src/operations.js'),import('./src/mailbox-ingest.js'),import('./src/ses-region-state.js'),import('@aws-sdk/client-sesv2'),
+      import('./src/adapters/node.js'),import('./src/app.js'),import('./scripts/adopt-platform-domain.js'),import('./src/webhooks/operations.js'),import('./src/mailbox-ingest.js'),import('./src/ses-region-state.js'),import('@aws-sdk/client-sesv2'),
       import(new URL('../infra/aws-shared/runtime-policies.mjs',import.meta.url).href),import('./src/domain-claims.js'),import('./src/mailbox-ingest-store.js'),import('drizzle-orm'),import('./src/jobs.js')]);
     const db=await fixtureDatabase(t),oh='us-east-2',acct='000033334444',host=`${unique('platform')}.test`,publicUrl=`https://${host}`;
     const [owner,other]=[0,1].map(()=>'ws_'+randomUUID().replaceAll('-','')) as [string,string];
@@ -28048,7 +28048,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('MX regional delivery: legacy backfill, closest claim, mixed batch and frozen dispatch',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run})=>{
-      const {readFile}=await import('node:fs/promises'),{runDispatcher}=await import('./src/dispatcher.js');
+      const {readFile}=await import('node:fs/promises'),{runDispatcher}=await import('./src/sending/dispatcher.js');
       const {GetAccountCommand,SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2');
       const wid=runtime.config.workspaceId,acct='111122223333',oh='us-east-2',va='us-east-1',byo=unique('byo');
       const old=`arn:aws:sns:${oh}:${acct}:bane-feedback`,trusted=`arn:aws:sns:${va}:${acct}:bane-trusted-feedback`;
@@ -28153,7 +28153,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.equal(attempts.length,5);
       // A retired topic accepts delayed notifications only for the exact recorded ARN,
       // account, region and provider/email ID. Rotating a shared topic cannot move an event.
-      const {ingestFeedbackBatch}=await import('./src/operations.js');
+      const {ingestFeedbackBatch}=await import('./src/ses/feedback.js');
       const providerId=(await db.query('SELECT provider_id FROM sending_emails WHERE id=$1',[mixed[1].id])).rows[0].provider_id;
       const replacement=`arn:aws:sns:${va}:${acct}:bane-replacement-feedback`;
       await db.query('UPDATE provider_pool_regions SET feedback_topic_arn=$1 WHERE region=$2',[replacement,va]);
@@ -28171,7 +28171,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('built-in domain: given on creation and by the backfill, unique and never a reserved name, sends within its caps and scope, receives into a catch-all inbox, refused when paused or revoked',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,request,run})=>t.test('synthetic transports',async t=>{
       const [{runDispatcher},{SESv2Client,GetAccountCommand,SendEmailCommand,GetEmailIdentityCommand,CreateTenantResourceAssociationCommand,DeleteTenantResourceAssociationCommand},builtin,{onboardNewUser,ownerName},{acceptInboundNotification,mailboxIngestJobs},{storeIncoming},{ingestInput},{matchRouting},{sql},{render}]=await Promise.all([
-        import('./src/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js'),import('./src/workspaces.js'),import('./src/mailbox-ingest.js'),import('./src/mailbox-ingest-store.js'),
+        import('./src/sending/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js'),import('./src/workspaces.js'),import('./src/mailbox-ingest.js'),import('./src/mailbox-ingest-store.js'),
         import('./src/mailbox-ingest-input.js'),import('./src/routing-match.js'),import('drizzle-orm'),import(new URL('../infra/aws-shared/runtime-policies.mjs',import.meta.url).href)]);
       const wid=runtime.config.workspaceId,acct='111122225555',oh='us-east-2',parent='nightmail-fixture.email',topic=`arn:aws:sns:${oh}:${acct}:bane-feedback`;
       const inbound=`arn:aws:sns:${oh}:${acct}:bane-inbound`,bucket='builtin-fixture-mail',screenOrigin='https://screen.builtin.invalid';
@@ -28669,7 +28669,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('built-in domain: a send while the domain is still being set up, by its job as well as by the request that made the workspace, is held until it is ready and then queued once; a setup that stopped is refused plainly',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run})=>t.test('synthetic transports',async t=>{
       const [{runDispatcher},{SESv2Client,GetAccountCommand,GetEmailIdentityCommand,CreateTenantResourceAssociationCommand,SendEmailCommand},builtin]=await Promise.all([
-        import('./src/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js')]);
+        import('./src/sending/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js')]);
       const wid=runtime.config.workspaceId,acct='111122227777',oh='us-east-2',parent='nightmail-fixture.email',topic=`arn:aws:sns:${oh}:${acct}:bane-feedback`;
       Object.assign(runtime.config,{multiTenant:true,regionalSending:true,liveEnabled:true,aws:{accessKeyId:'fixture-setup-hold',secretAccessKey:'fixture-only'},builtinDomain:parent,builtinScope:'members',platformAccount:undefined,hostedScreen:false,screen:undefined});
       await db.query(`UPDATE ses_installation_settings SET default_region=$2,enabled_regions=jsonb_build_array($2::text) WHERE workspace_id=$1`,[wid,oh]);
@@ -28734,7 +28734,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('built-in domain breaker: all built-in mail over 5% permanent bounces or 0.1% complaints, even without its worst workspace, stops every built-in domain sending, not receiving, pages the reputation channel, and stays tripped until an operator resets it; one workspace alone only alerts',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run})=>t.test('synthetic transports',async t=>{
       const [{runDispatcher},{SESv2Client,GetAccountCommand,GetEmailIdentityCommand,CreateTenantResourceAssociationCommand,SendEmailCommand},builtin,{reputationAlertJobs},{JobDeferred}]=await Promise.all([
-        import('./src/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js'),import('./src/reputation-alerts.js'),import('./src/jobs.js')]);
+        import('./src/sending/dispatcher.js'),import('@aws-sdk/client-sesv2'),import('./src/builtin-domain.js'),import('./src/reputation-alerts.js'),import('./src/jobs.js')]);
       const wid=runtime.config.workspaceId,acct='111122225555',oh='us-east-2',parent='nightmail-fixture.email',topic=`arn:aws:sns:${oh}:${acct}:bane-feedback`;
       Object.assign(runtime.config,{multiTenant:true,regionalSending:true,liveEnabled:true,aws:{accessKeyId:'fixture',secretAccessKey:'fixture-only'},builtinDomain:parent,builtinScope:'anyone',
         platformAccount:undefined,reputationAlertUrl:'https://hooks.slack.invalid/builtin-breaker',hostedScreen:false,screen:undefined});
@@ -29170,7 +29170,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       // Keep the envelope invisible to the independent simulated runner until THIS mocked
       // customer's regional dispatcher has recorded the provider response.
       const previous=runtime.db;try {await (await import('drizzle-orm/node-postgres')).drizzle(db).transaction(async tx=>{runtime.db=tx;
-      const {dispatchDue}=await import('./src/dispatcher.js');const scoped={...runtime,config:{...runtime.config,workspaceId:wid,regions:[oh,va]}};
+      const {dispatchDue}=await import('./src/sending/dispatcher.js');const scoped={...runtime,config:{...runtime.config,workspaceId:wid,regions:[oh,va]}};
       const sendSubject=(subject:string)=>api('POST','/v1/emails/send',{from:'pilot@sub.both.example',to:'success@simulator.amazonses.com',template:{name:'bane-pilot',data:{subject}}});
       error(await sendSubject('Fixture\rSender: x@evil'),422,'INVALID_RENDERED_MIME');
       error(await sendSubject('Fixture\r\nContent-Type: text/html'),422,'INVALID_RENDERED_MIME');
@@ -29203,7 +29203,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     assert.deepEqual(ok(await api('POST','/v1/domains',{name:'new.example'}),202).regions,[oh]);await run('byo.bind',oh);
     assert.equal((await db.query('SELECT region FROM domain_sending_bindings WHERE workspace_id=$1 AND name=$2',[wid,'new.example'])).rows[0].region,oh);
     const verify=(await db.query("SELECT j.* FROM jobs j JOIN operation_domains d ON d.id=j.payload->>'domainId' WHERE d.workspace_id=$1 AND d.name='new.example' AND j.type='domain.verify'",[wid])).rows[0];
-    await assert.rejects((await import('./src/operations.js')).operationJobs['domain.verify']!(runtime,verify.payload,{workspaceId:wid,id:verify.id,attempts:1}),JobDeferred);
+    await assert.rejects((await import('./src/webhooks/operations.js')).operationJobs['domain.verify']!(runtime,verify.payload,{workspaceId:wid,id:verify.id,attempts:1}),JobDeferred);
     assert.equal(trace.filter(t=>t.op==='PutEmailIdentityFeedbackAttributesCommand').length,1);assert.equal(createdIdentity?.FeedbackForwardingStatus,true,'An unchanged BYO role refuses the optional write without blocking the domain');
     assert.equal(trace.filter(t=>t.op==='CreateEmailIdentityCommand').length,1);assert.ok(policies.at(-1)!.includes(`arn:aws:ses:${oh}:${account}:identity/new.example`));
     await t.test('terminal bind failures release both domain caps and allow regional reselection',async()=>{
@@ -29788,7 +29788,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.equal(await confirmations(), sent + 1, 'One more confirmation email, from the same address.');
       // It went to the forward's registered recipient only, from its registered sender; the forward is still unconfirmed and
       // its destination unchanged: the resend can't confirm, decline, retarget or point the link anywhere else.
-      const { decrypt } = await import('./src/operations.js');
+      const { decrypt } = await import('./src/webhooks/crypto.js');
       const { rows: [newest] } = await db.query('SELECT to_addresses, from_address FROM sending_emails WHERE workspace_id = $1 AND subject = $2 ORDER BY created_at DESC, id DESC LIMIT 1', [wid, `Confirm forwarding from ${box.address}`]);
       assert.deepEqual([newest.to_addresses, newest.from_address], [['team@outside.example'], box.address]);
       const { rows: [after] } = await db.query('SELECT verified, declined_at, encrypted_target, request_from FROM mailbox_webhooks WHERE id = $1', [team.id]);
@@ -29914,7 +29914,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('MX receiving hosts: DNS conflicts are checked when a host is suggested or chosen and in the hourly recheck', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
-      const [{ operationJobs }, { baneRecordUse, receivingCandidates }] = await Promise.all([import('./src/operations.js'), import('./src/receiving-host.js')]);
+      const [{ operationJobs }, { baneRecordUse, receivingCandidates }] = await Promise.all([import('./src/webhooks/operations.js'), import('./src/receiving-host.js')]);
       const wid = runtime.config.workspaceId;
       Object.assign(runtime.config, { multiTenant: true });
       // A pool region that receives, and a ready Hosted connection on its account.
@@ -30796,7 +30796,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         assert.ok(cmd instanceof SendEmailCommand);assert.deepEqual(cmd.input.Destination?.ToAddresses,['success@simulator.amazonses.com']);
         sends++;return {MessageId:randomUUID()};
       });
-      const {runDispatcher}=await import('./src/dispatcher.js');
+      const {runDispatcher}=await import('./src/sending/dispatcher.js');
       await runDispatcher(runtime,{region:REGION,accountId:account,lanes:1});
       assert.equal(sends,1);assert.equal((await db.query('SELECT status FROM sending_emails WHERE workspace_id=$1 AND campaign_id=$2',[wid,c.id])).rows[0].status,'accepted');
       assert.deepEqual((await db.query(`SELECT a->>'used' AS used,a->>'marketingDayCap' AS marketing,hosted_minute_cap($1) AS burst,w.pending_cap_override,w.exempt_hosted_quotas FROM hosted_allowance_read($1,1,1,100,1000,10000,10) h(a) CROSS JOIN workspaces w WHERE w.id=$1`,[wid])).rows,
@@ -30937,7 +30937,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // the page are lowered here so 30 emails make a large campaign of five pages.
   test('campaign stats: a large campaign is counted in bounded steps, read from that count, exact once finished and kept after its emails go',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run,jobs})=>{
-      const {CAMPAIGN_STATS,campaignStats}=await import('./src/sending.js'),{campaigns}=await import('./src/db/sending.js'),{eq}=await import('drizzle-orm');
+      const {CAMPAIGN_STATS} = await import('./src/sending/schemas.js'), {campaignStats} = await import('./src/campaigns/stats.js'),{campaigns}=await import('./src/db/sending.js'),{eq}=await import('drizzle-orm');
       const lowered={...CAMPAIGN_STATS};t.after(()=>{Object.assign(CAMPAIGN_STATS,lowered);});
       Object.assign(CAMPAIGN_STATS,{from:10,page:7,runMs:0});
       const wid=runtime.config.workspaceId,review=unique('review'),c=ok(await local('POST','/v1/campaigns',{name:'Large'}),201),path=`/v1/campaigns/${c.id}/stats`;
@@ -31017,7 +31017,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   // fake clock lets each page statement take a chosen time.
   test('campaign stats: the background count waits 32 times as long as each run took, so slow steps make it count less often',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run,jobs})=>{
-      const {CAMPAIGN_STATS}=await import('./src/sending.js');
+      const {CAMPAIGN_STATS}=await import('./src/sending/schemas.js');
       const lowered={...CAMPAIGN_STATS};t.after(()=>{Object.assign(CAMPAIGN_STATS,lowered);});
       Object.assign(CAMPAIGN_STATS,{from:10,page:10});
       const wid=runtime.config.workspaceId,review=unique('review'),c=ok(await local('POST','/v1/campaigns',{name:'Paced'}),201);
@@ -31081,7 +31081,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run }) => {
       const { checkHostedHealth } = await import('./src/maintenance.js');
       const { resumeHostedSending } = await import('./src/states.js');
-      const { runDispatcher } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
       const { createMailbox } = await import('./src/mailbox-store.js');
       const wid = runtime.config.workspaceId, pool = '111122223333', domain = 'guard.example', from = `sender@${domain}`;
       // A limit of 100 for a workspace the standing job has not seen (the evaluation's is 500) keeps the counts below small.
@@ -31207,7 +31207,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     });
   });
   // A Hosted Ohio workspace with a ready tenant, for the reputation-hold regression tests (review of #111).
-  async function hostedHoldFixture(runtime: import('./src/core.js').Runtime, db: pg.Client, options: { createdDaysAgo?: number } = {}) {
+  async function hostedHoldFixture(runtime: import('./src/core/types.js').Runtime, db: pg.Client, options: { createdDaysAgo?: number } = {}) {
     const wid = runtime.config.workspaceId, pool = '111122223333', domain = 'held.example';
     Object.assign(runtime.config, { multiTenant: true, liveEnabled: true, aws: { accessKeyId: 'fixture-platform', secretAccessKey: 'fixture-only' } });
     await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture')`, [REGION, pool, `arn:aws:sns:${REGION}:${pool}:bane-feedback`]);
@@ -31224,7 +31224,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('MX review: screen verdicts count when the screen judges, so spam queued before a resume pauses; simulator-only mail and unperformed screens do not dilute', async t => {
     // A subtest owns the classifier stub, so its tracker resets before the fixture's network guard (as the screen benchmark does).
     await simulatedSesFixture(t, async ({ runtime, local, db }) => t.test('synthetic classifier', async t => {
-      const { checkHostedHealth } = await import('./src/maintenance.js'), { runDispatcher } = await import('./src/dispatcher.js');
+      const { checkHostedHealth } = await import('./src/maintenance.js'), { runDispatcher } = await import('./src/sending/dispatcher.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const f = await hostedHoldFixture(runtime, db);
       await db.query('UPDATE workspaces SET send_cap_override=200000 WHERE id=$1', [f.wid]); // No limit or burst cap in the way (an exempt workspace is never paused).
@@ -31322,7 +31322,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   test('MX review round 2: a marketing hold keeps already-queued marketing queued at dispatch while transactional mail sends', async t => {
     await simulatedSesFixture(t, async ({ db, runtime, local }) => {
-      const { runDispatcher } = await import('./src/dispatcher.js'), { pauseHostedSending } = await import('./src/states.js'), { sql } = await import('drizzle-orm');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { pauseHostedSending } = await import('./src/states.js'), { sql } = await import('drizzle-orm');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const f = await hostedHoldFixture(runtime, db);
       await db.query('UPDATE workspaces SET send_cap_override=100000 WHERE id=$1', [f.wid]);
@@ -31410,7 +31410,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       const send = (kind: 'marketing' | 'transactional') => local('POST', '/v1/emails/send', { from: 'news@second.example', to: 'reader@example.net', subject: 'Hello', text: 'Fixture', kind }, 'live', { 'X-Bane-Workspace': other });
       await db.query(`UPDATE provider_connections SET pool_tenant_name='bane-probation-second' WHERE id=$1`, [other]);
       await db.query(`UPDATE provider_connection_regions SET tenant_state='ready' WHERE connection_id=$1`, [other]);
-      const { runDispatcher } = await import('./src/dispatcher.js'), { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       t.mock.method(SESv2Client.prototype, 'send', async (cmd: any) => cmd instanceof GetAccountCommand ? { SendingEnabled: true, SendQuota: { MaxSendRate: 1000, Max24HourSend: 100000, SentLast24Hours: 0 } } : { MessageId: randomUUID() });
       // Review round 3: a sibling's transactional mail queued before the sponsor's full pause stays queued (it used to send).
       const queued = ok(await send('transactional'), 202).id;
@@ -31591,7 +31591,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   for (const kind of ['Bounce','Complaint'] as const) test(`MX: ${kind==='Bounce'?'non-permanent bounces':'only explicit not-spam reports'} do not suppress or charge reputation on either feedback path`,async t=>{
     await simulatedSesFixture(t,async ({runtime,local,db})=>{
-      const {ingestFeedbackBatch,operationJobs}=await import('./src/operations.js');
+      const {ingestFeedbackBatch} = await import('./src/ses/feedback.js'), {operationJobs} = await import('./src/webhooks/operations.js');
       const wid=runtime.config.workspaceId, account='111122223333', topicArn=`arn:aws:sns:${REGION}:${account}:fixture`, to=address();
       const email=ok(await local('POST','/v1/emails/send',mail({to})),202), provider=unique('fixture-provider');
       ok(await local('POST','/v1/contacts',{email:to}),201);
@@ -31615,7 +31615,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.equal((await db.query('SELECT 1 FROM hosted_health_hourly WHERE workspace_id=$1 AND (bounces>0 OR complaints>0)',[wid])).rowCount,0);
       if (kind==='Complaint') assert.equal((await db.query("SELECT 1 FROM operation_events WHERE workspace_id=$1 AND type='email.complained'",[wid])).rowCount,0);
       if (kind==='Complaint') for (const value of [undefined,'',42,'AbUse','fraud','virus','other','auth-failure','unknown']) {
-        const item:import('./src/core.js').FeedbackItem={topicArn,region:REGION,messageId:unique('sns'),message:{eventType:kind,mail:{messageId:provider,sendingAccountId:account},complaint:{complaintFeedbackType:value,complainedRecipients:[{emailAddress:to}]}}};
+        const item:import('./src/core/types.js').FeedbackItem={topicArn,region:REGION,messageId:unique('sns'),message:{eventType:kind,mail:{messageId:provider,sendingAccountId:account},complaint:{complaintFeedbackType:value,complainedRecipients:[{emailAddress:to}]}}};
         assert.deepEqual(await ingestFeedbackBatch(runtime,[item]),[{ok:true}]);
         assert.equal((await db.query('SELECT type FROM sending_email_events WHERE workspace_id=$1 AND external_id=$2',[wid,`${topicArn}:${item.messageId}`])).rows[0].type,'complaint');
         assert.equal((await db.query('SELECT suppressed FROM audience_contacts WHERE workspace_id=$1 AND email=$2',[wid,to])).rows[0].suppressed,true);
@@ -31625,7 +31625,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('MX: an operator lifts a bounce suppression in Nightmail and SES, scoped, audited and fenced, so a fixed sign-in address gets mail again', async t => {
     await simulatedSesFixture(t, async ({runtime,db,local}) => {
-      const {liftSuppression}=await import('./scripts/lift-suppression.js'),{runDispatcher}=await import('./src/dispatcher.js');
+      const {liftSuppression}=await import('./scripts/lift-suppression.js'),{runDispatcher}=await import('./src/sending/dispatcher.js');
       const wid=runtime.config.workspaceId, account='111122223333', domain='lift.example', to='New.Hire@Example.net';
       const second=REGION==='us-east-2'?'us-east-1':'us-east-2', trusted=`bane-trusted-${wid}`;
       Object.assign(runtime.config,{multiTenant:true,liveEnabled:true,aws:{accessKeyId:'fixture-platform',secretAccessKey:'fixture-only'}});
@@ -31719,7 +31719,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     ['answers without a MessageId','SES_MESSAGE_ID_MISSING',()=>({})],
   ] as const) test(`MX: when SES ${answer}, the dispatcher holds queued mail instead of failing all of it as acceptance_unknown`, async t => {
     await simulatedSesFixture(t, async ({runtime,db,local}) => {
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js');
       const wid=runtime.config.workspaceId, account='111122223333', domain='outage.example';
       Object.assign(runtime.config,{multiTenant:true,liveEnabled:true,aws:{accessKeyId:'fixture-platform',secretAccessKey:'fixture-only'}});
       await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture')`,[REGION,account,`arn:aws:sns:${REGION}:${account}:feedback`]);
@@ -31762,9 +31762,9 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   test('MX: a list\'s counts follow a bounce on either feedback path, an operator\'s lift and a footer opt-out', async t => {
     // The writers of a contact's suppression and consent that no dashboard request reaches: the SES feedback batch
-    // (sending.ts), the feedback job (operations.ts), scripts/lift-suppression.ts and recordUnsubscribe.
+    // (sending/events.ts), the feedback job (ses/feedback.ts), scripts/lift-suppression.ts and recordUnsubscribe.
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const [{ ingestFeedbackBatch, operationJobs }, { liftSuppression }, { recordUnsubscribe }] = await Promise.all([import('./src/operations.js'), import('./scripts/lift-suppression.js'), import('./src/audience.js')]);
+      const [{ ingestFeedbackBatch }, { operationJobs }, { liftSuppression }, { recordUnsubscribe }] = await Promise.all([import('./src/ses/feedback.js'), import('./src/webhooks/operations.js'), import('./scripts/lift-suppression.js'), import('./src/audience/consent.js')]);
       const wid = runtime.config.workspaceId, account = '111122223333', topicArn = `arn:aws:sns:${REGION}:${account}:fixture`;
       const list = ok(await local('POST', '/v1/lists', { name: 'Counted' }), 201), people: Json[] = [], sent: Json[] = [];
       for (let i = 0; i < 4; i++) {
@@ -31828,7 +31828,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('MX: a queue redelivery suppresses after a recovery job stored the bounce and died before suppressing', async t => {
     // tear witness (api/tear/ses): h b1, accept e1, J b1, J go, J crash, q b1.
     await simulatedSesFixture(t,async ({runtime,local,db})=>{
-      const {ingestFeedbackBatch,operationJobs}=await import('./src/operations.js');
+      const {ingestFeedbackBatch} = await import('./src/ses/feedback.js'), {operationJobs} = await import('./src/webhooks/operations.js');
       const wid=runtime.config.workspaceId, account='111122223333', topicArn=`arn:aws:sns:${REGION}:${account}:fixture`, to=address();
       const email=ok(await local('POST','/v1/emails/send',mail({to})),202), provider=unique('fixture-provider');
       runtime.config.multiTenant=true;
@@ -31855,7 +31855,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('MX: a validation-suppressed recipient never outranks a delivery or bounce SES reported for the same email', async t => {
     // tear witness (api/tear/ses --ext): accept e2, q d2, q v2.
     await simulatedSesFixture(t,async ({runtime,local,db})=>{
-      const {ingestFeedbackBatch,operationJobs}=await import('./src/operations.js');
+      const {ingestFeedbackBatch} = await import('./src/ses/feedback.js'), {operationJobs} = await import('./src/webhooks/operations.js');
       const wid=runtime.config.workspaceId, account='111122223333', topicArn=`arn:aws:sns:${REGION}:${account}:fixture`;
       const cases=(['Delivery','Bounce'] as const).flatMap(outcome=>(['batch','job'] as const).flatMap(path=>[false,true].map(validationFirst=>({outcome,path,validationFirst,kept:address(),dropped:address()}))));
       const sent:Json[]=[];
@@ -31887,8 +31887,8 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('MX: a Worker with the pre-153 rank table cannot restore suppressed or skip a delivery, and the repair fixes older rows', async t => {
     // tear witnesses (api/tear/ses): accept e2, q d2, old q v2; accept e2, q v2, old q d2.
     await simulatedSesFixture(t,async ({runtime,local,db})=>{
-      const {ingestFeedbackBatch,operationJobs}=await import('./src/operations.js');
-      const {rank}=await import('./src/sending.js');
+      const {ingestFeedbackBatch} = await import('./src/ses/feedback.js'), {operationJobs} = await import('./src/webhooks/operations.js');
+      const {rank}=await import('./src/sending/events.js');
       // The table a Worker deployed before migration 153 embeds; its statements are otherwise the same.
       const current={...rank}, old={scheduled:0,queued:0,attempting:1,acceptance_unknown:2,accepted:3,sent:4,delayed:4,suppressed:6,delivered:5,bounced:6,complained:7,rejected:6,rendering_failed:6,canceled:6,simulated:6};
       const asOld=async<T>(work:()=>Promise<T>)=>{Object.assign(rank,old);try{return await work();}finally{Object.assign(rank,current);}};
@@ -31959,7 +31959,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('MX: multi-recipient SES feedback uses real destinations, yesterday’s volume and the last operator resume', async t => {
     await simulatedSesFixture(t, async ({runtime,db,local}) => {
-      const { ingestFeedbackBatch } = await import('./src/operations.js');
+      const { ingestFeedbackBatch } = await import('./src/ses/feedback.js');
       const { checkHostedHealth } = await import('./src/maintenance.js');
       const { resumeHostedSending } = await import('./src/states.js');
       const wid=runtime.config.workspaceId, account='111122223333', topicArn=`arn:aws:sns:${REGION}:${account}:feedback`;
@@ -32018,7 +32018,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   test('MX: legacy feedback cutover quarantines fresh forgeries, ingests the old backlog, and replay rechecks authentication', async t => {
     await simulatedSesFixture(t, async ({runtime,db}) => {
-      const {quarantineUntaggedFeedback,archiveQueueFeedback,readFeedbackQuarantine,replayQuarantinedFeedback,retainLegacyFeedback,completeLegacyFeedback,ingestFeedbackBatch}=await import('./src/operations.js');
+      const {quarantineUntaggedFeedback,archiveQueueFeedback,readFeedbackQuarantine,replayQuarantinedFeedback,retainLegacyFeedback,completeLegacyFeedback,ingestFeedbackBatch}=await import('./src/ses/feedback.js');
       const {settleFeedbackBatch,feedbackMac}=await import('./src/adapters/feedback-queue.js');
       const {authenticFeedbackArchive,feedbackArchiveBody}=await import('./src/adapters/feedback-archive.js');
       const wid=runtime.config.workspaceId, account='111122223333', topicArn=`arn:aws:sns:${REGION}:${account}:feedback`, providerId=unique('provider');
@@ -32096,21 +32096,21 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   test('MX: feedback recovery survives quarantine exhaustion and database outage without an unsigned dead-letter escape',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
       const {settleFeedbackBatch,authenticLegacyRecovery}=await import('./src/adapters/feedback-queue.js');
-      const {archiveQueueFeedback,retainLegacyFeedback,completeLegacyFeedback,drainFeedbackRecovery,readFeedbackQuarantine,replayQuarantinedFeedback}=await import('./src/operations.js');
+      const {archiveQueueFeedback,retainLegacyFeedback,completeLegacyFeedback,drainFeedbackRecovery,readFeedbackQuarantine,replayQuarantinedFeedback}=await import('./src/ses/feedback.js');
       const {authenticFeedbackArchive,feedbackArchiveBody}=await import('./src/adapters/feedback-archive.js');
       const prefix=unique('full-quarantine');
       await db.query(`INSERT INTO operation_feedback_failures(id,payload,reason) SELECT $1||i,'{}','FEEDBACK_UNTAGGED' FROM generate_series(1,10000) i`,[prefix]);
       const firstPage=await readFeedbackQuarantine(runtime),secondPage=await readFeedbackQuarantine(runtime,undefined,firstPage.at(-1)!.id);
       assert.deepEqual([firstPage.length,secondPage.length],[500,500]);assert.ok(secondPage.every(row=>!firstPage.some(first=>first.id===row.id)),'manual review can page past the old cap');
       const objects=new Map<string,{body:Uint8Array;contentType:string}>();
-      const storage:import('./src/core.js').Storage={put:async(key,body,contentType)=>{objects.set(key,{body:new Uint8Array(body),contentType})},get:async key=>objects.get(key)??null,delete:async key=>{objects.delete(key)},list:async(prefix,after)=>({objects:[...objects.keys()].filter(k=>k.startsWith(prefix)&&(!after||k>after)).sort().map(key=>({key,uploaded:new Date()}))})};
+      const storage:import('./src/core/types.js').Storage={put:async(key,body,contentType)=>{objects.set(key,{body:new Uint8Array(body),contentType})},get:async key=>objects.get(key)??null,delete:async key=>{objects.delete(key)},list:async(prefix,after)=>({objects:[...objects.keys()].filter(k=>k.startsWith(prefix)&&(!after||k>after)).sort().map(key=>({key,uploaded:new Date()}))})};
       const up={...runtime,storage},down={...up,db:Object.assign(Object.create(runtime.db),{transaction:async()=>{throw Error('database unavailable')}})};
       const cutoff=Date.now()-1000,sourceQueue='fixture-feedback',sourceId=unique('cloudflare-id');
       const base={region:REGION,topicArn:`arn:aws:sns:${REGION}:111122223333:bane-feedback`,messageId:unique('historical'),message:{eventType:'Delivery',mail:{messageId:'fixture',sendingAccountId:'111122223333'},pad:''}};
       const body={...base,message:{...base.message,pad:'x'.repeat(127800-Buffer.byteLength(JSON.stringify(base)))}};
       assert.ok(Buffer.byteLength(JSON.stringify(body))<128000);
       let acked=0,retried=0,ingested=0;const promoted:import('./src/adapters/feedback-queue.js').LegacyFeedbackRecovery[]=[];
-      const consume=(target:import('./src/core.js').Runtime,id:string,lane:import('./src/adapters/feedback-queue.js').FeedbackLane='legacy',payload:unknown=body)=>settleFeedbackBatch({secrets:runtime.config,lane,sourceQueue:lane.endsWith('-dlq')?'fixture-feedback-dlq':sourceQueue,legacyCutover:cutoff,
+      const consume=(target:import('./src/core/types.js').Runtime,id:string,lane:import('./src/adapters/feedback-queue.js').FeedbackLane='legacy',payload:unknown=body)=>settleFeedbackBatch({secrets:runtime.config,lane,sourceQueue:lane.endsWith('-dlq')?'fixture-feedback-dlq':sourceQueue,legacyCutover:cutoff,
         messages:[{id,body:payload,timestamp:new Date(cutoff-1),attempts:6,ack(){acked++},retry(){retried++}}],ingest:async items=>{ingested+=items.length;return items.map(()=>({ok:true}))},
         promoteLegacy:async value=>{await retainLegacyFeedback(target,value);promoted.push(value)},completeLegacy:value=>completeLegacyFeedback(target,value),archive:(source,value,error)=>archiveQueueFeedback(target,source,value,error)});
       assert.equal((await consume(up,sourceId)).promoted,1,'10,000 untrusted rows cannot exhaust authenticated recovery');
@@ -32446,8 +32446,8 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run, jobs }) => {
       const { SESv2Client, GetAccountCommand, SendEmailCommand, GetEmailTemplateCommand, TestRenderEmailTemplateCommand } = await import('@aws-sdk/client-sesv2');
       const { STSClient, AssumeRoleCommand } = await import('@aws-sdk/client-sts');
-      const { runDispatcher } = await import('./src/dispatcher.js'), { dispatchPartitions } = await import('./src/dispatch.js');
-      const { ingestFeedbackBatch } = await import('./src/operations.js'), { setupResources } = await import('./src/ses-setup.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { dispatchPartitions } = await import('./src/dispatch.js');
+      const { ingestFeedbackBatch } = await import('./src/ses/feedback.js'), { setupResources } = await import('./src/ses-setup.js');
       const shared = runtime.config.workspaceId, byo = unique('customer'), pool = '111122223333', account = '444455556666', externalId = randomUUID();
       const poolTopic = `arn:aws:sns:${REGION}:${pool}:bane-feedback`, byoTopic = `arn:aws:sns:${REGION}:${account}:${setupResources(byo).topicName}`;
       const role = `arn:aws:iam::${account}:role/Bane-fixture`;
@@ -32536,7 +32536,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
   });
   test('sending review benchmark: attachment preflight, exhausted burst and classifier outage',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local})=>t.test('synthetic transports',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
       const wid=runtime.config.workspaceId,acct='112223330001',origin='https://screen.synthetic.invalid',topic=`arn:aws:sns:${REGION}:${acct}:fixture`;
       // Precharge, lease, dispatch and both EXPLAINs measure one quota minute, even across a wall-clock rollover.
       // Only statement_timestamp is pinned; leases, classifier latency and the benchmark timer still use real time.
@@ -32619,7 +32619,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('hosted screen records: a line per classifier request and per email sent or deferred, with timings and no content',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local})=>t.test('synthetic transports',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
       const wid=runtime.config.workspaceId,acct='112223330002',origin='https://screen.synthetic.invalid',topic=`arn:aws:sns:${REGION}:${acct}:fixture`;
       const key=ok(await local('POST','/v1/api-keys',{name:'records',permissions:['send','read']}),201);
       Object.assign(runtime.config,{multiTenant:true,hostedScreen:true,liveEnabled:true,aws:{accessKeyId:'fixture',secretAccessKey:'fixture'},screen:{ primary: 'jev', mode: 'reject', jev: { endpoint: origin, apiKey: 'classifier-fixture-key', model: 'fixture', threshold: 0.7 } }});
@@ -32661,7 +32661,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('content_screen_calls: a row per classifier request, answered or failed, with no content; a failed row write never stops a send',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local})=>t.test('synthetic transports',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
       const wid=runtime.config.workspaceId,acct='112223330004',origin='https://screen.synthetic.invalid',topic=`arn:aws:sns:${REGION}:${acct}:fixture`;
       const key=ok(await local('POST','/v1/api-keys',{name:'calls',permissions:['send','read']}),201);
       Object.assign(runtime.config,{multiTenant:true,hostedScreen:true,liveEnabled:true,aws:{accessKeyId:'fixture',secretAccessKey:'fixture'},screen:{ primary: 'jev', mode: 'reject', jev: { endpoint: origin, apiKey: 'classifier-fixture-key', model: 'fixture', threshold: 0.7 } }});
@@ -33137,7 +33137,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('Hosted content policy: accept, held mail and campaign copies share one rule; a built-in domain is never trusted; raw and sealed mail need the trusted tier',async()=>{
-    const {resolveHostedContentPolicy:policy,sharedFormatRefusal}=await import('./src/sending.js');
+    const {resolveHostedContentPolicy:policy,sharedFormatRefusal}=await import('./src/sending/mime.js');
     const config={hostedScreen:true,trustedPool:true,builtinDomain:'built.invalid'};
     const trusted={shared:true,poolTier:'trusted',legacyNames:false,from:'a@example.com',probation:false,simulated:false,kind:'transactional'} as const,fresh={...trusted,poolTier:'standard'};
     assert.deepEqual(policy(config,trusted),{shared:true,hosted:true,trusted:true,rules:null,screened:true,required:false});
@@ -33162,7 +33162,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     // A subtest, as the other classifier scenarios: a fetch mock on the fixture's own context would be restored over the
     // fixture's and leak into later tests.
     await simulatedSesFixture(t,async({runtime,db,local})=>t.test('probation copy',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2'),{screenedHtml,screenedText}=await import('./src/screened-html.js');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2'),{screenedHtml,screenedText}=await import('./src/screened-html.js');
       const wid=runtime.config.workspaceId,acct='112223330003',origin='https://screen.synthetic.invalid';
       runtime.config.hostedSendCaps.firstWeek=10000;
       const key=ok(await local('POST','/v1/api-keys',{name:'screened copy',permissions:['send','read']}),201);
@@ -33248,7 +33248,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('mail apps on probation: a file goes out as what its bytes are under its own name, a label is never refused, and what no label makes safe is refused in a reply that names the file',async t=>{
     // A subtest, as the other classifier scenarios, so its fetch mock is lifted before the fixture's own.
     await simulatedSesFixture(t,async({runtime,db,local,fetch})=>t.test('mail app files',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
       const wid=runtime.config.workspaceId,acct='112223330041',origin='https://screen.synthetic.invalid',gatewayToken=randomUUID()+randomUUID();
       runtime.config.hostedSendCaps.firstWeek=10000;
       const key=ok(await local('POST','/v1/api-keys',{name:'mail app',permissions:['send'],domains:['app.invalid']}),201);secrets.add(key.secret);
@@ -33331,7 +33331,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('probation follows standing: in good standing a responsive email goes out as written and is screened whole, hidden and escaped copy included, under the picture rules every sender keeps; a new, growing or capped sender gets the screened copy',async t=>{
     // A subtest, as the other classifier scenarios, so its fetch mock is lifted before the fixture's own.
     await simulatedSesFixture(t,async({runtime,db,local})=>t.test('standing copy',async t=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2'),{screenedHtml}=await import('./src/screened-html.js');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2'),{screenedHtml}=await import('./src/screened-html.js');
       const wid=runtime.config.workspaceId,acct='112223330021',origin='https://screen.synthetic.invalid';
       const key=ok(await local('POST','/v1/api-keys',{name:'standing copy',permissions:['send','read']}),201), auth={authorization:`Bearer ${key.secret}`};
       Object.assign(runtime.config,{multiTenant:true,hostedScreen:true,liveEnabled:true,aws:{accessKeyId:'fixture',secretAccessKey:'fixture'},screen:{ primary: 'jev', mode: 'reject', jev: { endpoint: origin, apiKey: 'fixture', model: 'fixture', threshold: 0.7 } }});
@@ -33448,7 +33448,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   // A Hosted probation workspace on live SES (SDK stubbed) with a classifier stub that flags SampleMarker and counts
   // requests, for the screened-text limit and campaign screen scenarios.
-  async function hostedScreenFixture(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client, acct: string, domain: string, flag = /samplemarker/) {
+  async function hostedScreenFixture(t: TestContext, runtime: import('./src/core/types.js').Runtime, db: pg.Client, acct: string, domain: string, flag = /samplemarker/) {
     const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
     const wid = runtime.config.workspaceId, origin = 'https://screen.synthetic.invalid';
     Object.assign(runtime.config, { multiTenant: true, hostedScreen: true, liveEnabled: true, aws: { accessKeyId: 'fixture', secretAccessKey: 'fixture' }, screen: { primary: 'jev', mode: 'reject', jev: { endpoint: origin, apiKey: 'fixture', model: 'fixture', threshold: 0.7 } } });
@@ -33508,9 +33508,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     }));
   });
   // Campaigns through the public routes, the campaign job and the dispatcher, against hostedScreenFixture.
-  async function campaignHarness(runtime: import('./src/core.js').Runtime, db: pg.Client, local: (method: string, path: string, body?: Json, environment?: 'test' | 'live', headers?: Record<string, string>) => Promise<Reply>,
+  async function campaignHarness(runtime: import('./src/core/types.js').Runtime, db: pg.Client, local: (method: string, path: string, body?: Json, environment?: 'test' | 'live', headers?: Record<string, string>) => Promise<Reply>,
     run: (type: string) => Promise<void>, jobs: (type: string) => Promise<Json[]>, wid: string, acct: string, from: string) {
-    const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+    const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
     const campaign = async (name: string, html: string, contacts: Record<string, unknown>[], extra: Json = {}) => {
       const list = ok(await local('POST', '/v1/lists', { name }), 201), tag = unique('c');
       await db.query(`WITH a AS (INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent,properties) SELECT $3||'-'||o,$1,$3||'-'||o||'@example.net','subscribed',p
@@ -33817,7 +33817,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.ok(delivered.has(manager!.email), 'Sent to the signed-in user, on the first run.');
       // The verdict is for exactly that email: a changed word, another or a further recipient, a header, HTML, an attachment
       // or a display name gets none, so it goes to the classifier like any other send.
-      const { platformTestEmail, platformTestVerdict } = await import('./src/sending.js');
+      const { platformTestEmail, platformTestVerdict } = await import('./src/sending/front-door.js');
       const me = manager!.email, fixed = platformTestEmail('platform.invalid');
       const exact = { ...fixed, to: [me], cc: [], bcc: [], replyTo: [], region: REGION, kind: 'transactional' as const, attachments: [], headers: [], tracking: false };
       assert.deepEqual(platformTestVerdict(exact, me.toUpperCase(), 'standard'), { status: 'platform', reason: 'platform test email', rules: 'standard' });
@@ -33889,7 +33889,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal((await dispatch()).sent, 0, 'Mail room never dispatches held unscreened row');
       assert.equal((await db.query('SELECT screened FROM sending_emails WHERE id=$1', [heldOutage.id])).rows[0].screened, false);
       fail = false;
-      const { screenHeldMail } = await import('./src/sending.js');
+      const { screenHeldMail } = await import('./src/sending/held-screen.js');
       assert.deepEqual(await screenHeldMail(runtime), { leased: 1, passed: 1, rejected: 0, deferred: 0, remaining: 0 });
       await Promise.all([post('Slow A'), post('Slow B'), post('Slow C'), post('Receipt', 'cached@example.invalid')]);
       assert.equal((await dispatch()).sent, 5);
@@ -33918,8 +33918,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('hosted screen 451/5xx/timeout failover, accept-and-hold on dual outage, bounded sweep scaling and backlog log', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => t.test('classifiers', async t => {
-      const { loadConfig } = await import('./src/config.js'), { screenHeldMail } = await import('./src/sending.js');
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+      const { loadConfig } = await import('./src/config.js'), { screenHeldMail } = await import('./src/sending/held-screen.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const acct = '112223330029', { wid, delivered } = await hostedScreenFixture(t, runtime, db, acct, 'outage-hold.invalid');
       const config = loadConfig({ BANE_ROOT_SECRET: AUTH_SECRET, PUBLIC_URL: PUBLIC_ORIGIN, TYPESAFE_API_KEY: 'fixture',
         JEV_ENDPOINT: runtime.config.screen!.jev.endpoint, JEV_MODEL: 'outage-hold-fixture', JEVF_API_KEY: 'jevf-fixture-key', JEVF_ENDPOINT: JEVF_URL });
@@ -34047,7 +34047,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('second classifier: every request the screen makes is repeated after the run and both answers are kept, for an email, a campaign test and campaign copies of several requests; a cached verdict, a retried dispatch and a batch written twice add nothing; nothing runs without its key', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, jobs }) => t.test('classifiers', async t => {
       const [{ shadowSettled, writeComparisons }, { processJobs }, { jobHandlers }, { operationJobs }, { newsletterJobs }, { SESv2Client, GetAccountCommand }] = await Promise.all([import('./src/screen-shadow.js'), import('./src/jobs.js'),
-        import('./src/sending.js'), import('./src/operations.js'), import('./src/newsletters.js'), import('@aws-sdk/client-sesv2')]);
+        import('./src/sending/jobs.js'), import('./src/webhooks/operations.js'), import('./src/newsletters.js'), import('@aws-sdk/client-sesv2')]);
       const acct = '112223330021', started = new Date(Date.now() - 1000).toISOString(), { wid } = await hostedScreenFixture(t, runtime, db, acct, 'shadow.invalid');
       // The second classifier flags a copy that greets Ben, which the screen passes, and passes SampleMarker, which the screen flags.
       let jevDown = false;
@@ -34186,7 +34186,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('second classifier slow, down, rate limited, answering garbage or hanging past its deadline: the same mail goes out under the same verdicts and no later, nothing is retried, and what became of each repeat is kept', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => t.test('classifiers', async t => {
-      const [{ enqueueShadow, consumeShadow, writeComparisons, writtenComparisons }, { drizzle }, { runDispatcher, initialGate }, { SESv2Client, GetAccountCommand }] = await Promise.all([import('./src/screen-shadow.js'), import('drizzle-orm/node-postgres'), import('./src/dispatcher.js'), import('@aws-sdk/client-sesv2')]);
+      const [{ enqueueShadow, consumeShadow, writeComparisons, writtenComparisons }, { drizzle }, { runDispatcher }, { initialGate }, { SESv2Client, GetAccountCommand }] = await Promise.all([import('./src/screen-shadow.js'), import('drizzle-orm/node-postgres'), import('./src/sending/dispatcher.js'), import('./src/sending/quota.js'), import('@aws-sdk/client-sesv2')]);
       const acct = '112223330022', { wid } = await hostedScreenFixture(t, runtime, db, acct, 'unmoved.invalid');
       // As on Cloudflare: the run puts its requests on the second classifier's queue and the queue's consumer asks, on
       // connections of its own (the fixture's one connection is a transaction in use). Its rows are committed, and
@@ -34474,7 +34474,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       return specifier === 'cloudflare:workers' ? { shortCircuit: true, url: 'data:text/javascript,export class DurableObject {constructor(ctx,env){this.ctx=ctx;this.env=env}} export class WorkerEntrypoint {constructor(ctx,env){this.ctx=ctx;this.env=env}}' } : next(specifier, context);
     } });
     const worker = (await import('./src/worker.js').finally(() => hook.deregister())).default as unknown as { queue(batch: unknown, env: unknown, ctx?: unknown): Promise<void> };
-    const [{ jobHandlers }, { screenWindow }] = await Promise.all([import('./src/sending.js'), import('./src/screen.js')]);
+    const [{ jobHandlers }, { screenWindow }] = await Promise.all([import('./src/sending/jobs.js'), import('./src/screen.js')]);
     // The Worker's own jobs table, so its drain claims this test's job and nothing else; every other table is the fixture database's.
     const db = new pg.Client({ connectionString: FIXTURE_DATABASE_URL }); await db.connect();
     const wid = unique('jevf-drain-workspace'), schema = `jevf_drain_${randomUUID().replaceAll('-', '').slice(0, 12)}`, type = 'campaign.shadowFixture';
@@ -34522,8 +34522,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('hosted campaign copy keys: the customer copy byte for byte, with only the unsubscribe slots Nightmail generates set for a placeholder', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => t.test('classifier', async t => {
       await hostedScreenFixture(t, runtime, db, '112223330015', 'keyed.invalid');
-      const { copyKey } = await import('./src/screen.js'), { screenedAs, withUnsubscribe, generatedUnsubscribeUrl } = await import('./src/sending.js');
-      const { createUnsubscribeLink } = await import('./src/operations.js');
+      const { copyKey } = await import('./src/screen.js'), { screenedAs, withUnsubscribe, generatedUnsubscribeUrl } = await import('./src/campaigns/materialize.js');
+      const { createUnsubscribeLink } = await import('./src/audience/unsubscribe.js');
       const generated = async () => (await createUnsubscribeLink(runtime.config.publicUrl, runtime.config.workspaceId, 'a@example.net')).url;
       const customer = (change: Record<string, unknown> = {}) => ({ testCampaignId: null, from: 'news@keyed.invalid', fromName: 'News', to: ['a@example.net'], cc: [], bcc: [], replyTo: ['help@keyed.invalid'],
         region: REGION, kind: 'marketing' as const, subject: 'Hello Ana', html: '<p>Hello Ana</p>', text: 'Hello Ana', attachments: [], tracking: true, headers: [] as { Name: string; Value: string }[], ...change });
@@ -34581,7 +34581,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     }));
   });
   // Personalized values in every form a recipient reads: each copy is screened as the copy it is, before it is sent.
-  const reviewScenario = (name: string, scenario: (f: Awaited<ReturnType<typeof hostedScreenFixture>> & Awaited<ReturnType<typeof campaignHarness>> & { runtime: import('./src/core.js').Runtime; db: pg.Client; local: (method: string, path: string, body?: Json, environment?: 'test' | 'live', headers?: Record<string, string>) => Promise<Reply>; run: (type: string) => Promise<void>; jobs: (type: string) => Promise<Json[]>; diagnostic: (message: string) => void }) => Promise<void>) =>
+  const reviewScenario = (name: string, scenario: (f: Awaited<ReturnType<typeof hostedScreenFixture>> & Awaited<ReturnType<typeof campaignHarness>> & { runtime: import('./src/core/types.js').Runtime; db: pg.Client; local: (method: string, path: string, body?: Json, environment?: 'test' | 'live', headers?: Record<string, string>) => Promise<Reply>; run: (type: string) => Promise<void>; jobs: (type: string) => Promise<Json[]>; diagnostic: (message: string) => void }) => Promise<void>) =>
     test(`campaign screen: ${name}`, async t => {
       await simulatedSesFixture(t, async ({ runtime, db, local, run, jobs }) => t.test('classifier', async t => {
         // The stub rejects the assembled phrase in the forms the reviews used (the screen folds case, compatibility
@@ -34702,7 +34702,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('sending review benchmark: bounded lease across queued owners',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {runDispatcher,initialGate}=await import('./src/dispatcher.js');
+      const {runDispatcher} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js');
       const owners=BENCH?5000:1000;
       await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated)
         SELECT 'q'||i,'owner'||(i%${owners}),'xx-test-1','fixture','a@example.invalid','[]','[]','[]','fixture','{"kind":"transactional"}',true FROM generate_series(1,${3*owners})i;ANALYZE sending_emails`);
@@ -34724,7 +34724,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('dispatch claim: stays on the primary key when the statistics were taken with nothing queued',async t=>{
     await simulatedSesFixture(t,async({runtime,local,db})=>{
-      const {runDispatcher}=await import('./src/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
+      const {runDispatcher}=await import('./src/sending/dispatcher.js'),{SESv2Client,GetAccountCommand}=await import('@aws-sdk/client-sesv2');
       const f=await hostedHoldFixture(runtime,db);
       t.mock.method(SESv2Client.prototype,'send',async(cmd:any)=>cmd instanceof GetAccountCommand?{SendingEnabled:true,SendQuota:{MaxSendRate:1000,Max24HourSend:100000,SentLast24Hours:0}}:{MessageId:randomUUID()});
       // Autovacuum analyzes the table between sends, while nothing is queued, so the statistics say every queued-only partial
@@ -34796,7 +34796,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   // Synthetic sign-ins, payments and Hosted mail for the abuse-monitoring tests, stored as the real paths store them.
   // Monitoring is on and its first run is done: everything made here is after the instant it started.
-  const abuseHarness = async (runtime: import('./src/core.js').Runtime, db: pg.Client) => {
+  const abuseHarness = async (runtime: import('./src/core/types.js').Runtime, db: pg.Client) => {
     const abuse = await import('./src/abuse.js'), { abuseSubjectCommand } = await import('./scripts/abuse-subject.js');
     const pool = '111122223333', topic = `arn:aws:sns:${REGION}:${pool}:bane-feedback`, issuer = 'https://account.fixture.example';
     Object.assign(runtime.config, { multiTenant: true, liveEnabled: true, aws: { accessKeyId: 'fixture-platform', secretAccessKey: 'fixture-only' }, abuseMonitoring: { since: '2020-01-01T00:00:00.000Z' } });
@@ -36444,7 +36444,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       runtime.config.support = support;
       assert.deepEqual(Object.keys(after.sending.previous), ['accepted', 'marketing', 'delivered', 'bounced', 'complained']);
       // The minute tick samples the quiet region's quota (the simulated SES's), and leaves the fresh one alone.
-      const { refreshPoolQuotas } = await import('./src/dispatcher.js');
+      const { refreshPoolQuotas } = await import('./src/sending/quota.js');
       await refreshPoolQuotas(runtime);
       const sampled = await readGlass(runtime);
       assert.deepEqual([sesRegion(sampled, region)!.maxSendRate, sesRegion(sampled, quiet)!.maxSendRate !== null, sesRegion(sampled, quiet)!.checkedAt !== null], [14, true, true]);
@@ -36845,7 +36845,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await db.query(`INSERT INTO provider_connections(id,workspace_id,region,state,kind,aws_account_id,tenant_state) VALUES ($1,$1,$2,'ready','shared',$3,'ready')`, [wid, REGION, pool]);
       await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES ($1,$2,$2,'verified')`, [domain, wid]);
       await gradedSender(db, wid, 10000);
-      const { probeSize } = await import('./src/sending.js');
+      const { probeSize } = await import('./src/sending/schemas.js');
       assert.deepEqual([50, 120, 1000, 3000, 10000].map(probeSize), [50, 100, 100, 300, 500]);
       const list = ok(await local('POST', '/v1/lists', { name: unique('probe') }), 201);
       await db.query(`WITH c AS (INSERT INTO audience_contacts(id,workspace_id,email,marketing_consent) SELECT 'con_'||md5($1||n),$1,'reader-'||n||'@example.net','subscribed' FROM generate_series(1,150)n RETURNING id)
@@ -36944,7 +36944,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await db.query('UPDATE sending_campaigns SET probe_cleared_at=now() WHERE id=$1', [c.id]); // A clean list; the probe is tested above.
       await run('campaign.run');
       assert.deepEqual(await shown(), ['sending', 30, 0, 30]);
-      // The dispatcher pauses a campaign it cannot verify even with everyone released (dispatcher.ts rejectPreflight). Queued
+      // The dispatcher pauses a campaign it cannot verify even with everyone released (sending/claim.ts rejectPreflight). Queued
       // mail still dispatches while it is paused, and the dispatcher finishes only a sending campaign.
       await db.query(`UPDATE sending_campaigns SET state='paused',paused_at=now(),pause_reason='{"code":"CAMPAIGN_HASH_FORMAT_UNSUPPORTED","message":"Paused."}' WHERE id=$1`, [c.id]);
       await db.query(`UPDATE sending_emails SET status='delivered',provider_id='settles-'||id WHERE campaign_id=$1 AND status='queued'`, [c.id]);
@@ -36957,7 +36957,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // A Hosted workspace on the shared pool, live, with a verified domain: exempt from Hosted quotas, as the first-party
   // workspace that went wrong was (and so planning at the pool's full 1,000/s), never from the ramp; graded, with no daily
   // limit; billing off (tested elsewhere: its free sends would hold these sends).
-  const rampWorkspace = async (runtime: import('./src/core.js').Runtime, db: pg.Client, pool: string, domain: string) => {
+  const rampWorkspace = async (runtime: import('./src/core/types.js').Runtime, db: pg.Client, pool: string, domain: string) => {
     const wid = runtime.config.workspaceId;
     Object.assign(runtime.config, { multiTenant: true, liveEnabled: true, aws: { accessKeyId: 'fixture-platform', secretAccessKey: 'fixture-only' } });
     await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture')`, [REGION, pool, `arn:aws:sns:${REGION}:${pool}:bane-feedback`]);
@@ -37136,7 +37136,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const claim = unique('api-ramp-later'), later = new Date(Date.now() + 3_600_000).toISOString();
       const asked = await admit(runtime, wid, actorJson({ keyId: 'fixture', domains: [] }), { stage: 'send', locks: 'take', mails: [{ host: domain, kind: 'marketing', attachments: [], bodyBytes: 5 }],
         ...scheduledCharges(runtime, [{ recipients: 1200, marketing: true, snapshot: { kind: 'marketing' } }], later), claim: { path: '/v1/emails/send', key: claim, hash: 'fixture', receipt: {} } });
-      const tooLarge = refusal(runtime, (await runtime.db.execute(sql`SELECT ${asked} AS s`)).rows[0]!.s as never) as import('./src/core.js').ApiError;
+      const tooLarge = refusal(runtime, (await runtime.db.execute(sql`SELECT ${asked} AS s`)).rows[0]!.s as never) as import('./src/core/errors.js').ApiError;
       assert.deepEqual([tooLarge.status, tooLarge.code, tooLarge.retryable, tooLarge.retryAfterSeconds], [429, 'RAMP_LIMIT_REACHED', true, Math.max(1, Math.ceil((next.getTime() - now.getTime()) / 1000))]);
       assert.deepEqual(tooLarge.details, [{ step: 1, steps: 9, ceilingPerHour: 1000, usedThisHour: 20, fitsNow: 980, requested: 1200, stepOpensAt: next.toISOString(), scheduledBacklog: 0, dailyBudget: 24000 }]);
       assert.equal(tooLarge.message, "This workspace is still ramping up (step 1 of 9): it can send 1,000 marketing recipients an hour, so a send of 1,200 can't be scheduled while it ramps. For a large list, send a campaign instead: campaigns are paced automatically.");
@@ -37229,7 +37229,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('campaign order: the list probe is a uniform sample of the whole audience, then the most engaged go first and contacts who joined since the list was last sent to go last; the review counts them', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
-      const wid = runtime.config.workspaceId, { probeSize } = await import('./src/sending.js'), { snapshotCampaignAudience } = await import('./src/audience.js');
+      const wid = runtime.config.workspaceId, { probeSize } = await import('./src/sending/schemas.js'), { snapshotCampaignAudience } = await import('./src/audience/counts.js');
       const list = ok(await local('POST', '/v1/lists', { name: unique('engaged-order') }), 201);
       // 300 subscribers: 1-30 opened in the last 30 hours (1 most recently), 31-60 last opened 200 days ago, 61-200 on the
       // list when it was last sent to (yesterday), 201-300 joined since, with nothing on record.
@@ -37618,7 +37618,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // fixture cannot prepare a real 20,000-recipient launch in one statement): 20,000 frozen recipients, and an earlier
       // clean, mature campaign that delivered to the 10,000 at odd ordinals (50% coverage), then to all 20,000. Neither
       // exempts them; at 10,000 recipients the same full, mature history does.
-      const { listMailedCleanly } = await import('./src/sending.js');
+      const { listMailedCleanly } = await import('./src/campaigns/stats.js');
       const review = async (total: number) => {
         const id = unique('rev_big');
         await db.query(`INSERT INTO sending_review_recipients(review_id,ordinal,recipient,recipient_bytes) SELECT $1,n,jsonb_build_object('id','con_big_'||n,'email','big-'||n||'@example.net'),64 FROM generate_series(1,$2::int) n`, [id, total]);
@@ -37642,7 +37642,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('AWS tenant status: an AWS or policy pause of a workspace tenant pauses the workspace; Nightmail\'s own switch and enables are timeline only', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
       const wid = runtime.config.workspaceId, pool = '111122223333', topicArn = `arn:aws:sns:${REGION}:${pool}:bane-feedback`;
-      const { ingestFeedbackBatch } = await import('./src/operations.js');
+      const { ingestFeedbackBatch } = await import('./src/ses/feedback.js');
       Object.assign(runtime.config, { multiTenant: true });
       await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture')`, [REGION, pool, topicArn]);
       // Real names are bane-probation-ws_<32 hex>; the fixture workspace ID is longer than SES allows in a tenant name.
@@ -37694,7 +37694,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   /** A Hosted workspace whose owner is the fixture operator, and the platform workspace that sends its account email. */
-  async function noticeFixture(runtime: import('./src/core.js').Runtime, db: pg.Client) {
+  async function noticeFixture(runtime: import('./src/core/types.js').Runtime, db: pg.Client) {
     const wid = runtime.config.workspaceId, platform = unique('platform'), pool = '111122223333';
     Object.assign(runtime.config, { multiTenant: true, platformDomainWorkspace: platform, notifyFrom: 'notices@platform.example' });
     await db.query(`INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)`, [platform]);
@@ -37730,7 +37730,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // under their own narrow origin; a forged one (an event that does not exist) is still canceled.
       await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated)
         SELECT 'email_forged_notice',workspace_id,region,'standing:stev_forged',from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated FROM sending_emails WHERE workspace_id=$1`, [platform]);
-      const { runDispatcher } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
       await runDispatcher(runtime, { region: REGION, accountId: pool });
       const outcome = Object.fromEntries((await db.query(`SELECT id,status,error_code FROM sending_emails WHERE workspace_id=$1`, [platform])).rows.map(r => [r.id === 'email_forged_notice' ? 'forged' : 'notice', [r.status, r.error_code]]));
       assert.ok(['accepted', 'sent', 'delivered'].includes(outcome.notice[0]) && outcome.notice[1] === null, JSON.stringify(outcome));
@@ -37840,7 +37840,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // build before it did, in other words under the same key (a deploy between the send and the job's end).
       await reset();
       const warned = await change({ kind: 'step', step: 'warn', reasons: reasons('warn') });
-      const { sendSystemEmail } = await import('./src/sending.js');
+      const { sendSystemEmail } = await import('./src/sending/held-screen.js');
       await sendSystemEmail(runtime, platform, { from: 'notices@platform.example', to: [AUTH_EMAIL], subject: 'Nightmail: W is warned', text: 'What happened', idempotencyKey: `standing:${warned!.eventId}`, standingEvent: warned!.eventId });
       const [retried] = (await db.query(`SELECT id,payload FROM jobs WHERE workspace_id=$1 AND type='standing.notify' AND status='pending'`, [wid])).rows;
       for (let i = 0; i < 2; i++) await notifyJob(runtime, retried.payload, { id: retried.id, attempts: i + 1, workspaceId: wid });
@@ -37942,7 +37942,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
       const { wid, name, platform, pool, fresh } = await noticeFixture(runtime, db);
       const { accountNotifyJob, domainUnverified, evaluationFinished, limitReached, waitlistAdmitted, INVITATION_EMAILS } = await import('./src/account-notices.js');
-      const { ApiError } = await import('./src/core.js'), { JobDeferred, MAX_ATTEMPTS } = await import('./src/jobs.js');
+      const { ApiError } = await import('./src/core/errors.js'), { JobDeferred, MAX_ATTEMPTS } = await import('./src/jobs.js');
       const { applyChange } = await import('./src/standing.js');
       // Runs each pending account.notify job twice (a retry), and returns the notices' kinds and how they ended.
       const deliver = async (workspaces = [wid, platform]) => {
@@ -38081,7 +38081,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // It dispatches under its own origin, as a standing notice does; nothing else may use that origin.
       await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated)
         SELECT 'email_forged_account_notice',workspace_id,region,'notice:ant_forged',from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated FROM sending_emails WHERE id=$1`, [invitation.id]);
-      const { runDispatcher } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
       await runDispatcher(runtime, { region: REGION, accountId: pool });
       const outcome = Object.fromEntries((await db.query(`SELECT id,status,error_code FROM sending_emails WHERE workspace_id=$1 AND id=ANY($2)`, [platform, [invitation.id, 'email_forged_account_notice']])).rows.map(r => [r.id === invitation.id ? 'notice' : 'forged', [r.status, r.error_code]]));
       assert.ok(['accepted', 'sent', 'delivered'].includes(outcome.notice[0]) && outcome.notice[1] === null, JSON.stringify(outcome));
@@ -38243,7 +38243,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('domain ownership: an absent proof has a grace period and is checked again before releasing the name', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const { expireDomainClaims } = await import('./src/operations.js');
+      const { expireDomainClaims } = await import('./src/domains/hosted.js');
       const name = 'renew.example', wid = runtime.config.workspaceId;
       const { token } = (await db.query("INSERT INTO domain_claims(workspace_id,name,ever_proven,created_at) VALUES($1,$2,true,now()-interval '31 days') RETURNING token", [wid,name])).rows[0];
       let response = 'absent';
@@ -38637,13 +38637,13 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('MCP login and consent share identity admission and OAuth state expires under a durable cap',async t=>{
-    const {guardPublicRequest}=await import('./src/core.js');
+    const {guardPublicRequest}=await import('./src/core/http.js');
     let reads=0; const peer=unique('identity-entry'),work=async()=>{reads++;return new Response(null,{status:200});};
     for(let i=0;i<40;i++) assert.equal((await guardPublicRequest(i%2?'/api/auth/sign-in/social':'/mcp/login',new Headers(),peer,work)).status,200);
     for(const path of ['/mcp/login','/mcp/consent']) assert.equal((await guardPublicRequest(path,new Headers(),peer,work)).status,429);
     assert.equal(reads,40);
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {reserveAuthState}=await import('./src/account-login.js'),{digest}=await import('./src/core.js'),peerHash=await digest('192.0.2.255');
+      const {reserveAuthState}=await import('./src/account-login.js'),{digest}=await import('./src/core/http.js'),peerHash=await digest('192.0.2.255');
       for(let i=0;i<8;i++) await reserveAuthState(runtime.db,peerHash);
       await assert.rejects(reserveAuthState(runtime.db,peerHash),{code:'AUTH_STATE_LIMIT'});
       await db.query('UPDATE auth_state_slots SET expires_at=now() WHERE peer=$1',[peerHash]);
@@ -38652,7 +38652,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('completed failure accounting isolates peers and never charges successful concurrency',async t=>{
-    const {guardPublicRequest}=await import('./src/core.js');
+    const {guardPublicRequest}=await import('./src/core/http.js');
     const headers=new Headers({authorization:'fixture'}),call=(peer:string,work:()=>Promise<Response>)=>guardPublicRequest('/v1/domains',headers,peer,work);
     const ok=async()=>new Response(null,{status:204});
     const replies=await Promise.all(Array.from({length:100},()=>call('parallel-success',ok)));
@@ -38686,7 +38686,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('repeated callback timeouts defer only that endpoint without recording a delivery attempt',async t=>{
     await simulatedSesFixture(t,async({runtime})=>{
-      const {postWebhook}=await import('./src/operations.js'),{JobDeferred}=await import('./src/jobs.js');let calls=0;
+      const {postWebhook}=await import('./src/webhooks/crypto.js'),{JobDeferred}=await import('./src/jobs.js');let calls=0;
       runtime.webhookFetch=async()=>{calls++;throw new DOMException('local synthetic timeout','TimeoutError');};
       const post=(binding:string)=>postWebhook(runtime,'https://fixture.example.org/',{},'{}',null,binding);
       for(let i=0;i<3;i++)await assert.rejects(post('one'),{name:'TimeoutError'});
@@ -38696,7 +38696,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('a sending webhook behind the timeout breaker keeps its spent attempts, so a hanging endpoint exhausts its retries',async t=>{
     await simulatedSesFixture(t,async({runtime,local,db})=>{
-      const {processJobs}=await import('./src/jobs.js'),{operationJobs}=await import('./src/operations.js');
+      const {processJobs}=await import('./src/jobs.js'),{operationJobs}=await import('./src/webhooks/operations.js');
       await db.query('CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP');
       const wid=runtime.config.workspaceId,hook=ok(await local('POST','/v1/webhooks',{url:`https://${unique('breaker')}.example.org/hook`,eventTypes:['email.delivered']}),201);
       const transport=runtime.webhookFetch;let posts=0;
@@ -38729,7 +38729,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         return Reflect.apply(send,this,[cmd]);
       });
       const queries=t.mock.method(db,'query');
-      const result=await (await import('./src/dispatcher.js')).dispatchDue(runtime,REGION);
+      const result=await (await import('./src/sending/dispatcher.js')).dispatchDue(runtime,REGION);
       const leases=queries.mock.calls.filter(c=>(c.arguments[0] as any)?.text?.includes('queued_owners'));
       assert.ok(leases.length);let leased=0;
       for(const entry of leases){
@@ -38742,7 +38742,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('query budget: API key admission, dispatch, acceptance and delivery at one and 100 envelopes',async t=>{
     await simulatedSesFixture(t,async({db,runtime,local})=>{
-      const {runDispatcher}=await import('./src/dispatcher.js'),{ingestFeedbackBatch}=await import('./src/operations.js');
+      const {runDispatcher}=await import('./src/sending/dispatcher.js'),{ingestFeedbackBatch}=await import('./src/ses/feedback.js');
       const wid=runtime.config.workspaceId,acct='112223330000',topic=`arn:aws:sns:${REGION}:${acct}:fixture`;
       const key=ok(await local('POST','/v1/api-keys',{name:'budget',permissions:['send','read']}),201);
       runtime.config.multiTenant=true;
@@ -38750,7 +38750,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await db.query(`INSERT INTO provider_connections(id,workspace_id,kind,state,region,aws_account_id,tenant_state) VALUES($1,$1,'shared','ready',$2,$3,'ready')`,[wid,REGION,acct]);
       await db.query(`INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES('bench.invalid',$1,$1,'verified')`,[wid]);
       await db.query(`INSERT INTO provider_account_limits(aws_account_id,region,max_send_rate,max_24_hour_send,sent_last_24_hours,checked_at,refresh_after) VALUES($1,$2,10000,100000,0,clock_timestamp(),now()+interval '1 minute')`,[acct,REGION]);
-      const sink:import('./src/core.js').FeedbackItem[]=[];runtime.feedback={enqueue:async items=>{sink.push(...items);}};
+      const sink:import('./src/core/types.js').FeedbackItem[]=[];runtime.feedback={enqueue:async items=>{sink.push(...items);}};
       const meter=await queryBudget(t,db);
       ok(await local('GET','/v1/emails',undefined,'live',{authorization:`Bearer ${key.secret}`})); // prime this real key
       for(const n of [1,100]){
@@ -39011,7 +39011,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('MX: 100 emails across 100 workspaces share account-scoped quota and bounded dispatcher statements', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const { runDispatcher } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js');
       const accounts=['111122223333','444455556666']; runtime.config.multiTenant=true; runtime.config.simulatedSes.latencyMs=15;
       await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,sending_state,feedback_topic_arn) VALUES ($1,$2,'ready',$3)`,[REGION,accounts[0],`arn:aws:sns:${REGION}:${accounts[0]}:bane-feedback`]);
       await db.query("INSERT INTO workspaces(id,name,slug) SELECT 'bench-'||n,'fixture','bench-'||n FROM generate_series(1,100)n");
@@ -39074,7 +39074,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3');
       const { SESv2Client, GetAccountCommand, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
       const { credentialFingerprint, discoveryTarget } = await import('./src/ses-region-state.js');
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const { acceptInboundNotification, mailboxIngestJobs } = await import('./src/mailbox-ingest.js');
       const { mailboxEventJobs } = await import('./src/mailbox-events.js');
       const scope = runtime.config.workspaceId, topic = `arn:aws:sns:${REGION}:111122223333:fixture`;
@@ -39542,7 +39542,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('ephemeral inbox: wait wakes for a delivery during the call and never skips concurrent commits',async t=>{
     const a=await fixtureDatabase(t),b=await fixtureDatabase(t),wid=unique('cursor-work'),host=wid+'.invalid',bid=unique('mbx'),domain=unique('mdom'),addr='cursor@'+host;
-    const {digest,randomSecret}=await import('./src/core.js'), token=randomSecret('bane_mbx_');
+    const {digest,randomSecret}=await import('./src/core/http.js'), token=randomSecret('bane_mbx_');
     await a.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status,catch_all) VALUES($1,$2,$1,$3,$4,'active','store')",[domain,wid,host,REGION]);
     await a.query("INSERT INTO mailboxes(id,workspace_id,address,domain_id,kind,retention_mode,expires_at,delete_after,quota_messages,quota_bytes) VALUES($1,$2,$3,$4,'inbox','ephemeral',now()+interval '1 day',now()+interval '2 days',200,26214400)",[bid,wid,addr,domain]);
     await a.query("INSERT INTO mailbox_addresses(workspace_id,address,mailbox_id,kind) VALUES($1,$2,$3,'primary')",[wid,addr,bid]);await a.query('INSERT INTO inbox_state(workspace_id,inbox_id) VALUES($1,$2)',[wid,bid]);
@@ -39568,7 +39568,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('H1: permanent removal holds the ingest lane; a reopened envelope delivers only the new membership',async t=>{
     const writer=await fixtureDatabase(t),peer=await fixtureDatabase(t),w=unique('reopen'),domain=unique('mdom'),mid=unique('msg');
     const bids=[unique('mbx'),unique('mbx')],addrs=['a@reopen.invalid','b@reopen.invalid'];
-    const {randomSecret,digest}=await import('./src/core.js'),tokens=[randomSecret('bane_mbx_'),randomSecret('bane_mbx_')];
+    const {randomSecret,digest}=await import('./src/core/http.js'),tokens=[randomSecret('bane_mbx_'),randomSecret('bane_mbx_')];
     await writer.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status,catch_all) VALUES($1,$2,$1,'reopen.invalid',$3,'active','store')",[domain,w,REGION]);
     for(const [i,bid] of bids.entries()){
       await writer.query("INSERT INTO mailboxes(id,workspace_id,domain_id,address,kind,retention_mode) VALUES($1,$2,$3,$4,'inbox','forever')",[bid,w,domain,addrs[i]]);
@@ -39805,7 +39805,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('inbox long-poll and from filter: modseq wake skips idle rescans, catches out-of-order inbox_seq and mutable flags, matches all email forms, and surfaces 422 READ_TOO_LARGE',async t=>{
     const a=await fixtureDatabase(t),w=unique('pollw'),host=w+'.invalid',dom=unique('mdom'),bid=unique('mbx'),addr='poll@'+host;
-    const {digest,randomSecret}=await import('./src/core.js');
+    const {digest,randomSecret}=await import('./src/core/http.js');
     const tok=randomSecret('bane_mbx_');
     cleanup(t,async()=>{for(const tbl of ['mailbox_events','mail_gc_candidates','mail_receipts','mailbox_keys','mailbox_addresses','mailbox_threads','mailbox_messages','mail_messages','mail_threads','mailboxes','mailbox_domains','api_request_budgets','mailbox_write_lanes'])await a.query(`DELETE FROM ${tbl} WHERE workspace_id=$1`,[w]);});
     await a.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status,catch_all) VALUES($1,$2,$1,$3,$4,'active','store')",[dom,w,host,REGION]);
@@ -39937,7 +39937,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const {attachToMailboxes}=await import('./src/mailbox-store.js');
     const {reconcileInboxState}=await import('./src/maintenance.js');
     const {drizzle}=await import('drizzle-orm/node-postgres');
-    const {digest,randomSecret}=await import('./src/core.js');
+    const {digest,randomSecret}=await import('./src/core/http.js');
     cleanup(t,async()=>{for(const tbl of ['mailbox_events','mail_gc_candidates','mail_receipts','mailbox_keys','mailbox_addresses','mailbox_threads','mailbox_messages','mail_messages','mail_threads','mailboxes','mailbox_domains','api_request_budgets','mailbox_write_lanes'])await a.query(`DELETE FROM ${tbl} WHERE workspace_id=$1`,[w]);});
     await a.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status,catch_all) VALUES($1,$2,$1,$3,$4,'active','store')",[dom,w,host,REGION]);
     const exact=async(bid:string)=>Number((await a.query('SELECT count(*)::int n FROM mailbox_messages WHERE mailbox_id=$1 AND NOT read AND held_reason IS NULL',[bid])).rows[0].n);
@@ -40450,7 +40450,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         await c1.query(`INSERT INTO jobs(id,type,workspace_id,payload,available_at) SELECT 'fa_'||lpad(i::text,3,'0'),'mailbox.ingest','floodA',jsonb_build_object('sesMessageId','m'||i),now()-interval '1 minute' FROM generate_series(1,36) i UNION ALL SELECT 'qb_1','mailbox.ingest','quietB','{"sesMessageId":"b1"}',now() UNION ALL SELECT 'qb_other','fixture.other','quietB','{}',now()`);
         const order: string[] = [];
         const perConsumer = [0, 0];
-        const mkHandlers = (idx: number): Record<string, import('./src/core.js').JobHandler> => ({
+        const mkHandlers = (idx: number): Record<string, import('./src/core/types.js').JobHandler> => ({
           'mailbox.ingest': Object.assign(
             async (_r: any, _p: any, j: any) => { order.push(`${j.workspaceId}:single`); perConsumer[idx]!++; await new Promise(r => setTimeout(r, 20)); },
             { batch: async (_r: any, items: any[]) => { order.push(`${items[0].job.workspaceId}:batch(${items.length})`); perConsumer[idx]! += items.length; await new Promise(r => setTimeout(r, 20)); return items.map(it => ({ id: it.job.id })); } },
@@ -40502,7 +40502,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('batched job settlement: a settlement that fails leaves its own job to the lease and settles none of its siblings', async t => {
     if (!fixtureWorker) return t.skip('requires the loopback worker and real database connections');
-    const { processJobs } = await import('./src/jobs.js'), { drizzle } = await import('drizzle-orm/node-postgres'), { sql } = await import('drizzle-orm'), { ApiError } = await import('./src/core.js');
+    const { processJobs } = await import('./src/jobs.js'), { drizzle } = await import('drizzle-orm/node-postgres'), { sql } = await import('drizzle-orm'), { ApiError } = await import('./src/core/errors.js');
     const db = await fixtureDatabase(t), wid = unique('settle'), schema = 'settle_' + randomUUID().replaceAll('-', '');
     const rt = { ...fixtureWorker.runtime, db: drizzle(db), config: { ...fixtureWorker.runtime.config, workspaceId: wid } };
     await db.query(`CREATE SCHEMA ${schema}`);
@@ -40570,7 +40570,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // inbox_adopt_batch takes a workspace's ingest lane, then each address row FOR UPDATE, and files the address's mail
   // by its threads' state. The replaced Worker's statements below are #360's, verbatim.
   test('address conversion: an address files its mail where the inbox writer would; the replaced Worker’s thread changes and this release’s writers take lanes before rows, and a thread change keeps its budget', async t => {
-    const [{ nodeRuntime }, { createApp }, { digest }] = await Promise.all([import('./src/adapters/node.js'), import('./src/app.js'), import('./src/core.js')]);
+    const [{ nodeRuntime }, { createApp }, { digest }] = await Promise.all([import('./src/adapters/node.js'), import('./src/app.js'), import('./src/core/http.js')]);
     const { runtime, close } = nodeRuntime({ ...process.env, DATABASE_URL: FIXTURE_DATABASE_URL }); cleanup(t, close);
     const db = await fixtureDatabase(t), old = await fixtureDatabase(t), other = await fixtureDatabase(t), app = createApp();
     const pidOf = async (c: pg.Client) => (await c.query('SELECT pg_backend_pid() AS pid')).rows[0].pid as number, oldPid = await pidOf(old), otherPid = await pidOf(other);
@@ -40926,7 +40926,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     assert.equal(await count('m2'),103);
   });
   // The SNS route of a single-tenant installation for one synthetic receiving host, in a simulated SES fixture.
-  const inboundRoute=async(runtime:import('./src/core.js').Runtime,db:pg.Client,name:string,limits:{messages:number;backlog:number})=>{
+  const inboundRoute=async(runtime:import('./src/core/types.js').Runtime,db:pg.Client,name:string,limits:{messages:number;backlog:number})=>{
     const {acceptInboundNotification}=await import('./src/mailbox-receipts.js');
     const wid=runtime.config.workspaceId,topicArn=`arn:aws:sns:${REGION}:111122223333:${name}-fixture`,bucket=name+'-fixture',host=name+'.invalid';
     await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status,catch_all) VALUES($1,$2,$1,$3,$4,'active','store')",[unique('dom'),wid,host,REGION]);
@@ -40998,7 +40998,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const fence = async (id: string) => (await db.query('SELECT state FROM mail_action_attempts WHERE workspace_id=$1 AND delivery_id=$2', [wid, id])).rows[0]?.state;
       const attempt = async (id: string, send: () => Promise<{ status: number }>) => {
         await db.query("INSERT INTO mailbox_webhook_deliveries(id,workspace_id,webhook_id,payload,routed) VALUES($1,$2,$3,$4,true) ON CONFLICT DO NOTHING", [id, wid, hook.id, { id: 'mev_' + id, type: 'message.received' }]);
-        return deliverEndpoint(runtime, wid, { delivery_id: id, generation: 0, routed: true, webhook_id: hook.id, payload: { id: 'mev_' + id, type: 'message.received' } } as unknown as import('./src/core.js').ClaimedWebhook, send);
+        return deliverEndpoint(runtime, wid, { delivery_id: id, generation: 0, routed: true, webhook_id: hook.id, payload: { id: 'mev_' + id, type: 'message.received' } } as unknown as import('./src/core/types.js').ClaimedWebhook, send);
       };
       // Nothing left the box (Node's connect and DNS errors): a known outcome, retried like a 503.
       for (const code of ['ECONNREFUSED', 'ENOTFOUND']) {
@@ -41054,7 +41054,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     assert.deepEqual(receipts.map(r=>[r.ses_message_id,r.recipients]),[['a-new',to('a')],['z-known',to('a','b','c')]]);
   });
   // A send's sender decision under its send locks (send_admission), as direct, campaign and mailbox sends make it.
-  const senderRoute=async(runtime:import('./src/core.js').Runtime,tx:import('./src/core.js').DbExecutor,held:import('./src/send-scope.js').SendScope,actor:import('./src/core.js').Actor,from:string,marketing=false)=>{
+  const senderRoute=async(runtime:import('./src/core/types.js').Runtime,tx:import('./src/core/types.js').DbExecutor,held:import('./src/send-scope.js').SendScope,actor:import('./src/core/types.js').Actor,from:string,marketing=false)=>{
     const [{admission,actorJson,admitted},{sql}]=await Promise.all([import('./src/admission.js'),import('drizzle-orm')]);
     const decision=await admission(runtime,actor.workspaceId,actorJson(actor),{stage:'send',locks:held,mails:[{host:from.split('@')[1]!.toLowerCase(),kind:marketing?'marketing':'transactional',attachments:[],bodyBytes:0}]});
     const route=admitted(runtime,(await tx.execute<{s:import('./src/admission.js').Admitted}>(sql`SELECT ${decision} AS s`)).rows[0]!.s,actor.workspaceId).mails[0]!;
@@ -41074,7 +41074,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     await g.query("INSERT INTO provider_connections(id,workspace_id,region,state,kind,aws_account_id,tenant_state) VALUES($1,$1,$2,'ready','shared','111122223333','ready')",[w,region]);
     await g.query("INSERT INTO domain_claims(name,workspace_id,connection_id,sending_state) VALUES($1,$2,$2,'verified')",[host,w]);
     await g.query('INSERT INTO operation_domains(id,name,workspace_id,region) VALUES($1,$2,$1,$3)',[w,host,region]);
-    const actor={workspaceId:w,permissions:[],domains:[],keyId:'fixture-key'} as import('./src/core.js').Actor;
+    const actor={workspaceId:w,permissions:[],domains:[],keyId:'fixture-key'} as import('./src/core/types.js').Actor;
     // The gate is the re-add after reserve_placed_claim's first lock: it holds the settings row, not yet the claim.
     await g.query('BEGIN');
     let send:Promise<unknown>|undefined,readd:string|undefined;
@@ -41113,7 +41113,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     await g.query('INSERT INTO operation_domains(id,name,workspace_id,region) VALUES($1,$2,$1,$3)',[w,host,region]);
     await g.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,receiving_host,region,status,enabled_at) VALUES($1,$1,$1,$2,$2,$3,'active',now())",[w,host,region]);
     const mailbox=await createMailbox(runtime.db,{workspaceId:w},{domainId:w,domainName:host,address:`reply@${host}`,origin:'api'});
-    const actor={workspaceId:w,permissions:['send'],domains:[],keyId:'fixture-key'} as import('./src/core.js').Actor;
+    const actor={workspaceId:w,permissions:['send'],domains:[],keyId:'fixture-key'} as import('./src/core/types.js').Actor;
     // Keep nothing the send writes: the runner must never dispatch this fixture's mail.
     const rollback=new Error('Roll back the fixture send');
     await g.query('BEGIN');
@@ -41157,7 +41157,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     await g.query('INSERT INTO operation_domains(id,name,workspace_id,region) VALUES($1,$2,$1,$3)',[w,host,region]);
     await g.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,receiving_host,region,status,enabled_at) VALUES($1,$1,$1,$2,$2,$3,'active',now())",[w,host,region]);
     const mailbox=await createMailbox(runtime.db,{workspaceId:w},{domainId:w,domainName:host,address:`reply@${host}`,origin:'api'});
-    const actor={workspaceId:w,permissions:['send'],domains:[],keyId:'fixture-key'} as import('./src/core.js').Actor;
+    const actor={workspaceId:w,permissions:['send'],domains:[],keyId:'fixture-key'} as import('./src/core/types.js').Actor;
     // Every mailbox send rolls back: the runner must never dispatch this fixture's mail.
     const rollback=new Error('Roll back the fixture send');
     const reply=()=>runtime.db.transaction(async tx=>{await sendFromMailbox(runtime,tx,{mailbox,actor,scope:{workspaceId:w},from:mailbox.address,
@@ -41417,7 +41417,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const bigLaunched = await launch(bigCamp);
     assert.equal(bigLaunched.status, 202, JSON.stringify(bigLaunched.body));
     assert.equal(bigLaunched.body.queued, bigBefore.length);
-    const { jobHandlers } = await import('./src/sending.js');
+    const { jobHandlers } = await import('./src/sending/jobs.js');
     const bigSubId = (await g.query("SELECT c.id FROM audience_contacts c JOIN audience_list_members m ON m.workspace_id=c.workspace_id AND m.contact_id=c.id WHERE c.workspace_id=$1 AND m.list_id=$2 AND c.marketing_consent='subscribed' AND NOT c.suppressed LIMIT 1", [w, bigList])).rows[0].id;
     await gate.query('BEGIN');
     let bgRun: Promise<unknown> | undefined;
@@ -41467,7 +41467,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // Also run the deferred background capture under the same stale statistics and verify it freezes the exact set in seconds.
       const capStart = Date.now();
       const { nodeRuntime } = await import('./src/adapters/node.js');
-      const { jobHandlers } = await import('./src/sending.js');
+      const { jobHandlers } = await import('./src/sending/jobs.js');
       const { processJobs } = await import('./src/jobs.js');
       // The background worker uses separate connections for capture and its progress write.
       // Give all of them the same private queue, containing only this campaign's real job.
@@ -41543,8 +41543,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   // Differential proof (L87 item 7) + s1: static content_hash deploy & rollback safety (L87 item 5).
   test('fast campaign launch: URL-attribute shortcut matches per-row parse5 and s1: hashes preserve deploy/rollback safety', async t => {
-    const { analyzeHtmlPlaceholders, staticContentHash, verifyCampaignContentHash } = await import('./src/sending.js');
-    const { digest } = await import('./src/core.js');
+    const { analyzeHtmlPlaceholders } = await import('./src/sending/mime.js'), { staticContentHash, verifyCampaignContentHash } = await import('./src/campaigns/materialize.js');
+    const { digest } = await import('./src/core/http.js');
     const { canonical } = await import('./src/idempotency.js');
     const { boundedHtmlFragment } = await import('./src/bounded-html.js');
     const escaped = (v: string) => v.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!));
@@ -41639,7 +41639,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     // Everyone unsubscribes after the 202 before the background capture runs.
     await g.query("UPDATE audience_contacts SET marketing_consent='unsubscribed' WHERE workspace_id=$1", [w]);
     const { nodeRuntime } = await import('./src/adapters/node.js');
-    const { jobHandlers } = await import('./src/sending.js');
+    const { jobHandlers } = await import('./src/sending/jobs.js');
     const { processJobs } = await import('./src/jobs.js');
     // A shared queue drain can finish without claiming this campaign. Give the worker only the job the launch queued.
     const schema = 'late_empty_' + randomUUID().replaceAll('-', ''), url = new URL(FIXTURE_DATABASE_URL!);
@@ -41666,7 +41666,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // Migration 332 decides the inbound mail stored without forwardEligible; a message committed after the page that
   // would have seen it is never decided on read any more: a forward refuses it.
   test('forward rollout: mail committed without forwardEligible after migration 332 ran is refused, not decided on read',async t=>{
-    const [{nodeRuntime},{sendToEndpoint},{encrypt}]=await Promise.all([import('./src/adapters/node.js'),import('./src/endpoints.js'),import('./src/operations.js')]);
+    const [{nodeRuntime},{sendToEndpoint},{encrypt}]=await Promise.all([import('./src/adapters/node.js'),import('./src/endpoints.js'),import('./src/webhooks/crypto.js')]);
     const {runtime,close}=nodeRuntime({...process.env,DATABASE_URL:FIXTURE_DATABASE_URL});cleanup(t,close);
     const a=await fixtureDatabase(t),b=await fixtureDatabase(t),w=unique('fwdroll'),hook='con_'+randomUUID().replaceAll('-',''),thread=unique('thr'),mid=unique('msg');
     cleanup(t,async()=>{
@@ -41690,7 +41690,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     } finally { await b.query('ROLLBACK'); }
     assert.equal((await a.query("SELECT verdicts ? 'forwardEligible' AS decided FROM mail_messages WHERE id=$1",[mid])).rows[0].decided,false,'The migration never saw it.');
     // The forward refuses it and decides nothing.
-    const delivery={type:'forward',webhook_id:hook,payload:{messageId:mid,type:'message.received',data:{recipients:[`box@${w}.example`],junk:false}}} as unknown as import('./src/core.js').ClaimedWebhook;
+    const delivery={type:'forward',webhook_id:hook,payload:{messageId:mid,type:'message.received',data:{recipients:[`box@${w}.example`],junk:false}}} as unknown as import('./src/core/types.js').ClaimedWebhook;
     await assert.rejects(sendToEndpoint(runtime,w,delivery),{code:'FORWARD_BLOCKED'});
     assert.equal((await a.query("SELECT verdicts ? 'forwardEligible' AS decided FROM mail_messages WHERE id=$1",[mid])).rows[0].decided,false);
   });
@@ -41924,7 +41924,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // tear witness (5 steps): U1 upload, expire, sweep, purge, U1 ok -> the object outlived its reservation with no deletion queued.
   test('attachment upload: a put that outlasts its swept reservation still queues the object for deletion',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {storeAttachmentBytes}=await import('./src/sending.js');
+      const {storeAttachmentBytes}=await import('./src/sending/mime.js');
       const wid=runtime.config.workspaceId;let stored='';
       t.mock.method(runtime.storage,'put',async(key:string)=>{
         stored=key;
@@ -41942,7 +41942,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // put whose Worker died after the sweeper's deletion ran left its object with no durable record).
   test('attachment upload: an unpublished object keeps a durable cleanup obligation even if its Worker dies',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {storeAttachmentBytes}=await import('./src/sending.js'),{cleanup}=await import('./src/maintenance.js');
+      const {storeAttachmentBytes}=await import('./src/sending/mime.js'),{cleanup}=await import('./src/maintenance.js');
       const wid=runtime.config.workspaceId,puts:{key:string;signal:unknown}[]=[];let landed=false;
       // The first put hangs (its Worker dies before finish and refund); later ones succeed.
       t.mock.method(runtime.storage,'put',(key:string,_b:Uint8Array,_c:string,signal:unknown)=>{puts.push({key,signal});return puts.length===1?new Promise<void>(()=>{landed=true;}):Promise.resolve();});
@@ -41972,7 +41972,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // that landed after its tombstone was spent left an object no record owned).
   test('attachment upload: storage reconciliation deletes any upload object no record has owned for a day',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {storeAttachmentBytes}=await import('./src/sending.js'),{reconcileUploads}=await import('./src/maintenance.js'),{r2Storage}=await import('./src/adapters/storage.js');
+      const {storeAttachmentBytes}=await import('./src/sending/mime.js'),{reconcileUploads}=await import('./src/maintenance.js'),{r2Storage}=await import('./src/adapters/storage.js');
       const wid=runtime.config.workspaceId,day=86_400_000,objects=new Map<string,Date>();
       t.mock.method(runtime.storage,'put',async(key:string)=>{objects.set(key,new Date());});
       // The bucket as the hourly reconciliation lists it, two objects a page.
@@ -42020,7 +42020,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('attachment upload: reconciliation and deletion never touch another key family or a referenced key',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {storeAttachmentBytes}=await import('./src/sending.js'),{reconcileUploads}=await import('./src/maintenance.js'),dispatch=await import('./src/dispatch.js');
+      const {storeAttachmentBytes}=await import('./src/sending/mime.js'),{reconcileUploads}=await import('./src/maintenance.js'),dispatch=await import('./src/dispatch.js');
       const wid=runtime.config.workspaceId,day=86_400_000,old=()=>new Date(Date.now()-2*day),objects=new Map<string,Date>(),hex=()=>randomUUID().replaceAll('-','');
       t.mock.method(runtime.storage,'put',async(key:string)=>{objects.set(key,new Date());});
       t.mock.method(runtime.storage,'delete',async(key:string)=>{objects.delete(key);});
@@ -43995,7 +43995,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const hookId=(await db.query("SELECT id AS hook_id FROM mailbox_webhooks WHERE workspace_id=$1 AND key=$2 AND type='forward' AND verified",[wid,'team'])).rows[0].hook_id;await call('PUT',root,config);
         const send=async(mid:string)=>{const row=(await db.query("SELECT id FROM mailbox_webhook_deliveries WHERE webhook_id=$1 AND payload->>'messageId'=$2",[hookId,mid])).rows[0];await mailboxEventJobs['mailbox.webhook'](runtime,{deliveryId:row.id},{id:row.id,workspaceId:wid,attempts:1});return row.id};
         const m=await ingest('forward-handler',[box.address]);await send(m.id);await send(m.id);const rows=(await db.query("SELECT from_address,from_name,text FROM mail_messages WHERE workspace_id=$1 AND direction='outbound' AND subject='Fwd: Test forward-handler'",[wid])).rows;assert.equal(rows.length,1);assert.equal(rows[0].from_address,box.address);assert.match(rows[0].from_name,/ via /);
-        await (await import('./src/dispatcher.js')).dispatchDue(runtime,REGION);
+        await (await import('./src/sending/dispatcher.js')).dispatchDue(runtime,REGION);
         assert.equal((await db.query('SELECT e.status FROM sending_emails e JOIN mail_forward_once f ON f.email_id=e.id WHERE f.message_id=$1 AND f.endpoint=$2',[m.id,hookId])).rows[0].status,'accepted');
         // No daily forwarding budget: a forward is a send and its admission applies the workspace's limits. 1,000 forwards
         // today and 999 this hour (the former 1,000 a day and 200 an hour) still forward; the endpoint's 1,000th in an hour is its last.
@@ -44101,7 +44101,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const emailId=(await db.query('SELECT email_id FROM mail_forward_once WHERE message_id=$1 AND endpoint=$2',[messageId,hookId])).rows[0].email_id as string;
         const {SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2'),send=SESv2Client.prototype.send,sends:Json[]=[];
         it.mock.method(SESv2Client.prototype,'send',async function(this:unknown,cmd:unknown,...rest:unknown[]){if(cmd instanceof SendEmailCommand)sends.push(cmd.input);return (send as (...a:unknown[])=>unknown).call(this,cmd,...rest);});
-        await (await import('./src/dispatcher.js')).dispatchDue(runtime,REGION);
+        await (await import('./src/sending/dispatcher.js')).dispatchDue(runtime,REGION);
         return sends.filter(s=>s.EmailTags.some((tag:Json)=>tag.Name==='bane_email_id'&&tag.Value===emailId));
       };
       const forwarded:{mime?:string}={};
@@ -44347,7 +44347,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const delivery=(await db.query("SELECT id FROM mailbox_webhook_deliveries WHERE webhook_id=$1 AND payload->>'messageId'=$2",[hookId,m.id])).rows[0].id as string;
         // The claim statement joins the endpoint while it is still active, then the pause commits.
         const payload={deliveryId:delivery};
-        const claimed=(await runtime.db.execute<import('./src/core.js').ClaimedWebhook>(sql`WITH claimed AS (SELECT 'job_paused_claim'::text AS id,${wid}::text AS workspace_id,'mailbox.webhook' AS type,${JSON.stringify(payload)}::jsonb AS payload),${inboundHookClaim} SELECT * FROM inbound_hooks WHERE blocked IS NULL`)).rows[0];
+        const claimed=(await runtime.db.execute<import('./src/core/types.js').ClaimedWebhook>(sql`WITH claimed AS (SELECT 'job_paused_claim'::text AS id,${wid}::text AS workspace_id,'mailbox.webhook' AS type,${JSON.stringify(payload)}::jsonb AS payload),${inboundHookClaim} SELECT * FROM inbound_hooks WHERE blocked IS NULL`)).rows[0];
         assert.ok(claimed);
         await call('PATCH','/v1/endpoints/paused-claim',{paused:true});
         const prev=runtime.webhookFetch;let posts=0;runtime.webhookFetch=async()=>{posts++;return {status:204}};
@@ -44421,8 +44421,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         await route('stale@receive.example',['webhook:stale-claim'],'stale-claim');
         const hookId=(await db.query("SELECT id FROM mailbox_webhooks WHERE workspace_id=$1 AND key='stale-claim'",[wid])).rows[0].id;
         const deliveryOf=async(mid:string)=>{const m=await ingest(mid,['stale@receive.example']);return (await db.query("SELECT id FROM mailbox_webhook_deliveries WHERE webhook_id=$1 AND payload->>'messageId'=$2",[hookId,m.id])).rows[0].id as string;};
-        const claim=async(delivery:string)=>(await runtime.db.execute<import('./src/core.js').ClaimedWebhook>(sql`WITH claimed AS (SELECT 'job_stale'::text AS id,${wid}::text AS workspace_id,'mailbox.webhook' AS type,${JSON.stringify({deliveryId:delivery})}::jsonb AS payload),${inboundHookClaim} SELECT * FROM inbound_hooks WHERE blocked IS NULL`)).rows[0]!;
-        const runJob=(delivery:string,webhook?:import('./src/core.js').ClaimedWebhook,generation?:number)=>mailboxEventJobs['mailbox.webhook']!(runtime,{deliveryId:delivery,...(generation===undefined?{}:{generation})},{id:'job_stale',workspaceId:wid,attempts:1,...(webhook?{webhook}:{})});
+        const claim=async(delivery:string)=>(await runtime.db.execute<import('./src/core/types.js').ClaimedWebhook>(sql`WITH claimed AS (SELECT 'job_stale'::text AS id,${wid}::text AS workspace_id,'mailbox.webhook' AS type,${JSON.stringify({deliveryId:delivery})}::jsonb AS payload),${inboundHookClaim} SELECT * FROM inbound_hooks WHERE blocked IS NULL`)).rows[0]!;
+        const runJob=(delivery:string,webhook?:import('./src/core/types.js').ClaimedWebhook,generation?:number)=>mailboxEventJobs['mailbox.webhook']!(runtime,{deliveryId:delivery,...(generation===undefined?{}:{generation})},{id:'job_stale',workspaceId:wid,attempts:1,...(webhook?{webhook}:{})});
         const state=async(delivery:string)=>(await db.query('SELECT status,generation FROM mailbox_webhook_deliveries WHERE id=$1',[delivery])).rows[0];
         const prev=runtime.webhookFetch;let posts=0,reply=400;runtime.webhookFetch=async()=>{posts++;return {status:reply}};
         try{
@@ -44816,7 +44816,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const w='ws_'+'a'.repeat(32),mid='msg_'+'b'.repeat(32),account='123456789012',region='us-east-2',prefix='bane-'+'c'.repeat(20),bucket=`${prefix}-mail-${region}`;
     const client=new S3Client({region}),commands:Json[]=[],raw=Buffer.from('Bcc: private@example.invalid\r\nSubject: Fixture\r\n\r\nStored body');
     t.mock.method(client,'send',async(cmd:any)=>{switch(cmd.constructor.name){case 'HeadObjectCommand':return {ETag:'"pin"',ContentLength:raw.length};case 'GetObjectCommand':return {Body:{transformToByteArray:async()=>raw}};case 'PutObjectCommand':commands.push(cmd.input);return {};default:throw Error(cmd.constructor.name);}});
-    const store=receivedMailStore({config:{multiTenant:true}} as import('./src/core.js').Runtime,w,{bucket,binding:{kind:'byo',id:'fixture',role_arn:'fixture',external_id:'fixture',aws_account_id:account},delivery:{lifecycle:'kept',prefixInbox:null,drop:false,owners:[]}},client,{messageId:mid,sesMessageId:'receipt'});
+    const store=receivedMailStore({config:{multiTenant:true}} as import('./src/core/types.js').Runtime,w,{bucket,binding:{kind:'byo',id:'fixture',role_arn:'fixture',external_id:'fixture',aws_account_id:account},delivery:{lifecycle:'kept',prefixInbox:null,drop:false,owners:[]}},client,{messageId:mid,sesMessageId:'receipt'});
     const copied=await copyWorkspaceRaw(client,region,bucket,'staging/receipt',store.rawKey,[],'kept');await store.objects.put(store.rawKey,copied.bytes,'message/rfc822');client.destroy();
     assert.equal(commands.length,2);assert.equal(store.rawKey,`workspaces/${w}/raw/kept/${mid}.eml`);
     const hosted=Object.values(render('--fresh',{account,origin:'https://dev.bane.mx'}) as Record<string,{Statement:IamStatement[]}>).flatMap(doc=>doc.Statement);
@@ -44838,7 +44838,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('attachment keys built by the code are authorized by the hosted and self-hosted IAM policies, and nothing wider (N1)',async()=>{
-    const {receivedAttachmentKey,sentAttachmentKey,mailboxResources}=await import('./src/mailbox-setup.js'),{digest}=await import('./src/core.js'),account='123456789012';
+    const {receivedAttachmentKey,sentAttachmentKey,mailboxResources}=await import('./src/mailbox-setup.js'),{digest}=await import('./src/core/http.js'),account='123456789012';
     const wid=`ws_${'a1'.repeat(16)}`,other=`ws_${'c3'.repeat(16)}`,msg=`msg_${(await digest('fixture')).slice(0,32)}`,matt=`matt_${(await digest(`${msg}:0`)).slice(0,32)}`,batch=await digest('batch');
     const received=receivedAttachmentKey(wid,msg,batch,matt),sent=sentAttachmentKey(wid,msg,matt);
     assert.match(received,/^workspaces\/ws_[0-9a-f]{32}\/att\/msg_[0-9a-f]{32}\/[0-9a-f]{64}\/matt_[0-9a-f]{32}$/);
@@ -44924,8 +44924,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const unavailable=drizzle(a),fault=t.mock.method(unavailable,'execute',()=>{throw Error('claim unavailable');});
         await assert.rejects(processJobs({...runtime,db:unavailable},{},1,1),/claim unavailable/);fault.mock.restore();
         let start!:(id:string)=>void,release!:()=>void;const begun=new Promise<string>(r=>{start=r;}),gate=new Promise<void>(r=>{release=r;});
-        const seen:string[]=[],record:import('./src/core.js').JobHandler=async(_r,_p,j)=>{seen.push(j.workspaceId);};
-        const blocking:import('./src/core.js').JobHandler=async(_r,_p,j)=>{start(j.id);await gate;};
+        const seen:string[]=[],record:import('./src/core/types.js').JobHandler=async(_r,_p,j)=>{seen.push(j.workspaceId);};
+        const blocking:import('./src/core/types.js').JobHandler=async(_r,_p,j)=>{start(j.id);await gate;};
         const first=drizzle(a).transaction(async db=>processJobs({...runtime,db},{'mailbox.ingest':blocking,'fixture.other':blocking},1,1));
         try {
           const id=await Promise.race([begun,first.then(()=>assert.fail('expected a blocked handler'))]);assert.match(id,/^a/);
@@ -45028,7 +45028,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const { SESv2Client, GetAccountCommand, GetEmailIdentityCommand, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
       const { credentialFingerprint, discoveryTarget } = await import('./src/ses-region-state.js');
       const { acceptInboundNotification, mailboxIngestJobs } = await import('./src/mailbox-ingest.js');
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const scope = runtime.config.workspaceId, topic = `arn:aws:sns:${REGION}:111122223333:inbound-fixture`;
       const domainId = unique('domain'), publicAddress = 'support@example.com', address = 'support@inbox.example.com';
       runtime.config.aws = { accessKeyId: 'synthetic-fixture', secretAccessKey: 'synthetic-fixture' }; runtime.config.liveEnabled = true;
@@ -45552,7 +45552,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const MiB = 1024 * 1024, base = memoryInUse();
     const runtime = { config: { publicUrl: PUBLIC_ORIGIN, authSecret: 'preview-fixture-secret' }, storage: { async put() {}, async get() { return null; }, async delete() {} } };
     // About 9.5 MiB each: the 2.5 MiB page three times and the screenshot reserve.
-    const preview = (render: () => Promise<import('./src/core.js').RenderedImage>) => renderPreview(runtime as never, 'ws_preview_fixture', 'x'.repeat(2.5 * MiB), [], async () => new Uint8Array(), render);
+    const preview = (render: () => Promise<import('./src/core/types.js').RenderedImage>) => renderPreview(runtime as never, 'ws_preview_fixture', 'x'.repeat(2.5 * MiB), [], async () => new Uint8Array(), render);
     const rendered = async () => ({ data: Uint8Array.of(1), mimeType: 'image/png' as const }), hang = () => new Promise<never>(() => {});
     const busy = (e: { status?: number; code?: string }) => e.status === 429 && e.code === 'PREVIEW_BUSY';
     // The isolate's other holds count: with its budget held elsewhere, a preview is refused though no preview runs.
@@ -45969,8 +45969,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const sub=ok(await local('POST','/v1/inbound/webhooks',{url:'https://example.com/plain-sub',eventTypes:['message.received']}),201);
       let seq=0;
       const delivery=async(id:string)=>{await db.query('INSERT INTO mailbox_webhook_deliveries(id,workspace_id,webhook_id,event_seq,payload) VALUES($1,$2,$3,$4,$5)',[id,wid,sub.id,++seq,{id:'mev_'+id,type:'message.received',messageId:'msg_'+id,data:{}}]);return id;};
-      const claim=async(id:string)=>(await runtime.db.execute<import('./src/core.js').ClaimedWebhook>(sql`WITH claimed AS (SELECT 'job_plain'::text AS id,${wid}::text AS workspace_id,'mailbox.webhook' AS type,${JSON.stringify({deliveryId:id})}::jsonb AS payload),${inboundHookClaim} SELECT * FROM inbound_hooks WHERE blocked IS NULL`)).rows[0]!;
-      const handle=(id:string,webhook?:import('./src/core.js').ClaimedWebhook,generation?:number)=>mailboxEventJobs['mailbox.webhook']!(runtime,{deliveryId:id,...(generation===undefined?{}:{generation})},{id:'job_plain',workspaceId:wid,attempts:1,...(webhook?{webhook}:{})});
+      const claim=async(id:string)=>(await runtime.db.execute<import('./src/core/types.js').ClaimedWebhook>(sql`WITH claimed AS (SELECT 'job_plain'::text AS id,${wid}::text AS workspace_id,'mailbox.webhook' AS type,${JSON.stringify({deliveryId:id})}::jsonb AS payload),${inboundHookClaim} SELECT * FROM inbound_hooks WHERE blocked IS NULL`)).rows[0]!;
+      const handle=(id:string,webhook?:import('./src/core/types.js').ClaimedWebhook,generation?:number)=>mailboxEventJobs['mailbox.webhook']!(runtime,{deliveryId:id,...(generation===undefined?{}:{generation})},{id:'job_plain',workspaceId:wid,attempts:1,...(webhook?{webhook}:{})});
       const state=async(id:string)=>(await db.query('SELECT status,last_error FROM mailbox_webhook_deliveries WHERE id=$1',[id])).rows[0];
       const transport=runtime.webhookFetch;let posts=0,reply:number|'timeout'=204;
       runtime.webhookFetch=async()=>{posts++;if(reply==='timeout')throw Object.assign(new Error('synthetic timeout'),{name:'TimeoutError'});return {status:reply};};
@@ -46031,7 +46031,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('operation webhooks retry past 24 hours before job and delivery fail together',async t=>{
     await simulatedSesFixture(t,async({runtime,local,db})=>{
-      const {processJobs,WEBHOOK_ATTEMPTS}=await import('./src/jobs.js'),{operationJobs}=await import('./src/operations.js');
+      const {processJobs,WEBHOOK_ATTEMPTS}=await import('./src/jobs.js'),{operationJobs}=await import('./src/webhooks/operations.js');
       await db.query('CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP');
       const hook=ok(await local('POST','/v1/webhooks',{url:'https://example.com/fixture'}),201), delivery=ok(await local('POST',`/v1/webhooks/${hook.id}/test`),202);
       // A plain 500: a 502, 503 or 504 would open the endpoint's breaker and defer attempts without counting them.
@@ -46151,7 +46151,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('testEndpoint uses ENDPOINT_TEST_LIMIT and only maps transport errors to NETWORK_ERROR', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
-      const { ApiError } = await import('./src/core.js');
+      const { ApiError } = await import('./src/core/errors.js');
       const w = runtime.config.workspaceId;
       const slack = ok(await local('POST', '/v1/endpoints', {
         type: 'slack', name: 'ops-test', url: `https://hooks.slack.com/services/T0TEST/B0TEST/${unique('tok')}`,
@@ -46193,11 +46193,11 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('a webhook storm stays off campaign lanes; capped fan-out and due selection are bounded', async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run})=>{
-      const {processJobs}=await import('./src/jobs.js'),{ingestFeedbackBatch}=await import('./src/operations.js');
+      const {processJobs}=await import('./src/jobs.js'),{ingestFeedbackBatch}=await import('./src/ses/feedback.js');
       await db.query('CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP');
       for(let i=0;i<10;i++) ok(await local('POST','/v1/webhooks',{url:`https://example.com/h${i}`,eventTypes:['email.delivered']}),201);
       error(await local('POST','/v1/webhooks',{url:'https://example.com/overflow'}),409,'WEBHOOK_LIMIT_REACHED');
-      const sink:import('./src/core.js').FeedbackItem[]=[];runtime.feedback={enqueue:async items=>{sink.push(...items);}};
+      const sink:import('./src/core/types.js').FeedbackItem[]=[];runtime.feedback={enqueue:async items=>{sink.push(...items);}};
       ok(await local('POST','/v1/emails/batch',{emails:Array.from({length:100},()=>mail())}),202);await run('email.dispatch');
       const deliveries=sink.filter(item=>item.messageId.endsWith(':Delivery'));assert.equal(deliveries.length,100);
       const t0=performance.now();assert.ok((await ingestFeedbackBatch(runtime,deliveries)).every(x=>x.ok));
@@ -46227,12 +46227,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('job scheduling serves every class', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
       const { processJobs, enqueue } = await import('./src/jobs.js');
-      const { jobHandlers } = await import('./src/sending.js');
+      const { jobHandlers } = await import('./src/sending/jobs.js');
       // processJobs drains the whole installation; isolate this queue from the harness runner.
       await db.query('CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP');
       const seen = new Set<string>();
       const types = ['campaign.run', 'operation.webhook', 'operation.simulatedFeedback'];
-      const handlers: Record<string, import('./src/core.js').JobHandler> = { 'email.dispatch': jobHandlers['email.dispatch']! };
+      const handlers: Record<string, import('./src/core/types.js').JobHandler> = { 'email.dispatch': jobHandlers['email.dispatch']! };
       for (const type of types) {
         handlers[type] = async () => { seen.add(type); };
         for (let i = 0; i < 12; i++) await enqueue(runtime.db, { type, workspaceId: runtime.config.workspaceId, payload: {} });
@@ -46263,7 +46263,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const scoped = { ...instance.runtime, db: drizzle(session) };
     const ws = unique('follow-due-workspace');
     let active = false, completed = 0, wakes = 0;
-    const handlers: Record<string, import('./src/core.js').JobHandler> = {
+    const handlers: Record<string, import('./src/core/types.js').JobHandler> = {
       'fixture.defer': async () => {
         if (active) throw new JobDeferred(new Date(Date.now() + 2_000).toISOString());
         active = true;
@@ -46284,7 +46284,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('the pacing gate spaces slots evenly at the quota times the rate factor and brakes to the quota after throttling', async () => {
-    const { initialGate, reserve, brake, shardRate,shardLeaseSize } = await import('./src/dispatcher.js');
+    const { initialGate, reserve, brake, shardRate,shardLeaseSize } = await import('./src/sending/quota.js');
     assert.deepEqual([shardLeaseSize(14,8),shardLeaseSize(50,8),shardLeaseSize(200,8),shardLeaseSize(1000,8)],[6,12,24,24]);
     const gate = initialGate();
     gate.quota = { maxSendRate: 20, max24HourSend: -1, sentLast24Hours: 0, checkedAt: Date.now() };
@@ -46306,7 +46306,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     assert.equal(shardRate(gate, undefined, pacing), 22, 'The brake releases after its window.');
     // Split 429 brake: marketing throttling brakes only marketing to (1 - txReservePercent) of raw quota and yields 1 s,
     // without touching transactional rate or clock.
-    const { marketingShardRate } = await import('./src/dispatcher.js');
+    const { marketingShardRate } = await import('./src/sending/quota.js');
     const g2 = initialGate();
     g2.quota = { maxSendRate: 200, max24HourSend: -1, sentLast24Hours: 0, checkedAt: Date.now() };
     const p2 = { rateFactor: 1.05, txReservePercent: 15, live: true } as const;
@@ -46322,7 +46322,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('transactional mail wins the next lease ahead of older non-campaign marketing', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const contact = ok(await local('POST', '/v1/contacts', { email: address() }), 201);
       ok(await local('POST', `/v1/contacts/${contact.id}/consent`, { status: 'subscribed', source: 'fixture', policyVersion: 'v1', evidence: 'Synthetic fixture.', occurredAt: new Date().toISOString() }));
       const marketing = ok(await local('POST', '/v1/emails/send', mail({ to: contact.email, kind: 'marketing' })), 202);
@@ -46339,7 +46339,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('transactional mail across workspaces leases strictly before marketing even behind ownerCursor, and marketing shares round-robin', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const pool = '111122229999', wsTx = 'ws_a_tx', wsM1 = 'ws_m_one', wsM2 = 'ws_m_two';
       Object.assign(runtime.config, { multiTenant: true });
       await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state) VALUES ($1,$2,$3,'ready') ON CONFLICT DO NOTHING`, [REGION, pool, `arn:aws:sns:${REGION}:${pool}:feedback`]);
@@ -46384,7 +46384,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a burst-blocked transactional backlog does not stall another workspace\'s marketing on the live-MX path', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const { runDispatcher, initialGate } = await import('./src/dispatcher.js');
+      const { runDispatcher } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const pool = '111122228888', wsBlocked = 'ws_a_frozen', wsMkt = 'ws_z_mkt';
       Object.assign(runtime.config, { multiTenant: true, liveEnabled: true, hostedScreen: false, aws: { accessKeyId: 'fixture-platform', secretAccessKey: 'fixture-only' } });
@@ -46426,7 +46426,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a transactional admission borrows one slot from an already leased campaign', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run }) => {
-      const { runDispatcher, dispatchWakeKey } = await import('./src/dispatcher.js');
+      const { runDispatcher, dispatchWakeKey } = await import('./src/sending/dispatcher.js');
       const { SESv2Client, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
       const list = ok(await local('POST', '/v1/lists', { name: unique('priority') }), 201);
       const size=BENCH?24:7; // Six claimed, at least one still leased; the first three slots establish borrowing and repayment.
@@ -46478,7 +46478,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a low-rate shard returns queued work instead of holding attempts behind a 50-recipient envelope', async t => {
     await simulatedSesFixture(t, async ({runtime,local,db}) => {
-      const {dispatchDue,initialGate}=await import('./src/dispatcher.js');
+      const {dispatchDue} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js');
       runtime.config.simulatedSes.maxSendRate=1;
       const big=ok(await local('POST','/v1/emails/send',mail({to:Array.from({length:50},(_,i)=>`bulk-${i}@example.net`)})),202);
       await db.query("UPDATE sending_emails SET created_at=now()-interval '1 hour' WHERE id=$1",[big.id]);
@@ -46498,7 +46498,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       ok(await local('POST',`/v1/contacts/${contact.id}/consent`,{status:'subscribed',source:'fixture',policyVersion:'v1',evidence:'Fixture',occurredAt:new Date().toISOString()}));
       ok(await local('POST','/v1/emails/batch',{emails:[1,2].map(()=>mail({to:contact.email,kind:'marketing'}))}),202);
       const {SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2'), orig=SESv2Client.prototype.send;
-      const {dispatchWakeKey}=await import('./src/dispatcher.js'), priorityWake=new EventTarget();
+      const {dispatchWakeKey}=await import('./src/sending/dispatcher.js'), priorityWake=new EventTarget();
       runtime.dispatch=async (region,account,_count,_kind,priority)=>{if(priority)priorityWake.dispatchEvent(new Event(dispatchWakeKey(region,account)));};
       let startedSend!:()=>void; const first=new Promise<void>(r=>{startedSend=r;});
       t.mock.method(SESv2Client.prototype,'send',function(this:InstanceType<typeof SESv2Client>,cmd:any){if(cmd instanceof SendEmailCommand)startedSend(); return Reflect.apply(orig,this,[cmd]);});
@@ -46513,7 +46513,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a definitive daily denial and a known uncalled sibling survive an interrupted-attempt sweep', async t => {
     await simulatedSesFixture(t,async({runtime,local,db,run})=>{
-      const {dispatchDue}=await import('./src/dispatcher.js'), {dispatchPartitions}=await import('./src/dispatch.js');
+      const {dispatchDue}=await import('./src/sending/dispatcher.js'), {dispatchPartitions}=await import('./src/dispatch.js');
       const {SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2');
       runtime.config.simulatedSes.maxSendRate=4;
       const list=ok(await local('POST','/v1/lists',{name:unique('late-denial')}),201);
@@ -46542,7 +46542,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a host ahead of Postgres cannot refill a spent daily sample or spin quota alarms', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       ok(await local('POST', '/v1/emails/send', mail()), 202);
       const { rows: [sample] } = await db.query(`INSERT INTO sending_region_limits(workspace_id,region,max_send_rate,max_24_hour_send,sent_last_24_hours,checked_at)
         VALUES($1,$2,100,100,99,clock_timestamp()) ON CONFLICT(workspace_id,region) DO UPDATE SET max_send_rate=100,max_24_hour_send=100,sent_last_24_hours=99,checked_at=clock_timestamp() RETURNING checked_at`,[runtime.config.workspaceId,REGION]);
@@ -46558,7 +46558,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a stale quota sample is refreshed before the send; a shard that loses the refresh waits for the winner', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const send = SESv2Client.prototype.send, visible: boolean[] = []; let pending: string;
       t.mock.method(SESv2Client.prototype,'send',async function(this: InstanceType<typeof SESv2Client>, cmd: any) {
@@ -46588,7 +46588,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a fast provider ID is visible while its claimed sibling is still waiting for SES', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const { SESv2Client, SendEmailCommand } = await import('@aws-sdk/client-sesv2');
       const fast = ok(await local('POST','/v1/emails/send',mail()),202).id;
       const slow = ok(await local('POST','/v1/emails/send',mail()),202).id;
@@ -46616,7 +46616,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a daily denial holds the shard until the next sample, even when SES usage lags', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const contact = ok(await local('POST','/v1/contacts',{email:address()}),201);
       ok(await local('POST',`/v1/contacts/${contact.id}/consent`,{status:'subscribed',source:'fixture',policyVersion:'v1',evidence:'Fixture',occurredAt:new Date().toISOString()}));
@@ -46645,7 +46645,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('MX shard leases wait for fresh quota before claiming against old or thin daily headroom', async t => {
     await simulatedSesFixture(t, async ({runtime, local, db}) => {
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const ws=runtime.config.workspaceId, accountId='111122223333';
       const ids=[ok(await local('POST','/v1/emails/send',mail()),202).id,ok(await local('POST','/v1/emails/send',mail()),202).id];
@@ -46675,7 +46675,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('exhausted shard gives marketing back immediately and the last shared credits belong to the first shards', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js'), ws=runtime.config.workspaceId;
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js'), ws=runtime.config.workspaceId;
       const contact=ok(await local('POST','/v1/contacts',{email:address()}),201);
       ok(await local('POST',`/v1/contacts/${contact.id}/consent`,{status:'subscribed',source:'fixture',policyVersion:'v1',evidence:'Fixture',occurredAt:new Date().toISOString()}));
       ok(await local('POST','/v1/emails/batch',{emails:Array.from({length:9},()=>mail({to:contact.email,kind:'marketing'}))}),202);
@@ -46697,7 +46697,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('rolling daily headroom holds a sending campaign, admits transactional recipients and drains after quota refresh', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run }) => {
-      const { dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js'), { initialGate } = await import('./src/sending/quota.js');
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
       const gate = initialGate(), opts = { gate, lanes: 2, batchSize: 6, quotaRefreshMs: 650 };
       const list = ok(await local('POST', '/v1/lists', { name: unique('rolling-quota') }), 201);
@@ -46750,9 +46750,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   // The customer share (HOSTED_CUSTOMER_SHARE_PERCENT, migration 401): every outside workspace on a shared account together
   // may use half its daily SES limit by default. A first-party workspace (exempt) and an outside one share a pool account.
-  async function customerShareFixture(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client) {
+  async function customerShareFixture(t: TestContext, runtime: import('./src/core/types.js').Runtime, db: pg.Client) {
     const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2'), { ensureRegionSettings } = await import('./src/ses-region-state.js');
-    const { runDispatcher } = await import('./src/dispatcher.js');
+    const { runDispatcher } = await import('./src/sending/dispatcher.js');
     const pool = '111122224444', customer = runtime.config.workspaceId, ours = unique('first-party');
     Object.assign(runtime.config, { multiTenant: true, liveEnabled: true, aws: { accessKeyId: 'fixture-platform', secretAccessKey: 'fixture-only' } });
     await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state) VALUES ($1,$2,$3,'ready')`, [REGION, pool, `arn:aws:sns:${REGION}:${pool}:feedback`]);
@@ -46844,7 +46844,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   const OPERATOR_HOOK = 'https://hooks.slack.com/services/T0FIXTURE/B0FIXTURE/operatoralerts';
   const cardLine = (card: Json) => card.blocks[0].text.text as string;
   /** Posts each pending operator alert as the job runner would, to a fake Slack answering status (or what status says for each card); returns what was posted. */
-  async function postOperatorAlerts(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client, status: number | ((card: Json) => number) = 200) {
+  async function postOperatorAlerts(t: TestContext, runtime: import('./src/core/types.js').Runtime, db: pg.Client, status: number | ((card: Json) => number) = 200) {
     const { operatorAlertJobs } = await import('./src/operator-alerts.js'), posted: Json[] = [];
     await t.test(`operator alerts posted, Slack answering ${typeof status === 'number' ? status : 'by card'}`, async t => {
       t.mock.method(globalThis, 'fetch', async (url: RequestInfo | URL, init?: RequestInit) => {
@@ -47055,7 +47055,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // Mentions of the operator on urgent cards (src/operator-mention.ts). The user is a fixture; Slack is faked.
   const MENTION = 'U0FIXTURE', LEAD = '<@U0FIXTURE>', ABUSE_HOOK = 'https://hooks.slack.com/services/T0FIXTURE/B0FIXTURE/mentions';
   /** A clean slate for one mentions test: no mentions decided, no operator card or abuse alert of an earlier test waiting or holding a place. */
-  async function mentionFixture(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client) {
+  async function mentionFixture(t: TestContext, runtime: import('./src/core/types.js').Runtime, db: pg.Client) {
     await db.query('DELETE FROM operator_mentions');
     await db.query(`UPDATE jobs SET status='completed' WHERE type='operator.alert' AND status='pending'`);
     await db.query(`UPDATE abuse_alerts SET status='stale',stale_reason='expired' WHERE status='stored'`);
@@ -47083,7 +47083,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     return { workspace, pause, amazon, hold, mentions, cluster, stored };
   }
   /** Runs one abuse alert's job as the runner would: 'done', or how long it waits; Slack answers with answer(card) (a status, or an error to throw). */
-  async function postAbuseAlert(t: TestContext, runtime: import('./src/core.js').Runtime, id: string, answer: (card: Json) => number | Error, posted: Json[]) {
+  async function postAbuseAlert(t: TestContext, runtime: import('./src/core/types.js').Runtime, id: string, answer: (card: Json) => number | Error, posted: Json[]) {
     const { abuseAlertJobs } = await import('./src/abuse-alerts.js'), { JobDeferred } = await import('./src/jobs.js');
     let result = '';
     await t.test('abuse alert posted', async t => {
@@ -47218,7 +47218,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
   /** Amazon's GetAccount for a region of the test's own, read as the 10-minute check reads it (the simulator answers the others). read returns the check's status, the state told and the operator cards posted. */
-  async function amazonAccountReads(t: TestContext, runtime: import('./src/core.js').Runtime, db: pg.Client, region: string, pool: string) {
+  async function amazonAccountReads(t: TestContext, runtime: import('./src/core/types.js').Runtime, db: pg.Client, region: string, pool: string) {
     const { refreshDeliverabilitySources } = await import('./src/glass-deliverability.js'), { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
     const multiTenant = runtime.config.multiTenant; runtime.config.multiTenant = true; t.after(() => { runtime.config.multiTenant = multiTenant; });
     await db.query(`INSERT INTO provider_pool_regions(region,aws_account_id,feedback_topic_arn,sending_state,inbound_bucket) VALUES ($1,$2,$3,'ready','fixture') ON CONFLICT DO NOTHING`, [region, pool, `arn:aws:sns:${region}:${pool}:mentions`]);
@@ -47981,7 +47981,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('MX health: jobs-failed counts the jobs that failed within the hour, by when the runner failed each, never the failed jobs still kept: history opens nothing, three new failures of a code that alerts at its first do, five of any type do, and it clears once the last is an hour old', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local }) => {
-      const { healthTick } = await import('./src/health.js'), { processJobs, MAX_ATTEMPTS } = await import('./src/jobs.js'), { ApiError } = await import('./src/core.js');
+      const { healthTick } = await import('./src/health.js'), { processJobs, MAX_ATTEMPTS } = await import('./src/jobs.js'), { ApiError } = await import('./src/core/errors.js');
       const tag = unique('w').slice(-8), staging = 'health.staging.' + tag, other = 'health.other.' + tag, c = (text: string) => '`' + text + '`';
       // The runner below works on this test's jobs alone.
       await db.query('CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP');
@@ -48162,7 +48162,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('MX health: a slow request is always logged whatever the sampling, error lines are counted by code, and the request counters give each route its count, errors and p95 without a log search, by minute and then by hour', async t => {
-    const { log } = await import('./src/log.js'), counters = await import('./src/health-counters.js'), { healthTick } = await import('./src/health.js'), { platformMessage, ApiError } = await import('./src/core.js');
+    const { log } = await import('./src/log.js'), counters = await import('./src/health-counters.js'), { healthTick } = await import('./src/health.js'), { platformMessage, ApiError } = await import('./src/core/errors.js');
     // Sampling keeps one success in ten: with the dice against it a quick 200 is dropped, and a slow one is written whole.
     const lines: Json[] = [];
     const dice = t.mock.method(Math, 'random', () => 0.99), info = t.mock.method(console, 'info', (line: string) => { lines.push(JSON.parse(line)); });
@@ -48328,7 +48328,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   // nothing may rely on these being strictly increasing: within one millisecond they come in no particular order.
   test('IDs: high-volume rows get time-ordered IDs in the same format, sorted by creation time; other IDs stay random', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, db }) => {
-      const { id, rowId, taggedEmailId } = await import('./src/core.js');
+      const { id, rowId } = await import('./src/core/http.js'), { taggedEmailId } = await import('./src/core/ses.js');
       const v7 = /^[a-z]+_[0-9a-f]{12}7[0-9a-f]{3}[89ab][0-9a-f]{15}$/, v4 = /^[a-z]+_[0-9a-f]{12}4[0-9a-f]{3}[89ab][0-9a-f]{15}$/;
       const at = (value: string) => parseInt(value.slice(value.lastIndexOf('_') + 1, value.lastIndexOf('_') + 13), 16);
       const wid = runtime.config.workspaceId, began = Date.now() - 1000;
@@ -48399,7 +48399,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('duplicate/out-of-order simulated feedback fans out once and cannot impersonate public SNS feedback', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, jobs, db }) => {
-      const { operationJobs } = await import('./src/operations.js');
+      const { operationJobs } = await import('./src/webhooks/operations.js');
       const email = ok(await local('POST', '/v1/emails/send', mail()), 202);
       const otherRegion = REGION === 'eu-west-1' ? 'us-west-2' : 'eu-west-1';
       ok(await local('PUT', `/v1/regions/${otherRegion}`, { enabled: true }, 'live'));
@@ -48415,7 +48415,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const send = feedback.find(job => job.payload.message.eventType === 'Send')!;
       const context = (job: Json) => ({ id: job.id, attempts: 1, workspaceId: runtime.config.workspaceId });
       for (const job of [deliver, deliver, send, send]) await operationJobs['operation.simulatedFeedback']!(runtime, job.payload, context(job));
-      const { recordEmailEvent } = await import('./src/sending.js');
+      const { recordEmailEvent } = await import('./src/sending/events.js');
       assert.equal(await recordEmailEvent(runtime, { workspaceId: runtime.config.workspaceId, emailId: email.id, type: 'delivery', providerId: deliver.payload.message.mail.messageId, externalId: `${deliver.payload.topicArn}:${deliver.payload.messageId}` }), null, 'Replaying the same external event must not fan out again even without the receipt guard.');
       assert.equal(ok(await local('GET', `/v1/emails/${email.id}`)).status, 'delivered', 'Late Send feedback must not regress Delivery.');
       assert.equal(page(await local('GET', `/v1/emails/${email.id}/events`)).filter(event => ['send', 'delivery'].includes(event.type)).length, 2);
@@ -48886,7 +48886,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('campaign images: linked from the host of the message\'s links (PUBLIC_URL here, the link domain on Hosted) instead of attached, the message is its HTML, and a link serves only its own picture, only on a host that serves its workspace', async t => {
     await simulatedSesFixture(t, async ({ runtime, db, local, fetch, run }) => {
-      const { crc32, deflateSync } = await import('node:zlib'), { inlineMessage } = await import('./src/sending.js');
+      const { crc32, deflateSync } = await import('node:zlib'), { inlineMessage } = await import('./src/sending/mime.js');
       // November's newsletter as it was sent: an editor body and one 272,311-byte PNG shown 100 px wide, under its bane- content ID.
       const chunk = (type: string, data: Buffer) => { const body = Buffer.concat([Buffer.from(type, 'latin1'), data]), out = Buffer.alloc(data.length + 12); out.writeUInt32BE(data.length); body.copy(out, 4); out.writeUInt32BE(crc32(body), data.length + 8); return out; };
       const side = 260, header = Buffer.alloc(13); header.writeUInt32BE(side); header.writeUInt32BE(side, 4); header.set([8, 6, 0, 0, 0], 8);
@@ -49087,7 +49087,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   }
   test('an earlier reschedule wins over a run that already decided to wait for the old time', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, db }) => {
-      const [{ processJobs, JobDeferred }, { jobHandlers }, { sql }] = await Promise.all([import('./src/jobs.js'), import('./src/sending.js'), import('drizzle-orm')]);
+      const [{ processJobs, JobDeferred }, { jobHandlers }, { sql }] = await Promise.all([import('./src/jobs.js'), import('./src/sending/jobs.js'), import('drizzle-orm')]);
       const campaign = await scheduledCampaign(local, run, 3_600_000), jobId = `campaign.run:${campaign.id}`;
       await runtime.db.execute(sql`CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP`);
       try {
@@ -49097,7 +49097,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         // The handler reads the old time and throws its deferral; the owner moves the send earlier before it settles.
         const earlier = new Date(Date.now() + 1_800_000).toISOString();
         let moved: Json | undefined;
-        const racing: import('./src/core.js').JobHandler = async (rt, payload, job) => {
+        const racing: import('./src/core/types.js').JobHandler = async (rt, payload, job) => {
           try { await jobHandlers['campaign.run']!(rt, payload, job); }
           catch (cause) { if (cause instanceof JobDeferred && !moved) moved = ok(await local('POST', `/v1/campaigns/${campaign.id}/reschedule`, { scheduledAt: earlier })); throw cause; }
         };
@@ -49116,7 +49116,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('a run that found the old time due cannot start sending after a later reschedule', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, db }) => {
-      const [{ JobDeferred }, { jobHandlers }, { PgDialect }] = await Promise.all([import('./src/jobs.js'), import('./src/sending.js'), import('drizzle-orm/pg-core')]);
+      const [{ JobDeferred }, { jobHandlers }, { PgDialect }] = await Promise.all([import('./src/jobs.js'), import('./src/sending/jobs.js'), import('drizzle-orm/pg-core')]);
       const campaign = await scheduledCampaign(local, run, 3_600_000), jobId = `campaign.run:${campaign.id}`;
       // The send time has come: the run will find it due and move scheduled -> sending.
       await db.query("UPDATE sending_campaigns SET scheduled_at = now() - interval '1 second' WHERE id = $1", [campaign.id]);
@@ -49143,7 +49143,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('routine callbacks create processed receipts and public events immediately, without prereceipts or SES work', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, jobs, db }) => {
-      const { operationJobs } = await import('./src/operations.js');
+      const { operationJobs } = await import('./src/webhooks/operations.js');
       const email = ok(await local('POST', '/v1/emails/send', mail()), 202);
       await run('email.dispatch');
       const callbacks = await jobs('operation.simulatedFeedback');
@@ -49217,7 +49217,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('SES account pauses expire only continuously held mail and clear on recovery',async t=>{
     await simulatedSesFixture(t,async({runtime,local,db})=>{
-      const {SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2'),{dispatchDue,initialGate}=await import('./src/dispatcher.js');
+      const {SESv2Client,SendEmailCommand}=await import('@aws-sdk/client-sesv2'),{dispatchDue} = await import('./src/sending/dispatcher.js'), {initialGate} = await import('./src/sending/quota.js');
       const original=SESv2Client.prototype.send;let sends=0,paused=true;
       const gate=initialGate();
       t.mock.method(SESv2Client.prototype,'send',function(this:InstanceType<typeof SESv2Client>,cmd:any){
@@ -49303,7 +49303,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('schema and transient feedback failures redeliver and NUL diagnostics do not lose a hard bounce',async t=>{
     await simulatedSesFixture(t,async({runtime,local,db})=>{
-      const {ingestFeedbackBatch}=await import('./src/operations.js');
+      const {ingestFeedbackBatch}=await import('./src/ses/feedback.js');
       const wid=runtime.config.workspaceId, account='111122223333', topicArn=`arn:aws:sns:${REGION}:${account}:fixture`;
       for(const code of ['08006','40P01','42P01']) {
         const to=address(), email=ok(await local('POST','/v1/emails/send',mail({to})),202), provider=unique('provider');
@@ -49322,7 +49322,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a bounce and a delay keep the receiving server\u2019s reply, the delay\u2019s type and its retry deadline, in the email\u2019s events and, without addresses, in its webhook',async t=>{
     await simulatedSesFixture(t,async({runtime,local,db,run})=>{
-      const {ingestFeedbackBatch,operationJobs}=await import('./src/operations.js');
+      const {ingestFeedbackBatch} = await import('./src/ses/feedback.js'), {operationJobs} = await import('./src/webhooks/operations.js');
       const wid=runtime.config.workspaceId, account='111122223333', topicArn=`arn:aws:sns:${REGION}:${account}:fixture`;
       const sent=async()=>{
         const to=address(), email=ok(await local('POST','/v1/emails/send',mail({to})),202), provider=unique('provider');
@@ -49398,8 +49398,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('mixed-workspace feedback commits healthy siblings and quarantines only the unpersistable message',async t=>{
     await simulatedSesFixture(t,async ({runtime,local,run,db})=>{
-      const {ingestFeedbackBatch}=await import('./src/operations.js');
-      const sink:import('./src/core.js').FeedbackItem[]=[];runtime.feedback={enqueue:async items=>{sink.push(...items);}};
+      const {ingestFeedbackBatch}=await import('./src/ses/feedback.js');
+      const sink:import('./src/core/types.js').FeedbackItem[]=[];runtime.feedback={enqueue:async items=>{sink.push(...items);}};
       const ids=ok(await local('POST','/v1/emails/batch',{emails:[mail(),mail(),mail()]}),202).data.map((e:Json)=>e.id);
       await run('email.dispatch');
       await db.query(`UPDATE sending_emails SET workspace_id='other-fixture' WHERE id=$1`,[ids[1]]);
@@ -49423,9 +49423,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a feedback sink carries simulated callbacks off the jobs table and the batch consumer ingests them exactly once', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, jobs, db }) => {
-      const { ingestFeedbackBatch } = await import('./src/operations.js');
+      const { ingestFeedbackBatch } = await import('./src/ses/feedback.js');
       // Cloudflare provides this sink (the feedback queue); here it is an in-memory capture.
-      const sink: import('./src/core.js').FeedbackItem[] = [];
+      const sink: import('./src/core/types.js').FeedbackItem[] = [];
       runtime.feedback = { enqueue: async items => { sink.push(...items); } };
       cleanup(t, async () => { delete runtime.feedback; });
       const first = ok(await local('POST', '/v1/emails/send', mail()), 202);
@@ -49473,7 +49473,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('unmatched callback retains one deferred recovery and later records delivery exactly once', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, jobs, db }) => {
-      const [{ operationJobs }, { recordEmailEvent }] = await Promise.all([import('./src/operations.js'), import('./src/sending.js')]);
+      const [{ operationJobs }, { recordEmailEvent }] = await Promise.all([import('./src/webhooks/operations.js'), import('./src/sending/events.js')]);
       const providerId = `sim_${randomUUID()}`;
       const payload = { topicArn: `urn:opensend:simulated-ses:${REGION}`, messageId: unique('early-delivery'), region: REGION,
         message: { eventType: 'Delivery', mail: { messageId: providerId }, delivery: { timestamp: new Date().toISOString() } } };
@@ -49511,7 +49511,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('a real SQL fanout failure rolls back receipt, status and events before a successful callback retry', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, jobs, db }) => {
-      const { operationJobs } = await import('./src/operations.js');
+      const { operationJobs } = await import('./src/webhooks/operations.js');
       ok(await local('POST', '/v1/webhooks', { url: `https://example.com/${unique('atomic-hook')}`, eventTypes: ['email.delivered'] }), 201);
       const email = ok(await local('POST', '/v1/emails/send', mail()), 202);
       await run('email.dispatch');
@@ -49614,7 +49614,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('attachment downloads: an unread response is ended and its file let go before its memory returns to the budget',async t=>{
     await simulatedSesFixture(t,async({runtime,local,fetch})=>{
-      const [{attachmentDownload},{memoryInUse,sendReservation,withMemory}]=await Promise.all([import('./src/sending.js'),import('./src/isolate-memory.js')]);
+      const [{attachmentDownload},{memoryInUse,sendReservation,withMemory}]=await Promise.all([import('./src/sending/mime.js'),import('./src/isolate-memory.js')]);
       const objects=new Map<string,Uint8Array>(),MiB=1024*1024,size=25*MiB,readMs=attachmentDownload.readMs;
       runtime.storage={put:async(key:string,body:Uint8Array)=>{objects.set(key,body);},get:async(key:string)=>objects.has(key)?{body:objects.get(key)!,contentType:'text/plain'}:null,delete:async(key:string)=>{objects.delete(key);}};
       const key=ok(await local('POST','/v1/api-keys',{name:'downloads',permissions:['send','read']}),201).secret as string;secrets.add(key);
@@ -49711,7 +49711,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         get: (k: string) => vars[k],
         header: () => {},
         req: { raw: new Request('http://127.0.0.1/v1/inboxes/inb_1/messages') },
-      }) as unknown as import('./src/core.js').Ctx;
+      }) as unknown as import('./src/core/types.js').Ctx;
       assert.throws(() => resolveReadWorkspaceId(fakeCtx({})), (err: any) => err?.status === 401 && err?.code === 'AUTH_REQUIRED');
       assert.throws(() => resolveReadWorkspaceId(fakeCtx({ actor: { workspaceId: '' } })), (err: any) => err?.status === 401 && err?.code === 'AUTH_REQUIRED');
       const inbA = fakeCtx({ mailboxAccess: { workspaceId: 'ws_inb_a', keyId: 'k_a', admin: false, mailboxIds: ['inb_a'], permissions: ['read'] } });
@@ -49876,7 +49876,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
   test('query budget: immutable campaign preparation, release, dispatch and storage per recipient',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local})=>{
-      const {jobHandlers}=await import('./src/sending.js'),{JobDeferred}=await import('./src/jobs.js'),{dispatchDue}=await import('./src/dispatcher.js');
+      const {jobHandlers}=await import('./src/sending/jobs.js'),{JobDeferred}=await import('./src/jobs.js'),{dispatchDue}=await import('./src/sending/dispatcher.js');
       const ws=runtime.config.workspaceId,n=100,bytes=Buffer.from('fixture'),attachments:string[]=[];
       runtime.feedback={enqueue:async()=>{}};runtime.storage={put:async()=>{},get:async()=>({body:bytes,contentType:'text/plain'}),delete:async()=>{}};
       for(let i=0;i<20;i++)attachments.push(ok(await local('POST','/v1/attachments',{filename:`file${i}.txt`,content:bytes.toString('base64')}),201).id);
@@ -49910,8 +49910,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('launching and completing a campaign is bounded in statements and job rows', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const { jobHandlers } = await import('./src/sending.js');
-      const { dispatchDue } = await import('./src/dispatcher.js');
+      const { jobHandlers } = await import('./src/sending/jobs.js');
+      const { dispatchDue } = await import('./src/sending/dispatcher.js');
       const { JobDeferred } = await import('./src/jobs.js');
       const ws = runtime.config.workspaceId;
       const recipients=BENCH?2000:240;
@@ -49972,7 +49972,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('a run that exhausts its retries leaves the campaign failed, and a sending campaign with nothing queued is finished by the sweep', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, run, jobs, db }) => {
       const { MAX_ATTEMPTS } = await import('./src/jobs.js');
-      const { jobHandlers } = await import('./src/sending.js');
+      const { jobHandlers } = await import('./src/sending/jobs.js');
       const { dispatchPartitions } = await import('./src/dispatch.js');
       const list = ok(await local('POST', '/v1/lists', { name: unique('stuck') }), 201);
       const contact = ok(await local('POST', '/v1/contacts', { email: address() }), 201);
@@ -50124,7 +50124,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('eight dispatch shards at 170ms synthetic SES latency measure per-shard capacity',async t=>{
     const db=await fixtureDatabase(t),wid=unique('bench-capacity'),region='ap-south-2';
-    const [{nodeRuntime},{runDispatcher}]=await Promise.all([import('./src/adapters/node.js'),import('./src/dispatcher.js')]);
+    const [{nodeRuntime},{runDispatcher}]=await Promise.all([import('./src/adapters/node.js'),import('./src/sending/dispatcher.js')]);
     const instances=Array.from({length:8},()=>nodeRuntime({...process.env,DATABASE_URL:FIXTURE_DATABASE_URL,ENABLE_LIVE_SES:'false'}));
     try {
       await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)',[wid]);
@@ -50155,7 +50155,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('four dispatcher shards on separate connections drain one campaign concurrently without serializing on its row', async t => {
     const db = await fixtureDatabase(t);
     const key = await keyFixture(t);
-    const [{ nodeRuntime }, { jobHandlers }, { runDispatcher }, pg] = await Promise.all([import('./src/adapters/node.js'), import('./src/sending.js'), import('./src/dispatcher.js'), import('pg')]);
+    const [{ nodeRuntime }, { jobHandlers }, { runDispatcher }, pg] = await Promise.all([import('./src/adapters/node.js'), import('./src/sending/jobs.js'), import('./src/sending/dispatcher.js'), import('pg')]);
     const list = await resource(t, key.secret, '/v1/lists', { name: unique('shards') });
     const ws = list.workspaceId, tag = unique('shard');
     const recipients = BENCH ? 2000 : 480; // Five full leases per shard, before the competing runner.
@@ -50278,7 +50278,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('campaign detail counts a large sending campaign once per cache window, keeps delivery current and is exact once done', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, request, run, db }) => {
-      const { CAMPAIGN_PROGRESS_CACHE_SECONDS: window, CAMPAIGN_PROGRESS_CACHE_MIN_RECIPIENTS: total } = await import('./src/sending.js');
+      const { CAMPAIGN_PROGRESS_CACHE_SECONDS: window, CAMPAIGN_PROGRESS_CACHE_MIN_RECIPIENTS: total } = await import('./src/campaigns/views.js');
       const ws = runtime.config.workspaceId, tail = 900;
       const list = ok(await local('POST', '/v1/lists', { name: unique('progress-cache') }), 201);
       await db.query(`INSERT INTO audience_contacts (id, workspace_id, email, marketing_consent)
@@ -50445,7 +50445,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       // duplicate delivery_delay, and delivery_delay followed by delivery) via recordEmailEvent and verify tallies
       // match raw sending_email_events semantics (no spurious deliveryDelayed from operation_events's ELSE 129) and
       // reconcile produces 0 drift.
-      const { recordEmailEvent } = await import('./src/sending.js');
+      const { recordEmailEvent } = await import('./src/sending/events.js');
       await db.query(`INSERT INTO sending_emails(id,workspace_id,region,actor_key_id,campaign_id,review_id,review_ordinal,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,status,provider_id,created_at) VALUES
         ('t_seq_bnc',$1,$3,'fixture',$2,$4,5,'n@e.com','["s1@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'bounced','ps1',$5),
         ('t_seq_val',$1,$3,'fixture',$2,$4,6,'n@e.com','["s2@e.com"]','[]','[]','S','{"kind":"marketing"}',false,'sent','ps2',$5),
@@ -50531,7 +50531,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('feedback throughput: priority routing, cross-queue duplicates, concurrent out-of-order safety, exact tallies and priority-only lag hold', async t => {
     const { feedbackSink, isPriorityFeedback, settleFeedbackBatch, feedbackMac, batchFirstDeliveryLag, metricsEffectiveLagMs } = await import('./src/adapters/feedback-queue.js');
-    const { ingestRoutineSesEvents, recordFeedbackLag, FEEDBACK_LAG_HOLD_MS, FEEDBACK_LAG_MIN_DEPTH } = await import('./src/sending.js');
+    const { ingestRoutineSesEvents, recordFeedbackLag, FEEDBACK_LAG_HOLD_MS, FEEDBACK_LAG_MIN_DEPTH } = await import('./src/sending/events.js');
     // B6: retried messages (attempts > 1) and tiny metric backlogs (< FEEDBACK_LAG_MIN_DEPTH) never trigger lag holds.
     const t0 = Date.now();
     assert.equal(batchFirstDeliveryLag([{ attempts: 5, timestamp: new Date(t0 - 450_000) }], t0), null, 'Retry-only batch returns null lag');
@@ -50541,8 +50541,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     assert.equal(metricsEffectiveLagMs(FEEDBACK_LAG_MIN_DEPTH, new Date(t0 - 450_000), FEEDBACK_LAG_MIN_DEPTH, t0), 450_000, 'Metrics depth at/above floor reports real lag');
     const secret = '0'.repeat(64);
     const routineSent: unknown[] = [], prioritySent: unknown[] = [];
-    const mkQ = (out: unknown[]) => ({ sendBatch: async (batch: { body: unknown }[]) => { out.push(...batch.map(b => b.body)); } }) as unknown as Queue<import('./src/core.js').FeedbackItem>;
-    const sampleItems: import('./src/core.js').FeedbackItem[] = [
+    const mkQ = (out: unknown[]) => ({ sendBatch: async (batch: { body: unknown }[]) => { out.push(...batch.map(b => b.body)); } }) as unknown as Queue<import('./src/core/types.js').FeedbackItem>;
+    const sampleItems: import('./src/core/types.js').FeedbackItem[] = [
       { region: REGION, topicArn: 'urn:t', messageId: 'm1', message: { eventType: 'Delivery' } },
       { region: REGION, topicArn: 'urn:t', messageId: 'm2', message: { eventType: 'Open' } },
       { region: REGION, topicArn: 'urn:t', messageId: 'm3', message: { eventType: 'Click' } },
@@ -50589,9 +50589,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal(sentRows.length, 80);
 
       const topic = `urn:bane:simulated-ses:${REGION}`, nowIso = new Date().toISOString();
-      const events: import('./src/sending.js').RoutineIngress[] = [];
+      const events: import('./src/sending/events.js').RoutineIngress[] = [];
       for (const [i, r] of sentRows.entries()) {
-        const mk = (kind: string, type: string, data: Record<string, unknown>, effects?: import('./src/sending.js').RoutineIngress['effects']): import('./src/sending.js').RoutineIngress => ({
+        const mk = (kind: string, type: string, data: Record<string, unknown>, effects?: import('./src/sending/events.js').RoutineIngress['effects']): import('./src/sending/events.js').RoutineIngress => ({
           workspaceId: ws, type, providerId: r.provider_id, taggedEmailId: r.id, createdAt: nowIso,
           externalId: `${topic}:${r.id}:${kind}`, data: { providerId: r.provider_id, ...data }, ...(effects ? { effects } : {}),
           ingress: { topicArn: topic, messageId: `${r.id}:${kind}`, region: REGION, payload: { message: { eventType: kind, mail: { messageId: r.provider_id } }, topicArn: topic, messageId: `${r.id}:${kind}`, region: REGION }, recoveryType: 'operation.simulatedFeedbackRecovery' },
@@ -50694,8 +50694,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('campaign content hash reader: verifies legacy and s1: hashes, rejects tampering, and pauses without burning recipients on unknown formats', async t => {
-    const { staticContentHash, verifyCampaignContentHash, isSupportedContentHash, sentCampaignContent } = await import('./src/sending.js');
-    const { digest } = await import('./src/core.js');
+    const { staticContentHash, verifyCampaignContentHash, isSupportedContentHash, sentCampaignContent } = await import('./src/campaigns/materialize.js');
+    const { digest } = await import('./src/core/http.js');
     const { canonical } = await import('./src/idempotency.js');
     assert.deepEqual([
       isSupportedContentHash('a'.repeat(64)),
@@ -50787,7 +50787,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('bounded response and load sizes: templates, emails, campaigns, idempotency and MCP', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
       const ws = runtime.config.workspaceId;
-      const { CAMPAIGN_DEFAULTS_MAX_KEYS, CAMPAIGN_DEFAULTS_MAX_BYTES, EMAIL_LIST_MAX_BYTES } = await import('./src/sending.js');
+      const { CAMPAIGN_DEFAULTS_MAX_KEYS, CAMPAIGN_DEFAULTS_MAX_BYTES, EMAIL_LIST_MAX_BYTES } = await import('./src/sending/schemas.js');
       const { MAX_IDEMPOTENT_RESULT_BYTES } = await import('./src/idempotency.js');
 
       // 1. Template list projects summary columns in SQL without loading draft/published HTML.
@@ -51209,7 +51209,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('dispatch wake-ups: attachment mail waiting out a storage outage, and mail a busy claim gave back, wake the shard when due; only a live storage read ends the outage', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
-      const [{ SESv2Client, GetAccountCommand }, { dispatchDue, initialGate }, { PgDialect }] = await Promise.all([import('@aws-sdk/client-sesv2'), import('./src/dispatcher.js'), import('drizzle-orm/pg-core')]);
+      const [{ SESv2Client, GetAccountCommand }, { dispatchDue }, { initialGate }, { PgDialect }] = await Promise.all([import('@aws-sdk/client-sesv2'), import('./src/sending/dispatcher.js'), import('./src/sending/quota.js'), import('drizzle-orm/pg-core')]);
       let sends = 0;
       t.mock.method(SESv2Client.prototype, 'send', async (command: any) => {
         if (command instanceof GetAccountCommand) return { SendingEnabled: true, SendQuota: { MaxSendRate: 1000, Max24HourSend: 100000, SentLast24Hours: 0 } };
@@ -51266,7 +51266,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('SES quota: a failed GetAccount holds the refresh election for seconds, a shard with a recent sample keeps sending on it, and a cold shard says when to try again', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db }) => {
       const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
-      const { campaignQuota, dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      const { campaignQuota, initialGate } = await import('./src/sending/quota.js'), { dispatchDue } = await import('./src/sending/dispatcher.js');
       let quotaDown = true, sends = 0;
       t.mock.method(SESv2Client.prototype, 'send', async (command: any) => {
         if (!(command instanceof GetAccountCommand)) { sends++; return { MessageId: unique('accepted') }; }
@@ -51333,7 +51333,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   test('MOCK JEV TRANSPORT: screened live transactional spam is rejected before SES, clean and unscreened mail sends, and an outage fails open', async t => {
     await simulatedSesFixture(t, async ({ runtime, local, db, run }) => {
       const [{ SESv2Client, SendEmailCommand, GetAccountCommand }, { dispatchDue }, { credentialFingerprint, discoveryTarget }, { loadConfig }] = await Promise.all([
-        import('@aws-sdk/client-sesv2'), import('./src/dispatcher.js'), import('./src/ses-region-state.js'), import('./src/config.js'),
+        import('@aws-sdk/client-sesv2'), import('./src/sending/dispatcher.js'), import('./src/ses-region-state.js'), import('./src/config.js'),
       ]);
       const base = { BANE_ROOT_SECRET: AUTH_SECRET, PUBLIC_URL: PUBLIC_ORIGIN };
       assert.throws(()=>loadConfig({...base,MULTI_TENANT:'true',ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google',ENABLE_LIVE_SES:'true',BANE_HOSTED_SCREEN:'true'}),/requires TYPESAFE_API_KEY/);
@@ -51429,7 +51429,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await dispatchDue(runtime, REGION);
       assert.deepEqual(sent.sort(), [clean, unscreened].sort(), 'Mail room never sends outage-held rows before screening.');
       classifierDown = false;
-      const { screenHeldMail } = await import('./src/sending.js');
+      const { screenHeldMail } = await import('./src/sending/held-screen.js');
       assert.deepEqual(await screenHeldMail(runtime), { leased: 2, passed: 1, rejected: 1, deferred: 0, remaining: 0 });
       await dispatchDue(runtime, REGION);
       assert.equal((await get(heldSpamId)).status, 'rejected');
@@ -51460,7 +51460,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const { loadConfig } = await import('./src/config.js');
     const encodedRuntime = {
       config: loadConfig({ BANE_ROOT_SECRET: AUTH_SECRET, PUBLIC_URL: PUBLIC_ORIGIN, MULTI_TENANT:'true',ACCOUNT_REQUIRED_ACR:'urn:anomaly:acr:google', DEFAULT_SES_REGION: REGION, OLD_FIXTURE_CLIENT_ID: 'id', OLD_FIXTURE_CLIENT_SECRET: 'secret' }),
-      db: {} as import('./src/core.js').Database,
+      db: {} as import('./src/core/types.js').Database,
       storage: { put: async () => {}, get: async () => null, delete: async () => {} },
     };
     const encodedApp = createApp();
@@ -51536,7 +51536,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         await assert.rejects(() => assertLoopbackDb('postgres://127.0.0.1:5432/bane?hostaddr=8.8.8.8'), /host/);
         const dbUrl = await assertLoopbackDb(process.env.BANE_COLD_TEST_DB_URL);
         assert.ok(!process.argv.some(arg => arg.includes(dbUrl)), 'Database URL must not appear in process argv.');
-        const [{ createApp }, { loadConfig }, { digest }] = await Promise.all([import(mod('src/app.js')), import(mod('src/config.js')), import(mod('src/core.js'))]);
+        const [{ createApp }, { loadConfig }, { digest }] = await Promise.all([import(mod('src/app.js')), import(mod('src/config.js')), import(mod('src/core/http.js'))]);
         const client = new pg.Client({ connectionString: dbUrl });
         await client.connect();
         const rollback = new Error('rollback cold fixture');
@@ -51660,8 +51660,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           if (url.endsWith('/v2/email/outbound-emails')) { sesSent++; return Response.json({ MessageId: 'ses_cold_' + sesSent }); }
           throw new Error('Unexpected fetch in dispatcher test: ' + url);
         };
-        const [{ createApp }, { DispatcherShard }, { runDispatcher }, { dispatchPartitions }, { loadConfig }, { digest, ModuleLoadError }] = await Promise.all([
-          import(mod('src/app.js')), import(mod('src/dispatcher-do.js')), import(mod('src/dispatcher.js')), import(mod('src/dispatch.js')), import(mod('src/config.js')), import(mod('src/core.js')),
+        const [{ createApp }, { DispatcherShard }, { runDispatcher }, { dispatchPartitions }, { loadConfig }, { digest }, { ModuleLoadError }] = await Promise.all([
+          import(mod('src/app.js')), import(mod('src/dispatcher-do.js')), import(mod('src/sending/dispatcher.js')), import(mod('src/dispatch.js')), import(mod('src/config.js')), import(mod('src/core/http.js')), import(mod('src/core/errors.js')),
         ]);
         assert.equal([...loadedModules].some(u => u.includes('client-sesv2')), false, 'SESv2 SDK must stay unloaded before dispatch.');
         const client = new pg.Client({ connectionString: dbUrl });
@@ -51922,7 +51922,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           throw new Error('Unexpected fetch in byo-scan/discovery test: ' + url);
         };
         const [{ drainJobs }, { loadConfig }, { credentialFingerprint, discoveryTarget }, { readReputation }, { ModuleLoadError }] = await Promise.all([
-          import(mod('src/dispatch.js')), import(mod('src/config.js')), import(mod('src/ses-region-state.js')), import(mod('src/ses-setup.js')), import(mod('src/core.js')),
+          import(mod('src/dispatch.js')), import(mod('src/config.js')), import(mod('src/ses-region-state.js')), import(mod('src/ses-setup.js')), import(mod('src/core/errors.js')),
         ]);
         const client = new pg.Client({ connectionString: dbUrl });
         await client.connect();
@@ -52064,12 +52064,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
             console.warn = (...args) => { warnLogs.push(String(args[0])); };
             console.error = (...args) => { errorLogs.push(String(args[0])); };
             try {
-              // Fail 7 consecutive times at attempts=5 (claimed as attempt 6 = ceiling): 1 pre-handler sending.js failure + 6 in-handler parse5 failures.
+              // Fail 7 consecutive times at attempts=5 (claimed as attempt 6 = ceiling): 1 pre-handler sending/jobs.js failure + 6 in-handler parse5 failures.
               for (let i = 1; i <= 7; i++) {
                 await client.query('UPDATE jobs SET available_at = now() WHERE id = $1', [jobId]);
                 let failOnce = true;
                 faultResolver = (specifier) => {
-                  if (failOnce && (i === 1 ? specifier.endsWith('/sending.js') : specifier === 'parse5')) {
+                  if (failOnce && (i === 1 ? specifier.endsWith('/sending/jobs.js') : specifier === 'parse5')) {
                     failOnce = false;
                     throw new Error('synthetic load failure #' + i);
                   }
@@ -52187,7 +52187,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           assert.equal((await openApiRes.json()).openapi, '3.1.0');
 
           // 3) Exhaust public auth & unsubscribe failure budgets for peer 203.0.113.9; encoded variants must return 429 PUBLIC_RATE_LIMITED (and never hit ASSETS).
-          const { digest, guardPublicRequest } = await import(mod('src/core.js'));
+          const { digest, guardPublicRequest } = await import(mod('src/core/http.js'));
           const peer = await digest('203.0.113.9');
           for(const path of ['/v1/domains','/unsubscribe/test']) for(let n=0;n<40;n++) await guardPublicRequest(path,new Headers({authorization:'fixture'}),peer,async()=>new Response(null,{status:401}));
 
@@ -52294,9 +52294,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
         let failAudience = 2;
         faultResolver = (specifier) => {
-          if (failAudience > 0 && specifier.endsWith('/audience.js')) {
+          if (failAudience > 0 && specifier.endsWith('/audience/routes.js')) {
             failAudience--;
-            throw new Error('synthetic audience.js group load failure');
+            throw new Error('synthetic audience/routes.js group load failure');
           }
         };
         const nodeRes = await getNode('/v1/contacts');
@@ -52317,7 +52317,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         );
         assert.deepEqual({ ...nodeJson.error, requestId: 'req_normalized' }, { ...workerJson.error, requestId: 'req_normalized' });
 
-        // Subsequent request loads audience.js cleanly and reaches normal route authentication.
+        // Subsequent request loads audience/routes.js cleanly and reaches normal route authentication.
         const recovered = await getNode('/v1/contacts');
         assert.equal(recovered.status, 401);
         assert.equal(JSON.parse(recovered.text).error?.code, 'AUTH_REQUIRED');
@@ -52607,7 +52607,7 @@ test('bounded inbound page sizes: address caps, byte-bounded pagination, routing
 
       // 6. Inbox-key reads isolate FairPool shares by workspace (mailboxAccess.workspaceId, not shared 'anonymous').
       const { readPool, READ_MAX_ACTIVE_PER_WORKSPACE, READ_MAX_WAITING_PER_WORKSPACE } = await import('./src/read-bounds.js');
-      const { digest, randomSecret } = await import('./src/core.js');
+      const { digest, randomSecret } = await import('./src/core/http.js');
       const wsA = f.scope, wsB = unique('ws_inb_b'), hostB = wsB + '.invalid', boxB = unique('mbx'), keyA = randomSecret('bane_mbx_'), keyB = randomSecret('bane_mbx_');
       await db.query("INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)", [wsB]);
       await db.query("INSERT INTO operation_settings(workspace_id,name) VALUES($1,$1)", [wsB]);
@@ -52650,10 +52650,10 @@ test('bounded inbound page sizes: address caps, byte-bounded pagination, routing
 test('Database disk alert: a PlanetScale storage event with the derived Authorization header posts one card without the database, once per threshold; a wrong token, a bad signature or a stale event posts nothing', async t => {
   const [{ createApp }, { loadConfig }, { diskAlertSetup, diskAlertCard }] = await Promise.all([import('./src/app.js'), import('./src/config.js'), import('./src/disk-alert.js')]);
   const origin = 'https://disk.example.org', hook = 'https://hooks.slack.com/services/T0FIXTURE/B0FIXTURE/diskalert', secret = 'disk-fixture-'.repeat(4), signing = 'f'.repeat(64);
-  const db = new Proxy({}, { get(_target, prop) { throw new Error('The database disk alert touched Postgres (' + String(prop) + ').'); } }) as import('./src/core.js').Runtime['db'];
-  const storage: import('./src/core.js').Storage = { async put() { throw Error('unused'); }, async delete() { throw Error('unused'); }, async get() { throw Error('unused'); } };
+  const db = new Proxy({}, { get(_target, prop) { throw new Error('The database disk alert touched Postgres (' + String(prop) + ').'); } }) as import('./src/core/types.js').Runtime['db'];
+  const storage: import('./src/core/types.js').Storage = { async put() { throw Error('unused'); }, async delete() { throw Error('unused'); }, async get() { throw Error('unused'); } };
   const hosted = { PUBLIC_URL: origin, BANE_ROOT_SECRET: secret, MULTI_TENANT: 'true', ACCOUNT_REQUIRED_ACR: 'urn:anomaly:acr:google', OPERATOR_SLACK_WEBHOOK_URL: hook };
-  const runtime = (env: Record<string, string | undefined> = {}): import('./src/core.js').Runtime => ({ config: loadConfig({ ...hosted, ...env }), db, storage });
+  const runtime = (env: Record<string, string | undefined> = {}): import('./src/core/types.js').Runtime => ({ config: loadConfig({ ...hosted, ...env }), db, storage });
   const app = createApp(), live = runtime(), setup = diskAlertSetup(live.config);
   assert.deepEqual([setup.url, setup.events], [origin + '/internal/v1/database-disk', ['cluster.storage']]);
   assert.match(setup.authorization, /^Bearer nmdisk_[A-Za-z0-9_-]{43}$/);
@@ -52742,7 +52742,7 @@ test('Database disk alert: a PlanetScale storage event with the derived Authoriz
   assert.deepEqual(await deliver(storageEvent(96), undefined, runtime({ OPERATOR_SLACK_WEBHOOK_URL: undefined })), [503, 'OPERATOR_ALERTS_OFF']);
   // On Workers the DISK_ALERT limiter is asked with the threshold's key, and a card it refuses is not posted; the answer
   // goes out before the card, which is posted after the response (PlanetScale waits two seconds).
-  const asked: string[] = [], later: ((runtime: import('./src/core.js').Runtime) => Promise<void>)[] = [];
+  const asked: string[] = [], later: ((runtime: import('./src/core/types.js').Runtime) => Promise<void>)[] = [];
   assert.deepEqual(await deliver(storageEvent(44), undefined, { ...live, allowDiskAlert: async key => { asked.push(key); return false; } }), [204, null]);
   const worker = { ...live, allowDiskAlert: async (key: string) => { asked.push(key); return true; }, deferNudge: (work: (typeof later)[number]) => { later.push(work); } };
   assert.deepEqual(await deliver(storageEvent(96), undefined, worker), [204, null]);
@@ -52757,7 +52757,7 @@ describe('dashboard analytics', () => {
   const origin = 'https://analytics.example.org', path = '/internal/v1/analytics';
   const bucket = () => {
     const map = new Map<string, Uint8Array>();
-    const storage: import('./src/core.js').Storage = {
+    const storage: import('./src/core/types.js').Storage = {
       async put(key, body) { map.set(key, body); },
       async createIfAbsent(key, body) { if (!map.has(key)) map.set(key, body); },
       async get(key) { const body = map.get(key); return body ? { body, contentType: 'application/octet-stream' } : null; },
@@ -52772,8 +52772,8 @@ describe('dashboard analytics', () => {
   const setup = async (env: Record<string, string> = {}) => {
     const [{ createApp }, { loadConfig }] = await Promise.all([import('./src/app.js'), import('./src/config.js')]);
     const { map, storage } = bucket();
-    const db = new Proxy({}, { get(_target, prop) { throw new Error('Dashboard analytics touched Postgres (' + String(prop) + ').'); } }) as import('./src/core.js').Runtime['db'];
-    const runtime: import('./src/core.js').Runtime = { config: loadConfig({ PUBLIC_URL: origin, BANE_ROOT_SECRET: 'fixture-only-'.repeat(4), DASHBOARD_ANALYTICS: 'on', ...env }), db, storage };
+    const db = new Proxy({}, { get(_target, prop) { throw new Error('Dashboard analytics touched Postgres (' + String(prop) + ').'); } }) as import('./src/core/types.js').Runtime['db'];
+    const runtime: import('./src/core/types.js').Runtime = { config: loadConfig({ PUBLIC_URL: origin, BANE_ROOT_SECRET: 'fixture-only-'.repeat(4), DASHBOARD_ANALYTICS: 'on', ...env }), db, storage };
     const app = createApp();
     const post = async (body: unknown, headers: Record<string, string> = {}, peer = '198.51.100.' + Math.floor(Math.random() * 250), suffix = '') => {
       const { clientIpHeader } = await import('./src/brand.js');
@@ -52867,7 +52867,7 @@ describe('dashboard analytics', () => {
 
   test('dashboard analytics: off by default and then discarded unread, the dashboard origin only, DNT and GPC honored, and bounded', async t => {
     const batch = envelope([{ id: 'evt_00000001', seq: 1, t: Date.now(), type: 'page_view', route: '/overview' }]);
-    const health = async (app: import('./src/app.js').HttpApp, runtime: import('./src/core.js').Runtime) => ((await (await app.fetch(new Request(origin + '/health'), runtime)).json()) as { analytics: boolean }).analytics;
+    const health = async (app: import('./src/app.js').HttpApp, runtime: import('./src/core/types.js').Runtime) => ((await (await app.fetch(new Request(origin + '/health'), runtime)).json()) as { analytics: boolean }).analytics;
     const { loadConfig } = await import('./src/config.js');
     assert.equal(loadConfig({ PUBLIC_URL: origin, BANE_ROOT_SECRET: 'fixture-only-'.repeat(4) }).dashboardAnalytics, false, 'Off unless DASHBOARD_ANALYTICS=on');
     const off = await setup({ DASHBOARD_ANALYTICS: 'off' });

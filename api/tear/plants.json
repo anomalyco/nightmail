@@ -9,7 +9,7 @@
   {
     "label": "ses-B",
     "checker": "ses",
-    "file": "api/src/operations.ts",
+    "file": "api/src/ses/feedback.ts",
     "old": "  if (!input || input.receipt.processedAt) return;\n  const { receipt, email } = input;",
     "neu": "  if (!input) return;\n  const { receipt, email } = input;"
   },
@@ -51,7 +51,7 @@
   {
     "label": "access-2",
     "checker": "access",
-    "file": "api/src/core.ts",
+    "file": "api/src/core/access.ts",
     "old": "(?:domains|webhooks|agent-tokens)(?:\\/|$)|^\\/v1\\/regions\\/",
     "neu": "(?:domains|agent-tokens)(?:\\/|$)|^\\/v1\\/regions\\/"
   },
@@ -72,42 +72,42 @@
   {
     "label": "dispatch-1",
     "checker": "dispatch",
-    "file": "api/src/dispatcher.ts",
+    "file": "api/src/sending/quota.ts",
     "old": "  if (kind === 'transactional') {\n    gate.nextAllowedAt = Math.max(gate.nextAllowedAt, now + 250);\n    gate.txAllowedAt = Math.max(gate.txAllowedAt ?? 0, now + 250);",
     "neu": "  if (kind === 'transactional') {\n    gate.nextAllowedAt = Math.max(gate.nextAllowedAt, now + 50);\n    gate.txAllowedAt = Math.max(gate.txAllowedAt ?? 0, now + 50);"
   },
   {
     "label": "dispatch-2",
     "checker": "dispatch",
-    "file": "api/src/dispatcher.ts",
+    "file": "api/src/sending/dispatcher.ts",
     "old": "Math.min(OUTAGE_MAX_MS, OUTAGE_MS * 2 ** (gate.outageStreak ?? 0))",
     "neu": "Math.min(OUTAGE_MAX_MS, OUTAGE_MS)"
   },
   {
     "label": "dispatch-3-slow-brake",
     "checker": "dispatch",
-    "file": "api/src/dispatcher.ts",
+    "file": "api/src/sending/quota.ts",
     "old": "  if (kind === 'transactional') {\n    gate.nextAllowedAt = Math.max(gate.nextAllowedAt, now + 250);\n    gate.txAllowedAt = Math.max(gate.txAllowedAt ?? 0, now + 250);",
     "neu": "  if (kind === 'transactional') {\n    gate.nextAllowedAt = Math.max(gate.nextAllowedAt, now + 3000);\n    gate.txAllowedAt = Math.max(gate.txAllowedAt ?? 0, now + 3000);"
   },
   {
     "label": "collab-1-no-rowlock",
     "checker": "campaign-collab",
-    "file": "api/src/sending.ts",
+    "file": "api/src/campaigns/routes.ts",
     "old": "      const current = await findCampaign(db, a, campaignId, true);\n      const draft = {...input.draft,",
     "neu": "      const current = await findCampaign(db, a, campaignId);\n      const draft = {...input.draft,"
   },
   {
     "label": "attach-1-inline-as-attachment",
     "checker": "campaign-attachments",
-    "file": "api/src/dispatcher.ts",
+    "file": "api/src/sending/claim.ts",
     "old": "ContentDisposition: shown.inline ? 'INLINE' : 'ATTACHMENT'",
     "neu": "ContentDisposition: 'ATTACHMENT'"
   },
   {
     "label": "attach-2-links-not-removed",
     "checker": "campaign-attachments",
-    "file": "api/src/sending.ts",
+    "file": "api/src/campaigns/routes.ts",
     "old": "      await attachmentRows(db, a, input.draft.attachments, true);\n      await db.delete(attachmentLinks).where(and(scope(attachmentLinks, a), eq(attachmentLinks.ownerType, 'campaign'), eq(attachmentLinks.ownerId, campaignId)));\n",
     "neu": "      await attachmentRows(db, a, input.draft.attachments, true);\n"
   },
@@ -122,28 +122,28 @@
   {
     "label": "dbfaults-2-53300-not-transient",
     "checker": "db-faults",
-    "file": "api/src/core.ts",
+    "file": "api/src/core/errors.ts",
     "old": "new Set(['58000', '53300', '57P01'",
     "neu": "new Set(['58000', '57P01'"
   },
   {
     "label": "scale-1-seqscan-page",
     "checker": "scale-reads",
-    "file": "api/src/audience.ts",
+    "file": "api/src/audience/consent.ts",
     "old": "      ORDER BY ${contacts.id} ASC LIMIT ${query.limit + 1}`;",
     "neu": "      ORDER BY ${contacts.name} ASC, ${contacts.id} ASC LIMIT ${query.limit + 1}`;"
   },
   {
     "label": "tenant-2-import-global-lock-3s",
     "checker": "tenant-isolation",
-    "file": "api/src/audience.ts",
+    "file": "api/src/audience/imports.ts",
     "old": "          const [job] = await tx.select({ ...importMetaColumns, rowCount: sql<number>`jsonb_array_length(${imports.rows})::int` }).from(imports)",
     "neu": "          await tx.execute(sql`LOCK TABLE sending_emails IN ACCESS EXCLUSIVE MODE`); await tx.execute(sql`SELECT pg_sleep(3)`);\n          const [job] = await tx.select({ ...importMetaColumns, rowCount: sql<number>`jsonb_array_length(${imports.rows})::int` }).from(imports)"
   },
   {
     "label": "tenant-1b-final-order-reversed",
     "checker": "tenant-isolation",
-    "file": "api/src/dispatcher.ts",
+    "file": "api/src/sending/claim.ts",
     "old": "    ORDER BY (leased.snapshot->>'kind' = 'transactional') DESC, leased.created_at, leased.id`);",
     "neu": "    ORDER BY (leased.snapshot->>'kind' = 'transactional') ASC, leased.created_at, leased.id`);"
   },
@@ -157,7 +157,7 @@
   {
     "label": "iso-2-campaign-foreign-audience",
     "checker": "workspace-isolation",
-    "file": "api/src/sending.ts",
+    "file": "api/src/campaigns/routes.ts",
     "old": "      draftSender(c.env, a, draft);\n      await draftAudience(db, a, draft.audience);",
     "neu": "      draftSender(c.env, a, draft);"
   },
@@ -171,14 +171,14 @@
   {
     "label": "iso-4-contacts-unscoped-get",
     "checker": "workspace-isolation",
-    "file": "api/src/audience.ts",
+    "file": "api/src/audience/schemas.ts",
     "old": "async function findContact(db: DbExecutor, identity: Actor, contactId: string) { const [row] = await db.select().from(contacts).where(and(scope(contacts, identity), eq(contacts.id, contactId), isNull(contacts.deletedAt))).limit(1); return row ?? notFound('Contact'); }",
     "neu": "async function findContact(db: DbExecutor, identity: Actor, contactId: string) { const [row] = await db.select().from(contacts).where(and(eq(contacts.id, contactId), isNull(contacts.deletedAt))).limit(1); return row ?? notFound('Contact'); }"
   },
   {
     "label": "dispatch-4-brake-clobber",
     "checker": "dispatch",
-    "file": "api/src/dispatcher.ts",
+    "file": "api/src/sending/quota.ts",
     "old": "  gate.brakeUntil = Math.max(gate.brakeUntil ?? 0, now + BRAKE_MS);",
     "neu": "  gate.brakeUntil = now + BRAKE_MS;"
   },

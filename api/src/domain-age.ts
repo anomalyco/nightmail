@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { log, type DbExecutor, type Runtime } from './core.js';
+import { log } from './log.js';
+import type { DbExecutor, Runtime } from './core/types.js';
 import { placementRoot } from './domain-registry.js';
 
 // When the domains Nightmail sends from and links on were registered (domain_registrations, migration 546), from each

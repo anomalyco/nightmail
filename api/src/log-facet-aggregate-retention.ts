@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { rowId, type Database, type DbExecutor } from './core.js';
+import { rowId } from './core/http.js';
+import type { Database, DbExecutor } from './core/types.js';
 
 export const FACET_CHANGE_RETENTION_HOURS=24;
 const GC_PAGE=512;

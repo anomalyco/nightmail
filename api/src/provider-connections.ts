@@ -1,7 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
 import { auditContext, auditInsert, recordAudit, type AuditContext } from './audit.js';
-import { ApiError, assertSesConfigured, denied, isSimulatedSes, errors, id, json, log, logError, ModuleLoadError, notFound, response, wrapModuleLoad, type App, type Ctx, type Runtime, type JobHandler } from './core.js';
+import { ApiError, denied, errors, logError, ModuleLoadError, notFound, wrapModuleLoad } from './core/errors.js';
+import { assertSesConfigured, isSimulatedSes } from './core/ses.js';
+import { id, json, response } from './core/http.js';
+import { log } from './log.js';
+import type { App, Ctx, Runtime, JobHandler } from './core/types.js';
 import { caller, assume, platformCredentials } from './provider-credentials.js';
 import { awsError, discoverSes, feedbackUrl, loadSetupSdk, POOL_INSTALLATION, poolTenantName, provisionSes, provisionTenant, setupResources, verifiedByoDomains, type SesDiscovery, byoStackName } from './ses-setup.js';
 import { builtinClaim, builtinSettingUp, importByoClaims, releaseConnectionClaims } from './domain-claims.js';
@@ -612,7 +616,7 @@ export function registerProviderConnections(app: App) {
         await db.execute(sql`UPDATE provider_connections SET state='disconnecting' WHERE id=${row.id}`);
         return row;
       });
-      await (await wrapModuleLoad(() => import('./operations.js'))).deleteConnectionIdentities(c.env, wid, { id: row.id, kind: row.kind, region: row.region, aws_account_id: row.aws_account_id!, role_arn: row.role_arn!, external_id: row.external_id!, tenant_state: row.tenant_state });
+      await (await wrapModuleLoad(() => import('./domains/hosted.js'))).deleteConnectionIdentities(c.env, wid, { id: row.id, kind: row.kind, region: row.region, aws_account_id: row.aws_account_id!, role_arn: row.role_arn!, external_id: row.external_id!, tenant_state: row.tenant_state });
       // A pause can land during the AWS cleanup: re-check it under the connection's lock (the fence's lock order) before
       // releasing anything. The connection stays fenced; a DELETE after the resume finishes. Once a concurrent DELETE has
       // finished, both statements are no-ops, so only one audits.

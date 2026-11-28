@@ -1,4 +1,5 @@
-import { ApiError, type Config } from '../core.js';
+import { ApiError } from '../core/errors.js';
+import type { Config } from '../core/types.js';
 import { formatUsd, microCents } from './money.js';
 import type { BillingGate } from './types.js';
 import { productName } from '../brand.js';

@@ -4,7 +4,7 @@ import { sql } from 'drizzle-orm';
 import { Buffer } from 'node:buffer';
 import { productName } from './brand.js';
 import { ATTACHMENT_FIELD_RULES, ATTACHMENT_LIMITS_TEXT, UPLOAD_HEADERS } from './attachment-limits.js';
-import { ApiError } from './core.js';
+import { ApiError } from './core/errors.js';
 import { SEND_LIMITS } from './send-limits.js';
 
 // Shared validation for sending, audience/consent and template reply addresses.
@@ -108,7 +108,7 @@ export function unsubscribePageLink(page: string, token: string): string {
 }
 
 // A workspace's postal address: US law (CAN-SPAM) requires one in every commercial email. Plain text, shown under the
-// Unsubscribe link of every campaign footer and every marketing send (src/sending.ts marketingFooter). Line breaks are
+// Unsubscribe link of every campaign footer and every marketing send (src/sending/front-door.ts marketingFooter). Line breaks are
 // kept, each line trimmed and empty ones dropped (postalAddressText); no markup, control or bidirectional characters.
 export const POSTAL_ADDRESS = { chars: 300, lines: 6 } as const;
 const POSTAL_CONTROL = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f\u2028\u2029\u202a-\u202e\u2066-\u2069]/;

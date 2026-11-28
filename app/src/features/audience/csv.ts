@@ -1,4 +1,4 @@
-// The API's CSV rules (api/src/audience.ts parseCsv): quoted fields, doubled quotes inside them, CRLF, CR or LF line
+// The API's CSV rules (api/src/audience/imports.ts parseCsv): quoted fields, doubled quotes inside them, CRLF, CR or LF line
 // ends and a BOM; rows whose cells are all blank are skipped, as the API skips them, so row numbers agree with its own.
 // Rows come one at a time and cells are cut from the text, so a 100 MiB file is read without a copy per character.
 export function* csvRows(text: string): Generator<string[]> {

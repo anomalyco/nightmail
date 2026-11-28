@@ -1,6 +1,6 @@
 import { z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import type { Database } from './core.js';
+import type { Database } from './core/types.js';
 
 // The operator's reading of screen_comparisons (src/screen-shadow.ts, migration 452): the content screen's requests beside
 // the same requests repeated to the second classifier. Everything here comes from that one table, by created_at.

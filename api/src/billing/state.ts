@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { Database } from '../core.js';
+import type { Database } from '../core/types.js';
 import { CREDIT, perThousandUsd, rateUsd, RATES } from './rates.js';
 import type { BillingPosition, BillingSummary } from './types.js';
 

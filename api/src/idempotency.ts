@@ -1,6 +1,9 @@
 import { z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import { ApiError, digest, mailboxRoute, webhookUrlHint, type Ctx, type Database, type DbExecutor } from './core.js';
+import { ApiError } from './core/errors.js';
+import { digest } from './core/http.js';
+import { mailboxRoute, webhookUrlHint } from './core/access.js';
+import type { Ctx, Database, DbExecutor } from './core/types.js';
 import { utf8Bytes } from './read-bounds.js';
 import { SEND_LIMITS } from './send-limits.js';
 

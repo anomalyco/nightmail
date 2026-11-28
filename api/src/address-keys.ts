@@ -1,5 +1,7 @@
 import { sql } from 'drizzle-orm';
-import { ApiError, digest, id, isoTime, randomSecret, type Actor, type Ctx, type DbExecutor } from './core.js';
+import { ApiError } from './core/errors.js';
+import { digest, id, isoTime, randomSecret } from './core/http.js';
+import type { Actor, Ctx, DbExecutor } from './core/types.js';
 import { mailboxKeys, type MailboxPermission } from './db/mailbox.js';
 import { recordAudit } from './audit.js';
 import { agentExpiryRefusal, approvalMadeKey, askedExpiry, createdInboxes, holdKeyAdmin, inactiveKey } from './auth.js';
@@ -81,7 +83,7 @@ export type LimitedChange = { name?: string; expiresAt?: string | null; permissi
  * for addresses or an inbox key and back on the same secret. The caller isn't this key, and its authority is checked
  * again here (holdKeyAdmin). The change applies at once: every request with the key reads its row (authorizeInboxKey),
  * a long poll reads it again each second (auth.ts longPoll), and dispatch checks the sending address against it
- * (dispatcher.ts), so mail queued from a removed address is not sent. Returns the key's view, with the access it has
+ * (sending/claim.ts), so mail queued from a removed address is not sent. Returns the key's view, with the access it has
  * now: its addresses, and with create the inboxes it created.
  */
 export async function updateLimitedKey(tx: DbExecutor, c: Ctx, a: Actor, keyId: string, change: LimitedChange) {

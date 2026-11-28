@@ -63,7 +63,7 @@ Every kind of send is decided by one SQL function, `send_admission` (migration 3
 
 The eight-shard fixture is unchanged: 36.0, 186.6 and 269.9/s at 50, 200 and 1,000/s, against 36.0, 185.7 and 267.7/s before.
 
-**Campaign launch: the capture before the send locks (2026-11-21).** A launch captures its audience before it locks the campaign row and the workspace's admission row, then takes both only for the admission, the review, the reserve and the state change, all in one transaction. Sends in the workspace no longer wait for the capture. Locally, with 2,000,000 subscribed contacts and one single send every 50 ms in the same workspace during the launch, those sends took 5.1 s p50, 9.2 s p95 and 9.6 s at most before, and 4 ms, 7 ms and 17 ms after (2–3 ms with no launch); the launch took 9.7 and 9.5 s. A launch now makes 23 calls instead of 15: a per-campaign launch lock, an unlocked read, the admission checked once more before the capture in a savepoint it rolls back and releases (so the claim and attachment locks it takes are not held through the capture), and the planner setting around the capture's join, which is hashed whatever the statistics say. Row versions are unchanged. Queueing the campaign's background stats count (src/sending.ts campaignStatsJob) adds one more call and one row version: 24 calls, 124 row versions.
+**Campaign launch: the capture before the send locks (2026-11-21).** A launch captures its audience before it locks the campaign row and the workspace's admission row, then takes both only for the admission, the review, the reserve and the state change, all in one transaction. Sends in the workspace no longer wait for the capture. Locally, with 2,000,000 subscribed contacts and one single send every 50 ms in the same workspace during the launch, those sends took 5.1 s p50, 9.2 s p95 and 9.6 s at most before, and 4 ms, 7 ms and 17 ms after (2–3 ms with no launch); the launch took 9.7 and 9.5 s. A launch now makes 23 calls instead of 15: a per-campaign launch lock, an unlocked read, the admission checked once more before the capture in a savepoint it rolls back and releases (so the claim and attachment locks it takes are not held through the capture), and the planner setting around the capture's join, which is hashed whatever the statistics say. Row versions are unchanged. Queueing the campaign's background stats count (src/campaigns/stats.ts campaignStatsJob) adds one more call and one row version: 24 calls, 124 row versions.
 
 ### Feedback, webhook and screening operations
 
@@ -122,7 +122,7 @@ scheduling around them was the problem.
 
 Commits `be8076e` → `7f82248` on `main`.
 
-### 3.1 Batch dispatcher (`api/src/dispatcher.ts`)
+### 3.1 Batch dispatcher (`api/src/sending/dispatcher.ts`)
 - Queued `sending_emails` rows *are* the queue. No per-recipient job rows.
 - Loop per environment/region: one statement leases up to 24 due rows (`FOR UPDATE SKIP LOCKED`,
   `lease_until`), rows are prepared in memory (render, hash check, MIME), then processed in

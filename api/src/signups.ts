@@ -1,9 +1,11 @@
 import { createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
 import { sql, type SQL } from 'drizzle-orm';
-import { id, log, type Config, type Database, type DbExecutor, type JobHandler, type Runtime } from './core.js';
+import { id } from './core/http.js';
+import { log } from './log.js';
+import type { Config, Database, DbExecutor, JobHandler, Runtime } from './core/types.js';
 import { productName } from './brand.js';
 import { JobDeferred, retryDatabaseFailures } from './jobs.js';
-import type { ListContactResult } from './audience.js';
+import type { ListContactResult } from './audience/consent.js';
 
 // The sign-up limit (hosted, migration 404): how many accounts may sign up on their own, set by an operator at
 // Operator → Sign-ups (src/operator.ts). A place is taken by an account that signed up (nightmail_signups, one row per
@@ -234,7 +236,7 @@ export async function placesOpened(runtime: Runtime, send = true): Promise<{ ema
 // (last_at or let_in_at after list_synced_at), a sign-up until it has been written once; every minute signupsTick queues
 // one signups.sync job while anything is due, and the job writes each due address and marks the version it wrote. The
 // contact is written from the waitlist row or the sign-up record alone (recordSignup), never the account's profile,
-// through the audience code (audience.ts upsertListContact): an opt-out stays an opt-out, suppression is never touched
+// through the audience code (audience/consent.ts upsertListContact): an opt-out stays an opt-out, suppression is never touched
 // and a deleted contact stays deleted. Hourly, signups.reconcile marks admitted the contacts still waiting whose address
 // got in another way. Jobs carry no address. Without the list or the platform workspace nothing is queued.
 export type SignupsList = { workspaceId: string; listId: string };
@@ -287,7 +289,7 @@ const lockAddress = (tx: DbExecutor, list: SignupsList, address: string) => tx.e
  * row's version it saw (null: none) for the caller to mark once the contact has committed.
  */
 async function syncAddress(db: Database, list: SignupsList, address: string): Promise<{ result: ListContactResult; version: string | null; attempts: number | null }> {
-  const { upsertListContact } = await import('./audience.js'), byAddress = await addressProperties(address);
+  const { upsertListContact } = await import('./audience/consent.js'), byAddress = await addressProperties(address);
   return db.transaction(async tx => {
     await lockAddress(tx, list, address);
     const { rows: [standing] } = await tx.execute<Standing>(sql`SELECT
@@ -418,13 +420,13 @@ type Written = { workspace_id: string; list_id: string; email: string };
 const lockAccount = (tx: DbExecutor, userId: string) => tx.execute(sql`SELECT pg_advisory_xact_lock(hashtextextended(${userId},57901))`);
 /** Takes the address a row names off its list, unless another account's row holds it there now. */
 async function takeBack(tx: DbExecutor, userId: string, written: Written) {
-  const { removeListContact } = await import('./audience.js');
+  const { removeListContact } = await import('./audience/consent.js');
   if ((await tx.execute(sql`SELECT FROM nightmail_customers WHERE user_id<>${userId} AND workspace_id=${written.workspace_id} AND list_id=${written.list_id} AND email=${written.email}`)).rowCount) return false;
   return removeListContact(tx, { workspaceId: written.workspace_id }, written.list_id, written.email);
 }
 /** One account's contact, from where it stands now, and the row that says so. Reads the account without locking it. */
 async function writeCustomer(db: Database, workspaceId: string, listId: string, userId: string): Promise<ListContactResult | 'skipped'> {
-  const { upsertListContact } = await import('./audience.js');
+  const { upsertListContact } = await import('./audience/consent.js');
   return db.transaction(async tx => {
     await lockAccount(tx, userId);
     const { rows: [account] } = await tx.execute<{ email: string; name: string; created_at: string; signed_up: string | null; signup_name: string | null }>(sql`SELECT
@@ -496,7 +498,7 @@ export const signupJobs: Record<string, JobHandler> = {
     if (!list) return;
     const admitted = (address: SQL) => sql`NOT EXISTS (SELECT FROM nightmail_waitlist w WHERE w.email=${address}) AND NOT EXISTS (SELECT FROM nightmail_signups s WHERE s.email=${address})
       AND EXISTS (SELECT FROM nightmail_users u WHERE u.email_verified AND lower(u.email)=${address})`;
-    const { PropertiesInput } = await import('./audience.js');
+    const { PropertiesInput } = await import('./audience/schemas.js');
     let after = typeof payload.after === 'string' ? payload.after : '';
     try {
       for (;;) {

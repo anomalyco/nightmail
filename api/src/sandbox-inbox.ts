@@ -1,6 +1,8 @@
 import {mimeIndex} from './mailbox-mime-index.js';
 import { sql } from 'drizzle-orm';
-import { ApiError, id, type Runtime } from './core.js';
+import { ApiError } from './core/errors.js';
+import { id } from './core/http.js';
+import type { Runtime } from './core/types.js';
 import { mailKey, sandboxMailStore } from './mail-objects.js';
 import { storeIncoming } from './mailbox-ingest-store.js';
 import { storeNotice } from './inbox-wake.js';

@@ -1,9 +1,9 @@
 import { parseArgs } from 'node:util';
 import { Client } from 'pg';
 import { postgresConnection } from '../src/adapters/node.js';
-import { log } from '../src/core.js';
+import { log } from '../src/log.js';
 
-// Required notices (src/sending.ts requiredNotice) reach people who unsubscribed from marketing, so only an operator
+// Required notices (src/sending/front-door.ts requiredNotice) reach people who unsubscribed from marketing, so only an operator
 // turns them on, for one workspace, with a reason: Hosted or self-hosted alike.
 export async function setRequiredNotices(db: Pick<Client, 'query'>, args: string[]) {
   const { positionals, values } = parseArgs({ args, allowPositionals: true, options: { reason: { type: 'string' } } });

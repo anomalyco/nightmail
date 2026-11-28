@@ -1,6 +1,8 @@
 import { z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
-import { log, logError, type DbExecutor, type JobHandler, type Runtime } from './core.js';
+import { log } from './log.js';
+import { logError } from './core/errors.js';
+import type { DbExecutor, JobHandler, Runtime } from './core/types.js';
 import { ALLOWED, buildLists, fetchSource, SOURCES, type BuiltLists, type FetchedSource } from './hygiene-sources.js';
 import { resolveMailDomains, type MailDomain } from './mail-dns.js';
 

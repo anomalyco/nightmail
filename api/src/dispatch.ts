@@ -1,11 +1,13 @@
 import { sql } from 'drizzle-orm';
-import { ApiError, lazyModule, log, ModuleLoadError, wrapModuleLoad, type Runtime, type JobHandler } from './core.js';
+import { ApiError, lazyModule, ModuleLoadError, wrapModuleLoad } from './core/errors.js';
+import { log } from './log.js';
+import type { Runtime, JobHandler } from './core/types.js';
 import { sendingConnections } from './domain-claims.js';
 import { processJobs, wakeWebhooks } from './jobs.js';
-import type { GateState } from './dispatcher.js';
+import type { GateState } from './sending/quota.js';
 import { finishCampaigns, terminalColumns, terminalEvents } from './states.js';
 import { isDeletableUploadKey } from './storage-keys.js';
-const loadDispatcher = lazyModule(() => import('./dispatcher.js'));
+const loadDispatcher = lazyModule(() => Promise.all([import('./sending/quota.js'), import('./sending/dispatcher.js')]));
 export const deleteAttachment: JobHandler = async (runtime, payload, job) => {
   if (typeof payload.key !== 'string') throw new ApiError(500, 'JOB_PAYLOAD_INVALID', 'Attachment deletion job is missing its object key.');
   const key = payload.key;
@@ -31,8 +33,8 @@ export function resolveJobHandler(type: string): Promise<JobHandler | undefined>
       const display = await import('./sender-display-score.js');
       return type === display.DISPLAY_DISCOVERY_JOB ? display.senderDisplayDiscoveryJob : display.senderDisplayScoreJob;
     }
-    if (type === 'email.dispatch' || type.startsWith('sending.') || type.startsWith('campaign.')) return (await import('./sending.js')).jobHandlers[type];
-    if (type.startsWith('operation.') || type.startsWith('domain.')) return (await import('./operations.js')).operationJobs[type];
+    if (type === 'email.dispatch' || type.startsWith('sending.') || type.startsWith('campaign.')) return (await import('./sending/jobs.js')).jobHandlers[type];
+    if (type.startsWith('operation.') || type.startsWith('domain.')) return (await import('./webhooks/operations.js')).operationJobs[type];
     if (type === 'ses.provision' || type === 'ses.discover') return (await import('./ses-regions.js')).sesRegionJobs[type];
     if (type === 'reputation.alert') return (await import('./reputation-alerts.js')).reputationAlertJobs[type];
     if (type === 'operator.alert') return (await import('./operator-alerts.js')).operatorAlertJobs[type];
@@ -114,7 +116,7 @@ export async function drain(runtime: Runtime, limit = 20, concurrency = 2, maxDu
   let processed = await drainJobs(runtime, limit, concurrency, maxDurationMs,pool);
   const partitions = await dispatchPartitions(runtime, recoverInterrupted);
   if (!partitions.length) return processed;
-  const { initialGate, runDispatcher } = await loadDispatcher();
+  const [{ initialGate }, { runDispatcher }] = await loadDispatcher();
   const dispatch = async ({ accountId, region }: Partition) => {
     const key = `${accountId ? `${accountId}:` : ''}${region}`;
     const gate = gates.get(key) ?? initialGate(); gates.set(key, gate);

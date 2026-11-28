@@ -1,7 +1,8 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { FREEZE_FLOOR } from './standing-model.js';
 import type { GetEmailIdentityCommandOutput } from '@aws-sdk/client-sesv2';
-import { id, withoutVerdictSql, type DbExecutor } from './core.js';
+import { id } from './core/http.js';
+import { withoutVerdictSql, type DbExecutor } from './core/types.js';
 import type { MxReport } from './db/mailbox.js';
 import { legacySlugs, productName, productSlug } from './brand.js';
 
@@ -321,7 +322,7 @@ export const verifyImportedClaims = (connection: string, domains: {name: string;
  * grace the domain's other hosts are in; a claim that lost its proof or identity has no such host, and one that may not
  * receive (`off`) is never touched. Each claim is then what its hosts make it, as the next check would write it.
  */
-export async function activateReceiving(db: Pick<import('./core.js').Database, 'transaction'>, workspaceId: string, connectionId: string, region: string, hosts: string[]) {
+export async function activateReceiving(db: Pick<import('./core/types.js').Database, 'transaction'>, workspaceId: string, connectionId: string, region: string, hosts: string[]) {
   // Claims first, then their hosts: the order every receiving write takes.
   await db.transaction(async tx => { await tx.execute(sql`SELECT FROM domain_claims dc WHERE dc.workspace_id=${workspaceId} AND dc.connection_id=${connectionId} AND dc.receiving_state<>'off' ORDER BY dc.name FOR UPDATE`);
     const activated = (await tx.execute<{ name: string }>(sql`UPDATE mailbox_domains m SET status='active',last_error=NULL,enabled_at=now(),updated_at=now()
@@ -531,7 +532,7 @@ export const pauseCampaign = (ref: CampaignRef, reason: PauseReason) => moveCamp
 export const quarantineCampaign = (ref: CampaignRef, reason: PauseReason) => moveCampaign(ref, CAMPAIGN_RUNNING, 'paused', sql`${pausedFields(reason)},waiting_reason=NULL,waiting_until=NULL,quarantines=quarantines+1`);
 /** The list probe went out clean (or an owner or operator released its quarantine): release the rest. */
 export const clearProbe = (ref: CampaignRef) => sql`UPDATE sending_campaigns SET probe_cleared_at=now(),probe_wait_until=NULL,updated_at=now() WHERE ${campaignRow(ref)} RETURNING id`;
-/** A sender in good standing skips the probe for recipients an earlier campaign delivered to (src/sending.ts listMailedCleanly). */
+/** A sender in good standing skips the probe for recipients an earlier campaign delivered to (src/campaigns/stats.ts listMailedCleanly). */
 export const skipProbe = (ref: CampaignRef) => sql`UPDATE sending_campaigns SET probe_skipped_at=now(),updated_at=now() WHERE ${campaignRow(ref)} AND probe_cleared_at IS NULL AND probe_skipped_at IS NULL RETURNING id`;
 export const waitProbe = (ref: CampaignRef, until: string) => sql`UPDATE sending_campaigns SET probe_wait_until=${until}::timestamptz,waiting_reason='list_probe',waiting_until=${until}::timestamptz,updated_at=now() WHERE ${campaignRow(ref)} AND state='sending' AND probe_wait_until IS NULL RETURNING id`;
 /** paused, or failed after releasing some recipients, continues from its cursors on the same snapshot; the failure is

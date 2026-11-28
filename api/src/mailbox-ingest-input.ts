@@ -1,6 +1,6 @@
 import {sql,type SQLWrapper} from 'drizzle-orm';
 import type {ReadyConnection} from './provider-credentials.js';
-import type {Config} from './core.js';
+import type { Config } from './core/types.js';
 
 export const receivingPolicy=(c:Config)=>JSON.stringify({resource:new URL('/mcp',c.publicUrl).href,issuer:c.accountIssuer,hosted:c.multiTenant,subjects:c.allowedSubjects});
 

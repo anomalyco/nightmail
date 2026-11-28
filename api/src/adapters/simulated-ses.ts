@@ -1,6 +1,6 @@
 import { SESv2Client } from '@aws-sdk/client-sesv2';
 import type { HttpHandlerOptions, HttpRequest, HttpResponse, RequestHandler } from '@smithy/types';
-import type { Runtime } from '../core.js';
+import type { Runtime } from '../core/types.js';
 
 export interface SimulatedSesOptions {
   latencyMs?: number;

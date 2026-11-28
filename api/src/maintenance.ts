@@ -1,9 +1,11 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, type Runtime } from './core.js';
-import { log, logError } from './core.js';
+import { ApiError } from './core/errors.js';
+import type { Runtime } from './core/types.js';
+import { log } from './log.js';
+import { logError } from './core/errors.js';
 import { logAnalyticsFailure } from './analytics-traffic.js';
 import { campaignActive } from './states.js';
-import { expireDomainClaims } from './operations.js';
+import { expireDomainClaims } from './domains/hosted.js';
 import { SEND_LIMITS } from './send-limits.js';
 import { isReconciledUploadKey, UPLOAD_PREFIX } from './storage-keys.js';
 import { foldSendingTallies, recountSendingTallies } from './sending-tallies.js';

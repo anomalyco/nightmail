@@ -1,7 +1,11 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
-import { literalSearch, actor, ApiError, budgetedRead, denied, errors, PageQuery, readLimit, readLimitNote, statementTimedOut, unrestrictedRequired, region, response, security, type Actor, type App, type Ctx, type DbExecutor, type MailboxAccess } from './core.js';
+import { literalSearch, budgetedRead, PageQuery, readLimit, readLimitNote, statementTimedOut, response, security } from './core/http.js';
+import { actor } from './core/access.js';
+import { ApiError, denied, errors, unrestrictedRequired } from './core/errors.js';
+import { region } from './core/ses.js';
+import type { Actor, App, Ctx, DbExecutor, MailboxAccess } from './core/types.js';
 import { createFairPool, PAGE_MAX_BYTES, READ_MAX_WAITERS, READ_MAX_WAITING_PER_WORKSPACE, withBoundedRead } from './read-bounds.js';
 import { fitPageByBytes, INBOUND_ADDRESS_PAGE_LIMIT, messageFieldCount, sliceAddressStrings, sliceJsonbArray } from './inbound-bounds.js';
 import { emails } from './db/sending.js';
@@ -11,7 +15,8 @@ import type { AggregateTicket } from './log-facet-aggregate-view.js';
 import { mailMessages as messages } from './db/mailbox.js';
 import { readsDelivery, visibleAddresses } from './inbound-threads.js';
 import { accessibleMessages, sentThreadId, threadSize } from './thread-view.js';
-import { EmailStatusFilter, listedSubject, mailWhere, pageBinding, sentUntrustedContent, SubstringSearch } from './sending.js';
+import { EmailStatusFilter, mailWhere, pageBinding, sentUntrustedContent, SubstringSearch } from './sending/schemas.js';
+import { listedSubject } from './campaigns/views.js';
 
 // Logs: sent and received mail in one list, newest first, from one SQL statement. Each side keeps its own index
 // (sending_emails_created_page, mail_messages_tenant_page) and limit; the outer query merges the two pages. The cursor

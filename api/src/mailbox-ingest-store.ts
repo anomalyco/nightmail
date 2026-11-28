@@ -1,5 +1,5 @@
 import {getTableColumns,sql} from 'drizzle-orm';
-import type {DbExecutor} from './core.js';
+import type { DbExecutor } from './core/types.js';
 import type {StoreNotice} from './inbox-wake.js';
 import {mailMessages,mailAttachments} from './db/mailbox.js';
 import {ADDRESS} from './mailbox-store.js';

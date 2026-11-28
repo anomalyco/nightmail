@@ -7,7 +7,9 @@ import { clientIpHeader, clientNetworkHeader } from './brand.js';
 import { isBuiltinHost } from './builtin-domain.js';
 import type { Client, Pool, PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { JobDeferred } from './jobs.js';
-import { databaseCodeOf, log, type JobHandler, type Runtime } from './core.js';
+import { databaseCodeOf } from './core/errors.js';
+import { log } from './log.js';
+import type { JobHandler, Runtime } from './core/types.js';
 import { placementRoot } from './domain-registry.js';
 import { isKnownDisposable, PUBLIC_MAILBOXES } from './list-hygiene.js';
 
@@ -597,7 +599,7 @@ export type SampleBound = {
 };
 /**
  * The latest instant a read can be recorded through without skipping mail that becomes visible after it. Accepted mail
- * is stamped with clock_timestamp() inside the statement that writes it (dispatcher.ts recordOutcomes, sending.ts
+ * is stamped with clock_timestamp() inside the statement that writes it (sending/claim.ts recordOutcomes, sending/events.ts
  * persistEmailEvent and ingestRoutineSesEvents; check-premerge.ts "Accepted mail stamp" refuses any other stamp;
  * simulated mail, stamped with the Worker's clock, is never sampled: NOT v.simulated below). Such a statement takes
  * RowExclusiveLock on sending_email_events (or the partition it names) when it starts, before any row is stamped, and

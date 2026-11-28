@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import type { Database, DbExecutor } from './core.js';
+import type { Database, DbExecutor } from './core/types.js';
 
 const ROUTE_PAGE=256;
 async function routeLock(tx:DbExecutor) {

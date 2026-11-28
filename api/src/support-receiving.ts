@@ -1,6 +1,8 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, asc, inArray, sql } from 'drizzle-orm';
-import { errors, isoTime, response, wrapModuleLoad, type App, type DbExecutor } from './core.js';
+import { errors, wrapModuleLoad } from './core/errors.js';
+import { isoTime, response } from './core/http.js';
+import type { App, DbExecutor } from './core/types.js';
 import { mailboxDomains } from './db/mailbox.js';
 import { supportRead } from './deliverability.js';
 import { hostGraceStart, receivingSetup, setupError, type ReceivingSetup } from './states.js';
@@ -124,7 +126,7 @@ export function registerSupportReceiving(app: App, meta: SupportMeta, WorkspaceF
         CASE WHEN paused THEN 'paused' WHEN declined_at IS NOT NULL THEN 'declined' WHEN expires_at <= now() THEN 'expired' ELSE 'pending' END AS status,
         request_from AS "requestedFrom", requested_at::text AS "requestedAt", expires_at::text AS "expiresAt", declined_at::text AS "declinedAt"
       FROM mailbox_webhooks WHERE workspace_id = ANY(${ids(list)}) AND type = 'forward' AND NOT verified ORDER BY requested_at DESC NULLS LAST, id LIMIT ${FORWARDS + 1}`)).rows);
-    const { decrypt } = await wrapModuleLoad(() => import('./operations.js'));
+    const { decrypt } = await wrapModuleLoad(() => import('./webhooks/crypto.js'));
     const domainOf = async (r: { workspaceId: string; id: string; target: string | null }) => {
       if (!r.target) return null;
       try { const address = await decrypt(c.env, r.target, `${r.workspaceId}:endpoint:${r.id}`); return address.slice(address.lastIndexOf('@') + 1).toLowerCase() || null; } catch { return null; }

@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm';
 import { Buffer } from 'node:buffer';
-import { ApiError, type DbExecutor, type Runtime } from './core.js';
+import { ApiError } from './core/errors.js';
+import type { DbExecutor, Runtime } from './core/types.js';
 import { readMailBytes, withMailObjects } from './mail-objects.js';
 
 const CACHE_BYTES=16*1024, MESSAGE_LIMIT=40*1024*1024;

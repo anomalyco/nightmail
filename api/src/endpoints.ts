@@ -5,14 +5,17 @@
 // /v1/inbound/webhooks (webhooks, named or not) are two views of it with the same checks and caps.
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, and, desc, eq, lt } from 'drizzle-orm';
-import { ApiError, digest, errors, id, isoTime, json, lasting, nextCursor, randomSecret, readCursor, receivingAdmin, response, security, WEBHOOK_CHANGE, webhookUrlHint, WebhookUrlHint, wrapModuleLoad, type App, type Ctx, type ClaimedWebhook, type DbExecutor, type MailboxAccess, type Runtime } from './core.js';
+import { ApiError, errors, wrapModuleLoad } from './core/errors.js';
+import { digest, id, isoTime, json, nextCursor, randomSecret, readCursor, response, security } from './core/http.js';
+import { lasting, receivingAdmin, WEBHOOK_CHANGE, webhookUrlHint, WebhookUrlHint } from './core/access.js';
+import type { App, Ctx, ClaimedWebhook, DbExecutor, MailboxAccess, Runtime } from './core/types.js';
 import { claimSends, hostTakesAddresses } from './states.js';
 import { assertBuiltinRecipients, assertBuiltinStillSends } from './builtin-domain.js';
 import { endpoints, mailAttachments, mailboxDomains, mailboxes, mailboxWebhookDeliveries, mailMessages, retainedMail, type EndpointRecord } from './db/mailbox.js';
 import { ownReceiving, resumeNeedsUrl } from './rituals.js';
 import { recordAudit } from './audit.js';
 import { approvalField, approvalTie, approvalTies, tiedNextStep, type Tie } from './approval-ties.js';
-import { encrypt, decrypt, encryptWebhookHeaders, postWebhook, webhookHeaderViews, WebhookHeaders, WebhookHeaderViews, webhookSecret, webhookUrl } from './operations.js';
+import { encrypt, decrypt, encryptWebhookHeaders, postWebhook, webhookHeaderViews, WebhookHeaders, WebhookHeaderViews, webhookSecret, webhookUrl } from './webhooks/crypto.js';
 import { inboundEventTypes, recordEvents, webhookSecretBinding } from './mailbox-events.js';
 import { InboundAddressId } from './inbound-threads.js';
 import { createMailbox, htmlToPlain, lockMailboxLane } from './mailbox-store.js';
@@ -945,7 +948,7 @@ export async function sendToEndpoint(runtime: Runtime, w: string, h: ClaimedWebh
 }
 
 // ── Forwards ──────────────────────────────────────────────────────────────────────────────
-/** One sent message's attachment limits (send-limits.ts, sending.ts AttachmentIds). */
+/** One sent message's attachment limits (send-limits.ts, sending/schemas.ts AttachmentIds). */
 const FORWARD_FILES = SEND_LIMITS.attachments, FORWARD_BODY = 500_000;
 /** Forwards one endpoint may send in an hour (FORWARD_LIMIT): a loop guard, not a volume cap. */
 const FORWARDS_PER_HOUR = 1000;
@@ -963,7 +966,7 @@ const forwardBlocked = () => new ApiError(422, 'FORWARD_BLOCKED', 'Automated, ju
  */
 async function forwardAttachments(runtime: Runtime, w: string, m: Received) {
   const rows = m.attachmentCount ? await runtime.db.select().from(mailAttachments).where(and(eq(mailAttachments.workspaceId, w), eq(mailAttachments.messageId, m.id))).orderBy(mailAttachments.id) : [];
-  const { storeAttachmentBytes } = rows.length ? await wrapModuleLoad(() => import('./sending.js')) : { storeAttachmentBytes: undefined };
+  const { storeAttachmentBytes } = rows.length ? await wrapModuleLoad(() => import('./sending/mime.js')) : { storeAttachmentBytes: undefined };
   const screened = rows.length && runtime.config.hostedScreen ? (await wrapModuleLoad(() => import('./screened-html.js'))).screenedAttachment : undefined;
   const files: Awaited<ReturnType<NonNullable<typeof storeAttachmentBytes>>>[] = [], left: string[] = [], contentIds = new Set<string>();
   let bytes = 0;

@@ -1,5 +1,7 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { log, logError, ModuleLoadError, wrapModuleLoad, type JobHandler, type Runtime } from './core.js';
+import { log } from './log.js';
+import { logError, ModuleLoadError, wrapModuleLoad } from './core/errors.js';
+import type { JobHandler, Runtime } from './core/types.js';
 import { LINK_RETENTION_DAYS } from './link-hosts.js';
 
 // The domain setup check. Someone adds a domain, sees its records and leaves, and nothing tells them the records never
@@ -67,7 +69,7 @@ const relative = (name: string, zone: string | undefined) => !zone ? name : name
 
 export const domainSetupCheckJob: JobHandler = async (runtime, payload, job) => {
   if (!runtime.config.multiTenant || typeof payload.domainId !== 'string' || typeof payload.token !== 'string') return;
-  const [{ derivedReadiness, hostedDomain }, { checkSetup, wildcardOf }, { checkLinkHost, withLinkRecords }] = await wrapModuleLoad(() => Promise.all([import('./operations.js'), import('./record-check.js'), import('./link-domains.js')]));
+  const [{ derivedReadiness, hostedDomain }, { checkSetup, wildcardOf }, { checkLinkHost, withLinkRecords }] = await wrapModuleLoad(() => Promise.all([import('./domains/hosted.js'), import('./record-check.js'), import('./link-domains.js')]));
   const row = await hostedDomain(runtime.db, job.workspaceId, payload.domainId);
   // Removed, added again, verified, released, adopted or built in since it was queued: nothing to check.
   if (!row || row.token !== payload.token || row.expired || row.sending_state !== 'pending' || row.identity?.adopted || row.identity?.builtin || Date.parse(row.created_at) <= Date.now() - 72 * 3600_000) return;

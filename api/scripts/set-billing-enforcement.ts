@@ -1,7 +1,7 @@
 import { parseArgs } from 'node:util';
 import { Client } from 'pg';
 import { postgresConnection } from '../src/adapters/node.js';
-import { log } from '../src/core.js';
+import { log } from '../src/log.js';
 
 const MODES = ['off', 'shadow', 'enforce'] as const;
 const usage = 'Usage: set-billing-enforcement.ts off|shadow|enforce [--receive-hold on|off] [--storage-from YYYY-MM-DD|none] [--bill-simulated on|off] --reason "why (at least 10 characters)"';

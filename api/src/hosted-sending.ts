@@ -1,5 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, type Config } from './core.js';
+import { ApiError } from './core/errors.js';
+import type { Config } from './core/types.js';
 import { productName } from './brand.js';
 
 // Simulator feedback is not reputation evidence. Admission and dispatch,

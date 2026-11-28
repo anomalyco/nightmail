@@ -1,6 +1,10 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
-import { ApiError, dashboardSession, denied, digest, errors, json, log, notFound, response, type App, type Ctx, type DbExecutor } from './core.js';
+import { ApiError, denied, errors, notFound } from './core/errors.js';
+import { dashboardSession } from './core/access.js';
+import { digest, json, response } from './core/http.js';
+import { log } from './log.js';
+import type { App, Ctx, DbExecutor } from './core/types.js';
 import { auditContext, auditInsert, operatorContext, recordAudit, requireOperator } from './audit.js';
 import { CONVERSATION_ID, verifyHandoffToken, type RegisteredConversation } from './support-platform.js';
 import type { MailHeader, Verdicts } from './db/mailbox.js';

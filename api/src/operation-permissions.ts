@@ -1,8 +1,8 @@
-import { PERMISSIONS, type PermissionName } from './core.js';
+import { PERMISSIONS, type PermissionName } from './core/errors.js';
 import { productName, productSlug } from './brand.js';
 
 /**
- * What every operation needs, as data: the permission error.required names (core.ts PERMISSIONS), its level, the scope
+ * What every operation needs, as data: the permission error.required names (core/errors.ts PERMISSIONS), its level, the scope
  * a credential's limits must cover, and who may call it. The OpenAPI document carries each row as
  * x-nightmail-permission (openapi-docs.ts), the docs show its sentence and MCP describe_tool returns it.
  *
@@ -21,7 +21,7 @@ export type OperationPermission = {
    * addresses is refused. domain: the sender domain the request names or the resource has (a domain-limited key sees
    * its own). address: the receiving address or inbox, for a key limited to addresses or a workspace-wide one.
    * recipient: received mail, for a key limited to the address it reached, a key limited to sender domains with read
-   * (mail addressed to those domains: core.ts domainMailAccess) or a workspace-wide one.
+   * (mail addressed to those domains: core/access.ts domainMailAccess) or a workspace-wide one.
    */
   scope?: 'workspace' | 'domain' | 'address' | 'recipient';
   /**
@@ -61,7 +61,7 @@ const rulesRead = needs('receivingRules', 'read', 'workspace', admin), rulesChan
 // Receiving hosts, domains and scan policy answer only an unrestricted manage credential, reads included.
 const hostsRead = needs('receivingRules', 'write', 'workspace', admin), hostsChange = rulesChange;
 const mailRead = needs('receivedMail', 'read', 'address'), mailChange = needs('receivedMail', 'write', 'address', admin);
-// The received mail a key limited to sender domains also reads, when addressed to them (core.ts domainMailAccess).
+// The received mail a key limited to sender domains also reads, when addressed to them (core/access.ts domainMailAccess).
 const recipientRead = needs('receivedMail', 'read', 'recipient');
 
 export const OPERATION_PERMISSIONS: Record<string, OperationPermission> = {

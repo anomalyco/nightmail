@@ -31,7 +31,7 @@ export type EmailSnapshot = {
   /** Live transactional only: ask the outbound content classifier before accepting into the queue. */
   screen?: boolean;
   /** Content-screen verdict recorded at accept time so the dispatcher never re-screens queued mail. 'platform': the
-   *  dashboard's test email, whose words are fixed by us and which goes only to the signed-in person (sending.ts
+   *  dashboard's test email, whose words are fixed by us and which goes only to the signed-in person (sending/front-door.ts
    *  platformTestVerdict); reason says so. */
   screenVerdict?: { status: 'passed' | 'skipped' | 'platform'; reason?: 'platform test email'; spam?: number; model?: string; digest?: string; rules?: 'probation' | 'standard' | null };
   /** Sent campaign emails keep only their unsubscribe URL; the body is re-rendered from the frozen review on read. */
@@ -58,14 +58,14 @@ export type CampaignDraft = {
   /** Only stored in the internal, immutable launch review. */
   binding?: SendingBinding;
   /** Only stored in the launch review: the workspace's postal address its footer shows. A review from before postal
-   *  addresses has none until the campaign starts sending (src/sending.ts frozenPostalAddress). */
+   *  addresses has none until the campaign starts sending (src/campaigns/run.ts frozenPostalAddress). */
   postalAddress?: string;
   /** Only stored in the launch review: the origin of the links Nightmail adds to its copies (src/link-domains.ts). A
    *  review on the link domain (or from before link hosts) has none: each copy asks when it is made. */
   linkOrigin?: string;
   name: string; from: string; fromName?: string; previewText?: string; replyTo?: string[]; region: string; subject: string; html?: string;
   attachments: string[]; tracking: boolean; unsubscribePageUrl?: string;
-  /** A required notice (src/sending.ts): to everyone in the audience but the suppressed, without an unsubscribe link. */
+  /** A required notice (src/sending/front-door.ts): to everyone in the audience but the suppressed, without an unsubscribe link. */
   requiredNotice?: boolean;
   /** The topic the campaign is about (src/topics.ts); never on a required notice. */
   topicId?: string;
@@ -83,7 +83,7 @@ export const emails = pgTable('sending_emails', {
   snapshot: jsonb('snapshot').$type<EmailSnapshot>().notNull(), simulated: boolean('simulated').notNull(), screened: boolean('screened').notNull().default(true),
   attemptStartedAt: time('attempt_started_at'), errorCode: text('error_code'), suppressionReason: text('suppression_reason'), scheduledAt: time('scheduled_at'), dispatchVersion: integer('dispatch_version').notNull().default(0),
   leaseUntil: time('lease_until'), accountPauseStartedAt: time('account_pause_started_at'),
-  // Union of public event outcomes as bit flags (migration 031 trigger); see OUTCOME in operations.ts.
+  // Union of public event outcomes as bit flags (migration 031 trigger); see EMAIL_OUTCOME_BITS in email-outcomes.ts.
   eventOutcomes: smallint('event_outcomes').notNull().default(0),
   createdAt: time('created_at').notNull().defaultNow(), updatedAt: time('updated_at').notNull().defaultNow(),
   // The table has fillfactor 85 (migration 385), so later versions of a row fit on its page and stay HOT.
@@ -105,7 +105,7 @@ export type CampaignFailure = { code: string; message: string };
 /** One (status, simulated) group of a campaign's emails with its outcome counts, as GET /v1/campaigns/{id}/stats counts them. */
 export type CampaignStatsGroup = { status: EmailStatus; simulated: boolean; count: number; accepted: number; delivered: number; bounced: number; complained: number; opened: number; clicked: number; failed: number; deliveryDelayed: number };
 /**
- * A campaign's counted outcomes for one review (src/sending.ts campaignStatsJob). computedAt: when the count started (it
+ * A campaign's counted outcomes for one review (src/campaigns/stats.ts campaignStatsJob). computedAt: when the count started (it
  * includes every change made before then); revision: the workspace's mail revision then (dashboard-cache.ts mailRevision);
  * emails: how many it counted; frozen: a later count found fewer, so the 30-day retention has begun and these stay.
  */
@@ -159,7 +159,7 @@ export const campaignReviews = pgTable('sending_campaign_reviews', {
   // Version of the per-recipient renderer (interpolation, preheader, footer) that must reproduce this review's emails.
   rendererVersion: integer('renderer_version').notNull().default(1),
   rendered: jsonb('rendered').$type<{ html?: string; text?: string }>(),
-  // Hosted screening state and its classifier budget, charged before each request (migration 312, src/sending.ts campaignVerdicts).
+  // Hosted screening state and its classifier budget, charged before each request (migration 312, src/campaigns/materialize.ts campaignVerdicts).
   screen: jsonb('screen').$type<CampaignScreen>(), screenBudget: integer('screen_budget'), screenCharged: integer('screen_charged').notNull().default(0),
   // Background audience freeze completion (migration 429): NULL while capture is pending/in progress; non-NULL once all
   // recipients are frozen in one REPEATABLE READ snapshot. staticPrepared records whether static content_hash rows were stamped inline.

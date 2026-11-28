@@ -75,12 +75,12 @@ process.on("unhandledRejection", (err) => {
   leaked.push(String(err instanceof Error ? err.message : err).slice(0, 120));
 });
 
-const [{ createApp }, { loadConfig }, { s3Storage }, { runDispatcher, initialGate }, { ensureRegionSettings }, { SESv2Client }] =
+const [{ createApp }, { loadConfig }, { s3Storage }, { runDispatcher }, { initialGate }, { ensureRegionSettings }, { SESv2Client }] =
   await Promise.all([
     import("../../src/app.ts"),
     import("../../src/config.ts"),
     import("../../src/adapters/storage.ts"),
-    import("../../src/dispatcher.ts"),
+    import("../../src/sending/dispatcher.ts"), import("../../src/sending/quota.ts"),
     import("../../src/ses-region-state.ts"),
     import("@aws-sdk/client-sesv2"),
   ]);

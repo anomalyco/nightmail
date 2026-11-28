@@ -1,12 +1,14 @@
 import { and, asc, eq, inArray, sql } from 'drizzle-orm';
-import { ApiError, id, type Ctx, type DbExecutor } from './core.js';
+import { ApiError } from './core/errors.js';
+import { id } from './core/http.js';
+import type { Ctx, DbExecutor } from './core/types.js';
 import { recordAudit } from './audit.js';
 import { mailboxDomains, mailboxes } from './db/mailbox.js';
 import type { domains } from './db/operations.js';
 import { checkMx, expectedMx } from './mailbox-dns.js';
 import { queueReconcile } from './mailbox-setup.js';
 import { reservedPlatformName } from './domain-claims.js';
-import { derivedReadiness, dnsUnavailable, followMxJob, hostedDomain, recheckJob, type HostedDomain } from './operations.js';
+import { derivedReadiness, dnsUnavailable, followMxJob, hostedDomain, recheckJob, type HostedDomain } from './domains/hosted.js';
 import { establishedHost, inspectReceivingHost, type ReceivingIssue } from './receiving-host.js';
 import { claimProjection, hostEnabled, hostGraceStart, hostRemoved as removed, hostRoutes } from './states.js';
 import { productName } from './brand.js';

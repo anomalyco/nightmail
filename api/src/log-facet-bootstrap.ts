@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
-import { statementTimedOut, type Runtime } from './core.js';
+import { statementTimedOut } from './core/http.js';
+import type { Runtime } from './core/types.js';
 import { enrollLogFacet, readPublishedLogFacet, reusableLogFacetSlot, type FacetTicket } from './log-facet-fold.js';
 import { LOG_FACET_MAX_SOURCE_ROWS, logFacetSourceRows } from './log-facet-source.js';
 

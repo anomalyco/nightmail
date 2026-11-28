@@ -2,7 +2,7 @@ import { drizzle } from 'drizzle-orm/node-postgres';
 import { parseArgs } from 'node:util';
 import { Client } from 'pg';
 import { postgresConnection } from '../src/adapters/node.js';
-import { log } from '../src/core.js';
+import { log } from '../src/log.js';
 import { setOperatorRole, type OperatorRole } from '../src/operator-identity.js';
 
 // Grants or removes a Nightmail platform operator role (the /operator area and /v1/operator/*). Operators are Anomaly staff,

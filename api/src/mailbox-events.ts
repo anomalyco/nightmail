@@ -1,7 +1,8 @@
 import {ActionRetry,deliverEndpoint} from './endpoint-delivery.js';
 import { refusedForGood, retryAfterMs } from './ritual-retry.js';
 import { and, eq, getTableColumns, gt, inArray, isNotNull, max, sql, type SQL } from 'drizzle-orm';
-import { ApiError, lazyModule, ModuleLoadError, type DbExecutor, type JobHandler } from './core.js';
+import { ApiError, lazyModule, ModuleLoadError } from './core/errors.js';
+import type { DbExecutor, JobHandler } from './core/types.js';
 import { mailboxEvents, mailMessages } from './db/mailbox.js';
 import { addressedToDomains, oneOf } from './domain-mail.js';
 import { inboundHookClaim,JobDeferred,mailboxWebhookAttempts,retryDatabaseFailures } from './jobs.js';
@@ -77,7 +78,7 @@ export async function latestCursor(db: DbExecutor, workspaceId: string, scope: E
 
 const loadEndpoints = lazyModule(() => import('./endpoints.js'));
 const webhookJob: JobHandler = async (runtime, payload, job) => {
-  const delivery=job.webhook!==undefined?job.webhook:(await runtime.db.execute<import('./core.js').ClaimedWebhook>(sql`WITH claimed AS (SELECT ${job.id}::text AS id,${job.workspaceId}::text AS workspace_id,'mailbox.webhook' AS type,${JSON.stringify(payload)}::jsonb AS payload),${inboundHookClaim} SELECT * FROM inbound_hooks WHERE blocked IS NULL`)).rows[0];
+  const delivery=job.webhook!==undefined?job.webhook:(await runtime.db.execute<import('./core/types.js').ClaimedWebhook>(sql`WITH claimed AS (SELECT ${job.id}::text AS id,${job.workspaceId}::text AS workspace_id,'mailbox.webhook' AS type,${JSON.stringify(payload)}::jsonb AS payload),${inboundHookClaim} SELECT * FROM inbound_hooks WHERE blocked IS NULL`)).rows[0];
   if(!delivery)return;
   const {sendToEndpoint}=await loadEndpoints();
   let statusCode: number | null = null, error: string | null = null, retryable = true;

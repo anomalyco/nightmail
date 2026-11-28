@@ -168,18 +168,18 @@ const [
   { createApp },
   { loadConfig },
   { s3Storage },
-  { runDispatcher, initialGate },
+  { runDispatcher }, { initialGate },
   { processJobs },
-  { jobHandlers: sendingJobHandlers, ingestRoutineSesEvents, probeSize },
+  { jobHandlers: sendingJobHandlers }, { ingestRoutineSesEvents }, { probeSize },
   { ensureRegionSettings },
   { SESv2Client },
 ] = await Promise.all([
   import("../../src/app.ts"),
   import("../../src/config.ts"),
   import("../../src/adapters/storage.ts"),
-  import("../../src/dispatcher.ts"),
+  import("../../src/sending/dispatcher.ts"), import("../../src/sending/quota.ts"),
   import("../../src/jobs.ts"),
-  import("../../src/sending.ts"),
+  import("../../src/sending/jobs.ts"), import("../../src/sending/events.ts"), import("../../src/sending/schemas.ts"),
   import("../../src/ses-region-state.ts"),
   import("@aws-sdk/client-sesv2"),
 ]);
@@ -444,7 +444,7 @@ async function verifyAllInvariants(t: Trial) {
     t.pauseBoundViolations.push(`released while paused: expanded=${st.expanded} > expandedAtPause=${t.expandedAtPause}`);
   }
 
-  // Rule 5: probe invariants (sending.ts:2850: hosted, live / non-simulated campaigns only)
+  // Rule 5: probe invariants (campaigns/run.ts: hosted, live / non-simulated campaigns only)
   const probeApplies =
     !st.simulated && t.cfg.recipients > 100 && !t.cfg.priorCleanCampaign && st.total > probeSize(st.total) && !st.probeSkippedAt;
   if (probeApplies) {

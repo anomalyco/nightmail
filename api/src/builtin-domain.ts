@@ -1,7 +1,11 @@
 import { labelSkeleton } from './label-skeleton.js';
 import { sql } from 'drizzle-orm';
 import type { GetEmailIdentityCommandOutput, SESv2Client } from '@aws-sdk/client-sesv2';
-import { ApiError, assertSharedAccount, getSes, id, isSimulatedSes, log, logError, ModuleLoadError, type Config, type Ctx, type DbExecutor, type JobHandler, type Runtime } from './core.js';
+import { ApiError, logError, ModuleLoadError } from './core/errors.js';
+import { assertSharedAccount, getSes, isSimulatedSes } from './core/ses.js';
+import { id } from './core/http.js';
+import { log } from './log.js';
+import type { Config, Ctx, DbExecutor, JobHandler, Runtime } from './core/types.js';
 import { JobDeferred } from './jobs.js';
 import { SEND_LIMITS } from './send-limits.js';
 import { ADD_OWN_DOMAIN, BUILTIN_APEX_LOCALS, builtinApex, BUILTIN_UNSUPPORTED, BUILTIN_UNSUPPORTED_WORDS, builtinLimitsText, type BuiltinUnsupported } from './builtin-limits.js';

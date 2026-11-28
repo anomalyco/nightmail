@@ -1,6 +1,10 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { sql, type SQL } from 'drizzle-orm';
-import { actorMailAccess, ApiError, errors, id, isoTime, json, log, memberRefused, notFound, receivingAdminRefusal, response, wrapModuleLoad, type Actor, type App, type Ctx, type DbExecutor, type Runtime } from './core.js';
+import { actorMailAccess, memberRefused, receivingAdminRefusal } from './core/access.js';
+import { ApiError, errors, notFound, wrapModuleLoad } from './core/errors.js';
+import { id, isoTime, json, response } from './core/http.js';
+import { log } from './log.js';
+import type { Actor, App, Ctx, DbExecutor, Runtime } from './core/types.js';
 import { placementRoot } from './domain-registry.js';
 import { auditContext, auditInsert, systemContext, type AuditContext, type AuditEvent } from './audit.js';
 import { productName } from './brand.js';
@@ -46,7 +50,7 @@ type ActionSpec<S extends z.ZodRawShape, T = z.infer<z.ZodObject<S>>> = {
   wake?: (a: Actor, body: Record<string, unknown>) => void; delivery?: { table: SQL; id: (t: T, body: Record<string, unknown> | undefined) => unknown };
 };
 const spec = <S extends z.ZodRawShape>(s: ActionSpec<S>) => s;
-const operations = () => wrapModuleLoad(() => import('./operations.js')), endpoints = () => wrapModuleLoad(() => import('./endpoints.js'));
+const webhookDeliveries = () => wrapModuleLoad(() => import('./webhooks/deliveries.js')), hostedDomains = () => wrapModuleLoad(() => import('./domains/hosted.js')), webhookCrypto = () => wrapModuleLoad(() => import('./webhooks/crypto.js')), endpoints = () => wrapModuleLoad(() => import('./endpoints.js'));
 const webhookPool = (a: Actor) => { a.wakeJobPool = 'webhook'; };
 const ACTION_SPECS = {
   retry_webhook_delivery: spec({
@@ -56,7 +60,7 @@ const ACTION_SPECS = {
       FROM operation_deliveries d JOIN operation_webhooks h ON h.id = d.webhook_id AND h.workspace_id = d.workspace_id JOIN workspaces w ON w.id = d.workspace_id
       WHERE d.id = ${t.deliveryId} AND d.webhook_id = ${t.webhookId} AND d.workspace_id = ANY(${scope})`,
     sentence: (_, f, w) => `Retry the ${w.event} delivery from ${readable(f.at)} to your sending webhook ${w.webhook}, ${w.where}. ${standing(f.status, f.attempts)}`,
-    perform: async (runtime, tx, t, a) => ({ body: await (await operations()).retrySendingDelivery(runtime, tx, a, t.webhookId, t.deliveryId),
+    perform: async (runtime, tx, t, a) => ({ body: await (await webhookDeliveries()).retrySendingDelivery(runtime, tx, a, t.webhookId, t.deliveryId),
       trail: { action: 'webhook.delivery_retry', target: { type: 'webhook_delivery', id: t.deliveryId }, details: { webhook: t.webhookId } } }),
     wake: webhookPool, delivery: { table: sql`operation_deliveries`, id: t => t.deliveryId },
   }),
@@ -65,7 +69,7 @@ const ACTION_SPECS = {
     facts: (t, scope) => sql`SELECT h.workspace_id, w.name AS workspace, h.url, h.description AS name FROM operation_webhooks h JOIN workspaces w ON w.id = h.workspace_id
       WHERE h.id = ${t.webhookId} AND h.workspace_id = ANY(${scope})`,
     sentence: (_, __, w) => `Send a test email.delivered event to your sending webhook ${w.webhook}, ${w.where}. No email is sent.`,
-    perform: async (runtime, tx, t, a) => { const body = await (await operations()).testSendingWebhook(runtime, tx, a, t.webhookId);
+    perform: async (runtime, tx, t, a) => { const body = await (await webhookDeliveries()).testSendingWebhook(runtime, tx, a, t.webhookId);
       return { body, trail: { action: 'webhook.test', target: { type: 'webhook', id: t.webhookId }, details: { delivery: body.id } } }; },
     wake: webhookPool, delivery: { table: sql`operation_deliveries`, id: (_, body) => body?.id },
   }),
@@ -107,7 +111,7 @@ const ACTION_SPECS = {
     facts: (t, scope) => sql`SELECT c.workspace_id, w.name AS workspace, c.draft->>'name' AS campaign, c.state AS status, c.expanded, c.total
       FROM sending_campaigns c JOIN workspaces w ON w.id = c.workspace_id WHERE c.id = ${t.campaignId} AND c.workspace_id = ANY(${scope})`,
     sentence: (_, f, w) => { w.labels.campaign = label(f.campaign); return `Pause the campaign {campaign} ${w.where}. It stops releasing new recipients (${Number(f.expanded)} of ${Number(f.total)} released so far); resuming continues from the same place.`; },
-    perform: async (runtime, tx, t, a, audit) => { await (await wrapModuleLoad(() => import('./sending.js'))).pauseSendingCampaign(runtime, tx, a, t.campaignId, audit); return { body: { id: t.campaignId, state: 'paused' } }; },
+    perform: async (runtime, tx, t, a, audit) => { await (await wrapModuleLoad(() => import('./sending/schemas.js'))).pauseSendingCampaign(runtime, tx, a, t.campaignId, audit); return { body: { id: t.campaignId, state: 'paused' } }; },
   }),
 };
 type Kind = keyof typeof ACTION_SPECS;
@@ -293,7 +297,7 @@ async function recheckDomain(c: Ctx, conversation: Conversation, domainId: strin
   const context = supportContext(c, conversation);
   const readiness = await c.env.db.transaction(async tx => {
     await takeTurn(tx, as.kind, as.target.id);
-    const readiness = await (await operations()).verifyHostedDomain({ ...c.env, db: tx }, a, domainId);
+    const readiness = await (await hostedDomains()).verifyHostedDomain({ ...c.env, db: tx }, a, domainId);
     const queued = a.wakeJobs === 1, details = { domain: domain!.name, ...as.details, queued };
     await tx.execute(auditInsert(context, { workspaceId: domain!.workspace_id, userId: conversation.userId, target: { type: 'domain', id: domainId }, ticketRef: conversation.id, action: 'domain.verify', details, internal: false }));
     await recordAction(tx, context, conversation, domain!.workspace_id, as.kind, as.target, details);
@@ -407,7 +411,7 @@ export function registerSupportActions(app: App) {
     a.wakeJobs = 1;
     const { rows: [now] } = await c.env.db.execute<{ requested_at: string | null; expires_at: string | null; target: string | null }>(sql`SELECT requested_at::text, expires_at::text, encrypted_target AS target FROM mailbox_webhooks WHERE id = ${endpointId} AND workspace_id = ${wid}`);
     let recipientDomain: string | null = null;
-    try { const address = await (await operations()).decrypt(c.env, now!.target!, `${wid}:endpoint:${endpointId}`); recipientDomain = address.slice(address.lastIndexOf('@') + 1).toLowerCase() || null; } catch { /* Named by its endpoint alone. */ }
+    try { const address = await (await webhookCrypto()).decrypt(c.env, now!.target!, `${wid}:endpoint:${endpointId}`); recipientDomain = address.slice(address.lastIndexOf('@') + 1).toLowerCase() || null; } catch { /* Named by its endpoint alone. */ }
     return c.json({ id: endpointId, workspaceId: wid, name: forward!.key, status: 'pending' as const, requestedAt: isoTime(now?.requested_at), expiresAt: isoTime(now?.expires_at), recipientDomain }, 200);
   });
 
