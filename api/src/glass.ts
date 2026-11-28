@@ -83,7 +83,7 @@ const Glass = z.object({
   builtin: z.object({ active: int, ready: int.describe('Built-in domains that send.'), revoked: int,
     parent: z.object({ name: z.string(), ok: z.boolean(), problem: z.string().nullable(), trippedAt: z.string().nullable(), resetAt: z.string().nullable(), checkedAt: z.string() }).nullable() }),
   support: z.object({ open: int, ticketed: int, noReply: int.describe('Conversations in Needs you because the customer wrote and nothing was sent back for 10 minutes. Should always be 0.'),
-    staffMailFailed: int.describe('Emails to the team (src/support-staff-mail.ts) the support platform failed to send three times and that haven\u2019t gone since. Should always be 0.'),
+    staffMailFailed: int.describe('Emails to the team (src/support-staff-mail.ts) the support platform failed to send three times, with no later email in their thread gone since. Should always be 0.'),
     overLimit: int.describe('Emails of the last 7 days that passed the sender checks but got only the sign-in reply: nobody claimed them, and the answering limits refused their general answer (the support platform\u2019s unanswered entry). Nobody is told of them; a count to watch, not a fault.'),
     week: z.object({ answerable: int.describe('Conversations started in the last 7 days, leaving out agent feedback and those counted apart.'),
       withoutHuman: int.describe('Of answerable, those that ended (closed, marked done, or quiet for 24 hours after an agent answer) with no staff reply, no ticket for a person (a feature request the agent logged doesn\u2019t count), no held answer, no failed send and never "no reply sent". Whether the answers were right is not measured.'),
@@ -208,7 +208,9 @@ export async function readGlass(runtime: Pick<Runtime, 'db' | 'config'>): Promis
         FROM builtin_parent p ORDER BY p.name LIMIT 1) AS parent,
       (SELECT json_build_object('open',count(*) FILTER (WHERE c.status='open'),'ticketed',count(*) FILTER (WHERE c.status='ticketed'),
           'last',count(*) FILTER (WHERE c.created_at>=t.day),'previous',count(*) FILTER (WHERE c.created_at>=t.since48 AND c.created_at<t.day),'no_reply',${noReplyCount},
-          'staff_mail_failed',(SELECT count(*) FROM support_staff_emails e WHERE e.sent_at IS NULL AND e.failed_at IS NOT NULL),
+          -- Staff emails failed for good whose thread has had none go since: the team never heard of what they were about.
+          'staff_mail_failed',(SELECT count(*) FROM support_staff_emails e WHERE e.sent_at IS NULL AND e.failed_at IS NOT NULL
+            AND NOT EXISTS (SELECT FROM support_staff_emails n WHERE n.thread_key=e.thread_key AND n.seq>e.seq AND n.sent_at IS NOT NULL)),
           -- Emails that passed the sender checks (general_answer) whose general answer the limits refused: their unanswered entry.
           'over_limit',(SELECT count(*) FROM support_email_signins si WHERE si.general_answer AND si.created_at>=now()-interval '7 days' AND EXISTS (SELECT FROM support_messages u
             WHERE u.conversation_id=si.conversation_id AND u.author='system' AND u.kind='unanswered' AND u.source_message_id=si.message_id)))

@@ -441,10 +441,14 @@ export function registerSupportInbox(app: App) {
           FROM jsonb_to_recordset(${JSON.stringify(fresh)}::jsonb) AS m(id text, seq int, author text, kind text, text text, tools jsonb, attachments jsonb, files jsonb, source text, delivery text, reason text, at timestamptz)
           ON CONFLICT (id) DO NOTHING RETURNING id`);
         if (inserted.length !== fresh.length) throw conflict();
-        // Something new: a conversation staff marked done comes back to Needs you if it needs them.
+        // Something new: a conversation staff marked done comes back to Needs you if it needs them. The agent adding to its
+        // ticket (system kind ticket_note: it filed again on a conversation that has one) reopens a resolved ticket too.
+        const added = fresh.some(m => m.author === 'system' && m.kind === 'ticket_note');
         await tx.execute(sql`UPDATE support_conversations SET messages = messages + ${fresh.length},
             last_message_at = greatest(last_message_at, (SELECT max(created_at) FROM support_messages WHERE conversation_id = ${id} AND seq > ${conv!.messages})),
-            done_at = NULL, done_by = NULL
+            done_at = NULL, done_by = NULL,
+            ticket_resolved_at = CASE WHEN ${added}::boolean AND ticket_id IS NOT NULL THEN NULL ELSE ticket_resolved_at END,
+            ticket_resolved_by = CASE WHEN ${added}::boolean AND ticket_id IS NOT NULL THEN NULL ELSE ticket_resolved_by END
           WHERE id = ${id}`);
       }
       const numbered = new Map(fresh.map(m => [m.id, m.seq]));

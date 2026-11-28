@@ -98,6 +98,7 @@ function interruptible(ctx, bane) {
 }
 function failingDb(ctx, db) {
   const fail = async () => {
+    if (failTurns === 'ticket') return;
     const how = failTurns; failTurns = null;
     if (how === 'abort') { await ctx.storage.sync(); ctx.abort('fixture: evicted'); throw new Error('aborted'); }
     if (how === 'throw') throw new Error('D1_ERROR: fixture transient failure');
@@ -106,6 +107,10 @@ function failingDb(ctx, db) {
     if (prop !== 'prepare') { const value = target[prop]; return typeof value === 'function' ? value.bind(target) : value; }
     return query => {
       const statement = target.prepare(query);
+      // 'ticket': the ticket check after a turn (harnessTicket) fails once, as a D1 outage would.
+      if (failTurns === 'ticket' && query.startsWith('SELECT id FROM tickets WHERE conversation_id')) {
+        return { bind: (...args) => { const bound = statement.bind(...args); return { first: async () => { failTurns = null; throw new Error('D1_ERROR: fixture ticket failure'); }, run: () => bound.run(), all: () => bound.all() }; } };
+      }
       if (!query.startsWith('UPDATE conversations SET turns')) return statement;
       return { bind: (...args) => { const bound = statement.bind(...args); return { run: async () => { await fail(); return bound.run(); } }; } };
     };
@@ -169,8 +174,14 @@ export class SupportConversation extends Conversation {
     if (unavailable.delete(input.messageId)) throw new Error('fixture: unavailable');
     return super.enqueueInbound(input);
   }
-  async fixture({ expire, tick, age, unavailable: id, route, fail, ageActions, actionsDue, spend, claimWait, adopt }) {
+  async fixture({ expire, tick, age, unavailable: id, route, fail, ageActions, actionsDue, spend, claimWait, adopt, fill, overflow }) {
     const sql = this.ctx.storage.sql, has = name => sql.exec('SELECT 1 FROM sqlite_master WHERE name=?', name).toArray().length > 0;
+    // A transcript at its bound: fill customer messages written straight into it (mirrored as nothing new: the cursor moves past them).
+    if (fill) {
+      for (let i = 0; i < fill; i++) sql.exec("INSERT INTO _support_transcript (id, role, kind, text, at, tools) VALUES (?, 'user', NULL, ?, ?, '[]')", 'msg_fill' + String(i).padStart(12, '0'), 'Earlier message ' + i, new Date().toISOString());
+      const meta = this.meta(); meta.mirrored = sql.exec('SELECT max(seq) AS n FROM _support_transcript').one().n; this.save(meta);
+    }
+    if (overflow !== undefined) { const meta = this.meta(); meta.overflow = overflow; this.save(meta); }
     // A filed chat half adopted: this object set up from Nightmail's record, and the D1 row never written (a failure
     // between adoptFiledChat's two steps).
     if (adopt) await this.adoptFiled((await this.env.BANE.filedConversation(adopt)).body);
@@ -179,7 +190,7 @@ export class SupportConversation extends Conversation {
     if (ageActions) sql.exec('UPDATE _support_actions SET created_at = created_at - ?', ageActions);
     if (actionsDue) sql.exec('UPDATE _support_actions SET next_check_at = 0');
     if (id) unavailable.add(id);
-    if (fail) failTurns = fail;
+    if (fail) failTurns = fail === 'none' ? null : fail;
     if (expire && has('_support_work')) sql.exec('UPDATE _support_work SET due_at=1 WHERE id=?', expire);
     if (age) { const meta = this.meta(); meta.lastActivity -= age; if (meta.closedAt) meta.closedAt -= age; this.save(meta); }
     if (spend) { const meta = this.meta(); meta.turns = spend; this.save(meta); }
@@ -2251,7 +2262,7 @@ describe('support Worker', () => {
     afterAll(() => instance?.dispose());
     type Row = { id: string; kind: string; state: string; attempts: number; due_at: number; last_error: string | null };
     type Run = { rows: Row[]; legacy: { message_id: string; state: string }[]; grant: boolean; alarm: number | null; before: number; meta: { closedAt: number | null } | null; actions: { id: string; state: string; attempts: number; next_check_at: number }[] };
-    async function drive(id: string, options: { tick?: boolean; expire?: string; age?: number; unavailable?: string; route?: string; fail?: 'throw' | 'reply'; ageActions?: number; actionsDue?: boolean; spend?: number; claimWait?: string; adopt?: string } = {}) {
+    async function drive(id: string, options: { tick?: boolean; expire?: string; age?: number; unavailable?: string; route?: string; fail?: 'throw' | 'reply' | 'ticket' | 'none'; ageActions?: number; actionsDue?: boolean; spend?: number; claimWait?: string; adopt?: string; fill?: number; overflow?: number } = {}) {
       const res = await instance.dispatchFetch(`${SUPPORT}/__conversation`, { method: 'POST', body: JSON.stringify({ id, ...options }) });
       assert.equal(res.status, 200);
       return await res.json() as Run;
@@ -2385,10 +2396,17 @@ describe('support Worker', () => {
       assert.ok(await until(f => f.type === 'message.end' && /added it to your ticket/.test(f.text ?? '')));
       assert.ok(!frames.some(f => f.type === 'closed' || f.type === 'error'), JSON.stringify(frames.map(f => [f.type, f.code])));
       assert.equal(recorded.length, models, 'No model call for a message past the conversation\u2019s limits.');
-      // The inbox has both messages and the ticket (Needs you), and the replies are 'unanswered' lines: nothing reached them yet.
-      const box = await eventually(async () => { const box = await inboxOf(first.conversationId); return box?.state.ticket && box.messages.length >= 4 ? box : undefined; });
-      assert.deepEqual(box.messages.slice(-4).map((m: any) => [m.author, m.kind, m.text.slice(0, 12)]), [['customer', null, 'One more que'], ['system', 'unanswered', 'I can’t answ'], ['customer', null, 'Still there?'], ['system', 'unanswered', 'I can’t answ']]);
+      // The inbox has both messages and the ticket (Needs you), and the replies are 'unanswered' lines: nothing reached them
+      // yet. The second, added to the ticket, is a ticket note too: what was filed and what they asked.
+      const box = await eventually(async () => { const box = await inboxOf(first.conversationId); return box?.state.ticket && box.messages.length >= 5 ? box : undefined; });
+      assert.deepEqual(box.messages.slice(-5).map((m: any) => [m.author, m.kind, m.text.slice(0, 12)]), [['customer', null, 'One more que'], ['system', 'unanswered', 'I can’t answ'], ['customer', null, 'Still there?'], ['system', 'ticket_note', 'Added to tic'], ['system', 'unanswered', 'I can’t answ']]);
+      assert.equal(box.messages.at(-2).text, `Added to ticket ${box.state.ticket.id}: Conversation limit reached\nThe conversation reached its 60-turn limit, so the agent answers nothing more in it.\nWhat they asked: Still there?`);
       assert.equal(box.state.ticket.brief.title, 'Conversation limit reached');
+      // Never in the panel: a reconnect's history has no ticket note.
+      const again = await connect((await start()).socketUrl, instance);
+      const history = await again.until(f => f.type === 'history');
+      assert.ok(!history.messages.some((m: any) => m.kind === 'ticket_note' || m.text.startsWith('Added to ticket')), JSON.stringify(history.messages.slice(-3)));
+      again.ws.close();
       ws.close();
       assert.equal((await start()).conversationId, first.conversationId, 'Still open: resuming finds the ticketed conversation.');
     });
@@ -2408,16 +2426,64 @@ describe('support Worker', () => {
       // Never an error to retry, and no support address anywhere.
       assert.ok(!c.frames.some(f => f.type === 'error') && c.frames.every(f => !JSON.stringify(f).includes('support@')), JSON.stringify(c.frames.map(f => [f.type, f.code])));
       const tickets = (await (await db()).prepare('SELECT title, ask, notes FROM tickets WHERE conversation_id = ?').bind(c.id).all<{ title: string; ask: string; notes: string }>()).results;
-      assert.deepEqual(tickets.map(r => [r.title, r.ask, JSON.parse(r.notes).length]), [['The AI failed to answer', 'Why are Gmail bounces up?', 1]], 'One ticket for the conversation; the second failure is a note on it.');
-      // The inbox: both messages kept, each followed by its 'unanswered' line, and the ticket listed (Needs you).
-      const box = await eventually(async () => { const box = await inboxOf(c.id); return box?.state.ticket && box.messages.length === 4 ? box : undefined; });
-      assert.deepEqual(box.messages.map((m: any) => [m.author, m.kind]), [['customer', null], ['system', 'unanswered'], ['customer', null], ['system', 'unanswered']]);
+      assert.deepEqual(tickets.map(r => [r.title, r.ask, JSON.parse(r.notes).map((n: any) => [n.title, n.ask])]), [['The AI failed to answer', 'Why are Gmail bounces up?', [['The AI failed to answer', 'Hello?']]]], 'One ticket for the conversation; the second failure is a note on it, with what they asked.');
+      // The inbox: both messages kept, each followed by its 'unanswered' line (the second, added to the ticket, by a ticket
+      // note before it), and the ticket listed (Needs you).
+      const box = await eventually(async () => { const box = await inboxOf(c.id); return box?.state.ticket && box.messages.length === 5 ? box : undefined; });
+      assert.deepEqual(box.messages.map((m: any) => [m.author, m.kind]), [['customer', null], ['system', 'unanswered'], ['customer', null], ['system', 'ticket_note'], ['system', 'unanswered']]);
+      assert.ok(box.messages[3].text.endsWith('\nWhat they asked: Hello?'), box.messages[3].text);
       assert.equal(box.state.ticket.brief.title, 'The AI failed to answer');
       // Once the model is back, the conversation is answered again.
       c.say('mf3', 'Why are Gmail bounces up?');
       assert.ok(await c.until(f => f.type === 'message.end' && /Gmail hard-bounced/.test(f.text ?? '')));
       c.ws.close();
     }, 180_000);
+
+    test('a chat turn whose D1 write fails after the model ends still ends for the panel: its reply closes and the input opens again (status busy false)', async () => {
+      const c = await chat(handoff('usr_wedged'));
+      await setInbox({ id: c.id, channel: 'chat' });
+      control.failStatus = 400;
+      try {
+        // The model fails, so the message goes to the team, and the ticket check (D1) fails too: the turn throws.
+        await drive(c.id, { fail: 'ticket' });
+        c.say('wd1', 'Why are Gmail bounces up?');
+        const started = await c.until(f => f.type === 'message.start' && f.kind === 'reply');
+        assert.ok(started, JSON.stringify(c.frames.map(f => f.type)));
+        const after = () => c.frames.slice(c.frames.indexOf(started));
+        const idle = await eventually(async () => after().some(f => f.type === 'status' && f.busy === false) || undefined);
+        assert.ok(idle, `Never idle again: ${JSON.stringify(after().map(f => [f.type, f.busy]))}`);
+        assert.ok(after().some(f => f.type === 'message.end' && f.messageId === started.messageId), 'Its reply ended.');
+      } finally { control.failStatus = 0; await drive(c.id, { fail: 'none' }); }
+      c.ws.close();
+    }, 120_000);
+
+    test('a chat past the transcript\u2019s bound: each later message goes to the team as a ticket note, at most 20, then the chat says plainly it takes no more and passes nothing on', async () => {
+      const c = await chat(handoff('usr_full'));
+      await setInbox({ id: c.id, channel: 'chat' });
+      await drive(c.id, { fill: 200 });
+      const models = recorded.length, full = () => c.frames.filter(f => f.type === 'error' && f.code === 'BUDGET_EXHAUSTED');
+      c.say('fu1', 'One more thing about my bounces');
+      assert.match((await c.until(f => f.type === 'error' && f.code === 'BUDGET_EXHAUSTED'))!.message, /^This conversation is full, so I’ve passed your message to our team with it\./);
+      assert.ok(await c.until(f => f.type === 'ticket.filed'), 'Its ticket is filed with the message.');
+      c.say('fu2', 'And one about my domain');
+      assert.ok(await eventually(async () => full().length === 2 || undefined));
+      // The first is the ticket's ask; the second, added to it, a ticket note in the inbox with what they asked.
+      const box = await eventually(async () => { const box = await inboxOf(c.id); return box?.state.ticket && box.messages.some((m: any) => m.kind === 'ticket_note') ? box : undefined; });
+      assert.equal(box.state.ticket.brief.ask, 'One more thing about my bounces');
+      assert.ok(box.messages.find((m: any) => m.kind === 'ticket_note').text.endsWith('\nWhat they asked: And one about my domain'));
+      assert.equal((await drive(c.id) as any).meta.overflow, 2);
+      // Past the cap: refused, said so, and nothing more reaches the inbox or the ticket.
+      await drive(c.id, { overflow: 20 });
+      const before = (await inboxOf(c.id)).messages.length;
+      c.say('fu3', 'Are you still there?');
+      assert.ok(await eventually(async () => full().length === 3 || undefined));
+      assert.equal(full()[2].message, 'This conversation is full and can’t take more messages, so this one wasn’t sent. Our team has the conversation and will reply here, or by email when this chat isn’t open.');
+      await sleep(1000);
+      assert.equal((await inboxOf(c.id)).messages.length, before, 'Nothing passed on.');
+      assert.equal((await drive(c.id) as any).meta.overflow, 20);
+      assert.equal(recorded.length, models, 'No model call past the bound.');
+      c.ws.close();
+    }, 120_000);
 
     test('the staff inbox: a chat’s transcript and state are mirrored in order; with Nightmail down they wait and catch up in order', async () => {
       const c = await chat();

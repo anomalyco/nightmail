@@ -12401,6 +12401,11 @@ describe('Hosted MCP OAuth and tools', () => {
           // One credit proposal waits at a time: another amount is refused; the same ask answers the waiting one.
           error(reply(await proposeAs({ amountCents: 5000 })), 409, 'SUPPORT_CREDIT_PROPOSAL_OPEN');
           assert.deepEqual([reply(await proposeAs({ amountCents: 25000 })).status, reply(await proposeAs({ amountCents: 25000 })).body.id], [200, asked.body.id]);
+          // In its last hour too: the same ask answers the waiting one, never a second proposal beside it.
+          const expiresAt = (await db.query("UPDATE support_approvals SET expires_at = date_trunc('milliseconds', now() + interval '20 minutes') WHERE id = $1 RETURNING expires_at", [asked.body.id])).rows[0].expires_at as Date;
+          const lastHour = reply(await proposeAs({ amountCents: 25000 }));
+          assert.deepEqual([lastHour.status, lastHour.body.id, lastHour.body.expiresAt], [200, asked.body.id, expiresAt.toISOString()]);
+          assert.equal((await db.query("SELECT count(*)::int AS n FROM support_approvals WHERE conversation_id = $1 AND state = 'proposed'", [own])).rows[0].n, 1);
           // Past the console's own $1,000 a grant, nothing is proposed.
           error(reply(await proposeAs({ amountCents: 100001 })), 422, 'VALIDATION_FAILED');
           // Approve checks the cap again: a payload over $100 (made before the cap, or by hand) fails and grants nothing.
@@ -12634,14 +12639,56 @@ describe('Hosted MCP OAuth and tools', () => {
           assert.deepEqual(ok(reply(await platform.staffMailFailed(mail.key, { code: 'RATE_LIMITED' }))), { key: mail.key, attempts: 3, failed: true, sent: false });
           assert.equal(await failed(), before + 1, 'Three failed tries: not sent, on Glass.');
           assert.deepEqual((await db.query('SELECT attempts, last_error, failed_at IS NOT NULL AS failed FROM support_staff_emails WHERE key = $1', [mail.key])).rows[0], { attempts: 3, last_error: 'RATE_LIMITED', failed: true });
-          assert.ok((await due()).some((m: Json) => m.key === mail.key), 'Still offered to the support platform, every sweep.');
+          assert.ok(!(await due()).some((m: Json) => m.key === mail.key), 'Failed for good: never offered again.');
           error(reply(await platform.staffMailFailed(mail.key, { code: 'not a code' } as never)), 422);
           error(reply(await platform.staffMailFailed(`staff-${'0'.repeat(24)}-1`, { code: 'HTTP_503' })), 404);
           error(await send('POST', `/v1/operator/support/staff-mail/${mail.key}/failed`, keyed(operator), { code: 'HTTP_503' }), 403, 'SUPPORT_PLATFORM_REQUIRED');
-          // It goes: off Glass, and a late failure report changes nothing.
+          // A send in flight that went after all: off Glass, and a late failure report changes nothing.
           await sent(mail);
           assert.equal(await failed(), before, 'Sent: off Glass.');
           assert.deepEqual(ok(reply(await platform.staffMailFailed(mail.key, { code: 'HTTP_503' }))), { key: mail.key, attempts: 3, failed: false, sent: true });
+          assert.equal(await failed(), before);
+        });
+
+        await t.test('17a staff emails that failed for good hold up nothing: more than a batch of them never starve the rest, and the thread of one that failed hears of the next change in a first email of its own', async () => {
+          ok(reply(await platform.pullOutbox()));
+          const { readGlass } = await import('./src/glass.js'), { STAFF_MAIL_LIMITS } = await import('./src/support-staff-mail.js'), failed = async () => (await readGlass(runtime)).support.staffMailFailed;
+          const due = async () => ok(reply(await platform.staffMail())).data as Json[];
+          let n = 0;
+          const sent = async (mail: Json) => { n++; return ok(reply(await platform.staffMailSent(mail.key, { threadId: mail.threadId ?? `thr_good_${n}`, messageId: `msg_good_${n}` }))); };
+          const later = () => db.query("UPDATE support_staff_emails SET created_at = created_at - interval '2 hours'; UPDATE support_staff_threads SET last_sent_at = last_sent_at - interval '2 hours', opened_at = opened_at - interval '2 hours'");
+          await later();
+          for (let i = 0; i < 30; i++) { const batch = await due(); if (!batch.length) break; for (const mail of batch) await sent(mail); await later(); }
+          const before = await failed();
+          // More than a batch of old emails failed for good (written by hand, oldest first), each in a thread of its own.
+          const stale = Array.from({ length: STAFF_MAIL_LIMITS.batch + 1 }, (_, i) => ({ thread: `mail:thr_stale_${hex().slice(0, 12)}`, key: `staff-${hex().slice(0, 24)}-1`, i }));
+          for (const s of stale) {
+            await db.query("INSERT INTO support_staff_threads(key, subject) VALUES ($1, 'Stale')", [s.thread]);
+            await db.query("INSERT INTO support_staff_emails(key, thread_key, seq, subject, text, html, attempts, failed_at, created_at) VALUES ($1, $2, 1, 'Stale', 'Stale', '<p>Stale</p>', 3, now(), now() - interval '3 hours' + make_interval(secs => $3))", [s.key, s.thread, s.i]);
+          }
+          assert.equal(await failed(), before + stale.length);
+          // A customer now waiting gets their staff email at once, as the first in the batch: the failed ones are never offered.
+          const waiting = await stranger();
+          ok(reply(await platform.mirrorMessages(waiting, [{ id: msg(), author: 'customer', text: 'Is anyone there?', at: new Date(Date.now() - 20 * 60_000).toISOString() }])));
+          const batch = await due();
+          assert.ok(!batch.some((m: Json) => stale.some(s => s.key === m.key)), 'Failed for good: never offered.');
+          const mail = batch.find((m: Json) => m.text.includes(`/support/${waiting}`))!;
+          assert.ok(mail, JSON.stringify(batch.map((m: Json) => m.subject)));
+          assert.equal(mail.threadId, null, 'It starts its thread.');
+          // Its send fails for good too. The thread isn't pending: the next change writes its next email, a first one again
+          // (it starts the thread, with the full email, not an update in a thread nobody has).
+          for (let i = 0; i < 3; i++) ok(reply(await platform.staffMailFailed(mail.key, { code: 'HTTP_503' })));
+          assert.equal(await failed(), before + stale.length + 1);
+          ok(reply(await platform.mirrorMessages(waiting, [{ id: msg(), author: 'customer', text: 'Hello again?', at: new Date(Date.now() - 15 * 60_000).toISOString() }])));
+          const next = (await due()).find((m: Json) => m.text.includes(`/support/${waiting}`))!;
+          assert.ok(next && next.key !== mail.key && next.key.endsWith('-2'), JSON.stringify(next));
+          assert.deepEqual([next.threadId, next.replyToMessageId], [null, null]);
+          assert.ok(!next.text.includes('Since the last email') && !next.text.includes('It still needs you.'), `A first email, not an update: ${next.text}`);
+          // Once it goes, the thread's failed first one is off Glass: the team heard of the conversation.
+          await sent(next);
+          assert.equal(await failed(), before + stale.length);
+          await db.query('DELETE FROM support_staff_emails WHERE key = ANY($1::text[])', [stale.map(s => s.key)]);
+          await db.query('DELETE FROM support_staff_threads WHERE key = ANY($1::text[])', [stale.map(s => s.thread)]);
           assert.equal(await failed(), before);
         });
 

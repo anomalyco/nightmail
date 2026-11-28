@@ -40,7 +40,9 @@ import { event, itemColumns, itemFrom, triageCandidates, TRIAGE_REASONS, type It
 // ignored: never a conversation, never answered.
 //
 // A staff email the support platform can't send is reported each time it fails (POST …/{key}/failed); after three tries
-// it counts as not sent on Glass's support tile (src/glass.ts) until it goes.
+// it failed for good: never offered again, so it can't hold up the rest of staff mail or its own thread. It counts as not
+// sent on Glass's support tile (src/glass.ts) until its thread gets an email that goes. The thread's next email comes with
+// the next change, as if the failed one never was: its thread's first, when nothing in it was sent.
 
 const UPDATE_EVERY = 30, FEEDBACK_WINDOW = 60, FEEDBACK_SETTLE = 5, FEEDBACK_WAIT = 30, UNROUTED_AFTER = 30, UNROUTED_DAYS = 30;
 export const STAFF_MAIL_LIMITS = { perHour: 20, batch: 20, attempts: 3 } as const;
@@ -61,7 +63,8 @@ export type StaffRow = ItemRow & {
   proposal?: { id: string; kind: string; payload: Record<string, unknown>; reason: string; expires_ms: number } | null;
 };
 type Need = 'failed' | 'held' | 'no_reply' | 'proposal' | 'blocked' | 'waiting' | 'ticket' | 'feedback';
-type Thread = { key: string; subject: string; opened_at: string; last_sent_at: string | null; emails: number; pending: boolean };
+/** emails: every email the thread has (numbering the next); sent: those that went; pending: one still to go (not failed for good). */
+type Thread = { key: string; subject: string; opened_at: string; last_sent_at: string | null; emails: number; sent: number; pending: boolean };
 
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const ticketId = () => `tkt_${Array.from(crypto.getRandomValues(new Uint8Array(16)), b => BASE32[b & 31]).join('')}`;
@@ -316,13 +319,15 @@ export async function planStaffMail(db: Database, config: Pick<Config, 'publicUr
 
     const keys = [...new Set(rows.filter(changed).map(r => r.staff_thread!))];
     const { rows: threads } = keys.length ? await tx.execute<Thread>(sql`SELECT t.key, t.subject, t.opened_at::text AS opened_at, t.last_sent_at::text AS last_sent_at,
-        (SELECT count(*)::int FROM support_staff_emails e WHERE e.thread_key = t.key) AS emails, EXISTS (SELECT FROM support_staff_emails e WHERE e.thread_key = t.key AND e.sent_at IS NULL) AS pending
+        (SELECT count(*)::int FROM support_staff_emails e WHERE e.thread_key = t.key) AS emails, (SELECT count(*)::int FROM support_staff_emails e WHERE e.thread_key = t.key AND e.sent_at IS NOT NULL) AS sent,
+        EXISTS (SELECT FROM support_staff_emails e WHERE e.thread_key = t.key AND e.sent_at IS NULL AND e.failed_at IS NULL) AS pending
       FROM support_staff_threads t WHERE t.key = ANY(${sql.param(keys)}::text[])`) : { rows: [] as Thread[] };
     const byKey = new Map(threads.map(t => [t.key, t]));
     for (const key of keys) {
       const thread = byKey.get(key);
       if (!thread || thread.pending || budget <= 0) continue;
-      const members = rows.filter(r => r.staff_thread === key), first = thread.emails === 0;
+      // A thread whose emails all failed for good starts again: its next email is a first one (thread.sent counts what went).
+      const members = rows.filter(r => r.staff_thread === key), first = thread.sent === 0;
       const due = first ? members : members.filter(changed);
       if (!due.length) continue;
       if (first && key.startsWith('feedback:')) {
@@ -444,8 +449,8 @@ export async function staffReply(db: Database, config: Pick<Config, 'support'>, 
 }
 
 /**
- * One failed try to send a staff email: its count and the error's code. After STAFF_MAIL_LIMITS.attempts it counts as
- * not sent (failed_at) until it goes. One already sent changes nothing.
+ * One failed try to send a staff email: its count and the error's code. After STAFF_MAIL_LIMITS.attempts it failed for
+ * good (failed_at): the sweep never offers it again. One already sent changes nothing.
  */
 export async function staffMailFailed(db: DbExecutor, key: string, code: string) {
   const { rows: [row] } = await db.execute<{ attempts: number; failed: boolean; sent: boolean }>(sql`UPDATE support_staff_emails SET
@@ -465,14 +470,16 @@ const Key = z.object({ key: z.string().regex(/^staff-[0-9a-f]{24}-[0-9]{1,6}$/) 
 export function registerSupportStaffMail(app: App) {
   const security: Record<string, string[]>[] = [{ bearerAuth: [] }];
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'post', path: '/v1/operator/support/staff-mail', operationId: 'operatorSupportStaffMail',
-    description: 'The support platform\u2019s sweep (the binding only): writes the staff emails that are due, then answers every one not yet sent, oldest first. Send each from the support address to the team, then report it sent.',
+    description: 'The support platform\u2019s sweep (the binding only): writes the staff emails that are due, then answers every one not yet sent and not failed for good, oldest first. Send each from the support address to the team, then report it sent.',
     responses: { 200: response(z.object({ data: z.array(StaffEmail) })), ...errors } }), async c => {
     await supportPlatformOnly(c);
     await planStaffMail(c.env.db, c.env.config);
     const { rows } = await c.env.db.execute<{ key: string; seq: number; subject: string; text: string; html: string; thread_id: string | null; last_message_id: string | null }>(sql`SELECT e.key, e.seq, e.subject, e.text, e.html, t.thread_id, t.last_message_id
-      FROM support_staff_emails e JOIN support_staff_threads t ON t.key = e.thread_key WHERE e.sent_at IS NULL AND (e.seq = 1 OR t.thread_id IS NOT NULL)
+      FROM support_staff_emails e JOIN support_staff_threads t ON t.key = e.thread_key WHERE e.sent_at IS NULL AND e.failed_at IS NULL
+        AND (t.thread_id IS NOT NULL OR NOT EXISTS (SELECT FROM support_staff_emails p WHERE p.thread_key = e.thread_key AND p.seq < e.seq AND p.failed_at IS NULL))
       ORDER BY e.created_at, e.key LIMIT ${STAFF_MAIL_LIMITS.batch}`);
-    return c.json({ data: rows.map(r => ({ key: r.key, threadId: r.seq > 1 ? r.thread_id : null, replyToMessageId: r.seq > 1 ? r.last_message_id : null, subject: r.subject, text: r.text, html: r.html })) }, 200);
+    // A reply in its thread once one of the thread's emails went; until then (its first, or the first after every earlier one failed for good) it starts the thread.
+    return c.json({ data: rows.map(r => ({ key: r.key, threadId: r.thread_id, replyToMessageId: r.thread_id ? r.last_message_id : null, subject: r.subject, text: r.text, html: r.html })) }, 200);
   });
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'post', path: '/v1/operator/support/staff-mail/{key}/sent', operationId: 'operatorSupportStaffMailSent',
     description: 'The support platform sent this staff email (the binding only): its thread and message, so the thread\u2019s next email replies in it. Reporting it again changes nothing.',
@@ -490,7 +497,7 @@ export function registerSupportStaffMail(app: App) {
     return c.json({ key, sentAt: new Date(sentAt).toISOString() }, 200);
   });
   app.openapi(createRoute({ hide: true, tags: ['Operator'], security, method: 'post', path: '/v1/operator/support/staff-mail/{key}/failed', operationId: 'operatorSupportStaffMailFailed',
-    description: `The support platform could not send this staff email (the binding only): one failed try, and the error's code. After ${STAFF_MAIL_LIMITS.attempts} it counts as not sent on Glass until it goes; one already sent changes nothing.`,
+    description: `The support platform could not send this staff email (the binding only): one failed try, and the error's code. After ${STAFF_MAIL_LIMITS.attempts} it failed for good: never offered again, and not sent on Glass until its thread has an email that goes. One already sent changes nothing.`,
     request: { params: Key, body: json(z.object({ code: z.string().regex(/^[A-Z][A-Z0-9_]{0,63}$/) }).strict()) },
     responses: { 200: response(z.object({ key: z.string(), attempts: z.number().int(), failed: z.boolean(), sent: z.boolean() })), ...errors } }), async c => {
     await supportPlatformOnly(c);

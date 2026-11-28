@@ -284,14 +284,18 @@ export async function createHarness<H = ToolHost>(env: Env, storage: DurableObje
       })();
       const stop = () => { void opencode.sessions.interrupt({ sessionID } as never).catch(() => {}); };
       signal.addEventListener('abort', stop, { once: true });
+      let prompted = false;
       try {
         // Let the subscription attach before prompting, so no early event is missed.
         await new Promise(resolve => setTimeout(resolve, 0));
         await opencode.sessions.prompt({ sessionID, text: input.text, ...(input.images?.length ? { files: input.images.map(image => ({ uri: image.uri, name: image.name })) } : {}) } as never);
+        prompted = true;
         await done;
         // The run ended (succeeded, failed or interrupted): nothing is left for a boot to resume.
         await storage.delete(TURN_OPEN);
       } catch (error) {
+        // A prompt that failed started no run: nothing for the next turn to wait out (settle still stops any run it finds).
+        if (!prompted) await storage.delete(TURN_OPEN).catch(() => {});
         // Whatever its steps had spent goes with the error, so the caller counts it (harness.ts spentBy).
         throw withSpent(error, usage);
       } finally {
