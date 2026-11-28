@@ -476,8 +476,6 @@ const disconnect:JobHandler=retryDatabaseFailures(async(r,p,j)=>{
     // journal; a retry proves absence or checks ownership anew.
     const next=await r.db.transaction(async db=>{
       const c=await lockStep(db);if (!c) return false;
-      // Never delete a paused connection: defer until an operator resumes it.
-      if (c.paused_at || c.pause_reason) return 'paused';
       // After a forced fence, setup still running and mail still queued or mid-attempt settle before anything is removed:
       // setup could create a resource after its region was cleaned, and the dispatcher cancels queued mail and marks an
       // interrupted attempt unknown. Feedback SES sends later for mail already accepted is lost with the topic.
@@ -486,11 +484,12 @@ const disconnect:JobHandler=retryDatabaseFailures(async(r,p,j)=>{
       const rr=(await db.execute<CleanupRegion>(sql`SELECT region,ownership_journal,feedback_topic_arn FROM provider_connection_regions WHERE connection_id=${c.id} AND
         (feedback_topic_arn IS NOT NULL OR EXISTS(SELECT FROM jsonb_array_elements(ownership_journal) e WHERE e->>'kind' IS DISTINCT FROM 'identity')) ORDER BY region LIMIT 1`)).rows[0];
       if (!rr) {
+        // Never release claims or delete a paused connection: clean up AWS resources first, then defer until resumed.
+        if (c.paused_at || c.pause_reason) return 'paused';
         const left=c.disconnect_summary?.leftBehind??[];
         if (left.length) await recordAudit(db,systemContext('job'),{action:'connection.cleanup',workspaceId:c.workspace_id,target:{type:'connection',id:c.id},after:{leftBehind:left.slice(0,50)},internal:false});
         await db.execute(sql`WITH ${releaseConnectionClaims(c.workspace_id,sql`SELECT ${c.id}::text AS id`)} SELECT 1`);
-        const deleted=await db.execute(sql`DELETE FROM provider_connections WHERE id=${c.id} AND state='disconnecting' AND paused_at IS NULL AND pause_reason IS NULL`);
-        if (!deleted.rowCount) throw defer(30_000,p);
+        await db.execute(sql`DELETE FROM provider_connections WHERE id=${c.id} AND state='disconnecting'`);
         return false;
       }
       return {c,rr};

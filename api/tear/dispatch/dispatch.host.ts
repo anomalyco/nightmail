@@ -22,19 +22,11 @@ for (const level of ["log", "info", "warn", "error", "debug"] as const) {
 }
 
 // Validate disposable database before connecting, registering handlers, or writing anything.
-const { disposableUrl, assertDisposable } = await import("../disposable.ts");
-const checkedUrl = await (async () => {
-  const checked = disposableUrl(process.env.TEAR_DATABASE_URL ?? process.env.DATABASE_URL, "TEAR_DATABASE_URL");
-  const { default: pg } = await import("pg");
-  const client = new pg.Client({ connectionString: checked });
-  await client.connect();
-  try {
-    await assertDisposable((text) => client.query(text));
-  } finally {
-    await client.end();
-  }
-  return checked;
-})();
+const { assertDisposable, prepareTearClock, requireDisposableDatabase } = await import("../disposable.ts");
+const checkedUrl = await requireDisposableDatabase(
+  process.env.TEAR_DATABASE_URL ?? process.env.DATABASE_URL,
+  "TEAR_DATABASE_URL",
+);
 
 // Track unhandled rejections/exceptions as idle-rule violations instead of crashing the host.
 const leaked: string[] = [];
@@ -112,25 +104,7 @@ const q = async <T = Record<string, unknown>>(query: ReturnType<typeof sql>) => 
 let dbPrepared = false;
 async function prepareDatabase() {
   if (dbPrepared) return;
-  await db.execute(
-    sql.raw(`
-    CREATE SCHEMA IF NOT EXISTS tear_clock;
-    CREATE TABLE IF NOT EXISTS tear_clock.state(singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), off interval NOT NULL DEFAULT '0');
-    ALTER TABLE tear_clock.state ADD COLUMN IF NOT EXISTS horizon bigint NOT NULL DEFAULT 0;
-    ALTER TABLE tear_clock.state ADD COLUMN IF NOT EXISTS pinned timestamptz;
-    INSERT INTO tear_clock.state DEFAULT VALUES ON CONFLICT DO NOTHING;
-    CREATE OR REPLACE FUNCTION tear_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql VOLATILE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.clock_timestamp() + (SELECT off FROM tear_clock.state)) $$;
-    CREATE OR REPLACE FUNCTION tear_clock.now() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.now() + (SELECT off FROM tear_clock.state)) $$;
-    CREATE OR REPLACE FUNCTION tear_clock.statement_timestamp() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.statement_timestamp() + (SELECT off FROM tear_clock.state)) $$;
-    DO $$ DECLARE c record; BEGIN
-      FOR c IN SELECT table_name, column_name, column_default FROM information_schema.columns
-        WHERE table_schema='public' AND column_default ~ '(^|[^.])(now|clock_timestamp|statement_timestamp)\\(\\)' LOOP
-        EXECUTE format('ALTER TABLE public.%I ALTER COLUMN %I SET DEFAULT %s', c.table_name, c.column_name,
-          regexp_replace(c.column_default, '(^|[^.])(now|clock_timestamp|statement_timestamp)\\(\\)', '\\1tear_clock.\\2()', 'g'));
-      END LOOP;
-    END $$;
-  `),
-  );
+  await prepareTearClock((rawSql) => db.execute(sql.raw(rawSql)));
   await db.execute(
     sql.raw(`UPDATE sending_emails SET status='canceled' WHERE workspace_id LIKE 'tear\\_%' AND status IN ('queued','attempting');
     UPDATE jobs SET status='completed' WHERE workspace_id LIKE 'tear\\_%' AND status IN ('pending','running');`),
@@ -982,8 +956,7 @@ export const dispatchHost = host(dispatch, {
       }
       await setClock(t.epoch + t.modelSec * 1000 + t.subMs, true, true);
     } else {
-      t.subMs = Math.min(t.subMs + 1, 900);
-      lastVirtual = t.epoch + t.modelSec * 1000 + t.subMs;
+      lastVirtual = Math.max(lastVirtual, t.epoch + t.modelSec * 1000 + t.subMs);
     }
     return obs;
   },

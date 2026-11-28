@@ -1,5 +1,5 @@
 /**
- * Generates an exhaustive edge-covering campaign JSON for any of the 6 core tear models.
+ * Generates an exhaustive edge-covering campaign JSON for any of the 9 core tear models.
  *
  * Performs a bounded BFS on the pure model's state graph (matching the old Rust checkers' core
  * edge-coverage profiles), then packs 100% of every discovered (state, action) edge into a compact
@@ -7,7 +7,7 @@
  * minimal resets.
  *
  * Usage:
- *   bun edges.ts <dispatch|ses|access|admission|inbox|delivery> <out.json>
+ *   bun edges.ts <dispatch|ses|access|admission|inbox|delivery|campaign-lifecycle|billing|byo-regional> <out.json>
  */
 import { writeFileSync } from "node:fs";
 import type { Model } from "@tear/mbt";
@@ -141,7 +141,17 @@ const MODELS: Record<string, { model: Model<any, any, any, any>; profiles: EdgeP
         starts: [[{ op: "Configure", preset: "funded" }]],
         maxDepth: 2,
         maxStates: 120,
-        filter: (a) => !["SetCardOutcome", "AdvanceClock", "SettleUsage"].includes(a.op),
+        filter: (a) => {
+          if (a.op === "Wait") return a.seconds === 360;
+          if (a.op === "SendUsage") return a.amountCents === 1000;
+          if (a.op === "TopUp") return a.amountCents !== 5000 && a.outcome !== "stripe_5xx";
+          if (a.op === "ReconcileAttempt") return a.target === "latest" && (a.stripeState === "paid" || a.stripeState === "void");
+          if (a.op === "Refund") return a.target === "latest" && a.amountCents === undefined;
+          if (a.op === "DisputeCreated") return a.target === "latest" && a.partialCents === undefined;
+          if (a.op === "WebhookInvoicePaid") return a.target === "latest" && a.mode !== "duplicate";
+          if (a.op === "EarlyFraudWarning") return a.target === "latest";
+          return true;
+        },
       },
     ],
   },
@@ -257,7 +267,7 @@ function generateProfileTraces(m: Model<any, any, any, any>, profile: EdgeProfil
 
 const [checker, outFile] = process.argv.slice(2);
 if (!checker || !outFile || !(checker in MODELS)) {
-  console.error("usage: bun edges.ts <dispatch|ses|access|admission|inbox|delivery> <out.json>");
+  console.error("usage: bun edges.ts <dispatch|ses|access|admission|inbox|delivery|campaign-lifecycle|billing|byo-regional> <out.json>");
   process.exit(2);
 }
 

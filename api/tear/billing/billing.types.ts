@@ -119,6 +119,8 @@ export interface DisputeTrack {
   openedStatus: DisputeOpenStatus;
   closedStatus: DisputeCloseStatus | null;
   attemptWasSucceeded: boolean;
+  openedSeq: number;
+  closedSeq: number | null;
 }
 
 export interface BillingSnapshot {

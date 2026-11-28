@@ -23,19 +23,11 @@ for (const level of ["log", "info", "warn", "error", "debug"] as const) {
 }
 
 // Validate disposable database BEFORE connecting pools, registering handlers, or creating tear_clock.
-const { disposableUrl, assertDisposable } = await import("../disposable.ts");
-const checkedUrl = await (async () => {
-  const checked = disposableUrl(process.env.TEAR_DATABASE_URL ?? process.env.DATABASE_URL, "TEAR_DATABASE_URL");
-  const { default: pg } = await import("pg");
-  const client = new pg.Client({ connectionString: checked });
-  await client.connect();
-  try {
-    await assertDisposable((text) => client.query(text));
-  } finally {
-    await client.end();
-  }
-  return checked;
-})();
+const { assertDisposable, prepareTearClock, requireDisposableDatabase } = await import("../disposable.ts");
+const checkedUrl = await requireDisposableDatabase(
+  process.env.TEAR_DATABASE_URL ?? process.env.DATABASE_URL,
+  "TEAR_DATABASE_URL",
+);
 
 const leaked: string[] = [];
 const leak = (kind: string) => (error: unknown) => {
@@ -156,6 +148,7 @@ interface Trial {
   hostedClaimToken: string | null;
   hostedDomainName: string | null;
   externalId: string | null;
+  stackName: string | null;
   roleArn: string | null;
   revision: number;
   regionFault: Record<ByoRegion, RegionFault>;
@@ -204,7 +197,18 @@ function verifiedIdentity(name: string) {
   const op = cmd.constructor.name;
   const input = cmd.input ?? {};
   if (op === "GetCallerIdentityCommand") {
-    return { Account: t.account, Arn: t.roleArn ?? `arn:aws:iam::${t.account}:role/Nightmail-tear` };
+    const purpose =
+      t.activeJobType === "byo.disconnect"
+        ? "cleanup"
+        : t.activeJobType === "byo.provision"
+          ? "provision"
+          : "scan";
+    return {
+      Account: t.account,
+      Arn: t.stackName
+        ? `arn:aws:sts::${t.account}:assumed-role/${t.stackName}/nightmail-${purpose}`
+        : (t.roleArn ?? `arn:aws:iam::${t.account}:role/Nightmail-tear`),
+    };
   }
   if (op === "AssumeRoleCommand") {
     const roleArn = String(input.RoleArn ?? "");
@@ -453,18 +457,10 @@ function verifiedIdentity(name: string) {
 let dbPrepared = false;
 async function prepareDatabase() {
   if (dbPrepared) return;
-  await db.execute(
-    sql.raw(`
-    CREATE SCHEMA IF NOT EXISTS tear_clock;
-    CREATE TABLE IF NOT EXISTS tear_clock.state(singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), off interval NOT NULL DEFAULT '0');
-    ALTER TABLE tear_clock.state ADD COLUMN IF NOT EXISTS horizon bigint NOT NULL DEFAULT 0;
-    ALTER TABLE tear_clock.state ADD COLUMN IF NOT EXISTS pinned timestamptz;
-    INSERT INTO tear_clock.state DEFAULT VALUES ON CONFLICT DO NOTHING;
-    CREATE OR REPLACE FUNCTION tear_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql VOLATILE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.clock_timestamp() + (SELECT off FROM tear_clock.state)) $$;
-    CREATE OR REPLACE FUNCTION tear_clock.now() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.now() + (SELECT off FROM tear_clock.state)) $$;
-    CREATE OR REPLACE FUNCTION tear_clock.statement_timestamp() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.statement_timestamp() + (SELECT off FROM tear_clock.state)) $$;
-  `),
-  );
+  await prepareTearClock((rawSql) => db.execute(sql.raw(rawSql)));
+  // On this disposable Tear database, allow exercising defense-in-depth pause guards on BYO v5 rows
+  // and on rows where paused_at IS NOT NULL AND pause_reason IS NULL.
+  await db.execute(sql.raw("ALTER TABLE provider_connections DROP CONSTRAINT IF EXISTS provider_connections_check2;"));
   dbPrepared = true;
 }
 
@@ -546,6 +542,7 @@ async function enrollAndScan(t: Trial): Promise<{ status: number; code: string |
   if (!conn) return { status: 500, code: "NO_CONN" };
   t.connectionId = conn.id;
   t.externalId = conn.external_id;
+  t.stackName = conn.stack_name;
   t.roleArn = `arn:aws:iam::${t.account}:role/${conn.stack_name}`;
   t.revision = conn.inventory_revision;
 
@@ -821,6 +818,7 @@ export const byoRegionalHost = host(byoRegional, {
       hostedClaimToken: null,
       hostedDomainName: null,
       externalId: null,
+      stackName: null,
       roleArn: null,
       revision: 1,
       regionFault: { "us-east-2": "ok", "us-east-1": "ok" },
@@ -970,18 +968,24 @@ export const byoRegionalHost = host(byoRegional, {
 
       case "OperatorPause": {
         const conn = await currentConn();
-        if (conn && t.connectionKind === "shared") {
-          await db.execute(
-            sql`UPDATE provider_connections SET paused_at=clock_timestamp(), pause_reason='Sending paused by operator review.' WHERE id=${conn.id} AND kind='shared'`,
-          );
+        if (conn) {
+          if (a.reasonless) {
+            await db.execute(
+              sql`UPDATE provider_connections SET paused_at=clock_timestamp(), pause_reason=NULL WHERE id=${conn.id}`,
+            );
+          } else {
+            await db.execute(
+              sql`UPDATE provider_connections SET paused_at=clock_timestamp(), pause_reason='Sending paused by operator review.' WHERE id=${conn.id}`,
+            );
+          }
         }
         break;
       }
 
       case "OperatorResume": {
         const conn = await currentConn();
-        if (conn && t.connectionKind === "shared") {
-          await db.execute(sql`UPDATE provider_connections SET paused_at=NULL, pause_reason=NULL WHERE id=${conn.id} AND kind='shared'`);
+        if (conn) {
+          await db.execute(sql`UPDATE provider_connections SET paused_at=NULL, pause_reason=NULL WHERE id=${conn.id}`);
           t.wasPausedBeforeLastDelete = false;
         }
         break;
@@ -1004,11 +1008,35 @@ export const byoRegionalHost = host(byoRegional, {
 
       case "DisconnectStep": {
         const conn = await currentConn();
-        t.wasPausedBeforeLastDelete = Boolean(conn?.paused_at || conn?.pause_reason);
+        const wasPaused = Boolean(conn?.paused_at || conn?.pause_reason);
+        t.wasPausedBeforeLastDelete = wasPaused;
+        const countCleanupItems = async (cid: string) => {
+          const [row] = await q<{ n: number }>(
+            sql`SELECT coalesce(sum(
+              (SELECT count(*) FROM jsonb_array_elements(ownership_journal) e WHERE e->>'kind' IS DISTINCT FROM 'identity')
+              + CASE WHEN feedback_topic_arn IS NOT NULL THEN 1 ELSE 0 END
+            ), 0)::int AS n FROM provider_connection_regions WHERE connection_id=${cid}`,
+          );
+          return row?.n ?? 0;
+        };
+        const beforeItems = conn && conn.state === "disconnecting" ? await countCleanupItems(conn.id) : 0;
+        const [pendingDisconnect] = conn
+          ? await q<{ id: string }>(
+              sql`SELECT id FROM jobs WHERE workspace_id=${t.W} AND type='byo.disconnect' AND status='pending' LIMIT 1`,
+            )
+          : [];
         await runTargetedJob(t, "byo.disconnect", sql`true`);
         const after = await currentConn();
-        if (t.wasPausedBeforeLastDelete && !after) {
+        if (wasPaused && !after) {
           t.pausedDeleteViolations.push("byo.disconnect deleted a paused v5 connection");
+        }
+        if (wasPaused && after && pendingDisconnect && beforeItems > 0 && t.disconnectFault === "ok") {
+          const afterItems = await countCleanupItems(after.id);
+          if (afterItems >= beforeItems) {
+            t.pausedDeleteViolations.push(
+              `byo.disconnect stalled regional AWS cleanup while paused (remaining items ${beforeItems} -> ${afterItems})`,
+            );
+          }
         }
         break;
       }

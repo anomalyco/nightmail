@@ -152,11 +152,25 @@ const billingIdleRules: IdleRule<BillingSnapshot>[] = [
               if (att?.cardFingerprint !== d.fingerprint) return false;
               return !s.ledger.some((r) => r.kind === "dispute_reversal" && r.sourceId === l.sourceId);
             });
+            // Also account for chronological dispute opens (including zero-debit disputes on uncredited/refunded
+            // attempts) that landed AFTER the latest won/warning_closed lift on this fingerprint.
+            const fpDisputes = s.disputes.filter((x) => x.fingerprint === d.fingerprint);
+            const lastLiftSeq = fpDisputes.reduce(
+              (max, x) =>
+                (x.closedStatus === "won" || x.closedStatus === "warning_closed") && x.closedSeq !== null
+                  ? Math.max(max, x.closedSeq)
+                  : max,
+              -1,
+            );
+            const hasLaterOpenOrLost = fpDisputes.some(
+              (x) => x.openedSeq > lastLiftSeq && (x.closedStatus === null || x.closedStatus === "lost"),
+            );
+            const shouldBeBlocked = hasOtherUnreversed || hasLaterOpenOrLost;
             const blockReason = blockedMap.get(d.fingerprint);
-            if (hasOtherUnreversed && !blockReason) {
+            if (shouldBeBlocked && !blockReason) {
               return `card ${d.fingerprint} unblocked after ${d.disputeId} despite another open/lost dispute`;
             }
-            if (!hasOtherUnreversed && blockReason === "dispute") {
+            if (!shouldBeBlocked && blockReason === "dispute") {
               return `card ${d.fingerprint} still dispute-blocked after all disputes resolved (${d.disputeId}=${d.closedStatus})`;
             }
           }

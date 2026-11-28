@@ -223,5 +223,12 @@
     "file": "api/src/provider-connections.ts",
     "old": "        if (fenced.paused_at || fenced.pause_reason) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', fenced.pause_reason ?? 'Sending is paused for this workspace.');",
     "neu": "        // mid-disconnect pause guard removed"
+  },
+  {
+    "label": "byo-4-v5-disconnect-pause-bypass",
+    "checker": "byo-regional",
+    "file": "api/src/byo-regional.ts",
+    "old": "        if (c.paused_at || c.pause_reason) return 'paused';",
+    "neu": "        // pause guard removed"
   }
 ]

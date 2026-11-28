@@ -14,7 +14,7 @@ export type ByoAction =
   | { op: "ProvisionStep"; region: ByoRegion; runToExhaustion?: boolean }
   | { op: "ConfirmTopic"; region: ByoRegion }
   | { op: "BindStep"; region: ByoRegion; runToExhaustion?: boolean }
-  | { op: "OperatorPause" }
+  | { op: "OperatorPause"; reasonless?: boolean }
   | { op: "OperatorResume" }
   | { op: "Disconnect" }
   | { op: "DisconnectStep" }

@@ -697,6 +697,94 @@
         "outcome": "pass"
       },
       "note": "Disconnecting while a region is waiting for SNS confirmation fences setup and cleans journaled resources"
+    },
+    {
+      "name": "paused-v5-refuses-delete-connection",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "OperatorPause",
+          "reasonless": true
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "Verify"
+        },
+        {
+          "op": "OperatorResume"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "DisconnectStep"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "DELETE /v1/connection refuses a paused BYO v5 connection even when paused_at IS NOT NULL AND pause_reason IS NULL"
+    },
+    {
+      "name": "paused-v5-mid-disconnect-cleans-aws-and-defers-delete",
+      "steps": [
+        {
+          "op": "Configure",
+          "preset": "readyToImport"
+        },
+        {
+          "op": "SelectImports",
+          "region": "us-east-2",
+          "domain": "alpha"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "ProvisionStep",
+          "region": "us-east-2"
+        },
+        {
+          "op": "Disconnect"
+        },
+        {
+          "op": "OperatorPause"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "DisconnectStep"
+        },
+        {
+          "op": "Verify"
+        },
+        {
+          "op": "OperatorResume"
+        },
+        {
+          "op": "DisconnectStep"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "A pause landing mid-disconnect still cleans regional AWS config sets/topics, defers final DB delete until resumed, and finishes after resume (pins byo-4)"
     }
   ]
 }

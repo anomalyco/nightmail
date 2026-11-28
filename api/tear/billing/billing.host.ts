@@ -24,19 +24,11 @@ for (const level of ["log", "info", "warn", "error", "debug"] as const) {
 }
 
 // Validate disposable database BEFORE connecting pools, registering handlers, or creating tear_clock.
-const { disposableUrl, assertDisposable } = await import("../disposable.ts");
-const checkedUrl = await (async () => {
-  const checked = disposableUrl(process.env.TEAR_DATABASE_URL ?? process.env.DATABASE_URL, "TEAR_DATABASE_URL");
-  const { default: pg } = await import("pg");
-  const client = new pg.Client({ connectionString: checked });
-  await client.connect();
-  try {
-    await assertDisposable((text) => client.query(text));
-  } finally {
-    await client.end();
-  }
-  return checked;
-})();
+const { assertDisposable, prepareTearClock, requireDisposableDatabase } = await import("../disposable.ts");
+const checkedUrl = await requireDisposableDatabase(
+  process.env.TEAR_DATABASE_URL ?? process.env.DATABASE_URL,
+  "TEAR_DATABASE_URL",
+);
 
 const leaked: string[] = [];
 const leak = (kind: string) => (error: unknown) => {
@@ -160,6 +152,7 @@ interface Trial {
   cookie: string;
   stripe: StripeState;
   disputes: DisputeTrack[];
+  disputeEventSeq: number;
   fraudWarnings: Set<string>;
   rechargeLoopViolations: string[];
   leakedErrors: string[];
@@ -453,18 +446,7 @@ const q = async <T = Record<string, unknown>>(query: ReturnType<typeof sql>) => 
 let dbPrepared = false;
 async function prepareDatabase() {
   if (dbPrepared) return;
-  await db.execute(
-    sql.raw(`
-    CREATE SCHEMA IF NOT EXISTS tear_clock;
-    CREATE TABLE IF NOT EXISTS tear_clock.state(singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton), off interval NOT NULL DEFAULT '0');
-    ALTER TABLE tear_clock.state ADD COLUMN IF NOT EXISTS horizon bigint NOT NULL DEFAULT 0;
-    ALTER TABLE tear_clock.state ADD COLUMN IF NOT EXISTS pinned timestamptz;
-    INSERT INTO tear_clock.state DEFAULT VALUES ON CONFLICT DO NOTHING;
-    CREATE OR REPLACE FUNCTION tear_clock.clock_timestamp() RETURNS timestamptz LANGUAGE sql VOLATILE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.clock_timestamp() + (SELECT off FROM tear_clock.state)) $$;
-    CREATE OR REPLACE FUNCTION tear_clock.now() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.now() + (SELECT off FROM tear_clock.state)) $$;
-    CREATE OR REPLACE FUNCTION tear_clock.statement_timestamp() RETURNS timestamptz LANGUAGE sql STABLE AS $$ SELECT coalesce((SELECT pinned FROM tear_clock.state), pg_catalog.statement_timestamp() + (SELECT off FROM tear_clock.state)) $$;
-  `),
-  );
+  await prepareTearClock((rawSql) => db.execute(sql.raw(rawSql)));
   dbPrepared = true;
 }
 
@@ -803,6 +785,7 @@ export const billingHost = host(billing, {
         activeCard: "A",
       },
       disputes: [],
+      disputeEventSeq: 0,
       fraudWarnings: new Set(),
       rechargeLoopViolations: [],
       leakedErrors: [],
@@ -1018,6 +1001,8 @@ export const billingHost = host(billing, {
           openedStatus: a.status,
           closedStatus: null,
           attemptWasSucceeded: target.status === "succeeded",
+          openedSeq: ++t.disputeEventSeq,
+          closedSeq: null,
         });
         break;
       }
@@ -1036,6 +1021,7 @@ export const billingHost = host(billing, {
         });
         status = r.status;
         d.closedStatus = a.status;
+        d.closedSeq = ++t.disputeEventSeq;
         break;
       }
 

@@ -559,20 +559,22 @@ function stepInst(s: DispatchState, k: 0 | 1): void {
     }
     case "ses": {
       const isMkt = s.mails[ph.m]!.marketing;
+      const sendMs = Math.max(nowMs, isMkt ? inst.nextMktMs : inst.nextTxMs);
+      s.t = Math.floor(sendMs / 1000);
       const out = providerCall(s, ph.m);
       if (out === "accepted") {
         inst.outageStreak = 0;
       } else if (out === "throttled") {
         if (isMkt) {
-          inst.nextMktMs = Math.max(inst.nextMktMs, nowMs + 1000);
+          inst.nextMktMs = Math.max(inst.nextMktMs, sendMs + 1000);
         } else {
-          inst.brakeUntilMs = Math.max(inst.brakeUntilMs, nowMs + 10_000);
-          inst.nextTxMs = Math.max(inst.nextTxMs, nowMs + 250);
-          inst.nextMktMs = Math.max(inst.nextMktMs, nowMs + 1000);
+          inst.brakeUntilMs = Math.max(inst.brakeUntilMs, sendMs + 10_000);
+          inst.nextTxMs = Math.max(inst.nextTxMs, sendMs + 250);
+          inst.nextMktMs = Math.max(inst.nextMktMs, sendMs + 1000);
         }
-      } else if (out === "unknown" && inst.outageUntilMs <= nowMs) {
+      } else if (out === "unknown" && inst.outageUntilMs <= sendMs) {
         const waitMs = Math.min(OUTAGE_MAX_SECS, OUTAGE_SECS * 2 ** inst.outageStreak) * 1000;
-        inst.outageUntilMs = nowMs + waitMs;
+        inst.outageUntilMs = sendMs + waitMs;
         inst.outageStreak += 1;
         inst.nextTxMs = Math.max(inst.nextTxMs, inst.outageUntilMs);
         inst.nextMktMs = Math.max(inst.nextMktMs, inst.outageUntilMs);

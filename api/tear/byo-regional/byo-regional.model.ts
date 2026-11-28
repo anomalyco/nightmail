@@ -112,6 +112,7 @@ export const byoRegional = model<ByoState, ByoAction, ByoObs, ByoSnapshot>({
     if (s.preset === "hosted") {
       return [
         choice({ op: "OperatorPause" }, 3),
+        choice({ op: "OperatorPause", reasonless: true }, 1),
         choice({ op: "OperatorResume" }, 3),
         choice({ op: "SetDisconnectFault", fault: "ok" }, 2),
         choice({ op: "SetDisconnectFault", fault: "pause_mid_disconnect" }, 3),
@@ -159,6 +160,9 @@ export const byoRegional = model<ByoState, ByoAction, ByoObs, ByoSnapshot>({
       choice({ op: "BindStep", region: "us-east-2", runToExhaustion: true }, 2),
       choice({ op: "BindStep", region: "us-east-1" }, 3),
       choice({ op: "BindStep", region: "us-east-1", runToExhaustion: true }, 2),
+      choice({ op: "OperatorPause" }, 2),
+      choice({ op: "OperatorPause", reasonless: true }, 1),
+      choice({ op: "OperatorResume" }, 2),
       choice({ op: "Disconnect" }, 2),
       choice({ op: "DisconnectStep" }, 3),
     );
