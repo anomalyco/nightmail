@@ -1,7 +1,7 @@
 import { useRef, type ReactNode } from 'react'
 import { Check } from 'lucide-react'
 import { Link } from 'react-router'
-import { BackLink, Icon } from '../../components/ui'
+import { BackLink, Button, Icon, Input } from '../../components/ui'
 
 // The campaign pages' 48px top bar: back, the path (Campaigns / the status, then the campaign's name), the steps in the
 // middle, the actions (with their shortcuts) at the end. The status leads the name on Write and Review alike, so a name
@@ -32,4 +32,21 @@ export function CampaignSteps({ step, onReview, writeTo }: { step: 'write' | 're
     <li aria-current={step === 'write' ? 'step' : undefined}>{step === 'review' && writeTo ? <Link to={writeTo}>{write}</Link> : <span>{write}</span>}</li>
     <li aria-current={step === 'review' ? 'step' : undefined}>{step === 'write' ? <button type="button" disabled={!onReview} onClick={onReview}>{review}</button> : <span>{review}</span>}</li>
   </ol>
+}
+
+/** An editor's save state beside its actions (the campaign and template editors): a dot and a word, or, with
+ *  `onAction`, a ghost button for what to do about it (Retry, Choose). On a phone the More menu says it instead. */
+export function ComposerSyncStatus({ state, label, title, onAction, disabled }: { state: string; label: string; title?: string; onAction?: () => void; disabled?: boolean }) {
+  return <div className="campaign-sync-status" role="status" data-state={state} data-actionable={onAction ? true : undefined} title={title}>
+    <span className="campaign-sync-dot" aria-hidden="true" />
+    {onAction ? <Button variant="ghost" size="sm" disabled={disabled} onClick={onAction}>{label}</Button> : <span>{label}</span>}
+  </div>
+}
+/** Reply-To as typed (reply-to.ts), with why it isn't a list of addresses yet on the line under it. */
+export function ReplyToRow({ id, label, value, error, disabled, onChange, onBlur }: { id: string; label: string; value: string; error: string; disabled?: boolean; onChange: (value: string) => void; onBlur?: () => void }) {
+  return <>
+    <div className="campaign-compose-row"><label htmlFor={id}>{label}</label><Input id={id} type="text" inputMode="email" autoCapitalize="none" spellCheck={false} placeholder="reply@example.com" value={value} disabled={disabled}
+      aria-invalid={Boolean(error) || undefined} aria-describedby={error ? `${id}-error` : undefined} onChange={event => onChange(event.target.value)} onBlur={onBlur} /></div>
+    <RowProblem id={`${id}-error`} message={error} />
+  </>
 }

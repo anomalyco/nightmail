@@ -25,7 +25,7 @@ import { riskBreakdown } from '../audience/consent'
 import { CampaignPacing, CampaignProgress, SendEstimateLine, SummaryLine, campaignDisplayStatus, campaignLogs, campaignPollInterval, maxPerDay, maxRatePercent, minPerDay, minRatePercent, perDayError, ratePercentError } from './CampaignProgress'
 import { CampaignArchiveButton } from './CampaignArchiveButton'
 import { ReadinessPanel, type Consent, type PlanChoice } from './readiness'
-import { CampaignBar, CampaignSteps, RowProblem } from './steps'
+import { CampaignBar, CampaignSteps, ComposerSyncStatus, ReplyToRow, RowProblem } from './steps'
 import { previousDomains, productName } from '../../../../api/src/brand'
 export { CampaignsPage } from './CampaignList'
 export { TemplatesPage, TemplateEditorPage } from './templates'
@@ -165,7 +165,10 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
   const readyRef = useRef(false)
   const [dirty, setDirty] = useState(false)
   const dirtyRef = useRef(false)
-  const busyRef = useRef(false)
+  // What is under way that a version from someone else must wait for, read at once (state lags a render): a save (the
+  // guard), the composer or attachments at work, or the latest version loading. `pending` is the same, for rendering.
+  const working = useRef({ composer: false, attachments: false, latest: false })
+  const busy = () => guard.current || working.current.composer || working.current.attachments || working.current.latest
   const [remote, setRemote] = useState<Campaign | null>(null)
   const remoteRef = useRef<Campaign | null>(null)
   const [reviewUpdate, setReviewUpdate] = useState(false)
@@ -228,7 +231,6 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
   // Saves write the campaign into the cache instead of refetching every query on each autosave.
   const saveMutation = useApiMutation((api, input: CampaignInput) => api.campaigns.save(input), undefined, false, false)
   const pending = preparing || autosaving || attachmentsBusy || composerBusy || saveMutation.isPending || loadingLatest
-  busyRef.current = pending
   const markDirty = useCallback(() => { editVersion.current += 1; setEdits(editVersion.current); dirtyRef.current = true; setDirty(true); setError('') }, [])
   // Message edits made since the saved version (accepted): whether this person changed the message, for a merge.
   const bodyEdits = useRef(0), bodySaved = useRef(0), staleRetries = useRef(0)
@@ -268,7 +270,7 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
     if (!baseline || next.id !== baseline.id || campaignVersion(next) === campaignVersion(baseline)) return
     if (olderCampaign(next, baseline) || (remoteRef.current && olderCampaign(next, remoteRef.current))) return
     setTestOpen(false)
-    if (busyRef.current) queueRemote(next)
+    if (busy()) queueRemote(next)
     else if (!dirtyRef.current) applyRemote(next)
     else if (!rebase(next)) queueRemote(next)
     // The newest announced save this version includes names who made it, once.
@@ -317,7 +319,7 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
     const timer = setTimeout(() => { void save('auto') }, 800)
     return () => clearTimeout(timer)
   }, [edits, dirty, pending, saveDisabled, autosavePaused, form.name])
-  useEffect(() => { if (!remote || busyRef.current) return; if (!dirtyRef.current) applyRemote(remote); else rebase(remote) }, [remote, pending, dirty])
+  useEffect(() => { if (!remote || busy()) return; if (!dirtyRef.current) applyRemote(remote); else rebase(remote) }, [remote, pending, dirty])
   // Both changed the same field: keep these edits there, or load theirs there. Everything else merges either way.
   // A version that can't take edits any more (sent, archived) has nothing to merge into: loading it drops yours.
   const remoteLocked = Boolean(remote && (remote.archivedAt || !campaignEditable(remote)))
@@ -328,7 +330,7 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
     refreshController.current?.abort()
     refreshController.current = controller
     setLoadingLatest(true)
-    busyRef.current = true
+    working.current.latest = true
     try {
       const latest = await api.campaigns.get(acceptedRef.current.id, controller.signal)
       if (controller.signal.aborted) return
@@ -338,7 +340,7 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
       // Theirs can't take edits any more (sent, archived): nothing to keep, so it simply loads.
       if (!dirtyRef.current || !rebase(latest, prefer)) applyRemote(latest)
     } catch (cause) { if (!controller.signal.aborted) toast(errorText(cause), 'error') }
-    finally { if (!controller.signal.aborted) { setLoadingLatest(false); busyRef.current = false } }
+    finally { if (!controller.signal.aborted) { setLoadingLatest(false); working.current.latest = false } }
   }
   const syncLabel = autosaving || preparing || saveMutation.isPending ? 'Saving…' : remote ? 'Update available' : autosavePaused ? 'Save failed' : error ? 'Check draft' : unavailable ? 'Unavailable' : readOnly ? 'Read only' : sync.connection === 'offline' ? 'Sync interrupted' : dirty ? form.name.trim() ? 'Unsaved changes' : 'Name required' : accepted ? 'Saved' : 'New draft'
   const syncActionable = Boolean(remote || error || autosavePaused || sync.connection === 'offline')
@@ -366,7 +368,6 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
       return
     }
     guard.current = true
-    busyRef.current = true
     setError('')
     setAutosavePaused(false)
     if (automatic) setAutosaving(true)
@@ -468,10 +469,7 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
       <Input id="campaign-name" className="studio-name" aria-label={issueOf ? 'Issue name' : 'Campaign name'} placeholder={issueOf ? 'Untitled issue' : 'Untitled campaign'} value={form.name} onChange={event => change('name', event.target.value)} required disabled={controlsDisabled} />
     </>} status={<StatusBadge status={accepted?.status ?? 'draft'} tone={accepted?.status === 'failed' ? 'danger' : 'neutral'} />} steps={<CampaignSteps step="write" onReview={blocked ? undefined : review} />} actions={<>
       <CampaignPresence present={present} room />
-      {!phone && <div className="campaign-sync-status" role="status" data-state={syncState} data-actionable={syncActionable || undefined} title={syncTitle}>
-        <span className="campaign-sync-dot" aria-hidden="true" />
-        {syncActionable ? <Button variant="ghost" size="sm" disabled={pending} onClick={syncAction}>{syncLabel}</Button> : <span>{syncLabel}</span>}
-      </div>}
+      {!phone && <ComposerSyncStatus state={syncState} label={syncLabel} title={syncTitle} onAction={syncActionable ? syncAction : undefined} disabled={pending} />}
       {phone ? <>
         <Button variant="primary" disabled={blocked} loading={preparing} onClick={review}>Continue</Button>
         <DropdownMenu label="More actions" trigger={<IconButton label={syncActionable ? `More actions. ${syncLabel}` : 'More actions'} className="campaign-menu-trigger" data-state={syncActionable ? syncState : undefined}><MoreHorizontal size={16} /></IconButton>} items={[
@@ -496,8 +494,8 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
             <RowProblem id="campaign-from-error" message={senderError} />
             <div id="campaign-sender-details" className="campaign-compose-preview" data-open={senderDetailsOpen || undefined} aria-hidden={!senderDetailsOpen} inert={!senderDetailsOpen}>
               <div>
-                <div className="campaign-compose-row"><label htmlFor="campaign-reply-to">Reply-To</label><Input id="campaign-reply-to" type="text" inputMode="email" autoCapitalize="none" spellCheck={false} placeholder="reply@example.com" value={replyToText} aria-invalid={Boolean(replyToValidation) || undefined} aria-describedby={replyToValidation ? 'campaign-reply-to-error' : undefined} onChange={event => { const value = event.target.value; setReplyToText(value); setReplyToLeft(false); updateForm({...formRef.current, replyTo: replyToAddresses(value)}); markDirty() }} onBlur={() => setReplyToLeft(true)} disabled={controlsDisabled} /></div>
-                <RowProblem id="campaign-reply-to-error" message={replyToValidation} />
+                <ReplyToRow id="campaign-reply-to" label="Reply-To" value={replyToText} error={replyToValidation} disabled={controlsDisabled} onBlur={() => setReplyToLeft(true)}
+                  onChange={value => { setReplyToText(value); setReplyToLeft(false); updateForm({...formRef.current, replyTo: replyToAddresses(value)}); markDirty() }} />
               </div>
             </div>
             {!options.isPending && verifiedDomains.length === 0 && <div className="campaign-compose-feedback campaign-note" data-tone="warning"><span>No verified domains · <Link to="/domains">Add a domain</Link></span></div>}
@@ -506,8 +504,8 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
               <div><div className="campaign-compose-row"><label htmlFor="campaign-preview">Preview</label><Input ref={previewInput} id="campaign-preview" aria-label="Preview text" maxLength={200} placeholder="Shown after the subject" value={form.previewText} onChange={event => change('previewText', event.target.value)} disabled={controlsDisabled} /></div></div>
             </div>
           </div>
-          <ChunkFallback.Provider value={<ComposerSkeleton preview={<StaticEmailBody html={form.html} attachmentIds={form.attachments ?? []} />} />}><EmailComposer key={`${generation}.${rebased.body}`} ref={composer} personalize attachmentIds={form.attachments ?? []} knownAttachmentIds={[...seenAttachments.current]} initialHtml={form.html} disabled={controlsDisabled} onReady={handleComposerReady} onDirty={handleComposerDirty} onBusy={value => {busyRef.current = value || attachmentsBusy || guard.current || loadingLatest; setComposerBusy(value); if (value) markDirty()}} onAttach={() => {markDirty(); attachments.current?.open()}} /></ChunkFallback.Provider>
-          <CampaignAttachments key={`attachments:${generation}`} ref={attachments} ids={form.attachments ?? []} persisted={form.draft?.attachments ?? []} body={form.draft?.html ?? form.html} shown={composerReady} onChange={ids => change('attachments', ids)} onBusy={value => {busyRef.current = value || guard.current || loadingLatest; setAttachmentsBusy(value)}} disabled={preparing || autosaving || saveMutation.isPending || composerBusy || loadingLatest || readOnly} />
+          <ChunkFallback.Provider value={<ComposerSkeleton preview={<StaticEmailBody html={form.html} attachmentIds={form.attachments ?? []} />} />}><EmailComposer key={`${generation}.${rebased.body}`} ref={composer} personalize attachmentIds={form.attachments ?? []} knownAttachmentIds={[...seenAttachments.current]} initialHtml={form.html} disabled={controlsDisabled} onReady={handleComposerReady} onDirty={handleComposerDirty} onBusy={value => {working.current.composer = value; setComposerBusy(value); if (value) markDirty()}} onAttach={() => {markDirty(); attachments.current?.open()}} /></ChunkFallback.Provider>
+          <CampaignAttachments key={`attachments:${generation}`} ref={attachments} ids={form.attachments ?? []} persisted={form.draft?.attachments ?? []} body={form.draft?.html ?? form.html} shown={composerReady} onChange={ids => change('attachments', ids)} onBusy={value => {working.current.attachments = value; setAttachmentsBusy(value)}} disabled={preparing || autosaving || saveMutation.isPending || composerBusy || loadingLatest || readOnly} />
           {/* Every contact has an email, so {{email}} needs no fallback and no row. */}
           {/* With the composer, like the attachments: before it, the rows would sit where the email is about to open. */}
           {composerReady && fallbackKeys.length > 0 && <section className="campaign-personalize" aria-labelledby="campaign-personalize-title">

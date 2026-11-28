@@ -17,7 +17,7 @@ import { queries } from '../../data/queries'
 import { ChunkFallback } from '../../lib/preloadable'
 import { CampaignRouteSkeleton, ComposerSkeleton, templateColumns } from './skeletons'
 import { StaticEmailBody } from './composer-preview'
-import { RowProblem } from './steps'
+import { ComposerSyncStatus, ReplyToRow } from './steps'
 import { CampaignsHeader } from './header'
 import { publishFirst } from './copy'
 import './campaigns.css'
@@ -194,7 +194,7 @@ function TemplateEditor({ initial }: {initial: CampaignTemplate}) {
   const upToDate = template.publishedRevision === template.revision && !dirty
   return <div className="campaign-compose-page template-compose-page">
     <PageHeader title="Edit template" backTo="/campaigns/templates" actions={<>
-      {!phone && <div className="campaign-sync-status" data-state={error ? 'offline' : dirty || saving ? 'changed' : 'live'} data-actionable={error ? true : undefined} role="status" title={error}><span className="campaign-sync-dot" aria-hidden="true" />{error ? <Button variant="ghost" size="sm" disabled={saving} onClick={() => void save()}>Save failed · Retry</Button> : <span>{saving ? 'Saving…' : dirty ? 'Unsaved changes' : archived ? 'Archived' : 'Saved'}</span>}</div>}
+      {!phone && <ComposerSyncStatus state={error ? 'offline' : dirty || saving ? 'changed' : 'live'} label={error ? 'Save failed · Retry' : saving ? 'Saving…' : dirty ? 'Unsaved changes' : archived ? 'Archived' : 'Saved'} title={error || undefined} onAction={error ? () => void save() : undefined} disabled={saving} />}
       {phone ? <>
         <Button variant="primary" disabled={archived || saving || !ready || upToDate} onClick={() => void publish()}>{upToDate ? 'Published' : 'Publish'}</Button>
         <DropdownMenu trigger={<IconButton label={error ? 'More actions. Save failed' : 'More actions'} className="campaign-menu-trigger" data-state={error ? 'offline' : undefined}><MoreHorizontal size={16} /></IconButton>} items={[
@@ -220,8 +220,7 @@ function TemplateEditor({ initial }: {initial: CampaignTemplate}) {
         <div className="campaign-compose-row campaign-compose-subject"><label htmlFor="template-subject">Subject</label><Input id="template-subject" placeholder="Example subject" value={draft.subject} disabled={archived} onChange={event => change('subject', event.target.value)} /></div>
         <div className="campaign-compose-row"><label htmlFor="template-preview">Inbox preview</label><Input id="template-preview" placeholder="Shown after the subject" value={draft.previewText ?? ''} disabled={archived} onChange={event => change('previewText', event.target.value)} /></div>
         <div className="campaign-compose-row"><label htmlFor="template-from">From name</label><Input id="template-from" placeholder="Acme" value={draft.fromName ?? ''} disabled={archived} onChange={event => change('fromName', event.target.value)} /></div>
-        <div className="campaign-compose-row"><label htmlFor="template-reply">Reply to</label><Input id="template-reply" type="text" inputMode="email" autoCapitalize="none" spellCheck={false} placeholder="reply@example.com" value={replyToText} disabled={archived} aria-invalid={Boolean(replyToValidation) || undefined} aria-describedby={replyToValidation ? 'template-reply-error' : undefined} onChange={event => { setReplyToText(event.target.value); change('replyTo', replyToAddresses(event.target.value)) }} /></div>
-        <RowProblem id="template-reply-error" message={replyToValidation} />
+        <ReplyToRow id="template-reply" label="Reply to" value={replyToText} error={replyToValidation} disabled={archived} onChange={value => { setReplyToText(value); change('replyTo', replyToAddresses(value)) }} />
       </div>
       <ChunkFallback.Provider value={<ComposerSkeleton preview={<StaticEmailBody html={draft.html ?? ''} attachmentIds={draft.attachments} kind="templates" />} />}><EmailComposer ref={composer} personalize attachmentApi={api.templateAssets} attachmentIds={draft.attachments} initialHtml={draft.html ?? ''} disabled={archived} onReady={() => setReady(true)} onDirty={changed} onBusy={setComposerBusy} onAttach={() => attachments.current?.open()} /></ChunkFallback.Provider>
       <CampaignAttachments ref={attachments} attachmentApi={api.templateAssets} ids={draft.attachments} persisted={template.draft.attachments} body={template.draft.html ?? ''} shown={ready} onChange={ids => change('attachments', ids)} onBusy={setAssetBusy} disabled={archived || saving || composerBusy} />
