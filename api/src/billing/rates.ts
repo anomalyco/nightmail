@@ -10,6 +10,13 @@ export const RATES = { version: 4, emailUc: 20_000n, omenUc: 0n, storageUcPerGbM
 /** Prepaid credit: a top-up is $20 to $10,000 before tax (routes.ts), and what is left of it expires 12 months after
  *  purchase (migration 300, billing_credit_lots.expires_at). The public price pages quote these. */
 export const CREDIT = { minTopUpCents: 2000, maxTopUpCents: 1_000_000, expiresAfterMonths: 12 } as const;
+/** What a person may choose, as the API checks it, the dashboard offers it and the Terms (section 5) state it: a
+ *  workspace's first top-up is at most $500 until one succeeds; auto-recharge runs below a threshold of $5 to $1,000,
+ *  adds a top-up's amount each time, and adds at most a monthly limit of at least that amount, up to $250,000. */
+export const BILLING_LIMITS = {
+  firstTopUpMaxCents: 50_000,
+  autoRecharge: { minThresholdCents: 500, maxThresholdCents: 100_000, minAmountCents: CREDIT.minTopUpCents, maxAmountCents: CREDIT.maxTopUpCents, maxMonthlyCapCents: 25_000_000 },
+} as const;
 /** Storage bills received mail kept past this many days (migrations 292 and 314); default mail's raw copy expires then. */
 export const STORAGE_AFTER_DAYS = 90;
 
@@ -24,3 +31,5 @@ export const usd = (uc: bigint): string => {
   const whole = units / 10n ** BigInt(digits), frac = (units % 10n ** BigInt(digits)).toString().padStart(digits, '0');
   return `${neg ? '−' : ''}$${whole.toLocaleString('en-US')}.${frac}`;
 };
+/** Whole US cents as a limit is quoted: "$20", "$10,000" (with cents only when there are some). */
+export const dollars = (cents: number) => usd(BigInt(cents) * 1_000_000n).replace(/\.00$/, '');

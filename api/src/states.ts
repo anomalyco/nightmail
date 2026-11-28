@@ -496,8 +496,11 @@ export const clearProbe = (ref: CampaignRef) => sql`UPDATE sending_campaigns SET
 /** A sender in good standing skips the probe for recipients an earlier campaign delivered to (src/sending.ts listMailedCleanly). */
 export const skipProbe = (ref: CampaignRef) => sql`UPDATE sending_campaigns SET probe_skipped_at=now(),updated_at=now() WHERE ${campaignRow(ref)} AND probe_cleared_at IS NULL AND probe_skipped_at IS NULL RETURNING id`;
 export const waitProbe = (ref: CampaignRef, until: string) => sql`UPDATE sending_campaigns SET probe_wait_until=${until}::timestamptz,waiting_reason='list_probe',waiting_until=${until}::timestamptz,updated_at=now() WHERE ${campaignRow(ref)} AND state='sending' AND probe_wait_until IS NULL RETURNING id`;
-/** paused, or failed after releasing some recipients, continues from its cursors on the same snapshot; the failure is cleared. */
-export const resumeCampaign = (ref: CampaignRef, to: RunningState) => moveCampaign(ref, ['paused', 'failed'], to, sql`,paused_at=NULL,pause_reason=NULL,error=NULL,health_checked_at=now()`, sql`(state='paused' OR expanded>0)`);
+/** paused, or failed after releasing some recipients, continues from its cursors on the same snapshot; the failure is
+ *  cleared. It goes back to preparing exactly when it isn't fully prepared (runningState, sending_campaigns_preparing),
+ *  so a campaign whose cursors moved meanwhile matches no row instead of breaking the constraint. */
+export const resumeCampaign = (ref: CampaignRef, to: RunningState) => moveCampaign(ref, ['paused', 'failed'], to, sql`,paused_at=NULL,pause_reason=NULL,error=NULL,health_checked_at=now()`,
+  sql`(state='paused' OR expanded>0) AND ${to === 'preparing' ? sql`(total=0 OR prepared<total)` : sql`total>0 AND prepared>=total`}`);
 /** A schedule that released nothing yet (preparing, scheduled, or paused before its send time) -> draft: the frozen
  *  snapshot is dropped (maintenance prunes it), the reservation ends and every cursor starts over at the next launch. */
 const unreleasedSchedule = sql`expanded=0 AND scheduled_at IS NOT NULL`;
