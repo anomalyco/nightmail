@@ -101,6 +101,33 @@ type View = 'loading' | 'choose' | 'connect' | 'domain' | 'imported' | 'records'
 const rise = (index: number) => ({ '--i': index }) as CSSProperties
 // Connected stays on screen this long before Add domain takes over.
 const CONNECTED_HOLD_MS = 1400
+type AwsPhase = 'idle' | 'connecting' | 'connected' | 'done'
+/** BYO's Connect step: it opens once the flow is BYO, turns Connected when the connection (or the step) is ready, and
+ *  closes if the flow leaves BYO before then. Connected moves on to done after CONNECTED_HOLD_MS (a timer, not here). */
+function nextAwsPhase(phase: AwsPhase, { byo, sending, awsReady }: { byo: boolean; sending: boolean; awsReady: boolean }): AwsPhase {
+  if (phase === 'idle') return sending && byo ? awsReady ? 'connected' : 'connecting' : 'idle'
+  if (phase === 'connecting') return sending && !byo ? 'idle' : awsReady ? 'connected' : 'connecting'
+  return phase
+}
+/** Which step onboarding shows, first match wins. Each step is its own screen; `View` groups them for the step's fade. */
+type Step = 'boot' | 'start' | 'records' | 'connect' | 'hosted-error' | 'connection-error' | 'hosted' | 'choose' | 'regional' | 'imported' | 'domain'
+const stepView: Record<Step, View> = { boot: 'loading', start: 'start', records: 'records', connect: 'connect', 'hosted-error': 'error', 'connection-error': 'error', hosted: 'start', choose: 'choose', regional: 'loading', imported: 'imported', domain: 'domain' }
+function resolveOnboardingView(at: { step: { step: string; domainId?: string } | null; awsPhase: AwsPhase; autoHostedFailed: boolean; connectionFailed: boolean; hostedReady: boolean
+  waitingForSetup: boolean; readingConnection: boolean; choosing: boolean; regional: boolean; imported: boolean }): Step {
+  // Finished while still provisioning: the dashboard opens once it's ready.
+  if (at.step === null) return 'boot'
+  if (at.step.step === 'start') return 'start'
+  if (at.step.step === 'domain' && at.step.domainId) return 'records'
+  if (at.awsPhase === 'connecting' || at.awsPhase === 'connected') return 'connect'
+  if (at.autoHostedFailed) return 'hosted-error'
+  if (at.connectionFailed) return 'connection-error'
+  if (at.hostedReady) return 'hosted'
+  if (at.waitingForSetup || at.readingConnection) return 'boot'
+  if (at.choosing) return 'choose'
+  if (at.regional) return 'regional'
+  if (at.imported) return 'imported'
+  return 'domain'
+}
 
 // One component owns every step, so the domain form keeps its input from the choice through a ready connection.
 function OnboardingSteps({ stage }: { stage: NonNullable<OnboardingStage> }) {
@@ -119,7 +146,7 @@ function OnboardingSteps({ stage }: { stage: NonNullable<OnboardingStage> }) {
   // A connection being deleted (Back, or Hosted instead) is ignored until the delete lands.
   const [dropped, setDropped] = useState<string | null>(null)
   // BYO: connecting, then a short Connected moment, then Add domain.
-  const [awsPhase, setAwsPhase] = useState<'idle' | 'connecting' | 'connected' | 'done'>('idle')
+  const [storedAwsPhase, setAwsPhase] = useState<AwsPhase>('idle')
   // Imported domains can be skipped to add another one.
   const [addAnother, setAddAnother] = useState(false)
   const [draft, setDraft] = useState('')
@@ -183,10 +210,10 @@ function OnboardingSteps({ stage }: { stage: NonNullable<OnboardingStage> }) {
   const autoHosted = sending && !offerByo && !picked && !starting && connection.data === null
   useEffect(() => { if (autoHosted && !shared.error) choose('shared') }, [autoHosted, shared.error]) // eslint-disable-line react-hooks/exhaustive-deps
   const flow: ConnectionKind | null = sending ? picked ?? current?.kind ?? (offerByo ? null : 'shared') : identity?.connection?.kind ?? null
-  const ready = stage.step !== 'sending'
-  if (sending && flow === 'byo' && awsPhase === 'idle') setAwsPhase('connecting')
-  if (sending && flow !== 'byo' && awsPhase === 'connecting') setAwsPhase('idle')
-  if (awsPhase === 'connecting' && (ready || current?.state === 'ready')) setAwsPhase('connected')
+  // Moved on while rendering (React's way for state that follows what it is given), and used at once, so no pass renders
+  // the step it is leaving.
+  const awsPhase = nextAwsPhase(storedAwsPhase, { byo: flow === 'byo', sending, awsReady: stage.step !== 'sending' || current?.state === 'ready' })
+  if (awsPhase !== storedAwsPhase) setAwsPhase(awsPhase)
   useEffect(() => {
     if (awsPhase !== 'connected') return
     const timer = setTimeout(() => setAwsPhase('done'), CONNECTED_HOLD_MS)
@@ -235,31 +262,31 @@ function OnboardingSteps({ stage }: { stage: NonNullable<OnboardingStage> }) {
   const domainForm = () => <AddDomain draft={draft} onDraftChange={setDraft} queued={queued} onQueuedChange={setQueued}
     ready={stage.step === 'domain'} onBack={addAnother ? () => setAddAnother(false) : undefined}
     onAdded={id => setDomainStep(workspaceId, id)} onFinish={finish} />
-  let view: View, content: ReactNode
-  if (step === null) { view = 'loading'; content = <BootLoader inline /> } // Finished while still provisioning: the dashboard opens once it's ready.
-  else if (step.step === 'start') { view = 'start'; content = <GetStarted domainId={step.domainId || builtin?.id || null} onFinish={finish} /> }
-  else if (step.step === 'domain' && step.domainId) { const domainId = step.domainId; view = 'records'; content = <DomainSetup domainId={domainId} onContinue={() => next(domainId)} onMissing={() => setDomainStep(workspaceId, '')} /> }
-  else if (awsPhase === 'connecting' || awsPhase === 'connected') {
-    view = 'connect'
-    content = current?.templateVersion === 'v5'
-      ? <ConnectAwsRegional connection={current} onBack={() => leaveAws(offerByo ? null : 'shared')} onHosted={() => leaveAws('shared')} onChosen={chooseRegional} />
-      : <ConnectAwsStep state={connectionState} connection={current} onBack={() => leaveAws(offerByo ? null : 'shared')} onHosted={() => leaveAws('shared')} />
-  }
-  else if (autoHosted && shared.error) { view = 'error'; content = <HostedError error={shared.error} onRetry={() => shared.reset()} /> }
-  else if (sending && !picked && connection.error) { view = 'error'; content = <ErrorState error={connection.error} onRetry={() => void connection.refetch()} /> }
-  else if (hosted && !noBuiltin) { view = 'start'; content = <GetStarted domainId={builtin?.id ?? null} onFinish={finish} /> }
-  else if (starting && !picked && (sending || (choosingDomain && !builtin?.id))) { view = 'loading'; content = <BootLoader inline /> }
-  else if ((sending && !picked && connection.isPending) || (choosingDomain && flow === 'byo' && connection.isPending)) { view = 'loading'; content = <BootLoader inline /> }
-  else if (sending && !flow) { view = 'choose'; content = <ChooseSending onChoose={choose} error={shared.error ?? byo.error} /> }
-  else if (choosingDomain && flow === 'byo' && regionalDomain) {
-    view = 'loading'
-    content = <PendingDomain name={regionalDomain} onFound={id => { chooseRegional(null); setDomainStep(workspaceId, id ?? '') }} />
-  }
-  else if (choosingDomain && flow === 'byo' && imported > 0 && !addAnother) {
-    view = 'imported'
-    content = <ImportedDomains count={imported} onContinue={next} onAddAnother={() => setAddAnother(true)} fallback={domainForm()} />
-  }
-  else { view = 'domain'; content = domainForm() }
+  const shown = resolveOnboardingView({
+    step, awsPhase, autoHostedFailed: autoHosted && Boolean(shared.error), connectionFailed: sending && !picked && Boolean(connection.error), hostedReady: hosted && !noBuiltin,
+    waitingForSetup: starting && !picked && (sending || (choosingDomain && !builtin?.id)),
+    readingConnection: (sending && !picked && connection.isPending) || (choosingDomain && flow === 'byo' && connection.isPending),
+    choosing: sending && !flow, regional: choosingDomain && flow === 'byo' && Boolean(regionalDomain), imported: choosingDomain && flow === 'byo' && imported > 0 && !addAnother,
+  })
+  const view = stepView[shown]
+  const leave = () => leaveAws(offerByo ? null : 'shared')
+  const content: ReactNode = (() => {
+    switch (shown) {
+      case 'boot': return <BootLoader inline />
+      case 'start': return <GetStarted domainId={(step?.step === 'start' ? step.domainId : '') || builtin?.id || null} onFinish={finish} />
+      case 'records': { const domainId = step?.step === 'domain' ? step.domainId : ''; return <DomainSetup domainId={domainId} onContinue={() => next(domainId)} onMissing={() => setDomainStep(workspaceId, '')} /> }
+      case 'connect': return current?.templateVersion === 'v5'
+        ? <ConnectAwsRegional connection={current} onBack={leave} onHosted={() => leaveAws('shared')} onChosen={chooseRegional} />
+        : <ConnectAwsStep state={connectionState} connection={current} onBack={leave} onHosted={() => leaveAws('shared')} />
+      case 'hosted-error': return <HostedError error={shared.error} onRetry={() => shared.reset()} />
+      case 'connection-error': return <ErrorState error={connection.error} onRetry={() => void connection.refetch()} />
+      case 'hosted': return <GetStarted domainId={builtin?.id ?? null} onFinish={finish} />
+      case 'choose': return <ChooseSending onChoose={choose} error={shared.error ?? byo.error} />
+      case 'regional': return <PendingDomain name={regionalDomain!} onFound={id => { chooseRegional(null); setDomainStep(workspaceId, id ?? '') }} />
+      case 'imported': return <ImportedDomains count={imported} onContinue={next} onAddAnother={() => setAddAnother(true)} fallback={domainForm()} />
+      case 'domain': return domainForm()
+    }
+  })()
   // A step fades in; the first paint and the loader stay still.
   const [frame, setFrame] = useState<{ view: View; previous: View | null }>({ view, previous: null })
   if (frame.view !== view) setFrame({ view, previous: frame.view })
