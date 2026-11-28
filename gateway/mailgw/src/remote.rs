@@ -439,7 +439,10 @@ fn submit_error(status: u16, error: &Value) -> SubmitError {
             422,
             "ATTACHMENT_CONTENT_MISMATCH"
             | "ATTACHMENT_TYPE_UNSCREENABLE"
-            | "UNSUPPORTED_ATTACHMENT_TYPE",
+            | "UNSUPPORTED_ATTACHMENT_TYPE"
+            | "ATTACHMENT_METADATA_INVALID"
+            | "INLINE_ATTACHMENT_INVALID"
+            | "MIME_LIMIT",
         ) => SubmitError::Attachment(reply_text(error["message"].as_str().unwrap_or_default())),
         (_, "SEALED_MESSAGE_SIZE") => SubmitError::SealedTooLarge,
         (_, "SEALED_MAIL_UNAVAILABLE") => SubmitError::SealedUnavailable,
@@ -2514,11 +2517,22 @@ mod tests {
             attachment("UNSUPPORTED_ATTACHMENT_TYPE", ""),
             "550 5.6.1 Attachment refused"
         );
+        assert_eq!(
+            attachment(
+                "INLINE_ATTACHMENT_INVALID",
+                "An inline attachment needs a contentId."
+            ),
+            "550 5.6.1 An inline attachment needs a contentId."
+        );
+        assert_eq!(
+            attachment("MIME_LIMIT", "Message could not be safely parsed."),
+            "550 5.6.1 Message could not be safely parsed."
+        );
         assert!(submit((422, refused("VALIDATION_FAILED"))).starts_with("550 5.7.1 Rejected"));
         let submits = script.submits.lock().unwrap().clone();
         assert_eq!(
             submits.len(),
-            11,
+            13,
             "every submission passed the signature check"
         );
         assert_eq!(

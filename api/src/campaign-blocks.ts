@@ -345,17 +345,27 @@ function renderImage(element: Element, link?: Element): string {
   const image = `<img src="${escape(attribute(element, 'src') ?? '')}" alt="${escape(attribute(element, 'alt') ?? '')}"${width && !/%$/.test(width) ? ` width="${width}"` : ''}${height && !/%$/.test(height) ? ` height="${height}"` : ''} style="${styles.img}${size}${margin}${customStyle(element)}">`;
   return link ? `<a href="${escape(attribute(link, 'href') ?? '')}" style="display:block;text-decoration:none">${image}</a>` : image;
 }
-function renderList(element: Element): string {
+const LIST_INHERITED_STYLE = new Set(['color', 'font-size', 'font-weight', 'line-height', 'letter-spacing', 'text-decoration']);
+function inheritedListStyle(style: string): string {
+  if (!style) return '';
+  return style.split(';').filter(Boolean).filter(decl => {
+    const colon = decl.indexOf(':');
+    return colon > 0 && LIST_INHERITED_STYLE.has(decl.slice(0, colon).trim().toLowerCase());
+  }).map(decl => `${decl};`).join('');
+}
+function renderList(element: Element, inherited = ''): string {
+  const own = customStyle(element);
+  const itemInherited = `${inherited}${inheritedListStyle(own)}`;
   const items = element.childNodes.filter((child): child is Element => isElement(child) && child.tagName === 'li').map(item => {
     const parts = item.childNodes.map(child => {
-      if (isElement(child) && (child.tagName === 'ul' || child.tagName === 'ol')) return renderList(child);
+      if (isElement(child) && (child.tagName === 'ul' || child.tagName === 'ol')) return renderList(child, itemInherited);
       if (isElement(child) && child.tagName === 'p') return inlineChildren(child);
       return renderInline(child);
     });
-    return `<li style="${styles.li}${customStyle(item)}">${parts.join('')}</li>`;
+    return `<li style="${styles.li}${itemInherited}${customStyle(item)}">${parts.join('')}</li>`;
   });
   const start = attribute(element, 'start');
-  return `<${element.tagName}${start ? ` start="${escape(start)}"` : ''} style="${styles.list}${customStyle(element)}">${items.join('')}</${element.tagName}>`;
+  return `<${element.tagName}${start ? ` start="${escape(start)}"` : ''} style="${styles.list}${own}">${items.join('')}</${element.tagName}>`;
 }
 function renderBlock(node: Node): string {
   if (!isElement(node)) return '';
