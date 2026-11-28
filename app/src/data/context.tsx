@@ -124,7 +124,7 @@ function readReviewIdentity(signal?: AbortSignal) {
 async function loadIdentity(signal?: AbortSignal, override?: { account?: string | null; workspace?: string | null }) {
   let account = override ? (override.account ?? null) : selectedAccount()
   let workspace = override ? (override.workspace !== undefined ? override.workspace : (account ? rememberedWorkspace(account) : null)) : selectedWorkspace()
-  const opts = () => override ? { signal, account, workspace } : { signal }
+  const opts = () => override ? { signal, account, workspace, scope: 'unscoped' as const } : { signal, scope: 'unscoped' as const }
   const read = () => !override && reviewRoute.test(window.location.pathname) ? readReviewIdentity(signal) : request<Identity>('/v1/me', opts())
   // An explicit refetch (e.g. after logout) also respects the public-page hint; refetch bypasses useQuery's enabled flag.
   if (!override && asksOnlyIfLikely(window.location.pathname) && !sessionLikely()) throw new ApiError('Sign in to continue.', 'AUTH_REQUIRED', {}, undefined, 401)
@@ -338,7 +338,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   const review = useQuery({
     queryKey: ['invitation', invitation], enabled: Boolean(invitation), retry: false, staleTime: Infinity, gcTime: Infinity,
     queryFn: async ({ signal }) => {
-      try { return await workspaceApi.reviewInvitation(invitation!, signal) }
+      try { return await workspaceApi('unscoped').reviewInvitation(invitation!, signal) }
       catch (error) {
         // Signed out: keep the link so sign-in returns here to review it.
         if (error instanceof ApiError && error.status === 401) return null
@@ -349,7 +349,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   const join = useGuardedMutation({
     requestScope: null,
     mutationFn: async (pending: WorkspaceInvitationPreview) => {
-      const { workspaceId } = await workspaceApi.acceptInvitation(pending.id)
+      const { workspaceId } = await workspaceApi('unscoped').acceptInvitation(pending.id)
       // Joined from the homepage (an invitation link from before it moved to /overview): open the dashboard.
       await switchWorkspace(workspaceId, window.location.pathname === '/' ? '/overview' : undefined)
       clearInvitation()
@@ -371,7 +371,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     const account = selectedAccount()
     // Probe the target workspace without changing the active selection yet: mounted screens from the previous
     // workspace must never send a request to, or read from, the target workspace while /v1/me is in flight.
-    const next = await request<Identity>('/v1/me', { workspace: id })
+    const next = await request<Identity>('/v1/me', { workspace: id, scope: 'unscoped' })
     if (seq !== switchSeq.current || selectedAccount() !== account) throw aborted()
     // Commit synchronously: abort every in-flight request from the previous workspace, clear cache and remount.
     const nextWorkspace = next.multiTenant ? next.workspaceId : null
@@ -556,7 +556,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     // account and removes it before the browser opens the page (docs/analytics.md).
     const session = analytics().signInSession()
     if (session) callback.searchParams.set(ANALYTICS_SESSION_PARAM, session)
-    return request<{url: string}>('/api/auth/sign-in/account', {method: 'POST', body: {callbackURL: callback.href, ...select ? {prompt: 'select_account'} : {}, ...method ? {method} : {}}}).then(result => {
+    return request<{url: string}>('/api/auth/sign-in/account', {method: 'POST', scope: 'unscoped', body: {callbackURL: callback.href, ...select ? {prompt: 'select_account'} : {}, ...method ? {method} : {}}}).then(result => {
       const url = new URL(result.url)
       if (url.protocol !== 'https:') throw new Error('Invalid sign-in redirect.')
       return url.href
@@ -587,7 +587,7 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   const signInLink = !publicRoute && /^[\w-]+\.[\w-]+$/.test(new URLSearchParams(window.location.search).get('link') ?? '')
   const checkHome = window.location.pathname === '/' && authResult !== 'waitlist' && (signedOut || (!invitation && !dashboardLikelyReady(selectedWorkspace())))
   const home = useQuery({ queryKey: ['public-home'], enabled: checkHome, staleTime: Infinity, retry: false, queryFn: async ({signal}) => {
-    const multiTenant = (await request<{multiTenant?: boolean} | null>('/health', {signal}))?.multiTenant === true
+    const multiTenant = (await request<{multiTenant?: boolean} | null>('/health', {signal, scope: 'unscoped'}))?.multiTenant === true
     if (multiTenant) await loadHome()
     return multiTenant
   } })

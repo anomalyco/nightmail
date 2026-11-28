@@ -2,6 +2,7 @@ import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
 import { Link } from 'react-router'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { Alert, Button, Checkbox, CopyButton, Dialog, Field, Input, SearchField, SecretInput, Select, type Tone } from '../../components/ui'
+import { useRequestScope } from '../../data/context'
 import { request } from '../../data/live'
 import { ApiError, errorText, type InboundAddress, type WebhookSecrets } from '../../data/types'
 import { useAddressOptions } from '../../data/addresses'
@@ -90,16 +91,17 @@ export function EndpointDialog({ open, onOpenChange, onCreated, onSaved, editing
   const generalError = error && !forwardSenderNeeded(error) && !(error instanceof ApiError && ['name', 'url', 'type', 'paused'].some(f => error.fields[f])) ? errorText(error) : ''
   // Single flight: a second Create before the first answers would post the endpoint again.
   // `sender`: the address Create made for it just now (ForwardSenderOffer), sent as from.
+  const scope = useRequestScope()
   const send = useSingleFlight(editing ? 'endpoints.update' : 'endpoints.create', async (sender?: string) => {
     setBusy(true); setError(null)
     try {
-      if (editing) onSaved?.(await request<Endpoint & WebhookSecrets>(`/v1/endpoints/${encodeURIComponent(editing.name)}`, { method: 'PATCH', body: changes }))
+      if (editing) onSaved?.(await request<Endpoint & WebhookSecrets>(`/v1/endpoints/${encodeURIComponent(editing.name)}`, { method: 'PATCH', body: changes, scope }))
       else {
         // The API decides whether the recipient is asked (auto: not on a domain this workspace verified) and, with no address
         // that can ask, makes one (createSender): the answer says which, and who asked.
         const sendFrom = sender ?? from
         const body = { type, name: finalName, ...(type === 'forward' ? { address: value, preverify: 'auto', ...(sendFrom ? { from: sendFrom } : { createSender: true }) } : { url: value }) }
-        onCreated?.(await request<Endpoint & { secret?: string }>('/v1/endpoints', { method: 'POST', body, idempotencyKey: idempotencyFor(attempt, body) }))
+        onCreated?.(await request<Endpoint & { secret?: string }>('/v1/endpoints', { method: 'POST', body, idempotencyKey: idempotencyFor(attempt, body), scope }))
       }
     }
     catch (e) { setError(e) }
@@ -180,13 +182,14 @@ export const forwardSenderNeeded = (error: unknown): SenderNeed | null => {
  * Wherever a forward is made.
  */
 export function ForwardSenderOffer({ error, onCreated }: { error: unknown; onCreated: (address: InboundAddress) => void | Promise<void> }) {
+  const scope = useRequestScope()
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState<unknown>(null)
   const need = forwardSenderNeeded(error)
   if (!need) return null
   async function create() {
     setBusy(true); setFailed(null)
-    try { await onCreated(await request<InboundAddress>('/v1/inbound/addresses', { method: 'POST', body: { address: need!.suggested } })) }
+    try { await onCreated(await request<InboundAddress>('/v1/inbound/addresses', { method: 'POST', body: { address: need!.suggested }, scope })) }
     catch (e) { setFailed(e) } finally { setBusy(false) }
   }
   // What to do next is a control of its own (a tap target), never a link inside the sentence.

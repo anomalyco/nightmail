@@ -4,7 +4,7 @@ import { Plus } from 'lucide-react'
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Checkbox, ControlSkeleton, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, Field, Input, PageHeader, SectionHeader, Select, SkeletonText, StatusBadge, Switch, Tabs, Textarea, useToast, type Column, type MenuItem, type Tone, ErrorText, MutationError } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
-import { useSession } from '../../data/context'
+import { useRequestScope, useSession } from '../../data/context'
 import { ApiError, type SenderScoreFactor, type StandingReason, type StandingStep } from '../../data/types'
 import { isoTime, operatorApi, type OperatorAction, type OperatorCampaign, type OperatorDomain, type OperatorMember, type OperatorQueueItem, type OperatorTimelineItem, type OperatorWorkspace, type SignupPlaces, type SignupRaise, type TimelineKind, type WaitlistEntry, type WorkspaceSummary } from '../../data/operator'
 import { label, number, shortDateTime } from '../../lib/format'
@@ -54,7 +54,7 @@ export function OperatorPage() {
 
 // Sign-ups: how many accounts may sign up on their own (api/src/signups.ts), what fills that, and every workspace with
 // what judging it needs: when it joined, its owner, a verified domain, what it sent and its standing.
-const useSignupPlaces = () => useQuery({ queryKey: ['operator', 'signups'], queryFn: ({ signal }) => operatorApi.signups(signal) })
+const useSignupPlaces = () => { const scope = useRequestScope(); return useQuery({ queryKey: ['operator', 'signups'], queryFn: ({ signal }) => operatorApi(scope).signups(signal) }) }
 const standingText: Record<StandingStep, string> = { ok: 'Good', notice: 'Notice', warn: 'Warned', restrict: 'Restricted', pause: 'Paused' }
 const signupColumns: Column<WorkspaceSummary>[] = [
   { ...def(signupColumnDefs, 'name'), render: row => <span className="op-ws" title={`${row.name} · ${row.id}`}><span className="op-cell">{row.name}</span><span className="op-muted-id">{row.id}</span></span>, cardRender: row => row.name },
@@ -66,10 +66,11 @@ const signupColumns: Column<WorkspaceSummary>[] = [
   { ...def(signupColumnDefs, 'standing'), render: row => !row.standing ? <span className="muted">—</span> : <span className={row.standing === 'ok' ? 'muted' : undefined}>{standingText[row.standing]}</span> },
 ]
 function Signups({ sub, onSub, canAct }: { sub: 'signups' | 'waitlist'; onSub: (next: 'signups' | 'waitlist') => void; canAct: boolean }) {
+  const scope = useRequestScope()
   const query = useSignupPlaces(), places = query.data, unknown = query.isError && !places
   const list = useInfiniteQuery({
     queryKey: ['operator', 'signups', 'workspaces'], initialPageParam: undefined as string | undefined, enabled: sub === 'signups',
-    queryFn: ({ pageParam, signal }) => operatorApi.allWorkspaces({ cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
+    queryFn: ({ pageParam, signal }) => operatorApi(scope).allWorkspaces({ cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
   })
   const rows = (list.data?.pages ?? []).flatMap(page => page.items)
   return <>
@@ -101,7 +102,7 @@ function SetLimit() {
   </>
 }
 function SignupLimitForm({ places, idempotencyKey, onClose }: { places: SignupPlaces; idempotencyKey: string; onClose: () => void }) {
-  const client = useQueryClient(), toast = useToast()
+  const scope = useRequestScope(), client = useQueryClient(), toast = useToast()
   const [value, setValue] = useState(String(places.limit)), [raise, setRaise] = useState<SignupRaise>('hold'), [tried, setTried] = useState(false)
   const limit = Number(value), error = value.trim() === '' || !(Number.isInteger(limit) && limit >= 0 && limit <= 1_000_000) ? 'A whole number from 0 to 1,000,000.' : ''
   // As api/src/signups.ts setLimit: a hold raise holds the places it adds, as far as the waitlist goes; an open one holds none.
@@ -112,7 +113,7 @@ function SignupLimitForm({ places, idempotencyKey, onClose }: { places: SignupPl
   const hint = error ? '' : limit < places.limit ? 'Lowering it removes no one.'
     : [letIn && `Holds ${number(letIn)} for the oldest waiting and emails them.`, opened && `Opens ${number(opened)} to anyone, first come, no emails.`].filter(Boolean).join(' ')
   const mutation = useMutation({
-    mutationFn: () => operatorApi.setSignupLimit(limit, sent, { idempotencyKey }),
+    mutationFn: () => operatorApi(scope).setSignupLimit(limit, sent, { idempotencyKey }),
     // Everyone held is emailed once; one a failure missed is said here, and saving again emails it.
     onSuccess: saved => {
       const missed = sent === 'hold' ? saved.notEmailed ?? 0 : 0
@@ -141,10 +142,11 @@ const queueColumns: Column<OperatorQueueItem>[] = [
   { ...def(queueColumnDefs, 'since'), render: row => <At value={row.since} />, cardRender: row => `since ${when(row.since)}` },
 ]
 function Queue() {
+  const scope = useRequestScope()
   const [search, setSearch] = useState('')
   const [step, setStep] = useState('')
   const q = useDebounced(search.trim())
-  const queue = useQuery({ queryKey: ['operator', 'queue', q ? '' : step, q], queryFn: ({ signal }) => operatorApi.queue({ q: q || undefined, step: q ? undefined : step as StandingStep || undefined }, signal), placeholderData: previous => previous })
+  const queue = useQuery({ queryKey: ['operator', 'queue', q ? '' : step, q], queryFn: ({ signal }) => operatorApi(scope).queue({ q: q || undefined, step: q ? undefined : step as StandingStep || undefined }, signal), placeholderData: previous => previous })
   return <>
     <QueueToolbar search={search} step={step} onSearch={setSearch} onStep={setStep} />
     {queue.isError && !queue.data ? <ErrorState error={queue.error} onRetry={() => void queue.refetch()} />
@@ -178,9 +180,10 @@ function DetailDialog({ title, rows, onClose }: { title: string; rows: [string, 
   </Dialog>
 }
 function Actions() {
+  const scope = useRequestScope()
   const actions = useInfiniteQuery({
     queryKey: ['operator', 'actions'], initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam, signal }) => operatorApi.actions({ cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
+    queryFn: ({ pageParam, signal }) => operatorApi(scope).actions({ cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
   })
   const rows = (actions.data?.pages ?? []).flatMap(page => page.items)
   const [shown, setShown] = useState<OperatorAction | null>(null)
@@ -210,12 +213,13 @@ const waitlistColumns: Column<WaitlistEntry>[] = [
   { ...def(waitlistColumnDefs, 'letIn'), render: row => row.letInAt ? <span className="op-cell" title={letInText(row)}>{letInText(row)}</span> : <span className="muted">—</span>, cardRender: row => row.letInAt ? `Let in ${letInText(row)}` : 'Waiting' },
 ]
 function Waitlist() {
+  const scope = useRequestScope()
   const toast = useToast()
   const [search, setSearch] = useState('')
   const q = useDebounced(search.trim())
   const list = useInfiniteQuery({
     queryKey: ['operator', 'waitlist', q], initialPageParam: undefined as string | undefined, placeholderData: keepPreviousData,
-    queryFn: ({ pageParam, signal }) => operatorApi.waitlist({ q: q || undefined, cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
+    queryFn: ({ pageParam, signal }) => operatorApi(scope).waitlist({ q: q || undefined, cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
   })
   const rows = (list.data?.pages ?? []).flatMap(page => page.items), total = list.data?.pages[0]?.total
   const [exporting, setExporting] = useState(false)
@@ -227,7 +231,7 @@ function Waitlist() {
       const chunks: string[] = [formatCsvRow(['Email', 'Name', 'First attempt (UTC)', 'Last attempt (UTC)', 'Attempts', 'Let in (UTC)', 'Emailed'])]
       let cursor: string | undefined, pages = 0, truncated = false
       do {
-        const page = await operatorApi.waitlist({ q: q || undefined, cursor, limit: 1000 })
+        const page = await operatorApi(scope).waitlist({ q: q || undefined, cursor, limit: 1000 })
         if (page.items.length) chunks.push('\r\n' + page.items.map(row => formatCsvRow([row.email, row.name ?? '', isoTime(row.firstAt), isoTime(row.lastAt), row.attempts, row.letInAt ? isoTime(row.letInAt) : '', row.emailed ?? ''])).join('\r\n'))
         cursor = page.nextCursor ?? undefined
         if (cursor && ++pages >= MAX_PAGES) { truncated = true; break }
@@ -256,10 +260,11 @@ type PendingAction = { kind: ActionKind; key: string; campaign?: OperatorCampaig
 const open = (kind: ActionKind, campaign?: OperatorCampaign): PendingAction => ({ kind, key: crypto.randomUUID(), campaign })
 
 export function OperatorWorkspacePage() {
+  const scope = useRequestScope()
   const role = useOperatorRole()
   const id = useParams().id ?? ''
   const enabled = Boolean(role && id)
-  const detail = useQuery({ queryKey: ['operator', 'workspace', id], queryFn: ({ signal }) => operatorApi.workspace(id, signal), enabled })
+  const detail = useQuery({ queryKey: ['operator', 'workspace', id], queryFn: ({ signal }) => operatorApi(scope).workspace(id, signal), enabled })
   const [action, setAction] = useState<PendingAction | null>(null)
   if (!role) return <NotFound />
   if (!detail.data && !detail.isError) return <OperatorWorkspaceSkeleton actions={role === 'operator'} />
@@ -311,7 +316,8 @@ function WorkspaceBody({ data, canAct, onReleaseCampaign }: { data: OperatorWork
     { ...def(domainColumnDefs, 'mailFrom'), render: d => yes(d.mailFrom), cardRender: d => `MAIL FROM ${d.mailFrom ? 'on' : 'off'}` },
     { ...def(domainColumnDefs, 'dmarc'), render: d => d.dmarc ? label(d.dmarc) : 'None', cardRender: d => `DMARC ${d.dmarc ?? 'none'}` },
   ]
-  const billing = useQuery({ queryKey: ['operator', 'billing', data.workspace.id], queryFn: ({ signal }) => operatorApi.billing(data.workspace.id, signal) })
+  const scope = useRequestScope()
+  const billing = useQuery({ queryKey: ['operator', 'billing', data.workspace.id], queryFn: ({ signal }) => operatorApi(scope).billing(data.workspace.id, signal) })
   const [freeAction, setFreeAction] = useState<FreeAction | null>(null)
   const [reason, setReason] = useState<StandingReason | null>(null)
   const personFree = (userId: string) => billing.data?.free.people.find(p => p.userId === userId)?.free ?? null
@@ -408,9 +414,10 @@ const timelineColumns: Column<OperatorTimelineItem & { key: string }>[] = [
 // The evidence timeline: standing changes, operator actions, the daily score, bounces and complaints by recipient
 // domain and screen rejections, newest first. "Load more" pages back with the API's cursor.
 function Timeline({ workspaceId }: { workspaceId: string }) {
+  const scope = useRequestScope()
   const timeline = useInfiniteQuery({
     queryKey: ['operator', 'timeline', workspaceId], initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam, signal }) => operatorApi.timeline(workspaceId, pageParam, signal), getNextPageParam: page => page.nextCursor ?? undefined,
+    queryFn: ({ pageParam, signal }) => operatorApi(scope).timeline(workspaceId, pageParam, signal), getNextPageParam: page => page.nextCursor ?? undefined,
   })
   const rows = (timeline.data?.pages ?? []).flatMap((page, p) => page.items.map((item, i) => ({ ...item, key: `${p}:${i}:${item.at}:${item.kind}` })))
   const [shown, setShown] = useState<OperatorTimelineItem | null>(null)
@@ -465,13 +472,13 @@ function FreeDialog({ action, workspaceId, onClose }: { action: FreeAction | nul
   </Dialog>
 }
 function FreeForm({ action, workspaceId, onClose }: { action: FreeAction; workspaceId: string; onClose: () => void }) {
-  const client = useQueryClient(), toast = useToast()
+  const scope = useRequestScope(), client = useQueryClient(), toast = useToast()
   const [reason, setReason] = useState(''), [ticket, setTicket] = useState(''), [until, setUntil] = useState(''), [tried, setTried] = useState(false)
   const reasonError = reasonCheck(reason), untilError = until && !(Date.parse(until) > Date.now()) ? futureError : ''
   const mutation = useMutation({
     mutationFn: () => {
       const input = { free: action.on, reason, ticketRef: ticket, until: until ? new Date(until).toISOString() : null }, guard = { idempotencyKey: action.key }
-      return action.kind === 'workspace' ? operatorApi.workspaceFree(workspaceId, input, guard) : operatorApi.personFree(action.userId!, input, guard)
+      return action.kind === 'workspace' ? operatorApi(scope).workspaceFree(workspaceId, input, guard) : operatorApi(scope).personFree(action.userId!, input, guard)
     },
     onSuccess: () => { toast(action.on ? 'Marked free' : 'Billed again', 'success'); void client.invalidateQueries({ queryKey: ['operator'] }); onClose() },
   })
@@ -493,7 +500,7 @@ function ActionDialog({ action, workspace, onClose }: { action: PendingAction | 
   </Dialog>
 }
 function ActionForm({ action, workspace, onClose }: { action: PendingAction; workspace: OperatorWorkspace; onClose: () => void }) {
-  const client = useQueryClient(), toast = useToast()
+  const scope = useRequestScope(), op = operatorApi(scope), client = useQueryClient(), toast = useToast()
   const copy = actionCopy[action.kind]
   const [reason, setReason] = useState(''), [ticket, setTicket] = useState(''), [restore, setRestore] = useState<'50' | '100'>('50')
   // The limit starts at the current override, or else at the score's band, so the number to change from is in the field.
@@ -510,14 +517,14 @@ function ActionForm({ action, workspace, onClose }: { action: PendingAction; wor
     mutationFn: () => {
       const id = workspace.workspace.id, why = { reason, ticketRef: ticket }, guard = { idempotencyKey: action.key, ifMatch: workspace.standing?.version }
       switch (action.kind) {
-        case 'pause': return operatorApi.pause(id, why, guard)
-        case 'resume': return operatorApi.resume(id, { ...why, restore: restore === '100' ? 100 : 50 }, guard)
-        case 'hold': return operatorApi.marketing(id, { ...why, held: true }, guard)
-        case 'release': return operatorApi.marketing(id, { ...why, held: false }, guard)
-        case 'growth': return operatorApi.liftGrowth(id, why, guard)
-        case 'limit': return operatorApi.limit(id, { ...why, daily: clear ? null : dailyValue, expiresAt: expires ? new Date(expires).toISOString() : null }, guard)
-        case 'domains': return operatorApi.domainLimit(id, { ...why, limit: defaultDomains ? null : domainValue }, guard).then(() => undefined)
-        case 'campaign': return operatorApi.releaseCampaign(action.campaign!.id, why, guard)
+        case 'pause': return op.pause(id, why, guard)
+        case 'resume': return op.resume(id, { ...why, restore: restore === '100' ? 100 : 50 }, guard)
+        case 'hold': return op.marketing(id, { ...why, held: true }, guard)
+        case 'release': return op.marketing(id, { ...why, held: false }, guard)
+        case 'growth': return op.liftGrowth(id, why, guard)
+        case 'limit': return op.limit(id, { ...why, daily: clear ? null : dailyValue, expiresAt: expires ? new Date(expires).toISOString() : null }, guard)
+        case 'domains': return op.domainLimit(id, { ...why, limit: defaultDomains ? null : domainValue }, guard).then(() => undefined)
+        case 'campaign': return op.releaseCampaign(action.campaign!.id, why, guard)
       }
     },
     onSuccess: () => { toast(copy.done, 'success'); void client.invalidateQueries({ queryKey: ['operator'] }); onClose() },

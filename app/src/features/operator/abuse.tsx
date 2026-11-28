@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, ErrorText, FacetRail, Field, Input, MutationError, PageHeader, SectionHeader, Skeleton, SplitPane, StatusBadge, Textarea, useToast, type Column, type MenuItem, type Tone } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
-import { useSession } from '../../data/context'
+import { useRequestScope, useSession } from '../../data/context'
 import type { StandingStep } from '../../data/types'
 import { isoTime, operatorApi, type AbuseAccount, type AbuseAlert, type AbuseBand, type AbuseCluster, type AbuseClusterDetail, type AbuseLink, type AbuseReason, type AbuseReview, type AbuseWorkspace, type SlackCard } from '../../data/operator'
 import { errorText } from '../../data/types'
@@ -60,12 +60,13 @@ const alertColumns = (open: (row: AbuseAlert) => void, posting: boolean): Column
 
 /** The Abuse tab of /operator: a facet rail (risk levels, the outbox) beside the clusters or the alerts. */
 export function AbuseView() {
+  const scope = useRequestScope()
   const [params, setParams] = useSearchParams()
   const view = abuseView(params.toString())
   const set = (change: (next: URLSearchParams) => void) => setParams(previous => { const next = new URLSearchParams(previous); change(next); return next }, { replace: true })
   const clusters = useInfiniteQuery({
     queryKey: ['operator', 'abuse', 'clusters', view.band], initialPageParam: undefined as string | undefined, placeholderData: keepPreviousData,
-    queryFn: ({ pageParam, signal }) => operatorApi.abuseClusters({ band: view.band ?? undefined, cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
+    queryFn: ({ pageParam, signal }) => operatorApi(scope).abuseClusters({ band: view.band ?? undefined, cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
   })
   const first = clusters.data?.pages[0], rows = (clusters.data?.pages ?? []).flatMap(page => page.items)
   const groups = abuseFacets({ ...view, counts: first?.counts, outbox: first?.alerts,
@@ -84,9 +85,10 @@ export function AbuseView() {
 
 // The outbox: each alert with the Slack card it posted, or would post once a webhook is set.
 function Alerts() {
+  const scope = useRequestScope()
   const alerts = useInfiniteQuery({
     queryKey: ['operator', 'abuse', 'alerts'], initialPageParam: undefined as string | undefined,
-    queryFn: ({ pageParam, signal }) => operatorApi.abuseAlerts({ cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
+    queryFn: ({ pageParam, signal }) => operatorApi(scope).abuseAlerts({ cursor: pageParam }, signal), getNextPageParam: page => page.nextCursor ?? undefined,
   })
   const rows = (alerts.data?.pages ?? []).flatMap(page => page.items), delivery = alerts.data?.pages[0]?.delivery
   const [shown, setShown] = useState<AbuseAlert | null>(null)
@@ -120,11 +122,12 @@ export function SlackPreview({ card }: { card: SlackCard }) {
 
 type Pending = { kind: 'pause' | 'limit'; workspace: AbuseWorkspace; key: string }
 export function OperatorClusterPage() {
+  const scope = useRequestScope()
   const role = useSession()?.identity?.operator ?? null
   const id = useParams().id ?? ''
-  const detail = useQuery({ queryKey: ['operator', 'abuse', 'cluster', id], queryFn: ({ signal }) => operatorApi.abuseCluster(id, signal), enabled: Boolean(role && id) })
+  const detail = useQuery({ queryKey: ['operator', 'abuse', 'cluster', id], queryFn: ({ signal }) => operatorApi(scope).abuseCluster(id, signal), enabled: Boolean(role && id) })
   // The cluster's latest alert, which Slack links here: what Watch and Dismiss decide on.
-  const alerts = useQuery({ queryKey: ['operator', 'abuse', 'alerts', id], queryFn: ({ signal }) => operatorApi.abuseAlerts({ cluster: id, limit: 1 }, signal), enabled: Boolean(role && id) })
+  const alerts = useQuery({ queryKey: ['operator', 'abuse', 'alerts', id], queryFn: ({ signal }) => operatorApi(scope).abuseAlerts({ cluster: id, limit: 1 }, signal), enabled: Boolean(role && id) })
   const alert = alerts.data ? { alert: alerts.data.items[0] ?? null, posting: alerts.data.delivery === 'slack' } : undefined
   const [action, setAction] = useState<Pending | null>(null)
   if (!role) return <StaffOnly />
@@ -141,9 +144,9 @@ export function OperatorClusterPage() {
 // reasons) the cluster's latest alert; Pause is on each workspace. Disabled while it loads, without an alert, and for
 // the decision already taken.
 function ReviewActions({ alert }: { alert: AbuseAlert | null | undefined }) {
-  const client = useQueryClient(), toast = useToast()
+  const scope = useRequestScope(), client = useQueryClient(), toast = useToast()
   const mutation = useMutation({
-    mutationFn: (action: AbuseReview['action']) => operatorApi.abuseReview(alert!.id, action),
+    mutationFn: (action: AbuseReview['action']) => operatorApi(scope).abuseReview(alert!.id, action),
     onSuccess: (_, action) => { toast(action === 'watch' ? 'Alert watched' : 'Alert dismissed', 'success'); void client.invalidateQueries({ queryKey: ['operator', 'abuse'] }) },
     onError: error => toast(errorText(error), 'error'),
   })
@@ -153,7 +156,8 @@ function ReviewActions({ alert }: { alert: AbuseAlert | null | undefined }) {
 }
 // The other clusters, highest risk first, to step through without going back to the list.
 function ClusterRail({ current }: { current: string }) {
-  const list = useQuery({ queryKey: ['operator', 'abuse', 'rail'], queryFn: ({ signal }) => operatorApi.abuseClusters({ limit: 30 }, signal) })
+  const scope = useRequestScope()
+  const list = useQuery({ queryKey: ['operator', 'abuse', 'rail'], queryFn: ({ signal }) => operatorApi(scope).abuseClusters({ limit: 30 }, signal) })
   if (!list.data) return list.isError ? null : <ClusterRailSkeleton />
   return <ul className="op-cluster-rail" aria-label="Clusters">{list.data.items.map(cluster => <li key={cluster.id}>
     <Link className="op-cluster-rail__row" to={`/operator/abuse/${cluster.id}`} aria-current={cluster.id === current ? 'page' : undefined} replace>
@@ -242,14 +246,14 @@ function ActionDialog({ action, cluster, onClose }: { action: Pending | null; cl
   </Dialog>
 }
 function ActionForm({ action, cluster, onClose }: { action: Pending; cluster: string; onClose: () => void }) {
-  const client = useQueryClient(), toast = useToast()
+  const scope = useRequestScope(), client = useQueryClient(), toast = useToast()
   const [note, setNote] = useState(''), [ticket, setTicket] = useState(''), [daily, setDaily] = useState(action.workspace.dailyLimit ? String(action.workspace.dailyLimit) : ''), [tried, setTried] = useState(false)
   const noteError = note.trim().length < 10 ? 'At least 10 characters.' : note.trim().length > 1000 ? 'At most 1,000 characters.' : ''
   const dailyValue = Number(daily), dailyError = action.kind === 'limit' && !(Number.isInteger(dailyValue) && dailyValue >= 1 && dailyValue <= 10_000_000) ? dailyLimitError : ''
   const mutation = useMutation({
     mutationFn: () => {
       const input = { cluster, note, ticketRef: ticket }, guard = { idempotencyKey: action.key }
-      return action.kind === 'pause' ? operatorApi.abusePause(action.workspace.id, input, guard) : operatorApi.abuseLimit(action.workspace.id, { ...input, daily: dailyValue }, guard)
+      return action.kind === 'pause' ? operatorApi(scope).abusePause(action.workspace.id, input, guard) : operatorApi(scope).abuseLimit(action.workspace.id, { ...input, daily: dailyValue }, guard)
     },
     onSuccess: () => { toast(copy[action.kind].done, 'success'); void client.invalidateQueries({ queryKey: ['operator'] }); onClose() },
   })

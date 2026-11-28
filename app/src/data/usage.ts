@@ -1,4 +1,4 @@
-import { request } from './live'
+import { request, type RequestScope } from './live'
 
 // GET /v1/usage (hosted only): the price and the free allowances (sent and received, counted separately), whether
 // billing charges yet, this month's counts and the daily sending limit with the steps it grows through. Every workspace
@@ -13,4 +13,4 @@ export interface Usage {
   steps: UsageStep[]
   simulated: boolean
 }
-export const usageApi = { get: (signal?: AbortSignal) => request<Usage>('/v1/usage', { signal }) }
+export const usageApi = (scope: RequestScope | 'unscoped') => ({ get: (signal?: AbortSignal) => request<Usage>('/v1/usage', { signal, scope }) })

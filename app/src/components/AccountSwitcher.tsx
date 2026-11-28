@@ -145,7 +145,7 @@ function MenuGroup({ entries, named, className }: { entries: Entry[]; named: (en
 // A new workspace starts like a new signup: switching to it opens onboarding.
 function CreateWorkspaceDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
   const [name, setName] = useState('')
-  const create = useApiMutation((_api, value: string) => workspaceApi.create(value), undefined, false, false)
+  const create = useApiMutation((api, value: string) => workspaceApi(api.scope).create(value), undefined, false, false)
   async function submit(event: FormEvent) {
     event.preventDefault()
     try { const workspace = await create.mutateAsync(name.trim()); onClose(); onCreated(workspace.id) } catch { /* inline */ }

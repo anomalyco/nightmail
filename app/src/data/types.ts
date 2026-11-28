@@ -1,17 +1,19 @@
 import type { WorkspaceFocus } from '../../../api/src/workspace-focus.js'
 import { productName } from '../../../api/src/brand.js'
 import type { Grade, Step } from '../../../api/src/standing-model.js'
+import type { Campaign as SdkCampaign, CampaignDraft as SdkCampaignDraft, Email as SdkEmail, InboundWebhookRotatedSecret as SdkInboundWebhookRotatedSecret, UpdatedInboundWebhook as SdkUpdatedInboundWebhook } from '../../../sdk/src/types.gen.js'
 import type { WebhookFields } from '../features/settings/webhook-patch.js'
+import type { RequestScope } from './live.js'
 export type RegionId = string
 export type ISODate = string
 export type Stream = 'transactional' | 'marketing'
 export type AutoValidationMode = 'inherit' | 'off' | 'managed' | 'medium' | 'high' | 'unknown'
-export type EmailStatus = 'queued' | 'attempting' | 'accepted' | 'sent' | 'delivered' | 'bounced' | 'complained' | 'complaint' | 'deferred' | 'rejected' | 'rendering_failed' | 'delayed' | 'suppressed' | 'canceled' | 'acceptance_unknown' | 'simulated'
+export type EmailStatus = SdkEmail['status']
 // Statuses a sent email can still leave without anyone acting on it: a page showing one reads it again until it settles.
-export const pendingEmailStatuses: readonly string[] = ['queued', 'attempting', 'accepted', 'sent', 'deferred', 'delayed'] satisfies EmailStatus[]
+export const pendingEmailStatuses: readonly string[] = ['queued', 'attempting', 'accepted', 'sent', 'delayed'] satisfies EmailStatus[]
 export type ContactStatus = 'unknown' | 'subscribed' | 'unsubscribed' | 'suppressed'
 // The API's campaign states.
-export type CampaignStatus = 'draft' | 'preparing' | 'scheduled' | 'sending' | 'paused' | 'done' | 'failed' | 'canceled'
+export type CampaignStatus = SdkCampaign['state']
 // Editable, deletable and launchable from scratch: a draft, or a failed launch that released nothing. A failed launch that
 // already released recipients can only resume from its cursor or be canceled (it still holds its reservation).
 export const campaignEditable = (campaign: Pick<Campaign, 'status' | 'delivery'>) => campaign.status === 'draft' || (campaign.status === 'failed' && !(campaign.delivery?.expanded ?? 0))
@@ -46,7 +48,7 @@ export interface SesDiscovery {
   reputation?: SesReputation | null
 }
 export interface SesReputation { available: boolean; reason: string | null; bounceRate: number | null; complaintRate: number | null; series: { at: string; bounceRate: number | null; complaintRate: number | null }[] }
-interface SesConfigurationSet { name: string; exists: boolean | null; owned: boolean | null; sendingEnabled: boolean | null; eventDestinationExists: boolean | null; eventWired: boolean | null; autoValidation: AutoValidationMode | null }
+interface SesConfigurationSet { name: string; exists: boolean | null; owned: boolean | null; sendingEnabled: boolean | null; eventDestinationExists: boolean | null; eventWired: boolean | null; autoValidation?: AutoValidationMode | null }
 export interface Workspace { id: string; name: string; postalAddress: string | null; accountId?: string; role: string; members?: { id: string; name: string; email: string; role: string }[] }
 /** GET /v1/settings/workspace: the name and the postal address every campaign footer shows (null until set). */
 // requiredNotices: an operator let this workspace's campaigns be required notices (Campaign.requiredNotice).
@@ -95,7 +97,7 @@ export interface Contact { properties?: Record<string, string | number | boolean
 export interface Topic { id: string; name: string; description: string; subscribedByDefault: boolean; archivedAt: ISODate | null; createdAt: ISODate; /** Asked for with counts: the choices recorded about it; null when counting ran out of time. */ counts?: { optedIn: number; optedOut: number } | null }
 export interface ContactTopic { topicId: string; name: string; subscribed: boolean; chosen: boolean; updatedAt: ISODate | null }
 export interface ContactInput { id?: string; email: string; name: string; country: string; status: ContactStatus; listIds: string[] }
-export interface AudienceList { unknown?: number; id: string; name: string; total: number; subscribed: number; unsubscribed: number; suppressed: number; createdAt: ISODate }
+export interface AudienceList { unknown?: number; id: string; name: string; total?: number; subscribed?: number; unsubscribed?: number; suppressed?: number; createdAt: ISODate }
 export interface Segment { rule: Record<string, unknown>; id: string; name: string; updatedAt: ISODate }
 export type SegmentInput = Pick<Segment, 'name' | 'rule'> & { id?: string }
 /** risky: subscribed and not suppressed, but skipped as risky (not in eligible); riskyByReason only for a campaign's audience. */
@@ -124,7 +126,7 @@ export interface CampaignListStats { tracking: boolean; accepted: number; delive
 // null while a large list has never been counted.
 export interface NewsletterReaders { count: number; daily: number[]; since: string; countedAt: ISODate }
 export interface Newsletter { id: string; name: string; from: string; fromName: string | null; url: string; createdAt: ISODate; readers?: NewsletterReaders | null }
-export interface Campaign { stats?: CampaignListStats | null; counts?: { total: number; byStatus: Record<string, number> }; delivery?: CampaignDelivery | null; sendEstimate?: CampaignSendEstimate | null; archivedAt?: ISODate | null; revision?: number; draft?: Record<string, any>; attachments?: string[]; sourceTemplateId?: string | null; sourceTemplateRevision?: number | null; id: string; regionId: RegionId; name: string; subject: string; previewText: string; fromName: string; fromEmail: string; replyTo: string[]; unsubscribePageUrl: string; requiredNotice: boolean; /** '' without one. */ topicId: string; listId: string; segmentId: string | null; html: string; status: CampaignStatus; createdAt: ISODate; updatedAt: ISODate; scheduledAt: ISODate | null; recipients: number; delivered: number; bounced: number; complaints: number }
+export interface Campaign { stats?: CampaignListStats | null; counts?: { total: number; byStatus: Partial<Record<string, number>> }; delivery?: CampaignDelivery | null; sendEstimate?: CampaignSendEstimate | null; archivedAt?: ISODate | null; revision?: number; draft?: SdkCampaignDraft; attachments?: string[]; sourceTemplateId?: string | null; sourceTemplateRevision?: number | null; id: string; regionId: RegionId; name: string; subject: string; previewText: string; fromName: string; fromEmail: string; replyTo: string[]; unsubscribePageUrl: string; requiredNotice: boolean; /** '' without one. */ topicId: string; listId: string; segmentId: string | null; html: string; status: CampaignStatus; createdAt: ISODate; updatedAt: ISODate; scheduledAt: ISODate | null; recipients?: number; delivered?: number; bounced?: number; complaints?: number }
 // pacing, pausedAt, pauseReason, waiting, and rateShare are optional so older API responses still type-check.
 // rateShare is the fraction (0.05–1) of the SES per-second send rate the campaign may use; 1 is the full rate.
 export interface CampaignPacing { perDay: number | null; autoPause: boolean; rateShare?: number; windowStartedAt: ISODate | null; windowExpanded: number; nextWindowAt: ISODate | null; plan?: number[] | null; batch?: number | null
@@ -139,7 +141,7 @@ type CampaignRate = { value: number | null; numerator: number; denominator: numb
 // Lifetime distinct email outcomes (GET /v1/campaigns/{id}/stats); outcomes overlap and simulated mail is counted separately.
 export interface CampaignStats { tracking: boolean; totals: { accepted: number; delivered: number; bounced: number; complained: number; opened: number; clicked: number; failed: number; deliveryDelayed: number; simulated: number }; rates: Record<'delivery' | 'bounce' | 'complaint' | 'open' | 'click', CampaignRate> }
 // defaults are the fallback values for {{placeholders}} a contact has no value for (the API's draft.defaults).
-export type CampaignInput = Pick<Campaign, 'regionId' | 'name' | 'subject' | 'previewText' | 'fromName' | 'fromEmail' | 'listId' | 'segmentId' | 'html'> & { replyTo?: string[]; unsubscribePageUrl?: string; requiredNotice?: boolean; topicId?: string; id?: string; revision?: number; draft?: Record<string, any>; attachments?: string[]; defaults?: Record<string, string>; templateId?: string; idempotencyKey?: string }
+export type CampaignInput = Pick<Campaign, 'regionId' | 'name' | 'subject' | 'previewText' | 'fromName' | 'fromEmail' | 'listId' | 'segmentId' | 'html'> & { replyTo?: string[]; unsubscribePageUrl?: string; requiredNotice?: boolean; topicId?: string; id?: string; revision?: number; draft?: Partial<SdkCampaignDraft>; attachments?: string[]; defaults?: Record<string, string>; templateId?: string; idempotencyKey?: string }
 export interface CampaignState { id: string; revision: number; updatedAt: ISODate; status: CampaignStatus; scheduledAt: ISODate | null; archivedAt: ISODate | null }
 export interface SendCampaignInput { revision?: number; id: string; mode: 'now' | 'schedule'; scheduledAt?: ISODate; pacing?: { perDay?: number | null; autoPause?: boolean; rateShare?: number; plan?: 'recommended' }; consent?: { confirmed: true; source: string }; confirmRequiredNotice?: boolean }
 // Settings → Activity's entries (data/activity.ts) and an API key's history: the workspace's audit trail.
@@ -205,7 +207,7 @@ export interface DnsRecord { id: string; type: 'TXT' | 'CNAME' | 'MX'; name: str
 export interface ReceivingIssue { code: 'cname' | 'foreign_mx' | 'split' | 'wildcard' | 'bane_record' | 'host_taken' | 'claimed' | 'delegated' | 'mx_missing' | 'wrong_region' | 'null_mx' | 'proof_stale' | 'identity_stale'; host: string; blocking: boolean; message: string; provider?: string | null; target?: string | null; suggestion?: string | null }
 /** Hosted: the workspace's built-in domain (connection.builtinDomain in GET /v1/me): who it sends to, its caps, and whether it sends now. */
 export interface BuiltinDomain { id: string | null; name: string; sending: 'ready' | 'pending' | 'closed' | 'off'; /** Every built-in domain's sending is paused (the circuit breaker). */ paused?: true; scope: 'anyone' | 'members'; perDay: number; perMinute: number; /** Recipients in the rolling 24 hours, as perDay counts them (older APIs: absent). */ used?: number; /** Members only, but a reply may go once to a verified sender who wrote first (NIGHTMAIL_BUILTIN_REPLIES). */ repliesToSenders?: true }
-export interface Domain { /** The workspace's built-in domain: no DNS of its own, can't be deleted. */ builtIn?: boolean; /** The built-in domain's limits (GET /v1/domains/{id}). */ limits?: { scope: 'anyone' | 'members'; perDay: number; perMinute: number; unsupported: string[]; summary: string }; /** No nameservers serve the domain (unregistered or mistyped): set when it is added, by Check now and by the background check. */ dnsIssue?: { code: 'no_dns'; message: string } | null; dnsHost?: { name: string; zone: string; url: string | null } | null; receivingIssue?: ReceivingIssue | null; releasesAt?: string | null; dmarc?: Dmarc | null; dnsStatus?: 'available' | 'unavailable'; dnsUnavailableReason?: string | null; id: string; regionId: RegionId; name: string; status: 'verified' | 'pending' | 'issue'; verified?: boolean; dkimStatus?: 'verified' | 'pending' | 'failed'; mailFromDomain?: string | null; mailFromStatus: 'verified' | 'pending' | 'not_configured' | 'failed'; sending?: 'pending' | 'verified'; receiving?: 'pending' | 'verified'; records: DnsRecord[]; createdAt: ISODate }
+export interface Domain { /** The workspace's built-in domain: no DNS of its own, can't be deleted. */ builtIn?: boolean; /** The built-in domain's limits (GET /v1/domains/{id}). */ limits?: { scope: 'anyone' | 'members'; perDay: number; perMinute: number; unsupported: string[]; summary: string }; /** No nameservers serve the domain (unregistered or mistyped): set when it is added, by Check now and by the background check. */ dnsIssue?: { code: 'no_dns'; message: string } | null; dnsHost?: { name: string; zone: string; url: string | null } | null; receivingIssue?: ReceivingIssue | null; releasesAt?: string | null; dmarc?: Dmarc | null; dnsStatus?: 'available' | 'unavailable'; dnsUnavailableReason?: string | null; id: string; regionId: RegionId; name: string; status: 'verified' | 'pending' | 'issue'; verified?: boolean; dkimStatus?: 'verified' | 'pending' | 'failed'; mailFromDomain?: string | null; mailFromStatus: 'verified' | 'pending' | 'not_configured' | 'failed'; sending?: 'pending' | 'verified'; receiving?: 'pending' | 'verified'; records: DnsRecord[]; createdAt?: ISODate }
 export type MailboxDomainStatus = 'off' | 'provisioning' | 'waiting_for_mx' | 'active' | 'disabling' | 'disabled' | 'failed'
 export interface MailboxDomain {
   id: string; name: string; region: RegionId; status: MailboxDomainStatus; catchAll: 'create_address' | 'store'
@@ -225,11 +227,11 @@ export interface MailboxWebhookDelivery { id: string; webhookId: string; eventId
 export type InboxStatus = 'active' | 'expired' | 'deleting'
 export interface Inbox {
   id: string; kind: 'inbox'; type: 'ephemeral' | 'sandbox' | 'persistent'; address: string; domain: string; name: string | null; metadata: Record<string, unknown>; clientId: string | null
-  status: InboxStatus; createdAt: ISODate; expiresAt: ISODate; deleteAfter: ISODate; limits: { messages: number; bytes: number }
+  status: InboxStatus; createdAt: ISODate; expiresAt: ISODate | null; deleteAfter: ISODate | null; limits: { messages: number | null; bytes: number | null }
   send: { enabled: boolean; replyOnly: true }; usage: { messages: number; bytes: number; held: number; unread: number; lastMessageAt: ISODate | null }
 }
 export interface InboxInput { type: Inbox['type']; domain?: string; name?: string; ttlSeconds: number; send?: { enabled: boolean }; credential?: { name: string; permissions: ('read' | 'modify' | 'send')[] } }
-export interface CreatedInbox extends Inbox { credential?: { id: string; secret: string; permissions: string[]; expiresAt: ISODate } }
+export interface CreatedInbox extends Inbox { credential?: { id: string; secret: string; permissions: string[]; expiresAt: ISODate | null } }
 export interface InboxMessage {
   id: string; threadId: string; cursor: string; from: MailAddress; to: MailAddress[]; toCount?: number; subject: string; snippet: string; receivedAt: ISODate; read: boolean; junk: boolean
   /** When Nightmail stored it, and how long after its receipt reached it (older APIs: absent). */ storedAt?: ISODate; processingMs?: number | null
@@ -273,7 +275,7 @@ export interface ForwardEndpoint { id: string; name: string; status: 'ready' | '
 export interface InboundWebhook { id: string; key?: string | null; name?: string | null; url: string; description: string; eventTypes: MailboxEventType[]; addressIds: string[] | null; paused: boolean; headers: WebhookHeaderView[]; format?: InboundWebhookFormat; junk?: 'skip' | 'include'; createdAt: ISODate; updatedAt: ISODate; approval: ApprovalTie | null }
 /** eventTypes [] is a route-only webhook: it gets only the mail a route sends to it. */
 /** Shown once: a moved inbound-format webhook's new signing secret, and the verification token of one that is (or becomes) inbound format. */
-export interface WebhookSecrets { secret?: string; verificationToken?: string }
+export type WebhookSecrets = Pick<SdkUpdatedInboundWebhook, 'secret' | 'verificationToken'>
 export interface InboundWebhookInput { url: string; description: string; eventTypes: MailboxEventType[]; addressIds: string[] | null; headers?: WebhookHeaderInput[]; format?: InboundWebhookFormat; junk?: 'skip' | 'include' }
 /** A recipient → destinations rule. to: [] keeps mail without an inbox; 'drop' discards it. */
 export interface MailRoute { id: string; key: string | null; match: string; to: string[] | 'drop'; enabled: boolean; subaddresses: boolean; note: string; createdAt: ISODate }
@@ -378,6 +380,7 @@ export const errorText = (error: unknown, fallback = tryAgain) => error instance
 // Dates cross the boundary as ISO-8601 strings; rates are ratios, not formatted percentages.
 export type CursorItems<T> = T[] & { nextCursor?: string | null }
 export interface Api {
+  readonly scope: RequestScope | 'unscoped'
   consentHistory: (id: string, cursor?: string) => Promise<{items: ConsentEvent[]; nextCursor: string | null}>
   emailEvents: (id: string, cursor?: string) => Promise<{items: EmailEvent[]; nextCursor: string | null}>
   attachments: AttachmentApi
@@ -394,7 +397,7 @@ export interface Api {
   emails: { list(input: PageRequest, signal?: AbortSignal): Promise<PageResult<Email>>; get(id: string, signal?: AbortSignal): Promise<Email>; cancel(id: string, signal?: AbortSignal): Promise<Email>; reschedule(id: string, scheduledAt: ISODate, signal?: AbortSignal): Promise<Email>; check(input: EmailCheckInput, signal?: AbortSignal): Promise<SendabilityReport>; preview(input: EmailPreviewRequest, signal?: AbortSignal): Promise<ClientPreview[]> }
   logs: { list(input: PageRequest & { direction?: LogDirection }, signal?: AbortSignal): Promise<PageResult<LogEntry>>; facets(input: LogFacetInput, signal?: AbortSignal): Promise<LogFacetRead> }
   newsletters: { list(signal?: AbortSignal, cursor?: string): Promise<CursorItems<Newsletter>>; get(id: string, signal?: AbortSignal): Promise<Newsletter>; create(input: { name: string; from: string; fromName?: string }, signal?: AbortSignal): Promise<Newsletter> }
-  campaigns: { list(input: PageRequest & { archived?: boolean; /** Only campaigns to this list: a newsletter's issues. */ listId?: string; /** false: only campaigns that are no newsletter's issue. */ newsletter?: boolean }, signal?: AbortSignal): Promise<PageResult<Campaign>>; get(id: string, signal?: AbortSignal): Promise<Campaign>; state(id: string, signal?: AbortSignal): Promise<CampaignState>; preview(id: string, signal?: AbortSignal): Promise<CampaignPreview>; setArchived(input: { id: string; archived: boolean }, signal?: AbortSignal): Promise<Campaign>; save(input: CampaignInput, signal?: AbortSignal): Promise<Campaign>; audience(input: { id: string; listId: string; segmentId: string | null }, signal?: AbortSignal): Promise<AudiencePreview>; reviewDisplay(id: string, revision: number, check: boolean, signal?: AbortSignal): Promise<CampaignReviewDisplay>; send(input: SendCampaignInput, signal?: AbortSignal): Promise<Campaign | CampaignSendReceipt>; pause(id: string, signal?: AbortSignal): Promise<Campaign>; resume(id: string, signal?: AbortSignal): Promise<Campaign>; setPacing(id: string, input: CampaignPacingInput, signal?: AbortSignal): Promise<Campaign>; unschedule(id: string, signal?: AbortSignal): Promise<Campaign>; reschedule(id: string, scheduledAt: ISODate, signal?: AbortSignal): Promise<Campaign>; cancel(id: string, signal?: AbortSignal): Promise<{ canceled: number; inFlight: number }>; stats(id: string, signal?: AbortSignal): Promise<CampaignStats>; test(input: { id: string; to: string; data?: Record<string, string> }, signal?: AbortSignal): Promise<{ accepted: boolean; id?: string; status?: string; simulated?: boolean }> }
+  campaigns: { list(input: PageRequest & { archived?: boolean; /** Only campaigns to this list: a newsletter's issues. */ listId?: string; /** false: only campaigns that are no newsletter's issue. */ newsletter?: boolean }, signal?: AbortSignal): Promise<PageResult<Campaign>>; get(id: string, signal?: AbortSignal): Promise<Campaign>; state(id: string, signal?: AbortSignal): Promise<CampaignState>; preview(id: string, signal?: AbortSignal): Promise<CampaignPreview>; setArchived(input: { id: string; archived: boolean }, signal?: AbortSignal): Promise<Campaign>; save(input: CampaignInput, signal?: AbortSignal): Promise<Campaign>; audience(input: { id: string; listId: string; segmentId: string | null }, signal?: AbortSignal): Promise<AudiencePreview>; reviewDisplay(id: string, revision: number, check: boolean, signal?: AbortSignal): Promise<CampaignReviewDisplay>; send(input: SendCampaignInput, signal?: AbortSignal): Promise<CampaignSendReceipt>; pause(id: string, signal?: AbortSignal): Promise<Campaign>; resume(id: string, signal?: AbortSignal): Promise<Campaign>; setPacing(id: string, input: CampaignPacingInput, signal?: AbortSignal): Promise<Campaign>; unschedule(id: string, signal?: AbortSignal): Promise<Campaign>; reschedule(id: string, scheduledAt: ISODate, signal?: AbortSignal): Promise<Campaign>; cancel(id: string, signal?: AbortSignal): Promise<{ canceled: number; inFlight: number }>; stats(id: string, signal?: AbortSignal): Promise<CampaignStats>; test(input: { id: string; to: string; data?: Record<string, string> }, signal?: AbortSignal): Promise<{ accepted: boolean; id?: string; status?: string; simulated?: boolean }> }
   templates: { list(input?: PageRequest & { archived?: boolean; publishedOnly?: boolean }, signal?: AbortSignal): Promise<PageResult<CampaignTemplateSummary>>; get(id: string, signal?: AbortSignal): Promise<CampaignTemplate>; create(input: {name: string; description?: string}, signal?: AbortSignal): Promise<CampaignTemplate>; update(id: string, revision: number, draft: CampaignTemplateDraft, signal?: AbortSignal): Promise<CampaignTemplate>; publish(id: string, revision: number, signal?: AbortSignal): Promise<CampaignTemplate>; archive(id: string, archived: boolean, signal?: AbortSignal): Promise<CampaignTemplate>; remove(id: string, signal?: AbortSignal): Promise<void>; preview(id: string, published?: boolean, signal?: AbortSignal): Promise<CampaignPreview> }
   contacts: { list(input: PageRequest & { email?: string }, signal?: AbortSignal): Promise<PageResult<Contact>>; get(id: string, signal?: AbortSignal): Promise<Contact>; save(input: ContactInput, signal?: AbortSignal): Promise<Contact>; /** true: campaigns reach a risky contact anyway; false: they skip it again. */ allowRisk(id: string, allowed: boolean, signal?: AbortSignal): Promise<Contact> }
   lists: { list(input?: PageRequest & { counts?: boolean }, signal?: AbortSignal): Promise<PageResult<AudienceList>>; get(id: string, signal?: AbortSignal): Promise<AudienceList>; create(input: { name: string }, signal?: AbortSignal): Promise<AudienceList>; remove(id: string, signal?: AbortSignal): Promise<void> }
@@ -442,9 +445,9 @@ export interface Api {
     forwards(signal?: AbortSignal): Promise<ForwardEndpoint[]>
     /** One page of inbound webhooks; addressId keeps those that get that address's received mail. */
     webhook(id: string, signal?: AbortSignal): Promise<InboundWebhook>
-    updateWebhook(id: string, patch: Partial<InboundWebhookInput> & { paused?: boolean }, signal?: AbortSignal): Promise<InboundWebhook & WebhookSecrets>
+    updateWebhook(id: string, patch: Partial<InboundWebhookInput> & { paused?: boolean }, signal?: AbortSignal): Promise<SdkUpdatedInboundWebhook>
     deleteWebhook(id: string, signal?: AbortSignal): Promise<void>
-    rotateWebhookSecret(id: string, signal?: AbortSignal): Promise<WebhookSecrets & { secret: string }>
+    rotateWebhookSecret(id: string, signal?: AbortSignal): Promise<SdkInboundWebhookRotatedSecret>
     webhookDeliveries(id: string, cursor?: string, signal?: AbortSignal): Promise<CursorItems<MailboxWebhookDelivery>>
   }
   routing: {

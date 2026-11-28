@@ -7,7 +7,7 @@ import { useKeyboardInset } from '../../components/ui/sheet'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { ReceivedEmailPreview } from '../../components/EmailPreview'
 import { productName } from '../../../../api/src/brand'
-import { useSession } from '../../data/context'
+import { useRequestScope, useSession } from '../../data/context'
 import { ApiError } from '../../data/types'
 import { channelLabels, detailQuery, inboxDraft, inboxKeys, listQuery, prefetchConversation, subscribeInboxDrafts, supportInboxApi, updateInboxDraft, type Channel, type HeldReason, type SupportBrief, type SupportConversation, type SupportDetail, type SupportEmail, type SupportEvent, type SupportMessage } from '../../data/support-inbox'
 import { ago, label, number, shortDateTime } from '../../lib/format'
@@ -39,11 +39,12 @@ function useNeighbors(id: string, rows: SupportConversation[]) {
 
 
 export function SupportConversationPage() {
+  const scope = useRequestScope()
   const role = useRole(), canAct = role === 'operator'
   const id = useParams().id ?? '', valid = CONVERSATION.test(id)
   const client = useQueryClient(), navigate = useNavigate(), location = useLocation()
-  const detail = useQuery({ ...detailQuery(id), enabled: Boolean(role && valid), refetchInterval: query => query.state.status === 'error' ? false : 30_000 })
-  const list = useInfiniteQuery({ ...listQuery(memory.list.view, memory.list.q, memory.list.channel), enabled: Boolean(role), staleTime: 5_000 })
+  const detail = useQuery({ ...detailQuery(scope, id), enabled: Boolean(role && valid), refetchInterval: query => query.state.status === 'error' ? false : 30_000 })
+  const list = useInfiniteQuery({ ...listQuery(scope, memory.list.view, memory.list.q, memory.list.channel), enabled: Boolean(role), staleTime: 5_000 })
   const rows = flatten(list.data?.pages)
   const { next, previous } = useNeighbors(id, rows)
   const conversation = detail.data?.conversation ?? rows.find(c => c.id === id) ?? (valid ? cached(client, id) : undefined)
@@ -53,7 +54,7 @@ export function SupportConversationPage() {
   // On a phone the page ends where the keyboard begins, so the reply box rises with it.
   useKeyboardInset()
   // The conversations either side are read ahead, so j and k open them at once.
-  useEffect(() => { if (!detail.data) return; for (const other of [next, previous]) if (other) void prefetchConversation(client, other) }, [Boolean(detail.data), next, previous])
+  useEffect(() => { if (!detail.data) return; for (const other of [next, previous]) if (other) void prefetchConversation(client, scope, other) }, [Boolean(detail.data), next, previous])
   // Shown is read: through the messages on screen, so one arriving later is still new. Once per transcript length, so
   // marking it unread here (u) stays unread.
   const unread = detail.data?.conversation.unread, seen = detail.data?.conversation.messageCount, marked = useRef('')
@@ -109,10 +110,11 @@ export function SupportConversationPage() {
  * link did nothing: only Approve here (the operator role) runs it. Not now leaves it waiting; Decline closes it.
  */
 function ApprovalPrompt({ conversationId, canAct }: { conversationId: string; canAct: boolean }) {
+  const scope = useRequestScope()
   const [params, setParams] = useSearchParams(), approvalId = params.get('approval'), token = params.get('token')
   const client = useQueryClient(), toast = useToast(), key = useRef(crypto.randomUUID()), [busy, setBusy] = useState<'approve' | 'decline' | null>(null)
   const linked = Boolean(approvalId && token)
-  const approval = useQuery({ queryKey: ['support-inbox', 'approval', conversationId, approvalId], queryFn: ({ signal }) => supportInboxApi.approval(conversationId, approvalId!, token!, signal), enabled: linked, retry: false, staleTime: Infinity })
+  const approval = useQuery({ queryKey: ['support-inbox', 'approval', conversationId, approvalId], queryFn: ({ signal }) => supportInboxApi(scope).approval(conversationId, approvalId!, token!, signal), enabled: linked, retry: false, staleTime: Infinity })
   const close = () => setParams(previous => { const next = new URLSearchParams(previous); next.delete('approval'); next.delete('token'); return next }, { replace: true })
   useEffect(() => { if (linked && approval.isError) { toast('That approval link isn’t valid any more. The conversation is open as it is.', 'error'); close() } }, [linked, approval.isError])
   const a = approval.data
@@ -120,7 +122,7 @@ function ApprovalPrompt({ conversationId, canAct }: { conversationId: string; ca
   async function decide(decision: 'approve' | 'decline') {
     setBusy(decision)
     try {
-      const decided = await supportInboxApi.decideApproval(conversationId, a!.id, token!, decision, key.current)
+      const decided = await supportInboxApi(scope).decideApproval(conversationId, a!.id, token!, decision, key.current)
       const why = typeof decided.result?.message === 'string' ? decided.result.message : 'Try it from the conversation.'
       toast(decided.state === 'approved' ? `Done: ${decided.label.toLowerCase()}.` : decided.state === 'failed' ? `${decided.label} didn’t go through. ${why}` : 'Declined.', decided.state === 'failed' ? 'error' : 'success')
       void client.invalidateQueries({ queryKey: inboxKeys.detail(conversationId) })
@@ -344,14 +346,15 @@ function DraftActions({ m, c, actions, onEdit }: { m: SupportMessage; c: Support
 
 /** A customer email as it arrived: its reply first, the quoted history on request, its formatting (sandboxed, remote images off until asked) and the full text when it was longer, and its attachments. */
 function EmailBody({ conversationId, email, subject }: { conversationId: string; email: SupportEmail; subject: string | null }) {
+  const scope = useRequestScope()
   const [quoted, setQuoted] = useState(false), [formatted, setFormatted] = useState(false), [full, setFull] = useState(false)
-  const loaded = useQuery({ queryKey: [...inboxKeys.detail(conversationId), 'email', email.id], queryFn: ({ signal }) => supportInboxApi.email(conversationId, email.id, signal), enabled: formatted || full, staleTime: Infinity })
+  const loaded = useQuery({ queryKey: [...inboxKeys.detail(conversationId), 'email', email.id], queryFn: ({ signal }) => supportInboxApi(scope).email(conversationId, email.id, signal), enabled: formatted || full, staleTime: Infinity })
   const toast = useToast()
   const text = full && loaded.data ? loaded.data.text : email.text, reply = (full && loaded.data ? loaded.data.replyText : email.replyText).trim() || text
   const hasQuote = reply.trim() !== text.trim()
   const html = formatted ? loaded.data?.html ?? null : null
   async function open(attachmentId: string) {
-    try { window.open((await supportInboxApi.emailAttachment(conversationId, email.id, attachmentId)).url, '_blank', 'noopener') }
+    try { window.open((await supportInboxApi(scope).emailAttachment(conversationId, email.id, attachmentId)).url, '_blank', 'noopener') }
     catch (error) { toast(error instanceof ApiError ? error.message : 'The attachment couldn’t be opened.', 'error') }
   }
   return <div className="sinbox-email">
@@ -371,9 +374,10 @@ function EmailBody({ conversationId, email, subject }: { conversationId: string;
 }
 /** A chat's screenshots: opened from the support service on request, never loaded into the page. */
 function Files({ conversationId, files }: { conversationId: string; files: SupportMessage['files'] }) {
+  const scope = useRequestScope()
   const toast = useToast()
   async function open(attachmentId: string) {
-    try { window.open((await supportInboxApi.file(conversationId, attachmentId)).url, '_blank', 'noopener') }
+    try { window.open((await supportInboxApi(scope).file(conversationId, attachmentId)).url, '_blank', 'noopener') }
     catch (error) { toast(error instanceof ApiError ? error.message : 'The screenshot couldn’t be opened.', 'error') }
   }
   return <ul className="sinbox-files" aria-label="Screenshots">{files.map(file => <li key={file.id}>

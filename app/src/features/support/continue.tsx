@@ -84,7 +84,7 @@ export function SupportContinuePage() {
   function failed(error: unknown) { setAddress(mailboxAddress(error)); setState(outcome(error)) }
   async function load(tries = 3): Promise<void> {
     setState('loading')
-    try { setEmail(await supportApi.pending(id, messageId)); setState('ready') }
+    try { setEmail(await supportApi('unscoped').pending(id, messageId)); setState('ready') }
     catch (error) {
       // The session chose its account while this was in flight (data/live.ts drops that answer): ask again as that account.
       if (error instanceof DOMException && error.name === 'AbortError' && tries > 1) return load(tries - 1)
@@ -106,21 +106,21 @@ export function SupportContinuePage() {
     if (state === 'failed' && !email) { await load(); return }
     if (state === 'mailbox') {
       setWorking(true)
-      try { setAddress((await supportApi.signInLink(id, messageId)).address); setState('sent') }
+      try { setAddress((await supportApi('unscoped').signInLink(id, messageId)).address); setState('sent') }
       catch (error) { if (error instanceof ApiError && error.status === 429) setState('links'); else failed(error) }
       finally { setWorking(false) }
       return
     }
     if (state !== 'ready' && state !== 'failed') { leave(); return }
     setWorking(true)
-    try { await supportApi.claim(id, messageId); setState('claimed') }
+    try { await supportApi('unscoped').claim(id, messageId); setState('claimed') }
     catch (error) { failed(error) }
     finally { setWorking(false) }
   }
   // The second choice: a general answer by email, to the conversation's own address, without a sign-in.
   async function answer() {
     setAnswering(true)
-    try { const answered = await supportApi.answerByEmail(id, messageId); setAddress(answered.address); setState(answered.outcome === 'already_answered' ? 'already' : answered.outcome === 'answered' ? 'went' : 'answered') }
+    try { const answered = await supportApi('unscoped').answerByEmail(id, messageId); setAddress(answered.address); setState(answered.outcome === 'already_answered' ? 'already' : answered.outcome === 'answered' ? 'went' : 'answered') }
     catch (error) { setState(error instanceof ApiError && error.status === 429 ? 'busy' : error instanceof ApiError && error.status === 404 ? 'invalid' : 'failed') }
     finally { setAnswering(false) }
   }

@@ -4,6 +4,7 @@ import { useInfiniteQuery, useQueryClient } from '@tanstack/react-query'
 import { Bot, Mail, MessageSquare } from 'lucide-react'
 import { Button, DataTable, DropdownMenu, EmptyState, ErrorState, PageHeader, StatusBadge, type Column } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
+import { useRequestScope } from '../../data/context'
 import { listQuery, prefetchConversation, type Channel, type InboxView, type SupportConversation } from '../../data/support-inbox'
 import { ago } from '../../lib/format'
 import { useSearchDraft } from '../../lib/pagination'
@@ -62,6 +63,7 @@ const Subject = ({ c, preview = true }: { c: SupportConversation; preview?: bool
 // ---------------------------------------------------------------- the list
 
 export function SupportInboxPage() {
+  const scope = useRequestScope()
   const role = useRole(), canAct = role === 'operator'
   const location = useLocation(), navigate = useNavigate(), client = useQueryClient(), phone = usePhone()
   const [params, setParams] = useSearchParams()
@@ -70,7 +72,7 @@ export function SupportInboxPage() {
   useEffect(() => { memory.list = { view, q, channel } }, [view, q, channel])
   const setChannel = (next: Channel | '') => setParams(previous => { const params = new URLSearchParams(previous); if (next) params.set('channel', next); else params.delete('channel'); return params }, { replace: true })
   // A search keeps the rows it replaces until its answer arrives; another tab never shows this one's.
-  const list = useInfiniteQuery({ ...listQuery(view, q, channel), enabled: Boolean(role), staleTime: 5_000, refetchInterval: query => query.state.status === 'error' ? false : 30_000,
+  const list = useInfiniteQuery({ ...listQuery(scope, view, q, channel), enabled: Boolean(role), staleTime: 5_000, refetchInterval: query => query.state.status === 'error' ? false : 30_000,
     placeholderData: (previous, query) => query?.queryKey[2] === view ? previous : undefined })
   const rows = flatten(list.data?.pages), counts = list.data?.pages[0]?.counts ?? null
   // Each view keeps its own selected row.
@@ -84,12 +86,12 @@ export function SupportInboxPage() {
   useEffect(() => {
     if (!list.data || !role) return
     const other: InboxView = view === 'needs_you' ? 'all' : 'needs_you'
-    void client.prefetchInfiniteQuery({ ...listQuery(other, ''), staleTime: 5_000 })
+    void client.prefetchInfiniteQuery({ ...listQuery(scope, other, ''), staleTime: 5_000 })
   }, [Boolean(list.data), role])
   // The selected row is read ahead (once it has stayed selected a moment), and kept in view.
   useEffect(() => {
     if (!selected || phone) return
-    const timer = window.setTimeout(() => void prefetchConversation(client, selected.id), 120)
+    const timer = window.setTimeout(() => void prefetchConversation(client, scope, selected.id), 120)
     document.querySelector('.sinbox-table tr[data-selected="true"]')?.scrollIntoView({ block: 'nearest' })
     return () => window.clearTimeout(timer)
   }, [selected?.id])
@@ -136,7 +138,7 @@ export function SupportInboxPage() {
       <InboxToolbar search={search} onSearch={setSearch} channel={channel} onChannel={setChannel} />
       {list.isError && !list.data ? <ErrorState error={list.error} onRetry={() => void list.refetch()} /> : <>
         <DataTable key={view} className="sinbox-table" rows={rows} rowKey={c => c.id} columns={columns} selectedId={phone ? undefined : selected?.id} empty={empty} rowKeys={false}
-          rowHref={c => `/support/${c.id}`} rowLabel={titleOf} onRowIntent={c => void prefetchConversation(client, c.id)} onRowFocus={phone ? undefined : c => setSelectedId(c.id)} />
+          rowHref={c => `/support/${c.id}`} rowLabel={titleOf} onRowIntent={c => void prefetchConversation(client, scope, c.id)} onRowFocus={phone ? undefined : c => setSelectedId(c.id)} />
         {list.hasNextPage && <Button className="sinbox-more" loading={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>Load more</Button>}
       </>}
     </div>

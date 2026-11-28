@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Alert, Button, Dialog, ErrorText, StatusDot } from '../../components/ui'
+import { useRequestScope } from '../../data/context'
 import { supportActionsApi, type SupportAction } from '../../data/support'
 import { ApiError } from '../../data/types'
 import { relativeTime } from '../../lib/format'
@@ -28,12 +29,13 @@ export function ActionSummary({ action }: { action: SupportAction }) {
 // any other refusal of the request, reads as not available, never as the API's own words.
 const ACTION_ID = /^sac_[0-9a-f]{32}$/
 export function SupportActionDialog() {
+  const scope = useRequestScope()
   const { id = '' } = useParams()
   const navigate = useNavigate()
   const client = useQueryClient()
   const key = ['support-action', id]
   const valid = ACTION_ID.test(id)
-  const query = useQuery({ queryKey: key, queryFn: ({ signal }) => supportActionsApi.get(id, signal), staleTime: 0, enabled: valid,
+  const query = useQuery({ queryKey: key, queryFn: ({ signal }) => supportActionsApi(scope).get(id, signal), staleTime: 0, enabled: valid,
     retry: (count, error) => !(error instanceof ApiError && error.status !== undefined && error.status < 500) && count < 2,
     // A test posting, or a queued test or retry, is read again until its delivery answers (two minutes after the decision).
     refetchInterval: current => { if (current.state.status === 'error') return false; const data = current.state.data; return data && actionResult(data)?.waiting && Date.now() - Date.parse(data.resolvedAt ?? new Date().toISOString()) < 120_000 ? 2500 : false } })
@@ -44,7 +46,7 @@ export function SupportActionDialog() {
   async function decide(decision: 'confirm' | 'decline') {
     if (deciding) return
     setDeciding(decision); setError(null)
-    try { client.setQueryData(key, await supportActionsApi[decision](id)) }
+    try { client.setQueryData(key, await supportActionsApi(scope)[decision](id)) }
     catch (cause) { setError(cause); void query.refetch() }
     finally { setDeciding(null) }
   }

@@ -20,8 +20,8 @@ import './campaigns.css'
 // Simulated sends count as delivered here (the review page lists them apart). Past the email history the stored totals
 // count instead; null when neither is known. Demo campaigns carry only `delivered`.
 const delivered = (campaign: Campaign): number | null => (campaign.counts?.total ?? 0) > 0 ? (campaign.counts!.byStatus.delivered ?? 0) + (campaign.counts!.byStatus.simulated ?? 0)
-  : campaign.stats ? campaign.stats.delivered : campaign.counts ? null : campaign.delivered
-const deliveredShare = (campaign: Campaign) => { const count = ['sent', 'done'].includes(campaign.status) && campaign.recipients > 0 ? delivered(campaign) : null; return count === null ? null : count / campaign.recipients }
+  : campaign.stats ? campaign.stats.delivered : campaign.counts ? null : (campaign.delivered ?? null)
+const deliveredShare = (campaign: Campaign) => { const recipients = campaign.recipients ?? 0; const count = campaign.status === 'done' && recipients > 0 ? delivered(campaign) : null; return count === null ? null : count / recipients }
 const campaignPath = (campaign: Campaign) => `/campaigns/${encodeURIComponent(campaign.id)}/${!campaign.archivedAt && campaignEditable(campaign) ? 'edit' : 'review'}`
 
 export function CampaignsPage() {
@@ -80,7 +80,7 @@ export function CampaignsPage() {
         { ...campaignColumns[0], render: row => <div className="campaign-row-name"><span title={row.name}>{row.name}</span>{row.subject.trim() && row.subject.trim() !== row.name.trim() && <span className="muted" title={row.subject}>{row.subject}</span>}</div>, cardRender: row => row.name },
         { ...campaignColumns[1], render: row => <StatusBadge status={campaignDisplayStatus(row)} /> },
         { ...campaignColumns[2], render: row => row.subject.trim() || <span className="muted">No subject</span> },
-        { ...campaignColumns[3], render: row => campaignEditable(row) ? '—' : number(row.recipients), cardRender: row => campaignEditable(row) ? null : `${number(row.recipients)} ${row.recipients === 1 ? 'recipient' : 'recipients'}` },
+        { ...campaignColumns[3], render: row => campaignEditable(row) || row.recipients === undefined ? '—' : number(row.recipients), cardRender: row => campaignEditable(row) || row.recipients === undefined ? null : `${number(row.recipients)} ${row.recipients === 1 ? 'recipient' : 'recipients'}` },
         { ...campaignColumns[4], render: row => { const count = deliveredShare(row); return count === null ? '—' : percent(count) }, cardRender: row => { const count = deliveredShare(row); return count === null ? null : `${percent(count, 0)} delivered` } },
         { ...campaignColumns[5], render: row => { const at = row.scheduledAt || row.updatedAt; return <span className="muted campaign-activity" title={`${date(at)} · ${time(at)} UTC`}>{shortDateTime(at)}</span> }, cardRender: row => (row.scheduledAt ? 'Sends ' : '') + date(row.scheduledAt || row.updatedAt, { month: 'short', day: 'numeric', timeZone: 'UTC' }) },
         { ...campaignColumns[6], render: row => <CampaignArchiveButton campaign={row} compact onSuccess={() => filter('page', '')} /> },

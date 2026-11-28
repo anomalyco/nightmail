@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalS
 import { ArrowUp, Check, CircleAlert, Image as ImageIcon, ImagePlus, Square, UserRound, X } from 'lucide-react'
 import { Button, DropdownMenu, IconButton, Skeleton } from '../../components/ui'
 import { SheetOpenEffects, useSheetDrag } from '../../components/ui/sheet'
-import { useSession } from '../../data/context'
+import { useRequestScope, useSession } from '../../data/context'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { TOUCH, matches, usePhone, useTouch } from '../../lib/media'
 import { Markdown, settled } from './markdown'
@@ -34,6 +34,7 @@ const down = (state: ChatState) => state.connection === 'offline' || state.conne
 // opened from the sidebar's Help, which leaves the page readable beside it, and a sheet above the tab bar on a phone. It is not
 // modal: on a desktop the page stays usable while the agent works, and the conversation carries on across pages.
 export function SupportPanel({ mode, open, onClose, onUnread, resume }: { mode: 'demo' | 'live'; open: boolean; onClose: () => void; onUnread: (unread: boolean) => void; resume: string | null }) {
+  const scope = useRequestScope()
   const identity = useSession()?.identity ?? null
   const phone = usePhone(), touch = useTouch()
   const userId = identity?.id ?? 'demo', workspaceId = identity?.workspaceId ?? 'demo'
@@ -41,12 +42,12 @@ export function SupportPanel({ mode, open, onClose, onUnread, resume }: { mode: 
   // One continuous conversation per account and workspace: another account or workspace gets its own, never this one's.
   // A dashboard with no support Worker to talk to (not on the hosted service's hosts, no VITE_SUPPORT_ORIGIN) gets the
   // chat's own refusal, never the scripted demo: only ?support=demo shows that.
-  const store = useMemo(() => supportStore(`${mode}:${userId}:${workspaceId}`, () => {
+  const store = useMemo(() => supportStore(`${mode}:${userId}:${workspaceId}:${scope.epoch}`, () => {
     if (mode === 'demo') return createDemoTransport({ firstName: identity?.name?.trim().split(/\s+/)[0] || 'Ryan', workspace: { id: workspaceId, name: workspaceName ?? 'Acme' } })
     const origin = supportOrigin()
-    return origin ? createSocketTransport({ origin, userId, workspaceId, resume }) : createUnavailableTransport()
+    return origin ? createSocketTransport({ origin, userId, workspaceId, resume, scope }) : createUnavailableTransport(scope)
   }, { read: () => loadDraft(mode, userId, workspaceId), write: draft => saveDraft(mode, userId, workspaceId, draft),
-    parked: { read: () => loadDraft(mode, userId, workspaceId, 'parked'), write: text => saveDraft(mode, userId, workspaceId, text, 'parked') } }), [mode, userId, workspaceId])
+    parked: { read: () => loadDraft(mode, userId, workspaceId, 'parked'), write: text => saveDraft(mode, userId, workspaceId, text, 'parked') } }), [mode, userId, workspaceId, scope])
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot)
   const panel = useRef<HTMLElement>(null), input = useRef<HTMLTextAreaElement>(null)
   useEffect(() => {

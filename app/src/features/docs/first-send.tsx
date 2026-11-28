@@ -4,7 +4,7 @@ import { useGuardedMutation } from '../../lib/single-flight'
 import { Send } from 'lucide-react'
 import { Alert, Button, ErrorText, SectionHeader, Tabs } from '../../components/ui'
 import { CopyAction } from '../../components/motion'
-import { useApiDef, useApiQuery, usePublicOrigin, useSession } from '../../data/context'
+import { useApiDef, useApiQuery, usePublicOrigin, useRequestScope, useSession } from '../../data/context'
 import { request } from '../../data/live'
 import { queries } from '../../data/queries'
 import { pendingEmailStatuses, type Domain } from '../../data/types'
@@ -35,9 +35,10 @@ export const sendLanguages = [{ value: 'curl', label: 'cURL' }, { value: 'sdk', 
 /** The test send itself, for TestSend and Overview's first-send card. `domain` may still be loading. `ms` is the send's
  *  round trip through the API, measured in this browser. */
 export function useTestSend(domain: Pick<Domain, 'id'> | null | undefined, onSent?: (id: string, ms: number) => void) {
-  return useGuardedMutation({ target: domain?.id ?? '', mutationFn: async () => {
+  const scope = useRequestScope()
+  return useGuardedMutation({ target: domain?.id ?? '', requestScope: scope, mutationFn: async () => {
     const started = performance.now()
-    const sent = await request<{ id: string; status: string; simulated?: boolean }>(`/v1/domains/${encodeURIComponent(domain!.id)}/test-send`, { method: 'POST', idempotencyKey: crypto.randomUUID() })
+    const sent = await request<{ id: string; status: string; simulated?: boolean }>(`/v1/domains/${encodeURIComponent(domain!.id)}/test-send`, { method: 'POST', idempotencyKey: crypto.randomUUID(), scope })
     return { ...sent, ms: performance.now() - started }
   }, onSuccess: data => onSent?.(data.id, data.ms) })
 }

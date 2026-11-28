@@ -47,8 +47,8 @@ while IFS= read -r -d '' path; do
     domain-connect/*|infra/aws-shared/*|infra/pulumi/receiving-alarm.ts|.github/s3-fixture/*) acceptance=true ;;
   esac
   case "$path" in
-    # The dashboard imports these API modules directly and renders /openapi.json. It does not import sdk/src.
-    api/openapi.json|api/src/analytics-events.ts|api/src/billing/rates.ts|api/src/block-style.ts|api/src/brand.ts|api/src/mcp-clients.ts|api/src/ritual-schema.ts|api/src/standing-model.ts|api/src/webhook-signature-guide.ts) dashboard=true ;;
+    # The dashboard imports these API modules directly, sdk/src/types.gen.ts for wire types, and renders /openapi.json.
+    api/openapi.json|sdk/src/types.gen.ts|api/src/analytics-events.ts|api/src/billing/rates.ts|api/src/block-style.ts|api/src/brand.ts|api/src/mcp-clients.ts|api/src/ritual-schema.ts|api/src/standing-model.ts|api/src/webhook-signature-guide.ts) dashboard=true ;;
   esac
   case "$path" in
     api/src/brand.ts|api/src/log.ts|api/src/billing/rates.ts|api/src/mail-servers.ts|api/src/output-gate.ts|api/src/plain-text.ts|api/wrangler.prod.jsonc) support=true ;;

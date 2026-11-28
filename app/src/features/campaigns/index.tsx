@@ -771,7 +771,7 @@ function ScheduledBanner({ campaign }: { campaign: Campaign }) {
   const blocked = canAdminister ? undefined : 'Only owners and admins can change a schedule.'
   return <>
     <div className="campaign-scheduled" role="status">
-      <div className="campaign-scheduled__text"><strong>Scheduled for {utcLabel(at)}</strong><span className="muted">{localLabel(at)} · {number(total)} {total === 1 ? 'recipient' : 'recipients'}</span></div>
+      <div className="campaign-scheduled__text"><strong>Scheduled for {utcLabel(at)}</strong><span className="muted">{localLabel(at)}{total === undefined ? '' : ` · ${number(total)} ${total === 1 ? 'recipient' : 'recipients'}`}</span></div>
       <div className="cluster"><Button size="sm" disabled={!canAdminister} title={blocked} onClick={() => setDialog('reschedule')}>Reschedule</Button><Button size="sm" disabled={!canAdminister} title={blocked} onClick={() => setDialog('edit')}>Edit</Button><Button size="sm" variant="ghost" disabled={!canAdminister} title={blocked} onClick={() => setDialog('unschedule')}>Unschedule</Button></div>
     </div>
     <ConfirmDialog open={dialog === 'edit'} onOpenChange={open => setDialog(open ? 'edit' : null)} title="Edit this campaign?" description="Editing turns it back into a draft." confirmLabel="Unschedule and edit" onConfirm={() => unschedule(true)} />
@@ -1078,7 +1078,7 @@ function CampaignReview({ campaign: latest, stats, settings, stale, refreshing, 
     if (readinessError) { setError(readinessError); setConfirmation(null); return }
     guard.current = true
     setError('')
-    try { const result = await sendMutation.mutateAsync(input); if ('queued' in result && !result.scheduledAt) toast(result.queued > 0 ? `Sending started · ${number(result.queued)} ${result.queued === 1 ? 'recipient' : 'recipients'}${result.simulated ? ' · simulated' : ''}` : `Sending started · preparing recipients${result.simulated ? ' · simulated' : ''}`, 'success'); setConfirmation(null) }
+    try { const result = await sendMutation.mutateAsync(input); if (!result.scheduledAt) toast(result.queued > 0 ? `Sending started · ${number(result.queued)} ${result.queued === 1 ? 'recipient' : 'recipients'}${result.simulated ? ' · simulated' : ''}` : `Sending started · preparing recipients${result.simulated ? ' · simulated' : ''}`, 'success'); setConfirmation(null) }
     catch (cause) {
       setConfirmation(null)
       if (cause instanceof ApiError && cause.code === 'POSTAL_ADDRESS_REQUIRED') setAddressFor({ input, confirmed: true })
@@ -1204,7 +1204,7 @@ function CampaignReview({ campaign: latest, stats, settings, stale, refreshing, 
           {scheduledView ? <AudienceSource listId={campaign.listId} segmentId={campaign.segmentId} prefix="To " /> : <>
             <AudienceSource listId={campaign.listId} segmentId={campaign.segmentId} prefix={campaign.status === 'done' ? `Sent ${day(campaign.scheduledAt || campaign.updatedAt)} to ` : undefined} />
             <CampaignPacing key={`${campaign.id}:${campaign.delivery?.pacing?.perDay ?? ''}:${campaign.delivery?.pacing?.autoPause ?? ''}:${campaign.delivery?.pacing?.rateShare ?? ''}`} campaign={campaign} />
-            {finished ? <CampaignResults campaign={campaign} stats={stats} /> : campaign.counts ? <CampaignProgress campaign={campaign} /> : <div className="campaign-audience-summary"><div className="campaign-summary-line"><span>Recipients</span><span>{number(campaign.recipients)}</span></div></div>}
+            {finished ? <CampaignResults campaign={campaign} stats={stats} /> : campaign.counts ? <CampaignProgress campaign={campaign} /> : campaign.recipients !== undefined ? <div className="campaign-audience-summary"><div className="campaign-summary-line"><span>Recipients</span><span>{number(campaign.recipients)}</span></div></div> : null}
           </>}
           {scheduledView && <CampaignPacing key={`${campaign.id}:paused`} campaign={campaign} />}
         </>}

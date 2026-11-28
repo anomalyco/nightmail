@@ -23,6 +23,10 @@ app/*
 !app/src/**
 !app/public/
 !app/public/**
+!sdk/
+sdk/*
+!sdk/src/
+!sdk/src/types.gen.ts
 **/node_modules
 **/dist
 **/.env*

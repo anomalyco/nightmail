@@ -4,7 +4,7 @@ import { SectionHeader } from '../../components/ui'
 import { CopyAction } from '../../components/motion'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { isMailbox } from '../../lib/private-address'
-import { useApiQuery } from '../../data/context'
+import { useApiQuery, useRequestScope } from '../../data/context'
 import { request } from '../../data/live'
 import { errorText, type Domain } from '../../data/types'
 import { recordsFor } from '../settings/domain-records'
@@ -108,16 +108,17 @@ export type AgentSetup = { state: AgentSetupState; keyName: string | null; error
  * Null for everyone else, whose prompt has the device flow instead.
  */
 export function useAgentSetup(enabled: boolean): AgentSetup | null {
+  const scope = useRequestScope()
   const [minted, setMinted] = useState<string | null>(null)
   const [error, setError] = useState<unknown>(null)
-  const watched = useApiQuery(['agent-setup', minted ?? ''], (_api, signal) => request<SetupStatus>(`/v1/agent/setup-tokens/${encodeURIComponent(minted!)}`, { signal }),
+  const watched = useApiQuery(['agent-setup', minted ?? ''], (api, signal) => request<SetupStatus>(`/v1/agent/setup-tokens/${encodeURIComponent(minted!)}`, { signal, scope: api.scope }),
     { enabled: enabled && minted !== null, interval: data => !data || data.status === 'waiting' ? 3000 : false })
   if (!enabled) return null
   const status = minted && watched.data?.id === minted ? watched.data : null
   return { state: error ? 'failed' : !minted ? 'idle' : status?.status ?? 'waiting', keyName: status?.keyName ?? null, error,
     copy: prompt => async () => {
       try {
-        const made = await request<{ id: string; token: string }>('/v1/agent/setup-tokens', { method: 'POST' })
+        const made = await request<{ id: string; token: string }>('/v1/agent/setup-tokens', { method: 'POST', scope })
         setMinted(made.id); setError(null)
         return prompt(made.token)
       } catch (failure) { setError(failure); return prompt(undefined) }

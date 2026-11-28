@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, X } from 'lucide-react'
 import { Alert, Button, Checkbox, ConfirmDialog, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, ErrorText, type Column } from '../../components/ui'
-import { useSession } from '../../data/context'
+import { useRequestScope, useSession } from '../../data/context'
 import { ApiError } from '../../data/types'
 import { supportAgentsApi, supportAgentsKey, type SupportAgentApproval, type SupportAgentConnection, type SupportAgentRequest } from '../../data/support-agents'
 import { relativeTime, shortDateTime } from '../../lib/format'
@@ -28,10 +28,11 @@ function minutesLeft(at: string) {
 }
 
 export function OperatorAgentsPage() {
+  const scope = useRequestScope()
   const role = useSession()?.identity?.operator ?? null, client = useQueryClient()
   const [params, setParams] = useSearchParams()
   const code = readCode(params.get('code'))
-  const agents = useQuery({ queryKey: supportAgentsKey, enabled: Boolean(role), queryFn: ({ signal }) => supportAgentsApi.list(signal) })
+  const agents = useQuery({ queryKey: supportAgentsKey, enabled: Boolean(role), queryFn: ({ signal }) => supportAgentsApi(scope).list(signal) })
   const [revoking, setRevoking] = useState<SupportAgentApproval | null>(null)
   const menu = useRef<HTMLElement | null>(null)
   if (!role) return <StaffOnly />
@@ -56,13 +57,14 @@ export function OperatorAgentsPage() {
     {code && <ApproveDialog key={code} code={code} onClose={closeRequest} onApproved={() => void client.invalidateQueries({ queryKey: supportAgentsKey })} />}
     <ConfirmDialog open={revoking !== null} onOpenChange={next => { if (!next) setRevoking(null) }} danger returnFocus={menu} confirmLabel="Revoke"
       title={`Revoke ${revoking ? agentName(revoking.agent) : 'this agent'}?`} description="Its next call to the support inbox is refused."
-      onConfirm={async () => { await supportAgentsApi.revoke(revoking!.id); await client.invalidateQueries({ queryKey: supportAgentsKey }) }} />
+      onConfirm={async () => { await supportAgentsApi(scope).revoke(revoking!.id); await client.invalidateQueries({ queryKey: supportAgentsKey }) }} />
   </>
 }
 
 /** The request behind a link's code, to approve or deny: it opens once loaded, and says what came of the decision. Closing it is "not now". */
 function ApproveDialog({ code, onClose, onApproved }: { code: string; onClose: () => void; onApproved: () => void }) {
-  const request = useQuery({ queryKey: [...supportAgentsKey, 'request', code], retry: false, staleTime: Infinity, gcTime: 0, queryFn: ({ signal }) => supportAgentsApi.lookUp(code, signal) })
+  const scope = useRequestScope()
+  const request = useQuery({ queryKey: [...supportAgentsKey, 'request', code], retry: false, staleTime: Infinity, gcTime: 0, queryFn: ({ signal }) => supportAgentsApi(scope).lookUp(code, signal) })
   const [confirmed, setConfirmed] = useState(false)
   const [busy, setBusy] = useState<'approve' | 'deny' | null>(null)
   const [error, setError] = useState<unknown>(null)
@@ -74,7 +76,7 @@ function ApproveDialog({ code, onClose, onApproved }: { code: string; onClose: (
     if (busy) return
     setBusy(decision); setError(null)
     try {
-      await (decision === 'approve' ? supportAgentsApi.approve(code) : supportAgentsApi.deny(code))
+      await (decision === 'approve' ? supportAgentsApi(scope).approve(code) : supportAgentsApi(scope).deny(code))
       setDecided(decision === 'approve' ? 'approved' : 'denied')
       if (decision === 'approve') onApproved()
     } catch (cause) { setError(cause) }

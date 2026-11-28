@@ -3,7 +3,7 @@ import { ArrowRight, ChevronRight, Copy, Pencil, Plus, Trash2 } from 'lucide-rea
 import { useEffect, useId, useRef, useState, type CSSProperties, type ReactNode } from 'react'
 import { Alert, Button, CopyButton, DataTable, DropdownMenu, Icon, StatusBadge, useCopy, type MenuItem, type Tone } from '../../components/ui'
 import { CopyAction, LiveStatus, type LiveState } from '../../components/motion'
-import { useApi, useWorkspaceAccess } from '../../data/context'
+import { useApi, useRequestScope, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
 import { useRefreshListsOnChange } from '../../data/invalidation'
 import { request } from '../../data/live'
@@ -42,12 +42,13 @@ const oneClickDns = false
 // to about three seconds), and the answer is fixed at reveal, so the button never appears above
 // records that are already on screen.
 export function useDnsSetup(domain: Domain | undefined) {
+  const scope = useRequestScope()
   const { multiTenant, canAdminister } = useWorkspaceAccess()
   const needed = !!domain && domain.records.some(record => record.purpose !== 'dmarc' && record.status !== 'verified')
   const enabled = oneClickDns && multiTenant && canAdminister && needed
   const query = useQuery({
     queryKey: ['nightmail', 'domain', domain?.id, 'dns-setup'],
-    queryFn: ({ signal }) => request<DnsSetup>(`/v1/domains/${encodeURIComponent(domain!.id)}/dns-setup`, { signal }),
+    queryFn: ({ signal }) => request<DnsSetup>(`/v1/domains/${encodeURIComponent(domain!.id)}/dns-setup`, { signal, scope }),
     // gcTime 0: each page asks afresh, since pending groups change between onboarding and the domain page.
     enabled, retry: false, staleTime: Infinity, gcTime: 0, refetchOnWindowFocus: false,
   })

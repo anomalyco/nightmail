@@ -6,7 +6,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Navigate, useLocation } from 'react-router'
 import { Button, ErrorState, Field, Input, SkeletonText, Tabs, Textarea } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
-import { useApiQuery } from '../../data/context'
+import { useApiQuery, useRequestScope } from '../../data/context'
 import { queries } from '../../data/queries'
 import { request } from '../../data/live'
 import { errorText } from '../../data/types'
@@ -46,7 +46,7 @@ type Received = ReceivedRecipients & { id: string; from: { name: string | null; 
 /** The address to trace a message as: ours only (the receiving address or envelope recipient), never the header To. */
 const arrivedAt = (m: Received) => ownRecipient(m)
 /** The last few received messages, shared by the picker and the pages that wait for it before showing the picker. */
-export const useRecentMail = () => useApiQuery(['trace-recent'], (_api, signal) => request<{ data: Received[] }>('/v1/logs?direction=received&limit=6', { signal }).then(r => r.data))
+export const useRecentMail = () => useApiQuery(['trace-recent'], (api, signal) => request<{ data: Received[] }>('/v1/logs?direction=received&limit=6', { signal, scope: api.scope }).then(r => r.data))
 /** The email a picker starts on, from settled data: the newest received message, or the sample when there is none.
  * Chosen while rendering, not in an effect, so the picker never paints one mode and then switches. */
 export const defaultChoice = (recent: Received[] | undefined, to: string): EmailChoice =>
@@ -195,13 +195,14 @@ export function TraceView({ result, sources, overview, inboxes, runId }: { resul
 
 /** Runs testRules for a choice, with optional unsaved config and AI decision answers. */
 export function useDryRun() {
+  const scope = useRequestScope()
   const [result, setResult] = useState<DryRun | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [pending, setPending] = useState(false)
   const [runId, setRunId] = useState(0)
   async function run(body: Record<string, unknown>) {
     setPending(true); setError(null)
-    try { setResult(await request<DryRun>('/v1/rules/test', { method: 'POST', body })); setRunId(n => n + 1) }
+    try { setResult(await request<DryRun>('/v1/rules/test', { method: 'POST', body, scope })); setRunId(n => n + 1) }
     catch (e) { setError(errorText(e)); setResult(null) }
     finally { setPending(false) }
   }

@@ -167,10 +167,10 @@ export function AgentInboxPage() {
 function EditInboxDialog({ inbox, open, onOpenChange }: { inbox: Inbox; open: boolean; onOpenChange: (open: boolean) => void }) {
   const [name, setName] = useState(inbox.name ?? '')
   const [extend, setExtend] = useState('')
-  const limit = Date.parse(inbox.createdAt) + 30 * DAY, expires = Date.parse(inbox.expiresAt)
+  const limit = Date.parse(inbox.createdAt) + 30 * DAY, expires = inbox.expiresAt ? Date.parse(inbox.expiresAt) : 0
   const untilOf = (value: string) => value === 'max' ? limit : Math.min(limit, Math.max(Date.now(), expires) + Number(value) * 1000)
   const until = extend === '' ? null : new Date(untilOf(extend))
-  const save = useApiMutation((_api, body: { name?: string; expiresAt?: string }) => request(`/v1/inboxes/${encodeURIComponent(inbox.id)}`, { method: 'PATCH', body }), 'Inbox updated', false, invalidate.agentInboxes, inbox.id)
+  const save = useApiMutation((api, body: { name?: string; expiresAt?: string }) => request(`/v1/inboxes/${encodeURIComponent(inbox.id)}`, { method: 'PATCH', body, scope: api.scope }), 'Inbox updated', false, invalidate.agentInboxes, inbox.id)
   useEffect(() => { if (open) { save.reset(); setName(inbox.name ?? ''); setExtend('') } }, [open]) // eslint-disable-line react-hooks/exhaustive-deps
   // An expired inbox can still be kept longer during its hold day: updateInbox takes any expiry up to the limit.
   const canExtend = inbox.status !== 'deleting' && limit - 60_000 > Math.max(Date.now(), expires)
@@ -228,7 +228,7 @@ function InboxDetail({ id }: { id: string }) {
   }
   const revoke = useApiMutation((api, keyId: string) => api.keys.revoke(keyId), 'API key revoked', false, invalidate.apiKeys)
   // A sandbox only gets mail this way (simulateInboxMessage): a sign-up code to read, as an agent or test would.
-  const simulate = useApiMutation((_api, _: void) => request(`/v1/inboxes/${encodeURIComponent(id)}/simulate`, { method: 'POST', body: { from: 'hello@example.com', subject: 'Your sign-up code', text: 'Your code is 482913. It expires in 10 minutes.' } }), 'Test mail sent', false, invalidate.agentInboxSimulate, id)
+  const simulate = useApiMutation((api, _: void) => request(`/v1/inboxes/${encodeURIComponent(id)}/simulate`, { method: 'POST', body: { from: 'hello@example.com', subject: 'Your sign-up code', text: 'Your code is 482913. It expires in 10 minutes.' }, scope: api.scope }), 'Test mail sent', false, invalidate.agentInboxSimulate, id)
   const b: Inbox | undefined = inbox.data
   if (inbox.error) return <><PageHeader title="Agent inbox" backTo={route} /><ErrorState error={inbox.error} onRetry={() => void inbox.refetch()} /></>
   const next = messages.data?.hasMore ? messages.data.cursor : null
@@ -252,8 +252,8 @@ function InboxDetail({ id }: { id: string }) {
         <div><dt>Status</dt><dd><StatusBadge status={statusLabel[b.status]} tone={statusTone[b.status]} />{b.type === 'sandbox' && <span className="muted"> · Sandbox, test mail only</span>}</dd></div>
         <div><dt>{b.status === 'active' || !b.expiresAt ? 'Expires' : 'Expired'}</dt><dd>{b.expiresAt ? date(b.expiresAt) : 'Never'}</dd></div>
         <div><dt>Deleted after</dt><dd>{b.deleteAfter ? date(b.deleteAfter) : 'Never'}</dd></div>
-        <div><dt>Delivered</dt><dd>{number(b.usage.messages - b.usage.held)} of {number(b.limits.messages)}{b.usage.unread > 0 && <span className="muted"> · {number(b.usage.unread)} unread</span>}</dd></div>
-        <div><dt>Stored</dt><dd>{fileSize(b.usage.bytes)} of {fileSize(b.limits.bytes)}</dd></div>
+        <div><dt>Delivered</dt><dd>{number(b.usage.messages - b.usage.held)}{b.limits.messages !== null ? ` of ${number(b.limits.messages)}` : ''}{b.usage.unread > 0 && <span className="muted"> · {number(b.usage.unread)} unread</span>}</dd></div>
+        <div><dt>Stored</dt><dd>{fileSize(b.usage.bytes)}{b.limits.bytes !== null ? ` of ${fileSize(b.limits.bytes)}` : ''}</dd></div>
         <div><dt>Replies</dt><dd>{b.type === 'sandbox' ? 'Never (sandbox)' : b.send.enabled ? 'To senders only' : 'Off'}</dd></div>
       </dl>
       {b.status === 'deleting' && <Alert tone="info">This inbox was deleted. Its address no longer receives mail, and its messages are erased within the hour.</Alert>}
