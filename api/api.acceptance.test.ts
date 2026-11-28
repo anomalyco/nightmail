@@ -29709,7 +29709,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         // The inbound check and Check now queue the same check of every host.
         await db.query("UPDATE jobs SET status='completed',payload=payload-'follow' WHERE id=$1", ['domain.mx:' + d.token]);
         const checked = ok(await local('POST', `/v1/inbound/domains/${d.id}/check`));
-        assert.deepEqual(checked.hosts.map((h: Json) => [h.name, h.status, h.mx?.state]).sort(), [[name, 'active', 'active'], [`reply.${name}`, 'active', 'active']]);
+        assert.deepEqual(checked.hosts.map((h: Json) => [h.name, h.status, h.mx?.state]).sort((a: string[], b: string[]) => a[0]!.localeCompare(b[0]!)), [[name, 'active', 'active'], [`reply.${name}`, 'active', 'active']].sort((a, b) => a[0]!.localeCompare(b[0]!)));
         assert.deepEqual([(await job()).status, (await job()).payload.follow], ['pending', 0], 'checkInboundDomain checks every host.');
         await db.query("UPDATE jobs SET status='completed',payload=payload-'follow' WHERE id=$1", ['domain.mx:' + d.token]);
         ok(await local('POST', `/v1/domains/${d.id}/verify`));

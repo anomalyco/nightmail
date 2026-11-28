@@ -1478,7 +1478,7 @@ export type RecipientWarning = {
 
 export type SendEmailInput = {
     /**
-     * An address at a domain verified in this workspace, or at a subdomain of one — either bare ("hello@example.com") or with a display name ("Example <hello@example.com>"; or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies.
+     * An address at a domain verified in this workspace, or at a subdomain of one — either a bare address or "Display Name <address>" (or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies.
      */
     from: string;
     fromName?: string;
@@ -1578,7 +1578,7 @@ export type SendEmailBatchInput = {
 
 export type BatchSendEmailItem = {
     /**
-     * An address at a domain verified in this workspace, or at a subdomain of one — either bare ("hello@example.com") or with a display name ("Example <hello@example.com>"; or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies.
+     * An address at a domain verified in this workspace, or at a subdomain of one — either a bare address or "Display Name <address>" (or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies.
      */
     from: string;
     fromName?: string;

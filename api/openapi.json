@@ -4708,7 +4708,7 @@
           "from": {
             "type": "string",
             "maxLength": 460,
-            "description": "An address at a domain verified in this workspace, or at a subdomain of one — either bare (\"hello@example.com\") or with a display name (\"Example <hello@example.com>\"; or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies."
+            "description": "An address at a domain verified in this workspace, or at a subdomain of one — either a bare address or \"Display Name <address>\" (or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies."
           },
           "fromName": {
             "type": "string",
@@ -4977,7 +4977,7 @@
           "from": {
             "type": "string",
             "maxLength": 460,
-            "description": "An address at a domain verified in this workspace, or at a subdomain of one — either bare (\"hello@example.com\") or with a display name (\"Example <hello@example.com>\"; or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies."
+            "description": "An address at a domain verified in this workspace, or at a subdomain of one — either a bare address or \"Display Name <address>\" (or set fromName separately). Hosted: also any address at the workspace’s built-in domain (connection.builtinDomain in GET /v1/me) until a domain of its own verifies."
           },
           "fromName": {
             "type": "string",
