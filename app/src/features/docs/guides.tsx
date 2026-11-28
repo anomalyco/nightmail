@@ -50,7 +50,7 @@ function MailServers() {
       ['Username', 'The inbox address', <code key="u">apikey</code>],
       ['Password', 'The app password', 'The SMTP login'],
     ]} />
-    <p>An SMTP login sends like an API key: the same limits, suppressions and events. It can’t read mail. <Link to="/api-keys?create=smtp">Create an SMTP login</Link></p>
+    <p>An SMTP login sends like an API key: the same limits, suppressions and events. It can’t read mail. <Link to="/api-keys?create=smtp">Create an SMTP login</Link> · <Link to="/smtp-imap">SMTP &amp; IMAP</Link></p>
   </Section>
 }
 

@@ -232,6 +232,9 @@ const pages = ids => [
   ['Domain · parking', `/domains/${ids.parkedDomain}`, { user: 'nia', from: '/domains' }],
   ['Domain · change name dialog', `/domains/${ids.noDnsDomain}`, { user: 'nia', dialog: 'Change name' }],
   ['API keys', '/api-keys', { from: '/overview' }],
+  // SMTP & IMAP: what an app's own SMTP settings or a mail app takes, and the app passwords listed under IMAP's (the
+  // fixture has a mail gateway).
+  ['SMTP & IMAP', '/smtp-imap', { from: '/api-keys' }],
   ['Settings', '/settings', { from: '/overview' }],
   ['Settings · members', '/settings#members', { from: '/settings' }],
   ['Settings · webhooks', '/settings#webhooks', { from: '/settings' }],
@@ -607,6 +610,7 @@ const phonePages = new Set([
   'Onboarding · get started provisioning',
   'Onboarding · get started own domain',
   'API keys',
+  'SMTP & IMAP',
   'Settings',
   'Settings · members',
   'Settings · activity',
