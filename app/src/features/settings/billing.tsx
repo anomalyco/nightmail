@@ -98,7 +98,7 @@ function Summary({ summary: b, usage, state, admin, onAdd, onBalance }: { summar
   ] : [
     { label: 'This month so far', value: listed, note: when, money: true },
     admin && { label: 'Balance', value: <BalanceFigure summary={b} onOpen={onBalance} />, money: true },
-    admin && { label: 'Payment method', value: <CardControl summary={b} />, note: b ? card ? `Expires ${String(card.expMonth).padStart(2, '0')}/${String(card.expYear).slice(-2)}` : 'For auto-recharge and one-click top-ups' : null },
+    admin && { label: 'Payment method', value: <CardControl summary={b} />, note: b && card ? `Expires ${String(card.expMonth).padStart(2, '0')}/${String(card.expYear).slice(-2)}` : null },
   ]
   return <section className="billing-summary" aria-labelledby="billing-plan">
     <div className="billing-summary__head">
@@ -231,7 +231,7 @@ function CardControl({ summary: b }: { summary: BillingSummary | undefined }) {
   return <span className="billing-summary__card">
     <span>{cardLabel(card)}</span>
     <DropdownMenu label="Card actions" title={cardLabel(card)} trigger={<IconButton size="sm" label="Card actions"><MoreHorizontal size={16} aria-hidden="true" /></IconButton>} items={[{ label: 'Replace card', onSelect: () => void setup() }, { label: 'Remove card', destructive: true, onSelect: () => setRemoving(true) }]} />
-    <ConfirmDialog open={removing} onOpenChange={setRemoving} danger title="Remove this card?" description={`${cardLabel(card)} is removed from Stripe. Auto-recharge turns off; add credit with Stripe Checkout until you save another card.`} confirmLabel="Remove card"
+    <ConfirmDialog open={removing} onOpenChange={setRemoving} danger title="Remove this card?" description={`${cardLabel(card)} is removed from Stripe and auto-recharge turns off.`} confirmLabel="Remove card"
       onConfirm={async () => { try { await billingApi.removeCard() } catch (cause) { throw new Error(errorText(cause)) } refresh(); toast('Card removed. Auto-recharge is off.', 'success') }} />
   </span>
 }
@@ -289,7 +289,6 @@ function RechargeDialog({ settings, hasCard, enable, capped, Row, onClose }: { s
     catch (cause) { setError(cause) } finally { setPending(false) }
   }
   return <Dialog open onOpenChange={next => { if (!next && !pending) onClose() }} title={enable ? 'Turn on auto-recharge' : 'Auto-recharge'} className="billing-recharge-dialog"
-    description="Charges your saved card when the balance runs low, up to a monthly limit."
     footer={<><Button disabled={pending} onClick={onClose}>Cancel</Button><Button variant="primary" type="submit" form="billing-recharge" loading={pending} disabled={!valid || !hasCard || (!enable && !changed)}>{enable ? 'Turn on' : 'Save'}</Button></>}>
     <form id="billing-recharge" className="settings-rows billing-rows" onSubmit={submit} noValidate>
       {rows.map(([key, title, range]) => <Row key={key} title={title} error={invalid[key] ? range : undefined}>
@@ -511,7 +510,7 @@ function useCheckoutReturn() {
   const [watching, setWatching] = useState<string | null>(null)
   useEffect(() => {
     if (!outcome) return
-    if (outcome === 'success' && attempt && /^[\w-]{1,100}$/.test(attempt)) { toast('Payment received; your credit appears in a few seconds.', 'info'); setWatching(attempt) }
+    if (outcome === 'success' && attempt && /^[\w-]{1,100}$/.test(attempt)) { toast('Payment received.', 'info'); setWatching(attempt) }
     else if (outcome === 'canceled') toast('Checkout canceled.', 'info')
     navigate({ pathname: '/settings', search: '', hash: '#billing' }, { replace: true })
   }, [outcome, attempt, navigate, toast])

@@ -17,7 +17,7 @@ export function cleanupStatus(cleanup: ProviderConnection['cleanup'], done = fal
 export function DisconnectDetails({ summary }: { summary: DisconnectSummary }) {
   return <>
     {summary.leftBehind.length > 0 && <Alert tone="warning" title="Left in your AWS account">
-      <p>Delete these in the SES and SNS consoles: {productName} couldn’t remove them.</p>
+      <p>Delete these in the SES and SNS consoles.</p>
       <ul className="aws-disconnect__list">{summary.leftBehind.map(item => <li key={item.resource}><code>{item.resource}</code></li>)}</ul>
     </Alert>}
     {summary.stack && <p className="aws-disconnect__status">The {productName} role stays until you delete its stack: <a href={summary.stack.consoleUrl} target="_blank" rel="noopener noreferrer">delete {summary.stack.name} in AWS<ArrowUpRight size={14} aria-hidden="true" /></a></p>}

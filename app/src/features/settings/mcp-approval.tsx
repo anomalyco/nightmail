@@ -49,8 +49,8 @@ export function McpApprovalPage() {
         </label>)}
       {browser.data && <div className="settings-row"><span className="settings-row__label"><span>Another account</span></span><span className="settings-row__control"><Button onClick={() => session?.addAccount(location.pathname)}>Use another account</Button></span></div>}
     </div>}
-    {browser.data && (!owner ? <Alert tone="info" title="This agent used another account">It signed in with an account not connected in this browser. Add that account, or reconnect the client and choose one of these at Anomaly account.</Alert>
-      : picked !== owner ? <Alert tone="info" title="Not this agent’s account">The client signed in with a different account. To connect {pickedAccount?.name || 'this account'} instead, reconnect the client and choose it at Anomaly account.</Alert>
+    {browser.data && (!owner ? <Alert tone="info" title="This agent used another account">Add that account, or reconnect the client and choose one of these at Anomaly account.</Alert>
+      : picked !== owner ? <Alert tone="info" title="Not this agent’s account">To connect {pickedAccount?.name || 'this account'} instead, reconnect the client and choose it at Anomaly account.</Alert>
       : owner !== identity?.id ? <div className="cluster"><Button variant="primary" loading={switching} onClick={() => void continueAs(owner)}>Continue as {pickedAccount?.name || pickedAccount?.email || 'this account'}</Button></div>
       : null)}
     {ready && <>

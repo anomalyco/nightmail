@@ -32,7 +32,7 @@ function validate(input: WebhookInput) {
   if (!input.id || input.url.trim()) {
     try {
       const url = new URL(input.url.trim())
-      if (url.protocol !== 'https:') errors.url = 'Use an https:// URL. Webhooks are only delivered over HTTPS.'
+      if (url.protocol !== 'https:') errors.url = 'Use an https:// URL.'
       else if (url.username || url.password) errors.url = 'Remove the user name and password from the URL. Send them as a header.'
       else if (!url.hostname) errors.url = FULL_URL
     } catch { errors.url = FULL_URL }
@@ -112,7 +112,7 @@ function NewWebhook() {
       <EndpointFields input={input} onChange={setInput} regions={regions.data?.data ?? []} errors={errors} apiError={save.error} disabled={save.isPending} headers={{ current: [], draft: headers, onChange: setHeaders }} />
       <div className="cluster form-actions"><Button variant="primary" type="submit" loading={save.isPending}>Add webhook</Button></div>
     </form>}
-    <SecretDialog secret={created?.secret ?? null} title="Webhook created · Signing secret" onClose={() => { const id = created?.id; setCreated(null); if (id) navigate(`/settings/webhooks/${id}`, { replace: true }) }}><SigningGuide /></SecretDialog>
+    <SecretDialog secret={created?.secret ?? null} title="Webhook created · Signing secret" description={`Keep it on your server: anyone with it can sign requests as ${productName}.`} onClose={() => { const id = created?.id; setCreated(null); if (id) navigate(`/settings/webhooks/${id}`, { replace: true }) }}><SigningGuide /></SecretDialog>
   </div>
 }
 
@@ -194,7 +194,7 @@ function WebhookEditor({ webhook: read, regions, refreshError, onRefresh }: { we
     if (action === 'delete') { await remove.mutateAsync(webhook.id); navigate('/settings#webhooks') }
   }
   const actionTitle = action === 'rotate' ? `Rotate ${webhook.name} signing secret?` : action === 'delete' ? `Delete ${webhook.name}?` : `${action === 'pause' ? 'Pause' : 'Resume'} ${webhook.name}?`
-  const actionDescription = action === 'rotate' ? 'The current secret stops working at once, so update your server with the new one. To copy the current secret instead, use Reveal.' : action === 'delete' ? `${productName} stops calling this URL. Its delivery history is deleted too.` : action === 'pause' ? `${productName} stops calling this URL. Events from the pause are kept and delivered when you resume.` : `${productName} starts calling this URL again, including events held while it was paused.`
+  const actionDescription = action === 'rotate' ? 'The current secret stops working at once, so update your server with the new one.' : action === 'delete' ? `${productName} stops calling this URL. Its delivery history is deleted too.` : action === 'pause' ? `${productName} stops calling this URL. Events from the pause are kept and delivered when you resume.` : `Events held while it was paused are delivered.`
   return <div className="stack settings-page">
     <PageHeader title={webhook.name} backTo="/settings#webhooks" actions={<><StatusBadge status={label(webhook.status)} /><Button disabled={pending} onClick={() => setAction(webhook.status === 'active' ? 'pause' : 'resume')}>{webhook.status === 'active' ? 'Pause' : 'Resume'}</Button><Button variant="primary" form="edit-webhook" type="submit" loading={save.isPending} disabled={pending || !dirty}>Save changes</Button></>} />
     <form id="edit-webhook" className="stack" onSubmit={submit} noValidate><MutationError error={save.error} /><EndpointFields input={input} savedUrl={webhook.url} onChange={setInput} regions={regions} errors={errors} apiError={save.error} disabled={pending} headers={{ current: currentHeaders, draft: headers, onChange: setHeaders }} /></form>
@@ -218,7 +218,7 @@ function WebhookEditor({ webhook: read, regions, refreshError, onRefresh }: { we
     </section>
     <div><Button variant="danger" disabled={pending} onClick={() => setAction('delete')}>Delete webhook</Button></div>
     <ConfirmDialog open={action !== null} onOpenChange={open => { if (!open) setAction(null) }} title={actionTitle} description={actionDescription} confirmLabel={action === 'rotate' ? 'Rotate secret' : action === 'delete' ? 'Delete webhook' : action === 'pause' ? 'Pause webhook' : 'Resume webhook'} danger={action === 'delete' || action === 'rotate'} pending={pending} onConfirm={confirm} />
-    <SecretDialog secret={secret?.value ?? null} title={`${webhook.name} · ${secret?.rotated ? 'New signing secret' : 'Signing secret'}`} description={secret?.rotated ? undefined : `Keep it on your server: anyone with it can sign requests as ${productName}.`} onClose={() => { setSecret(null); rotate.reset(); reveal.reset() }}><SigningGuide /></SecretDialog>
+    <SecretDialog secret={secret?.value ?? null} title={`${webhook.name} · ${secret?.rotated ? 'New signing secret' : 'Signing secret'}`} description={`Keep it on your server: anyone with it can sign requests as ${productName}.`} onClose={() => { setSecret(null); rotate.reset(); reveal.reset() }}><SigningGuide /></SecretDialog>
     {/* A delivery in full: its facts as key/value rows, then the payload as sent, with copy for both the ID and the JSON. */}
     <Dialog size="lg" open={inspected !== null} onOpenChange={open => { if (!open) setInspected(null) }} title={inspected?.test ? 'Test delivery payload' : 'Delivery payload'}
       status={inspected && <StatusBadge status={label(inspected.status)} />}>
