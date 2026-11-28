@@ -2020,6 +2020,22 @@ describe('support Worker', () => {
     } finally { control.beforeTool = null; await fakeHook('/__close', { fail: 0 }); }
   }, 120_000);
 
+  test('a cancelled chat answer ends empty and keeps nothing: no reply in the transcript or the staff inbox, and the input opens again', async () => {
+    const chat = await chatAs('usr_cancel', 'owner');
+    await fakeHook('/__inbox', { id: chat.id, channel: 'chat' });
+    control.beforeTool = async () => { control.beforeTool = null; chat.send({ type: 'cancel' }); await sleep(500); };
+    let frames: any[];
+    try { frames = await turn(chat, 'Please retry my webhook delivery'); } finally { control.beforeTool = null; }
+    const reply = frames.find(f => f.type === 'message.start' && f.kind === 'reply')?.messageId;
+    assert.deepEqual(frames.filter(f => f.type === 'message.end' && f.messageId === reply).map(f => [f.text, f.redacted]), [['', false]]);
+    assert.ok(frames.some(f => f.type === 'status' && f.busy === false) && !frames.some(f => f.type === 'text.delta' || f.type === 'closed'), frames.map(f => f.type).join());
+    const box = await eventually(async () => { const b = await (await (await mf.getWorker('fake-bane')).fetch(`http://fake-bane/__inbox?id=${chat.id}`)).json() as any; return b?.messages.length ? b : undefined; });
+    await sleep(1000);
+    const after = await (await (await mf.getWorker('fake-bane')).fetch(`http://fake-bane/__inbox?id=${chat.id}`)).json() as any;
+    assert.deepEqual([box.messages.length, after.messages.map((m: any) => m.author)], [1, ['customer']], 'Only the customer’s message: no reply, empty or partial.');
+    chat.ws.close();
+  }, 120_000);
+
   test('M5: daily caps on turns, tickets, mail and confirm links; unverified email gets no model turn; the team is alerted once', async () => {
     const caps = new Miniflare({ cf: false, telemetry: { enabled: false }, workers: [worker('support', baseEnv({ LIMIT_TURNS_PER_DAY: text('2'), LIMIT_TICKETS_PER_PERSON: text('1'), LIMIT_MAIL_PER_SENDER: text('2'), LIMIT_CONFIRMS_PER_ADDRESS: text('1'), LIMIT_TICKETS_INTAKE_PER_MAILBOX: text('2') })),
       { config: { name: 'fake-bane', compatibilityDate: '2026-09-08', manifest: { mainModule: 'bane.js', modules: { 'bane.js': { type: 'esm', contents: FAKE_BANE } } }, env: {} } }] } as never);
@@ -2985,6 +3001,7 @@ describe('support Worker', () => {
         const from = recorded.length;
         let run = await drive(id, { claimWait: 'answer:msg_uc_cap', tick: true });
         assert.equal(states(run)['answer:msg_uc_cap'], 'parked', 'Back to waiting for its claim.');
+        assert.ok(run.rows.find(r => r.id === 'answer:msg_uc_cap')!.due_at >= run.before + 5 * 60_000 - 1000, 'Next checked on the sign-in schedule, never at once (an alarm right away).');
         assert.deepEqual(await sentKeys('thr_uc_cap'), ['reply-msg_uc_cap:signin'], 'No general answer, and no busy reply.');
         assert.equal(recorded.length, from, 'No model turn.');
         assert.deepEqual(await ticketsOf(id), [], 'No ticket.');
@@ -2999,6 +3016,42 @@ describe('support Worker', () => {
       await drive(id, { expire: 'answer:msg_uc_cap', tick: true });
       assert.deepEqual(await sentKeys('thr_uc_cap'), ['reply-msg_uc_cap', 'reply-msg_uc_cap:signin'], 'Claimed: answered from the account, once.');
       assert.equal((await replies('thr_uc_cap', instance)).find(c => c[5] === 'reply-msg_uc_cap')?.[3].text, VERIFIED_ANSWER);
+    }, 180_000);
+
+    test('a claim that arrives while an unclaimed answer waits to be written (the inbox down for a moment) gets the answer from the account, not the general one', async () => {
+      const { id } = await waitingOnClaim('usr_uca', 'uca@acme.test', 'msg_uc_queued', 'thr_uc_queued');
+      await setInbox({ down: true });
+      let run: Run;
+      try { run = await drive(id, { claimWait: 'answer:msg_uc_queued', tick: true }); } finally { await setInbox({ down: false }); }
+      assert.equal(states(run)['answer:msg_uc_queued'], 'pending', 'Released unclaimed, and waiting for the inbox before it is written.');
+      assert.equal(await claim(id, 'msg_uc_queued', 'usr_uca', instance), 200);
+      const pulls = (await fakeCalls(instance)).filter(c => c[0] === 'pullOutbox' && c[1] === id).length;
+      await wake(id);
+      await eventually(async () => (await fakeCalls(instance)).filter(c => c[0] === 'pullOutbox' && c[1] === id).length > pulls || undefined);
+      run = await drive(id, { expire: 'answer:msg_uc_queued', tick: true });
+      assert.equal(states(run)['answer:msg_uc_queued'], 'done');
+      assert.deepEqual(await sentKeys('thr_uc_queued'), ['reply-msg_uc_queued', 'reply-msg_uc_queued:signin'], 'One answer, and no follow-up waits.');
+      const sent = (await replies('thr_uc_queued', instance)).find(c => c[5] === 'reply-msg_uc_queued');
+      assert.deepEqual([sent?.[3].text, sent?.[3].to], [VERIFIED_ANSWER, ['Uca@acme.test']]);
+    }, 180_000);
+
+    test('a staff reply that failed for good is never sent on a retry: when Nightmail can’t record the failure, only that record is retried', async () => {
+      const c = await chat(handoff('usr_staffretry'));
+      await setInbox({ id: c.id, channel: 'chat' });
+      c.ws.close();
+      const reply = 'msg_staffretryaaaaaa';
+      await outage('/v1/inbound/threads', 422, 'VALIDATION_FAILED');
+      try {
+        await setInbox({ id: c.id, reply: { id: reply, text: 'Hi Ada, this is fixed.', staffName: 'Dana Rivera' }, failDelivery: 1 });
+        await wake(c.id);
+        await queued(c.id, reply);
+        const run = await drive(c.id, { tick: true });
+        assert.equal(states(run)[`staff:${reply}`], 'pending', 'Nightmail couldn’t record the failure: retried.');
+      } finally { await outage('/v1/inbound/threads'); }
+      const run = await drive(c.id, { expire: `staff:${reply}`, tick: true });
+      assert.equal(states(run)[`staff:${reply}`], 'done');
+      assert.deepEqual(await marked(reply), ['failed', 'failed'], 'Failed both times, never flipped to sent.');
+      assert.deepEqual((await sends(`staff-${reply}`)).map(x => x[6]), [422], 'The email was tried once.');
     }, 180_000);
 
     test('no one is left without a reply in chat either: the turn that files a ticket answers in the panel, naming it, and pauses nothing', async () => {

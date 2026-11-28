@@ -23,6 +23,7 @@ let closeFailures = 0;
 // Nightmail's 404 for one it never registered; down makes every inbox call answer 503.
 const inbox = new Map();
 let inboxDown = false;
+let deliveryFailures = 0; // the next markDelivery calls that answer 503 (/__inbox failDelivery)
 const releases = [];
 // Staff emails a test queued: { key, group, thread (the group to reply in, for a later one), subject, text, html }, and each group's thread once sent.
 const staffMail = [], staffThreads = new Map();
@@ -398,6 +399,7 @@ export class SupportPlatform extends WorkerEntrypoint {
   }
   async markDelivery(id, messageId, status) {
     calls.push(['markDelivery', id, messageId, status]);
+    if (deliveryFailures > 0) { deliveryFailures--; return unavailable(); }
     const reply = inbox.get(id)?.outbox.find(r => r.id === messageId);
     if (!reply) return missing();
     if (reply.delivery === 'sent' && status !== 'sent') return ok({ error: { code: 'SUPPORT_REPLY_DELIVERED' } }, 409);
@@ -434,8 +436,9 @@ export default {
     if (url.pathname === '/__staffmail') { const { group, update, ...mail } = await request.json(); staffMail.push({ ...mail, group, thread: update ? group : null, sent: false }); return new Response(null, { status: 204 }); }
     if (url.pathname === '/__inbox') {
       if (request.method === 'GET') { const c = inbox.get(url.searchParams.get('id')); return Response.json(c ?? null); }
-      const { id, channel, paused, reply, down } = await request.json();
+      const { id, channel, paused, reply, down, failDelivery } = await request.json();
       if (down !== undefined) inboxDown = down;
+      if (failDelivery !== undefined) deliveryFailures = failDelivery;
       if (id && !inbox.has(id)) inbox.set(id, { channel: channel ?? 'chat', status: 'open', paused: null, messages: [], state: {}, outbox: [] });
       const c = id ? inbox.get(id) : null;
       if (c && paused !== undefined) c.paused = paused ? 'staff' : null;
@@ -579,6 +582,7 @@ const MESSAGES = {
   msg_uc_early: ['thr_uc_early', 'una@acme.test', 'PASS', null, 'My bounces', 'Unclaimed probe: why are my Gmail bounces up?'],
   msg_uc_tk: ['thr_uc_tk', 'ulla@acme.test', 'PASS', null, 'Form fails', 'Ticket probe: the contact form fails after I submit it.'],
   msg_uc_cap: ['thr_uc_cap', 'uri@acme.test', 'PASS', null, 'My bounces', 'Unclaimed probe: why are my Gmail bounces up?'],
+  msg_uc_queued: ['thr_uc_queued', 'uca@acme.test', 'PASS', null, 'My bounces', 'Unclaimed probe: why are my Gmail bounces up?'],
   msg_uc_forged: ['thr_uc_forged', 'ursa@acme.test', 'FAIL', null, 'Refund', 'Unclaimed probe: refund my top-up please.'],
   msg_uc_auto: ['thr_uc_auto', 'ugo@acme.test', 'PASS', null, 'Out of office', 'I am away until Monday.'],
   // The same sender writes again while the first waits on its claim, and again after its general answer; another address

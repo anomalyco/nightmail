@@ -10,7 +10,7 @@ import { Access } from './conversation/actions.js';
 import { Inbox } from './conversation/inbox.js';
 import { Chat } from './conversation/chat.js';
 import { Email } from './conversation/email.js';
-export { adoptFiledChat } from './conversation/state.js';
+export { adoptFiledChat } from './conversation/inbox.js';
 
 // One support conversation (chat or email) per Durable Object (design §1). It holds:
 // - its conversation ID, the only identity it ever passes to Nightmail: Nightmail registered the conversation from its own

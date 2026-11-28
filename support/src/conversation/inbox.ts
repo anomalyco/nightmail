@@ -1,10 +1,10 @@
-import { nightmailApi, NightmailError, platformBody, type Scope, type FiledConversation } from '../nightmail.js';
+import { nightmailApi, NightmailError, platformBody, type Scope, type FiledConversation, type PlatformReply } from '../nightmail.js';
+import type { Env } from '../env.js';
 import { plainText } from '../gate.js';
-import { limits } from '../limits.js';
 import { external, type Outcome, type WorkRow } from '../work.js';
 import { productName } from '../../../api/src/brand.js';
 import { log, logError } from '../log.js';
-import { SIGNIN_CHECKS, CLAIM_WAIT_MS, Meta, Snapshot, Answer, Composed, StaffReply, AGENT_SUBJECT } from './state.js';
+import { Meta, Snapshot, StaffReply, AGENT_SUBJECT, answerJob, answerProgress, signInStep, staffDelivery, type StaffDeliveryRow } from './state.js';
 import type { ConversationStore } from './store.js';
 import type { Access } from './actions.js';
 
@@ -106,8 +106,11 @@ export class Inbox {
   async signIns(): Promise<number> {
     const meta = this.s.meta();
     if (!meta?.registered || meta.channel !== 'email' || meta.status === 'closed') return 0;
-    const parked = this.s.sql.exec<{ id: string; payload: string; result: string }>("SELECT id, payload, result FROM _support_work WHERE kind = 'answer' AND state = 'parked' AND json_extract(payload, '$.signin') = 1").toArray();
-    if (!parked.length) return 0;
+    // Parked for a sign-in, and (written for nobody yet) an unclaimed answer still queued or blocked: a claim that
+    // arrives before it is written makes it an answer from the account after all.
+    const rows = this.s.sql.exec<{ id: string; state: string; payload: string; result: string }>(`SELECT id, state, payload, result FROM _support_work WHERE kind = 'answer' AND json_extract(payload, '$.signin') = 1
+      AND (state = 'parked' OR (state IN ('pending', 'blocked') AND json_extract(result, '$.unclaimed') = 1 AND json_extract(result, '$.verified') IS NULL))`).toArray();
+    if (!rows.length) return 0;
     // Who signed in: null when Nightmail couldn't say.
     let signed: Set<string> | null = null;
     try {
@@ -118,19 +121,13 @@ export class Inbox {
     } catch (error) { logError(error, { event: 'email', code: 'SIGNIN_CHECK_FAILED' }, 'warn'); }
     const now = Date.now();
     let released = 0;
-    for (const row of parked) {
-      const answer = JSON.parse(row.payload) as Answer, progress = JSON.parse(row.result) as Composed, checks = progress.checks ?? 0;
-      const claimBy = answer.general && !answer.followup && progress.challengedAt && !progress.capped ? progress.challengedAt + CLAIM_WAIT_MS : null;
-      if (signed?.has(answer.messageId)) {
-        if (this.s.sql.exec("UPDATE _support_work SET state = 'pending', due_at = ?1, updated_at = ?1 WHERE id = ?2 AND state = 'parked'", now, row.id).rowsWritten) { released++; log('info', { event: 'email', code: 'EMAIL_SIGNED_IN', conversation: meta.conversationId }); }
-      } else if (signed && claimBy !== null && now >= claimBy) {
-        if (this.s.sql.exec("UPDATE _support_work SET state = 'pending', due_at = ?1, result = json_set(result, '$.unclaimed', json('true')), updated_at = ?1 WHERE id = ?2 AND state = 'parked'", now, row.id).rowsWritten) { released++; log('info', { event: 'email', code: 'EMAIL_UNCLAIMED', conversation: meta.conversationId }); }
-      } else {
-        const later = now + SIGNIN_CHECKS[Math.min(checks, SIGNIN_CHECKS.length - 1)]! * 60_000;
-        // The claim wait's end is a check of its own (a minute on, when Nightmail couldn't say just then).
-        const next = claimBy === null ? later : Math.min(later, Math.max(claimBy, now + (now >= claimBy ? 60_000 : 0)));
-        this.s.sql.exec("UPDATE _support_work SET due_at = ?1, result = json_set(result, '$.checks', ?2), updated_at = ?3 WHERE id = ?4 AND state = 'parked'", next, checks + 1, now, row.id);
-      }
+    const moved = (written: number, code: string) => { if (written) { released++; log('info', { event: 'email', code, conversation: meta.conversationId }); } };
+    for (const row of rows) {
+      const step = signInStep(answerJob(JSON.parse(row.payload)), answerProgress(JSON.parse(row.result)), row.state === 'parked', signed, now);
+      if (step?.to === 'release') moved(this.s.sql.exec("UPDATE _support_work SET state = 'pending', due_at = ?1, updated_at = ?1 WHERE id = ?2 AND state = 'parked'", now, row.id).rowsWritten, 'EMAIL_SIGNED_IN');
+      else if (step?.to === 'unclaimed') moved(this.s.sql.exec("UPDATE _support_work SET state = 'pending', due_at = ?1, result = json_set(result, '$.unclaimed', json('true')), updated_at = ?1 WHERE id = ?2 AND state = 'parked'", now, row.id).rowsWritten, 'EMAIL_UNCLAIMED');
+      else if (step?.to === 'claim') moved(this.s.sql.exec("UPDATE _support_work SET due_at = ?1, result = json_remove(result, '$.unclaimed'), updated_at = ?1 WHERE id = ?2 AND state IN ('pending', 'blocked') AND json_extract(result, '$.verified') IS NULL", now, row.id).rowsWritten, 'EMAIL_SIGNED_IN');
+      else if (step?.to === 'recheck') this.s.sql.exec("UPDATE _support_work SET due_at = ?1, result = json_set(result, '$.checks', ?2), updated_at = ?3 WHERE id = ?4 AND state = 'parked'", step.dueAt, step.checks, now, row.id);
     }
     if (released) await this.s.arm();
     await this.s.work.mirror();
@@ -152,11 +149,12 @@ export class Inbox {
     let due: string[];
     try { due = platformBody(await external(this.s.env.BANE.generalAnswers(meta.conversationId))).data.filter(d => d.conversationId === meta.conversationId).map(d => d.messageId); }
     catch (error) { logError(error, { event: 'email', code: 'RELEASE_CHECK_FAILED' }, 'warn'); return 0; }
-    const anchor = waiting.find(w => due.includes((JSON.parse(w.payload) as Answer).messageId));
-    const progress = anchor ? JSON.parse(anchor.result) as Composed : null;
-    if (!anchor || !progress || (progress.capped && progress.released)) return 0;
+    const messageOf = (w: { payload: string }) => answerJob(JSON.parse(w.payload)).base.messageId;
+    const anchor = waiting.find(w => due.includes(messageOf(w)));
+    const progress = anchor ? answerProgress(JSON.parse(anchor.result)) : null;
+    if (!anchor || !progress || (progress.phase === 'capped_unclaimed' && progress.released)) return 0;
     const others = waiting.filter(w => w !== anchor), now = Date.now();
-    const also = [...progress.also ?? [], ...others.map(w => (JSON.parse(w.payload) as Answer).messageId)];
+    const also = [...'also' in progress ? progress.also : [], ...others.map(messageOf)];
     const released = this.s.ctx.storage.transactionSync(() => {
       if (!this.s.sql.exec("UPDATE _support_work SET state = 'pending', due_at = ?1, result = json_set(json_remove(result, '$.capped'), '$.unclaimed', json('true'), '$.released', json('true'), '$.also', json(?2)), updated_at = ?1 WHERE id = ?3 AND state = 'parked'",
         now, JSON.stringify(also), anchor.id).rowsWritten) return false;
@@ -189,10 +187,17 @@ export class Inbox {
    * address the dashboard handoff vouched for. Then Nightmail records it sent; one that can't be delivered is marked failed.
    */
   async staffReply(item: WorkRow, reply: StaffReply): Promise<Outcome> {
-    const progress: { recorded?: boolean; emailed?: boolean; failed?: string } = JSON.parse(item.result), save = () => this.s.work.checkpoint(item.id, progress);
+    const progress: StaffDeliveryRow = JSON.parse(item.result), save = () => this.s.work.checkpoint(item.id, progress), state = staffDelivery(progress);
     const meta = this.s.meta()!, author = reply.staffName ?? `The ${productName} team`, at = new Date().toISOString();
     const recipient = meta.email && (meta.verified || meta.dmarcSender === meta.email) ? meta.email : null;
-    const settle = async (status: 'sent' | 'failed') => { platformBody(await external(this.s.env.BANE.markDelivery(meta.conversationId, reply.id, status))); return { result: progress }; };
+    const settle = async (status: 'sent' | 'failed') => {
+      if (status === 'sent' && !progress.sent) { progress.sent = true; save(); }
+      platformBody(await external(this.s.env.BANE.markDelivery(meta.conversationId, reply.id, status)));
+      return { result: progress };
+    };
+    // Settled on an earlier try, and only Nightmail's record of it failed: that is all that is retried, never the send.
+    if (state.phase === 'failed') return settle('failed');
+    if (state.phase === 'sent') return settle('sent');
     try {
       if (meta.channel === 'email') {
         const last = meta.lastInbound, agent = meta.verified === 'agent';
@@ -237,4 +242,25 @@ export class Inbox {
     if (meta.channel === 'email' && !progress.recorded) { this.s.record({ id: reply.id, role: 'staff', kind: 'staff', text: reply.text, at, tools: [], author }); progress.recorded = true; save(); }
     return settle('sent');
   }
+}
+
+/**
+ * A conversation Nightmail named that this Worker doesn't hold (D1 has no row): adopted if Nightmail opened it from a
+ * filed message, as a chat for its person and workspace (and only for `userId` when a resume names it): the object as
+ * openChat would have opened it, then a D1 row as startChat writes. False otherwise, or when Nightmail can't say now.
+ */
+export async function adoptFiledChat(env: Env, id: string, userId?: string): Promise<boolean> {
+  let reply: PlatformReply<FiledConversation>;
+  try { reply = await env.BANE.filedConversation(id); } catch (error) { logError(error, { event: 'chat', code: 'FILED_READ_FAILED' }, 'warn'); return false; }
+  if (reply.status !== 200) return false;
+  const f = reply.body;
+  if (!f.filed || !f.workspace || f.status === 'closed' || (userId !== undefined && f.user.id !== userId)) return false;
+  // The object first, the D1 row after: every path adopts only while the row is missing, so a failure between the two
+  // (a deploy, an overload) is finished by the next resume, wake or sweep. Both steps repeat safely: an object that holds
+  // the chat only takes messages in, and the row is written once.
+  if (!(await env.CONVERSATION.get(env.CONVERSATION.idFromName(id)).adoptFiled(f)).ok) return false;
+  const now = Date.now();
+  await env.DB.prepare(`INSERT INTO conversations (id, channel, user_id, email, workspace_id, workspace_name, status, created_at, updated_at) VALUES (?, 'chat', ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (id) DO NOTHING`).bind(f.id, f.user.id, f.user.email, f.workspace.id, f.workspace.name, f.status === 'ticketed' ? 'ticketed' : 'open', now, now).run();
+  return true;
 }

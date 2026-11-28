@@ -188,7 +188,7 @@ The agent ends its answer with the proposal and carries on once it is decided: o
 { "type": "consent.respond", "requestId": "cns_…", "decision": "deny" }
 { "type": "action.resolved", "actionId": "sac_…" }   // after the person decides (§4.4): read what came of it from Nightmail
 { "type": "human.request" }                     // "Talk to a person": files a ticket (once per conversation)
-{ "type": "cancel" }                            // stop the answer being written
+{ "type": "cancel" }                            // stop the answer being written: it ends empty (message.end text ""), nothing of it is kept
 { "type": "feedback", "rating": "up" }          // or "down"; optional, once per conversation
 { "type": "end" }                               // the person closed the conversation
 { "type": "ping" }                              // server answers { "type": "pong" }; send every 30 s while open

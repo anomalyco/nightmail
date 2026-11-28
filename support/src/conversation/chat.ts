@@ -11,9 +11,9 @@ import { toolNames } from '../agent/tools.js';
 import { untrusted } from '../agent/projection.js';
 import { productName } from '../../../api/src/brand.js';
 import { log, logError } from '../log.js';
-import { TURNS_PER_CONVERSATION, MAX_FRAME, MAX_TEXT, MAX_PENDING_TURNS, MAX_PENDING_BYTES, CHAT_BURST, CHAT_BURST_MS, MAX_TRANSCRIPT_MESSAGES, MAX_OVERFLOW_MESSAGES, REDACTED, DECLINE, LEGACY_ENDED, OPENING_MS, PAUSED, PASSED, CHAT_FULL, CHAT_FULL_REFUSED, ChatInput, Unanswered, ACTION_ID, Meta, Transcript, Outgoing, Answer, labels, mirrored, outcome, proposalsBlock, internal, codeOf, failedTurn } from './state.js';
+import { TURNS_PER_CONVERSATION, MAX_FRAME, MAX_TEXT, MAX_PENDING_TURNS, MAX_PENDING_BYTES, CHAT_BURST, CHAT_BURST_MS, MAX_TRANSCRIPT_MESSAGES, MAX_OVERFLOW_MESSAGES, REDACTED, DECLINE, LEGACY_ENDED, OPENING_MS, PAUSED, PASSED, CHAT_FULL, CHAT_FULL_REFUSED, ChatInput, Unanswered, ACTION_ID, Meta, Transcript, Outgoing, labels, internal, codeOf, failedTurn, type ActiveTurn } from './state.js';
 import type { ConversationStore } from './store.js';
-import { ActionHinter, type Access } from './actions.js';
+import { ActionHinter, proposalsBlock, type Access } from './actions.js';
 import type { Inbox } from './inbox.js';
 
 export class Chat {
@@ -204,8 +204,8 @@ export class Chat {
         if (meta.status === 'closed' || meta.ticketId || this.pendingTurns >= MAX_PENDING_TURNS) return;
         this.s.record({ id: newId('msg'), role: 'user', kind: null, text: 'Talk to a person', at: new Date().toISOString(), tools: [] });
         this.enqueueTurn({ text: '[The customer pressed “Talk to a person”. File a ticket of the type that fits (topic human_requested) with what you know so far, then tell them what happens next.]', hidden: true }); return;
-      case 'cancel': this.s.abort?.abort(); return;
-      case 'feedback': if (message.rating === 'up' || message.rating === 'down') this.s.update(m => { (m as Meta & { rating?: string }).rating = message.rating as string; }); return;
+      case 'cancel': if (this.s.turn?.channel === 'chat') this.s.stopTurn('cancelled'); return;
+      case 'feedback': { const rating = message.rating; if (rating === 'up' || rating === 'down') this.s.update(m => { if (m.channel === 'chat') m.rating = rating; }); return; }
       case 'end': await this.s.close('ended'); return;
       default: this.s.sendTo(ws, { type: 'error', code: 'BAD_MESSAGE', message: `Unknown type ${String(message.type).slice(0, 40)}.`, retryable: false });
     }
@@ -213,7 +213,7 @@ export class Chat {
   async webSocketClose(ws: WebSocket, code: number) { try { ws.close(code === 1005 ? 1000 : code, 'bye'); } catch { /* already closed */ } }
   hello(meta: Meta): Outgoing {
     return { type: 'hello', conversationId: meta.conversationId, channel: meta.channel, status: meta.status, agent: { name: `${productName} Support`, ai: true }, customer: { firstName: firstName(meta.name) },
-      workspace: meta.workspace, contentAccess: meta.contentAccess, busy: this.s.abort !== null };
+      workspace: meta.workspace, contentAccess: meta.contentAccess, busy: this.s.turn !== null };
   }
   pendingTicket(meta: Meta) {
     if (!meta.ticketId) return null;
@@ -309,14 +309,15 @@ export class Chat {
     this.s.broadcast({ type: 'status', busy: true });
     this.s.broadcast({ type: 'message.start', messageId, kind: 'reply' });
     // From here the panels show a reply under way: whatever happens after (a D1 write failing after the turn), it ends
-    // and their input opens again. A turn cut short (stoppedTurn) ends itself, with no idle status.
+    // and their input opens again. A turn cut short (stoppedTurn) ends itself, with no idle status; one the customer
+    // cancelled ends empty, with nothing it wrote kept or mirrored.
     let ended = false, idle = false;
     const end = (text = '', redacted = false) => { ended = true; this.s.broadcast({ type: 'message.end', messageId, text, redacted }); };
     const settle = () => { if (!idle) { idle = true; this.s.broadcast({ type: 'status', busy: false }); } };
-    const stopped = async () => { if (!await this.stoppedTurn(messageId)) return false; ended = idle = true; return true; };
+    const turn: ActiveTurn = this.s.turn = { channel: 'chat', stop: new AbortController(), stopReason: null, unticketed: false };
+    /** Cut short: ended here, and what the model spent so far (`charged`) saved. */
+    const stopped = async (charged?: Meta) => { if (!await this.stoppedTurn(turn, messageId)) return false; ended = idle = true; if (charged) await this.s.saveUsage(charged); return true; };
     try {
-      this.s.abort = new AbortController();
-      this.s.chatUnticketed = false;
       let result: TurnResult;
       try {
         const { images, notes } = await this.s.turnImages(input.attachments ?? []);
@@ -329,11 +330,11 @@ export class Chat {
         result = await agent.turn({ text, context: [customerBlock(this.s.customer(meta)), account, kept, proposals].filter(Boolean).join('\n'), images, tools: offered }, this.a.toolHost(), (event: HarnessEvent) => {
           if (event.type === 'tool.start') { const label = this.label(event.tool, event.args); tools.push({ id: event.callId, label: label.done, ok: true }); this.s.broadcast({ type: 'tool.start', messageId, toolCallId: event.callId, tool: event.tool, label: label.running }); }
           else { const t = tools.find(x => x.id === event.callId); if (t) t.ok = event.ok; this.s.broadcast({ type: 'tool.end', toolCallId: event.callId, ok: event.ok, label: t?.label ?? 'Done' }); }
-        }, this.s.abort.signal);
+        }, turn.stop.signal);
       } catch (error) {
-        this.s.abort = null;
         this.s.chargeLost(error, 1);
         if (await stopped()) return;
+        if (turn.stopReason === 'cancelled') return;
         const missing = error instanceof MissingSecret ? error.secret : null;
         logError(error, { event: 'chat', code: missing ? 'SECRET_MISSING' : 'TURN_FAILED' });
         // The reply in progress ends empty, and the message goes to the team.
@@ -342,9 +343,10 @@ export class Chat {
         settle();
         return;
       }
-      this.s.abort = null;
       meta = this.s.charge(result.usage, 1, failedTurn(result, !!result.text.trim()));
-      if (await stopped()) return;
+      if (await stopped(meta)) return;
+      // Cancelled from the panel: the reply ends empty, and nothing the model wrote is kept, shown or mirrored.
+      if (turn.stopReason === 'cancelled' || result.aborted) { end(); settle(); await this.s.saveUsage(meta); return; }
       let final = result.text.trim(), redacted = false, unticketed = false;
       // The model failed before it answered: the reply ends empty, and the message goes to the team.
       if (failedTurn(result, !!final)) {
@@ -355,8 +357,7 @@ export class Chat {
         return;
       }
       // Its ticket was refused by the ticket caps: nothing it wrote goes, and the message is the team's (No reply sent).
-      if (this.s.chatUnticketed) {
-        this.s.chatUnticketed = false;
+      if (turn.unticketed) {
         end();
         this.s.notice(PASSED.team, 'unanswered');
         settle();
@@ -386,7 +387,7 @@ export class Chat {
       settle();
       await this.s.saveUsage(meta);
     } finally {
-      this.s.abort = null;
+      if (this.s.turn === turn) this.s.turn = null;
       if (!ended) end();
       settle();
     }
@@ -396,9 +397,8 @@ export class Chat {
    * session is retired), or the conversation closed meanwhile (close() interrupted it). Nothing the model wrote is kept
    * or sent either way.
    */
-  async stoppedTurn(messageId: string) {
-    if (this.s.accessLost) {
-      this.s.accessLost = false;
+  async stoppedTurn(turn: ActiveTurn, messageId: string) {
+    if (turn.stopReason === 'access_lost') {
       // The reply in progress ends empty; then the notice and the close (no idle status first: the input stays shut).
       this.s.broadcast({ type: 'message.end', messageId, text: '', redacted: false });
       if (this.s.meta()!.status !== 'closed') await this.a.endForAccess(); else await this.s.retireModel();

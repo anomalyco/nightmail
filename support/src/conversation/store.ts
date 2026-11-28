@@ -1,18 +1,18 @@
-import { platformBody, type MirroredState, type PlatformReply } from '../nightmail.js';
+import { nightmailApi, platformBody, type MirroredMessage, type MirroredState, type PlatformReply } from '../nightmail.js';
 import type { Env } from '../env.js';
-import { gate } from '../gate.js';
 import { expectation, fileTicket, ticketEmail, type TicketContext, type TicketMessage } from '../tickets.js';
 import { addressHash, newId } from '../tokens.js';
 import { alertOnce, countToday, limits, registrableDomain, ticketAllowed } from '../limits.js';
 import { external, WorkQueue, type WorkRow, type WorkState } from '../work.js';
-import { attachmentLink, modelImage, type Attachment } from '../attachments.js';
+import { attachmentLink, MAX_ATTACHMENTS, modelImage, safeName, storeImage, type Attachment } from '../attachments.js';
+import { cleanImage, ImageRejected, IMAGE_TYPES, MAX_IMAGE_BYTES } from '../image.js';
 import { type Customer } from '../agent/context.js';
 import { spentBy, type Harness, type Usage } from '../agent/harness.js';
 import { createHarness } from '../agent/opencode.js';
 import { type TicketInput } from '../agent/tools.js';
 import { productName } from '../../../api/src/brand.js';
 import { log, logError } from '../log.js';
-import { TURNS_PER_CONVERSATION, TOKEN_BUDGET, CONTEXT_MS, CHAT_IDLE_MS, EMAIL_IDLE_MS, KEEP_AFTER_CLOSE_MS, MODEL_LABEL, MIRROR_DELAYS, Meta, Transcript, briefOf, ticketNote, Outgoing, Snapshot, Route, Composed, Notify, Alert, FollowUp, EmailTurn, MirrorRow, mirrored, platformError, fileName, ticketPerson, spentUsd } from './state.js';
+import { TURNS_PER_CONVERSATION, TOKEN_BUDGET, CHAT_IDLE_MS, EMAIL_IDLE_MS, KEEP_AFTER_CLOSE_MS, MODEL_LABEL, MIRROR_DELAYS, Meta, Transcript, HeldReason, Decision, snapshotOf, briefOf, ticketNote, Outgoing, Snapshot, Route, AnswerRow, Notify, Alert, FollowUp, ActiveTurn, StopReason, platformError, fileName, ticketPerson, spentUsd } from './state.js';
 
 export class ConversationStore {
   constructor(readonly ctx: DurableObjectState, private readonly envOf: () => Env) {
@@ -24,24 +24,23 @@ export class ConversationStore {
   readonly work: WorkQueue;
   /** OpenCode, booting or booted: started in the background when a chat opens or reconnects, awaited by the first turn. */
   booting: Promise<Harness> | null = null;
-  /** The DMARC verdict of the email being answered, for the ticket it may file. */
-  currentDmarc: string | null = null;
-  /**
-   * The email turn running now: its reply tool freezes that email's one answer. `verified`: it reads the account (by
-   * role); `lost`: a scope it was offered gave less than the turn ran with, so the turn stops and its answer is held.
-   */
-  emailTurn: EmailTurn | null = null;
+  /** The model turn running now, chat or email: set when it starts, cleared when it ends. */
+  turn: ActiveTurn | null = null;
   /** The account summary of the last member turn (<account>), reused for CONTEXT_MS. */
   context: { workspaceId: string; at: number; text: string } | null = null;
-  abort: AbortController | null = null;
+  /**
+   * Stops the turn running now, if any. It ends for the first reason given, except that lost access always wins: what the
+   * turn read must not reach an answer, whatever else stopped it.
+   */
+  stopTurn(reason: StopReason) {
+    if (!this.turn) return;
+    if (reason === 'access_lost' || !this.turn.stopReason) this.turn.stopReason = reason;
+    this.turn.stop.abort();
+  }
   /** Frame sequence: increases across restarts (it starts from the clock), without a storage write per streamed delta. */
   seq = Date.now() * 1000;
   /** One inbox mirror at a time, so the cursor only moves forward. */
   mirroring: Promise<void> = Promise.resolve();
-  /** A stamped request during the chat turn running now was refused: the turn stops and the chat ends after it. */
-  accessLost = false;
-  /** This chat turn's ticket was refused by the ticket caps (fileTicket): it ends with no answer, passed to the team. */
-  chatUnticketed = false;
   /**
    * What an earlier build left queued, settled once as this object loads:
    * - an answer whose text an earlier build wrote (it may have read an account) is never sent: held, and shown to the team
@@ -54,7 +53,7 @@ export class ConversationStore {
     const written = this.sql.exec<{ id: string; result: string }>(`SELECT id, result FROM _support_work WHERE kind = 'answer' AND state IN ('pending', 'blocked', 'parked')
       AND (json_extract(result, '$.model') IS NOT NULL OR json_type(result, '$.text') = 'text') AND coalesce(json_extract(result, '$.mode'), '') NOT IN ('general', 'verified')`).toArray();
     for (const row of written) {
-      const progress = JSON.parse(row.result) as Composed;
+      const progress = JSON.parse(row.result) as AnswerRow;
       progress.held ??= newId('msg');
       this.sql.exec("UPDATE _support_work SET state = 'held', result = ?, updated_at = ? WHERE id = ?", JSON.stringify(progress), now, row.id);
       this.record({ id: progress.held, role: 'assistant', kind: 'held', text: typeof progress.text === 'string' ? progress.text : progress.model ?? '', at, tools: [], channel: 'email', reason: 'earlier' }, false);
@@ -423,8 +422,7 @@ export class ConversationStore {
     this.context = null;
     // A turn still running stops, chat or email: nothing more it calls (an action included) runs, and its answer isn't
     // kept (an email's is withheld before it sends: releasable).
-    this.abort?.abort();
-    this.emailTurn?.stop.abort();
+    this.stopTurn('closed');
     this.broadcast({ type: 'closed', reason });
     for (const ws of this.ctx.getWebSockets()) { try { ws.close(1000, 'closed'); } catch { /* gone */ } }
     // Tried now; the alarm retries it.
@@ -450,7 +448,7 @@ export class ConversationStore {
     if (meta.retired) return;
     const open = this.sql.exec<{ id: string; payload: string; result: string }>("SELECT id, payload, result FROM _support_work WHERE kind = 'answer' AND state IN ('pending', 'blocked', 'parked') ORDER BY created_at").toArray();
     const drafts = open.map(row => {
-      const { messageId } = JSON.parse(row.payload) as { messageId: string }, done = JSON.parse(row.result) as Composed;
+      const { messageId } = JSON.parse(row.payload) as { messageId: string }, done = JSON.parse(row.result) as AnswerRow;
       const text = typeof done.text === 'string' ? done.text : typeof done.model === 'string' ? done.model : null;
       return `- Message ${messageId}: ${text ? `a draft, never sent:\n\n${text.slice(0, 1500).replace(/^/gm, '    ')}` : 'not answered yet.'}`;
     });
@@ -469,4 +467,56 @@ export class ConversationStore {
     if (meta.status !== 'closed') await this.close('ended');
     else { this.work.insert({ kind: 'close', id: 'close', payload: {} }); await this.arm(); }
   }
+  /** The message as the decision kept it, or (an answer imported from the earlier inbox) read once and kept here. */
+  async snapshot(messageId: string, progress: { message?: Snapshot }, save: () => void): Promise<Snapshot> {
+    const decided = this.sql.exec<{ result: string }>('SELECT result FROM _support_work WHERE id = ?', `msg:${messageId}`).toArray()[0];
+    const kept = decided ? (JSON.parse(decided.result) as Decision).message : undefined;
+    if (kept) return kept;
+    if (!progress.message) { progress.message = snapshotOf(await external(nightmailApi(this.env).message(messageId))); save(); }
+    return progress.message;
+  }
+  /**
+   * Image attachments of a support email, handled like chat uploads (5 per conversation, checked, stripped). `stored`
+   * remembers each part's attachment across tries of one answer, so a retry never stores a second copy.
+   */
+  async emailImages(message: Snapshot, messageId: string, stored: Record<string, string>, save: () => void) {
+    const parts = message.attachments.filter(p => (IMAGE_TYPES as readonly string[]).includes(String(p.contentType).toLowerCase()) && p.size <= MAX_IMAGE_BYTES);
+    const ids: string[] = [], skipped: string[] = [];
+    const meta = this.meta()!;
+    for (const part of parts) {
+      const kept = stored[part.id];
+      if (kept && this.attachments().some(a => a.id === kept)) { ids.push(kept); continue; }
+      if (this.attachments().length >= MAX_ATTACHMENTS) { skipped.push(`${fileName(part.filename)} (the conversation already has ${MAX_ATTACHMENTS} images)`); continue; }
+      try {
+        const bytes = await nightmailApi(this.env).part(messageId, part.id, MAX_IMAGE_BYTES);
+        if (!bytes) { skipped.push(`${fileName(part.filename)} (too large)`); continue; }
+        const clean = cleanImage(bytes);
+        const id = newId('att'), image = await storeImage(this.env, meta.conversationId, id, clean, 'email', safeName(part.filename, `attachment-${this.attachments().length + 1}`));
+        this.sql.exec('INSERT INTO _support_attachments (id, key, type, size, width, height, source, name, message_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', image.id, image.key, image.type, image.size, image.width, image.height, image.source, image.name, messageId, Date.now());
+        stored[part.id] = id; save();
+        ids.push(id);
+      } catch (error) {
+        logError(error, { event: 'email', code: 'EMAIL_ATTACHMENT_SKIPPED', reason: error instanceof ImageRejected ? error.code : 'FETCH_FAILED' }, 'warn');
+        skipped.push(`${fileName(part.filename)} (not a readable PNG, JPEG or WebP)`);
+      }
+    }
+    const others = message.attachments.length - parts.length;
+    return { ids, skipped, others };
+  }
+}
+
+export type MirrorRow = { id: string; role: Transcript['role']; kind: Transcript['kind']; text: string; at: string; tools: string; channel: string | null; source: string | null; reason: HeldReason | null };
+/**
+ * A transcript row as the staff inbox stores it: who wrote it, its tools by label and outcome, its screenshots by ID and
+ * as files (from the stored attachments), a customer email's source message, and why a held answer was held.
+ */
+export function mirrored(row: MirrorRow, stored: Map<string, Attachment>): MirroredMessage {
+  const saved = JSON.parse(row.tools) as Transcript['tools'] | { tools: Transcript['tools']; attachments: NonNullable<Transcript['attachments']> };
+  const tools = (Array.isArray(saved) ? saved : saved.tools).map(t => ({ label: t.label.slice(0, 80) || 'Done', ok: t.ok })).slice(0, 50);
+  const attachments = (Array.isArray(saved) ? [] : saved.attachments).map(a => a.id).filter(id => /^att_[a-z2-7]{16}$/.test(id)).slice(0, 20);
+  const files = attachments.flatMap(id => { const a = stored.get(id); return a ? [{ id, name: a.name.slice(0, 80), type: a.type, size: a.size }] : []; });
+  const author = row.role === 'user' ? 'customer' : row.kind === 'notice' || row.kind === 'waiting' || row.kind === 'status' || row.kind === 'unanswered' || row.kind === 'ticket_note' ? 'system' : 'agent';
+  return { id: row.id, author, kind: row.kind, text: row.text.slice(0, 16_000), tools: author === 'agent' ? tools : [], attachments, ...files.length ? { files } : {},
+    ...(author === 'customer' || row.kind === 'unanswered') && row.source ? { source: row.source } : {}, ...author === 'agent' && row.kind === 'held' && row.reason ? { reason: row.reason } : {},
+    ...author === 'agent' && row.kind === 'held' ? { delivery: 'held' as const } : author === 'agent' && row.channel === 'email' ? { delivery: 'sent' as const } : {}, at: row.at };
 }
