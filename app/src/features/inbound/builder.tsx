@@ -25,7 +25,7 @@ import { hostStatus, moveReason, useReceivingHosts } from '../settings/receiving
 import { isAbortError, request } from '../../data/live'
 import { invalidate, invalidateResources } from '../../data/invalidation'
 import { ApiError, errorText, type InboundAddress, type MailboxDomain } from '../../data/types'
-import { idempotencyFor, addressOption } from './shared'
+import { idempotencyFor, addressOption, freeKey } from './shared'
 import { Flow, FlowFork, FlowItem, FlowStage, isSplit, splitOf } from './flow'
 import { FlowPanel } from './panel'
 import { receivingDomains, useOverview, type Overview, type OverviewRule, type RouteEntry, type Target } from './overview'
@@ -147,8 +147,7 @@ const newField: Record<NewType, { label: string; placeholder: string }> = {
   forward: { label: 'Their address', placeholder: 'team@example.com' },
 }
 const blank: Plan = { split: false, condition: 'subject', value: '', then: 'own', otherwise: 'own', targets: {} }
-const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 56)
-const freeName = (base: string, taken: Set<string>) => { const stem = slug(base) || 'desk'; for (let n = 1; ; n++) { const name = n === 1 ? stem : `${stem}-${n}`; if (!taken.has(name)) return name } }
+const freeName = (base: string, taken: Set<string>) => freeKey(base, taken, 'desk')
 const words = (v: unknown) => Array.isArray(v) ? v.join(', ') : String(v ?? '')
 const list = (v: string) => v.split(',').map(s => s.trim()).filter(Boolean).join(',')
 

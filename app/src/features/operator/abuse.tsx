@@ -1,24 +1,21 @@
-import { useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, ErrorText, FacetRail, Field, Input, MutationError, PageHeader, SectionHeader, Skeleton, SplitPane, StatusBadge, Textarea, useToast, type Column, type MenuItem, type Tone } from '../../components/ui'
+import { Alert, Button, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, FacetRail, Field, Input, MutationError, PageHeader, SectionHeader, Skeleton, SplitPane, StatusBadge, Textarea, useToast, type Column, type MenuItem, type Tone } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { useSession } from '../../data/context'
-import type { StandingStep } from '../../data/types'
 import { isoTime, operatorApi, type AbuseAccount, type AbuseAlert, type AbuseBand, type AbuseCluster, type AbuseClusterDetail, type AbuseLink, type AbuseReason, type AbuseReview, type AbuseWorkspace, type SlackCard } from '../../data/operator'
 import { errorText } from '../../data/types'
 import { label, number, shortDateTime } from '../../lib/format'
 import { abuseFacets, abuseView, alertColumnDefs, bandLabel, bandTone, ClusterBodySkeleton, clusterAccountColumnDefs, clusterColumnDefs, clusterFacts, ClusterRailSkeleton, clusterWorkspaceColumnDefs, dailyLimitError, reviewActions, StaffOnly } from './skeletons'
 import { ListsView } from './lists'
+import { At, def, InfiniteMore, reasonCheck, StepBadge, useShown, when } from './shared'
 
 // Operator → Abuse: accounts and workspaces that abuse monitoring found related, by risk, for a person to review.
 // A cluster opens beside the list of the others: why it scored, what links its members (kinds and counts, never a
 // value), and its workspaces with this month's free use. Nothing here acts by itself: an operator clicks Pause or Set
 // limit, and the note they give stays in the staff audit; or reviews the cluster's alert with Watch or Dismiss. Every
 // read of this area is recorded for staff.
-const def = (defs: typeof clusterColumnDefs, key: string) => defs.find(column => column.key === key)!
-const when = (value: string | null | undefined) => value ? `${shortDateTime(isoTime(value))} UTC` : '—'
-const At = ({ value }: { value: string | null | undefined }) => <span className="nowrap">{when(value)}</span>
 const reasonLabel: Record<string, string> = {
   MULTI_ACCOUNT: 'Several accounts', FREE_TIER_MULTIPLIED: 'Free allowance multiplied', THROWAWAY_SIGNUP: 'Throwaway sign-up', SIGNUP_BURST: 'Sign-up burst', SHARED_CARD: 'Shared card', PAYMENT_RISK: 'Payment risk',
   SIMILAR_CONTENT: 'Similar mail', SHARED_LINKS: 'Shared link domains', SENDER_STANDING: 'Sender standing', FAST_FIRST_SEND: 'Fast first send', WAITLIST_REPEAT: 'Repeated refusals',
@@ -76,8 +73,7 @@ export function AbuseView() {
     {view.lists ? <ListsView /> : view.alerts ? <Alerts /> : clusters.isError && !clusters.data ? <ErrorState error={clusters.error} onRetry={() => void clusters.refetch()} /> : <>
       <DataTable loading={clusters.isPending} skeletonRows={6} rows={rows} rowKey={row => row.id} rowHref={row => `/operator/abuse/${row.id}`} columns={clusterColumns}
         empty={<EmptyState title={first && !first.monitoring ? 'Abuse monitoring is off' : view.band ? `No ${bandLabel[view.band].toLowerCase()}-risk clusters` : 'No related accounts found'} action={view.band ? <Button onClick={() => set(next => next.delete('band'))}>Show all</Button> : undefined} />} />
-      {clusters.hasNextPage && <Button className="op-more" loading={clusters.isFetchingNextPage} onClick={() => void clusters.fetchNextPage()}>Load more</Button>}
-      {clusters.isError && clusters.data && <Alert tone="danger"><ErrorText error={clusters.error} /></Alert>}
+      <InfiniteMore query={clusters} />
     </>}
   </SplitPane>
 }
@@ -93,8 +89,7 @@ function Alerts() {
   if (alerts.isError && !alerts.data) return <ErrorState error={alerts.error} onRetry={() => void alerts.refetch()} />
   return <>
     <DataTable loading={alerts.isPending} skeletonRows={6} rows={rows} rowKey={row => row.id} onRowClick={setShown} columns={alertColumns(setShown, delivery === 'slack')} empty={<EmptyState title="No alerts yet" />} />
-    {alerts.hasNextPage && <Button className="op-more" loading={alerts.isFetchingNextPage} onClick={() => void alerts.fetchNextPage()}>Load more</Button>}
-    {alerts.isError && alerts.data && <Alert tone="danger"><ErrorText error={alerts.error} /></Alert>}
+    <InfiniteMore query={alerts} />
     {shown && <Dialog open onOpenChange={next => { if (!next) setShown(null) }} title="Slack card" footer={<><Button onClick={() => setShown(null)}>Close</Button><Link className="ui-button ui-button--primary ui-button--md" to={`/operator/abuse/${shown.clusterId}`}>Open cluster</Link></>}>
       {shown.status === 'unconfirmed' && <Alert tone="warning">Slack didn’t answer either post in time, so this card may be in the channel once or twice, or not at all. Check the channel.</Alert>}
       <SlackPreview card={shown.payload} />
@@ -161,8 +156,6 @@ function ClusterRail({ current }: { current: string }) {
     </Link></li>)}{list.data.nextCursor && <li><Link className="op-cluster-rail__row muted" to="/operator?view=abuse">More clusters…</Link></li>}</ul>
 }
 
-const stepTone: Record<StandingStep, Tone> = { ok: 'success', notice: 'neutral', warn: 'warning', restrict: 'warning', pause: 'danger' }
-const stepLabel: Record<StandingStep, string> = { ok: 'Good', notice: 'Notice', warn: 'Warn', restrict: 'Restrict', pause: 'Pause' }
 const planLabel: Record<AbuseWorkspace['plan'], string> = { free: 'Free', paid: 'Paid', exempt: 'Not billed' }
 const use = (value: { used: number; limit: number }) => `${number(value.used)} / ${number(value.limit)}`
 function ClusterBody({ cluster, alert, canAct, onAct }: { cluster: AbuseClusterDetail; alert?: { alert: AbuseAlert | null; posting: boolean }; canAct: boolean; onAct: (kind: Pending['kind'], workspace: AbuseWorkspace) => void }) {
@@ -179,7 +172,7 @@ function ClusterBody({ cluster, alert, canAct, onAct }: { cluster: AbuseClusterD
     { ...def(clusterWorkspaceColumnDefs, 'plan'), render: w => planLabel[w.plan] },
     { ...def(clusterWorkspaceColumnDefs, 'sent'), render: w => use(w.sent), cardRender: w => `Sent ${use(w.sent)}` },
     { ...def(clusterWorkspaceColumnDefs, 'received'), render: w => use(w.received), cardRender: w => `Received ${use(w.received)}` },
-    { ...def(clusterWorkspaceColumnDefs, 'step'), render: w => w.step ? <StatusBadge status={stepLabel[w.step]} tone={stepTone[w.step]} /> : <span className="muted">{w.sending === 'shared' ? 'Not graded' : w.sending === 'byo' ? 'Own AWS' : 'Not sending'}</span> },
+    { ...def(clusterWorkspaceColumnDefs, 'step'), render: w => w.step ? <StepBadge step={w.step} /> : <span className="muted">{w.sending === 'shared' ? 'Not graded' : w.sending === 'byo' ? 'Own AWS' : 'Not sending'}</span> },
     { ...def(clusterWorkspaceColumnDefs, 'actions'), render: w => {
       const items: MenuItem[] = [{ label: 'Open workspace', onSelect: () => navigate(`/operator/workspaces/${encodeURIComponent(w.id)}`) },
         ...(canAct && w.sending === 'shared' ? [...(w.paused ? [] : [{ label: 'Pause sending…', destructive: true, onSelect: () => onAct('pause', w) }]), { label: 'Set daily limit…', onSelect: () => onAct('limit', w) }] : [])]
@@ -234,9 +227,7 @@ function ClusterGraph({ cluster }: { cluster: AbuseClusterDetail }) {
 // Pause or a daily limit, from the cluster. The note is for staff: the workspace is told only that it followed a review.
 const copy = { pause: { title: 'Pause sending?', confirm: 'Pause sending', done: 'Sending paused' }, limit: { title: 'Set the daily limit', confirm: 'Save limit', done: 'Limit saved' } }
 function ActionDialog({ action, cluster, onClose }: { action: Pending | null; cluster: string; onClose: () => void }) {
-  const last = useRef(action)
-  if (action) last.current = action
-  const shown = action ?? last.current
+  const shown = useShown(action)
   return <Dialog open={action !== null} onOpenChange={next => { if (!next) onClose() }} title={shown ? copy[shown.kind].title : ''}>
     {shown && <ActionForm key={shown.key} action={shown} cluster={cluster} onClose={onClose} />}
   </Dialog>
@@ -244,7 +235,7 @@ function ActionDialog({ action, cluster, onClose }: { action: Pending | null; cl
 function ActionForm({ action, cluster, onClose }: { action: Pending; cluster: string; onClose: () => void }) {
   const client = useQueryClient(), toast = useToast()
   const [note, setNote] = useState(''), [ticket, setTicket] = useState(''), [daily, setDaily] = useState(action.workspace.dailyLimit ? String(action.workspace.dailyLimit) : ''), [tried, setTried] = useState(false)
-  const noteError = note.trim().length < 10 ? 'At least 10 characters.' : note.trim().length > 1000 ? 'At most 1,000 characters.' : ''
+  const noteError = reasonCheck(note)
   const dailyValue = Number(daily), dailyError = action.kind === 'limit' && !(Number.isInteger(dailyValue) && dailyValue >= 1 && dailyValue <= 10_000_000) ? dailyLimitError : ''
   const mutation = useMutation({
     mutationFn: () => {

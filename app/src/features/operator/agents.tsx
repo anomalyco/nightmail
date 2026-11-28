@@ -6,8 +6,9 @@ import { Alert, Button, Checkbox, ConfirmDialog, DataTable, Dialog, DropdownMenu
 import { useSession } from '../../data/context'
 import { ApiError } from '../../data/types'
 import { supportAgentsApi, supportAgentsKey, type SupportAgentApproval, type SupportAgentConnection, type SupportAgentRequest } from '../../data/support-agents'
-import { relativeTime, shortDateTime } from '../../lib/format'
+import { relativeTime } from '../../lib/format'
 import { agentColumnDefs, AgentsHeader, AgentsLead, StaffOnly } from './skeletons'
+import { when } from './shared'
 
 // Your agents (/operator/agents, from the support inbox's menu): the agents you approved to work the support inbox as you
 // (api/src/support-agents.ts), and where an agent's link lands. An agent signed in over MCP asks first, with a code and
@@ -20,7 +21,6 @@ function readCode(value: string | null) {
   return CODE.test(code) ? `${code.slice(0, 4)}-${code.slice(4)}` : null
 }
 const def = (key: string) => agentColumnDefs.find(column => column.key === key)!
-const when = (value: string) => `${shortDateTime(value)} UTC`
 const agentName = (agent: SupportAgentConnection) => `${agent.client ?? 'Unnamed client'}${agent.profile ? ` · ${agent.profile}` : ''}`
 function minutesLeft(at: string) {
   const minutes = Math.max(1, Math.round((Date.parse(at) - Date.now()) / 60_000))

@@ -23,6 +23,12 @@ export function WebhookSecretsDialog({ secrets, title, onClose }: { secrets: Web
 /** A sender in words, for a label or a title: the display name, never a piece of the address. */
 export const nameOf = (value: MailAddress) => { const parts = nameParts(value.name, value.address); return parts && parts.every(part => !part.address) ? parts.map(part => part.text).join('') : 'this sender' }
 export const full = (value: MailAddress) => cleanName(value.name) ? `${cleanName(value.name)} <${value.address}>` : value.address
+/** A name for something new (a rule's key, an endpoint) made from `base`: lowercase words joined by dashes, numbered
+ *  past the names already taken, `fallback` when nothing of `base` is left. */
+export function freeKey(base: string, taken: Set<string>, fallback: string) {
+  const stem = base.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 56) || fallback
+  for (let n = 1; ; n++) { const name = n === 1 ? stem : `${stem}-${n}`; if (!taken.has(name)) return name }
+}
 export const addressName = (addresses: Map<string, InboundAddress>, id: string) => addresses.get(id)?.address ?? id
 export function when(value: string) {
   const at = new Date(value), now = new Date()

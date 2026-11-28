@@ -1,15 +1,15 @@
 import { useState } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
-import { Alert, Button, DataTable, Dialog, EmptyState, ErrorState, ErrorText, StatusBadge, type Column, type Tone } from '../../components/ui'
-import { isoTime, operatorApi, type ListRiskBand, type OperatorListRow } from '../../data/operator'
-import { label, number, shortDateTime } from '../../lib/format'
+import { Button, DataTable, Dialog, EmptyState, ErrorState, StatusBadge, type Column, type Tone } from '../../components/ui'
+import { operatorApi, type ListRiskBand, type OperatorListRow } from '../../data/operator'
+import { label, number } from '../../lib/format'
 import { listColumnDefs } from './skeletons'
+import { InfiniteMore, when } from './shared'
 
 // Operator → Lists: each recent marketing campaign to a list, with the list-risk measure its launch recorded (shares and
 // counts of that workspace's own contacts), what the send review said then, and what happened. The measure decides
 // nothing yet; this is where it is judged against outcomes. The lines a band was judged by live on the server only.
 const def = (key: string) => listColumnDefs.find(column => column.key === key)!
-const when = (value: string) => `${shortDateTime(isoTime(value))} UTC`
 const percent = (part: number, whole: number) => whole > 0 ? `${(100 * part / whole).toFixed(part / whole < 0.1 ? 1 : 0)}%` : '—'
 const share = (value: number | undefined) => value === undefined ? '—' : `${(100 * value).toFixed(value < 0.1 ? 1 : 0)}%`
 const bandTone: Record<ListRiskBand, Tone> = { low: 'success', elevated: 'warning', high: 'danger' }
@@ -51,8 +51,7 @@ export function ListsView() {
   return <>
     <DataTable loading={lists.isPending} skeletonRows={6} rows={rows} rowKey={row => row.campaignId} onRowClick={setShown} columns={columns}
       empty={<EmptyState title="No campaigns to lists in the last 90 days" />} />
-    {lists.hasNextPage && <Button className="op-more" loading={lists.isFetchingNextPage} onClick={() => void lists.fetchNextPage()}>Load more</Button>}
-    {lists.isError && lists.data && <Alert tone="danger"><ErrorText error={lists.error} /></Alert>}
+    <InfiniteMore query={lists} />
     {shown && <Dialog open onOpenChange={next => { if (!next) setShown(null) }} title={shown.campaignName} footer={<Button onClick={() => setShown(null)}>Close</Button>}>
       <ListDetail row={shown} />
     </Dialog>}

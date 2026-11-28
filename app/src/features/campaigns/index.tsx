@@ -46,7 +46,8 @@ import { localLabel, parseUtc, ScheduleField, scheduleError, utcLabel } from '..
 import { useSingleFlight } from '../../lib/single-flight'
 import { modKey, usePhone } from '../../lib/media'
 import { useLeaveGuard } from '../../lib/leave-guard'
-import { emailIsValid, replyToAddresses, replyToError } from './reply-to'
+import { replyToAddresses, replyToError } from './reply-to'
+import { validEmail } from '../../lib/domain'
 import { mergeCampaign, mergeFieldsText, type MergeField } from './merge'
 import { announceSave, CampaignPresence, useCampaignPresence, type Room, type Save } from './presence'
 import { PresenceOverlay } from './presence-overlay'
@@ -67,11 +68,11 @@ const unsubscribePageError = (value = '') => {
 const nobodyEligible = 'Nobody on this list can receive campaigns yet. Mark contacts as subscribed or choose another list.'
 const campaignRoute = (campaign: Pick<Campaign, 'id'>, view: 'edit' | 'review') => `/campaigns/${encodeURIComponent(campaign.id)}/${view}`
 function campaignReadinessError(campaign: Campaign) {
-  const missing = [!campaign.name.trim() && 'a campaign name', !campaign.subject.trim() && 'a subject', !emailIsValid(campaign.fromEmail.trim()) && 'a valid sender email address', !campaign.listId && 'a recipient list', !campaign.html.trim() && 'email content'].filter(Boolean)
+  const missing = [!campaign.name.trim() && 'a campaign name', !campaign.subject.trim() && 'a subject', !validEmail(campaign.fromEmail.trim()) && 'a valid sender email address', !campaign.listId && 'a recipient list', !campaign.html.trim() && 'email content'].filter(Boolean)
   return missing.length ? `Add ${missing.join(', ')}.` : ''
 }
 // A test goes to one address, so it needs a complete message but no recipient list (the API sends it without one).
-const campaignMessageReady = (campaign: Campaign) => Boolean(campaign.name.trim() && campaign.subject.trim() && emailIsValid(campaign.fromEmail.trim()) && campaign.html.trim())
+const campaignMessageReady = (campaign: Campaign) => Boolean(campaign.name.trim() && campaign.subject.trim() && validEmail(campaign.fromEmail.trim()) && campaign.html.trim())
 const olderCampaign = (candidate: Campaign, baseline: Campaign) => (candidate.revision ?? 1) < (baseline.revision ?? 1) || ((candidate.revision ?? 1) === (baseline.revision ?? 1) && Date.parse(candidate.updatedAt) < Date.parse(baseline.updatedAt))
 const campaignInput = (campaign: Campaign): CampaignInput => ({
   id: campaign.id, revision: campaign.revision, draft: campaign.draft, attachments: campaign.attachments, regionId: campaign.regionId,
@@ -354,7 +355,7 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
     const version = creation.current?.version ?? editVersion.current
     const validation = !input.name.trim() ? issueOf ? 'Enter an issue name.' : 'Enter a campaign name.'
       : continuing && !input.subject.trim() ? `Enter a subject before ${next === 'test' ? 'sending a test' : 'continuing'}.`
-      : (continuing || input.fromEmail.trim()) && !emailIsValid(input.fromEmail.trim()) ? invalidSender
+      : (continuing || input.fromEmail.trim()) && !validEmail(input.fromEmail.trim()) ? invalidSender
       : !multiTenant && (!input.regionId.trim() || input.regionId.trim().length > 40) ? 'Enter a region identifier of 1–40 characters.' : ''
     if (validation) { if (!automatic) reportError(validation); return }
     // An unchanged saved draft needs no new revision: open the test or review straight away.
@@ -539,7 +540,7 @@ function TestEmailDialog({ campaign, open, onOpenChange }: { campaign: Campaign;
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (guard.current || mutation.isPending) return
-    if (!emailIsValid(to.trim())) { setError('Recipient email: enter an address like you@example.com.'); return }
+    if (!validEmail(to.trim())) { setError('Recipient email: enter an address like you@example.com.'); return }
     const missing = samples.find(key => !data[key]?.trim())
     if (missing) { setError(`Sample {{${missing}}}: enter a value to show in the test, or add a fallback in the editor.`); return }
     setError('')
@@ -1094,7 +1095,7 @@ function CampaignReview({ campaign: latest, stats, settings, stale, refreshing, 
   const scoreNote = sendability.data && sendability.data.score < LOW_SENDABILITY && toFix ? ` Checks found ${checksSummary(sendability.data)}.` : ''
   const previewHtml = (html: string) => keys.length ? html.replace(/\{\{\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\}\}/g, (_, key: string) => escapeHtml(fallbacks[key] ? String(fallbacks[key]) : sampleValue(key))) : html
   // What the Write step still needs, each named, and what this step needs: shown under the send button.
-  const missing = [!campaign.name.trim() && 'a name', !campaign.subject.trim() && 'a subject', !emailIsValid(campaign.fromEmail.trim()) && 'a sender', !campaign.html.trim() && 'content'].filter(Boolean) as string[]
+  const missing = [!campaign.name.trim() && 'a name', !campaign.subject.trim() && 'a subject', !validEmail(campaign.fromEmail.trim()) && 'a sender', !campaign.html.trim() && 'content'].filter(Boolean) as string[]
   const writeLink = <Link to={campaignRoute(campaign, 'edit')}>Write</Link>
   // Shown in every open stage's footer, until they read the newer version (useReadCampaign).
   const unreadNote = unread && <>{by.length ? `${by.join(' and ')} saved this ${thing}` : `This ${thing} changed`} after you opened it. <Button size="sm" onClick={() => { readAgain(); setError(''); setOpenRow('message') }}>Read it again</Button></>
