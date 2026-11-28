@@ -116,7 +116,7 @@ async function withImportRetry<T>(work: () => Promise<T>, signal: AbortSignal, o
       }
       if (err.code === 'INVALID_RESPONSE' && err.retryable && truncatedTries < 2) {
         truncatedTries++
-        onWait('Response cut short — retrying…')
+        onWait('Retrying…')
         await sleepAbortable(1000 * truncatedTries, signal)
         onWait('Retrying…')
         continue
@@ -189,7 +189,6 @@ export function ImportContactsDialog({ listId: initialListId = '', onClose }: { 
             if (!(err instanceof ApiError && err.status === 404) || refreshes >= 3) throw err
             const part = getPartCsv(index)
             if (!part.csv) throw err
-            setProgress(`Refreshing part ${index + 1} of ${input.ids.length}…`)
             const refreshed = await withImportRetry(() => api.imports.preview({ csv: part.csv!, mapping: part.mapping, ...(input.listId ? { listId: input.listId } : {}) }, signal), signal, setProgress)
             partId = refreshed.id
           }
@@ -251,7 +250,7 @@ export function ImportContactsDialog({ listId: initialListId = '', onClose }: { 
     const imported = result.imported, subscribed = result.subscribed ?? 0, risky = riskyCount(result.risky)
     return <Dialog open onOpenChange={open => { if (!open) onClose() }} title="Import complete" footer={<>{!consent && imported > 0 && <Link className="ui-button ui-button--secondary ui-button--md" to={unknownHref} onClick={onClose}>Review unknown contacts</Link>}<Button variant="primary" onClick={onClose}>Done</Button></>}><div className="stack audience-result">
       <p>{plural(imported, 'contact')} imported{consent ? ` · ${number(subscribed)} marked subscribed${subscribed < imported ? ` · ${number(imported - subscribed)} kept their earlier consent` : ''}` : ''}.</p>
-      {!consent && imported > 0 && <p>They can’t receive campaigns until they consent. Once they do, choose Review unknown contacts, then Mark as subscribed.</p>}
+      {!consent && imported > 0 && <p>They can’t receive campaigns until they consent.</p>}
       {risky && <p>{risky}: {riskBreakdown(result.risky!.byReason, number)}. {riskySkipped} <Link to={riskyHref} onClick={onClose}>Review them</Link></p>}
       {result.errorCount > 0 && <RejectedRows errors={result.errors} count={result.errorCount} skipped />}
     </div></Dialog>

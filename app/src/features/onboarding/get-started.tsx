@@ -101,7 +101,7 @@ export function GetStarted({ domainId, onFinish }: { domainId: string | null; on
       {/* Both panels share one cell: the taller sets its height, so switching moves nothing below them. */}
       <div className="onb-panels">
         <section className="onb-panel onb-panel--agent" {...panel('agent')}>
-          <AgentPromptPanel value={copyPrompt} preview={preview} setup={setup} idle="Paste it into your coding agent." line="Paste it into your coding agent: it connects with a device code." />
+          <AgentPromptPanel value={copyPrompt} preview={preview} setup={setup} idle="Paste it into your coding agent." line="Paste it into your coding agent." />
         </section>
         <section className="onb-panel" {...panel('hand')}>
           <ByHand from={name} onCreated={() => setActed(true)} />
@@ -183,7 +183,7 @@ function ByHand({ from, onCreated }: { from: string | null; onCreated: () => voi
           <SecretCode>{secret ?? ''}</SecretCode>{secret && <CopyButton value={secret} label="Copy API key" />}
         </span>
       </div>
-      <p className="muted onb-panel__line">{create.error ? <span className="onboarding-error"><ErrorText error={create.error} /></span> : secret ? 'Shown once: copy it now. It sends email; revoke it under API keys.' : 'A key for your server that sends email.'}</p>
+      {(create.error || secret) && <p className="muted onb-panel__line">{create.error ? <span className="onboarding-error"><ErrorText error={create.error} /></span> : 'Shown once: copy it now.'}</p>}
     </div>
     <div className="onb-send">
       <div className="developer-client-bar">

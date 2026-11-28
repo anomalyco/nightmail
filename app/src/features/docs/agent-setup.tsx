@@ -128,7 +128,7 @@ export function useAgentSetup(enabled: boolean): AgentSetup | null {
 // The line reserves this name's width: a longer one (an agent's own name) is cut to it, so the line never wraps further.
 const sampleKey = 'Agent, set up 0000-00-00'
 const setupLines: Record<AgentSetupState, (keyName: string) => ReactNode> = {
-  idle: () => 'Copying adds a one-time setup token, so your agent gets its own API key. Revoke it any time under API keys.',
+  idle: () => null,
   waiting: () => 'Waiting for your agent to use the setup token. It works once, for 15 minutes.',
   connected: keyName => <>Your agent connected. Its key is <strong className="agent-setup-status__key" title={keyName}>{keyName}</strong>, under API keys.</>,
   expired: () => 'The setup token expired before your agent used it. Copy the prompt again for a new one.',
@@ -176,7 +176,6 @@ function PromptBox({ text }: { text: string }) {
 export function McpSetup({ compact = false }: { compact?: boolean }) {
   return <section id="mcp" className="section stack developer-section" aria-label="MCP server">
     <SectionHeader title="MCP server" />
-    {!compact && <p className="muted developer-copy">Add this URL as a remote (HTTP) server in your MCP client.</p>}
     <McpSignInSetup />
   </section>
 }
