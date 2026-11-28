@@ -38929,7 +38929,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const {copyWorkspaceRaw}=await import('./src/mailbox-mime.js'),{S3Client}=await import('@aws-sdk/client-s3');const size=8*1024*1024,head=2*1024*1024,cut='Bcc: blind@private.example\r\n';let read=0,streamed=0;
     const s3=new S3Client({region:REGION});t.mock.method(s3,'send',async(cmd:any)=>{if(cmd.constructor.name==='HeadObjectCommand')return {ContentLength:size,ETag:'pinned'};assert.equal(cmd.input.IfMatch,'pinned');read++;if(read===1){assert.equal(cmd.input.Range,`bytes=0-${head-1}`);const data=Buffer.alloc(head,120);data.write(cut+'Subject: hello\r\n\r\n');return {ContentRange:`bytes 0-${head-1}/${size}`,Body:{transformToByteArray:async()=>data}};}
       assert.equal(cmd.input.Range,`bytes=${head}-${size-1}`);let left=size-head;return {ContentRange:`bytes ${head}-${size-1}/${size}`,Body:{transformToByteArray:()=>assert.fail('tail was buffered'),transformToWebStream:()=>new ReadableStream({pull(c){if(!left)c.close();else{const n=Math.min(left,65536);left-=n;c.enqueue(new Uint8Array(n));}}})}};});
-    try{const result=await copyWorkspaceRaw(s3,REGION,'fixture','staging/fixture','d/work/msg.eml',[],'raw',undefined,undefined,{async put(_key,data){assert.ok(!(data instanceof Uint8Array));const reader=data.stream.getReader();for(;;){const {done,value}=await reader.read();if(done)break;if(!streamed)assert.match(Buffer.from(value).subarray(0,20).toString(),/^Subject: hello/);else assert.ok(value.length<=65536);streamed+=value.length;}assert.equal(streamed,data.length);},head:async()=>null,get:async()=>null,delete:async()=>{}});assert.equal(result.large,true);assert.equal(result.bytes.length,head-cut.length);assert.equal(streamed,size-cut.length);assert.equal(read,2);}finally{s3.destroy();}
+    try{const result=await copyWorkspaceRaw(s3,REGION,'fixture','staging/fixture','d/work/msg.eml',[],'raw',undefined,{async put(_key,data){assert.ok(!(data instanceof Uint8Array));const reader=data.stream.getReader();for(;;){const {done,value}=await reader.read();if(done)break;if(!streamed)assert.match(Buffer.from(value).subarray(0,20).toString(),/^Subject: hello/);else assert.ok(value.length<=65536);streamed+=value.length;}assert.equal(streamed,data.length);},head:async()=>null,get:async()=>null,delete:async()=>{}});assert.equal(result.large,true);assert.equal(result.bytes.length,head-cut.length);assert.equal(streamed,size-cut.length);assert.equal(read,2);}finally{s3.destroy();}
   });
   test('inbox ingest benchmark: compare v1 and v2 on a 100k-address receiving host',{skip:!BENCH},async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{const wid=runtime.config.workspaceId,domain=unique('mdom'),addr='bench100000@bench.invalid';
@@ -39900,6 +39900,68 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         assert.ok(order.slice(0, 6).includes('quietB:other'), `quietB other job must not wait behind floodA: ${order.slice(0, 6)}`);
       } finally { await c1.query(`DROP SCHEMA ${schema} CASCADE`); }
     });
+  });
+  test('batched inbound ingest: a receipt that stores nothing settles with its job, so a claim whose lease was retired settles none', async t => {
+    if (!fixtureWorker) return t.skip('requires the loopback worker and real database connections');
+    const { processJobs } = await import('./src/jobs.js'), { mailboxIngestJobs } = await import('./src/mailbox-ingest.js'), { drizzle } = await import('drizzle-orm/node-postgres');
+    const db = await fixtureDatabase(t), wid = unique('retired'), addr = `gone@${wid}.invalid`, schema = 'retired_' + randomUUID().replaceAll('-', ''), ids = { kept: unique('rk'), lost: unique('rl') };
+    const rt = { ...fixtureWorker.runtime, db: drizzle(db), config: { ...fixtureWorker.runtime.config, workspaceId: wid } };
+    // Every recipient is a deleted inbox's reserved address: the receipt is settled without reading or storing anything.
+    const retired = { region: REGION, bucket: 'fixture', objectKey: 'k', recipients: [addr], notification: {}, createdAt: new Date().toISOString(), spamPolicy: 'store', delivery: { lifecycle: 'ephemeral', prefixInbox: null, drop: true, owners: [null] }, binding: null };
+    await db.query("INSERT INTO mail_receipts(workspace_id,ses_message_id,region,bucket,object_key,recipients,notification) SELECT $1,m,$2,'fixture','k',$3::jsonb,'{}' FROM unnest($4::text[]) m", [wid, REGION, JSON.stringify([addr]), Object.values(ids)]);
+    await db.query(`CREATE SCHEMA ${schema}`);
+    try {
+      await db.query(`SET search_path TO ${schema}, public`);
+      await db.query("CREATE TABLE jobs (LIKE public.jobs INCLUDING ALL); CREATE TABLE mail_ingest_turns (LIKE public.mail_ingest_turns INCLUDING ALL); CREATE TRIGGER mail_ingest_head AFTER INSERT OR UPDATE OR DELETE ON jobs FOR EACH ROW EXECUTE FUNCTION mail_ingest_head_change(); CREATE TRIGGER mail_ingest_admit BEFORE INSERT ON jobs FOR EACH ROW WHEN (NEW.type='mailbox.ingest' AND NEW.status IN ('pending','running')) EXECUTE FUNCTION mail_ingest_admit()");
+      await db.query("INSERT INTO jobs(id,type,workspace_id,payload) SELECT 'job_'||k,'mailbox.ingest',$1,jsonb_build_object('sesMessageId',m) FROM jsonb_each_text($2::jsonb) e(k,m)", [wid, JSON.stringify(ids)]);
+      const ingest = mailboxIngestJobs['mailbox.ingest']!;
+      let batches = 0;
+      const handler = Object.assign(ingest.bind(null), { batch: async (r: any, items: any[]) => {
+        batches++;
+        // While the batch runs, the lost job's lease lapses and another claim takes the job.
+        await db.query("UPDATE jobs SET lease_until=lease_until+interval '1 minute' WHERE id='job_lost'");
+        return ingest.batch!(r, items.map(item => ({ ...item, job: { ...item.job, ingest: retired } })));
+      } });
+      assert.ok(await processJobs(rt, { 'mailbox.ingest': handler }, 10, 6, 4000, 'ingest') >= 2);
+      assert.equal(batches, 1, 'both jobs ran as one batch');
+      assert.deepEqual((await db.query("SELECT id,status FROM jobs ORDER BY id")).rows, [{ id: 'job_kept', status: 'completed' }, { id: 'job_lost', status: 'running' }]);
+      const receipt = async (mid: string) => (await db.query("SELECT status,error,dropped_recipients AS n FROM mail_receipts WHERE workspace_id=$1 AND ses_message_id=$2", [wid, mid])).rows[0];
+      assert.deepEqual(await receipt(ids.kept), { status: 'processed', error: 'EPHEMERAL_RETIRED', n: 1 });
+      assert.deepEqual(await receipt(ids.lost), { status: 'pending', error: null, n: 0 }, 'the retired claim settles nothing; the job that now holds it does');
+    } finally {
+      await db.query(`DROP SCHEMA ${schema} CASCADE`);
+      await db.query('DELETE FROM public.mail_receipts WHERE workspace_id=$1', [wid]);
+    }
+  });
+  test('batched job settlement: a settlement that fails leaves its own job to the lease and settles none of its siblings', async t => {
+    if (!fixtureWorker) return t.skip('requires the loopback worker and real database connections');
+    const { processJobs } = await import('./src/jobs.js'), { drizzle } = await import('drizzle-orm/node-postgres'), { sql } = await import('drizzle-orm'), { ApiError } = await import('./src/core.js');
+    const db = await fixtureDatabase(t), wid = unique('settle'), schema = 'settle_' + randomUUID().replaceAll('-', '');
+    const rt = { ...fixtureWorker.runtime, db: drizzle(db), config: { ...fixtureWorker.runtime.config, workspaceId: wid } };
+    await db.query(`CREATE SCHEMA ${schema}`);
+    try {
+      await db.query(`SET search_path TO ${schema}, public`);
+      await db.query("CREATE TABLE jobs (LIKE public.jobs INCLUDING ALL); CREATE TABLE mail_ingest_turns (LIKE public.mail_ingest_turns INCLUDING ALL); CREATE TRIGGER mail_ingest_head AFTER INSERT OR UPDATE OR DELETE ON jobs FOR EACH ROW EXECUTE FUNCTION mail_ingest_head_change(); CREATE TRIGGER mail_ingest_admit BEFORE INSERT ON jobs FOR EACH ROW WHEN (NEW.type='mailbox.ingest' AND NEW.status IN ('pending','running')) EXECUTE FUNCTION mail_ingest_admit()");
+      await db.query("INSERT INTO jobs(id,type,workspace_id,payload) SELECT 'job_'||k,'mailbox.ingest',$1,jsonb_build_object('sesMessageId',k) FROM unnest(ARRAY['broken','plain','refused']) k", [wid]);
+      let batches = 0;
+      const handler = Object.assign(async () => { throw new Error('batch only'); }, { batch: async (_r: any, items: any[]) => {
+        batches++;
+        return items.map(({ job }) => {
+          // This job's records fail its completion statement (a NULL primary key).
+          if (job.id === 'job_broken') job.recordWithSettlement(sql`broken AS (INSERT INTO jobs(id,type,workspace_id,payload) VALUES(NULL,'fixture.none',${wid},'{}') RETURNING 1)`);
+          return job.id === 'job_refused' ? { id: job.id, error: new ApiError(503, 'FIXTURE_REFUSED', 'Fixture refusal.', undefined, true) } : { id: job.id };
+        });
+      } });
+      await assert.rejects(processJobs(rt, { 'mailbox.ingest': handler }, 10, 6, 4000, 'ingest'), (error: any) => /null value|not-null/.test(String(error?.cause?.message ?? error?.message)));
+      assert.equal(batches, 1, 'all three jobs ran as one batch');
+      assert.deepEqual((await db.query("SELECT id,status,last_error FROM jobs ORDER BY id")).rows, [
+        { id: 'job_broken', status: 'running', last_error: null },
+        { id: 'job_plain', status: 'completed', last_error: null },
+        { id: 'job_refused', status: 'pending', last_error: 'FIXTURE_REFUSED' },
+      ], 'the failed completion is left to its lease; its siblings settle with their own outcomes');
+    } finally {
+      await db.query(`DROP SCHEMA ${schema} CASCADE`);
+    }
   });
   test('mail gateway: a signed folder edit waiting behind deletion is denied without a write',async t=>{
     const db=await fixtureDatabase(t),rt=fixtureWorker!.runtime,w=unique('gwdel'),bid=unique('mbx'),kid=unique('app');

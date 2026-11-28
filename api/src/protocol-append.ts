@@ -67,11 +67,11 @@ export async function streamedAppend(c: Ctx, encoded: string, digest: string) {
   const discard = () => withMailObjects(rt, who.w, '', bucket, (o) => o.delete([key])).catch((e: unknown) => logError(e, { code: 'APPEND_CLEANUP_FAILED' }, 'warn'));
   const cut = Buffer.from(prefix).indexOf('\r\n\r\n'),
     header = cut < 0 ? null : cut + 4;
-  const m = header !== null ? await parseInboundMime(prefix.subarray(0, header)) : null;
   // Set once the callback finishes: a failure after that is the COMMIT, whose outcome is uncertain, so the object stays.
   let settled = false;
   let row: { pairs: number[][]; validity: number; error?: string };
   try {
+    const m = header !== null ? await parseInboundMime(prefix.subarray(0, header)) : null;
     row = await rt.db.transaction(async (tx) => {
       settled = false;
       await tx.execute(sql`SELECT FROM inbox_state WHERE workspace_id=${who.w} AND inbox_id=${who.b} FOR UPDATE`);
