@@ -2,7 +2,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import type { S3Client } from '@aws-sdk/client-s3';
 import { serialize, type DefaultTreeAdapterMap } from 'parse5';
 import { boundedHtmlFragment } from './bounded-html.js';
-import { ApiError, isSimulatedSes, digest, id, rowId, log, uploadKey, ModuleLoadError, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
+import { ApiError, isSimulatedSes, digest, id, rowId, log, ModuleLoadError, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
 import {mimeIndex} from './mailbox-mime-index.js';
 import { attachmentLinks, attachments as sendingAttachments, emails } from './db/sending.js';
 import { splitThreadingHeaders } from './custom-headers.js';
@@ -22,6 +22,7 @@ import { SEND_LIMITS } from './send-limits.js';
 import { withMemory } from './isolate-memory.js';
 import { productName } from './brand.js';
 import { builtinRefusal, isBuiltinHost } from './builtin-domain.js';
+import { ownsUploadKey, uploadKey } from './storage-keys.js';
 
 /** An address or inbox has no hourly or daily send cap: the workspace's sending limits apply (standing, pacing, the
  * evaluation). Only the loop guards are per address. perHour and perDay are deprecated and shown as set (these values
@@ -37,9 +38,6 @@ export const NO_REPLY = /^(?:no-?reply|do-?not-?reply|donotreply|mailer-daemon|p
 export type AttachmentInput = { content: string; filename: string; contentType?: string; disposition?: 'attachment' | 'inline'; contentId?: string } | { id: string }
   | { bytes: () => Uint8Array; filename: string; contentType: string; disposition: 'attachment' | 'inline'; contentId?: string };
 type ResolvedAttachment = typeof sendingAttachments.$inferSelect;
-const ownsUpload = (wid: string, file: ResolvedAttachment) => file.sourceTemplateAssetId
-  ? file.storageKey === `${wid}/templates/assets/${file.sourceTemplateAssetId}`
-  : file.storageKey === uploadKey(wid, file.id) || file.storageKey === `${wid}/attachments/${file.id}` || file.storageKey === `${wid}/live/attachments/${file.id}`;
 type MailboxRow = typeof mailboxes.$inferSelect;
 type MessageRow = typeof mailMessages.$inferSelect;
 /** Resolve to immutable sending uploads before admission, never inside a message transaction. */
@@ -74,7 +72,7 @@ export async function resolveAttachments(runtime:Runtime, mailbox:Pick<MailboxRo
         await mailAttachmentBytes(runtime,scope.workspaceId,file.region!,file.file))));
     } else {
       const [source]=await runtime.db.select().from(sendingAttachments).where(and(eq(sendingAttachments.workspaceId,scope.workspaceId),eq(sendingAttachments.id,item.id)));
-      if(!source || !ownsUpload(scope.workspaceId,source))throw new ApiError(404,'ATTACHMENT_NOT_FOUND','The upload was not found.','attachments');
+      if(!source || !ownsUploadKey(scope.workspaceId,source))throw new ApiError(404,'ATTACHMENT_NOT_FOUND','The upload was not found.','attachments');
       out.push(source);
     }
     if(out.reduce((sum,file)=>sum+file.size,0)>MAX_TOTAL_ATTACHMENT_BYTES)throw new ApiError(413,'ATTACHMENT_LIMIT_EXCEEDED',`Attachments may not exceed ${mib(MAX_TOTAL_ATTACHMENT_BYTES)} combined.`,'attachments');
@@ -117,7 +115,7 @@ export async function archiveMailboxFiles(runtime:Runtime,wid:string,messageId:s
   const {verifiedAttachment}=await wrapModuleLoad(()=>import('./sending.js'));
   // One file at a time: the largest file and its stored copy count against the isolate's budget (isolate-memory.ts).
   await withMemory(copyReservation(Math.max(...rows.map(r=>r.source.size))),()=>withMailObjects(runtime,wid,region,first.bucket,async objects=>{for(const {file,source} of rows){
-    if(!ownsUpload(wid,source) || source.checksum!==file.sha256)throw new ApiError(404,'MAILBOX_OBJECT_NOT_FOUND','Invalid archive source.');
+    if(!ownsUploadKey(wid,source) || source.checksum!==file.sha256)throw new ApiError(404,'MAILBOX_OBJECT_NOT_FOUND','Invalid archive source.');
     const bytes=await verifiedAttachment(runtime,source);
     await objects.put(file.storageKey,bytes,file.contentType);
   }},{client}));

@@ -3,6 +3,7 @@ import { Bot, ChevronRight, Mail, MessageSquare, MoreHorizontal } from 'lucide-r
 import { useLocation } from 'react-router'
 import { BackLink, Button, IconButton, LoadingRegion, PageHeader, SearchField, Select, Skeleton, SkeletonText, TableSkeleton, Tabs, type SkeletonColumn, type Tone } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
+import { useSession } from '../../data/context'
 import { channelLabels, type Channel, type InboxCounts, type InboxView, type SupportConversation } from '../../data/support-inbox'
 import './support-inbox.css'
 import './conversation.css'
@@ -99,8 +100,8 @@ export function SupportConversationSkeleton() {
   return <div className="sinbox-chat"><ConversationHeader /><ThreadSkeleton /></div>
 }
 // The route-level placeholder while the support inbox's code loads.
-export function SupportRouteSkeleton({ operator }: { operator: 'operator' | 'operator:read' | null | undefined }) {
+export function SupportRouteSkeleton() {
   const { pathname, search } = useLocation()
-  if (!operator) return null
+  if (!useSession()?.identity?.operator) return null
   return pathname.startsWith('/support/') ? <SupportConversationSkeleton /> : <SupportInboxSkeleton view={viewOf(search)} channel={channelOf(search)} />
 }

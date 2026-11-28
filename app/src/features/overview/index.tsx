@@ -15,7 +15,7 @@ import { NextSteps, SidebarScore, StandingCard, useNextSteps, useSenderScore } f
 import { AsideSkeleton, ChartSkeleton, factTitles, FactTilesSkeleton, latestColumns as logColumns, PanelToggle, RegionStatus, ScoreTileSkeleton } from './skeletons'
 import { latestRequest, useLatestRowCount } from './latest'
 import { logHref, logRowLabel, useLogRowIntent } from '../logs/rows'
-import { routeChunks, usePrefetchQueries } from '../../data/prefetch'
+import { preloadRouteChunk, usePrefetchQueries } from '../../data/prefetch'
 import { warmCampaignEditor } from '../campaigns/composer-content'
 import { DailyLimit, useSendingLimitPending, useSetupRead, type SetupRead } from './setup'
 import { useCompactShell, useMediaQuery } from '../../lib/media'
@@ -173,7 +173,7 @@ function Facts({ data, range, stream, fresh }: { data: Overview; range: TimeRang
   const deliveredCount = useTween(data.delivered, swap), bouncedCount = useTween(data.bounced, swap), complaintCount = useTween(data.complaints, swap)
   const change = useTween(data.previousSent ? (data.sent - data.previousSent) / data.previousSent : undefined, swap)
   const to = (status?: string) => logsHref(`/logs?view=sent${status ? `&status=${status}` : ''}${stream === 'all' ? '' : `&stream=${stream}`}`, range)
-  const warm = () => void routeChunks['/logs']?.().catch(() => {})
+  const warm = () => void preloadRouteChunk('/logs')
   const tiles = [
     { title: factTitles[0], to: to(), hint: data.previousSent ? `${change >= 0 ? '+' : ''}${percent(change, 0)}` : '', value: number(Math.round(sent)), columns: data.points.map(p => p.sent), tone: 'sent' as const },
     { title: factTitles[1], to: to('delivered'), hint: number(Math.round(deliveredCount)), value: data.sent ? percent(delivered) : '—', columns: data.points.map(p => p.delivered), tone: 'delivered' as const },

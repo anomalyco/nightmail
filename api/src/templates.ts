@@ -12,6 +12,8 @@ import { readOwnMailObject } from './mail-object-route.js';
 import { AttachmentContentId, AttachmentFilename, AttachmentMetadata, AttachmentUpload, decodeBase64, mailAddress, MAX_JSON_ATTACHMENT_BYTES, senderDisplayName, unsubscribePageUrl, validateAttachment, type AttachmentMetadataInput } from './outbound-content.js';
 import { productName } from './brand.js';
 import { SEND_LIMITS } from './send-limits.js';
+import { enqueue } from './jobs.js';
+import { templateAssetKey } from './storage-keys.js';
 import { uploadReservation } from './upload-reservation.js';
 import { PREVIEW_ROUTE_NOTE, previewResponses, refuseHead, renderPreview } from './preview-images.js';
 
@@ -61,7 +63,7 @@ async function checksum(bytes: Uint8Array) { return Array.from(new Uint8Array(aw
 // A template asset is an uploaded file like an attachment: it counts against the workspace's stored-file cap, reserved
 // before its object is written (migration 514 counts template_assets in sending_asset_usage).
 async function saveAsset(runtime: Runtime, identity: Actor, metadata: AttachmentMetadataInput, bytes: Uint8Array) {
-  const input = validateAttachment(metadata, bytes, MAX_ASSET_BYTES), assetId = id('tasset'), storageKey = `${identity.workspaceId}/templates/assets/${assetId}`, hash = await checksum(bytes);
+  const input = validateAttachment(metadata, bytes, MAX_ASSET_BYTES), assetId = id('tasset'), storageKey = templateAssetKey(identity.workspaceId, assetId), hash = await checksum(bytes);
   const upload = uploadReservation(runtime, identity.workspaceId, assetId, storageKey, bytes, input.contentType);
   try {
     await upload.put();
@@ -169,5 +171,5 @@ export function registerTemplates(app: App) {
       timeoutError: () => new ApiError(504, 'DOWNLOAD_TIMEOUT', 'The template asset was not read in time.'),
     }) as never;
   });
-  app.openapi(createRoute({ method: 'delete', path: '/v1/template-assets/{id}', operationId: 'deleteTemplateAsset', tags: ['Templates'], security, request: { params: IdParams }, responses: { 200: response(Removed), ...errors } }), async c => { const identity = manageTemplates(c), assetId = c.req.valid('param').id; await c.env.db.transaction(async db => { const [row] = await db.select().from(templateAssets).where(and(eq(templateAssets.workspaceId, identity.workspaceId), eq(templateAssets.id, assetId))).limit(1).for('update'); if (!row) notFound('Template asset'); const linked = await db.select({ id: templateAssetLinks.assetId }).from(templateAssetLinks).where(and(eq(templateAssetLinks.workspaceId, identity.workspaceId), eq(templateAssetLinks.assetId, assetId))).limit(1); const cloned = await db.select({ id: attachments.id }).from(attachments).where(and(eq(attachments.workspaceId, identity.workspaceId), eq(attachments.sourceTemplateAssetId, assetId))).limit(1); if (linked.length || cloned.length) throw new ApiError(409, 'TEMPLATE_ASSET_IN_USE', 'Remove this asset from template drafts, published revisions, and retained campaigns first.'); await c.env.storage.delete(row!.storageKey); await db.delete(templateAssets).where(and(eq(templateAssets.workspaceId, identity.workspaceId), eq(templateAssets.id, assetId))); }); return c.json({ id: assetId, deleted: true as const }, 200); });
+  app.openapi(createRoute({ method: 'delete', path: '/v1/template-assets/{id}', operationId: 'deleteTemplateAsset', tags: ['Templates'], security, request: { params: IdParams }, responses: { 200: response(Removed), ...errors } }), async c => { const identity = manageTemplates(c), assetId = c.req.valid('param').id; await c.env.db.transaction(async db => { const [row] = await db.select().from(templateAssets).where(and(eq(templateAssets.workspaceId, identity.workspaceId), eq(templateAssets.id, assetId))).limit(1).for('update'); if (!row) notFound('Template asset'); const linked = await db.select({ id: templateAssetLinks.assetId }).from(templateAssetLinks).where(and(eq(templateAssetLinks.workspaceId, identity.workspaceId), eq(templateAssetLinks.assetId, assetId))).limit(1); const cloned = await db.select({ id: attachments.id }).from(attachments).where(and(eq(attachments.workspaceId, identity.workspaceId), eq(attachments.sourceTemplateAssetId, assetId))).limit(1); if (linked.length || cloned.length) throw new ApiError(409, 'TEMPLATE_ASSET_IN_USE', 'Remove this asset from template drafts, published revisions, and retained campaigns first.'); await enqueue(db, { workspaceId: identity.workspaceId, type: 'maintenance.deleteAttachment', payload: { key: row!.storageKey } }); await db.delete(templateAssets).where(and(eq(templateAssets.workspaceId, identity.workspaceId), eq(templateAssets.id, assetId))); }); return c.json({ id: assetId, deleted: true as const }, 200); });
 }

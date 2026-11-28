@@ -5,6 +5,7 @@ import { logAnalyticsFailure } from './analytics-traffic.js';
 import { campaignActive } from './states.js';
 import { expireDomainClaims } from './operations.js';
 import { SEND_LIMITS } from './send-limits.js';
+import { isReconciledUploadKey, UPLOAD_PREFIX } from './storage-keys.js';
 import { foldSendingTallies, recountSendingTallies } from './sending-tallies.js';
 
 // Rows per delete statement: small enough to finish well inside Hyperdrive's 60 s statement limit on 1 vCPU.
@@ -19,14 +20,14 @@ export const IMPORT_PREVIEW_RETENTION_DAYS = 7, IMPORT_COMMITTED_ROWS_RETENTION_
  * Storage reconciliation, hourly with cleanup (the only retention step that calls storage). A put can
  * land at any time (see Storage.put): after its reservation expired, after the sweeper's deletion ran
  * and after the reservation's tombstone (158) was spent. The reconciler lists only the upload prefix
- * (uploadKey), takes only keys of its exact grammar (uploads/<existing workspace>/attachment_<32 hex>)
+ * (uploadKey), takes only keys of its exact grammar (isReconciledUploadKey, of an existing workspace)
  * that are a day old and that no row references (storage_key_in_use), and queues their deletion; the
  * same object found again later is queued again. The deletion job checks the key once more when it
  * runs. Each run continues from a stored cursor and starts over at the end, so a large bucket is
  * covered over several runs. Tombstones remain the fast path, and the only one for keys of the earlier
  * layout (<workspace>/attachments/<id>), which this never lists.
  */
-const UPLOAD_PREFIX = 'uploads/', UPLOAD_KEY = /^uploads\/[^/]+\/attachment_[0-9a-f]{32}$/, RECONCILE_PAGES = 20;
+const RECONCILE_PAGES = 20;
 export async function reconcileUploads(runtime: Runtime, budgetMs = 60_000) {
   if (!runtime.storage.list) return 0;
   try { return await reconcilePages(runtime, Date.now() + budgetMs); }
@@ -36,7 +37,7 @@ async function reconcilePages(runtime: Runtime, deadline: number) {
   let queued = 0, after = (await runtime.db.execute<{ after: string }>(sql`SELECT after FROM sending_upload_reconcile WHERE id='uploads'`)).rows[0]?.after ?? '';
   for (let page = 0; page < RECONCILE_PAGES && Date.now() < deadline; page++) {
     const listed = await runtime.storage.list!(UPLOAD_PREFIX, after || undefined), old = Date.now() - DAY_MS, next = listed.cursor ?? '';
-    const keys = listed.objects.filter(o => UPLOAD_KEY.test(o.key) && o.uploaded.getTime() <= old).map(o => o.key);
+    const keys = listed.objects.filter(o => isReconciledUploadKey(o.key) && o.uploaded.getTime() <= old).map(o => o.key);
     const { rows: [r] } = await runtime.db.execute<{ moved: boolean; n: number }>(sql`WITH moved AS (
         INSERT INTO sending_upload_reconcile(id,after) VALUES('uploads',${next}) ON CONFLICT(id) DO UPDATE SET after=excluded.after WHERE sending_upload_reconcile.after=${after} RETURNING 1),
       orphans AS (SELECT key,split_part(key,'/',2) AS wid FROM unnest(${sql.param(keys)}::text[]) key WHERE EXISTS(SELECT FROM moved)

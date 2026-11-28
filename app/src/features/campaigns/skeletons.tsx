@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { AlignCenter, AlignLeft, AlignRight, Bold, Braces, ChevronRight, ImagePlus, Italic, MoreHorizontal, Redo2, Shapes, SlidersHorizontal, Type, Undo2, X, type LucideIcon } from 'lucide-react'
 import {
   Button, ControlSkeleton, Field, Icon, IconButton, LoadingRegion, PageHeader, SearchField, SectionHeader,
@@ -10,8 +11,6 @@ import { useSearchParams } from 'react-router'
 import { useWorkspaceAccess } from '../../data/context'
 import type { Campaign } from '../../data/types'
 import { newsletterPath } from '../newsletters/shared'
-import type { AttachmentKind } from './composer-content'
-import { StaticEmailBody } from './composer-preview'
 import './campaigns.css'
 import { CampaignBar, CampaignSteps } from './steps'
 
@@ -51,14 +50,15 @@ export function CampaignAudienceSkeleton() {
 
 // The composer's tools and panel as the editor opens them (EmailComposer, disabled until it is ready), so the studio's
 // rail (from 900 px) and its docked Style panel (from 1150 px) are in place from the first frame; below 900 px
-// the toolbar row on the sheet. Outside the studio (a preview dialog) only the toolbar row and the canvas show.
+// the toolbar row on the sheet. Outside the studio (a preview dialog) only the toolbar row and the canvas show. With a
+// preview (the draft drawn as static HTML, composer-preview.tsx), the canvas shows it instead of placeholder lines.
 const railTools: LucideIcon[][] = [[Type, ImagePlus, Shapes, Braces], [Bold, Italic, AlignLeft, AlignCenter, AlignRight], [Undo2, Redo2], [SlidersHorizontal]]
-export function ComposerSkeleton({ html, attachmentIds, kind = 'campaigns' }: { html?: string; attachmentIds?: readonly string[]; kind?: AttachmentKind } = {}) {
+export function ComposerSkeleton({ preview }: { preview?: ReactNode } = {}) {
   return <LoadingRegion label="Loading composer" className="composer-loading">
     <div className="composer-rail composer-skeleton-rail" aria-hidden="true">{railTools.map((group, index) => <div key={index} className="composer-rail__group">{group.map((glyph, tool) => <span key={tool} className="composer-skeleton-tool"><Icon icon={glyph} /></span>)}</div>)}</div>
     <div className="composer-skeleton-tools"><ControlSkeleton width={90} /><ControlSkeleton width={28} /><ControlSkeleton width={28} /></div>
-    {html !== undefined
-      ? <div className="composer-skeleton-canvas composer-skeleton-canvas--preview"><StaticEmailBody html={html} attachmentIds={attachmentIds} kind={kind} /></div>
+    {preview !== undefined
+      ? <div className="composer-skeleton-canvas composer-skeleton-canvas--preview">{preview}</div>
       : <div className="composer-skeleton-canvas"><SkeletonText width="55%" lineHeight={36} /><SkeletonText /><SkeletonText width="80%" /><SkeletonText width="60%" /></div>}
     <div className="composer-inspector composer-skeleton-panel" aria-hidden="true">
       <div className="composer-inspector-header"><span className="composer-inspector-title">Style</span><span className="composer-skeleton-tool composer-skeleton-tool--sm"><Icon icon={X} /></span></div>

@@ -525,9 +525,10 @@ export function DeliverabilityBoard({ fill, controls, stale = false }: { fill?: 
   </div>
 }
 
-// The route-level placeholder while the operator chunk loads.
-export function OperatorRouteSkeleton({ operator }: { operator: 'operator' | 'operator:read' | null | undefined }) {
-  const { pathname, search } = useLocation(), identity = useSession()?.identity, uiNotes = identity?.uiNotes === true
+// The route-level placeholders while the operator chunk loads: Glass's is for operators only.
+export function GlassRouteSkeleton() { return useSession()?.identity?.operator ? <GlassSkeleton /> : null }
+export function OperatorRouteSkeleton() {
+  const { pathname, search } = useLocation(), identity = useSession()?.identity, operator = identity?.operator, uiNotes = identity?.uiNotes === true
   if (!operator) return identity && identity.multiTenant !== true && pathname === '/operator' ? <SelfHostedHealthSkeleton /> : null
   if (pathname === '/operator/notes') return uiNotes ? <OperatorNotesSkeleton /> : null
   if (pathname === '/operator/agents') return <OperatorAgentsSkeleton />

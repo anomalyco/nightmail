@@ -1,47 +1,10 @@
 import { useLocation } from 'react-router'
-import { OverviewRouteSkeleton } from '../features/overview/skeletons'
-import { EmailDetailSkeleton, LogsRouteSkeleton } from '../features/logs/skeletons'
-import { isReceivedId } from '../features/logs/rows'
-import { CampaignRouteSkeleton } from '../features/campaigns/skeletons'
-import { NewsletterRouteSkeleton } from '../features/newsletters/skeletons'
-import { AudienceRouteSkeleton } from '../features/audience/skeletons'
-import { SettingsRouteSkeleton, SmtpImapRouteSkeleton } from '../features/settings/skeletons'
-import { GlassSkeleton, OperatorRouteSkeleton } from '../features/operator/skeletons'
-import { SupportRouteSkeleton } from '../features/support-inbox/skeletons'
-import { DocsSkeleton } from '../features/docs/frame'
-import { useSession, useWorkspaceAccess } from '../data/context'
-import { Button, LoadingRegion, PageHeader } from './ui'
+import { ChunkFallback } from '../lib/preloadable'
+import { routeHandle } from '../lib/routes'
 
+// The shell's placeholder while a page's code loads: the skeleton its route names (App.tsx). A skeleton with code of its
+// own (the staff pages') draws nothing until that arrives, never this placeholder again.
 export function RouteSkeleton() {
-  const { pathname } = useLocation()
-  const identity = useSession()?.identity
-  const operator = identity?.operator
-  const { canAdminister } = useWorkspaceAccess()
-  const [section, id, view] = pathname.split('/').filter(Boolean)
-  if (!section || section === 'overview') return <OverviewRouteSkeleton />
-  if (section === 'logs') return !id ? <LogsRouteSkeleton /> : <EmailDetailSkeleton kind={isReceivedId(id) ? 'received' : 'sent'} />
-  if (section === 'campaigns') return id === 'templates' ? <CampaignRouteSkeleton kind={view ? 'template' : 'templates'} /> : <CampaignRouteSkeleton kind={!id ? 'list' : view === 'review' ? 'review' : 'editor'} isNew={id === 'new'} />
-  if (section === 'newsletters') return <NewsletterRouteSkeleton id={id} />
-  if (section === 'audience') return id === 'lists' ? <AudienceRouteSkeleton kind={view ? 'list' : 'lists'} /> : id === 'segments' ? <AudienceRouteSkeleton kind={view ? 'segment' : 'segments'} isNew={view === 'new'} /> : id === 'topics' ? <AudienceRouteSkeleton kind="topics" /> : <AudienceRouteSkeleton kind={view ? 'contact' : 'contacts'} />
-  if (section === 'api-keys') return <SettingsRouteSkeleton kind="keys" />
-  // Without a mail gateway there is no SMTP or IMAP page: an unknown address has no skeleton either. A member gets
-  // the page's own locked note, never a flash of the hosts and settings before it.
-  if (section === 'smtp-imap') return identity?.mailServers && canAdminister ? <SmtpImapRouteSkeleton /> : null
-  if (section === 'domains') return <SettingsRouteSkeleton kind={id ? 'domain' : 'domains'} />
-  if (section === 'operator') return <OperatorRouteSkeleton operator={operator} />
-  if (section === 'glass') return operator ? <GlassSkeleton /> : null
-  if (section === 'support') return <SupportRouteSkeleton operator={operator} />
-  if (section === 'docs') return <DocsSkeleton />
-  if (section === 'receiving' && !id) return <ReceivingRouteSkeleton />
-  if (section === 'settings') return <SettingsRouteSkeleton kind={id === 'webhooks' && view ? 'webhook' : 'settings'} isNew={view === 'new'} />
-  return null
-}
-
-// Mail routing's header as the page draws it before its overview arrives, over the page's own loading block.
-function ReceivingRouteSkeleton() {
-  const { canAdminister } = useWorkspaceAccess()
-  return <div className="stack inbound-stack receiving-page">
-    <PageHeader title="Mail routing" actions={canAdminister && <Button variant="primary" disabled>New address</Button>} />
-    <LoadingRegion label="Loading receiving"><div className="rcv-skeleton" aria-hidden="true"><span /><span /><span /><span /></div></LoadingRegion>
-  </div>
+  const { handle: { skeleton }, params } = routeHandle(useLocation().pathname)
+  return <ChunkFallback.Provider value={null}>{typeof skeleton === 'function' ? skeleton(params) : skeleton}</ChunkFallback.Provider>
 }
