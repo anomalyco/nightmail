@@ -6,7 +6,7 @@ import { DispatcherShard, dispatcherName, shardCount, shardsForRate } from './di
 import { CampaignRoom } from './campaign-room.js';
 import { durableInboxWake } from './inbox-wake.js';
 import { ROOM_PEER_HEADER } from './campaign-room-protocol.js';
-import type { SupportPlatformApi } from './support-platform.js';
+import type { PlatformReply, SupportPlatformApi, SupportPlatformRpc } from './support-platform.js';
 import { SECURITY_HEADERS } from './security-headers.js';
 import { clientIpHeader, clientNetworkHeader, healthService, legacyClientIpHeaders, requestHeaderNames, setting } from './brand.js';
 import { oldDashboardReference } from './dashboard-reference.js';
@@ -292,7 +292,7 @@ const waitUntilOf = (ctx: ExecutionContext | undefined) => typeof ctx?.waitUntil
 /** Connections per support platform call: support reads (the context summary, a request's trace) run their queries in
  *  parallel. Within the six simultaneous outbound connections a Worker invocation may open (a trace also asks Workers Logs). */
 const SUPPORT_POOL = 4;
-export class SupportPlatform extends WorkerEntrypoint<Env> {
+export class SupportPlatform extends WorkerEntrypoint<Env> implements SupportPlatformRpc {
   private async platform(): Promise<SupportPlatformApi> {
     const [{ app, core }, { supportPlatform, platformRuntime }, { CONFIG_KEYS, loadConfig }] = await Promise.all([loadHttpDeps(), import('./support-platform.js'), import('./config.js')]);
     stampLogs(this.env, core);
@@ -308,7 +308,7 @@ export class SupportPlatform extends WorkerEntrypoint<Env> {
   async verifyHandoff(token: string) { return (await this.platform()).verifyHandoff(token); }
   async registerConversation(body: Parameters<SupportPlatformApi['registerConversation']>[0]) { return (await this.platform()).registerConversation(body); }
   async closeConversation(conversationId: string) { return (await this.platform()).closeConversation(conversationId); }
-  async request(conversationId: string, method: string, path: string, body?: unknown) { return (await this.platform()).request(conversationId, method, path, body); }
+  async request<T = unknown>(conversationId: string, method: string, path: string, body?: unknown): Promise<PlatformReply<T>> { return (await this.platform()).request<T>(conversationId, method, path, body); }
   async mirrorMessages(conversationId: string, messages: Parameters<SupportPlatformApi['mirrorMessages']>[1]) { return (await this.platform()).mirrorMessages(conversationId, messages); }
   async mirrorState(conversationId: string, state: Parameters<SupportPlatformApi['mirrorState']>[1]) { return (await this.platform()).mirrorState(conversationId, state); }
   async inboxState(conversationId: string) { return (await this.platform()).inboxState(conversationId); }
@@ -329,6 +329,9 @@ export class SupportPlatform extends WorkerEntrypoint<Env> {
   // A plain fetch to the entrypoint answers nothing: the methods above are the whole surface.
   override async fetch() { return new Response(null, { status: 404 }); }
 }
+// Compile-time check: WorkerEntrypoint RPC surface stays in lockstep with supportPlatform() and SupportPlatformRpc.
+const _supportPlatformEntrypoint = (p: SupportPlatform) => p satisfies SupportPlatformRpc & Omit<SupportPlatformApi, 'call'>;
+void _supportPlatformEntrypoint;
 
 export default {
   async fetch(request, env, ctx) {

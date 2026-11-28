@@ -5703,6 +5703,10 @@ export type InboundMessage = {
     replyText: string;
     receivedAt: string;
     bodyTruncated: boolean;
+    /**
+     * Best-effort detection of hidden, styled or invisible content stripped from text. False does not guarantee visibility.
+     */
+    hiddenContent?: boolean;
     attachmentCount: number;
     read: boolean;
     errorCode: string | null;

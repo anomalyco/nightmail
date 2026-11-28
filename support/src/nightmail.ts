@@ -2,45 +2,18 @@ import type { Env } from './env.js';
 import { readCapped } from './attachments.js';
 import { MissingSecret } from './tokens.js';
 import { productName } from '../../api/src/brand.js';
+import type { AgentAnswer, Brief, ConversationEvidence, FeedbackReport, FiledConversation, GeneralAnswerDue, Handoff, HandoffCheck, InboxState, MirroredMessage, MirroredState, OutboxReply, PlatformReply, RegisteredConversation, StaffEmail, StaffReply, SupportMode as Mode, SupportPlatformRpc as SupportPlatform, SupportVerification as Verification, TriageNoteInput } from '../../api/src/support-contract.js';
 
 // Nightmail, from the support Worker's side. Two bindings to the same Nightmail Worker in the same account:
 //
-// - `BANE` → the `SupportPlatform` entrypoint (api/src/support-platform.ts, its source of truth): verify a handoff,
-//   register and close a conversation, its stamped /v1/support/* requests (Nightmail derives the person from the
-//   conversation's row), and the staff inbox: mirror each conversation's transcript and state, read whether staff paused
-//   the agent, and pull and acknowledge staff replies. No token: the binding is the credential.
+// - `BANE` → the `SupportPlatform` entrypoint (api/src/support-platform.ts, shared contract api/src/support-contract.ts):
+//   verify a handoff, register and close a conversation, its stamped /v1/support/* requests (Nightmail derives the person
+//   from the conversation's row), and the staff inbox: mirror each conversation's transcript and state, read whether staff
+//   paused the agent, and pull and acknowledge staff replies. No token: the binding is the credential.
 // - `BANE_API` → the default entrypoint, Nightmail's public API, as a customer of Nightmail would use it: the support@nightmail.dev
 //   inbound address's own API key (BANE_SUPPORT_INBOX_KEY, limited to that address) reads support mail and sends replies and ticket emails.
 
-export type PlatformReply<T = unknown> = { status: number; body: T; requestId: string | null; retryAfter: string | null };
-export type Handoff = {
-  id: string; kind: string; userId: string; email: string; role: string; workspace: { id: string; name: string };
-  page: string | null; requestIds: string[]; shareContent: boolean; issuedAt: string; expiresAt: string;
-  usedAt: string | null; message: string | null;
-};
-export type HandoffCheck = { ok: true; handoff: Handoff } | { ok: false; code: 'HANDOFF_INVALID' | 'HANDOFF_EXPIRED' | 'HANDOFF_NOT_FOUND' | 'SUPPORT_NOT_CONFIGURED' };
-/** A transcript entry mirrored into the staff inbox. Staff replies come from the inbox, never from here. */
-export type MirroredMessage = { id: string; author: 'customer' | 'agent' | 'system'; kind?: string | null; text: string; tools?: { label: string; ok: boolean }[]; attachments?: string[];
-  /** The screenshots' metadata (`attachments` keeps their IDs). */
-  files?: { id: string; name: string; type: string; size: number }[];
-  /** A customer email's: the Nightmail inbound message it came from. */
-  source?: string;
-  /** A held answer's: staff paused the agent, the output gate held it, access shrank, the conversation ended, or an earlier build wrote it. */
-  reason?: 'paused' | 'gate' | 'access' | 'closed' | 'earlier';
-  delivery?: 'sent' | 'failed' | 'held'; at?: string };
-export type MirroredState = { subject?: string; ticket?: { id: string; type: string; severity: 'P1' | 'P2' | 'P3'; brief?: { title: string; summary: string; ask: string; recommendation: string; tried?: { tool: string; finding: string }[] } }; turns?: number; costUsd?: number; blockedWork?: number; pauseForTicket?: true };
-/** Whether staff paused the agent: checked before every turn and every send. */
-export type InboxState = { id: string; status: 'open' | 'ticketed' | 'closed'; agentState: 'active' | 'paused'; pausedBy: 'staff' | 'ticket' | null; pausedAt: string | null; queuedReplies: number };
-/** A staff reply waiting for this Worker to deliver it. */
-export type OutboxReply = { id: string; conversationId: string; channel: 'chat' | 'email'; text: string; staffName: string | null; createdAt: string };
-/** How Nightmail knows who a conversation is for: its own signed handoff, or a message it received at a support address. */
-export type ConversationEvidence = { kind: 'handoff'; token: string } | { kind: 'email'; messageId: string };
-export type Mode = 'member' | 'non_member' | 'pending_signin' | 'unverified';
-export type Verification = 'handoff' | 'dmarc' | 'signin' | 'none' | 'agent';
-/** A registration's answer (POST /v1/operator/support/conversations): Nightmail's decision about the conversation. */
-export type RegisteredConversation = { id: string; channel: 'chat' | 'email'; mode: Mode; verification: Verification; status: 'open' | 'ticketed' | 'closed'; workspaceId: string | null; contentShared: boolean; created: boolean;
-  /** Email: the message passed the sender checks a general answer needs (api/src/support-conversations.ts emailEvidence). */
-  generalAnswer?: boolean };
+export type { AgentAnswer, Brief, ConversationEvidence, FeedbackReport, FiledConversation, GeneralAnswerDue, Handoff, HandoffCheck, InboxState, MirroredMessage, MirroredState, Mode, OutboxReply, PlatformReply, RegisteredConversation, StaffEmail, StaffReply, SupportPlatform, TriageNoteInput, Verification };
 export type ScopeWorkspace = { id: string; name: string; role: 'owner' | 'admin' | 'member' };
 /** GET /v1/support/scope: who the conversation is for and what it can read now, read at the start of every turn. */
 export type Scope = {
@@ -65,68 +38,6 @@ export type SupportAction = {
   delivery?: { status: 'pending' | 'delivered' | 'failed' | 'paused'; attempts: number; statusCode: number | null } | null;
   createdAt: string; expiresAt: string; resolvedAt: string | null;
 };
-
-/** The methods of Nightmail's SupportPlatform entrypoint, as this Worker calls them over RPC. */
-/**
- * A chat as Nightmail holds it (GET /v1/operator/support/conversations/{id}/filed): `filed` when Nightmail opened it
- * from a message the dashboard filed and this Worker never registered it; `messages` the customer's filed messages,
- * oldest first, already with staff.
- */
-export type FiledConversation = { id: string; status: 'open' | 'ticketed' | 'closed'; filed: boolean; user: { id: string; name: string | null; email: string | null };
-  workspace: { id: string; name: string; role: 'owner' | 'admin' | 'member' } | null; page: string | null; requestIds: string[]; messages: { id: string; text: string; at: string }[] };
-export interface SupportPlatform {
-  verifyWake(token: string, conversationId: string): Promise<boolean>;
-  /** A staff download of one screenshot: Nightmail's short-lived token for this conversation and attachment. */
-  verifyFile(token: string, conversationId: string, attachmentId: string): Promise<boolean>;
-  verifyHandoff(token: string): Promise<HandoffCheck>;
-  /** Nightmail checks the evidence itself and decides who the conversation is for (201 new, 200 repeated). */
-  registerConversation(body: { conversationId: string; evidence: ConversationEvidence }): Promise<PlatformReply<RegisteredConversation>>;
-  /** Every later request for the conversation is refused. Repeating it is harmless. */
-  closeConversation(conversationId: string): Promise<PlatformReply<{ id: string; status: 'closed'; closedAt: string }>>;
-  /** A /v1/support GET, or a POST to scope, notes, actions or a domain's verify (a chat's), for one registered conversation: Nightmail stamps the person. */
-  request<T = unknown>(conversationId: string, method: string, path: string, body?: unknown): Promise<PlatformReply<T>>;
-  // The staff inbox (api/src/support-inbox.ts). A conversation Nightmail doesn't know (not registered) answers 404.
-  mirrorMessages(conversationId: string, messages: MirroredMessage[]): Promise<PlatformReply<{ data: { id: string; seq: number; created: boolean }[] }>>;
-  mirrorState(conversationId: string, state: MirroredState): Promise<PlatformReply<InboxState>>;
-  inboxState(conversationId: string): Promise<PlatformReply<InboxState>>;
-  pullOutbox(conversationId?: string): Promise<PlatformReply<{ data: OutboxReply[] }>>;
-  /** Conversations whose sender asked, from the sign-in link, to be answered by email instead (one conversation's, after its wake). */
-  generalAnswers(conversationId?: string): Promise<PlatformReply<{ data: { conversationId: string; messageId: string; requestedAt: string }[] }>>;
-  /** A chat as Nightmail holds it, with the messages the dashboard filed while the chat couldn't take them (api/src/support-conversations.ts). */
-  filedConversation(conversationId: string): Promise<PlatformReply<FiledConversation>>;
-  markDelivery(conversationId: string, messageId: string, status: 'sent' | 'failed'): Promise<PlatformReply<{ id: string; delivery: 'sent' | 'failed'; deliveredAt: string | null }>>;
-  // One path to a human (api/src/support-staff-mail.ts): the staff emails Nightmail wrote, and each one sent.
-  staffMail(): Promise<PlatformReply<{ data: StaffEmail[] }>>;
-  staffMailSent(key: string, sent: { threadId: string; messageId: string }): Promise<PlatformReply<{ key: string; sentAt: string }>>;
-  /** A staff email failed to send this time, with its error's code: after three tries Glass shows it until it goes. */
-  staffMailFailed(key: string, failed: { code: string }): Promise<PlatformReply<{ key: string; attempts: number; failed: boolean; sent: boolean }>>;
-  /**
-   * Before an email to a support address is a customer's: whether it replies to a staff email. reply true: Nightmail made
-   * it a note on its conversation (a verified staff sender) or ignored it, and it is never a conversation here.
-   */
-  staffMailReply(messageId: string, team: string | null): Promise<PlatformReply<StaffReply>>;
-  // The feedback triage agent (api/src/feedback-triage.ts, triage.ts): the reports due (claimed, each at most twice), and
-  // for one report, by its conversation, a request's trace and the reports beside it (its own workspace only), and its one note.
-  feedbackDue(limit: number): Promise<PlatformReply<{ data: FeedbackReport[] }>>;
-  feedbackRequest(conversationId: string, requestId: string): Promise<PlatformReply>;
-  feedbackRelated(conversationId: string): Promise<PlatformReply>;
-  feedbackTriage(conversationId: string, note: TriageNoteInput): Promise<PlatformReply<{ conversationId: string; ticketId: string | null; messageId: string; classification: string; createdAt: string }>>;
-  /** What one reading of a report cost (its model turns and US dollars): sent once, after it ends. */
-  feedbackUsage(conversationId: string, usage: { turns: number; costUsd: number }): Promise<PlatformReply<{ conversationId: string; turns: number; costUsd: number }>>;
-  /** Agent reports to answer by email (api/src/feedback-triage.ts): each one's email conversation, claimed (at most three times). */
-  agentAnswersDue(limit: number): Promise<PlatformReply<{ data: AgentAnswer[] }>>;
-}
-/** What Nightmail made of a reply to a staff email (api/src/support-staff-mail.ts staffReply). */
-export type StaffReply = { reply: false } | { reply: true; notes: number; ignored: 'unverified' | 'not_staff' | 'no_conversation' | 'empty' | 'automated' | 'limited' | null };
-/** An agent's report that asks something, to answer by email: the person's own conversation, its first message the report (untrusted). */
-export type AgentAnswer = { conversationId: string; messageId: string; reportConversationId: string; filedAt: string; credential: 'apiKey' | 'agentToken' | 'mcp' | 'dashboard'; credentialEnd: string | null; subject: string | null; text: string;
-  person: { userId: string; email: string; name: string | null }; workspace: { id: string; name: string } };
-/** An agent feedback report to triage: Nightmail's facts, and its text as its filer wrote it (untrusted). */
-export type FeedbackReport = { conversationId: string; ticketId: string; filedAt: string; operation: string | null; requestId: string | null; text: string };
-/** The triage agent's one note: its summary and likely cause, a suggested classification, and duplicates by ticket ID. */
-export type TriageNoteInput = { summary: string; cause: string; classification: 'bug' | 'docs_gap' | 'neither' | 'question'; duplicates: string[] };
-/** A staff email to send from the support address to the team: a new thread, or a reply in threadId to replyToMessageId. */
-export type StaffEmail = { key: string; threadId: string | null; replyToMessageId: string | null; subject: string; text: string; html: string };
 /** A platform reply's body, or (any other status than `ok`) a NightmailError the work queue can classify. */
 export function platformBody<T>(reply: PlatformReply<T>, ok = [200, 201]): T {
   if (ok.includes(reply.status)) return reply.body;
@@ -211,7 +122,7 @@ export type InboundMessage = {
   id: string; threadId: string | null; direction: 'inbound' | 'outbound'; subject: string | null;
   from: { name: string | null; address: string } | string | null; fromAddress?: string;
   to?: unknown; cc?: unknown; replyTo?: unknown; text?: string | null;
-  replyText?: string | null; messageId?: string | null; inReplyTo?: string | null; references?: unknown; receivedAt?: string;
+  replyText?: string | null; hiddenContent?: boolean; messageId?: string | null; inReplyTo?: string | null; references?: unknown; receivedAt?: string;
   attachments?: { id: string; filename: string | null; contentType: string; size: number; disposition?: string }[];
   /** With includeAuthentication=true. dmarc is PASS when the From domain aligns with a passing SPF or DKIM result. */
   authentication?: { spf: string | null; dkim: string | null; dmarc: string | null };

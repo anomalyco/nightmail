@@ -4,13 +4,16 @@ import { sql, type SQL } from 'drizzle-orm';
 import { ApiError, errors, isoTime, json, log, nextCursor, notFound, readCursor, response, type App, type Config, type Ctx, type DbExecutor } from './core.js';
 import { auditInsert, operatorContext, operatorRequired } from './audit.js';
 import { signedUrl } from './inbound-threads.js';
-import { htmlToPlain, replyText } from './mailbox-store.js';
+import { replyText } from './mailbox-store.js';
+import { safeMailText } from './inbox-content.js';
 import { boundedHtmlFragment } from './bounded-html.js';
 import { plainText } from './plain-text.js';
 import { mutate, operatorActor, type OperatorIdentity } from './operator.js';
 import type { OperatorRole } from './operator-identity.js';
 import { supportPlatformOnly } from './support-conversations.js';
-import { CONVERSATION_ID, FILE_AUDIENCE, signSupportToken, type InboxState, type OutboxReply } from './support-platform.js';
+import { CONVERSATION_ID, FILE_AUDIENCE, signSupportToken } from './support-platform.js';
+import { EVENT_KINDS, HELD_REASONS, TICKET_TYPES, TRIAGE_REASONS, type Brief as ContractBrief, type InboxState as ContractInboxState, type MirroredMessage as ContractMirroredMessage, type MirroredState as ContractMirroredState, type OutboxReply as ContractOutboxReply, type SupportApproval as ContractSupportApproval, type SupportConversation as ContractSupportConversation, type SupportDetail as ContractSupportDetail, type SupportEmail as ContractSupportEmail, type SupportEmailFull as ContractSupportEmailFull, type SupportEvent as ContractSupportEvent, type SupportInboxPage as ContractSupportInboxPage, type SupportMessage as ContractSupportMessage } from './support-contract.js';
+export { TRIAGE_REASONS };
 import { EXPIRES_MS, heldWhy, isKind, KINDS, validToken } from './support-approvals.js';
 import { agentOperator, SUPPORT_AGENT_CLOSES_PER_HOUR, SUPPORT_AGENT_REPLIES_PER_HOUR } from './support-agents.js';
 import { gate, LINK_ORIGINS, namedIn } from './output-gate.js';
@@ -55,8 +58,6 @@ import { addresses, productName } from './brand.js';
 const MESSAGE_ID = /^msg_[a-z2-7]{16}$/;
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';
 const newMessageId = () => `msg_${Array.from(crypto.getRandomValues(new Uint8Array(16)), b => BASE32[b & 31]).join('')}`;
-/** The ticket types the support platform files. */
-const TICKET_TYPES = ['billing', 'bug', 'deliverability', 'account', 'abuse_report', 'privacy', 'legal', 'feature_request', 'other'] as const;
 /** How recently the support platform must have pulled the outbox for staff to reply. */
 const REPLY_WINDOW = sql`interval '10 minutes'`;
 /** How long the operator who marked a conversation done can undo it. */
@@ -66,8 +67,6 @@ const TRANSCRIPT_LIMIT = 500;
 /** How much of each customer email the conversation page carries: the rest loads from the email itself. */
 const EMAIL_TEXT_LIMIT = 20_000;
 const MAIL_MESSAGE_ID = /^msg_[0-9a-f]{32}$/, ATTACHMENT_ID = /^att_[a-z2-7]{16}$/;
-const HELD_REASONS = ['paused', 'gate', 'access', 'closed', 'earlier'] as const;
-const EVENT_KINDS = ['opened', 'ticket', 'priority', 'paused', 'resumed', 'resolved', 'done', 'undone', 'closed', 'approved', 'declined', 'action', 'proposed'] as const;
 
 const Author = z.enum(['customer', 'agent', 'staff', 'system']);
 const Delivery = z.enum(['queued', 'sent', 'failed', 'held']);
@@ -79,13 +78,14 @@ const MailAddress = z.object({ name: z.string().nullable(), address: z.string() 
 const EmailSource = z.object({
   id: z.string(), subject: z.string(), from: MailAddress, to: z.array(MailAddress), cc: z.array(MailAddress), receivedAt: z.string(),
   text: z.string().describe(`The email's text, quoted history included (the first ${EMAIL_TEXT_LIMIT} characters).`), replyText: z.string().describe('The text without its quoted history.'),
-  textTruncated: z.boolean().describe('More text than this, or part of the email was too large to store: read the email itself.'), hasHtml: z.boolean(),
+  textTruncated: z.boolean().describe('More text than this, or part of the email was too large to store: read the email itself.'),
+  hiddenContent: z.boolean().describe('Best-effort detection of hidden, styled or invisible content stripped from text.'), hasHtml: z.boolean(),
   attachments: z.array(z.object({ id: z.string(), filename: z.string(), contentType: z.string(), size: z.number().int(), inline: z.boolean(), available: z.boolean().describe('Scanned clean, so it can be opened.') })),
 }).describe('A customer email: the message as it arrived at the support address.');
+const EmailFull = z.object({ id: z.string(), text: z.string(), replyText: z.string(), html: z.string().nullable(), htmlTooComplex: z.boolean(), bodyTruncated: z.boolean(), hiddenContent: z.boolean() });
 const Ticket = z.object({ id: z.string(), type: z.string().nullable(), severity: z.string().nullable(), resolvedAt: z.string().nullable() });
 const ConversationParam = z.object({ id: z.string().regex(CONVERSATION_ID) });
 const DoneBody = z.object({ ticketId: z.string().max(100).nullable().optional().describe('The ticket on screen when Done was pressed (null for none). Omit to resolve whatever ticket is open.') }).strict();
-export const TRIAGE_REASONS = ['ticket', 'blocked', 'failed', 'paused', 'no_reply'] as const;
 
 const Message = z.object({
   id: z.string(), seq: z.number().int(), author: Author, kind: z.string().nullable(), text: z.string(),
@@ -157,6 +157,73 @@ const State = z.object({
   id: z.string(), status: z.enum(['open', 'ticketed', 'closed']), agentState: z.enum(['active', 'paused']), pausedBy: z.enum(['staff', 'ticket']).nullable(), pausedAt: z.string().nullable(),
   ticket: Ticket.nullable(), queuedReplies: z.number().int(),
 }).openapi('SupportInboxState');
+const MirrorMessage = z.object({
+  id: z.string().regex(MESSAGE_ID).describe('The support platform’s message ID: appending it again changes nothing.'),
+  author: z.enum(['customer', 'agent', 'system']).describe('Staff replies come from the inbox, never from a mirror.'),
+  kind: z.string().regex(/^[a-z_]{1,32}$/).nullable().optional(),
+  text: z.string().max(16_000),
+  tools: z.array(Tool).max(50).default([]).describe('The agent’s tool calls: labels and outcomes only.'),
+  attachments: z.array(z.string().regex(ATTACHMENT_ID)).max(20).default([]),
+  files: z.array(File).max(20).optional().describe('The attachments’ names, types and sizes, beside their IDs.'),
+  source: z.string().max(100).optional().describe('A customer email: the message it came from at a support address; or the support platform\u2019s record that it won\u2019t answer that email until its sender claims it (system, kind unanswered). Kept only when it is one; anything else is dropped, never refused, so the mirror never stalls on it.'),
+  delivery: z.enum(['sent', 'failed', 'held']).optional().describe('An agent answer only: sent, failed, or held (frozen before a staff reply and never sent).'),
+  reason: z.enum(HELD_REASONS).optional().describe('A held agent answer only: why it was not sent.'),
+  at: z.iso.datetime({ offset: true }).optional().describe('When it was written; default now, at most 5 minutes ahead.'),
+}).strict();
+const MirrorState = z.object({
+  subject: z.string().trim().min(1).max(200).optional(),
+  ticket: z.object({ id: z.string().regex(/^tkt_[a-z2-7]{16}$/), type: z.enum(TICKET_TYPES), severity: z.enum(['P1', 'P2', 'P3']), brief: Brief.optional().describe('The ticket as the agent filed it.') }).strict().optional().describe('The conversation’s one ticket.'),
+  turns: z.number().int().min(0).max(1_000_000).optional(), costUsd: z.number().min(0).max(100_000).optional(),
+  blockedWork: z.number().int().min(0).max(100_000).optional().describe('Work items for this conversation that are blocked now.'),
+  pauseForTicket: z.literal(true).optional().describe('Pause the agent after an emailed ticket. A conversation already paused stays as it is.'),
+}).strict();
+const Reply = z.object({ id: z.string(), conversationId: z.string(), channel: z.enum(['chat', 'email']), text: z.string(), staffName: z.string().nullable(), createdAt: z.string() });
+const InboxPage = z.object({ data: z.array(Item), nextCursor: z.string().nullable(), replyAvailable: z.boolean(),
+  counts: z.object({ needsYou: z.number().int(), agent: z.number().int(), waiting: z.number().int() }).describe('The needs_you, agent and waiting views’ sizes, whatever this request’s filters.') });
+const Approval = z.object({
+  id: z.string(), conversationId: z.string(), kind: z.string(), label: z.string().describe('What approving does, in a few words.'), effect: z.string().describe('What happens, in one sentence.'),
+  risky: z.boolean(), summary: z.string().nullable().describe('The exact target in Nightmail\u2019s words (an agent\u2019s risky proposal): what it acts on, with its numbers.'),
+  reason: z.string().describe('Why it was proposed: the proposer\u2019s words (the agent\u2019s, for a risky one).'), proposedBy: z.enum(['nightmail', 'agent']),
+  state: z.enum(['proposed', 'approved', 'declined', 'failed', 'expired']), createdAt: z.string(), expiresAt: z.string(), decidedAt: z.string().nullable(),
+  decidedBy: z.object({ userId: z.string(), name: z.string().nullable() }).nullable(), result: z.record(z.string(), z.unknown()).nullable(),
+  change: z.object({ now: z.string(), after: z.string() }).nullable().describe('A limit or balance it changes: its value now, read when this is opened, and after approving.'),
+  preview: z.object({ text: z.string().nullable().describe('Exactly what would be sent.'), held: z.string().nullable().describe('Why the support platform held it, in our words for its stored reason (Held by the output check, Held by a staff pause, Reason not recorded…); null once it is gone.'),
+    blocked: z.string().nullable().describe('Why it can\u2019t be, now.') }).nullable()
+    .describe('Send the held answer: the answer as it would go, and why it can\u2019t go, when it can\u2019t (it needs a fresh reply, a newer reply reached them, or it was decided).'),
+}).openapi('SupportApproval');
+
+export type Brief = z.infer<typeof Brief>;
+export type InboxState = z.infer<typeof State>;
+export type MirroredMessage = z.input<typeof MirrorMessage>;
+export type MirroredState = z.input<typeof MirrorState>;
+export type OutboxReply = z.infer<typeof Reply>;
+export type SupportConversation = z.infer<typeof Item>;
+export type SupportMessage = z.infer<typeof Message>;
+export type SupportEmail = z.infer<typeof EmailSource>;
+export type SupportEmailFull = z.infer<typeof EmailFull>;
+export type SupportEvent = z.infer<typeof Event>;
+export type SupportDetail = z.infer<typeof Detail>;
+export type SupportApproval = z.infer<typeof Approval>;
+export type SupportInboxPage = z.infer<typeof InboxPage>;
+
+// Compile-time lockstep between the Zod schemas here and the zero-dependency contract shared with support/ and app/.
+type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+type AssertExact<T extends true> = T;
+export type _SupportInboxContractLockstep = [
+  AssertExact<Exact<Brief, ContractBrief>>,
+  AssertExact<Exact<InboxState, ContractInboxState>>,
+  AssertExact<Exact<MirroredMessage, ContractMirroredMessage>>,
+  AssertExact<Exact<MirroredState, ContractMirroredState>>,
+  AssertExact<Exact<OutboxReply, ContractOutboxReply>>,
+  AssertExact<Exact<SupportConversation, ContractSupportConversation>>,
+  AssertExact<Exact<SupportMessage, ContractSupportMessage>>,
+  AssertExact<Exact<SupportEmail, ContractSupportEmail>>,
+  AssertExact<Exact<SupportEmailFull, ContractSupportEmailFull>>,
+  AssertExact<Exact<SupportEvent, ContractSupportEvent>>,
+  AssertExact<Exact<SupportDetail, ContractSupportDetail>>,
+  AssertExact<Exact<SupportApproval, ContractSupportApproval>>,
+  AssertExact<Exact<SupportInboxPage, ContractSupportInboxPage>>,
+];
 
 // ---------- reading conversations ----------
 
@@ -311,10 +378,10 @@ const emailOf = sql`(SELECT json_build_object('id', mm.id, 'subject', mm.subject
       FROM mail_attachments a WHERE a.message_id = mm.id))
   FROM mail_messages mm WHERE mm.id = m.source_message_id AND mm.direction = 'inbound')`;
 function email(row: EmailRow): z.infer<typeof EmailSource> {
-  const text = row.text ?? (row.html_text ? htmlToPlain(row.html_text) : '');
+  const { text, hiddenContent } = safeMailText(row.text, row.html_text);
   return { id: row.id, subject: row.subject, from: { name: row.from_name, address: row.from_address }, to: row.to.map(a => ({ name: a.name ?? null, address: a.address })),
     cc: row.cc.map(a => ({ name: a.name ?? null, address: a.address })), receivedAt: isoTime(row.received_at)!, text: text.slice(0, EMAIL_TEXT_LIMIT), replyText: replyText(text).slice(0, EMAIL_TEXT_LIMIT),
-    textTruncated: row.body_truncated || row.text_length > EMAIL_TEXT_LIMIT || text.length > EMAIL_TEXT_LIMIT, hasHtml: row.has_html,
+    textTruncated: row.body_truncated || row.text_length > EMAIL_TEXT_LIMIT || text.length > EMAIL_TEXT_LIMIT, hiddenContent, hasHtml: row.has_html,
     attachments: row.attachments.map(a => ({ id: a.id, filename: a.filename, contentType: a.contentType, size: a.size, inline: a.disposition === 'inline' && a.contentId !== null, available: row.clean })) };
 }
 const message = (m: MessageRow): z.infer<typeof Message> => {
@@ -394,20 +461,6 @@ export function registerSupportInbox(app: App) {
   const tags = ['Operator'];
 
   // ---------- the support platform's binding: the mirror, the state and the outbox ----------
-
-  const MirrorMessage = z.object({
-    id: z.string().regex(MESSAGE_ID).describe('The support platform’s message ID: appending it again changes nothing.'),
-    author: z.enum(['customer', 'agent', 'system']).describe('Staff replies come from the inbox, never from a mirror.'),
-    kind: z.string().regex(/^[a-z_]{1,32}$/).nullable().optional(),
-    text: z.string().max(16_000),
-    tools: z.array(Tool).max(50).default([]).describe('The agent’s tool calls: labels and outcomes only.'),
-    attachments: z.array(z.string().regex(ATTACHMENT_ID)).max(20).default([]),
-    files: z.array(File).max(20).optional().describe('The attachments’ names, types and sizes, beside their IDs.'),
-    source: z.string().max(100).optional().describe('A customer email: the message it came from at a support address; or the support platform\u2019s record that it won\u2019t answer that email until its sender claims it (system, kind unanswered). Kept only when it is one; anything else is dropped, never refused, so the mirror never stalls on it.'),
-    delivery: z.enum(['sent', 'failed', 'held']).optional().describe('An agent answer only: sent, failed, or held (frozen before a staff reply and never sent).'),
-    reason: z.enum(HELD_REASONS).optional().describe('A held agent answer only: why it was not sent.'),
-    at: z.iso.datetime({ offset: true }).optional().describe('When it was written; default now, at most 5 minutes ahead.'),
-  }).strict();
   app.openapi(createRoute({ hide: true, tags, security: operatorSecurity, method: 'post', path: '/v1/operator/support/conversations/{id}/messages', operationId: 'operatorMirrorSupportMessages',
     description: 'The support platform mirrors transcript entries into the inbox, in order (the binding only). Each is numbered on arrival; an ID already in this conversation is left as it is.',
     request: { params: ConversationParam, body: json(z.object({ messages: z.array(MirrorMessage).min(1).max(50) }).strict()) },
@@ -465,13 +518,7 @@ export function registerSupportInbox(app: App) {
   });
   app.openapi(createRoute({ hide: true, tags, security: operatorSecurity, method: 'post', path: '/v1/operator/support/conversations/{id}/state', operationId: 'operatorMirrorSupportState',
     description: 'The support platform mirrors a conversation’s subject, ticket, counters and blocked work (the binding only), and may pause the agent after an emailed ticket. It never resumes one: only staff hand back.',
-    request: { params: ConversationParam, body: json(z.object({
-      subject: z.string().trim().min(1).max(200).optional(),
-      ticket: z.object({ id: z.string().regex(/^tkt_[a-z2-7]{16}$/), type: z.enum(TICKET_TYPES), severity: z.enum(['P1', 'P2', 'P3']), brief: Brief.optional().describe('The ticket as the agent filed it.') }).strict().optional().describe('The conversation’s one ticket.'),
-      turns: z.number().int().min(0).max(1_000_000).optional(), costUsd: z.number().min(0).max(100_000).optional(),
-      blockedWork: z.number().int().min(0).max(100_000).optional().describe('Work items for this conversation that are blocked now.'),
-      pauseForTicket: z.literal(true).optional().describe('Pause the agent after an emailed ticket. A conversation already paused stays as it is.'),
-    }).strict()) },
+    request: { params: ConversationParam, body: json(MirrorState) },
     responses: { 200: response(State), ...errors } }), async c => {
     await supportPlatformOnly(c);
     const id = c.req.valid('param').id, body = c.req.valid('json'), ticket = body.ticket ?? null, pause = body.pauseForTicket === true;
@@ -513,7 +560,6 @@ export function registerSupportInbox(app: App) {
     return c.json(await stateOf(c.env.db, id), 200);
   });
 
-  const Reply = z.object({ id: z.string(), conversationId: z.string(), channel: z.enum(['chat', 'email']), text: z.string(), staffName: z.string().nullable(), createdAt: z.string() });
   app.openapi(createRoute({ hide: true, tags, security: operatorSecurity, method: 'get', path: '/v1/operator/support/outbox', operationId: 'operatorSupportOutbox',
     description: 'The staff replies waiting for the support platform to deliver (the binding only), oldest first; one conversation’s after its wake. Staff can reply only while this is pulled.',
     request: { query: z.object({ conversationId: z.string().regex(CONVERSATION_ID).optional(), limit: z.coerce.number().int().min(1).max(100).default(50) }) },
@@ -559,8 +605,7 @@ export function registerSupportInbox(app: App) {
       q: z.string().trim().min(1).max(200).optional().describe('A conversation, ticket or user ID, or part of a name, address or subject.'),
       cursor: z.string().max(2000).optional(), limit: z.coerce.number().int().min(1).max(100).default(50),
     }) },
-    responses: { 200: response(z.object({ data: z.array(Item), nextCursor: z.string().nullable(), replyAvailable: z.boolean(),
-      counts: z.object({ needsYou: z.number().int(), agent: z.number().int(), waiting: z.number().int() }).describe('The needs_you, agent and waiting views’ sizes, whatever this request’s filters.') })), ...errors } }), async c => {
+    responses: { 200: response(InboxPage), ...errors } }), async c => {
     const operator = await staff(c, 'operator:read', true), me = operator.userId;
     // An agent's reading of the inbox is on the trail too; a person's opening of the list isn't (each conversation is).
     if (operator.agent) await c.env.db.execute(auditInsert(staffContext(c, operator), { action: 'support.inbox_list', workspaceId: null, userId: operator.userId,
@@ -947,10 +992,10 @@ export function registerSupportInbox(app: App) {
   const EmailParams = ConversationParam.extend({ messageId: z.string().regex(MAIL_MESSAGE_ID) });
   app.openapi(createRoute({ hide: true, tags, security: sessionSecurity, method: 'get', path: '/v1/operator/support-inbox/{id}/emails/{messageId}', operationId: 'operatorGetSupportEmail',
     description: 'A customer email of this conversation in full: all of its stored text, and its HTML as stored (render it sandboxed, with remote images off until asked). htmlTooComplex: past the parsing budget; prefer the text.',
-    request: { params: EmailParams }, responses: { 200: response(z.object({ id: z.string(), text: z.string(), replyText: z.string(), html: z.string().nullable(), htmlTooComplex: z.boolean(), bodyTruncated: z.boolean() })), ...errors } }), async c => {
+    request: { params: EmailParams }, responses: { 200: response(EmailFull), ...errors } }), async c => {
     await staff(c, 'operator:read');
-    const { id, messageId } = c.req.valid('param'), row = await sourceOf(c, id, messageId), text = row.text ?? (row.html ? htmlToPlain(row.html) : '');
-    return c.json({ id: row.id, text, replyText: replyText(text), html: row.html, htmlTooComplex: row.html ? !boundedHtmlFragment(row.html, 'document') : false, bodyTruncated: row.body_truncated }, 200);
+    const { id, messageId } = c.req.valid('param'), row = await sourceOf(c, id, messageId), { text, hiddenContent } = safeMailText(row.text, row.html);
+    return c.json({ id: row.id, text, replyText: replyText(text), html: row.html, htmlTooComplex: row.html ? !boundedHtmlFragment(row.html, 'document') : false, bodyTruncated: row.body_truncated, hiddenContent }, 200);
   });
   app.openapi(createRoute({ hide: true, tags, security: sessionSecurity, method: 'get', path: '/v1/operator/support-inbox/{id}/emails/{messageId}/attachments/{attachmentId}', operationId: 'operatorGetSupportEmailAttachment',
     description: 'A download link for one attachment of a customer email of this conversation, for five minutes. Only an attachment scanned clean. On the audit trail.',
@@ -981,17 +1026,6 @@ export function registerSupportInbox(app: App) {
   // ---------- approvals (src/support-approvals.ts): an emailed link lands here, and only a signed-in operator decides ----------
 
   const ApprovalParams = z.object({ id: z.string().regex(CONVERSATION_ID), approvalId: z.string().regex(/^apr_[a-z2-7]{26}$/) });
-  const Approval = z.object({
-    id: z.string(), conversationId: z.string(), kind: z.string(), label: z.string().describe('What approving does, in a few words.'), effect: z.string().describe('What happens, in one sentence.'),
-    risky: z.boolean(), summary: z.string().nullable().describe('The exact target in Nightmail\u2019s words (an agent\u2019s risky proposal): what it acts on, with its numbers.'),
-    reason: z.string().describe('Why it was proposed: the proposer\u2019s words (the agent\u2019s, for a risky one).'), proposedBy: z.enum(['nightmail', 'agent']),
-    state: z.enum(['proposed', 'approved', 'declined', 'failed', 'expired']), createdAt: z.string(), expiresAt: z.string(), decidedAt: z.string().nullable(),
-    decidedBy: z.object({ userId: z.string(), name: z.string().nullable() }).nullable(), result: z.record(z.string(), z.unknown()).nullable(),
-    change: z.object({ now: z.string(), after: z.string() }).nullable().describe('A limit or balance it changes: its value now, read when this is opened, and after approving.'),
-    preview: z.object({ text: z.string().nullable().describe('Exactly what would be sent.'), held: z.string().nullable().describe('Why the support platform held it, in our words for its stored reason (Held by the output check, Held by a staff pause, Reason not recorded…); null once it is gone.'),
-      blocked: z.string().nullable().describe('Why it can\u2019t be, now.') }).nullable()
-      .describe('Send the held answer: the answer as it would go, and why it can\u2019t go, when it can\u2019t (it needs a fresh reply, a newer reply reached them, or it was decided).'),
-  }).openapi('SupportApproval');
   type ApprovalRow = { id: string; conversation_id: string; kind: string; payload: Record<string, unknown>; proposed_by: 'nightmail' | 'agent'; reason: string; state: 'proposed' | 'approved' | 'declined' | 'failed';
     created_at: string; expires_at: string; expires_ms: number; expired: boolean; decided_at: string | null; decided_by: string | null; decided_by_name: string | null; result: Record<string, unknown> | null };
   /** The approval, only through its link's token: a wrong or missing token is the same 404 as no approval at all. */

@@ -1,5 +1,7 @@
 import { toolResult } from './projection.js';
 import { productName } from '../../../api/src/brand.js';
+import { TICKET_TYPES, type TicketType } from '../../../api/src/support-contract.js';
+export { TICKET_TYPES, type TicketType };
 
 // The agent's tools (design §4.1). Every account tool reads through the conversation's own stamp (Nightmail derives the
 // person from the conversation): the model never passes, sees or chooses identity, and each tool sends only the query
@@ -48,8 +50,6 @@ export interface ToolHost {
 }
 /** The longest note Nightmail keeps (NOTE_MAX_LENGTH in api/src/support-notes.ts). */
 export const NOTE_MAX = 1000;
-export const TICKET_TYPES = ['billing', 'bug', 'deliverability', 'account', 'abuse_report', 'privacy', 'legal', 'feature_request', 'other'] as const;
-export type TicketType = typeof TICKET_TYPES[number];
 export const TICKET_TOPICS = ['refund', 'billing_dispute', 'charge', 'credit', 'plan', 'account_closure', 'limit_increase', 'enforcement_review', 'access', 'security', 'legal', 'human_requested', 'guardrail', 'other'] as const;
 /** The structured part of a ticket, by type (a bug's reproduction; a feature's use case). */
 export type TicketDetails = {

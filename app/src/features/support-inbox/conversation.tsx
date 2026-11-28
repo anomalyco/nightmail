@@ -514,6 +514,7 @@ function AiSummary({ brief, subject }: { brief: SupportBrief; subject: string })
     <dl className="sinbox-summary__body">
       <div><dt>Summary</dt><dd>{brief.summary}</dd></div>
       {brief.ask && <div><dt>What they asked</dt><dd>{brief.ask}</dd></div>}
+      {brief.tried && brief.tried.length > 0 && <div><dt>What it checked</dt><dd><ul className="sinbox-summary__tried">{brief.tried.map((item, index) => <li key={`${item.tool}:${index}`}>{item.tool ? <><code>{item.tool}</code>{item.finding ? ` — ${item.finding}` : ''}</> : item.finding}</li>)}</ul></dd></div>}
       {brief.recommendation && <div><dt>Recommendation</dt><dd>{brief.recommendation}</dd></div>}
     </dl>
     <p className="sinbox-summary__note">Written by the agent when it filed the ticket. The conversation is what was actually said.</p>

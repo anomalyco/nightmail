@@ -93,3 +93,13 @@ export function visibleMail(text: string | null, html: string | null, extract = 
   }
   return { text: visible.trim(), hiddenContent, extract: { codes: [...codes], links } };
 }
+/** Visible plain text of a stored message: invisible Unicode stripped from plain text, or CSS-hidden HTML and invisible Unicode stripped when there is no plain text. */
+export function safeMailText(text: string | null | undefined, html: string | null | undefined): { text: string; hiddenContent: boolean } {
+  if (text != null) {
+    const cleaned = displayText(text);
+    return { text: cleaned, hiddenContent: cleaned !== text };
+  }
+  if (!html) return { text: '', hiddenContent: false };
+  const visible = visibleMail(null, html);
+  return { text: visible.text, hiddenContent: visible.hiddenContent };
+}

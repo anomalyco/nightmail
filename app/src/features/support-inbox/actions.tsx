@@ -125,7 +125,7 @@ export function useInboxActions() {
     read: (c: SupportConversation, read: boolean, seq?: number) => run(c, x => ({ ...x, unread: !read }), () => supportInboxApi.read(c.id, read, seq), { reread: false }).catch(() => {}),
     wake: (c: SupportConversation) => run(c, x => x, () => supportInboxApi.wake(c.id)).then(r => toast(r.woken ? 'Support service woken' : 'The support service didn’t answer', r.woken ? 'success' : 'error'), () => {}),
     reply: (c: SupportConversation, text: string, key: string) => {
-      const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'reply', text, tools: [], attachments: [], staff: me, delivery: 'queued', heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
+      const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'reply', text, tools: [], attachments: [], staff: { ...me, viaAgent: false }, emailFrom: null, delivery: 'queued', heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
       const messages = (change: (list: SupportMessage[]) => SupportMessage[]) => client.setQueryData<SupportDetail>(inboxKeys.detail(c.id), d => d && { ...d, messages: change(d.messages) })
       return run(c, x => { messages(list => [...list, pending]); return { ...x, agentState: 'paused', pausedBy: { kind: 'staff', userId: me.userId, name: me.name }, pausedAt: x.pausedAt ?? now(), lastAuthor: 'staff', lastMessageAt: now(), messageCount: x.messageCount + 1, queuedReplies: x.queuedReplies + 1, done: null, unread: false } },
         () => supportInboxApi.reply(c.id, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m)), done: c.agentState === 'active' ? 'Reply queued. The agent is paused.' : 'Reply queued' })
@@ -135,7 +135,7 @@ export function useInboxActions() {
       const held = client.getQueryData<SupportDetail>(inboxKeys.detail(c.id))?.messages.find(m => m.id === draftId)
       const body = text ?? held?.text ?? '', fresh = Boolean(held?.heldReason && freshOnly[held.heldReason])
       const decided = (replyId: string | null) => ({ outcome: fresh ? 'replaced' as const : text === undefined || text === held?.text.trim() ? 'sent' as const : 'edited' as const, by: me, at: now(), replyId })
-      const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'reply', text: body, tools: [], attachments: [], staff: me, delivery: 'queued', heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
+      const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'reply', text: body, tools: [], attachments: [], staff: { ...me, viaAgent: false }, emailFrom: null, delivery: 'queued', heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
       const messages = (change: (list: SupportMessage[]) => SupportMessage[]) => client.setQueryData<SupportDetail>(inboxKeys.detail(c.id), d => d && { ...d, messages: change(d.messages) })
       return run(c, x => { messages(list => [...list.map(m => m.id === draftId ? { ...m, draft: decided(null) } : m), pending]); return { ...x, agentState: 'paused', pausedBy: { kind: 'staff', userId: me.userId, name: me.name }, pausedAt: x.pausedAt ?? now(), lastAuthor: 'staff', lastMessageAt: now(), messageCount: x.messageCount + 1, queuedReplies: x.queuedReplies + 1, done: null, unread: false } },
         () => supportInboxApi.sendDraft(c.id, draftId, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m.id === draftId ? { ...m, draft: decided(sent.id) } : m)), done: 'Reply queued' })
@@ -147,7 +147,7 @@ export function useInboxActions() {
     },
     // A note: shown at once in the timeline; it changes nothing the lists show.
     note: (c: SupportConversation, text: string, key: string) => {
-      const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'note', text, tools: [], attachments: [], staff: me, delivery: null, heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
+      const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'note', text, tools: [], attachments: [], staff: { ...me, viaAgent: false }, emailFrom: null, delivery: null, heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
       const messages = (change: (list: SupportMessage[]) => SupportMessage[]) => client.setQueryData<SupportDetail>(inboxKeys.detail(c.id), d => d && { ...d, messages: change(d.messages) })
       return run(c, x => { messages(list => [...list, pending]); return { ...x, messageCount: x.messageCount + 1, unread: false } },
         () => supportInboxApi.note(c.id, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m)), done: 'Note added' })

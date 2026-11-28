@@ -1,5 +1,5 @@
 import { DurableObject } from 'cloudflare:workers';
-import { nightmailApi, NightmailError, platformBody, senderOf, type Handoff, type InboundMessage, type MirroredMessage, type MirroredState, type Mode, type OutboxReply, type PlatformReply, type RegisteredConversation, type Scope, type SupportAction, type AgentAnswer, type FiledConversation } from './nightmail.js';
+import { nightmailApi, NightmailError, platformBody, senderOf, type Brief, type Handoff, type InboundMessage, type MirroredMessage, type MirroredState, type Mode, type OutboxReply, type PlatformReply, type RegisteredConversation, type Scope, type SupportAction, type AgentAnswer, type FiledConversation } from './nightmail.js';
 import type { Env } from './env.js';
 import { gate, LINK_ORIGINS, namedIn, plainText } from './gate.js';
 import { addTicketNote, expectation, fileTicket, masked, openFollowUp, ticketEmail, type FiledTicket, type TicketContext, type TicketMessage } from './tickets.js';
@@ -12,7 +12,7 @@ import { customerBlock, firstName, notesBlock, oneLine, type Customer, type Note
 import { spentBy, type Harness, type HarnessEvent, type TurnResult, type Usage } from './agent/harness.js';
 import { createHarness, MODEL, promptFragments } from './agent/opencode.js';
 import { searchDocs } from './agent/docs.js';
-import { actionTitle, NOTE_MAX, ToolFailure, toolNames, type ActionProposal, type TicketInput, type ToolHost } from './agent/tools.js';
+import { actionTitle, NOTE_MAX, ToolFailure, toolNames, type ActionProposal, type TicketInput, type TicketType, type ToolHost } from './agent/tools.js';
 import { fenced, toolResult, untrusted } from './agent/projection.js';
 import { hostedDomain, productName } from '../../api/src/brand.js';
 
@@ -177,7 +177,7 @@ type Meta = {
   // The staff inbox: the subject and ticket it lists, the transcript seq mirrored so far and the state last mirrored, the
   // mirror's retry, the last customer email (a staff reply answers it), the sender whose mail passed DMARC, and whether
   // chat already said the agent is paused.
-  subject?: string | null; ticket?: { id: string; type: string; severity: 'P1' | 'P2' | 'P3'; category?: string; replyTo?: string | null; expect?: string; brief?: Brief | null } | null; mirrored?: number; mirroredState?: string | null;
+  subject?: string | null; ticket?: { id: string; type: TicketType; severity: 'P1' | 'P2' | 'P3'; category?: string; replyTo?: string | null; expect?: string; brief?: Brief | null } | null; mirrored?: number; mirroredState?: string | null;
   mirrorDueAt?: number | null; mirrorAttempts?: number; lastInbound?: { messageId: string; threadId: string; addressIds?: string[] } | null; dmarcSender?: string | null; pauseNotice?: boolean;
   /** Chat messages past the transcript's bound that went to the team in its ticket (at most MAX_OVERFLOW_MESSAGES). */
   overflow?: number;
@@ -218,8 +218,6 @@ type Transcript = { id: string; role: 'user' | 'assistant' | 'staff'; kind: 'fir
   /** A customer email's: the Nightmail message it came from (an 'unanswered' entry's: the email it is about). A held answer's: why it was held. */
   source?: string; reason?: HeldReason };
 type HeldReason = NonNullable<MirroredMessage['reason']>;
-/** What the staff inbox shows of a ticket: the brief the agent filed (null: an earlier ticket whose row has none). */
-type Brief = NonNullable<NonNullable<MirroredState['ticket']>['brief']>;
 const briefOf = (t: { title: string; summary: string; ask: string; recommendation: string; tried?: TicketInput['tried'] }): Brief =>
   ({ title: t.title.slice(0, 200), summary: t.summary.slice(0, 1200), ask: t.ask.slice(0, 600), recommendation: t.recommendation.slice(0, 800),
     ...t.tried?.length ? { tried: t.tried.slice(0, 12).map(x => ({ tool: x.tool.slice(0, 60), finding: x.finding.slice(0, 400) })) } : {} });

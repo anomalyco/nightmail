@@ -14,7 +14,8 @@ const loadS3Presign = lazyModule(() => Promise.all([import('@aws-sdk/client-s3')
 import { mailboxMessages as links, mailboxThreads, mailAttachments, mailMessages as messages } from './db/mailbox.js';
 import { oneOf } from './domain-mail.js';
 import { accessibleMessages, EmailThread, liveBox, threadBlock, threadView, visibleLinks, type Filter, type RawThread } from './thread-view.js';
-import { htmlToPlain, replyText } from './mailbox-store.js';
+import { replyText } from './mailbox-store.js';
+import { safeMailText } from './inbox-content.js';
 import { boundedHtmlFragment } from './bounded-html.js';
 import { archiveMailboxFiles, sendFromMailbox, finishMailboxArchive, type OutgoingMessage } from './mailbox-send.js';
 import { idempotent, idempotentRequest, SendIdempotencyHeaders } from './idempotency.js';
@@ -42,7 +43,7 @@ const Message = z.object({
   replyTo: z.array(Address).describe('Addresses in the Reply-To header (at most 20 on conversation pages, up to 100 on getInboundMessage).'),
   replyToCount: z.number().int().describe('Total addresses in the Reply-To header (may exceed replyTo.length when shortened).'),
   subject: z.string(), snippet: z.string(),
-  text: z.string(), replyText: z.string(), receivedAt: z.string(), bodyTruncated: z.boolean(), attachmentCount: z.number().int(), read:z.boolean(), errorCode:z.string().nullable(), suppressionReason:SuppressionReason.nullable().optional(),
+  text: z.string(), replyText: z.string(), receivedAt: z.string(), bodyTruncated: z.boolean(), hiddenContent: z.boolean().optional().describe('Best-effort detection of hidden, styled or invisible content stripped from text. False does not guarantee visibility.'), attachmentCount: z.number().int(), read:z.boolean(), errorCode:z.string().nullable(), suppressionReason:SuppressionReason.nullable().optional(),
   emailId: z.string().nullable(), messageId: z.string().nullable().describe(`RFC Message-ID, not the ${productName} message ID (id).`),
   inReplyTo: z.string().nullable(), references: z.array(z.string()).describe('Message-IDs in the References header (at most 20 on conversation pages, up to 100 on getInboundMessage).'),
   referencesCount: z.number().int().describe('Total Message-IDs in the References header (may exceed references.length when shortened).'),
@@ -243,14 +244,14 @@ function publicVerdicts(verdicts: Verdicts): Record<string, string | boolean> {
   return out;
 }
 function messageView(row: Pick<typeof messages.$inferSelect, Exclude<keyof typeof messageFields,'simulated'>> & {simulated?:boolean;verdicts?:Verdicts} & MessageCounts, addressIds: string[], read = true) {
-  const text = row.text ?? (row.html ? htmlToPlain(row.html) : '');
+  const { text, hiddenContent } = safeMailText(row.text, row.html);
   const toCount = Math.max(row.to.length, row.toCount ?? row.verdicts?.toCount ?? 0);
   const ccCount = Math.max(row.cc.length, row.ccCount ?? row.verdicts?.ccCount ?? 0);
   const replyToCount = Math.max(row.replyTo.length, row.replyToCount ?? row.verdicts?.replyToCount ?? 0);
   const referencesCount = Math.max(row.references.length, row.referencesCount ?? row.verdicts?.referencesCount ?? 0);
   return { simulated:row.simulated??row.verdicts?.simulated??false,id: row.id, threadId: row.threadId, addressIds, direction: row.direction, status: row.status, read, errorCode:row.errorCode, suppressionReason:row.suppressionReason,
     from: { name: row.fromName, address: row.fromAddress }, to: row.to, toCount, cc: row.cc, ccCount, replyTo: row.replyTo, replyToCount, subject: row.subject, snippet: row.snippet,
-    text, replyText: replyText(text), receivedAt: timestamp(row.receivedAt), bodyTruncated: row.bodyTruncated, attachmentCount: row.attachmentCount,
+    text, replyText: replyText(text), receivedAt: timestamp(row.receivedAt), bodyTruncated: row.bodyTruncated, hiddenContent, attachmentCount: row.attachmentCount,
     emailId: row.sendingEmailId, messageId: row.messageId, inReplyTo: row.inReplyTo, references: row.references, referencesCount };
 }
 type PageMsgRow = {

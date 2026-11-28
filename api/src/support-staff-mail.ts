@@ -7,7 +7,9 @@ import { htmlToPlain, replyText } from './mailbox-store.js';
 import { renderNotice, type Line, type Notice } from './notices.js';
 import { approvalLink, heldWhy, isKind, KINDS, propose } from './support-approvals.js';
 import { emailEvidence, supportPlatformOnly } from './support-conversations.js';
-import { event, itemColumns, itemFrom, triageCandidates, TRIAGE_REASONS, type ItemRow } from './support-inbox.js';
+import { event, itemColumns, itemFrom, triageCandidates, TRIAGE_REASONS, type Brief, type ItemRow } from './support-inbox.js';
+import type { StaffReply, StaffReplyIgnored } from './support-contract.js';
+export type { StaffReply, StaffReplyIgnored };
 
 // One path to a human. Whatever needs a person in support has a ticket and one email thread to staff: every conversation
 // in Needs you (src/support-inbox.ts: an open ticket, held or failed answers, blocked work, a customer waiting on a paused
@@ -52,7 +54,6 @@ export const STAFF_NOTE_MAX = 4000;
 export const STAFF_NOTES_PER_HOUR = 20;
 
 type Words = { text: string; at: string };
-type Brief = { title: string; summary: string; ask: string; recommendation: string; tried?: { tool: string; finding: string }[] };
 export type StaffRow = ItemRow & {
   brief: Brief | null; evidence: { filedBy?: string } | null; staff_thread: string | null; staff_seq: number; staff_reasons: string[]; role: string | null;
   max_seq: number; held_reason: string | null; held_seq: number | null; held_id: string | null; first_words: Words | null; fresh_words: Words[] | null;
@@ -388,11 +389,6 @@ export async function planStaffMail(db: Database, config: Pick<Config, 'publicUr
 
 // ---------- replies to staff emails ----------
 
-/** Why a reply to a staff email became no note. */
-/** automated: an auto-reply (an out-of-office, a bounce) is no one's note; limited: the conversation already took
- *  STAFF_NOTES_PER_HOUR notes by email in the last hour. */
-export type StaffReplyIgnored = 'unverified' | 'not_staff' | 'no_conversation' | 'empty' | 'automated' | 'limited';
-export type StaffReply = { reply: false } | { reply: true; notes: number; ignored: StaffReplyIgnored | null };
 /** A note's own ID, the same for one email in one conversation, so a retried reply is noted once. */
 const noteId = (conversationId: string, messageId: string) => `msg_${Array.from(createHash('sha256').update(`staff-reply:${conversationId}:${messageId}`).digest().subarray(0, 16), b => BASE32[b & 31]).join('')}`;
 /** A reply's own words as plain text: no quoted email, no control characters other than line breaks and tabs, bounded. */
