@@ -63,7 +63,8 @@ export function registerPreviewImages(app: App) {
     const missing = () => new ApiError(404, 'NOT_FOUND', 'This preview link is invalid or has expired.'), token = c.req.param('token');
     if (token.length > 1024 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]{43}$/.test(token)) throw missing();
     const [data, mac] = token.split('.') as [string, string];
-    if (!timingSafeEqual(Buffer.from(mac), Buffer.from(linkTag(c.env.config.authSecret, data)))) throw missing();
+    const secrets = [c.env.config.authSecret, c.env.config.previousAuthSecret].filter((s): s is string => !!s);
+    if (!secrets.some(secret => timingSafeEqual(Buffer.from(mac), Buffer.from(linkTag(secret, data))))) throw missing();
     let claims: { w?: unknown; k?: unknown; e?: unknown };
     try { claims = JSON.parse(Buffer.from(data, 'base64url').toString()); } catch { throw missing(); }
     if (!Number.isSafeInteger(claims.e) || (claims.e as number) <= Date.now() / 1000 || typeof claims.w !== 'string' || typeof claims.k !== 'string' || KEY.exec(claims.k)?.[1] !== claims.w) throw missing();

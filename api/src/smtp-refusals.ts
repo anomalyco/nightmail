@@ -15,7 +15,7 @@ import { narrowed, type SupportMeta } from './support-deliverability.js';
 // Not recorded: what the gateway refuses on its own inside the session without asking the API (a MAIL FROM or From
 // header the credential doesn't own, too many recipients, a message past the SIZE limit), and an unsigned request.
 
-const ATTACHMENT = new Set(['ATTACHMENT_CONTENT_MISMATCH', 'ATTACHMENT_TYPE_UNSCREENABLE', 'UNSUPPORTED_ATTACHMENT_TYPE']);
+const ATTACHMENT = new Set(['ATTACHMENT_CONTENT_MISMATCH', 'ATTACHMENT_TYPE_UNSCREENABLE', 'UNSUPPORTED_ATTACHMENT_TYPE', 'ATTACHMENT_METADATA_INVALID', 'INLINE_ATTACHMENT_INVALID', 'MIME_LIMIT']);
 /** API text as the gateway puts it on one reply line (remote.rs reply_text): printable ASCII, anything else '?', at most 400 characters. */
 const replyText = (message: string) => {
   const text = [...message].map(c => c === ' ' || /^[\x21-\x7e]$/.test(c) ? c : '?').join('');
