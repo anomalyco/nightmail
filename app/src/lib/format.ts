@@ -14,8 +14,6 @@ export function shortDateTime(value: string) {
   return date(value, { month: 'short', day: 'numeric', ...(sameYear ? {} : { year: 'numeric' }), hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' })
 }
 export const label = (value: string) => value.replaceAll('_', ' ').replace(/^./, c => c.toUpperCase())
-export const formatDate = date
-// Coarse, human-readable distance from now ("in 5 hours", "2 minutes ago"); best for estimates, not exact times.
 /** How long ago, the way tables say it: 5m, 3h, 2d. The column names the time, so no row repeats "ago". */
 export function ago(value: string | null | undefined, now = Date.now()) {
   const at = Date.parse(value ?? '')

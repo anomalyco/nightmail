@@ -2,12 +2,12 @@ import { useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { Plus } from 'lucide-react'
 import { keepPreviousData, useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Alert, Button, Checkbox, ControlSkeleton, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, Field, Input, PageHeader, SectionHeader, Select, SkeletonText, StatusBadge, Switch, Tabs, Textarea, useToast, type Column, type MenuItem, type Tone, ErrorText, MutationError } from '../../components/ui'
+import { Button, Checkbox, ControlSkeleton, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, Field, Input, PageHeader, SectionHeader, Select, SkeletonText, StatusBadge, Switch, Tabs, Textarea, useToast, type Column, type MenuItem, type Tone, MutationError } from '../../components/ui'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { useSession } from '../../data/context'
 import { ApiError, type SenderScoreFactor, type StandingReason, type StandingStep } from '../../data/types'
 import { isoTime, operatorApi, type OperatorAction, type OperatorCampaign, type OperatorDomain, type OperatorMember, type OperatorQueueItem, type OperatorTimelineItem, type OperatorWorkspace, type SignupPlaces, type SignupRaise, type TimelineKind, type WaitlistEntry, type WorkspaceSummary } from '../../data/operator'
-import { label, number, shortDateTime } from '../../lib/format'
+import { label, number } from '../../lib/format'
 import { downloadCsvChunks, formatCsvRow } from '../../lib/download'
 import { errorText } from '../../data/types'
 import { factorFormats } from '../score'
@@ -15,6 +15,7 @@ import { actionColumnDefs, ActionsTrigger, dailyLimitError, campaignColumnDefs, 
 import { useDebounced } from '../../lib/pagination'
 import { AbuseView } from './abuse'
 import { HealthView } from './health'
+import { At, def, InfiniteMore, reasonCheck, StepBadge, useShown, when } from './shared'
 
 // The operator console (lazy, /operator): Nightmail staff with a platform role review flagged Hosted workspaces and act on
 // them through the audited operator API. Impersonation-free: it reads standing, score, limits and evidence, never
@@ -26,12 +27,6 @@ export { OperatorClusterPage } from './abuse'
 export { GlassPage } from './glass'
 const useOperatorRole = () => useSession()?.identity?.operator ?? null
 const NotFound = StaffOnly
-const def = (defs: typeof queueColumnDefs, key: string) => defs.find(column => column.key === key)!
-const when = (value: string | null | undefined) => value ? `${shortDateTime(isoTime(value))} UTC` : '—'
-const At = ({ value }: { value: string | null | undefined }) => <span className="nowrap">{when(value)}</span>
-const stepTone: Record<StandingStep, Tone> = { ok: 'success', notice: 'neutral', warn: 'warning', restrict: 'warning', pause: 'danger' }
-const stepLabel: Record<StandingStep, string> = { ok: 'Good', notice: 'Notice', warn: 'Warn', restrict: 'Restrict', pause: 'Pause' }
-const StepBadge = ({ step }: { step: StandingStep }) => <StatusBadge status={stepLabel[step]} tone={stepTone[step]} />
 
 
 export function OperatorPage() {
@@ -77,10 +72,9 @@ function Signups({ sub, onSub, canAct }: { sub: 'signups' | 'waitlist'; onSub: (
       : unknown ? { 'Signed up': '—', 'Held for the waitlist': '—', Open: '—', Waiting: '—' } : undefined} />
     <SignupSubTabs value={sub} onChange={onSub} actions={canAct ? <SetLimit /> : undefined} />
     {sub === 'waitlist' ? <Waitlist /> : list.isError && !list.data ? <ErrorState error={list.error} onRetry={() => void list.refetch()} /> : <>
-      <DataTable className="op-table" loading={list.isPending} skeletonRows={6} rows={rows} rowKey={row => row.id} columns={signupColumns}
+      <DataTable loading={list.isPending} skeletonRows={6} rows={rows} rowKey={row => row.id} columns={signupColumns}
         rowHref={row => row.standing ? `/operator/workspaces/${encodeURIComponent(row.id)}` : undefined} empty={<EmptyState title="No workspaces yet" />} />
-      {list.hasNextPage && <Button className="op-more" loading={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>Load more</Button>}
-      {list.isError && list.data && <Alert tone="danger"><ErrorText error={list.error} /></Alert>}
+      <InfiniteMore query={list} />
     </>}
   </>
 }
@@ -149,7 +143,7 @@ function Queue() {
     <QueueToolbar search={search} step={step} onSearch={setSearch} onStep={setStep} />
     {queue.isError && !queue.data ? <ErrorState error={queue.error} onRetry={() => void queue.refetch()} />
       : <>
-        <DataTable className="op-table" loading={queue.isPending} skeletonRows={6} rows={queue.data ?? []} rowKey={row => row.workspaceId} rowHref={row => `/operator/workspaces/${encodeURIComponent(row.workspaceId)}`}
+        <DataTable loading={queue.isPending} skeletonRows={6} rows={queue.data ?? []} rowKey={row => row.workspaceId} rowHref={row => `/operator/workspaces/${encodeURIComponent(row.workspaceId)}`}
           empty={<EmptyState title={q ? 'No workspace matches' : 'Nothing to review'} action={q ? <Button onClick={() => setSearch('')}>Clear search</Button> : undefined} />} columns={queueColumns} />
         {(queue.data?.length ?? 0) >= 200 && <p className="op-total muted">Showing first 200 workspaces — filter by standing or search to narrow.</p>}
       </>}
@@ -186,9 +180,8 @@ function Actions() {
   const [shown, setShown] = useState<OperatorAction | null>(null)
   return <>
     {actions.isError && !actions.data ? <ErrorState error={actions.error} onRetry={() => void actions.refetch()} /> : <>
-      <DataTable className="op-table" loading={actions.isPending} skeletonRows={6} rows={rows} rowKey={row => `${row.at}:${row.workspaceId}:${row.action}:${row.requestId ?? ''}`} onRowClick={setShown} empty={<EmptyState title="No operator actions yet" />} columns={actionColumns} />
-      {actions.hasNextPage && <Button className="op-more" loading={actions.isFetchingNextPage} onClick={() => void actions.fetchNextPage()}>Load more</Button>}
-      {actions.isError && actions.data && <Alert tone="danger"><ErrorText error={actions.error} /></Alert>}
+      <DataTable loading={actions.isPending} skeletonRows={6} rows={rows} rowKey={row => `${row.at}:${row.workspaceId}:${row.action}:${row.requestId ?? ''}`} onRowClick={setShown} empty={<EmptyState title="No operator actions yet" />} columns={actionColumns} />
+      <InfiniteMore query={actions} />
     </>}
     {shown && <DetailDialog title={actionLabel(shown)} onClose={() => setShown(null)} rows={[
       ['When', when(shown.at)], ['By', shown.operatorEmail ? <PrivateAddress value={shown.operatorEmail} /> : shown.operatorId], ['Workspace', shown.workspaceId === 'platform' ? null : <Link to={`/operator/workspaces/${encodeURIComponent(shown.workspaceId)}`}>{shown.workspaceId}</Link>],
@@ -240,11 +233,10 @@ function Waitlist() {
   return <>
     <WaitlistToolbar search={search} onSearch={setSearch} onExport={() => void exportCsv()} exporting={exporting} exportable={rows.length > 0} />
     {list.isError && !list.data ? <ErrorState error={list.error} onRetry={() => void list.refetch()} /> : <>
-      <DataTable className="op-table" loading={list.isPending} skeletonRows={6} rows={rows} rowKey={row => row.email} columns={waitlistColumns}
+      <DataTable loading={list.isPending} skeletonRows={6} rows={rows} rowKey={row => row.email} columns={waitlistColumns}
         empty={<EmptyState title={q ? 'No one matches' : 'No one on the waitlist yet'} action={q ? <Button onClick={() => setSearch('')}>Clear search</Button> : undefined} />} />
       {rows.length > 0 && total !== undefined && <p className="op-total muted">{number(total)} {total === 1 ? 'person' : 'people'}</p>}
-      {list.hasNextPage && <Button className="op-more" loading={list.isFetchingNextPage} onClick={() => void list.fetchNextPage()}>Load more</Button>}
-      {list.isError && list.data && <Alert tone="danger"><ErrorText error={list.error} /></Alert>}
+      <InfiniteMore query={list} />
     </>}
   </>
 }
@@ -363,8 +355,8 @@ function WorkspaceBody({ data, canAct, onReleaseCampaign }: { data: OperatorWork
         ]} /> : <EmptyState title="No hosted limit" />}
       </section>
     </div>
-    <section className="op-section"><SectionHeader title="Factors" /><DataTable className="op-table" rows={score.factors} rowKey={f => f.key} columns={factorColumns} empty={<EmptyState title="No factors yet" />} /></section>
-    <section className="op-section"><SectionHeader title="Domains" actions={<span className="muted">{`${number(data.domainLimit.used)} of ${number(data.domainLimit.limit)}${data.domainLimit.custom ? ' · set by an operator' : ''}`}</span>} /><DataTable className="op-table" rows={data.domains} rowKey={d => d.name} columns={domainColumns} empty={<EmptyState title="No domains" />} /></section>
+    <section className="op-section"><SectionHeader title="Factors" /><DataTable rows={score.factors} rowKey={f => f.key} columns={factorColumns} empty={<EmptyState title="No factors yet" />} /></section>
+    <section className="op-section"><SectionHeader title="Domains" actions={<span className="muted">{`${number(data.domainLimit.used)} of ${number(data.domainLimit.limit)}${data.domainLimit.custom ? ' · set by an operator' : ''}`}</span>} /><DataTable rows={data.domains} rowKey={d => d.name} columns={domainColumns} empty={<EmptyState title="No domains" />} /></section>
     <section className="op-section" aria-labelledby="op-billing"><SectionHeader title={<span id="op-billing">Billing</span>} />
       {billing.isError && !billing.data ? <ErrorState error={billing.error} onRetry={() => void billing.refetch()} /> : <dl className="op-rows op-rows--single">
         <div><dt>Status</dt><dd title={billingState ?? undefined}>{billingState ?? <SkeletonText width={220} />}</dd></div>
@@ -377,9 +369,9 @@ function WorkspaceBody({ data, canAct, onReleaseCampaign }: { data: OperatorWork
         <div><dt>AI decisions</dt><dd>{!billing.data ? <SkeletonText width={200} /> : `${number(billing.data.decisions.month)} this month · ${number(billing.data.decisions.day)} in 24 hours`}</dd></div>
       </dl>}
     </section>
-    <section className="op-section"><SectionHeader title="Members" /><DataTable className="op-table" rows={data.members} rowKey={m => m.userId} columns={memberColumns} empty={<EmptyState title="No members" />} /></section>
+    <section className="op-section"><SectionHeader title="Members" /><DataTable rows={data.members} rowKey={m => m.userId} columns={memberColumns} empty={<EmptyState title="No members" />} /></section>
     <FreeDialog action={freeAction} workspaceId={data.workspace.id} onClose={() => setFreeAction(null)} />
-    <section className="op-section"><SectionHeader title="Campaigns" /><DataTable className="op-table" rows={data.campaigns} rowKey={c => c.id} columns={campaignColumns} empty={<EmptyState title="No active or quarantined campaigns" />} /></section>
+    <section className="op-section"><SectionHeader title="Campaigns" /><DataTable rows={data.campaigns} rowKey={c => c.id} columns={campaignColumns} empty={<EmptyState title="No active or quarantined campaigns" />} /></section>
     <Timeline workspaceId={data.workspace.id} />
     {reason && <DetailDialog title="Standing reason" onClose={() => setReason(null)} rows={[['Reason', reason.message], ['Code', <span className="op-muted-id">{reason.code}</span>], ['Window', reason.window ?? null], ['Step', <StepBadge step={reason.step} />]]} />}
   </div>
@@ -416,10 +408,9 @@ function Timeline({ workspaceId }: { workspaceId: string }) {
   const [shown, setShown] = useState<OperatorTimelineItem | null>(null)
   return <section className="op-section"><SectionHeader title="Evidence timeline" />
     {timeline.isError && !timeline.data ? <ErrorState error={timeline.error} onRetry={() => void timeline.refetch()} /> : <>
-      <DataTable className="op-table" loading={timeline.isPending} skeletonRows={5} rows={rows} rowKey={row => row.key} onRowClick={setShown} columns={timelineColumns} empty={<EmptyState title="No events yet" />} />
+      <DataTable loading={timeline.isPending} skeletonRows={5} rows={rows} rowKey={row => row.key} onRowClick={setShown} columns={timelineColumns} empty={<EmptyState title="No events yet" />} />
       {shown && <DetailDialog title="Event" onClose={() => setShown(null)} rows={[['Event', shown.title], ['Kind', <StatusBadge status={label(shown.kind)} tone={kindTone[shown.kind] ?? 'neutral'} />], ['When', when(shown.at)], ['Detail', detailText(shown)]]} />}
-      {timeline.hasNextPage && <Button className="op-more" loading={timeline.isFetchingNextPage} onClick={() => void timeline.fetchNextPage()}>Load more</Button>}
-      {timeline.isError && timeline.data && <Alert tone="danger"><ErrorText error={timeline.error} /></Alert>}
+      <InfiniteMore query={timeline} />
     </>}
   </section>
 }
@@ -439,13 +430,12 @@ const actionCopy: Record<ActionKind, { title: string; description?: string; conf
   campaign: { title: 'Release this campaign?', confirm: 'Release campaign', done: 'Campaign released' },
 }
 const reasonLabel = 'Reason for the audit log'
-const reasonCheck = (reason: string) => reason.trim().length < 10 ? 'At least 10 characters.' : reason.trim().length > 1000 ? 'At most 1,000 characters.' : ''
 const futureError = 'A time in the future.'
 const ticketLabel = 'Ticket ID or URL'
 // An optional date: its Add button leaves it out (no end) until pressed, so empty never needs explaining.
 function OptionalDate({ add, label, value, onChange, error, disabled }: { add: string; label: string; value: string; onChange: (value: string) => void; error?: string; disabled?: boolean }) {
   const [open, setOpen] = useState(value !== '')
-  if (!open) return <Button variant="ghost" className="op-add-date" disabled={disabled} onClick={() => setOpen(true)}><Plus size={14} aria-hidden="true" />{add}</Button>
+  if (!open) return <Button variant="ghost" disabled={disabled} onClick={() => setOpen(true)}><Plus size={14} aria-hidden="true" />{add}</Button>
   return <Field label={label} error={error}><Input type="datetime-local" autoFocus value={value} disabled={disabled} onChange={event => onChange(event.target.value)} /></Field>
 }
 // Each opening has its own Idempotency-Key, and every submit sends If-Match with the standing version it was decided on.
@@ -453,9 +443,7 @@ function OptionalDate({ add, label, value, onChange, error, disabled }: { add: s
 // the reason goes into the audit log. An end date is optional. Billing again says what it charges before it does.
 type FreeAction = { kind: 'workspace' | 'person'; on: boolean; userId?: string; key: string }
 function FreeDialog({ action, workspaceId, onClose }: { action: FreeAction | null; workspaceId: string; onClose: () => void }) {
-  const last = useRef(action)
-  if (action) last.current = action
-  const shown = action ?? last.current
+  const shown = useShown(action)
   const title = !shown ? '' : shown.kind === 'workspace' ? shown.on ? 'Make this workspace free?' : 'Bill this workspace again?' : shown.on ? 'Make every workspace this person owns free?' : 'End this person’s free account?'
   const description = !shown || shown.on ? undefined : shown.kind === 'workspace'
     ? 'Usage settled from now on is charged again, unless an owner has a free account.'
@@ -485,9 +473,7 @@ function FreeForm({ action, workspaceId, onClose }: { action: FreeAction; worksp
   </form>
 }
 function ActionDialog({ action, workspace, onClose }: { action: PendingAction | null; workspace: OperatorWorkspace; onClose: () => void }) {
-  const last = useRef(action)
-  if (action) last.current = action
-  const shown = action ?? last.current
+  const shown = useShown(action)
   return <Dialog open={action !== null} onOpenChange={next => { if (!next) onClose() }} title={!shown ? '' : shown.kind === 'campaign' && shown.campaign ? `Release ${shown.campaign.name}?` : actionCopy[shown.kind].title} description={shown ? actionCopy[shown.kind].description : undefined}>
     {shown && <ActionForm key={shown.key} action={shown} workspace={workspace} onClose={onClose} />}
   </Dialog>
@@ -503,7 +489,6 @@ function ActionForm({ action, workspace, onClose }: { action: PendingAction; wor
   const [tried, setTried] = useState(false)
   const reasonError = reasonCheck(reason)
   const domainValue = Number(domainLimit), domainError = action.kind === 'domains' && !defaultDomains && !(Number.isInteger(domainValue) && domainValue >= 1 && domainValue <= 10_000) ? 'A whole number from 1 to 10,000.' : ''
-  const ticketError = ticket.trim().length > 200 ? 'At most 200 characters.' : ''
   const dailyValue = Number(daily), dailyError = action.kind === 'limit' && !clear && !(Number.isInteger(dailyValue) && dailyValue >= 1 && dailyValue <= 10_000_000) ? dailyLimitError : ''
   const expiresAt = Date.parse(expires), expiresError = action.kind === 'limit' && !clear && expires ? !(expiresAt > Date.now()) ? futureError : expiresAt > Date.now() + 366 * 86_400_000 ? 'At most a year ahead.' : '' : ''
   const mutation = useMutation({
@@ -527,7 +512,7 @@ function ActionForm({ action, workspace, onClose }: { action: PendingAction; wor
   function submit(event: FormEvent) {
     event.preventDefault()
     setTried(true)
-    if (reasonError || ticketError || dailyError || expiresError || domainError) return
+    if (reasonError || dailyError || expiresError || domainError) return
     mutation.mutate()
   }
   return <form className="op-dialog-fields" onSubmit={submit} noValidate>
@@ -541,7 +526,7 @@ function ActionForm({ action, workspace, onClose }: { action: PendingAction; wor
       <Field label={`Domain limit (${number(workspace.domainLimit.used)} in use)`} error={tried ? domainError : ''}><Input type="number" inputMode="numeric" min={1} max={10_000} step={1} value={defaultDomains ? '' : domainLimit} disabled={defaultDomains} onChange={event => setDomainLimit(event.target.value)} /></Field>
     </>}
     <Field label={reasonLabel} error={tried ? reasonError : ''}><Textarea value={reason} maxLength={1000} onChange={event => setReason(event.target.value)} /></Field>
-    <Field label={ticketLabel} error={tried ? ticketError : ''}><Input value={ticket} maxLength={200} onChange={event => setTicket(event.target.value)} /></Field>
+    <Field label={ticketLabel}><Input value={ticket} maxLength={200} onChange={event => setTicket(event.target.value)} /></Field>
     {action.kind === 'limit' && <OptionalDate add="Add an expiry" label="Expires" value={expires} onChange={setExpires} error={tried ? expiresError : ''} disabled={clear} />}
     <MutationError error={mutation.error} />
     <div className="ui-dialog__footer"><Button disabled={mutation.isPending} onClick={onClose}>Cancel</Button><Button type="submit" variant={copy.danger ? 'danger' : 'primary'} loading={mutation.isPending}>{copy.confirm}</Button></div>

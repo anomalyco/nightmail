@@ -13738,7 +13738,7 @@ describe('Hosted MCP OAuth and tools', () => {
     t.after(() => { if (!hadWindow) delete (globalThis as { window?: unknown }).window; });
     // Loaded by a path the API's type check doesn't follow: the dashboard's modules are checked by its own build.
     const panel = (name: string) => import(`../app/src/features/support/${name}.ts`);
-    const [{ SupportStore }, { FileError }] = await Promise.all([panel('store'), panel('protocol')]);
+    const [{ SupportStore }, { FileError, MAX_MESSAGE }] = await Promise.all([panel('store'), panel('protocol')]);
     type Store = { setDraft(text: string): void; send(): boolean; dispose(): void; getSnapshot(): { messages: Json[]; draft: string; fileProblem: string | null } };
     const ticket = { conversationId: `conv_${'a'.repeat(26)}`, messageId: `msg_${'b'.repeat(16)}`, replyTo: 'ren@example.com' };
     const settle = () => new Promise(resolve => setImmediate(resolve));
@@ -13779,7 +13779,7 @@ describe('Hosted MCP OAuth and tools', () => {
     say(downStore, 'Sending is stuck.');
     t.mock.timers.tick(8000); await settle();
     assert.deepEqual(down.filed, ['Sending is stuck.']);
-    assert.ok(downStore.getSnapshot().messages.some(m => m.filed && m.filedId === ticket.messageId) && !working(downStore));
+    assert.ok(downStore.getSnapshot().messages.some(m => m.filedId === ticket.messageId) && !working(downStore));
     downStore.dispose();
 
     // A refusal is no blip: filed at once.
@@ -13806,7 +13806,7 @@ describe('Hosted MCP OAuth and tools', () => {
     t.mock.timers.tick(15_000); await settle();
     assert.deepEqual(reload.filed, ['Our domain stopped verifying.']);
     assert.deepEqual([reloaded.getSnapshot().draft, drafts.slots.draft, drafts.slots.parked, reloaded.getSnapshot().fileProblem], ['', '', '', null]);
-    assert.ok(reloaded.getSnapshot().messages.some(m => m.filed));
+    assert.ok(reloaded.getSnapshot().messages.some(m => m.filedId));
     // Words the person changed meanwhile are theirs to send: never sent on their own.
     reachable = false;
     const edited = transport(fileOrNot), editedDrafts = saved(), editedStore = <Store>new SupportStore(edited as never, editedDrafts.store);
@@ -13816,6 +13816,17 @@ describe('Hosted MCP OAuth and tools', () => {
     reachable = true; t.mock.timers.tick(15_000); await settle();
     assert.deepEqual([edited.filed, editedDrafts.slots.parked, editedStore.getSnapshot().fileProblem], [['First words.'], '', null]);
     reloaded.dispose(); editedStore.dispose();
+    // Typed on while it failed, past the box's limit together: the box keeps the first MAX_MESSAGE characters, and
+    // exactly those still go on their own.
+    reachable = false;
+    const long = transport(fileOrNot), longDrafts = saved(), longStore = <Store>new SupportStore(long as never, longDrafts.store);
+    long.emit({ type: 'connection', state: 'unavailable', reason: 'NO_HANDOFF' });
+    say(longStore, 'Short words.'); longStore.setDraft('x'.repeat(MAX_MESSAGE)); await settle();
+    const kept = `Short words.\n\n${'x'.repeat(MAX_MESSAGE)}`.slice(0, MAX_MESSAGE);
+    assert.deepEqual([longStore.getSnapshot().draft, longDrafts.slots.parked, longStore.getSnapshot().fileProblem], [kept, kept, 'waiting'], 'Still waiting to go.');
+    reachable = true; t.mock.timers.tick(15_000); await settle();
+    assert.deepEqual([long.filed.at(-1), longStore.getSnapshot().fileProblem], [kept, null]);
+    longStore.dispose();
 
     // Review of #960: sent while the chat reconnects, then the panel rebuilt from its saved state 3 s into the wait (a
     // reload, a workspace switch). The words were saved from the moment of sending: back in the box, and they go once,

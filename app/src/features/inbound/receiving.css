@@ -7,9 +7,7 @@
 .rcv-cell { display: flex; align-items: center; gap: var(--space-8); min-width: 0; }
 /* On a two-line cell the icon sits on the first line: a box of its line's height, the glyph drawn centred in it. */
 .rcv-cell > .rcv-icon { align-self: flex-start; height: 1lh; }
-/* Routes beside their kinds (the facet rail); counts, times and rule names in mono. */
-.rcv-split > .ui-split__main { gap: var(--space-12); }
-.rcv-split .rcv-toolbar { justify-content: flex-end; }
+/* Counts and times in mono. */
 .rcv-table td:is([data-col='unread'], [data-col='last']) { font-family: var(--font-mono); font-size: var(--text-xs); }
 .rcv-table td[data-col='unread'] strong { display: inline-flex; align-items: center; gap: var(--space-6); vertical-align: top; color: var(--color-text); font-weight: 400; }
 /* Unread is a fact, not a second accent: a dot in the text's own colour. */
@@ -23,13 +21,7 @@
 .rcv-target { display: inline-flex; align-items: center; gap: var(--space-6); white-space: nowrap; }
 .rcv-target[data-muted] { color: var(--color-muted); }
 .rcv-via { margin-left: var(--space-6); color: var(--color-faint); font-size: var(--text-xs); }
-.rcv-chain { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-4); }
-/* One line in a list row: the first rule and how many more, cut short rather than wrapped. */
-.rcv-chain[data-line], .rcv-table .rcv-chain { flex-wrap: nowrap; max-width: 100%; min-width: 0; }
-.rcv-table .rcv-chain > span:has(code) { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rcv-chain > .muted { flex: none; white-space: nowrap; font-family: var(--font-mono); font-size: var(--text-xs); }
-.rcv-chain code, .rcv-cell code, .rcv-step code, .addr-path code { font-family: var(--font-mono); font-size: var(--text-sm); }
-.rcv-chain__then { margin-right: var(--space-4); color: var(--color-faint); }
+.rcv-cell code, .rcv-step code, .addr-path code { font-family: var(--font-mono); font-size: var(--text-sm); }
 /* An empty cell's way to fill it reads as a link: the text's colour, underlined. */
 .rcv-add { color: var(--color-text); text-decoration: underline; text-decoration-color: var(--color-faint); text-underline-offset: 3px; white-space: nowrap; transition: text-decoration-color var(--motion-duration); }
 .rcv-add:is(:hover, :focus-visible) { text-decoration-color: currentColor; }
@@ -77,11 +69,6 @@
 /* A ghost button that starts a row sits on the column's edge, its label under the text above it. */
 .addr-step__actions > .ui-button--ghost:first-child { margin-inline-start: calc(-1 * var(--button-pad-x, 11px)); }
 .addr-step__actions .ui-select-trigger { min-width: 0; width: 180px; }
-.addr-recent { display: grid; margin: 0; padding: 0; list-style: none; }
-.addr-recent a { display: grid; grid-template-columns: minmax(140px, 30%) minmax(0, 1fr) 72px; gap: var(--space-16); align-items: center; min-height: 44px; margin: 0 calc(-1 * var(--space-8)); padding: 0 var(--space-8); border-radius: var(--radius-sm); color: var(--color-text); text-decoration: none; transition: background var(--motion-duration); }
-.addr-recent a:is(:hover, :focus-visible) { background: var(--color-hover); }
-.addr-recent span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: var(--text-sm); }
-.addr-recent time { color: var(--color-muted); font-size: var(--text-xs); text-align: right; font-variant-numeric: tabular-nums; }
 .addr-patterns { display: grid; gap: var(--space-8); max-width: 520px; margin-top: var(--space-8); }
 .addr-patterns ul { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
 .addr-patterns li { display: flex; align-items: center; gap: var(--space-8); min-height: 40px; }
@@ -89,81 +76,10 @@
 .addr-patterns__add { display: flex; gap: var(--space-8); }
 .addr-patterns__add .ui-input { flex: 1; font-family: var(--font-mono); }
 
-/* Trace: pick an email, then watch it run. */
-.trace-form { display: grid; gap: var(--space-16); }
-.trace-picker { display: grid; gap: var(--space-12); }
-.trace-picker__body { min-height: 252px; }
-.trace-picker__empty { margin: 0; font-size: var(--text-sm); }
-.trace-recent { display: grid; margin: 0; padding: 0; list-style: none; }
-.trace-recent__row { display: grid; grid-template-columns: minmax(120px, 22%) minmax(0, 1fr) minmax(140px, 26%) 64px; align-items: center; gap: var(--space-16); width: 100%; min-height: 40px; padding: 0 var(--space-8); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text); font: inherit; font-size: var(--text-sm); text-align: left; cursor: pointer; transition: background var(--motion-duration); }
-.trace-recent__row:hover { background: var(--color-hover); }
-.trace-recent__row[aria-checked='true'] { background: var(--color-active-bg); }
-.trace-recent__row:focus-visible:not([aria-checked='true']) { background: var(--color-hover); }
-.trace-recent__row > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-.trace-recent__time { color: var(--color-muted); font-size: var(--text-xs); text-align: right; font-variant-numeric: tabular-nums; }
-.trace-sample { display: grid; grid-template-columns: minmax(220px, 320px) minmax(0, 1fr); gap: var(--space-16); align-items: start; }
-.trace-sample__mime { margin: 0; padding: var(--space-12); border-radius: var(--radius-sm); background: var(--color-layer-1); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); line-height: 18px; white-space: pre-wrap; overflow-wrap: anywhere; }
-.trace-out { scroll-margin-top: var(--space-24); }
-/* Trace it as mail to: an address typed there is masked like any other, but its placeholder is the default it falls
-   back to (the message's own recipients), not an address, so it stays readable. */
-html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder { color: var(--color-muted); text-shadow: none; }
-
-.trace-view { display: grid; gap: var(--space-16); }
-.trace-view__bar { display: flex; align-items: center; justify-content: space-between; min-height: var(--control-height); font-size: var(--text-sm); }
-.trace-recipient { display: grid; gap: var(--space-12); }
-.trace-recipient__head { display: flex; align-items: baseline; gap: var(--space-8); min-width: 0; font-size: var(--text-sm); }
-/* A rule's run: its name on a solid head bar, then the code on its well beside the steps. */
-.trace-ritual { display: grid; gap: var(--space-4); }
-.trace-ritual h3 { display: flex; align-items: center; gap: var(--space-8); margin: 0; padding: var(--space-8) var(--space-12); border-radius: var(--radius-sm); background: var(--color-thead); font-size: var(--text-sm); font-weight: var(--font-weight-regular); }
-.trace-ritual h3 code { font-family: var(--font-mono); }
-.trace-ritual h3 .muted { margin-left: auto; font-size: var(--text-xs); }
-.trace-ritual__body { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr); }
-.trace-code { margin: 0; padding: var(--space-8) 0; list-style: none; border-radius: var(--radius-sm); background: var(--color-layer-1); overflow-x: auto; font-family: var(--font-mono); font-size: var(--text-xs); line-height: 20px; }
-.trace-code li { display: grid; grid-template-columns: 36px minmax(0, 1fr); padding-right: var(--space-12); transition: background 180ms ease-out; }
-.trace-code li[data-active] { background: var(--color-active-bg); }
-.trace-code__n { padding-right: var(--space-8); color: var(--color-faint); text-align: right; user-select: none; }
-.trace-code code { white-space: pre; color: var(--color-text); }
-/* A condition is underlined until it runs, then its result in the status ink (no fill: it sits on the code's well). */
-.trace-cond { border-radius: var(--radius-xs); background: transparent; color: inherit; text-decoration: underline; text-decoration-color: var(--color-faint); text-underline-offset: 3px; transition: background 220ms ease-out, text-decoration-color 220ms ease-out, color 220ms ease-out; }
-.trace-cond:is([data-state='true'], [data-state='false']) { text-decoration-color: transparent; }
-.trace-cond[data-state='true'] { color: var(--color-success); }
-.trace-cond[data-state='false'] { color: var(--color-danger); }
-.trace-steps { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-4); margin: 0; padding: var(--space-8); list-style: none; }
-.trace-step { display: flex; align-items: center; gap: var(--space-8); min-height: 30px; padding: var(--space-4) var(--space-8); border-radius: var(--radius-sm); font-size: var(--text-sm); transition: opacity 220ms ease-out, transform 260ms var(--ease-out-strong), background 220ms ease-out; }
-.trace-step[data-state='pending'] { opacity: 0; transform: translateY(4px); }
-.trace-step[data-state='active'] { background: var(--color-active-bg); }
-.trace-step--error { color: var(--color-danger); }
-.trace-step__line { flex: none; width: 28px; color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-xs); }
-/* A long condition wraps, so its true or false always stays in view. */
-.trace-step__code { flex: 1; min-width: 0; overflow-wrap: anywhere; font-family: var(--font-mono); font-size: var(--text-xs); line-height: 18px; }
-.trace-bool { flex: none; padding: 0 var(--space-6); border-radius: var(--radius-xs); font-family: var(--font-mono); font-size: var(--text-xs); line-height: 18px; }
-.trace-bool[data-value='true'] { background: var(--color-success-bg); color: var(--color-success); }
-.trace-bool[data-value='false'] { background: var(--color-danger-bg); color: var(--color-danger); }
-.trace-action { display: inline-flex; align-items: center; gap: var(--space-6); }
-.trace-omens { display: grid; gap: var(--space-4); flex: 1; }
-.trace-omen { display: grid; grid-template-columns: minmax(64px, auto) minmax(60px, 1fr) 36px; align-items: center; gap: var(--space-8); }
-.trace-omen code { font-family: var(--font-mono); font-size: var(--text-xs); }
-.trace-omen__bar { height: 6px; border-radius: var(--radius-2xs); background: var(--color-layer-2); overflow: hidden; }
-.trace-omen__bar > span { display: block; height: 100%; background: var(--color-accent-data); transform-origin: left; transition: transform 520ms var(--ease-out-strong); }
-.trace-omen__value { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); text-align: right; font-variant-numeric: tabular-nums; }
-.trace-result { display: flex; align-items: center; gap: var(--space-16); min-height: 44px; padding-block: var(--space-8); transition: opacity 260ms ease-out, transform 300ms var(--ease-out-strong); }
-.trace-result[data-state='pending'] { opacity: 0; transform: translateY(4px); }
-.trace-result__title { flex: none; color: var(--color-muted); font-size: var(--text-xs); }
-.trace-result__items { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-8) var(--space-16); }
-.trace-chip { display: inline-flex; align-items: center; gap: var(--space-6); font-size: var(--text-sm); }
-.trace-chip[data-tone='warning'] { color: var(--color-warning); }
-.trace-chip--label { padding: 0 var(--space-6); border-radius: var(--radius-xs); background: var(--color-chip); color: var(--color-muted); font-size: var(--text-xs); line-height: 18px; }
-.trace-warning { color: var(--color-warning); font-size: var(--text-xs); }
-
-@media (prefers-reduced-motion: reduce) {
-  .trace-step, .trace-result, .trace-cond, .trace-code li, .trace-omen__bar > span { transition: none; }
-  .trace-step[data-state='pending'], .trace-result[data-state='pending'] { transform: none; }
-}
 @media (max-width: 900px) {
   .rcv-steps, .addr-path { grid-template-columns: minmax(0, 1fr); }
   .addr-path { row-gap: var(--space-24); }
   .addr-arrow { display: none; }
-  .trace-ritual__body, .trace-sample { grid-template-columns: minmax(0, 1fr); }
   .rcv-toolbar { flex-wrap: wrap; }
 }
 .addr-grow { flex: 1; }
@@ -189,7 +105,6 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 /* A card's one line: its first rule (+ how many more), then where its mail goes; it clips at the card's edge. */
 .rcv-card-to { display: block; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 .rcv-card-to > span[aria-hidden] { margin-right: var(--space-8); }
-.rcv-card-to__ritual { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--font-mono); font-size: var(--text-sm); }
 .rcv-card-to > span[aria-hidden] { color: var(--color-faint); }
 .rcv-card-to .rcv-targets { flex-wrap: nowrap; }
 .rcv-unread { color: var(--color-text); font-weight: var(--font-weight-bold); }
@@ -197,15 +112,6 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 @media (max-width: 640px) {
   .rcv-match { overflow: hidden; }
   .rcv-match__host { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-}
-/* Phone: a recent message in Trace reads as two lines, subject and time, then from and to. */
-@media (max-width: 640px) {
-  .trace-recent__row { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'subject time' 'from to'; gap: var(--space-4) var(--space-12); min-height: 56px; padding-block: var(--space-8); }
-  /* A long subject wraps so it can be read in full; the row grows by a line instead of cutting it. */
-  .trace-recent__row .trace-recent__subject { grid-area: subject; white-space: normal; overflow-wrap: anywhere; }
-  .trace-recent__time { grid-area: time; }
-  .trace-recent__from { grid-area: from; color: var(--color-muted); }
-  .trace-recent__to { grid-area: to; max-width: 160px; justify-self: end; }
 }
 
 /* A long address or name clips inside its cell, column or heading instead of running into its neighbour; the whole value
@@ -233,11 +139,6 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 .addr-step li > .rcv-match { flex: 0 1 auto; }
 .rcv-step__body .cluster > .ui-button--ghost:first-child { margin-inline-start: calc(-1 * var(--button-pad-x, 11px)); }
 @media (max-width: 640px) {
-  /* A recent message: subject and time, then its first words on a line of their own. */
-  .addr-recent a { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: 'subject time' 'snippet snippet'; gap: var(--space-4) var(--space-12); padding-block: var(--space-8); }
-  .addr-recent__subject { grid-area: subject; }
-  .addr-recent time { grid-area: time; }
-  .addr-recent__snippet { grid-area: snippet; font-size: var(--text-xs); }
   /* A card's "Add a rule" gets a 44 px tap area: its lines let it reach past them, and the line still cuts sideways. */
   .rcv-table .ui-card__line:has(.rcv-add), .rcv-table .ui-card__segment:has(.rcv-add) { overflow: visible; }
   .rcv-card-to { overflow: visible; overflow-x: clip; }
@@ -296,7 +197,6 @@ html[data-privacy='on'] .trace-to.private-field:not(:hover, :focus)::placeholder
 .flow-item__aside { display: inline-flex; flex: none; align-items: center; font-size: var(--text-xs); }
 .flow-item__tick { color: var(--color-text); }
 .flow-item .rcv-match { max-width: 100%; }
-.flow-code { font-family: var(--font-mono); font-size: var(--text-xs); }
 .flow-via { margin-left: var(--space-8); color: var(--color-faint); font-size: var(--text-xs); }
 .flow[data-tested] .flow-item[data-hit='no'] { opacity: .45; }
 .flow[data-tested] .flow-stage:has([data-hit='yes']) { background: var(--color-active-bg); }

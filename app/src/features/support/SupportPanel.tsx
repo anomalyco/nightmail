@@ -20,7 +20,7 @@ const cx = (...values: Array<string | false | null | undefined>) => values.filte
 // end with it. A sign-out also forgets the conversations this tab saved.
 for (const type of ['nightmail:account-changed', 'nightmail:account-signed-out', 'nightmail:unauthorized', 'nightmail:support-reset']) window.addEventListener(type, event => {
   endSupport()
-  if (type !== 'nightmail:unauthorized' && type !== 'nightmail:support-reset' && (event as CustomEvent<{ signedOut?: boolean } | null>).detail?.signedOut !== false) forgetSaved(true)
+  if (type !== 'nightmail:unauthorized' && type !== 'nightmail:support-reset' && (event as CustomEvent<{ signedOut?: boolean } | null>).detail?.signedOut !== false) forgetSaved()
 })
 const reducedMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches
 /** The panel's own first line: shown at the top of the conversation once loaded, with no model call. */
@@ -154,7 +154,7 @@ function Conversation({ state, store, open, loading }: { state: ChatState; store
       </div> : <>
         <article className="support-message support-message--agent support-message--opening"><div className="support-text"><p>{OPENING}</p></div></article>
         {state.messages.map((message, index) => message.role === 'user' ? <UserMessage key={message.key ?? message.id} message={message} onRetry={() => store.retry()}
-          filed={message.filed && !state.messages[index + 1]?.filed ? { replyTo: state.ticket?.replyTo ?? null } : null} />
+          filed={message.filedId && !state.messages[index + 1]?.filedId ? { replyTo: state.ticket?.replyTo ?? null } : null} />
           : <AgentMessage key={message.key ?? message.id} message={message} store={store} closed={Boolean(state.closed)} />)}
       </>}
       <InlineStatus state={state} store={store} />

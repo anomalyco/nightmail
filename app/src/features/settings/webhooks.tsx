@@ -71,7 +71,7 @@ export function WebhooksSection() {
   const withHeaders = webhooks.data?.some(webhook => webhook.headers.length > 0) ?? false
   return <section id="webhooks" className="section stack settings-group settings-rule">
     {multiTenant ? <div className="settings-actions"><Button onClick={() => navigate('/settings/webhooks/new')}>Add webhook</Button></div> : <SectionHeader title="Webhooks" actions={<Button onClick={() => navigate('/settings/webhooks/new')}>Add webhook</Button>} />}
-    {webhooks.error ? <ErrorState error={webhooks.error} onRetry={() => void webhooks.refetch()} /> : <DataTable className="settings-webhooks-table ui-table--two-line" loading={webhooks.isPending} skeletonRows={2} minRows={2} rows={webhooks.data ?? []} rowKey={webhook => webhook.id} rowHref={webhook => `/settings/webhooks/${webhook.id}`} empty={<EmptyState title="No webhooks" />} columns={[
+    {webhooks.error ? <ErrorState error={webhooks.error} onRetry={() => void webhooks.refetch()} /> : <DataTable className="ui-table--two-line" loading={webhooks.isPending} skeletonRows={2} minRows={2} rows={webhooks.data ?? []} rowKey={webhook => webhook.id} rowHref={webhook => `/settings/webhooks/${webhook.id}`} empty={<EmptyState title="No webhooks" />} columns={[
       { ...column(columns, 'name'), render: (webhook: Webhook) => <div className="settings-webhook-name"><span title={webhook.name}>{webhook.name}</span><span className="muted" title={webhook.url}>{webhook.url}</span></div>, cardRender: (webhook: Webhook) => webhook.name },
       { ...column(columns, 'url'), render: (webhook: Webhook) => webhook.url },
       ...multiTenant ? [] : [{ ...column(columns, 'scope'), render: (webhook: Webhook) => scopeText(webhook.regionIds) }],
@@ -224,7 +224,7 @@ function WebhookEditor({ webhook: read, regions, refreshError, onRefresh }: { we
       status={inspected && <StatusBadge status={label(inspected.status)} />}>
       {inspected && <>
         <KeyValues className="settings-delivery-facts" items={[['Event', <code>{inspected.event}</code>], ['Response', inspected.response ?? 'No response'], ['Attempts', number(inspected.attempts)], ['Created', `${shortDateTime(inspected.at)} UTC`], ...multiTenant ? [] : [['Region', inspected.regionId] as [string, ReactNode]], ['ID', <span className="ui-kv__id"><code>{inspected.id}</code><CopyButton value={inspected.id} label="Copy delivery ID" /></span>]]} />
-        <div className="settings-payload-head"><h3 className="ui-label ui-label--rule">Payload</h3><CopyButton value={JSON.stringify(inspected.payload ?? {}, null, 2)} label="Copy payload" /></div>
+        <div className="settings-payload-head"><h3 className="ui-label">Payload</h3><CopyButton value={JSON.stringify(inspected.payload ?? {}, null, 2)} label="Copy payload" /></div>
         <pre className="settings-payload">{JSON.stringify(inspected.payload ?? {}, null, 2)}</pre>
       </>}
     </Dialog>

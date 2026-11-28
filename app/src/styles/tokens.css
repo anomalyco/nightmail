@@ -110,11 +110,8 @@
   --color-contrast: #111111;
   --color-contrast-hover: #2B2B2B;
   --color-on-contrast: #FFFFFF;
-  --shadow-on-contrast: 0 .5px .5px rgb(0 0 0 / 30%);
-  --color-complaint: var(--color-danger);
   --color-neutral-marker: var(--color-faint);
   --color-overlay: rgb(0 0 0 / 40%);
-  --color-shadow: rgb(0 0 0 / 8%);
   --color-transparent: transparent;
   --font-body: 'Inter', 'Inter Fallback', sans-serif;
   --font-mono: 'OpenTUI Mono', 'OpenTUI Mono Fallback', monospace;
@@ -202,17 +199,15 @@
      any of them: the frame and the canvas are two solid surfaces. */
   --sidebar-width: 224px;
   --topbar-height: 44px;
-  /* The sidebar's edge padding, and the inset of content inside its rows (workspace picker, navigation links). */
-  --sidebar-gutter: var(--space-8);
+  /* The inset of content inside the sidebar's rows (workspace picker, navigation links). */
   --sidebar-inset: var(--space-8);
   --page-inset: 0px;
   --page-gap: var(--space-12);
   /* Colour, fill and border changes on controls, links, rows and tabs. */
   --motion-duration: 150ms;
   --ease-standard: cubic-bezier(.4, 0, .2, 1);
-  /* Micro-interactions: strong ease-out for enters and feedback (120–250 ms), ease-in-out for on-screen moves. */
+  /* Micro-interactions: strong ease-out for enters and feedback (120–250 ms). */
   --ease-out-strong: cubic-bezier(.23, 1, .32, 1);
-  --ease-in-out-strong: cubic-bezier(.77, 0, .175, 1);
   /* Data swaps (a new range on Overview, the selected tab's marker): 200 ms. */
   --ease-swap: cubic-bezier(.2, .8, .2, 1);
   /* Sheets: the iOS drawer curve. */
@@ -243,9 +238,7 @@
   --color-contrast: #F2F2F2;
   --color-contrast-hover: #FFFFFF;
   --color-on-contrast: #111111;
-  --shadow-on-contrast: none;
   --color-overlay: rgb(0 0 0 / 60%);
-  --color-shadow: rgb(0 0 0 / 30%);
   --shadow-popover: 0 8px 24px rgb(0 0 0 / 40%), 0 2px 6px rgb(0 0 0 / 30%);
   --shadow-dialog: 0 16px 40px rgb(0 0 0 / 50%), 0 4px 12px rgb(0 0 0 / 30%);
 }
@@ -269,7 +262,6 @@
    keyboard focus is a solid step, never a ring. */
 :root {
   --color-deep: #EFEFEF;
-  --color-canvas: var(--color-deep);
   --color-surface: #FFFFFF;
   --color-layer-1: #F5F5F5;
   --color-layer-2: #E8E8E8;
@@ -315,27 +307,16 @@
   --color-overlay-control-hover: #E6E6E6;
   --color-overlay-control-focus: #DCDCDC;
   --color-overlay-control-pressed: #D4D4D4;
-  /* The surfaces that take the place of rules. Overview: the figures' wells and the inspector rail. Logs: the filter
-     rail. Tables: the head's bar, every other row of a mail stream, and a phone's card. A sent email: the facts strip,
-     the matte behind the preview and the inspector. The campaign studio: its bar, the sender rows, the toolbar, the
-     panel and its block buttons. Chips (a tag, a thread's count) and the chart's reference lines. */
+  /* The surfaces that take the place of rules: the figures' wells, a table's head bar, every other row of a mail
+     stream, a phone's card, the matte behind a sent email's preview, chips (a tag, a thread's count) and the chart's
+     reference lines. */
   /* At most one surface step beyond the page canvas (--color-layer-1): no nested panels or stacked shades. */
   --color-well: var(--color-layer-1);
   --color-well-hover: var(--color-layer-2);
-  --color-rail: transparent;
-  --color-facets: transparent;
   --color-thead: var(--color-layer-1);
   --color-row-alt: transparent;
   --color-card: var(--color-layer-1);
-  --color-strip: transparent;
   --color-matte: var(--color-layer-1);
-  --color-inspector: transparent;
-  --color-studio-bar: var(--color-surface);
-  --color-studio-meta: var(--color-surface);
-  --color-studio-tools: var(--color-surface);
-  --color-studio-panel: var(--color-surface);
-  --color-block: #E8E8E8;
-  --color-block-hover: #DEDEDE;
   --color-chip: #E8E8E8;
   /* A staff note being written (the support reply box in note mode): the one surface step, warmed, so a note never looks
      like a reply. */
@@ -348,25 +329,19 @@
   --color-border-muted: #E5E5E5;
   --color-border: #D0D0D0;
   --color-border-strong: #A3A3A3;
-  --color-control-edge: #8A8A8A;
   /* Neutral ink for secondary series, meter tracks and a gauge's empty cells. */
   --color-series: #B3B3B3;
   --color-series-strong: #5C5C5C;
   --color-track: #E6E6E6;
   --color-tick: #E2E2E2;
-  /* The campaign studio's desk around the white email sheet. */
-  --color-desk: #EAEAEA;
   --color-focus: var(--color-text);
-  /* The primary action: a #111111 fill, white text, a lighter hover and a black press; text actions in the text colour.
-     A shortcut's letters inside the primary button are on-accent-muted. */
+  /* The primary action: a #111111 fill, white text, a lighter hover and a black press; text actions in the text colour. */
   --color-accent: #111111;
   --color-accent-hover: #2B2B2B;
   --color-accent-pressed: #000000;
-  --color-accent-edge: transparent;
   --color-accent-text: #111111;
   --color-on-accent: #FFFFFF;
   --color-on-accent-edge: #585858;
-  --color-on-accent-muted: #BCBCBC;
   /* Data: the one blue, for the sent series, its chart line and meters. */
   --color-accent-data: #1D4ED8;
   /* Status: ink for words, marker for dots and lines. On light the ink is a step deeper than its marker, for 4.5:1 on
@@ -426,20 +401,10 @@
   /* At most one surface step beyond the page canvas (--color-layer-1): no nested panels or stacked shades. */
   --color-well: var(--color-layer-1);
   --color-well-hover: var(--color-layer-2);
-  --color-rail: transparent;
-  --color-facets: transparent;
   --color-thead: var(--color-layer-1);
   --color-row-alt: transparent;
   --color-card: var(--color-layer-1);
-  --color-strip: transparent;
   --color-matte: var(--color-layer-1);
-  --color-inspector: transparent;
-  --color-studio-bar: var(--color-surface);
-  --color-studio-meta: var(--color-surface);
-  --color-studio-tools: var(--color-surface);
-  --color-studio-panel: var(--color-surface);
-  --color-block: #242424;
-  --color-block-hover: #2C2C2C;
   --color-chip: #2C2C2C;
   --color-note-bg: #2B261C;
   --color-gridline: #222222;
@@ -449,21 +414,17 @@
   --color-border-muted: #2B2B2B;
   --color-border: #3A3A3A;
   --color-border-strong: #525252;
-  --color-control-edge: #707070;
   --color-series: #5C5C5C;
   --color-series-strong: #A3A3A3;
   --color-track: #2C2C2C;
   --color-tick: #2E2E2E;
-  --color-desk: #131313;
   /* On near-black the primary is a near-white fill with #111111 text; hover goes to white, pressed a step down. */
   --color-accent: #F2F2F2;
   --color-accent-hover: #FFFFFF;
   --color-accent-pressed: #D4D4D4;
-  --color-accent-edge: transparent;
   --color-accent-text: #F2F2F2;
   --color-on-accent: #111111;
   --color-on-accent-edge: #B0B0B0;
-  --color-on-accent-muted: #4F4F4F;
   --color-accent-data: #3B82F6;
   /* On dark a marker is the full-strength colour and its ink a step lighter, for words on near-black. */
   --color-success: #4ADE80;
@@ -480,17 +441,10 @@
 }
 
 /* Either theme: a notice or status mark sits on a solid neutral surface (the tone's -bg), its colour in the dot and the
-   ink alone. (The -border tones are for pages outside the console that still draw rules.) The kinds of mail that share
-   a status take its marker. */
+   ink alone. The kinds of mail that share a status take its marker. */
 :root {
   --color-success-bg: var(--color-layer-1);
-  --color-success-border: var(--color-border);
-  --color-warning-bg: var(--color-layer-1);
-  --color-warning-border: var(--color-border);
   --color-danger-bg: var(--color-layer-1);
-  --color-danger-border: var(--color-border);
-  --color-info-bg: var(--color-layer-1);
-  --color-info-border: var(--color-border);
   --color-series-sent: var(--color-accent-data);
   --color-series-delivered: var(--color-success-marker);
   --color-series-bounced: var(--color-warning-marker);

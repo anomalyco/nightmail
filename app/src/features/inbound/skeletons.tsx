@@ -17,7 +17,7 @@ export function ReceivingBodySkeleton() {
 // Mail routing's header as the page draws it before its overview arrives, over the page's own loading block.
 export function ReceivingRouteSkeleton() {
   const { canAdminister } = useWorkspaceAccess()
-  return <div className="stack inbound-stack receiving-page">
+  return <div className="stack inbound-stack">
     <PageHeader title="Mail routing" actions={canAdminister && <Button variant="primary" disabled>New address</Button>} />
     <ReceivingBodySkeleton />
   </div>

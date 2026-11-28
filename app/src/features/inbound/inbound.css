@@ -17,11 +17,10 @@
 .address-select .ui-select-item > span:first-child, .address-select .ui-action-sheet__label { min-width: 0; flex: 1; }
 :is(.address-select, .address-select-trigger) .private-address__value { flex: 0 1 auto; min-width: 0; overflow: hidden; }
 .ui-action-sheet__items.address-select { width: auto; }
-/* Search and the address filter share one row above the views. */
+/* Search, the view and New message share one row above the threads. */
 .mailbox-toolbar { display: flex; gap: var(--space-8); padding-top: var(--space-12); }
 .mailbox-search.search-box { flex: 1 1 0; width: auto; min-width: 0; }
 .mailbox-search .ui-input { width: 100%; }
-.mailbox-toolbar .mailbox-address-filter { flex: none; width: auto; min-width: 0; max-width: 50%; }
 /* Rows bleed into the gutter so their text lines up with the search box. */
 .mailbox-threads { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: var(--space-2); flex: 1; min-height: 0; overflow-y: auto; margin: 0 calc(-1 * var(--space-4)) 0 calc(-1 * var(--space-16)); padding: 0 var(--space-4) var(--space-16) 0; list-style: none; }
 .mailbox-thread-row { position: relative; display: grid; gap: var(--space-4); width: 100%; padding: var(--space-8) var(--space-12) var(--space-8) var(--space-16); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text); text-align: left; font: inherit; cursor: pointer; transition: background var(--motion-duration, 120ms); }

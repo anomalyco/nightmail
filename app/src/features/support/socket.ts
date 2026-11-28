@@ -17,13 +17,10 @@ type Saved = { conversationId: string; socketUrl?: string; expiresAt?: string }
 const storageKey = (userId: string, workspaceId: string) => `bane.support.conversation.${userId}.${workspaceId}`
 // `parked`: words not yet with the chat or filed (store.ts), sent on their own while the box still holds exactly them.
 const draftKey = (mode: 'demo' | 'live', userId: string, workspaceId: string, slot: 'draft' | 'parked' = 'draft') => `bane.support.${slot}.${mode}.${userId}.${workspaceId}`
-/** Forgets saved conversations and drafts: every account's (a sign-out), or only legacy slots from earlier releases. */
-export function forgetSaved(all: boolean) {
+/** Forgets every account's saved conversations and drafts (a sign-out). */
+export function forgetSaved() {
   try {
-    for (const key of Object.keys(sessionStorage)) {
-      if (all && /^bane\.support\.(conversation|last|draft|parked)\./.test(key)) sessionStorage.removeItem(key)
-      else if (!all && (/^bane\.support\.last\./.test(key) || (/^bane\.support\.conversation\./.test(key) && !/^bane\.support\.conversation\.[^.]+\.[^.]+$/.test(key)))) sessionStorage.removeItem(key)
-    }
+    for (const key of Object.keys(sessionStorage)) if (/^bane\.support\.(conversation|last|draft|parked)\./.test(key)) sessionStorage.removeItem(key)
   } catch { /* Session-only. */ }
 }
 export function loadDraft(mode: 'demo' | 'live', userId: string, workspaceId: string, slot: 'draft' | 'parked' = 'draft'): string {
@@ -112,7 +109,6 @@ async function fileTicket(text: string): Promise<FiledTicket> {
 }
 
 export function createSocketTransport({ origin, userId, workspaceId, resume }: { origin: string; userId: string; workspaceId: string; resume?: string | null }): SupportTransport {
-  forgetSaved(false)
   const key = storageKey(userId, workspaceId)
   // ?support=<conversationId> (`resume`) opens that chat conversation directly; otherwise keep the workspace's conversation.
   if (resume) save(key, { conversationId: resume })

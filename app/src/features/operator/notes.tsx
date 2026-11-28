@@ -8,6 +8,7 @@ import { noteKinds, noteSeverities, noteStatuses, statusLabel, uiNotesApi, uiNot
 import { relativeTime, shortDateTime } from '../../lib/format'
 import { setUiNotesMode, useUiNotesMode } from '../../lib/ui-notes-mode'
 import { GlassLink, NotesToolbar, noteColumnDefs, StaffOnly, useOperatorTabs } from './skeletons'
+import { InfiniteMore } from './shared'
 import { errorText } from '../../data/types'
 import { useDebounced } from '../../lib/pagination'
 
@@ -80,7 +81,7 @@ export function OperatorNotesPage() {
       {notes.isError && !notes.data ? <ErrorState error={notes.error} onRetry={() => void notes.refetch()} /> : <>
         <DataTable className="op-notes" loading={notes.isPending} skeletonRows={6} rows={rows} rowKey={row => row.id} onRowClick={row => setOpen(row.id)} columns={columns}
           empty={<EmptyState title={filtered ? 'No notes match' : 'No open notes'} action={filtered ? <Button onClick={clearFilters}>Clear filters</Button> : notesOn ? undefined : <Button onClick={() => setUiNotesMode(true)}>Turn on UI notes</Button>} />} />
-        {notes.hasNextPage && <Button className="op-more" loading={notes.isFetchingNextPage} onClick={() => void notes.fetchNextPage()}>Load more</Button>}
+        <InfiniteMore query={notes} />
       </>}
     </div>
     {open && <NoteDialog noteId={open} initial={rows.find(row => row.id === open)} canAct={canAct} onClose={() => setOpen(null)} onChanged={() => void refresh()} onOpenOnPage={openOnPage} />}

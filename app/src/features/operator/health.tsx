@@ -75,7 +75,7 @@ export function HealthView() {
       Connections: d ? `${number(d.connections)} of ${number(d.maxConnections)}` : '—',
       Database: d ? `${size(d.sizeBytes)}${d.diskBytes ? ` of ${size(d.diskBytes)}` : ''}` : '—',
     } : undefined} />
-    <DataTable className="op-table" loading={query.isPending} skeletonRows={8} rows={health ? rows(health) : []} rowKey={row => row.id} columns={columns}
+    <DataTable loading={query.isPending} skeletonRows={8} rows={health ? rows(health) : []} rowKey={row => row.id} columns={columns}
       empty={<EmptyState title={health?.generatedAt ? 'Nothing to show' : 'Nothing measured yet'} description={health?.generatedAt ? undefined : 'The first figures arrive within a minute of the job runner starting.'} />} />
   </>
 }

@@ -46,7 +46,7 @@ export const invalidate = {
   inboundReply: ['inbound-threads', 'inbound-thread', 'inbound-message', 'inbound-overview', 'logs', 'emails', 'overview', 'sending-limit', 'activity'] as const,
   agentInboxes: ['agent-inboxes', 'agent-inbox', 'agent-inbox-folders', 'inbound-addresses', 'inbound-overview', 'routing', 'keys', 'app-passwords', 'activity'] as const,
   agentInboxSimulate: ['agent-inbox', 'agent-inbox-folders', 'agent-inbox-messages', 'agent-inboxes', 'inbound-threads', 'logs'] as const,
-  rules: ['inbound-overview', 'inbound-endpoints', 'inbound-addresses', 'inbound-address', 'inbound-webhooks', 'forward-endpoints', 'routing', 'rule-recipes', 'rule-recent', 'trace-recent', 'why-it-went-here', 'activity'] as const,
+  rules: ['inbound-overview', 'inbound-endpoints', 'inbound-addresses', 'inbound-address', 'inbound-webhooks', 'forward-endpoints', 'routing', 'rule-recipes', 'rule-recent', 'why-it-went-here', 'activity'] as const,
 } as const
 
 export type InvalidationTarget<TInput = unknown, TResult = unknown> =

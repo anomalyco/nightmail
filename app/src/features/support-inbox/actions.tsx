@@ -63,7 +63,7 @@ export function useShortcuts(keys: Record<string, () => void>, enabled = true) {
 const shortcuts: [string[], string][] = [[['j', 'k'], 'Next or previous conversation'], [['Enter', 'o'], 'Open'], [['Esc'], 'Back to the list'], [['r'], 'Reply'], [['n'], 'Add an internal note'], [['e'], 'Mark done and move on (Undo on its toast)'],
   [['h'], 'Hand back to the agent'], [['u'], 'Mark read or unread'], [['/'], 'Search'], [[...sendKeyLabel], 'Send the reply or note'], [[...newLineKeyLabel], 'New line in the reply box'], [['?'], 'These shortcuts']]
 export function ShortcutsDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
-  return <Dialog open={open} onOpenChange={next => { if (!next) onClose() }} title="Keyboard shortcuts" className="sinbox-shortcuts">
+  return <Dialog open={open} onOpenChange={next => { if (!next) onClose() }} title="Keyboard shortcuts">
     <dl className="sinbox-keys">{shortcuts.map(([keys, text]) => <div key={text}><dt>{keys.map(key => <kbd key={key}>{key}</kbd>)}</dt><dd>{text}</dd></div>)}</dl>
   </Dialog>
 }

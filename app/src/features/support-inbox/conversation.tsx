@@ -499,7 +499,7 @@ const Composer = forwardRef<ComposerHandle, { detail: SupportDetail; actions: Ac
 function Activity({ detail }: { detail: SupportDetail }) {
   const items = activityOf(detail)
   if (!items.length) return null
-  return <section className="sinbox-activity"><h3 className="ui-label ui-label--rule">Activity</h3>
+  return <section className="sinbox-activity"><h3 className="ui-label">Activity</h3>
     <ol>{items.map(item => <li key={item.key}>
       <span className="sinbox-activity__text">{item.ok !== undefined && (item.ok ? <Check size={12} aria-label="Done" /> : <X size={12} aria-label="Failed" />)}{item.text}</span>
       <time dateTime={item.at} title={when(item.at)}>{shortDateTime(item.at)}</time>
@@ -537,7 +537,7 @@ function verifiedRow(c: SupportDetail['conversation'], hasUser: boolean): ReactN
   return 'Workspace credential'
 }
 // The customer panel (Signal Log): each section a small caps label with its rule over muted keys and mono values, or a short list.
-const Label = ({ children }: { children: ReactNode }) => <h3 className="ui-label ui-label--rule">{children}</h3>
+const Label = ({ children }: { children: ReactNode }) => <h3 className="ui-label">{children}</h3>
 function CustomerPanel({ detail }: { detail: SupportDetail }) {
   const { conversation: c, customer } = detail, user = customer.user, evidence = c.evidence
   const others = customer.conversations

@@ -373,15 +373,37 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     // workspace must never send a request to, or read from, the target workspace while /v1/me is in flight.
     const next = await request<Identity>('/v1/me', { workspace: id })
     if (seq !== switchSeq.current || selectedAccount() !== account) throw aborted()
-    // Commit synchronously: abort every in-flight request from the previous workspace, clear cache and remount.
+    commitIdentity(next, { path })
+  }
+  // Commits a new identity at once: abort every in-flight request from the previous scope, clear the cache and remount
+  // every screen. Entering an account selects it and keeps the account list, now with it active.
+  function commitIdentity(next: Identity, { path, entered = false }: { path?: string; entered?: boolean }) {
     const nextWorkspace = next.multiTenant ? next.workspaceId : null
+    if (entered) selectAccount(next.id)
     selectWorkspace(nextWorkspace)
     void cache.cancelQueries()
+    const accounts = entered ? cache.getQueryData<AccountList>(accountsKey) : undefined
     cache.clear()
+    if (accounts) cache.setQueryData<AccountList>(accountsKey, { ...accounts, active: next.id })
     cache.setQueryData(['identity'], next)
     if (path) navigate(path)
     setGeneration(value => value + 1)
     if (takeInterruptedWrite(next.id, nextWorkspace)) toast('A save here was cut off when you switched — check if it landed.', 'info')
+  }
+  // No account is left in this tab: drop its selection, abort and clear everything it read, remount, and read the
+  // session again (the signed-out page).
+  async function resetSignedOutScope() {
+    selectAccount(null); selectWorkspace(null)
+    void cache.cancelQueries()
+    cache.clear()
+    setGeneration(value => value + 1)
+    await identity.refetch()
+  }
+  // The active account's session ended (signed out here): every tab's dashboard learns so, and the next load starts cold.
+  function endActiveSession() {
+    window.dispatchEvent(new Event('nightmail:active-session-ended'))
+    rememberDashboardReady(selectedWorkspace(), false)
+    accountChanged(true)
   }
   // Act as another connected account in this tab, at once: no round trip to the account service, one /v1/me to Nightmail.
   // Nothing from the previous account stays cached or mounted (the generation remounts every screen and dialog), and
@@ -395,21 +417,11 @@ export function ApiProvider({ children }: { children: ReactNode }) {
       if (!(error instanceof ApiError && error.status === 401)) throw error
       if (seq !== switchSeq.current) throw aborted()
       // No account is left in this browser: the signed-out page.
-      accountChanged(true); selectAccount(null); selectWorkspace(null); void cache.cancelQueries(); cache.clear(); setGeneration(value => value + 1); await identity.refetch(); return
+      accountChanged(true); await resetSignedOutScope(); return
     }
     if (seq !== switchSeq.current) throw aborted()
     if (next.id !== previous.account) accountChanged(false)
-    const nextWorkspace = next.multiTenant ? next.workspaceId : null
-    selectAccount(next.id)
-    selectWorkspace(nextWorkspace)
-    void cache.cancelQueries()
-    const accounts = cache.getQueryData<AccountList>(accountsKey)
-    cache.clear()
-    if (accounts) cache.setQueryData<AccountList>(accountsKey, { ...accounts, active: next.id })
-    cache.setQueryData(['identity'], next)
-    if (options.path) navigate(options.path)
-    setGeneration(value => value + 1)
-    if (takeInterruptedWrite(next.id, nextWorkspace)) toast('A save here was cut off when you switched — check if it landed.', 'info')
+    commitIdentity(next, { path: options.path, entered: true })
   }
   async function switchAccount(id: string, path?: string, workspace?: string) {
     if (id === selectedAccount() && cache.getQueryData(['identity'])) { if (workspace) await switchWorkspace(workspace, path); return }
@@ -423,21 +435,17 @@ export function ApiProvider({ children }: { children: ReactNode }) {
     forgetInboxDrafts()
     if (id) announce({ type: 'signed-out', accounts: [id] })
     if (id && id !== selectedAccount()) { void cache.invalidateQueries({ queryKey: accountsKey }); return }
-    window.dispatchEvent(new Event('nightmail:active-session-ended'))
-    rememberDashboardReady(selectedWorkspace(), false)
-    accountChanged(true)
+    endActiveSession()
     if (result.active) { await enter(result.active, { path: '/overview' }); toast('Signed out of that account', 'success'); return }
-    selectAccount(null); selectWorkspace(null); cache.clear(); await identity.refetch()
+    await resetSignedOutScope()
   }
   async function signOutAll() {
     await accountApi.signOut({ all: true })
-    window.dispatchEvent(new Event('nightmail:active-session-ended'))
     clearInterruptedWrites()
     forgetInboxDrafts()
     announce({ type: 'signed-out', accounts: 'all' })
-    rememberDashboardReady(selectedWorkspace(), false)
-    accountChanged(true)
-    selectAccount(null); selectWorkspace(null); cache.clear(); await identity.refetch()
+    endActiveSession()
+    await resetSignedOutScope()
   }
   // Add account: the account service's chooser in a popup. The popup starts the sign-in itself and is opened with
   // noopener, so it holds no reference to this page; it reports back over the BroadcastChannel only. The account picked
@@ -602,30 +610,37 @@ export function ApiProvider({ children }: { children: ReactNode }) {
   const invitee = signedOut && invitation !== null && review.data?.status === 'pending'
   const reviewing = !publicRoute && invitation !== null && ((identity.data && !identity.isError) || invitee || (signedOut && review.isFetching))
   const allowToast = useMemo(() => () => isCurrentScope(scope), [scope])
-  return <ApiContext.Provider key={generation} value={client}><RequestScopeContext.Provider value={scope}><ToastScope allow={allowToast}><SessionContext.Provider value={{identity: identity.data ?? null, logout, switchWorkspace, switchAccount, addAccount, signOutAccount, signOutAll, signInForStaff: () => void startLogin(false, 'google'), signIn: (focus, select) => void startLogin(select === true, undefined, focus), signInIntent: prepareLogin, signingIn: busy, signInWaitUntil: signInWait, notice, dismissNotice: () => setNotice(null)}}>
-    <Analytics identity={identity.data && !identity.isError ? identity.data : null} signedOut={signedOut} />
-    {reviewing ? review.data?.status === 'pending' ? <InvitationReview invitation={review.data} email={identity.data?.email ?? null} firstWorkspace={invitee} joining={join.isPending} error={join.error} onJoin={() => join.mutate(review.data!)} onCancel={invitee ? () => { clearInvitation(); void logout() } : clearInvitation} /> : <BootLoader />
-    : publicRoute || (identity.data && !identity.isError) ? <>{authError && <Alert tone="danger">{String(authError)}</Alert>}{children}</> : checkIdentity && identity.isPending ? <BootLoader /> : authResult === 'waitlist' && window.location.pathname === '/' ? <WaitlistPage busy={busy} error={authError} waitUntil={signInWait} onSwitch={() => void startLogin(true)} />
-    : home.isLoading ? <BootLoader /> : signedOut && home.data ? <Suspense fallback={null}><HomePage start={{ signedIn: false, onSignIn: login, onSignInIntent: prepareLogin, busy, waitUntil: signInWait }} notice={authNotice} /></Suspense>
+  // What the provider shows: an invitation's review, the dashboard, or one of the signed-out pages.
+  function authGate(): ReactNode {
+    if (reviewing) return review.data?.status === 'pending' ? <InvitationReview invitation={review.data} email={identity.data?.email ?? null} firstWorkspace={invitee} joining={join.isPending} error={join.error} onJoin={() => join.mutate(review.data!)} onCancel={invitee ? () => { clearInvitation(); void logout() } : clearInvitation} /> : <BootLoader />
+    if (publicRoute || (identity.data && !identity.isError)) return <>{authError && <Alert tone="danger">{String(authError)}</Alert>}{children}</>
+    if (checkIdentity && identity.isPending) return <BootLoader />
+    if (authResult === 'waitlist' && window.location.pathname === '/') return <WaitlistPage busy={busy} error={authError} waitUntil={signInWait} onSwitch={() => void startLogin(true)} />
+    if (home.isLoading) return <BootLoader />
+    if (signedOut && home.data) return <Suspense fallback={null}><HomePage start={{ signedIn: false, onSignIn: login, onSignInIntent: prepareLogin, busy, waitUntil: signInWait }} notice={authNotice} /></Suspense>
     // A dashboard page (a deep link from an email, or a bookmark) asks to sign in and opens once signed in; any other
     // address says there is no page there.
     // /connect, from the link an agent showed: say what is waiting, so a person who has never signed in knows why.
-    : signedOut ? isKnownPath(pathname) ? <SignedOutPage title={pathname === '/connect' ? 'Sign in to approve your agent' : `Sign in to ${productName}`}>
-        {authNotice}
-        {pathname === '/connect' && <p className="muted">{connectLead(new URLSearchParams(window.location.search).get('code'))}</p>}
-        <SignInButton variant="primary" loading={busy} waitUntil={signInWait} onClick={login} onPointerDown={prepareLogin} data-analytics="sign-in/continue">Continue to sign in</SignInButton>
-        <SignInConsent className="muted" />
-      </SignedOutPage>
-      : <SignedOutPage title="Page not found">
-        {authNotice}
-        <SignInButton variant="primary" loading={busy} waitUntil={signInWait} onClick={login} onPointerDown={prepareLogin} data-analytics="sign-in/not-found">Sign in</SignInButton>
-        <SignInConsent className="muted" />
-        <Link className="signed-out__link" to="/">Go to {productName}</Link>
-      </SignedOutPage>
-    : <SignedOutPage title="Couldn’t check your session">
-        <Alert tone="warning">{unconfigured ? 'Sign-in is not configured on this installation.' : `${productName} couldn’t verify your session.`}</Alert>
-        <Button loading={identity.isFetching} onClick={() => void identity.refetch()}>Try again</Button>
-      </SignedOutPage>}
+    if (signedOut && isKnownPath(pathname)) return <SignedOutPage title={pathname === '/connect' ? 'Sign in to approve your agent' : `Sign in to ${productName}`}>
+      {authNotice}
+      {pathname === '/connect' && <p className="muted">{connectLead(new URLSearchParams(window.location.search).get('code'))}</p>}
+      <SignInButton variant="primary" loading={busy} waitUntil={signInWait} onClick={login} onPointerDown={prepareLogin} data-analytics="sign-in/continue">Continue to sign in</SignInButton>
+      <SignInConsent className="muted" />
+    </SignedOutPage>
+    if (signedOut) return <SignedOutPage title="Page not found">
+      {authNotice}
+      <SignInButton variant="primary" loading={busy} waitUntil={signInWait} onClick={login} onPointerDown={prepareLogin} data-analytics="sign-in/not-found">Sign in</SignInButton>
+      <SignInConsent className="muted" />
+      <Link className="signed-out__link" to="/">Go to {productName}</Link>
+    </SignedOutPage>
+    return <SignedOutPage title="Couldn’t check your session">
+      <Alert tone="warning">{unconfigured ? 'Sign-in is not configured on this installation.' : `${productName} couldn’t verify your session.`}</Alert>
+      <Button loading={identity.isFetching} onClick={() => void identity.refetch()}>Try again</Button>
+    </SignedOutPage>
+  }
+  return <ApiContext.Provider key={generation} value={client}><RequestScopeContext.Provider value={scope}><ToastScope allow={allowToast}><SessionContext.Provider value={{identity: identity.data ?? null, logout, switchWorkspace, switchAccount, addAccount, signOutAccount, signOutAll, signInForStaff: () => void startLogin(false, 'google'), signIn: (focus, select) => void startLogin(select === true, undefined, focus), signInIntent: prepareLogin, signingIn: busy, signInWaitUntil: signInWait, notice, dismissNotice: () => setNotice(null)}}>
+    <Analytics identity={identity.data && !identity.isError ? identity.data : null} signedOut={signedOut} />
+    {authGate()}
   </SessionContext.Provider></ToastScope></RequestScopeContext.Provider></ApiContext.Provider>
 }
 // The installation's canonical address (lib/public-origin.ts), for examples and connection URLs: PUBLIC_URL from

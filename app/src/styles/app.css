@@ -275,7 +275,6 @@ html[data-privacy='on']:not([data-peek]) .private-field:not(:focus)::placeholder
 .signed-out__link-form .ui-input[aria-invalid='true'] { background: var(--color-control-invalid, var(--color-danger-bg)); }
 .between { justify-content: space-between; }
 .nowrap { white-space: nowrap; }
-.text-warning { color: var(--color-warning); }
 /* Charts: no box and no axis rules; ultra-quiet horizontal reference lines (crisp, all one step) and muted mono labels. */
 .chart-label { fill: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-label); font-variant-numeric: tabular-nums; }
 .chart-grid { stroke: var(--color-gridline); shape-rendering: crispEdges; }

@@ -25,7 +25,7 @@ import { ago, firstOverview, useOverview, type Overview, type OverviewEndpoint, 
 import { AwaitingConfirm, CreatedEndpointDialog, ForwardSenderOffer, discordUrl, forwardSenderNeeded, slackUrl, targetProblem, type Endpoint } from './ritual-connections'
 import { AskAgentLink } from './ritual-agent'
 import type { Condition } from './builder'
-import { addressOption, idempotencyFor, openBuilder, rulePath, splitBuilderPath } from './shared'
+import { addressOption, freeKey, idempotencyFor, openBuilder, rulePath, splitBuilderPath } from './shared'
 import './inbound.css'
 import './receiving.css'
 import './recipes.css'
@@ -282,8 +282,6 @@ function targetCheck(type: FieldType, value: string): { type?: EndpointType; err
   const error = targetProblem(endpoint, value)
   return error ? { error } : { type: endpoint }
 }
-const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 56)
-const freeName = (base: string, taken: Set<string>) => { const stem = slug(base) || 'endpoint'; for (let n = 1; ; n++) { const name = n === 1 ? stem : `${stem}-${n}`; if (!taken.has(name)) return name } }
 const splitSenders = (text: string) => [...new Set(text.split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean))]
 type Made = { name: string; type: EndpointType; status: OverviewEndpoint['status']; target: string }
 
@@ -348,7 +346,7 @@ function RecipeEditor({ recipe, overview, addresses, preset, header, back, addre
   async function createEndpoint(f: RecipeField): Promise<Endpoint & { secret?: string }> {
     const url = urls[f.name]!.trim(), type = targetCheck(f.type, url).type!
     const base = type === 'forward' ? url.split('@')[0]! : labelOf(targets[0] ?? '').split('@')[0] || type
-    const name = freeName(base, taken)
+    const name = freeKey(base, taken, 'endpoint')
     const post = (body: Record<string, unknown>) => request<Endpoint & { secret?: string }>('/v1/endpoints', { method: 'POST', body, idempotencyKey: idempotencyFor(attempt, body) })
     let created: Endpoint & { secret?: string }
     if (type === 'forward') {

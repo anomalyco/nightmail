@@ -987,6 +987,253 @@ async function masking(page, hover, shell) {
   return problems;
 }
 
+// The sign-in-press guard: Continue to sign in starts once per press, and a refusal holds it for the wait the API gives.
+async function signInPressGuard(page, job, problems) {
+  // A sign-in starts on a mouse's pointer down (data/context.tsx prepareLogin), never on a touch's: a scroll that begins
+  // on the button would hold one of the network's pending sign-ins. One press is one start either way. Refused at the
+  // cap (429 AUTH_STATE_LIMIT), the button is held for the wait the API gives: it keeps keyboard focus and its name,
+  // Enter and Space do nothing, and it works the moment the wait ends. A wait kept for the tab is never longer than the
+  // API's maximum (lib/countdown.ts), whatever is stored and however the system clock moves, and ends on waking from
+  // a sleep that outlasted it.
+  let starts = 0, wait = 2;
+  await page.route('**/api/auth/sign-in/account', route => { starts++; return route.fulfill({ status: 429, contentType: 'application/json', headers: { 'retry-after': String(wait) }, body: JSON.stringify({ error: { code: 'AUTH_STATE_LIMIT', message: 'Too many pending sign-ins.', details: [{ retryAfterSeconds: wait }] } }) }); });
+  const button = page.getByRole('button', { name: 'Continue to sign in' });
+  const waitMs = (ms = 500) => page.waitForTimeout(ms);
+  const state = () => button.evaluate(el => {
+    const shown = [...el.querySelectorAll('[data-shown]')].map(node => node.textContent).join(''), clock = /(\d+):(\d\d)/.exec(shown);
+    return { held: el.getAttribute('aria-disabled') === 'true', focused: document.activeElement === el, name: el.getAttribute('aria-label') ?? el.textContent.trim(), seconds: clock ? Number(clock[1]) * 60 + Number(clock[2]) : 0 };
+  });
+  const expectStarts = (n, what) => { if (starts !== n) problems.push(`${what} on Continue to sign in: ${starts} sign-in starts in all, expected ${n}`); };
+  if (job.device === 'phone') {
+    await button.dispatchEvent('pointerdown', { pointerType: 'touch', button: 0, isPrimary: true });
+    await button.dispatchEvent('pointercancel', { pointerType: 'touch', button: 0, isPrimary: true });
+    await waitMs();
+    expectStarts(0, 'a touch pointer down');
+    await button.tap();
+  } else await button.click();
+  await waitMs();
+  expectStarts(1, job.device === 'phone' ? 'one tap' : 'one mouse press');
+  await waitMs(wait * 1000);
+  // From the keyboard: Enter is refused, and focus stays on the held button.
+  await button.focus();
+  await page.keyboard.press('Enter');
+  await waitMs();
+  expectStarts(2, 'Enter');
+  let now = await state();
+  if (!now.held || !now.focused) problems.push(`refused, Continue to sign in was ${now.held ? 'held' : 'not held'} and ${now.focused ? 'kept' : 'lost'} keyboard focus`);
+  if (now.name !== 'Continue to sign in') problems.push(`held, Continue to sign in was named "${now.name}"`);
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Space');
+  await waitMs(200);
+  expectStarts(2, 'Enter and Space while held');
+  await waitMs(wait * 1000);
+  now = await state();
+  if (now.held || !now.focused) problems.push(`when the wait ended, Continue to sign in was ${now.held ? 'still held' : 'pressable'} and ${now.focused ? 'focused' : 'not focused'}`);
+  await page.keyboard.press('Enter');
+  await waitMs();
+  expectStarts(3, 'Enter when the wait ended');
+  if (job.device === 'desktop') {
+    await waitMs(wait * 1000);
+    const KEY = 'nightmail.sign-in-wait', MAX = 660;
+    const reload = async (value, offset = 0) => {
+      await page.evaluate(([key, value, offset]) => { if (value === null) sessionStorage.removeItem(key); else if (value !== undefined) sessionStorage.setItem(key, String(value)); sessionStorage.setItem('cls-clock-offset', String(offset)); }, [KEY, value, offset]);
+      await page.reload();
+      await button.waitFor();
+      await waitMs(300);
+      return state();
+    };
+    // The system clock moved: an init script offsets Date.now() by what the test puts in sessionStorage.
+    await page.addInitScript(() => { const offset = Number(sessionStorage.getItem('cls-clock-offset')) || 0; if (offset) { const real = Date.now.bind(Date); Date.now = () => real() + offset; } });
+    const at = await page.evaluate(() => Date.now());
+    for (const [what, value, held] of [['20 days ahead', at + 20 * 86_400_000, false], ['in the past', at - 1000, false], ['garbage', 'garbage', false], ['2 minutes ahead', at + 120_000, true]]) {
+      now = await reload(value);
+      if (now.held !== held || now.seconds > (held ? 120 : 0)) problems.push(`a kept wait ${what}: ${now.held ? `held for ${now.seconds} s` : 'not held'}, expected ${held ? 'at most 120 s' : 'not held'}`);
+    }
+    // Refused for 300 s, then the system clock moves an hour. Back: the wait keeps its time (performance.now() ends it).
+    // Forward: it is over (the system clock says so; the next press asks the API). Either way a reload drops the kept
+    // wait, as it is no longer a time within the API's maximum.
+    wait = 300;
+    for (const [what, hour, held] of [['back', -3_600_000, true], ['forward', 3_600_000, false]]) {
+      await reload(null);
+      await button.click();
+      await waitMs();
+      await page.evaluate(hour => { const real = Date.now.bind(Date); Date.now = () => real() + hour; }, hour);
+      await waitMs(1200);
+      now = await state();
+      if (now.held !== held || now.seconds > 300) problems.push(`refused for 300 s, the clock moved an hour ${what}: ${now.held ? `held for ${now.seconds} s` : 'released'}, expected ${held ? 'held for at most 300 s' : 'released'}`);
+      now = await reload(undefined, hour);
+      if (now.held) problems.push(`refused for 300 s, the clock moved an hour ${what}, then a reload: held for ${now.seconds} s, expected not held`);
+    }
+    // Refused for 300 s, then an hour asleep (a locked phone, a closed laptop): performance.now() stood still, the system
+    // clock didn't. Released on waking, and the next press asks the API.
+    await reload(null);
+    await button.click();
+    await waitMs();
+    const asleep = starts;
+    await page.evaluate(() => { const real = Date.now.bind(Date); Date.now = () => real() + 3_600_000; });
+    await waitMs(1200);
+    now = await state();
+    if (now.held) problems.push(`refused for 300 s, then an hour asleep: still held for ${now.seconds} s on waking`);
+    await button.click();
+    await waitMs();
+    if (starts !== asleep + 1) problems.push(`refused for 300 s, then an hour asleep: the next press started ${starts - asleep} sign-ins, expected 1`);
+    await page.evaluate(() => sessionStorage.removeItem('cls-clock-offset'));
+  }
+  await page.unroute('**/api/auth/sign-in/account');
+}
+
+// The receiving-edit guard: the address builder writes only what it was told to.
+async function receivingEditGuard(page, origin, problems) {
+  // Saving through the address builder never changes an address's routes or rules it wasn't told to: New address
+  // turns away one that exists and a *, an unchanged Save writes nothing, and closing with a change asks first.
+  const writes = [];
+  const onRequest = request => { if (request.method() !== 'GET' && request.url().startsWith(origin + '/v1/')) writes.push(`${request.method()} ${request.url().slice(origin.length)}`); };
+  page.on('request', onRequest);
+  const snapshot = () => page.evaluate(async () => JSON.stringify([await (await fetch('/v1/routing/routes')).json(), (await (await fetch('/v1/rules')).json()).config]));
+  const before = await snapshot();
+  // New address turns away an address that exists and a *, writing nothing: it only creates.
+  const existing = await page.evaluate(async id => (await (await fetch('/v1/inbound/addresses/' + id)).json()).address, new URL(page.url()).searchParams.get('open'));
+  for (const typed of [existing, '*@' + existing.split('@')[1]]) {
+    await page.getByRole('button', { name: 'New address', exact: true }).click();
+    const dialog = page.locator('[role=dialog][data-state=open]');
+    await dialog.locator('#builder-address-input').fill(typed);
+    await dialog.getByRole('button', { name: 'Next' }).click();
+    await page.waitForTimeout(300);
+    if (!await dialog.locator('#builder-address-input').count()) problems.push(`New address went past its first step for ${typed.startsWith('*') ? 'a catch-all' : 'an address that exists'}`);
+    if (typed.startsWith('*') && !await dialog.getByRole('button', { name: 'Edit the catch-all' }).count()) problems.push('New address with * offers no way to the catch-all');
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    // What was typed is a change: closing asks first.
+    const outcome = await askedOrLeft(page.getByRole('button', { name: 'Discard', exact: true }), page.locator('.builder').waitFor({ state: 'detached', timeout: 30_000 }));
+    if (outcome !== 'asked') problems.push(outcome === 'left' ? 'Cancel with an address typed closed New address without asking' : 'Cancel with an address typed neither asked nor closed');
+    else await page.getByRole('button', { name: 'Discard', exact: true }).click();
+    await page.locator('.builder').waitFor({ state: 'detached', timeout: 30_000 }).catch(() => problems.push('Discard left New address open'));
+  }
+  const edit = async () => { const clicked = await page.evaluate(() => { const button = [...document.querySelectorAll('.flow-panel button')].find(el => el.textContent.trim() === 'Edit'); button?.click(); return Boolean(button); }); if (clicked) await page.waitForSelector('.builder #builder-flow', { timeout: 10_000 }).catch(() => problems.push('Edit on the flow panel opened no builder for an address it can draw')); return clicked; };
+  if (!await edit()) problems.push('no Edit on the flow panel');
+  else {
+    // Save with nothing changed: the result, and no write.
+    await page.locator('.builder').getByRole('button', { name: 'Save' }).click();
+    await page.locator('.builder').getByRole('button', { name: 'Done' }).click({ timeout: 10_000 }).catch(() => problems.push('an unchanged Save showed no result'));
+    await page.waitForTimeout(300);
+    // A change, then Cancel: asked, and discarded.
+    if (await edit()) {
+      await page.locator('.builder').getByRole('button', { name: 'Split with a rule' }).click();
+      await page.locator('.builder').getByRole('button', { name: 'Cancel' }).click();
+      const outcome = await askedOrLeft(page.getByRole('button', { name: 'Discard', exact: true }), page.locator('.builder').waitFor({ state: 'detached', timeout: 30_000 }));
+      if (outcome !== 'asked') problems.push(outcome === 'left' ? 'Cancel after a change closed the builder without asking' : 'Cancel after a change neither asked nor closed the builder');
+      else {
+        await page.getByRole('button', { name: 'Discard', exact: true }).click();
+        await page.locator('.builder').waitFor({ state: 'detached', timeout: 30_000 }).catch(() => problems.push('Discard left the builder open'));
+      }
+    }
+  }
+  page.off('request', onRequest);
+  if (writes.length) problems.push(`Edit wrote to the API: ${writes.join(', ')}`);
+  if (await snapshot() !== before) problems.push('Edit changed the address\'s routes or rules');
+}
+
+// The receiving-splits guard: a split made in the builder is the rule it shows. `expect500` names the one request whose
+// 500 the page's error check expects meanwhile (null: none).
+async function receivingSplitsGuard(page, origin, fx, problems, expect500) {
+  // Runs alone, after every shared page: it adds addresses and rules. An address with two splits opens its steps
+  // (never a loop back to the same message), and each rule opens the builder on that rule; New rule's Split on an
+  // address that splits already asks before replacing; Test's AI answer takes its side; a new address whose one
+  // write fails leaves no endpoint behind, and Save again creates it.
+  const api = (path, method = 'GET', body) => page.evaluate(async ([path, method, body]) => { const r = await fetch(path, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) }); return { status: r.status, body: await r.json().catch(() => null) }; }, [path, method, body]);
+  const builder = page.locator('.builder[role=dialog]');
+  const split = (value, then, otherwise) => ({ recipe: 'split', params: { test: 'subject', value, then, otherwise } });
+  const two = (await api('/v1/inbound/addresses', 'POST', { address: 'guard-two@northwind.example', key: 'guard-two', flow: { deliver: [], split: split('invoice', 'crm', 'inbox:guard-two') } })).body;
+  const second = (await api(`/v1/inbound/addresses/${two.id}/flow`, 'PATCH', { split: split('refund', 'store', 'inbox:guard-two') })).body;
+  const config = (await api('/v1/rules')).body;
+  const mine = config.config.attachments.filter(a => a.target === two.id), rest = config.config.attachments.filter(a => a.target !== two.id);
+  await api('/v1/rules/attachments', 'PUT', { attachments: [...rest, ...mine.reverse()] });
+  await page.goto(origin + `/receiving/addresses/${two.id}?tab=flow`);
+  await page.locator('.flow-panel').getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20_000 });
+  await page.waitForURL(/edit=1/, { timeout: 10_000 }).catch(() => problems.push('Edit on an address with two splits didn\'t open its steps'));
+  if (await page.$('.builder')) problems.push('Edit on an address with two splits opened the builder');
+  await page.getByText('It splits its mail with more than one rule.', { exact: false }).waitFor({ timeout: 20_000 }).catch(() => problems.push('the steps of an address with two splits don\'t say why'));
+  await page.locator('.addr-rule', { hasText: 'refund' }).first().click({ timeout: 20_000 });
+  const value = await builder.locator('#builder-value').inputValue({ timeout: 20_000 }).catch(() => null);
+  if (value !== 'refund') problems.push(`its refund rule opened ${value === null ? 'no builder field' : `the builder on "${value}"`}`);
+  if (await builder.getByRole('button', { name: 'One destination' }).count()) problems.push('the builder on one rule offers to reroute the address');
+  await builder.getByRole('button', { name: 'Cancel' }).click().catch(() => {});
+  // New rule → Split by words on an address with one split: asked, and Cancel writes nothing.
+  const one = (await api('/v1/inbound/addresses', 'POST', { address: 'guard-one@northwind.example', key: 'guard-one', flow: { deliver: [], split: { recipe: 'split-by-meaning', params: { meaning: 'a refund request', then: 'crm', otherwise: 'inbox:guard-one' } } } })).body;
+  const writes = [];
+  const onRequest = request => { if (request.method() !== 'GET' && request.url().startsWith(origin + '/v1/') && !request.url().includes('/v1/rules/test')) writes.push(`${request.method()} ${request.url().slice(origin.length)}`); };
+  page.on('request', onRequest);
+  await page.goto(origin + `/receiving/rules/new?address=${one.id}`);
+  await page.getByRole('link', { name: 'Split by words' }).click({ timeout: 20_000 });
+  await page.getByText('Replace the existing split?').waitFor({ timeout: 20_000 }).catch(() => problems.push('New rule\'s Split on an address that splits already didn\'t ask to replace it'));
+  if (await builder.locator('#builder-value').count()) problems.push('New rule\'s Split opened the existing split to change without asking');
+  await builder.getByRole('button', { name: 'Cancel' }).click().catch(() => {});
+  await page.waitForTimeout(300);
+  page.off('request', onRequest);
+  if (writes.length) problems.push(`Cancel on Replace the existing split? wrote: ${writes.join(', ')}`);
+  // The AI says Yes takes If yes (crm), No the other side (its inbox).
+  for (const [answer, want] of [['Yes', 'crm'], ['No', 'inbox']]) {
+    await page.goto(origin + `/receiving/addresses/${one.id}?tab=flow`);
+    await page.locator('.flow-sample summary').click({ timeout: 20_000 });
+    await page.locator('.flow-sample button[role=combobox]').click();
+    await page.getByRole('option', { name: answer, exact: true }).click();
+    await page.locator('.flow-panel').getByRole('button', { name: 'Test', exact: true }).click();
+    await page.waitForSelector('.flow-panel .flow[data-tested]', { timeout: 20_000 }).catch(() => {});
+    const ticked = await page.locator('.flow-panel .flow-stage').last().locator('.flow-item[data-hit=yes]').allInnerTexts();
+    if (ticked.length !== 1 || !ticked[0].toLowerCase().includes(want)) problems.push(`Test with The AI says ${answer} delivered to ${JSON.stringify(ticked)}, not ${want}`);
+  }
+  // A new address with two new webhooks whose one write fails (its rule write refused) leaves neither behind.
+  await page.goto(origin + '/receiving');
+  await page.getByRole('button', { name: 'New address', exact: true }).click({ timeout: 20_000 });
+  await builder.locator('#builder-address-input').fill('guard-fails@northwind.example');
+  await builder.getByRole('button', { name: 'Next' }).click();
+  await builder.getByRole('button', { name: 'Split with a rule' }).click({ timeout: 20_000 });
+  await builder.locator('#builder-value').fill('refund');
+  for (const [side, url] of [['then', 'https://hooks.northwind.example/guard-one'], ['otherwise', 'https://hooks.northwind.example/guard-two']]) {
+    await builder.locator(`#builder-${side}`).click();
+    await page.getByRole('option', { name: 'New webhook' }).click();
+    await builder.locator(`#builder-${side}-target`).fill(url);
+  }
+  await fx.db.query("CREATE FUNCTION cls_rule_refused() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'rule write refused'; END $$");
+  await fx.db.query('CREATE TRIGGER cls_rule_refused BEFORE INSERT OR UPDATE ON mail_ritual_configs FOR EACH ROW EXECUTE FUNCTION cls_rule_refused()');
+  expect500(r => r.url().endsWith('/v1/inbound/addresses') && r.request().method() === 'POST');
+  try {
+    const failed = page.waitForResponse(r => r.url().endsWith('/v1/inbound/addresses') && r.request().method() === 'POST', { timeout: 20_000 });
+    await builder.getByRole('button', { name: 'Save' }).click();
+    if ((await failed).status() !== 500) problems.push('the refused create didn\'t fail');
+  } finally { expect500(null); await fx.db.query('DROP TRIGGER cls_rule_refused ON mail_ritual_configs'); await fx.db.query('DROP FUNCTION cls_rule_refused()'); }
+  for (const name of ['guard-fails-webhook', 'guard-fails-webhook-2']) if ((await api('/v1/endpoints/' + name)).status !== 404) problems.push(`a failed create left ${name} behind`);
+  const retried = page.waitForResponse(r => r.url().endsWith('/v1/inbound/addresses') && r.request().method() === 'POST', { timeout: 20_000 });
+  await builder.getByRole('button', { name: 'Save' }).click();
+  if ((await retried).status() !== 201) problems.push(`Save again after a failed create returned ${(await retried).status()}`);
+  // The wildcard and catch-all route editor saves with the version it read: a change made meanwhile to its route is
+  // said and kept; one elsewhere in the workspace doesn't stop it.
+  const crm = (await api('/v1/inbound/overview?limit=50')).body.endpoints.find(e => e.name === 'crm' && e.source === 'endpoint');
+  const wild = (await api('/v1/routing/routes', 'POST', { match: 'guard-*@northwind.example', to: [crm.id] })).body;
+  const routeEditor = page.locator('[role=dialog]', { hasText: 'Where should this mail go?' });
+  const openEditor = async () => {
+    await page.goto(origin + '/receiving?kind=pattern&q=guard-');
+    await page.locator('.flow-panel').getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20_000 });
+    await routeEditor.locator('#routing-action').waitFor({ timeout: 20_000 });
+  };
+  const store = async () => { await routeEditor.locator('#routing-action').click(); await page.getByRole('option', { name: 'Stored 30 days, no inbox' }).click(); await routeEditor.getByRole('button', { name: 'Save' }).click(); };
+  await openEditor();
+  await api(`/v1/routing/routes/${wild.id}`, 'PATCH', { to: 'drop' });
+  await store();
+  await routeEditor.getByText('This changed since you opened it.', { exact: false }).waitFor({ timeout: 20_000 }).catch(() => problems.push('the route editor saved over a change made meanwhile, or didn\'t say so'));
+  if ((await api(`/v1/routing/routes/${wild.id}`)).body.to !== 'drop') problems.push('the route editor overwrote a change made meanwhile');
+  await openEditor();
+  await api('/v1/routing/routes', 'POST', { match: 'guard-other@northwind.example', to: [crm.id] });
+  await store();
+  await routeEditor.waitFor({ state: 'detached', timeout: 20_000 }).catch(() => problems.push('a change elsewhere in the workspace stopped the route editor\'s Save'));
+  if (JSON.stringify((await api(`/v1/routing/routes/${wild.id}`)).body.to) !== '[]') problems.push('the route editor\'s Save after a change elsewhere didn\'t land');
+  // An address's alias refuses a *, as New address does, pointing to the catch-all.
+  await page.goto(origin + `/receiving/addresses/${two.id}?tab=settings`);
+  await page.locator('.alias-input__field').waitFor({ state: 'attached', timeout: 20_000 });
+  await page.evaluate(() => document.querySelector('.alias-input__field')?.closest('details')?.setAttribute('open', ''));
+  await page.locator('.alias-input__field').fill('*', { timeout: 20_000 });
+  await page.keyboard.press('Enter');
+  if (!await page.getByRole('link', { name: 'Edit the catch-all' }).count()) problems.push('a * alias isn\'t pointed to the catch-all');
+}
 async function measure(browser, job, fx) {
   // The docs go to the server at the address their reference pages are painted for (paintedPort, below), so a visitor's
   // load is the painted page's.
@@ -1316,247 +1563,9 @@ async function measure(browser, job, fx) {
       result.screenshot = `${job.slug}.png`;
       await page.screenshot({ path: join(out, result.screenshot) });
     }
-    if (job.guard === 'sign-in-press' && job.mode === 'load') {
-      // A sign-in starts on a mouse's pointer down (data/context.tsx prepareLogin), never on a touch's: a scroll that begins
-      // on the button would hold one of the network's pending sign-ins. One press is one start either way. Refused at the
-      // cap (429 AUTH_STATE_LIMIT), the button is held for the wait the API gives: it keeps keyboard focus and its name,
-      // Enter and Space do nothing, and it works the moment the wait ends. A wait kept for the tab is never longer than the
-      // API's maximum (lib/countdown.ts), whatever is stored and however the system clock moves, and ends on waking from
-      // a sleep that outlasted it.
-      let starts = 0, wait = 2;
-      await page.route('**/api/auth/sign-in/account', route => { starts++; return route.fulfill({ status: 429, contentType: 'application/json', headers: { 'retry-after': String(wait) }, body: JSON.stringify({ error: { code: 'AUTH_STATE_LIMIT', message: 'Too many pending sign-ins.', details: [{ retryAfterSeconds: wait }] } }) }); });
-      const button = page.getByRole('button', { name: 'Continue to sign in' });
-      const settle = (ms = 500) => page.waitForTimeout(ms);
-      const state = () => button.evaluate(el => {
-        const shown = [...el.querySelectorAll('[data-shown]')].map(node => node.textContent).join(''), clock = /(\d+):(\d\d)/.exec(shown);
-        return { held: el.getAttribute('aria-disabled') === 'true', focused: document.activeElement === el, name: el.getAttribute('aria-label') ?? el.textContent.trim(), seconds: clock ? Number(clock[1]) * 60 + Number(clock[2]) : 0 };
-      });
-      const expectStarts = (n, what) => { if (starts !== n) problems.push(`${what} on Continue to sign in: ${starts} sign-in starts in all, expected ${n}`); };
-      if (job.device === 'phone') {
-        await button.dispatchEvent('pointerdown', { pointerType: 'touch', button: 0, isPrimary: true });
-        await button.dispatchEvent('pointercancel', { pointerType: 'touch', button: 0, isPrimary: true });
-        await settle();
-        expectStarts(0, 'a touch pointer down');
-        await button.tap();
-      } else await button.click();
-      await settle();
-      expectStarts(1, job.device === 'phone' ? 'one tap' : 'one mouse press');
-      await settle(wait * 1000);
-      // From the keyboard: Enter is refused, and focus stays on the held button.
-      await button.focus();
-      await page.keyboard.press('Enter');
-      await settle();
-      expectStarts(2, 'Enter');
-      let now = await state();
-      if (!now.held || !now.focused) problems.push(`refused, Continue to sign in was ${now.held ? 'held' : 'not held'} and ${now.focused ? 'kept' : 'lost'} keyboard focus`);
-      if (now.name !== 'Continue to sign in') problems.push(`held, Continue to sign in was named "${now.name}"`);
-      await page.keyboard.press('Enter');
-      await page.keyboard.press('Space');
-      await settle(200);
-      expectStarts(2, 'Enter and Space while held');
-      await settle(wait * 1000);
-      now = await state();
-      if (now.held || !now.focused) problems.push(`when the wait ended, Continue to sign in was ${now.held ? 'still held' : 'pressable'} and ${now.focused ? 'focused' : 'not focused'}`);
-      await page.keyboard.press('Enter');
-      await settle();
-      expectStarts(3, 'Enter when the wait ended');
-      if (job.device === 'desktop') {
-        await settle(wait * 1000);
-        const KEY = 'nightmail.sign-in-wait', MAX = 660;
-        const reload = async (value, offset = 0) => {
-          await page.evaluate(([key, value, offset]) => { if (value === null) sessionStorage.removeItem(key); else if (value !== undefined) sessionStorage.setItem(key, String(value)); sessionStorage.setItem('cls-clock-offset', String(offset)); }, [KEY, value, offset]);
-          await page.reload();
-          await button.waitFor();
-          await settle(300);
-          return state();
-        };
-        // The system clock moved: an init script offsets Date.now() by what the test puts in sessionStorage.
-        await page.addInitScript(() => { const offset = Number(sessionStorage.getItem('cls-clock-offset')) || 0; if (offset) { const real = Date.now.bind(Date); Date.now = () => real() + offset; } });
-        const at = await page.evaluate(() => Date.now());
-        for (const [what, value, held] of [['20 days ahead', at + 20 * 86_400_000, false], ['in the past', at - 1000, false], ['garbage', 'garbage', false], ['2 minutes ahead', at + 120_000, true]]) {
-          now = await reload(value);
-          if (now.held !== held || now.seconds > (held ? 120 : 0)) problems.push(`a kept wait ${what}: ${now.held ? `held for ${now.seconds} s` : 'not held'}, expected ${held ? 'at most 120 s' : 'not held'}`);
-        }
-        // Refused for 300 s, then the system clock moves an hour. Back: the wait keeps its time (performance.now() ends it).
-        // Forward: it is over (the system clock says so; the next press asks the API). Either way a reload drops the kept
-        // wait, as it is no longer a time within the API's maximum.
-        wait = 300;
-        for (const [what, hour, held] of [['back', -3_600_000, true], ['forward', 3_600_000, false]]) {
-          await reload(null);
-          await button.click();
-          await settle();
-          await page.evaluate(hour => { const real = Date.now.bind(Date); Date.now = () => real() + hour; }, hour);
-          await settle(1200);
-          now = await state();
-          if (now.held !== held || now.seconds > 300) problems.push(`refused for 300 s, the clock moved an hour ${what}: ${now.held ? `held for ${now.seconds} s` : 'released'}, expected ${held ? 'held for at most 300 s' : 'released'}`);
-          now = await reload(undefined, hour);
-          if (now.held) problems.push(`refused for 300 s, the clock moved an hour ${what}, then a reload: held for ${now.seconds} s, expected not held`);
-        }
-        // Refused for 300 s, then an hour asleep (a locked phone, a closed laptop): performance.now() stood still, the system
-        // clock didn't. Released on waking, and the next press asks the API.
-        await reload(null);
-        await button.click();
-        await settle();
-        const asleep = starts;
-        await page.evaluate(() => { const real = Date.now.bind(Date); Date.now = () => real() + 3_600_000; });
-        await settle(1200);
-        now = await state();
-        if (now.held) problems.push(`refused for 300 s, then an hour asleep: still held for ${now.seconds} s on waking`);
-        await button.click();
-        await settle();
-        if (starts !== asleep + 1) problems.push(`refused for 300 s, then an hour asleep: the next press started ${starts - asleep} sign-ins, expected 1`);
-        await page.evaluate(() => sessionStorage.removeItem('cls-clock-offset'));
-      }
-      await page.unroute('**/api/auth/sign-in/account');
-    }
-    if (job.guard === 'receiving-edit') {
-      // Saving through the address builder never changes an address's routes or rules it wasn't told to: New address
-      // turns away one that exists and a *, an unchanged Save writes nothing, and closing with a change asks first.
-      const writes = [];
-      const onRequest = request => { if (request.method() !== 'GET' && request.url().startsWith(origin + '/v1/')) writes.push(`${request.method()} ${request.url().slice(origin.length)}`); };
-      page.on('request', onRequest);
-      const snapshot = () => page.evaluate(async () => JSON.stringify([await (await fetch('/v1/routing/routes')).json(), (await (await fetch('/v1/rules')).json()).config]));
-      const before = await snapshot();
-      // New address turns away an address that exists and a *, writing nothing: it only creates.
-      const existing = await page.evaluate(async id => (await (await fetch('/v1/inbound/addresses/' + id)).json()).address, new URL(page.url()).searchParams.get('open'));
-      for (const typed of [existing, '*@' + existing.split('@')[1]]) {
-        await page.getByRole('button', { name: 'New address', exact: true }).click();
-        const dialog = page.locator('[role=dialog][data-state=open]');
-        await dialog.locator('#builder-address-input').fill(typed);
-        await dialog.getByRole('button', { name: 'Next' }).click();
-        await page.waitForTimeout(300);
-        if (!await dialog.locator('#builder-address-input').count()) problems.push(`New address went past its first step for ${typed.startsWith('*') ? 'a catch-all' : 'an address that exists'}`);
-        if (typed.startsWith('*') && !await dialog.getByRole('button', { name: 'Edit the catch-all' }).count()) problems.push('New address with * offers no way to the catch-all');
-        await dialog.getByRole('button', { name: 'Cancel' }).click();
-        // What was typed is a change: closing asks first.
-        const outcome = await askedOrLeft(page.getByRole('button', { name: 'Discard', exact: true }), page.locator('.builder').waitFor({ state: 'detached', timeout: 30_000 }));
-        if (outcome !== 'asked') problems.push(outcome === 'left' ? 'Cancel with an address typed closed New address without asking' : 'Cancel with an address typed neither asked nor closed');
-        else await page.getByRole('button', { name: 'Discard', exact: true }).click();
-        await page.locator('.builder').waitFor({ state: 'detached', timeout: 30_000 }).catch(() => problems.push('Discard left New address open'));
-      }
-      const edit = async () => { const clicked = await page.evaluate(() => { const button = [...document.querySelectorAll('.flow-panel button')].find(el => el.textContent.trim() === 'Edit'); button?.click(); return Boolean(button); }); if (clicked) await page.waitForSelector('.builder #builder-flow', { timeout: 10_000 }).catch(() => problems.push('Edit on the flow panel opened no builder for an address it can draw')); return clicked; };
-      if (!await edit()) problems.push('no Edit on the flow panel');
-      else {
-        // Save with nothing changed: the result, and no write.
-        await page.locator('.builder').getByRole('button', { name: 'Save' }).click();
-        await page.locator('.builder').getByRole('button', { name: 'Done' }).click({ timeout: 10_000 }).catch(() => problems.push('an unchanged Save showed no result'));
-        await page.waitForTimeout(300);
-        // A change, then Cancel: asked, and discarded.
-        if (await edit()) {
-          await page.locator('.builder').getByRole('button', { name: 'Split with a rule' }).click();
-          await page.locator('.builder').getByRole('button', { name: 'Cancel' }).click();
-          const outcome = await askedOrLeft(page.getByRole('button', { name: 'Discard', exact: true }), page.locator('.builder').waitFor({ state: 'detached', timeout: 30_000 }));
-          if (outcome !== 'asked') problems.push(outcome === 'left' ? 'Cancel after a change closed the builder without asking' : 'Cancel after a change neither asked nor closed the builder');
-          else {
-            await page.getByRole('button', { name: 'Discard', exact: true }).click();
-            await page.locator('.builder').waitFor({ state: 'detached', timeout: 30_000 }).catch(() => problems.push('Discard left the builder open'));
-          }
-        }
-      }
-      page.off('request', onRequest);
-      if (writes.length) problems.push(`Edit wrote to the API: ${writes.join(', ')}`);
-      if (await snapshot() !== before) problems.push('Edit changed the address\'s routes or rules');
-    }
-    if (job.guard === 'receiving-splits') {
-      // Runs alone, after every shared page: it adds addresses and rules. An address with two splits opens its steps
-      // (never a loop back to the same message), and each rule opens the builder on that rule; New rule's Split on an
-      // address that splits already asks before replacing; Test's AI answer takes its side; a new address whose one
-      // write fails leaves no endpoint behind, and Save again creates it.
-      const api = (path, method = 'GET', body) => page.evaluate(async ([path, method, body]) => { const r = await fetch(path, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) }); return { status: r.status, body: await r.json().catch(() => null) }; }, [path, method, body]);
-      const builder = page.locator('.builder[role=dialog]');
-      const split = (value, then, otherwise) => ({ recipe: 'split', params: { test: 'subject', value, then, otherwise } });
-      const two = (await api('/v1/inbound/addresses', 'POST', { address: 'guard-two@northwind.example', key: 'guard-two', flow: { deliver: [], split: split('invoice', 'crm', 'inbox:guard-two') } })).body;
-      const second = (await api(`/v1/inbound/addresses/${two.id}/flow`, 'PATCH', { split: split('refund', 'store', 'inbox:guard-two') })).body;
-      const config = (await api('/v1/rules')).body;
-      const mine = config.config.attachments.filter(a => a.target === two.id), rest = config.config.attachments.filter(a => a.target !== two.id);
-      await api('/v1/rules/attachments', 'PUT', { attachments: [...rest, ...mine.reverse()] });
-      await page.goto(origin + `/receiving/addresses/${two.id}?tab=flow`);
-      await page.locator('.flow-panel').getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20_000 });
-      await page.waitForURL(/edit=1/, { timeout: 10_000 }).catch(() => problems.push('Edit on an address with two splits didn\'t open its steps'));
-      if (await page.$('.builder')) problems.push('Edit on an address with two splits opened the builder');
-      await page.getByText('It splits its mail with more than one rule.', { exact: false }).waitFor({ timeout: 20_000 }).catch(() => problems.push('the steps of an address with two splits don\'t say why'));
-      await page.locator('.addr-rule', { hasText: 'refund' }).first().click({ timeout: 20_000 });
-      const value = await builder.locator('#builder-value').inputValue({ timeout: 20_000 }).catch(() => null);
-      if (value !== 'refund') problems.push(`its refund rule opened ${value === null ? 'no builder field' : `the builder on "${value}"`}`);
-      if (await builder.getByRole('button', { name: 'One destination' }).count()) problems.push('the builder on one rule offers to reroute the address');
-      await builder.getByRole('button', { name: 'Cancel' }).click().catch(() => {});
-      // New rule → Split by words on an address with one split: asked, and Cancel writes nothing.
-      const one = (await api('/v1/inbound/addresses', 'POST', { address: 'guard-one@northwind.example', key: 'guard-one', flow: { deliver: [], split: { recipe: 'split-by-meaning', params: { meaning: 'a refund request', then: 'crm', otherwise: 'inbox:guard-one' } } } })).body;
-      const writes = [];
-      const onRequest = request => { if (request.method() !== 'GET' && request.url().startsWith(origin + '/v1/') && !request.url().includes('/v1/rules/test')) writes.push(`${request.method()} ${request.url().slice(origin.length)}`); };
-      page.on('request', onRequest);
-      await page.goto(origin + `/receiving/rules/new?address=${one.id}`);
-      await page.getByRole('link', { name: 'Split by words' }).click({ timeout: 20_000 });
-      await page.getByText('Replace the existing split?').waitFor({ timeout: 20_000 }).catch(() => problems.push('New rule\'s Split on an address that splits already didn\'t ask to replace it'));
-      if (await builder.locator('#builder-value').count()) problems.push('New rule\'s Split opened the existing split to change without asking');
-      await builder.getByRole('button', { name: 'Cancel' }).click().catch(() => {});
-      await page.waitForTimeout(300);
-      page.off('request', onRequest);
-      if (writes.length) problems.push(`Cancel on Replace the existing split? wrote: ${writes.join(', ')}`);
-      // The AI says Yes takes If yes (crm), No the other side (its inbox).
-      for (const [answer, want] of [['Yes', 'crm'], ['No', 'inbox']]) {
-        await page.goto(origin + `/receiving/addresses/${one.id}?tab=flow`);
-        await page.locator('.flow-sample summary').click({ timeout: 20_000 });
-        await page.locator('.flow-sample button[role=combobox]').click();
-        await page.getByRole('option', { name: answer, exact: true }).click();
-        await page.locator('.flow-panel').getByRole('button', { name: 'Test', exact: true }).click();
-        await page.waitForSelector('.flow-panel .flow[data-tested]', { timeout: 20_000 }).catch(() => {});
-        const ticked = await page.locator('.flow-panel .flow-stage').last().locator('.flow-item[data-hit=yes]').allInnerTexts();
-        if (ticked.length !== 1 || !ticked[0].toLowerCase().includes(want)) problems.push(`Test with The AI says ${answer} delivered to ${JSON.stringify(ticked)}, not ${want}`);
-      }
-      // A new address with two new webhooks whose one write fails (its rule write refused) leaves neither behind.
-      await page.goto(origin + '/receiving');
-      await page.getByRole('button', { name: 'New address', exact: true }).click({ timeout: 20_000 });
-      await builder.locator('#builder-address-input').fill('guard-fails@northwind.example');
-      await builder.getByRole('button', { name: 'Next' }).click();
-      await builder.getByRole('button', { name: 'Split with a rule' }).click({ timeout: 20_000 });
-      await builder.locator('#builder-value').fill('refund');
-      for (const [side, url] of [['then', 'https://hooks.northwind.example/guard-one'], ['otherwise', 'https://hooks.northwind.example/guard-two']]) {
-        await builder.locator(`#builder-${side}`).click();
-        await page.getByRole('option', { name: 'New webhook' }).click();
-        await builder.locator(`#builder-${side}-target`).fill(url);
-      }
-      await fx.db.query("CREATE FUNCTION cls_rule_refused() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'rule write refused'; END $$");
-      await fx.db.query('CREATE TRIGGER cls_rule_refused BEFORE INSERT OR UPDATE ON mail_ritual_configs FOR EACH ROW EXECUTE FUNCTION cls_rule_refused()');
-      expected500 = r => r.url().endsWith('/v1/inbound/addresses') && r.request().method() === 'POST';
-      try {
-        const failed = page.waitForResponse(r => r.url().endsWith('/v1/inbound/addresses') && r.request().method() === 'POST', { timeout: 20_000 });
-        await builder.getByRole('button', { name: 'Save' }).click();
-        if ((await failed).status() !== 500) problems.push('the refused create didn\'t fail');
-      } finally { expected500 = null; await fx.db.query('DROP TRIGGER cls_rule_refused ON mail_ritual_configs'); await fx.db.query('DROP FUNCTION cls_rule_refused()'); }
-      for (const name of ['guard-fails-webhook', 'guard-fails-webhook-2']) if ((await api('/v1/endpoints/' + name)).status !== 404) problems.push(`a failed create left ${name} behind`);
-      const retried = page.waitForResponse(r => r.url().endsWith('/v1/inbound/addresses') && r.request().method() === 'POST', { timeout: 20_000 });
-      await builder.getByRole('button', { name: 'Save' }).click();
-      if ((await retried).status() !== 201) problems.push(`Save again after a failed create returned ${(await retried).status()}`);
-      // The wildcard and catch-all route editor saves with the version it read: a change made meanwhile to its route is
-      // said and kept; one elsewhere in the workspace doesn't stop it.
-      const crm = (await api('/v1/inbound/overview?limit=50')).body.endpoints.find(e => e.name === 'crm' && e.source === 'endpoint');
-      const wild = (await api('/v1/routing/routes', 'POST', { match: 'guard-*@northwind.example', to: [crm.id] })).body;
-      const routeEditor = page.locator('[role=dialog]', { hasText: 'Where should this mail go?' });
-      const openEditor = async () => {
-        await page.goto(origin + '/receiving?kind=pattern&q=guard-');
-        await page.locator('.flow-panel').getByRole('button', { name: 'Edit', exact: true }).click({ timeout: 20_000 });
-        await routeEditor.locator('#routing-action').waitFor({ timeout: 20_000 });
-      };
-      const store = async () => { await routeEditor.locator('#routing-action').click(); await page.getByRole('option', { name: 'Stored 30 days, no inbox' }).click(); await routeEditor.getByRole('button', { name: 'Save' }).click(); };
-      await openEditor();
-      await api(`/v1/routing/routes/${wild.id}`, 'PATCH', { to: 'drop' });
-      await store();
-      await routeEditor.getByText('This changed since you opened it.', { exact: false }).waitFor({ timeout: 20_000 }).catch(() => problems.push('the route editor saved over a change made meanwhile, or didn\'t say so'));
-      if ((await api(`/v1/routing/routes/${wild.id}`)).body.to !== 'drop') problems.push('the route editor overwrote a change made meanwhile');
-      await openEditor();
-      await api('/v1/routing/routes', 'POST', { match: 'guard-other@northwind.example', to: [crm.id] });
-      await store();
-      await routeEditor.waitFor({ state: 'detached', timeout: 20_000 }).catch(() => problems.push('a change elsewhere in the workspace stopped the route editor\'s Save'));
-      if (JSON.stringify((await api(`/v1/routing/routes/${wild.id}`)).body.to) !== '[]') problems.push('the route editor\'s Save after a change elsewhere didn\'t land');
-      // An address's alias refuses a *, as New address does, pointing to the catch-all.
-      await page.goto(origin + `/receiving/addresses/${two.id}?tab=settings`);
-      await page.locator('.alias-input__field').waitFor({ state: 'attached', timeout: 20_000 });
-      await page.evaluate(() => document.querySelector('.alias-input__field')?.closest('details')?.setAttribute('open', ''));
-      await page.locator('.alias-input__field').fill('*', { timeout: 20_000 });
-      await page.keyboard.press('Enter');
-      if (!await page.getByRole('link', { name: 'Edit the catch-all' }).count()) problems.push('a * alias isn\'t pointed to the catch-all');
-    }
+    if (job.guard === 'sign-in-press' && job.mode === 'load') await signInPressGuard(page, job, problems);
+    if (job.guard === 'receiving-edit') await receivingEditGuard(page, origin, problems);
+    if (job.guard === 'receiving-splits') await receivingSplitsGuard(page, origin, fx, problems, test => { expected500 = test; });
   })();
   work.catch(() => {}); // After a timeout the context closes under it.
   let timer;
@@ -1658,9 +1667,10 @@ try {
     // `wide` pages take the desktop passes at 3440 × 1440.
     const device = wide && pass === 'desktop' ? 'wide' : pass;
     const slug = `${name}-${device === 'phone' ? 'phone' : scheme}`.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const load = { name, path, user, scheme, device, support, live, leave: leave && device === 'desktop' && scheme === 'light', notes, panel, policyNotice, skipped, step, start, disclose, dialog, tab, menu, still, alone, notFound, waitlist, guard: guard && device === 'desktop' && scheme === 'light' || guard === 'sign-in-press' && device === 'phone' ? guard : undefined, firstTouch, lands, mode: 'load', slug: slug + '-load' };
-    jobs.push(load);
-    if (from) jobs.push({ name, path, user, from, click, row, switchTo, support, notes, panel, policyNotice, skipped, step, start, still, alone, scheme, device, mode: 'in-app', slug: slug + '-in-app' });
+    // What both ways of reaching a page share; a load adds what only a cold load checks, an in-app visit how it gets there.
+    const base = { name, path, user, scheme, device, support, notes, panel, policyNotice, skipped, step, start, still, alone };
+    jobs.push({ ...base, live, leave: leave && device === 'desktop' && scheme === 'light', disclose, dialog, tab, menu, notFound, waitlist, guard: guard && device === 'desktop' && scheme === 'light' || guard === 'sign-in-press' && device === 'phone' ? guard : undefined, firstTouch, lands, mode: 'load', slug: slug + '-load' });
+    if (from) jobs.push({ ...base, from, click, row, switchTo, mode: 'in-app', slug: slug + '-in-app' });
   }
   // Multi-step jobs (Support chat, live rules, Overview's full warm-up) start first so none trails alone at the end.
   const weight = job => (job.support ? 4 : 0) + (job.live ? 2 : 0) + (job.name === 'Overview' && job.mode === 'load' ? 3 : 0);

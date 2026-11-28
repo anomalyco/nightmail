@@ -106,7 +106,7 @@ export const healthColumnDefs: SkeletonColumn[] = [
   { key: 'now', label: 'Now', card: 'line' },
   { key: 'detail', label: 'Detail', width: '24%', card: 'line' },
 ]
-export const HealthSkeleton = () => <><HealthFacts /><TableSkeleton className="op-table" columns={healthColumnDefs} rows={8} /></>
+export const HealthSkeleton = () => <><HealthFacts /><TableSkeleton columns={healthColumnDefs} rows={8} /></>
 // A self-hosted installation has no operator area: Health is its whole page.
 export function SelfHostedHealthSkeleton() {
   return <><PageHeader title="Health" /><LoadingRegion label="Loading health"><div className="op-page"><HealthSkeleton /></div></LoadingRegion></>
@@ -216,7 +216,7 @@ export function abuseFacets({ band, alerts, lists, counts, outbox, onBand, onAle
 }
 export function AbuseSkeleton({ search }: { search: string }) {
   const view = abuseView(search)
-  return <SplitPane className="op-abuse" collapse="row" rail={<FacetRail label="Abuse views" groups={abuseFacets(view)} />}><TableSkeleton className="op-table" columns={view.lists ? listColumnDefs : view.alerts ? alertColumnDefs : clusterColumnDefs} rows={6} /></SplitPane>
+  return <SplitPane className="op-abuse" collapse="row" rail={<FacetRail label="Abuse views" groups={abuseFacets(view)} />}><TableSkeleton columns={view.lists ? listColumnDefs : view.alerts ? alertColumnDefs : clusterColumnDefs} rows={6} /></SplitPane>
 }
 export const dailyLimitError = 'A whole number from 1 to 10,000,000.'
 export const clusterFacts = ['Risk', 'Score', 'Accounts', 'Workspaces', 'First seen', 'Changed', 'Alert', 'Review'] as const
@@ -230,7 +230,7 @@ export function ClusterBodySkeleton() {
   return <div className="op-page" aria-hidden="true">
     <dl className="op-facts op-facts--four">{clusterFacts.map(title => <div key={title}><dt>{title}</dt><dd><Skeleton width={88} height={14} /></dd></div>)}</dl>
     <div className="op-grid"><section className="op-section"><SectionHeader title="Why" /><Skeleton height={224} /></section><section className="op-section"><SectionHeader title="Links" /><Skeleton height={224} /></section></div>
-    <section className="op-section"><SectionHeader title="Workspaces" /><TableSkeleton className="op-table" columns={clusterWorkspaceColumnDefs} rows={3} /></section>
+    <section className="op-section"><SectionHeader title="Workspaces" /><TableSkeleton columns={clusterWorkspaceColumnDefs} rows={3} /></section>
   </div>
 }
 export function OperatorClusterSkeleton({ actions }: { actions: boolean }) {
