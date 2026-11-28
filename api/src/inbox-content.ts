@@ -22,10 +22,13 @@ export function visibleMail(text: string | null, html: string | null, extract = 
   const links: { text: string; href: string; mismatch: boolean }[] = [];
   function walk(n: DefaultTreeAdapterMap['childNode']): string {
     if (n.nodeName === '#text' && 'value' in n) return strip(n.value);
-    if (!('tagName' in n)) return '';
+    // An Outlook conditional comment ([if mso], or [if !mso]><!-- that reveals markup to everyone else, cut short or
+    // not) shows Outlook other markup than this reads: flagged, never read as text.
+    if (!('tagName' in n)) { if ('data' in n && /^\[if\b/i.test(n.data.trim())) hiddenContent = true; return ''; }
     const attr = (k: string) => n.attrs.find((a) => a.name === k)?.value;
     if (
-      ['script', 'style', 'template', 'noscript', 'head', 'title', 'svg', 'math'].includes(n.tagName) || (n.tagName==='details' && attr('open')===undefined) || (hasStylesheet && (attr('class')!==undefined || attr('id')!==undefined)) ||
+      // A frame shows another document (or its srcdoc), and a client that plays or embeds the element shows none of its fallback text.
+      ['script', 'style', 'template', 'noscript', 'head', 'title', 'svg', 'math', 'iframe', 'noembed', 'noframes', 'object', 'applet', 'canvas', 'audio', 'video'].includes(n.tagName) || (n.tagName==='details' && attr('open')===undefined) || (hasStylesheet && (attr('class')!==undefined || attr('id')!==undefined)) ||
       attr('hidden') !== undefined ||
       attr('aria-hidden') === 'true' ||
       hides(attr('style')??'')

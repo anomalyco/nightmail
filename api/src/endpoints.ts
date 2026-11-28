@@ -207,12 +207,14 @@ const defaultJunk = (format: StoredFormat) => format === 'inbound' ? 'include' a
 /**
  * Locks an endpoint for a change: the address lane, then this approval's hold on what it changes, then the row: the
  * order every endpoint write takes them in, and a removal takes the approval before the rows it disables. A removal
- * that lands after this waits for the change and holds the endpoint again.
+ * that lands after this waits for the change and holds the endpoint again. `owned`: an approval may change or delete
+ * it only if it made it (approvalChanges), as for /v1/endpoints.
  */
-async function lockEndpoint(tx: DbExecutor, c: Ctx, w: string, where: { id: string } | { name: string }, hold = true) {
+async function lockEndpoint(tx: DbExecutor, c: Ctx, w: string, where: { id: string } | { name: string }, hold = true, owned = false) {
   await lockMailboxLane(tx, w, 'address');
-  const [found] = await tx.select({ id: endpoints.id, type: endpoints.type }).from(endpoints).where(and(eq(endpoints.workspaceId, w), 'id' in where ? eq(endpoints.id, where.id) : eq(endpoints.key, where.name)));
+  const [found] = await tx.select({ id: endpoints.id, type: endpoints.type, key: endpoints.key }).from(endpoints).where(and(eq(endpoints.workspaceId, w), 'id' in where ? eq(endpoints.id, where.id) : eq(endpoints.key, where.name)));
   if (!found) return null;
+  if (owned) await approvalChanges(tx, c, w, found);
   if (hold) await ownReceiving(tx, c, 'endpoint', found.id);
   // A short wait for the row (a forward's send holds it only from its last check to its commit), so a pause, rename,
   // resend or delete never queues behind a long one: past it the request is refused as busy (retryable), then the
@@ -224,6 +226,22 @@ async function lockEndpoint(tx: DbExecutor, c: Ctx, w: string, where: { id: stri
   });
   await tx.execute(sql`SELECT set_config('lock_timeout',${wait!.before},true)`);
   return row ?? null;
+}
+
+/** An approval (or a key it made) changes or deletes only an endpoint it made, and not one another owner's attached
+ *  rule calls or route delivers to: a new URL there would receive that owner's mail. */
+async function approvalChanges(tx: DbExecutor, c: Ctx, w: string, endpoint: { id: string; key: string | null }) {
+  const grant = c.get('actor').grantId;
+  if (!grant) return;
+  const { rows: [use] } = await tx.execute<{ made: boolean; called: boolean; routed: boolean }>(sql`SELECT
+    EXISTS (SELECT FROM mail_grant_objects WHERE grant_id = ${grant} AND workspace_id = ${w} AND kind = 'endpoint' AND resource = ${endpoint.id}) AS made,
+    EXISTS (SELECT FROM mail_ritual_configs r CROSS JOIN jsonb_array_elements(r.config->'attachments') b WHERE r.workspace_id = ${w} AND ${endpoint.key}::text IS NOT NULL
+      AND r.owners->>('attachment:' || (b->>'target') || ':' || (b->>'ritual')) IS DISTINCT FROM ${grant}
+      AND r.programs->'rituals'->(b->>'ritual')->'refs' ? ('endpoint:' || ${endpoint.key}::text)) AS called,
+    EXISTS (SELECT FROM mail_routes t WHERE t.workspace_id = ${w} AND t.destinations ? ${endpoint.id}
+      AND NOT EXISTS (SELECT FROM mail_grant_objects WHERE grant_id = ${grant} AND workspace_id = ${w} AND kind = 'route' AND resource = t.id)) AS routed`);
+  if (!use?.made) throw new ApiError(403, 'ENDPOINT_NOT_OWNED', 'This approval can change or delete only endpoints it created. Change this one in the dashboard.');
+  if (use.called || use.routed) throw new ApiError(403, 'ENDPOINT_NOT_OWNED', `Another owner’s ${use.called ? 'attached rule calls' : 'route delivers to'} this endpoint, so this approval cannot change or delete it. Change it in the dashboard.`);
 }
 
 // ── The writer ────────────────────────────────────────────────────────────────────────────
@@ -540,14 +558,14 @@ export function registerEndpoints(app: App) {
     return c.json({ ...created, ...(secret ? { secret } : {}), ...(q.type === 'forward' ? { confirmation: row.verified ? 'skipped' as const : 'emailed' as const } : {}), ...(createdSender ? { createdSender } : {}) }, 201);
   });
   app.openapi(createRoute({ ...meta, method: 'patch', path: `${base}/{name}`, operationId: 'updateEndpoint', summary: 'Edit an endpoint',
-    description: 'Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret and verificationToken once. A forward’s address is fixed (its recipient confirmed it); create a new forward instead.',
+    description: 'Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret and verificationToken once. A forward’s address is fixed (its recipient confirmed it); create a new forward instead. An MCP approval edits only endpoints it created that no other owner’s rule or route uses (403 ENDPOINT_NOT_OWNED).',
     request: { params: NameParam, body: json(UpdateEndpoint) }, responses: { 200: response(Endpoint.extend({
       secret: z.string().optional().describe('New webhook signing secret, shown once when moving an inbound-format webhook to a new URL.'),
       verificationToken: z.string().optional().describe('New X-Webhook-Verification-Token for an inbound-format webhook, shown once when its URL changes.'),
     }).openapi('UpdatedEndpoint')), ...errors } }), async c => {
     const w = receivingAdmin(c, manage).workspaceId, name = c.req.valid('param').name, { name: rename, ...q } = c.req.valid('json');
     const { row: updated, ...secrets } = await c.env.db.transaction(async tx => {
-      const row = await lockEndpoint(tx, c, w, { name });
+      const row = await lockEndpoint(tx, c, w, { name }, true, true);
       if (!row) throw missingEndpoint(name);
       const changed = await changeEndpointRecord(tx, c, row, { ...q, key: rename });
       const next = changed.row;
@@ -560,10 +578,10 @@ export function registerEndpoints(app: App) {
     if (secrets.secret || secrets.verificationToken) c.header('Cache-Control', 'no-store');
     return c.json({ ...await endpointView(c.env, w, endpointRowOf(updated)), ...secrets }, 200);
   });
-  app.openapi(createRoute({ ...meta, method: 'delete', path: `${base}/{name}`, operationId: 'deleteEndpoint', summary: 'Delete an endpoint', description: 'Delete an endpoint no rule or route uses.', request: { params: NameParam }, responses: { 200: response(z.object({ name: Name, deleted: z.literal(true) }).openapi('DeletedEndpoint')), ...errors } }), async c => {
+  app.openapi(createRoute({ ...meta, method: 'delete', path: `${base}/{name}`, operationId: 'deleteEndpoint', summary: 'Delete an endpoint', description: 'Delete an endpoint no rule or route uses. An MCP approval deletes only endpoints it created (403 ENDPOINT_NOT_OWNED).', request: { params: NameParam }, responses: { 200: response(z.object({ name: Name, deleted: z.literal(true) }).openapi('DeletedEndpoint')), ...errors } }), async c => {
     const w = receivingAdmin(c, manage).workspaceId, name = c.req.valid('param').name;
     await c.env.db.transaction(async tx => {
-      const row = await lockEndpoint(tx, c, w, { name }, false);
+      const row = await lockEndpoint(tx, c, w, { name }, false, true);
       if (!row) throw missingEndpoint(name);
       await deleteEndpointRecord(tx, c, row, false);
       await recordAudit(tx, c, { action: 'endpoint.delete', workspaceId: w, target: { type: 'endpoint', id: row.id }, before: { name, type: row.type } });

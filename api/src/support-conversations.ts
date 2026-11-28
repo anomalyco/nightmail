@@ -510,7 +510,7 @@ export function registerSupportConversations(app: App) {
     await supportPlatformOnly(c);
     const { rows: [row] } = await c.env.db.execute<{ id: string; status: z.infer<typeof Filed>['status']; filed: boolean; user: z.infer<typeof Filed>['user']; workspace: z.infer<typeof Filed>['workspace'];
       page: string | null; request_ids: string[] | null; messages: z.infer<typeof Filed>['messages'] }>(sql`SELECT s.id, s.status, coalesce((s.evidence->>'filed')::boolean, false) AS filed,
-        json_build_object('id', u.id, 'name', u.name, 'email', u.email) AS user,
+        json_build_object('id', u.id, 'name', u.name, 'email', CASE WHEN u.email_verified THEN u.email END) AS user,
         (SELECT json_build_object('id', w.id, 'name', w.name, 'role', m.role) FROM workspace_members m JOIN workspaces w ON w.id = m.workspace_id WHERE m.user_id = s.user_id AND m.workspace_id = s.workspace_id) AS workspace,
         h.page, h.request_ids,
         coalesce((SELECT json_agg(json_build_object('id', f.id, 'text', f.text, 'at', to_char(f.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')) ORDER BY f.seq)

@@ -3,7 +3,7 @@ import type { EmailSnapshot } from './db/sending.js';
 import { errorTypeOf, log } from './log.js';
 import { keepScreenCall, outbound } from './screen-calls.js';
 import { keepShadow, type ShadowItem } from './screen-shadow.js';
-import { unescapeCss, VISIBLE_WORDS } from './screened-html.js';
+import { cssRules, selectorList, selectorSubjects, stringEnd, unescapeCss, VISIBLE_WORDS } from './screened-html.js';
 import { formattedSender } from './sending.js';
 import { SEND_LIMITS } from './send-limits.js';
 
@@ -110,36 +110,8 @@ function host(value: string) {
 // as a client tokenizes it: identifiers, function names, property names and attribute names with their escapes decoded
 // (\61ttr( is attr(), data-\63opy is data-copy), and the same tokens decide what draws and what it draws. Past a budget
 // (distinct variants, var() depth, work) the message is refused as unreadable, never read in part.
-type CssRule = { prelude: string; decls: [string, string][] };
-/** Past the string literal that starts at i: its closing quote, the end of its line, or the end of the text. */
-function stringEnd(css: string, i: number) {
-  for (let j = i + 1; j < css.length; j++) { if (css[j] === '\\') j++; else if (css[j] === css[i] || css[j] === '\n') return j + 1; }
-  return css.length;
-}
 // An identifier as CSS tokenizes it, escapes included: custom property names (--x) too.
 const IDENT = /(?:--|-?(?:[_a-zA-Z\u0080-\uffff]|\\[0-9a-fA-F]{1,6}(?:\r\n|[ \t\n\r\f])?|\\[^\n\r\f0-9a-fA-F]))(?:[-\w\u0080-\uffff]|\\[0-9a-fA-F]{1,6}(?:\r\n|[ \t\n\r\f])?|\\[^\n\r\f0-9a-fA-F])*/y;
-/** A declaration's name as a client reads it: escapes decoded, case folded except for a custom property's. */
-const propertyName = (raw: string) => { const name = unescapeCss(raw.trim()); return name.startsWith('--') ? name : name.toLowerCase(); };
-/** Every rule's selector and declarations, those inside at-rules included; root collects bare declarations (a style attribute's). */
-function cssRules(css: string): CssRule[] {
-  const root: CssRule = { prelude: '', decls: [] }, rules = [root], stack = [root];
-  let buffer = '', parens = 0;
-  const flush = () => { const text = buffer.trim(), colon = text.indexOf(':'); buffer = ''; if (colon > 0 && !text.startsWith('@')) stack.at(-1)!.decls.push([propertyName(text.slice(0, colon)), text.slice(colon + 1).trim()]); };
-  for (let i = 0; i < css.length; i++) {
-    const c = css[i]!;
-    if (c === '"' || c === "'") { const end = stringEnd(css, i); buffer += css.slice(i, end); i = end - 1; }
-    else if (c === '\\') { buffer += css.slice(i, i + 2); i++; }
-    else if (c === '/' && css[i + 1] === '*') { const end = css.indexOf('*/', i + 2); i = end < 0 ? css.length : end + 1; buffer += ' '; }
-    else if (c === '(' || (c === ')' && parens)) { parens += c === '(' ? 1 : -1; buffer += c; }
-    else if (parens) buffer += c;
-    else if (c === '{') { const rule: CssRule = { prelude: buffer.trim(), decls: [] }; buffer = ''; rules.push(rule); stack.push(rule); }
-    else if (c === '}') { flush(); if (stack.length > 1) stack.pop(); }
-    else if (c === ';') flush();
-    else buffer += c;
-  }
-  flush();
-  return rules;
-}
 type Piece = { text: string } | { ident: string } | { attr: string; fallback?: Piece[] } | { variable: string; fallback?: Piece[] };
 /** The end of a function's arguments that start at i: its closing parenthesis (strings and escapes skipped), or the end. */
 function argumentsEnd(value: string, i: number) {
@@ -262,14 +234,11 @@ function cssReader(sheets: string[], styles: string[], hosts: Set<string>) {
   // Every declaration once without attributes (an element without them draws attr()'s fallback), then per element below.
   const texts = new Set(drawn.flatMap(d => evaluate(d.list, null, d.idents)).map(t => t.trim()).filter(Boolean));
   // Rules that may display an element: a display other than none, or all (which resets it), on a selector whose subject
-  // (its last compound, without pseudo-elements) has no type or that type, and only classes and an id the element has.
-  // A subject with an escape could name anything, so it may display any of them.
-  const subjects = rules.filter(rule => rule.prelude && !rule.prelude.startsWith('@') && displays(rule.decls)).flatMap(rule => rule.prelude.split(',').flatMap(selector => {
-    if (/::|:(?:before|after|first-line|first-letter)\b/i.test(selector)) return [];
-    const subject = selector.replace(/\[[^\]]*\]|\([^)]*\)/g, '').trim().split(/[\s>+~]+/).at(-1)!.toLowerCase();
-    if (subject.includes('\\')) return [{ tag: undefined, classes: [], ids: [] }];
-    return [{ tag: /^[a-z][\w-]*/.exec(subject)?.[0], classes: [...subject.matchAll(/\.([-\w]+)/g)].map(m => m[1]!), ids: [...subject.matchAll(/#([-\w]+)/g)].map(m => m[1]!) }];
-  }));
+  // (its last compound, without pseudo-elements) the element could meet (selectorSubjects). Past its budget the sheet
+  // is unreadable.
+  const subjects = selectorSubjects<true>(), step = () => { if (++steps > CSS_STEPS) throw unreadable(); };
+  for (const rule of rules) if (rule.prelude && !rule.prelude.startsWith('@') && displays(rule.decls))
+    for (const { bare } of selectorList(rule.prelude)) if (!/::|:(?:before|after|first-line|first-letter)\b/i.test(bare) && !subjects.add(bare, true)) throw unreadable();
   return {
     texts,
     /** What attr() draws for this element: every declaration that reads one of its attributes, with them resolved. */
@@ -281,7 +250,7 @@ function cssReader(sheets: string[], styles: string[], hosts: Set<string>) {
     /** Whether CSS may display an element a client hides by default. */
     shown: (tag: string, attrs: { name: string; value: string }[]) => {
       const style = attrs.find(a => a.name === 'style')?.value, classes = new Set((attrs.find(a => a.name === 'class')?.value ?? '').toLowerCase().split(/\s+/)), id = attrs.find(a => a.name === 'id')?.value.toLowerCase();
-      return (style !== undefined && displays(cssRules(style)[0]!.decls)) || subjects.some(s => (!s.tag || s.tag === tag) && s.classes.every(c => classes.has(c)) && s.ids.every(i => i === id));
+      return (style !== undefined && displays(cssRules(style)[0]!.decls)) || !subjects.matching({ tag, classes, id }, step).next().done;
     },
   };
 }

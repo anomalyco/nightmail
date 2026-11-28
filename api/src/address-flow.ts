@@ -81,14 +81,14 @@ async function forgetDomain(tx: DbExecutor, w: string, config: Config, host: str
   return hosts.has(host) ? config : { ...config, evaluateDomains: config.evaluateDomains.filter(d => d !== host) };
 }
 /** The rule config after the split change, every refusal included, before anything is written. */
-async function nextRules(tx: DbExecutor, w: string, config: Config, box: Address, flow: Flow): Promise<{ config: Config; rule: string | null; action: string }> {
+async function nextRules(tx: DbExecutor, c: Ctx, w: string, config: Config, box: Address, flow: Flow): Promise<{ config: Config; rule: string | null; action: string }> {
   const split = flow.split, base = `${split?.recipe}-${box.address.split('@')[0]}`;
   const mine = (target: string) => target === box.id || target === box.address;
   // Named after the recipe and the address, as createRuleFromRecipe names one: split-support, split-support-2.
   if (!flow.rule) {
     if (!split) return { config, rule: null, action: '' };
     const key = freeKey(config, base);
-    return { config: await applyRecipe(config, tx, w, key, split.recipe, split.params, [box.id], undefined), rule: key, action: 'ritual.recipe' };
+    return { config: await applyRecipe(config, tx, c, w, key, split.recipe, split.params, [box.id], undefined), rule: key, action: 'ritual.recipe' };
   }
   const key = flow.rule, prev = config.rituals.find(r => r.key === key);
   if (!prev) throw new ApiError(404, 'NOT_FOUND', `Rule ${key} was not found.`, 'rule');
@@ -102,13 +102,13 @@ async function nextRules(tx: DbExecutor, w: string, config: Config, box: Address
     const attachments = config.attachments.filter(a => !(a.ritual === key && mine(a.target)));
     return { config: await forget({ ...config, attachments, rituals: shared ? config.rituals : config.rituals.filter(r => r.key !== key) }), rule: null, action: shared ? 'ritual.attach' : 'ritual.delete' };
   }
-  const rewritten = await applyRecipe(config, tx, w, key, split.recipe, split.params, undefined, undefined);
+  const rewritten = await applyRecipe(config, tx, c, w, key, split.recipe, split.params, undefined, undefined);
   if (same(rewritten.rituals.find(r => r.key === key), prev)) return { config, rule: key, action: '' };
   if (!shared) return { config: await forget(rewritten), rule: key, action: 'ritual.recipe' };
   // Shared: the other addresses keep the rule as it is; this address's attachments run its own copy, in their places.
   const copy = freeKey(config, base);
   const moved = { ...config, attachments: config.attachments.map(a => a.ritual === key && mine(a.target) ? { ...a, ritual: copy } : a) };
-  return { config: await forget(await applyRecipe(moved, tx, w, copy, split.recipe, split.params, here.map(a => a.target), prev.enabled)), rule: copy, action: 'ritual.recipe' };
+  return { config: await forget(await applyRecipe(moved, tx, c, w, copy, split.recipe, split.params, here.map(a => a.target), prev.enabled)), rule: copy, action: 'ritual.recipe' };
 }
 
 /**
@@ -136,7 +136,7 @@ export async function applyFlow(tx: DbExecutor, c: Ctx, w: string, box: Address,
     await recordAudit(tx, c, { action: 'endpoint.create', workspaceId: w, target: { type: 'endpoint', id: forward.id }, after: { name: f.name, type: 'forward', address: f.address, preverified: forward.verified } });
   }
   if (Array.isArray(flow.deliver)) flow = { ...flow, deliver: flow.deliver.map(ref => made.get(ref) ?? ref) };
-  const before = await currentRules(tx, w), rules = await nextRules(tx, w, before.config, box, flow);
+  const before = await currentRules(tx, w), rules = await nextRules(tx, c, w, before.config, box, flow);
   let saved = version;
   if (flow.deliver !== undefined) {
     const routes = await listRoutes(tx, w), prev = routes.find(r => r.match === box.address), deliver = flow.deliver;

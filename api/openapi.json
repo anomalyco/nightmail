@@ -19611,7 +19611,8 @@
             "description": "The inviter’s display name as plain words, like workspaceName; may be empty. Identify the inviter by inviterEmail."
           },
           "inviterEmail": {
-            "type": "string"
+            "type": "string",
+            "description": "The inviter’s verified address; empty when they have none."
           },
           "role": {
             "type": "string",
@@ -49105,7 +49106,7 @@
         ],
         "operationId": "updateEndpoint",
         "summary": "Edit an endpoint",
-        "description": "Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret and verificationToken once. A forward’s address is fixed (its recipient confirmed it); create a new forward instead.",
+        "description": "Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret and verificationToken once. A forward’s address is fixed (its recipient confirmed it); create a new forward instead. An MCP approval edits only endpoints it created that no other owner’s rule or route uses (403 ENDPOINT_NOT_OWNED).",
         "parameters": [
           {
             "schema": {
@@ -49279,7 +49280,7 @@
         ],
         "operationId": "deleteEndpoint",
         "summary": "Delete an endpoint",
-        "description": "Delete an endpoint no rule or route uses.",
+        "description": "Delete an endpoint no rule or route uses. An MCP approval deletes only endpoints it created (403 ENDPOINT_NOT_OWNED).",
         "parameters": [
           {
             "schema": {

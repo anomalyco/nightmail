@@ -6693,6 +6693,9 @@ export type WorkspaceInvitationPreview = {
      * The inviter’s display name as plain words, like workspaceName; may be empty. Identify the inviter by inviterEmail.
      */
     inviterName: string;
+    /**
+     * The inviter’s verified address; empty when they have none.
+     */
     inviterEmail: string;
     role: 'owner' | 'admin' | 'member';
     expiresAt: string;

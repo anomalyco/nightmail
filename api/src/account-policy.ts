@@ -62,6 +62,9 @@ export function githubVerifiedAddress(acr: unknown, upstream: ProviderIdentity |
 
 /** How long a sign-in's proof of the mailbox (provenMailbox) lets email speak for the account. */
 export const MAILBOX_PROOF_DAYS = 7;
+/** A user's email when it is verified, else null: the only address anything sends to or vouches for as the person's. An
+ *  unverified one is what a sign-in asserted without its provider vouching for it, and may be anyone's. */
+export const verifiedUserEmail = (userId: SQL) => sql`(SELECT email FROM nightmail_users WHERE id = ${userId} AND email_verified)`;
 /**
  * Whether the account row `u` (nightmail_users) has an address its person proved, signed in, to be a mailbox they read:
  * a sign-in whose provenMailbox was that address (recorded at sign-in, account-login.ts) within MAILBOX_PROOF_DAYS, and the

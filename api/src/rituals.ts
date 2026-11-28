@@ -202,21 +202,40 @@ export async function save(tx: DbExecutor, c: Ctx, w: string, input: Config, ver
     ...Object.entries(cfg.senderLists).map(([k,v])=>['list:'+k,JSON.stringify(v)] as const),
     ...cfg.evaluateDomains.map(k=>['domain:'+k,k] as const),...cfg.evaluateRoutes.map(k=>['route:'+k,k] as const),
   ]);
-  const before=prior&&parts(prior.config), grant=c.get('actor').grantId??null;
+  const before=prior&&parts(prior.config), after=parts(config), grant=c.get('actor').grantId??null;
   if (prior && grant && !preview) {
     // Ignore additions and this approval's own bindings. What remains must be the
     // same chain, including continue flags: the first action can stop later guards.
     const protectedBindings=prior.config.attachments.filter(b=>prior.owners[bindingKey(b)]!==grant);
-    const protectedKeys=new Set(protectedBindings.map(bindingKey));
+    const protectedKeys=new Set(protectedBindings.map(bindingKey)), rulesRun=[...new Set(protectedBindings.map(b=>b.ritual))];
     const retained=config.attachments.filter(b=>protectedKeys.has(bindingKey(b)));
     if (retained.length!==protectedBindings.length || retained.some((b,i)=>bindingKey(b)!==bindingKey(protectedBindings[i]) || b.continue!==protectedBindings[i].continue))
       throw new ApiError(403,'RULE_BINDING_NOT_OWNED','This approval cannot remove, change, or reorder another owner’s rule attachments.','attachments');
-    // Turning a rule off stops its attachments like removing them would.
+    // The approval's attachments go after every one of another owner's, except where they already were: one placed ahead
+    // of them on the same mail (an address and its inbox ID are the same mail, and routes deliver one into another) could
+    // stop the chain first or crowd those rules out of the per-address limit.
+    const placed=new Map(prior.config.attachments.map((b,i)=>[bindingKey(b),i])), ahead=(b:Config['attachments'][number],q:Config['attachments'][number])=>(placed.get(bindingKey(b))??Infinity)<placed.get(bindingKey(q))!;
+    if (config.attachments.some((b,i)=>!protectedKeys.has(bindingKey(b)) && config.attachments.slice(i+1).some(q=>protectedKeys.has(bindingKey(q)) && !ahead(b,q))))
+      throw new ApiError(403,'RULE_BINDING_NOT_OWNED','This approval’s rule attachments go after every attachment of another owner’s.','attachments');
+    // Turning a rule off stops its attachments like removing them would; turning one its owner paused back on runs it
+    // when they chose not to.
     const off=(cfg:Config)=>new Set(cfg.rituals.filter(r=>r.enabled===false).map(r=>r.key)),was=off(prior.config),now=off(config);
-    if (protectedBindings.some(b=>now.has(b.ritual)&&!was.has(b.ritual)))
-      throw new ApiError(403,'RULE_BINDING_NOT_OWNED','This approval cannot turn off another owner’s rule.','enabled');
+    if (rulesRun.some(k=>now.has(k)!==was.has(k)))
+      throw new ApiError(403,'RULE_BINDING_NOT_OWNED','This approval cannot turn another owner’s attached rule on or off.','enabled');
+    // What those attachments run stays as it was: the rule's source, the sender lists it reads and, for a rule that asks
+    // for decisions, every opt-in it could read under. Changed by the approval, it would run the approval's code as the
+    // other owner's rule, and become the approval's, so revoking the approval would stop the other owner's rule.
+    const changed=(key:string)=>before?.get(key)!==after.get(key);
+    if (rulesRun.some(k=>changed('ritual:'+k)))
+      throw new ApiError(403,'RULE_BINDING_NOT_OWNED','This approval cannot change the source of another owner’s attached rule.','rules');
+    const read=rulesRun.flatMap(k=>(p.rituals[k]?.lists??[]).map(l=>'list:'+l.name));
+    if (read.some(changed))
+      throw new ApiError(403,'RULE_BINDING_NOT_OWNED','This approval cannot change a sender list another owner’s attached rule reads.','senderLists');
+    const optIns=[...new Set([...before?.keys()??[],...after.keys()])].filter(k=>(k.startsWith('domain:')||k.startsWith('route:'))&&changed(k));
+    if (optIns.length && rulesRun.some(k=>Object.keys(p.rituals[k]?.omens??{}).length))
+      throw new ApiError(403,'RULE_BINDING_NOT_OWNED','This approval cannot change the decision opt-ins another owner’s attached rule reads.',optIns[0]!.startsWith('domain:')?'evaluateDomains':'evaluateRoutes');
   }
-  p.owners=Object.fromEntries([...parts(config)].map(([k,v])=>[k,before?.get(k)===v?prior?.owners[k]??null:preview?null:grant]));
+  p.owners=Object.fromEntries([...after].map(([k,v])=>[k,before?.get(k)===v?prior?.owners[k]??null:preview?null:grant]));
   if (!routed) await tx.execute(
     sql`INSERT INTO mail_routing_state(workspace_id,version) VALUES(${w},${next}) ON CONFLICT(workspace_id) DO UPDATE SET version=excluded.version`,
   );
@@ -491,14 +510,16 @@ async function targetInboxes(tx: DbExecutor, w: string, targets: string[]) {
 }
 const stageOf = (config: Config, key: string) => { const r = config.rituals.find(x => x.key === key); return r?.recipe ? ritualRecipes.find(x => x.id === r.recipe!.id)?.stage ?? 2 : 3; };
 /** Attaches `key` to each target it isn't on yet: after the address's recipes of its stage and before any later stage
- *  or script, so recipes act independently (continue) and a script's "stop the rest" never silences one. Attachments
- *  on targets no longer listed are removed; the rest keep their place. */
-function placeRecipe(config: Config, key: string, targets: string[], inbox: (target: string) => string): Config['attachments'] {
+ *  or script, so recipes act independently (continue) and a script's "stop the rest" never silences one, and never ahead
+ *  of an attachment `held` by another owner (an approval's go after those, see save). Attachments on targets no longer
+ *  listed are removed; the rest keep their place. */
+function placeRecipe(config: Config, key: string, targets: string[], inbox: (target: string) => string, held: (a: Config['attachments'][number]) => boolean): Config['attachments'] {
   const stage = stageOf(config, key);
   let list = config.attachments.filter(a => a.ritual !== key || targets.includes(a.target));
+  const floor = list.reduce((n, a, i) => held(a) ? i + 1 : n, 0);
   for (const target of targets) {
     if (list.some(a => a.ritual === key && a.target === target)) continue;
-    const at = list.findIndex(a => inbox(a.target) === inbox(target) && stageOf(config, a.ritual) > stage);
+    const at = list.findIndex((a, i) => i >= floor && inbox(a.target) === inbox(target) && stageOf(config, a.ritual) > stage);
     const entry = { ritual: key, target, continue: true };
     list = at < 0 ? [...list, entry] : [...list.slice(0, at), entry, ...list.slice(at)];
   }
@@ -510,7 +531,7 @@ export const freeKey = (config: Config, base: string) => {
 };
 /** Writes a recipe's rule into the config: its source, its recipe, where it runs (addresses, or where it runs now) and,
  *  for an AI recipe, the decision opt-in for the domains of those addresses. */
-export async function apply(config: Config, tx: DbExecutor, w: string, key: string, recipeId: string, input: RecipeParams, addresses: string[] | undefined, enabled: boolean | undefined) {
+export async function apply(config: Config, tx: DbExecutor, c: Ctx, w: string, key: string, recipeId: string, input: RecipeParams, addresses: string[] | undefined, enabled: boolean | undefined) {
   const built = buildRecipe(recipeId, input, await endpointKinds(tx, w));
   if (!built.ok) throw new ApiError(422, built.field === 'recipe' ? 'UNKNOWN_RECIPE' : 'INVALID_RECIPE', built.message, built.field);
   const prev = config.rituals.find(r => r.key === key);
@@ -520,7 +541,10 @@ export async function apply(config: Config, tx: DbExecutor, w: string, key: stri
   const named = addresses || built.recipe.decisions ? await targetAddresses(tx, w, targets) : [];
   const hosts = built.recipe.decisions ? named.map(a => a.split('@')[1]!.toLowerCase()) : [];
   const inbox = await targetInboxes(tx, w, [...targets, ...next.attachments.map(a => a.target)]);
-  return { ...next, attachments: placeRecipe(next, key, targets, inbox), evaluateDomains: [...new Set([...next.evaluateDomains, ...hosts])] };
+  // For an approval, the attachments another owner holds (save's protected bindings).
+  const grant = c.get('actor').grantId, owners = grant ? (await tx.execute<{ owners: Record<string, string | null> }>(sql`SELECT owners FROM mail_ritual_configs WHERE workspace_id=${w}`)).rows[0]?.owners ?? {} : {};
+  const held = (a: Config['attachments'][number]) => !!grant && Object.hasOwn(owners, `attachment:${a.target}:${a.ritual}`) && owners[`attachment:${a.target}:${a.ritual}`] !== grant;
+  return { ...next, attachments: placeRecipe(next, key, targets, inbox, held), evaluateDomains: [...new Set([...next.evaluateDomains, ...hosts])] };
 }
 function registerRecipes(app: App, item: string, keyParams: z.ZodObject<{ key: z.ZodString }>) {
   rule(app, {
@@ -551,7 +575,7 @@ function registerRecipes(app: App, item: string, keyParams: z.ZodObject<{ key: z
       if (q.key && config.rituals.some(r => r.key === q.key)) throw new ApiError(409, 'RULE_EXISTS', `A rule named ${q.key} exists. Change it with updateRuleFromRecipe.`, 'key');
       // Named after the recipe and its first address unless a key is given: slack-support, slack-support-2.
       key = q.key ?? freeKey(config, `${q.recipe}-${(await targetAddresses(tx, w, [q.addresses[0]!]))[0]!.split('@')[0]}`);
-      return apply(config, tx, w, key, q.recipe, q.params, q.addresses, q.enabled);
+      return apply(config, tx, c, w, key, q.recipe, q.params, q.addresses, q.enabled);
     }, { action: 'ritual.recipe', get target() { return { type: 'ritual', id: key }; }, after: () => ({ key, recipe: q.recipe }) });
     return c.json({ ...stateOf(result), key }, 201);
   });
@@ -568,7 +592,7 @@ function registerRecipes(app: App, item: string, keyParams: z.ZodObject<{ key: z
       if (!prev) throw new ApiError(404, 'NOT_FOUND', 'Rule not found.');
       const recipe = q.recipe ?? prev.recipe?.id;
       if (!recipe) throw new ApiError(422, 'NOT_A_RECIPE', `${key} is a script. Pass recipe to rewrite it from one, or edit it with saveRule.`, 'recipe');
-      return apply(config, tx, w, key, recipe, q.params, q.addresses, q.enabled);
+      return apply(config, tx, c, w, key, recipe, q.params, q.addresses, q.enabled);
     }, { action: 'ritual.recipe', target: { type: 'ritual', id: key }, after: () => ({ key }) })), 200);
   });
   rule(app, {
