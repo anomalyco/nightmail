@@ -14,7 +14,7 @@ import { X509Certificate, verify } from 'node:crypto';
 import { isIP } from 'node:net';
 import { actor, ApiError, assertSesConfigured, chargeBudget, denied, requiredOf, restrictedArea, unrestrictedRequired, assertSharedAccount, isSimulatedSes, digest, errors, getSes, id, rowId, IdParams, json, lazyModule, log, logError, ModuleLoadError, notFound, PageQuery, preloadSesTransport, randomSecret, redactCapabilityData, region, response, security, senderDomainAllowed, simulatedTopic, taggedEmailId, wrapModuleLoad, type App, type Actor, type Ctx, type Config, type Database, type DbExecutor, type JobHandler, type Permission, type Runtime } from './core.js';
 import { chargeManualDelivery, claimedWithWebhooks, enqueue, JobDeferred, WEBHOOK_ATTEMPTS, retryDatabaseFailures, webhookClaimCtes } from './jobs.js';
-import { applyClaim, connectionReady, domainHosts, receivingSetup, type ReceivingSetup, hostGraceStart, identityOnly, LOST_GRACE_MS, poolReceives, poolSends, transitionClaim, type ClaimEvidence, type ClaimState, type HostEvidence, type HostStatus, type HostWrite, type IdentityFacts, type TenantState, PROOF_LABELS, proofRecordName, type ProofLabel } from './states.js';
+import { applyClaim, connectionReady, domainHosts, receivingSetup, type ReceivingSetup, hostGraceStart, identityOnly, LOST_GRACE_MS, poolReceives, poolSends, transitionClaim, type ClaimEvidence, type ClaimState, type HostEvidence, checkedHostStatus, hostRemoved, hostRoutes, type HostWrite, type IdentityFacts, type TenantState, PROOF_LABELS, proofRecordName, type ProofLabel } from './states.js';
 import { WORKSPACE_FOCUS, type WorkspaceFocus } from './workspace-focus.js';
 import { SETUP_LIMITS, SETUP_SENDER } from './setup-email.js';
 import { jobs } from './db/core.js';
@@ -437,7 +437,7 @@ export function derivedReadiness(row: ClaimRow, config?: Pick<Config, 'builtinSc
   // domain's existing mail), and never one of Nightmail's own names. DNS checks refine this to a free host. Every other
   // host is exactly where it was added, and a host the owner removed has no record.
   const ses=facts?.ses, chosen=facts?.receivingChoice ?? null, hosts=row.hosts ?? [], own=hosts.find(h=>h.own), established=establishedHost(row);
-  const others=hosts.filter(h=>!h.own && h.status!=='disabled' && h.status!=='disabling');
+  const others=hosts.filter(h=>!h.own && !hostRemoved(h.status));
   const rootActive=established===row.name || chosen===row.name || (facts?.mx?.expected.name===row.name && facts.mx.state==='active');
   const receivingName=(name:string)=>established ?? (chosen && !baneRecordUse(chosen,row.name,ses) ? chosen : (name===row.name && !rootActive) || baneRecordUse(name,row.name,ses) ? defaultReceivingHost(row.name,ses) : name);
   const template=report.dns.find(r=>r.purpose==='receiving');
@@ -502,11 +502,11 @@ async function saveObservation(db:DbExecutor,row:HostedDomain,wid:string,ses:Ide
   // An MX-only observation never routes a new host without fresh ownership proof.
   const allow=(h:{status:string},on:boolean|undefined)=>on===undefined ? undefined : on && (evidence.proven || h.status==='active');
   const own:HostEvidence|null=ownRow?.status==='disabled' ? {host:ownRow.host,status:'disabled',lost_since:null,live:undefined}
-    : {host:ownHost,status:ownRow ? hostStatus(ownRow.status) : 'waiting_for_mx',lost_since:ownRow ? seed(ownRow) : null,live:allow(ownRow ?? {status:'waiting_for_mx'},observed===undefined ? undefined : observed!==null)};
+    : {host:ownHost,status:ownRow ? checkedHostStatus(ownRow.status) : 'waiting_for_mx',lost_since:ownRow ? seed(ownRow) : null,live:allow(ownRow ?? {status:'waiting_for_mx'},observed===undefined ? undefined : observed!==null)};
   const evidenceFor=(h:ReceivingHostRow):HostEvidence=>{
     const seenThere=observation?.hosts.get(h.host);
     if (seenThere) hostIssues.set(h.host,seenThere.issue);
-    return {host:h.host,status:hostStatus(h.status),lost_since:seed(h),live:allow(h,seenThere ? live(seenThere.mx) && !(seenThere.issue && refusedCodes.has(seenThere.issue.code)) : undefined)};
+    return {host:h.host,status:checkedHostStatus(h.status),lost_since:seed(h),live:allow(h,seenThere ? live(seenThere.mx) && !(seenThere.issue && refusedCodes.has(seenThere.issue.code)) : undefined)};
   };
   let input=[own,...others.map(evidenceFor)];
   const regionReceives=row.claim_scope!=='account' && (byo || row.pool_receiving);
@@ -532,8 +532,7 @@ async function saveObservation(db:DbExecutor,row:HostedDomain,wid:string,ses:Ide
     });
     await applyClaim(db,ref,next.claim,{ses,dmarc,proven:evidence.proven,mx,note,issue,receivingChoice:row.identity?.receivingChoice ?? null,imported:row.identity?.imported,adopted:row.identity?.adopted},writes);
   };
-  const routes=(s:string)=>s==='active' || s==='provisioning';
-  const newlyRouting=()=>input.filter((h,i)=>routes(next.hosts[i]!.status) && !routes(h.status)).map(h=>h.host);
+  const newlyRouting=()=>input.filter((h,i)=>hostRoutes(next.hosts[i]!.status) && !hostRoutes(h.status)).map(h=>h.host);
   if (newlyRouting().length) {
     // Two domains can both read a host as free above and then race to route it; the unique indexes decide. The loser
     // reports host_taken on that host instead of failing the job (the savepoint keeps the transaction usable).
@@ -557,11 +556,9 @@ async function saveObservation(db:DbExecutor,row:HostedDomain,wid:string,ses:Ide
   if (row.sending_state==='lost' && next.claim.sending_state==='pending' && !evidence.definitive && !evidence.unavailable && !evidence.sendingRevoked)
     await (await wrapModuleLoad(() => import('./account-notices.js'))).domainUnverified(db,wid,{id:row.id,name:row.name,lostSince:row.lost_since ? String(row.lost_since) : null});
   if (row.connection.legacy===false) return next.claim;
-  if (byo && (next.claim.receiving_host!==row.receiving_host || next.hosts.some((s,i)=>s.status==='provisioning' || routes(s.status)!==routes(input[i]!.status)))) await (await wrapModuleLoad(() => import('./mailbox-setup.js'))).queueReconcile(db,wid,row.region);
+  if (byo && (next.claim.receiving_host!==row.receiving_host || next.hosts.some((s,i)=>s.status==='provisioning' || hostRoutes(s.status)!==hostRoutes(input[i]!.status)))) await (await wrapModuleLoad(() => import('./mailbox-setup.js'))).queueReconcile(db,wid,row.region);
   return next.claim;
 }
-/** Hosted rows only ever take the four host states; anything else (a self-hosted leftover) reads as waiting for its MX. */
-const hostStatus=(status:string):HostStatus=>status==='active' || status==='provisioning' || status==='disabled' ? status : 'waiting_for_mx';
 const receivingHostConflict=(error:unknown)=>{
   const e=((error as {cause?:unknown})?.cause ?? error) as {code?:string;constraint?:string};
   return e?.code==='23505' && ['domain_claims_receiving_host','domain_claims_routing','mailbox_domains_routing_host'].includes(e.constraint ?? '');

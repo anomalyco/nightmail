@@ -14,7 +14,7 @@ import { getRegionSettings } from './ses-region-state.js';
 import { awsError, canonical, feedbackUrl, policyReady, POOL_INSTALLATION, setupResources } from './ses-setup.js';
 import { bucketPolicy, copiedMailExpiryRules, deliveryPolicy, inboundPolicy, lifecycleRules, publicAccessBlock, receiptRule, redrivePolicy, STAGING_PREFIX } from './mail-controls.js';
 import { platformCredentials, workspaceConnection, workspaceCredentials,type ReadyConnection } from './provider-credentials.js';
-import { activateReceiving, claimReceivable, connectionReady, noteReconcileFailure } from './states.js';
+import { activateReceiving, claimReceivable, connectionReady, hostRoutesSql, noteReconcileFailure, selfHostedFrom } from './states.js';
 
 const OWNER_TAG = tagKey('installation-id');
 const PURPOSE_TAG = tagKey('purpose');
@@ -284,7 +284,7 @@ export async function reconcileRegion(runtime: Runtime, region: string, workspac
     }), ses: clients.ses };
     const names = mailboxResources(settings.installationId, region);
     // BYO: every host whose MX was seen (waiting for the rule, or routing) of a claim that may receive, each listed by name.
-    const rows = await runtime.db.select().from(mailboxDomains).where(and(eq(mailboxDomains.workspaceId, workspaceId), eq(mailboxDomains.region, region),connection ? sql`${mailboxDomains.status} IN ('provisioning','active') AND ${mailboxDomains.receivingHost} IS NOT NULL AND EXISTS (SELECT 1 FROM domain_claims dc JOIN operation_domains d ON d.workspace_id=dc.workspace_id AND d.name=dc.name WHERE dc.connection_id=${connection.id} AND ${claimReceivable()} AND dc.workspace_id=${workspaceId} AND d.id=${mailboxDomains.domainId} AND d.region=${region})` : undefined));
+    const rows = await runtime.db.select().from(mailboxDomains).where(and(eq(mailboxDomains.workspaceId, workspaceId), eq(mailboxDomains.region, region),connection ? sql`${hostRoutesSql(sql`mailbox_domains`)} AND ${mailboxDomains.receivingHost} IS NOT NULL AND EXISTS (SELECT 1 FROM domain_claims dc JOIN operation_domains d ON d.workspace_id=dc.workspace_id AND d.name=dc.name WHERE dc.connection_id=${connection.id} AND ${claimReceivable()} AND dc.workspace_id=${workspaceId} AND d.id=${mailboxDomains.domainId} AND d.region=${region})` : undefined));
     // Self-hosted subdomains are covered by their domain's wildcard recipient.
     const receiving = rows.filter(row => !row.parentId && ['provisioning', 'waiting_for_mx', 'active'].includes(row.status));
     const desired = new Set(connection ? rows.map(row=>row.receivingHost!) : receiving.flatMap(row => row.acceptSubdomains ? [row.name, `.${row.name}`] : [row.name]));
@@ -348,7 +348,7 @@ const reconcileJob: JobHandler = async (runtime, payload, job) => {
       await runtime.db.update(mailboxRegions).set({ lastError: message, updatedAt: now }).where(and(eq(mailboxRegions.workspaceId, job.workspaceId), eq(mailboxRegions.region, region)));
       if (runtime.config.multiTenant) await runtime.db.execute(noteReconcileFailure(job.workspaceId, region, message));
       else await runtime.db.update(mailboxDomains).set({ lastError: message, ...(final ? { status: 'failed' as const } : {}), updatedAt: now })
-        .where(and(eq(mailboxDomains.workspaceId, job.workspaceId), eq(mailboxDomains.region, region), inArray(mailboxDomains.status, ['provisioning', 'disabling'])));
+        .where(and(eq(mailboxDomains.workspaceId, job.workspaceId), eq(mailboxDomains.region, region), inArray(mailboxDomains.status, selfHostedFrom('failed'))));
     }
     throw failure;
   }

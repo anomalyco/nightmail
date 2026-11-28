@@ -298,7 +298,7 @@ function buildStatement(t: Trial, a: InboxAction, c: { db: Db }, claim?: string[
   if (a.op === "StoreClaimed" || a.op === "StoreAuto") {
     const m = a.op === "StoreAuto" ? a.msg : "";
     return async () => {
-      await storeIncoming(c.db as Json, incoming(t, m, claim!), [], false, false, false, null, undefined);
+      await storeIncoming(c.db as Json, { m: incoming(t, m, claim!), files: [], verifiedFrom: false, allowCreate: false, plan: null });
       await c.db.execute(
         sql`UPDATE jobs SET status='completed' WHERE workspace_id=${t.ws} AND type='mailbox.ingest' AND status='pending' AND payload->>'sesMessageId'=${midOf(t, m)} AND EXISTS (SELECT 1 FROM mail_receipts WHERE workspace_id=${t.ws} AND ses_message_id=${midOf(t, m)} AND status<>'pending')`,
       );
@@ -870,7 +870,7 @@ export const inboxHost = host(inbox, {
       const claimed = c.claimed!;
       const claim = c.claim!;
       r = await runHeld(c, async () => {
-        await storeIncoming(c.db as Json, incoming(t, claimed, claim), [], false, false, false, null, undefined);
+        await storeIncoming(c.db as Json, { m: incoming(t, claimed, claim), files: [], verifiedFrom: false, allowCreate: false, plan: null });
         await c.db.execute(
           sql`UPDATE jobs SET status='completed' WHERE workspace_id=${t.ws} AND type='mailbox.ingest' AND status='pending' AND payload->>'sesMessageId'=${midOf(t, claimed)} AND EXISTS (SELECT 1 FROM mail_receipts WHERE workspace_id=${t.ws} AND ses_message_id=${midOf(t, claimed)} AND status<>'pending')`,
         );

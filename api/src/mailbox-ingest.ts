@@ -5,7 +5,7 @@ import {wirePreview} from './protocol-preview.js';
 import { headWorkspaceRaw, transferWorkspaceRaw, PARSE_LIMIT, type RawObjectHead } from './mailbox-mime.js';
 import { matchRouting, plusBase } from './routing-match.js';
 import { storeNotice, wakeTargets } from './inbox-wake.js';
-import { storeIncoming, storeIncomingBatch, type IncomingBatchEntry } from './mailbox-ingest-store.js';
+import { storeIncoming, storeIncomingBatch, type Incoming, type IncomingBatchEntry } from './mailbox-ingest-store.js';
 import { mailJson } from './mailbox-text.js';
 import { platformHosts } from './domain-claims.js';
 import { receivingPolicy,ingestInput,type IngestInput } from './mailbox-ingest-input.js';
@@ -615,7 +615,7 @@ async function prepareMessage(runtime:Runtime,p:Planned,head:RawObjectHead){
   if (ccList.count > INBOUND_ADDRESS_STORE_LIMIT) verdicts.ccCount = ccList.count;
   if (replyToList.count > INBOUND_ADDRESS_STORE_LIMIT) verdicts.replyToCount = replyToList.count;
   if (refs.count > INBOUND_ADDRESS_STORE_LIMIT) verdicts.referencesCount = refs.count;
-  const message:Parameters<typeof storeIncoming>[1]={
+  const message:Incoming={
         id: messageRowId, workspaceId, direction: 'inbound', region: receipt.region, sesMessageId, messageId: normalizeMessageId(email?.messageId ?? common.messageId), inReplyTo: normalizeMessageId(email?.inReplyTo), references: refs.items, subject: (email?.subject ?? common.subject ?? '').slice(0, 998),
          fromAddress: from.address, fromName: from.name, to: toList.items, cc: ccList.items, bcc: [], replyTo: replyToList.items,
         envelopeFrom: notification.mail?.source?.toLowerCase() ?? null, envelopeTo: receipt.recipients, sentAt, receivedAt: p.receivedAt,
@@ -642,7 +642,6 @@ async function prepareMessage(runtime:Runtime,p:Planned,head:RawObjectHead){
   const entry:IncomingBatchEntry={m:message,files:attachments,verifiedFrom,allowCreate:!receipt.notification.stagingEtag,replyAuthorVerified:verifiedAuthor,plan,platformHosts:runtime.config.multiTenant?platformHosts(runtime.config):null,preview};
   return {entry,status,sizeBytes,rawMs};
 }
-const storeOne=(runtime:Runtime,e:IncomingBatchEntry,notice:ReturnType<typeof storeNotice>)=>storeIncoming(runtime.db,e.m,e.files,e.verifiedFrom,e.allowCreate,e.replyAuthorVerified,e.plan,receivingPolicy(runtime.config),e.platformHosts,e.preview,notice);
 const logIngested=(p:Planned,prepared:Prepared,rawMs:number,row:{wait_ms:number;hold_ms:number}|undefined,batch?:number)=>log('info',{code:'MAILBOX_MESSAGE_INGESTED',workspaceId:p.workspaceId,status:prepared.status,spam:p.spam,rawMs,waitMs:row?.wait_ms??0,holdMs:row?.hold_ms??0,lagMs:Date.now()-Date.parse(p.receipt.createdAt),bytes:prepared.sizeBytes,attachments:prepared.entry.files.length,...batch?{batch}:{}});
 // Keep the aggregate parser input at the old single-message ceiling; larger streaming
 // copies need the whole budget for the multipart Bcc scrub. Never wait on another request.
@@ -806,7 +805,7 @@ async function ingestBatch(runtime: Runtime, items: JobBatchItem[]): Promise<Job
     // 5. Commit all ready messages in arrival order under one ingest lane lock and one transaction.
     if (ready.length) {
       ready.sort((a, b) => a.p!.receivedAt.localeCompare(b.p!.receivedAt) || a.p!.sesMessageId.localeCompare(b.p!.sesMessageId));
-      const notice = (states: State[]) => storeNotice(runtime.inboxWake, workspaceId, wakeTargets(states.map(st => st.prepared!.entry.plan)));
+      const policy = receivingPolicy(runtime.config), notice = (states: State[]) => storeNotice(runtime.inboxWake, workspaceId, wakeTargets(states.map(st => st.prepared!.entry.plan)));
       const stored: State[] = [];
       let runnable = 0;
       const committed = async (st: State, row: { queued_count: number; wait_ms: number; hold_ms: number } | undefined, batch?: number) => {
@@ -818,12 +817,12 @@ async function ingestBatch(runtime: Runtime, items: JobBatchItem[]): Promise<Job
       };
       let rows: { queued_count: number; wait_ms: number; hold_ms: number }[] | undefined;
       if (ready.length > 1) try {
-        rows = await storeIncomingBatch(runtime.db, workspaceId, ready.map(st => st.prepared!.entry), receivingPolicy(runtime.config), notice(ready));
+        rows = await storeIncomingBatch(runtime.db, workspaceId, ready.map(st => st.prepared!.entry), { policy, notice: notice(ready) });
       } catch { /* Stored one at a time below. */ }
       if (rows) for (const [i, st] of ready.entries()) await committed(st, rows[i], ready.length);
       // Isolate a single conflicting/invalid item (e.g. 40001 ownership/retention race) without failing siblings.
       else for (const st of ready) {
-        try { await committed(st, await storeOne(runtime, st.prepared!.entry, notice([st]))); }
+        try { await committed(st, await storeIncoming(runtime.db, st.prepared!.entry, { policy, notice: notice([st]) })); }
         catch (error) { await fail(st, error); }
       }
       // Committed: polls waiting on their inboxes read now (inbox-wake.ts).

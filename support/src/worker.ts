@@ -1,5 +1,6 @@
 import { verifyWebhook } from './webhook.js';
 import type { Env } from './env.js';
+import type { Handoff } from './nightmail.js';
 import { addressHash, chatToken, MissingSecret, newId, readChatToken } from './tokens.js';
 import { readAttachmentLink, readCapped, serveAttachment } from './attachments.js';
 import { MAX_IMAGE_BYTES } from './image.js';
@@ -57,32 +58,53 @@ async function readHandoff(request: Request): Promise<{ handoff?: string; conver
   try { const body = JSON.parse(text) as Record<string, unknown>; return { handoff: typeof body.handoff === 'string' ? body.handoff : undefined, conversationId: typeof body.conversationId === 'string' ? body.conversationId : undefined, resume: body.resume === true }; } catch { return null; }
 }
 
-async function startChat(request: Request, env: Env): Promise<Response> {
+const OPENED = 'This handoff already opened a conversation. Get a fresh one.';
+const unavailable = (headers: HeadersInit) => fail(503, 'SUPPORT_UNAVAILABLE', 'Support could not open your account just now. Try again in a minute.', headers);
+
+/** What /chat/start and /chat/resume check first: a dashboard origin, a small JSON body, and a handoff Nightmail signed. */
+async function verifyChatHandoff(request: Request, env: Env, route: 'start' | 'resume'): Promise<Response | { headers: Record<string, string>; token: string; conversationId?: string; resume: boolean; handoff: Handoff }> {
   const headers = cors(env, request);
   if (!allowedOrigin(env, request)) return fail(403, 'ORIGIN_NOT_ALLOWED', `Open support from the ${productName} dashboard.`);
   const body = await readHandoff(request);
   if (body?.tooLarge) return fail(413, 'PAYLOAD_TOO_LARGE', 'Request body is too large.', headers);
-  if (!body?.handoff) return fail(400, 'INVALID_REQUEST', 'Send { "handoff": "<token from /v1/contact-support>" }.', headers);
+  if (!body?.handoff || route === 'resume' && !(body.conversationId && CONVERSATION_ID.test(body.conversationId)))
+    return fail(400, 'INVALID_REQUEST', route === 'start' ? 'Send { "handoff": "<token from /v1/contact-support>" }.' : 'Send { "conversationId", "handoff" }.', headers);
   const checked = await env.BANE.verifyHandoff(body.handoff);
   if (!checked.ok) return checked.code === 'SUPPORT_NOT_CONFIGURED' ? fail(503, 'SUPPORT_UNAVAILABLE', 'Support chat is not configured on this installation.', headers)
     : fail(401, 'HANDOFF_INVALID', 'That handoff is not valid or has expired. Get a fresh one and retry.', headers);
-  const { handoff } = checked;
-  if (handoff.usedAt) return fail(409, 'HANDOFF_USED', 'This handoff already opened a conversation. Get a fresh one.', headers);
+  return { headers, token: body.handoff, conversationId: body.conversationId, resume: body.resume === true, handoff: checked.handoff };
+}
+
+/** The answer to a start or a rejoin: a chat token and the socket it opens. A rejoin gets only a new chat token: account access
+ * never expires mid-conversation (Nightmail reads it from the conversation on every request), so there is nothing to renew. */
+async function chatOpened(env: Env, conversationId: string, userId: string, headers: HeadersInit): Promise<Response> {
+  const chat = await chatToken(env.SUPPORT_ROOT_SECRET, conversationId, userId);
+  return json({ conversationId, chatToken: chat.token, socketUrl: socketUrl(env, conversationId, chat.token), expiresAt: chat.expiresAt }, 200, headers);
+}
+
+/** Rejoins an open chat, or null when the conversation itself no longer admits this person: still open, theirs, and with no
+ * less access than it last ran with, checked before the handoff is spent or a token minted. */
+async function rejoinChat(env: Env, conversationId: string, handoff: Handoff, headers: HeadersInit, used: string): Promise<Response | null> {
+  const admitted = await conversation(env, conversationId).admits({ userId: handoff.userId });
+  if (!admitted.ok) return admitted.code === 'UNAVAILABLE' ? unavailable(headers) : null;
+  const claimed = await env.DB.prepare('INSERT INTO handoffs_used (jti, conversation_id, used_at) VALUES (?, ?, ?) ON CONFLICT (jti) DO NOTHING').bind(handoff.id, conversationId, Date.now()).run();
+  if (!claimed.meta.changes) return fail(409, 'HANDOFF_USED', used, headers);
+  // What the dashboard filed into it while the chat couldn't take it, into its history (no turn: staff answer those).
+  await conversation(env, conversationId).takeFiled();
+  return chatOpened(env, conversationId, handoff.userId, headers);
+}
+
+async function startChat(request: Request, env: Env): Promise<Response> {
+  const checked = await verifyChatHandoff(request, env, 'start');
+  if (checked instanceof Response) return checked;
+  const { headers, handoff } = checked;
+  if (handoff.usedAt) return fail(409, 'HANDOFF_USED', OPENED, headers);
   // Continuous chat: when the panel asks to resume, rejoin this person and workspace's open chat instead of starting another.
-  if (body.resume && !handoff.message) {
+  if (checked.resume && !handoff.message) {
     const existing = await env.DB.prepare("SELECT id FROM conversations WHERE channel = 'chat' AND user_id = ? AND workspace_id = ? AND status <> 'closed' ORDER BY updated_at DESC, created_at DESC LIMIT 1")
       .bind(handoff.userId, handoff.workspace.id).first<{ id: string }>();
-    if (existing) {
-      const admitted = await conversation(env, existing.id).admits({ userId: handoff.userId });
-      if (admitted.ok) {
-        const claimed = await env.DB.prepare('INSERT INTO handoffs_used (jti, conversation_id, used_at) VALUES (?, ?, ?) ON CONFLICT (jti) DO NOTHING').bind(handoff.id, existing.id, Date.now()).run();
-        if (!claimed.meta.changes) return fail(409, 'HANDOFF_USED', 'This handoff already opened a conversation. Get a fresh one.', headers);
-        await conversation(env, existing.id).takeFiled();
-        const chat = await chatToken(env.SUPPORT_ROOT_SECRET, existing.id, handoff.userId);
-        return json({ conversationId: existing.id, chatToken: chat.token, socketUrl: socketUrl(env, existing.id, chat.token), expiresAt: chat.expiresAt }, 200, headers);
-      }
-      if (admitted.code === 'UNAVAILABLE') return fail(503, 'SUPPORT_UNAVAILABLE', 'Support could not open your account just now. Try again in a minute.', headers);
-    }
+    const rejoined = existing && await rejoinChat(env, existing.id, handoff, headers, OPENED);
+    if (rejoined) return rejoined;
   }
   if (env.CHAT_START && !(await env.CHAT_START.limit({ key: `user:${handoff.userId}` })).success) return fail(429, 'RATE_LIMITED', 'Too many conversations started. Try again in a minute.', { ...headers, 'retry-after': '60' }, { retryAfter: 60 });
   const now = Date.now(), dayAgo = now - 86_400_000;
@@ -95,48 +117,33 @@ async function startChat(request: Request, env: Env): Promise<Response> {
     env.DB.prepare(`INSERT INTO conversations (id, channel, user_id, email, workspace_id, workspace_name, created_at, updated_at)
       SELECT ?, 'chat', ?, ?, ?, ?, ?, ? WHERE (SELECT conversation_id FROM handoffs_used WHERE jti = ?) = ?`).bind(conversationId, handoff.userId, handoff.email, handoff.workspace.id, handoff.workspace.name, now, now, handoff.id, conversationId),
   ]);
-  if (!claimed[1]?.meta.changes) return fail(409, 'HANDOFF_USED', 'This handoff already opened a conversation. Get a fresh one.', headers);
+  if (!claimed[1]?.meta.changes) return fail(409, 'HANDOFF_USED', OPENED, headers);
   // Nightmail registers the conversation from this same signed handoff: it binds the person and workspace, once.
-  const opened = await conversation(env, conversationId).openChat({ conversationId, handoff, token: body.handoff });
+  const opened = await conversation(env, conversationId).openChat({ conversationId, handoff, token: checked.token });
   if (!opened.ok) {
     await env.DB.prepare("UPDATE conversations SET status = 'closed', closed_at = ? WHERE id = ?").bind(Date.now(), conversationId).run();
-    return opened.code === 'HANDOFF_USED' ? fail(409, 'HANDOFF_USED', 'This handoff already opened a conversation. Get a fresh one.', headers)
+    return opened.code === 'HANDOFF_USED' ? fail(409, 'HANDOFF_USED', OPENED, headers)
       : opened.code === 'CONVERSATION_LIMIT' ? fail(429, 'RATE_LIMITED', `You have too many open support conversations. Continue an earlier one.`, { ...headers, 'retry-after': '3600' }, { retryAfter: 3600 })
-      : fail(503, 'SUPPORT_UNAVAILABLE', 'Support could not open your account just now. Try again in a minute.', headers);
+      : unavailable(headers);
   }
-  const chat = await chatToken(env.SUPPORT_ROOT_SECRET, conversationId, handoff.userId);
-  return json({ conversationId, chatToken: chat.token, socketUrl: socketUrl(env, conversationId, chat.token), expiresAt: chat.expiresAt }, 200, headers);
+  return chatOpened(env, conversationId, handoff.userId, headers);
 }
 
 async function resumeChat(request: Request, env: Env): Promise<Response> {
-  const headers = cors(env, request);
-  if (!allowedOrigin(env, request)) return fail(403, 'ORIGIN_NOT_ALLOWED', `Open support from the ${productName} dashboard.`);
-  const body = await readHandoff(request);
-  if (body?.tooLarge) return fail(413, 'PAYLOAD_TOO_LARGE', 'Request body is too large.', headers);
-  if (!body?.handoff || !body.conversationId || !CONVERSATION_ID.test(body.conversationId)) return fail(400, 'INVALID_REQUEST', 'Send { "conversationId", "handoff" }.', headers);
-  const checked = await env.BANE.verifyHandoff(body.handoff);
-  if (!checked.ok) return fail(401, 'HANDOFF_INVALID', 'That handoff is not valid or has expired. Get a fresh one and retry.', headers);
-  if (checked.handoff.usedAt) return fail(409, 'HANDOFF_USED', 'This handoff was already used. Get a fresh one.', headers);
-  const read = () => env.DB.prepare('SELECT channel, user_id, status FROM conversations WHERE id = ?').bind(body.conversationId).first<{ channel: string; user_id: string | null; status: string }>();
+  const checked = await verifyChatHandoff(request, env, 'resume');
+  if (checked instanceof Response) return checked;
+  const { headers, handoff } = checked, conversationId = checked.conversationId!, used = 'This handoff was already used. Get a fresh one.';
+  if (handoff.usedAt) return fail(409, 'HANDOFF_USED', used, headers);
+  const read = () => env.DB.prepare('SELECT channel, user_id, status FROM conversations WHERE id = ?').bind(conversationId).first<{ channel: string; user_id: string | null; status: string }>();
   // A chat Nightmail opened from a message the dashboard filed (the chat couldn't take it): adopted for this person, once.
   let row = await read();
-  if (!row && await adoptFiledChat(env, body.conversationId!, checked.handoff.userId)) row = await read();
-  if (!row || row.status === 'closed') return fail(404, 'CONVERSATION_NOT_FOUND', 'That conversation has ended. Start a new one.', headers);
+  if (!row && await adoptFiledChat(env, conversationId, handoff.userId)) row = await read();
+  const ended = () => fail(404, 'CONVERSATION_NOT_FOUND', 'That conversation has ended. Start a new one.', headers);
+  if (!row || row.status === 'closed') return ended();
   // An email conversation continues by email, never in the panel: the panel starts a conversation of its own instead.
   if (row.channel === 'email') return fail(409, 'EMAIL_CONVERSATION', 'This conversation continues by email. Start a new one here.', headers);
-  if (!row.user_id || row.user_id !== checked.handoff.userId) return fail(403, 'NOT_YOUR_CONVERSATION', 'This conversation belongs to someone else.', headers);
-  // Still open and theirs in the conversation itself, with no less access than it last ran with: checked before a token is minted.
-  const admitted = await conversation(env, body.conversationId).admits({ userId: checked.handoff.userId });
-  if (!admitted.ok) return admitted.code === 'UNAVAILABLE' ? fail(503, 'SUPPORT_UNAVAILABLE', 'Support could not open your account just now. Try again in a minute.', headers)
-    : fail(404, 'CONVERSATION_NOT_FOUND', 'That conversation has ended. Start a new one.', headers);
-  const claimed = await env.DB.prepare('INSERT INTO handoffs_used (jti, conversation_id, used_at) VALUES (?, ?, ?) ON CONFLICT (jti) DO NOTHING').bind(checked.handoff.id, body.conversationId, Date.now()).run();
-  if (!claimed.meta.changes) return fail(409, 'HANDOFF_USED', 'This handoff was already used. Get a fresh one.', headers);
-  // What the dashboard filed into it while the chat couldn't take it, into its history (no turn: staff answer those).
-  await conversation(env, body.conversationId!).takeFiled();
-  // Only a new chat token: account access never expires mid-conversation (Nightmail reads it from the conversation on
-  // every request), so there is nothing to renew.
-  const chat = await chatToken(env.SUPPORT_ROOT_SECRET, body.conversationId, checked.handoff.userId);
-  return json({ conversationId: body.conversationId, chatToken: chat.token, socketUrl: socketUrl(env, body.conversationId, chat.token), expiresAt: chat.expiresAt }, 200, headers);
+  if (!row.user_id || row.user_id !== handoff.userId) return fail(403, 'NOT_YOUR_CONVERSATION', 'This conversation belongs to someone else.', headers);
+  return await rejoinChat(env, conversationId, handoff, headers, used) ?? ended();
 }
 
 async function socket(request: Request, env: Env, conversationId: string): Promise<Response> {

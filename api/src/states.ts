@@ -44,16 +44,40 @@ export function terminalEvents(rows: SQL, extra = sql`'{}'::jsonb`) {
     INSERT INTO operation_events(id,workspace_id,type,region,created_at,data)
     SELECT v.id,v.workspace_id,'email.rejected',t.region,v.created_at,${withoutVerdictSql(sql`v.data`)}||jsonb_build_object('emailId',t.id,'simulated',t.simulated)
     FROM emitted v JOIN terminal t ON t.id=v.email_id ON CONFLICT DO NOTHING RETURNING *
-  ), deliveries AS (
+  ), ${operationWebhookFanoutCtes()}`;
+}
+/**
+ * The deliveries and jobs for operation events a statement publishes: `published` names its CTE of inserted
+ * operation_events rows. Each event gets one delivery per webhook of its workspace subscribed to its type and region (an
+ * event without a region goes to every region's webhooks), and each delivery a job. Defines the CTEs `deliveries` and
+ * `webhook_jobs`; callers count `webhook_jobs` to wake webhook workers.
+ */
+export const operationWebhookFanoutCtes = (published = sql`published`) => sql`deliveries AS (
     INSERT INTO operation_deliveries(id,workspace_id,webhook_id,event_id,payload)
     SELECT public.row_id('whd'),p.workspace_id,w.id,p.id,
       jsonb_build_object('id',p.id,'workspaceId',p.workspace_id,'type',p.type,'region',p.region,'createdAt',p.created_at,'data',p.data)
-    FROM published p JOIN operation_webhooks w ON w.workspace_id=p.workspace_id AND NOT w.paused AND w.event_types ? p.type AND (w.regions IS NULL OR w.regions ? p.region)
+    FROM ${published} p JOIN operation_webhooks w ON w.workspace_id=p.workspace_id
+    WHERE NOT w.paused AND w.event_types ? p.type AND (w.regions IS NULL OR p.region IS NULL OR w.regions ? p.region)
     ON CONFLICT DO NOTHING RETURNING id,workspace_id
   ), webhook_jobs AS (
-    INSERT INTO jobs(id,workspace_id,type,payload) SELECT public.row_id('job'),workspace_id,'operation.webhook',jsonb_build_object('deliveryId',id,'generation',0) FROM deliveries RETURNING 1
+    INSERT INTO jobs(id,workspace_id,type,payload) SELECT public.row_id('job'),workspace_id,'operation.webhook',jsonb_build_object('deliveryId',id,'generation',0) FROM deliveries RETURNING id
   )`;
-}
+/**
+ * A simulated installation's SES callbacks for accepted mail: a Send now and a Delivery `deliveryDelayMs` later, each
+ * an operation.simulatedFeedback job due then. `accepted` yields (workspace_id, email_id, region, provider_id,
+ * created_at) per accepted email. Defines the CTEs `simulated_callbacks` and `simulated_jobs`.
+ */
+export const simulatedFeedbackCtes = (accepted: SQL, deliveryDelayMs: number) => sql`simulated_callbacks AS (
+    SELECT 'urn:bane:simulated-ses:' || a.region AS topic_arn, a.email_id || ':' || kind AS message_id, a.workspace_id, a.region, a.provider_id,
+      a.created_at + CASE WHEN kind = 'Delivery' THEN ${deliveryDelayMs}::int ELSE 0 END * interval '1 millisecond' AS created_at, kind
+    FROM (${accepted}) a, unnest(ARRAY['Send','Delivery']) kind
+  ), simulated_jobs AS (
+    INSERT INTO jobs(id, workspace_id, type, available_at, payload)
+    SELECT public.row_id('job'), r.workspace_id, 'operation.simulatedFeedback', r.created_at,
+      jsonb_build_object('topicArn', r.topic_arn, 'messageId', r.message_id, 'region', r.region,
+        'message', jsonb_build_object('eventType', r.kind, 'mail', jsonb_build_object('messageId', r.provider_id), lower(r.kind), jsonb_build_object('timestamp', r.created_at)))
+    FROM simulated_callbacks r RETURNING id
+  )`;
 
 /**
  * A scheduled single send whose release job ended without releasing it (its last attempt failed, or its last lease ran
@@ -119,13 +143,36 @@ export type ClaimEvidence = {
   regionReceives: boolean;
   byo: boolean;
 };
+// Receiving hosts.
 /**
- * One receiving host of a domain, on its own mailbox_domains row: waiting for its MX (`waiting_for_mx`), waiting for a
- * BYO receipt rule (`provisioning`), routing (`active`; within its two-hour grace once `lost_since` is set) or removed by
- * the owner (`disabled`, kept with its addresses so adding it again restores it).
+ * One receiving host of a domain, on its own mailbox_domains row (these are its CHECK constraint): waiting for its MX
+ * (`waiting_for_mx`), waiting for a BYO receipt rule (`provisioning`), routing (`active`; within its two-hour grace once
+ * `lost_since` is set) or removed by the owner (`disabled`, kept with its addresses so adding it again restores it).
+ * Self-hosted, a host is also `disabling` until the region's reconcile takes it out of the receipt rule, and `failed`
+ * once that reconcile gave up (selfHostedTransitions). Hosted hosts move only by transitionClaim, between CheckedHostStatus.
  */
-export type HostStatus = 'waiting_for_mx' | 'provisioning' | 'active' | 'disabled';
-export type HostState = { status: HostStatus; lost_since: string | null };
+export const HOST_STATUSES = ['provisioning', 'waiting_for_mx', 'active', 'disabling', 'disabled', 'failed'] as const;
+export type HostStatus = typeof HOST_STATUSES[number];
+export type CheckedHostStatus = Extract<HostStatus, 'waiting_for_mx' | 'provisioning' | 'active' | 'disabled'>;
+/** A stored status as a check reads it: hosted rows only ever take the checked states, so anything else (a self-hosted leftover) waits for its MX. */
+export const checkedHostStatus = (status: HostStatus): CheckedHostStatus => status === 'active' || status === 'provisioning' || status === 'disabled' ? status : 'waiting_for_mx';
+/** Self-hosted: each status and those it may move to. The owner enables (a new domain starts in `provisioning`) and
+ *  disables; the region's reconcile (mailbox-setup.ts) applies that, and the hourly MX check moves a host between waiting and active. */
+export const selfHostedTransitions: Record<HostStatus, HostStatus[]> = {
+  provisioning: ['active', 'waiting_for_mx', 'disabling', 'failed'], waiting_for_mx: ['active', 'disabling'], active: ['waiting_for_mx', 'disabling'],
+  disabling: ['disabled', 'provisioning', 'failed'], disabled: ['provisioning'], failed: ['provisioning', 'disabling'] };
+/** The statuses a self-hosted host may move to `to` from: the fence of the statement that moves it. */
+export const selfHostedFrom = (to: HostStatus) => HOST_STATUSES.filter(from => selfHostedTransitions[from].includes(to));
+/** Removed by the owner: takes no new addresses and no receiving record; its addresses and mail are kept. `m` is the mailbox_domains alias. */
+export const hostRemoved = (status: HostStatus) => status === 'disabled' || status === 'disabling';
+export const hostRemovedSql = (m: SQL = sql`m`) => sql`${m}.status IN ('disabled','disabling')`;
+/** Holds its name in the receipt rule: routing, or waiting for a BYO rule to list it (the mailbox_domains_routing_host index). */
+export const hostRoutes = (status: HostStatus) => status === 'active' || status === 'provisioning';
+export const hostRoutesSql = (m: SQL = sql`m`) => sql`${m}.status IN ('active','provisioning')`;
+/** The host a domain-level view shows is the first in this order: hosted, the domain's own row unless the owner removed
+ *  it, then the first other host still receiving; self-hosted readers select only the own row. */
+export const primaryHostOrder = (m: SQL = sql`m`) => sql`${hostRemovedSql(m)},${m}.parent_id IS NOT NULL,${m}.created_at,${m}.id`;
+export type HostState = { status: CheckedHostStatus; lost_since: string | null };
 /** What one check saw at a host: `live` when Nightmail's MX answers there (alone, or beside another provider's) and
  * nothing refuses the host; undefined when its MX was not checked this time. */
 export type HostEvidence = HostState & { host: string; live: boolean | undefined };
@@ -238,7 +285,6 @@ export async function applyClaim(db: DbExecutor, claim: ClaimRef, next: ClaimSta
   }
   const [own, ...others] = hosts as [HostWrite, ...HostWrite[]];
   const json = (value: unknown) => value == null ? null : JSON.stringify(value);
-  const routes = (s: HostStatus) => s === 'active' || s === 'provisioning';
   // A new domain row, including the operator-adopted platform domain's, takes the column default catch_all='store'
   // (migration 120): mail for unknown recipients stays unrouted, so only inboxes created on purpose (abuse@,
   // postmaster@ …) receive. Later changes are kept. A domain added again finds its old row by name and takes it back.
@@ -246,16 +292,16 @@ export async function applyClaim(db: DbExecutor, claim: ClaimRef, next: ClaimSta
       lost_since=${next.lost_since}::timestamptz,receiving_lost_since=${next.receiving_lost_since}::timestamptz,identity=${JSON.stringify(facts)}::jsonb
       WHERE name=${claim.name} AND token=${claim.token} AND connection_id=${claim.connectionId} RETURNING workspace_id,claim_scope),
     own AS (UPDATE mailbox_domains m SET receiving_host=${own.host},status=${own.status},lost_since=${own.lost_since}::timestamptz,issue=${json(own.issue)}::jsonb,last_error=NULL,
-        enabled_at=CASE WHEN NOT ${routes(own.status)} THEN NULL WHEN m.status IN ('active','provisioning') THEN coalesce(m.enabled_at,now()) ELSE now() END,
+        enabled_at=CASE WHEN NOT ${hostRoutes(own.status)} THEN NULL WHEN ${hostRoutesSql()} THEN coalesce(m.enabled_at,now()) ELSE now() END,
         mx=coalesce(${json(own.mx)}::jsonb,m.mx),checked_at=coalesce(${own.mx?.checkedAt ?? null}::timestamptz,m.checked_at),updated_at=now()
       FROM claim WHERE claim.claim_scope<>'account' AND m.workspace_id=claim.workspace_id AND m.domain_id=${claim.domainId} AND m.parent_id IS NULL RETURNING m.id),
     created AS (INSERT INTO mailbox_domains AS m(id,workspace_id,domain_id,name,region,receiving_host,status,enabled_at,mx,checked_at,lost_since,issue)
-      SELECT ${id('mdom')},workspace_id,${claim.domainId},${claim.name},${claim.region},${own.host},${own.status},CASE WHEN ${routes(own.status)} THEN now() END,${json(own.mx)}::jsonb,${own.mx?.checkedAt ?? null}::timestamptz,${own.lost_since}::timestamptz,${json(own.issue)}::jsonb
+      SELECT ${id('mdom')},workspace_id,${claim.domainId},${claim.name},${claim.region},${own.host},${own.status},CASE WHEN ${hostRoutes(own.status)} THEN now() END,${json(own.mx)}::jsonb,${own.mx?.checkedAt ?? null}::timestamptz,${own.lost_since}::timestamptz,${json(own.issue)}::jsonb
         FROM claim WHERE claim_scope<>'account' AND NOT EXISTS (SELECT FROM own)
       ON CONFLICT ON CONSTRAINT mailbox_domains_name DO UPDATE SET domain_id=excluded.domain_id,parent_id=NULL,region=excluded.region,receiving_host=excluded.receiving_host,status=excluded.status,last_error=NULL,
         enabled_at=excluded.enabled_at,mx=coalesce(excluded.mx,m.mx),checked_at=coalesce(excluded.checked_at,m.checked_at),lost_since=excluded.lost_since,issue=excluded.issue,updated_at=now() RETURNING m.id)
     UPDATE mailbox_domains m SET status=h.status,lost_since=h.lost_since,issue=h.issue,last_error=NULL,mx=coalesce(h.mx,m.mx),checked_at=coalesce((h.mx->>'checkedAt')::timestamptz,m.checked_at),
-      enabled_at=CASE WHEN h.status NOT IN ('active','provisioning') THEN NULL WHEN m.status IN ('active','provisioning') THEN coalesce(m.enabled_at,now()) ELSE now() END,updated_at=now()
+      enabled_at=CASE WHEN NOT ${hostRoutesSql(sql`h`)} THEN NULL WHEN ${hostRoutesSql()} THEN coalesce(m.enabled_at,now()) ELSE now() END,updated_at=now()
     FROM claim,jsonb_to_recordset(${JSON.stringify(others.map(h => ({ id: h.id, status: h.status, lost_since: h.lost_since, mx: h.mx ?? null, issue: h.issue ?? null })))}::jsonb) h(id text,status text,lost_since timestamptz,mx jsonb,issue jsonb)
     WHERE claim.claim_scope<>'account' AND m.workspace_id=claim.workspace_id AND m.id=h.id AND m.domain_id=${claim.domainId} AND m.parent_id IS NOT NULL`);
 }

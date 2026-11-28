@@ -46,7 +46,7 @@ export async function simulateInbox(
   await objects.put(key, wire, 'message/rfc822');
   await storeIncoming(
     runtime.db,
-    {
+    { m: {
       id: mid,
       workspaceId: wid,
       direction: 'inbound',
@@ -75,12 +75,8 @@ export async function simulateInbox(
       spam: false,
       automated: false,
       status: 'received',
-    },
-    [],
-    false,
-    false,
-    false, null, undefined, null, undefined,
-    storeNotice(runtime.inboxWake, wid, [bid]),
+    }, files: [], verifiedFrom: false, allowCreate: false, plan: null },
+    { notice: storeNotice(runtime.inboxWake, wid, [bid]) },
   );
   // Stored: a poll waiting on this inbox reads it now (inbox-wake.ts).
   await runtime.inboxWake?.notify(wid, [bid]);

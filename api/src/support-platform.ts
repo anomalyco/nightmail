@@ -1,4 +1,5 @@
 import type { Config } from './core.js';
+import { ceilingFor } from './support-conversations.js';
 import type { AgentAnswer, Brief, ConversationEvidence, FeedbackReport, FiledConversation, GeneralAnswerDue, Handoff, HandoffCheck, HandoffClaims, InboxState, MirroredMessage, MirroredState, OutboxReply, PlatformReply, RegisteredConversation, StaffEmail, StaffReply, StaffReplyIgnored, SupportPlatformRpc, TriageNoteInput } from './support-contract.js';
 export type { AgentAnswer, Brief, ConversationEvidence, FeedbackReport, FiledConversation, GeneralAnswerDue, Handoff, HandoffCheck, HandoffClaims, InboxState, MirroredMessage, MirroredState, OutboxReply, PlatformReply, RegisteredConversation, StaffEmail, StaffReply, StaffReplyIgnored, SupportPlatformRpc, TriageNoteInput };
 
@@ -83,31 +84,21 @@ const ROUTES = {
   // Agent reports that ask something (src/feedback-triage.ts): their email conversations, claimed for the support agent.
   agentAnswersDue: defineSupportRoute('POST', '/v1/operator/support/agent-answers/due'),
 };
-const SUPPORT_READ = /^\/v1\/support\/[A-Za-z0-9_./-]{1,200}$/;
-/** The writes a conversation makes: narrowing its scope to one workspace, and keeping a note about its person. */
-const STAMPED_WRITES: [method: string, path: RegExp][] = [
-  ['POST', /^\/v1\/support\/scope$/],
-  ['POST', /^\/v1\/support\/notes$/],
-];
-
 /**
- * The writes about the person's account (src/support-actions.ts): proposing a change they confirm signed in, the safe
- * actions (re-checking a domain's or a receiving host's DNS, resending a forward confirmation), and proposing a risky
- * change to staff, which only an operator's approval runs.
+ * A path that could reach another route once decoded or normalized: a dot segment, an empty segment, a backslash or an
+ * encoded dot, slash or backslash. Each allowlist below matches whole ID segments anyway; this refuses them first.
  */
-const ACTION_WRITES: [method: string, path: RegExp][] = [['POST', /^\/v1\/support\/actions$/], ['POST', /^\/v1\/support\/domains\/[A-Za-z0-9_-]{1,120}\/verify$/],
-  ['POST', /^\/v1\/support\/receiving\/hosts\/[A-Za-z0-9_-]{1,120}\/recheck$/], ['POST', /^\/v1\/support\/receiving\/forwards\/[A-Za-z0-9_-]{1,120}\/resend$/], ['POST', /^\/v1\/support\/approvals$/]];
-
+const traverses = (path: string) => /\.\.|\/\/|\\|%(?:2e|2f|5c)/i.test(path);
 /** Whether the binding may make this call without a conversation: the operator support routes. */
 export function supportPlatformAllows(method: string, path: string) {
-  if (path.includes('..') || path.includes('//')) return false;
-  return OPERATOR_ROUTES.some(([m, p]) => m === method && p.test(path));
+  return !traverses(path) && OPERATOR_ROUTES.some(([m, p]) => m === method && p.test(path));
 }
-/** Whether request() may make this call for a conversation: a GET under /v1/support, or one of its writes. */
+/**
+ * Whether request() may make this call for a conversation: a GET or POST with a ceiling (support-conversations.ts
+ * SUPPORT_CEILINGS), the one list of what a conversation may call and for which roles.
+ */
 export function stampedAllows(method: string, path: string) {
-  if (path.includes('..') || path.includes('//')) return false;
-  if (ACTION_WRITES.some(([m, p]) => m === method && p.test(path))) return true;
-  return (method === 'GET' && SUPPORT_READ.test(path)) || STAMPED_WRITES.some(([m, p]) => m === method && p.test(path));
+  return method !== 'HEAD' && !traverses(path) && Boolean(ceilingFor(method, path));
 }
 
 // ---------- the handoffs Nightmail signs (aud bane-support) ----------

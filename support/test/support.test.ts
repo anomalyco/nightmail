@@ -714,6 +714,13 @@ describe('support Worker', () => {
     assert.equal((await (await mf.getD1Database('DB', 'support')).prepare('SELECT status FROM conversations WHERE id = ?').bind(start.body.conversationId).first<{ status: string }>())?.status, 'closed');
   }, 180_000);
 
+  test('/chat/start and /chat/resume both answer 503 SUPPORT_UNAVAILABLE where Nightmail has no handoff key', async () => {
+    for (const [path, body] of [['/chat/start', { handoff: 'unconfigured' }], ['/chat/resume', { conversationId: `conv_${'u'.repeat(26)}`, handoff: 'unconfigured' }]] as const) {
+      const refused = await post(path, body);
+      assert.deepEqual([refused.status, refused.body?.error?.code], [503, 'SUPPORT_UNAVAILABLE'], path);
+    }
+  });
+
   test('/chat/resume: an email conversation continues by email, and a conversation without an owner is nobody’s', async () => {
     assert.equal((await signedHook('msg_resume_email', 'thr_resume_email')).status, 200);
     const d1 = await mf.getD1Database('DB', 'support');

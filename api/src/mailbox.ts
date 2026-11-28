@@ -7,7 +7,7 @@ import { authenticate, chargeCredential, createdInboxes, delegatedInbox, keyExpi
 import { boundRequestBody } from './request-body.js';
 import { auditContext, auditInsert, recordAudit } from './audit.js';
 import { domains } from './db/operations.js';
-import { claimSends, connectionReady, hostTakesAddresses, receivingSetup, setupError, type ReceivingSetup } from './states.js';
+import { claimSends, connectionReady, HOST_STATUSES, hostRemoved, hostRemovedSql, hostTakesAddresses, primaryHostOrder, receivingSetup, selfHostedFrom, setupError, type ReceivingSetup } from './states.js';
 import { mailboxAddresses, mailboxDomains, mailboxes, mailboxKeys, mailboxThreads, mailMessages, type MailboxPermission } from './db/mailbox.js';
 import { expectedMx, checkMx, mxBlocksEnable } from './mailbox-dns.js';
 import { eventView, inboundEventTypes, latestCursor, readEvents, recordEvents } from './mailbox-events.js';
@@ -98,7 +98,7 @@ const labelName = z.string().trim().toLowerCase().min(1).max(64).regex(/^[a-z0-9
 const MxRecord = z.object({ type: z.literal('MX'), name: z.string(), value: z.string(), priority: z.number() });
 const MxReportSchema = z.object({ state: z.enum(['active', 'missing', 'conflict', 'mixed', 'wrong_region', 'null_mx', 'cname', 'error']), expected: MxRecord, records: z.array(z.object({ priority: z.number(), host: z.string(), provider: z.string().nullable() })), providers: z.array(z.string()), message: z.string(), checkedAt: z.string(), target: z.string().optional().describe('The existing CNAME target when state is cname.'), split: z.boolean().optional().describe('Mail for the name may be split across several MX hosts.') }).openapi('InboundMxReport');
 const InboundCatchAll = z.enum(['create_address', 'store']);
-const InboundDomainStatus = z.enum(['off', 'provisioning', 'waiting_for_mx', 'active', 'disabling', 'disabled', 'failed']);
+const InboundDomainStatus = z.enum(['off', ...HOST_STATUSES]);
 const InboundDomainSchema = z.object({
   id: z.string().describe(`${productName} domain ID.`), name: z.string(), region: z.string(),
   status: InboundDomainStatus,
@@ -152,15 +152,12 @@ const Limit = z.coerce.number().int().min(1).max(100).default(25);
 const IdParam = z.object({ id: z.string().min(1).max(120) });
 
 // ---------- views ----------
-/** The host a domain-level view shows: hosted, the domain's own row unless the owner removed it, then the first other
- * host still receiving; self-hosted, the domain's own row (its other hosts are subdomains below it). */
-function primaryHost(multiTenant: boolean, rows: (typeof mailboxDomains.$inferSelect)[]) {
-  const own = rows.find(row => row.parentId === null), live = (row: typeof mailboxDomains.$inferSelect) => !['disabled', 'disabling'].includes(row.status);
-  return multiTenant ? (own && live(own) ? own : rows.find(live) ?? own) : own;
-}
+/** The host a domain-level view shows, from its rows in primaryHostOrder: hosted, the first; self-hosted, the domain's own
+ * row (its other hosts are subdomains below it). */
+const primaryHost = (multiTenant: boolean, rows: (typeof mailboxDomains.$inferSelect)[]) => multiTenant ? rows[0] : rows.find(row => row.parentId === null);
 async function domainViews(c: Ctx, rows: (typeof domains.$inferSelect)[]) {
   if (!rows.length) return [];
-  const all = await c.env.db.select().from(mailboxDomains).where(and(eq(mailboxDomains.workspaceId, access(c).workspaceId), inArray(mailboxDomains.domainId, rows.map(row => row.id)))).orderBy(sql`${mailboxDomains.parentId} IS NOT NULL`, asc(mailboxDomains.createdAt), asc(mailboxDomains.id));
+  const all = await c.env.db.select().from(mailboxDomains).where(and(eq(mailboxDomains.workspaceId, access(c).workspaceId), inArray(mailboxDomains.domainId, rows.map(row => row.id)))).orderBy(primaryHostOrder(sql`mailbox_domains`));
   const shown = new Map(rows.map(row => [row.id, primaryHost(c.env.config.multiTenant, all.filter(item => item.domainId === row.id))]));
   const ids = [...shown.values()].flatMap(state => state ? [state.id] : []);
   const counts = ids.length ? await c.env.db.select({ domainId: mailboxes.domainId, count: sql<number>`count(*)::int` }).from(mailboxes).where(inArray(mailboxes.domainId, ids)).groupBy(mailboxes.domainId) : [];
@@ -176,7 +173,7 @@ async function domainViews(c: Ctx, rows: (typeof domains.$inferSelect)[]) {
     const host=state?.receivingHost ?? state?.name ?? row.name;
     const region=state?.region ?? (shared?'us-east-2':row.region);
     // The domain's other hosts: subdomains self-hosted, any host hosted.
-    const others = all.filter(item => item.domainId === row.id && item.id !== state?.id && (c.env.config.multiTenant || item.parentId === own?.id) && !['disabled', 'disabling'].includes(item.status)).length;
+    const others = all.filter(item => item.domainId === row.id && item.id !== state?.id && (c.env.config.multiTenant || item.parentId === own?.id) && !hostRemoved(item.status)).length;
     return { id: row.id, name: host, region, status: state?.status ?? setup?.status ?? 'off' as const, dns: [expectedMx(host, region)], mx: state?.mx ?? null, lastError: state?.lastError ?? (setup?.status === 'failed' ? setupError(setup) : null),
       enabledAt: iso(state?.enabledAt), checkedAt: iso(state?.checkedAt), catchAll: state?.catchAll ?? 'store' as const, addressCount: counts.find(item => item.domainId === state?.id)?.count ?? 0,
       subdomains: { enabled: own?.acceptSubdomains ?? false, count: others, dns: [expectedMx(`*.${row.name}`, region)] } };
@@ -194,7 +191,7 @@ async function operationDomain(c: Ctx, domainId: string) {
 /** A host below the domain's own row, as the subdomain operations show it: active until it is removed. */
 async function subdomainViews(runtime: Runtime, domain: typeof domains.$inferSelect, parent: typeof mailboxDomains.$inferSelect, rows: (typeof mailboxDomains.$inferSelect)[]) {
   const counts = rows.length ? await runtime.db.select({ domainId: mailboxes.domainId, count: sql<number>`count(*)::int` }).from(mailboxes).where(inArray(mailboxes.domainId, rows.map(row => row.id))).groupBy(mailboxes.domainId) : [];
-  return rows.map(row => ({ id: row.id, name: row.receivingHost ?? row.name, parentDomainId: domain.id, parentName: domain.name, status: ['disabled', 'disabling'].includes(row.status) ? 'disabled' as const : 'active' as const, metadata: row.metadata,
+  return rows.map(row => ({ id: row.id, name: row.receivingHost ?? row.name, parentDomainId: domain.id, parentName: domain.name, status: hostRemoved(row.status) ? 'disabled' as const : 'active' as const, metadata: row.metadata,
     dns: [expectedMx(row.receivingHost ?? row.name, parent.region)], mx: row.mx ?? null, catchAll: row.catchAll, addressCount: counts.find(item => item.domainId === row.id)?.count ?? 0, createdAt: iso(row.createdAt)!, updatedAt: iso(row.updatedAt)! }));
 }
 /** A Nightmail domain and its own receiving row, which its other hosts hang off. Self-hosted, that row must be receiving. */
@@ -323,7 +320,7 @@ function registerReceivingDomains(app: App) {
       const [current] = await tx.select().from(mailboxDomains).where(and(eq(mailboxDomains.workspaceId, value.workspaceId), eq(mailboxDomains.domainId, row.id), isNull(mailboxDomains.parentId))).for('update');
       const now = new Date().toISOString();
       if (!current) await tx.insert(mailboxDomains).values({ id: id('mdom'), workspaceId: value.workspaceId, domainId: row.id, name: row.name, region: row.region, status: 'provisioning', catchAll: input.catchAll, mx, checkedAt: mx.checkedAt });
-      else await tx.update(mailboxDomains).set({ ...(['disabled', 'disabling', 'failed'].includes(current.status) ? { status: 'provisioning' as const, lastError: null } : {}), catchAll: input.catchAll, mx, checkedAt: mx.checkedAt, updatedAt: now }).where(eq(mailboxDomains.id, current.id));
+      else await tx.update(mailboxDomains).set({ ...(selfHostedFrom('provisioning').includes(current.status) ? { status: 'provisioning' as const, lastError: null } : {}), catchAll: input.catchAll, mx, checkedAt: mx.checkedAt, updatedAt: now }).where(eq(mailboxDomains.id, current.id));
       await queueReconcile(tx, value.workspaceId, row.region);
       await recordAudit(tx, c, { action: 'inbound_domain.enable', workspaceId: value.workspaceId, target: { type: 'domain', id: row.id }, before: current ? { status: current.status } : undefined, after: { name: row.name, catchAll: input.catchAll, force: input.force, mx: mx.state } });
     });
@@ -334,7 +331,7 @@ function registerReceivingDomains(app: App) {
     const value = hostAdmin(c); const row = await operationDomain(c, c.req.valid('param').id);
     if (c.env.config.multiTenant) throw new ApiError(409,'HOSTED_RECEIVING_MANAGED','Receiving follows verified DNS. Remove the MX record to stop delivery.');
     await c.env.db.transaction(async tx => {
-      const updated = await tx.update(mailboxDomains).set({ status: 'disabling', updatedAt: new Date().toISOString() }).where(and(eq(mailboxDomains.workspaceId, value.workspaceId), eq(mailboxDomains.domainId, row.id), isNull(mailboxDomains.parentId), inArray(mailboxDomains.status, ['provisioning', 'waiting_for_mx', 'active', 'failed']))).returning({ id: mailboxDomains.id });
+      const updated = await tx.update(mailboxDomains).set({ status: 'disabling', updatedAt: new Date().toISOString() }).where(and(eq(mailboxDomains.workspaceId, value.workspaceId), eq(mailboxDomains.domainId, row.id), isNull(mailboxDomains.parentId), inArray(mailboxDomains.status, selfHostedFrom('disabling')))).returning({ id: mailboxDomains.id });
       if (updated.length) {
         await queueReconcile(tx, value.workspaceId, row.region);
         await recordAudit(tx, c, { action: 'inbound_domain.disable', workspaceId: value.workspaceId, target: { type: 'domain', id: row.id }, before: { name: row.name } });
@@ -398,12 +395,12 @@ function registerReceivingDomains(app: App) {
   // ---------- subdomains ----------
   const SubParams = z.object({ id: z.string().min(1).max(120), subdomainId: z.string().min(1).max(120) });
   const subdomains = `${base}/{id}/subdomains`;
-  const removedStatus = sql`${mailboxDomains.status} IN ('disabled','disabling')`;
+  const removed = hostRemovedSql(sql`mailbox_domains`);
   app.openapi(createRoute({ ...meta, method: 'get', path: subdomains, operationId: 'listInboundSubdomains', summary: 'List receiving subdomains',
     description: `The domain\u2019s receiving hosts other than its own (GET ${hosts} lists them all).`,
     request: { params: IdParam, query: z.object({ status: z.enum(['active', 'disabled', 'all']).default('active'), cursor: z.string().max(200).optional(), limit: Limit }) }, responses: { 200: response(pageOf(InboundSubdomainSchema, 'InboundSubdomainPage')), ...errors } }), async c => {
     admin(c); const { domain, parent } = await receivingParent(c, c.req.valid('param').id); const q = c.req.valid('query');
-    const rows = await c.env.db.select().from(mailboxDomains).where(and(eq(mailboxDomains.parentId, parent.id), q.status === 'all' ? undefined : q.status === 'active' ? sql`NOT ${removedStatus}` : removedStatus, q.cursor ? sql`${mailboxDomains.name} > ${q.cursor}` : undefined)).orderBy(asc(mailboxDomains.name)).limit(q.limit + 1);
+    const rows = await c.env.db.select().from(mailboxDomains).where(and(eq(mailboxDomains.parentId, parent.id), q.status === 'all' ? undefined : q.status === 'active' ? sql`NOT ${removed}` : removed, q.cursor ? sql`${mailboxDomains.name} > ${q.cursor}` : undefined)).orderBy(asc(mailboxDomains.name)).limit(q.limit + 1);
     return c.json({ data: await subdomainViews(c.env, domain, parent, rows.slice(0, q.limit)), nextCursor: rows.length > q.limit ? rows[q.limit - 1]!.name : null }, 200);
   });
   app.openapi(createRoute({ ...meta, method: 'post', path: subdomains, operationId: 'createInboundSubdomain', summary: 'Add a receiving subdomain',
@@ -512,14 +509,14 @@ function registerAddresses(app: App) {
     // Hosted, the workspace's live claim is enough, verified or not: routing waits for proven ownership and the MX observation
     // (mailbox-receipts.ts), so an address made the minute its domain was added receives once both are there.
     // A domain may receive on several hosts: the address goes to the row of its own host. A removed host takes no new addresses.
-    const receivingRow = async (db: DbExecutor = c.env.db) => (await db.select().from(mailboxDomains).where(and(eq(mailboxDomains.workspaceId, value.workspaceId), eq(c.env.config.multiTenant?mailboxDomains.receivingHost:mailboxDomains.name,host), c.env.config.multiTenant ? hostTakesAddresses(value.workspaceId, sql`mailbox_domains`) : undefined)).orderBy(sql`${mailboxDomains.status} IN ('disabled','disabling')`).limit(1))[0];
+    const receivingRow = async (db: DbExecutor = c.env.db) => (await db.select().from(mailboxDomains).where(and(eq(mailboxDomains.workspaceId, value.workspaceId), eq(c.env.config.multiTenant?mailboxDomains.receivingHost:mailboxDomains.name,host), c.env.config.multiTenant ? hostTakesAddresses(value.workspaceId, sql`mailbox_domains`) : undefined)).orderBy(hostRemovedSql(sql`mailbox_domains`)).limit(1))[0];
     const found = await receivingRow();
     // Hosted: on the workspace's own domain, an address where nothing receives yet turns receiving on there, and the answer
     // says which MX record to publish. Checked here (receiving-hosts.ts planReceiving); written in the transaction below
     // that creates the address and its flow, so any refusal in it leaves receiving as it was.
     const turnOn = !found && c.env.config.multiTenant ? await planReceiving(c, value.workspaceId, host, input.address, admits(() => lasting(c, RECEIVING_HOST_CHANGE))) : undefined, turnedOn = !!turnOn;
     if (!found && !turnOn) throw new ApiError(409, 'MAILBOX_DOMAIN_NOT_ENABLED', c.env.config.multiTenant ? `${host} doesn’t receive mail yet. Turn it on with POST /v1/inbound/domains/{id}/hosts, then create the address.` : `Enable receiving for ${host}'s domain first: POST /v1/inbound/domains/{id}/enable, then create the address.`, 'address');
-    if (found && ['disabled', 'disabling'].includes(found.status)) throw new ApiError(409, 'MAILBOX_DOMAIN_NOT_ENABLED', c.env.config.multiTenant ? `${host} no longer receives mail: its receiving host was removed. Add it back with POST /v1/inbound/domains/${found.domainId}/hosts and {"name":"${host}"}, then create the address.` : `Verify ${host}'s domain in this workspace before creating addresses on it.`, 'address');
+    if (found && hostRemoved(found.status)) throw new ApiError(409, 'MAILBOX_DOMAIN_NOT_ENABLED', c.env.config.multiTenant ? `${host} no longer receives mail: its receiving host was removed. Add it back with POST /v1/inbound/domains/${found.domainId}/hosts and {"name":"${host}"}, then create the address.` : `Verify ${host}'s domain in this workspace before creating addresses on it.`, 'address');
     const publicAddress = input.publicAddress;
     if (publicAddress) {
       if (input.ttlSeconds !== undefined) throw new ApiError(422, 'TEMPORARY_MAILBOX_ROUTING', 'Temporary mailboxes cannot have a public sender address.', 'publicAddress');

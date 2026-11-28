@@ -1,5 +1,6 @@
 import { bigint, bigserial, boolean, customType, index, integer, smallint,jsonb, pgTable, primaryKey, text, timestamp, unique, uniqueIndex } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
+import type { HostStatus } from '../states.js';
 
 /** Workspace-wide readers may see durable mail, but not an ended inbox's mail while GC drains. */
 export function retainedMail(probe: 'exists' | 'perMessage' = 'exists') {
@@ -27,7 +28,6 @@ export type MxReport = {
   message: string;
   checkedAt: string;
 };
-export type MailboxDomainStatus = 'provisioning' | 'waiting_for_mx' | 'active' | 'disabling' | 'disabled' | 'failed';
 // Keep the existing CHECK constraint and default. Only the DB uses the old enum spelling.
 const catchAll = customType<{data:'create_address'|'store';driverData:'create_mailbox'|'store'}>({
   dataType: () => 'text', toDriver: v => v === 'store' ? v : 'create_mailbox', fromDriver: v => v === 'store' ? v : 'create_address',
@@ -50,7 +50,7 @@ export const mailboxRegions = pgTable('mailbox_regions', {
 
 export const mailboxDomains = pgTable('mailbox_domains', {
   id: text('id').primaryKey(), ...scope(), domainId: text('domain_id').notNull(), name: text('name').notNull(), receivingHost:text('receiving_host'), region: text('region').notNull(),
-  status: text('status').$type<MailboxDomainStatus>().notNull(), catchAll: catchAll('catch_all').notNull().default(sql`'store'`),
+  status: text('status').$type<HostStatus>().notNull(), catchAll: catchAll('catch_all').notNull().default(sql`'store'`),
   mx: jsonb('mx').$type<MxReport | null>(), mxMisses:smallint('mx_misses').notNull().default(0),lastError: text('last_error'), enabledAt: ts('enabled_at'), checkedAt: ts('checked_at'),
   // One row is one receiving host of a domain (its host is coalesce(receiving_host,name)). The domain's first row has no
   // parent; every further host (the root, reply., acme. ...) points at it and shares its SES domain. Hosted: when a routing
