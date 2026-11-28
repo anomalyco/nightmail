@@ -121,6 +121,17 @@ async function hostedAttachmentAccess(key:string,account='905840579680') {
 // setup integrations use the normal app with mocked providers; no auth bypasses.
 const BASE = (process.env.API_BASE_URL ?? 'http://127.0.0.1:8787').replace(/\/$/, '');
 const BENCH = (process.env.NIGHTMAIL_BENCH ?? process.env.BANE_BENCH) === '1';
+test('self-hosted DMARC: a failed lookup is never cached and keeps the last answer', async t => {
+  const { localDmarc } = await import('./src/dmarc.js'), name = `${randomUUID()}.example.com`;
+  let fail = true;
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL) => {
+    const q = new URL(String(input)).searchParams.get('name');
+    return Response.json(fail ? { Status: 2 } : q === `_dmarc.${name}` ? { Status: 0, Answer: [{ name: q, type: 16, data: 'v=DMARC1; p=reject' }] } : { Status: 3 });
+  });
+  assert.equal(await localDmarc(name), null);
+  fail = false; const first = await localDmarc(name); assert.equal(first?.status, 'reject', 'The failure was not cached.');
+  fail = true; assert.deepEqual(await localDmarc(name, undefined, true), first, 'A failed refresh keeps the last answer, checkedAt included.');
+});
 test('email preview engine: Word-only lint, Gmail account modes, safe rewrites and byte clipping', async () => {
   const { emulate, lint, PreviewLimitError } = await import('./src/email-preview/index.js');
   const source = '<!doctype html><head><style>.card {border-radius:14px;color:#123456}</style></head><body><p class="card">Receipt</p><a href="https://example.com/read">Read</a><img src="https://example.com/pixel" alt="Logo"><!--[if mso]><p style="display:grid">Word only</p><![endif]--></body>';
@@ -4485,7 +4496,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
             default:throw Error(cmd.constructor.name);
           }
         });
-        let denyForwarding = false, loseCreateResponse = false, failTenantOnce = false, dropCreate = false,quotaFull=false;
+        let denyForwarding = false, loseCreateResponse = false, failTenantOnce = false, dropCreate = false,quotaFull=false,denyDelete=false;
         const root = `${unique('claims')}.invalid`, domain = `mail.${root}`, foreign = `existing.${unique('ses')}.invalid`;
         const importParent=`${unique('import')}.invalid`,imported=`mail.${importParent}`, reserved=`${unique('reserved')}.invalid`;
         const verifiedIdentity = { VerificationStatus:'SUCCESS', VerifiedForSendingStatus:true, DkimAttributes:{ SigningEnabled:true, Status:'SUCCESS', Tokens:['fixture1','fixture2','fixture3'], SigningHostedZone:'dkim.amazonses.com' } };
@@ -4509,7 +4520,7 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
             }
             case 'ListResourceTenantsCommand': return {ResourceTenants:[...associations].filter(k=>k.endsWith(`:${i.ResourceArn}`)).map(k=>({TenantName:k.split(':')[0]}))};
             case 'DeleteTenantResourceAssociationCommand': assert.ok(associations.delete(`${i.TenantName}:${i.ResourceArn}`),'Never remove an association that does not exist'); return {};
-            case 'DeleteEmailIdentityCommand': assert.ok(identities.delete(`${account}:${i.EmailIdentity}`)); return {};
+            case 'DeleteEmailIdentityCommand': if (denyDelete) { denyDelete=false; throw Object.assign(new Error('Synthetic delete denied'),{name:'AccessDenied'}); } assert.ok(identities.delete(`${account}:${i.EmailIdentity}`)); return {};
             case 'ListEmailIdentitiesCommand': {
               assert.equal(account, customer);
               if (failImportRead) throw Object.assign(new Error('synthetic throttle'),{name:'ThrottlingException'});
@@ -5042,9 +5053,11 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
               }
               identity.DkimAttributes={...dkim,SigningEnabled:false};policies.set(domain,['v=DMARC1; p=reject']);d=await observe();
               assert.deepEqual(d.dmarc.alignment,{dkim:false,spf:true});await accepted(await marketing());
+              // A DMARC lookup that fails is no observation: the verifier keeps the last one, checkedAt included, and bulk sending with it.
+              const kept=await cached();dmarcFailure=true;d=await observe();dmarcFailure=false;
+              assert.deepEqual(await cached(),kept);assert.equal(d.dmarc.status,'reject');assert.deepEqual(recommended(d),[]);await accepted(await marketing());
               identity.MailFromAttributes={MailFromDomain:`email.${domain}`,MailFromDomainStatus:'FAILED'};d=await observe();assert.deepEqual(d.dmarc.alignment,{dkim:false,spf:false});error(await marketing(),409,'BULK_DMARC_REQUIRED');
-              dmarcFailure=true; d=await observe();assert.equal(d.dmarc,null);assert.deepEqual(recommended(d),[]);error(await marketing(),409,'BULK_DMARC_REQUIRED');
-              const staleCount=dmarcQueries;assert.equal((await inspect()).dmarc,null); assert.equal(dmarcQueries,staleCount);
+              const staleCount=dmarcQueries;assert.deepEqual((await inspect()).dmarc,d.dmarc); assert.equal(dmarcQueries,staleCount);
             } finally {runtime.config.requireDmarcForBulk=originalFlag;policies.clear();dmarcFailure=false;fault='';identity.MailFromAttributes=originalMailFrom;identity.DkimAttributes=dkim;await observe();}
           });
           await dt.test('MX inbound routes only MX-verified customer hosts, independently of DKIM, and splits private Bcc',async it=>{
@@ -5570,8 +5583,11 @@ describe('OIDC dashboard sessions and current-policy authorization', () => {
         assert.equal((await released())[0].connection_id,reconnected.id);
         // Disconnecting a shared connection removes its tagged pool identities so a later reconnect never meets its own ghost.
         associations.add(`bane-${a.org.id}:arn:aws:ses:${region}:${platform}:identity/${domain}`); const sharedCalls=calls.length;
+        // AWS work runs after the fence commits: a failure leaves the connection disconnecting with its claims, and DELETE again resumes.
+        denyDelete=true; error(await local('DELETE', path, undefined, a.cookie), 403, 'SES_ACCESS_DENIED');
+        assert.equal(ok(await local('GET', path, undefined, a.cookie)).connection.state,'disconnecting'); assert.equal((await released())[0].connection_id,reconnected.id);
         ok(await local('DELETE', path, undefined, a.cookie));
-        assert.deepEqual(calls.slice(sharedCalls),['GetEmailIdentityCommand','ListResourceTenantsCommand','DeleteTenantResourceAssociationCommand','DeleteEmailIdentityCommand']);
+        assert.deepEqual(calls.slice(sharedCalls),['GetEmailIdentityCommand','ListResourceTenantsCommand','DeleteTenantResourceAssociationCommand','DeleteEmailIdentityCommand','GetEmailIdentityCommand','ListResourceTenantsCommand','DeleteEmailIdentityCommand']);
         assert.ok(!identities.has(`${platform}:${domain}`)); assert.equal(associations.size,[...associations].filter(k=>!k.endsWith(`:identity/${domain}`)).length);
         assert.equal((await released())[0].connection_id,null); assert.equal((await pool.query('SELECT 1 FROM operation_domains WHERE workspace_id=$1 AND name=$2',[a.org.id,domain])).rowCount,0);
         assert.deepEqual(ok(await local('GET', path, undefined, a.cookie)), { connection: null });

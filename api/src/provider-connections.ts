@@ -4,7 +4,7 @@ import { auditContext, auditInsert, recordAudit, type AuditContext } from './aud
 import { ApiError, assertSesConfigured, denied, isSimulatedSes, errors, id, json, log, logError, ModuleLoadError, notFound, response, wrapModuleLoad, type App, type Ctx, type Runtime, type JobHandler } from './core.js';
 import { caller, assume, platformCredentials } from './provider-credentials.js';
 import { awsError, discoverSes, feedbackUrl, loadSetupSdk, POOL_INSTALLATION, poolTenantName, provisionSes, provisionTenant, setupResources, verifiedByoDomains, type SesDiscovery, byoStackName } from './ses-setup.js';
-import { builtinClaim, builtinSettingUp, importByoClaims } from './domain-claims.js';
+import { builtinClaim, builtinSettingUp, importByoClaims, releaseConnectionClaims } from './domain-claims.js';
 import { SEND_LIMITS } from './send-limits.js';
 import { regionPattern, getRegionSettings } from './ses-region-state.js';
 import { JobDeferred, MAX_ATTEMPTS, retryDatabaseFailures } from './jobs.js';
@@ -589,7 +589,9 @@ export function registerProviderConnections(app: App) {
     try {
       const current=await get(c.env,wid);
       if (current?.template_version==='v5') {const result=await disconnectV5(c.env,wid,current.id,(db,conn)=>recordAudit(db,c,{action:'connection.delete',workspaceId:wid,target:{type:'connection',id:conn.id},before:{kind:'byo',region:conn.region,state:conn.state}}));c.get('actor').wakeJobs=1;return c.json(result,202);}
-      await c.env.db.transaction(async db => {
+      // No AWS call runs in a transaction: fence the connection under the send-admission lock, delete its shared identities,
+      // then release its claims and delete it. A failure leaves the fence (nothing sends on it); a repeated DELETE resumes.
+      const row = await c.env.db.transaction(async db => {
         await getRegionSettings(db, wid, 'update'); // Serialize with send admission, which takes FOR SHARE on this row.
         const row = (await db.execute<Row & { pause_reason: string | null }>(sql`SELECT * FROM provider_connections pc WHERE workspace_id=${wid} AND ${notProvisioning()}
           AND NOT EXISTS (SELECT 1 FROM sending_emails WHERE workspace_id=${wid} AND status IN ('queued','attempting','acceptance_unknown'))
@@ -598,11 +600,18 @@ export function registerProviderConnections(app: App) {
           if (!(await db.execute(sql`SELECT 1 FROM provider_connections WHERE workspace_id=${wid}`)).rowCount) return notFound('Connection');
           throw new ApiError(409, 'CONNECTION_IN_USE', 'Finish queued work or active setup before disconnecting.');
         }
+        if (row.state === 'disconnecting' && row.template_version !== 'v5') return row; // An earlier DELETE fenced it after these checks.
         // Disconnect/reconnect must not serve as a workspace-controlled unpause.
         if (row.pause_reason) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', row.pause_reason);
         if (row.template_version==='v5' || (await db.execute(sql`SELECT FROM provider_connection_regions WHERE connection_id=${row.id} AND NOT legacy AND NOT (${row.kind}='shared' AND region='us-east-1' AND pool_tenant_name IS NOT NULL AND receiving_state='off' AND sending_state='ready') LIMIT 1`)).rowCount) throw new ApiError(409,'REGIONAL_DISCONNECT_REQUIRED','A regional connection requires reviewed cleanup before disconnecting.');
-        await (await wrapModuleLoad(() => import('./operations.js'))).releaseConnectionDomains(c.env, db, wid, { id: row.id, kind: row.kind, region: row.region, aws_account_id: row.aws_account_id!, role_arn: row.role_arn!, external_id: row.external_id!, tenant_state: row.tenant_state });
-        await db.execute(sql`WITH deleted AS (DELETE FROM provider_connections WHERE id=${row.id} RETURNING id),
+        await db.execute(sql`UPDATE provider_connections SET state='disconnecting' WHERE id=${row.id}`);
+        return row;
+      });
+      await (await wrapModuleLoad(() => import('./operations.js'))).deleteConnectionIdentities(c.env, wid, { id: row.id, kind: row.kind, region: row.region, aws_account_id: row.aws_account_id!, role_arn: row.role_arn!, external_id: row.external_id!, tenant_state: row.tenant_state });
+      // Both statements are no-ops once a concurrent DELETE has finished, so only one audits.
+      await c.env.db.transaction(async db => {
+        await db.execute(sql`WITH ${releaseConnectionClaims(wid, sql`SELECT ${row.id}::text AS id`)} SELECT 1`);
+        await db.execute(sql`WITH deleted AS (DELETE FROM provider_connections WHERE id=${row.id} AND state='disconnecting' RETURNING id),
           audit AS (${auditInsert(auditContext(c), { action: 'connection.delete', workspaceId: wid, target: { type: 'connection', id: row.id }, before: { kind: row.kind, region: row.region, state: row.state } }, { from: sql`deleted` })}) SELECT 1`);
       });
     } catch (e) { if (e instanceof ModuleLoadError) throw e; throw awsError(e); }
