@@ -1059,4 +1059,3 @@ async function sendForward(runtime: Runtime, w: string, endpointId: string, addr
       throw new ApiError(422, 'CONNECTOR_UNAVAILABLE', 'Only confirmed endpoints receive routed, non-junk mail.');
   });
 }
-export { DEFAULT_POLICY };

@@ -17,7 +17,7 @@ type Keys = 'ok' | 'missing' | 'extra' | 'not_configured' | 'unauthorized' | 'un
 type Address = { id: string; address: string };
 
 /** The addresses a flow answers for: SUPPORT_ADDRESSES (default SUPPORT_ADDRESS), or the intake addresses. */
-export function configured(env: Env, flow: Flow) {
+function configured(env: Env, flow: Flow) {
   const list = flow === 'intake' ? env.INTAKE_ADDRESSES : env.SUPPORT_ADDRESSES || env.SUPPORT_ADDRESS;
   const all = [...new Set(list.split(',').map(a => a.trim().toLowerCase()).filter(Boolean))];
   return flow === 'intake' ? all.filter(a => a.split('@')[0]! in INTAKE) : all;

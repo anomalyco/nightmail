@@ -3,6 +3,7 @@ import { ApiError, digest, senderDomainAllowed, wrapModuleLoad, type Actor, type
 import { apiKeys } from './db/core.js';
 import { mailboxKeys } from './db/mailbox.js';
 import { API_KEY, checkBudget, credentialCtes } from './auth.js';
+import { inboxKeyBearer } from './brand.js';
 import { tieAllows } from './approval-ties.js';
 import { submittedHeaders } from './custom-headers.js';
 import { stripBlindRecipients, submissionParties } from './mailbox-mime.js';
@@ -22,9 +23,8 @@ import { parseSubmission, sealedMime } from './submission-mime.js';
  * revocation: migration 346 notifies bane_protocol_auth with the key's ID).
  */
 const RELAY_USER = 'apikey';
-const ADDRESS_KEY = /^(?:nm|bane|os)_mbx_[0-9a-f]{64}$/; // bane_/os_: remove after rename cleanup
 /** Whether a password is an API key rather than an app password (four-character groups of hex). */
-export const relayPassword = (password: string) => API_KEY.test(password) || ADDRESS_KEY.test(password);
+export const relayPassword = (password: string) => API_KEY.test(password) || inboxKeyBearer.test(password);
 /** The key behind a gateway credential ID, or null for an app password. */
 const relayKind = (kid: string) => kid.startsWith('key_') ? 'api_key' as const : kid.startsWith('mbk_') ? 'key' as const : null;
 type Kind = NonNullable<ReturnType<typeof relayKind>>;
@@ -50,7 +50,7 @@ const owns = (kind: Kind, addresses: string[]) => kind === 'key' ? sql`NOT EXIST
  *  has left, if it expires; the gateway reuses the login and keeps the session open no longer than that. */
 export async function relayLogin(runtime: Runtime, user: string, password: string, protocol: 'imap' | 'smtp') {
   if (protocol !== 'smtp' || user.toLowerCase() !== RELAY_USER) return null;
-  const kind: Kind = ADDRESS_KEY.test(password) ? 'key' : 'api_key';
+  const kind: Kind = inboxKeyBearer.test(password) ? 'key' : 'api_key';
   const addresses = kind === 'key' ? sql`(SELECT DISTINCT a FROM (${sendable} LIMIT 1001) x(a))` : sql`(SELECT NULL::text a WHERE false)`;
   const { rows: [row] } = await runtime.db.execute(sql`WITH k AS MATERIALIZED (${sendOnlyKey(runtime, kind, sql`k.hash=${await digest(password)}`)})
     SELECT k.id AS kid,k.id AS inbox,k.workspace_id AS workspace,coalesce('sponsor:'||w.quota_sponsor,'unsponsored') AS account,

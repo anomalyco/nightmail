@@ -28667,7 +28667,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('MX regional campaign editing, controls and disabled queue recovery', async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run})=>{
-      const {acquireRegionProvisioning,finishHostedRegion,toggleRegionSending}=await import('./src/states.js');
+      const {acquireRegionProvisioning,finishHostedRegion}=await import('./src/states.js');
       const {dispatchPartitions}=await import('./src/dispatch.js');
       const wid=runtime.config.workspaceId,oh='us-east-2',va='us-east-1',acct='111122223333',host='virginia.example',from=`sender@${host}`;
       Object.assign(runtime.config,{multiTenant:true,regionalSending:true});
@@ -28731,7 +28731,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       const queued=await direct(),inFlight=await direct();
       await db.query(`UPDATE sending_emails SET status='attempting',attempt_started_at=now() WHERE id=$1`,[inFlight]);
       await db.query(`UPDATE sending_emails SET scheduled_at=now()+interval '1 day',lease_until=now()+interval '2 minutes' WHERE id=$1`,[queued]);
-      await runtime.db.execute(toggleRegionSending(ref,false,generation));
+      await db.query("UPDATE provider_connection_regions SET sending_state='disabled',generation=generation+1 WHERE connection_id=$1 AND region=$2 AND NOT legacy",[wid,va]);
       for(const path of ['/v1/emails','/v1/campaigns'])assert.ok(ok(await local('GET',`${path}?region=${va}`)).data.length);
       const disposable=await edit(await create({name:'Disabled draft',...fields,from}));
       const endpoint=`/v1/campaigns/${disposable.id}`;
@@ -28749,7 +28749,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
 
   test('MX regional BYO: a rescan is not authorization and first-ready regions provision independently',async t=>{
     await simulatedSesFixture(t,async({runtime,db,local})=>{
-      const {startRegionScan,finishRegionScan,acquireRegionProvisioning,finishRegionProvisioning,toggleRegionSending}=await import('./src/states.js');
+      const {acquireRegionProvisioning,finishRegionProvisioning}=await import('./src/states.js');
       const {setupResources}=await import('./src/ses-setup.js'),{SESv2Client,GetEmailTemplateCommand,TestRenderEmailTemplateCommand}=await import('@aws-sdk/client-sesv2');
       const wid=runtime.config.workspaceId,oh='us-east-2',va='us-east-1',account='444455556666';
       Object.assign(runtime.config,{multiTenant:true,regionalSending:true,liveEnabled:true,aws:{accessKeyId:'unused',secretAccessKey:'fixture'}});
@@ -28758,8 +28758,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       const publish=async(region:string)=>{
         const ref={connectionId:wid,region},topic=`arn:aws:sns:${region}:${account}:${names.topicName}`;
         await db.query(`INSERT INTO provider_connection_regions(connection_id,region) VALUES($1,$2)`,[wid,region]);
-        const scan=Number((await runtime.db.execute(startRegionScan(ref))).rows[0]!.scan_revision);
-        await runtime.db.execute(finishRegionScan(ref,scan,true));
+        await db.query("UPDATE provider_connection_regions SET scan_state='ready_to_import',scan_revision=scan_revision+1 WHERE connection_id=$1 AND region=$2 AND NOT legacy",[wid,region]);
         assert.equal((await db.query('SELECT 1 FROM regional_sending_connections WHERE id=$1 AND region=$2',[wid,region])).rowCount,0);
         const gen=Number((await runtime.db.execute(acquireRegionProvisioning(ref))).rows[0]!.generation);
         assert.equal((await runtime.db.execute(acquireRegionProvisioning(ref))).rowCount,0);
@@ -28768,7 +28767,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         await db.query(`UPDATE provider_connection_regions SET confirmed_topic_arn=$3,confirmed_generation=generation WHERE connection_id=$1 AND region=$2`,[wid,region,topic]); // signed confirmation fixture
         assert.equal((await runtime.db.execute(finishRegionProvisioning(ref,gen-1,topic))).rowCount,0);
         assert.equal((await runtime.db.execute(finishRegionProvisioning(ref,gen,topic))).rowCount,1);
-        await runtime.db.execute(startRegionScan(ref));assert.equal((await db.query('SELECT 1 FROM regional_sending_connections WHERE id=$1 AND region=$2',[wid,region])).rowCount,1);
+        await db.query("UPDATE provider_connection_regions SET scan_state='scanning',scan_revision=scan_revision+1 WHERE connection_id=$1 AND region=$2 AND NOT legacy",[wid,region]);assert.equal((await db.query('SELECT 1 FROM regional_sending_connections WHERE id=$1 AND region=$2',[wid,region])).rowCount,1);
         const reserved=(await db.query(`SELECT * FROM reserve_regional_claim($1,$2,$3,$4,$1)`,[wid,`${region}.example`,region,`byo-${region}`])).rows[0];assert.equal(reserved.id,`byo-${region}`);
         await db.query(`UPDATE domain_claims SET sending_state='verified' WHERE token=$1`,[reserved.token]);
       };
@@ -28789,8 +28788,7 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       sesDown=true;
       assert.equal((await meter('template-replay',async()=>ok(await local('POST','/v1/emails/send',templated,'live',idem),202))).id,sent.id);
       sesDown=false;
-      assert.equal((await runtime.db.execute(toggleRegionSending({connectionId:wid,region:va},false,0))).rowCount,0);
-      assert.equal((await runtime.db.execute(toggleRegionSending({connectionId:wid,region:va},false,2))).rowCount,1);
+      await db.query("UPDATE provider_connection_regions SET sending_state='disabled',generation=generation+1 WHERE connection_id=$1 AND region=$2 AND NOT legacy",[wid,va]);
       error(await local('POST','/v1/emails/send',{from:`a@${va}.example`,to:address(),subject:'Blocked',text:'No fallback'}),409,'CONNECTION_REQUIRED');
       ok(await local('POST','/v1/emails/send',{from:`a@${oh}.example`,to:address(),subject:'Independent',text:'Mock only'}),202);
     });
@@ -38392,11 +38390,11 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     for(const path of ['/mcp/login','/mcp/consent']) assert.equal((await guardPublicRequest(path,new Headers(),peer,work)).status,429);
     assert.equal(reads,40);
     await simulatedSesFixture(t,async({runtime,db})=>{
-      const {reserveSignIn}=await import('./src/dashboard-auth.js'),headers=new Headers({'x-nightmail-client-ip':'192.0.2.255'});
-      for(let i=0;i<8;i++) await reserveSignIn(runtime,headers);
-      await assert.rejects(reserveSignIn(runtime,headers),{code:'AUTH_STATE_LIMIT'});
-      const {digest}=await import('./src/core.js'); await db.query('UPDATE auth_state_slots SET expires_at=now() WHERE peer=$1',[await digest('192.0.2.255')]);
-      await reserveSignIn(runtime,headers);
+      const {reserveAuthState}=await import('./src/account-login.js'),{digest}=await import('./src/core.js'),peerHash=await digest('192.0.2.255');
+      for(let i=0;i<8;i++) await reserveAuthState(runtime.db,peerHash);
+      await assert.rejects(reserveAuthState(runtime.db,peerHash),{code:'AUTH_STATE_LIMIT'});
+      await db.query('UPDATE auth_state_slots SET expires_at=now() WHERE peer=$1',[peerHash]);
+      await reserveAuthState(runtime.db,peerHash);
     });
   });
 
@@ -41923,9 +41921,11 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       error(await thread(as('chosen'), { addressId: a.id }), 403, 'PERMISSION_DENIED');
       error(await thread(as('reply'), { addressId: b.id }), 404, 'NOT_FOUND');
       error(await thread(as('reply'), { addressId: a.id, from: `beta@${host}` }), 403, 'FROM_NOT_ALLOWED');
-      // Every address includes ones added later; a chosen-address key doesn't.
+      // Every address includes ones added later; a chosen-address key doesn't. Legacy os_mbx_ keys also authenticate on /mcp.
       const gamma = await address('gamma');
       ok(await read(as('every'), gamma.id)); error(await read(as('chosen'), gamma.id), 404, 'NOT_FOUND');
+      const mcpTools = ok(await request('POST', '/mcp', as('every'), { jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }, { accept: 'application/json, text/event-stream', 'mcp-protocol-version': '2025-11-25' })).result.tools;
+      assert.ok(mcpTools.some((t: Json) => t.name === 'messages'), 'Legacy os_mbx_ inbox key authenticates on /mcp.');
       // A provisioning key creates inboxes and sees only those.
       const made = ok(await request('POST', '/v1/inboxes', as('provisioning'), {}), 201);
       assert.deepEqual(ok(await request('GET', '/v1/inboxes', as('provisioning'))).data.map((x: Json) => x.id), [made.id]);

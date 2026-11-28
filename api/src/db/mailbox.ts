@@ -102,14 +102,6 @@ export const mailMessages = pgTable('mail_messages', {
   createdAt: ts('created_at').notNull().defaultNow(), updatedAt: ts('updated_at').notNull().defaultNow(),
 }, t => [index('mail_messages_tenant_page').on(t.workspaceId, t.direction, t.receivedAt.desc(), t.id.desc())]);
 
-export const mailMessageIds = pgTable('mail_message_ids', {
-  ...scope(), messageId: text('message_id').notNull(), mailMessageId: text('mail_message_id').notNull(), threadId: text('thread_id').notNull(),
-}, t => [primaryKey({ columns: [t.workspaceId, t.messageId] })]);
-
-export const mailUnrouted = pgTable('mail_unrouted', {
-  ...scope(), messageId: text('message_id').notNull(), address: text('address').notNull(), createdAt: ts('created_at').notNull().defaultNow(),
-}, t => [primaryKey({ columns: [t.workspaceId, t.address, t.messageId] }), index('mail_unrouted_message').on(t.messageId), index('mail_unrouted_created_at').on(t.createdAt)]);
-
 export const mailboxMessages = pgTable('mailbox_messages', {
   heldReason:text('held_reason'),
   mailboxId: text('mailbox_id').notNull(), messageId: text('message_id').notNull(), ...scope(), threadId: text('thread_id').notNull(),
@@ -148,7 +140,6 @@ export const mailReceiptHolds=pgTable('mail_receipt_holds',{
   bindingWorkspace:text('binding_workspace'),owners:jsonb('owners').$type<Record<string,string[]>>().notNull(),recipients:jsonb('recipients').$type<string[]>().notNull(),notification:jsonb('notification').$type<Record<string,unknown>>().notNull(),
   receivedAt:ts('received_at').notNull(),expiresAt:ts('expires_at').notNull(),nextCheck:ts('next_check').notNull().defaultNow(),status:text('status').notNull().default('held'),error:text('error'),
 },t=>[primaryKey({columns:[t.bucket,t.sesMessageId]})]);
-export const mailIngestTurns=pgTable('mail_ingest_turns',{workspaceId:text('workspace_id').primaryKey(),servedAt:ts('served_at').notNull()});
 
 export const mailboxKeys = pgTable('mailbox_keys', {
   id: text('id').primaryKey(), ...scope(), name: text('name').notNull(), hash: text('hash').notNull().unique(), prefix: text('prefix').notNull(),

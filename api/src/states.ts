@@ -13,12 +13,10 @@ export const SENDING_STATES = ['pending', 'verified', 'lost', 'failed'] as const
 export const RECEIVING_STATES = ['off', 'pending', 'active', 'lost'] as const;
 export const CONNECTION_STATES = ['awaiting_role', 'scanning', 'ready_to_import', 'provisioning', 'ready', 'failed','disconnecting'] as const;
 export const TENANT_STATES = ['pending', 'ready', 'failed'] as const;
-export const POOL_STATES = ['pending', 'ready'] as const;
 export type SendingState = typeof SENDING_STATES[number];
 export type ReceivingState = typeof RECEIVING_STATES[number];
 export type ConnectionState = typeof CONNECTION_STATES[number];
 export type TenantState = typeof TENANT_STATES[number];
-export type PoolState = typeof POOL_STATES[number];
 
 // Publish local terminal transitions from UPDATE ... RETURNING, never by scanning mail
 // after commit. The event, subscribed deliveries and jobs either all exist or none do.
@@ -306,10 +304,6 @@ export const connectionTransitions: Record<ConnectionState, ConnectionState[]> =
 // sending readiness. Replacing an expired lease or disabling a binding invalidates its generation.
 type RegionRef = { connectionId:string; region:string };
 const managedRegion = (ref:RegionRef) => sql`connection_id=${ref.connectionId} AND region=${ref.region} AND NOT legacy`;
-export const startRegionScan = (ref:RegionRef) => sql`UPDATE provider_connection_regions SET scan_state='scanning',scan_revision=scan_revision+1
-  WHERE ${managedRegion(ref)} RETURNING scan_revision`;
-export const finishRegionScan = (ref:RegionRef, revision:number, completed:boolean) => sql`UPDATE provider_connection_regions SET scan_state=${completed?'ready_to_import':'failed'}
-  WHERE ${managedRegion(ref)} AND scan_revision=${revision} AND scan_state='scanning' RETURNING region`;
 export const acquireRegionProvisioning = (ref:RegionRef,guard:SQL=sql`true`,accepted:SQL=sql`false`) => sql`UPDATE provider_connection_regions SET sending_state='provisioning',generation=generation+1,lease_until=clock_timestamp()+interval '4 minutes',
   confirmed_generation=CASE WHEN confirmed_generation=generation AND confirmed_topic_arn=feedback_topic_arn THEN generation+1 END
   WHERE ${managedRegion(ref)} AND ${guard} AND (scan_state='ready_to_import' OR ${accepted} OR EXISTS (SELECT FROM provider_connections c WHERE c.id=connection_id AND c.kind='shared'))
@@ -321,8 +315,6 @@ export const finishRegionProvisioning = (ref:RegionRef,generation:number,confirm
   parent AS (UPDATE provider_connections c SET state='ready' FROM finished r WHERE c.id=r.connection_id AND c.state<>'ready' AND r.sending_state='ready'),
   settings AS (UPDATE ses_installation_settings s SET enabled_regions=s.enabled_regions||jsonb_build_array(r.region) FROM finished r JOIN provider_connections c ON c.id=r.connection_id
     WHERE s.workspace_id=c.workspace_id AND r.sending_state='ready' AND NOT s.enabled_regions ? r.region) SELECT * FROM finished`;
-export const toggleRegionSending = (ref:RegionRef,enable:boolean,generation:number) => sql`UPDATE provider_connection_regions SET sending_state=${enable?'ready':'disabled'},generation=generation+1
-  WHERE ${managedRegion(ref)} AND sending_state=${enable?'disabled':'ready'} AND generation=${generation} RETURNING generation`;
 // After the provisioner has verified the tenant and its resource associations. The pool,
 // not each tenant, owns the shared topic. Never copy a pool ARN into a BYO registration.
 export const finishHostedRegion = (ref:RegionRef,generation:number) => sql`WITH finished AS (UPDATE provider_connection_regions r SET sending_state='ready',tenant_state='ready',lease_until=NULL
@@ -331,9 +323,6 @@ export const finishHostedRegion = (ref:RegionRef,generation:number) => sql`WITH 
     AND r.connection_id=${ref.connectionId} AND r.region=${ref.region} AND NOT r.legacy AND r.sending_state='provisioning' AND r.generation=${generation} AND r.lease_until>clock_timestamp() RETURNING c.workspace_id,r.region),
   settings AS (UPDATE ses_installation_settings s SET enabled_regions=s.enabled_regions||jsonb_build_array(f.region) FROM finished f
     WHERE s.workspace_id=f.workspace_id AND NOT s.enabled_regions ? f.region) SELECT region FROM finished`;
-const receiveNext = {off:'review',review:'provisioning',provisioning:'active',active:'disabling',disabling:'off'} as const;
-export const transitionRegionReceiving = (ref:RegionRef,from:keyof typeof receiveNext,generation:number) => sql`UPDATE provider_connection_regions SET receiving_state=${receiveNext[from]},receiving_generation=receiving_generation+1
-  WHERE ${managedRegion(ref)} AND receiving_state=${from} AND receiving_generation=${generation} AND EXISTS(SELECT FROM provider_connections c WHERE c.id=connection_id AND c.kind='byo') RETURNING receiving_generation`;
 export function assertConnectionTransition(from: ConnectionState, to: ConnectionState) {
   if (!connectionTransitions[from].includes(to)) throw new Error(`Invalid connection transition ${from} -> ${to}`);
 }

@@ -1,6 +1,6 @@
 import { createRoute, z } from '@hono/zod-openapi';
 import { and, eq, inArray, isNull, sql } from 'drizzle-orm';
-import { actor, ApiError, assertSesConfigured, requiredOf, unrestrictedRequired, isSimulatedSes, errors, id, json, response, security, type Actor, type App, type Database, type JobHandler, type Runtime } from './core.js';
+import { actor, ApiError, assertSesConfigured, requiredOf, unrestrictedRequired, isSimulatedSes, errors, id, json, response, security, type App, type Database, type JobHandler, type Runtime } from './core.js';
 import { recordAudit } from './audit.js';
 import { apiKeys, jobs } from './db/core.js';
 import { domains } from './db/operations.js';

@@ -14,15 +14,6 @@ export const microCents = (v: bigint | string): MicroCents => {
   if (!/^-?\d{1,19}$/.test(v)) throw new RangeError(`Not an integer micro-cent amount: ${JSON.stringify(v)}`);
   return BigInt(v) as MicroCents;
 };
-export const fromCents = (cents: number): MicroCents => {
-  if (!Number.isSafeInteger(cents)) throw new RangeError(`Not a whole number of cents: ${cents}`);
-  return (BigInt(cents) * UC_PER_CENT) as MicroCents;
-};
-/** Whole cents, rounded towards negative infinity. */
-export const toCentsFloor = (v: MicroCents): number => {
-  const q = v / UC_PER_CENT, r = v % UC_PER_CENT;
-  return Number(r < 0n ? q - 1n : q);
-};
 /** "$12.34", "−$0.50"; four decimals when 0 < |v| < 1¢ ("$0.0002"). The public price pages format with the same function. */
 export const formatUsd = (v: MicroCents): string => usd(v);
 export const MicroCentsJson = z.string().regex(/^-?\d{1,19}$/).openapi('MicroCents', { description: 'Integer micro-cents (1¢ = 1,000,000) as a string.', example: '2500000000' });

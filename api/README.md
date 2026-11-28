@@ -707,8 +707,6 @@ The only acceptance-test file is `api/api.acceptance.test.ts`. Idempotency and a
 
 Use an isolated database with synthetic identities, never real user data, for local acceptance. For that dedicated local test installation, the suite needs the server's matching `NIGHTMAIL_ROOT_SECRET`, `API_BASE_URL`, and paired `DATABASE_URL`. Allow the fixture's subject `acceptance-operator` (`AUTH_TEST_SUBJECT`) in `AUTH_ALLOWED_SUBJECTS`. Reserve that subject and `operator@example.com` for the fixture; neither may collide with an existing user. Restart the API/worker after changing configuration. These are **test-only** identities/permissions, not production onboarding, and fake OAuth credentials alone are not an alternate login path.
 
-The dashboard is desktop-first. At a 390-pixel viewport its controls remain reachable, but the persistent sidebar leaves a cramped main pane; small-screen layout polish remains a follow-up, not a verified mobile-ready claim.
-
 Useful checks, from their respective packages:
 
 - `api/`: `bun run check`, `bun run test`, `bun run sdk`, and `bun run cf:check` (after the dashboard build).

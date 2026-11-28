@@ -1,7 +1,6 @@
-import { addressGlob } from './routing-match.js';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { ApiError, id, type DbExecutor, type Runtime } from './core.js';
-import { mailboxAddresses, mailboxes, mailboxWriteLanes, mailMessages, type MailAddress, type SendLimits } from './db/mailbox.js';
+import { mailboxAddresses, mailboxes, mailboxWriteLanes, mailMessages, type SendLimits } from './db/mailbox.js';
 import { mailText } from './mailbox-text.js';
 import { safeMailText } from './inbox-content.js';
 
@@ -73,15 +72,6 @@ export function htmlToPlain(html: string) {
 export function snippetOf(text: string | null | undefined, html: string | null | undefined) {
   const source = replyText(safeMailText(text ? text.slice(0, 16384) : null, html ? html.slice(0, 16384) : null).text);
   return source.replace(/\s+/g, ' ').trim().slice(0, 200);
-}
-export function uniqueAddresses(list: MailAddress[], limit = 20): MailAddress[] {
-  const seen = new Set<string>(), out: MailAddress[] = [];
-  for (const item of list) { const key = item.address.toLowerCase(); if (!key || seen.has(key)) continue; seen.add(key); out.push({ name: item.name || null, address: key }); if (out.length >= limit) break; }
-  return out;
-}
-/** Wildcard address rules: "*" matches any run of characters, e.g. support+*@acme.com or *@help.acme.com. */
-export function ruleMatches(rule: string, address: string) {
-  return addressGlob(rule.toLowerCase(),address);
 }
 export function validateRule(rule: string, domain: string) {
   const value = rule.trim().toLowerCase();

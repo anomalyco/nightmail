@@ -22,7 +22,7 @@ import { countScreened, failScheduledRelease, CAMPAIGN_ACTIVE, CAMPAIGN_RUNNING,
 import { productName } from './brand.js';
 import { ADMISSION_MS, roomName } from './campaign-room-protocol.js';
 import type { CampaignScreen, ScreenResult } from './screen.js';
-export { simulatedTopic, taggedEmailId, terminalColumns, terminalEvents };
+export { terminalColumns, terminalEvents };
 import { regionalSending, sendingConnections, type SendingBinding } from './domain-claims.js';
 import { lockSendScope, type SendScope } from './send-scope.js';
 import { uploadReservation } from './upload-reservation.js';

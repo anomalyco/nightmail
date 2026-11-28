@@ -9,7 +9,6 @@ use tokio::sync::watch;
 #[derive(Clone, Copy, Default)]
 pub struct Generation {
     pub auth: u64,
-    pub mail: u64,
 }
 type Sender = watch::Sender<Generation>;
 #[derive(Default)]
@@ -32,8 +31,6 @@ impl Hints {
             s.send_modify(|g| {
                 if auth {
                     g.auth = g.auth.wrapping_add(1)
-                } else {
-                    g.mail = g.mail.wrapping_add(1)
                 }
             })
         };

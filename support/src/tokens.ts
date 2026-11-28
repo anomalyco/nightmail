@@ -1,13 +1,12 @@
 // Short-lived capabilities the support Worker hands out, all HMAC-SHA256 under keys derived from one root
 // (SUPPORT_ROOT_SECRET) with HKDF and a purpose label, as Nightmail derives its own keys (api/README.md "Secret rotation").
 //
-// - chat token: lets one person's panel open one conversation's WebSocket for 15 minutes (renewed via /chat/resume);
-// - confirm token: the "Confirm it's me" link in an email reply (24 hours, single use, bound to conversation and address).
+// - chat token: lets one person's panel open one conversation's WebSocket for 15 minutes (renewed via /chat/resume).
 
 const encoder = new TextEncoder();
 const b64url = (bytes: ArrayBuffer | Uint8Array) => btoa(String.fromCharCode(...new Uint8Array(bytes))).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/, '');
 
-export type Purpose = 'chat-token/v1' | 'confirm/v1' | 'attachment/v1';
+export type Purpose = 'chat-token/v1' | 'attachment/v1';
 const keys = new Map<string, Promise<CryptoKey>>();
 
 /** The HMAC key for one purpose; the root never leaves this function. Fails closed when the secret is missing or weak. */
@@ -36,7 +35,7 @@ export async function verify(key: CryptoKey, payload: string, signature: string)
 }
 
 const SAFE = /^[A-Za-z0-9_@.+-]{1,200}$/;
-export const CHAT_TOKEN_MINUTES = 15;
+const CHAT_TOKEN_MINUTES = 15;
 const CHAT_TOKEN_SECONDS = CHAT_TOKEN_MINUTES * 60;
 
 export async function chatToken(root: string | undefined, conversationId: string, userId: string, now = Date.now()) {
@@ -54,19 +53,6 @@ export async function readChatToken(root: string | undefined, token: string | nu
   try { return await verify(await purposeKey(root, 'chat-token/v1'), `v1.${conv}.${userId}.${exp}`, sig) ? { userId, issuedAt, expiresAt } : null; } catch (error) { if (error instanceof MissingSecret) throw error; return null; }
 }
 
-/** A confirm link token: the conversation, a hash of the address (never the address itself in a URL) and an expiry. */
-export async function confirmToken(root: string | undefined, conversationId: string, email: string, now = Date.now()) {
-  const exp = Math.floor(now / 1000) + 24 * 3600, nonce = b64url(crypto.getRandomValues(new Uint8Array(12)));
-  const payload = `c1.${conversationId}.${await addressHash(email)}.${exp}.${nonce}`;
-  return `${payload}.${await sign(await purposeKey(root, 'confirm/v1'), payload)}`;
-}
-export async function readConfirmToken(root: string | undefined, token: string, now = Date.now()): Promise<{ conversationId: string; addressHash: string; nonce: string } | null> {
-  const parts = token.split('.');
-  if (parts.length !== 6 || parts[0] !== 'c1') return null;
-  const [, conv, hash, exp, nonce, sig] = parts as [string, string, string, string, string, string];
-  if (!SAFE.test(conv) || !/^[A-Za-z0-9_-]{20,64}$/.test(hash) || !/^\d{10}$/.test(exp) || Number(exp) * 1000 <= now) return null;
-  try { return await verify(await purposeKey(root, 'confirm/v1'), `c1.${conv}.${hash}.${exp}.${nonce}`, sig) ? { conversationId: conv, addressHash: hash, nonce } : null; } catch (error) { if (error instanceof MissingSecret) throw error; return null; }
-}
 export async function addressHash(email: string) { return b64url(await crypto.subtle.digest('SHA-256', encoder.encode(`bane-support:${email.trim().toLowerCase()}`))).slice(0, 32); }
 
 /** `conv_` + 26 base32 characters (130 bits). */

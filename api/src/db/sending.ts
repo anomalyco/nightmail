@@ -165,23 +165,7 @@ export const campaignReviews = pgTable('sending_campaign_reviews', {
   // recipients are frozen in one REPEATABLE READ snapshot. staticPrepared records whether static content_hash rows were stamped inline.
   capturedAt: time('captured_at').defaultNow(), capturedCount: integer('captured_count'), staticPrepared: boolean('static_prepared').notNull().default(false),
 }, t => [index('sending_review_campaign').on(t.workspaceId, t.campaignId)]);
-// One verdict per campaign and copy as delivered (src/screen.ts copyKey), shared by every recipient whose copy is the same.
-export const campaignScreens = pgTable('sending_campaign_screens', {
-  campaignId: text('campaign_id').notNull(), ...scope(), copyHash: text('copy_hash').notNull(), requests: integer('requests').notNull(), windows: integer('windows').notNull().default(0),
-  spam: doublePrecision('spam').notNull().default(0), model: text('model'), threshold: doublePrecision('threshold'), createdAt: time('created_at').notNull().defaultNow(), judgedAt: time('judged_at'),
-}, t => [primaryKey({ columns: [t.campaignId, t.copyHash] })]);
-// Recipient values are copied once from one database snapshot; no live contact joins during preparation or expansion.
-export const reviewRecipients = pgTable('sending_review_recipients', {
-  // No foreign key (migration 026): a statement-level trigger on reviews cascades deletes without a per-row insert check.
-  reviewId: text('review_id').notNull(),
-  ordinal: integer('ordinal').notNull(), recipient: jsonb('recipient').$type<ReviewedRecipient>().notNull(),
-  recipientBytes: integer('recipient_bytes').notNull(), contentHash: text('content_hash'), subject: text('subject'), snapshotBytes: integer('snapshot_bytes'), screenRejected: boolean('screen_rejected').notNull().default(false),
-}, t => [primaryKey({ columns: [t.reviewId, t.ordinal] })]);
 export const regionalLimits = pgTable('sending_region_limits', {
   ...scope(), region: text('region').notNull(), maxSendRate: doublePrecision('max_send_rate').notNull().default(0), max24HourSend: doublePrecision('max_24_hour_send').notNull().default(0), sentLast24Hours: doublePrecision('sent_last_24_hours').notNull().default(0), reserved: integer('reserved').notNull().default(0),
   checkedAt: time('checked_at'), nextAllowedAt: time('next_allowed_at'),
 }, t => [primaryKey({ columns: [t.workspaceId, t.region] })]);
-export const sendingIdempotency = pgTable('sending_idempotency', {
-  ...scope(), actorKeyId: text('actor_key_id').notNull(), path: text('path').notNull(), requestKey: text('request_key').notNull(), requestHash: text('request_hash').notNull(),
-  result: jsonb('result').$type<Record<string, unknown>>(), createdAt: time('created_at').notNull().defaultNow(),
-}, t => [primaryKey({ columns: [t.workspaceId, t.actorKeyId, t.path, t.requestKey] })]);

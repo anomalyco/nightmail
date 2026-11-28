@@ -50,7 +50,7 @@ const INTERNAL = [/^conv_[a-z2-7]{26}$/, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[
 const EMBEDDED = new RegExp(INTERNAL.map(shape => `(?<![A-Za-z0-9_-])(?:${shape.source.slice(1, -1)})(?![A-Za-z0-9_-])`).join('|'), 'gi');
 const idLike = (key: string) => key === 'id' || /(?:Id|_id)$/.test(key);
 const HIDDEN = Symbol('hidden');
-export const RESULT_LIMIT = 8192;
+const RESULT_LIMIT = 8192;
 
 /** `hidden`: values removed wherever they appear (the conversation's own person and ID), whatever field holds them. */
 export function project(value: unknown, depth = 0, key = '', hidden: readonly string[] = []): unknown {

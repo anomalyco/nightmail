@@ -23,7 +23,7 @@ export type TicketContext = {
    * tickets of an unbound conversation are always unverified. A ticket's customer is the person Nightmail stamped (its
    * scope), never one looked up from an address.
    */
-  verified: 'handoff' | 'dmarc' | 'signin' | 'magic_link' | 'agent' | null;
+  verified: 'handoff' | 'dmarc' | 'signin' | 'agent' | null;
   /** The email's DMARC verdict, for email tickets. */
   dmarc: string | null;
   /** The address that wrote, for an unverified email ticket (never presented as a customer). */
@@ -33,7 +33,7 @@ export type TicketContext = {
 };
 export type FiledTicket = { id: string; created: boolean; dueAt: number; replyTo: string | null };
 
-export const TYPE_LABEL: Record<TicketType, string> = { billing: 'billing', bug: 'bug', deliverability: 'deliverability', account: 'account', abuse_report: 'abuse', privacy: 'privacy', legal: 'legal', feature_request: 'feature request', other: 'support' };
+const TYPE_LABEL: Record<TicketType, string> = { billing: 'billing', bug: 'bug', deliverability: 'deliverability', account: 'account', abuse_report: 'abuse', privacy: 'privacy', legal: 'legal', feature_request: 'feature request', other: 'support' };
 
 const HOUR = 3_600_000;
 /** When the team should have answered (D8): appeals 4 business hours, limit requests 2 business days, else 1. */
@@ -198,14 +198,6 @@ export function ticketEmail(env: Pick<Env, 'NIGHTMAIL_ORIGIN'>, ctx: TicketConte
   ];
   const subject = `[${productName} ${TYPE_LABEL[input.type]}]${verified || ctx.dmarc === 'PASS' ? '' : ' [UNVERIFIED]'} ${ticket.id}: ${input.title} (${input.severity})`.replace(/[\r\n]+/g, ' ');
   return { subject, text: lines.join('\n') };
-}
-
-/** The team's email. Idempotent per ticket, so a retried notification never sends twice. */
-export async function notifyTeam(env: Env, ctx: TicketContext, ticket: FiledTicket, input: TicketInput) {
-  const { subject, text } = ticketEmail(env, ctx, ticket, input);
-  const sent = await nightmailApi(env).startThread({ to: [env.TICKET_TO], subject, text }, `ticket-${ticket.id}`);
-  await env.DB.prepare('UPDATE tickets SET notified_at = ? WHERE id = ?').bind(Date.now(), ticket.id).run();
-  return sent;
 }
 
 /** For a chat ticket: the customer's acknowledgement, which is also the thread the team replies in. */

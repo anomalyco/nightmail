@@ -7,7 +7,7 @@ import { chooseWorkspace, setDefaultWorkspace, WorkspaceChoice, type McpConnecti
 import { buildMcpCatalog, TOOLSETS, ALWAYS_LISTED, EMAIL_SEND_CONFIRMATION, EMAIL_SEND_ROUTING, FEEDBACK_INSTRUCTIONS, type McpOperation } from './mcp-catalog.js';
 import { fingerprintTag, issueLegacySession, MAX_LEGACY_SESSION_CHARS, staleLegacySession, toolSnapshot } from './mcp-session.js';
 import { describeAction, describeTool, listedTool, resourceActions, resourceTools } from './mcp-resources.js';
-import { mcpServerName, productName } from './brand.js';
+import { inboxKeyBearer, mcpServerName, productName } from './brand.js';
 import { setResponseByteLimit, withMemory } from './isolate-memory.js';
 import { EVENTS_EXTENSION, EventsError, MESSAGE_RECEIVED, serveEvents, type EventsCredential } from './mcp-events.js';
 import { callSupportTool, SUPPORT_INSTRUCTIONS, SUPPORT_TOOL_NAMES, supportTools } from './mcp-support.js';
@@ -654,7 +654,7 @@ export function registerMcp(app: App): void {
     // exactly as REST authenticates it: the /mcp request counts against its minute budget, and so does each tool call,
     // a REST request made with it), else an account-service access token.
     const bearer = c.req.header('authorization')?.match(/^Bearer (\S+)$/i)?.[1];
-    const inboxKey = bearer && /^(?:nm|bane)_mbx_[0-9a-f]{64}$/i.test(bearer) ? bearer : undefined; // bane_: remove after rename cleanup
+    const inboxKey = bearer && inboxKeyBearer.test(bearer) ? bearer : undefined;
     const response = preflight ? new Response(null, { status: 204 })
       : inboxKey ? await handler({ inbox: await (await import('./mailbox.js')).authorizeInboxKey(c, inboxKey), bearer: inboxKey })
       : bearer && workspaceBearer(bearer) ? await handler({ key: await bearerActor(c, bearer), bearer })

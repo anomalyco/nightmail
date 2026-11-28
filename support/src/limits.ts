@@ -41,9 +41,6 @@ export const DEFAULT_LIMITS = {
   mailPerDay: 2000,
   /** Agent feedback reports the triage agent reads a day (triage.ts): past it, the rest wait, and get no note if a day goes by. */
   triagePerDay: 100,
-  /** "Confirm it's me" links per address a day, and the least time between two for the same open confirmation. */
-  confirmsPerAddress: 3,
-  confirmResendMinutes: 60,
 };
 export type Limits = typeof DEFAULT_LIMITS;
 
@@ -191,8 +188,6 @@ export async function daily(env: Env, now = Date.now()) {
     env.DB.prepare('DELETE FROM overflow WHERE created_at < ?').bind(ago(30)),
     env.DB.prepare('DELETE FROM webhook_deliveries WHERE received_at < ?').bind(ago(30)),
     env.DB.prepare('DELETE FROM handoffs_used WHERE used_at < ?').bind(ago(30)),
-    env.DB.prepare('DELETE FROM confirmations WHERE used_at < ?').bind(ago(30)),
-    env.DB.prepare('DELETE FROM pending_confirms WHERE sent_at < ?').bind(ago(2)),
     env.DB.prepare('DELETE FROM tickets WHERE updated_at < ?').bind(ago(365)),
     env.DB.prepare("DELETE FROM conversations WHERE status = 'closed' AND closed_at < ? AND id NOT IN (SELECT conversation_id FROM tickets)").bind(ago(365)),
   ]);

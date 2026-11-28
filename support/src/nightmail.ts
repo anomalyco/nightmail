@@ -115,7 +115,6 @@ export function nightmailApi(env: Env, which: 'support' | 'intake' = 'support') 
       }, idempotencyKey),
   };
 }
-export type NightmailApi = ReturnType<typeof nightmailApi>;
 export type InboundEvent = { cursor: string; type: string; addressId: string | null; threadId: string | null; messageId: string | null };
 
 export type InboundMessage = {

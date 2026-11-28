@@ -6,7 +6,7 @@ import type { Actor, App, AppEnv, Ctx, DbExecutor, MailboxAccess, RequestOrigin,
 import { agentTokens, apiKeys } from './db/core.js';
 import { mailboxKeys } from './db/mailbox.js';
 import { AuditEntry, auditContext, auditInsert, keyTrail, LastChange, lastChanges, recordAudit, type AuditVia } from './audit.js';
-import { productName, secretPrefixes, shownPrefix } from './brand.js';
+import { inboxKeyPrefix, productName, secretPrefixes, shownPrefix } from './brand.js';
 import { idempotencyGate, idempotent, IdempotencyHeaders, idempotentRequest, validIdempotencyKey } from './idempotency.js';
 import { approvalField, approvalTie, approvalTies, tiedNextStep } from './approval-ties.js';
 
@@ -154,7 +154,7 @@ export const requireReceivingConsent: MiddlewareHandler<AppEnv> = async (c,next)
 const AGENT_TOKEN = /^(?:nm|bane|os)_agent_/;
 export const API_KEY = /^(?:nm_|bane_|os_(?:live_)?)[0-9a-f]{64}$/i;
 /** A workspace API key or agent token (not an inbox key, not an account-service token): what bearerActor takes. */
-export const workspaceBearer = (token: string) => /^(?:nm|bane|os)_(?!mbx_)/.test(token);
+export const workspaceBearer = (token: string) => /^(?:nm|bane|os)_/.test(token) && !inboxKeyPrefix.test(token);
 /** How a revoked key was revoked: its newest revocation's `via` (audit_events_key_target), read only for a revoked key. */
 const revokedVia = sql`CASE WHEN k.revoked_at IS NOT NULL THEN (SELECT a.via FROM audit_events a WHERE a.workspace_id = k.workspace_id AND a.target_type = 'api_key'
   AND a.target_id = k.id AND a.action = 'api_key.revoke' ORDER BY a.at DESC, a.id DESC LIMIT 1) END`;
