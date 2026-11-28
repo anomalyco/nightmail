@@ -1,7 +1,7 @@
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router'
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeftRight, Bot, Check, ChevronRight, CornerDownLeft, Eye, EyeOff, Globe, KeyRound, Lock, LogOut, MessageCircleQuestionMark, Moon, Search, Send, Sun, type LucideIcon } from 'lucide-react'
+import { ArrowLeftRight, Bot, Check, ChevronRight, CornerDownLeft, Eye, EyeOff, Globe, KeyRound, Lock, LogOut, Mail, MessageCircleQuestionMark, Moon, Search, Send, Server, Sun, type LucideIcon } from 'lucide-react'
 import { sectionPath, useApi, useSession, useWorkspaceAccess } from '../data/context'
 import { useAccounts, withOwnAccount } from '../data/accounts'
 import { isAbortError, request } from '../data/live'
@@ -10,11 +10,12 @@ import { errorText } from '../data/types'
 import { openConnectAgent } from '../lib/connect-agent'
 import { togglePrivacy, usePrivacy } from '../lib/privacy'
 import { useTheme } from '../lib/theme'
+import { useMailServers } from '../features/docs/mail-settings'
 import { Dialog, Icon, useToast } from './ui'
 
-// ⌘K: every page of the shell and the things you'd otherwise hunt for (connect an agent, a new key, a domain, a test
-// email, Help, the theme, another workspace, Sign out), filtered as you type. With nothing typed it lists what you used
-// last, then the pages with their G shortcuts, then the actions. Arrow keys (or Ctrl+N and Ctrl+P) move, Enter runs,
+// ⌘K: every page of the shell and the things you'd otherwise hunt for (connect an agent, a new key, SMTP and IMAP
+// settings, a domain, a test email, Help, the theme, another workspace, Sign out), filtered as you type. With nothing
+// typed it lists what you used last, then the pages with their G shortcuts, then the actions. Arrow keys (or Ctrl+N and Ctrl+P) move, Enter runs,
 // Escape closes; Switch workspace opens a list of its own, and Backspace in an empty field goes back. It opens on the
 // next frame with nothing animated (it is reached for many times a day) and floats over the page, so nothing moves.
 export type Shortcut = { keys: string[]; label: string }
@@ -191,6 +192,7 @@ function useActions({ help, signOut }: { help: (() => void) | null; signOut: (()
   const { theme, toggleTheme } = useTheme()
   const privacy = usePrivacy()
   const identity = useSession()?.identity
+  const mail = useMailServers() !== null
   const { canAdminister, multiTenant } = useWorkspaceAccess()
   return useMemo(() => {
     // A test email from the workspace's own verified domain (else its built-in one) to the signed-in person, as
@@ -210,6 +212,9 @@ function useActions({ help, signOut }: { help: (() => void) | null; signOut: (()
       action({ id: 'connect-agent', title: 'Connect your agent', icon: Bot, words: 'mcp ai claude cursor codex opencode chatgpt', run: openConnectAgent }),
       ...canAdminister ? [
         action({ id: 'new-api-key', title: 'New API key', icon: KeyRound, words: 'create token secret', run: () => navigate('/api-keys?create=send') }),
+        // SMTP & IMAP: the server, port and username an app or a mail app needs, each section of its own page.
+        ...mail ? [action({ id: 'smtp-settings', title: 'SMTP settings', icon: Server, words: 'server port host username login relay', run: () => navigate('/smtp-imap#smtp') }),
+          action({ id: 'imap-settings', title: 'IMAP settings', icon: Mail, words: 'mail app server port host username app password', run: () => navigate('/smtp-imap#imap') })] : [],
         action({ id: 'add-domain', title: 'Add domain', icon: Globe, words: 'new dns verify', run: () => navigate('/domains?add') }),
         ...identity?.email ? [action({ id: 'test-email', title: 'Send a test email', icon: Send, words: 'try first yourself', run: () => void sendTest() })] : [],
       ] : [],
@@ -219,7 +224,7 @@ function useActions({ help, signOut }: { help: (() => void) | null; signOut: (()
       ...multiTenant && identity ? [action({ id: 'switch-workspace', title: 'Switch workspace', icon: ArrowLeftRight, words: 'account change team', opens: 'workspaces' })] : [],
       ...signOut ? [action({ id: 'sign-out', title: 'Sign out', icon: LogOut, words: 'log out logout', run: signOut })] : [],
     ]
-  }, [api, client, navigate, toast, theme, toggleTheme, privacy, identity, canAdminister, multiTenant, help, signOut])
+  }, [api, client, navigate, toast, theme, toggleTheme, privacy, identity, mail, canAdminister, multiTenant, help, signOut])
 }
 
 // Hosted: every workspace of the accounts this browser connected, as the account menu lists them (the tab's own account

@@ -1,5 +1,6 @@
 import './settings.css'
 export { ApiKeysPage } from './keys'
+export { SmtpImapPage } from './smtp-imap'
 export { DomainsPage, DomainDetailPage } from './domains'
 export { SettingsPage } from './workspace'
 export { WebhookDetailPage } from './webhooks'

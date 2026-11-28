@@ -3407,8 +3407,8 @@ test('mail gateway: SMTP queues dispatchable content with a single database conn
   assert.deepEqual(smtpReply(422,'ATTACHMENT_CONTENT_MISMATCH','Message not sent: attachment "Rechnung März.pdf" is a Windows program, whatever it is called, and programs are never sent.\r\n250 2.0.0 ok'),
     {code:'550 5.6.1',text:'Message not sent: attachment "Rechnung M?rz.pdf" is a Windows program, whatever it is called, and programs are never sent.??250 2.0.0 ok'});
   assert.equal(smtpReply(422,'ATTACHMENT_TYPE_UNSCREENABLE','Message not sent: '+'x'.repeat(600))!.text.length,400);
-  assert.deepEqual([smtpReply(422,'UNSUPPORTED_ATTACHMENT_TYPE',''),smtpReply(422,'VALIDATION_FAILED','x'),smtpReply(402,'BALANCE_EMPTY','x')?.code,smtpReply(429,'REQUEST_RATE_LIMITED','x')?.code,smtpReply(403,'PROTOCOL_DENIED','x'),smtpReply(503,'MAIL_STORE_UNAVAILABLE','x')],
-    [{code:'550 5.6.1',text:'Attachment refused'},{code:'550 5.7.1',text:'Rejected'},'451 4.7.1','451 4.7.1',null,null]);
+  assert.deepEqual([smtpReply(422,'UNSUPPORTED_ATTACHMENT_TYPE',''),smtpReply(422,'INLINE_ATTACHMENT_INVALID','An inline attachment needs a contentId.'),smtpReply(422,'MIME_LIMIT','Message could not be safely parsed.'),smtpReply(422,'VALIDATION_FAILED','x'),smtpReply(402,'BALANCE_EMPTY','x')?.code,smtpReply(429,'REQUEST_RATE_LIMITED','x')?.code,smtpReply(403,'PROTOCOL_DENIED','x'),smtpReply(503,'MAIL_STORE_UNAVAILABLE','x')],
+    [{code:'550 5.6.1',text:'Attachment refused'},{code:'550 5.6.1',text:'An inline attachment needs a contentId.'},{code:'550 5.6.1',text:'Message could not be safely parsed.'},{code:'550 5.7.1',text:'Rejected'},'451 4.7.1','451 4.7.1',null,null]);
   // plain, attachment, large text, blind, 25 MiB, 100 recipients (two), signed, forwarded, two without a copy, no quota.
   assert.equal((await db.query('SELECT count(*)::int n FROM sending_emails WHERE actor_key_id=$1',[kid])).rows[0].n,12);
 });
@@ -19479,6 +19479,11 @@ describe('Dashboard API capabilities', () => {
     assert.doesNotThrow(()=>validateBlockHtml(html,{complete:true}));
     assert.ok(renderBlockHtml(html).includes('<strong>formatted</strong>'));
     assert.equal(renderBlockText(html),'Example\n\nSome formatted text.');
+    const styledList='<ul style="color:#666666;font-size:14px"><li>First</li><li style="color:#111111">Second</li></ul>';
+    assert.doesNotThrow(()=>validateBlockHtml(styledList,{complete:true}));
+    const renderedList=renderBlockHtml(styledList);
+    assert.match(renderedList,/<li style="[^"]*color:#666666;font-size:14px;">First<\/li>/);
+    assert.match(renderedList,/<li style="[^"]*color:#666666;font-size:14px;color:#111111;">Second<\/li>/);
   });
 
   test('campaign content is block HTML: the guide, validation errors, preview rendering and text alternative are observable', async t => {
@@ -23151,6 +23156,19 @@ describe('Hosted unsubscribe and dispatch-time consent', () => {
     const tokenTopic = async (token: string) => (await db.query("SELECT topic_id FROM operation_unsubscribe_tokens WHERE token_hash = encode(sha256(convert_to($1, 'UTF8')), 'hex')", [token])).rows[0]?.topic_id;
     const topicsOf = async (contact: Json) => Object.fromEntries(ok(await http('GET', `/v1/contacts/${contact.id}`, key.secret)).topics.map((row: Json) => [row.topicId, row.subscribed]));
     const refusedFor = (reply: Reply) => error(reply, 422, 'RECIPIENT_INELIGIBLE').details.map((row: Json) => row.reason);
+
+    // Transactional sends accept "Display Name <addr>" in from and custom RFC 8058 unsubscribe.url (marketing refuses unsubscribe).
+    const baseMail = mail({ to: ana.email });
+    const namedUnsub = ok(await http('POST', '/v1/emails/send', key.secret, { ...baseMail, from: `Acme Alerts <${baseMail.from}>`, unsubscribe: { url: 'https://app.example.invalid/unsub?token=abc' } }), 202);
+    const [namedRow] = (await db.query('SELECT from_address, snapshot FROM sending_emails WHERE id = $1', [namedUnsub.id])).rows;
+    assert.equal(namedRow.from_address, baseMail.from);
+    assert.equal(namedRow.snapshot.fromName, 'Acme Alerts');
+    assert.deepEqual(namedRow.snapshot.headers.filter((h: Json) => /^list-unsubscribe/i.test(h.Name)), [
+      { Name: 'List-Unsubscribe', Value: '<https://app.example.invalid/unsub?token=abc>' },
+      { Name: 'List-Unsubscribe-Post', Value: 'List-Unsubscribe=One-Click' },
+    ]);
+    error(await http('POST', '/v1/emails/send', key.secret, { ...baseMail, from: `Acme Alerts <${baseMail.from}>`, fromName: 'Other' }), 422);
+    assert.equal(error(await http('POST', '/v1/emails/send', key.secret, mail({ to: ana.email, kind: 'marketing', unsubscribe: { url: 'https://app.example.invalid/unsub' } })), 422, 'UNSUBSCRIBE_REQUIRES_TRANSACTIONAL').field, 'unsubscribe');
 
     // A topic is for marketing, and one the workspace has and hasn't archived: one read for a whole batch.
     assert.equal(error(await http('POST', '/v1/emails/send', key.secret, mail({ to: ana.email, topicId: news.id })), 422, 'TOPIC_REQUIRES_MARKETING').field, 'topicId');
@@ -29695,7 +29713,8 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         assert.deepEqual(await states(), { [`reply.${name}`]: 'active', [name]: 'active' });
         // The inbound check and Check now queue the same check of every host.
         await db.query("UPDATE jobs SET status='completed',payload=payload-'follow' WHERE id=$1", ['domain.mx:' + d.token]);
-        ok(await local('POST', `/v1/inbound/domains/${d.id}/check`));
+        const checked = ok(await local('POST', `/v1/inbound/domains/${d.id}/check`));
+        assert.deepEqual(checked.hosts.map((h: Json) => [h.name, h.status, h.mx?.state]).sort((a: string[], b: string[]) => a[0]!.localeCompare(b[0]!)), [[name, 'active', 'active'], [`reply.${name}`, 'active', 'active']].sort((a, b) => a[0]!.localeCompare(b[0]!)));
         assert.deepEqual([(await job()).status, (await job()).payload.follow], ['pending', 0], 'checkInboundDomain checks every host.');
         await db.query("UPDATE jobs SET status='completed',payload=payload-'follow' WHERE id=$1", ['domain.mx:' + d.token]);
         ok(await local('POST', `/v1/domains/${d.id}/verify`));
@@ -41990,7 +42009,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     const styled=visibleMail(null,'<style>.muted{visibility:hidden}</style><div class="muted">Sample</div><details>Sample</details><title>Sample</title><p>Visible</p>');assert.equal(styled.text,'Visible');assert.equal(styled.hiddenContent,true);
     const tags='vis\u{e0061}ible';assert.equal(visibleMail(tags,null).hiddenContent,true);assert.equal(displayText(tags),'visible');assert.equal(visibleMail(null,`<p>${tags}</p>`).text,'visible');
   });
-  test('ephemeral inbox: extract finds codes and links only in visible text and flags hidden content',async()=>{const {visibleMail}=await import('./src/inbox-content.js');const m=visibleMail('code 000000','<div hidden>code 111111</div><p style="font-size:0">code 222222</p><p>Verify: A3B4</p><a href="https://real.invalid/">other.invalid</a><span>zero\u200bwidth</span>','codes,links');assert.equal(m.hiddenContent,true);assert.deepEqual(m.extract,{codes:['A3B4'],links:[{text:'other.invalid',href:'https://real.invalid/',mismatch:true}]});assert.ok(!m.text.includes('111111'));});
+  test('ephemeral inbox: extract finds codes and links only in visible text and flags hidden content',async()=>{const {visibleMail}=await import('./src/inbox-content.js');const m=visibleMail('code 000000','<div hidden>code 111111</div><p style="font-size:0">code 222222</p><p>Verify: A3B4</p><a href="https://real.invalid/">other.invalid</a><span>zero\u200bwidth</span>','codes,links');assert.equal(m.hiddenContent,true);assert.deepEqual(m.extract,{codes:['A3B4'],links:[{text:'other.invalid',href:'https://real.invalid/',mismatch:true}]});assert.ok(!m.text.includes('111111'));const plain=visibleMail('Sign in via (https://app.example.invalid/auth/verify?token=abc123). Your verification code is 482913.',null,'codes,links');assert.deepEqual(plain.extract,{codes:['482913'],links:[{text:'https://app.example.invalid/auth/verify?token=abc123',href:'https://app.example.invalid/auth/verify?token=abc123',mismatch:false}]});const linkOnly=visibleMail('Verify your login: https://app.example.invalid/auth/verify?token=abc123',null,'codes,links');assert.deepEqual(linkOnly.extract,{codes:[],links:[{text:'https://app.example.invalid/auth/verify?token=abc123',href:'https://app.example.invalid/auth/verify?token=abc123',mismatch:false}]});});
   test('shared-pool staging redrive retires unattributed objects once, skips SES setup probe, and keeps mail_ignored_staging 5 days', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
       const { S3Client } = await import('@aws-sdk/client-s3');

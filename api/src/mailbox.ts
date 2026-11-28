@@ -106,6 +106,7 @@ const InboundDomainSchema = z.object({
   dns: z.array(MxRecord).describe('Records to publish for receiving.'), mx: MxReportSchema.nullable(), lastError: z.string().nullable(),
   enabledAt: z.string().nullable(), checkedAt: z.string().nullable(), addressCount: z.number().int(),
   subdomains: z.object({ enabled: z.boolean().describe('Whether the receipt rule also matches every subdomain.'), count: z.number().int().describe('Receiving subdomains.'), dns: z.array(MxRecord).describe('The wildcard MX record subdomains need, published once.') }),
+  hosts: z.array(z.object({ id: z.string(), name: z.string(), status: z.enum(['pending', 'active', 'mixed', 'lost', 'failed', 'removed']), mx: MxReportSchema.nullable() })).optional().describe('Returned by checkInboundDomain: every receiving host of the domain with its current MX check.'),
 }).openapi('InboundDomain');
 const InboundSubdomainSchema = z.object({
   id: z.string().describe('Subdomain ID (mdom_…).'), name: z.string().describe('Full host, e.g. acme.example.com.'), parentDomainId: z.string().describe(`${productName} domain ID of the parent.`), parentName: z.string(),
@@ -281,17 +282,26 @@ function registerReceivingDomains(app: App) {
     admin(c); const row = await operationDomain(c, c.req.valid('param').id);
     return c.json((await domainViews(c, [row]))[0]!, 200);
   });
-  app.openapi(createRoute({ ...meta, method: 'post', path: `${base}/{id}/check`, operationId: 'checkInboundDomain', summary: 'Check MX records now', description: 'Reads public DNS and reports who currently receives mail for the domain. Updates the receiving status when inbound is enabled. Hosted: also checks every receiving host of the domain again in the background within seconds, and keeps checking a host that waits for its MX for a while; read listReceivingHosts for each host’s status. Never changes DNS or AWS.', request: { params: IdParam }, responses: { 200: response(InboundDomainSchema), ...errors } }), async c => {
+  app.openapi(createRoute({ ...meta, method: 'post', path: `${base}/{id}/check`, operationId: 'checkInboundDomain', summary: 'Check MX records now', description: 'Reads public DNS and reports who currently receives mail for the domain and each of its receiving hosts (hosts[]). Updates the receiving status when inbound is enabled. Hosted: also checks every receiving host of the domain again in the background within seconds, and keeps checking a host that waits for its MX for a while. Never changes DNS or AWS.', request: { params: IdParam }, responses: { 200: response(InboundDomainSchema), ...errors } }), async c => {
     admin(c); const row = await operationDomain(c, c.req.valid('param').id);
     if (c.env.config.multiTenant) {
       // Every host of the domain, not only the one this answer's mx reads: the same DNS check the hourly sweep runs, now.
       if ((await c.env.db.execute(followMxJob(row.workspaceId, sql`SELECT d.id,dc.token FROM operation_domains d JOIN domain_claims dc ON dc.workspace_id=d.workspace_id AND dc.name=d.name WHERE d.workspace_id=${row.workspaceId} AND d.id=${row.id}`))).rowCount) { const actor = c.get('actor'); if (actor) actor.wakeJobs = Math.max(actor.wakeJobs ?? 0, 1); }
-      const [view]=await domainViews(c,[row]);return c.json({...view!,mx:await checkMx(view!.name,view!.region)},200);
+      const [view] = await domainViews(c, [row]);
+      const mx = await checkMx(view!.name, view!.region);
+      const hostRows = await listHosts(c, row);
+      const hosts = await Promise.all(hostRows.slice(0, 20).map(async h => ({
+        id: h.id, name: h.name, status: h.status,
+        mx: h.status === 'removed' ? h.mx : h.name === view!.name ? mx : await checkMx(h.name, view!.region),
+      })));
+      return c.json({ ...view!, mx, hosts }, 200);
     }
     const mx = await checkMx(row.name, row.region);
     await saveMailboxMx(c.env.db,row.workspaceId,row.id,mx);
     const [view] = await domainViews(c, [row]);
-    return c.json({ ...view!, mx }, 200);
+    const hostRows = await listHosts(c, row);
+    const hosts = hostRows.slice(0, 20).map(h => ({ id: h.id, name: h.name, status: h.status, mx: h.name === view!.name ? mx : h.mx }));
+    return c.json({ ...view!, mx, hosts }, 200);
   });
   app.openapi(createRoute({ ...meta, method: 'post', path: `${base}/{id}/enable`, operationId: 'enableInboundDomain', summary: 'Enable receiving for a verified domain',
     description: `Checks that the domain is verified in SES and that its MX records will not take mail from another provider, then queues setup: a ${productName} S3 bucket, SNS topic and a catch-all SES receipt rule for the domain. Publish the returned MX record to start receiving. Use force=true to take over a domain whose mail another provider receives today. Hosted, receiving follows verified DNS: this queues the domain\u2019s check now, and the domain reads provisioning until that check routes it (active), finds no MX yet (waiting_for_mx) or fails (failed, with lastError).`,
