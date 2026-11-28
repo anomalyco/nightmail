@@ -1,6 +1,6 @@
 import { ApiError, type MailRoute, type RoutingTestResult, type Api, type PageRequest, type PageResult, type Campaign, type CampaignState, type Contact, type AudienceList, type AudiencePreview, type Segment, type Domain, type Webhook, type WebhookDelivery, type MailboxDomain, type MailboxWebhookDelivery, type ReceivedEmailDetail, type InboundAddress, type InboundAddressState, type InboundMessage, type InboundMessageDetail, type InboundThread, type InboundThreadDetail, type InboundWebhook, type ForwardEndpoint, type Email, type RegionCatalog, type SesDiscovery, type RegionProvisionReceipt, type Workspace, type OverviewSetup, type CampaignReviewDisplay, type CampaignTemplate, type CampaignTemplateDraft, type CampaignTemplateSummary, type EmailEvent, type SendabilityReport, type ClientPreview, type Newsletter, type CampaignPreview, type CampaignSendReceipt, type CampaignStats, type Attachment, type ImportPreview, type AudiencePlan } from './types'
 import type { Agent, ApiKey, AppPassword, AuditEntry, CreatedAppPassword, DomainQuota, Topic, WorkspaceSettings } from './types'
-import type { CreatedInbox, Inbox, InboxMessageDetail, InboxMessagePage, LogDirection, LogEntry, SenderScore } from './types'
+import type { CreatedInbox, Inbox, InboxMessageDetail, InboxMessagePage, LogDirection, LogEntry, RequestScope, SenderScore } from './types'
 import type {
   AgentList as SdkAgentList,
   ApiError as SdkApiError,
@@ -123,7 +123,7 @@ export const selectedWorkspace = () => workspaceSelection
 // Every workspace or account switch bumps selectionEpoch and aborts scopeController so in-flight fetches from the
 // previous scope cancel immediately, stale responses are dropped even across A -> B -> A round trips, and any closure
 // pinned to the previous scope fails closed before calling fetch().
-export type RequestScope = { readonly account: string | null; readonly workspace: string | null; readonly epoch: number }
+export type { RequestScope }
 let selectionEpoch = 0
 let scopeController = new AbortController()
 export const currentScope = (): RequestScope => ({ account: accountSelection, workspace: workspaceSelection, epoch: selectionEpoch })

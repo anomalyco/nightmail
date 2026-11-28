@@ -3,7 +3,7 @@ import { productName } from '../../../api/src/brand.js'
 import type { Grade, Step } from '../../../api/src/standing-model.js'
 import type { Campaign as SdkCampaign, CampaignDraft as SdkCampaignDraft, Email as SdkEmail, InboundWebhookRotatedSecret as SdkInboundWebhookRotatedSecret, UpdatedInboundWebhook as SdkUpdatedInboundWebhook } from '../../../sdk/src/types.gen.js'
 import type { WebhookFields } from '../features/settings/webhook-patch.js'
-import type { RequestScope } from './live.js'
+export type RequestScope = { readonly account: string | null; readonly workspace: string | null; readonly epoch: number }
 export type RegionId = string
 export type ISODate = string
 export type Stream = 'transactional' | 'marketing'
