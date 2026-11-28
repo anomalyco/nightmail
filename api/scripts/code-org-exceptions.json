@@ -1,0 +1,23 @@
+{
+  "files": {
+    "api/api.acceptance.test.ts": 52038,
+    "api/src/operations.ts": 2604,
+    "api/src/placement-registries.ts": 1826,
+    "api/src/sending.ts": 4925,
+    "api/tear/access/access.rest.types.ts": 2876,
+    "api/tear/admission/admission.model.ts": 2018,
+    "api/tear/inbox/inbox.model.ts": 1751,
+    "api/tear/safety/workspace-isolation.host.ts": 3569,
+    "app/scripts/cls.mjs": 1701,
+    "app/src/features/home/tv/crt/commercial/show.js": 1946,
+    "gateway/core/src/imap.rs": 2834,
+    "gateway/mailgw/src/remote.rs": 2689,
+    "gateway/tear/src/model.rs": 1940,
+    "support/src/conversation.ts": 2774,
+    "support/test/fakes.ts": 1002,
+    "support/test/support.test.ts": 4095
+  },
+  "folders": {
+    "api/src": 239
+  }
+}

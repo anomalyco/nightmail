@@ -515,16 +515,21 @@ async function serve(app: App, c: Ctx, principal: Principal, catalog: ReadonlyMa
       if (byteLength(JSON.stringify(args)) > INPUT_LIMIT) fail('INVALID_ARGUMENTS', 'Arguments exceed the 12 MiB limit.');
       if (inbox && id === 'createInboundThread') fail('EPHEMERAL_REPLY_ONLY', 'Inboxes may only reply.');
       // The workspace comes first: membership and role there, checked now, decide what this call may do.
-      let actor: Actor | MailboxAccess = inbox ?? key?.key!;
+      let actor: Actor | MailboxAccess;
       if (connection) {
         const { workspace, ...rest } = args; args = rest;
         actor = await actorFor(workspace);
         const need = refusal(op, actor);
         if (need) { const error = denied('PERMISSION_DENIED', `Your role in this workspace (${actor.role}) and this connection’s scopes don’t allow ${id}.`, need); fail(error.code, error.message, 403, need); }
-      } else if (key && args.workspace !== undefined) {
-        // A key belongs to one workspace: a call may name that one, and is refused any other.
-        const { workspace, ...rest } = args; args = rest;
-        if (workspace !== key.key.workspaceId) fail('WORKSPACE_ACCESS_DENIED', 'An API key or agent token acts only in its own workspace. Omit workspace.', 403);
+      } else if (inbox) {
+        actor = inbox;
+      } else {
+        actor = key!.key;
+        if (args.workspace !== undefined) {
+          // A key belongs to one workspace: a call may name that one, and is refused any other.
+          const { workspace, ...rest } = args; args = rest;
+          if (workspace !== key!.key.workspaceId) fail('WORKSPACE_ACCESS_DENIED', 'An API key or agent token acts only in its own workspace. Omit workspace.', 403);
+        }
       }
       const value = id === 'revokeWorkspaceInvitation' ? await revokeInvitation(op, args, actor as Actor) : await invoke(op, args, actor);
       status = value.status; apiRequestId = value.requestId;

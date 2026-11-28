@@ -1,0 +1,48 @@
+{
+  "$schema": "./api/node_modules/oxlint/configuration_schema.json",
+  "extends": [
+    "./api/scripts/lint/recommended-ts.json"
+  ],
+  "categories": {
+    "correctness": "error"
+  },
+  "rules": {
+    "no-control-regex": "off",
+    "no-misleading-character-class": [
+      "error",
+      {
+        "allowEscape": true
+      }
+    ],
+    "no-unused-vars": [
+      "error",
+      {
+        "argsIgnorePattern": "^_",
+        "varsIgnorePattern": "^_",
+        "caughtErrorsIgnorePattern": "^_",
+        "ignoreRestSiblings": true
+      }
+    ]
+  },
+  "overrides": [
+    {
+      "files": [
+        "app/src/features/inbound/builder.tsx"
+      ],
+      "rules": {
+        "unicorn/no-thenable": "off"
+      }
+    }
+  ],
+  "ignorePatterns": [
+    "**/node_modules/**",
+    "**/dist/**",
+    "**/dist-tv/**",
+    "**/target/**",
+    "**/vendor/**",
+    "api/scripts/lint/**",
+    "api/src/hygiene-snapshot.ts",
+    "api/src/api-field-names.ts",
+    "sdk/src/**"
+  ]
+}

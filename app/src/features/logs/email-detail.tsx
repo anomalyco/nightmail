@@ -246,7 +246,7 @@ const stamp = (at: string, day: string) => sameDay(at, day) ? time(at) : date(at
 const linkText = (link: string) => link.replace(/^https?:\/\//, '').slice(0, 64) + (link.replace(/^https?:\/\//, '').length > 64 ? '…' : '')
 
 function stepTip(step: Step, day: string) {
-  const [name, meaning] = eventCopy[step.key] ?? [label(step.key), '']
+  const meaning = eventCopy[step.key]?.[1] ?? ''
   const detail = step.events[0]?.detail, links = [...new Set(step.events.flatMap(event => event.detail?.link ? [event.detail.link] : []))]
   const bots = step.events.filter(event => event.detail?.bot).length
   const lines: ReactNode[] = meaning ? [meaning] : []

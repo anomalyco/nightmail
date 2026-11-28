@@ -9,6 +9,8 @@
     "migrate": "node --env-file-if-exists=.env --import tsx src/migrate.ts",
     "iam-policy:personal": "node scripts/create-iam-policy.mjs",
     "check": "tsc --noEmit && tsc --ignoreConfig --noEmit --strict --skipLibCheck --target ES2022 --module NodeNext --lib ES2023,DOM,DOM.Iterable --types node,@cloudflare/workers-types scripts/e2e.ts",
+    "lint": "node --import tsx scripts/check-lint.ts",
+    "code-org": "node --import tsx scripts/check-code-org.ts",
     "e2e": "node --import tsx scripts/e2e.ts",
     "test": "node --env-file-if-exists=.env --import tsx --test api.acceptance.test.ts",
     "tear:ci": "bash tear/run.sh",
@@ -48,8 +50,10 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260908.1",
     "@hey-api/openapi-ts": "^0.99.0",
+    "@oxlint/plugins": "^1.95.0",
     "@types/node": "^26.5.0",
     "@types/pg": "^8.23.1",
+    "oxlint": "^1.95.0",
     "tsx": "^4.23.13",
     "typescript": "^6.0.3",
     "wrangler": "^4.130.0"

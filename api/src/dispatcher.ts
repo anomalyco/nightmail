@@ -1151,7 +1151,8 @@ async function dispatchReady(base: Runtime, lane: Lane, ready: (Leased & { owner
         }
         else await new Promise<void>(resolve=>{notify=resolve;});
       }
-    } finally {for(const r of await workers) if(r.status==='rejected') throw r.reason;}
+    } finally { await workers; }
+    for(const r of await workers) if(r.status==='rejected') throw r.reason;
   };
   if(ready.some(item=>item.contentBytes || item.mail.snapshot.attachments.length)) {
     // Reserve bytes, not a whole lane. Small pages overlap and share the result

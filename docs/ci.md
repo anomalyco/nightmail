@@ -166,6 +166,18 @@ The public price pages (`/pricing` and `/compare/*`, `app/src/features/pricing`)
 
 **Fix:** do what the violation's `use` line says. In `app/`, `bun run design-lint <files>` checks only the files you changed, `--rule <id>` one rule, `--json` gives the list to an agent. A sanctioned exception goes in the rule's `allow` list in the config with its reason, or on the CSS line as `/* stylelint-disable-next-line nightmail/<rule> -- <reason> */`.
 
+### Lint (Oxlint + anti-slop)
+
+`.oxlintrc.json` enables Oxlint correctness rules and the synced `anti-slop` pack (`api/scripts/lint/recommended-ts.json`) across `api/src`, `app/src` and `support/src`. Existing diagnostics are grandfathered per file and rule in `api/scripts/lint-baseline.json`. **Fails when** any file introduces a new diagnostic or exceeds its baseline ceiling for a rule.
+
+**Fix:** fix the reported violations instead of raising ceilings or adding inline disables. Run `bun run lint` in `api/` locally, and `bun run lint -- --ratchet` after cleaning up grandfathered violations to tighten the baseline.
+
+### Code organization (file size and folder breadth)
+
+`api/scripts/check-code-org.ts` enforces file line caps (non-test source files warn > 800, cap 1,500; test files cap 1,000) and folder breadth (warn > 40, cap 60 non-test source files per folder). Existing over-cap files and folders live in `api/scripts/code-org-exceptions.json` with ceilings that only go down. **Fails when** any new file or folder crosses its cap or an excepted entry grows above its ceiling.
+
+**Fix:** split new logic into focused modules or capability subfolders instead of growing an excepted file or folder. Run `bun run code-org` in `api/` locally, and `bun run code-org -- --ratchet` after shrinking an excepted entry to tighten or remove its ceiling.
+
 ## Deadlock guard (`acceptance`)
 
 Dev's E2E runs its steps concurrently, and every 40P01 it has hit so far was two endpoints locking the same rows (the workspace's settings row, a domain claim, a receipt or its window) in opposite orders. Each request then failed with a 500 after `deadlock_timeout`. The acceptance job now:
