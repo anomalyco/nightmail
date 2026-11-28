@@ -5,7 +5,9 @@ import { ArrowLeftRight, Bot, Check, ChevronRight, CornerDownLeft, Eye, EyeOff, 
 import { sectionPath, useApi, useSession, useWorkspaceAccess } from '../data/context'
 import { useAccounts, withOwnAccount } from '../data/accounts'
 import { isAbortError, request } from '../data/live'
+import { queries } from '../data/queries'
 import { resourceOf } from '../data/invalidation'
+import { preferredSendingDomain } from '../lib/domain'
 import { errorText } from '../data/types'
 import { openConnectAgent } from '../lib/connect-agent'
 import { togglePrivacy, usePrivacy } from '../lib/privacy'
@@ -199,8 +201,9 @@ function useActions({ help, signOut }: { help: (() => void) | null; signOut: (()
     // Overview's first-send card sends it (POST /v1/domains/{id}/test-send); it shows in Logs.
     async function sendTest() {
       try {
-        const { items } = await api.domains.list({ page: 1, pageSize: 10, refresh: false })
-        const domain = items.find(item => !item.builtIn && item.status === 'verified') ?? items.find(item => item.builtIn && item.status === 'verified')
+        const sendingDomains = queries.sendingDomains()
+        const items = await client.fetchQuery({ queryKey: ['nightmail', ...sendingDomains.key], queryFn: ({ signal }) => sendingDomains.read(api, signal), staleTime: 30_000 })
+        const domain = preferredSendingDomain(items, { allowBuiltIn: true })
         if (!domain) { toast('Add and verify a domain to send a test email.', 'error', { action: { label: 'Domains', onSelect: () => navigate('/domains') } }); return }
         const sent = await request<{ id: string }>(`/v1/domains/${encodeURIComponent(domain.id)}/test-send`, { method: 'POST', idempotencyKey: crypto.randomUUID() })
         void client.invalidateQueries({ predicate: query => query.queryKey[0] === 'nightmail' && ['overview', 'overview-setup', 'logs', 'emails', 'sender-score', 'sending-limit'].includes(resourceOf(query.queryKey)) }).catch(() => {})

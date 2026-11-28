@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronRight, MoreHorizontal } from 'lucide-react'
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
@@ -202,15 +202,9 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
     mounted.current = true
     return () => { mounted.current = false; refreshController.current?.abort() }
   }, [])
-  const [domainCursor, setDomainCursor] = useState<string | undefined>()
-  const options = useApiQuery(['campaign-options', { pageSize: 100, domains: domainCursor }], async (api, signal) => {
-    const domainPage = await api.domains.list({pageSize: 100, cursor: domainCursor, refresh: false}, signal)
-    // The built-in domain sends no campaigns (send_admission refuses them).
-    return { domains: domainPage.items.filter(domain => domain.status === 'verified' && !domain.builtIn), next: domainPage.nextCursor }
-  })
-  const previousOptions = useRef<typeof options.data>(undefined)
-  if (options.data) previousOptions.current = options.data
-  const choices = options.data ?? previousOptions.current ?? { domains: [], next: null }
+  const options = useApiDef(queries.sendingDomains())
+  // The built-in domain sends no campaigns (send_admission refuses them).
+  const verifiedDomains = useMemo(() => (options.data ?? []).filter(domain => domain.status === 'verified' && !domain.builtIn), [options.data])
   // The domain this workspace's campaigns go out from (its latest campaign with a sender): what an empty From suggests.
   const recent = useApiQuery(['campaigns', { pageSize: 10, senders: true }], (api, signal) => api.campaigns.list({ pageSize: 10 }, signal), { enabled: !form.fromEmail })
   const sendingDomain = recent.data?.items.find(item => item.fromEmail)?.fromEmail.split('@')[1]
@@ -219,13 +213,13 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
   const covers = (domain: string, parent: string) => domain === parent || domain.endsWith(`.${parent}`)
   const latestSender = recent.data?.items.map(item => ({ name: item.fromName, email: item.fromEmail })).find(sender => {
     const domain = sender.email.split('@')[1]?.toLowerCase()
-    return Boolean(domain) && !previousDomains.some(old => covers(domain, old)) && choices.domains.some(item => covers(domain, item.name.toLowerCase()))
+    return Boolean(domain) && !previousDomains.some(old => covers(domain, old)) && verifiedDomains.some(item => covers(domain, item.name.toLowerCase()))
   })
   const prefilled = useRef(Boolean(initial || newsletter))
   useEffect(() => {
     if (prefilled.current || !latestSender || formRef.current.fromEmail || formRef.current.fromName || document.activeElement?.id === 'campaign-from-email') return
     prefilled.current = true
-    const domain = latestSender.email.split('@')[1].toLowerCase(), match = choices.domains.find(item => covers(domain, item.name.toLowerCase()))
+    const domain = latestSender.email.split('@')[1].toLowerCase(), match = verifiedDomains.find(item => covers(domain, item.name.toLowerCase()))
     updateForm({ ...formRef.current, fromName: latestSender.name, fromEmail: latestSender.email, ...(match ? { regionId: match.regionId } : {}) })
     setRebased(value => ({ ...value, sender: value.sender + 1 }))
   }, [latestSender?.email]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -497,7 +491,7 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
         <div className="studio-notices"><Notices /></div>
         <div className="campaign-compose-sheet">
           <div className="campaign-compose-metadata">
-            <div className="campaign-compose-row campaign-compose-sender"><label htmlFor="campaign-from-email">From</label><CampaignSenderInput key={`${generation}.${rebased.sender}`} name={form.fromName} email={form.fromEmail} domains={choices.domains.map(domain => domain.name)} preferredDomain={sendingDomain} onError={setSenderError} errorId="campaign-from-error" disabled={controlsDisabled || options.isPending} onChange={({name, email}) => {const domain = email.split('@')[1]?.toLowerCase(); const supports = (parent: string) => domain === parent || domain?.endsWith(`.${parent}`); const match = choices.domains.find(item => supports(item.name) && item.regionId === formRef.current.regionId) ?? choices.domains.find(item => supports(item.name)); if (name !== formRef.current.fromName || email !== formRef.current.fromEmail || (match && match.regionId !== formRef.current.regionId)) updateForm({...formRef.current, fromName: name, fromEmail: email, ...(match ? {regionId: match.regionId} : {})}); markDirty()}} /><Button variant="ghost" size="sm" className="campaign-sender-toggle" aria-expanded={senderDetailsOpen} aria-controls="campaign-sender-details" onClick={toggleSender}>Reply-To<Icon icon={ChevronRight} size="sm" /></Button></div>
+            <div className="campaign-compose-row campaign-compose-sender"><label htmlFor="campaign-from-email">From</label><CampaignSenderInput key={`${generation}.${rebased.sender}`} name={form.fromName} email={form.fromEmail} domains={verifiedDomains.map(domain => domain.name)} preferredDomain={sendingDomain} onError={setSenderError} errorId="campaign-from-error" disabled={controlsDisabled || options.isPending} onChange={({name, email}) => {const domain = email.split('@')[1]?.toLowerCase(); const supports = (parent: string) => domain === parent || domain?.endsWith(`.${parent}`); const match = verifiedDomains.find(item => supports(item.name) && item.regionId === formRef.current.regionId) ?? verifiedDomains.find(item => supports(item.name)); if (name !== formRef.current.fromName || email !== formRef.current.fromEmail || (match && match.regionId !== formRef.current.regionId)) updateForm({...formRef.current, fromName: name, fromEmail: email, ...(match ? {regionId: match.regionId} : {})}); markDirty()}} /><Button variant="ghost" size="sm" className="campaign-sender-toggle" aria-expanded={senderDetailsOpen} aria-controls="campaign-sender-details" onClick={toggleSender}>Reply-To<Icon icon={ChevronRight} size="sm" /></Button></div>
             <RowProblem id="campaign-from-error" message={senderError} />
             <div id="campaign-sender-details" className="campaign-compose-preview" data-open={senderDetailsOpen || undefined} aria-hidden={!senderDetailsOpen} inert={!senderDetailsOpen}>
               <div>
@@ -505,8 +499,7 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
                 <RowProblem id="campaign-reply-to-error" message={replyToValidation} />
               </div>
             </div>
-            {(domainCursor || choices.next) && <div className="campaign-compose-feedback cluster"><Button onClick={() => setDomainCursor(undefined)}>First domains</Button><Button disabled={!choices.next} onClick={() => setDomainCursor(choices.next ?? undefined)}>More domains</Button></div>}
-            {!options.isPending && choices.domains.length === 0 && <div className="campaign-compose-feedback campaign-note" data-tone="warning"><span>No verified domains on this page · <Link to="/domains">Add a domain</Link></span></div>}
+            {!options.isPending && verifiedDomains.length === 0 && <div className="campaign-compose-feedback campaign-note" data-tone="warning"><span>No verified domains · <Link to="/domains">Add a domain</Link></span></div>}
             <div className="campaign-compose-row campaign-compose-subject"><label htmlFor="campaign-subject">Subject</label><Input id="campaign-subject" value={form.subject} onChange={event => change('subject', event.target.value)} disabled={controlsDisabled} /><Button className="campaign-preview-toggle" variant="ghost" size="sm" disabled={controlsDisabled} aria-expanded={previewOpen} aria-controls="campaign-preview-row" onClick={() => {setPreviewOpen(!previewOpen); if (!previewOpen) requestAnimationFrame(() => previewInput.current?.focus({preventScroll: true}))}}>Preview text<Icon icon={ChevronRight} size="sm" /></Button></div>
             <div id="campaign-preview-row" className="campaign-compose-preview" data-open={previewOpen || undefined} aria-hidden={!previewOpen} inert={!previewOpen}>
               <div><div className="campaign-compose-row"><label htmlFor="campaign-preview">Preview</label><Input ref={previewInput} id="campaign-preview" aria-label="Preview text" maxLength={200} placeholder="Shown after the subject" value={form.previewText} onChange={event => change('previewText', event.target.value)} disabled={controlsDisabled} /></div></div>

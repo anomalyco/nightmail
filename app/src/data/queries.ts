@@ -1,5 +1,5 @@
 import { connectionApi } from './connections'
-import { ApiError, type InboundThreadView, type Api, type LogDirection, type LogFacetInput, type PageRequest, type Stream, type TimeRange } from './types'
+import { ApiError, type Domain, type InboundThreadView, type Api, type LogDirection, type LogFacetInput, type PageRequest, type Stream, type TimeRange } from './types'
 import { usageApi } from './usage'
 import { billingApi } from './billing'
 import { workspaceApi } from './workspaces'
@@ -8,6 +8,20 @@ import { workspaceApi } from './workspaces'
 // data/prefetch.ts warms the very same keys and readers before the page is opened.
 export type QueryDef<T> = { key: readonly unknown[]; read: (api: Api, signal: AbortSignal) => Promise<T> }
 const def = <T>(key: readonly unknown[], read: QueryDef<T>['read']): QueryDef<T> => ({ key, read })
+
+const SENDING_DOMAINS_MAX_PAGES = 50
+/** Walks GET /v1/domains cursors with refresh=false up to a bounded cap so workspaces with >10 domains see all of them. */
+export async function walkSendingDomains(api: Api, signal?: AbortSignal): Promise<Domain[]> {
+  const items: Domain[] = []
+  let cursor: string | undefined
+  for (let pages = 0; pages < SENDING_DOMAINS_MAX_PAGES; pages++) {
+    const page = await api.domains.list({ pageSize: 10, cursor, refresh: false }, signal)
+    items.push(...page.items)
+    if (!page.nextCursor) break
+    cursor = page.nextCursor
+  }
+  return items
+}
 
 export const queries = {
   overview: (regionId: string, range: TimeRange, stream: Stream | 'all') => def(['overview', regionId, range, stream], (api, signal) => api.overview.get({ regionId, range, stream: stream === 'all' ? undefined : stream }, signal)),
@@ -40,6 +54,8 @@ export const queries = {
   // Overview's setup steps and next steps: domains, key, webhook and invitation counts and whether mail exists, in one request.
   overviewSetup: () => def(['overview-setup'], (api, signal) => api.overview.setup(signal)),
   domains: (regionId: string, page: number) => def(['domains', regionId, page], (api, signal) => api.domains.list({ regionId, page, pageSize: 10 }, signal)),
+  /** Every sending domain in the workspace (refresh=false), shared across pickers, command menu and docs examples. */
+  sendingDomains: () => def(['domains', 'sending'], walkSendingDomains),
   keys: (cursor: string | undefined, showRevoked: boolean) => def(['keys', cursor, showRevoked], (api, signal) => api.keys.list(signal, cursor, showRevoked)),
   keyChanges: (id: string) => def(['key-changes', id], (api, signal) => api.keys.changes(id, signal)),
   // Connected agents with the tokens they made here. With inactive ones: Settings → Account and the rules page read

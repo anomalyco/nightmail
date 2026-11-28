@@ -21,6 +21,7 @@ import { decodeBase64, MAX_JSON_ATTACHMENT_BYTES, mib, validateAttachment } from
 import { SEND_LIMITS } from './send-limits.js';
 import { withMemory } from './isolate-memory.js';
 import { productName } from './brand.js';
+import { capabilityPattern, FORWARD_CONFIRM_TOKEN, SIGNIN_LINK_TOKEN } from './capabilities.js';
 import { builtinRefusal, isBuiltinHost } from './builtin-domain.js';
 import { ownsUploadKey, uploadKey } from './storage-keys.js';
 
@@ -198,7 +199,8 @@ export type OutgoingMessage = {
   answering?: string;
 };
 /** Withholds single-use capabilities (a forward confirmation; a sign-in link, signups.ts signinLinkUrl) from stored, workspace-visible copies of sealed mail. */
-export const sealCapabilities = (value: string) => value.replace(/fwd_[0-9a-f]{64}|(?<=\blink=)[A-Za-z0-9_-]{24}\.[A-Za-z0-9_-]{43}/g, '[link withheld: only the recipient can use it]');
+const SEALED = capabilityPattern(FORWARD_CONFIRM_TOKEN, SIGNIN_LINK_TOKEN);
+export const sealCapabilities = (value: string) => value.replace(SEALED, '[link withheld: only the recipient can use it]');
 
 /** Enforces the loop guards. There is no hourly or daily cap per address: the send admission applies the workspace's
  * limits. Caller holds the mailbox row lock. */

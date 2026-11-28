@@ -5,7 +5,7 @@ import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 export const resourceOf = (queryKey: readonly unknown[]) => String(queryKey[1])
 // Lists and details backed by SES or other slow external reads: an ordinary write leaves them alone, and the
 // mutations that change them (domains, regions) pass refreshSes to refresh everything.
-const external = new Set(['regions', 'region-discovery', 'domain', 'domains', 'campaign-options'])
+const external = new Set(['regions', 'region-discovery', 'domain', 'domains'])
 export const staleAfterWrite = (queryKey: readonly unknown[], refreshSes: boolean) => queryKey[0] === 'nightmail' && (refreshSes || !external.has(resourceOf(queryKey)))
 
 // Resource groups invalidated by mutations. Each entry names queryKey[1] values under ['nightmail', ...].
@@ -32,9 +32,9 @@ export const invalidate = {
   apiKeys: ['keys', 'key-changes', 'overview-setup', 'activity'] as const,
   agents: ['agents', 'keys', 'inbound-overview', 'inbound-endpoints', 'inbound-webhooks', 'forward-endpoints', 'routing', 'activity'] as const,
   appPasswords: ['app-passwords', 'activity'] as const,
-  domains: ['domains', 'domain', 'mailbox-domains', 'mailbox-domain', 'inbound-overview', 'overview-setup', 'sender-score', 'email-check', 'campaign-options', 'activity'] as const,
+  domains: ['domains', 'domain', 'mailbox-domains', 'mailbox-domain', 'inbound-overview', 'overview-setup', 'sender-score', 'email-check', 'activity'] as const,
   mailboxDomains: ['mailbox-domains', 'mailbox-domain', 'domains', 'domain', 'inbound-overview', 'activity'] as const,
-  connection: ['connection', 'domains', 'domain', 'mailbox-domains', 'mailbox-domain', 'inbound-overview', 'regions', 'region-discovery', 'overview', 'overview-setup', 'sender-score', 'sending-limit', 'usage', 'campaign-options', 'activity'] as const,
+  connection: ['connection', 'domains', 'domain', 'mailbox-domains', 'mailbox-domain', 'inbound-overview', 'regions', 'region-discovery', 'overview', 'overview-setup', 'sender-score', 'sending-limit', 'usage', 'activity'] as const,
   workspace: ['workspace', 'workspace-settings', 'email-check', 'activity'] as const,
   postalAddress: ['workspace', 'email-check', 'activity'] as const,
   workspaceMembers: ['workspace-members', 'activity'] as const,
@@ -59,12 +59,7 @@ export function invalidateResources(client: QueryClient, resources: readonly str
   const set = new Set(resources)
   // Review reads these together, so either source changing invalidates the presentation result.
   if (set.has('campaign-audience') || set.has('email-check')) set.add('campaign-review-display')
-  const active = client.invalidateQueries({ predicate: query => query.queryKey[0] === 'nightmail' && set.has(resourceOf(query.queryKey)) })
-  // Domain, list, and segment changes also mark cached campaign-options stale without refetching while unmounted.
-  if (!set.has('campaign-options') && (set.has('domains') || set.has('lists') || set.has('segments'))) {
-    void client.invalidateQueries({ predicate: query => query.queryKey[0] === 'nightmail' && resourceOf(query.queryKey) === 'campaign-options', refetchType: 'none' }).catch(() => {})
-  }
-  return active
+  return client.invalidateQueries({ predicate: query => query.queryKey[0] === 'nightmail' && set.has(resourceOf(query.queryKey)) })
 }
 
 /**

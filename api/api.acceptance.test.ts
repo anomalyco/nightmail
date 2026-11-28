@@ -786,8 +786,8 @@ test('rules: compiler diagnostics, linear regex, plain scores and atomic step/ou
   assert.deepEqual(runRitual(ir,{subject:'NEWS',text:'hi'},{},{}).intents.map(i=>i.op),['label','endpoint']);
   // Diagnostics name the problem, point at it and suggest the fix.
   for(const [body,pattern] of [['email.subjet',/column 7: email has no field subjet\. Did you mean email\.subject\?/],['slack.billing({text:"x"})',/called by name.*endpoints\.billing\(\{ text \}\)/],['lable("x")',/Did you mean label\(\)\?/],['let x=1',/Use const, not let/],['const r=omens(email,{refund:"Is this a refund?"});if(r.refnd)label("x")',/Did you mean r\.refund\?/],['const r=decisions(email,{refund:"Is this a refund?"});if(r.refnd)label("x")',/has no decision named refnd\. Did you mean r\.refund\?/],['decision(email,{a:"Is this a refund?"})',/Did you mean decisions\(\)\?/],['inbox.delver("x")',/Did you mean inbox\.deliver\(\)\?/],['for(;;){}',/Loops are not available/],['x==1',/Use === instead of ==/]] as const)assert.throws(()=>compileRitual(source(body)),pattern);
-  const {retryAfterMs,actionDelay,endpointPolicy}=await import('./src/ritual-retry.js');assert.equal(retryAfterMs('1.5'),1500);assert.equal(retryAfterMs('120'),120000);assert.ok(retryAfterMs(new Date(Date.now()+5000).toUTCString())>3000);assert.equal(retryAfterMs('soon'),0);
-  for(const r of [0,0.5,0.999]){const d=actionDelay(2,0,()=>r);assert.ok(d>=45000&&d<=75000,String(d))}assert.equal(actionDelay(1,90000,()=>0),90000);assert.deepEqual(endpointPolicy('slack'),{perMinute:60,retryOnTimeout:false,idempotent:false});assert.equal(endpointPolicy('webhook').perMinute,600);assert.equal(endpointPolicy('forward',{retry_on_timeout:false}).retryOnTimeout,true);
+  const {retryAfterMs,retryDelay,endpointPolicy}=await import('./src/ritual-retry.js');assert.equal(retryAfterMs('1.5'),1500);assert.equal(retryAfterMs('120'),120000);assert.ok(retryAfterMs(new Date(Date.now()+5000).toUTCString())>3000);assert.equal(retryAfterMs('soon'),0);
+  for(const r of [0,0.5,0.999]){const d=retryDelay(2,{capMs:12*3600000,random:()=>r});assert.ok(d>=45000&&d<=75000,String(d))}assert.equal(retryDelay(1,{capMs:12*3600000,afterMs:90000,random:()=>0}),90000);assert.deepEqual(endpointPolicy('slack'),{perMinute:60,retryOnTimeout:false,idempotent:false});assert.equal(endpointPolicy('webhook').perMinute,600);assert.equal(endpointPolicy('forward',{retry_on_timeout:false}).retryOnTimeout,true);
   const {ritualTemplates,ritualTypings}=await import('./src/ritual-schema.js');for(const t of ritualTemplates)assert.doesNotThrow(()=>compileRitual(t.source()),t.id);assert.ok(ritualTemplates.length>=9);
   const dts=ritualTypings({endpoints:[{name:'billing',type:'slack',status:'ready'},{name:'support-hook',type:'webhook',status:'ready'}],inboxes:['support'],lists:['vip']});assert.match(dts,/billing\(message: \{ text: string \}\): void/);assert.match(dts,/"support-hook"\(payload\?: Record<string, unknown>\): void/);assert.match(dts,/deliver\(key: "support"\)/);assert.match(dts,/has\(list: "vip", value: string\)/);assert.match(dts,/declare function decisions</);assert.match(dts,/@deprecated The earlier name for decisions\(\)[^\n]*\ndeclare function omens</);
   for(const r of [runRitual(ir,{subject:'news',text:'x'.repeat(65537)},{},{}),runRitual(ir,{subject:'news',text:'hi'},{},{},{},2)]){assert.ok(r.error);assert.deepEqual(r.intents,[])}
@@ -972,6 +972,122 @@ after(async () => {
     try { if (manager) await authDb.query('DELETE FROM nightmail_users WHERE id = $1', [manager.userId]); }
     finally { await authDb.end(); }
   }
+});
+test('capability links: unsubscribe, forward confirm and stop, and sign-in links are withheld by one grammar', async () => {
+  const { redactCapabilityText } = await import('./src/core.js'), { sealCapabilities } = await import('./src/mailbox-send.js'), { redactSecrets } = await import('./src/feedback.js');
+  const { signinLinkUrl, newLinkId } = await import('./src/signups.js'), { forwardStopUrl } = await import('./src/endpoints.js');
+  // Each made by its issuer: a stop link's HMAC and a sign-in link's ID and HMAC are base64url, the others hex.
+  const unsubscribe = `u_${'a'.repeat(64)}`, confirm = `fwd_${'b'.repeat(64)}`;
+  const stopUrl = await forwardStopUrl({ config: { encryptionKey: 'c'.repeat(64) } } as never, `con_${'d'.repeat(32)}`, 'https://links.example');
+  const signin = signinLinkUrl({ authSecret: 'e'.repeat(32), publicUrl: 'https://mail.example' }, newLinkId());
+  const stop = stopUrl.slice(stopUrl.lastIndexOf('/') + 1), link = new URL(signin).searchParams.get('link')!;
+  const text = `Leave: https://x.example/unsubscribe/${unsubscribe}. Allow: https://x.example/v1/forwarding/confirm/${confirm}. Stop: ${stopUrl}. Sign in: ${signin}`;
+  const readOnly = redactCapabilityText(text), feedback = redactSecrets(text).text, sealed = sealCapabilities(text);
+  for (const token of [unsubscribe, confirm, stop, link]) {
+    assert.ok(!readOnly.includes(token), `A read-only view shows ${token}`);
+    assert.ok(!feedback.includes(token), `A feedback report keeps ${token}`);
+  }
+  assert.match(readOnly, /\/stop\/\[redacted\]\. Sign in: https:\/\/mail\.example\/overview\?link=\[redacted\]$/);
+  // A sealed copy withholds what only its recipient may use; the rest of the message is as sent.
+  assert.deepEqual([confirm, link, unsubscribe, stop].map(token => sealed.includes(token)), [false, false, true, true]);
+  // The route gate lets exactly a well-formed emailed link through without a credential.
+  const { createApp } = await import('./src/app.js'), app = createApp();
+  const gate = async (path: string) => (await app.fetch(new Request(`https://api.example${path}`), fixtureWorker?.runtime ?? {} as never)).status;
+  if (fixtureWorker) {
+    assert.notEqual(await gate(`/v1/forwarding/stop/${stop}`), 401);
+    assert.equal(await gate(`/v1/forwarding/stop/${stop}x`), 401);
+  }
+});
+test('DMARC and SPF: a domain claim and its support health check read a record the same way', async t => {
+  const { readDmarc, observeDmarc } = await import('./src/dmarc.js'), { parseDmarc, parseSpf, liveDns, domainFindings } = await import('./src/deliverability.js'), { spfIncludesAmazonSes, withPublicDns } = await import('./src/record-check.js');
+  const cases: [string[], boolean][] = [
+    [['v=DMARC1; p=reject; rua=mailto:d@example.com'], true], [['v=DMARC1; p=none', 'v=DMARC1; p=reject'], false], [['v=DMARC1; p=none; sp=bogus'], false],
+    [['v=DMARC1; p=none; pct=999'], false], [['v=DMARC1; p=none; adkim=x'], false], [['v=DMARC1; p=none; p=reject'], false], [['p=none; v=DMARC1'], false], [['"v=DMARC1; " "p=quarantine"'], true],
+    // A DKIM key published at _dmarc by mistake has a p= too: beside a real DMARC record it is not a second one.
+    [['v=DKIM1; k=rsa; p=MIGfMA0GCSqGSIb3', 'v=DMARC1; p=reject'], true],
+  ];
+  for (const [values, valid] of cases) {
+    assert.equal(readDmarc(values)?.valid, valid, values.join(' | '));
+    assert.equal(parseDmarc(values, 'live').valid, valid, values.join(' | '));
+  }
+  // A stored observation of two records keeps both, a line each, and stays invalid when read back (RFC 7489 §6.6.3).
+  assert.equal(parseDmarc((readDmarc(['v=DMARC1; p=none', 'v=DMARC1; p=reject'])!.record).split('\n'), 'stored').valid, false);
+  // The same two published records, through the claim's observation and the health check's live read.
+  const name = `${randomUUID()}.example.com`, txt = new Map<string, string[]>([[`_dmarc.${name}`, ['v=DMARC1; p=none', 'v=DMARC1; p=reject']]]);
+  t.mock.method(globalThis, 'fetch', async (input: RequestInfo | URL) => {
+    const q = new URL(String(input)).searchParams.get('name')!, data = txt.get(q);
+    return Response.json(data ? { Status: 0, Answer: data.map(data => ({ name: q, type: 16, data: `"${data}"` })) } : { Status: 3 });
+  });
+  assert.deepEqual([(await observeDmarc(name))?.status, (await liveDns(name, null, null)).dmarc.valid], ['invalid', false]);
+  // Two SPF records at a MAIL FROM are a permerror (RFC 7208 §4.5): Check now never calls the record found.
+  const spfState = async (records: string[]) => {
+    const host = `bounce.${randomUUID()}.example.com`; txt.set(host, records);
+    const record: { name: string; type: 'TXT'; value: string; purpose: string; status: string; publicDns?: import('./src/record-check.js').PublicDns | null } = { name: host, type: 'TXT', value: 'v=spf1 include:amazonses.com ~all', purpose: 'mail_from', status: 'pending' };
+    await withPublicDns({ name: host, dns: [record] });
+    return record.publicDns?.state;
+  };
+  assert.deepEqual([await spfState(['v=spf1 include:amazonses.com ~all']), await spfState(['v=spf1 include:amazonses.com ~all', 'v=spf1 -all'])], ['found', 'wrong_value']);
+  // BIMI needs DMARC at enforcement, and an invalid record enforces nothing whatever its p= says.
+  const bimiReady = (dmarc: string) => !domainFindings(name, { dns: { checkedAt: '', complete: true, spf: parseSpf([]), dmarc: parseDmarc([dmarc], 'live'), bimi: { record: 'v=BIMI1; l=https://x.example/l.svg; a=https://x.example/a.pem', logo: true, authority: true }, mailFrom: null },
+    align: { dmarcPasses: true } as never, days: [], ageDays: null, bulk: [], marketingApi: 0 }).some(f => f.code === 'BIMI_NOT_READY');
+  assert.deepEqual([bimiReady('v=DMARC1; p=reject'), bimiReady('v=DMARC1; p=reject; pct=999')], [true, false]);
+  for (const [term, passes] of [['include:amazonses.com', true], ['+include:amazonses.com', true], ['INCLUDE:AmazonSES.com', true], ['-include:amazonses.com', false], ['~include:amazonses.com', false], ['?include:amazonses.com', false], ['include:amazonses.com.evil.example', false]] as const) {
+    const record = `v=spf1 ${term} ~all`;
+    assert.deepEqual([spfIncludesAmazonSes(record), parseSpf([record]).includesAmazonSes], [passes, passes], term);
+  }
+});
+test('retries: failures that happened together are spread out, up to each kind of work\'s cap', async () => {
+  const { retryDelay } = await import('./src/ritual-retry.js');
+  assert.deepEqual([0, 0.5, 0.999].map(r => retryDelay(3, { capMs: 3_600_000, random: () => r })), [180_000, 240_000, 299_880]);
+  // The cap is a ceiling, jitter included: 12 hours for webhooks and rule actions, 15 minutes for a module that failed to
+  // load. Waits at the cap spread evenly over its last quarter, none piled on the cap itself, however many attempts.
+  assert.deepEqual([0, 0.5, 1].map(r => retryDelay(20, { capMs: 12 * 3_600_000, random: () => r })), [9 * 3_600_000, 10.5 * 3_600_000, 12 * 3_600_000]);
+  assert.deepEqual([0, 1].map(r => retryDelay(9, { capMs: 15 * 60_000, random: () => r })), [675_000, 900_000]);
+  assert.equal(retryDelay(1000, { capMs: 12 * 3_600_000, random: () => 0.5 }), 10.5 * 3_600_000, 'A thousandth attempt is still a finite wait.');
+  const capped = Array.from({ length: 400 }, () => retryDelay(30, { capMs: 3_600_000 }));
+  assert.ok(capped.filter(d => d === 3_600_000).length < 10, 'Capped retries are not piled on the cap.');
+  assert.equal(retryDelay(1, { capMs: 3_600_000, afterMs: 120_000, random: () => 1 }), 120_000, 'Never sooner than the endpoint asked.');
+  const batch = Array.from({ length: 200 }, () => retryDelay(4, { capMs: 3_600_000 }));
+  assert.ok(new Set(batch).size > 100 && Math.min(...batch) >= 720_000 && Math.max(...batch) <= 1_200_000, 'A batch of failed webhooks does not come due at one instant.');
+});
+test('verified attachments: the isolate cache is part of the memory budget and gives way to a reservation', async () => {
+  const { verifiedAttachment } = await import('./src/sending.js'), { memoryStats, reserveMemory } = await import('./src/isolate-memory.js'), { SEND_LIMITS } = await import('./src/send-limits.js');
+  const body = new Uint8Array(8 * 1024 * 1024).fill(7), checksum = createHash('sha256').update(body).digest('hex');
+  let reads = 0;
+  const runtime = { storage: { cacheScope: {}, async get() { reads++; return { body, contentType: 'application/octet-stream' }; } } } as never;
+  const row = { storageKey: unique('cached-attachment'), checksum, size: body.length } as never;
+  const cached = memoryStats().cachedBytes;
+  await verifiedAttachment(runtime, row); await verifiedAttachment(runtime, row);
+  assert.deepEqual([reads, memoryStats().cachedBytes - cached], [1, body.length], 'Read once, then served from the cache, which the budget counts.');
+  const room = SEND_LIMITS.isolateWorkingBytes - memoryStats().usedBytes - 1024 * 1024;
+  const lease = await reserveMemory(room, { route: 'acceptance.attachment-cache' });
+  try {
+    const after = memoryStats();
+    assert.ok(after.usedBytes + after.cachedBytes <= SEND_LIMITS.isolateWorkingBytes, `${after.usedBytes} held + ${after.cachedBytes} cached`);
+  } finally { lease.release(); }
+  await verifiedAttachment(runtime, row);
+  assert.equal(reads, 2, 'The reservation dropped the idle cached file, so it is read again.');
+});
+test('campaign health: a campaign\'s tallies count accepted, bounced and complained mail as its emails do', async t => {
+  const db = await fixtureDatabase(t), { drizzle } = await import('drizzle-orm/node-postgres'), { campaignOutcomes } = await import('./src/sending.js');
+  const wid = unique('health-tallies'), campaign = unique('cmp');
+  await db.query('INSERT INTO workspaces(id,name,slug) VALUES($1,$1,$1)', [wid]);
+  cleanup(t, async () => { await db.query('DELETE FROM sending_emails WHERE workspace_id=$1', [wid]); await db.query('DELETE FROM sending_campaign_tallies WHERE workspace_id=$1', [wid]); await db.query('DELETE FROM workspaces WHERE id=$1', [wid]); });
+  // [status, provider ID, event_outcomes]: a delivery; a hard bounce SES then also reported as a complaint (the complaint
+  // ranks higher, so only its bit says it bounced); a bounce; mail accepted by its bit alone; suppressed mail; mail still queued.
+  const mail: [string, string | null, number][] = [['delivered', 'p1', 3], ['complained', 'p2', 13], ['bounced', 'p3', 5], ['sent', null, 1], ['suppressed', null, 0], ['queued', null, 0]];
+  const ids: string[] = [];
+  for (const [status, provider, outcomes] of mail) {
+    const id = unique('health-email'); ids.push(id);
+    await db.query(`INSERT INTO sending_emails (id, workspace_id, region, actor_key_id, campaign_id, from_address, to_addresses, cc_addresses, bcc_addresses, subject, snapshot, simulated, status, provider_id, event_outcomes)
+      VALUES ($1,$2,$3,'fixture',$4,'sender@example.com','["r@example.com"]','[]','[]','Health','{}',false,$5,$6,$7)`, [id, wid, REGION, campaign, status, provider, outcomes]);
+  }
+  // A later complaint on the plain bounce: an update the tally triggers count too.
+  await db.query("UPDATE sending_emails SET status='complained', event_outcomes=event_outcomes|8 WHERE id=$1", [ids[2]]);
+  const executor = drizzle(db);
+  const [tallied, counted] = [await campaignOutcomes(executor, wid, campaign, false), await campaignOutcomes(executor, wid, campaign, true)];
+  assert.deepEqual(tallied, { accepted: 4, bounced: 2, complained: 2 });
+  assert.deepEqual(counted, tallied, 'The emails, counted, agree with the tallies.');
 });
 test('OIDC migration links only connected subjects; nobody is adopted by email', async t => {
   const db = await fixtureDatabase(t);
@@ -16538,7 +16654,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
   // a new one fails this test until it is; a key of anything but a send must never expire, money and launches included.
   test('retention: an Idempotency-Key expires only on a send route; every other route\'s key, and any path near one, is kept', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const [{ cleanup }, { AUTHENTICATED_CREATES, MAILBOX_CREATES }, { PgDialect }] = await Promise.all([import('./src/maintenance.js'),
+      const [{ cleanup }, { createKeyRoute }, { PgDialect }] = await Promise.all([import('./src/maintenance.js'),
         import('./src/idempotency.js'), import('drizzle-orm/pg-core')]);
       const wid = runtime.config.workspaceId, spec = (await import('./scripts/registered-document.js')).registeredDocument;
       // Every route that claims a key: those that declare the header, the creates the middleware covers, and two that claim
@@ -16547,13 +16663,13 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
       for (const [path, item] of Object.entries(spec.paths as Record<string, Record<string, Json>>)) for (const [method, op] of Object.entries(item)) {
         const concrete = path.replace(/\{[^}]+\}/g, 'id1');
         if ((op.parameters ?? []).some((p: Json) => p.in === 'header' && p.name === 'Idempotency-Key') || op.operationId === 'sendDomainTestEmail'
-          || (method === 'post' && [...AUTHENTICATED_CREATES, ...MAILBOX_CREATES].some(route => route.test(concrete)))) routes.set(op.operationId, concrete);
+          || (method === 'post' && createKeyRoute(concrete))) routes.set(op.operationId, concrete);
       }
       const expires = ['sendEmail', 'sendEmailBatch', 'testCampaign', 'sendDomainTestEmail', 'createInboundThread', 'replyToInboundThread'];
-      const kept = ['createAgentToken', 'createApiKey', 'updateApiKey', 'createContact', 'createContactList', 'createNewsletter', 'createSegment', 'createTopic', 'previewContactImport', 'createCampaignTemplate',
+      const kept = ['createAgentToken', 'createApiKey', 'updateApiKey', 'createContact', 'createContactList', 'createNewsletter', 'createSegment', 'createTopic', 'previewContactImport', 'planAudienceMutation', 'createCampaignTemplate',
         'uploadTemplateAsset', 'importTemplateImage', 'uploadAttachment', 'uploadAttachmentBytes', 'createCampaign', 'sendCampaign', 'scheduleCampaign', 'cancelCampaign', 'createWebhook',
-        'createRoute', 'createEndpoint', 'createInboxConnection', 'createInbox', 'createInboundSubdomain', 'createInboundAddress', 'createInboundWebhook',
-        'createBillingTopUp', 'createBillingTopUpLink'];
+        'createRoute', 'createRuleFromRecipe', 'createEndpoint', 'createInboxConnection', 'createInbox', 'createInboxFolder', 'createInboxAppPassword', 'createInboundSubdomain', 'createInboundAddress', 'createInboundWebhook',
+        'createWorkspace', 'sendFeedback', 'createBillingTopUp', 'createBillingTopUpLink'];
       assert.deepEqual([...routes.keys()].sort(), [...expires, ...kept].sort(), 'every route that takes an Idempotency-Key is classified');
       // Paths one step off a send route.
       const near = ['/v1/campaigns/id1/id2/test', '/v1/campaigns/test', '/v1/domains/id1/id2/test-send', '/v1/inbound/threads/id1', '/v1/inbound/threads/id1/id2/reply',
@@ -17376,10 +17492,28 @@ describe('Billing: metering, gate and settlement', () => {
       assert.deepEqual([g.ok, g.requiredUc, g.freeSentLeft, g.freeReceivedLeft], [true, '0', 5000, 0]);
       await db.query(`INSERT INTO billing_usage_hourly(workspace_id,hour,meter,quantity) VALUES ($1,date_trunc('hour',now(),'UTC'),'receive',1)`, [live]);
       assert.deepEqual([(await gate()).openUc, (await gate()).freeSentLeft], ['20000', 5000], 'The 20,001st received is charged; the sends stay free.');
-      // What the API publishes (RATES) is this month's version, the price of an AI decision included.
-      const { RATES } = await import('./src/billing/money.js');
-      assert.deepEqual((await db.query(`SELECT (billing_rates_in((date_trunc('month', now() AT TIME ZONE 'UTC'))::date)).*, billing_rate_uc('omen', 1::smallint, now())::text AS omen_uc`)).rows[0],
-        { version: RATES.version, free_sent: RATES.freeSentEmails, free_received: RATES.freeReceivedEmails, omen_uc: String(RATES.omenUc) });
+      // What the API publishes (RATES) is this month's version and unit prices: send, receive, omen, storage and freeStorageBytes.
+      const { RATES, rateUsd } = await import('./src/billing/rates.js');
+      assert.equal(rateUsd(RATES.storageUcPerGbMonth), '0.25');
+      await db.query('BEGIN');
+      try {
+        await db.query(`UPDATE billing_config SET storage_billing_from = DATE '2026-01-01', storage_aged_through = NULL WHERE singleton`);
+        const daysInMonth = Number((await db.query(`SELECT extract(day FROM date_trunc('month', now() AT TIME ZONE 'UTC') + interval '1 month - 1 day')::int AS d`)).rows[0].d);
+        assert.deepEqual((await db.query(`SELECT (billing_rates_in((date_trunc('month', now() AT TIME ZONE 'UTC'))::date)).*,
+            billing_rate_uc('send', 1::smallint, now())::text AS send_uc,
+            billing_rate_uc('receive', 1::smallint, now())::text AS receive_uc,
+            billing_rate_uc('omen', 1::smallint, now())::text AS omen_uc,
+            round(billing_rate_uc('storage', 1::smallint, now()) * $1::numeric * $2::numeric)::text AS storage_gb_month_uc`,
+            [String(RATES.freeStorageBytes), daysInMonth])).rows[0],
+          { version: RATES.version, free_sent: RATES.freeSentEmails, free_received: RATES.freeReceivedEmails,
+            send_uc: String(RATES.emailUc), receive_uc: String(RATES.emailUc), omen_uc: String(RATES.omenUc), storage_gb_month_uc: String(RATES.storageUcPerGbMonth) });
+        const freeStorageWid = unique('free-storage');
+        await db.query(`INSERT INTO mail_storage_aged(workspace_id, aged_bytes, aged_through) VALUES ($1, $2, DATE '2026-06-01')`, [freeStorageWid, String(RATES.freeStorageBytes + 42n)]);
+        await db.query(`SELECT billing_storage_day(DATE '2026-09-01')`);
+        assert.equal((await db.query(`SELECT quantity::text AS q FROM billing_usage_hourly WHERE workspace_id = $1 AND meter = 'storage'`, [freeStorageWid])).rows[0]?.q, '42', 'billing_storage_day charges only bytes above RATES.freeStorageBytes');
+      } finally {
+        await db.query('ROLLBACK');
+      }
     });
   });
 
@@ -43607,8 +43741,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         assert.equal((await db.query('SELECT FROM mail_forward_once WHERE message_id=$1',[over.id])).rowCount,0);
         await db.query("DELETE FROM api_request_budgets WHERE workspace_id=$1 AND key_id IN ('forward-daily',$2)",[wid,'forward-hourly:'+hookId]);
         // Every forward carries a signed stop link; a forged one is refused and stopping blocks new requests for 30 days.
+        // A link whose signature is the wrong shape isn't a capability at all: the gate refuses it before the route (src/capabilities.ts).
         const stop=new URL(/Stop these forwards: (\S+)/.exec(rows[0].text)![1]).pathname;
-        for (const [link,status] of [[stop,200],[stop.replace(/\.[^.]+$/,'.forged'),404]] as const) {
+        for (const [link,status] of [[stop,200],[stop.replace(/\.[^.]+$/,'.'+'A'.repeat(43)),404],[stop.replace(/\.[^.]+$/,'.forged'),401]] as const) {
           const get=await page('GET',link), head=await page('HEAD',link);
           assert.equal(get.status,status);
           assert.deepEqual([head.status,head.headers.get('content-type'),await head.text()], [status,get.headers.get('content-type'),'']);
@@ -51557,7 +51692,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
                 assert.equal(jobRow.last_error, 'MODULE_LOAD_FAILED');
                 assert.equal(jobRow.payload._loadFailures, i);
                 assert.ok(jobRow.delay_s <= 905, 'Backoff must cap at 15 minutes (900s), got ' + jobRow.delay_s);
-                if (i >= 5) assert.ok(jobRow.delay_s >= 890 && jobRow.delay_s <= 905, 'Expected 15m cap at failure #' + i + ', got ' + jobRow.delay_s);
+                // Jittered (src/ritual-retry.ts retryDelay): at the cap a wait falls in its last quarter.
+                if (i >= 5) assert.ok(jobRow.delay_s >= 0.75 * 900 - 5 && jobRow.delay_s <= 905, 'Expected 15m cap at failure #' + i + ', got ' + jobRow.delay_s);
                 assert.deepEqual(campRow, { state: 'preparing', prepared: 0, expanded: 0, error: null });
               }
             } finally {
@@ -52608,5 +52744,120 @@ describe('dashboard analytics', () => {
       const hour=await app.fetch(new Request(origin+path+'/export?from='+failed.body.from+'&to='+failed.body.to,{headers:{cookie:operatorCookie}}),runtime);
       assert.deepEqual((await hour.json() as Json).rows,failed.body.rows);
     });
+  });
+});
+
+test('contacts: listIds on createContact and updateContact reconcile atomically and enforce manage permission without half-commit', async t => {
+  await simulatedSesFixture(t, async ({ db, runtime, local, request }) => {
+    runtime.config.multiTenant = true;
+    cleanup(t, async () => { runtime.config.multiTenant = false; });
+    const wid = runtime.config.workspaceId, issuer = process.env.ACCOUNT_ISSUER ?? 'https://account.anoma.ly';
+    const memberId = unique('contact-member'), memberToken = createHash('sha256').update(randomUUID()).digest('base64url');
+    secrets.add(memberToken);
+    await db.query('INSERT INTO nightmail_users(id,name,email,email_verified) VALUES($1,$1,$2,true)', [memberId, `${memberId}@${AUTH_DOMAIN}`]);
+    await db.query('INSERT INTO nightmail_oidc_identities VALUES($1,$2,$3)', [issuer, memberId, memberId]);
+    await db.query("INSERT INTO nightmail_sessions(token_hash,user_id,issuer,subject,verified_email,expires_at) VALUES($1,$2,$3,$2,$4,now()+interval '1 hour')", [createHash('sha256').update(memberToken).digest('hex'), memberId, issuer, `${memberId}@${AUTH_DOMAIN}`]);
+    await db.query("INSERT INTO workspace_members(id,user_id,workspace_id,role) VALUES($1,$2,$3,'member')", [randomUUID(), memberId, wid]);
+    const memberHeaders = { cookie: `${COOKIE_NAME}=${memberToken}`, origin: PUBLIC_ORIGIN };
+    const asMember = (method: string, path: string, body?: Json) => request(method, path, undefined, body, memberHeaders);
+
+    const listA = ok(await local('POST', '/v1/lists', { name: unique('atomic-a') }), 201);
+    const listB = ok(await local('POST', '/v1/lists', { name: unique('atomic-b') }), 201);
+    const listC = ok(await local('POST', '/v1/lists', { name: unique('atomic-c') }), 201);
+
+    // 1. Atomic create with listIds commits contact and memberships together.
+    const email1 = `atomic1-${unique('c')}@example.net`;
+    const created = ok(await local('POST', '/v1/contacts', { email: email1, name: 'Ada', listIds: [listB.id, listA.id, listA.id] }), 201);
+    assert.deepEqual(ok(await local('GET', `/v1/contacts/${created.id}`)).listIds, [listA.id, listB.id].sort());
+    assert.equal(ok(await local('GET', `/v1/lists/${listA.id}`)).counts.total, 1);
+
+    // 2. Invalid listId rolls back contact create completely (no half-committed contact).
+    const emailBad = `atomic-bad-${unique('c')}@example.net`;
+    error(await local('POST', '/v1/contacts', { email: emailBad, listIds: [listA.id, 'lst_does_not_exist'] }), 404, 'NOT_FOUND');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM audience_contacts WHERE workspace_id=$1 AND email=$2', [wid, emailBad])).rows[0].n, 0);
+
+    // 3. Atomic patch reconciles listIds (removes A, keeps B, adds C) and updates profile together.
+    ok(await local('PATCH', `/v1/contacts/${created.id}`, { name: 'Ada Lovelace', listIds: [listB.id, listC.id] }), 200);
+    const afterPatch = ok(await local('GET', `/v1/contacts/${created.id}`));
+    assert.equal(afterPatch.name, 'Ada Lovelace');
+    assert.deepEqual(afterPatch.listIds, [listB.id, listC.id].sort());
+    assert.equal(ok(await local('GET', `/v1/lists/${listA.id}`)).counts.total, 0);
+    assert.equal(ok(await local('GET', `/v1/lists/${listC.id}`)).counts.total, 1);
+
+    // 4. Invalid listId on patch rolls back profile and membership changes atomically.
+    error(await local('PATCH', `/v1/contacts/${created.id}`, { name: 'Should Rollback', listIds: [listA.id, 'lst_missing'] }), 404, 'NOT_FOUND');
+    const afterFailedPatch = ok(await local('GET', `/v1/contacts/${created.id}`));
+    assert.equal(afterFailedPatch.name, 'Ada Lovelace');
+    assert.deepEqual(afterFailedPatch.listIds, [listB.id, listC.id].sort());
+
+    // 5. Hosted dashboard member gets 403 BEFORE creating a contact when non-empty listIds are supplied.
+    const emailMemberBlocked = `member-blocked-${unique('c')}@example.net`;
+    error(await asMember('POST', '/v1/contacts', { email: emailMemberBlocked, name: 'Blocked', listIds: [listA.id] }), 403, 'PERMISSION_DENIED');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM audience_contacts WHERE workspace_id=$1 AND email=$2', [wid, emailMemberBlocked])).rows[0].n, 0);
+
+    // 6. Hosted dashboard member can create without lists (or with []) and patch profile without changing listIds,
+    //    but changing listIds on patch returns 403 without mutating the contact's profile.
+    const emailMemberOk = `member-ok-${unique('c')}@example.net`;
+    const memberContact = ok(await asMember('POST', '/v1/contacts', { email: emailMemberOk, name: 'Member Made', listIds: [] }), 201);
+    assert.equal(memberContact.name, 'Member Made');
+    ok(await asMember('PATCH', `/v1/contacts/${created.id}`, { name: 'Member Edited', listIds: [listB.id, listC.id] }), 200);
+    assert.equal(ok(await local('GET', `/v1/contacts/${created.id}`)).name, 'Member Edited');
+    error(await asMember('PATCH', `/v1/contacts/${created.id}`, { name: 'Should Not Apply', listIds: [listA.id] }), 403, 'PERMISSION_DENIED');
+    const unchanged = ok(await local('GET', `/v1/contacts/${created.id}`));
+    assert.equal(unchanged.name, 'Member Edited');
+    assert.deepEqual(unchanged.listIds, [listB.id, listC.id].sort());
+  });
+});
+
+test('create idempotency: rules/recipes replays the same rule key and inboxes/:id/app-passwords withholds the secret without creating a second password', async t => {
+  await simulatedSesFixture(t, async ({ db, runtime, local }) => {
+    const wid = runtime.config.workspaceId, domainId = unique('mdom'), host = `idemp-${unique('d')}.example`;
+    runtime.mailR2 = { write: true, name: 'fake', bucket: { put: async () => {} } } as unknown as typeof runtime.mailR2;
+    await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status,catch_all) VALUES($1,$2,$1,$3,$4,'active','store')", [domainId, wid, host, REGION]);
+    const post = (path: string, body: Json, key: string) => local('POST', path, body, 'live', { 'idempotency-key': key });
+
+    // 1. POST /v1/rules/recipes replays the same rule key with Idempotent-Replayed: true and never creates a second copy.
+    const addr = ok(await local('POST', '/v1/inbound/addresses', { address: `support@${host}` }), 201);
+    const recipe = await post('/v1/rules/recipes', { recipe: 'junk-newsletters', params: {}, addresses: [addr.id] }, 'recipe-replay-1');
+    assert.equal(recipe.status, 201, JSON.stringify(recipe.body));
+    const recipeAgain = await post('/v1/rules/recipes', { recipe: 'junk-newsletters', params: {}, addresses: [addr.id] }, 'recipe-replay-1');
+    assert.equal(recipeAgain.status, 201, JSON.stringify(recipeAgain.body));
+    assert.equal(recipeAgain.body.key, recipe.body.key);
+    assert.equal(recipeAgain.headers.get('idempotent-replayed'), 'true');
+    error(await post('/v1/rules/recipes', { recipe: 'junk-failed-dmarc', params: {}, addresses: [addr.id] }, 'recipe-replay-1'), 409, 'IDEMPOTENCY_CONFLICT');
+
+    // 2. POST /v1/inboxes/:id/app-passwords withholds the one-time password on replay instead of creating a second password.
+    const persistent = ok(await local('POST', '/v1/inboxes', { type: 'persistent', domain: host, localPart: 'vault' }), 201);
+    const appPw = await post(`/v1/inboxes/${persistent.id}/app-passwords`, { name: 'Replay mail client', protocols: ['imap'] }, 'app-pw-replay-1');
+    assert.equal(appPw.status, 201, JSON.stringify(appPw.body));
+    assert.ok(appPw.body.password);
+    error(await post(`/v1/inboxes/${persistent.id}/app-passwords`, { name: 'Replay mail client', protocols: ['imap'] }, 'app-pw-replay-1'), 409, 'IDEMPOTENT_SECRET_WITHHELD');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM inbox_app_passwords WHERE inbox_id=$1', [persistent.id])).rows[0].n, 1);
+
+    // 3. POST /v1/inboxes/:id/folders replays cleanly with Idempotent-Replayed: true.
+    const folder = await post(`/v1/inboxes/${persistent.id}/folders`, { path: 'Receipts' }, 'folder-replay-1');
+    assert.equal(folder.status, 201, JSON.stringify(folder.body));
+    const folderAgain = await post(`/v1/inboxes/${persistent.id}/folders`, { path: 'Receipts' }, 'folder-replay-1');
+    assert.equal(folderAgain.status, 201, JSON.stringify(folderAgain.body));
+    assert.equal(folderAgain.headers.get('idempotent-replayed'), 'true');
+  });
+});
+
+test('auth: revokeAgentToken is idempotent, preserves the first revocation timestamp and writes one audit row', async t => {
+  await simulatedSesFixture(t, async ({ db, runtime, local }) => {
+    const wid = runtime.config.workspaceId;
+    const tokenId = unique('agt');
+    await db.query(`INSERT INTO agent_tokens(id, workspace_id, grant_id, permissions, domains, purpose, expires_at)
+      VALUES ($1, $2, 'grant_fixture', '["read"]'::jsonb, '[]'::jsonb, 'idempotent revoke test', now() + interval '1 hour')`, [tokenId, wid]);
+    const first = ok(await local('POST', `/v1/agent-tokens/${tokenId}/revoke`), 200);
+    assert.deepEqual(first, { id: tokenId, revoked: true });
+    const firstRevokedAt = (await db.query('SELECT revoked_at::text AS t FROM agent_tokens WHERE id=$1', [tokenId])).rows[0].t;
+    assert.ok(firstRevokedAt);
+    const second = ok(await local('POST', `/v1/agent-tokens/${tokenId}/revoke`), 200);
+    assert.deepEqual(second, { id: tokenId, revoked: true });
+    const secondRevokedAt = (await db.query('SELECT revoked_at::text AS t FROM agent_tokens WHERE id=$1', [tokenId])).rows[0].t;
+    assert.equal(secondRevokedAt, firstRevokedAt);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM audit_events WHERE workspace_id=$1 AND action='agent_token.revoke' AND target_id=$2", [wid, tokenId])).rows[0].n, 1);
+    error(await local('POST', '/v1/agent-tokens/agt_does_not_exist/revoke'), 404, 'NOT_FOUND');
   });
 });

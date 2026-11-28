@@ -1,3 +1,4 @@
+import { capabilityPattern, FORWARD_CONFIRM_TOKEN, FORWARD_STOP_TOKEN, SIGNIN_LINK_TOKEN, UNSUBSCRIBE_TOKEN } from './capabilities.js';
 import { HTTPException } from 'hono/http-exception';
 import { z } from '@hono/zod-openapi';
 import type { OpenAPIHono } from '@hono/zod-openapi';
@@ -1074,7 +1075,9 @@ export function randomSecret(prefix: string) {
   return prefix + Array.from(bytes, n => n.toString(16).padStart(2, '0')).join('');
 }
 export function notFound(entity: string): never { throw new ApiError(404, 'NOT_FOUND', `${entity} was not found.`); }
-export const redactCapabilityText = (value: string) => value.replace(/u_[0-9a-f]{64}/g, '[redacted]');
+// Every bearer capability (src/capabilities.ts): a reader without manage sees none of them in mail, events or replies.
+const CAPABILITIES = capabilityPattern(UNSUBSCRIBE_TOKEN, FORWARD_CONFIRM_TOKEN, FORWARD_STOP_TOKEN, SIGNIN_LINK_TOKEN);
+export const redactCapabilityText = (value: string) => value.replace(CAPABILITIES, '[redacted]');
 export function redactCapabilityData(value: Record<string, unknown>): Record<string, unknown> {
   const redact = (item: unknown): unknown => {
     if (typeof item === 'string') return redactCapabilityText(item);

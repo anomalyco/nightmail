@@ -1,5 +1,6 @@
 import { sql } from 'drizzle-orm';
 import { log, logError, type DbExecutor, type Runtime } from './core.js';
+import { EMAIL_OUTCOME_BITS as OUTCOME } from './email-outcomes.js';
 
 // First-party delivery history: what each workspace's own mail did, kept past the 30 days the sent-mail log keeps it
 // (migration 542). Read by the workspace's own audience review; never by another workspace.
@@ -78,7 +79,6 @@ export function bounceClass(e: { type: string; subType?: string | null; status?:
 // 500 a page: a page's contact update holds those contacts until it commits, and a send to them waits that long. On
 // packed pages (no room for a HOT update) 2,000 contacts took 2.3–2.6 s at the 2M scale; 500 keep it well under a second.
 const ROLLUP = { page: 500, budgetMs: 20_000, matureHours: 24, backDays: 30, statementMs: 5_000, lockMs: 1_000, lease: '10 minutes', maxBudgetMs: 5 * 60_000 } as const;
-const OUTCOME = { accepted: 1, delivered: 2, bounced: 4, complained: 8, opened: 16, clicked: 32, delayed: 128 } as const;
 type Mail = { id: string; workspace_id: string; at: string; status: string; o: number; simulated: boolean; single: boolean; accepted: boolean; marketing: boolean; rcpt: string | null; from_domain: string; link_host: string | null };
 type Feedback = { email_id: string; type: string; sub_type: string | null; status: string | null; diagnostic: string | null };
 type Domain = { sent: number; delivered: number; hard: number; soft: number; complained: number; opened: number; clicked: number; classes: Record<BounceClass, number>; failedSince: number; first: string; last: string; lastDelivered: string | null };

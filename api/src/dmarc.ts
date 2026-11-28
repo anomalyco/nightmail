@@ -1,6 +1,6 @@
 import { ModuleLoadError } from './core.js';
 import { placementRoot } from './domain-registry.js';
-import { dns, fqdn } from './public-dns.js';
+import { dns, fqdn, txtText } from './public-dns.js';
 import type { IdentityFacts } from './states.js';
 import { SEND_LIMITS } from './send-limits.js';
 
@@ -10,23 +10,39 @@ type PolicyRecord = { status:Policy|'invalid'|'missing'; record:string|null; sou
 export type DmarcObservation = PolicyRecord & { checkedAt:number; recommend:boolean; alignedMailFrom:string|null };
 const isPolicy=(p?:string):p is Policy=>p==='none' || p==='quarantine' || p==='reject';
 
-function policyAt(values:string[],source:string,inherited:boolean):PolicyRecord|null {
-  const records=values.map(s=>s.replace(/^"|"$/g,'').replace(/"\s*"/g,''))
-    .filter(s=>/(?:^|;)\s*(?:v\s*=\s*DMARC|p\s*=)/i.test(s));
+/**
+ * The DMARC record among a _dmarc name's TXT strings, read by RFC 7489: null when there is none; more than one is none
+ * that counts (§6.6.3), so it is invalid. Its tags are what it says, first of each name; valid when it keeps the grammar
+ * (v=DMARC1 first, then p; no tag twice) and every policy, alignment mode and pct is one the RFC allows. Every reader
+ * of DMARC (the stored observation, the support health check, domain findings) decides validity here.
+ */
+export function readDmarc(values:string[]):{record:string;tags:Map<string,string>;valid:boolean}|null {
+  // Records that begin v=DMARC1 are the DMARC records (§6.6.3), whatever else the name publishes (a misplaced DKIM key
+  // has a p= too). Only without one does a near miss (v=DMARC2, p= first) show as an invalid record.
+  const texts=values.map(txtText), dmarc=texts.filter(s=>/^\s*v\s*=\s*DMARC1(?:\s*;|\s*$)/i.test(s));
+  const records=dmarc.length ? dmarc : texts.filter(s=>/(?:^|;)\s*(?:v\s*=\s*DMARC|p\s*=)/i.test(s));
   if(!records.length) return null;
-  const invalid={status:'invalid',record:records.join('\n'),source,adkim:'r',aspf:'r'} as const;
-  if(records.length!==1) return invalid;
-  const record=records[0]!, tags=new Map<string,string>();
+  const record=records.join('\n'), tags=new Map<string,string>();
+  if(records.length!==1) return {record,tags,valid:false};
+  let valid=true;
   for(const field of record.trim().replace(/;$/,'').split(';')) {
-    const m=/^\s*([a-z][a-z0-9_-]*)\s*=\s*([^;\x00-\x1f]+?)\s*$/i.exec(field);
-    if(!m || tags.has(m[1]!.toLowerCase())) return invalid;
-    tags.set(m[1]!.toLowerCase(),m[2]!);
+    const m=/^\s*([a-z][a-z0-9_-]*)\s*=\s*([^;\x00-\x1f]+?)\s*$/i.exec(field), name=m?.[1]!.toLowerCase();
+    if(!m || tags.has(name!)) { valid=false; continue; }
+    tags.set(name!,m[2]!);
   }
   const [v,p]=tags.keys(), policy=tags.get('p')?.toLowerCase(), sub=tags.get('sp')?.toLowerCase();
   const adkim=tags.get('adkim')?.toLowerCase() ?? 'r', aspf=tags.get('aspf')?.toLowerCase() ?? 'r';
-  if(v!=='v' || tags.get(v)!=='DMARC1' || p!=='p' || !isPolicy(policy) || (sub!==undefined && !isPolicy(sub)) ||
-     !['r','s'].includes(adkim) || !['r','s'].includes(aspf) || (tags.has('pct') && !/^(?:\d{1,2}|100)$/.test(tags.get('pct')!))) return invalid;
-  return {status:inherited && sub ? sub : policy,record,source,adkim:adkim as Mode,aspf:aspf as Mode};
+  valid&&=v==='v' && tags.get(v)==='DMARC1' && p==='p' && isPolicy(policy) && (sub===undefined || isPolicy(sub)) &&
+    ['r','s'].includes(adkim) && ['r','s'].includes(aspf) && (!tags.has('pct') || /^(?:\d{1,2}|100)$/.test(tags.get('pct')!));
+  return {record,tags,valid};
+}
+
+function policyAt(values:string[],source:string,inherited:boolean):PolicyRecord|null {
+  const read=readDmarc(values);
+  if(!read) return null;
+  if(!read.valid) return {status:'invalid',record:read.record,source,adkim:'r',aspf:'r'};
+  const {record,tags}=read, policy=tags.get('p')!.toLowerCase() as Policy, sub=tags.get('sp')?.toLowerCase() as Policy|undefined;
+  return {status:inherited && sub ? sub : policy,record,source,adkim:(tags.get('adkim')?.toLowerCase() ?? 'r') as Mode,aspf:(tags.get('aspf')?.toLowerCase() ?? 'r') as Mode};
 }
 
 // The verifier persists this alongside its SES and MX facts. No resolver calls in MX reads or admissions.

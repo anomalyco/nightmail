@@ -14,3 +14,13 @@ export function normalizeDomain(input: string) {
     .replace(/\.$/, '')
     .replace(/^www\./, '')
 }
+
+/** Picks the workspace's preferred verified sending domain: its own verified domain first, else the verified built-in domain when allowed. */
+export function preferredSendingDomain<T extends { status: string; builtIn?: boolean }>(
+  domains: readonly T[],
+  { allowBuiltIn }: { allowBuiltIn: boolean },
+): T | null {
+  return domains.find(domain => !domain.builtIn && domain.status === 'verified')
+    ?? (allowBuiltIn ? domains.find(domain => domain.builtIn && domain.status === 'verified') : undefined)
+    ?? null
+}

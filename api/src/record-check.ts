@@ -1,4 +1,4 @@
-import { cname, dns, fqdn } from './public-dns.js';
+import { cname, dns, fqdn, txtText } from './public-dns.js';
 import { placementRoot } from './domain-registry.js';
 
 // What public DNS shows for each record a domain still waits for, so Check now can say which one is missing or
@@ -18,7 +18,6 @@ const TTL_MS = 30_000, MAX_ENTRIES = 500, BUDGET_MS = 3_000, MAX_VALUES = 5, MAX
 const cache = new Map<string, { at: number; values: string[] }>();
 
 // A TXT answer is one or more quoted strings; receivers read them joined.
-const txtText = (data: string) => { const parts = [...data.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map(m => m[1]!.replace(/\\(.)/g, '$1')); return parts.length ? parts.join('') : data; };
 const mxHost = (data: string) => fqdn(data.trim().split(/\s+/).at(-1) ?? '');
 
 async function answer(name: string, type: CheckedRecord['type'] | 'A', signal: AbortSignal) {
@@ -31,13 +30,19 @@ async function answer(name: string, type: CheckedRecord['type'] | 'A', signal: A
   return values;
 }
 
+/** An SPF record (`v=spf1 …`) passes mail Amazon SES sends: it includes amazonses.com unqualified or with `+` (RFC 7208
+ * §4.6.2); `-`, `~` or `?` fail it, soft-fail it or make it neutral instead. */
+export const spfIncludesAmazonSes = (record: string) => record.split(/\s+/).slice(1).some(term => /^\+?include:amazonses\.com$/i.test(term));
+
 function compare(record: CheckedRecord, values: string[]): Omit<PublicDns, 'checkedAt'> {
   const spf = record.type === 'TXT' && record.value.startsWith('v=spf1');
-  // An SPF record that includes amazonses.com does what this one asks, whatever else it allows.
-  const relevant = spf ? values.filter(v => v.toLowerCase().startsWith('v=spf1')) : values;
-  const matches = (v: string) => record.type === 'TXT' ? v === record.value || (spf && /(^|\s)include:amazonses\.com(\s|$)/i.test(v)) : record.type === 'MX' ? mxHost(v) === fqdn(record.value) : fqdn(v) === fqdn(record.value);
+  // An SPF record that includes amazonses.com does what this one asks, whatever else it allows. Two SPF records are a
+  // permerror (RFC 7208 §4.5): neither counts, so the record isn't found.
+  const relevant = spf ? values.filter(v => /^v=spf1(?:\s|$)/i.test(v)) : values;
+  const matches = (v: string) => record.type === 'TXT' ? v === record.value || (spf && spfIncludesAmazonSes(v)) : record.type === 'MX' ? mxHost(v) === fqdn(record.value) : fqdn(v) === fqdn(record.value);
   const shown = relevant.slice(0, MAX_VALUES).map(v => v.slice(0, MAX_VALUE_LENGTH));
-  return relevant.some(matches) ? { state: 'found', values: [] } : relevant.length ? { state: 'wrong_value', values: shown } : { state: 'missing', values: [] };
+  const found = spf ? relevant.length === 1 && matches(relevant[0]!) : relevant.some(matches);
+  return found ? { state: 'found', values: [] } : relevant.length ? { state: 'wrong_value', values: shown } : { state: 'missing', values: [] };
 }
 
 // Where a domain's DNS is hosted, from its zone's NS records, so the dashboard and the setup reminder can say where to add
