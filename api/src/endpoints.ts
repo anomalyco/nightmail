@@ -295,6 +295,10 @@ export async function changeEndpointRecord(tx: DbExecutor, c: Ctx, row: Endpoint
   if (q.paused !== undefined) set.paused = q.paused;
   // A new URL answers a reconfirm mark; a forward has no URL to send again (its address is shown and fixed), so resuming clears it.
   if (q.url !== undefined || (row.type === 'forward' && q.paused !== undefined)) set.reconfirm = false;
+  // Shown once in the response: a moved inbound-format webhook's new secret, and the verification token of a webhook
+  // that is (or becomes) inbound format. Derived here, inside the caller's transaction, so a secret that can't be read
+  // (503 KEY_ROTATION_REQUIRED) rolls the change back instead of committing a format whose token was never shown.
+  const disclosed: { secret?: string; verificationToken?: string } = {};
   if (row.type === 'webhook') {
     const eventTypes = q.eventTypes && [...new Set(q.eventTypes)], events = eventTypes ?? row.eventTypes;
     const format = q.format ?? row.format, junk = q.junk ?? (format !== row.format ? defaultJunk(format) : row.junk);
@@ -306,9 +310,13 @@ export async function changeEndpointRecord(tx: DbExecutor, c: Ctx, row: Endpoint
     // A new URL drops the custom headers meant for the old one, unless new ones come with it. Moving an inbound-format
     // webhook also replaces its secret, which its verification token is derived from.
     const headers = q.headers ?? (moved ? [] : undefined), binding = webhookSecretBinding(w, row.id);
+    const rotatedSecret = moved && (format === 'inbound' || row.format === 'inbound') ? webhookSecret() : undefined;
+    if (rotatedSecret) disclosed.secret = rotatedSecret;
+    if (format === 'inbound' && (rotatedSecret || row.format !== 'inbound'))
+      Object.assign(disclosed, await inboundToken(format, rotatedSecret ?? await decrypt(c.env, row.encryptedSecret!, binding)));
     Object.assign(set, { name: q.name, description: q.description, eventTypes, mailboxIds: q.addressIds, format: q.format && format, junk: q.junk !== undefined || format !== row.format ? junk : undefined,
       include: q.include, timeoutSeconds: q.timeoutSeconds, retryAttempts: q.retryAttempts, url, encryptedHeaders: await encryptWebhookHeaders(c.env, headers, binding),
-      encryptedSecret: moved && (format === 'inbound' || row.format === 'inbound') ? await encrypt(c.env, webhookSecret(), binding) : undefined });
+      encryptedSecret: rotatedSecret ? await encrypt(c.env, rotatedSecret, binding) : undefined });
     // A webhook named after its endpoint name keeps the two together.
     if (rekey && row.name === row.key && q.name === undefined) set.name = rekey;
   } else {
@@ -321,7 +329,7 @@ export async function changeEndpointRecord(tx: DbExecutor, c: Ctx, row: Endpoint
   }
   const [updated] = await tx.update(endpoints).set(set).where(and(eq(endpoints.workspaceId, w), eq(endpoints.id, row.id))).returning();
   if (resumed) { await tx.execute(sql`INSERT INTO jobs(id,type,workspace_id,payload) VALUES(public.row_id('job'),'mailbox.resumeDeliveries',${w},jsonb_build_object('hook',${row.id}::text))`); c.get('actor').wakeJobs = 1; }
-  return updated!;
+  return { row: updated!, ...disclosed };
 }
 /** Deletes an endpoint the caller locked. `detach` (the webhooks API) first removes it from every route, as one routing version. */
 async function deleteEndpointRecord(tx: DbExecutor, c: Ctx, row: EndpointRecord, detach: boolean) {
@@ -329,11 +337,20 @@ async function deleteEndpointRecord(tx: DbExecutor, c: Ctx, row: EndpointRecord,
   await assertEndpointUnused(tx, row.workspaceId, { name: row.key, id: row.id }, 'delete');
   await tx.delete(endpoints).where(and(eq(endpoints.workspaceId, row.workspaceId), eq(endpoints.id, row.id)));
 }
-async function debit(tx: DbExecutor, w: string, key: string, limit: number, window: 'day' | 'hour', message: string) {
+const inboundToken = async (format: string, secret: string) => format === 'inbound' ? { verificationToken: await (await import('./inbound-webhook.js')).verificationToken(secret) } : {};
+// The receiver timed out, refused the connection or failed its TLS handshake: the test's result, not a server failure (a 500).
+// Node reports a socket or certificate code; a Worker's fetch reports a TypeError. Anything else is a bug and stays a 500.
+function transportError(error: unknown): 'timeout' | 'network' | null {
+  if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) return 'timeout';
+  const code = (error as { code?: unknown } | null)?.code;
+  if (error instanceof TypeError || (typeof code === 'string' && /^(?:E[A-Z]+|ERR_TLS_\w+|CERT_\w+|UNABLE_TO_\w+|DEPTH_ZERO_\w+|SELF_SIGNED_\w+)$/.test(code))) return 'network';
+  return null;
+}
+async function debit(tx: DbExecutor, w: string, key: string, limit: number, window: 'day' | 'hour', code: string, message: string) {
   const charge = await tx.execute(sql`INSERT INTO api_request_budgets AS b(workspace_id,key_id,window_start,used) VALUES(${w},${key},date_trunc(${window},now()),1)
     ON CONFLICT(workspace_id,key_id) DO UPDATE SET used=CASE WHEN b.window_start=excluded.window_start THEN b.used+1 ELSE 1 END,window_start=excluded.window_start
     WHERE b.window_start<>excluded.window_start OR b.used<${limit} RETURNING 1`);
-  if (!charge.rowCount) throw new ApiError(429, 'FORWARD_LIMIT', message, undefined, true);
+  if (!charge.rowCount) throw new ApiError(429, code, message, undefined, true);
 }
 async function checkExternal(tx: DbExecutor, w: string, address: string) {
   if ((await tx.execute(sql`SELECT FROM mailbox_domains WHERE workspace_id=${w} AND coalesce(receiving_host,name)=split_part(${address},'@',2) LIMIT 1`)).rowCount)
@@ -443,10 +460,10 @@ async function requestConfirmation(c: Ctx, tx: DbExecutor, w: string, endpointId
   const addressHash = await digest(address);
   const declined = (await tx.execute<{ until: string }>(sql`SELECT (declined_at+interval '30 days')::text AS until FROM mail_forward_declines WHERE workspace_id=${w} AND address_hash=${addressHash} AND declined_at>now()-interval '30 days'`)).rows[0];
   if (declined) throw new ApiError(409, 'FORWARD_DECLINED', `${address} declined forwarding from this workspace. You can ask again after ${new Date(declined.until).toISOString()}.`, 'address');
-  await debit(tx, w, 'forward-verification', 20, 'day', 'At most 20 forward confirmation requests per workspace per day.');
-  await debit(tx, w, 'forward-verification:' + addressHash, 3, 'day', 'At most 3 confirmation requests per address per day.');
+  await debit(tx, w, 'forward-verification', 20, 'day', 'FORWARD_LIMIT', 'At most 20 forward confirmation requests per workspace per day.');
+  await debit(tx, w, 'forward-verification:' + addressHash, 3, 'day', 'FORWARD_LIMIT', 'At most 3 confirmation requests per address per day.');
   // Across every workspace: one address cannot be flooded with requests by many workspaces.
-  await debit(tx, 'global', 'forward-verification:' + addressHash, 5, 'day', 'This address has received too many confirmation requests today.');
+  await debit(tx, 'global', 'forward-verification:' + addressHash, 5, 'day', 'FORWARD_LIMIT', 'This address has received too many confirmation requests today.');
   const token = randomSecret('fwd_');
   await tx.execute(sql`UPDATE mailbox_webhooks SET proof_hash=${await digest(token)},expires_at=now()+interval '24 hours',requested_at=now(),request_from=${box.address},declined_at=NULL WHERE workspace_id=${w} AND id=${endpointId}`);
   await sendFromMailbox(c.env, tx, {
@@ -523,20 +540,25 @@ export function registerEndpoints(app: App) {
     return c.json({ ...created, ...(secret ? { secret } : {}), ...(q.type === 'forward' ? { confirmation: row.verified ? 'skipped' as const : 'emailed' as const } : {}), ...(createdSender ? { createdSender } : {}) }, 201);
   });
   app.openapi(createRoute({ ...meta, method: 'patch', path: `${base}/{name}`, operationId: 'updateEndpoint', summary: 'Edit an endpoint',
-    description: 'Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. A forward’s address is fixed (its recipient confirmed it); create a new forward instead.',
-    request: { params: NameParam, body: json(UpdateEndpoint) }, responses: { 200: response(Endpoint), ...errors } }), async c => {
+    description: 'Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret and verificationToken once. A forward’s address is fixed (its recipient confirmed it); create a new forward instead.',
+    request: { params: NameParam, body: json(UpdateEndpoint) }, responses: { 200: response(Endpoint.extend({
+      secret: z.string().optional().describe('New webhook signing secret, shown once when moving an inbound-format webhook to a new URL.'),
+      verificationToken: z.string().optional().describe('New X-Webhook-Verification-Token for an inbound-format webhook, shown once when its URL changes.'),
+    }).openapi('UpdatedEndpoint')), ...errors } }), async c => {
     const w = receivingAdmin(c, manage).workspaceId, name = c.req.valid('param').name, { name: rename, ...q } = c.req.valid('json');
-    const updated = await c.env.db.transaction(async tx => {
+    const { row: updated, ...secrets } = await c.env.db.transaction(async tx => {
       const row = await lockEndpoint(tx, c, w, { name });
       if (!row) throw missingEndpoint(name);
-      const next = await changeEndpointRecord(tx, c, row, { ...q, key: rename });
+      const changed = await changeEndpointRecord(tx, c, row, { ...q, key: rename });
+      const next = changed.row;
       // URLs and header values are credentials: only that they changed is recorded (in fields), never their values.
       await recordAudit(tx, c, { action: 'endpoint.update', workspaceId: w, target: { type: 'endpoint', id: row.id }, details: { fields: Object.keys(c.req.valid('json')) },
         ...(next.key !== row.key || next.type !== row.type ? { before: { name, type: row.type } } : {}),
         after: { name: next.key, type: next.type, paused: q.paused, perMinute: q.perMinute, retryOnTimeout: q.retryOnTimeout, idempotent: q.idempotent, timeoutSeconds: q.timeoutSeconds, retryAttempts: q.retryAttempts, headerNames: q.headers?.map(h => h.name) } });
-      return next;
+      return changed;
     });
-    return c.json(await endpointView(c.env, w, endpointRowOf(updated)), 200);
+    if (secrets.secret || secrets.verificationToken) c.header('Cache-Control', 'no-store');
+    return c.json({ ...await endpointView(c.env, w, endpointRowOf(updated)), ...secrets }, 200);
   });
   app.openapi(createRoute({ ...meta, method: 'delete', path: `${base}/{name}`, operationId: 'deleteEndpoint', summary: 'Delete an endpoint', description: 'Delete an endpoint no rule or route uses.', request: { params: NameParam }, responses: { 200: response(z.object({ name: Name, deleted: z.literal(true) }).openapi('DeletedEndpoint')), ...errors } }), async c => {
     const w = receivingAdmin(c, manage).workspaceId, name = c.req.valid('param').name;
@@ -560,15 +582,25 @@ export function registerEndpoints(app: App) {
     if (!row) throw missingEndpoint(name);
     if (row.type === 'forward') throw new ApiError(422, 'FORWARD_TEST_UNAVAILABLE', 'Forwards send real mail. Dry-run the rule with testRules instead.');
     if (needsUrl(row)) throw resumeNeedsUrl(); // Nothing is posted to a held endpoint, a test included.
-    await debit(c.env.db, w, 'endpoint-test:' + row.id, 10, 'hour', 'At most 10 endpoint tests per hour.');
+    await debit(c.env.db, w, 'endpoint-test:' + row.id, 10, 'hour', 'ENDPOINT_TEST_LIMIT', 'At most 10 endpoint tests per hour.');
+    const chat = row.type === 'webhook' ? null : {
+      url: pinnedUrl(row.type, await decrypt(c.env, row.encryptedTarget!, targetBinding(w, row.id))),
+      body: JSON.stringify(renderChat(row.type, { [row.type === 'slack' ? 'text' : 'content']: `Test from ${productName}: ${endpointCall(name)} is connected.` })),
+    };
+    const sendTestWebhook = row.type === 'webhook' ? (await import('./inbound-webhook.js')).sendTestWebhook : null;
     try {
-      const result = row.type === 'webhook'
-        ? await (await import('./inbound-webhook.js')).sendTestWebhook(c.env, row, {})
-        : await postWebhook(c.env, pinnedUrl(row.type, await decrypt(c.env, row.encryptedTarget!, targetBinding(w, row.id))), {}, JSON.stringify(renderChat(row.type, { [row.type === 'slack' ? 'text' : 'content']: `Test from ${productName}: ${endpointCall(name)} is connected.` })), null, targetBinding(w, row.id));
+      const result = chat
+        ? await postWebhook(c.env, chat.url, {}, chat.body, null, targetBinding(w, row.id))
+        : await sendTestWebhook!(c.env, row, {});
       const ok = result.status >= 200 && result.status < 300;
       return c.json({ ok, status: result.status, error: ok ? null : `HTTP ${result.status}` }, 200);
     } catch (e) {
-      return c.json({ ok: false, status: null, error: e instanceof ApiError ? e.code : 'NETWORK_ERROR' }, 200);
+      const error = e instanceof JobDeferred ? 'WEBHOOK_COOLING_DOWN'
+        : e instanceof ApiError && e.status < 500 ? e.code
+        : !(e instanceof ApiError) && transportError(e) ? 'NETWORK_ERROR'
+        : null;
+      if (!error) throw e;
+      return c.json({ ok: false, status: null, error }, 200);
     }
   });
   registerForwardPages(app);
@@ -622,11 +654,9 @@ export async function postInboundTest(runtime: Runtime, row: EndpointRecord, inp
   catch (error) {
     if (error instanceof JobDeferred) throw new ApiError(503, 'WEBHOOK_COOLING_DOWN', `This endpoint timed out three times in a row; ${productName} tries it again after ${error.availableAt}.`, undefined, true);
     if (error instanceof ApiError) throw error;
-    // The receiver timed out, refused the connection or failed its TLS handshake: the test's result, not a server failure (a 500).
-    // Node reports a socket or certificate code; a Worker's fetch reports a TypeError. Anything else is a bug and stays a 500.
-    const timedOut = error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError'), code = (error as { code?: unknown }).code;
-    if (!timedOut && !(error instanceof TypeError) && !(typeof code === 'string' && /^(?:E[A-Z]+|ERR_TLS_\w+|CERT_\w+|UNABLE_TO_\w+|DEPTH_ZERO_\w+|SELF_SIGNED_\w+)$/.test(code))) throw error;
-    throw new ApiError(503, 'WEBHOOK_UNREACHABLE', timedOut ? `The endpoint did not answer within ${row.timeoutSeconds} seconds.` : 'The endpoint could not be reached.', undefined, true);
+    const kind = transportError(error);
+    if (!kind) throw error;
+    throw new ApiError(503, 'WEBHOOK_UNREACHABLE', kind === 'timeout' ? `The endpoint did not answer within ${row.timeoutSeconds} seconds.` : 'The endpoint could not be reached.', undefined, true);
   }
 }
 /** Redelivering a received message (POST /v1/inbound/messages/{messageId}/redeliver), in the caller's transaction: how many copies it queued and charged. */
@@ -658,7 +688,6 @@ export function registerInboundWebhooks(app: App, deps: Access) {
   const createFields = { ...webhookFields, description: webhookFields.description.default(''), eventTypes: webhookFields.eventTypes.default(['message.received']), paused: webhookFields.paused.default(false) };
   const create = z.object({ ...createFields, addressIds: idFilter.default(null) }).strict();
   const patch = z.object({ ...webhookFields, addressIds: idFilter }).partial().strict();
-  const inboundToken = async (format: string, secret: string) => format === 'inbound' ? { verificationToken: await (await import('./inbound-webhook.js')).verificationToken(secret) } : {};
 
   app.openapi(createRoute({ method: 'post', path, operationId: 'createInboundWebhook', security, tags, summary: 'Subscribe to inbound events', description: 'Deliveries are signed with Standard Webhooks headers (Webhook-Id, Webhook-Timestamp, Webhook-Signature) and retried with backoff. The endpoint must be a public HTTPS URL. The signing secret, and for the inbound format its verification token, are returned once. A webhook with a key is also a named endpoint (listEndpoints). Set up over MCP, or with a key that was, it is tied to that approval: approval and nextStep in the result say until when.', request: { body: json(create.openapi('CreateInboundWebhook')) }, responses: { 201: response(InboundWebhookSchema.extend({ secret: z.string(), verificationToken: z.string().optional().describe('inbound format: the X-Webhook-Verification-Token value.'), nextStep: z.string().optional().describe('Only for a webhook tied to an MCP approval: what it depends on and how to make a lasting one.') }).openapi('InboundWebhookSecret')), ...errors } }), async c => {
     const w = manageHook(c).workspaceId, input = c.req.valid('json'), format = storedFormat(input.format ?? webhookFormat);
@@ -692,20 +721,25 @@ export function registerInboundWebhooks(app: App, deps: Access) {
     return c.json({ data: await Promise.all(page.map(row => webhookView(c, row, approvals.get(row.id) ?? null))), nextCursor: rows.length > q.limit ? page.at(-1)!.id : null }, 200);
   });
   app.openapi(createRoute({ method: 'get', path: `${path}/{id}`, operationId: 'getInboundWebhook', security, tags, request: { params: IdParam }, responses: { 200: response(InboundWebhookSchema), ...errors } }), async c => c.json(await webhookView(c, await getWebhook(c.env.db, readAccess(c).workspaceId, c.req.valid('param').id)), 200));
-  app.openapi(createRoute({ method: 'patch', path: `${path}/{id}`, operationId: 'updateInboundWebhook', security, tags, description: 'Only supplied fields change. Changing format resets junk to that format\'s default unless junk is supplied too.', request: { params: IdParam, body: json(patch.openapi('UpdateInboundWebhook')) }, responses: { 200: response(InboundWebhookSchema), ...errors } }), async c => {
+  app.openapi(createRoute({ method: 'patch', path: `${path}/{id}`, operationId: 'updateInboundWebhook', security, tags, description: 'Only supplied fields change. Changing format resets junk to that format\'s default unless junk is supplied too. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret (and verificationToken while inbound) once; switching to inbound format returns its verificationToken once.', request: { params: IdParam, body: json(patch.openapi('UpdateInboundWebhook')) }, responses: { 200: response(InboundWebhookSchema.extend({
+    secret: z.string().optional().describe('New signing secret, shown once when moving an inbound-format webhook to a new URL.'),
+    verificationToken: z.string().optional().describe('inbound format: the X-Webhook-Verification-Token value, shown once when switching to inbound format or moving its URL.'),
+  }).openapi('UpdatedInboundWebhook')), ...errors } }), async c => {
     const input = c.req.valid('json'), webhookId = c.req.valid('param').id;
-    const updated = await c.env.db.transaction(async tx => {
+    const { row: updated, ...secrets } = await c.env.db.transaction(async tx => {
       // One transaction and one row lock: two independently valid changes must not combine into a scoped message.stored subscription.
       const w = manageHook(c).workspaceId, row = await lockWebhook(tx, c, w, webhookId);
       const { format, ...rest } = input;
-      const result = await changeEndpointRecord(tx, c, row, { ...rest, ...(format ? { format: storedFormat(format) } : {}) }, 'key');
+      const changed = await changeEndpointRecord(tx, c, row, { ...rest, ...(format ? { format: storedFormat(format) } : {}) }, 'key');
+      const result = changed.row;
       // Changed field names and non-secret values: a URL hint, never header values.
       await recordAudit(tx, c, { action: 'inbound_webhook.update', workspaceId: w, target: { type: 'inbound_webhook', id: row.id }, details: { fields: Object.keys(input) },
         before: { url: input.url ? webhookUrlHint(row.url!) : undefined, paused: input.paused !== undefined ? row.paused : undefined, eventTypes: input.eventTypes ? row.eventTypes : undefined },
         after: { url: input.url ? webhookUrlHint(result.url!) : undefined, paused: input.paused, eventTypes: input.eventTypes && result.eventTypes, addressIds: input.addressIds, key: input.key, format: format && shownFormat(storedFormat(format)), junk: input.junk, headerNames: input.headers?.map(h => h.name) } });
-      return result;
+      return changed;
     });
-    return c.json(await webhookView(c, updated), 200);
+    if (secrets.secret || secrets.verificationToken) c.header('Cache-Control', 'no-store');
+    return c.json({ ...await webhookView(c, updated), ...secrets }, 200);
   });
   const detach = z.object({ detach: z.enum(['true', 'false']).optional().describe('Also remove it from every route that delivers to it, as one routing version. Without it, a referenced webhook is not deleted.') });
   app.openapi(createRoute({ method: 'delete', path: `${path}/{id}`, operationId: 'deleteInboundWebhook', security, tags, request: { params: IdParam, query: detach }, responses: { 200: response(Ok), ...errors } }), async c => {
@@ -989,7 +1023,7 @@ async function sendForward(runtime: Runtime, w: string, endpointId: string, addr
     if (!(await tx.execute(sql`INSERT INTO mail_forward_once(workspace_id,message_id,endpoint,grants) VALUES(${w},${m.id},${endpointId},${JSON.stringify(grants)}::jsonb) ON CONFLICT DO NOTHING RETURNING 1`)).rowCount) return;
     // A forward is a send: the send admission applies the workspace's sending limits. Per endpoint, an hourly bound
     // stops a runaway alias (a loop through a forwarder that strips the loop header) without capping a busy one.
-    await debit(tx, w, 'forward-hourly:' + endpointId, FORWARDS_PER_HOUR, 'hour', `At most ${FORWARDS_PER_HOUR.toLocaleString('en-US')} forwards per endpoint per hour.`);
+    await debit(tx, w, 'forward-hourly:' + endpointId, FORWARDS_PER_HOUR, 'hour', 'FORWARD_LIMIT', `At most ${FORWARDS_PER_HOUR.toLocaleString('en-US')} forwards per endpoint per hour.`);
     // Any incoming loop token blocks a forward (forwardEligibility), including tokens from other installations.
     const loop = await crypto.subtle.importKey('raw', Buffer.from(runtime.config.encryptionKey, 'hex'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
     const token = Buffer.from(await crypto.subtle.sign('HMAC', loop, new TextEncoder().encode(w + ':' + m.id))).toString('base64url');

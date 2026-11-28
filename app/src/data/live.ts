@@ -1,4 +1,4 @@
-import { ApiError, type MailRoute, type RoutingTestResult, type Api, type PageRequest, type PageResult, type Campaign, type CampaignState, type Contact, type AudienceList, type AudiencePreview, type Segment, type Domain, type Webhook, type WebhookDelivery, type MailboxDomain, type MailboxWebhookDelivery, type ReceivedEmailDetail, type InboundAddress, type InboundAddressState, type InboundMessage, type InboundMessageDetail, type InboundThread, type InboundThreadDetail, type InboundWebhook, type ForwardEndpoint, type Email, type RegionCatalog, type SesDiscovery, type RegionProvisionReceipt, type Workspace, type Identity, type OverviewSetup } from './types'
+import { ApiError, type MailRoute, type RoutingTestResult, type Api, type PageRequest, type PageResult, type Campaign, type CampaignState, type Contact, type AudienceList, type AudiencePreview, type Segment, type Domain, type Webhook, type WebhookDelivery, type MailboxDomain, type MailboxWebhookDelivery, type ReceivedEmailDetail, type InboundAddress, type InboundAddressState, type InboundMessage, type InboundMessageDetail, type InboundThread, type InboundThreadDetail, type InboundWebhook, type WebhookSecrets, type ForwardEndpoint, type Email, type RegionCatalog, type SesDiscovery, type RegionProvisionReceipt, type Workspace, type Identity, type OverviewSetup } from './types'
 
 import type { Agent, ApiKey, AppPassword, AuditEntry, CreatedAppPassword, DomainQuota, Topic, WorkspaceSettings } from './types'
 import type { CreatedInbox, Inbox, InboxMessageDetail, InboxMessagePage, LogDirection, LogEntry, SenderScore } from './types'
@@ -500,9 +500,9 @@ export function createLiveApi(scope?: RequestScope): Api {
         }
       },
       webhook: (id, signal) => inboundCall<InboundWebhook>(`/webhooks/${idPath(id)}`, 'GET', undefined, signal),
-      updateWebhook: (id, patch, signal) => inboundCall<InboundWebhook>(`/webhooks/${idPath(id)}`, 'PATCH', patch, signal),
+      updateWebhook: (id, patch, signal) => inboundCall<InboundWebhook & WebhookSecrets>(`/webhooks/${idPath(id)}`, 'PATCH', patch, signal),
       deleteWebhook: async (id, signal) => { await inboundCall(`/webhooks/${idPath(id)}?detach=true`, 'DELETE', undefined, signal) },
-      rotateWebhookSecret: (id, signal) => inboundCall<{ secret: string }>(`/webhooks/${idPath(id)}/rotate-secret`, 'POST', undefined, signal),
+      rotateWebhookSecret: (id, signal) => inboundCall<WebhookSecrets & { secret: string }>(`/webhooks/${idPath(id)}/rotate-secret`, 'POST', undefined, signal),
       webhookDeliveries: async (id, cursor, signal) => { const result = await inboundCall<{ data: MailboxWebhookDelivery[]; nextCursor: string | null }>(`/webhooks/${idPath(id)}/deliveries?limit=25${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ''}`, 'GET', undefined, signal); return Object.assign(result.data, { nextCursor: result.nextCursor }) },
     },
     routing: {

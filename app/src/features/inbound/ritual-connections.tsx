@@ -3,7 +3,7 @@ import { Link } from 'react-router'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { Alert, Button, Checkbox, CopyButton, Dialog, Field, Input, SearchField, SecretInput, Select, type Tone } from '../../components/ui'
 import { request } from '../../data/live'
-import { ApiError, errorText, type InboundAddress } from '../../data/types'
+import { ApiError, errorText, type InboundAddress, type WebhookSecrets } from '../../data/types'
 import { useAddressOptions } from '../../data/addresses'
 import { useDebounced } from '../../lib/pagination'
 import { idempotencyFor, SecretField } from './shared'
@@ -51,7 +51,7 @@ const chat = (type: EndpointType) => type === 'slack' || type === 'discord'
  * Creates an endpoint, or with `editing` edits one in place (PATCH, only what changed). Editing never shows the stored
  * URL: the field starts empty as "Replace URL", and left empty the endpoint keeps its URL.
  */
-export function EndpointDialog({ open, onOpenChange, onCreated, onSaved, editing, types = Object.keys(typeLabel) as EndpointType[], taken = [] }: { open: boolean; onOpenChange: (open: boolean) => void; onCreated?: (e: Endpoint & { secret?: string }) => void; onSaved?: (e: Endpoint) => void; editing?: EditableEndpoint | null; types?: EndpointType[]; taken?: string[] }) {
+export function EndpointDialog({ open, onOpenChange, onCreated, onSaved, editing, types = Object.keys(typeLabel) as EndpointType[], taken = [] }: { open: boolean; onOpenChange: (open: boolean) => void; onCreated?: (e: Endpoint & { secret?: string }) => void; onSaved?: (e: Endpoint & WebhookSecrets) => void; editing?: EditableEndpoint | null; types?: EndpointType[]; taken?: string[] }) {
   const [boxSearch, setBoxSearch] = useState('')
   const boxes = useAddressOptions({ enabled: open && !editing, search: useDebounced(boxSearch) })
   const [type, setType] = useState<EndpointType>(types[0]!)
@@ -93,7 +93,7 @@ export function EndpointDialog({ open, onOpenChange, onCreated, onSaved, editing
   const send = useSingleFlight(editing ? 'endpoints.update' : 'endpoints.create', async (sender?: string) => {
     setBusy(true); setError(null)
     try {
-      if (editing) onSaved?.(await request<Endpoint>(`/v1/endpoints/${encodeURIComponent(editing.name)}`, { method: 'PATCH', body: changes }))
+      if (editing) onSaved?.(await request<Endpoint & WebhookSecrets>(`/v1/endpoints/${encodeURIComponent(editing.name)}`, { method: 'PATCH', body: changes }))
       else {
         // The API decides whether the recipient is asked (auto: not on a domain this workspace verified) and, with no address
         // that can ask, makes one (createSender): the answer says which, and who asked.

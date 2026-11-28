@@ -45387,6 +45387,128 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       } finally { runtime.webhookFetch = transport; }
     });
   });
+
+  test('updating an inbound-format webhook discloses rotated secrets and newly derived verification tokens with no-store', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local }) => {
+      const { verifyWebhook } = await import('../sdk/src/webhooks.js');
+      const transport = runtime.webhookFetch;
+      let lastBody = '', lastHeaders = new Headers();
+      runtime.webhookFetch = async (_url, init) => { lastBody = String(init.body); lastHeaders = new Headers(init.headers); return { status: 204 }; };
+      try {
+        const created = ok(await local('POST', '/v1/inbound/webhooks', {
+          key: 'inb-move', url: `https://${unique('inb1')}.example.org/hook`, format: 'inbound', eventTypes: ['message.received'],
+        }), 201);
+        assert.match(created.secret, /^whsec_/);
+        assert.ok(created.verificationToken);
+
+        // Moving an inbound-format webhook's URL rotates its secret and discloses both secret and verificationToken.
+        const movedRes = await local('PATCH', `/v1/inbound/webhooks/${created.id}`, { url: `https://${unique('inb2')}.example.org/hook` });
+        const moved = ok(movedRes);
+        assert.equal(movedRes.headers.get('cache-control'), 'no-store');
+        assert.match(moved.secret, /^whsec_/);
+        assert.notEqual(moved.secret, created.secret);
+        assert.ok(moved.verificationToken && moved.verificationToken !== created.verificationToken);
+        ok(await local('POST', `/v1/inbound/webhooks/${created.id}/test`, {}));
+        assert.equal(lastHeaders.get('x-webhook-verification-token'), moved.verificationToken);
+        assert.equal(await verifyWebhook(lastBody, lastHeaders, moved.secret), true);
+
+        // Non-URL edits do not re-disclose secrets.
+        const quiet = ok(await local('PATCH', `/v1/inbound/webhooks/${created.id}`, { description: 'still here' }));
+        assert.equal(quiet.secret, undefined);
+        assert.equal(quiet.verificationToken, undefined);
+
+        // Moving the same named inbound-format webhook through PATCH /v1/endpoints/{name} discloses its rotated credentials too.
+        const epMovedRes = await local('PATCH', '/v1/endpoints/inb-move', { url: `https://${unique('inb3')}.example.org/hook` });
+        const epMoved = ok(epMovedRes);
+        assert.equal(epMovedRes.headers.get('cache-control'), 'no-store');
+        assert.match(epMoved.secret, /^whsec_/);
+        assert.notEqual(epMoved.secret, moved.secret);
+        assert.ok(epMoved.verificationToken && epMoved.verificationToken !== moved.verificationToken);
+        ok(await local('POST', `/v1/inbound/webhooks/${created.id}/test`, {}));
+        assert.equal(lastHeaders.get('x-webhook-verification-token'), epMoved.verificationToken);
+        assert.equal(await verifyWebhook(lastBody, lastHeaders, epMoved.secret), true);
+
+        // Switching nightmail -> inbound without moving the URL keeps the secret and discloses the derived verificationToken.
+        const native = ok(await local('POST', '/v1/inbound/webhooks', {
+          key: 'nm-switch', url: `https://${unique('nm1')}.example.org/hook`, format: 'nightmail', eventTypes: ['message.received'],
+        }), 201);
+        assert.equal(native.verificationToken, undefined);
+        const switchedRes = await local('PATCH', `/v1/inbound/webhooks/${native.id}`, { format: 'inbound' });
+        const switched = ok(switchedRes);
+        assert.equal(switchedRes.headers.get('cache-control'), 'no-store');
+        assert.equal(switched.secret, undefined);
+        assert.ok(switched.verificationToken);
+        ok(await local('POST', `/v1/inbound/webhooks/${native.id}/test`, {}));
+        assert.equal(lastHeaders.get('x-webhook-verification-token'), switched.verificationToken);
+        assert.equal(await verifyWebhook(lastBody, lastHeaders, native.secret), true);
+
+        // Switching inbound -> nightmail while moving the URL rotates and returns secret, without verificationToken.
+        const backRes = await local('PATCH', `/v1/inbound/webhooks/${native.id}`, { format: 'nightmail', url: `https://${unique('nm2')}.example.org/hook` });
+        const back = ok(backRes);
+        assert.equal(backRes.headers.get('cache-control'), 'no-store');
+        assert.match(back.secret, /^whsec_/);
+        assert.notEqual(back.secret, native.secret);
+        assert.equal(back.verificationToken, undefined);
+        ok(await local('POST', `/v1/inbound/webhooks/${native.id}/test`, {}));
+        assert.equal(await verifyWebhook(lastBody, lastHeaders, back.secret), true);
+
+        // Moving a nightmail-format webhook through /v1/endpoints/{name} does not rotate or disclose a secret.
+        const sameFormat = ok(await local('PATCH', '/v1/endpoints/nm-switch', { url: `https://${unique('nm3')}.example.org/hook` }));
+        assert.equal(sameFormat.secret, undefined);
+        assert.equal(sameFormat.verificationToken, undefined);
+
+        // A secret that can't be read refuses the switch to inbound format and changes nothing: the token is never lost.
+        await db.query("UPDATE mailbox_webhooks SET encrypted_secret='corrupt' WHERE workspace_id=$1 AND id=$2", [runtime.config.workspaceId, native.id]);
+        error(await local('PATCH', `/v1/inbound/webhooks/${native.id}`, { format: 'inbound', description: 'unreadable' }), 503, 'KEY_ROTATION_REQUIRED');
+        const kept = ok(await local('GET', `/v1/inbound/webhooks/${native.id}`));
+        assert.equal(kept.format, 'nightmail');
+        assert.notEqual(kept.description, 'unreadable');
+      } finally { runtime.webhookFetch = transport; }
+    });
+  });
+
+  test('testEndpoint uses ENDPOINT_TEST_LIMIT and only maps transport errors to NETWORK_ERROR', async t => {
+    await simulatedSesFixture(t, async ({ runtime, db, local }) => {
+      const { ApiError } = await import('./src/core.js');
+      const w = runtime.config.workspaceId;
+      const slack = ok(await local('POST', '/v1/endpoints', {
+        type: 'slack', name: 'ops-test', url: `https://hooks.slack.com/services/T0TEST/B0TEST/${unique('tok')}`,
+      }), 201);
+      const hook = ok(await local('POST', '/v1/endpoints', {
+        type: 'webhook', name: 'hook-test', url: `https://${unique('ephook')}.example.org/hook`,
+      }), 201);
+      const transport = runtime.webhookFetch;
+      try {
+        // Transport socket/timeout failures map to HTTP 200 NETWORK_ERROR; 4xx ApiErrors map to their code.
+        runtime.webhookFetch = async () => { throw Object.assign(new Error('connect ECONNREFUSED 203.0.113.9:443'), { code: 'ECONNREFUSED' }); };
+        assert.deepEqual(ok(await local('POST', '/v1/endpoints/ops-test/test')), { ok: false, status: null, error: 'NETWORK_ERROR' });
+        runtime.webhookFetch = async () => { throw new ApiError(422, 'WEBHOOK_ADDRESS_BLOCKED', 'Blocked.'); };
+        assert.deepEqual(ok(await local('POST', '/v1/endpoints/ops-test/test')), { ok: false, status: null, error: 'WEBHOOK_ADDRESS_BLOCKED' });
+
+        // Internal bugs are never swallowed as HTTP 200 NETWORK_ERROR.
+        runtime.webhookFetch = async () => { throw new RangeError('Invalid header value'); };
+        error(await local('POST', '/v1/endpoints/ops-test/test'), 500, 'INTERNAL_ERROR');
+        error(await local('POST', '/v1/endpoints/hook-test/test'), 500, 'INTERNAL_ERROR');
+
+        // Three timeouts trip the circuit breaker; the next test reports WEBHOOK_COOLING_DOWN rather than NETWORK_ERROR.
+        runtime.webhookFetch = async () => { throw new DOMException('The operation was aborted due to timeout', 'TimeoutError'); };
+        for (let i = 0; i < 3; i++) assert.deepEqual(ok(await local('POST', '/v1/endpoints/ops-test/test')), { ok: false, status: null, error: 'NETWORK_ERROR' });
+        assert.deepEqual(ok(await local('POST', '/v1/endpoints/ops-test/test')), { ok: false, status: null, error: 'WEBHOOK_COOLING_DOWN' });
+
+        // Server-side 5xx ApiErrors (such as decrypt failure) propagate instead of turning into 200 responses.
+        await db.query("UPDATE mailbox_webhooks SET encrypted_target='corrupt' WHERE workspace_id=$1 AND id=$2", [w, slack.id]);
+        error(await local('POST', '/v1/endpoints/ops-test/test'), 503, 'KEY_ROTATION_REQUIRED');
+        await db.query("UPDATE mailbox_webhooks SET encrypted_secret='corrupt' WHERE workspace_id=$1 AND id=$2", [w, hook.id]);
+        error(await local('POST', '/v1/endpoints/hook-test/test'), 503, 'KEY_ROTATION_REQUIRED');
+
+        // Exhausting the hourly endpoint-test budget returns 429 ENDPOINT_TEST_LIMIT, not FORWARD_LIMIT.
+        await db.query(`INSERT INTO api_request_budgets(workspace_id,key_id,window_start,used) VALUES($1,$2,date_trunc('hour',now()),10)
+          ON CONFLICT(workspace_id,key_id) DO UPDATE SET used=10,window_start=excluded.window_start`, [w, 'endpoint-test:' + slack.id]);
+        const limited = error(await local('POST', '/v1/endpoints/ops-test/test'), 429, 'ENDPOINT_TEST_LIMIT');
+        assert.equal(limited.retryable, true);
+      } finally { runtime.webhookFetch = transport; }
+    });
+  });
   test('a webhook storm stays off campaign lanes; capped fan-out and due selection are bounded', async t=>{
     await simulatedSesFixture(t,async({runtime,db,local,run})=>{
       const {processJobs}=await import('./src/jobs.js'),{ingestFeedbackBatch}=await import('./src/operations.js');

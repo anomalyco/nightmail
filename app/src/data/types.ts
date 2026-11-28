@@ -272,6 +272,8 @@ export type InboundWebhookFormat = 'nightmail' | 'inbound'
 export interface ForwardEndpoint { id: string; name: string; status: 'ready' | 'pending' | 'expired' | 'declined' | 'paused'; target: string }
 export interface InboundWebhook { id: string; key?: string | null; name?: string | null; url: string; description: string; eventTypes: MailboxEventType[]; addressIds: string[] | null; paused: boolean; headers: WebhookHeaderView[]; format?: InboundWebhookFormat; junk?: 'skip' | 'include'; createdAt: ISODate; updatedAt: ISODate; approval: ApprovalTie | null }
 /** eventTypes [] is a route-only webhook: it gets only the mail a route sends to it. */
+/** Shown once: a moved inbound-format webhook's new signing secret, and the verification token of one that is (or becomes) inbound format. */
+export interface WebhookSecrets { secret?: string; verificationToken?: string }
 export interface InboundWebhookInput { url: string; description: string; eventTypes: MailboxEventType[]; addressIds: string[] | null; headers?: WebhookHeaderInput[]; format?: InboundWebhookFormat; junk?: 'skip' | 'include' }
 /** A recipient → destinations rule. to: [] keeps mail without an inbox; 'drop' discards it. */
 export interface MailRoute { id: string; key: string | null; match: string; to: string[] | 'drop'; enabled: boolean; subaddresses: boolean; note: string; createdAt: ISODate }
@@ -440,9 +442,9 @@ export interface Api {
     forwards(signal?: AbortSignal): Promise<ForwardEndpoint[]>
     /** One page of inbound webhooks; addressId keeps those that get that address's received mail. */
     webhook(id: string, signal?: AbortSignal): Promise<InboundWebhook>
-    updateWebhook(id: string, patch: Partial<InboundWebhookInput> & { paused?: boolean }, signal?: AbortSignal): Promise<InboundWebhook>
+    updateWebhook(id: string, patch: Partial<InboundWebhookInput> & { paused?: boolean }, signal?: AbortSignal): Promise<InboundWebhook & WebhookSecrets>
     deleteWebhook(id: string, signal?: AbortSignal): Promise<void>
-    rotateWebhookSecret(id: string, signal?: AbortSignal): Promise<{ secret: string }>
+    rotateWebhookSecret(id: string, signal?: AbortSignal): Promise<WebhookSecrets & { secret: string }>
     webhookDeliveries(id: string, cursor?: string, signal?: AbortSignal): Promise<CursorItems<MailboxWebhookDelivery>>
   }
   routing: {

@@ -3523,7 +3523,7 @@ export const getEndpoint = <ThrowOnError extends boolean = false>(options: Optio
 /**
  * Edit an endpoint
  *
- * Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. A forward’s address is fixed (its recipient confirmed it); create a new forward instead.
+ * Edit an endpoint: its name, type, URL, pause state, rate or retry policy. Send only what changes. URLs and headers are write-only: an omitted url keeps the current one, and none is ever returned. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret and verificationToken once. A forward’s address is fixed (its recipient confirmed it); create a new forward instead.
  */
 export const updateEndpoint = <ThrowOnError extends boolean = false>(options: Options<UpdateEndpointData, ThrowOnError>): RequestResult<UpdateEndpointResponses, UpdateEndpointErrors, ThrowOnError> => (options.client ?? client).patch<UpdateEndpointResponses, UpdateEndpointErrors, ThrowOnError>({
     security: [
@@ -5527,7 +5527,7 @@ export const getInboundWebhook = <ThrowOnError extends boolean = false>(options:
 });
 
 /**
- * Only supplied fields change. Changing format resets junk to that format's default unless junk is supplied too.
+ * Only supplied fields change. Changing format resets junk to that format's default unless junk is supplied too. Moving an inbound-format webhook to a new URL rotates its signing secret and returns secret (and verificationToken while inbound) once; switching to inbound format returns its verificationToken once.
  */
 export const updateInboundWebhook = <ThrowOnError extends boolean = false>(options: Options<UpdateInboundWebhookData, ThrowOnError>): RequestResult<UpdateInboundWebhookResponses, UpdateInboundWebhookErrors, ThrowOnError> => (options.client ?? client).patch<UpdateInboundWebhookResponses, UpdateInboundWebhookErrors, ThrowOnError>({
     security: [
