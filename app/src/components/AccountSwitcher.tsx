@@ -87,8 +87,7 @@ export function AccountSwitcher({ help = null }: { help?: (() => void) | null } 
       label: <span className="account-menu__toggle">UI notes<span className="account-menu__toggle-state">{notesOn ? 'On' : 'Off'}{!phone && <kbd>⇧N</kbd>}</span></span> }] : [],
     ...help ? [{ key: 'help', text: 'Help', label: 'Help', icon: <MessageCircleQuestionMark />, onSelect: () => { helping.current = true; setOpen(false); help() } }] : [],
     // At the limit, Add account says why it can't, only when it is chosen.
-    // With one workspace per account, Add account says it signs in to an account that exists, not a new workspace.
-    { key: 'add', text: 'Add account', label: oneWorkspace ? <span className="account-menu__who"><span>Add account</span><span className="account-menu__note">For an account you already have</span></span> : 'Add account', icon: <UserPlus />, onSelect: () => { setOpen(false); if (full) toast(`Up to ${limit} accounts. Sign out of one first.`, 'error'); else session!.addAccount() } },
+    { key: 'add', text: 'Add account', label: 'Add account', icon: <UserPlus />, onSelect: () => { setOpen(false); if (full) toast(`Up to ${limit} accounts. Sign out of one first.`, 'error'); else session!.addAccount() } },
     { key: 'sign-out', text: 'Sign out', label: 'Sign out', icon: <LogOut />, onSelect: () => void run(() => session!.signOutAccount(self.id), 'Couldn’t sign out.') },
     ...accounts.length > 1 ? [{ key: 'sign-out-all', text: 'Sign out of all accounts', label: 'Sign out of all accounts', icon: <LogOut />, destructive: true, onSelect: () => void run(() => session!.signOutAll(), 'Couldn’t sign out.') }] : [],
   ])
@@ -146,7 +145,7 @@ function MenuGroup({ entries, named, className }: { entries: Entry[]; named: (en
 // A new workspace starts like a new signup: switching to it opens onboarding.
 function CreateWorkspaceDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
   const [name, setName] = useState('')
-  const create = useApiMutation((_api, value: string) => workspaceApi.create(value), 'Workspace created', false, false)
+  const create = useApiMutation((_api, value: string) => workspaceApi.create(value), undefined, false, false)
   async function submit(event: FormEvent) {
     event.preventDefault()
     try { const workspace = await create.mutateAsync(name.trim()); onClose(); onCreated(workspace.id) } catch { /* inline */ }

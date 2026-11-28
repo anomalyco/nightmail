@@ -335,7 +335,7 @@ function ApiKeyForm({ open, onOpenChange, onPending, onCreated, initial, editing
   return <>
     <form id={formId} className="stack" onSubmit={submit} noValidate>
       <MutationError error={write.error} />
-      <Field label="Name" htmlFor="key-name" error={nameError} errorCode={nameCode} hint={`Any text up to ${NAME_MAX} characters, such as what the key is for. It doesn’t have to be unique.`}><Input id="key-name" value={name} maxLength={NAME_MAX} onChange={event => { setName(event.target.value); if (errors.name) setErrors(({ name: _, ...rest }) => rest) }} autoFocus={!editing} required disabled={pending} placeholder={placeholder} /></Field>
+      <Field label="Name" htmlFor="key-name" error={nameError} errorCode={nameCode} hint={`Up to ${NAME_MAX} characters.`}><Input id="key-name" value={name} maxLength={NAME_MAX} onChange={event => { setName(event.target.value); if (errors.name) setErrors(({ name: _, ...rest }) => rest) }} autoFocus={!editing} required disabled={pending} placeholder={placeholder} /></Field>
       {/* The grey example reads as filled in; an empty name offers it as the name. */}
       {nameCode === 'empty' && <div className="cluster"><Button size="sm" onClick={() => { setName(placeholder); setErrors(({ name: _, ...rest }) => rest) }} disabled={pending}>Use “{placeholder}”</Button></div>}
       <fieldset className="keys-purpose" disabled={pending}>
@@ -413,7 +413,7 @@ function AppPasswordForm({ open, onOpenChange, onPending, onCreated }: FormProps
       const result = await create.mutateAsync({ inboxId: chosen, name: name.trim(), protocols })
       onOpenChange(false)
       const inbox = activeInboxes(inboxes).find(box => box.id === chosen)
-      onCreated({ secret: result.password, title: 'App password created', description: 'Shown once: copy it now and use it as your mail app’s password.',
+      onCreated({ secret: result.password, title: 'App password created',
         mail: { username: inbox ? <PrivateAddress value={inbox.address} /> : 'The inbox address', imap: protocols.includes('imap'), smtp: protocols.includes('smtp') } })
     } catch { /* Shown in the form. */ }
   }
@@ -470,7 +470,7 @@ function SmtpLoginForm({ open, onOpenChange, onPending, onCreated }: FormProps) 
     try {
       const result = await create.mutateAsync(input)
       onOpenChange(false)
-      onCreated({ secret: result.secret, title: 'SMTP login created', description: 'Shown once: copy it now and use it as the app’s SMTP password.', mail: { username: <SmtpUsername />, imap: false, smtp: true } })
+      onCreated({ secret: result.secret, title: 'SMTP login created', mail: { username: <SmtpUsername />, imap: false, smtp: true } })
     } catch { /* Shown in the form. */ }
   }
   return <form id="create-smtp-login" className="stack" onSubmit={submit} noValidate>

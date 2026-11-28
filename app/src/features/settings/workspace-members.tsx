@@ -22,7 +22,7 @@ const roleOptions = (owner: boolean) => (owner ? ['owner', 'admin', 'member'] as
 const roleHint: Record<WorkspaceRole, string> = {
   owner: 'Everything, including adding and removing other owners.',
   admin: 'Everything except owners: keys, domains, webhooks, sending and members.',
-  member: 'Sends email, reads logs and edits content. Can’t manage keys, domains, webhooks or teammates.',
+  member: 'Sends email, reads logs and edits content.',
 }
 function RoleGuide({ owner }: { owner: boolean }) {
   return <Disclosure title="What each role can do"><dl className="settings-role-guide">{(owner ? ['owner', 'admin', 'member'] as const : ['admin', 'member'] as const).map(role => <div key={role}><dt>{roleLabel[role]}</dt><dd className="muted">{roleHint[role]}</dd></div>)}</dl></Disclosure>
@@ -66,7 +66,7 @@ export function Members({ owner, onInvite }: { owner: boolean; onInvite: () => v
         ]} /> : <span className="settings-card-end" /> },
     ]} />}
     <ConfirmDialog open={changing !== null} onOpenChange={open => { if (!open) setChanging(null) }} title={change?.title ?? ''} description={change?.description ?? ''} confirmLabel={change?.confirm} danger={change?.danger} pending={update.isPending} onConfirm={async () => { if (changing) await update.mutateAsync({ id: changing.member.id, role: changing.role }) }} />
-    <ConfirmDialog open={removing !== null} onOpenChange={open => { if (!open) setRemoving(null) }} title={`Remove ${removing?.name || 'this member'}?`} description={removing && !removing.name ? <><PrivateAddress value={removing.email} /> loses access to this workspace immediately. You can invite them again later.</> : 'They lose access to this workspace immediately. You can invite them again later.'} confirmLabel="Remove member" danger pending={remove.isPending} onConfirm={async () => { if (removing) await remove.mutateAsync(removing.id) }} />
+    <ConfirmDialog open={removing !== null} onOpenChange={open => { if (!open) setRemoving(null) }} title={`Remove ${removing?.name || 'this member'}?`} description={removing && !removing.name ? <><PrivateAddress value={removing.email} /> loses access to this workspace immediately.</> : 'They lose access to this workspace immediately.'} confirmLabel="Remove member" danger pending={remove.isPending} onConfirm={async () => { if (removing) await remove.mutateAsync(removing.id) }} />
   </section>
 }
 
@@ -141,7 +141,7 @@ export function InviteDialog({ open, owner, onOpenChange }: { open: boolean; own
         </div>
         <div className="ui-secret"><SecretCode className="settings-invite__link">{created?.acceptUrl ?? '\u00a0'}</SecretCode><CopyButton value={created?.acceptUrl ?? ''} label="Copy invitation link" /></div>
         {canShare() && <Button className="settings-share" onClick={() => { if (created) void shareLink(created.acceptUrl, toast) }}><Share size={16} />Share link</Button>}
-        <p className="muted">Only that address can accept it, by signing in with an emailed link or its Google account.</p>
+        <p className="muted">Only that address can accept it.</p>
       </div>
     </div>
   </Dialog>

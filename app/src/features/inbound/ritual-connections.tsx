@@ -4,7 +4,6 @@ import { PrivateAddress } from '../../components/PrivateAddress'
 import { Alert, Button, Checkbox, CopyButton, Dialog, Field, Input, SearchField, SecretInput, Select, type Tone } from '../../components/ui'
 import { request } from '../../data/live'
 import { ApiError, errorText, type InboundAddress } from '../../data/types'
-import { productName } from '../../../../api/src/brand'
 import { useAddressOptions } from '../../data/addresses'
 import { useDebounced } from '../../lib/pagination'
 import { idempotencyFor, SecretField } from './shared'
@@ -31,7 +30,7 @@ export const slackUrl = /^https:\/\/hooks\.slack\.com\//i, discordUrl = /^https:
 /** What is wrong with an endpoint's URL or forward address, or '' when it will do. The recipe form checks with it too. */
 export function targetProblem(type: EndpointType, value: string) {
   if (type === 'forward') return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? '' : 'Enter a full email address, like team@example.com.'
-  if (!/^https:\/\//i.test(value)) return /^http:\/\//i.test(value) ? `Use https://: ${productName} only posts to secure URLs.` : 'Start the URL with https://.'
+  if (!/^https:\/\//i.test(value)) return 'Start the URL with https://.'
   if (type === 'slack' && !slackUrl.test(value)) return 'Use Slack’s incoming webhook URL, starting https://hooks.slack.com/.'
   if (type === 'discord' && !discordUrl.test(value)) return 'Use Discord’s webhook URL, starting https://discord.com/api/webhooks/.'
   return ''
@@ -213,7 +212,7 @@ export function AwaitingConfirm({ address, from }: { address: string; from?: str
 /** What creating a forward did: asked its recipient (from which address, and whether that address is new), or nothing
  *  to ask (on a domain this workspace verified). */
 function ForwardAsked({ endpoint }: { endpoint: Endpoint }) {
-  if (endpoint.status !== 'pending') return <p className="muted">It’s on a domain you verified, so nobody had to confirm.</p>
+  if (endpoint.status !== 'pending') return null
   return <>
     <AwaitingConfirm address={endpoint.target} from={endpoint.requestFrom} />
     {endpoint.createdSender && <p className="muted"><PrivateAddress value={endpoint.createdSender.address} /> is a new address, made to ask them.</p>}

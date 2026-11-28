@@ -188,7 +188,7 @@ export function InboundAddressDetailPage() {
   const [building, setBuilding] = useState(false)
   const input = edited ?? (current ? formOf(current) : null)
   // Only a failed first load replaces the page: a later refetch that fails keeps the Settings form and its edits.
-  if (gone) return <><PageHeader title="Address" backTo="/receiving" /><EmptyState title="This address no longer exists" description="It was deleted, by a teammate, an agent or in another tab. Its mail stays in Logs." action={<Link className="ui-button ui-button--secondary ui-button--md" to="/receiving">Back to addresses</Link>} /></>
+  if (gone) return <><PageHeader title="Address" backTo="/receiving" /><EmptyState title="This address no longer exists" description="Its mail stays in Logs." action={<Link className="ui-button ui-button--secondary ui-button--md" to="/receiving">Back to addresses</Link>} /></>
   if (address.error && !current) return <><PageHeader title="Address" backTo="/receiving" /><ErrorState error={address.error} onRetry={() => void address.refetch()} /></>
   const base = input?.base
   const dirty = !!base && !!input && (input.displayName.trim() !== (base.displayName ?? '') || !sameList(input.aliases.list, base.aliases) || !!input.aliases.draft.trim())
@@ -211,7 +211,7 @@ export function InboundAddressDetailPage() {
     <PageHeader title={current ? <PrivateAddress value={current.address} /> : <SkeletonText width={240} lineHeight={28} />} backTo={tab === 'mail' && params.get('thread') ? `/receiving/addresses/${id}` : '/receiving'} />
     {canAdminister && <Tabs label="Address" value={tab} onValueChange={value => show(value as AddressTab)}
       items={[{ value: 'mail', label: 'Mail' }, { value: 'flow', label: 'Where mail goes' }, { value: 'settings', label: 'Settings' }]} />}
-    {expired && <Alert tone="info">This temporary address expired. It can’t receive or send, but its mail stays readable.</Alert>}
+    {expired && <Alert tone="info">This temporary address expired. It can’t receive or send.</Alert>}
     {/* Mail stays mounted, hidden, behind the other tabs: a reply being written survives a look at them. */}
     <AddressMail addressId={id} hidden={tab !== 'mail'} enabled={!deleted} />
     {tab === 'mail' ? null

@@ -70,7 +70,7 @@ export function McpSignInSetup({ label = 'Agent', urlLine = true, picker = false
  *  cell, so the height holds. */
 export function McpClientSetup({ client, onClient, url, auth, label = 'MCP client' }: { client: McpClient; onClient: (client: McpClient) => void; url: string | null; auth: McpAuth; label?: string }) {
   const kind = 'key' in auth || 'bearer' in auth ? 'key' : 'oauth'
-  if (!url) return <p className="muted developer-copy" role="status">Loading this installation’s address…</p>
+  if (!url) return <p className="muted developer-copy" role="status">Loading…</p>
   return <div className="stack">
     <Tabs label={label} value={client} onValueChange={value => onClient(value as McpClient)} items={clientTabs} />
     <div className="developer-client-panels" data-sensitive={kind === 'key' || undefined}>{mcpClients.map(value => {
@@ -142,7 +142,7 @@ function SetupPrompt() {
   const prompt = (setupToken: string | null | undefined) => agentPrompt({ origin: base, domain: undefined, email: identity?.email ?? null, multiTenant: identity?.multiTenant === true, setupToken })
   return <section className="stack connect-agent__prompt" aria-label="Agent prompt">
     <AgentPromptPanel value={setup.copy(prompt)} preview={prompt(null)} setup={setup} pending={!origin}
-      idle="Paste it into your coding agent. Copying adds a one-time setup token; revoke the key any time under API keys."
+      idle="Paste it into your coding agent."
       line="Paste it into your coding agent: it connects with a device code." />
   </section>
 }

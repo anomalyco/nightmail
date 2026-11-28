@@ -127,7 +127,7 @@ export function SendEstimateLine({ campaign, recipients, start, perDay, rateShar
   const finish = estimate?.ratePerSecond && left ? estimateFinish({ recipients: left, start, ratePerSecond: estimate.ratePerSecond, rateShare, perDay, ramp: ramp && { step: ramp.step - 1, startedAt: null, released: 0 } }) : null
   const span = finish === null ? '' : relativeTime(new Date(finish).toISOString(), start)
   const takes = !span ? '' : span === 'in under a minute' ? 'Takes under a minute' : `Takes ${span.replace(/^in /, 'about ')}`
-  const ramping = ramp ? `ramps up from ${number(ramp.ceilingPerHour)} an hour, as a new sender's large campaigns do` : ''
+  const ramping = ramp ? `ramps up from ${number(ramp.ceilingPerHour)} an hour` : ''
   const text = takes ? `${takes}${ramping ? `: it ${ramping}` : ''}.` : ramping ? `It ${ramping}.` : ''
   return <p className="review-detail campaign-send-estimate" title={finish === null ? undefined : `Last recipients go out about ${atUtc(new Date(finish).toISOString())}`}>{text}</p>
 }
@@ -189,7 +189,7 @@ export function CampaignPacing({ campaign }: { campaign: Campaign }) {
   return <div className="campaign-pacing">
     {paused && <div className="campaign-scheduled" data-tone={campaign.status === 'failed' ? 'danger' : 'warning'} role="status">
       <div className="campaign-pacing-banner">{campaign.status === 'failed' ? <><strong>Sending failed</strong>
-        <span>No new recipients are being released. Resume to continue where it stopped, or cancel.{expansion.pausedAt && <span className="muted" title={atUtc(expansion.pausedAt)}> Paused {relativeTime(expansion.pausedAt)}.</span>}</span></>
+        <span>Resume continues where it stopped.{expansion.pausedAt && <span className="muted" title={atUtc(expansion.pausedAt)}> Paused {relativeTime(expansion.pausedAt)}.</span>}</span></>
         // An automatic pause says why first.
         : <span>{expansion.pauseReason && `${expansion.pauseReason.message} `}{expansion.pausedAt && <><span title={atUtc(expansion.pausedAt)}>Paused {relativeTime(expansion.pausedAt)}.</span> </>}Queued emails still send.</span>}
         {canAdminister && <Button variant="primary" size="sm" loading={resume.isPending} disabled={busy} onClick={() => void run(() => resume.mutateAsync(campaign.id))}>Resume</Button>}

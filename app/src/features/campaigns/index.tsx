@@ -67,7 +67,7 @@ const nobodyEligible = 'Nobody on this list can receive campaigns yet. Mark cont
 const campaignRoute = (campaign: Pick<Campaign, 'id'>, view: 'edit' | 'review') => `/campaigns/${encodeURIComponent(campaign.id)}/${view}`
 function campaignReadinessError(campaign: Campaign) {
   const missing = [!campaign.name.trim() && 'a campaign name', !campaign.subject.trim() && 'a subject', !emailIsValid(campaign.fromEmail.trim()) && 'a valid sender email address', !campaign.listId && 'a recipient list', !campaign.html.trim() && 'email content'].filter(Boolean)
-  return missing.length ? `Complete the draft before reviewing or sending: add ${missing.join(', ')}.` : ''
+  return missing.length ? `Add ${missing.join(', ')}.` : ''
 }
 // A test goes to one address, so it needs a complete message but no recipient list (the API sends it without one).
 const campaignMessageReady = (campaign: Campaign) => Boolean(campaign.name.trim() && campaign.subject.trim() && emailIsValid(campaign.fromEmail.trim()) && campaign.html.trim())
@@ -347,7 +347,7 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
   const syncLabel = autosaving || preparing || saveMutation.isPending ? 'Saving…' : remote ? 'Update available' : autosavePaused ? 'Save failed' : error ? 'Check draft' : unavailable ? 'Unavailable' : readOnly ? 'Read only' : sync.connection === 'offline' ? 'Sync interrupted' : dirty ? form.name.trim() ? 'Unsaved changes' : 'Name required' : accepted ? 'Saved' : 'New draft'
   const syncActionable = Boolean(remote || error || autosavePaused || sync.connection === 'offline')
   const syncState = error || autosavePaused || sync.connection === 'offline' ? 'offline' : remote || dirty || autosaving ? 'changed' : sync.connection
-  const syncTitle = error || sync.error?.message || (remote ? conflicts.length ? `You both changed ${mergeFieldsText(conflicts)}.` : 'A newer version is available.' : autosavePaused ? 'Autosave paused. Retry saving your changes.' : readOnly ? `This ${thing} is no longer editable.` : 'Changes save automatically and sync with MCP and the API.')
+  const syncTitle = error || sync.error?.message || (remote ? conflicts.length ? `You both changed ${mergeFieldsText(conflicts)}.` : undefined : autosavePaused ? 'Autosave paused. Retry saving your changes.' : undefined)
   function syncAction() { if (remote) setReviewUpdate(true); else if (autosavePaused) void save('edit'); else if (error) toast(error, 'error'); else sync.checkNow() }
   function reportError(value: string) { setError(value); toast(value, 'error') }
   async function save(next: 'auto' | 'edit' | 'review' | 'test') {
@@ -506,7 +506,7 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
             </div>
             {(domainCursor || choices.next) && <div className="campaign-compose-feedback cluster"><Button onClick={() => setDomainCursor(undefined)}>First domains</Button><Button disabled={!choices.next} onClick={() => setDomainCursor(choices.next ?? undefined)}>More domains</Button></div>}
             {!options.isPending && choices.domains.length === 0 && <div className="campaign-compose-feedback campaign-note" data-tone="warning"><span>No verified domains on this page · <Link to="/domains">Add a domain</Link></span></div>}
-            <div className="campaign-compose-row campaign-compose-subject"><label htmlFor="campaign-subject">Subject</label><Input id="campaign-subject" placeholder="Add a subject" value={form.subject} onChange={event => change('subject', event.target.value)} disabled={controlsDisabled} /><Button className="campaign-preview-toggle" variant="ghost" size="sm" disabled={controlsDisabled} aria-expanded={previewOpen} aria-controls="campaign-preview-row" onClick={() => {setPreviewOpen(!previewOpen); if (!previewOpen) requestAnimationFrame(() => previewInput.current?.focus({preventScroll: true}))}}>Preview text<Icon icon={ChevronRight} size="sm" /></Button></div>
+            <div className="campaign-compose-row campaign-compose-subject"><label htmlFor="campaign-subject">Subject</label><Input id="campaign-subject" value={form.subject} onChange={event => change('subject', event.target.value)} disabled={controlsDisabled} /><Button className="campaign-preview-toggle" variant="ghost" size="sm" disabled={controlsDisabled} aria-expanded={previewOpen} aria-controls="campaign-preview-row" onClick={() => {setPreviewOpen(!previewOpen); if (!previewOpen) requestAnimationFrame(() => previewInput.current?.focus({preventScroll: true}))}}>Preview text<Icon icon={ChevronRight} size="sm" /></Button></div>
             <div id="campaign-preview-row" className="campaign-compose-preview" data-open={previewOpen || undefined} aria-hidden={!previewOpen} inert={!previewOpen}>
               <div><div className="campaign-compose-row"><label htmlFor="campaign-preview">Preview</label><Input ref={previewInput} id="campaign-preview" aria-label="Preview text" maxLength={200} placeholder="Shown after the subject" value={form.previewText} onChange={event => change('previewText', event.target.value)} disabled={controlsDisabled} /></div></div>
             </div>
@@ -626,8 +626,8 @@ function CampaignControlFallback({ id, state, error, refreshing, onRetry }: { id
       </div>
       {actionError && <p className="campaign-note" data-tone="danger" role="alert">{actionError}</p>}
     </div>
-    <ConfirmDialog open={confirm === 'cancel'} onOpenChange={open => { if (!open) setConfirm(null) }} danger title="Cancel this campaign?" description="Queued emails are canceled and remaining recipients won’t get it. Sent emails stay sent. You can’t undo this." confirmLabel="Cancel campaign" pending={busy === 'cancel'} onConfirm={cancel} />
-    <ConfirmDialog open={confirm === 'unschedule'} onOpenChange={open => { if (!open) setConfirm(null) }} title="Unschedule this campaign?" description="It becomes a draft again and won’t send." confirmLabel="Unschedule" pending={busy === 'unschedule'} onConfirm={async () => { await run('unschedule', () => api.campaigns.unschedule(id), 'Unscheduled. The campaign is a draft again.'); setConfirm(null) }} />
+    <ConfirmDialog open={confirm === 'cancel'} onOpenChange={open => { if (!open) setConfirm(null) }} danger title="Cancel this campaign?" description="Queued emails are canceled and remaining recipients won’t get it. You can’t undo this." confirmLabel="Cancel campaign" pending={busy === 'cancel'} onConfirm={cancel} />
+    <ConfirmDialog open={confirm === 'unschedule'} onOpenChange={open => { if (!open) setConfirm(null) }} title="Unschedule this campaign?" description="It becomes a draft again and won’t send." confirmLabel="Unschedule" pending={busy === 'unschedule'} onConfirm={async () => { await run('unschedule', () => api.campaigns.unschedule(id), 'Unscheduled'); setConfirm(null) }} />
   </div>
 }
 
@@ -765,16 +765,16 @@ function ScheduledBanner({ campaign }: { campaign: Campaign }) {
   const total = campaign.delivery?.total ?? campaign.recipients
   async function unschedule(edit: boolean) {
     accept(await api.campaigns.unschedule(campaign.id))
-    toast(edit ? 'Unscheduled. Schedule it again after editing.' : 'Unscheduled. The campaign is a draft again.', 'success')
+    toast('Unscheduled', 'success')
     if (edit) navigate(campaignRoute(campaign, 'edit'))
   }
   const blocked = canAdminister ? undefined : 'Only owners and admins can change a schedule.'
   return <>
     <div className="campaign-scheduled" role="status">
       <div className="campaign-scheduled__text"><strong>Scheduled for {utcLabel(at)}</strong><span className="muted">{localLabel(at)} · {number(total)} {total === 1 ? 'recipient' : 'recipients'}</span></div>
-      <div className="cluster"><Button size="sm" disabled={!canAdminister} title={blocked} onClick={() => setDialog('reschedule')}>Reschedule</Button><Button size="sm" disabled={!canAdminister} title={blocked ?? 'Unschedules it so you can edit; schedule it again afterwards'} onClick={() => setDialog('edit')}>Edit</Button><Button size="sm" variant="ghost" disabled={!canAdminister} title={blocked} onClick={() => setDialog('unschedule')}>Unschedule</Button></div>
+      <div className="cluster"><Button size="sm" disabled={!canAdminister} title={blocked} onClick={() => setDialog('reschedule')}>Reschedule</Button><Button size="sm" disabled={!canAdminister} title={blocked} onClick={() => setDialog('edit')}>Edit</Button><Button size="sm" variant="ghost" disabled={!canAdminister} title={blocked} onClick={() => setDialog('unschedule')}>Unschedule</Button></div>
     </div>
-    <ConfirmDialog open={dialog === 'edit'} onOpenChange={open => setDialog(open ? 'edit' : null)} title="Edit this campaign?" description="Editing turns it back into a draft. Schedule it again when you’re done." confirmLabel="Unschedule and edit" onConfirm={() => unschedule(true)} />
+    <ConfirmDialog open={dialog === 'edit'} onOpenChange={open => setDialog(open ? 'edit' : null)} title="Edit this campaign?" description="Editing turns it back into a draft." confirmLabel="Unschedule and edit" onConfirm={() => unschedule(true)} />
     <ConfirmDialog open={dialog === 'unschedule'} onOpenChange={open => setDialog(open ? 'unschedule' : null)} title="Unschedule this campaign?" description="It becomes a draft again and won’t send." confirmLabel="Unschedule" onConfirm={() => unschedule(false)} />
     {dialog === 'reschedule' && <RescheduleDialog campaign={campaign} onClose={() => setDialog(null)} />}
   </>
@@ -816,8 +816,8 @@ function CancelCampaignButton({ campaign }: { campaign: Campaign }) {
   const { canAdminister } = useWorkspaceAccess()
   const [open, setOpen] = useState(false)
   return <>
-    <Button variant="ghost" disabled={!canAdminister} title={canAdminister ? 'Stop releasing recipients and cancel queued emails' : 'Only owners and admins can cancel campaigns.'} onClick={() => setOpen(true)}>Cancel campaign</Button>
-    <ConfirmDialog open={open} onOpenChange={setOpen} danger title="Cancel this campaign?" description="Queued emails are canceled and remaining recipients won’t get it. Sent emails stay sent. You can’t undo this." confirmLabel="Cancel campaign" onConfirm={async () => { const result = await api.campaigns.cancel(campaign.id); toast(`Campaign canceled · ${number(result.canceled)} not sent`, 'success'); await cache.invalidateQueries({ queryKey: ['nightmail', 'campaign', campaign.id] }); void cache.invalidateQueries({ queryKey: ['nightmail', 'campaigns'], refetchType: 'none' }) }} />
+    <Button variant="ghost" disabled={!canAdminister} title={canAdminister ? undefined : 'Only owners and admins can cancel campaigns.'} onClick={() => setOpen(true)}>Cancel campaign</Button>
+    <ConfirmDialog open={open} onOpenChange={setOpen} danger title="Cancel this campaign?" description="Queued emails are canceled and remaining recipients won’t get it. You can’t undo this." confirmLabel="Cancel campaign" onConfirm={async () => { const result = await api.campaigns.cancel(campaign.id); toast(`Campaign canceled · ${number(result.canceled)} not sent`, 'success'); await cache.invalidateQueries({ queryKey: ['nightmail', 'campaign', campaign.id] }); void cache.invalidateQueries({ queryKey: ['nightmail', 'campaigns'], refetchType: 'none' }) }} />
   </>
 }
 
@@ -908,7 +908,7 @@ function AudiencePicker({ campaign, audience, notices, disabled }: { campaign: C
     {(segmentCursor || options.data?.nextSegment) && <div className="cluster"><Button disabled={!segmentCursor} onClick={() => setSegmentCursor(undefined)}>First segments</Button><Button disabled={!options.data?.nextSegment} onClick={() => setSegmentCursor(options.data?.nextSegment ?? undefined)}>More segments</Button></div>}
     {/* The kind of mail it is (Audience → Topics): people who opted out of the topic are skipped, and its unsubscribe link
         opts out of that topic alone. A required notice has no unsubscribe, so no topic. */}
-    {!campaign.requiredNotice && <Field label="Topic" htmlFor="campaign-topic" hint={campaign.topicId ? 'People who opted out of it are skipped, and its unsubscribe link stops this topic only.' : 'Its unsubscribe link stops all marketing.'}><Select id="campaign-topic" aria-label="Topic" disabled={off} value={campaign.topicId} onValueChange={value => { if (!saving && value !== campaign.topicId) void save({ topicId: value }) }} options={options.isPending ? [{ value: campaign.topicId, label: 'Loading topics…', disabled: true }] : [{ value: '', label: 'No topic' }, ...(campaign.topicId && !topics.some(topic => topic.id === campaign.topicId) ? [{ value: campaign.topicId, label: 'Archived topic: choose another' }] : []), ...topics.map(topic => ({ value: topic.id, label: topic.name })), ...(!topics.length ? [{ value: '__none', label: 'No topics yet. Create one in Audience.', disabled: true }] : [])]} /></Field>}
+    {!campaign.requiredNotice && <Field label="Topic" htmlFor="campaign-topic" hint={campaign.topicId ? 'Its unsubscribe link stops this topic only.' : 'Its unsubscribe link stops all marketing.'}><Select id="campaign-topic" aria-label="Topic" disabled={off} value={campaign.topicId} onValueChange={value => { if (!saving && value !== campaign.topicId) void save({ topicId: value }) }} options={options.isPending ? [{ value: campaign.topicId, label: 'Loading topics…', disabled: true }] : [{ value: '', label: 'No topic' }, ...(campaign.topicId && !topics.some(topic => topic.id === campaign.topicId) ? [{ value: campaign.topicId, label: 'Archived topic: choose another' }] : []), ...topics.map(topic => ({ value: topic.id, label: topic.name })), ...(!topics.length ? [{ value: '__none', label: 'No topics yet. Create one in Audience.', disabled: true }] : [])]} /></Field>}
     {/* A campaign that is already a notice keeps the choice, so it can go back to marketing if notices were turned off. */}
     {(notices || campaign.requiredNotice) && <Field label="Kind" htmlFor="campaign-kind" hint={campaign.requiredNotice ? 'Reaches people who unsubscribed too, with no unsubscribe link.' : undefined}><Select id="campaign-kind" aria-label="Kind" disabled={disabled || saving} value={campaign.requiredNotice ? 'notice' : 'marketing'} onValueChange={value => { if (!saving && (value === 'notice') !== campaign.requiredNotice) void save({ requiredNotice: value === 'notice', ...(value === 'notice' ? { topicId: '' } : {}) }) }} options={[{ value: 'marketing', label: 'Marketing' }, { value: 'notice', label: 'Required notice', disabled: !notices }]} /></Field>}
   </div>
@@ -1112,7 +1112,7 @@ function CampaignReview({ campaign: latest, stats, settings, stale, refreshing, 
   ]
   const bar = <CampaignBar back={campaign.archivedAt ? '/campaigns?archived=true' : issueOf ? newsletterPath(issueOf.id) : '/campaigns'} crumb={issueOf?.name ?? 'Campaigns'} title={<h1 className="studio-title">{campaign.name}</h1>} status={<StatusBadge status={campaignDisplayStatus(campaign)} />} steps={draft && <CampaignSteps step="review" writeTo={campaignRoute(campaign, 'edit')} />} actions={<><CampaignPresence present={present} room={draft} />{stale && <span className="campaign-note" data-tone="warning" title="Showing the last available counts.">Couldn’t refresh</span>}{!campaignEditable(campaign) && !finished && sentSomething && <Link className="ui-button ui-button--secondary ui-button--md" to={`/logs?campaign=${encodeURIComponent(campaign.id)}`}>View logs</Link>}{campaign.archivedAt && <CampaignArchiveButton campaign={campaign} />}</>} />
   const dialogs = <>
-    <ConfirmDialog open={confirmation !== null} onOpenChange={open => { if (!open && !sendMutation.isPending) setConfirmation(null) }} title={confirmation?.mode === 'schedule' ? `Schedule this ${thing}?` : `Send this ${thing} now?`} description={confirmation?.mode === 'schedule' ? `Send “${campaign.name}”${origin} to ${recipients}${audienceName} on ${utcLabel(confirmation.scheduledAt!)} (${localLabel(confirmation.scheduledAt!)}).${paceSummary(confirmation)}${cost}${noticeNote}${scoreNote} You can change this until sending starts.` : `Send “${campaign.name}”${origin} to ${recipients}${audienceName} now.${paceSummary(confirmation)}${cost}${noticeNote || ' Consent is checked again as each email sends.'}${scoreNote} You can’t undo this.`} confirmLabel={confirmation?.mode === 'schedule' ? 'Schedule' : 'Send now'} onConfirm={confirmSend} pending={sendMutation.isPending} />
+    <ConfirmDialog open={confirmation !== null} onOpenChange={open => { if (!open && !sendMutation.isPending) setConfirmation(null) }} title={confirmation?.mode === 'schedule' ? `Schedule this ${thing}?` : `Send this ${thing} now?`} description={confirmation?.mode === 'schedule' ? `Send “${campaign.name}”${origin} to ${recipients}${audienceName} on ${utcLabel(confirmation.scheduledAt!)} (${localLabel(confirmation.scheduledAt!)}).${paceSummary(confirmation)}${cost}${noticeNote}${scoreNote} You can change this until sending starts.` : `Send “${campaign.name}”${origin} to ${recipients}${audienceName} now.${paceSummary(confirmation)}${cost}${noticeNote}${scoreNote} You can’t undo this.`} confirmLabel={confirmation?.mode === 'schedule' ? 'Schedule' : 'Send now'} onConfirm={confirmSend} pending={sendMutation.isPending} />
     {draft && testOpen && <TestEmailDialog campaign={campaign} open={testOpen} onOpenChange={setTestOpen} />}
     {addressFor && <PostalAddressDialog open onOpenChange={open => { if (!open) setAddressFor(null) }} initial={null} required title="Add your postal address" submitLabel="Continue"
       onSaved={() => { if (addressFor.confirmed) void send(addressFor.input); else setConfirmation(addressFor.input) }} />}
@@ -1198,7 +1198,7 @@ function CampaignReview({ campaign: latest, stats, settings, stale, refreshing, 
     <div className="campaign-review-layout">
       <section className="campaign-fields campaign-recipients">
         {campaign.delivery?.error && <p className="campaign-note" data-tone="danger" role="alert">{campaign.delivery.error.message}</p>}
-        {!scheduledView && <SectionHeader title="Delivery" actions={finished ? undefined : <div className="cluster">{cancellable && <CancelCampaignButton campaign={campaign} />}<Button variant="secondary" size="sm" onClick={refresh} disabled={refreshing} title="This page also updates by itself">Refresh</Button></div>} />}
+        {!scheduledView && <SectionHeader title="Delivery" actions={finished ? undefined : <div className="cluster">{cancellable && <CancelCampaignButton campaign={campaign} />}<Button variant="secondary" size="sm" onClick={refresh} disabled={refreshing}>Refresh</Button></div>} />}
         {/* Eligible recipients is matched contacts less the suppressed and not subscribed lines under it. */}
         {<>
           {scheduledView ? <AudienceSource listId={campaign.listId} segmentId={campaign.segmentId} prefix="To " /> : <>

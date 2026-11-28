@@ -187,11 +187,11 @@ function EmailFacts({ email }: { email: Email }) {
 
 // ── Delivery: every event, oldest first, with what each means on hover ──
 
-// One short name and one line of meaning per event; the raw event type is in the meaning for support and logs.
+// One short name per event, and a line of meaning where the name doesn't say it all.
 const eventCopy: Record<string, [name: string, meaning: string]> = {
-  scheduled: ['Scheduled', 'Waiting for its send time. Until then you can cancel or reschedule it from Logs.'],
-  rescheduled: ['Rescheduled', 'Its send time moved.'],
-  queued: ['Queued', `${productName} took the email and queued it for sending.`],
+  scheduled: ['Scheduled', 'Until it sends, you can cancel or reschedule it from Logs.'],
+  rescheduled: ['Rescheduled', ''],
+  queued: ['Queued', ''],
   dispatch_attempt: ['Sent', `${productName} handed the email to Amazon SES.`],
   accepted: ['Accepted', 'SES took the email and gave it a message ID.'],
   dispatch_deferred: ['Waiting', `${productName} is holding the email until there is sending capacity.`],
@@ -202,15 +202,15 @@ const eventCopy: Record<string, [name: string, meaning: string]> = {
   bounce: ['Bounced', 'The recipient’s server refused it.'],
   non_permanent_bounce: ['Soft bounce', 'The recipient’s server refused it for now. A later email may get through.'],
   validation_suppressed: ['Not sent', 'SES skipped an address its checks found undeliverable.'],
-  complaint: ['Marked as spam', 'The recipient reported it as spam.'],
+  complaint: ['Marked as spam', ''],
   complaint_feedback: ['Not spam', 'The recipient’s provider reported it as not spam.'],
   reject: ['Rejected', 'SES refused to send it, for example because it contained a virus.'],
   rendering_failure: ['Rendering failed', 'A template value couldn’t be filled in.'],
   delivery_delay: ['Delayed', 'The recipient’s server put it off; SES keeps retrying.'],
   open: ['Opened', 'The recipient opened it with images on.'],
-  click: ['Clicked', 'The recipient clicked a link in it.'],
+  click: ['Clicked', ''],
   suppressed: ['Suppressed', 'Not sent: the address is suppressed after an earlier bounce or complaint.'],
-  canceled: ['Canceled', 'The email was canceled before it was sent.'],
+  canceled: ['Canceled', ''],
   subscription: ['Subscription', 'The recipient changed their subscription from this email.'],
 }
 // Webhook names for the same events, and statuses for an email without any.
@@ -245,11 +245,11 @@ const scheduledFor = (at: string) => `Scheduled for ${date(at, { month: 'short',
 const stamp = (at: string, day: string) => sameDay(at, day) ? time(at) : date(at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' })
 const linkText = (link: string) => link.replace(/^https?:\/\//, '').slice(0, 64) + (link.replace(/^https?:\/\//, '').length > 64 ? '…' : '')
 
-function StepTip({ step, day }: { step: Step; day: string }) {
+function stepTip(step: Step, day: string) {
   const [name, meaning] = eventCopy[step.key] ?? [label(step.key), '']
   const detail = step.events[0]?.detail, links = [...new Set(step.events.flatMap(event => event.detail?.link ? [event.detail.link] : []))]
   const bots = step.events.filter(event => event.detail?.bot).length
-  const lines: ReactNode[] = [meaning || name]
+  const lines: ReactNode[] = meaning ? [meaning] : []
   if (detail?.bounceType) lines.push(`SES: ${detail.bounceType}${detail.bounceSubType ? `, ${detail.bounceSubType}` : ''}.`)
   if (detail?.feedbackType) lines.push(`Feedback type: ${detail.feedbackType}.`)
   for (const event of step.events) if (event.diagnostic) lines.push(<code key={event.id}><AddressText text={event.diagnostic} /></code>)
@@ -258,6 +258,8 @@ function StepTip({ step, day }: { step: Step; day: string }) {
   // When: the exact UTC time of a single event (the column shows the time since the first), every time for repeats.
   if (step.events.length > 1) lines.push(step.events.map(event => stamp(event.at, day)).join(', '))
   else if (step.at) lines.push(`${date(step.at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone: 'UTC' })} UTC`)
+  // A step whose name says it all has no tooltip: the name alone is the fact, and a tip repeating it would be empty noise.
+  if (!lines.length) return null
   return <span className="delivery-tip">{lines.map((line, index) => <span key={index}>{line}</span>)}</span>
 }
 
@@ -295,9 +297,10 @@ function Delivery({ email, vertical, why }: { email: Email; vertical: boolean; w
   if (vertical) {
     const start = Date.parse(steps.find(step => step.at)?.at ?? day)
     const rows = steps.map((step, index) => {
-      const name = nameOf(step)
+      const name = nameOf(step), tip = stepTip(step, day)
+      const fact = <span className="delivery__fact" tabIndex={tip ? 0 : undefined}><span className="delivery__name">{name}{step.events.length > 1 && <span className="delivery__count"> {step.events.length}×</span>}</span></span>
       return { key: step.key, tone: toneOf(step.key), series: seriesOf[step.key],
-        label: <Tooltip content={<StepTip step={step} day={day} />}><span className="delivery__fact" tabIndex={0}><span className="delivery__name">{name}{step.events.length > 1 && <span className="delivery__count"> {step.events.length}×</span>}</span></span></Tooltip>,
+        label: tip ? <Tooltip content={tip}>{fact}</Tooltip> : fact,
         // A step with no time of its own (a status without its event) leaves the column empty rather than a bare dash.
         delta: !step.at || sends(step) ? '' : index === 0 ? <time dateTime={step.at}>{time(step.at)}</time> : `+${elapsed(Date.parse(step.at) - start)}` }
     })
@@ -311,17 +314,13 @@ function Delivery({ email, vertical, why }: { email: Email; vertical: boolean; w
   return <div className="delivery">
     <ol className="delivery__steps ui-scroll-fade" aria-label="Delivery">
       {steps.map((step, index) => {
-        const name = nameOf(step)
-        const at = times[index]
-        return <li key={step.key} className="delivery__step">
-          <Tooltip content={<StepTip step={step} day={day} />}>
-            <span className="delivery__fact" tabIndex={0}>
-              <span className={`delivery__dot ui-tone--${toneOf(step.key)}`} aria-hidden="true" />
-              <span className="delivery__name">{name}{step.events.length > 1 && <span className="delivery__count"> {step.events.length}×</span>}</span>
-              {at && <time className="delivery__time" dateTime={step.at}>{at}{index === lastShown && <span className="delivery__zone"> UTC</span>}</time>}
-            </span>
-          </Tooltip>
-        </li>
+        const name = nameOf(step), at = times[index], tip = stepTip(step, day)
+        const fact = <span className="delivery__fact" tabIndex={tip ? 0 : undefined}>
+          <span className={`delivery__dot ui-tone--${toneOf(step.key)}`} aria-hidden="true" />
+          <span className="delivery__name">{name}{step.events.length > 1 && <span className="delivery__count"> {step.events.length}×</span>}</span>
+          {at && <time className="delivery__time" dateTime={step.at}>{at}{index === lastShown && <span className="delivery__zone"> UTC</span>}</time>}
+        </span>
+        return <li key={step.key} className="delivery__step">{tip ? <Tooltip content={tip}>{fact}</Tooltip> : fact}</li>
       })}
     </ol>
     {reason}

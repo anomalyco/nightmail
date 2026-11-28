@@ -125,7 +125,7 @@ function FocusDialog({ initial, onClose }: { initial: WorkspaceFocus[]; onClose:
   const [value, setValue] = useState(initial)
   const save = useSaveFocus()
   return <Dialog open onOpenChange={open => { if (!open) onClose() }} title="Focus" size="lg"
-    description="Pick any. The first leads Overview’s first card and its Get started steps."
+    description="Pick any. The first leads Overview."
     footer={<><Button onClick={onClose}>Cancel</Button><Button variant="primary" data-analytics="settings/focus/save" onClick={() => { save(value); onClose() }}>Save</Button></>}>
     <FocusPicker value={value} onChange={setValue} />
   </Dialog>
@@ -207,8 +207,8 @@ function DisconnectRow({ kind, connection }: { kind: 'shared' | 'byo' | undefine
   const sync = useConnectionCache()
   const client = useQueryClient()
   if (!kind) return null
-  const keeps = 'Domains, DNS records, API keys and received mail stay. It isn’t possible while emails or campaigns are still sending.'
-  const description = regional ? `Sending stops, and ${productName} removes the configuration sets and topics it created in your AWS account. Your SES identities stay, and you get their list. ${keeps}`
+  const keeps = 'Domains, DNS records, API keys and received mail stay.'
+  const description = regional ? `Sending stops, and ${productName} removes the configuration sets and topics it created in your AWS account. Your SES identities stay. ${keeps}`
     : kind === 'byo' ? `Sending stops until you connect again. ${keeps} AWS resources stay in your account; delete the ${productName} stack in AWS to revoke access.` : `Sending stops until you connect again. ${keeps}`
   function close() { setSummary(null); sync(client.getQueryData<ProviderConnection | null>(['nightmail', 'connection']) ?? null) }
   return <div className="settings-rows settings-danger">

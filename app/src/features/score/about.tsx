@@ -78,7 +78,7 @@ export function ScoreAbout({ report, error, onRetry }: { report: SenderScore | u
       <Disclosure className="score-about__section" title="How it’s graded">
         <dl className="score-about__bases">{report.factors.map(factor => <div key={factor.key}><dt>{factor.label}</dt><dd>{factor.basis}</dd></div>)}</dl>
         <ul>
-          <li>Each part scores 0–100. Parts with no data are left out and the rest count more.</li>
+          <li>Parts with no data are left out and the rest count more.</li>
           <li>Recent days count most (30-day half-life). It updates hourly.</li>
           <li>Your first {number(report.needed)} real emails set it once their results are in.{report.limit ? ` ${GOOD_STANDING} and up has no daily limit.` : ''}</li>
           <li>Counts every email you send except simulated sends. Mail only to <code>…@simulator.amazonses.com</code> uses your daily limit but not the score.</li>

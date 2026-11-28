@@ -49,8 +49,8 @@ function TopicEditor({ topic, onClose }: { topic?: Topic; onClose: () => void })
       <MutationError error={save.error} />
       <Field label="Name" htmlFor="topic-name" error={fieldError(save.error, 'name')}><Input autoFocus id="topic-name" required maxLength={100} placeholder="Product updates" value={name} onChange={event => setName(event.target.value)} /></Field>
       <Field label="Description" htmlFor="topic-description" error={fieldError(save.error, 'description')}><Textarea id="topic-description" rows={2} maxLength={300} placeholder="New features, about once a month" value={description} onChange={event => setDescription(event.target.value)} /></Field>
-      {topic ? <Field label="Who gets it"><p className="muted">{topicDefault(topic)}. This is set when a topic is made.</p></Field>
-        : <Field label="Who gets it"><Checkbox checked={everyone} onCheckedChange={setEveryone} label="Everyone subscribed to marketing, until they opt out" /><p className="muted">{everyone ? 'Turn this off for a topic only people who opt in get.' : 'Only people who opt in get it.'} This can’t change later.</p></Field>}
+      {topic ? <Field label="Who gets it"><p className="muted">{topicDefault(topic)}.</p></Field>
+        : <Field label="Who gets it"><Checkbox checked={everyone} onCheckedChange={setEveryone} label="Everyone subscribed to marketing, until they opt out" /><p className="muted">This can’t change later.</p></Field>}
     </form>
   </Dialog>
 }

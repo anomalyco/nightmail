@@ -297,6 +297,7 @@ a.ui-tab { text-decoration: none; }
 .ui-alert > div:first-child { flex: 1; min-width: 0; }
 .ui-alert__timer { position: absolute; inset: auto 1px 1px; height: 2px; border-radius: var(--radius-2xs); background: var(--tone-marker); transform-origin: left; animation: toast-timer linear forwards; pointer-events: none; }
 .ui-alert__title { color: var(--tone-ink); font-weight: var(--font-weight-semibold); margin-bottom: var(--space-4); }
+.ui-alert__title:last-child { margin-bottom: 0; }
 .ui-error-reference { display: block; margin-top: var(--space-4); color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); }
 .ui-secret { display: flex; align-items: center; justify-content: space-between; gap: var(--space-12); min-width: 0; }
 .ui-secret code { overflow-wrap: anywhere; white-space: normal; }

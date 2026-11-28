@@ -71,7 +71,7 @@ function TurnOnReceiving({ host, domainId }: { host: string; domainId: string })
   const domain = useApiDef(queries.domain(domainId))
   const value = domain.data?.records.find(record => record.purpose === 'receiving' && record.type === 'MX')?.value
   return <Alert tone={isSubdomainName(host) ? 'info' : 'warning'} title={`Turn on receiving for ${host}`}>
-    Creating this address turns receiving on at {host}. Then add this MX record at your DNS provider: <code>{host}</code> MX <code>{value ?? '…'}</code>.
+    After you create it, add this MX record at your DNS provider: <code>{host}</code> MX <code>{value ?? '…'}</code>.
     {' '}{rootMxWarning(host)}
   </Alert>
 }
@@ -343,7 +343,7 @@ export function AddressBuilder({ open, onOpenChange, domains, initial = '', addr
     const wanted = (['then', 'otherwise'] as Side[]).filter(side => draft[side] === 'new:forward').map(side => (draft.targets[side] ?? '').trim()).filter(to => to && !forwards.some(f => f.to === to))
     return {
       title: saved ? 'The address is made' : 'The address isn’t made yet',
-      description: <>{saved && <><PrivateAddress value={name} /> keeps its mail in its inbox until it has a destination. Find it in Mail routing.</>}
+      description: <>{saved && <><PrivateAddress value={name} /> keeps its mail in its inbox until it has a destination.</>}
         {forwardFrom && forwardFrom.id !== saved?.id && <> <PrivateAddress value={forwardFrom.address} /> is made too, to send the request.</>}
         {asked.map(to => <span key={to}> We emailed <PrivateAddress value={to} /> to confirm forwarding.</span>)}
         {ready.map(to => <span key={to}> Forwarding to <PrivateAddress value={to} /> is set up, not connected to an address yet.</span>)}
@@ -398,7 +398,7 @@ export function AddressBuilder({ open, onOpenChange, domains, initial = '', addr
     if (!value) { found.address = `Enter an address, such as ${example}.`; code.address = 'empty' }
     else if (read.error) { found.address = read.error; code.address = read.code!; setRefused(read.fixes ?? []) }
     else if (LOCAL.test(value)) { found.address = `Add the domain, such as ${value}@example.com.`; code.address = 'missing_domain' }
-    else if (!EMAIL.test(value)) { found.address = `${value} isn’t a full email address: use a name, @ and a domain, such as ${example}.`; code.address = 'invalid' }
+    else if (!EMAIL.test(value)) { found.address = `Enter a full email address, such as ${example}.`; code.address = 'invalid' }
     // A * makes a catch-all or wildcard (a route), never an address with a * in its name.
     else if (value.split('@')[0]!.includes('*')) { found.address = value.startsWith('*@') ? catchAllNote : 'An address with * is a wildcard.'; code.address = 'invalid' }
     // Someone else's address (their own mailbox, most likely): an address here comes first, and the next step forwards to it.
@@ -650,7 +650,7 @@ export function AddressBuilder({ open, onOpenChange, domains, initial = '', addr
     {(fixes.length > 0 || mailFromDomainId) && <div className="cluster builder-fixes">{fixes.map(fix => <Button key={fix} size="sm" onClick={() => { setForm({ ...form, address: fix }); setErrors({}); setCodes({}); setRefused([]) }}>Use {fix}</Button>)}
       {mailFromDomainId && <Link className="ui-button ui-button--ghost ui-button--sm" to={`/domains/${mailFromDomainId}`} onClick={leaveTo(`/domains/${mailFromDomainId}`)}>Change the MAIL FROM subdomain</Link>}</div>}
     {existing && <div className="cluster"><Link className="ui-button ui-button--secondary ui-button--sm" to={`/receiving/addresses/${existing.id}?tab=flow`} onClick={() => onOpenChange(false)}>Open it</Link></div>}
-    <Field label="Display name" htmlFor="builder-address-name"><Input id="builder-address-name" value={form.displayName} onChange={e => setForm({ ...form, displayName: e.target.value })} placeholder="Name" /></Field>
+    <Field label="Display name" htmlFor="builder-address-name"><Input id="builder-address-name" value={form.displayName} onChange={e => setForm({ ...form, displayName: e.target.value })} /></Field>
     <details className="inbound-advanced" open={!!form.lifetime || !!form.publicAddress || !!errors.publicAddress || undefined}>
       <summary>More options</summary>
       <div className="stack inbound-advanced__body">
@@ -660,7 +660,6 @@ export function AddressBuilder({ open, onOpenChange, domains, initial = '', addr
     </details>
   </form>
   else if (step === 'flow' && fits && asking) body = <div className="stack">
-    <p>It already splits its mail with this rule. Replacing it changes where that mail goes.</p>
     <Flow label="Its rule now"><FlowStage kind="process"><FlowItem><RuleLine rule={base!.rule!} keyName={base!.rule!.key} endpoints={overview.data?.endpoints} /></FlowItem></FlowStage></Flow>
   </div>
   else if (step === 'flow' && !fits) body = <div className="stack">
@@ -716,7 +715,7 @@ export function AddressBuilder({ open, onOpenChange, domains, initial = '', addr
         await request(`/v1/inbound/domains/${encodeURIComponent(moveHost!.domainId)}/hosts`, { method: 'POST', body: { name: moveHost!.host, confirm: true }, scope })
         void save({ preventDefault() {} } as FormEvent)
       }} />
-    <ConfirmDialog open={!!leaving} onOpenChange={next => { if (!next) setLeaving(null) }} title={leaving?.made?.title ?? 'Discard changes?'} description={leaving?.made?.description ?? 'What you set here isn’t saved.'}
+    <ConfirmDialog open={!!leaving} onOpenChange={next => { if (!next) setLeaving(null) }} title={leaving?.made?.title ?? 'Discard changes?'} description={leaving?.made?.description}
       confirmLabel={leaving?.made ? 'Close' : 'Discard'} danger={!leaving?.made} onConfirm={() => { const go = leaving?.go; setLeaving(null); go?.() }} />
   </>
 }

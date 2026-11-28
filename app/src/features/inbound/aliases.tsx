@@ -55,7 +55,7 @@ export function commitAliases(state: AliasState, { address, temporary }: Rules, 
   // Repeats are dropped quietly in a pasted list; a single repeat is worth saying.
   const message: AliasMessage | null = reason ? { tone: 'error', text: `${added.length ? `Added ${added.length}. ` : ''}${text[reason]}`, ...(reason === 'catchAll' ? { link: { to: `/receiving?kind=catch_all&domain=${encodeURIComponent(domain)}`, label: 'Edit the catch-all' } } : {}) }
     : !added.length && duplicates ? { tone: 'error', text: duplicates > 1 ? 'Already aliases.' : text.duplicate }
-    : added.length > 1 ? { tone: 'info', text: `Added ${added.length} aliases.` } : null
+    : null
   return { list, draft: rest.join(', '), message, ok: !reason, added }
 }
 

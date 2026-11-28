@@ -127,7 +127,7 @@ function MessageCard({ message, addressId, parent, expanded, onToggle, onReply, 
       {expanded ? <>
         {detail.error && <Alert tone="danger"><ErrorText error={detail.error} /></Alert>}
         {loaded ? loaded.bodyTruncated && <Alert tone="info">Part of this message was too large to store in full.</Alert>
-          : message.bodyTruncated && <Alert tone="info">This is a preview of a long message. <Button variant="ghost" size="sm" loading={pending && wanted === 'full'} onClick={() => setWanted('full')}>Show the full message</Button></Alert>}
+          : message.bodyTruncated && <div className="mailbox-attachments"><Button variant="ghost" size="sm" loading={pending && wanted === 'full'} onClick={() => setWanted('full')}>Show the full message</Button></div>}
         {formatted && loaded?.html && <ReceivedEmailPreview html={loaded.html} tooComplex={loaded.htmlTooComplex} title={`Message from ${nameOf(message.from)}`} className="mailbox-message__html" />}
         {(!formatted || !loaded?.html || loaded.htmlTooComplex) && <div className="mailbox-message__body">{(showQuoted ? text : replyText || text) || <span className="muted">(no text)</span>}</div>}
         <div className="cluster mailbox-message__toggles">

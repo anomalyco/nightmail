@@ -286,10 +286,6 @@ export function DomainRecords({ domain, actions, guided = false, setup = null, r
   const alert = issue && <ReceivingIssueAlert issue={issue} />
   const warning = receivingWarning(domain.name, receiving)
   const { copy } = useCopy()
-  const { multiTenant } = useWorkspaceAccess()
-  // Hosted: unsubscribe links go on the link domain unless the domain has a link record of its own (own link hosts).
-  const linkNote = multiTenant && !domain.records.some(record => record.purpose === 'links')
-    ? `Unsubscribe links in campaign and marketing mail from ${domain.name} use ${productName}'s link domain, so they need no DNS record.` : null
   // Stays in place (invisible) once every record verifies, so nothing below moves.
   const connect = setup && <DnsConnect setup={setup} open={domain.records.some(record => record.purpose !== 'dmarc' && record.status !== 'verified')} />
   if (guided) {
@@ -317,7 +313,7 @@ export function DomainRecords({ domain, actions, guided = false, setup = null, r
   const rows = [...sending.map(checked), ...dmarc ? [dmarc] : [], ...receivingRows, ...mailFromRecords.map(record => ({ ...checked(record), actions: change }))]
   // While sending records are pending, one line leads the records: what Check now does, then what it found to fix. Its
   // space is there from the first frame (clamped, the full text on hover), so the answer never moves the table.
-  const summary = checks && domain.records.some(required) ? checkSummary(domain, checks) ?? { text: 'Check now looks up each record in public DNS.', tone: 'neutral' as const } : null
+  const summary = checks && domain.records.some(required) ? checkSummary(domain, checks) ?? { text: '', tone: 'neutral' as const } : null
   // Copy all: every record the table lists, but not a DMARC policy that is already published.
   const all = rows.flatMap(row => row.record.id === 'dmarc-policy' ? [] : [row.record])
   const copyAll = () => copy(`${zoneLines(all)}\n`, `Copied ${all.length} records`)
@@ -328,7 +324,7 @@ export function DomainRecords({ domain, actions, guided = false, setup = null, r
   const foldRecords = domain.status === 'verified' && !domain.records.some(required)
   const content = <>
     {(summary || actions || all.length > 0) && <div className="domain-records-actions">
-      {summary && <p className="domain-check-summary" data-tone={summary.tone} title={summary.text} role="status">{summary.text}</p>}
+      {summary && <p className="domain-check-summary" data-tone={summary.tone} title={summary.text || undefined} role="status">{summary.text}</p>}
       {actions}{all.length > 0 && <Button onClick={() => void copyAll()}><Copy size={14} aria-hidden />Copy all</Button>}
     </div>}
     {connect}
@@ -336,7 +332,6 @@ export function DomainRecords({ domain, actions, guided = false, setup = null, r
     {rows.length > 0 && <div className="domain-records-list">
       <DnsRecordTable domain={domain.name} rows={rows} />
       {mailFrom && !domain.mailFromDomain && mailFromRecords.length === 0 && <div className="domain-records-add"><Button variant="ghost" onClick={mailFrom.onEdit}><Plus size={14} aria-hidden />Add custom MAIL FROM</Button></div>}
-      {linkNote && <p className="muted">{linkNote}</p>}
     </div>}
   </>
   return <section className="section stack domain-records-section">

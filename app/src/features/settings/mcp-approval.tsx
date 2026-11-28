@@ -39,7 +39,7 @@ export function McpApprovalPage() {
       : !browser.data ? <div className="settings-rows"><div className="settings-row"><Skeleton width={220} height={20} /></div></div>
       : self ? <div className="settings-rows"><AgentAccount name={self.name} email={self.email} /></div>
       : owner ? <div className="settings-rows"><AgentAccount name={ownerAccount?.name} email={ownerAccount?.email} /></div>
-      : <Alert tone="info" title="This agent used another account">It signed in with an account not connected in this browser. Add that account to continue, or reconnect the client and choose it at Anomaly account. <Button variant="ghost" onClick={() => session?.addAccount(location.pathname)}>Use another account</Button></Alert>}
+      : <Alert tone="info" title="This agent used another account">Add that account to continue, or reconnect the client and choose it at Anomaly account. <Button variant="ghost" onClick={() => session?.addAccount(location.pathname)}>Use another account</Button></Alert>}
     {owner && !self && <div className="cluster"><Button variant="primary" loading={switching} onClick={() => void continueAs(owner)}>Continue as {ownerAccount?.name || ownerAccount?.email || 'this account'}</Button></div>}
     {self && <>
       <SectionHeader title="Default workspace" />

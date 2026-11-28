@@ -108,7 +108,7 @@ export function actionResult(action: SupportAction): { text: string; tone: Outco
   switch (action.status) {
     case 'proposed': return null
     case 'running': return { text: 'Sending the test…', tone: 'info', waiting: true }
-    case 'declined': return { text: 'Declined. Nothing changed.', tone: 'neutral', waiting: false }
+    case 'declined': return { text: 'Declined.', tone: 'neutral', waiting: false }
     case 'expired': return { text: 'Expired. Ask support again if you still want it.', tone: 'neutral', waiting: false }
     case 'failed':
       // The test was posted, and its answer never recorded: it may or may not have arrived.

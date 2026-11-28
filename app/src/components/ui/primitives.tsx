@@ -372,7 +372,9 @@ export function StatusDot({ tone, children, note, title, muted = false }: { tone
 }
 // `timer`: a notice that dismisses itself shows the time it has left as a thin bar that empties (paused while `paused`).
 export function Alert({ tone = 'neutral', title, children, onDismiss, timer, ...rest }: { tone?: Tone; title?: ReactNode; children: ReactNode; onDismiss?: () => void; timer?: { duration: number; paused: boolean } } & Omit<HTMLAttributes<HTMLDivElement>, 'title' | 'children'>) {
-  return <div data-component="Alert" {...rest} className={cx('ui-alert', `ui-tone--${tone}`)} role={tone === 'danger' ? 'alert' : 'status'}><div>{title && <div className="ui-alert__title">{title}</div>}<div>{children}</div></div>{onDismiss && <IconButton label="Dismiss notification" onClick={onDismiss}><Icon icon={X} size="md" /></IconButton>}{timer && <span className="ui-alert__timer" aria-hidden="true" style={{ animationDuration: `${timer.duration}ms`, animationPlayState: timer.paused ? 'paused' : 'running' }} />}</div>;
+  // A cut that leaves only a title (a permission error that is not an ApiError) renders no empty body line.
+  const body = children !== null && children !== undefined && children !== false && children !== ''
+  return <div data-component="Alert" {...rest} className={cx('ui-alert', `ui-tone--${tone}`)} role={tone === 'danger' ? 'alert' : 'status'}><div>{title && <div className="ui-alert__title">{title}</div>}{body && <div>{children}</div>}</div>{onDismiss && <IconButton label="Dismiss notification" onClick={onDismiss}><Icon icon={X} size="md" /></IconButton>}{timer && <span className="ui-alert__timer" aria-hidden="true" style={{ animationDuration: `${timer.duration}ms`, animationPlayState: timer.paused ? 'paused' : 'running' }} />}</div>;
 }
 /** `icon`: an optional static 32px mark over the title, muted. One action at most. */
 export function EmptyState({ title, description, action, icon, headingAs: Heading = 'h3' }: { title: string; description?: string; action?: ReactNode; icon?: LucideIcon; headingAs?: 'h1' | 'h3' }) {
@@ -396,7 +398,7 @@ const notFound = (error: unknown) => error instanceof Error && (('status' in err
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   // Too broad a read fails the same way again: one calm line asks for narrower filters, with no retry.
   if (error instanceof ApiError && error.code === tooBroadCode) return <div className="ui-error-state"><Alert tone="neutral"><span>{error.message}</span></Alert></div>;
-  if (permissionError(error)) return <div className="ui-error-state"><Alert tone="neutral" title="Owners and admins only"><span>{error instanceof ApiError ? error.message : 'Only workspace owners and admins can open this.'}</span></Alert></div>;
+  if (permissionError(error)) return <div className="ui-error-state"><Alert tone="neutral" title="Owners and admins only">{error instanceof ApiError ? error.message : null}</Alert></div>;
   return <div className="ui-error-state"><Alert tone="danger" title="Couldn’t load this content"><ErrorText error={error} />{onRetry && !notFound(error) && <div className="ui-error-state__retry"><Button onClick={onRetry}>Try again</Button></div>}</Alert></div>;
 }
 type ToastTone = 'success' | 'error' | 'info';

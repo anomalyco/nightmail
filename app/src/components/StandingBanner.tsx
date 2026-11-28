@@ -16,7 +16,7 @@ export function StandingBanner() {
   const { pathname } = useLocation()
   if (!shown) return null
   const reason = score.data?.standing?.reasons[0]?.message
-  const what = score.data ? reason ?? standingFallback[step] : score.isError ? 'Open Overview for what happened.' : null
+  const what = score.data ? reason ?? standingFallback[step] : score.isError ? standingFallback[step] : null
   const Icon = step === 'pause' ? OctagonAlert : TriangleAlert
   return <div className={`standing-banner ui-tone--${standingTone(step)}`} role={step === 'pause' ? 'alert' : 'status'} data-step={step}>
     <Icon className="standing-banner__icon" size={16} aria-hidden="true" />

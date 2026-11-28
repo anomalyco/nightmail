@@ -232,7 +232,7 @@ function KeyChanges({ keyId }: { keyId: string }) {
 function RevokeDialog({ row, onClose, onConfirm, pending, returnFocus }: { row: Row | null; onClose: () => void; onConfirm: (row: Row) => Promise<void>; pending: boolean; returnFocus: RefObject<HTMLElement | null> }) {
   const description: ReactNode = !row ? ''
     : row.kind === 'key' ? row.key.access.type === 'workspace' ? 'Requests using this key will stop working. Revoking a key cannot be undone.' : 'Agents using this key stop working immediately, and queued mail it sent will not be dispatched. Revoking cannot be undone.'
-    : row.kind === 'agent' ? row.agent.own ? 'This revokes its sign-in and every agent token it made: they stop working immediately. To connect it again, sign out of Anomaly account or sign in there again first; it then connects as a new agent.' : <>This revokes the agent tokens it made in this workspace. The sign-in belongs to <PrivateAddress value={row.agent.userEmail} />.</>
+    : row.kind === 'agent' ? row.agent.own ? 'This revokes its sign-in and every agent token it made: they stop working immediately.' : <>This revokes the agent tokens it made in this workspace. The sign-in belongs to <PrivateAddress value={row.agent.userEmail} />.</>
     : row.kind === 'token' ? 'This short-lived token stops working immediately. Revoking it cannot be undone.'
     : 'Mail apps using it are signed out and can’t sign in with it again. The inbox and its mail stay.'
   const label = row ? revokeLabel(row) : 'Revoke'

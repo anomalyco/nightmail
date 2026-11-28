@@ -4,7 +4,7 @@ import { focusLabels, WORKSPACE_FOCUS, type WorkspaceFocus } from '../data/focus
 import './focus-picker.css'
 
 export const focusChoices: Record<WorkspaceFocus, { icon: LucideIcon; line: string }> = {
-  marketing: { icon: Megaphone, line: 'Campaigns to your contacts, started from a template.' },
+  marketing: { icon: Megaphone, line: 'Campaigns to your contacts.' },
   newsletter: { icon: Newspaper, line: 'A list people sign up to, and the issues you send it.' },
   developer: { icon: CodeXml, line: 'Receipts, sign-in links and alerts your app sends.' },
   agents: { icon: Bot, line: 'Addresses your AI agents receive and read mail at.' },
