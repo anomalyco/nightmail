@@ -24362,6 +24362,16 @@
                     },
                     "default": {},
                     "description": "Up to 50 key/value pairs, at most 16 KiB of JSON total."
+                  },
+                  "listIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 120
+                    },
+                    "maxItems": 200,
+                    "description": "Optional list IDs for this contact (atomically replaces memberships on update). Non-empty on create or changing memberships on update requires manage permission."
                   }
                 },
                 "required": [
@@ -24730,6 +24740,16 @@
                   "riskAllowed": {
                     "type": "boolean",
                     "description": "true sends campaigns and marketing to a contact flagged as risky anyway; false skips it again. Owners and admins only (manage permission). Only for a contact with a risk (409 CONTACT_NOT_RISKY otherwise)."
+                  },
+                  "listIds": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 120
+                    },
+                    "maxItems": 200,
+                    "description": "Optional list IDs for this contact (atomically replaces memberships on update). Non-empty on create or changing memberships on update requires manage permission."
                   }
                 },
                 "additionalProperties": false

@@ -3,7 +3,9 @@ import { useIsFetching, useQuery } from '@tanstack/react-query'
 import { Link, Navigate, useLocation, useNavigationType, useParams } from 'react-router'
 import { Alert, EmptyState, ErrorState, Input, SkeletonText, SubNav, Tabs } from '../../components/ui'
 import { CopyAction } from '../../components/motion'
-import { useApiQuery, useCanonicalOrigin, useSession, useWorkspaceAccess } from '../../data/context'
+import { useApiDef, useCanonicalOrigin, useSession, useWorkspaceAccess } from '../../data/context'
+import { queries } from '../../data/queries'
+import { preferredSendingDomain } from '../../lib/domain'
 import { AgentPromptPanel, agentPrompt, useAgentSetup } from './agent-setup'
 import { guides, type Guide } from './guides'
 import { SendingLimitsGuide } from '../score/limits'
@@ -158,13 +160,13 @@ function useAgentPrompt() {
   const { multiTenant, canAdminister } = useWorkspaceAccess()
   const withDomain = Boolean(identity) && canAdminister
   const origin = useDocsOrigin()
-  const domains = useApiQuery(['domains', 'agent-prompt'], (api, signal) => api.domains.list({ page: 1, pageSize: 10, refresh: false }, signal), { enabled: withDomain })
+  const domains = useApiDef(queries.sendingDomains(), { enabled: withDomain })
   // An admin's copied prompt carries a setup token; everyone else's has the device flow.
   const setup = useAgentSetup(withDomain)
   if ((!identity && checkingSession) || (withDomain && domains.isPending)) return { prompt: null, setup }
-  // Prefer a verified domain for the test send; any domain still gives the agent its DNS context.
-  const items = domains.data?.items ?? []
-  const domain = withDomain ? items.find(row => row.status === 'verified') ?? items[0] ?? null : undefined
+  // Prefer a verified custom domain, then built-in; any domain still gives the agent its DNS context.
+  const items = domains.data ?? []
+  const domain = withDomain ? preferredSendingDomain(items, { allowBuiltIn: true }) ?? items[0] ?? null : undefined
   const promptFor = (setupToken: string | null | undefined) => agentPrompt({ origin, domain, email: identity?.email ?? null, multiTenant, setupToken })
   return { prompt: promptFor(setup ? null : undefined), setup, copy: setup?.copy(promptFor) }
 }

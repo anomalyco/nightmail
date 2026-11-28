@@ -601,6 +601,46 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
   if (failed === before) console.log(`Announced changes: ${here.size} in ${file}, each announced on its own day.`);
 }
 
+// 15. Every non-internal POST returning 201 accepts Idempotency-Key (via the create middleware or an explicit
+// Idempotency-Key header parameter), unless it is in the documented opt-out set below.
+{
+  const before = failed, file = 'api/src/idempotency.ts';
+  const { createKeyRoute } = await import('../src/idempotency.js');
+  const spec = registeredDocument as { paths: Record<string, Record<string, { operationId?: string; parameters?: Array<{ in?: string; name?: string }>; responses?: Record<string, unknown> }>> };
+  const optOut: Record<string, string> = {
+    createAgentSetupToken: 'ephemeral dashboard setup token (no durable resource)',
+    exchangeAgentSetupToken: 'unauthenticated one-time setup token exchange',
+    pollAgentDeviceToken: 'unauthenticated OAuth device-flow poll',
+    createDomain: 'unique by domain name per workspace; regional BYO reads Idempotency-Key in-handler',
+    addReceivingHost: 'unique by hostname per domain',
+    inviteWorkspaceMember: 'unique per email in workspace',
+    createWorkspaceInvitation: 'unique per email in workspace',
+    createConnection: 'workspace singleton BYO AWS connection setup',
+    contactSupport: 'unauthenticated public support form (no workspace credential)',
+    createBillingCardSetup: 'ephemeral Stripe SetupIntent client_secret for dashboard card entry',
+  };
+  const seen = new Set<string>();
+  let covered = 0, opted = 0;
+  for (const [path, item] of Object.entries(spec.paths)) {
+    const op = item.post;
+    if (!op?.operationId || !op.responses?.['201'] || path.startsWith('/internal/')) continue;
+    const concrete = path.replace(/\{[^}]+\}/g, 'id');
+    const declaresHeader = (op.parameters ?? []).some(p => p.in === 'header' && p.name?.toLowerCase() === 'idempotency-key');
+    const isCovered = createKeyRoute(concrete) || declaresHeader;
+    seen.add(op.operationId);
+    if (isCovered) {
+      covered++;
+      if (Object.hasOwn(optOut, op.operationId)) fail('Create idempotency', `${op.operationId} (POST ${path}) already supports Idempotency-Key; remove it from the opt-out list in api/scripts/check-premerge.ts.`, 'api/scripts/check-premerge.ts');
+    } else if (Object.hasOwn(optOut, op.operationId)) {
+      opted++;
+    } else {
+      fail('Create idempotency', `${op.operationId} (POST ${path}) returns 201 without Idempotency-Key coverage. Add its path to AUTHENTICATED_CREATES or MAILBOX_CREATES in ${file}, declare IdempotencyHeaders on the route, or add a documented opt-out in api/scripts/check-premerge.ts.`, file);
+    }
+  }
+  for (const opId of Object.keys(optOut)) if (!seen.has(opId)) fail('Create idempotency', `${opId} in the opt-out list is not a non-internal POST 201 operation. Remove it from api/scripts/check-premerge.ts.`, 'api/scripts/check-premerge.ts');
+  if (failed === before) console.log(`Create idempotency: ${covered} POST 201 routes accept Idempotency-Key (${opted} documented opt-outs).`);
+}
+
 if (failed) {
   console.log(`\n${failed} pre-merge check${failed === 1 ? '' : 's'} failed. docs/ci.md explains each one and how to fix it.`);
   process.exitCode = 1;

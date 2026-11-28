@@ -1,5 +1,5 @@
 import { createRoute, z } from '@hono/zod-openapi';
-import { and, asc, eq, gt, inArray, isNull, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, gt, inArray, isNull, notInArray, sql, type SQL } from 'drizzle-orm';
 import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { Database } from './core.js';
 import { actor, ApiError, AudienceSpec, budgetedRead, chargeBudget, databaseCodeOf, unrestrictedRequired, errors, id, IdParams, json, log, notFound, page, PageQuery, readLimit, readLimitNote, response, rowId, security, statementTimedOut, type Actor, type App, type Ctx, type DbExecutor, type Runtime } from './core.js';
@@ -46,8 +46,9 @@ export function propertiesByteLength(properties: Record<string, unknown>): numbe
 const Email = mailAddress(z.string().trim()).transform(v => v.toLowerCase()).openapi({format:'email'});
 const Properties = z.record(z.string().min(1).max(80), z.union([z.string().max(2000), z.number().finite(), z.boolean(), z.null()])).refine(v => Object.keys(v).length <= CONTACT_PROPERTIES_MAX_KEYS, 'At most 50 properties are supported.');
 export const PropertiesInput = Properties.refine(v => propertiesByteLength(v) <= CONTACT_PROPERTIES_MAX_BYTES, 'Contact properties must total at most 16 KiB of JSON.').describe('Up to 50 key/value pairs, at most 16 KiB of JSON total.');
-export const ContactInput = z.object({ email: Email, name: z.string().trim().max(200).optional(), properties: PropertiesInput.default({}) }).strict();
-const ContactPatch = z.object({ name: z.string().trim().max(200).nullable().optional(), properties: PropertiesInput.optional(), riskAllowed: z.boolean().optional().describe('true sends campaigns and marketing to a contact flagged as risky anyway; false skips it again. Owners and admins only (manage permission). Only for a contact with a risk (409 CONTACT_NOT_RISKY otherwise).') }).strict();
+const ContactListIds = z.array(z.string().min(1).max(120)).max(CONTACT_LIST_IDS_SINGLE_MAX).optional().describe('Optional list IDs for this contact (atomically replaces memberships on update). Non-empty on create or changing memberships on update requires manage permission.');
+export const ContactInput = z.object({ email: Email, name: z.string().trim().max(200).optional(), properties: PropertiesInput.default({}), listIds: ContactListIds }).strict();
+const ContactPatch = z.object({ name: z.string().trim().max(200).nullable().optional(), properties: PropertiesInput.optional(), riskAllowed: z.boolean().optional().describe('true sends campaigns and marketing to a contact flagged as risky anyway; false skips it again. Owners and admins only (manage permission). Only for a contact with a risk (409 CONTACT_NOT_RISKY otherwise).'), listIds: ContactListIds }).strict();
 export function withAudienceReadMemory(c: Ctx, work: () => Promise<Response>): Promise<Response> {
   return withBoundedRead(c, () => work(), { route: 'audience.read' });
 }
@@ -123,6 +124,11 @@ async function findContact(db: DbExecutor, identity: Actor, contactId: string) {
 const listColumns = { id: lists.id, workspaceId: lists.workspaceId, name: lists.name, description: lists.description, createdAt: lists.createdAt, updatedAt: lists.updatedAt };
 type ListRow = { [K in keyof typeof listColumns]: (typeof lists.$inferSelect)[K] };
 async function findList(db: DbExecutor, identity: Actor, listId: string) { const [row] = await db.select(listColumns).from(lists).where(and(scope(lists, identity), eq(lists.id, listId))).limit(1); return row ?? notFound('List'); }
+async function lockLists(tx: DbExecutor, identity: Pick<Actor, 'workspaceId'>, listIds: string[]) {
+  if (!listIds.length) return;
+  const existing = await tx.select({ id: lists.id }).from(lists).where(and(scope(lists, identity), inArray(lists.id, listIds))).orderBy(asc(lists.id)).for('share');
+  if (existing.length !== listIds.length) notFound('List');
+}
 async function findSegment(db: DbExecutor, identity: Actor, segmentId: string) { const [row] = await db.select().from(segments).where(and(scope(segments, identity), eq(segments.id, segmentId))).limit(1); return row ?? notFound('Segment'); }
 
 // Literal substring search: %, _ and backslash have no wildcard meaning.
@@ -1114,15 +1120,29 @@ export function registerAudience(app: App) {
     }) as never;
   });
   app.openapi(createRoute({ method: 'post', path: '/v1/contacts', operationId: 'createContact', tags: ['Audience'], security, request: { body: json(ContactInput) }, responses: { 201: response(Contact), ...errors } }), async c => {
-    const identity = actor(c, 'editContent'), input = c.req.valid('json');
+    const identity = actor(c, 'editContent'), { listIds, ...input } = c.req.valid('json');
+    const desiredLists = listIds ? [...new Set(listIds)].sort() : [];
+    if (desiredLists.length) actor(c, 'manage');
+    const risk = await riskFor(c.env, input.email, identity.workspaceId) as unknown as Risk;
     let contact: typeof contacts.$inferSelect | undefined;
     try {
-      [contact] = await c.env.db.insert(contacts).values({ id: rowId('con'), ...scopeValues(identity), ...input, risk: await riskFor(c.env, input.email, identity.workspaceId) as unknown as Risk }).onConflictDoNothing().returning();
+      const createRow = async (db: DbExecutor) => {
+        const [created] = await db.insert(contacts).values({ id: rowId('con'), ...scopeValues(identity), ...input, risk }).onConflictDoNothing().returning();
+        if (!created) throw new ApiError(409, 'CONTACT_EXISTS', 'This address already has a contact or retained consent record. Use imports to restore a deleted contact without changing consent.');
+        return created;
+      };
+      contact = desiredLists.length
+        ? await c.env.db.transaction(async tx => {
+            await lockLists(tx, identity, desiredLists);
+            const created = await createRow(tx);
+            await tx.insert(listMembers).values(desiredLists.map(listId => ({ ...scopeValues(identity), listId, contactId: created.id }))).onConflictDoNothing();
+            return created;
+          })
+        : await createRow(c.env.db);
     } catch (err) {
       if (isContactSizeCheckViolation(err)) throw new ApiError(422, 'VALIDATION_FAILED', 'Contact properties must total at most 16 KiB of JSON.', 'properties');
       throw err;
     }
-    if (!contact) throw new ApiError(409, 'CONTACT_EXISTS', 'This address already has a contact or retained consent record. Use imports to restore a deleted contact without changing consent.');
     return c.json(contactBody(contact), 201);
   });
   app.openapi(createRoute({ method: 'get', path: '/v1/contacts/{id}', operationId: 'getContact', tags: ['Audience'], security, request: { params: IdParams }, responses: { 200: response(ContactDetail), ...errors } }), async c => {
@@ -1131,19 +1151,42 @@ export function registerAudience(app: App) {
     return c.json({ ...contact!, topics: states.map(({ description: _, ...topic }) => topic) }, 200);
   });
   app.openapi(createRoute({ method: 'patch', path: '/v1/contacts/{id}', operationId: 'updateContact', tags: ['Audience'], security, request: { params: IdParams, body: json(ContactPatch) }, responses: { 200: response(Contact), ...errors } }), async c => {
-    const identity = actor(c, 'editContent'), contactId = c.req.valid('param').id, input = c.req.valid('json'), found = await findContact(c.env.db, identity, contactId);
+    const identity = actor(c, 'editContent'), contactId = c.req.valid('param').id, { listIds, ...input } = c.req.valid('json'), found = await findContact(c.env.db, identity, contactId);
     // Sending to a risky address anyway is an owner's or admin's call (manage), not every member's who edits contacts.
     if (input.riskAllowed !== undefined) actor(c, 'manage');
     if (input.riskAllowed !== undefined && !found.risk) throw new ApiError(409, 'CONTACT_NOT_RISKY', 'This contact is not flagged as risky, so there is nothing to allow.', 'riskAllowed');
     let contact: typeof contacts.$inferSelect | undefined;
     try {
-      // The allowance is for the risk the caller saw: one the hourly pass changed meanwhile stays skipped.
-      [contact] = await c.env.db.update(contacts).set({ ...input, updatedAt: new Date().toISOString() }).where(and(scope(contacts, identity), eq(contacts.id, contactId), isNull(contacts.deletedAt), input.riskAllowed !== undefined ? eq(contacts.risk, found.risk!) : undefined)).returning();
+      const updateRow = async (db: DbExecutor) => {
+        // The allowance is for the risk the caller saw: one the hourly pass changed meanwhile stays skipped.
+        const [updated] = await db.update(contacts).set({ ...input, updatedAt: new Date().toISOString() }).where(and(scope(contacts, identity), eq(contacts.id, contactId), isNull(contacts.deletedAt), input.riskAllowed !== undefined ? eq(contacts.risk, found.risk!) : undefined)).returning();
+        return updated ?? notFound('Contact');
+      };
+      if (listIds !== undefined) {
+        const desiredLists = [...new Set(listIds)].sort();
+        contact = await c.env.db.transaction(async tx => {
+          const current = await tx.select({ listId: listMembers.listId }).from(listMembers).innerJoin(lists, and(eq(lists.workspaceId, listMembers.workspaceId), eq(lists.id, listMembers.listId))).where(and(scope(listMembers, identity), eq(listMembers.contactId, contactId)));
+          const currentSet = new Set(current.map(row => row.listId));
+          const changed = desiredLists.length !== currentSet.size || desiredLists.some(listId => !currentSet.has(listId));
+          if (changed) {
+            actor(c, 'manage');
+            await lockLists(tx, identity, desiredLists);
+          }
+          const updated = await updateRow(tx);
+          if (changed) {
+            await tx.delete(listMembers).where(and(scope(listMembers, identity), eq(listMembers.contactId, contactId), desiredLists.length ? notInArray(listMembers.listId, desiredLists) : undefined));
+            if (desiredLists.length) await tx.insert(listMembers).values(desiredLists.map(listId => ({ ...scopeValues(identity), listId, contactId }))).onConflictDoNothing();
+          }
+          return updated;
+        });
+      } else {
+        contact = await updateRow(c.env.db);
+      }
     } catch (err) {
       if (isContactSizeCheckViolation(err)) throw new ApiError(422, 'VALIDATION_FAILED', 'Contact properties must total at most 16 KiB of JSON.', 'properties');
       throw err;
     }
-    return c.json(contactBody(contact ?? notFound('Contact')), 200);
+    return c.json(contactBody(contact), 200);
   });
   app.openapi(createRoute({ method: 'delete', path: '/v1/contacts/{id}', operationId: 'deleteContact', tags: ['Audience'], security, description: 'Remove contact profile and memberships, retaining minimal consent/suppression to prevent accidental re-enrollment.', request: { params: IdParams }, responses: { 200: response(Deleted), ...errors } }), async c => {
     const identity = actor(c, 'editContent'), contactId = c.req.valid('param').id;
