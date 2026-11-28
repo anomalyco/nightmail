@@ -147,7 +147,7 @@ Current facts for general questions, in chat and email: answer from these, with 
 
 - A 4xx or 5xx comes from the customer's endpoint. Timeouts and TLS errors are on their side too.
 - Endpoints must be public HTTPS hostnames.
-- Transient failures retry up to 10 attempts over about 42 hours. Manual retries and tests share 1,000 an hour per workspace.
+- Transient failures retry up to 10 attempts over 31 to 43 hours. Manual retries and tests share 1,000 an hour per workspace.
 - `APPROVAL_INACTIVE` means the MCP approval behind the webhook isn't active. `WEBHOOK_URL_REQUIRED` means the webhook was paused when its approval was removed: save the URL again.
 - Signature failures usually come from verifying a re-serialized body instead of the raw bytes, or from using another endpoint's secret. `search_docs` ("webhook signature") gives the headers and the SDK's `verifyWebhook`.
 

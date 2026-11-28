@@ -7,10 +7,14 @@ export class ActionRetry extends ApiError {
     super(503, code, 'Rule delivery will be retried.', undefined, true);
   }
 }
-/** Exponential backoff from 15 s to 12 h with ±25% jitter, never sooner than the endpoint's Retry-After. */
-export function actionDelay(attempt: number, afterMs: number, random = Math.random) {
-  const base = Math.min(12 * 3600000, 15000 * 4 ** Math.max(0, attempt - 1));
-  return Math.max(afterMs, Math.round(base * (0.75 + 0.5 * random())));
+/**
+ * Exponential backoff from 15 s, quadrupling each attempt, with ±25% jitter so work that failed together (a batch of
+ * webhooks to one endpoint, every job during a database outage) does not retry together. Never longer than `capMs`
+ * (waits at the cap spread over its last quarter), and never sooner than `afterMs` (an endpoint's Retry-After).
+ */
+export function retryDelay(attempt: number, { capMs, afterMs = 0, random = Math.random }: { capMs: number; afterMs?: number; random?: () => number }) {
+  const base = Math.min(capMs, 15_000 * 4 ** Math.max(0, attempt - 1));
+  return Math.max(afterMs, Math.min(capMs, Math.round(base * (0.75 + 0.5 * random()))));
 }
 /** Retry-After as delta seconds (integer or decimal, as Discord sends) or an HTTP date; capped at 7 days. */
 export function retryAfterMs(value?: string | null, now = Date.now()) {

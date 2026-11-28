@@ -19,6 +19,7 @@ import { SLOW_REQUEST_MS } from './log.js';
 import { authenticatedCreates } from './idempotency.js';
 import { oldDashboardReference } from './dashboard-reference.js';
 import { addresses, clientIpHeader, headerPrefix, healthService, productName, requestHeaderNames } from './brand.js';
+import { FORWARD_CONFIRM_TOKEN, FORWARD_STOP_TOKEN } from './capabilities.js';
 
 type RouteGroup = 'linked-images' | 'analytics' | 'disk-alert' | 'auth-ui' | 'mcp' | 'auth' | 'agent-setup' | 'feedback' | 'operator' | 'support' | 'audience' | 'audience-query' | 'newsletters' | 'templates' | 'sending-emails' | 'sending-other' | 'ops-domains' | 'ops-events' | 'ops-other' | 'ses-regions' | 'mailbox' | 'workspaces' | 'provider-connections' | 'public-stats' | 'overview' | 'billing';
 // Internal areas: /v1/operator/* answers only Nightmail operators and /v1/support/* only support grants (src/support.ts).
@@ -160,6 +161,8 @@ export function unmatchedTemplate(path: string) {
   const template = `/${shown.join('/')}${segments.length > 12 ? '/…' : ''}`;
   return template.length > UNMATCHED_MAX ? `${template.slice(0, UNMATCHED_MAX)}…` : template;
 }
+// A forward recipient's emailed links (src/endpoints.ts), the only credential their routes take.
+const FORWARD_LINK = new RegExp(`^/v1/forwarding/(?:confirm/${FORWARD_CONFIRM_TOKEN.source}|stop/${FORWARD_STOP_TOKEN.source})$`);
 const UNMATCHED_MAX = 200;
 type RouteRow = { method: string; template: string; segments: (string | null)[] };
 const routeTables = new WeakMap<object, { size: number; rows: RouteRow[] }>();
@@ -344,7 +347,7 @@ function createShell(loadDocs: () => Promise<{ doc: Record<string, any>; createL
     // workspace-scoped.
     if (c.req.path === '/v1/public/stats' || c.req.path === '/v1/public/signups') return next();
     // Forward recipients answer with the emailed link alone; the routes check the token themselves.
-    if (['GET','HEAD','POST'].includes(c.req.method) && /^\/v1\/forwarding\/(?:confirm\/fwd_[0-9a-f]{64}|stop\/con_[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+)$/.test(c.req.path)) return next();
+    if (['GET','HEAD','POST'].includes(c.req.method) && FORWARD_LINK.test(c.req.path)) return next();
     // Joining requires a verified session, not an existing membership. This endpoint
     // authenticates the invitation recipient directly and cannot authorize resource access.
     if (c.req.method === 'POST' && /^\/v1\/workspaces\/invitations\/[^/]+\/accept$/.test(c.req.path)) return next();

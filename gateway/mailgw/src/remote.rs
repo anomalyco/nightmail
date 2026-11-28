@@ -631,14 +631,16 @@ impl Store {
                 gates.len() < GATES || gates.contains_key(&p.kid),
                 "credential admission full"
             );
+            // A sponsor's workspaces share its account lane. The fallback lane ('unsponsored') is no one's account:
+            // each of its workspaces gets a lane of its own, so unrelated workspaces never wait on each other.
+            let sponsored = p.account.starts_with("sponsor:");
             let account_share = gates
                 .values()
-                .find(|g| g.account == p.account)
+                .find(|g| g.account == p.account && (sponsored || g.workspace == p.workspace))
                 .map(|g| g.lanes.0[3].clone())
                 .unwrap_or_else(|| {
                     let share = crate::admission::Shares::new(32, 16, 16, 144);
-                    // The fallback lane is no one's account: its workspaces keep only their own share.
-                    Arc::new(if p.account.starts_with("sponsor:") {
+                    Arc::new(if sponsored {
                         share.with_sessions(tenant)
                     } else {
                         share
@@ -1733,6 +1735,38 @@ mod auth_tests {
             assert!(Arc::ptr_eq(&gate.lanes.0[2], &open[0].lanes.0[2]));
         }
     }
+    /// Workspaces of one sponsor share its account lane; workspaces without a sponsor each get their own.
+    #[test]
+    fn only_a_sponsors_workspaces_share_an_account_lane() {
+        let api = Arc::new(Api::new("http://localhost".into(), "x".repeat(32)).unwrap());
+        let store = |kid: &str, w: &str, account: &str| {
+            Store::new(
+                api.clone(),
+                Principal {
+                    workspace: w.into(),
+                    account: account.into(),
+                    inbox: kid.into(),
+                    kid: kid.into(),
+                    addresses: vec![],
+                    domains: vec![],
+                    any_sender: false,
+                    folders: vec![],
+                    started: None,
+                    cached: false,
+                    expires_in_ms: None,
+                    until: None,
+                },
+            )
+            .unwrap()
+        };
+        let (a, b) = (store("k1", "w1", "unsponsored"), store("k2", "w2", "unsponsored"));
+        assert!(!Arc::ptr_eq(&a.lanes.0[3], &b.lanes.0[3]));
+        // A second credential of the same unsponsored workspace still shares that workspace's lane.
+        assert!(Arc::ptr_eq(&a.lanes.0[3], &store("k3", "w1", "unsponsored").lanes.0[3]));
+        let (c, d) = (store("k4", "w3", "sponsor:acct_1"), store("k5", "w4", "sponsor:acct_1"));
+        assert!(Arc::ptr_eq(&c.lanes.0[3], &d.lanes.0[3]));
+        assert!(!Arc::ptr_eq(&c.lanes.0[3], &store("k6", "w5", "sponsor:acct_2").lanes.0[3]));
+    }
     #[tokio::test]
     async fn account_and_workspace_capacity_is_shared_and_waiters_are_fifo() {
         use crate::admission::{Reservation, Shares};
@@ -1758,11 +1792,11 @@ mod auth_tests {
             )
             .unwrap()
         };
-        let a = store("a", "w", "owner");
-        let b = store("b", "w", "owner");
-        let c = store("c", "other", "other_owner");
-        let second_workspace = store("d", "w2", "owner");
-        let sibling = store("a", "w", "owner");
+        let a = store("a", "w", "sponsor:owner");
+        let b = store("b", "w", "sponsor:owner");
+        let c = store("c", "other", "sponsor:other_owner");
+        let second_workspace = store("d", "w2", "sponsor:owner");
+        let sibling = store("a", "w", "sponsor:owner");
         let responses = Arc::new(tokio::sync::Semaphore::new(64));
         let mut concurrent = vec![];
         for session in [&a, &sibling].repeat(8) {
