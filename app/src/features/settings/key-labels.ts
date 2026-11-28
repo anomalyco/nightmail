@@ -24,9 +24,24 @@ export const mailLabel = (mail: MailPermission[]) => capitalize(list.format((['c
 export const protocolLabel = (protocols: AppPasswordProtocol[]) => list.format((['imap', 'smtp'] as const).filter(p => protocols.includes(p)).map(p => p.toUpperCase()))
 /** What an agent's sign-in was approved for. */
 export const agentAccess = (permissions: string[]) => permissions.includes('manage') ? 'Full access' : permissions.includes('send') ? 'Read and send' : 'Read only'
+/** A client that identifies itself with an OAuth metadata URL names its product, not that URL: the known ones by their
+ *  product's name, any other `https://` client by its hostname. A client that names itself (or an opaque client ID) stays
+ *  as it is. The full client ID stays in key details and on the connection's name. */
+function clientName(raw: string) {
+  if (!/^https:\/\//i.test(raw)) return raw
+  let url: URL
+  try { url = new URL(raw) } catch { return raw }
+  const host = url.hostname.toLowerCase().replace(/^www\./, '')
+  const known = (domain: string) => host === domain || host.endsWith(`.${domain}`)
+  if (known('claude.ai')) return /claude-code/i.test(url.pathname) ? 'Claude Code' : 'Claude'
+  if (known('opencode.ai')) return 'OpenCode'
+  if (known('chatgpt.com') || known('openai.com')) return 'ChatGPT'
+  if (known('cursor.com') || known('cursor.sh')) return 'Cursor'
+  return host
+}
 /** A connected agent's client, and the label of its entry (`?profile=` on its MCP URL), so a personal and a work entry of
  *  one client are easy to tell apart. The label is display only. */
-export const connectionTitle = (agent: Pick<Agent, 'name' | 'clientId' | 'profile'>) => `${agent.name || agent.clientId}${agent.profile ? ` · ${agent.profile}` : ''}`
+export const connectionTitle = (agent: Pick<Agent, 'name' | 'clientId' | 'profile'>) => `${clientName(agent.name || agent.clientId)}${agent.profile ? ` · ${agent.profile}` : ''}`
 
 /** A key or webhook tied to MCP approvals: whether all of them are active, and until the earliest end. */
 export function approvalLabel(tie: ApprovalTie) {
