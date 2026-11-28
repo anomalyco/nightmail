@@ -270,15 +270,7 @@ impl Slot {
             .accepts
             .entry(ip)
             .or_insert_with(|| Bucket::new(now, 32, 10));
-        let after = if b.take(now, 1) {
-            now
-        } else {
-            let at = b.last.max(now)
-                + Duration::from_millis((1000 - b.credit.min(1000)).div_ceil(b.rate));
-            b.credit = 0;
-            b.last = at;
-            at
-        };
+        let after = b.reserve(now, 1);
         drop(l);
         Some(Self {
             ip,

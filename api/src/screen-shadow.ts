@@ -153,10 +153,70 @@ function retryAfter(value: string | null, now: number): number | undefined {
   return Number.isFinite(ms) ? Math.max(MIN_PAUSE_MS, Math.min(MAX_PAUSE_MS, Math.round(ms))) : undefined;
 }
 
+export type CircuitState =
+  | { state: 'closed'; failures: number }
+  | { state: 'open'; retryAt: number }
+  | { state: 'probing'; leaseUntil: number };
+
+export type CircuitClaim = { probe: boolean; token: CircuitState };
+
+/**
+ * Explicit three-state circuit breaker: closed (counting consecutive failures), open (cooling down until retryAt),
+ * and probing (one half-open probe in flight until leaseUntil, so a vanished Worker never wedges the breaker).
+ */
+export class CircuitBreaker {
+  current: CircuitState = { state: 'closed', failures: 0 };
+
+  get isOpen(): boolean { return this.current.state !== 'closed'; }
+
+  /** Admits a call when closed, or claims the single half-open probe once open/probing has expired. Returns null while cooling down or a probe is already in flight. */
+  tryAcquire(now: number, probeLeaseMs: number): CircuitClaim | null {
+    const s = this.current;
+    if (s.state === 'closed') return { probe: false, token: s };
+    if (s.state === 'open' ? now < s.retryAt : now < s.leaseUntil) return null;
+    const probing: CircuitState = { state: 'probing', leaseUntil: now + probeLeaseMs };
+    this.current = probing;
+    return { probe: true, token: probing };
+  }
+
+  /** Closes the breaker (or resets closed failures). Ignores stale claims from before an open/re-probe transition. */
+  recordSuccess(claim: CircuitClaim): boolean {
+    if (!this.owns(claim)) return false;
+    const wasProbing = claim.probe;
+    this.current = { state: 'closed', failures: 0 };
+    return wasProbing;
+  }
+
+  /** Records a breaker-tripping failure. Opens when a closed breaker hits `failuresToOpen` or when a probe fails. */
+  recordFailure(claim: CircuitClaim, now: number, failuresToOpen: number, cooldownMs: number): { opened: boolean; again: boolean; failures: number } {
+    if (!this.owns(claim)) return { opened: false, again: false, failures: 0 };
+    if (claim.probe) {
+      this.current = { state: 'open', retryAt: now + cooldownMs };
+      return { opened: true, again: true, failures: failuresToOpen };
+    }
+    const failures = (this.current as Extract<CircuitState, { state: 'closed' }>).failures + 1;
+    if (failures >= failuresToOpen) {
+      this.current = { state: 'open', retryAt: now + cooldownMs };
+      return { opened: true, again: false, failures };
+    }
+    this.current = { state: 'closed', failures };
+    return { opened: false, again: false, failures };
+  }
+
+  /** Releases an inconclusive probe (e.g. rate-limited or region-specific 451) so the next request can probe immediately. */
+  releaseProbe(claim: CircuitClaim, now: number): void {
+    if (claim.probe && this.current === claim.token) this.current = { state: 'open', retryAt: now };
+  }
+
+  private owns(claim: CircuitClaim): boolean {
+    return claim.probe ? this.current === claim.token : this.current.state === 'closed';
+  }
+}
+
 /** The pause and the breaker, and when each failure class was last logged: one per endpoint and model in a process or
  *  an isolate (gateFor), shared by every runner there. Plain state: nothing in it belongs to one invocation. */
-export type ShadowGate = { failures: number; openMs: number; openUntil: number; openedAt: number; probeUntil: number; pausedUntil: number; logged: Map<string, { at: number; count: number }> };
-const newGate = (): ShadowGate => ({ failures: 0, openMs: 0, openUntil: 0, openedAt: 0, probeUntil: 0, pausedUntil: 0, logged: new Map() });
+export type ShadowGate = { breaker: CircuitBreaker; openMs: number; openedAt: number; pausedUntil: number; logged: Map<string, { at: number; count: number }> };
+const newGate = (): ShadowGate => ({ breaker: new CircuitBreaker(), openMs: 0, openedAt: 0, pausedUntil: 0, logged: new Map() });
 const gates = new Map<string, ShadowGate>();
 function gateFor(settings: ShadowSettings): ShadowGate {
   const key = `${settings.endpoint}\n${settings.model}`;
@@ -196,7 +256,7 @@ export class ShadowRunner {
   /** Requests waiting for a call. */
   get waiting() { return this.queue.length; }
   /** Whether the breaker is open (or half-open, waiting on its probe). */
-  get open() { return this.gate.openMs > 0; }
+  get open() { return this.gate.breaker.isOpen; }
 
   accept(items: ShadowItem[]) {
     try {
@@ -216,14 +276,11 @@ export class ShadowRunner {
         const item = this.queue.shift()!, now = Date.now();
         const skip = !item.request || now - item.at > MAX_AGE_MS ? 'skipped_backlog' : now < gate.pausedUntil ? 'skipped_rate_limited' : undefined;
         if (skip) { this.record(item, { outcome: skip }); continue; }
-        let probe = false;
-        if (gate.openMs) {
-          if (now < gate.openUntil || now < gate.probeUntil) { this.record(item, { outcome: 'skipped_breaker' }); continue; }
-          // Half-open: this one request finds out. Its claim lapses a little after its deadline, in case it never reports.
-          probe = true; gate.probeUntil = now + this.settings.deadlineMs + 1000;
-        }
+        // Half-open probe lease lapses a little after its deadline, in case it never reports.
+        const claim = gate.breaker.tryAcquire(now, this.settings.deadlineMs + 1000);
+        if (!claim) { this.record(item, { outcome: 'skipped_breaker' }); continue; }
         this.active++;
-        void this.call(item).then(result => { this.active--; this.learn(result, probe); this.record(item, result); this.pump(); });
+        void this.call(item).then(result => { this.active--; this.learn(result, claim); this.record(item, result); this.pump(); });
       }
       this.flush();
     } catch (error) { logError(error, { code: 'SCREEN_SHADOW_FAILED' }, 'warn'); }
@@ -278,31 +335,31 @@ export class ShadowRunner {
 
   // The pause and the breaker. An answer (a score, or a refusal of an over-long request) is a success; a 429 only pauses;
   // anything else is a failure.
-  private learn(result: Result, probe: boolean) {
+  private learn(result: Result, claim: CircuitClaim) {
     try {
       const now = Date.now(), outcome = result.outcome, gate = this.gate;
-      if (probe) gate.probeUntil = 0;
       if (outcome === 'rate_limited' || result.retryAfterMs) {
         const pause = result.retryAfterMs ?? DEFAULT_PAUSE_MS;
         gate.pausedUntil = Math.max(gate.pausedUntil, now + pause);
         if (outcome === 'rate_limited') this.note('SCREEN_SHADOW_RATE_LIMITED', { retryAfterMs: pause });
       }
       if (outcome === 'ok' || outcome === 'refused_too_large') {
-        gate.failures = 0;
-        if (probe) { log('info', { code: 'SCREEN_SHADOW_BREAKER', state: 'closed', openMs: now - gate.openedAt }); gate.openMs = 0; gate.openUntil = 0; }
+        if (gate.breaker.recordSuccess(claim)) {
+          log('info', { code: 'SCREEN_SHADOW_BREAKER', state: 'closed', openMs: now - gate.openedAt });
+          gate.openMs = 0;
+        }
         if (outcome !== 'ok') this.note('SCREEN_SHADOW_ERROR', { outcome, httpStatus: result.httpStatus });
         return;
       }
-      if (outcome === 'rate_limited') return; // Not a failure: the next request after the pause is the probe.
-      gate.failures++;
+      if (outcome === 'rate_limited') { gate.breaker.releaseProbe(claim, now); return; } // Not a failure: the next request after the pause is the probe.
       if (outcome === 'timeout') this.note('SCREEN_SHADOW_TIMEOUT', { deadlineMs: this.settings.deadlineMs });
       else this.note('SCREEN_SHADOW_ERROR', { outcome, httpStatus: result.httpStatus });
-      if (probe) {
-        gate.openMs = Math.min(gate.openMs * 2, MAX_OPEN_MS); gate.openUntil = now + gate.openMs;
-        log('warn', { code: 'SCREEN_SHADOW_BREAKER', state: 'opened', again: true, outcome, pauseMs: gate.openMs });
-      } else if (!gate.openMs && gate.failures >= this.failuresToOpen) {
-        gate.openMs = this.firstOpenMs; gate.openUntil = now + gate.openMs; gate.openedAt = now;
-        log('warn', { code: 'SCREEN_SHADOW_BREAKER', state: 'opened', failures: gate.failures, outcome, pauseMs: gate.openMs });
+      const nextOpenMs = claim.probe ? Math.min((gate.openMs || this.firstOpenMs) * 2, MAX_OPEN_MS) : this.firstOpenMs;
+      const transition = gate.breaker.recordFailure(claim, now, this.failuresToOpen, nextOpenMs);
+      if (transition.opened) {
+        gate.openMs = nextOpenMs;
+        if (transition.again) log('warn', { code: 'SCREEN_SHADOW_BREAKER', state: 'opened', again: true, outcome, pauseMs: gate.openMs });
+        else { gate.openedAt = now; log('warn', { code: 'SCREEN_SHADOW_BREAKER', state: 'opened', failures: transition.failures, outcome, pauseMs: gate.openMs }); }
       }
     } catch { /* A record never changes what happens next. */ }
   }

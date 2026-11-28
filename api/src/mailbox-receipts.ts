@@ -1,6 +1,6 @@
 import { sql, type SQL } from 'drizzle-orm';
 import { ApiError, log, type Runtime } from './core.js';
-import { claimReceives, connectionReady, poolReceives } from './states.js';
+import { claimReceives, connectionReady, hostEnabledSql, poolReceives } from './states.js';
 import { mailJson } from './mailbox-text.js';
 import { STAGING_PREFIX } from './mailbox-setup.js';
 import { builtinApex } from './builtin-limits.js';
@@ -53,7 +53,7 @@ async function route(runtime:Runtime,source:SQL,replay:boolean) {
           OR (lower(e.host)=${apex.parent}::text AND lower(split_part(e.addr,'@',1))=ANY(${sql.param(apex.locals)}::text[]) AND d.workspace_id=${apex.workspace}::text AND dc.identity ? 'builtin'))
         AND (m.receiving_host=dc.receiving_host OR m.lost_since IS NULL OR m.lost_since>now()-interval '2 hours') AND (d.region=m.region OR
         (c.kind='shared' AND m.region='us-east-2' AND m.status='active' AND EXISTS
-          (SELECT FROM domain_sending_bindings sb WHERE sb.domain_id=d.id AND sb.connection_id=c.id AND sb.region=d.region))))` : sql`m.status IN ('provisioning','waiting_for_mx','active') AND (m.parent_id IS NULL OR EXISTS (SELECT 1 FROM mailbox_domains parent WHERE parent.id=m.parent_id AND parent.workspace_id=m.workspace_id AND parent.status IN ('provisioning','waiting_for_mx','active')))`}
+          (SELECT FROM domain_sending_bindings sb WHERE sb.domain_id=d.id AND sb.connection_id=c.id AND sb.region=d.region))))` : sql`${hostEnabledSql()} AND (m.parent_id IS NULL OR EXISTS (SELECT 1 FROM mailbox_domains parent WHERE parent.id=m.parent_id AND parent.workspace_id=m.workspace_id AND ${hostEnabledSql(sql`parent`)}))`}
   ), groups AS (SELECT bucket,mid,workspace_id,jsonb_agg(DISTINCT addr ORDER BY addr) AS recipients FROM matched GROUP BY 1,2,3),
   receipts AS (INSERT INTO mail_receipts AS r(workspace_id,ses_message_id,region,bucket,object_key,recipients,notification)
     SELECT g.workspace_id,s.mid,s.region,s.bucket,'workspaces/'||g.workspace_id||'/raw/'||s.mid||'.eml',g.recipients,s.notification FROM groups g JOIN source s USING(bucket,mid) ORDER BY g.workspace_id,s.mid

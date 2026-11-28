@@ -1583,7 +1583,9 @@ const releaseScheduled: JobHandler = retryDatabaseFailures(async (runtime, paylo
         }
       }
       const route = d.mails[0]!;
-      const needsVerdict = !isSimulatedSes(runtime) && !s.screenVerdict && ((route.connection?.kind === 'shared' && runtime.config.hostedScreen) || (s.screen && s.kind === 'transactional'));
+      const needsVerdict = !s.screenVerdict && resolveHostedContentPolicy(runtime.config, {
+        shared: route.connection?.kind === 'shared', from: row.from, probation: false, simulated: isSimulatedSes(runtime), kind: s.kind, screen: s.screen,
+      }).screened;
       const { rows: [lim] } = await tx.execute<{ rate: number | null }>(route.connection?.aws_account_id
         ? sql`SELECT max_send_rate AS rate FROM provider_account_limits WHERE aws_account_id=${route.connection.aws_account_id} AND region=${route.region} AND max_send_rate>0`
         : sql`SELECT max_send_rate AS rate FROM sending_region_limits WHERE workspace_id=${wid} AND region=${route.region} AND max_send_rate>0`);
@@ -1683,10 +1685,10 @@ async function flushScreenObservability(runtime: Runtime) {
   if (runtime.deferNudge) runtime.deferNudge(async rt => { await flushScreenCalls(rt.db, runtime.db); });
   else await flushScreenCalls(runtime.db);
 }
-function mayScreenAtAccept(runtime: Runtime, out: Outgoing[]) {
+function mayScreenAtAccept(runtime: Runtime, items: readonly (Pick<EmailSnapshot, 'screen' | 'kind'> | { snapshot: Pick<EmailSnapshot, 'screen' | 'kind'> })[]) {
   if (isSimulatedSes(runtime)) return false;
   if (runtime.config.multiTenant && runtime.config.hostedScreen) return true;
-  return out.some(m => m.snapshot.screen && m.snapshot.kind === 'transactional');
+  return items.some(item => { const m = 'snapshot' in item ? item.snapshot : item; return m.screen && m.kind === 'transactional'; });
 }
 /**
  * Why one destination `d.email` can't receive a message, or NULL. Reads its contact as `c` (audience_contacts, LEFT
@@ -2143,7 +2145,7 @@ export async function tryAtomicKeyAdmission(c:Ctx,credentialCtes:(charge?:SQL)=>
   if(!parsed.success)return;
   const input=parsed.data,mails='emails' in input?input.emails:[input];
   // Fall through to the authenticated handler whenever front-door content screening may run (keeps Jev/JevF outside DB locks).
-  if(!isSimulatedSes(c.env) && ((c.env.config.multiTenant && c.env.config.hostedScreen) || mails.some(m => m.screen && m.kind === 'transactional'))) return;
+  if (mayScreenAtAccept(c.env, mails)) return;
   if(('replyAddressId' in input && input.replyAddressId)||('replyMailboxId' in input && input.replyMailboxId)||('scheduledAt' in input && input.scheduledAt)||mails.some(m=>m.template || m.kind==='marketing' || isBuiltinHost(c.env.config,m.from.split('@')[1]!) || m.attachments.some(a=>a.includes('\0')) || m.headers?.some(h=>h.name.toLowerCase()==='in-reply-to')))return;
   const key=c.req.header('Idempotency-Key');if(key!==undefined && !validIdempotencyKey(key))return;
   if(batch && batchContent(mails)>SEND_LIMITS.batchContentChars)return;
