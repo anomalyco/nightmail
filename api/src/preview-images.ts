@@ -2,11 +2,15 @@ import { Buffer } from 'node:buffer';
 import { createHmac, hkdfSync, timingSafeEqual } from 'node:crypto';
 import { z } from '@hono/zod-openapi';
 import { ApiError, id, type App, type Ctx, type RenderedImage, type Runtime } from './core.js';
+import { tryReserveMemory } from './isolate-memory.js';
 
 // Visual previews embed every cid: reference as the image's whole data URI and hold the page while Browser Run renders
-// it. Everything a preview holds is counted against one budget per isolate (a Worker isolate has 128 MB; on Node, per
-// process), from before the first read until its result is stored: the handler releases it before it responds, and the
-// result is served from storage through a five-minute link, so no response body holds preview bytes in this process.
+// it. Everything a preview holds is counted in the isolate's memory budget (src/isolate-memory.ts; a Worker isolate has
+// 128 MB, on Node, per process), at most PREVIEW_MEMORY_BUDGET of it for all previews, from before the first read until
+// its result is stored: the handler releases it before it responds, and the result is served from storage through a
+// five-minute link, so no response body holds preview bytes in this process. A preview that doesn't fit is refused, never
+// queued. Browser Run bounds a render at ~21 s, so a hold whose request workerd cancelled is reclaimed after 30 s without
+// progress, 60 s at most.
 const MiB = 1024 * 1024;
 export const PREVIEW_MEMORY_BUDGET = 24 * MiB;
 // One preview's page, counted as it is held: the largest raw image (read and encoded one at a time), then three copies
@@ -15,17 +19,12 @@ export const PREVIEW_INLINE_LIMIT = 8 * MiB;
 // Held for the screenshot from the start. A larger one grows the share as Browser Run's response is read; the stored
 // JSON is then built in one buffer next to the PNG.
 const SCREENSHOT_RESERVE = 2 * MiB, CHUNK = 48 * 1024;
-let held = 0;
 
 const busy = () => new ApiError(429, 'PREVIEW_BUSY', 'This server is rendering other previews. Retry in a few seconds.', undefined, true, new Date(Date.now() + 5000).toISOString());
-function reserve(bytes: number) {
-  if (held + bytes > PREVIEW_MEMORY_BUDGET) throw busy();
-  held += bytes;
-  let own = bytes;
-  return {
-    resize(next: number) { if (next > own && held - own + next > PREVIEW_MEMORY_BUDGET) throw busy(); held += next - own; own = next; },
-    release() { held -= own; own = 0; },
-  };
+function reserve(bytes: number, workspaceId: string) {
+  const lease = tryReserveMemory(bytes, { route: 'preview.render', workspaceId, routeCap: PREVIEW_MEMORY_BUDGET, idleMs: 30_000, maxMs: 60_000 });
+  if (!lease) throw busy();
+  return { resize(next: number) { if (!lease.tryResize(next)) throw busy(); }, release: lease.release };
 }
 
 // ---------- links ----------
@@ -123,7 +122,7 @@ export async function renderPreview<T extends InlineImage>(runtime: Pick<Runtime
   if (page > PREVIEW_INLINE_LIMIT) throw new ApiError(413, 'PREVIEW_TOO_LARGE', `Previewing these inline images needs ${(page / MiB).toFixed(1)} MiB; the limit is ${PREVIEW_INLINE_LIMIT / MiB} MiB. Use smaller images or reference each one once.`);
   if (runtime.allowPreview && !await runtime.allowPreview(workspaceId, page + SCREENSHOT_RESERVE))
     throw new ApiError(429, 'RENDER_RATE_LIMITED', 'This workspace previewed too many large pages this minute. Retry after the window resets.', undefined, true, new Date(Date.now() + 60_000).toISOString());
-  const memory = reserve(page + SCREENSHOT_RESERVE);
+  const memory = reserve(page + SCREENSHOT_RESERVE, workspaceId);
   try {
     if (counts.size) {
       const uris = new Map<string, string>();

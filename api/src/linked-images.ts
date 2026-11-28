@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { ApiError, type App } from './core.js';
 import { mayLink, servesWorkspace } from './link-domains.js';
 import { servedDomains } from './brand.js';
+import { MEMORY_LIMITS, reserveMemory, type MemoryLease } from './isolate-memory.js';
 
 // Campaign mail links its inline pictures instead of carrying them. Each is served at <link origin>/i/<name>, on the same
 // host as the message's unsubscribe link (src/link-domains.ts: the link domain, links.nightmailedge.com, on Hosted;
@@ -116,8 +117,37 @@ export function registerLinkedImages(app: App) {
       'Cross-Origin-Resource-Policy': 'cross-origin', 'X-Robots-Tag': 'noindex',
     };
     if (c.req.header('if-none-match')?.split(',').some(tag => tag.trim().replace(/^W\//, '') === etag)) return new Response(null, { status: 304, headers });
-    const object = await c.env.storage.get(row.storage_key);
-    if (!object || object.body.length !== row.size || !opensAs(object.body, extension) || await sha256(object.body) !== row.checksum) throw missing();
-    return new Response(object.body as Uint8Array<ArrayBuffer>, { headers: { ...headers, 'Content-Length': String(row.size) } });
+    // A campaign's opens arrive together, so the picture counts against the isolate's self-reclaiming budget
+    // (isolate-memory.ts) from before it is read until the response is read, canceled, or past its idle/hard deadline.
+    let lease: MemoryLease;
+    try {
+      lease = await reserveMemory(row.size + 512 * 1024, { route: 'linked-image.download', workspaceId: row.workspace_id, signal: c.req.raw.signal, idleMs: MEMORY_LIMITS.streamIdleMs, maxMs: MEMORY_LIMITS.streamMaxMs });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return new Response(null, { status: 499 });
+      if (error instanceof ApiError && (error.status === 429 || error.status === 503)) c.header('Retry-After', '1');
+      throw error;
+    }
+    let file: Uint8Array | null;
+    try {
+      const object = await c.env.storage.get(row.storage_key);
+      if (!object || object.body.length !== row.size || !opensAs(object.body, extension) || await sha256(object.body) !== row.checksum) throw missing();
+      file = object.body;
+    } catch (error) { lease.release(); throw error; }
+    headers['Content-Length'] = String(row.size);
+    if (c.req.method === 'HEAD') { lease.release(); return new Response(null, { headers }); }
+    let at = 0;
+    const done = () => { file = null; lease.release(); };
+    lease.onReclaim(() => { file = null; });
+    return new Response(new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!file) { controller.error(new Error('The picture was not read in time.')); return; }
+        const next = Math.min(file.length, at + 64 * 1024);
+        controller.enqueue(file.subarray(at, next));
+        at = next;
+        lease.touch();
+        if (at >= file.length) { controller.close(); done(); }
+      },
+      cancel: done,
+    }), { headers });
   });
 }
