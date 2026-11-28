@@ -2997,6 +2997,16 @@ test('MCP account resource validates issuer JWT, per-call workspaces, Nightmail-
     assert.deepEqual((await connection()).default,{id:'mcp-admin'+suffix,source:'set'});
     const after=(await (await call('/v1/agents')).json() as {data:{id:string;workspaceId:string|null}[]}).data.find(g=>g.id===multiId);
     assert.equal(after?.workspaceId,'mcp-admin'+suffix);
+    // Past its end (nightmail_approval_active: 30 days without a token), an approval is listed as expired, not active,
+    // and takes no default.
+    const {issued}=(await db.query('SELECT issued_at AS issued FROM nightmail_resource_grants WHERE id=$1',[multiId])).rows[0];
+    await db.query("UPDATE nightmail_resource_grants SET issued_at=floor(extract(epoch FROM now()-interval '30 days'))::bigint-1 WHERE id=$1",[multiId]);
+    const ended=await bind(multiId,{workspaceId:'mcp-member'+suffix});
+    assert.deepEqual([ended.status,(await ended.json() as {error:{code:string}}).error.code],[409,'MCP_CONNECTION_EXPIRED']);
+    const statusOf=async(query='')=>(await (await call('/v1/agents'+query)).json() as {data:{id:string;status:string}[]}).data.find(g=>g.id===multiId)?.status;
+    assert.deepEqual([await statusOf(),await statusOf('?includeInactive=true')],[undefined,'expired']);
+    await db.query('UPDATE nightmail_resource_grants SET issued_at=$2 WHERE id=$1',[multiId,issued]);
+    assert.equal(await statusOf(),'active');
     assert.equal((await bind(multiId,{workspaceId:null})).status,422,'A default is one of your workspaces');
     // A default the person no longer belongs to falls back: to the last-used workspace, then to the only one left.
     await db.query('DELETE FROM workspace_members WHERE user_id=$1 AND workspace_id=$2',[manager.userId,'mcp-admin'+suffix]);
@@ -3038,6 +3048,8 @@ test('MCP cutover expires legacy approvals and tokens but keeps the objects they
     assert.deepEqual((await db.query('SELECT id FROM api_keys WHERE revoked_at IS NULL ORDER BY id')).rows,[{id:'derived'},{id:'independent'}]);
     assert.equal((await db.query('SELECT FROM mail_grant_objects')).rowCount,0);
     assert.deepEqual((await db.query("SELECT kind,resource FROM nightmail_retired_grant_objects WHERE grant_id='consent'")).rows,[{kind:'api_key',resource:'derived'}]);
+    // The listing reads approvals through nightmail_approval_active, which takes the real table's rows: list from it.
+    await db.query('DROP TABLE pg_temp.nightmail_resource_grants CASCADE');
     const [{drizzle},{loadConfig},{createApp}]=await Promise.all([import('drizzle-orm/node-postgres'),import('./src/config.js'),import('./src/app.js')]);
     const runtime:import('./src/core.js').Runtime={config:loadConfig({...process.env,PUBLIC_URL:PUBLIC_ORIGIN}),db:drizzle(db),snsCertificateState:new SnsCertificateState(),storage:{async put(){throw Error('unused');},async get(){throw Error('unused');},async delete(){throw Error('unused');}}};
     const response=await createApp().fetch(new Request(PUBLIC_ORIGIN+'/v1/agents?includeInactive=true',{headers:{cookie:manager.cookie}}),runtime);
@@ -7053,11 +7065,15 @@ describe('Hosted MCP OAuth and tools', () => {
     const member = await sessionFixture(t);
     await db.query("UPDATE workspace_members SET role = 'member' WHERE user_id = $1 AND workspace_id = 'default'", [member.userId]);
     const otherAgent = `mcp_at_${randomUUID().replaceAll('-', '')}`, otherToken = `agt_${randomUUID().replaceAll('-', '')}`;
-    await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,permissions,expires_at,issued_at) VALUES($1,$2,$3,$3,'fixture-member-client','{read,send}',now()+interval '1 hour',0)", [otherAgent, process.env.ACCOUNT_ISSUER, member.userId]);
+    await db.query("INSERT INTO nightmail_resource_grants(id,issuer,subject,user_id,client_id,permissions,expires_at,issued_at) VALUES($1,$2,$3,$3,'fixture-member-client','{read,send}',now()+interval '1 hour',floor(extract(epoch FROM now()))::bigint)", [otherAgent, process.env.ACCOUNT_ISSUER, member.userId]);
     await db.query(`INSERT INTO agent_tokens(id,workspace_id,grant_id,permissions,domains,purpose,expires_at) VALUES($1,'default',$2,'["read"]','[]','Member script',now()+interval '1 hour')`, [otherToken, otherAgent]);
     cleanup(t, async () => { await db.query('DELETE FROM agent_tokens WHERE id = $1', [otherToken]); });
     const theirs = (await agents()).find(a => a.id === otherAgent);
     assert.deepEqual([theirs?.own, theirs?.userEmail, theirs?.workspaceId, theirs?.tokens.map((x: Json) => x.id)], [false, member.email, null, [otherToken]]);
+    // Past its end (nightmail_approval_active), another member's approval is listed only with the inactive ones, as expired.
+    await db.query('UPDATE nightmail_resource_grants SET issued_at = 0 WHERE id = $1', [otherAgent]);
+    assert.deepEqual([(await agents()).some(a => a.id === otherAgent), (await agents('?includeInactive=true')).find(a => a.id === otherAgent)?.status], [false, 'expired']);
+    await db.query('UPDATE nightmail_resource_grants SET issued_at = floor(extract(epoch FROM now()))::bigint WHERE id = $1', [otherAgent]);
     // An owner revokes another member's agent tokens here; the sign-in stays theirs, and so do its tokens in another workspace.
     const elsewhere = unique('agents-ws'), farToken = `agt_${randomUUID().replaceAll('-', '')}`;
     await db.query('INSERT INTO workspaces (id, name, slug) VALUES ($1, $1, $1)', [elsewhere]);
@@ -44982,6 +44998,32 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
     });
   });
 
+  // Previews kept their own 24 MiB count, apart from the isolate's budget and with no deadline: a render whose request
+  // workerd cancelled never released it, so the isolate answered 429 PREVIEW_BUSY until it was recycled.
+  test('visual previews count in the isolate memory budget, and one whose request was cancelled is reclaimed by deadline', async t => {
+    const [{ renderPreview }, { memoryInUse, reserveMemory }] = await Promise.all([import('./src/preview-images.js'), import('./src/isolate-memory.js')]);
+    const MiB = 1024 * 1024, base = memoryInUse();
+    const runtime = { config: { publicUrl: PUBLIC_ORIGIN, authSecret: 'preview-fixture-secret' }, storage: { async put() {}, async get() { return null; }, async delete() {} } };
+    // About 9.5 MiB each: the 2.5 MiB page three times and the screenshot reserve.
+    const preview = (render: () => Promise<import('./src/core.js').RenderedImage>) => renderPreview(runtime as never, 'ws_preview_fixture', 'x'.repeat(2.5 * MiB), [], async () => new Uint8Array(), render);
+    const rendered = async () => ({ data: Uint8Array.of(1), mimeType: 'image/png' as const }), hang = () => new Promise<never>(() => {});
+    const busy = (e: { status?: number; code?: string }) => e.status === 429 && e.code === 'PREVIEW_BUSY';
+    // The isolate's other holds count: with its budget held elsewhere, a preview is refused though no preview runs.
+    const other = await reserveMemory(60 * MiB, { route: 'attachment.download' });
+    await assert.rejects(preview(rendered), busy);
+    other.release();
+    // Two renders hang as if workerd cancelled their requests (their finally never runs); their bytes are in the budget.
+    void preview(hang); void preview(hang);
+    assert.ok(memoryInUse() - base > 18 * MiB, `${memoryInUse() - base} bytes counted.`);
+    await assert.rejects(preview(rendered), busy);
+    // Past the 60 s cap they are reclaimed without their requests, and previews render again.
+    const now = Date.now(), clock = t.mock.method(Date, 'now', () => now + 61_000);
+    try {
+      assert.match((await preview(rendered)).url, /\/v1\/preview-images\//);
+      assert.equal(memoryInUse(), base);
+    } finally { clock.mock.restore(); }
+  });
+
   // Rechecks of #295: response bodies holding preview memory could outlive their requests (slow readers, then HEAD and
   // abandoned Worker streams). A preview is now stored and its permit released before the handler answers 303 with a
   // five-minute link that streams the stored object, so clients that read slowly, disconnect or send HEAD hold nothing.
@@ -48346,11 +48388,31 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
       // The link is public, cached for a year and serves the picture byte for byte; nothing else answers under /i/.
       const get = (target: string, headers: Record<string, string> = {}, method = 'GET') => fetch(new Request(PUBLIC_ORIGIN + target, { method, headers }));
+      // A served picture holds its memory until its body is read or canceled, so a check that reads only the status cancels it.
+      const status = async (reply: Promise<Response>) => { const answer = await reply; await answer.body?.cancel(); return answer.status; };
       const served = await get(path);
       assert.equal(served.status, 200);
       assert.deepEqual(Object.fromEntries(['content-type', 'content-length', 'cache-control', 'etag', 'x-content-type-options', 'content-security-policy'].map(name => [name, served.headers.get(name)])), {
         'content-type': 'image/png', 'content-length': '272311', 'cache-control': 'public, max-age=31536000, immutable', etag: `"${checksum}"`, 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox" });
       assert.ok(Buffer.from(await served.arrayBuffer()).equals(png));
+      // The picture counts in the isolate's memory budget until its response is read or canceled.
+      const { memoryInUse } = await import('./src/isolate-memory.js'), unread = await get(path);
+      assert.ok(memoryInUse() >= png.length, `${memoryInUse()} bytes counted while unread.`);
+      await unread.body!.cancel();
+      assert.equal(memoryInUse(), 0);
+      // On Cloudflare the colo's copy is written first and the reader is answered from it, so nothing stays counted (or
+      // held in the isolate) however slowly the reader reads; the copy is kept an hour, the answer a year.
+      const colo = new Map<string, { body: ArrayBuffer; headers: Headers }>(), global = globalThis as { caches?: unknown };
+      global.caches = { default: {
+        async put(key: Request, value: Response) { colo.set(key.url, { body: await value.arrayBuffer(), headers: value.headers }); },
+        async match(key: Request) { const kept = colo.get(key.url); return kept && new Response(kept.body, { headers: kept.headers }); },
+      } };
+      try {
+        const fromColo = await get(path);
+        assert.equal(memoryInUse(), 0, 'A picture answered from the colo holds no memory here.');
+        assert.deepEqual([fromColo.headers.get('cache-control'), colo.get(PUBLIC_ORIGIN + path)?.headers.get('cache-control')], ['public, max-age=31536000, immutable', 'public, max-age=3600']);
+        assert.ok(Buffer.from(await fromColo.arrayBuffer()).equals(png));
+      } finally { delete global.caches; }
       assert.equal((await get(path, { 'if-none-match': `"${checksum}"` })).status, 304);
       const head = await get(path, {}, 'HEAD');
       assert.equal(head.status, 200); assert.equal((await head.arrayBuffer()).byteLength, 0);
@@ -48387,12 +48449,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const wid = runtime.config.workspaceId;
         await db.query('DELETE FROM link_fallback_days WHERE workspace_id=$1 AND host=$2', [wid, linkDomain]);
         assert.equal((await fetch(new Request(onLinkDomain))).status, 404, 'A workspace that never linked on the link domain has nothing served there.');
-        assert.equal((await get(path)).status, 200);
+        assert.equal(await status(get(path)), 200);
         // A campaign's test on the link domain records its use, so its pictures answer there too.
         const tested = ok(await local('POST', `/v1/campaigns/${mixed.id}/test`, { to: address() }), 202);
         await run('email.dispatch');
         assert.ok(readable(input(tested.id)).includes(`<img src="${onLinkDomain}" alt="logo" width="100"`));
-        assert.equal((await fetch(new Request(onLinkDomain))).status, 200);
+        assert.equal(await status(fetch(new Request(onLinkDomain))), 200);
         // The link domain is every customer's, so it isn't an image host: an inline picture no launched campaign or campaign
         // test carried answers 404 there, though the workspace has linked there, and still answers on its own origin.
         const loose = Buffer.from(png); loose.write('Loose', png.length - 40, 'latin1');
@@ -48400,7 +48462,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const unusedSum: string = (await db.query('SELECT checksum FROM sending_attachments WHERE id=$1', [unused.id])).rows[0].checksum;
         const unusedPath = `/i/${unused.id.slice('attachment_'.length)}${unusedSum.slice(0, 32)}.png`;
         assert.equal((await fetch(new Request(`https://${linkDomain}${unusedPath}`))).status, 404);
-        assert.equal((await get(unusedPath)).status, 200);
+        assert.equal(await status(get(unusedPath)), 200);
         // A paused workspace (the standing ladder's pause here; an operator's pause or the abuse path the same way) gets none
         // of its pictures there, while its recipients can still unsubscribe there.
         const unsubscribe = new RegExp(`https://${linkDomain.replaceAll('.', '\\.')}/unsubscribe/u_[0-9a-f]{64}`).exec(body)![0];
@@ -48410,8 +48472,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           assert.equal((await fetch(new Request(onLinkDomain))).status, 404);
           assert.equal((await fetch(new Request(unsubscribe, { headers: { accept: 'text/html' } }))).status, 200);
         } finally { await db.query("UPDATE sender_standing SET step='ok' WHERE workspace_id=$1", [wid]); }
-        assert.equal((await fetch(new Request(onLinkDomain))).status, 200);
+        assert.equal(await status(fetch(new Request(onLinkDomain))), 200);
       } finally { runtime.config.linkHost = undefined; }
+      assert.equal(memoryInUse(), 0, 'Every picture served gave its memory back.');
       // Hosted, its own domain never serves them, even as one of its own origins.
       const hostedBefore = { multiTenant: runtime.config.multiTenant, previousOrigins: runtime.config.previousOrigins };
       Object.assign(runtime.config, { multiTenant: true, previousOrigins: [...runtime.config.previousOrigins ?? [], 'https://nightmail.dev'] });

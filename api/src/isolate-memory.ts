@@ -3,7 +3,8 @@ import { ApiError, log } from './core.js';
 import { SEND_LIMITS } from './send-limits.js';
 
 // One byte budget for every path that holds large payloads in memory: raw uploads, attachment downloads, template asset
-// downloads, contact imports, dispatcher pages with attachments or large bodies, and inbox mail copies / Sent archives.
+// downloads, linked campaign images, visual previews, contact imports, dispatcher pages with attachments or large bodies,
+// and inbox mail copies / Sent archives.
 // A Worker isolate has 128 MB for all requests at once and the loaded app holds ~25 MB, so these paths share at most
 // SEND_LIMITS.isolateWorkingBytes (64 MiB).
 //
@@ -66,6 +67,8 @@ export type MemoryLease = {
   touch(): void;
   /** Shrink the reservation (e.g. from parse peak down to unread stream bytes) and wake queued waiters. */
   shrink(newBytes: number): void;
+  /** Resize without queuing, counting as progress; false (unchanged) once released or when growing would pass the isolate, workspace or route cap. */
+  tryResize(newBytes: number): boolean;
   /** Update idle/hard deadlines (e.g. when handing a lease to a response stream). */
   setDeadlines(idleMs: number, maxMs?: number): void;
   /** Register a best-effort cleanup callback run if the budget reclaims this hold by deadline. */
@@ -89,6 +92,8 @@ type ActiveHold = {
   confirmDeadlineAt: number;
   onReclaimFn: (() => void) | undefined;
   released: boolean;
+  /** Most bytes all holds of this route may hold at once (tryReserveMemory's routeCap). */
+  routeCap?: number;
 };
 
 type Waiter = {
@@ -130,6 +135,12 @@ function canFit(bytes: number, workspaceId: string | undefined, wsCap: number): 
   if (used + bytes > budget) return false;
   if (workspaceId !== undefined && (usedByWs.get(workspaceId) ?? 0) + bytes > wsCap) return false;
   return true;
+}
+
+function heldByRoute(route: string) {
+  let bytes = 0;
+  for (const h of activeHolds) if (h.route === route) bytes += h.bytes;
+  return bytes;
 }
 
 function earliestHoldDeadline(): number {
@@ -278,7 +289,7 @@ function admit(now = Date.now()) {
 }
 
 function wrapHold(hold: ActiveHold): MemoryLease {
-  return {
+  const lease: MemoryLease = {
     get released() { return hold.released; },
     touch() {
       if (hold.released) return;
@@ -309,6 +320,19 @@ function wrapHold(hold: ActiveHold): MemoryLease {
       hold.lastProgressAt = now;
       hold.idleDeadlineAt = Math.min(hold.hardDeadlineAt, now + hold.idleMs);
     },
+    tryResize(newBytes: number) {
+      reclaimExpiredMemory();
+      if (hold.released) return false;
+      const next = Math.max(1, Math.ceil(newBytes)), delta = next - hold.bytes;
+      if (delta > 0) {
+        if (!canFit(delta, hold.workspaceId, MEMORY_LIMITS.maxWorkspaceBytes) || heldByRoute(hold.route) + delta > (hold.routeCap ?? budget)) return false;
+        hold.bytes = next;
+        used += delta;
+        adjustMap(usedByWs, hold.workspaceId, delta);
+      } else lease.shrink(next);
+      lease.touch();
+      return true;
+    },
     onReclaim(fn: () => void) {
       if (hold.released) return;
       hold.onReclaimFn = fn;
@@ -321,6 +345,7 @@ function wrapHold(hold: ActiveHold): MemoryLease {
       admit(now);
     },
   };
+  return lease;
 }
 
 /**
@@ -347,6 +372,7 @@ export async function reserveMemory(bytes: number, opts: MemoryLeaseOptions = {}
         get released() { return done; },
         touch() { if (!done) outer.touch(); },
         shrink() {},
+        tryResize: next => !done && next <= outer.bytes,
         setDeadlines() {},
         onReclaim() {},
         release() { done = true; },
@@ -442,6 +468,21 @@ export async function reserveMemory(bytes: number, opts: MemoryLeaseOptions = {}
   hold.lastProgressAt = resumeNow;
   hold.idleDeadlineAt = resumeNow + hold.idleMs;
   hold.hardDeadlineAt = resumeNow + Math.max(1, maxMs);
+  return wrapHold(hold);
+}
+
+/**
+ * Reserves `bytes` at once or returns null, never queuing: for work that answers "busy, retry" instead of waiting.
+ * Fits only when nobody is queued and the bytes fit the isolate budget, the workspace share and `routeCap` (the most all
+ * holds of `route` may hold together). Self-reclaiming by deadline like reserveMemory.
+ */
+export function tryReserveMemory(bytes: number, opts: Pick<MemoryLeaseOptions, 'route' | 'workspaceId' | 'idleMs' | 'maxMs'> & { routeCap?: number } = {}): MemoryLease | null {
+  const n = Math.max(1, Math.ceil(bytes)), route = opts.route ?? 'general', routeCap = opts.routeCap ?? budget, now = Date.now();
+  reclaimExpiredMemory(now);
+  admit(now);
+  if (waiting.length || !canFit(n, opts.workspaceId, Math.max(n, MEMORY_LIMITS.maxWorkspaceBytes)) || heldByRoute(route) + n > routeCap) return null;
+  const hold = makeHold(n, opts.workspaceId, route, opts.idleMs ?? MEMORY_LIMITS.defaultIdleMs, opts.maxMs ?? MEMORY_LIMITS.defaultMaxMs, undefined, true, now);
+  hold.routeCap = routeCap;
   return wrapHold(hold);
 }
 

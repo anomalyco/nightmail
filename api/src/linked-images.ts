@@ -1,8 +1,10 @@
 import { timingSafeEqual } from 'node:crypto';
 import { sql } from 'drizzle-orm';
-import { ApiError, type App } from './core.js';
+import { ApiError, applySecurityHeaders, type App, type Ctx } from './core.js';
 import { mayLink, servesWorkspace } from './link-domains.js';
 import { servedDomains } from './brand.js';
+import { reserveMemory, type MemoryLease } from './isolate-memory.js';
+import { keepAlive, streamBytesResponse } from './read-bounds.js';
 
 // Campaign mail links its inline pictures instead of carrying them. Each is served at <link origin>/i/<name>, on the same
 // host as the message's unsubscribe link (src/link-domains.ts: the link domain, links.nightmailedge.com, on Hosted;
@@ -69,6 +71,21 @@ async function sha256(bytes: Uint8Array) {
   return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>)), n => n.toString(16).padStart(2, '0')).join('');
 }
 const missing = () => new ApiError(404, 'NOT_FOUND', 'This image does not exist.');
+/**
+ * The colo's cache for a GET on Cloudflare (absent on Node), which src/worker.ts answers from before admission, the
+ * database or storage, and how to write this request's picture to it: with `maxAge` rather than the year browsers may
+ * keep it, under the address alone, as the Worker would answer it.
+ */
+function colo(c: Ctx) {
+  const cache = c.req.method === 'GET' ? (globalThis as { caches?: { default?: Cache } }).caches?.default : undefined;
+  if (!cache) return undefined;
+  const url = new URL(c.req.url), key = new Request(url.origin + url.pathname);
+  return {
+    put: (bytes: Uint8Array, headers: Record<string, string>, maxAge: number) =>
+      cache.put(key, new Response(bytes as Uint8Array<ArrayBuffer>, { headers: applySecurityHeaders(new Headers({ ...headers, 'Cache-Control': `public, max-age=${maxAge}` })) })),
+    match: () => cache.match(key),
+  };
+}
 export function registerLinkedImages(app: App) {
   // The sender score card's pictures (src/score-card.ts), on every origin this installation answers, its own included
   // (unlike a campaign's pictures below, which Hosted's own domain never serves): drawn from the address alone (a score,
@@ -84,13 +101,17 @@ export function registerLinkedImages(app: App) {
       'X-Content-Type-Options': 'nosniff', 'Content-Disposition': 'inline', 'Cross-Origin-Resource-Policy': 'cross-origin', 'Access-Control-Allow-Origin': '*', 'X-Robots-Tag': 'noindex',
     };
     if (c.req.header('if-none-match')?.split(',').some(tag => tag.trim().replace(/^W\//, '') === etag)) return new Response(null, { status: 304, headers });
-    // HEAD skips the colo's copy (src/worker.ts keeps GETs only): answered without drawing, so it can't make the Worker draw on every request.
+    // HEAD skips the colo's copy (colo keeps GETs only): answered without drawing, so it can't make the Worker draw on every request.
     if (c.req.method === 'HEAD') return new Response(null, { headers });
     const png = await drawScoreCard(card);
+    // Kept 30 days: a card is never taken down and its address is its design's version, so each colo draws each card
+    // about once a month. Both responses read the same small buffer.
+    const cache = colo(c);
+    if (cache) keepAlive(c, cache.put(png, headers, 2592000));
     return new Response(png as Uint8Array<ArrayBuffer>, { headers: { ...headers, 'Content-Length': String(png.length) } });
   });
   // Public by design: the name is the only credential, and every copy of the message carries it. Cached for a year
-  // everywhere (the Worker keeps a copy in its colo, src/worker.ts): a name always means the same bytes.
+  // everywhere (each colo keeps a copy, colo above): a name always means the same bytes.
   app.get('/i/:name', async c => {
     const match = NAME.exec(c.req.param('name'));
     // Hosted's own domain never serves customer pictures, whatever links an old message carries: only link hosts do.
@@ -103,7 +124,7 @@ export function registerLinkedImages(app: App) {
     // The link domain is every customer's, so one can't make it an image host: there it serves only a picture a launched
     // campaign (its review) or a campaign's test carried, and none of a paused workspace's (an operator's pause or the abuse
     // path, or the standing ladder's pause step; its unsubscribe links keep answering). The colo keeps a copy an hour, so
-    // either takes effect within it (src/worker.ts).
+    // either takes effect within it.
     if (new URL(c.req.url).hostname.toLowerCase() === c.env.config.linkHost) {
       const { rows: [allowed] } = await c.env.db.execute<{ ok: boolean }>(sql`SELECT ${mayLink(row.workspace_id)} AND EXISTS (SELECT 1 FROM sending_attachment_links l
         WHERE l.workspace_id=${row.workspace_id} AND l.attachment_id=${`attachment_${id}`} AND (l.owner_type='review' OR l.owner_type='email' AND EXISTS (SELECT 1 FROM sending_emails e
@@ -116,8 +137,37 @@ export function registerLinkedImages(app: App) {
       'Cross-Origin-Resource-Policy': 'cross-origin', 'X-Robots-Tag': 'noindex',
     };
     if (c.req.header('if-none-match')?.split(',').some(tag => tag.trim().replace(/^W\//, '') === etag)) return new Response(null, { status: 304, headers });
-    const object = await c.env.storage.get(row.storage_key);
-    if (!object || object.body.length !== row.size || !opensAs(object.body, extension) || await sha256(object.body) !== row.checksum) throw missing();
-    return new Response(object.body as Uint8Array<ArrayBuffer>, { headers: { ...headers, 'Content-Length': String(row.size) } });
+    // A campaign's opens arrive together, so the picture counts against the isolate's self-reclaiming budget
+    // (isolate-memory.ts) from before it is read: through the read and its check at the default deadlines, then until the
+    // response is read, canceled, or past the stream's idle/hard deadline.
+    let lease: MemoryLease;
+    try {
+      lease = await reserveMemory(row.size + 512 * 1024, { route: 'linked-image.download', workspaceId: row.workspace_id, signal: c.req.raw.signal });
+    } catch (error) {
+      if (error instanceof DOMException && error.name === 'AbortError') return new Response(null, { status: 499 });
+      if (error instanceof ApiError && (error.status === 429 || error.status === 503)) c.header('Retry-After', '1');
+      throw error;
+    }
+    let streaming = false;
+    try {
+      const object = await c.env.storage.get(row.storage_key);
+      if (!object || object.body.length !== row.size || !opensAs(object.body, extension) || await sha256(object.body) !== row.checksum) throw missing();
+      headers['Content-Length'] = String(row.size);
+      if (c.req.method === 'HEAD') return new Response(null, { headers });
+      // On Cloudflare the colo's copy is written first, while the lease holds the picture, and the reader is answered from
+      // it: the cache's stream holds nothing in this isolate however slowly it is read, where a copy of a stream from this
+      // isolate would hold the whole picture for a slow reader after the lease ended. Kept an hour, not the year browsers
+      // may: a deleted picture or one taken down stops being served from this colo within the hour (a Cloudflare purge
+      // of its URL ends it at once).
+      const cache = colo(c);
+      // (A lease the budget reclaimed during a slow read writes nothing and fails as busy below.)
+      if (cache && !lease.released) {
+        const kept = await cache.put(object.body, headers, 3600).then(() => cache.match()).catch(() => undefined);
+        if (kept?.body) return new Response(kept.body, { headers });
+      }
+      // On Node, or when the colo has no copy to answer from, the picture streams from this isolate under the lease.
+      streaming = true;
+      return streamBytesResponse(c, lease, object.body, headers);
+    } finally { if (!streaming) lease.release(); }
   });
 }

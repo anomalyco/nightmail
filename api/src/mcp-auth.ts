@@ -64,16 +64,20 @@ export function registerMcpAuth(app:App) {
   // workspace it acts in, and what the approval created stays in its own workspace.
   app.openapi(createRoute({method:'post',path:'/v1/mcp-connections/{id}/workspace',operationId:'bindMcpConnection',tags:['Auth'],security,description:'Sets an MCP connection\'s default workspace, for tool calls that name none.',request:{params:IdParams,body:{required:true,content:{'application/json':{schema:Binding}}}},responses:{200:response(z.object({id:z.string(),workspaceId:z.string(),receiving:z.boolean()})),...errors}}),async c=>{
     const user=owner(c),{id}=c.req.valid('param'),{workspaceId}=c.req.valid('json');
-    const {rows:[result]}=await c.env.db.execute<{revoked:boolean|null;role:string|null;bound:boolean}>(sql`WITH approval AS (SELECT revoked,client_id,workspace_id FROM nightmail_resource_grants WHERE id=${id} AND user_id=${user}),
+    const {rows:[result]}=await c.env.db.execute<{revoked:boolean|null;active:boolean|null;role:string|null;bound:boolean}>(sql`WITH approval AS (SELECT g.revoked,nightmail_approval_active(g) AS active,g.client_id,g.workspace_id FROM nightmail_resource_grants g WHERE g.id=${id} AND g.user_id=${user} FOR UPDATE),
       membership AS (SELECT role FROM workspace_members WHERE workspace_id=${workspaceId} AND user_id=${user} AND role IN ('owner','admin','member')),
-      bound AS (UPDATE nightmail_resource_grants SET workspace_id=${workspaceId},updated_at=now() WHERE id=${id} AND user_id=${user} AND NOT revoked
+      bound AS (UPDATE nightmail_resource_grants SET workspace_id=${workspaceId},updated_at=now() WHERE id=${id} AND user_id=${user} AND nightmail_approval_active(nightmail_resource_grants)
         AND EXISTS(SELECT FROM membership) RETURNING id),
       audit AS (${auditInsert(auditContext(c),{action:'mcp_connection.bind',workspaceId,userId:user,target:{type:'mcp_connection',id},
         before:sql`jsonb_build_object('clientId',approval.client_id,'workspaceId',approval.workspace_id)`,after:{workspaceId}},{from:sql`bound, approval`})})
-      SELECT (SELECT revoked FROM approval) revoked,(SELECT role FROM membership) role,EXISTS(SELECT FROM bound) bound`);
+      SELECT (SELECT revoked FROM approval) revoked,(SELECT active FROM approval) active,(SELECT role FROM membership) role,EXISTS(SELECT FROM bound) bound`);
     if(result?.revoked==null) throw new ApiError(404,'NOT_FOUND','MCP connection was not found.');
     if(result.revoked) throw new ApiError(409,'MCP_CONNECTION_REVOKED',`This MCP connection is revoked in ${productName}.`);
+    if(!result.active) throw new ApiError(409,'MCP_CONNECTION_EXPIRED',`This MCP connection has expired in ${productName}. Reconnect the client.`);
     if(!result.role) throw new ApiError(403,'PERMISSION_DENIED','You are not a member of that workspace.');
+    // The approval is locked as it is read, so a revoke that committed first reads as revoked above; an approval that ended
+    // between the two reads still sets nothing, and is never answered as bound.
+    if(!result.bound) throw new ApiError(409,'MCP_CONNECTION_REVOKED',`This MCP connection is no longer active in ${productName}. Reconnect the client.`);
     return c.json({id,workspaceId,receiving:false},200);
   });
 
@@ -93,13 +97,14 @@ export function registerMcpAuth(app:App) {
     request:{query:z.object({includeInactive:z.enum(['true','false']).default('false').describe('Also list revoked and expired sign-ins and tokens.')})},responses:{200:response(z.object({data:z.array(Agent)}).openapi('AgentList')),...errors}}),async c=>{
     const user=owner(c),a=c.get('actor'),w=a.workspaceId,all=c.req.valid('query').includeInactive==='true';
     const admin=a.role==='owner'||a.role==='admin',live=all?sql``:sql`AND t.revoked_at IS NULL AND t.expires_at>now()`;
+    const status=sql`CASE WHEN g.revoked THEN 'revoked' WHEN NOT nightmail_approval_active(g) THEN 'expired' ELSE 'active' END`;
     const {rows}=await c.env.db.execute<AgentRow>(sql`
       WITH agents AS (
-        SELECT g.id,g.user_id,g.client_id,g.client_id AS name,g.profile,g.permissions,g.workspace_id,g.created_at,g.last_used_at,CASE WHEN g.revoked THEN 'revoked' ELSE 'active' END AS status,true AS own
-          FROM nightmail_resource_grants g WHERE g.user_id=${user} ${all?sql``:sql`AND NOT g.revoked`}
+        SELECT g.id,g.user_id,g.client_id,g.client_id AS name,g.profile,g.permissions,g.workspace_id,g.created_at,g.last_used_at,${status} AS status,true AS own
+          FROM nightmail_resource_grants g WHERE g.user_id=${user} ${all?sql``:sql`AND nightmail_approval_active(g)`}
         ${all?sql`UNION ALL SELECT e.id,e.user_id,e.client_id,e.name,NULL,ARRAY(SELECT substr(s,6) FROM unnest(e.scopes) s WHERE s LIKE 'bane:%'),NULL,e.created_at,NULL,'expired',true FROM nightmail_expired_approvals e WHERE e.user_id=${user}`:sql``}
-        UNION ALL SELECT g.id,g.user_id,g.client_id,g.client_id,g.profile,g.permissions,NULL,g.created_at,g.last_used_at,CASE WHEN g.revoked THEN 'revoked' ELSE 'active' END,false
-          FROM nightmail_resource_grants g WHERE ${admin} AND g.user_id<>${user} AND EXISTS(SELECT FROM agent_tokens t WHERE t.workspace_id=${w} AND t.grant_id=g.id ${live})
+        UNION ALL SELECT g.id,g.user_id,g.client_id,g.client_id,g.profile,g.permissions,NULL,g.created_at,g.last_used_at,${status},false
+          FROM nightmail_resource_grants g WHERE ${admin} AND g.user_id<>${user} ${all?sql``:sql`AND nightmail_approval_active(g)`} AND EXISTS(SELECT FROM agent_tokens t WHERE t.workspace_id=${w} AND t.grant_id=g.id ${live})
         ORDER BY 11 DESC,8 DESC LIMIT 200)
       SELECT a.id,a.client_id,a.name,a.profile,a.permissions,a.workspace_id,a.created_at::text,a.status,a.own,u.email,
         greatest(a.last_used_at,(SELECT max(t.last_used_at) FROM agent_tokens t WHERE t.workspace_id=${w} AND t.grant_id=a.id))::text AS last_used_at,
