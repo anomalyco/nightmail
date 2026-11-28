@@ -715,7 +715,6 @@ export function useApiMutation<TInput, TResult>(write: (api: Api, input: TInput)
       if (!invalidate) return
       if (invalidate === true) {
         void client.invalidateQueries({predicate: query => staleAfterWrite(query.queryKey, refreshSes)}).catch(() => {})
-        if (!refreshSes) void client.invalidateQueries({predicate: query => query.queryKey[0] === 'nightmail' && resourceOf(query.queryKey) === 'campaign-options', refetchType: 'none'}).catch(() => {})
         return
       }
       const resources = typeof invalidate === 'function' ? invalidate(result, input) : invalidate

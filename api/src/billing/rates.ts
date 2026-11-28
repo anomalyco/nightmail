@@ -22,6 +22,8 @@ export const STORAGE_AFTER_DAYS = 90;
 
 /** A per-unit rate in micro-cents as US dollars per 1,000 units, as GET /v1/billing and the homepage show it ("0.20"). */
 export const perThousandUsd = (uc: bigint) => (Number(uc) * 1000 / 100_000_000).toFixed(2);
+/** A unit rate in micro-cents as plain US dollars without "$", as GET /v1/billing's storagePerGbMonth shows it ("0.25"). */
+export const rateUsd = (uc: bigint) => (Number(uc) / 100_000_000).toFixed(2);
 
 /** Micro-cents (1¢ = 1,000,000 µ¢) as "$12.34" or "−$0.50"; four decimals when 0 < |v| < 1¢ ("$0.0002"), rounded half up. */
 export const usd = (uc: bigint): string => {

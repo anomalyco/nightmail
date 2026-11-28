@@ -331,12 +331,10 @@ const WARM_FRESH = 30_000
 export async function warmCampaignEditor(cache: QueryClient, api: Api, id: string): Promise<void> {
   void composer.preload().catch(() => {})
   const campaignQuery = queries.campaign(id)
+  const domainsQuery = queries.sendingDomains()
   const domainsPromise = cache.prefetchQuery({
-    queryKey: ['nightmail', 'campaign-options', { pageSize: 100, domains: undefined }],
-    queryFn: async ({ signal }) => {
-      const domainPage = await api.domains.list({ pageSize: 100, cursor: undefined, refresh: false }, signal)
-      return { domains: domainPage.items.filter(domain => domain.status === 'verified' && !domain.builtIn), next: domainPage.nextCursor }
-    },
+    queryKey: ['nightmail', ...domainsQuery.key],
+    queryFn: ({ signal }) => domainsQuery.read(api, signal),
     staleTime: WARM_FRESH,
   }).catch(() => {})
   const campaign = await cache.fetchQuery<Campaign>({

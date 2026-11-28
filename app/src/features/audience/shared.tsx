@@ -19,8 +19,8 @@ export { number }
 export { consentTitle, displayStatus, evidenceRequired, noUnknown, riskBreakdown, riskLabels, riskSkipped, statusOptions, statusTitle } from './consent'
 /** A contact name is free text: addresses in it are masked (AddressText), so it is a tooltip only when it holds none. */
 export const nameTitle = (name?: string) => name && !addressParts(name).some(part => part.address) ? name : undefined
-export function useAudienceLists(search = '', cursor?: string) {
-  return useApiDef(queries.audienceLists(search, cursor), { keepPrevious: true })
+export function useAudienceLists(search = '', cursor?: string, enabled = true) {
+  return useApiDef(queries.audienceLists(search, cursor), { keepPrevious: true, enabled })
 }
 /** A quoted AudienceQL string literal. */
 export const aqlString = (value: string) => `'${value.replaceAll("'", "''")}'`

@@ -4,10 +4,11 @@ import { useGuardedMutation } from '../../lib/single-flight'
 import { Send } from 'lucide-react'
 import { Alert, Button, ErrorText, SectionHeader, Tabs } from '../../components/ui'
 import { CopyAction } from '../../components/motion'
-import { useApiDef, useApiQuery, usePublicOrigin, useSession } from '../../data/context'
+import { useApiDef, usePublicOrigin, useSession } from '../../data/context'
 import { request } from '../../data/live'
 import { queries } from '../../data/queries'
 import { pendingEmailStatuses, type Domain } from '../../data/types'
+import { preferredSendingDomain } from '../../lib/domain'
 import { label } from '../../lib/format'
 import './developer.css'
 import { PrivateAddress } from '../../components/PrivateAddress'
@@ -117,7 +118,7 @@ export function FirstSend({ domain, apiKey = null, title = 'Send your first emai
 // Shown with a newly created API key (a dashboard dialog, so compact): the same examples with that key and the
 // workspace's first verified domain.
 export function KeySendExample({ apiKey }: { apiKey: string }) {
-  const domains = useApiQuery(['domains', 'key-example'], (api, signal) => api.domains.list({ page: 1, pageSize: 10, refresh: false }, signal))
-  const items = domains.data?.items ?? []
-  return <FirstSend domain={items.find(domain => domain.status === 'verified') ?? items[0] ?? null} apiKey={apiKey} title="Send with this key" testButton={false} compact />
+  const domains = useApiDef(queries.sendingDomains())
+  const items = domains.data ?? []
+  return <FirstSend domain={preferredSendingDomain(items, { allowBuiltIn: true }) ?? items[0] ?? null} apiKey={apiKey} title="Send with this key" testButton={false} compact />
 }

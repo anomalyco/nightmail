@@ -16538,7 +16538,7 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
   // a new one fails this test until it is; a key of anything but a send must never expire, money and launches included.
   test('retention: an Idempotency-Key expires only on a send route; every other route\'s key, and any path near one, is kept', async t => {
     await simulatedSesFixture(t, async ({ runtime, db }) => {
-      const [{ cleanup }, { AUTHENTICATED_CREATES, MAILBOX_CREATES }, { PgDialect }] = await Promise.all([import('./src/maintenance.js'),
+      const [{ cleanup }, { createKeyRoute }, { PgDialect }] = await Promise.all([import('./src/maintenance.js'),
         import('./src/idempotency.js'), import('drizzle-orm/pg-core')]);
       const wid = runtime.config.workspaceId, spec = (await import('./scripts/registered-document.js')).registeredDocument;
       // Every route that claims a key: those that declare the header, the creates the middleware covers, and two that claim
@@ -16547,13 +16547,13 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
       for (const [path, item] of Object.entries(spec.paths as Record<string, Record<string, Json>>)) for (const [method, op] of Object.entries(item)) {
         const concrete = path.replace(/\{[^}]+\}/g, 'id1');
         if ((op.parameters ?? []).some((p: Json) => p.in === 'header' && p.name === 'Idempotency-Key') || op.operationId === 'sendDomainTestEmail'
-          || (method === 'post' && [...AUTHENTICATED_CREATES, ...MAILBOX_CREATES].some(route => route.test(concrete)))) routes.set(op.operationId, concrete);
+          || (method === 'post' && createKeyRoute(concrete))) routes.set(op.operationId, concrete);
       }
       const expires = ['sendEmail', 'sendEmailBatch', 'testCampaign', 'sendDomainTestEmail', 'createInboundThread', 'replyToInboundThread'];
-      const kept = ['createAgentToken', 'createApiKey', 'updateApiKey', 'createContact', 'createContactList', 'createNewsletter', 'createSegment', 'createTopic', 'previewContactImport', 'createCampaignTemplate',
+      const kept = ['createAgentToken', 'createApiKey', 'updateApiKey', 'createContact', 'createContactList', 'createNewsletter', 'createSegment', 'createTopic', 'previewContactImport', 'planAudienceMutation', 'createCampaignTemplate',
         'uploadTemplateAsset', 'importTemplateImage', 'uploadAttachment', 'uploadAttachmentBytes', 'createCampaign', 'sendCampaign', 'scheduleCampaign', 'cancelCampaign', 'createWebhook',
-        'createRoute', 'createEndpoint', 'createInboxConnection', 'createInbox', 'createInboundSubdomain', 'createInboundAddress', 'createInboundWebhook',
-        'createBillingTopUp', 'createBillingTopUpLink'];
+        'createRoute', 'createRuleFromRecipe', 'createEndpoint', 'createInboxConnection', 'createInbox', 'createInboxFolder', 'createInboxAppPassword', 'createInboundSubdomain', 'createInboundAddress', 'createInboundWebhook',
+        'createWorkspace', 'sendFeedback', 'createBillingTopUp', 'createBillingTopUpLink'];
       assert.deepEqual([...routes.keys()].sort(), [...expires, ...kept].sort(), 'every route that takes an Idempotency-Key is classified');
       // Paths one step off a send route.
       const near = ['/v1/campaigns/id1/id2/test', '/v1/campaigns/test', '/v1/domains/id1/id2/test-send', '/v1/inbound/threads/id1', '/v1/inbound/threads/id1/id2/reply',
@@ -17376,10 +17376,28 @@ describe('Billing: metering, gate and settlement', () => {
       assert.deepEqual([g.ok, g.requiredUc, g.freeSentLeft, g.freeReceivedLeft], [true, '0', 5000, 0]);
       await db.query(`INSERT INTO billing_usage_hourly(workspace_id,hour,meter,quantity) VALUES ($1,date_trunc('hour',now(),'UTC'),'receive',1)`, [live]);
       assert.deepEqual([(await gate()).openUc, (await gate()).freeSentLeft], ['20000', 5000], 'The 20,001st received is charged; the sends stay free.');
-      // What the API publishes (RATES) is this month's version, the price of an AI decision included.
-      const { RATES } = await import('./src/billing/money.js');
-      assert.deepEqual((await db.query(`SELECT (billing_rates_in((date_trunc('month', now() AT TIME ZONE 'UTC'))::date)).*, billing_rate_uc('omen', 1::smallint, now())::text AS omen_uc`)).rows[0],
-        { version: RATES.version, free_sent: RATES.freeSentEmails, free_received: RATES.freeReceivedEmails, omen_uc: String(RATES.omenUc) });
+      // What the API publishes (RATES) is this month's version and unit prices: send, receive, omen, storage and freeStorageBytes.
+      const { RATES, rateUsd } = await import('./src/billing/rates.js');
+      assert.equal(rateUsd(RATES.storageUcPerGbMonth), '0.25');
+      await db.query('BEGIN');
+      try {
+        await db.query(`UPDATE billing_config SET storage_billing_from = DATE '2026-01-01', storage_aged_through = NULL WHERE singleton`);
+        const daysInMonth = Number((await db.query(`SELECT extract(day FROM date_trunc('month', now() AT TIME ZONE 'UTC') + interval '1 month - 1 day')::int AS d`)).rows[0].d);
+        assert.deepEqual((await db.query(`SELECT (billing_rates_in((date_trunc('month', now() AT TIME ZONE 'UTC'))::date)).*,
+            billing_rate_uc('send', 1::smallint, now())::text AS send_uc,
+            billing_rate_uc('receive', 1::smallint, now())::text AS receive_uc,
+            billing_rate_uc('omen', 1::smallint, now())::text AS omen_uc,
+            round(billing_rate_uc('storage', 1::smallint, now()) * $1::numeric * $2::numeric)::text AS storage_gb_month_uc`,
+            [String(RATES.freeStorageBytes), daysInMonth])).rows[0],
+          { version: RATES.version, free_sent: RATES.freeSentEmails, free_received: RATES.freeReceivedEmails,
+            send_uc: String(RATES.emailUc), receive_uc: String(RATES.emailUc), omen_uc: String(RATES.omenUc), storage_gb_month_uc: String(RATES.storageUcPerGbMonth) });
+        const freeStorageWid = unique('free-storage');
+        await db.query(`INSERT INTO mail_storage_aged(workspace_id, aged_bytes, aged_through) VALUES ($1, $2, DATE '2026-06-01')`, [freeStorageWid, String(RATES.freeStorageBytes + 42n)]);
+        await db.query(`SELECT billing_storage_day(DATE '2026-09-01')`);
+        assert.equal((await db.query(`SELECT quantity::text AS q FROM billing_usage_hourly WHERE workspace_id = $1 AND meter = 'storage'`, [freeStorageWid])).rows[0]?.q, '42', 'billing_storage_day charges only bytes above RATES.freeStorageBytes');
+      } finally {
+        await db.query('ROLLBACK');
+      }
     });
   });
 
@@ -52608,5 +52626,120 @@ describe('dashboard analytics', () => {
       const hour=await app.fetch(new Request(origin+path+'/export?from='+failed.body.from+'&to='+failed.body.to,{headers:{cookie:operatorCookie}}),runtime);
       assert.deepEqual((await hour.json() as Json).rows,failed.body.rows);
     });
+  });
+});
+
+test('contacts: listIds on createContact and updateContact reconcile atomically and enforce manage permission without half-commit', async t => {
+  await simulatedSesFixture(t, async ({ db, runtime, local, request }) => {
+    runtime.config.multiTenant = true;
+    cleanup(t, async () => { runtime.config.multiTenant = false; });
+    const wid = runtime.config.workspaceId, issuer = process.env.ACCOUNT_ISSUER ?? 'https://account.anoma.ly';
+    const memberId = unique('contact-member'), memberToken = createHash('sha256').update(randomUUID()).digest('base64url');
+    secrets.add(memberToken);
+    await db.query('INSERT INTO nightmail_users(id,name,email,email_verified) VALUES($1,$1,$2,true)', [memberId, `${memberId}@${AUTH_DOMAIN}`]);
+    await db.query('INSERT INTO nightmail_oidc_identities VALUES($1,$2,$3)', [issuer, memberId, memberId]);
+    await db.query("INSERT INTO nightmail_sessions(token_hash,user_id,issuer,subject,verified_email,expires_at) VALUES($1,$2,$3,$2,$4,now()+interval '1 hour')", [createHash('sha256').update(memberToken).digest('hex'), memberId, issuer, `${memberId}@${AUTH_DOMAIN}`]);
+    await db.query("INSERT INTO workspace_members(id,user_id,workspace_id,role) VALUES($1,$2,$3,'member')", [randomUUID(), memberId, wid]);
+    const memberHeaders = { cookie: `${COOKIE_NAME}=${memberToken}`, origin: PUBLIC_ORIGIN };
+    const asMember = (method: string, path: string, body?: Json) => request(method, path, undefined, body, memberHeaders);
+
+    const listA = ok(await local('POST', '/v1/lists', { name: unique('atomic-a') }), 201);
+    const listB = ok(await local('POST', '/v1/lists', { name: unique('atomic-b') }), 201);
+    const listC = ok(await local('POST', '/v1/lists', { name: unique('atomic-c') }), 201);
+
+    // 1. Atomic create with listIds commits contact and memberships together.
+    const email1 = `atomic1-${unique('c')}@example.net`;
+    const created = ok(await local('POST', '/v1/contacts', { email: email1, name: 'Ada', listIds: [listB.id, listA.id, listA.id] }), 201);
+    assert.deepEqual(ok(await local('GET', `/v1/contacts/${created.id}`)).listIds, [listA.id, listB.id].sort());
+    assert.equal(ok(await local('GET', `/v1/lists/${listA.id}`)).counts.total, 1);
+
+    // 2. Invalid listId rolls back contact create completely (no half-committed contact).
+    const emailBad = `atomic-bad-${unique('c')}@example.net`;
+    error(await local('POST', '/v1/contacts', { email: emailBad, listIds: [listA.id, 'lst_does_not_exist'] }), 404, 'NOT_FOUND');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM audience_contacts WHERE workspace_id=$1 AND email=$2', [wid, emailBad])).rows[0].n, 0);
+
+    // 3. Atomic patch reconciles listIds (removes A, keeps B, adds C) and updates profile together.
+    ok(await local('PATCH', `/v1/contacts/${created.id}`, { name: 'Ada Lovelace', listIds: [listB.id, listC.id] }), 200);
+    const afterPatch = ok(await local('GET', `/v1/contacts/${created.id}`));
+    assert.equal(afterPatch.name, 'Ada Lovelace');
+    assert.deepEqual(afterPatch.listIds, [listB.id, listC.id].sort());
+    assert.equal(ok(await local('GET', `/v1/lists/${listA.id}`)).counts.total, 0);
+    assert.equal(ok(await local('GET', `/v1/lists/${listC.id}`)).counts.total, 1);
+
+    // 4. Invalid listId on patch rolls back profile and membership changes atomically.
+    error(await local('PATCH', `/v1/contacts/${created.id}`, { name: 'Should Rollback', listIds: [listA.id, 'lst_missing'] }), 404, 'NOT_FOUND');
+    const afterFailedPatch = ok(await local('GET', `/v1/contacts/${created.id}`));
+    assert.equal(afterFailedPatch.name, 'Ada Lovelace');
+    assert.deepEqual(afterFailedPatch.listIds, [listB.id, listC.id].sort());
+
+    // 5. Hosted dashboard member gets 403 BEFORE creating a contact when non-empty listIds are supplied.
+    const emailMemberBlocked = `member-blocked-${unique('c')}@example.net`;
+    error(await asMember('POST', '/v1/contacts', { email: emailMemberBlocked, name: 'Blocked', listIds: [listA.id] }), 403, 'PERMISSION_DENIED');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM audience_contacts WHERE workspace_id=$1 AND email=$2', [wid, emailMemberBlocked])).rows[0].n, 0);
+
+    // 6. Hosted dashboard member can create without lists (or with []) and patch profile without changing listIds,
+    //    but changing listIds on patch returns 403 without mutating the contact's profile.
+    const emailMemberOk = `member-ok-${unique('c')}@example.net`;
+    const memberContact = ok(await asMember('POST', '/v1/contacts', { email: emailMemberOk, name: 'Member Made', listIds: [] }), 201);
+    assert.equal(memberContact.name, 'Member Made');
+    ok(await asMember('PATCH', `/v1/contacts/${created.id}`, { name: 'Member Edited', listIds: [listB.id, listC.id] }), 200);
+    assert.equal(ok(await local('GET', `/v1/contacts/${created.id}`)).name, 'Member Edited');
+    error(await asMember('PATCH', `/v1/contacts/${created.id}`, { name: 'Should Not Apply', listIds: [listA.id] }), 403, 'PERMISSION_DENIED');
+    const unchanged = ok(await local('GET', `/v1/contacts/${created.id}`));
+    assert.equal(unchanged.name, 'Member Edited');
+    assert.deepEqual(unchanged.listIds, [listB.id, listC.id].sort());
+  });
+});
+
+test('create idempotency: rules/recipes replays the same rule key and inboxes/:id/app-passwords withholds the secret without creating a second password', async t => {
+  await simulatedSesFixture(t, async ({ db, runtime, local }) => {
+    const wid = runtime.config.workspaceId, domainId = unique('mdom'), host = `idemp-${unique('d')}.example`;
+    runtime.mailR2 = { write: true, name: 'fake', bucket: { put: async () => {} } } as unknown as typeof runtime.mailR2;
+    await db.query("INSERT INTO mailbox_domains(id,workspace_id,domain_id,name,region,status,catch_all) VALUES($1,$2,$1,$3,$4,'active','store')", [domainId, wid, host, REGION]);
+    const post = (path: string, body: Json, key: string) => local('POST', path, body, 'live', { 'idempotency-key': key });
+
+    // 1. POST /v1/rules/recipes replays the same rule key with Idempotent-Replayed: true and never creates a second copy.
+    const addr = ok(await local('POST', '/v1/inbound/addresses', { address: `support@${host}` }), 201);
+    const recipe = await post('/v1/rules/recipes', { recipe: 'junk-newsletters', params: {}, addresses: [addr.id] }, 'recipe-replay-1');
+    assert.equal(recipe.status, 201, JSON.stringify(recipe.body));
+    const recipeAgain = await post('/v1/rules/recipes', { recipe: 'junk-newsletters', params: {}, addresses: [addr.id] }, 'recipe-replay-1');
+    assert.equal(recipeAgain.status, 201, JSON.stringify(recipeAgain.body));
+    assert.equal(recipeAgain.body.key, recipe.body.key);
+    assert.equal(recipeAgain.headers.get('idempotent-replayed'), 'true');
+    error(await post('/v1/rules/recipes', { recipe: 'junk-failed-dmarc', params: {}, addresses: [addr.id] }, 'recipe-replay-1'), 409, 'IDEMPOTENCY_CONFLICT');
+
+    // 2. POST /v1/inboxes/:id/app-passwords withholds the one-time password on replay instead of creating a second password.
+    const persistent = ok(await local('POST', '/v1/inboxes', { type: 'persistent', domain: host, localPart: 'vault' }), 201);
+    const appPw = await post(`/v1/inboxes/${persistent.id}/app-passwords`, { name: 'Replay mail client', protocols: ['imap'] }, 'app-pw-replay-1');
+    assert.equal(appPw.status, 201, JSON.stringify(appPw.body));
+    assert.ok(appPw.body.password);
+    error(await post(`/v1/inboxes/${persistent.id}/app-passwords`, { name: 'Replay mail client', protocols: ['imap'] }, 'app-pw-replay-1'), 409, 'IDEMPOTENT_SECRET_WITHHELD');
+    assert.equal((await db.query('SELECT count(*)::int AS n FROM inbox_app_passwords WHERE inbox_id=$1', [persistent.id])).rows[0].n, 1);
+
+    // 3. POST /v1/inboxes/:id/folders replays cleanly with Idempotent-Replayed: true.
+    const folder = await post(`/v1/inboxes/${persistent.id}/folders`, { path: 'Receipts' }, 'folder-replay-1');
+    assert.equal(folder.status, 201, JSON.stringify(folder.body));
+    const folderAgain = await post(`/v1/inboxes/${persistent.id}/folders`, { path: 'Receipts' }, 'folder-replay-1');
+    assert.equal(folderAgain.status, 201, JSON.stringify(folderAgain.body));
+    assert.equal(folderAgain.headers.get('idempotent-replayed'), 'true');
+  });
+});
+
+test('auth: revokeAgentToken is idempotent, preserves the first revocation timestamp and writes one audit row', async t => {
+  await simulatedSesFixture(t, async ({ db, runtime, local }) => {
+    const wid = runtime.config.workspaceId;
+    const tokenId = unique('agt');
+    await db.query(`INSERT INTO agent_tokens(id, workspace_id, grant_id, permissions, domains, purpose, expires_at)
+      VALUES ($1, $2, 'grant_fixture', '["read"]'::jsonb, '[]'::jsonb, 'idempotent revoke test', now() + interval '1 hour')`, [tokenId, wid]);
+    const first = ok(await local('POST', `/v1/agent-tokens/${tokenId}/revoke`), 200);
+    assert.deepEqual(first, { id: tokenId, revoked: true });
+    const firstRevokedAt = (await db.query('SELECT revoked_at::text AS t FROM agent_tokens WHERE id=$1', [tokenId])).rows[0].t;
+    assert.ok(firstRevokedAt);
+    const second = ok(await local('POST', `/v1/agent-tokens/${tokenId}/revoke`), 200);
+    assert.deepEqual(second, { id: tokenId, revoked: true });
+    const secondRevokedAt = (await db.query('SELECT revoked_at::text AS t FROM agent_tokens WHERE id=$1', [tokenId])).rows[0].t;
+    assert.equal(secondRevokedAt, firstRevokedAt);
+    assert.equal((await db.query("SELECT count(*)::int AS n FROM audit_events WHERE workspace_id=$1 AND action='agent_token.revoke' AND target_id=$2", [wid, tokenId])).rows[0].n, 1);
+    error(await local('POST', '/v1/agent-tokens/agt_does_not_exist/revoke'), 404, 'NOT_FOUND');
   });
 });

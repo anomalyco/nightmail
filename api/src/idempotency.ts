@@ -1,6 +1,6 @@
 import { z } from '@hono/zod-openapi';
 import { sql } from 'drizzle-orm';
-import { ApiError, digest, webhookUrlHint, type Ctx, type Database, type DbExecutor } from './core.js';
+import { ApiError, digest, mailboxRoute, webhookUrlHint, type Ctx, type Database, type DbExecutor } from './core.js';
 import { utf8Bytes } from './read-bounds.js';
 import { SEND_LIMITS } from './send-limits.js';
 
@@ -151,10 +151,18 @@ export const AUTHENTICATED_CREATES = [
   /^\/v1\/(?:contacts|lists|newsletters|segments|topics|contact-imports|templates|template-assets|webhooks|api-keys|agent-tokens|endpoints|inbox-connections)$/,
   /^\/v1\/template-assets\/import$/,
   /^\/v1\/routing\/routes$/,
+  /^\/v1\/(?:rules\/recipes|workspaces|audience-query\/plan|feedback)$/,
   // A retried top-up returns the same Checkout link or charge instead of starting a second payment.
   /^\/v1\/billing\/(?:top-ups|top-up-links)$/,
 ];
-export const MAILBOX_CREATES = [/^\/v1\/inboxes$/, /^\/v1\/inbound\/(?:addresses|webhooks)$/, /^\/v1\/inbound\/domains\/[^/]+\/subdomains$/];
+export const MAILBOX_CREATES = [
+  /^\/v1\/inboxes$/,
+  /^\/v1\/inboxes\/[^/]+\/(?:app-passwords|folders)$/,
+  /^\/v1\/inbound\/(?:addresses|webhooks)$/,
+  /^\/v1\/inbound\/domains\/[^/]+\/subdomains$/,
+];
+/** Whether POST <path> is covered by the create Idempotency-Key middleware (matching app.ts/mailbox.ts partitioning). */
+export const createKeyRoute = (path: string) => (mailboxRoute(path) ? MAILBOX_CREATES : AUTHENTICATED_CREATES).some(p => p.test(path));
 // Field names that hold credentials at any depth (createInbox nests its key under credential.secret).
 // "key" is not one: addresses and webhooks use it for their routing key.
 const SECRET_FIELDS = new Set(['secret', 'token', 'verificationToken', 'password']);
