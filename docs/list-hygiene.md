@@ -10,7 +10,7 @@ Synced once a day by the hourly upkeep (`syncHygieneLists`), never at send time.
 and checked: HTTP 200, a size cap, a floor on its entry count, at least half the entries of its last good copy, well-formed
 host names, and no large provider (gmail.com, outlook.com, yahoo.com, icloud.com, proton.me and the like) on a disposable
 list. A source that fails keeps its last good copy (`hygiene_lists`, `source:<name>`); one that has never been fetched is
-covered by the vendored snapshot, `api/src/hygiene-snapshot.ts`, which is also what an installation uses until its first sync
+covered by the vendored snapshot, `api/generated/hygiene-snapshot.json`, which is also what an installation uses until its first sync
 (or always, with `NIGHTMAIL_HYGIENE_LISTS=off`). A day's change to the built lists is capped: more than 2,000 (or 2%) new
 disposable domains or more than 25 (or 1%) providers dropped keeps the last built
 lists and logs `HYGIENE_LISTS_CHANGE_REFUSED` until an operator accepts it (`syncHygieneLists(runtime, fetch, true, true)`).
