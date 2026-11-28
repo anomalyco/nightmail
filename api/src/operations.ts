@@ -22,10 +22,10 @@ import { lasting, RECEIVING_HOST_CHANGE, EmailEventData, withoutVerdict, WEBHOOK
 import { emails } from './db/sending.js';
 import { sesRegions } from './db/ses-regions.js';
 import { getRegionSettings, resolveRegionRuntime, withRegionSettings } from './ses-region-state.js';
-import { claimName, domainName, domainQuota, platformDomainOwner, platformHosts, releaseConnectionClaims, releasedClaimCleanup, reserveClaim, reservedPlatformName } from './domain-claims.js';
+import { claimName, domainName, domainQuota, platformDomainOwner, platformHosts, releasedClaimCleanup, reserveClaim, reservedPlatformName } from './domain-claims.js';
 import { loadRegistries } from './domain-registry.js';
 import { discover, groupIds, pendingGroups, signedApply, verifyReturn } from './domain-connect.js';
-import { dmarcView, localDmarc, observeDmarc, type DmarcObservation } from './dmarc.js';
+import { dmarcView, localDmarc, tryObserveDmarc, type DmarcObservation } from './dmarc.js';
 import { forDelivery, workspaceConnection, type ReadyConnection } from './provider-credentials.js';
 import { byoEnabled } from './byo-pilot.js';
 import { awsError, byoFeedbackUrl, claimTenantName, feedbackUrl, mxOwnerTag, POOL_INSTALLATION } from './ses-setup.js';
@@ -620,7 +620,8 @@ async function deleteClaimIdentity(runtime:Runtime,wid:string,row:Pick<HostedDom
   const identity=await ignoreMissing(({ GetEmailIdentityCommand })=>client.send(new GetEmailIdentityCommand({EmailIdentity:row.name})));
   if (!identity || !ownsIdentity(identity,row.token)) return;
   // Read actual SES membership, not readiness: DNS can regress, or the association acknowledgement can be lost.
-  // The caller holds the claim lock through deletion so a concurrent release/re-claim cannot delete a new owner's identity.
+  // The caller holds the claim lock through deletion, or has fenced its connection (deleteConnectionIdentities), so a
+  // concurrent release/re-claim cannot delete a new owner's identity.
   if (row.connection.kind==='shared' && row.connection.aws_account_id) {
     const binding=identityBinding(row,wid); let next: string | undefined;
     do {
@@ -633,13 +634,14 @@ async function deleteClaimIdentity(runtime:Runtime,wid:string,row:Pick<HostedDom
   }
   await ignoreMissing(({ DeleteEmailIdentityCommand })=>client.send(new DeleteEmailIdentityCommand({EmailIdentity:row.name})));
 }
-/** Disconnect: shared identities are deleted, BYO identities stay in AWS, and only exclusive claims are retained. */
-export async function releaseConnectionDomains(runtime:Runtime,db:DbExecutor,wid:string,connection:HostedDomain['connection'] & {region:string}) {
-  if (connection.kind==='shared') {
-    const claims=(await db.execute<{name:string;token:string;region:string;managed_tenant:boolean;pool_tenant_name:string|null}>(sql`SELECT dc.name,dc.token,b.region,r.managed_tenant,r.pool_tenant_name FROM domain_claims dc JOIN domain_sending_bindings b USING(workspace_id,name,connection_id) JOIN regional_connections r ON r.id=b.connection_id AND r.region=b.region WHERE dc.workspace_id=${wid} AND dc.connection_id=${connection.id} AND NOT coalesce(dc.identity ? 'adopted',false) FOR UPDATE OF dc`)).rows;
-    for (const claim of claims) await deleteClaimIdentity(runtime,wid,{...claim,connection:{...connection,managed_tenant:claim.managed_tenant,pool_tenant_name:claim.pool_tenant_name}});
-  }
-  await db.execute(sql`WITH ${releaseConnectionClaims(wid,sql`SELECT ${connection.id}::text AS id`)} SELECT 1`);
+/** Disconnect: a shared connection's tagged identities are deleted; BYO identities, adopted ones and the built-in domain
+ * (a name under the platform's parent identity, with none of its own) are not touched. The caller has fenced the
+ * connection (state 'disconnecting'), so no claim read sees it any more; taking the claims' locks first waits out a write
+ * already under way (an identity create). No transaction or lock is held across the AWS calls. */
+export async function deleteConnectionIdentities(runtime:Runtime,wid:string,connection:HostedDomain['connection'] & {region:string}) {
+  if (connection.kind!=='shared') return;
+  const claims=(await runtime.db.transaction(db=>db.execute<{name:string;token:string;region:string;managed_tenant:boolean;pool_tenant_name:string|null}>(sql`SELECT dc.name,dc.token,b.region,r.managed_tenant,r.pool_tenant_name FROM domain_claims dc JOIN domain_sending_bindings b USING(workspace_id,name,connection_id) JOIN regional_connections r ON r.id=b.connection_id AND r.region=b.region WHERE dc.workspace_id=${wid} AND dc.connection_id=${connection.id} AND NOT coalesce(dc.identity ?| array['adopted','builtin'],false) FOR UPDATE OF dc`))).rows;
+  for (const claim of claims) await deleteClaimIdentity(runtime,wid,{...claim,connection:{...connection,managed_tenant:claim.managed_tenant,pool_tenant_name:claim.pool_tenant_name}});
 }
 async function releaseClaim(db:DbExecutor,wid:string,row:{token:string}) {
   await db.execute(sql`WITH released AS (DELETE FROM domain_claims WHERE workspace_id=${wid} AND token=${row.token} RETURNING name,token), ${releasedClaimCleanup(wid)}
@@ -821,7 +823,7 @@ const domainVerify: JobHandler = async (runtime,payload,job) => {
       // ones. A drifted identity stops sending and receiving at once (no grace) until the operator attests it again,
       // and a claim whose adoption never completed (sending still pending) never receives.
       const ses=sesFacts(identity);
-      const [dmarc,observation]=await Promise.all([observeDmarc(row.name,identity.MailFromAttributes?.MailFromDomain).catch(e=>{if(e instanceof ModuleLoadError)throw e;return null;}),receivingMx(runtime.db,row,job.workspaceId)]);
+      const [dmarc,observation]=await Promise.all([tryObserveDmarc(row.name,identity.MailFromAttributes?.MailFromDomain),receivingMx(runtime.db,row,job.workspaceId)]);
       await runtime.db.transaction(async db=>{
         const current=await hostedDomain(db,job.workspaceId,row.id,true);
         if (!current?.identity?.adopted || current.token!==row.token || current.expired) return;
@@ -841,7 +843,7 @@ const domainVerify: JobHandler = async (runtime,payload,job) => {
     // is established, keep checking it even if DKIM regresses: receive-only routing has its own grace.
     const dkimSuccess=identity.DkimAttributes?.Status==='SUCCESS';
     const checkHostedTxt=row.check_txt || dkimSuccess || row.identity?.proven || sends(row) || row.receiving_host!==null;
-    const [positive,dmarc,observation,upgrade]=await Promise.all([shared ? (checkHostedTxt ? ownershipTxt(row.name,row.token) : false) : identityVerified,observeDmarc(row.name,identity.MailFromAttributes?.MailFromDomain).catch(e=>{if(e instanceof ModuleLoadError)throw e;return null;}),
+    const [positive,dmarc,observation,upgrade]=await Promise.all([shared ? (checkHostedTxt ? ownershipTxt(row.name,row.token) : false) : identityVerified,tryObserveDmarc(row.name,identity.MailFromAttributes?.MailFromDomain),
       scopedImport || row.connection.legacy===false ? undefined : receivingMx(runtime.db,row,job.workspaceId),scopedImport ? ownershipTxt(row.name,row.token).catch(()=>false) : false]); // Optional ownership lookup never blocks applying SES's sending evidence.
     const report=readiness(row,identity,claimProof(row,positive));
     // The identity binds to the workspace tenant, which the tenant job owns; a verified domain waits for it here.
@@ -879,6 +881,8 @@ const domainVerify: JobHandler = async (runtime,payload,job) => {
       await db.execute(sql`UPDATE domain_claims SET ${observeProof(positive)}, receiving_identity_at=CASE WHEN ${current.connection.legacy===false} THEN receiving_identity_at WHEN ${identityVerified} THEN now() END WHERE workspace_id=${job.workspaceId} AND token=${row.token} AND connection_id=${current.connection.id}`);
       return saveObservation(db,current,job.workspaceId,sesFacts(identity),observation,{sending:report.ready,sendingRevoked:current.identity?.imported && !report.ready,identityVerified,proven:positive},dmarc);
     });
+    // A domain that has never had a DMARC answer (the resolver failed) retries soon, after its verification has committed.
+    if (outcome && dmarc===undefined && row.identity?.dmarc===undefined) throw dnsUnavailable();
     if (!outcome || (outcome.sending_state==='verified' && report.mailFromStatus!=='PENDING' && outcome.receiving_state!=='lost')) return; // MX-only upkeep owns receiving changes after sending verifies.
     // DKIM just propagated. Give a lagging TXT its own short retry sequence instead of inheriting
     // the hours-long DKIM backoff. A domain abandoned at this step still backs off normally.
@@ -913,7 +917,7 @@ const domainMx:JobHandler=async(runtime,payload,job)=>{
   // undefined preserves the locked row's last observation and its original expiry.
   // A definitive missing/invalid/ambiguous answer must still replace it.
   // An adopted claim never publishes an ownership TXT: its proof is the operator's attestation, renewed by domain.verify.
-  const [observation,dmarc,proof]=await Promise.all([checkReceiving ? receivingMx(runtime.db,row,job.workspaceId) : undefined,observeDmarc(row.name,row.identity.ses.MailFromAttributes?.MailFromDomain).catch(e=>{if(e instanceof ModuleLoadError)throw e;return undefined;}), row.connection.kind==='shared' && !row.identity.adopted && (checkReceiving || row.receiving_host) ? ownershipTxt(row.name,row.token) : undefined]);
+  const [observation,dmarc,proof]=await Promise.all([checkReceiving ? receivingMx(runtime.db,row,job.workspaceId) : undefined,tryObserveDmarc(row.name,row.identity.ses.MailFromAttributes?.MailFromDomain), row.connection.kind==='shared' && !row.identity.adopted && (checkReceiving || row.receiving_host) ? ownershipTxt(row.name,row.token) : undefined]);
   if(!observation && dmarc===undefined) throw dnsUnavailable();
   // A sending promotion to Virginia doesn't move the existing Ohio ingress. Re-attest the
   // original account/host in Ohio; a successful Virginia SES read is not evidence for it.

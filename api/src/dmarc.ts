@@ -65,12 +65,16 @@ export function dmarcView(obs:DmarcObservation|null|undefined,ses:IdentityFacts[
   }};
 }
 
-// Self-hosted detail already refreshes SES inline; cache public DNS only and never cache an in-flight request.
+// A transport failure is no observation (undefined), so the caller keeps its last one; null is an authoritative answer.
+export const tryObserveDmarc=(name:string,mailFrom?:string)=>observeDmarc(name,mailFrom).catch(e=>{if(e instanceof ModuleLoadError)throw e;return undefined;});
+
+// Self-hosted detail already refreshes SES inline; cache public DNS only and never cache an in-flight request or a failure.
 const local=new Map<string,{value:DmarcObservation|null;until:number}>();
 export async function localDmarc(name:string,mailFrom?:string,refresh=false) {
   const key=name+':'+(mailFrom ?? ''), hit=local.get(key);
   if(!refresh && hit && hit.until>Date.now()) return hit.value;
-  const value=await observeDmarc(name,mailFrom).catch(e=>{if(e instanceof ModuleLoadError)throw e;return null;});
+  const value=await tryObserveDmarc(name,mailFrom);
+  if(value===undefined) return hit?.value ?? null;
   if(local.size>=256) local.delete(local.keys().next().value!);
   local.set(key,{value,until:Date.now()+(value?300_000:30_000)}); return value;
 }
