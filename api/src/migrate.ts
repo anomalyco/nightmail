@@ -6,7 +6,7 @@ import { envNames, setting } from './brand.js';
 import { postgresConnection } from './adapters/node.js';
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { deriveEncryptionKey, loadConfig, migrationSettings } from './config.js';
-import { decrypt, reencryptWebhookSecrets } from './operations.js';
+import { decrypt, reencryptWebhookSecrets } from './webhooks/crypto.js';
 import { ensureRegionSettings } from './ses-region-state.js';
 
 const rotation = envNames('ROOT_SECRET').some(name => process.env[`PREVIOUS_${name}`]) || process.env.ENCRYPTION_KEY ? loadConfig(process.env) : null;

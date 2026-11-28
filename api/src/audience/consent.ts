@@ -123,7 +123,7 @@ export async function lockContacts(tx: DbExecutor, identity: Pick<Actor, 'worksp
   return rows.filter(row => !row.deletedAt).map(row => row.id);
 }
 /** Who acted on an unsubscribe link, as the consent history records it: the mailbox's one-click (RFC 8058), the hosted
- *  confirmation, the hosted preference page (src/operations.ts), or SES's own subscription event. */
+ *  confirmation, the hosted preference page (src/audience/unsubscribe.ts), or SES's own subscription event. */
 export type RecipientSource = 'footer-confirm' | 'rfc8058-post' | 'ses-subscription' | 'preferences';
 const RECIPIENT_EVIDENCE: Record<RecipientSource, string> = {
   'ses-subscription': 'Signed SES subscription event reported unsubscribeAll for a single-recipient email.',
@@ -150,7 +150,7 @@ export async function recordUnsubscribe(runtime: Runtime, workspaceId: string, e
     return { contactId: contact.id, changed: true };
   });
 }
-/** A recipient's unsubscribe from mail with a topic (src/operations.ts /unsubscribe): that topic only, archived or not; the
+/** A recipient's unsubscribe from mail with a topic (src/audience/unsubscribe.ts /unsubscribe): that topic only, archived or not; the
  *  contact's marketing consent stays as it is. A contact deleted since keeps its choice, as it keeps its consent. */
 export async function recordTopicUnsubscribe(runtime: Runtime, workspaceId: string, email: string, topicId: string, source: 'footer-confirm' | 'rfc8058-post'): Promise<{ contactId: string; changed: boolean }> {
   return runtime.db.transaction(async tx => {

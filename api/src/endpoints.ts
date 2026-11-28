@@ -15,7 +15,7 @@ import { endpoints, mailAttachments, mailboxDomains, mailboxes, mailboxWebhookDe
 import { ownReceiving, resumeNeedsUrl } from './rituals.js';
 import { recordAudit } from './audit.js';
 import { approvalField, approvalTie, approvalTies, tiedNextStep, type Tie } from './approval-ties.js';
-import { encrypt, decrypt, encryptWebhookHeaders, postWebhook, webhookHeaderViews, WebhookHeaders, WebhookHeaderViews, webhookSecret, webhookUrl } from './operations.js';
+import { encrypt, decrypt, encryptWebhookHeaders, postWebhook, webhookHeaderViews, WebhookHeaders, WebhookHeaderViews, webhookSecret, webhookUrl } from './webhooks/crypto.js';
 import { inboundEventTypes, recordEvents, webhookSecretBinding } from './mailbox-events.js';
 import { InboundAddressId } from './inbound-threads.js';
 import { createMailbox, htmlToPlain, lockMailboxLane } from './mailbox-store.js';

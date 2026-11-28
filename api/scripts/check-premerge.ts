@@ -474,7 +474,7 @@ const warn = (check: string, message: string, file?: string) => console.log(`::w
   for (const name of readdirSync(new URL('migrations/', api)).filter(n => n.endsWith('.sql')).sort()) insertedTypes(readFileSync(new URL(`migrations/${name}`, api), 'utf8'), `api/migrations/${name}`);
   const registries = await Promise.all([
     import('../src/sending.js').then(m => ['api/src/sending.ts', m.jobHandlers] as const),
-    import('../src/operations.js').then(m => ['api/src/operations.ts', m.operationJobs] as const),
+    import('../src/webhooks/operations.js').then(m => ['api/src/webhooks/operations.ts', m.operationJobs] as const),
     import('../src/ses-regions.js').then(m => ['api/src/ses-regions.ts', m.sesRegionJobs] as const),
     import('../src/reputation-alerts.js').then(m => ['api/src/reputation-alerts.ts', m.reputationAlertJobs] as const),
     import('../src/operator-alerts.js').then(m => ['api/src/operator-alerts.ts', m.operatorAlertJobs] as const),

@@ -5,7 +5,7 @@ import { log } from './log.js';
 import { logError } from './core/errors.js';
 import { logAnalyticsFailure } from './analytics-traffic.js';
 import { campaignActive } from './states.js';
-import { expireDomainClaims } from './operations.js';
+import { expireDomainClaims } from './domains/hosted.js';
 import { SEND_LIMITS } from './send-limits.js';
 import { isReconciledUploadKey, UPLOAD_PREFIX } from './storage-keys.js';
 import { foldSendingTallies, recountSendingTallies } from './sending-tallies.js';

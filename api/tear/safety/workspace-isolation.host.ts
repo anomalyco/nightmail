@@ -101,7 +101,7 @@ const [
 ] = await Promise.all([
   import("../../src/app.ts"),
   import("../../src/config.ts"),
-  import("../../src/operations.ts"),
+  import("../../src/webhooks/crypto.ts"),
   import("../../src/mcp-catalog.ts"),
   import("../../src/support-conversations.ts"),
   import("@aws-sdk/client-sesv2"),

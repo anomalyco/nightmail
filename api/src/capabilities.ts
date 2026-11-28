@@ -2,7 +2,7 @@
  * Bearer capabilities: links whose text alone lets whoever holds it act, so the route gate that lets them in without a
  * credential, the copies that withhold them and the redaction of read-only views all match the same grammar.
  */
-/** An unsubscribe link's token (operations.ts randomSecret('u_')). */
+/** An unsubscribe link's token (audience/unsubscribe.ts randomSecret('u_')). */
 export const UNSUBSCRIBE_TOKEN = /u_[0-9a-f]{64}/;
 /** A forward confirmation's token (endpoints.ts randomSecret('fwd_')). */
 export const FORWARD_CONFIRM_TOKEN = /fwd_[0-9a-f]{64}/;

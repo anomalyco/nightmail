@@ -103,7 +103,7 @@ function loadGroupRegistrar(group: Exclude<RouteGroup, 'mcp'>): Promise<(app: Ap
       case 'sending-other': return (await import('./sending.js')).registerSending;
       case 'ops-domains':
       case 'ops-events':
-      case 'ops-other': return (await import('./operations.js')).registerOperations;
+      case 'ops-other': return (await import('./webhooks/operations.js')).registerOperations;
       case 'ses-regions': return (await import('./ses-regions.js')).registerSesRegions;
       case 'mailbox': return (await import('./mailbox.js')).registerMailbox;
       case 'workspaces': return (await import('./workspaces.js')).registerWorkspaces;
@@ -531,7 +531,7 @@ export async function createOpenApiApp(): Promise<App> {
     { registerAudit }, { registerSupport, registerSupportOperator }, { registerSupportConversations }, { registerSupportInbox }, { registerUiNotes },
   ] = await wrapModuleLoad(() => Promise.all([
     import('./mcp-auth.js'), import('./dashboard-auth.js'), import('./audience/routes.js'), import('./audience-query.js'),
-    import('./templates.js'), import('./sending.js'), import('./operations.js'), import('./ses-regions.js'),
+    import('./templates.js'), import('./sending.js'), import('./webhooks/operations.js'), import('./ses-regions.js'),
     import('./mailbox.js'), import('./workspaces.js'), import('./provider-connections.js'), import('./mcp.js'), import('./public-stats.js'), import('./overview-setup.js'), import('./operator.js'),
     import('./audit.js'), import('./support.js'), import('./support-conversations.js'), import('./support-inbox.js'), import('./ui-notes.js'),
   ]));

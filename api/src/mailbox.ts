@@ -32,7 +32,7 @@ import { registerLogs } from './logs.js';
 import { registerInboundOverview } from './inbound-overview.js';
 import { AddressState, assertInboundRecipients, createInboundThreadRoute, InboundAddressId, inboundReplyTarget, queueInboundThreadMessage, registerInboundThreadReads, replyToInboundThreadRoute, visibleThreadAddresses } from './inbound-threads.js';
 import { inboxKeyBearer, inboxKeyPrefix, legacyAddressOperations, productName } from './brand.js';
-import { followMxJob, receivingIssueSchema } from './operations.js';
+import { followMxJob, receivingIssueSchema } from './domains/hosted.js';
 import { addHost, enableHosted, listHosts, planReceiving, receiveInTransaction, removeHost, updateHost } from './receiving-hosts.js';
 
 const security: Record<string, string[]>[] = [{ bearerAuth: [] }, { dashboardSession: [] }, { secureDashboardSession: [] }];

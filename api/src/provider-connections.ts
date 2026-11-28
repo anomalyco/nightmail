@@ -616,7 +616,7 @@ export function registerProviderConnections(app: App) {
         await db.execute(sql`UPDATE provider_connections SET state='disconnecting' WHERE id=${row.id}`);
         return row;
       });
-      await (await wrapModuleLoad(() => import('./operations.js'))).deleteConnectionIdentities(c.env, wid, { id: row.id, kind: row.kind, region: row.region, aws_account_id: row.aws_account_id!, role_arn: row.role_arn!, external_id: row.external_id!, tenant_state: row.tenant_state });
+      await (await wrapModuleLoad(() => import('./domains/hosted.js'))).deleteConnectionIdentities(c.env, wid, { id: row.id, kind: row.kind, region: row.region, aws_account_id: row.aws_account_id!, role_arn: row.role_arn!, external_id: row.external_id!, tenant_state: row.tenant_state });
       // A pause can land during the AWS cleanup: re-check it under the connection's lock (the fence's lock order) before
       // releasing anything. The connection stays fenced; a DELETE after the resume finishes. Once a concurrent DELETE has
       // finished, both statements are no-ops, so only one audits.

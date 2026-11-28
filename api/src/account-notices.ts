@@ -106,7 +106,7 @@ export async function queueNotice(db: DbExecutor, n: Queued, savepoint = false):
 export const domainUnverified = (db: DbExecutor, workspaceId: string, domain: { id: string; name: string; lostSince: string | null }) =>
   queueNotice(db, { workspaceId, kind: 'domain_unverified', dedupe: `domain:${domain.id}:${domain.lostSince ?? ''}`, data: { domainId: domain.id, name: domain.name } }, true);
 
-/** A proven domain released because its ownership records were gone for 30 days (operations.ts expireDomainClaims). Once per claim. */
+/** A proven domain released because its ownership records were gone for 30 days (domains/hosted.ts expireDomainClaims). Once per claim. */
 export const domainReleased = (db: DbExecutor, workspaceId: string, domain: { name: string; token: string }) =>
   queueNotice(db, { workspaceId, kind: 'domain_released', dedupe: `domain-released:${domain.token}`, data: { name: domain.name } }, true);
 

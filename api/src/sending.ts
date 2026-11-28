@@ -65,7 +65,7 @@ const loadParse5 = lazyModule((): Promise<HtmlParser> => import('parse5').then(m
 const loadBoundedHtml = lazyModule(() => import('./bounded-html.js'));
 const loadCampaignBlocks = lazyModule(() => import('./campaign-blocks.js'));
 const loadEmailPreview = lazyModule(() => import('./email-preview/index.js'));
-const loadOpsUnsub = lazyModule(() => import('./operations.js'));
+const loadOpsUnsub = lazyModule(() => import('./audience/unsubscribe.js'));
 const loadScreen = lazyModule(() => import('./screen.js'));
 const loadSendingSesv2 = lazyModule(() => import('@aws-sdk/client-sesv2'));
 
@@ -3925,7 +3925,7 @@ export async function campaignVerdicts(runtime: Runtime, ref: CampaignScreenRef,
     return row?.judged && row.threshold !== null && row.model !== null ? { key, spam: row.spam, model: row.model, threshold: row.threshold } : null;
   });
 }
-/** The unsubscribe link Nightmail generates for one recipient (src/operations.ts createUnsubscribeLink): the copy's link
+/** The unsubscribe link Nightmail generates for one recipient (src/audience/unsubscribe.ts createUnsubscribeLink): the copy's link
  *  host (`origin`), `/unsubscribe/u_` and 64 lowercase hex digits, and nothing else. */
 export function generatedUnsubscribeUrl(origin: string, value: string): string {
   const prefix = `${origin.replace(/\/$/, '')}/unsubscribe/u_`;

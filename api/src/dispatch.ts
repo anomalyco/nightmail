@@ -34,7 +34,7 @@ export function resolveJobHandler(type: string): Promise<JobHandler | undefined>
       return type === display.DISPLAY_DISCOVERY_JOB ? display.senderDisplayDiscoveryJob : display.senderDisplayScoreJob;
     }
     if (type === 'email.dispatch' || type.startsWith('sending.') || type.startsWith('campaign.')) return (await import('./sending.js')).jobHandlers[type];
-    if (type.startsWith('operation.') || type.startsWith('domain.')) return (await import('./operations.js')).operationJobs[type];
+    if (type.startsWith('operation.') || type.startsWith('domain.')) return (await import('./webhooks/operations.js')).operationJobs[type];
     if (type === 'ses.provision' || type === 'ses.discover') return (await import('./ses-regions.js')).sesRegionJobs[type];
     if (type === 'reputation.alert') return (await import('./reputation-alerts.js')).reputationAlertJobs[type];
     if (type === 'operator.alert') return (await import('./operator-alerts.js')).operatorAlertJobs[type];

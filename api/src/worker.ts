@@ -209,7 +209,7 @@ async function withRuntime<T>(env: Env, work: (runtime: Runtime) => Promise<T>, 
     return await work({ db, storage: r2Storage(env.ATTACHMENTS), config, shadow: shadowQueue && (items => { const sent = enqueueShadow(shadowQueue, items); if (keepShadow) keepShadow(sent); else handovers.push(sent); }), mailR2: env.MAIL && { bucket:env.MAIL,name:setting(env,'MAIL_BUCKET')!,write:setting(env,'MAIL_STORE')==='r2' }, jwksCacheScope: env.HYPERDRIVE,
       allowSnsCertMiss: async peer => (await env.SNS_CERT_MISSES.limit({key: `bane:sns-miss:${await core.digest(peer)}`})).success,
       allowMalformedSns: async peer => (await env.ADMISSION.limit({key:`bane:sns-malformed:${await core.digest(peer)}`})).success,
-      // Weighted so a peer's 20 failed SNS verifications a minute spend the limiter's 6,000 (operations.ts SnsFailureBudget).
+      // Weighted so a peer's 20 failed SNS verifications a minute spend the limiter's 6,000 (ses/sns-ingress.ts SnsFailureBudget).
       allowSnsFailure: async peer => (await env.ADMISSION.limit({key:`bane:sns-invalid:${await core.digest(peer)}`,delta:300} as RateLimitOptions)).success,
       // 6,000 units of 16 KiB a minute per workspace in each location: about 94 MiB of preview memory, eight previews at the limit.
       // The per-isolate budget is the memory bound, so a limiter that rejects the weight fails open.
@@ -466,7 +466,7 @@ export default {
       : batch.queue === queueName(env, 'FEEDBACK_DLQ_NAME', '') ? 'tagged-dlq'
       : batch.queue === queueName(env, 'LEGACY_FEEDBACK_DLQ_NAME', '') ? 'legacy-dlq' : undefined;
     if (feedbackLane) {
-      const { ingestFeedbackBatch, archiveQueueFeedback, retainLegacyFeedback, completeLegacyFeedback } = await core.wrapModuleLoad(() => import('./operations.js'));
+      const { ingestFeedbackBatch, archiveQueueFeedback, retainLegacyFeedback, completeLegacyFeedback } = await core.wrapModuleLoad(() => import('./ses/feedback.js'));
       // Each message is one verified callback; acknowledge and retry individually so one bad
       // payload never blocks a batch of routine deliveries. Only items this installation tagged at
       // /v1/events/ses are ingested. Only platform-dated, pre-cutover legacy items may drain unsigned;
@@ -598,7 +598,7 @@ export default {
           }
         } catch { core.log('warn', { code: 'FEEDBACK_LAG_RECORD_FAILED' }); }
       }
-      try { const { drainFeedbackRecovery } = await import('./operations.js'); await drainFeedbackRecovery(runtime); }
+      try { const { drainFeedbackRecovery } = await import('./ses/feedback.js'); await drainFeedbackRecovery(runtime); }
       catch { core.log('error',{code:'FEEDBACK_RECOVERY_DRAIN_FAILED'}); }
       await reconcileSharedConnections(runtime); // Installation work must not depend on a workspace or a successful queue drain.
       // A pool region nothing has sent through yet still gets its SES quota sampled (Glass, the customer share); never throws.

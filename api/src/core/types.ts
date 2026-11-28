@@ -246,11 +246,11 @@ export interface Runtime {
   feedback?: { enqueue: (items: FeedbackItem[]) => Promise<void> };
   allowFeedbackTopic?: (arn:string)=>Promise<boolean>;
   allowSnsCertMiss?: (peer: string) => Promise<boolean>;
-  snsCertificateState?: import('../operations.js').SnsCertificateState; // Omitted by production: share one state per isolate, not per request.
+  snsCertificateState?: import('../ses/sns-ingress.js').SnsCertificateState; // Omitted by production: share one state per isolate, not per request.
   allowMalformedSns?: (peer: string) => Promise<boolean>;
   // A peer's failed SNS verifications across isolates (Workers: the ADMISSION limiter, weighted); false spends its budget.
   allowSnsFailure?: (peer: string) => Promise<boolean>;
-  snsFailureBudget?: import('../operations.js').SnsFailureBudget; // Tests only: production shares one per isolate.
+  snsFailureBudget?: import('../ses/sns-ingress.js').SnsFailureBudget; // Tests only: production shares one per isolate.
   // A workspace's preview memory a minute (Workers: the ADMISSION limiter, weighted by bytes). Node has only the per-process budget.
   allowPreview?: (workspaceId: string, bytes: number) => Promise<boolean>;
   // Dashboard analytics (src/analytics.ts): the Workers ANALYTICS bucket and the ANALYTICS_INGEST limiter. Node uses

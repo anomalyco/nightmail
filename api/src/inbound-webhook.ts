@@ -7,7 +7,7 @@ import { webhookSecretBinding } from './mailbox-events.js';
 import { safeForwardHtml } from './mailbox-send.js';
 import { readableMailboxKey } from './mailbox-setup.js';
 import { withMailObjects } from './mail-objects.js';
-import { decrypt, hmac, postWebhook, webhookSecret, webhookUrl } from './operations.js';
+import { decrypt, hmac, postWebhook, webhookSecret, webhookUrl } from './webhooks/crypto.js';
 import { legacyWebhookFormat, productName, webhookUserAgent } from './brand.js';
 
 const s3commands = lazyModule(() => import('@aws-sdk/client-s3'));

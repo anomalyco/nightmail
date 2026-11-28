@@ -10,7 +10,7 @@ import { postgresConnection } from '../src/adapters/node.js';
 import { loadConfig } from '../src/config.js';
 import { log } from '../src/log.js';
 import type { Runtime } from '../src/core/types.js';
-import { readFeedbackQuarantine, replayQuarantinedFeedback } from '../src/operations.js';
+import { readFeedbackQuarantine, replayQuarantinedFeedback } from '../src/ses/feedback.js';
 import { authenticFeedbackArchive, feedbackArchiveBody } from '../src/adapters/feedback-archive.js';
 
 const args = process.argv.slice(2), apply = args.includes('--apply'), afterIndex = args.indexOf('--after');

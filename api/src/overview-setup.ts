@@ -20,7 +20,8 @@ import { webhooks } from './db/operations.js';
 import { byoWorkspace } from './domain-claims.js';
 import { emails } from './db/sending.js';
 import { workspaceInvitations } from './db/workspaces.js';
-import { DomainPage, domainPage, domainReader, workspaceActor } from './operations.js';
+import { DomainPage, domainPage, domainReader } from './domains/hosted.js';
+import { workspaceActor } from './webhooks/crypto.js';
 import { mailWhere } from './sending.js';
 import { withRegionSettings } from './ses-region-state.js';
 

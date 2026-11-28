@@ -23,7 +23,7 @@ type Feature = { face: 'screen' | 'object'; show: ReactNode }
 
 const TEAM = [['Dana', 'Owner'], ['Zahir', 'Admin'], ['Bertram', 'Member'], ['Mina', 'Member']] as const
 // The workspace's built-in domain (api/src/builtin-domain.ts), then a domain's records as the product lists them
-// (api/src/operations.ts, readiness): three DKIM CNAMEs, MAIL FROM's SPF, the DMARC it checks for, and the MX that receives.
+// (api/src/domains/hosted.ts, readiness): three DKIM CNAMEs, MAIL FROM's SPF, the DMARC it checks for, and the MX that receives.
 const RECORDS = [['Built-in', 'acme-k7.nightmail.email'], ['DKIM', 'x7k2._domainkey'], ['DKIM', 'p4qd._domainkey'], ['SPF', 'email'], ['DMARC', '_dmarc'], ['MX', 'acme.example']] as const
 // A campaign's review (api/src/sending.ts, readiness) and the first hours of the ramp (api/src/standing-model.ts, RAMP).
 const READY = [['DMARC', 'acme.example', '✓'], ['List', 'risky addresses skipped', '✓'], ...RAMP.steps.slice(0, 3).map((step, i) => [`Hour ${i + 1}`, `${formatCount(step.ceilingPerHour)} recipients`, i < 2 ? '✓' : '…'])] as const

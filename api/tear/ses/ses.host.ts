@@ -41,10 +41,12 @@ globalThis.fetch = (async () => {
   throw new Error("tear host: network is forbidden");
 }) as typeof fetch;
 
-const [{ createApp }, { nodeRuntime }, ops, sending, { dispatchAsActor }] = await Promise.all([
+const [{ createApp }, { nodeRuntime }, ops, snsIngress, sesFeedback, sending, { dispatchAsActor }] = await Promise.all([
   import("../../src/app.ts"),
   import("../../src/adapters/node.ts"),
-  import("../../src/operations.ts"),
+  import("../../src/webhooks/operations.ts"),
+  import("../../src/ses/sns-ingress.ts"),
+  import("../../src/ses/feedback.ts"),
   import("../../src/sending.ts"),
   import("../../src/auth.ts"),
 ]);
@@ -92,7 +94,7 @@ const pem = (() => {
   }
 })();
 const CERT_URL = `https://sns.${REGION}.amazonaws.com/SimpleNotificationService-${hex(32)}.pem`;
-const certs = new ops.SnsCertificateState();
+const certs = new snsIngress.SnsCertificateState();
 certs.candidates.set(CERT_URL, { cert: new X509Certificate(pem), expiresAt: Date.now() + 86_400_000 });
 runtime.snsCertificateState = certs;
 
@@ -774,10 +776,10 @@ export const sesHost = host(ses, {
     await ranked(old, async () => {
       switch (a.op) {
         case "Queue":
-          r = (await ops.ingestFeedbackBatch(runtimeOn(t, auto.db), [buildItem(t, a.msg)])).map(outcome);
+          r = (await sesFeedback.ingestFeedbackBatch(runtimeOn(t, auto.db), [buildItem(t, a.msg)])).map(outcome);
           break;
         case "Pair":
-          r = (await ops.ingestFeedbackBatch(runtimeOn(t, auto.db), [buildItem(t, a.a), buildItem(t, a.b)])).map(outcome);
+          r = (await sesFeedback.ingestFeedbackBatch(runtimeOn(t, auto.db), [buildItem(t, a.a), buildItem(t, a.b)])).map(outcome);
           break;
         case "Http":
           r = await httpReq(t, auto.db, buildEnvelope(t, a.msg));
@@ -797,7 +799,7 @@ export const sesHost = host(ses, {
         case "Cross":
           if (a.via === "queue") {
             r = (
-              await ops.ingestFeedbackBatch(runtimeOn(t, auto.db), [
+              await sesFeedback.ingestFeedbackBatch(runtimeOn(t, auto.db), [
                 { ...buildItem(t, "b1"), topicArn: OTHER, message: buildMessage(t, "b1", OTHER_ACCOUNT) as Record<string, unknown> },
               ])
             ).map(outcome);
@@ -856,7 +858,7 @@ export const sesHost = host(ses, {
           await c.raw("BEGIN");
           c.open = true;
           c.settled = undefined;
-          c.pending = ops.ingestFeedbackBatch(runtimeOn(t, c.db), [buildItem(t, a.msg)]).then(
+          c.pending = sesFeedback.ingestFeedbackBatch(runtimeOn(t, c.db), [buildItem(t, a.msg)]).then(
             (v) => {
               c.settled = { ok: true, value: v.map(outcome) };
             },

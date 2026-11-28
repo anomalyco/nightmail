@@ -9,7 +9,7 @@
   {
     "label": "ses-B",
     "checker": "ses",
-    "file": "api/src/operations.ts",
+    "file": "api/src/ses/feedback.ts",
     "old": "  if (!input || input.receipt.processedAt) return;\n  const { receipt, email } = input;",
     "neu": "  if (!input) return;\n  const { receipt, email } = input;"
   },

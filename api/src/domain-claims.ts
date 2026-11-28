@@ -96,7 +96,7 @@ export async function reserveClaim(runtime: Runtime, workspace: string, name: st
 
 /**
  * Another workspace has proven this name, or one above or below it. What the domain's owner can do about it: an exclusive
- * claim is released once its ownership records have been gone for 30 days (operations.ts expireDomainClaims).
+ * claim is released once its ownership records have been gone for 30 days (domains/hosted.ts expireDomainClaims).
  */
 export const domainClaimed = () => new ApiError(409, 'DOMAIN_CLAIMED', `Another workspace has verified this domain, or one above or below it. If the domain is yours, remove that workspace's records from your DNS: its ownership TXT record (_${PROOF_LABELS[0]}.<domain>, or ${PROOF_LABELS.slice(1).map(label => '_' + label).join(' or ')} on older setups) and its DKIM CNAME records under _domainkey. The claim is released about 30 days after both are gone. To release it sooner, write to ${addresses.support}.`);
 /** Whether the workspace sends through its own AWS account: its identities live in that account's SES, so no domain total applies (migration 355). */
