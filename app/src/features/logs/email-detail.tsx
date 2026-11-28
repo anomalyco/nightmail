@@ -245,7 +245,7 @@ const scheduledFor = (at: string) => `Scheduled for ${date(at, { month: 'short',
 const stamp = (at: string, day: string) => sameDay(at, day) ? time(at) : date(at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: 'UTC' })
 const linkText = (link: string) => link.replace(/^https?:\/\//, '').slice(0, 64) + (link.replace(/^https?:\/\//, '').length > 64 ? '…' : '')
 
-function StepTip({ step, day }: { step: Step; day: string }) {
+function stepTip(step: Step, day: string) {
   const [name, meaning] = eventCopy[step.key] ?? [label(step.key), '']
   const detail = step.events[0]?.detail, links = [...new Set(step.events.flatMap(event => event.detail?.link ? [event.detail.link] : []))]
   const bots = step.events.filter(event => event.detail?.bot).length
@@ -297,8 +297,8 @@ function Delivery({ email, vertical, why }: { email: Email; vertical: boolean; w
   if (vertical) {
     const start = Date.parse(steps.find(step => step.at)?.at ?? day)
     const rows = steps.map((step, index) => {
-      const name = nameOf(step), tip = <StepTip step={step} day={day} />
-      const fact = <span className="delivery__fact" tabIndex={0}><span className="delivery__name">{name}{step.events.length > 1 && <span className="delivery__count"> {step.events.length}×</span>}</span></span>
+      const name = nameOf(step), tip = stepTip(step, day)
+      const fact = <span className="delivery__fact" tabIndex={tip ? 0 : undefined}><span className="delivery__name">{name}{step.events.length > 1 && <span className="delivery__count"> {step.events.length}×</span>}</span></span>
       return { key: step.key, tone: toneOf(step.key), series: seriesOf[step.key],
         label: tip ? <Tooltip content={tip}>{fact}</Tooltip> : fact,
         // A step with no time of its own (a status without its event) leaves the column empty rather than a bare dash.
@@ -314,8 +314,8 @@ function Delivery({ email, vertical, why }: { email: Email; vertical: boolean; w
   return <div className="delivery">
     <ol className="delivery__steps ui-scroll-fade" aria-label="Delivery">
       {steps.map((step, index) => {
-        const name = nameOf(step), at = times[index], tip = <StepTip step={step} day={day} />
-        const fact = <span className="delivery__fact" tabIndex={0}>
+        const name = nameOf(step), at = times[index], tip = stepTip(step, day)
+        const fact = <span className="delivery__fact" tabIndex={tip ? 0 : undefined}>
           <span className={`delivery__dot ui-tone--${toneOf(step.key)}`} aria-hidden="true" />
           <span className="delivery__name">{name}{step.events.length > 1 && <span className="delivery__count"> {step.events.length}×</span>}</span>
           {at && <time className="delivery__time" dateTime={step.at}>{at}{index === lastShown && <span className="delivery__zone"> UTC</span>}</time>}
