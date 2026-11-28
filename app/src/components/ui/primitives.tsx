@@ -363,7 +363,9 @@ export function StatusDot({ tone, children, note, title, muted = false }: { tone
 }
 // `timer`: a notice that dismisses itself shows the time it has left as a thin bar that empties (paused while `paused`).
 export function Alert({ tone = 'neutral', title, children, onDismiss, timer, ...rest }: { tone?: Tone; title?: ReactNode; children: ReactNode; onDismiss?: () => void; timer?: { duration: number; paused: boolean } } & Omit<HTMLAttributes<HTMLDivElement>, 'title' | 'children'>) {
-  return <div data-component="Alert" {...rest} className={cx('ui-alert', `ui-tone--${tone}`)} role={tone === 'danger' ? 'alert' : 'status'}><div>{title && <div className="ui-alert__title">{title}</div>}<div>{children}</div></div>{onDismiss && <IconButton label="Dismiss notification" onClick={onDismiss}><Icon icon={X} size="md" /></IconButton>}{timer && <span className="ui-alert__timer" aria-hidden="true" style={{ animationDuration: `${timer.duration}ms`, animationPlayState: timer.paused ? 'paused' : 'running' }} />}</div>;
+  // A cut that leaves only a title (a permission error that is not an ApiError) renders no empty body line.
+  const body = children !== null && children !== undefined && children !== false && children !== ''
+  return <div data-component="Alert" {...rest} className={cx('ui-alert', `ui-tone--${tone}`)} role={tone === 'danger' ? 'alert' : 'status'}><div>{title && <div className="ui-alert__title">{title}</div>}{body && <div>{children}</div>}</div>{onDismiss && <IconButton label="Dismiss notification" onClick={onDismiss}><Icon icon={X} size="md" /></IconButton>}{timer && <span className="ui-alert__timer" aria-hidden="true" style={{ animationDuration: `${timer.duration}ms`, animationPlayState: timer.paused ? 'paused' : 'running' }} />}</div>;
 }
 /** `icon`: an optional static 32px mark over the title, muted. One action at most. */
 export function EmptyState({ title, description, action, icon, headingAs: Heading = 'h3' }: { title: string; description?: string; action?: ReactNode; icon?: LucideIcon; headingAs?: 'h1' | 'h3' }) {

@@ -258,8 +258,9 @@ function StepTip({ step, day }: { step: Step; day: string }) {
   // When: the exact UTC time of a single event (the column shows the time since the first), every time for repeats.
   if (step.events.length > 1) lines.push(step.events.map(event => stamp(event.at, day)).join(', '))
   else if (step.at) lines.push(`${date(step.at, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23', timeZone: 'UTC' })} UTC`)
-  // (A step whose name says it all, with nothing else to add, shows its name.)
-  return <span className="delivery-tip">{(lines.length ? lines : [name]).map((line, index) => <span key={index}>{line}</span>)}</span>
+  // A step whose name says it all has no tooltip: the name alone is the fact, and a tip repeating it would be empty noise.
+  if (!lines.length) return null
+  return <span className="delivery-tip">{lines.map((line, index) => <span key={index}>{line}</span>)}</span>
 }
 
 // Why it ended this way and what happens next, then the receiving server's own reply (`said`: only the reply). A reply
@@ -296,9 +297,10 @@ function Delivery({ email, vertical, why }: { email: Email; vertical: boolean; w
   if (vertical) {
     const start = Date.parse(steps.find(step => step.at)?.at ?? day)
     const rows = steps.map((step, index) => {
-      const name = nameOf(step)
+      const name = nameOf(step), tip = <StepTip step={step} day={day} />
+      const fact = <span className="delivery__fact" tabIndex={0}><span className="delivery__name">{name}{step.events.length > 1 && <span className="delivery__count"> {step.events.length}×</span>}</span></span>
       return { key: step.key, tone: toneOf(step.key), series: seriesOf[step.key],
-        label: <Tooltip content={<StepTip step={step} day={day} />}><span className="delivery__fact" tabIndex={0}><span className="delivery__name">{name}{step.events.length > 1 && <span className="delivery__count"> {step.events.length}×</span>}</span></span></Tooltip>,
+        label: tip ? <Tooltip content={tip}>{fact}</Tooltip> : fact,
         // A step with no time of its own (a status without its event) leaves the column empty rather than a bare dash.
         delta: !step.at || sends(step) ? '' : index === 0 ? <time dateTime={step.at}>{time(step.at)}</time> : `+${elapsed(Date.parse(step.at) - start)}` }
     })
@@ -312,17 +314,13 @@ function Delivery({ email, vertical, why }: { email: Email; vertical: boolean; w
   return <div className="delivery">
     <ol className="delivery__steps ui-scroll-fade" aria-label="Delivery">
       {steps.map((step, index) => {
-        const name = nameOf(step)
-        const at = times[index]
-        return <li key={step.key} className="delivery__step">
-          <Tooltip content={<StepTip step={step} day={day} />}>
-            <span className="delivery__fact" tabIndex={0}>
-              <span className={`delivery__dot ui-tone--${toneOf(step.key)}`} aria-hidden="true" />
-              <span className="delivery__name">{name}{step.events.length > 1 && <span className="delivery__count"> {step.events.length}×</span>}</span>
-              {at && <time className="delivery__time" dateTime={step.at}>{at}{index === lastShown && <span className="delivery__zone"> UTC</span>}</time>}
-            </span>
-          </Tooltip>
-        </li>
+        const name = nameOf(step), at = times[index], tip = <StepTip step={step} day={day} />
+        const fact = <span className="delivery__fact" tabIndex={0}>
+          <span className={`delivery__dot ui-tone--${toneOf(step.key)}`} aria-hidden="true" />
+          <span className="delivery__name">{name}{step.events.length > 1 && <span className="delivery__count"> {step.events.length}×</span>}</span>
+          {at && <time className="delivery__time" dateTime={step.at}>{at}{index === lastShown && <span className="delivery__zone"> UTC</span>}</time>}
+        </span>
+        return <li key={step.key} className="delivery__step">{tip ? <Tooltip content={tip}>{fact}</Tooltip> : fact}</li>
       })}
     </ol>
     {reason}
