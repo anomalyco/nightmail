@@ -39,6 +39,7 @@ import { CampaignSenderInput, SenderLines } from './CampaignSenderInput'
 import { AttachmentList, CampaignAttachments, type CampaignAttachmentsRef } from './CampaignAttachments'
 import { campaignVersion, useCampaignSync } from './useCampaignSync'
 import { ComposerSkeleton } from './skeletons'
+import { StaticEmailBody } from './composer-preview'
 import { composerLoading, invalidSender } from './copy'
 import { AddressList, PrivateAddress } from '../../components/PrivateAddress'
 import { localLabel, parseUtc, ScheduleField, scheduleError, utcLabel } from '../../components/ScheduleField'
@@ -511,7 +512,7 @@ function CampaignEditor({ initial, newsletter, fallbackRegion, preserveEditor }:
               <div><div className="campaign-compose-row"><label htmlFor="campaign-preview">Preview</label><Input ref={previewInput} id="campaign-preview" aria-label="Preview text" maxLength={200} placeholder="Shown after the subject" value={form.previewText} onChange={event => change('previewText', event.target.value)} disabled={controlsDisabled} /></div></div>
             </div>
           </div>
-          <ChunkFallback.Provider value={<ComposerSkeleton html={form.html} attachmentIds={form.attachments ?? []} />}><EmailComposer key={`${generation}.${rebased.body}`} ref={composer} personalize attachmentIds={form.attachments ?? []} knownAttachmentIds={[...seenAttachments.current]} initialHtml={form.html} disabled={controlsDisabled} onReady={handleComposerReady} onDirty={handleComposerDirty} onBusy={value => {busyRef.current = value || attachmentsBusy || guard.current || loadingLatest; setComposerBusy(value); if (value) markDirty()}} onAttach={() => {markDirty(); attachments.current?.open()}} /></ChunkFallback.Provider>
+          <ChunkFallback.Provider value={<ComposerSkeleton preview={<StaticEmailBody html={form.html} attachmentIds={form.attachments ?? []} />} />}><EmailComposer key={`${generation}.${rebased.body}`} ref={composer} personalize attachmentIds={form.attachments ?? []} knownAttachmentIds={[...seenAttachments.current]} initialHtml={form.html} disabled={controlsDisabled} onReady={handleComposerReady} onDirty={handleComposerDirty} onBusy={value => {busyRef.current = value || attachmentsBusy || guard.current || loadingLatest; setComposerBusy(value); if (value) markDirty()}} onAttach={() => {markDirty(); attachments.current?.open()}} /></ChunkFallback.Provider>
           <CampaignAttachments key={`attachments:${generation}`} ref={attachments} ids={form.attachments ?? []} persisted={form.draft?.attachments ?? []} body={form.draft?.html ?? form.html} shown={composerReady} onChange={ids => change('attachments', ids)} onBusy={value => {busyRef.current = value || guard.current || loadingLatest; setAttachmentsBusy(value)}} disabled={preparing || autosaving || saveMutation.isPending || composerBusy || loadingLatest || readOnly} />
           {/* Every contact has an email, so {{email}} needs no fallback and no row. */}
           {/* With the composer, like the attachments: before it, the rows would sit where the email is about to open. */}

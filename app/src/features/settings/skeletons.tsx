@@ -1,5 +1,5 @@
 import { Button, Checkbox, ControlSkeleton, FieldSkeleton, LoadingRegion, PageHeader, SectionHeader, Skeleton, SkeletonText, TableSkeleton, Tabs, type SkeletonColumn } from '../../components/ui'
-import { useRegion, useWorkspaceAccess } from '../../data/context'
+import { useRegion, useSession, useWorkspaceAccess } from '../../data/context'
 import { MailSection } from '../docs/mail-settings'
 import './settings.css'
 import './domain-records.css'
@@ -177,8 +177,11 @@ export function DomainDetailSkeleton() {
 }
 
 // SMTP & IMAP as it loads: both sections' settings (they come with the session, so they are the page's own) and the
-// app passwords table under IMAP's, so nothing moves when they arrive.
+// app passwords table under IMAP's, so nothing moves when they arrive. Without a mail gateway there is no such page, so
+// no skeleton either; a member gets the page's own locked note, never a flash of the hosts and settings before it.
 export function SmtpImapRouteSkeleton() {
+  const mailServers = useSession()?.identity?.mailServers, { canAdminister } = useWorkspaceAccess()
+  if (!mailServers || !canAdminister) return null
   return <LoadingRegion className="stack" label="Loading SMTP and IMAP">
     <PageHeader title="SMTP & IMAP" />
     <div className="keys-sections">

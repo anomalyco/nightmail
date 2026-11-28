@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from 'react'
 import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { rememberedPageSize } from '../lib/pagination'
+import { routeHandle } from '../lib/routes'
 import { useApi, useLogsVisibility, useRegion, useSession, useWorkspaceAccess } from './context'
 import { queries, type QueryDef } from './queries'
 import { firstOverview, overviewQuery } from '../features/inbound/overview'
@@ -13,13 +14,11 @@ import { issuesRequest, useNewsletters } from '../features/newsletters/shared'
 // A warmed result stays fresh this long, so repeated hovers and the idle sweep never refetch it.
 const FRESH = 30_000
 export const sidebarPaths = ['/overview', '/logs', '/receiving', '/campaigns', '/audience', '/domains', '/api-keys', '/smtp-imap', '/settings'] as const
-// Filled by App.tsx with each route's chunk preload.
-export const routeChunks: Record<string, () => Promise<unknown>> = {}
 
 // newsletters: whether the workspace has any (Campaigns then leaves their issues out).
 type Scope = { regionId: string; multiTenant: boolean; canAdminister: boolean; newsletters: boolean; logsVisibility: string | null; mailGateway: boolean }
 /** Preloads only the JS chunk for a route (no API requests): used by the idle sweep so opening one page never scans every other page's data. */
-export const preloadRouteChunk = (path: string) => routeChunks[path.startsWith('/newsletters/') ? '/newsletters' : path]?.().catch(() => {}) ?? Promise.resolve()
+export const preloadRouteChunk = (path: string) => routeHandle(path).handle.preload?.().catch(() => {}) ?? Promise.resolve()
 
 // The first screen of the page currently opening (cold load). Never runs multi-page loops.
 function firstScreen(path: string, { regionId, multiTenant, canAdminister, newsletters, logsVisibility, mailGateway }: Scope): QueryDef<unknown>[] {

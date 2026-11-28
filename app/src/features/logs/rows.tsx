@@ -4,7 +4,7 @@ import { PrivateAddress, Sender } from '../../components/PrivateAddress'
 import type { LogDirection, LogEntry } from '../../data/types'
 import { useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
-import { routeChunks, usePrefetchQueries } from '../../data/prefetch'
+import { preloadRouteChunk, usePrefetchQueries } from '../../data/prefetch'
 import { date, label } from '../../lib/format'
 import { receivedTo } from '../../lib/private-address'
 
@@ -31,7 +31,7 @@ export const isReceivedId = (id: string) => id.startsWith('msg_')
 export function useLogRowIntent() {
   const warm = usePrefetchQueries()
   const { canAdminister } = useWorkspaceAccess()
-  return (row: Pick<LogEntry, 'id'>) => { void routeChunks['/logs']?.().catch(() => {}); void warm([isReceivedId(row.id) ? queries.receivedEmail(row.id, canAdminister) : queries.email(row.id)]) }
+  return (row: Pick<LogEntry, 'id'>) => { void preloadRouteChunk('/logs'); void warm([isReceivedId(row.id) ? queries.receivedEmail(row.id, canAdminister) : queries.email(row.id)]) }
 }
 
 // A threaded row's message count, after its subject (the detail page lists them).

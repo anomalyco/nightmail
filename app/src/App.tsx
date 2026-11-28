@@ -6,12 +6,19 @@ import { Button, EmptyState } from './components/ui'
 import { HomePage, loadHome, useOnboardingStage, useSession } from './data/context'
 import { selectedWorkspace } from './data/live'
 import { dashboardLikelyReady, rememberDashboardReady } from './data/onboarding'
-import { routeChunks } from './data/prefetch'
 import { chunk, ChunkFallback } from './lib/preloadable'
-import { setRouteTable } from './lib/routes'
+import { routeHandle, setRouteTable } from './lib/routes'
+import { AudienceRouteSkeleton } from './features/audience/skeletons'
 import { composer } from './features/campaigns/composer-chunk'
-import { DocsStandalone, useDocsAudience } from './features/docs/frame'
+import { CampaignRouteSkeleton } from './features/campaigns/skeletons'
+import { DocsSkeleton, DocsStandalone, useDocsAudience } from './features/docs/frame'
 import { preloadFirstPicture } from './features/home/first-picture'
+import { ReceivingPageSkeleton, ReceivingRouteSkeleton } from './features/inbound/skeletons'
+import { isReceivedId } from './features/logs/rows'
+import { EmailDetailSkeleton, LogsRouteSkeleton } from './features/logs/skeletons'
+import { NewsletterRouteSkeleton } from './features/newsletters/skeletons'
+import { OverviewRouteSkeleton } from './features/overview/skeletons'
+import { SettingsRouteSkeleton, SmtpImapRouteSkeleton } from './features/settings/skeletons'
 const onboarding = chunk(() => import('./features/onboarding'))
 const overview = chunk(() => import('./features/overview'))
 const logs = chunk(() => import('./features/logs'))
@@ -21,6 +28,7 @@ const audience = chunk(() => import('./features/audience'))
 const settings = chunk(() => import('./features/settings'))
 const docs = chunk(() => import('./features/docs'))
 const inbound = chunk(() => import('./features/inbound'))
+const rituals = chunk(() => import('./features/inbound/rituals'))
 const operator = chunk(() => import('./features/operator'))
 const supportInbox = chunk(() => import('./features/support-inbox'))
 const supportAction = chunk(() => import('./features/support/actions'))
@@ -28,22 +36,12 @@ const legal = chunk(() => import('./features/legal'))
 const pricing = chunk(() => import('./features/pricing'))
 const supportContinue = chunk(() => import('./features/support/continue'))
 const connect = chunk(() => import('./features/connect'))
+// Staff pages' skeletons come with their own code, so no one else's first screen carries them.
+const operatorSkeletons = chunk(() => import('./features/operator/skeletons'))
+const supportSkeletons = chunk(() => import('./features/support-inbox/skeletons'))
 // Dev and VITE_DESIGN_SHEET=1 builds only (lib/design-sheet.ts). The test is written out here, not imported, so the
 // bundler sees a constant and leaves the chunk out of any other build.
 const DesignSheetPage = import.meta.env.DEV || import.meta.env.VITE_DESIGN_SHEET === '1' ? chunk(() => import('./features/design-sheet')).page(m => m.DesignSheetPage) : null
-const loadOnboarding = onboarding.preload
-const loadOverview = overview.preload
-const loadLogs = logs.preload
-const loadCampaigns = campaigns.preload
-const loadNewsletters = newsletters.preload
-const loadAudience = audience.preload
-const loadSettings = settings.preload
-const loadDocs = docs.preload
-const loadInbound = inbound.preload
-const loadOperator = operator.preload
-const loadSupportInbox = supportInbox.preload
-const loadLegal = legal.preload
-Object.assign(routeChunks, { '/overview': loadOverview, '/logs': loadLogs, '/receiving': loadInbound, '/campaigns': loadCampaigns, '/newsletters': loadNewsletters, '/audience': loadAudience, '/domains': loadSettings, '/api-keys': loadSettings, '/smtp-imap': loadSettings, '/settings': loadSettings, '/docs': loadDocs, '/operator': loadOperator, '/glass': loadOperator, '/support': loadSupportInbox, '/legal': loadLegal })
 const LogsPage = logs.page(m => m.LogsPage)
 const LogDetailPage = logs.page(m => m.LogDetailPage)
 const CampaignsPage = campaigns.page(m => m.CampaignsPage)
@@ -70,7 +68,7 @@ const McpApprovalPage = settings.page(m => m.McpApprovalPage)
 const WebhookDetailPage = settings.page(m => m.WebhookDetailPage)
 const DocsPage = docs.page(m => m.DocsPage)
 const InboundPage = inbound.page(m => m.InboundPage)
-const RulePage = chunk(()=>import('./features/inbound/rituals')).page(m=>m.RulePage)
+const RulePage = rituals.page(m => m.RulePage)
 const TracePage = inbound.page(m => m.TracePage)
 const RitualsRedirect = inbound.page(m => m.RitualsRedirect)
 const NewRulePage = inbound.page(m => m.NewRulePage)
@@ -102,38 +100,9 @@ const PricePage = pricing.page(m => m.PricePage)
 const SupportContinuePage = supportContinue.page(m => m.SupportContinuePage)
 const ConnectPage = connect.page(m => m.ConnectPage)
 
-// Preload the first screen's code alongside /v1/me. A workspace that may need onboarding waits instead.
-const noop = () => {}
-const initialPath = window.location.pathname
-if (initialPath === '/legal' || initialPath.startsWith('/legal/')) loadLegal().catch(noop)
-else if (/^\/(?:pricing|compare)(?:\/|$)/.test(initialPath)) pricing.preload().catch(noop)
-else if (initialPath.startsWith('/support/continue/')) supportContinue.preload().catch(noop)
-else if (initialPath === '/onboarding') loadOnboarding().catch(noop)
-else if (initialPath === '/connect') connect.preload().catch(noop)
-// The docs are public: signed out or in, their code loads alongside /v1/me.
-else if (['/docs', '/developer'].some(path => initialPath.startsWith(path))) loadDocs().catch(noop)
-// "/" is the homepage, signed in or out, on a hosted installation: a remembered workspace means one, and so does a first
-// visit. A self-hosted installation remembered as ready has no homepage: "/" opens Overview there.
-// Its first picture starts loading with its code.
-else if (initialPath === '/') { if (selectedWorkspace() || !dashboardLikelyReady(null)) { preloadFirstPicture(); loadHome().catch(noop) } else loadOverview().catch(noop) }
-// The Logs chunk is safe to warm before /v1/me even in a fresh browser; its reads still wait for the signed-in shell.
-else if (/^\/logs\/?$/.test(initialPath)) loadLogs().catch(noop)
-else if (!dashboardLikelyReady(selectedWorkspace())) { /* /v1/me decides between onboarding and the dashboard. */ }
-else if (initialPath === '/overview') loadOverview().catch(noop)
-else if (initialPath.startsWith('/logs')) loadLogs().catch(noop)
-else if (['/campaigns', '/templates'].some(path => initialPath.startsWith(path))) {
-  loadCampaigns().catch(noop)
-  // The composer is the largest chunk; an editor route fetches it alongside the campaigns chunk, not after it.
-  if (/^\/campaigns\/(?:new|templates\/[^/]+|[^/]+\/edit)\/?$/.test(initialPath)) composer.preload().catch(noop)
-}
-else if (initialPath.startsWith('/newsletters')) loadNewsletters().catch(noop)
-else if (['/audience', '/contacts', '/lists', '/segments'].some(path => initialPath.startsWith(path))) loadAudience().catch(noop)
-else if (['/api-keys', '/smtp-imap', '/domains', '/settings'].some(path => initialPath.startsWith(path))) loadSettings().catch(noop)
-else if (['/receiving', '/inbound', '/mailboxes'].some(path => initialPath.startsWith(path))) loadInbound().catch(noop)
-else if (initialPath.startsWith('/operator') || initialPath === '/glass') loadOperator().catch(noop)
-// A change support proposed (its emailed link) opens over Overview.
-else if (initialPath.startsWith('/support/actions/')) { loadOverview().catch(noop); supportAction.preload().catch(noop) }
-else if (initialPath === '/support' || initialPath.startsWith('/support/')) loadSupportInbox().catch(noop)
+const OperatorSkeleton = operatorSkeletons.page(m => m.OperatorRouteSkeleton)
+const GlassSkeleton = operatorSkeletons.page(m => m.GlassRouteSkeleton)
+const SupportSkeleton = supportSkeletons.page(m => m.SupportRouteSkeleton)
 
 class AppErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false }
@@ -169,11 +138,13 @@ function RootPage() {
   if (!hosted) return <Navigate replace to={{ pathname: '/overview', search: location.search, hash: location.hash }} />
   return <ChunkFallback.Provider value={<BootLoader />}><HomePage start={{ signedIn: true }} /></ChunkFallback.Provider>
 }
-// Former sections that were folded into another page keep their links working, query and anchor included.
+// Former sections that were folded into another page keep their links working: the old link's query joins the new
+// address's, and its anchor applies unless the new address names its own.
 function Moved({ to }: { to: (params: Readonly<Params>) => string }) {
   const location = useLocation()
-  const target = to(useParams())
-  return <Navigate replace to={`${target}${location.search}${target.includes('#') ? '' : location.hash}`} />
+  const [path = '', hash] = to(useParams()).split('#'), [pathname, query] = path.split('?')
+  const search = [query, location.search.slice(1)].filter(Boolean).join('&')
+  return <Navigate replace to={{ pathname, search: search && `?${search}`, hash: hash ? `#${hash}` : location.hash }} />
 }
 const id = (params: Readonly<Params>) => encodeURIComponent(params.id ?? '')
 function useRememberDashboardReady() {
@@ -185,31 +156,102 @@ export function App() {
   useRememberDashboardReady()
   return <AppErrorBoundary><Routes>{routes}</Routes></AppErrorBoundary>
 }
+// A route's handle (lib/routes.ts RouteHandle) names the code its page needs and the shell's skeleton while that loads.
+const load = (...chunks: { preload: () => Promise<unknown> }[]) => () => Promise.all(chunks.map(c => c.preload()))
+const booting = (page: ReactNode) => <ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}>{page}</Suspense></ChunkFallback.Provider>
+const rules = '/receiving?tab=rules'
 // The route table, also given to analytics (a page view names its template) and to the signed-out pages (lib/routes.ts).
-const routes = <><Route path="legal/:doc?" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><LegalPage /></Suspense></ChunkFallback.Provider>} /><Route path="pricing" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="pricing/:vendor" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="alternatives/:vendor" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="email-for-ai-agents" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="cheapest-email-api" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="free-email-api" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="compare" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="compare/:vendor" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><PricePage /></Suspense></ChunkFallback.Provider>} /><Route path="onboarding" element={<OnboardingRoute />} /><Route path="connect" element={<ChunkFallback.Provider value={<BootLoader />}><Suspense fallback={<BootLoader />}><ConnectPage /></Suspense></ChunkFallback.Provider>} /><Route path="support/continue/:id/:message" element={<ChunkFallback.Provider value={<BootLoader />}><SupportContinuePage /></ChunkFallback.Provider>} /><Route index element={<RootPage />} />{DesignSheetPage && <Route path="_design-sheet" element={<ChunkFallback.Provider value={<BootLoader />}><DesignSheetPage /></ChunkFallback.Provider>} />}<Route element={<DashboardGate />}>
-    <Route path="overview" element={<OverviewPage />} />
-    <Route path="logs" element={<LogsPage />} /><Route path="logs/received/:id" element={<Moved to={params => `/logs/${encodeURIComponent(params.id ?? '')}`} />} /><Route path="logs/:id" element={<LogDetailPage />} />
-    <Route path="receiving/endpoints" element={<Navigate replace to="/receiving?tab=destinations" />}/><Route path="receiving/rituals/*" element={<RitualsRedirect />} /><Route path="receiving/rules/new" element={<NewRulePage />} /><Route path="receiving/rules/new/script" element={<RulePage />} /><Route path="receiving/rules/new/:recipe" element={<NewRecipeRoute />} /><Route path="receiving/rules/:key" element={<RulePage />} /><Route path="receiving/rules/:key/code" element={<Moved to={params => `/receiving/rules/${encodeURIComponent(params.key ?? '')}`} />} /><Route path="receiving/rules" element={<Navigate replace to="/receiving?tab=rules" />} /><Route path="receiving/routing" element={<Navigate replace to="/receiving" />} /><Route path="receiving/trace" element={<TracePage />} /><Route path="receiving" element={<ReceivingPage />} /><Route path="receiving/inbox" element={<InboundPage />} /><Route path="receiving/addresses/:id" element={<InboundAddressDetailPage />} /><Route path="receiving/webhooks" element={<WebhooksListRedirect />} /><Route path="receiving/webhooks/:id" element={<InboundWebhookDetailPage />} />
-    <Route path="receiving/addresses" element={<Moved to={() => '/receiving'} />} /><Route path="inbound" element={<Moved to={() => '/logs?view=received'} />} /><Route path="inbound/addresses" element={<Moved to={() => '/receiving'} />} /><Route path="inbound/addresses/:id" element={<Moved to={params => `/receiving/addresses/${id(params)}`} />} /><Route path="inbound/webhooks" element={<WebhooksListRedirect />} /><Route path="inbound/webhooks/:id" element={<Moved to={params => `/receiving/webhooks/${id(params)}`} />} />
-    <Route path="receiving/inboxes" element={<AgentInboxesPage />} /><Route path="receiving/inboxes/:id" element={<AgentInboxPage />} />
-    <Route path="mailboxes" element={<LegacyMailboxesRedirect />} /><Route path="mailboxes/webhooks" element={<LegacyMailboxWebhooksRedirect />} /><Route path="mailboxes/webhooks/:id" element={<LegacyMailboxWebhookRedirect />} /><Route path="mailboxes/:id" element={<LegacyMailboxRedirect />} />
-    <Route path="campaigns" element={<CampaignsPage />} /><Route path="campaigns/new" element={<CampaignEditorPage />} /><Route path="campaigns/:id/edit" element={<CampaignEditorPage />} /><Route path="campaigns/:id/review" element={<CampaignReviewPage />} />
-    <Route path="campaigns/templates" element={<TemplatesPage />} /><Route path="campaigns/templates/:id" element={<TemplateEditorPage />} />
-    <Route path="newsletters" element={<NewslettersPage />} /><Route path="newsletters/new" element={<NewNewsletterPage />} /><Route path="newsletters/:id" element={<NewsletterPage />} />
-    <Route path="audience" element={<ContactsPage />} /><Route path="audience/contacts/:id" element={<ContactDetailPage />} />
-    <Route path="audience/lists" element={<ListsPage />} /><Route path="audience/lists/:id" element={<ListDetailPage />} />
-    <Route path="audience/segments" element={<SegmentsPage />} /><Route path="audience/segments/new" element={<SegmentEditorPage />} /><Route path="audience/segments/:id" element={<SegmentEditorPage />} /><Route path="audience/topics" element={<TopicsPage />} />
-    <Route path="api-keys" element={<ApiKeysPage />} /><Route path="smtp-imap" element={<SmtpImapPage />} /><Route path="domains" element={<DomainsPage />} /><Route path="domains/:id" element={<DomainDetailPage />} />
-    <Route path="settings" element={<SettingsPage />} /><Route path="settings/mcp/:id" element={<McpApprovalPage />} /><Route path="settings/webhooks/new" element={<WebhookDetailPage />} /><Route path="settings/webhooks/:id" element={<WebhookDetailPage />} />
-    <Route path="templates" element={<Moved to={() => '/campaigns/templates'} />} /><Route path="templates/:id" element={<Moved to={params => `/campaigns/templates/${id(params)}`} />} />
-    <Route path="contacts" element={<Moved to={() => '/audience'} />} /><Route path="contacts/:id" element={<Moved to={params => `/audience/contacts/${id(params)}`} />} />
-    <Route path="lists" element={<Moved to={() => '/audience/lists'} />} /><Route path="lists/:id" element={<Moved to={params => `/audience/lists/${id(params)}`} />} />
-    <Route path="segments" element={<Moved to={() => '/audience/segments'} />} /><Route path="segments/:id" element={<Moved to={params => `/audience/segments/${id(params)}`} />} />
-    <Route path="settings/webhooks" element={<Moved to={() => '/settings#webhooks'} />} /><Route path="settings/workspace" element={<Moved to={() => '/settings#workspace'} />} /><Route path="settings/account" element={<Moved to={() => '/settings#account'} />} />
-    <Route path="docs/*" element={<DocsPage />} /><Route path="developer" element={<Moved to={() => '/docs'} />} />
-    <Route path="operator" element={<OperatorPage />} /><Route path="operator/notes" element={<OperatorNotesPage />} /><Route path="operator/agents" element={<OperatorAgentsPage />} /><Route path="operator/workspaces/:id" element={<OperatorWorkspacePage />} /><Route path="operator/abuse/:id" element={<OperatorClusterPage />} /><Route path="glass" element={<GlassPage />} />
-    <Route path="support" element={<SupportInboxPage />} /><Route path="support/:id" element={<SupportConversationPage />} />
-    <Route path="support/actions/:id" element={<><OverviewPage /><ChunkFallback.Provider value={null}><SupportActionDialog /></ChunkFallback.Provider></>} />
+const routes = <>
+  <Route handle={{ preload: load(legal), early: true }} path="legal/:doc?" element={booting(<LegalPage />)} />
+  <Route handle={{ preload: load(pricing), early: true }}>
+    {['pricing', 'pricing/:vendor', 'alternatives/:vendor', 'email-for-ai-agents', 'cheapest-email-api', 'free-email-api', 'compare', 'compare/:vendor'].map(path => <Route key={path} path={path} element={booting(<PricePage />)} />)}
+  </Route>
+  <Route handle={{ preload: load(onboarding), early: true }} path="onboarding" element={<OnboardingRoute />} />
+  <Route handle={{ preload: load(connect), early: true }} path="connect" element={booting(<ConnectPage />)} />
+  <Route handle={{ preload: load(supportContinue), early: true }} path="support/continue/:id/:message" element={<ChunkFallback.Provider value={<BootLoader />}><SupportContinuePage /></ChunkFallback.Provider>} />
+  <Route index element={<RootPage />} />
+  {DesignSheetPage && <Route path="_design-sheet" element={<ChunkFallback.Provider value={<BootLoader />}><DesignSheetPage /></ChunkFallback.Provider>} />}
+  <Route element={<DashboardGate />}>
+    <Route handle={{ preload: load(overview), skeleton: <OverviewRouteSkeleton /> }} path="overview" element={<OverviewPage />} />
+    <Route handle={{ preload: load(logs), skeleton: (params: Params) => <EmailDetailSkeleton kind={isReceivedId(params.id ?? '') ? 'received' : 'sent'} /> }}>
+      {/* The list's code is safe to warm before /v1/me even in a fresh browser; its reads still wait for the signed-in shell. */}
+      <Route handle={{ early: true, skeleton: <LogsRouteSkeleton /> }} path="logs" element={<LogsPage />} />
+      <Route path="logs/received/:id" element={<Moved to={params => `/logs/${id(params)}`} />} /><Route path="logs/:id" element={<LogDetailPage />} />
+    </Route>
+    <Route handle={{ preload: load(inbound) }}>
+      <Route handle={{ skeleton: <ReceivingRouteSkeleton /> }} path="receiving" element={<ReceivingPage />} />
+      <Route path="receiving/endpoints" element={<Navigate replace to="/receiving?tab=destinations" />} /><Route path="receiving/rituals/*" element={<RitualsRedirect />} />
+      <Route handle={{ skeleton: <ReceivingPageSkeleton title="New rule" backTo={rules} /> }} path="receiving/rules/new" element={<NewRulePage />} />
+      <Route handle={{ skeleton: <ReceivingPageSkeleton title={200} backTo="/receiving/rules/new" /> }} path="receiving/rules/new/:recipe" element={<NewRecipeRoute />} />
+      {/* The rule editor is its own chunk, fetched alongside Mail routing's on a cold load, not after it. */}
+      <Route handle={{ preload: load(inbound, rituals), skeleton: <ReceivingPageSkeleton title="New rule" backTo={rules} /> }} path="receiving/rules/new/script" element={<RulePage />} />
+      <Route handle={{ preload: load(inbound, rituals), skeleton: <ReceivingPageSkeleton title={200} backTo={rules} /> }} path="receiving/rules/:key" element={<RulePage />} />
+      <Route path="receiving/rules/:key/code" element={<Moved to={params => `/receiving/rules/${encodeURIComponent(params.key ?? '')}`} />} /><Route path="receiving/rules" element={<Navigate replace to={rules} />} /><Route path="receiving/routing" element={<Navigate replace to="/receiving" />} />
+      <Route path="receiving/trace" element={<TracePage />} /><Route path="receiving/inbox" element={<InboundPage />} />
+      <Route handle={{ skeleton: <ReceivingPageSkeleton title={240} backTo="/receiving" /> }} path="receiving/addresses/:id" element={<InboundAddressDetailPage />} />
+      <Route path="receiving/webhooks" element={<WebhooksListRedirect />} />
+      <Route handle={{ skeleton: <ReceivingPageSkeleton title={220} backTo="/receiving?tab=destinations" /> }} path="receiving/webhooks/:id" element={<InboundWebhookDetailPage />} />
+      <Route handle={{ skeleton: <ReceivingPageSkeleton title="Agent inboxes" backTo="/receiving?kind=inbox" /> }} path="receiving/inboxes" element={<AgentInboxesPage />} />
+      <Route handle={{ skeleton: <ReceivingPageSkeleton title={260} backTo="/receiving/inboxes" /> }} path="receiving/inboxes/:id" element={<AgentInboxPage />} />
+      <Route path="receiving/addresses" element={<Moved to={() => '/receiving'} />} /><Route path="inbound" element={<Moved to={() => '/logs?view=received'} />} /><Route path="inbound/addresses" element={<Moved to={() => '/receiving'} />} /><Route path="inbound/addresses/:id" element={<Moved to={params => `/receiving/addresses/${id(params)}`} />} /><Route path="inbound/webhooks" element={<WebhooksListRedirect />} /><Route path="inbound/webhooks/:id" element={<Moved to={params => `/receiving/webhooks/${id(params)}`} />} />
+      <Route path="mailboxes" element={<LegacyMailboxesRedirect />} /><Route path="mailboxes/webhooks" element={<LegacyMailboxWebhooksRedirect />} /><Route path="mailboxes/webhooks/:id" element={<LegacyMailboxWebhookRedirect />} /><Route path="mailboxes/:id" element={<LegacyMailboxRedirect />} />
+    </Route>
+    <Route handle={{ preload: load(campaigns) }}>
+      <Route handle={{ skeleton: <CampaignRouteSkeleton kind="list" /> }} path="campaigns" element={<CampaignsPage />} />
+      {/* The composer is the largest chunk; an editor route fetches it alongside the campaigns chunk, not after it. */}
+      <Route handle={{ preload: load(campaigns, composer), skeleton: <CampaignRouteSkeleton kind="editor" isNew /> }} path="campaigns/new" element={<CampaignEditorPage />} />
+      <Route handle={{ preload: load(campaigns, composer), skeleton: <CampaignRouteSkeleton kind="editor" /> }} path="campaigns/:id/edit" element={<CampaignEditorPage />} />
+      <Route handle={{ skeleton: <CampaignRouteSkeleton kind="review" /> }} path="campaigns/:id/review" element={<CampaignReviewPage />} />
+      <Route handle={{ skeleton: <CampaignRouteSkeleton kind="templates" /> }} path="campaigns/templates" element={<TemplatesPage />} />
+      <Route handle={{ preload: load(campaigns, composer), skeleton: <CampaignRouteSkeleton kind="template" /> }} path="campaigns/templates/:id" element={<TemplateEditorPage />} />
+      <Route path="templates" element={<Moved to={() => '/campaigns/templates'} />} /><Route path="templates/:id" element={<Moved to={params => `/campaigns/templates/${id(params)}`} />} />
+    </Route>
+    <Route handle={{ preload: load(newsletters), skeleton: (params: Params) => <NewsletterRouteSkeleton id={params.id} /> }}>
+      <Route path="newsletters" element={<NewslettersPage />} /><Route handle={{ skeleton: <NewsletterRouteSkeleton id="new" /> }} path="newsletters/new" element={<NewNewsletterPage />} /><Route path="newsletters/:id" element={<NewsletterPage />} />
+    </Route>
+    <Route handle={{ preload: load(audience) }}>
+      <Route handle={{ skeleton: <AudienceRouteSkeleton kind="contacts" /> }} path="audience" element={<ContactsPage />} /><Route handle={{ skeleton: <AudienceRouteSkeleton kind="contact" /> }} path="audience/contacts/:id" element={<ContactDetailPage />} />
+      <Route handle={{ skeleton: <AudienceRouteSkeleton kind="lists" /> }} path="audience/lists" element={<ListsPage />} /><Route handle={{ skeleton: <AudienceRouteSkeleton kind="list" /> }} path="audience/lists/:id" element={<ListDetailPage />} />
+      <Route handle={{ skeleton: <AudienceRouteSkeleton kind="segments" /> }} path="audience/segments" element={<SegmentsPage />} />
+      <Route handle={{ skeleton: <AudienceRouteSkeleton kind="segment" isNew /> }} path="audience/segments/new" element={<SegmentEditorPage />} /><Route handle={{ skeleton: <AudienceRouteSkeleton kind="segment" /> }} path="audience/segments/:id" element={<SegmentEditorPage />} />
+      <Route handle={{ skeleton: <AudienceRouteSkeleton kind="topics" /> }} path="audience/topics" element={<TopicsPage />} />
+      <Route path="contacts" element={<Moved to={() => '/audience'} />} /><Route path="contacts/:id" element={<Moved to={params => `/audience/contacts/${id(params)}`} />} />
+      <Route path="lists" element={<Moved to={() => '/audience/lists'} />} /><Route path="lists/:id" element={<Moved to={params => `/audience/lists/${id(params)}`} />} />
+      <Route path="segments" element={<Moved to={() => '/audience/segments'} />} /><Route path="segments/:id" element={<Moved to={params => `/audience/segments/${id(params)}`} />} />
+    </Route>
+    <Route handle={{ preload: load(settings) }}>
+      <Route handle={{ skeleton: <SettingsRouteSkeleton kind="keys" /> }} path="api-keys" element={<ApiKeysPage />} /><Route handle={{ skeleton: <SmtpImapRouteSkeleton /> }} path="smtp-imap" element={<SmtpImapPage />} />
+      <Route handle={{ skeleton: <SettingsRouteSkeleton kind="domains" /> }} path="domains" element={<DomainsPage />} /><Route handle={{ skeleton: <SettingsRouteSkeleton kind="domain" /> }} path="domains/:id" element={<DomainDetailPage />} />
+      <Route handle={{ skeleton: <SettingsRouteSkeleton kind="settings" /> }}>
+        <Route path="settings" element={<SettingsPage />} /><Route path="settings/mcp/:id" element={<McpApprovalPage />} />
+        <Route handle={{ skeleton: <SettingsRouteSkeleton kind="webhook" isNew /> }} path="settings/webhooks/new" element={<WebhookDetailPage />} /><Route handle={{ skeleton: <SettingsRouteSkeleton kind="webhook" /> }} path="settings/webhooks/:id" element={<WebhookDetailPage />} />
+        <Route path="settings/webhooks" element={<Moved to={() => '/settings#webhooks'} />} /><Route path="settings/workspace" element={<Moved to={() => '/settings#workspace'} />} /><Route path="settings/account" element={<Moved to={() => '/settings#account'} />} />
+      </Route>
+    </Route>
+    {/* The docs are public: signed out or in, their code loads alongside /v1/me. */}
+    <Route handle={{ preload: load(docs), early: true, skeleton: <DocsSkeleton /> }}>
+      <Route path="docs/*" element={<DocsPage />} /><Route path="developer" element={<Moved to={() => '/docs'} />} />
+    </Route>
+    <Route handle={{ preload: load(operator, operatorSkeletons), skeleton: <OperatorSkeleton /> }}>
+      <Route path="operator" element={<OperatorPage />} /><Route path="operator/notes" element={<OperatorNotesPage />} /><Route path="operator/agents" element={<OperatorAgentsPage />} /><Route path="operator/workspaces/:id" element={<OperatorWorkspacePage />} /><Route path="operator/abuse/:id" element={<OperatorClusterPage />} />
+      <Route handle={{ skeleton: <GlassSkeleton /> }} path="glass" element={<GlassPage />} />
+    </Route>
+    <Route handle={{ preload: load(supportInbox, supportSkeletons), skeleton: <SupportSkeleton /> }}>
+      <Route path="support" element={<SupportInboxPage />} /><Route path="support/:id" element={<SupportConversationPage />} />
+    </Route>
+    {/* A change support proposed (its emailed link) opens over Overview. */}
+    <Route handle={{ preload: load(overview, supportAction), skeleton: <OverviewRouteSkeleton /> }} path="support/actions/:id" element={<><OverviewPage /><ChunkFallback.Provider value={null}><SupportActionDialog /></ChunkFallback.Provider></>} />
     <Route path="*" element={<EmptyState headingAs="h1" title="Page not found" action={<Link to="/overview">Return to overview</Link>} />} />
-  </Route></>
+  </Route>
+</>
 setRouteTable(createRoutesFromChildren(routes))
+
+// Preload the first screen's code alongside /v1/me. A workspace that may need onboarding waits for /v1/me, unless the
+// route's code loads early.
+const noop = () => {}
+const initialPath = window.location.pathname
+// "/" is the homepage, signed in or out, on a hosted installation: a remembered workspace means one, and so does a first
+// visit. A self-hosted installation remembered as ready has no homepage: "/" opens Overview there.
+// Its first picture starts loading with its code.
+if (initialPath === '/') { if (selectedWorkspace() || !dashboardLikelyReady(null)) { preloadFirstPicture(); loadHome().catch(noop) } else overview.preload().catch(noop) }
+else { const { handle } = routeHandle(initialPath); if (handle.early || dashboardLikelyReady(selectedWorkspace())) handle.preload?.().catch(noop) }

@@ -16,6 +16,7 @@ import { composer as composerChunk, EmailComposer } from './composer-chunk'
 import { queries } from '../../data/queries'
 import { ChunkFallback } from '../../lib/preloadable'
 import { CampaignRouteSkeleton, ComposerSkeleton, templateColumns } from './skeletons'
+import { StaticEmailBody } from './composer-preview'
 import { RowProblem } from './steps'
 import { CampaignsHeader } from './header'
 import { publishFirst } from './copy'
@@ -222,7 +223,7 @@ function TemplateEditor({ initial }: {initial: CampaignTemplate}) {
         <div className="campaign-compose-row"><label htmlFor="template-reply">Reply to</label><Input id="template-reply" type="text" inputMode="email" autoCapitalize="none" spellCheck={false} placeholder="reply@example.com" value={replyToText} disabled={archived} aria-invalid={Boolean(replyToValidation) || undefined} aria-describedby={replyToValidation ? 'template-reply-error' : undefined} onChange={event => { setReplyToText(event.target.value); change('replyTo', replyToAddresses(event.target.value)) }} /></div>
         <RowProblem id="template-reply-error" message={replyToValidation} />
       </div>
-      <ChunkFallback.Provider value={<ComposerSkeleton html={draft.html ?? ''} attachmentIds={draft.attachments} kind="templates" />}><EmailComposer ref={composer} personalize attachmentApi={api.templateAssets} attachmentIds={draft.attachments} initialHtml={draft.html ?? ''} disabled={archived} onReady={() => setReady(true)} onDirty={changed} onBusy={setComposerBusy} onAttach={() => attachments.current?.open()} /></ChunkFallback.Provider>
+      <ChunkFallback.Provider value={<ComposerSkeleton preview={<StaticEmailBody html={draft.html ?? ''} attachmentIds={draft.attachments} kind="templates" />} />}><EmailComposer ref={composer} personalize attachmentApi={api.templateAssets} attachmentIds={draft.attachments} initialHtml={draft.html ?? ''} disabled={archived} onReady={() => setReady(true)} onDirty={changed} onBusy={setComposerBusy} onAttach={() => attachments.current?.open()} /></ChunkFallback.Provider>
       <CampaignAttachments ref={attachments} attachmentApi={api.templateAssets} ids={draft.attachments} persisted={template.draft.attachments} body={template.draft.html ?? ''} shown={ready} onChange={ids => change('attachments', ids)} onBusy={setAssetBusy} disabled={archived || saving || composerBusy} />
     </div></div></section>
     {leaveGuard}
