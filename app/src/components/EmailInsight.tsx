@@ -135,7 +135,7 @@ export function ChecksChip({ check, onOpen }: { check: Check; onOpen: (opener: H
 function Categories({ report }: { report: SendabilityReport }) {
   return <ul className="ei-categories" aria-label="Scores by category">{report.categories.map(category => <li key={category.id}>
     <span className="ei-categories__label">{categoryLabel[category.id]}</span>
-    <span className="ei-categories__value">{category.weight ? category.score : <Tooltip content="Not scored: no evidence yet, so it doesn’t count."><span tabIndex={0} aria-label="Not scored">—</span></Tooltip>}</span>
+    <span className="ei-categories__value">{category.weight ? category.score : <Tooltip content="Not scored: no evidence yet."><span tabIndex={0} aria-label="Not scored">—</span></Tooltip>}</span>
     <span className="ei-bar" aria-hidden="true"><span style={{ transform: `scaleX(${category.weight ? category.score / 100 : 0})` }} /></span>
   </li>)}</ul>
 }

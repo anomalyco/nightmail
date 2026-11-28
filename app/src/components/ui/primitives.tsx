@@ -387,7 +387,7 @@ const notFound = (error: unknown) => error instanceof Error && (('status' in err
 export function ErrorState({ error, onRetry }: { error: unknown; onRetry?: () => void }) {
   // Too broad a read fails the same way again: one calm line asks for narrower filters, with no retry.
   if (error instanceof ApiError && error.code === tooBroadCode) return <div className="ui-error-state"><Alert tone="neutral"><span>{error.message}</span></Alert></div>;
-  if (permissionError(error)) return <div className="ui-error-state"><Alert tone="neutral" title="Owners and admins only"><span>{error instanceof ApiError ? error.message : 'Only workspace owners and admins can open this.'}</span></Alert></div>;
+  if (permissionError(error)) return <div className="ui-error-state"><Alert tone="neutral" title="Owners and admins only">{error instanceof ApiError ? error.message : null}</Alert></div>;
   return <div className="ui-error-state"><Alert tone="danger" title="Couldn’t load this content"><ErrorText error={error} />{onRetry && !notFound(error) && <div className="ui-error-state__retry"><Button onClick={onRetry}>Try again</Button></div>}</Alert></div>;
 }
 type ToastTone = 'success' | 'error' | 'info';

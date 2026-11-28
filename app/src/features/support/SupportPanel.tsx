@@ -276,7 +276,7 @@ function ConsentCard({ part, closed, onDecide }: { part: Extract<Part, { kind: '
         <Button size="sm" disabled={decided || closed || part.state === 'allowing'} tabIndex={decided ? -1 : undefined} onClick={() => onDecide('deny')}>Not now</Button>
       </div>
       <p className="support-card__resolved" data-active={decided || undefined} data-decision={decided ? part.state : undefined} aria-hidden={!decided || undefined}>
-        {part.state === 'deny' ? `Not shared. ${productName} support won’t read your emails.` : <><Check size={14} strokeWidth={2.5} aria-hidden="true" />Allowed for this conversation</>}
+        {part.state === 'deny' ? 'Not shared.' : <><Check size={14} strokeWidth={2.5} aria-hidden="true" />Allowed for this conversation</>}
       </p>
     </div>
   </div>
@@ -346,11 +346,11 @@ function InlineStatus({ state, store }: { state: ChatState; store: SupportStore 
   const line = (tone: 'warning' | 'danger', text: ReactNode, action?: ReactNode) => <div className="support-inline" data-tone={tone}><span className="support-inline__dot" aria-hidden="true" /><span>{text}</span>{action}</div>
   // A message that couldn't be filed: past the hour's limit (it is back in the message box), or Nightmail out of reach.
   if (state.fileProblem === 'capped') return line('warning', 'That’s the limit for this hour. Your earlier messages are with our team.')
-  if (state.fileProblem === 'capped_first') return line('warning', 'That’s the limit for this hour. Your message is kept in the box.')
+  if (state.fileProblem === 'capped_first') return line('warning', 'That’s the limit for this hour.')
   if (state.fileProblem === 'waiting') return line('warning', 'Can’t reach us right now. Your message is kept and goes as soon as it can.')
   // Once something is with the team, its line says so; until then, say what sending does while the chat is down.
   if (state.ticket && down(state)) return null
-  if (state.connection === 'unavailable') return line('warning', 'Chat isn’t available right now. What you send is filed as a ticket.')
+  if (state.connection === 'unavailable') return line('warning', 'What you send is filed as a ticket.')
   // A lost connection with a message being answered: the message says "Working on it…" and the header the reconnecting.
   if (state.connection === 'offline') return state.messages.some(message => message.streaming || message.local) ? null
     : line('warning', `Reconnecting to ${productName} support.`, <Button variant="ghost" size="sm" onClick={() => store.reconnect()}>Try now</Button>)
@@ -371,7 +371,6 @@ function Composer({ state, store, input, busy, canAttach }: { state: ChatState; 
   // The box grows with what is typed, up to six lines, then scrolls.
   useLayoutEffect(() => { const el = input.current; if (!el) return; el.style.height = 'auto'; el.style.height = `${Math.min(el.scrollHeight, 132)}px` }, [state.draft, placeholder])
   if (state.closed) return <div className="support-composer support-composer--closed">
-    <span>This conversation ended.</span>
     <Button size="sm" onClick={() => store.restart()}>Start a new conversation</Button>
   </div>
   // Open for typing and sending from the moment the panel opens: what is sent before the conversation is connected goes

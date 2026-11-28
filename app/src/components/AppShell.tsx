@@ -370,7 +370,7 @@ class PageErrorBoundary extends Component<{ resetKey: string; children: ReactNod
   componentDidUpdate(previous: { resetKey: string }) { if (this.state.failed && previous.resetKey !== this.props.resetKey) this.setState({ failed: false }) }
   render() {
     if (!this.state.failed) return this.props.children
-    return <EmptyState headingAs="h1" title="This page couldn’t load" description="Unsaved changes on it may be lost." action={<div className="cluster"><Button onClick={() => this.setState({ failed: false })}>Try again</Button><Link to="/overview">Return to overview</Link></div>} />
+    return <EmptyState headingAs="h1" title="This page couldn’t load" action={<div className="cluster"><Button onClick={() => this.setState({ failed: false })}>Try again</Button><Link to="/overview">Return to overview</Link></div>} />
   }
 }
 
