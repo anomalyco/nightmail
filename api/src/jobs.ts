@@ -131,6 +131,9 @@ export async function processJobs(runtime: Runtime, handlers: JobHandlerResolver
   type Claimed = { id: string; workspace_id: string; type: string; payload: Record<string, unknown>; attempts: number; lease_fence: string; webhook: ClaimedWebhook | null;ingest:IngestInput|null;delete_binding:import('./provider-credentials.js').ReadyConnection|null };
   const jobFence = (job: Claimed) => and(eq(jobs.id, job.id), eq(jobs.attempts, job.attempts), eq(jobs.status, 'running'), sql`${jobs.leaseUntil}=${job.lease_fence}::timestamptz`, typeof job.payload.run === 'string' ? sql`${jobs.payload}->>'run' = ${job.payload.run}` : undefined);
   const stripLoadFailures = (payload: Record<string, unknown>) => '_loadFailures' in payload ? (() => { const { _loadFailures: _, ...rest } = payload; return rest; })() : payload;
+  const complete = (job: Claimed, payload: Record<string, unknown>) => runtime.db.update(jobs).set({ status: 'completed', leaseUntil: null, lastError: null, ...(payload !== job.payload ? { payload } : {}) }).where(jobFence(job));
+  // A handler's records (recordWithSettlement) commit only with its job's lease-fenced settlement, as CTEs that see it (settled).
+  const withRecords = (update: SQLWrapper, records: SQL | undefined) => records ? sql`WITH settled AS (${update.getSQL()} RETURNING id), ${records} SELECT 1` : update.getSQL();
   const writeJob = async (job: Claimed, started: number, statement: SQL) => {
     if (job.type.startsWith('abuse.stage.')) return (await import('./abuse.js')).settleStage(runtime,job.type,started,statement);
     return runtime.db.execute(statement);
@@ -183,7 +186,7 @@ export async function processJobs(runtime: Runtime, handlers: JobHandlerResolver
     let records: SQL | undefined, settling = false;
     const settle = (update: SQLWrapper) => {
       settling = true;
-      return writeJob(job,jobStarted,records ? sql`WITH settled AS (${update.getSQL()} RETURNING id), ${records} SELECT 1` : update.getSQL());
+      return writeJob(job,jobStarted,withRecords(update,records));
     };
     const handlerPayload = stripLoadFailures(job.payload);
     try {
@@ -195,7 +198,7 @@ export async function processJobs(runtime: Runtime, handlers: JobHandlerResolver
         ? await regionalRuntime(job.workspace_id) : { ...runtime, config: { ...runtime.config, workspaceId: job.workspace_id } };
       await handler(ownerRuntime, handlerPayload, { id: job.id, attempts: job.attempts, workspaceId: job.workspace_id, startedAt: jobStarted, leaseFence: job.lease_fence,
         webhook: job.webhook,ingest:job.ingest,deleteBinding:job.delete_binding, recordWithSettlement: ctes => { records = ctes; } });
-      await settle(runtime.db.update(jobs).set({ status: 'completed', leaseUntil: null, lastError: null, ...(handlerPayload !== job.payload ? { payload: handlerPayload } : {}) }).where(fence));
+      await settle(complete(job, handlerPayload));
       log('info', { ...context, code: 'JOB_COMPLETED', claimMs, claimBatchSize, jobMs: Date.now() - jobStarted });
     } catch (error) {
       if (settling) throw error; // Outcome and job settle atomically. Let the durable lease recover a failed commit.
@@ -210,10 +213,12 @@ export async function processJobs(runtime: Runtime, handlers: JobHandlerResolver
     peakActiveJobs = Math.max(peakActiveJobs, activeJobs);
     const ownerRuntime = { ...runtime, config: { ...runtime.config, workspaceId: group[0]!.workspace_id } };
     const payloads = group.map(j => stripLoadFailures(j.payload));
+    const records = new Map<string, SQL>();
+    const settle = (job: Claimed) => (update: SQLWrapper) => runtime.db.execute(withRecords(update, records.get(job.id)));
     try {
       const outcomes = await handler(ownerRuntime, group.map((j, i) => ({
         payload: payloads[i]!,
-        job: { id: j.id, attempts: j.attempts, workspaceId: j.workspace_id, leaseFence: j.lease_fence, webhook: j.webhook, ingest: j.ingest, deleteBinding: j.delete_binding },
+        job: { id: j.id, attempts: j.attempts, workspaceId: j.workspace_id, leaseFence: j.lease_fence, webhook: j.webhook, ingest: j.ingest, deleteBinding: j.delete_binding, recordWithSettlement: ctes => { records.set(j.id, ctes); } },
       })));
       const byId = new Map(outcomes.map(o => [o.id, o]));
       const done: Claimed[] = [];
@@ -223,22 +228,28 @@ export async function processJobs(runtime: Runtime, handlers: JobHandlerResolver
         if (outcome?.error !== undefined) failedItems.push({ job, payload: payloads[i]!, error: outcome.error });
         else done.push(job);
       }
-      if (done.length) {
-        const ids = done.map(j => j.id), attempts = done.map(j => j.attempts), fences = done.map(j => j.lease_fence);
-        const stripped = done.map(j => stripLoadFailures(j.payload) !== j.payload ? JSON.stringify(stripLoadFailures(j.payload)) : null);
+      // Jobs whose handler recorded nothing complete in one statement; the rest each with their records.
+      const plain = done.filter(j => !records.has(j.id));
+      if (plain.length) {
+        const ids = plain.map(j => j.id), attempts = plain.map(j => j.attempts), fences = plain.map(j => j.lease_fence);
+        const stripped = plain.map(j => stripLoadFailures(j.payload) !== j.payload ? JSON.stringify(stripLoadFailures(j.payload)) : null);
         await runtime.db.execute(sql`UPDATE jobs j SET status='completed',lease_until=NULL,last_error=NULL,payload=coalesce(v.payload::jsonb,j.payload)
           FROM unnest(${sql.param(ids)}::text[],${sql.param(attempts)}::int[],${sql.param(fences)}::timestamptz[],${sql.param(stripped)}::text[]) AS v(id,attempts,lease_fence,payload)
           WHERE j.id=v.id AND j.attempts=v.attempts AND j.status='running' AND j.lease_until=v.lease_fence`);
+      }
+      for (const job of done) if (records.has(job.id)) await settle(job)(complete(job, stripLoadFailures(job.payload)));
+      if (done.length) {
         const jobMs = Date.now() - batchStarted;
         for (const job of done) {
           log('info', { event: 'job', jobId: job.id, operation: job.type, attempt: job.attempts, workspaceId: job.workspace_id, code: 'JOB_COMPLETED', claimMs, claimBatchSize, jobMs, batchSize: done.length });
         }
       }
       for (const item of failedItems) {
-        await settleError(item.job, item.payload, item.error, u => runtime.db.execute(u.getSQL()), claimMs, claimBatchSize, batchStarted);
+        await settleError(item.job, item.payload, item.error, settle(item.job), claimMs, claimBatchSize, batchStarted);
       }
     } catch (error) {
       for (let i = 0; i < group.length; i++) {
+        // The handler or a settlement statement failed: no records commit with these.
         await settleError(group[i]!, payloads[i]!, error, u => runtime.db.execute(u.getSQL()), claimMs, claimBatchSize, batchStarted);
       }
     } finally {

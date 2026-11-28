@@ -1,5 +1,5 @@
 import { sql, eq, and } from 'drizzle-orm';
-import { ApiError, id, type Actor, type Ctx } from './core.js';
+import { ApiError, id, logError, type Actor, type Ctx } from './core.js';
 import { mailboxes } from './db/mailbox.js';
 import { principal } from './mail-gateway.js';
 import { boundMailBucket, mailKey, withMailObjects } from './mail-objects.js';
@@ -41,10 +41,17 @@ export async function contentWrite(c: Ctx, p: Submitted) {
   // Never ask for a second connection while the Worker holds its only one.
   const attachments = mime ? [] : await resolveAttachments(rt, {id:who.b, workspaceId:who.w, domainId:who.domain}, parsed.files.map(submittedFile), sender);
   const cap = await protocolScoreCap(rt, who.w);
-  const persist = () => withMailObjects(rt, who.w, '', bucket, (objects) => objects.put(key, raw, 'message/rfc822'));
-  // An uncertain transaction outcome must not remove a committed object. Orphan cleanup
-  // must prove no membership references the immutable key before deleting it.
-  return rt.db.transaction(async (tx) => {
+  // A quota is only what the inbox sets (null: none), as for received mail and APPEND.
+  const space = sql`(b.quota_messages IS NULL OR s.messages<b.quota_messages) AND (b.quota_bytes IS NULL OR s.bytes+${raw.length}<=b.quota_bytes)`;
+  // Upload the Sent copy before the transaction, as APPEND does: the upload must not hold the inbox_state lock (which
+  // ingest, flags and expunge also take) or a pooled connection. The transaction keeps it only if the inbox still has room.
+  const uploaded = !!(await rt.db.execute(sql`SELECT FROM inbox_state s JOIN mailboxes b ON b.id=s.inbox_id WHERE s.inbox_id=${who.b} AND ${space}`)).rowCount;
+  if (uploaded) await withMailObjects(rt, who.w, '', bucket, (objects) => objects.put(key, raw, 'message/rfc822'));
+  const discard = () => withMailObjects(rt, who.w, '', bucket, (o) => o.delete([key])).catch((e: unknown) => logError(e, { code: 'SENT_COPY_CLEANUP_FAILED' }, 'warn'));
+  // Set once the callback finishes: a failure after that is the COMMIT, whose outcome is uncertain, so the object stays.
+  let settled = false;
+  const sent = await rt.db.transaction(async (tx) => {
+    settled = false;
     const box = (
       await tx
         .select()
@@ -54,11 +61,9 @@ export async function contentWrite(c: Ctx, p: Submitted) {
     )[0];
     // Acquire the issuer/revoker's fence BEFORE taking the statement snapshot used to authorize.
     await tx.execute(sql`SELECT FROM inbox_state WHERE workspace_id=${who.w} AND inbox_id=${who.b} FOR UPDATE`);
-    // A quota is only what the inbox sets (null: none), as for received mail and APPEND.
     const active = (
       await tx.execute<{ owned: string[]; suppressed: boolean; space: boolean }>(
-        sql`WITH a AS (${auth}) SELECT ${ownership} AS owned,
-          ((b.quota_messages IS NULL OR s.messages<b.quota_messages) AND (b.quota_bytes IS NULL OR s.bytes+${raw.length}<=b.quota_bytes)) AS space,
+        sql`WITH a AS (${auth}) SELECT ${ownership} AS owned,(${space}) AS space,
           EXISTS(SELECT FROM audience_contacts WHERE workspace_id=a.w AND email=ANY(${sql.param(p.to.map(v=>v.toLowerCase()))}::text[]) AND suppressed) AS suppressed
           FROM a JOIN inbox_state s ON s.inbox_id=a.b JOIN mailboxes b ON b.id=a.b FOR UPDATE OF s`,
       )
@@ -67,7 +72,7 @@ export async function contentWrite(c: Ctx, p: Submitted) {
     if (!ownsSenders(active.owned)) throw denied();
     // A full inbox doesn't stop mail going out: only its Sent copy is left out. Otherwise hold inbox_state until the
     // membership insert charges these bytes and one message; do not charge the counters twice.
-    const stored = active.space;
+    const stored = uploaded && active.space;
     // SMTP submissions have no reply-author suppression exemption. Don't acknowledge
     // known undeliverable mail; dispatch still rechecks for changes after this commit.
     if (active.suppressed) throw new ApiError(422, 'RECIPIENT_INELIGIBLE', 'Recipient is not eligible for delivery.');
@@ -112,10 +117,14 @@ export async function contentWrite(c: Ctx, p: Submitted) {
     await tx.execute(
       sql`INSERT INTO inbox_protocol_sends VALUES(${who.b},(now() AT TIME ZONE 'UTC')::date,${p.to.length}) ON CONFLICT(inbox_id,day) DO UPDATE SET accepted=inbox_protocol_sends.accepted+excluded.accepted`,
     );
-    if (stored) {
-      await persist();
-      await savePreview(tx,mid,key,raw,raw.length);
-    }
+    if (stored) await savePreview(tx,mid,key,raw,raw.length);
+    settled = true;
     return { id: message.sendingEmailId!, sentCopy: stored };
+  }).catch(async (e: unknown) => {
+    if (uploaded && !settled) await discard();
+    throw e;
   });
+  // The inbox filled up meanwhile: the copy is unreferenced.
+  if (uploaded && !sent.sentCopy) await discard();
+  return sent;
 }

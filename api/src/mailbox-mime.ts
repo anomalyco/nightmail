@@ -136,8 +136,7 @@ export async function transferWorkspaceRaw(client: S3Client, region: string, buc
 }
 
 /** Inspect the exact bytes being copied. CopySourceIfMatch prevents substituting another object after inspection. */
-export async function copyWorkspaceRaw(client:S3Client,region:string,bucket:string,source:string,key:string,recipients:string[],kind:'raw'|'legacy-raw'|'kept',etag?:string,reserve?:(bytes:number)=>Promise<void>,objects?:MailObjects) {
+export async function copyWorkspaceRaw(client:S3Client,region:string,bucket:string,source:string,key:string,recipients:string[],kind:'raw'|'legacy-raw'|'kept',etag?:string,objects?:MailObjects) {
   const head = await headWorkspaceRaw(client, bucket, source, etag);
-  await reserve?.(head.size); // Before GET, copy, MIME or attachment work. Idempotent by receipt.
   return transferWorkspaceRaw(client, region, bucket, source, key, recipients, kind, head, objects);
 }
