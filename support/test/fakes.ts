@@ -37,7 +37,7 @@ const reports = new Map(), traces = new Map();
 const NOTE_FIELDS = ['cause', 'classification', 'duplicates', 'summary'];
 const earlierOf = r => [...reports.values()].filter(o => o.workspaceId === r.workspaceId && o.conversationId !== r.conversationId && o.filedAt <= r.filedAt);
 const missing = () => ok({ error: { code: 'NOT_FOUND' } }, 404), unavailable = () => ok({ error: { code: 'UNAVAILABLE' } }, 503);
-const inboxState = (id, c) => ({ id, status: c.status, agentState: c.paused ? 'paused' : 'active', pausedBy: c.paused || null, pausedAt: c.paused ? new Date().toISOString() : null, queuedReplies: c.outbox.filter(r => !r.delivery).length });
+const inboxState = (id, c) => ({ id, status: c.status, agentState: c.paused ? 'paused' : 'active', pausedBy: c.paused || null, pausedAt: c.paused ? new Date().toISOString() : null, ticket: c.state?.ticket ? { id: c.state.ticket.id, type: c.state.ticket.type ?? null, severity: c.state.ticket.severity ?? null, resolvedAt: null } : null, queuedReplies: c.outbox.filter(r => !r.delivery).length });
 const ok = (body, status = 200) => ({ status, body, requestId: 'req_' + '0'.repeat(32), retryAfter: null });
 const refuse = (status, code) => ok({ error: { code, message: code } }, status);
 // People and workspaces, as Nightmail keeps them: a handoff's user belongs to its workspace. Removing a membership is a

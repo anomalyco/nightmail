@@ -16824,6 +16824,10 @@
           "bodyTruncated": {
             "type": "boolean"
           },
+          "hiddenContent": {
+            "type": "boolean",
+            "description": "Best-effort detection of hidden, styled or invisible content stripped from text. False does not guarantee visibility."
+          },
           "attachmentCount": {
             "type": "integer"
           },

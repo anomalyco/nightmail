@@ -107,6 +107,13 @@ export function useInboxActions() {
     }
   }
   const now = () => new Date().toISOString()
+  const updateMessages = (id: string, change: (list: SupportMessage[]) => SupportMessage[]) =>
+    client.setQueryData<SupportDetail>(inboxKeys.detail(id), d => d && { ...d, messages: change(d.messages) })
+  const pendingMessage = (c: SupportConversation, kind: 'reply' | 'note', text: string, key: string): SupportMessage => ({
+    id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind, text, tools: [], attachments: [],
+    staff: { ...me, viaAgent: false }, emailFrom: null, delivery: kind === 'reply' ? 'queued' : null,
+    heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null,
+  })
   const act = (c: SupportConversation, action: SupportAction, predict: (c: SupportConversation) => SupportConversation, options: { done?: string; quiet?: boolean } = {}) =>
     run(c, predict, () => supportInboxApi.act(c.id, action, crypto.randomUUID()), options)
   // Undo puts back what that Done changed: the conversation, and the ticket it resolved.
@@ -125,32 +132,27 @@ export function useInboxActions() {
     read: (c: SupportConversation, read: boolean, seq?: number) => run(c, x => ({ ...x, unread: !read }), () => supportInboxApi.read(c.id, read, seq), { reread: false }).catch(() => {}),
     wake: (c: SupportConversation) => run(c, x => x, () => supportInboxApi.wake(c.id)).then(r => toast(r.woken ? 'Support service woken' : 'The support service didn’t answer', r.woken ? 'success' : 'error'), () => {}),
     reply: (c: SupportConversation, text: string, key: string) => {
-      const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'reply', text, tools: [], attachments: [], staff: me, delivery: 'queued', heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
-      const messages = (change: (list: SupportMessage[]) => SupportMessage[]) => client.setQueryData<SupportDetail>(inboxKeys.detail(c.id), d => d && { ...d, messages: change(d.messages) })
-      return run(c, x => { messages(list => [...list, pending]); return { ...x, agentState: 'paused', pausedBy: { kind: 'staff', userId: me.userId, name: me.name }, pausedAt: x.pausedAt ?? now(), lastAuthor: 'staff', lastMessageAt: now(), messageCount: x.messageCount + 1, queuedReplies: x.queuedReplies + 1, done: null, unread: false } },
-        () => supportInboxApi.reply(c.id, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m)), done: c.agentState === 'active' ? 'Reply queued. The agent is paused.' : 'Reply queued' })
+      const pending = pendingMessage(c, 'reply', text, key)
+      return run(c, x => { updateMessages(c.id, list => [...list, pending]); return { ...x, agentState: 'paused', pausedBy: { kind: 'staff', userId: me.userId, name: me.name }, pausedAt: x.pausedAt ?? now(), lastAuthor: 'staff', lastMessageAt: now(), messageCount: x.messageCount + 1, queuedReplies: x.queuedReplies + 1, done: null, unread: false } },
+        () => supportInboxApi.reply(c.id, text, key), { after: sent => updateMessages(c.id, list => list.map(m => m.id === pending.id ? sent : m)), done: c.agentState === 'active' ? 'Reply queued. The agent is paused.' : 'Reply queued' })
     },
     // A held answer sent as a staff reply: the reply shows at once and the answer says who sent it.
     sendDraft: (c: SupportConversation, draftId: string, text: string | undefined, key: string) => {
       const held = client.getQueryData<SupportDetail>(inboxKeys.detail(c.id))?.messages.find(m => m.id === draftId)
       const body = text ?? held?.text ?? '', fresh = Boolean(held?.heldReason && freshOnly[held.heldReason])
       const decided = (replyId: string | null) => ({ outcome: fresh ? 'replaced' as const : text === undefined || text === held?.text.trim() ? 'sent' as const : 'edited' as const, by: me, at: now(), replyId })
-      const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'reply', text: body, tools: [], attachments: [], staff: me, delivery: 'queued', heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
-      const messages = (change: (list: SupportMessage[]) => SupportMessage[]) => client.setQueryData<SupportDetail>(inboxKeys.detail(c.id), d => d && { ...d, messages: change(d.messages) })
-      return run(c, x => { messages(list => [...list.map(m => m.id === draftId ? { ...m, draft: decided(null) } : m), pending]); return { ...x, agentState: 'paused', pausedBy: { kind: 'staff', userId: me.userId, name: me.name }, pausedAt: x.pausedAt ?? now(), lastAuthor: 'staff', lastMessageAt: now(), messageCount: x.messageCount + 1, queuedReplies: x.queuedReplies + 1, done: null, unread: false } },
-        () => supportInboxApi.sendDraft(c.id, draftId, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m.id === draftId ? { ...m, draft: decided(sent.id) } : m)), done: 'Reply queued' })
+      const pending = pendingMessage(c, 'reply', body, key)
+      return run(c, x => { updateMessages(c.id, list => [...list.map(m => m.id === draftId ? { ...m, draft: decided(null) } : m), pending]); return { ...x, agentState: 'paused', pausedBy: { kind: 'staff', userId: me.userId, name: me.name }, pausedAt: x.pausedAt ?? now(), lastAuthor: 'staff', lastMessageAt: now(), messageCount: x.messageCount + 1, queuedReplies: x.queuedReplies + 1, done: null, unread: false } },
+        () => supportInboxApi.sendDraft(c.id, draftId, text, key), { after: sent => updateMessages(c.id, list => list.map(m => m.id === pending.id ? sent : m.id === draftId ? { ...m, draft: decided(sent.id) } : m)), done: 'Reply queued' })
     },
-    discardDraft: (c: SupportConversation, draftId: string) => {
-      const messages = (change: (list: SupportMessage[]) => SupportMessage[]) => client.setQueryData<SupportDetail>(inboxKeys.detail(c.id), d => d && { ...d, messages: change(d.messages) })
-      return run(c, x => { messages(list => list.map(m => m.id === draftId ? { ...m, draft: { outcome: 'discarded', by: me, at: now(), replyId: null } } : m)); return x },
-        () => supportInboxApi.discardDraft(c.id, draftId, crypto.randomUUID()), { after: dropped => messages(list => list.map(m => m.id === draftId ? dropped : m)), done: 'Draft discarded' }).catch(() => {})
-    },
+    discardDraft: (c: SupportConversation, draftId: string) =>
+      run(c, x => { updateMessages(c.id, list => list.map(m => m.id === draftId ? { ...m, draft: { outcome: 'discarded', by: me, at: now(), replyId: null } } : m)); return x },
+        () => supportInboxApi.discardDraft(c.id, draftId, crypto.randomUUID()), { after: dropped => updateMessages(c.id, list => list.map(m => m.id === draftId ? dropped : m)), done: 'Draft discarded' }).catch(() => {}),
     // A note: shown at once in the timeline; it changes nothing the lists show.
     note: (c: SupportConversation, text: string, key: string) => {
-      const pending: SupportMessage = { id: `pending:${key}`, seq: c.messageCount + 1, author: 'staff', kind: 'note', text, tools: [], attachments: [], staff: me, delivery: null, heldReason: null, files: [], email: null, deliveredAt: null, at: now(), draft: null }
-      const messages = (change: (list: SupportMessage[]) => SupportMessage[]) => client.setQueryData<SupportDetail>(inboxKeys.detail(c.id), d => d && { ...d, messages: change(d.messages) })
-      return run(c, x => { messages(list => [...list, pending]); return { ...x, messageCount: x.messageCount + 1, unread: false } },
-        () => supportInboxApi.note(c.id, text, key), { after: sent => messages(list => list.map(m => m.id === pending.id ? sent : m)), done: 'Note added' })
+      const pending = pendingMessage(c, 'note', text, key)
+      return run(c, x => { updateMessages(c.id, list => [...list, pending]); return { ...x, messageCount: x.messageCount + 1, unread: false } },
+        () => supportInboxApi.note(c.id, text, key), { after: sent => updateMessages(c.id, list => list.map(m => m.id === pending.id ? sent : m)), done: 'Note added' })
     },
   }
 }

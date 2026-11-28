@@ -3,6 +3,7 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { ApiError, id, type DbExecutor, type Runtime } from './core.js';
 import { mailboxAddresses, mailboxes, mailboxWriteLanes, mailMessages, type MailAddress, type SendLimits } from './db/mailbox.js';
 import { mailText } from './mailbox-text.js';
+import { safeMailText } from './inbox-content.js';
 
 export type Scope = { workspaceId: string };
 /** SES assigns the wire Message-ID independently of Nightmail's durable receipt. */
@@ -70,7 +71,7 @@ export function htmlToPlain(html: string) {
     .replace(/\s+/g,w=>w.includes('\n')?'\n':' ').trim();
 }
 export function snippetOf(text: string | null | undefined, html: string | null | undefined) {
-  const source = replyText(text?.slice(0,16384) || (html ? htmlToPlain(html.slice(0,16384)) : ''));
+  const source = replyText(safeMailText(text ? text.slice(0, 16384) : null, html ? html.slice(0, 16384) : null).text);
   return source.replace(/\s+/g, ' ').trim().slice(0, 200);
 }
 export function uniqueAddresses(list: MailAddress[], limit = 20): MailAddress[] {

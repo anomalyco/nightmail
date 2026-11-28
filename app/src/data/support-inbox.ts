@@ -1,74 +1,14 @@
 import type { InfiniteData, QueryClient } from '@tanstack/react-query'
 import { request } from './live'
+import type { Brief as SupportBrief, HeldReason, InboxCounts, SupportApproval, SupportAuthor, SupportChannel as Channel, SupportConversation, SupportDetail, SupportEmail, SupportEmailFull, SupportEvent, SupportEventKind, SupportInboxPage, SupportMessage, SupportTicket, SupportWorkspace, TriageReason } from '../../../api/src/support-contract.js'
 
-// The support inbox (/v1/operator/support-inbox, api/src/support-inbox.ts): every support conversation, for Nightmail
-// staff. Like the rest of the operator API it is left out of the public SDK, so the inbox calls it with the dashboard's
-// own request helper. Its views: Needs you (what only a person can move forward, most urgent first), AI handling (the agent
-// owes the next message), Waiting on customer, Done and All.
+// The support inbox (/v1/operator/support-inbox, api/src/support-inbox.ts, shared contract api/src/support-contract.ts):
+// every support conversation, for Nightmail staff. Like the rest of the operator API it is left out of the public SDK,
+// so the inbox calls it with the dashboard's own request helper. Its views: Needs you (what only a person can move
+// forward, most urgent first), AI handling (the agent owes the next message), Waiting on customer, Done and All.
 export type InboxView = 'needs_you' | 'agent' | 'waiting' | 'done' | 'all'
-/** agent_feedback: a report an agent filed with sendFeedback (api/src/feedback.ts); nobody to reply to. */
-export type Channel = 'chat' | 'email' | 'agent_feedback'
+export type { Channel, HeldReason, InboxCounts, SupportApproval, SupportAuthor, SupportBrief, SupportConversation, SupportDetail, SupportEmail, SupportEmailFull, SupportEvent, SupportEventKind, SupportInboxPage, SupportMessage, SupportTicket, SupportWorkspace, TriageReason }
 export const channelLabels: Record<Channel, string> = { chat: 'Chat', email: 'Email', agent_feedback: 'Agent feedback' }
-export type SupportAuthor = 'customer' | 'agent' | 'staff' | 'system'
-export type TriageReason = 'ticket' | 'blocked' | 'failed' | 'paused' | 'no_reply'
-export interface SupportTicket { id: string; type: string | null; severity: string | null; resolvedAt: string | null }
-export interface SupportConversation {
-  id: string; channel: Channel; mode: 'member' | 'non_member' | 'pending_signin' | 'unverified'; verification: 'handoff' | 'dmarc' | 'signin' | 'none' | 'credential' | 'agent'
-  status: 'open' | 'ticketed' | 'closed'; subject: string | null; customer: { userId: string; name: string | null; email: string | null } | null; sender: string | null
-  workspace: { id: string; name: string } | null; filedBy?: string | null; ticket: SupportTicket | null; agentState: 'active' | 'paused'
-  pausedBy: { kind: 'staff' | 'ticket'; userId: string | null; name: string | null } | null; pausedAt: string | null
-  lastAuthor: SupportAuthor | null; needsReply: boolean; preview: { author: SupportAuthor; text: string; held: boolean } | null; messageCount: number; queuedReplies: number; turns: number; costUsd: number; blockedWork: number
-  firstLine: string | null; needsYou: { reasons: TriageReason[]; urgent: boolean; since: string } | null; done: { at: string; userId: string; name: string | null } | null; unread: boolean
-  createdAt: string; lastMessageAt: string | null; closedAt: string | null
-}
-export type HeldReason = 'paused' | 'gate' | 'access' | 'closed' | 'earlier'
-export interface SupportEmail {
-  id: string; subject: string; from: { name: string | null; address: string }; to: { name: string | null; address: string }[]; cc: { name: string | null; address: string }[]; receivedAt: string
-  text: string; replyText: string; textTruncated: boolean; hasHtml: boolean
-  attachments: { id: string; filename: string; contentType: string; size: number; inline: boolean; available: boolean }[]
-}
-export interface SupportMessage {
-  id: string; seq: number; author: SupportAuthor; kind: string | null; text: string; tools: { label: string; ok: boolean }[]; attachments: string[]
-  /** viaAgent: their own agent wrote it for them (api/src/support-agents.ts); the customer never sees this. */
-  staff: { userId: string; name: string | null; viaAgent?: boolean } | null
-  /** A note that came by email (a staff member's reply to a staff email): the verified address it came from. */
-  emailFrom?: string | null; delivery: 'queued' | 'sent' | 'failed' | 'held' | null; heldReason: HeldReason | null
-  files: { id: string; name: string | null; type: string | null; size: number | null }[]; email: SupportEmail | null; deliveredAt: string | null; at: string
-  draft: { outcome: 'sent' | 'edited' | 'replaced' | 'discarded'; by: { userId: string; name: string | null }; at: string; replyId: string | null } | null
-}
-export type SupportEventKind = 'opened' | 'ticket' | 'priority' | 'paused' | 'resumed' | 'resolved' | 'done' | 'undone' | 'closed' | 'approved' | 'declined' | 'action' | 'proposed'
-/** A one-click decision a staff email linked to (api/src/support-approvals.ts): only a signed-in operator's confirm runs it. */
-export interface SupportApproval {
-  id: string; conversationId: string; kind: string; label: string; effect: string; risky: boolean; reason: string; proposedBy: 'nightmail' | 'agent'
-  /** An agent's risky proposal: its exact target in Nightmail's words, with its numbers. */
-  summary: string | null
-  /** A limit or balance it changes: its value now (read when opened) and after approving. */
-  change: { now: string; after: string } | null
-  state: 'proposed' | 'approved' | 'declined' | 'failed' | 'expired'; createdAt: string; expiresAt: string; decidedAt: string | null
-  decidedBy: { userId: string; name: string | null } | null; result: Record<string, unknown> | null
-  /** Send the held answer: exactly what would go, and why it can't, when it can't. */
-  preview: { text: string | null; held: string | null; blocked: string | null } | null
-}
-export interface SupportEvent { id: string; kind: SupportEventKind; by: { userId: string; name: string | null } | null; details: Record<string, unknown>; at: string }
-export interface SupportBrief { title: string; summary: string; ask: string; recommendation: string }
-export interface SupportWorkspace { id: string; name: string; role: string; joinedAt: string; createdAt: string; members: number; inScope: boolean; contentShared: boolean; sending: { kind: string; region: string | null; paused: boolean } | null; standing: string | null }
-export interface SupportDetail {
-  conversation: SupportConversation & { threadId: string | null; page: string | null; contentWorkspaceId: string | null
-    evidence: { handoff: string | null; message: string | null; dmarc: string | null; dkimAligned: boolean | null; claimedAt: string | null
-      /** Agent feedback: the key, sign-in or token that filed it (api/src/feedback.ts), and its ID. */
-      filedBy?: string | null; credentialId?: string | null } }
-  messages: SupportMessage[]; earlierMessages: number; events: SupportEvent[]; brief: SupportBrief | null; replyTarget: { address: string | null; verified: boolean }
-  customer: {
-    user: { id: string; name: string | null; email: string | null; emailVerified: boolean; createdAt: string } | null
-    workspaces: SupportWorkspace[]
-    conversations: { id: string; channel: string; mode: string; verification: string; status: string; subject: string | null; ticket: SupportTicket | null; createdAt: string; lastMessageAt: string | null }[]
-    activity: { id: string; at: string; action: string; workspaceId: string | null; actorType: string; via: string; internal: boolean; summary: Record<string, unknown> }[]
-    notes: { id: string; text: string; author: 'agent' | 'staff'; workspaceId: string | null; conversationId: string; createdAt: string }[]
-  }
-  replyAvailable: boolean
-}
-export type InboxCounts = { needsYou: number; agent: number; waiting: number }
-export interface SupportInboxPage { data: SupportConversation[]; nextCursor: string | null; replyAvailable: boolean; counts: InboxCounts }
 export type SupportAction = 'pause' | 'resume' | 'resolve'
 
 const base = '/v1/operator/support-inbox', id = encodeURIComponent
@@ -88,7 +28,7 @@ export const supportInboxApi = {
   /** An internal note: staff see it in the timeline; the customer and the agent never do. */
   note: (conversationId: string, text: string, idempotencyKey: string) => request<SupportMessage>(`${base}/${id(conversationId)}/notes`, { method: 'POST', body: { text }, idempotencyKey }),
   /** A customer email in full: all of its text and its HTML as stored (render it sandboxed, images off until asked). */
-  email: (conversationId: string, messageId: string, signal?: AbortSignal) => request<{ id: string; text: string; replyText: string; html: string | null; htmlTooComplex: boolean; bodyTruncated: boolean }>(`${base}/${id(conversationId)}/emails/${id(messageId)}`, { signal }),
+  email: (conversationId: string, messageId: string, signal?: AbortSignal) => request<SupportEmailFull>(`${base}/${id(conversationId)}/emails/${id(messageId)}`, { signal }),
   emailAttachment: (conversationId: string, messageId: string, attachmentId: string) => request<{ url: string; expiresAt: string }>(`${base}/${id(conversationId)}/emails/${id(messageId)}/attachments/${id(attachmentId)}`),
   /** A chat screenshot, held by the support service: a link for five minutes. */
   file: (conversationId: string, attachmentId: string) => request<{ url: string; expiresAt: string }>(`${base}/${id(conversationId)}/files/${id(attachmentId)}`),

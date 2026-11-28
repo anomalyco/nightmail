@@ -170,6 +170,8 @@
 .sinbox-summary__body { display: grid; gap: var(--space-8); margin: var(--space-8) 0 0; font-size: var(--text-sm); line-height: 22px; }
 .sinbox-summary__body dt { color: var(--color-faint); font-family: var(--font-mono); font-size: var(--text-xs); }
 .sinbox-summary__body dd { margin: 0; overflow-wrap: anywhere; white-space: pre-wrap; }
+.sinbox-summary__tried { display: grid; gap: var(--space-4); margin: 0; padding: 0; list-style: none; white-space: normal; }
+.sinbox-summary__tried code { color: var(--color-muted); font-family: var(--font-mono); font-size: var(--text-xs); }
 .sinbox-summary__note { margin: var(--space-8) 0 0; color: var(--color-faint); font-size: var(--text-xs); line-height: var(--leading-xs); }
 .sinbox-details__brief .sinbox-summary { margin: 0; }
 .sinbox-panel__body { display: flex; flex-direction: column; gap: var(--space-20); min-width: 0; }
