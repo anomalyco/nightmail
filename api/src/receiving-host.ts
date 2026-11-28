@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { DbExecutor } from './core.js';
 import type { MxReport } from './db/mailbox.js';
 import { checkMx, delegatedZone } from './mailbox-dns.js';
-import { hostRemoved, hostRoutesSql, isProofRecord, type HostStatus, type IdentityFacts } from './states.js';
+import { hostRemoved, hostRoutes, hostRoutesSql, isProofRecord, type HostStatus, type IdentityFacts } from './states.js';
 import { productName } from './brand.js';
 
 /**
@@ -136,7 +136,7 @@ type HostedRow = { name: string; region: string; receiving_host: string | null; 
 /** The host the domain's own row routes or waits on a BYO rule for: watched where it is, never moved. */
 export const establishedHost = (row: HostedRow) => {
   const own = row.hosts?.find(h => h.own);
-  return own ? (own.status === 'active' || own.status === 'provisioning' ? own.host : null) : row.receiving_host;
+  return own ? (hostRoutes(own.status) ? own.host : null) : row.receiving_host;
 };
 /** Codes that mean a host can never receive here, whatever its MX says. */
 export const refusedCodes: ReadonlySet<ReceivingIssueCode> = new Set(['bane_record', 'host_taken', 'claimed', 'delegated']);

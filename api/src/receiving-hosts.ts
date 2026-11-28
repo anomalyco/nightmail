@@ -8,7 +8,7 @@ import { queueReconcile } from './mailbox-setup.js';
 import { reservedPlatformName } from './domain-claims.js';
 import { derivedReadiness, dnsUnavailable, followMxJob, hostedDomain, recheckJob, type HostedDomain } from './operations.js';
 import { establishedHost, inspectReceivingHost, type ReceivingIssue } from './receiving-host.js';
-import { claimProjection, hostGraceStart, hostRemoved as removed } from './states.js';
+import { claimProjection, hostEnabled, hostGraceStart, hostRemoved as removed, hostRoutes } from './states.js';
 import { productName } from './brand.js';
 
 // A domain receives on a set of hosts: its root and any of its subdomains, at once, each added and removed on its own.
@@ -181,7 +181,7 @@ export async function enableHosted(c: Ctx, domain: Domain) {
     // The claim first, then its hosts: the order every receiving write takes.
     const current = await hostedDomain(db, wid, domain.id, true);
     if (!current || current.token !== row.token) throw new ApiError(409, 'DOMAIN_CHANGED', 'The domain changed while receiving was enabled. Try again.', undefined, true);
-    if (!current.identity || current.receiving_setup?.status === 'provisioning' || current.hosts.some(h => h.status === 'active' || h.status === 'provisioning' || (h.own && removed(h.status)))) return false;
+    if (!current.identity || current.receiving_setup?.status === 'provisioning' || current.hosts.some(h => hostRoutes(h.status) || (h.own && removed(h.status)))) return false;
     if (!current.hosts.some(h => h.own)) {
       const host = derivedReadiness(current).dns.find(r => r.purpose === 'receiving')?.name ?? current.name;
       // A domain added again takes back its old row (and that row's addresses) by name, as the first check would.
@@ -206,7 +206,7 @@ const taken = (host: string, name: string) => new ApiError(409, 'RECEIVING_HOST_
 async function addSelfHosted(c: Ctx, wid: string, domain: Domain, input: AddInput): Promise<{ view: HostView; created: boolean }> {
   const host = hostName(input.name, domain.name);
   const [own] = (await hostRows(c.env.db, wid, domain.id)).filter(r => r.parentId === null);
-  if (!own || !['provisioning', 'waiting_for_mx', 'active'].includes(own.status)) throw new ApiError(409, 'MAILBOX_DOMAIN_NOT_ENABLED', `Enable receiving for ${domain.name} before adding hosts.`);
+  if (!own || !hostEnabled(own.status)) throw new ApiError(409, 'MAILBOX_DOMAIN_NOT_ENABLED', `Enable receiving for ${domain.name} before adding hosts.`);
   if (host === domain.name) return { view: (await views(c.env.db, [own]))[0]!, created: false };
   const mx = await checkMx(host, own.region);
   const result = await c.env.db.transaction(async tx => {
@@ -293,7 +293,7 @@ export async function removeHost(c: Ctx, domain: Domain, hostId: string) {
     const [saved] = await db.update(mailboxDomains).set({ status, lostSince: null, issue: null, enabledAt: null, updatedAt: now }).where(eq(mailboxDomains.id, row.id)).returning() as [Row];
     if (claim) {
       await saveProjection(db, claim, wid, rows.map(r => r.id === saved.id ? saved : r));
-      if (claim.connection.kind === 'byo' && ['active', 'provisioning'].includes(row.status)) await queueReconcile(db, wid, row.region);
+      if (claim.connection.kind === 'byo' && hostRoutes(row.status)) await queueReconcile(db, wid, row.region);
     } else if (status === 'disabling') await queueReconcile(db, wid, row.region);
     await recordAudit(db, c, { action: 'inbound_host.delete', workspaceId: wid, target: { type: 'inbound_host', id: row.id }, before: { domainId: domain.id, name: row.receivingHost ?? row.name, status: row.status } });
     return saved;

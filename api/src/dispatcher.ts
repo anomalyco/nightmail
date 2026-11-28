@@ -1,15 +1,15 @@
 import { getTableColumns, sql, type SQL } from 'drizzle-orm';
 import type { Attachment, SESv2Client, SendEmailCommandInput } from '@aws-sdk/client-sesv2';
-import { ApiError, databaseCodeOf, databaseConflict, getSes, isSimulatedSes, rowId, lazyModule, log, logError, ModuleLoadError, preloadSesTransport, transientDatabaseError, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
+import { ApiError, databaseCodeOf, databaseConflict, isSimulatedSes, rowId, lazyModule, log, logError, ModuleLoadError, preloadSesTransport, transientDatabaseError, wrapModuleLoad, type Actor, type DbExecutor, type Runtime } from './core.js';
 import { attachments, emails, type EmailSnapshot, type EmailStatus, type CampaignDraft, type ReviewedRecipient } from './db/sending.js';
-import { approvedOriginUser, checkedDispatchAttachments, customerCredits, formattedSender, inlineMessage, LINK_RECORD_RECHECK_MS, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, sesDailyReserve, sizeCheck, statusForEvent, storageUnavailable, attachmentReads, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
+import { approvedOriginUser, checkedDispatchAttachments, customerCredits, formattedSender, inlineMessage, LINK_RECORD_RECHECK_MS, materializeCampaignEmail, originAllowed, publicEventType, QUOTA_REFRESH_MS, queueSimulatedFeedback, rank, recipientIneligibleReasonSql, resolveHostedContentPolicy, sesDailyReserve, sharedFormatRefusal, sizeCheck, statusForEvent, storageUnavailable, attachmentReads, terminalColumns, terminalEvents, verifiedAttachment } from './sending.js';
 import { receivingPolicy } from './mailbox-ingest-input.js';
 import { tieAllows } from './approval-ties.js';
 import { principal } from './mail-gateway.js';
 import { regionalSender, sendingConnections, verifiedClaim } from './domain-claims.js';
 import { claimsOnly } from './send-scope.js';
 import { heldStream, probationReason } from './hosted-sending.js';
-import { finishCampaigns, pauseCampaign, reopenQueuedCampaigns, type TenantState } from './states.js';
+import { finishCampaigns, operationWebhookFanoutCtes, pauseCampaign, reopenQueuedCampaigns, simulatedFeedbackCtes, type TenantState } from './states.js';
 import { credentialFingerprint, discoveryTarget } from './ses-region-state.js';
 import { mxResourceName, POOL_INSTALLATION, setupResources } from './ses-setup.js';
 import { forDelivery, type ReadyConnection } from './provider-credentials.js';
@@ -19,7 +19,6 @@ import type { CampaignScreen } from './screen.js';
 import { outbound } from './screen-calls.js';
 import { SEND_LIMITS } from './send-limits.js';
 import { SesBodyError } from './ses-body.js';
-import { topicAllows } from './topics.js';
 import { sendReservation, withMemory } from './isolate-memory.js';
 import { linkInlineImages } from './linked-images.js';
 import { servedDomains } from './brand.js';
@@ -53,7 +52,7 @@ export type Mail = typeof emails.$inferSelect;
 type Review = { version:number; draft: CampaignDraft; rendered: { html?: string; text?: string }; assets:AttachmentRow[]; contentHash: string | null; recipient: ReviewedRecipient; screen?: CampaignScreen | null; reviewHash?: string };
 // `probation`: a Hosted sender still in its evaluation, growth pace or below good standing (src/hosted-sending.ts probationReason).
 // `customer`: an outside workspace on the shared account (Hosted, live, not exempt), whose marketing waits for the customer share.
-type Owner = { runtime: Runtime; a: Actor; ses: SESv2Client; transport: DispatchTransport; sendClient?:(domainId:string)=>SESv2Client; trusted?:boolean; probation?:boolean; customer?: boolean; tenantName?: string; feedbackTopic?: string };
+type Owner = { runtime: Runtime; a: Actor; ses: SESv2Client; transport: DispatchTransport; sendClient?:(domainId:string)=>SESv2Client; poolTier?: string | null; legacyNames?: boolean | null; probation?:boolean; customer?: boolean; tenantName?: string; feedbackTopic?: string };
 type LeaseQuota = { rate: number; max: number; sent: number; customer: number; checked: string; age_ms: number };
 /** Where one email's time goes in a run, filled in stage by stage for its DISPATCH_EMAIL line (logEmail). */
 type Trace = { leasedAt: number; shard?: number; paceMs?: number; sesMs?: number };
@@ -152,9 +151,6 @@ const rankJson = () => rankJsonCache ??= JSON.stringify(rank);
 
 const sleep = (ms: number) => new Promise<void>(resolve => setTimeout(resolve, ms));
 
-export async function providerClient(runtime: Runtime, region: string, connection?: ReadyConnection, runClients?: Map<string, SESv2Client>): Promise<SESv2Client> {
-  return isSimulatedSes(runtime) ? (await loadSimulatedSes()).simulatedSes(runtime, region) : getSes(runtime, region, connection, runClients);
-}
 async function fetchQuota(transport: DispatchTransport, ses: SESv2Client, gate: GateState): Promise<QuotaSnapshot> {
   const account = await ses.send(new transport.GetAccountCommand({})), quota = account.SendQuota;
   if (account.SendingEnabled) delete gate.accountPauseAt;
@@ -521,7 +517,7 @@ async function leaseDue(runtime: Runtime, transport: DispatchTransport, region: 
       const namespace=pc?.legacy_names===false ? pc.kind==='shared' ? pc.pool_tier : 'byo' : undefined;
       const { transactional, marketing } = setupResources(pc?.kind === 'shared' ? POOL_INSTALLATION : pc?.id ?? installation_id as string,namespace);
       const scoped = { ...runtime, config: { ...runtime.config, workspaceId, regions: [default_region as string, ...(enabled_regions as string[]).filter(r => r !== default_region),...(pc?[region]:[])], configurationSets: { transactional, marketing } } };
-      owner = { runtime: scoped, trusted:runtime.config.trustedPool && pc?.pool_tier==='trusted' && pc.legacy_names===false, probation:on_probation===true, customer:outside===true, a: { workspaceId, keyId: 'worker', domains: [], permissions: ['manage'] }, transport, ses: transport.clientFor(scoped, region, forDelivery(pc,{purpose:'quota'}), runClients),
+      owner = { runtime: scoped, poolTier: pc?.pool_tier, legacyNames: pc?.legacy_names, probation:on_probation===true, customer:outside===true, a: { workspaceId, keyId: 'worker', domains: [], permissions: ['manage'] }, transport, ses: transport.clientFor(scoped, region, forDelivery(pc,{purpose:'quota'}), runClients),
         sendClient:pc?.template_version==='v5'?domainId=>transport.clientFor(scoped,region,forDelivery(pc,{purpose:'send',domainId}),runClients):undefined,
         tenantName: pc?.kind === 'shared' ? pc.pool_tenant_name ?? (pc.managed_tenant ? mxResourceName(workspaceId) : `bane-${workspaceId}`) : undefined, feedbackTopic: pc?.feedback_topic_arn };
       owners.set(workspaceId, owner);
@@ -556,10 +552,13 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
   const { runtime, a } = leased.owner;
   let mail = leased.mail;
   if (mail.simulated && !isSimulatedSes(runtime)) throw new ApiError(409, 'SES_MODE_CHANGED', 'This message was queued for simulated delivery. Submit it again to send through SES.');
-  const hosted=Boolean(leased.owner.tenantName && runtime.config.hostedScreen);
+  const policy = resolveHostedContentPolicy(runtime.config, {
+    shared: !!leased.owner.tenantName, poolTier: leased.owner.poolTier, legacyNames: leased.owner.legacyNames,
+    from: mail.from, probation: !!leased.owner.probation, simulated: isSimulatedSes(runtime), kind: mail.snapshot.kind, screen: mail.snapshot.screen,
+  });
   // Mail queued before screen-at-accept (migration 459), or by an older isolate during the rollout, has no verdict. It never
   // goes out unscreened: it leaves the mail room's queue (screened = false) for the screen sweep.
-  if (!isSimulatedSes(runtime) && (hosted || (mail.snapshot.screen && mail.snapshot.kind==='transactional')) && !mail.snapshot.screenVerdict) throw new HeldForScreen();
+  if (policy.screened && !mail.snapshot.screenVerdict) throw new HeldForScreen();
   let rows: AttachmentRow[] | undefined;
   let unsubscribe: Prepared['unsubscribe'];
   let stored: Prepared['stored'];
@@ -568,14 +567,12 @@ async function prepareMail(leased: Leased & { owner: Owner }, loadAttachments: (
     mail = materialized.mail; rows = materialized.rows; unsubscribe = materialized.unsubscribe; stored = materialized.stored;
   }
   let s = mail.snapshot;
-  if(leased.owner.tenantName && s.raw) throw new ApiError(422,'SHARED_RAW_UNSUPPORTED','Hosted sending requires structured SES content.');
-  // A mail app's signed or encrypted message goes out as written (protocol-submit.ts sealedPassthrough): on Hosted only
-  // from a sender past its evaluation, since a probation sender's mail goes out as the copy the screen read.
-  if(leased.owner.tenantName && s.mime && !leased.owner.trusted) throw new ApiError(422,'SEALED_MAIL_UNAVAILABLE','Signed and encrypted mail goes out as written, which a sender can do once its first messages are evaluated.');
+  const refusal = sharedFormatRefusal(s, policy);
+  if (refusal) throw refusal;
   // Content screening runs at accept time / campaign prepare (src/sending.ts) before rows enter sending_emails; the mail
   // room never calls an external classifier. Deferred campaigns and any pre-deploy rows still apply local in-memory
   // hostedCopy / attachment checks here.
-  const rules=isSimulatedSes(runtime) || !hosted || leased.owner.trusted ? null : leased.owner.probation ? 'probation' : 'standard';
+  const { rules } = policy;
   const delivery=rules ? await import('./screened-html.js') : undefined;
   if (delivery && (mail.snapshot.deferredCampaign || s.screenVerdict?.rules !== rules)) s = delivery.hostedCopy(s, rules==='probation');
   let parts: Attachment[] = [];
@@ -780,14 +777,7 @@ function claimCtes(runtime: Runtime, region: string, input: SQL) {
          -- A required notice (src/sending.ts requiredNotice) skips only the marketing consent checks: it still never goes
          -- to a suppressed address or a deleted contact.
          (SELECT cause.reason FROM dest d LEFT JOIN consent c USING (workspace_id,email)
-          CROSS JOIN LATERAL (SELECT CASE
-            WHEN x.marketing AND NOT x.notice AND c.marketing_consent='unsubscribed' THEN 'unsubscribed'
-            WHEN c.suppressed AND NOT coalesce(NOT x.marketing AND c.suppression_reason='email_validation'
-              AND c.marketing_consent<>'unsubscribed' AND x.reply_authors ? d.email,false) THEN coalesce(c.suppression_reason,'suppressed')
-            WHEN x.marketing AND (c.deleted_at IS NOT NULL OR (x.notice AND c.email IS NULL)) THEN 'contact_deleted'
-            WHEN x.marketing AND NOT x.notice AND c.marketing_consent IS DISTINCT FROM 'subscribed' THEN 'consent_missing'
-            -- Its topic's opt-outs (src/topics.ts), recorded since it was accepted or captured; a global unsubscribe wins above.
-            WHEN x.marketing AND NOT x.notice AND NOT ${topicAllows(sql`c.workspace_id`, sql`c.id`, sql`x.topic_id`)} THEN 'topic_unsubscribed' END AS reason) cause
+          CROSS JOIN LATERAL (SELECT ${recipientIneligibleReasonSql({ marketing: sql`x.marketing`, replyAuthors: sql`x.reply_authors`, topic: sql`x.topic_id`, notice: sql`x.notice`, risk: false })} AS reason) cause
           WHERE d.email_id=x.id AND cause.reason IS NOT NULL ORDER BY d.n LIMIT 1) AS suppression_reason
       FROM input x
     ), budget AS MATERIALIZED (SELECT x.id,${runtime.config.multiTenant && !isSimulatedSes(runtime) ? sql`CASE WHEN x.hosted AND NOT el.busy AND el.origin_ok AND el.binding_ok AND el.campaign_allowed AND el.suppression_reason IS NULL
@@ -944,28 +934,10 @@ async function recordOutcomes(runtime: Runtime, outcomes: Outcome[]) {
       SELECT i.id, i.workspace_id, x.public_type, m.region, i.created_at,
         x.data || jsonb_build_object('emailId', m.id, 'simulated', ${simulated}::boolean) || CASE WHEN x.provider_id IS NULL THEN '{}'::jsonb ELSE jsonb_build_object('providerId', x.provider_id) END
       FROM inserted i JOIN input x ON x.event_id = i.id JOIN mail m ON m.id = i.email_id WHERE x.public_type IS NOT NULL ON CONFLICT DO NOTHING RETURNING *
-    ), deliveries AS (
-      INSERT INTO operation_deliveries(id, workspace_id, webhook_id, event_id, payload)
-      SELECT public.row_id('whd'), p.workspace_id, w.id, p.id,
-        jsonb_build_object('id', p.id, 'workspaceId', p.workspace_id, 'type', p.type, 'region', p.region, 'createdAt', p.created_at, 'data', p.data)
-      FROM published p JOIN operation_webhooks w ON w.workspace_id = p.workspace_id
-      WHERE NOT w.paused AND w.event_types ? p.type AND (w.regions IS NULL OR p.region IS NULL OR w.regions ? p.region)
-      ON CONFLICT DO NOTHING RETURNING id, workspace_id
-    ), webhook_jobs AS (
-      INSERT INTO jobs(id, workspace_id, type, payload)
-      SELECT public.row_id('job'), workspace_id, 'operation.webhook', jsonb_build_object('deliveryId', id, 'generation', 0) FROM deliveries RETURNING id
-    ), simulated_callbacks AS (
-      SELECT 'urn:bane:simulated-ses:' || m.region AS topic_arn, m.id || ':' || kind AS message_id, i.workspace_id, m.region, x.provider_id,
-        i.created_at + CASE WHEN kind = 'Delivery' THEN ${runtime.config.simulatedSes.deliveryDelayMs}::int ELSE 0 END * interval '1 millisecond' AS created_at, kind
-      FROM inserted i JOIN input x ON x.event_id = i.id JOIN mail m ON m.id = i.email_id, unnest(ARRAY['Send','Delivery']) kind
-      WHERE ${simulated && !runtime.feedback}::boolean AND x.type = 'accepted' AND x.provider_id LIKE 'sim\\_%'
-    ), simulated_jobs AS (
-      INSERT INTO jobs(id, workspace_id, type, available_at, payload)
-      SELECT public.row_id('job'), r.workspace_id, 'operation.simulatedFeedback', r.created_at,
-        jsonb_build_object('topicArn', r.topic_arn, 'messageId', r.message_id, 'region', r.region,
-          'message', jsonb_build_object('eventType', r.kind, 'mail', jsonb_build_object('messageId', r.provider_id), lower(r.kind), jsonb_build_object('timestamp', r.created_at)))
-      FROM simulated_callbacks r RETURNING id
-    ) SELECT (SELECT count(*) FROM inserted)::int AS events, (SELECT count(*) FROM updated)::int AS updated, (SELECT count(*) FROM webhook_jobs)::int AS webhooks, (SELECT count(*) FROM simulated_jobs)::int AS simulated`;
+    ), ${operationWebhookFanoutCtes()}, ${simulatedFeedbackCtes(sql`SELECT i.workspace_id, m.id AS email_id, m.region, x.provider_id, i.created_at
+      FROM inserted i JOIN input x ON x.event_id = i.id JOIN mail m ON m.id = i.email_id
+      WHERE ${simulated && !runtime.feedback}::boolean AND x.type = 'accepted' AND x.provider_id LIKE 'sim\\_%'`, runtime.config.simulatedSes.deliveryDelayMs)}
+    SELECT (SELECT count(*) FROM inserted)::int AS events, (SELECT count(*) FROM updated)::int AS updated, (SELECT count(*) FROM webhook_jobs)::int AS webhooks, (SELECT count(*) FROM simulated_jobs)::int AS simulated`;
   // Retry only the fenced, external-id-deduplicated write. Never reacquire a send slot or call SES again.
   let readyJobs: number;
   for (let attempt=0; ; attempt++) {

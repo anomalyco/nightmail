@@ -2,7 +2,7 @@ import { ApiError, digest, type Config, type Runtime, type ScreenClassifier, typ
 import type { EmailSnapshot } from './db/sending.js';
 import { errorTypeOf, log } from './log.js';
 import { keepScreenCall, outbound } from './screen-calls.js';
-import { keepShadow, type ShadowItem } from './screen-shadow.js';
+import { CircuitBreaker, keepShadow, type ShadowItem } from './screen-shadow.js';
 import { cssRules, selectorList, selectorSubjects, stringEnd, unescapeCss, VISIBLE_WORDS } from './screened-html.js';
 import { formattedSender } from './sending.js';
 import { SEND_LIMITS } from './send-limits.js';
@@ -22,7 +22,7 @@ const MAX_ENTRIES = 5000;
 const DEADLINE_MS = 500;
 const PRIMARY_FAILURES = 3, PRIMARY_COOLDOWN_MS = 60_000;
 const WINDOW_CONCURRENCY = 4;
-const primaryBreakers = new Map<string, { failures: number; retryAt: number }>();
+const primaryBreakers = new Map<string, CircuitBreaker>();
 const failoverEligible = (timing: CallTiming) =>
   timing.outcome === 'timeout' || timing.outcome === 'network' || timing.outcome === 'invalid' ||
   (timing.httpStatus !== undefined && (timing.httpStatus === 401 || timing.httpStatus === 402 || timing.httpStatus === 403 || timing.httpStatus === 429 || timing.httpStatus === 451 || timing.httpStatus >= 500));
@@ -468,24 +468,18 @@ async function evaluate(runtime: Runtime, state: unknown, call: ScreenCall | und
   if (!backup) return ask(primary, primaryDeadline, timing);
   const key = first + '\n' + primary.endpoint + '\n' + primary.model;
   let breaker = primaryBreakers.get(key);
-  if (!breaker) primaryBreakers.set(key, breaker = { failures: 0, retryAt: 0 });
-  const now = Date.now();
-  if (now >= breaker.retryAt) {
-    // After cool-off, claim the single probe. The claim expires even if its Worker invocation disappears.
-    if (breaker.retryAt) breaker.retryAt = now + PRIMARY_COOLDOWN_MS;
-    const claim = breaker.retryAt;
+  if (!breaker) primaryBreakers.set(key, breaker = new CircuitBreaker());
+  const now = Date.now(), claim = breaker.tryAcquire(now, PRIMARY_COOLDOWN_MS);
+  if (claim) {
     try {
       const result = await ask(primary, primaryDeadline, timing);
-      if (breaker.retryAt === claim) { breaker.failures = 0; breaker.retryAt = 0; }
+      breaker.recordSuccess(claim);
       return result;
     } catch (error) {
-      const eligible = failoverEligible(timing);
-      const trips = tripsPrimaryBreaker(timing);
-      if (breaker.retryAt === claim) {
-        if (trips && ++breaker.failures >= PRIMARY_FAILURES) breaker.retryAt = Date.now() + PRIMARY_COOLDOWN_MS;
-        else if (!eligible && timing.outcome) { breaker.failures = 0; breaker.retryAt = 0; }
-        else if (!trips && claim) breaker.retryAt = now; // No global primary outage: leave the probe available.
-      }
+      const eligible = failoverEligible(timing), trips = tripsPrimaryBreaker(timing);
+      if (trips) breaker.recordFailure(claim, Date.now(), PRIMARY_FAILURES, PRIMARY_COOLDOWN_MS);
+      else if (!eligible && timing.outcome) breaker.recordSuccess(claim);
+      else breaker.releaseProbe(claim, now); // No global primary outage: leave the probe available.
       if (!eligible) throw error;
     }
   }

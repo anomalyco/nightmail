@@ -30,17 +30,22 @@ const security: Record<string, string[]>[] = [{ dashboardSession: [] }, { secure
 const tags = ['Workspaces'];
 const base = '/v1/workspaces/current';
 
+/** Inviter membership join and claimability predicates shared by claimInvitation, pendingInvitation and getWorkspaceInvitation. */
+const invitationInviterJoin = sql`JOIN workspace_members inviter ON inviter.workspace_id = i.workspace_id AND inviter.user_id = i.inviter_id`;
+const claimablePendingSql = sql`i.status = 'pending' AND i.expires_at > now() AND (inviter.role = 'owner' OR (inviter.role = 'admin' AND i.role <> 'owner'))`;
+const claimableInvitationWhere = (invitationId: string, email: string, acceptedForUserId?: string) => sql`i.id = ${invitationId} AND i.email = ${email.toLowerCase()} AND i.role IN ('owner','admin','member') AND (${acceptedForUserId === undefined
+  ? claimablePendingSql
+  : sql`(${claimablePendingSql}) OR (i.status = 'accepted' AND EXISTS(SELECT 1 FROM workspace_members m WHERE m.workspace_id = i.workspace_id AND m.user_id = ${acceptedForUserId}))`})`;
+
 // Accept only the invitation the verified recipient followed. Never overwrite an existing role.
 // The joining user is the actor (not yet a member of the workspace they join); the request supplies the rest.
 export async function claimInvitation(db: DbExecutor, userId: string, email: string, invitationId: string, request: Omit<AuditContext, 'actor'> = { requestId: null, ipNetwork: null, userAgent: null }) {
   const audit = auditInsert({ ...request, actor: { type: 'member', id: userId, userId, via: 'dashboard' } },
     { action: 'member.join', workspaceId: sql`joined.workspace_id`, target: { type: 'member', id: sql`joined.id` }, after: sql`jsonb_build_object('role', joined.role)`, details: { invitationId } }, { from: sql`joined` });
   const result = await db.execute<{ workspace_id: string }>(sql`WITH pending AS (
-    SELECT i.id FROM workspace_invitations i JOIN workspace_members inviter ON inviter.workspace_id = i.workspace_id AND inviter.user_id = i.inviter_id
+    SELECT i.id FROM workspace_invitations i ${invitationInviterJoin}
     JOIN nightmail_users recipient ON recipient.id=${userId} AND recipient.email_verified AND lower(recipient.email)=i.email
-    WHERE i.email = ${email.toLowerCase()} AND i.status = 'pending' AND i.expires_at > now() AND i.role IN ('owner','admin','member')
-      AND (inviter.role = 'owner' OR (inviter.role = 'admin' AND i.role <> 'owner'))
-      AND i.id = ${invitationId} FOR UPDATE OF i FOR SHARE OF inviter,recipient
+    WHERE ${claimableInvitationWhere(invitationId, email)} FOR UPDATE OF i FOR SHARE OF inviter,recipient
   ), claimed AS (
     UPDATE workspace_invitations i SET status = 'accepted' FROM pending WHERE i.id = pending.id RETURNING i.workspace_id, i.role
   ), joined AS (
@@ -53,9 +58,8 @@ export async function claimInvitation(db: DbExecutor, userId: string, email: str
 // The invitation the verified recipient followed is still claimable (the same conditions as
 // claimInvitation). Reading it changes nothing.
 export async function pendingInvitation(db: DbExecutor, email: string, invitationId: string) {
-  const result = await db.execute(sql`SELECT FROM workspace_invitations i JOIN workspace_members inviter ON inviter.workspace_id = i.workspace_id AND inviter.user_id = i.inviter_id
-    WHERE i.id = ${invitationId} AND i.email = ${email.toLowerCase()} AND i.status = 'pending' AND i.expires_at > now() AND i.role IN ('owner','admin','member')
-      AND (inviter.role = 'owner' OR (inviter.role = 'admin' AND i.role <> 'owner'))`);
+  const result = await db.execute(sql`SELECT FROM workspace_invitations i ${invitationInviterJoin}
+    WHERE ${claimableInvitationWhere(invitationId, email)}`);
   return !!result.rowCount;
 }
 
@@ -256,10 +260,8 @@ export function registerWorkspaces(app: App) {
     const result = await c.env.db.execute<z.infer<typeof InvitationPreview>>(sql`SELECT i.id, i.workspace_id AS "workspaceId", w.name AS "workspaceName", w.slug AS "workspaceSlug",
         u.name AS "inviterName", CASE WHEN u.email_verified THEN coalesce(u.email, '') ELSE '' END AS "inviterEmail", i.role, i.expires_at AS "expiresAt", CASE WHEN i.status = 'accepted' THEN 'accepted' ELSE 'pending' END AS status
       FROM workspace_invitations i JOIN workspaces w ON w.id = i.workspace_id JOIN nightmail_users u ON u.id = i.inviter_id
-      JOIN workspace_members inviter ON inviter.workspace_id = i.workspace_id AND inviter.user_id = i.inviter_id
-      WHERE i.id = ${invitationId} AND i.email = ${a.email.toLowerCase()} AND i.role IN ('owner','admin','member') AND (
-        (i.status = 'pending' AND i.expires_at > now() AND (inviter.role = 'owner' OR (inviter.role = 'admin' AND i.role <> 'owner')))
-        OR (i.status = 'accepted' AND EXISTS(SELECT 1 FROM workspace_members m WHERE m.workspace_id = i.workspace_id AND m.user_id = ${a.userId})))`);
+      ${invitationInviterJoin}
+      WHERE ${claimableInvitationWhere(invitationId, a.email, a.userId)}`);
     const row = result.rows[0] ?? notFound('Invitation');
     // The names are the inviting account's to choose and this page speaks for the product: plain words only, as in its emails.
     return c.json(InvitationPreview.parse({ ...row, workspaceName: shownName(row.workspaceName), inviterName: shownName(row.inviterName), expiresAt: new Date(row.expiresAt).toISOString() }), 200);

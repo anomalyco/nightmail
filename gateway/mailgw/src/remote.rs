@@ -234,6 +234,31 @@ impl Api {
                 .ok_or(429u16)?,
         ))
     }
+    /// Builds a signed POST to `/internal/v1/mail`, hashing `scope_id` (ASCII-lowercased) for `x-bane-scope` and
+    /// signing `POST\n/internal/v1/mail\n<ts>\n<hash>\n<scope>` plus any `\n<extra_lines>`.
+    fn signed_post(
+        &self,
+        scope_id: &str,
+        hash: &str,
+        extra_lines: Option<&str>,
+    ) -> Option<reqwest::RequestBuilder> {
+        let scope = hex::encode(Sha256::digest(scope_id.to_ascii_lowercase().as_bytes()));
+        let ts = chrono::Utc::now().timestamp().to_string();
+        let mut mac = Hmac::<Sha256>::new_from_slice(self.key.as_bytes()).ok()?;
+        mac.update(format!("POST\n/internal/v1/mail\n{ts}\n{hash}\n{scope}").as_bytes());
+        if let Some(extra) = extra_lines {
+            mac.update(b"\n");
+            mac.update(extra.as_bytes());
+        }
+        Some(
+            self.client
+                .post(&self.url)
+                .header("x-bane-scope", scope)
+                .header("x-bane-content", hash)
+                .header("x-bane-timestamp", ts)
+                .header("x-bane-signature", hex::encode(mac.finalize().into_bytes())),
+        )
+    }
     /// A signed call. A refusal carries the API's error code, when it gave one.
     fn call_coded(&self, p: Value, deadline: Option<Instant>) -> Result<Vec<u8>, (u16, String)> {
         let _work = self
@@ -246,28 +271,17 @@ impl Api {
             )
             .map_err(|status| (status, String::new()))?;
         let unavailable = |_| (503u16, String::new());
-        let scope = hex::encode(Sha256::digest(
-            p.get("kid")
-                .or_else(|| p.get("user"))
-                .and_then(Value::as_str)
-                .unwrap_or("login")
-                .to_ascii_lowercase()
-                .as_bytes(),
-        ));
+        let scope_id = p
+            .get("kid")
+            .or_else(|| p.get("user"))
+            .and_then(Value::as_str)
+            .unwrap_or("login");
         let b = serde_json::to_vec(&p).map_err(|_| (500u16, String::new()))?;
         let hash = hex::encode(Sha256::digest(&b));
-        let ts = chrono::Utc::now().timestamp().to_string();
-        let mut mac = Hmac::<Sha256>::new_from_slice(self.key.as_bytes())
-            .map_err(|_| (500u16, String::new()))?;
-        mac.update(format!("POST\n/internal/v1/mail\n{ts}\n{hash}\n{scope}").as_bytes());
         let req = self
-            .client
-            .post(&self.url)
+            .signed_post(scope_id, &hash, None)
+            .ok_or_else(|| (500u16, String::new()))?
             .header("content-type", "application/json")
-            .header("x-bane-scope", scope)
-            .header("x-bane-content", hash)
-            .header("x-bane-timestamp", ts)
-            .header("x-bane-signature", hex::encode(mac.finalize().into_bytes()))
             .body(b);
         let req = if let Some(deadline) = deadline {
             req.timeout(
@@ -1253,7 +1267,7 @@ impl MailStore for Store {
         let raw = self
             .api
             .call(self.body(p, e.uid, false)?)
-            // 509: the API's fair-use download cap for this inbox (migration 246).
+            // 509: the API's fair-use download cap for this inbox (migration 297).
             .map_err(|s| {
                 if s == 509 {
                     store::Error::DownloadLimit
@@ -1367,7 +1381,8 @@ impl MailStore for Store {
                         .admit(Some(&self.principal.kid), true)
                         .map_err(|status| store_error(status, ""))?;
                     let meta=STANDARD.encode(serde_json::to_vec(&json!({"kid":self.principal.kid,"folder":folder,"date":date.to_rfc3339(),"flags":flags,"size":upload.size})).map_err(|_|store::Error::Unavailable)?);
-                    let scope = hex::encode(Sha256::digest(self.principal.kid.as_bytes()));
+                    let meta_hash = hex::encode(Sha256::digest(meta.as_bytes()));
+                    let kid = self.principal.kid.as_str();
                     let api = &self.api;
                     let size = upload.size;
                     let a: Value = tokio::runtime::Handle::current().block_on(async {
@@ -1375,24 +1390,10 @@ impl MailStore for Store {
                             .finish()
                             .await
                             .map_err(|_| store::Error::Unavailable)?;
-                        let ts = chrono::Utc::now().timestamp();
-                        let mut mac = Hmac::<Sha256>::new_from_slice(api.key.as_bytes())
-                            .map_err(|_| store::Error::Unavailable)?;
-                        mac.update(
-                            format!(
-                                "POST\n/internal/v1/mail\n{ts}\n{hash}\n{scope}\n{}",
-                                hex::encode(Sha256::digest(meta.as_bytes()))
-                            )
-                            .as_bytes(),
-                        );
                         let r = api
-                            .client
-                            .post(&api.url)
+                            .signed_post(kid, &hash, Some(&meta_hash))
+                            .ok_or(store::Error::Unavailable)?
                             .header("x-bane-append", meta)
-                            .header("x-bane-scope", scope)
-                            .header("x-bane-content", hash)
-                            .header("x-bane-timestamp", ts.to_string())
-                            .header("x-bane-signature", hex::encode(mac.finalize().into_bytes()))
                             .header("content-length", size)
                             .timeout(UPLOAD)
                             .body(body)
@@ -1440,7 +1441,7 @@ impl MailStore for Store {
                 out.validity = self.folder(p)?.validity;
             }
             // Large sets go in batches of BATCH UIDs inside this one command: each batch is
-            // one atomic API call with its own statement, its own 5 s budget and its own COPY
+            // one atomic API call with its own statement, its own 60 s (COMMAND) budget and its own COPY
             // replay ticket (derived from the command's, so a retry replays the batches that
             // committed). Other connections get a turn between batches. All of them share the
             // command's deadline: past it, the batches that committed are shown and the rest
@@ -1608,25 +1609,11 @@ impl Submitter for Store {
             serde_json::to_vec(&json!({"kid":kid,"from":s.sender,"to":s.recipients,"size":size}))
                 .map_err(|_| SubmitError::Unavailable)?,
         );
-        let scope = hex::encode(Sha256::digest(kid.to_ascii_lowercase().as_bytes()));
-        let ts = chrono::Utc::now().timestamp();
-        let mut mac = Hmac::<Sha256>::new_from_slice(api.key.as_bytes())
-            .map_err(|_| SubmitError::Unavailable)?;
-        mac.update(
-            format!(
-                "POST\n/internal/v1/mail\n{ts}\n{hash}\n{scope}\nsubmit\n{}",
-                hex::encode(Sha256::digest(meta.as_bytes()))
-            )
-            .as_bytes(),
-        );
+        let extra = format!("submit\n{}", hex::encode(Sha256::digest(meta.as_bytes())));
         let request = api
-            .client
-            .post(&api.url)
+            .signed_post(kid, &hash, Some(&extra))
+            .ok_or(SubmitError::Unavailable)?
             .header("x-bane-submit", meta)
-            .header("x-bane-scope", scope)
-            .header("x-bane-content", hash)
-            .header("x-bane-timestamp", ts.to_string())
-            .header("x-bane-signature", hex::encode(mac.finalize().into_bytes()))
             .header("content-length", size)
             .timeout(UPLOAD)
             .body(body);

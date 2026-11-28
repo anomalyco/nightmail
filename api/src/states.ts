@@ -169,6 +169,9 @@ export const hostRemovedSql = (m: SQL = sql`m`) => sql`${m}.status IN ('disabled
 /** Holds its name in the receipt rule: routing, or waiting for a BYO rule to list it (the mailbox_domains_routing_host index). */
 export const hostRoutes = (status: HostStatus) => status === 'active' || status === 'provisioning';
 export const hostRoutesSql = (m: SQL = sql`m`) => sql`${m}.status IN ('active','provisioning')`;
+/** Self-hosted: enabled for receiving (provisioning, waiting for MX, or active; not disabling, disabled, or failed). */
+export const hostEnabled = (status: HostStatus) => status === 'provisioning' || status === 'waiting_for_mx' || status === 'active';
+export const hostEnabledSql = (m: SQL = sql`m`) => sql`${m}.status IN ('provisioning','waiting_for_mx','active')`;
 /** The host a domain-level view shows is the first in this order: hosted, the domain's own row unless the owner removed
  *  it, then the first other host still receiving; self-hosted readers select only the own row. */
 export const primaryHostOrder = (m: SQL = sql`m`) => sql`${hostRemovedSql(m)},${m}.parent_id IS NOT NULL,${m}.created_at,${m}.id`;
