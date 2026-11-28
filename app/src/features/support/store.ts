@@ -22,10 +22,10 @@ export interface ActionPart { kind: 'action'; request: ActionRequest; action: Su
 /** A screenshot in a sent message: its local preview, or none after a reload (the server never sends images back). */
 export interface ChatImage { url: string | null; name: string }
 /** `local`: only in this panel so far: a message waiting for the connection, or the reply being prepared for it (until
- *  the server's message.start adopts it; `key` keeps it the same element when it does). `filed`: the chat couldn't take
- *  it, so it went to the team as a ticket (`filedId`: its ID in that conversation; `filing` while it goes). */
+ *  the server's message.start adopts it; `key` keeps it the same element when it does). `filedId`: the chat couldn't
+ *  take it, so it went to the team as a ticket; its ID in that conversation. `failed`: the chat couldn't answer it. */
 export interface ChatMessage { id: string; key?: string; role: 'assistant' | 'user'; kind: MessageKind; parts: Part[]; streaming: boolean; restored: boolean; local?: boolean; failed?: string; images?: ChatImage[]; author?: string | null
-  filed?: boolean; filedId?: string; filing?: boolean }
+  filedId?: string }
 /** A screenshot in the message box: uploading as soon as it is added, sent with the next message. */
 export interface Attachment { key: string; name: string; url: string; state: 'uploading' | 'ready' | 'failed'; progress: number; attachmentId?: string; error?: string }
 type Hello = Extract<ServerMessage, { type: 'hello' }>
@@ -294,35 +294,35 @@ export class SupportStore {
         this.settle()
         if (!next.text) { forChat.push(next); continue }
         if (fromOutbox) this.inFiling = next
-        this.update(next.clientMessageId, item => ({ ...item, filing: true }))
         try {
           const ticket = await this.transport.file(next.text)
           if (this.disposed) return
           this.inFiling = null
           this.save()
-          this.update(next.clientMessageId, item => ({ ...item, local: false, filing: false, failed: undefined, filed: true, filedId: ticket.messageId }))
+          this.update(next.clientMessageId, item => ({ ...item, local: false, failed: undefined, filedId: ticket.messageId }))
           this.set({ ticket: { replyTo: ticket.replyTo }, fileProblem: null, announcement: `Filed as a ticket for the ${productName} team.${ticket.replyTo ? ` They’ll reply to ${ticket.replyTo}.` : ''}` })
         } catch (error) {
           if (this.disposed) return
           this.inFiling = null
-          if (error instanceof FileError && error.reason === 'capped') {
-            const back = [next, ...this.outbox.splice(0)], ids = new Set(back.map(item => item.clientMessageId))
-            this.set(state => ({ messages: state.messages.filter(item => !ids.has(item.id)), fileProblem: state.ticket ? 'capped' : 'capped_first' }))
-            this.setDraft([...back.map(item => item.text).filter(Boolean), this.state.draft].filter(Boolean).join('\n\n'))
-            break
-          }
-          // Nightmail couldn't be reached (or this browser is offline): the words go back into the box and its saved
-          // draft, so a reload keeps them too, and are sent again, unchanged, as soon as they can.
-          const back = [next, ...this.outbox.splice(0)], ids = new Set(back.map(item => item.clientMessageId))
-          const draft = [...back.map(item => item.text).filter(Boolean), this.state.draft].filter(Boolean).join('\n\n')
-          this.park(draft.trim())
-          this.set(state => ({ messages: state.messages.filter(item => !ids.has(item.id)), fileProblem: 'waiting' }))
-          this.setDraft(draft)
-          this.fileTimer = setTimeout(() => this.retryParked(), FILE_RETRY_MS)
+          // Past the hourly limit, or Nightmail couldn't be reached (or this browser is offline): that message and those after
+          // it go back into the box and its saved draft, so a reload keeps them too. Unreachable, they are sent again,
+          // unchanged, as soon as they can.
+          const capped = error instanceof FileError && error.reason === 'capped'
+          this.rollbackToDraft([next, ...this.outbox.splice(0)], capped ? this.state.ticket ? 'capped' : 'capped_first' : 'waiting')
+          if (!capped) this.fileTimer = setTimeout(() => this.retryParked(), FILE_RETRY_MS)
           break
         }
       }
     } finally { this.inFiling = null; this.outbox.push(...forChat); this.filingNow = false; this.save() }
+  }
+  /** Takes messages back out of the log and puts their words ahead of the box's, as the box holds them (MAX_MESSAGE at
+   *  most). `waiting` parks exactly those words, so they go on their own while the box still holds them. */
+  private rollbackToDraft(items: { clientMessageId: string; text: string }[], problem: NonNullable<ChatState['fileProblem']>) {
+    const ids = new Set(items.map(item => item.clientMessageId))
+    const draft = [...items.map(item => item.text).filter(Boolean), this.state.draft].filter(Boolean).join('\n\n').slice(0, MAX_MESSAGE)
+    if (problem === 'waiting') this.park(draft.trim())
+    this.set(state => ({ messages: state.messages.filter(item => !ids.has(item.id)), fileProblem: problem }))
+    this.setDraft(draft)
   }
   /** The outbox, once the conversation is connected (after its history). */
   private flush() {
@@ -340,9 +340,8 @@ export class SupportStore {
     if (this.parked !== null) this.retryParked()
   }
   /** Drops the reply placeholder: no answer is coming for it (a refusal, an error, the end of the conversation). */
-  private settle(failed?: string) {
-    this.set(state => ({ messages: state.messages.filter(item => !(item.local && item.role === 'assistant')).map(item => item.streaming ? { ...item, streaming: false }
-      : failed && item.local && item.role === 'user' ? { ...item, failed } : item) }))
+  private settle() {
+    this.set(state => ({ messages: state.messages.filter(item => !(item.local && item.role === 'assistant')).map(item => item.streaming ? { ...item, streaming: false } : item) }))
   }
   /** Screenshots pasted, dropped or picked: checked by type (from the bytes), size and the per-conversation limit, then
    *  uploaded at once while the person writes. */
@@ -498,10 +497,10 @@ export class SupportStore {
         const local = this.state.messages.flatMap(item => item.local ? [item] : item.id === lost?.clientMessageId ? [{ ...item, local: true }] : [])
         // A filed message stays filed: as the server holds it (the same ID, once the support platform took it in), or as
         // this panel showed it until then.
-        const filed = new Set(this.state.messages.flatMap(item => item.filed && item.filedId ? [item.filedId] : []))
-        const kept = this.state.messages.filter(item => item.filed && !messages.some(entry => entry.id === item.filedId))
+        const filed = new Set(this.state.messages.flatMap(item => item.filedId ? [item.filedId] : []))
+        const kept = this.state.messages.filter(item => item.filedId && !messages.some(entry => entry.id === item.filedId))
         const answering = this.state.busy && messages.at(-1)?.role === 'user' && !local.some(item => item.role === 'assistant')
-        this.set({ messages: [...messages.map(entry => filed.has(entry.id) ? { ...entry, filed: true, filedId: entry.id } : entry), ...kept, ...local, ...answering ? [placeholder(messages.at(-1)!.id)] : []], imagesSent: imagesSent + this.outbox.reduce((sum, item) => sum + (item.attachments?.length ?? 0), 0) })
+        this.set({ messages: [...messages.map(entry => filed.has(entry.id) ? { ...entry, filedId: entry.id } : entry), ...kept, ...local, ...answering ? [placeholder(messages.at(-1)!.id)] : []], imagesSent: imagesSent + this.outbox.reduce((sum, item) => sum + (item.attachments?.length ?? 0), 0) })
         if (message.pending?.consent) this.append({ kind: 'consent', request: message.pending.consent, state: 'open' })
         if (message.pending?.ticket?.ticketId) this.append({ kind: 'ticket', ticket: message.pending.ticket, screenshots: imagesSent })
         for (const request of message.pending?.actions ?? []) this.proposeAction(request)
