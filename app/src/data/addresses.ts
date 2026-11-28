@@ -62,7 +62,7 @@ export function useResolvedAddresses(ids: readonly (string | null | undefined)[]
   }, [ids, loadedIds])
   const useBulk = enabled && missing.length > SINGLE_LOOKUP_LIMIT && (nextCursor === undefined || Boolean(nextCursor))
   const bulk = useQuery({
-    queryKey: ['nightmail', 'inbound-addresses', 'bulk-resolve', nextCursor ?? null, missing.length],
+    queryKey: ['nightmail', 'inbound-addresses', 'bulk-resolve', nextCursor ?? null, missing],
     enabled: useBulk,
     staleTime: 60_000,
     retry: false,

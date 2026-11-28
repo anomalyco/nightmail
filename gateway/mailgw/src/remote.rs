@@ -583,8 +583,8 @@ pub type Sink<'a> = &'a mut dyn FnMut(&[u8]) -> bool;
 pub struct Store {
     /// The body FETCH or SEARCH is reading now (Store::materialize).
     body_permit: std::cell::RefCell<Option<crate::admission::Reservation>>,
-    /// A message SMTP DATA is spooling (Submitter::begin).
-    spool: Option<crate::upload::Spool>,
+    /// A message SMTP DATA is spooling (Submitter::begin); gateway/tear checks none outlives DATA.
+    pub(crate) spool: Option<crate::upload::Spool>,
     pending_copy: Option<([u8; 32], Value)>,
     page_wait: std::cell::Cell<Duration>,
     page: std::cell::RefCell<PreviewPage>,
@@ -1528,6 +1528,9 @@ impl Submitter for Store {
     }
     fn data(&mut self, chunk: &[u8]) -> bool {
         self.spool.as_mut().is_some_and(|s| s.write(chunk))
+    }
+    fn abort(&mut self) {
+        drop(self.spool.take());
     }
     /// The message streams to the API as the request body, with the envelope in x-bane-submit; both are signed, and the
     /// signature names the kind (api/src/protocol-admission.ts).

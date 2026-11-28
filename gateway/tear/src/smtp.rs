@@ -15,6 +15,7 @@
 //!   steps back never reopens a cap window.
 //! - Pipelined commands (one write) get one reply each, in order, exactly as sent one by one.
 //! - DATA is dot-transparent; more than 16 MiB gets 552 at the final dot.
+//! - No session holds a DATA spool once it has left DATA (submitted, rejected or refused).
 use crate::{
     fake_api::{self, Fake},
     remote::{Api, Login, Store},
@@ -413,7 +414,7 @@ impl Model {
         }
     }
     fn expected(&self, codes: &[u16]) -> Value {
-        json!({"codes": codes, "up": self.sessions.iter().map(|s| s.up).collect::<Vec<_>>(), "filed": self.filed})
+        json!({"codes": codes, "up": self.sessions.iter().map(|s| s.up).collect::<Vec<_>>(), "filed": self.filed, "stray_spools": []})
     }
 }
 fn first_day(month: i32) -> i64 {
@@ -640,7 +641,11 @@ impl Fixture {
                 false
             }
             None => {
-                conn.smtp.refuse_data();
+                if let Some(store) = conn.store.as_mut() {
+                    conn.smtp.refuse_data(store);
+                } else {
+                    conn.smtp.refuse_data(&mut crate::remote::Offline);
+                }
                 true
             }
         }
@@ -715,8 +720,21 @@ impl Fixture {
             }
         };
         Ok(
-            json!({"codes": codes, "up": self.conns.iter().map(Option::is_some).collect::<Vec<_>>(), "filed": self.filed()}),
+            json!({"codes": codes, "up": self.conns.iter().map(Option::is_some).collect::<Vec<_>>(), "filed": self.filed(), "stray_spools": self.stray_spools()}),
         )
+    }
+    /// Sessions still holding a DATA spool outside DATA: a rejected or refused message whose
+    /// spool was never released.
+    fn stray_spools(&self) -> Vec<usize> {
+        self.conns
+            .iter()
+            .enumerate()
+            .filter_map(|(s, c)| {
+                let c = c.as_ref()?;
+                let held = c.store.as_ref()?.spool.is_some();
+                (held && !c.smtp.receiving_data()).then_some(s)
+            })
+            .collect()
     }
     /// What the inbox kept: (raw passed through unchanged, dot-transparent body), per message.
     fn filed(&self) -> Vec<(bool, bool)> {

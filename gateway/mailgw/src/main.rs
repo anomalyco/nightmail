@@ -7,7 +7,7 @@ use anyhow::{Context, Result, anyhow};
 use mailgw_core::{
     imap::Imap,
     session::{Account, Action, Protocol, Reply},
-    smtp::{Caps, Sink, Smtp},
+    smtp::{Caps, Sink, Smtp, Submitter},
     store::Memory,
     wire::{Error as FrameError, Event, Frame},
 };
@@ -416,7 +416,11 @@ impl Gateway {
                         .await
                         else {
                             if let Core::Smtp(s) = &mut core {
-                                s.refuse_data();
+                                if let Some(store) = backend.as_mut() {
+                                    s.refuse_data(store);
+                                } else {
+                                    s.refuse_data(&mut remote::Offline);
+                                }
                             }
                             write(&mut stream, b"452 4.3.1 Submission capacity busy\r\n").await?;
                             continue;
@@ -424,7 +428,12 @@ impl Gateway {
                         data_permit = Some(permit);
                     }
                 } else {
-                    drop(data_permit.take())
+                    drop(data_permit.take());
+                    if matches!(&core, Core::Smtp(_))
+                        && let Some(store) = backend.as_mut()
+                    {
+                        store.abort();
+                    }
                 }
                 if login.is_none() && Instant::now() >= auth_deadline {
                     if smtp {

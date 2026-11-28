@@ -23,11 +23,11 @@ if grep -Eq "^(infra/pulumi/(tenant-status/|Pulumi\.$stage\.yaml$|package\.json$
   tenant_status=true
 fi
 # What the Pulumi program reads: infra/pulumi and infra/aws-shared (not their docs), the shared mail-control
-# documents, and the receiving-set check its job runs.
+# documents, the published BYO role templates, and the receiving-set check its job runs.
 # A stack settings file is only read by the selected stack. Shared changes since
 # the actual deployed base still count, not merely changes introduced by the PR.
 other=dev; [[ $stage == dev ]] && other=production
-inputs=$(grep -E '^(infra/|api/src/mail-controls\.ts$|\.github/scripts/receiving-rule-set\.sh$|\.github/actions/cloudflare-token/)' <<< "$changed" | grep -v '\.md$' | grep -Fxv "infra/pulumi/Pulumi.$other.yaml" || true)
+inputs=$(grep -E '^(infra/|api/src/mail-controls\.ts$|api/byo-templates/|\.github/scripts/receiving-rule-set\.sh$|\.github/actions/cloudflare-token/)' <<< "$changed" | grep -v '\.md$' | grep -Fxv "infra/pulumi/Pulumi.$other.yaml" || true)
 
 # The Pulumi job itself, aliases expanded and Require guards removed: a guard only stops a run, never changes what
 # Pulumi applies. A change anywhere else in deploy.yml (the Worker deploy, the E2E) is not Pulumi's.

@@ -72,6 +72,8 @@ pub trait Submitter {
     fn data(&mut self, _chunk: &[u8]) -> bool {
         false
     }
+    /// DATA ended without submission (oversize, write failure, rejected headers, or refused).
+    fn abort(&mut self) {}
     fn submit(&mut self, input: Submission<'_>) -> Result<Sent, SubmitError>;
 }
 /// Never delivers. Counters belong to this synthetic inbox, not to the socket, login alias or protocol.
@@ -187,7 +189,10 @@ impl Smtp {
     pub fn receiving_data(&self) -> bool {
         matches!(self.phase, Phase::Data(_) | Phase::Oversize)
     }
-    pub fn refuse_data(&mut self) {
+    pub fn refuse_data(&mut self, submit: &mut dyn Submitter) {
+        if matches!(self.phase, Phase::Data(ref body) if !body.failed) {
+            submit.abort();
+        }
         self.phase = Phase::Command;
         self.reset();
     }
@@ -229,6 +234,7 @@ impl Smtp {
                     let r = if body.failed {
                         Reply::one(&SubmitError::Unavailable.to_string())
                     } else if !owned_headers(&body.bytes, account) {
+                        submit.abort();
                         Reply::one("553 5.7.1 Header sender not owned")
                     } else {
                         let s = Submission {
@@ -250,11 +256,17 @@ impl Smtp {
                 }
                 let chunk = bytes.strip_prefix(b".").unwrap_or(bytes);
                 self.phase = if body.size + chunk.len() > MAX_SIZE {
+                    if !body.failed {
+                        submit.abort();
+                    }
                     Phase::Oversize
                 } else {
                     body.size += chunk.len();
                     if body.spooled {
-                        body.failed |= !submit.data(chunk);
+                        if !body.failed && !submit.data(chunk) {
+                            body.failed = true;
+                            submit.abort();
+                        }
                         let keep = HEAD.saturating_sub(body.bytes.len()).min(chunk.len());
                         body.bytes.extend_from_slice(&chunk[..keep]);
                     } else {
@@ -728,5 +740,101 @@ mod tests {
             &*remove_bcc(b"To: x\r\nBcC: a,\r\n b\r\n\r\nBcc: body\r\n"),
             b"To: x\r\n\r\nBcc: body\r\n"
         );
+    }
+    /// Any DATA path that exits without submit() aborts the spool so rejected spools are released immediately.
+    #[test]
+    fn rejected_data_aborts_the_spool() {
+        #[derive(Default)]
+        struct Spool {
+            active: bool,
+            aborts: usize,
+            submits: usize,
+            fail_write: bool,
+        }
+        impl Submitter for Spool {
+            fn begin(&mut self) -> bool {
+                self.active = true;
+                true
+            }
+            fn data(&mut self, _: &[u8]) -> bool {
+                !self.fail_write
+            }
+            fn abort(&mut self) {
+                self.active = false;
+                self.aborts += 1;
+            }
+            fn submit(&mut self, _: Submission<'_>) -> Result<Sent, SubmitError> {
+                self.active = false;
+                self.submits += 1;
+                Ok(Sent { copy: true })
+            }
+        }
+        let a = Account::new(
+            "mbx_test".into(),
+            vec!["x@example.invalid".into()],
+            "fixture".into(),
+            false,
+        );
+        let date: Date = "2025-01-17T00:00:00Z".parse().unwrap();
+        let mut smtp = Smtp::new(true);
+        let mut spool = Spool::default();
+        let start_data = |smtp: &mut Smtp, spool: &mut Spool| {
+            let r = smtp.step(b"MAIL FROM:<x@example.invalid>\r\n", &a, spool, date);
+            assert!(r.bytes.starts_with(b"250"));
+            let r = smtp.step(b"RCPT TO:<r@example.invalid>\r\n", &a, spool, date);
+            assert!(r.bytes.starts_with(b"250"));
+            let r = smtp.step(b"DATA\r\n", &a, spool, date);
+            assert!(r.bytes.starts_with(b"354"));
+            assert!(spool.active);
+        };
+        smtp.step(b"EHLO client.invalid\r\n", &a, &mut spool, date);
+        smtp.step(
+            b"AUTH PLAIN AHhAZXhhbXBsZS5pbnZhbGlkAGZpeHR1cmU=\r\n",
+            &a,
+            &mut spool,
+            date,
+        );
+
+        // 1. Unowned From header.
+        start_data(&mut smtp, &mut spool);
+        smtp.step(b"From: other@example.invalid\r\n", &a, &mut spool, date);
+        let r = smtp.step(b".\r\n", &a, &mut spool, date);
+        assert!(r.bytes.starts_with(b"553"));
+        assert!(!spool.active);
+        assert_eq!((spool.aborts, spool.submits), (1, 0));
+
+        // 2. Spool write failure.
+        spool.fail_write = true;
+        start_data(&mut smtp, &mut spool);
+        smtp.step(b"From: x@example.invalid\r\n", &a, &mut spool, date);
+        assert!(!spool.active);
+        let r = smtp.step(b".\r\n", &a, &mut spool, date);
+        assert!(r.bytes.starts_with(b"451"));
+        assert_eq!((spool.aborts, spool.submits), (2, 0));
+        spool.fail_write = false;
+
+        // 3. Oversize DATA.
+        start_data(&mut smtp, &mut spool);
+        let big = vec![b'a'; MAX_SIZE + 1];
+        smtp.step(&big, &a, &mut spool, date);
+        assert!(!spool.active);
+        let r = smtp.step(b".\r\n", &a, &mut spool, date);
+        assert!(r.bytes.starts_with(b"552"));
+        assert_eq!((spool.aborts, spool.submits), (3, 0));
+
+        // 4. Shell refuses DATA (capacity busy).
+        start_data(&mut smtp, &mut spool);
+        smtp.refuse_data(&mut spool);
+        assert!(!smtp.receiving_data());
+        assert!(!spool.active);
+        assert_eq!((spool.aborts, spool.submits), (4, 0));
+
+        // 5. Accepted submission does not call abort().
+        start_data(&mut smtp, &mut spool);
+        smtp.step(b"From: x@example.invalid\r\n", &a, &mut spool, date);
+        let r = smtp.step(b".\r\n", &a, &mut spool, date);
+        assert!(r.bytes.starts_with(b"250"));
+        assert!(!spool.active);
+        assert_eq!((spool.aborts, spool.submits), (4, 1));
     }
 }
