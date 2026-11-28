@@ -351,43 +351,9 @@ const mapList = (r: SdkContactList | SdkContactListRead): AudienceList => {
   }
 }
 const mapSegment = (r: SdkSegment): Segment => ({ id: r.id, name: r.name, rule: r.rule, updatedAt: r.updatedAt })
-const mapCampaign = (r: SdkCampaign): Campaign => ({
+const mapCampaignBase = (r: SdkCampaign | SdkCampaignSummary): Campaign => ({
   id: r.id,
   status: r.state,
-  counts: r.counts,
-  delivery: r.delivery ?? null,
-  sendEstimate: r.sendEstimate ?? null,
-  createdAt: r.createdAt,
-  updatedAt: r.updatedAt,
-  scheduledAt: r.scheduledAt,
-  archivedAt: r.archivedAt ?? null,
-  revision: r.revision,
-  sourceTemplateId: r.sourceTemplateId,
-  sourceTemplateRevision: r.sourceTemplateRevision,
-  draft: r.draft,
-  regionId: r.draft.region,
-  name: r.draft.name,
-  fromEmail: r.draft.from ?? '',
-  fromName: r.draft.fromName ?? '',
-  replyTo: r.draft.replyTo ?? [],
-  unsubscribePageUrl: r.draft.unsubscribePageUrl ?? '',
-  requiredNotice: r.draft.requiredNotice === true,
-  topicId: r.draft.topicId ?? '',
-  subject: r.draft.subject ?? '',
-  previewText: r.draft.previewText ?? '',
-  html: r.draft.html ?? '',
-  listId: r.draft.audience?.listId ?? '',
-  segmentId: r.draft.audience?.segmentId ?? null,
-  attachments: r.draft.attachments ?? [],
-  recipients: r.delivery?.total ?? r.counts?.total,
-  delivered: r.counts?.byStatus?.delivered,
-  bounced: r.counts?.byStatus?.bounced,
-  complaints: r.counts?.byStatus?.complained,
-})
-const mapCampaignSummary = (r: SdkCampaignSummary): Campaign => ({
-  id: r.id,
-  status: r.state,
-  stats: r.stats,
   counts: r.counts,
   delivery: r.delivery ?? null,
   createdAt: r.createdAt,
@@ -414,6 +380,21 @@ const mapCampaignSummary = (r: SdkCampaignSummary): Campaign => ({
   delivered: r.counts?.byStatus?.delivered,
   bounced: r.counts?.byStatus?.bounced,
   complaints: r.counts?.byStatus?.complained,
+})
+const mapCampaign = (r: SdkCampaign): Campaign => ({
+  ...mapCampaignBase(r),
+  sendEstimate: r.sendEstimate ?? null,
+  draft: r.draft,
+  replyTo: r.draft.replyTo ?? [],
+  unsubscribePageUrl: r.draft.unsubscribePageUrl ?? '',
+  requiredNotice: r.draft.requiredNotice === true,
+  topicId: r.draft.topicId ?? '',
+  html: r.draft.html ?? '',
+  attachments: r.draft.attachments ?? [],
+})
+const mapCampaignSummary = (r: SdkCampaignSummary): Campaign => ({
+  ...mapCampaignBase(r),
+  stats: r.stats,
 })
 const nonEmpty = (value: unknown) => typeof value === 'string' && value ? value : undefined
 const mapEmailEvent = (r: SdkEmailEvent): EmailEvent => ({

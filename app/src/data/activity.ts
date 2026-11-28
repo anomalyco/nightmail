@@ -7,7 +7,7 @@ export type { AuditActorType, AuditEntry }
 export type ActivityPage = { data: AuditEntry[]; nextCursor: string | null }
 export type ActivityFilters = { action?: string; actorType?: AuditActorType; since?: string; until?: string }
 
-export const activityApi = (scope: RequestScope | 'unscoped') => ({
+export const activityApi = (scope: RequestScope) => ({
   list: (filters: ActivityFilters & { cursor?: string; limit?: number }, signal?: AbortSignal) => {
     const params = new URLSearchParams({ limit: String(filters.limit ?? 50) })
     for (const key of ['cursor', 'action', 'actorType', 'since', 'until'] as const) if (filters[key]) params.set(key, filters[key]!)

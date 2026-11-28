@@ -6,7 +6,7 @@ import { useApi, useApiDef, useRegion, useWorkspaceAccess } from '../../data/con
 import { queries } from '../../data/queries'
 import { useRegionCatalog, useRegionDiscovery } from '../../data/regions'
 import { accountStatus, ratePercent, rateStatus } from '../../lib/reputation'
-import { campaignEditable, pendingEmailStatuses, type Campaign, type ChartPoint, type LogEntry, type Overview, type SesDiscovery, type TimeRange } from '../../data/types'
+import { campaignDeliveredShare, campaignEditable, pendingEmailStatuses, type Campaign, type ChartPoint, type LogEntry, type Overview, type SesDiscovery, type TimeRange } from '../../data/types'
 import { DataTable, EmptyState, ErrorState, Icon, PageHeader, SectionHeader, Select, StatusBadge, Tabs } from '../../components/ui'
 import { Crossfade, useMorph, useTween } from '../../components/motion'
 import { date, label, number, percent } from '../../lib/format'
@@ -245,9 +245,9 @@ function Campaigns({ rows }: { rows: Campaign[] }) {
   const warm = usePrefetchQueries()
   return <nav className="next-steps ov-campaigns" aria-label="Recent campaigns">
     <div className="ov-campaigns__head"><h2 className="ov-label">Campaigns</h2><Link className="ui-button ui-button--ghost ui-button--sm" to="/campaigns">All <Icon icon={ArrowUpRight} size="sm" /></Link></div>
-    <ul>{rows.map((row, i) => { const sent = row.status === 'done', deliveredCount = (row.counts?.total ?? 0) > 0 ? (row.counts!.byStatus.delivered ?? 0) + (row.counts!.byStatus.simulated ?? 0) : row.stats ? row.stats.delivered : (row.delivered ?? 0), intent = () => { if (!row.archivedAt && campaignEditable(row)) void warmCampaignEditor(cache, api, row.id); else void warm([queries.campaign(row.id)]) }
+    <ul>{rows.map((row, i) => { const sent = row.status === 'done', share = campaignDeliveredShare(row), intent = () => { if (!row.archivedAt && campaignEditable(row)) void warmCampaignEditor(cache, api, row.id); else void warm([queries.campaign(row.id)]) }
       return <li key={row.id} style={{ '--i': i } as CSSProperties}><Link to={`/campaigns/${row.id}/${campaignEditable(row) ? 'edit' : 'review'}`} title={row.name} onPointerEnter={intent} onFocus={intent}>
-        <span>{row.name}</span><span className="muted">{sent ? `${date(row.updatedAt, { month: 'short', day: 'numeric' })}${row.recipients ? ` · ${percent(deliveredCount / row.recipients, 0)} delivered` : ''}` : label(row.status)}</span><Icon icon={ArrowUpRight} size="sm" />
+        <span>{row.name}</span><span className="muted">{sent ? `${date(row.updatedAt, { month: 'short', day: 'numeric' })}${share !== null ? ` · ${percent(share, 0)} delivered` : ''}` : label(row.status)}</span><Icon icon={ArrowUpRight} size="sm" />
       </Link></li> })}</ul>
   </nav>
 }

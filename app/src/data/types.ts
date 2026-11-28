@@ -19,6 +19,16 @@ export type CampaignStatus = SdkCampaign['state']
 export const campaignEditable = (campaign: Pick<Campaign, 'status' | 'delivery'>) => campaign.status === 'draft' || (campaign.status === 'failed' && !(campaign.delivery?.expanded ?? 0))
 export const campaignResumable = (campaign: Pick<Campaign, 'status' | 'delivery'>) => campaign.status === 'paused' || (campaign.status === 'failed' && (campaign.delivery?.expanded ?? 0) > 0)
 export const campaignActive = (campaign: Pick<Campaign, 'status' | 'delivery'>) => ['preparing', 'scheduled', 'sending', 'paused'].includes(campaign.status) || campaignResumable(campaign)
+// Simulated sends count as delivered here (the review page lists them apart). Past the email history the stored totals
+// count instead; null when neither is known. Demo campaigns carry only `delivered`.
+export const campaignDeliveredCount = (campaign: Pick<Campaign, 'counts' | 'stats' | 'delivered'>): number | null =>
+  (campaign.counts?.total ?? 0) > 0 ? (campaign.counts!.byStatus.delivered ?? 0) + (campaign.counts!.byStatus.simulated ?? 0)
+  : campaign.stats ? campaign.stats.delivered : campaign.counts ? null : (campaign.delivered ?? null)
+export const campaignDeliveredShare = (campaign: Pick<Campaign, 'status' | 'recipients' | 'counts' | 'stats' | 'delivered'>): number | null => {
+  const recipients = campaign.recipients ?? 0
+  const count = campaign.status === 'done' && recipients > 0 ? campaignDeliveredCount(campaign) : null
+  return count === null ? null : count / recipients
+}
 export type WebhookEvent = 'send' | 'delivered' | 'bounced' | 'complaint' | 'rejected' | 'delivery_delayed' | 'email.sent' | 'email.delivered' | 'email.bounced' | 'email.complained' | 'email.rejected' | 'email.rendering_failed' | 'email.delivery_delayed' | 'email.opened' | 'email.clicked' | 'contact.subscription_changed' | 'account.standing.changed'
 export type TimeRange = '24h' | '7d' | '30d'
 export interface PageRequest { page?: number; pageSize?: number; search?: string; regionId?: RegionId; status?: string; stream?: string; listId?: string; segmentId?: string; campaignId?: string; cursor?: string; to?: string; from?: string }

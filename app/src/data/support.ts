@@ -49,7 +49,7 @@ export type SupportAction = {
 }
 // Only the person it was proposed to reads or decides it, with their own dashboard session; anyone else gets 404.
 const action = (id: string) => `/v1/support-actions/${encodeURIComponent(id)}`
-export const supportActionsApi = (scope: RequestScope | 'unscoped') => ({
+export const supportActionsApi = (scope: RequestScope) => ({
   get: (id: string, signal?: AbortSignal) => request<SupportAction>(action(id), { signal, scope }),
   confirm: (id: string) => request<SupportAction>(`${action(id)}/confirm`, { method: 'POST', scope }),
   decline: (id: string) => request<SupportAction>(`${action(id)}/decline`, { method: 'POST', scope }),
