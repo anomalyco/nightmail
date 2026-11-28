@@ -94,9 +94,7 @@
   .settings-mcp__workspace { flex: 1 0 100%; width: auto; }
 }
 
-/* The MCP connection page (mcp-approval.tsx): one 53px row per connected account, a radio to pick it. The account (its
-   radio, avatar, name and address) takes a wider first column than a label, its badges right after it. */
-@media (min-width: 641px) { .mcp-approval [role='radiogroup'] > .settings-row { grid-template-columns: minmax(0, 320px) minmax(0, 1fr); } }
-.mcp-approval__account { cursor: pointer; }
+/* The MCP connection page (mcp-approval.tsx): one 53px row for the agent's account (its avatar, name and address), the
+   whole row across, then its default workspace. */
+.mcp-approval .settings-row.mcp-approval__account { grid-template-columns: minmax(0, 1fr); }
 .mcp-approval__who { display: flex; align-items: center; gap: var(--space-12); min-width: 0; }
-.mcp-approval__who input { flex: none; margin: 0; accent-color: var(--color-contrast); }

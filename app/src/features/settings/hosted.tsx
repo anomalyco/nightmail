@@ -252,7 +252,9 @@ export function McpApproval({ app, workspaces, onRevoke, linked = true }: { app:
   const [revoking, setRevoking] = useState(false)
   const changed = workspaceId !== '' && workspaceId !== app.workspaceId
   const name = connectionTitle(app)
-  return <Row title={linked ? <Link to={`/settings/mcp/${encodeURIComponent(app.id)}`}>{name}</Link> : name}>
+  // The client ID itself stays on hover: the name shows the client's product or host when it identifies itself by URL.
+  const label = <span title={app.clientId}>{name}</span>
+  return <Row title={linked ? <Link to={`/settings/mcp/${encodeURIComponent(app.id)}`}>{label}</Link> : label}>
     <span className="settings-mcp">
       <Select aria-label={`Default workspace for ${name}`} className="settings-mcp__workspace" value={workspaceId} placeholder="Last used" disabled={bind.isPending}
         options={workspaces.map(workspace => ({ value: workspace.id, label: workspace.name }))} onValueChange={setWorkspaceId} />

@@ -119,7 +119,7 @@ export function KeyTable({ type, showRevoked, onConnectAgent }: { type: KeyTypeF
   }
   const name = (row: Row): { first: ReactNode; second: ReactNode } => {
     if (row.kind === 'key') return { first: row.key.name, second: `${agentClient(row.key)}Created ${date(row.key.createdAt)}${row.key.expiresAt && !row.key.revokedAt ? ` · ${past(row.key.expiresAt) ? 'ended' : 'ends'} ${date(row.key.expiresAt)}` : ''}` }
-    if (row.kind === 'agent') return { first: connectionTitle(row.agent), second: row.agent.own ? row.agent.clientId : <PrivateAddress value={row.agent.userEmail} /> }
+    if (row.kind === 'agent') return { first: connectionTitle(row.agent), second: row.agent.own ? 'You' : <PrivateAddress value={row.agent.userEmail} /> }
     if (row.kind === 'token') return { first: row.token.purpose, second: expiry(row.token) }
     return { first: row.password.name, second: `Created ${date(row.password.createdAt)}` }
   }
