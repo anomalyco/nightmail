@@ -7,7 +7,7 @@ import { assume, brokerRoleArn, loadStsSdk } from './provider-credentials.js';
 import { BYO_TEMPLATE_VERSIONS, byoSessionPolicy, byoTemplateUrl, versionAtLeast, type ByoPurpose } from './byo-permissions.js';
 import { requirePlatformAccount } from './config.js';
 import { awsError, byoFeedbackUrl, loadSetupSdk, provisionJournaledFeedback, readSelectedDomains, removeByoFeedbackResource, scanRegionPage, setupResources, type Inventory, type CandidateIdentity, type JournalEntry, type ScanStage, byoStackName } from './ses-setup.js';
-import { JobDeferred, retryDatabaseFailures } from './jobs.js';
+import { JobDeferred, MAX_ATTEMPTS, retryDatabaseFailures } from './jobs.js';
 import { acquireRegionProvisioning, campaignReserved, finishRegionProvisioning, verifyImportedClaims } from './states.js';
 import { claimNameAllowed, domainClaimed, domainLimitError, releaseConnectionClaims } from './domain-claims.js';
 import { getRegionSettings } from './ses-region-state.js';
@@ -199,15 +199,24 @@ async function disconnectSummary(db:DbExecutor,c:V5Connection):Promise<Summary> 
 }
 const Cleanup=z.object({operationId:z.string(),lastError:z.object({region:z.string().nullable(),code:z.string()}).nullable(),remaining:z.array(z.object({region:z.string(),resources:Region.shape.resources})),retain:z.array(z.string()),summary:DisconnectSummary.nullable()});
 export const InventoryFields={scan:ScanView.optional(),candidates:z.array(Candidate).optional(),cleanup:Cleanup.optional()};
-// An open selection in a region that isn't ready, with no setup queued or running (it failed, ran out of attempts or was
-// never queued), will never bind: it shows as failed with the region's error until the domain is selected again.
+// A selection (i) with its region (r), that region's setup job (p) and its own binding job (j). The job that acts on it
+// is its binding once the region is ready, the region's setup before. With neither queued nor running (it failed, ran out
+// of attempts or is gone) the selection will never bind: it shows as failed, and the next selection closes it.
+const intentJobs=sql`JOIN provider_connection_regions r USING(connection_id,region) LEFT JOIN jobs p ON p.id='byo.provision:'||r.connection_id||':'||r.region LEFT JOIN jobs j ON j.id='byo.bind:'||i.id`;
+const intentJob=sql`(CASE WHEN r.sending_state='ready' THEN j.status ELSE p.status END)`;
+const intentActive=sql`coalesce(${intentJob} IN ('pending','running'),false)`;
+const intentError=sql`coalesce(i.closed_reason,j.last_error,r.provision_error,p.last_error,'PROVISION_FAILED')`;
+/** Closes open selections whose job gave up (failed or finished without binding them), so the domain can be selected
+ *  again in any region. Runs under the connection lock, like every selection. */
+const closeGivenUp=(db:DbExecutor,c:V5Connection)=>db.execute(sql`UPDATE byo_domain_intents t SET closed_reason=s.error FROM (SELECT i.id,${intentError} AS error FROM byo_domain_intents i ${intentJobs}
+  WHERE i.connection_id=${c.id} AND i.closed_reason IS NULL AND ${intentJob} IN ('completed','failed')) s WHERE t.connection_id=${c.id} AND t.id=s.id`);
 export async function statuses(db:DbExecutor,cid:string) {
-  const rows=(await db.execute<ScanRow & {pending:z.infer<typeof Pending>[];failed:z.infer<typeof FailedIntent>[]}>(sql`SELECT r.*,i.pending,i.failed FROM provider_connection_regions r
-    LEFT JOIN jobs p ON p.id='byo.provision:'||r.connection_id||':'||r.region
-    CROSS JOIN LATERAL (SELECT r.sending_state<>'ready' AND p.status IS DISTINCT FROM 'pending' AND p.status IS DISTINCT FROM 'running' AS stuck) s CROSS JOIN LATERAL (SELECT
-    coalesce(jsonb_agg(jsonb_build_object('domain',i.name,'importing',i.importing,'error',j.last_error) ORDER BY i.name) FILTER(WHERE i.closed_reason IS NULL AND NOT s.stuck),'[]') AS pending,
-    coalesce(jsonb_agg(jsonb_build_object('domain',i.name,'importing',i.importing,'error',coalesce(i.closed_reason,r.provision_error,p.last_error,'PROVISION_FAILED')) ORDER BY i.name) FILTER(WHERE i.closed_reason IS NOT NULL OR s.stuck),'[]') AS failed
-    FROM byo_domain_intents i LEFT JOIN jobs j ON j.id='byo.bind:'||i.id WHERE i.connection_id=r.connection_id AND i.region=r.region) i WHERE r.connection_id=${cid} ORDER BY r.region`)).rows;
+  const domain=sql`'domain',i.name,'importing',i.importing`;
+  const rows=(await db.execute<ScanRow & {pending:z.infer<typeof Pending>[];failed:z.infer<typeof FailedIntent>[]}>(sql`SELECT r.*,coalesce(x.pending,'[]') AS pending,coalesce(x.failed,'[]') AS failed
+    FROM provider_connection_regions r LEFT JOIN (SELECT i.region,
+      jsonb_agg(jsonb_build_object(${domain},'error',j.last_error) ORDER BY i.name) FILTER(WHERE i.closed_reason IS NULL AND ${intentActive}) AS pending,
+      jsonb_agg(jsonb_build_object(${domain},'error',${intentError}) ORDER BY i.name) FILTER(WHERE i.closed_reason IS NOT NULL OR NOT ${intentActive}) AS failed
+      FROM byo_domain_intents i ${intentJobs} WHERE i.connection_id=${cid} GROUP BY i.region) x ON x.region=r.region WHERE r.connection_id=${cid} ORDER BY r.region`)).rows;
   return rows.map(s=>({region:s.region,regionLabel:regionLabels[s.region]!,scanState:s.scan_state,scanError:s.scan_error,sendingState:s.sending_state,receivingState:s.receiving_state,error:s.provision_error,facts:s.scan_facts,resources:s.ownership_journal.map(({kind,resource,target,state})=>({kind,resource,target,state})),pending:s.pending,failedIntents:s.failed}));
 }
 async function candidates(db:DbExecutor,c:V5Connection) {
@@ -274,6 +283,7 @@ export async function selectImports(r:Runtime,wid:string,input:z.infer<typeof Im
     await getRegionSettings(db,wid,'update');
     const locked=usable(await connection(db,wid,true)),replay=await op.read(db);if (replay) return replay;
     if (locked.id!==c.id || locked.inventory_revision!==input.revision) throw stale();
+    await closeGivenUp(db,c);
     for (const [region,domains] of groups) for (const name of domains) await saveIntent(db,c,region,name,true);
     return op.save(db,{operationId:'byo.import:'+hash(request),regions:[...groups.keys()].sort()});
   });
@@ -288,6 +298,7 @@ export async function newRegionalDomain(r:Runtime,wid:string,name:string,owner:b
   return r.db.transaction(async db=>{
     await getRegionSettings(db,wid,'update');if (usable(await connection(db,wid,true)).id!==c.id) throw stale();
     const op=receipt<Op>(c,'domain',key,JSON.stringify([name,override])),prior=await op.read(db);if(prior)return prior;
+    await closeGivenUp(db,c); // Never default to, or conflict with, a region whose setup gave up.
     const current=(await db.execute<{region:string}>(sql`SELECT region FROM domain_sending_bindings WHERE workspace_id=${wid} AND name=${name} UNION ALL SELECT region FROM byo_domain_intents WHERE connection_id=${c.id} AND name=${name} AND closed_reason IS NULL LIMIT 1`)).rows[0];
     const first=(await db.execute<{region:string}>(sql`SELECT region FROM provider_connection_regions WHERE connection_id=${c.id} AND sending_state='ready' ORDER BY ready_at,region LIMIT 1`)).rows[0];
     const region=override??current?.region??first?.region??'us-east-2';
@@ -399,9 +410,10 @@ async function bindIntent(r:Runtime,c:V5Connection,p:Record<string,unknown>) {
 const bind=runV5(async(r,c,p,attempt)=>{
   try {await bindIntent(r,c,p);} catch(e) {
     if (e instanceof ModuleLoadError) throw e;
-    // Preserve transient failures for retry. Closing only this attempt's intent
+    // Preserve transient failures for retry, until the last attempt. Closing only this attempt's intent
     // frees the name and capacity; a new selection gets a distinct ID and job.
-    if (e instanceof ApiError && !e.retryable) await r.db.execute(sql`UPDATE byo_domain_intents i SET closed_reason=${e.code}
+    const retryable=!(e instanceof ApiError) || e.retryable; // retryDatabaseFailures retries any other error
+    if (!retryable || attempt>=MAX_ATTEMPTS) await r.db.execute(sql`UPDATE byo_domain_intents i SET closed_reason=${e instanceof ApiError ? e.code : 'OPERATION_TEMPORARILY_UNAVAILABLE'}
       FROM jobs j WHERE i.connection_id=${c.id} AND i.id=${p.intent} AND i.closed_reason IS NULL AND j.id='byo.bind:'||i.id AND j.workspace_id=${c.workspace_id}
         AND j.status='running' AND j.attempts=${attempt} AND j.payload->>'run'=${p.run}`);
     throw e;

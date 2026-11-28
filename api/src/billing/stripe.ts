@@ -202,10 +202,15 @@ export async function failAttempt(runtime: Runtime, attemptId: string, code: str
   });
 }
 
-/** A failed recharge turns auto-recharge off until the owner turns it back on, with one recharge_failed notice (keyed by the attempt). */
+/**
+ * A failed recharge turns auto-recharge off until the owner turns it back on, with one recharge_failed notice (keyed by
+ * the attempt). A dispute or fraud warning that already turned it off stays the reason: the dashboard tells the owner
+ * to add a different card for those.
+ */
 async function stopRecharge(tx: DbExecutor, a: AttemptRow, account: { card_last4: string | null }, code: string, message: string | null) {
-  await tx.execute(sql`UPDATE billing_accounts SET recharge_pending_attempt=CASE WHEN recharge_pending_attempt=${a.id} THEN NULL ELSE recharge_pending_attempt END,
-    recharge_enabled=false, recharge_disabled_reason=${code.slice(0, 100)}, recharge_disabled_at=now(), updated_at=now() WHERE workspace_id=${a.workspace_id}`);
+  await tx.execute(sql`UPDATE billing_accounts SET recharge_pending_attempt=CASE WHEN recharge_pending_attempt=${a.id} THEN NULL ELSE recharge_pending_attempt END, recharge_enabled=false,
+    recharge_disabled_reason=CASE WHEN recharge_disabled_reason IN ('dispute','early_fraud_warning') THEN recharge_disabled_reason ELSE ${code.slice(0, 100)} END,
+    recharge_disabled_at=now(), updated_at=now() WHERE workspace_id=${a.workspace_id}`);
   const data = { attemptId: a.id, code, message: message?.slice(0, 300) ?? null, last4: a.card_last4 ?? account.card_last4 };
   await tx.execute(sql`SELECT billing_notice(${a.workspace_id}, 'recharge_failed', ${'recharge_failed:' + a.id}, ${JSON.stringify(data)}::jsonb)`);
   log('warn', { code: 'BILLING_RECHARGE_FAILED', workspaceId: a.workspace_id, attemptId: a.id, reason: code });
@@ -481,17 +486,20 @@ export async function settleInvoice(runtime: Runtime, attemptId: string, invoice
     invoiceUrl: invoice.hosted_invoice_url ?? null, invoicePdf: invoice.invoice_pdf ?? null, paymentIntent: invoicePaymentIntent(invoice) });
 }
 
-type ChargeGuard = { recharge_enabled: boolean; account_fingerprint: string | null; blocked: boolean };
-type ChargeStop = { code: string; message: string; status: 'failed' | 'canceled' };
+type ChargeGuard = { recharge_enabled: boolean; account_fingerprint: string | null; blocked: boolean; stripe_customer: string | null; stripe_payment_method: string | null };
+/** disable: whether a failed recharge turns auto-recharge off (failAttempt); a missing card isn't the card's failure. */
+type ChargeStop = { code: string; message: string; status: 'failed' | 'canceled'; disable?: boolean };
 /**
  * Why an open off-session attempt must not charge now, although it once could: its card or the workspace's was blocked
- * (a dispute or an early fraud warning), the workspace saved another card (the attempt records the one it was opened
- * for; an attempt from before that column has none and is not compared), or auto-recharge was turned off after the
- * recharge opened. Reconciliation re-runs the charge for up to 22 h, so each run asks again.
+ * (a dispute or an early fraud warning; blocking also forgets the saved card, so this is asked first), no card is saved,
+ * the workspace saved another card (the attempt records the one it was opened for; an attempt from before that column
+ * has none and is not compared), or auto-recharge was turned off after the recharge opened. Reconciliation re-runs the
+ * charge for up to 22 h, so each run asks again.
  */
 function stopCharge(a: AttemptRow & ChargeGuard): ChargeStop | null {
-  if (a.card_fingerprint !== null && a.card_fingerprint !== a.account_fingerprint) return { code: 'card_changed', message: 'The saved card changed before this charge went through.', status: 'canceled' };
   if (a.blocked) return { code: 'card_blocked', message: 'This card can no longer be charged.', status: 'failed' };
+  if (!a.stripe_customer || !a.stripe_payment_method) return { code: 'payment_method_missing', message: 'No card is saved for this workspace.', status: 'failed', disable: false };
+  if (a.card_fingerprint !== null && a.card_fingerprint !== a.account_fingerprint) return { code: 'card_changed', message: 'The saved card changed before this charge went through.', status: 'canceled' };
   if (a.kind === 'recharge' && !a.recharge_enabled) return { code: 'recharge_disabled', message: 'Auto-recharge was turned off before this charge went through.', status: 'canceled' };
   return null;
 }
@@ -513,8 +521,8 @@ async function abandonCharge(runtime: Runtime, cfg: StripeConfig, a: AttemptRow,
     if (!await closeInvoice(cfg, invoice, a.idempotency_key)) { await touch(runtime, a.id); return a.status; }
   }
   log('warn', { code: 'BILLING_CHARGE_STOPPED', workspaceId: a.workspace_id, attemptId: a.id, kind: a.kind, reason: stop.code });
-  // A blocked card ends auto-recharge with its notice; a changed card or auto-recharge turned off only frees the next trigger.
-  return failAttempt(runtime, a.id, stop.code, stop.message, stop.status);
+  // A blocked card ends auto-recharge with its notice; a missing or changed card, or auto-recharge turned off, only frees the next trigger.
+  return failAttempt(runtime, a.id, stop.code, stop.message, stop.status, stop.disable);
 }
 
 /**
@@ -526,15 +534,15 @@ async function abandonCharge(runtime: Runtime, cfg: StripeConfig, a: AttemptRow,
  */
 export async function chargeSavedCard(runtime: Runtime, attemptId: string): Promise<string> {
   const cfg = stripeConfig(runtime);
-  const [a] = await rows<AttemptRow & ChargeGuard & { stripe_customer: string | null; stripe_payment_method: string | null }>(runtime.db, sql`SELECT p.*, b.stripe_customer, b.stripe_payment_method,
+  const [a] = await rows<AttemptRow & ChargeGuard>(runtime.db, sql`SELECT p.*, b.stripe_customer, b.stripe_payment_method,
     coalesce(b.recharge_enabled, false) AS recharge_enabled, b.card_fingerprint AS account_fingerprint,
     EXISTS (SELECT FROM billing_blocked_cards c WHERE c.fingerprint IN (p.card_fingerprint, b.card_fingerprint)) AS blocked
     FROM billing_payment_attempts p LEFT JOIN billing_accounts b ON b.workspace_id=p.workspace_id WHERE p.id=${attemptId}`);
   if (!a || !OPEN.includes(a.status) || (a.kind !== 'saved_card' && a.kind !== 'recharge')) return a?.status ?? 'missing';
-  if (!a.stripe_customer || !a.stripe_payment_method) return failAttempt(runtime, attemptId, 'payment_method_missing', 'No card is saved for this workspace.', 'failed', false);
   const stop = stopCharge(a);
   if (stop) return abandonCharge(runtime, cfg, a, stop);
-  const key = a.idempotency_key, meta = metadata(cfg, a.workspace_id, { bane_attempt: attemptId }), pm = a.stripe_payment_method;
+  const customer = a.stripe_customer!, pm = a.stripe_payment_method!; // stopCharge refused the attempt without them
+  const key = a.idempotency_key, meta = metadata(cfg, a.workspace_id, { bane_attempt: attemptId });
   const product = a.stripe_credit_product;
   let invoiceId = a.stripe_invoice, addingProductLine = false;
   if (product) try { await creditProduct(cfg, product); }
@@ -545,7 +553,7 @@ export async function chargeSavedCard(runtime: Runtime, attemptId: string): Prom
   }
   try {
     if (!invoiceId) {
-      const invoice = await stripeRequest(cfg, 'POST', '/v1/invoices', { customer: a.stripe_customer, collection_method: 'charge_automatically', auto_advance: false,
+      const invoice = await stripeRequest(cfg, 'POST', '/v1/invoices', { customer, collection_method: 'charge_automatically', auto_advance: false,
         pending_invoice_items_behavior: 'exclude', automatic_tax: { enabled: cfg.automaticTax }, default_payment_method: pm, metadata: meta }, `${key}:invoice`);
       invoiceId = String(invoice.id);
       await runtime.db.execute(sql`UPDATE billing_payment_attempts SET stripe_invoice=${invoiceId}, status='pending', updated_at=now()
@@ -555,8 +563,8 @@ export async function chargeSavedCard(runtime: Runtime, attemptId: string): Prom
     // Old writers leave the product NULL. Replay their exact body, even if Stripe accepted it before the deploy.
     addingProductLine = product !== null;
     await stripeRequest(cfg, 'POST', '/v1/invoiceitems', product
-      ? { customer: a.stripe_customer, invoice: invoiceId, description: `${productName} credit`, price_data: { currency: 'usd', product, unit_amount: cents(a.amount_uc), tax_behavior: 'exclusive' }, metadata: meta }
-      : { customer: a.stripe_customer, invoice: invoiceId, amount: cents(a.amount_uc), currency: 'usd', description: `${productName} credit`, tax_behavior: 'exclusive', metadata: meta }, `${key}:item`);
+      ? { customer, invoice: invoiceId, description: `${productName} credit`, price_data: { currency: 'usd', product, unit_amount: cents(a.amount_uc), tax_behavior: 'exclusive' }, metadata: meta }
+      : { customer, invoice: invoiceId, amount: cents(a.amount_uc), currency: 'usd', description: `${productName} credit`, tax_behavior: 'exclusive', metadata: meta }, `${key}:item`);
     addingProductLine = false;
     await stripeRequest(cfg, 'POST', `${path}/finalize`, { auto_advance: false }, `${key}:finalize`);
     // The invoice carries the card (default_payment_method), so a retry sends identical parameters under the same key.
@@ -817,13 +825,13 @@ export async function reconcileRefund(runtime: Runtime, refundId: string): Promi
 async function blockCard(tx: DbExecutor, a: AttemptRow, reason: 'dispute' | 'early_fraud_warning') {
   if (a.card_fingerprint) await tx.execute(sql`INSERT INTO billing_blocked_cards(fingerprint, reason) VALUES (${a.card_fingerprint}, ${reason})
     ON CONFLICT (fingerprint) DO UPDATE SET reason=excluded.reason WHERE excluded.reason='early_fraud_warning'`);
-  await tx.execute(sql`UPDATE billing_accounts SET recharge_enabled=false, recharge_disabled_reason=${reason}, recharge_disabled_at=now(), updated_at=now() WHERE workspace_id=${a.workspace_id}`);
-  // As forgetCard: GET /v1/billing must not offer a blocked card as the saved one.
-  if (a.card_fingerprint) await tx.execute(sql`UPDATE billing_accounts SET stripe_payment_method=NULL, card_brand=NULL, card_last4=NULL, card_exp_month=NULL, card_exp_year=NULL, card_fingerprint=NULL
-    WHERE workspace_id=${a.workspace_id} AND card_fingerprint=${a.card_fingerprint}`);
+  // As forgetCard, when it is the saved card: GET /v1/billing must not offer a blocked card.
+  const forget = (column: string) => sql`${sql.raw(column)}=CASE WHEN card_fingerprint=${a.card_fingerprint} THEN NULL ELSE ${sql.raw(column)} END`;
+  await tx.execute(sql`UPDATE billing_accounts SET recharge_enabled=false, recharge_disabled_reason=${reason}, recharge_disabled_at=now(),
+    ${sql.join(['stripe_payment_method', 'card_brand', 'card_last4', 'card_exp_month', 'card_exp_year', 'card_fingerprint'].map(forget), sql`, `)}, updated_at=now() WHERE workspace_id=${a.workspace_id}`);
 }
 /**
- * A dispute debits what the payment credited (at most the disputed amount), blocks the card and stops auto-recharge.
+ * A dispute debits what the payment credited and wasn't refunded (at most the disputed amount), blocks the card and stops auto-recharge.
  * An inquiry (warning_needs_response) takes no funds yet but is held the same way: Stripe escalates it to a chargeback
  * without another charge.dispute.created, and closeDispute gives it back when it closes as warning_closed.
  */
@@ -832,9 +840,11 @@ export async function openDispute(runtime: Runtime, attemptId: string, dispute: 
     const locked = await lockAttempt(tx, attemptId);
     if (!locked) return;
     const { attempt: a } = locked;
-    const disputed = BigInt(Math.max(0, Number(dispute.amount) || 0)) * UC_PER_CENT, credited = BigInt(a.amount_uc);
-    const debit = disputed < credited ? disputed : credited;
-    await tx.execute(sql`SELECT billing_post(${a.workspace_id}, 'dispute', ${'dispute:' + dispute.id}, ${-debit}::bigint, 0::bigint,
+    // Only what the payment credited and wasn't refunded: an attempt that never credited (an amount mismatch, a late
+    // payment) debits nothing, and writes no dispute row that would hold the card's block after the others close.
+    const left = a.status === 'succeeded' ? BigInt(a.amount_uc) - BigInt(a.refunded_uc) : 0n, credited = left > 0n ? left : 0n;
+    const disputed = BigInt(Math.max(0, Number(dispute.amount) || 0)) * UC_PER_CENT, debit = disputed < credited ? disputed : credited;
+    if (debit > 0n) await tx.execute(sql`SELECT billing_post(${a.workspace_id}, 'dispute', ${'dispute:' + dispute.id}, ${-debit}::bigint, 0::bigint,
       ${JSON.stringify({ attemptId, disputeId: dispute.id, reason: dispute.reason ?? null })}::jsonb, 'stripe')`);
     await blockCard(tx, a, 'dispute');
     log('error', { code: 'BILLING_DISPUTE_OPENED', workspaceId: a.workspace_id, attemptId, disputeId: dispute.id, amountCents: Number(dispute.amount) || 0 });
@@ -857,7 +867,7 @@ export async function closeDispute(runtime: Runtime, attemptId: string, dispute:
     // Every dispute debit that has no reversal is one still open or lost.
     if (a.card_fingerprint) await tx.execute(sql`DELETE FROM billing_blocked_cards b WHERE b.fingerprint=${a.card_fingerprint} AND b.reason='dispute'
       AND NOT EXISTS (SELECT FROM billing_ledger d JOIN billing_payment_attempts p ON p.id=d.detail->>'attemptId'
-        WHERE d.kind='dispute' AND d.source_id<>${source} AND p.card_fingerprint=b.fingerprint
+        WHERE d.kind='dispute' AND d.paid_uc<>0 AND d.source_id<>${source} AND p.card_fingerprint=b.fingerprint
           AND NOT EXISTS (SELECT FROM billing_ledger r WHERE r.kind='dispute_reversal' AND r.source_id=d.source_id))`);
   });
 }

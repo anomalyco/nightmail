@@ -22546,7 +22546,7 @@ describe('Billing: Stripe', () => {
     for (const amount of [4339, 1085]) {
       const d = {id:'dp_'+randomUUID(), object:'dispute', amount, payment_intent:a.stripe_payment_intent, reason:'fraudulent', status:'needs_response'};
       await deliver('charge.dispute.created',d); await deliver('charge.dispute.closed',{...d,status:'won'});
-      const principal = BigInt(Math.min(3999, amount))*UC;
+      const principal = BigInt(Math.min(3999 - 333, amount))*UC; // What the payment credited, less the refund.
       assert.deepEqual((await ledger()).filter(r=>r.source_id==='dispute:'+d.id).map(r=>r.paid), [String(-principal),String(principal)]);
     }
   });
@@ -22814,7 +22814,7 @@ describe('Billing: Stripe', () => {
   });
 
   test('Reconciliation never pays a charge that may no longer run: auto-recharge turned off, the card replaced or blocked voids its invoice instead', async t => {
-    const { runtime, db, fake, wid, account, attempt, enforcement, saveCard, recharge, stripe } = await stripeFixture(t);
+    const { runtime, db, fake, wid, account, attempt, enforcement, saveCard, recharge, stripe, deliver } = await stripeFixture(t);
     await enforcement('enforce'); await saveCard();
     const warnings = t.mock.method(console, 'warn', () => {});
     const autoRecharge = (enabled: boolean) => stripe.setAutoRecharge(runtime, wid, { enabled, thresholdCents: 10_000, amountCents: 2500, monthlyCapCents: 100_000 });
@@ -22839,13 +22839,25 @@ describe('Billing: Stripe', () => {
     fake.card = { ...fake.card, last4: '1881', fingerprint: `fp_${randomUUID().slice(0, 12)}` }; await saveCard();
     assert.deepEqual(await stopped(replaced), ['canceled', 'card_changed', 'void', 0]);
     assert.deepEqual([(await account()).recharge_pending_attempt, (await account()).recharge_enabled], [null, true], 'Neither is the new card\'s fault.');
+    // A dispute blocks the card, and forgets it, while a recharge on it is still open: that recharge is card_blocked (not
+    // card_changed or a missing card), its invoice is voided, and auto-recharge stays off for the dispute.
+    const paid = (await stripe.chargeSavedCardTopUp(runtime, { workspaceId: wid, amountCents: 2000, actor: 'user:fixture' })).attemptId;
+    const disputed = await unanswered(async () => { await recharge(); return (await account()).recharge_pending_attempt; });
+    const errors = t.mock.method(console, 'error', () => {});
+    await deliver('charge.dispute.created', { id: `dp_${randomUUID().replaceAll('-', '')}`, object: 'dispute', amount: 2000, payment_intent: (await attempt(paid)).stripe_payment_intent, reason: 'fraudulent', status: 'needs_response' });
+    errors.mock.restore();
+    const blockedPrint = fake.card.fingerprint;
+    cleanup(t, async () => { await db.query('DELETE FROM billing_blocked_cards WHERE fingerprint = $1', [blockedPrint]); });
+    assert.deepEqual(await stopped(disputed), ['failed', 'card_blocked', 'void', 0]);
+    assert.deepEqual([(await account()).recharge_enabled, (await account()).recharge_disabled_reason, (await account()).stripe_payment_method], [false, 'dispute', null]);
+    fake.card = { ...fake.card, last4: '0005', fingerprint: `fp_${randomUUID().slice(0, 12)}` }; await saveCard();
     const top = await unanswered(async () => (await stripe.chargeSavedCardTopUp(runtime, { workspaceId: wid, amountCents: 2000, actor: 'user:fixture' })).attemptId);
     const fingerprint = fake.card.fingerprint;
     await db.query("INSERT INTO billing_blocked_cards(fingerprint, reason) VALUES ($1, 'dispute')", [fingerprint]);
     cleanup(t, async () => { await db.query('DELETE FROM billing_blocked_cards WHERE fingerprint = $1', [fingerprint]); });
     assert.deepEqual(await stopped(top), ['failed', 'card_blocked', 'void', 0]);
     warnings.mock.restore();
-    assert.deepEqual([(await account()).balance, [...fake.objects.values()].filter(o => o.object === 'charge').length], ['0', 0]);
+    assert.deepEqual([(await account()).balance, [...fake.objects.values()].filter(o => o.object === 'charge').length], ['0', 1], 'Only the disputed top-up was charged, and its credit went with the dispute.');
   });
 
   test('Refund: the hold lands before Stripe is called, a refusal releases it, and only unspent paid credit is refundable', async t => {
@@ -23019,9 +23031,12 @@ describe('Billing: Stripe', () => {
     } finally { errors.mock.restore(); warnings.mock.restore(); }
     const a = await account(), notices = (await db.query("SELECT data FROM billing_notices WHERE workspace_id=$1 AND kind='recharge_failed'", [wid])).rows;
     assert.deepEqual([a.recharge_enabled, a.recharge_disabled_reason, a.recharge_pending_attempt, notices.map(n => [n.data.attemptId, n.data.code])], [false, 'amount_mismatch', null, [[id, 'amount_mismatch']]]);
+    // Disputing either charge takes nothing: neither credited the workspace.
+    const opened = t.mock.method(console, 'error', () => {});
+    try { for (const disputed of [id, top.attemptId]) await stripe.openDispute(runtime, disputed, { id: `dp_${randomUUID().replaceAll('-', '')}`, amount: 2400 }); } finally { opened.mock.restore(); }
     const closed = await attempt(top.attemptId);
     assert.deepEqual([closed.status, closed.charged_cents, closed.stripe_payment_intent, closed.stripe_charge, closed.stripe_invoice, closed.receipt_url], ['expired', 2000, 'pi_late', 'ch_late', 'in_late', 'https://pay.stripe.test/receipts/late'], 'The refund by hand has what it needs.');
-    assert.deepEqual((await ledger()).map(r => r.kind), [], 'Neither payment is credited.');
+    assert.deepEqual((await ledger()).map(r => r.kind), [], 'Neither payment is credited, and neither dispute debits or leaves a row.');
   });
 
   // Review finding 3: an hour of sends isn't settled yet; refunding it would leave the workspace in debt.
@@ -28759,6 +28774,10 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       await db.query("UPDATE jobs SET last_error='OPERATION_TEMPORARILY_UNAVAILABLE' WHERE id=$1",[`byo.provision:${v5.id}:${va}`]);
       await db.query("UPDATE provider_connection_regions SET sending_state='provisioning',provision_error=NULL WHERE connection_id=$1 AND region=$2",[v5.id,va]);
       assert.deepEqual(await failedFor(),['provisioning',[],[{domain,importing:true,error:'OPERATION_TEMPORARILY_UNAVAILABLE'}]]);
+      // The same domain in another region is a new selection, not a DOMAIN_REGION_CONFLICT with the one that gave up.
+      assert.deepEqual(ok(await api('POST','/v1/domains',{name:domain,region:oh}),202).regions,[oh]);
+      assert.deepEqual([(await failedFor())[2],(await regionStatus(oh)).pending.some((i:Json)=>i.domain===domain)],[[],true],'The selection moved to the new region.');
+      await db.query('DELETE FROM byo_domain_intents WHERE connection_id=$1 AND name=$2 AND region=$3',[v5.id,domain,oh]); // The rest of this test selects it in its own region.
       await db.query("UPDATE provider_connection_regions SET sending_state='failed' WHERE connection_id=$1 AND region=$2",[v5.id,va]); // Selecting it again retries.
     });
     const concurrent=await Promise.all([select(ohId,vaId),select(ohId,vaId)]);assert.equal(ok(concurrent[0]!,202).operationId,ok(concurrent[1]!,202).operationId);
@@ -36418,9 +36437,11 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal((await db.query(`SELECT count(*)::int AS n FROM hosted_operator_audit WHERE workspace_id=$1 AND action='operator-release-campaign'`, [wid])).rows[0].n, 1);
       // Paused before every recipient was validated: the release goes back to preparing (it used to skip to sending), and
       // no caller can move such a campaign past preparing.
-      await db.query(`UPDATE sending_campaigns SET state='paused',paused_at=now(),total=total+50 WHERE id=$1`, [c.id]);
-      const { resumeCampaign } = await import('./src/states.js');
-      assert.equal((await runtime.db.execute(resumeCampaign({ workspaceId: wid, id: c.id }, 'sending'))).rows.length, 0);
+      const { resumeCampaign } = await import('./src/states.js'), ref = { workspaceId: wid, id: c.id };
+      await db.query(`UPDATE sending_campaigns SET state='paused',paused_at=now() WHERE id=$1`, [c.id]);
+      assert.equal((await runtime.db.execute(resumeCampaign(ref, 'preparing'))).rows.length, 0, 'A prepared campaign never goes back to preparing (a 409, not the constraint\'s 500).');
+      await db.query(`UPDATE sending_campaigns SET total=total+50 WHERE id=$1`, [c.id]);
+      assert.equal((await runtime.db.execute(resumeCampaign(ref, 'sending'))).rows.length, 0);
       ok(await local('POST', `/v1/operator/campaigns/${c.id}/release`, { reason: 'Reviewed the list source again' }));
       assert.equal((await view()).state, 'preparing');
     });
