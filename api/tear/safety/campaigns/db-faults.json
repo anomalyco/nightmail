@@ -225,6 +225,36 @@
         "outcome": "pass"
       },
       "note": "A 57014 timeout after the first write inside a request returns retryable 503 and never double-sends on retry"
+    },
+    {
+      "name": "suppressed-recipient-mid-request-fault-never-replays-phantom-202",
+      "steps": [
+        {
+          "op": "SetFault",
+          "mode": "after_second_write_57014"
+        },
+        {
+          "op": "SendSuppressed"
+        },
+        {
+          "op": "SetFault",
+          "mode": "none"
+        },
+        {
+          "op": "SendSuppressed"
+        },
+        {
+          "op": "Send",
+          "key": "k1"
+        },
+        {
+          "op": "Drain"
+        }
+      ],
+      "expected": {
+        "outcome": "pass"
+      },
+      "note": "PR #1046: a send to a suppressed recipient never claims its Idempotency-Key. Before, the admission statement committed a receipt and a later statement deleted it; a fault on that delete left a receipt the retry replayed as a phantom 202"
     }
   ]
 }

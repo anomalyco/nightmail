@@ -22,7 +22,11 @@ const FAULT_MODES: readonly FaultMode[] = [
   "lock_55P03",
   "pool_exhausted_53300",
   "after_first_write_57014",
+  "after_second_write_57014",
 ] as const;
+
+/** Faults that may fail a request after some of its writes committed, so its key's outcome is unknown. */
+const midRequest = (mode: FaultMode) => mode === "after_first_write_57014" || mode === "after_second_write_57014";
 
 const dbFaultIdleRules: IdleRule<DbFaultSnapshot>[] = [
   {
@@ -75,6 +79,7 @@ export const dbFaults = model<DbFaultState, DbFaultAction, DbFaultObs, DbFaultSn
     out.push(
       choice({ op: "Send", key: "k1" }, 3),
       choice({ op: "Send", key: "k2" }, 3),
+      choice({ op: "SendSuppressed" }, 2),
       choice({ op: "CreateList" }, 2),
       choice({ op: "ReadMe" }, 2),
       choice({ op: "Drain" }, 3),
@@ -108,11 +113,25 @@ export const dbFaults = model<DbFaultState, DbFaultAction, DbFaultObs, DbFaultSn
       };
     }
 
+    if (a.op === "SendSuppressed") {
+      // Its recipient is suppressed, so no attempt queues mail or keeps its Idempotency-Key (s1): a crash after the
+      // admission statement must not leave a receipt that a retry replays as a 202 for mail that was never queued.
+      return {
+        next,
+        expect: satisfies("ineligible-never-accepted", (obs) => {
+          if (obs.status >= 200 && obs.status < 300) return `a send to a suppressed recipient was accepted (${obs.status}, emailId ${obs.emailId}) under fault ${s.fault}`;
+          if (obs.status === 422 && obs.code === "RECIPIENT_INELIGIBLE") return true;
+          if (s.fault !== "none" && (obs.status === 503 || obs.status === 409) && obs.retryable === true) return true;
+          return `expected 422 RECIPIENT_INELIGIBLE${s.fault === "none" ? "" : " or a retryable 503/409"} under fault ${s.fault}, got ${obs.status} ${obs.code} (retryable=${obs.retryable})`;
+        }),
+      };
+    }
+
     if (a.op === "Send") {
       if (s.fault === "none" && !next.keysAccepted.includes(a.key)) {
         next.keysAccepted.push(a.key);
       }
-      if (s.fault === "after_first_write_57014" && !next.uncertainKeys.includes(a.key)) {
+      if (midRequest(s.fault) && !next.uncertainKeys.includes(a.key)) {
         next.uncertainKeys.push(a.key);
       }
     }
@@ -124,7 +143,7 @@ export const dbFaults = model<DbFaultState, DbFaultAction, DbFaultObs, DbFaultSn
       }
       if (s.fault === "none") {
         if (obs.status >= 200 && obs.status < 300) return true;
-        // Only keys previously sent under after_first_write_57014 may legitimately return 409 IDEMPOTENCY_OUTCOME_UNKNOWN.
+        // Only keys previously sent under a mid-request fault may legitimately return 409 IDEMPOTENCY_OUTCOME_UNKNOWN.
         if (keyUncertain && obs.status === 409 && obs.code === "IDEMPOTENCY_OUTCOME_UNKNOWN") return true;
         return `expected 2xx while DB is healthy, got ${obs.status} ${obs.code} (retryable=${obs.retryable})`;
       }

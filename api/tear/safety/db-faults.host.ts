@@ -65,10 +65,12 @@ function makeFaultError(mode: FaultMode, text: string): Error | null {
     case "pool_exhausted_53300":
       return Object.assign(new Error("sorry, too many clients already"), { code: "53300" });
     case "after_first_write_57014":
+    case "after_second_write_57014":
       if (!isWriteSql(text)) return null;
       reqWriteSeq += 1;
-      // Let the first write succeed (e.g., chargeCredential or idempotency claim), then fail the next write mid-request.
-      return reqWriteSeq >= 2
+      // Let the first write (the credential charge) or the first two (also the send admission and its idempotency
+      // claim) succeed, then fail the next write mid-request.
+      return reqWriteSeq > (mode === "after_first_write_57014" ? 1 : 2)
         ? Object.assign(new Error("canceling statement due to statement timeout"), { code: "57014" })
         : null;
   }
@@ -197,6 +199,26 @@ async function api(t: Trial, method: string, path: string, body?: unknown, heade
   return { status: r.status, body: parsed };
 }
 
+/** The recipient (and Idempotency-Key suffix) of SendSuppressed: a hard-bounce suppressed contact in every trial. */
+const SUPPRESSED = "s1";
+
+/** Sends one email to `<key>@example.com` with the Idempotency-Key `<workspace>-<key>`. */
+async function send(t: Trial, key: string) {
+  const res = await api(
+    t,
+    "POST",
+    "/v1/emails/send",
+    { from: "sender@example.com", to: `${key}@example.com`, region: t.region, subject: "DB fault test", text: "Synthetic body" },
+    { "idempotency-key": `${t.w}-${key}` },
+  );
+  return {
+    status: res.status,
+    code: res.status >= 400 ? res.body?.error?.code ?? null : null,
+    retryable: res.status >= 400 ? (typeof res.body?.error?.retryable === "boolean" ? res.body.error.retryable : false) : null,
+    emailId: res.status === 202 && typeof res.body?.id === "string" ? (res.body.id as string) : null,
+  };
+}
+
 const letters = (n: number) => {
   let s = "";
   do {
@@ -230,6 +252,10 @@ export const dbFaultsHost = host(dbFaults, {
       [`key_${w}`, w, createHash("sha256").update(secret).digest("hex"), secret.slice(0, 14)],
     );
     await ensureRegionSettings(drizzle(admin), { workspaceId: w, regions: [region] });
+    await admin.query(
+      "INSERT INTO audience_contacts(id,workspace_id,email,suppressed,suppression_reason) VALUES ($1,$2,$3,true,'hard_bounce')",
+      [`contact_${w}`, w, `${SUPPRESSED}@example.com`],
+    );
     const trial: Trial = {
       bug: req.bug,
       w,
@@ -254,21 +280,16 @@ export const dbFaultsHost = host(dbFaults, {
         currentFault = a.mode;
         reqWriteSeq = 0;
         return { status: 200, code: null, retryable: null, emailId: null, duplicateKeyId: false, drained: false };
+      case "SendSuppressed": {
+        const { status, code, retryable, emailId } = await send(t, SUPPRESSED);
+        if (emailId) t.acceptedIds.add(emailId);
+        if (currentFault !== "none" && status >= 400 && retryable !== true && code !== "RECIPIENT_INELIGIBLE") {
+          t.nonRetryableFaultErrors.push(`SendSuppressed:${status}:${code}`);
+        }
+        return { status, code, retryable, emailId, duplicateKeyId: false, drained: false };
+      }
       case "Send": {
-        const res = await api(
-          t,
-          "POST",
-          "/v1/emails/send",
-          {
-            from: "sender@example.com",
-            to: `${a.key}@example.com`,
-            region: t.region,
-            subject: "DB fault test",
-            text: "Synthetic body",
-          },
-          { "idempotency-key": `${t.w}-${a.key}` },
-        );
-        const emailId = res.status === 202 && typeof res.body?.id === "string" ? res.body.id : null;
+        const { status, code, retryable, emailId } = await send(t, a.key);
         let duplicateKeyId = false;
         if (emailId) {
           t.acceptedIds.add(emailId);
@@ -280,12 +301,10 @@ export const dbFaultsHost = host(dbFaults, {
           if (ids.size > 0 && !ids.has(emailId)) duplicateKeyId = true;
           ids.add(emailId);
         }
-        const code = res.status >= 400 ? res.body?.error?.code ?? null : null;
-        const retryable = res.status >= 400 ? (typeof res.body?.error?.retryable === "boolean" ? res.body.error.retryable : false) : null;
-        if (currentFault !== "none" && res.status >= 400 && retryable !== true && code !== "IDEMPOTENCY_OUTCOME_UNKNOWN") {
-          t.nonRetryableFaultErrors.push(`Send:${res.status}:${code}`);
+        if (currentFault !== "none" && status >= 400 && retryable !== true && code !== "IDEMPOTENCY_OUTCOME_UNKNOWN") {
+          t.nonRetryableFaultErrors.push(`Send:${status}:${code}`);
         }
-        return { status: res.status, code, retryable, emailId, duplicateKeyId, drained: false };
+        return { status, code, retryable, emailId, duplicateKeyId, drained: false };
       }
       case "CreateList": {
         const res = await api(t, "POST", "/v1/lists", { name: `list-${randomBytes(4).toString("hex")}` });
