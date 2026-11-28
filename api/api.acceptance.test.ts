@@ -1050,6 +1050,63 @@ test('retries: failures that happened together are spread out, up to each kind o
   const batch = Array.from({ length: 200 }, () => retryDelay(4, { capMs: 3_600_000 }));
   assert.ok(new Set(batch).size > 100 && Math.min(...batch) >= 720_000 && Math.max(...batch) <= 1_200_000, 'A batch of failed webhooks does not come due at one instant.');
 });
+test('event webhooks: only 408, 429 and 5xx answers are retried, each retry waits out Retry-After, and overloaded answers open the endpoint\'s breaker', async t => {
+  const [{ nodeRuntime }, { operationJobs, encrypt }, { ActionRetry }, { JobDeferred }] = await Promise.all([
+    import('./src/adapters/node.js'), import('./src/operations.js'), import('./src/ritual-retry.js'), import('./src/jobs.js')]);
+  const instance = nodeRuntime({ DATABASE_URL: FIXTURE_DATABASE_URL, BANE_ROOT_SECRET: AUTH_SECRET, ACCOUNT_ISSUER: process.env.ACCOUNT_ISSUER, ACCOUNT_CLIENT_ID: 'fixture', ACCOUNT_CLIENT_PRIVATE_KEY: 'unused-by-session-fixture',
+    AUTH_ALLOWED_SUBJECTS: AUTH_SUBJECT, PUBLIC_URL: PUBLIC_ORIGIN, DEFAULT_SES_REGION: REGION, ENABLE_LIVE_SES: 'false', S3_BUCKET: 'synthetic-webhook-fixture', S3_ACCESS_KEY_ID: 'synthetic-storage-id', S3_SECRET_ACCESS_KEY: 'synthetic-storage-secret' });
+  cleanup(t, instance.close);
+  const runtime = instance.runtime, wid = unique('hook-workspace');
+  // No delivery here touches the database: the claim is given, and the settlement is handed back unwritten.
+  const answers: { status: number; retryAfter?: string }[] = [];
+  let posts = 0;
+  runtime.webhookFetch = async () => { posts++; return answers.shift()!; };
+  const deliver = async (hook: string, answer?: { status: number; retryAfter?: string }) => {
+    if (answer) answers.push(answer);
+    const payload = { id: unique('evt'), type: 'email.delivered', createdAt: new Date().toISOString(), workspaceId: wid, region: null, data: {} };
+    const webhook = { delivery_id: unique('whd'), generation: 0, event_id: payload.id, webhook_id: hook, url: `https://example.com/${hook}`, synthetic: false, encrypted_headers: null, payload,
+      encrypted_secret: await encrypt(runtime, 'whsec_' + Buffer.alloc(32, 7).toString('base64'), `${wid}:live:${hook}`) };
+    return operationJobs['operation.webhook']!(runtime, {}, { id: unique('job'), attempts: 1, workspaceId: wid, webhook, recordWithSettlement: () => {} });
+  };
+  const refused = (status: number) => assert.rejects(deliver(unique('hook'), { status }), (e: any) => !(e instanceof ActionRetry) && e.code === 'WEBHOOK_HTTP_ERROR' && e.retryable === false, `${status} is final`);
+  for (const status of [400, 401, 403, 404, 410, 422]) await refused(status);
+  const retried = (status: number, retryAfter: string | undefined, afterMs: number) => assert.rejects(deliver(unique('hook'), { status, retryAfter }),
+    (e: any) => e instanceof ActionRetry && e.code === 'WEBHOOK_HTTP_ERROR' && e.afterMs === afterMs, `${status} retries after ${afterMs} ms`);
+  await retried(408, undefined, 0); await retried(429, '120', 120_000); await retried(500, undefined, 0); await retried(503, '30', 30_000);
+  // Three overloaded answers in a row from one endpoint hold its next delivery without posting it.
+  const down = unique('hook');
+  for (let i = 0; i < 3; i++) await assert.rejects(deliver(down, { status: 503 }), ActionRetry);
+  const before = posts;
+  await assert.rejects(deliver(down), (e: any) => e instanceof JobDeferred && Date.parse(e.availableAt) > Date.now() + 25_000);
+  assert.equal(posts, before, 'An open breaker posts nothing.');
+});
+test('attachment deletion: the storage delete runs outside any database transaction, after a check that nothing references the key', async () => {
+  const { deleteAttachment } = await import('./src/dispatch.js'), { uploadKey } = await import('./src/storage-keys.js');
+  const wid = unique('delete-workspace').replaceAll('-', '_'), key = uploadKey(wid, 'attachment_' + randomUUID().replaceAll('-', ''));
+  const deleted: string[] = [];
+  let used = false, fail = false;
+  const runtime = { db: { execute: async () => ({ rows: [{ used }] }), transaction: () => assert.fail('No transaction is held across the storage call.') },
+    storage: { delete: async (k: string) => { if (fail) throw new Error('storage down'); deleted.push(k); } } } as never;
+  const run = () => deleteAttachment(runtime, { key }, { id: unique('job'), attempts: 1, workspaceId: wid });
+  await run(); assert.deepEqual(deleted, [key]);
+  used = true; await run(); assert.deepEqual(deleted, [key], 'A referenced key is kept.');
+  used = false; fail = true; await assert.rejects(run(), { code: 'STORAGE_DELETE_FAILED', retryable: true });
+});
+test('health: direct mail due and waiting warns at five minutes and pages at thirty, each held two ticks; a failed probe is unknown, not fine', async () => {
+  const { evaluate, emptyMemory } = await import('./src/health.js');
+  type Sample = import('./src/health.js').Sample;
+  let memory = emptyMemory(), now = 1_800_000_000;
+  const tick = (directMail: Sample['directMail']) => { const result = evaluate({ queues: [], late: [], failed: [], directMail, campaigns: [], counters: [], database: null }, memory, now); memory = result.rollup.memory; now += 60; return result; };
+  const found = (directMail: Sample['directMail']) => tick(directMail).findings.filter(f => f.kind === 'mail-behind').map(f => `${f.severity} ${f.value}: ${f.words}`);
+  assert.deepEqual(found({ due: 40, oldestSeconds: 30 }), []);
+  assert.deepEqual(found({ due: 40, oldestSeconds: 400 }), [], 'One tick is busy, not behind.');
+  assert.deepEqual(found({ due: 40, oldestSeconds: 460 }), ['warning 460: 40 due, oldest 8 min.']);
+  const blind = tick(null);
+  assert.deepEqual([[...blind.blind].includes('mail'), blind.rollup.directMail, blind.rollup.memory.streaks['mail-behind']], [true, null, 2]);
+  assert.deepEqual(found({ due: 5_000, oldestSeconds: 1_900 }), ['warning 1900: 5,000+ due, oldest 32 min.']);
+  assert.deepEqual(found({ due: 5_000, oldestSeconds: 1_960 }), ['critical 1960: 5,000+ due, oldest 33 min.']);
+  assert.deepEqual(tick({ due: 0, oldestSeconds: 0 }).rollup.directMail, { due: 0, oldestSeconds: 0, behind: false });
+});
 test('verified attachments: the isolate cache is part of the memory budget and gives way to a reservation', async () => {
   const { verifiedAttachment } = await import('./src/sending.js'), { memoryStats, reserveMemory } = await import('./src/isolate-memory.js'), { SEND_LIMITS } = await import('./src/send-limits.js');
   const body = new Uint8Array(8 * 1024 * 1024).fill(7), checksum = createHash('sha256').update(body).digest('hex');
@@ -17007,6 +17064,23 @@ describe('Transactional sending, idempotency and scoped authorization', () => {
     // A sender's clock a little behind: a time up to a minute ago is accepted and goes at once.
     const late = ok(await send({ scheduledAt: new Date(Date.now() - 30_000).toISOString() }), 202);
     assert.equal((await poll(`/v1/emails/${late.id}`, key.secret, row => row.status === 'delivered')).scheduled, false);
+  });
+
+  test('dispatch claim: an email whose recipient contact another transaction holds for writing waits a few seconds in the queue, and no other email waits on it', async t => {
+    const key = await keyFixture(t), holder = await fixtureDatabase(t), busy = address();
+    const contact = await resource(t, key.secret, '/v1/contacts', { email: busy });
+    await holder.query('BEGIN');
+    let held: Json;
+    try {
+      // An import or a bulk change holding the contact row: the claim used to wait for it, with every email in its group.
+      await holder.query('SELECT 1 FROM audience_contacts WHERE id=$1 FOR UPDATE', [contact.id]);
+      held = ok(await http('POST', '/v1/emails/send', key.secret, mail({ to: busy })), 202);
+      const other = ok(await http('POST', '/v1/emails/send', key.secret, mail()), 202);
+      await poll(`/v1/emails/${held.id}`, key.secret, row => row.status === 'queued' && row.errorCode === 'RECIPIENT_BUSY');
+      await poll(`/v1/emails/${other.id}`, key.secret, row => row.status === 'delivered');
+    } finally { await holder.query('COMMIT'); }
+    const sent = await poll(`/v1/emails/${held.id}`, key.secret, row => row.status === 'delivered');
+    assert.equal(sent.errorCode, null);
   });
 
   test('a scheduled send can be canceled or moved until it starts sending, and its sender is told', async t => {
@@ -43710,6 +43784,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
           const attempt=(id:string,attempts:number)=>mailboxEventJobs['mailbox.webhook'](runtime,{deliveryId:id},{id,workspaceId:wid,attempts});const state=async(id:string)=>(await db.query('SELECT state FROM mail_action_attempts WHERE delivery_id=$1',[id])).rows[0].state;
           const timeout=async()=>{throw Object.assign(new Error('timed out'),{name:'TimeoutError'})};
           const first=await deliveryFor('chat-throttled');runtime.webhookFetch=async()=>({status:429,retryAfter:'1.5'});await assert.rejects(attempt(first,1),(e:unknown)=>e instanceof ActionRetry&&e.afterMs===1500&&e.code==='DESTINATION_THROTTLED');
+          // A delivered post resets the endpoint's breaker: the 429 above and the two timeouts below are not three failures in a row.
+          runtime.webhookFetch=async()=>({status:200});await attempt(await deliveryFor('chat-recovered'),1);
           runtime.webhookFetch=timeout;await assert.rejects(attempt(first,2),{code:'ACTION_UNKNOWN',retryable:false});assert.equal(await state(first),'unknown');
           assert.deepEqual((await call('PATCH','/v1/endpoints/triage',{retryOnTimeout:true})).policy,{perMinute:30,retryOnTimeout:true,idempotent:false});error(await local('PATCH','/v1/endpoints/triage',{idempotent:true}),422,'UNSUPPORTED_IDEMPOTENCY');
           const second=await deliveryFor('chat-timeout');await assert.rejects(attempt(second,1),(e:unknown)=>e instanceof ActionRetry&&e.code==='ACTION_UNKNOWN');runtime.webhookFetch=async()=>({status:200});await attempt(second,2);assert.equal(await state(second),'delivered');
@@ -45779,7 +45855,8 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const {processJobs,WEBHOOK_ATTEMPTS}=await import('./src/jobs.js'),{operationJobs}=await import('./src/operations.js');
       await db.query('CREATE TEMP TABLE jobs (LIKE public.jobs INCLUDING ALL) ON COMMIT DROP');
       const hook=ok(await local('POST','/v1/webhooks',{url:'https://example.com/fixture'}),201), delivery=ok(await local('POST',`/v1/webhooks/${hook.id}/test`),202);
-      runtime.webhookFetch=async()=>({status:503}); let horizon=0;
+      // A plain 500: a 502, 503 or 504 would open the endpoint's breaker and defer attempts without counting them.
+      runtime.webhookFetch=async()=>({status:500}); let horizon=0;
       for(let i=1;i<=WEBHOOK_ATTEMPTS;i++) {
         await db.query("UPDATE jobs SET available_at=now() WHERE payload->>'deliveryId'=$1",[delivery.id]);
         const start=Date.now();assert.equal(await processJobs(runtime,operationJobs,1,1),1);
@@ -50866,7 +50943,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.equal(requeued.dispatch_version, 1, 'A throttled attempt requeues the row under a new dispatch version.');
       assert.equal(requeued.lease_until, null);
       const retryAt = new Date(requeued.scheduled_at).getTime();
-      assert.ok(retryAt >= beforeThrottle + 2000 && retryAt <= afterThrottle + 2000, `Retry should be due in 2000ms; observed ${retryAt - beforeThrottle}ms.`);
+      assert.ok(retryAt >= beforeThrottle + 1500 && retryAt <= afterThrottle + 2500, `Retry should be due in 2000ms ±25%; observed ${retryAt - beforeThrottle}ms.`);
       assert.equal((await events(first.id)).filter(event => event.type === 'provider_throttled').length, 1);
       assert.equal((await jobs('operation.simulatedFeedback')).length, 0);
       // Not yet due: another pass must not touch the row or consume the retry outcome.
@@ -50879,7 +50956,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const secondStart = Date.now();
       await run('email.dispatch');
       const second = await stored(first.id), secondWait = new Date(second.scheduled_at).getTime();
-      assert.equal(second.status,'queued'); assert.ok(secondWait >= secondStart + 4000 && secondWait <= Date.now() + 4000);
+      assert.equal(second.status,'queued'); assert.ok(secondWait >= secondStart + 3000 && secondWait <= Date.now() + 5000);
       await db.query('UPDATE sending_emails SET scheduled_at = clock_timestamp() WHERE id = $1', [first.id]);
       await run('email.dispatch');
       const accepted = ok(await local('GET', `/v1/emails/${first.id}`));
@@ -50917,6 +50994,134 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.ok(callbacks.every(job => job.payload.message.mail.messageId === accepted.providerId));
       const versions = (await db.query('SELECT dispatch_version FROM sending_emails WHERE workspace_id = $1 ORDER BY dispatch_version DESC', [runtime.config.workspaceId])).rows;
       assert.deepEqual(versions, [{ dispatch_version: 3 }, { dispatch_version: 0 }, { dispatch_version: 0 }]);
+    });
+  });
+
+  test('SES throttling: a 400 "Maximum sending rate exceeded" and any number of 429s requeue the email with growing, capped, jittered waits and never reject it', async t => {
+    await simulatedSesFixture(t, async ({ local, db, run }) => {
+      const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
+      // Attempt 1 is HTTP 400, which SES also uses for per-second throttling; then more 429s than the old five-retry ceiling.
+      const throttles = [[400, 'Throttling', 'Maximum sending rate exceeded.'], ...Array.from({ length: 8 }, () => [429, 'TooManyRequestsException', 'Too Many Requests'] as const)] as const;
+      let sends = 0;
+      t.mock.method(SESv2Client.prototype, 'send', async (command: any) => {
+        if (command instanceof GetAccountCommand) return { SendingEnabled: true, SendQuota: { MaxSendRate: 1000, Max24HourSend: 100000, SentLast24Hours: 0 } };
+        const failure = throttles[sends++];
+        if (failure) throw Object.assign(new Error(failure[2]), { name: failure[1], $metadata: { httpStatusCode: failure[0] } });
+        return { MessageId: 'accepted-after-throttling' };
+      });
+      const email = ok(await local('POST', '/v1/emails/send', mail()), 202);
+      for (let i = 0; i < throttles.length; i++) {
+        const before = Date.now(); await run('email.dispatch'); const after = Date.now();
+        const row = (await db.query('SELECT status,error_code,scheduled_at FROM sending_emails WHERE id=$1', [email.id])).rows[0];
+        assert.deepEqual([row.status, row.error_code], ['queued', 'SES_THROTTLED'], `throttle ${i + 1}`);
+        const wait = Date.parse(row.scheduled_at.toISOString()), base = 2000 * 2 ** i;
+        // ±25%, and at the 5-minute cap spread over its last quarter.
+        assert.ok(wait >= before + Math.min(0.75 * base, 225_000) - 50 && wait <= after + Math.min(1.25 * base, 300_000) + 50, `throttle ${i + 1}: waited ${wait - before} ms`);
+        await db.query('UPDATE sending_emails SET scheduled_at=now() WHERE id=$1', [email.id]);
+      }
+      await run('email.dispatch');
+      const accepted = ok(await local('GET', `/v1/emails/${email.id}`));
+      // Accepted mail keeps no error from the throttles before it.
+      assert.deepEqual([accepted.status, accepted.providerId, accepted.errorCode, sends], ['accepted', 'accepted-after-throttling', null, throttles.length + 1]);
+      // A 400 refusal whose text names an address like throttle@example.com is a refusal, not throttling.
+      t.mock.method(SESv2Client.prototype, 'send', async () => { throw Object.assign(new Error('Email address is not verified. The following identities failed the check: throttle@example.com'), { name: 'MessageRejected', $metadata: { httpStatusCode: 400 } }); });
+      const refused = ok(await local('POST', '/v1/emails/send', mail()), 202);
+      await run('email.dispatch');
+      const row = ok(await local('GET', `/v1/emails/${refused.id}`));
+      assert.deepEqual([row.status, row.errorCode], ['rejected', 'MessageRejected']);
+    });
+  });
+
+  test('dispatch wake-ups: attachment mail waiting out a storage outage, and mail a busy claim gave back, wake the shard when due; only a live storage read ends the outage', async t => {
+    await simulatedSesFixture(t, async ({ runtime, local, db }) => {
+      const [{ SESv2Client, GetAccountCommand }, { dispatchDue, initialGate }, { PgDialect }] = await Promise.all([import('@aws-sdk/client-sesv2'), import('./src/dispatcher.js'), import('drizzle-orm/pg-core')]);
+      let sends = 0;
+      t.mock.method(SESv2Client.prototype, 'send', async (command: any) => {
+        if (command instanceof GetAccountCommand) return { SendingEnabled: true, SendQuota: { MaxSendRate: 1000, Max24HourSend: 100000, SentLast24Hours: 0 } };
+        sends++; return { MessageId: unique('accepted') };
+      });
+      const objects = new Map<string, { body: Uint8Array; contentType: string }>();
+      let down = false, gets = 0;
+      t.mock.method(runtime.storage, 'put', async (k: string, body: Uint8Array, contentType: string) => { objects.set(k, { body, contentType }); });
+      t.mock.method(runtime.storage, 'get', async (k: string) => { gets++; if (down) throw new Error('connect ETIMEDOUT'); return objects.get(k) ?? null; });
+      const file = ok(await local('POST', '/v1/attachments', { filename: 'notes.txt', contentType: 'text/plain', content: Buffer.from(unique('notes')).toString('base64') }), 201);
+      const row = async (id: string) => (await db.query('SELECT status,error_code,extract(epoch FROM lease_until)*1000 AS lease FROM sending_emails WHERE id=$1', [id])).rows[0];
+      const gate = initialGate(), dispatch = () => dispatchDue(runtime, REGION, { gate });
+      // Storage throws: the shard opens one window, 15 s ±25%, and the run sleeps until it ends instead of polling.
+      down = true;
+      const first = ok(await local('POST', '/v1/emails/send', mail({ attachments: [file.id] })), 202);
+      const before = Date.now(), outage = await dispatch();
+      const until = gate.storageUntil!;
+      assert.ok(until >= before + 11_250 && until <= Date.now() + 18_750, `window ${until - before} ms`);
+      assert.deepEqual([outage.idle, outage.paceRetryAt, gate.storageStreak], [true, until, 1]);
+      let held = await row(first.id);
+      assert.equal(held.status, 'queued'); assert.ok(Math.abs(Number(held.lease) - until) < 1000);
+      // Mail that waits out the window without asking storage proves nothing: the window and its streak stay.
+      down = false;
+      const second = ok(await local('POST', '/v1/emails/send', mail({ attachments: [file.id] })), 202);
+      const readsBefore = gets, waiting = await dispatch();
+      assert.deepEqual([waiting.paceRetryAt, gets, gate.storageUntil, gate.storageStreak, (await row(second.id)).status], [until, readsBefore, until, 1, 'queued']);
+      // The window ends and storage answers: both send and the outage is over.
+      gate.storageUntil = Date.now() - 1;
+      await db.query('UPDATE sending_emails SET lease_until=NULL WHERE id = ANY($1)', [[first.id, second.id]]);
+      const back = await dispatch();
+      assert.deepEqual([back.sent, gets > readsBefore, gate.storageUntil, gate.storageStreak], [2, true, undefined, undefined]);
+      // A cached attachment is no live read: a streak left from an earlier outage is kept.
+      gate.storageStreak = 2;
+      const cached = ok(await local('POST', '/v1/emails/send', mail({ attachments: [file.id] })), 202), readsCached = gets;
+      assert.equal((await dispatch()).sent, 1);
+      assert.deepEqual([gets, gate.storageStreak, (await row(cached.id)).status], [readsCached, 2, 'accepted']);
+      // A claim that waits past its lock_timeout gives its mail back for 5 s, and the run wakes then.
+      const dialect = new PgDialect(), execute = runtime.db.execute.bind(runtime.db);
+      let refused = 0;
+      t.mock.method(runtime.db, 'execute', async (query: Parameters<typeof execute>[0]) => {
+        if (!refused && dialect.sqlToQuery((query as { getSQL(): import('drizzle-orm').SQL }).getSQL()).sql.includes('before AS MATERIALIZED')) { refused++; throw Object.assign(new Error('canceling statement due to lock timeout'), { code: '55P03' }); }
+        return execute(query);
+      });
+      const busy = ok(await local('POST', '/v1/emails/send', mail()), 202);
+      const claimStart = Date.now(), contended = await dispatch();
+      assert.equal(refused, 1);
+      assert.ok(contended.idle && contended.paceRetryAt! >= claimStart + 5000 && contended.paceRetryAt! <= Date.now() + 5000, `wake ${contended.paceRetryAt! - claimStart} ms`);
+      held = await row(busy.id);
+      assert.equal(held.status, 'queued'); assert.ok(Math.abs(Number(held.lease) - contended.paceRetryAt!) < 1000);
+      assert.equal(sends, 3);
+    });
+  });
+
+  test('SES quota: a failed GetAccount holds the refresh election for seconds, a shard with a recent sample keeps sending on it, and a cold shard says when to try again', async t => {
+    await simulatedSesFixture(t, async ({ runtime, local, db }) => {
+      const { SESv2Client, GetAccountCommand } = await import('@aws-sdk/client-sesv2');
+      const { campaignQuota, dispatchDue, initialGate } = await import('./src/dispatcher.js');
+      let quotaDown = true, sends = 0;
+      t.mock.method(SESv2Client.prototype, 'send', async (command: any) => {
+        if (!(command instanceof GetAccountCommand)) { sends++; return { MessageId: unique('accepted') }; }
+        if (quotaDown) throw Object.assign(new Error('Rate exceeded'), { name: 'TooManyRequestsException', $metadata: { httpStatusCode: 429 } });
+        return { SendingEnabled: true, SendQuota: { MaxSendRate: 1000, Max24HourSend: 100000, SentLast24Hours: 0 } };
+      });
+      const wid = runtime.config.workspaceId, a = { workspaceId: wid } as never;
+      const fence = async () => (await db.query('SELECT extract(epoch FROM next_allowed_at-clock_timestamp())::float8 AS s FROM sending_region_limits WHERE workspace_id=$1 AND region=$2', [wid, REGION])).rows[0].s as number | null;
+      const status = async (id: string) => (await db.query('SELECT status FROM sending_emails WHERE id=$1', [id])).rows[0].status;
+      // The election's fence is seconds long, not the minute-long cache period: a failed call delays only the next try.
+      await assert.rejects(campaignQuota(runtime, a, REGION), { name: 'TooManyRequestsException' });
+      const held = await fence();
+      assert.ok(held !== null && held > 0 && held <= 10, `fence ${held} s`);
+      // A shard whose sample is two minutes old paces on it while the refresh fails, and sends.
+      await db.query('UPDATE sending_region_limits SET next_allowed_at=NULL WHERE workspace_id=$1 AND region=$2', [wid, REGION]);
+      const warm = ok(await local('POST', '/v1/emails/send', mail()), 202);
+      const gate = { ...initialGate(), quota: { maxSendRate: 1000, max24HourSend: 100000, sentLast24Hours: 0, checkedAt: Date.now() - 120_000 } };
+      const report = await dispatchDue(runtime, REGION, { gate });
+      assert.deepEqual([report.sent, sends, await status(warm.id)], [1, 1, 'accepted']);
+      // A cold shard that loses the election to a refresh that never publishes gives its mail back and says when to come back.
+      await db.query("UPDATE sending_region_limits SET next_allowed_at=clock_timestamp()+interval '1 minute' WHERE workspace_id=$1 AND region=$2", [wid, REGION]);
+      const cold = ok(await local('POST', '/v1/emails/send', mail()), 202);
+      const blocked = await dispatchDue(runtime, REGION, { gate: initialGate() });
+      assert.equal(blocked.sent, 0); assert.equal(await status(cold.id), 'queued');
+      assert.ok(blocked.quotaRetryAt !== undefined && blocked.quotaRetryAt > Date.now() && blocked.quotaRetryAt <= Date.now() + 6000, `quotaRetryAt ${blocked.quotaRetryAt}`);
+      // Once GetAccount answers, the sample publishes and the election's fence is let go.
+      quotaDown = false;
+      await db.query('UPDATE sending_region_limits SET next_allowed_at=NULL WHERE workspace_id=$1 AND region=$2', [wid, REGION]);
+      assert.equal((await campaignQuota(runtime, a, REGION))?.maxSendRate, 1000);
+      assert.equal(await fence(), null);
     });
   });
 

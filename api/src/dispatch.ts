@@ -11,18 +11,18 @@ export const deleteAttachment: JobHandler = async (runtime, payload, job) => {
   const key = payload.key;
   if (!isDeletableUploadKey(job.workspaceId, key)) throw new ApiError(500, 'JOB_PAYLOAD_INVALID', 'Attachment deletion key is outside the job scope.');
   // Recheck when deleting, not when queuing, and never from the key alone: no row may reference this exact
-  // key (storage_key_in_use, 158). A new reference needs the reservation or asset row this check also sees,
-  // so none can appear before the delete below, in the same transaction.
-  const deleted = await runtime.db.transaction(async tx => {
-    if ((await tx.execute<{ used: boolean }>(sql`SELECT storage_key_in_use(${key}) AS used`)).rows[0]!.used) return false;
-    try { await runtime.storage.delete(key); }
-    catch (error) {
-      if (error instanceof ModuleLoadError) throw error;
-      throw new ApiError(503, 'STORAGE_DELETE_FAILED', 'Attachment deletion failed; retrying the retained object key.', undefined, true);
-    }
-    return true;
-  });
-  if (!deleted) log('warn', { code: 'ATTACHMENT_DELETE_KEPT', workspaceId: job.workspaceId, message: 'A row references the object; it was not deleted.' });
+  // key (storage_key_in_use, 158). Upload keys are never reused (uploads/<workspace>/<id>), so once nothing references
+  // one nothing can again. The check is one autocommit read: the delete, a network call to R2 or S3 that can take
+  // seconds, holds no database connection or transaction.
+  if ((await runtime.db.execute<{ used: boolean }>(sql`SELECT storage_key_in_use(${key}) AS used`)).rows[0]!.used) {
+    log('warn', { code: 'ATTACHMENT_DELETE_KEPT', workspaceId: job.workspaceId, message: 'A row references the object; it was not deleted.' });
+    return;
+  }
+  try { await runtime.storage.delete(key); }
+  catch (error) {
+    if (error instanceof ModuleLoadError) throw error;
+    throw new ApiError(503, 'STORAGE_DELETE_FAILED', 'Attachment deletion failed; retrying the retained object key.', undefined, true);
+  }
 };
 export function resolveJobHandler(type: string): Promise<JobHandler | undefined> {
   return wrapModuleLoad(async () => {
@@ -102,8 +102,11 @@ export async function dispatchPartitions(runtime: Runtime, recoverInterrupted = 
     FROM sending_emails e JOIN ses_installation_settings s ON s.workspace_id=e.workspace_id
     WHERE ${due} AND e.screened AND s.enabled_regions ? e.region`;
   if (!recoverInterrupted) return (await runtime.db.execute<Partition>(partitions)).rows;
-  const {rows:[result]}=await runtime.db.execute<{n:number;partitions:Partition[]}>(sql`${recovery} SELECT (SELECT count(*)::int FROM webhook_jobs) AS n,
-    coalesce((SELECT jsonb_agg(to_jsonb(p)) FROM (${partitions}) p),'[]') AS partitions`);
+  const {rows:[result]}=await runtime.db.execute<{n:number;interrupted:number;partitions:Partition[]}>(sql`${recovery} SELECT (SELECT count(*)::int FROM webhook_jobs) AS n,
+    (SELECT count(*)::int FROM stale) AS interrupted, coalesce((SELECT jsonb_agg(to_jsonb(p)) FROM (${partitions}) p),'[]') AS partitions`);
+  // A provider call that never recorded its answer (its run was cut off mid-send): SES may or may not have the
+  // message. An error line, so the health tick counts it (docs/operations.md errors).
+  if (result!.interrupted) log('error', { code: 'INTERRUPTED_PROVIDER_ATTEMPT', count: result!.interrupted });
   await wakeWebhooks(runtime,result!.n); return result!.partitions;
 }
 /** Jobs plus due mail for every account/region, in this process. Node runners and tests use this. */

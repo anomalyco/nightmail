@@ -75,6 +75,12 @@ export const JOBS_LATE: Record<string, AgeRule> = {
   other: { warning: 600 },
   abuse: {}, abuse_sample: {}, // Measured by outstanding source work, not queue age.
 };
+/**
+ * Direct mail (sent through the API, not a campaign's copies) that is queued and due: the oldest has waited this long
+ * for the mail room. A campaign's queue is campaign-slow's to judge. Mail scheduled for later, or waiting out a
+ * throttle, is not due and never counts. At most `read` are read a tick, oldest first.
+ */
+export const DIRECT_MAIL = { warning: 300, critical: 1_800, sustain: 2, remindMinutes: 30, read: 5_000 } as const;
 export const JOBS = {
   sustain: 2, remindMinutes: 30,
   /** At most this many due and this many failed jobs are read per tick, newest failures first: the count shows "5,000+". */

@@ -17,6 +17,9 @@ export function retryDelay(attempt: number, { capMs, afterMs = 0, random = Math.
   const lo = Math.min(0.75 * raw, 0.75 * capMs), hi = Math.min(1.25 * raw, capMs);
   return Math.max(afterMs, Math.round(lo + (hi - lo) * random()));
 }
+/** A webhook answer that retrying will not change: a 4xx other than 408 (timeout) and 429 (throttled). Those, a 5xx and a
+ *  network error are retried (the delivery contract in createWebhook's description). */
+export const refusedForGood = (status: number) => status >= 400 && status < 500 && status !== 408 && status !== 429;
 /** Retry-After as delta seconds (integer or decimal, as Discord sends) or an HTTP date; capped at 7 days. */
 export function retryAfterMs(value?: string | null, now = Date.now()) {
   if (!value) return 0;

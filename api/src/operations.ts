@@ -14,6 +14,7 @@ import { X509Certificate, verify } from 'node:crypto';
 import { isIP } from 'node:net';
 import { actor, ApiError, assertSesConfigured, chargeBudget, denied, requiredOf, restrictedArea, unrestrictedRequired, assertSharedAccount, isSimulatedSes, digest, errors, getSes, id, rowId, IdParams, json, lazyModule, log, logError, ModuleLoadError, notFound, PageQuery, preloadSesTransport, randomSecret, redactCapabilityData, region, response, security, senderDomainAllowed, simulatedTopic, taggedEmailId, wrapModuleLoad, type App, type Actor, type Ctx, type Config, type Database, type DbExecutor, type JobHandler, type Permission, type Runtime } from './core.js';
 import { chargeManualDelivery, claimedWithWebhooks, enqueue, JobDeferred, WEBHOOK_ATTEMPTS, retryDatabaseFailures, webhookClaimCtes } from './jobs.js';
+import { ActionRetry, refusedForGood, retryAfterMs } from './ritual-retry.js';
 import { applyClaim, connectionReady, domainHosts, receivingSetup, type ReceivingSetup, hostGraceStart, identityOnly, LOST_GRACE_MS, poolReceives, poolSends, transitionClaim, type ClaimEvidence, type ClaimState, type HostEvidence, type HostStatus, type HostWrite, type IdentityFacts, type TenantState, PROOF_LABELS, proofRecordName, type ProofLabel } from './states.js';
 import { WORKSPACE_FOCUS, type WorkspaceFocus } from './workspace-focus.js';
 import { SETUP_LIMITS, SETUP_SENDER } from './setup-email.js';
@@ -174,7 +175,10 @@ export function webhookUrl(runtime: Pick<Runtime, 'config'>, value: string) {
   return url.toString();
 }
 const hookTimeouts=new Map<string,{count:number;until:number}>();
-/** The one outbound transport for sending and inbound webhooks: no redirects, five-second budget, response bodies discarded. */
+/** Answers that say the endpoint is overloaded or down, which open its breaker like timeouts do. */
+const OVERLOADED = new Set([429, 502, 503, 504]);
+/** The one outbound transport for sending and inbound webhooks: no redirects, five-second budget, response bodies discarded.
+ *  Three timeouts or overloaded answers in a row hold every delivery to the endpoint for 30 s, or its Retry-After (up to 15 min). */
 export async function postWebhook(runtime: Runtime, url: string, headers: Record<string, string>, body: string, encryptedHeaders: string | null, binding: string, timeoutSeconds=5) {
   const key=await digest(binding+'\n'+url),prior=hookTimeouts.get(key);
   // Nothing leaves while the breaker is open: return only this claim's attempt. Resetting the count let every delivery to an
@@ -186,16 +190,20 @@ export async function postWebhook(runtime: Runtime, url: string, headers: Record
   for (const [name, value] of Object.entries(headers)) merged.set(name, value);
   merged.set('Content-Type', 'application/json');
   const init = { method: 'POST' as const, headers: Object.fromEntries(merged), body, signal: AbortSignal.timeout(timeoutSeconds*1000) };
+  const trip=(holdMs:number)=>{
+    const last=hookTimeouts.get(key), count=1+(last && last.until>Date.now()?last.count:0);
+    if(!last && hookTimeouts.size>=1024)hookTimeouts.delete(hookTimeouts.keys().next().value!);
+    // A later timeout or 503 never shortens a window an endpoint's Retry-After already asked for.
+    hookTimeouts.set(key,{count,until:Math.max(last?.until??0,Date.now()+Math.max(30000+timeoutSeconds*1000,Math.min(holdMs,15*60000)))});
+  };
   try {
     const result=runtime.webhookFetch?await runtime.webhookFetch(url,init):await fetch(url,{...init,redirect:'manual'});
     if(result instanceof Response) await result.body?.cancel();
-    hookTimeouts.delete(key);return {status:result.status,retryAfter:result instanceof Response?result.headers.get('retry-after'):result.retryAfter};
+    const retryAfter=result instanceof Response?result.headers.get('retry-after'):result.retryAfter;
+    if(OVERLOADED.has(result.status))trip(retryAfterMs(retryAfter));else hookTimeouts.delete(key);
+    return {status:result.status,retryAfter};
   }catch(error){
-    if(init.signal.aborted || error instanceof Error && error.name==='TimeoutError'){
-      const last=hookTimeouts.get(key), count=1+(last && last.until>Date.now()?last.count:0);
-      if(!last && hookTimeouts.size>=1024)hookTimeouts.delete(hookTimeouts.keys().next().value!);
-      hookTimeouts.set(key,{count,until:Date.now()+30000+timeoutSeconds*1000});
-    }
+    if(init.signal.aborted || error instanceof Error && error.name==='TimeoutError')trip(0);
     throw error;
   }
 }
@@ -2158,7 +2166,7 @@ const webhookJob: JobHandler = async (runtime, payload, job) => {
     SELECT ${job.id}::text id,${job.workspaceId}::text workspace_id,${JSON.stringify(payload)}::jsonb payload,'operation.webhook'::text type
   ), ${webhookClaimCtes} ${claimedWithWebhooks}`)).rows[0]?.webhook;
   if (!delivery) return;
-  const start = Date.now(); let statusCode: number | null = null, error: string | null = null, retryable = true;
+  const start = Date.now(); let statusCode: number | null = null, error: string | null = null, retryable = true, afterMs = 0;
   // A webhook tied to an approval is posted to only while that approval is active, like a request from a key the
   // approval created. Otherwise the delivery fails here, unsent; it can be retried by hand once the approval is active.
   // Every approval that owns it must be active: the rule getWebhook reports as approval.active (approval-ties.ts).
@@ -2169,7 +2177,8 @@ const webhookJob: JobHandler = async (runtime, payload, job) => {
     const body = JSON.stringify(outwardEvent(eventSchema.parse(delivery.payload))), timestamp = String(Math.floor(Date.now() / 1000));
     const signature = await hmac(secret, `${delivery.event_id}.${timestamp}.${body}`);
     const result = await postWebhook(runtime, url, { 'Webhook-Id': delivery.event_id, 'Webhook-Timestamp': timestamp, 'Webhook-Signature': `v1,${signature}`, 'User-Agent': webhookUserAgent, ...(delivery.synthetic ? Object.fromEntries(webhookTestHeaders.map(name => [name, 'true'])) : {}) }, body, delivery.encrypted_headers, binding);
-    statusCode = result.status; if (statusCode < 200 || statusCode >= 300) error = 'WEBHOOK_HTTP_ERROR';
+    statusCode = result.status;
+    if (statusCode < 200 || statusCode >= 300) { error = 'WEBHOOK_HTTP_ERROR'; retryable = !refusedForGood(statusCode); afterMs = retryAfterMs(result.retryAfter); }
   } catch (e) { if(e instanceof JobDeferred)throw e; error = e instanceof ApiError ? e.code : 'WEBHOOK_NETWORK_ERROR'; retryable = !(e instanceof ApiError) || e.retryable; }
   const retry = Boolean(error) && retryable && job.attempts < WEBHOOK_ATTEMPTS;
   const records = sql`attempt AS (INSERT INTO operation_delivery_attempts(id,workspace_id,delivery_id,status_code,error,duration_ms)
@@ -2179,7 +2188,8 @@ const webhookJob: JobHandler = async (runtime, payload, job) => {
       WHERE workspace_id=${job.workspaceId} AND operation_deliveries.id=${delivery.delivery_id} AND generation=${delivery.generation})`;
   if (job.recordWithSettlement) job.recordWithSettlement(records);
   else await runtime.db.execute(sql`WITH settled AS (SELECT 1), ${records} SELECT 1`);
-  if (error && !inactive) throw new ApiError(503, error, 'Webhook delivery failed; inspect the stored delivery attempts.', undefined, retry);
+  // A retry waits at least the endpoint's Retry-After (src/jobs.ts retryDelay).
+  if (error && !inactive) throw retry ? new ActionRetry(error, afterMs) : new ApiError(503, error, 'Webhook delivery failed; inspect the stored delivery attempts.', undefined, false);
 };
 
 const sesEvents: Record<string, { type: EventType; rawType: string }> = { Send: { type: 'email.sent', rawType: 'send' }, Delivery: { type: 'email.delivered', rawType: 'delivery' }, Bounce: { type: 'email.bounced', rawType: 'bounce' }, Complaint: { type: 'email.complained', rawType: 'complaint' }, DeliveryDelay: { type: 'email.delivery_delayed', rawType: 'delivery_delay' }, Reject: { type: 'email.rejected', rawType: 'reject' }, RenderingFailure: { type: 'email.rendering_failed', rawType: 'rendering_failure' }, Open: { type: 'email.opened', rawType: 'open' }, Click: { type: 'email.clicked', rawType: 'click' } };

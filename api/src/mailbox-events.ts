@@ -1,4 +1,5 @@
 import {ActionRetry,deliverEndpoint} from './endpoint-delivery.js';
+import { refusedForGood, retryAfterMs } from './ritual-retry.js';
 import { and, eq, getTableColumns, gt, inArray, isNotNull, max, sql, type SQL } from 'drizzle-orm';
 import { ApiError, lazyModule, ModuleLoadError, type DbExecutor, type JobHandler } from './core.js';
 import { mailboxEvents, mailMessages } from './db/mailbox.js';
@@ -84,8 +85,9 @@ const webhookJob: JobHandler = async (runtime, payload, job) => {
     const result=await deliverEndpoint(runtime,job.workspaceId,delivery,()=>sendToEndpoint(runtime,job.workspaceId,delivery),job);
     // Paused after the claim (the fence parked it for resume), or no longer this claim's: nothing was sent.
     if(result.parked)return;
-    if(result.status===410)retryable=false;
-    statusCode = result.status; if (statusCode < 200 || statusCode >= 300) error = 'WEBHOOK_HTTP_ERROR';
+    statusCode = result.status;
+    // A plain subscription retries 408, 429, a 5xx and a network error, waiting at least its Retry-After; any other 4xx is final.
+    if (statusCode < 200 || statusCode >= 300) { error = 'WEBHOOK_HTTP_ERROR'; retryable = !refusedForGood(statusCode); actionError = new ActionRetry(error, retryAfterMs(result.retryAfter)); }
   } catch (e) { if(e instanceof ActionRetry)actionError=e;if (e instanceof ModuleLoadError || e instanceof JobDeferred) throw e; error = e instanceof ApiError ? e.code : 'WEBHOOK_NETWORK_ERROR'; retryable = !(e instanceof ApiError) || e.retryable; }
   const retry = Boolean(error) && retryable && job.attempts < mailboxWebhookAttempts(delivery);
   const record=sql`recorded AS (UPDATE mailbox_webhook_deliveries d SET attempt_count=attempt_count+1,status=${!error?'delivered':retry?'pending':'failed'},last_status_code=${statusCode}::int,last_error=${error}::text,updated_at=now() FROM settled WHERE d.id=${delivery.delivery_id} AND d.workspace_id=${job.workspaceId} AND d.generation=${delivery.generation} AND d.status='pending')`;

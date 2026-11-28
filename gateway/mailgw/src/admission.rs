@@ -13,11 +13,20 @@ pub struct Shares {
     pub data: Arc<Semaphore>,
     pub uploads: Arc<Semaphore>,
     pub views: Arc<Semaphore>,
+    /// KiB of message bodies the lane holds at once while FETCH and SEARCH read them, so one inbox's slow readers can't
+    /// hold the task's whole budget for bodies.
+    pub bodies: Arc<Semaphore>,
     /// Open sessions, on the lanes that share them: a workspace and its sponsoring account.
     pub sessions: Option<Arc<Semaphore>>,
 }
 impl Shares {
-    pub fn new(responses: usize, data: usize, uploads: usize, view_mib: usize) -> Self {
+    pub fn new(
+        responses: usize,
+        data: usize,
+        uploads: usize,
+        view_mib: usize,
+        body_mib: usize,
+    ) -> Self {
         Self {
             // API calls a lane makes at once: as many as the responses it may build.
             reads: Arc::new(Semaphore::new(responses)),
@@ -25,6 +34,7 @@ impl Shares {
             data: Arc::new(Semaphore::new(data)),
             uploads: Arc::new(Semaphore::new(uploads)),
             views: Arc::new(Semaphore::new(view_mib * 1024)),
+            bodies: Arc::new(Semaphore::new(body_mib * 1024)),
             sessions: None,
         }
     }
