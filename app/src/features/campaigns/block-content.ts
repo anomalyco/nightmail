@@ -2,8 +2,7 @@
 // API's campaign content guide). The composer opens it as blocks and writes it back in
 // the same vocabulary. Import is lenient so drafts written before the vocabulary or
 // pasted from elsewhere still open; export is strict so saved content always validates.
-import { isRasterDataUrl } from './composer-content'
-import { sanitizeBlockStyle } from '../../../../api/src/block-style'
+import { sanitizeBlockStyle } from '../../../../api/src/block-style.js'
 
 export type EditorNode = { type: string; attrs?: Record<string, unknown>; content?: EditorNode[]; text?: string; marks?: { type: string; attrs?: Record<string, unknown> }[] }
 type Mark = NonNullable<EditorNode['marks']>[number]
@@ -11,6 +10,10 @@ type Mark = NonNullable<EditorNode['marks']>[number]
 const ALIGNMENTS = new Set(['left', 'center', 'right'])
 const HEADING_LEVELS: Record<string, number> = { H1: 1, H2: 2, H3: 3, H4: 3, H5: 3, H6: 3 }
 const COLUMN_TYPES: Record<number, string> = { 2: 'twoColumns', 3: 'threeColumns', 4: 'fourColumns' }
+export function isRasterDataUrl(value: string): boolean {
+  const content = value.slice(value.indexOf(',') + 1)
+  return content.length % 4 === 0 && /^data:image\/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/]+={0,2}$/i.test(value)
+}
 const safeHref = (value: string | null) => value != null && /^(?:https?:\/\/|mailto:|tel:|\{\{\s*[a-zA-Z_][a-zA-Z0-9_]*\s*\}\}|#$)/i.test(value.trim()) && !/[\u0000-\u0020\u007f\\]/.test(value.trim()) ? value.trim() : null
 export const safeImageSource = (value: string | null) => value != null && (/^https:\/\/[^\s"'<>]+$/.test(value.trim()) || /^cid:[a-zA-Z0-9_.@-]{1,120}$/.test(value.trim()) || isRasterDataUrl(value.trim())) ? value.trim() : null
 const dimension = (value: unknown) => { const text = typeof value === 'number' && Number.isFinite(value) ? String(value) : typeof value === 'string' ? value.trim() : ''; return /^(?:[1-9][0-9]{0,3}|[1-9][0-9]?%|100%)$/.test(text) ? text : null }
@@ -145,7 +148,8 @@ export function blockHtmlToDocument(html: string): EditorNode {
 
 // ----- Export: editor document -> block HTML ----------------------------------------
 
-const escape = (value: string) => value.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+// U+0000 can arrive in pasted text; Postgres can't store it, so a draft holding one is refused whole.
+const escape = (value: string) => value.replace(/\u0000/g, '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
 const alignAttr = (attrs: Record<string, unknown> | undefined) => typeof attrs?.alignment === 'string' && ALIGNMENTS.has(attrs.alignment) && attrs.alignment !== 'left' ? ` align="${attrs.alignment}"` : ''
 const styleAttr = (attrs: Record<string, unknown> | undefined) => { const style = sanitizeBlockStyle(typeof attrs?.style === 'string' ? attrs.style : null); return style ? ` style="${escape(style)}"` : '' }
 const MARK_TAGS: Record<string, string> = { bold: 'strong', italic: 'em', underline: 'u', strike: 's', code: 'code', sup: 'sup' }
@@ -168,25 +172,59 @@ function exportInline(node: EditorNode, inButton: boolean): string {
 }
 const exportInlineContent = (node: EditorNode, inButton = false) => (node.content ?? []).map(child => exportInline(child, inButton)).join('')
 
-function exportList(node: EditorNode): string {
+// Where a block sits decides what it may hold: a styled section can't sit in another section or in a column, and
+// columns can't nest. The editor allows all three; the saved HTML unwraps the inner one and keeps its blocks.
+type Place = 'top' | 'section' | 'column'
+// A list item holds text and nested lists (three levels at most), and a quote holds paragraphs, but the editor lets
+// either hold any block (an image, a heading, a divider, a button). The saved HTML ends the list or quote before such a
+// block, puts the block after it at the level that can hold it, and goes on with the rest: the parts, in reading order,
+// are finished HTML or a block lifted out.
+type Part = string | EditorNode
+const isList = (node: EditorNode) => node.type === 'bulletList' || node.type === 'orderedList'
+
+function listParts(node: EditorNode, depth: number): Part[] {
   const tag = node.type === 'orderedList' ? 'ol' : 'ul'
-  const start = Number(node.attrs?.start)
-  const items = (node.content ?? []).filter(item => item.type === 'listItem').map(item => {
-    const parts = (item.content ?? []).map(child => {
-      if (child.type === 'paragraph') return exportInlineContent(child)
-      if (child.type === 'bulletList' || child.type === 'orderedList') return exportList(child)
-      return exportBlock(child, true)
-    })
-    return `<li${styleAttr(item.attrs)}>${parts.join('')}</li>`
-  })
-  return `<${tag}${tag === 'ol' && start > 1 ? ` start="${start}"` : ''}${styleAttr(node.attrs)}>${items.join('')}</${tag}>`
+  const parts: Part[] = []
+  let number = Math.max(1, Math.floor(Number(node.attrs?.start)) || 1), start = number, items: string[] = []
+  const closeList = () => { if (items.length) parts.push(`<${tag}${tag === 'ol' && start > 1 ? ` start="${start}"` : ''}${styleAttr(node.attrs)}>${items.join('')}</${tag}>`); items = []; start = number }
+  // Past the third level, a list's items join the list above it.
+  const flatten = (item: EditorNode): EditorNode[] => [{ ...item, content: item.content?.filter(child => !isList(child)) }, ...(item.content ?? []).filter(isList).flatMap(list => (list.content ?? []).filter(child => child.type === 'listItem').flatMap(flatten))]
+  const listItems = (node.content ?? []).filter(item => item.type === 'listItem').flatMap(item => depth < 3 ? [item] : flatten(item))
+  for (const item of listItems) {
+    let inner = '', open = false, text = false
+    const closeItem = () => { if (open) { items.push(`<li${styleAttr(item.attrs)}>${inner}</li>`); number++ } inner = ''; open = text = false }
+    const lift = (block: EditorNode) => { closeItem(); closeList(); parts.push(block) }
+    for (const child of item.content ?? []) {
+      // A second paragraph in an item is a new line in it.
+      if (child.type === 'paragraph') { inner += `${text ? '<br>' : ''}${exportInlineContent(child)}`; open = text = true }
+      else if (isList(child)) for (const part of listParts(child, depth + 1)) { if (typeof part === 'string') { inner += part; open = true; text = false } else lift(part) }
+      else lift(child)
+    }
+    closeItem()
+  }
+  closeList()
+  return parts
 }
-function exportBlock(node: EditorNode, inColumn: boolean): string {
+function quoteParts(node: EditorNode): Part[] {
+  const parts: Part[] = []
+  let inner = ''
+  const close = () => { if (inner) parts.push(`<blockquote${styleAttr(node.attrs)}>${inner}</blockquote>`); inner = '' }
+  for (const child of node.content ?? []) {
+    if (child.type === 'paragraph') inner += `<p${alignAttr(child.attrs)}${styleAttr(child.attrs)}>${exportInlineContent(child)}</p>`
+    else { close(); parts.push(child) }
+  }
+  close()
+  return parts
+}
+const exportParts = (parts: Part[], place: Place) => parts.map(part => typeof part === 'string' ? part : exportBlock(part, place)).join('')
+const exportBlocks = (nodes: EditorNode[], place: Place) => nodes.map(child => exportBlock(child, place)).join('')
+
+function exportBlock(node: EditorNode, place: Place): string {
   switch (node.type) {
     case 'paragraph': return `<p${alignAttr(node.attrs)}${styleAttr(node.attrs)}>${exportInlineContent(node)}</p>`
     case 'heading': { const level = Math.min(3, Math.max(1, Number(node.attrs?.level) || 1)); return `<h${level}${alignAttr(node.attrs)}${styleAttr(node.attrs)}>${exportInlineContent(node)}</h${level}>` }
-    case 'bulletList': case 'orderedList': return exportList(node)
-    case 'blockquote': return `<blockquote${styleAttr(node.attrs)}>${(node.content ?? []).map(child => child.type === 'paragraph' ? `<p${alignAttr(child.attrs)}${styleAttr(child.attrs)}>${exportInlineContent(child)}</p>` : exportBlock(child, inColumn)).join('')}</blockquote>`
+    case 'bulletList': case 'orderedList': return exportParts(listParts(node, 1), place)
+    case 'blockquote': return exportParts(quoteParts(node), place)
     case 'codeBlock': return `<pre${styleAttr(node.attrs)}><code>${escape((node.content ?? []).map(child => child.text ?? '').join(''))}</code></pre>`
     case 'horizontalRule': return `<hr${styleAttr(node.attrs)}>`
     case 'hardBreak': return ''
@@ -204,15 +242,18 @@ function exportBlock(node: EditorNode, inColumn: boolean): string {
     }
     case 'twoColumns': case 'threeColumns': case 'fourColumns': {
       const columns = (node.content ?? []).filter(child => child.type === 'columnsColumn')
-      if (inColumn || !COLUMN_TYPES[columns.length]) return columns.map(column => (column.content ?? []).map(child => exportBlock(child, inColumn)).join('')).join('')
-      return `<div data-columns="${columns.length}">${columns.map(column => `<div data-column${styleAttr(column.attrs)}>${trimTrailingEmpty(column.content ?? []).map(child => exportBlock(child, true)).join('') || '<p></p>'}</div>`).join('')}</div>`
+      if (place === 'column' || !COLUMN_TYPES[columns.length]) return columns.map(column => exportBlocks(column.content ?? [], place)).join('')
+      return `<div data-columns="${columns.length}">${columns.map(column => `<div data-column${styleAttr(column.attrs)}>${exportBlocks(trimTrailingEmpty(column.content ?? []), 'column') || '<p></p>'}</div>`).join('')}</div>`
     }
-    case 'section': return `<section${styleAttr(node.attrs)}>${trimTrailingEmpty(node.content ?? []).map(child => exportBlock(child, false)).join('') || '<p></p>'}</section>`
+    case 'section': {
+      const blocks = trimTrailingEmpty(node.content ?? [])
+      return place === 'top' ? `<section${styleAttr(node.attrs)}>${exportBlocks(blocks, 'section') || '<p></p>'}</section>` : exportBlocks(blocks, place)
+    }
     case 'previewText': case 'globalContent': return ''
     default: {
-      // Containers the vocabulary does not have (section, div, table, body) unwrap to their blocks.
+      // Containers the vocabulary does not have (div, table, body) unwrap to their blocks.
       if (node.content?.some(child => child.type === 'text' || child.type === 'hardBreak')) return `<p>${exportInlineContent(node)}</p>`
-      return (node.content ?? []).map(child => exportBlock(child, inColumn)).join('')
+      return exportBlocks(node.content ?? [], place)
     }
   }
 }
@@ -227,7 +268,7 @@ export function documentToBlockHtml(doc: EditorNode): string {
   // The editor wraps content in a container node (and stores theme state in globalContent); unwrap to the blocks.
   const unwrap = (nodes: EditorNode[]): EditorNode[] => nodes.flatMap(node => ['container', 'body', 'div'].includes(node.type) ? unwrap(node.content ?? []) : node.type === 'globalContent' || node.type === 'previewText' ? [] : [node])
   const blocks = trimTrailingEmpty(unwrap(doc.content ?? []))
-  return blocks.map(node => exportBlock(node, false)).join('\n')
+  return blocks.map(node => exportBlock(node, 'top')).join('\n')
 }
 
 /** True when the document has no visible text, image, button or divider. */

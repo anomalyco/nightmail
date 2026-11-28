@@ -632,6 +632,57 @@ test('dashboard addresses in free text: every run holding an @ is masked whole, 
   addressParts('x@'.repeat(100_000) + ' ' + '"('.repeat(50_000) + '@'); addressParts('a "b" (c) d@e '.repeat(5_000));
   assert.ok(performance.now() - started < 1000, 'long text is split quickly');
 });
+// The composer saves what its editor holds as block HTML (app/src/features/campaigns/block-content.ts). The editor lets a
+// section, column, list item, quote or table cell hold any block, so every block inside up to three of them, in every
+// order, must save as HTML the API accepts, with nothing dropped.
+test('dashboard composer: every layout the editor can build saves as block HTML the API accepts, keeping its content', async () => {
+  type Doc = { type: string; attrs?: Record<string, unknown>; content?: Doc[]; text?: string };
+  // Its DOM half types against the browser's Element, which the Workers types here replace.
+  const { documentToBlockHtml } = await import(`../app/src/features/campaigns/${'block-content'}.ts`) as { documentToBlockHtml: (doc: Doc) => string };
+  const { validateBlockHtml } = await import('./src/campaign-blocks.js');
+  const text = (value: string): Doc => ({ type: 'text', text: value });
+  const paragraph = (word: string): Doc => ({ type: 'paragraph', content: [text(word)] });
+  const blocks: Record<string, (word: string) => Doc> = {
+    paragraph,
+    heading: word => ({ type: 'heading', attrs: { level: 2 }, content: [text(word)] }),
+    image: word => ({ type: 'image', attrs: { src: `cid:nightmail-${word}`, alt: word, width: '100%', alignment: 'left' } }),
+    button: word => ({ type: 'button', attrs: { href: '#', alignment: 'center' }, content: [text(word)] }),
+    code: word => ({ type: 'codeBlock', content: [text(word)] }),
+    divider: () => ({ type: 'horizontalRule' }),
+  };
+  const containers: Record<string, (inner: Doc, word: string) => Doc> = {
+    section: (inner, word) => ({ type: 'section', attrs: { style: 'padding:16px' }, content: [paragraph(word), inner] }),
+    columns: (inner, word) => ({ type: 'twoColumns', content: [{ type: 'columnsColumn', content: [inner] }, { type: 'columnsColumn', content: [paragraph(word)] }] }),
+    list: (inner, word) => ({ type: 'bulletList', content: [{ type: 'listItem', content: [paragraph(word), inner] }] }),
+    numbered: (inner, word) => ({ type: 'orderedList', attrs: { start: 3 }, content: [{ type: 'listItem', content: [paragraph(word), inner, paragraph(word + 'q')] }, { type: 'listItem', content: [paragraph(word + 'r')] }] }),
+    quote: (inner, word) => ({ type: 'blockquote', content: [paragraph(word), inner, paragraph(word + 'q')] }),
+    table: (inner, word) => ({ type: 'table', content: [{ type: 'tableRow', content: [{ type: 'tableCell', content: [inner] }, { type: 'tableHeader', content: [paragraph(word)] }] }] }),
+  };
+  const names = Object.keys(containers);
+  const chains: string[][] = [[]];
+  for (let depth = 0; depth < 3; depth++) for (const chain of chains.filter(item => item.length === depth)) for (const name of names) chains.push([...chain, name]);
+  for (const chain of chains) for (const [block, make] of Object.entries(blocks)) {
+    const words: string[] = [];
+    const word = () => { const value = `w${words.length}z`; words.push(value); return value; };
+    let doc = make(word());
+    for (const name of [...chain].reverse()) doc = containers[name]!(doc, word());
+    const html = documentToBlockHtml({ type: 'doc', content: [doc, { type: 'paragraph' }] });
+    const where = `${[...chain, block].join(' > ')}: ${html}`;
+    assert.doesNotThrow(() => validateBlockHtml(html), where);
+    for (const value of block === 'divider' ? words.slice(1) : words) assert.ok(html.includes(value), `${value} kept in ${where}`);
+    if (block === 'divider') assert.ok(html.includes('<hr>'), where);
+  }
+  // A block lifted out of a numbered list leaves the list's numbering where it was.
+  assert.equal(documentToBlockHtml({ type: 'doc', content: [containers.numbered!(blocks.image!('pic'), 'one')] }),
+    '<ol start="3"><li>one</li></ol><img src="cid:nightmail-pic" alt="pic" width="100%"><ol start="4"><li>oneq</li><li>oner</li></ol>');
+  // Pasted text can hold U+0000, which Postgres can't store: it is left out.
+  assert.equal(documentToBlockHtml({ type: 'doc', content: [paragraph('a\u0000b')] }), '<p>ab</p>');
+  // Two paragraphs in a list item are two lines, and lists nest three levels deep: deeper items join the third.
+  const deep = (depth: number): Doc => ({ type: 'bulletList', content: [{ type: 'listItem', content: [paragraph(`d${depth}`), ...(depth < 6 ? [deep(depth + 1)] : [])] }] });
+  const nested = documentToBlockHtml({ type: 'doc', content: [{ type: 'bulletList', content: [{ type: 'listItem', content: [paragraph('a'), paragraph('b')] }] }, deep(1)] });
+  assert.doesNotThrow(() => validateBlockHtml(nested));
+  assert.equal(nested, '<ul><li>a<br>b</li></ul>\n<ul><li>d1<ul><li>d2<ul><li>d3</li><li>d4</li><li>d5</li><li>d6</li></ul></li></ul></li></ul>');
+});
 test('dashboard receiving health: stale proof and identity show repair actions; unknown states remain readable', async () => {
   const { receivingIssueTitle } = await import('../app/src/features/settings/receiving-issue-title.js');
   const host = 'inbox.example.com';
@@ -19474,6 +19525,12 @@ describe('Dashboard API capabilities', () => {
       const html=`<p><a href="${href}">Link</a></p>`;
       assert.doesNotThrow(()=>validateBlockHtml(html));
       assert.throws(()=>validateBlockHtml(html,{complete:true}),/placeholder/);
+    }
+    // A refusal names its rule, and the element it is about, from fixed lists: the request log carries them, never content.
+    for(const [html,reason] of [['<ul><li>x<img src="cid:a"></li></ul>','element_in_list_item:img'],['<blockquote><h2>x</h2></blockquote>','element_in_quote:h2'],['<section><section><p>x</p></section></section>','section_nested'],
+      ['<div data-columns="2"><div data-column><section><p>x</p></section></div><div data-column><p>x</p></div></div>','section_in_column'],['<p><x-private-name>x</x-private-name></p>','element_in_text:other'],['<p onclick="go()">x</p>','attribute:p'],['<p><a href="#">x</a></p>','placeholder']] as const){
+      const refused=(()=>{try{validateBlockHtml(html,{complete:true});}catch(cause){return cause;}})();
+      assert.ok(refused instanceof BlockContentError,html);assert.equal(refused.logReason,reason,html);
     }
     const html='<h1>Example</h1><p>Some <strong>formatted</strong> text.</p>';
     assert.doesNotThrow(()=>validateBlockHtml(html,{complete:true}));

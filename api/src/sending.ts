@@ -2258,8 +2258,10 @@ async function assertBlockContent(html: string | undefined, complete = false) {
   if (!html) return;
   const { validateBlockHtml, BlockContentError } = await loadCampaignBlocks();
   try { validateBlockHtml(html, { complete }); } catch (error) {
-    if (error instanceof BlockContentError) throw new ApiError(422, 'CAMPAIGN_CONTENT_INVALID', error.message, 'html');
-    throw error;
+    if (!(error instanceof BlockContentError)) throw error;
+    const refused = new ApiError(422, 'CAMPAIGN_CONTENT_INVALID', error.message, 'html');
+    refused.logReason = error.logReason;
+    throw refused;
   }
 }
 /** Block HTML becomes the styled email plus a plain-text alternative. Legacy drafts fail here with the block error until re-saved. */

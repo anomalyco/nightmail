@@ -1,19 +1,20 @@
 import type { QueryClient } from '@tanstack/react-query'
 import { currentScope } from '../../data/live'
 import { queries } from '../../data/queries'
-import type { Api, Attachment, AttachmentApi, Campaign, CampaignTemplate } from '../../data/types'
+import { ApiError, type Api, type Attachment, type AttachmentApi, type Campaign, type CampaignTemplate } from '../../data/types'
 import { imageTags } from '../../lib/html-scan'
 import { composer } from './composer-chunk'
 import { MAX_ATTACHMENTS } from './copy'
+import { isRasterDataUrl } from './block-content'
 
 // What the composer saves: inlineAttachmentIds are the inline images the body uses, removedInlineIds the ones it no longer does.
 export type ComposedDraft = { html: string; inlineAttachmentIds: string[]; removedInlineIds: string[] }
 export const draftAttachments = (ids: string[] = [], draft: ComposedDraft) => [...new Set([...ids, ...draft.inlineAttachmentIds])].filter(id => !draft.removedInlineIds.includes(id))
+// The API refused the content's blocks (api/src/campaign-blocks.ts). It judges tags and attributes, never text, so content
+// with the same blockStructure would be refused again.
+export const contentRefused = (cause: unknown) => cause instanceof ApiError && (cause.code === 'TEMPLATE_CONTENT_INVALID' || cause.code === 'CAMPAIGN_CONTENT_INVALID')
+export const blockStructure = (html: string) => html.replace(/>[^<]*</g, '><')
 
-export function isRasterDataUrl(value: string): boolean {
-  const content = value.slice(value.indexOf(',') + 1)
-  return content.length % 4 === 0 && /^data:image\/(?:png|jpeg|gif|webp|avif);base64,[A-Za-z0-9+/]+={0,2}$/i.test(value)
-}
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
 }
