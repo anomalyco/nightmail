@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { Link, useNavigate, useSearchParams } from 'react-router'
 import { Check, X } from 'lucide-react'
-import { Button, ConfirmDialog, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, IconButton, LoadingRegion, PageHeader, Pagination, SearchField, Select, StatusBadge, Tabs, useToast } from '../../components/ui'
+import { Button, ConfirmDialog, DataTable, Dialog, DropdownMenu, EmptyState, ErrorState, IconButton, PageHeader, Pagination, SearchField, Select, StatusBadge, Tabs, useToast } from '../../components/ui'
 import { useApiDef, useApiQuery, useRequestScope, useWorkspaceAccess } from '../../data/context'
 import { queries } from '../../data/queries'
 import { useResolvedAddresses } from '../../data/addresses'
@@ -24,6 +24,7 @@ import { Match, RouteIcon, TargetIcon, Targets, targetName } from './parts'
 import { RulesSummary, RulesTab } from './recipes'
 import { CreatedEndpointDialog, EndpointDialog, endpointStatusLabel, endpointStatusTone, type EditableEndpoint, type Endpoint } from './ritual-connections'
 import { RouteEditor } from './routing'
+import { ReceivingBodySkeleton } from './skeletons'
 import { actorText, useLiveVersion } from './live'
 import '../settings/settings.css'
 import './inbound.css'
@@ -307,7 +308,7 @@ export function ReceivingPage() {
     {/* The page's one action. An address's mail is on its own page; every address's mail is in Logs. */}
     {/* Until a domain receives, the first-run steps carry the way in; a dead button here would only say no. */}
     <PageHeader title="Mail routing" actions={manage && (!data || receivingDomains(data.domains).length > 0) && <Button variant="primary" disabled={!data} onClick={() => setCreating({ address: '' })}>New address</Button>} />
-    {overview.error && !data ? <ErrorState error={overview.error} onRetry={() => void overview.refetch()} /> : !data || !counts ? <LoadingRegion label="Loading receiving"><div className="rcv-skeleton" aria-hidden="true"><span /><span /><span /><span /></div></LoadingRegion> : <div className="rcv-page">
+    {overview.error && !data ? <ErrorState error={overview.error} onRetry={() => void overview.refetch()} /> : !data || !counts ? <ReceivingBodySkeleton /> : <div className="rcv-page">
       <Tabs label="Mail routing" value={tab} onValueChange={value => update({ tab: value, kind: null, address: null })}
         items={[{ value: 'addresses', label: concepts.addresses.title, count: counts.addresses }, ...(data.manage ? [{ value: 'rules', label: concepts.rules.title, count: counts.rules }, { value: 'destinations', label: concepts.destinations.title, count: counts.destinations }] : [])]} />
       {tab === 'rules' && data.manage ? <RulesTab overview={data} refresh={() => overview.refetch()} />

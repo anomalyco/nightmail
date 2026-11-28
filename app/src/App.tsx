@@ -162,30 +162,30 @@ const booting = (page: ReactNode) => <ChunkFallback.Provider value={<BootLoader 
 const rules = '/receiving?tab=rules'
 // The route table, also given to analytics (a page view names its template) and to the signed-out pages (lib/routes.ts).
 const routes = <>
-  <Route handle={{ preload: load(legal), early: true }} path="legal/:doc?" element={booting(<LegalPage />)} />
-  <Route handle={{ preload: load(pricing), early: true }}>
+  <Route handle={{ preload: legal.preload, early: true }} path="legal/:doc?" element={booting(<LegalPage />)} />
+  <Route handle={{ preload: pricing.preload, early: true }}>
     {['pricing', 'pricing/:vendor', 'alternatives/:vendor', 'email-for-ai-agents', 'cheapest-email-api', 'free-email-api', 'compare', 'compare/:vendor'].map(path => <Route key={path} path={path} element={booting(<PricePage />)} />)}
   </Route>
-  <Route handle={{ preload: load(onboarding), early: true }} path="onboarding" element={<OnboardingRoute />} />
-  <Route handle={{ preload: load(connect), early: true }} path="connect" element={booting(<ConnectPage />)} />
-  <Route handle={{ preload: load(supportContinue), early: true }} path="support/continue/:id/:message" element={<ChunkFallback.Provider value={<BootLoader />}><SupportContinuePage /></ChunkFallback.Provider>} />
+  <Route handle={{ preload: onboarding.preload, early: true }} path="onboarding" element={<OnboardingRoute />} />
+  <Route handle={{ preload: connect.preload, early: true }} path="connect" element={booting(<ConnectPage />)} />
+  <Route handle={{ preload: supportContinue.preload, early: true }} path="support/continue/:id/:message" element={<ChunkFallback.Provider value={<BootLoader />}><SupportContinuePage /></ChunkFallback.Provider>} />
   <Route index element={<RootPage />} />
   {DesignSheetPage && <Route path="_design-sheet" element={<ChunkFallback.Provider value={<BootLoader />}><DesignSheetPage /></ChunkFallback.Provider>} />}
   <Route element={<DashboardGate />}>
-    <Route handle={{ preload: load(overview), skeleton: <OverviewRouteSkeleton /> }} path="overview" element={<OverviewPage />} />
-    <Route handle={{ preload: load(logs), skeleton: (params: Params) => <EmailDetailSkeleton kind={isReceivedId(params.id ?? '') ? 'received' : 'sent'} /> }}>
+    <Route handle={{ preload: overview.preload, skeleton: <OverviewRouteSkeleton /> }} path="overview" element={<OverviewPage />} />
+    <Route handle={{ preload: logs.preload, skeleton: (params: Params) => <EmailDetailSkeleton kind={isReceivedId(params.id ?? '') ? 'received' : 'sent'} /> }}>
       {/* The list's code is safe to warm before /v1/me even in a fresh browser; its reads still wait for the signed-in shell. */}
       <Route handle={{ early: true, skeleton: <LogsRouteSkeleton /> }} path="logs" element={<LogsPage />} />
       <Route path="logs/received/:id" element={<Moved to={params => `/logs/${id(params)}`} />} /><Route path="logs/:id" element={<LogDetailPage />} />
     </Route>
-    <Route handle={{ preload: load(inbound) }}>
+    <Route handle={{ preload: inbound.preload }}>
       <Route handle={{ skeleton: <ReceivingRouteSkeleton /> }} path="receiving" element={<ReceivingPage />} />
       <Route path="receiving/endpoints" element={<Navigate replace to="/receiving?tab=destinations" />} /><Route path="receiving/rituals/*" element={<RitualsRedirect />} />
       <Route handle={{ skeleton: <ReceivingPageSkeleton title="New rule" backTo={rules} /> }} path="receiving/rules/new" element={<NewRulePage />} />
       <Route handle={{ skeleton: <ReceivingPageSkeleton title={200} backTo="/receiving/rules/new" /> }} path="receiving/rules/new/:recipe" element={<NewRecipeRoute />} />
       {/* The rule editor is its own chunk, fetched alongside Mail routing's on a cold load, not after it. */}
-      <Route handle={{ preload: load(inbound, rituals), skeleton: <ReceivingPageSkeleton title="New rule" backTo={rules} /> }} path="receiving/rules/new/script" element={<RulePage />} />
-      <Route handle={{ preload: load(inbound, rituals), skeleton: <ReceivingPageSkeleton title={200} backTo={rules} /> }} path="receiving/rules/:key" element={<RulePage />} />
+      <Route handle={{ preload: rituals.preload, skeleton: <ReceivingPageSkeleton title="New rule" backTo={rules} /> }} path="receiving/rules/new/script" element={<RulePage />} />
+      <Route handle={{ preload: rituals.preload, skeleton: <ReceivingPageSkeleton title={200} backTo={rules} /> }} path="receiving/rules/:key" element={<RulePage />} />
       <Route path="receiving/rules/:key/code" element={<Moved to={params => `/receiving/rules/${encodeURIComponent(params.key ?? '')}`} />} /><Route path="receiving/rules" element={<Navigate replace to={rules} />} /><Route path="receiving/routing" element={<Navigate replace to="/receiving" />} />
       <Route path="receiving/trace" element={<TracePage />} /><Route path="receiving/inbox" element={<InboundPage />} />
       <Route handle={{ skeleton: <ReceivingPageSkeleton title={240} backTo="/receiving" /> }} path="receiving/addresses/:id" element={<InboundAddressDetailPage />} />
@@ -196,20 +196,20 @@ const routes = <>
       <Route path="receiving/addresses" element={<Moved to={() => '/receiving'} />} /><Route path="inbound" element={<Moved to={() => '/logs?view=received'} />} /><Route path="inbound/addresses" element={<Moved to={() => '/receiving'} />} /><Route path="inbound/addresses/:id" element={<Moved to={params => `/receiving/addresses/${id(params)}`} />} /><Route path="inbound/webhooks" element={<WebhooksListRedirect />} /><Route path="inbound/webhooks/:id" element={<Moved to={params => `/receiving/webhooks/${id(params)}`} />} />
       <Route path="mailboxes" element={<LegacyMailboxesRedirect />} /><Route path="mailboxes/webhooks" element={<LegacyMailboxWebhooksRedirect />} /><Route path="mailboxes/webhooks/:id" element={<LegacyMailboxWebhookRedirect />} /><Route path="mailboxes/:id" element={<LegacyMailboxRedirect />} />
     </Route>
-    <Route handle={{ preload: load(campaigns) }}>
+    <Route handle={{ preload: campaigns.preload }}>
       <Route handle={{ skeleton: <CampaignRouteSkeleton kind="list" /> }} path="campaigns" element={<CampaignsPage />} />
       {/* The composer is the largest chunk; an editor route fetches it alongside the campaigns chunk, not after it. */}
-      <Route handle={{ preload: load(campaigns, composer), skeleton: <CampaignRouteSkeleton kind="editor" isNew /> }} path="campaigns/new" element={<CampaignEditorPage />} />
-      <Route handle={{ preload: load(campaigns, composer), skeleton: <CampaignRouteSkeleton kind="editor" /> }} path="campaigns/:id/edit" element={<CampaignEditorPage />} />
+      <Route handle={{ preload: composer.preload, skeleton: <CampaignRouteSkeleton kind="editor" isNew /> }} path="campaigns/new" element={<CampaignEditorPage />} />
+      <Route handle={{ preload: composer.preload, skeleton: <CampaignRouteSkeleton kind="editor" /> }} path="campaigns/:id/edit" element={<CampaignEditorPage />} />
       <Route handle={{ skeleton: <CampaignRouteSkeleton kind="review" /> }} path="campaigns/:id/review" element={<CampaignReviewPage />} />
       <Route handle={{ skeleton: <CampaignRouteSkeleton kind="templates" /> }} path="campaigns/templates" element={<TemplatesPage />} />
-      <Route handle={{ preload: load(campaigns, composer), skeleton: <CampaignRouteSkeleton kind="template" /> }} path="campaigns/templates/:id" element={<TemplateEditorPage />} />
+      <Route handle={{ preload: composer.preload, skeleton: <CampaignRouteSkeleton kind="template" /> }} path="campaigns/templates/:id" element={<TemplateEditorPage />} />
       <Route path="templates" element={<Moved to={() => '/campaigns/templates'} />} /><Route path="templates/:id" element={<Moved to={params => `/campaigns/templates/${id(params)}`} />} />
     </Route>
-    <Route handle={{ preload: load(newsletters), skeleton: (params: Params) => <NewsletterRouteSkeleton id={params.id} /> }}>
+    <Route handle={{ preload: newsletters.preload, skeleton: (params: Params) => <NewsletterRouteSkeleton id={params.id} /> }}>
       <Route path="newsletters" element={<NewslettersPage />} /><Route handle={{ skeleton: <NewsletterRouteSkeleton id="new" /> }} path="newsletters/new" element={<NewNewsletterPage />} /><Route path="newsletters/:id" element={<NewsletterPage />} />
     </Route>
-    <Route handle={{ preload: load(audience) }}>
+    <Route handle={{ preload: audience.preload }}>
       <Route handle={{ skeleton: <AudienceRouteSkeleton kind="contacts" /> }} path="audience" element={<ContactsPage />} /><Route handle={{ skeleton: <AudienceRouteSkeleton kind="contact" /> }} path="audience/contacts/:id" element={<ContactDetailPage />} />
       <Route handle={{ skeleton: <AudienceRouteSkeleton kind="lists" /> }} path="audience/lists" element={<ListsPage />} /><Route handle={{ skeleton: <AudienceRouteSkeleton kind="list" /> }} path="audience/lists/:id" element={<ListDetailPage />} />
       <Route handle={{ skeleton: <AudienceRouteSkeleton kind="segments" /> }} path="audience/segments" element={<SegmentsPage />} />
@@ -219,7 +219,7 @@ const routes = <>
       <Route path="lists" element={<Moved to={() => '/audience/lists'} />} /><Route path="lists/:id" element={<Moved to={params => `/audience/lists/${id(params)}`} />} />
       <Route path="segments" element={<Moved to={() => '/audience/segments'} />} /><Route path="segments/:id" element={<Moved to={params => `/audience/segments/${id(params)}`} />} />
     </Route>
-    <Route handle={{ preload: load(settings) }}>
+    <Route handle={{ preload: settings.preload }}>
       <Route handle={{ skeleton: <SettingsRouteSkeleton kind="keys" /> }} path="api-keys" element={<ApiKeysPage />} /><Route handle={{ skeleton: <SmtpImapRouteSkeleton /> }} path="smtp-imap" element={<SmtpImapPage />} />
       <Route handle={{ skeleton: <SettingsRouteSkeleton kind="domains" /> }} path="domains" element={<DomainsPage />} /><Route handle={{ skeleton: <SettingsRouteSkeleton kind="domain" /> }} path="domains/:id" element={<DomainDetailPage />} />
       <Route handle={{ skeleton: <SettingsRouteSkeleton kind="settings" /> }}>
@@ -229,7 +229,7 @@ const routes = <>
       </Route>
     </Route>
     {/* The docs are public: signed out or in, their code loads alongside /v1/me. */}
-    <Route handle={{ preload: load(docs), early: true, skeleton: <DocsSkeleton /> }}>
+    <Route handle={{ preload: docs.preload, early: true, skeleton: <DocsSkeleton /> }}>
       <Route path="docs/*" element={<DocsPage />} /><Route path="developer" element={<Moved to={() => '/docs'} />} />
     </Route>
     <Route handle={{ preload: load(operator, operatorSkeletons), skeleton: <OperatorSkeleton /> }}>

@@ -15,7 +15,8 @@ export const isKnownPath = (pathname: string) => matchRoutes(routes, pathname)?.
 
 /**
  * What a page needs before it can draw, given as its route's handle in App.tsx. A route takes the handles of the
- * routes around it, its own last, so a section's code is named once around its pages.
+ * routes around it, its own last, and composes their preloaders in parallel so a section's code is named once around
+ * its pages.
  */
 export type RouteHandle = {
   /** Starts loading the page's code: on a cold load alongside /v1/me, on hover, and in the idle sweep. */
@@ -27,5 +28,9 @@ export type RouteHandle = {
 }
 export function routeHandle(pathname: string): { handle: RouteHandle; params: Params } {
   const matches = matchRoutes(routes, pathname) ?? []
-  return { handle: Object.assign({}, ...matches.map(match => match.route.handle as RouteHandle | undefined)), params: matches.at(-1)?.params ?? {} }
+  const handles = matches.map(match => match.route.handle as RouteHandle | undefined).filter((handle): handle is RouteHandle => !!handle)
+  const preloads = handles.map(handle => handle.preload).filter((fn): fn is () => Promise<unknown> => !!fn)
+  const handle: RouteHandle = Object.assign({}, ...handles)
+  if (preloads.length > 1) handle.preload = () => Promise.all(preloads.map(fn => fn()))
+  return { handle, params: matches.at(-1)?.params ?? {} }
 }
