@@ -1,5 +1,6 @@
 import { DASHBOARD_CACHE_NOTE, dashboardRead } from './dashboard-cache.js';
 import { talliesEnabled } from './sending-tallies.js';
+import { emailAccepted, emailBounced, emailComplained, emailDelivered, emailHas } from './email-outcomes.js';
 import { registerSenderScore } from './sender-score.js';
 import { auditContext, auditInsert, recordAudit } from './audit.js';
 import { registerUsage } from './usage.js';
@@ -1926,18 +1927,15 @@ function registerMetrics(app: App) {
     // Outcomes come from the per-email flags kept by the operation_events trigger (migration 031): the same
     // union of public events the old per-query event aggregation produced, without re-reading the events.
     type Row = { date: string; emails: number; accepted: number; delivered: number; bounced: number; complained: number; opened: number; clicked: number; failed: number; deliveryDelayed: number; simulated: number };
-    const counts = (cols: { status: SQL; simulated: SQL; providerId: SQL; outcomes: SQL }) => {
-      const has = (bit: number) => sql`(${cols.outcomes} & ${bit}) <> 0`;
-      return sql`count(*)::int AS "emails",
-        count(*) FILTER (WHERE NOT ${cols.simulated} AND ${cols.status} <> 'suppressed' AND (${cols.providerId} IS NOT NULL OR ${cols.status} IN ('accepted', 'sent', 'delivered', 'bounced', 'complained', 'delayed') OR ${has(OUTCOME.accepted)}))::int AS "accepted",
-        count(*) FILTER (WHERE ${cols.status} = 'delivered' OR ${has(OUTCOME.delivered)})::int AS "delivered",
-        count(*) FILTER (WHERE ${cols.status} = 'bounced' OR ${has(OUTCOME.bounced)})::int AS "bounced",
-        count(*) FILTER (WHERE ${cols.status} = 'complained' OR ${has(OUTCOME.complained)})::int AS "complained",
-        count(*) FILTER (WHERE ${has(OUTCOME.opened)})::int AS "opened", count(*) FILTER (WHERE ${has(OUTCOME.clicked)})::int AS "clicked",
-        count(*) FILTER (WHERE ${cols.status} IN ('rejected', 'rendering_failed') OR ${has(OUTCOME.failed)})::int AS "failed",
-        count(*) FILTER (WHERE ${cols.status} = 'delayed' OR ${has(OUTCOME.delayed)})::int AS "deliveryDelayed",
-        count(*) FILTER (WHERE ${cols.simulated})::int AS "simulated"`;
-    };
+    const e = 'sending_emails', counts = sql`count(*)::int AS "emails",
+      count(*) FILTER (WHERE NOT ${emails.simulated} AND ${emailAccepted(e)})::int AS "accepted",
+      count(*) FILTER (WHERE ${emailDelivered(e)})::int AS "delivered",
+      count(*) FILTER (WHERE ${emailBounced(e)})::int AS "bounced",
+      count(*) FILTER (WHERE ${emailComplained(e)})::int AS "complained",
+      count(*) FILTER (WHERE ${emailHas(e, 'opened')})::int AS "opened", count(*) FILTER (WHERE ${emailHas(e, 'clicked')})::int AS "clicked",
+      count(*) FILTER (WHERE ${emails.status} IN ('rejected', 'rendering_failed') OR ${emailHas(e, 'failed')})::int AS "failed",
+      count(*) FILTER (WHERE ${emails.status} = 'delayed' OR ${emailHas(e, 'delayed')})::int AS "deliveryDelayed",
+      count(*) FILTER (WHERE ${emails.simulated})::int AS "simulated"`;
     const total = (row?: Partial<Row>) => ({ emails: row?.emails ?? 0, accepted: row?.accepted ?? 0, delivered: row?.delivered ?? 0, bounced: row?.bounced ?? 0, complained: row?.complained ?? 0, opened: row?.opened ?? 0, clicked: row?.clicked ?? 0, failed: row?.failed ?? 0, deliveryDelayed: row?.deliveryDelayed ?? 0, simulated: row?.simulated ?? 0 });
     type Totals = ReturnType<typeof total>;
     type KindHourRow = Totals & { hour: string; kind: string };
@@ -1991,7 +1989,7 @@ function registerMetrics(app: App) {
               q.region ? eq(emails.region, q.region) : undefined, q.stream && !extras.has('streams') ? sql`${emails.snapshot}->>'kind' = ${q.stream}` : undefined);
             const { rows: edgeRows } = await db.execute<Totals & { kind: string }>(sql`SELECT
               coalesce(${emails.snapshot}->>'kind', '') AS kind,
-              ${counts({ status: sql`${emails.status}`, simulated: sql`${emails.simulated}`, providerId: sql`${emails.providerId}`, outcomes: sql`${emails.eventOutcomes}` })}
+              ${counts}
               FROM ${emails} WHERE ${filter} GROUP BY 1`);
             return edgeRows.map(r => ({ ...r, hour: slotIso }));
           };
@@ -2061,7 +2059,7 @@ function registerMetrics(app: App) {
     } else if (!extras.size) {
       const filter = and(scoped(emails, a), gte(emails.createdAt, start), lt(emails.createdAt, end), q.region ? eq(emails.region, q.region) : undefined, q.stream ? sql`${emails.snapshot}->>'kind' = ${q.stream}` : undefined);
       rows = (await budgetedRead(c.env.db, db => db.execute<Row>(sql`
-      SELECT ${date} AS "date", ${counts({ status: sql`${emails.status}`, simulated: sql`${emails.simulated}`, providerId: sql`${emails.providerId}`, outcomes: sql`${emails.eventOutcomes}` })}
+      SELECT ${date} AS "date", ${counts}
       FROM ${emails}
       WHERE ${filter}
       GROUP BY 1 ORDER BY 1`), readLimit(METRICS_READ))).rows;
@@ -2078,9 +2076,8 @@ function registerMetrics(app: App) {
       const needAll = !q.stream || extras.has('streams'), needKind = !!q.stream || extras.has('streams');
       const inWindow = sql`${emails.createdAt} >= ${start}::timestamptz`;
       const bucketOf = sql`CASE WHEN ${inWindow} THEN ${date} END`;
-      const measures = counts({ status: sql`${emails.status}`, simulated: sql`${emails.simulated}`, providerId: sql`${emails.providerId}`, outcomes: sql`${emails.eventOutcomes}` });
       const within = (from: string) => and(scoped(emails, a), gte(emails.createdAt, from), lt(emails.createdAt, end), q.region ? eq(emails.region, q.region) : undefined);
-      const arm = (part: 'all' | 'kind', from: string) => sql`SELECT ${part}::text AS part, ${inWindow} AS cur, ${bucketOf} AS "date", ${measures}
+      const arm = (part: 'all' | 'kind', from: string) => sql`SELECT ${part}::text AS part, ${inWindow} AS cur, ${bucketOf} AS "date", ${counts}
         FROM ${emails} WHERE ${and(within(from), part === 'kind' ? sql`(${emails.snapshot}->>'kind') = ${kind === 'marketing' ? sql`'marketing'::text` : sql`'transactional'::text`}` : undefined)} GROUP BY 2, 3`;
       const arms = [...(needAll ? [arm('all', q.stream ? start : scanFrom)] : []), ...(needKind ? [arm('kind', q.stream ? scanFrom : start)] : [])];
       const parts = (await budgetedRead(c.env.db, db => db.execute<Row & { part: 'all' | 'kind'; cur: boolean }>(arms.length > 1 ? sql`${arms[0]} UNION ALL ${arms[1]}` : arms[0]!), readLimit(METRICS_READ))).rows;
@@ -2130,8 +2127,6 @@ function registerMetrics(app: App) {
   });
 }
 
-// Bits of sending_emails.event_outcomes, set by the operation_events trigger in migration 031.
-const OUTCOME = { accepted: 1, delivered: 2, bounced: 4, complained: 8, opened: 16, clicked: 32, failed: 64, delayed: 128 } as const;
 // Resumes one page of an unpaused endpoint's parked deliveries and returns the page's size; a full page means more
 // may remain. A resumed delivery keeps the attempts it already made: a pause holds the remaining retries, it does not
 // refill them. One that already used its attempts fails instead of starting another round. An endpoint paused again

@@ -2,6 +2,7 @@ import { queueListRisk } from './list-risk-lines.js';
 import { blocklistPause, blocklistWindow, campaignBlocklistReplies, planHeldWhy, planWindowHealthy, stopDeadDomains, stoppedDomains } from './send-guards.js';
 import { cachedDashboardRead, mailRevision } from './dashboard-cache.js';
 import { talliesEnabled } from './sending-tallies.js';
+import { EMAIL_OUTCOME_BITS, emailAccepted, emailBounced, emailComplained, emailDelivered } from './email-outcomes.js';
 import { boundRequestBody } from './request-body.js';
 import { checkBudget } from './auth.js';
 import { recordAudit, type AuditContext } from './audit.js';
@@ -45,7 +46,7 @@ import { PREVIEW_ROUTE_NOTE, previewResponses, refuseHead, registerPreviewImages
 import { actorJson, admission, admitted, charges, duplicateAttachment, QUARANTINE_CODES, RAMP_POLICY, refusal, scheduledCharges, shadowBilling, type AdmissionMail, type Admitted, type Refused, type Released } from './admission.js';
 import { contentBytes, estimatedMimeBytes, SEND_LIMITS } from './send-limits.js';
 import { SETUP_EMAIL, SETUP_SENDER } from './setup-email.js';
-import { assertResponseWithinLimit, reserveMemory, responseByteLimit, withMemory } from './isolate-memory.js';
+import { assertResponseWithinLimit, fitMemoryCaches, registerMemoryCache, reserveMemory, responseByteLimit, withMemory } from './isolate-memory.js';
 import { buildBoundedPageJson, PAGE_MAX_BYTES, streamBase64JsonResponse, utf8Bytes, withBoundedRead } from './read-bounds.js';
 import { RATES } from './billing/money.js';
 import { RecipientWarning, recipientWarnings, RiskBreakdown } from './list-hygiene.js';
@@ -976,7 +977,7 @@ async function visibleEmailContent(runtime: Runtime,a: Actor,row: typeof emails.
   // Raw MIME can hide tokens inside encodings/folding; only managers receive that opaque content.
   const visible = (value: string | undefined) => value === undefined ? null : manage ? value : redactCapabilityText(value);
   // Sealed Nightmail notices (forward confirmations, sign-in links) carry a capability meant only for the recipient: withheld from every reader.
-  if (row.snapshot.sealed) { const { sealCapabilities } = await import('./mailbox-send.js'); return EmailContent.parse({ untrustedContent, subject: s.subject, html: s.html === undefined ? null : sealCapabilities(s.html), text: s.text === undefined ? null : sealCapabilities(s.text), raw: null, attachments: s.attachments, render: s.template?.render ?? 'direct', templateName: s.template?.name ?? null, simulated: row.simulated }); }
+  if (row.snapshot.sealed) { const { sealCapabilities } = await import('./mailbox-send.js'); return EmailContent.parse({ untrustedContent, subject: visible(s.subject), html: s.html === undefined ? null : visible(sealCapabilities(s.html)), text: s.text === undefined ? null : visible(sealCapabilities(s.text)), raw: null, attachments: s.attachments, render: s.template?.render ?? 'direct', templateName: s.template?.name ?? null, simulated: row.simulated }); }
   return EmailContent.parse({ untrustedContent, subject: visible(s.subject), html: visible(s.html), text: visible(s.text), raw: manage ? s.raw ?? s.mime ?? null : null, attachments: s.attachments, render: s.template?.render ?? 'direct', templateName: s.template?.name ?? null, simulated: row.simulated });
 }
 // Every reader, whatever its permissions, gets an event's data without the content screen's verdict.
@@ -2537,7 +2538,7 @@ export function registerSending(app: App) {
         SELECT (${sentUntrustedContent}) AS untrusted_content,
           ${emails.id} AS id, ${emails.region} AS region, ${emails.campaignId} AS campaign_id,
           ${emails.from} AS from_address,
-          coalesce(${emails.snapshot}->>'fromName', CASE WHEN ${emails.reviewId} IS NOT NULL THEN (SELECT draft->>'fromName' FROM sending_campaign_reviews cr WHERE cr.id = ${emails.reviewId} AND cr.workspace_id = ${emails.workspaceId}) END) AS from_name,
+          ${emails.snapshot}->>'fromName' AS own_from_name, ${emails.reviewId} AS review_id, ${emails.workspaceId} AS workspace_id,
           ${emails.snapshot}->>'kind' AS kind,
           ${emails.to} AS to_addresses, ${emails.cc} AS cc_addresses, ${emails.bcc} AS bcc_addresses,
           ${emails.subject} AS subject, ${emails.status} AS status, ${emails.providerId} AS provider_id,
@@ -2551,13 +2552,20 @@ export function registerSending(app: App) {
         SELECT *, row_number() OVER (ORDER BY created_at DESC, id DESC) AS rn,
           sum(row_bytes) OVER (ORDER BY created_at DESC, id DESC ROWS UNBOUNDED PRECEDING) AS cum_bytes
         FROM candidate
+      ), page AS (
+        SELECT * FROM sized WHERE rn = 1 OR cum_bytes <= ${maxBytes}
+      ), reviewed AS MATERIALIZED (
+        -- A campaign email's stub has no fromName: its campaign review's draft does. The draft is up to 512 KiB, so it
+        -- is read once for each review on the page, not once for each email.
+        SELECT cr.id, cr.workspace_id, cr.draft->>'fromName' AS from_name FROM sending_campaign_reviews cr
+        WHERE (cr.id, cr.workspace_id) IN (SELECT DISTINCT review_id, workspace_id FROM page WHERE own_from_name IS NULL AND review_id IS NOT NULL)
       )
-      SELECT untrusted_content, id, region, campaign_id, from_address, from_name, kind,
+      SELECT untrusted_content, p.id, region, campaign_id, from_address, coalesce(p.own_from_name, r.from_name) AS from_name, kind,
         to_addresses, cc_addresses, bcc_addresses, subject, status, provider_id, simulated,
         attempt_started_at::text, error_code, suppression_reason, scheduled_at::text,
         created_at::text, updated_at::text,
         (SELECT count(*)::int FROM candidate) AS candidate_count
-      FROM sized WHERE rn = 1 OR cum_bytes <= ${maxBytes}
+      FROM page p LEFT JOIN reviewed r ON r.id = p.review_id AND r.workspace_id = p.workspace_id
       ORDER BY rn`), readLimit(READ_LIMIT.emails));
     const candidateCount = rows[0]?.candidate_count ?? 0;
     const rawPage = rows.slice(0, q.limit);
@@ -3064,7 +3072,7 @@ async function cancelCampaignWork(db: DbExecutor, a: Actor, row: typeof campaign
 /** Which of these addresses this workspace delivered to before, outside this campaign (lower case). */
 async function deliveredBefore(db: DbExecutor, wid: string, campaignId: string, emails: string[]) {
   const { rows } = await db.execute<{ email: string }>(sql`SELECT DISTINCT lower(t.addr) AS email FROM sending_emails p CROSS JOIN LATERAL jsonb_array_elements_text(p.to_addresses) t(addr)
-    WHERE p.workspace_id=${wid} AND p.campaign_id IS DISTINCT FROM ${campaignId} AND NOT p.simulated AND (p.status='delivered' OR p.event_outcomes & 2 <> 0)
+    WHERE p.workspace_id=${wid} AND p.campaign_id IS DISTINCT FROM ${campaignId} AND NOT p.simulated AND ${emailDelivered('p')}
       AND lower(t.addr) IN (SELECT lower(x) FROM jsonb_array_elements_text(${JSON.stringify(emails)}::jsonb) x)`);
   return new Set(rows.map(r => r.email));
 }
@@ -3215,16 +3223,26 @@ async function launch(runtime: Runtime, db: DbExecutor, a: Actor, campaignId: st
   return { id: campaignId, state: 'preparing' as const, queued, scheduledAt: input.scheduledAt ?? null, simulated: isSimulatedSes(runtime), risky, readiness };
 }
 async function bytesDigest(bytes: Uint8Array) { return Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes as Uint8Array<ArrayBuffer>)), n => n.toString(16).padStart(2, '0')).join(''); }
-// Reuse fully verified bytes across invocations sharing the same bucket binding.
-// Pending reads remain local to each Storage wrapper/invocation: Workers cannot
-// await I/O owned by a different request. Both paths retain bounded byte storage.
-const attachmentCaches = new WeakMap<object, { bytes: number; entries: Map<string, Uint8Array> }>();
+// Fully verified bytes are reused across invocations sharing the same bucket binding (its cacheScope), in one
+// least-recently-used cache for the isolate of at most SEND_LIMITS.attachmentCacheBytes. Its bytes count against the
+// isolate's memory budget (src/isolate-memory.ts), which drops the oldest when a reservation needs their room.
+// Pending reads remain local to each Storage wrapper/invocation: Workers cannot await I/O owned by a different request.
+const attachmentScopes = new WeakMap<object, number>();
+let attachmentScopeCount = 0;
+const attachmentCache = { bytes: 0, entries: new Map<string, Uint8Array>() };
+function evictAttachments(bytes: number) {
+  for (const [key, body] of attachmentCache.entries) {
+    if (bytes <= 0) return;
+    attachmentCache.entries.delete(key); attachmentCache.bytes -= body.length; bytes -= body.length;
+  }
+}
+registerMemoryCache({ bytes: () => attachmentCache.bytes, evict: evictAttachments });
 const attachmentLoads = new WeakMap<Storage, Map<string, Promise<Uint8Array>>>();
 export async function verifiedAttachment(runtime: Runtime, row: typeof attachments.$inferSelect) {
-  const scope = runtime.storage.cacheScope ?? runtime.storage;
-  let cache = attachmentCaches.get(scope);
-  if (!cache) { cache = { bytes: 0, entries: new Map() }; attachmentCaches.set(scope, cache); }
-  const key = `${row.storageKey}:${row.checksum}:${row.size}`;
+  const scope = runtime.storage.cacheScope ?? runtime.storage, cache = attachmentCache;
+  let scopeId = attachmentScopes.get(scope);
+  if (scopeId === undefined) attachmentScopes.set(scope, scopeId = ++attachmentScopeCount);
+  const key = `${scopeId}:${row.storageKey}:${row.checksum}:${row.size}`;
   const cached = cache.entries.get(key);
   if (cached) { cache.entries.delete(key); cache.entries.set(key, cached); return cached; }
   let pending = attachmentLoads.get(runtime.storage);
@@ -3234,14 +3252,14 @@ export async function verifiedAttachment(runtime: Runtime, row: typeof attachmen
   const load = (async () => {
     const asset = await runtime.storage.get(row.storageKey);
     if (!asset || asset.body.length !== row.size || await bytesDigest(asset.body) !== row.checksum) throw new ApiError(503, 'ATTACHMENT_STORAGE_UNAVAILABLE', 'An immutable attachment is missing or changed.', undefined, true);
-    const already = cache!.entries.get(key);
+    const already = cache.entries.get(key);
     if (already) return already;
-    const limit = 32 * 1024 * 1024;
-    while (cache!.bytes + asset.body.length > limit && cache!.entries.size) {
-      const oldest = cache!.entries.entries().next().value as [string, Uint8Array];
-      cache!.entries.delete(oldest[0]); cache!.bytes -= oldest[1].length;
+    const limit = SEND_LIMITS.attachmentCacheBytes;
+    if (asset.body.length <= limit) {
+      evictAttachments(cache.bytes + asset.body.length - limit);
+      cache.entries.set(key, asset.body); cache.bytes += asset.body.length;
+      fitMemoryCaches();
     }
-    if (asset.body.length <= limit) { cache!.entries.set(key, asset.body); cache!.bytes += asset.body.length; }
     return asset.body;
   })();
   pending.set(key, load);
@@ -3259,7 +3277,10 @@ export const statusForEvent: Record<string, EmailStatus> = { send: 'sent', deliv
 // Publish email.sent from the SendEmail response; a later SES Send is status feedback only.
 export const publicEventType: Record<string, string> = { accepted: 'email.sent', delivery: 'email.delivered', bounce: 'email.bounced', non_permanent_bounce: 'email.bounced', validation_suppressed: 'email.bounced', complaint: 'email.complained', reject: 'email.rejected', acceptance_unknown: 'email.rejected', rendering_failure: 'email.rendering_failed', delivery_delay: 'email.delivery_delayed', open: 'email.opened', click: 'email.clicked' };
 export const rank: Record<EmailStatus, number> = { scheduled: 0, queued: 0, attempting: 10, acceptance_unknown: 20, accepted: 30, sent: 40, delayed: 45, suppressed: 50, delivered: 60, bounced: 70, complained: 80, rejected: 70, rendering_failed: 70, canceled: 70, simulated: 70 };
-const outcomeBitForEvent: Record<string, number> = { send: 1, accepted: 1, delivery: 3, bounce: 5, non_permanent_bounce: 129, complaint: 9, delivery_delay: 129, open: 16, click: 32, reject: 64, rendering_failure: 64 };
+// Every outcome after a send implies it was accepted. Migration 407's check_sending_event_outcome_bits expects the same.
+const { accepted: ACCEPTED_BIT, delivered: DELIVERED_BIT, bounced: BOUNCED_BIT, complained: COMPLAINED_BIT, delayed: DELAYED_BIT } = EMAIL_OUTCOME_BITS;
+const outcomeBitForEvent: Record<string, number> = { send: ACCEPTED_BIT, accepted: ACCEPTED_BIT, delivery: ACCEPTED_BIT | DELIVERED_BIT, bounce: ACCEPTED_BIT | BOUNCED_BIT, non_permanent_bounce: ACCEPTED_BIT | DELAYED_BIT,
+  complaint: ACCEPTED_BIT | COMPLAINED_BIT, delivery_delay: ACCEPTED_BIT | DELAYED_BIT, open: EMAIL_OUTCOME_BITS.opened, click: EMAIL_OUTCOME_BITS.clicked, reject: EMAIL_OUTCOME_BITS.failed, rendering_failure: EMAIL_OUTCOME_BITS.failed };
 type EmailEventInput = { workspaceId: string; type: string; providerId?: string; errorCode?: string; data?: Record<string, unknown>; recipientHashes?: string[]; externalId?: string; createdAt?: string; receipt?: { topicArn: string; messageId: string } };
 type IncomingReceipt = { topicArn: string; messageId: string; region: string; payload: Record<string, unknown>; recoveryType?: 'operation.ses' | 'operation.simulatedFeedbackRecovery' };
 export async function recordEmailEvent(runtime: Runtime, input: EmailEventInput & { emailId: string }) {
@@ -3671,25 +3692,35 @@ export async function rebuildCampaignEmail(runtime: Runtime, a: Actor, stub: Ema
   marketingFooter(snapshot, stub.unsubscribeUrl ?? '', review.draft);
   return withoutLegacyFonts(snapshot);
 }
-// Accepted means provider acceptance evidence; bounce and complaint rates are over accepted mail. Suppressed mail
-// (ineligible at claim time, or dropped by SES Auto Validation before sending) is neither accepted nor bounced.
-const campaignOutcomes = (wid: string, campaign: SQL) => sql`SELECT
-    count(*) FILTER (WHERE status <> 'suppressed' AND (provider_id IS NOT NULL OR status IN ('accepted','sent','delivered','bounced','complained','delayed')))::int AS accepted,
-    count(*) FILTER (WHERE status = 'bounced')::int AS bounced, count(*) FILTER (WHERE status = 'complained')::int AS complained, max(created_at) AS last
-    FROM sending_emails WHERE workspace_id = ${wid} AND campaign_id = ${campaign}`;
-async function campaignHealth(db: DbExecutor, a: Actor, campaignId: string, hosted = false, probe?: number, lines?: RampLines): Promise<{ code: string; message: string } | null> {
+/**
+ * A campaign's accepted, bounced and complained emails (src/email-outcomes.ts): bounce and complaint rates are over
+ * accepted mail, and suppressed mail (ineligible at claim time, or dropped by SES Auto Validation) is neither accepted nor
+ * bounced. A real campaign reads its tallies (migration 407, kept by the same statement that changes an email), a few
+ * rows whatever its size; a simulated one, whose tallies count nothing as accepted, or one while the tally triggers are
+ * off, counts its emails.
+ */
+export async function campaignOutcomes(db: DbExecutor, wid: string, campaignId: string, simulated: boolean) {
+  const [row] = (await db.execute<{ accepted: number; bounced: number; complained: number }>(!simulated && await talliesEnabled(db)
+    ? sql`SELECT coalesce(sum(accepted), 0)::int AS accepted, coalesce(sum(bounced), 0)::int AS bounced, coalesce(sum(complained), 0)::int AS complained
+        FROM sending_campaign_tallies WHERE workspace_id = ${wid} AND campaign_id = ${campaignId} AND NOT simulated`
+    : sql`SELECT count(*) FILTER (WHERE ${emailAccepted()})::int AS accepted, count(*) FILTER (WHERE ${emailBounced()})::int AS bounced,
+        count(*) FILTER (WHERE ${emailComplained()})::int AS complained FROM sending_emails e WHERE e.workspace_id = ${wid} AND e.campaign_id = ${campaignId}`)).rows;
+  return row!;
+}
+async function campaignHealth(db: DbExecutor, a: Actor, campaign: Pick<RunRow, 'id' | 'simulated'>, hosted = false, probe?: number, lines?: RampLines): Promise<{ code: string; message: string } | null> {
+  const campaignId = campaign.id;
   // Replies naming a blocklist first (src/send-guards.ts): the probe and every later check.
   const listed = lines ? await blocklistPause(db, a.workspaceId, campaignId, lines) : null;
   if (listed) return listed;
-  const [row] = (await db.execute<{ accepted: number; bounced: number; complained: number }>(campaignOutcomes(a.workspaceId, sql`${campaignId}`))).rows;
+  const row = await campaignOutcomes(db, a.workspaceId, campaignId, campaign.simulated);
   const percent = (part: number, whole: number) => `${(100 * part / whole).toFixed(2)}%`;
-  if (probe !== undefined && row!.accepted && (row!.bounced / row!.accepted > PROBE.bounceRate || row!.complained >= PROBE.complaints))
-    return { code: 'LIST_QUALITY', message: `Quarantined: the first ${row!.accepted} recipients (the list probe) had ${row!.bounced} hard bounces (${percent(row!.bounced, row!.accepted)}; the line is ${PROBE.bounceRate * 100}%) and ${row!.complained} spam complaints (the line is ${PROBE.complaints}). Bounced addresses were suppressed. Remove contacts you have not mailed before, or confirm the list's source, then resume.` };
+  if (probe !== undefined && row.accepted && (row.bounced / row.accepted > PROBE.bounceRate || row.complained >= PROBE.complaints))
+    return { code: 'LIST_QUALITY', message: `Quarantined: the first ${row.accepted} recipients (the list probe) had ${row.bounced} hard bounces (${percent(row.bounced, row.accepted)}; the line is ${PROBE.bounceRate * 100}%) and ${row.complained} spam complaints (the line is ${PROBE.complaints}). Bounced addresses were suppressed. Remove contacts you have not mailed before, or confirm the list's source, then resume.` };
   if (probe !== undefined) return null;
-  if (row!.accepted >= AUTO_PAUSE.bounceMinimum && row!.bounced / row!.accepted > AUTO_PAUSE.bounceRate)
-    return { code: 'BOUNCE_RATE_HIGH', message: `Paused automatically: ${percent(row!.bounced, row!.accepted)} of ${row!.accepted} accepted emails bounced (limit ${AUTO_PAUSE.bounceRate * 100}%). Review the audience before resuming.` };
-  if (row!.accepted >= (hosted ? AUTO_PAUSE.hostedComplaintMinimum : AUTO_PAUSE.complaintMinimum) && row!.complained / row!.accepted > AUTO_PAUSE.complaintRate)
-    return { code: 'COMPLAINT_RATE_HIGH', message: `Paused automatically: ${percent(row!.complained, row!.accepted)} of ${row!.accepted} accepted emails were marked as spam (limit ${AUTO_PAUSE.complaintRate * 100}%). Review the audience before resuming.` };
+  if (row.accepted >= AUTO_PAUSE.bounceMinimum && row.bounced / row.accepted > AUTO_PAUSE.bounceRate)
+    return { code: 'BOUNCE_RATE_HIGH', message: `Paused automatically: ${percent(row.bounced, row.accepted)} of ${row.accepted} accepted emails bounced (limit ${AUTO_PAUSE.bounceRate * 100}%). Review the audience before resuming.` };
+  if (row.accepted >= (hosted ? AUTO_PAUSE.hostedComplaintMinimum : AUTO_PAUSE.complaintMinimum) && row.complained / row.accepted > AUTO_PAUSE.complaintRate)
+    return { code: 'COMPLAINT_RATE_HIGH', message: `Paused automatically: ${percent(row.complained, row.accepted)} of ${row.accepted} accepted emails were marked as spam (limit ${AUTO_PAUSE.complaintRate * 100}%). Review the audience before resuming.` };
   return null;
 }
 /**
@@ -3707,10 +3738,10 @@ async function rampHistory(db: DbExecutor, workspaceId: string) {
 async function rampBatch(db: DbExecutor, a: Actor, row: Pick<RunRow, 'reviewId' | 'expanded'>, from: number) {
   const [batch] = (await db.execute<{ released: number; waiting: number; accepted: number; resolved: number; bounced: number; complained: number }>(sql`SELECT count(*)::int AS released,
       count(*) FILTER (WHERE status IN ('queued','attempting'))::int AS waiting,
-      count(*) FILTER (WHERE status<>'suppressed' AND (provider_id IS NOT NULL OR status IN ('accepted','sent','delivered','bounced','complained','delayed') OR event_outcomes & 1 <> 0))::int AS accepted,
-      count(*) FILTER (WHERE status IN ('delivered','bounced','complained') OR event_outcomes & 6 <> 0)::int AS resolved,
-      count(*) FILTER (WHERE status='bounced' OR event_outcomes & 4 <> 0)::int AS bounced,
-      count(*) FILTER (WHERE status='complained' OR event_outcomes & 8 <> 0)::int AS complained
+      count(*) FILTER (WHERE ${emailAccepted('')})::int AS accepted,
+      count(*) FILTER (WHERE status = 'complained' OR ${emailDelivered('')} OR ${emailBounced('')})::int AS resolved,
+      count(*) FILTER (WHERE ${emailBounced('')})::int AS bounced,
+      count(*) FILTER (WHERE ${emailComplained('')})::int AS complained
     FROM sending_emails WHERE review_id=${row.reviewId} AND review_ordinal>${from} AND review_ordinal<=${row.expanded} AND workspace_id=${a.workspaceId}`)).rows;
   return batch!;
 }
@@ -3746,10 +3777,10 @@ export async function listMailedCleanly(db: DbExecutor, a: Pick<Actor, 'workspac
       SELECT c.id FROM sending_campaigns c WHERE c.workspace_id=${a.workspaceId} AND c.id<>${row.id} AND c.state='done' AND NOT c.simulated AND c.quarantines=0 AND NOT c.delivered_only
         AND c.updated_at>now()-make_interval(days=>${CLEAN_LIST.days}::int) ORDER BY c.updated_at DESC LIMIT ${CLEAN_LIST.candidates}
     ), mailed AS MATERIALIZED (
-      SELECT e.campaign_id,lower(e.to_addresses->>0) AS email,bool_or(e.status='delivered' OR e.event_outcomes & 2 <> 0) AS delivered,
-        bool_or(e.status='bounced' OR e.event_outcomes & 4 <> 0) AS bounced,bool_or(e.status='complained' OR e.event_outcomes & 8 <> 0) AS complained,max(e.updated_at) AS changed
+      SELECT e.campaign_id,lower(e.to_addresses->>0) AS email,bool_or(${emailDelivered()}) AS delivered,
+        bool_or(${emailBounced()}) AS bounced,bool_or(${emailComplained()}) AS complained,max(e.updated_at) AS changed
       FROM candidates c JOIN sending_emails e ON e.workspace_id=${a.workspaceId} AND e.campaign_id=c.id AND lower(e.to_addresses->>0)=ANY(${sql.param(emails)}::text[])
-        AND e.status<>'suppressed' AND (e.provider_id IS NOT NULL OR e.status IN ('accepted','sent','delivered','bounced','complained','delayed') OR e.event_outcomes & 1 <> 0)
+        AND ${emailAccepted()}
       GROUP BY 1,2
     ), history AS (
       SELECT campaign_id,count(*) FILTER (WHERE delivered AND NOT bounced AND NOT complained) AS covered,count(*) AS mailed,count(*) FILTER (WHERE delivered OR bounced) AS resolved,
@@ -4399,7 +4430,7 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
     if (row.autoPause && (row.priorityLagMs ?? 0) >= FEEDBACK_LAG_HOLD_MS) {
       return hold('feedback_lag', new Date(dbNow + 60_000).toISOString());
     }
-    const unhealthy = await campaignHealth(runtime.db, a, row.id, true, probe, guardLines);
+    const unhealthy = await campaignHealth(runtime.db, a, row, true, probe, guardLines);
     if (unhealthy) return quarantine(unhealthy);
     await runtime.db.execute(clearProbe(ref));
   } else if (probe !== null) probeLeft = probe - row.expanded;
@@ -4411,7 +4442,7 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
     return hold('feedback_lag', new Date(dbNow + 60_000).toISOString());
   }
   if (row.autoPause && (!row.healthCheckedAt || nowMs - Date.parse(row.healthCheckedAt) >= AUTO_PAUSE.intervalMs)) {
-    const unhealthy = await campaignHealth(runtime.db, a, row.id, hosted, undefined, guardLines);
+    const unhealthy = await campaignHealth(runtime.db, a, row, hosted, undefined, guardLines);
     if (unhealthy) return quarantine(unhealthy);
     // Recipient domains this campaign's mail mostly bounced at lately: the rest there is skipped (src/send-guards.ts).
     await stopDeadDomains(runtime.db, a.workspaceId, row.id, guardLines).catch(() => log('warn', { code: 'CAMPAIGN_DOMAIN_STOP_FAILED', campaignId: row.id }));

@@ -47,23 +47,26 @@ export function ContactsPage() {
 }
 
 function ContactEditor({ contact, onClose }: { contact?: Contact; onClose: () => void }) {
+  const { canAdminister } = useWorkspaceAccess()
   const [input, setInput] = useState<ContactInput>(() => contact ? { id: contact.id, email: contact.email, name: contact.name, country: contact.country, status: contact.status, listIds: [...contact.listIds] } : { email: '', name: '', country: '', status: 'unsubscribed', listIds: [] })
   const [listSearch, setListSearch] = useState('')
   const [listCursor, setListCursor] = useState<string | undefined>()
-  const lists = useAudienceLists(useDebounced(listSearch.trim()), listCursor)
-  const listsChanged = (value: ContactInput) => !contact || value.listIds.length !== contact.listIds.length || value.listIds.some(id => !contact.listIds.includes(id))
+  const lists = useAudienceLists(useDebounced(listSearch.trim()), listCursor, canAdminister)
+  const listsChanged = (value: ContactInput) => canAdminister && (!contact ? value.listIds.length > 0 : value.listIds.length !== contact.listIds.length || value.listIds.some(id => !contact.listIds.includes(id)))
   const save = useApiMutation((api, value: ContactInput) => api.contacts.save(value), contact ? 'Contact updated' : 'Contact added', false, (_saved, value) => listsChanged(value) ? invalidate.contactMembership : invalidate.contactProfile)
   async function submit() {
-    try { await save.mutateAsync({ ...input, status: contact ? contact.status : 'unknown' }); onClose() } catch { /* Shown inline. */ }
+    try { await save.mutateAsync({ ...input, status: contact ? contact.status : 'unknown', listIds: canAdminister ? input.listIds : (contact?.listIds ?? []) }); onClose() } catch { /* Shown inline. */ }
   }
-  return <Dialog open onOpenChange={open => { if (!open && !save.isPending) onClose() }} title={contact ? 'Edit contact' : 'Add contact'} footer={<><Button onClick={onClose} disabled={save.isPending}>Cancel</Button><Button variant="primary" type="submit" form="contact-editor" loading={save.isPending} disabled={lists.isPending || lists.isError}>{contact ? 'Save changes' : 'Add contact'}</Button></>}>
+  return <Dialog open onOpenChange={open => { if (!open && !save.isPending) onClose() }} title={contact ? 'Edit contact' : 'Add contact'} footer={<><Button onClick={onClose} disabled={save.isPending}>Cancel</Button><Button variant="primary" type="submit" form="contact-editor" loading={save.isPending} disabled={canAdminister && (lists.isPending || lists.isError)}>{contact ? 'Save changes' : 'Add contact'}</Button></>}>
     <form id="contact-editor" className="stack" onSubmit={event => { event.preventDefault(); void submit() }}>
       <MutationError error={save.error} />
       {!contact && <Field label="Email" htmlFor="contact-email" error={fieldError(save.error, 'email')}><Input id="contact-email" type="email" required value={input.email} onChange={event => setInput({ ...input, email: event.target.value })} /></Field>}
       <div className="form-grid"><Field label="Full name" htmlFor="contact-name" error={fieldError(save.error, 'name')}><Input id="contact-name" value={input.name} onChange={event => setInput({ ...input, name: event.target.value })} /></Field><Field label="Country" htmlFor="contact-country" error={fieldError(save.error, 'country')}><Input id="contact-country" maxLength={2} placeholder="US" autoCapitalize="characters" value={input.country} onChange={event => setInput({ ...input, country: event.target.value.trim().toUpperCase() })} /></Field></div>
-      <Field label="Find lists" htmlFor="contact-list-search"><Input id="contact-list-search" type="search" value={listSearch} onChange={event => {setListSearch(event.target.value); setListCursor(undefined)}} /></Field>
-      <Field label="Lists" error={fieldError(save.error, 'listIds')}><div className="stack">{lists.isPending ? <LoadingRegion label="Loading lists"><ControlSkeleton /></LoadingRegion> : lists.isError ? <ErrorState error={lists.error} onRetry={() => lists.refetch()} /> : lists.data.length ? lists.data.map(list => <Checkbox key={list.id} checked={input.listIds.includes(list.id)} onCheckedChange={checked => setInput({ ...input, listIds: checked ? [...input.listIds, list.id] : input.listIds.filter(id => id !== list.id) })} label={list.name} />) : <span className="muted">No matching lists.</span>}</div></Field>
-      {(listCursor || lists.data?.nextCursor) && <div className="cluster"><Button disabled={save.isPending || lists.isFetching || !listCursor} onClick={() => setListCursor(undefined)}>First matching lists</Button><Button disabled={save.isPending || lists.isFetching || !lists.data?.nextCursor} onClick={() => setListCursor(lists.data?.nextCursor ?? undefined)}>Next matching lists</Button></div>}
+      {canAdminister && <>
+        <Field label="Find lists" htmlFor="contact-list-search"><Input id="contact-list-search" type="search" value={listSearch} onChange={event => {setListSearch(event.target.value); setListCursor(undefined)}} /></Field>
+        <Field label="Lists" error={fieldError(save.error, 'listIds')}><div className="stack">{lists.isPending ? <LoadingRegion label="Loading lists"><ControlSkeleton /></LoadingRegion> : lists.isError ? <ErrorState error={lists.error} onRetry={() => lists.refetch()} /> : lists.data.length ? lists.data.map(list => <Checkbox key={list.id} checked={input.listIds.includes(list.id)} onCheckedChange={checked => setInput({ ...input, listIds: checked ? [...input.listIds, list.id] : input.listIds.filter(id => id !== list.id) })} label={list.name} />) : <span className="muted">No matching lists.</span>}</div></Field>
+        {(listCursor || lists.data?.nextCursor) && <div className="cluster"><Button disabled={save.isPending || lists.isFetching || !listCursor} onClick={() => setListCursor(undefined)}>First matching lists</Button><Button disabled={save.isPending || lists.isFetching || !lists.data?.nextCursor} onClick={() => setListCursor(lists.data?.nextCursor ?? undefined)}>Next matching lists</Button></div>}
+      </>}
       {!contact && <Alert tone="info">New contacts start with Unknown consent: campaigns skip them until marked subscribed.</Alert>}
       {contact?.status === 'suppressed' && <Alert tone="warning">Suppressed: {suppressionText(contact.suppressionReason) ?? 'Delivery blocked.'}</Alert>}
     </form>

@@ -407,14 +407,12 @@ export function createLiveApi(scope?: RequestScope): Api {
       get: getContact,
       save: async (input, signal) => {
         const current = input.id ? await call(`/contacts/${idPath(input.id)}`, 'GET', undefined, signal) : null
-        const body = {name: input.name, properties: {...current?.properties, country: input.country}, ...(!input.id ? {email: input.email} : {})}
-        const result = await call(input.id ? `/contacts/${idPath(input.id)}` : '/contacts', input.id ? 'PATCH' : 'POST', body, signal)
         const oldLists: string[] = current?.listIds ?? []
-        const added = input.listIds.filter(x => !oldLists.includes(x))
-        const removed = oldLists.filter(x => !input.listIds.includes(x))
-        for (const listId of added) await call(`/lists/${idPath(listId)}/members`, 'POST', {contactIds: [result.id]}, signal)
-        for (const listId of removed) await call(`/lists/${idPath(listId)}/members/${idPath(result.id)}`, 'DELETE', undefined, signal)
-        return added.length || removed.length ? getContact(result.id, signal) : mapContact({ ...result, listIds: oldLists })
+        const nextLists = [...new Set(input.listIds)].sort()
+        const listsChanged = nextLists.length !== oldLists.length || nextLists.some(id => !oldLists.includes(id))
+        const body = { name: input.name, properties: { ...current?.properties, country: input.country }, ...(!input.id ? { email: input.email } : {}), ...(listsChanged ? { listIds: nextLists } : {}) }
+        const result = await call(input.id ? `/contacts/${idPath(input.id)}` : '/contacts', input.id ? 'PATCH' : 'POST', body, signal)
+        return mapContact({ ...result, listIds: listsChanged ? nextLists : oldLists })
       },
       allowRisk: async (id, allowed, signal) => mapContact(await call(`/contacts/${idPath(id)}`, 'PATCH', {riskAllowed: allowed}, signal)),
     },

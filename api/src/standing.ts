@@ -8,6 +8,7 @@ import { dailyLimit, ESTABLISHED, GOOD_STANDING, establishedBy, EVALUATION, eval
 import { DISPLAY_SCORE_ID_PREFIX, DISPLAY_SCORE_JOB } from './sender-score.js';
 import { productName } from './brand.js';
 import { checkSignInMail, standingAlert } from './operator-alerts.js';
+import { emailAccepted, emailBounced, emailComplained, emailDelivered, emailHas } from './email-outcomes.js';
 
 // The standing job: every ten minutes it counts each Hosted workspace's mail, moves its score, sets the daily limit
 // admission reads (none in good standing), and walks the ladder (notice → warn → restrict → pause). Every change of standing, by the job, an
@@ -126,7 +127,6 @@ export async function applyChange(db: DbExecutor, change: Change): Promise<{ eve
 type Candidate = StandingRow & { connection_id: string; paused_at: string | null; pause_reason: string | null; marketing_hold_reason: string | null; legacy_hold: boolean; exempt: boolean; screened_workspace: boolean; accepted_total: number; accepted_day: number;
   sponsor_key: string; pace: number | null; override: boolean;
   days: DayEvidence[] | null; domains: DomainAuth[] | null; win: { day: Window; week: Window } | null; screen: { screened: number; rejected: number } | null };
-const MAIL_ACCEPTED = sql`e.status<>'suppressed' AND (e.provider_id IS NOT NULL OR e.status IN ('accepted','sent','delivered','bounced','complained','delayed') OR e.event_outcomes & 1 <> 0)`;
 // Only real Hosted mail is evidence: never simulated runs, mail only to the SES mailbox simulator, or mail the workspace
 // sent through its own (BYO) account before (the unit is one email, in numerator and denominator alike).
 const MAIL_REAL = sql`NOT e.simulated AND hosted_real_cost(e.to_addresses||e.cc_addresses||e.bcc_addresses)>0
@@ -140,10 +140,10 @@ async function refreshEvidence(db: DbExecutor, limit: number) {
       SELECT workspace_id,evidence_at FROM sender_standing WHERE evidence_at IS NULL OR evidence_at<now()-CASE WHEN phase='calibrating' THEN interval '5 minutes' ELSE interval '1 hour' END
       ORDER BY evidence_at NULLS FIRST LIMIT ${limit} FOR UPDATE SKIP LOCKED
     ), mail AS (
-      SELECT d.workspace_id,(e.created_at AT TIME ZONE 'UTC')::date AS day,${MAIL_ACCEPTED} AS accepted,
-        (e.status='delivered' OR e.event_outcomes & 2 <> 0) AS delivered,(e.status='bounced' OR e.event_outcomes & 4 <> 0) AS bounced,
-        (e.status='complained' OR e.event_outcomes & 8 <> 0) AS complained,e.status='suppressed' AS suppressed,
-        e.campaign_id IS NOT NULL AS first_send,coalesce(e.snapshot->>'kind'='marketing' OR e.campaign_id IS NOT NULL OR e.snapshot ? 'bulk',false) AS marketing,e.event_outcomes & 32 <> 0 AS clicked
+      SELECT d.workspace_id,(e.created_at AT TIME ZONE 'UTC')::date AS day,${emailAccepted()} AS accepted,
+        ${emailDelivered()} AS delivered,${emailBounced()} AS bounced,
+        ${emailComplained()} AS complained,e.status='suppressed' AS suppressed,
+        e.campaign_id IS NOT NULL AS first_send,coalesce(e.snapshot->>'kind'='marketing' OR e.campaign_id IS NOT NULL OR e.snapshot ? 'bulk',false) AS marketing,${emailHas('e', 'clicked')} AS clicked
       FROM due d JOIN sending_emails e ON e.workspace_id=d.workspace_id AND ${MAIL_REAL}
         AND e.created_at>=date_trunc('day',now(),'UTC')-CASE WHEN d.evidence_at IS NULL THEN interval '30 days' ELSE interval '7 days' END
     ), days AS (
@@ -190,8 +190,8 @@ async function growthHour(runtime: Runtime, key: string, hour: string): Promise<
       SELECT DISTINCT v.workspace_id,v.email_id FROM members m JOIN sending_email_events v ON v.workspace_id=m.id AND v.created_at>=${hour}::timestamptz
         AND v.created_at<${hour}::timestamptz+interval '1 hour' AND v.type IN ('accepted','send') AND NOT v.simulated
     ), recipients AS (
-      SELECT lower(x) AS address,(e.status='delivered' OR e.event_outcomes & 2 <> 0) AS delivered,(e.status='bounced' OR e.event_outcomes & 4 <> 0) AS bounced,
-        (e.status='complained' OR e.event_outcomes & 8 <> 0) AS complained
+      SELECT lower(x) AS address,${emailDelivered()} AS delivered,${emailBounced()} AS bounced,
+        ${emailComplained()} AS complained
       FROM accepted a JOIN sending_emails e ON e.workspace_id=a.workspace_id AND e.id=a.email_id AND NOT e.simulated
       CROSS JOIN LATERAL jsonb_array_elements_text(e.to_addresses||e.cc_addresses||e.bcc_addresses) x WHERE lower(x) NOT LIKE '%@simulator.amazonses.com'
     ) SELECT count(*)::int AS accepted,count(DISTINCT address)::int AS "distinct",count(*) FILTER (WHERE delivered OR bounced)::int AS resolved,
@@ -213,8 +213,8 @@ async function trackRecord(runtime: Runtime, wid: string, cutoff: string): Promi
     ), counted AS (
       SELECT * FROM real ORDER BY at,id OFFSET ${EVALUATION.recipients}
     ), recipients AS (
-      SELECT (c.at AT TIME ZONE 'UTC')::date AS day,lower(x) AS address,(c.status='delivered' OR c.event_outcomes & 2 <> 0) AS delivered,(c.status='bounced' OR c.event_outcomes & 4 <> 0) AS bounced,
-        (c.status='complained' OR c.event_outcomes & 8 <> 0) AS complained
+      SELECT (c.at AT TIME ZONE 'UTC')::date AS day,lower(x) AS address,${emailDelivered('c')} AS delivered,${emailBounced('c')} AS bounced,
+        ${emailComplained('c')} AS complained
       FROM counted c CROSS JOIN LATERAL jsonb_array_elements_text(c.to_addresses||c.cc_addresses||c.bcc_addresses) x
       WHERE c.at>=date_trunc('day',${cutoff}::timestamptz,'UTC')-make_interval(days=>${ESTABLISHED.windowDays}) AND c.at<date_trunc('day',${cutoff}::timestamptz,'UTC')
         AND lower(x) NOT LIKE '%@simulator.amazonses.com'

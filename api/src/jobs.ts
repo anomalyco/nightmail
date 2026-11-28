@@ -1,4 +1,4 @@
-import {ActionRetry,actionDelay} from './ritual-retry.js';
+import {ActionRetry,retryDelay} from './ritual-retry.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { and, eq, sql, type SQL, type SQLWrapper } from 'drizzle-orm';
 import { ApiError, databaseCodeOf, databaseConflict, databaseUnavailable, rowId, log, logError, ModuleLoadError, transientDatabaseError } from './core.js';
@@ -145,7 +145,7 @@ export async function processJobs(runtime: Runtime, handlers: JobHandlerResolver
       const priorLoadFailures = typeof job.payload._loadFailures === 'number' && Number.isInteger(job.payload._loadFailures) && job.payload._loadFailures >= 0 ? job.payload._loadFailures : 0;
       const loadFailures = priorLoadFailures + 1;
       const refundedAttempts = Math.max(0, job.attempts - 1);
-      const delay = Math.min(15 * 60_000, 15_000 * 4 ** (loadFailures - 1));
+      const delay = retryDelay(loadFailures, { capMs: 15 * 60_000 });
       const nextPayload = { ...handlerPayload, _loadFailures: loadFailures };
       await writeJob(job,jobStarted,runtime.db.update(jobs).set({ status: 'pending', attempts: refundedAttempts, leaseUntil: null, lastError: error.code, availableAt: new Date(Date.now() + delay).toISOString(), payload: nextPayload }).where(fence).getSQL());
       log(loadFailures >= LOAD_ERROR_THRESHOLD ? 'error' : 'warn', { ...context, jobType: job.type, attempt: refundedAttempts, loadFailures, code: error.code, retryable: true, claimMs, claimBatchSize, jobMs: Date.now() - jobStarted });
@@ -169,7 +169,7 @@ export async function processJobs(runtime: Runtime, handlers: JobHandlerResolver
     // ordinary attempt ceiling would strand a campaign in pending forever.
     const hook=job.type==='operation.webhook' || job.type==='mailbox.webhook';
     const retry = failure instanceof ApiError && failure.retryable && (job.attempts < (job.type==='mailbox.webhook'?mailboxWebhookAttempts(job.webhook):hook?WEBHOOK_ATTEMPTS:MAX_ATTEMPTS) || failure.code === 'JOB_FINALIZATION_FAILED');
-    const delay=error instanceof ActionRetry?actionDelay(job.attempts,error.afterMs):Math.min(hook ? 12*3600000 : 3600000,15000 * 4 ** (job.attempts - 1));
+    const delay=retryDelay(job.attempts,{capMs:error instanceof ActionRetry || hook ? 12*3600000 : 3600000,afterMs:error instanceof ActionRetry?error.afterMs:0});
     // A job that fails for good is never due again: its available_at is when it failed, which the health tick counts
     // within the hour (src/health.ts jobs-failed), where a retry's is when it is next due.
     await settle(runtime.db.update(jobs).set({ status: retry ? 'pending' : 'failed', leaseUntil: null, lastError: code, availableAt: new Date(Date.now() + (retry ? delay : 0)).toISOString(), ...(job.type==='mailbox.webhook' && job.webhook?{payload:{...handlerPayload,maxAttempts:mailboxWebhookAttempts(job.webhook)}}:handlerPayload!==job.payload?{payload:handlerPayload}:{}) }).where(fence));

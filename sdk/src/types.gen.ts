@@ -8950,6 +8950,10 @@ export type CreateContactData = {
         properties?: {
             [key: string]: string | number | boolean | null;
         };
+        /**
+         * Optional list IDs for this contact (atomically replaces memberships on update). Non-empty on create or changing memberships on update requires manage permission.
+         */
+        listIds?: Array<string>;
     };
     path?: never;
     query?: never;
@@ -9152,6 +9156,10 @@ export type UpdateContactData = {
          * true sends campaigns and marketing to a contact flagged as risky anyway; false skips it again. Owners and admins only (manage permission). Only for a contact with a risk (409 CONTACT_NOT_RISKY otherwise).
          */
         riskAllowed?: boolean;
+        /**
+         * Optional list IDs for this contact (atomically replaces memberships on update). Non-empty on create or changing memberships on update requires manage permission.
+         */
+        listIds?: Array<string>;
     };
     path: {
         id: string;

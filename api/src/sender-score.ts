@@ -5,6 +5,7 @@ import { probationReason, type ProbationReason } from './hosted-sending.js';
 import { productName } from './brand.js';
 import { actor, ApiError, dashboardSession, requiredOf, restrictedArea, unrestrictedRequired, errors, json, response, security, type App, type Runtime } from './core.js';
 import { burstFor, EVALUATION, evaluateLadder, FACTOR_KEYS, FREEZE_FLOOR, GOOD_STANDING, GROWTH, GRADE_BANDS, GRADES, gradeOf, marketingHourFor, nextBand, quality, reserveFor, round, stepRank, STEPS, type DayEvidence, type DomainAuth, type Factor, type Reason, type Step } from './standing-model.js';
+import { emailAccepted, emailBounced, emailComplained, emailDelivered, emailHas } from './email-outcomes.js';
 
 // GET /v1/sender-score reads what the ten-minute standing job stored (src/standing.ts): the score, its factors, the
 // daily limit it sets (none in good standing) and the ladder step. A workspace without a Hosted connection (self-hosted, BYO) has no standing;
@@ -108,15 +109,15 @@ const publishedDisplay = (wid: string) => sql`(SELECT payload->'view' FROM jobs 
 
 // Common aggregation for the exact live advisory and the background's bounded pages.
 export const displayEvidenceColumns = sql`count(*)::int AS emails,
-  count(*) FILTER (WHERE status<>'suppressed' AND (provider_id IS NOT NULL OR status IN ('accepted','sent','delivered','bounced','complained','delayed') OR event_outcomes & 1 <> 0))::int AS accepted,
-  count(*) FILTER (WHERE status='delivered' OR event_outcomes & 2 <> 0)::int AS delivered,count(*) FILTER (WHERE status='bounced' OR event_outcomes & 4 <> 0)::int AS bounced,
-  count(*) FILTER (WHERE campaign_id IS NOT NULL AND status<>'suppressed' AND (provider_id IS NOT NULL OR event_outcomes & 1 <> 0))::int AS first_sends,
-  count(*) FILTER (WHERE campaign_id IS NOT NULL AND (status='bounced' OR event_outcomes & 4 <> 0))::int AS first_bounced,
-  count(*) FILTER (WHERE status='complained' OR event_outcomes & 8 <> 0)::int AS complained,
-  count(*) FILTER (WHERE error_code='CONTENT_REJECTED_SPAM' OR (status<>'suppressed' AND (provider_id IS NOT NULL OR event_outcomes & 1 <> 0)))::int AS screened,
+  count(*) FILTER (WHERE ${emailAccepted('')})::int AS accepted,
+  count(*) FILTER (WHERE ${emailDelivered('')})::int AS delivered,count(*) FILTER (WHERE ${emailBounced('')})::int AS bounced,
+  count(*) FILTER (WHERE campaign_id IS NOT NULL AND ${emailAccepted('')})::int AS first_sends,
+  count(*) FILTER (WHERE campaign_id IS NOT NULL AND ${emailBounced('')})::int AS first_bounced,
+  count(*) FILTER (WHERE ${emailComplained('')})::int AS complained,
+  count(*) FILTER (WHERE error_code='CONTENT_REJECTED_SPAM' OR ${emailAccepted('')})::int AS screened,
   count(*) FILTER (WHERE error_code='CONTENT_REJECTED_SPAM')::int AS rejected,count(*) FILTER (WHERE campaign_id IS NOT NULL AND status='suppressed')::int AS suppressed,
-  count(*) FILTER (WHERE (kind='marketing' OR campaign_id IS NOT NULL) AND (status='delivered' OR event_outcomes & 2 <> 0))::int AS marketing_delivered,0 AS unsubscribed,
-  count(*) FILTER (WHERE (kind='marketing' OR campaign_id IS NOT NULL) AND event_outcomes & 32 <> 0)::int AS clicked`;
+  count(*) FILTER (WHERE (kind='marketing' OR campaign_id IS NOT NULL) AND ${emailDelivered('')})::int AS marketing_delivered,0 AS unsubscribed,
+  count(*) FILTER (WHERE (kind='marketing' OR campaign_id IS NOT NULL) AND ${emailHas('', 'clicked')})::int AS clicked`;
 
 // Advisories still ask for exact live evidence. Public and staff score displays never select its mail CTE.
 export async function loadStanding(runtime: Runtime, wid: string, storedOnly = false): Promise<Row> {

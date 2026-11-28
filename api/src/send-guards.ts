@@ -4,6 +4,7 @@ import { blocklistNamed } from './delivery-history.js';
 import { placementRoot } from './domain-registry.js';
 import { PUBLIC_MAILBOXES } from './list-hygiene.js';
 import { BLOCKLIST_PAUSE, RAMP, type RampLines } from './standing-model.js';
+import { emailAccepted, emailBounced, emailComplained, emailDelivered } from './email-outcomes.js';
 
 // A sending campaign's guards, beside the automatic pause (src/sending.ts campaignHealth and the release loop). Lines from
 // RampLines: each guard is off until the private NIGHTMAIL_RAMP setting names it, so unset, a campaign sends as before.
@@ -61,7 +62,7 @@ export async function blocklistPause(db: DbExecutor, workspaceId: string, campai
 export async function stopDeadDomains(db: DbExecutor, workspaceId: string, campaignId: string, lines: RampLines) {
   const s = lines.domainStop;
   if (!s) return [];
-  const resolved = sql`(e.status IN ('delivered', 'bounced', 'complained') OR e.event_outcomes & 6 <> 0)`, bounced = sql`(e.status = 'bounced' OR e.event_outcomes & 4 <> 0)`;
+  const resolved = sql`(e.status = 'complained' OR ${emailDelivered()} OR ${emailBounced()})`, bounced = emailBounced();
   const { rows } = await db.execute<{ domain: string; resolved: number; bounced: number }>(sql`SELECT lower(split_part(e.to_addresses->>0, '@', 2)) AS domain,
       count(*) FILTER (WHERE ${resolved})::int AS resolved, count(*) FILTER (WHERE ${bounced})::int AS bounced
     FROM sending_emails e WHERE e.workspace_id = ${workspaceId} AND e.created_at > now() - make_interval(mins => ${s.windowMinutes}) AND e.campaign_id = ${campaignId}
@@ -87,8 +88,8 @@ export type PlanDay = { healthy: boolean; accepted: number; bounced: number; com
 export async function planWindowHealthy(db: DbExecutor, workspaceId: string, campaignId: string, windowStartedAt: string): Promise<PlanDay> {
   const c = RAMP.check;
   const { rows: [w] } = await db.execute<{ accepted: number; bounced: number; complained: number }>(sql`SELECT
-      count(*) FILTER (WHERE e.status <> 'suppressed' AND (e.provider_id IS NOT NULL OR e.event_outcomes & 1 <> 0))::int AS accepted,
-      count(*) FILTER (WHERE e.status = 'bounced' OR e.event_outcomes & 4 <> 0)::int AS bounced, count(*) FILTER (WHERE e.status = 'complained' OR e.event_outcomes & 8 <> 0)::int AS complained
+      count(*) FILTER (WHERE ${emailAccepted()})::int AS accepted,
+      count(*) FILTER (WHERE ${emailBounced()})::int AS bounced, count(*) FILTER (WHERE ${emailComplained()})::int AS complained
     FROM sending_emails e WHERE e.workspace_id = ${workspaceId} AND e.created_at >= ${windowStartedAt}::timestamptz AND e.campaign_id = ${campaignId}`);
   const accepted = Number(w?.accepted ?? 0), bounced = Number(w?.bounced ?? 0), complained = Number(w?.complained ?? 0);
   const clean = (accepted < c.bounceMinimum || bounced <= accepted * c.bounceRate) && (complained < c.complaints || complained <= accepted * c.complaintRate);

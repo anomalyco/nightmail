@@ -238,6 +238,8 @@ export async function createHarness<H = ToolHost>(env: Env, storage: DurableObje
 
   return {
     async turn(input: TurnInput, tools: H, onEvent: (event: HarnessEvent) => void, signal: AbortSignal): Promise<TurnResult> {
+      // Stopped before it started: no model run, nothing spent.
+      if (signal.aborted) return { text: '', usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, costUsd: 0 }, aborted: true };
       const sessionID = await session(input.tools);
       await settle(sessionID);
       await storage.put(TURN_OPEN, true);
@@ -288,8 +290,12 @@ export async function createHarness<H = ToolHost>(env: Env, storage: DurableObje
       try {
         // Let the subscription attach before prompting, so no early event is missed.
         await new Promise(resolve => setTimeout(resolve, 0));
+        // Stopped while the session was readied: no prompt, so no run (an abort listener only interrupts a run).
+        if (signal.aborted) { await storage.delete(TURN_OPEN); return { text: '', usage, aborted: true }; }
         await opencode.sessions.prompt({ sessionID, text: input.text, ...(input.images?.length ? { files: input.images.map(image => ({ uri: image.uri, name: image.name })) } : {}) } as never);
         prompted = true;
+        // Stopped while the prompt was sent: its interrupt may have come before the run existed, so it is sent again.
+        if (signal.aborted) stop();
         await done;
         // The run ended (succeeded, failed or interrupted): nothing is left for a boot to resume.
         await storage.delete(TURN_OPEN);

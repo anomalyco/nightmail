@@ -2,7 +2,7 @@ import { useEffect, useId, useState, type FormEvent } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { useApi, useApiDef, useApiQuery, useWorkspaceAccess } from '../../data/context'
 import { usePrefetchQueries } from '../../data/prefetch'
-import { queries } from '../../data/queries'
+import { queries, walkSendingDomains } from '../../data/queries'
 import { campaignEditable, errorText, type Campaign, type Newsletter, type NewsletterReaders } from '../../data/types'
 import { Button, DataTable, EmptyState, ErrorState, Field, Input, PageHeader, Pagination, SkeletonText, StatusBadge, type Column } from '../../components/ui'
 import { date, number, percent } from '../../lib/format'
@@ -117,10 +117,9 @@ function NewNewsletter() {
   const api = useApi(), navigate = useNavigate(), remember = useRememberNewsletter(), nameId = useId()
   const [name, setName] = useState(''), [sender, setSender] = useState({ name: '', email: '' })
   const [pending, setPending] = useState(false), [errors, setErrors] = useState<{ name?: string; from?: string }>({})
-  // First page of domains (API caps GET /v1/domains at 10) for autocomplete; submit walks remaining cursors if needed.
-  const domains = useApiQuery(['domains', 'newsletter-sender'], (client, signal) => client.domains.list({ pageSize: 10, refresh: false }, signal))
+  const domains = useApiDef(queries.sendingDomains())
   // The built-in domain sends no newsletters: issues are campaigns, which it refuses.
-  const verified = (domains.data?.items ?? []).filter(domain => domain.status === 'verified' && !domain.builtIn).map(domain => domain.name)
+  const verified = (domains.data ?? []).filter(domain => domain.status === 'verified' && !domain.builtIn).map(domain => domain.name)
   async function submit(event: FormEvent) {
     event.preventDefault()
     const missing = { name: !name.trim() ? 'Enter a name.' : undefined, from: !sender.email ? 'Enter the address issues are sent from.' : undefined }
@@ -130,24 +129,11 @@ function NewNewsletter() {
     try {
       const created = await api.newsletters.create({ name: name.trim(), from: sender.email, fromName: sender.name || name.trim() })
       remember({ id: created.id, name: created.name })
-      // Sending needs the address's domain verified: walk domain pages (10/page, refresh=false) until matched or exhausted
-      // so workspaces with >10 domains never treat their 11th+ verified domain as unverified.
       const domain = sender.email.split('@')[1]!.toLowerCase(), back = newsletterPath(created.id)
       const covers = (parent: string) => domain === parent || domain.endsWith(`.${parent}`)
-      let items = domains.data?.items ?? []
-      let cursor: string | null | undefined = domains.data ? domains.data.nextCursor : undefined
-      let verifiedMatch = items.some(item => item.status === 'verified' && covers(item.name))
-      let known = items.find(item => item.name === domain)
-      if (!verifiedMatch && (!domains.data || cursor)) {
-        for (let pages = domains.data ? 1 : 0; pages < 50; pages++) {
-          const page = await api.domains.list({ pageSize: 10, cursor: cursor ?? undefined, refresh: false }).catch(() => null)
-          if (!page) break
-          if (page.items.some(item => item.status === 'verified' && covers(item.name))) { verifiedMatch = true; break }
-          known ??= page.items.find(item => item.name === domain)
-          cursor = page.nextCursor
-          if (!cursor) break
-        }
-      }
+      const items = domains.data ?? await walkSendingDomains(api).catch(() => [])
+      const verifiedMatch = items.some(item => item.status === 'verified' && !item.builtIn && covers(item.name))
+      const known = items.find(item => item.name === domain)
       if (verifiedMatch) navigate(back, { replace: true })
       else navigate(known ? `/domains/${encodeURIComponent(known.id)}?then=${encodeURIComponent(back)}` : `/domains?add=${encodeURIComponent(domain)}&then=${encodeURIComponent(back)}`, { replace: true })
     } catch (cause) { setErrors({ from: errorText(cause) }); setPending(false) }
