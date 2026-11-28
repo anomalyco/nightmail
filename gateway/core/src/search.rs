@@ -1,21 +1,9 @@
-use crate::{fetch::header_end, store::Entry};
-use imap_codec::imap_types::{
-    search::SearchKey as K,
-    sequence::{SeqOrUid, Sequence, SequenceSet},
-};
+use crate::{fetch::header_end, imap::seq_ranges, store::Entry};
+use imap_codec::imap_types::{search::SearchKey as K, sequence::SequenceSet};
 use mail_parser::MessageParser;
+// Runs per message, so it walks the set's ranges instead of building merged runs.
 pub fn contains(set: &SequenceSet, n: u32, last: u32) -> bool {
-    let value = |x: SeqOrUid| match x {
-        SeqOrUid::Value(i) => i.get(),
-        SeqOrUid::Asterisk => last,
-    };
-    set.0.as_ref().iter().any(|s| match *s {
-        Sequence::Single(x) => value(x) == n,
-        Sequence::Range(x, y) => {
-            let (a, b) = (value(x), value(y));
-            (a.min(b)..=a.max(b)).contains(&n)
-        }
-    })
+    seq_ranges(set, last).any(|(a, b)| (a..=b).contains(&n))
 }
 pub fn matches(k: &K<'_>, e: &Entry, seq: u32, last: u32, uidmax: u32) -> bool {
     let has = |s: &str| e.flags.iter().any(|f| f.eq_ignore_ascii_case(s));

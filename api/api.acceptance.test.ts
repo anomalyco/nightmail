@@ -256,8 +256,18 @@ test('Cloudflare static files: only files the deployed build has get a cache lif
   assert.ok(capped.uncached.length>0);assert.deepEqual(capped.uncached,many.slice(-capped.uncached.length),'The files listed first keep their rules.');
   assert.equal(sent(capped.headers,'/assets/chunk-0.js').get('cache-control'),FILE_CACHE.assets);
 });
+/** Settle one tagged feedback message whose ingestion returns `outcome`, as the queue consumer does: its retry delay, 'ack', 'retired' (routine unmatched) or 'archived'. */
+async function settleOne(attempts:number,outcome:{ok:boolean;error?:string},item:import('./src/core.js').FeedbackItem={region:'us-east-2',topicArn:'fixture',messageId:'fixture',message:{}}){
+  const {settleFeedbackBatch,feedbackMac}=await import('./src/adapters/feedback-queue.js'),secrets={authSecret:'fixture-feedback-secret'},{mac:_,...body}=item;
+  let settled:number|'ack'|undefined;
+  const counts=await settleFeedbackBatch({secrets,lane:'tagged',sourceQueue:'fixture',messages:[{id:'fixture',attempts,timestamp:new Date(),body:{...body,mac:feedbackMac(secrets.authSecret,body)},
+    ack:()=>{settled='ack';},retry:opts=>{settled=opts?.delaySeconds;}}],ingest:async items=>items.map(()=>outcome),promoteLegacy:async()=>{},completeLegacy:async()=>{},archive:async()=>{}});
+  if(counts.retiredUnmatched) assert.equal(counts.failed,0,'a retired message is not a failure');
+  return counts.retiredUnmatched?'retired':counts.quarantined?'archived':settled;
+}
 test('feedback queue: only platform-dated pre-cutover legacy items drain unsigned; fresh forgeries and replays are refused',async()=>{
-  const {authenticFeedback,authenticLegacyRecovery,feedbackMac,feedbackSink,feedbackVerdict,legacyFeedbackCutover,settleFeedbackBatch,settleFeedbackMessage}=await import('./src/adapters/feedback-queue.js');
+  const {authenticFeedback,authenticLegacyRecovery,classifyFeedback,feedbackMac,feedbackSink,legacyFeedbackCutover,settleFeedbackBatch}=await import('./src/adapters/feedback-queue.js');
+  const feedbackVerdict=(...args:Parameters<typeof classifyFeedback>)=>classifyFeedback(...args).verdict;
   type Item=import('./src/core.js').FeedbackItem;
   const secret=randomUUID(),previous=randomUUID(),sent:{body:Item}[]=[];
   const queue={send:async()=>{},sendBatch:async(messages:{body:Item}[])=>{sent.push(...messages);}} as unknown as Queue<Item>;
@@ -304,7 +314,7 @@ test('feedback queue: only platform-dated pre-cutover legacy items drain unsigne
   const tagged=[message(queued),message(poisoned),message(fresh),message(tampered),message(bigint),message('text')];
   const settled=await run('tagged',tagged);
   assert.deepEqual(ingested,[queued]);
-  assert.deepEqual([settled.unauthenticated,settled.untagged,settled.deadLettered,settled.quarantined,settled.held,settled.failed,settled.retiredUnmatched],[5,0,0,5,0,0,0]);
+  assert.deepEqual([settled.unauthenticated,settled.untagged,settled.quarantined,settled.held,settled.failed,settled.retiredUnmatched],[5,0,5,0,0,0]);
   assert.deepEqual(tagged.map(m=>[m.acked,m.retried]),[[1,0],[1,0],[1,0],[1,0],[1,0],[1,0]]);
   assert.deepEqual(quarantined.map(q=>q.body),[poisoned,fresh,tampered,bigint,'text']);
   assert.deepEqual(quarantined[0]!.source,{queue:'fixture-tagged',id:tagged[1]!.id,enqueuedAt:freshDate.toISOString(),attempts:1});
@@ -312,18 +322,18 @@ test('feedback queue: only platform-dated pre-cutover legacy items drain unsigne
   // If both durable stores fail, only that message retries.
   const held=[message(queued),message(poisoned)];
   const partial=await run('tagged',held,{failArchive:body=>body===poisoned});
-  assert.deepEqual([partial.deadLettered,partial.held,held[0]!.acked,held[1]!.acked,held[1]!.retried],[0,1,1,0,1]);
+  assert.deepEqual([partial.held,held[0]!.acked,held[1]!.acked,held[1]!.retried],[1,1,0,1]);
   quarantined.length=0;ingested=[];
   const legacy=[message(fresh),message(queued),message(tampered),message(poisoned)];
   const drained=await run('legacy',legacy);
   assert.deepEqual(ingested,[queued]);
-  assert.deepEqual([drained.untagged,drained.unauthenticated,drained.quarantined,drained.deadLettered],[1,2,3,0]);
+  assert.deepEqual([drained.untagged,drained.unauthenticated,drained.quarantined],[1,2,3]);
   assert.deepEqual(quarantined.map(q=>q.body),[fresh,tampered,poisoned]);
   assert.deepEqual(legacy.map(m=>[m.acked,m.retried]),[[1,0],[1,0],[1,0],[1,0]]);
   const historical=[message(item,old)];
   const beforeCutover=await run('legacy',historical);
   assert.deepEqual(ingested,[],'unsigned items are durably promoted before ingestion');
-  assert.deepEqual([beforeCutover.promoted,beforeCutover.quarantined,beforeCutover.deadLettered,historical[0]!.acked],[1,0,0,1]);
+  assert.deepEqual([beforeCutover.promoted,beforeCutover.quarantined,historical[0]!.acked],[1,0,1]);
   const recovery=promoted[0]!;
   assert.deepEqual(recovery.source,{queue:'fixture-legacy',id:historical[0]!.id,enqueuedAt:old.toISOString(),cutover:new Date(cutover).toISOString()});
   assert.equal(authenticLegacyRecovery(secrets,structuredClone(recovery)),true);
@@ -361,9 +371,6 @@ test('feedback queue: only platform-dated pre-cutover legacy items drain unsigne
     assert.deepEqual(ingested,[],'DLQ consumers only archive');
     assert.ok(messages.every(m=>m.acked===1&&m.retried===0));
   }
-  let acked=0,retried=0;
-  settleFeedbackMessage({attempts:1,ack:()=>{acked++;},retry:()=>{retried++;},body:item},{ok:true});
-  assert.deepEqual([acked,retried],[1,0]);
   const ts=(await import('typescript')).default;
   for(const file of ['wrangler.dev.jsonc','wrangler.prod.jsonc']){
     const c=ts.parseConfigFileTextToJson(file,await readFile(new URL(file,import.meta.url),'utf8')).config;
@@ -9873,6 +9880,7 @@ describe('Hosted MCP OAuth and tools', () => {
       error(await service('GET', '/v1/support/workspaces'), 404, 'NOT_FOUND');
       assert.equal(supportPlatformAllows('GET', '/v1/support/workspaces'), false);
       assert.equal(supportPlatformAllows('GET', '/v1/support/../operator/users/x/audit'), false);
+      assert.deepEqual([`/v1/operator/support/handoffs/sho_${'0'.repeat(32)}`, '/v1/operator/support/outbox/%2e%2e', '/v1/operator/support//outbox', '/v1/operator/support/outbox/'].map(p => supportPlatformAllows('GET', p)), [true, false, false, false]);
       // Past its allow-list, the gate itself still refuses the binding everywhere else under /v1/operator.
       const bypass = await app.fetch(new Request(`${PUBLIC_ORIGIN}/v1/operator/users/${manager!.userId}/audit`), { ...runtime, platformCaller: 'bane-support' });
       assert.equal(bypass.status, 403);
@@ -10264,6 +10272,9 @@ describe('Hosted MCP OAuth and tools', () => {
         error(await stamped(id, 'POST', '/v1/support/context', {}), 404);
         error(await stamped(id, 'GET', '/v1/operator/support/grants'), 404);
         error(await stamped(id, 'GET', '/v1/support/../operator/users/x/audit'), 404);
+        // Only a route with a ceiling, its IDs whole segments: no empty, dot or encoded segment, no trailing slash, no GET of a write.
+        for (const path of ['/v1/support//workspaces', '/v1/support/workspaces/', '/v1/support/emails/%2e%2e', '/v1/support/emails/a.b', `/v1/support/emails/${'x'.repeat(121)}`, '/v1/support/emails/a%2Fb', '/v1/support/actions', '/v1/support/domains/x/verify'])
+          error(await stamped(id, 'GET', path), 404, 'NOT_FOUND');
         error(await stamped('conv_unknown', 'GET', '/v1/support/context'), 403, 'SUPPORT_GRANT_REQUIRED');
         error(await stamped(conversation(), 'GET', '/v1/support/context'), 403, 'SUPPORT_GRANT_REQUIRED');
         // Only an email conversation bound to its sender's account reads, and only that account.
@@ -10286,6 +10297,9 @@ describe('Hosted MCP OAuth and tools', () => {
         const table = SUPPORT_CEILINGS.map(e => `${e.method} ${e.path}`).sort();
         assert.deepEqual(registered.filter(r => !table.includes(r)), [], 'A /v1/support route without a role ceiling.');
         assert.deepEqual(table.filter(e => !registered.includes(e)), [], 'A role ceiling for a route that does not exist.');
+        const { stampedAllows } = await import('./src/support-platform.js'), ids = ['dom_0123456789abcdef0123456789abcdef', 'email_0000018c1a2b37def0123456789abcdef', '0100018c1a2b3c4d-1a2b3c4d-1a2b-000000'];
+        assert.deepEqual(SUPPORT_CEILINGS.flatMap(e => ids.filter(x => !stampedAllows(e.method, e.path.replace(/\{[^}]+\}/g, x))).map(x => `${e.method} ${e.path} ${x}`)), [], 'The binding allows exactly the ceilings.');
+        assert.deepEqual(['HEAD /v1/support/context', 'GET /v1/support/emails/a.b', 'GET /v1/support/emails/%2e%2e', 'POST /v1/support/actions/x'].filter(c => stampedAllows(...c.split(' ') as [string, string])), []);
         assert.ok(registered.length >= 23, registered.join());
         const people = { owner, admin, member } as const, chats = { owner: await chat(owner), admin: await chat(admin), member: await chat(member) };
         const dashboard = new Map<string, number>(), mismatches: string[] = [];
@@ -11055,6 +11069,13 @@ describe('Hosted MCP OAuth and tools', () => {
           assert.deepEqual(ok(await publicly(`/v1/inbound/webhooks/${live.id}/test`)), { statusCode: 204 });
           assert.deepEqual(posted, ['https://example.com/hooks/in-live', 'https://example.com/hooks/in-live'], 'One post for the action, one for the route.');
           assert.deepEqual((await decisions(test.id)).map(d => d.outcome), ['running', 'done'], 'The claim and the answer are both on the trail.');
+          // A test whose answer never came back settles the first time anyone reads it: failed, outcome unknown, never posted again.
+          const lost = await propose(id, { kind: 'test_inbound_webhook', webhookId: live.id });
+          await db.query(`UPDATE support_actions SET status = 'running', started_at = now() - interval '6 minutes' WHERE id = $1`, [lost.id]);
+          const unsettled = ok(await stamped(id, 'GET', `/v1/support/actions/${lost.id}`));
+          assert.deepEqual([unsettled.status, unsettled.error?.code, unsettled.result, typeof unsettled.resolvedAt], ['failed', 'SUPPORT_ACTION_OUTCOME_UNKNOWN', null, 'string']);
+          assert.deepEqual(ok(await confirm(lost.id)), unsettled, 'Confirming it answers the settled outcome.');
+          assert.deepEqual([posted.length, (await decisions(lost.id)).map(d => d.outcome)], [2, ['unknown']], 'Never posted; settled once, on the trail.');
         } finally { runtime.webhookFetch = transport; }
         // The role is checked again when the person confirms, and the membership.
         const theirs = await chat(deputy, shop), demoted = await propose(theirs, { kind: 'test_webhook', webhookId: hook });
@@ -27878,9 +27899,9 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       await runtime.db.transaction(async tx=>{
         await tx.execute(sql`UPDATE mailbox_domains SET catch_all=${catchAll} WHERE workspace_id=${owner} AND name=${host}`);
         await tx.execute(sql`INSERT INTO mail_receipts(workspace_id,ses_message_id,region,bucket,object_key,recipients,notification) VALUES(${owner},${mid},${oh},${bucket},${'staging/'+mid},${JSON.stringify(recipients)}::jsonb,'{}'::jsonb)`);
-        await storeIncoming(tx,{id:message,workspaceId:owner,direction:'inbound',region:oh,sesMessageId:mid,messageId:`<${mid}@ca.example>`,inReplyTo:null,references:[],subject:'Validation',
+        await storeIncoming(tx,{m:{id:message,workspaceId:owner,direction:'inbound',region:oh,sesMessageId:mid,messageId:`<${mid}@ca.example>`,inReplyTo:null,references:[],subject:'Validation',
           fromAddress:'validation@ca.example',fromName:null,to:[],cc:[],bcc:[],replyTo:[],envelopeFrom:'validation@ca.example',envelopeTo:recipients,sentAt:null,receivedAt:new Date().toISOString(),
-          text:'Validation.',html:null,bodyTruncated:false,snippet:'Validation.',headers:[],attachmentCount:0,sizeBytes:100,rawBucket:bucket,rawKey:`workspaces/${owner}/raw/${mid}.eml`,verdicts:{},spam:false,automated:false,status:'received'} as any,[],true,true,false,null,undefined,host);
+          text:'Validation.',html:null,bodyTruncated:false,snippet:'Validation.',headers:[],attachmentCount:0,sizeBytes:100,rawBucket:bucket,rawKey:`workspaces/${owner}/raw/${mid}.eml`,verdicts:{},spam:false,automated:false,status:'received'} as any,files:[],verifiedFrom:true,allowCreate:true,plan:null,platformHosts:host});
         const rows=async(q:ReturnType<typeof sql>)=>(await tx.execute<{address:string}>(q)).rows.map(r=>r.address).sort();
         result={created:await rows(sql`SELECT address FROM mailboxes WHERE workspace_id=${owner} AND origin='auto'`),
           delivered:await rows(sql`SELECT b.address FROM mailbox_messages m JOIN mailboxes b ON b.id=m.mailbox_id WHERE m.workspace_id=${owner} AND m.message_id=${message}`),
@@ -28227,10 +28248,10 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       const deliver=async(recipients:string[])=>{const {n,mid}=await receive(recipients);assert.equal(n,1);const message=unique('msg');
         const input=(await runtime.db.execute<{i:Json}>(sql`SELECT ${ingestInput(runtime.config,wid,mid)} AS i`)).rows[0]!.i;
         const plan=matchRouting(input.routing,input.recipients,false,'PASS',new Date().toISOString());
-        await storeIncoming(runtime.db,{id:message,workspaceId:wid,direction:'inbound',region:oh,sesMessageId:mid,messageId:`<${mid}@sender.example>`,inReplyTo:null,references:[],subject:'Hi',
+        await storeIncoming(runtime.db,{m:{id:message,workspaceId:wid,direction:'inbound',region:oh,sesMessageId:mid,messageId:`<${mid}@sender.example>`,inReplyTo:null,references:[],subject:'Hi',
           fromAddress:'someone@sender.example',fromName:null,to:recipients,cc:[],bcc:[],replyTo:[],envelopeFrom:'someone@sender.example',envelopeTo:recipients,sentAt:null,receivedAt:new Date().toISOString(),
           text:'Hi.',html:null,bodyTruncated:false,snippet:'Hi.',headers:[],attachmentCount:0,sizeBytes:100,rawBucket:bucket,rawKey:`workspaces/${wid}/raw/${mid}.eml`,verdicts:{spam:'PASS',virus:'PASS'},spam:false,automated:false,status:'received',
-          lifecycle:plan.recipients.some(r=>r.inboxes.some(id=>input.routing.boxes?.[id]?.kept))?'kept':undefined} as any,[],true,true,false,plan,undefined,null); // As ingest stores a kept inbox's mail.
+          lifecycle:plan.recipients.some(r=>r.inboxes.some(id=>input.routing.boxes?.[id]?.kept))?'kept':undefined} as any,files:[],verifiedFrom:true,allowCreate:true,plan}); // As ingest stores a kept inbox's mail.
         return {plan,boxes:(await db.query('SELECT mailbox_id FROM mailbox_messages WHERE message_id=$1 ORDER BY mailbox_id',[message])).rows.map(r=>r.mailbox_id),
           envelope:(await db.query('SELECT envelope_to FROM mail_messages WHERE id=$1',[message])).rows[0].envelope_to};};
       const anyone=`order-4821@${host}`,caught=await deliver([anyone]);
@@ -28262,10 +28283,10 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         const fresh=async(o:{from?:string;verified?:boolean;automated?:boolean;replyTo?:string[];address?:boolean;to?:string[]}={})=>{const {n,mid}=await receive([o.address?`support@${host}`:`order-${randomUUID().slice(0,6)}@${host}`]);assert.equal(n,1);
           const id=unique('msg'),sender=o.from??'someone@sender.example',input=(await runtime.db.execute<{i:Json}>(sql`SELECT ${ingestInput(runtime.config,wid,mid)} AS i`)).rows[0]!.i;
           const plan=matchRouting(input.routing,input.recipients,false,'PASS',new Date().toISOString());
-          await storeIncoming(runtime.db,{id,workspaceId:wid,direction:'inbound',region:oh,sesMessageId:mid,messageId:`<${mid}@sender.example>`,inReplyTo:null,references:[],subject:'Question',
+          await storeIncoming(runtime.db,{m:{id,workspaceId:wid,direction:'inbound',region:oh,sesMessageId:mid,messageId:`<${mid}@sender.example>`,inReplyTo:null,references:[],subject:'Question',
             fromAddress:sender,fromName:null,to:o.to?o.to.map(address=>({name:null,address})):input.recipients,cc:[],bcc:[],replyTo:(o.replyTo??[]).map(address=>({name:null,address})),envelopeFrom:sender,envelopeTo:input.recipients,sentAt:null,receivedAt:new Date().toISOString(),
             text:'Hi.',html:null,bodyTruncated:false,snippet:'Hi.',headers:[],attachmentCount:0,sizeBytes:100,rawBucket:bucket,rawKey:`workspaces/${wid}/raw/${mid}.eml`,verdicts:{spam:'PASS',virus:'PASS',dmarc:o.verified===false?'FAIL':'PASS'},spam:false,automated:!!o.automated,status:'received',
-            lifecycle:plan.recipients.some(r=>r.inboxes.some(id=>input.routing.boxes?.[id]?.kept))?'kept':undefined} as any,[],true,true,o.verified!==false,plan,undefined,null);
+            lifecycle:plan.recipients.some(r=>r.inboxes.some(id=>input.routing.boxes?.[id]?.kept))?'kept':undefined} as any,files:[],verifiedFrom:true,allowCreate:true,replyAuthorVerified:o.verified!==false,plan});
           const row=(await db.query('SELECT thread_id,mailbox_id FROM mailbox_messages WHERE message_id=$1',[id])).rows[0];
           return {id,thread:row.thread_id as string,box:row.mailbox_id as string};};
         const answer=(m:{id:string;thread:string;box:string},extra:Json={})=>local('POST',`/v1/inbound/threads/${m.thread}/reply`,{addressId:m.box,replyToMessageId:m.id,text:'Thanks, on it.',...extra});
@@ -29542,6 +29563,9 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
       assert.deepEqual(await listed(), { id: own.id, name: own.name, domain: own.name, hosts: [own.name, `help.${own.name}`], status: 'waiting_for_mx', catchAll: 'store' });
       await db.query("UPDATE mailbox_domains SET status='disabled' WHERE workspace_id=$1 AND domain_id=$2 AND parent_id IS NULL", [wid, own.id]);
       assert.deepEqual(await listed(), { id: own.id, name: `help.${own.name}`, domain: own.name, hosts: [`help.${own.name}`], status: 'waiting_for_mx', catchAll: 'store' });
+      // The domain's own read shows the same host as the overview: both take the first in primaryHostOrder.
+      const shown = ok(await local('GET', `/v1/inbound/domains/${own.id}`));
+      assert.deepEqual([shown.name, shown.status], [`help.${own.name}`, 'waiting_for_mx']);
       assert.equal(ok(await create(`more@help.${own.name}`), 201).address, `more@help.${own.name}`);
 
       // The reported case: receiving was set up at reply.<domain>, the owner removed that host and wants the domain itself.
@@ -32381,11 +32405,10 @@ describe('SIMULATED SES: real SDK transport and direct event fanout', () => {
         if (!customer) {
           const tag = input.EmailTags!.find(t=>t.Name==='bane_email_id')!.Value!;
           const early = { topicArn:poolTopic, region:REGION, messageId:unique('early-bounce'), message:{ eventType:'Bounce', mail:{messageId:'same-provider-id-in-both-accounts',sendingAccountId:pool,tags:{opensend_email_id:[tag]}}, bounce:{bounceType:'Permanent',bouncedRecipients:[{emailAddress:bouncedAddress}]} } };
-          const { settleFeedbackMessage } = await import('./src/adapters/feedback-queue.js');
           for (const attempts of [1,2]) {
             const [outcome] = await ingestFeedbackBatch(runtime,[early]);
             assert.equal(outcome?.error,'SES_EMAIL_NOT_FOUND');
-            settleFeedbackMessage({attempts,ack:()=>assert.fail('Matched early feedback must not be dropped'),retry:opts=>assert.equal(opts?.delaySeconds,15*2**attempts)},outcome);
+            assert.equal(await settleOne(attempts,outcome!,early),15*2**attempts,'Matched early feedback must not be dropped');
           }
           assert.equal((await jobs('operation.ses')).length,1,'The known owner gets one durable recovery job.');
         }
@@ -32986,6 +33009,28 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       }
       t.diagnostic(`Required screen: ${positions.length}/${positions.length} neutral markers classified; over-budget trees refused without a classifier call`);
     }));
+  });
+
+  test('Hosted content policy: accept, held mail and campaign copies share one rule; a built-in domain is never trusted; raw and sealed mail need the trusted tier',async()=>{
+    const {resolveHostedContentPolicy:policy,sharedFormatRefusal}=await import('./src/sending.js');
+    const config={hostedScreen:true,trustedPool:true,builtinDomain:'built.invalid'};
+    const trusted={shared:true,poolTier:'trusted',legacyNames:false,from:'a@example.com',probation:false,simulated:false,kind:'transactional'} as const,fresh={...trusted,poolTier:'standard'};
+    assert.deepEqual(policy(config,trusted),{shared:true,hosted:true,trusted:true,rules:null,screened:true,required:false});
+    assert.equal(policy(config,{...trusted,kind:'marketing'}).required,true,'trusted marketing still needs a verdict');
+    assert.deepEqual(policy(config,{...trusted,from:'a@ws.BUILT.invalid'}),{shared:true,hosted:true,trusted:false,rules:'probation',screened:true,required:true});
+    assert.equal(policy(config,{...trusted,legacyNames:null}).trusted,false);
+    assert.equal(policy({...config,trustedPool:false},trusted).trusted,false);
+    assert.equal(policy(config,fresh).rules,'standard');
+    assert.equal(policy(config,{...fresh,probation:true}).rules,'probation');
+    assert.deepEqual(policy(config,{...fresh,simulated:true}),{shared:true,hosted:true,trusted:false,rules:null,screened:false,required:true});
+    assert.deepEqual(policy({...config,hostedScreen:false},fresh),{shared:true,hosted:false,trusted:false,rules:null,screened:false,required:false});
+    assert.deepEqual(policy(config,{...fresh,shared:false,screen:true}),{shared:false,hosted:false,trusted:false,rules:null,screened:true,required:false},'BYO screen: true');
+    assert.equal(policy(config,{...fresh,shared:false,screen:true,kind:'marketing'}).screened,false);
+    assert.equal(policy(config,{...fresh,from:''}).rules,'standard','a draft without a sender is not a built-in domain');
+    assert.equal(sharedFormatRefusal({raw:'x'},policy(config,trusted))?.code,'SHARED_RAW_UNSUPPORTED');
+    assert.equal(sharedFormatRefusal({mime:'x'},policy(config,fresh))?.code,'SEALED_MAIL_UNAVAILABLE');
+    assert.equal(sharedFormatRefusal({mime:'x'},policy(config,trusted)),undefined);
+    assert.equal(sharedFormatRefusal({raw:'x',mime:'x'},policy(config,{...fresh,shared:false})),undefined);
   });
 
   test('probation mail is delivered as the copy the screen read',async t=>{
@@ -34523,14 +34568,12 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       await assert.rejects(reputationAlertJobs['reputation.alert']!(runtime, { region: REGION, metric: 'nope' }, { id: 'job_alert_bad', workspaceId: wid, attempts: 1 }), { code: 'JOB_PAYLOAD_INVALID', retryable: false });
     });
   });
-  test('only old or BYO unmatched feedback acks after a short retry; hosted and unavailable writes still retry',()=>import('./src/adapters/feedback-queue.js').then(({settleFeedbackMessage})=>{
-    const result=(attempts:number,kind:'shared'|'byo',days:number,error='SES_FEEDBACK_UNMATCHED')=>{
-      let settled:number|'ack'|undefined;
-      settleFeedbackMessage({attempts,body:{region:REGION,topicArn:'fixture',messageId:'fixture',topicKind:kind,message:{mail:{timestamp:new Date(Date.now()-days*86400000).toISOString()}}},
-        retry:opts=>{settled=opts?.delaySeconds;},ack:()=>{settled='ack';}},{ok:false,error});return settled;
-    };
-    assert.deepEqual([result(1,'byo',0),result(2,'byo',0),result(2,'shared',31),result(2,'shared',0),result(2,'byo',31,'FEEDBACK_PERSIST_FAILED')],[30,'ack','ack',60,60]);
-  }));
+  test('only old or BYO unmatched feedback acks after a short retry; hosted and unavailable writes still retry',async()=>{
+    const result=(attempts:number,kind:'shared'|'byo',days:number,error='SES_FEEDBACK_UNMATCHED')=>
+      settleOne(attempts,{ok:false,error},{region:REGION,topicArn:'fixture',messageId:'fixture',topicKind:kind,message:{mail:{timestamp:new Date(Date.now()-days*86400000).toISOString()}}});
+    assert.deepEqual(await Promise.all([result(1,'byo',0),result(2,'byo',0),result(2,'shared',31),result(2,'shared',0),result(2,'byo',31,'FEEDBACK_PERSIST_FAILED'),result(5,'shared',0)]),
+      [30,'retired','retired',60,60,'archived']);
+  });
 
   test('sending review benchmark: bounded lease across queued owners',async t=>{
     await simulatedSesFixture(t,async({runtime,db})=>{
@@ -49124,7 +49167,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('schema and transient feedback failures redeliver and NUL diagnostics do not lose a hard bounce',async t=>{
     await simulatedSesFixture(t,async({runtime,local,db})=>{
-      const {ingestFeedbackBatch}=await import('./src/operations.js'),{settleFeedbackMessage}=await import('./src/adapters/feedback-queue.js');
+      const {ingestFeedbackBatch}=await import('./src/operations.js');
       const wid=runtime.config.workspaceId, account='111122223333', topicArn=`arn:aws:sns:${REGION}:${account}:fixture`;
       for(const code of ['08006','40P01','42P01']) {
         const to=address(), email=ok(await local('POST','/v1/emails/send',mail({to})),202), provider=unique('provider');
@@ -49132,9 +49175,9 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const item={topicArn,region:REGION,messageId:unique('sns'),message:{eventType:'Bounce',mail:{messageId:provider,sendingAccountId:account},bounce:{bounceType:'Permanent',bouncedRecipients:[{emailAddress:to,diagnosticCode:'misbehaving MTA\0status'}]}}};
         const tx=runtime.db;let attempts=0;const consumer={...runtime,db:Object.assign(Object.create(tx),{execute:()=>{attempts++;throw Object.assign(new Error('fault'),{cause:{code}});}})};
         const payload=code==='40P01'?[item]:[item,item,item], failures=await ingestFeedbackBatch(consumer,payload);
-        assert.equal(attempts,code==='40P01'?2:1);let retry=0;
-        for(const failure of failures) for(const attempts of [1,2,3,4,5,6]) settleFeedbackMessage({attempts,retry:()=>{retry++;},ack:()=>assert.fail('transient failure acknowledged')},failure);
-        assert.equal(retry,payload.length*6);assert.deepEqual(await ingestFeedbackBatch(runtime,[item,item]),[{ok:true},{ok:true}]);
+        assert.equal(attempts,code==='40P01'?2:1);assert.equal(failures.length,payload.length);
+        for(const failure of failures) assert.deepEqual(await Promise.all([1,2,3,4,5].map(attempts=>settleOne(attempts,failure))),[30,60,120,240,'archived'],'a transient failure retries until the attempt ceiling quarantines it');
+        assert.deepEqual(await ingestFeedbackBatch(runtime,[item,item]),[{ok:true},{ok:true}]);
         assert.equal((await db.query('SELECT suppression_reason FROM audience_contacts WHERE workspace_id=$1 AND email=$2',[wid,to])).rows[0].suppression_reason,'hard_bounce');
         assert.equal((await db.query('SELECT 1 FROM operation_feedback_failures WHERE topic_arn=$1',[topicArn])).rowCount,0);
       }
@@ -49219,7 +49262,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
 
   test('mixed-workspace feedback commits healthy siblings and quarantines only the unpersistable message',async t=>{
     await simulatedSesFixture(t,async ({runtime,local,run,db})=>{
-      const {ingestFeedbackBatch}=await import('./src/operations.js'), {settleFeedbackMessage}=await import('./src/adapters/feedback-queue.js');
+      const {ingestFeedbackBatch}=await import('./src/operations.js');
       const sink:import('./src/core.js').FeedbackItem[]=[];runtime.feedback={enqueue:async items=>{sink.push(...items);}};
       const ids=ok(await local('POST','/v1/emails/batch',{emails:[mail(),mail(),mail()]}),202).data.map((e:Json)=>e.id);
       await run('email.dispatch');
@@ -49231,7 +49274,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       const tx=runtime.db; const consumer={...runtime,db:Object.assign(Object.create(tx),{execute:(q:any)=>tx.transaction(sp=>sp.execute(q))})};
       const results=await ingestFeedbackBatch(consumer,batch);
       assert.deepEqual(results,[{ok:true},{ok:false,error:'SES_FEEDBACK_QUARANTINED'},{ok:true}]);
-      let ack=0;for (const result of results) settleFeedbackMessage({attempts:1,retry:()=>assert.fail('durable outcomes must not retry'),ack:()=>{ack++;}},result);assert.equal(ack,3);
+      assert.deepEqual(await Promise.all(results.map(result=>settleOne(1,result))),['ack','archived','ack'],'durable outcomes must not retry');
       assert.deepEqual((await db.query('SELECT status FROM sending_emails WHERE id=ANY($1) ORDER BY array_position($1,id)',[ids])).rows.map(r=>r.status),['delivered','accepted','delivered']);
       assert.deepEqual((await db.query('SELECT payload FROM operation_feedback_failures WHERE id=encode(sha256(convert_to($1,\'UTF8\')),\'hex\')',[JSON.stringify([batch[1].topicArn,batch[1].messageId])])).rows.map(r=>JSON.parse(r.payload)),[batch[1]]);
       assert.deepEqual((await db.query('SELECT topic_arn,workspace_id FROM operation_feedback_failures WHERE payload=$1',[JSON.stringify(batch[1])])).rows,[{topic_arn:batch[1].topicArn,workspace_id:'other-fixture'}]);
@@ -49265,18 +49308,14 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
       assert.deepEqual(outcomes.slice(0, 5).map(outcome => outcome.ok), [true, true, true, true, true], 'Routine items and an exact duplicate are acknowledged.');
       assert.equal(outcomes[5]!.ok, false);
       assert.equal(outcomes[5]!.error, 'SIMULATED_FEEDBACK_UNSUPPORTED');
-      const { settleFeedbackMessage } = await import('./src/adapters/feedback-queue.js');
       const unknown = { ...deliveries[0]!, message: { eventType:'Delivery', mail:{ messageId:`sim_${randomUUID()}` } } };
       const [unmatched] = await ingestFeedbackBatch(runtime, [unknown]);
       assert.equal(unmatched?.error, 'SES_FEEDBACK_UNMATCHED');
-      const settled: (number | 'ack')[] = [];
       const live = { ...unknown, topicArn:`arn:aws:sns:${REGION}:111122223333:fixture` };
       const [invalid, unsupported] = await ingestFeedbackBatch(runtime,[{...live,message:{eventType:'Send',mail:{}}},{...live,message:{eventType:'unknown',mail:{messageId:'fixture'}}}]);
       assert.deepEqual([invalid?.error,unsupported?.error],['SES_INVALID_EVENT','SES_UNSUPPORTED_EVENT']);
-      for (const [attempts, outcome] of [[1,unmatched],[2,unmatched],[2,outcomes[5]],[1,outcomes[0]],[1,invalid],[1,unsupported],[2,{ok:false,error:'FEEDBACK_PERSIST_FAILED'}]] as const) {
-        settleFeedbackMessage({ attempts, ack:()=>settled.push('ack'), retry:opts=>settled.push(opts!.delaySeconds!) }, outcome);
-      }
-      assert.deepEqual(settled, [30,60,'ack','ack','ack','ack',60]);
+      const settled = await Promise.all(([[1,unmatched],[2,unmatched],[2,outcomes[5]],[1,outcomes[0]],[1,invalid],[1,unsupported],[2,{ok:false,error:'FEEDBACK_PERSIST_FAILED'}]] as const).map(([attempts, outcome]) => settleOne(attempts, outcome!)));
+      assert.deepEqual(settled, [30,60,'archived','ack','archived','archived',60]);
       const persisted = await receipts();
       assert.equal(persisted.length, 4, 'Exactly one receipt per distinct callback; duplicates and rejected items add none.');
       assert.ok(persisted.every(receipt => receipt.processed_at !== null));

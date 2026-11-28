@@ -2,7 +2,7 @@ import { sql } from 'drizzle-orm';
 import type { DbExecutor } from './core.js';
 import type { MxReport } from './db/mailbox.js';
 import { checkMx, delegatedZone } from './mailbox-dns.js';
-import { isProofRecord, type IdentityFacts } from './states.js';
+import { hostRemoved, hostRoutesSql, isProofRecord, type HostStatus, type IdentityFacts } from './states.js';
 import { productName } from './brand.js';
 
 /**
@@ -73,7 +73,7 @@ export async function hostOwners(db: Pick<DbExecutor, 'execute'>, hosts: string[
   const [routed, claims] = await Promise.all([
     db.execute<{ host: string; own: boolean; name: string }>(sql`SELECT m.receiving_host AS host,m.workspace_id=${wid} AS own,d.name FROM mailbox_domains m
         JOIN operation_domains d ON d.id=m.domain_id AND d.workspace_id=m.workspace_id
-      WHERE m.receiving_host IN (SELECT jsonb_array_elements_text(${list}::jsonb)) AND m.status IN ('active','provisioning') AND NOT (m.workspace_id=${wid} AND d.name=${domain})
+      WHERE m.receiving_host IN (SELECT jsonb_array_elements_text(${list}::jsonb)) AND ${hostRoutesSql()} AND NOT (m.workspace_id=${wid} AND d.name=${domain})
       UNION ALL SELECT receiving_host,workspace_id=${wid},name FROM domain_claims
       WHERE receiving_host IN (SELECT jsonb_array_elements_text(${list}::jsonb)) AND NOT (workspace_id=${wid} AND name=${domain})`),
     names.length ? db.execute<{ name: string }>(sql`SELECT DISTINCT name FROM domain_claims WHERE name IN (SELECT jsonb_array_elements_text(${JSON.stringify(names)}::jsonb)) AND workspace_id<>${wid} AND (ever_proven OR claim_scope='account')`) : { rows: [] },
@@ -131,7 +131,7 @@ const sameHosts = (a: MxReport, b: MxReport) => a.records.length > 0 && a.record
 const caughtByWildcard = (mx: MxReport, wildcard: MxReport | null) => !!wildcard && (mx.state === 'cname' ? wildcard.state === 'cname' && wildcard.target === mx.target : wildcard.state !== 'cname' && sameHosts(mx, wildcard));
 
 /** A domain's receiving host as the checks read it: `own` is the domain's own row (its host floats with the suggestion until it routes). */
-export type ReceivingHostRow = { id: string; host: string; own: boolean; status: 'waiting_for_mx' | 'provisioning' | 'active' | 'disabled' | 'disabling' | 'failed'; lost_since: string | null; mx: MxReport | null; issue: ReceivingIssue | null };
+export type ReceivingHostRow = { id: string; host: string; own: boolean; status: HostStatus; lost_since: string | null; mx: MxReport | null; issue: ReceivingIssue | null };
 type HostedRow = { name: string; region: string; receiving_host: string | null; identity: (IdentityFacts & { receivingChoice?: string | null }) | null; hosts?: ReceivingHostRow[] };
 /** The host the domain's own row routes or waits on a BYO rule for: watched where it is, never moved. */
 export const establishedHost = (row: HostedRow) => {
@@ -151,7 +151,7 @@ export type DomainObservation = { own: ReceivingObservation | null; hosts: Map<s
 export async function observeReceiving(db: Pick<DbExecutor, 'execute'>, row: HostedRow, wid: string, unavailable: () => Error): Promise<DomainObservation> {
   const dns = dnsBudget(row.name, row.region, unavailable);
   try {
-    const others = (row.hosts ?? []).filter(h => !h.own && h.status !== 'disabled' && h.status !== 'disabling');
+    const others = (row.hosts ?? []).filter(h => !h.own && !hostRemoved(h.status));
     const removed = row.hosts?.find(h => h.own)?.status === 'disabled';
     const [own, hosts] = await Promise.all([removed ? null : observeOwn(db, row, wid, unavailable, dns, new Set(others.map(h => h.host))), inspectHosts(db, row, wid, others, dns)]);
     return { own, hosts };

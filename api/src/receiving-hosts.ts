@@ -8,7 +8,7 @@ import { queueReconcile } from './mailbox-setup.js';
 import { reservedPlatformName } from './domain-claims.js';
 import { derivedReadiness, dnsUnavailable, followMxJob, hostedDomain, recheckJob, type HostedDomain } from './operations.js';
 import { establishedHost, inspectReceivingHost, type ReceivingIssue } from './receiving-host.js';
-import { claimProjection, hostGraceStart } from './states.js';
+import { claimProjection, hostGraceStart, hostRemoved as removed } from './states.js';
 import { productName } from './brand.js';
 
 // A domain receives on a set of hosts: its root and any of its subdomains, at once, each added and removed on its own.
@@ -26,7 +26,6 @@ type AddInput = { name: string; catchAll?: CatchAll; metadata?: Record<string, u
 /** Hosts a domain may receive on at once, removed ones not counted. */
 export const MAX_HOSTS = 20;
 const LABEL = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
-const removed = (status: string) => status === 'disabled' || status === 'disabling';
 /** Hosts list in the order they were added, also several added in one transaction. */
 const addedAt = sql`clock_timestamp()` as unknown as string;
 

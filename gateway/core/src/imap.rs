@@ -63,24 +63,9 @@ impl Selected {
         } else {
             self.view.len() as u32
         };
-        use imap_codec::imap_types::sequence::{SeqOrUid, Sequence};
-        let v = |x: SeqOrUid| match x {
-            SeqOrUid::Asterisk => last,
-            SeqOrUid::Value(n) => n.get(),
-        };
-        let mut ranges = set
-            .0
-            .as_ref()
-            .iter()
-            .map(|s| match *s {
-                Sequence::Single(a) => (v(a), v(a)),
-                Sequence::Range(a, b) => (v(a).min(v(b)), v(a).max(v(b))),
-            })
-            .collect::<Vec<_>>();
-        ranges.sort_unstable();
         let mut result = Vec::new();
-        let mut prior = 0usize;
-        for (a, b) in ranges {
+        // Merged runs are disjoint and ascending, so each message is listed once, in order.
+        for (a, b) in uid_runs(set, last) {
             let (lo, hi) = if uid {
                 (
                     self.view.partition_point(|x| x.0 < a),
@@ -92,10 +77,8 @@ impl Selected {
                     (b as usize).min(self.view.len()),
                 )
             };
-            let start = lo.max(prior);
-            if start < hi {
-                result.extend(self.view[start..hi].iter().map(|x| x.0));
-                prior = hi;
+            if lo < hi {
+                result.extend(self.view[lo..hi].iter().map(|x| x.0));
             }
         }
         result
@@ -1547,22 +1530,22 @@ fn set(runs: &[(u32, u32)]) -> String {
         .collect::<Vec<_>>()
         .join(",")
 }
-/// A UID set as sorted, merged ranges, with `*` as `star`.
-fn uid_runs(set: &SequenceSet, star: u32) -> Vec<(u32, u32)> {
+/// A sequence or UID set's ranges as `(low, high)` in the client's order, with `*` as `star` and reversed
+/// ranges (`5:2`) turned around.
+pub(crate) fn seq_ranges(set: &SequenceSet, star: u32) -> impl Iterator<Item = (u32, u32)> + '_ {
     use imap_codec::imap_types::sequence::{SeqOrUid, Sequence};
-    let v = |x: SeqOrUid| match x {
+    let v = move |x: SeqOrUid| match x {
         SeqOrUid::Asterisk => star,
         SeqOrUid::Value(n) => n.get(),
     };
-    let mut ranges: Vec<_> = set
-        .0
-        .as_ref()
-        .iter()
-        .map(|s| match *s {
-            Sequence::Single(a) => (v(a), v(a)),
-            Sequence::Range(a, b) => (v(a).min(v(b)), v(a).max(v(b))),
-        })
-        .collect();
+    set.0.as_ref().iter().map(move |s| match *s {
+        Sequence::Single(a) => (v(a), v(a)),
+        Sequence::Range(a, b) => (v(a).min(v(b)), v(a).max(v(b))),
+    })
+}
+/// A sequence or UID set as sorted, merged ranges, with `*` as `star`.
+fn uid_runs(set: &SequenceSet, star: u32) -> Vec<(u32, u32)> {
+    let mut ranges: Vec<_> = seq_ranges(set, star).collect();
     ranges.sort_unstable();
     let mut merged: Vec<(u32, u32)> = vec![];
     for (a, b) in ranges {
@@ -1710,6 +1693,41 @@ mod tests {
     use super::*;
     use crate::session::Account;
     use crate::store::{Applied, Memory};
+
+    #[test]
+    fn sequence_sets_resolve_star_reversed_ranges_and_duplicates_once() {
+        let selected = |uids: &[u32]| Selected {
+            path: "INBOX".into(),
+            validity: 1,
+            ro: false,
+            view: uids.iter().map(|&u| (u, 0)).collect(),
+            keywords: Flags::default(),
+            announced: 0,
+            synced: 0,
+        };
+        let set = |s: &str| SequenceSet::try_from(s).unwrap();
+        let five = selected(&[3, 5, 7, 9, 11]);
+        assert_eq!(five.targets(&set("4:2,3,*,2:3"), false), [5, 7, 9, 11]);
+        assert_eq!(five.targets(&set("*:8,3,4:2"), true), [3, 9, 11]);
+        assert_eq!(five.targets(&set("10:12"), false), [] as [u32; 0]);
+        let empty = selected(&[]);
+        assert!(
+            empty.targets(&set("*"), false).is_empty()
+                && empty.targets(&set("1:*"), true).is_empty()
+        );
+        assert_eq!(
+            uid_runs(&set("9:7,1,2,*,3:4"), 20),
+            [(1, 4), (7, 9), (20, 20)]
+        );
+        assert!(
+            crate::search::contains(&set("9:7"), 8, 20)
+                && crate::search::contains(&set("*"), 20, 20)
+        );
+        assert!(
+            !crate::search::contains(&set("*:15"), 14, 20)
+                && !crate::search::contains(&set("3,5"), 4, 20)
+        );
+    }
 
     /// A store whose snapshot loses the selected folder during a change, the way a Remote
     /// refresh reveals that another session deleted it.

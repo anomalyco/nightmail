@@ -18,7 +18,7 @@ import type { AnyPgColumn } from 'drizzle-orm/pg-core';
 import type { Attachment } from '@aws-sdk/client-sesv2';
 import { actor, actorMailAccess, ApiError, apiFailureBody, describeApiFailure, AudienceSpec, denied, unrestrictedRequired, chargeRenderBudget, digest, errors, getSes, isSimulatedSes, id, rowId, IdParams, json, lazyModule, log, logError, platformMessage, schemaIssues, ModuleLoadError, notFound, PageQuery, page, redactCapabilityData, redactCapabilityText, region, response, security, senderDomainAllowed, simulatedTopic, taggedEmailId, timed, withoutVerdict, wrapModuleLoad, type Actor, type App, type Ctx, type DbExecutor, type JobHandler, type Runtime, type Storage, type AttachmentTypes } from './core.js';
 import { enqueue, JobDeferred, MAX_ATTEMPTS, retryDatabaseFailures, wakeWebhooks } from './jobs.js';
-import { countScreened, failScheduledRelease, CAMPAIGN_ACTIVE, CAMPAIGN_RUNNING, CAMPAIGN_STATES, campaignEditable, campaignReserved, campaignResumable, cancelCampaign, failCampaign, finishCampaigns, holdCampaign, launchCampaign, noteHealthChecked, pauseCampaign, quarantineCampaign, clearProbe, skipProbe, waitProbe, queueCampaignRun, recordExpanded, recordPrepared, rescheduleCampaign, restartRampWindow, restrictToDelivered, resumeCampaign, retireCampaignRun, reviseCampaign, runningState, setCampaignPacing, setRamp, startSending, unscheduleCampaign, terminalColumns, terminalEvents, wakeCampaignRun, type CampaignState } from './states.js';
+import { countScreened, failScheduledRelease, CAMPAIGN_ACTIVE, CAMPAIGN_RUNNING, CAMPAIGN_STATES, campaignEditable, campaignReserved, campaignResumable, cancelCampaign, failCampaign, finishCampaigns, holdCampaign, launchCampaign, noteHealthChecked, pauseCampaign, quarantineCampaign, clearProbe, skipProbe, waitProbe, queueCampaignRun, recordExpanded, recordPrepared, rescheduleCampaign, restartRampWindow, restrictToDelivered, resumeCampaign, retireCampaignRun, reviseCampaign, runningState, setCampaignPacing, setRamp, startSending, unscheduleCampaign, terminalColumns, terminalEvents, operationWebhookFanoutCtes, simulatedFeedbackCtes, wakeCampaignRun, type CampaignState } from './states.js';
 import { productName } from './brand.js';
 import { ADMISSION_MS, roomName } from './campaign-room-protocol.js';
 import type { CampaignScreen, ScreenResult } from './screen.js';
@@ -1688,6 +1688,25 @@ function mayScreenAtAccept(runtime: Runtime, out: Outgoing[]) {
   if (runtime.config.multiTenant && runtime.config.hostedScreen) return true;
   return out.some(m => m.snapshot.screen && m.snapshot.kind === 'transactional');
 }
+/**
+ * Why one destination `d.email` can't receive a message, or NULL. Reads its contact as `c` (audience_contacts, LEFT
+ * JOINed, so NULL for an address that is no contact). Marketing mail needs a subscribed, undeleted contact its topic
+ * allows; any mail skips a suppressed address except a transactional reply to a validation-suppressed author. A
+ * required `notice` (requiredNotice) skips the consent checks but never goes to a deleted or missing contact; `risk`
+ * refuses unallowed risky contacts too (at accept; dispatch rechecks consent only).
+ */
+export function recipientIneligibleReasonSql(o: { marketing: SQL; replyAuthors: SQL; topic: SQL; notice?: SQL; risk: boolean }) {
+  const consented = o.notice ? sql`${o.marketing} AND NOT ${o.notice}` : o.marketing;
+  return sql`CASE
+      WHEN ${consented} AND c.marketing_consent = 'unsubscribed' THEN 'unsubscribed'
+      WHEN c.suppressed AND NOT coalesce(NOT ${o.marketing} AND c.suppression_reason = 'email_validation'
+        AND c.marketing_consent <> 'unsubscribed' AND ${o.replyAuthors} ? d.email, false) THEN coalesce(c.suppression_reason, 'suppressed')
+      WHEN ${o.marketing} AND ${o.notice ? sql`(c.deleted_at IS NOT NULL OR (${o.notice} AND c.email IS NULL))` : sql`c.deleted_at IS NOT NULL`} THEN 'contact_deleted'
+      WHEN ${consented} AND c.marketing_consent IS DISTINCT FROM 'subscribed' THEN 'consent_missing'
+      WHEN ${consented} AND NOT ${topicAllows(sql`c.workspace_id`, sql`c.id`, o.topic)} THEN 'topic_unsubscribed'
+      ${o.risk ? sql`WHEN ${o.marketing} AND c.risk IS NOT NULL AND NOT c.risk_allowed THEN 'risky_' || c.risk` : sql``}
+    END`;
+}
 async function checkRecipientsEligible(db: DbExecutor, workspaceId: string, out: Outgoing[], batch: boolean, skip = false) {
   if (skip || !out.length) return;
   const input = out.map((m, ord) => ({
@@ -1702,18 +1721,33 @@ async function checkRecipientsEligible(db: DbExecutor, workspaceId: string, out:
     FROM jsonb_to_recordset(${JSON.stringify(input)}::jsonb) AS x(ord int, marketing boolean, destinations jsonb, reply_authors jsonb, topic text)
     CROSS JOIN LATERAL jsonb_array_elements_text(x.destinations) WITH ORDINALITY d(email, n)
     LEFT JOIN audience_contacts c ON c.workspace_id = ${workspaceId} AND c.email = d.email
-    CROSS JOIN LATERAL (SELECT CASE
-      WHEN x.marketing AND c.marketing_consent = 'unsubscribed' THEN 'unsubscribed'
-      WHEN c.suppressed AND NOT coalesce(NOT x.marketing AND c.suppression_reason = 'email_validation'
-        AND c.marketing_consent <> 'unsubscribed' AND x.reply_authors ? d.email, false) THEN coalesce(c.suppression_reason, 'suppressed')
-      WHEN x.marketing AND c.deleted_at IS NOT NULL THEN 'contact_deleted'
-      WHEN x.marketing AND c.marketing_consent IS DISTINCT FROM 'subscribed' THEN 'consent_missing'
-      WHEN x.marketing AND NOT ${topicAllows(sql`c.workspace_id`, sql`c.id`, sql`x.topic`)} THEN 'topic_unsubscribed'
-      WHEN x.marketing AND c.risk IS NOT NULL AND NOT c.risk_allowed THEN 'risky_' || c.risk
-    END AS reason) cause
+    CROSS JOIN LATERAL (SELECT ${recipientIneligibleReasonSql({ marketing: sql`x.marketing`, replyAuthors: sql`x.reply_authors`, topic: sql`x.topic`, risk: true })} AS reason) cause
     WHERE cause.reason IS NOT NULL
     ORDER BY x.ord, d.n`);
   if (rows.length) throw recipientIneligibleError(rows, batch);
+}
+/** The Hosted content rules a message goes out under: the probation copy, as written under the image rule, or as written. */
+export type ContentRules = 'probation' | 'standard' | null;
+/**
+ * How one message is screened and delivered, decided the same at accept (screenOutgoingAtAccept), for held mail
+ * (screenHeldMail), for a campaign's copies (campaignRules) and at dispatch (dispatcher.ts prepareMail). `hosted`: shared
+ * sending with the Hosted screen on. `trusted`: the trusted pool tier, never for a built-in domain's mail, which gets a
+ * new sender's rules whatever the connection's tier. `screened`: the classifier reads it; `required`: a verdict must
+ * exist before it is sent.
+ */
+export function resolveHostedContentPolicy(config: Pick<Runtime['config'], 'hostedScreen' | 'trustedPool' | 'builtinDomain'>,
+  m: { shared: boolean; poolTier?: string | null; legacyNames?: boolean | null; from: string; probation: boolean; simulated: boolean; kind: EmailSnapshot['kind']; screen?: boolean }) {
+  const hosted = m.shared && !!config.hostedScreen, builtin = isBuiltinHost(config, m.from.split('@')[1] ?? '');
+  const trusted = !builtin && !!config.trustedPool && m.poolTier === 'trusted' && m.legacyNames === false;
+  const rules: ContentRules = m.simulated || !hosted || trusted ? null : m.probation || builtin ? 'probation' : 'standard';
+  return { shared: m.shared, hosted, trusted, rules, screened: !m.simulated && (hosted || (!!m.screen && m.kind === 'transactional')), required: hosted && (!trusted || m.kind === 'marketing') };
+}
+export type HostedContentPolicy = ReturnType<typeof resolveHostedContentPolicy>;
+/** Shared sending sends only structured content, and a signed or encrypted message as written only from the trusted tier:
+ *  a probation sender's mail goes out as the copy the screen read (protocol-submit.ts sealedPassthrough). */
+export function sharedFormatRefusal(s: Pick<EmailSnapshot, 'raw' | 'mime'>, policy: Pick<HostedContentPolicy, 'shared' | 'trusted'>) {
+  if (policy.shared && s.raw) return new ApiError(422, 'SHARED_RAW_UNSUPPORTED', 'Hosted sending requires structured SES content.');
+  if (policy.shared && s.mime && !policy.trusted) return new ApiError(422, 'SEALED_MAIL_UNAVAILABLE', 'Signed and encrypted mail goes out as written, which a sender can do once its first messages are evaluated.');
 }
 /** Runs Hosted content rules (probation/standard HTML + attachment picture checks) and synchronous Jev/JevF screening
  *  at accept time before anything enters sending_emails. Parallelizes batch screening with bounded concurrency. */
@@ -1722,20 +1756,14 @@ async function screenOutgoingAtAccept(runtime: Runtime, a: Actor, out: Outgoing[
   const settings = runtime.config.screen;
   const allAttachIds = [...new Set(out.flatMap(m => m.snapshot.attachments))];
   let loadedAttachments: Map<string, typeof attachments.$inferSelect> | undefined;
-  type ScreenTask = { index: number; message: Outgoing; copy: EmailSnapshot; hosted: boolean; required: boolean; rules: 'probation' | 'standard' | null; region: string };
+  type ScreenTask = { index: number; message: Outgoing; copy: EmailSnapshot; hosted: boolean; required: boolean; rules: ContentRules; region: string };
   const tasks: ScreenTask[] = [], unsendable: AttachmentProblem[] = [];
   for (const [i, m] of out.entries()) {
-    const route = decided.mails[i]!;
-    const conn = route.connection;
-    const shared = conn?.kind === 'shared';
-    const hosted = Boolean(shared && runtime.config.hostedScreen);
-    // A built-in domain's mail is screened with a new sender's rules, whatever the connection's tier.
-    const builtin = isBuiltinHost(runtime.config, m.snapshot.from.split('@')[1]!);
-    const trusted = !builtin && Boolean(runtime.config.trustedPool && conn?.pool_tier === 'trusted' && conn?.legacy_names === false);
-    if (shared && m.snapshot.raw) throw atItem(new ApiError(422, 'SHARED_RAW_UNSUPPORTED', 'Hosted sending requires structured SES content.'), batch ? i : undefined);
-    if (shared && m.snapshot.mime && !trusted) throw atItem(new ApiError(422, 'SEALED_MAIL_UNAVAILABLE', 'Signed and encrypted mail goes out as written, which a sender can do once its first messages are evaluated.'), batch ? i : undefined);
-    const rules: 'probation' | 'standard' | null = !hosted || trusted ? null : probation || builtin ? 'probation' : 'standard';
-    const shouldScreen = hosted || Boolean(m.snapshot.screen && m.snapshot.kind === 'transactional');
+    const route = decided.mails[i]!, conn = route.connection;
+    const { hosted, rules, screened, required, ...policy } = resolveHostedContentPolicy(runtime.config, { shared: conn?.kind === 'shared', poolTier: conn?.pool_tier, legacyNames: conn?.legacy_names,
+      from: m.snapshot.from, probation, simulated: isSimulatedSes(runtime), kind: m.snapshot.kind, screen: m.snapshot.screen });
+    const refusal = sharedFormatRefusal(m.snapshot, policy);
+    if (refusal) throw atItem(refusal, batch ? i : undefined);
     let copy = m.snapshot;
     if (rules) {
       const delivery = await import('./screened-html.js');
@@ -1758,7 +1786,7 @@ async function screenOutgoingAtAccept(runtime: Runtime, a: Actor, out: Outgoing[
         }
       }
     }
-    if (shouldScreen) {
+    if (screened) {
       m.emailId ??= rowId('email');
       const verdict = m.platformTestTo ? platformTestVerdict(m.snapshot, m.platformTestTo, rules) : undefined;
       if (verdict) {
@@ -1767,7 +1795,7 @@ async function screenOutgoingAtAccept(runtime: Runtime, a: Actor, out: Outgoing[
         m.snapshot.screenVerdict = verdict;
         continue;
       }
-      tasks.push({ index: i, message: m, copy, hosted, required: hosted && (!trusted || m.snapshot.kind === 'marketing'), rules, region: route.region });
+      tasks.push({ index: i, message: m, copy, hosted, required, rules, region: route.region });
     }
   }
   if (unsendable.length) throw attachmentRefusal(unsendable, batch);
@@ -1939,15 +1967,7 @@ async function admitSends(call: SendCall, body: unknown, out: Outgoing[], identi
     FROM principal k CROSS JOIN submitted_rows r
     CROSS JOIN LATERAL jsonb_array_elements_text(r.destinations) WITH ORDINALITY d(email, n)
     LEFT JOIN audience_contacts c ON c.workspace_id = k.workspace_id AND c.email = d.email
-    CROSS JOIN LATERAL (SELECT CASE
-      WHEN r.marketing AND c.marketing_consent = 'unsubscribed' THEN 'unsubscribed'
-      WHEN c.suppressed AND NOT coalesce(NOT r.marketing AND c.suppression_reason = 'email_validation'
-        AND c.marketing_consent <> 'unsubscribed' AND r.reply_authors ? d.email, false) THEN coalesce(c.suppression_reason, 'suppressed')
-      WHEN r.marketing AND c.deleted_at IS NOT NULL THEN 'contact_deleted'
-      WHEN r.marketing AND c.marketing_consent IS DISTINCT FROM 'subscribed' THEN 'consent_missing'
-      WHEN r.marketing AND NOT ${topicAllows(sql`c.workspace_id`, sql`c.id`, sql`r.snapshot->>'topicId'`)} THEN 'topic_unsubscribed'
-      WHEN r.marketing AND c.risk IS NOT NULL AND NOT c.risk_allowed THEN 'risky_' || c.risk
-    END AS reason) cause
+    CROSS JOIN LATERAL (SELECT ${recipientIneligibleReasonSql({ marketing: sql`r.marketing`, replyAuthors: sql`r.reply_authors`, topic: sql`r.snapshot->>'topicId'`, risk: true })} AS reason) cause
     WHERE cause.reason IS NOT NULL
     ORDER BY r.ord, d.n`}
   ), state AS MATERIALIZED (
@@ -2438,7 +2458,7 @@ export const platformTestEmail = (domain: string, custom?: { subject: string; te
  * Anything else, a changed word, another or a further recipient, a header, an attachment or HTML, gets no verdict here
  * and is screened as usual.
  */
-export function platformTestVerdict(s: EmailSnapshot, to: string, rules: 'probation' | 'standard' | null): EmailSnapshot['screenVerdict'] {
+export function platformTestVerdict(s: EmailSnapshot, to: string, rules: ContentRules): EmailSnapshot['screenVerdict'] {
   const domain = s.from.split('@')[1] ?? '';
   const ours = [platformTestEmail(domain), platformTestEmail(domain, SETUP_EMAIL)].some(fixed => s.from === fixed.from && (s.fromName ?? undefined) === fixed.fromName && s.subject === fixed.subject && s.text === fixed.text);
   const exact = ours && s.html === undefined && s.kind === 'transactional'
@@ -3476,17 +3496,7 @@ export async function ingestRoutineSesEvents(runtime: Runtime, inputs: RoutineIn
       SELECT ins.id, ins.workspace_id, x.public_type, x.region, ins.created_at,
          coalesce(x.public_data, x.data) || jsonb_build_object('simulated', x.simulated, 'providerId', x.provider_id, 'emailId', x.email_id)
       FROM inserted ins JOIN input x ON x.event_id = ins.id WHERE x.public_type IS NOT NULL ON CONFLICT DO NOTHING RETURNING *
-    ), deliveries AS (
-      INSERT INTO operation_deliveries(id, workspace_id, webhook_id, event_id, payload)
-      SELECT public.row_id('whd'), p.workspace_id, w.id, p.id,
-        jsonb_build_object('id', p.id, 'workspaceId', p.workspace_id, 'type', p.type, 'region', p.region, 'createdAt', p.created_at, 'data', p.data)
-      FROM published p JOIN operation_webhooks w ON w.workspace_id = p.workspace_id
-      WHERE NOT w.paused AND w.event_types ? p.type AND (w.regions IS NULL OR p.region IS NULL OR w.regions ? p.region)
-      ON CONFLICT DO NOTHING RETURNING id, workspace_id
-    ), webhook_jobs AS (
-      INSERT INTO jobs(id, workspace_id, type, payload)
-      SELECT public.row_id('job'), workspace_id, 'operation.webhook', jsonb_build_object('deliveryId', id, 'generation', 0) FROM deliveries RETURNING id
-    ) SELECT x.ordinal, x.workspace_id AS "workspaceId", coalesce(x.error,CASE WHEN x.effects IS NOT NULL AND x.email_id IS NULL THEN 'SES_EMAIL_NOT_FOUND' END) AS error,
+    ), ${operationWebhookFanoutCtes()} SELECT x.ordinal, x.workspace_id AS "workspaceId", coalesce(x.error,CASE WHEN x.effects IS NOT NULL AND x.email_id IS NULL THEN 'SES_EMAIL_NOT_FOUND' END) AS error,
       (SELECT row_to_json(e) FROM (SELECT ins.id, ins.workspace_id AS "workspaceId", ins.email_id AS "emailId", ins.type,
         ins.provider_id AS "providerId", ins.external_id AS "externalId", ins.data, ins.simulated, ins.created_at::text AS "createdAt" FROM inserted ins WHERE ins.id = x.event_id) e) AS event,
       (SELECT count(*)::int FROM webhook_jobs) AS hooks,EXISTS(SELECT FROM recovery r WHERE r.id=x.recovery_job_id) AS recovery,
@@ -3530,29 +3540,8 @@ async function persistEmailEvent(runtime: Runtime, input: EmailEventInput & { em
     SELECT inserted.id, inserted.workspace_id, ${publicType ?? null}::text, mail.region, inserted.created_at,
       ${JSON.stringify({ ...(webhookData(input.data) ?? input.data ?? {}), ...(input.providerId ? { providerId: input.providerId } : {}) })}::jsonb || jsonb_build_object('emailId',mail.id,'simulated',mail.simulated)
     FROM inserted, mail WHERE ${publicType ?? null}::text IS NOT NULL ON CONFLICT DO NOTHING RETURNING *
-  ), deliveries AS (
-    INSERT INTO operation_deliveries(id, workspace_id, webhook_id, event_id, payload)
-    SELECT public.row_id('whd'), p.workspace_id, w.id, p.id,
-      jsonb_build_object('id',p.id,'workspaceId',p.workspace_id,'type',p.type,'region',p.region,'createdAt',p.created_at,'data',p.data)
-    FROM published p JOIN operation_webhooks w ON w.workspace_id=p.workspace_id
-    WHERE NOT w.paused AND w.event_types ? p.type AND (w.regions IS NULL OR p.region IS NULL OR w.regions ? p.region)
-    ON CONFLICT DO NOTHING RETURNING id, workspace_id
-  ), webhook_jobs AS (
-    INSERT INTO jobs(id, workspace_id, type, payload)
-    SELECT public.row_id('job'), workspace_id, 'operation.webhook', jsonb_build_object('deliveryId', id, 'generation', 0) FROM deliveries RETURNING id
-  ), simulated_callbacks AS (
-    SELECT 'urn:bane:simulated-ses:' || mail.region AS topic_arn, mail.id || ':' || kind AS message_id, inserted.workspace_id,
-      inserted.created_at + CASE WHEN kind='Delivery' THEN ${runtime.config.simulatedSes.deliveryDelayMs}::int ELSE 0 END * interval '1 millisecond' AS created_at
-    FROM inserted, mail, unnest(ARRAY['Send','Delivery']) kind
-    WHERE ${simulatedJobs}::boolean
-  ), simulated_jobs AS (
-    INSERT INTO jobs(id, workspace_id, type, available_at, payload)
-    SELECT public.row_id('job'), r.workspace_id, 'operation.simulatedFeedback', r.created_at,
-      jsonb_build_object('topicArn',r.topic_arn,'messageId',r.message_id,'region',mail.region,
-        'message', jsonb_build_object('eventType',split_part(r.message_id,':',2),'mail',jsonb_build_object('messageId',${input.providerId ?? null}::text),
-          lower(split_part(r.message_id,':',2)),jsonb_build_object('timestamp',r.created_at)))
-    FROM simulated_callbacks r, mail
-  ), receipt_processed AS (
+  ), ${operationWebhookFanoutCtes()}, ${simulatedFeedbackCtes(sql`SELECT inserted.workspace_id, mail.id AS email_id, mail.region, ${input.providerId ?? null}::text AS provider_id, inserted.created_at
+    FROM inserted, mail WHERE ${simulatedJobs}::boolean`, runtime.config.simulatedSes.deliveryDelayMs)}, receipt_processed AS (
     UPDATE operation_sns_receipts SET processed_at = clock_timestamp()
     WHERE workspace_id = ${input.workspaceId}
       AND topic_arn = ${input.receipt?.topicArn ?? null} AND message_id = ${input.receipt?.messageId ?? null} AND EXISTS (SELECT 1 FROM mail)
@@ -3804,14 +3793,18 @@ export async function listMailedCleanly(db: DbExecutor, a: Pick<Actor, 'workspac
   return found!.clean;
 }
 // The campaign row with its frozen snapshot and the cached regional limits: one read per step of the run job.
-type RunAccount = NonNullable<Actor['dispatchAccount']> & { pauseReason: string | null; generation:number; trusted: boolean; probation: ProbationReason | null; exempt: boolean };
-type RunRow = typeof campaigns.$inferSelect & { reviewVersion: number | null; reviewDraft: CampaignDraft | null; reviewRendered: { html?: string; text?: string } | null; reviewHash: string | null; reviewScreen: CampaignScreen | null; reviewCapturedAt: string | null; reviewCapturedCount: number | null; reviewStaticPrepared: boolean | null; rate: number; max24: number; sent24: number; customer24: number; quotaCheckedAt: string | null; priorityLagMs: number | null; dbNow: string; account: RunAccount | null };
-async function readRun(runtime: Runtime, a: Actor, campaignId: string): Promise<RunRow | undefined> {
+type RunAccount = NonNullable<Actor['dispatchAccount']> & { pauseReason: string | null; generation:number; poolTier: string | null; legacyNames: boolean | null; probation: ProbationReason | null; exempt: boolean };
+/** The campaign's launched review as a run sends it: frozen draft and rendered parts, their renderer, and its screening and capture state. */
+type CampaignReviewSnapshot = { version: number; draft: CampaignDraft; rendered: { html?: string; text?: string }; hash: string; screen: CampaignScreen | null; capturedAt: string | null; capturedCount: number | null };
+type RunRow = typeof campaigns.$inferSelect & { review: CampaignReviewSnapshot; rate: number; max24: number; sent24: number; customer24: number; quotaCheckedAt: string | null; priorityLagMs: number | null; dbNow: string; account: RunAccount | null };
+/** The campaign's run row; review is null when its frozen message source is missing (runCampaign refuses it). */
+async function readRun(runtime: Runtime, a: Actor, campaignId: string): Promise<RunRow | (Omit<RunRow, 'review'> & { review: null }) | undefined> {
   const limits = limitsTable(runtime), region = sql`${campaignReviews.draft}->>'region'`;
-  const [row] = await runtime.db.select({ ...getTableColumns(campaigns), reviewVersion: campaignReviews.rendererVersion, reviewDraft: campaignReviews.draft, reviewRendered: campaignReviews.rendered, reviewHash: campaignReviews.contentHash, reviewScreen: campaignReviews.screen, reviewCapturedAt: campaignReviews.capturedAt, reviewCapturedCount: campaignReviews.capturedCount, reviewStaticPrepared: campaignReviews.staticPrepared,
+  const [row] = await runtime.db.select({ ...getTableColumns(campaigns),
+    review: { version: campaignReviews.rendererVersion, draft: campaignReviews.draft, rendered: campaignReviews.rendered, hash: campaignReviews.contentHash, screen: campaignReviews.screen, capturedAt: campaignReviews.capturedAt, capturedCount: campaignReviews.capturedCount },
     autoPause: runtime.config.multiTenant ? sql<boolean>`${campaigns.autoPause} OR ${sharedConnection(a.workspaceId)}` : campaigns.autoPause,
     account: runtime.config.multiTenant ? sql<RunAccount>`(SELECT jsonb_build_object('aws_account_id', aws_account_id, 'kind', kind, 'pauseReason', pause_reason,'generation',generation,
-      'trusted', ${!!runtime.config.trustedPool} AND coalesce(pool_tier='trusted' AND legacy_names=false, false),'probation',${probationReason(sql`${a.workspaceId}::text`)},
+      'poolTier', pool_tier, 'legacyNames', legacy_names,'probation',${probationReason(sql`${a.workspaceId}::text`)},
       'exempt',(SELECT exempt_hosted_quotas FROM workspaces WHERE id=${a.workspaceId}))
       FROM ${sendingConnections(runtime)} WHERE workspace_id=${a.workspaceId} AND region=${region})` : sql<null>`NULL`,
     rate: sql<number>`coalesce((SELECT max_send_rate FROM ${limits} WHERE workspace_id=${a.workspaceId} AND region=${region}),0)`,
@@ -3826,11 +3819,15 @@ async function readRun(runtime: Runtime, a: Actor, campaignId: string): Promise<
     )`,
     dbNow: sql<string>`clock_timestamp()::text`,
   }).from(campaigns).leftJoin(campaignReviews, eq(campaignReviews.id, campaigns.reviewId)).where(campaignWhere(a, campaignId));
-  return row;
+  if (!row) return;
+  const { review, ...run } = row;
+  return review?.rendered ? { ...run, review: { ...review, rendered: review.rendered } } : { ...run, review: null };
 }
-/** How a campaign's copies are delivered (src/dispatcher.ts prepareMail decides the same per message): the probation copy,
- *  as written under the image rule, or (the trusted tier) as written. */
-const contentRules = (row: RunRow) => !row.account || row.account.trusted ? null : row.account.probation !== null ? 'probation' as const : 'standard' as const;
+/** How a campaign's copies are delivered, as each message of it is (resolveHostedContentPolicy). */
+const campaignRules = (runtime: Runtime, row: RunRow) => resolveHostedContentPolicy(runtime.config, { shared: row.account?.kind === 'shared', poolTier: row.account?.poolTier,
+  legacyNames: row.account?.legacyNames, from: row.review.draft.from, probation: row.account?.probation != null, simulated: isSimulatedSes(runtime), kind: 'marketing' }).rules;
+/** The review's screening state, when it is for the review's content. */
+const currentScreen = (row: RunRow) => row.review.screen?.contentHash === row.review.hash ? row.review.screen : null;
 const staleReview = () => new ApiError(409,'SENDER_BINDING_CHANGED','The reviewed sending binding is no longer ready.');
 /** A campaign's message as admission sees it at preparation and release: its reviewed sender, region and binding. */
 const reviewedMail = (draft: CampaignDraft): AdmissionMail & { from: string; binding?: SendingBinding } => ({ host: draft.from.split('@')[1]!.toLowerCase(), from: draft.from,
@@ -3963,10 +3960,10 @@ const screenRef = (a: Actor, row: RunRow): CampaignScreenRef => ({ workspaceId: 
 // refusal, and the review gets its budget: enough requests to screen every recipient's copy on its own, and a few retries.
 async function screenCampaignStep(runtime: Runtime, a: Actor, row: RunRow) {
   const limits = runtime.config.screenLimits, screen = await loadScreen();
-  const rules = contentRules(row), fresh: CampaignScreen = { contentHash: row.reviewHash!, probation: rules === 'probation', template: null, screenedThrough: 0, recipients: 0, rejected: 0, failures: 0, quarantined: false };
-  const state = row.reviewScreen?.contentHash === row.reviewHash ? row.reviewScreen! : await saveScreen(runtime, a, row, fresh);
+  const rules = campaignRules(runtime, row), fresh: CampaignScreen = { contentHash: row.review.hash, probation: rules === 'probation', template: null, screenedThrough: 0, recipients: 0, rejected: 0, failures: 0, quarantined: false };
+  const state = currentScreen(row) ?? await saveScreen(runtime, a, row, fresh);
   await runtime.db.execute(sql`UPDATE sending_campaign_reviews SET screen_budget=${(Math.max(row.total, 1) + 10) * screen.chunksFor(limits.campaignBytes)} WHERE workspace_id=${a.workspaceId} AND id=${row.reviewId} AND screen_budget IS NULL`);
-  const own = await campaignCopy(runtime, row.reviewDraft!, row.reviewRendered!, row.reviewVersion!);
+  const own = await campaignCopy(runtime, row.review.draft, row.review.rendered, row.review.version);
   let verdict: CopyVerdict;
   try { [verdict] = await campaignVerdicts(runtime, screenRef(a, row), [rules ? (await import('./screened-html.js')).hostedCopy(own, rules === 'probation') : own], Date.now() + SCREEN_BUDGET_MS); }
   catch (error) { return screenOutage(runtime, a, row, state, error); }
@@ -3983,13 +3980,13 @@ async function screenCampaignStep(runtime: Runtime, a: Actor, row: RunRow) {
 // a digest of each is kept. The completed prefix is checkpointed about every second; the time budget is checked after
 // each group, so a pass always gets at least one copy through however long it takes.
 async function screenAhead(runtime: Runtime, a: Actor, row: RunRow, state: CampaignScreen, through: number): Promise<CampaignScreen> {
-  const draft = row.reviewDraft!, rendered = row.reviewRendered!, started = Date.now(), ref = screenRef(a, row), screen = await loadScreen();
+  const { draft, rendered, version } = row.review, started = Date.now(), ref = screenRef(a, row), screen = await loadScreen();
   const assets = await attachmentRows(runtime.db, a, draft.attachments);
-  const probationCopy = contentRules(row) === 'probation' ? (await import('./screened-html.js')).probationCopy : undefined;
+  const probationCopy = campaignRules(runtime, row) === 'probation' ? (await import('./screened-html.js')).probationCopy : undefined;
   // Copies that are the same up to their recipient share one screen: by a digest of the copy, never the copy itself.
   const forms = new Map<string, Promise<CopyVerdict>>();
   const verdictOf = async (recipient: ReviewedRecipient) => {
-    const keyed = screenedAs(runtime, await campaignMessage(runtime, draft, recipient, false, assets, rendered, true, !rendered.html?.includes('{{'), row.reviewVersion!), draft);
+    const keyed = screenedAs(runtime, await campaignMessage(runtime, draft, recipient, false, assets, rendered, true, !rendered.html?.includes('{{'), version), draft);
     // The copy as the dispatcher keys it (probation senders' rewritten, src/dispatcher.ts prepareMail).
     const copy = probationCopy ? probationCopy({ ...keyed, to: [] }) : { ...keyed, to: [] };
     const size = Buffer.byteLength(copy.html ?? '') + Buffer.byteLength(copy.text ?? ''), form = await screen.copyKey(runtime, copy);
@@ -4099,7 +4096,7 @@ async function finalizeCapture(runtime: Runtime, a: Actor, row: RunRow, jobId: s
     const [rev] = (await db.execute<{ captured_at: string | null; captured_count: number | null; static_prepared: boolean }>(sql`
       SELECT captured_at::text, captured_count, static_prepared FROM sending_campaign_reviews WHERE workspace_id = ${a.workspaceId} AND id = ${row.reviewId}`)).rows;
     if (!rev?.captured_at || rev.captured_count === null) return;
-    const authorized = await originAllowed(runtime, db, { ...a, actorKeyId: a.keyId, campaignId: campaign.id, snapshot: { from: row.reviewDraft!.from } });
+    const authorized = await originAllowed(runtime, db, { ...a, actorKeyId: a.keyId, campaignId: campaign.id, snapshot: { from: row.review.draft.from } });
     if (!authorized) { await cancelCampaignWork(db, a, campaign, 'ORIGIN_KEY_REVOKED'); return; }
     // Delta is > 0 when onProgress skipped under pool contention (leaving campaign.total at its initial estimate).
     const delta = Math.max(0, rev.captured_count - campaign.total);
@@ -4136,11 +4133,11 @@ async function finalizeCapture(runtime: Runtime, a: Actor, row: RunRow, jobId: s
  * (avoiding 40001 conflicts). Static campaigns validate addresses and stamp s1: content_hash inline during capture.
  */
 async function captureStep(runtime: Runtime, a: Actor, row: RunRow, jobId: string) {
-  const screenState = campaignScreened(runtime, row.account?.kind === 'shared') ? row.reviewScreen?.contentHash === row.reviewHash ? row.reviewScreen : null : undefined;
+  const screenState = campaignScreened(runtime, row.account?.kind === 'shared') ? currentScreen(row) : undefined;
   if (screenState !== undefined && screenState?.template?.threshold === undefined) return screenCampaignStep(runtime, a, row);
   if (screenState?.template && screenState.template.spam >= screenState.template.threshold!) return campaignRejected(runtime, a, row, screenState);
 
-  const review = { draft: row.reviewDraft!, rendered: row.reviewRendered! };
+  const review = row.review;
   const draft = review.draft;
   const parsedAudience = AudienceSpec.safeParse(draft.audience);
   if (!parsedAudience.success || !draft.from || !draft.subject) throw new ApiError(409, 'CAMPAIGN_SNAPSHOT_INVALID', 'The frozen campaign draft is incomplete.');
@@ -4166,7 +4163,7 @@ async function captureStep(runtime: Runtime, a: Actor, row: RunRow, jobId: strin
   if (!prepCheck) return;
 
   const staticStamp = messageStatic
-    ? await prepareStaticStamp(runtime, draft, review.rendered, prepCheck.lockedAttachments, row.reviewVersion!)
+    ? await prepareStaticStamp(runtime, draft, review.rendered, prepCheck.lockedAttachments, review.version)
     : undefined;
   const audienceMod = await wrapModuleLoad(() => import('./audience.js'));
   const topic = await campaignTopic(runtime.db, a.workspaceId, draft, false);
@@ -4228,10 +4225,10 @@ async function captureStep(runtime: Runtime, a: Actor, row: RunRow, jobId: strin
 // preparing: validate the next chunk of frozen recipients (every substitution, URL and MIME size) and keep only each
 // message's digest; when the whole list is validated the campaign moves to its schedule or straight to sending.
 async function prepareStep(runtime: Runtime, a: Actor, row: RunRow, jobId: string) {
-  const state = campaignScreened(runtime, row.account?.kind === 'shared') ? row.reviewScreen?.contentHash === row.reviewHash ? row.reviewScreen : null : undefined;
+  const state = campaignScreened(runtime, row.account?.kind === 'shared') ? currentScreen(row) : undefined;
   if (state !== undefined && state?.template?.threshold === undefined) return screenCampaignStep(runtime, a, row);
   if (state?.template && state.template.spam >= state.template.threshold!) return campaignRejected(runtime, a, row, state);
-  const ref = campaignRef(a, row.id), review = { draft: row.reviewDraft!, rendered: row.reviewRendered! };
+  const ref = campaignRef(a, row.id), review = row.review;
   await runtime.db.transaction(async db => {
     const campaign = await findCampaign(db, a, row.id, true);
     if (campaign.state !== 'preparing' || campaign.reviewId !== row.reviewId) return;
@@ -4244,7 +4241,7 @@ async function prepareStep(runtime: Runtime, a: Actor, row: RunRow, jobId: strin
     const started = Date.now();
     if (messageStatic) {
       // Set-based static preparation (used for small <=5,000 sync launches and pre-deploy static reviews mid-prepare).
-      const stamp = await prepareStaticStamp(runtime, review.draft, review.rendered, lockedAttachments, row.reviewVersion!);
+      const stamp = await prepareStaticStamp(runtime, review.draft, review.rendered, lockedAttachments, review.version);
       const sliceEnd = Math.min(campaign.total, campaign.prepared + STATIC_PREPARE_SLICE_ROWS);
       const expected = sliceEnd - campaign.prepared;
       if (expected <= 0) throw new ApiError(409, 'CAMPAIGN_SNAPSHOT_INVALID', 'The frozen audience is incomplete.');
@@ -4287,7 +4284,7 @@ async function prepareStep(runtime: Runtime, a: Actor, row: RunRow, jobId: strin
     // alter any URL or DOM structure, so validateHtmlUrls runs once instead of re-parsing HTML per recipient.
     const htmlUrlsOnce = htmlStatic || !htmlInfo.hasUrlPlaceholder;
     if (htmlUrlsOnce && review.rendered.html) {
-      await validateHtmlUrls(review.draft.previewText ? withPreheader(review.rendered.html, review.draft.previewText, parse, row.reviewVersion!) : review.rendered.html);
+      await validateHtmlUrls(review.draft.previewText ? withPreheader(review.rendered.html, review.draft.previewText, parse, review.version) : review.rendered.html);
     }
     let cursor = campaign.prepared, payloadBytes = 0;
     const prepared: { ordinal: number; hash: string; subject: string; bytes: number }[] = [];
@@ -4296,7 +4293,7 @@ async function prepareStep(runtime: Runtime, a: Actor, row: RunRow, jobId: strin
       // If a text attribute holds a placeholder and recipient data could push total attribute bytes past bounded-html's
       // 512 KiB budget, fall back to full per-row validateHtmlUrls so the result is always identical.
       const rowHtmlValidated = htmlUrlsOnce && (!htmlInfo.hasAttrPlaceholder || templateHtmlBytes + htmlInfo.attrPlaceholderCount * (recipient.recipient_bytes ?? 0) <= 512 * 1024);
-      const snapshot = await campaignMessage(runtime, review.draft, recipient.recipient, false, lockedAttachments, review.rendered, true, rowHtmlValidated, row.reviewVersion!);
+      const snapshot = await campaignMessage(runtime, review.draft, recipient.recipient, false, lockedAttachments, review.rendered, true, rowHtmlValidated, review.version);
       const contentHash = await digest(canonical(snapshot));
       marketingFooter(snapshot, unsubscribePlaceholder(keyedOrigin(runtime, review.draft)), review.draft);
       sizeCheck(snapshot, lockedAttachments);
@@ -4342,9 +4339,9 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
   // nothing queued or attempting: with a row in flight it changes nothing and the dispatcher finishes the campaign.
   const settle = () => runtime.db.execute(finishCampaigns(sql`SELECT ${a.workspaceId}::text AS workspace_id, ${row.id}::text AS campaign_id`));
   if (row.expanded >= row.total) { await settle(); return 'done'; }
-  if (row.expanded === 0 && row.reviewDraft!.postalAddress === undefined) row.reviewDraft = { ...row.reviewDraft!, postalAddress: await frozenPostalAddress(runtime, a, row) };
+  if (row.expanded === 0 && row.review.draft.postalAddress === undefined) row.review.draft = { ...row.review.draft, postalAddress: await frozenPostalAddress(runtime, a, row) };
   // Do not turn a retired generation into a pacing/quota wait, or refresh its provider quota.
-  if (row.reviewDraft?.binding && row.account?.generation!==row.reviewDraft.binding.generation) throw staleReview();
+  if (row.review.draft.binding && row.account?.generation!==row.review.draft.binding.generation) throw staleReview();
   // Poll a full buffer with one bounded count, before the locks and origin checks; the transaction rechecks capacity under the admission lock.
   const limits = { campaign: campaignBuffer(row.rate), total: workspaceBuffer(row.rate) };
   const [buffered] = (await runtime.db.execute<{ total: number; campaign: number }>(sql`SELECT
@@ -4359,9 +4356,9 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
   // (src/link-domains.ts). With none to use (the workspace paused, or with own link hosts only, none active), it waits
   // without releasing anyone and looks again every 15 minutes; a domain's own host turning active wakes it at once
   // (wakeLinkRecordHolds). On the link domain, the release records its recipients there.
-  let releaseOrigin = row.reviewDraft!.requiredNotice ? undefined : row.reviewDraft!.linkOrigin;
-  if (!row.reviewDraft!.linkOrigin && !row.reviewDraft!.requiredNotice) {
-    const choice = await linkChoice(runtime, runtime.db, a.workspaceId, row.reviewDraft!.from).catch(error => { if (error instanceof ApiError && error.code === 'LINK_RECORD_REQUIRED') return null; throw error; });
+  let releaseOrigin = row.review.draft.requiredNotice ? undefined : row.review.draft.linkOrigin;
+  if (!row.review.draft.linkOrigin && !row.review.draft.requiredNotice) {
+    const choice = await linkChoice(runtime, runtime.db, a.workspaceId, row.review.draft.from).catch(error => { if (error instanceof ApiError && error.code === 'LINK_RECORD_REQUIRED') return null; throw error; });
     if (!choice) return hold('link_record', new Date(nowMs + LINK_RECORD_RECHECK_MS).toISOString());
     releaseOrigin = choice.origin;
   }
@@ -4374,7 +4371,7 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
   // buffer and Hosted admission checks; the first dispatch populates its quota cache.
   if ((row.quotaCheckedAt !== null || max > 0 || row.waitingReason === 'ses_daily_quota') && !(refreshAt > dbNow)) {
     const { campaignQuota } = await wrapModuleLoad(() => import('./dispatcher.js'));
-    const q = await campaignQuota(runtime, a, row.reviewDraft!.region, row.account?.aws_account_id).catch(error => { if (error instanceof ModuleLoadError) throw error; return null; });
+    const q = await campaignQuota(runtime, a, row.review.draft.region, row.account?.aws_account_id).catch(error => { if (error instanceof ModuleLoadError) throw error; return null; });
     if (!q) return hold('ses_daily_quota', new Date(dbNow + QUOTA_REFRESH_MS).toISOString());
     max = q.max24HourSend; sent = q.sentLast24Hours; customerSent = q.customerSent ?? 0; refreshAt = q.checkedAt + QUOTA_REFRESH_MS;
   }
@@ -4513,8 +4510,8 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
   // Screened campaigns release only recipients whose copies have verdicts; a refused share past the screen's restrict
   // line (src/standing-model.ts) pauses the campaign once, for its owner to review.
   let screened = Number.POSITIVE_INFINITY;
-  if (campaignScreened(runtime, hosted) && row.reviewScreen?.contentHash === row.reviewHash && row.reviewScreen?.template) {
-    let state = row.reviewScreen;
+  let state = campaignScreened(runtime, hosted) ? currentScreen(row) : null;
+  if (state?.template) {
     const through = Math.min(row.total, row.expanded + SCREEN_AHEAD);
     if (state.screenedThrough < through) state = await screenAhead(runtime, a, row, state, through);
     const line = (await wrapModuleLoad(() => import('./standing-model.js'))).LADDER.screen.restrict[0];
@@ -4525,7 +4522,7 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
     screened = state.screenedThrough - row.expanded;
     if (screened <= 0) return 'again';
   }
-  const draft = row.reviewDraft!, limits_ = limitsTable(runtime);
+  const draft = row.review.draft, limits_ = limitsTable(runtime);
   // A plan opens its next batch only after a healthy day (src/send-guards.ts, when the setting turns it on). Judged here,
   // before the send locks: the release below holds the workspace's admission row, which every send waits on. Judged a few
   // minutes early too, so a day that ends while this step runs still has its judgement.
@@ -4630,7 +4627,7 @@ async function releaseStep(runtime: Runtime, a: Actor, row: RunRow, payload: Rec
     const prepared=recipients.map(r=>({id:rowId('email'),ordinal:r.ordinal,address:r.recipient.email,subject:r.subject??draft.subject}));
     // On the link domain: the release's recipients are recorded there (src/link-domains.ts recordLinkUse).
     if (runtime.config.linkHost && releaseOrigin === `https://${runtime.config.linkHost}` && prepared.length) await recordLinkUse(db, a.workspaceId, runtime.config.linkHost, prepared.length);
-    const tpl = row.reviewScreen?.template;
+    const tpl = row.review.screen?.template;
     const stub={kind:'marketing',deferredCampaign:true,...(!draft.linkOrigin && releaseOrigin ? {linkOrigin:releaseOrigin} : {}),...(tpl ? { screenVerdict: { status: 'passed', spam: tpl.spam, model: tpl.model, digest: tpl.key } } : {})};
     if (prepared.length) await db.execute(sql`INSERT INTO sending_emails(id,workspace_id,actor_key_id,region,campaign_id,review_id,review_ordinal,from_address,to_addresses,cc_addresses,bcc_addresses,subject,snapshot,simulated,screened,scheduled_at)
       SELECT p.id,${a.workspaceId},${a.keyId},${draft.region},${campaign.id},${campaign.reviewId},p.ordinal,${draft.from},jsonb_build_array(p.address),'[]','[]',p.subject,${JSON.stringify(stub)}::jsonb,${campaign.simulated},true,${campaign.scheduledAt}
@@ -4673,11 +4670,11 @@ const runCampaign: JobHandler = async (runtime, payload, job) => {
       if (!row || !(CAMPAIGN_RUNNING as readonly string[]).includes(row.state)) return;
       if (row.account?.pauseReason && row.expanded < row.total) throw new ApiError(409, 'HOSTED_SENDING_PAUSED', row.account.pauseReason);
       if (row.simulated !== isSimulatedSes(runtime)) throw new ApiError(409, 'SES_MODE_CHANGED', 'The campaign was launched with a different SES configuration. No more recipients were queued.');
-      if (!row.reviewDraft || !row.reviewRendered) throw new ApiError(409, 'CAMPAIGN_SNAPSHOT_INVALID', 'The frozen message source is missing.');
+      if (!row.review) throw new ApiError(409, 'CAMPAIGN_SNAPSHOT_INVALID', 'The frozen message source is missing.');
       a.keyId = row.actorKeyId ?? a.keyId;
       if (row.state === 'preparing') {
-        if (row.reviewCapturedAt === null) await captureStep(runtime, a, row, job.id);
-        else if (row.reviewCapturedCount !== null) await finalizeCapture(runtime, a, row, job.id);
+        if (row.review.capturedAt === null) await captureStep(runtime, a, row, job.id);
+        else if (row.review.capturedCount !== null) await finalizeCapture(runtime, a, row, job.id);
         else await prepareStep(runtime, a, row, job.id);
       }
       else if (row.state === 'scheduled') {
@@ -4755,15 +4752,10 @@ export async function screenHeldMail(runtime: Runtime, limit = HELD_SCREEN_LIMIT
   const processRow = async (r: HeldRow) => {
     const wid = r.workspace_id, id = r.id, ver = r.dispatch_version;
     const snapshot = r.snapshot;
-    const conn = r.connection;
-    const shared = conn?.kind === 'shared';
-    const hosted = Boolean(mx && shared && runtime.config.hostedScreen);
-    // A built-in domain's mail has a new sender's rules, as at accept (screenOutgoingAtAccept).
-    const builtin = isBuiltinHost(runtime.config, snapshot.from.split('@')[1]!);
-    const trusted = !builtin && Boolean(runtime.config.trustedPool && conn?.pool_tier === 'trusted' && conn?.legacy_names === false);
-    const required = hosted && (!trusted || snapshot.kind === 'marketing');
-    const rules: 'probation' | 'standard' | null = isSimulatedSes(runtime) || !hosted || trusted ? null : r.on_probation || builtin ? 'probation' : 'standard';
-    const needsScreen = !r.simulated && !isSimulatedSes(runtime) && (hosted || Boolean(snapshot.screen && snapshot.kind === 'transactional'));
+    // The connection is read only on a multi-tenant installation, so a single-tenant one never has shared mail.
+    const conn = r.connection, policy = resolveHostedContentPolicy(runtime.config, { shared: conn?.kind === 'shared', poolTier: conn?.pool_tier, legacyNames: conn?.legacy_names,
+      from: snapshot.from, probation: r.on_probation, simulated: isSimulatedSes(runtime) || r.simulated, kind: snapshot.kind, screen: snapshot.screen });
+    const { hosted, required, rules } = policy;
 
     // A row that could not be judged now (an outage, a failure of its own) waits 45 s out of oldest-first order so
     // failing rows never starve rows behind them while still coming due on the very next minute cron tick.
@@ -4814,9 +4806,9 @@ export async function screenHeldMail(runtime: Runtime, limit = HELD_SCREEN_LIMIT
     };
 
     try {
-      if (!needsScreen) { await passHeld(snapshot, false); return; }
-      if (shared && snapshot.raw) { await rejectHeld('SHARED_RAW_UNSUPPORTED'); return; }
-      if (shared && snapshot.mime && !trusted) { await rejectHeld('SEALED_MAIL_UNAVAILABLE'); return; }
+      if (!policy.screened) { await passHeld(snapshot, false); return; }
+      const refusal = sharedFormatRefusal(snapshot, policy);
+      if (refusal) { await rejectHeld(refusal.code); return; }
       const scopedRt: Runtime = { ...runtime, config: { ...runtime.config, workspaceId: wid } };
       const a: Actor = { workspaceId: wid, keyId: r.actor_key_id, permissions: ['manage'], domains: [] };
 

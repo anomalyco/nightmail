@@ -92,7 +92,8 @@ export const CONTEXT_SECTIONS = {
   webhookDeliveries: { roles: MANAGERS, counterpart: 'GET /v1/webhooks' },
   recentActivity: { roles: MANAGERS, counterpart: 'GET /v1/activity' },
 } as const;
-const compiled = SUPPORT_CEILINGS.map(entry => ({ ...entry, pattern: new RegExp(`^${entry.path.replace(/\{[^}]+\}/g, '[^/]+')}$`) }));
+// A parameter is one ID segment (prefix_hex, base32 or SES message IDs): never a dot, a percent escape or a separator.
+const compiled = SUPPORT_CEILINGS.map(entry => ({ ...entry, pattern: new RegExp(`^${entry.path.replace(/\{[^}]+\}/g, '[A-Za-z0-9_-]{1,120}')}$`) }));
 /** The ceiling of a concrete request (HEAD reads like GET), or undefined: a conversation may not call it. */
 export const ceilingFor = (method: string, path: string) => {
   const verb = method === 'HEAD' ? 'GET' : method;

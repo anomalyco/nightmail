@@ -19,6 +19,7 @@ import { RecipeRef, RuleRecipeRef, type Config, type Programs } from './ritual-p
 import { compileRitual, type RitualIR } from './ritual-engine.js';
 import { withRegionSettings } from './ses-region-state.js';
 import { productName } from './brand.js';
+import { hostRemovedSql, primaryHostOrder } from './states.js';
 
 type MailboxRow = typeof mailboxes.$inferSelect;
 type Deps = {
@@ -274,12 +275,11 @@ export function registerInboundOverview(app: App, deps: Deps) {
           (SELECT count(*) > ${OVERVIEW_ENDPOINTS} FROM hk) AS hooks_more,
           (SELECT coalesce(jsonb_agg(jsonb_build_object('id',m.id,'key',m.key,'address',m.address,'displayName',m.display_name)),'[]'::jsonb)
             FROM mailboxes m WHERE m.workspace_id=${w} AND m.key IN (SELECT substr(ref,7) FROM refs WHERE starts_with(ref,'inbox:'))) AS keyed,
-          (SELECT coalesce(jsonb_agg(jsonb_build_object('id',d.id,'name',coalesce(md.receiving_host,d.name),'domain',d.name,'hosts',(SELECT coalesce(jsonb_agg(coalesce(h.receiving_host,h.name) ORDER BY h.parent_id NULLS FIRST, h.created_at),'[]'::jsonb) FROM mailbox_domains h WHERE h.workspace_id=${w} AND h.domain_id=d.id AND h.status NOT IN ('disabled','disabling')),'status',coalesce(md.status,'off'),
+          (SELECT coalesce(jsonb_agg(jsonb_build_object('id',d.id,'name',coalesce(md.receiving_host,d.name),'domain',d.name,'hosts',(SELECT coalesce(jsonb_agg(coalesce(h.receiving_host,h.name) ORDER BY h.parent_id NULLS FIRST, h.created_at),'[]'::jsonb) FROM mailbox_domains h WHERE h.workspace_id=${w} AND h.domain_id=d.id AND NOT ${hostRemovedSql(sql`h`)}),'status',coalesce(md.status,'off'),
             'catchAll',CASE WHEN md.catch_all IN ('create_mailbox','create_address') THEN 'create_address' ELSE 'store' END) ORDER BY d.name),'[]'::jsonb)
-            -- The host the domain shows, as domainViews' primaryHost picks it: hosted, its own row unless the owner removed it,
-            -- then the first host still receiving (a domain whose reply. host was removed and its root added receives at the root).
+            -- The host the domain shows, as domainViews picks it (a domain whose reply. host was removed and its root added receives at the root).
             FROM ${domains} d LEFT JOIN LATERAL (SELECT * FROM mailbox_domains m WHERE m.workspace_id=${w} AND m.domain_id=d.id${c.env.config.multiTenant ? sql`` : sql` AND m.parent_id IS NULL`}
-              ORDER BY m.status IN ('disabled','disabling'), m.parent_id IS NOT NULL, m.created_at, m.id LIMIT 1) md ON true
+              ORDER BY ${primaryHostOrder()} LIMIT 1) md ON true
             WHERE d.workspace_id=${w} AND d.region = ANY(${textArray(c.env.config.regions)})) AS domains`)).rows[0]!;
     }
 

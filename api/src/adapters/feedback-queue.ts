@@ -61,8 +61,11 @@ export function authenticatedFeedbackItem(secrets: FeedbackSecrets, body: unknow
   if (authenticLegacyRecovery(secrets, body)) return body.body;
   if (authenticFeedback(secrets, body)) return body;
 }
+/** The shape the previous Worker version enqueued: a plain object carrying no tag, refusal or recovery envelope. */
+const untaggedShape = (body: unknown): body is object =>
+  !!body && typeof body === 'object' && !Array.isArray(body) && !('mac' in body) && !('refused' in body) && !('recovery' in body);
 const unsignedFeedback = (body: unknown): body is FeedbackItem => {
-  if (!body || typeof body !== 'object' || Array.isArray(body) || 'mac' in body || 'refused' in body || 'recovery' in body) return false;
+  if (!untaggedShape(body)) return false;
   const item = body as Partial<FeedbackItem>;
   return typeof item.region === 'string' && typeof item.topicArn === 'string' && typeof item.messageId === 'string' && !!item.message && typeof item.message === 'object' && !Array.isArray(item.message);
 };
@@ -132,18 +135,6 @@ export function workWake(queue: Queue, concurrency: number): NonNullable<Runtime
 }
 
 const invalidFeedback = new Set(['SES_INVALID_EVENT', 'SES_UNSUPPORTED_EVENT', 'SES_ACCOUNT_MISMATCH', 'SNS_TOPIC_NOT_ALLOWED', 'SES_TENANT_NOT_OWNED', 'SES_ENVIRONMENT_MISMATCH', 'SIMULATED_FEEDBACK_FORBIDDEN', 'SIMULATED_FEEDBACK_UNSUPPORTED']);
-export function settleFeedbackMessage(message: Pick<Message, 'attempts' | 'retry' | 'ack'> & {body?:FeedbackItem}, outcome?: { ok: boolean; error?: string }) {
-  if (outcome?.ok || outcome?.error === 'SES_FEEDBACK_QUARANTINED' || (outcome?.error && invalidFeedback.has(outcome.error))) return message.ack();
-  // A recent pool event might race the acceptance write. Keep its recovery chain.
-  // A missing owner on a customer-controlled topic or beyond detail retention is
-  // routine. One short retry covers normal propagation; it must not page the DLQ.
-  if(outcome?.error==='SES_FEEDBACK_UNMATCHED' && message.attempts>1 && message.body) {
-    const item=message.body,stamp=(item.message.mail as {timestamp?:string}|undefined)?.timestamp;
-    if(item.topicKind==='byo' || (stamp && Date.parse(stamp)<Date.now()-30*86400000)) {message.ack();return 'retired_unmatched';}
-  }
-  message.retry({ delaySeconds: Math.min(300, 15 * 2 ** message.attempts) });
-}
-
 /**
  * The tagged lane (`FEEDBACK_QUEUE`) carries what this installation
  * tagged; anything else on it is archived with platform provenance. Both native DLQs are archive-only
@@ -162,17 +153,23 @@ export function legacyFeedbackCutover(value: unknown, now = Date.now()): number 
   const cutover = Date.parse(value);
   return Number.isFinite(cutover) && cutover > 0 && cutover <= now ? cutover : undefined;
 }
-export function feedbackVerdict(secrets: FeedbackSecrets, lane: FeedbackLane, body: unknown, provenance?: { timestamp?: Date; cutover?: number }): FeedbackVerdict {
-  if (lane === 'tagged-dlq' || lane === 'legacy-dlq') return 'refused';
-  if (authenticatedFeedbackItem(secrets, body)) return 'ingest';
-  if (lane === 'legacy' && typeof body === 'object' && body !== null && !Array.isArray(body) && !('mac' in body) && !('refused' in body) && !('recovery' in body)) {
-    const timestamp = provenance?.timestamp?.getTime(), cutover = provenance?.cutover;
-    if (timestamp !== undefined && Number.isFinite(timestamp) && timestamp > 0 && cutover !== undefined && Number.isFinite(cutover) && cutover <= Date.now() && timestamp < cutover &&
-      unsignedFeedback(body)) return 'legacy';
-    return 'untagged';
-  }
-  return 'refused';
+export type FeedbackClass = { verdict: FeedbackVerdict; item?: FeedbackItem; recovery?: boolean };
+/** Authenticate a queue body once; `item` is what an 'ingest' verdict hands to ingestion. */
+export function classifyFeedback(secrets: FeedbackSecrets, lane: FeedbackLane, body: unknown, provenance?: { timestamp?: Date; cutover?: number }): FeedbackClass {
+  if (lane === 'tagged-dlq' || lane === 'legacy-dlq') return { verdict: 'refused' };
+  if (authenticLegacyRecovery(secrets, body)) return { verdict: 'ingest', item: body.body, recovery: true };
+  if (authenticFeedback(secrets, body)) return { verdict: 'ingest', item: body };
+  if (lane !== 'legacy' || !untaggedShape(body)) return { verdict: 'refused' };
+  const timestamp = provenance?.timestamp?.getTime(), cutover = provenance?.cutover;
+  return timestamp !== undefined && Number.isFinite(timestamp) && timestamp > 0 && cutover !== undefined && Number.isFinite(cutover) && cutover <= Date.now() && timestamp < cutover &&
+    unsignedFeedback(body) ? { verdict: 'legacy' } : { verdict: 'untagged' };
 }
+// A missing owner on a customer-controlled topic or beyond detail retention is routine; a recent pool event might
+// race the acceptance write, so only those two retire unmatched after one short retry (never paging through quarantine).
+const routineUnmatched = (item: FeedbackItem) => {
+  const stamp = (item.message.mail as { timestamp?: string } | undefined)?.timestamp;
+  return item.topicKind === 'byo' || (!!stamp && Date.parse(stamp) < Date.now() - 30 * 86400000);
+};
 type FeedbackMessage = Pick<Message, 'id' | 'attempts' | 'retry' | 'ack'> & { body: unknown; timestamp?: Date };
 export async function settleFeedbackBatch(options: {
   secrets: FeedbackSecrets; lane: FeedbackLane; sourceQueue: string; messages: readonly FeedbackMessage[]; legacyCutover?: number;
@@ -186,21 +183,9 @@ export async function settleFeedbackBatch(options: {
   const { secrets, lane, messages, ingest, archive } = options;
   const sourceOf = (message: FeedbackMessage): FeedbackSource => ({ queue: options.sourceQueue, id: message.id, enqueuedAt: message.timestamp!.toISOString(), attempts: message.attempts });
   // Classify and authenticate each message ONCE per batch (avoids re-running HMAC 2-3x per item).
-  const classified = messages.map(message => {
-    if (lane === 'tagged-dlq' || lane === 'legacy-dlq') return { verdict: 'refused' as FeedbackVerdict, item: undefined as FeedbackItem | undefined, isLegacyRecovery: false };
-    if (authenticLegacyRecovery(secrets, message.body)) return { verdict: 'ingest' as FeedbackVerdict, item: message.body.body, isLegacyRecovery: true };
-    if (authenticFeedback(secrets, message.body)) return { verdict: 'ingest' as FeedbackVerdict, item: message.body, isLegacyRecovery: false };
-    if (lane === 'legacy' && typeof message.body === 'object' && message.body !== null && !Array.isArray(message.body) && !('mac' in message.body) && !('refused' in message.body) && !('recovery' in message.body)) {
-      const timestamp = message.timestamp?.getTime(), cutover = options.legacyCutover;
-      if (timestamp !== undefined && Number.isFinite(timestamp) && timestamp > 0 && cutover !== undefined && Number.isFinite(cutover) && cutover <= Date.now() && timestamp < cutover && unsignedFeedback(message.body)) {
-        return { verdict: 'legacy' as FeedbackVerdict, item: undefined, isLegacyRecovery: false };
-      }
-      return { verdict: 'untagged' as FeedbackVerdict, item: undefined, isLegacyRecovery: false };
-    }
-    return { verdict: 'refused' as FeedbackVerdict, item: undefined, isLegacyRecovery: false };
-  });
+  const classified = messages.map(message => classifyFeedback(secrets, lane, message.body, { timestamp: message.timestamp, cutover: options.legacyCutover }));
   const verdicts = classified.map(c => c.verdict);
-  let retiredUnmatched = 0, quarantined = 0, deadLettered = 0, held = 0, promoted = 0;
+  let retiredUnmatched = 0, quarantined = 0, held = 0, promoted = 0;
   // Preserve provenance before any unrelated ingestion can throw and retry the entire batch.
   for (const [index, message] of messages.entries()) if (verdicts[index] === 'legacy') {
     let recovery: LegacyFeedbackRecovery | undefined;
@@ -219,14 +204,15 @@ export async function settleFeedbackBatch(options: {
   catch { ingested = items.map(() => ({ ok: false, error: 'FEEDBACK_PERSIST_FAILED' })); }
   const outcomes = verdicts.map(verdict => verdict === 'ingest' ? ingested.shift()! : verdict === 'legacy' ? { ok: true } : { ok: false, error: verdict === 'untagged' ? 'FEEDBACK_UNTAGGED' : 'FEEDBACK_UNAUTHENTICATED' });
   for (const [index, message] of messages.entries()) {
-    const { verdict, isLegacyRecovery } = classified[index]!;
+    const { verdict, item, recovery } = classified[index]!;
     if (verdict === 'legacy') continue;
     if (verdict === 'ingest') {
-      if (outcomes[index]?.ok && isLegacyRecovery) {
+      if (outcomes[index]?.ok && recovery) {
         try { await options.completeLegacy(message.body as LegacyFeedbackRecovery); } catch { message.retry({ delaySeconds: 60 }); held++; continue; }
       }
       if (outcomes[index]?.ok) { message.ack(); continue; }
       const error = outcomes[index]?.error ?? 'FEEDBACK_PERSIST_FAILED';
+      if (error === 'SES_FEEDBACK_UNMATCHED' && message.attempts > 1 && routineUnmatched(item!)) { message.ack(); retiredUnmatched++; continue; }
       if (message.attempts < 5 && error !== 'SES_FEEDBACK_QUARANTINED' && !invalidFeedback.has(error)) {
         message.retry({ delaySeconds: Math.min(300, 15 * 2 ** message.attempts) }); continue;
       }
@@ -241,5 +227,5 @@ export async function settleFeedbackBatch(options: {
     } catch { message.retry({ delaySeconds: 60 }); held++; }
   }
   const untagged = verdicts.filter(v => v === 'untagged').length, unauthenticated = verdicts.filter(v => v === 'refused').length;
-  return { outcomes, untagged, unauthenticated, quarantined, deadLettered, held, promoted, retiredUnmatched, failed: outcomes.filter(outcome => !outcome.ok).length - retiredUnmatched - untagged - unauthenticated };
+  return { outcomes, untagged, unauthenticated, quarantined, held, promoted, retiredUnmatched, failed: outcomes.filter(outcome => !outcome.ok).length - retiredUnmatched - untagged - unauthenticated };
 }
