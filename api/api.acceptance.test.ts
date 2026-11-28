@@ -45269,7 +45269,7 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
   });
 
   test('updating an inbound-format webhook discloses rotated secrets and newly derived verification tokens with no-store', async t => {
-    await simulatedSesFixture(t, async ({ runtime, local }) => {
+    await simulatedSesFixture(t, async ({ runtime, db, local }) => {
       const { verifyWebhook } = await import('../sdk/src/webhooks.js');
       const transport = runtime.webhookFetch;
       let lastBody = '', lastHeaders = new Headers();
@@ -45336,6 +45336,13 @@ ${Array.from({length:6},(_,i)=>`<tr><td id="templateSection${i+2}" style="paddin
         const sameFormat = ok(await local('PATCH', '/v1/endpoints/nm-switch', { url: `https://${unique('nm3')}.example.org/hook` }));
         assert.equal(sameFormat.secret, undefined);
         assert.equal(sameFormat.verificationToken, undefined);
+
+        // A secret that can't be read refuses the switch to inbound format and changes nothing: the token is never lost.
+        await db.query("UPDATE mailbox_webhooks SET encrypted_secret='corrupt' WHERE workspace_id=$1 AND id=$2", [runtime.config.workspaceId, native.id]);
+        error(await local('PATCH', `/v1/inbound/webhooks/${native.id}`, { format: 'inbound', description: 'unreadable' }), 503, 'KEY_ROTATION_REQUIRED');
+        const kept = ok(await local('GET', `/v1/inbound/webhooks/${native.id}`));
+        assert.equal(kept.format, 'nightmail');
+        assert.notEqual(kept.description, 'unreadable');
       } finally { runtime.webhookFetch = transport; }
     });
   });

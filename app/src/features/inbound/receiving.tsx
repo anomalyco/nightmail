@@ -9,7 +9,8 @@ import { useApiDef, useApiQuery, useRequestScope, useWorkspaceAccess } from '../
 import { queries } from '../../data/queries'
 import { useResolvedAddresses } from '../../data/addresses'
 import { isAbortError, request } from '../../data/live'
-import { errorText, type InboundAddress } from '../../data/types'
+import { errorText, type InboundAddress, type WebhookSecrets } from '../../data/types'
+import { WebhookSecretsDialog } from './shared'
 import { number } from '../../lib/format'
 import { useMediaQuery } from '../../lib/media'
 import { FlowPanel, mailOf } from './panel'
@@ -200,6 +201,7 @@ function DestinationsTab({ overview, refresh }: { overview: Overview; refresh: (
   // Kept after closing, so the dialog's title and fields don't change while it animates out.
   const [editing, setEditing] = useState<EditableEndpoint | null>(null), [editOpen, setEditOpen] = useState(false)
   const [deleting, setDeleting] = useState<OverviewEndpoint | null>(null), [deleteOpen, setDeleteOpen] = useState(false)
+  const [secrets, setSecrets] = useState<(WebhookSecrets & { name: string }) | null>(null)
   const scope = useRequestScope()
   async function act(e: OverviewEndpoint, path: string, method: string, body: unknown, done: string) {
     try {
@@ -238,8 +240,13 @@ function DestinationsTab({ overview, refresh }: { overview: Overview; refresh: (
       ]} />}
     {list.data && <Pagination page={pagination.page} pageSize={ENDPOINT_PAGE} nextCursor={list.data.nextCursor} count={list.data.data.length} onPageChange={next => pagination.onPageChange(next, list.data?.nextCursor)} />}
     <EndpointDialog open={creating} onOpenChange={setCreating} taken={overview.endpoints.map(e => e.name)} onCreated={e => { setCreating(false); setCreated(e); reload() }} />
-    <EndpointDialog open={editOpen} editing={editing} onOpenChange={setEditOpen} onSaved={e => { setEditOpen(false); toast(`Saved ${e.name}.`, 'success'); reload() }} />
+    <EndpointDialog open={editOpen} editing={editing} onOpenChange={setEditOpen} onSaved={e => {
+      setEditOpen(false); reload()
+      // A new URL rotates an inbound-format webhook's secret: shown once, never behind a toast.
+      if (e.secret || e.verificationToken) setSecrets({ name: e.name, secret: e.secret, verificationToken: e.verificationToken }); else toast(`Saved ${e.name}.`, 'success')
+    }} />
     <CreatedEndpointDialog created={created} onClose={() => setCreated(null)} />
+    <WebhookSecretsDialog secrets={secrets} title={`${secrets?.name ?? ''} · ${secrets?.secret ? 'New signing secret' : 'Verification token'}`} onClose={() => setSecrets(null)} />
     <ConfirmDialog open={deleteOpen} onOpenChange={setDeleteOpen} danger title={`Delete ${deleting?.name ?? 'this destination'}?`} description="Rules and addresses that send to it stop delivering. This can’t be undone." confirmLabel="Delete destination"
       onConfirm={() => deleting ? act(deleting, '', 'DELETE', undefined, `${deleting.name} deleted.`) : undefined} />
   </div>

@@ -1,5 +1,5 @@
-import { CopyButton, Field, SecretCode, type SelectOption } from '../../components/ui'
-import type { InboundAddress, MailAddress } from '../../data/types'
+import { Button, CopyButton, Dialog, Field, SecretCode, type SelectOption } from '../../components/ui'
+import type { InboundAddress, MailAddress, WebhookSecrets } from '../../data/types'
 import { PrivateAddress } from '../../components/PrivateAddress'
 import { cleanName, nameParts } from '../../lib/private-address'
 
@@ -8,6 +8,17 @@ export { cleanName }
  *  to know about it now. */
 export function SecretField({ label, value, copyLabel }: { label: string; value: string; copyLabel: string }) {
   return <Field label={label} hint="It won’t be shown again."><div className="settings-copy-cell"><SecretCode>{value}</SecretCode><CopyButton value={value} label={copyLabel} /></div></Field>
+}
+/** A webhook's new signing secret and inbound-format verification token, shown once after a save or a rotation that
+ *  returned either. Open while `secrets` holds one. */
+export function WebhookSecretsDialog({ secrets, title, onClose }: { secrets: WebhookSecrets | null; title: string; onClose: () => void }) {
+  return <Dialog sensitive dismissible={false} open={Boolean(secrets?.secret || secrets?.verificationToken)} onOpenChange={open => { if (!open) onClose() }} title={title}
+    description={secrets?.secret ? 'The old secret stopped working.' : 'Your server checks this in the X-Webhook-Verification-Token header.'} footer={<Button variant="primary" onClick={onClose}>Done</Button>}>
+    <div className="stack">
+      {secrets?.secret && <SecretField label="Signing secret" value={secrets.secret} copyLabel="Copy secret" />}
+      {secrets?.verificationToken && <SecretField label="Verification token" value={secrets.verificationToken} copyLabel="Copy token" />}
+    </div>
+  </Dialog>
 }
 /** A sender in words, for a label or a title: the display name, never a piece of the address. */
 export const nameOf = (value: MailAddress) => { const parts = nameParts(value.name, value.address); return parts && parts.every(part => !part.address) ? parts.map(part => part.text).join('') : 'this sender' }

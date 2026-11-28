@@ -295,7 +295,10 @@ export async function changeEndpointRecord(tx: DbExecutor, c: Ctx, row: Endpoint
   if (q.paused !== undefined) set.paused = q.paused;
   // A new URL answers a reconfirm mark; a forward has no URL to send again (its address is shown and fixed), so resuming clears it.
   if (q.url !== undefined || (row.type === 'forward' && q.paused !== undefined)) set.reconfirm = false;
-  let rotatedSecret: string | undefined;
+  // Shown once in the response: a moved inbound-format webhook's new secret, and the verification token of a webhook
+  // that is (or becomes) inbound format. Derived here, inside the caller's transaction, so a secret that can't be read
+  // (503 KEY_ROTATION_REQUIRED) rolls the change back instead of committing a format whose token was never shown.
+  const disclosed: { secret?: string; verificationToken?: string } = {};
   if (row.type === 'webhook') {
     const eventTypes = q.eventTypes && [...new Set(q.eventTypes)], events = eventTypes ?? row.eventTypes;
     const format = q.format ?? row.format, junk = q.junk ?? (format !== row.format ? defaultJunk(format) : row.junk);
@@ -307,7 +310,10 @@ export async function changeEndpointRecord(tx: DbExecutor, c: Ctx, row: Endpoint
     // A new URL drops the custom headers meant for the old one, unless new ones come with it. Moving an inbound-format
     // webhook also replaces its secret, which its verification token is derived from.
     const headers = q.headers ?? (moved ? [] : undefined), binding = webhookSecretBinding(w, row.id);
-    rotatedSecret = moved && (format === 'inbound' || row.format === 'inbound') ? webhookSecret() : undefined;
+    const rotatedSecret = moved && (format === 'inbound' || row.format === 'inbound') ? webhookSecret() : undefined;
+    if (rotatedSecret) disclosed.secret = rotatedSecret;
+    if (format === 'inbound' && (rotatedSecret || row.format !== 'inbound'))
+      Object.assign(disclosed, await inboundToken(format, rotatedSecret ?? await decrypt(c.env, row.encryptedSecret!, binding)));
     Object.assign(set, { name: q.name, description: q.description, eventTypes, mailboxIds: q.addressIds, format: q.format && format, junk: q.junk !== undefined || format !== row.format ? junk : undefined,
       include: q.include, timeoutSeconds: q.timeoutSeconds, retryAttempts: q.retryAttempts, url, encryptedHeaders: await encryptWebhookHeaders(c.env, headers, binding),
       encryptedSecret: rotatedSecret ? await encrypt(c.env, rotatedSecret, binding) : undefined });
@@ -323,7 +329,7 @@ export async function changeEndpointRecord(tx: DbExecutor, c: Ctx, row: Endpoint
   }
   const [updated] = await tx.update(endpoints).set(set).where(and(eq(endpoints.workspaceId, w), eq(endpoints.id, row.id))).returning();
   if (resumed) { await tx.execute(sql`INSERT INTO jobs(id,type,workspace_id,payload) VALUES(public.row_id('job'),'mailbox.resumeDeliveries',${w},jsonb_build_object('hook',${row.id}::text))`); c.get('actor').wakeJobs = 1; }
-  return { row: updated!, rotatedSecret };
+  return { row: updated!, ...disclosed };
 }
 /** Deletes an endpoint the caller locked. `detach` (the webhooks API) first removes it from every route, as one routing version. */
 async function deleteEndpointRecord(tx: DbExecutor, c: Ctx, row: EndpointRecord, detach: boolean) {
@@ -332,14 +338,6 @@ async function deleteEndpointRecord(tx: DbExecutor, c: Ctx, row: EndpointRecord,
   await tx.delete(endpoints).where(and(eq(endpoints.workspaceId, row.workspaceId), eq(endpoints.id, row.id)));
 }
 const inboundToken = async (format: string, secret: string) => format === 'inbound' ? { verificationToken: await (await import('./inbound-webhook.js')).verificationToken(secret) } : {};
-async function disclosedWebhookSecrets(c: Ctx, beforeFormat: StoredFormat, row: EndpointRecord, rotatedSecret?: string): Promise<{ secret?: string; verificationToken?: string }> {
-  if (row.type !== 'webhook') return {};
-  const switchedToInbound = row.format === 'inbound' && beforeFormat !== 'inbound';
-  if (!rotatedSecret && !switchedToInbound) return {};
-  const tokenSecret = row.format === 'inbound' ? (rotatedSecret ?? await decrypt(c.env, row.encryptedSecret!, webhookSecretBinding(row.workspaceId, row.id))) : undefined;
-  c.header('Cache-Control', 'no-store');
-  return { ...(rotatedSecret ? { secret: rotatedSecret } : {}), ...(tokenSecret ? await inboundToken(row.format, tokenSecret) : {}) };
-}
 // The receiver timed out, refused the connection or failed its TLS handshake: the test's result, not a server failure (a 500).
 // Node reports a socket or certificate code; a Worker's fetch reports a TypeError. Anything else is a bug and stays a 500.
 function transportError(error: unknown): 'timeout' | 'network' | null {
@@ -548,7 +546,7 @@ export function registerEndpoints(app: App) {
       verificationToken: z.string().optional().describe('New X-Webhook-Verification-Token for an inbound-format webhook, shown once when its URL changes.'),
     }).openapi('UpdatedEndpoint')), ...errors } }), async c => {
     const w = receivingAdmin(c, manage).workspaceId, name = c.req.valid('param').name, { name: rename, ...q } = c.req.valid('json');
-    const { row: updated, beforeFormat, rotatedSecret } = await c.env.db.transaction(async tx => {
+    const { row: updated, ...secrets } = await c.env.db.transaction(async tx => {
       const row = await lockEndpoint(tx, c, w, { name });
       if (!row) throw missingEndpoint(name);
       const changed = await changeEndpointRecord(tx, c, row, { ...q, key: rename });
@@ -557,9 +555,9 @@ export function registerEndpoints(app: App) {
       await recordAudit(tx, c, { action: 'endpoint.update', workspaceId: w, target: { type: 'endpoint', id: row.id }, details: { fields: Object.keys(c.req.valid('json')) },
         ...(next.key !== row.key || next.type !== row.type ? { before: { name, type: row.type } } : {}),
         after: { name: next.key, type: next.type, paused: q.paused, perMinute: q.perMinute, retryOnTimeout: q.retryOnTimeout, idempotent: q.idempotent, timeoutSeconds: q.timeoutSeconds, retryAttempts: q.retryAttempts, headerNames: q.headers?.map(h => h.name) } });
-      return { ...changed, beforeFormat: row.format };
+      return changed;
     });
-    const secrets = await disclosedWebhookSecrets(c, beforeFormat, updated, rotatedSecret);
+    if (secrets.secret || secrets.verificationToken) c.header('Cache-Control', 'no-store');
     return c.json({ ...await endpointView(c.env, w, endpointRowOf(updated)), ...secrets }, 200);
   });
   app.openapi(createRoute({ ...meta, method: 'delete', path: `${base}/{name}`, operationId: 'deleteEndpoint', summary: 'Delete an endpoint', description: 'Delete an endpoint no rule or route uses.', request: { params: NameParam }, responses: { 200: response(z.object({ name: Name, deleted: z.literal(true) }).openapi('DeletedEndpoint')), ...errors } }), async c => {
@@ -728,7 +726,7 @@ export function registerInboundWebhooks(app: App, deps: Access) {
     verificationToken: z.string().optional().describe('inbound format: the X-Webhook-Verification-Token value, shown once when switching to inbound format or moving its URL.'),
   }).openapi('UpdatedInboundWebhook')), ...errors } }), async c => {
     const input = c.req.valid('json'), webhookId = c.req.valid('param').id;
-    const { row: updated, beforeFormat, rotatedSecret } = await c.env.db.transaction(async tx => {
+    const { row: updated, ...secrets } = await c.env.db.transaction(async tx => {
       // One transaction and one row lock: two independently valid changes must not combine into a scoped message.stored subscription.
       const w = manageHook(c).workspaceId, row = await lockWebhook(tx, c, w, webhookId);
       const { format, ...rest } = input;
@@ -738,9 +736,9 @@ export function registerInboundWebhooks(app: App, deps: Access) {
       await recordAudit(tx, c, { action: 'inbound_webhook.update', workspaceId: w, target: { type: 'inbound_webhook', id: row.id }, details: { fields: Object.keys(input) },
         before: { url: input.url ? webhookUrlHint(row.url!) : undefined, paused: input.paused !== undefined ? row.paused : undefined, eventTypes: input.eventTypes ? row.eventTypes : undefined },
         after: { url: input.url ? webhookUrlHint(result.url!) : undefined, paused: input.paused, eventTypes: input.eventTypes && result.eventTypes, addressIds: input.addressIds, key: input.key, format: format && shownFormat(storedFormat(format)), junk: input.junk, headerNames: input.headers?.map(h => h.name) } });
-      return { ...changed, beforeFormat: row.format };
+      return changed;
     });
-    const secrets = await disclosedWebhookSecrets(c, beforeFormat, updated, rotatedSecret);
+    if (secrets.secret || secrets.verificationToken) c.header('Cache-Control', 'no-store');
     return c.json({ ...await webhookView(c, updated), ...secrets }, 200);
   });
   const detach = z.object({ detach: z.enum(['true', 'false']).optional().describe('Also remove it from every route that delivers to it, as one routing version. Without it, a referenced webhook is not deleted.') });

@@ -1,11 +1,11 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { useNavigate, useParams } from 'react-router'
-import { Alert, Button, Checkbox, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, SearchField, SecretInput, PageHeader, SectionHeader, Select, SkeletonText, StatusBadge, type Tone, fieldError, MutationError, SecretDialog } from '../../components/ui'
+import { Alert, Button, Checkbox, ConfirmDialog, DataTable, EmptyState, ErrorState, Field, Input, SearchField, SecretInput, PageHeader, SectionHeader, Select, SkeletonText, StatusBadge, type Tone, fieldError, MutationError } from '../../components/ui'
 import { useApiMutation, useApiQuery, useWorkspaceAccess } from '../../data/context'
 import { invalidate } from '../../data/invalidation'
 import { mergeAddresses, useAddressOptions, useResolvedAddresses } from '../../data/addresses'
 import { useDebounced } from '../../lib/pagination'
-import { inboundEventTypes, type InboundAddress, type InboundWebhook, type InboundWebhookInput, type MailboxEventType, type MailboxWebhookDelivery } from '../../data/types'
+import { inboundEventTypes, type InboundAddress, type InboundWebhook, type InboundWebhookInput, type MailboxEventType, type MailboxWebhookDelivery, type WebhookSecrets } from '../../data/types'
 import { date, time } from '../../lib/format'
 import { approvalLabel } from '../settings/key-labels'
 import { headerDraftErrors, headerPayload, headersChanged, WebhookHeadersField, type HeaderDraft } from '../settings/webhook-headers'
@@ -13,6 +13,7 @@ import '../settings/settings.css'
 import './inbound.css'
 import './receiving.css'
 import { PrivateAddress } from '../../components/PrivateAddress'
+import { WebhookSecretsDialog } from './shared'
 import { productName } from '../../../../api/src/brand'
 
 // paused: held by a paused webhook until it resumes.
@@ -93,7 +94,7 @@ function WebhookDetail() {
   const [input, setInput] = useState<Draft | null>(null)
   const [headers, setHeaders] = useState<HeaderDraft>(null)
   const [errors, setErrors] = useState<Record<string, string>>({})
-  const [secret, setSecret] = useState<string | null>(null)
+  const [secrets, setSecrets] = useState<WebhookSecrets | null>(null)
   const [confirm, setConfirm] = useState<'rotate' | 'delete' | null>(null)
   useEffect(() => { if (webhook.data && !input) setInput(draftOf(webhook.data)) }, [webhook.data, input])
   const current = webhook.data
@@ -110,7 +111,11 @@ function WebhookDetail() {
     const next = { ...validate(input, true), ...headerDraftErrors(headers) }; setErrors(next)
     if (Object.keys(next).length) return
     const { url, ...patch } = payloadOf(input)
-    try { const saved = await save.mutateAsync({ ...patch, ...(url ? { url } : {}), headers: headerPayload(headers, currentHeaders) }); setInput(draftOf(saved)); setHeaders(null) } catch { /* Shown in the form. */ }
+    try {
+      const saved = await save.mutateAsync({ ...patch, ...(url ? { url } : {}), headers: headerPayload(headers, currentHeaders) }); setInput(draftOf(saved)); setHeaders(null)
+      // A new URL rotates an inbound-format webhook's secret, and switching to inbound format gives it a verification token: both shown once.
+      if (saved.secret || saved.verificationToken) setSecrets({ secret: saved.secret, verificationToken: saved.verificationToken })
+    } catch { /* Shown in the form. */ }
   }
   return <div className="stack inbound-stack">
     <PageHeader title={current ? webhookTitle(current) : <SkeletonText width={220} lineHeight={28} />} backTo={list} actions={current && <>
@@ -145,8 +150,8 @@ function WebhookDetail() {
         </form>}
       </section>
     </>}
-    <ConfirmDialog open={confirm === 'rotate'} onOpenChange={open => { if (!open) setConfirm(null) }} title="Rotate signing secret?" description="The old secret stops working at once." confirmLabel="Rotate secret" pending={rotate.isPending} onConfirm={async () => { setSecret((await rotate.mutateAsync()).secret) }} />
+    <ConfirmDialog open={confirm === 'rotate'} onOpenChange={open => { if (!open) setConfirm(null) }} title="Rotate signing secret?" description="The old secret stops working at once." confirmLabel="Rotate secret" pending={rotate.isPending} onConfirm={async () => { const { secret, verificationToken } = await rotate.mutateAsync(); setSecrets({ secret, verificationToken }) }} />
     <ConfirmDialog open={confirm === 'delete'} onOpenChange={open => { if (!open) setConfirm(null) }} title="Delete this webhook?" description="Pending deliveries are dropped and addresses stop delivering to it. Events stay readable through the events API." confirmLabel="Delete webhook" danger pending={remove.isPending} onConfirm={async () => { await remove.mutateAsync(); navigate(list) }} />
-    <SecretDialog secret={secret} title="New signing secret" onClose={() => setSecret(null)} />
+    <WebhookSecretsDialog secrets={secrets} title={secrets?.secret ? 'New signing secret' : 'Verification token'} onClose={() => setSecrets(null)} />
   </div>
 }
